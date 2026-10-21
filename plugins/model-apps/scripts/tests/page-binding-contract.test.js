@@ -8,6 +8,8 @@
 // reads a list as "already holds" with.
 const { test } = require('node:test');
 const assert = require('node:assert');
+const fs = require('node:fs');
+const path = require('node:path');
 const {
   PAGE_BINDINGS,
   BINDING_PROPERTIES,
@@ -63,6 +65,66 @@ test('statableBinding states a documented entry whole — a REST and a tabular c
   const held = { ...APPROVE, parameterKinds: { Comment: 'String' } };
   const { stated } = statableBinding('actionBindings', held);
   assert.notStrictEqual(stated.parameterKinds, held.parameterKinds, 'a copy: a later edit of the spec does not reach the page\'s entry');
+});
+
+test('declared Custom API kinds: the vocabulary contains exactly ten declared primitives', () => {
+  const kinds = ['Boolean', 'DateTime', 'Decimal', 'Float', 'Integer', 'Money', 'Picklist', 'String', 'StringArray', 'Guid'];
+  assert.deepStrictEqual([...PARAMETER_KINDS].sort(), [...kinds].sort());
+});
+
+test('declared Custom API kinds: discovery and validation use one immutable pure contract without a CLI dependency', () => {
+  const shared = require('../lib/custom-api-kinds.js');
+  assert.strictEqual(PARAMETER_KINDS, shared.PARAMETER_KINDS);
+  assert.strictEqual(PARAMETER_KIND_BY_TYPE, shared.PARAMETER_KIND_BY_TYPE);
+  assert.ok(Object.isFrozen(shared.PARAMETER_KINDS) && Object.isFrozen(shared.PARAMETER_KIND_BY_TYPE));
+  const visited = new Set();
+  function visit(module) {
+    if (visited.has(module.id)) return;
+    visited.add(module.id);
+    for (const child of module.children) visit(child);
+  }
+  visit(require.cache[require.resolve('../lib/page-bindings.js')]);
+  assert.ok(!visited.has(require.resolve('../list-custom-apis.js')), 'production statability never loads the CLI entry point');
+  assert.deepStrictEqual(require.cache[require.resolve('../lib/custom-api-kinds.js')].children, []);
+});
+
+test('declared Custom API kinds: both App Spec references agree with the runtime vocabulary', () => {
+  const references = path.join(__dirname, '..', '..', 'references');
+  const schema = fs.readFileSync(path.join(references, 'app-spec-schema.md'), 'utf8');
+  const row = schema.split(/\r?\n/).find((line) => /^\s*\|\s*\|\s*`parameterKinds`\s*\|/.test(line));
+  assert.ok(row);
+  const list = /(?:kinds|accepts)\s*\(([^)]+)\)/.exec(row);
+  assert.ok(list, 'the schema states the closed kind vocabulary');
+  const kinds = [...list[1].matchAll(/`([A-Za-z]+)`/g)].map((match) => match[1]);
+  assert.deepStrictEqual(kinds.sort(), [...PARAMETER_KINDS].sort());
+  const reference = fs.readFileSync(path.join(references, 'custom-api.md'), 'utf8')
+    .split('## In an App Spec')[1].split('## Discovery-only lookup inputs')[0];
+  assert.match(reference, /ten primitive declared kinds documented above/);
+  assert.match(reference, /lookup-only API/);
+  assert.match(reference, /left out whole/);
+});
+
+test('declared Custom API kinds: all ten primitive kinds and sparse lookup maps are statable', () => {
+  const kinds = ['Boolean', 'DateTime', 'Decimal', 'Float', 'Integer', 'Money', 'Picklist', 'String', 'StringArray', 'Guid'];
+  for (const parameterKinds of [...kinds.map((kind) => ({ Value: kind })), { Note: 'String' }, {}]) {
+    const entry = { ...APPROVE, parameterKinds };
+    assert.deepStrictEqual(statableBindings('actionBindings', [entry]), { stated: [entry], problem: null });
+  }
+  const lookupOnly = { name: 'contoso_ResolveReference', isFunction: false };
+  assert.deepStrictEqual(statableBindings('actionBindings', [lookupOnly]), { stated: [lookupOnly], problem: null });
+});
+
+test('declared Custom API kinds: unsupported declarations leave the entire list unstated', async (t) => {
+  for (const kind of ['EntityReference', 'Entity', 'EntityCollection']) {
+    await t.test(`declared Custom API kinds: unstated ${kind}`, () => {
+      const bad = { name: 'contoso_ResolveReference', parameterKinds: { Ref: kind, Note: 'String' } };
+      const projected = statableBindings('actionBindings', [APPROVE, bad]);
+      assert.deepStrictEqual(projected, { stated: null, problem: { entry: 1, property: 'parameterKinds', why: 'parameter-kinds' } });
+      const reason = bindingProblemText('actionBindings', 1, projected.problem);
+      assert.match(reason, /^actionBindings\[1\]\.parameterKinds /);
+      assert.ok(!reason.includes(kind) && !reason.includes('Ref'), 'the diagnostic names the place/property, never its value or map keys');
+    });
+  }
 });
 
 // The values a credential takes when it hides in a property a spec DOES state. Each must leave its value out: a value is stated only with a shape that is positively known to be safe, and a URL only when its

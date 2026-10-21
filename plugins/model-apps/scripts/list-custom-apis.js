@@ -49,18 +49,7 @@ const BINDING_TYPE = { 0: 'Global', 1: 'Entity', 2: 'EntityCollection' };
 // and has no other source, so record them exactly — an Integer mis-recorded as Decimal (or a Guid as
 // String) changes how the value is serialized on the wire.
 // See: https://learn.microsoft.com/power-apps/developer/data-platform/reference/entities/customapirequestparameter
-const PARAMETER_KIND_BY_TYPE = {
-  0: 'Boolean',
-  1: 'DateTime',
-  2: 'Decimal',
-  6: 'Float',
-  7: 'Integer',
-  8: 'Money',
-  9: 'Picklist',
-  10: 'String',
-  11: 'StringArray',
-  12: 'Guid',
-};
+const { PARAMETER_KIND_BY_TYPE } = require('./lib/custom-api-kinds.js');
 
 function bindingTypeLabel(bindingtype) {
   return BINDING_TYPE[bindingtype] || 'Global';

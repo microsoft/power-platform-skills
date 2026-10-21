@@ -1664,7 +1664,15 @@ custom control), but the spec validator emits a warning.
   | `actionBindings` | `name`, `boundEntityLogicalName` | an identifier |
   | | `displayName` | a label |
   | | `isFunction` | `true` or `false` |
-  | | `parameterKinds` | a map from a parameter name (a letter or `_`, then letters, digits, `_`) to one of the Dataverse parameter kinds (`String`, `Integer`, `Decimal`, `Float`, `Money`, `Boolean`, `DateTime`, `Guid`, `StringArray`, `EntityReference`, `Entity`, `EntityCollection`, `Picklist`) |
+  | | `parameterKinds` | a map from a parameter name (a letter or `_`, then letters, digits, `_`) to one of the ten declared primitive kinds the page runtime accepts (`Boolean`, `DateTime`, `Decimal`, `Float`, `Integer`, `Money`, `Picklist`, `String`, `StringArray`, `Guid`) |
+
+  `EntityReference`, `Entity` and `EntityCollection` are not declared kinds: an unsupported declared
+  kind makes the runtime drop the whole binding. Lookup inputs remain structural call values, not
+  entries in this map; lookup authoring hints are discovery-only metadata, never App Spec binding
+  properties. Sparse primitive maps are valid; a lookup-only API can state `parameterKinds: {}`.
+  To deliberately correct an existing bad map, state its verified primitive entries explicitly
+  (or `{}` for lookup-only inputs). Omitting `actionBindings` preserves the page's existing payload
+  instead of correcting it; no unsupported declaration is silently stripped or changed to `Guid`.
 
   No text of any of them may be shaped like a token (a known token prefix such as `ghp_` or `eyJ`, an
   authorization scheme such as `Bearer …`, or a run of 32 or more letters and digits that mixes both).

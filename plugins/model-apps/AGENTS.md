@@ -1643,7 +1643,9 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   `dataSources` and `model`: a rebuild into the same environment kept a page's bindings only because it sent none
   (the SDK leaves a list a push omits as it is), and a copy of the spec rebuilt in another environment deployed
   the pages without them. `parseDownloadedPages` now writes a list a page holds into the spec **only WHOLE, and only
-  what is known to be safe** (`lib/page-bindings.js`, whose header holds the threat model and lists every sink): each key
+  what is known to be safe** (`lib/page-bindings.js`, whose header holds the threat model and lists every sink).
+  Declared Custom API kinds come from the pure `lib/custom-api-kinds.js` contract shared with discovery,
+  without loading a CLI; only the ten runtime primitives are declared, never structural lookups. Each key is
   one of the documented properties (`logicalName`, `connectorId`, `dataset`, `tables`, `tableDisplayNames`,
   `operations` for a connector binding; `name`, `isFunction`, `boundEntityLogicalName`, `displayName`, `parameterKinds`
   for a Custom API binding) and each value of a conservative shape positively known to be safe — an identifier, a GUID,

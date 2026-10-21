@@ -81,7 +81,7 @@ An app a download reads is written with each page's `actionBindings` in `pages[]
 writes that list back onto the page (a spec that states none leaves the page's own). A spec states an entry by the
 properties documented above — `name`, `isFunction`, `boundEntityLogicalName`, `displayName`, `parameterKinds` — and
 by nothing else, each with a value of a conservative shape known to be safe (an identifier, a label, a flag, a map of
-parameter names to Dataverse parameter kinds). A list in which any entry holds anything else is left out of the spec
+parameter names to the ten primitive declared kinds documented above). A list in which any entry holds anything else is left out of the spec
 WHOLE, reported by its place and the vetted property (never a value or an unrecognized key), and stays on the page;
 a spec that states one is refused (see `references/app-spec-schema.md` → `pages[]`). `/genpage`
 itself never reads or writes the spec. The spec carries the list and not the Custom APIs it names: each must
@@ -89,6 +89,14 @@ already exist in the environment you rebuild into, deployed in a solution. A reb
 APIs before it writes and says by name one that is not there, one that is the other kind (Action or Function) and
 one bound to another table; it does not stop for them. The `custom-api` flag gates what the `/genpage` agents
 author, not this.
+
+An App Spec must not declare `EntityReference`, `Entity` or `EntityCollection`. A downloaded list
+holding an unsupported declared kind is left out whole and reported by place and property, never
+by value; the raw page config and an omitted list's rebuild payload stay untouched. A sparse
+primitive map such as `{ "Note": "String" }` is valid, as is `{}` for a lookup-only API. The lookup
+still belongs in the call as `{ entityName, id }`; its authoring hints remain discovery-only,
+not App Spec binding fields (see below). A deliberate repair states the verified primitive map
+explicitly; omitting the list preserves it rather than repairing it. Do not coerce a lookup to `Guid`.
 
 ## Discovery-only lookup inputs
 

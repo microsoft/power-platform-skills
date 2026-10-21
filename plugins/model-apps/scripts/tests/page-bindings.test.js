@@ -97,6 +97,47 @@ test('a spec page may state connectorBindings and actionBindings: each entry by 
   assert.deepStrictEqual(plain.warnings, []);
 });
 
+test('declared Custom API kinds: authored specs refuse unsupported declarations with structural lookup advice', async (t) => {
+  for (const kind of ['EntityReference', 'Entity', 'EntityCollection']) {
+    await t.test(`declared Custom API kinds: authored ${kind}`, () => {
+      const result = validateAppSpec(specWithPages({ actionBindings: [{ ...APPROVE, parameterKinds: { Ref: kind } }] }));
+      assert.strictEqual(result.ok, false);
+      const reason = result.errors.find((text) => /actionBindings\[0\]\.parameterKinds/.test(text));
+      assert.match(reason, /primitive.*Boolean.*Guid/);
+      assert.match(reason, /lookup.*structural.*discovery/i);
+      assert.ok(!reason.includes(kind), 'the supplied kind value is never echoed');
+    });
+  }
+});
+
+test('declared Custom API kinds: invalid maps give actionable advice without echoing their values', () => {
+  const marker = 'SYNTHETIC_NOT_A_PARAMETER_KIND';
+  const result = validateAppSpec(specWithPages({ actionBindings: [{ ...APPROVE, parameterKinds: { Value: marker } }] }));
+  assert.strictEqual(result.ok, false);
+  const reason = result.errors.find((text) => /actionBindings\[0\]\.parameterKinds/.test(text));
+  assert.match(reason, /primitive.*Boolean.*Guid/);
+  assert.match(reason, /lookup.*structural.*discovery/i);
+  assert.ok(!reason.includes(marker));
+});
+
+test('declared Custom API kinds: authored primitive sparse and lookup-only maps remain valid', () => {
+  const kinds = ['Boolean', 'DateTime', 'Decimal', 'Float', 'Integer', 'Money', 'Picklist', 'String', 'StringArray', 'Guid'];
+  const entries = [
+    ...kinds.map((kind) => ({ ...APPROVE, parameterKinds: { Value: kind } })),
+    { name: 'contoso_ResolveReference', parameterKinds: { Note: 'String' } },
+    { name: 'contoso_ResolveReference', parameterKinds: {} },
+    { name: 'contoso_ResolveReference' },
+  ];
+  for (const entry of entries) {
+    const result = validateAppSpec(specWithPages({ actionBindings: [entry] }));
+    assert.ok(result.ok, JSON.stringify(result.errors));
+  }
+  const withAuthoringHints = validateAppSpec(specWithPages({ actionBindings: [{
+    name: 'contoso_ResolveReference', parameterKinds: {}, lookupParameters: { Ref: { isOptional: false } },
+  }] }));
+  assert.strictEqual(withAuthoringHints.ok, false, 'discovery-only hints never become an App Spec binding field');
+});
+
 test('a list that is not a list, or an entry that is not an object, is an error naming the page and the place', () => {
   for (const [kind, value, expected] of [
     ['connectorBindings', 'contoso_msnweather', /pages\[0\]\.connectorBindings must be an array/],
@@ -186,6 +227,26 @@ const A = '11111111-1111-4111-8111-111111111111';
 const B = '22222222-2222-4222-8222-222222222222';
 const C = '33333333-3333-4333-8333-333333333333';
 const D = '44444444-4444-4444-8444-444444444444';
+
+test('declared Custom API kinds: download omits unsupported lists whole and keeps diagnostics value-safe', async (t) => {
+  for (const kind of ['EntityReference', 'Entity', 'EntityCollection']) {
+    await t.test(`declared Custom API kinds: downloaded ${kind}`, () => {
+      const held = [APPROVE, { name: 'contoso_ResolveReference', parameterKinds: { Ref: kind, Note: 'String' } }];
+      const root = pageTree({ [A]: { connectorBindings: [WEATHER], actionBindings: held } });
+      const unkept = [];
+      const [page] = parseDownloadedPages(root, root, null, [], [], unkept);
+      assert.ok(!Object.hasOwn(page, 'actionBindings'), 'one unsupported declaration omits every action binding, not only its parameter');
+      assert.deepStrictEqual(page.connectorBindings, [WEATHER]);
+      assert.strictEqual(unkept.length, 1);
+      assert.deepStrictEqual([unkept[0].pageId, unkept[0].field], [A, 'actionBindings']);
+      assert.match(unkept[0].reason, /^actionBindings\[1\]\.parameterKinds /);
+      const report = pageBindingsReport([{ ...page, key: 'weather', name: 'Weather' }], unkept);
+      const text = JSON.stringify(report) + pageBindingsNote(report);
+      assert.ok(!text.includes(kind) && !text.includes('contoso_ResolveReference'), 'omission diagnostics carry no binding values');
+      assert.deepStrictEqual(JSON.parse(fs.readFileSync(path.join(root, A, 'config.json'), 'utf8')).actionBindings, held);
+    });
+  }
+});
 
 test('parseDownloadedPages carries a page\'s binding lists as its config.json holds them — entries, their order and every property a spec states unchanged', () => {
   const root = pageTree({
@@ -623,7 +684,7 @@ test('validateAppSpec refuses a binding property an App Spec does not state, and
     [{ connectorBindings: [{ ...WEATHER, operations: [{ credentials: SECRET.token }] }] }, "page 'weather': connectorBindings[0].operations must be a list of identifiers"],
     [{ connectorBindings: [{ ...WEATHER, dataset: `https://${SECRET.token}@contoso.example/x` }] }, "page 'weather': connectorBindings[0].dataset must be empty, a plain name, or an http(s) URL with no user-info, no query and no fragment"],
     [{ actionBindings: [{ ...APPROVE, isFunction: 'no' }] }, "page 'weather': actionBindings[0].isFunction must be true or false"],
-    [{ actionBindings: [{ ...APPROVE, parameterKinds: { [SECRET.named]: 'String' } }] }, "page 'weather': actionBindings[0].parameterKinds must map parameter names to Dataverse parameter kinds"],
+    [{ actionBindings: [{ ...APPROVE, parameterKinds: { [SECRET.named]: 'String' } }] }, "page 'weather': actionBindings[0].parameterKinds must map safe parameter names to the ten declared primitive kinds (Boolean, DateTime, Decimal, Float, Integer, Money, Picklist, String, StringArray, Guid); lookup inputs stay in the call as structural values, with discovery-only hints kept out of this map"],
     [{ actionBindings: [{ ...APPROVE, displayName: `https://contoso.example/?sig=${SECRET.signature}` }] }, "page 'weather': actionBindings[0].displayName must be a plain label (letters, digits, spaces and simple punctuation; no URL)"],
   ];
   for (const [extra, expected] of cases) {

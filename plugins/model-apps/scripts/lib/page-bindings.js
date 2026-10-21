@@ -30,14 +30,10 @@
 // downloaded), so a rebuild into the environment the page is in must not take them away: it reads the entries a spec states as "what the page holds of these properties", writes a list only when that differs,
 // and when it writes, keeps on each entry what the spec does not state.
 const { compareText } = require('./compare-text.js');
+const { PARAMETER_KINDS } = require('./custom-api-kinds.js');
 
 // Each list of a page, with the property its entries are found by: a connector binding by the logical name of the connection reference it goes through, a Custom API binding by the API's unique name.
 const PAGE_BINDINGS = { connectorBindings: 'logicalName', actionBindings: 'name' };
-
-// The DataverseParameterKind strings the runtime reads from `parameterKinds`: the kinds of a Custom API's request parameter (customapirequestparameter.type), as scripts/list-custom-apis.js writes them. A closed
-// set, so a value of the map is never free text.
-// See: https://learn.microsoft.com/power-apps/developer/data-platform/reference/entities/customapirequestparameter
-const PARAMETER_KINDS = ['Boolean', 'DateTime', 'Decimal', 'Entity', 'EntityCollection', 'EntityReference', 'Float', 'Integer', 'Money', 'Picklist', 'String', 'StringArray', 'Guid'];
 
 const MAX_LIST = 1000;
 
@@ -204,7 +200,7 @@ const WHY_WORDS = {
   identifiers: 'must be a list of identifiers',
   boolean: 'must be true or false',
   label: 'must be a plain label (letters, digits, spaces and simple punctuation; no URL)',
-  'parameter-kinds': 'must map parameter names to Dataverse parameter kinds',
+  'parameter-kinds': `must map safe parameter names to the ten declared primitive kinds (${PARAMETER_KINDS.join(', ')}); lookup inputs stay in the call as structural values, with discovery-only hints kept out of this map`,
 };
 
 // The words for one property of entry `index` of a list that is not stated (statableBinding's `leftOut`, statableBindings' `problem`): the vetted property's name and the shape its value lacks, or — for a key

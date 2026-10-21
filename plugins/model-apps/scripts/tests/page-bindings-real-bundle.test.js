@@ -154,6 +154,70 @@ test('REAL BUNDLE: a page whose config.json holds null, or an empty list, for a 
   });
 });
 
+test('declared Custom API kinds: REAL BUNDLE omission preserves unsupported payloads until an explicit primitive correction', async (t) => {
+  for (const kind of ['EntityReference', 'Entity', 'EntityCollection']) {
+    await t.test(`declared Custom API kinds: REAL BUNDLE preserves ${kind}`, async () => {
+      const bad = { name: 'contoso_ResolveReference', isFunction: false, parameterKinds: { Ref: kind, Note: 'String' } };
+      const held = [APPROVE, bad];
+      const server = seededServer({ actionBindings: held });
+      await withBackend(server, async (genpage) => {
+        const unkept = [];
+        const { entry } = downloaded(await genpage.read(ID), unkept);
+        assert.ok(!Object.hasOwn(entry, 'actionBindings'), 'the whole action list is omitted, not repaired or partially projected');
+        assert.match(unkept[0].reason, /^actionBindings\[1\]\.parameterKinds /);
+        assert.ok(!JSON.stringify(unkept).includes(kind), 'unsupported values stay only in the raw page config');
+        const record = (await genpage.update(ID, { ...SENT })).fingerprint;
+        const before = rows(server, ID);
+        server.requests.length = 0;
+        server.published.length = 0;
+        const unchanged = await genpage.update(ID, { ...SENT, ...statedPageBindings(entry), specBindings: true, publishedFingerprint: record });
+        assert.deepStrictEqual([unchanged.unchanged, unchanged.publish.kind], [true, 'skipped']);
+        assert.deepStrictEqual(server.writes(), []);
+        assert.deepStrictEqual(server.published, []);
+        assert.deepStrictEqual(rows(server, ID), before, 'omission preserves the exact deployed payload, including the unsupported map');
+
+        const corrected = [APPROVE, { ...bad, parameterKinds: { Note: 'String' } }];
+        await genpage.update(ID, { ...SENT, actionBindings: corrected, specBindings: true, publishedFingerprint: record });
+        const config = JSON.parse(rows(server, ID)['config.json']);
+        assert.deepStrictEqual(config.actionBindings, corrected, 'only explicit author intent replaces the declared map');
+        assert.deepStrictEqual(config.connectorBindings, [WEATHER, SHAREPOINT]);
+        assert.deepStrictEqual(config.futureSetting, { kept: true });
+      });
+    });
+  }
+});
+
+test('declared Custom API kinds: REAL BUNDLE sparse and lookup-only calls retain structural source and binding maps', async (t) => {
+  for (const parameterKinds of [{ Note: 'String' }, {}]) {
+    await t.test(`declared Custom API kinds: REAL BUNDLE ${Object.keys(parameterKinds).length ? 'sparse' : 'lookup-only'} call`, async () => {
+      const binding = { name: 'contoso_ResolveReference', isFunction: false, parameterKinds };
+      const parameters = Object.keys(parameterKinds).length ? ", Note: 'Selected'" : '';
+      const lookupSource = `import * as React from 'react';
+export default function Page(props: { dataApi: { executeAction: Function }; pageInput: { accountId: string } }) {
+  return <button onClick={() => props.dataApi.executeAction({ name: 'contoso_ResolveReference', parameters: { Ref: { entityName: 'account', id: props.pageInput.accountId }${parameters} } })}>Resolve</button>;
+}
+`;
+      const server = makeServer();
+      server.seedPage(ID, { name: 'Weather', source: lookupSource, prompt: 'Resolve selected record', agentMessage: 'Ready',
+        config: { dataSources: ['account'], model: 'gpt-4.1', connectorBindings: [WEATHER], actionBindings: [binding] } });
+      await withBackend(server, async (genpage) => {
+        const page = await genpage.read(ID);
+        assert.strictEqual(pageFolderFiles(page)['page.tsx'], lookupSource);
+        const { entry } = downloaded(page);
+        assert.deepStrictEqual(entry.actionBindings, [binding]);
+        assert.ok(!Object.hasOwn(entry.actionBindings[0].parameterKinds, 'Ref'));
+        assert.ok(!Object.hasOwn(entry.actionBindings[0], 'lookupParameters'));
+        const before = rows(server, ID);
+        server.requests.length = 0;
+        const out = await genpage.update(ID, { ...SENT, source: lookupSource, ...statedPageBindings(entry), specBindings: true });
+        assert.strictEqual(out.unchanged, true);
+        assert.deepStrictEqual(changeWrites(server), []);
+        assert.deepStrictEqual(rows(server, ID), before);
+      });
+    });
+  }
+});
+
 // ── a page that holds more than a spec states ────────────────────────────────────────────────────────────────────────────────
 // A binding a page holds can carry what a spec does not state: a connection id of the environment it was made in, a credential someone wrote into a connectors.json, a property a later runtime adds. A download
 // leaves such a list out of the spec WHOLE (page-bindings.js), so a rebuild sends nothing for it and the page keeps it. A list an AUTHOR states for such a page is read by the build as "what the page already
