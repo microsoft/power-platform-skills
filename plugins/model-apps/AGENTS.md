@@ -2549,7 +2549,7 @@ scripts/
   list-connections.js          ← Connector discovery: the maker's connections + Dataverse connection references. The connections come from the SDK first (`listConnections`, with the Power Apps service token); `pac connection list --environment <origin>` runs only where the SDK refuses the route — and at once, with no SDK and no token read, for an environment outside the Public cloud, which the SDK has no route for (see "Connections, connector metadata and deployment settings") — and the output says which answered (`connectionsSource`, `connectionsFallback`)
   connector.js                 ← /genpage connector builder: a connector's operations, one operation's parameters and response, a tabular connector's table columns — `operations` and `schema --operation` from the SDK first (an environment outside the Public cloud goes to `pac` at once), `schema --dataset --table` and every SDK refusal through `pac model genpage`; one pure-ASCII JSON line with `source`
   create-connection-reference.js ← Creates Dataverse connectionreference rows for connector bindings
-  list-custom-apis.js          ← Discovers bindable Custom APIs (Global + entity-bound) + parameter kinds (custom-api gated)
+  list-custom-apis.js          ← Discovers supported public Custom APIs (Global + entity-bound), primitive kinds + separate lookup inputs (custom-api gated)
   list-languages.js            ← /genpage planner: the environment's base language and each provisioned language (LCID, culture code, right-to-left) — the SDK's `getEnvironmentLanguages()` over the az-token client, three reads and no write, printed as one pure-ASCII JSON line. The only source: no `pac model list-languages` stands behind it, because every /genpage page operation needs the Azure CLI
   apps.js                      ← the replacement for `pac model list` and `pac model create` that /genpage and /app-builder run (`pac-replaced-docs.test.js` pins that their text names this script, not the `pac` commands): the environment's model-driven apps and a new app that opens on generative pages, through the bundled SDK. `list` prints each app's id, name, unique name, description and two facts, apart: `published` (it has a row in the published layer: users can open it) and `unpublishedChanges` (it has a saved row that is not published) — drafts included; `pac`'s "(Saved - Not Published)" is neither of them (see the spec section) and never part of the name. `create --name --solution --page-id <guid> [--page-id …] [--unique-name] [--description] [--publish]` makes the app with one area "Main", one group "Pages" and a sub-area per page, titled with the page's stored name; the app and its sitemap join the solution (a system solution such as `Default` holds them already: `systemSolution: true`); it is published only with `--publish`. The default public view of each table the pages read (the tables come from each page's own configuration, the views from the page backend: the definition `placeInApp` pins with) joins the app's components in the create itself — `components.views` of the app the SDK creates, written by the same AddAppComponents that adds the sitemap — as `pac model genpage upload --app-id` pinned them; the output says what was pinned (`dataSources`, `pinnedViews`), a table with no default public view or a page held as raw files is named in `warnings`, and a page that cannot be read refuses the create before the first write. Every check — no page id, a page that does not exist, a solution that does not exist or is managed, a taken unique name, an unreadable base language — is a refusal printed as `{ ok: false, code, error, written: false }` before the first write; a failure after the push began reads the platform back and prints what is actually left of this create (its rows are recognised by their ids, and a row that holds the unique name under another id is named apart)
   list-tables.js               ← the replacement for `pac model list-tables` (the skills' and agents' text runs this script: `pac-replaced-docs.test.js`): the environment's tables — the SDK's `findTables(term)` for each comma-separated `--search` term, a few reads at a time, joined without repeats; `--exact` keeps the tables whose logical name IS a term and names the terms no table has (`missing`), from one read of every table; `--type custom|standard|all` is `pac`'s own filter, `custom` through the SDK's `customOnly` option. One pure-ASCII JSON line of `{ logicalName, displayName, schemaName, isCustom }` rows. An answer that is no list of tables — a 2xx with no `value` list: a sign-in page, `{}`, `null` — fails `TABLES_UNREADABLE` (exit 1) instead of reading as "no tables, every searched one missing" (`lib/collection-answers.js`)
@@ -2590,7 +2590,7 @@ scripts/
     compare-text.js            ← `compareText`, the text order for any list a script writes and a diff between two runs then reads: UTF-16 code units after lower-casing, the raw text breaking a tie; never `localeCompare`, whose order follows the host's ICU locale and version (the download's lists use it)
     lcid-cultures.js           ← pure: a Windows language id (LCID) → culture code and right-to-left, from a table of Windows' own culture data (what `pac` printed; the SDK reports numbers only, and no Intl API maps an LCID); a language id with no entry stays numeric and is reported, never guessed (`list-languages.js`)
     supported-dependencies.js  ← Single source of truth for runtime + dev deps versions
-    feature-flags.js           ← Default-OFF feature flag probe + Custom API script backstop
+    feature-flags.js           ← Feature flag probe with fail-closed fallback + Custom API script backstop
     sdk-build.js               ← app-builder build engine (idempotent; incl. the pages phase). Every way it pushes or publishes the app is one of `appWriters`, which first awaits `publishTablesBeforeApp` (the one request that publishes, before the app, the tables whose forms or charts its publish ships)
     app-components.js          ← shared current/published app layers (`currentLayerRows`, and `currentLayerRow` — the authored layer wins — for a listing), component inventory (`readAppComponentInventory`: the download's read, with two opt-ins the build's pre-app proof makes — `savedLayer`, which looks the tables of the form and chart components up in the SAVED layer, and `requireIdentified`, which reads the answer strictly: a row counts for an id the list asked about, two tables for one id or a value no table has make the read incomplete, and a row of the component list that cannot be placed — no record, no GUID objectid, another component type — makes the list unreadable), hidden-table pin/proof, Main-form resolution/membership and push directives, `collectionRows`, the one reader of a paged collection, and `savedPageRows`, the one reader of the generative-page rows in the SAVED layer (RetrieveUnpublishedMultiple, 50 ids a read): a plain read of the page table answers the published layer only, so a page that was created and never published is "not found" by it — `apps.js` and teardown read pages here
     solution-membership.js     ← one read of a solution's components (the types the build adds, plus its tables: a table held with all its subcomponents vouches for its views, forms and charts, which have no rows of their own), so a rebuild adds just what the solution is not PROVEN to hold; every doubt reads as "add"
@@ -2731,7 +2731,7 @@ Agents are invoked by skills via the `Task` tool — they are not user-invocable
 | `genpage-page-builder` | `genpage` (create flow) **and** `app-builder` (Phase 1.5) | Generates one complete `.tsx` page from a plan document and schema; runs in parallel with other builders for multi-page requests. `/app-builder` projects its App Spec into that plan format via `scripts/write-page-plan.js` and dispatches this same agent |
 | `genpage-edit-planner` | `genpage` (edit flow) | Reads downloaded artifacts as data, gathers changes, presents an edit plan and writes the same approved change list. The plan references prompt.txt without embedding it; the orchestrator applies only verified Requested Changes. |
 | `genpage-connector-builder` | `genpage` orchestrator (create **and** edit flows) | Performs connector discovery (connections, connection references, datasets, tables, operations, schema), creates Dataverse connection references, and writes the `## Connector Bindings` contract + `connectors.json`. The orchestrator forwards its output into the planner or edit-planner prompt. |
-| `genpage-customapi-builder` | `genpage` orchestrator (create **and** edit flows) | **Single owner of the custom-api feature gate.** Discovers the Dataverse Custom APIs a page can bind to (Global + entity-bound Actions/Functions) plus their parameter kinds via `list-custom-apis.js`, and writes the `## Custom API Bindings` contract + `actions.json`. The orchestrator forwards its output into the planner or edit-planner prompt. |
+| `genpage-customapi-builder` | `genpage` orchestrator (create **and** edit flows) | **Single owner of the custom-api feature gate.** Discovers supported public Dataverse Custom APIs (Global + entity-bound Actions/Functions), primitive declared kinds and separate lookup inputs via `list-custom-apis.js`, and writes the `## Custom API Bindings` contract + primitive-only `actions.json`. The orchestrator forwards its output into the planner or edit-planner prompt. |
 
 ## Key Concepts
 
@@ -2784,11 +2784,10 @@ What the skills ran through `pac model genpage` — the listing, the download, t
 
 ## Feature Flags
 
-Unreleased functionality is gated behind committed, **default-OFF** feature flags so
-the skill can merge ahead of its cross-repo dependencies. With a flag OFF, the
-**deployed page behavior is identical to before the feature existed** — the guarantee
-is about runtime/deploy output, not that every authoring artifact is byte-for-byte
-unchanged. The mechanism lives in `scripts/lib/feature-flags.js` with the committed
+Unreleased functionality can ship behind committed, **default-OFF** feature flags while
+dependencies roll out. **Supported public Custom API discovery now ships ON**, with the gate
+retained as an explicit opt-out. OFF stops new discovery/authoring; unrelated edits preserve
+existing page bindings, not silently clear them. The mechanism lives in `scripts/lib/feature-flags.js` with the committed
 values in `feature-flags.json` at the plugin root.
 
 **A flag is flipped to `true` FIRST and removed in a LATER change, not both at once.**
@@ -2799,14 +2798,13 @@ a permanently-on gate is dead weight that still has to be probed, branched on an
 about at every call site.
 
 Connector authoring no longer has a feature flag (the feature itself is in public preview). The
-remaining flags are `custom-api` and `custom-telemetry`; both currently ship **OFF** while their
-dependencies finish rolling out.
+remaining flags are `custom-api` (**ON**) and `custom-telemetry` (**OFF**).
 
-- **Source of truth:** `feature-flags.json` (e.g. `{ "custom-api": false }`). Flip a
+- **Source of truth:** `feature-flags.json` (e.g. `{ "custom-api": true }`). Flip a
   flag to `true` in a one-line PR once its dependencies are GA in PROD, then remove
   it in a follow-up that deletes its gates.
 - **Precedence (highest first):** env var `GENPAGE_ENABLE_<FLAG>` (e.g.
-  `GENPAGE_ENABLE_CUSTOM_API=1` for a single run) → committed
+  `GENPAGE_ENABLE_CUSTOM_API=0` to opt out for a single run) → committed
   `feature-flags.json` → default `false`
   (fail-closed). This mirrors the telemetry opt-out env-over-config convention.
 - **LLM gate:** skill/agent markdown probes a flag with
@@ -2833,14 +2831,16 @@ only the per-feature specifics are tabled below:
    never gate inline.
 2. **Scripts** — each entry-point script calls the shared `exitIf<Feature>Disabled()` helper (DRY —
    never an inlined gate) and fails closed with exit 3 when OFF.
-3. **Deploy** — the SKILL phase **re-probes** the flag and treats an absent/malformed bindings
-   section as *no bindings*, so a plan authored while the flag was ON cannot deploy after it goes OFF.
+3. **Deploy** — the SKILL phase **re-probes** the flag. A populated Custom API table under an
+   OFF probe halts before generation; a missing/malformed section halts too. Only the exact
+   `No custom API bindings.` sentinel means none, never a fallback that clears existing bindings.
 4. **ALM** — solution packaging honours the flag (or documents why it needs no gate).
 5. **Codegen** — `genpage-page-builder` emits feature code **only** when the plan carries an actual
    binding table, never on an absent/sentinel section.
 
 | | `custom-api` | `custom-telemetry` |
 |---|---|---|
+| **Committed default** | ON (`GENPAGE_ENABLE_CUSTOM_API=0` opts out) | OFF |
 | **Owner agent** | `genpage-customapi-builder` | none — codegen-only |
 | **Plan section** | `## Custom API Bindings` | none — driven by the maker request, not the plan |
 | **Gated scripts** | `list-custom-apis.js` | none |
@@ -2861,16 +2861,25 @@ produces the dispatch line. It also carries a second gate the other flags do not
 when `enabled`, `genpage-page-builder` instruments a page **only** when the maker explicitly
 asked to measure or track something. `enabled` is permission, not instruction.
 
-The two remaining flags currently ship **OFF**, each waiting on cross-repo dependencies:
+Feature dependencies remain separate from their committed defaults:
 
-- **`custom-api`** — the AIBuilder CoderAgent action prompt, the shared `pai-gen-ux-action-runtime`
+- **`custom-api` (ON)** — the AIBuilder CoderAgent action prompt, the shared `pai-gen-ux-action-runtime`
   plus the UCI and Controls host runtimes, the page `actionBindings` the plugin writes into `config.json`
   (through the SDK: `genpage-upload.js --actions`, and the build), and the `GenUxPluginActionAllowList` ECS setting.
   Note the maker-facing name is "Custom API" while the shipped wire contract stays
   `actionBindings` / `executeAction` (see `references/custom-api.md`).
-- **`custom-telemetry`** — the page telemetry facade in the UCI host runtime, the GenUX
+- **`custom-telemetry` (OFF)** — the page telemetry facade in the UCI host runtime, the GenUX
   authoring control (power-platform-ux), the AIBuilder CoderAgent telemetry prompt, and the
   `GenUxEnableCustomTelemetry` ECS setting (see `references/page-telemetry.md`).
+
+Custom API discovery selects public Global APIs and the page's entity-bound APIs in one inline
+request, including request and response types. It excludes collection-bound APIs and APIs with
+Entity/EntityCollection inputs or outputs. Missing, unreadable or incomplete required metadata is an error, not
+an empty successful result. `lookupParameters` retains exact lookup names, optionalness and an
+optional table hint for authoring; it never enters `actions.json`. Primitive declared kinds and
+structural `{ entityName, id }` lookup values remain separate. The builder/reference contract
+also requires known read semantics before automatic Function invocation; GET alone is not
+proof that an operation is harmless. See `references/custom-api.md` for the wire and call shapes.
 
 ## TSX source lexer — known limits
 

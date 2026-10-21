@@ -173,6 +173,71 @@ test('Custom API bindings preserve omission and only an explicit empty array cle
   }
 });
 
+function lookupFixture({ isOptional = false, supplied = true } = {}) {
+  const fixture = apiFixture();
+  event(fixture, 'discovery').result.customApis[0].lookupParameters = {
+    Ref: { isOptional, logicalEntityName: 'salesorder' },
+  };
+  fixture.genpagePlan += '\nLookup inputs (discovery-only): cnt_ApproveOrder.Ref '
+    + `is ${isOptional ? 'optional' : 'required'}; use { entityName: 'salesorder', id: recordId } `
+    + 'from the existing page record, never a declared parameter kind in actions.json.\n';
+  if (supplied) {
+    fixture.artifacts['stages/with-api.tsx'] = source.replace(
+      "parameters: { Comment: 'Approved', Amount: amount }",
+      "parameters: { Ref: { entityName: 'salesorder', id: recordId }, Comment: 'Approved', Amount: amount }"
+    );
+  }
+  return fixture;
+}
+
+test('Custom API lookup inputs are structural while authored bindings remain primitive-only', () => {
+  const fixture = lookupFixture();
+  for (const layer of [1, 2]) {
+    const result = score(fixture, layer);
+    assert.equal(result.status, 'pass', result.reason);
+  }
+  assert.deepEqual(JSON.parse(fixture.artifacts['actions.json']), bindings);
+  for (const file of ['created/config.json', 'preserved/config.json']) {
+    assert.deepEqual(JSON.parse(fixture.artifacts[file]).actionBindings, bindings);
+  }
+});
+
+test('a required discovered lookup input cannot silently disappear from the generated call', () => {
+  const fixture = lookupFixture({ supplied: false });
+  for (const layer of [1, 2]) {
+    const result = score(fixture, layer);
+    assert.equal(result.status, 'fail', 'the discovery-only lookup name is still a required call input');
+    assert.match(result.reason, /lookup|Ref/i);
+  }
+});
+
+test('an optional discovered lookup may be omitted or supplied in its structural shape', () => {
+  for (const supplied of [false, true]) {
+    const fixture = lookupFixture({ isOptional: true, supplied });
+    const result = score(fixture);
+    assert.equal(result.status, 'pass', result.reason);
+  }
+});
+
+test('lookup inputs must use the discovered table and an existing record rather than a primitive or invented id', () => {
+  for (const replacement of [
+    'recordId',
+    "{ entityName: 'account', id: recordId }",
+    "{ entityName: 'salesorder' }",
+    "{ entityName: 'salesorder', id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa' }",
+    "{ entityName: 'salesorder', id: amount }",
+    "{ entityName: 'salesorder', id: recordId, name: 'Invented' }",
+    'null',
+  ]) {
+    const fixture = lookupFixture();
+    fixture.artifacts['stages/with-api.tsx'] = fixture.artifacts['stages/with-api.tsx']
+      .replace("Ref: { entityName: 'salesorder', id: recordId }", `Ref: ${replacement}`);
+    const result = score(fixture);
+    assert.equal(result.status, 'fail', replacement);
+    assert.match(result.reason, /lookup|Ref/i);
+  }
+});
+
 test('disabled or unreadable Custom API gates refuse before generation, not as a no-bindings fallback', () => {
   for (const result of ['disabled', 'unknown', null]) {
     const stopped = apiFixture();

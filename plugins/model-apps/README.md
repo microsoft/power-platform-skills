@@ -38,18 +38,19 @@ A page write whose outcome is unknown (the connection dropped before the answer)
 what it holds decides whether the write landed — the message says what to check when that cannot be told. There is no `pac` call, and so
 no timeout setting, for pages.
 
-## Feature flags (experimental & in-progress)
+## Feature flags (defaults and overrides)
 
 Some capabilities ship **OFF by default** while their cross-repo dependencies roll
-out to production. With a flag OFF, the skill behaves as if the feature doesn't
-exist and deployed pages are unchanged. Flags are catalogued (with lifecycle
+out to production. **Supported public Custom API discovery is ON by default**; custom
+telemetry remains OFF. An explicit Custom API opt-out stops new discovery/authoring without
+clearing existing bindings during unrelated edits. Flags are catalogued (with lifecycle
 status) in `scripts/lib/feature-flags.js`; their on/off value lives in
 `feature-flags.json` at the plugin root.
 
-| Flag | Status | Enables | Depends on |
-|---|---|---|---|
-| `custom-api` | in-progress | Calling a Dataverse Custom API Action or Function from a generated page (`executeAction` / `executeFunction` / `listBoundActions`) | the AIBuilder action prompt, the shared action runtime, the UCI and Controls host runtimes, the page `actionBindings` the plugin writes into `config.json` (through the SDK), and the `GenUxPluginActionAllowList` setting — all live in PROD |
-| `custom-telemetry` | in-progress | A generated page reporting its own events, metrics, traces and exceptions to your Application Insights resource via `props.appInsights` | the page telemetry facade in the UCI host runtime, the GenUX authoring control, the AIBuilder telemetry prompt, and the `GenUxEnableCustomTelemetry` setting — all live in PROD |
+| Flag | Status | Default | Enables | Depends on |
+|---|---|---|---|---|
+| `custom-api` | in-progress | ON | Calling a supported public Dataverse Custom API Action or Function from a generated page (`executeAction` / `executeFunction` / `listBoundActions`) | the action prompt and host runtimes, revision-bound `actionBindings`, environment governance and the signed-in user's privileges |
+| `custom-telemetry` | in-progress | OFF | A generated page reporting its own events, metrics, traces and exceptions to your Application Insights resource via `props.appInsights` | the page telemetry facade in the UCI host runtime, the GenUX authoring control, the AIBuilder telemetry prompt, and the `GenUxEnableCustomTelemetry` setting — all live in PROD |
 
 Connector authoring is in **public preview** and no longer has a feature flag. Connector discovery, binding, deploy, and ALM packaging are always available when the required PAC and host capabilities are present.
 
@@ -59,30 +60,35 @@ Connector authoring is in **public preview** and no longer has a feature flag. C
 node scripts/lib/feature-flags.js --list
 ```
 
-**Enable a flag for a single run** via an environment variable (highest precedence):
+**Disable Custom API discovery for a single run** via an environment variable (highest precedence):
 
 ```powershell
 # Windows (PowerShell)
-$env:GENPAGE_ENABLE_CUSTOM_API = "1"
+$env:GENPAGE_ENABLE_CUSTOM_API = "0"
 ```
 
 ```bash
 # macOS / Linux (bash)
-export GENPAGE_ENABLE_CUSTOM_API=1
+export GENPAGE_ENABLE_CUSTOM_API=0
 ```
 
-**Enable it persistently** by flipping the value in `feature-flags.json`:
+**Disable it persistently** by changing its committed value in `feature-flags.json`:
 
 ```json
-{ "custom-api": true }
+{ "custom-api": false }
 ```
 
-Precedence is **env var → `feature-flags.json` → default OFF** (fail-closed). Only
-turn a flag on once its "Depends on" items are actually available in your
-environment — otherwise the feature's commands will fail with a clear "disabled" or
-capability error. The env var name is always `GENPAGE_ENABLE_` plus the flag name in upper case, with
+Precedence is **env var → `feature-flags.json` → default OFF** for missing/unset
+configuration (fail-closed); it does not override Custom API's committed ON default.
+Use `GENPAGE_ENABLE_CUSTOM_API=1` to explicitly enable a run. Host capabilities and server
+governance still apply; enabling discovery grants no new privileges.
+The env var name is always `GENPAGE_ENABLE_` plus the flag name in upper case, with
 `-` turned into `_` (`custom-api` → `GENPAGE_ENABLE_CUSTOM_API`), and unknown flags stay disabled even if
 a matching env var is set.
+
+Discovery omits private APIs and APIs with Entity/EntityCollection inputs or outputs.
+Lookup input names stay available to the author separately from the primitive-only wire
+`parameterKinds`; see [the Custom API contract](references/custom-api.md).
 
 ## Skills
 

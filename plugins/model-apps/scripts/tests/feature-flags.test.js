@@ -19,7 +19,7 @@ const {
   FLAGS,
 } = require(libPath);
 
-// --- Default OFF (fail-closed) ---------------------------------------------
+// --- Committed defaults and fail-closed fallback ---------------------------
 
 test('connectors flag is retired and unknown fail-closed', () => {
   const json = JSON.parse(
@@ -34,10 +34,17 @@ test('connectors flag is retired and unknown fail-closed', () => {
     assert.equal(lib[removed], undefined, `${removed} must stay removed now that connectors have no flag`);
   }
 });
-test('custom-api flag is OFF by default (no env override)', () => {
-  // Same fail-closed contract every gated feature relies on: an empty env falls through to the
-  // committed feature-flags.json, which ships custom-api:false until the runtime stack is GA in PROD.
-  assert.equal(isCustomApiEnabled({ env: {} }), false);
+test('custom-api flag is ON by default without changing the generic fail-closed fallback', () => {
+  assert.equal(isEnabled('custom-api', { env: {} }), true);
+  assert.equal(isCustomApiEnabled({ env: {} }), true);
+  for (const flags of [{}, { 'custom-api': false }, { 'custom-api': 'true' }]) {
+    assert.equal(isEnabled('custom-api', { env: {}, flags }), false);
+  }
+});
+
+test('an explicit custom-api opt-out overrides the committed enabled default', () => {
+  assert.equal(isEnabled('custom-api', { env: { GENPAGE_ENABLE_CUSTOM_API: '0' } }), false);
+  assert.equal(isCustomApiEnabled({ env: { GENPAGE_ENABLE_CUSTOM_API: '0' } }), false);
 });
 
 test('custom-telemetry flag is OFF by default (no env override)', () => {
@@ -103,13 +110,19 @@ test('customApiDisabledMessage explains how to enable', () => {
   assert.match(m, /feature-flags\.json/);
 });
 
-// --- Committed config actually ships OFF ------------------------------------
+test('the Custom API catalog and disabled guidance describe the enabled default and opt-out', () => {
+  assert.match(FLAGS['custom-api'].summary, /enabled by default/i);
+  assert.match(customApiDisabledMessage(), /GENPAGE_ENABLE_CUSTOM_API=0/);
+  assert.doesNotMatch(customApiDisabledMessage(), /once the dependencies are released/);
+});
 
-test('committed feature-flags.json ships custom-api: false', () => {
+// --- Committed config keeps each feature's own default ---------------------
+
+test('committed feature-flags.json ships custom-api: true', () => {
   const json = JSON.parse(
     fs.readFileSync(path.join(__dirname, '..', '..', 'feature-flags.json'), 'utf8')
   );
-  assert.equal(json['custom-api'], false);
+  assert.equal(json['custom-api'], true);
 });
 
 test('committed feature-flags.json ships custom-telemetry: false', () => {
@@ -121,13 +134,21 @@ test('committed feature-flags.json ships custom-telemetry: false', () => {
 
 // --- CLI probe (deterministic gate for the skill markdown) ------------------
 
-test('CLI prints "disabled" and exits 1 when OFF', () => {
+test('CLI prints "disabled" and exits 1 for an explicit opt-out', () => {
   const res = spawnSync(process.execPath, [libPath, 'custom-api'], {
     encoding: 'utf8',
-    env: { ...process.env, GENPAGE_ENABLE_CUSTOM_API: '' },
+    env: { ...process.env, GENPAGE_ENABLE_CUSTOM_API: '0' },
   });
   assert.equal(res.status, 1);
   assert.match(res.stdout, /disabled/);
+});
+
+test('CLI prints "enabled" and exits 0 without an environment override', () => {
+  const env = { ...process.env };
+  delete env.GENPAGE_ENABLE_CUSTOM_API;
+  const res = spawnSync(process.execPath, [libPath, 'custom-api'], { encoding: 'utf8', env });
+  assert.equal(res.status, 0, res.stderr);
+  assert.equal(res.stdout.trim(), 'enabled');
 });
 
 test('CLI prints "enabled" and exits 0 when env override ON', () => {
@@ -151,7 +172,7 @@ test('exitIfCustomApiDisabled exits 3 and writes the message when OFF', () => {
   let exitCode = null;
   let written = '';
   exitIfCustomApiDisabled({
-    env: {},
+    env: { GENPAGE_ENABLE_CUSTOM_API: '0' },
     exit: (c) => { exitCode = c; },
     write: (s) => { written += s; },
   });

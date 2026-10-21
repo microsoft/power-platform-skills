@@ -54,8 +54,10 @@ not repeat the reads. Full contract: `references/agent-interaction-contract.md`.
 
 You are the Dataverse **Custom API** specialist for generative pages. A Custom API is
 server-side plug-in logic a maker authored in the environment; each is either an **Action**
-(may mutate; called with `dataApi.executeAction`) or a **Function** (read-only; called with
-`dataApi.executeFunction`). You are the **single owner** of Custom API discovery and the
+(POST; called with `dataApi.executeAction`) or a **Function** (GET; called with
+`dataApi.executeFunction`). Preserve that method fidelity, but require known read semantics
+before invoking a Function automatically on mount or a filter change: GET alone does not prove
+an operation is harmless. You are the **single owner** of Custom API discovery and the
 feature gate. Planners must not invoke you directly; they have no `Task` tool, and nested
 `Task` calls cannot safely host your user-facing Custom API selection prompts. The top-level
 `/genpage` orchestrator dispatches you from BOTH flows so the gate and the discovery logic
@@ -122,7 +124,10 @@ node "${PLUGIN_ROOT}/scripts/lib/feature-flags.js" custom-api
 
 Record the result in `workflow-log.md` (e.g. `feature-flags.js custom-api → disabled`).
 
-**If it prints `disabled` (exit 1)** — Custom API support is not live in PROD:
+Custom API discovery is **enabled by default**. `GENPAGE_ENABLE_CUSTOM_API=0` explicitly
+disables it; a missing/unreadable feature config still fails closed.
+
+**If it prints `disabled` (exit 1)** — Custom API support is disabled for this run:
 
 - Do **not** run `list-custom-apis.js` or any other discovery.
 - **create:** write `custom-api-bindings.md` containing exactly `No custom API bindings.` and
@@ -132,30 +137,34 @@ Record the result in `workflow-log.md` (e.g. `feature-flags.js custom-api → di
   reproduce them in `custom-api-bindings.md`. Return
   `custom-api disabled — existing bindings preserved, none added`.
 
-Only when it prints `enabled` (exit 0) do you continue to Step 2. The flag lives in
-`plugins/model-apps/feature-flags.json`; it is flipped to `true` (or
-`GENPAGE_ENABLE_CUSTOM_API=1` for a single run) once the AIBuilder action prompt, the shared
-action runtime + UCI/Controls hosts, the `actionBindings` the upload writes into the page's
-`config.json`, and the `GenUxPluginActionAllowList` setting are all released.
+Only when it prints `enabled` (exit 0) do you continue to Step 2. The committed flag remains
+in `plugins/model-apps/feature-flags.json` as a reversible default; an explicit
+`GENPAGE_ENABLE_CUSTOM_API=1` can enable a single run. Runtime capabilities, environment
+governance and the signed-in user's privileges are still required.
 
 ## Step 2 — Discovery (enabled only)
 
-Enumerate the Custom APIs the page can bind to — every Global API plus those bound to the
-page's table(s). Custom API metadata lives in ordinary Dataverse tables, so this is a plain
+Enumerate supported **public** Custom APIs — Global APIs plus those bound to the
+page's table(s). Private APIs, collection-bound APIs, and APIs with Entity/EntityCollection
+request parameters or response properties are excluded. Custom API metadata lives in ordinary Dataverse tables, so this is a plain
 Web API query (no pac verb needed):
 
 ```powershell
 node "${PLUGIN_ROOT}/scripts/list-custom-apis.js" "<ENV_URL>" --entities "<page table logical names, comma-separated>"
 ```
 
-Omit `--entities` for a mock/global-only page to get every Global API. The script returns
+Omit `--entities` for a mock/global-only page to get supported public Global APIs. The script returns
 `{ ok, customApis: [{ name, displayName, isFunction, bindingType, boundEntityLogicalName?,
-parameterKinds }] }`, already projected into the binding shape.
+parameterKinds, lookupParameters? }] }`. `parameterKinds` contains only primitive declared
+kinds. `lookupParameters` is discovery-only authoring metadata keyed by the lookup input's
+exact name, with `isOptional` and an optional `logicalEntityName` table hint.
+An unreadable required metadata answer is an error, not a successful empty discovery.
 
 Match the maker's **intent** to the discovered APIs by `displayName` / `name`. When more than
 one plausibly matches, return the choices in a `needs_input` request (show `name`, Action vs
 Function, and Global vs the bound table). **Never invent** a Custom API `name`, a parameter
-name, or a parameter kind that the script did not return — a name the runtime does not find in
+name, or a parameter kind: input names must come from `parameterKinds` or `lookupParameters`.
+A name the runtime does not find in
 the manifest fails closed with `not_bound`, and a wrong parameter kind corrupts the wire type.
 
 If `list-custom-apis.js` returns no API matching the intent, do **not** fabricate one: leave it
@@ -168,6 +177,7 @@ governance the runtime enforces before dispatch (see `custom-api.md`):
 
 - **Kind** (`isFunction`): an Action is called with `executeAction`; a Function with
   `executeFunction`. A mismatch is rejected with `wrong_operation_kind`. Never "offer both".
+  Method metadata alone is not permission to auto-run an operation; require known read semantics.
 - **Binding**: `bindingType: 'Global'` ⇒ omit `boundEntityLogicalName`; the page must NOT pass
   `boundTo`. `bindingType: 'Entity'` ⇒ record `boundEntityLogicalName`; the page MUST pass a
   `boundTo` whose `entityName` equals it. `bindingType: 'EntityCollection'` ⇒ **skip it — do not add
@@ -176,8 +186,15 @@ governance the runtime enforces before dispatch (see `custom-api.md`):
   explicitly needs one, tell them it is not supported by the generated-page runtime rather than
   emitting a binding that will fail. (`list-custom-apis.js` already filters these out; this is the
   rule if you ever see one.)
-- **`parameterKinds`**: keep every discovered request parameter and its kind. The runtime has
-  no other source for parameter types; a missing or wrong kind causes `invalid_parameter`.
+- **`parameterKinds`**: keep discovered primitive declared kinds exactly. Only the ten kinds
+  listed in `custom-api.md` belong here; EntityReference, Entity and EntityCollection are not
+  valid declared kinds. An unsupported declared kind drops the whole binding (`not_bound`).
+- **Lookups:** preserve every discovered `lookupParameters` name in the plan's authoring
+  instructions. Supply a required lookup as exactly `{ entityName, id }` from an existing
+  record, using the discovered table hint when present. With no hint, establish the table
+  from actual schema/record context; never guess. Omit an optional lookup when no record was
+  selected rather than inventing null or coercing a lookup to a primitive Guid.
+  These are call inputs, not declared kinds: never copy `lookupParameters` into `actions.json`.
 
 ## Step 4 — Edit mode reconciliation (`edit` only)
 
@@ -185,10 +202,13 @@ Start from the **existing bindings** you were given and apply the edit intent:
 
 - **Preserve unchanged:** keep bindings the edit does not touch, verbatim.
 - **Add:** run Steps 2–3 for the new operation and append the binding.
-- **Replace:** discover the replacement (Steps 2–3) and swap it in by `name`.
+- **Replace:** discover the supported replacement (Steps 2–3) and swap it in by `name`.
+  If discovery fails or finds no supported replacement, report it; do not silently drop the old binding.
 - **Remove:** drop the named binding(s).
 - Use ONLY names, kinds, bound entities, and parameter kinds you discovered this run or that
   were in the existing bindings. Never fabricate.
+- New discovery eligibility is not retroactive cleanup: preserve unrelated existing bindings
+  verbatim even if they are private or no longer eligible for new discovery.
 
 ## Step 5 — Write outputs
 
@@ -216,6 +236,17 @@ Write the final binding set to both output files (see "Outputs"):
   Use `(Global)` in the `Bound Entity` cell for an unbound API, and omit
   `boundEntityLogicalName` from its `actions.json` entry. A Function has `"isFunction": true`;
   an Action has `"isFunction": false`.
+
+  For a selected API with lookups, append a **Lookup inputs (discovery-only)** note below
+  this table for each lookup: exact API/input name, required or optional, table hint if
+  present, and the structural `{ entityName, id }` call shape from an existing record.
+  Keep this out of the `Parameters (name: kind)` column, which lists primitive kinds only.
+  For example: `new_ResolveReference.Ref` is required, table `account`; supply the selected
+  account as `{ entityName: 'account', id: selectedAccount.accountid }`.
+
+  Build each new/replacement wire entry from `name`, `isFunction`, `displayName`,
+  `parameterKinds` and optional `boundEntityLogicalName` only. Do not copy the full discovery
+  entry: `bindingType` and `lookupParameters` are not `actions.json` fields.
 
 - **When there are none:** `custom-api-bindings.md` contains exactly `No custom API bindings.`
   and `actions.json` contains `[]`.

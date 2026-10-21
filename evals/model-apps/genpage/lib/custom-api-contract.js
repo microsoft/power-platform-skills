@@ -49,6 +49,22 @@ function projectBinding(entry) {
     ...(entry.boundEntityLogicalName && { boundEntityLogicalName: entry.boundEntityLogicalName }) };
 }
 
+function discoveredLookupParameters(entry) {
+  const lookups = entry.lookupParameters;
+  if (lookups === undefined) return {};
+  if (!lookups || typeof lookups !== 'object' || Array.isArray(lookups)) {
+    throw new Error(`${entry.name}: unreadable discovery-only lookup parameters`);
+  }
+  for (const [name, lookup] of Object.entries(lookups)) {
+    if (!name || Object.hasOwn(entry.parameterKinds, name) || !lookup || typeof lookup !== 'object'
+      || Array.isArray(lookup) || typeof lookup.isOptional !== 'boolean'
+      || (lookup.logicalEntityName !== undefined && (typeof lookup.logicalEntityName !== 'string' || !lookup.logicalEntityName))) {
+      throw new Error(`${entry.name}.${name}: unreadable discovery-only lookup metadata`);
+    }
+  }
+  return lookups;
+}
+
 function customApiGateProblems(fixture) {
   const bindings = planBindings(fixture);
   const calls = workflowCalls(fixture);
@@ -88,10 +104,37 @@ function parameterMatches(value, kind, prefix) {
   if (kind === 'Boolean') return /^(true|false)$/.test(value) || annotation === 'boolean';
   if (kind === 'DateTime') return annotation === 'Date' || (literal !== null && /^\d{4}-\d\d-\d\dT/.test(literal));
   if (kind === 'StringArray') return annotation === 'string[]';
-  return value.trim().startsWith('{') || (kind === 'EntityCollection' && value.trim().startsWith('['));
+  return false;
 }
 
-function runtimeProblems(code, bindings, declaredOutputs) {
+function existingRecordId(value, prefix) {
+  return literalString(value) === null && /^[\w$.]+$/.test(value) && parameterMatches(value, 'Guid', prefix);
+}
+
+function lookupParameterProblems(parameters, lookups, operation, prefix) {
+  const problems = [];
+  for (const [name, lookup] of Object.entries(lookups)) {
+    if (!parameters.has(name)) {
+      if (!lookup.isOptional) problems.push(`${operation}.${name}: required discovered lookup input is missing`);
+      continue;
+    }
+    let fields;
+    try { fields = objectFields(parameters.get(name)); }
+    catch { problems.push(`${operation}.${name}: lookup must be the structural { entityName, id } object`); continue; }
+    const entity = literalString(fields.get('entityName') || '');
+    if (fields.size !== 2 || !entity || !fields.has('id')) {
+      problems.push(`${operation}.${name}: lookup must have exactly entityName and id`);
+    } else if (lookup.logicalEntityName && entity !== lookup.logicalEntityName) {
+      problems.push(`${operation}.${name}: lookup table disagrees with discovery`);
+    }
+    if (!existingRecordId(fields.get('id') || '', prefix)) {
+      problems.push(`${operation}.${name}: lookup id must come from string-typed existing page input, never an invented or numeric id`);
+    }
+  }
+  return problems;
+}
+
+function runtimeProblems(code, bindings, declaredOutputs, lookupMetadata) {
   const problems = pageStructureProblems(code);
   const calls = actionCalls(code);
   const known = new Map(bindings.map((binding) => [binding.name, binding]));
@@ -115,17 +158,25 @@ function runtimeProblems(code, bindings, declaredOutputs) {
     const match = presence.exec(prefixMask);
     if (!match || !/^['"]function['"]/.test(prefix.slice(match.index + match[0].length - 1))) problems.push(`${name}: method is not presence-checked on the same receiver in its helper before the call`);
     const parameters = call.fields.has('parameters') ? objectFields(call.fields.get('parameters')) : new Map();
-    if ([...parameters.keys()].sort().join('|') !== Object.keys(binding.parameterKinds).sort().join('|')) problems.push(`${name}: runtime parameter names differ from the declared kinds`);
+    // Sparse declared kinds do not enumerate lookup inputs. Use discovery-only metadata to allow
+    // their names and enforce required lookups without persisting structural kinds in the binding.
+    const lookups = lookupMetadata.get(name) || {};
+    const allowed = new Set([...Object.keys(binding.parameterKinds), ...Object.keys(lookups)]);
+    if ([...parameters.keys()].some((parameter) => !allowed.has(parameter))
+      || Object.keys(binding.parameterKinds).some((parameter) => !parameters.has(parameter))) {
+      problems.push(`${name}: runtime parameter names differ from the declared kinds and discovered lookups`);
+    }
     for (const [parameter, kind] of Object.entries(binding.parameterKinds)) {
       if (!parameterMatches(parameters.get(parameter) || '', kind, prefix)) problems.push(`${name}.${parameter}: runtime value does not match ${kind}`);
     }
+    problems.push(...lookupParameterProblems(parameters, lookups, name, prefix));
     if (binding.boundEntityLogicalName) {
       if (!call.fields.has('boundTo')) problems.push(`${name}: entity-bound operation omits boundTo`);
       else {
         const bound = objectFields(call.fields.get('boundTo'));
         if (literalString(bound.get('entityName') || '') !== binding.boundEntityLogicalName) problems.push(`${name}: boundTo uses the wrong entity`);
         const id = bound.get('id') || '';
-        if (literalString(id) !== null || !/^[\w$.]+$/.test(id) || !parameterMatches(id, 'Guid', prefix)) {
+        if (!existingRecordId(id, prefix)) {
           problems.push(`${name}: bound record id must come from string-typed existing page input, never a hard-coded GUID or numeric value`);
         }
       }
@@ -163,10 +214,14 @@ function customApiProblems(fixture) {
   const declared = planBindings(fixture);
   const calls = workflowCalls(fixture);
   const discovered = new Map();
+  const lookupMetadata = new Map();
   for (const call of calls.filter((entry) => /\blist-custom-apis\.js\b/.test(entry.command))) {
     const result = resultObject(call);
     if (result?.ok !== true || !Array.isArray(result.customApis)) problems.push('Custom API discovery failed or returned unreadable metadata');
-    else for (const entry of result.customApis) discovered.set(entry.name, projectBinding(entry));
+    else for (const entry of result.customApis) {
+      discovered.set(entry.name, projectBinding(entry));
+      lookupMetadata.set(entry.name, discoveredLookupParameters(entry));
+    }
   }
   for (const binding of declared) if (!isDeepStrictEqual(discovered.get(binding.name), binding)) problems.push(`${binding.name}: plan kind, bound entity or parameter kinds do not match discovery`);
   let previousId = null;
@@ -196,7 +251,7 @@ function customApiProblems(fixture) {
     const code = artifactText(fixture, stage.source);
     const write = calls.slice(0, uploadIndex).filter((entry) => /^Write\s+/.test(entry.command) && fileName(entry.command.slice(6)) === stage.target).at(-1);
     if (!write || artifactText(fixture, write.artifact) !== code) problems.push(`${stage.id}: uploaded API source is not the actual preceding generated snapshot`);
-    problems.push(...runtimeProblems(code, desired, contract.outputs));
+    problems.push(...runtimeProblems(code, desired, contract.outputs, lookupMetadata));
   }
   const last = contract.stages.at(-1);
   if (artifactText(fixture, last.target) !== artifactText(fixture, last.source)) problems.push('final API TSX differs from the final lifecycle stage');

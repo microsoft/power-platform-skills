@@ -645,14 +645,18 @@ required patterns and the binding contract.
 
 When the plan's `## Custom API Bindings` contains a binding table, the page may invoke Dataverse
 **Custom APIs** (server-side plug-in logic) on the signed-in user's own token. A Custom
-API of kind **Action** (may mutate) is called with `dataApi.executeAction`; a **Function**
-(read-only) with `dataApi.executeFunction`; `dataApi.listBoundActions` enumerates the
+API of kind **Action** (POST) is called with `dataApi.executeAction`; a **Function**
+(GET) with `dataApi.executeFunction`; `dataApi.listBoundActions` enumerates the
 page's bound operations. These are optional runtime methods — always presence-check before
 calling, guard Actions against double-submit, read results from `res.outputs` (never
 `res.value`), surface only the sanitized `res.error?.message`, and never auto-retry an
 `indeterminate` result. Call only the `name`s in the plan's `## Custom API Bindings`; a name
 not bound to the page fails with `not_bound`. See [custom-api.md](./custom-api.md) for the
 required patterns, the `boundTo` rules, and the full `error.code` contract.
+Automatic Function invocation requires known read semantics, not merely GET metadata.
+Read the plan's separate lookup-input notes: structural `{ entityName, id }` lookup values
+remain call inputs even though only primitive kinds appear in `parameterKinds`.
+Discovery-only `lookupParameters` must never be copied into a wire binding.
 
 ---
 
