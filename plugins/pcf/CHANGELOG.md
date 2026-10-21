@@ -13,7 +13,7 @@ First preview release: ships the `/pcf:pcf` skill, matrix-pinned templates and r
 
 ### Changed
 
-- The bundled SDK is the one model-apps 2.17.0 ships (power-platform-ux d603c799); it no longer carries the SDK's PCF control registration, which this plugin never called.
+- The bundled SDK is the one model-apps 2.18.0 ships (power-platform-ux a3443479), beside model-apps 2.18.0's HTTP client; the SDK no longer carries its PCF control registration, which this plugin never called. What changed in them — a web resource's published content read back, an app's sitemap found by its component, a publish sent once — is in requests this plugin does not make: it only reads through them and publishes through PAC, so what it does is unchanged.
 
 ### Fixed
 
