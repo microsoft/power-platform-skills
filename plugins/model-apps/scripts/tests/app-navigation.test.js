@@ -5,9 +5,11 @@
 // sitemap with no non-empty area holding a non-empty group (HTTP 400, measured). It accepts the same navigation when
 // the sitemap of an app that already exists is UPDATED (measured: saved and published), so only a new app is refused.
 // A spec whose navigation is only pages, or has no entry at all, still VALIDATES, so a build of a new app used to fail
-// at the app step after the solution, tables, views and forms had been written. This file pins the rule itself, its
-// agreement with what appDef pushes, that validation is unchanged, and the lint warning. The build, the dry run and
-// the writes are pinned in app-navigation-build.test.js.
+// at the app step after the solution, tables, views and forms had been written. A run that creates a new app's pages
+// FIRST (the whole build) creates the app once they exist, with them in its first navigation, so it builds a navigation
+// of pages only for a new app too; both rules are pinned. This file pins the rule itself, its agreement with what appDef
+// pushes, that validation is unchanged, and the lint warning. The build, the dry run and the writes are pinned in
+// app-navigation-build.test.js.
 const { test } = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');
@@ -15,7 +17,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { execFileSync } = require('node:child_process');
 
-const { NAVIGATION_REFUSAL_CODE, navigationEntryKind, navigationHolds, navigationVerdict } = require('../lib/app-navigation.js');
+const { NAVIGATION_REFUSAL_CODE, navigationEntryKind, navigationHolds, navigationIsPagesOnly, navigationVerdict } = require('../lib/app-navigation.js');
 const { appDef } = require('../lib/sdk-build.js');
 const { validateAppSpec } = require('../lib/app-spec.js');
 const { lintAppSpec } = require('../lib/spec-lint.js');
@@ -78,7 +80,24 @@ for (const shape of SHAPES) {
       else assert.strictEqual(verdict.code, undefined, 'a navigation the build goes on with carries no refusal code');
     }
   });
+  // A run that creates a new app's pages before the app (sdk-build.js pagesFirstRule): the whole build --apply runs.
+  test(`verdict, a run that creates the pages first — ${shape.name}: new ${shape.forNewPagesFirst}, existing ${shape.forExisting}, unknown ${shape.forUnknownPagesFirst}`, () => {
+    const spec = specFor(shape);
+    for (const [appExists, expected] of [[false, shape.forNewPagesFirst], [true, shape.forExisting], [undefined, shape.forUnknownPagesFirst]]) {
+      const verdict = navigationVerdict(spec, { appExists, newAppPagesFirst: true });
+      assert.strictEqual(verdict.outcome, expected, `${exists[appExists]}: ${JSON.stringify(verdict)}`);
+      if (expected === 'ok') assert.deepStrictEqual(verdict, { outcome: 'ok' });
+      else assert.strictEqual(verdict.kind, shape.kind);
+    }
+  });
 }
+
+test('navigationIsPagesOnly: a navigation that holds entries, every one a page — the one a new app is built from only by creating its pages first', () => {
+  for (const shape of SHAPES) assert.strictEqual(navigationIsPagesOnly(specFor(shape)), shape.kind === 'pages-only', shape.name);
+  assert.strictEqual(navigationIsPagesOnly({}), false);
+  assert.strictEqual(navigationIsPagesOnly({ appShell: oneGroup(page('overview'), { dashboard: 'Ops', title: 'Ops' }) }), false, 'a dashboard entry is not a page');
+  assert.strictEqual(navigationIsPagesOnly({ appShell: oneGroup(page('overview'), { url: 'https://contoso.example', title: 'u' }) }), false, 'nor is a url');
+});
 
 test('the refusal code is the one the build halts with', () => {
   assert.strictEqual(NAVIGATION_REFUSAL_CODE, 'app-navigation-empty');
@@ -108,22 +127,29 @@ test('an existing app is warned of an empty navigation only when the run writes 
 });
 
 test('a refusal says what the navigation holds, what Dataverse requires, and what to add', () => {
-  const pagesOnly = navigationVerdict(specFor(SHAPES.find((s) => s.name === 'a navigation of pages only')), { appExists: false });
+  // A navigation of pages only is refused only by a run that does not create a new app's pages first, and says why it does not.
+  const pagesOnly = navigationVerdict(specFor(SHAPES.find((s) => s.name === 'a navigation of pages only')), { appExists: false, whyNotPagesFirst: 'this run does not have the pages phase, which would create them first' });
   assert.match(pagesOnly.message, /holds only page entries \('overview', 'detail'\)/);
-  assert.match(pagesOnly.message, /A page entry joins the navigation only once its page exists, so a new app is created without them/);
+  assert.match(pagesOnly.message, /A page entry joins the navigation only once its page exists, and this run does not have the pages phase, which would create them first, so a new app would be created without them/);
   assert.match(pagesOnly.message, /Dataverse refuses to create a sitemap with no non-empty area holding a non-empty group/);
   assert.match(pagesOnly.message, /HTTP 400: "SiteMap needs to have a non-empty Area with a non-empty Group"/);
+  assert.match(pagesOnly.message, /A build that has the pages phase creates such an app after its pages, with them in its first navigation: run the whole build, with every page the navigation names implemented\./);
   assert.ok(pagesOnly.message.includes("{ entity: '<table>', title: '<label>' }"), 'an entry to add');
-  assert.match(pagesOnly.message, /A new app needs one entry that is not a page: add one to a group/);
+  assert.match(pagesOnly.message, /Or give a group one entry that is not a page/);
   assert.match(pagesOnly.message, /dashboard or url entry/);
   assert.match(pagesOnly.message, /keep the page entries beside it/);
+  assert.match(navigationVerdict(specFor(SHAPES.find((s) => s.name === 'a navigation of pages only')), { appExists: false }).message, /and this run does not create the pages before the app, so/, 'without a reason it still says what the run does not do');
 
   for (const shape of SHAPES.filter((s) => s.kind === 'empty')) {
     const { message } = navigationVerdict(specFor(shape), { appExists: false });
     assert.ok(message.includes(`the navigation has no entry (${shape.said})`), `${shape.name}: ${message}`);
     assert.match(message, /Dataverse refuses to create a sitemap with no non-empty area holding a non-empty group \(HTTP 400: "SiteMap needs to have a non-empty Area with a non-empty Group"\)/);
-    assert.ok(message.includes("{ entity: '<table>', title: '<label>' } in appShell.areas[].groups[].subAreas"), shape.name);
-    assert.match(message, /A new app needs one entry that is not a page/);
+    assert.ok(message.includes("{ entity: '<table>', title: '<label>' } in appShell.areas[].groups[].subAreas."), shape.name);
+    assert.match(message, /A new app needs one entry that is not a page/, 'a run that does not create the pages first needs one');
+    // In a run that does, an entry for one of the spec's pages is as good, and the advice says so instead.
+    const pagesFirst = navigationVerdict(specFor(shape), { appExists: false, newAppPagesFirst: true }).message;
+    assert.ok(pagesFirst.includes("{ entity: '<table>', title: '<label>' } in appShell.areas[].groups[].subAreas, or an entry for one of the spec's pages (a build that has the pages phase creates a new app's pages before the app)."), `${shape.name}: ${pagesFirst}`);
+    assert.doesNotMatch(pagesFirst, /needs one entry that is not a page/);
   }
 });
 
@@ -136,6 +162,10 @@ test('a spec with no appShell.areas says there is no navigation to build the app
       assert.ok(message.startsWith('the spec has no appShell.areas, so there is no navigation to build the app with.'), `${shape.name}, ${exists[appExists]}: ${message}`);
       assert.ok(message.includes("{ entity: '<table>', title: '<label>' } in appShell.areas[].groups[].subAreas"), shape.name);
       assert.ok(!/HTTP 400/.test(message), 'Dataverse is not involved: nothing would be sent');
+      // In a run that creates a new app's pages first, an entry for one of the spec's pages is offered too.
+      const pagesFirst = navigationVerdict(specFor(shape), { appExists, newAppPagesFirst: true });
+      assert.strictEqual(pagesFirst.outcome, 'refuse', 'still refused: there is no navigation at all');
+      assert.ok(pagesFirst.message.includes("in appShell.areas[].groups[].subAreas, or an entry for one of the spec's pages"), pagesFirst.message);
     }
   }
 });
@@ -188,10 +218,10 @@ test('an unknown answer for an empty navigation says what an app that exists wou
 
 // The agreement the whole check rests on: what the build pushes for a NEW app is appDef with `omitUnbuiltPages`, and
 // the check must call a navigation fine exactly when that holds an entry in a group in an area.
-function firstPushHoldsAnEntry(spec, created = { dashboards: {}, pages: {} }) {
+function firstPushHoldsAnEntry(spec, created = { dashboards: {}, pages: {} }, options = { omitUnbuiltPages: true }) {
   let pushed;
   try {
-    pushed = appDef(spec, created, { omitUnbuiltPages: true });
+    pushed = appDef(spec, created, options);
   } catch {
     return false; // no appShell.areas: appDef has nothing to build a sitemap from
   }
@@ -202,6 +232,18 @@ test('the check agrees with the navigation appDef pushes for a new app, for ever
   for (const shape of SHAPES) {
     const spec = specFor(shape);
     assert.strictEqual(navigationVerdict(spec, { appExists: false }).outcome === 'ok', firstPushHoldsAnEntry(spec), shape.name);
+  }
+});
+
+// The same agreement in a run that creates a new app's pages first. For a navigation of pages only the app's first push is made once the
+// pages exist — appDef over every page's id, nothing left out (sdk-build.js createAppWithPages); for any other it is the app step's, the
+// pages left out, as before.
+test('the check agrees with the navigation appDef pushes for a new app in a run that creates the pages first, for every shape', () => {
+  for (const shape of SHAPES) {
+    const spec = specFor(shape);
+    const built = { dashboards: {}, pages: Object.fromEntries((shape.pages || []).map((key, i) => [key, `gp-${i}`])) };
+    const pushed = navigationIsPagesOnly(spec) ? firstPushHoldsAnEntry(spec, built, {}) : firstPushHoldsAnEntry(spec);
+    assert.strictEqual(navigationVerdict(spec, { appExists: false, newAppPagesFirst: true }).outcome === 'ok', pushed, shape.name);
   }
 });
 
@@ -232,11 +274,13 @@ for (const profile of ['plan', 'deploy']) {
 
 const appShellWarnings = (spec) => lintAppSpec(spec).warnings.filter((w) => w.startsWith('appShell: '));
 
+// Lint speaks of the build --apply runs: the whole build, which creates a new app's pages before the app. So it warns for exactly the
+// navigations that build refuses for a new app (`forNewPagesFirst`) — a navigation of pages only is not one of them.
 test('lint warns, once, for exactly the navigations a new app cannot be built from — and never errors on them', () => {
   for (const shape of SHAPES) {
     const spec = specFor(shape);
     const warnings = appShellWarnings(spec);
-    assert.strictEqual(warnings.length, shape.forNew === 'refuse' ? 1 : 0, `${shape.name}: ${JSON.stringify(warnings)}`);
+    assert.strictEqual(warnings.length, shape.forNewPagesFirst === 'refuse' ? 1 : 0, `${shape.name}: ${JSON.stringify(warnings)}`);
     const lint = lintAppSpec(spec);
     assert.deepStrictEqual(lint.errors, [], `${shape.name}: a warning, not an error`);
     assert.strictEqual(lint.ok, true, shape.name);
@@ -244,13 +288,11 @@ test('lint warns, once, for exactly the navigations a new app cannot be built fr
 });
 
 test('the lint warning carries what the build would say', () => {
-  const [pagesOnly] = appShellWarnings(specFor(SHAPES.find((s) => s.name === 'a navigation of pages only')));
-  assert.match(pagesOnly, /^appShell: the navigation holds only page entries \('overview', 'detail'\)/);
-  assert.match(pagesOnly, /HTTP 400: "SiteMap needs to have a non-empty Area with a non-empty Group"/);
-  assert.ok(pagesOnly.includes("{ entity: '<table>', title: '<label>' }"));
-  assert.ok(pagesOnly.endsWith(' An app that already exists is not affected.'), 'lint cannot know whether the app exists, so it says who is spared');
+  assert.deepStrictEqual(appShellWarnings(specFor(SHAPES.find((s) => s.name === 'a navigation of pages only'))), [], 'a navigation of pages only builds: the whole build creates the pages first');
   const [empty] = appShellWarnings(specFor(SHAPES.find((s) => s.name === 'areas: []')));
   assert.match(empty, /^appShell: the navigation has no entry \(appShell\.areas is empty\)/);
+  assert.match(empty, /HTTP 400: "SiteMap needs to have a non-empty Area with a non-empty Group"/);
+  assert.ok(empty.includes("{ entity: '<table>', title: '<label>' } in appShell.areas[].groups[].subAreas, or an entry for one of the spec's pages"), 'what to add, a page entry included');
   assert.ok(empty.endsWith(' An app that already exists is built with no navigation entries, and the build says so.'), 'an app that exists is not refused an empty navigation, and lint says what it gets instead');
   const [undeclared] = appShellWarnings(specFor(SHAPES.find((s) => s.name === 'a spec with no appShell')));
   assert.match(undeclared, /^appShell: the spec has no appShell\.areas, so there is no navigation to build the app with\./);
@@ -259,13 +301,18 @@ test('the lint warning carries what the build would say', () => {
 
 // The authoring flow runs lint-app-spec at the default `plan` profile, where a page may still be an intent.
 test('lint-app-spec (plan profile) reports the warning with its source tag, and the exit code stays 0 without --strict', () => {
-  const spec = specFor(SHAPES.find((s) => s.name === 'a navigation of pages only'));
-  for (const p of spec.pages) p.source = { kind: 'intent' };
-  const report = lintSpec(spec);
+  const report = lintSpec(specFor(SHAPES.find((s) => s.name === 'areas: []')));
   assert.strictEqual(report.profile, 'plan');
   assert.strictEqual(report.ok, true, JSON.stringify(report.errors));
   assert.strictEqual(report.warnings.filter((w) => w.startsWith('lint: appShell: ')).length, 1, JSON.stringify(report.warnings));
   assert.strictEqual(lintSpec(specFor(SHAPES.find((s) => s.name === 'a table entry'))).warnings.filter((w) => /appShell:/.test(w)).length, 0);
+  // A navigation of pages only whose pages are still intents: the build that deploys them implements them first (validation's deploy
+  // profile demands it), and then creates them before the app — so lint has nothing to say of the navigation.
+  const intents = specFor(SHAPES.find((s) => s.name === 'a navigation of pages only'));
+  for (const p of intents.pages) p.source = { kind: 'intent' };
+  const pagesOnly = lintSpec(intents);
+  assert.strictEqual(pagesOnly.ok, true, JSON.stringify(pagesOnly.errors));
+  assert.deepStrictEqual(pagesOnly.warnings.filter((w) => /appShell:/.test(w)), []);
 });
 
 function runCli(spec, extraArgs = []) {

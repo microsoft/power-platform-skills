@@ -934,8 +934,9 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   downloaded spec carries the app's own navigation, which can be empty, so a build of a new app used to fail at the app
   step, after the solution, tables, views and forms were written. `navigationVerdict` (`scripts/lib/app-navigation.js`)
   now decides from the spec alone, whenever the app-shell phase is in the run's range (never for `--stage data`, or an
-  `--only` without it). A NEW app needs one table, dashboard or url entry in a group in an area, because its first push
-  creates the sitemap: a navigation of pages only, or with no entry, is refused. An EXISTING app is refused for neither.
+  `--only` without it). A NEW app needs an entry its first push holds, because that push creates the sitemap: a navigation
+  with no entry is refused, and so is a navigation of pages only in a run that cannot create the pages first (below). An
+  EXISTING app is refused for neither.
   Its navigation is written from the whole spec once the pages exist, so a page entry counts; and an empty navigation is
   built (Dataverse accepts it on an update) with a WARNING that the app is left with no navigation entries — any it has
   now are removed, which the destructive-operation gate (`lib/op-diff.js`, wired in `buildModelApp`) asks
@@ -950,10 +951,13 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   would stop the build closes with "Fix the steps marked ? above, then re-run with --apply to execute." rather than
   inviting an apply that would stop; `--apply` (`checkNavigationBeforeWriting`, ahead of the view-filter pre-flight) halts
   with `BuildHalt` code `app-navigation-empty` (phase `preflight`, `recoverable: false`, `transient = false`, never
-  retried), saying what the platform requires and what to add — `{ entity: '<table>', title: '<label>' }` in a group, and
-  for a navigation of pages only that a page entry joins the navigation only once its page exists, so a new app needs one
-  other entry. A navigation that is fine for an app that exists and refused for a new one — pages only, or no entry at all
-  — depends on whether the app exists, so only it reads that: one `findArtifact('app')`, the read the app step makes next.
+  retried), saying what the platform requires and what to add — `{ entity: '<table>', title: '<label>' }` in a group (or,
+  in a run that creates the pages first, an entry for one of the spec's pages), and for a navigation of pages only why this
+  run cannot create the pages first. A navigation that is fine for an app that exists and refused for a new one — pages
+  only, or no entry at all — depends on whether the app exists, so only it reads that: one `findArtifact('app')`, the read
+  the app step makes next. The read is made for a navigation of pages only in a run that creates the pages first too, where
+  both answers build, so that an app that exists makes exactly the requests it made; the app step's own read decides the
+  order.
   A valid navigation adds no call, and its plan and requests are byte-identical to what they were. When that read cannot
   answer (`--no-live-plan`, a failed read) the stricter rule is not applied: the build warns what it could not check and
   goes on as before. A spec with no `appShell.areas` is refused whatever the answer. The destructive-operation gate in
@@ -961,12 +965,37 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   the removal is real, and the build then goes on — and it does not ask about a spec the check refuses outright:
   `discoverOpDiffState` reads the deployed navigation only for a spec that declares `appShell.areas`, so a maker is never
   asked to authorize the removal of entries from a navigation the build will not write.
-  `lint-app-spec` warns (`appShell: …`) for a navigation a new app cannot be built from, and says whether an app that
-  already exists is spared (not affected, or built with no entries). A test that builds a NEW app against a fake SDK must
-  give its navigation an entry that is not a page: the fakes do not model the platform's rule.
+  `lint-app-spec` warns (`appShell: …`) for a navigation a new app cannot be built from by the whole build — which creates
+  the pages first, so a navigation of pages only is not one — and says whether an app that already exists is spared (not
+  affected, or built with no entries). A test that builds a NEW app against a fake SDK must give its navigation an entry
+  that is not a page, or run the pages phase (which then creates the pages first): the fakes do not model the platform's
+  rule (`lifecycle-pages-first-real-bundle.test.js` adds it in front of its fake).
   Pinned by `app-navigation.test.js` (the rule, its agreement with `appDef`, validation, lint) and
   `app-navigation-build.test.js` (dry run and apply for every shape, with every call recorded, the summary line, and the
   order of the destructive gate and the check).
+  **A new app whose navigation is pages only is built by creating its pages FIRST** (`pagesFirstRule` and
+  `createAppWithPages`, `scripts/lib/sdk-build.js`). In a run that has the app step and the pages phase, is not a changed-only
+  re-upload, and builds every page an entry names, the app step does all it does before a create — the icon, the Main-form
+  list, the `app.tables` refs, its existence read, the one pre-app table publish — and, finding no app, leaves the create to
+  the pages phase: the step is reported `⊘ app "<name>" (created after its pages: its navigation holds only page entries)`,
+  never a ✓ for an app that does not exist yet. The pages phase runs as for any app, with no membership (there is no
+  sitemap to read, so an id binds only through this workspace's creation receipt — the rule that already binds a page whose
+  build stopped before its finalizer — and the removal gate has nothing of this app to protect), and in the finalizer's slot
+  it CREATES the app with `appDef(spec, result.created)` — the whole navigation, every page's id in it — through the app
+  step's own create (`createApp`: create and push, the app and its sitemap into the solution, the `app.tables` pin), reported
+  in the app-shell phase as `✓ app "<name>" (created with its pages)`. Its first sitemap holds the page entries, so no
+  navigation without them is ever sent and there is no temporary entry to remove; the pages' default views are pinned after
+  it as for any app. This is the order `apps.js create --page-id` has always used (a page made with no app, then the app
+  around it, live-verified). A stop between the pages and the app leaves the pages, their receipts and the manifest, and no
+  app: a re-run — or the CLI's own retry of a transient halt — adopts each page by its receipt (an unchanged page is neither
+  written nor published) and creates the app; a teardown deletes them by their receipts with the app absent. A build from
+  another workspace holds no receipt: it halts `pages-identity-conflict`, and its advice names that workspace rather than an
+  `add-to-app` for an app that does not exist. An app that EXISTS is not affected: the app step finds it and reuses it, and
+  its requests are byte-identical (pinned). A run that cannot create the pages first — no pages phase, a changed-only
+  re-upload, a page entry whose page it does not build — still refuses a new app of pages only, and says which. Pinned by
+  `lifecycle-pages-first-real-bundle.test.js` (over the real bundle: built from nothing, an unchanged rebuild, a stop between
+  the pages and the app then a re-run, the CLI's retry, another workspace, and a teardown after each, back to what the
+  environment held) and `app-navigation-build.test.js` (every request of the order, and the refusals).
   **An existing app's sitemap is rewritten ONTO its live nodes (AB#6726727).** The App Spec describes a
   node's label/title, target and icons only, and the SDK serializes a node without its fetched `bag` from
   scratch (new `Id`, `ResourceId="SitemapDesigner.NewSubArea"`, broad `Client`/`Sku`,

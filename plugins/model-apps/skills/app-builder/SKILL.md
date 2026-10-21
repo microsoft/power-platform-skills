@@ -803,7 +803,9 @@ the SDK rewrites the sitemap once to add the `GenPage` subareas) → **AI featur
 **security** (one role per `personas[]` entry, sized from its jobs' declared access; injects an
 app-module read privilege and associates the app to each role so it opens for that persona) →
 publish (opt-in). When the app has generative-page subareas the app module is created first WITHOUT
-them (they can't resolve until the pages upload), then the pages phase rewrites the sitemap. All
+them (they can't resolve until the pages upload), then the pages phase rewrites the sitemap — except for a
+new app whose navigation holds ONLY page subareas: its pages are created first, and then the app, with them
+already in its first sitemap. All
 Dataverse access goes through the SDK, so the downloaded metadata lands in `.maker-workspace/`.
 Independent ops (columns, views/charts/forms) run with bounded parallelism; publish is one
 round-trip per entity + the app. Views/charts build **before** forms so a sub-grid can reference the

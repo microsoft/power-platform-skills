@@ -442,9 +442,12 @@ function lintAppSpec(spec) {
   // A navigation a NEW app cannot be built from. validateAppSpec accepts it (data-only specs have no navigation, and a downloaded spec carries
   // the app's own, which can be empty), but a build that includes the app step refuses it for a new app before it writes anything. Whether the
   // app exists is not known here, so this is a warning, and it says who is spared by asking the same rule again for an app that exists.
-  const navigation = navigationVerdict(spec, { appExists: false });
+  // It speaks of the build `--apply` runs — the whole build, which creates a new app's pages before the app (sdk-build.js pagesFirstRule) — so a
+  // navigation of pages only is one a new app is built from, and is not warned about; whether each page is implemented yet is validation's to say
+  // (the deploy profile), since a spec being authored may still hold intent pages.
+  const navigation = navigationVerdict(spec, { appExists: false, newAppPagesFirst: true });
   if (navigation.outcome === 'refuse') {
-    const forExisting = navigationVerdict(spec, { appExists: true }).outcome;
+    const forExisting = navigationVerdict(spec, { appExists: true, newAppPagesFirst: true }).outcome;
     const spared = forExisting === 'ok' ? ' An app that already exists is not affected.'
       : forExisting === 'warn' ? ' An app that already exists is built with no navigation entries, and the build says so.' : '';
     W(`appShell: ${navigation.message}${spared}`);

@@ -1,8 +1,9 @@
 'use strict';
 // The navigation shapes the tests of the navigation check share (app-navigation.test.js and
 // app-navigation-build.test.js). `forNew`, `forExisting` and `forUnknown` say what the check must answer for an app
-// that does not exist, one that does, and one whose existence could not be read. They are written out from the
-// rule (lib/app-navigation.js), never computed with the code under test.
+// that does not exist, one that does, and one whose existence could not be read, in a run that does NOT create a new
+// app's pages first; `forNewPagesFirst` and `forUnknownPagesFirst` what it must answer in a run that does (below). They
+// are written out from the rule (lib/app-navigation.js), never computed with the code under test.
 //
 //   refuse   the build stops before it writes anything
 //   ok       the build goes on
@@ -18,10 +19,14 @@ const page = (key) => ({ page: key, title: key });
 const oneGroup = (...subAreas) => ({ areas: [{ label: 'Main', groups: [{ label: 'Records', subAreas }] }] });
 
 // Dataverse refuses to CREATE a sitemap with no entry and accepts one on an UPDATE (measured), so an app that exists is not refused.
-const NOTHING = { kind: 'empty', forNew: 'refuse', forExisting: 'warn', forUnknown: 'unknown' };
-const UNDECLARED = { kind: 'undeclared', forNew: 'refuse', forExisting: 'refuse', forUnknown: 'refuse' };
-const ONLY_PAGES = { kind: 'pages-only', forNew: 'refuse', forExisting: 'ok', forUnknown: 'unknown' };
-const FINE = { forNew: 'ok', forExisting: 'ok', forUnknown: 'ok' };
+// `forNewPagesFirst` and `forUnknownPagesFirst` are the answers of a run that creates a NEW app's pages before the app (sdk-build.js
+// pagesFirstRule: the app step and the pages phase, not a changed-only re-upload, every page entry naming a page the run builds) —
+// the whole build `--apply` runs. It creates such an app with its pages already in its first navigation, so only a navigation of
+// pages only is answered differently; `forNew` and `forUnknown` are the answers of any other run.
+const NOTHING = { kind: 'empty', forNew: 'refuse', forExisting: 'warn', forUnknown: 'unknown', forNewPagesFirst: 'refuse', forUnknownPagesFirst: 'unknown' };
+const UNDECLARED = { kind: 'undeclared', forNew: 'refuse', forExisting: 'refuse', forUnknown: 'refuse', forNewPagesFirst: 'refuse', forUnknownPagesFirst: 'refuse' };
+const ONLY_PAGES = { kind: 'pages-only', forNew: 'refuse', forExisting: 'ok', forUnknown: 'unknown', forNewPagesFirst: 'ok', forUnknownPagesFirst: 'ok' };
+const FINE = { forNew: 'ok', forExisting: 'ok', forUnknown: 'ok', forNewPagesFirst: 'ok', forUnknownPagesFirst: 'ok' };
 
 const SHAPES = [
   { name: 'a spec with no appShell', ...UNDECLARED, appShell: undefined, said: 'the spec has no appShell.areas' },

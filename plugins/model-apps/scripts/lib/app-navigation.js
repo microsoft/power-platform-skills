@@ -20,6 +20,14 @@
 // published sitemap then holding no SubArea at all. So an empty navigation is refused where the platform refuses
 // it, for a new app, and only said so for an app that exists, which is left with no entries (`warn`).
 //
+// A NEW app whose navigation holds ONLY page entries is not refused by a build that can create its pages FIRST: one that has the
+// pages phase, and is not a changed-only re-upload, for a spec whose page entries all name pages it builds. Such a build leaves the
+// app's create to the end of the pages phase and makes the app with the pages already in its first navigation (sdk-build.js
+// `createAppWithPages`), so the sitemap it creates is not empty. That is the order `apps.js create --page-id` has always used — a page
+// made with no app, then the app around it, through the same SDK create and the same sub-area (genpage-subarea.js) — and that order
+// was live-verified. Any other run creates the app before its pages, and is still refused (`newAppPagesFirst` false; `whyNotPagesFirst`
+// says why).
+//
 // The spec models no IsVisible children, so none are ignored here. A spec whose navigation is only pages, or is
 // `areas: []`, or has an area with no group, or a group with no entry, is still VALID — validateAppSpec accepts
 // a spec with no appShell at all, which data-only builds and downloaded specs rely on — so such a build of a new
@@ -64,27 +72,39 @@ function navigationHolds(spec) {
   return holds;
 }
 
+// Whether the navigation holds entries and every one of them is a page — the one navigation a NEW app is built from only by
+// creating its pages first (the app step decides that from this and from the run's shape: sdk-build.js, `createAppWithPages`).
+const onlyPages = (holds) => holds.declared && holds.entries > 0 && holds.entries === holds.pages.length;
+function navigationIsPagesOnly(spec) {
+  return onlyPages(navigationHolds(spec));
+}
+
 // What a navigation that cannot build a NEW app holds, why that stops one, and what to add. `held` is the first of the
-// three on its own, for the warning an app that exists gets.
-function navigationAdvice(holds) {
+// three on its own, for the warning an app that exists gets. `pagesFirst` is whether the run creates a new app's pages
+// before the app (navigationVerdict's `newAppPagesFirst`): an entry for one of the spec's pages is then one the app's first
+// navigation holds, so the advice offers it. `whyNotPagesFirst` is why a run does not, for a navigation of pages only.
+function navigationAdvice(holds, { pagesFirst = false, whyNotPagesFirst } = {}) {
+  const orPage = pagesFirst ? ", or an entry for one of the spec's pages (a build that has the pages phase creates a new app's pages before the app)" : '';
+  const notAPage = pagesFirst ? '' : ' A new app needs one entry that is not a page, since a page entry joins the navigation only once its page exists.';
   if (!holds.declared) {
     // `appDef` throws on a spec with no appShell.areas before it asks whether the app exists, so no app, new or not, is built from it.
     return {
       kind: 'undeclared',
       held: 'the spec has no appShell.areas',
       problem: 'the spec has no appShell.areas, so there is no navigation to build the app with.',
-      fix: `Add appShell.areas with a group holding an entry — for example ${ENTRY_EXAMPLE} in appShell.areas[].groups[].subAreas. A new app needs one entry that is not a page, since a page entry joins the navigation only once its page exists.`,
+      fix: `Add appShell.areas with a group holding an entry — for example ${ENTRY_EXAMPLE} in appShell.areas[].groups[].subAreas${orPage}.${notAPage}`,
     };
   }
   if (holds.entries > 0) {
+    // Reached only for a run that does NOT create a new app's pages first (navigationVerdict): one that does builds a navigation of pages only.
     const shown = holds.pages.slice(0, 5).map((page) => `'${page}'`).join(', ');
     const more = holds.pages.length > 5 ? ` and ${holds.pages.length - 5} more` : '';
     const held = `the navigation holds only page entries (${shown}${more})`;
     return {
       kind: 'pages-only',
       held,
-      problem: `${held}. A page entry joins the navigation only once its page exists, so a new app is created without them, and ${PLATFORM_REFUSAL}.`,
-      fix: `A new app needs one entry that is not a page: add one to a group — for example ${ENTRY_EXAMPLE}; a dashboard or url entry works too — and keep the page entries beside it.`,
+      problem: `${held}. A page entry joins the navigation only once its page exists, and ${whyNotPagesFirst || 'this run does not create the pages before the app'}, so a new app would be created without them, and ${PLATFORM_REFUSAL}.`,
+      fix: `A build that has the pages phase creates such an app after its pages, with them in its first navigation: run the whole build, with every page the navigation names implemented. Or give a group one entry that is not a page — for example ${ENTRY_EXAMPLE}; a dashboard or url entry works too — and keep the page entries beside it.`,
     };
   }
   const what = holds.areas === 0 ? 'appShell.areas is empty'
@@ -95,7 +115,7 @@ function navigationAdvice(holds) {
     kind: 'empty',
     held,
     problem: `${held}, and ${PLATFORM_REFUSAL}.`,
-    fix: `Give an area a group with an entry — for example ${ENTRY_EXAMPLE} in appShell.areas[].groups[].subAreas. A new app needs one entry that is not a page, since a page entry joins the navigation only once its page exists.`,
+    fix: `Give an area a group with an entry — for example ${ENTRY_EXAMPLE} in appShell.areas[].groups[].subAreas${orPage}.${notAPage}`,
   };
 }
 
@@ -111,27 +131,39 @@ function navigationAdvice(holds) {
 //   existingAppIsWritten whether this run writes the spec's navigation to an app that already exists (sdk-build.js
 //                        existingAppSitemapIsWritten); a run that writes none asks nothing of the spec for such an app
 //   whyUnknown           what stopped the caller reading it, for the `unknown` message
+//   newAppPagesFirst     whether this run creates a NEW app's pages before the app, so that the app's first navigation holds
+//                        its page entries (sdk-build.js pagesFirstRule: the app step and the pages phase, not a changed-only
+//                        re-upload, and every page entry naming a page the run builds). lint-app-spec speaks of the build
+//                        `--apply` runs, which does. Absent is false: the stricter rule.
+//   whyNotPagesFirst     why it does not, for the refusal of a navigation of pages only
 //
 //   the navigation holds                NEW app (its first push     EXISTING app (its sitemap        existence
 //                                       creates the sitemap)        is updated)                      UNKNOWN
 //   an entry that is not a page         ok                          ok                               ok
-//   entries, every one a page           refuse                      ok                               unknown
+//   entries, every one a page, and
+//     the run creates the pages first   ok                          ok                               ok
+//     a run that does not               refuse                      ok                               unknown
 //   no entry at all                     refuse                      warn (ok if this run writes      unknown
 //                                                                   no navigation to it)
 //   no appShell.areas                   refuse                      refuse                           refuse
 //
 // Why they differ:
-//   NEW app       one entry that is not a page. Its first navigation leaves the pages out, so that is all it holds, and
-//                 Dataverse refuses to CREATE a sitemap with no entry (the HTTP 400 quoted above).
+//   NEW app       an entry its first push holds, since that push creates the sitemap and Dataverse refuses to CREATE one with
+//                 no entry (the HTTP 400 quoted above). A run that creates the pages first creates the app after them, so its
+//                 first push holds the page entries; any other run creates the app before its pages and leaves them out, so it
+//                 needs one entry that is not a page.
 //   EXISTING app  its navigation is written from the whole spec once the pages exist (the pages phase's finalizer), so a
 //                 page entry counts, and Dataverse accepts an empty navigation when a sitemap is UPDATED (measured, above):
 //                 the build goes on, with a warning that the app is left with no entries. A run that writes no navigation
 //                 to it asks nothing of the spec.
 //   no appShell.areas  refused for every app: `appDef` throws on it before it asks whether the app exists.
-function navigationVerdict(spec, { appExists, existingAppIsWritten = true, whyUnknown } = {}) {
+function navigationVerdict(spec, { appExists, existingAppIsWritten = true, whyUnknown, newAppPagesFirst = false, whyNotPagesFirst } = {}) {
   const holds = navigationHolds(spec);
   if (holds.declared && holds.entries > holds.pages.length) return { outcome: 'ok' };
-  const advice = navigationAdvice(holds);
+  // Pages only, in a run that creates a new app's pages first: a new app is created with them, and an app that exists takes them as it
+  // always did — so the answer is the same whichever this is, and whether or not that could be read.
+  if (newAppPagesFirst && onlyPages(holds)) return { outcome: 'ok' };
+  const advice = navigationAdvice(holds, { pagesFirst: newAppPagesFirst, whyNotPagesFirst });
   if (appExists === false || advice.kind === 'undeclared') {
     return { outcome: 'refuse', kind: advice.kind, code: NAVIGATION_REFUSAL_CODE, message: `${advice.problem} ${advice.fix}` };
   }
@@ -154,4 +186,4 @@ function navigationVerdict(spec, { appExists, existingAppIsWritten = true, whyUn
   };
 }
 
-module.exports = { NAVIGATION_REFUSAL_CODE, navigationEntryKind, navigationHolds, navigationVerdict };
+module.exports = { NAVIGATION_REFUSAL_CODE, navigationEntryKind, navigationHolds, navigationIsPagesOnly, navigationVerdict };

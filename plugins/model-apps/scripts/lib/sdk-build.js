@@ -143,7 +143,7 @@ const { appWriteTables, appPushTables, preAppTables, publishTablesXml, readSaved
 const { hasUnsyncedEdits } = require('./unsynced-edits.js');
 const { createSolutionMembership, ensureSolutionComponent } = require('./solution-membership.js');
 const { openUnconfirmedWebResources } = require('./web-resource-records.js');
-const { navigationEntryKind, navigationVerdict } = require('./app-navigation.js');
+const { navigationEntryKind, navigationHolds, navigationIsPagesOnly, navigationVerdict } = require('./app-navigation.js');
 const { isAppTextMap, appTextKind, localizedAppText } = require('./app-header-text.js');
 // The build's retry policy (retry-policy.js): every halt below is raised with what a run again may do — RETRY.NEVER, or a policy decided from the failure it wraps — and every failure the engine
 // raises itself is made by refusal() (deterministic) or serviceFailure() (the plugin's words around a failure of the service), because the build's retry reads a failure's STRUCTURE and the
@@ -1308,6 +1308,30 @@ function existingAppSitemapIsWritten(spec, phases, changedOnly) {
   return !appHasPageSubareas(spec);
 }
 
+// Whether this run creates a NEW app's pages BEFORE the app, so that the app's first navigation already holds its page entries — the one
+// way a new app whose navigation holds only pages can be built, since Dataverse refuses to CREATE a sitemap with no entry (app-navigation.js).
+// It mirrors what runSdkBuildPhases does for such an app, and the tests that drive the engine pin that it does:
+//   * the app step and the pages phase are both in the run: the app step leaves the create to the pages phase, which makes the app once
+//     the pages exist (`createAppWithPages`);
+//   * it is not a changed-only re-upload (`skipSitemapFinalize`), which uploads the changed pages of an app that exists and creates no app;
+//   * every page entry names a page of `pages[]` the run builds — a tsx source with a codeFile, the pages phase's `implemented` — because the
+//     app's first navigation is made from the pages the run created. Validation's deploy profile, which `--apply` uses, already demands that
+//     (a page entry names a declared page, and every page is implemented), so this guards a caller that did not validate.
+// Returns { newAppPagesFirst: true }, or { newAppPagesFirst: false, whyNotPagesFirst } — the rule navigationVerdict takes, with the words of
+// its refusal.
+function pagesFirstRule(spec, phases, changedOnly) {
+  if (!phases.includes('app-shell')) return { newAppPagesFirst: false, whyNotPagesFirst: 'this run has no app step' };
+  if (!phases.includes('pages')) return { newAppPagesFirst: false, whyNotPagesFirst: 'this run does not have the pages phase, which would create them first' };
+  if (changedOnly && changedOnly.skipSitemapFinalize) return { newAppPagesFirst: false, whyNotPagesFirst: 'this run only re-uploads changed pages, and creates no app' };
+  const built = new Set((spec.pages || []).filter((p) => {
+    const src = normalizePageSource(p);
+    return src && src.kind === 'tsx' && src.codeFile;
+  }).map((p) => p.key || p.name));
+  const unbuilt = navigationHolds(spec).pages.filter((key) => !built.has(key));
+  if (unbuilt.length) return { newAppPagesFirst: false, whyNotPagesFirst: `this run builds no page for ${unbuilt.map((key) => `'${key}'`).join(', ')} (a page of pages[] with source.kind 'tsx' and a codeFile)` };
+  return { newAppPagesFirst: true };
+}
+
 // The dry run's share of the navigation check: say, on the app step's own line, that an apply would stop there, and why.
 // The line is marked as a view the build would refuse is (annotateLivePlan): `? unknown` with the reason, and `wouldHalt` so
 // the summary counts it among the steps that would stop the build and not among those it could not read. Whether the app
@@ -1320,6 +1344,7 @@ function checkNavigationInPlan(plan, spec, { phases, changedOnly, warn }) {
   const verdict = navigationVerdict(spec, {
     appExists: item.state === 'create' ? false : item.state === 'reuse' ? true : undefined,
     existingAppIsWritten: existingAppSitemapIsWritten(spec, phases, changedOnly),
+    ...pagesFirstRule(spec, phases, changedOnly),
     whyUnknown: item.state === 'unknown' ? (item.stateWhy || 'the app could not be read') : 'this dry run did not read the environment',
   });
   if (verdict.outcome === 'refuse') {
@@ -1337,19 +1362,23 @@ function checkNavigationInPlan(plan, spec, { phases, changedOnly, warn }) {
 // exists, refused for a new one — which pays for one read of that, the very read the app step makes next. A read that fails
 // leaves the answer unknown: the build goes on as it always did and says what it could not check. Halts as the view-filter
 // pre-flight does (phase `preflight`, never retried).
+// A navigation of pages only, in a run that creates a new app's pages first (pagesFirstRule), builds whichever the answer is, and
+// the read is made all the same: so that a build of an app that exists makes exactly the requests it always made. What decides
+// whether the pages come first is the app step's own read, right before the create, never this one.
 async function checkNavigationBeforeWriting(spec, { provision, phases, changedOnly, warn }) {
-  const rule = { existingAppIsWritten: existingAppSitemapIsWritten(spec, phases, changedOnly) };
-  let verdict = navigationVerdict(spec, rule);
-  if (verdict.outcome === 'unknown') {
-    let appExists;
-    let whyUnknown;
+  const written = { existingAppIsWritten: existingAppSitemapIsWritten(spec, phases, changedOnly) };
+  const rule = { ...written, ...pagesFirstRule(spec, phases, changedOnly) };
+  const readsExistence = navigationVerdict(spec, written).outcome === 'unknown';
+  let appExists;
+  let whyUnknown;
+  if (readsExistence) {
     try {
       appExists = !!(await provision.findArtifact('app', { uniqueName: appUniqueName(spec) }));
     } catch (err) {
       whyUnknown = (err && err.message) || String(err);
     }
-    verdict = navigationVerdict(spec, { ...rule, appExists, whyUnknown });
   }
+  const verdict = navigationVerdict(spec, readsExistence ? { ...rule, appExists, whyUnknown } : rule);
   if (verdict.outcome === 'refuse') {
     // The message quotes the author's own page keys, so it must never be read as one of the texts the CLI retries on (isTransientHalt), and a re-run reads the same spec.
     throw new BuildHalt(`app "${spec.app.name}" cannot be built: ${verdict.message} The build stopped before writing anything.`, { phase: 'preflight', code: verdict.code, recoverable: false, retry: RETRY.NEVER });
@@ -6205,9 +6234,15 @@ async function runSdkBuildPhases(spec, opts, owed) {
   let appWasExisting = false;
   let mainFormsP;
   const resolvedMainForms = () => mainFormsP || (mainFormsP = resolveMainForms(provision.dataverse, spec, result.created.formIds));
+  // Set by the app step when it leaves the create of a NEW app to the pages phase, because the app's navigation holds only page entries
+  // (pagesFirstRule): the pages are created first, and this makes the app with them already in its first navigation.
+  let createAppWithPages = null;
 
   // 7. App module + sitemap. When the app has generative-page subareas, create it WITHOUT them
   //    (they can't resolve until pages upload); the pages phase then rewrites the sitemap.
+  //    A NEW app whose navigation holds ONLY page entries cannot be created that way — its first sitemap would hold no
+  //    entry, which Dataverse refuses to create — so its create is left to the pages phase, which makes it once the pages
+  //    exist (`createAppWithPages`), with the pages in its first navigation.
   //    For an app that ALREADY exists (edit flow / retry), its sitemap + components are write-once
   //    on create, so a plain reuse would silently drop requested subarea add/rename/reorder edits.
   //    Fetch it into this session's workspace (also required before push/publish on a cross-session
@@ -6229,6 +6264,37 @@ async function runSdkBuildPhases(spec, opts, owed) {
     // SDK's arbitrary external/managed icon fallback that broke import into a fresh environment.
     const iconWebResourceId = await ensureAppIcon(spec, result.created, { provision, sol, runner, unconfirmed: unconfirmedWebResources });
     const def = appDef(spec, result.created, { omitUnbuiltPages: true, iconWebResourceId, mainFormsByTable });
+    // The create of a NEW app, made below — or, for a navigation of pages only, at the end of the pages phase (createAppWithPages): the
+    // same writes in the same order either way.
+    // Create: the full def (siteMap + explicit components + iconWebResourceId) serializes unchanged
+    // through createArtifact, and push emits appmodule -> sitemap -> AddAppComponents -> publish.
+    // The def leaves `published` unset on purpose, so that push publishes the app. The SDK can
+    // create a never-published draft (`published: false`) for the final publish to cover — one publish
+    // round trip less — but a draft answers 404 by id and is missing from the PUBLISHED projection that
+    // every probe here reads (findArtifact('app'), the collision gate, the sitemap/navigation reads of
+    // the pages phase that follows, verify, download). A failed first build would leave an app its own
+    // re-run cannot see (it would POST the same unique name again), the pages phase would find no sitemap
+    // and halt, and a build without --publish would never publish it. Pinned in sdk-opt-ins.test.js.
+    const createApp = async (createDef) => {
+      const pushed = requireSuccessfulPush(await explainAppPushWarnings(provision.dataverse, await appWriters.create(createDef), createDef.name), `app ${createDef.name}`, opts.warn);
+      // Join the solution straight after the push, before the hidden-table pin, its read-back and the
+      // publish that follows it can fail. A re-run finds the app and takes this step's reuse branch, which
+      // re-asserts the membership too, so a create interrupted here never leaves a solution without its app.
+      await provision.addSolutionComponent({ componentId: pushed.id, componentType: COMPONENT_TYPE.app, solutionUniqueName: sol.uniqueName });
+      // The app module and its sitemap are DISTINCT solution components — adding the appmodule does
+      // NOT pull the sitemap in (it lands only in the Default solution), so export/import from the
+      // app's own solution would be incomplete. Add the sitemap (componenttype 62) explicitly.
+      await ensureSitemapInSolution(provision, sol, createDef.uniqueName);
+      await pinTables(pushed.id, true);
+      return pushed.id;
+    };
+    // Whether a NEW app is created after its pages: decided from the spec and the run here, and from whether the app exists by the read
+    // the step makes next — the same read that decides create or reuse for every app, right before the write.
+    const pagesFirst = navigationIsPagesOnly(spec) && pagesFirstRule(spec, phases, opts.changedOnly).newAppPagesFirst;
+    // What the step throws to hand the create on. The runner then reports the step as SKIPPED, with the reason, rather than done (makeRunner
+    // `skipIf`, entity-provision.js): an app that does not exist yet is not one this step made, and a ✓ would say it was. It is taken back by
+    // identity and never leaves the step; it is a refusal (retry-policy.js) so that, were it ever to, it would say a run again changes nothing.
+    const createdAfterItsPages = refusal('the app is created after its pages, by the pages phase');
     result.created.app = await runner.run('app-shell', `app "${def.name}"`, async () => {
       // Whether the app exists says whether its components can be read to prove which tables it holds forms or charts of (publishTablesBeforeApp), so it is looked up first.
       const existingId = await provision.findArtifact('app', { uniqueName: def.uniqueName });
@@ -6328,40 +6394,35 @@ async function runSdkBuildPhases(spec, opts, owed) {
         await warnAppIconNotApplied(provision, spec, iconWebResourceId, opts.warn);
         return existingId;
       }
-      // Create: the full def (siteMap + explicit components + iconWebResourceId) serializes unchanged
-      // through createArtifact, and push emits appmodule -> sitemap -> AddAppComponents -> publish.
-      // The def leaves `published` unset on purpose, so the push above publishes the app. The SDK can
-      // create a never-published draft (`published: false`) for the final publish to cover — one publish
-      // round trip less — but a draft answers 404 by id and is missing from the PUBLISHED projection that
-      // every probe here reads (findArtifact('app'), the collision gate, the sitemap/navigation reads of
-      // the pages phase that follows, verify, download). A failed first build would leave an app its own
-      // re-run cannot see (it would POST the same unique name again), the pages phase would find no sitemap
-      // and halt, and a build without --publish would never publish it. Pinned in sdk-opt-ins.test.js.
-      const pushed = requireSuccessfulPush(await explainAppPushWarnings(provision.dataverse, await appWriters.create(def), def.name), `app ${def.name}`, opts.warn);
-      // Join the solution straight after the push, before the hidden-table pin, its read-back and the
-      // publish that follows it can fail. A re-run finds the app and takes the reuse branch above, which
-      // re-asserts the membership too, so a create interrupted here never leaves a solution without its app.
-      await provision.addSolutionComponent({ componentId: pushed.id, componentType: COMPONENT_TYPE.app, solutionUniqueName: sol.uniqueName });
-      // The app module and its sitemap are DISTINCT solution components — adding the appmodule does
-      // NOT pull the sitemap in (it lands only in the Default solution), so export/import from the
-      // app's own solution would be incomplete. Add the sitemap (componenttype 62) explicitly.
-      await ensureSitemapInSolution(provision, sol, def.uniqueName);
-      await pinTables(pushed.id, true);
-      return pushed.id;
-    });
+      if (pagesFirst) {
+        // A NEW app whose navigation holds only page entries: created with `def` it would have no entry at all (its pages do not
+        // exist yet), and Dataverse refuses to create such a sitemap. So the pages phase creates the pages first and then the app,
+        // through this, with the WHOLE navigation — appDef without `omitUnbuiltPages`, over `result.created.pages`, which by then
+        // holds every page's id. Everything this step does before a create has been done above: the icon, the Main-form list, the
+        // `app.tables` refs and the one request that publishes the tables before the app, which nothing in the pages phase undoes
+        // (it writes pages and the manifest, no table, view or form).
+        createAppWithPages = async () => {
+          result.created.app = await createApp(appDef(spec, result.created, { iconWebResourceId, mainFormsByTable }));
+          return result.created.app;
+        };
+        throw createdAfterItsPages;
+      }
+      return createApp(def);
+    }, { skipIf: (err) => err === createdAfterItsPages && 'created after its pages: its navigation holds only page entries' });
   }
 
-  // 7b. Pages (generative pages). The app now exists; implement the full §9 protocol: structural scan/parity
+  // 7b. Pages (generative pages). The app now exists — or, for a NEW app whose navigation holds only page entries, it is created at the
+  //     end of this phase, once its pages exist (`createAppWithPages`); implement the full §9 protocol: structural scan/parity
   //     BEFORE any write (fail-closed) → create-absent-first for nav targets (persist manifest after EVERY
   //     create, crash-safety) → resolve nav pagerefs into run-scoped staging (never mutate canonical source)
   //     → upload-once with UPDATE-identity guard → sitemap finalize. All under a single-machine advisory
   //     lockfile (courtesy, not a correctness guarantee — convergence spine is the safety guarantee).
   // Run the pages phase when the phase is enabled AND there is page work to do: the spec declares pages,
   // OR the app already existed (an existing app may still reference live pages the new spec dropped;
-  // the destructive-removal gate below must run even when spec.pages is now empty). A FRESH app with no
-  // spec pages has nothing to build and no pre-existing pages to remove, so it is correctly skipped (this
-  // also avoids spinning up genpage enumeration for every page-less app build).
-  if (has('pages') && ((spec.pages || []).length || appWasExisting)) {
+  // the destructive-removal gate below must run even when spec.pages is now empty), OR the app is still to be
+  // created here. A FRESH app with no spec pages has nothing to build and no pre-existing pages to remove, so it
+  // is correctly skipped (this also avoids spinning up genpage enumeration for every page-less app build).
+  if (has('pages') && ((spec.pages || []).length || appWasExisting || createAppWithPages)) {
     // The page backend: the SDK on a throwaway workspace of its own, removed in the finally below (never the app folder's, whose copies of a
     // page would be stale the moment anyone saved it). `opts.genpage` is a seam for the tests, and is the caller's to dispose. The run's throttle budget
     // (`opts.throttle`) is handed to it, so the HTTP client it makes draws its waits for a throttled read or publish from the same five minutes as the page writes do.
@@ -6369,8 +6430,9 @@ async function runSdkBuildPhases(spec, opts, owed) {
     const genpage = opts.genpage || makeGenpageSdk(opts.env, { throttle: opts.throttle });
     const appUnique = appUniqueName(spec);
     // Recovery guard: the app id is only populated by app-shell (this run). If pages runs without it
-    // (e.g. --from pages), there is nothing to upload against — HALT and require a FULL rerun.
-    if (!result.created.app) throw new BuildHalt('pages phase requires the app (app-shell) in the same run — the app id is not carried across invocations. Re-run a FULL build (do not use --from pages).', { phase: 'pages', code: 'pages-requires-app', recoverable: false, retry: RETRY.NEVER });
+    // (e.g. --from pages), there is nothing to upload against — HALT and require a FULL rerun. An app the app step left to this
+    // phase to create has no id yet, by design: it is made below, once the pages exist.
+    if (!result.created.app && !createAppWithPages) throw new BuildHalt('pages phase requires the app (app-shell) in the same run — the app id is not carried across invocations. Re-run a FULL build (do not use --from pages).', { phase: 'pages', code: 'pages-requires-app', recoverable: false, retry: RETRY.NEVER });
     const wsDir = opts.workspaceDir || path.join(path.resolve(opts.appDir || '.'), '.maker-workspace');
     // Advisory lease: acquired OUTSIDE the try so a failed acquire (pages-locked HALT) never triggers the
     // finally that would release a lease we never held. Correctness rests on the convergence spine, not this.
@@ -6391,9 +6453,14 @@ async function runSdkBuildPhases(spec, opts, owed) {
       // only when it is a proven member of THIS app). A page-bearing build has just created or is editing
       // the app, so the sitemap MUST be readable; ok:false is a real failure, never "empty". A fresh app's
       // sitemap is validly empty of genpages here → ids:[] (correct). Reused below for the removal gate.
-      const membership = await fetchSitemap(provision, appUnique);
-      if (!membership.ok) throw new BuildHalt(`could not read the app sitemap (${membership.reason}) — refusing to proceed without verifying the app's page set`, { phase: 'pages', code: 'pages-sitemap-read-failed', recoverable: true, ...retryFrom(membership.cause, membership.detail) });
-      const sitemapIds = membership.ids;
+      // An app this phase is still to create (`createAppWithPages`) has no sitemap: the app step's read found no app a moment ago, so
+      // nothing is a member of it and nothing is read. Its answer is the one fetchSitemap gives for an app that does not exist, which the
+      // conflict advice below (navigationProof) reads the same way. That proves no page: an id binds only through the creation receipt
+      // a build of this app wrote for it (reconcilePageIds) — the rule that already binds a page made by a build that stopped before its
+      // finalizer — and the removal gate has no live page of this app to protect.
+      const membership = createAppWithPages ? { ok: false, reason: 'app-not-found' } : await fetchSitemap(provision, appUnique);
+      if (!membership.ok && !createAppWithPages) throw new BuildHalt(`could not read the app sitemap (${membership.reason}) — refusing to proceed without verifying the app's page set`, { phase: 'pages', code: 'pages-sitemap-read-failed', recoverable: true, ...retryFrom(membership.cause, membership.detail) });
+      const sitemapIds = membership.ok ? membership.ids : [];
 
       // IDENTITY (the durable manifest, discriminated read). A PRESENT-but-unparseable manifest is CORRUPT
       // and must HALT fail-closed BEFORE reconcile — reconciling it as "no identity" would recreate the
@@ -6540,7 +6607,8 @@ async function runSdkBuildPhases(spec, opts, owed) {
           : '';
         const recovery = unproven.map((c) => {
           const name = JSON.stringify(c.storedName || c.requestedName || '(unreadable name)');
-          // The page verbs of scripts/genpage.js, ready to run: this app's id is known by now (the pages phase halts without the app), and the environment is the one the build runs in.
+          // The page verbs of scripts/genpage.js, ready to run: this app's id is known by now (the pages phase halts without the app — but for an app this
+          // phase is still to create, whose advice is its own, below), and the environment is the one the build runs in.
           const place = genpageCommand('add-to-app', { env: opts.env, pageId: c.manifestId, app: { id: result.created.app, note: "this app's id" } });
           if (inSavedNav.has(String(c.manifestId).toLowerCase())) {
             return `page ${c.manifestId} (${name}) is only in this app's saved but unpublished navigation: publish the app — ${place} publishes it, since the page is already in its saved navigation — then re-run. The build updates a page only when the app's published navigation or a local creation record proves it is this app's, so that other apps' navigation is checked before an update`;
@@ -6549,6 +6617,11 @@ async function runSdkBuildPhases(spec, opts, owed) {
             ? 'its local creation record does not corroborate the stored name'
             : 'this workspace holds no record that this app created it in this environment';
           const removal = genpageCommand('delete', { env: opts.env, pageId: c.manifestId, flags: ' --allow-destructive' });
+          // An app this phase is still to create has no navigation to add the page to, so the record is the only proof there can be: the
+          // workspace that created the page holds it (a build run from there adopts the page and creates the app with it).
+          if (createAppWithPages) {
+            return `page ${c.manifestId} (${name}) is in no navigation of this app — the app does not exist yet: its navigation holds only page entries, so the build creates it once its pages exist — and ${proofText}: if it is this app's page, run the build from the workspace that created it, which holds that record; if not, remove the stale id from the manifest/spec (or delete the page, after asking the user — it is permanent: ${removal}) and re-run`;
+          }
           return `page ${c.manifestId} (${name}) is not in this app's navigation${unreadDraft} and ${proofText}: if it is this app's page, add it to the app's navigation with ${place} (it publishes the app and proves the page in what runs) and re-run; if not, remove the stale id from the manifest/spec (or delete the page, after asking the user — it is permanent: ${removal}) and re-run`;
         });
         throw new BuildHalt(`generative-page identity conflict(s): ${JSON.stringify(conflicts)}${nameReadErrors.length ? `; stored-name reads failed: ${nameReadErrors.join('; ')}` : ''} — refusing to overwrite/misbind a page. ${recovery.length ? recovery.join('; ') : 'Resolve the duplicate/mismatched id(s) in the spec/manifest and rebuild.'}`, { phase: 'pages', code: 'pages-identity-conflict', recoverable: false, retry: RETRY.NEVER });
@@ -7122,8 +7195,14 @@ async function runSdkBuildPhases(spec, opts, owed) {
       // empty) and STRIP the app's form/view/chart component registrations (:635). A pure content re-upload
       // leaves the key→pageId map unchanged, so the sitemap needs no rewrite — skip the finalize in that
       // submode. Any sitemap-changing apply (and every full build) still finalizes.
+      // A NEW app whose navigation holds only page entries does not exist yet: the app step left its create to this step, so the step
+      // CREATES it, with the whole navigation — every page now has its id — in its first sitemap (createAppWithPages). There is no live
+      // sitemap to fence or rewrite and no header to compare: the create writes the spec's name, description and routing description
+      // itself, as the app step's create does. It is the app step's work, so it is reported, and fails, in that phase.
       const skipSitemapFinalize = !!(opts.changedOnly && opts.changedOnly.skipSitemapFinalize);
-      if (!skipSitemapFinalize && (appHasPageSubareas(spec) || appWasExisting)) {
+      if (createAppWithPages) {
+        await runner.run('app-shell', `app "${spec.app.name}" (created with its pages)`, () => createAppWithPages());
+      } else if (!skipSitemapFinalize && (appHasPageSubareas(spec) || appWasExisting)) {
         await runner.run('pages', 'finalize sitemap (genpage subareas)', async () => {
           await provision.fetchArtifact('app', result.created.app);
           const mainFormsByTable = await resolvedMainForms();
@@ -7968,4 +8047,4 @@ async function runSdkBuildPhases(spec, opts, owed) {
   return result;
 }
 
-module.exports = { runSdkBuild, publishTargets, partialEnrichment, settleOwedPublishes, collectOwedPublishes, settleOwedLengths, normalizeFormId, planFor, annotateLivePlan, resolvePhases, PHASES, BuildHalt, SDK_COLUMN_TYPE, viewDef, defaultViewColumns, subgridLabel, enrichesDefaultViews, dashboardsInSolution, findDashboardsByName, findPinnedDashboard, artifactIdentityQuery, resolveExistingFormId, FORM_TYPE_CODE, chartDef, dashboardTileOpts, dashboardComponent, compileFormIntent, formFieldLogicals, appDef, appUniqueName, applyAppAiDescription, haltOnUnpublishedAppHeader, pushAppHeader, commandsByEntity, commandDef, businessRuleDef, businessRuleFilter, bpfDef, bpfFilter, webResourceOpts, WEB_RESOURCE_KINDS, FORM_EVENTS, acquireAppPagesLease, personaRoleSpecFor, resolveRoleBusinessUnit, roleBuClause, roleGrantLabel, resolveRoleGrantTarget, existingAppSitemapIsWritten, applyAppHeader, applyAppHeaderText, warnAppIconNotApplied, inspectBpfStages, applyBpfStages, refuseUnpushedAppCopy, assertAuthorizedSitemapRewrite, reconciledPublishHalt };
+module.exports = { runSdkBuild, publishTargets, partialEnrichment, settleOwedPublishes, collectOwedPublishes, settleOwedLengths, normalizeFormId, planFor, annotateLivePlan, resolvePhases, PHASES, BuildHalt, SDK_COLUMN_TYPE, viewDef, defaultViewColumns, subgridLabel, enrichesDefaultViews, dashboardsInSolution, findDashboardsByName, findPinnedDashboard, artifactIdentityQuery, resolveExistingFormId, FORM_TYPE_CODE, chartDef, dashboardTileOpts, dashboardComponent, compileFormIntent, formFieldLogicals, appDef, appUniqueName, applyAppAiDescription, haltOnUnpublishedAppHeader, pushAppHeader, commandsByEntity, commandDef, businessRuleDef, businessRuleFilter, bpfDef, bpfFilter, webResourceOpts, WEB_RESOURCE_KINDS, FORM_EVENTS, acquireAppPagesLease, personaRoleSpecFor, resolveRoleBusinessUnit, roleBuClause, roleGrantLabel, resolveRoleGrantTarget, existingAppSitemapIsWritten, pagesFirstRule, applyAppHeader, applyAppHeaderText, warnAppIconNotApplied, inspectBpfStages, applyBpfStages, refuseUnpushedAppCopy, assertAuthorizedSitemapRewrite, reconciledPublishHalt };
