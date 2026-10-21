@@ -789,3 +789,76 @@ test('the build command refuses the same spec on a dry run before it reads a tok
   assert.deepStrictEqual(r.requests, [], 'no request was sent');
   assert.deepStrictEqual(r.tokenReads, { dataverse: 0, powerApps: 0 }, 'no token was read');
 });
+
+// A spec that a release before this check accepted can carry such a key: the build ignored it then and built
+// the form without the option. Every path that builds or plans a build keeps the refusal above. The paths that
+// only READ a spec to act on what was deployed take the same finding as a warning, so an app built from it can
+// still be torn down, previewed and verified: the structural profile (teardown and preview) always, and
+// read-only verification through `fieldOptionKeys: 'warn'`, which only verify-model-app.js passes.
+
+const { lintSpec } = require('../lint-app-spec.js');
+const { scriptsMatching } = require('./helpers/production-scripts.js');
+const READ_ONLY_TYPO = unknownOptionKey('new_points', 'readOnlyy', " — did you mean 'readOnly'?");
+
+test('an unknown fieldOptions key stays an error under every profile that builds, and is a warning in the same words under the structural profile', () => {
+  for (const profile of ['design', 'plan', 'deploy']) {
+    const result = validateAppSpec(readOnlyTypo(), { profile });
+    assert.strictEqual(result.ok, false, profile);
+    assert.deepStrictEqual(result.errors, [READ_ONLY_TYPO], profile);
+    assert.deepStrictEqual(result.warnings, [], profile);
+  }
+  const structural = validateAppSpec(readOnlyTypo(), { profile: 'structural' });
+  assert.strictEqual(structural.ok, true, JSON.stringify(structural.errors));
+  assert.deepStrictEqual(structural.errors, []);
+  assert.deepStrictEqual(structural.warnings, [READ_ONLY_TYPO]);
+  // The lint, the authoring flow's gate, reports it as a schema error under its default and every profile that builds.
+  for (const options of [undefined, { profile: 'design' }, { profile: 'plan' }, { profile: 'deploy' }]) {
+    const report = lintSpec(readOnlyTypo(), options);
+    assert.strictEqual(report.ok, false, JSON.stringify(options));
+    assert.ok(report.errors.includes(`schema: ${READ_ONLY_TYPO}`), `${JSON.stringify(options)}: ${JSON.stringify(report.errors)}`);
+  }
+});
+
+test('fieldOptionKeys: "warn" moves this finding to the warnings under the deploy profile, and no other value or downgrade moves it', () => {
+  const lenient = validateAppSpec(readOnlyTypo(), { profile: 'deploy', fieldOptionKeys: 'warn' });
+  assert.strictEqual(lenient.ok, true, JSON.stringify(lenient.errors));
+  assert.deepStrictEqual(lenient.errors, []);
+  assert.deepStrictEqual(lenient.warnings, [READ_ONLY_TYPO]);
+  for (const options of [{}, { fieldOptionKeys: true }, { fieldOptionKeys: 'WARN' }, { fieldOptionKeys: 'error' }, { columnValues: 'warn' }, { relationshipCollisions: 'warn' }]) {
+    const result = validateAppSpec(readOnlyTypo(), { profile: 'deploy', ...options });
+    assert.deepStrictEqual(result.errors, [READ_ONLY_TYPO], JSON.stringify(options));
+  }
+});
+
+test('the downgrade moves nothing but this finding: a malformed entry, a value the build cannot apply, an inline unknown key and any other problem stay errors', () => {
+  // One explicit form carries each neighbour of the finding: an inline entry with an unknown key, a form-level
+  // entry that is not an object, and `readOnly: false` beside the misspelled key; the table has a column of no known type.
+  const spec = () => {
+    const s = specWithBigInt({
+      layout: 'explicit',
+      prune: false,
+      tabs: [{ label: 'G', sections: [{ label: 'D', columns: 1, fields: ['new_name', { name: 'new_duedate', readOnlyy: true }] }] }],
+      fieldOptions: { new_points: { readOnly: false, readOnlyy: true }, new_daysremaining: 'hidden' },
+    });
+    s.entities[0].columns.push({ schemaName: 'new_bad', type: 'Nope' });
+    return s;
+  };
+  const strict = validateAppSpec(spec(), { profile: 'deploy' });
+  assert.ok(strict.errors.includes(READ_ONLY_TYPO), JSON.stringify(strict.errors));
+  const kept = strict.errors.filter((e) => e !== READ_ONLY_TYPO);
+  assert.strictEqual(kept.length, 4, JSON.stringify(kept));
+  for (const options of [{ profile: 'structural' }, { profile: 'deploy', fieldOptionKeys: 'warn' }]) {
+    const result = validateAppSpec(spec(), options);
+    const label = JSON.stringify(options);
+    assert.strictEqual(result.ok, false, label);
+    assert.deepStrictEqual(result.errors, kept, label);
+    assert.deepStrictEqual(result.warnings, [READ_ONLY_TYPO], label);
+  }
+  for (const pattern of [/column new_bad has unknown type 'Nope'/, /fieldOptions\['new_daysremaining'\] must be an object/, /fieldOptions\['new_points'\] sets readOnly: false/, /unknown key 'readOnlyy' on tab 'G' section 'D' field 'new_duedate'/]) {
+    assert.ok(kept.some((e) => pattern.test(e)), `${pattern} stays an error: ${JSON.stringify(kept)}`);
+  }
+});
+
+test('no script but the verify CLI passes the fieldOptions key downgrade', () => {
+  assert.deepStrictEqual(scriptsMatching(/fieldOptionKeys\s*:\s*['"]warn['"]/), ['verify-model-app.js']);
+});

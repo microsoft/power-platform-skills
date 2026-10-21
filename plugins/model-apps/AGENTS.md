@@ -1866,11 +1866,11 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   dropped and counted in `droppedSubareas`.
 - **`scripts/verify-model-app.js` → `scripts/lib/verify-spec.js`** — read-only reconcile of the App Spec
   against what actually deployed; exits non-zero and lists anything missing, catching silent partial
-  builds. It validates the spec first under the `deploy` profile, with two compatibility downgrades
-  (`relationshipCollisions: 'warn'` and `columnValues: 'warn'`): a spec an earlier release accepted and built — a 1:N and an N:N
-  that share a schema name, an AutoNumber column with no format, a `required` that is not `true`, `false` or `"recommended"` — is
-  verified, with a warning that names the fix, and is never refused before anything is read (the build, the lint and the
-  provisioning gate keep these as errors). **Every `WARNING:` line it prints on stderr — those findings, the spec's other warnings, and a page
+  builds. It validates the spec first under the `deploy` profile, with three compatibility downgrades
+  (`relationshipCollisions: 'warn'`, `columnValues: 'warn'` and `fieldOptionKeys: 'warn'`): a spec an earlier release accepted and built — a 1:N and an N:N
+  that share a schema name, an AutoNumber column with no format, a `required` that is not `true`, `false` or `"recommended"`, a key a form's
+  `fieldOptions` entry does not take — is verified, with a warning that names the fix, and is never refused before anything is read (the
+  build, the lint and the provisioning gate keep these as errors). **Every `WARNING:` line it prints on stderr — those findings, the spec's other warnings, and a page
   workspace it could not remove — is also in the result JSON's optional `warnings` array** (the same messages, without the prefix, in the order
   printed; left out when there is none, as `unverified` is), so a caller that reads only the JSON loses none of them. It is there on a failed
   verification and on a refused spec (`{ ok: false, errors, warnings }`, whose warnings are printed too) as on a passed one, and changes neither

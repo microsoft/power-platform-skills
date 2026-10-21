@@ -1382,8 +1382,11 @@ or **inline** on an explicit layout's `fields[]` entry as `{ "name": …, "readO
 Where both apply to one field the inline entry wins; a plain string entry keeps working unchanged.
 An entry takes only the options below — `readOnly`, `hidden`, `after`, `colspan` and `rowspan` — and
 an inline entry its `name` as well; a `fieldOptions` entry takes no `name`, because its key names the
-field. Any other key (a misspelling such as `readOnlyy` or `colSpan`) is **rejected** at author time,
-naming the key it most likely meant, rather than accepted and silently ignored.
+field. Any other key (a misspelling such as `readOnlyy` or `colSpan`) is **rejected** at author time —
+by the lint, a dry run and a build — naming the key it most likely meant, rather than accepted and
+silently ignored. A spec an earlier release built with such a `fieldOptions` key can still be read:
+`verify-model-app.js` reports the key as a warning, and teardown and `preview-form.js` accept it. The
+option stays unapplied until the key is fixed.
 
 - **`readOnly: true`** locks the control (`disabled="true"`), leaving it visible. Use it for a value
   the platform generates but does **not** make immutable — an AutoNumber column is writable through

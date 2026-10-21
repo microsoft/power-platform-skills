@@ -642,7 +642,10 @@ async function main() {
   // each column exists — so the spec of an app an earlier release built from a value they refuse (an AutoNumber column made as plain text, a
   // `required: "true"` made not required) must still reach its deployment. The warning names the column and the fix for the next build. Not the
   // structural profile: that would also skip the checks of pages and forms that verification relies on.
-  const v = validateAppSpec(spec, { profile: 'deploy', relationshipCollisions: 'warn', columnValues: 'warn' });
+  // `fieldOptionKeys: 'warn'` is the same arrangement for a key a form's `fieldOptions` entry does not take: the build refuses one, because it
+  // would drop it and never apply the option, but a release before that check accepted it and built the form without the option — and
+  // verification only reads that deployment. Every other finding about the entry stays an error.
+  const v = validateAppSpec(spec, { profile: 'deploy', relationshipCollisions: 'warn', columnValues: 'warn', fieldOptionKeys: 'warn' });
   // A warning is printed for a person and kept for the result JSON in one step, so the two cannot differ: a caller that reads only the JSON must not
   // lose what stderr says. The spec's are found before it is judged, so a spec that is refused reports the warnings it also has.
   const warnings = [];

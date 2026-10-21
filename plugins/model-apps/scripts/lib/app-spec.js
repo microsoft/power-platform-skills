@@ -2262,7 +2262,7 @@ function validateFormLayoutKeys(f, errors) {
   });
 }
 
-function validateFormFieldOptions(f, entityByLower, errors, warnings) {
+function validateFormFieldOptions(f, entityByLower, errors, warnings, unknownKeyFindings = errors) {
   const label = `form '${f.name || f.entity}'`;
   const entity = entityByLower.get(String(f.entity || '').toLowerCase());
   const columnType = (logical) => {
@@ -2316,13 +2316,14 @@ function validateFormFieldOptions(f, entityByLower, errors, warnings) {
           errors.push(`${label}: fieldOptions['${key}'] must be an object { ${FIELD_OPTION_SHAPE} }`);
           continue;
         }
-        // Only the entry's OWN keys (Object.keys): a key the entry does not take is refused here, worded
-        // like the inline entry's check (validateFormLayoutKeys), instead of being dropped by the compiler.
+        // Only the entry's OWN keys (Object.keys): a key the entry does not take is reported here, worded
+        // like the inline entry's check (validateFormLayoutKeys), instead of being dropped by the compiler —
+        // as an error, or as a warning where validateAppSpec says the spec is only read (fieldOptionKeyFindings).
         // A named form also names its table: a field belongs to a table, and two tables' forms can share
         // a name.
         for (const k of Object.keys(v)) {
           if (FIELD_OPTION_KEYS.includes(k)) continue;
-          errors.push(`${label}${f.name && f.entity ? ` (table ${f.entity})` : ''}: unknown key '${k}' on fieldOptions['${key}']${fieldOptionKeyHint(k)} (allowed: ${FIELD_OPTION_KEYS.join(', ')})`);
+          unknownKeyFindings.push(`${label}${f.name && f.entity ? ` (table ${f.entity})` : ''}: unknown key '${k}' on fieldOptions['${key}']${fieldOptionKeyHint(k)} (allowed: ${FIELD_OPTION_KEYS.join(', ')})`);
         }
         seen.push({ name: String(key).toLowerCase(), opt: v, where: `fieldOptions['${key}']`, inline: false });
       }
@@ -2481,6 +2482,12 @@ function validateAppSpec(spec, opts = {}) {
   // protect there, and the spec of an app an earlier release built from a value they refuse must still reach its deployment. The same arrangement as
   // `relationshipCollisions: 'warn'` at the end of this function; every other caller keeps the error.
   const columnValueFindings = opts.columnValues === 'warn' ? warnings : errors;
+  // Where an unknown key of a form's `fieldOptions` entry goes (validateFormFieldOptions). Every profile that builds or plans a build
+  // keeps it an error: the build drops such a key, so the option would never be applied. A release before that check accepted and built
+  // a spec carrying one (the key was ignored), and a spec that is only READ to act on its deployment must still be read — so the
+  // structural profile (teardown, preview) takes it as a warning in the same words, and so does read-only verification, which keeps the
+  // deploy profile and passes `fieldOptionKeys: 'warn'`, as it passes `columnValues: 'warn'`. Nothing else about the entry moves.
+  const fieldOptionKeyFindings = profile === 'structural' || opts.fieldOptionKeys === 'warn' ? warnings : errors;
   if (!VALIDATION_PROFILES.includes(profile)) {
     return { ok: false, errors: [`unknown validation profile '${profile}' (valid: ${VALIDATION_PROFILES.join(', ')})`], warnings };
   }
@@ -3010,7 +3017,7 @@ function validateAppSpec(spec, opts = {}) {
         }
       }
     }
-    validateFormFieldOptions(f, entityByLower, errors, warnings);
+    validateFormFieldOptions(f, entityByLower, errors, warnings, fieldOptionKeyFindings);
     validateFormLayoutKeys(f, errors);
     validateFormSecurityRoles(f, spec, errors);
     // `layout: 'explicit'` with no `tabs[]` is a spec that asks for one thing and builds another.

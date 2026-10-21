@@ -10,6 +10,7 @@ const vm = require('node:vm');
 const { teardownModelApp: engineTeardownModelApp, cliEmit } = require(path.join(__dirname, '..', 'teardown-model-app.js'));
 const teardownModelApp = (spec, opts, deps) => engineTeardownModelApp(spec, { env: 'https://contoso.crm.dynamics.com', ...opts }, deps);
 const { validateFlagsFromParsed } = require('./helpers/fake-auth.js');
+const { validateAppSpec } = require(path.join(__dirname, '..', 'lib', 'app-spec.js'));
 
 const desk = JSON.parse(fs.readFileSync(path.join(__dirname, '..', '..', 'samples', 'app-spec.support-desk.json'), 'utf8'));
 
@@ -108,6 +109,51 @@ test('apply --allow-destructive performs the deletes', async () => {
   const r = await teardownModelApp(desk, { apply: true, allowDestructive: true }, { sdk });
   assert.strictEqual(r.ok, true);
   assert.ok(sdk.calls.some((c) => c.method === 'deleteAppCascade'), 'app deleted');
+});
+
+// A key a form's `fieldOptions` entry does not take is refused by the build and the lint, but a release before that check
+// accepted it and built the form without the option. Teardown reads the spec under the structural profile, where that finding
+// is a warning, so an app built from such a spec is still torn down, behind the same authorization as any other.
+const FIELD_OPTION_TYPO = "form 'Ticket' (table new_ticket): unknown key 'readOnlyy' on fieldOptions['new_priority'] — did you mean 'readOnly'? (allowed: readOnly, hidden, after, colspan, rowspan)";
+function deskWithFieldOptionTypo() {
+  const spec = JSON.parse(JSON.stringify(desk));
+  spec.forms.find((f) => f.entity === 'new_ticket').fieldOptions = { new_priority: { readOnlyy: true } };
+  return spec;
+}
+
+test('a spec whose fieldOptions entry carries a key it does not take is still torn down: the dry run lists the same plan', async () => {
+  const structural = validateAppSpec(deskWithFieldOptionTypo(), { profile: 'structural' });
+  assert.deepStrictEqual([structural.ok, structural.errors, structural.warnings], [true, [], [FIELD_OPTION_TYPO]], 'the finding is a warning there');
+  const reads = [];
+  const r = await teardownModelApp(deskWithFieldOptionTypo(), { apply: false }, { sdk: { queryRecords: async (entity) => { reads.push(entity); return []; } } });
+  assert.strictEqual(r.ok, true, JSON.stringify(r.errors));
+  assert.strictEqual(r.dryRun, true);
+  const plain = await teardownModelApp(desk, { apply: false }, { sdk: { queryRecords: async () => [] } });
+  assert.deepStrictEqual(r.plan, plain.plan, 'the plan of the same spec without the key');
+  assert.deepStrictEqual(reads, ['webresource']);
+});
+
+test('such a spec still needs --allow-destructive to be torn down, and with it the deletes run', async () => {
+  const held = presentSdk();
+  const refused = await teardownModelApp(deskWithFieldOptionTypo(), { apply: true }, { sdk: held });
+  assert.strictEqual(refused.ok, false);
+  assert.ok(refused.errors.some((e) => /requires --allow-destructive/.test(e)), JSON.stringify(refused.errors));
+  assert.ok(!refused.errors.some((e) => /unknown key/.test(e)), JSON.stringify(refused.errors));
+  assert.strictEqual(held.calls.length, 0, 'nothing was touched');
+  const sdk = presentSdk();
+  const r = await teardownModelApp(deskWithFieldOptionTypo(), { apply: true, allowDestructive: true }, { sdk });
+  assert.strictEqual(r.ok, true, JSON.stringify(r.errors));
+  assert.ok(sdk.calls.some((c) => c.method === 'deleteAppCascade'), 'app deleted');
+});
+
+test('such a spec is still refused before any teardown for any other problem, and the fieldOptions key is no part of the refusal', async () => {
+  const spec = deskWithFieldOptionTypo();
+  spec.forms.push({ entity: 'new_missing', name: 'Ghost' });
+  const sdk = presentSdk();
+  const r = await teardownModelApp(spec, { apply: true, allowDestructive: true }, { sdk });
+  assert.strictEqual(r.ok, false);
+  assert.deepStrictEqual(r.errors, ["form references unknown entity 'new_missing'"]);
+  assert.strictEqual(sdk.calls.length, 0, 'no SDK calls on a bad spec');
 });
 
 // REVERSED by #587 item 5, deliberately. This test used to assert that teardown CONTINUES after a

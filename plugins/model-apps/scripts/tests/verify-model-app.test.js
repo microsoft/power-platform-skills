@@ -959,6 +959,36 @@ test('verify CLI still refuses a spec that is invalid for another reason — bef
   assert.deepStrictEqual(reads, [], 'nothing was read');
 });
 
+// --- a form whose fieldOptions entry carries a key it does not take -------------------------------------------------------------------
+// The build and the lint refuse a key a `fieldOptions` entry does not take, but a release before that check accepted one and built the form
+// without the option. Verification keeps the deploy profile, whose checks of forms and pages it relies on, and passes fieldOptionKeys: 'warn':
+// the finding is a warning that names the key and the option it most likely meant, and the verdict is the deployment's. The form of these specs
+// is not in the fake environment, so its check fails: what is pinned is that the check ran.
+const FIELD_OPTION_TYPO = "form 'Ticket' (table new_ticket): unknown key 'readOnlyy' on fieldOptions['new_ref'] — did you mean 'readOnly'? (allowed: readOnly, hidden, after, colspan, rowspan)";
+const withTypoForm = (spec) => ({ ...spec, forms: [{ entity: 'new_ticket', name: 'Ticket', fieldOptions: { new_ref: { readOnlyy: true } } }] });
+
+test('verify CLI still verifies the deployment of a form whose fieldOptions entry carries a key it does not take — and warns, naming the key', async () => {
+  const { reads, emitted, stderr } = await verifyOlderSpec(withTypoForm(appSpec({ columns: [column({ type: 'Text' })] })));
+  const result = JSON.parse(JSON.stringify(emitted.payload));
+  assert.ok(Number.isInteger(result.total) && result.total > 0 && Array.isArray(result.missing), `a verdict, not a refusal: ${JSON.stringify(result)}`);
+  assert.ok(reads.includes('columns new_ticket'), `the deployed columns were read: ${JSON.stringify(reads)}`);
+  assert.match(stderr, /^ {2}[✓✗] form: Ticket/m, 'the form was looked for in the deployment');
+  assert.ok(stderr.includes(`WARNING: ${FIELD_OPTION_TYPO}\n`), stderr);
+  assert.deepStrictEqual(result.warnings, [FIELD_OPTION_TYPO]);
+  assert.ok(!result.errors.some((e) => /unknown key/.test(e)), JSON.stringify(result.errors));
+});
+
+test('verify CLI still refuses such a spec for any other problem — before any read — and the fieldOptions key is no part of the refusal', async () => {
+  const spec = withTypoForm(appSpec({ columns: [column({ type: 'Text' }), column({ schemaName: 'new_bad', type: 'Nope' })] }));
+  const { reads, emitted, stderr } = await verifyOlderSpec(spec);
+  const result = JSON.parse(JSON.stringify(emitted.payload));
+  assert.strictEqual(emitted.ok, false);
+  assert.deepStrictEqual(result.errors, ["entity new_ticket: column new_bad has unknown type 'Nope'"]);
+  assert.deepStrictEqual(result.warnings, [FIELD_OPTION_TYPO]);
+  assert.ok(stderr.includes(`WARNING: ${FIELD_OPTION_TYPO}\n`), stderr);
+  assert.deepStrictEqual(reads, [], 'nothing was read');
+});
+
 // --- the result JSON carries what stderr warns -----------------------------------------------------------------------------------------
 // A person reads the `WARNING:` lines verify prints, but a caller that reads only the JSON result — a skill, a pipeline — lost them. The result's optional
 // `warnings` array holds the same messages, without the prefix and in the order they were printed, and is left out when there is none, as `unverified` is.
