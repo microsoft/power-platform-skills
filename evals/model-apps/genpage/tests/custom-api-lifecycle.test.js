@@ -742,6 +742,90 @@ test('scoped assignment origin: unmodeled outer alias writes remain refusals', a
   }
 });
 
+test('scoped assignment origin: named helper defaults retain potential input writes', async (t) => {
+  for (const [label, parameter, argument, arrow = false] of [
+    ['plain parameter', 'record = props.selectedAccount', ''],
+    ['destructured member', '{ record = props.selectedAccount }', '{}'],
+    ['opaque array member', '[record = props.selectedAccount]', '[]'],
+    ['arrow parameter', 'record = props.selectedAccount', '', true],
+  ]) {
+    for (const layer of [1, 2]) {
+      await t.test(`scoped assignment origin: named helper defaults ${label}, layer ${layer}`, () => {
+        const fixture = selectedRecordLookupFixture();
+        const code = fixture.artifacts['stages/with-api.tsx']
+          .replace('  const pending = { current: false };', `  ${arrow ? 'const editDraft = ' : 'function editDraft'}(${parameter})${arrow ? ' =>' : ''} {
+    record.accountid = 'draft';
+  };
+  editDraft(${argument});
+  const pending = { current: false };`);
+        fixture.artifacts['stages/with-api.tsx'] = code;
+        assertKnownApiReceivers(code);
+        const result = score(fixture, layer);
+        assert.equal(result.status, 'fail', result.reason);
+        assert.match(result.reason, /lookup|Ref|provenance/i);
+      });
+    }
+  }
+});
+
+test('scoped assignment origin: opaque default headers cannot hide outer writes', async (t) => {
+  for (const layer of [1, 2]) {
+    await t.test(`scoped assignment origin: opaque default headers, layer ${layer}`, () => {
+      const fixture = selectedRecordLookupFixture();
+      const code = fixture.artifacts['stages/with-api.tsx']
+        .replace('  const pending = { current: false };', `  let writtenRecord!: { accountid: string };
+  function prepareDraft({ other = (writtenRecord = props.selectedAccount) }) {
+    void other;
+  }
+  prepareDraft({});
+  writtenRecord.accountid = 'draft';
+  const pending = { current: false };`);
+      fixture.artifacts['stages/with-api.tsx'] = code;
+      assertKnownApiReceivers(code);
+      const result = score(fixture, layer);
+      assert.equal(result.status, 'fail', result.reason);
+      assert.match(result.reason, /lookup|Ref|provenance/i);
+    });
+  }
+});
+
+test('scoped assignment origin: helper default header positives keep distinct bindings', async (t) => {
+  for (const [label, declaration] of [
+    ['unrelated component local', `let record = props.otherAccount;
+  record = props.selectedAccount;
+  void record.accountid;
+  function editDraft(record = { accountid: 'fresh' }) {
+    record.accountid = 'draft';
+  }`],
+    ['nested arrow parameter', `function editDraft(record = ((record: { accountid: string }) => {
+    record = props.selectedAccount;
+    return { accountid: 'fresh' };
+  })({ accountid: 'fresh' })) {
+    record.accountid = 'draft';
+  }`],
+    ['nested named parameter', `function editDraft(record = (function makeDraft(record: { accountid: string }) {
+    record = props.selectedAccount;
+    return { accountid: 'fresh' };
+  })({ accountid: 'fresh' })) {
+    record.accountid = 'draft';
+  }`],
+  ]) {
+    for (const layer of [1, 2]) {
+      await t.test(`scoped assignment origin: helper default header positives ${label}, layer ${layer}`, () => {
+        const fixture = selectedRecordLookupFixture();
+        const code = fixture.artifacts['stages/with-api.tsx']
+          .replace('  const pending = { current: false };', `  ${declaration}
+  editDraft({ accountid: 'fresh' });
+  const pending = { current: false };`);
+        fixture.artifacts['stages/with-api.tsx'] = code;
+        assertKnownApiReceivers(code);
+        const result = score(fixture, layer);
+        assert.equal(result.status, 'pass', result.reason);
+      });
+    }
+  }
+});
+
 test('download result pages: empty present list cannot establish provenance', async (t) => {
   for (const layer of [1, 2]) {
     await t.test(`download result pages: empty present list, layer ${layer}`, () => {

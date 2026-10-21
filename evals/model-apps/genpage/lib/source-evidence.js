@@ -350,7 +350,8 @@ function arrowScopes(mask) {
     let body = match.index + 2;
     while (/\s/.test(mask[body] || '')) body += 1;
     const bodyEnd = mask[body] === '{' ? groupEnd(mask, body) : expressionEnd(mask, body);
-    scopes.push({ arrow: true, names, paramsOpen, body: match.index, end: bodyEnd });
+    const paramsEnd = before[close] === ')' ? close : before.length;
+    scopes.push({ arrow: true, names, paramsOpen, paramsEnd, body: match.index, end: bodyEnd });
   }
   // `function (…) {` and `function* (…) {` with no name: a value, so its callers are untraceable too.
   for (const match of mask.matchAll(/\bfunction\s*\*?\s*\(/g)) {
@@ -358,7 +359,7 @@ function arrowScopes(mask) {
     const paramsEnd = groupEnd(mask, paramsOpen);
     const body = mask.indexOf('{', paramsEnd);
     if (body < 0) continue;
-    scopes.push({ arrow: true, names: boundNames(mask.slice(paramsOpen + 1, paramsEnd)), paramsOpen, body: paramsOpen, end: groupEnd(mask, body) });
+    scopes.push({ arrow: true, names: boundNames(mask.slice(paramsOpen + 1, paramsEnd)), paramsOpen, paramsEnd, body: paramsOpen, end: groupEnd(mask, body) });
   }
   return scopes;
 }
@@ -367,7 +368,7 @@ function arrowScopes(mask) {
 // `const { … } = …`) inside an enclosing scope or outside every scope. A binding inside a scope
 // that does not enclose `at` (another helper, or the component seen from a helper outside it) is
 // not visible. Several bindings at the same level must all resolve.
-function bindingsOf(ctx, name, at, potentialWrite = false) {
+function bindingsOf(ctx, name, at, potentialWrite = false, parameterHeader = false) {
   const { mask, scopes, component } = ctx;
   const found = [];
   const levelOf = (index) => {
@@ -375,9 +376,14 @@ function bindingsOf(ctx, name, at, potentialWrite = false) {
     if (!scope) return -1;
     return scope.body < at && scope.end > at ? scope.body : null;
   };
-  for (const scope of scopes.filter((entry) => entry.body < at && entry.end > at)) {
+  // A parameter default (`record = props.selectedAccount`) is before its body but binds
+  // that same parameter. Include it only when identifying an assignment LHS, not its RHS or
+  // ordinary value/receiver proof. Header visibility uses the list position so nested scopes win.
+  for (const scope of scopes.filter((entry) => (entry.body < at && entry.end > at)
+    || (parameterHeader && potentialWrite && !entry.isComponent && entry.paramsOpen < at && entry.paramsEnd > at))) {
+    const level = scope.body < at ? scope.body : scope.paramsOpen;
     if (scope.arrow) {
-      if (scope.names.includes(name)) found.push({ level: scope.body, kind: 'opaque', at: scope.paramsOpen });
+      if (scope.names.includes(name)) found.push({ level, kind: 'opaque', at: scope.paramsOpen, scope });
       continue;
     }
     if (scope.isComponent) {
@@ -393,13 +399,13 @@ function bindingsOf(ctx, name, at, potentialWrite = false) {
     splitTopLevel(mask, scope.paramsOpen, scope.paramsEnd).forEach((param, index) => {
       const plain = param.startsWith('...') ? null : /^([A-Za-z_$][\w$]*)/.exec(param);
       if (plain) {
-        if (plain[1] === name) found.push({ level: scope.body, kind: 'param', scope, index, name });
+        if (plain[1] === name) found.push({ level, kind: 'param', scope, index, name });
         return;
       }
       const pattern = /^\{([^{}]*)\}/.exec(param);
       const property = pattern ? destructuredNames(pattern[1]).get(name) : undefined;
-      if (property) found.push({ level: scope.body, kind: 'param-member', scope, index, name, property });
-      else if (boundNames(param).includes(name)) found.push({ level: scope.body, kind: 'opaque', scope, index });
+      if (property) found.push({ level, kind: 'param-member', scope, index, name, property });
+      else if (boundNames(param).includes(name)) found.push({ level, kind: 'opaque', scope, index });
     });
   }
   for (const match of mask.matchAll(new RegExp(`\\b(?:const|let|var)\\s+${escapeRe(name)}\\s*(?::[^=;]+)?=`, 'g'))) {
@@ -503,8 +509,9 @@ function identityPaths(ctx, expr, at, depth = 0) {
   const [name, ...members] = normalizeChain(chain).split('.');
   const append = (paths, parts = []) => paths.map((entry) => ({ root: entry.root, parts: [...entry.parts, ...parts, ...members] }));
   const bindings = bindingsOf(ctx, name, at, true);
-  const bindingKey = (binding) => JSON.stringify([binding.level, binding.kind, binding.at,
-    binding.scope?.paramsOpen, binding.index, binding.property]);
+  const bindingKey = (binding) => JSON.stringify(binding.scope
+    ? [binding.kind, binding.scope.paramsOpen, binding.index, binding.property]
+    : [binding.kind, binding.level, binding.at, binding.property]);
   const bindingKeys = new Set(bindings.map(bindingKey));
   const paths = bindings.flatMap((binding) => {
     if (binding.kind === 'props') return append([{ root: `props:${ctx.component.scope.paramsOpen}`, parts: [] }]);
@@ -527,10 +534,19 @@ function identityPaths(ctx, expr, at, depth = 0) {
   const assignments = new RegExp(`(?<![\\w$.])${escapeRe(name)}\\s*(?:\\?\\?|\\|\\||&&)?=(?![=>])`, 'g');
   for (const assignment of ctx.mask.matchAll(assignments)) {
     if (/\b(?:const|let|var)\s+$/.test(ctx.mask.slice(Math.max(0, assignment.index - 12), assignment.index))) continue;
-    const assigned = bindingsOf(ctx, name, assignment.index, true);
+    const assigned = bindingsOf(ctx, name, assignment.index, true, true);
+    // Opaque patterns over-approximate names: `{ other = (outer = input) }` can assign an
+    // enclosing `outer`, not declare a parameter. Keep the original body-only possibilities
+    // too; ambiguity may refuse provenance but must never silently discard a possible write.
+    const opaqueHeader = assigned.some((binding) => binding.kind === 'opaque' && binding.scope
+      && binding.scope.paramsOpen < assignment.index && binding.scope.paramsEnd > assignment.index);
+    const outsideHeader = opaqueHeader ? bindingsOf(ctx, name, assignment.index, true) : null;
+    const possible = outsideHeader ? [...assigned, ...outsideHeader] : assigned;
     // Two unresolved references may still share an outer binding. Retain that potential write only
     // for conservative refusal, never as authorization of an input value or API receiver.
-    if (bindingKeys.size ? !assigned.some((binding) => bindingKeys.has(bindingKey(binding))) : assigned.length) continue;
+    const sameBinding = bindingKeys.size ? possible.some((binding) => bindingKeys.has(bindingKey(binding)))
+      : (outsideHeader || assigned).length === 0;
+    if (!sameBinding) continue;
     const rhs = identityChain(initializerText(ctx.mask, assignment.index + assignment[0].length));
     if (rhs && normalizeChain(rhs) !== name) paths.push(...append(identityPaths(ctx, rhs, assignment.index, depth + 1)));
   }
