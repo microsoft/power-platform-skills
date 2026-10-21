@@ -13,7 +13,8 @@ published. A new app whose navigation holds only generative pages can now be bui
 Custom API bindings and much more of each table's schema into the App Spec, and verify checks declared status reasons and alternate
 keys. Supported public Custom APIs are discovered by default. The HTTP client no longer re-sends a publish the customization lock
 refused, a web resource or dashboard that a stopped build left behind is finished by the next build instead of made again, and an
-unknown key in a form's `fieldOptions` is refused instead of ignored.
+unknown key in a form's `fieldOptions` is refused instead of ignored. An access token is now also kept out of bytes, out of its
+other spellings, and out of text cut short or split between two writes.
 
 ### Added
 
@@ -32,15 +33,19 @@ unknown key in a form's `fieldOptions` is refused instead of ignored.
   fragment, nothing shaped like a token, and for a Custom API only the ten primitive parameter kinds the runtime binds. Any other list
   is left out of the spec, named by page, list, entry and property (never by a value), and stays on the page; a spec that states one
   is refused. A secret written as plain words in a label cannot be told from a label. A list the spec does not state is not sent, so
-  the page keeps its own, and `[]` clears it. A page that already holds what the spec states is neither written nor published, even
-  when its last publish was recorded before the spec stated the lists. Before it writes anything (and in a dry run), a build reads
-  the target environment's connection references and Custom APIs, and the definition of a custom connector whose operations a
-  binding calls: it stops (`pages-binding-reference-conflict`, never retried) at a connection reference of that name for another
-  connector; it names a reference or Custom API that is not there, a reference with no connection, an operation the custom
-  connector there does not define, and a Custom API of the other kind or bound to another table; and what the answer did not prove
-  is reported as not checked, never as compatible. A throttle wait the run's budget refuses during these reads stops the build
-  before it writes. The download's `pageBindings` result and a `NOTE:` on stderr list what the target must already have: the
-  connection references and their connections, the Custom APIs and the service resources the bindings point at.
+  the page keeps its own, and `[]` clears it. When a page already holds what the spec states and this workspace has a usable record
+  of its last publish, the build neither writes nor publishes it; a record from before the spec stated the lists counts only once
+  the page's published copy is read and found to hold them, and with no usable record the page is published (not written), as an
+  unchanged page always was. Before it writes anything (and in a dry run), a build reads the target environment's connection
+  references and Custom APIs, and the definition of a custom connector whose operations a binding calls: it stops
+  (`pages-binding-reference-conflict`, never retried) at a connection reference of that name for another connector; it names a
+  reference or Custom API that is not there, a reference with no connection, an operation the custom connector there does not
+  define, and a Custom API of the other kind or bound to another table. A read that fails, a reference row that does not say — in a
+  form the build can read — its connector, its connection or its custom connector, and a definition it cannot read are reported as
+  not checked, never as compatible; a Custom API row is taken as it reads (a kind it does not state counts as an Action, a table it
+  does not state as Global). A throttle wait the run's budget refuses during these reads stops the build before it writes. The
+  download's `pageBindings` result and a `NOTE:` on stderr list what the target must already have: the connection references and
+  their connections, the Custom APIs and the service resources the bindings point at.
 - **A download keeps much more of each table's schema**: Text format and length, Memo length, Integer range and format, Decimal and
   Double range and precision, Money range, Boolean labels, DateTime format, AutoNumber masks, and the primary name column's length
   (written even at 100, so a fresh build corrects an environment that overrides it) and mask; custom unmanaged Active and Inactive
@@ -64,9 +69,9 @@ unknown key in a form's `fieldOptions` is refused instead of ignored.
 ### Changed
 
 - **The bundled SDK is updated (power-platform-ux a3443479).** What a maker can see of it:
-  - a web resource create, and an update that writes content, read the published content back after they publish (one read each),
-    and fail with `WEB_RESOURCE_UNVERIFIED`, naming the row (which exists), when the publish failed or the content read back is
-    missing or not what was written (see Fixed for how a build recovers);
+  - a web resource create, and an update that writes content, read the published content back once their publish succeeds (one
+    read), and fail with `WEB_RESOURCE_UNVERIFIED`, naming the row (which exists), when the publish fails (nothing is read back then)
+    or the content read back is missing, unreadable or not what was written (see Fixed for how a build recovers);
   - a publish is never sent again by the SDK, except when SQL rolled it back as a deadlock victim;
   - an edit of an Active business process flow that the customization lock refuses is sent again, unchanged and with its original
     version check, for up to three minutes of waits, where it failed at once: another maker's edit in between makes it fail rather
@@ -75,8 +80,9 @@ unknown key in a form's `fieldOptions` is refused instead of ignored.
     is checked when an app is read — before and after its sitemap is read — and again before the app is written; each check is two
     reads (the app's current layer and its SiteMap component) where a read of an app made one name lookup, and deleting an app also
     reads which apps use its sitemap;
-  - an app create whose rollback the customization lock refused says whether the partial app was kept or its removal could not be
-    confirmed, and to check that its rows are the create's own before removing them.
+  - an app create whose rollback the customization lock refused or interrupted now names the lock as the reason — the partial app
+    kept because its rollback deleted nothing, or its removal unconfirmed because the rollback may not have run — and says to check,
+    once the lock frees, that its rows exist and are the create's own before removing them; other rollback outcomes read as before.
 - **The HTTP client sends a publish (`PublishXml`, `PublishAllXml`) once.** It sent one again after a 429, 500, 502, 503 or 504 or a
   reset or timed-out connection, up to six sends; measured under the customization lock, a refused publish is no proof that nothing
   changed, and an accepted re-send published old content. A publish is still sent again after a 401 (with a new token) and after a
@@ -86,10 +92,12 @@ unknown key in a form's `fieldOptions` is refused instead of ignored.
 - **Supported public Custom APIs are discovered by default** (`GENPAGE_ENABLE_CUSTOM_API=0` opts out for a run; a missing or
   unreadable flag configuration still turns it off). `list-custom-apis.js` returns, in one request, the public Global APIs and the
   public APIs bound to the page's tables; it leaves out private APIs, APIs bound to a table collection, and APIs with an Entity or
-  EntityCollection input or output. Missing, malformed or incomplete metadata is an error, not an empty or partial list, and an
-  answer that may be cut at the platform's limit is refused rather than paged. This is Custom API discovery, not support for other
-  Dataverse actions and functions. The page builders invoke a Function automatically only when its read semantics are known — GET
-  alone does not prove it harmless — and otherwise only on the user's action.
+  EntityCollection input or output. It refuses, rather than returning an empty or partial list, an API list, privacy flag, parameter
+  or response type, or lookup detail it cannot read — the metadata its eligibility checks need — and an answer or expansion whose
+  completeness it cannot prove (a continuation, or the platform's 5,000-row cap); the other fields of an API's own row are not
+  checked. This is Custom API discovery, not support for other Dataverse actions and functions. The page builders invoke a Function
+  automatically only when its read semantics are known — GET alone does not prove it harmless — and otherwise only on the user's
+  action.
 - **A rebuild no longer re-sends a status reason, an alternate key or an Integer format the environment already holds.** It reads a
   table's status reasons once — after every labelled create, so the read cannot strip a later create's other-language labels — and
   inserts only a reason whose value, state, label and color are not all there; it takes the keys from the table read it already
@@ -117,13 +125,15 @@ unknown key in a form's `fieldOptions` is refused instead of ignored.
   whose sitemap another live app uses is refused, and so is a push of an app that was linked to another sitemap since it was read
   (read it again). A build still adds a sitemap to the spec's solution only when it carries the app's unique name, as the sitemaps
   the build creates do.
-- **A web resource whose publication could not be confirmed is written again by its id on the next build**, not reused with stale
+- **A web resource whose publication could not be confirmed is recovered by its id on the next build**, not reused with stale
   content or created a second time. At each place the build writes one — the spec's web resources, the generated app icon and the
   page manifest — it records the row's id in the workspace (`web-resource-unconfirmed.*.json`), adds the row to the solution, and
-  stops saying the write is unconfirmed, not lost. The next run on that workspace — or the build's own retry — writes the content
-  again by id, checks what was published and clears the record; pages already created are adopted, not created twice. A row of that
-  name the record does not hold is reused as before, and a recorded id now under another name, or a recorded name now under another
-  id, stops recovery without touching the other row. When the record cannot be saved, the build does not retry on its own. The
+  stops saying the write is unconfirmed, not lost. The next run on that workspace — or the build's own retry — writes a spec web
+  resource's or the icon's content again by that id, publishes it and checks what was published; it writes the page manifest again
+  only when the manifest's published copy is not already what the run wants, and otherwise keeps it as it is. Either way the row
+  joins the solution and the record is cleared, and pages already created are adopted, not created twice. A row of that name the
+  record does not hold is reused as before, and a recorded id now under another name, or a recorded name now under another id,
+  stops recovery without touching the other row. When the record cannot be saved, the build does not retry on its own. The
   workspace-reset advice keeps these records. Not covered: a process killed while the SDK publishes, and another workspace.
 - **A dashboard a build created and then stopped before adding to the app's solution joins the solution on the next build.** A build
   killed between the create and the add, one whose create's answer was lost, or one whose add and undo both failed left a row outside
@@ -150,6 +160,15 @@ unknown key in a form's `fieldOptions` is refused instead of ignored.
 - **A download no longer carries the relationship a File or Image column brings** (`FileAttachment_<table>_<column>`), nor warns
   that its name lacks the publisher prefix, nor reads the `fileattachment` table for it: the column makes it again on a rebuild.
   Other relationships of those tables are kept.
+- **An access token the process obtained is also kept out of bytes, out of its other spellings, and out of text cut short or split
+  between two writes.** Bytes a script writes to stdout or stderr (a Buffer, or text written as base64 or hex) are read too, and a
+  token there is masked with `*` byte for byte, so framed output keeps its length. The token's base64 (standard and URL-safe),
+  percent-encoded and HTML spellings are taken out like the token itself. A piece of the token of 24 characters or more is taken out
+  where `util.inspect`'s `... N more characters` or an ellipsis cut the text, at the end of a write that begins the token, and at the
+  start of one that ends it; an escape split between two writes stays whole, so JSON written in two pieces is still JSON. Still left:
+  a piece shorter than 24 characters, the middle piece of a token written in three or more writes, a piece shorter than 24 characters
+  on the far side of an escape split between two writes, base64 of a part of the token, and bytes written to a file. pcf's copy of
+  the module changes the same way.
 - The capabilities document no longer says that a download leaves `relationships[]` out (#567).
 
 ## [2.17.0]
