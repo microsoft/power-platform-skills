@@ -912,7 +912,7 @@ test('the conflict halt of a page whose name reads as a transient error is still
 
 test('a build with no conflict goes on: the same connector under another spelling of its id, and a Custom API of the same kind and table, are fine — and nothing is said', async () => {
   const { spec, outDir } = await portableCopy();
-  const { sdk, writes } = targetEnvironment({ references: [referenceRow('CONTOSO_MsnWeather', 'SHARED_MSNWEATHER'), { connectionreferencelogicalname: 'contoso_sharepoint', connectorid: 'shared_sharepointonline', connectionid: 'shared-sharepoint-0001', _customconnectorid_value: null }], apis: BOTH_APIS });
+  const { sdk, writes } = targetEnvironment({ references: [referenceRow('CONTOSO_MsnWeather', 'SHARED_MSNWEATHER'), { connectionreferencelogicalname: 'contoso_sharepoint', connectorid: '/providers/Microsoft.PowerApps/apis/Shared_SharePointOnline', connectionid: 'shared-sharepoint-0001', _customconnectorid_value: null }], apis: BOTH_APIS });
   const genpage = fakeGenpage();
   const warnings = [];
   const rebuilt = await runSdkBuild(spec, { sdk, genpage, appDir: outDir, env: FABRIKAM, apply: true, phases: PHASES, warn: (m) => warnings.push(m) });
@@ -1000,6 +1000,23 @@ test('a build whose target row names no custom connector for a binding\'s refere
   const warnings = [];
   await runSdkBuild(spec, { sdk: complete.sdk, genpage: fakeGenpage(), appDir: outDir, env: FABRIKAM, apply: true, phases: PHASES, warn: (m) => warnings.push(m) });
   assert.ok(warnings.some((m) => /calls operation GetWidget, which the custom connector that connection reference is for in this environment does not define/.test(m)));
+});
+
+// Malformed target metadata never stops a rebuild: a `connectorid` that is not a connector's API id, and a `connectionid` that is not a text, are said as not checked. Only two VALID connector ids that differ
+// are a conflict.
+test('a build whose target row holds a malformed connectorid or connectionid goes on and says it was not checked — it never halts on a value it cannot read', async () => {
+  const { spec, outDir } = await portableCopy();
+  const malformed = [{ ...referenceRow('contoso_msnweather', 'shared_msnweather'), connectorid: '***' }, { ...BOTH_REFERENCES[1], connectionid: 42 }];
+  const { sdk, writes } = targetEnvironment({ references: malformed, apis: BOTH_APIS });
+  const genpage = fakeGenpage();
+  const warnings = [];
+  const rebuilt = await runSdkBuild(spec, { sdk, genpage, appDir: outDir, env: FABRIKAM, apply: true, phases: PHASES, warn: (m) => warnings.push(m) });
+  assert.ok(rebuilt.ok, 'no pages-binding-reference-conflict for a connector id it cannot read');
+  assert.ok(writes.length > 0);
+  assert.strictEqual(genpage.of('create').length, 2, 'the pages are written');
+  assert.ok(warnings.some((m) => /connection reference contoso_msnweather did not give a connector id this build can read/.test(m)), JSON.stringify(bindingWords(warnings)));
+  assert.ok(warnings.some((m) => /connection reference contoso_sharepoint did not say, in a form this build can read, whether it has a connection/.test(m)), JSON.stringify(bindingWords(warnings)));
+  assert.ok(!warnings.some((m) => /has no connection/.test(m)), 'a connectionid that is not a text is not "no connection"');
 });
 
 test('a binding whose reference names no custom connector — a connector the platform publishes — has its operations said to be not checked, once per page', async () => {

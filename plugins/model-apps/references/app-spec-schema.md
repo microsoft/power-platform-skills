@@ -1706,7 +1706,9 @@ custom control), but the spec validator emits a warning.
     then not checked);
   - **says as NOT CHECKED**, by name, what the environment's answer did not prove — never reading it as compatible,
     and never refusing for it: a reference row that does not say which connector it is for, or whether it has a
-    connection, and the operations of a binding whose reference names no custom connector. Operations are checked
+    connection — or says it in a form the build cannot read (a `connectorid` that is not
+    `/providers/Microsoft.PowerApps/apis/shared_<name>`, a `connectionid` that is not text) — and the operations of a
+    binding whose reference names no custom connector. Only two valid connector ids that differ stop the build. Operations are checked
     only through a custom connector's definition (its `connector` row), which is the environment's own and can be
     another version than the page was made with; a reference whose custom connector lookup is absent, null or not a
     GUID — which a connector the platform publishes also has — is not proof of which connector defines them.

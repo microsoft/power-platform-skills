@@ -161,7 +161,7 @@ test('judgeBindingTargets cannot prove a conflict from a connector that is not s
   const pages = [{ key: 'a', name: 'A', connectorBindings: [{ logicalName: 'contoso_one' }, { logicalName: 'contoso_two', connectorId: api('shared_two') }, { logicalName: 'contoso_three', connectorId: '' }] }];
   const verdict = judgeBindingTargets(pages, targetsOf({ references: [['contoso_one', 'shared_x'], ['contoso_two', undefined], ['contoso_three', 'shared_y']] }));
   assert.deepStrictEqual(verdict.findings, []);
-  assert.deepStrictEqual(verdict.unchecked, [{ what: 'reference connectors', text: 'this environment\'s row for connection reference contoso_two did not say which connector it is for, so whether connector binding "contoso_two" of page "A" goes through the connector it was made for was not checked' }]);
+  assert.deepStrictEqual(verdict.unchecked, [{ what: 'reference connectors', text: 'this environment\'s row for connection reference contoso_two did not give a connector id this build can read (absent, or not of the form /providers/Microsoft.PowerApps/apis/shared_<name>), so whether connector binding "contoso_two" of page "A" goes through the connector it was made for was not checked' }]);
 });
 
 test('judgeBindingTargets says by name which references and Custom APIs the environment does not have — one line per page, in the page\'s order', () => {
@@ -306,7 +306,7 @@ test('judgeBindingTargets says by name a reference of the right connector that h
   const unknown = judgeBindingTargets(pages, targetsWith([['contoso_msnweather', { connectorId: api('shared_msnweather') }], ['contoso_sharepoint', { connectorId: api('shared_sharepointonline') }]]));
   // A row that does not carry `connectionid` proves nothing: it is NOT CHECKED, said by name — and not a finding.
   assert.deepStrictEqual(unknown.findings, []);
-  assert.deepStrictEqual(unknown.unchecked.filter((u) => u.what === 'reference connections').map((u) => u.text), ['this environment\'s rows for connection references contoso_msnweather, contoso_sharepoint did not say whether they have a connection, so that was not checked for page "Weather"']);
+  assert.deepStrictEqual(unknown.unchecked.filter((u) => u.what === 'reference connections').map((u) => u.text), ['this environment\'s rows for connection references contoso_msnweather, contoso_sharepoint did not say, in a form this build can read, whether they have a connection, so that was not checked for page "Weather"']);
   // A reference for another connector is refused, and nothing else is said of it.
   const conflict = judgeBindingTargets(pages, targetsWith([['contoso_msnweather', { connectorId: api('shared_office365users'), connected: false }], ['contoso_sharepoint', { connectorId: api('shared_sharepointonline'), connected: true }]]));
   assert.deepStrictEqual(conflict.findings.map((f) => f.kind), ['connector-conflict']);
@@ -373,4 +373,35 @@ test('a successful answer that lacks a column the check needs is NOT CHECKED, by
   const bare = await judge(without(complete, 'connectorid', 'connectionid', '_customconnectorid_value'));
   assert.deepStrictEqual(kinds(bare), [[], ['reference connectors', 'reference connections', 'custom connector definitions']]);
   assert.ok(bare.findings.every((f) => f.severity !== 'refuse'), 'missing evidence never refuses');
+});
+
+// ── malformed, not missing: a row that answers with a value of the wrong shape ──────────────────────────────────────────────────
+// A value that is THERE but is not what the column holds proves nothing either. A `connectorid` that is not a connector's API id as Dataverse writes it (`/providers/Microsoft.PowerApps/apis/shared_<name>`) —
+// `***`, a bare name, a number, an object — is not compared: it is NOT CHECKED, said by name, and never a conflict, so it never stops a rebuild. A `connectionid` that is not a text is not "no connection":
+// only null or a blank text says that. Two VALID connector ids that differ are still refused.
+test('a malformed connectorid or connectionid in a successful answer is NOT CHECKED — never a refusal, never "no connection" — while two valid, different connectors are still refused', async () => {
+  const page = { key: 'weather', name: 'Weather', connectorBindings: [WEATHER] };
+  const judge = async (row) => {
+    const { provision } = readerOf({ connectionreference: [row] });
+    return judgeBindingTargets([page], await readBindingTargets(provision, [page]));
+  };
+  const row = { connectionreferencelogicalname: 'contoso_msnweather', connectorid: WEATHER.connectorId, connectionid: 'shared-connection-0001', _customconnectorid_value: null };
+  for (const connectorid of ['***', 'shared_office365users', '/providers/Microsoft.PowerApps/apis/', '/providers/Microsoft.PowerApps/apis/office365users', '/providers/Microsoft.PowerApps/apis/shared_x/extra', 42, { id: 'shared_x' }, ['/providers/Microsoft.PowerApps/apis/shared_x'], true]) {
+    const verdict = await judge({ ...row, connectorid });
+    assert.deepStrictEqual(verdict.findings, [], `${JSON.stringify(connectorid)}: no finding, and never a refusal`);
+    assert.ok(verdict.unchecked.some((u) => u.what === 'reference connectors'), `${JSON.stringify(connectorid)}: said as not checked`);
+  }
+  for (const connectionid of [42, { id: 'x' }, true, ['shared-connection-0001']]) {
+    const verdict = await judge({ ...row, connectionid });
+    assert.deepStrictEqual(verdict.findings, [], `${JSON.stringify(connectionid)}: not "no connection"`);
+    assert.ok(verdict.unchecked.some((u) => u.what === 'reference connections'), `${JSON.stringify(connectionid)}: said as not checked`);
+  }
+  // What the column DOES say is still judged: null or a blank text is no connection, and a valid connector id of another connector is a conflict.
+  for (const connectionid of [null, '', '  ']) assert.deepStrictEqual((await judge({ ...row, connectionid })).findings.map((f) => f.kind), ['connection-missing'], JSON.stringify(connectionid));
+  const conflict = await judge({ ...row, connectorid: '/providers/Microsoft.PowerApps/apis/SHARED_OFFICE365USERS' });
+  assert.deepStrictEqual(conflict.findings.map((f) => [f.severity, f.kind, f.found]), [['refuse', 'connector-conflict', 'shared_office365users']]);
+  // A binding whose own connectorId is not a connector id is not compared either: there is nothing to contradict.
+  const odd = { key: 'weather', name: 'Weather', connectorBindings: [{ ...WEATHER, connectorId: 'contoso' }] };
+  const { provision } = readerOf({ connectionreference: [{ ...row, connectorid: '/providers/Microsoft.PowerApps/apis/shared_office365users' }] });
+  assert.deepStrictEqual(judgeBindingTargets([odd], await readBindingTargets(provision, [odd])).findings, []);
 });

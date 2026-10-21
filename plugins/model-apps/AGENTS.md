@@ -1669,8 +1669,11 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   the other kind or bound to another table (the runtime refuses that call itself), and a read that failed (the
   bindings were not checked); a connector that is not named on both sides is never a conflict. **Missing evidence is
   NOT CHECKED, never compatible**: a row that answers without its `connectorid`, its `connectionid`, or a GUID in
-  `_customconnectorid_value` (absent, null or invalid) is said by name as not checked (`unchecked`, a warning) — the
-  connector is not compared, the connection not judged, the operations not proven — and nothing is refused for it.
+  `_customconnectorid_value` (absent, null or invalid) — or with a value of another shape: a `connectorid` that is not
+  `/providers/Microsoft.PowerApps/apis/shared_<name>` (`referenceConnectorKey` checks the syntax before anything is
+  compared), a `connectionid` that is not a text or null — is said by name as not checked (`unchecked`, a warning): the
+  connector is not compared, the connection not judged, the operations not proven, and nothing is refused for it. The
+  conflict halt needs two VALID connector ids that differ.
   Operations are read only for a CUSTOM connector: its definition is a row of the
   environment (`connector.openapidefinition`, found through the reference's `_customconnectorid_value`, parsed by
   `definedOperations` as Swagger 2.0 — every HTTP method's `operationId`, matched exactly, as the SDK matches them;
