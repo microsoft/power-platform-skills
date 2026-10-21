@@ -11,6 +11,9 @@ Read `PLUGIN_DEVELOPMENT_GUIDE.md` for UX and reliability standards when creatin
 
 ## Non-SPA creation and shared design quality
 
+`scripts/telemetry-config.js` delegates preference changes to the bundled shared CLI and adds the non-SPA creation disclosure.
+The telemetry skill uses this Power Pages-only entry point so the shared library and other plugins' configs stay unchanged.
+
 Keep reusable visual principles in `references/site-design-quality.md` and native application in
 `skills/edit-site/references/styling/design-quality.md`. The SPA `references/design-aesthetics.md`,
 `references/page-blueprints.md`, `references/design-critique.md` and existing SPA review workflow

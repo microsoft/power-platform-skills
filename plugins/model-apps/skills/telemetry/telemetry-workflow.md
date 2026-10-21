@@ -7,7 +7,13 @@ telemetry for this plugin. Default to `status` when no argument is given.
 
 1. Read the action from `$ARGUMENTS`. It must be one of `on`, `off`, or `status`.
    If it is empty or anything else, use `status`.
-2. Run the synced CLI (it auto-detects the plugin from the plugin manifest):
+2. For Power Pages, run its plugin-specific CLI:
+
+   ```bash
+   node "${PLUGIN_ROOT}/scripts/telemetry-config.js" --action <action>
+   ```
+
+   For other plugins, run the synced CLI (it auto-detects the plugin from the plugin manifest):
 
    ```bash
    node "${PLUGIN_ROOT}/scripts/lib/telemetry/lib/telemetry-config.js" --action <action>

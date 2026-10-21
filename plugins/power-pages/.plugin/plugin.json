@@ -1,6 +1,6 @@
 {
   "name": "power-pages",
-  "version": "2.9.0",
+  "version": "3.0.0",
   "description": "Create and deploy Power Pages sites using modern development approaches. Supports Enhanced-model non-SPA sites using Liquid and Web Templates, plus SPA sites with React, Angular, Vue, or Astro. Adds multilingual localization and safe runtime LTR/RTL switching for React, Vue, and Angular runtime sites; Astro and Angular static localization are temporarily unavailable. Includes ALM orchestration, per-solution pipelines, Azure Blob asset advisory, multi-solution deployments, and force-link remediation.",
   "author": {
     "name": "Microsoft",

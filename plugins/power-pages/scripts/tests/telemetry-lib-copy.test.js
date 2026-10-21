@@ -79,12 +79,6 @@ test("bundled telemetry CLI discloses the Power Pages framework field", () => {
   assert.match(result.stdout, /eventInfo\.framework/);
   assert.match(result.stdout, /react, vue, angular, or astro/);
   assert.match(result.stdout, /never a site name or path/);
-  assert.match(result.stdout, /template_used and non_spa_creation_success/);
-  assert.match(result.stdout, /non_spa_creation_failure with a shared correlationId/);
-  assert.match(result.stdout, /eventInfo\.templateId, eventInfo\.templateKind \(non-spa\)/);
-  assert.match(result.stdout, /eventInfo\.audience \(internal\/external\)/);
-  assert.match(result.stdout, /non-spa-creations/);
-  assert.match(result.stdout, /even when transmission is off/);
 });
 
 // --- Behavior of the bundled copy -------------------------------------------
