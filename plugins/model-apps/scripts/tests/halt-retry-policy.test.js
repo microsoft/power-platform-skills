@@ -85,6 +85,9 @@ const POLICY = {
   'pages-publish-failed': { kinds: ['by-failure'], via: PAGES },
   'pages-dangling-navref': { kinds: ['never'], via: PAGES },
   'pages-update-identity-mismatch': { kinds: ['never'], via: PAGES },
+  // A connector binding whose connection reference in the environment written to is for another connector (lib/page-binding-targets.js): raised at preflight, before anything is
+  // written, and a run again reads the same reference. Held with the doubles of a target environment, under a page name that reads as a transient error.
+  'pages-binding-reference-conflict': { kinds: ['never'], via: 'page-bindings.test.js' },
   'security-role-failed': { kinds: ['by-failure'] },
   'role-grant-unresolved': { kinds: ['by-failure'] },
   'role-grant-persona-overlap': { kinds: ['never'] },

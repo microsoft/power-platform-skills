@@ -907,6 +907,24 @@ test('a build into another environment refuses a binding whose connection refere
   assert.deepStrictEqual(reads.map((r) => r.entity), ['connectionreference', 'customapi'], 'what it read: the references and the Custom APIs the pages state, once');
 });
 
+// The halt's text opens with the page's name, and the build decides from a halt's text whether it is a transient error to run every phase again for (isTransientHalt, build-model-app.js). A page
+// called "SQL Timeout 503 try again later" must not make this refusal read as one: it is raised before anything is written, and a run again reads the same reference. The words alone DO read as
+// transient (the control), so it is the halt's own policy (`retry: RETRY.NEVER`) that is held here — tests/halt-retry-policy.test.js names this file for it.
+test('the conflict halt of a page whose name reads as a transient error is still final — the build does not run again for it', async () => {
+  const { isTransientHalt } = require('../build-model-app.js');
+  const { spec, outDir } = await portableCopy();
+  spec.pages.find((p) => p.key === 'weather').name = 'SQL Timeout 503 try again later';
+  const { sdk, writes } = targetEnvironment({ references: [referenceRow('contoso_msnweather', 'shared_office365users'), BOTH_REFERENCES[1]], apis: BOTH_APIS });
+  const halt = await runSdkBuild(spec, { sdk, genpage: fakeGenpage(), appDir: outDir, env: FABRIKAM, apply: true, phases: PHASES }).then(() => null, (error) => error);
+  assert.ok(halt instanceof BuildHalt, String(halt && halt.stack));
+  assert.strictEqual(halt.code, 'pages-binding-reference-conflict');
+  assert.match(halt.message, /page "SQL Timeout 503 try again later": connector binding "contoso_msnweather" is for connector shared_msnweather/);
+  assert.deepStrictEqual(writes, []);
+  assert.strictEqual(isTransientHalt(halt, { spec }), false, 'the halt reads as final');
+  assert.strictEqual(halt.transient, false, 'because it says so');
+  assert.strictEqual(isTransientHalt(new Error(halt.message), { spec }), true, 'its words alone would have read as a transient error');
+});
+
 test('a build with no conflict goes on: the same connector under another spelling of its id, and a Custom API of the same kind and table, are fine — and nothing is said', async () => {
   const { spec, outDir } = await portableCopy();
   const { sdk, writes } = targetEnvironment({ references: [referenceRow('CONTOSO_MsnWeather', 'SHARED_MSNWEATHER'), { connectionreferencelogicalname: 'contoso_sharepoint', connectorid: 'shared_sharepointonline' }], apis: BOTH_APIS });
