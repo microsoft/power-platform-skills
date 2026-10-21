@@ -375,8 +375,12 @@ async function renderStatusPage(options, deps = {}) {
   renderTemplate({
     templatePath: path.join(__dirname, '..', 'assets', 'non-spa-creation-status-template.html'),
     outputPath,
-    dataObject: { MODEL: model },
-    requiredKeys: ['MODEL'],
+    dataObject: {
+      MODEL: model,
+      CSP_IMAGE_SOURCES: 'data:',
+      CSP_CONNECT_SOURCES: "'none'",
+    },
+    requiredKeys: ['MODEL', 'CSP_IMAGE_SOURCES', 'CSP_CONNECT_SOURCES'],
     overwrite: true,
     emitStatus: false,
   });

@@ -328,6 +328,10 @@ test('renderStatusPage creates a standalone page and overwrites it as status adv
     assert.match(acceptedHtml, /working-indicator/);
     assert.match(acceptedHtml, /id="inputNotice"/);
     assert.match(acceptedHtml, /role="note" aria-label="Preview experience"/);
+    const policy = acceptedHtml.match(/http-equiv="Content-Security-Policy" content="([^"]+)"/)[1]
+      .replace(/&#39;/g, "'");
+    assert.match(policy, /img-src data:/);
+    assert.doesNotMatch(policy, /'self'|https?:/);
     assert.match(
       acceptedHtml,
       /This non-SPA site creation and customization experience is in preview/,

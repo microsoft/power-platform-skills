@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data:; style-src 'unsafe-inline'; script-src 'nonce-__ATTR_CSP_NONCE__'">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src __ATTR_CSP_IMAGE_SOURCES__; connect-src __ATTR_CSP_CONNECT_SOURCES__; style-src 'unsafe-inline'; script-src 'nonce-__ATTR_CSP_NONCE__'">
   <title>Power Pages site creation status</title>
   <style>
     :root {
@@ -170,6 +170,8 @@
       position: absolute;
       left: 18px;
       bottom: 18px;
+      max-width: calc(100% - 36px);
+      overflow-wrap: anywhere;
       padding: 9px 12px;
       border: 1px solid rgba(255,255,255,.7);
       border-radius: 10px;
@@ -183,6 +185,7 @@
 
     .slide-controls {
       display: flex;
+      flex-wrap: wrap;
       justify-content: center;
       gap: 8px;
       padding-top: 14px;
@@ -192,6 +195,8 @@
       display: inline-flex;
       align-items: center;
       gap: 7px;
+      max-width: 100%;
+      overflow-wrap: anywhere;
       padding: 7px 10px;
       border: 1px solid transparent;
       border-radius: 999px;
@@ -263,6 +268,7 @@
     .template-info h2 { margin: 0 0 8px; font-size: 16px; }
     .template-category {
       display: inline-flex;
+      align-self: flex-start;
       margin: 0 0 10px;
       padding: 4px 9px;
       border: 1px solid #d8d0f0;
@@ -565,7 +571,7 @@
       <div class="brand"><img class="brand-mark" id="brandIcon" src="data:image/gif;base64,R0lGODlhAQABAAAAACw=" alt="" hidden>Power Pages</div>
       <span class="status-badge" id="statusBadge">Preparing site</span>
     </header>
-    <aside class="preview-notice" role="note" aria-label="Preview experience">
+    <aside class="preview-notice" id="previewNoticeBanner" role="note" aria-label="Preview experience">
       <strong>Preview</strong>
       <span id="previewNotice">This non-SPA site creation and customization experience is in preview. Review environments, plans, and local changes before approval or deployment.</span>
     </aside>
@@ -646,7 +652,8 @@
     const storageKey = `power-pages-create-site:${location.pathname}`;
     const saved = JSON.parse(sessionStorage.getItem(storageKey) || "{}");
     let currentView = saved.view === "mobile" ? "mobile" : "desktop";
-    let autoRefreshPaused = saved.autoRefreshPaused === true;
+    const allowRefreshPause = model.presentation?.allowRefreshPause !== false;
+    let autoRefreshPaused = allowRefreshPause && saved.autoRefreshPaused === true;
     let refreshTimer;
     let currentSlide = model.template.previews.some((preview) => preview.name === saved.slide)
       ? saved.slide
@@ -699,7 +706,11 @@
     setText("templateDisplayName", model.template.displayName);
     setText("templateDescription", model.template.description);
     setText("aboutDescription", model.template.description);
-    if (model.presentation?.notice) setText("previewNotice", model.presentation.notice);
+    if (model.presentation?.showPreviewNotice === false) {
+      document.getElementById("previewNoticeBanner").remove();
+    } else if (model.presentation?.notice) {
+      setText("previewNotice", model.presentation.notice);
+    }
     setText("templateEyebrow", model.presentation?.templateEyebrow || "Your selected starting point");
     setText("templateCategory", model.presentation?.templateCategory || "Non-SPA");
     setText("siteEyebrow", model.presentation?.siteEyebrow || "Creating your site");
@@ -867,6 +878,7 @@
     renderStatus();
 
     const refreshToggle = document.getElementById("refreshToggle");
+    if (!allowRefreshPause) refreshToggle.remove();
 
     function rememberFocusAndReload() {
       const focusKey = document.activeElement?.dataset?.focusKey;

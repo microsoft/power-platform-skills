@@ -17,6 +17,7 @@ function parseArgs(argv) {
   const args = { open: false, previewImages: [], solutionCount: 1 };
   for (let i = 0; i < argv.length; i++) {
     if (argv[i] === '--templateName') args.templateName = argv[++i];
+    else if (argv[i] === '--templateDescription') args.templateDescription = argv[++i];
     else if (argv[i] === '--statusPath') args.statusPath = argv[++i];
     else if (argv[i] === '--outputPath') args.outputPath = argv[++i];
     else if (argv[i] === '--previewImagesJson') args.previewImages = JSON.parse(argv[++i] || '[]');
@@ -75,16 +76,23 @@ function toDataUrl(filePath) {
   return `data:image/png;base64,${fs.readFileSync(filePath).toString('base64')}`;
 }
 
-function buildModel({ templateName, statusPath, outputPath, previewImages, solutionCount }) {
+function buildModel({ templateName, templateDescription, statusPath, outputPath, previewImages, solutionCount }) {
   const statusUrl = path.dirname(path.resolve(statusPath)) === path.dirname(path.resolve(outputPath))
     ? path.basename(statusPath)
     : pathToFileURL(path.resolve(statusPath)).href;
-  const previews = localizePreviewImages(previewImages, outputPath).map((url, index) => ({
-    name: `preview-${index + 1}`,
-    displayName: `Preview ${index + 1}`,
-    desktop: url,
-    mobile: url,
-  }));
+  const previews = previewImages.map((image, index) => {
+    const url = previewImageUrl(image, index, path.dirname(path.resolve(outputPath)));
+    if (!url) return null;
+    const sourcePath = /^(?:https?|file):\/\//i.test(image)
+      ? decodeURIComponent(new URL(image).pathname)
+      : image;
+    return {
+      name: `preview-${index + 1}`,
+      displayName: sourcePath.split(/[\\/]/).pop(),
+      desktop: url,
+      mobile: url,
+    };
+  }).filter(Boolean);
   const pluralSolutions = solutionCount > 1;
   const pluginRoot = path.resolve(__dirname, '..');
 
@@ -93,7 +101,8 @@ function buildModel({ templateName, statusPath, outputPath, previewImages, solut
       path.join(pluginRoot, 'skills', 'create-site', 'assets', 'shared', 'power-pages-icon.png'),
     ),
     presentation: {
-      notice: 'This SPA template is being installed, built, uploaded, and activated. Review the live-site link when setup completes.',
+      allowRefreshPause: false,
+      showPreviewNotice: false,
       templateEyebrow: 'Your selected SPA template',
       siteEyebrow: 'Creating your SPA site',
       templateCategory: 'SPA',
@@ -103,7 +112,7 @@ function buildModel({ templateName, statusPath, outputPath, previewImages, solut
     template: {
       name: templateName,
       displayName: templateName,
-      description: 'A packaged Power Pages SPA template with local source and cloud provisioning.',
+      description: templateDescription || 'A packaged Power Pages SPA template with local source and cloud provisioning.',
       capabilities: [
         pluralSolutions ? 'Supporting solutions included' : 'Supporting solution included',
         'Local SPA source',
@@ -151,6 +160,7 @@ function buildModel({ templateName, statusPath, outputPath, previewImages, solut
 
 function renderTemplateImportStatus({
   templateName,
+  templateDescription,
   statusPath,
   outputPath,
   previewImages = [],
@@ -158,7 +168,7 @@ function renderTemplateImportStatus({
   open = false,
 }, deps = {}) {
   if (!templateName || !statusPath || !outputPath) {
-    throw new Error('Usage: render-template-import-status.js --templateName <name> --statusPath <path> --outputPath <path> [--previewImagesJson <json>] [--solutionCount <count>] [--open]');
+    throw new Error('Usage: render-template-import-status.js --templateName <name> --statusPath <path> --outputPath <path> [--templateDescription <description>] [--previewImagesJson <json>] [--solutionCount <count>] [--open]');
   }
   if (!Number.isSafeInteger(solutionCount) || solutionCount < 1) {
     throw new Error('solutionCount must be a positive integer');
@@ -171,13 +181,23 @@ function renderTemplateImportStatus({
     'assets',
     'non-spa-creation-status-template.html',
   );
+  const model = buildModel({ templateName, templateDescription, statusPath, outputPath, previewImages, solutionCount });
+  // Unlike the standalone non-SPA page, SPA import is served over HTTP and polls
+  // a same-origin JSON feed. Allow its local images/feed plus only the explicit
+  // remote preview origins, while retaining default-src 'none' and nonce scripts.
+  // https://www.w3.org/TR/CSP3/#directive-connect-src
+  const imageOrigins = [...new Set(model.template.previews
+    .filter(({ desktop }) => /^https?:\/\//i.test(desktop))
+    .map(({ desktop }) => new URL(desktop).origin))];
   renderTemplate({
     templatePath,
     outputPath,
     dataObject: {
-      MODEL: buildModel({ templateName, statusPath, outputPath, previewImages, solutionCount }),
+      MODEL: model,
+      CSP_IMAGE_SOURCES: ["'self'", 'data:', ...imageOrigins].join(' '),
+      CSP_CONNECT_SOURCES: "'self'",
     },
-    requiredKeys: ['MODEL'],
+    requiredKeys: ['MODEL', 'CSP_IMAGE_SOURCES', 'CSP_CONNECT_SOURCES'],
     emitStatus: false,
     copyIcon: false,
   });

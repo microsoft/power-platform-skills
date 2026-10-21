@@ -62,6 +62,8 @@ provisioning imports supporting solutions, applies optional seed data, activates
 leaves the shared status page open with an explicit website link. Non-SPA creation provisions an
 Enhanced-model Bootstrap 5 site, downloads and validates its Liquid/Web Template baseline, and
 offers coordinated local customization.
+SPA template import status updates automatically without a pause control.
+Its status page uses the catalog description and original image filenames, with a compact SPA badge and no non-SPA preview notice.
 Solutions marked `publishChanges` in the template manifest use `pac solution import --publish-changes`; other solutions import without that flag.
 The install confirmation warns that PAC's publication step can include other pending customizations in the target environment.
 Financial seed rows use an explicitly selected existing active currency with their amounts unchanged.

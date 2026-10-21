@@ -439,6 +439,7 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
       # { "state": "running", "phase": "site", "message": "Preparing template site" }
       node "${PLUGIN_ROOT}/scripts/render-template-import-status.js" \
         --templateName "<SELECTED_TEMPLATE.displayName>" \
+        --templateDescription "<SELECTED_TEMPLATE.description>" \
         --statusPath "<temp-import-status-dir>/status.json" \
         --previewImagesJson '<JSON array of SELECTED_TEMPLATE.previewImages localUrl values from the template browser step>' \
         --solutionCount "<TEMPLATE_SOLUTIONS_TO_IMPORT.length, or SELECTED_TEMPLATE_SOLUTIONS.length when imports are skipped>" \
