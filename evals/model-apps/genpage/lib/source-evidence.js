@@ -367,7 +367,7 @@ function arrowScopes(mask) {
 // `const { … } = …`) inside an enclosing scope or outside every scope. A binding inside a scope
 // that does not enclose `at` (another helper, or the component seen from a helper outside it) is
 // not visible. Several bindings at the same level must all resolve.
-function bindingsOf(ctx, name, at) {
+function bindingsOf(ctx, name, at, potentialWrite = false) {
   const { mask, scopes, component } = ctx;
   const found = [];
   const levelOf = (index) => {
@@ -420,7 +420,10 @@ function bindingsOf(ctx, name, at) {
   const innermost = Math.max(...found.map((binding) => binding.level));
   const visible = found.filter((binding) => binding.level === innermost);
   // A name assigned again after its declaration (or a parameter overwritten in its helper) proves nothing.
-  return reassigned(mask, name) ? visible.map((binding) => ({ ...binding, kind: 'opaque' })) : visible;
+  // Write tracking keeps potential identities even after a rebind: an earlier alias may still
+  // hold the original object. This over-approximation is used only to refuse member provenance;
+  // the ordinary binding/receiver proof keeps its existing fail-closed rebinding behavior.
+  return !potentialWrite && reassigned(mask, name) ? visible.map((binding) => ({ ...binding, kind: 'opaque' })) : visible;
 }
 
 // A helper parameter is what its callers pass. A recursive call that passes the same PLAIN parameter on
@@ -490,11 +493,99 @@ function receiverIsDataApi(mask, scopes, expr, at) {
   return isDataApi(sourceContext(mask, scopes), expr, at);
 }
 
+// Resolve only the identity-preserving forms already understood by the shared evidence reader.
+// Parameters keep a local identity and their recognized caller identities so writes through a
+// named helper or alias cannot conceal a changed member. Opaque expressions establish no identity.
+function identityPaths(ctx, expr, at, depth = 0) {
+  if (!expr || depth > 8) return [];
+  const chain = identityChain(expr);
+  if (!chain) return [];
+  const [name, ...members] = normalizeChain(chain).split('.');
+  const append = (paths, parts = []) => paths.map((entry) => ({ root: entry.root, parts: [...entry.parts, ...parts, ...members] }));
+  const paths = bindingsOf(ctx, name, at, true).flatMap((binding) => {
+    if (binding.kind === 'props') return append([{ root: `props:${ctx.component.scope.paramsOpen}`, parts: [] }]);
+    if (binding.kind === 'prop-member') return append([{ root: `props:${ctx.component.scope.paramsOpen}`, parts: [] }], [binding.property]);
+    if (binding.kind === 'alias') return append(identityPaths(ctx, binding.expr, binding.at, depth + 1));
+    if (binding.kind === 'member') return append(identityPaths(ctx, binding.object, binding.at, depth + 1), [binding.property]);
+    if (binding.kind === 'param' || binding.kind === 'param-member') {
+      const { scope, index } = binding;
+      const local = [{ root: `param:${scope.paramsOpen}:${index}`, parts: [] }];
+      const callers = callSites(ctx.mask, scope.name).filter((site) => !(site.at > scope.body && site.at < scope.end
+        && identityChain(site.args[index] || '') === name));
+      const incoming = callers.flatMap((site) => identityPaths(ctx, site.args[index], site.at, depth + 1));
+      return append([...local, ...incoming], binding.kind === 'param-member' ? [binding.property] : []);
+    }
+    return [];
+  });
+  // A reassigned writer may acquire the input after its initializer. Keep every recognized
+  // identity RHS as a possible write target; this cannot authorize a value or a receiver.
+  const assignments = new RegExp(`(?<![\\w$.])${escapeRe(name)}\\s*(?:\\?\\?|\\|\\||&&)?=(?![=>])`, 'g');
+  for (const assignment of ctx.mask.matchAll(assignments)) {
+    if (/\b(?:const|let|var)\s+$/.test(ctx.mask.slice(Math.max(0, assignment.index - 12), assignment.index))) continue;
+    const rhs = identityChain(initializerText(ctx.mask, assignment.index + assignment[0].length));
+    if (rhs && normalizeChain(rhs) !== name) paths.push(...append(identityPaths(ctx, rhs, assignment.index, depth + 1)));
+  }
+  return [...new Map(paths.map((entry) => [JSON.stringify(entry), entry])).values()];
+}
+
+function memberWriteTargets(mask) {
+  const candidates = [];
+  const writes = [];
+  for (const match of mask.matchAll(/(?<![\w$.])([A-Za-z_$][\w$]*)/g)) {
+    const parts = [];
+    let end = match.index + match[0].length;
+    while (end < mask.length) {
+      const member = /^\s*\.\s*([A-Za-z_$][\w$]*)/.exec(mask.slice(end));
+      if (member) { parts.push(member[1]); end += member[0].length; continue; }
+      const bracket = /^\s*\[/.exec(mask.slice(end));
+      if (!bracket) break;
+      const open = end + bracket[0].length - 1;
+      end = groupEnd(mask, open) + 1;
+      // Strings are masked, and a computed member may name the used field: refuse rather than guess.
+      parts.push('*');
+    }
+    if (!parts.length) continue;
+    const target = { expr: match[1], parts, at: match.index, end };
+    candidates.push(target);
+    const tail = mask.slice(end);
+    const prefix = mask.slice(0, match.index);
+    if (/^\s*(?:(?:\*\*|<<|>>>?|&&|\|\||\?\?|[-+*/%&|^])?=(?![=>])|\+\+|--)/.test(tail)
+      || /\bdelete\s*$|\+\+\s*$|--\s*$/.test(prefix)
+      || (/\bfor\s*\(\s*$/.test(prefix) && /^\s+(?:of|in)\b/.test(tail))) writes.push(target);
+  }
+  // Destructuring assignments can write a member without an adjacent '=': ({ id: record.id } = x).
+  for (const match of mask.matchAll(/[\]}]\s*=(?![=>])/g)) {
+    const open = groupStart(mask, match.index);
+    if (open < 0 || /\b(?:const|let|var)\s*$/.test(mask.slice(Math.max(0, open - 8), open))) continue;
+    writes.push(...candidates.filter((entry) => entry.at > open && entry.end <= match.index));
+  }
+  for (const match of mask.matchAll(/\b(?:Object\s*\.\s*(?:assign|defineProperty|defineProperties|setPrototypeOf)|Reflect\s*\.\s*(?:set|defineProperty|deleteProperty|setPrototypeOf))\s*\(/g)) {
+    const open = match.index + match[0].lastIndexOf('(');
+    const close = groupEnd(mask, open);
+    const target = splitTopLevel(mask, open, close)[0];
+    if (target) writes.push({ expr: target, parts: [], at: match.index });
+  }
+  return writes;
+}
+
+function recordValueWritten(ctx, expr, at) {
+  const roots = identityPaths(ctx, expr, at);
+  if (!roots.length) return true;
+  const writes = ctx.memberWrites || (ctx.memberWrites = memberWriteTargets(ctx.mask));
+  return writes.some((write) => identityPaths(ctx, write.expr, write.at).some((entry) => {
+    const changed = { root: entry.root, parts: [...entry.parts, ...write.parts] };
+    return roots.some((root) => root.root === changed.root
+      && root.parts.slice(0, Math.min(root.parts.length, changed.parts.length))
+        .every((part, index) => part === '*' || changed.parts[index] === '*' || part === changed.parts[index]));
+  }));
+}
+
 function recordPropInput(ctx, expr, at, depth = 0) {
   if (!expr || depth > 8) return false;
   const chain = identityChain(expr);
   const name = chain ? normalizeChain(chain) : null;
   if (!name) return false;
+  if (recordValueWritten(ctx, name, at)) return false;
   const direct = /^([A-Za-z_$][\w$]*)\.([A-Za-z_$][\w$]*)$/.exec(name);
   if (direct) return isPropsObject(ctx, direct[1], at, depth + 1);
   if (!IDENT.test(name)) return false;
@@ -515,6 +606,9 @@ function stringRecordMemberIsInput(mask, scopes, expr, at) {
   const member = /^([A-Za-z_$][\w$]*)\s*\.\s*([A-Za-z_$][\w$]*)$/.exec(expr.trim());
   if (!member) return false;
   const ctx = sourceContext(mask, scopes);
+  // Conservatively refuse recognized writes anywhere on these value paths, including aliased
+  // helpers declared later in the module. This is not an execution-order or general heap evaluator.
+  if (recordValueWritten(ctx, member[1], at)) return false;
   const bindings = bindingsOf(ctx, member[1], at);
   return bindings.length > 0 && bindings.every((binding) => {
     if (binding.kind !== 'param') return false;

@@ -7,7 +7,9 @@ const { workflowCalls, isGeneration, isUpload, isMutation, resultObject, unassoc
 const { artifactText, artifactJson, commandInfo, fileName, isGuid, pathKey } = require('./evidence-utils.js');
 const { planSection, parseMarkdownRows } = require('./plan-evidence.js');
 const { actionCalls, literalString, objectFields, receiverIsDataApi, stringRecordMemberIsInput, escapeRe } = require('./source-evidence.js');
-const { desiredBindings, sameBindings } = require('./upload-contract.js');
+const {
+  desiredBindings, sameBindings, uploadResultIdentityMatches, beforePageIdentityProblems, sameRecordedEnvironment,
+} = require('./upload-contract.js');
 
 const KINDS = new Set(Object.values(PARAMETER_KIND_BY_TYPE));
 const isGate = (command) => /\bfeature-flags\.js\b[^\n]*\bcustom-api\b/.test(command);
@@ -232,15 +234,49 @@ function customApiProblems(fixture) {
     }
   }
   const beforeByStage = new Map();
-  for (const stage of contract.stages.filter((entry) => entry.beforeConfig)) {
-    const config = artifactJson(fixture, stage.beforeConfig);
-    const before = config.actionBindings === undefined ? [] : config.actionBindings;
-    // Use the existing binding-list contract to validate before evidence, not a name-only exemption.
-    desiredBindings(before, undefined, 'name');
-    for (const binding of before) projectBinding(binding);
-    beforeByStage.set(stage, before);
+  const verifiedBefore = new Set();
+  const producedConfigs = new Map();
+  for (const stage of contract.stages) {
+    const uploads = calls.filter((entry) => entry.id === stage.upload && isUpload(entry.command));
+    const call = uploads.length === 1 ? uploads[0] : null;
+    const flags = call ? commandInfo(call).flags : {};
+    const result = call ? resultObject(call) : null;
+    if (stage.beforeConfig) {
+      const config = artifactJson(fixture, stage.beforeConfig);
+      const before = config.actionBindings === undefined ? [] : config.actionBindings;
+      desiredBindings(before, undefined, 'name');
+      for (const binding of before) projectBinding(binding);
+      beforeByStage.set(stage, before);
+      const identityProblems = [];
+      if (!call || !flags['page-id'] || result?.ok !== true || !uploadResultIdentityMatches(flags, result)) {
+        identityProblems.push(`${stage.id}: before-config preservation requires an unambiguous existing update target`);
+      }
+      const rows = fixture.manifest?.uploads;
+      if (rows !== undefined) {
+        const associated = Array.isArray(rows) ? rows.filter((row) => row.event === stage.upload) : [];
+        if (associated.length !== 1) {
+          identityProblems.push(`${stage.id}: before-page identity evidence has no unique upload association`);
+        } else if (call) {
+          identityProblems.push(...beforePageIdentityProblems(fixture, associated[0], call, stage.beforeConfig, stage.afterConfig));
+        }
+      } else {
+        // A prior successful lifecycle stage can associate its exact read-back snapshot with its
+        // result identity. A first-stage arbitrary artifact path cannot establish page ownership.
+        const prior = producedConfigs.get(pathKey(stage.beforeConfig));
+        if (!prior || prior.pageId !== flags['page-id'] || prior.appId !== flags['app-id']) {
+          identityProblems.push(`${stage.id}: before-config lacks same-page/app identity provenance`);
+        } else if (prior.env !== undefined && !sameRecordedEnvironment(prior.env, flags.env)) {
+          identityProblems.push(`${stage.id}: before-config environment differs from the update target`);
+        }
+      }
+      problems.push(...identityProblems);
+      if (!identityProblems.length) verifiedBefore.add(stage);
+    }
+    if (call && result?.ok === true && uploadResultIdentityMatches(flags, result)) {
+      producedConfigs.set(pathKey(stage.afterConfig), { pageId: result.pageId, appId: result.appId, env: flags.env });
+    }
   }
-  const beforeBindings = [...beforeByStage.values()].flat();
+  const beforeBindings = [...verifiedBefore].flatMap((stage) => beforeByStage.get(stage));
   for (const binding of declared) {
     const fresh = isDeepStrictEqual(discovered.get(binding.name), binding);
     const existing = beforeBindings.some((before) => isDeepStrictEqual(projectBinding(before), binding));
@@ -272,7 +308,7 @@ function customApiProblems(fixture) {
       const fresh = isDeepStrictEqual(discovered.get(binding.name), projected);
       // Only an exact unchanged stage-before entry has preservation provenance. An explicit
       // addition/replacement still needs eligible discovery, even when its name already existed.
-      const preserved = stage.beforeConfig && !authoredNames.has(binding.name)
+      const preserved = verifiedBefore.has(stage) && !authoredNames.has(binding.name)
         && before.some((entry) => isDeepStrictEqual(entry, binding));
       if (!fresh && !preserved) problems.push(`${binding.name}: actions file differs from discovered metadata or unchanged before-config evidence`);
     }

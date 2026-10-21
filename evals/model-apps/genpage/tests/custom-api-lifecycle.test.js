@@ -6,6 +6,7 @@ const path = require('node:path');
 const { loadFixtures } = require('../lib/fixture-loader.js');
 const { PHASE_EXPECTATIONS, WORKFLOW_ASSERTIONS } = require('../lib/assertions-layer-1.js');
 const { PHASE5_EXPECTATIONS } = require('../lib/assertions-layer-2.js');
+const { actionCalls, receiverIsDataApi } = require('../lib/source-evidence.js');
 
 const RULE = 'Phase 5: Custom API discovery, gate, bare bindings, runtime calls and update preservation or explicit clear agree';
 const bindings = [
@@ -362,6 +363,16 @@ function privateBeforePublicAddFixture() {
     'actions.json': JSON.stringify(desired),
     'before/config.json': JSON.stringify({ actionBindings: [existing] }),
     'after/config.json': JSON.stringify({ actionBindings: desired }),
+    'before/page.json': JSON.stringify({
+      pageId: '99999999-9999-4999-8999-999999999999',
+      appId: '11111111-1111-4111-8111-111111111111',
+      name: 'Owned API Page', navigationTitle: 'Owned API Page',
+    }),
+    'after/page.json': JSON.stringify({
+      pageId: '99999999-9999-4999-8999-999999999999',
+      appId: '11111111-1111-4111-8111-111111111111',
+      name: 'Owned API Page', navigationTitle: 'Owned API Page',
+    }),
   };
   fixture.genpagePlan = `## Custom API Bindings
 | Name | Kind | Bound Entity | Display Name | Parameters (name: kind) |
@@ -378,16 +389,22 @@ function privateBeforePublicAddFixture() {
       change: { add: [added] },
     }],
   };
+  // Use the shared upload identity fields to tie the before blob to this update, independently
+  // of whether its binding values happen to be equal to the desired array.
+  fixture.manifest.uploads = [{
+    event: 'edit', mode: 'update', beforeConfig: 'before/config.json', beforePage: 'before/page.json',
+    afterConfig: 'after/config.json', afterPage: 'after/page.json',
+  }];
   fixture.events = [
     { id: 'gate-discover', command: 'node feature-flags.js custom-api', result: 'enabled' },
-    { id: 'download', command: 'node genpage.js download --env https://contoso.crm.dynamics.com --page-id 99999999-9999-4999-8999-999999999999 --output-directory before',
+    { id: 'download', command: 'node genpage.js download --env https://contoso.crm.dynamics.com --app-id 11111111-1111-4111-8111-111111111111 --page-id 99999999-9999-4999-8999-999999999999 --output-directory before',
       result: { ok: true, pageId: '99999999-9999-4999-8999-999999999999' } },
     { id: 'discovery', command: 'node list-custom-apis.js https://contoso.crm.dynamics.com --entities salesorder',
       result: { ok: true, customApis: [{ ...added, bindingType: 'Global' }] } },
     { id: 'gate-generate', command: 'node feature-flags.js custom-api', result: 'enabled' },
     { id: 'write-edit', command: 'Write page.tsx', artifact: 'stages/edited.tsx' },
     { id: 'edit', command: 'node genpage-upload.js --env https://contoso.crm.dynamics.com --app-id 11111111-1111-4111-8111-111111111111 --page-id 99999999-9999-4999-8999-999999999999 --code-file page.tsx --actions actions.json',
-      result: { ok: true, pageId: '99999999-9999-4999-8999-999999999999' } },
+      result: { ok: true, pageId: '99999999-9999-4999-8999-999999999999', appId: '11111111-1111-4111-8111-111111111111' } },
   ];
   return fixture;
 }
@@ -497,5 +514,174 @@ test('pre-existing private bindings can be removed only through an explicit clea
   for (const layer of [1, 2]) {
     const result = score(fixture, layer);
     assert.equal(result.status, 'pass', result.reason);
+  }
+});
+
+function assertKnownApiReceivers(code) {
+  const calls = actionCalls(code);
+  assert.ok(calls.length > 0);
+  for (const call of calls) {
+    assert.equal(receiverIsDataApi(call.mask, call.scopes, call.receiver, call.start), true,
+      `${call.scope.name}: record-value evidence must not change the shared dataApi receiver proof`);
+  }
+}
+
+test('lookup member value writes and source replacements cannot retain input provenance', async (t) => {
+  const invented = "'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'";
+  const helperWrite = (text, write) => text.replace("  if (typeof api.executeAction", `  ${write}\n  if (typeof api.executeAction`);
+  const callerWrite = (text, write) => text.replace('  const pending = { current: false };', `  ${write}\n  const pending = { current: false };`);
+  for (const [label, mutate] of [
+    ['direct helper member write', (text) => helperWrite(text, `selectedAccount.accountid = ${invented};`)],
+    ['computed helper member write', (text) => helperWrite(text, `selectedAccount['accountid'] = ${invented};`)],
+    ['compound helper member write', (text) => helperWrite(text, "selectedAccount.accountid += 'invented';")],
+    ['helper record alias member write', (text) => helperWrite(text, `const recordAlias = selectedAccount;\n  recordAlias.accountid = ${invented};`)],
+    ['explicit record mutation call', (text) => helperWrite(text, `Object.assign(selectedAccount, { accountid: ${invented} });`)],
+    ['recognized helper argument member write', (text) => helperWrite(text, 'replaceAccountId(selectedAccount);')
+      .replace('const GeneratedComponent', `function replaceAccountId(record: { accountid: string }) {\n  record.accountid = ${invented};\n}\nconst GeneratedComponent`)],
+    ['captured helper alias after parameter rebinding', (text) => helperWrite(text, 'replaceAccountId(selectedAccount);')
+      .replace('const GeneratedComponent', `function replaceAccountId(record: { accountid: string }) {\n  const capturedRecord = record;\n  record = { accountid: 'other' };\n  capturedRecord.accountid = ${invented};\n}\nconst GeneratedComponent`)],
+    ['rebound helper writer alias', (text) => helperWrite(text,
+      `let recordAlias = { accountid: 'other' };\n  recordAlias = selectedAccount;\n  recordAlias.accountid = ${invented};`)],
+    ['caller props record replacement', (text) => callerWrite(text, `props.selectedAccount = { accountid: ${invented} };`)],
+    ['caller computed props replacement', (text) => callerWrite(text, `props['selectedAccount'] = { accountid: ${invented} };`)],
+    ['caller props alias replacement', (text) => callerWrite(text, `const pageAlias = props;\n  pageAlias.selectedAccount = { accountid: ${invented} };`)],
+    ['caller record alias member write', (text) => callerWrite(text, `const chosenAccount = props.selectedAccount;\n  chosenAccount.accountid = ${invented};`)
+      .replace(', pending, props.selectedAccount)', ', pending, chosenAccount)')],
+    ['caller destructured alias member write', (text) => callerWrite(text, `const { selectedAccount: chosenAccount } = props;\n  chosenAccount.accountid = ${invented};`)
+      .replace(', pending, props.selectedAccount)', ', pending, chosenAccount)')],
+    ['captured caller alias after rebinding', (text) => callerWrite(text,
+      `let record = props.selectedAccount;\n  const capturedRecord = record;\n  record = { accountid: 'other' };\n  capturedRecord.accountid = ${invented};`)],
+  ]) {
+    await t.test(`lookup member value: ${label}`, () => {
+      const fixture = selectedRecordLookupFixture();
+      const code = mutate(fixture.artifacts['stages/with-api.tsx']);
+      fixture.artifacts['stages/with-api.tsx'] = code;
+      assertKnownApiReceivers(code);
+      for (const layer of [1, 2]) {
+        const result = score(fixture, layer);
+        assert.equal(result.status, 'fail', `${label}, layer ${layer}`);
+        assert.match(result.reason, /lookup|Ref|provenance/i, label);
+      }
+    });
+  }
+});
+
+test('lookup member value positives retain unchanged inputs readonly aliases and receivers', async (t) => {
+  for (const [label, declaration, argument] of [
+    ['unchanged direct input', '', 'props.selectedAccount'],
+    ['record alias', 'const chosenAccount = props.selectedAccount;', 'chosenAccount'],
+    ['props alias', 'const pageAlias = props;', 'pageAlias.selectedAccount'],
+    ['destructured record alias', 'const { selectedAccount: chosenAccount } = props;', 'chosenAccount'],
+  ]) {
+    await t.test(`lookup member value positive: ${label}`, () => {
+      const fixture = selectedRecordLookupFixture();
+      const code = fixture.artifacts['stages/with-api.tsx']
+        .replace('  const pending = { current: false };', `  ${declaration}\n  const pending = { current: false };`)
+        .replace(', pending, props.selectedAccount)', `, pending, ${argument})`);
+      fixture.artifacts['stages/with-api.tsx'] = code;
+      assertKnownApiReceivers(code);
+      for (const layer of [1, 2]) {
+        const result = score(fixture, layer);
+        assert.equal(result.status, 'pass', result.reason);
+      }
+    });
+  }
+});
+
+function updateIdentityArtifact(fixture, file, changes) {
+  const value = JSON.parse(fixture.artifacts[file]);
+  fixture.artifacts[file] = JSON.stringify({ ...value, ...changes });
+}
+
+test('before-page provenance cannot authorize a different page or a successful create', async (t) => {
+  const otherPage = '22222222-2222-4222-8222-222222222222';
+  for (const associated of [false, true]) {
+    for (const mode of ['different update target', 'create']) {
+      await t.test(`before-page provenance target: ${mode}, upload association=${associated}`, () => {
+        const fixture = privateBeforePublicAddFixture();
+        if (!associated) delete fixture.manifest.uploads;
+        const upload = event(fixture, 'edit');
+        if (mode === 'create') {
+          upload.command = upload.command.replace(/ --page-id [0-9a-f-]+/, '') + ' --add-to-sitemap';
+          if (associated) fixture.manifest.uploads[0].mode = 'create';
+        } else {
+          upload.command = upload.command.replace(/ --page-id [0-9a-f-]+/, ` --page-id ${otherPage}`);
+        }
+        upload.result.pageId = otherPage;
+        updateIdentityArtifact(fixture, 'after/page.json', { pageId: otherPage });
+        for (const layer of [1, 2]) {
+          const result = score(fixture, layer);
+          assert.equal(result.status, 'fail', `${mode}, layer ${layer}`);
+          assert.match(result.reason, /before|page|identity|provenance|target|preserv|evidence/i);
+        }
+      });
+    }
+  }
+});
+
+test('before-page provenance stays associated with recorded context and cannot be ambiguous', async (t) => {
+  const otherApp = '22222222-2222-4222-8222-222222222222';
+  for (const [label, mutate] of [
+    ['different recorded environment', (fixture) => {
+      event(fixture, 'edit').command = event(fixture, 'edit').command
+        .replace('https://contoso.crm.dynamics.com', 'https://example.crm.dynamics.com');
+    }],
+    ['different recorded app', (fixture) => {
+      const upload = event(fixture, 'edit');
+      upload.command = upload.command.replace(/ --app-id [0-9a-f-]+/, ` --app-id ${otherApp}`);
+      upload.result.appId = otherApp;
+      updateIdentityArtifact(fixture, 'after/page.json', { appId: otherApp });
+    }],
+    ['contradictory before-page identity', (fixture) => {
+      updateIdentityArtifact(fixture, 'before/page.json', { pageId: '22222222-2222-4222-8222-222222222222' });
+    }],
+    ['renamed snapshots contradict the recorded download', (fixture) => {
+      const pageId = '22222222-2222-4222-8222-222222222222';
+      const upload = event(fixture, 'edit');
+      upload.command = upload.command.replace(/ --page-id [0-9a-f-]+/, ` --page-id ${pageId}`);
+      upload.result.pageId = pageId;
+      updateIdentityArtifact(fixture, 'before/page.json', { pageId });
+      updateIdentityArtifact(fixture, 'after/page.json', { pageId });
+    }],
+    ['download result contradicts the requested page', (fixture) => {
+      event(fixture, 'download').result.pageId = '22222222-2222-4222-8222-222222222222';
+    }],
+    ['declared before-page evidence missing', (fixture) => {
+      delete fixture.artifacts['before/page.json'];
+    }],
+    ['ambiguous upload evidence association', (fixture) => {
+      fixture.manifest.uploads.push(structuredClone(fixture.manifest.uploads[0]));
+    }],
+    ['no download or upload identity association', (fixture) => {
+      fixture.events = fixture.events.filter((call) => call.id !== 'download');
+      delete fixture.manifest.uploads;
+    }],
+  ]) {
+    await t.test(`before-page provenance context: ${label}`, () => {
+      const fixture = privateBeforePublicAddFixture();
+      mutate(fixture);
+      for (const layer of [1, 2]) {
+        const result = score(fixture, layer);
+        assert.equal(result.status, 'fail', `${label}, layer ${layer}`);
+        assert.match(result.reason, /before|page|identity|provenance|target|context|app|environment|download|evidence/i);
+      }
+    });
+  }
+});
+
+test('before-page provenance keeps same-page private adds and explicit clear positives', () => {
+  for (const clear of [false, true]) {
+    const fixture = privateBeforePublicAddFixture();
+    if (clear) {
+      fixture.manifest.customApi.stages[0].change = { clear: true };
+      fixture.artifacts['actions.json'] = '[]';
+      fixture.artifacts['after/config.json'] = '{"actionBindings":[]}';
+      fixture.artifacts['stages/edited.tsx'] = cleared;
+      fixture.files[0].content = cleared;
+    }
+    for (const layer of [1, 2]) {
+      const result = score(fixture, layer);
+      assert.equal(result.status, 'pass', result.reason);
+    }
   }
 });
