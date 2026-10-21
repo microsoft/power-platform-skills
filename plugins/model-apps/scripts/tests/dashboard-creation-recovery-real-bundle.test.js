@@ -97,6 +97,61 @@ test('the record is the same bytes for the same dashboards, whatever order they 
   assert.deepEqual(Object.keys(JSON.parse(bytes(one)).dashboards), ['alpha', 'Zeta'], 'sorted as Dataverse compares names');
 });
 
+// The exact bytes an ordinary record is written as — names that look like an index included, which JSON lists first in any object — so a change to
+// how the names are serialized cannot move one byte of a record the build already writes.
+test('ordinary names are written byte for byte as they always were', () => {
+  const dir = scratch();
+  const run = open(dir);
+  const ID_D = '44444444-dddd-4ddd-8ddd-444444444444';
+  assert.equal(run.note('Zeta', ID_A), true);
+  assert.equal(run.note('alpha', ID_B), true);
+  assert.equal(run.observe('alpha', ID_C), true);
+  assert.equal(run.note('2026', ID_D), true);
+  const expected = `{"schemaVersion":1,"environmentFingerprint":"${environmentFingerprint(ENV)}","appUniqueName":"${APP}","solutionUniqueName":"${SOLUTION.toLowerCase()}",`
+    + `"dashboards":{"2026":{"id":"${ID_D}"},"alpha":{"id":"${ID_B}","reportedId":"${ID_C}"},"Zeta":{"id":"${ID_A}"}}}\n`;
+  assert.equal(fs.readFileSync(records().dashboardCreationRecordPath(dir, ENV, APP, SOLUTION), 'utf8'), expected);
+});
+
+// `__proto__` is a legal dashboard name. Assigned to a plain object, it calls the inherited prototype setter instead of adding an entry, so the
+// record's JSON left the dashboard out — with no warning, since the write itself succeeded — and the next build could not find a create that
+// was interrupted before it joined the solution.
+test('a dashboard named __proto__ is recorded like any other name: written as an own key, read back by a fresh open, kept when another entry is cleared', () => {
+  const dir = scratch();
+  const run = open(dir);
+  assert.equal(run.note('__proto__', ID_A), true);
+  assert.equal(run.note(BOARD, ID_B), true);
+  const file = records().dashboardCreationRecordPath(dir, ENV, APP, SOLUTION);
+  const written = JSON.parse(fs.readFileSync(file, 'utf8')).dashboards;
+  assert.deepEqual(Object.keys(written), ['__proto__', BOARD], 'an own key of the file, sorted as Dataverse compares names');
+  assert.deepEqual(Object.getOwnPropertyDescriptor(written, '__proto__').value, { id: ID_A }, 'holding its id');
+  assert.deepEqual(open(dir).idsOf('__proto__'), [ID_A], 'a fresh open reads it back');
+  assert.deepEqual(open(dir).idsOf(BOARD), [ID_B]);
+  const next = open(dir);
+  assert.equal(next.observe('__proto__', ID_C), true, 'a reported id is kept beside it');
+  assert.equal(next.clear(BOARD), true);
+  assert.deepEqual(open(dir).idsOf('__proto__'), [ID_A, ID_C], 'clearing another entry keeps it');
+  assert.equal(open(dir).clear('__proto__'), true);
+  assert.equal(fs.existsSync(file), false, 'and clearing it is what removes the file');
+});
+
+// The reader takes what JSON.parse makes, and JSON.parse makes a `__proto__` key an OWN key (CreateDataProperty, never the setter); the reader
+// only lists those keys (Object.entries) into a Map, so nothing it reads is ever taken as a prototype.
+test('the reader takes a __proto__ key of the file as an ordinary entry: an own key, and no prototype changed', () => {
+  const dir = scratch();
+  const file = records().dashboardCreationRecordPath(dir, ENV, APP, SOLUTION);
+  const text = `{"schemaVersion":1,"environmentFingerprint":"${environmentFingerprint(ENV)}","appUniqueName":"${APP}","solutionUniqueName":"${SOLUTION.toLowerCase()}",`
+    + `"dashboards":{"__proto__":{"id":"${ID_A}"},"${BOARD}":{"id":"${ID_B}"}}}\n`;
+  fs.writeFileSync(file, text);
+  const parsed = JSON.parse(text).dashboards;
+  assert.equal(Object.prototype.hasOwnProperty.call(parsed, '__proto__'), true, 'JSON.parse makes it an own key');
+  assert.equal(Object.getPrototypeOf(parsed), Object.prototype, 'and changes no prototype');
+  const read = records().readDashboardCreations(dir, ENV, APP, SOLUTION);
+  assert.deepEqual([...read.entries()], [['__proto__', { name: '__proto__', id: ID_A }], ['ops overview', { name: BOARD, id: ID_B }]]);
+  assert.deepEqual(open(dir).idsOf('__proto__'), [ID_A]);
+  assert.equal(Object.prototype.hasOwnProperty.call(Object.prototype, 'id'), false, 'no object gained an id through a prototype');
+  assert.equal(fs.readFileSync(file, 'utf8'), text, 'and the file is as it was');
+});
+
 test('the record never stops a build: one it cannot read is "nothing recorded", said once, and is left exactly as it was — never overwritten; with no workspace or environment, or an id that is no id, nothing is recorded', () => {
   const dir = scratch();
   const file = records().dashboardCreationRecordPath(dir, ENV, APP, SOLUTION);
@@ -232,13 +287,13 @@ function ran(step, label) {
 }
 
 // The build is killed the moment it sends the new dashboard's membership add: that request never answers, and nothing of the run happens after
-// it — no undo, no record cleared, no app. Answers the id the add named, which is the row the create committed.
-async function dieAtMembership(env) {
+// it — no undo, no record cleared, no app. Answers the id the add named, which is the row the create committed. `buildSpec` is the spec it builds.
+async function dieAtMembership(env, buildSpec = spec) {
   let named;
   const reached = new Promise((resolve) => { named = resolve; });
   const fault = env.add('POST', isDashboardMembership, (req, body) => { named(String(body.ComponentId).toLowerCase()); return new Promise(() => {}); });
   let settled = false;
-  env.harness.build(spec()).then(() => { settled = true; }, () => { settled = true; });
+  env.harness.build(buildSpec()).then(() => { settled = true; }, () => { settled = true; });
   const id = await reached;
   fault.lift();
   await new Promise((resolve) => setImmediate(resolve));
@@ -284,6 +339,33 @@ for (const [inBetween, makerDoes] of IN_BETWEEN) {
     assert.deepEqual(allDashboards(env.org), [], 'ALL ABSENT: teardown deletes it as a member of the solution — no orphan is left');
   });
 }
+
+// A legal name that a plain JavaScript object cannot hold as a key: `__proto__`. The dashboard is built beside ordinary navigation (a table), as a
+// spec can declare a dashboard its sitemap does not open.
+const PROTO = '__proto__';
+const protoSpec = () => ({
+  ...spec(),
+  dashboards: [{ name: PROTO, tiles: [{ type: 'iframe', url: 'https://contoso.example/status', name: 'Status' }] }],
+  appShell: { areas: [{ label: 'Work', groups: [{ label: 'Records', subAreas: [{ entity: 'contact', title: 'Contacts' }] }] }] },
+});
+const named = (org, name) => org.find('systemforms', (f) => Number(f.type) === 0 && f.name === name).map((f) => String(f.formid).toLowerCase());
+
+test('a build killed before adding a dashboard named __proto__ to the solution: the record keeps its id as it keeps any name, and the next build adds that same dashboard and creates none', async () => {
+  const env = environment();
+  const id = await dieAtMembership(env, protoSpec);
+  assert.deepEqual(named(env.org, PROTO), [id], 'the create committed');
+  assert.deepEqual(members(env.org), [], 'outside the solution');
+  const left = recorded(env);
+  const rerun = ran(await env.harness.measure(() => env.harness.build(protoSpec())), 'the next build');
+  assert.equal(rerun.value.result.ok, true, JSON.stringify(rerun.value.result.errors));
+  assert.deepEqual(creates(env.org, rerun.mark), [], 'no second dashboard is created');
+  assert.equal(memberships(env.org, rerun.mark, id).length, 1, 'the dashboard the killed build created is added to the solution');
+  assert.deepEqual(named(env.org, PROTO), [id]);
+  assert.deepEqual(members(env.org), [id]);
+  assert.deepEqual(left, { [PROTO]: { id } }, 'the killed build had recorded it, under its own name');
+  assert.deepEqual(recordReads(env.org, rerun.mark, id).map((r) => r.status), [200], 'and the next build read that id in the saved layer');
+  assert.equal(recorded(env), null, 'the record is cleared once the row is in the solution');
+});
 
 test('a dashboard the build could neither add to its solution nor remove again: the halt says a run again adds it, and the next run adds that same dashboard', async () => {
   const env = environment();

@@ -86,6 +86,8 @@ function readDashboardCreations(workspaceDir, environment, appUniqueName, soluti
     throw new Error(`${file} is not a dashboard creation record this build can read`);
   }
   for (const [name, entry] of Object.entries(record.dashboards)) {
+    // JSON.parse makes every key of the file an OWN key — a `__proto__` key included (it defines the property; it never calls the prototype setter) — and
+    // the names are only listed here, into a Map, so no name read from the file is ever taken as a prototype.
     // Exactly what the writer writes, or the whole record is unreadable (see the header): `{ "id": "<guid>" }` or `{ "id": "<guid>", "reportedId": "<another guid>" }`
     // under a name no other entry shares as Dataverse compares names. Reading only the id of an entry whose reported id is damaged could prove "absent" while the
     // row the service named exists; keeping one of two entries for the same name would drop the other's id.
@@ -113,7 +115,10 @@ function writeDashboardCreations(workspaceDir, environment, appUniqueName, solut
     return;
   }
   const root = workspaceRoot(workspaceDir, true);
-  const dashboards = {};
+  // A null-prototype object, so that EVERY name becomes an own key. `__proto__` is a legal dashboard name, and assigned to a plain object it calls the
+  // inherited prototype setter instead of adding an entry: JSON.stringify then left that dashboard out, with no error to warn about, and the next run
+  // could not find it. Every other name serializes exactly as before — JSON.stringify lists own keys in the same order whatever the prototype.
+  const dashboards = Object.create(null);
   for (const [, { name, id, reportedId }] of [...entries].sort(byKey)) dashboards[name] = { id, ...(reportedId ? { reportedId } : {}) };
   writeFileAtomic(recordFile(root, fingerprint, app, solution), `${JSON.stringify({ schemaVersion: SCHEMA_VERSION, environmentFingerprint: fingerprint, appUniqueName: app, solutionUniqueName: solution, dashboards })}\n`);
 }
