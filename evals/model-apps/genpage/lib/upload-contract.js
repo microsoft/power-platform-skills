@@ -144,9 +144,17 @@ function beforePageIdentityProblems(fixture, row, call, beforeConfig, afterConfi
     if (!ids.includes(beforePage.pageId)) continue;
     matchingDownloads += 1;
     const downloaded = resultObject(download);
-    const returnedIds = downloaded.pageId !== undefined ? [downloaded.pageId]
-      : Array.isArray(downloaded.pages) ? downloaded.pages.map((page) => page?.pageId) : [];
-    if (returnedIds.length && (!returnedIds.includes(beforePage.pageId) || returnedIds.some((id) => !ids.includes(id)))) {
+    const hasPages = Object.hasOwn(downloaded, 'pages');
+    // Array.from also visits unreadable holes in direct object evidence; map would skip them.
+    const returnedIds = Array.isArray(downloaded.pages)
+      ? Array.from(downloaded.pages, (page) => isObject(page) ? page.pageId : undefined) : [];
+    const establishesBeforePage = (values) => values.length > 0 && values.includes(beforePage.pageId)
+      && values.every((id) => isGuid(id) && ids.includes(id));
+    // Current downloads return pages: [{ pageId, ... }]. A present empty/malformed list
+    // contradicts the download; only genuinely absent fields retain historical shorthand.
+    // Validate a recorded scalar independently so neither shape can hide a contradiction.
+    if ((hasPages && !establishesBeforePage(returnedIds))
+      || (downloaded.pageId !== undefined && !establishesBeforePage([downloaded.pageId]))) {
       problems.push(`${event}: recorded download result does not establish the before-page identity`);
     }
     if (source.env !== undefined && !sameRecordedEnvironment(source.env, flags.env)) {

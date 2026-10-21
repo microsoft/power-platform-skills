@@ -377,7 +377,7 @@ function bindingsOf(ctx, name, at, potentialWrite = false) {
   };
   for (const scope of scopes.filter((entry) => entry.body < at && entry.end > at)) {
     if (scope.arrow) {
-      if (scope.names.includes(name)) found.push({ level: scope.body, kind: 'opaque' });
+      if (scope.names.includes(name)) found.push({ level: scope.body, kind: 'opaque', at: scope.paramsOpen });
       continue;
     }
     if (scope.isComponent) {
@@ -399,7 +399,7 @@ function bindingsOf(ctx, name, at, potentialWrite = false) {
       const pattern = /^\{([^{}]*)\}/.exec(param);
       const property = pattern ? destructuredNames(pattern[1]).get(name) : undefined;
       if (property) found.push({ level: scope.body, kind: 'param-member', scope, index, name, property });
-      else if (boundNames(param).includes(name)) found.push({ level: scope.body, kind: 'opaque' });
+      else if (boundNames(param).includes(name)) found.push({ level: scope.body, kind: 'opaque', scope, index });
     });
   }
   for (const match of mask.matchAll(new RegExp(`\\b(?:const|let|var)\\s+${escapeRe(name)}\\s*(?::[^=;]+)?=`, 'g'))) {
@@ -407,14 +407,14 @@ function bindingsOf(ctx, name, at, potentialWrite = false) {
     if (level === null) continue;
     // The whole initializer must pass the value on: `const a = dataApi && other` is not `dataApi`.
     const expr = identityChain(initializerText(mask, match.index + match[0].length));
-    found.push(expr ? { level, kind: 'alias', expr, at: match.index } : { level, kind: 'opaque' });
+    found.push(expr ? { level, kind: 'alias', expr, at: match.index } : { level, kind: 'opaque', at: match.index });
   }
   for (const match of mask.matchAll(/\b(?:const|let|var)\s*\{([^{}]*)\}\s*(?::[^=;]+)?=/g)) {
     const property = destructuredNames(match[1]).get(name);
     const level = property ? levelOf(match.index) : null;
     if (level === null) continue;
     const object = identityChain(initializerText(mask, match.index + match[0].length));
-    found.push(object ? { level, kind: 'member', object, property, at: match.index } : { level, kind: 'opaque' });
+    found.push(object ? { level, kind: 'member', object, property, at: match.index } : { level, kind: 'opaque', at: match.index });
   }
   if (!found.length) return [];
   const innermost = Math.max(...found.map((binding) => binding.level));
@@ -502,7 +502,11 @@ function identityPaths(ctx, expr, at, depth = 0) {
   if (!chain) return [];
   const [name, ...members] = normalizeChain(chain).split('.');
   const append = (paths, parts = []) => paths.map((entry) => ({ root: entry.root, parts: [...entry.parts, ...parts, ...members] }));
-  const paths = bindingsOf(ctx, name, at, true).flatMap((binding) => {
+  const bindings = bindingsOf(ctx, name, at, true);
+  const bindingKey = (binding) => JSON.stringify([binding.level, binding.kind, binding.at,
+    binding.scope?.paramsOpen, binding.index, binding.property]);
+  const bindingKeys = new Set(bindings.map(bindingKey));
+  const paths = bindings.flatMap((binding) => {
     if (binding.kind === 'props') return append([{ root: `props:${ctx.component.scope.paramsOpen}`, parts: [] }]);
     if (binding.kind === 'prop-member') return append([{ root: `props:${ctx.component.scope.paramsOpen}`, parts: [] }], [binding.property]);
     if (binding.kind === 'alias') return append(identityPaths(ctx, binding.expr, binding.at, depth + 1));
@@ -517,11 +521,16 @@ function identityPaths(ctx, expr, at, depth = 0) {
     }
     return [];
   });
-  // A reassigned writer may acquire the input after its initializer. Keep every recognized
-  // identity RHS as a possible write target; this cannot authorize a value or a receiver.
+  // A reassigned writer may acquire the input after its initializer. Union recognized RHS
+  // identities only for that resolved scope/declaration/parameter, not another scope's `record`.
+  // Even opaque bindings retain their declaration position; this adds no value or receiver proof.
   const assignments = new RegExp(`(?<![\\w$.])${escapeRe(name)}\\s*(?:\\?\\?|\\|\\||&&)?=(?![=>])`, 'g');
   for (const assignment of ctx.mask.matchAll(assignments)) {
     if (/\b(?:const|let|var)\s+$/.test(ctx.mask.slice(Math.max(0, assignment.index - 12), assignment.index))) continue;
+    const assigned = bindingsOf(ctx, name, assignment.index, true);
+    // Two unresolved references may still share an outer binding. Retain that potential write only
+    // for conservative refusal, never as authorization of an input value or API receiver.
+    if (bindingKeys.size ? !assigned.some((binding) => bindingKeys.has(bindingKey(binding))) : assigned.length) continue;
     const rhs = identityChain(initializerText(ctx.mask, assignment.index + assignment[0].length));
     if (rhs && normalizeChain(rhs) !== name) paths.push(...append(identityPaths(ctx, rhs, assignment.index, depth + 1)));
   }

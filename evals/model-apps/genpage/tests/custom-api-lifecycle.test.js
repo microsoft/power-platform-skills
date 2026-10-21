@@ -398,7 +398,7 @@ function privateBeforePublicAddFixture() {
   fixture.events = [
     { id: 'gate-discover', command: 'node feature-flags.js custom-api', result: 'enabled' },
     { id: 'download', command: 'node genpage.js download --env https://contoso.crm.dynamics.com --app-id 11111111-1111-4111-8111-111111111111 --page-id 99999999-9999-4999-8999-999999999999 --output-directory before',
-      result: { ok: true, pageId: '99999999-9999-4999-8999-999999999999' } },
+      result: { ok: true, pages: [{ pageId: '99999999-9999-4999-8999-999999999999' }] } },
     { id: 'discovery', command: 'node list-custom-apis.js https://contoso.crm.dynamics.com --entities salesorder',
       result: { ok: true, customApis: [{ ...added, bindingType: 'Global' }] } },
     { id: 'gate-generate', command: 'node feature-flags.js custom-api', result: 'enabled' },
@@ -682,6 +682,148 @@ test('before-page provenance keeps same-page private adds and explicit clear pos
     for (const layer of [1, 2]) {
       const result = score(fixture, layer);
       assert.equal(result.status, 'pass', result.reason);
+    }
+  }
+});
+
+function separateRecordBindingsFixture(argument = "{ accountid: 'new draft' }") {
+  const fixture = selectedRecordLookupFixture();
+  fixture.artifacts['stages/with-api.tsx'] = fixture.artifacts['stages/with-api.tsx']
+    .replace('const GeneratedComponent', `function editDraft(record: { accountid: string }) {
+  record.accountid = 'draft';
+}
+const GeneratedComponent`)
+    .replace('  const pending = { current: false };', `  let record = props.otherAccount;
+  record = props.selectedAccount;
+  void record.accountid;
+  editDraft(${argument});
+  const pending = { current: false };`);
+  return fixture;
+}
+
+test('scoped assignment origin: unrelated helper parameter remains independent', async (t) => {
+  for (const layer of [1, 2]) {
+    await t.test(`scoped assignment origin: unrelated helper parameter, layer ${layer}`, () => {
+      const fixture = separateRecordBindingsFixture();
+      assertKnownApiReceivers(fixture.artifacts['stages/with-api.tsx']);
+      const result = score(fixture, layer);
+      assert.equal(result.status, 'pass', result.reason);
+    });
+  }
+});
+
+test('scoped assignment origin: actual input mutation is refused', async (t) => {
+  for (const layer of [1, 2]) {
+    await t.test(`scoped assignment origin: actual input mutation, layer ${layer}`, () => {
+      const fixture = separateRecordBindingsFixture('props.selectedAccount');
+      assertKnownApiReceivers(fixture.artifacts['stages/with-api.tsx']);
+      const result = score(fixture, layer);
+      assert.equal(result.status, 'fail', result.reason);
+      assert.match(result.reason, /lookup|Ref|provenance/i);
+    });
+  }
+});
+
+test('scoped assignment origin: unmodeled outer alias writes remain refusals', async (t) => {
+  for (const layer of [1, 2]) {
+    await t.test(`scoped assignment origin: unmodeled outer alias write, layer ${layer}`, () => {
+      const fixture = selectedRecordLookupFixture();
+      const code = fixture.artifacts['stages/with-api.tsx']
+        .replace('const GeneratedComponent', 'declare let writtenRecord: { accountid: string };\nconst GeneratedComponent')
+        .replace('  const pending = { current: false };', `  writtenRecord = props.selectedAccount;
+  writtenRecord.accountid = 'draft';
+  const pending = { current: false };`);
+      fixture.artifacts['stages/with-api.tsx'] = code;
+      assertKnownApiReceivers(code);
+      const result = score(fixture, layer);
+      assert.equal(result.status, 'fail', result.reason);
+      assert.match(result.reason, /lookup|Ref|provenance/i);
+    });
+  }
+});
+
+test('download result pages: empty present list cannot establish provenance', async (t) => {
+  for (const layer of [1, 2]) {
+    await t.test(`download result pages: empty present list, layer ${layer}`, () => {
+      const fixture = privateBeforePublicAddFixture();
+      event(fixture, 'download').result = { ok: true, pages: [] };
+      const result = score(fixture, layer);
+      assert.equal(result.status, 'fail', result.reason);
+      assert.match(result.reason, /download|before|provenance|identity|evidence/i);
+    });
+  }
+});
+
+test('download result pages: unreadable list slots cannot establish provenance', async (t) => {
+  for (const layer of [1, 2]) {
+    await t.test(`download result pages: unreadable list slots, layer ${layer}`, () => {
+      const fixture = privateBeforePublicAddFixture();
+      const pages = [{ pageId: '99999999-9999-4999-8999-999999999999' }];
+      // Direct object evidence can contain holes even though a JSON capture would encode null.
+      pages.length = 2;
+      event(fixture, 'download').result = { ok: true, pages };
+      const result = score(fixture, layer);
+      assert.equal(result.status, 'fail', result.reason);
+      assert.match(result.reason, /download|before|provenance|identity|evidence/i);
+    });
+  }
+});
+
+test('download result pages: malformed or wrong identities cannot establish provenance', async (t) => {
+  const pageId = '99999999-9999-4999-8999-999999999999';
+  const otherPage = '22222222-2222-4222-8222-222222222222';
+  for (const [label, downloaded, requested = pageId] of [
+    ['null list', { ok: true, pages: null }],
+    ['object instead of list', { ok: true, pages: {} }],
+    ['string instead of list', { ok: true, pages: 'unreadable' }],
+    ['null list entry', { ok: true, pages: [null] }],
+    ['entry without identity', { ok: true, pages: [{}] }],
+    ['entry with null identity', { ok: true, pages: [{ pageId: null }] }],
+    ['entry with malformed identity', { ok: true, pages: [{ pageId: 'not-a-page-id' }] }],
+    ['different returned page', { ok: true, pages: [{ pageId: otherPage }] }],
+    ['matching page plus malformed entry', { ok: true, pages: [{ pageId }, {}] }],
+    ['matching scalar cannot hide empty list', { ok: true, pageId, pages: [] }],
+    ['matching scalar cannot hide null list', { ok: true, pageId, pages: null }],
+    ['matching scalar cannot hide object list', { ok: true, pageId, pages: {} }],
+    ['matching scalar cannot hide wrong page', { ok: true, pageId, pages: [{ pageId: otherPage }] }],
+    ['matching scalar cannot hide missing identity', { ok: true, pageId, pages: [{}] }],
+    ['matching scalar cannot hide missing before page in batch',
+      { ok: true, pageId, pages: [{ pageId: otherPage }] }, `${pageId},${otherPage}`],
+    ['wrong scalar cannot hide behind matching list', { ok: true, pageId: otherPage, pages: [{ pageId }] }],
+  ]) {
+    for (const layer of [1, 2]) {
+      await t.test(`download result pages: ${label}, layer ${layer}`, () => {
+        const fixture = privateBeforePublicAddFixture();
+        const download = event(fixture, 'download');
+        download.result = structuredClone(downloaded);
+        download.command = download.command.replace(`--page-id ${pageId}`, `--page-id ${requested}`);
+        const result = score(fixture, layer);
+        assert.equal(result.status, 'fail', `${label}, layer ${layer}: ${result.reason}`);
+        assert.match(result.reason, /download|before|provenance|identity|evidence/i);
+      });
+    }
+  }
+});
+
+test('download result pages: valid current and historical identities retain preservation', async (t) => {
+  const pageId = '99999999-9999-4999-8999-999999999999';
+  const otherPage = '22222222-2222-4222-8222-222222222222';
+  for (const [label, downloaded, requested] of [
+    ['current list', { ok: true, pages: [{ pageId }] }, pageId],
+    ['agreeing current list and scalar', { ok: true, pageId, pages: [{ pageId }] }, pageId],
+    ['historical scalar without list', { ok: true, pageId }, pageId],
+    ['historical omitted identity fields', { ok: true }, pageId],
+    ['current list for multiple requested pages', { ok: true, pages: [{ pageId }, { pageId: otherPage }] }, `${pageId},${otherPage}`],
+  ]) {
+    for (const layer of [1, 2]) {
+      await t.test(`download result pages: ${label}, layer ${layer}`, () => {
+        const fixture = privateBeforePublicAddFixture();
+        const download = event(fixture, 'download');
+        download.result = structuredClone(downloaded);
+        download.command = download.command.replace(`--page-id ${pageId}`, `--page-id ${requested}`);
+        const result = score(fixture, layer);
+        assert.equal(result.status, 'pass', `${label}, layer ${layer}: ${result.reason}`);
+      });
     }
   }
 });
