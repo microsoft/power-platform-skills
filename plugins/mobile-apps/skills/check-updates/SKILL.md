@@ -26,16 +26,15 @@ https://raw.githubusercontent.com/microsoft/power-platform-skills/main/plugins/m
 
 Compare semantic versions. If the public version is newer, make no project changes, return `BLOCKED: mobile-app plugin update requires restart`, and show the matching update path:
 
+- First determine whether `${PLUGIN_ROOT}` is under a local source checkout by walking its ancestors for a `.git` directory or gitfile. This includes plugins loaded from a **local marketplace directory** as well as `--plugin-dir`. For this live-source mode, do not recommend marketplace/plugin update commands or a VS Code Update button: tell the user to update that source checkout using its normal Git workflow, then restart/reload the host and rerun this skill. Do not pull, rebase, or discard checkout changes automatically.
 - GitHub Copilot CLI: `copilot plugin marketplace update power-platform-skills`, then `copilot plugin update mobile-app@power-platform-skills`, `/restart`, and rerun this skill.
 - Claude Code: `claude plugin marketplace update power-platform-skills`, then `claude plugin update mobile-app@power-platform-skills`, restart, and rerun this skill.
-- VS Code Copilot Chat:
-  1. Open the **Extensions** view.
-  2. Enter `@agentplugin mobile-app` in the search box.
-  3. Select **mobile-app** from **power-platform-skills**, then select **Update**.
+- VS Code Copilot Chat, when the plugin is a copied marketplace install rather than a live local source:
+  1. Open the integrated terminal.
+  2. Run `copilot plugin marketplace update power-platform-skills`.
+  3. Run `copilot plugin update mobile-app@power-platform-skills`.
   4. Run **Developer: Reload Window** from the Command Palette.
   5. Rerun this skill.
-
-For a checkout loaded with `--plugin-dir`, tell the user to update that checkout and restart the host instead.
 
 After the plugin is current, run this once from `<working_dir>`:
 

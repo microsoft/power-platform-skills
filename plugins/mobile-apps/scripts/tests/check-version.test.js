@@ -58,12 +58,12 @@ function normalizeLineEndings(content) {
 }
 
 function assertVsCodeUpdatePath(content) {
-  assert.match(content, /Open the \*\*Extensions\*\* view/);
-  assert.match(content, /`@agentplugin mobile-app`/);
-  assert.match(content, /Select \*\*mobile-app\*\* from \*\*power-platform-skills\*\*/);
+  assert.match(content, /Open the integrated terminal/);
+  assert.match(content, /`copilot plugin marketplace update power-platform-skills`/);
+  assert.match(content, /`copilot plugin update mobile-app@power-platform-skills`/);
   assert.match(content, /\*\*Developer: Reload Window\*\*/);
   assert.match(content, /Rerun this skill/);
-  assert.doesNotMatch(content, /Agent Plugins\s*\/?\s*Extensions view/);
+  assert.doesNotMatch(content, /Extensions view|select \*\*Update\*\*/i);
 }
 
 test('normalizeLineEndings makes Windows skill frontmatter parseable', () => {
@@ -126,7 +126,7 @@ test('formatUpdateMessage uses the plain plugin name without a marketplace', () 
   assert.doesNotMatch(message, /@/);
 });
 
-test('formatUpdateMessage gives VS Code UI guidance without CLI commands', () => {
+test('formatUpdateMessage gives VS Code copied installs verified CLI guidance', () => {
   const message = formatUpdateMessage(
     'mobile-app',
     '0.3.0',
@@ -136,7 +136,7 @@ test('formatUpdateMessage gives VS Code UI guidance without CLI commands', () =>
   );
 
   assertVsCodeUpdatePath(message);
-  assert.doesNotMatch(message, /claude plugin|copilot plugin/);
+  assert.doesNotMatch(message, /claude plugin/);
 });
 
 test('formatUpdateMessage gives unknown hosts neutral UI guidance', () => {
@@ -152,7 +152,7 @@ test('formatUpdateMessage gives unknown hosts neutral UI guidance', () => {
   assert.doesNotMatch(message, /claude plugin|copilot plugin/);
 });
 
-test('formatUpdateMessage gives local checkouts source-specific guidance', () => {
+test('formatUpdateMessage gives local live sources checkout-specific guidance', () => {
   const message = formatUpdateMessage(
     'mobile-app',
     '0.3.0',
@@ -162,8 +162,8 @@ test('formatUpdateMessage gives local checkouts source-specific guidance', () =>
     'checkout'
   );
 
-  assert.match(message, /loaded from a local checkout/);
-  assert.match(message, /Update that checkout/);
+  assert.match(message, /loaded live from a local marketplace or checkout/);
+  assert.match(message, /Update that source checkout/);
   assert.doesNotMatch(message, /plugin marketplace update|plugin update mobile-app/);
 });
 
@@ -239,10 +239,10 @@ test('checkForUpdate works for a standalone installed plugin without Git metadat
 
   assert.match(message, /Plugin update available: mobile-app 0\.3\.0 -> 0\.4\.0/);
   assertVsCodeUpdatePath(message);
-  assert.doesNotMatch(message, /claude plugin|copilot plugin/);
+  assert.doesNotMatch(message, /claude plugin/);
 });
 
-test('checkForUpdate gives source guidance for a local checkout', async (t) => {
+test('checkForUpdate gives source guidance for a local live marketplace checkout', async (t) => {
   const checkoutPluginRoot = createCheckoutPlugin(t, '0.3.0');
   const message = await checkForUpdate({
     pluginRoot: checkoutPluginRoot,
@@ -250,7 +250,7 @@ test('checkForUpdate gives source guidance for a local checkout', async (t) => {
     fetchRemotePlugin: async () => ({ version: '0.4.0' }),
   });
 
-  assert.match(message, /loaded from a local checkout/);
+  assert.match(message, /loaded live from a local marketplace or checkout/);
   assert.doesNotMatch(message, /claude plugin|copilot plugin/);
 });
 
@@ -296,6 +296,9 @@ test('every public skill runs or owns the plugin check before its workflow', () 
     const content = normalizeLineEndings(fs.readFileSync(skillPath, 'utf8'));
     if (/^name: check-updates$/m.test(content)) {
       assert.match(content, /^## Step 1: Check The Plugin$/m);
+      assert.match(content, /local marketplace directory/);
+      assert.match(content, /walking its ancestors for a `\.git` directory or gitfile/);
+      assert.match(content, /Do not pull, rebase, or discard checkout changes automatically/);
       assertVsCodeUpdatePath(content);
       continue;
     }

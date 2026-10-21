@@ -77,17 +77,18 @@ function formatUpdateMessage(
   if (installation === 'checkout') {
     return (
       message +
-      'This plugin is loaded from a local checkout. Update that checkout, restart or reload the host, and rerun this skill.'
+      'This plugin is loaded live from a local marketplace or checkout. Update that source checkout using its normal Git workflow, restart or reload the host, and rerun this skill.'
     );
   }
 
   if (host === 'vscode') {
+    const qualifiedName = marketplaceName ? `${pluginName}@${marketplaceName}` : pluginName;
     return (
       message +
-      `To update in VS Code:\n` +
-      `1. Open the **Extensions** view.\n` +
-      `2. Enter \`@agentplugin ${pluginName}\` in the search box.\n` +
-      `3. Select **${pluginName}** from **${marketplaceName || DEFAULT_MARKETPLACE_NAME}**, then select **Update**.\n` +
+      `To update a copied marketplace plugin in VS Code:\n` +
+      `1. Open the integrated terminal.\n` +
+      `2. Run \`copilot plugin marketplace update ${marketplaceName || DEFAULT_MARKETPLACE_NAME}\`.\n` +
+      `3. Run \`copilot plugin update ${qualifiedName}\`.\n` +
       `4. Run **Developer: Reload Window** from the Command Palette.\n` +
       `5. Rerun this skill.`
     );
