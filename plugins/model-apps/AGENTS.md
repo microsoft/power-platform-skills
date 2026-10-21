@@ -1640,8 +1640,9 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   create or update of the pages loop, both pass them) — an omitted list is the deployed page's own, a stated one,
   `[]` too, is the page's list. **The record of an earlier publish is recognised** (`lib/page-publish-records.js`):
   it is the hash of the content the build sent, and every record made before a download stated the lists is the
-  hash of the content WITHOUT them. With `specBindings`, when the page already holds what the spec states and
-  the caller's record is the hash without the lists, `update` reads the PUBLISHED copy (read only) and, when it holds
+  hash of the content WITHOUT them (or without one of them, for a record made while the spec stated only the other).
+  With `specBindings`, when the page already holds what the spec states and the caller's record is the hash of that
+  content without one or both of the lists it states, `update` reads the PUBLISHED copy (read only) and, when it holds
   the lists too, answers `publish.kind: 'skipped'` with `receiptUpgraded: true`; the build then renews the record to
   the new hash with the versions it already holds (`rememberPublished`), so the next build reads nothing more. A
   copy that does not hold them, or cannot be read, publishes as it always did, and a page the spec changes is

@@ -2797,6 +2797,23 @@ test('deploy: the renewed record is no licence — a page a maker saved since is
   } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
 });
 
+test('deploy: a page whose record names ONE of its lists, built by a spec that states both, is neither written nor published — a list stated for the first time is no change to the page', async () => {
+  const { appDir, spec, server, ids } = seededBindingApp({ extras: false });
+  try {
+    // The first build states the page's connector bindings and not its Custom API bindings: the page is published, and the record is the hash of its content with that one list.
+    spec.pages[0].connectorBindings = STATED_LISTS.connectorBindings;
+    await rebuildPages(spec, appDir, server, ids);
+    const alphaSource = fs.readFileSync(path.join(appDir, 'alpha.tsx'), 'utf8');
+    assert.strictEqual(publishedOf(spec, appDir).get(ids.alpha).fingerprint, contentFingerprint({ source: alphaSource, name: 'Alpha', dataSources: [], connectorBindings: STATED_LISTS.connectorBindings }));
+    // The next states the Custom API bindings too, which the page holds: nothing is written, nothing is published, and the record is renewed to name both lists.
+    spec.pages[0].actionBindings = STATED_LISTS.actionBindings;
+    const from = server.requests.length;
+    await rebuildPages(spec, appDir, server, ids);
+    assert.deepStrictEqual(quiet(requestsOf(server, from)), [0, 0, 0], 'neither a change set, nor a publish, nor any other write — only reads');
+    assert.strictEqual(publishedOf(spec, appDir).get(ids.alpha).fingerprint, contentFingerprint({ source: alphaSource, name: 'Alpha', dataSources: [], ...STATED_LISTS }));
+  } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
+});
+
 // ── a changed-only run checks the bindings of the pages it writes, and only those ────────────────────────────────────────────────────────────
 test('changed-only: a binding whose reference is another connector\'s stops a run that writes its page before anything is uploaded — and does not stop one that leaves the page alone', async () => {
   const appDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sel-bindings-'));

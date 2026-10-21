@@ -270,6 +270,38 @@ test('REAL BUNDLE: a record of a publish made before the lists were stated still
   }
 });
 
+// A record can name ONE of the lists: a build whose spec stated a page's connector bindings and not its Custom API bindings (a list a download could not state, or one the author took out of the spec to keep the
+// page's own) published the page with the hash of its content and that one list. A spec that then states the other list too, which the page holds, is the same content again: stating a list for the first time is
+// not a change to the page, whichever list it is.
+test('REAL BUNDLE: a record of a publish made when the spec stated ONE of the lists still stands when a spec states the other for the first time — nothing is written, nothing is published', async () => {
+  const stated = { connectorBindings: [WEATHER], actionBindings: [APPROVE] };
+  for (const [earlierList, newList] of [['connectorBindings', 'actionBindings'], ['actionBindings', 'connectorBindings']]) {
+    const server = seededServer(stated);
+    await withBackend(server, async (genpage) => {
+      const earlier = await genpage.update(ID, { ...SENT, [earlierList]: stated[earlierList], specBindings: true });
+      assert.strictEqual(earlier.publish.kind, 'verified', 'the earlier build published the page, and its record names one list');
+      server.requests.length = 0;
+      server.published.length = 0;
+      const out = await genpage.update(ID, { ...SENT, ...stated, specBindings: true, publishedFingerprint: earlier.fingerprint });
+      assert.deepStrictEqual([out.unchanged, out.publish.kind, out.receiptUpgraded], [true, 'skipped', true], `${newList} stated for the first time`);
+      assert.strictEqual(out.fingerprint, contentFingerprint({ source: SOURCE, name: 'Weather', dataSources: ['account'], model: 'gpt-4.1', ...stated }), 'the renewed record names both lists');
+      assert.deepStrictEqual(server.writes(), [], `${newList}: no row written and no PublishXml`);
+      assert.deepStrictEqual(server.published, []);
+      assert.ok(publishedLayerReads(server).length > 0, 'the published copy was read, to see that it holds the list the record does not name');
+    });
+  }
+
+  // A record of OTHER content — the one list as it was before the spec changed it — is no record of this content, whatever the spec states now: the page is published, as it always was.
+  const server = seededServer(stated);
+  await withBackend(server, async (genpage) => {
+    const other = contentFingerprint({ source: SOURCE, name: 'Weather', dataSources: ['account'], model: 'gpt-4.1', connectorBindings: [{ ...WEATHER, operations: ['Forecast'] }] });
+    server.published.length = 0;
+    const out = await genpage.update(ID, { ...SENT, ...stated, specBindings: true, publishedFingerprint: other });
+    assert.deepStrictEqual([out.publish.kind, out.receiptUpgraded], ['verified', undefined]);
+    assert.deepStrictEqual(server.published, [ID]);
+  });
+});
+
 test('REAL BUNDLE: the record of an older publish is not taken for the lists when the published copy does not hold them — the page is published, as it always was', async () => {
   const server = seededServer({ connectorBindings: undefined, actionBindings: undefined });
   await withBackend(server, async (genpage) => {

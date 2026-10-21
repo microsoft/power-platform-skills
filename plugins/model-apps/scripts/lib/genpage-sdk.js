@@ -322,6 +322,20 @@ function contentFingerprint(fields) {
   return sha256(`genpage-content/1\n${JSON.stringify(content)}`);
 }
 
+// The hashes a record of a publish holds for `fields` when it was made before one or more of the binding lists `fields` states were stated: the content with each such set of lists left out — three for a caller
+// that states both lists (without the connector bindings, without the Custom API bindings, without either), one for a caller that states one, none for a caller that states none. `update` takes a record that is
+// one of them for this content only once it has read the published copy and found the lists there too.
+function fingerprintsBeforeListsWereStated(fields) {
+  const stated = ['connectorBindings', 'actionBindings'].filter((key) => fields[key] !== undefined);
+  const hashes = [];
+  for (let leftOut = 1; leftOut < (1 << stated.length); leftOut += 1) {
+    const earlier = { ...fields };
+    stated.forEach((key, at) => { if (leftOut & (1 << at)) earlier[key] = undefined; });
+    hashes.push(contentFingerprint(earlier));
+  }
+  return hashes;
+}
+
 // The content fields of a page as `update` takes them from its arguments, normalized as the write normalizes them, so what is compared, hashed and checked afterwards is what is written. A field the caller leaves
 // out (`undefined`) is the page's own. `publishedDiffers` takes its arguments through this too, so the `fingerprint` it answers is the one `update` answers for the same arguments.
 function contentFieldsOf(args) {
@@ -1121,8 +1135,8 @@ function makeGenpageSdk(env, deps = {}) {
     //   is the `fingerprint` (contentFingerprint) a result gave it for a publish it saw take effect, and a page that already holds content with that very fingerprint is not
     //   published again (`publish.kind: 'skipped'`). It is only ever a reason not to publish a page this update has just read as already holding the content: a page that
     //   differs is written and published whatever the caller recorded, and a fingerprint that is missing or is another content's leaves the publish as it always was.
-    //   With `specBindings`, the hash of the same content WITHOUT its binding lists is the record of a publish made before the lists were stated: it is taken for the lists too only when the published copy is read
-    //   and holds them, and the result then says `receiptUpgraded: true` — its `fingerprint` is the hash to keep from now on.
+    //   With `specBindings`, the hash of the same content WITHOUT one or both of the binding lists it states is the record of a publish made before those lists were stated: it is taken for them too only when the
+    //   published copy is read and holds them, and the result then says `receiptUpgraded: true` — its `fingerprint` is the hash to keep from now on.
     // The result carries the `fingerprint` of the content the page holds now, for the caller that keeps one.
     // The #722 guarantee: an update that MAY have landed is never sent again blindly. After an unknown outcome the page is read:
     //   what was sent is there, turn included   -> it landed (publish)
@@ -1174,11 +1188,12 @@ function makeGenpageSdk(env, deps = {}) {
         if (typeof args.publishedFingerprint === 'string' && args.publishedFingerprint === fingerprint) {
           return { pageId: id, unchanged: true, publish: { kind: 'skipped', detail: 'the page already holds this content, and the caller recorded that this content was published' }, fingerprint, warnings: [] };
         }
-        // A record made before the caller stated the binding lists is the hash of this content WITHOUT them — the build's record of every page it published before a download wrote the lists into the spec. The page holds
-        // them now (nothing is left to write), and the caller's record says that nothing has touched the page since that publish, so the lists were published with it: but the record never named them, and it is
-        // only taken for them once the PUBLISHED copy is read and found to hold them too (one read of the published layer, never a write). The answer says so (`receiptUpgraded`), so the caller keeps the hash it
-        // was given now, and a later update finds it as it is. A copy that does not hold them — or cannot be read — leaves the page to be published, as it always was.
-        if (specBindings && typeof args.publishedFingerprint === 'string' && args.publishedFingerprint === contentFingerprint({ ...fields, connectorBindings: undefined, actionBindings: undefined })
+        // A record made before the caller stated a binding list is the hash of this content WITHOUT it — the build's record of every page it published before a download wrote the lists into the spec (both lists),
+        // or before a spec stated the second of them (one: a list a download could not state, or one the author took out of the spec to keep the page's own, stated again). The page holds them now (nothing is left
+        // to write), and the caller's record says that nothing has touched the page since that publish, so the lists were published with it: but the record never named them, and it is only taken for them once the
+        // PUBLISHED copy is read and found to hold them too (one read of the published layer, never a write). The answer says so (`receiptUpgraded`), so the caller keeps the hash it was given now, and a later
+        // update finds it as it is. A copy that does not hold them — or cannot be read — leaves the page to be published, as it always was.
+        if (specBindings && typeof args.publishedFingerprint === 'string' && fingerprintsBeforeListsWereStated(fields).includes(args.publishedFingerprint)
           && await publishedCopyHolds(sdk, id, fields, { specBindings })) {
           return { pageId: id, unchanged: true, publish: { kind: 'skipped', detail: 'the page already holds this content, the caller recorded that this content was published before its binding lists were stated, and the published copy holds them' }, fingerprint, receiptUpgraded: true, warnings: [] };
         }
