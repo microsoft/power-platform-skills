@@ -638,6 +638,57 @@ for (const [what, plant, said] of BAD_RECORDS) {
   });
 }
 
+// The two shapes the writer never makes that look most like a record it does: a reported id equal to the id (observe() records only another
+// id), and an entry with a key of its own (the writer writes `id` and `reportedId` only). Each makes the whole record unreadable, as a damaged
+// file does: read directly, and under a first build over the real bundle, which is then the build it was with no record.
+const UNWRITTEN_SHAPES = [
+  ['a reported id equal to its id', (entry) => ({ ...entry, reportedId: entry.id })],
+  ['a key the build does not write', (entry) => ({ ...entry, keptByHand: true })],
+];
+
+for (const [what, reshape] of UNWRITTEN_SHAPES) {
+  test(`an entry with ${what} makes the whole record unreadable: said once, nothing read from it, note() and clear() leave its bytes intact, and a first build is the one it is with no record`, async () => {
+    // Read directly, beside a good sibling.
+    const dir = scratch();
+    const first = open(dir);
+    assert.equal(first.note(BOARD, ID_A), true);
+    assert.equal(first.note('Sibling', ID_B), true, 'a good sibling');
+    const file = records().dashboardCreationRecordPath(dir, ENV, APP, SOLUTION);
+    const record = JSON.parse(fs.readFileSync(file, 'utf8'));
+    record.dashboards[BOARD] = reshape(record.dashboards[BOARD]);
+    const bytes = Buffer.from(`${JSON.stringify(record)}\n`);
+    fs.writeFileSync(file, bytes);
+    const warnings = [];
+    const run = open(dir, { warn: (w) => warnings.push(w) });
+    assert.equal(run.idsOf(BOARD), undefined, 'nothing is read from it');
+    assert.equal(run.idsOf('Sibling'), undefined, 'not even the good sibling');
+    assert.equal(run.note('Another', ID_C), false, 'note() does not write over it');
+    assert.equal(run.observe('Sibling', ID_C), false, 'observe() does not either');
+    assert.equal(run.clear('Sibling'), false, 'clear() does not delete it');
+    assert.deepEqual(fs.readFileSync(file), bytes, 'its bytes are left intact');
+    assert.equal(warnings.length, 1, `said once: ${JSON.stringify(warnings)}`);
+    assert.match(warnings[0], /could not be read .*so this build finds dashboards by name, as before, and records none of its own/);
+
+    // Under a first build: what a first build with no record sends — no read of a recorded id — one warning, and the file as it was.
+    const env = environment();
+    const planted = recordFile(env);
+    plantRecord(planted, env, { [BOARD]: reshape({ id: ID_A }), Sibling: { id: ID_B } });
+    const plantedBytes = fs.readFileSync(planted);
+    const built = ran(await env.harness.measure(() => env.harness.build(spec())), 'the build');
+    assert.equal(built.value.result.ok, true, JSON.stringify(built.value.result.errors));
+    assert.deepEqual(built.writes, FIRST_BUILD_WRITES, 'what a first build always writes');
+    assert.equal(built.reads, FIRST_BUILD_READS, 'and reads: no recorded id is read');
+    assert.deepEqual(recordReads(env.org, built.mark, ID_A), [], 'the id the entry names is not read');
+    const [only] = boards(env.org);
+    assert.deepEqual(members(env.org), [only]);
+    assert.equal(fs.existsSync(planted), true, 'the file is left where it was');
+    assert.deepEqual(fs.readFileSync(planted), plantedBytes, 'the file is left exactly as it was');
+    const about = built.value.warnings.filter((w) => /dashboard/i.test(w) && /record/i.test(w));
+    assert.equal(about.length, 1, `one warning about the record: ${JSON.stringify(built.value.warnings)}`);
+    assert.match(about[0], /could not be read/);
+  });
+}
+
 // --- 5. what is unchanged --------------------------------------------------------------------------------------------------------------------------------------
 
 test('an ordinary first build and an unchanged rebuild send exactly what they sent before, read no recorded id, and leave no record behind', async () => {
