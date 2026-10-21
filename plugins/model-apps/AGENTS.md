@@ -1667,7 +1667,10 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   that is there with no connection (`connectionid` empty — what a solution import leaves when no settings file gives
   one), an operation a binding lists that the custom connector of its reference does not define, a Custom API that is
   the other kind or bound to another table (the runtime refuses that call itself), and a read that failed (the
-  bindings were not checked); a connector that is not named on both sides is never a conflict. **Missing evidence is
+  bindings were not checked); a connector that is not named on both sides is never a conflict. The runner captures the
+  attempt's throttle checkpoint before these preflight reads: a wait refused by the shared budget stops preflight with
+  `throttle-budget-exhausted` before any SDK or page mutation, not just an unchecked-metadata warning. Refusals from
+  earlier attempts do not stop a new attempt unless it refuses another wait. **Missing evidence is
   NOT CHECKED, never compatible**: a row that answers without its `connectorid`, its `connectionid`, or a GUID in
   `_customconnectorid_value` (absent, null or invalid) — or with a value of another shape: a `connectorid` that is not
   `/providers/Microsoft.PowerApps/apis/shared_<name>` (`referenceConnectorKey` checks the syntax before anything is

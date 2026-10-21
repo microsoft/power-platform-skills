@@ -1364,7 +1364,7 @@ async function checkNavigationBeforeWriting(spec, { provision, phases, changedOn
 //     the connector this environment has. Left to the pages phase it would stop after the solution, the tables, the views, the forms and the app were written, as the navigation check used to;
 //   - a reference or a Custom API that is not there, a reference that has no connection, an operation a binding calls that the custom connector there does not define, a Custom API of the other kind or bound
 //     to another table, and a read that failed are SAID, by name, and the build goes on: the page is written with its binding (a reference made, or given its connection, later makes the page work without a
-//     rebuild), and a read that failed says only that the bindings were not checked.
+//     rebuild), and an ordinary read failure says only that the bindings were not checked. A refused throttle wait is still the attempt's budget stop, checked by its runner before any mutation.
 // Only a run that has the pages phase writes a binding, and a changed-only run writes the pages it selected (pagesStatingBindings). A spec that states none reads nothing.
 async function readPageBindingVerdict(spec, { provision, phases, changedOnly }) {
   if (!phases.includes('pages')) return null;
@@ -2865,11 +2865,14 @@ async function runSdkBuildPhases(spec, opts, owed) {
     };
   }
 
+  // Capture the attempt's checkpoint before best-effort preflight reads can swallow a refused throttle wait as unchecked metadata. The same runner then stops before any mutation, without counting refusals from earlier attempts.
+  const runner = makeRunner({ emit, total: plan.length, throttle: opts.throttle });
   // A navigation Dataverse will refuse stops the build here, before anything is written, rather than at the app step
   // after the solution, tables, columns, views and forms have been (app-navigation.js). Only a run that has the app step.
   if (has('app-shell')) await checkNavigationBeforeWriting(spec, { provision, phases, changedOnly: opts.changedOnly, warn: opts.warn });
   // A binding whose connection reference is another connector's stops the build here too, before anything is written, for the same reason (checkPageBindingsBeforeWriting).
   await checkPageBindingsBeforeWriting(spec, { provision, phases, changedOnly: opts.changedOnly, warn: opts.warn });
+  runner.stopIfRefused('preflight');
 
   const createdFormsThisRun = new Set();
   const result = { ok: true, created: { entities: {}, relationships: {}, records: {}, webResources: {}, views: {}, charts: {}, forms: {}, formIds: {}, businessRules: {}, businessProcessFlows: {}, bpfBackingTables: {}, commands: {}, dashboards: {}, pages: {}, pageDeployedShas: {}, pageSourceShas: {}, ai: { appFeatures: null, summaries: {} }, roles: {}, roleGrants: {}, bpfRoleGrants: {}, app: null }, skipped: { businessRules: [], aiSummaries: [], layout: [], unauthorizedRemovals: [] } };
@@ -2878,8 +2881,6 @@ async function runSdkBuildPhases(spec, opts, owed) {
   // The full-build path never sets opts.changedOnly, so result.created.app stays null and app-shell
   // creates/updates it exactly as before — this branch is a no-op (byte-identical) on the normal path.
   if (opts.changedOnly && opts.changedOnly.resolvedAppId) result.created.app = opts.changedOnly.resolvedAppId;
-  // The runner stops the run at the next step once the budget has refused a wait (entity-provision.js, makeRunner): the build's retry loop does not run the phases again to meet the same answer.
-  const runner = makeRunner({ emit, total: plan.length, throttle: opts.throttle });
   const sol = spec.solution;
   // The web resources an earlier run of this build wrote and could not confirm were published (lib/web-resource-records.js), read at first use: the
   // spec's web resources, the generated app icon and the page manifest are written again by id when they are in it. One per run of the phases, so the

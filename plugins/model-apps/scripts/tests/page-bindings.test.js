@@ -28,6 +28,8 @@ const { buildManifest } = require('../lib/page-manifest.js');
 const { makeSimpleMockSdk } = require('./helpers/mock-sdk.js');
 const { currentReadSdk } = require('./helpers/app-membership-sdk.js');
 const { fakeGenpage } = require('./helpers/fake-genpage.js');
+const { createAzHttpClient } = require('../lib/sdk-http-client.js');
+const { makeThrottleBudget } = require('../lib/throttle-budget.js');
 
 const ENV = 'https://contoso.crm.dynamics.com';
 const APP_ID = 'aaaaaaaa-0000-4000-8000-000000000001';
@@ -857,7 +859,7 @@ function targetEnvironment({ references = [], apis = [], connectors = [], failRe
     if (entity === 'customapi' && failApis) throw new Error(failApis);
     return answers[entity];
   };
-  for (const method of ['createPublisher', 'createSolution', 'createTable', 'createColumn', 'createRelationship', 'createWebResource', 'createArtifact', 'addElement', 'updateElement', 'pushArtifact', 'publishArtifact', 'addSolutionComponent']) {
+  for (const method of ['createPublisher', 'createSolution', 'createTable', 'createColumn', 'createRelationship', 'createWebResource', 'updateWebResource', 'createArtifact', 'addElement', 'updateElement', 'removeElement', 'pushArtifact', 'publishArtifact', 'addSolutionComponent']) {
     const original = sdk[method];
     sdk[method] = (...args) => { writes.push(method); return original(...args); };
   }
@@ -1035,6 +1037,74 @@ test('a read of the environment that fails is said, and the build goes on as it 
   assert.ok(rebuilt.ok);
   assert.deepStrictEqual(bindingWords(warnings), ['could not read this environment\'s connection references (HTTP 403), so the connector bindings of page "Weather" were not checked against them']);
 });
+
+// Exercise the real client's refusal bookkeeping at the SDK read boundary: a best-effort binding read catches its HTTP error, but the attempt must still stop before its first mutation.
+async function failedBindingPreflight(entity, statusCode, earlierRefusal) {
+  const { spec, outDir } = await portableCopy();
+  const references = entity === 'connector'
+    ? [{ connectionreferencelogicalname: WIDGETS_BINDING.logicalName, connectorid: WIDGETS_BINDING.connectorId, connectionid: 'shared-widgets-0001', _customconnectorid_value: WIDGETS_CONNECTOR_ID }]
+    : BOTH_REFERENCES;
+  if (entity === 'connector') spec.pages.find((p) => p.key === 'weather').connectorBindings = [WIDGETS_BINDING];
+  const { sdk, writes } = targetEnvironment({ references, apis: BOTH_APIS });
+  const throttle = makeThrottleBudget();
+  if (earlierRefusal) throttle.decline({ askedMs: 600000, waitMs: 600000 });
+  const requests = [];
+  const http = createAzHttpClient(FABRIKAM, {
+    getToken: () => 'SYNTHETIC_BINDING_PREFLIGHT_TOKEN',
+    throttle,
+    now: () => 0,
+    random: () => 0,
+    sleep: async () => { assert.fail('a refused wait or a permanent metadata failure must not sleep'); },
+    request: async (request) => {
+      requests.push({ method: request.method, url: request.url });
+      return { statusCode, headers: statusCode === 429 ? { 'retry-after': '600' } : {}, body: JSON.stringify({ error: { message: 'Metadata unavailable' } }) };
+    },
+  });
+  const query = sdk.queryRecords;
+  sdk.queryRecords = async (logical, options) => {
+    if (logical !== entity) return query(logical, options);
+    const response = await http.get(`${FABRIKAM}/api/data/v9.2/${logical}`);
+    throw Object.assign(new Error(`HTTP ${response.status}`), { statusCode: response.status });
+  };
+  const genpage = fakeGenpage();
+  const warnings = [];
+  const events = [];
+  return {
+    spec, throttle, writes, genpage, requests, warnings, events,
+    opts: { sdk, genpage, appDir: outDir, env: FABRIKAM, apply: true, phases: PHASES, throttle, warn: (m) => warnings.push(m), emit: (event) => events.push(event) },
+  };
+}
+
+for (const entity of ['connectionreference', 'customapi', 'connector']) {
+  test(`a refused preflight wait from ${entity} halts before any SDK or page mutation`, async () => {
+    for (const earlierRefusal of [false, true]) {
+      const f = await failedBindingPreflight(entity, 429, earlierRefusal);
+      const halt = await runSdkBuild(f.spec, f.opts).then(() => null, (error) => error);
+      assert.deepStrictEqual(f.requests, [{ method: 'GET', url: `${FABRIKAM}/api/data/v9.2/${entity}` }], 'the throttled request was sent once and never resent');
+      assert.deepStrictEqual(f.throttle.declined(), { count: Number(earlierRefusal) + 1, askedMs: 600000, waitMs: 600000 });
+      assert.strictEqual(halt && halt.code, 'throttle-budget-exhausted', 'a refused preflight wait must stop before any mutation');
+      assert.ok(halt instanceof BuildHalt);
+      assert.strictEqual(halt.phase, 'preflight');
+      assert.strictEqual(halt.statusCode, 429);
+      assert.match(halt.message, /the service asked to wait 600 s/);
+      assert.deepStrictEqual(f.writes, [], 'no SDK mutation, including solution or manifest writes');
+      assert.deepStrictEqual(f.genpage.calls, [], 'no page read, create, update, placement, removal or delete');
+      assert.deepStrictEqual(f.events, [], 'no mutation step started');
+    }
+  });
+
+  test(`an unchecked ${entity} read still permits mutation when no new throttle wait is refused`, async () => {
+    for (const earlierRefusal of [false, true]) {
+      const f = await failedBindingPreflight(entity, 403, earlierRefusal);
+      assert.ok((await runSdkBuild(f.spec, f.opts)).ok);
+      assert.deepStrictEqual(f.requests, [{ method: 'GET', url: `${FABRIKAM}/api/data/v9.2/${entity}` }], 'a permanent metadata failure was not resent');
+      assert.strictEqual(f.throttle.declined().count, Number(earlierRefusal), 'no refusal belongs to this attempt');
+      assert.ok(f.warnings.some((m) => /HTTP 403/.test(m) && /not checked/.test(m)), 'unavailable metadata is still reported as unchecked');
+      assert.ok(f.writes.length > 0, 'the build continues past an ordinary unchecked read');
+      assert.strictEqual(f.genpage.of('create').length, 2, 'the pages are still created, even after an earlier attempt refused a wait');
+    }
+  });
+}
 
 test('a spec that states no binding makes no read of references or Custom APIs, and a rebuild of it is as it was', async () => {
   const { spec, outDir } = await portableCopy();
