@@ -75,9 +75,14 @@ function formatUpdateMessage(
   let message = `\nPlugin update available: ${pluginName} ${localVersion} -> ${remoteVersion}.\n`;
 
   if (installation === 'checkout') {
+    const reloadInstruction =
+      host === 'vscode'
+        ? 'run **Developer: Reload Window** from the Command Palette'
+        : 'restart or reload the host';
     return (
       message +
-      'This plugin is loaded live from a local marketplace or checkout. Update that source checkout using its normal Git workflow, restart or reload the host, and rerun this skill.'
+      'This plugin is loaded live from a local source, so Copilot cannot update it. Ask the person who configured the local marketplace or plugin directory to update its mobile-app files, then ' +
+      `${reloadInstruction} and rerun this skill.`
     );
   }
 

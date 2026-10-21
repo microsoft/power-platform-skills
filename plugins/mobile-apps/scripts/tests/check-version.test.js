@@ -152,18 +152,21 @@ test('formatUpdateMessage gives unknown hosts neutral UI guidance', () => {
   assert.doesNotMatch(message, /claude plugin|copilot plugin/);
 });
 
-test('formatUpdateMessage gives local live sources checkout-specific guidance', () => {
+test('formatUpdateMessage gives local live sources administrator guidance', () => {
   const message = formatUpdateMessage(
     'mobile-app',
     '0.3.0',
     '0.4.0',
     'power-platform-skills',
-    'claude',
+    'vscode',
     'checkout'
   );
 
-  assert.match(message, /loaded live from a local marketplace or checkout/);
-  assert.match(message, /Update that source checkout/);
+  assert.match(message, /loaded live from a local source/);
+  assert.match(message, /Copilot cannot update it/);
+  assert.match(message, /person who configured the local marketplace or plugin directory/);
+  assert.match(message, /\*\*Developer: Reload Window\*\*/);
+  assert.doesNotMatch(message, /\bGit\b|git pull|rebase/);
   assert.doesNotMatch(message, /plugin marketplace update|plugin update mobile-app/);
 });
 
@@ -242,7 +245,7 @@ test('checkForUpdate works for a standalone installed plugin without Git metadat
   assert.doesNotMatch(message, /claude plugin/);
 });
 
-test('checkForUpdate gives source guidance for a local live marketplace checkout', async (t) => {
+test('checkForUpdate gives administrator guidance for a local live marketplace', async (t) => {
   const checkoutPluginRoot = createCheckoutPlugin(t, '0.3.0');
   const message = await checkForUpdate({
     pluginRoot: checkoutPluginRoot,
@@ -250,7 +253,9 @@ test('checkForUpdate gives source guidance for a local live marketplace checkout
     fetchRemotePlugin: async () => ({ version: '0.4.0' }),
   });
 
-  assert.match(message, /loaded live from a local marketplace or checkout/);
+  assert.match(message, /loaded live from a local source/);
+  assert.match(message, /Copilot cannot update it/);
+  assert.doesNotMatch(message, /\bGit\b|git pull|rebase/);
   assert.doesNotMatch(message, /claude plugin|copilot plugin/);
 });
 
@@ -298,7 +303,9 @@ test('every public skill runs or owns the plugin check before its workflow', () 
       assert.match(content, /^## Step 1: Check The Plugin$/m);
       assert.match(content, /local marketplace directory/);
       assert.match(content, /walking its ancestors for a `\.git` directory or gitfile/);
-      assert.match(content, /Do not pull, rebase, or discard checkout changes automatically/);
+      assert.match(content, /Copilot cannot update a plugin loaded live from a local source/);
+      assert.match(content, /do not recommend[\s\S]*Git commands/);
+      assert.match(content, /Do not modify that source automatically/);
       assertVsCodeUpdatePath(content);
       continue;
     }
