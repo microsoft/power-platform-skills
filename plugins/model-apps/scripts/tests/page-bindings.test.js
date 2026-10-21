@@ -585,6 +585,33 @@ test('a credential hidden in a URL (user-info alone, an encoded query key, a fra
   }
 });
 
+// A parser normalizes what it reads: a dot-segment removes the path segment before it, so a check of the parsed URL never sees that segment, while the spec would keep the text as it was. The text a download
+// would persist is the text that is checked, so such a URL — in any place a binding holds a text — leaves its list out of the spec, and of every other sink.
+test('a URL whose dot-segments would drop a segment — plain or percent-encoded — leaves its list out of every sink: the text checked is the text that would be persisted', async () => {
+  const hidden = (dots) => `https://contoso.example/${SECRET.token}/${dots}/site`;
+  const cases = [
+    ['a dot-segment, as a connector dataset', 'connectorBindings', { ...WEATHER, dataset: hidden('..') }],
+    ['a percent-encoded dot-segment, as a connector dataset', 'connectorBindings', { ...WEATHER, dataset: hidden('%2e%2e') }],
+    ["an upper-case encoded dot-segment, as a custom connector's dataset", 'connectorBindings', { logicalName: 'contoso_widgets', connectorId: '/providers/Microsoft.PowerApps/apis/shared_contoso-5fwidgets-5f6a8c', dataset: hidden('%2E%2E'), operations: ['ListWidgets'] }],
+    ['a dot-segment, as a table id', 'connectorBindings', { ...SHAREPOINT, tables: [hidden('..')] }],
+    ["a dot-segment, as a Custom API's display name", 'actionBindings', { ...APPROVE, displayName: hidden('..') }],
+    ['a dot-segment, as a parameter name', 'actionBindings', { ...APPROVE, parameterKinds: { [hidden('..')]: 'String' } }],
+  ];
+  for (const [what, kind, entry] of cases) {
+    const { result, stderr, weather } = await downloadPagesHolding({ [kind]: [entry] });
+    assert.ok(!(kind in weather), `${what}: the list is left out`);
+    const carried = result.pageBindings.notCarried.find((n) => n.field === kind);
+    assert.ok(carried && !carried.reason.includes(SECRET.token) && !carried.reason.includes('..'), `${what}: the reason says where, never what`);
+    const disk = await persisted(result);
+    assert.deepStrictEqual(leaked(disk.spec), [], `${what}: app-spec.json`);
+    assert.deepStrictEqual(leaked(disk.printed), [], `${what}: the printed result`);
+    assert.deepStrictEqual(leaked(stderr), [], `${what}: stderr`);
+    const authored = validateAppSpec(specWithPages({ [kind]: [entry] }));
+    assert.strictEqual(authored.ok, false, `${what}: an authored spec that states it is refused`);
+    assert.deepStrictEqual(leaked(JSON.stringify(authored)), [], `${what}: and the refusal does not quote it`);
+  }
+});
+
 test('validateAppSpec refuses a binding property an App Spec does not state, and a value without the shape it states — by the vetted name or as "an unrecognized property", never by value or key', () => {
   const unrecognized = (kind) => `page 'weather': ${kind}[0] holds an unrecognized property, which an App Spec does not state (a binding states only ${kind === 'connectorBindings' ? 'logicalName, connectorId, dataset, tables, tableDisplayNames, operations' : 'name, isFunction, boundEntityLogicalName, displayName, parameterKinds'})`;
   const cases = [

@@ -1618,7 +1618,7 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   one of the documented properties (`logicalName`, `connectorId`, `dataset`, `tables`, `tableDisplayNames`,
   `operations` for a connector binding; `name`, `isFunction`, `boundEntityLogicalName`, `displayName`, `parameterKinds`
   for a Custom API binding) and each value of a conservative shape positively known to be safe — an identifier, a GUID,
-  a plain name or label, or an `http(s)` URL whose PARSED form (`new URL`) has no user-info, no query and no fragment
+  a plain name or label, or an `http(s)` URL whose PARSED form (`new URL`) has no user-info, no query and no fragment and whose text is already that canonical form (a parser removes dot-segments before any check could see them, so the text that is persisted must be the text that is checked)
   and whose decoded path is labels — none of it shaped like a token (a known token prefix, an authorization scheme, a
   32+ run mixing letters and digits). **That is a security rule, not a tidiness one, and it fails closed**:
   `genpage-upload.js` writes any JSON array into a binding, so an entry can hold a connection id or a credential as a

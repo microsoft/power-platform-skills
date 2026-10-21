@@ -12,7 +12,8 @@
 // KNOWN to be safe, and the rule fails closed:
 //   - a key is stated only when it is one of the properties the two references document (FIELDS), and a key of `parameterKinds` only when it is shaped like a request parameter's unique name and not like a token;
 //   - a value is stated only when it has a conservative shape that is positively known (SHAPES): an identifier, a GUID, a plain name or label, or a URL whose PARSED form (`new URL`) has no user-info, no query and
-//     no fragment and whose decoded path is plain names. A value that merely does not look like a credential is not enough — a credential has more forms than any list of them (a token alone in a URL's
+//     no fragment and whose decoded path is plain names, and whose text is ALREADY that parsed form (no dot-segment the parser would remove — the text that is persisted is the text that is checked). A value
+//     that merely does not look like a credential is not enough — a credential has more forms than any list of them (a token alone in a URL's
 //     user-info, `api%5Fkey=` in a query, `#access_token=` in a fragment, a bare token as a key);
 //   - a list in which ANY entry holds anything else is left out of the spec WHOLE. Nothing is projected out of it, because an entry stated without what it was found by (`logicalName`, `name`) or without a
 //     property it held would make a rebuild REPLACE the page's entry with less (mergeBindings matches entries by that identity). A list that is left out is a list a rebuild does not send, and the page keeps
@@ -58,7 +59,7 @@ const tokenLike = (text) => TOKEN_PREFIX.test(text) || AUTH_SCHEME.test(text) ||
 //   name        a SQL dataset (`server,database`), a table name (`[dbo].[Orders]`), a dataset key (`default`): letters, digits, space and `_ . , : - [ ] ( )` (up to 256), opening with a letter, a digit or `[`
 //   label       what a person reads — a display name: letters (any script), marks, digits, dashes, space and `_ . , ; : ' ( ) & + !` (up to 256). No `/`, `@`, `=`, `?`, `#`, `%` or quote, so no URL and no key=value
 //   url         a SharePoint site and the like: `new URL` parses it as http(s), with no user-info (`user@`, `user:pass@`), no query and no fragment — the raw text holds no `?`, `#` or `@` at all — a host of DNS
-//               labels, an optional port, and a path whose segments, decoded, are labels
+//               labels, an optional port, and a path whose segments, decoded, are labels — written exactly as `new URL` gives it back (isSafeUrl)
 // An empty text is a value only where the reference documents one: a connector binding's `dataset` is `""` for a REST connector.
 const IDENTIFIER = /^[A-Za-z][A-Za-z0-9_.-]{0,127}$/;
 const GUID = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
@@ -71,6 +72,11 @@ const isName = (value) => typeof value === 'string' && NAME.test(value) && !toke
 const isLabel = (value) => typeof value === 'string' && LABEL.test(value) && !tokenLike(value);
 // The `new URL` of a WHATWG parser is what decides, not a pattern: it is what a browser and the runtime read the text as. The raw text is held to having no `?`, `#` and `@` first, because a parser that drops an
 // empty query (`https://x/?`) or reads a `@` in the path as data would hide one.
+// The text a spec KEEPS is the text that is checked. The parser NORMALIZES what it reads — it removes dot-segments (`/<x>/../`, `/%2e%2e/`, `/./`), lower-cases the scheme and the host, drops a default port —
+// so a check of the parsed form alone would certify a text whose dropped segment it never saw: `https://contoso.example/<token>/../site` parses as `https://contoso.example/site`, and the spec would keep the
+// token. A URL is therefore a value only when the text is ALREADY canonical — `new URL(text).href` is the text itself, or the text and the `/` an origin with no path is given — so that every segment of the
+// text is a segment of the parsed path, and each one is checked below.
+// See: https://url.spec.whatwg.org/#double-dot-path-segment
 function isSafeUrl(value) {
   if (typeof value !== 'string' || value.length > 2048 || /[?#@\\\s]/.test(value)) return false;
   let url;
@@ -79,6 +85,7 @@ function isSafeUrl(value) {
   } catch {
     return false;
   }
+  if (url.href !== value && !(url.pathname === '/' && url.href === `${value}/`)) return false;
   if (url.protocol !== 'https:' && url.protocol !== 'http:') return false;
   if (url.username || url.password || url.search || url.hash || !DNS_HOST.test(url.hostname)) return false;
   for (const segment of url.pathname.split('/').filter(Boolean)) {
@@ -88,7 +95,8 @@ function isSafeUrl(value) {
     } catch {
       return false;
     }
-    if (!LABEL.test(decoded) || tokenLike(decoded)) return false;
+    // A canonical text holds no dot-segment; said again here, where a segment is read, so that this loop never certifies one whatever the parser does.
+    if (decoded === '.' || decoded === '..' || !LABEL.test(decoded) || tokenLike(decoded)) return false;
   }
   return !tokenLike(url.hostname);
 }

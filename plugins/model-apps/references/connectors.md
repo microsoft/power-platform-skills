@@ -62,7 +62,7 @@ An app a download reads is written with each page's `connectorBindings` in `page
 rebuild writes that list back onto the page (a spec that states none leaves the page's own). A spec states an
 entry by the properties documented above — `logicalName`, `connectorId`, `dataset`, `tables`, `tableDisplayNames`,
 `operations` — each with a value of a conservative shape known to be safe (an identifier, a GUID, a plain name or
-label, an `http(s)` URL with no user-info, no query and no fragment), and by nothing else. A list in which any entry
+label, an `http(s)` URL with no user-info, no query and no fragment, written in its canonical form), and by nothing else. A list in which any entry
 holds anything else — a connection id, a credential, a property a binding holds beyond these — is left out of the
 spec WHOLE, reported by its place and the vetted property (never a value or an unrecognized key), and stays on the
 page, which a rebuild then leaves as it is (see `references/app-spec-schema.md` → `pages[]`). Never write a

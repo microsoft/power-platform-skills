@@ -106,6 +106,47 @@ test('a value is stated only with a conservative shape known to be safe — a cr
   }
 });
 
+// A URL is stated only as it is written: the exact text that goes into app-spec.json is the text that is checked. A parser NORMALIZES what it reads — a dot-segment (`/<x>/../`, `%2e%2e`, `/./`) removes a path
+// segment before any check sees it, and a host is lower-cased — so a URL is a value only when it is already in the form the parser gives back (`new URL(text).href` is the text, or the text and a `/` for an
+// origin with no path). Anything else leaves its list out of the spec, whatever the segment that would have been dropped holds.
+const NOT_CANONICAL = [
+  [`https://contoso.example/${TOKEN}/../site`, 'a dot-segment that drops a token-shaped segment'],
+  [`https://contoso.example/${MARK}/%2e%2e/site`, 'a percent-encoded dot-segment'],
+  [`https://contoso.example/${MARK}/%2E%2E/site`, 'an upper-case percent-encoded dot-segment'],
+  [`https://contoso.example/${MARK}/.%2e/site`, 'a half-encoded dot-segment'],
+  ['https://contoso.example/sites/./x', 'a single-dot segment'],
+  ['https://contoso.example/sites/%2e/x', 'an encoded single-dot segment'],
+  ['https://contoso.example/sites/x/..', 'a trailing dot-segment'],
+  ['https://Contoso.Example/sites/x', 'a host the parser lower-cases'],
+  ['https://contoso.example:443/sites/x', 'a default port the parser drops'],
+  ['HTTPS://contoso.example/sites/x', 'a scheme the parser lower-cases'],
+];
+
+test('a URL is stated only when it is already canonical — the text that is persisted is the text that is checked, so a dot-segment cannot hide a segment the check never saw', () => {
+  for (const [value, what] of NOT_CANONICAL) {
+    for (const [kind, base, property, put] of [
+      ['connectorBindings', SHAREPOINT, 'dataset', (v) => v],
+      ['connectorBindings', { logicalName: 'contoso_widgets', connectorId: '/providers/Microsoft.PowerApps/apis/shared_contoso-5fwidgets-5f6a8c', operations: ['ListWidgets'] }, 'dataset', (v) => v],
+      ['connectorBindings', SHAREPOINT, 'tables', (v) => [v]],
+      ['connectorBindings', SHAREPOINT, 'tableDisplayNames', (v) => [v]],
+      ['actionBindings', APPROVE, 'displayName', (v) => v],
+      ['actionBindings', APPROVE, 'parameterKinds', (v) => ({ [v]: 'String' })],
+    ]) {
+      const { stated, leftOut } = statableBinding(kind, { ...base, [property]: put(value) });
+      assert.ok(!(property in stated), `${what}, as ${kind}.${property}: not stated`);
+      assert.deepStrictEqual(leftOut.map((l) => l.property), [property], `${what}, as ${kind}.${property}`);
+      const said = JSON.stringify(leftOut) + bindingProblemText(kind, 0, leftOut[0]);
+      assert.ok(!said.includes(MARK) && !said.includes(TOKEN) && !said.includes('..'), `${what}: what is said holds nothing of the value`);
+      assert.deepStrictEqual(statableBindings(kind, [base, { ...base, [property]: put(value) }]).stated, null, `${what}: the whole list is left out`);
+    }
+  }
+  // The same token in a canonical path was always refused; and canonical URLs are still stated as they are, an origin with or without its `/` too.
+  assert.deepStrictEqual(statableBinding('connectorBindings', { ...SHAREPOINT, dataset: `https://contoso.example/${TOKEN}/site` }).leftOut.map((l) => l.property), ['dataset']);
+  for (const dataset of ['https://contoso.sharepoint.com/sites/x', 'https://contoso.sharepoint.com', 'https://contoso.sharepoint.com/', 'https://contoso.sharepoint.com/sites/Team%20Site/Shared%20Documents', 'http://intranet.contoso.example:8080/sites/x']) {
+    assert.deepStrictEqual(statableBinding('connectorBindings', { ...SHAREPOINT, dataset }).leftOut, [], dataset);
+  }
+});
+
 test('a key is stated only when it is a documented property — any other is "an unrecognized property", and the key itself is never said: a token can be the NAME of a property', () => {
   const entry = { ...WEATHER, [TOKEN]: true, connectionId: 'x', credentials: { accessToken: MARK }, constructor: 1 };
   const { stated, leftOut } = statableBinding('connectorBindings', entry);

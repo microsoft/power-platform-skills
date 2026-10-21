@@ -1650,7 +1650,7 @@ custom control), but the spec validator emits a warning.
   |---|---|---|
   | `connectorBindings` | `logicalName` | an identifier: a letter, then letters, digits, `_ . -` |
   | | `connectorId` | `/providers/Microsoft.PowerApps/apis/<identifier>`, or the identifier |
-  | | `dataset` | `""`, a plain name (`server,database`, `default`), or an `http(s)` URL with no user-info, no query and no fragment, whose host is DNS labels and whose decoded path segments are labels |
+  | | `dataset` | `""`, a plain name (`server,database`, `default`), or an `http(s)` URL with no user-info, no query and no fragment, whose host is DNS labels and whose decoded path segments are labels, written in its canonical form — exactly as a URL parser gives it back: no `.` or `..` segment (plain or percent-encoded), a lower-case scheme and host, no default port |
   | | `tables` | a list of GUIDs or plain names (`[dbo].[Orders]`) |
   | | `tableDisplayNames` | a list of labels: letters, digits, dashes, spaces and `_ . , ; : ' ( ) & + !` — no URL, no `=` |
   | | `operations` | a list of identifiers |
