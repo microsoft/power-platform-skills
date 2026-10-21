@@ -222,7 +222,7 @@ Use `AskUserQuestion`:
 Add to `scripts/lint-skills-alm.js`:
 
 ### `GATE-must-have-marker`
-Every `AskUserQuestion` block in a skill or `references/*-workflow.md` must be preceded (within the same section) by either:
+Every `AskUserQuestion` block in a skill, `references/*-workflow.md`, or `workflows/*.md` must be preceded (within the same section) by either:
 - A paired `<!-- gate: ID | category=X | cancel-leaves=Y -->` comment, **or**
 - An explicit `<!-- not-a-gate: <reason> -->` comment justifying why.
 
@@ -469,12 +469,20 @@ When **removing** a gate, also remove its catalog row in the same PR.
 
 ---
 
-### 6.13 `create-site` (13 gates)
+### 6.13 `create-site` (21 gates)
 
 | ID | Kind | Category | Phase | Trigger / question | Cancel leaves |
 |---|---|---|---|---|---|
-| `create-site:0.site-type` | gate | plan | 0 | Ambiguous request — choose SPA site or platform-provisioned non-SPA site | nothing |
 | `create-site:1.purpose` | gate | plan | 1 | Site purpose unclear — multi-question prompt (site name, framework, purpose, audience, location) | nothing |
+| `create-site:1.5.confirm-environment` | gate | consent | 1.5 | Confirm the resolved target environment before template install preflights | template-cache |
+| `create-site:1.5.unblock-js` | gate | consent | 1.5 | Approve removing `.js` from the target environment's blocked attachments before uploading website code | attachment-block-modified |
+| `create-site:1.5.template-import` | gate | consent | 1.5 | Confirm installing the selected template in the current environment | template-cache |
+| `create-site:1.5.update-installed` | gate | consent | 1.5 | Confirm updating each already-installed unmanaged template solution | template-cache |
+| `create-site:1.5.reinstall-unknown` | gate | consent | 1.5 | Installed-solution detection failed; confirm whether to import | template-cache |
+| `create-site:1.5.clone-existing` | gate | consent | 1.5 | Confirm creating a new site while reusing already-installed supporting solutions | template-cache |
+| `create-site:1.5.pack-failed` | gate | progress | 1.5 | Choose how to proceed after preparing the local solution package fails | template-cache |
+| `create-site:1.5.import-failed` | gate | progress | 1.5 | Choose how to proceed after template solution import fails | partial-unmanaged-template-import |
+| `create-site:1.5.clone-failed` | gate | progress | 1.5 | Choose how to proceed after cloning, building, or uploading the packaged template site fails | partial-template-clone |
 | `create-site:3.requirements` | gate | plan | 3 | *"Which features? / Aesthetic / Mood / Brand"* — shared SPA planning prompt, with a brand URL/colors/logo follow-up only when missing; shapes the rendered Phase 4 plan | nothing |
 | `create-site:4.7.plan-approval` | gate | plan | 4.7 | HTML plan rendered — *"Approve and start building / I'd like to make changes"* | nothing |
 | `create-site:5.7.critique-blocked` | gate | progress | 5.7 | A critical design gate still fails after three critique rounds - *"Keep fixing / Continue and record it as a known issue / Stop here"* | nothing |
@@ -498,13 +506,24 @@ When **removing** a gate, also remove its catalog row in the same PR.
 
 ---
 
-### 6.14 `deploy-site` (12 calls)
+### 6.13.2 `add-localization` (3 gates)
+
+| ID | Kind | Category | Phase | Trigger / question | Cancel leaves |
+|---|---|---|---|---|---|
+| `add-localization:3.plan-approval` | gate | plan | 3 | Approve the complete localization delta before dependencies or site files change | rendered-plan |
+| `add-localization:7.review` | gate | plan | 7 | Accept the verified localization result or request a focused revision | localized-site-files |
+| `add-localization:8.deploy` | gate | plan | 8 | Choose whether to deploy after a standalone localization run | localized-site-files |
+
+---
+
+### 6.14 `deploy-site` (13 calls)
 
 | ID | Kind | Category | Phase | Trigger / question | Cancel leaves |
 |---|---|---|---|---|---|
 | `deploy-site:2.auth-url` | not-a-gate | — | 2 | Free-text env URL when PAC CLI not authenticated — data-gathering | — |
 | `deploy-site:0.project-type` | gate | plan | 0 | Multiple/mixed SPA and non-SPA candidates — select the exact project and type | nothing |
 | `deploy-site:3.confirm-env` | gate | consent | 3 | Echoes current env — *"Deploy to this environment? Yes / No, choose different"*. Covers the follow-up "pick different env" sub-prompt at the same step (single section, paired by marker proximity). Wrong-env deploy is destructive — confirmation is mandatory. | nothing |
+| `deploy-site:non-spa-3.confirm-env` | gate | consent | Non-SPA 3 | Confirm the exact target environment before querying and uploading the non-SPA site; repeat after switching environments | nothing |
 | `deploy-site:4.1.multi-project` | gate | plan | 4.1 | Multiple `powerpages.config.json` candidates found — *"Which project to deploy?"* | nothing |
 | `deploy-site:4.2.audit-permissions` | gate | plan | 4.2 | Re-deployment detected (`.powerpages-site` exists) — *"Run permissions audit first / Skip"* | nothing |
 | `deploy-site:5.5.1.activate` | gate | plan | 5.5.1 | Site not yet activated — *"Activate now / Skip"* | nothing |

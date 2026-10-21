@@ -93,9 +93,9 @@ The selected environment has not been queried yet, so do not show Enhanced or St
 
 Reuse the parent deployment environment consent semantics:
 
-<!-- gate: deploy-site:3.confirm-env | category=consent | cancel-leaves=nothing -->
+<!-- gate: deploy-site:non-spa-3.confirm-env | category=consent | cancel-leaves=nothing -->
 
-> 🚦 **Gate (consent · deploy-site:3.confirm-env):** Confirm the exact target environment before
+> 🚦 **Gate (consent · deploy-site:non-spa-3.confirm-env):** Confirm the exact target environment before
 > querying and uploading the non-SPA site.
 
 Use `AskUserQuestion`: **Deploy to this environment / Choose another environment / Cancel**.

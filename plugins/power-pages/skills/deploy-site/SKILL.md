@@ -64,19 +64,9 @@ If ambiguous, use `AskUserQuestion` to select the exact project root and detecte
 
 ### Non-SPA upload approval
 
-The non-SPA workflow contains the detailed call sites below. These markers keep its
-pre-upload permissions review and cloud-mutation gates visible to the repository gate catalog.
-
-<!-- gate: deploy-site:non-spa-4.permissions-audit | category=plan | cancel-leaves=local-customization -->
-
-> 🚦 **Gate (plan · deploy-site:non-spa-4.permissions-audit):** Permission-sensitive
-> non-SPA metadata changed — run `/audit-permissions` before upload, explicitly continue
-> without it, or cancel.
-
-<!-- gate: deploy-site:non-spa-5.upload | category=final | cancel-leaves=local-customization -->
-
-> 🚦 **Gate (final · deploy-site:non-spa-5.upload):** Approve the exact non-SPA root,
-> environment, website identity, model, and local change summary immediately before upload.
+The authoritative markers and prompts live in `workflows/non-spa-site.md`.
+Gate `deploy-site:non-spa-4.permissions-audit` handles permission-sensitive changes before upload.
+Gate `deploy-site:non-spa-5.upload` approves the exact root, environment, website identity, model, and local change summary immediately before upload.
 
 ## SPA-Site Deployment Workflow
 

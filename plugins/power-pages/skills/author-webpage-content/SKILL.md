@@ -18,8 +18,7 @@ allowed-tools: Read, Write, Edit, Grep, Glob, Bash, TaskCreate, TaskUpdate, Task
 model: sonnet
 ---
 
-> **Plugin check**: Run `node "${PLUGIN_ROOT}/scripts/check-version.js"` — if it
-> outputs a message, show it to the user before proceeding.
+> **Plugin check**: Run `node "${PLUGIN_ROOT}/scripts/check-version.js"` — if it outputs a message, show it to the user before proceeding.
 
 # Author Webpage Content
 

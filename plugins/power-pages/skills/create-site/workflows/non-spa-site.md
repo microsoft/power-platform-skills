@@ -114,6 +114,8 @@ Create all eight tasks before starting:
    than assuming English or displaying a raw LCID. If authentication is missing, guide the user
    through `pac auth create` or `az login`, then retry.
 
+<!-- gate: create-site:non-spa-1-confirm-environment | category=consent | cancel-leaves=nothing -->
+
 > 🚦 **Gate (consent · create-site:non-spa-1-confirm-environment):** Confirm the exact environment
 > before template selection and provisioning.
 >
@@ -132,6 +134,8 @@ Create all eight tasks before starting:
    ```
 
    The expected capability status is `indeterminate` because no documented API reads the toggle.
+
+<!-- gate: create-site:non-spa-1-confirm-capability | category=progress | cancel-leaves=nothing -->
 
 > 🚦 **Gate (progress · create-site:non-spa-1-confirm-capability):** Require administrator
 > confirmation that **Switch to enhanced data model** is enabled.
@@ -175,6 +179,8 @@ requirements, not its final appearance. Template previews and starter layouts ar
 not a visual commitment. Carry forward genuinely requested capabilities and content; customization
 may recompose supported native sections and establish a new identity without changing the data
 model or weakening platform contracts. Honor explicit user preservation preferences.
+
+<!-- gate: create-site:non-spa-2-select-template | category=plan | cancel-leaves=nothing -->
 
 > 🚦 **Gate (plan · create-site:non-spa-2-select-template):** Select the exact supported template
 > identifier submitted to Create Website.
@@ -298,6 +304,8 @@ Subdomain: <subdomain>
 Website record ID: Assigned by Power Pages during provisioning
 Download destination: <resolved path>
 ```
+
+<!-- gate: create-site:non-spa-4-provision | category=final | cancel-leaves=nothing -->
 
 > 🚦 **Gate (final · create-site:non-spa-4-provision):** Final consent immediately before the Create
 > Website API call.

@@ -29,7 +29,7 @@
 //              (matched by `` `AskUserQuestion` `` near a `:`).
 //     Require: the same section contains at least one preceding
 //              `<!-- gate: ... -->` or `<!-- not-a-gate: ... -->` marker.
-//     Scope:   Every SKILL.md and references/*-workflow.md under skills/ → severity 'error'.
+//     Scope:   Every SKILL.md, references/*-workflow.md and workflows/*.md under skills/ → severity 'error'.
 //              (v2 had a warn-only branch for non-ALM skills; v3 removed it once
 //              the catalog in references/approval-gates.md was extended to cover
 //              the full skill set — see §10 landing history.)
@@ -528,12 +528,13 @@ function checkSectionPairing(content) {
 function collectFindings({ pluginRoot }) {
   const findings = [];
   const { entries: allowlistEntries } = loadAllowlist(pluginRoot);
-  // Reference workflows own approval even without a skill registration. Use the
-  // workflow filename contract rather than gate presence so deleting every marker
+  // Reference and branch workflows own approval even without a skill registration.
+  // Use workflow paths rather than gate presence so deleting every marker
   // cannot also remove that workflow from prompt/catalog enforcement.
   const workflowFiles = walkFiles(path.join(pluginRoot, 'skills'), (p) =>
     p.endsWith(`${path.sep}SKILL.md`) ||
-    (p.includes(`${path.sep}references${path.sep}`) && p.endsWith('-workflow.md'))
+    (p.includes(`${path.sep}references${path.sep}`) && p.endsWith('-workflow.md')) ||
+    (p.includes(`${path.sep}workflows${path.sep}`) && p.endsWith('.md'))
   );
 
   const scriptFiles = walkFiles(path.join(pluginRoot, 'scripts'), (p) => {

@@ -832,6 +832,33 @@ test('reference workflows cover catalog gates without their own skill registrati
   assert.deepEqual(collectFindings({ pluginRoot: root }), []);
 });
 
+test('branch workflows cover catalog gates without a -workflow filename suffix', (t) => {
+  const root = mkPluginRoot(t);
+  const id = 'create-site:non-spa-4-provision';
+  writeCatalogTable(root, [{ id, kind: 'gate' }]);
+  const dir = path.join(root, 'skills', 'create-site', 'workflows');
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, 'non-spa-site.md'), [
+    '# Provision',
+    `<!-- gate: ${id} | category=final | cancel-leaves=nothing -->`,
+    `> 🚦 **Gate (final · ${id}):** Approve provisioning.`,
+    'Use `AskUserQuestion`: **Create / Cancel**.',
+  ].join('\n'));
+  assert.deepEqual(collectFindings({ pluginRoot: root }), []);
+});
+
+test('branch workflows enforce marker pairing even when every marker is missing', (t) => {
+  const root = mkPluginRoot(t);
+  const dir = path.join(root, 'skills', 'create-site', 'workflows');
+  fs.mkdirSync(dir, { recursive: true });
+  const file = path.join(dir, 'non-spa-site.md');
+  fs.writeFileSync(file, '# Provision\n\nUse `AskUserQuestion`: **Create / Cancel**.\n');
+  const findings = collectFindings({ pluginRoot: root });
+  assert.deepEqual(findings.map(({ rule, file: findingFile }) => ({ rule, file: findingFile })), [
+    { rule: 'GATE-must-have-marker', file },
+  ]);
+});
+
 test('reference workflows enforce marker pairing even when every marker is missing', (t) => {
   const root = mkPluginRoot(t);
   const file = writeReferenceWorkflow(root, 'edit-site',

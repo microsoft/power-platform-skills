@@ -17,16 +17,10 @@ test('getAuthToken calls az account get-access-token without --allow-no-subscrip
   });
 
   assert.equal(token, 'fake-token-value');
-  assert.equal(
-    captured.file,
-    process.platform === 'win32'
-      ? 'C:\\Program Files\\Microsoft SDKs\\Azure\\CLI2\\python.exe'
-      : 'az',
-  );
+  assert.equal(captured.file, 'az');
   assert.deepEqual(
     captured.args,
     [
-      ...(process.platform === 'win32' ? ['-IBm', 'azure.cli'] : []),
       'account',
       'get-access-token',
       '--resource',
