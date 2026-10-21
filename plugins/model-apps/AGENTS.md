@@ -2127,10 +2127,19 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   created again was answered `Ya existe una clave de entidad con el nombre … en la entidad …` (HTTP 400, `0x80060893`), and a
   rebuild that read only English words halted there. So each of those creates also recognises the answer by the `error.code` of its
   body — `ALREADY_EXISTS_CODES` in `lib/entity-provision.js`, read by `serviceCodeOf` (`lib/retry-policy.js`) from the SDK's
-  `ConnectionError`: `0x80060893` for a key, `0x80044310` for a status reason's value, `0x80060304` and `0x80047013` for a column
-  (and for the lookup column of a 1:N), `0x8009050d` (measured; not in the platform's reference) and `0x8004700b` for a table,
-  `0x8004432B` for a relationship's name
+  `ConnectionError`: `0x80060893` for a key, `0x80044310` for a status reason's value, `0x80047013` (measured, on 13 column types)
+  and `0x80060304` for a column, `0x80044363` (measured), `0x8009050d` (measured; not in the platform's reference) and `0x8004700b`
+  for a table; for a 1:N `0x80072551` (measured), the reference's name code `0x8004432B` and the column codes for its lookup column;
+  for an N:N the name code only
   ([web service error codes](https://learn.microsoft.com/en-us/power-apps/developer/data-platform/reference/web-service-error-codes)).
+  Two of them speak of something another component can hold, so each is listed for one create only, where the read that follows
+  decides. `0x80044363` ("The schema name … for type Entity is not unique. An … with same name already exists.", the answer to the
+  create of an existing table) is about a schema name: a name held by anything but a table finds no table on that read, and the
+  create's own error stops the build. `0x80072551` ("NavigationPropertyName … is not unique within an entity", the answer to the
+  create of an existing 1:N — in words no English rule matched, so such a relationship stopped the build in every language) is about
+  the navigation property the create names after the relationship: the build reuses only the declared relationship that the read of
+  the name, or of the lookup column's owner, proves, and any other relationship holding it — or an answer the read cannot prove —
+  stops the build.
   The codes only add recognition, and prove no more than the English words of the same refusal: the 409 and English-word rules are
   unchanged, and they apply whatever code the answer carries, an unlisted one included — an English `0x80060894` answer (another key
   over the same columns, "An entity key with the selected attributes already exists on entity.") is still a skip, as it was. A code

@@ -8,12 +8,19 @@
 //
 // Each create that reads such an answer is run here twice through the real vendored SDK, over a transport that answers only what a test
 // models: once answered in English and once in another language, with the same code. The other language must come to the same outcome
-// — the same steps, warnings, requests and result. Only the key's Spanish text is the platform's own; the other non-English texts are
+// — the same steps, warnings, requests and result. Of the non-English texts only the key's Spanish one is the platform's own (the same
+// environment answered the other creates in English, and those English texts are its own too where a test says so); the others are
 // written for these tests, to be words the English rule cannot read. The codes are the ones lib/entity-provision.js documents
 // (ALREADY_EXISTS_CODES). What must not move: a code of ANOTHER create, a generic code, and a code that the words only quote do not by
 // themselves make an answer an already-exists one — given words the English rule cannot read, such an answer stops the build (the 409
 // and English-word rules are unchanged and still apply whatever code an answer carries); and the reads that decide a table and a
 // relationship are made as before.
+//
+// Two codes are broader than the create they are listed for, and are pinned on both sides of the read that decides: the table create's
+// 0x80044363 (a schema name that is not unique — what an existing table's create was answered, live, but a name another kind of
+// component can hold too), and the 1:N create's 0x80072551 (a navigation property that is not unique — what an existing 1:N's create was
+// answered, live, in words no English rule matched, so such a relationship stopped the build in every language; but another
+// relationship can hold that navigation property too).
 // See: https://learn.microsoft.com/en-us/power-apps/developer/data-platform/reference/web-service-error-codes
 const { test } = require('node:test');
 const assert = require('node:assert');
@@ -143,6 +150,9 @@ test('an alternate key refused in another language with a code that does not say
     ['the generic code', refused(GENERIC, 'Ya existe una clave de entidad con el nombre contoso_codekey en la entidad contoso_project.')],
     // The code is read from the answer's `error.code`, never from its words.
     ['a code the words only quote', refused(GENERIC, 'Error 0x80060893: ya existe una clave de entidad con el nombre contoso_codekey.')],
+    // The two codes that are broader than their create count for that create only: a schema name (a table's) and a navigation property (a 1:N's).
+    ['the code of a schema name that is not unique, a table create\'s', refused('0x80044363', 'El nombre de esquema contoso_codekey para el tipo EntityKey no es unico.')],
+    ['the code of a navigation property that is not unique, a 1:N create\'s', refused('0x80072551', 'NavigationPropertyName contoso_codekey no es unico dentro de una entidad')],
   ]) {
     const run = await build(KEYED, keyRefusedWith(keyAnswer));
     assertStopsAt(run, 'alt key contoso_Project.contoso_CodeKey', keyAnswer.body.error.message, what);
@@ -227,10 +237,38 @@ test('a table create refused in Spanish as existing, whose table the next read d
   }
 });
 
+// What an environment answered the create of a table that exists (live-captured: the names replaced, and the server's stack trace that
+// follows the message cut to its first line), and the same refusal in words the English rule cannot read.
+const TABLE_NAME_NOT_UNIQUE = 'Failed to create entity with logical name contoso_project and object type code -1. Exception: Microsoft.Crm.CrmException: The schema name contoso_project for type Entity is not unique. An contoso_project with same name already exists.\r\n   at Microsoft.Crm.Metadata.SchemaNameValidator.ValidateSchemaNameIsUnique(String metadataEntityName, String attributeName, ISqlExecutionContext sqlContext)';
+const TABLE_NAME_NOT_UNIQUE_ES = 'No se pudo crear la entidad con el nombre logico contoso_project. El nombre de esquema contoso_project para el tipo Entity no es unico. Ya existe un contoso_project con el mismo nombre.';
+
+test('a table create refused because its schema name is not unique (0x80044363, the answer to an existing table\'s create, live) is followed by the read that finds the table, in Spanish exactly as in English', async () => {
+  const english = await build(TABLE, tableRefusedWith(refused('0x80044363', TABLE_NAME_NOT_UNIQUE)));
+  assert.deepStrictEqual(english.unmodelled, []);
+  assert.strictEqual(english.error, undefined, english.error && english.error.message);
+  assert.deepStrictEqual(english.steps, ['ok table contoso_Project'], 'the table is taken as it is found, and nothing else is made');
+  assert.deepStrictEqual(english.requests, [`GET ${PROBE}`, 'POST /EntityDefinitions', `GET ${PROBE}`]);
+  assert.deepStrictEqual(english.result.entities, { contoso_Project: { logicalName: 'contoso_project', entitySetName: 'contoso_projects' } });
+  const spanish = await build(TABLE, tableRefusedWith(refused('0x80044363', TABLE_NAME_NOT_UNIQUE_ES)));
+  assert.strictEqual(spanish.error, undefined, spanish.error && spanish.error.message);
+  assert.deepStrictEqual(outcomeOf(spanish), outcomeOf(english), 'the same steps, warnings, requests and result as the English answer');
+});
+
+test('a table create refused with 0x80044363 for a name that something other than a table holds finds no table when it reads again, and stops the build with the create\'s own error — in Spanish as in English', async () => {
+  // SchemaNameisNotUnique is about a schema name, not a table: a component of another kind can hold the name. It is only the cue for the
+  // read that follows, and that read finds no table.
+  for (const [language, words] of [['English', 'The schema name contoso_project for type Entity is not unique. An contoso_project with same name already exists.'], ['Spanish', TABLE_NAME_NOT_UNIQUE_ES]]) {
+    const run = await build(TABLE, tableRefusedWith(refused('0x80044363', words), { foundAfter: false }));
+    assertStopsAt(run, 'table contoso_Project', words, language);
+    assert.deepStrictEqual(run.requests, [`GET ${PROBE}`, 'POST /EntityDefinitions', `GET ${PROBE}`], `${language}: the table was looked for again, once, and not found`);
+  }
+});
+
 test('a table create refused in another language with a code that does not say the table exists stops the build, as before', async () => {
   for (const [what, tableAnswer] of [
     ['the code of a relationship that exists', refused('0x8004432b', 'Ya existe una relacion con el nombre especificado.')],
     ['the code of a column that exists', refused('0x80047013', 'Ya existe un atributo con el nombre especificado.')],
+    ['the code of a navigation property that is not unique, a 1:N create\'s', refused('0x80072551', 'NavigationPropertyName contoso_project no es unico dentro de una entidad')],
     ['the generic code', refused(GENERIC, 'Ya existen las entidades: contoso_Project.')],
   ]) {
     const run = await build(TABLE, tableRefusedWith(tableAnswer));
@@ -255,9 +293,10 @@ const columnsRefusedWith = (columnAnswer, customerAnswer) => (method, asked) => 
 };
 
 test('columns refused in Spanish because they exist (0x80060304, 0x80047013) are skipped exactly as the English refusals are', async () => {
+  // The 0x80047013 English text is the platform's own (live-captured, the same for every column type the build makes; names replaced).
   const english = await build(COLUMNED, columnsRefusedWith(
     refused('0x80060304', 'Attribute contoso_code already exists for entity contoso_project.'),
-    refused('0x80047013', 'An attribute with the specified name contoso_customer already exists.'),
+    refused('0x80047013', 'An attribute with the specified name contoso_customer already exists for entity contoso_project.'),
   ));
   assert.deepStrictEqual(english.unmodelled, []);
   assert.strictEqual(english.error, undefined, english.error && english.error.message);
@@ -279,6 +318,8 @@ test('a column refused in another language with a code that does not say the col
     ['the code of a taken option value', refused('0x80044310', 'Ya existe el valor de la lista desplegable. Los valores deben ser unicos.')],
     ['the code of an alternate key that exists', refused('0x80060893', 'Ya existe una clave de entidad con el nombre contoso_code en la entidad contoso_project.')],
     ['the code of a relationship that exists', refused('0x8004432b', 'Ya existe una relacion con el nombre especificado.')],
+    ['the code of a schema name that is not unique, a table create\'s', refused('0x80044363', 'El nombre de esquema contoso_code para el tipo Attribute no es unico.')],
+    ['the code of a navigation property that is not unique, a 1:N create\'s', refused('0x80072551', 'NavigationPropertyName contoso_code no es unico dentro de una entidad')],
     ['the generic code', refused(GENERIC, 'El atributo contoso_code ya existe para la entidad contoso_project.')],
   ]) {
     const run = await build(COLUMNED, columnsRefusedWith(columnAnswer, created));
@@ -295,13 +336,18 @@ const RELATED = { solution: SOLUTION, entities: [], relationships: [{
   type: 'OneToMany', schemaName: SCHEMA, referenced: 'contoso_project', referencing: 'contoso_task', lookup: { schemaName: 'contoso_ProjectId', displayName: 'Proyecto' },
 }] };
 const HELD = { SchemaName: SCHEMA, ReferencedEntity: 'contoso_project', ReferencingEntity: 'contoso_task', ReferencingAttribute: 'contoso_projectid' };
-// `holder` is what the read of the name answers (none: the name is free), `owners` the relationships the referencing table lists.
-const relationshipRefusedWith = (relationshipAnswer, { holder = HELD, owners = [] } = {}) => (method, asked) => {
+// `holder` is what the read of the name answers (none: the name is free), `owners` the relationships the referencing table lists as its
+// many-to-one, `listed` the ones the referenced table lists as its one-to-many (the probe's read, and the search for the name);
+// `nameReadFails` answers the read of the name with a server error.
+const relationshipRefusedWith = (relationshipAnswer, { holder = HELD, owners = [], listed = [], nameReadFails = false } = {}) => (method, asked) => {
   let m;
   if (method === 'GET' && (m = /^\/EntityDefinitions\(LogicalName='(contoso_project|contoso_task)'\)\/(OneToMany|ManyToOne|ManyToMany)Relationships\?\$select=[\w,]+$/.exec(asked))) {
-    return ok({ value: m[1] === 'contoso_task' && m[2] === 'ManyToOne' ? owners : [] });
+    if (m[1] === 'contoso_task' && m[2] === 'ManyToOne') return ok({ value: owners });
+    if (m[1] === 'contoso_project' && m[2] === 'OneToMany') return ok({ value: listed });
+    return ok({ value: [] });
   }
   if (method === 'GET' && asked === `/RelationshipDefinitions(SchemaName='${SCHEMA}')?$select=SchemaName,RelationshipType`) {
+    if (nameReadFails) return answer(500, GENERIC, 'An unexpected error occurred.');
     return holder ? ok({ SchemaName: SCHEMA, RelationshipType: 'OneToManyRelationship' }) : absent(`RelationshipMetadataBase With Id = SchemaName='${SCHEMA}' does not exist.`);
   }
   if (method === 'GET' && holder && asked === `/RelationshipDefinitions(SchemaName='${SCHEMA}')/Microsoft.Dynamics.CRM.OneToManyRelationshipMetadata?$select=SchemaName,ReferencedEntity,ReferencingEntity,ReferencingAttribute`) {
@@ -355,6 +401,7 @@ test('a relationship refused in another language with a code that does not say t
   for (const [what, relationshipAnswer] of [
     // An N:N makes a table for its links; the build does not look for a relationship behind a table that exists.
     ['the code of a table that exists', refused('0x8009050d', 'Ya existen las entidades: contoso_project_contoso_task.')],
+    ['the code of a schema name that is not unique, a table create\'s', refused('0x80044363', 'El nombre de esquema contoso_project_contoso_task para el tipo EntityRelationship no es unico.')],
     ['the code of an alternate key that exists', refused('0x80060893', 'Ya existe una clave de entidad con el nombre contoso_projectid en la entidad contoso_task.')],
     ['the generic code', refused(GENERIC, 'Ya existe una relacion con el nombre especificado.')],
   ]) {
@@ -364,10 +411,109 @@ test('a relationship refused in another language with a code that does not say t
   }
 });
 
+// What an environment answered the create of a 1:N that exists (live-captured, names replaced): the navigation property the create names
+// after the relationship's schema name is not unique on the table. No English words of the rule match it, so such a relationship stopped
+// the build in every language. And the same refusal in words of another language.
+const NAVIGATION_NOT_UNIQUE = `NavigationPropertyName ${SCHEMA} is not unique within an entity`;
+const NAVIGATION_NOT_UNIQUE_ES = `NavigationPropertyName ${SCHEMA} no es unico dentro de una entidad`;
+
+test('a 1:N create refused because its navigation property is not unique (0x80072551, the answer to an existing 1:N\'s create, live) reuses the declared relationship once the read of its name proves it — in English and in Spanish alike', async () => {
+  const english = await build(RELATED, relationshipRefusedWith(refused('0x80072551', NAVIGATION_NOT_UNIQUE)));
+  assert.deepStrictEqual(english.unmodelled, []);
+  assert.strictEqual(english.error, undefined, english.error && english.error.message);
+  assert.deepStrictEqual(english.steps, ['skip relationship 1:N contoso_project->contoso_task (exists)'], 'the relationship that holds the name is the declared one');
+  // The same reads prove it as for a refusal of the name: the read of the relationship of that name, and its typed read.
+  const byName = await build(RELATED, relationshipRefusedWith(refused('0x8004432B', 'A relationship with the specified name already exists. Please specify a unique name.')));
+  assert.deepStrictEqual(outcomeOf(english), outcomeOf(byName), 'the same steps, warnings, requests and result as a refusal of the name');
+  const spanish = await build(RELATED, relationshipRefusedWith(refused('0x80072551', NAVIGATION_NOT_UNIQUE_ES)));
+  assert.strictEqual(spanish.error, undefined, spanish.error && spanish.error.message);
+  assert.deepStrictEqual(outcomeOf(spanish), outcomeOf(english), 'the same steps, warnings, requests and result as the English answer');
+});
+
+test('a 1:N refused with 0x80072551 whose name is held by ANOTHER relationship stops the build and names it, in English and in Spanish: the code is not a proof', async () => {
+  const other = { ...HELD, ReferencingAttribute: 'contoso_ownerid' };
+  for (const [language, words] of [['English', NAVIGATION_NOT_UNIQUE], ['Spanish', NAVIGATION_NOT_UNIQUE_ES]]) {
+    const run = await build(RELATED, relationshipRefusedWith(refused('0x80072551', words), { holder: other }));
+    assert.deepStrictEqual(run.unmodelled, [], language);
+    assert.ok(run.error instanceof BuildHalt, `${language}: ${run.error && run.error.message}`);
+    assert.match(run.error.message, /relationship schema name 'contoso_project_contoso_task' is already used by 1:N contoso_project -> contoso_task \(lookup contoso_ownerid\)/, language);
+    assert.deepStrictEqual(run.steps, ['error relationship 1:N contoso_project->contoso_task'], language);
+  }
+});
+
+test('a 1:N refused with 0x80072551 whose navigation property a relationship of ANOTHER name holds, the name itself being free, stops the build in English and in Spanish: nothing is reused on the code', async () => {
+  // The referenced table lists a relationship of another name over another lookup — the one in the way. The read of the declared name finds
+  // nothing, no relationship owns the declared lookup column, the name is read twice more, and the build stops.
+  const old = { SchemaName: 'contoso_project_tasks_old', ReferencingEntity: 'contoso_task', ReferencingAttribute: 'contoso_oldprojectid' };
+  const owners = [{ SchemaName: 'contoso_project_tasks_old', ReferencedEntity: 'contoso_project', ReferencingAttribute: 'contoso_oldprojectid' }];
+  const nameRead = `GET /RelationshipDefinitions(SchemaName='${SCHEMA}')?$select=SchemaName,RelationshipType`;
+  for (const [language, words] of [['English', NAVIGATION_NOT_UNIQUE], ['Spanish', NAVIGATION_NOT_UNIQUE_ES]]) {
+    const run = await build(RELATED, relationshipRefusedWith(refused('0x80072551', words), { holder: null, listed: [old], owners }));
+    assert.deepStrictEqual(run.unmodelled, [], language);
+    assert.ok(run.error instanceof BuildHalt, `${language}: ${run.error && run.error.message}`);
+    assert.match(run.error.message, /relationship schema name 'contoso_project_contoso_task' is already used by a relationship the build could not identify\. Give it an explicit "schemaName"\./, language);
+    assert.deepStrictEqual(run.steps, ['error relationship 1:N contoso_project->contoso_task'], language);
+    assert.strictEqual(run.requests.filter((request) => request === nameRead).length, 3, `${language}: the name was read, and read twice again`);
+  }
+});
+
+test('a 1:N refused with 0x80072551 is not skipped when the read of its name cannot prove the declared relationship — an incomplete answer, a read that fails — in English and in Spanish', async () => {
+  // Only the declared relationship, proven by the read, is a skip (`sameRelationshipExists`). The build's own words for these two stops say
+  // "already exists", which the English rule would read: the proof, not the words, is what the skip is held to.
+  for (const [what, options, stop] of [
+    ['an answer that leaves out the referencing table and the lookup', { holder: { SchemaName: SCHEMA, ReferencedEntity: 'contoso_project' } },
+      /relationship schema name 'contoso_project_contoso_task' already exists, but the environment's answer for it is incomplete/],
+    ['a read of the name that fails', { nameReadFails: true },
+      /could not identify the relationship that already uses schema name 'contoso_project_contoso_task'/],
+  ]) {
+    for (const [language, words] of [['English', NAVIGATION_NOT_UNIQUE], ['Spanish', NAVIGATION_NOT_UNIQUE_ES]]) {
+      const run = await build(RELATED, relationshipRefusedWith(refused('0x80072551', words), options));
+      assert.deepStrictEqual(run.unmodelled, [], `${what}, ${language}`);
+      assert.ok(run.error instanceof BuildHalt, `${what}, ${language}: ${run.error && run.error.message}`);
+      assert.match(run.error.message, stop, `${what}, ${language}`);
+      assert.deepStrictEqual(run.steps, ['error relationship 1:N contoso_project->contoso_task'], `${what}, ${language}`);
+    }
+  }
+});
+
+// --- an N:N the probe did not see -------------------------------------------------------------------------------------------------
+// An N:N's identity includes the table that holds its links. Its create reads the holder of its name on the reference's code for a taken
+// name; the 1:N's navigation-property code is not listed for it (the answer to an existing N:N's create has not been captured).
+const INTERSECT = 'contoso_project_task_links';
+const RELATED_NN = { solution: SOLUTION, entities: [], relationships: [{ type: 'ManyToMany', schemaName: SCHEMA, entity1: 'contoso_project', entity2: 'contoso_task', intersectEntityName: INTERSECT }] };
+const NN_SELECT = 'SchemaName,Entity1LogicalName,Entity2LogicalName,IntersectEntityName,Entity1IntersectAttribute,Entity2IntersectAttribute';
+const HELD_NN = { SchemaName: SCHEMA, Entity1LogicalName: 'contoso_project', Entity2LogicalName: 'contoso_task', IntersectEntityName: INTERSECT, Entity1IntersectAttribute: 'contoso_projectid', Entity2IntersectAttribute: 'contoso_taskid' };
+const manyToManyRefusedWith = (relationshipAnswer) => (method, asked) => {
+  if (method === 'GET' && asked === `/EntityDefinitions(LogicalName='contoso_project')/ManyToManyRelationships?$select=${NN_SELECT}`) return ok({ value: [] });
+  if (method === 'GET' && asked === `/RelationshipDefinitions(SchemaName='${SCHEMA}')?$select=SchemaName,RelationshipType`) return ok({ SchemaName: SCHEMA, RelationshipType: 'ManyToManyRelationship' });
+  if (method === 'GET' && asked === `/RelationshipDefinitions(SchemaName='${SCHEMA}')/Microsoft.Dynamics.CRM.ManyToManyRelationshipMetadata?$select=${NN_SELECT}`) return ok(HELD_NN);
+  if (method === 'POST' && asked === '/RelationshipDefinitions') return relationshipAnswer;
+  return undefined;
+};
+
+test('an N:N create refused in Spanish because its name is taken (0x8004432B) reuses the declared N:N once the read proves it, exactly as the English refusal does', async () => {
+  const english = await build(RELATED_NN, manyToManyRefusedWith(refused('0x8004432B', 'A relationship with the specified name already exists. Please specify a unique name.')));
+  assert.deepStrictEqual(english.unmodelled, []);
+  assert.strictEqual(english.error, undefined, english.error && english.error.message);
+  assert.deepStrictEqual(english.steps, ['skip relationship N:N contoso_project<->contoso_task (exists)'], 'the N:N that holds the name is the declared one');
+  const spanish = await build(RELATED_NN, manyToManyRefusedWith(refused('0x8004432B', 'Ya existe una relacion con el nombre especificado. Especifique un nombre unico.')));
+  assert.strictEqual(spanish.error, undefined, spanish.error && spanish.error.message);
+  assert.deepStrictEqual(outcomeOf(spanish), outcomeOf(english), 'the same steps, warnings, requests and result as the English answer');
+});
+
+test('an N:N create refused with 0x80072551, the 1:N create\'s navigation-property code, stops the build at once in English and in Spanish: the holder of the name is not read', async () => {
+  for (const [language, words] of [['English', NAVIGATION_NOT_UNIQUE], ['Spanish', NAVIGATION_NOT_UNIQUE_ES]]) {
+    const run = await build(RELATED_NN, manyToManyRefusedWith(refused('0x80072551', words)));
+    assertStopsAt(run, 'relationship N:N contoso_project<->contoso_task', words, language);
+    assert.ok(!run.requests.some((request) => request.startsWith('GET /RelationshipDefinitions(')), `${language}: the holder of the name is not read — ${run.requests.join(' | ')}`);
+  }
+});
+
 // The codes are compared as the plugin reads them from an answer — lower case (the platform writes them in either case) — so a code
-// written in capitals here would never match. Each create that reads an already-exists answer has its own list.
+// written in capitals here would never match. Each create that reads an already-exists answer has its own list, and the two codes that are
+// broader than a create are listed for one create each: where a read that follows the refusal decides.
 test('each create\'s already-exists codes are written as the plugin reads them: lower-case 0x and eight hex digits, none listed for a create it does not answer', () => {
-  assert.deepStrictEqual(Object.keys(ALREADY_EXISTS_CODES).sort(), ['alternateKey', 'column', 'relationship', 'statusReason', 'table']);
+  assert.deepStrictEqual(Object.keys(ALREADY_EXISTS_CODES).sort(), ['alternateKey', 'column', 'manyToManyRelationship', 'oneToManyRelationship', 'statusReason', 'table']);
   for (const [create, codes] of Object.entries(ALREADY_EXISTS_CODES)) {
     assert.ok(codes.size > 0, create);
     for (const code of codes) assert.match(code, /^0x[0-9a-f]{8}$/, `${create}: ${code}`);
@@ -375,7 +521,11 @@ test('each create\'s already-exists codes are written as the plugin reads them: 
   }
   assert.deepStrictEqual([...ALREADY_EXISTS_CODES.alternateKey], ['0x80060893']);
   assert.deepStrictEqual([...ALREADY_EXISTS_CODES.statusReason], ['0x80044310']);
-  assert.deepStrictEqual([...ALREADY_EXISTS_CODES.table].sort(), ['0x8004700b', '0x8009050d']);
+  assert.deepStrictEqual([...ALREADY_EXISTS_CODES.table].sort(), ['0x80044363', '0x8004700b', '0x8009050d']);
   assert.deepStrictEqual([...ALREADY_EXISTS_CODES.column].sort(), ['0x80047013', '0x80060304']);
-  assert.deepStrictEqual([...ALREADY_EXISTS_CODES.relationship].sort(), ['0x8004432b', '0x80047013', '0x80060304']);
+  assert.deepStrictEqual([...ALREADY_EXISTS_CODES.oneToManyRelationship].sort(), ['0x8004432b', '0x80047013', '0x80060304', '0x80072551']);
+  assert.deepStrictEqual([...ALREADY_EXISTS_CODES.manyToManyRelationship], ['0x8004432b']);
+  for (const [code, only] of [['0x80044363', 'table'], ['0x80072551', 'oneToManyRelationship']]) {
+    assert.deepStrictEqual(Object.keys(ALREADY_EXISTS_CODES).filter((create) => ALREADY_EXISTS_CODES[create].has(code)), [only], `${code} is listed for one create only`);
+  }
 });

@@ -1068,23 +1068,34 @@ function causeChain(err, maxDepth = 6) {
 // for the create that answers it, and only where the platform's reference gives it an "already exists" meaning for what that create
 // makes — never a generic code such as 0x80040216 ("An unexpected error occurred."), and never a neighbouring condition: a key over the
 // same columns under another name (0x80060894, EntityKeyWithSelectedAttributesExists — the declared key is not there), a record that
-// already holds a key's values (0x80060892), a schema name that is not unique among components of any type (0x80044363,
-// SchemaNameisNotUnique). A listed code is taken exactly as the English words of the same refusal are, and proves no more than they do:
-// a status reason, a key or a column is skipped on it (a column's code can name a companion the platform makes beside the column, as its
-// words can), and for a table or a relationship it is only the cue to read what exists, which alone decides what is reused. The lists
-// only ADD recognition: isAlreadyExists keeps its 409 and English-word rules unchanged, and they still read an answer whatever code it
-// carries, an unlisted one included — an English 0x80060894 answer ("An entity key with the selected attributes already exists on
-// entity.") is still a skip, as it always was. Names and messages are the platform's reference:
+// already holds a key's values (0x80060892). Two codes are broader than the thing created — the name or the navigation property they speak
+// of can be held by something else — and each is listed for one create only, where a read that follows the refusal decides: 0x80044363
+// (SchemaNameisNotUnique) for the table create, 0x80072551 (NavigationPropertyAlreadyExists) for the 1:N relationship create. A listed
+// code is taken exactly as the English words of the same refusal are, and proves no more than they do: a status reason, a key or a column
+// is skipped on it (a column's code can name a companion the platform makes beside the column, as its words can), and for a table or a
+// relationship it is only the cue to read what exists, which alone decides what is reused. The lists only ADD recognition:
+// isAlreadyExists keeps its 409 and English-word rules unchanged, and they still read an answer whatever code it carries, an unlisted one
+// included — an English 0x80060894 answer ("An entity key with the selected attributes already exists on entity.") is still a skip, as it
+// always was. Names and messages are the platform's reference:
 // See: https://learn.microsoft.com/en-us/power-apps/developer/data-platform/reference/web-service-error-codes
 // Lower case, because serviceCodeOf (lib/retry-policy.js) lower-cases what it reads: the platform writes a code in either case (the
 // reference spells 0x8004432B with a capital).
 const ALREADY_EXISTS_CODES = Object.freeze({
-  // POST EntityDefinitions. Live-captured: HTTP 400 {"error":{"code":"0x8009050d","message":"Entities already exist: contoso_Project."}} — a code the
-  // reference does not list; and the reference's InvalidSchemaName, 0x8004700b, "An entity with the specified name already exists. Please specify
-  // a unique name.". Never a proof by itself: the build reads the table again and takes it only when that read finds it (findExistingTable).
-  table: Object.freeze(new Set(['0x8009050d', '0x8004700b'])),
-  // POST EntityDefinitions(…)/Attributes, and a Customer column's POST CreateCustomerRelationships: DuplicateAttributePhysicalName, 0x80060304,
-  // "Attribute {0} already exists for entity {1}.", and DuplicateAttributeSchemaName, 0x80047013.
+  // POST EntityDefinitions. Live-captured, the create of a table that exists (names replaced; the server's stack trace that follows cut):
+  //   HTTP 400 {"error":{"code":"0x80044363","message":"Failed to create entity with logical name contoso_project and object type code -1.
+  //   Exception: Microsoft.Crm.CrmException: The schema name contoso_project for type Entity is not unique. An contoso_project with same name
+  //   already exists.\r\n   at Microsoft.Crm.Metadata.SchemaNameValidator.ValidateSchemaNameIsUnique(…)…"}}
+  // SchemaNameisNotUnique speaks of a schema name, which a component of another kind can hold too. Another environment answered the same
+  // create HTTP 400 {"error":{"code":"0x8009050d","message":"Entities already exist: contoso_Project."}} — a code the reference does not list —
+  // and the reference has InvalidSchemaName, 0x8004700b, "An entity with the specified name already exists. Please specify a unique name.".
+  // None of them is a proof: the build reads the table again and takes it only when that read finds it (findExistingTable); a name held by
+  // anything but a table finds no table there, and the create's own error stops the build.
+  table: Object.freeze(new Set(['0x80044363', '0x8009050d', '0x8004700b'])),
+  // POST EntityDefinitions(…)/Attributes, and a Customer column's POST CreateCustomerRelationships: DuplicateAttributeSchemaName, 0x80047013 —
+  // live-captured, the same answer for each of 17 columns of 13 types (Text, Memo, Integer, Decimal, Double, Money, Boolean, DateTime, Choice,
+  // MultiChoice, AutoNumber, File, Image):
+  //   HTTP 400 {"error":{"code":"0x80047013","message":"An attribute with the specified name contoso_code already exists for entity contoso_project."}}
+  // — and DuplicateAttributePhysicalName, 0x80060304, "Attribute {0} already exists for entity {1}.".
   column: Object.freeze(new Set(['0x80060304', '0x80047013'])),
   // POST InsertStatusValue, which the build sends with the reason's pinned value: PicklistValueNotUnique, 0x80044310, "The picklist value already
   // exists. Picklist values must be unique." Live-captured: HTTP 400 {"error":{"code":"0x80044310","message":"The picklist or status value 100000000
@@ -1093,10 +1104,18 @@ const ALREADY_EXISTS_CODES = Object.freeze({
   // POST EntityDefinitions(…)/Keys: EntityKeyNameExists, 0x80060893, "An entity key with the name {0} already exists on entity {1}." — live-captured
   // in English and in Spanish (above).
   alternateKey: Object.freeze(new Set(['0x80060893'])),
-  // POST RelationshipDefinitions: EntityRelationshipSchemaNameNotUnique, 0x8004432b, "A relationship with the specified name already exists. Please
-  // specify a unique name.", and the column codes above for the lookup column a 1:N create makes. Never a proof by itself either: the build reads
-  // the relationship that holds the name, or the one that owns the lookup column, and reuses only the declared one (compareRelationship).
-  relationship: Object.freeze(new Set(['0x8004432b', '0x80060304', '0x80047013'])),
+  // POST RelationshipDefinitions of a 1:N. Live-captured, the create of a 1:N that exists (names replaced):
+  //   HTTP 400 {"error":{"code":"0x80072551","message":"NavigationPropertyName contoso_project_contoso_task is not unique within an entity"}}
+  // NavigationPropertyAlreadyExists: the navigation property the create names after the relationship's schema name is already on the table —
+  // the declared relationship's, or another relationship's. None of the English words matched it, so such a relationship stopped the build in
+  // every language. Also the reference's EntityRelationshipSchemaNameNotUnique, 0x8004432b, "A relationship with the specified name already
+  // exists. Please specify a unique name." (not what the create of an existing 1:N was answered live), and the column codes above, for the
+  // lookup column a 1:N create makes. None of them is a proof: the build reads the relationship that holds the name, or the one that owns the
+  // lookup column, and reuses only the declared one (compareRelationship); any other stops the build.
+  oneToManyRelationship: Object.freeze(new Set(['0x80072551', '0x8004432b', '0x80060304', '0x80047013'])),
+  // POST RelationshipDefinitions of an N:N: the reference's name code only, read the same way (the whole identity of the N:N, the table that
+  // holds its links included). An N:N makes no lookup column, and the answer to the create of an existing N:N has not been captured.
+  manyToManyRelationship: Object.freeze(new Set(['0x8004432b'])),
 });
 const NO_CODES = Object.freeze(new Set());
 
@@ -2519,6 +2538,9 @@ async function provisionDataModelSteps({ sdk, provision, runner, spec, apply, la
     const createOpts = rel.type === 'OneToMany'
       ? { type: 'OneToMany', schemaName: schema, referencedEntity: rel.referenced.toLowerCase(), referencingEntity: rel.referencing.toLowerCase(), lookupSchemaName: rel.lookup.schemaName, lookupDisplayName: createLabel.label, languageCode: resolvedLanguageCode }
       : { type: 'ManyToMany', schemaName: schema, entity1: rel.entity1.toLowerCase(), entity2: rel.entity2.toLowerCase(), intersectEntityName: rel.intersectEntityName, languageCode: resolvedLanguageCode };
+    // The codes on which a refusal of this create is the cue to read who holds the name (ALREADY_EXISTS_CODES): a 1:N's answer names its
+    // navigation property and its lookup column too, which an N:N's does not.
+    const alreadyExistsCodes = rel.type === 'OneToMany' ? ALREADY_EXISTS_CODES.oneToManyRelationship : ALREADY_EXISTS_CODES.manyToManyRelationship;
     await runner.run('data-model', label, async () => {
       try {
         const res = await sdk.createRelationship(createOpts);
@@ -2531,7 +2553,7 @@ async function provisionDataModelSteps({ sdk, provision, runner, spec, apply, la
           result.lookupLabels[key] = { label: labelText(createLabel.label, resolvedLanguageCode) };
         }
       } catch (err) {
-        if (!isAlreadyExists(err, ALREADY_EXISTS_CODES.relationship)) throw err;
+        if (!isAlreadyExists(err, alreadyExistsCodes)) throw err;
         // What the relationship held under this name says of itself decides the step. It is the declared one only when it states its whole
         // identity (compareRelationship): the create's own error is then rethrown, marked, which is how skipIf turns the step into a skip. One
         // it contradicts is another relationship's, and the name has to change. One that leaves a part out is neither — it has not been shown
@@ -2596,7 +2618,7 @@ async function provisionDataModelSteps({ sdk, provision, runner, spec, apply, la
         // run again can help; the create's own refusal, and the name, do not.
         throw serviceFailure(`could not identify the relationship that already uses schema name '${schema}' (${holder.error || 'read failed'}); the create failed because it already exists: ${(err && err.message) || err}`, { status: holder.status, words: holder.error || '', answered: holder.answered });
       }
-    }, { skipIf: (e) => isAlreadyExists(e, ALREADY_EXISTS_CODES.relationship) && e.sameRelationshipExists === true });
+    }, { skipIf: (e) => isAlreadyExists(e, alreadyExistsCodes) && e.sameRelationshipExists === true });
   }
 
   // A rebuild repairs a lookup column an older build labelled with its old default (opt-in: only the app
