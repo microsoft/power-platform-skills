@@ -24,7 +24,7 @@
 //     Uint8Array, or a string given with an encoding the stream decodes into bytes: `write(text, 'base64')`) are read byte for byte for every needle and spelling below, and a hit is masked in a COPY with as many `*` as
 //     it has bytes — never decoded into text and encoded back, never shorter or longer: a test runner's own frames are bytes, and the length a frame declares must stay true — while bytes that hold none are the very object
 //     given. Each write is read on its own, and nothing is held back to wait for the next one, so a token written in two pieces is two texts: the end of a write that BEGINS a needle and the start of one that ENDS a
-//     needle are taken out too (EDGES, below). `emitResult` (lib/dataverse-auth.js) also cleans its own text, so a result is clean where a caller has replaced the stream's `write`. The writes a `process.exit` follows at
+//     needle are taken out too (EDGES, below) — never part of an escape cut between the two writes. `emitResult` (lib/dataverse-auth.js) also cleans its own text, so a result is clean where a caller has replaced the stream's `write`. The writes a `process.exit` follows at
 //     once are made blocking first (makeWritesBlocking), so that what is written there is whole when the process ends — not only clean.
 //   - what Node itself prints when an error ends the process (an uncaught exception, an unhandled rejection): it never passes through `process.stderr.write`, so a handler prints it, cleaned, when nothing else handles the error
 //     (guardFatalErrors).
@@ -36,6 +36,7 @@
 //   - not covered, by design: a token another process obtained (`pac` has its own); a piece of a token SHORTER than MIN_TOKEN_PART_LENGTH at the edge of a write or before a cut (it would be taken out of ordinary words — a
 //     token written in two pieces leaves the shorter piece when it is under 24 characters; the first one is written before the second exists); a piece from the MIDDLE of a token that neither begins nor ends a needle (a
 //     token written in three pieces or more, or cut at both ends); the start of a write read through an escape's letters (it is read on the first reading only: a literal backslash before its first letter leaves that letter);
+//     the piece of a token that an escape cut between two writes leaves on its far side when that piece is shorter than 24 characters (the escape stays whole, so its characters count for neither piece);
 //     a spelling other than those below (a partial percent-encoding, a numeric entity for every character, base64 of a part alone, hex, a token spelled backwards — a reader that guessed at them would blank ordinary data);
 //     a cut other than util.inspect's, an ellipsis or the end of a text the process writes; inside BYTES only whole needles and the edges of a write are read (no cut, no fold, no escape); bytes given to a FILE writer (the
 //     writers below clean text); the cuts and edges of a token searched for literally (one with white space, a backslash or an ESC of its own — no token a service issues); a raw control character other than white space
@@ -58,7 +59,9 @@
 //
 // EDGES. A write is read on its own and nothing is held back for the next one, so a token written in two pieces is two texts, each with a piece of it at one end. A text the process writes (redactOutput: a stream's write,
 // a file, a result) loses a run of 24 characters or more at its END that begins a needle, and one at its START that ends a needle (takeLeadingSuffix: on the first reading — an escape there is the character it stands
-// for). A whole text cannot end inside a JSON string, so JSON is never cut by this; a text a caller only asks about (redactTokens) is read this way when it asks for `edges`.
+// for). An escape is never cut by this: a text that ends inside one (`\`, `\u00`, `\x7`) is read up to where it begins, and a guarded stream remembers it — a few characters, not output — so that its next write, which
+// begins by finishing it, is read from after it (unfinishedEscape, finishEscape). The escape stays whole where it was written, and the pieces of the token on either side of it go each on its own: JSON written in two
+// pieces is JSON together. A text a caller only asks about (redactTokens) is read this way when it asks for `edges` (and `from`).
 //
 // COST. Every needle (the token, each of its parts of 24 characters or more: needlesOf, and each spelling: spellingsOf) is searched in ONE pass over the characters the text spells, as Knuth-Morris-Pratt does, in lockstep, so
 // a text of any size takes time that grows with its size and a near miss of a long needle over and over costs no more than any other text; an escape read the other way starts a reading that is followed next to the pass,
@@ -434,6 +437,47 @@ function forkReadings(text, begin, end, prepared, read, spans) {
 // The most digits of the count util.inspect prints after a cut: a string's length is below 2^53, which has 16 digits; a bound keeps the look at a cut from reading on.
 const MAX_COUNT_DIGITS = 16;
 
+// ---- An escape cut between two writes ----------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+// Where an escape that a write ENDS inside begins — a run of backslashes at its end, or such a run and `u` with fewer than four hex digits after it, or `x` with fewer than two (readEscape's items, cut short) — or
+// `length` when it ends on no such thing. `unitAt(i)` is unit i of the write (a character, or a byte: an escape is ASCII either way), read from `from` on. The edges of a write stop there, and the guard on a stream
+// remembers it, so that the piece of a token before it and the one after it are each taken out and the escape is never cut in two: `{"error":"…\` and `/…"}` — a JSON `\/` written in two pieces — stay `\` and `/`.
+function unfinishedEscape(unitAt, from, length) {
+  const runStart = (at) => {
+    let start = at;
+    while (start - 1 >= from && unitAt(start - 1) === 0x5c) start -= 1;
+    return start;
+  };
+  let digitsFrom = length;
+  while (digitsFrom > from && digitsFrom > length - 3 && hexValue(unitAt(digitsFrom - 1)) >= 0) digitsFrom -= 1;
+  for (let letterAt = digitsFrom - 1; letterAt < length; letterAt += 1) {
+    if (letterAt - 1 < from) continue;
+    const letter = unitAt(letterAt);
+    const digits = length - letterAt - 1;
+    if (((letter === 0x75 && digits <= 3) || (letter === 0x78 && digits <= 1)) && unitAt(letterAt - 1) === 0x5c) return runStart(letterAt - 1);
+  }
+  if (length - 1 >= from && unitAt(length - 1) === 0x5c) return runStart(length - 1);
+  return length;
+}
+
+// The escape a write ended inside, kept as the stream's only memory of it: one backslash for its whole run (a run of any length is one item to readEscape) and what followed it — at most `\u` and three digits.
+function openEscapeOf(unitAt, start, length) {
+  let at = start;
+  while (at < length && unitAt(at) === 0x5c) at += 1;
+  let open = '\\';
+  for (let i = at; i < length; i += 1) open += String.fromCharCode(unitAt(i));
+  return open;
+}
+
+// How many units at the start of a write finish the escape the last write ended inside (`open`), and the escape still open after it when the write ends inside it too. `head` is the write's first units as a string
+// (latin1 for bytes), as many as can belong to the escape: its leading backslashes and six more.
+function finishEscape(open, head, wholeLength) {
+  const joined = open + head;
+  if (head.length === wholeLength && unfinishedEscape((i) => joined.charCodeAt(i), 0, joined.length) === 0) return { rest: wholeLength, open: openEscapeOf((i) => joined.charCodeAt(i), 0, joined.length) };
+  readEscape(joined, 0);
+  return { rest: Math.min(wholeLength, Math.max(0, spelledWidth - open.length)), open: null };
+}
+
 // Whether the text says, at `at`, that what stands before it was CUT SHORT:
 //   - util.inspect prints at most `maxStringLength` (10,000) characters of a string and then, after the closing quote — in colours, after the code that ends the string's colour — how many it left out
 //     (https://nodejs.org/api/util.html#utilinspectobject-options):
@@ -483,13 +527,13 @@ function takePrefixes(prepared, read, end, spans) {
 // or nothing; its letters are not followed here), and for each needle the longest of its ends that they are (endsAtStart). One of MIN_TOKEN_PART_LENGTH characters or more is taken out, from the first character spelled
 // to the last of it: the white space before it stays. Such an end begins with MIN_TOKEN_PART_LENGTH characters that stand somewhere in its needle, so only a needle that holds the text's first ones is matched, and only
 // as many characters are read as the longest of those needles has: a write of ordinary words costs one short look.
-function takeLeadingSuffix(text, prepared, spans) {
+function takeLeadingSuffix(text, prepared, spans, from, to) {
   const { needles, reversedTables, skip, lead } = prepared;
   const { codes, begins, ends } = lead;
   let count = 0;
-  let at = 0;
+  let at = from;
   const readUpTo = (limit) => {
-    while (at < text.length && count < limit) {
+    while (at < to && count < limit) {
       const begin = at;
       let code = readSpelled(text, at, skip);
       at += spelledWidth;
@@ -526,10 +570,12 @@ function takeLeadingSuffix(text, prepared, spans) {
 // needle, which is all a match can reach back over; an item that cannot start a match while no needle is being matched is counted and not stored, because no match will ever ask for its start. Where the text says it was cut
 // (cutsHere), and — with `edges` — at its end, the alignments still being read that have come MIN_TOKEN_PART_LENGTH characters or more are a needle cut short (takePrefixes); with `edges`, a needle's end at the start of
 // the text is one too (takeLeadingSuffix). The spans of all the needles are then merged where they overlap (a token and its parts do) and each merged span is replaced by one marker; two spans that only touch stay two,
-// as two tokens written one after the other are two.
-function takeOutSpelled(text, prepared, edges) {
+// as two tokens written one after the other are two. With `edges`, the text is read from `from` (where an escape the last write ended inside is finished: see unfinishedEscape) up to an escape it ends inside, so that
+// no span ever takes part of an escape.
+function takeOutSpelled(text, prepared, edges, start = 0) {
   const { needles, tables, longest, firstUnits, skip, starts, states, readings: all } = prepared;
   const count = needles.length;
+  const stop = edges ? unfinishedEscape((i) => text.charCodeAt(i), start, text.length) : text.length;
   states.fill(0);
   for (const readings of all) readings.count = 0;
   const spans = [];
@@ -537,7 +583,7 @@ function takeOutSpelled(text, prepared, edges) {
   let matching = false;
   // Where the last item that spells a character — or may: an escape read two ways — ends. A needle cut short ends there; the white space, colour codes and stray backslashes after it stay, as they do after a match.
   let lastEnd = 0;
-  for (let at = 0; at < text.length;) {
+  for (let at = start; at < stop;) {
     if (matching) {
       // Only a quote, a dot or an ellipsis can begin a cut: looked for here, and not in a call for every character of a token.
       const unit = text.charCodeAt(at);
@@ -601,7 +647,7 @@ function takeOutSpelled(text, prepared, edges) {
   }
   if (edges) {
     if (matching) takePrefixes(prepared, read, lastEnd, spans);
-    takeLeadingSuffix(text, prepared, spans);
+    takeLeadingSuffix(text, prepared, spans, start, stop);
   }
   if (spans.length === 0) return text;
   spans.sort((a, b) => a[0] - b[0] || b[1] - a[1]);
@@ -623,12 +669,15 @@ function takeOutSpelled(text, prepared, edges) {
 
 // `text` with the tokens `prepared` stands for taken out: what the reader finds, and then — only for a needle the reader cannot read (white space, a backslash or an ESC in it), with the other needles of its token — a literal
 // search, as the Dataverse client's scrubber does it. The reader first, so that a token spelled in one piece is one marker: a literal search first would take out the parts of a token whose dots are inside a fold, and leave
-// `<token>.<token>` where the reader finds the whole. `edges`: the text is a whole write (see EDGES above).
-function redactWith(prepared, text, edges = false) {
+// `<token>.<token>` where the reader finds the whole. `edges`: the text is a whole write (see EDGES above), read from `from`; nothing before `from` is changed, by the reader or the literal search.
+function redactWith(prepared, text, edges = false, from = 0) {
   let out = text;
-  if (prepared.needles.length > 0) out = takeOutSpelled(out, prepared, edges);
-  for (const needle of prepared.literal) out = out.split(needle).join(TOKEN_MARKER);
-  return out;
+  if (prepared.needles.length > 0) out = takeOutSpelled(out, prepared, edges, from);
+  if (prepared.literal.length === 0) return out;
+  // The reader leaves the units before `from` as they were, so they are the start of `out` too.
+  let rest = out.slice(from);
+  for (const needle of prepared.literal) rest = rest.split(needle).join(TOKEN_MARKER);
+  return from === 0 ? rest : out.slice(0, from) + rest;
 }
 
 // ---- Bytes ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
@@ -659,12 +708,13 @@ function bytesOf(prepared) {
 
 // `bytes` with every needle in them — and, with `edges`, a run of MIN_TOKEN_PART_LENGTH bytes or more at their end that begins a needle and at their start that ends one — masked, in a COPY: the bytes given are the
 // caller's (a frame it may write again, a pooled buffer). The very bytes when nothing is found. One pass, every needle in lockstep as Knuth-Morris-Pratt does it, the start read for at most each needle's length.
-function maskWith(prepared, bytes, edges) {
+function maskWith(prepared, bytes, edges, from = 0) {
   const { needles, tables, reversed, firstBytes, inNeedles, states } = bytesOf(prepared);
+  const to = edges ? unfinishedEscape((i) => bytes[i], from, bytes.length) : bytes.length;
   states.fill(0);
   const spans = [];
   let matching = false;
-  for (let i = 0; i < bytes.length; i += 1) {
+  for (let i = from; i < to; i += 1) {
     const unit = bytes[i];
     if (!matching && firstBytes[unit] === 0) continue;
     matching = false;
@@ -683,15 +733,15 @@ function maskWith(prepared, bytes, edges) {
   }
   if (edges) {
     // The start: an end of a needle of MIN_TOKEN_PART_LENGTH bytes or more begins with bytes that stand somewhere in that needle — each of them a byte some needle holds — so only a needle that holds the first ones
-    // is matched.
-    let first = bytes.length >= MIN_TOKEN_PART_LENGTH ? bytes.subarray(0, MIN_TOKEN_PART_LENGTH) : null;
-    for (let i = 0; first !== null && i < MIN_TOKEN_PART_LENGTH; i += 1) if (inNeedles[bytes[i]] === 0) first = null;
+    // is matched. The start and the end are those of the write less an escape cut at either of them (see unfinishedEscape).
+    let first = to - from >= MIN_TOKEN_PART_LENGTH ? bytes.subarray(from, from + MIN_TOKEN_PART_LENGTH) : null;
+    for (let i = 0; first !== null && i < MIN_TOKEN_PART_LENGTH; i += 1) if (inNeedles[bytes[from + i]] === 0) first = null;
     for (let n = 0; n < needles.length; n += 1) {
       const needle = needles[n];
-      if (states[n] >= MIN_TOKEN_PART_LENGTH) spans.push(bytes.length - states[n], bytes.length);
+      if (states[n] >= MIN_TOKEN_PART_LENGTH) spans.push(to - states[n], to);
       if (first === null || needle.indexOf(first) < 0) continue;
-      const length = endsAtStart(needle.length, (i) => needle[i], reversed[n], Math.min(bytes.length, needle.length), (i) => bytes[i]);
-      if (length >= MIN_TOKEN_PART_LENGTH) spans.push(0, length);
+      const length = endsAtStart(needle.length, (i) => needle[i], reversed[n], Math.min(to - from, needle.length), (i) => bytes[from + i]);
+      if (length >= MIN_TOKEN_PART_LENGTH) spans.push(from, from + length);
     }
   }
   if (spans.length === 0) return bytes;
@@ -704,29 +754,29 @@ function maskWith(prepared, bytes, edges) {
  * `text` with every token in `tokens` taken out of it — whole, by each of its parts of 24 characters or more, and by each of its other spellings (spellingsOf) — wherever the text spells it: plainly, with a fold in it, with
  * an escape in it (or a stray backslash), or printed over several lines the way `util.inspect` prints a long string, in colours or not; and the beginning of one, 24 characters or more, where the text says it was cut.
  * With `edges`, the text is read as a whole write is: a needle's beginning at its end, and a needle's end at its start, are taken out too. A text that holds none is returned as the same string. Throws a RangeError for a
- * text that holds too many ways to read a token to be checked (MAX_READINGS): a caller must then not write the text.
+ * text that holds too many ways to read a token to be checked (MAX_READINGS): a caller must then not write the text. `from` (with `edges`): where an escape the last write ended inside is finished — nothing before it is read.
  * @param {string} text
  * @param {string[]} tokens
- * @param {{ edges?: boolean }} [options]
+ * @param {{ edges?: boolean, from?: number }} [options]
  * @returns {string}
  */
-function redactTokens(text, tokens, { edges = false } = {}) {
+function redactTokens(text, tokens, { edges = false, from = 0 } = {}) {
   const prepared = prepare(Array.isArray(tokens) ? tokens : []);
-  return prepared === null || typeof text !== 'string' || text === '' ? text : redactWith(prepared, text, edges === true);
+  return prepared === null || typeof text !== 'string' || text === '' ? text : redactWith(prepared, text, edges === true, edges === true ? from : 0);
 }
 
 /**
  * `bytes` (a Buffer or a Uint8Array) with every token in `tokens` masked — each needle and spelling of it, byte for byte, with as many `*` — in a copy; with `edges`, also a needle's beginning of 24 bytes or more at their
- * end and a needle's end at their start. The very bytes when they hold none, and anything that is not bytes as it is.
+ * end and a needle's end at their start (from `from`, as for redactTokens). The very bytes when they hold none, and anything that is not bytes as it is.
  * @template T
  * @param {T} bytes
  * @param {string[]} tokens
- * @param {{ edges?: boolean }} [options]
+ * @param {{ edges?: boolean, from?: number }} [options]
  * @returns {T | Buffer}
  */
-function maskTokenBytes(bytes, tokens, { edges = false } = {}) {
+function maskTokenBytes(bytes, tokens, { edges = false, from = 0 } = {}) {
   const prepared = prepare(Array.isArray(tokens) ? tokens : []);
-  return prepared === null || !isUint8Array(bytes) || bytes.length === 0 ? bytes : maskWith(prepared, bytes, edges === true);
+  return prepared === null || !isUint8Array(bytes) || bytes.length === 0 ? bytes : maskWith(prepared, bytes, edges === true, edges === true ? from : 0);
 }
 
 // ---- The tokens this process obtained -------------------------------------------------------------------------------------------------------------------------------------------------------------
@@ -774,15 +824,16 @@ function redactOutput(text) {
 
 /**
  * What a guarded stream writes in place of `chunk`: a text as `redactOutput` makes it, and bytes with every token this process has obtained masked (maskTokenBytes, with the edges of the write) — the very bytes when they
- * hold none. Anything else is returned as it is.
+ * hold none. `from`: where an escape the stream's last write ended inside is finished (guardStream). Anything else is returned as it is.
  * @template T
  * @param {T} chunk
+ * @param {{ from?: number }} [options]
  * @returns {T | Buffer}
  */
-function redactWritten(chunk) {
+function redactWritten(chunk, { from = 0 } = {}) {
   if (obtained.size === 0) return chunk;
-  if (typeof chunk === 'string') return redactOutput(chunk);
-  return isUint8Array(chunk) && chunk.length > 0 ? maskWith(preparedNow(), chunk, true) : chunk;
+  if (typeof chunk === 'string') return chunk === '' ? chunk : redactWith(preparedNow(), chunk, true, from);
+  return isUint8Array(chunk) && chunk.length > 0 ? maskWith(preparedNow(), chunk, true, from) : chunk;
 }
 
 // ---- The streams, an error that ends the process, and the SDK's workspace --------------------------------------------------------------------------------------------------------------------------
@@ -798,25 +849,56 @@ const BINARY_ENCODINGS = /^(?:hex|base64|base64url)$/i;
  * Makes `stream.write` take the tokens out of everything it is given. The wrapper is the stream's own `write` property, put where the original was: whatever replaces it later replaces it whole, and a caller that wraps it
  * (`const write = stream.write; stream.write = …`) wraps it with the guard inside. A text is given to `redact`; so are bytes — a Buffer or a Uint8Array, and the bytes a string in a binary encoding stands for (decoded as
  * the stream would decode it) — and where `redact` hands back other bytes, those are written in their place, with the same encoding argument (a stream ignores it for bytes): never a text made of bytes and turned back.
- * The callback and what `write` returns are the stream's own. Returns false for a stream that is already guarded or has no `write`.
+ * The callback and what `write` returns are the stream's own. A write that ends inside an escape is remembered (a few characters), and the next write is read from after the units that finish it, with `{ from }` given
+ * to `redact`. Returns false for a stream that is already guarded or has no `write`.
  * @param {{ write: Function }} stream
- * @param {(chunk: string | Uint8Array) => (string | Uint8Array)} [redact]
+ * @param {(chunk: string | Uint8Array, options: { from: number }) => (string | Uint8Array)} [redact]
  * @returns {boolean}
  */
 function guardStream(stream, redact = redactWritten) {
   if (!stream || typeof stream.write !== 'function' || stream.write[GUARDED]) return false;
   const write = stream.write;
+  // The escape the last write ended inside (`\`, `\u00`, …), or null: the stream's only memory of what it wrote — a few characters, no output — so that the next write, which begins by finishing it, is read from after
+  // it. Without it each write is read on its own, and a JSON `\/` written as `…\` and `/…` lost its `/` to the piece of the token after it: `\<token>`, which is no JSON (see unfinishedEscape).
+  let open = null;
+  const escapeIn = (unitAt, length, head) => {
+    let from = 0;
+    let carried = null;
+    if (open !== null) ({ rest: from, open: carried } = finishEscape(open, head, length));
+    if (carried === null) {
+      const start = unfinishedEscape(unitAt, from, length);
+      if (start < length) carried = openEscapeOf(unitAt, start, length);
+    }
+    return { from, carried };
+  };
+  // The units a finished escape can take at the start of a write: its leading backslashes and six more.
+  const headOf = (unitAt, length, slice) => {
+    let at = 0;
+    while (at < length && unitAt(at) === 0x5c) at += 1;
+    return slice(Math.min(length, at + 6));
+  };
   const guarded = function writeWithoutTokens(chunk, ...rest) {
     let given = chunk;
     try {
-      if (typeof chunk === 'string' && typeof rest[0] === 'string' && BINARY_ENCODINGS.test(rest[0])) {
-        const bytes = Buffer.from(chunk, rest[0]);
-        const masked = redact(bytes);
+      let bytes = null;
+      if (typeof chunk === 'string' && typeof rest[0] === 'string' && BINARY_ENCODINGS.test(rest[0])) bytes = Buffer.from(chunk, rest[0]);
+      else if (isUint8Array(chunk)) bytes = chunk;
+      if (bytes !== null) {
+        const unitAt = (i) => bytes[i];
+        const { from, carried } = escapeIn(unitAt, bytes.length, headOf(unitAt, bytes.length, (end) => Buffer.from(bytes.buffer, bytes.byteOffset, end).toString('latin1')));
+        const masked = redact(bytes, { from });
+        open = carried;
         if (masked !== bytes) given = masked;
-      } else if (typeof chunk === 'string' || isUint8Array(chunk)) {
-        given = redact(chunk);
+      } else if (typeof chunk === 'string') {
+        const unitAt = (i) => chunk.charCodeAt(i);
+        const { from, carried } = escapeIn(unitAt, chunk.length, headOf(unitAt, chunk.length, (end) => chunk.slice(0, end)));
+        given = redact(chunk, { from });
+        open = carried;
+      } else {
+        open = null;
       }
     } catch {
+      open = null;
       given = WITHHELD;
     }
     return write.call(this, given, ...rest);

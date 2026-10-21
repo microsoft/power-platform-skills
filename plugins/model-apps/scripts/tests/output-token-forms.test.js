@@ -464,3 +464,102 @@ test('every new path costs time that grows with what it reads — bytes of any s
   failing.write(`${'\\n'.repeat(400)}`);
   assert.match(guarded[0], /^\[output withheld/);
 });
+
+// ── An escape split between two writes ────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+// A JSON line whose token has an escape in it — `\/` (the token holds a `/`, as a standard-base64 one does), `\u0073` (a character JSON may escape), a literal `\\` (a stray backslash between two characters of the
+// token), the `\r\n` of a fold — written in two pieces split at every place in and around the escape. Each piece of the token is 24 characters or more, so each is taken out; the escape is kept whole wherever it was cut.
+const SPLIT_ESCAPES = [
+  { name: '\\/', token: `${'A'.repeat(24)}/${'B'.repeat(27)}`, spelled: `${'A'.repeat(24)}\\/${'B'.repeat(27)}` },
+  { name: '\\u0073', token: `${'A'.repeat(24)}s${'B'.repeat(27)}`, spelled: `${'A'.repeat(24)}\\u0073${'B'.repeat(27)}` },
+  { name: '\\\\', token: `${'A'.repeat(24)}${'B'.repeat(27)}`, spelled: `${'A'.repeat(24)}\\\\${'B'.repeat(27)}` },
+  { name: '\\r\\n', token: `${'A'.repeat(24)}${'B'.repeat(27)}`, spelled: `${'A'.repeat(24)}\\r\\n${'B'.repeat(27)}` },
+];
+const splitLines = () => SPLIT_ESCAPES.flatMap(({ name, token, spelled }) => {
+  const line = `{"error":"bearer ${spelled}","ok":false}\n`;
+  const escapeAt = line.indexOf('\\');
+  const escapeEnd = line.lastIndexOf('\\') + (name === '\\u0073' ? 6 : 2);
+  const cases = [];
+  for (let split = escapeAt - 1; split <= escapeEnd + 1; split += 1) cases.push({ name, token, split, first: line.slice(0, split), second: line.slice(split) });
+  return cases;
+});
+
+test('REAL PROCESS: an escape split between two writes — `\\/`, `\\u0073`, `\\\\`, `\\r\\n`, cut at every place in and around it — is kept whole: the JSON the writes make together is JSON still, and no piece of 24 characters of the token is left; on stdout as text, on stderr as bytes', () => {
+  const cases = splitLines();
+  const failures = [];
+  for (const token of [...new Set(cases.map((one) => one.token))]) {
+    const own = cases.filter((one) => one.token === token);
+    const run = script(`
+      require('./lib/dataverse-auth.js').getAuthToken('https://contoso.crm.dynamics.com', { exec: () => ${JSON.stringify(`${token}\n`)} });
+      for (const { first, second } of ${JSON.stringify(own)}) {
+        process.stdout.write(first); process.stdout.write(second);
+        process.stderr.write(Buffer.from(first)); process.stderr.write(Buffer.from(second));
+      }
+    `);
+    for (const [where, written] of [['stdout', run.stdout.toString()], ['stderr', run.stderr.toString()]]) {
+      const lines = written.split('\n').slice(0, -1);
+      own.forEach(({ name, split, first }, i) => {
+        const line = lines[i];
+        let parsed = null;
+        try { parsed = JSON.parse(line); } catch { failures.push(`${where} ${name} split ${split}: not JSON: ${line}`); return; }
+        if (parsed.ok !== false) failures.push(`${where} ${name} split ${split}: the document changed: ${line}`);
+        // Bytes are read literally (no escape is read in them), so a token they spell with an escape is the documented residual — except where each write holds its piece as it is: the cut right after the backslash
+        // of `\/`, which once made the two writes no JSON.
+        const literal = where === 'stdout' || (name === '\\/' && first.endsWith('\\'));
+        const left = literal ? piecesIn(line, [token, 'A'.repeat(24), 'B'.repeat(27)]) : [];
+        if (left.length > 0) failures.push(`${where} ${name} split ${split}: a piece of the token is left: ${line}`);
+      });
+    }
+  }
+  assert.deepEqual(failures, []);
+});
+
+test('a JSON `\\/` cut after its backslash, at the functions: a write that ends inside `\\/` and the next that finishes it — each piece taken out, the escape whole, and two writes with no token in them as they were', () => {
+  const token = SPLIT_ESCAPES[0].token;
+  const chunks = [];
+  const stream = { write(chunk) { chunks.push(chunk); return true; } };
+  guardStream(stream, (chunk, options) => (typeof chunk === 'string' ? redactTokens(chunk, [token], { edges: true, ...options }) : redaction.maskTokenBytes(chunk, [token], { edges: true, ...options })));
+  stream.write(`{"error":"${'A'.repeat(24)}\\`);
+  stream.write(`/${'B'.repeat(27)}"}`);
+  assert.deepEqual(JSON.parse(chunks.join('')), { error: `${MARK}/${MARK}` });
+  chunks.length = 0;
+  stream.write(Buffer.from(`{"error":"${'A'.repeat(24)}\\`));
+  stream.write(Buffer.from(`/${'B'.repeat(27)}"}`));
+  assert.deepEqual(JSON.parse(Buffer.concat(chunks).toString()), { error: `${'*'.repeat(24)}/${'*'.repeat(27)}` });
+  // Writes with no token in them — a path that ends with a backslash, and the next write — are what they were.
+  chunks.length = 0;
+  stream.write('C:\\work\\');
+  stream.write('/next line\n');
+  assert.deepEqual(chunks, ['C:\\work\\', '/next line\n']);
+});
+test('JSON written in pieces cut anywhere — inside escapes of every kind, inside the token, around it — is JSON again when the guarded pieces are put together, as text and as bytes, and the rest of the document is as it was', () => {
+  const token = SPLIT_ESCAPES[0].token;
+  const NOISE = ['plain', ' ', '\n', '\r\n', '\t', '"', '\\', '/', 'é', '日本', '🧪', '\u0001', 'u0041', '\\n', 'x', '...', '…'];
+  const guardedWith = (chunks) => {
+    const stream = { write(chunk) { chunks.push(chunk); return true; } };
+    guardStream(stream, (chunk, options) => (typeof chunk === 'string' ? redactTokens(chunk, [token], { edges: true, ...options }) : redaction.maskTokenBytes(chunk, [token], { edges: true, ...options })));
+    return stream;
+  };
+  for (let seed = 1; seed <= 400; seed += 1) {
+    const random = generator(seed);
+    let note = '';
+    for (let i = 0; i < 1 + random.int(8); i += 1) note += random.pick(NOISE);
+    // The token spelled as JSON may spell it: `/` as `\/` or `\u002f`, a character as its \u escape.
+    const spelled = [...token].map((char) => (char === '/' ? random.pick(['/', '\\/', '\\u002f', '\\u002F']) : random.next() < 0.15 ? `\\u${char.charCodeAt(0).toString(16).padStart(4, '0')}` : char)).join('');
+    const document = `{"note":${JSON.stringify(note)},"error":"Rejected bearer ${spelled} here","ok":false}`;
+    assert.equal(JSON.parse(document).error, `Rejected bearer ${token} here`, 'the document spells the token');
+    const cuts = [...new Set(Array.from({ length: 1 + random.int(3) }, () => 1 + random.int(document.length - 1)))].sort((a, b) => a - b);
+    const pieces = [0, ...cuts].map((at, i, all) => document.slice(at, all[i + 1]));
+    const text = [];
+    const asText = guardedWith(text);
+    for (const piece of pieces) asText.write(piece);
+    const bytes = [];
+    const asBytes = guardedWith(bytes);
+    for (const piece of pieces) asBytes.write(Buffer.from(piece));
+    for (const [how, joined] of [['text', text.join('')], ['bytes', Buffer.concat(bytes).toString()]]) {
+      let parsed;
+      assert.doesNotThrow(() => { parsed = JSON.parse(joined); }, `seed ${seed}, ${how}, cut at ${cuts}: ${joined}`);
+      assert.deepEqual([parsed.note, parsed.ok], [note, false], `seed ${seed}, ${how}: the rest of the document is as it was`);
+    }
+  }
+});
