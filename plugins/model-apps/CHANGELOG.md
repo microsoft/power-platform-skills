@@ -170,6 +170,14 @@ other spellings, and out of text cut short or split between two writes.
   on the far side of an escape split between two writes, base64 of a part of the token, and bytes written to a file. pcf's copy of
   the module changes the same way.
 - The capabilities document no longer says that a download leaves `relationships[]` out (#567).
+- **A rebuild on an environment whose language is not English no longer stops at something that already exists.** The platform words its
+  "already exists" answer in the caller's language, and the build read only English words, so on a Spanish environment an alternate key it
+  could not prove from its table read stopped the data-model phase — and so could a status reason, a column of a table whose columns could not
+  be read, or a table or relationship found only after its create. Each of those creates now also recognises the answer by its error code,
+  which is the same in every language (`0x80060893` key, `0x80044310` status reason, `0x80060304`/`0x80047013` column, `0x8009050d`/`0x8004700b`
+  table, `0x8004432B` relationship); a table or relationship is still reused only when it is read back and proven. The codes add to the existing
+  rules — a 409 and the English wording are still recognised whatever code the answer carries — and a code of another create, a generic code or
+  a code the message only quotes does not count by itself.
 
 ## [2.17.0]
 
