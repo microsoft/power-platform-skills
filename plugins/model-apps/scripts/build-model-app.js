@@ -923,8 +923,10 @@ function isTransientHalt(err, { spec } = {}) {
   if (!err) return false;
   // A dashboard the build could neither add to its solution nor remove again says `transient: false`
   // (sdk-build.js): its message quotes the causes verbatim — a customization lock, "try again later" —
-  // but a retry would find the dashboard as a lone name match and reuse it outside the solution, the
-  // state the undo exists to prevent. `never` is that, and the typed refusals, and a status that says no.
+  // but the add and its undo were both refused just now, which is a person's to look at, and a dashboard
+  // the build could not record (lib/dashboard-creation-records.js) would be found by a retry as a lone name
+  // match and reused outside the solution, the state the undo exists to prevent. One it recorded is added by
+  // the maker's next run. `never` is that, and the typed refusals, and a status that says no.
   const judgement = judgeFailure(err, spec ? { declares: (table, column) => specDeclaresAttribute(spec, table, column) } : {});
   if (judgement.never) return false;
   if (judgement.transient) return true;

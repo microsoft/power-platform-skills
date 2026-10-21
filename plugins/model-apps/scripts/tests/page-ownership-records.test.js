@@ -19,8 +19,9 @@ const lib = () => require('../lib/page-ownership-records.js');
 
 // The reset remedy must preserve every non-reconstructible store, not only SDK cache. Page receipts
 // retain pending creates and deletion progress; resource receipts retain the id needed to rewrite an
-// unconfirmed publication. Its named globs must cover the actual files both modules write.
-test('the workspace-reset advice keeps the baseline, approval and every page and resource recovery store', (t) => {
+// unconfirmed publication; dashboard creation records retain the id of a dashboard an interrupted build
+// created before it joined the solution. Its named globs must cover the actual files these modules write.
+test('the workspace-reset advice keeps the baseline, approval and every page, resource and dashboard recovery store', (t) => {
   const { RESET_WORKSPACE } = require('../lib/entity-provision.js');
   const dir = workspace(t);
   lib().recordPageCreation(dir, APP, 'overview', ID, 'Overview', ENV_A);
@@ -28,13 +29,16 @@ test('the workspace-reset advice keeps the baseline, approval and every page and
   lib().recordPageTeardown(dir, APP, [{ id: ID, key: 'overview', name: 'Overview' }], ENV_A);
   const { openUnconfirmedWebResources, unconfirmedRecordPath } = require('../lib/web-resource-records.js');
   assert.equal(openUnconfirmedWebResources({ workspaceDir: dir, environment: ENV_A }).note('contoso_/reset.js', ID), true);
+  const { openDashboardCreations, dashboardCreationRecordPath } = require('../lib/dashboard-creation-records.js');
+  assert.equal(openDashboardCreations({ workspaceDir: dir, environment: ENV_A, appUniqueName: APP, solutionUniqueName: 'ContosoPages' }).note('Overview', OTHER), true);
   const written = fs.readdirSync(dir);
-  assert.equal(written.length, 4);
+  assert.equal(written.length, 5);
   const pageRecords = written.filter((name) => name.startsWith('page-ownership.'));
   assert.deepEqual(pageRecords.map((name) => name.split('.')[1]).sort(), ['created', 'pending', 'teardown']);
   assert.ok(pageRecords.every((name) => /^page-ownership\..+\.json$/.test(name)), 'every page record is page-ownership.<kind>.<hash>.json');
   assert.match(path.basename(unconfirmedRecordPath(dir, ENV_A)), /^web-resource-unconfirmed\.[a-f0-9]{64}\.json$/);
-  assert.match(RESET_WORKSPACE, /except last-applied\.json, destructive-approval\.json, web-resource-unconfirmed\.\*\.json \(the durable ids needed to recover unconfirmed web-resource writes\) and the page-ownership\.\*\.json records/);
+  assert.match(path.basename(dashboardCreationRecordPath(dir, ENV_A, APP, 'ContosoPages')), /^dashboard-creation\.[a-f0-9]{64}\.json$/);
+  assert.match(RESET_WORKSPACE, /except last-applied\.json, destructive-approval\.json, web-resource-unconfirmed\.\*\.json \(the durable ids needed to recover unconfirmed web-resource writes\), dashboard-creation\.\*\.json \(the ids of the dashboards an interrupted build created before they joined the solution\) and the page-ownership\.\*\.json records/);
   assert.match(RESET_WORKSPACE, /pending records/);
 });
 

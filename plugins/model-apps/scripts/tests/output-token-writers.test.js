@@ -57,7 +57,7 @@ test('lib/apply-snapshot-store.js writes the snapshot, the baseline and the reco
   writeFileAtomic(path.join(dir, 'clean.json'), '{"a":1}');
   assert.strictEqual(fs.readFileSync(path.join(dir, 'clean.json'), 'utf8'), '{"a":1}');
   assert.deepStrictEqual(fs.readdirSync(dir).sort(), ['clean.json', 'last-applied.json'], 'no temporary file is left');
-  assert.deepStrictEqual(scriptsMatching(/\bwriteFileAtomic\s*\(/), ['lib/apply-snapshot-store.js', 'lib/deployed-baseline.js', 'lib/page-ownership-records.js', 'lib/page-publish-records.js', 'lib/web-resource-records.js'], 'the baseline and the records are written by it, and by nothing else');
+  assert.deepStrictEqual(scriptsMatching(/\bwriteFileAtomic\s*\(/), ['lib/apply-snapshot-store.js', 'lib/dashboard-creation-records.js', 'lib/deployed-baseline.js', 'lib/page-ownership-records.js', 'lib/page-publish-records.js', 'lib/web-resource-records.js'], 'the baseline and the records are written by it, and by nothing else');
   const { openUnconfirmedWebResources, unconfirmedRecordPath } = require('../lib/web-resource-records.js');
   const environment = 'https://contoso.crm.dynamics.com';
   const record = openUnconfirmedWebResources({ workspaceDir: dir, environment });
@@ -67,6 +67,14 @@ test('lib/apply-snapshot-store.js writes the snapshot, the baseline and the reco
   const recovery = fs.readFileSync(unconfirmedRecordPath(dir, environment), 'utf8');
   assert.deepStrictEqual(leaksIn(recovery, SECRETS), [], 'the new recovery record goes through the same redacting writer');
   assert.strictEqual(JSON.parse(recovery).webResources['contoso_/clean.js'], id, 'ordinary resource identities are unchanged');
+  // A dashboard's name is the maker's text, so the record of the dashboards a build created goes through the same writer.
+  const { openDashboardCreations, dashboardCreationRecordPath } = require('../lib/dashboard-creation-records.js');
+  const created = openDashboardCreations({ workspaceDir: dir, environment, appUniqueName: 'contoso_app', solutionUniqueName: 'ContosoSolution' });
+  assert.strictEqual(created.note('Clean Overview', id), true);
+  assert.strictEqual(created.note(`Rejected bearer ${TOKEN}`, id), true);
+  const dashboards = fs.readFileSync(dashboardCreationRecordPath(dir, environment, 'contoso_app', 'ContosoSolution'), 'utf8');
+  assert.deepStrictEqual(leaksIn(dashboards, SECRETS), [], 'the dashboard creation record goes through the same redacting writer');
+  assert.strictEqual(JSON.parse(dashboards).dashboards['Clean Overview'].id, id, 'ordinary dashboard names are unchanged');
 });
 
 // A form whose labels hold the token — as a label a maker typed could, or an answer that echoes a header — read by the SDK, which writes the form, its metadata and the manifest into the workspace: the SDK factory's storage keeps

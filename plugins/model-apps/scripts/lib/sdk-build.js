@@ -143,6 +143,7 @@ const { appWriteTables, appPushTables, preAppTables, publishTablesXml, readSaved
 const { hasUnsyncedEdits } = require('./unsynced-edits.js');
 const { createSolutionMembership, ensureSolutionComponent } = require('./solution-membership.js');
 const { openUnconfirmedWebResources } = require('./web-resource-records.js');
+const { openDashboardCreations } = require('./dashboard-creation-records.js');
 const { navigationEntryKind, navigationHolds, navigationIsPagesOnly, navigationVerdict } = require('./app-navigation.js');
 const { isAppTextMap, appTextKind, localizedAppText } = require('./app-header-text.js');
 // The build's retry policy (retry-policy.js): every halt below is raised with what a run again may do — RETRY.NEVER, or a policy decided from the failure it wraps — and every failure the engine
@@ -244,6 +245,96 @@ async function findPinnedDashboard(sdk, pin) {
     throw refusal(`dashboardId ${id} is a type-${row.type} form, not a dashboard — correct the id, or remove it to find the dashboard by name`);
   }
   return { id: String(row.formid), name: String(row.name === undefined || row.name === null ? '' : row.name) };
+}
+
+// One systemform row read by its id in the SAVED layer, through the SDK's own client:
+//   GET /systemforms(<id>)/Microsoft.Dynamics.CRM.RetrieveUnpublished()?$select=formid,name,type
+//   200 { "@odata.etag": "W/\"1234567\"", "formid": "11111111-1111-4111-8111-111111111111", "name": "Ops Overview", "type": 0 }
+//   404 { "error": { "code": "0x80040217", "message": "systemform With Id = 11111111-… Does Not Exist" } }
+// The saved layer answers for a row whether or not it was ever published — MEASURED by the bundled SDK, whose readSystemFormType reads the same function:
+// a never-published form, a new dashboard and an out-of-box form all answer with their type, and a missing id answers 404 0x80040217. A plain read
+// (`$filter=formid eq <id>`, or the name lookup) answers the PUBLISHED layer only, where a dashboard an interrupted build created is not, so a miss there
+// proves nothing. It is not read through the build workspace either: a fetch into it can hand back the local copy the interrupted run left there, which
+// is not the service's word. `dataverse.get` answers a non-2xx as a response (it throws only when no answer came), so the status is read here, and only
+// the documented "Does Not Exist" proves the row absent — any other answer, a 404 without that code included, proves nothing either way.
+// Answers { state: 'present', id, name, type } | { state: 'absent', id } | { state: 'unreadable', id, why, status?, answered?, error? }.
+// See: https://learn.microsoft.com/power-apps/developer/data-platform/webapi/reference/retrieveunpublished
+async function readSavedSystemForm(provision, id) {
+  const client = provision && provision.dataverse;
+  if (!client || typeof client.get !== 'function') return { state: 'unreadable', id, why: 'the SDK has no reader of the saved layer' };
+  let response;
+  try {
+    response = await client.get(`/systemforms(${id})/Microsoft.Dynamics.CRM.RetrieveUnpublished()?$select=formid,name,type`);
+  } catch (error) {
+    return { state: 'unreadable', id, why: (error && error.message) || String(error), error };
+  }
+  const status = response && response.status;
+  const body = response && response.body;
+  const answered = body && typeof body === 'object' && body.error && typeof body.error === 'object' ? body.error : undefined;
+  if (status === 404 && answered && answered.code === '0x80040217') return { state: 'absent', id };
+  if (status >= 200 && status < 300 && body && typeof body === 'object' && String(body.formid || '').replace(/[{}]/g, '').toLowerCase() === id) {
+    return { state: 'present', id, name: typeof body.name === 'string' ? body.name : '', type: body.type };
+  }
+  return { state: 'unreadable', id, status, answered, why: `HTTP ${status}${answered && typeof answered.message === 'string' ? `: ${answered.message}` : ' with no row the build can read'}` };
+}
+
+// A systemform `type` as the integer it is, strictly (the platform answers a number; a text of digits is read as one). Anything else is NaN, never 0 —
+// 0 is a real type, the standard dashboard the build creates.
+function systemFormType(raw) {
+  if (typeof raw === 'number') return Number.isInteger(raw) ? raw : NaN;
+  return typeof raw === 'string' && /^\s*\d+\s*$/.test(raw) ? Number(raw) : NaN;
+}
+
+// The dashboard an earlier, interrupted run of this build created for `dash` and never saw join the solution (lib/dashboard-creation-records.js), settled
+// before any dashboard is looked up by name. `ids` are what the record holds: the id the create was sent with, then the one its push reported when that was
+// another. Each is read in the saved layer (readSavedSystemForm):
+//   - none is there: the create never committed, or the row was deleted since — the record is cleared and the build goes on as it always did, looking the
+//     dashboard up by name (answers undefined);
+//   - exactly one is, a standard dashboard with this name: THAT row is added to the solution — idempotent: a component the solution already holds is not
+//     added twice — and reused, and the record cleared (answers its id). Its tiles are what the interrupted run pushed, and are not repaired;
+//   - anything else — a read that fails, a row of another kind, a dashboard renamed since, both ids answering: nothing is added and nothing deleted, no
+//     dashboard is created, the record is kept, and the step stops with what a maker can do. Creating a dashboard there could make the second one this
+//     record exists to prevent, and adding the row could adopt what the build no longer knows to be its own.
+// Never deletes anything: the record proves which id the build sent, not that a row which answers to it now is used by nobody else.
+async function recoverRecordedDashboard(provision, { dash, ids, sol, runner, creations }) {
+  const reads = [];
+  for (const id of ids) reads.push(await readSavedSystemForm(provision, id));
+  const label = `dashboard "${dash.name}"`;
+  const created = ids.length > 1 ? `${ids[0]} (the service reported ${ids[1]})` : ids[0];
+  const stop = (error) => runner.run('dashboards', label, async () => { throw error; });
+  const unreadable = reads.find((r) => r.state === 'unreadable');
+  if (unreadable) {
+    // A run again may settle it: whether it does follows what the service answered (its status and its own error), never the dashboard's name.
+    return stop(serviceFailure(`dashboard "${dash.name}": an earlier build created it as ${created} and stopped before adding it to solution '${sol.uniqueName}', and whether it still exists could not be read (${unreadable.why}). Nothing was added to the solution or deleted, and no second dashboard was created; run the build again.`, { status: unreadable.status, answered: unreadable.answered, cause: unreadable.error }));
+  }
+  const present = reads.filter((r) => r.state === 'present');
+  if (!present.length) {
+    creations.clear(dash.name);
+    return undefined;
+  }
+  if (present.length > 1) {
+    return stop(refusal(`dashboard "${dash.name}": an earlier build stopped after creating it, and each of the ids it recorded for it (${ids.join(', ')}) names a row now, so it cannot tell which is the one it created. Nothing was added to the solution or deleted. Delete the one that is not this app's in Maker, and run the build again.`));
+  }
+  const [row] = present;
+  const type = systemFormType(row.type);
+  if (type !== 0) {
+    return stop(refusal(`dashboard "${dash.name}": an earlier build recorded ${row.id} for it before it stopped, and that id now names ${Number.isNaN(type) ? 'a systemform whose type could not be read' : `a systemform of type ${type}`}, not a dashboard of the kind the build creates (type 0). Nothing was added to the solution or deleted. Check the id, then remove the entry '${dash.name}' from ${creations.path()} and run the build again.`));
+  }
+  if (dashboardNameKey(row.name) !== dashboardNameKey(dash.name)) {
+    return stop(refusal(`dashboard "${dash.name}": an earlier build created it as ${row.id} and stopped before adding it to solution '${sol.uniqueName}', and that dashboard is now named '${row.name}'. Nothing was added to the solution or deleted. If it is this app's, rename it back to '${dash.name}' in Maker and run the build again: it is then added to the solution and reused. If it is not wanted, delete it in Maker and run the build again: '${dash.name}' is then created afresh.`));
+  }
+  await runner.run('dashboards', `${label} (created by an interrupted build as ${row.id} — added to the solution, and reused)`, async () => {
+    try {
+      await provision.addSolutionComponent({ componentId: row.id, componentType: COMPONENT_TYPE.dashboard, solutionUniqueName: sol.uniqueName });
+    } catch (err) {
+      // Kept, and not undone: deleting the row on this record's word is what it must never do. A run again tries the add again.
+      throw serviceFailure(`dashboard "${dash.name}" (${row.id}), which an earlier build created and stopped before adding to solution '${sol.uniqueName}', could not be added to it now (${(err && err.message) || err}). Nothing was deleted, and the record of it is kept: run the build again to add it.`, {
+        status: err && (err.statusCode || err.status), words: judgeFailure(err).text, cause: err,
+      });
+    }
+    creations.clear(dash.name);
+  });
+  return row.id;
 }
 
 // Web-resource kinds (App Spec `type`) -> SDK createWebResource `type` token. The SDK maps
@@ -6107,6 +6198,10 @@ async function runSdkBuildPhases(spec, opts, owed) {
   //     views/charts already built), then push + add to the solution (systemform, component type 60).
   //     Global (no entity); placement in the app sitemap is manual for now.
   if (has('dashboards')) {
+    // The dashboards an earlier run of this build created and did not see join the solution (lib/dashboard-creation-records.js), read at first use. One
+    // per run of the phases, so the build's own re-run of a halt reads what the attempt before it recorded. Bound to this app and solution as the spec
+    // names them: a new app has no id yet, and its unique name is the spec's.
+    const creations = openDashboardCreations({ workspaceDir: opts.workspaceDir, environment: opts.env, appUniqueName: spec.app ? appUniqueName(spec) : '', solutionUniqueName: sol && sol.uniqueName, warn: opts.warn });
     for (const dash of spec.dashboards || []) {
       // AB#6726727: a DOWNLOADED dashboard is bound by the id it was read from before anything is tried
       // by name. Renamed in the designer since, its spec name finds nothing — and the name path below
@@ -6119,6 +6214,17 @@ async function runSdkBuildPhases(spec, opts, owed) {
         runner.skip('dashboards', `dashboard "${dash.name}" (exists — reuse by its dashboardId; tile edits aren't applied on rebuild, recreate to change)`);
         result.created.dashboards[dash.name] = pinned.id;
         continue;
+      }
+      // A dashboard an earlier run created and stopped before adding to the solution is settled by the id that run recorded, BEFORE the name lookup
+      // below: a row created and never published is in no plain read, so the lookup would create a second one, and a published one it would reuse
+      // outside the solution (recoverRecordedDashboard). With nothing recorded for the name this costs nothing — no request.
+      const recordedIds = creations.idsOf(dash.name);
+      if (recordedIds) {
+        const recovered = await recoverRecordedDashboard(provision, { dash, ids: recordedIds, sol, runner, creations });
+        if (recovered) {
+          result.created.dashboards[dash.name] = recovered;
+          continue;
+        }
       }
       // Additive discover-reconcile (design §14): a dashboard is global (identity = name), so a rebuild
       // or retry must REUSE the existing one instead of createArtifact-ing a duplicate every run (the old
@@ -6182,7 +6288,17 @@ async function runSdkBuildPhases(spec, opts, owed) {
         for (let ti = 0; ti < tiles.length; ti++) {
           await provision.addElement('dashboard', art.id, '/components', dashboardComponent(dashboardTileOpts(spec, tiles[ti], result), ti));
         }
+        // Recorded BEFORE the push: the SDK sends this id as the row's key (`systemform.formid`), so if the run stops anywhere after the create is
+        // sent — killed, its answer lost, the add below and its undo both failing — the next run still knows which row it made, which no name and no
+        // plain read can tell it (lib/dashboard-creation-records.js). A record that cannot be written is one warning, and the build goes on as it did
+        // before there was a record: refusing to create the dashboard would turn a local bookkeeping failure into a failed build for every dashboard,
+        // to guard against a crash in the moment between two requests.
+        creations.note(dash.name, art.id);
         const pushed = requireSuccessfulPush(await provision.pushArtifact('dashboard', art.id), `dashboard ${dash.name}`, opts.warn);
+        // The SDK prefers the id the service's answer names over the one it sent, and moves its copy there. When they differ, both are kept: the next
+        // run reads both, and neither is confirmed on the other's word.
+        const bareId = (id) => String(id).replace(/[{}]/g, '').toLowerCase();
+        if (bareId(pushed.id) !== bareId(art.id)) creations.observe(dash.name, pushed.id);
         try {
           await provision.addSolutionComponent({ componentId: pushed.id, componentType: COMPONENT_TYPE.dashboard, solutionUniqueName: sol.uniqueName });
         } catch (err) {
@@ -6198,6 +6314,10 @@ async function runSdkBuildPhases(spec, opts, owed) {
           } catch (e) {
             undoErr = e;
           }
+          // Proven removed only when the delete answered: the record goes with the row. When it did not, the record stays whatever the read below
+          // finds — that read answers the PUBLISHED layer, where a dashboard nobody has published is not, so it cannot prove the row gone; the next run
+          // reads the saved layer (recoverRecordedDashboard).
+          if (!undoErr) creations.clear(dash.name);
           // deleteRemoteArtifact removes the row and THEN the local workspace copy, so a failure can come
           // from either half. Only a row that is still there is left outside the solution; when that
           // cannot be read either, assume it is.
@@ -6210,9 +6330,14 @@ async function runSdkBuildPhases(spec, opts, owed) {
             } catch { /* cannot tell — keep assuming it is still there */ }
           }
           if (stranded) {
-            // Never auto-retried (isTransientHalt, build-model-app.js): a retry would reuse it as a lone
-            // name match without adding it, whatever transient text the causes quoted above carry.
-            throw refusal(`dashboard "${dash.name}" was created (${pushed.id}) but could not be added to solution '${sol.uniqueName}' (${why}), and removing it again failed (${(undoErr && undoErr.message) || undoErr}) — add it to the solution or delete it in Maker before re-running, or teardown will not recognise it as this app's`, { cause: err });
+            // Never auto-retried (isTransientHalt, build-model-app.js): the add and its undo were both refused just now, which is a person's to look
+            // at, whatever transient text the causes quoted above carry — and a dashboard the record does not hold would be reused by a retry as a lone
+            // name match without being added. One the record holds is added by the next run, so the halt says that instead of asking for Maker.
+            const recorded = (creations.idsOf(dash.name) || []).includes(bareId(pushed.id));
+            const remedy = recorded
+              ? 'this build recorded it, so running the build again adds it to the solution and reuses it; or delete it in Maker before running it again, and it is created afresh'
+              : "add it to the solution or delete it in Maker before re-running, or teardown will not recognise it as this app's";
+            throw refusal(`dashboard "${dash.name}" was created (${pushed.id}) but could not be added to solution '${sol.uniqueName}' (${why}), and removing it again failed (${(undoErr && undoErr.message) || undoErr}) — ${remedy}`, { cause: err });
           }
           // Nothing is left behind, so a retry is safe — when the SERVICE said it may be: the cause's HTTP
           // status (a 429/503 is still auto-retried as it was before the undo existed) and its own words
@@ -6221,6 +6346,8 @@ async function runSdkBuildPhases(spec, opts, owed) {
             status: err && (err.statusCode || err.status), words: judgeFailure(err).text, cause: err,
           });
         }
+        // Proven in the solution: nothing is left to recover.
+        creations.clear(dash.name);
         result.created.dashboards[dash.name] = pushed.id;
       });
     }

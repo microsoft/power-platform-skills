@@ -289,7 +289,8 @@ works through.
   than emit a spec that cannot be rebuilt: rename one in Maker and download again. Because a name can
   also match **another app's** dashboard, ownership comes from the app's solution, which holds every
   dashboard the build creates (one the build cannot add to it is removed again, or named in the halt
-  when that fails too). When several in the
+  when that fails too; one a build created and then stopped before adding is added by the next build,
+  which finds it by the id it recorded in its workspace before the create). When several in the
   environment match, the build reuses — and verify checks, its sitemap entry included — the one the
   solution holds, and halts if that does not single one out; a single match is used as it is. Teardown
   deletes only the ones the solution holds, never a namesake, and none when the spec has no real
