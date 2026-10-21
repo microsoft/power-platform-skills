@@ -65,6 +65,28 @@ test('hydrateSpec reconstructs a valid, complete spec (entities + appShell + pag
   assert.strictEqual(r.ok, true, JSON.stringify(r.errors));
 });
 
+// A download writes no form (hydrate-spec.js says why `forms` stays empty), so it cannot write a
+// `fieldOptions` key the spec gate refuses. The forms of a downloaded spec are the author's: one that
+// uses every per-field option must pass the build's gate after the file round trip, and a misspelled
+// option must not.
+test('a downloaded spec writes no field option, and a form the author adds with every option still passes the build gate', async () => {
+  const spec = JSON.parse(JSON.stringify(await hydrateSpec(deployedRead())));
+  assert.deepStrictEqual(spec.forms, [], 'a download writes no form, so no fieldOptions');
+  spec.entities[0].columns.push({ schemaName: 'new_due', displayName: 'Due', type: 'DateTime' });
+  spec.forms.push({ entity: 'new_order', name: 'Order', fieldOptions: {
+    new_name: { readOnly: true },
+    new_status: { hidden: true, colspan: 2, rowspan: 1 },
+    new_due: { after: 'new_name' },
+  } });
+  const r = validateAppSpec(spec);
+  assert.strictEqual(r.ok, true, JSON.stringify(r.errors));
+
+  spec.forms[0].fieldOptions.new_due = { aftr: 'new_name' };
+  assert.deepStrictEqual(validateAppSpec(spec).errors, [
+    "form 'Order' (table new_order): unknown key 'aftr' on fieldOptions['new_due'] — did you mean 'after'? (allowed: readOnly, hidden, after, colspan, rowspan)",
+  ]);
+});
+
 test('hydrateSpec unwraps Dataverse Label descriptions and omits absent descriptions', async () => {
   const spec = await hydrateSpec({
     app: async () => ({ name: 'A', description: null, siteMap: { areas: [] } }),

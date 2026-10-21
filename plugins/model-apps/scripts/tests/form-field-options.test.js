@@ -20,6 +20,7 @@
 const test = require('node:test');
 const assert = require('node:assert');
 const path = require('node:path');
+const { makeTempDir } = require('./helpers/temp-dirs.js');
 
 const {
   compileFormIntent,
@@ -594,4 +595,197 @@ test('__explicitLayout reports what was COMPILED, not what was requested', () =>
   });
   const real = compileIntent(realSpec, realSpec.forms[0]);
   assert.strictEqual(real.__explicitLayout, true, 'an authored tabs layout IS explicit');
+});
+
+// ---------------------------------------------------------------------------
+// fieldOptions keys: one closed list, shared with the inline field entry
+// ---------------------------------------------------------------------------
+//
+// A `fieldOptions` entry was checked only for the VALUES of the keys the build reads. Any other key
+// (a typo such as `readOnlyy`, a casing slip such as `colSpan`, a key of another object such as a
+// subgrid's `before`) validated clean and then disappeared: the compiler projects only readOnly,
+// hidden, after, colspan and rowspan, so the build succeeded and the option was never applied. The
+// inline `fields[]` entry already refused an unknown key as an error, so the map now does the same,
+// over the same five keys. `name` is not one of them: in the map, the KEY names the field.
+
+const { createMakerSdk, createNodeWorkspaceStorage } = require('../vendor/cds-maker-sdk.cjs');
+const { buildModelApp } = require('../build-model-app.js');
+const { createFakeBuildOrg } = require('./helpers/fake-app-build-org.js');
+const { runScript } = require('./helpers/run-with-fakes.js');
+
+const OPTION_KEYS_ALLOWED = '(allowed: readOnly, hidden, after, colspan, rowspan)';
+const unknownOptionKey = (field, key, hint = '') =>
+  `form 'Item' (table new_item): unknown key '${key}' on fieldOptions['${field}']${hint} ${OPTION_KEYS_ALLOWED}`;
+const readOnlyTypo = () => specWithBigInt({ fieldOptions: { new_points: { readOnlyy: true } } });
+
+test('validation rejects a misspelled fieldOptions key, naming the form, table, field and key, the key it most likely meant and the keys allowed', () => {
+  assert.deepStrictEqual(errsFor(readOnlyTypo()), [unknownOptionKey('new_points', 'readOnlyy', " — did you mean 'readOnly'?")]);
+});
+
+test('validation rejects a span- or anchor-like key that a fieldOptions entry does not take', () => {
+  // `colSpan` differs from a real key only in case, `before` is a subgrid's placement key, and
+  // `span` is no key at all, so only the first has a likely meaning to offer.
+  const errs = errsFor(specWithBigInt({ fieldOptions: {
+    new_points: { colSpan: 2 },
+    new_duedate: { before: 'new_name' },
+    new_daysremaining: { span: 2 },
+  } }));
+  assert.deepStrictEqual(errs, [
+    unknownOptionKey('new_points', 'colSpan', " — did you mean 'colspan'?"),
+    unknownOptionKey('new_duedate', 'before'),
+    unknownOptionKey('new_daysremaining', 'span'),
+  ]);
+});
+
+test('validation rejects the unknown key of an entry that mixes it with valid keys, and still checks the valid ones', () => {
+  const errs = errsFor(specWithBigInt({ fieldOptions: {
+    new_points: { readOnly: true, hiden: true },
+    new_duedate: { hidden: false, readOnlyy: true },
+  } }));
+  assert.deepStrictEqual(errs.filter((e) => /unknown key/.test(e)), [
+    unknownOptionKey('new_points', 'hiden', " — did you mean 'hidden'?"),
+    unknownOptionKey('new_duedate', 'readOnlyy', " — did you mean 'readOnly'?"),
+  ]);
+  // A valid key beside an unknown one keeps its own check: `hidden: false` is still refused, and
+  // `readOnly: true` adds nothing.
+  assert.strictEqual(errs.length, 3, errs.join(' | '));
+  assert.ok(errs.some((e) => /fieldOptions\['new_duedate'\] sets hidden: false/.test(e)), errs.join(' | '));
+});
+
+test("validation rejects 'name' inside a fieldOptions entry, because the map key already names the field", () => {
+  // An inline `fields[]` entry carries its `name`; a map entry is keyed by it. Accepting `name` here
+  // would let `{ "new_a": { "name": "new_b" } }` say two different things about which field it means.
+  const errs = errsFor(specWithBigInt({ fieldOptions: { new_points: { name: 'new_points', readOnly: true } } }));
+  assert.deepStrictEqual(errs, [unknownOptionKey('new_points', 'name', " — a fieldOptions entry is keyed by the field's logical name, so it takes no 'name'")]);
+});
+
+test("validation points a fieldOptions 'visible' at 'hidden', the option that hides a field", () => {
+  // Tabs and sections take `visible`, so it is a likely key to reach for; no near spelling explains it.
+  const errs = errsFor(specWithBigInt({ fieldOptions: { new_points: { visible: false } } }));
+  assert.deepStrictEqual(errs, [unknownOptionKey('new_points', 'visible', " — to keep the field on the form but not show it, use 'hidden': true")]);
+});
+
+test('a fieldOptions key that collides with Object.prototype is reported as itself, never as a native function', () => {
+  // JSON.parse makes each of these an OWN key of the entry. A hint table that is a plain object would
+  // answer `constructor` with Object's own function and splice its source into the message. The form
+  // has no name here, so the message names it by its table alone.
+  const entry = JSON.parse('{ "constructor": true, "toString": 1 }');
+  const errs = errsFor(specWithBigInt({ name: undefined, fieldOptions: { new_points: entry } }));
+  assert.deepStrictEqual(errs, ['constructor', 'toString'].map((k) => `form 'new_item': unknown key '${k}' on fieldOptions['new_points'] ${OPTION_KEYS_ALLOWED}`));
+});
+
+test('an inline field entry keeps its own contract: name plus the same five options, and an unknown key is still refused', () => {
+  // The layout check already refused these; the shared list must not change what an inline entry
+  // accepts or how a refusal reads.
+  const spec = specWithBigInt({
+    layout: 'explicit',
+    tabs: [{ label: 'G', sections: [{ label: 'D', columns: 1, fields: ['new_name', { name: 'new_points', readOnlyy: true }, { name: 'new_duedate', readonly: true }] }] }],
+  });
+  assert.deepStrictEqual(errsFor(spec), [
+    "form 'Item': unknown key 'readOnlyy' on tab 'G' section 'D' field 'new_points' (allowed: name, readOnly, hidden, after, colspan, rowspan)",
+    "form 'Item': unknown key 'readonly' on tab 'G' section 'D' field 'new_duedate' — did you mean 'readOnly'? (allowed: name, readOnly, hidden, after, colspan, rowspan)",
+  ]);
+});
+
+test('each of the five options still validates and compiles exactly as before, form-level and inline', () => {
+  const none = { readOnly: false, hidden: false, after: undefined, colspan: undefined, rowspan: undefined };
+  const shape = (c) => [c.control.fieldName, c.control.isReadOnly, c.visible, c.colspan, c.rowspan];
+
+  // Form-level, under the AUTO layout (its only route). The one-column auto section clamps the
+  // cell's colspan to 1, while the raw span survives for the reconcile.
+  const auto = specWithBigInt({ fieldOptions: {
+    new_name: { readOnly: true },
+    new_duedate: { hidden: true },
+    new_daysremaining: { after: 'New_DueDate' },
+    new_points: { colspan: 2, rowspan: 1 },
+  } });
+  assert.deepStrictEqual(errsFor(auto), []);
+  assert.deepStrictEqual(fieldOptionsMap(auto.forms[0]), {
+    new_name: { name: 'new_name', ...none, readOnly: true },
+    new_duedate: { name: 'new_duedate', ...none, hidden: true },
+    new_daysremaining: { name: 'new_daysremaining', ...none, after: 'new_duedate' },
+    new_points: { name: 'new_points', ...none, colspan: 2, rowspan: 1 },
+  });
+  const autoIntent = compileFormIntent(auto, auto.forms[0]);
+  assert.deepStrictEqual(autoCells(autoIntent).map(shape), [
+    ['new_name', true, undefined, undefined, undefined],
+    ['new_duedate', undefined, false, undefined, undefined],
+    ['new_daysremaining', undefined, undefined, undefined, undefined],
+    ['new_points', undefined, undefined, 1, 1],
+  ]);
+  assert.deepStrictEqual(autoIntent.__fieldPositions, { new_daysremaining: 'new_duedate' });
+  assert.deepStrictEqual(autoIntent.__fieldSpans, { new_points: { colspan: 2, rowspan: 1 } });
+
+  // Inline, on an EXPLICIT layout: a rowspan above 1 is legal on the last field of its section.
+  const explicit = specWithBigInt({
+    layout: 'explicit',
+    tabs: [{ label: 'G', sections: [{ label: 'D', columns: 2, fields: [
+      { name: 'New_Name', readOnly: true },
+      { name: 'new_duedate', hidden: true },
+      { name: 'new_daysremaining', colspan: 2 },
+      { name: 'new_points', rowspan: 2 },
+    ] }] }],
+  });
+  assert.deepStrictEqual(errsFor(explicit), []);
+  assert.deepStrictEqual(explicit.forms[0].tabs[0].sections[0].fields.map(normalizeFieldEntry), [
+    { name: 'new_name', ...none, readOnly: true },
+    { name: 'new_duedate', ...none, hidden: true },
+    { name: 'new_daysremaining', ...none, colspan: 2 },
+    { name: 'new_points', ...none, rowspan: 2 },
+  ]);
+  const explicitIntent = compileFormIntent(explicit, explicit.forms[0]);
+  assert.deepStrictEqual(explicitIntent.tabs[0].columns[0].sections[0].rows.map((r) => r.cells.map(shape)), [
+    [['new_name', true, undefined, undefined, undefined], ['new_duedate', undefined, false, undefined, undefined]],
+    [['new_daysremaining', undefined, undefined, 2, undefined]],
+    [['new_points', undefined, undefined, undefined, 2]],
+  ]);
+  assert.deepStrictEqual(explicitIntent.__fieldSpans, { new_daysremaining: { colspan: 2 }, new_points: { rowspan: 2 } });
+});
+
+test('the compiler projects exactly the option keys validation accepts, from either route', () => {
+  const { FIELD_OPTION_KEYS } = require(path.join(__dirname, '..', 'lib', 'app-spec.js'));
+  assert.deepStrictEqual([...FIELD_OPTION_KEYS], ['readOnly', 'hidden', 'after', 'colspan', 'rowspan']);
+  assert.ok(Object.isFrozen(FIELD_OPTION_KEYS), 'the shared list cannot be widened at run time');
+  for (const projected of [normalizeFieldEntry('new_a'), normalizeFieldEntry({ name: 'new_a', readOnly: true }), fieldOptionsMap({ fieldOptions: { new_a: {} } }).new_a]) {
+    assert.deepStrictEqual(Object.keys(projected), ['name', ...FIELD_OPTION_KEYS]);
+  }
+  // A key added to the list must arrive with a value it is known to take, so this table has to move
+  // with it: each key, on its own, validates and reaches the projection.
+  const sample = { readOnly: true, hidden: true, after: 'new_name', colspan: 2, rowspan: 1 };
+  assert.deepStrictEqual(Object.keys(sample), [...FIELD_OPTION_KEYS]);
+  for (const key of FIELD_OPTION_KEYS) {
+    const spec = specWithBigInt({ fieldOptions: { new_points: { [key]: sample[key] } } });
+    assert.deepStrictEqual(errsFor(spec), [], key);
+    assert.strictEqual(fieldOptionsMap(spec.forms[0]).new_points[key], sample[key], key);
+  }
+});
+
+test('a key outside the list never reaches the compiled form, even where validation is bypassed', () => {
+  const spec = specWithBigInt({ fieldOptions: { new_points: { readOnly: true, readOnlyy: true, hiden: true } } });
+  assert.deepStrictEqual(fieldOptionsMap(spec.forms[0]).new_points, { name: 'new_points', readOnly: true, hidden: false, after: undefined, colspan: undefined, rowspan: undefined });
+  assert.deepStrictEqual(cellFor(compileFormIntent(spec, spec.forms[0]), 'new_points'), { control: { fieldName: 'new_points', isReadOnly: true } });
+});
+
+test('the build refuses a misspelled fieldOptions key before any request reaches the environment, on a dry run and on an apply', async () => {
+  // The real vendored SDK over a fake Dataverse that records every request it is sent.
+  const org = createFakeBuildOrg({ entities: { new_item: { attributes: { new_name: 'String' } } } });
+  const sdk = createMakerSdk({ workspaceStorage: createNodeWorkspaceStorage(makeTempDir('field-option-keys-')), instanceUrl: org.origin, httpClient: org.httpClient });
+  for (const opts of [{ apply: false, livePlan: true }, { apply: true, publish: true }]) {
+    const r = await buildModelApp(readOnlyTypo(), { ...opts, env: org.origin, retryDelayMs: 0 }, { sdk, provisionSdk: sdk, sleep: async () => {}, log: () => {}, warn: () => {} });
+    assert.strictEqual(r.ok, false, JSON.stringify(opts));
+    assert.deepStrictEqual(r.errors, [unknownOptionKey('new_points', 'readOnlyy', " — did you mean 'readOnly'?")], JSON.stringify(opts));
+  }
+  assert.deepStrictEqual(org.calls, [], 'no request reached the environment');
+});
+
+test('the build command refuses the same spec on a dry run before it reads a token or sends a request', () => {
+  // A dry run reads the environment for its plan unless --no-live-plan is given, so a spec that
+  // validated would be sent requests here.
+  const r = runScript('build-model-app.js', ['--env', 'https://contoso.crm.dynamics.com', '--spec', (dir) => `@${path.join(dir, 'app-spec.json')}`], {
+    files: { 'app-spec.json': JSON.stringify(readOnlyTypo()) },
+  });
+  assert.strictEqual(r.status, 1, r.stderr);
+  assert.deepStrictEqual(JSON.parse(r.stdout).errors, [unknownOptionKey('new_points', 'readOnlyy', " — did you mean 'readOnly'?")]);
+  assert.deepStrictEqual(r.requests, [], 'no request was sent');
+  assert.deepStrictEqual(r.tokenReads, { dataverse: 0, powerApps: 0 }, 'no token was read');
 });

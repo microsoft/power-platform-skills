@@ -11,7 +11,7 @@
 // the SDK's generic mutation surface without hardcoding form-model logic everywhere.
 
 const { entityByLogical } = require('./_graph.js');
-const { lookupColumnsFor, generatedTabName, generatedSectionName, formColumnsOf, authoredSectionNames, authoredTabNames } = require('./app-spec.js');
+const { lookupColumnsFor, generatedTabName, generatedSectionName, formColumnsOf, authoredSectionNames, authoredTabNames, FIELD_OPTION_KEYS } = require('./app-spec.js');
 const { SDK_COLUMN_TYPE } = require('./entity-provision.js');
 const { timelineCellIntent, timelineRowsIntent, wantsTimeline } = require('./form-timeline.js');
 
@@ -159,6 +159,36 @@ function fieldCellIntent(logical, opts) {
 // custom control — but validateAppSpec emits a warning so the choice is deliberate rather than accidental.
 const NON_FORM_RENDERABLE_TYPES = new Set(['BigInt']);
 
+// A span is `undefined` only when the author SAID NOTHING. An explicit 1 is preserved as 1: the
+// previous rule mapped every value <= 1 to undefined, which made "author asked for the default"
+// and "author said nothing" IDENTICAL — the opposite of what its comment claimed. The consequence
+// was live-reproduced: changing an authored colspan from 2 to 1 compiled to "no colspan",
+// reconcile read that as "no desired span", and the deployed cell stayed at 2 across two applies.
+function optSpan(v) {
+  if (v === undefined || v === null || v === '') return undefined; // said nothing
+  const n = Number(v);
+  return Number.isFinite(n) && n >= 1 ? Math.floor(n) : undefined; // an explicit 1 IS intent
+}
+
+// How each per-field option reaches the canonical entry, the same from both routes that declare one
+// (an inline `fields[]` entry and a form-level `fieldOptions` entry). The projection walks
+// FIELD_OPTION_KEYS (app-spec.js), the list validation accepts, so the two cannot drift apart: a key
+// added there without a projector here fails the first compile, and a key that is not there never
+// reaches a form, because the spec gate refuses it instead of this projection dropping it in silence.
+const FIELD_OPTION_PROJECTORS = {
+  readOnly: (v) => v === true,
+  hidden: (v) => v === true,
+  after: (v) => (v ? String(v).toLowerCase() : undefined),
+  colspan: optSpan,
+  rowspan: optSpan,
+};
+
+function projectFieldOptions(name, source) {
+  const entry = { name };
+  for (const key of FIELD_OPTION_KEYS) entry[key] = FIELD_OPTION_PROJECTORS[key](source[key]);
+  return entry;
+}
+
 // Normalize one entry of `tabs[].sections[].fields[]`.
 //
 // An entry is either a bare logical name (the original and still most common shape) or an object
@@ -170,30 +200,12 @@ const NON_FORM_RENDERABLE_TYPES = new Set(['BigInt']);
 //   { "name": "co_description",    "colspan": 2 }
 // Returns a canonical { name, readOnly, hidden, after, colspan, rowspan } with `name`/`after`
 // lower-cased, because every downstream comparison (form field logicals, cell pointers, Dataverse
-// attribute logical names) is lower-case.
-//
-// A span is `undefined` only when the author SAID NOTHING. An explicit 1 is preserved as 1: the
-// previous rule mapped every value <= 1 to undefined, which made "author asked for the default"
-// and "author said nothing" IDENTICAL — the opposite of what its comment claimed. The consequence
-// was live-reproduced: changing an authored colspan from 2 to 1 compiled to "no colspan",
-// reconcile read that as "no desired span", and the deployed cell stayed at 2 across two applies.
+// attribute logical names) is lower-case. Spans keep optSpan's omission-vs-value rule.
 function normalizeFieldEntry(entry) {
-  const span = (v) => {
-    if (v === undefined || v === null || v === '') return undefined; // said nothing
-    const n = Number(v);
-    return Number.isFinite(n) && n >= 1 ? Math.floor(n) : undefined; // an explicit 1 IS intent
-  };
   if (entry && typeof entry === 'object' && !Array.isArray(entry)) {
-    return {
-      name: String(entry.name || '').toLowerCase(),
-      readOnly: entry.readOnly === true,
-      hidden: entry.hidden === true,
-      after: entry.after ? String(entry.after).toLowerCase() : undefined,
-      colspan: span(entry.colspan),
-      rowspan: span(entry.rowspan),
-    };
+    return projectFieldOptions(String(entry.name || '').toLowerCase(), entry);
   }
-  return { name: String(entry || '').toLowerCase(), readOnly: false, hidden: false, after: undefined, colspan: undefined, rowspan: undefined };
+  return projectFieldOptions(String(entry || '').toLowerCase(), {});
 }
 
 // Form-level per-field control options, keyed by column logical name:
@@ -202,12 +214,6 @@ function normalizeFieldEntry(entry) {
 // This is the ONLY way to reach these attributes under an AUTO layout, which has no field list to
 // hang an inline object off. Under an EXPLICIT layout both work and the inline entry wins, because
 // the more specific declaration should not be silently overridden by a form-wide default.
-function optSpan(v) {
-  if (v === undefined || v === null || v === '') return undefined;
-  const n = Number(v);
-  return Number.isFinite(n) && n >= 1 ? Math.floor(n) : undefined;
-}
-
 function fieldOptionsMap(formSpec) {
   const map = {};
   const fo = formSpec && formSpec.fieldOptions;
@@ -215,15 +221,7 @@ function fieldOptionsMap(formSpec) {
   for (const key of Object.keys(fo)) {
     const v = fo[key];
     if (!v || typeof v !== 'object' || Array.isArray(v)) continue;
-    map[String(key).toLowerCase()] = {
-      name: String(key).toLowerCase(),
-      readOnly: v.readOnly === true,
-      hidden: v.hidden === true,
-      after: v.after ? String(v.after).toLowerCase() : undefined,
-      // Same omission-vs-value rule as normalizeFieldEntry: an explicit 1 is a claim, absence is not.
-      colspan: optSpan(v.colspan),
-      rowspan: optSpan(v.rowspan),
-    };
+    map[String(key).toLowerCase()] = projectFieldOptions(String(key).toLowerCase(), v);
   }
   return map;
 }

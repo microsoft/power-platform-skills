@@ -1380,6 +1380,10 @@ A form field can carry these per-control options. Declare them **form-level** in
 (keyed by column logical name) — the only route under an `auto` layout, which has no field list —
 or **inline** on an explicit layout's `fields[]` entry as `{ "name": …, "readOnly": …, "hidden": … }`.
 Where both apply to one field the inline entry wins; a plain string entry keeps working unchanged.
+An entry takes only the options below — `readOnly`, `hidden`, `after`, `colspan` and `rowspan` — and
+an inline entry its `name` as well; a `fieldOptions` entry takes no `name`, because its key names the
+field. Any other key (a misspelling such as `readOnlyy` or `colSpan`) is **rejected** at author time,
+naming the key it most likely meant, rather than accepted and silently ignored.
 
 - **`readOnly: true`** locks the control (`disabled="true"`), leaving it visible. Use it for a value
   the platform generates but does **not** make immutable — an AutoNumber column is writable through

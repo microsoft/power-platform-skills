@@ -7,6 +7,7 @@ const { normalizeSpecShape } = require('./spec-shape.js');
 const { isMainForm, selectDefaultForm, ordersByHand } = require('./form-order.js');
 const { AUTO_TAB_NAME, AUTO_SECTION_NAME, placementOf, resolvePlacement } = require('./form-subgrid-placement.js');
 const { PAGE_BINDINGS, pageBindingsProblem, statedPageBindings, statableBinding, bindingProblemText } = require('./page-bindings.js');
+const { nearestName } = require('./nearest-name.js');
 
 // URL scheme allowlist for spec-supplied URLs that the built app will RENDER (iframe dashboard tiles,
 // sitemap URL subareas). Only http(s) is allowed — a `javascript:`, `data:`, `vbscript:`, or `file:`
@@ -1607,6 +1608,38 @@ function validateFormSecurityRoles(f, spec, errors) {
   }
 }
 
+// The per-field control options, ONE list for both routes that declare them: a form-level
+// `fieldOptions` entry takes exactly these, and an inline `fields[]` entry takes these plus its `name`
+// (FORM_FIELD_ENTRY_KEYS). A map entry takes no `name`, because its KEY names the field.
+//
+// It is also the list the compiler projects (artifact-intent.js `projectFieldOptions`), so validation
+// and the build cannot disagree about what an option is. A `fieldOptions` entry used to be checked only
+// for the values of these keys, so any other key (`readOnlyy`, `colSpan`, a subgrid's `before`)
+// validated clean and was then dropped by the projection: a green build that never applied the option.
+// Frozen, and in the order of the compiled entry.
+const FIELD_OPTION_KEYS = Object.freeze(['readOnly', 'hidden', 'after', 'colspan', 'rowspan']);
+// `readOnly?, hidden?, after?, colspan?, rowspan?`, for the messages that describe an entry's shape.
+const FIELD_OPTION_SHAPE = FIELD_OPTION_KEYS.map((k) => `${k}?`).join(', ');
+
+// What to write instead, for a key of a `fieldOptions` entry that a near spelling cannot explain.
+// Prototype-less for the reason ENTITY_KEY_HINTS is: the lookup key comes from the spec, and
+// `constructor` must not find Object's own function.
+const FIELD_OPTION_KEY_HINTS = Object.assign(Object.create(null), {
+  name: " — a fieldOptions entry is keyed by the field's logical name, so it takes no 'name'",
+  visible: " — to keep the field on the form but not show it, use 'hidden': true",
+});
+
+// The message suffix naming the option an unknown `fieldOptions` key most likely meant: a written hint
+// first, then the shared single-edit matcher, which also settles a casing slip (`colSpan` for
+// `colspan`). nearestName answers in lower case, so its match is mapped back to the spelling the spec
+// must use.
+function fieldOptionKeyHint(key) {
+  if (FIELD_OPTION_KEY_HINTS[key]) return FIELD_OPTION_KEY_HINTS[key];
+  const near = nearestName(key, FIELD_OPTION_KEYS.map((k) => k.toLowerCase()));
+  const meant = near && FIELD_OPTION_KEYS.find((k) => k.toLowerCase() === near);
+  return meant ? ` — did you mean '${meant}'?` : '';
+}
+
 // Allow-listed keys for an explicit form layout, with the reason each rejection exists.
 //
 // `tabs[]`/`sections[]` had no allow-list at all, so an invented or misspelled key validated clean
@@ -1626,7 +1659,7 @@ function validateFormSecurityRoles(f, spec, errors) {
 const FORM_TAB_KEYS = new Set(['name', 'label', 'expanded', 'visible', 'sections', 'columns']);
 const FORM_TAB_COLUMN_KEYS = new Set(['width', 'sections']);
 const FORM_SECTION_KEYS = new Set(['name', 'label', 'columns', 'showLabel', 'visible', 'fields']);
-const FORM_FIELD_ENTRY_KEYS = new Set(['name', 'readOnly', 'hidden', 'after', 'colspan', 'rowspan']);
+const FORM_FIELD_ENTRY_KEYS = new Set(['name', ...FIELD_OPTION_KEYS]);
 // Identity of a sample-data `matchOn` value, shared by the author-time gate in `validateAppSpec` and
 // the loader's own refusal in `chooseMatchOn`/`firstDuplicateNonEmpty` (entity-provision.js).
 //
@@ -2267,7 +2300,7 @@ function validateFormFieldOptions(f, entityByLower, errors, warnings) {
         } else if (typeof entry === 'string') {
           listedByLayout.add(entry.toLowerCase());
         } else {
-          errors.push(`${label}: a field entry must be a column logical name or an object { name, readOnly?, hidden?, after? }`);
+          errors.push(`${label}: a field entry must be a column logical name or an object { name, ${FIELD_OPTION_SHAPE} }`);
         }
       }
     }
@@ -2280,8 +2313,16 @@ function validateFormFieldOptions(f, entityByLower, errors, warnings) {
       for (const key of Object.keys(f.fieldOptions)) {
         const v = f.fieldOptions[key];
         if (!v || typeof v !== 'object' || Array.isArray(v)) {
-          errors.push(`${label}: fieldOptions['${key}'] must be an object { readOnly?, hidden?, after?, colspan? }`);
+          errors.push(`${label}: fieldOptions['${key}'] must be an object { ${FIELD_OPTION_SHAPE} }`);
           continue;
+        }
+        // Only the entry's OWN keys (Object.keys): a key the entry does not take is refused here, worded
+        // like the inline entry's check (validateFormLayoutKeys), instead of being dropped by the compiler.
+        // A named form also names its table: a field belongs to a table, and two tables' forms can share
+        // a name.
+        for (const k of Object.keys(v)) {
+          if (FIELD_OPTION_KEYS.includes(k)) continue;
+          errors.push(`${label}${f.name && f.entity ? ` (table ${f.entity})` : ''}: unknown key '${k}' on fieldOptions['${key}']${fieldOptionKeyHint(k)} (allowed: ${FIELD_OPTION_KEYS.join(', ')})`);
         }
         seen.push({ name: String(key).toLowerCase(), opt: v, where: `fieldOptions['${key}']`, inline: false });
       }
@@ -4504,6 +4545,7 @@ module.exports = {
   quickCreateEnabledFor,
   isPlatformIconRef,
   webResourceNameFromRef,
+  FIELD_OPTION_KEYS,
   FORM_TYPE_CODE,
   formIdentityKey,
   FORM_GUID_RE,
