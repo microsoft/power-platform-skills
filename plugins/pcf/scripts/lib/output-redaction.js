@@ -877,7 +877,10 @@ function guardStream(stream, redact = redactWritten) {
     while (at < length && unitAt(at) === 0x5c) at += 1;
     return slice(Math.min(length, at + 6));
   };
+  // Bumped by every write, so that a write the stream refuses can tell whether a write made inside it (a callback the stream called at once) has moved the memory on since.
+  let writes = 0;
   const guarded = function writeWithoutTokens(chunk, ...rest) {
+    const before = open;
     let given = chunk;
     try {
       let bytes = null;
@@ -901,7 +904,17 @@ function guardStream(stream, redact = redactWritten) {
       open = null;
       given = WITHHELD;
     }
-    return write.call(this, given, ...rest);
+    // The memory is this write's before the stream takes it, so that a callback the stream calls at once, and writes from, reads on from it. A write the stream REFUSES — it throws (an encoding it does not know, a
+    // chunk that is no text and no bytes, a stream already ended) — wrote nothing, so the memory goes back to what the last written one left, unless a write made inside it has moved it on; the error is the
+    // stream's own. A write that returns false was taken (the stream asks the writer to wait): its memory stands.
+    writes += 1;
+    const mine = writes;
+    try {
+      return write.call(this, given, ...rest);
+    } catch (error) {
+      if (writes === mine) open = before;
+      throw error;
+    }
   };
   guarded[GUARDED] = true;
   stream.write = guarded;

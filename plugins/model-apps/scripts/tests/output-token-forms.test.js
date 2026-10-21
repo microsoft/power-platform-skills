@@ -563,3 +563,49 @@ test('JSON written in pieces cut anywhere — inside escapes of every kind, insi
     }
   }
 });
+test('a write the stream REFUSES at once — an encoding it does not know, a chunk that is no text and no bytes, bytes it will not take — leaves the memory of the escape the last written one ended inside: the writes after it are what they would have been, JSON again, and the error is the stream\'s own; a write that returns false keeps its memory, and a callback the stream calls at once reads on from it', () => {
+  const token = SPLIT_ESCAPES[0].token;
+  const head = `{"error":"${'A'.repeat(24)}\\`;
+  const tail = `/${'B'.repeat(27)}"}`;
+  const make = (verdictOf) => {
+    const chunks = [];
+    const stream = { write(chunk) { const verdict = verdictOf(chunk); if (verdict instanceof Error) throw verdict; chunks.push(chunk); return verdict; } };
+    guardStream(stream, (chunk, options) => (typeof chunk === 'string' ? redactTokens(chunk, [token], { edges: true, ...options }) : redaction.maskTokenBytes(chunk, [token], { edges: true, ...options })));
+    return { stream, chunks };
+  };
+  // What the two writes make when nothing comes between them.
+  const control = make(() => true);
+  control.stream.write(head);
+  control.stream.write(tail);
+  const expected = control.chunks.join('');
+  assert.deepEqual(JSON.parse(expected), { error: `${MARK}/${MARK}` });
+  const wrong = [];
+  for (const [what, refused, args] of [
+    ['a text in an encoding the stream does not know', 'interleaved text', ['no-such-encoding']],
+    ['a chunk that is no text and no bytes', 42, []],
+    ['bytes the stream will not take', Buffer.from('more'), []],
+    ['a string in base64 the stream will not take', Buffer.from('xyz').toString('base64'), ['base64']],
+  ]) {
+    const rejection = new TypeError(`refused: ${what}`);
+    let refuse = false;
+    const { stream, chunks } = make(() => (refuse ? rejection : true));
+    stream.write(head);
+    refuse = true;
+    assert.throws(() => stream.write(refused, ...args), (error) => error === rejection, `${what}: the stream's own error`);
+    refuse = false;
+    stream.write(tail);
+    if (chunks.join('') !== expected) wrong.push(`${what}: ${chunks.join('')}`);
+  }
+  assert.deepEqual(wrong, [], 'the writes after a refused one are what they would have been');
+  // A write that returns false was taken (the stream asks the writer to wait): its memory stands.
+  const waiting = make((chunk) => !(typeof chunk === 'string' && chunk.endsWith('\\')));
+  assert.equal(waiting.stream.write(head), false);
+  waiting.stream.write(tail);
+  assert.equal(waiting.chunks.join(''), expected);
+  // A callback the stream calls at once, which writes the rest from inside the first write, reads on from that write's memory.
+  const chunks = [];
+  const eager = { write(chunk, callback) { chunks.push(chunk); if (typeof callback === 'function') callback(); return true; } };
+  guardStream(eager, (chunk, options) => redactTokens(chunk, [token], { edges: true, ...options }));
+  eager.write(head, () => eager.write(tail));
+  assert.equal(chunks.join(''), expected);
+});
