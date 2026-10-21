@@ -327,9 +327,10 @@ After plan-mode approval (before the full build):
    The plan's `## Environment` carries `Mode: app-builder` and every page row carries a **Key**, so
    the worker emits `"PAGEREF_<key>"` for cross-page navigation (never a file-derived token — a
    downloaded page's `codeFile` is a path, not its identity). Custom nav ids go in `data:` — never
-   `recordId`. `Connectors: none` and `Telemetry: disabled` are constants here: the App Spec has no
-   connector-binding concept (so the projected plan always says `No connector bindings.`), and
-   `/app-builder` never runs the Phase 4.7 `custom-telemetry` probe. Both are stated explicitly
+   `recordId`. `Connectors: none` and `Telemetry: disabled` are constants here: `/app-builder` writes no
+   connector code (the App Spec's `connectorBindings` / `actionBindings` are lists a downloaded page already
+   holds, carried through a rebuild and never authored here, so the projected plan always says
+   `No connector bindings.`), and `/app-builder` never runs the Phase 4.7 `custom-telemetry` probe. Both are stated explicitly
    rather than omitted — the page-builder treats a missing line as the same fail-closed value, but
    an explicit line is what makes the dispatch contract checkable.
 
@@ -694,7 +695,8 @@ This reconstructs the app into `<working-dir>/app-spec.json`. **Round-trip scope
 not everything:**
 - **Round-trips:** the sitemap → `appShell` (all subareas + icons), **every** generative page (read
   through the SDK; the pages are the sitemap's `GenPage` subareas, so Maker-added pages
-  are included, and each keeps its own name and model) into `pages[]` + their `.tsx`, the referenced
+  are included, and each keeps its own name, model, and connector and Custom API bindings —
+  `connectorBindings` / `actionBindings`) into `pages[]` + their `.tsx`, the referenced
   entities (minimal — the build reuses existing tables), **classic dashboards** (id-passthrough tiles
   carrying the deployed view/chart ids), the icon web resources, and the solution.
 - **Does NOT round-trip:** `forms[]`, `views[]`, `charts[]`, `commands[]` — they come back empty.
@@ -707,6 +709,16 @@ not everything:**
   table with a `roleGrants[]` entry (additive; it does not associate the role with the app). Lint and
   the design document name each new table no persona and no grant covers, and `write-app-spec-doc.js
   --env` lists the roles the app has.
+
+**Page bindings and another environment.** A page's connector and Custom API bindings are in the spec, so a
+rebuild writes them back — into this environment and into another one. A rebuild cannot make what they
+*name*. When the pull's result carries `pageBindings`, tell the user what it says before any rebuild into
+another environment: `neededInTarget` lists the connection references (and the connections behind them), the
+Custom APIs and the service resources (a SharePoint site and its list ids, say) that environment must already
+have, and `notCarried` the lists the spec could not state (a rebuild into the same environment leaves those as
+they are; into another one, they are bound with `/genpage`). Do not write bindings into a spec yourself — they
+come from a page a pull read — and when you reset a page to `intent` to regenerate it, delete its bindings
+from the spec: the generator writes no connector code.
 
 Then:
 

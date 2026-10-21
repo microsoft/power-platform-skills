@@ -73,6 +73,14 @@ under `actionBindings`; the skill never writes this file directly):
   `StringArray`, `EntityReference`, `Entity`, `EntityCollection`, `Picklist`.
   See <https://learn.microsoft.com/power-apps/developer/data-platform/custom-api>.
 
+## In an App Spec
+
+An app a download reads is written with each page's `actionBindings` in `pages[].actionBindings`, entry for entry,
+and a rebuild writes that list back onto the page (a spec that states none leaves the page's own). `/genpage`
+itself never reads or writes the spec. The spec carries the list and not the Custom APIs it names: each must
+already exist in the environment you rebuild into, deployed in a solution. The `custom-api` flag gates what the
+`/genpage` agents author, not this. See `references/app-spec-schema.md` → `pages[]`.
+
 ## Runtime requirements
 
 - Always cast `dataApi` to the optional action-method shape and **presence-check** the method

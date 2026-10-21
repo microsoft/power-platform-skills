@@ -55,6 +55,7 @@ const {
   subgridRelationshipName,
   lookupLabelFor,
   lookupParentNeedsEnvironment,
+  statedPageBindings,
 } = require('./app-spec.js');
 const { PHASES } = require('./stages.js');
 const { topoOrderEntities, entityByLogical } = require('./_graph.js');
@@ -6906,7 +6907,7 @@ async function runSdkBuildPhases(spec, opts, owed) {
           for (const p of implemented) {
             const key = keyOf(p);
             if (keyToId.has(key) || !navTargets.has(key)) continue; // only ABSENT targets need pre-minting
-            const fields = { name: p.name, source: sourceByKey.get(key), prompt: p.prompt, agentMessage: p.agentMessage, dataSources: p.dataSources || [], model: p.model };
+            const fields = { name: p.name, source: sourceByKey.get(key), prompt: p.prompt, agentMessage: p.agentMessage, dataSources: p.dataSources || [], model: p.model, ...statedPageBindings(p) };
             const up = await createPage(p, fields);
             recordCreate(p, up.pageId);
             keyToId.set(key, up.pageId);
@@ -7003,8 +7004,9 @@ async function runSdkBuildPhases(spec, opts, owed) {
             // The spec's data sources are authoritative, as they always were: a page that lists none is bound to none. The model and name ride along
             // too, but the page's own are kept when the spec has none (the SDK writes only what differs; pac stored whatever `--model` it was
             // sent, so a re-upload without one used to wipe a deployed page's model id to ""). A downloaded spec carries the model (pages[].model).
+            // The connector and Custom API bindings go the same way, and only when the page states them: one it leaves out is the deployed page's own, and a list it states — `[]` too — replaces it.
             // `caller: 'build'` words the advice for an UPDATE that may have landed: the build keeps no base marker, and reads every page again when it runs.
-            const fields = { name: p.name, source: deployedBytes, prompt: p.prompt, agentMessage: p.agentMessage, dataSources: p.dataSources || [], model: p.model };
+            const fields = { name: p.name, source: deployedBytes, prompt: p.prompt, agentMessage: p.agentMessage, dataSources: p.dataSources || [], model: p.model, ...statedPageBindings(p) };
             // `publishedFingerprint` is what this workspace recorded about the page's last publish, handed over only while the page's files still read as they did right after it (`publishesStillStanding`):
             // a page that already holds this very content, and was not touched from elsewhere since, is not published again.
             const up = requestedId ? await genpage.update(requestedId, { ...fields, caller: 'build', runtimeEvidence: true, publishedFingerprint: standingPublishes.get(String(requestedId).toLowerCase()), ...(opts.throttle ? { throttle: opts.throttle } : {}) }) : await createPage(p, fields);

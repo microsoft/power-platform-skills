@@ -38,6 +38,30 @@ const FORM_GUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{
 // `model` in its config.json. Shared with download, which carries only a model the spec can hold.
 const PAGE_MODEL_RE = /^[A-Za-z0-9][A-Za-z0-9._:/@+-]{0,99}$/;
 
+// The two lists a generative page holds in its config.json beside its `dataSources` and `model`, each with the property its entries are found by — what the page's code asks the runtime for:
+// a connector binding is found by the logical name of the connection reference it goes through, a Custom API binding by the API's unique name. As a page holds them:
+//   { "connectorBindings": [ { "logicalName": "new_msnweather", "connectorId": "/providers/Microsoft.PowerApps/apis/shared_msnweather", "dataset": "", "operations": ["CurrentWeather"] } ],
+//     "actionBindings":    [ { "name": "new_ApproveOrder", "isFunction": false, "boundEntityLogicalName": "salesorder" } ] }
+// A spec page states them as the page holds them (`pages[].connectorBindings`, `pages[].actionBindings`), every entry exactly as written: its other properties are the runtime's
+// (references/connectors.md and references/custom-api.md say what each means), so they are neither checked nor rewritten here.
+const PAGE_BINDINGS = { connectorBindings: 'logicalName', actionBindings: 'name' };
+
+// Why `value` cannot be a page's `<kind>` in an App Spec — it is not a list, or one entry is not an object — or null when it can. validateAppSpec holds a spec to the same rule, so a download that asks before it
+// writes a page's bindings into a spec never writes what the spec's own validation refuses.
+function pageBindingsProblem(kind, value) {
+  if (!Array.isArray(value)) return `${kind} is present but is not an array`;
+  const at = value.findIndex((entry) => !entry || typeof entry !== 'object' || Array.isArray(entry));
+  return at === -1 ? null : `${kind}[${at}] is not an object`;
+}
+
+// The binding lists a spec page states, as the page backend takes them: { connectorBindings?, actionBindings? }. A list the page does not state is left out — the backend writes only what it
+// is given, so the page keeps the bindings it holds — and a list it states, `[]` too, is the page's own from then on, as its `dataSources` are.
+function statedPageBindings(page) {
+  const out = {};
+  for (const kind of Object.keys(PAGE_BINDINGS)) if (page && Array.isArray(page[kind])) out[kind] = page[kind];
+  return out;
+}
+
 // Security-authoring enums (personas[]). These mirror the vendored SDK's security surface
 // (cds-maker-sdk src/types/security.ts) EXACTLY — the app-spec validator is a lint-time echo of the
 // SDK's own guards so an author sees a bad access/scope at author time instead of only on apply.
@@ -3473,6 +3497,20 @@ function validateAppSpec(spec, opts = {}) {
     if (p.model !== undefined && (typeof p.model !== 'string' || !PAGE_MODEL_RE.test(p.model))) {
       errors.push(`page '${p.key || p.name}': model must be a model id such as 'gpt-4.1' (letters, digits and . _ : / @ + -, at most 100 characters)`);
     }
+    // The page's connector and Custom API bindings. That each is a list, and that none of its entries is missing, is reported above by normalizeSpecShape; an entry that is there and is no object (a string, a number) is
+    // reported here, by the rule a download holds a page's bindings to (pageBindingsProblem), so a download never writes a spec this refuses. What else is checked is what the page finds an entry by. That is a warning:
+    // an entry is written exactly as it is given, and a page a download read the bindings of may hold one with no such property, which a refusal would leave with no spec at all.
+    for (const [kind, identity] of Object.entries(PAGE_BINDINGS)) {
+      if (!Array.isArray(p[kind])) continue;
+      const problem = pageBindingsProblem(kind, p[kind]);
+      if (problem) errors.push(`page '${p.key || p.name}': ${problem}`);
+      p[kind].forEach((entry, i) => {
+        if (!entry || typeof entry !== 'object' || Array.isArray(entry)) return;
+        if (typeof entry[identity] !== 'string' || !entry[identity].trim()) {
+          warnings.push(`page '${p.key || p.name}': ${kind}[${i}] has no ${identity} — the page's code finds a binding by it, so this one can never be used`);
+        }
+      });
+    }
     const src = normalizePageSource(p);
     // Track whether a structural source error was emitted so the profile check below doesn't
     // double-report (e.g. source:{kind:'tsx'} with no codeFile should get ONE error, not two).
@@ -4485,6 +4523,9 @@ module.exports = {
   formIdentityKey,
   FORM_GUID_RE,
   PAGE_MODEL_RE,
+  PAGE_BINDINGS,
+  pageBindingsProblem,
+  statedPageBindings,
   ACCESS_LEVELS,
   PRIVILEGE_SCOPES,
   ROLE_GRANT_KEYS,

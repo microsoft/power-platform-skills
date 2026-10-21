@@ -1,5 +1,5 @@
 'use strict';
-const { isSafeHttpUrl, webResourceNameFromRef, FORM_GUID_RE } = require('./app-spec.js');
+const { isSafeHttpUrl, webResourceNameFromRef, FORM_GUID_RE, statedPageBindings } = require('./app-spec.js');
 // Reconstruct a COMPLETE app-spec from a DEPLOYED app (the edit flow's "pull everything" step). Pure
 // + testable: `read` supplies the deployed state — the app (sitemap JSON, via the SDK's app read
 // path which surfaces entity/genPage/icon subareas), its generative pages (read through the SDK),
@@ -196,6 +196,10 @@ async function hydrateSpec(read) {
     };
   };
 
+  // A page's connector and Custom API bindings, as the download read them — written when the page has any. An empty list says nothing the page does not already say by having none, and
+  // a spec that stated one would claim the page's bindings were cleared on purpose (a rebuild writes a stated list as the page's own, `[]` clearing it), as `dataSources` is left out when empty.
+  const bindingsOf = (p) => Object.fromEntries(Object.entries(statedPageBindings(p)).filter(([, list]) => list.length));
+
   const spec = {
     // schemaVersion 2 only when pages carry keys (v2 shape); omitted for legacy back-compat.
     ...(hasKeys ? { schemaVersion: 2 } : {}),
@@ -273,6 +277,7 @@ async function hydrateSpec(read) {
           ...(p.purpose !== undefined ? { purpose: p.purpose } : {}),
           ...(p.dataSources && p.dataSources.length ? { dataSources: p.dataSources } : {}),
           ...(p.model ? { model: p.model } : {}),
+          ...bindingsOf(p),
           ...(p.navigatesTo ? { navigatesTo: p.navigatesTo } : {}),
           ...(p.pageInput !== undefined ? { pageInput: p.pageInput } : {}),
           ...directEntryOf(p),
@@ -285,6 +290,7 @@ async function hydrateSpec(read) {
           name: p.name,
           ...(p.dataSources && p.dataSources.length ? { dataSources: p.dataSources } : {}),
           ...(p.model ? { model: p.model } : {}),
+          ...bindingsOf(p),
           ...(p.prompt !== undefined ? { prompt: p.prompt } : {}),
           codeFile: p.codeFile,
         })),

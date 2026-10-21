@@ -21,6 +21,11 @@
 // the download stops without writing anything, `{ ok: false, code: 'navigation-language-unknown', error }`: titles read in a guessed language could overwrite the right ones on the next
 // rebuild. Run it again, or pass --language-code. The flag only decides the language the titles are read in: it is not written into the spec (a pin there is the author's), and a flag that
 // names another language than the spec on disk pins is refused (`navigation-language-conflict`).
+//
+// A page's connector and Custom API bindings are written into the spec as the page holds them (`pages[].connectorBindings`, `pages[].actionBindings`), so a rebuild keeps them in this environment and writes them
+// into another one. What a rebuild cannot make there — the connection references and the connections behind them, the Custom APIs, the service resources a connector binding points at — is said on stderr and
+// in the JSON result as `pageBindings` (pageBindingsReport): { pages, neededInTarget, notCarried?, note }. It is left out of the result when no page holds a binding and none had to be left out; a list the spec cannot
+// state is never a refusal (see parseDownloadedPages).
 
 const fs = require('node:fs');
 const path = require('node:path');
@@ -34,7 +39,7 @@ const { parseManifestBase64, manifestResourceName, reconcilePageIds, KEY_GRAMMAR
 const { reverseResolveNavIdsReport } = require('./lib/pageref-resolver.js');
 const { fetchSitemap, sitemapGenPages, appNavigationMatchesSitemap } = require('./lib/sitemap-pages.js');
 const { isRestrictedSolution } = require('./lib/system-solutions.js');
-const { isPlatformIconRef, webResourceNameFromRef, validateAppSpec, normalizeLanguageCode, isLocalizedLabelMap, derivedPluralName, ambiguousChoiceAliases, relationshipSchemaName, manyToManySchemaName, dashboardNameKey, PAGE_MODEL_RE, sitemapEntityTables, lookupLabelFor, isOldLookupColumnLabel } = require('./lib/app-spec.js');
+const { isPlatformIconRef, webResourceNameFromRef, validateAppSpec, normalizeLanguageCode, isLocalizedLabelMap, derivedPluralName, ambiguousChoiceAliases, relationshipSchemaName, manyToManySchemaName, dashboardNameKey, PAGE_MODEL_RE, PAGE_BINDINGS, pageBindingsProblem, sitemapEntityTables, lookupLabelFor, isOldLookupColumnLabel } = require('./lib/app-spec.js');
 const { labelsByLcid, sameLabel } = require('./lib/lookup-labels.js');
 const { odataGuid } = require('./lib/ai-app-settings.js');
 const { APP_COMPONENT_ENTITY_SOURCES, appComponentEntities, appComponentRows, currentAppLayer, readAppComponentInventory, downloadAppMainForms, setAppMembershipFloor } = require('./lib/app-components.js');
@@ -974,7 +979,10 @@ async function readDescriptionInventory(sdk, appId, solutionScope, referencedGlo
 //
 // `unkeptModels` collects pages whose model id the App Spec cannot hold (`PAGE_MODEL_RE`): written into
 // the spec it would fail validation and block a rebuild, so it is left out and reported instead.
-function parseDownloadedPages(pagesRoot, outDir, nameById, unreadable, unkeptModels) {
+//
+// `unkeptBindings` collects the pages whose config.json holds a list of connector or Custom API bindings the spec cannot state as the page holds it
+// (`pageBindingsProblem`: not a list, or an entry that is not an object): { pageId, field, reason }. See the projection below.
+function parseDownloadedPages(pagesRoot, outDir, nameById, unreadable, unkeptModels, unkeptBindings) {
   const pages = [];
   if (!fs.existsSync(pagesRoot)) return pages;
   // Read in the pages' own order (comparePages), not the directory's: `readdirSync` lists in the file system's order, which is
@@ -1035,16 +1043,135 @@ function parseDownloadedPages(pagesRoot, outDir, nameById, unreadable, unkeptMod
     const recordedModel = typeof config.model === 'string' ? config.model.trim() : '';
     const model = PAGE_MODEL_RE.test(recordedModel) ? recordedModel : undefined;
     if (recordedModel && !model && Array.isArray(unkeptModels)) unkeptModels.push({ pageId: entry, model: recordedModel });
+    // The page's connector and Custom API bindings, written as the page holds them (config.json: `connectorBindings` / `actionBindings`, each a list of objects) — so that the spec states them and a rebuild keeps
+    // them, in this environment and in another one. A list that has an entry is carried; an empty one is not, as it says what a page with none already says. `null` is the page's way of holding none (the backend
+    // reads it as "not given"), so there is nothing to report. A list the spec cannot state (pageBindingsProblem — the same two rules the validator reports) is left out WHOLE and recorded in `unkeptBindings`: a spec that
+    // stated part of a list would make a rebuild replace the page's list with that part. It is reported and not a gate — a page whose list is left out keeps it when it is rebuilt into this environment, which
+    // is what a rebuild did before the spec could state bindings — whereas the page's data sources, which a rebuild replaces, are (above).
+    const bindings = {};
+    for (const kind of Object.keys(PAGE_BINDINGS)) {
+      if (!Object.prototype.hasOwnProperty.call(config, kind) || config[kind] === null) continue;
+      const problem = pageBindingsProblem(kind, config[kind]);
+      if (problem) {
+        if (Array.isArray(unkeptBindings)) unkeptBindings.push({ pageId: entry, field: kind, reason: problem });
+        continue;
+      }
+      if (config[kind].length) bindings[kind] = config[kind];
+    }
     pages.push({
       pageId: entry,
       name: nameOf(entry),
       dataSources: Object.prototype.hasOwnProperty.call(config, 'dataSources') ? config.dataSources : [],
       ...(model ? { model } : {}),
+      ...bindings,
       prompt,
       codeFile: path.relative(outDir, tsx).replace(/\\/g, '/'),
     });
   }
   return pages;
+}
+
+// The names a page's bindings go by — `PAGE_BINDINGS` says which property of an entry names it — each once, in code-unit order (compareText). An entry with no name (a page can hold one; the validator warns of it)
+// is listed as `(no <property>)`, so a page that holds a binding never reads as one that holds none.
+function bindingNames(list, identity) {
+  const names = (Array.isArray(list) ? list : []).map((entry) => (entry && typeof entry[identity] === 'string' && entry[identity].trim() ? entry[identity].trim() : `(no ${identity})`));
+  return [...new Set(names)].sort(compareText);
+}
+
+// What the connector and Custom API bindings of the pages a download read come to, and what a rebuild into ANOTHER environment still cannot bring:
+//   { pages: [{ key, name, connectorBindings?: [name…], actionBindings?: [name…] }], notCarried?: [{ key, name, field, reason }], neededInTarget: { connectionReferences?, customApis?, serviceResources? }, note }
+// or null when no page holds a binding or lost one. `pages` are the pages whose bindings are in the spec, in the order the spec lists its pages, each with the names its bindings go by; `notCarried` the lists a page holds that the
+// spec cannot state as the page holds them (`unkept`, from parseDownloadedPages) — a rebuild into this environment leaves those as they are, and a rebuild into another does not carry them.
+//
+// The spec carries the binding LISTS: they are plain text in the page's config.json, so a rebuild writes them in any environment. It carries nothing of what they name, and a rebuild makes none of it:
+//   - a connector binding names a CONNECTION REFERENCE by its logical name. The reference is a Dataverse row that points at a connection, and a connection holds a user's sign-in, so it stays in the environment
+//     that made it; the page resolves the reference by name, which is how the page itself can travel (https://learn.microsoft.com/power-apps/maker/data-platform/create-connection-reference);
+//   - a Custom API binding names a Custom API by its unique name. A Custom API is a solution component, not an App Spec item (https://learn.microsoft.com/power-apps/developer/data-platform/custom-api);
+//   - what a connector binding points at inside the service — `dataset`, `tables`: a SharePoint site and its list ids, say — is written as the page holds it, and means something in another environment only if the same
+//     resources are there. `serviceResources` names the connection references whose bindings carry one.
+function pageBindingsReport(pages, unkept) {
+  const held = [];
+  const references = new Set();
+  const apis = new Set();
+  const service = new Set();
+  const nonEmpty = (list) => Array.isArray(list) && list.length > 0;
+  for (const page of pages || []) {
+    if (!nonEmpty(page.connectorBindings) && !nonEmpty(page.actionBindings)) continue;
+    const entry = { key: page.key, name: page.name };
+    if (nonEmpty(page.connectorBindings)) {
+      entry.connectorBindings = bindingNames(page.connectorBindings, PAGE_BINDINGS.connectorBindings);
+      for (const binding of page.connectorBindings) {
+        const name = binding && typeof binding.logicalName === 'string' ? binding.logicalName.trim() : '';
+        if (!name) continue;
+        references.add(name);
+        if (binding.dataset || nonEmpty(binding.tables)) service.add(name);
+      }
+    }
+    if (nonEmpty(page.actionBindings)) {
+      entry.actionBindings = bindingNames(page.actionBindings, PAGE_BINDINGS.actionBindings);
+      for (const binding of page.actionBindings) {
+        const name = binding && typeof binding.name === 'string' ? binding.name.trim() : '';
+        if (name) apis.add(name);
+      }
+    }
+    held.push(entry);
+  }
+  const byId = new Map((pages || []).map((p) => [String(p.pageId).toLowerCase(), p]));
+  const notCarried = (unkept || []).map((u) => {
+    const page = byId.get(String(u.pageId).toLowerCase()) || {};
+    return { key: page.key, name: page.name === undefined ? u.pageId : page.name, field: u.field, reason: u.reason };
+  }).sort((a, b) => compareText(a.name, b.name) || compareText(a.field, b.field));
+  if (!held.length && !notCarried.length) return null;
+  const sorted = (set) => [...set].sort(compareText);
+  return {
+    pages: held,
+    ...(notCarried.length ? { notCarried } : {}),
+    neededInTarget: {
+      ...(references.size ? { connectionReferences: sorted(references) } : {}),
+      ...(apis.size ? { customApis: sorted(apis) } : {}),
+      ...(service.size ? { serviceResources: sorted(service) } : {}),
+    },
+    note: 'The spec states these bindings, so a rebuild writes them onto each page in any environment. A rebuild cannot create what they name — the connection references and the connections behind them, the Custom APIs, and the '
+      + 'service resources a connector binding points at — so each must already exist in the environment you rebuild into.',
+  };
+}
+
+// Render `pageBindingsReport` as the operator-facing text on stderr, kept apart from the computation (as notRoundTrippedWarning is) so the wording is testable without a download. The scripts it names are
+// the ones that make each missing piece in the target environment.
+function pageBindingsNote(report) {
+  if (!report) return '';
+  const lines = [];
+  const needed = report.neededInTarget || {};
+  const list = (names) => names.join(', ');
+  if (report.pages.length) {
+    lines.push(
+      `NOTE: ${report.pages.length} page(s) hold connector or Custom API bindings, and the spec states them (pages[].connectorBindings, pages[].actionBindings), so a rebuild writes them back onto the page — here or in another environment.`,
+      '  Rebuilding into THIS environment keeps them working. Rebuilding into a DIFFERENT environment writes them, but cannot bring what they name, which has to be there first:',
+    );
+    if (needed.connectionReferences) {
+      lines.push(`    - connection reference(s) ${list(needed.connectionReferences)}, and the connection each one goes through (a connection holds a user's sign-in, so it stays where it was made): create the reference there with create-connection-reference.js, or move it with a solution (add-page-to-solution.js --connection-refs, then solution-settings.js for the connection ids)`);
+    }
+    if (needed.customApis) {
+      lines.push(`    - Custom API(s) ${list(needed.customApis)}: a Custom API is a solution component, not an App Spec item — deploy it there first (list-custom-apis.js lists what an environment has); one bound to a table needs that table there too`);
+    }
+    if (needed.serviceResources) {
+      lines.push(`    - what the connector bindings of ${list(needed.serviceResources)} point at inside the service (dataset, tables: a SharePoint site and list ids, for example) is written as it is here, and works there only if the same resources exist`);
+    }
+    lines.push('  Until they are, the page cannot use those bindings. The pages:');
+    for (const page of report.pages) {
+      const parts = [];
+      if (page.connectorBindings) parts.push(`connectorBindings: ${list(page.connectorBindings)}`);
+      if (page.actionBindings) parts.push(`actionBindings: ${list(page.actionBindings)}`);
+      lines.push(`    ${page.name}${page.key ? ` [${page.key}]` : ''} — ${parts.join('; ')}`);
+    }
+  }
+  if (report.notCarried && report.notCarried.length) {
+    lines.push(
+      `WARNING: ${report.notCarried.length} list(s) of connector or Custom API bindings are NOT in the spec, because the spec cannot state them as the page holds them: ${report.notCarried.map((n) => `${JSON.stringify(n.name)} (${n.reason})`).join('; ')}.`,
+      '  Rebuilding into THIS environment leaves such a page\'s bindings as they are. Rebuilding into a DIFFERENT environment will not carry them — bind them there with /genpage (genpage-upload.js --connectors / --actions).',
+    );
+  }
+  return `${lines.join('\n')}\n`;
 }
 
 // The page keys an earlier download of this app left in the output folder: { keys, conflicts, problem, unidentified }, read from the app-spec.json this
@@ -2613,6 +2740,8 @@ async function runDownload({ sdk, genpage, outDir, appId, appUnique, allowLossy 
   // Ids a download left in navigation calls instead of turning them back into PAGEREF_ tokens: see the reverse resolution below.
   const navIdsLeft = [];
   let manifest = null;
+  // What the pages' connector and Custom API bindings come to (pageBindingsReport): in the spec, and what a rebuild into another environment still cannot bring. Null when no page holds any.
+  let pageBindings = null;
 
   if (smPages.length) {
     // Durable manifest (stable key→id bindings + v2 semantics). Best-effort: a missing or corrupt
@@ -2695,7 +2824,8 @@ async function runDownload({ sdk, genpage, outDir, appId, appUnique, allowLossy 
 
     const unreadableConfigs = [];
     const unkeptModels = [];
-    pages = parseDownloadedPages(pagesRoot, outDir, nameById, unreadableConfigs, unkeptModels);
+    const unkeptBindings = [];
+    pages = parseDownloadedPages(pagesRoot, outDir, nameById, unreadableConfigs, unkeptModels, unkeptBindings);
     // Reported, not gated: a page whose model is left out rebuilds exactly as every page did before the spec carried models — an
     // update leaves the model the page already has as it is (the SDK writes only what a spec names), and a page the rebuild creates
     // gets none.
@@ -2710,7 +2840,7 @@ async function runDownload({ sdk, genpage, outDir, appId, appUnique, allowLossy 
       if (!allowLossy) {
         return { ok: false, error: `could not read config.json for page(s): ${detail} — their data-source bindings are unknown, so refusing to write a spec that would silently rebuild them unbound. Re-run with --allow-lossy-download to accept the loss.` };
       }
-      process.stderr.write(`WARNING: ${unreadableConfigs.length} page config(s) unreadable; their data-source bindings are DROPPED: ${detail}\n`);
+      process.stderr.write(`WARNING: ${unreadableConfigs.length} page config(s) unreadable; their data-source bindings are DROPPED, and their connector and Custom API bindings are not in the spec either (a rebuild into this environment leaves those as they are): ${detail}\n`);
     }
 
     // Bidirectional exact equality: sitemap ids ↔ downloaded ids. A gap either way means the download
@@ -2765,6 +2895,11 @@ async function runDownload({ sdk, genpage, outDir, appId, appUnique, allowLossy 
       };
       process.stderr.write(`WARNING: ${navIdsLeft.length} page id(s) of this app remain in the downloaded page source instead of PAGEREF_ tokens (${navIdsLeft.map((l) => `page "${l.page}" line ${l.line}, column ${l.column}: ${why(l)}`).join('; ')}) — a navigation call that keeps one is a hardcoded page id, which a rebuild refuses: write it as a double-quoted "PAGEREF_<key>" literal in a navigateTo call whose options object is written inline, before any construct this check reads by guess, then rebuild. An id that is data — a record id, text, a comment — can stay.\n`);
     }
+
+    // The connector and Custom API bindings the pages hold. The spec states them (parseDownloadedPages), so a rebuild writes them back; what it cannot do in another environment is said here — and in the result — rather
+    // than left for the first call through a binding that cannot resolve. Silent when no page holds one.
+    pageBindings = pageBindingsReport(pages, unkeptBindings);
+    if (pageBindings) process.stderr.write(pageBindingsNote(pageBindings));
 
     // Warn about manifest pages no longer in the sitemap (Maker-deleted in the live app). The
     // rebuilt spec drops these pages; the warning mirrors the droppedSubareaCount WARNING below.
@@ -3158,7 +3293,7 @@ async function runDownload({ sdk, genpage, outDir, appId, appUnique, allowLossy 
   if (relationshipsSkipped.length) process.stderr.write(relationshipsSkippedWarning(relationshipsSkipped));
   const droppedSubareas = typeof spec.droppedSubareas === 'number' ? spec.droppedSubareas : droppedSubareaCount(app, spec);
   const droppedSubareaDetails = Array.isArray(spec.droppedSubareaDetails) ? spec.droppedSubareaDetails : [];
-  return { ok: true, spec, pages, entities, webResources, droppedSubareas, droppedSubareaDetails, dashboardReconstructionError, dashboardWarnings, notRoundTripped, relationships, relationshipsSkipped, ...(navIdsLeft.length ? { navIdsLeft } : {}), ...(solutionCandidates ? { solutionCandidates } : {}) };
+  return { ok: true, spec, pages, entities, webResources, droppedSubareas, droppedSubareaDetails, dashboardReconstructionError, dashboardWarnings, notRoundTripped, relationships, relationshipsSkipped, ...(navIdsLeft.length ? { navIdsLeft } : {}), ...(pageBindings ? { pageBindings } : {}), ...(solutionCandidates ? { solutionCandidates } : {}) };
 }
 
 async function main(deps = {}) {
@@ -3282,7 +3417,7 @@ async function main(deps = {}) {
     makeWritesBlocking(process.stdout, io.stderr);
     if (!result.ok) { finish(false, result); return; }
 
-    const { spec, pages, entities, webResources, droppedSubareas, droppedSubareaDetails, dashboardReconstructionError, dashboardWarnings, notRoundTripped, solutionCandidates, navIdsLeft } = result;
+    const { spec, pages, entities, webResources, droppedSubareas, droppedSubareaDetails, dashboardReconstructionError, dashboardWarnings, notRoundTripped, solutionCandidates, navIdsLeft, pageBindings } = result;
     if (droppedSubareas > 0 || dashboardReconstructionError) {
       const droppedList = (droppedSubareaDetails || [])
         .map((d) => `${d.type}${d.id ? `:${d.id}` : ''}${d.title ? ` (${d.title})` : ''}`)
@@ -3341,7 +3476,7 @@ async function main(deps = {}) {
     }
     // Each optional field is in the result only when it has something to say. `navIdsLeft` is absent in the usual case (runDownload leaves it out when no id is
     // left) and could be an empty list from another producer, so it is checked for both: an empty list is no finding.
-    finish(true, { ok: true, spec: specPath, pages: pages.length, entities: entities.length, webResources: webResources.length, droppedSubareas, ...(notRoundTripped ? { notRoundTripped } : {}), ...(defaulted.length ? { directEntryDefaulted: defaulted } : {}), ...(navIdsLeft && navIdsLeft.length ? { navIdsLeft } : {}), ...(solutionCandidates ? { solutionCandidates } : {}) });
+    finish(true, { ok: true, spec: specPath, pages: pages.length, entities: entities.length, webResources: webResources.length, droppedSubareas, ...(notRoundTripped ? { notRoundTripped } : {}), ...(defaulted.length ? { directEntryDefaulted: defaulted } : {}), ...(navIdsLeft && navIdsLeft.length ? { navIdsLeft } : {}), ...(pageBindings ? { pageBindings } : {}), ...(solutionCandidates ? { solutionCandidates } : {}) });
   } finally {
     try { if (session) session.cleanup(); } catch { /* best-effort: the result below matters more */ }
     if (outcome) io.emitResult(...outcome);
@@ -3409,4 +3544,4 @@ if (require.main === module) {
   main().catch((err) => emitResult(false, err));
 }
 
-module.exports = { untypedColumnNames, collectGlobalChoices, finalizeGlobalChoices, roundTrippedAware, isRoleRestrictedFormXml, notRoundTrippedSummary, notRoundTrippedWarning, relationshipsSkippedWarning, labelFromDataverse, columnDisplayName, resolveAppId, collectSitemap, appComponentEntities, parseDownloadedPages, readPreviousPageKeys, assignPageKeys, missingDownloads, entityFromMetadata, readEntityWithDescriptions, readDescriptionInventory, readAppShellSettings, iconWebResources, readDashboards, readRelationships, droppedSubareaCount, recoverAppSolution, runDownload, preserveAuthoredLanguageCode, makeDownloadSdk, compareText, main };
+module.exports = { untypedColumnNames, collectGlobalChoices, finalizeGlobalChoices, roundTrippedAware, isRoleRestrictedFormXml, notRoundTrippedSummary, notRoundTrippedWarning, relationshipsSkippedWarning, labelFromDataverse, columnDisplayName, resolveAppId, collectSitemap, appComponentEntities, parseDownloadedPages, pageBindingsReport, pageBindingsNote, readPreviousPageKeys, assignPageKeys, missingDownloads, entityFromMetadata, readEntityWithDescriptions, readDescriptionInventory, readAppShellSettings, iconWebResources, readDashboards, readRelationships, droppedSubareaCount, recoverAppSolution, runDownload, preserveAuthoredLanguageCode, makeDownloadSdk, compareText, main };

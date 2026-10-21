@@ -115,6 +115,8 @@ function fakeGenpage(options = {}) {
       if (args.name) page.name = args.name;
       if (args.dataSources !== undefined) page.dataSources = Array.isArray(args.dataSources) ? args.dataSources : String(args.dataSources).split(',');
       if (args.model) page.model = args.model;
+      // As the backend does: a binding list that is left out (undefined) is the page's own, one that is given — `[]` too — replaces it.
+      for (const key of ['connectorBindings', 'actionBindings']) if (args[key] !== undefined) page[key] = args[key];
       return { pageId: String(id).toLowerCase(), ...(unchanged ? { unchanged: true } : {}), publish: { kind: 'verified', detail: '' }, warnings: [], ...extra };
     },
 

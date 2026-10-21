@@ -56,6 +56,15 @@ wrapped under `connectorBindings`; the skill never writes this file directly):
 - `tableDisplayNames`: user-facing names aligned by index with `tables`.
 - `operations`: REST/action operation names for `executeConnectorOperation`.
 
+## In an App Spec
+
+An app a download reads is written with each page's `connectorBindings` in `pages[].connectorBindings`, entry for
+entry, and a rebuild writes that list back onto the page (a spec that states none leaves the page's own).
+`/genpage` itself never reads or writes the spec. The spec carries the list and not what it names: the connection
+reference — and the connection behind it — must already exist in the environment you rebuild into
+(`create-connection-reference.js`, or a solution: `add-page-to-solution.js --connection-refs`, then
+`solution-settings.js`). See `references/app-spec-schema.md` → `pages[]`.
+
 ## Runtime requirements
 
 - Always cast `dataApi` to an optional connector-method shape.

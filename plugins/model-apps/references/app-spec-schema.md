@@ -1630,16 +1630,39 @@ custom control), but the spec validator emits a warning.
   highest identity authority (outranks the manifest), confirmed against EXISTENCE — so a downloaded
   app (including Maker-added pages) rebuilds against the correct existing page without duplication.
 - **What a page round-trip carries — and what it does not.** A download brings back each page's
-  code, prompt, `dataSources`, the id of the **model** that generated it (`pages[].model`) and its
+  code, prompt, `dataSources`, the id of the **model** that generated it (`pages[].model`), its
+  **connector and Custom API bindings** (`pages[].connectorBindings`, `pages[].actionBindings`, below) and its
   identity; the build sends the model with every update, and the page's own is kept when the spec has none
-  (the SDK writes only what differs). A page's **connector and Custom API bindings** have no App
-  Spec field, so they are not in the spec. The build writes pages without them, and the SDK leaves a page's
-  existing bindings in place when they are omitted: a rebuild in the **same environment** keeps the
-  bindings working, but that is preservation, not reconstruction — the same spec rebuilt in **another
-  environment** deploys the page without them (bind them there with `/genpage`).
+  (the SDK writes only what differs). What no spec can bring to **another environment** is what the bindings
+  *name* — the connection references, the Custom APIs and the service resources (below).
 - **`model` (optional).** The model id a page was generated with, e.g. `"gpt-4.1"` — letters, digits and
   `. _ : / @ + -`, at most 100 characters. A download writes it (an id outside that shape is left out, with
   a warning); an authored spec may omit it, and then a rebuild of an existing page keeps the model that page has.
+- **`connectorBindings` and `actionBindings` (optional).** The two lists a page holds in its `config.json`,
+  stated exactly as the page holds them: a list of objects each, an entry's other properties neither checked nor
+  rewritten (`references/connectors.md` and `references/custom-api.md` say what they mean):
+  ```jsonc
+  { "connectorBindings": [ { "logicalName": "new_msnweather", "connectorId": "/providers/Microsoft.PowerApps/apis/shared_msnweather", "dataset": "", "operations": ["CurrentWeather"] } ],
+    "actionBindings":    [ { "name": "new_ApproveOrder", "isFunction": false, "boundEntityLogicalName": "salesorder" } ] }
+  ```
+  A download writes the lists a page holds (an empty list, or `null`, is left out). The build writes a list a
+  spec states, and **leaves the page's own alone when the spec does not state it**; a list that is stated —
+  `[]` too — *replaces* the page's, as `dataSources` does. `logicalName` (a connector binding) and `name` (a
+  Custom API binding) is what the page's code finds an entry by, so an entry without one draws a warning. A
+  list that is not a list of objects is refused. A list a download finds that the spec cannot state that way is
+  left out whole and reported, never refused.
+  The spec carries the lists, which are text; it cannot carry what they name, and a rebuild creates none of it,
+  so each must already exist in the environment you rebuild into: the **connection reference** each connector
+  binding goes through, and the connection behind it, which holds a user's sign-in (create the reference with
+  `create-connection-reference.js`, or move it in a solution with `add-page-to-solution.js --connection-refs` and
+  `solution-settings.js`); the **Custom API** each action binding names, a solution component and not an App Spec
+  item; and, for a connector binding that names a `dataset` or `tables` (a SharePoint site and its list ids),
+  the same resources. A download names what it found, on stderr and as `pageBindings` in its JSON result.
+  `/app-builder` never authors these lists — it writes no connector or Custom API code — so they come from a page
+  a download read. A page you reset to `source.kind: "intent"` to regenerate it is generated without connector
+  code: delete its bindings from the spec too, or it keeps bindings its code no longer uses. The `custom-api`
+  feature flag gates what the `/genpage` agents author, not the download or the rebuild of bindings a page
+  already holds.
 - **Safety HALTs (pages phase).** The build halts on identity/safety violations rather than
   proceeding with potentially wrong state:
   - `pages-identity-conflict` — spec `pageId` and manifest disagree on a key, or a duplicate id is
