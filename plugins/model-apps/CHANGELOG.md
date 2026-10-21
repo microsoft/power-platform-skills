@@ -57,7 +57,8 @@ other spellings, and out of text cut short or split between two writes.
   default, and a status reason with no label in the authoring language is named and left out. It is still not a clone: Boolean
   defaults, column capabilities, BigInt ranges, DateTime behavior, script resources, raster, foreign or managed table icons,
   `roleGrants[]` and `sampleData` are not carried. The download reads once more per table for its status reasons, once per column
-  type present (Text, Memo, Integer, Decimal, Double, DateTime) and once per icon it captures.
+  type present (Text, Memo, Integer, Decimal, Double, DateTime) and once per icon it captures, plus one lookup of the web-resource
+  table's entity set name before the first icon when that name is not yet known.
 - **Verification checks declared status reasons and alternate keys** — `verify-model-app.js`, and the verification a build runs (with
   `--verify`, and on every build that applies a spec's generative pages). A status reason passes when the table holds its label
   under the state the build gives it and at the value the spec pins, if it pins one; a state the answer does not give readably
@@ -137,11 +138,11 @@ other spellings, and out of text cut short or split between two writes.
   workspace-reset advice keeps these records. Not covered: a process killed while the SDK publishes, and another workspace.
 - **A dashboard a build created and then stopped before adding to the app's solution joins the solution on the next build.** A build
   killed between the create and the add, one whose create's answer was lost, or one whose add and undo both failed left a row outside
-  the solution that the next build's name lookup, which reads the published layer, could not see; so it created a second dashboard,
-  and teardown kept the first. The build now records the id it creates the dashboard with (`dashboard-creation.*.json`) before the
-  create; the next build reads that id in the saved layer and adds the same dashboard to the solution. Anything it cannot prove —
-  another kind of row, a rename, both the sent and the reported id answering, an add refused — stops the step with nothing added,
-  deleted or created, and it never asks to delete a dashboard that may be another app's. The record never adopts a namesake,
+  the solution. The next build reused that row without adding it to the solution — or created a second dashboard if its name lookup
+  missed the row — and teardown kept it. The build now records the id it creates the dashboard with (`dashboard-creation.*.json`)
+  before the create; the next build reads that id in the saved layer and adds the same dashboard to the solution. Anything it cannot
+  prove — another kind of row, a rename, both the sent and the reported id answering, an add refused — stops the step with nothing
+  added, deleted or created, and it never asks to delete a dashboard that may be another app's. The record never adopts a namesake,
   teardown never reads it, and the workspace-reset advice keeps it; a first build and an unchanged rebuild send what they sent
   before. Not covered: a dashboard created before this release or from another workspace.
 - **An unknown key in a form's `fieldOptions` entry is refused instead of ignored.** A misspelling such as `readOnlyy` or `colSpan`
