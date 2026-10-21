@@ -53,10 +53,13 @@ unknown key in a form's `fieldOptions` is refused instead of ignored.
   defaults, column capabilities, BigInt ranges, DateTime behavior, script resources, raster, foreign or managed table icons,
   `roleGrants[]` and `sampleData` are not carried. The download reads once more per table for its status reasons, once per column
   type present (Text, Memo, Integer, Decimal, Double, DateTime) and once per icon it captures.
-- **`verify-model-app.js` checks declared status reasons and alternate keys.** A status reason passes when the table holds its label
+- **Verification checks declared status reasons and alternate keys** — `verify-model-app.js`, and the verification a build runs (with
+  `--verify`, and on every build that applies a spec's generative pages). A status reason passes when the table holds its label
   under the state the build gives it and at the value the spec pins, if it pins one; a state the answer does not give readably
   fails. An alternate key passes when a key of its name is over exactly its columns, in any order. Each is one read, made only for a
-  table that declares one.
+  table that declares one. A build therefore now fails its verification, as it does for any other artifact, when the environment
+  holds a declared reason or key differently — a reason renamed in Maker, say, which a rebuild does not rename back — or the read
+  fails.
 
 ### Changed
 
@@ -68,8 +71,10 @@ unknown key in a form's `fieldOptions` is refused instead of ignored.
   - an edit of an Active business process flow that the customization lock refuses is sent again, unchanged and with its original
     version check, for up to three minutes of waits, where it failed at once: another maker's edit in between makes it fail rather
     than be overwritten;
-  - an app's sitemap is found by the SiteMap component on the app's current layer, not by the app's unique name (see Fixed), which
-    costs a few more reads wherever an app is read, and deleting an app first reads which apps use its sitemap;
+  - an app's sitemap is found by the SiteMap component on the app's current layer, not by the app's unique name (see Fixed). The link
+    is checked when an app is read — before and after its sitemap is read — and again before the app is written; each check is two
+    reads (the app's current layer and its SiteMap component) where a read of an app made one name lookup, and deleting an app also
+    reads which apps use its sitemap;
   - an app create whose rollback the customization lock refused says whether the partial app was kept or its removal could not be
     confirmed, and to check that its rows are the create's own before removing them.
 - **The HTTP client sends a publish (`PublishXml`, `PublishAllXml`) once.** It sent one again after a 429, 500, 502, 503 or 504 or a
@@ -143,7 +148,8 @@ unknown key in a form's `fieldOptions` is refused instead of ignored.
   counted so. In any teardown, a relationship from a table to itself, which its table's delete takes with it, now reads
   `(not found)` on its own step. The deletes sent and the exit status are unchanged.
 - **A download no longer carries the relationship a File or Image column brings** (`FileAttachment_<table>_<column>`), nor warns
-  that its name lacks the publisher prefix: the column makes it again on a rebuild. Other relationships of those tables are kept.
+  that its name lacks the publisher prefix, nor reads the `fileattachment` table for it: the column makes it again on a rebuild.
+  Other relationships of those tables are kept.
 - The capabilities document no longer says that a download leaves `relationships[]` out (#567).
 
 ## [2.17.0]
