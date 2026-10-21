@@ -538,6 +538,12 @@ function identityPaths(ctx, expr, at, depth = 0) {
     // Opaque patterns over-approximate names: `{ other = (outer = input) }` can assign an
     // enclosing `outer`, not declare a parameter. Keep the original body-only possibilities
     // too; ambiguity may refuse provenance but must never silently discard a possible write.
+    // Arrow parameters are opaque to value/caller proof, so this union also applies to a
+    // definite plain arrow parameter with a default. Known conservative limitation: if its
+    // name matches an outer variable that is later written, a valid page may be refused even
+    // when the arrow only reads the input and the outer write affects a separate object.
+    // This limitation only adds refusals, never incorrect acceptance of such code. Rename
+    // the arrow parameter and its references inside the arrow to avoid the false refusal.
     const opaqueHeader = assigned.some((binding) => binding.kind === 'opaque' && binding.scope
       && binding.scope.paramsOpen < assignment.index && binding.scope.paramsEnd > assignment.index);
     const outsideHeader = opaqueHeader ? bindingsOf(ctx, name, assignment.index, true) : null;
