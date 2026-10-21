@@ -74,6 +74,7 @@ const { unreadableAnswer } = require('./collection-answers.js');
 const { fetchSitemap, navigationProof } = require('./sitemap-pages.js');
 const { unescapePacName } = require('./genpage-sdk.js');
 const { readPageOwnership, readPendingCreations, recordPageTeardown, completePageDeletions, completePendingCreations } = require('./page-ownership-records.js');
+const { danglingSitemapOf, deleteAppWithoutSitemap } = require('./app-sitemap-dangling.js');
 
 // OData v4 string-literal escaping lives in ./odata.js. `odataStr` is kept as a backward-compatible
 // alias because it is part of this module's exported (and unit-tested) surface.
@@ -321,11 +322,21 @@ const KIND_HANDLERS = {
     // delete. Surface any GENUINE failure so the run reports ok=false with the exact leftovers. A
     // not-found failure means the row already cascaded away (not a leftover), so it is tolerated —
     // the same best-effort spirit as the step-level isNotFound handling in deleteStep.
-    async del(sdk, item) {
+    async del(sdk, item, ctx) {
       let result;
       try {
         result = await sdk.deleteAppCascade(item.id, item.appModuleIdUnique);
       } catch (err) {
+        // The one refusal a run again can never get past: the app's SiteMap component names a sitemap that is gone (the teardown of another app that
+        // shared it can leave an app so). The app is deleted on its own only once lib/app-sitemap-dangling.js has proven that sitemap gone with reads of
+        // its own; otherwise it refuses, finally and without asking for a retry. Its note — the app went without its sitemap — is a warning, said once.
+        const dangling = danglingSitemapOf(err, item.id);
+        if (dangling) {
+          const { warning } = await deleteAppWithoutSitemap(sdk.dataverse, { appId: item.id, appName: item.name, sitemapId: dangling.sitemapId, refused: err });
+          if (ctx && Array.isArray(ctx.warnings)) ctx.warnings.push(warning);
+          if (ctx && typeof ctx.warn === 'function') ctx.warn(warning);
+          return;
+        }
         // A rejection does not mean the app survived. The SDK's deleteAppCascade runs the remote
         // cascade and THEN tidies its local workspace copy (`workspace.readArtifact`/`deleteArtifact`),
         // so a failure in that local step arrives after the app is already gone — and reading it as
@@ -1830,7 +1841,7 @@ async function runTeardownSteps(spec, opts, deps, deferredResetPublishes) {
         emit({ phase: step.phase, status: 'skip', skip: 'kept', label: why, n: myN, total });
         continue;
       }
-      const { deletedIds, absentIds, skipped } = await deleteStep(sdk, handler, items, step.kind === 'resetDefaultViews' || step.kind === 'genpage' ? deferredResetPublishes : undefined);
+      const { deletedIds, absentIds, skipped } = await deleteStep(sdk, handler, items, step.kind === 'resetDefaultViews' || step.kind === 'genpage' || step.kind === 'app' ? deferredResetPublishes : undefined);
       // A removal that looked for its artifact itself and found none is a step that found nothing — the line and the counts a resolver that finds none gets — and not a deletion.
       if (!deletedIds.length && !skipped.length && absentIds.length) {
         result.skipped.push(step.label);
