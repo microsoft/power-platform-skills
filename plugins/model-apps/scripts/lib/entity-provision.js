@@ -1065,11 +1065,16 @@ function causeChain(err, maxDepth = 6) {
 // live, on one whose only language is Spanish, an alternate key created again was answered (names replaced)
 //   HTTP 400 {"error":{"code":"0x80060893","message":"Ya existe una clave de entidad con el nombre contoso_codekey en la entidad contoso_project."}}
 // and the rebuild halted, because only the English words below were read. The code is the same in every language. A code is listed only
-// for the create that answers it, and only where it means that the very thing being created exists — never a generic code such as
-// 0x80040216 ("An unexpected error occurred."), and never a neighbouring condition: a key over the same columns under another name
-// (0x80060894, EntityKeyWithSelectedAttributesExists — the declared key is not there), a record that already holds a key's values
-// (0x80060892), a schema name that is not unique among components of any type (0x80044363, SchemaNameisNotUnique) — so that no real
-// failure is ever taken for a success. Names and messages are the platform's reference:
+// for the create that answers it, and only where the platform's reference gives it an "already exists" meaning for what that create
+// makes — never a generic code such as 0x80040216 ("An unexpected error occurred."), and never a neighbouring condition: a key over the
+// same columns under another name (0x80060894, EntityKeyWithSelectedAttributesExists — the declared key is not there), a record that
+// already holds a key's values (0x80060892), a schema name that is not unique among components of any type (0x80044363,
+// SchemaNameisNotUnique). A listed code is taken exactly as the English words of the same refusal are, and proves no more than they do:
+// a status reason, a key or a column is skipped on it (a column's code can name a companion the platform makes beside the column, as its
+// words can), and for a table or a relationship it is only the cue to read what exists, which alone decides what is reused. The lists
+// only ADD recognition: isAlreadyExists keeps its 409 and English-word rules unchanged, and they still read an answer whatever code it
+// carries, an unlisted one included — an English 0x80060894 answer ("An entity key with the selected attributes already exists on
+// entity.") is still a skip, as it always was. Names and messages are the platform's reference:
 // See: https://learn.microsoft.com/en-us/power-apps/developer/data-platform/reference/web-service-error-codes
 // Lower case, because serviceCodeOf (lib/retry-policy.js) lower-cases what it reads: the platform writes a code in either case (the
 // reference spells 0x8004432B with a capital).
@@ -1098,17 +1103,20 @@ const NO_CODES = Object.freeze(new Set());
 // A metadata create that fails because the component already exists (the classic re-run
 // case). Used to make otherwise non-idempotent creates (e.g. alternate keys — the SDK has no
 // key lister — and a status reason's pinned value) safe to re-run: the build skips instead of
-// halting, or, for a table and a relationship, reads what exists. Dataverse answers 409, or an
-// OData error whose `error.code` is one of `codes` — the create's own list in
-// ALREADY_EXISTS_CODES. The SDK keeps that answer as the `cause` of the ConnectionError it throws:
+// halting, or, for a table and a relationship, reads what exists. Such an answer is recognised by
+// an HTTP 409, by an OData `error.code` that is one of `codes` — the create's own list in
+// ALREADY_EXISTS_CODES — or by the English words below. The SDK keeps the OData answer as the
+// `cause` of the ConnectionError it throws:
 //   ConnectionError {
 //     code: 'CONNECTION_ERROR', statusCode: 400, url: "https://contoso.crm.dynamics.com/api/data/v9.0/EntityDefinitions(LogicalName='contoso_project')/Keys",
 //     message: 'HTTP 400 from <url>: Ya existe una clave de entidad con el nombre contoso_codekey en la entidad contoso_project.',
 //     cause: { error: { code: '0x80060893', message: 'Ya existe una clave de entidad con el nombre contoso_codekey en la entidad contoso_project.' } } }
 // and serviceCodeOf reads that `error.code` of THIS error's own answer: never a code its message only quotes, and never one further
 // down a chain — an SDK error that wraps another failure (COLUMN_VISUALIZATION_BIND_FAILED around a binding that failed after the
-// column WAS made) carries a code that is not the create's. The English words stay for an answer that carries no code. Kept
-// deliberately narrow so a genuine failure (bad key attribute, etc.) still surfaces.
+// column WAS made) carries a code that is not the create's. The code only ADDS recognition: the 409 and English-word rules are
+// the ones this function always had, and they apply whatever code the answer carries — a code of another create, a generic code or
+// a code the message only quotes does not count by itself, and does not stop the words from counting either. Kept deliberately
+// narrow so a genuine failure (bad key attribute, etc.) still surfaces.
 function isAlreadyExists(err, codes = NO_CODES) {
   if (!err) return false;
   const status = err.statusCode || err.status || (err.cause && (err.cause.statusCode || err.cause.status));

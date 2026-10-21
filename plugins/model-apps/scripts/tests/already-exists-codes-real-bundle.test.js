@@ -10,8 +10,10 @@
 // models: once answered in English and once in another language, with the same code. The other language must come to the same outcome
 // — the same steps, warnings, requests and result. Only the key's Spanish text is the platform's own; the other non-English texts are
 // written for these tests, to be words the English rule cannot read. The codes are the ones lib/entity-provision.js documents
-// (ALREADY_EXISTS_CODES). What must not move: a code of ANOTHER create, a generic code, and a code that the words only quote are not
-// read as "already exists" in any language; and the reads that decide a table and a relationship are made as before.
+// (ALREADY_EXISTS_CODES). What must not move: a code of ANOTHER create, a generic code, and a code that the words only quote do not by
+// themselves make an answer an already-exists one — given words the English rule cannot read, such an answer stops the build (the 409
+// and English-word rules are unchanged and still apply whatever code an answer carries); and the reads that decide a table and a
+// relationship are made as before.
 // See: https://learn.microsoft.com/en-us/power-apps/developer/data-platform/reference/web-service-error-codes
 const { test } = require('node:test');
 const assert = require('node:assert');

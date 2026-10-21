@@ -2119,20 +2119,24 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   none, because a download never writes one and a relationship adopted with `existing: true` has the intersect
   table its maker chose — the answer still has to state it. The SDK's own relationship projection
   (`fetchEntityMetadata`) lists an N:N without its intersect table, so it never proves one.
-- **An "already exists" answer is read by its error code, in any language.** A create the platform refuses because what it
+- **An "already exists" answer is also recognised by its error code, in any language.** A create the platform refuses because what it
   asks for is already there is a skip for a status reason (its pinned value is taken), for an alternate key the build could not
   prove from its table read, and for a column of a table whose columns could not be read; for a table and a relationship it is
   the cue to read what exists, and only what that read finds — the declared relationship, by its whole identity — is reused.
   The platform words that answer in the caller's language: measured on an environment whose only language is Spanish, a key
   created again was answered `Ya existe una clave de entidad con el nombre … en la entidad …` (HTTP 400, `0x80060893`), and a
-  rebuild that read only English words halted there. So each of those creates recognises the answer by the `error.code` of its
+  rebuild that read only English words halted there. So each of those creates also recognises the answer by the `error.code` of its
   body — `ALREADY_EXISTS_CODES` in `lib/entity-provision.js`, read by `serviceCodeOf` (`lib/retry-policy.js`) from the SDK's
   `ConnectionError`: `0x80060893` for a key, `0x80044310` for a status reason's value, `0x80060304` and `0x80047013` for a column
   (and for the lookup column of a 1:N), `0x8009050d` (measured; not in the platform's reference) and `0x8004700b` for a table,
   `0x8004432B` for a relationship's name
   ([web service error codes](https://learn.microsoft.com/en-us/power-apps/developer/data-platform/reference/web-service-error-codes)).
-  A 409 and the English words still count, for an answer that carries no code. A code another create answers, a generic code
-  (`0x80040216`) and a code the message only quotes are not read, so any other refusal still stops the build. Pinned by
+  The codes only add recognition, and prove no more than the English words of the same refusal: the 409 and English-word rules are
+  unchanged, and they apply whatever code the answer carries, an unlisted one included — an English `0x80060894` answer (another key
+  over the same columns, "An entity key with the selected attributes already exists on entity.") is still a skip, as it was. A code
+  another create answers, a generic code (`0x80040216`) and a code the message only quotes do not count by themselves: such an answer
+  stops the build unless the 409 or the English words read it as an already-exists one — an answer worded in another language, which
+  the English rule does not read, stops. Pinned by
   `already-exists-codes-real-bundle.test.js`, which runs each of those creates through the real bundle answered in English and
   in another language, and requires the same outcome.
 - **Bounded parallelism in the read-heavy and publish-heavy paths.** Each item below has tests that count
