@@ -2703,6 +2703,140 @@ test('deploy: a record that cannot be saved is ONE warning — the pages are sti
   } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
 });
 
+// ── A page that holds bindings, rebuilt by the spec a download wrote ─────────────────────────────────────────────────────────────────────────
+// A page's connector and Custom API bindings are in the spec a download writes (pages[].connectorBindings, pages[].actionBindings), and the build sends them with the page's content. The record of a publish is the
+// hash of that content, and the record an earlier build made of a page it published was made when the build stated no lists: it is the hash of the content WITHOUT them. The page has not changed, and the first
+// rebuild after a download used to meet a hash it did not know and publish every such page again — one PublishXml of several seconds each. It must not: the page is neither written nor published, and its record is
+// renewed, so the build after it asks nothing more of the published copy. What stays as it was: a page the spec CHANGES is written and published, and so is one whose published copy does not hold the lists.
+const { contentFingerprint } = require('../lib/genpage-sdk.js');
+const HELD_WEATHER = { logicalName: 'contoso_msnweather', connectorId: '/providers/Microsoft.PowerApps/apis/shared_msnweather', dataset: '', operations: ['CurrentWeather'] };
+const HELD_APPROVE = { name: 'contoso_ApproveOrder', isFunction: false, boundEntityLogicalName: 'contoso_item', displayName: 'Approve order', parameterKinds: { Comment: 'String' } };
+const STATED_LISTS = { connectorBindings: [HELD_WEATHER], actionBindings: [HELD_APPROVE] };
+const CONNECTION_PLACEHOLDER = 'env-local-connection-placeholder';
+
+// The environment of an app whose pages the maker laid out: the first holds bindings (and, with `extras`, a connection id a spec does not state), the second none. Each page's file is what the spec points at, so the
+// pages hold what the spec asks for and a rebuild has nothing to write.
+function seededBindingApp({ extras = true } = {}) {
+  const { appDir, spec } = twoPageApp();
+  const server = new FakeGenPageServer();
+  const ids = { alpha: 'a1000000-0000-4000-8000-000000000001', beta: 'a2000000-0000-4000-8000-000000000002' };
+  for (const [key, id] of Object.entries(ids)) {
+    const page = spec.pages.find((p) => p.key === key);
+    const lists = key === 'alpha' ? { connectorBindings: [extras ? { ...HELD_WEATHER, connectionId: CONNECTION_PLACEHOLDER } : HELD_WEATHER], actionBindings: [HELD_APPROVE] } : {};
+    server.seedPage(id, { name: page.name, source: fs.readFileSync(path.join(appDir, `${key}.tsx`), 'utf8'), config: { dataSources: [], model: '', ...lists } });
+  }
+  return { appDir, spec, server, ids };
+}
+const quiet = (requests) => [requests.changeSets, requests.publishes, requests.otherWrites];
+
+test('deploy: a page that holds bindings, built by a spec that stated none and then by the spec a download wrote, is neither written nor published by the second build — the record of its publish stands, and is renewed', async () => {
+  for (const extras of [false, true]) {
+    const { appDir, spec, server, ids } = seededBindingApp({ extras });
+    try {
+      // Build 1, as every build was before a spec could state the lists: the pages hold what the spec asks for, so they are only published, and the publish is recorded — with no lists in its hash.
+      await rebuildPages(spec, appDir, server, ids);
+      assert.deepStrictEqual([...publishedOf(spec, appDir).keys()].sort(), Object.values(ids).sort());
+      const legacy = publishedOf(spec, appDir).get(ids.alpha).fingerprint;
+      const betaRecord = publishedOf(spec, appDir).get(ids.beta);
+
+      // The download states the bindings, without what a spec does not state.
+      Object.assign(spec.pages[0], STATED_LISTS);
+      const alphaSource = fs.readFileSync(path.join(appDir, 'alpha.tsx'), 'utf8');
+      const stated = contentFingerprint({ source: alphaSource, name: 'Alpha', dataSources: [], ...STATED_LISTS });
+      assert.notStrictEqual(stated, legacy, 'the lists are part of the hash');
+      const publishedBefore = server.published.length;
+      let from = server.requests.length;
+      await rebuildPages(spec, appDir, server, ids);
+      assert.deepStrictEqual(quiet(requestsOf(server, from)), [0, 0, 0], `extras ${extras}: neither a change set, nor a publish, nor any other write — only reads`);
+      assert.strictEqual(server.published.length, publishedBefore);
+      const renewed = publishedOf(spec, appDir).get(ids.alpha);
+      assert.strictEqual(renewed.fingerprint, stated, 'the record is now the hash of what the spec states');
+      assert.deepStrictEqual(renewed.files, versionsNow(server, ids.alpha), 'with the versions the page has: nothing moved it');
+      assert.deepStrictEqual(publishedOf(spec, appDir).get(ids.beta), betaRecord, 'a page that states none keeps its record as it was');
+      const held = JSON.parse(server.rowText(ids.alpha, 'config.json'));
+      assert.strictEqual(held.connectorBindings[0].connectionId, extras ? CONNECTION_PLACEHOLDER : undefined, 'the page keeps what the spec could not state');
+
+      // And the build after it asks nothing: the record is the hash as it is, and the published copy is not read again to see that it holds the lists.
+      from = server.requests.length;
+      await rebuildPages(spec, appDir, server, ids);
+      assert.deepStrictEqual(quiet(requestsOf(server, from)), [0, 0, 0]);
+      assert.strictEqual(server.requests.slice(from).filter((r) => r.method === 'GET' && /^\/uxagentproject/.test(r.path) && !('MSCRM.IncludeUnpublished' in r.headers) && !/versionnumber/.test(r.path)).length, 0, 'no read of the published copy: the versions the record is held to are the only plain reads');
+    } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
+  }
+});
+
+test('deploy: the renewed record is no licence — a page a maker saved since is published again, and a page the spec changes is written and published whatever was recorded', async () => {
+  const { appDir, spec, server, ids } = seededBindingApp();
+  try {
+    await rebuildPages(spec, appDir, server, ids);
+    Object.assign(spec.pages[0], STATED_LISTS);
+    await rebuildPages(spec, appDir, server, ids);
+    const config = JSON.parse(server.rowText(ids.alpha, 'config.json'));
+
+    // A maker saves the page's settings as a draft, adding a setting and nothing else: the page's files moved, so the record no longer stands and the page is published once — with nothing to write.
+    server.otherWorkspaceDraft(ids.alpha, 'config.json', JSON.stringify({ ...config, futureSetting: { kept: true } }));
+    let from = server.requests.length;
+    await rebuildPages(spec, appDir, server, ids);
+    assert.deepStrictEqual(quiet(requestsOf(server, from)), [0, 1, 0], 'a publish, and no write');
+    from = server.requests.length;
+    await rebuildPages(spec, appDir, server, ids);
+    assert.deepStrictEqual(quiet(requestsOf(server, from)), [0, 0, 0], 'after which it is left alone again');
+
+    // The spec edits a binding: the page is written — one change set — and published, and keeps what the spec could not state of the entry it changes.
+    spec.pages[0].connectorBindings = [{ ...HELD_WEATHER, operations: ['Forecast'] }];
+    from = server.requests.length;
+    await rebuildPages(spec, appDir, server, ids);
+    assert.deepStrictEqual(quiet(requestsOf(server, from)), [1, 1, 0]);
+    const edited = JSON.parse(server.rowText(ids.alpha, 'config.json'));
+    assert.deepStrictEqual(edited.connectorBindings, [{ ...HELD_WEATHER, connectionId: CONNECTION_PLACEHOLDER, operations: ['Forecast'] }]);
+    assert.deepStrictEqual(edited.futureSetting, { kept: true });
+    // The write was published and recorded, with the lists in the hash: the next build leaves the page alone.
+    from = server.requests.length;
+    await rebuildPages(spec, appDir, server, ids);
+    assert.deepStrictEqual(quiet(requestsOf(server, from)), [0, 0, 0]);
+  } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
+});
+
+// ── a changed-only run checks the bindings of the pages it writes, and only those ────────────────────────────────────────────────────────────
+test('changed-only: a binding whose reference is another connector\'s stops a run that writes its page before anything is uploaded — and does not stop one that leaves the page alone', async () => {
+  const appDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sel-bindings-'));
+  try {
+    fs.writeFileSync(path.join(appDir, 'overview.tsx'), 'export default function O(){ return null; }', 'utf8');
+    fs.writeFileSync(path.join(appDir, 'detail.tsx'), 'export default function D(){ return null; }', 'utf8');
+    const spec = {
+      schemaVersion: 2,
+      solution: { uniqueName: 'SelBindings', displayName: 'S', publisherPrefix: 'contoso' },
+      app: { name: 'Sel Bindings App' },
+      entities: [{ schemaName: 'contoso_item', displayName: 'Item', primaryAttribute: { schemaName: 'contoso_name', displayName: 'Name' }, columns: [] }],
+      pages: [
+        { key: 'overview', name: 'Overview', source: { kind: 'tsx', codeFile: 'overview.tsx' } },
+        { key: 'detail', name: 'Detail', source: { kind: 'tsx', codeFile: 'detail.tsx' }, connectorBindings: [HELD_WEATHER] },
+      ],
+      appShell: { areas: [{ label: 'Main', groups: [{ label: 'G', subAreas: [{ page: 'overview', title: 'Overview' }, { page: 'detail', title: 'Detail' }] }] }] },
+    };
+    const live = [{ pageId: OVERVIEW_ID, name: 'Overview' }, { pageId: DETAIL_ID, name: 'Detail' }];
+    const manifest = { schemaVersion: 1, pages: [{ key: 'overview', name: 'Overview', pageId: OVERVIEW_ID }, { key: 'detail', name: 'Detail', pageId: DETAIL_ID }] };
+    const environment = () => {
+      const { sdk } = mockSdk({ pageManifest: Buffer.from(JSON.stringify(manifest), 'utf8').toString('base64'), liveSitemapXml: pageSitemap([OVERVIEW_ID, DETAIL_ID]), pageRows: live.map((p) => ({ uxagentprojectid: p.pageId, name: p.name })) });
+      const answer = sdk.queryRecords;
+      sdk.queryRecords = async (entity, options) => (entity === 'connectionreference'
+        ? [{ connectionreferencelogicalname: 'contoso_msnweather', connectorid: '/providers/Microsoft.PowerApps/apis/shared_office365users' }]
+        : answer(entity, options));
+      return sdk;
+    };
+    const run = (selectedKeys, genpageCli) => runSdkBuild(spec, { sdk: environment(), apply: true, env: 'https://x', appDir, genpageCli, phases: PAGES_ONLY, changedOnly: { fastApply: true, resolvedAppId: APP_ID, skipSitemapFinalize: true, selectedKeys } });
+
+    const left = mockGenpageCli(live);
+    const fine = await run(['overview'], left);
+    assert.ok(fine.ok);
+    assert.deepStrictEqual(left.uploads.map((u) => u.name), ['Overview'], 'the page that is not written is not held to its bindings');
+
+    const stopped = mockGenpageCli(live);
+    await assert.rejects(run(['detail'], stopped), (e) => e.code === 'pages-binding-reference-conflict' && e.phase === 'preflight' && /page "Detail": connector binding "contoso_msnweather" is for connector shared_msnweather/.test(e.message));
+    assert.deepStrictEqual(stopped.uploads, [], 'and nothing was uploaded');
+  } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
+});
+
 test('deploy: the record keeps only the pages the spec still binds — a page it no longer names is dropped when the next is written', async () => {
   const { appDir, spec } = twoPageApp();
   const server = new FakeGenPageServer();

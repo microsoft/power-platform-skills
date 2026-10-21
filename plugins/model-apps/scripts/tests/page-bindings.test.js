@@ -19,9 +19,10 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { validateAppSpec, pageBindingsProblem, statedPageBindings, migrateAppSpec, PAGE_BINDINGS } = require('../lib/app-spec.js');
+const { statableBindings } = require('../lib/page-bindings.js');
 const { hydrateSpec } = require('../lib/hydrate-spec.js');
 const { runDownload, parseDownloadedPages, pageBindingsReport, pageBindingsNote, main } = require('../download-model-app.js');
-const { runSdkBuild } = require('../lib/sdk-build.js');
+const { runSdkBuild, BuildHalt } = require('../lib/sdk-build.js');
 const { classifyPages } = require('../lib/classify-changes.js');
 const { buildManifest } = require('../lib/page-manifest.js');
 const { makeSimpleMockSdk } = require('./helpers/mock-sdk.js');
@@ -37,9 +38,9 @@ const SOLUTION_ID = 'aaaaaaaa-0000-4000-8000-000000000004';
 const WEATHER_ID = 'bbbbbbbb-0000-4000-8000-000000000001';
 const DETAIL_ID = 'bbbbbbbb-0000-4000-8000-000000000002';
 
-// Bindings as /genpage writes them (references/connectors.md and references/custom-api.md). Each carries a property the plugin knows nothing about, which has to
-// come back exactly: an entry is the runtime's, not the plugin's.
-const WEATHER = { logicalName: 'contoso_msnweather', connectorId: '/providers/Microsoft.PowerApps/apis/shared_msnweather', dataset: '', operations: ['CurrentWeather'], futureProperty: { kept: true } };
+// Bindings as /genpage writes them (references/connectors.md and references/custom-api.md): only the properties an App Spec states. What a page may hold beyond them (a connection id,
+// a credential, a property the plugin does not know) never reaches a spec, and the tests of that put it on the page side of a fixture (`WEATHER_WITH_EXTRAS`).
+const WEATHER = { logicalName: 'contoso_msnweather', connectorId: '/providers/Microsoft.PowerApps/apis/shared_msnweather', dataset: '', operations: ['CurrentWeather'] };
 const SHAREPOINT = { logicalName: 'contoso_sharepoint', connectorId: '/providers/Microsoft.PowerApps/apis/shared_sharepointonline', dataset: 'https://contoso.sharepoint.com/sites/x', tables: ['11111111-2222-3333-4444-555555555555'], tableDisplayNames: ['Pets'] };
 const APPROVE = { name: 'contoso_ApproveOrder', isFunction: false, boundEntityLogicalName: 'contoso_item', displayName: 'Approve order', parameterKinds: { Comment: 'String' } };
 const SUMMARY = { name: 'contoso_GetSummary', isFunction: true, displayName: 'Get summary', parameterKinds: { ItemId: 'Guid' } };
@@ -82,7 +83,7 @@ function specWithPages(extra = {}) {
   };
 }
 
-test('a spec page may state connectorBindings and actionBindings, every entry exactly as the page holds it — extra properties included', () => {
+test('a spec page may state connectorBindings and actionBindings: each entry by the properties an App Spec states', () => {
   const result = validateAppSpec(specWithPages({ connectorBindings: [WEATHER, SHAREPOINT], actionBindings: [APPROVE, SUMMARY] }));
   assert.ok(result.ok, JSON.stringify(result.errors));
   assert.deepStrictEqual(result.warnings, []);
@@ -128,12 +129,19 @@ test('an entry with no logicalName (a connector binding) or name (a Custom API b
   assert.ok(result.warnings.every((w) => /finds a binding by it/.test(w)), 'the warning says why a binding needs it');
 });
 
-test('the download and the validator agree on what a list of bindings can be: pageBindingsProblem is null exactly when validateAppSpec reports no error for it', () => {
-  const values = [[], [WEATHER], [{}], [{ anything: 1 }], 'x', 5, {}, [null], [WEATHER, 3], [[WEATHER]], [true]];
+test('what a download carries of a list always validates, and the validator refuses what the download would leave out of it — the rules they share are pageBindingsProblem and statableBindings', () => {
+  const values = [[], [WEATHER], [{}], [{ anything: 1 }], [{ ...WEATHER, connectionId: 'x' }], 'x', 5, {}, [null], [WEATHER, 3], [[WEATHER]], [true]];
   for (const kind of Object.keys(PAGE_BINDINGS)) {
+    const errorsOf = (list) => validateAppSpec(specWithPages({ [kind]: list })).errors.filter((e) => e.includes(kind));
     for (const value of values) {
-      const accepted = validateAppSpec(specWithPages({ [kind]: value })).errors.filter((e) => e.includes(kind)).length === 0;
-      assert.strictEqual(pageBindingsProblem(kind, value) === null, accepted, `${kind}: ${JSON.stringify(value)}`);
+      const container = pageBindingsProblem(kind, value);
+      if (container) {
+        assert.ok(errorsOf(value).length > 0, `${kind}: the validator refuses ${JSON.stringify(value)}: ${container}`);
+        continue;
+      }
+      const { stated, leftOut } = statableBindings(kind, value);
+      assert.deepStrictEqual(errorsOf(stated), [], `${kind}: what a download carries of ${JSON.stringify(value)} validates`);
+      assert.strictEqual(errorsOf(value).length > 0, leftOut.length > 0, `${kind}: ${JSON.stringify(value)} is refused exactly when something of it would be left out`);
     }
   }
 });
@@ -175,7 +183,7 @@ const B = '22222222-2222-4222-8222-222222222222';
 const C = '33333333-3333-4333-8333-333333333333';
 const D = '44444444-4444-4444-8444-444444444444';
 
-test('parseDownloadedPages carries a page\'s binding lists as its config.json holds them — entries, their order and their unknown properties unchanged', () => {
+test('parseDownloadedPages carries a page\'s binding lists as its config.json holds them — entries, their order and every property a spec states unchanged', () => {
   const root = pageTree({
     [A]: { dataSources: ['contoso_item'], model: 'gpt-4.1', connectorBindings: [SHAREPOINT, WEATHER], actionBindings: [SUMMARY, APPROVE] },
     [B]: { dataSources: ['contoso_item'] },
@@ -470,6 +478,207 @@ test('main puts pageBindings in the JSON result, and leaves it out when there is
   assert.strictEqual('pageBindings' in without.payload, false);
 });
 
+// ── a spec states a binding's identity and shape, never a credential ─────────────────────────────────────────────────────────
+// The spec is the artifact that is committed, reviewed and shared; the page's own config.json is the environment's. A binding a page holds can carry more than the runtime reads — a connection id of the
+// environment it was made in, a credential someone put in a connectors.json, a property a later runtime adds — and none of it is the spec's to carry. So the spec states a binding by an ALLOWLIST of
+// properties, the ones references/connectors.md and references/custom-api.md document, each with the kind of value it holds; anything else is left out and the download says which, by name.
+
+// Synthetic values, none a real credential. Each is looked for in everything a download writes or prints.
+const SECRET = {
+  token: 'SYNTHETIC_TEST_ACCESS_TOKEN',
+  clientSecret: 'SYNTHETIC_TEST_SECRET',
+  password: 'SYNTHETIC_TEST_PASSWORD',
+  signature: 'SYNTHETIC_TEST_SIGNATURE',
+  connection: 'env-local-connection-placeholder',
+};
+const leaked = (text) => Object.values(SECRET).filter((value) => String(text).includes(value));
+
+// The page's side of a binding: what it may hold beyond what a spec states.
+const WEATHER_WITH_EXTRAS = { ...WEATHER, connectionId: SECRET.connection, credentials: { accessToken: SECRET.token, clientSecret: SECRET.clientSecret }, futureProperty: { kept: true } };
+const SHAREPOINT_WITH_EXTRAS = { ...SHAREPOINT, apiKey: SECRET.clientSecret };
+const APPROVE_WITH_EXTRAS = { ...APPROVE, headers: { Authorization: `Bearer ${SECRET.token}` } };
+
+// A download of the app whose first page holds the given lists.
+async function downloadPagesHolding({ connectorBindings, actionBindings, allowLossy } = {}) {
+  const pages = environmentPages();
+  if (connectorBindings !== undefined) pages[0].connectorBindings = connectorBindings;
+  if (actionBindings !== undefined) pages[0].actionBindings = actionBindings;
+  const outDir = tmp('page-bindings-secret-');
+  const { readSdk } = downloadFixture(pages);
+  const { value: result, stderr } = await withStderr(() => runDownload({ sdk: readSdk(), genpage: fakeGenpage({ pages: livePages(pages) }), outDir, appId: APP_ID, appUnique: APP_UNIQUE, allowLossy }));
+  assert.ok(result.ok, JSON.stringify(result));
+  return { result, stderr, outDir, weather: result.spec.pages.find((p) => p.key === 'weather') };
+}
+
+test('a download states a binding by its identity and shape only: a credential, a connection id and a property no spec states stay out of the spec, the result and stderr — and the download names them', async () => {
+  const { result, stderr, outDir, weather } = await downloadPagesHolding({ connectorBindings: [WEATHER_WITH_EXTRAS, SHAREPOINT_WITH_EXTRAS], actionBindings: [APPROVE_WITH_EXTRAS, SUMMARY] });
+  assert.deepStrictEqual(weather.connectorBindings, [WEATHER, SHAREPOINT], 'exactly the properties a spec states, in the page\'s order');
+  assert.deepStrictEqual(weather.actionBindings, [APPROVE, SUMMARY]);
+  assert.ok(validateAppSpec(JSON.parse(JSON.stringify(result.spec))).ok, 'and the spec validates');
+  assert.deepStrictEqual(leaked(JSON.stringify(result)), [], 'no value of a left-out property is in the spec, the pages or the report');
+  assert.deepStrictEqual(leaked(stderr), [], 'nor on stderr');
+
+  // What it left out is said by the property's NAME: the page, the list, the entry, the entry's own name, and why.
+  assert.deepStrictEqual(result.pageBindings.propertiesLeftOut, [
+    { key: 'weather', name: 'Weather', field: 'actionBindings', entry: 0, binding: 'contoso_ApproveOrder', properties: [{ property: 'headers', why: 'not-stated' }] },
+    { key: 'weather', name: 'Weather', field: 'connectorBindings', entry: 0, binding: 'contoso_msnweather', properties: [{ property: 'connectionId', why: 'not-stated' }, { property: 'credentials', why: 'not-stated' }, { property: 'futureProperty', why: 'not-stated' }] },
+    { key: 'weather', name: 'Weather', field: 'connectorBindings', entry: 1, binding: 'contoso_sharepoint', properties: [{ property: 'apiKey', why: 'not-stated' }] },
+  ]);
+  assert.match(stderr, /WARNING: 3 binding\(s\) hold properties that are NOT in the spec/);
+  assert.match(stderr, /a spec states only what identifies a binding and shapes its calls \(connectorBindings: logicalName, connectorId, dataset, tables, tableDisplayNames, operations; actionBindings: name, isFunction, boundEntityLogicalName, displayName, parameterKinds\)/);
+  assert.match(stderr, /Weather connectorBindings\[0\] \(contoso_msnweather\): connectionId, credentials, futureProperty/);
+  assert.match(stderr, /the values are never printed/);
+  // A page whose bindings are all stated is still a page that holds bindings: the note about the target environment is there as before.
+  assert.match(stderr, /NOTE: 1 page\(s\) hold connector or Custom API bindings/);
+
+  // The page folder is the page as the environment holds it. It is not rewritten, so it still holds what the spec does not — and the download says that too.
+  const sidecar = JSON.parse(fs.readFileSync(path.join(outDir, 'pages', WEATHER_ID, 'config.json'), 'utf8'));
+  assert.strictEqual(sidecar.connectorBindings[0].connectionId, SECRET.connection);
+  assert.match(stderr, /still in the page folder's own config\.json \(pages\/<page id>\/config\.json\)/);
+});
+
+test('a property a spec does state is left out too when its value is not what the property holds — a credential cannot ride in a list, a map or a flag', async () => {
+  const { result, stderr, weather } = await downloadPagesHolding({
+    connectorBindings: [{
+      ...WEATHER,
+      operations: [{ name: 'CurrentWeather', credentials: { accessToken: SECRET.token } }],
+      tables: ['11111111-2222-3333-4444-555555555555', { id: 'x', clientSecret: SECRET.clientSecret }],
+      tableDisplayNames: 'Pets',
+    }],
+    actionBindings: [{
+      ...APPROVE,
+      isFunction: 'false',
+      displayName: { en: SECRET.password },
+      parameterKinds: { Comment: 'String', Authorization: { scheme: 'Bearer', value: SECRET.token }, Note: `Bearer ${SECRET.token}` },
+    }],
+  });
+  assert.deepStrictEqual(weather.connectorBindings, [{ logicalName: WEATHER.logicalName, connectorId: WEATHER.connectorId, dataset: '' }]);
+  assert.deepStrictEqual(weather.actionBindings, [{ name: APPROVE.name, boundEntityLogicalName: APPROVE.boundEntityLogicalName }]);
+  assert.deepStrictEqual(result.pageBindings.propertiesLeftOut.map((l) => [l.field, l.entry, l.properties]), [
+    ['actionBindings', 0, [{ property: 'displayName', why: 'not-text' }, { property: 'isFunction', why: 'not-boolean' }, { property: 'parameterKinds', why: 'not-parameter-kinds' }]],
+    ['connectorBindings', 0, [{ property: 'operations', why: 'not-text-list' }, { property: 'tableDisplayNames', why: 'not-text-list' }, { property: 'tables', why: 'not-text-list' }]],
+  ]);
+  assert.deepStrictEqual(leaked(JSON.stringify(result) + stderr), []);
+  assert.match(stderr, /operations \(must be a list of texts\)/);
+  assert.match(stderr, /isFunction \(must be true or false\)/);
+});
+
+test('a text that holds a credential is left out whatever its property: a password in a URL, a signature in a query, a connection string, a bearer token', async () => {
+  const { result, stderr, weather } = await downloadPagesHolding({
+    connectorBindings: [{
+      ...SHAREPOINT,
+      dataset: `https://admin:${SECRET.password}@contoso.sharepoint.com/sites/x`,
+      tableDisplayNames: [`Pets; Password=${SECRET.password}`, 'Owners'],
+      operations: [`GetItems?sig=${SECRET.signature}`],
+    }],
+    actionBindings: [{ ...APPROVE, displayName: `Bearer ${SECRET.token}ABCDEFGH` }],
+  });
+  assert.deepStrictEqual(weather.connectorBindings, [{ logicalName: SHAREPOINT.logicalName, connectorId: SHAREPOINT.connectorId, tables: SHAREPOINT.tables }]);
+  assert.ok(!('displayName' in weather.actionBindings[0]));
+  assert.deepStrictEqual(result.pageBindings.propertiesLeftOut.flatMap((l) => l.properties), [
+    { property: 'displayName', why: 'credential-shaped' },
+    { property: 'dataset', why: 'credential-shaped' },
+    { property: 'operations', why: 'credential-shaped' },
+    { property: 'tableDisplayNames', why: 'credential-shaped' },
+  ]);
+  assert.deepStrictEqual(leaked(JSON.stringify(result) + stderr), []);
+});
+
+test('a property whose NAME is not a plain identifier is reported without its name — a name can carry a value too', async () => {
+  const odd = `Authorization: Bearer ${SECRET.token}`;
+  const { result, stderr } = await downloadPagesHolding({ connectorBindings: [{ ...WEATHER, [odd]: true, [`sk-live-${SECRET.clientSecret}`]: 1 }] });
+  assert.deepStrictEqual(result.pageBindings.propertiesLeftOut[0].properties, [
+    { property: '(a property with an unusual name)', why: 'not-stated' },
+    { property: '(a property with an unusual name)', why: 'not-stated' },
+  ]);
+  assert.deepStrictEqual(leaked(JSON.stringify(result) + stderr), []);
+});
+
+test('an entry in which a spec can state nothing leaves its whole list out — a spec that stated the others would have a rebuild drop that entry from the page', async () => {
+  const { result, weather } = await downloadPagesHolding({ connectorBindings: [WEATHER, { credentials: { accessToken: SECRET.token } }] });
+  assert.ok(!('connectorBindings' in weather));
+  assert.deepStrictEqual(weather.actionBindings, [APPROVE, SUMMARY], 'the other list is still stated');
+  assert.deepStrictEqual(result.pageBindings.notCarried, [{ key: 'weather', name: 'Weather', field: 'connectorBindings', reason: 'connectorBindings[1] holds nothing an App Spec states' }]);
+  assert.deepStrictEqual(leaked(JSON.stringify(result)), []);
+});
+
+test('main writes an app-spec.json that holds none of it, and prints by name what it left out', async () => {
+  const { result: downloaded } = await downloadPagesHolding({ connectorBindings: [WEATHER_WITH_EXTRAS], actionBindings: [APPROVE_WITH_EXTRAS] });
+  const outDir = tmp('page-bindings-main-out-');
+  const printed = [];
+  await main({
+    argv: ['--env', ENV, '--app', APP_UNIQUE, '--out', outDir],
+    stderr: { write: () => {} },
+    emitResult: (ok, payload) => printed.push({ ok, payload }),
+    preflightAuth: async () => ({ ok: true }),
+    makeGenpageSdk: () => ({}),
+    makeDownloadSdk: async () => ({ sdk: { queryRecords: async (_set, opts = {}) => (/uniquename eq/.test(opts.filter || '') ? [{ appmoduleid: APP_ID }] : [{ uniquename: APP_UNIQUE }]) }, cleanup() {} }),
+    runDownload: async () => downloaded,
+  });
+  assert.strictEqual(printed.length, 1);
+  assert.strictEqual(printed[0].ok, true, JSON.stringify(printed[0].payload));
+  const persisted = fs.readFileSync(path.join(outDir, 'app-spec.json'), 'utf8');
+  assert.deepStrictEqual(leaked(persisted), [], 'the spec on disk');
+  assert.deepStrictEqual(leaked(JSON.stringify(printed)), [], 'and what main printed');
+  assert.deepStrictEqual(JSON.parse(persisted).pages.find((p) => p.key === 'weather').connectorBindings, [WEATHER]);
+  assert.deepStrictEqual(printed[0].payload.pageBindings.propertiesLeftOut.map((l) => [l.field, l.entry, l.properties.map((p) => p.property)]), [
+    ['actionBindings', 0, ['headers']],
+    ['connectorBindings', 0, ['connectionId', 'credentials', 'futureProperty']],
+  ]);
+});
+
+test('validateAppSpec refuses a binding property an App Spec does not state — by name, never by value — and a value a property cannot hold', () => {
+  const cases = [
+    [{ connectorBindings: [{ ...WEATHER, connectionId: SECRET.connection }] }, "page 'weather': connectorBindings[0].connectionId is not a property an App Spec states (a binding states only logicalName, connectorId, dataset, tables, tableDisplayNames, operations) — remove it"],
+    [{ connectorBindings: [{ ...WEATHER, credentials: { accessToken: SECRET.token } }] }, "page 'weather': connectorBindings[0].credentials is not a property an App Spec states (a binding states only logicalName, connectorId, dataset, tables, tableDisplayNames, operations) — remove it"],
+    [{ actionBindings: [{ ...APPROVE, headers: { Authorization: SECRET.token } }] }, "page 'weather': actionBindings[0].headers is not a property an App Spec states (a binding states only name, isFunction, boundEntityLogicalName, displayName, parameterKinds) — remove it"],
+    [{ connectorBindings: [{ ...WEATHER, futureProperty: true }] }, "page 'weather': connectorBindings[0].futureProperty is not a property an App Spec states (a binding states only logicalName, connectorId, dataset, tables, tableDisplayNames, operations) — remove it"],
+    [{ connectorBindings: [{ ...WEATHER, operations: [{ credentials: SECRET.token }] }] }, "page 'weather': connectorBindings[0].operations must be a list of texts"],
+    [{ connectorBindings: [{ ...WEATHER, dataset: `https://admin:${SECRET.password}@contoso.sharepoint.com/sites/x` }] }, "page 'weather': connectorBindings[0].dataset looks like it holds a credential, which an App Spec never states"],
+    [{ actionBindings: [{ ...APPROVE, isFunction: 'no' }] }, "page 'weather': actionBindings[0].isFunction must be true or false"],
+    [{ actionBindings: [{ ...APPROVE, parameterKinds: { Comment: SECRET.token } }] }, "page 'weather': actionBindings[0].parameterKinds must map parameter names to Dataverse parameter kinds"],
+    [{ connectorBindings: [{ ...WEATHER, [`sk-live-${SECRET.clientSecret}`]: 1 }] }, "page 'weather': connectorBindings[0] has a property with an unusual name, which an App Spec does not state — remove it"],
+  ];
+  for (const [extra, expected] of cases) {
+    const result = validateAppSpec(specWithPages(extra));
+    assert.strictEqual(result.ok, false, JSON.stringify(extra));
+    assert.ok(result.errors.includes(expected), `${expected}\n  got ${JSON.stringify(result.errors)}`);
+    assert.deepStrictEqual(leaked(JSON.stringify(result)), [], 'the refusal quotes the name of a property, never its value');
+  }
+  // The same entries without the extra property are valid, and so are the documented values of every property.
+  const clean = validateAppSpec(specWithPages({ connectorBindings: [WEATHER, SHAREPOINT], actionBindings: [APPROVE, SUMMARY] }));
+  assert.ok(clean.ok, JSON.stringify(clean.errors));
+  assert.deepStrictEqual(clean.warnings, []);
+});
+
+test('a build refuses a spec whose binding states a credential or a connection id, by the property\'s name, before it does anything else', async () => {
+  const { buildModelApp } = require('../build-model-app.js');
+  const spec = specWithPages({ connectorBindings: [{ ...WEATHER, credentials: { accessToken: SECRET.token }, connectionId: SECRET.connection }] });
+  const result = await buildModelApp(spec, { apply: true, appDir: tmp('page-bindings-refused-'), profile: 'deploy' }, {});
+  assert.strictEqual(result.ok, false);
+  assert.ok(result.errors.some((e) => /^page 'weather': connectorBindings\[0\]\.credentials is not a property an App Spec states/.test(e)), JSON.stringify(result.errors));
+  assert.ok(result.errors.some((e) => /^page 'weather': connectorBindings\[0\]\.connectionId is not a property an App Spec states/.test(e)), JSON.stringify(result.errors));
+  assert.deepStrictEqual(leaked(JSON.stringify(result)), [], 'and the refusal does not print their values');
+});
+
+test('pageBindingsNote names what a download left out of a binding, and where the values still are', () => {
+  const pages = [{ pageId: A, key: 'weather', name: 'Weather', connectorBindings: [WEATHER] }];
+  const leftOut = [{ pageId: A, field: 'connectorBindings', entry: 0, binding: 'contoso_msnweather', properties: [{ property: 'connectionId', why: 'not-stated' }, { property: 'operations', why: 'not-text-list' }] }];
+  const report = pageBindingsReport(pages, [], leftOut);
+  assert.deepStrictEqual(report.propertiesLeftOut, [{ key: 'weather', name: 'Weather', field: 'connectorBindings', entry: 0, binding: 'contoso_msnweather', properties: leftOut[0].properties }]);
+  const text = pageBindingsNote(report);
+  assert.match(text, /^NOTE: 1 page\(s\) hold connector or Custom API bindings/);
+  assert.match(text, /WARNING: 1 binding\(s\) hold properties that are NOT in the spec/);
+  assert.match(text, /Weather connectorBindings\[0\] \(contoso_msnweather\): connectionId, operations \(must be a list of texts\)/);
+  assert.match(text, /Rebuilding into THIS environment leaves them on the page/);
+  assert.match(text, /still in the page folder's own config\.json \(pages\/<page id>\/config\.json\)/);
+  // Only a binding left something out, and no page states one: there is still something to say. And nothing left out says nothing.
+  const only = pageBindingsReport([{ pageId: A, key: 'plain', name: 'Plain' }], [], [{ pageId: A, field: 'actionBindings', entry: 2, properties: [{ property: 'headers', why: 'not-stated' }] }]);
+  assert.deepStrictEqual(only.pages, []);
+  assert.match(pageBindingsNote(only), /^WARNING: 1 binding\(s\) hold properties that are NOT in the spec/);
+  assert.strictEqual(pageBindingsReport([{ pageId: A, key: 'plain', name: 'Plain' }], [], []), null);
+});
+
 // ── the build ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 
 const PHASES = ['solution', 'data-model', 'app-shell', 'pages'];
@@ -641,4 +850,163 @@ test('a navigation target that states bindings is created with them — the crea
   assert.deepStrictEqual(byName.get('Item Detail').connectorBindings, [WEATHER, SHAREPOINT]);
   assert.deepStrictEqual(byName.get('Item Detail').actionBindings, [APPROVE, SUMMARY]);
   for (const key of ['connectorBindings', 'actionBindings']) assert.ok(!(key in byName.get('Weather')), `${key} is not sent for the page that states none`);
+});
+
+// ── a rebuild checks the environment's references before it writes a binding ──────────────────────────────────────────────────
+// A binding is called through the logical name of a connection reference, and the spec cannot make the reference. A rebuild into another environment reads what that environment has for the names the
+// spec states — before it writes anything — and: refuses a reference that is there for ANOTHER connector (the page would call that connector under this name), says by name what is not there, and says by name
+// a Custom API that is the other kind or bound to another table. It never makes one: a connection holds a user's sign-in.
+const FABRIKAM = 'https://fabrikam.crm.dynamics.com';
+const apiId = (name) => `/providers/Microsoft.PowerApps/apis/${name}`;
+const referenceRow = (logicalName, connector) => ({ connectionreferencelogicalname: logicalName, connectorid: connector === undefined ? undefined : apiId(connector) });
+
+// The environment a copy goes to, with the references (`connectionreference` rows) and Custom APIs (`customapi` rows) it already holds. `reads` are the reads the build made of them, `writes` every write it
+// made to the SDK before it stopped.
+function targetEnvironment({ references = [], apis = [], failReferences, failApis } = {}) {
+  const sdk = freshEnvironmentSdk();
+  const answer = sdk.queryRecords;
+  const reads = [];
+  const writes = [];
+  sdk.queryRecords = async (entity, options) => {
+    if (entity !== 'connectionreference' && entity !== 'customapi') return answer(entity, options);
+    reads.push({ entity, options });
+    if (entity === 'connectionreference' && failReferences) throw new Error(failReferences);
+    if (entity === 'customapi' && failApis) throw new Error(failApis);
+    return entity === 'connectionreference' ? references : apis;
+  };
+  for (const method of ['createPublisher', 'createSolution', 'createTable', 'createColumn', 'createRelationship', 'createWebResource', 'createArtifact', 'addElement', 'updateElement', 'pushArtifact', 'publishArtifact', 'addSolutionComponent']) {
+    const original = sdk[method];
+    sdk[method] = (...args) => { writes.push(method); return original(...args); };
+  }
+  return { sdk, reads, writes };
+}
+const BOTH_REFERENCES = [referenceRow('contoso_msnweather', 'shared_msnweather'), referenceRow('contoso_sharepoint', 'shared_sharepointonline')];
+const BOTH_APIS = [
+  { uniquename: 'contoso_ApproveOrder', isfunction: false, bindingtype: 1, boundentitylogicalname: 'contoso_item' },
+  { uniquename: 'contoso_GetSummary', isfunction: true, bindingtype: 0 },
+];
+const bindingWords = (messages) => messages.filter((m) => /connection reference|Custom API|binding/i.test(m));
+
+test('a build into another environment refuses a binding whose connection reference is there for ANOTHER connector — before it writes anything', async () => {
+  const { spec, outDir } = await portableCopy();
+  const { sdk, reads, writes } = targetEnvironment({ references: [referenceRow('contoso_msnweather', 'shared_office365users'), BOTH_REFERENCES[1]], apis: BOTH_APIS });
+  const genpage = fakeGenpage();
+  await assert.rejects(runSdkBuild(spec, { sdk, genpage, appDir: outDir, env: FABRIKAM, apply: true, phases: PHASES }), (error) => {
+    assert.ok(error instanceof BuildHalt, String(error && error.stack));
+    assert.deepStrictEqual([error.phase, error.code, error.recoverable, error.transient], ['preflight', 'pages-binding-reference-conflict', false, false], 'a run again reads the same references: it is not retried');
+    assert.match(error.message, /1 connector binding\(s\) name a connection reference this environment already has for ANOTHER connector: page "Weather": connector binding "contoso_msnweather" is for connector shared_msnweather, but the connection reference of that name in this environment is for connector shared_office365users\./);
+    assert.match(error.message, /The build stopped before writing anything\./);
+    assert.match(error.message, /give the binding the logical name of a reference that is for the right connector \(create-connection-reference\.js makes one\)/);
+    assert.match(error.message, /set the binding's connectorId in the spec to the connector this environment has/);
+    assert.ok(!/contoso_sharepoint/.test(error.message), 'only the binding that conflicts is named');
+    return true;
+  });
+  assert.deepStrictEqual(writes, [], 'nothing was written: no solution, no table, no app');
+  assert.deepStrictEqual(genpage.calls.filter((c) => c.method === 'create' || c.method === 'update'), [], 'and no page');
+  assert.deepStrictEqual(reads.map((r) => r.entity), ['connectionreference', 'customapi'], 'what it read: the references and the Custom APIs the pages state, once');
+});
+
+test('a build with no conflict goes on: the same connector under another spelling of its id, and a Custom API of the same kind and table, are fine — and nothing is said', async () => {
+  const { spec, outDir } = await portableCopy();
+  const { sdk, writes } = targetEnvironment({ references: [referenceRow('CONTOSO_MsnWeather', 'SHARED_MSNWEATHER'), { connectionreferencelogicalname: 'contoso_sharepoint', connectorid: 'shared_sharepointonline' }], apis: BOTH_APIS });
+  const genpage = fakeGenpage();
+  const warnings = [];
+  const rebuilt = await runSdkBuild(spec, { sdk, genpage, appDir: outDir, env: FABRIKAM, apply: true, phases: PHASES, warn: (m) => warnings.push(m) });
+  assert.ok(rebuilt.ok);
+  assert.ok(writes.length > 0);
+  assert.strictEqual(genpage.of('create').length, 2);
+  assert.deepStrictEqual(bindingWords(warnings), []);
+});
+
+test('a build says by name what the environment does not have — and writes the pages with their bindings all the same: a reference made later makes the page work without a rebuild', async () => {
+  const { spec, outDir } = await portableCopy();
+  const { sdk } = targetEnvironment({ references: [BOTH_REFERENCES[1]], apis: [BOTH_APIS[1]] });
+  const genpage = fakeGenpage();
+  const warnings = [];
+  const rebuilt = await runSdkBuild(spec, { sdk, genpage, appDir: outDir, env: FABRIKAM, apply: true, phases: PHASES, warn: (m) => warnings.push(m) });
+  assert.ok(rebuilt.ok);
+  const bound = bindingWords(warnings);
+  assert.strictEqual(bound.length, 2, JSON.stringify(bound));
+  assert.match(bound[0], /^page "Weather": connection reference contoso_msnweather is not in this environment, so the page is written with a binding it cannot resolve yet\. A page finds its connector by the reference's logical name: create the reference here \(create-connection-reference\.js, or import the solution that holds it\) and the page works without a rebuild$/);
+  assert.match(bound[1], /^page "Weather": Custom API contoso_ApproveOrder is not in this environment \(list-custom-apis\.js lists what it has\), so a call through the binding is refused until it is deployed here$/);
+  const weather = genpage.of('create').map((c) => c.args[0]).find((c) => c.name === 'Weather');
+  assert.deepStrictEqual([weather.connectorBindings, weather.actionBindings], [[WEATHER, SHAREPOINT], [APPROVE, SUMMARY]], 'the bindings are written: the spec states them');
+});
+
+test('a Custom API of the other kind, or bound to another table, is a warning by name, never a refusal', async () => {
+  const { spec, outDir } = await portableCopy();
+  const { sdk } = targetEnvironment({ references: BOTH_REFERENCES, apis: [{ ...BOTH_APIS[0], isfunction: true }, { ...BOTH_APIS[1], bindingtype: 1, boundentitylogicalname: 'contoso_other' }] });
+  const warnings = [];
+  const rebuilt = await runSdkBuild(spec, { sdk, genpage: fakeGenpage(), appDir: outDir, env: FABRIKAM, apply: true, phases: PHASES, warn: (m) => warnings.push(m) });
+  assert.ok(rebuilt.ok);
+  assert.deepStrictEqual(bindingWords(warnings), [
+    'page "Weather": Custom API binding "contoso_ApproveOrder" says it is an Action, but the Custom API of that name in this environment is a Function — the runtime refuses the call (wrong_operation_kind)',
+    'page "Weather": Custom API binding "contoso_GetSummary" is for a Global operation, but the Custom API of that name in this environment is bound to table contoso_other — the runtime refuses the call (invalid_bound_to)',
+  ]);
+});
+
+test('a read of the environment that fails is said, and the build goes on as it did: the page is written, and not checked', async () => {
+  const { spec, outDir } = await portableCopy();
+  const { sdk } = targetEnvironment({ failReferences: 'HTTP 403', apis: BOTH_APIS });
+  const warnings = [];
+  const rebuilt = await runSdkBuild(spec, { sdk, genpage: fakeGenpage(), appDir: outDir, env: FABRIKAM, apply: true, phases: PHASES, warn: (m) => warnings.push(m) });
+  assert.ok(rebuilt.ok);
+  assert.deepStrictEqual(bindingWords(warnings), ['could not read this environment\'s connection references (HTTP 403), so the connector bindings of page "Weather" were not checked against them']);
+});
+
+test('a spec that states no binding makes no read of references or Custom APIs, and a rebuild of it is as it was', async () => {
+  const { spec, outDir } = await portableCopy();
+  for (const page of spec.pages) { delete page.connectorBindings; delete page.actionBindings; }
+  const { sdk, reads } = targetEnvironment({ references: [referenceRow('contoso_msnweather', 'shared_office365users')] });
+  const warnings = [];
+  const rebuilt = await runSdkBuild(spec, { sdk, genpage: fakeGenpage(), appDir: outDir, env: FABRIKAM, apply: true, phases: PHASES, warn: (m) => warnings.push(m) });
+  assert.ok(rebuilt.ok);
+  assert.deepStrictEqual(reads, []);
+  assert.deepStrictEqual(bindingWords(warnings), []);
+});
+
+test('a run without the pages phase does not read them either: the bindings are not written, so there is nothing to check', async () => {
+  const { spec, outDir } = await portableCopy();
+  const { sdk, reads } = targetEnvironment({ references: [referenceRow('contoso_msnweather', 'shared_office365users')] });
+  const rebuilt = await runSdkBuild(spec, { sdk, genpage: fakeGenpage(), appDir: outDir, env: FABRIKAM, apply: true, phases: ['solution', 'data-model', 'app-shell'] });
+  assert.ok(rebuilt.ok);
+  assert.deepStrictEqual(reads, []);
+});
+
+test('a dry run says what an apply would stop at — on the page\'s own line — and reads nothing when it is asked not to read the environment', async () => {
+  const { spec, outDir } = await portableCopy();
+  const conflicting = [referenceRow('contoso_msnweather', 'shared_office365users'), BOTH_REFERENCES[1]];
+  const warnings = [];
+  const { sdk, reads, writes } = targetEnvironment({ references: conflicting, apis: BOTH_APIS });
+  const planned = await runSdkBuild(spec, { sdk, genpage: fakeGenpage(), appDir: outDir, env: FABRIKAM, apply: false, phases: PHASES, warn: (m) => warnings.push(m) });
+  assert.strictEqual(planned.dryRun, true);
+  assert.deepStrictEqual(writes, [], 'a dry run writes nothing');
+  assert.ok(reads.length > 0, 'it read the environment for the names the pages state');
+  const weather = planned.planItems.find((item) => item.label === 'page "Weather"');
+  assert.deepStrictEqual([weather.state, weather.wouldHalt], ['unknown', true]);
+  assert.strictEqual(weather.stateWhy, 'the build would stop before writing anything: page "Weather": connector binding "contoso_msnweather" is for connector shared_msnweather, but the connection reference of that name in this environment is for connector shared_office365users');
+  assert.deepStrictEqual(planned.planItems.filter((item) => item.wouldHalt).map((item) => item.label), ['page "Weather"'], 'no other line is marked');
+
+  // A reference that is not there is a warning in the plan, as it is in the build, and halts nothing.
+  const missing = targetEnvironment({ references: [BOTH_REFERENCES[1]], apis: BOTH_APIS });
+  const missingWarnings = [];
+  const missingPlan = await runSdkBuild(spec, { sdk: missing.sdk, genpage: fakeGenpage(), appDir: outDir, env: FABRIKAM, apply: false, phases: PHASES, warn: (m) => missingWarnings.push(m) });
+  assert.deepStrictEqual(missingPlan.planItems.filter((item) => item.wouldHalt), []);
+  assert.match(bindingWords(missingWarnings)[0], /^page "Weather": connection reference contoso_msnweather is not in this environment/);
+
+  // `livePlan: false` is a plan that does not read the environment: it reads no reference either.
+  const offline = targetEnvironment({ references: conflicting });
+  const offlinePlan = await runSdkBuild(spec, { sdk: offline.sdk, genpage: fakeGenpage(), appDir: outDir, env: FABRIKAM, apply: false, livePlan: false, phases: PHASES });
+  assert.deepStrictEqual(offline.reads, []);
+  assert.deepStrictEqual(offlinePlan.planItems.filter((item) => item.wouldHalt), []);
+});
+
+test('a dry run whose read of the references fails says so, and halts nothing', async () => {
+  const { spec, outDir } = await portableCopy();
+  const { sdk } = targetEnvironment({ failReferences: 'HTTP 403', apis: BOTH_APIS });
+  const warnings = [];
+  const planned = await runSdkBuild(spec, { sdk, genpage: fakeGenpage(), appDir: outDir, env: FABRIKAM, apply: false, phases: PHASES, warn: (m) => warnings.push(m) });
+  assert.deepStrictEqual(planned.planItems.filter((item) => item.wouldHalt), []);
+  assert.strictEqual(bindingWords(warnings).length, 1);
+  assert.match(bindingWords(warnings)[0], /^could not read this environment's connection references \(HTTP 403\)/);
 });

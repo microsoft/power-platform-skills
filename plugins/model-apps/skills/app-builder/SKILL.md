@@ -710,15 +710,26 @@ not everything:**
   the design document name each new table no persona and no grant covers, and `write-app-spec-doc.js
   --env` lists the roles the app has.
 
-**Page bindings and another environment.** A page's connector and Custom API bindings are in the spec, so a
-rebuild writes them back — into this environment and into another one. A rebuild cannot make what they
-*name*. When the pull's result carries `pageBindings`, tell the user what it says before any rebuild into
-another environment: `neededInTarget` lists the connection references (and the connections behind them), the
-Custom APIs and the service resources (a SharePoint site and its list ids, say) that environment must already
-have, and `notCarried` the lists the spec could not state (a rebuild into the same environment leaves those as
-they are; into another one, they are bound with `/genpage`). Do not write bindings into a spec yourself — they
-come from a page a pull read — and when you reset a page to `intent` to regenerate it, delete its bindings
-from the spec: the generator writes no connector code.
+**Page bindings and another environment.** A page's connector and Custom API bindings are in the spec, by the
+properties the references document — `logicalName`, `connectorId`, `dataset`, `tables`, `tableDisplayNames`,
+`operations` for a connector binding; `name`, `isFunction`, `boundEntityLogicalName`, `displayName`,
+`parameterKinds` for a Custom API binding — and by nothing else, so a rebuild writes them back into this
+environment and into another one. What a binding holds beyond that (a connection id, a credential, a property
+no spec states) is **not** in the spec: when the pull's result carries `pageBindings.propertiesLeftOut`, tell the
+user which properties were left out (it names them, never their values), and that the page folder's own
+`config.json` still holds them — they must not commit or share that folder if a value there is a credential. A
+spec that states one is refused. A rebuild cannot make what the bindings *name*. When the pull's result carries
+`pageBindings`, tell the user what it says before any rebuild into another environment: `neededInTarget` lists
+the connection references (and the connections behind them), the Custom APIs and the service resources (a
+SharePoint site and its list ids, say) that environment must already have, and `notCarried` the lists the spec
+could not state (a rebuild into the same environment leaves those as they are; into another one, they are bound
+with `/genpage`). The rebuild itself reads that environment's references before it writes anything: it **stops**
+(`pages-binding-reference-conflict`, nothing written) at a connection reference of that name that is for another
+connector — give the binding the logical name of a reference that is for the right connector, or set the
+binding's `connectorId` to the one that environment has, and never pick a reference for the user — and its
+warnings say by name each reference or Custom API that is not there yet: relay them. Do not write bindings into a
+spec yourself — they come from a page a pull read — and when you reset a page to `intent` to regenerate it, delete
+its bindings from the spec: the generator writes no connector code.
 
 Then:
 

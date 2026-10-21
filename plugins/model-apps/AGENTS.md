@@ -1613,33 +1613,72 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   `pages[]`). The page folder always held the raw lists in its `config.json`, but the spec carried only
   `dataSources` and `model`: a rebuild into the same environment kept a page's bindings only because it sent none
   (the SDK leaves a list a push omits as it is), and a copy of the spec rebuilt in another environment deployed
-  the pages without them. `parseDownloadedPages` now projects each list a page holds, entries and their
-  properties as written, whole or not at all — `pageBindingsProblem` (`lib/app-spec.js`) is the one rule,
-  the validator's too (a list of objects), so a download never writes a spec its own validation refuses, and a
-  spec that stated part of a list would have the next rebuild *replace* the page's list with that part. An empty
-  list and `null` (the page's way of holding none) are nothing and are never written: a stated `[]` means
-  "clear". A list the spec cannot state is left out, said on stderr (`WARNING:`) and listed in
-  `pageBindings.notCarried`; it is a note and never a gate, as for a model the spec cannot hold, because a
-  rebuild into the same environment leaves such a list as it is. The build sends a list a spec page states, and
-  none it does not (`statedPageBindings`; the create that makes a page the others navigate to, and the create or
-  update of the pages loop, both pass them) — an omitted list is the deployed page's own, a stated one, `[]`
-  too, replaces it, and an unchanged one costs no write (the backend writes only what differs). Verify does not
-  compare them, as it does not compare `dataSources` or `model`. `--changed-only` reads a change to a list as a
-  structural change to the page, so it takes a full build. No `minimumPluginVersion` is set for them: an older
-  plugin ignores the lists, which is what it always did, and a floor above the running version makes
-  `validateAppSpec` refuse the spec. **What a rebuild cannot bring to another environment is what the lists name,
+  the pages without them. `parseDownloadedPages` now projects each list a page holds — **by an allowlist**
+  (`lib/page-bindings.js`: `logicalName`, `connectorId`, `dataset`, `tables`, `tableDisplayNames`, `operations` for
+  a connector binding; `name`, `isFunction`, `boundEntityLogicalName`, `displayName`, `parameterKinds` for a Custom API
+  binding, each with the kind of value it holds) — and never copies anything else. **That is a security rule, not a
+  tidiness one**: `genpage-upload.js` writes any JSON array into a binding, so an entry can hold a connection id of
+  the environment it was made in or a credential, and the spec is the artifact that is committed and shared. A
+  property off the list, a property on it whose value is not what it holds (an object where a text belongs, a map
+  whose values are not Dataverse parameter kinds) and a text shaped like a credential (a password in a URL, a
+  `sig=`/`Password=` pair, a bearer token or JWT) are **left out**, and the download says which — by the property's
+  NAME, never its value (a name that is not a plain identifier is not echoed either) — on stderr (`WARNING:`) and as
+  `pageBindings.propertiesLeftOut`. The validator holds an authored spec to the same list: a property off it is an
+  ERROR (`bindingProblemText`), because refusing is the only thing that keeps a credential out of the file. The
+  page folder's own `config.json` is the page as the environment holds it and is **not** rewritten, so it still
+  holds them — the `WARNING:` says so. A whole list is left out (`pageBindings.notCarried`) only when it is no
+  list of objects (`pageBindingsProblem`, also the validator's) or an entry of it holds nothing a spec states (such an
+  entry would be one a rebuild takes off the page). An empty list and `null` (the page's way of holding none)
+  are nothing and are never written: a stated `[]` means "clear". Neither is a gate, as for a model the spec
+  cannot hold. **A rebuild must not strip what the spec could not state**, so the page backend reads a list a
+  spec states against the page's own entries (`update` and `publishedDiffers` take `specBindings: true`, the build
+  always passes it; `planEdits` → `mergeBindings`): an entry is matched by `logicalName` / `name`, the properties a
+  spec can state come from the spec, and the others stay on the entry. A page that already holds what the spec
+  states is therefore **not written and not published**, and an edit changes what it names and nothing else. Any
+  other caller of the backend keeps replacing a list with the one it gives. The build sends a list a spec page
+  states, and none it does not (`statedPageBindings`; the create that makes a page the others navigate to, and the
+  create or update of the pages loop, both pass them) — an omitted list is the deployed page's own, a stated one,
+  `[]` too, is the page's list. **The record of an earlier publish is recognised** (`lib/page-publish-records.js`):
+  it is the hash of the content the build sent, and every record made before a download stated the lists is the
+  hash of the content WITHOUT them. With `specBindings`, when the page already holds what the spec states and
+  the caller's record is the hash without the lists, `update` reads the PUBLISHED copy (read only) and, when it holds
+  the lists too, answers `publish.kind: 'skipped'` with `receiptUpgraded: true`; the build then renews the record to
+  the new hash with the versions it already holds (`rememberPublished`), so the next build reads nothing more. A
+  copy that does not hold them, or cannot be read, publishes as it always did, and a page the spec changes is
+  written and published whatever was recorded. Verify does not compare the lists, as it does not compare
+  `dataSources` or `model`. `--changed-only` reads a change to a list as a structural change to the page, so it
+  takes a full build. No `minimumPluginVersion` is set for them: an older plugin ignores the lists, which is what
+  it always did, and a floor above the running version makes `validateAppSpec` refuse the spec. **A rebuild
+  checks what the lists name before it writes anything** (`lib/page-binding-targets.js`, called from
+  `checkPageBindingsBeforeWriting` next to the navigation check, and in a dry run's plan): it reads the
+  environment's `connectionreference` rows and `customapi` rows for the names the pages it writes state —
+  the pages a changed-only run selects and the navigation targets it may have to make — and **stops**
+  (`BuildHalt`, phase `preflight`, code `pages-binding-reference-conflict`, never retried, nothing written) at a
+  connection reference of that name whose connector is another than the binding's `connectorId` (compared by the
+  connector's name, the last segment of its id). It never guesses and never makes a reference: the author gives the
+  binding another logical name, or states the connector this environment has (a custom connector's id differs in
+  every environment). It only SAYS, by name, a reference or Custom API that is not there (the page is written with
+  its binding, and a reference made afterwards makes it work without a rebuild), a Custom API that is the other kind
+  or bound to another table (the runtime refuses that call itself), and a read that failed (the bindings were not
+  checked); a connector that is not named on both sides is never a conflict. What it cannot say is whether a
+  connector offers the `operations` a binding lists — only the Power Apps service has the connector's definition.
+  **What a rebuild cannot bring to another environment is what the lists name,
   and the download says so**: when any page holds a binding it prints `NOTE:` on stderr and returns
   `pageBindings` — `pages` (each page's key, name and the connection references / Custom APIs its bindings go by),
   `neededInTarget` (`connectionReferences`, `customApis`, and `serviceResources`: the references whose bindings
-  name a `dataset` or `tables`, which are the source environment's), `notCarried` and a `note` — in the order
-  the spec lists its pages, names sorted by `compareText`; the block is absent when no page holds one and nothing
-  was left out. The connection reference and the connection behind it (a user's sign-in, which stays where it was
-  made), the Custom API (a solution component) and the resources a connector binding points at are not App Spec
-  items; the `NOTE:` names the scripts that make each one there. The `custom-api` feature flag gates what
-  the `/genpage` agents author, not this: a download and a rebuild carry the bindings a page already holds.
-  `page-bindings.test.js` pins the shape, the projection, the build's two write sites and the round trip in the
-  same and in another environment, and `page-bindings-real-bundle.test.js` what the real SDK does with the lists:
-  a page read with them, a rebuild that writes no row, a changed list, a create in another environment.
+  name a `dataset` or `tables`, which are the source environment's), `notCarried`, `propertiesLeftOut` and a
+  `note` — in the order the spec lists its pages, names sorted by `compareText`; the block is absent when no page
+  holds one and nothing was left out. The connection reference and the connection behind it (a user's sign-in, which
+  stays where it was made), the Custom API (a solution component) and the resources a connector binding points at
+  are not App Spec items; the `NOTE:` names the scripts that make each one there. The `custom-api` feature flag
+  gates what the `/genpage` agents author, not this: a download and a rebuild carry the bindings a page already
+  holds. `page-binding-contract.test.js` pins the allowlist, the projection and the merge,
+  `page-binding-targets.test.js` the reads and the judgement of the environment, `page-bindings.test.js` the
+  download, the validator, the build's write sites and its check of the environment, and
+  `page-bindings-real-bundle.test.js` what the real SDK does with the lists: a page read with them, a rebuild
+  that writes no row, a changed list that keeps what the spec could not state, a create in another environment, and
+  the record of an older publish (the build-level version, with the real pages phase, is in
+  `sdk-build-pages-deploy.test.js`).
   **A download is written in a fixed order, so two downloads of one app match byte for byte** and a diff
   between them shows only what changed. Dataverse promises no row order for a query without `$orderby`,
   and a directory listing is in the file system's order (name order on NTFS, hash order on ext4), so

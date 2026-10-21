@@ -22,10 +22,11 @@
 // rebuild. Run it again, or pass --language-code. The flag only decides the language the titles are read in: it is not written into the spec (a pin there is the author's), and a flag that
 // names another language than the spec on disk pins is refused (`navigation-language-conflict`).
 //
-// A page's connector and Custom API bindings are written into the spec as the page holds them (`pages[].connectorBindings`, `pages[].actionBindings`), so a rebuild keeps them in this environment and writes them
-// into another one. What a rebuild cannot make there — the connection references and the connections behind them, the Custom APIs, the service resources a connector binding points at — is said on stderr and
-// in the JSON result as `pageBindings` (pageBindingsReport): { pages, neededInTarget, notCarried?, note }. It is left out of the result when no page holds a binding and none had to be left out; a list the spec cannot
-// state is never a refusal (see parseDownloadedPages).
+// A page's connector and Custom API bindings are written into the spec (`pages[].connectorBindings`, `pages[].actionBindings`) by the properties a spec states of a binding — an allowlist, with the kind of value each
+// holds (lib/page-bindings.js) — so a rebuild keeps them in this environment and writes them into another one. What the spec does not carry of a binding (a connection id, a credential, a property this plugin does not
+// know) is left out and named, by the property's name and never its value, and stays on the page. What a rebuild cannot make in another environment — the connection references and the connections behind them,
+// the Custom APIs, the service resources a connector binding points at — is said on stderr and in the JSON result as `pageBindings` (pageBindingsReport): { pages, neededInTarget, notCarried?, propertiesLeftOut?, note }.
+// It is left out of the result when no page holds a binding and none had to be left out; a list or a property the spec cannot state is never a refusal (see parseDownloadedPages).
 
 const fs = require('node:fs');
 const path = require('node:path');
@@ -39,7 +40,8 @@ const { parseManifestBase64, manifestResourceName, reconcilePageIds, KEY_GRAMMAR
 const { reverseResolveNavIdsReport } = require('./lib/pageref-resolver.js');
 const { fetchSitemap, sitemapGenPages, appNavigationMatchesSitemap } = require('./lib/sitemap-pages.js');
 const { isRestrictedSolution } = require('./lib/system-solutions.js');
-const { isPlatformIconRef, webResourceNameFromRef, validateAppSpec, normalizeLanguageCode, isLocalizedLabelMap, derivedPluralName, ambiguousChoiceAliases, relationshipSchemaName, manyToManySchemaName, dashboardNameKey, PAGE_MODEL_RE, PAGE_BINDINGS, pageBindingsProblem, sitemapEntityTables, lookupLabelFor, isOldLookupColumnLabel } = require('./lib/app-spec.js');
+const { isPlatformIconRef, webResourceNameFromRef, validateAppSpec, normalizeLanguageCode, isLocalizedLabelMap, derivedPluralName, ambiguousChoiceAliases, relationshipSchemaName, manyToManySchemaName, dashboardNameKey, PAGE_MODEL_RE, sitemapEntityTables, lookupLabelFor, isOldLookupColumnLabel } = require('./lib/app-spec.js');
+const { PAGE_BINDINGS, BINDING_PROPERTIES, WHY_WORDS, pageBindingsProblem, statableBindings } = require('./lib/page-bindings.js');
 const { labelsByLcid, sameLabel } = require('./lib/lookup-labels.js');
 const { odataGuid } = require('./lib/ai-app-settings.js');
 const { APP_COMPONENT_ENTITY_SOURCES, appComponentEntities, appComponentRows, currentAppLayer, readAppComponentInventory, downloadAppMainForms, setAppMembershipFloor } = require('./lib/app-components.js');
@@ -980,9 +982,12 @@ async function readDescriptionInventory(sdk, appId, solutionScope, referencedGlo
 // `unkeptModels` collects pages whose model id the App Spec cannot hold (`PAGE_MODEL_RE`): written into
 // the spec it would fail validation and block a rebuild, so it is left out and reported instead.
 //
-// `unkeptBindings` collects the pages whose config.json holds a list of connector or Custom API bindings the spec cannot state as the page holds it
-// (`pageBindingsProblem`: not a list, or an entry that is not an object): { pageId, field, reason }. See the projection below.
-function parseDownloadedPages(pagesRoot, outDir, nameById, unreadable, unkeptModels, unkeptBindings) {
+// `unkeptBindings` collects the pages whose config.json holds a list of connector or Custom API bindings the spec cannot state: { pageId, field, reason }. The list is not a list, or an entry is not an object
+// (`pageBindingsProblem`), or an entry holds nothing a spec states (see the projection below).
+//
+// `leftOutBindings` collects what the spec does not carry of the entries it does state — the entry's properties that are not on the allowlist (a connection id, a credential, anything the runtime or a later
+// version adds) or hold a value an allowlisted property cannot: { pageId, field, entry, binding?, properties: [{ property, why }] }. By the property's NAME; its value is never recorded.
+function parseDownloadedPages(pagesRoot, outDir, nameById, unreadable, unkeptModels, unkeptBindings, leftOutBindings) {
   const pages = [];
   if (!fs.existsSync(pagesRoot)) return pages;
   // Read in the pages' own order (comparePages), not the directory's: `readdirSync` lists in the file system's order, which is
@@ -1043,11 +1048,15 @@ function parseDownloadedPages(pagesRoot, outDir, nameById, unreadable, unkeptMod
     const recordedModel = typeof config.model === 'string' ? config.model.trim() : '';
     const model = PAGE_MODEL_RE.test(recordedModel) ? recordedModel : undefined;
     if (recordedModel && !model && Array.isArray(unkeptModels)) unkeptModels.push({ pageId: entry, model: recordedModel });
-    // The page's connector and Custom API bindings, written as the page holds them (config.json: `connectorBindings` / `actionBindings`, each a list of objects) — so that the spec states them and a rebuild keeps
-    // them, in this environment and in another one. A list that has an entry is carried; an empty one is not, as it says what a page with none already says. `null` is the page's way of holding none (the backend
-    // reads it as "not given"), so there is nothing to report. A list the spec cannot state (pageBindingsProblem — the same two rules the validator reports) is left out WHOLE and recorded in `unkeptBindings`: a spec that
-    // stated part of a list would make a rebuild replace the page's list with that part. It is reported and not a gate — a page whose list is left out keeps it when it is rebuilt into this environment, which
-    // is what a rebuild did before the spec could state bindings — whereas the page's data sources, which a rebuild replaces, are (above).
+    // The page's connector and Custom API bindings, as far as a spec states them (page-bindings.js): each entry by an ALLOWLIST of properties, with the kind of value each holds. A binding can carry more than the
+    // runtime reads — a connection id of the environment it was made in, a credential someone wrote into a connectors.json (genpage-upload.js takes any JSON array), a property a later runtime adds — and the spec is
+    // what is committed and shared, so none of that is copied into it: it is left out, and said by the property's name (`leftOutBindings`), never its value. It stays on the page, which a rebuild into this
+    // environment leaves as it is (mergeBindings), and in the page folder's own config.json, which this does not rewrite.
+    // A list that has an entry is carried; an empty one is not, as it says what a page with none already says. `null` is the page's way of holding none (the backend reads it as "not given"), so there is nothing to report.
+    // A list the spec cannot state — it is not a list or holds a non-object (pageBindingsProblem, the validator's rule too), or one of its entries holds nothing a spec states, which a spec could only state as an entry
+    // a rebuild would then drop from the page — is left out WHOLE and recorded in `unkeptBindings`: a spec that stated part of a list would make a rebuild replace the page's list with that part. It is reported and
+    // not a gate — a page whose list is left out keeps it when it is rebuilt into this environment, which is what a rebuild did before the spec could state bindings — whereas the page's data sources, which a rebuild
+    // replaces, are (above).
     const bindings = {};
     for (const kind of Object.keys(PAGE_BINDINGS)) {
       if (!Object.prototype.hasOwnProperty.call(config, kind) || config[kind] === null) continue;
@@ -1056,7 +1065,14 @@ function parseDownloadedPages(pagesRoot, outDir, nameById, unreadable, unkeptMod
         if (Array.isArray(unkeptBindings)) unkeptBindings.push({ pageId: entry, field: kind, reason: problem });
         continue;
       }
-      if (config[kind].length) bindings[kind] = config[kind];
+      if (!config[kind].length) continue;
+      const projected = statableBindings(kind, config[kind]);
+      if (projected.blank.length) {
+        if (Array.isArray(unkeptBindings)) unkeptBindings.push({ pageId: entry, field: kind, reason: `${kind}[${projected.blank[0]}] holds nothing an App Spec states` });
+        continue;
+      }
+      bindings[kind] = projected.stated;
+      if (Array.isArray(leftOutBindings)) for (const left of projected.leftOut) leftOutBindings.push({ pageId: entry, field: kind, ...left });
     }
     pages.push({
       pageId: entry,
@@ -1079,9 +1095,11 @@ function bindingNames(list, identity) {
 }
 
 // What the connector and Custom API bindings of the pages a download read come to, and what a rebuild into ANOTHER environment still cannot bring:
-//   { pages: [{ key, name, connectorBindings?: [name…], actionBindings?: [name…] }], notCarried?: [{ key, name, field, reason }], neededInTarget: { connectionReferences?, customApis?, serviceResources? }, note }
+//   { pages: [{ key, name, connectorBindings?: [name…], actionBindings?: [name…] }], notCarried?: [{ key, name, field, reason }], propertiesLeftOut?: [{ key, name, field, entry, binding?, properties: [{ property, why }] }],
+//     neededInTarget: { connectionReferences?, customApis?, serviceResources? }, note }
 // or null when no page holds a binding or lost one. `pages` are the pages whose bindings are in the spec, in the order the spec lists its pages, each with the names its bindings go by; `notCarried` the lists a page holds that the
-// spec cannot state as the page holds them (`unkept`, from parseDownloadedPages) — a rebuild into this environment leaves those as they are, and a rebuild into another does not carry them.
+// spec cannot state (`unkept`, from parseDownloadedPages) — a rebuild into this environment leaves those as they are, and a rebuild into another does not carry them; `propertiesLeftOut` (`leftOut`, from
+// parseDownloadedPages) what the spec does not carry of the entries it states — by the property's NAME and the reason (`why`, page-bindings.js), never its value: a connection id, a credential, a property no spec states.
 //
 // The spec carries the binding LISTS: they are plain text in the page's config.json, so a rebuild writes them in any environment. It carries nothing of what they name, and a rebuild makes none of it:
 //   - a connector binding names a CONNECTION REFERENCE by its logical name. The reference is a Dataverse row that points at a connection, and a connection holds a user's sign-in, so it stays in the environment
@@ -1089,7 +1107,7 @@ function bindingNames(list, identity) {
 //   - a Custom API binding names a Custom API by its unique name. A Custom API is a solution component, not an App Spec item (https://learn.microsoft.com/power-apps/developer/data-platform/custom-api);
 //   - what a connector binding points at inside the service — `dataset`, `tables`: a SharePoint site and its list ids, say — is written as the page holds it, and means something in another environment only if the same
 //     resources are there. `serviceResources` names the connection references whose bindings carry one.
-function pageBindingsReport(pages, unkept) {
+function pageBindingsReport(pages, unkept, leftOut) {
   const held = [];
   const references = new Set();
   const apis = new Set();
@@ -1121,18 +1139,24 @@ function pageBindingsReport(pages, unkept) {
     const page = byId.get(String(u.pageId).toLowerCase()) || {};
     return { key: page.key, name: page.name === undefined ? u.pageId : page.name, field: u.field, reason: u.reason };
   }).sort((a, b) => compareText(a.name, b.name) || compareText(a.field, b.field));
-  if (!held.length && !notCarried.length) return null;
+  const propertiesLeftOut = (leftOut || []).map((left) => {
+    const page = byId.get(String(left.pageId).toLowerCase()) || {};
+    return { key: page.key, name: page.name === undefined ? left.pageId : page.name, field: left.field, entry: left.entry, ...(left.binding === undefined ? {} : { binding: left.binding }), properties: left.properties };
+  }).sort((a, b) => compareText(a.name, b.name) || compareText(a.field, b.field) || a.entry - b.entry);
+  if (!held.length && !notCarried.length && !propertiesLeftOut.length) return null;
   const sorted = (set) => [...set].sort(compareText);
   return {
     pages: held,
     ...(notCarried.length ? { notCarried } : {}),
+    ...(propertiesLeftOut.length ? { propertiesLeftOut } : {}),
     neededInTarget: {
       ...(references.size ? { connectionReferences: sorted(references) } : {}),
       ...(apis.size ? { customApis: sorted(apis) } : {}),
       ...(service.size ? { serviceResources: sorted(service) } : {}),
     },
     note: 'The spec states these bindings, so a rebuild writes them onto each page in any environment. A rebuild cannot create what they name — the connection references and the connections behind them, the Custom APIs, and the '
-      + 'service resources a connector binding points at — so each must already exist in the environment you rebuild into.',
+      + 'service resources a connector binding points at — so each must already exist in the environment you rebuild into. A rebuild reads them there before it writes a page: it stops, before writing anything, at a connection '
+      + 'reference that is for another connector, and says by name each reference and Custom API that is not there.',
   };
 }
 
@@ -1157,7 +1181,7 @@ function pageBindingsNote(report) {
     if (needed.serviceResources) {
       lines.push(`    - what the connector bindings of ${list(needed.serviceResources)} point at inside the service (dataset, tables: a SharePoint site and list ids, for example) is written as it is here, and works there only if the same resources exist`);
     }
-    lines.push('  Until they are, the page cannot use those bindings. The pages:');
+    lines.push('  Until they are, the page cannot use those bindings. A rebuild reads them in the environment it writes to: it stops, before writing anything, at a connection reference that is for another connector, and names each reference and Custom API that is not there. The pages:');
     for (const page of report.pages) {
       const parts = [];
       if (page.connectorBindings) parts.push(`connectorBindings: ${list(page.connectorBindings)}`);
@@ -1169,6 +1193,16 @@ function pageBindingsNote(report) {
     lines.push(
       `WARNING: ${report.notCarried.length} list(s) of connector or Custom API bindings are NOT in the spec, because the spec cannot state them as the page holds them: ${report.notCarried.map((n) => `${JSON.stringify(n.name)} (${n.reason})`).join('; ')}.`,
       '  Rebuilding into THIS environment leaves such a page\'s bindings as they are. Rebuilding into a DIFFERENT environment will not carry them — bind them there with /genpage (genpage-upload.js --connectors / --actions).',
+    );
+  }
+  if (report.propertiesLeftOut && report.propertiesLeftOut.length) {
+    // The property's name, and — for one a spec does state, with a value it cannot hold — why: "operations (must be a list of texts)". Never a value.
+    const said = (property) => (property.why === 'not-stated' ? property.property : `${property.property} (${WHY_WORDS[property.why]})`);
+    const where = (left) => `${left.name} ${left.field}[${left.entry}]${left.binding === undefined ? '' : ` (${left.binding})`}: ${left.properties.map(said).join(', ')}`;
+    lines.push(
+      `WARNING: ${report.propertiesLeftOut.length} binding(s) hold properties that are NOT in the spec: a spec states only what identifies a binding and shapes its calls (${Object.entries(BINDING_PROPERTIES).map(([kind, names]) => `${kind}: ${names.join(', ')}`).join('; ')}), so anything else — a credential, a connection id, a property this plugin does not know — is left out. Left out, by name (the values are never printed): ${report.propertiesLeftOut.map(where).join('; ')}.`,
+      '  Rebuilding into THIS environment leaves them on the page: a binding the spec states as the page holds it is not written, and one it changes keeps them. Rebuilding into a DIFFERENT environment writes the bindings without them. '
+      + 'They are still in the page folder\'s own config.json (pages/<page id>/config.json), which is the page as this environment holds it and is not rewritten: keep that folder out of version control, and do not share it, if a value there is a credential.',
     );
   }
   return `${lines.join('\n')}\n`;
@@ -2825,7 +2859,8 @@ async function runDownload({ sdk, genpage, outDir, appId, appUnique, allowLossy 
     const unreadableConfigs = [];
     const unkeptModels = [];
     const unkeptBindings = [];
-    pages = parseDownloadedPages(pagesRoot, outDir, nameById, unreadableConfigs, unkeptModels, unkeptBindings);
+    const leftOutBindings = [];
+    pages = parseDownloadedPages(pagesRoot, outDir, nameById, unreadableConfigs, unkeptModels, unkeptBindings, leftOutBindings);
     // Reported, not gated: a page whose model is left out rebuilds exactly as every page did before the spec carried models — an
     // update leaves the model the page already has as it is (the SDK writes only what a spec names), and a page the rebuild creates
     // gets none.
@@ -2898,7 +2933,7 @@ async function runDownload({ sdk, genpage, outDir, appId, appUnique, allowLossy 
 
     // The connector and Custom API bindings the pages hold. The spec states them (parseDownloadedPages), so a rebuild writes them back; what it cannot do in another environment is said here — and in the result — rather
     // than left for the first call through a binding that cannot resolve. Silent when no page holds one.
-    pageBindings = pageBindingsReport(pages, unkeptBindings);
+    pageBindings = pageBindingsReport(pages, unkeptBindings, leftOutBindings);
     if (pageBindings) process.stderr.write(pageBindingsNote(pageBindings));
 
     // Warn about manifest pages no longer in the sitemap (Maker-deleted in the live app). The

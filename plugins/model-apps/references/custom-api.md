@@ -75,11 +75,16 @@ under `actionBindings`; the skill never writes this file directly):
 
 ## In an App Spec
 
-An app a download reads is written with each page's `actionBindings` in `pages[].actionBindings`, entry for entry,
-and a rebuild writes that list back onto the page (a spec that states none leaves the page's own). `/genpage`
+An app a download reads is written with each page's `actionBindings` in `pages[].actionBindings`, and a rebuild
+writes that list back onto the page (a spec that states none leaves the page's own). A spec states an entry by the
+properties documented above — `name`, `isFunction`, `boundEntityLogicalName`, `displayName`, `parameterKinds` — and
+by nothing else: any other property a binding holds is left out of the spec, named by its name on stderr, and stays
+on the page; a spec that states one is refused (see `references/app-spec-schema.md` → `pages[]`). `/genpage`
 itself never reads or writes the spec. The spec carries the list and not the Custom APIs it names: each must
-already exist in the environment you rebuild into, deployed in a solution. The `custom-api` flag gates what the
-`/genpage` agents author, not this. See `references/app-spec-schema.md` → `pages[]`.
+already exist in the environment you rebuild into, deployed in a solution. A rebuild reads the environment's Custom
+APIs before it writes and says by name one that is not there, one that is the other kind (Action or Function) and
+one bound to another table; it does not stop for them. The `custom-api` flag gates what the `/genpage` agents
+author, not this.
 
 ## Runtime requirements
 

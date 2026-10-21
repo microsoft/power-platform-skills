@@ -44,6 +44,7 @@ const { makeTempWorkspace } = require('./temp-workspace.js');
 const { sha256 } = require('./hash.js');
 const { withCause } = require('./retry-policy.js');
 const { makeThrottleBudget, waitDoesNotFit, spentNote } = require('./throttle-budget.js');
+const { mergeBindings } = require('./page-bindings.js');
 
 const GUID_RE = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
 
@@ -293,14 +294,19 @@ function projectionOf(page) {
 // What an update has to write for `page` to hold `fields` — [{ key, value }], in the order they are applied; empty when it already does. A field left `undefined` is the
 // page's own and is never an edit. The one definition of "this page already holds that content": an update plans its writes with it, and a create that finds a page
 // under its id asks it whether that page holds all of what the create asked for.
-function planEdits(fields, page) {
+// `specBindings`: the binding lists given are an App Spec's. A spec states an entry by the properties it can carry and not by the ones it cannot (a connection id, a credential, a property a later runtime adds),
+// so a list it states is read against the page's own entry by entry (mergeBindings): the page "holds" the list when every entry reads the same, and an edit's value is the list as the page will hold it, each entry
+// still carrying what the spec could not state. For any other caller a list given is the page's list, as it always was.
+function planEdits(fields, page, { specBindings = false } = {}) {
   const edits = [];
   if (fields.source !== page.source) edits.push({ key: 'source', value: fields.source });
   if (fields.name !== undefined && fields.name !== page.name) edits.push({ key: 'name', value: fields.name });
   if (fields.dataSources !== undefined && !isDeepStrictEqual(fields.dataSources, page.dataSources === undefined ? [] : page.dataSources)) edits.push({ key: 'dataSources', value: fields.dataSources });
   if (fields.model !== undefined && fields.model !== page.model) edits.push({ key: 'model', value: fields.model });
   for (const key of ['connectorBindings', 'actionBindings']) {
-    if (fields[key] !== undefined && !isDeepStrictEqual(fields[key], page[key])) edits.push({ key, value: fields[key] });
+    if (fields[key] === undefined) continue;
+    const wanted = specBindings ? mergeBindings(key, fields[key], page[key]) : fields[key];
+    if (!isDeepStrictEqual(wanted, page[key])) edits.push({ key, value: wanted });
   }
   return edits;
 }
@@ -395,6 +401,16 @@ async function readPublishedPage(sdk, id, { runtime = false } = {}) {
   // `runtime`: the hash of the same copy's compiled output too (`runtimeSha256`, null for a copy that has none), from the listing of rows just read — a caller that compares the copy with evidence of what was published asks for it.
   if (runtime) page.runtimeSha256 = await compiledOutputSha256(sdk, id, { rows: rows || [] });
   return page;
+}
+
+// Whether the PUBLISHED copy of page `id` holds `fields` (planEdits, on the published layer): read only, and false for a page that has no published copy or whose copy cannot be read — "cannot be told" is never "holds it".
+async function publishedCopyHolds(sdk, id, fields, options) {
+  try {
+    const page = await readPublishedPage(sdk, id);
+    return page !== null && planEdits(fields, page, options).length === 0;
+  } catch {
+    return false;
+  }
 }
 
 // The filetype of a page's COMPILED output row: the one after the text rows (TEXT_ROW_TYPE) — the bytes the runtime serves. The SDK writes it with the source, and a publish copies it to the published layer.
@@ -1093,7 +1109,9 @@ function makeGenpageSdk(env, deps = {}) {
     },
 
     // UPDATE: read the page, write only what differs from it, record the turn, publish, and prove the published copy.
-    //   args: { name, source, dataSources, model, prompt, agentMessage, connectorBindings, actionBindings, caller, appId, sourceFile, publishedFingerprint, runtimeEvidence, throttle } (`runtimeEvidence`, `throttle`: see create)
+    //   args: { name, source, dataSources, model, prompt, agentMessage, connectorBindings, actionBindings, specBindings, caller, appId, sourceFile, publishedFingerprint, runtimeEvidence, throttle } (`runtimeEvidence`, `throttle`: see create)
+    //   `specBindings: true` says that the binding lists given are an App Spec's: it states each entry by the properties it can carry, so they are read against the page's entries and an entry keeps what the spec could
+    //   not state (planEdits, mergeBindings). Without it a list given is the page's list.
     //   A field the caller leaves out (`undefined`) is left alone — an omitted data-source list, model, name or binding list is the
     //   page's own, not an instruction to clear it; `[]` clears a list. The page's FIRST prompt is kept and the new one is recorded
     //   as a turn of its conversation (pac overwrote the first prompt on every upload).
@@ -1103,6 +1121,8 @@ function makeGenpageSdk(env, deps = {}) {
     //   is the `fingerprint` (contentFingerprint) a result gave it for a publish it saw take effect, and a page that already holds content with that very fingerprint is not
     //   published again (`publish.kind: 'skipped'`). It is only ever a reason not to publish a page this update has just read as already holding the content: a page that
     //   differs is written and published whatever the caller recorded, and a fingerprint that is missing or is another content's leaves the publish as it always was.
+    //   With `specBindings`, the hash of the same content WITHOUT its binding lists is the record of a publish made before the lists were stated: it is taken for the lists too only when the published copy is read
+    //   and holds them, and the result then says `receiptUpgraded: true` — its `fingerprint` is the hash to keep from now on.
     // The result carries the `fingerprint` of the content the page holds now, for the caller that keeps one.
     // The #722 guarantee: an update that MAY have landed is never sent again blindly. After an unknown outcome the page is read:
     //   what was sent is there, turn included   -> it landed (publish)
@@ -1143,7 +1163,9 @@ function makeGenpageSdk(env, deps = {}) {
       // `validate` and `normalize`, is only that it is a GUID — it keeps one it is given, and derives the message ids from its digits.
       const turn = { ...turnOf({ prompt: args.prompt, agentMessage: args.agentMessage }, fields.name || baseline.name), id: String(newTurnId()).toLowerCase() };
       const warnings = [];
-      const planFor = (page) => planEdits(fields, page);
+      // The lists a caller gives as an App Spec's (see planEdits) are read against the page's entries; every other caller's replace them.
+      const specBindings = args.specBindings === true;
+      const planFor = (page) => planEdits(fields, page, { specBindings });
       const fingerprint = contentFingerprint(fields);
       let edits = planFor(baseline);
       if (!edits.length) {
@@ -1151,6 +1173,14 @@ function makeGenpageSdk(env, deps = {}) {
         // or none, is the answer "not known", and the page is published (see above).
         if (typeof args.publishedFingerprint === 'string' && args.publishedFingerprint === fingerprint) {
           return { pageId: id, unchanged: true, publish: { kind: 'skipped', detail: 'the page already holds this content, and the caller recorded that this content was published' }, fingerprint, warnings: [] };
+        }
+        // A record made before the caller stated the binding lists is the hash of this content WITHOUT them — the build's record of every page it published before a download wrote the lists into the spec. The page holds
+        // them now (nothing is left to write), and the caller's record says that nothing has touched the page since that publish, so the lists were published with it: but the record never named them, and it is
+        // only taken for them once the PUBLISHED copy is read and found to hold them too (one read of the published layer, never a write). The answer says so (`receiptUpgraded`), so the caller keeps the hash it
+        // was given now, and a later update finds it as it is. A copy that does not hold them — or cannot be read — leaves the page to be published, as it always was.
+        if (specBindings && typeof args.publishedFingerprint === 'string' && args.publishedFingerprint === contentFingerprint({ ...fields, connectorBindings: undefined, actionBindings: undefined })
+          && await publishedCopyHolds(sdk, id, fields, { specBindings })) {
+          return { pageId: id, unchanged: true, publish: { kind: 'skipped', detail: 'the page already holds this content, the caller recorded that this content was published before its binding lists were stated, and the published copy holds them' }, fingerprint, receiptUpgraded: true, warnings: [] };
         }
         const runtimeSha256 = await runtimeEvidenceOf(sdk, id, args);
         const published = await publish(sdk, 'genPage', id, { verify: true });
@@ -1647,7 +1677,8 @@ function makeGenpageSdk(env, deps = {}) {
     },
 
     // What the PUBLISHED copy of a page differs from `args` in: the content a caller that keeps a record of what it published (the build: lib/page-publish-records.js) needs to see held before it records a publish.
-    //   args: what `update` takes — only the content fields count (the source, and the name, data sources, model and bindings given); an omitted one is the page's own and cannot differ
+    //   args: what `update` takes — only the content fields count (the source, and the name, data sources, model and bindings given); an omitted one is the page's own and cannot differ. `specBindings: true`
+    //   reads the binding lists as an App Spec's, as `update` does, so the published copy of a page that holds more than a spec states is not reported as differing from it
     //   expected: `{ runtimeSha256 }` — the hash of the compiled output the DRAFT held when it was published (what `create` and `update` answer with `runtimeEvidence: true`); the published copy's compiled output must hash to it
     //   -> { ok: true, differing: [key…], fingerprint, runtimeSha256? } | { ok: false, error }
     // `differing` names the fields whose published value is not the one asked for, in `planEdits`' own words — the one definition of "holds that content", made on the published layer where `update` makes it on the
@@ -1670,7 +1701,7 @@ function makeGenpageSdk(env, deps = {}) {
         const wantsRuntime = !!expected && typeof expected.runtimeSha256 === 'string';
         const page = await readPublishedPage(sdk, id, { runtime: wantsRuntime });
         if (page === null) return { ok: false, error: `page ${id} has no published copy` };
-        const differing = planEdits(fields, page).map((edit) => edit.key);
+        const differing = planEdits(fields, page, { specBindings: args.specBindings === true }).map((edit) => edit.key);
         if (wantsRuntime && page.runtimeSha256 !== expected.runtimeSha256) differing.push('compiled output');
         // Given evidence, the answer says which compiled output it read (`runtimeSha256`, null for a copy with none), so a caller can see that the comparison was made: an answer that does not carry it was not about the runtime.
         return { ok: true, differing, fingerprint: contentFingerprint(fields), ...(wantsRuntime ? { runtimeSha256: page.runtimeSha256 } : {}) };

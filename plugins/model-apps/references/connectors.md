@@ -58,12 +58,18 @@ wrapped under `connectorBindings`; the skill never writes this file directly):
 
 ## In an App Spec
 
-An app a download reads is written with each page's `connectorBindings` in `pages[].connectorBindings`, entry for
-entry, and a rebuild writes that list back onto the page (a spec that states none leaves the page's own).
+An app a download reads is written with each page's `connectorBindings` in `pages[].connectorBindings`, and a
+rebuild writes that list back onto the page (a spec that states none leaves the page's own). A spec states an
+entry by the properties documented above — `logicalName`, `connectorId`, `dataset`, `tables`, `tableDisplayNames`,
+`operations` — and by nothing else: a connection id, a credential or any other property a binding holds is left out
+of the spec, named by its name on stderr, and stays on the page (see `references/app-spec-schema.md` → `pages[]`).
+Never write a credential or a connection id into `connectors.json`; a spec that states one is refused.
 `/genpage` itself never reads or writes the spec. The spec carries the list and not what it names: the connection
 reference — and the connection behind it — must already exist in the environment you rebuild into
 (`create-connection-reference.js`, or a solution: `add-page-to-solution.js --connection-refs`, then
-`solution-settings.js`). See `references/app-spec-schema.md` → `pages[]`.
+`solution-settings.js`). A rebuild reads the environment's references before it writes: one of that name for
+**another connector** than the binding's `connectorId` stops it, before anything is written; one that is not there
+is said by name.
 
 ## Runtime requirements
 

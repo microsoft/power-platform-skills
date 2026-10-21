@@ -58,6 +58,7 @@ const {
   statedPageBindings,
 } = require('./app-spec.js');
 const { PHASES } = require('./stages.js');
+const { pagesStatingBindings, readBindingTargets, judgeBindingTargets } = require('./page-binding-targets.js');
 const { topoOrderEntities, entityByLogical } = require('./_graph.js');
 const {
   isMainForm,
@@ -1354,6 +1355,54 @@ async function checkNavigationBeforeWriting(spec, { provision, phases, changedOn
     throw new BuildHalt(`app "${spec.app.name}" cannot be built: ${verdict.message} The build stopped before writing anything.`, { phase: 'preflight', code: verdict.code, recoverable: false, retry: RETRY.NEVER });
   }
   if ((verdict.outcome === 'unknown' || verdict.outcome === 'warn') && typeof warn === 'function') warn(`app "${spec.app.name}": ${verdict.message}`);
+}
+
+// A page's bindings are written as the spec states them, and the spec cannot make what they name: a connection reference, which a page calls its connector through by its logical name, or a Custom API. So the
+// build reads what the environment has for the names the pages it writes state (lib/page-binding-targets.js) and judges it, before it writes anything:
+//   - a reference that is there for ANOTHER connector stops the build (phase `preflight`, never retried: a run again reads the same reference). The page would call that connector under this name, with the
+//     signed-in user's connection to it, and nothing in the name tells the two apart — so it is refused, and nothing is guessed or made: the author gives the binding the name of the right reference, or states
+//     the connector this environment has. Left to the pages phase it would stop after the solution, the tables, the views, the forms and the app were written, as the navigation check used to;
+//   - a reference or a Custom API that is not there, a Custom API of the other kind or bound to another table, and a read that failed are SAID, by name, and the build goes on: the page is written with its binding
+//     (a reference made later makes the page work without a rebuild), and a read that failed says only that the bindings were not checked.
+// Only a run that has the pages phase writes a binding, and a changed-only run writes the pages it selected (pagesStatingBindings). A spec that states none reads nothing.
+async function readPageBindingVerdict(spec, { provision, phases, changedOnly }) {
+  if (!phases.includes('pages')) return null;
+  const pages = pagesStatingBindings(spec, { changedOnly });
+  if (!pages.length) return null;
+  return judgeBindingTargets(pages, await readBindingTargets(provision, pages));
+}
+
+async function checkPageBindingsBeforeWriting(spec, { provision, phases, changedOnly, warn }) {
+  const verdict = await readPageBindingVerdict(spec, { provision, phases, changedOnly });
+  if (!verdict) return;
+  const refused = verdict.findings.filter((finding) => finding.severity === 'refuse');
+  if (refused.length) {
+    // The message quotes the author's own page and binding names, so it must never be read as one of the texts the CLI retries on (isTransientHalt); `retry: RETRY.NEVER` marks it outright.
+    throw new BuildHalt(
+      `${refused.length} connector binding(s) name a connection reference this environment already has for ANOTHER connector: ${refused.map((finding) => finding.text).join('; ')}. The build stopped before writing anything. `
+      + 'A page calls a binding through its reference\'s logical name, so each of these pages would call the other connector. Either give the binding the logical name of a reference that is for the right connector '
+      + '(create-connection-reference.js makes one), or, if the reference that is here is the one the page should call (a custom connector has its own id in each environment), set the binding\'s connectorId in the spec to the connector this environment has.',
+      { phase: 'preflight', code: 'pages-binding-reference-conflict', recoverable: false, retry: RETRY.NEVER },
+    );
+  }
+  if (typeof warn === 'function') for (const text of [...verdict.unchecked.map((u) => u.text), ...verdict.findings.map((finding) => finding.text)]) warn(text);
+}
+
+// The dry run's share: say on the page's own line that an apply would stop there, and why. The line is marked as a view the build would refuse is (annotateLivePlan): `? unknown` with the reason, and `wouldHalt` so
+// the summary counts it among the steps that would stop the build. What an apply would only say is said the same way.
+async function checkPageBindingsInPlan(plan, spec, { provision, phases, changedOnly, warn }) {
+  const verdict = await readPageBindingVerdict(spec, { provision, phases, changedOnly });
+  if (!verdict) return;
+  const refusedBy = new Map();
+  for (const finding of verdict.findings.filter((f) => f.severity === 'refuse')) refusedBy.set(finding.page.name, [...(refusedBy.get(finding.page.name) || []), finding.text]);
+  for (const [name, texts] of refusedBy) {
+    const item = plan.find((p) => p.phase === 'pages' && p.label === `page "${name}"`);
+    if (!item) continue;
+    item.state = 'unknown';
+    item.stateWhy = `the build would stop before writing anything: ${texts.join('; ')}`;
+    item.wouldHalt = true;
+  }
+  if (typeof warn === 'function') for (const text of [...verdict.unchecked.map((u) => u.text), ...verdict.findings.filter((f) => f.severity !== 'refuse').map((f) => f.text)]) warn(text);
 }
 
 // SINGLE-MACHINE advisory lockfile over the pages protocol (design §9, DESCOPED from a cross-machine guarantee).
@@ -2797,6 +2846,14 @@ async function runSdkBuildPhases(spec, opts, owed) {
       }
     }
     if (has('app-shell')) checkNavigationInPlan(plan, spec, { phases, changedOnly: opts.changedOnly, warn: opts.warn });
+    // What the environment has for the names the pages' bindings state (checkPageBindingsInPlan): it reads, so it is a part of the live plan and is left out of one that is asked not to read the environment.
+    if (canProbe && has('pages')) {
+      try {
+        await checkPageBindingsInPlan(plan, spec, { provision, phases, changedOnly: opts.changedOnly, warn: opts.warn });
+      } catch (err) {
+        if (typeof opts.warn === 'function') opts.warn(`could not check the bindings of the pages against this environment (${(err && err.message) || err})`);
+      }
+    }
     plan.forEach((p, i) => emit({ phase: p.phase, status: p.state === 'reuse' ? 'skip' : 'skip', label: p.label, state: p.state, stateWhy: p.stateWhy, n: i + 1, total: plan.length }));
     return {
       ok: true,
@@ -2810,6 +2867,8 @@ async function runSdkBuildPhases(spec, opts, owed) {
   // A navigation Dataverse will refuse stops the build here, before anything is written, rather than at the app step
   // after the solution, tables, columns, views and forms have been (app-navigation.js). Only a run that has the app step.
   if (has('app-shell')) await checkNavigationBeforeWriting(spec, { provision, phases, changedOnly: opts.changedOnly, warn: opts.warn });
+  // A binding whose connection reference is another connector's stops the build here too, before anything is written, for the same reason (checkPageBindingsBeforeWriting).
+  await checkPageBindingsBeforeWriting(spec, { provision, phases, changedOnly: opts.changedOnly, warn: opts.warn });
 
   const createdFormsThisRun = new Set();
   const result = { ok: true, created: { entities: {}, relationships: {}, records: {}, webResources: {}, views: {}, charts: {}, forms: {}, formIds: {}, businessRules: {}, businessProcessFlows: {}, bpfBackingTables: {}, commands: {}, dashboards: {}, pages: {}, pageDeployedShas: {}, pageSourceShas: {}, ai: { appFeatures: null, summaries: {} }, roles: {}, roleGrants: {}, bpfRoleGrants: {}, app: null }, skipped: { businessRules: [], aiSummaries: [], layout: [], unauthorizedRemovals: [] } };
@@ -6845,7 +6904,7 @@ async function runSdkBuildPhases(spec, opts, owed) {
           const first = await readRowVersions([pageId]);
           const before = first.ok ? first.versions.get(pageId) : null;
           if (!before) return null;
-          const copy = await genpage.publishedDiffers(pageId, fields, { runtimeSha256 });
+          const copy = await genpage.publishedDiffers(pageId, { ...fields, specBindings: true }, { runtimeSha256 });
           // `fingerprint` is the hash of the content the copy was compared with: it must be the hash the record keeps, or the answer is about other content.
           if (!copy.ok || copy.fingerprint !== fingerprint) return null;
           if (copy.differing.length) {
@@ -6859,10 +6918,19 @@ async function runSdkBuildPhases(spec, opts, owed) {
         } catch { return null; }
       };
       const rememberPublished = async (written, p, fields) => {
-        if (!opts.workspaceDir || !written.publish || written.publish.kind !== 'verified' || typeof written.fingerprint !== 'string') return;
+        if (!opts.workspaceDir || typeof written.fingerprint !== 'string') return;
         const pageId = String(written.pageId).toLowerCase();
-        const files = await provedVersions(p, pageId, fields, written.fingerprint, written.runtimeSha256);
-        publishedPages.set(pageId, { fingerprint: written.fingerprint, files });
+        if (written.receiptUpgraded) {
+          // The record of an earlier publish was made before the spec stated the page's binding lists, and the update found that it stands for them too (it read the published copy and it holds them): the page was not written
+          // and not published, so there is nothing new to prove — the record is renewed to the hash of what the spec states now, with the versions it already holds, which `publishesStillStanding` has just found to be the page's.
+          const standing = publishedPages.get(pageId);
+          if (!standing || !standing.files) return;
+          publishedPages.set(pageId, { fingerprint: written.fingerprint, files: standing.files });
+        } else {
+          if (!written.publish || written.publish.kind !== 'verified') return;
+          const files = await provedVersions(p, pageId, fields, written.fingerprint, written.runtimeSha256);
+          publishedPages.set(pageId, { fingerprint: written.fingerprint, files });
+        }
         const bound = new Set(Array.from(keyToId.values(), (id) => String(id).toLowerCase()));
         try {
           writePublishedPages(opts.workspaceDir, appUnique, opts.env, new Map([...publishedPages].filter(([id]) => bound.has(id))));
@@ -7004,12 +7072,14 @@ async function runSdkBuildPhases(spec, opts, owed) {
             // The spec's data sources are authoritative, as they always were: a page that lists none is bound to none. The model and name ride along
             // too, but the page's own are kept when the spec has none (the SDK writes only what differs; pac stored whatever `--model` it was
             // sent, so a re-upload without one used to wipe a deployed page's model id to ""). A downloaded spec carries the model (pages[].model).
-            // The connector and Custom API bindings go the same way, and only when the page states them: one it leaves out is the deployed page's own, and a list it states — `[]` too — replaces it.
+            // The connector and Custom API bindings go the same way, and only when the page states them: one it leaves out is the deployed page's own, and a list it states — `[]` too — replaces it. They are the spec's, which
+            // states each entry by the properties it can carry (lib/page-bindings.js), so the update reads them against the page's own entries (`specBindings`): a page that already holds what the spec states is not
+            // written, and an entry that is changed keeps what the spec could not state of it.
             // `caller: 'build'` words the advice for an UPDATE that may have landed: the build keeps no base marker, and reads every page again when it runs.
             const fields = { name: p.name, source: deployedBytes, prompt: p.prompt, agentMessage: p.agentMessage, dataSources: p.dataSources || [], model: p.model, ...statedPageBindings(p) };
             // `publishedFingerprint` is what this workspace recorded about the page's last publish, handed over only while the page's files still read as they did right after it (`publishesStillStanding`):
             // a page that already holds this very content, and was not touched from elsewhere since, is not published again.
-            const up = requestedId ? await genpage.update(requestedId, { ...fields, caller: 'build', runtimeEvidence: true, publishedFingerprint: standingPublishes.get(String(requestedId).toLowerCase()), ...(opts.throttle ? { throttle: opts.throttle } : {}) }) : await createPage(p, fields);
+            const up = requestedId ? await genpage.update(requestedId, { ...fields, caller: 'build', runtimeEvidence: true, specBindings: true, publishedFingerprint: standingPublishes.get(String(requestedId).toLowerCase()), ...(opts.throttle ? { throttle: opts.throttle } : {}) }) : await createPage(p, fields);
             if (!requestedId) recordCreate(p, up.pageId);
             // An UPDATE (requestedId set) must return the SAME id, else a resolved sibling could point at
             // a stale target. Case-insensitive (Dataverse may echo a differently-cased GUID).

@@ -11,7 +11,7 @@ const assert = require('node:assert');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { makeGenpageSdk, pageFolderFiles } = require('../lib/genpage-sdk.js');
+const { makeGenpageSdk, pageFolderFiles, contentFingerprint } = require('../lib/genpage-sdk.js');
 const { statedPageBindings } = require('../lib/app-spec.js');
 const { parseDownloadedPages, pageBindingsReport } = require('../download-model-app.js');
 const { FakeGenPageServer, INSTANCE, ACCOUNT_TABLE } = require('./helpers/fake-genpage-server.js');
@@ -42,17 +42,19 @@ async function withBackend(server, fn) {
 }
 
 // What a download makes of a page the backend read: the folder it writes (lib/genpage-sdk.js pageFolderFiles), read back as the spec's page entry.
-function downloaded(page, unkept = []) {
+function downloaded(page, unkept = [], leftOut = []) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'page-bindings-real-'));
   tempDirs.push(root);
   const dir = path.join(root, page.id);
   fs.mkdirSync(dir, { recursive: true });
   for (const [name, text] of Object.entries(pageFolderFiles(page))) fs.writeFileSync(path.join(dir, name), text, 'utf8');
-  const [entry] = parseDownloadedPages(root, root, null, [], [], unkept);
+  const [entry] = parseDownloadedPages(root, root, null, [], [], unkept, leftOut);
   return { entry, configText: fs.readFileSync(path.join(dir, 'config.json'), 'utf8') };
 }
 
 const changeWrites = (server) => server.writes().filter((w) => !/PublishXml/.test(w));
+// The reads of a page's rows that are NOT of the draft: a read without `MSCRM.IncludeUnpublished` is served the published layer.
+const publishedLayerReads = (server) => server.requests.filter((r) => r.method === 'GET' && /^\/uxagentproject/.test(r.path) && !('MSCRM.IncludeUnpublished' in r.headers));
 const rows = (server, id) => Object.fromEntries(server.filesOf(id).map((f) => [f.filename, server.fileText(f.id)]));
 
 // The page the maker laid out: two lists, a data source, a model, and a property of config.json that the SDK has no field for.
@@ -149,5 +151,165 @@ test('REAL BUNDLE: a page whose config.json holds null, or an empty list, for a 
     assert.ok(!('connectorBindings' in entry) && !('actionBindings' in entry));
     assert.deepStrictEqual(unkept, []);
     assert.strictEqual(pageBindingsReport([{ ...entry, key: 'weather', name: 'Weather' }], unkept), null);
+  });
+});
+
+// ── a page that holds more than a spec states ────────────────────────────────────────────────────────────────────────────────
+// A binding a page holds can carry what a spec does not state: a connection id of the environment it was made in, a credential someone wrote into a connectors.json, a property a later runtime adds. A download
+// states the binding without it (the spec is shared), so a rebuild into the environment the page is in has to read "what the spec states" as "what the page already holds" — and, when the spec changes a binding,
+// change that binding and leave on the page what the spec could not state. The build says so with `specBindings: true`; the backend's other callers replace a list with what they give, as they always did.
+const WEATHER_ON_PAGE = { ...WEATHER, connectionId: 'env-local-connection-placeholder', futureProperty: { kept: true } };
+const SHAREPOINT_ON_PAGE = { ...SHAREPOINT, apiKey: 'SYNTHETIC_TEST_SECRET' };
+const APPROVE_ON_PAGE = { ...APPROVE, headers: { note: 'kept' } };
+const pageHolding = () => seededServer({ connectorBindings: [WEATHER_ON_PAGE, SHAREPOINT_ON_PAGE], actionBindings: [APPROVE_ON_PAGE] });
+const SENT = { source: SOURCE, name: 'Weather', dataSources: ['account'], model: 'gpt-4.1', prompt: 'again', agentMessage: 'again' };
+
+test('REAL BUNDLE: a download states the page\'s bindings without what a spec does not state — and a rebuild of that spec into the environment writes not one row', async () => {
+  const server = pageHolding();
+  await withBackend(server, async (genpage) => {
+    const leftOut = [];
+    const { entry } = downloaded(await genpage.read(ID), [], leftOut);
+    assert.deepStrictEqual([entry.connectorBindings, entry.actionBindings], [[WEATHER, SHAREPOINT], [APPROVE]], 'the spec\'s page entry states exactly the allowlisted properties');
+    assert.deepStrictEqual(leftOut.map((l) => [l.field, l.entry, l.properties.map((p) => p.property)]), [
+      ['connectorBindings', 0, ['connectionId', 'futureProperty']],
+      ['connectorBindings', 1, ['apiKey']],
+      ['actionBindings', 0, ['headers']],
+    ]);
+
+    const before = rows(server, ID);
+    server.requests.length = 0;
+    const out = await genpage.update(ID, { ...SENT, ...statedPageBindings(entry), specBindings: true });
+    assert.strictEqual(out.unchanged, true, 'the page already holds what the spec states');
+    assert.deepStrictEqual(changeWrites(server), [], 'not a row written');
+    assert.deepStrictEqual(rows(server, ID), before, 'the page keeps what the spec could not state');
+
+    // The other callers of the backend replace a list with the one they give, as they always did: the same call without the flag rewrites the page's entries with the spec's.
+    await genpage.update(ID, { ...SENT, ...statedPageBindings(entry), prompt: 'replaced', agentMessage: 'replaced' });
+    const replaced = JSON.parse(rows(server, ID)['config.json']);
+    assert.deepStrictEqual([replaced.connectorBindings, replaced.actionBindings], [[WEATHER, SHAREPOINT], [APPROVE]]);
+  });
+});
+
+test('REAL BUNDLE: a spec that changes one binding changes that binding, and the page keeps the rest of its entries as they were — what a spec could not state included', async () => {
+  const server = pageHolding();
+  await withBackend(server, async (genpage) => {
+    const { entry } = downloaded(await genpage.read(ID));
+    const messages = server.messagesOf(ID).length;
+    // Weather's operations change, SharePoint is dropped, and the Custom API list is as it was.
+    await genpage.update(ID, { ...SENT, connectorBindings: [{ ...entry.connectorBindings[0], operations: ['Forecast'] }], actionBindings: entry.actionBindings, specBindings: true });
+    const config = JSON.parse(rows(server, ID)['config.json']);
+    assert.deepStrictEqual(config.connectorBindings, [{ ...WEATHER_ON_PAGE, operations: ['Forecast'] }], 'the edited entry keeps its connection id and its property no spec states; the dropped entry is gone');
+    assert.deepStrictEqual(config.actionBindings, [APPROVE_ON_PAGE], 'a list the edit left as the page held it is not rewritten');
+    assert.deepStrictEqual(config.futureSetting, { kept: true });
+    assert.strictEqual(server.messagesOf(ID).length, messages + 2, 'and the change is a turn of the conversation, as any update is');
+
+    // A binding the spec adds is written as the spec states it; one whose name is changed is a new binding, and takes nothing of the old one's.
+    const added = { logicalName: 'contoso_new', connectorId: '/providers/Microsoft.PowerApps/apis/shared_new', operations: ['Do'] };
+    await genpage.update(ID, { ...SENT, connectorBindings: [{ ...WEATHER, operations: ['Forecast'] }, added], actionBindings: [{ ...APPROVE, name: 'contoso_Renamed' }], specBindings: true });
+    const next = JSON.parse(rows(server, ID)['config.json']);
+    assert.deepStrictEqual(next.connectorBindings, [{ ...WEATHER_ON_PAGE, operations: ['Forecast'] }, added]);
+    assert.deepStrictEqual(next.actionBindings, [{ ...APPROVE, name: 'contoso_Renamed' }]);
+
+    // `[]` is still a statement: it clears the list, and the entries with it.
+    await genpage.update(ID, { ...SENT, connectorBindings: [], specBindings: true });
+    assert.deepStrictEqual(JSON.parse(rows(server, ID)['config.json']).connectorBindings, []);
+  });
+});
+
+test('REAL BUNDLE: the published copy of a page that holds more is read as holding the spec\'s lists, when the build says they are a spec\'s — no false "published again from elsewhere"', async () => {
+  const server = pageHolding();
+  await withBackend(server, async (genpage) => {
+    const { entry } = downloaded(await genpage.read(ID));
+    const asked = { ...SENT, ...statedPageBindings(entry) };
+    // A first publish of the page as it is: the build's rebuild of a page nobody recorded.
+    const first = await genpage.update(ID, { ...asked, specBindings: true });
+    assert.strictEqual(first.publish.kind, 'verified');
+    const plain = await genpage.publishedDiffers(ID, asked);
+    assert.deepStrictEqual(plain.differing, ['connectorBindings', 'actionBindings'], 'read as another caller reads it, the published copy holds more than the spec states');
+    const spec = await genpage.publishedDiffers(ID, { ...asked, specBindings: true });
+    assert.deepStrictEqual(spec.differing, [], 'read as the build\'s lists, it holds them');
+    assert.strictEqual(spec.fingerprint, first.fingerprint, 'and the fingerprint is the one an update answers for the same arguments');
+    const changed = await genpage.publishedDiffers(ID, { ...asked, connectorBindings: [{ ...WEATHER, operations: ['Forecast'] }], specBindings: true });
+    assert.deepStrictEqual(changed.differing, ['connectorBindings'], 'a list that differs from what was published still does');
+  });
+});
+
+// ── a record of a publish made before a download stated the bindings ─────────────────────────────────────────────────────────
+// The build keeps, per page, the hash of the content it published (contentFingerprint) and hands it back to the next update, which then does not publish a page it finds already holding that content. The hash covers
+// the lists a caller states, so a record made when the build stated none (every record before a download states them) is the hash of the same content WITHOUT them. A page that holds those lists, rebuilt by the
+// spec the download wrote, is the same content: it must not be written, and it must not be published again — only when the published copy is READ and holds the lists too.
+const asPublishedByAnOlderBuild = async (genpage) => (await genpage.update(ID, { ...SENT })).fingerprint;
+
+test('REAL BUNDLE: a record of a publish made before the lists were stated still stands for the page when a spec states them — nothing is written, nothing is published, and the record is renewed', async () => {
+  const cases = [
+    ['a page that holds exactly what the spec states', seededServer({ connectorBindings: [WEATHER], actionBindings: [APPROVE] }), { connectorBindings: [WEATHER], actionBindings: [APPROVE] }],
+    ['a page that holds more', pageHolding(), { connectorBindings: [WEATHER, SHAREPOINT], actionBindings: [APPROVE] }],
+  ];
+  for (const [label, server, stated] of cases) {
+    await withBackend(server, async (genpage) => {
+      const legacy = await asPublishedByAnOlderBuild(genpage);
+      assert.notStrictEqual(contentFingerprint({ source: SOURCE, name: 'Weather', dataSources: ['account'], model: 'gpt-4.1', ...stated }), legacy, `${label}: the lists are part of the hash`);
+      server.requests.length = 0;
+      server.published.length = 0;
+      const out = await genpage.update(ID, { ...SENT, ...stated, specBindings: true, publishedFingerprint: legacy });
+      assert.strictEqual(out.unchanged, true, label);
+      assert.strictEqual(out.publish.kind, 'skipped', label);
+      assert.strictEqual(out.receiptUpgraded, true, `${label}: the caller is told the record it holds can be renewed`);
+      assert.strictEqual(out.fingerprint, contentFingerprint({ source: SOURCE, name: 'Weather', dataSources: ['account'], model: 'gpt-4.1', ...stated }), 'the renewed record is the hash of what the spec states');
+      assert.deepStrictEqual(server.writes(), [], `${label}: no row written and no PublishXml`);
+      assert.deepStrictEqual(server.published, [], label);
+      assert.ok(publishedLayerReads(server).length > 0, `${label}: the published copy was read, to see that it holds the lists`);
+
+      // The renewed record is the one a later update finds: it matches the hash as it is, and reads nothing of the published copy.
+      server.requests.length = 0;
+      const later = await genpage.update(ID, { ...SENT, ...stated, specBindings: true, publishedFingerprint: out.fingerprint });
+      assert.deepStrictEqual([later.publish.kind, later.receiptUpgraded], ['skipped', undefined], label);
+      assert.deepStrictEqual(server.writes(), [], label);
+      assert.deepStrictEqual(publishedLayerReads(server), [], `${label}: the published copy is not read again`);
+    });
+  }
+});
+
+test('REAL BUNDLE: the record of an older publish is not taken for the lists when the published copy does not hold them — the page is published, as it always was', async () => {
+  const server = seededServer({ connectorBindings: undefined, actionBindings: undefined });
+  await withBackend(server, async (genpage) => {
+    const legacy = await asPublishedByAnOlderBuild(genpage);
+    // Another writer adds the lists to the draft of the page and does not publish: the published copy holds none, and the page's draft holds what the spec states.
+    const config = JSON.parse(rows(server, ID)['config.json']);
+    server.otherWorkspaceDraft(ID, 'config.json', JSON.stringify({ ...config, connectorBindings: [WEATHER], actionBindings: [APPROVE] }));
+    server.requests.length = 0;
+    server.published.length = 0;
+    const out = await genpage.update(ID, { ...SENT, connectorBindings: [WEATHER], actionBindings: [APPROVE], specBindings: true, publishedFingerprint: legacy });
+    assert.strictEqual(out.unchanged, true, 'the draft already holds the lists: nothing to write');
+    assert.strictEqual(out.publish.kind, 'verified', 'but they were never published, and the record of the older publish says nothing of them');
+    assert.strictEqual(out.receiptUpgraded, undefined);
+    assert.deepStrictEqual(server.published, [ID]);
+    assert.deepStrictEqual(server.writes(), ['POST /PublishXml'], 'the publish, and nothing else');
+  });
+});
+
+test('REAL BUNDLE: a record of an older publish is a reason not to publish only for a page that already holds the content — one the spec changes is written and published whatever was recorded', async () => {
+  const server = pageHolding();
+  await withBackend(server, async (genpage) => {
+    const legacy = await asPublishedByAnOlderBuild(genpage);
+    server.requests.length = 0;
+    server.published.length = 0;
+    const out = await genpage.update(ID, { ...SENT, connectorBindings: [{ ...WEATHER, operations: ['Forecast'] }], actionBindings: [APPROVE], specBindings: true, publishedFingerprint: legacy });
+    assert.strictEqual(out.unchanged, undefined);
+    assert.strictEqual(out.publish.kind, 'verified');
+    assert.deepStrictEqual(server.published, [ID]);
+    assert.deepStrictEqual(JSON.parse(rows(server, ID)['config.json']).connectorBindings.map((b) => b.operations), [['Forecast']]);
+  });
+});
+
+test('REAL BUNDLE: the record of an older publish is read as one that names the lists only for a caller that says its lists are a spec\'s — any other keeps what the record has always meant', async () => {
+  const server = seededServer({ connectorBindings: [WEATHER], actionBindings: [APPROVE] });
+  await withBackend(server, async (genpage) => {
+    const legacy = await asPublishedByAnOlderBuild(genpage);
+    server.requests.length = 0;
+    server.published.length = 0;
+    const out = await genpage.update(ID, { ...SENT, connectorBindings: [WEATHER], actionBindings: [APPROVE], publishedFingerprint: legacy });
+    assert.strictEqual(out.publish.kind, 'verified', 'the hash is another content\'s: the page is published');
+    assert.deepStrictEqual(server.published, [ID]);
   });
 });
