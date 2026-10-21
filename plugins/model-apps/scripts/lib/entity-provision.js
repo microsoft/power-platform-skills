@@ -1640,14 +1640,14 @@ async function resolveAuthoringLanguage({ envUrl, languageCode, spec, warn, read
 // than silently shipping an English-only table. Same fail-closed rule as the unprovisioned-language
 // check above, and for the same reason: by the time a warning is read the table already exists, and
 // fixing a label after the fact is a manual job.
-async function findExistingTable(provision, schemaName, { hasLocalizedLabels = false, attempts = 3, includeKeys = false, includeIcons = false } = {}) {
+async function findExistingTable(provision, schemaName, { hasLocalizedLabels = false, attempts = 3, includeKeys = false } = {}) {
   const logical = String(schemaName).toLowerCase();
   const raw = provision && provision.dataverse;
   if (raw && typeof raw.get === 'function') {
     const escaped = logical.replace(/'/g, "''");
-    // Keys' identity and icon names are scalars, so they can ride this already-required probe
+    // Keys' identities are scalars, so they can ride this already-required probe
     // without a label-bearing read ahead of a localized create.
-    const url = `/EntityDefinitions(LogicalName='${escaped}')?$select=LogicalName,EntitySetName${includeIcons ? ',IconVectorName,IconMediumName' : ''}${includeKeys ? '&$expand=Keys($select=SchemaName,KeyAttributes)' : ''}`;
+    const url = `/EntityDefinitions(LogicalName='${escaped}')?$select=LogicalName,EntitySetName${includeKeys ? '&$expand=Keys($select=SchemaName,KeyAttributes)' : ''}`;
     // Retried only for a LOCALIZED entity, where the alternative to a conclusive answer is a halt.
     // For everything else one attempt then `findTables` is both cheaper and exactly the old
     // behaviour.
@@ -1667,7 +1667,6 @@ async function findExistingTable(provision, schemaName, { hasLocalizedLabels = f
         return {
           logicalName: String(res.body.LogicalName).toLowerCase(), entitySetName: res.body.EntitySetName,
           ...(includeKeys && Array.isArray(res.body.Keys) ? { keys: res.body.Keys } : {}),
-          ...(includeIcons ? { icons: { vector: res.body.IconVectorName, medium: res.body.IconMediumName } } : {}),
         };
       }
       if (res && res.status === 404) return null;
@@ -1993,8 +1992,6 @@ async function provisionDataModelSteps({ sdk, provision, runner, spec, apply, la
   // (`<referencing>|<lookup logical>` -> { label }), so a later phase that repairs something derived
   // from it — an existing form's cell label — repairs it to what the column now says.
   const result = { entities: {}, globalChoiceIds: {}, statusReasonValues: {}, columns: {}, relationships: [], lookupLabels: {} };
-  // Private proof for the later icon step, not another field on the build's documented result.
-  Object.defineProperty(result, 'tableIcons', { value: {} });
   // The CLI resolves the authoring LCID BEFORE constructing the SDK, because
   // `MakerSdkOptions.languageCode` is a construction-time option (#455) — the App/Form/Dashboard
   // adapters bake it in. Re-resolving here would repeat the org read and the provisioned-languages
@@ -2037,7 +2034,7 @@ async function provisionDataModelSteps({ sdk, provision, runner, spec, apply, la
     // for a localized one. See findExistingTable.
     const entityIsLocalized = localizedLabelLcidsInSpec({ entities: [e] }).length > 0;
     const hits = await findExistingTable(provision, e.schemaName, {
-      hasLocalizedLabels: entityIsLocalized, includeKeys: !!(e.alternateKeys && e.alternateKeys.length), includeIcons: !!(e.icon || e.vectorIcon),
+      hasLocalizedLabels: entityIsLocalized, includeKeys: !!(e.alternateKeys && e.alternateKeys.length),
     });
     const existingTable = hits;
     // Every buildable column: all scalar types + Customer (a Lookup comes from a relationship).
@@ -2067,7 +2064,6 @@ async function provisionDataModelSteps({ sdk, provision, runner, spec, apply, la
       runner.skip('data-model', `table ${e.schemaName} (exists — reuse)`);
       reusedTables.add(logical);
       result.entities[e.schemaName] = { logicalName: logical, entitySetName: existingTable.entitySetName };
-      if (existingTable.icons) result.tableIcons[logical] = existingTable.icons;
       existingColRows = await findExistingColumns(provision, logical, warn);
       existingCols = new Set(existingColRows.map((c) => String(c.logicalName || c.schemaName || '').toLowerCase()));
     } else {
@@ -2683,7 +2679,7 @@ async function reconcileLookupLabelsPass({ spec, sdk, provision, runner, warn, l
 // with RetrieveAsIfPublished=false, so a live check of this publish has to trace the request, not read the label.
 // Nothing else in the build is sure to publish the child table. Its other table publishes follow from what the spec
 // puts on a table — a form, view, chart or icon, or its enriched default views — and a downloaded spec, whose lookups
-// the download leaves without a label precisely so that this pass repairs them, carries no forms, views, charts or
+// the download leaves without a label precisely so that this pass repairs them, need not carry forms, views, charts or
 // table icons and marks every table existing: true, whose default views the build leaves alone. A rebuild of one would
 // save the new label and leave it to whatever publishes that table next, while reporting the repair done; a re-run
 // finds the label already changed. So the pass publishes the tables it relabelled itself, in ONE envelope, at once —

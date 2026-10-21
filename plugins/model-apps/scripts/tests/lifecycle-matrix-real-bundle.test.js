@@ -156,8 +156,8 @@ const BUILD_PUBLISHES = [
 // The rebuild of the UNCHANGED spec. It is not free: each line is a write the current build still sends when nothing changed, and
 // what it depends on. A line that disappears is progress (lower it here); a line that appears is a regression.
 const REBUILD_WRITES = {
-  // Status values and key identities are proved equal before insert; the table's icon names ride its existing scalar probe.
-  'PUT EntityDefinitions': 1, // the quick-create flag is still re-asserted (entity-provision.js)
+  // Status values and key identities are proved equal before insert; icon publication still needs its own assignment/publish pair.
+  'PUT EntityDefinitions': 2, // the quick-create flag and the table-icon assignment
   'PATCH savedqueries': 4, // the SDK's default-view enrichment saves both generated views of each table on every build (rebuild-writes-real-bundle.test.js)
   'PATCH systemforms': 3, // isdefault is set again on each table's chosen Main form (promoteDefaultForm reads nothing first), and the form's security roles are rewritten byte for byte
   'PATCH sitemaps': 1, // the sitemap of an existing app is rewritten by the pages finalize, byte for byte
@@ -166,9 +166,10 @@ const REBUILD_WRITES = {
   'POST roles/Microsoft.Dynamics.CRM.ReplacePrivilegesRole': 1, // a persona role converges with replace semantics on every build
   'POST appmodules/appmoduleroles_association/$ref': 1, // re-associated; the platform refuses the duplicate and the build reads that as "already linked"
   'POST roles/Microsoft.Dynamics.CRM.AddPrivilegesRole': 1, // a role grant is additive and re-sent
-  'POST PublishXml': 3, // see REBUILD_PUBLISHES
+  'POST PublishXml': 4, // see REBUILD_PUBLISHES
 };
 const REBUILD_PUBLISHES = [
+  'contoso_project', // the table-icon assignment; a saved name cannot prove its previous publish completed
   'contoso_project contoso_tag contoso_task', // the tables before the app's publish
   'app', // the app after the sitemap finalize
   'contoso_project contoso_task app', // the publish phase

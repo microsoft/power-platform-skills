@@ -81,10 +81,10 @@ const TEARDOWN_PLAN = [
 
 // A rebuild of the unchanged spec WITHOUT --publish. The bulk publishes are what --publish gates (skills/app-builder/SKILL.md: the
 // tables published together once before the app, and the publish phase); without it each step publishes what it re-pushed, table by
-// table — measured, not derived: 10 publishes where the --publish rebuild of the matrix sends 3, each a PublishXml that takes seconds
+// table — measured, not derived: 11 publishes where the --publish rebuild of the matrix sends 4, each a PublishXml that takes seconds
 // on a real environment. The two tables' views and forms are pushed concurrently, so the publishes are counted, not ordered.
 const UNPUBLISHED_REBUILD_PUBLISHES = {
-  contoso_project: 4, // the unchanged table icon is proved equal and needs no publish; the view "Open Projects" still publishes,
+  contoso_project: 5, // the table-icon assignment and the view "Open Projects" publish,
   //                     as do default-view enrichment and the unchanged forms "Project" and "Project Card"
   contoso_task: 5, // the views "Open Tasks" and "My Open Tasks"; the default-view enrichment; the forms "Task Quick Create" and "Task"
   app: 1, // the app after the sitemap finalize, the last publish
@@ -94,13 +94,14 @@ const UNPUBLISHED_REBUILD_PUBLISHES = {
 const UNPUBLISHED_AFTER = ['appsettings <id>', 'systemforms Project', 'systemforms Task'];
 
 // The rebuild of the downloaded spec. Its tables are existing and it carries no form, view, chart or command, so nothing of the data
-// model or the record UI is written; what is written is the app's own, as on any rebuild of an existing app.
+// model or the record UI is rewritten, except its declared icon assignment/publish pair; the app writes remain its own.
 const DOWNLOADED_REBUILD_WRITES = {
+  'PUT EntityDefinitions': 1, // table-icon assignment: saved-name equality is not publication proof
   'PATCH webresourceset': 1, // the page manifest: the downloaded page's source is pages/<pageId>/page.tsx, where the authored one was KitchenPage.tsx
   'PATCH sitemaps': 1, // the sitemap of an existing app is rewritten by the pages finalize, byte for byte (as in the matrix's rebuild)
   'POST AddAppComponents': 1, // ...and the push re-adds the app's components
   'POST SaveSettingValue': 1, // the new look setting is saved again
-  'POST PublishXml': 5, // the tables before the app's publish, the page, the manifest, the app after the finalize, and the publish phase
+  'POST PublishXml': 6, // the icon table, tables before the app, page, manifest, app after finalize, and publish phase
 };
 
 // What verify reads for the kitchen sink with its status reasons and alternate key taken out of the spec — what it read before it checked

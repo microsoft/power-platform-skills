@@ -1139,7 +1139,7 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   in one `<entities>` PublishXml, with or without `--publish` — in the data-model phase, before anything can publish
   the app; a failed publish is a warning that names the tables. Nothing else in the build is sure to publish them:
   its other table publishes follow from what the spec puts on a table (a form, view, chart or icon, or its enriched
-  default views), and a downloaded spec carries no forms, views, charts or table icons and marks every table
+  default views), and a downloaded spec need not carry forms, views, charts or table icons and marks every table
   `existing: true`, whose default views the build leaves alone. No metadata read can confirm that publish: measured
   live, `RetrieveEntity` returns the new label right after the PUT even with `RetrieveAsIfPublished=false`, so a
   live check of it has to trace the request. The labels are read **once per child table**
@@ -1585,12 +1585,14 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   owns the file, so teardown of the downloaded spec must not delete it. Resource resolution may
   need one set-name lookup plus one read per distinct SVG; navigation/table overlaps are deduplicated.
   **Same-environment rebuilds do not re-send these schema writes when proven equal.** Scalar
-  key/icon identities ride the existing table probe. Status-label comparisons run only after all
+  key identities ride the existing table probe. Status-label comparisons run only after all
   labelled schema creates (including deferred keys), so they cannot strip a later create's
   non-base-language labels. A halted attempt leaves its queued existing-table status reasons for
   the next successful attempt. A standalone Integer format is compared before its SDK update. Unknown
-  proof keeps the existing duplicate-protected create/update path; a missing reason/key/icon or a
-  changed Integer format still writes. Existing status/key definitions are not rewritten on a
+  proof keeps the existing duplicate-protected create/update path; a missing reason/key or a
+  changed Integer format still writes. Table icons retain the SDK's assignment and specific-table
+  publish even when the saved name matches: a failed publish can leave that same saved name behind.
+  Existing status/key definitions are not rewritten on a
   name/value conflict, and ordinary column lengths/ranges remain create-only, as before.
   Missing, malformed or refused portable detail is named on stderr without dropping typed columns
   or inventing defaults. This is not full environment cloning: script resources, raster/foreign/

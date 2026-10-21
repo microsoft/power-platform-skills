@@ -1,6 +1,7 @@
 'use strict';
 // The download's portable schema, over the real bundle and the strict lifecycle fake: values a second
-// environment cannot infer must survive, while rebuilding in place must not re-send their writes.
+// environment cannot infer must survive, while proven schema reuse avoids redundant writes.
+// Table icons retain their assignment/publish pair because saved names do not prove publication.
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const path = require('node:path');
@@ -186,7 +187,7 @@ test('a column at the build defaults gains no invented type options on download'
   ]);
 });
 
-test('rebuilding the downloaded spec in place sends no column, status-reason, key or table-icon write', async () => {
+test('rebuilding the downloaded spec reuses columns, status reasons and keys while publishing its icon assignment', async () => {
   const { root, org, harness, downloaded, built } = await walk();
   const dir = path.join(root, 'download');
   const rebuild = ran(await harness.measure(() => harness.build(downloaded.value.spec, {
@@ -195,7 +196,7 @@ test('rebuilding the downloaded spec in place sends no column, status-reason, ke
   assert.equal(rebuild.value.result.ok, true, JSON.stringify(rebuild.value.result));
   const schemaWrites = Object.fromEntries(Object.entries(rebuild.writes).filter(([key]) =>
     /EntityDefinitions|InsertStatusValue|GlobalOptionSetDefinitions|webresourceset/.test(key)));
-  assert.deepEqual(schemaWrites, {});
+  assert.deepEqual(schemaWrites, { 'PUT EntityDefinitions': 1 }, 'only the table-icon assignment is reasserted');
   assert.deepEqual(schemaOf(org), built, 'every schema option stays unchanged');
   assert.deepEqual(validateAppSpec(downloaded.value.spec, { profile: 'plan', reconstructed: true }).errors, []);
 });
@@ -233,4 +234,94 @@ test('no-op proofs do not suppress a missing status, key, icon or a real Whole N
   assert.equal(rebuild.writes['PUT EntityDefinitions'], 1);
   assert.equal(rebuild.writes['PUT EntityDefinitions/Attributes'], 1);
   assert.deepEqual(schemaOf(org), built);
+});
+
+test('a full-build rerun completes an icon publish after its table assignment was saved', async () => {
+  const logical = 'contoso_icononly';
+  const resource = 'contoso_icononly.svg';
+  const org = createLifecycleOrg();
+  const root = makeTempDir('table-icon-recovery-');
+  const observed = [];
+  let refuseIconPublish = false;
+  let assigned = false;
+  let refused = 0;
+  // The SDK's own table publish carries ParameterXml, e.g.
+  // <importexportxml><entities><entity>contoso_icononly</entity></entities></importexportxml>.
+  // Select only this one-table request, never an app/resource publish or another table.
+  const isIconPublish = (call) => {
+    if (call.method !== 'POST' || !call.path.endsWith('/PublishXml') || !call.body) return false;
+    const xml = call.body.ParameterXml;
+    if (typeof xml !== 'string' || /<(?:appmodule|webresource)>/.test(xml)) return false;
+    const names = [...xml.matchAll(/<entity>([^<]+)<\/entity>/g)].map((m) => m[1]);
+    return names.length === 1 && names[0] === logical;
+  };
+  const request = async (req) => {
+    const url = new URL(req.url);
+    const isDefinitionPut = req.method === 'PUT' && /\/EntityDefinitions\(/.test(url.pathname);
+    const isPublish = req.method === 'POST' && url.pathname.endsWith('/PublishXml');
+    const call = { method: req.method, path: url.pathname, body: isDefinitionPut || isPublish ? JSON.parse(String(req.body)) : undefined };
+    observed.push(call);
+    if (refuseIconPublish && assigned && isIconPublish(call)) {
+      refused += 1;
+      call.status = 403;
+      return { statusCode: 403, headers: { 'content-type': 'application/json' }, body: JSON.stringify({
+        error: { code: '0x80040220', message: 'Owned fixture table-icon publish refused' },
+      }) };
+    }
+    const response = await org.request(req);
+    call.status = response.statusCode;
+    if (isDefinitionPut && call.body.IconVectorName === resource && response.statusCode >= 200 && response.statusCode < 300) assigned = true;
+    return response;
+  };
+  const harness = createLifecycleHarness({ ...org, request }, root);
+  const seed = {
+    schemaVersion: 2,
+    solution: { uniqueName: 'ContosoIconRecovery', displayName: 'Icon Recovery', publisherPrefix: 'contoso' },
+    app: { name: 'Icon Recovery', tables: [logical, 'contoso_untouched'] },
+    entities: [logical, 'contoso_untouched'].map((schemaName) => ({
+      schemaName, displayName: schemaName,
+      primaryAttribute: { schemaName: 'contoso_name', displayName: 'Name' }, columns: [],
+    })),
+    webResources: [{ name: resource, type: 'svg', content: ICON }],
+    appShell: { areas: [{ label: 'Links', groups: [{ label: 'Help', subAreas: [
+      { url: 'https://contoso.example/help', title: 'Help' },
+    ] }] }] },
+  };
+  const options = { publish: false, sampleData: false, verify: false };
+  const seeded = ran(await harness.measure(() => harness.build(seed, options)), 'the complete setup build');
+  assert.equal(seeded.value.result.ok, true, JSON.stringify(seeded.value.result));
+  const desired = structuredClone(seed);
+  for (const entity of desired.entities) entity.existing = true;
+  desired.entities[0].vectorIcon = resource;
+  desired.webResources[0].external = true;
+  const unrelated = structuredClone(org.metadata.tables.get('contoso_untouched'));
+  const successfulPublishes = (since) => observed.slice(since).filter((call) =>
+    isIconPublish(call) && call.status >= 200 && call.status < 300);
+
+  refuseIconPublish = true;
+  const beforeFailure = observed.length;
+  const failed = await harness.measure(() => harness.build(desired, options));
+  assert.deepEqual(failed.unexpected, []);
+  assert.equal(refused, 1, 'the request fault is reached only after the successful icon metadata PUT');
+  assert.ok(failed.error, 'the full build propagates its failed icon publication');
+  assert.match(failed.error.message, /table icon|publish/i);
+  assert.equal(org.metadata.tables.get(logical).IconVectorName, resource, 'saved metadata already has the requested name');
+  assert.equal(successfulPublishes(beforeFailure).length, 0);
+
+  refuseIconPublish = false;
+  const beforeRetry = observed.length;
+  const freshHarness = createLifecycleHarness({ ...org, request }, root);
+  const retry = ran(await freshHarness.measure(() => freshHarness.build(desired, options)), 'the full same-workspace rerun');
+  assert.equal(retry.value.result.ok, true, JSON.stringify(retry.value.result));
+  assert.equal(successfulPublishes(beforeRetry).length, 1,
+    'a saved icon assignment with a failed publish must finish that publish on rerun');
+  const beforeCompleted = observed.length;
+  const completed = ran(await freshHarness.measure(() => freshHarness.build(desired, options)), 'the completed unchanged rebuild');
+  assert.equal(completed.value.result.ok, true, JSON.stringify(completed.value.result));
+  assert.equal(observed.slice(beforeCompleted).filter((call) =>
+    call.method === 'PUT' && call.body && call.body.IconVectorName === resource).length, 1,
+    'completed unchanged icons retain the released assignment behavior');
+  assert.equal(successfulPublishes(beforeCompleted).length, 1,
+    'completed unchanged icons retain their specific-table publish rather than guessing from metadata');
+  assert.deepEqual(org.metadata.tables.get('contoso_untouched'), unrelated, 'the unrelated table definition stays unchanged');
 });

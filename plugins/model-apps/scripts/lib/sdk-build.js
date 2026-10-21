@@ -3144,12 +3144,8 @@ async function runSdkBuildPhases(spec, opts, owed) {
         runner.skip('web-resources', `table icon for ${logical} (web resource ${missing.join(', ')} not built this run)`);
         continue;
       }
-      const current = dataModel.tableIcons && dataModel.tableIcons[logical];
-      const sameName = (actual, wanted) => typeof actual === 'string' && actual.toLowerCase() === String(wanted).toLowerCase();
-      if (current && (!e.vectorIcon || sameName(current.vector, e.vectorIcon)) && (!e.icon || sameName(current.medium, e.icon))) {
-        runner.skip('web-resources', `table icon for ${logical} (already set)`);
-        continue;
-      }
+      // A failed publish can leave this name in saved metadata already. Keep the SDK's
+      // specific-table publish on rerun; metadata equality is not publication proof.
       await runner.run('web-resources', `table icon for ${logical}`, async () => {
         await provision.setEntityIcon(logical, { vector: e.vectorIcon || undefined, medium: e.icon || undefined });
         return `${[e.vectorIcon && `vector=${e.vectorIcon}`, e.icon && `raster=${e.icon}`].filter(Boolean).join(', ')}`;
