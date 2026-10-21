@@ -42,13 +42,13 @@ async function withBackend(server, fn) {
 }
 
 // What a download makes of a page the backend read: the folder it writes (lib/genpage-sdk.js pageFolderFiles), read back as the spec's page entry.
-function downloaded(page, unkept = [], leftOut = []) {
+function downloaded(page, unkept = []) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'page-bindings-real-'));
   tempDirs.push(root);
   const dir = path.join(root, page.id);
   fs.mkdirSync(dir, { recursive: true });
   for (const [name, text] of Object.entries(pageFolderFiles(page))) fs.writeFileSync(path.join(dir, name), text, 'utf8');
-  const [entry] = parseDownloadedPages(root, root, null, [], [], unkept, leftOut);
+  const [entry] = parseDownloadedPages(root, root, null, [], [], unkept);
   return { entry, configText: fs.readFileSync(path.join(dir, 'config.json'), 'utf8') };
 }
 
@@ -156,44 +156,67 @@ test('REAL BUNDLE: a page whose config.json holds null, or an empty list, for a 
 
 // ── a page that holds more than a spec states ────────────────────────────────────────────────────────────────────────────────
 // A binding a page holds can carry what a spec does not state: a connection id of the environment it was made in, a credential someone wrote into a connectors.json, a property a later runtime adds. A download
-// states the binding without it (the spec is shared), so a rebuild into the environment the page is in has to read "what the spec states" as "what the page already holds" — and, when the spec changes a binding,
-// change that binding and leave on the page what the spec could not state. The build says so with `specBindings: true`; the backend's other callers replace a list with what they give, as they always did.
+// leaves such a list out of the spec WHOLE (page-bindings.js), so a rebuild sends nothing for it and the page keeps it. A list an AUTHOR states for such a page is read by the build as "what the page already
+// holds" (`specBindings: true`): a binding the spec changes is changed, and what the spec does not state stays on the entry. The backend's other callers replace a list with what they give, as they always did.
 const WEATHER_ON_PAGE = { ...WEATHER, connectionId: 'env-local-connection-placeholder', futureProperty: { kept: true } };
 const SHAREPOINT_ON_PAGE = { ...SHAREPOINT, apiKey: 'SYNTHETIC_TEST_SECRET' };
 const APPROVE_ON_PAGE = { ...APPROVE, headers: { note: 'kept' } };
 const pageHolding = () => seededServer({ connectorBindings: [WEATHER_ON_PAGE, SHAREPOINT_ON_PAGE], actionBindings: [APPROVE_ON_PAGE] });
 const SENT = { source: SOURCE, name: 'Weather', dataSources: ['account'], model: 'gpt-4.1', prompt: 'again', agentMessage: 'again' };
+// What an author states for that page: the documented properties of each binding.
+const AUTHORED = { connectorBindings: [WEATHER, SHAREPOINT], actionBindings: [APPROVE] };
 
-test('REAL BUNDLE: a download states the page\'s bindings without what a spec does not state — and a rebuild of that spec into the environment writes not one row', async () => {
-  const server = pageHolding();
+// An identity a spec cannot state, beside a property a spec does not state, in BOTH kinds of list: a projection that kept the rest would write an entry with no identity, and a rebuild would REPLACE the
+// page's entry with it — identity, connection id and all. The download leaves both lists out instead; the rebuild of that spec, with the record of the page's last publish, writes and publishes nothing.
+test('REAL BUNDLE: a page whose lists hold an identity a spec cannot state is downloaded without those lists, and a rebuild of that spec writes nothing, publishes nothing, and keeps every entry as it was', async () => {
+  const connector = { ...WEATHER, logicalName: 'Bearer SYNTHETIC_TEST_ACCESS_TOKEN', connectionId: 'env-local-connection-placeholder', futureProperty: { kept: true } };
+  const action = { ...APPROVE, name: `ghp_${'R'.repeat(36)}`, headers: { note: 'kept' } };
+  const server = seededServer({ connectorBindings: [connector, SHAREPOINT], actionBindings: [action] });
   await withBackend(server, async (genpage) => {
-    const leftOut = [];
-    const { entry } = downloaded(await genpage.read(ID), [], leftOut);
-    assert.deepStrictEqual([entry.connectorBindings, entry.actionBindings], [[WEATHER, SHAREPOINT], [APPROVE]], 'the spec\'s page entry states exactly the allowlisted properties');
-    assert.deepStrictEqual(leftOut.map((l) => [l.field, l.entry, l.properties.map((p) => p.property)]), [
-      ['connectorBindings', 0, ['connectionId', 'futureProperty']],
-      ['connectorBindings', 1, ['apiKey']],
-      ['actionBindings', 0, ['headers']],
+    const unkept = [];
+    const { entry } = downloaded(await genpage.read(ID), unkept);
+    assert.ok(!('connectorBindings' in entry) && !('actionBindings' in entry), 'neither list is in the spec: nothing is projected out of them');
+    assert.deepStrictEqual(unkept.map((u) => [u.field, u.reason]), [
+      ['connectorBindings', 'connectorBindings[0].logicalName must be an identifier (a letter, then letters, digits, _ . -)'],
+      ['actionBindings', 'actionBindings[0].name must be an identifier (a letter, then letters, digits, _ . -)'],
     ]);
+    assert.ok(!/SYNTHETIC|ghp_/.test(JSON.stringify(unkept)), 'the reason never quotes the value');
 
+    // The build's record of the page's last publish, made by a build whose spec stated no lists — what a download into the same folder meets.
+    const record = (await genpage.update(ID, { ...SENT })).fingerprint;
     const before = rows(server, ID);
     server.requests.length = 0;
-    const out = await genpage.update(ID, { ...SENT, ...statedPageBindings(entry), specBindings: true });
+    server.published.length = 0;
+    const out = await genpage.update(ID, { ...SENT, ...statedPageBindings(entry), specBindings: true, publishedFingerprint: record });
+    assert.deepStrictEqual([out.unchanged, out.publish.kind], [true, 'skipped']);
+    assert.deepStrictEqual(server.writes(), [], 'not a row written and no PublishXml');
+    assert.deepStrictEqual(server.published, []);
+    assert.deepStrictEqual(rows(server, ID), before, 'every entry as it was: identity, connection id, the property no spec states');
+    const held = JSON.parse(rows(server, ID)['config.json']);
+    assert.deepStrictEqual([held.connectorBindings, held.actionBindings], [[connector, SHAREPOINT], [action]]);
+  });
+});
+
+test('REAL BUNDLE: a list an author states for a page that holds more changes nothing when the page holds it — not one row is written — and other callers still replace a list', async () => {
+  const server = pageHolding();
+  await withBackend(server, async (genpage) => {
+    const before = rows(server, ID);
+    server.requests.length = 0;
+    const out = await genpage.update(ID, { ...SENT, ...AUTHORED, specBindings: true });
     assert.strictEqual(out.unchanged, true, 'the page already holds what the spec states');
     assert.deepStrictEqual(changeWrites(server), [], 'not a row written');
-    assert.deepStrictEqual(rows(server, ID), before, 'the page keeps what the spec could not state');
-
-    // The other callers of the backend replace a list with the one they give, as they always did: the same call without the flag rewrites the page's entries with the spec's.
-    await genpage.update(ID, { ...SENT, ...statedPageBindings(entry), prompt: 'replaced', agentMessage: 'replaced' });
+    assert.deepStrictEqual(rows(server, ID), before, 'the page keeps what the spec does not state');
+    // The other callers of the backend replace a list with the one they give, as they always did.
+    await genpage.update(ID, { ...SENT, ...AUTHORED, prompt: 'replaced', agentMessage: 'replaced' });
     const replaced = JSON.parse(rows(server, ID)['config.json']);
     assert.deepStrictEqual([replaced.connectorBindings, replaced.actionBindings], [[WEATHER, SHAREPOINT], [APPROVE]]);
   });
 });
 
-test('REAL BUNDLE: a spec that changes one binding changes that binding, and the page keeps the rest of its entries as they were — what a spec could not state included', async () => {
+test('REAL BUNDLE: a spec that changes one binding changes that binding, and the page keeps the rest of its entries as they were — what a spec does not state included', async () => {
   const server = pageHolding();
   await withBackend(server, async (genpage) => {
-    const { entry } = downloaded(await genpage.read(ID));
+    const entry = AUTHORED;
     const messages = server.messagesOf(ID).length;
     // Weather's operations change, SharePoint is dropped, and the Custom API list is as it was.
     await genpage.update(ID, { ...SENT, connectorBindings: [{ ...entry.connectorBindings[0], operations: ['Forecast'] }], actionBindings: entry.actionBindings, specBindings: true });
@@ -219,8 +242,7 @@ test('REAL BUNDLE: a spec that changes one binding changes that binding, and the
 test('REAL BUNDLE: the published copy of a page that holds more is read as holding the spec\'s lists, when the build says they are a spec\'s — no false "published again from elsewhere"', async () => {
   const server = pageHolding();
   await withBackend(server, async (genpage) => {
-    const { entry } = downloaded(await genpage.read(ID));
-    const asked = { ...SENT, ...statedPageBindings(entry) };
+    const asked = { ...SENT, ...AUTHORED };
     // A first publish of the page as it is: the build's rebuild of a page nobody recorded.
     const first = await genpage.update(ID, { ...asked, specBindings: true });
     assert.strictEqual(first.publish.kind, 'verified');

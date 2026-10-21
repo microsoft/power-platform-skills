@@ -1613,24 +1613,28 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   `pages[]`). The page folder always held the raw lists in its `config.json`, but the spec carried only
   `dataSources` and `model`: a rebuild into the same environment kept a page's bindings only because it sent none
   (the SDK leaves a list a push omits as it is), and a copy of the spec rebuilt in another environment deployed
-  the pages without them. `parseDownloadedPages` now projects each list a page holds — **by an allowlist**
-  (`lib/page-bindings.js`: `logicalName`, `connectorId`, `dataset`, `tables`, `tableDisplayNames`, `operations` for
-  a connector binding; `name`, `isFunction`, `boundEntityLogicalName`, `displayName`, `parameterKinds` for a Custom API
-  binding, each with the kind of value it holds) — and never copies anything else. **That is a security rule, not a
-  tidiness one**: `genpage-upload.js` writes any JSON array into a binding, so an entry can hold a connection id of
-  the environment it was made in or a credential, and the spec is the artifact that is committed and shared. A
-  property off the list, a property on it whose value is not what it holds (an object where a text belongs, a map
-  whose values are not Dataverse parameter kinds) and a text shaped like a credential (a password in a URL, a
-  `sig=`/`Password=` pair, a bearer token or JWT) are **left out**, and the download says which — by the property's
-  NAME, never its value (a name that is not a plain identifier is not echoed either) — on stderr (`WARNING:`) and as
-  `pageBindings.propertiesLeftOut`. The validator holds an authored spec to the same list: a property off it is an
-  ERROR (`bindingProblemText`), because refusing is the only thing that keeps a credential out of the file. The
-  page folder's own `config.json` is the page as the environment holds it and is **not** rewritten, so it still
-  holds them — the `WARNING:` says so. A whole list is left out (`pageBindings.notCarried`) only when it is no
-  list of objects (`pageBindingsProblem`, also the validator's) or an entry of it holds nothing a spec states (such an
-  entry would be one a rebuild takes off the page). An empty list and `null` (the page's way of holding none)
-  are nothing and are never written: a stated `[]` means "clear". Neither is a gate, as for a model the spec
-  cannot hold. **A rebuild must not strip what the spec could not state**, so the page backend reads a list a
+  the pages without them. `parseDownloadedPages` now writes a list a page holds into the spec **only WHOLE, and only
+  what is known to be safe** (`lib/page-bindings.js`, whose header holds the threat model and lists every sink): each key
+  one of the documented properties (`logicalName`, `connectorId`, `dataset`, `tables`, `tableDisplayNames`,
+  `operations` for a connector binding; `name`, `isFunction`, `boundEntityLogicalName`, `displayName`, `parameterKinds`
+  for a Custom API binding) and each value of a conservative shape positively known to be safe — an identifier, a GUID,
+  a plain name or label, or an `http(s)` URL whose PARSED form (`new URL`) has no user-info, no query and no fragment
+  and whose decoded path is labels — none of it shaped like a token (a known token prefix, an authorization scheme, a
+  32+ run mixing letters and digits). **That is a security rule, not a tidiness one, and it fails closed**:
+  `genpage-upload.js` writes any JSON array into a binding, so an entry can hold a connection id or a credential as a
+  value, as a KEY, or inside a URL's user-info, query or fragment, encoded or not, and the spec is the artifact that is
+  committed and shared. A list in which any entry holds anything else is left out of the spec **whole** — nothing is
+  projected out of it, because an entry stated without its identity (or a property) would make a rebuild REPLACE the
+  page's entry with less — and reported in `pageBindings.notCarried` (stderr `WARNING:`) by the page, the list, the
+  entry's place and the vetted property, or "an unrecognized property": never a value, never an unrecognized key
+  (`bindingProblemText`). A list left out is one a rebuild does not send, so the page keeps it: no write, no publish.
+  The validator holds an authored spec to the same rule, as an ERROR in the same words, because refusing is the only
+  thing that keeps a credential out of the file. The page folder's own `config.json` is the page as the environment
+  holds it and is **not** rewritten, so it still holds everything — the `WARNING:` says so. A list that is no list of
+  objects (`pageBindingsProblem`, also the validator's) is left out whole too. An empty list and `null` (the page's
+  way of holding none) are nothing and are never written: a stated `[]` means "clear". Neither is a gate, as for a
+  model the spec cannot hold. **A rebuild must not strip what a spec does not state** (an author's list, or a page that
+  gained a property after its download), so the page backend reads a list a
   spec states against the page's own entries (`update` and `publishedDiffers` take `specBindings: true`, the build
   always passes it; `planEdits` → `mergeBindings`): an entry is matched by `logicalName` / `name`, the properties a
   spec can state come from the spec, and the others stay on the entry. A page that already holds what the spec
@@ -1663,19 +1667,22 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   that is there with no connection (`connectionid` empty — what a solution import leaves when no settings file gives
   one), an operation a binding lists that the custom connector of its reference does not define, a Custom API that is
   the other kind or bound to another table (the runtime refuses that call itself), and a read that failed (the
-  bindings were not checked); a connector that is not named on both sides is never a conflict, and a column a row
-  does not carry says nothing. Operations are read only for a CUSTOM connector: its definition is a row of the
+  bindings were not checked); a connector that is not named on both sides is never a conflict. **Missing evidence is
+  NOT CHECKED, never compatible**: a row that answers without its `connectorid`, its `connectionid`, or a GUID in
+  `_customconnectorid_value` (absent, null or invalid) is said by name as not checked (`unchecked`, a warning) — the
+  connector is not compared, the connection not judged, the operations not proven — and nothing is refused for it.
+  Operations are read only for a CUSTOM connector: its definition is a row of the
   environment (`connector.openapidefinition`, found through the reference's `_customconnectorid_value`, parsed by
   `definedOperations` as Swagger 2.0 — every HTTP method's `operationId`, matched exactly, as the SDK matches them;
   a definition it cannot read leaves the operations unchecked, and says so), and the copy there can be another
-  version than the page was made with. A connector that is not a custom one has one definition for every environment
-  of its cloud — the one `connector.js` read the binding's operations from — so a reference for the same connector
-  offers them and nothing is read for it.
+  version than the page was made with. A reference whose row names no custom connector gets no definition read, and
+  its binding's operations are said as not checked: a null lookup is what a connector the platform publishes has, but
+  it is no proof of one (a reference made through the Web API can leave it unset).
   **What a rebuild cannot bring to another environment is what the lists name,
   and the download says so**: when any page holds a binding it prints `NOTE:` on stderr and returns
   `pageBindings` — `pages` (each page's key, name and the connection references / Custom APIs its bindings go by),
   `neededInTarget` (`connectionReferences`, `customApis`, and `serviceResources`: the references whose bindings
-  name a `dataset` or `tables`, which are the source environment's), `notCarried`, `propertiesLeftOut` and a
+  name a `dataset` or `tables`, which are the source environment's), `notCarried` and a
   `note` — in the order the spec lists its pages, names sorted by `compareText`; the block is absent when no page
   holds one and nothing was left out. The connection reference and the connection behind it (a user's sign-in, which
   stays where it was made), the Custom API (a solution component) and the resources a connector binding points at

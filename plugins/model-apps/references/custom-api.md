@@ -78,8 +78,10 @@ under `actionBindings`; the skill never writes this file directly):
 An app a download reads is written with each page's `actionBindings` in `pages[].actionBindings`, and a rebuild
 writes that list back onto the page (a spec that states none leaves the page's own). A spec states an entry by the
 properties documented above — `name`, `isFunction`, `boundEntityLogicalName`, `displayName`, `parameterKinds` — and
-by nothing else: any other property a binding holds is left out of the spec, named by its name on stderr, and stays
-on the page; a spec that states one is refused (see `references/app-spec-schema.md` → `pages[]`). `/genpage`
+by nothing else, each with a value of a conservative shape known to be safe (an identifier, a label, a flag, a map of
+parameter names to Dataverse parameter kinds). A list in which any entry holds anything else is left out of the spec
+WHOLE, reported by its place and the vetted property (never a value or an unrecognized key), and stays on the page;
+a spec that states one is refused (see `references/app-spec-schema.md` → `pages[]`). `/genpage`
 itself never reads or writes the spec. The spec carries the list and not the Custom APIs it names: each must
 already exist in the environment you rebuild into, deployed in a solution. A rebuild reads the environment's Custom
 APIs before it writes and says by name one that is not there, one that is the other kind (Action or Function) and

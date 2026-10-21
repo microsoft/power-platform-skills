@@ -6,13 +6,28 @@
 //   { "connectorBindings": [ { "logicalName": "new_msnweather", "connectorId": "/providers/Microsoft.PowerApps/apis/shared_msnweather", "dataset": "", "operations": ["CurrentWeather"] } ],
 //     "actionBindings":    [ { "name": "new_ApproveOrder", "isFunction": false, "boundEntityLogicalName": "salesorder", "displayName": "Approve Order", "parameterKinds": { "Comment": "String" } } ] }
 //
-// An entry can hold more than that. genpage-upload.js writes any JSON array it is given into the list, so an entry can carry a connection id of the environment it was made in, a credential someone put in a
-// connectors.json, or a property a later runtime adds. The App Spec is what is committed, reviewed and shared, so it states an entry by an ALLOWLIST: the properties the two references document, each with the
-// kind of value it holds. A value of another kind — an object where a text belongs, a nested list, a map whose values are not Dataverse parameter kinds — is not stated even under a property that is, because that
-// is where a credential would ride; and neither is a text that is shaped like one. What a spec does not state is left out and named (by the property's name, never its value), and it stays on the page.
+// THREAT MODEL. An entry can hold more than that, and anything at all in it: genpage-upload.js writes any JSON array it is given into the list, so an entry can carry a connection id of the environment it was
+// made in, a credential someone put in a connectors.json — as a property, as the NAME of a property, inside a URL's user-info, query or fragment, percent-encoded, in a map's keys — or a property a later runtime
+// adds. The App Spec is what is committed, reviewed and shared, and a download's stderr and JSON result go to a terminal, a log and an agent's context. So nothing of a binding reaches any of them unless it is
+// KNOWN to be safe, and the rule fails closed:
+//   - a key is stated only when it is one of the properties the two references document (FIELDS), and a key of `parameterKinds` only when it is shaped like a request parameter's unique name and not like a token;
+//   - a value is stated only when it has a conservative shape that is positively known (SHAPES): an identifier, a GUID, a plain name or label, or a URL whose PARSED form (`new URL`) has no user-info, no query and
+//     no fragment and whose decoded path is plain names. A value that merely does not look like a credential is not enough — a credential has more forms than any list of them (a token alone in a URL's
+//     user-info, `api%5Fkey=` in a query, `#access_token=` in a fragment, a bare token as a key);
+//   - a list in which ANY entry holds anything else is left out of the spec WHOLE. Nothing is projected out of it, because an entry stated without what it was found by (`logicalName`, `name`) or without a
+//     property it held would make a rebuild REPLACE the page's entry with less (mergeBindings matches entries by that identity). A list that is left out is a list a rebuild does not send, and the page keeps
+//     its own as it is: no write and no publish.
+// SINKS — every place a binding's text can go, and what goes there:
+//   app-spec.json (download-model-app.js, through hydrateSpec)  only a list every entry of which is stated whole (statableBindings);
+//   the download's stderr and JSON result (pageBindingsNote, pageBindingsReport: `pages`, `neededInTarget`, `notCarried`)  the names of the bindings of a list that is stated (identifiers, by SHAPES), and for a list
+//       left out its kind, the place of the entry and the vetted name of the property — or "an unrecognized property" — never a value and never an unrecognized key (listProblemText);
+//   validateAppSpec's errors and warnings (lib/app-spec.js)  the same words (bindingProblemText);
+//   the build's warnings and halt (lib/page-binding-targets.js, lib/sdk-build.js)  binding names of a spec that passed validateAppSpec, so of the shapes above.
+// The page folder's own config.json is the page as the environment holds it, written before the spec and not by these rules: it holds everything, and the download's note says so.
 //
-// That last part is what `mergeBindings` is for. A spec that states an entry says nothing of the properties it left out, so a rebuild into the environment the page is in must not take them away: it reads the
-// entries a spec states as "what the page holds of these properties", writes a list only when that differs, and when it writes, keeps on each entry what the spec could not state.
+// That is why `mergeBindings` still matters. A spec that states an entry says nothing of the properties it does not state (an author who writes a list by hand, or a page that gains a property after it was
+// downloaded), so a rebuild into the environment the page is in must not take them away: it reads the entries a spec states as "what the page holds of these properties", writes a list only when that differs,
+// and when it writes, keeps on each entry what the spec does not state.
 const { compareText } = require('./compare-text.js');
 
 // Each list of a page, with the property its entries are found by: a connector binding by the logical name of the connection reference it goes through, a Custom API binding by the API's unique name.
@@ -23,65 +38,98 @@ const PAGE_BINDINGS = { connectorBindings: 'logicalName', actionBindings: 'name'
 // See: https://learn.microsoft.com/power-apps/developer/data-platform/reference/entities/customapirequestparameter
 const PARAMETER_KINDS = ['Boolean', 'DateTime', 'Decimal', 'Entity', 'EntityCollection', 'EntityReference', 'Float', 'Integer', 'Money', 'Picklist', 'String', 'StringArray', 'Guid'];
 
-// What a text or a list may hold. A SharePoint site URL or a SQL dataset is far below the cap; a table list is a handful of GUIDs.
-const MAX_TEXT = 2048;
 const MAX_LIST = 1000;
-// A Custom API request parameter's unique name: letters, digits, `_` and `.`, which is also why a key of `parameterKinds` cannot be a value.
-const PARAMETER_NAME = /^[A-Za-z_][A-Za-z0-9_.]{0,127}$/;
-const CONTROL = /[\u0000-\u001f\u007f]/;
 
-// A text that holds a credential by its shape — a second line behind the allowlist, for the one kind of value the allowlist cannot judge by its type: a text. They are the forms a credential takes inside
-// a dataset, a name or a label, e.g.
-//   https://admin:hunter2@contoso.sharepoint.com/sites/x                  a password in the authority of a URL
-//   https://account.blob.core.windows.net/c?sv=2022-11-02&sig=abc123       a shared-access signature in a query
-//   Server=sql.contoso.net;Database=Sales;Password=hunter2                a connection string
-//   Bearer abcdefgh12345   /   eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.abc     an Authorization value, a JSON Web Token
-// A name=value pair only counts at the start of the text or after one of `?&;,` or a space, so `design=1` is not `sig=`. A text that is flagged is left out and said, so a false positive costs a property in
-// the spec — the page keeps it — and a miss is no worse than a spec author who writes a secret by hand.
-const CREDENTIAL_SHAPES = [
-  /:\/\/[^\s/?#@]*:[^\s/?#@]*@/,
-  /(?:^|[?&;,\s])(?:sig|signature|token|access[_-]?token|refresh[_-]?token|id[_-]?token|password|pwd|secret|client[_-]?secret|api[_-]?key|account[_-]?key|shared[_-]?access[_-]?(?:key|signature))\s*=/i,
-  /\bBearer\s+[A-Za-z0-9._~+/=-]{8,}/i,
-  /\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\./,
-];
-const holdsCredential = (text) => CREDENTIAL_SHAPES.some((shape) => shape.test(text));
+// A text that is shaped like a token, wherever it stands — a name, a label, a key, a path segment. A conservative shape alone would let a token through when it happens to fit one (`ghp_` + 36 letters is an
+// identifier), so every shape below is also held to this:
+//   - the prefixes of the token formats that announce themselves: `ghp_`/`gho_`/`ghu_`/`ghs_`/`ghr_`/`github_pat_` (GitHub), `xoxb-`… (Slack), `sk-`/`sk_live_`/`pk_live_`/`rk_live_` (API keys),
+//     `AKIA`/`ASIA` (AWS access keys), `AIza` (Google), `ya29.` (OAuth), `eyJ` (the base64 of `{"`, which opens every JSON Web Token), an `npm_` token;
+//   - an authorization scheme followed by a credential: `Bearer …`, `Basic …`;
+//   - a run of 32 or more letters and digits that holds both — a hex digest, a key, a GUID written without its dashes. A connector's or reference's own random suffix is far shorter (`-5f6a8c`), and a
+//     word of 32 letters has no digit.
+// A label that is flagged leaves its list out of the spec: a false positive costs the page's list its portability, and the page keeps it.
+const TOKEN_PREFIX = /(?:^|[^A-Za-z0-9])(?:gh[pousr]_|github_pat_|xox[abposr]-|sk-|sk_(?:live|test)_|pk_(?:live|test)_|rk_(?:live|test)_|AKIA|ASIA|AIza|ya29\.|eyJ|npm_)/;
+const AUTH_SCHEME = /(?:^|\s)(?:bearer|basic|negotiate|digest)\s+\S/i;
+const tokenLike = (text) => TOKEN_PREFIX.test(text) || AUTH_SCHEME.test(text) || (text.match(/[A-Za-z0-9]{32,}/g) || []).some((run) => /[0-9]/.test(run) && /[A-Za-z]/.test(run));
 
-// Why `value` is not a thing a spec states for a property that holds it — a short code, never the value — or null when it is.
-function textProblem(value) {
-  if (typeof value !== 'string' || CONTROL.test(value)) return 'not-text';
-  if (value.length > MAX_TEXT) return 'too-long';
-  return holdsCredential(value) ? 'credential-shaped' : null;
-}
-function textListProblem(value) {
-  if (!Array.isArray(value)) return 'not-text-list';
-  if (value.length > MAX_LIST) return 'too-long';
-  for (const item of value) {
-    const why = textProblem(item);
-    // An item that is no text makes the property no list of texts; one that is a text with a problem of its own keeps that problem's name.
-    if (why === 'not-text') return 'not-text-list';
-    if (why) return why;
+// The conservative shapes a value may have. Each is a positive description of what the value IS; anything outside it is not stated.
+//   identifier  a connection reference's logical name, a table's logical name, a Custom API's unique name, an operation id: a letter, then letters, digits, `_`, `.` and `-` (up to 128)
+//   guid        a SharePoint list id, a table id: 8-4-4-4-12 hex digits
+//   name        a SQL dataset (`server,database`), a table name (`[dbo].[Orders]`), a dataset key (`default`): letters, digits, space and `_ . , : - [ ] ( )` (up to 256), opening with a letter, a digit or `[`
+//   label       what a person reads — a display name: letters (any script), marks, digits, dashes, space and `_ . , ; : ' ( ) & + !` (up to 256). No `/`, `@`, `=`, `?`, `#`, `%` or quote, so no URL and no key=value
+//   url         a SharePoint site and the like: `new URL` parses it as http(s), with no user-info (`user@`, `user:pass@`), no query and no fragment — the raw text holds no `?`, `#` or `@` at all — a host of DNS
+//               labels, an optional port, and a path whose segments, decoded, are labels
+// An empty text is a value only where the reference documents one: a connector binding's `dataset` is `""` for a REST connector.
+const IDENTIFIER = /^[A-Za-z][A-Za-z0-9_.-]{0,127}$/;
+const GUID = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
+const NAME = /^[A-Za-z0-9[][A-Za-z0-9 _.,:\-[\]()]{0,255}$/;
+const LABEL = /^[\p{L}\p{M}\p{N}\p{Pd} _.,;:'()&+!]{1,256}$/u;
+const DNS_HOST = /^(?=.{1,253}$)[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*$/;
+const isIdentifier = (value) => typeof value === 'string' && IDENTIFIER.test(value) && !tokenLike(value);
+const isGuid = (value) => typeof value === 'string' && GUID.test(value);
+const isName = (value) => typeof value === 'string' && NAME.test(value) && !tokenLike(value);
+const isLabel = (value) => typeof value === 'string' && LABEL.test(value) && !tokenLike(value);
+// The `new URL` of a WHATWG parser is what decides, not a pattern: it is what a browser and the runtime read the text as. The raw text is held to having no `?`, `#` and `@` first, because a parser that drops an
+// empty query (`https://x/?`) or reads a `@` in the path as data would hide one.
+function isSafeUrl(value) {
+  if (typeof value !== 'string' || value.length > 2048 || /[?#@\\\s]/.test(value)) return false;
+  let url;
+  try {
+    url = new URL(value);
+  } catch {
+    return false;
   }
-  return null;
+  if (url.protocol !== 'https:' && url.protocol !== 'http:') return false;
+  if (url.username || url.password || url.search || url.hash || !DNS_HOST.test(url.hostname)) return false;
+  for (const segment of url.pathname.split('/').filter(Boolean)) {
+    let decoded;
+    try {
+      decoded = decodeURIComponent(segment);
+    } catch {
+      return false;
+    }
+    if (!LABEL.test(decoded) || tokenLike(decoded)) return false;
+  }
+  return !tokenLike(url.hostname);
 }
-const booleanProblem = (value) => (typeof value === 'boolean' ? null : 'not-boolean');
-function parameterKindsProblem(value) {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return 'not-parameter-kinds';
+// A connector's id as a binding and a reference write it — `/providers/Microsoft.PowerApps/apis/<connector name>` — or the bare name.
+const CONNECTOR_PATH = /^\/providers\/Microsoft\.PowerApps\/apis\//i;
+const isConnectorId = (value) => typeof value === 'string' && isIdentifier(value.replace(CONNECTOR_PATH, ''));
+const isDataset = (value) => value === '' || isName(value) || isSafeUrl(value);
+const isTableId = (value) => isGuid(value) || isName(value);
+const listOf = (check) => (value) => Array.isArray(value) && value.length <= MAX_LIST && value.every(check);
+const isBoolean = (value) => typeof value === 'boolean';
+// A Custom API request parameter's unique name: a letter or `_`, then letters, digits and `_` — and never a token-shaped one: a key is as free as a value.
+const PARAMETER_NAME = /^[A-Za-z_][A-Za-z0-9_]{0,127}$/;
+function isParameterKinds(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
   const names = Object.keys(value);
-  if (names.length > MAX_LIST) return 'too-long';
-  return names.every((name) => PARAMETER_NAME.test(name) && PARAMETER_KINDS.includes(value[name])) ? null : 'not-parameter-kinds';
+  return names.length <= MAX_LIST && names.every((name) => PARAMETER_NAME.test(name) && !tokenLike(name) && PARAMETER_KINDS.includes(value[name]));
 }
 
-// The properties a spec states of each kind of entry, each with its check. This is the allowlist: a property that is not here is not stated, whatever it holds.
+// The properties a spec states of each kind of entry, each with the shape its value must have, and the words that say what that shape is. This is the allowlist: a key that is not here is not stated, and a
+// value that does not have its shape is not stated either.
 const FIELDS = {
-  connectorBindings: { logicalName: textProblem, connectorId: textProblem, dataset: textProblem, tables: textListProblem, tableDisplayNames: textListProblem, operations: textListProblem },
-  actionBindings: { name: textProblem, isFunction: booleanProblem, boundEntityLogicalName: textProblem, displayName: textProblem, parameterKinds: parameterKindsProblem },
+  connectorBindings: {
+    logicalName: [isIdentifier, 'identifier'],
+    connectorId: [isConnectorId, 'connector-id'],
+    dataset: [isDataset, 'dataset'],
+    tables: [listOf(isTableId), 'table-ids'],
+    tableDisplayNames: [listOf(isLabel), 'labels'],
+    operations: [listOf(isIdentifier), 'identifiers'],
+  },
+  actionBindings: {
+    name: [isIdentifier, 'identifier'],
+    isFunction: [isBoolean, 'boolean'],
+    boundEntityLogicalName: [isIdentifier, 'identifier'],
+    displayName: [isLabel, 'label'],
+    parameterKinds: [isParameterKinds, 'parameter-kinds'],
+  },
 };
 const BINDING_PROPERTIES = Object.fromEntries(Object.entries(FIELDS).map(([kind, fields]) => [kind, Object.keys(fields)]));
 
-// A property is named in a message only when its name is a plain identifier: a name is as free as a value, and one can carry a secret too (`sk-live-…`, `Authorization: Bearer …`).
-const PLAIN_NAME = /^[A-Za-z][A-Za-z0-9_]{0,47}$/;
-const UNUSUAL_NAME = '(a property with an unusual name)';
-const shownName = (property) => (PLAIN_NAME.test(property) ? property : UNUSUAL_NAME);
+// What a message says instead of a key that is not one of FIELDS: the key itself can be the secret (a token used as a property name), so it is never echoed.
+const UNUSUAL_NAME = 'an unrecognized property';
 
 const hasOwn = (object, property) => Object.prototype.hasOwnProperty.call(object, property);
 // Own-property writes that never run a setter: a config.json is parsed JSON, and `__proto__` in it is an own property like any other.
@@ -105,56 +153,58 @@ function statedPageBindings(page) {
   return out;
 }
 
-// What a spec states of ONE entry (an object): { stated, leftOut }. `stated` holds the allowlisted properties whose value is of the kind the property holds, copied, in the entry's own order. `leftOut` names
-// the others — [{ property, why }], by code-unit order of the name — and `why` says whether the property is not one a spec states ('not-stated') or is, with a value it cannot hold ('not-text',
-// 'not-text-list', 'not-boolean', 'not-parameter-kinds', 'credential-shaped' or 'too-long'). It is never the value.
+// What a spec states of ONE entry (an object): { stated, leftOut }. `stated` holds the properties of FIELDS whose value has its shape, copied, in the entry's own order. `leftOut` says what is not stated —
+// [{ property, why }], the vetted properties first by code-unit order, then the unrecognized ones — where `property` is the vetted name, or UNUSUAL_NAME for a key that is not one (never the key), and `why` is 'not-stated' for such a key or the shape the value
+// lacks ('identifier', 'connector-id', 'dataset', 'table-ids', 'labels', 'identifiers', 'boolean', 'label', 'parameter-kinds'). It is never the value.
 function statableBinding(kind, entry) {
   const fields = FIELDS[kind] || {};
   const stated = {};
   const leftOut = [];
   for (const property of Object.keys(entry)) {
-    const why = hasOwn(fields, property) ? fields[property](entry[property]) : 'not-stated';
-    if (why) leftOut.push({ property: shownName(property), why });
-    else put(stated, property, copyOf(entry[property]));
+    if (!hasOwn(fields, property)) {
+      leftOut.push({ property: UNUSUAL_NAME, why: 'not-stated' });
+      continue;
+    }
+    const [holds, shape] = fields[property];
+    if (holds(entry[property])) put(stated, property, copyOf(entry[property]));
+    else leftOut.push({ property, why: shape });
   }
-  leftOut.sort((a, b) => compareText(a.property, b.property));
+  // A vetted property first, by name — its words say more (a list left out because of its identity says so) — then the unrecognized ones, which all read alike.
+  leftOut.sort((a, b) => Number(a.why === 'not-stated') - Number(b.why === 'not-stated') || compareText(a.property, b.property) || compareText(a.why, b.why));
   return { stated, leftOut };
 }
 
-// What a spec states of a whole list (one `pageBindingsProblem` finds no fault with): { stated, leftOut, blank }. `leftOut` is one record per entry that left something out — { entry, binding?, properties } —
-// with `binding` the entry's own name when a spec states it, so a report can say which one; `blank` the places of the entries in which a spec can state nothing. A list with such an entry cannot be stated whole:
-// an entry that is left out of a spec is an entry a rebuild would take off the page.
+// What a spec states of a whole list (one `pageBindingsProblem` finds no fault with): { stated, problem }. `stated` is the list as the spec states it — every entry whole — and `problem` null; or `stated` is null
+// and `problem` is { entry, property, why } for the FIRST entry that holds anything a spec does not state (statableBinding): the list is then left out of the spec whole, because a spec that stated part of
+// it would make a rebuild replace the page's entries with less (see the header). `property` is a vetted name or UNUSUAL_NAME, never the key or the value.
 function statableBindings(kind, list) {
-  const identity = PAGE_BINDINGS[kind];
   const stated = [];
-  const leftOut = [];
-  const blank = [];
-  list.forEach((entry, index) => {
-    const one = statableBinding(kind, entry);
+  for (let index = 0; index < list.length; index += 1) {
+    const one = statableBinding(kind, list[index]);
+    if (one.leftOut.length) return { stated: null, problem: { entry: index, property: one.leftOut[0].property, why: one.leftOut[0].why } };
     stated.push(one.stated);
-    if (!Object.keys(one.stated).length) blank.push(index);
-    const name = one.stated[identity];
-    if (one.leftOut.length) leftOut.push({ entry: index, ...(typeof name === 'string' && name ? { binding: name } : {}), properties: one.leftOut });
-  });
-  return { stated, leftOut, blank };
+  }
+  return { stated, problem: null };
 }
 
 const WHY_WORDS = {
-  'not-text': 'must be a text',
-  'not-text-list': 'must be a list of texts',
-  'not-boolean': 'must be true or false',
-  'not-parameter-kinds': 'must map parameter names to Dataverse parameter kinds',
-  'credential-shaped': 'looks like it holds a credential, which an App Spec never states',
-  'too-long': 'is longer than an App Spec states',
+  identifier: 'must be an identifier (a letter, then letters, digits, _ . -)',
+  'connector-id': "must be a connector's id (/providers/Microsoft.PowerApps/apis/<name>, or the name)",
+  dataset: 'must be empty, a plain name, or an http(s) URL with no user-info, no query and no fragment',
+  'table-ids': 'must be a list of GUIDs or plain names',
+  labels: 'must be a list of plain labels',
+  identifiers: 'must be a list of identifiers',
+  boolean: 'must be true or false',
+  label: 'must be a plain label (letters, digits, spaces and simple punctuation; no URL)',
+  'parameter-kinds': 'must map parameter names to Dataverse parameter kinds',
 };
 
-// The words a validator uses for one `leftOut` property of entry `index` of a list: it names the property and never its value.
+// The words for one property of entry `index` of a list that is not stated (statableBinding's `leftOut`, statableBindings' `problem`): the vetted property's name and the shape its value lacks, or — for a key
+// that is not one of FIELDS — that the entry holds an unrecognized property. Never the value, never the key.
 function bindingProblemText(kind, index, { property, why }) {
   const at = `${kind}[${index}]`;
-  if (why !== 'not-stated') return `${at}.${property} ${WHY_WORDS[why]}`;
-  return property === UNUSUAL_NAME
-    ? `${at} has a property with an unusual name, which an App Spec does not state — remove it`
-    : `${at}.${property} is not a property an App Spec states (a binding states only ${BINDING_PROPERTIES[kind].join(', ')}) — remove it`;
+  if (why === 'not-stated') return `${at} holds ${UNUSUAL_NAME}, which an App Spec does not state (a binding states only ${BINDING_PROPERTIES[kind].join(', ')})`;
+  return `${at}.${property} ${WHY_WORDS[why] || 'does not have the shape an App Spec states'}`;
 }
 
 // The list a rebuild writes for a spec that states `stated`, onto a page that holds `held`: each stated entry on the held entry of the same name (matched in order when a name is repeated; by place when neither side

@@ -1639,36 +1639,46 @@ custom control), but the spec validator emits a warning.
   `. _ : / @ + -`, at most 100 characters. A download writes it (an id outside that shape is left out, with
   a warning); an authored spec may omit it, and then a rebuild of an existing page keeps the model that page has.
 - **`connectorBindings` and `actionBindings` (optional).** The two lists a page holds in its `config.json`, each a
-  list of objects. A spec states an entry by **the properties the references document, each with the kind of value
-  it holds** — an allowlist (`references/connectors.md` and `references/custom-api.md` say what they mean):
+  list of objects. A spec states an entry by **the properties the references document, each with a value of a
+  conservative shape known to be safe** — an allowlist (`references/connectors.md` and `references/custom-api.md`
+  say what they mean):
   ```jsonc
   { "connectorBindings": [ { "logicalName": "new_msnweather", "connectorId": "/providers/Microsoft.PowerApps/apis/shared_msnweather", "dataset": "", "operations": ["CurrentWeather"] } ],
     "actionBindings":    [ { "name": "new_ApproveOrder", "isFunction": false, "boundEntityLogicalName": "salesorder", "displayName": "Approve Order", "parameterKinds": { "Comment": "String" } } ] }
   ```
-  | List | Properties a spec states | Each holds |
+  | List | Property | Its value |
   |---|---|---|
-  | `connectorBindings` | `logicalName`, `connectorId`, `dataset` | a text |
-  | | `tables`, `tableDisplayNames`, `operations` | a list of texts |
-  | `actionBindings` | `name`, `boundEntityLogicalName`, `displayName` | a text |
+  | `connectorBindings` | `logicalName` | an identifier: a letter, then letters, digits, `_ . -` |
+  | | `connectorId` | `/providers/Microsoft.PowerApps/apis/<identifier>`, or the identifier |
+  | | `dataset` | `""`, a plain name (`server,database`, `default`), or an `http(s)` URL with no user-info, no query and no fragment, whose host is DNS labels and whose decoded path segments are labels |
+  | | `tables` | a list of GUIDs or plain names (`[dbo].[Orders]`) |
+  | | `tableDisplayNames` | a list of labels: letters, digits, dashes, spaces and `_ . , ; : ' ( ) & + !` — no URL, no `=` |
+  | | `operations` | a list of identifiers |
+  | `actionBindings` | `name`, `boundEntityLogicalName` | an identifier |
+  | | `displayName` | a label |
   | | `isFunction` | `true` or `false` |
-  | | `parameterKinds` | a map from a parameter name to one of the Dataverse parameter kinds (`String`, `Integer`, `Decimal`, `Float`, `Money`, `Boolean`, `DateTime`, `Guid`, `StringArray`, `EntityReference`, `Entity`, `EntityCollection`, `Picklist`) |
+  | | `parameterKinds` | a map from a parameter name (a letter or `_`, then letters, digits, `_`) to one of the Dataverse parameter kinds (`String`, `Integer`, `Decimal`, `Float`, `Money`, `Boolean`, `DateTime`, `Guid`, `StringArray`, `EntityReference`, `Entity`, `EntityCollection`, `Picklist`) |
 
-  **Nothing else is in a spec — never a value that can hold a secret.** A binding a page holds can carry more than
-  the runtime reads: a connection id of the environment it was made in, a credential someone wrote into a
-  `connectors.json` (`genpage-upload.js` takes any JSON array), a property a later runtime adds. The spec is what is
-  committed and shared, so a download states a binding by the allowlist above and leaves the rest out: a property
-  that is not on it, and a property that is, with a value of another kind (an object where a text belongs, a nested
-  list) or a text shaped like a credential (a password in a URL, `sig=`/`Password=` pairs, a bearer token). It says
-  **which, by the property's name — never its value** — on stderr and as `pageBindings.propertiesLeftOut` in its
-  JSON result. The page folder's own `config.json` is the page as the environment holds it and is not rewritten, so
-  it still holds them: keep that folder out of version control if a value there is a credential. A spec that states
-  one is **refused** by the validator, with the property's name. A list in which an entry holds nothing a spec states,
-  or that is not a list of objects, is left out whole and reported in `pageBindings.notCarried`, never refused.
+  No text of any of them may be shaped like a token (a known token prefix such as `ghp_` or `eyJ`, an
+  authorization scheme such as `Bearer …`, or a run of 32 or more letters and digits that mixes both).
+  **Nothing else is in a spec, and a list is stated only WHOLE.** A binding a page holds can carry anything: a
+  connection id of the environment it was made in, a credential someone wrote into a `connectors.json`
+  (`genpage-upload.js` takes any JSON array) — as a value, as the NAME of a property, in a URL's user-info, query or
+  fragment — or a property a later runtime adds. The spec is what is committed and shared, so when ANY entry of a list
+  holds a key that is not on the allowlist, or a value without its shape, a download leaves the **whole list** out of
+  the spec — it never states part of an entry, because an entry stated without its identity or a property would make a
+  rebuild replace the page's entry with less — and reports it in `pageBindings.notCarried` (stderr: `WARNING:`) by the
+  page, the list, the entry's place and the vetted property, or "an unrecognized property": **never a value and never an
+  unrecognized key**. A list left out is one a rebuild does not send, so the page keeps it as it is, with no write and no
+  publish. The page folder's own `config.json` is the page as the environment holds it and is not rewritten, so it still
+  holds everything: keep that folder out of version control if a value there is a credential. A spec that states such a
+  property or value is **refused** by the validator, in the same words. A list that is not a list of objects is left out
+  whole too; neither is ever a refusal of the download.
   A download writes the lists a page holds (an empty list, or `null`, is left out). The build writes a list a
   spec states, and **leaves the page's own alone when the spec does not state it**; a list that is stated —
   `[]` too — is the page's list, as `dataSources` is. It is read against the page's own entries: a page that
   already holds what the spec states is **not written and not published**, and an entry the spec changes keeps
-  the properties the spec could not state (an entry is matched by `logicalName` / `name`). `logicalName` (a
+  the properties the spec does not state (an entry is matched by `logicalName` / `name`). `logicalName` (a
   connector binding) and `name` (a Custom API binding) is what the page's code finds an entry by, so an entry
   without one draws a warning.
   The spec carries the lists, which are text; it cannot carry what they name, and a rebuild creates none of it,
@@ -1693,9 +1703,13 @@ custom control), but the spec validator emits a warning.
     reference that is there with **no connection** (what a solution import leaves when no settings file gives one), an
     **operation** a binding lists that the **custom connector** of its reference there does not define, a Custom API
     that is the other kind (Action or Function) or bound to another table, and a read that failed (the bindings were
-    then not checked). Operations are checked only for a custom connector, whose definition is the environment's own
-    (its `connector` row) and can be another version than the page was made with; a connector that is not a custom
-    one has the same operations in every environment of its cloud, so a reference for the same connector offers them.
+    then not checked);
+  - **says as NOT CHECKED**, by name, what the environment's answer did not prove — never reading it as compatible,
+    and never refusing for it: a reference row that does not say which connector it is for, or whether it has a
+    connection, and the operations of a binding whose reference names no custom connector. Operations are checked
+    only through a custom connector's definition (its `connector` row), which is the environment's own and can be
+    another version than the page was made with; a reference whose custom connector lookup is absent, null or not a
+    GUID — which a connector the platform publishes also has — is not proof of which connector defines them.
 
   `/app-builder` never authors these lists — it writes no connector or Custom API code — so they come from a page
   a download read. A page you reset to `source.kind: "intent"` to regenerate it is generated without connector

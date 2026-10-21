@@ -3479,8 +3479,9 @@ function validateAppSpec(spec, opts = {}) {
     }
     // The page's connector and Custom API bindings. That each is a list, and that none of its entries is missing, is reported above by normalizeSpecShape; an entry that is there and is no object (a string, a number) is
     // reported here, by the rule a download holds a page's bindings to (pageBindingsProblem), so a download never writes a spec this refuses.
-    // An entry is stated by an allowlist of properties, each with the kind of value it holds (page-bindings.js): a property outside it — a connection id, a credential, anything the runtime or a later version adds —
-    // or a value of another kind is an ERROR that names the property and never its value, because the spec is what is committed and shared, and refusing is the only thing that keeps a credential out of it.
+    // An entry is stated by an allowlist of properties, each with a value of a shape known to be safe (page-bindings.js, which holds the threat model): a property outside it — a connection id, a credential,
+    // anything the runtime or a later version adds — or a value of another shape is an ERROR that names the vetted property or says "an unrecognized property", and never a value or an unrecognized key (a key
+    // can be the secret), because the spec is what is committed and shared, and refusing is the only thing that keeps a credential out of it.
     // What the page finds an entry by is only a warning: an entry is written as it is given, and a page a download read the bindings of may hold one with no such property, which a refusal would leave with no spec at all.
     for (const [kind, identity] of Object.entries(PAGE_BINDINGS)) {
       if (!Array.isArray(p[kind])) continue;

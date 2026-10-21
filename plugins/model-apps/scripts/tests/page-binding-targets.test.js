@@ -129,8 +129,9 @@ test('readBindingTargets quotes a name into the filter as OData text, reads many
 // ── judging what was read ────────────────────────────────────────────────────────────────────────────────────────────────────
 
 const pagesA = [{ key: 'weather', name: 'Weather', connectorBindings: [WEATHER, SHAREPOINT], actionBindings: [APPROVE, SUMMARY] }];
+// References as complete rows prove them: the connector, and a connection. Whether a reference is for a custom connector is left out — a row with a null lookup proves nothing about it.
 const targetsOf = ({ references = [], apis = [], problems = {} } = {}) => ({
-  references: new Map(references.map(([name, connector]) => [name, { connectorId: connector === undefined ? undefined : api(connector) }])),
+  references: new Map(references.map(([name, connector]) => [name, { connectorId: connector === undefined ? undefined : api(connector), connected: true }])),
   apis: new Map(apis.map(([name, value]) => [name, value])),
   problems,
 });
@@ -140,7 +141,9 @@ test('judgeBindingTargets: a reference of the same name for the SAME connector, 
     references: [['contoso_msnweather', 'SHARED_MSNWEATHER'], ['contoso_sharepoint', 'shared_sharepointonline']],
     apis: [['contoso_approveorder', { isFunction: false, boundEntity: 'CONTOSO_ITEM' }], ['contoso_getsummary', { isFunction: true }]],
   }));
-  assert.deepStrictEqual(verdict, { findings: [], unchecked: [] });
+  assert.deepStrictEqual(verdict.findings, []);
+  // The operations Weather's binding calls are not proven to be there: no row named a custom connector whose definition could be read. That is said — it is not "fine" by default.
+  assert.deepStrictEqual(verdict.unchecked.map((u) => [u.what, u.text]), [['custom connector definitions', 'the operations that connector binding "contoso_msnweather" of page "Weather" call were not checked: this environment does not name a custom connector for its connection reference, and only a custom connector\'s definition is read here (a connector the platform publishes defines the same operations in every environment of its cloud)']]);
 });
 
 test('judgeBindingTargets refuses a reference that exists for ANOTHER connector, naming the page, the binding and both connectors', () => {
@@ -154,10 +157,11 @@ test('judgeBindingTargets refuses a reference that exists for ANOTHER connector,
   assert.strictEqual(conflict.text, 'page "Weather": connector binding "contoso_msnweather" is for connector shared_msnweather, but the connection reference of that name in this environment is for connector shared_office365users');
 });
 
-test('judgeBindingTargets cannot prove a conflict from a connector that is not stated on both sides — it says nothing then, and a reference with no connector is not a conflict', () => {
+test('judgeBindingTargets cannot prove a conflict from a connector that is not stated on both sides — a reference whose row names no connector is NOT CHECKED, said by name, and never a conflict', () => {
   const pages = [{ key: 'a', name: 'A', connectorBindings: [{ logicalName: 'contoso_one' }, { logicalName: 'contoso_two', connectorId: api('shared_two') }, { logicalName: 'contoso_three', connectorId: '' }] }];
   const verdict = judgeBindingTargets(pages, targetsOf({ references: [['contoso_one', 'shared_x'], ['contoso_two', undefined], ['contoso_three', 'shared_y']] }));
-  assert.deepStrictEqual(verdict, { findings: [], unchecked: [] });
+  assert.deepStrictEqual(verdict.findings, []);
+  assert.deepStrictEqual(verdict.unchecked, [{ what: 'reference connectors', text: 'this environment\'s row for connection reference contoso_two did not say which connector it is for, so whether connector binding "contoso_two" of page "A" goes through the connector it was made for was not checked' }]);
 });
 
 test('judgeBindingTargets says by name which references and Custom APIs the environment does not have — one line per page, in the page\'s order', () => {
@@ -300,7 +304,9 @@ test('judgeBindingTargets says by name a reference of the right connector that h
   const both = judgeBindingTargets(pages, targetsWith([['contoso_msnweather', { connectorId: api('shared_msnweather'), connected: false }], ['contoso_sharepoint', { connectorId: api('shared_sharepointonline'), connected: false }]]));
   assert.match(both.findings[0].text, /^page "Weather": connection references contoso_msnweather, contoso_sharepoint are in this environment but have no connection, so the page's calls through them fail until they have one\. Give them a connection/);
   const unknown = judgeBindingTargets(pages, targetsWith([['contoso_msnweather', { connectorId: api('shared_msnweather') }], ['contoso_sharepoint', { connectorId: api('shared_sharepointonline') }]]));
-  assert.deepStrictEqual(unknown, { findings: [], unchecked: [] });
+  // A row that does not carry `connectionid` proves nothing: it is NOT CHECKED, said by name — and not a finding.
+  assert.deepStrictEqual(unknown.findings, []);
+  assert.deepStrictEqual(unknown.unchecked.filter((u) => u.what === 'reference connections').map((u) => u.text), ['this environment\'s rows for connection references contoso_msnweather, contoso_sharepoint did not say whether they have a connection, so that was not checked for page "Weather"']);
   // A reference for another connector is refused, and nothing else is said of it.
   const conflict = judgeBindingTargets(pages, targetsWith([['contoso_msnweather', { connectorId: api('shared_office365users'), connected: false }], ['contoso_sharepoint', { connectorId: api('shared_sharepointonline'), connected: true }]]));
   assert.deepStrictEqual(conflict.findings.map((f) => f.kind), ['connector-conflict']);
@@ -319,9 +325,12 @@ test('judgeBindingTargets says by name an operation a binding calls that the cus
   // Matched exactly, as the connector matches an operation id: another case is another operation.
   const cased = judgeBindingTargets(pages, targetsWith([['contoso_widgets', widgetsReference]], [[WIDGETS_CONNECTOR, new Set(['listwidgets', 'GetWidget'])]]));
   assert.deepStrictEqual(cased.findings.map((f) => f.operations), [['ListWidgets']]);
-  // A connector that is not a custom one has its operations in every environment of its cloud: a reference for the same connector is never asked for a definition, and nothing is said.
+  // A reference whose row names no custom connector — a connector the platform publishes, or a lookup left unset — is never asked for a definition, and its operations are said to be NOT CHECKED: a null
+  // lookup is no proof that the connector is not a custom one.
   const managed = judgeBindingTargets([{ key: 'weather', name: 'Weather', connectorBindings: [WEATHER] }], targetsWith([['contoso_msnweather', { connectorId: WEATHER.connectorId, connected: true }]]));
-  assert.deepStrictEqual(managed, { findings: [], unchecked: [] });
+  assert.deepStrictEqual(managed.findings, []);
+  assert.deepStrictEqual(managed.unchecked.map((u) => u.what), ['custom connector definitions']);
+  assert.match(managed.unchecked[0].text, /^the operations that connector binding "contoso_msnweather" of page "Weather" call were not checked/);
 });
 
 test('judgeBindingTargets says which operations it could not check, and why — a definition it could not read is never one that defines nothing', () => {
@@ -332,4 +341,36 @@ test('judgeBindingTargets says which operations it could not check, and why — 
   assert.deepStrictEqual(verdict.unchecked.map((u) => u.text), ['could not read the definition of the custom connector that connection reference contoso_widgets is for in this environment (connector: HTTP 403), so the operations connector binding "contoso_widgets" of page "Widgets" calls were not checked against it']);
   const notRead = judgeBindingTargets(pages, { references: new Map([['contoso_widgets', widgetsReference]]), apis: null, problems: {} });
   assert.match(notRead.unchecked[0].text, /\(its definition was not read\)/);
+});
+
+// ── successful but incomplete: a row that answers without a column the check needs ──────────────────────────────────────────────
+// A read that FAILS is said as not checked. So is a read that SUCCEEDS with a row that lacks what the check needs — the custom connector lookup absent, null or not a GUID, no `connectionid`, no
+// `connectorid`: none of it is evidence of compatibility, and none of it is evidence of a conflict either. Each is said by name as not checked; nothing is refused; what the row did prove is still judged.
+test('a successful answer that lacks a column the check needs is NOT CHECKED, by name — a missing, null or invalid lookup, a missing connectionid or connectorid — and never read as compatible', async () => {
+  const page = { key: 'widgets', name: 'Widgets', connectorBindings: [WIDGETS] };
+  const complete = { connectionreferencelogicalname: 'contoso_widgets', connectorid: WIDGETS.connectorId, connectionid: 'shared-connection-0001', _customconnectorid_value: WIDGETS_CONNECTOR };
+  const definition = { connectorid: WIDGETS_CONNECTOR, openapidefinition: swaggerOf(['ListWidgets']) };
+  const without = (row, ...keys) => { const out = { ...row }; for (const key of keys) delete out[key]; return out; };
+  const judge = async (row) => {
+    const { provision, calls } = readerOf({ connectionreference: [row], connector: [definition] });
+    return { ...judgeBindingTargets([page], await readBindingTargets(provision, [page])), reads: calls.map((c) => c.entity) };
+  };
+  const kinds = (verdict) => [verdict.findings.map((f) => f.kind), verdict.unchecked.map((u) => u.what)];
+
+  // The control: a complete row, and the definition there lacks GetWidget.
+  assert.deepStrictEqual(kinds(await judge(complete)), [['operation-missing'], []]);
+
+  for (const [label, row] of [['a missing lookup', without(complete, '_customconnectorid_value')], ['a null lookup', { ...complete, _customconnectorid_value: null }], ['a lookup that is no GUID', { ...complete, _customconnectorid_value: 'not-a-guid' }]]) {
+    const verdict = await judge(row);
+    assert.deepStrictEqual(kinds(verdict), [[], ['custom connector definitions']], label);
+    assert.deepStrictEqual(verdict.reads, ['connectionreference'], `${label}: no definition is read, as there is none to read by`);
+    assert.strictEqual(verdict.unchecked[0].text, 'the operations that connector binding "contoso_widgets" of page "Widgets" call were not checked: this environment does not name a custom connector for its connection reference, and only a custom connector\'s definition is read here (a connector the platform publishes defines the same operations in every environment of its cloud)');
+  }
+  const noConnection = await judge(without(complete, 'connectionid'));
+  assert.deepStrictEqual(kinds(noConnection), [['operation-missing'], ['reference connections']], 'what the row did prove is still judged');
+  const noConnector = await judge(without(complete, 'connectorid'));
+  assert.deepStrictEqual(kinds(noConnector), [['operation-missing'], ['reference connectors']]);
+  const bare = await judge(without(complete, 'connectorid', 'connectionid', '_customconnectorid_value'));
+  assert.deepStrictEqual(kinds(bare), [[], ['reference connectors', 'reference connections', 'custom connector definitions']]);
+  assert.ok(bare.findings.every((f) => f.severity !== 'refuse'), 'missing evidence never refuses');
 });

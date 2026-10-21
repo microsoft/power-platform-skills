@@ -713,12 +713,13 @@ not everything:**
 **Page bindings and another environment.** A page's connector and Custom API bindings are in the spec, by the
 properties the references document — `logicalName`, `connectorId`, `dataset`, `tables`, `tableDisplayNames`,
 `operations` for a connector binding; `name`, `isFunction`, `boundEntityLogicalName`, `displayName`,
-`parameterKinds` for a Custom API binding — and by nothing else, so a rebuild writes them back into this
-environment and into another one. What a binding holds beyond that (a connection id, a credential, a property
-no spec states) is **not** in the spec: when the pull's result carries `pageBindings.propertiesLeftOut`, tell the
-user which properties were left out (it names them, never their values), and that the page folder's own
-`config.json` still holds them — they must not commit or share that folder if a value there is a credential. A
-spec that states one is refused. A rebuild cannot make what the bindings *name*. When the pull's result carries
+`parameterKinds` for a Custom API binding — each with a value of a shape known to be safe, and by nothing else,
+so a rebuild writes them back into this environment and into another one. A list in which any binding holds
+anything else (a connection id, a credential, a property no spec states, a URL with a query) is **not** in the
+spec at all: the pull's `pageBindings.notCarried` names the page, the list and the entry's place (never a value),
+and the page keeps that list as it is. Tell the user, and that the page folder's own `config.json` still holds
+everything — they must not commit or share that folder if a value there is a credential. A spec that states such
+a binding is refused. A rebuild cannot make what the bindings *name*. When the pull's result carries
 `pageBindings`, tell the user what it says before any rebuild into another environment: `neededInTarget` lists
 the connection references (and the connections behind them), the Custom APIs and the service resources (a
 SharePoint site and its list ids, say) that environment must already have, and `notCarried` the lists the spec
@@ -727,8 +728,9 @@ with `/genpage`). The rebuild itself reads that environment's references before 
 (`pages-binding-reference-conflict`, nothing written) at a connection reference of that name that is for another
 connector — give the binding the logical name of a reference that is for the right connector, or set the
 binding's `connectorId` to the one that environment has, and never pick a reference for the user — and its
-warnings say by name each reference or Custom API that is not there yet, a reference that has no connection, and
-an operation the custom connector there does not define: relay them. Do not write bindings into a
+warnings say by name each reference or Custom API that is not there yet, a reference that has no connection, an
+operation the custom connector there does not define, and what it could NOT check (a row that did not say its
+connector or connection, or operations no custom connector definition could prove): relay them. Do not write bindings into a
 spec yourself — they come from a page a pull read — and when you reset a page to `intent` to regenerate it, delete
 its bindings from the spec: the generator writes no connector code.
 

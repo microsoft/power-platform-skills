@@ -2,9 +2,10 @@
 // What an App Spec states of a generative page's connector and Custom API bindings, and what a rebuild does with it (lib/page-bindings.js).
 //
 // A binding a page holds can carry more than the runtime reads: a connection id of the environment it was made in, a credential someone put in a connectors.json (genpage-upload.js takes any JSON array),
-// a property a later runtime adds. The spec is committed, reviewed and shared, so it states a binding by an ALLOWLIST of the properties references/connectors.md and references/custom-api.md document, each
-// with the kind of value it holds — never a value that can carry a secret by shape (an object, a nested list) — and the rest is left out and named. A rebuild into the environment a page came from then has
-// to leave on the page what the spec could not state: mergeBindings is that rule, and what planEdits (genpage-sdk.js) reads a list as "already holds" with.
+// a property a later runtime adds — as a value, as a key, inside a URL. The spec is committed, reviewed and shared, so it states a list only WHOLE: every key one of the properties references/connectors.md and
+// references/custom-api.md document, every value of a conservative shape known to be safe (page-bindings.js has the threat model). Anything else leaves the list out of the spec, said by its place and a vetted
+// name, never the value or an unrecognized key. A rebuild into the environment a page came from leaves on the page what a spec does not state: mergeBindings is that rule, and what planEdits (genpage-sdk.js)
+// reads a list as "already holds" with.
 const { test } = require('node:test');
 const assert = require('node:assert');
 const {
@@ -48,139 +49,85 @@ test('the properties a spec states of a binding are the ones the references docu
   assert.deepStrictEqual([...PARAMETER_KINDS].sort(), Object.values(PARAMETER_KIND_BY_TYPE).sort(), 'list-custom-apis.js writes exactly these kinds into parameterKinds');
 });
 
-test('statableBinding keeps the properties a spec states, in the entry\'s own order and as copies, and leaves out every other property by its name', () => {
-  const entry = { connectionId: 'x', dataset: 'd', logicalName: 'contoso_a', credentials: { accessToken: 't' }, connectorId: '/providers/Microsoft.PowerApps/apis/shared_a', tables: ['t1'], operations: ['Op'], zzz: 1 };
+test('statableBinding states a documented entry whole — a REST and a tabular connector binding, a SQL dataset and table, a custom connector, a Custom API with its parameter kinds — in the entry\'s order, as copies', () => {
+  const SQL = { logicalName: 'contoso_sql', connectorId: 'shared_sql', dataset: 'contoso.database.windows.net,Sales', tables: ['[dbo].[Orders]'], tableDisplayNames: ['Orders'] };
+  const CUSTOM = { logicalName: 'contoso_widgets', connectorId: '/providers/Microsoft.PowerApps/apis/shared_contoso-5fwidgets-5f6a8c', dataset: '', operations: ['ListWidgets', 'Get-Widget.v2'] };
+  const SUMMARY = { name: 'contoso_GetSummary', isFunction: true, displayName: 'Get summary (v2) — Sales & Ops', parameterKinds: { ItemId: 'Guid', _Note: 'String' } };
+  const SITE = { ...SHAREPOINT, dataset: 'https://contoso.sharepoint.com/sites/Team%20Site/Shared%20Documents', tableDisplayNames: ['Équipes', 'Pets'] };
+  for (const [kind, entry] of [['connectorBindings', WEATHER], ['connectorBindings', SHAREPOINT], ['connectorBindings', SQL], ['connectorBindings', CUSTOM], ['connectorBindings', SITE], ['actionBindings', APPROVE], ['actionBindings', SUMMARY]]) {
+    const { stated, leftOut } = statableBinding(kind, deepFreeze(JSON.parse(JSON.stringify(entry))));
+    assert.deepStrictEqual(leftOut, [], JSON.stringify(entry));
+    assert.deepStrictEqual(stated, entry);
+    assert.deepStrictEqual(Object.keys(stated), Object.keys(entry), 'in the entry\'s own order');
+  }
+  const held = { ...APPROVE, parameterKinds: { Comment: 'String' } };
+  const { stated } = statableBinding('actionBindings', held);
+  assert.notStrictEqual(stated.parameterKinds, held.parameterKinds, 'a copy: a later edit of the spec does not reach the page\'s entry');
+});
+
+// The values a credential takes when it hides in a property a spec DOES state. Each must leave its value out: a value is stated only with a shape that is positively known to be safe, and a URL only when its
+// PARSED form has no user-info, no query and no fragment. Synthetic markers only.
+const MARK = 'SYNTHETIC_CREDENTIAL_R3';
+const TOKEN = `ghp_${'R'.repeat(36)}`;
+const UNSAFE_VALUES = [
+  ['connectorBindings', 'dataset', `https://${MARK}@contoso.example/data`, 'a token alone in the user-info of a URL'],
+  ['connectorBindings', 'dataset', `https://maker:${MARK}@contoso.example/data`, 'a password in the user-info'],
+  ['connectorBindings', 'dataset', `https://contoso.example/data?api%5Fkey=${MARK}`, 'a percent-encoded key in a query'],
+  ['connectorBindings', 'dataset', `https://contoso.example/data?x=${MARK}`, 'any query'],
+  ['connectorBindings', 'dataset', 'https://contoso.example/data?', 'an empty query, which a parser drops'],
+  ['connectorBindings', 'dataset', `https://contoso.example/data#access_token=${MARK}`, 'a fragment'],
+  ['connectorBindings', 'dataset', `https://contoso.example/sites/a%40${MARK}`, 'an encoded @ in the path'],
+  ['connectorBindings', 'dataset', `https://contoso.example/sites/0123456789abcdef0123456789abcdef${MARK}`, 'a digest-shaped path segment'],
+  ['connectorBindings', 'dataset', `ftp://contoso.example/${MARK}`, 'a scheme that is not http(s)'],
+  ['connectorBindings', 'dataset', JSON.stringify({ accessToken: MARK }), 'JSON text'],
+  ['connectorBindings', 'dataset', `Server=sql.contoso.example;Password=${MARK}`, 'a connection string'],
+  ['connectorBindings', 'logicalName', `Bearer ${MARK}`, 'an authorization value as the identity'],
+  ['connectorBindings', 'logicalName', TOKEN, 'a token-format identity'],
+  ['connectorBindings', 'connectorId', `/providers/Microsoft.PowerApps/apis/shared_x?sig=${MARK}`, 'a connector id with a query'],
+  ['connectorBindings', 'tables', [`${MARK}=1`], 'a table with a key=value'],
+  ['connectorBindings', 'tableDisplayNames', [`https://${MARK}@contoso.example`], 'a label that is a URL'],
+  ['connectorBindings', 'operations', [`eyJhbGciOiJIUzI1NiJ9.${MARK}`], 'a JSON Web Token as an operation'],
+  ['actionBindings', 'displayName', `https://${MARK}@contoso.example/api`, "a Custom API's display name that is a URL"],
+  ['actionBindings', 'displayName', `Bearer ${MARK}`, 'an authorization value as a label'],
+  ['actionBindings', 'displayName', `key=${MARK}`, 'a label with a key=value'],
+  ['actionBindings', 'boundEntityLogicalName', `contoso_item ${MARK}`, 'a table name with a space'],
+  ['actionBindings', 'parameterKinds', { [TOKEN]: 'String' }, 'a token as a parameter name'],
+  ['actionBindings', 'parameterKinds', { [`x${MARK}`.toLowerCase()]: MARK }, 'a parameter kind that is not one'],
+];
+
+test('a value is stated only with a conservative shape known to be safe — a credential in a URL\'s user-info, query or fragment, encoded, as a token, a JWT or JSON text is left out, and never quoted', () => {
+  for (const [kind, property, value, what] of UNSAFE_VALUES) {
+    const base = kind === 'connectorBindings' ? SHAREPOINT : APPROVE;
+    const { stated, leftOut } = statableBinding(kind, { ...base, [property]: value });
+    assert.ok(!(property in stated), `${what}: not stated`);
+    assert.deepStrictEqual(leftOut.map((l) => l.property), [property], what);
+    assert.ok(!JSON.stringify(leftOut).includes(MARK) && !JSON.stringify(leftOut).includes(TOKEN), `${what}: the value is never in what is said`);
+    assert.ok(!bindingProblemText(kind, 0, leftOut[0]).includes(MARK), what);
+  }
+});
+
+test('a key is stated only when it is a documented property — any other is "an unrecognized property", and the key itself is never said: a token can be the NAME of a property', () => {
+  const entry = { ...WEATHER, [TOKEN]: true, connectionId: 'x', credentials: { accessToken: MARK }, constructor: 1 };
   const { stated, leftOut } = statableBinding('connectorBindings', entry);
-  assert.deepStrictEqual(Object.keys(stated), ['dataset', 'logicalName', 'connectorId', 'tables', 'operations'], 'the page\'s own order');
-  assert.deepStrictEqual(stated, { dataset: 'd', logicalName: 'contoso_a', connectorId: '/providers/Microsoft.PowerApps/apis/shared_a', tables: ['t1'], operations: ['Op'] });
-  assert.deepStrictEqual(leftOut, [{ property: 'connectionId', why: 'not-stated' }, { property: 'credentials', why: 'not-stated' }, { property: 'zzz', why: 'not-stated' }], 'by name, in code-unit order');
-  stated.tables.push('t2');
-  assert.deepStrictEqual(entry.tables, ['t1'], 'a copy: changing what is stated does not change the page\'s entry');
-  // The same property is not one for the other kind of binding.
-  assert.deepStrictEqual(statableBinding('actionBindings', { name: 'contoso_a', logicalName: 'contoso_a' }), { stated: { name: 'contoso_a' }, leftOut: [{ property: 'logicalName', why: 'not-stated' }] });
-  assert.deepStrictEqual(statableBinding('connectorBindings', {}), { stated: {}, leftOut: [] });
+  assert.deepStrictEqual(stated, WEATHER);
+  assert.deepStrictEqual(leftOut, Array(4).fill({ property: UNUSUAL_NAME, why: 'not-stated' }));
+  const said = JSON.stringify(leftOut) + bindingProblemText('connectorBindings', 0, leftOut[0]);
+  for (const secret of [TOKEN, 'connectionId', 'credentials', MARK]) assert.ok(!said.includes(secret), secret);
+  assert.strictEqual(bindingProblemText('connectorBindings', 2, leftOut[0]), 'connectorBindings[2] holds an unrecognized property, which an App Spec does not state (a binding states only logicalName, connectorId, dataset, tables, tableDisplayNames, operations)');
+  assert.strictEqual(bindingProblemText('actionBindings', 0, { property: 'displayName', why: 'label' }), 'actionBindings[0].displayName must be a plain label (letters, digits, spaces and simple punctuation; no URL)');
 });
 
-test('each property is stated only with the kind of value it holds: a text, a list of texts, a flag, a map of Dataverse parameter kinds', () => {
-  const left = (kind, property, value) => statableBinding(kind, { [property]: value }).leftOut.map((l) => `${l.property}:${l.why}`);
-  for (const property of ['logicalName', 'connectorId', 'dataset']) {
-    assert.deepStrictEqual(left('connectorBindings', property, 'ok'), []);
-    assert.deepStrictEqual(left('connectorBindings', property, ''), [], 'an empty text is a text: the SharePoint-less weather binding has dataset ""');
-    for (const value of [1, true, null, ['a'], { a: 'b' }]) assert.deepStrictEqual(left('connectorBindings', property, value), [`${property}:not-text`], `${property} = ${JSON.stringify(value)}`);
-  }
-  for (const property of ['tables', 'tableDisplayNames', 'operations']) {
-    assert.deepStrictEqual(left('connectorBindings', property, []), []);
-    assert.deepStrictEqual(left('connectorBindings', property, ['a', 'b']), []);
-    for (const value of ['a', 1, null, { a: 'b' }, ['a', 1], ['a', { id: 'x', clientSecret: 's' }], [['a']], ['a', null]]) assert.deepStrictEqual(left('connectorBindings', property, value), [`${property}:not-text-list`], `${property} = ${JSON.stringify(value)}`);
-  }
-  for (const property of ['name', 'boundEntityLogicalName', 'displayName']) {
-    assert.deepStrictEqual(left('actionBindings', property, 'ok'), []);
-    for (const value of [1, false, ['a'], { en: 'x' }]) assert.deepStrictEqual(left('actionBindings', property, value), [`${property}:not-text`], `${property} = ${JSON.stringify(value)}`);
-  }
-  assert.deepStrictEqual(left('actionBindings', 'isFunction', true), []);
-  assert.deepStrictEqual(left('actionBindings', 'isFunction', false), []);
-  for (const value of ['true', 0, null, [], {}]) assert.deepStrictEqual(left('actionBindings', 'isFunction', value), ['isFunction:not-boolean'], JSON.stringify(value));
-
-  assert.deepStrictEqual(left('actionBindings', 'parameterKinds', {}), []);
-  assert.deepStrictEqual(left('actionBindings', 'parameterKinds', Object.fromEntries(PARAMETER_KINDS.map((kind, i) => [`Param${i}`, kind]))), [], 'every kind the discovery script writes');
-  for (const value of [{ Comment: 'Text' }, { Comment: 1 }, { Comment: null }, { Comment: { kind: 'String' } }, { 'not a name': 'String' }, { '': 'String' }, ['String'], 'String', null, 7, { [`${'p'.repeat(129)}`]: 'String' }]) {
-    assert.deepStrictEqual(left('actionBindings', 'parameterKinds', value), ['parameterKinds:not-parameter-kinds'], JSON.stringify(value));
-  }
+test('statableBindings states a list WHOLE or not at all — the first entry that holds anything else is said by its place and a vetted name, and nothing of the list is projected', () => {
+  const whole = statableBindings('connectorBindings', [WEATHER, SHAREPOINT]);
+  assert.deepStrictEqual(whole, { stated: [WEATHER, SHAREPOINT], problem: null });
+  // An entry whose identity alone is unsafe: projecting the rest would write an entry with no identity, and a rebuild would replace the page's entry with it.
+  const identity = statableBindings('connectorBindings', [WEATHER, { ...SHAREPOINT, logicalName: `Bearer ${MARK}` }]);
+  assert.deepStrictEqual(identity, { stated: null, problem: { entry: 1, property: 'logicalName', why: 'identifier' } });
+  const unknown = statableBindings('actionBindings', [{ ...APPROVE, [TOKEN]: 1 }]);
+  assert.deepStrictEqual(unknown, { stated: null, problem: { entry: 0, property: UNUSUAL_NAME, why: 'not-stated' } });
+  assert.deepStrictEqual(statableBindings('actionBindings', []), { stated: [], problem: null });
+  assert.ok(!JSON.stringify([identity, unknown]).includes(MARK) && !JSON.stringify(unknown).includes(TOKEN));
 });
-
-test('a text that holds a credential is not stated, whatever its property — and an ordinary dataset, table name or label is', () => {
-  const credentialShaped = [
-    'https://admin:hunter2@contoso.sharepoint.com/sites/x',
-    'ftp://user:pw@host/path',
-    'https://contoso.blob.core.windows.net/c?sv=2022-11-02&sig=abc123',
-    'GetItems?token=abc',
-    'Server=sql.contoso.net;Database=Sales;Password=hunter2',
-    'Server=sql.contoso.net; Database=Sales; PWD = hunter2',
-    'accountKey=abc',
-    'AccessToken=abc',
-    'client_secret=abc',
-    'api-key=abc',
-    'SharedAccessSignature=abc',
-    'Bearer abcdefgh12345',
-    'bearer abcdefgh.ijklmnop',
-    'eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.abc',
-  ];
-  for (const text of credentialShaped) {
-    for (const [kind, property] of [['connectorBindings', 'dataset'], ['connectorBindings', 'logicalName'], ['actionBindings', 'displayName']]) {
-      assert.deepStrictEqual(statableBinding(kind, { [property]: text }).leftOut, [{ property, why: 'credential-shaped' }], `${property}: ${text}`);
-    }
-    assert.deepStrictEqual(statableBinding('connectorBindings', { operations: ['Fine', text] }).leftOut, [{ property: 'operations', why: 'credential-shaped' }], `in a list: ${text}`);
-  }
-  const ordinary = [
-    'https://contoso.sharepoint.com/sites/x',
-    'https://contoso.sharepoint.com/sites/Team Docs/Lists/Pets',
-    'sql.contoso.net,Sales',
-    '5709dd6f-c73e-4079-ad23-2334e45e0e13',
-    'Approve order',
-    'Orders: open & closed',
-    'Tokens and keys',
-    'Q&A, answered',
-    '/providers/Microsoft.PowerApps/apis/shared_msnweather',
-    'Get_rows_by_ID',
-  ];
-  for (const text of ordinary) assert.deepStrictEqual(statableBinding('connectorBindings', { dataset: text, tableDisplayNames: [text] }).leftOut, [], text);
-});
-
-test('a text with a control character, or longer than a spec states, is left out; so is a list of too many', () => {
-  assert.deepStrictEqual(statableBinding('connectorBindings', { dataset: 'a\nb' }).leftOut, [{ property: 'dataset', why: 'not-text' }]);
-  assert.deepStrictEqual(statableBinding('connectorBindings', { dataset: 'a'.repeat(2048) }).leftOut, []);
-  assert.deepStrictEqual(statableBinding('connectorBindings', { dataset: 'a'.repeat(2049) }).leftOut, [{ property: 'dataset', why: 'too-long' }]);
-  assert.deepStrictEqual(statableBinding('connectorBindings', { tables: Array.from({ length: 1000 }, (_, i) => `t${i}`) }).leftOut, []);
-  assert.deepStrictEqual(statableBinding('connectorBindings', { tables: Array.from({ length: 1001 }, (_, i) => `t${i}`) }).leftOut, [{ property: 'tables', why: 'too-long' }]);
-});
-
-test('a property is named in a report only when its name is a plain identifier — a name can carry a value too', () => {
-  const entry = { 'Authorization: Bearer abc': 1, 'sk-live-abc': 2, 'has space': 3, '': 4, [`x${'y'.repeat(60)}`]: 5, connectionId: 6, _private: 7 };
-  const left = statableBinding('connectorBindings', entry).leftOut.map((l) => l.property);
-  assert.deepStrictEqual(left.filter((p) => p === UNUSUAL_NAME).length, 6, 'six names that are not plain identifiers');
-  assert.ok(left.includes('connectionId'));
-  assert.strictEqual(UNUSUAL_NAME, '(a property with an unusual name)');
-  assert.ok(!left.some((p) => /Bearer|sk-live|space/.test(p)));
-});
-
-// ── a list ───────────────────────────────────────────────────────────────────────────────────────────────────────────────────
-
-test('statableBindings projects a list entry by entry, says which entry left what out, names the entry by what a spec states of it, and finds an entry that states nothing', () => {
-  const list = [HELD_WEATHER, { credentials: { accessToken: 't' } }, HELD_SHAREPOINT, WEATHER];
-  const { stated, leftOut, blank } = statableBindings('connectorBindings', list);
-  assert.deepStrictEqual(stated, [WEATHER, {}, SHAREPOINT, WEATHER]);
-  assert.deepStrictEqual(blank, [1], 'the second entry holds nothing a spec states');
-  assert.deepStrictEqual(leftOut, [
-    { entry: 0, binding: 'contoso_msnweather', properties: [{ property: 'connectionId', why: 'not-stated' }, { property: 'futureProperty', why: 'not-stated' }] },
-    { entry: 1, properties: [{ property: 'credentials', why: 'not-stated' }] },
-    { entry: 2, binding: 'contoso_sharepoint', properties: [{ property: 'apiKey', why: 'not-stated' }] },
-  ]);
-  assert.deepStrictEqual(statableBindings('actionBindings', []), { stated: [], leftOut: [], blank: [] });
-});
-
-test('an entry is named only by an identity a spec can state: one that is not a text, or holds a credential, is not echoed', () => {
-  const { leftOut } = statableBindings('connectorBindings', [{ logicalName: 'Bearer abcdefgh12345', connectionId: 'x' }, { logicalName: { a: 1 }, connectionId: 'x' }]);
-  assert.deepStrictEqual(leftOut.map((l) => 'binding' in l), [false, false]);
-});
-
-// ── what a validator says ────────────────────────────────────────────────────────────────────────────────────────────────────
-
-test('bindingProblemText says what is wrong with a property in words that quote its name and never its value', () => {
-  assert.strictEqual(bindingProblemText('connectorBindings', 0, { property: 'connectionId', why: 'not-stated' }),
-    'connectorBindings[0].connectionId is not a property an App Spec states (a binding states only logicalName, connectorId, dataset, tables, tableDisplayNames, operations) — remove it');
-  assert.strictEqual(bindingProblemText('actionBindings', 2, { property: 'headers', why: 'not-stated' }),
-    'actionBindings[2].headers is not a property an App Spec states (a binding states only name, isFunction, boundEntityLogicalName, displayName, parameterKinds) — remove it');
-  assert.strictEqual(bindingProblemText('connectorBindings', 1, { property: UNUSUAL_NAME, why: 'not-stated' }),
-    'connectorBindings[1] has a property with an unusual name, which an App Spec does not state — remove it');
-  assert.strictEqual(bindingProblemText('connectorBindings', 0, { property: 'operations', why: 'not-text-list' }), 'connectorBindings[0].operations must be a list of texts');
-  assert.strictEqual(bindingProblemText('connectorBindings', 0, { property: 'dataset', why: 'not-text' }), 'connectorBindings[0].dataset must be a text');
-  assert.strictEqual(bindingProblemText('actionBindings', 0, { property: 'isFunction', why: 'not-boolean' }), 'actionBindings[0].isFunction must be true or false');
-  assert.strictEqual(bindingProblemText('actionBindings', 0, { property: 'parameterKinds', why: 'not-parameter-kinds' }), 'actionBindings[0].parameterKinds must map parameter names to Dataverse parameter kinds');
-  assert.strictEqual(bindingProblemText('connectorBindings', 0, { property: 'dataset', why: 'credential-shaped' }), 'connectorBindings[0].dataset looks like it holds a credential, which an App Spec never states');
-  assert.strictEqual(bindingProblemText('connectorBindings', 0, { property: 'dataset', why: 'too-long' }), 'connectorBindings[0].dataset is longer than an App Spec states');
-});
-
-// ── a rebuild leaves on the page what the spec could not state ───────────────────────────────────────────────────────────────
 
 test('mergeBindings: the entries a spec states as the page holds them merge into exactly the page\'s own — so nothing is written, and nothing a spec could not state is lost', () => {
   const held = [HELD_WEATHER, HELD_SHAREPOINT];
