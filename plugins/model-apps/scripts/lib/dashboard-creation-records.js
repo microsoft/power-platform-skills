@@ -26,13 +26,17 @@
 //   { "schemaVersion": 1, "environmentFingerprint": "<sha256 of the origin>", "appUniqueName": "contoso_app", "solutionUniqueName": "contososolution",
 //     "dashboards": { "Ops Overview": { "id": "11111111-1111-4111-8111-111111111111" },
 //                     "Sales": { "id": "33333333-3333-4333-8333-333333333333", "reportedId": "44444444-4444-4444-8444-444444444444" } } }
-// `reportedId` appears only when the push reported another id than the one the build sent; both observations are kept, so the next build reads both and
-// never confirms one on the other's word. Names are compared as Dataverse compares dashboard names (app-spec.js dashboardNameKey); the file keeps a name
-// as the build wrote it, sorted by that comparison, so the same dashboards are the same bytes. Written atomically.
+// `reportedId` appears only when the push reported another id than the one the build sent; both observations are kept, and they are not equal: the
+// reported id is the row the create made, the sent one was never seen to make anything, so the next build recovers only the reported row and never
+// adopts the sent one on its own (sdk-build.js recoverRecordedDashboard). Names are compared as Dataverse compares dashboard names (app-spec.js
+// dashboardNameKey); the file keeps a name as the build wrote it, sorted by that comparison, so the same dashboards are the same bytes. Written atomically.
 //
-// A file that cannot be read — damaged, a link where the file should be, a folder, too large, one written for another environment, app or solution — is
-// "nothing is recorded", which is what the build did before there was a record: it finds dashboards by name. The run then writes no record of its own
-// either, so a file it cannot read is never replaced by one that would lose what it held; the warning names it, for a person to look at and remove.
+// A file that cannot be read — damaged, a link where the file should be, a folder, too large, one written for another environment, app or solution, or
+// one holding an entry the build never writes (an id or a reported id that is no id, a reported id equal to the id, a key it does not write, two names
+// Dataverse compares as one) — is "nothing is recorded", which is what the build did before there was a record: it finds dashboards by name. An entry
+// is never skipped on its own: what it held may be the only trace of a dashboard outside its solution, and a record that went on being written would
+// lose it (a note() would replace the file, a clear() of the last good entry would delete it). The run then writes no record of its own either, so a
+// file it cannot read is never replaced or removed; the warning names it, for a person to look at and remove.
 const fs = require('node:fs');
 const path = require('node:path');
 const { sha256 } = require('./hash.js');
@@ -62,7 +66,7 @@ function dashboardCreationRecordPath(workspaceDir, environment, appUniqueName, s
 }
 
 // The recorded dashboards, as Map<dashboardNameKey(name), { name, id, reportedId? }>. Throws what stops the file from being read (the caller decides that is
-// only a warning); a workspace or a file that does not exist is an empty map. An entry without a usable id is not one.
+// only a warning); a workspace or a file that does not exist is an empty map. An entry the build does not write makes the whole file unreadable.
 function readDashboardCreations(workspaceDir, environment, appUniqueName, solutionUniqueName) {
   const known = new Map();
   const root = workspaceRoot(workspaceDir);
@@ -82,11 +86,17 @@ function readDashboardCreations(workspaceDir, environment, appUniqueName, soluti
     throw new Error(`${file} is not a dashboard creation record this build can read`);
   }
   for (const [name, entry] of Object.entries(record.dashboards)) {
-    const id = entry && typeof entry === 'object' ? idOf(entry.id) : null;
-    const reportedId = entry && entry.reportedId !== undefined ? idOf(entry.reportedId) : undefined;
-    // A reported id that is not one makes the whole entry unusable: reading only the other id could prove "absent" while the row the service named exists.
-    if (!name || !id || reportedId === null) continue;
-    known.set(dashboardNameKey(name), { name, id, ...(reportedId && reportedId !== id ? { reportedId } : {}) });
+    // Exactly what the writer writes, or the whole record is unreadable (see the header): `{ "id": "<guid>" }` or `{ "id": "<guid>", "reportedId": "<another guid>" }`
+    // under a name no other entry shares as Dataverse compares names. Reading only the id of an entry whose reported id is damaged could prove "absent" while the
+    // row the service named exists; keeping one of two entries for the same name would drop the other's id.
+    const key = dashboardNameKey(name);
+    const shaped = Boolean(entry) && typeof entry === 'object' && !Array.isArray(entry) && Object.keys(entry).every((k) => k === 'id' || k === 'reportedId');
+    const id = shaped ? idOf(entry.id) : null;
+    const reportedId = shaped && entry.reportedId !== undefined ? idOf(entry.reportedId) : undefined;
+    if (!key || !id || reportedId === null || reportedId === id || known.has(key)) {
+      throw new Error(`${file} holds an entry this build does not write (dashboard '${name}')`);
+    }
+    known.set(key, { name, id, ...(reportedId ? { reportedId } : {}) });
   }
   return known;
 }

@@ -118,6 +118,40 @@ test('the record never stops a build: one it cannot read is "nothing recorded", 
   assert.equal(open(scratch()).note(BOARD, 'not-a-guid'), false, 'an id that is no id is not recorded');
 });
 
+// An entry the build never writes — an id or a reported id that is no id, or two names Dataverse compares as one — is not skipped: what it
+// held may be the only trace of a dashboard outside its solution, and a record that went on being written would lose it (a note() replaced
+// the file, a clear() of the last good entry deleted it). The whole record is unreadable for the run, as a damaged file is.
+const ID_C = '33333333-cccc-4ccc-8ccc-333333333333';
+const MALFORMED_ENTRIES = [
+  ['a reported id that is no id', (dashboards) => { dashboards[BOARD].reportedId = 'damaged'; }],
+  ['an id that is no id', (dashboards) => { dashboards[BOARD].id = 'damaged'; }],
+  ['two names Dataverse compares as one', (dashboards) => { dashboards['OPS OVERVIEW '] = { id: ID_C }; }],
+];
+
+for (const [what, damage] of MALFORMED_ENTRIES) {
+  test(`an entry this build never writes — ${what} — makes the whole record unreadable: said once, nothing is read from it, not even a good sibling, and neither note() nor clear() writes or deletes it`, () => {
+    const dir = scratch();
+    const first = open(dir);
+    assert.equal(first.note(BOARD, ID_A), true);
+    assert.equal(first.note('Sibling', ID_B), true, 'a good sibling');
+    const file = records().dashboardCreationRecordPath(dir, ENV, APP, SOLUTION);
+    const record = JSON.parse(fs.readFileSync(file, 'utf8'));
+    damage(record.dashboards);
+    const bytes = Buffer.from(`${JSON.stringify(record)}\n`);
+    fs.writeFileSync(file, bytes);
+    const warnings = [];
+    const run = open(dir, { warn: (w) => warnings.push(w) });
+    assert.equal(run.idsOf(BOARD), undefined, 'nothing is read from it');
+    assert.equal(run.idsOf('Sibling'), undefined, 'not even the good sibling');
+    assert.equal(run.note('Another', ID_C), false, 'note() does not write over it');
+    assert.equal(run.observe('Sibling', ID_C), false, 'observe() does not either');
+    assert.equal(run.clear('Sibling'), false, 'clear() does not delete it');
+    assert.deepEqual(fs.readFileSync(file), bytes, 'its bytes are left intact');
+    assert.equal(warnings.length, 1, `said once: ${JSON.stringify(warnings)}`);
+    assert.match(warnings[0], /could not be read .*so this build finds dashboards by name, as before, and records none of its own/);
+  });
+}
+
 // --- the environment ---------------------------------------------------------------------------------------------------------------------------------------
 
 // A fake environment, and a seam in front of its transport that answers what a test's faults name instead of the fake. A refused request
@@ -182,6 +216,10 @@ const recordReads = (org, mark, id) => org.since(mark).filter((r) => r.method ==
 const recordFile = (env) => path.join(env.harness.workspaceDir, `dashboard-creation.${sha256(JSON.stringify([environmentFingerprint(env.org.origin), APP, SOLUTION.toLowerCase()]))}.json`);
 function recorded(env) {
   try { return JSON.parse(fs.readFileSync(recordFile(env), 'utf8')).dashboards; } catch (e) { if (e.code === 'ENOENT') return null; throw e; }
+}
+// A record of the shape the build writes, for this environment, app and solution, holding `dashboards` as given.
+function plantRecord(file, env, dashboards) {
+  fs.writeFileSync(file, `${JSON.stringify({ schemaVersion: 1, environmentFingerprint: environmentFingerprint(env.org.origin), appUniqueName: APP, solutionUniqueName: SOLUTION.toLowerCase(), dashboards })}\n`);
 }
 const recordFiles = (env) => fs.readdirSync(env.harness.workspaceDir).filter((name) => name.startsWith('dashboard-creation.'));
 
@@ -476,7 +514,7 @@ test('the record names a dashboard the service still answers to, but its add to 
   assert.equal(recorded(env), null);
 });
 
-test('both ids the record holds answer — the one the build sent and the one the service reported: the build cannot tell which it created, adds neither, deletes neither, and stops', async () => {
+test('both ids the record holds answer — the one the build sent and the one the service reported: the build cannot tell which it created, adds neither, deletes neither, and stops with a way out that deletes nothing', async () => {
   const env = environment();
   const reported = '0e0e0e0e-0000-4000-8000-00000000000e';
   const rekey = env.add('POST', isDashboardCreate, (req, body) => env.org.request({ ...req, body: JSON.stringify({ ...body, formid: reported }) }));
@@ -492,9 +530,41 @@ test('both ids the record holds answer — the one the build sent and the one th
   assert.deepEqual(creates(env.org, halted.mark), []);
   assert.deepEqual(memberships(env.org, halted.mark), []);
   assert.deepEqual(formDeletes(env.org, halted.mark), []);
-  assert.match(halted.error.message, new RegExp(`dashboard "${BOARD}": an earlier build stopped after creating it, and each of the ids it recorded for it \\(${sent}, ${reported}\\) names a row now, so it cannot tell which is the one it created\\. Nothing was added to the solution or deleted\\. Delete the one that is not this app's in Maker, and run the build again\\.`));
+  assert.match(halted.error.message, new RegExp(`dashboard "${BOARD}": an earlier build stopped after creating it, and both ids it recorded for it name a row now — ${sent}, the id its create was sent with, and ${reported}, the id the service reported for the dashboard it made — so it cannot tell on its own which one is this app's\\. Nothing was added to the solution or deleted\\. Do not delete either dashboard to settle this: the other one may be another app's\\. Check in Maker which one this app's build made \\(the service reported ${reported}\\), add that one to solution '${SOLUTION}' and publish it there, then remove the entry '${BOARD}' from .*dashboard-creation\\.[0-9a-f]{64}\\.json and run the build again: it then reuses the dashboard the solution holds and leaves the other as it is\\.`));
+  assert.doesNotMatch(halted.error.message, /(?<!not )\bdelete\b/i, 'the way out asks for no dashboard to be deleted');
   assert.equal(isTransientHalt(halted.error), false);
   assert.deepEqual(recorded(env), left, 'the record is kept');
+  assert.deepEqual(boards(env.org).sort(), [sent, reported].sort(), 'both rows are left as they are');
+});
+
+// After a re-keyed create, the id the SERVICE reported is the row the create made; the id the build sent was never seen to make anything. When
+// the reported row is gone and only the sent id answers, that row's being there is no evidence it is this app's — another maker can have made it
+// since — and adding it to the solution would give teardown the authority to delete it.
+test('after a re-keyed create, only the id the service reported is the row the create made: when that row is gone and only the id the build sent answers, the next build adds nothing, deletes nothing, creates nothing, keeps the record and stops', async () => {
+  const env = environment();
+  const reported = '0f0f0f0f-0000-4000-8000-00000000000f';
+  const rekey = env.add('POST', isDashboardCreate, (req, body) => env.org.request({ ...req, body: JSON.stringify({ ...body, formid: reported }) }));
+  await dieAtMembership(env);
+  rekey.lift();
+  const left = recorded(env);
+  assert.ok(left && left[BOARD] && left[BOARD].reportedId === reported, JSON.stringify(left));
+  const sent = left[BOARD].id;
+  // Another maker's dashboard of the same name at the id the build sent, made in Maker since; and the dashboard the create made, deleted since.
+  await inMaker(env.org, 'POST', '/systemforms', { formid: sent, name: BOARD, type: 0, formxml: '<form><tabs /></form>' });
+  await inMaker(env.org, 'DELETE', `/systemforms(${reported})`);
+  const before = env.org.contents()[`row systemforms ${sent}`];
+  const halted = await env.harness.measure(() => env.harness.build(spec()));
+  assert.deepEqual(memberships(env.org, halted.mark), [], 'the row at the id the build sent is never added to the solution');
+  assert.deepEqual(creates(env.org, halted.mark), [], 'no dashboard is created');
+  assert.deepEqual(formDeletes(env.org, halted.mark), [], 'nothing is deleted');
+  assert.ok(halted.error, 'the build stops');
+  assert.match(halted.error.message, new RegExp(`dashboard "${BOARD}": an earlier build stopped after creating it\\. Its create was sent as ${sent}, but the service reported the dashboard it made as ${reported}, which is gone now, and ${sent} names a row this build never saw its create make\\. Nothing was added to the solution or deleted, and no dashboard was created\\. That row is not known to be this app's: do not delete or change it on this build's account\\. Find out whose it is, then remove the entry '${BOARD}' from .*dashboard-creation\\.[0-9a-f]{64}\\.json and run the build again: it then finds the dashboard by name, as it does when nothing is recorded\\.`));
+  assert.doesNotMatch(halted.error.message, /(?<!not )\bdelete\b/i, 'it asks for no dashboard to be deleted');
+  assert.equal(isTransientHalt(halted.error), false, 'conflicting evidence is a person\'s to settle: the build does not run again on its own');
+  assert.deepEqual(recorded(env), left, 'the record is kept');
+  assert.deepEqual(members(env.org), []);
+  assert.deepEqual(env.org.contents()[`row systemforms ${sent}`], before, 'the other row is as it was');
+  assert.deepEqual(halted.unexpected, []);
 });
 
 test('the record is never teardown authority: a teardown while it names a dashboard outside the solution deletes only what the solution holds, and leaves the record as it was', async () => {
@@ -539,6 +609,9 @@ const BAD_RECORDS = [
       return rename.call(fs, from, to, ...rest);
     });
   }, /could not be written/],
+  // A record of the right shape, for this environment, app and solution, holding an entry the build never writes.
+  ['holding an entry whose reported id is no id, beside a good one', (file, env) => plantRecord(file, env, { [BOARD]: { id: ID_A, reportedId: 'damaged' }, Sibling: { id: ID_B } }), /could not be read/],
+  ['holding two entries Dataverse compares as one name', (file, env) => plantRecord(file, env, { [BOARD]: { id: ID_A }, 'OPS OVERVIEW ': { id: ID_B } }), /could not be read/],
 ];
 
 for (const [what, plant, said] of BAD_RECORDS) {
@@ -554,8 +627,10 @@ for (const [what, plant, said] of BAD_RECORDS) {
     const [only] = boards(env.org);
     assert.deepEqual(members(env.org), [only]);
     if (kind === 'folder') assert.ok(fs.lstatSync(file).isDirectory(), 'the folder is left where it was');
-    else if (kind) assert.deepEqual(fs.readFileSync(file), kind, 'the file is left exactly as it was');
-    else assert.equal(fs.existsSync(file), false, 'no record is left half-written');
+    else if (kind) {
+      assert.equal(fs.existsSync(file), true, 'the file is left where it was');
+      assert.deepEqual(fs.readFileSync(file), kind, 'the file is left exactly as it was');
+    } else assert.equal(fs.existsSync(file), false, 'no record is left half-written');
     const about = built.value.warnings.filter((w) => /dashboard/i.test(w) && /record/i.test(w));
     assert.equal(about.length, 1, `one warning about the record: ${JSON.stringify(built.value.warnings)}`);
     assert.match(about[0], said);

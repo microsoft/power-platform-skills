@@ -286,21 +286,26 @@ function systemFormType(raw) {
 }
 
 // The dashboard an earlier, interrupted run of this build created for `dash` and never saw join the solution (lib/dashboard-creation-records.js), settled
-// before any dashboard is looked up by name. `ids` are what the record holds: the id the create was sent with, then the one its push reported when that was
-// another. Each is read in the saved layer (readSavedSystemForm):
+// before any dashboard is looked up by name. `ids` are what the record holds: `sent`, the id the create was sent with, then `reported`, the one its push
+// reported when that was another. The two are not equal evidence: after such a re-key the reported row is the one the create made, and the sent id was
+// never seen to make anything. Each is read in the saved layer (readSavedSystemForm):
 //   - none is there: the create never committed, or the row was deleted since — the record is cleared and the build goes on as it always did, looking the
 //     dashboard up by name (answers undefined);
-//   - exactly one is, a standard dashboard with this name: THAT row is added to the solution — idempotent: a component the solution already holds is not
-//     added twice — and reused, and the record cleared (answers its id). Its tiles are what the interrupted run pushed, and are not repaired;
-//   - anything else — a read that fails, a row of another kind, a dashboard renamed since, both ids answering: nothing is added and nothing deleted, no
-//     dashboard is created, the record is kept, and the step stops with what a maker can do. Creating a dashboard there could make the second one this
-//     record exists to prevent, and adding the row could adopt what the build no longer knows to be its own.
-// Never deletes anything: the record proves which id the build sent, not that a row which answers to it now is used by nobody else.
+//   - the row the create made is (the sent one, or the reported one after a re-key), a standard dashboard with this name: THAT row is added to the
+//     solution — idempotent: a component the solution already holds is not added twice — and reused, and the record cleared (answers its id). Its tiles
+//     are what the interrupted run pushed, and are not repaired;
+//   - anything else — a read that fails, a row of another kind, a dashboard renamed since, both ids answering, or, after a re-key, only the SENT id
+//     answering (a row the build never saw its create make: another maker can have made it since, and adding it would give teardown the authority to
+//     delete it): nothing is added and nothing deleted, no dashboard is created, the record is kept, and the step stops with what a maker can do —
+//     never asking for a row to be deleted that may be another app's. Creating a dashboard there could make the second one this record exists to
+//     prevent, and adding the row could adopt what the build does not know to be its own.
+// Never deletes anything: the record proves which ids the build sent and was answered with, not that a row which answers to one now is used by nobody else.
 async function recoverRecordedDashboard(provision, { dash, ids, sol, runner, creations }) {
+  const [sent, reported] = ids;
   const reads = [];
   for (const id of ids) reads.push(await readSavedSystemForm(provision, id));
   const label = `dashboard "${dash.name}"`;
-  const created = ids.length > 1 ? `${ids[0]} (the service reported ${ids[1]})` : ids[0];
+  const created = reported ? `${sent} (the service reported ${reported})` : sent;
   const stop = (error) => runner.run('dashboards', label, async () => { throw error; });
   const unreadable = reads.find((r) => r.state === 'unreadable');
   if (unreadable) {
@@ -312,10 +317,14 @@ async function recoverRecordedDashboard(provision, { dash, ids, sol, runner, cre
     creations.clear(dash.name);
     return undefined;
   }
+  // The way out names the row the service reported and asks for no delete: either row may be another app's, and this record is no authority over it.
   if (present.length > 1) {
-    return stop(refusal(`dashboard "${dash.name}": an earlier build stopped after creating it, and each of the ids it recorded for it (${ids.join(', ')}) names a row now, so it cannot tell which is the one it created. Nothing was added to the solution or deleted. Delete the one that is not this app's in Maker, and run the build again.`));
+    return stop(refusal(`dashboard "${dash.name}": an earlier build stopped after creating it, and both ids it recorded for it name a row now — ${sent}, the id its create was sent with, and ${reported}, the id the service reported for the dashboard it made — so it cannot tell on its own which one is this app's. Nothing was added to the solution or deleted. Do not delete either dashboard to settle this: the other one may be another app's. Check in Maker which one this app's build made (the service reported ${reported}), add that one to solution '${sol.uniqueName}' and publish it there, then remove the entry '${dash.name}' from ${creations.path()} and run the build again: it then reuses the dashboard the solution holds and leaves the other as it is.`));
   }
   const [row] = present;
+  if (reported && row.id !== reported) {
+    return stop(refusal(`dashboard "${dash.name}": an earlier build stopped after creating it. Its create was sent as ${sent}, but the service reported the dashboard it made as ${reported}, which is gone now, and ${sent} names a row this build never saw its create make. Nothing was added to the solution or deleted, and no dashboard was created. That row is not known to be this app's: do not delete or change it on this build's account. Find out whose it is, then remove the entry '${dash.name}' from ${creations.path()} and run the build again: it then finds the dashboard by name, as it does when nothing is recorded.`));
+  }
   const type = systemFormType(row.type);
   if (type !== 0) {
     return stop(refusal(`dashboard "${dash.name}": an earlier build recorded ${row.id} for it before it stopped, and that id now names ${Number.isNaN(type) ? 'a systemform whose type could not be read' : `a systemform of type ${type}`}, not a dashboard of the kind the build creates (type 0). Nothing was added to the solution or deleted. Check the id, then remove the entry '${dash.name}' from ${creations.path()} and run the build again.`));
