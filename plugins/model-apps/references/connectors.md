@@ -68,8 +68,9 @@ Never write a credential or a connection id into `connectors.json`; a spec that 
 reference — and the connection behind it — must already exist in the environment you rebuild into
 (`create-connection-reference.js`, or a solution: `add-page-to-solution.js --connection-refs`, then
 `solution-settings.js`). A rebuild reads the environment's references before it writes: one of that name for
-**another connector** than the binding's `connectorId` stops it, before anything is written; one that is not there
-is said by name.
+**another connector** than the binding's `connectorId` stops it, before anything is written; one that is not there,
+one that has no connection, and an operation in `operations` that a custom connector there does not define are
+said by name.
 
 ## Runtime requirements
 

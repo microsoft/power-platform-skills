@@ -1156,7 +1156,7 @@ function pageBindingsReport(pages, unkept, leftOut) {
     },
     note: 'The spec states these bindings, so a rebuild writes them onto each page in any environment. A rebuild cannot create what they name — the connection references and the connections behind them, the Custom APIs, and the '
       + 'service resources a connector binding points at — so each must already exist in the environment you rebuild into. A rebuild reads them there before it writes a page: it stops, before writing anything, at a connection '
-      + 'reference that is for another connector, and says by name each reference and Custom API that is not there.',
+      + 'reference that is for another connector, and says by name each reference and Custom API that is not there, a reference that has no connection, and an operation a custom connector there does not define.',
   };
 }
 
@@ -1181,7 +1181,7 @@ function pageBindingsNote(report) {
     if (needed.serviceResources) {
       lines.push(`    - what the connector bindings of ${list(needed.serviceResources)} point at inside the service (dataset, tables: a SharePoint site and list ids, for example) is written as it is here, and works there only if the same resources exist`);
     }
-    lines.push('  Until they are, the page cannot use those bindings. A rebuild reads them in the environment it writes to: it stops, before writing anything, at a connection reference that is for another connector, and names each reference and Custom API that is not there. The pages:');
+    lines.push('  Until they are, the page cannot use those bindings. A rebuild reads them in the environment it writes to: it stops, before writing anything, at a connection reference that is for another connector, and names each reference and Custom API that is not there, each reference that has no connection, and each operation a custom connector there does not define. The pages:');
     for (const page of report.pages) {
       const parts = [];
       if (page.connectorBindings) parts.push(`connectorBindings: ${list(page.connectorBindings)}`);

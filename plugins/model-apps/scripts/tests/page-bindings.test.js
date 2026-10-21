@@ -862,17 +862,18 @@ const referenceRow = (logicalName, connector) => ({ connectionreferencelogicalna
 
 // The environment a copy goes to, with the references (`connectionreference` rows) and Custom APIs (`customapi` rows) it already holds. `reads` are the reads the build made of them, `writes` every write it
 // made to the SDK before it stopped.
-function targetEnvironment({ references = [], apis = [], failReferences, failApis } = {}) {
+function targetEnvironment({ references = [], apis = [], connectors = [], failReferences, failApis } = {}) {
   const sdk = freshEnvironmentSdk();
   const answer = sdk.queryRecords;
   const reads = [];
   const writes = [];
+  const answers = { connectionreference: references, customapi: apis, connector: connectors };
   sdk.queryRecords = async (entity, options) => {
-    if (entity !== 'connectionreference' && entity !== 'customapi') return answer(entity, options);
+    if (!(entity in answers)) return answer(entity, options);
     reads.push({ entity, options });
     if (entity === 'connectionreference' && failReferences) throw new Error(failReferences);
     if (entity === 'customapi' && failApis) throw new Error(failApis);
-    return entity === 'connectionreference' ? references : apis;
+    return answers[entity];
   };
   for (const method of ['createPublisher', 'createSolution', 'createTable', 'createColumn', 'createRelationship', 'createWebResource', 'createArtifact', 'addElement', 'updateElement', 'pushArtifact', 'publishArtifact', 'addSolutionComponent']) {
     const original = sdk[method];
@@ -943,6 +944,36 @@ test('a Custom API of the other kind, or bound to another table, is a warning by
     'page "Weather": Custom API binding "contoso_ApproveOrder" says it is an Action, but the Custom API of that name in this environment is a Function — the runtime refuses the call (wrong_operation_kind)',
     'page "Weather": Custom API binding "contoso_GetSummary" is for a Global operation, but the Custom API of that name in this environment is bound to table contoso_other — the runtime refuses the call (invalid_bound_to)',
   ]);
+});
+
+// A page made with a CUSTOM connector: its binding goes through a reference whose connector's definition is a row of the environment (`connector.openapidefinition`), and the copy there can be another version.
+const WIDGETS_BINDING = { logicalName: 'contoso_widgets', connectorId: '/providers/Microsoft.PowerApps/apis/shared_contoso-5fwidgets-5f6a8c', dataset: '', operations: ['ListWidgets', 'GetWidget'] };
+const WIDGETS_CONNECTOR_ID = 'c0000000-0000-4000-8000-0000000000a1';
+const widgetsDefinition = (operationIds) => JSON.stringify({ swagger: '2.0', info: { title: 'Widgets', version: '1.0' }, paths: Object.fromEntries(operationIds.map((id, i) => [`/widgets/${i}`, { get: { operationId: id, responses: { 200: { description: 'OK' } } } }])) });
+
+test('a build says by name a reference that has no connection, and an operation the custom connector of a reference does not define there — and writes the pages with their bindings all the same', async () => {
+  const { spec, outDir } = await portableCopy();
+  const weather = spec.pages.find((p) => p.key === 'weather');
+  weather.connectorBindings = [WIDGETS_BINDING, SHAREPOINT];
+  const { sdk, reads } = targetEnvironment({
+    references: [
+      { connectionreferencelogicalname: 'contoso_widgets', connectorid: WIDGETS_BINDING.connectorId, connectionid: 'shared-contoso-5fwidgets-0001', _customconnectorid_value: WIDGETS_CONNECTOR_ID },
+      { ...BOTH_REFERENCES[1], connectionid: null },
+    ],
+    apis: BOTH_APIS,
+    connectors: [{ connectorid: WIDGETS_CONNECTOR_ID, openapidefinition: widgetsDefinition(['ListWidgets']) }],
+  });
+  const genpage = fakeGenpage();
+  const warnings = [];
+  const rebuilt = await runSdkBuild(spec, { sdk, genpage, appDir: outDir, env: FABRIKAM, apply: true, phases: PHASES, warn: (m) => warnings.push(m) });
+  assert.ok(rebuilt.ok);
+  assert.deepStrictEqual(reads.map((r) => r.entity), ['connectionreference', 'connector', 'customapi'], 'the definition of the custom connector is read once, by id, between the two reads it already made');
+  assert.deepStrictEqual(bindingWords(warnings), [
+    'page "Weather": connection reference contoso_sharepoint is in this environment but has no connection, so the page\'s calls through it fail until it has one. Give it a connection (import the solution that holds it with a settings file that does: solution-settings.js, or set it in Power Apps, in the solution\'s connection references) and the page works without a rebuild',
+    'page "Weather": connector binding "contoso_widgets" calls operation GetWidget, which the custom connector that connection reference is for in this environment does not define, so the page\'s call to it fails there until it does (import the solution that holds the connector as the page was made with it)',
+  ]);
+  const created = genpage.of('create').map((c) => c.args[0]).find((c) => c.name === 'Weather');
+  assert.deepStrictEqual(created.connectorBindings, [WIDGETS_BINDING, SHAREPOINT], 'the page is written with the bindings the spec states');
 });
 
 test('a read of the environment that fails is said, and the build goes on as it did: the page is written, and not checked', async () => {

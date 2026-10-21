@@ -1657,12 +1657,20 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   (`BuildHalt`, phase `preflight`, code `pages-binding-reference-conflict`, never retried, nothing written) at a
   connection reference of that name whose connector is another than the binding's `connectorId` (compared by the
   connector's name, the last segment of its id). It never guesses and never makes a reference: the author gives the
-  binding another logical name, or states the connector this environment has (a custom connector's id differs in
-  every environment). It only SAYS, by name, a reference or Custom API that is not there (the page is written with
-  its binding, and a reference made afterwards makes it work without a rebuild), a Custom API that is the other kind
-  or bound to another table (the runtime refuses that call itself), and a read that failed (the bindings were not
-  checked); a connector that is not named on both sides is never a conflict. What it cannot say is whether a
-  connector offers the `operations` a binding lists — only the Power Apps service has the connector's definition.
+  binding another logical name, or states the connector this environment has (a custom connector made separately in
+  each environment has another id in each). It only SAYS, by name, a reference or Custom API that is not there (the
+  page is written with its binding, and a reference made afterwards makes it work without a rebuild), a reference
+  that is there with no connection (`connectionid` empty — what a solution import leaves when no settings file gives
+  one), an operation a binding lists that the custom connector of its reference does not define, a Custom API that is
+  the other kind or bound to another table (the runtime refuses that call itself), and a read that failed (the
+  bindings were not checked); a connector that is not named on both sides is never a conflict, and a column a row
+  does not carry says nothing. Operations are read only for a CUSTOM connector: its definition is a row of the
+  environment (`connector.openapidefinition`, found through the reference's `_customconnectorid_value`, parsed by
+  `definedOperations` as Swagger 2.0 — every HTTP method's `operationId`, matched exactly, as the SDK matches them;
+  a definition it cannot read leaves the operations unchecked, and says so), and the copy there can be another
+  version than the page was made with. A connector that is not a custom one has one definition for every environment
+  of its cloud — the one `connector.js` read the binding's operations from — so a reference for the same connector
+  offers them and nothing is read for it.
   **What a rebuild cannot bring to another environment is what the lists name,
   and the download says so**: when any page holds a binding it prints `NOTE:` on stderr and returns
   `pageBindings` — `pages` (each page's key, name and the connection references / Custom APIs its bindings go by),

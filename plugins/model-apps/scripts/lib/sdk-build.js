@@ -1362,8 +1362,9 @@ async function checkNavigationBeforeWriting(spec, { provision, phases, changedOn
 //   - a reference that is there for ANOTHER connector stops the build (phase `preflight`, never retried: a run again reads the same reference). The page would call that connector under this name, with the
 //     signed-in user's connection to it, and nothing in the name tells the two apart — so it is refused, and nothing is guessed or made: the author gives the binding the name of the right reference, or states
 //     the connector this environment has. Left to the pages phase it would stop after the solution, the tables, the views, the forms and the app were written, as the navigation check used to;
-//   - a reference or a Custom API that is not there, a Custom API of the other kind or bound to another table, and a read that failed are SAID, by name, and the build goes on: the page is written with its binding
-//     (a reference made later makes the page work without a rebuild), and a read that failed says only that the bindings were not checked.
+//   - a reference or a Custom API that is not there, a reference that has no connection, an operation a binding calls that the custom connector there does not define, a Custom API of the other kind or bound
+//     to another table, and a read that failed are SAID, by name, and the build goes on: the page is written with its binding (a reference made, or given its connection, later makes the page work without a
+//     rebuild), and a read that failed says only that the bindings were not checked.
 // Only a run that has the pages phase writes a binding, and a changed-only run writes the pages it selected (pagesStatingBindings). A spec that states none reads nothing.
 async function readPageBindingVerdict(spec, { provision, phases, changedOnly }) {
   if (!phases.includes('pages')) return null;
@@ -1381,7 +1382,7 @@ async function checkPageBindingsBeforeWriting(spec, { provision, phases, changed
     throw new BuildHalt(
       `${refused.length} connector binding(s) name a connection reference this environment already has for ANOTHER connector: ${refused.map((finding) => finding.text).join('; ')}. The build stopped before writing anything. `
       + 'A page calls a binding through its reference\'s logical name, so each of these pages would call the other connector. Either give the binding the logical name of a reference that is for the right connector '
-      + '(create-connection-reference.js makes one), or, if the reference that is here is the one the page should call (a custom connector has its own id in each environment), set the binding\'s connectorId in the spec to the connector this environment has.',
+      + '(create-connection-reference.js makes one), or, if the reference that is here is the one the page should call (a custom connector made separately in each environment has another id in each), set the binding\'s connectorId in the spec to the connector this environment has.',
       { phase: 'preflight', code: 'pages-binding-reference-conflict', recoverable: false, retry: RETRY.NEVER },
     );
   }

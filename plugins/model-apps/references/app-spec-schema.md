@@ -1684,14 +1684,18 @@ custom control), but the spec validator emits a warning.
     of that name that is for **another connector** than the binding's `connectorId` (compared by the connector's
     name, so `/providers/Microsoft.PowerApps/apis/shared_msnweather` and `shared_msnweather` agree): the page
     would call that connector under that name. Give the binding the logical name of a reference that is for the
-    right connector, or, when the reference that is there is the one the page should call (a custom connector has
-    its own id in each environment), set the binding's `connectorId` to the one this environment has. Nothing is
-    guessed or made, and a connector that a binding or a reference does not name is never a conflict;
-  - **says by name** (a warning, and the page is written with its binding all the same — a reference made later
-    makes the page work without a rebuild) each reference and Custom API that is not there, a Custom API that is the
-    other kind (Action or Function) or bound to another table, and a read that failed (the bindings were then not
-    checked). It cannot say whether a connector offers the `operations` a binding lists: that is the connector's own
-    definition, which the build has no way to read.
+    right connector, or, when the reference that is there is the one the page should call (a custom connector made
+    separately in each environment has another id in each), set the binding's `connectorId` to the one this
+    environment has. Nothing is guessed or made, and a connector that a binding or a reference does not name is
+    never a conflict;
+  - **says by name** (a warning, and the page is written with its binding all the same — a reference made, or given
+    its connection, later makes the page work without a rebuild) each reference and Custom API that is not there, a
+    reference that is there with **no connection** (what a solution import leaves when no settings file gives one), an
+    **operation** a binding lists that the **custom connector** of its reference there does not define, a Custom API
+    that is the other kind (Action or Function) or bound to another table, and a read that failed (the bindings were
+    then not checked). Operations are checked only for a custom connector, whose definition is the environment's own
+    (its `connector` row) and can be another version than the page was made with; a connector that is not a custom
+    one has the same operations in every environment of its cloud, so a reference for the same connector offers them.
 
   `/app-builder` never authors these lists — it writes no connector or Custom API code — so they come from a page
   a download read. A page you reset to `source.kind: "intent"` to regenerate it is generated without connector

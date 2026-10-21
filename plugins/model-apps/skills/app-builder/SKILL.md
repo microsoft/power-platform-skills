@@ -727,7 +727,8 @@ with `/genpage`). The rebuild itself reads that environment's references before 
 (`pages-binding-reference-conflict`, nothing written) at a connection reference of that name that is for another
 connector — give the binding the logical name of a reference that is for the right connector, or set the
 binding's `connectorId` to the one that environment has, and never pick a reference for the user — and its
-warnings say by name each reference or Custom API that is not there yet: relay them. Do not write bindings into a
+warnings say by name each reference or Custom API that is not there yet, a reference that has no connection, and
+an operation the custom connector there does not define: relay them. Do not write bindings into a
 spec yourself — they come from a page a pull read — and when you reset a page to `intent` to regenerate it, delete
 its bindings from the spec: the generator writes no connector code.
 
