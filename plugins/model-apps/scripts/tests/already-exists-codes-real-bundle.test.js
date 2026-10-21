@@ -293,7 +293,8 @@ const columnsRefusedWith = (columnAnswer, customerAnswer) => (method, asked) => 
 };
 
 test('columns refused in Spanish because they exist (0x80060304, 0x80047013) are skipped exactly as the English refusals are', async () => {
-  // The 0x80047013 English text is the platform's own (live-captured, the same for every column type the build makes; names replaced).
+  // The 0x80047013 English text is the platform's own, as the live census answered it for each of the 13 column types it exercised (names
+  // replaced). A Customer column's answer, to CreateCustomerRelationships, was not captured: here that text is adapted to the Customer column.
   const english = await build(COLUMNED, columnsRefusedWith(
     refused('0x80060304', 'Attribute contoso_code already exists for entity contoso_project.'),
     refused('0x80047013', 'An attribute with the specified name contoso_customer already exists for entity contoso_project.'),
@@ -478,7 +479,8 @@ test('a 1:N refused with 0x80072551 is not skipped when the read of its name can
 
 // --- an N:N the probe did not see -------------------------------------------------------------------------------------------------
 // An N:N's identity includes the table that holds its links. Its create reads the holder of its name on the reference's code for a taken
-// name; the 1:N's navigation-property code is not listed for it (the answer to an existing N:N's create has not been captured).
+// name; the 1:N's navigation-property code is not listed for it — an N:N names navigation properties too, but the answer to an existing
+// N:N's create has not been captured — and the test below pins that boundary, not a fact about the platform.
 const INTERSECT = 'contoso_project_task_links';
 const RELATED_NN = { solution: SOLUTION, entities: [], relationships: [{ type: 'ManyToMany', schemaName: SCHEMA, entity1: 'contoso_project', entity2: 'contoso_task', intersectEntityName: INTERSECT }] };
 const NN_SELECT = 'SchemaName,Entity1LogicalName,Entity2LogicalName,IntersectEntityName,Entity1IntersectAttribute,Entity2IntersectAttribute';

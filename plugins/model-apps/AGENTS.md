@@ -2123,14 +2123,15 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   asks for is already there is a skip for a status reason (its pinned value is taken), for an alternate key the build could not
   prove from its table read, and for a column of a table whose columns could not be read; for a table and a relationship it is
   the cue to read what exists, and only what that read finds — the declared relationship, by its whole identity — is reused.
-  The platform words that answer in the caller's language: measured on an environment whose only language is Spanish, a key
+  The platform can word that answer in the caller's language: measured on an environment whose only language is Spanish, a key
   created again was answered `Ya existe una clave de entidad con el nombre … en la entidad …` (HTTP 400, `0x80060893`), and a
-  rebuild that read only English words halted there. So each of those creates also recognises the answer by the `error.code` of its
-  body — `ALREADY_EXISTS_CODES` in `lib/entity-provision.js`, read by `serviceCodeOf` (`lib/retry-policy.js`) from the SDK's
-  `ConnectionError`: `0x80060893` for a key, `0x80044310` for a status reason's value, `0x80047013` (measured, on 13 column types)
-  and `0x80060304` for a column, `0x80044363` (measured), `0x8009050d` (measured; not in the platform's reference) and `0x8004700b`
-  for a table; for a 1:N `0x80072551` (measured), the reference's name code `0x8004432B` and the column codes for its lookup column;
-  for an N:N the name code only
+  rebuild that read only English words halted there (the same environment answered the other creates below in English). So each of
+  those creates also recognises the answer by the `error.code` of its body — `ALREADY_EXISTS_CODES` in `lib/entity-provision.js`, read
+  by `serviceCodeOf` (`lib/retry-policy.js`) from the SDK's `ConnectionError`: `0x80060893` for a key, `0x80044310` for a status
+  reason's value, `0x80047013` (measured, on 13 column types; not on a Customer column) and `0x80060304` for a column, `0x80044363`
+  (measured), `0x8009050d` (measured; not in the platform's reference) and `0x8004700b` for a table; for a 1:N `0x80072551`
+  (measured), the reference's name code `0x8004432B` and the column codes for its lookup column; for an N:N the name code only, as no
+  answer to the create of an existing N:N has been captured
   ([web service error codes](https://learn.microsoft.com/en-us/power-apps/developer/data-platform/reference/web-service-error-codes)).
   Two of them speak of something another component can hold, so each is listed for one create only, where the read that follows
   decides. `0x80044363` ("The schema name … for type Entity is not unique. An … with same name already exists.", the answer to the

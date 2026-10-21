@@ -1093,7 +1093,7 @@ const ALREADY_EXISTS_CODES = Object.freeze({
   table: Object.freeze(new Set(['0x80044363', '0x8009050d', '0x8004700b'])),
   // POST EntityDefinitions(…)/Attributes, and a Customer column's POST CreateCustomerRelationships: DuplicateAttributeSchemaName, 0x80047013 —
   // live-captured, the same answer for each of 17 columns of 13 types (Text, Memo, Integer, Decimal, Double, Money, Boolean, DateTime, Choice,
-  // MultiChoice, AutoNumber, File, Image):
+  // MultiChoice, AutoNumber, File, Image; a Customer column's answer, to CreateCustomerRelationships, was not captured):
   //   HTTP 400 {"error":{"code":"0x80047013","message":"An attribute with the specified name contoso_code already exists for entity contoso_project."}}
   // — and DuplicateAttributePhysicalName, 0x80060304, "Attribute {0} already exists for entity {1}.".
   column: Object.freeze(new Set(['0x80060304', '0x80047013'])),
@@ -1114,7 +1114,11 @@ const ALREADY_EXISTS_CODES = Object.freeze({
   // lookup column, and reuses only the declared one (compareRelationship); any other stops the build.
   oneToManyRelationship: Object.freeze(new Set(['0x80072551', '0x8004432b', '0x80060304', '0x80047013'])),
   // POST RelationshipDefinitions of an N:N: the reference's name code only, read the same way (the whole identity of the N:N, the table that
-  // holds its links included). An N:N makes no lookup column, and the answer to the create of an existing N:N has not been captured.
+  // holds its links included). The answer to the create of an existing N:N has not been captured. An N:N names a navigation property on each
+  // of its tables (Entity1NavigationPropertyName, Entity2NavigationPropertyName) and makes the attributes of the table that holds its links,
+  // so 0x80072551 or a column code may answer it too; neither is listed until such an answer is seen, and an N:N refused with one stops the
+  // build unless the 409 or the English words read it.
+  // See: https://learn.microsoft.com/en-us/power-apps/developer/data-platform/webapi/reference/manytomanyrelationshipmetadata
   manyToManyRelationship: Object.freeze(new Set(['0x8004432b'])),
 });
 const NO_CODES = Object.freeze(new Set());
@@ -2538,8 +2542,10 @@ async function provisionDataModelSteps({ sdk, provision, runner, spec, apply, la
     const createOpts = rel.type === 'OneToMany'
       ? { type: 'OneToMany', schemaName: schema, referencedEntity: rel.referenced.toLowerCase(), referencingEntity: rel.referencing.toLowerCase(), lookupSchemaName: rel.lookup.schemaName, lookupDisplayName: createLabel.label, languageCode: resolvedLanguageCode }
       : { type: 'ManyToMany', schemaName: schema, entity1: rel.entity1.toLowerCase(), entity2: rel.entity2.toLowerCase(), intersectEntityName: rel.intersectEntityName, languageCode: resolvedLanguageCode };
-    // The codes on which a refusal of this create is the cue to read who holds the name (ALREADY_EXISTS_CODES): a 1:N's answer names its
-    // navigation property and its lookup column too, which an N:N's does not.
+    // The codes on which a refusal of this create is the cue to read who holds the name (ALREADY_EXISTS_CODES), by kind. A 1:N's list adds the
+    // navigation-property code its re-create was answered with live, and the codes of the lookup column it makes. An N:N names navigation
+    // properties too, and makes the attributes of the table that holds its links, but no answer to its re-create has been captured, so its list
+    // holds the name code only: those other answers are not observed for an N:N, not impossible.
     const alreadyExistsCodes = rel.type === 'OneToMany' ? ALREADY_EXISTS_CODES.oneToManyRelationship : ALREADY_EXISTS_CODES.manyToManyRelationship;
     await runner.run('data-model', label, async () => {
       try {
