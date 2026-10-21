@@ -240,6 +240,25 @@ function runStatusPage(html, saved = {}) {
   return { elements, context, polls: () => polls };
 }
 
+test('template heading groups the category pill and keeps preview images unobstructed', (t) => {
+  const dir = tempDir();
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const outputPath = path.join(dir, 'import.html');
+  renderTemplateImportStatus({
+    templateName: '311 Portal',
+    statusPath: path.join(dir, 'status.json'),
+    outputPath,
+    previewImages: ['https://example.com/home.png'],
+  });
+  const html = fs.readFileSync(outputPath, 'utf8');
+  assert.doesNotMatch(html, /preview-label|previewLabel/);
+  assert.match(html, /<div class="template-heading">\s*<h1 id="templateDisplayName"><\/h1>\s*<span class="template-category" id="templateCategory">Non-SPA<\/span>\s*<\/div>/);
+  const page = runStatusPage(html);
+  assert.equal(page.elements.get('previewImage').src, 'https://example.com/home.png');
+  assert.equal(page.elements.get('previewImage').alt, 'desktop preview of 311 Portal: home.png');
+  assert.equal(page.elements.has('previewLabel'), false);
+});
+
 test('SPA import removes the pause button and ignores a previously saved pause', async (t) => {
   const dir = tempDir();
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));

@@ -121,6 +121,18 @@
       text-transform: uppercase;
     }
 
+    .template-heading {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .template-heading h1 {
+      min-width: 0;
+      overflow-wrap: anywhere;
+    }
+
     h1 {
       margin: 0;
       max-width: 700px;
@@ -164,23 +176,6 @@
       max-width: 72%;
       margin: 0 auto;
       object-fit: contain;
-    }
-
-    .preview-label {
-      position: absolute;
-      left: 18px;
-      bottom: 18px;
-      max-width: calc(100% - 36px);
-      overflow-wrap: anywhere;
-      padding: 9px 12px;
-      border: 1px solid rgba(255,255,255,.7);
-      border-radius: 10px;
-      color: var(--ink);
-      background: rgba(255,255,255,.88);
-      box-shadow: 0 8px 22px rgba(30, 37, 70, .12);
-      font-size: 12px;
-      font-weight: 700;
-      backdrop-filter: blur(12px);
     }
 
     .slide-controls {
@@ -268,8 +263,8 @@
     .template-info h2 { margin: 0 0 8px; font-size: 16px; }
     .template-category {
       display: inline-flex;
-      align-self: flex-start;
-      margin: 0 0 10px;
+      flex: none;
+      margin: 0;
       padding: 4px 9px;
       border: 1px solid #d8d0f0;
       border-radius: 999px;
@@ -579,12 +574,13 @@
     <section class="layout">
       <aside class="preview-pane">
         <p class="eyebrow" id="templateEyebrow">Your selected starting point</p>
-        <h1 id="templateDisplayName"></h1>
-        <span class="template-category" id="templateCategory">Non-SPA</span>
+        <div class="template-heading">
+          <h1 id="templateDisplayName"></h1>
+          <span class="template-category" id="templateCategory">Non-SPA</span>
+        </div>
         <p class="lede" id="templateDescription"></p>
         <div class="preview-card" id="previewCard" role="tabpanel" tabindex="0" data-focus-key="preview-panel">
           <img id="previewImage" src="data:image/gif;base64,R0lGODlhAQABAAAAACw=" alt="" hidden>
-          <span class="preview-label" id="previewLabel"></span>
         </div>
         <div class="slide-controls" id="slideControls" role="tablist" aria-label="Template page preview"></div>
         <div class="preview-controls">
@@ -684,7 +680,6 @@
       image.src = preview[currentView];
       image.alt = `${currentView} preview of ${model.template.displayName}: ${preview.displayName}`;
       image.hidden = false;
-      setText("previewLabel", `${preview.displayName} · template preview`);
       document.getElementById("previewCard").classList.toggle("mobile", currentView === "mobile");
       document.querySelectorAll("[data-view]").forEach((button) => {
         const selected = button.dataset.view === currentView;
