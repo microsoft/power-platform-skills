@@ -46,7 +46,7 @@ const { readRelationshipsOf, findRelationshipHolder, compareRelationship, descri
 const { readOrgLanguageCode, readProvisionedLanguages } = require('./dataverse-auth.js');
 // The build's retry policy (see the header of retry-policy.js): every halt below says what a run again may do, decided where it is raised, and every failure this engine raises itself is made by
 // refusal() (deterministic) or serviceFailure() (the plugin's words around a failure of the service) — never a bare `new Error`, whose message the build's retry would read.
-const { RETRY, retryPolicyFor, refusal, serviceFailure } = require('./retry-policy.js');
+const { RETRY, retryPolicyFor, refusal, serviceFailure, serviceCodeOf } = require('./retry-policy.js');
 // What the run's throttle budget says when it refuses a wait (the words of the build's own halt for it), for the step guard in makeRunner.
 const { waitDoesNotFit } = require('./throttle-budget.js');
 const { readStatusOptions, alternateKeyMatches } = require('./table-schema-metadata.js');
@@ -1060,15 +1060,60 @@ function causeChain(err, maxDepth = 6) {
   return chain;
 }
 
+// The Dataverse error codes that say what a create asked for ALREADY EXISTS, for each create that reads such an answer (isAlreadyExists).
+// The platform words an answer in the caller's language, so its words cannot be what decides on an environment that is not in English:
+// live, on one whose only language is Spanish, an alternate key created again was answered (names replaced)
+//   HTTP 400 {"error":{"code":"0x80060893","message":"Ya existe una clave de entidad con el nombre contoso_codekey en la entidad contoso_project."}}
+// and the rebuild halted, because only the English words below were read. The code is the same in every language. A code is listed only
+// for the create that answers it, and only where it means that the very thing being created exists — never a generic code such as
+// 0x80040216 ("An unexpected error occurred."), and never a neighbouring condition: a key over the same columns under another name
+// (0x80060894, EntityKeyWithSelectedAttributesExists — the declared key is not there), a record that already holds a key's values
+// (0x80060892), a schema name that is not unique among components of any type (0x80044363, SchemaNameisNotUnique) — so that no real
+// failure is ever taken for a success. Names and messages are the platform's reference:
+// See: https://learn.microsoft.com/en-us/power-apps/developer/data-platform/reference/web-service-error-codes
+// Lower case, because serviceCodeOf (lib/retry-policy.js) lower-cases what it reads: the platform writes a code in either case (the
+// reference spells 0x8004432B with a capital).
+const ALREADY_EXISTS_CODES = Object.freeze({
+  // POST EntityDefinitions. Live-captured: HTTP 400 {"error":{"code":"0x8009050d","message":"Entities already exist: contoso_Project."}} — a code the
+  // reference does not list; and the reference's InvalidSchemaName, 0x8004700b, "An entity with the specified name already exists. Please specify
+  // a unique name.". Never a proof by itself: the build reads the table again and takes it only when that read finds it (findExistingTable).
+  table: Object.freeze(new Set(['0x8009050d', '0x8004700b'])),
+  // POST EntityDefinitions(…)/Attributes, and a Customer column's POST CreateCustomerRelationships: DuplicateAttributePhysicalName, 0x80060304,
+  // "Attribute {0} already exists for entity {1}.", and DuplicateAttributeSchemaName, 0x80047013.
+  column: Object.freeze(new Set(['0x80060304', '0x80047013'])),
+  // POST InsertStatusValue, which the build sends with the reason's pinned value: PicklistValueNotUnique, 0x80044310, "The picklist value already
+  // exists. Picklist values must be unique." Live-captured: HTTP 400 {"error":{"code":"0x80044310","message":"The picklist or status value 100000000
+  // is invalid for optionSet <id> because another picklist or status option for this optionSet already exists with that value"}}.
+  statusReason: Object.freeze(new Set(['0x80044310'])),
+  // POST EntityDefinitions(…)/Keys: EntityKeyNameExists, 0x80060893, "An entity key with the name {0} already exists on entity {1}." — live-captured
+  // in English and in Spanish (above).
+  alternateKey: Object.freeze(new Set(['0x80060893'])),
+  // POST RelationshipDefinitions: EntityRelationshipSchemaNameNotUnique, 0x8004432b, "A relationship with the specified name already exists. Please
+  // specify a unique name.", and the column codes above for the lookup column a 1:N create makes. Never a proof by itself either: the build reads
+  // the relationship that holds the name, or the one that owns the lookup column, and reuses only the declared one (compareRelationship).
+  relationship: Object.freeze(new Set(['0x8004432b', '0x80060304', '0x80047013'])),
+});
+const NO_CODES = Object.freeze(new Set());
+
 // A metadata create that fails because the component already exists (the classic re-run
-// case). Dataverse answers 409, or 400 with a duplicate-name message. Used to make
-// otherwise non-idempotent creates (e.g. alternate keys — the SDK has no key lister) safe
-// to re-run: the build skips instead of halting. Kept deliberately narrow so a genuine
-// failure (bad key attribute, etc.) still surfaces.
-function isAlreadyExists(err) {
+// case). Used to make otherwise non-idempotent creates (e.g. alternate keys — the SDK has no
+// key lister — and a status reason's pinned value) safe to re-run: the build skips instead of
+// halting, or, for a table and a relationship, reads what exists. Dataverse answers 409, or an
+// OData error whose `error.code` is one of `codes` — the create's own list in
+// ALREADY_EXISTS_CODES. The SDK keeps that answer as the `cause` of the ConnectionError it throws:
+//   ConnectionError {
+//     code: 'CONNECTION_ERROR', statusCode: 400, url: "https://contoso.crm.dynamics.com/api/data/v9.0/EntityDefinitions(LogicalName='contoso_project')/Keys",
+//     message: 'HTTP 400 from <url>: Ya existe una clave de entidad con el nombre contoso_codekey en la entidad contoso_project.',
+//     cause: { error: { code: '0x80060893', message: 'Ya existe una clave de entidad con el nombre contoso_codekey en la entidad contoso_project.' } } }
+// and serviceCodeOf reads that `error.code` of THIS error's own answer: never a code its message only quotes, and never one further
+// down a chain — an SDK error that wraps another failure (COLUMN_VISUALIZATION_BIND_FAILED around a binding that failed after the
+// column WAS made) carries a code that is not the create's. The English words stay for an answer that carries no code. Kept
+// deliberately narrow so a genuine failure (bad key attribute, etc.) still surfaces.
+function isAlreadyExists(err, codes = NO_CODES) {
   if (!err) return false;
   const status = err.statusCode || err.status || (err.cause && (err.cause.statusCode || err.cause.status));
   if (status === 409) return true;
+  if (codes.has(serviceCodeOf(err))) return true;
   const msg = String((err && err.message) || '').toLowerCase();
   // "already exist" (no trailing 's') also catches the plural table-create message
   // "Entities already exist: <name>" that Dataverse returns on a transient-retry duplicate.
@@ -1776,7 +1821,7 @@ async function applyStatusReasons({ sdk, provision, runner, warn }, { entity, lo
     await runner.run('data-model', `status reason ${entity.schemaName}: ${sr.label}`, async () => {
       const value = await sdk.insertStatusValue(logical, { label: sr.label, stateCode, color: sr.color, value: pinned, languageCode });
       result.statusReasonValues[logical][sr.label] = { value: typeof value === 'number' ? value : pinned, stateCode };
-    }, { recoverable: true, skipIf: isAlreadyExists });
+    }, { recoverable: true, skipIf: (err) => isAlreadyExists(err, ALREADY_EXISTS_CODES.statusReason) });
   }
 }
 
@@ -1820,7 +1865,7 @@ async function payOwedLengths({ runner, sdk, provision, spec, warn, sleep }, owe
 function alternateKeyStep({ runner, sdk, entity, logical, key, languageCode }) {
   return runner.run('data-model', `alt key ${entity.schemaName}.${key.schemaName}`,
     () => sdk.createAlternateKey(logical, { schemaName: key.schemaName, displayName: key.displayName || key.schemaName, keyAttributes: (key.columns || []).map((x) => x.toLowerCase()), languageCode }),
-    { recoverable: true, skipIf: isAlreadyExists });
+    { recoverable: true, skipIf: (err) => isAlreadyExists(err, ALREADY_EXISTS_CODES.alternateKey) });
 }
 
 // What the build can tell of an alternate key over a table's name column with that column at the length the spec asks — the one wording every
@@ -2117,7 +2162,7 @@ async function provisionDataModelSteps({ sdk, provision, runner, spec, apply, la
           // The SDK says of this refusal that the table WAS created. What its cause carries — a 409 from the update, a word in the platform's reason —
           // is no sign that the table's name is taken, so it is never taken for an already-exists answer and "rediscovered".
           if (err && err.code === 'PRIMARY_COLUMN_REQUIRED_NOT_APPLIED') throw err;
-          if (!isAlreadyExists(err)) throw err;
+          if (!isAlreadyExists(err, ALREADY_EXISTS_CODES.table)) throw err;
           // First POST likely succeeded server-side; a transient-network retry hit "already exists".
           // Rediscover to capture entitySetName (required by later phases). No poisoning concern
           // here whatever the labels are — the table now EXISTS, so no create follows this read.
@@ -2200,7 +2245,7 @@ async function provisionDataModelSteps({ sdk, provision, runner, spec, apply, la
       () => inlineConfirmed.get(c) || (c.type === 'Customer'
         ? sdk.createCustomerColumn(logical, { schemaName: c.schemaName, displayName: c.displayName || c.schemaName, required: REQUIRED(c), languageCode: resolvedLanguageCode })
         : sdk.createColumn(logical, columnOptions(c, globalChoiceIds, spec.globalChoices, resolvedLanguageCode))),
-      { skipIf: isAlreadyExists }));
+      { skipIf: (err) => isAlreadyExists(err, ALREADY_EXISTS_CODES.column) }));
     if (existingTable) {
       const existingColMeta = new Map(existingColRows.map((c) => [String(c.logicalName || c.schemaName || '').toLowerCase(), c]));
       const requiredTargets = requiredDeclared.filter((c) => existingCols.has(c.schemaName.toLowerCase()));
@@ -2478,7 +2523,7 @@ async function provisionDataModelSteps({ sdk, provision, runner, spec, apply, la
           result.lookupLabels[key] = { label: labelText(createLabel.label, resolvedLanguageCode) };
         }
       } catch (err) {
-        if (!isAlreadyExists(err)) throw err;
+        if (!isAlreadyExists(err, ALREADY_EXISTS_CODES.relationship)) throw err;
         // What the relationship held under this name says of itself decides the step. It is the declared one only when it states its whole
         // identity (compareRelationship): the create's own error is then rethrown, marked, which is how skipIf turns the step into a skip. One
         // it contradicts is another relationship's, and the name has to change. One that leaves a part out is neither — it has not been shown
@@ -2543,7 +2588,7 @@ async function provisionDataModelSteps({ sdk, provision, runner, spec, apply, la
         // run again can help; the create's own refusal, and the name, do not.
         throw serviceFailure(`could not identify the relationship that already uses schema name '${schema}' (${holder.error || 'read failed'}); the create failed because it already exists: ${(err && err.message) || err}`, { status: holder.status, words: holder.error || '', answered: holder.answered });
       }
-    }, { skipIf: (e) => isAlreadyExists(e) && e.sameRelationshipExists === true });
+    }, { skipIf: (e) => isAlreadyExists(e, ALREADY_EXISTS_CODES.relationship) && e.sameRelationshipExists === true });
   }
 
   // A rebuild repairs a lookup column an older build labelled with its old default (opt-in: only the app
@@ -2963,4 +3008,4 @@ async function provisionSampleData({ sdk, provision, runner, spec, dataModel }) 
   return { records: result.records, entitySetFor };
 }
 
-module.exports = { makeRunner, mapLimit, runBestEffort, requireSuccessfulPush, pushFailed, reportPartialPush, errorCodeChain, RESET_WORKSPACE, makeEntitySetResolver, resolveLanguageCode, resolveAuthoringLanguage, provisionSolution, provisionDataModel, settleOwedLengths, provisionSampleData, buildSeedGroup, BuildHalt, SDK_COLUMN_TYPE, DEFAULT_MAX_SIZE_KB, isVisualizationUnsupported, localizedLabelLcidsInSpec, checkLocalizedLabelLanguages, findExistingTable, findExistingColumns, relationshipExists, lookupsWithDefaultLabel, relationshipsInCreateOrder, statusReasonTargets };
+module.exports = { makeRunner, mapLimit, runBestEffort, requireSuccessfulPush, pushFailed, reportPartialPush, errorCodeChain, RESET_WORKSPACE, makeEntitySetResolver, resolveLanguageCode, resolveAuthoringLanguage, provisionSolution, provisionDataModel, settleOwedLengths, provisionSampleData, buildSeedGroup, BuildHalt, SDK_COLUMN_TYPE, DEFAULT_MAX_SIZE_KB, isVisualizationUnsupported, ALREADY_EXISTS_CODES, localizedLabelLcidsInSpec, checkLocalizedLabelLanguages, findExistingTable, findExistingColumns, relationshipExists, lookupsWithDefaultLabel, relationshipsInCreateOrder, statusReasonTargets };

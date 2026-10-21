@@ -366,4 +366,6 @@ function throttleAskOf(error) {
 
 module.exports = {
   RETRY, TRANSIENT_STATUSES, TRANSIENT_SERVICE_CODES, TRANSPORT_CODES, isTransientStatus, refusal, neverRetry, serviceFailure, withCause, judgeFailure, retryPolicyFor, retryFrom, throttleAskOf,
+  // Also the reader of an answer's code for lib/entity-provision.js, which recognises an "already exists" refusal by it (isAlreadyExists).
+  serviceCodeOf,
 };
