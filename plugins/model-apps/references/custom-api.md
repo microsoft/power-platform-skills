@@ -97,6 +97,13 @@ tables. It excludes private APIs, collection-bound APIs, and APIs with Entity/En
 inputs **or outputs**. It reads request and response type metadata inline in one query;
 an unreadable or incomplete required metadata answer is an error, never a successful empty list.
 These discovery rules do not remove unrelated existing page bindings.
+Single-level expanded collections normally include relationship `@odata.nextLink` annotations
+that describe the same related rows, not another page. Discovery accepts those known links
+without following them; genuine/ambiguous paging and the 5,000-related-row ceiling fail explicitly.
+See <https://learn.microsoft.com/power-apps/developer/data-platform/webapi/query/join-tables#single-expand-on-collection-valued-navigation-properties>.
+Request names must be usable and unique. Lookup requiredness must be a real boolean, and a
+supplied table hint must be a valid string; missing or malformed authoring facts are errors,
+not guessed defaults. An absent/null table hint is legitimate.
 
 A lookup (request type 5) is supported **structurally**, not through a declared kind.
 Discovery retains its exact input name separately:
@@ -119,7 +126,12 @@ The callable `Ref` input must not disappear just because it has no declared kind
 
 Pass a lookup as exactly `{ entityName, id }`, for example
 `Ref: { entityName: 'account', id: selectedAccount.accountid }` from a record the page
-actually loaded or selected. Honor `logicalEntityName` when discovery supplies a table hint;
+actually loaded or selected. For the directly checked member form, use a named helper's explicit
+record input (for example `selectedAccount: { accountid: string }`) supplied from the page's
+existing record input. Do not fabricate a local record or cast an unknown object to provide
+type/provenance evidence. For a more complex record source, pass its verified ID through an
+explicitly typed `string` helper input instead of an unproven member chain.
+Honor `logicalEntityName` when discovery supplies a table hint;
 when it is absent, establish the table from actual schema/record context rather than guessing.
 Omit an optional lookup when no record was selected. Never invent a GUID, substitute a
 primitive Guid parameter, or manufacture a null lookup value.

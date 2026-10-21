@@ -475,7 +475,7 @@ function isDataApi(ctx, expr, at, depth = 0) {
 // where <props> is the page component's props parameter, a name destructured from those props or
 // assigned from such a name (casts allowed), or a parameter of an enclosing helper that every
 // outside call fills with one of those. Anything unresolvable fails.
-function receiverIsDataApi(mask, scopes, expr, at) {
+function sourceContext(mask, scopes) {
   const component = pageComponent(mask, scopes);
   const named = component
     ? [...scopes.filter((scope) => scope.paramsOpen !== component.scope.paramsOpen), component.scope]
@@ -483,6 +483,51 @@ function receiverIsDataApi(mask, scopes, expr, at) {
   // The component itself may be an arrow; it is already in the list as the component scope.
   const arrows = arrowScopes(mask).filter((scope) => !component || scope.paramsOpen !== component.scope.paramsOpen);
   const all = [...named, ...arrows];
-  return isDataApi({ mask, scopes: all, component }, expr, at);
+  return { mask, scopes: all, component };
 }
-module.exports = { groupEnd, literalString, objectFields, actionCalls, receiverIsDataApi, escapeRe };
+
+function receiverIsDataApi(mask, scopes, expr, at) {
+  return isDataApi(sourceContext(mask, scopes), expr, at);
+}
+
+function recordPropInput(ctx, expr, at, depth = 0) {
+  if (!expr || depth > 8) return false;
+  const chain = identityChain(expr);
+  const name = chain ? normalizeChain(chain) : null;
+  if (!name) return false;
+  const direct = /^([A-Za-z_$][\w$]*)\.([A-Za-z_$][\w$]*)$/.exec(name);
+  if (direct) return isPropsObject(ctx, direct[1], at, depth + 1);
+  if (!IDENT.test(name)) return false;
+  const bindings = bindingsOf(ctx, name, at);
+  return bindings.length > 0 && bindings.every((binding) => {
+    if (binding.kind === 'prop-member') return true;
+    if (binding.kind === 'param') return paramFilledWith(ctx, binding, depth, recordPropInput);
+    if (binding.kind === 'alias') return recordPropInput(ctx, binding.expr, binding.at, depth + 1);
+    if (binding.kind === 'member') return isPropsObject(ctx, binding.object, binding.at, depth + 1);
+    return false;
+  });
+}
+
+// The bounded member form is a named helper's explicit record input, e.g.
+// `selectedAccount: { accountid: string }` supplied from the page's props. A local fabricated
+// record, an opaque type alias or an arbitrary chain is not evidence that an ID came from an input.
+function stringRecordMemberIsInput(mask, scopes, expr, at) {
+  const member = /^([A-Za-z_$][\w$]*)\s*\.\s*([A-Za-z_$][\w$]*)$/.exec(expr.trim());
+  if (!member) return false;
+  const ctx = sourceContext(mask, scopes);
+  const bindings = bindingsOf(ctx, member[1], at);
+  return bindings.length > 0 && bindings.every((binding) => {
+    if (binding.kind !== 'param') return false;
+    const parameter = splitTopLevel(mask, binding.scope.paramsOpen, binding.scope.paramsEnd)[binding.index];
+    const annotation = new RegExp(`^${escapeRe(member[1])}\\s*:\\s*(\\{[\\s\\S]*\\})$`).exec(parameter);
+    if (!annotation) return false;
+    try {
+      // Flat inline type members use the same literal-name grammar as request objects. TypeScript
+      // allows semicolons between members; no value/source code is evaluated to infer their types.
+      if (objectFields(annotation[1].replace(/;/g, ',')).get(member[2]) !== 'string') return false;
+    } catch { return false; }
+    return paramFilledWith(ctx, binding, 0, recordPropInput);
+  });
+}
+
+module.exports = { groupEnd, literalString, objectFields, actionCalls, receiverIsDataApi, stringRecordMemberIsInput, escapeRe };

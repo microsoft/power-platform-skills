@@ -69,6 +69,10 @@ function answer(request) {
       const projected = project(row, select);
       for (const [navigation, fields] of navigations) {
         projected[navigation] = (row[navigation] || []).map((parameter) => project(parameter, fields));
+        // Dataverse emits ordinary related-collection links for complete single-level expansions,
+        // including empty ones. Successful fixtures must exercise that service shape by default.
+        projected[`${navigation}@odata.nextLink`] =
+          `${url.origin}${url.pathname}(${row.customapiid})/${navigation}?$select=${fields.join(',')}`;
       }
       if (fixture.unreadable) {
         const { navigation, missing, value } = fixture.unreadable;

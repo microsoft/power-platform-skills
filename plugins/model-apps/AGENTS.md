@@ -2880,6 +2880,12 @@ optional table hint for authoring; it never enters `actions.json`. Primitive dec
 structural `{ entityName, id }` lookup values remain separate. The builder/reference contract
 also requires known read semantics before automatic Function invocation; GET alone is not
 proof that an operation is harmless. See `references/custom-api.md` for the wire and call shapes.
+Single-level expanded collection links normally repeat the same related rows, so their presence
+alone is not a paging failure. Discovery validates the known relationship shape without following
+it, and refuses genuine/ambiguous paging or the 5,000-row expansion cap. Lookup names, boolean
+requiredness and supplied hint shapes must be read, not invented. The offline consumer accepts
+typed, provenance-checked record member IDs and exact unchanged before-config bindings; additions
+or replacements still need fresh eligible discovery.
 
 ## TSX source lexer — known limits
 

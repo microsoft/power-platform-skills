@@ -243,6 +243,11 @@ Write the final binding set to both output files (see "Outputs"):
   Keep this out of the `Parameters (name: kind)` column, which lists primitive kinds only.
   For example: `new_ResolveReference.Ref` is required, table `account`; supply the selected
   account as `{ entityName: 'account', id: selectedAccount.accountid }`.
+  Keep the selected-record input explicitly typed in a named helper
+  (`selectedAccount: { accountid: string }`) and preserve its page-input provenance.
+  An arbitrary member chain, cast or locally invented record is not proof of an existing ID.
+  If that member form cannot be established, pass the verified ID through a typed string helper
+  input rather than guessing.
 
   Build each new/replacement wire entry from `name`, `isFunction`, `displayName`,
   `parameterKinds` and optional `boundEntityLogicalName` only. Do not copy the full discovery

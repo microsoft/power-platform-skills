@@ -269,3 +269,233 @@ test('a populated plan cannot continue the audit disabled-gate probe', () => {
   const enabled = { ...disabled, workflowLog: 'node feature-flags.js custom-api -> enabled\n' + captured.workflowLog };
   assert.equal(check({ fixture: enabled }).status, 'pass');
 });
+
+function selectedRecordLookupFixture(memberType = 'string') {
+  const fixture = lookupFixture();
+  event(fixture, 'discovery').result.customApis[0].lookupParameters.Ref.logicalEntityName = 'account';
+  fixture.genpagePlan = fixture.genpagePlan
+    .replace("entityName: 'salesorder', id: recordId", "entityName: 'account', id: selectedAccount.accountid");
+  fixture.artifacts['stages/with-api.tsx'] = fixture.artifacts['stages/with-api.tsx']
+    .replace('pending: Pending)', `pending: Pending, selectedAccount: { accountid: ${memberType} })`)
+    .replace("Ref: { entityName: 'salesorder', id: recordId }",
+      "Ref: { entityName: 'account', id: selectedAccount.accountid }")
+    .replace("approveOrder(dataApi, 'record', 1, pending)", "approveOrder(dataApi, 'record', 1, pending, props.selectedAccount)");
+  return fixture;
+}
+
+test('selected-record member lookup IDs with a proven string input pass both evaluator layers', () => {
+  const fixture = selectedRecordLookupFixture();
+  for (const layer of [1, 2]) {
+    const result = score(fixture, layer);
+    assert.equal(result.status, 'pass', result.reason);
+  }
+});
+
+test('selected-record member lookup IDs retain type provenance table and shape refusals', async (t) => {
+  for (const [label, mutate] of [
+    ['numeric member', (fixture) => {
+      fixture.artifacts['stages/with-api.tsx'] = fixture.artifacts['stages/with-api.tsx']
+        .replace('accountid: string', 'accountid: number');
+    }],
+    ['unknown member type', (fixture) => {
+      fixture.artifacts['stages/with-api.tsx'] = fixture.artifacts['stages/with-api.tsx']
+        .replace('selectedAccount: { accountid: string }', 'selectedAccount: SelectedAccount');
+    }],
+    ['unproven member name', (fixture) => {
+      fixture.artifacts['stages/with-api.tsx'] = fixture.artifacts['stages/with-api.tsx']
+        .replace('id: selectedAccount.accountid', 'id: selectedAccount.unprovenid');
+    }],
+    ['arbitrary member chain', (fixture) => {
+      fixture.artifacts['stages/with-api.tsx'] = fixture.artifacts['stages/with-api.tsx']
+        .replace('id: selectedAccount.accountid', 'id: selectedAccount.owner.accountid');
+    }],
+    ['invented literal', (fixture) => {
+      fixture.artifacts['stages/with-api.tsx'] = fixture.artifacts['stages/with-api.tsx']
+        .replace('id: selectedAccount.accountid', "id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'");
+    }],
+    ['invented local record', (fixture) => {
+      fixture.artifacts['stages/with-api.tsx'] = fixture.artifacts['stages/with-api.tsx']
+        .replace(', selectedAccount: { accountid: string }', '')
+        .replace(', pending, props.selectedAccount)', ', pending)')
+        .replace("  if (typeof api.executeAction", "  const selectedAccount: { accountid: string } = { accountid: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa' };\n  if (typeof api.executeAction");
+    }],
+    ['invented caller record', (fixture) => {
+      fixture.artifacts['stages/with-api.tsx'] = fixture.artifacts['stages/with-api.tsx']
+        .replace(', pending, props.selectedAccount)', ", pending, { accountid: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa' })");
+    }],
+    ['mixed record provenance across callers', (fixture) => {
+      fixture.artifacts['stages/with-api.tsx'] = fixture.artifacts['stages/with-api.tsx']
+        .replace("  void readSummary(dataApi, 'record');",
+          "  void approveOrder(dataApi, 'record', 1, pending, { accountid: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa' });\n  void readSummary(dataApi, 'record');");
+    }],
+    ['wrong table', (fixture) => {
+      fixture.artifacts['stages/with-api.tsx'] = fixture.artifacts['stages/with-api.tsx']
+        .replace("Ref: { entityName: 'account'", "Ref: { entityName: 'contact'");
+    }],
+    ['wrong structural shape', (fixture) => {
+      fixture.artifacts['stages/with-api.tsx'] = fixture.artifacts['stages/with-api.tsx']
+        .replace("Ref: { entityName: 'account', id: selectedAccount.accountid }",
+          "Ref: { entityName: 'account', id: selectedAccount.accountid, name: 'Invented' }");
+    }],
+  ]) {
+    await t.test(`selected-record member: ${label}`, () => {
+      const fixture = selectedRecordLookupFixture();
+      mutate(fixture);
+      for (const layer of [1, 2]) {
+        const result = score(fixture, layer);
+        assert.equal(result.status, 'fail', label);
+        assert.match(result.reason, /lookup|Ref/i, label);
+      }
+    });
+  }
+});
+
+function privateBeforePublicAddFixture() {
+  const fixture = apiFixture();
+  const existing = { ...structuredClone(bindings[0]), name: 'cnt_ExistingPrivate', displayName: 'Existing Private' };
+  const added = structuredClone(bindings[1]);
+  const desired = [existing, added];
+  const editedSource = source.replaceAll('cnt_ApproveOrder', existing.name);
+  fixture.files = [{ name: 'page.tsx', content: editedSource }];
+  fixture.artifacts = {
+    'stages/edited.tsx': editedSource,
+    'actions.json': JSON.stringify(desired),
+    'before/config.json': JSON.stringify({ actionBindings: [existing] }),
+    'after/config.json': JSON.stringify({ actionBindings: desired }),
+  };
+  fixture.genpagePlan = `## Custom API Bindings
+| Name | Kind | Bound Entity | Display Name | Parameters (name: kind) |
+|------|------|--------------|--------------|-------------------------|
+| ${existing.name} | Action | salesorder | Existing Private | Comment: String, Amount: Decimal |
+| ${added.name} | Function | (Global) | Summary | OrderId: Guid |
+`;
+  fixture.workflowLog = 'Edit adds a discovered public API and preserves the downloaded private binding exactly.';
+  fixture.manifest.customApi = {
+    outputs: { [existing.name]: ['NewStatus'], [added.name]: ['Total'] },
+    stages: [{
+      id: 'edit', target: 'page.tsx', source: 'stages/edited.tsx', actions: 'actions.json',
+      beforeConfig: 'before/config.json', afterConfig: 'after/config.json', upload: 'edit',
+      change: { add: [added] },
+    }],
+  };
+  fixture.events = [
+    { id: 'gate-discover', command: 'node feature-flags.js custom-api', result: 'enabled' },
+    { id: 'download', command: 'node genpage.js download --env https://contoso.crm.dynamics.com --page-id 99999999-9999-4999-8999-999999999999 --output-directory before',
+      result: { ok: true, pageId: '99999999-9999-4999-8999-999999999999' } },
+    { id: 'discovery', command: 'node list-custom-apis.js https://contoso.crm.dynamics.com --entities salesorder',
+      result: { ok: true, customApis: [{ ...added, bindingType: 'Global' }] } },
+    { id: 'gate-generate', command: 'node feature-flags.js custom-api', result: 'enabled' },
+    { id: 'write-edit', command: 'Write page.tsx', artifact: 'stages/edited.tsx' },
+    { id: 'edit', command: 'node genpage-upload.js --env https://contoso.crm.dynamics.com --app-id 11111111-1111-4111-8111-111111111111 --page-id 99999999-9999-4999-8999-999999999999 --code-file page.tsx --actions actions.json',
+      result: { ok: true, pageId: '99999999-9999-4999-8999-999999999999' } },
+  ];
+  return fixture;
+}
+
+test('pre-existing private bindings are exact preservation evidence when a public API is added', () => {
+  const fixture = privateBeforePublicAddFixture();
+  for (const layer of [1, 2]) {
+    const result = score(fixture, layer);
+    assert.equal(result.status, 'pass', result.reason);
+  }
+});
+
+test('pre-existing binding preservation never authorizes dropping changing or undiscovered additions', async (t) => {
+  for (const [label, mutate] of [
+    ['old binding dropped', (fixture) => {
+      const rows = JSON.parse(fixture.artifacts['actions.json']).slice(1);
+      fixture.artifacts['actions.json'] = JSON.stringify(rows);
+      fixture.artifacts['after/config.json'] = JSON.stringify({ actionBindings: rows });
+    }],
+    ['old primitive contract changed', (fixture) => {
+      const rows = JSON.parse(fixture.artifacts['actions.json']);
+      rows[0].parameterKinds.Amount = 'Integer';
+      fixture.artifacts['actions.json'] = JSON.stringify(rows);
+      fixture.artifacts['after/config.json'] = JSON.stringify({ actionBindings: rows });
+    }],
+    ['old method changed together with the call', (fixture) => {
+      const rows = JSON.parse(fixture.artifacts['actions.json']);
+      rows[0].isFunction = true;
+      fixture.artifacts['actions.json'] = JSON.stringify(rows);
+      fixture.artifacts['after/config.json'] = JSON.stringify({ actionBindings: rows });
+      fixture.manifest.customApi.stages[0].change.add.push(rows[0]);
+      fixture.genpagePlan = fixture.genpagePlan.replace('| cnt_ExistingPrivate | Action |', '| cnt_ExistingPrivate | Function |');
+      const nextSource = fixture.artifacts['stages/edited.tsx'].replaceAll('api.executeAction', 'api.executeFunction');
+      fixture.artifacts['stages/edited.tsx'] = nextSource;
+      fixture.files[0].content = nextSource;
+    }],
+    ['before-config provenance absent', (fixture) => {
+      delete fixture.manifest.customApi.stages[0].beforeConfig;
+    }],
+    ['explicit re-addition of the private binding', (fixture) => {
+      const existing = JSON.parse(fixture.artifacts['before/config.json']).actionBindings[0];
+      fixture.manifest.customApi.stages[0].change.add.push(existing);
+    }],
+    ...[
+      ['parameterKinds', ['String']],
+      ['isFunction', 'false'],
+      ['displayName', 7],
+      ['boundEntityLogicalName', 7],
+    ].map(([field, value]) => [`malformed before ${field}`, (fixture) => {
+      const before = JSON.parse(fixture.artifacts['before/config.json']);
+      before.actionBindings[0][field] = value;
+      fixture.artifacts['before/config.json'] = JSON.stringify(before);
+      const rows = JSON.parse(fixture.artifacts['actions.json']);
+      rows[0][field] = value;
+      fixture.artifacts['actions.json'] = JSON.stringify(rows);
+      fixture.artifacts['after/config.json'] = JSON.stringify({ actionBindings: rows });
+    }]),
+    ['new public binding not discovered', (fixture) => {
+      event(fixture, 'discovery').result.customApis = [];
+    }],
+    ['new private binding not discovered', (fixture) => {
+      const extra = { name: 'cnt_NewPrivateSummary', isFunction: true, displayName: 'New Private', parameterKinds: { OrderId: 'Guid' } };
+      fixture.manifest.customApi.stages[0].change.add.push(extra);
+      fixture.manifest.customApi.outputs[extra.name] = ['Total'];
+      const rows = JSON.parse(fixture.artifacts['actions.json']);
+      rows.push(extra);
+      fixture.artifacts['actions.json'] = JSON.stringify(rows);
+      fixture.artifacts['after/config.json'] = JSON.stringify({ actionBindings: rows });
+      fixture.genpagePlan += `| ${extra.name} | Function | (Global) | New Private | OrderId: Guid |\n`;
+      const start = source.indexOf('async function readSummary');
+      const end = source.indexOf('const GeneratedComponent');
+      const helper = source.slice(start, end)
+        .replaceAll('readSummary', 'readPrivateSummary')
+        .replaceAll('cnt_GetOrderSummary', extra.name);
+      const nextSource = fixture.artifacts['stages/edited.tsx']
+        .replace('const GeneratedComponent', helper + 'const GeneratedComponent')
+        .replace("  void readSummary(dataApi, 'record');", "  void readSummary(dataApi, 'record');\n  void readPrivateSummary(dataApi, 'record');");
+      fixture.artifacts['stages/edited.tsx'] = nextSource;
+      fixture.files[0].content = nextSource;
+    }],
+    ['disabled gate', (fixture) => { event(fixture, 'gate-generate').result = 'disabled'; }],
+    ['changed method on the existing operation', (fixture) => {
+      const nextSource = fixture.artifacts['stages/edited.tsx'].replace('await api.executeAction({', 'await api.executeFunction({');
+      fixture.artifacts['stages/edited.tsx'] = nextSource;
+      fixture.files[0].content = nextSource;
+    }],
+  ]) {
+    await t.test(`pre-existing binding preservation: ${label}`, () => {
+      const fixture = privateBeforePublicAddFixture();
+      mutate(fixture);
+      for (const layer of [1, 2]) {
+        const result = score(fixture, layer);
+        assert.equal(result.status, 'fail', label);
+        if (label === 'old method changed together with the call') assert.match(result.reason, /discovery|before-config/i);
+      }
+    });
+  }
+});
+
+test('pre-existing private bindings can be removed only through an explicit clear intent', () => {
+  const fixture = privateBeforePublicAddFixture();
+  fixture.manifest.customApi.stages[0].change = { clear: true };
+  fixture.artifacts['actions.json'] = '[]';
+  fixture.artifacts['after/config.json'] = '{"actionBindings":[]}';
+  fixture.artifacts['stages/edited.tsx'] = cleared;
+  fixture.files[0].content = cleared;
+  for (const layer of [1, 2]) {
+    const result = score(fixture, layer);
+    assert.equal(result.status, 'pass', result.reason);
+  }
+});

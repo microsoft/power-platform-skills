@@ -425,3 +425,149 @@ test('incomplete API or expanded type metadata is reported rather than treated a
     assert.match(result.stderr, /metadata|incomplete/i);
   }
 });
+
+// A single-level collection expansion has an ordinary relationship link even when all related rows
+// are present. It is not a second page. The documented 5,000-related-row ceiling is a separate
+// completeness boundary, so the absence of a paging token alone must not authorize a capped result.
+// See: https://learn.microsoft.com/power-apps/developer/data-platform/webapi/query/join-tables#single-expand-on-collection-valued-navigation-properties
+function singleLevelExpansionLinks(entry) {
+  const related = `${ENV}/api/data/v9.2/customapis(${entry.customapiid})`;
+  return {
+    ...entry,
+    'CustomAPIRequestParameters@odata.nextLink':
+      `${related}/CustomAPIRequestParameters?$select=uniquename,type,isoptional,logicalentityname`,
+    'CustomAPIResponseProperties@odata.nextLink':
+      `${related}/CustomAPIResponseProperties?$select=type`,
+  };
+}
+
+test('single-level relationship links preserve complete primitive and lookup discovery in one GET', async (t) => {
+  for (const [label, row, expectedKinds, expectedLookups] of [
+    ['primitive', api('new_LinkedPrimitive', {
+      CustomAPIRequestParameters: [{ uniquename: 'Amount', type: 2, isoptional: false }],
+      CustomAPIResponseProperties: [{ type: 10 }],
+    }), { Amount: 'Decimal' }, undefined],
+    ['lookup and empty response', api('new_LinkedLookup', {
+      CustomAPIRequestParameters: [
+        { uniquename: 'Ref', type: 5, isoptional: false, logicalentityname: 'account' },
+        { uniquename: 'Note', type: 10, isoptional: true },
+      ],
+    }), { Note: 'String' }, { Ref: { isOptional: false, logicalEntityName: 'account' } }],
+  ]) {
+    await t.test(`single-level complete links: ${label}`, () => {
+      const result = discover({ responseBody: { value: [singleLevelExpansionLinks(row)] } });
+      assert.equal(result.status, 0, result.stderr);
+      assert.equal(result.output.customApis.length, 1);
+      assert.equal(result.output.customApis[0].name, row.uniquename);
+      assert.deepEqual(result.output.customApis[0].parameterKinds, expectedKinds);
+      assert.deepEqual(result.output.customApis[0].lookupParameters, expectedLookups);
+      assert.equal(result.requests.length, 1, 'ordinary relationship links must not be followed');
+      assert.equal(result.requests[0].method, 'GET');
+      assert.equal(result.requests[0].body, null);
+    });
+  }
+});
+
+test('single-level expansion completeness distinguishes below-limit rows from the ambiguous ceiling', async (t) => {
+  for (const navigation of ['CustomAPIRequestParameters', 'CustomAPIResponseProperties']) {
+    for (const count of [4999, 5000]) {
+      await t.test(`single-level ${navigation} with ${count} rows`, () => {
+        const rows = Array.from({ length: count }, (_, index) => navigation === 'CustomAPIRequestParameters'
+          ? { uniquename: `Input${index}`, type: 10, isoptional: false }
+          : { type: 10 });
+        const row = singleLevelExpansionLinks(api('new_ExpansionLimit', { [navigation]: rows }));
+        const result = discover({ responseBody: { value: [row] } });
+        assert.equal(result.status, count < 5000 ? 0 : 1,
+          `${navigation} at the documented ceiling cannot prove that no rows were omitted`);
+        assert.equal(result.requests.length, 1);
+        if (count < 5000) assert.equal(result.output.customApis.length, 1);
+        else {
+          assert.equal(result.output, null);
+          assert.match(result.stderr, /metadata|incomplete|limit|ambiguous/i);
+        }
+      });
+    }
+    await t.test(`single-level ${navigation} at the ceiling without a link`, () => {
+      const rows = Array.from({ length: 5000 }, (_, index) => navigation === 'CustomAPIRequestParameters'
+        ? { uniquename: `Input${index}`, type: 10, isoptional: false }
+        : { type: 10 });
+      const result = discover({ responseBody: { value: [api('new_UnannotatedLimit', { [navigation]: rows })] } });
+      assert.equal(result.status, 1, 'missing annotations do not prove an expanded collection below its cap');
+      assert.equal(result.output, null);
+      assert.equal(result.requests.length, 1);
+    });
+  }
+});
+
+test('single-level links with genuine paging or ambiguous scope fail without following any URL', async (t) => {
+  const row = singleLevelExpansionLinks(api('new_UncertainExpansion'));
+  for (const navigation of ['CustomAPIRequestParameters', 'CustomAPIResponseProperties']) {
+    const property = `${navigation}@odata.nextLink`;
+    const normal = row[property];
+    for (const [label, link] of [
+      ['paging token', `${normal}&$skiptoken=next`],
+      ['encoded paging option', `${normal}&%24skiptoken=next`],
+      ['limited related query', `${normal}&$top=1`],
+      ['wrong relationship', normal.replace(`/${navigation}?`, '/UnrelatedCollection?')],
+      ['different origin', normal.replace(ENV, 'https://example.org')],
+      ['unreadable annotation', null],
+    ]) {
+      await t.test(`single-level ${navigation}: ${label}`, () => {
+        const result = discover({ responseBody: { value: [{ ...row, [property]: link }] } });
+        assert.equal(result.status, 1);
+        assert.equal(result.output, null);
+        assert.match(result.stderr, /metadata|incomplete|unsupported|ambiguous/i);
+        assert.equal(result.requests.length, 1, 'no continuation or arbitrary relationship URL is followed');
+      });
+    }
+  }
+});
+
+test('malformed lookup names requiredness and supplied hints fail the whole discovery explicitly', async (t) => {
+  const valid = { uniquename: 'Ref', type: 5, isoptional: false, logicalentityname: 'account' };
+  for (const [label, rows, reason] of [
+    ['missing name', [{ ...valid, uniquename: undefined }], /unique.?name|input name|parameter name/i],
+    ['empty name', [{ ...valid, uniquename: '' }], /unique.?name|input name|parameter name/i],
+    ['blank name', [{ ...valid, uniquename: '   ' }], /unique.?name|input name|parameter name/i],
+    ['non-string name', [{ ...valid, uniquename: 7 }], /unique.?name|input name|parameter name/i],
+    ['prototype-setter name', [{ ...valid, uniquename: '__proto__' }], /unique.?name|input name|parameter name/i],
+    ['duplicate lookup name', [valid, { ...valid, isoptional: true }], /duplicate|unique.*name|name.*unique/i],
+    ['lookup and primitive name collision', [valid, { uniquename: 'Ref', type: 10, isoptional: false }], /duplicate|unique.*name|name.*unique/i],
+    ['missing requiredness', [{ ...valid, isoptional: undefined }], /isoptional|optional|requiredness/i],
+    ['null requiredness', [{ ...valid, isoptional: null }], /isoptional|optional|requiredness/i],
+    ['string requiredness', [{ ...valid, isoptional: 'false' }], /isoptional|optional|requiredness/i],
+    ['numeric requiredness', [{ ...valid, isoptional: 0 }], /isoptional|optional|requiredness/i],
+    ['object table hint', [{ ...valid, logicalentityname: { entityName: 'account' } }], /logicalentityname|table hint|logical entity/i],
+    ['numeric table hint', [{ ...valid, logicalentityname: 7 }], /logicalentityname|table hint|logical entity/i],
+    ['array table hint', [{ ...valid, logicalentityname: ['account'] }], /logicalentityname|table hint|logical entity/i],
+    ['blank table hint', [{ ...valid, logicalentityname: '   ' }], /logicalentityname|table hint|logical entity/i],
+  ]) {
+    await t.test(`malformed lookup metadata: ${label}`, () => {
+      const result = discover({ apis: [
+        api('new_PrimitiveControl'),
+        api('new_MetadataLookup', { CustomAPIRequestParameters: rows }),
+      ] });
+      assert.equal(result.status, 1, `${label} must not produce a successful partial binding`);
+      assert.equal(result.output, null);
+      assert.match(result.stderr, /new_MetadataLookup/);
+      assert.match(result.stderr, reason);
+      assert.equal(result.requests.length, 1);
+    });
+  }
+});
+
+test('lookup metadata keeps real boolean requiredness and legitimate absent or null hints', async (t) => {
+  for (const isoptional of [false, true]) {
+    for (const logicalentityname of [undefined, null]) {
+      await t.test(`lookup metadata keeps optional=${isoptional}, hint=${String(logicalentityname)}`, () => {
+        const result = discover({ apis: [api('new_UnrestrictedLookup', {
+          CustomAPIRequestParameters: [{ uniquename: 'Ref', type: 5, isoptional, logicalentityname }],
+        })] });
+        assert.equal(result.status, 0, result.stderr);
+        assert.deepEqual(result.output.customApis[0].lookupParameters, { Ref: { isOptional: isoptional } });
+        assert.deepEqual(result.output.customApis[0].parameterKinds, {});
+        assert.equal(result.requests.length, 1);
+      });
+    }
+  }
+});
