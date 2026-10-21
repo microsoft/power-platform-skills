@@ -1434,15 +1434,22 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   Missing, malformed, ambiguous or changed identity refuses as `APP_SITEMAP_UNRESOLVED`; a sitemap another live app currently pins refuses
   deletion as `APP_SITEMAP_SHARED`. Fetch/push also refuse a shared same-name fallback rather than adopting another app's navigation, and
   download returns the refusal with `ok:false` before writing output. A copy whose app was re-linked must be fetched again before pushing edits.
-  One `APP_SITEMAP_UNRESOLVED` refusal, and only that one, teardown gets past itself: the app's SiteMap component names a sitemap that is
-  GONE (`… sitemap '<id>' was not returned by the unpublished-aware read. … Retry.`). Before 2.18.0 the teardown of one app deleted a sitemap
-  another app shared, and the other app's component outlives the row it names (measured live), so every run met that refusal and no retry
-  could pass it. `scripts/lib/app-sitemap-dangling.js` proves the sitemap absent by its id in the published AND the saved layer, with no other
-  app's current layer naming it and the link unchanged when read again, then deletes the app ALONE — one `DELETE`, `If-Match` on the app's
-  row version, no sitemap written — reads it back gone from both layers, warns once, and teardown goes on. A read that fails or is ambiguous,
-  a sitemap a layer still holds, another app's pin, a relink and an app with no published row are each a final refusal (`transient: false`)
-  that says what was found and asks the maker to delete the app in Power Apps and run the teardown again — never "Retry". The SDK's sentence
-  only chooses that path; the proof decides (pinned against the real bundle in `scripts/tests/teardown-dangling-sitemap-real-bundle.test.js`).
+  One `APP_SITEMAP_UNRESOLVED` refusal, and only that one, teardown gets past itself — for a published app whose teardown reaches the app step:
+  the app's SiteMap component names a sitemap that is GONE (`… sitemap '<id>' was not returned by the unpublished-aware read. … Retry.`). Before
+  2.18.0 the teardown of one app deleted a sitemap another app shared, and the other app's component outlives the row it names (measured live).
+  2.17.0's delete looked the sitemap up by the app's unique name and, when no sitemap had that name, deleted such an app alone; the component-aware 2.18.0 delete
+  refuses it on every run, and no retry can pass that. `scripts/lib/app-sitemap-dangling.js` reads the app's row version FIRST, then proves the
+  sitemap absent by its id in the published AND the saved layer, with no other app's current layer naming it and the link unchanged when read
+  again; then it deletes the app ALONE — one `DELETE` with `If-Match` on the version read before the proof, so a repair, relink or publish of
+  the app while the proof ran is refused (412, a final refusal), no sitemap written — reads it back gone from both layers, warns once, and
+  teardown goes on. A read that fails or is ambiguous, a sitemap a layer still holds, another app's pin, a relink, a moved version and an app with
+  no published row are each a final refusal (`transient: false`) that says what was found and asks the maker to delete the app in Power Apps and
+  run the teardown again — never "Retry". Every error of this path is `failClosed`: `deleteStep` passes it on before its not-found, dependency and
+  undeletable shortcuts, which read an error's words (an app's display name, a proxy's "not found"), so the steps that depend on the app are
+  never attempted after it. What the version cannot see — another app pinning the sitemap, or a row of its id made again, after the last read —
+  is the same snapshot limit as the SDK's reverse-owner check. Not reached: an app with live generative pages stops earlier, at the page proof
+  (its navigation is gone), as before — delete such an app in Power Apps, then run the teardown again. The SDK's sentence only chooses this path;
+  the proof decides (pinned against the real bundle in `scripts/tests/teardown-dangling-sitemap-real-bundle.test.js`).
   The reverse-owner check is a snapshot, not a cross-app lock: another app adding a pin afterwards moves neither row token, so this does not
   promise to prevent that race. Each row's delete is conditioned on its
   **row** token from a by-id read, not the unpublished-aware read's content token, which runs ahead

@@ -129,6 +129,18 @@ function isUndeletable(err) {
   return /system-defined|system managed|system-managed/.test(msg);
 }
 
+// Marks an error FAIL-CLOSED: what the step could not prove is itself the failure, so deleteStep passes it on before any of its shortcuts. Those read
+// an error's WORDS and status — "not found", "referenced by", "system-managed", a 404 — and the words of such an error can be a maker's (an app named
+// "System Managed Ops") or a proxy's ("Resource not found for the segment …"): read as a shortcut, it turned the refusal of a live app into an
+// undeletable skip or a confirmed delete, and the steps that depend on the app ran. The resolve step honours the same marker.
+function failClosed(err) {
+  if (err && typeof err === 'object') {
+    err.failClosed = true;
+    return err;
+  }
+  return Object.assign(new Error(String(err)), { failClosed: true });
+}
+
 // Solution component type codes used when reporting what still references a relationship.
 // See: https://learn.microsoft.com/en-us/power-apps/developer/data-platform/reference/entities/dependency
 const DEPENDENT_COMPONENT_LABELS = { 1: 'table', 2: 'column', 10: 'relationship', 26: 'view', 59: 'chart', 60: 'form' };
@@ -327,14 +339,20 @@ const KIND_HANDLERS = {
       try {
         result = await sdk.deleteAppCascade(item.id, item.appModuleIdUnique);
       } catch (err) {
-        // The one refusal a run again can never get past: the app's SiteMap component names a sitemap that is gone (the teardown of another app that
-        // shared it can leave an app so). The app is deleted on its own only once lib/app-sitemap-dangling.js has proven that sitemap gone with reads of
-        // its own; otherwise it refuses, finally and without asking for a retry. Its note — the app went without its sitemap — is a warning, said once.
+        // The one refusal a run again can never get past: the app's SiteMap component names a sitemap that is gone (a teardown, before 2.18.0, of another
+        // app that shared it can leave an app so). The app is deleted on its own only once lib/app-sitemap-dangling.js has proven that sitemap gone with
+        // reads of its own; otherwise it refuses, finally and without asking for a retry. Whatever it throws is fail-closed, so deleteStep can never read
+        // it as a row that is already gone or an artifact that cannot be deleted. Its note — the app went without its sitemap — is a warning, said once.
         const dangling = danglingSitemapOf(err, item.id);
         if (dangling) {
-          const { warning } = await deleteAppWithoutSitemap(sdk.dataverse, { appId: item.id, appName: item.name, sitemapId: dangling.sitemapId, refused: err });
-          if (ctx && Array.isArray(ctx.warnings)) ctx.warnings.push(warning);
-          if (ctx && typeof ctx.warn === 'function') ctx.warn(warning);
+          let outcome;
+          try {
+            outcome = await deleteAppWithoutSitemap(sdk.dataverse, { appId: item.id, appName: item.name, sitemapId: dangling.sitemapId, refused: err });
+          } catch (refusedHere) {
+            throw failClosed(refusedHere);
+          }
+          if (ctx && Array.isArray(ctx.warnings)) ctx.warnings.push(outcome.warning);
+          if (ctx && typeof ctx.warn === 'function') ctx.warn(outcome.warning);
           return;
         }
         // A rejection does not mean the app survived. The SDK's deleteAppCascade runs the remote
@@ -1563,7 +1581,7 @@ function planTeardown(spec) {
 // Reporting both as "undeletable" would send an operator hunting a platform problem that isn't
 // there. `skippedIds` is retained as the union of both for callers that only need the count.
 // A third reason, `failed` (with a `detail`), is a removal the handler tolerates (`tolerateFailure`).
-// A not-found error counts as already-gone. Throws only on a genuine failure.
+// A not-found error counts as already-gone. Throws only on a genuine failure — and on any error marked `failClosed`, before reading it at all.
 //
 // A removal that looks for its artifact itself answers whether there was one: the handler's `foundNothing(outcome)` says so (aiSummary: the SDK's `{ removed: false }`), and that id is
 // answered in `absentIds`. It is neither deleted nor skipped — nothing was there — and runTeardown reports it as a step that found nothing, like one whose resolver finds none.
@@ -1579,6 +1597,10 @@ async function deleteStep(sdk, handler, items, ctx) {
       if (typeof handler.foundNothing === 'function' && handler.foundNothing(outcome)) absentIds.push(item.id);
       else deletedIds.push(item.id);
     } catch (err) {
+      // A fail-closed error (failClosed, above) is passed on before every shortcut below: it says what could not be proven, and its words — a
+      // maker's names, a proxy's "not found" — are not a verdict of the platform's on this row. For the app step, passing it on is what stops the
+      // teardown before the steps that depend on the app (runTeardown).
+      if (err && err.failClosed === true) throw err;
       if (handler.tolerateNotFound && isNotFound(err)) {
         // Table delete throws not-found even on success; treat as deleted — unless the handler can
         // tell that nothing was there when the step began (`absentOnNotFound`): then it is a step

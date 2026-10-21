@@ -1,28 +1,33 @@
 'use strict';
-// The teardown of an app whose navigation link names a sitemap that no longer exists.
+// The teardown of a published app whose navigation link names a sitemap that no longer exists.
 //
 // An app is two rows, the appmodule and its sitemap, and the bundled SDK deletes the two together once it has found the sitemap through the
 // app's SiteMap component (componenttype 62) on its current layer. Before 2.18.0, the teardown of one app deleted the sitemap it used even when
 // another app used that sitemap too. 2.18.0 refuses that, but environments where it happened hold apps whose SiteMap component names a sitemap
-// that is gone: measured live, the component outlives the row it names. The SDK refuses to delete such an app:
+// that is gone: measured live, the component outlives the row it names. 2.17.0's delete looked an app's sitemap up by the app's unique name and, when
+// no sitemap had that name, deleted such an app alone; the component-aware delete of the 2.18.0 SDK refuses it, on every run:
 //   APP_SITEMAP_UNRESOLVED  Refusing to delete app '<app>': sitemap '<sitemap>' was not returned by the unpublished-aware read. … Retry.
-// Every later teardown met that same refusal, so its "Retry." could never succeed — where 2.17.0's teardown had removed the app.
+// — and its "Retry." can never succeed.
 //
-// Teardown now proves the sitemap gone itself: by its id, in the published and in the saved layer, with no other app's current layer naming
-// it, and with the link unchanged. Then it deletes the app ALONE — one DELETE, conditioned on the app's row version — proves the app gone in both
-// layers, and goes on. In every other case it refuses, with what it found and what the maker can do, and never with "Retry".
+// Teardown now proves the sitemap gone itself — by its id, in the published and in the saved layer, with no other app's current layer naming
+// it, and with the link unchanged — having read the app's row version FIRST. Then it deletes the app ALONE, with one DELETE conditioned on that
+// version, so a change of the app while the proof ran (a repair, a relink, a publish) makes the platform refuse the delete; it proves the app gone
+// in both layers, and goes on. In every other case it refuses, with what it found and what the maker can do, never with "Retry" — and every error
+// of this path stops the teardown before the steps that depend on the app, whatever its words say. It is reached only by a teardown that gets to
+// the app step: an app whose live generative pages must first be proven from its navigation stops at that proof, as it did before.
 //
 // Over the REAL vendored SDK, the plugin's own HTTP client and the strict stateful fake of helpers/fake-lifecycle-org.js: a row that does not
 // exist answers 404 0x80040217 by id and is in no collection read; a plain read of a collection is the published layer, and
 // RetrieveUnpublishedMultiple is the saved one. The app is made by the build. The dangling link is made by a DISCLOSED FIXTURE STEP (`strand`):
 // the sitemap is deleted the way another app's teardown deleted it, and the app's SiteMap component is put back, because the platform kept it
 // (measured live) where this fake drops every component that names a row it deletes. A failure is provoked in front of the fake, for this
-// test's own requests only.
+// test's own requests only; so is the platform's If-Match rule for the app's DELETE (`honourIfMatch`), which this fake does not apply to deletes.
 //
 //   1. the SDK's refusal: the one shape teardown recognises
-//   2. a dangling link: teardown deletes that app alone and finishes — or, when that delete is refused or cannot be read back, stops before
-//      the steps that depend on the app, and a run again finishes
-//   3. a dangling link teardown cannot prove gone: refused, never retried, nothing deleted
+//   2. a dangling link: teardown deletes that app alone and finishes — or, when that delete is refused (a change of the app while the proof ran
+//      among others) or cannot be read back, stops before the steps that depend on the app, and a run again finishes
+//   3. a dangling link teardown cannot prove gone: refused, never retried, nothing deleted — and no error of this path is taken for a row that is
+//      not found or an artifact that cannot be deleted, whatever the app is called
 //   4. what is unchanged: an ordinary teardown, and the SDK's own refusals — a sitemap another app shares, a link that changes while the SDK
 //      reads it, a SiteMap component it cannot read, a namesake sitemap that is another app's navigation
 const test = require('node:test');
@@ -44,11 +49,11 @@ const OTHER_APP = '66666666-6666-4666-8666-666666666666';
 const OTHER_LAYER = '77777777-7777-4777-8777-777777777777';
 const ELSEWHERE = '44444444-4444-4444-8444-444444444444';
 
-// The smallest app the build makes with navigation of its own: in its solution, published, a table in its sitemap.
-const spec = () => ({
+// The smallest app the build makes with navigation of its own: in its solution, published, a table in its sitemap. `appName` is its display name.
+const spec = (appName = APP_NAME) => ({
   schemaVersion: 2,
   solution: { uniqueName: SOLUTION, displayName: 'Contoso Nav', publisherPrefix: 'contoso' },
-  app: { name: APP_NAME, uniqueName: APP },
+  app: { name: appName, uniqueName: APP },
   entities: [{ schemaName: 'contact', displayName: 'Contact', existing: true, primaryAttribute: { schemaName: 'fullname', displayName: 'Full Name' }, columns: [] }],
   appShell: { areas: [{ label: 'Work', groups: [{ label: 'People', subAreas: [{ entity: 'contact', title: 'Contacts' }] }] }] },
 });
@@ -90,9 +95,9 @@ async function direct(org, method, where, body) {
   return res;
 }
 
-// The app the build made: its id, its current layer, and the sitemap its SiteMap component names.
-async function built(env) {
-  const { result } = await env.harness.build(spec());
+// The app the build made from `appSpec`: its id, its current layer, and the sitemap its SiteMap component names.
+async function built(env, appSpec = spec()) {
+  const { result } = await env.harness.build(appSpec);
   assert.equal(result.ok, true, JSON.stringify(result.errors));
   const [app] = env.org.find('appmodules', (a) => a.uniquename === APP);
   const layer = String(app.appmoduleidunique).toLowerCase();
@@ -140,12 +145,14 @@ const ORDINARY_READS = [
   'GET webresourceset', 'GET webresourceset', 'GET EntityDefinitions', 'GET solutions',
 ];
 // What the teardown of an app with a dangling link reads: the ordinary reads up to the SDK's refusal (its saved-layer read of the sitemap answers no
-// row); the proof — the app's current layer and its link, the sitemap in the published and the saved layer, the apps that name it, the layer and the
-// link again, the app's row version; after the app's delete, the app in the published and the saved layer; then the steps after the app, as ever.
+// row); the app's row version, read BEFORE the proof so that the delete is conditioned on the app as it was proven; the proof — the app's current
+// layer and its link, the sitemap in the published and the saved layer, the apps that name it, the layer and the link again; after the app's
+// delete, the app in the published and the saved layer; then the steps after the app, as ever.
 const DANGLING_READS = [
   ...ORDINARY_READS.slice(0, 8),
+  'GET appmodules',
   'GET appmodules/Microsoft.Dynamics.CRM.RetrieveUnpublishedMultiple', 'GET appmodulecomponents', 'GET sitemaps', 'GET sitemaps/Microsoft.Dynamics.CRM.RetrieveUnpublishedMultiple',
-  'GET appmodulecomponents', 'GET appmodules/Microsoft.Dynamics.CRM.RetrieveUnpublishedMultiple', 'GET appmodulecomponents', 'GET appmodules',
+  'GET appmodulecomponents', 'GET appmodules/Microsoft.Dynamics.CRM.RetrieveUnpublishedMultiple', 'GET appmodulecomponents',
   'GET appmodules', 'GET appmodules/Microsoft.Dynamics.CRM.RetrieveUnpublishedMultiple',
   ...ORDINARY_READS.slice(12),
 ];
@@ -225,6 +232,7 @@ test('a dangling link on this spec\'s own app: teardown deletes exactly that app
   const deleted = at(`DELETE /appmodules(${app.id})`);
   for (const read of [PUBLISHED_SITEMAP(app.sitemapId), SAVED_SITEMAP(app.sitemapId), LINK(app.layer), APP_ROW(app.id)]) assert.ok(at(`GET ${read}`) < deleted, `${read} before the delete`);
   for (const read of [PUBLISHED_APP(app.id), SAVED_APP(app.id)]) assert.ok(at(`GET ${read}`) > deleted, `${read} after the delete`);
+  assert.ok(at(`GET ${APP_ROW(app.id)}`) < at(`GET ${LINK(app.layer)}`), 'the app\'s row version is read BEFORE the proof begins: the delete is conditioned on the app as it was proven');
   assert.equal(sent.filter((line) => line === `GET ${LINK(app.layer)}`).length, 2, 'the link is read again after the sitemap, as the SDK reads it again');
   assert.deepEqual(env.org.readNames(run.mark), DANGLING_READS);
   assert.equal(run.end - run.mark, 25, 'the reads, the app\'s delete, and the two deletes after it');
@@ -238,19 +246,25 @@ test('a dangling link on this spec\'s own app: teardown deletes exactly that app
   assert.ok(log.some((line) => /^✓ teardown complete — /.test(line.trim())), 'the teardown completes');
 });
 
-test('a dangling link, and the app\'s own delete is refused (its row version moved): the step fails with the platform\'s words, nothing else is deleted, and nothing asks for a retry of the SDK\'s', async () => {
+// The platform's answer to a delete conditioned on a version the row no longer has, and the final refusal teardown makes of it.
+const VERSION_MOVED = "The version of the existing record doesn't match the RowVersion property provided.";
+const versionMoved = (app, name = APP_NAME) => `app "${name}" (${app.id}) was not deleted: its sitemap ${app.sitemapId} is gone, but the app changed while teardown was proving that, so the platform refused a delete conditioned on the version the proof began at (HTTP 412: 0x80060882 ${VERSION_MOVED}). Nothing was deleted. Run the teardown again: it proves the app as it is now before it deletes anything.`;
+const notAttempted = (result) => result.skipped.length > 0 && result.skipped.every((line) => / \(not attempted — the app was not deleted\)$/.test(line));
+
+test('a dangling link, and the platform refuses the app\'s delete on its row version (412): a final refusal — nothing is deleted, no step after the app is attempted, and nothing asks for a retry', async () => {
   const env = environment();
   const app = await built(env);
   await strand(env, app);
-  const refused = env.add('DELETE', (w) => w === `/appmodules(${app.id})`, refusedWith(412, '0x80060882', "The version of the existing record doesn't match the RowVersion property provided."));
+  const refused = env.add('DELETE', (w) => w === `/appmodules(${app.id})`, refusedWith(412, '0x80060882', VERSION_MOVED));
   const before = env.org.contents();
   const run = ran(await env.harness.measure(() => env.harness.teardown(spec())), 'the teardown');
   const { result } = run.value;
   assert.equal(refused.hits, 1, 'the app\'s delete was sent once');
   assert.equal(result.ok, false);
   assert.deepEqual(env.org.contents(), before, 'the environment holds exactly what it held');
-  assert.deepEqual(result.errors, [{ step: `app module "${APP_NAME}"`, message: `app "${APP_NAME}" (${app.id}) was not deleted: its sitemap ${app.sitemapId} is gone, but the delete of the app on its own did not remove it (HTTP 412: 0x80060882 The version of the existing record doesn't match the RowVersion property provided.). Nothing else was deleted. Run the teardown again; if the app stays, and it is yours, delete it in Power Apps (make.powerapps.com, Apps), then run the teardown again: it removes the rest.` }]);
-  assert.ok(result.skipped.every((line) => / \(not attempted — the app was not deleted\)$/.test(line)), JSON.stringify(result.skipped));
+  assert.deepEqual(result.errors, [{ step: `app module "${APP_NAME}"`, message: versionMoved(app) }]);
+  assert.doesNotMatch(result.errors[0].message, /\bretry\b/i);
+  assert.ok(notAttempted(result), JSON.stringify(result.skipped));
 });
 
 test('a dangling link, and the app cannot be read back after its delete: the steps that depend on it wait, and the teardown run again finds the app gone and finishes', async () => {
@@ -275,6 +289,96 @@ test('a dangling link, and the app cannot be read back after its delete: the ste
   assert.deepEqual(again.writes, { 'DELETE webresourceset': 1, 'DELETE solutions': 1 }, 'the rest, and no app or sitemap write');
   backToSeed(env);
 });
+
+// The strict fake does not apply If-Match to a DELETE, so this seam applies the platform's documented rule to the app's delete: a delete conditioned
+// on a version the row no longer has is refused — 412 0x80060882 — and changes nothing. An app's read by id answers its version as W/"<n>"
+// (helpers/fake-lifecycle-org.js), the token such a delete carries.
+// See: https://learn.microsoft.com/power-apps/developer/data-platform/webapi/perform-conditional-operations-using-web-api#apply-optimistic-concurrency
+function honourIfMatch(env, app) {
+  return env.add('DELETE', (w) => w === `/appmodules(${app.id})`, (req) => {
+    const sent = Object.entries(req.headers || {}).find(([name]) => name.toLowerCase() === 'if-match');
+    const row = env.org.rowsOf('appmodules').get(app.id);
+    if (sent && row && sent[1] !== `W/"${row.version}"`) return refusedWith(412, '0x80060882', VERSION_MOVED)();
+    return env.org.request(req);
+  });
+}
+
+test('a dangling link the app is repaired from while teardown proves it — relinked to a new sitemap and published right after teardown\'s last read of its link: the delete, conditioned on the version the proof began at, is refused, and the app, its new sitemap and every step after the app stay', async () => {
+  const env = environment();
+  const app = await built(env);
+  await strand(env, app);
+  const REPAIRED = '55555555-5555-4555-8555-555555555555';
+  let linkReads = 0;
+  env.add('GET', (w) => w === LINK(app.layer), async (req) => {
+    linkReads += 1;
+    const answer = await env.org.request(req);
+    if (linkReads === 2) {
+      // Another maker repairs the app the moment teardown has read its link the second, last time: a new sitemap, the app linked to it in place
+      // of the one that is gone, and the app published. Each is a change of THIS app, and each moves its row version.
+      await direct(env.org, 'POST', '/sitemaps', { sitemapid: REPAIRED, sitemapname: 'Repaired', sitemapnameunique: 'contoso_repaired', sitemapxml: '<SiteMap><Area Id="a"><Group Id="g"><SubArea Id="s" Url="https://contoso.example/repaired" /></Group></Area></SiteMap>' });
+      await direct(env.org, 'POST', '/RemoveAppComponents', { AppId: app.id, Components: [{ '@odata.type': 'Microsoft.Dynamics.CRM.sitemap', sitemapid: app.sitemapId }] });
+      await direct(env.org, 'POST', '/AddAppComponents', { AppId: app.id, Components: [{ '@odata.type': 'Microsoft.Dynamics.CRM.sitemap', sitemapid: REPAIRED }] });
+      await direct(env.org, 'POST', '/PublishXml', { ParameterXml: `<importexportxml><appmodules><appmodule>${app.id}</appmodule></appmodules></importexportxml>` });
+    }
+    return answer;
+  });
+  const appDelete = honourIfMatch(env, app);
+  const run = ran(await env.harness.measure(() => env.harness.teardown(spec())), 'the teardown');
+  const { result } = run.value;
+  assert.equal(linkReads, 2, 'the repair came after teardown\'s second, last read of the link');
+  assert.equal(result.ok, false, 'the repaired app is not deleted');
+  assert.equal(env.org.rowsOf('appmodules').has(app.id), true, 'the app is still there');
+  assert.equal(env.org.find('sitemaps', (s) => String(s.sitemapid).toLowerCase() === REPAIRED).length, 1, 'so is its new sitemap');
+  assert.equal(env.org.find('appmodulecomponents', (c) => String(c.objectid).toLowerCase() === REPAIRED && Number(c.componenttype) === 62).length, 1, 'still its navigation');
+  assert.equal(appDelete.hits, 1, 'the app\'s delete was sent once');
+  assert.deepEqual(env.org.writes(run.mark).filter((w) => w.method === 'DELETE'), [], 'no delete reached the environment');
+  assert.deepEqual(result.errors, [{ step: `app module "${APP_NAME}"`, message: versionMoved(app) }]);
+  assert.ok(notAttempted(result), JSON.stringify(result.skipped));
+});
+
+test('an app whose display name reads like a platform refusal ("System Managed Ops"), with a dangling link teardown cannot prove gone: the refusal is not taken for an undeletable artifact — nothing is written, and no step after the app is attempted', async () => {
+  const env = environment();
+  const NAMED = 'System Managed Ops';
+  const app = await built(env, spec(NAMED));
+  await strand(env, app);
+  const fault = env.add('GET', (w) => w === SAVED_SITEMAP(app.sitemapId), refusedWith(403, '0x80040220', 'The user is not a member of the organization.'));
+  const before = env.org.contents();
+  const run = ran(await env.harness.measure(() => env.harness.teardown(spec(NAMED))), 'the teardown');
+  const { result } = run.value;
+  assert.equal(result.ok, false, 'the app step failed, and was not skipped as undeletable');
+  assert.deepEqual(env.org.writes(run.mark), [], 'not one write: no web resource, no solution');
+  assert.deepEqual(env.org.contents(), before, 'the environment holds exactly what it held');
+  assert.equal(result.errors.length, 1, JSON.stringify(result.errors));
+  assert.equal(result.errors[0].step, `app module "${NAMED}"`);
+  assert.match(result.errors[0].message, new RegExp(`^app "${NAMED}" \\(${app.id}\\) was not deleted: .*the saved layer could not be read \\(.*HTTP 403`));
+  assert.ok(notAttempted(result), JSON.stringify(result.skipped));
+  assert.ok(fault.hits >= 1, 'the read teardown could not use was sent');
+});
+
+// A read back refused with words that say "not found" — an OData 404 of a proxy or of the service:
+//   { "error": { "code": "0x80060888", "message": "Resource not found for the segment 'appmodules'." } }
+for (const [layer, readBack] of [['published', PUBLISHED_APP], ['saved', SAVED_APP]]) {
+  test(`a dangling link, and the app's read back in the ${layer} layer is refused with words that say "not found": the step fails rather than count as a delete, nothing that depends on the app is touched, and a run again finishes`, async () => {
+    const env = environment();
+    const app = await built(env);
+    await strand(env, app);
+    const proxy = env.add('GET', (w) => w === readBack(app.id), refusedWith(404, '0x80060888', "Resource not found for the segment 'appmodules'."));
+    const first = ran(await env.harness.measure(() => env.harness.teardown(spec())), 'the teardown');
+    assert.ok(proxy.hits >= 1, 'the app was read back');
+    assert.equal(first.value.result.ok, false, 'not counted as a delete');
+    assert.equal(env.org.rowsOf('appmodules').has(app.id), false, 'the delete ran');
+    assert.deepEqual(first.writes, { 'DELETE appmodules': 1 }, 'and nothing after it');
+    assert.equal(first.value.result.warnings, undefined, 'no note that the app went without its sitemap: that is not proven');
+    assert.match(first.value.result.errors[0].message, new RegExp(`^app "${APP_NAME}" \\(${app.id}\\): its sitemap ${app.sitemapId} is gone and the app's delete was sent \\(HTTP 204\\), but whether the app is gone could not be read \\(.*Resource not found for the segment 'appmodules'.*\\)`));
+    assert.ok(notAttempted(first.value.result), JSON.stringify(first.value.result.skipped));
+
+    proxy.matches = () => false;
+    const again = ran(await env.harness.measure(() => env.harness.teardown(spec())), 'the teardown run again');
+    assert.equal(again.value.result.ok, true, JSON.stringify(again.value.result.errors));
+    assert.deepEqual(again.writes, { 'DELETE webresourceset': 1, 'DELETE solutions': 1 }, 'the rest, and no app or sitemap write');
+    backToSeed(env);
+  });
+}
 
 // --- 3. a dangling link teardown cannot prove gone ---------------------------------------------------------------------------------------------------------
 
@@ -334,7 +438,7 @@ const UNPROVEN = [
   {
     title: 'the app has no row version to make its delete conditional on',
     arrange: (env, app) => env.add('GET', (w) => w === APP_ROW(app.id), refusedWith(404, '0x80040217', `appmodule With Id = ${app.id} Does Not Exist`)),
-    why: () => /That sitemap is gone, but teardown could not delete the app on its own: it has no published row to condition its delete on \(its read by id answered HTTP 404: it was never published, or it was deleted meanwhile\)\. /,
+    why: () => /Teardown deletes such an app on its own only with a delete conditioned on the app's row version, and it could not read one: its read by id answered HTTP 404: it was never published, or it was deleted meanwhile\. /,
   },
 ];
 
@@ -387,6 +491,60 @@ test('the refusal is final: it is marked so, the build\'s retry policy never run
   assert.doesNotMatch(error.message, /\bretry\b/i);
   assert.equal(error.cause && error.cause.code, 'APP_SITEMAP_UNRESOLVED', 'the SDK\'s refusal is kept as its cause');
   assert.equal(error.cause.message, sdkRefusal(app));
+});
+
+// Every error that leaves this path stops the teardown before what depends on the app, whatever its words: it is marked `failClosed`, which
+// deleteStep passes on before its shortcuts (below). A proof that cannot be made and a delete refused on a moved version are final as well.
+test('every error the dangling-link path throws is marked failClosed; a proof that cannot be made and a delete refused on its version are final', async () => {
+  const CASES = [
+    ['a proof that cannot be made', (env, app) => env.add('GET', (w) => w === SAVED_SITEMAP(app.sitemapId), refusedWith(403, '0x80040220', 'The user is not a member of the organization.')), true],
+    ['a delete refused on its version', (env, app) => env.add('DELETE', (w) => w === `/appmodules(${app.id})`, refusedWith(412, '0x80060882', VERSION_MOVED)), true],
+    ['a delete answered with no change', (env, app) => env.add('DELETE', (w) => w === `/appmodules(${app.id})`, refusedWith(400, '0x80040216', 'An unexpected error occurred.')), false],
+    ['a read back that cannot be made', (env, app) => env.add('GET', (w) => w === PUBLISHED_APP(app.id), refusedWith(404, '0x80060888', "Resource not found for the segment 'appmodules'.")), false],
+  ];
+  for (const [what, arrange, final] of CASES) {
+    const env = environment();
+    const app = await built(env);
+    await strand(env, app);
+    arrange(env, app);
+    const sdk = createMakerSdk({ workspaceStorage: createNodeWorkspaceStorage(makeTempDir('teardown-dangling-sdk-')), instanceUrl: env.org.origin, httpClient: env.harness.client });
+    await sdk.initWorkspace();
+    const [item] = await KIND_HANDLERS.app.resolve(sdk, { uniqueName: APP });
+    const error = await KIND_HANDLERS.app.del(sdk, item, { warnings: [] }).then(() => null, (e) => e);
+    assert.ok(error, `${what}: the app step fails`);
+    assert.equal(error.failClosed, true, `${what}: marked failClosed`);
+    assert.doesNotMatch(error.message, /\bretry\b/i, what);
+    if (final) {
+      assert.equal(error.transient, false, `${what}: final`);
+      assert.equal(retryPolicyFor(error), RETRY.NEVER, what);
+    }
+  }
+});
+
+test('deleteStep: an error marked failClosed is passed on before every shortcut — not found, a dependency block, an undeletable artifact — and an unmarked one is read exactly as before', async () => {
+  const { deleteStep } = require('../lib/sdk-teardown.js');
+  const item = { id: 'a1', name: 'System Managed Ops' };
+  let asked = 0;
+  const handler = (error, extra = {}) => ({ del: async () => { throw error; }, confirmAbsent: async () => { asked += 1; return true; }, ...extra });
+  // Unmarked, as before: words that say "not found", once the platform confirms the row absent, are a deletion; a dependency block is a skip for a
+  // handler that tolerates one; system-managed words are an undeletable skip.
+  assert.deepEqual(await deleteStep({}, handler(new Error('appmodule With Id = a1 Does Not Exist')), [item]), { deletedIds: ['a1'], absentIds: [], skippedIds: [], skipped: [] });
+  assert.equal(asked, 1);
+  assert.deepEqual(await deleteStep({}, handler(new Error('The uxagentproject component cannot be deleted because it is referenced by 1 other components.'), { tolerateDependencyBlock: true }), [item]),
+    { deletedIds: [], absentIds: [], skippedIds: ['a1'], skipped: [{ id: 'a1', reason: 'referenced' }] });
+  assert.deepEqual(await deleteStep({}, handler(new Error('The view is system-managed and cannot be deleted.')), [item]), { deletedIds: [], absentIds: [], skippedIds: ['a1'], skipped: [{ id: 'a1', reason: 'undeletable' }] });
+  // Marked: passed on as it is, and nothing is asked of the platform about it.
+  for (const [words, extra] of [
+    ['appmodule With Id = a1 Does Not Exist', {}],
+    ['The uxagentproject component cannot be deleted because it is referenced by 1 other components.', { tolerateDependencyBlock: true }],
+    ['app "System Managed Ops" (a1) was not deleted', {}],
+  ]) {
+    const marked = Object.assign(new Error(words), { failClosed: true });
+    await assert.rejects(deleteStep({}, handler(marked, extra), [item]), (e) => e === marked, words);
+  }
+  const status404 = Object.assign(new Error('HTTP 404'), { statusCode: 404, failClosed: true });
+  await assert.rejects(deleteStep({}, handler(status404, { tolerateNotFound: true }), [item]), (e) => e === status404, 'a marked 404 even where not-found is tolerated');
+  assert.equal(asked, 1, 'confirmAbsent was never asked about a marked error');
 });
 
 // --- 4. what is unchanged ----------------------------------------------------------------------------------------------------------------------------------

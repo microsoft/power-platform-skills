@@ -1,12 +1,16 @@
 'use strict';
-// The teardown of an app whose SiteMap component names a sitemap that no longer exists: proving that sitemap gone, then deleting the app alone.
+// The teardown of a published app whose SiteMap component names a sitemap that no longer exists: proving that sitemap gone, then deleting the app alone.
 //
 // WHY. An app is two rows, the appmodule and its sitemap, and the bundled SDK deletes them together (one change set) once it has resolved the sitemap
 // from the app's current layer: an app deleted on its own while its sitemap exists strands that row and keeps its unique name taken for good
 // (AGENTS.md, "An app is TWO rows"). When the sitemap row is gone, that resolution cannot finish and the SDK refuses. Refusing is right while it
 // cannot tell, but the row can be gone for good: before 2.18.0, the teardown of one app deleted a sitemap that another app shared, and — measured
-// live — the other app's SiteMap component outlives the row it names. Every later teardown of that app met the same refusal, and its "Retry." could
-// never get past it, where 2.17.0's teardown had deleted such an app.
+// live — the other app's SiteMap component outlives the row it names. 2.17.0's delete looked an app's sitemap up by the app's unique name and, when
+// no sitemap had that name, deleted such an app alone; the component-aware delete of the 2.18.0 SDK refuses it on every run, and its "Retry." can never get past that.
+//
+// SCOPE. This is the app step of a teardown. A teardown that stops before it never gets here: an app with live generative pages has them proven from
+// its navigation first (sdk-teardown.js, the pages' resolve), and with that navigation gone the proof stops the teardown, as it always did — the maker
+// deletes such an app in Power Apps, then runs the teardown again. So is an app that was never published refused here (step 0 below).
 //
 // THE SDK'S REFUSAL, the one this module acts on (the vendored bundle's app delete: deleteAppCascade, and the sitemap resolution it starts with):
 //   SdkError {
@@ -26,17 +30,26 @@
 //
 // THE PROOF. Every read is strict: an answer that is refused, is no list, or pages wrongly is "not proven", never "absent" (app-components.js
 // collectionRows).
+//   0. FIRST, the app's row version, from its read by id. Everything after it is proven of the app AT this version, and the delete is conditioned on
+//      it: a repair, a relink or a publish of the app while the proof runs moves the version, and the platform then refuses the delete (412), which is
+//      a final refusal here. A version read after the proof would carry such a change in with it — the delete would then act on an app nothing proved.
+//      (The 2.17.0 SDK's own app delete reads the app's version first, for the same reason.)
 //   1. the link: the app's current layer, and exactly one SiteMap component on it, naming the sitemap the SDK named;
 //   2. that sitemap, by its id, in the PUBLISHED layer (a plain read of the collection) and in the SAVED layer (RetrieveUnpublishedMultiple): no row
 //      in either;
 //   3. no OTHER app's current layer names it — the rule the SDK applies before it deletes a sitemap that two apps use (APP_SITEMAP_SHARED);
-//   4. the link again, unchanged: a relink while this module reads is caught, as the SDK's own second read of the link catches one;
-//   5. the app's row version, from its read by id.
-// Then ONE write: DELETE /appmodules(<id>) with If-Match on that version — the app alone. No sitemap is written or deleted. Then the app is read in both
-// layers again: it is gone, or the step fails. Anything else refuses, says what was found and what the maker can do, and is final (retry-policy.js
-// `refusal`: `transient: false`): a run again as it is cannot change what was found, so the refusal does not ask for one.
+//   4. the link again, unchanged: a relink while this module reads is caught, as the SDK's own second read of the link catches one.
+// Then ONE write: DELETE /appmodules(<id>) with If-Match on the version of step 0 — the app alone. No sitemap is written or deleted. Then the app is
+// read in both layers again: it is gone, or the step fails. Anything else refuses and says what was found and what the maker can do; a refusal is final
+// (retry-policy.js `refusal`: `transient: false`) and does not ask for a retry, which could not change what was found.
+// What the version cannot see: a change of OTHER rows after the last read — another app adding a pin to the sitemap, a sitemap of that id made
+// again — moves no version of this app. That is the snapshot the SDK's own reverse-owner check is ("not a cross-app lock").
+//
+// FAIL CLOSED. Every error that leaves this path is marked `failClosed` (sdk-teardown.js passes such an error on before any of deleteStep's
+// shortcuts): its words can be the maker's — the app's display name — or the platform's ("Resource not found …"), and read as words they could pass
+// for a row that is already gone or an artifact that cannot be deleted, and let the steps that depend on a live app run.
 // See https://learn.microsoft.com/power-apps/developer/data-platform/webapi/reference/retrieveunpublishedmultiple
-// and https://learn.microsoft.com/power-apps/developer/data-platform/webapi/perform-conditional-operations-using-web-api
+// and https://learn.microsoft.com/power-apps/developer/data-platform/webapi/perform-conditional-operations-using-web-api#apply-optimistic-concurrency
 const { collectionRows, currentAppLayer, appComponentRows } = require('./app-components.js');
 const { FORM_GUID_RE } = require('./app-spec.js');
 const { refusal, serviceFailure } = require('./retry-policy.js');
@@ -126,8 +139,9 @@ async function otherAppsNaming(client, sitemapId, appId, ownLayer) {
   return others;
 }
 
-// Step 5: the app's row version, which its delete is conditioned on — as the SDK conditions its own delete of an app that has no sitemap. An app's read
-// by id is its PUBLISHED projection, so an app that was never published answers 404 (measured; the download tells the maker to publish a new app first):
+// Step 0: the app's row version, which its delete is conditioned on — read FIRST, before anything is proven about the app (see the header), as the SDK
+// reads it first for its own delete of an app that has no sitemap. An app's read by id is its PUBLISHED projection, so an app that was never published
+// answers 404 (measured; the download tells the maker to publish a new app first):
 //   GET /appmodules(<id>)?$select=appmoduleid  ->  200, ETag: W/"1234567"  (the same version is the body's "@odata.etag")
 async function appRowVersion(client, appId) {
   let answer;
@@ -136,7 +150,7 @@ async function appRowVersion(client, appId) {
   } catch (error) {
     return { ok: false, why: `reading the app failed (${reasonOf(error)})` };
   }
-  if (answer && answer.status === 404) return { ok: false, why: 'it has no published row to condition its delete on (its read by id answered HTTP 404: it was never published, or it was deleted meanwhile)' };
+  if (answer && answer.status === 404) return { ok: false, why: 'its read by id answered HTTP 404: it was never published, or it was deleted meanwhile' };
   if (!answer || answer.status < 200 || answer.status >= 300) return { ok: false, why: `reading the app answered HTTP ${answer && answer.status}` };
   const header = Object.entries(answer.headers || {}).find(([name]) => name.toLowerCase() === 'etag');
   const version = header ? header[1] : answer.body && answer.body['@odata.etag'];
@@ -168,14 +182,18 @@ function answerOf(answer, failure) {
 
 // Deletes the app `appId` (named `appName`) on its own, once the sitemap the SDK could not find (`sitemapId`, from danglingSitemapOf) is proven gone — see the
 // header. `client` is the SDK's Dataverse client (`sdk.dataverse`), `refused` the SDK's refusal, kept as the cause of a refusal here. Resolves to { warning }
-// (what to tell the maker) once the app is deleted and read back gone from both layers; throws otherwise. Nothing is written before the proof is complete.
+// (what to tell the maker) once the app is deleted and read back gone from both layers; throws otherwise — every error it throws marked `failClosed`.
+// Nothing is written before the proof is complete.
 async function deleteAppWithoutSitemap(client, { appId, appName, sitemapId, refused }) {
   const id = guidKey(appId);
   const lead = `app "${appName}" (${id}) was not deleted: its navigation link names sitemap ${sitemapId}, which the SDK could not read.`;
   const ask = 'If this app is yours, delete it in Power Apps (make.powerapps.com, Apps), then run the teardown again: it removes the rest.';
-  const unproven = (why) => refusal(`${lead} Teardown deletes such an app on its own only once that sitemap is proven gone, and it could not prove it: ${why}. Nothing was deleted. ${ask}`, { cause: refused });
+  const unproven = (why) => refusal(`${lead} Teardown deletes such an app on its own only once that sitemap is proven gone, and it could not prove it: ${why}. Nothing was deleted. ${ask}`, { cause: refused, failClosed: true });
   if (!client || typeof client.get !== 'function' || typeof client.delete !== 'function') throw unproven('there is no Dataverse client to read it with');
 
+  // Step 0, before anything is proven: the version the delete is conditioned on. Never read again after the proof — see the header.
+  const row = await appRowVersion(client, id);
+  if (!row.ok) throw refusal(`${lead} Teardown deletes such an app on its own only with a delete conditioned on the app's row version, and it could not read one: ${row.why}. Nothing was deleted. ${ask}`, { cause: refused, failClosed: true });
   const link = await readLink(client, id);
   if (!link.ok) throw unproven(link.why);
   if (link.sitemapId !== sitemapId) throw unproven(`the app's SiteMap component names sitemap ${link.sitemapId} now`);
@@ -193,11 +211,9 @@ async function deleteAppWithoutSitemap(client, { appId, appName, sitemapId, refu
   const again = await readLink(client, id);
   if (!again.ok) throw unproven(again.why);
   if (again.layer !== link.layer || again.sitemapId !== sitemapId) throw unproven(`the link changed while teardown read it (sitemap ${sitemapId}, then sitemap ${again.sitemapId})`);
-  const row = await appRowVersion(client, id);
-  if (!row.ok) throw refusal(`${lead} That sitemap is gone, but teardown could not delete the app on its own: ${row.why}. Nothing was deleted. ${ask}`, { cause: refused });
 
-  // The one write. A delete that gets no answer is not sent again (lib/sdk-http-client.js never re-sends a conditional write it has no answer to): the
-  // reads below say whether it ran.
+  // The one write, conditioned on the version of step 0. A delete that gets no answer is not sent again (lib/sdk-http-client.js never re-sends a
+  // conditional write it has no answer to): the reads below say whether it ran.
   let answer;
   let failure = null;
   try {
@@ -207,14 +223,20 @@ async function deleteAppWithoutSitemap(client, { appId, appName, sitemapId, refu
   }
   const gone = await appGone(client, id);
   if (!gone.ok) {
-    throw new Error(`app "${appName}" (${id}): its sitemap ${sitemapId} is gone and the app's delete was sent (${answerOf(answer, failure)}), but whether the app is gone could not be read (${gone.why}), so the steps that depend on it are not attempted. Run the teardown again: it finds the app gone, or proves its sitemap gone again and deletes it.`);
+    throw Object.assign(new Error(`app "${appName}" (${id}): its sitemap ${sitemapId} is gone and the app's delete was sent (${answerOf(answer, failure)}), but whether the app is gone could not be read (${gone.why}), so the steps that depend on it are not attempted. Run the teardown again: it finds the app gone, or proves its sitemap gone again and deletes it.`), { failClosed: true, ...(failure ? { cause: failure } : {}) });
   }
   if (!gone.gone) {
-    throw serviceFailure(`app "${appName}" (${id}) was not deleted: its sitemap ${sitemapId} is gone, but the delete of the app on its own did not remove it (${answerOf(answer, failure)}). Nothing else was deleted. Run the teardown again; if the app stays, and it is yours, delete it in Power Apps (make.powerapps.com, Apps), then run the teardown again: it removes the rest.`, {
+    // 412: the app's version is no longer the one the proof began at — the app changed while it ran (a repair, a relink, a publish), and nothing proven
+    // holds for the app as it is now. Final, as every refusal of the proof is: the next teardown proves the app as it is then.
+    //   { "error": { "code": "0x80060882", "message": "The version of the existing record doesn't match the RowVersion property provided." } }
+    if (!failure && answer && answer.status === 412) {
+      throw refusal(`app "${appName}" (${id}) was not deleted: its sitemap ${sitemapId} is gone, but the app changed while teardown was proving that, so the platform refused a delete conditioned on the version the proof began at (${answerOf(answer)}). Nothing was deleted. Run the teardown again: it proves the app as it is now before it deletes anything.`, { cause: refused, failClosed: true });
+    }
+    throw Object.assign(serviceFailure(`app "${appName}" (${id}) was not deleted: its sitemap ${sitemapId} is gone, but the delete of the app on its own did not remove it (${answerOf(answer, failure)}). Nothing else was deleted. Run the teardown again; if the app stays, and it is yours, delete it in Power Apps (make.powerapps.com, Apps), then run the teardown again: it removes the rest.`, {
       status: answer && answer.status,
       answered: answer && answer.body && answer.body.error,
       cause: failure || refused,
-    });
+    }), { failClosed: true });
   }
   return { warning: `app "${appName}" (${id}) was deleted without its sitemap: its navigation link named sitemap ${sitemapId}, which is in neither the published nor the saved layer (the teardown of another app that shared it can leave an app so), so there was none to delete, and no sitemap was touched` };
 }
