@@ -34,6 +34,7 @@ const { placementOf, resolvePlacement, columnSequence, neighbourOf, tokenLabel, 
 const { isMainForm, selectDefaultForm, plannedMainFormSequence, displayConditionsOrder, compareServedOrder } = require('./form-order.js');
 const { hasLabelUses, resolveViewFilterLabels, memoizeChoiceReader, describeProblem } = require('./view-filter-labels.js');
 const { hostsCustomControl } = require('./dashboard-tiles.js');
+const { answerOf, statusReasonChecks, alternateKeyChecks } = require('./status-reasons-keys.js');
 
 // How many verification reads may be in flight at once. A verify pass is nothing but reads, but each is a
 // Dataverse request that already retries on its own 429s (lib/sdk-http-client.js), so the bound is small:
@@ -248,6 +249,18 @@ async function verifySpec(spec, read, opts = {}) {
           add('column-visualization', name, deployed === c.visualization,
             deployed === c.visualization ? '' : `expected '${c.visualization}', deployed '${deployed}'`);
         }
+      }
+      // Status reasons and alternate keys, each declared one by its name (lib/status-reasons-keys.js): what the build gives a reason (its
+      // state, and the value the spec pins) and a key (its columns) is what is held to. Reader-gated like the rest, and read once for the
+      // table, only for a table that declares any — a spec that declares neither sends no request for them. A read that fails is reported on
+      // each check it was for, with the reason, and the pass goes on.
+      if (Array.isArray(e.statusReasons) && e.statusReasons.length && typeof read.statusReasons === 'function') {
+        const answer = await answerOf(() => read.statusReasons(logical));
+        for (const c of statusReasonChecks(e, answer, { languageCode: spec.languageCode })) add('status-reason', c.name, c.present, c.detail);
+      }
+      if (Array.isArray(e.alternateKeys) && e.alternateKeys.length && typeof read.alternateKeys === 'function') {
+        const answer = await answerOf(() => read.alternateKeys(logical));
+        for (const c of alternateKeyChecks(e, answer)) add('alternate-key', c.name, c.present, c.detail);
       }
     }
   }

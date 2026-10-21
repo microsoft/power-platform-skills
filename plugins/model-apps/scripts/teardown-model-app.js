@@ -17,7 +17,8 @@
 //   global choices -> solution. Forms/charts/views/relationships are deleted explicitly BEFORE
 //   tables (a table delete does not reliably cascade cross-references). Command teardown removes
 //   the whole command bar for an entity the spec authored commands on (the SDK models a command bar
-//   per entity, not per button).
+//   per entity, not per button). The solution's PUBLISHER is never deleted (it may be shared); the
+//   closing summary says so in one line.
 const fs = require('node:fs');
 const path = require('node:path');
 const { validateAppSpec, migrateAppSpec } = require('./lib/app-spec.js');
@@ -177,6 +178,12 @@ async function teardownModelApp(spec, opts, deps) {
     const notAttempted = counts['not-attempted'] || 0;
     const extra = `${kept ? `, ${kept} kept` : ''}${notAttempted ? `, ${notAttempted} not attempted` : ''}`;
     log(`\n${r.ok ? '✓' : '✗'} teardown ${r.ok ? 'complete' : 'finished with errors'} — ${counts.ok} deleted, ${notFound} not found, ${counts.error} failed${extra} (${counts.ok + counts.skip + counts.error} steps)`);
+    // A publisher is never deleted, and no step plans one: the build reuses any publisher with the spec's prefix
+    // (lib/entity-provision.js provisionSolution), and other solutions may share the one it made, so nothing here can
+    // tell that this app alone uses it. Said once, after the count, so the row a maker finds left behind is expected.
+    // The structural profile requires solution.publisherPrefix; the guard only keeps a log line from ever throwing.
+    const publisherPrefix = spec.solution && spec.solution.publisherPrefix;
+    if (publisherPrefix) log(`▸ the publisher with prefix '${publisherPrefix}' is kept: teardown never deletes a publisher, which other solutions may share — delete it in Power Apps (Solutions → Publishers) once nothing uses it`);
   }
   return r;
 }

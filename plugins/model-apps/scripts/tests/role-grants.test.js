@@ -77,6 +77,31 @@ test('roleGrants: roleId must be a GUID', () => {
   assert.ok(errs.some((e) => /roleId must be a GUID/.test(e)), JSON.stringify(errs));
 });
 
+// Which role an entry names is decided by one function, which the design document asks too (lib/app-access.js roleGrantRefusals): the gate
+// reports exactly its words for each way an entry can fail to name one role, and nothing else about the entry's identity.
+test('roleGrants: the identity check is one shared function, and the gate reports exactly its words', () => {
+  const { roleGrantIdentityErrors, roleGrantEntryLabel } = require('../lib/app-spec.js');
+  const privileges = [{ entity: 'contoso_order', access: ['read'] }];
+  const cases = [
+    [{ role: 'Contoso PM - Project Manager', roleId: '11111111-1111-1111-1111-111111111111', privileges }, 1],
+    [{ privileges }, 1],
+    [{ role: '   ', privileges }, 1],
+    [{ roleId: 'Project Manager', privileges }, 1],
+    [{ role: 5, roleId: 'x', privileges }, 3],
+    [{ role: 'Contoso PM - Project Manager', privileges }, 0],
+    [{ roleId: '11111111-1111-1111-1111-111111111111', privileges }, 0],
+  ];
+  for (const [entry, count] of cases) {
+    const identity = roleGrantIdentityErrors(entry, roleGrantEntryLabel(entry, 0));
+    assert.strictEqual(identity.length, count, JSON.stringify({ entry, identity }));
+    const s = base();
+    s.roleGrants = [entry];
+    const gate = validateAppSpec(s, { profile: 'plan' }).errors;
+    for (const message of identity) assert.ok(gate.includes(message), JSON.stringify({ message, gate }));
+    assert.deepStrictEqual(gate.filter((e) => /not both|name the existing role to extend|role must be the non-empty display name|roleId must be a GUID/.test(e)), identity);
+  }
+});
+
 test('roleGrants: a blank role name is rejected rather than trimmed to nothing', () => {
   const errs = errorsFor((s) => { s.roleGrants = [grant({ role: '   ' })]; });
   assert.ok(errs.some((e) => /non-empty display name of an EXISTING security role/.test(e)), JSON.stringify(errs));

@@ -3144,6 +3144,12 @@ async function runSdkBuildPhases(spec, opts, owed) {
         runner.skip('web-resources', `table icon for ${logical} (web resource ${missing.join(', ')} not built this run)`);
         continue;
       }
+      const current = dataModel.tableIcons && dataModel.tableIcons[logical];
+      const sameName = (actual, wanted) => typeof actual === 'string' && actual.toLowerCase() === String(wanted).toLowerCase();
+      if (current && (!e.vectorIcon || sameName(current.vector, e.vectorIcon)) && (!e.icon || sameName(current.medium, e.icon))) {
+        runner.skip('web-resources', `table icon for ${logical} (already set)`);
+        continue;
+      }
       await runner.run('web-resources', `table icon for ${logical}`, async () => {
         await provision.setEntityIcon(logical, { vector: e.vectorIcon || undefined, medium: e.icon || undefined });
         return `${[e.vectorIcon && `vector=${e.vectorIcon}`, e.icon && `raster=${e.icon}`].filter(Boolean).join(', ')}`;

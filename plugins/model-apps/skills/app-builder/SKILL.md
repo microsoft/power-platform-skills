@@ -575,7 +575,9 @@ failed, so a re-run can still tell, keeps the page manifest while the generative
 re-run still finds the pages the app authored, and keeps a table — with its icon web resource and a global choice its
 columns bind, which the platform refuses to delete while the table exists, and its relationship to itself — while a
 business rule on it could not be deleted (the rule's activated copy can never be deleted once its table is gone), so
-a re-run deletes the rule first, then the table and what was kept with it. **Dry-run by default**; add `--apply
+a re-run deletes the rule first, then the table and what was kept with it. It never deletes the solution's
+**publisher** (the build reuses one by prefix, and other solutions may share it); its closing summary says so in one line,
+so tell the user the publisher stays and can be removed in Maker once nothing uses it. **Dry-run by default**; add `--apply
 --allow-destructive` to actually delete (`--clear-workspace` also prunes `.maker-workspace/`).
 **`--allow-destructive` is required for `teardown --apply`** — without it teardown refuses and
 touches nothing.
@@ -829,9 +831,10 @@ child view id. Each step emits `[n/total]`.
   independently).
   **To apply one of those edits, change it in Maker, or `teardown --apply` then rebuild fresh.**
   `--verify` catches what is **missing** — a spec view column, filter condition or sort key (authored
-  sort keys must also keep their order), a relationship, command or dashboard — as a loud
-  `verify FAIL`. It tolerates **extra** deployed content, so a view column, filter or sort key you
-  removed from the spec still passes, just as one a maker added by hand does.
+  sort keys must also keep their order), a relationship, a table's command bar, a status reason, an alternate key
+  or a dashboard — as a loud `verify FAIL`. It tolerates **extra** deployed content, so
+  a view column, filter or sort key you removed from the spec still passes, just as one a maker added
+  by hand does. Individual command controls are not verified.
 - Not in scope (later): **conditional** command visibility (Power-Fx-only), **titled
   command groups** (from-scratch — needs an SDK-synthesized parent row), lookup/associated views,
   multi-area sitemaps, **column-level (field) security**, and **access teams / hierarchy security**

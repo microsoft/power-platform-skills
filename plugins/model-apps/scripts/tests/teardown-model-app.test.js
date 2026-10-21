@@ -227,6 +227,30 @@ test('dry-run lists the plan with a ▢ marker and no summary', async () => {
   await teardownModelApp(desk, { apply: false }, { sdk: throwing, log: cap.log });
   assert.ok(cap.logs.some((l) => /\[\d+\/\d+\] ▢ /.test(l)), 'plan items use the ▢ marker');
   assert.ok(!cap.logs.some((l) => /teardown complete/.test(l)), 'no summary on a dry-run');
+  assert.ok(!cap.logs.some((l) => /publisher/.test(l)), 'nor the publisher line, which belongs to the summary');
+});
+
+// A publisher is never deleted: the build reuses any publisher with the spec's prefix, and other solutions may share the one it made,
+// so nothing tells a teardown that this app alone uses it. A maker who checks the environment afterwards finds it there, so the
+// summary says so — one line, right after the closing count, on a clean run and on a failed one alike.
+const PUBLISHER_KEPT = "▸ the publisher with prefix 'new' is kept: teardown never deletes a publisher, which other solutions may share — delete it in Power Apps (Solutions → Publishers) once nothing uses it";
+test('the teardown summary says the publisher is kept, in one line after the closing count', async () => {
+  const clean = logCapture();
+  const sdk = presentSdk();
+  const r = await teardownModelApp(desk, { apply: true, allowDestructive: true }, { sdk, log: clean.log });
+  assert.strictEqual(r.ok, true, JSON.stringify(r.errors));
+  const closing = clean.logs.findIndex((l) => /teardown complete — /.test(l));
+  assert.ok(closing >= 0, clean.logs.join('\n'));
+  assert.deepStrictEqual(clean.logs.slice(closing + 1), [PUBLISHER_KEPT]);
+  assert.ok(!sdk.calls.some((c) => /publisher/i.test(JSON.stringify(c))), 'and nothing is asked of a publisher');
+
+  const failed = logCapture();
+  const refusing = presentSdk();
+  refusing.deleteWebResource = async () => { throw new Error('HTTP 500: boom'); };
+  const f = await teardownModelApp(desk, { apply: true, allowDestructive: true }, { sdk: refusing, log: failed.log });
+  assert.strictEqual(f.ok, false);
+  const closingFailed = failed.logs.findIndex((l) => /teardown finished with errors — /.test(l));
+  assert.deepStrictEqual(failed.logs.slice(closingFailed + 1), [PUBLISHER_KEPT]);
 });
 
 test('cliEmit: an error event with no detail has no dangling separator', () => {

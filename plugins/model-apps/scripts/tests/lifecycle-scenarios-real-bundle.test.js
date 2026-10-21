@@ -9,6 +9,8 @@
 //   --publish means what it says  a rebuild without it sends none of the bulk publishes it gates, and leaves the rest unpublished
 //   the edit flow is safe         the downloaded spec rebuilds in the same environment without creating or deleting anything, and both
 //                                 it and the authored spec verify
+//   verify reads what is declared a table's status reasons and alternate keys cost verify one read each, made only for a table that
+//                                 declares them
 // (lifecycle-recovery-real-bundle.test.js pins the rest: drift, a failed build or teardown run again, a teardown of a downloaded spec.)
 //
 // One environment is built once and the tests use it in order — the ones that only read first, then the rebuilds.
@@ -79,11 +81,11 @@ const TEARDOWN_PLAN = [
 
 // A rebuild of the unchanged spec WITHOUT --publish. The bulk publishes are what --publish gates (skills/app-builder/SKILL.md: the
 // tables published together once before the app, and the publish phase); without it each step publishes what it re-pushed, table by
-// table — measured, not derived: 11 publishes where the --publish rebuild of the matrix sends 4, each a PublishXml that takes seconds
+// table — measured, not derived: 10 publishes where the --publish rebuild of the matrix sends 3, each a PublishXml that takes seconds
 // on a real environment. The two tables' views and forms are pushed concurrently, so the publishes are counted, not ordered.
 const UNPUBLISHED_REBUILD_PUBLISHES = {
-  contoso_project: 5, // the table icon set again; the view "Open Projects" pushed again unchanged (no write, but a publish); the
-  //                     default-view enrichment; the forms "Project" and "Project Card", likewise unchanged
+  contoso_project: 4, // the unchanged table icon is proved equal and needs no publish; the view "Open Projects" still publishes,
+  //                     as do default-view enrichment and the unchanged forms "Project" and "Project Card"
   contoso_task: 5, // the views "Open Tasks" and "My Open Tasks"; the default-view enrichment; the forms "Task Quick Create" and "Task"
   app: 1, // the app after the sitemap finalize, the last publish
 };
@@ -100,6 +102,16 @@ const DOWNLOADED_REBUILD_WRITES = {
   'POST SaveSettingValue': 1, // the new look setting is saved again
   'POST PublishXml': 5, // the tables before the app's publish, the page, the manifest, the app after the finalize, and the publish phase
 };
+
+// What verify reads for the kitchen sink with its status reasons and alternate key taken out of the spec — what it read before it checked
+// either — and what declaring them adds: one read of the table's status column and one of its keys, for the one table that declares them.
+// (The status column read is the same request the view filter's label read of that table makes among its four; it is not shared, because
+// that read is made only for a table a view filters by a label, and sharing it would cost every other table three reads more.)
+const VERIFY_READS_WITHOUT = 74;
+const VERIFY_READS_ADDED = [
+  "GET /EntityDefinitions(LogicalName='contoso_project')/Attributes/Microsoft.Dynamics.CRM.StatusAttributeMetadata?$select=LogicalName&$expand=OptionSet($select=Options)",
+  "GET /EntityDefinitions(LogicalName='contoso_project')/Keys?$select=LogicalName,SchemaName,KeyAttributes",
+];
 
 // ====================================================================================================================================
 
@@ -147,6 +159,32 @@ test('lifecycle scenarios: two downloads of an unchanged app write the same spec
   const third = clean(await harness.measure(() => harness.download(APP, path.join(root, 'download-a'))), 'the download over the first');
   assert.equal(third.value.text, first.value.text);
   assert.deepEqual(diffContents(held, org.contents()), [], 'three downloads change nothing in the environment');
+});
+
+test('lifecycle scenarios: verify reads a table\'s status reasons and alternate keys only when the spec declares them — one read each', async () => {
+  const { org, harness } = await built();
+  const held = org.contents();
+  const plain = kitchenSinkSpec();
+  delete plain.entities[0].statusReasons;
+  delete plain.entities[0].alternateKeys;
+  const without = clean(await harness.measure(() => harness.verify(plain)), 'verify of the spec without them');
+  const declared = clean(await harness.measure(() => harness.verify(spec)), 'verify of the spec');
+  for (const [step, checked] of [[without, []], [declared, ['alternate-key contoso_project.contoso_emailkey', 'status-reason contoso_project.In Review']]]) {
+    assert.deepEqual({ ok: step.value.ok, missing: step.value.missing }, { ok: true, missing: [] });
+    assert.deepEqual(step.value.checks.filter((c) => /^(status-reason|alternate-key)$/.test(c.kind)).map((c) => `${c.kind} ${c.name}`).sort(), checked);
+  }
+  const sent = (step) => org.requests.slice(step.mark, step.end).map((r) => `${r.method} ${r.path}`);
+  assert.equal(sent(without).length, VERIFY_READS_WITHOUT);
+  assert.ok(!sent(without).some((r) => /\/Keys\b/.test(r)), 'a spec that declares no alternate key reads no key');
+  // The difference of the two runs, request by request: exactly the two reads, and nothing else read once more or once less.
+  const rest = [...sent(declared)];
+  for (const r of sent(without)) {
+    const at = rest.indexOf(r);
+    assert.ok(at >= 0, `the run that declares them still sends ${r}`);
+    rest.splice(at, 1);
+  }
+  assert.deepEqual(rest.sort(), VERIFY_READS_ADDED);
+  assert.deepEqual(diffContents(held, org.contents()), [], 'and neither run changes anything');
 });
 
 test('lifecycle scenarios: a rebuild without --publish skips the bulk publishes, and leaves the rest unpublished', async () => {

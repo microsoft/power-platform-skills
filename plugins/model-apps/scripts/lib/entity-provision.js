@@ -32,7 +32,7 @@ const {
   maxLengthSent,
   PRIMARY_NAME_MAX_LENGTH,
 } = require('./app-spec.js');
-const { readColumnLabels, makeTableLabelReader, lookupKey } = require('./lookup-labels.js');
+const { readColumnLabels, makeTableLabelReader, lookupKey, labelsByLcid } = require('./lookup-labels.js');
 const { topoOrderEntities, entityByLogical } = require('./_graph.js');
 // OData string-literal escaping for spec-controlled values interpolated into $filter (a solution
 // uniquename / publisher prefix with a `'` would otherwise break the query or inject a clause).
@@ -49,6 +49,7 @@ const { readOrgLanguageCode, readProvisionedLanguages } = require('./dataverse-a
 const { RETRY, retryPolicyFor, refusal, serviceFailure } = require('./retry-policy.js');
 // What the run's throttle budget says when it refuses a wait (the words of the build's own halt for it), for the step guard in makeRunner.
 const { waitDoesNotFit } = require('./throttle-budget.js');
+const { readStatusOptions, alternateKeyMatches } = require('./table-schema-metadata.js');
 
 // App Spec column type -> SDK ColumnType. Lookup is omitted (side effect of a OneToMany
 // relationship); Customer is handled specially (createCustomerColumn).
@@ -526,12 +527,13 @@ async function checkOwedTable({ provision, debt, logical, primaryLogical, asked 
 // the one the debt was recorded for (checkOwedTable, or a request addressed by its ids that answered 404), which is left alone. A step the runner stopped before it began (`notStarted: true`, with the stop as `error`, and the column's
 // id as above) is neither a length that was set nor an update that failed: nothing was sent, and the table is owed the length as it was.
 //
-// It is the LAST thing the data-model phase does (provisionDataModel calls it once every table, column, status reason, alternate
-// key and relationship has been created), not the first thing after the table. The SDK's updateColumn starts by reading the column
+// This runs at the end of the phase, after tables, columns, new tables' status reasons, relationships and keys that need no length,
+// not immediately after each table. Deferred keys and existing tables' status reasons follow it. The SDK's updateColumn starts by reading the column
 // WITH its labels, and a label-bearing metadata read ahead of a labelled create is what makes Dataverse keep only the base-language
 // label of what is created (measured live — see findExistingColumns, which is why the reads that precede a create in this file are
-// narrow). That read is inside the SDK and cannot be narrowed, so it goes where nothing labelled is created after it — within one
-// attempt. The build runs a phase that halts on a transient answer (a 429, a lock) again (build-model-app.js): the attempt that
+// narrow). That read is inside the SDK and cannot be narrowed. Deferred keys have their own label/length ordering rules; status
+// reasons accept only a single label, with no other languages for this read to strip. The build runs a phase that halts on a
+// transient answer (a 429, a lock) again (build-model-app.js): the attempt that
 // created the table sets its length by then, because this runs after a halt too. When that step fails as well — the lock that
 // stopped the phase can still be held — the table is OWED its length: the halt carries a record of it (`owedLengths`, see
 // runSdkBuild) the way it carries the publishes an attempt owes for the views it saved, and the retry, which finds the table, sets
@@ -986,6 +988,17 @@ async function confirmInlineColumns(provision, table, columns, { warn, sleep, at
 }
 
 const STATE_CODE = { Active: 0, Inactive: 1 };
+
+// The state and the value the build gives each of a table's declared status reasons, in the spec's order: the declared state (Active
+// unless it says Inactive; any other word has always read as Active) and the declared `value`, else 100000000 + the reason's place in the
+// list. The data-model phase inserts each at these, and verify (lib/status-reasons-keys.js) holds a deployed reason to the same two.
+function statusReasonTargets(entity) {
+  return ((entity && entity.statusReasons) || []).map((statusReason, index) => ({
+    statusReason,
+    stateCode: STATE_CODE[statusReason.state] !== undefined ? STATE_CODE[statusReason.state] : 0,
+    value: typeof statusReason.value === 'number' ? statusReason.value : 100000000 + index,
+  }));
+}
 
 // A halt the build stops with. `retry` is the halt's policy for the build's own re-run (retry-policy.js), decided where it is raised: RETRY.NEVER (a run again cannot change it — marks the halt
 // `transient: false`, which the retry check has always read) or RETRY.SERVICE (it wraps a failure of the service: the status and words of that failure decide, never this halt's message, which quotes
@@ -1627,12 +1640,14 @@ async function resolveAuthoringLanguage({ envUrl, languageCode, spec, warn, read
 // than silently shipping an English-only table. Same fail-closed rule as the unprovisioned-language
 // check above, and for the same reason: by the time a warning is read the table already exists, and
 // fixing a label after the fact is a manual job.
-async function findExistingTable(provision, schemaName, { hasLocalizedLabels = false, attempts = 3 } = {}) {
+async function findExistingTable(provision, schemaName, { hasLocalizedLabels = false, attempts = 3, includeKeys = false, includeIcons = false } = {}) {
   const logical = String(schemaName).toLowerCase();
   const raw = provision && provision.dataverse;
   if (raw && typeof raw.get === 'function') {
     const escaped = logical.replace(/'/g, "''");
-    const url = `/EntityDefinitions(LogicalName='${escaped}')?$select=LogicalName,EntitySetName`;
+    // Keys' identity and icon names are scalars, so they can ride this already-required probe
+    // without a label-bearing read ahead of a localized create.
+    const url = `/EntityDefinitions(LogicalName='${escaped}')?$select=LogicalName,EntitySetName${includeIcons ? ',IconVectorName,IconMediumName' : ''}${includeKeys ? '&$expand=Keys($select=SchemaName,KeyAttributes)' : ''}`;
     // Retried only for a LOCALIZED entity, where the alternative to a conclusive answer is a halt.
     // For everything else one attempt then `findTables` is both cheaper and exactly the old
     // behaviour.
@@ -1649,7 +1664,11 @@ async function findExistingTable(provision, schemaName, { hasLocalizedLabels = f
       lastFailure = undefined;
       try { res = await raw.get(url); } catch (err) { res = null; lastFailure = err; lastWhy = (err && err.message) || String(err); }
       if (res && res.status >= 200 && res.status < 300 && res.body && res.body.LogicalName) {
-        return { logicalName: String(res.body.LogicalName).toLowerCase(), entitySetName: res.body.EntitySetName };
+        return {
+          logicalName: String(res.body.LogicalName).toLowerCase(), entitySetName: res.body.EntitySetName,
+          ...(includeKeys && Array.isArray(res.body.Keys) ? { keys: res.body.Keys } : {}),
+          ...(includeIcons ? { icons: { vector: res.body.IconVectorName, medium: res.body.IconMediumName } } : {}),
+        };
       }
       if (res && res.status === 404) return null;
       if (res) { lastWhy = `HTTP ${res.status}${res.body && res.body.LogicalName === undefined && res.status < 300 ? ' with no LogicalName in the body' : ''}`; lastStatus = res.status; }
@@ -1721,16 +1740,41 @@ async function provisionDataModel(args) {
   // The tables an EARLIER attempt left unset, as the phase found them: one this attempt creates again is not among them.
   const carriedIn = new Set(owed.keys());
   const waitingKeys = [];
+  const waitingStatuses = [];
   let result;
   try {
-    result = await provisionDataModelSteps(args, { owed, carriedIn, waitingKeys });
+    result = await provisionDataModelSteps(args, { owed, carriedIn, waitingKeys, waitingStatuses });
   } catch (err) {
     await payOwedLengths(args, owed, carriedIn, { halted: true, waitingKeys });
     throw err;
   }
   const outcomes = await payOwedLengths(args, owed, carriedIn, { halted: false, waitingKeys });
   await createWaitingKeys(args, waitingKeys, outcomes);
+  // Option labels must be read only AFTER every labelled schema create (including deferred keys).
+  // Reading them inside the table loop can strip later creates' non-base-language labels.
+  for (const status of waitingStatuses) await applyStatusReasons(args, status, result, true);
   return result;
+}
+
+async function applyStatusReasons({ sdk, provision, runner, warn }, { entity, logical, languageCode }, result, checkExisting = false) {
+  const read = checkExisting ? await readStatusOptions(provision && provision.dataverse, logical) : {};
+  if (read.failed && typeof warn === 'function') {
+    warn(`could not read status reasons for ${logical} (${read.failed}); using the duplicate-protected insert instead`);
+  }
+  for (const { statusReason: sr, stateCode, value: pinned } of statusReasonTargets(entity)) {
+    (result.statusReasonValues[logical] = result.statusReasonValues[logical] || {})[sr.label] = { value: pinned, stateCode };
+    const same = (read.options || []).some((o) => o && o.Value === pinned && o.State === stateCode
+      && labelsByLcid(o.Label)[languageCode] === sr.label
+      && (sr.color === undefined || o.Color === sr.color));
+    if (same) {
+      runner.skip('data-model', `status reason ${entity.schemaName}: ${sr.label} (exists — reuse)`);
+      continue;
+    }
+    await runner.run('data-model', `status reason ${entity.schemaName}: ${sr.label}`, async () => {
+      const value = await sdk.insertStatusValue(logical, { label: sr.label, stateCode, color: sr.color, value: pinned, languageCode });
+      result.statusReasonValues[logical][sr.label] = { value: typeof value === 'number' ? value : pinned, stateCode };
+    }, { recoverable: true, skipIf: isAlreadyExists });
+  }
 }
 
 // Sets the primary name column length of every table the phase owes one, in table order — the length steps are the last the phase
@@ -1944,11 +1988,13 @@ async function settleOwedLengths({ sdk, provision, spec, owed, warn, sleep } = {
 // `owed` is the Map provisionDataModel keeps (see there): this attempt's tables whose length is to be set, and those an earlier attempt
 // left unset. `carriedIn` is the set of the second kind as the phase found them; `waitingKeys` collects the alternate keys that wait for
 // a length step, for createWaitingKeys to make once the steps have run.
-async function provisionDataModelSteps({ sdk, provision, runner, spec, apply, languageCode, warn, provisionedLanguages, preResolvedLanguageCode, sleep, reconcileLookupLabels = false, inlineColumns = true }, { owed, carriedIn, waitingKeys }) {
+async function provisionDataModelSteps({ sdk, provision, runner, spec, apply, languageCode, warn, provisionedLanguages, preResolvedLanguageCode, sleep, reconcileLookupLabels = false, inlineColumns = true }, { owed, carriedIn, waitingKeys, waitingStatuses }) {
   // `lookupLabels` records the label each spec lookup column carries once this phase is done
   // (`<referencing>|<lookup logical>` -> { label }), so a later phase that repairs something derived
   // from it — an existing form's cell label — repairs it to what the column now says.
   const result = { entities: {}, globalChoiceIds: {}, statusReasonValues: {}, columns: {}, relationships: [], lookupLabels: {} };
+  // Private proof for the later icon step, not another field on the build's documented result.
+  Object.defineProperty(result, 'tableIcons', { value: {} });
   // The CLI resolves the authoring LCID BEFORE constructing the SDK, because
   // `MakerSdkOptions.languageCode` is a construction-time option (#455) — the App/Form/Dashboard
   // adapters bake it in. Re-resolving here would repeat the org read and the provisioned-languages
@@ -1964,7 +2010,6 @@ async function provisionDataModelSteps({ sdk, provision, runner, spec, apply, la
   await checkLocalizedLabelLanguages(spec, provisionedLanguages);
 
   const globalChoiceIds = result.globalChoiceIds;
-  const statusReasonValues = result.statusReasonValues;
   // The declared tables (lower-case logical names) this run found already in the environment, as opposed
   // to the ones it created. A lookup to one that sets no displayName of its own is named by the
   // environment (lookupParentNeedsEnvironment), which only the table loop below can know.
@@ -1991,7 +2036,9 @@ async function provisionDataModelSteps({ sdk, provision, runner, spec, apply, la
     // probe may be resolved by the broad `findTables` read — safe for a plain-label entity, poisoning
     // for a localized one. See findExistingTable.
     const entityIsLocalized = localizedLabelLcidsInSpec({ entities: [e] }).length > 0;
-    const hits = await findExistingTable(provision, e.schemaName, { hasLocalizedLabels: entityIsLocalized });
+    const hits = await findExistingTable(provision, e.schemaName, {
+      hasLocalizedLabels: entityIsLocalized, includeKeys: !!(e.alternateKeys && e.alternateKeys.length), includeIcons: !!(e.icon || e.vectorIcon),
+    });
     const existingTable = hits;
     // Every buildable column: all scalar types + Customer (a Lookup comes from a relationship).
     const buildable = (e.columns || []).filter((c) => SDK_COLUMN_TYPE[c.type || 'Text'] || c.type === 'Customer');
@@ -2020,6 +2067,7 @@ async function provisionDataModelSteps({ sdk, provision, runner, spec, apply, la
       runner.skip('data-model', `table ${e.schemaName} (exists — reuse)`);
       reusedTables.add(logical);
       result.entities[e.schemaName] = { logicalName: logical, entitySetName: existingTable.entitySetName };
+      if (existingTable.icons) result.tableIcons[logical] = existingTable.icons;
       existingColRows = await findExistingColumns(provision, logical, warn);
       existingCols = new Set(existingColRows.map((c) => String(c.logicalName || c.schemaName || '').toLowerCase()));
     } else {
@@ -2205,19 +2253,17 @@ async function provisionDataModelSteps({ sdk, provision, runner, spec, apply, la
       // Deliberately a SEPARATE block from the `required` reconcile above rather than folded into
       // it, and with a DIFFERENT strategy: `required` reads the column's CURRENT level first so it
       // can skip a no-op update and, more importantly, avoid demoting an omitted value (a maker may
-      // have set Business Required by hand, and the spec staying silent must not undo that). These
-      // three have no equivalent maker-authored surface to protect, and `updateColumn` performs its
-      // own GET-mutate-PUT round trip per call (measured against the vendored bundle — replaying an
-      // already-correct value is a harmless no-op on the wire), so they are simply RE-ASSERTED
-      // whenever the spec sets them explicitly — the same no-pre-read-diff strategy already used by
-      // `setColumnVisualization` below for the same reason.
+      // have set Business Required by hand, and the spec staying silent must not undo that).
+      // Capabilities are re-asserted through the SDK's GET-mutate-PUT. A standalone Integer format
+      // is the exception below: downloads now carry it, so compare that scalar without labels to
+      // avoid writing an unchanged column on every download/rebuild.
       //
       // Customer columns are excluded outright, not merely skipped for these three fields:
       // `updateColumn` refuses ANY change to a Customer column (measured — it throws "type
       // 'Customer' not supported"), because Customer has no entry in the SDK's attribute-type ->
       // OData-cast table (it is created through the wholly separate createCustomerColumn instead).
       const capabilityTargets = capabilityDeclared.filter((c) => existingCols.has(c.schemaName.toLowerCase()));
-      await runner.mapLimit(capabilityTargets, 1, (c) => {
+      await runner.mapLimit(capabilityTargets, 1, async (c) => {
         const columnLogical = c.schemaName.toLowerCase();
         const opts = {};
         // Same type gates as columnOptions() above (Boolean-only / Integer-only): the SDK's update
@@ -2231,6 +2277,18 @@ async function provisionDataModelSteps({ sdk, provision, runner, spec, apply, la
         if (c.isValidForCreate !== undefined) opts.isValidForCreate = c.isValidForCreate;
         if (c.isValidForUpdate !== undefined) opts.isValidForUpdate = c.isValidForUpdate;
         if (c.isValidForRead !== undefined) opts.isValidForRead = c.isValidForRead;
+        // A downloaded Whole Number format is an instruction to preserve it, not a reason to
+        // PUT an unchanged definition on every rebuild. This scalar read replaces updateColumn's
+        // own GET on a no-op; a real edit still takes the SDK's read-mutate-write path.
+        if (Object.keys(opts).length === 1 && opts.integerFormat !== undefined && provision.dataverse && typeof provision.dataverse.get === 'function') {
+          try {
+            const current = await provision.dataverse.get(`/EntityDefinitions(LogicalName='${odataLit(logical)}')/Attributes(LogicalName='${odataLit(columnLogical)}')/Microsoft.Dynamics.CRM.IntegerAttributeMetadata?$select=Format`);
+            if (current && current.status >= 200 && current.status < 300 && current.body && current.body.Format === opts.integerFormat) {
+              runner.skip('data-model', `column capabilities ${e.schemaName}.${c.schemaName} (already ${opts.integerFormat})`);
+              return;
+            }
+          } catch { /* an inconclusive proof keeps the SDK's existing update behaviour */ }
+        }
         return runBestEffort(
           runner,
           'data-model',
@@ -2312,20 +2370,16 @@ async function provisionDataModelSteps({ sdk, provision, runner, spec, apply, la
     // (publisher range 100000000+i, matching how the engine assigns choice/global option values;
     // authors may override via sr.value) and pass it explicitly: a re-run then hits an already-exists
     // error that skipIf turns into a skip (no duplicate), while the value stays captured for sample
-    // data. On a fresh insert we overwrite with the server-returned value (authoritative).
-    let srIdx = 0;
-    for (const sr of e.statusReasons || []) {
-      const stateCode = STATE_CODE[sr.state] !== undefined ? STATE_CODE[sr.state] : 0;
-      const pinned = typeof sr.value === 'number' ? sr.value : 100000000 + srIdx;
-      srIdx += 1;
-      (statusReasonValues[logical] = statusReasonValues[logical] || {})[sr.label] = { value: pinned, stateCode };
-      await runner.run('data-model', `status reason ${e.schemaName}: ${sr.label}`, async () => {
-        const v = await sdk.insertStatusValue(logical, { label: sr.label, stateCode, color: sr.color, value: pinned, languageCode: resolvedLanguageCode });
-        statusReasonValues[logical][sr.label] = { value: typeof v === 'number' ? v : pinned, stateCode };
-      }, { recoverable: true, skipIf: isAlreadyExists });
+    // data. Existing tables first prove equality after the phase's labelled creates; inconclusive
+    // proof keeps that duplicate-protected path. A fresh insert records the server-returned value.
+    // The same statusReasonTargets supply both the insert and verification state/value contract.
+    if (e.statusReasons && e.statusReasons.length) {
+      const status = { entity: e, logical, languageCode: resolvedLanguageCode };
+      if (existingTable && provision.dataverse && typeof provision.dataverse.get === 'function') waitingStatuses.push(status);
+      else await applyStatusReasons({ sdk, provision, runner, warn }, status, result);
     }
-    // alternate keys — idempotent: the SDK has no key lister, so a re-run that hits an
-    // already-exists error is treated as a skip (not a halt) via skipIf.
+    // Alternate keys' scalar identity rides the table probe: an identical name/column set skips
+    // its POST, while unknown or different metadata keeps the duplicate-protected create path.
     //
     // A key over the name column of a table whose length is still to be set waits for that step when its label goes out in ONE language
     // (keyWaitsForNameLength): it is made at the end of the phase, once the length is right. A key over that column whose label goes out in
@@ -2334,6 +2388,10 @@ async function provisionDataModelSteps({ sdk, provision, runner, spec, apply, la
     // beside the others: the platform would refuse it here, so it waits too, whatever its label (keyMustWaitForShorterNameColumn).
     // Every other key is made here, with its table, as it always was.
     for (const k of e.alternateKeys || []) {
+      if (alternateKeyMatches(existingTable && existingTable.keys, k)) {
+        runner.skip('data-model', `alt key ${e.schemaName}.${k.schemaName} (exists)`);
+        continue;
+      }
       if (lengthPending && keyWaitsForNameLength(e, k)) {
         waitingKeys.push({ entity: e, logical, key: k, languageCode: resolvedLanguageCode });
         continue;
@@ -2905,4 +2963,4 @@ async function provisionSampleData({ sdk, provision, runner, spec, dataModel }) 
   return { records: result.records, entitySetFor };
 }
 
-module.exports = { makeRunner, mapLimit, runBestEffort, requireSuccessfulPush, pushFailed, reportPartialPush, errorCodeChain, RESET_WORKSPACE, makeEntitySetResolver, resolveLanguageCode, resolveAuthoringLanguage, provisionSolution, provisionDataModel, settleOwedLengths, provisionSampleData, buildSeedGroup, BuildHalt, SDK_COLUMN_TYPE, DEFAULT_MAX_SIZE_KB, isVisualizationUnsupported, localizedLabelLcidsInSpec, checkLocalizedLabelLanguages, findExistingTable, findExistingColumns, relationshipExists, lookupsWithDefaultLabel, relationshipsInCreateOrder };
+module.exports = { makeRunner, mapLimit, runBestEffort, requireSuccessfulPush, pushFailed, reportPartialPush, errorCodeChain, RESET_WORKSPACE, makeEntitySetResolver, resolveLanguageCode, resolveAuthoringLanguage, provisionSolution, provisionDataModel, settleOwedLengths, provisionSampleData, buildSeedGroup, BuildHalt, SDK_COLUMN_TYPE, DEFAULT_MAX_SIZE_KB, isVisualizationUnsupported, localizedLabelLcidsInSpec, checkLocalizedLabelLanguages, findExistingTable, findExistingColumns, relationshipExists, lookupsWithDefaultLabel, relationshipsInCreateOrder, statusReasonTargets };

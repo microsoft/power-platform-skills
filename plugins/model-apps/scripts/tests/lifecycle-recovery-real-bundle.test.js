@@ -11,7 +11,7 @@
 //
 // Two environments serve the tests, each walked in the order a maker meets these steps; as in the matrix, a step that throws is
 // recorded and fails its own test (a later test on the same environment then fails after it):
-//   CLEAN    built -> a maker deletes six artifacts in Maker -> verify -> rebuild | download -> teardown of the downloaded spec ->
+//   CLEAN    built -> a maker deletes seven artifacts in Maker -> verify -> rebuild | download -> teardown of the downloaded spec ->
 //            teardown of the authored spec -> a teardown of what is gone
 //   FAULTED  a build refused part way -> the build run again | a teardown refused part way -> the teardown run again
 // A failure is provoked only by refusing a request for this test's own app, in front of the fake: the refused request never reaches
@@ -61,7 +61,8 @@ async function inMaker(org, method, where) {
 const buttonsOf = (org) => org.find('appactions', () => true).map((a) => a.buttonlabeltext).sort();
 
 // CLEAN: the kitchen sink built, and what it deployed (the reference a recovered environment must end equal to); then a maker deletes
-// a view, a Quick Create form, a button, the persona's role, the N:N relationship and the generative page; verify; the rebuild.
+// a view, a Quick Create form, a button, the persona's role, the N:N relationship, the generative page and the alternate key; verify;
+// the rebuild.
 let cleanP;
 const clean = () => cleanP || (cleanP = (async () => {
   const env = await environment();
@@ -82,6 +83,7 @@ const clean = () => cleanP || (cleanP = (async () => {
   const page = [...org.pageServer.state.projects.values()].find((p) => p.name === 'Kitchen Page');
   for (const message of org.pageServer.messagesOf(page.id)) await inMaker(org, 'DELETE', `/agentconversationmessages(${message.id})`);
   await inMaker(org, 'DELETE', `/uxagentprojects(${page.id})`);
+  await inMaker(org, 'DELETE', "/EntityDefinitions(LogicalName='contoso_project')/Keys(LogicalName='contoso_emailkey')");
   env.drifted = await harness.measure(() => harness.verify(spec));
   env.rebuild = await harness.measure(() => harness.build(spec));
   env.afterRebuild = deployedFeatures(org);
@@ -128,9 +130,10 @@ function assertBackToSeed(env) {
 // ====================================================================================================================================
 // THE PINNED VALUES — one per step. A value that moves on purpose is a one-line change here.
 
-// What verify reports for the six deletions, in its order. The deleted "Escalate" button is NOT among them: verify checks one command
+// What verify reports for the seven deletions, in its order. The deleted "Escalate" button is NOT among them: verify checks one command
 // bar per table (verify-spec.js, "Commands (existence)"), and the table still has the flyout.
 const DRIFT_MISSING = [
+  'alternate-key contoso_project.contoso_emailkey',
   'view contoso_task.My Open Tasks',
   'form Task Quick Create',
   'relationship contoso_tag_contoso_task',
@@ -154,9 +157,10 @@ const FAILED_BUILD_WRITES = {
 };
 
 // The refused teardown: one table's delete fails, the teardown goes on as far as it can, keeps the solution for the re-run, and says so.
+// The relationship from contoso_project to itself went with its table, so its own step finds nothing: 1 not found.
 const FAILED_TEARDOWN_LINES = [
   "[18/27] ✗ table contoso_tag — HTTP 400 from https://contoso.crm.dynamics.com/api/data/v9.0/EntityDefinitions(LogicalName='contoso_tag'): The Entity component cannot be deleted because it is referenced by 1 other component.",
-  '✗ teardown finished with errors — 25 deleted, 0 not found, 1 failed, 1 kept (27 steps)',
+  '✗ teardown finished with errors — 24 deleted, 1 not found, 1 failed, 1 kept (27 steps)',
 ];
 // The teardown run again: the table it could not delete and the solution it kept. A table or global choice is deleted by name, so the
 // two tables and the global choice that are already gone are sent again and answered 404, which the teardown reads as "already gone".
@@ -176,9 +180,10 @@ const DOWNLOADED_TEARDOWN_WRITES = {
   'DELETE solutions': 1,
 };
 
-// A teardown of what is gone. This overstates what it did: a default-view reset, a relationship, a table or a global choice that was
-// already gone is reported as deleted (each step is idempotent and ends ✓). Once that is fixed this reads "0 deleted, 27 not found".
-const AGAIN_SUMMARY = '✓ teardown complete — 9 deleted, 18 not found, 0 failed (27 steps)';
+// A teardown of what is gone: every step finds nothing, and says so. A default-view reset finds no default view; a relationship is
+// looked up by the SDK, which sends no delete when it finds none; a table and a global choice are deleted by name and answered 404 —
+// the table's own read had already listed no such table, and the global choice's delete is its step's only request.
+const AGAIN_SUMMARY = '✓ teardown complete — 0 deleted, 27 not found, 0 failed (27 steps)';
 
 // ====================================================================================================================================
 
@@ -252,4 +257,5 @@ test('lifecycle recovery: a teardown of the downloaded spec keeps every table, c
   assert.deepEqual(org.since(again.mark).filter((r) => r.method !== 'GET').map((r) => r.status), [404, 404, 404, 404]);
   assertBackToSeed(env);
   assert.deepEqual(again.value.log.filter((line) => /teardown complete|finished with errors/.test(line)).map((line) => line.trim()), [AGAIN_SUMMARY]);
+  assert.deepEqual(again.value.log.filter((line) => /^\s+\[\d+\/\d+\] /.test(line) && !/^\s+\[\d+\/\d+\] ⊘ .* \(not found\)$/.test(line)), [], 'and every step line says not found');
 });

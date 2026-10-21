@@ -31,7 +31,12 @@ function richSpec() {
     solution: { uniqueName: 'verify_checks', publisherPrefix: 'new' },
     app: { name: 'Verify Checks', uniqueName: 'new_verifychecks' },
     schemaVersion: 2,
-    entities: TABLES.map((t) => ({ schemaName: t, columns: [{ schemaName: `${t}_a` }, { schemaName: `${t}_b` }] })),
+    entities: TABLES.map((t) => ({
+      schemaName: t,
+      columns: [{ schemaName: `${t}_a` }, { schemaName: `${t}_b` }],
+      // Two tables declare status reasons and alternate keys: their reads join the overlapped pass like any other.
+      ...(t === 'new_t0' || t === 'new_t1' ? { statusReasons: [{ label: 'Held' }], alternateKeys: [{ schemaName: `${t}_key`, columns: [`${t}_a`] }] } : {}),
+    })),
     views: TABLES.map((t) => ({ entity: t, name: `Active ${t}` })),
     charts: TABLES.slice(0, 3).map((t) => ({ entity: t, name: `Chart ${t}` })),
     forms: TABLES.flatMap((t) => [
@@ -107,6 +112,9 @@ function richReader() {
     sitemapXml: async () => sitemap,
     entityRelationships: async () => [],
     commandBar: async (entity) => entity !== 'new_t2',
+    // new_t1's status reason and key are not there, so the pass reports a mix of the new checks too.
+    statusReasons: async (entity) => ({ state: 'ok', options: [{ value: 1, state: 0, labels: ['Active'], shown: 'Active' }, ...(entity === 'new_t0' ? [{ value: 100000000, state: 0, labels: ['Held'], shown: 'Held' }] : [])] }),
+    alternateKeys: async (entity) => ({ state: 'ok', keys: entity === 'new_t0' ? [{ logicalName: 'new_t0_key', schemaName: 'new_t0_key', columns: ['new_t0_a'] }] : [] }),
     appRoleIds: async () => ({ ok: true, roleIds: ['role-Agent'] }),
     // Every persona holds the same table privilege, so the same two privilege sets are asked for by all of them.
     entityPrivileges: async (entity) => [{ Name: `prvRead${entity}`, PrivilegeId: `${entity}-read`, PrivilegeType: 'Read' }],
@@ -128,7 +136,7 @@ test('the fixture reaches most of verify and reports a mix of passes and failure
   const { result } = await runRich({ concurrency: 1 }, { latency: () => 0 });
   const kinds = new Set(result.checks.map((c) => c.kind));
   assert.ok(result.checks.length >= 60, `${result.checks.length} checks`);
-  for (const kind of ['entity', 'column', 'view', 'chart', 'form', 'form-default', 'form-default-unique', 'form-order', 'form-order-served', 'relationship', 'command', 'business-rule', 'role', 'role-privileges', 'app-role', 'subarea', 'app-table-component', 'page', 'page-subarea']) {
+  for (const kind of ['entity', 'column', 'status-reason', 'alternate-key', 'view', 'chart', 'form', 'form-default', 'form-default-unique', 'form-order', 'form-order-served', 'relationship', 'command', 'business-rule', 'role', 'role-privileges', 'app-role', 'subarea', 'app-table-component', 'page', 'page-subarea']) {
     assert.ok(kinds.has(kind), `the fixture should produce '${kind}' checks (got ${[...kinds].join(', ')})`);
   }
   assert.ok(result.checks.some((c) => c.present) && result.missing.length > 0, 'some checks pass and some fail');

@@ -62,6 +62,7 @@ const { assertSafeOutputDir } = require('./lib/safe-fs.js');
 const { depthFromMask } = require('./lib/role-privileges.js');
 const { appEntityComponentsFor, appMainFormsFor, appComponentRows } = require('./lib/app-components.js');
 const { readChoiceAttributes } = require('./lib/view-filter-labels.js');
+const { readStatusReasons, readAlternateKeys } = require('./lib/status-reasons-keys.js');
 const { sameFormXmlAcrossLayers } = require('./lib/formxml-layers.js');
 // The app's id and the ids of the roles associated with it live in lib/app-roles.js: the design document reads the same relationship. Still exported from here.
 const { appIdFor, appRoleIdsFor } = require('./lib/app-roles.js');
@@ -267,6 +268,11 @@ function readerFor(sdk, appUnique, opts) {
       const items = await sdk.resolveArtifact('command', { entity: String(entity).toLowerCase() });
       return !!(items && items[0] && items[0].id);
     },
+    // statusReasons(entity) / alternateKeys(entity): the table's status reasons, with their states, and its alternate keys, with their
+    // columns — one narrow read each, made only for a table that declares any (lib/status-reasons-keys.js). They never throw: a read that
+    // fails answers { state: 'error', why }, which verify reports on the checks it was for.
+    statusReasons: (logical) => readStatusReasons(sdk.dataverse, logical),
+    alternateKeys: (logical) => readAlternateKeys(sdk.dataverse, logical),
     // rolePrivileges(roleId): what the deployed role actually GRANTS, as [{ privilegeId, depth }].
     // The `roleprivileges` intersect row carries `privilegedepthmask` — a BITMASK (1 Basic /
     // 2 Local / 4 Deep / 8 Global), which is NOT the same encoding as the `Depth` name the SDK

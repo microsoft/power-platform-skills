@@ -678,6 +678,14 @@ function createLifecycleOrg(options = {}) {
     for (const p of table.Privileges || []) insertRow('privileges', { privilegeid: p.PrivilegeId, name: p.Name, accessright: p.PrivilegeType, canbebasic: p.CanBeBasic, canbelocal: p.CanBeLocal, canbedeep: p.CanBeDeep, canbeglobal: p.CanBeGlobal });
   }
   for (const [logical, info] of Object.entries(SYSTEM_TABLES)) seedSystemTable(logical, info);
+  // The two stock tables the platform relates every File and Image column to (fake-lifecycle-metadata.js mediaRelationshipOf), as
+  // definitions only: nothing reads or writes their rows. MEASURED: `fileattachment` reads back `IsCustomEntity: false`.
+  for (const [logical, otc] of [['fileattachment', 55], ['imagedescriptor', 1007]]) {
+    const table = metadata.makeTable({ SchemaName: logical, EntitySetName: `${logical}s`, ObjectTypeCode: otc, OwnershipType: 'OrganizationOwned', DisplayName: logical, DisplayCollectionName: logical, Attributes: [] }, { custom: false });
+    table.PrimaryIdAttribute = `${logical}id`;
+    for (const a of table.Attributes.values()) a.IsCustomAttribute = false;
+    metadata.tables.set(logical, table);
+  }
   insertRow('organizations', { organizationid: IDS.organization, name: 'Contoso', languagecode: baseLanguage });
   insertRow('businessunits', { businessunitid: IDS.businessUnit, name: 'contoso', _parentbusinessunitid_value: null });
   insertRow('systemusers', { systemuserid: IDS.user, fullname: 'Maker', domainname: 'maker@contoso.onmicrosoft.com', _businessunitid_value: IDS.businessUnit });
@@ -934,7 +942,7 @@ function createLifecycleOrg(options = {}) {
       const options = attribute.OptionSet.Options;
       const value = body.Value !== undefined && body.Value !== null ? Number(body.Value) : Math.max(100000000 - 1, ...options.map((o) => o.Value)) + 1;
       if (options.some((o) => o.Value === value)) return failure(400, '0x80047007', `An option with the value ${value} already exists.`);
-      options.push({ Value: value, Label: metadata.label(body.Label), Description: metadata.label(null), Color: null, IsManaged: false, ExternalValue: null, ...(p === '/InsertStatusValue' ? { State: Number(body.StateCode) } : {}) });
+      options.push({ Value: value, Label: metadata.label(body.Label), Description: metadata.label(null), Color: body.Color === undefined ? null : body.Color, IsManaged: false, ExternalValue: null, ...(p === '/InsertStatusValue' ? { State: Number(body.StateCode) } : {}) });
       return json(200, { NewOptionValue: value });
     }
     // SaveSettingValue { SettingName, Value, AppUniqueName?, SolutionUniqueName? }: an app-scoped value is the `appsettings` row of that

@@ -26,6 +26,9 @@
 //     whatever the create sent — MEASURED: a create sending `false` read back `true` — and a later one does not, `true` sent or not
 //     (Microsoft Learn: "ignored if set to true when creating a new image column" while another exists). Deleting the primary one
 //     makes the next the primary (Learn: "another image column for the table is selected automatically");
+//   - a File or an Image column gets a relationship of the platform's own to a stock table (MEASURED on a live environment, from the
+//     table's ManyToOneRelationships): `FileAttachment_<table>_<file>`, fileattachment -> <table>.<file>, CUSTOM; and
+//     `ImageDescriptor_<table>_<image>`, imagedescriptor -> <table>.<image>id, not custom. It goes with the column (mediaRelationshipOf);
 //   - a 1:N relationship creates its lookup column on the referencing table; an N:N its intersect table.
 // See: https://learn.microsoft.com/en-us/power-apps/developer/data-platform/webapi/create-update-entity-definitions-using-web-api
 // See: https://learn.microsoft.com/en-us/power-apps/developer/data-platform/webapi/create-update-entity-relationships-using-web-api
@@ -324,6 +327,34 @@ function createMetadataStore({ baseLanguage = 1033, userLanguage = baseLanguage,
 
   const isImage = (attribute) => classOf(attribute) === 'ImageAttributeMetadata';
 
+  // The relationship the platform makes WITH a File or an Image column (see the header), as a table's ManyToOneRelationships answers it
+  // (MEASURED, abridged):
+  //   { "SchemaName": "FileAttachment_<table>_<file>", "ReferencedEntity": "fileattachment", "ReferencedAttribute": "fileattachmentid",
+  //     "ReferencingEntity": "<table>", "ReferencingAttribute": "<file>", "IsCustomRelationship": true }
+  //   { "SchemaName": "ImageDescriptor_<table>_<image>", "ReferencedEntity": "imagedescriptor", "ReferencedAttribute": "imagedescriptorid",
+  //     "ReferencingEntity": "<table>", "ReferencingAttribute": "<image>id", "IsCustomRelationship": false }
+  // Null for a column of any other type.
+  function mediaRelationshipOf(table, attribute) {
+    const cls = classOf(attribute);
+    const kind = cls === 'FileAttributeMetadata' ? { prefix: 'FileAttachment', parent: 'fileattachment', column: attribute.LogicalName, custom: true }
+      : cls === 'ImageAttributeMetadata' ? { prefix: 'ImageDescriptor', parent: 'imagedescriptor', column: `${attribute.LogicalName}id`, custom: false }
+        : null;
+    if (!kind) return null;
+    return {
+      '@odata.type': '#Microsoft.Dynamics.CRM.OneToManyRelationshipMetadata',
+      MetadataId: randomUUID(),
+      SchemaName: `${kind.prefix}_${table.LogicalName}_${attribute.LogicalName}`,
+      RelationshipType: 'OneToManyRelationship',
+      IsCustomRelationship: kind.custom,
+      IsManaged: false,
+      IsValidForAdvancedFind: false,
+      ReferencedEntity: kind.parent,
+      ReferencingEntity: table.LogicalName,
+      ReferencedAttribute: `${kind.parent}id`,
+      ReferencingAttribute: kind.column,
+    };
+  }
+
   function addAttribute(table, attribute) {
     // The platform's choice of a table's primary image (see the header): the first Image column it gets, whatever was sent.
     if (isImage(attribute)) {
@@ -333,6 +364,8 @@ function createMetadataStore({ baseLanguage = 1033, userLanguage = baseLanguage,
     }
     table.Attributes.set(attribute.LogicalName, attribute);
     for (const companion of companionsOf(attribute)) if (!table.Attributes.has(companion.LogicalName)) table.Attributes.set(companion.LogicalName, companion);
+    const media = mediaRelationshipOf(table, attribute);
+    if (media && !relationships.has(lc(media.SchemaName))) relationships.set(lc(media.SchemaName), media);
     return attribute;
   }
 
@@ -757,6 +790,9 @@ function createMetadataStore({ baseLanguage = 1033, userLanguage = baseLanguage,
   function deleteColumn(table, attribute) {
     table.Attributes.delete(attribute.LogicalName);
     for (const [name, other] of [...table.Attributes]) if (other.AttributeOf === attribute.LogicalName) table.Attributes.delete(name);
+    // A File or an Image column's relationship of the platform's own goes with it (mediaRelationshipOf).
+    const media = mediaRelationshipOf(table, attribute);
+    if (media) relationships.delete(lc(media.SchemaName));
     // The base-currency twin has no AttributeOf to follow (see companionsOf): it goes by its name, as the platform deletes it.
     const twin = table.Attributes.get(`${attribute.LogicalName}_base`);
     if (classOf(attribute) === 'MoneyAttributeMetadata' && attribute.IsBaseCurrency !== true && twin && twin.IsBaseCurrency === true) table.Attributes.delete(twin.LogicalName);

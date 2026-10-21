@@ -17,7 +17,7 @@
 // PURE: no I/O. The lint (spec-lint.js), the design document (app-spec-doc.js) and its warnings (write-app-spec-doc.js) all read the spec through here,
 // so they cannot disagree about which tables nothing grants, or which marks say an app already exists. The environment's side — the roles an app
 // has — is read by lib/app-roles.js and arrives here as `appAccess`.
-const { canonicalPersonaName } = require('./app-spec.js');
+const { canonicalPersonaName, roleGrantEntryLabel, roleGrantIdentityErrors } = require('./app-spec.js');
 
 // Every collection read here is shape-guarded: the lint and the document run on specs still being typed, and a crash kills the authoring flow.
 const isObject = (v) => !!v && typeof v === 'object' && !Array.isArray(v);
@@ -98,6 +98,24 @@ function uncoveredTables(spec) {
     seen.add(key);
     return !covered.has(key);
   });
+}
+
+/**
+ * The roleGrants[] entries the build refuses because they do not name exactly one role — `role` and `roleId` both, neither, or one of them
+ * malformed — each with the gate's own messages (app-spec.js roleGrantIdentityErrors, which validateRoleGrants reports and lint-app-spec.js
+ * prints as `schema:` errors), labelled by the entry's index as written:
+ *   [ { index, messages: ["roleGrants[1] (role \"Viewer\"): set either 'role' … or 'roleId' …, not both — …"] } ]
+ * The document shows these instead of the entry's privileges, and does not match them against the roles of the app.
+ * @returns {{ index: number, messages: string[] }[]}
+ */
+function roleGrantRefusals(spec) {
+  const out = [];
+  arr(isObject(spec) ? spec.roleGrants : []).forEach((g, index) => {
+    if (!isObject(g)) return;
+    const messages = roleGrantIdentityErrors(g, roleGrantEntryLabel(g, index));
+    if (messages.length) out.push({ index, messages });
+  });
+  return out;
 }
 
 // --- the personas' share of who can open the app ----------------------------------------------------------------------------------------------
@@ -225,7 +243,10 @@ function appAccessModel(spec, appAccess) {
   const named = arr(s.personas).filter(isObject)
     .map((p) => ({ name: canonicalPersonaName(p), getsApp: p.appAccess !== false }))
     .filter((p) => filled(p.name));
-  const wanted = arr(s.roleGrants).filter(isObject).map((g) => {
+  // An entry the build refuses names no role it would extend (roleGrantRefusals), so it is matched to none of the app's.
+  const refused = new Set(roleGrantRefusals(s).map((r) => r.index));
+  const wanted = arr(s.roleGrants).map((g, index) => {
+    if (!isObject(g) || refused.has(index)) return null;
     if (filled(g.roleId)) return { by: 'id', key: lc(g.roleId.trim()), label: g.roleId.trim() };
     if (filled(g.role)) return { by: 'name', key: lc(g.role.trim()), label: g.role.trim() };
     return null;
@@ -256,6 +277,7 @@ module.exports = {
   introducedTables,
   tablePrivileges,
   uncoveredTables,
+  roleGrantRefusals,
   personaAppAccess,
   rolesOfPersonas,
   appAccessCondition,

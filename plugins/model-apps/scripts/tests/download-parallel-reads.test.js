@@ -111,11 +111,11 @@ function normalizedUrl(url) {
 
 function matchAuxRoute(url) {
   const text = normalizedUrl(url);
-  if (/\?\$select=LogicalName,Description,DisplayName,DisplayCollectionName$/.test(text)) return 'entity-labels';
+  if (/\?\$select=LogicalName,Description,DisplayName,DisplayCollectionName,IconVectorName&\$expand=Keys\(\$select=SchemaName,DisplayName,KeyAttributes,IsManaged\)$/.test(text)) return 'entity-labels';
   if (/\/Attributes\?\$select=LogicalName,Description,DisplayName,IsLogical,AttributeOf,AttributeTypeName$/.test(text)) return 'attribute-labels';
-  if (/MoneyAttributeMetadata\?\$select=LogicalName,IsBaseCurrency$/.test(text)) return 'money';
-  if (/PicklistAttributeMetadata\?\$select=LogicalName&\$expand=OptionSet\(\$select=Name,IsGlobal,Options\)/.test(text)) return 'picklist';
-  if (/MultiSelectPicklistAttributeMetadata\?\$select=LogicalName&\$expand=OptionSet\(\$select=Name,IsGlobal,Options\)/.test(text)) return 'multiselect';
+  if (/MoneyAttributeMetadata\?\$select=LogicalName,IsBaseCurrency,MinValue,MaxValue,Precision,PrecisionSource$/.test(text)) return 'money';
+  if (/PicklistAttributeMetadata\?\$select=LogicalName&\$expand=OptionSet\(\$select=Name,DisplayName,IsGlobal,Options\)/.test(text)) return 'picklist';
+  if (/MultiSelectPicklistAttributeMetadata\?\$select=LogicalName&\$expand=OptionSet\(\$select=Name,DisplayName,IsGlobal,Options\)/.test(text)) return 'multiselect';
   return null;
 }
 

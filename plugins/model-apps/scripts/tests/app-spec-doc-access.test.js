@@ -406,6 +406,59 @@ test('a malformed discovery answer or spec renders instead of throwing', () => {
   }
 });
 
+// --- a roleGrants[] entry the build refuses -------------------------------------------------------------------------------------------
+
+// An entry that names its role twice (`role` and `roleId`), or not at all, is refused by the gate a build and lint-app-spec.js run. The
+// document used to show it as a grant the build would make; it now says what lint says, in lint's words, and lists none of its privileges.
+test('a roleGrants[] entry the build refuses is refused in the document and its warnings in the words lint uses, and nothing of it is shown as granted', () => {
+  const { lintSpec } = require('../lint-app-spec.js');
+  const spec = extensionSpec();
+  spec.roleGrants = [
+    grant('Contoso PM - Viewer', 'contoso_baseline'),
+    { role: 'Contoso PM - Project Manager', roleId: '33333333-3333-3333-3333-333333333333', privileges: [{ entity: 'contoso_baseline', access: ['write'], scope: 'organization' }] },
+    { privileges: [{ entity: 'contoso_baseline', access: ['delete'], scope: 'organization' }] },
+  ];
+  const refusals = lintSpec(spec).errors.filter((e) => /^schema: roleGrants\[[12]\]/.test(e)).map((e) => e.replace(/^schema: /, ''));
+  assert.deepEqual(refusals, [
+    "roleGrants[1] (role \"Contoso PM - Project Manager\"): set either 'role' (the existing role's display name) or 'roleId' (its GUID), not both — they can disagree and only one can be honoured",
+    "roleGrants[2]: name the existing role to extend — set 'role' (display name) or 'roleId' (GUID)",
+  ]);
+
+  const gaps = designGaps(spec);
+  for (const refusal of refusals) assert.ok(gaps.includes(refusal), `the warnings say what lint says: ${refusal}\n${JSON.stringify(gaps)}`);
+
+  const extended = section(renderAppSpecDoc(spec), '### Roles extended by `roleGrants[]`');
+  for (const refusal of refusals) assert.ok(extended.includes(`> ✗ ${refusal}`), `the document says what lint says: ${refusal}\n${extended}`);
+  assert.match(extended, /\| Contoso PM - Viewer \| contoso_baseline \| read \| organization \|/, 'the entry the build makes is listed as before');
+  assert.doesNotMatch(extended, /\| (Contoso PM - Project Manager|33333333-3333-3333-3333-333333333333|) \| contoso_baseline \|/, 'no row of a refused entry');
+  assert.doesNotMatch(extended, /\| (write|delete) \|/);
+
+  // Read against the environment, a refused entry names no role a build would extend: it is not matched to the app's roles either.
+  const appAccess = appWithRoles('Contoso PM - Viewer');
+  const read = section(renderAppSpecDoc(spec, { envUrl: ENV, appAccess }), '### Roles extended by `roleGrants[]`');
+  assert.doesNotMatch(read, /Role "(Contoso PM - Project Manager|33333333-3333-3333-3333-333333333333)"/);
+  assert.deepEqual(designGaps(spec, { envUrl: ENV, appAccess }).filter((g) => /is not among the roles/.test(g)), []);
+
+  // A spec whose every entry names one role says nothing of the kind.
+  const valid = extensionSpec();
+  valid.roleGrants = [grant('Contoso PM - Viewer', 'contoso_baseline')];
+  assert.doesNotMatch(renderAppSpecDoc(valid), /> ✗ /);
+  assert.deepEqual(designGaps(valid).filter((g) => /^roleGrants\[/.test(g)), []);
+
+  // The command still writes the document and exits 0 — the lint gate is what refuses the spec — and echoes the refusals.
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'appdoc-refused-grant-'));
+  try {
+    const specPath = path.join(dir, 'app-spec.json');
+    fs.writeFileSync(specPath, JSON.stringify(spec), 'utf8');
+    const out = JSON.parse(execFileSync(process.execPath, [CLI, '--spec', `@${specPath}`], { encoding: 'utf8' }));
+    assert.equal(out.ok, true);
+    for (const refusal of refusals) assert.ok(out.warnings.includes(refusal), JSON.stringify(out.warnings));
+    assert.ok(fs.readFileSync(out.docPath, 'utf8').includes(`> ✗ ${refusals[0]}`));
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 // --- the command, offline ---------------------------------------------------------------------------------------------------------------
 
 test('the command with no --env makes the same findings and reads no environment', () => {

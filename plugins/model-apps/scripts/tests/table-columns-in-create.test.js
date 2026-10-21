@@ -188,10 +188,14 @@ function fakeDataverse({
       const p = relative(url);
       log.push({ method: 'GET', path: p });
       let m;
-      if ((m = /^\/EntityDefinitions\(LogicalName='([^']+)'\)\?\$select=LogicalName,EntitySetName$/.exec(p))) {
+      if ((m = /^\/EntityDefinitions\(LogicalName='([^']+)'\)\?\$select=LogicalName,EntitySetName(&\$expand=Keys\(\$select=SchemaName,KeyAttributes\))?$/.exec(p))) {
         const t = tables.get(m[1]);
         if (t && t.lagReads > 0) { t.lagReads -= 1; return reply(404, { error: { message: `no table ${m[1]} yet` } }); }
-        return t ? reply(200, { LogicalName: t.logical, EntitySetName: `${t.logical}s` }) : reply(404, { error: { message: `no table ${m[1]}` } });
+        return t ? reply(200, {
+          LogicalName: t.logical, EntitySetName: `${t.logical}s`,
+          // The no-op key proof carries identity scalars only, never labels ahead of a create.
+          ...(m[2] ? { Keys: [...t.keys.values()].map((k) => ({ SchemaName: k.body.SchemaName, KeyAttributes: clone(k.body.KeyAttributes) })) } : {}),
+        }) : reply(404, { error: { message: `no table ${m[1]}` } });
       }
       // Which table answers to a name right now: its MetadataId and its primary name column, in one narrow request by name.
       if ((m = /^\/EntityDefinitions\(LogicalName='([^']+)'\)\?\$select=MetadataId,PrimaryNameAttribute$/.exec(p))) {
@@ -648,7 +652,7 @@ test('a table that already exists, an SDK without createColumns, or inlineColumn
       findColumns: async () => [],
       dataverse: { get: async (url) => {
         seen.reads.push(url);
-        if (/\?\$select=LogicalName,EntitySetName$/.test(url)) return existing ? { status: 200, body: { LogicalName: 'new_t', EntitySetName: 'new_ts' } } : { status: 404, body: null };
+        if (/\?\$select=LogicalName,EntitySetName(?:&\$expand=Keys\(\$select=SchemaName,KeyAttributes\))?$/.test(url)) return existing ? { status: 200, body: { LogicalName: 'new_t', EntitySetName: 'new_ts' } } : { status: 404, body: null };
         return { status: 200, body: { value: [] } };
       } },
     };
@@ -1876,7 +1880,7 @@ function orderDoubles({ failOn, existing = [] } = {}) {
     if (/Attributes\?\$select=MetadataId,LogicalName$/.test(url)) return { status: 200, body: { value: ['new_x', 'new_y'].map((n) => ({ LogicalName: n, MetadataId: attributeId('new_t', n) })) } };
     if (/Attributes\?\$select=LogicalName,RequiredLevel$/.test(url)) return { status: 200, body: { value: [] } };
     if (/Relationships\?\$select=/.test(url)) return { status: 200, body: { value: [] } };
-    const table = /EntityDefinitions\(LogicalName='([^']+)'\)\?\$select=LogicalName,EntitySetName$/.exec(url);
+    const table = /EntityDefinitions\(LogicalName='([^']+)'\)\?\$select=LogicalName,EntitySetName(?:&\$expand=Keys\(\$select=SchemaName,KeyAttributes\))?$/.exec(url);
     if (table && existing.includes(table[1])) return { status: 200, body: { LogicalName: table[1], EntitySetName: `${table[1]}s` } };
     return { status: 404, body: null };
   } } };
@@ -1997,8 +2001,9 @@ test('a phase that halts after creating tables still sets the name column length
       ...FIRST_TABLE_CALLS, 'createTable new_b', SET_FIRST_LENGTH,
     ]],
     // A table that existed before is never set, a halt or not: only the table this run created is.
+    // Its status comparison waits until every labelled create finishes; a halted phase never reaches it.
     ['the first table already existed, and a column of the second is refused', (call) => /^createColumns? new_b[ .]new_y$/.test(call), ['new_a'], [
-      'updateTable new_a {"quickCreateEnabled":true}', 'createColumn new_a.new_x', 'createColumn new_a.new_file', 'insertStatusValue new_a: On hold', 'createAlternateKey new_a.new_a_key',
+      'updateTable new_a {"quickCreateEnabled":true}', 'createColumn new_a.new_x', 'createColumn new_a.new_file', 'createAlternateKey new_a.new_a_key',
       'createTable new_b', 'createColumns new_b new_y', 'createColumn new_b.new_y', SET_SECOND_LENGTH,
     ]],
   ]) {
@@ -2557,6 +2562,21 @@ test('the primary column length step is planned exactly when the spec asks for a
     assert.strictEqual(lengthEvents(run).length, asked ? 1 : 0, `${what}: narrated`);
     assert.strictEqual(run.events.filter((e) => e.status !== 'start').length, planned.length, `${what}: as many steps as the plan has, so n never passes total`);
   }
+});
+
+test('a downloaded 100-character primary name stays explicit so a fresh build corrects the platform default', async () => {
+  const { entityFromMetadata } = require('../download-model-app.js');
+  const authored = oneTable([], asksFor(100));
+  const source = await provisionOver(authored);
+  const actualLength = source.dv.tables.get('new_ticket').primaryLength;
+  assert.strictEqual(actualLength, 100);
+  const entity = entityFromMetadata({
+    schemaName: 'new_ticket', primaryNameAttribute: 'new_name',
+    attributes: [{ logicalName: 'new_name', displayName: 'Name', attributeType: 'String', maxLength: actualLength }],
+  }, 'new_ticket');
+  const target = await provisionOver({ ...authored, entities: [entity] });
+  assert.strictEqual(target.dv.tables.get('new_ticket').primaryLength, actualLength,
+    'the explicit downloaded length must trigger the post-create correction even at the SDK default');
 });
 
 // --- an alternate key over a new table's name column -----------------------------------------------------------------------------
@@ -3756,7 +3776,8 @@ test('the run after a first build that made such a key after the length step fin
     ['skip', 'primary column length new_ticket.new_name (table exists — kept)'],
     ['skip', 'column new_ticket.new_code (exists)'],
     ['skip', 'alt key new_ticket.new_pairkey (exists)'],
-  ], 'every step is a skip, the key\'s too: the platform answers that it exists');
+  ], 'every step is a skip, the key\'s too: the scalar metadata proves that it exists');
+  assert.strictEqual(keyPosts(first).length, 1, 'only the first build asks to create the key; the rebuild reuses its identity proof');
   assert.deepStrictEqual(again.warnings, []);
   assert.strictEqual(puts(first).length, 1, 'the one write of the length is the first build\'s');
   assert.strictEqual(first.dv.tables.get('new_ticket').primaryLength, 120);
@@ -4475,5 +4496,3 @@ test('a rebuild that finds the AutoNumber column already there never reaches the
   assert.deepStrictEqual(stated.log.filter((r) => r.method === 'POST'), [], 'nothing is created');
   for (const put of stated.log.filter((r) => r.method === 'PUT')) assert.ok(!('AutoNumberFormat' in put.body), 'an update of the column carries no format');
 });
-
-

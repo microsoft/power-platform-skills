@@ -125,6 +125,31 @@ test("fake contract: a Money column's base-currency twin has the live-measured f
   assert.deepEqual([...org.metadata.tables.get('fabrikam_widget').Attributes.keys()].filter((name) => name.startsWith('fabrikam_price')), []);
 });
 
+// MEASURED on a live environment, from a table's ManyToOneRelationships: a File column comes with a CUSTOM relationship to the stock
+// table fileattachment, and an Image column with one, not custom, to imagedescriptor through its `<name>id` — each named for its table and
+// column. A download reads them back (download-model-app.js mediaRelationshipKeys); each goes with its column and with its table.
+test("fake contract: a File and an Image column come with the platform's relationship of each, as measured, which goes with the column and the table", async () => {
+  const org = await populated();
+  const label = (text) => ({ LocalizedLabels: [{ Label: text, LanguageCode: 1033 }] });
+  const where = "/EntityDefinitions(LogicalName='fabrikam_widget')/Attributes";
+  assert.equal((await send(org, 'POST', where, { '@odata.type': 'Microsoft.Dynamics.CRM.FileAttributeMetadata', SchemaName: 'fabrikam_manual', DisplayName: label('Manual'), RequiredLevel: { Value: 'None' }, MaxSizeInKB: 1024 })).status, 204);
+  assert.equal((await send(org, 'POST', where, { '@odata.type': 'Microsoft.Dynamics.CRM.ImageAttributeMetadata', SchemaName: 'fabrikam_photo', DisplayName: label('Photo'), RequiredLevel: { Value: 'None' }, MaxSizeInKB: 10240 })).status, 204);
+  const rows = async () => answered(await send(org, 'GET', "/EntityDefinitions(LogicalName='fabrikam_widget')/ManyToOneRelationships?$select=SchemaName,ReferencedEntity,ReferencingEntity,ReferencingAttribute,IsCustomRelationship")).value
+    .filter((r) => /^(FileAttachment|ImageDescriptor)_/.test(r.SchemaName))
+    .map((r) => [r.SchemaName, r.ReferencedEntity, r.ReferencingEntity, r.ReferencingAttribute, r.IsCustomRelationship]).sort();
+  assert.deepEqual(await rows(), [
+    ['FileAttachment_fabrikam_widget_fabrikam_manual', 'fileattachment', 'fabrikam_widget', 'fabrikam_manual', true],
+    ['ImageDescriptor_fabrikam_widget_fabrikam_photo', 'imagedescriptor', 'fabrikam_widget', 'fabrikam_photoid', false],
+  ]);
+  // The parent of each is a stock table, as the platform reports fileattachment.
+  assert.equal(answered(await send(org, 'GET', "/EntityDefinitions(LogicalName='fileattachment')?$select=IsCustomEntity")).IsCustomEntity, false);
+  assert.equal(answered(await send(org, 'GET', "/EntityDefinitions(LogicalName='imagedescriptor')?$select=IsCustomEntity")).IsCustomEntity, false);
+  assert.equal((await send(org, 'DELETE', `${where}(LogicalName='fabrikam_manual')`)).status, 204);
+  assert.deepEqual((await rows()).map((r) => r[0]), ['ImageDescriptor_fabrikam_widget_fabrikam_photo'], 'the File column took its own with it');
+  assert.equal((await send(org, 'DELETE', "/EntityDefinitions(LogicalName='fabrikam_widget')")).status, 204);
+  assert.deepEqual([...org.metadata.relationships.keys()].filter((name) => /^(fileattachment|imagedescriptor)_/.test(name)), [], 'and the table took the rest');
+});
+
 test("fake contract: the content proof sees another maker's work overwritten, which the identity inventory does not", async () => {
   const overwrites = [
     ['the foreign view\'s FetchXML', async (org) => { const v = org.find('savedqueries', (r) => r.name === 'Open Projects')[0]; return send(org, 'PATCH', `/savedqueries(${v.savedqueryid})`, { fetchxml: '<fetch><entity name="wrong_table"/></fetch>' }); }, /changed: savedqueries .* "Open Projects" \(saved\.fetchxml, saved\.modifiedon, saved\.versionnumber\)/],

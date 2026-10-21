@@ -474,7 +474,7 @@ spec with its last snapshot, not with the deployed row, so it does not notice).
   Integer · BigInt · Decimal · Double · File · Image · AutoNumber · Customer`.
   **Lookups are NOT columns** — declare a `OneToMany` relationship instead.
 - **Per-type options** (all optional except an AutoNumber column's `autoNumberFormat`): `required: true` /
-  `"recommended"` / `false`; Text → `maxLength`,
+  `"recommended"` / `false`; Text/Memo → `maxLength`; Text →
   `format` (`Text`/`Email`/`Url`/`Phone`); numeric → `minValue`/`maxValue`/`precision`;
   Integer → also `integerFormat` (`None`/`Duration`/`TimeZone`/`Language`/`Locale` — e.g. render a
   raw minute count as a Duration picker instead of a plain number); DateTime → `dateFormat`
@@ -483,6 +483,27 @@ spec with its last snapshot, not with the deployed row, so it does not notice).
   `autoNumberFormat` (**required** on an AutoNumber column, e.g. `"C-{SEQNUM:5}"` — see the
   AutoNumber note below); Calculated/Rollup → `source: "Calculated"|"Rollup"` +
   `formula`.
+- **Downloaded column options are canonical, not a record of which defaults the author typed.**
+  Text format/length, Memo length, Integer range/format, Decimal/Double range/precision, Money range,
+  Boolean labels, DateTime format and AutoNumber masks are reconstructed, as are the primary name
+  column's length/mask. Options equal to the bundled SDK's create defaults are omitted: Text
+  length 100/format `Text`, Memo length 2000, Integer range -2147483648..2147483647/format `None`,
+  Decimal/Double range -100000000000..100000000000/precision 2, Money range 0..1000000000/precision 2,
+  Boolean `Yes`/`No` and DateTime `DateAndTime`. A primary name length stays explicit even at 100:
+  some environments override the length in a table create, and the post-create correction runs only
+  when `primaryAttribute.maxLength` is present. A missing or malformed detail read is named on
+  stderr; the typed column remains, but a fresh build cannot recover the missing option.
+  **Money precision is not generally portable.** The SDK always creates `PrecisionSource: 2`
+  (transaction currency). Download retains numeric `Precision` metadata only for source 2, and
+  even then the effective precision depends on the transaction currency's decimal places in the
+  target; equal numeric metadata does not prove currency equivalence. Source 0 (column precision),
+  source 1 (organization pricing), and missing/malformed/unknown sources are diagnosed with
+  precision omitted, without losing the typed Money column or its range. Configure the required
+  source in Power Apps on the target rather than relying on this spec to recreate it.
+  See [Money PrecisionSource](https://learn.microsoft.com/en-us/dotnet/api/microsoft.xrm.sdk.metadata.moneyattributemetadata.precisionsource).
+  This does not reconstruct `required`, Boolean `defaultValue`, `isValidFor*`, visualization,
+  BigInt ranges or DateTime behavior. A non-primary AutoNumber's custom length/format cannot be
+  authored through this spec; its number mask is carried.
 - **Write permissions** (optional, every column type **except Customer**): `isValidForCreate` /
   `isValidForUpdate` / `isValidForRead` — see `isValidForCreate / isValidForUpdate /
   isValidForRead` below.
@@ -512,13 +533,12 @@ spec with its last snapshot, not with the deployed row, so it does not notice).
   after the answer to its create was lost, or an existing table whose columns could not be read,
   warns — `false` too, since nothing shows what the column holds), and running the build again finds
   the table and sets the level as it does for any existing column — it never creates the table twice.
-- **`defaultValue`, `integerFormat`, and `isValidFor*` converge differently: by re-assertion, not
-  by diff.** Unlike `required` above, a rebuild does not read the column's current state first —
-  it simply re-sends whichever of these fields the spec sets explicitly, on every build, for both a
-  brand-new column and one that already exists. This is safe because re-sending an already-correct
-  value is a no-op on the wire; it does mean (unlike `required`) there is no "leave it alone if
-  omitted" behavior to rely on for a value set by hand in the portal — omit the field entirely to
-  leave portal-set state untouched, exactly as for `visualization` below.
+- **`defaultValue` and `isValidFor*` converge by re-assertion.** A rebuild re-sends whichever of
+  these fields the spec sets explicitly for an existing column; an omitted field leaves portal-set
+  state untouched, exactly as for `visualization` below. **A standalone `integerFormat` is
+  compared first:** an equal scalar format skips the SDK's read-mutate-write, while a different
+  or unreadable one keeps that update path. When other capabilities are authored alongside the
+  format, the existing combined update is still re-asserted.
 - **Choice / MultiChoice** need `options[]` (string labels) **or** a `globalChoice` reference
   (see `globalChoices` below). **Customer** is a polymorphic account/contact lookup.
 - **AutoNumber** can also be the **primary** column — put `autoNumberFormat` on `primaryAttribute`
@@ -656,6 +676,22 @@ without needing a business rule or a plug-in to enforce it.
 "alternateKeys": [ { "schemaName": "new_emailkey", "displayName": "Email Key", "columns": ["new_email"] } ],
 "mainFormOrder": ["Work Item", "Work Item — Summary"]   // the Main Form Set order — see forms[] → "Which form a table opens with"
 ```
+
+A download keeps unmanaged custom `statusReasons` with Active/Inactive state, label, color and
+value (omitting `value` only when the build would assign the same number by index). Stock values
+1/2, managed reasons and stock-table reasons below 100000000 are not re-declared. Other states or
+incomplete metadata are named rather than fabricated. `alternateKeys` keep their schema names,
+column sets and available display labels; managed keys are not re-declared. Status labels use only
+the resolved download language (`--language-code`, the existing spec's `languageCode`, then the
+environment base language), not the caller's UI language. A reason missing that translation is
+omitted with a diagnostic, never relabelled from another LCID. A non-base-language download flag
+is read-time only: pass the same flag on rebuild or pin `languageCode` in the spec.
+A malformed or missing optional `Keys` array is diagnosed and recovers no keys, without dropping
+the table, its primary name, typed columns or navigation. On rebuild an equal
+status value/state/label in the authoring language (and color, when authored), or an equal key
+name/column set, skips the insert. An unknown or conflicting answer keeps the existing
+duplicate-protected create path: it is not an instruction to rewrite a conflicting deployed
+definition.
 
 ## Conditional features — read `app-spec-schema-advanced.md` when you use one
 
@@ -1898,6 +1934,7 @@ auto-selects tables that are good row-summary candidates and skips those that ar
 - **Lint warnings:**
   - `incident`, `lead`, and `opportunity` are Dynamics 365 app tables (Case / Lead / Opportunity) that provide their own row summaries — configuring one as a summary table warns, because the row-summary feature is not available for them.
   - A table with no descriptive columns (only lookups / system fields) warns that a row summary may not be useful.
+  - A table's entry is read for `enabled`, `instruction` and `columns` only, and validation rejects no other key — so any other key warns that it is ignored. The prompt is `instruction`: a `prompt` key warns and names it. When a summary is enabled, omitting `instruction` uses the default prompt; setting `instruction` alone does not enable a table under `default: "off"`.
 
 ## personas[] (optional — security roles)
 

@@ -4210,6 +4210,39 @@ function canonicalPersonaName(persona) {
 // https://learn.microsoft.com/en-us/power-apps/developer/data-platform/webapi/reference/addprivilegesrole
 const ROLE_GRANT_KEYS = new Set(['role', 'roleId', 'businessUnitId', 'privileges', 'description']);
 
+// How every roleGrants[] message names its entry: `roleGrants[1] (role "Viewer")`, `roleGrants[0] (roleId <guid>)`, or `roleGrants[2]`.
+// `i` is the entry's index in the spec's roleGrants[] as written.
+function roleGrantEntryLabel(g, i) {
+  const roleName = typeof g.role === 'string' ? g.role.trim() : g.role;
+  return `roleGrants[${i}]${roleName ? ` (role "${roleName}")` : g.roleId ? ` (roleId ${g.roleId})` : ''}`;
+}
+
+// The ONE check of which role a roleGrants[] entry names: exactly one of `role` (an existing role's display name) and `roleId` (its
+// GUID). Answers the gate's messages, [] for an entry that names one role. validateRoleGrants (the gate a build and lint-app-spec.js
+// run) reports them, and the design document repeats them word for word (lib/app-access.js roleGrantRefusals → lib/app-spec-doc.js and
+// the warnings of write-app-spec-doc.js), which used to show an entry with both as a grant the build would make.
+function roleGrantIdentityErrors(g, label) {
+  const describeValue = (v) => { try { return JSON.stringify(v); } catch { return Object.prototype.toString.call(v); } };
+  const errors = [];
+  const roleName = typeof g.role === 'string' ? g.role.trim() : g.role;
+  // Exactly one identity. Accepting both would let them disagree, and the apply path can only follow
+  // one — resolving the id and ignoring a mismatched name would grant on a role the author did not name.
+  const hasName = g.role !== undefined;
+  const hasId = g.roleId !== undefined;
+  if (hasName && hasId) {
+    errors.push(`${label}: set either 'role' (the existing role's display name) or 'roleId' (its GUID), not both — they can disagree and only one can be honoured`);
+  } else if (!hasName && !hasId) {
+    errors.push(`${label}: name the existing role to extend — set 'role' (display name) or 'roleId' (GUID)`);
+  }
+  if (hasName && (typeof roleName !== 'string' || !roleName)) {
+    errors.push(`${label}: role must be the non-empty display name of an EXISTING security role (got ${describeValue(g.role)})`);
+  }
+  if (hasId && (typeof g.roleId !== 'string' || !FORM_GUID_RE.test(g.roleId))) {
+    errors.push(`${label}: roleId must be a GUID (got ${describeValue(g.roleId)})`);
+  }
+  return errors;
+}
+
 function validateRoleGrants(spec, errors) {
   const grants = spec && spec.roleGrants;
   if (grants === undefined) return;
@@ -4217,7 +4250,6 @@ function validateRoleGrants(spec, errors) {
     errors.push('roleGrants must be an array of { role | roleId, privileges[] } entries');
     return;
   }
-  const describeValue = (v) => { try { return JSON.stringify(v); } catch { return Object.prototype.toString.call(v); } };
   // A role's identity is (trimmed+folded NAME, business unit) — the same key the SDK uses. Two roles
   // may legitimately share a name in different business units, so the BU must be part of the key or
   // that valid pair is rejected; an absent BU means "the org root", which is one specific BU.
@@ -4242,22 +4274,9 @@ function validateRoleGrants(spec, errors) {
       if (!ROLE_GRANT_KEYS.has(k)) errors.push(`roleGrants[${i}]: unknown key '${k}' (allowed: ${[...ROLE_GRANT_KEYS].join(', ')})`);
     }
     const roleName = typeof g.role === 'string' ? g.role.trim() : g.role;
-    const label = `roleGrants[${i}]${roleName ? ` (role "${roleName}")` : g.roleId ? ` (roleId ${g.roleId})` : ''}`;
-    // Exactly one identity. Accepting both would let them disagree, and the apply path can only follow
-    // one — resolving the id and ignoring a mismatched name would grant on a role the author did not name.
-    const hasName = g.role !== undefined;
+    const label = roleGrantEntryLabel(g, i);
+    errors.push(...roleGrantIdentityErrors(g, label));
     const hasId = g.roleId !== undefined;
-    if (hasName && hasId) {
-      errors.push(`${label}: set either 'role' (the existing role's display name) or 'roleId' (its GUID), not both — they can disagree and only one can be honoured`);
-    } else if (!hasName && !hasId) {
-      errors.push(`${label}: name the existing role to extend — set 'role' (display name) or 'roleId' (GUID)`);
-    }
-    if (hasName && (typeof roleName !== 'string' || !roleName)) {
-      errors.push(`${label}: role must be the non-empty display name of an EXISTING security role (got ${describeValue(g.role)})`);
-    }
-    if (hasId && (typeof g.roleId !== 'string' || !FORM_GUID_RE.test(g.roleId))) {
-      errors.push(`${label}: roleId must be a GUID (got ${describeValue(g.roleId)})`);
-    }
     if (g.businessUnitId !== undefined && (typeof g.businessUnitId !== 'string' || !FORM_GUID_RE.test(g.businessUnitId))) {
       errors.push(`${label}: businessUnitId must be a GUID`);
     }
@@ -4415,6 +4434,8 @@ function migrateAppSpec(spec) {
 }
 
 module.exports = {
+  roleGrantEntryLabel,
+  roleGrantIdentityErrors,
   rejectLocalizedGlobalChoice,
   sampleKeyIdentity,
   dashboardNameKey,

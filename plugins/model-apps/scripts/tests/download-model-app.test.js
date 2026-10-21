@@ -250,7 +250,7 @@ test('readEntityWithDescriptions reads descriptions through the RAW dataverse cl
 
   // The $select also carries the DISPLAY labels now, so a table/column labelled in more than one
   // language round-trips (AB#6686428). The SDK's flattened `displayName` keeps only one.
-  assert.ok(gets.some((u) => /^\/EntityDefinitions\(LogicalName='new_order'\)\?\$select=LogicalName,Description,DisplayName,DisplayCollectionName$/.test(u)), `table read URL wrong: ${gets.join(' | ')}`);
+  assert.ok(gets.some((u) => u === "/EntityDefinitions(LogicalName='new_order')?$select=LogicalName,Description,DisplayName,DisplayCollectionName,IconVectorName&$expand=Keys($select=SchemaName,DisplayName,KeyAttributes,IsManaged)"), `table read URL wrong: ${gets.join(' | ')}`);
   assert.ok(gets.some((u) => /^\/EntityDefinitions\(LogicalName='new_order'\)\/Attributes\?\$select=LogicalName,Description,DisplayName,IsLogical,AttributeOf,AttributeTypeName$/.test(u)), `attribute read URL wrong: ${gets.join(' | ')}`);
   assert.strictEqual(e.description, 'Order table purpose.');
   const status = e.columns.find((c) => c.schemaName === 'new_status');
@@ -466,7 +466,7 @@ test('#564 a LOCAL option set downloads as a real Choice with inline options[], 
   // The cast segment is required: Attributes is a heterogeneous collection, so OptionSet can only be
   // expanded through it. Pin the exact URL so a silent shape change is caught here, not live.
   assert.ok(
-    urls.some((u) => u === "/EntityDefinitions(LogicalName='new_ticket')/Attributes/Microsoft.Dynamics.CRM.PicklistAttributeMetadata?$select=LogicalName&$expand=OptionSet($select=Name,IsGlobal,Options)"),
+    urls.some((u) => u === "/EntityDefinitions(LogicalName='new_ticket')/Attributes/Microsoft.Dynamics.CRM.PicklistAttributeMetadata?$select=LogicalName&$expand=OptionSet($select=Name,DisplayName,IsGlobal,Options)"),
     'picklist read URL wrong: ' + urls.join(' | ')
   );
 });

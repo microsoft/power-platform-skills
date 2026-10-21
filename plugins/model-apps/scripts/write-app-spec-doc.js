@@ -12,8 +12,9 @@
 //
 // Output: { "ok": true, "docPath": "...", "bytes": N, "warnings": [...] }
 // `warnings` echoes the design gaps rendered into the document (no jobs, unmapped jobs, no pages, a new table no role is
-// given access to, and — with --env — what the environment says about who can open the app) so the orchestrator can
-// surface them in chat rather than leaving them buried in a file the user may not open.
+// given access to, a roleGrants[] entry the build refuses — in lint's words — and, with --env, what the environment says
+// about who can open the app) so the orchestrator can surface them in chat rather than leaving them buried in a file the
+// user may not open.
 //
 // --env <orgUrl> labels the document with the environment AND reads, read-only, which security roles the app has associated
 // with it there (lib/app-roles.js), so the document can say who can already open the app and keep that apart from the privileges
@@ -27,7 +28,7 @@ const { assertSafeOutputDir, writeFileSafe } = require('./lib/safe-fs.js');
 const { parseArgs, validateFlags, readJsonArg, emitResult, requireDataverseOrigin } = require('./lib/dataverse-auth.js');
 const { migrateAppSpec } = require('./lib/app-spec.js');
 const { renderAppSpecDoc } = require('./lib/app-spec-doc.js');
-const { appAccessModel, uncoveredTables, uncoveredTablesWarning } = require('./lib/app-access.js');
+const { appAccessModel, roleGrantRefusals, uncoveredTables, uncoveredTablesWarning } = require('./lib/app-access.js');
 const { withThrowawaySdk } = require('./lib/throwaway-sdk.js');
 const { appRolesOf } = require('./lib/app-roles.js');
 const { makeWritesBlocking } = require('./lib/output-redaction.js');
@@ -67,6 +68,9 @@ function designGaps(spec, opts = {}) {
   }
   const withoutAccess = uncoveredTables(s);
   if (withoutAccess.length) out.push(uncoveredTablesWarning(withoutAccess));
+  // A roleGrants[] entry that does not name exactly one role, in the words lint-app-spec.js reports it in (roleGrantRefusals): the build
+  // refuses the spec, and the document shows the entry as that refusal rather than as a grant.
+  for (const { messages } of roleGrantRefusals(s)) out.push(...messages);
 
   // What the environment said (--env), from the same model the document is written from. The administrator-only conclusion is drawn here, and only here, on that
   // evidence: the app has no role (or does not exist yet) AND no persona of this spec gets it — a persona that opts out (`appAccess: false`) is a role the build

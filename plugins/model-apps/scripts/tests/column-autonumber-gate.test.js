@@ -121,10 +121,10 @@ test('an input whose AutoNumber column has a format is provisioned as before', a
 });
 
 // --- a downloaded spec passes the gate ----------------------------------------------------------------------------------------------
-// An auto-number column is a String attribute (formally a text column with a format), so the download reads it as Text and states no format: the spec it
-// makes never carries an AutoNumber column, with or without a format.
+// A positive mask distinguishes an AutoNumber from an ordinary String attribute. Both the column
+// and primary-name masks must survive so a fresh build cannot silently turn either into plain text.
 
-test('a downloaded auto-number column is declared Text with no autoNumberFormat, and the spec it makes passes the gate', () => {
+test('a downloaded auto-number column keeps its type and mask, and the spec it makes passes the gate', () => {
   const attribute = (logicalName, extra) => ({ logicalName, displayName: logicalName, attributeType: 'String', isCustomAttribute: true, ...extra });
   const meta = {
     logicalName: 'new_ticket', schemaName: 'new_ticket', displayName: 'Ticket', primaryNameAttribute: 'new_name',
@@ -135,9 +135,10 @@ test('a downloaded auto-number column is declared Text with no autoNumberFormat,
     ],
   };
   const entity = entityFromMetadata(meta, 'new_ticket');
-  assert.deepStrictEqual(entity.columns.map((c) => [c.schemaName, c.type]), [['new_ref', 'Text'], ['new_plain', 'Text']]);
-  for (const c of entity.columns) assert.ok(!('autoNumberFormat' in c), `${c.schemaName} states no format`);
-  assert.ok(!('autoNumberFormat' in entity.primaryAttribute), 'and neither does the name column');
+  assert.deepStrictEqual(entity.columns.map((c) => [c.schemaName, c.type]), [['new_ref', 'AutoNumber'], ['new_plain', 'Text']]);
+  assert.strictEqual(entity.columns[0].autoNumberFormat, 'C-{SEQNUM:5}');
+  assert.ok(!('autoNumberFormat' in entity.columns[1]), 'ordinary text gains no mask');
+  assert.strictEqual(entity.primaryAttribute.autoNumberFormat, 'WO-{SEQNUM:5}');
   for (const profile of ['plan', 'deploy']) {
     const result = validateAppSpec({ schemaVersion: 2, solution: { uniqueName: 'S', publisherPrefix: 'new' }, app: { name: 'A' }, entities: [entity], appShell: { areas: [] } }, { profile });
     assert.deepStrictEqual(result.errors, [], profile);

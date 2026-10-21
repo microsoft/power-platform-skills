@@ -47,8 +47,8 @@ async function dashboardOver(formxml) {
 }
 
 const ordinaryTiles = [
-  { type: 'list', name: 'Open cases', entity: 'incident', viewId: OPEN_VIEW },
-  { type: 'chart', name: 'Cases by status', entity: 'incident', viewId: CHART_VIEW, visualizationId: CHART },
+  { type: 'list', name: 'Open cases', entity: 'incident', viewId: OPEN_VIEW, colspan: 2, rowspan: 8 },
+  { type: 'chart', name: 'Cases by status', entity: 'incident', viewId: CHART_VIEW, visualizationId: CHART, colspan: 2, rowspan: 8 },
 ];
 
 test('a dashboard of native tiles downloads as it always did: a list, a chart, an iframe and a web resource, with nothing said', async () => {
@@ -61,8 +61,8 @@ test('a dashboard of native tiles downloads as it always did: a list, a chart, a
   assert.deepStrictEqual(dashboards.map((d) => [d.id, d.name]), [[DASHBOARD_ID, 'Support board']]);
   assert.deepStrictEqual(dashboards[0].tiles, [
     ...ordinaryTiles,
-    { type: 'iframe', name: 'Knowledge', url: 'https://contoso.example/help' },
-    { type: 'webresource', name: 'Welcome', webResource: 'new_welcome.htm' },
+    { type: 'iframe', name: 'Knowledge', url: 'https://contoso.example/help', colspan: 4, rowspan: 6 },
+    { type: 'webresource', name: 'Welcome', webResource: 'new_welcome.htm', colspan: 4, rowspan: 6 },
   ]);
   assert.deepStrictEqual(warnings, []);
 });

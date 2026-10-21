@@ -139,12 +139,12 @@ function mockSdk(state = {}) {
     }
   };
 
+  // As the real SDK's deleteRelationship: it looks the relationship up by its schema name first and, finding none, throws its
+  // InvalidArgumentError (`code: 'INVALID_ARGUMENT'`, no HTTP status) without sending a delete.
   const deleteRelationship = async (schemaName) => {
     calls.push({ method: 'deleteRelationship', schemaName });
     if (!db.relationships.has(schemaName)) {
-      const err = new Error(`Relationship ${schemaName} not found`);
-      err.statusCode = 404;
-      throw err;
+      throw Object.assign(new Error(`relationship '${schemaName}' not found`), { code: 'INVALID_ARGUMENT' });
     }
     db.relationships.delete(schemaName);
   };
@@ -436,6 +436,8 @@ test('runTeardown deletes declared global choices by name (tolerating an already
   const gcCalls = sdk.calls.filter((c) => c.method === 'deleteGlobalOptionSet').map((c) => c.name);
   assert.deepStrictEqual(gcCalls, ['new_present', 'new_absent'], 'both declared choices attempted');
   assert.strictEqual(sdk.db.globalchoices.has('new_present'), false, 'present choice deleted');
+  assert.deepStrictEqual(res.deleted.globalChoice, ['new_present'], 'only the choice that was there is counted as deleted');
+  assert.ok(res.skipped.includes('global choice new_absent'), 'the absent one is a step that found nothing');
 });
 
 test('deleteStep skips a system view that cannot be deleted (best-effort, no throw)', async () => {
@@ -1041,12 +1043,11 @@ test('not-found artifacts are skipped, not errors, and issue no delete', async (
   const sdk = mockSdk(); // empty env — nothing exists
   const r = await runTeardown(fullSpec(), { apply: true }, { sdk });
   assert.strictEqual(r.ok, true);
-  // Tables will attempt deleteTable (synthetic item) but get not-found immediately, counted as deleted
-  // Relationships will attempt deleteRelationship but get not-found, counted as deleted (tolerateNotFound)
+  // Tables still send deleteTable (a synthetic item) and get not-found: the table read had listed none, so each is not found too.
+  // Relationships are looked up by the SDK, which finds none and sends no delete: not found.
   // Other artifacts (app, dashboard, commands, forms, charts, views, webResource, solution) skip when resolve returns []
-  assert.strictEqual(r.skipped.length, 16); // app, genpage, dashboard, commands, 3 forms, 2 charts, 3 views, webResource, generated app-icon WR, page-manifest WR, solution
-  assert.strictEqual((r.deleted.table || []).length, 3); // tables counted as deleted (tolerateNotFound)
-  assert.strictEqual((r.deleted.relationship || []).length, 2); // relationships counted as deleted (tolerateNotFound)
+  assert.strictEqual(r.skipped.length, 21); // app, genpage, dashboard, commands, 3 forms, 2 charts, 3 views, 2 relationships, 3 tables, webResource, generated app-icon WR, page-manifest WR, solution
+  assert.deepStrictEqual([r.deleted.table, r.deleted.relationship], [undefined, undefined], 'nothing was there, so no table or relationship is counted as deleted');
   // Only table/relationship deletes were attempted (synthetic items); other kinds skipped before delete
   const deletesDone = sdk.calls.filter((c) => c.method !== 'resolveArtifact' && c.method !== 'queryRecords' && c.method !== 'findTables');
   assert.ok(deletesDone.every((c) => c.method === 'deleteTable' || c.method === 'deleteRelationship'), 'only table/relationship deletes attempted');
@@ -1093,14 +1094,109 @@ test('teardown deletes a created custom table but skips a reused system table in
   assert.ok(!sdk.db.tables.has('new_order'), 'created table deleted; system table left intact');
 });
 
-test('a table that does not exist skips the delete', async () => {
+test('a table that does not exist is still sent its delete, and is reported not found', async () => {
   const sdk = mockSdk(); // no tables
   const spec = { solution: { uniqueName: 'S', publisherPrefix: 'new' }, entities: [{ schemaName: 'new_x', primaryAttribute: { schemaName: 'new_name' } }] };
-  const r = await runTeardown(spec, { apply: true }, { sdk });
+  const events = [];
+  const r = await runTeardown(spec, { apply: true }, { sdk, emit: (e) => events.push(e) });
   assert.strictEqual(r.ok, true);
-  // The table resolve returns a synthetic item, but deleteTable throws not-found immediately (table never existed)
-  // The handler tolerates not-found, so it counts as deleted
-  assert.strictEqual((r.deleted.table || []).length, 1);
+  // The table resolve returns a synthetic item and deleteTable is sent; its not-found answer, after a table read that listed no
+  // such table, says the table was never there — not a deletion.
+  assert.deepStrictEqual(sdk.calls.filter((c) => c.method === 'deleteTable').map((c) => c.logical), ['new_x']);
+  assert.strictEqual(r.deleted.table, undefined);
+  assert.ok(events.some((e) => e.status === 'skip' && e.skip === 'not-found' && e.label === 'table new_x (not found)'), JSON.stringify(events));
+});
+
+// A delete answered "not found" says one of two things: nothing was there when the step began, or the step's own delete removed it —
+// a metadata delete that the client sent again after a timeout gets the second answer once the first send did the work. Each kind
+// reports the one it can tell from what it already knows, and sends exactly the deletes it always sent.
+test('a teardown of what is already gone says not found for every default-view reset, relationship, table and global choice, and still succeeds', async () => {
+  const spec = fullSpec();
+  spec.globalChoices = [{ name: 'new_severity', displayName: 'Severity', options: ['Low', 'High'] }];
+  const sdk = mockSdk(); // nothing exists
+  // The default-view reset as the real SDK runs it in a teardown (saved with publish: false, published once later): a table that is
+  // gone has no default view to reset.
+  sdk.enrichDefaultViews = async (logical, cols, opts) => { sdk.calls.push({ method: 'enrichDefaultViews', logical, opts }); return { updated: [], results: [], pendingPublish: [] }; };
+  sdk.publishArtifact = async () => ({ publish: { kind: 'published' } });
+  sdk.publishArtifacts = async (targets) => targets.map(() => ({ publish: { kind: 'published' } }));
+  const events = [];
+  const r = await runTeardown(spec, { apply: true }, { sdk, emit: (e) => events.push(e) });
+  assert.strictEqual(r.ok, true, JSON.stringify(r.errors));
+  const steps = events.filter((e) => e.status !== 'start' && /^(reset default views|relationship|table|global choice) /.test(e.label));
+  assert.deepStrictEqual(steps.map((e) => [e.status, e.skip, e.label]), [
+    ['skip', 'not-found', 'reset default views for new_ticket (drop parent lookups) (not found)'],
+    ['skip', 'not-found', 'reset default views for new_comment (drop parent lookups) (not found)'],
+    ['skip', 'not-found', 'relationship new_customer_new_ticket (not found)'],
+    ['skip', 'not-found', 'relationship new_ticket_new_comment (not found)'],
+    ['skip', 'not-found', 'table new_comment (not found)'],
+    ['skip', 'not-found', 'table new_ticket (not found)'],
+    ['skip', 'not-found', 'table new_customer (not found)'],
+    ['skip', 'not-found', 'global choice new_severity (not found)'],
+  ]);
+  assert.deepStrictEqual(r.deleted, {});
+  // ...and what is sent is what was always sent: each reset, each relationship lookup, each table and global choice delete.
+  const sent = (method) => sdk.calls.filter((c) => c.method === method).length;
+  assert.deepStrictEqual([sent('enrichDefaultViews'), sent('deleteRelationship'), sent('deleteTable'), sent('deleteGlobalOptionSet')], [2, 2, 3, 1]);
+});
+
+test('a not-found answer to a delete is "not found" only where the step knows nothing was there; everywhere else it stays the deletion it was', async () => {
+  const notFound = (props) => Object.assign(new Error('Could not find an entity with the specified logical name'), props);
+  const outcome = async (sdk, kind, item) => {
+    const { deletedIds, absentIds } = await deleteStep(sdk, KIND_HANDLERS[kind], [item]);
+    return { deletedIds, absentIds };
+  };
+  // A table: the step's read listed no such table — not found; the read saw it — the not-found a re-sent delete gets once its first
+  // send did the work, so a deletion; the read could not be made — unknown, a deletion as before.
+  const table = { deleteTable: async () => { throw notFound({ statusCode: 404 }); } };
+  assert.deepStrictEqual(await outcome(table, 'table', { id: 'new_x', logical: 'new_x', seen: false }), { deletedIds: [], absentIds: ['new_x'] });
+  assert.deepStrictEqual(await outcome(table, 'table', { id: 'new_x', logical: 'new_x', seen: true }), { deletedIds: ['new_x'], absentIds: [] });
+  assert.deepStrictEqual(await outcome(table, 'table', { id: 'new_x', logical: 'new_x' }), { deletedIds: ['new_x'], absentIds: [] });
+  // A relationship: the SDK's own lookup found none and sent no delete (its error carries no HTTP status) — not found; the delete
+  // itself answered 404, or 400 "…but 0 were found", after the lookup found it — a deletion, as before.
+  const relationship = (err) => ({ deleteRelationship: async () => { throw err; } });
+  assert.deepStrictEqual(await outcome(relationship(notFound({ message: "relationship 'new_a_new_b' not found", code: 'INVALID_ARGUMENT' })), 'relationship', { id: 'new_a_new_b', schemaName: 'new_a_new_b' }), { deletedIds: [], absentIds: ['new_a_new_b'] });
+  assert.deepStrictEqual(await outcome(relationship(notFound({ statusCode: 404 })), 'relationship', { id: 'new_a_new_b', schemaName: 'new_a_new_b' }), { deletedIds: ['new_a_new_b'], absentIds: [] });
+  assert.deepStrictEqual(await outcome(relationship(notFound({ message: 'There should be one and only one relationship related to the entity relationship with id cb989759-967a-f111-9d0f-7ced8d711dbf, but 0 were found', statusCode: 400 })), 'relationship', { id: 'new_a_new_b', schemaName: 'new_a_new_b' }), { deletedIds: ['new_a_new_b'], absentIds: [] });
+  // A global choice: its delete is the step's only request, so its not-found is the platform saying there is no such choice.
+  assert.deepStrictEqual(await outcome({ deleteGlobalOptionSet: async () => { throw notFound({ statusCode: 404 }); } }, 'globalChoice', { id: 'new_c', name: 'new_c' }), { deletedIds: [], absentIds: ['new_c'] });
+  assert.deepStrictEqual(await outcome({ deleteGlobalOptionSet: async () => undefined }, 'globalChoice', { id: 'new_c', name: 'new_c' }), { deletedIds: ['new_c'], absentIds: [] });
+  // Every other kind that tolerates a not-found found its artifact first, so a not-found from its delete stays a deletion.
+  assert.deepStrictEqual(await outcome({ deleteSecurityRole: async () => { throw notFound({ statusCode: 404 }); } }, 'role', { id: 'r1', name: 'Planner' }), { deletedIds: ['r1'], absentIds: [] });
+});
+
+test('the table read says whether the table was there before its delete: seen, listed as absent, or not known', async () => {
+  const resolveWith = (findTables) => KIND_HANDLERS.table.resolve({ findTables }, { logical: 'new_x', schemaName: 'new_X' });
+  assert.deepStrictEqual(await resolveWith(async () => [{ logicalName: 'new_x', isCustom: true }]), [{ id: 'new_x', logical: 'new_x', seen: true }]);
+  assert.deepStrictEqual(await resolveWith(async () => [{ logicalName: 'new_xy', isCustom: true }]), [{ id: 'new_x', logical: 'new_x', seen: false }]);
+  assert.deepStrictEqual(await resolveWith(async () => []), [{ id: 'new_x', logical: 'new_x', seen: false }]);
+  // A read that failed, or a list cut at the 50 matches it asks for, does not say the table is absent.
+  assert.deepStrictEqual(await resolveWith(async () => { throw new Error('HTTP 503'); }), [{ id: 'new_x', logical: 'new_x' }]);
+  const fifty = Array.from({ length: 50 }, (_, i) => ({ logicalName: `new_x${i}`, isCustom: true }));
+  assert.deepStrictEqual(await resolveWith(async () => fifty), [{ id: 'new_x', logical: 'new_x' }]);
+});
+
+test('a default-view reset that finds no default view says not found; one that finds views, or fails after finding them, reads as before', async () => {
+  const PARTIAL = Symbol.for('cds-maker-sdk.partialDefaultViewEnrichment');
+  const deferred = () => ({ deferPublish: true, owedByTable: new Map(), warnings: [] });
+  const item = { id: 'new_task', cols: [{ name: 'new_name', width: 300, order: 0 }] };
+  const outcome = async (enrichDefaultViews, ctx = deferred()) => {
+    const { deletedIds, absentIds } = await deleteStep({ enrichDefaultViews }, KIND_HANDLERS.resetDefaultViews, [item], ctx);
+    return { deletedIds, absentIds };
+  };
+  const absent = { deletedIds: [], absentIds: ['new_task'] };
+  const asBefore = { deletedIds: ['new_task'], absentIds: [] };
+  // The SDK found no default view of the table: it is gone.
+  assert.deepStrictEqual(await outcome(async () => ({ updated: [], results: [], pendingPublish: [] })), absent);
+  // The SDK's read of the table's default views answered not-found (no partial record: it failed before it found any view).
+  assert.deepStrictEqual(await outcome(async () => { throw Object.assign(new Error("The entity with a name = 'new_task' was not found in the MetadataCache."), { statusCode: 400 }); }), absent);
+  // Views found and saved, or found and already as the reset leaves them: as before.
+  assert.deepStrictEqual(await outcome(async () => ({ updated: ['v1'], results: [{ saved: true }], pendingPublish: [{ artifacts: [{ type: 'view', id: 'v1' }] }] })), asBefore);
+  assert.deepStrictEqual(await outcome(async () => ({ updated: [], results: [{ saved: false }], pendingPublish: [] })), asBefore);
+  // A failure after the views were found (the SDK attaches what it had saved), even a not-found one, or any other failure: as before.
+  assert.deepStrictEqual(await outcome(async () => { throw Object.assign(new Error('HTTP 404 from https://contoso.crm.dynamics.com/api/data/v9.0/savedqueries(v1): Not found'), { statusCode: 404, [PARTIAL]: { updated: [], results: [], pendingPublish: [] } }); }), asBefore);
+  assert.deepStrictEqual(await outcome(async () => { throw new Error('HTTP 500 from https://contoso.crm.dynamics.com/api/data/v9.0/savedqueries: boom'); }), asBefore);
+  // An SDK that cannot defer the publish answers only what it saved, which cannot tell "no view" from "nothing to change": as before.
+  assert.deepStrictEqual(await outcome(async () => ({ updated: [] }), undefined), asBefore);
 });
 
 test('appaction delete not-found (cascade already removed it) is tolerated', async () => {
@@ -1776,24 +1872,26 @@ test('a table kept for a failed rule keeps its icon, the global choice its colum
   assert.deepStrictEqual(res.errors.map((e) => e.step), ['business rule "Gate" (new_ticket)']);
   assert.deepStrictEqual(events.filter((e) => e.status === 'error').map((e) => e.label), ['business rule "Gate" (new_ticket)']);
 
-  // What is kept, in the order the plan reaches it — each a `(kept — …)` skip that names the table, and the solution last.
-  assert.deepStrictEqual(res.skipped.slice(0, 4), [
+  // What is kept, in the order the plan reaches it — each a `(kept — …)` skip that names the table, and the solution last. Between
+  // them, the deleted table's relationship to itself, which went with its table: its step found nothing, and says so.
+  assert.deepStrictEqual(res.skipped.slice(0, 5), [
     keptTableLabel('new_ticket', ['Gate']),
     keptWithTable('relationship new_ticket_new_ticket', 'it relates table new_ticket to itself'),
+    'relationship new_customer_new_customer',
     keptWithTable('web resource new_ticket.svg', 'it is the icon of table new_ticket'),
     keptWithTable('global choice new_priority', 'a column of table new_ticket binds it'),
   ]);
-  assert.strictEqual(res.skipped.length, 5, JSON.stringify(res.skipped));
-  assert.match(res.skipped[4], solutionKept, 'the solution is kept for the re-run, as for any earlier failure');
+  assert.strictEqual(res.skipped.length, 6, JSON.stringify(res.skipped));
+  assert.match(res.skipped[5], solutionKept, 'the solution is kept for the re-run, as for any earlier failure');
   assert.deepStrictEqual(events.filter((e) => e.status === 'skip').map((e) => [e.phase, e.skip]), [
-    ['tables', 'kept'], ['relationships', 'kept'], ['web-resources', 'kept'], ['global-choices', 'kept'], ['solution', 'kept'],
+    ['tables', 'kept'], ['relationships', 'kept'], ['relationships', 'not-found'], ['web-resources', 'kept'], ['global-choices', 'kept'], ['solution', 'kept'],
   ], 'each is a kept skip, which the summary counts as kept');
 
   // What was deleted as before: the other table with everything it holds, the script, the relationship between the two tables.
   assert.deepStrictEqual(res.deleted.table, ['new_customer']);
   assert.deepStrictEqual(res.deleted.webResource, ['wr-customer', 'wr-js']);
   assert.deepStrictEqual(res.deleted.globalChoice, ['new_tier']);
-  assert.deepStrictEqual(res.deleted.relationship, ['new_customer_new_ticket', 'new_customer_new_customer']);
+  assert.deepStrictEqual(res.deleted.relationship, ['new_customer_new_ticket']);
 
   // What the environment holds afterwards: the table with the rule and everything that hangs on it, nothing the platform refused.
   assert.deepStrictEqual([...sdk.db.tables], ['new_ticket']);
@@ -1847,7 +1945,8 @@ test('with no failed rule the same spec is torn down exactly as before: the same
   const sdk = dependentsWorld();
   const res = await runTeardown(dependentsSpec(), { apply: true }, { sdk, emit: () => {} });
   assert.strictEqual(res.ok, true, JSON.stringify(res.errors));
-  assert.deepStrictEqual(res.skipped, []);
+  // Nothing kept: the only steps that skip are the two relationships to themselves, which went with their tables and so find nothing.
+  assert.deepStrictEqual(res.skipped, ['relationship new_ticket_new_ticket', 'relationship new_customer_new_customer']);
   assert.deepStrictEqual(ruleRequests(sdk), [
     'queryRecords workflow',
     'updateRecord workflow gate-def {"statecode":0,"statuscode":1}',

@@ -156,9 +156,8 @@ const BUILD_PUBLISHES = [
 // The rebuild of the UNCHANGED spec. It is not free: each line is a write the current build still sends when nothing changed, and
 // what it depends on. A line that disappears is progress (lower it here); a line that appears is a regression.
 const REBUILD_WRITES = {
-  'POST InsertStatusValue': 1, // re-sent at its pinned value; the platform's "already exists" is the skip (entity-provision.js)
-  'POST EntityDefinitions/Keys': 1, // the SDK has no key lister: re-sent, "already exists" is the skip (entity-provision.js)
-  'PUT EntityDefinitions': 2, // the quick-create flag and the table icon are re-asserted on every build (entity-provision.js, sdk-build.js 3c)
+  // Status values and key identities are proved equal before insert; the table's icon names ride its existing scalar probe.
+  'PUT EntityDefinitions': 1, // the quick-create flag is still re-asserted (entity-provision.js)
   'PATCH savedqueries': 4, // the SDK's default-view enrichment saves both generated views of each table on every build (rebuild-writes-real-bundle.test.js)
   'PATCH systemforms': 3, // isdefault is set again on each table's chosen Main form (promoteDefaultForm reads nothing first), and the form's security roles are rewritten byte for byte
   'PATCH sitemaps': 1, // the sitemap of an existing app is rewritten by the pages finalize, byte for byte
@@ -167,10 +166,9 @@ const REBUILD_WRITES = {
   'POST roles/Microsoft.Dynamics.CRM.ReplacePrivilegesRole': 1, // a persona role converges with replace semantics on every build
   'POST appmodules/appmoduleroles_association/$ref': 1, // re-associated; the platform refuses the duplicate and the build reads that as "already linked"
   'POST roles/Microsoft.Dynamics.CRM.AddPrivilegesRole': 1, // a role grant is additive and re-sent
-  'POST PublishXml': 4, // see REBUILD_PUBLISHES
+  'POST PublishXml': 3, // see REBUILD_PUBLISHES
 };
 const REBUILD_PUBLISHES = [
-  'contoso_project', // the table icon set again
   'contoso_project contoso_tag contoso_task', // the tables before the app's publish
   'app', // the app after the sitemap finalize
   'contoso_project contoso_task app', // the publish phase
@@ -200,16 +198,16 @@ const TEARDOWN_WRITES = {
 // Reads per phase: a ceiling about a tenth above what each phase reads today, so a read that starts being made once per row fails
 // here. HTTP requests (reads, writes and change sets) likewise.
 const BUDGET = {
-  build: { reads: 335, requests: 430 }, // today 320 / 410: +18 current-layer/component proofs replace 4 name lookups; published web resources are still read back (4)
-  rebuild: { reads: 318, requests: 343 }, // today 303 / 324: +30 current-layer/component proofs replace 7 name lookups; both ceilings rise by the net 23, preserving headroom and identical writes
-  download: { reads: 130, requests: 130 }, // today 120 / 120: +4 current-layer/component proofs replace 1 name lookup (File/Image sizes still cost one read each)
-  verify: { reads: 85, requests: 85 }, // today 74 / 74
-  teardown: { reads: 95, requests: 135 }, // today 91 / 127: +4 current-layer/component proofs and 2 reverse-owner reads replace 1 name lookup; identical deletes
+  build: { reads: 335, requests: 430 }, // current app/component identities and published-resource readbacks
+  rebuild: { reads: 318, requests: 343 }, // status/key/icon equality proofs and current component identities
+  download: { reads: 143, requests: 143 }, // conditional type casts, status options, owned SVGs and current component identities
+  verify: { reads: 85, requests: 85 }, // declared status reasons and keys add one conditional read each
+  teardown: { reads: 95, requests: 135 }, // current component identities and reverse-owner proofs
 };
 
 // What verify checks, by kind: a kind that stops being checked (or is checked fewer times) fails here even though verify still passes.
 const VERIFY_CHECKS = {
-  entity: 3, column: 18, relationship: 3,
+  entity: 3, column: 18, 'status-reason': 1, 'alternate-key': 1, relationship: 3,
   view: 3, 'view-columns': 3, 'view-filters': 3, 'view-sort': 1, chart: 1,
   form: 4, 'form-identities': 4, 'form-default': 2, 'form-order': 1, 'form-order-served': 1, 'form-timeline': 1,
   dashboard: 1, command: 1,
@@ -263,6 +261,9 @@ const BUILT = {
     contoso_tag_contoso_task: { plural: 'contoso_tag_contoso_task', icon: null, quickCreate: false, intersect: true, columns: {}, keys: [], statusReasons: ['1 Active state 0', '2 Inactive state 1'] },
   },
   relationships: [
+    // The two the platform makes with the File and the Image column of contoso_project (fake-lifecycle-metadata.js mediaRelationshipOf).
+    'FileAttachment_contoso_project_contoso_contract 1:N fileattachment->contoso_project.contoso_contract',
+    'ImageDescriptor_contoso_project_contoso_logo 1:N imagedescriptor->contoso_project.contoso_logoid',
     'contoso_contoso_task_account 1:N account->contoso_task.contoso_customer',
     'contoso_contoso_task_contact 1:N contact->contoso_task.contoso_customer',
     'contoso_project_contoso_project 1:N contoso_project->contoso_project.contoso_parentprojectid',
@@ -348,7 +349,8 @@ test('lifecycle matrix: rebuilding the unchanged spec creates and deletes nothin
 //               deletes it; the app's immutable `uniqueName` and each page's `pageId` are written; a page's source is stored under
 //               pages/<pageId>/ and its prompt is written (references/app-spec-schema.md, app.uniqueName and pages[])
 //   documented  a dashboard comes back pinned by `dashboardId`, its tiles bound to the deployed view and chart ids
-//   documented  an AutoNumber column comes back as Text (download-model-app.js: "no AutoNumber column or format is ever emitted")
+//   documented  column options equal to the SDK's create defaults are left implicit; AutoNumber masks and non-default options are kept
+//   documented  primary name lengths stay explicit even at 100, so a fresh build corrects an environment that overrides the create's length
 //   documented  a lookup label that is the referenced table's display name is left out (it is the default)
 //   documented  a File or Image column comes back typed, with the size it was made with unless that is the size a build gives a column
 //               that sets none (docs/app-builder-capabilities.md, "Round-trip scope")
@@ -358,17 +360,21 @@ test('lifecycle matrix: rebuilding the unchanged spec creates and deletes nothin
 //               (references/app-spec-schema.md, "Round-trip")
 //   documented  personas[] are not carried (references/app-spec-schema.md: "a download carries none")
 //   warned      a Customer column is left out: its two relationships have no relationships[] form (the download warns)
-//   gap         solution.displayName, a global choice's displayName, a table's vectorIcon, statusReasons and alternateKeys, a column's
-//               type options (format, length, range, precision, labels, date format), a dashboard tile's size, script and
-//               table-icon web resources, roleGrants[] and sampleData are not carried
+//   documented  custom Active/Inactive status reasons, alternate keys, solution/global-choice display names and tile sizes are kept;
+//               a table's own unmanaged SVG is carried as external:true, so teardown cannot delete a shared icon
+//   gap         script resources, raster/foreign/managed table icons, roleGrants[] and sampleData are not carried; Boolean defaults,
+//               column capabilities, BigInt ranges and unsupported status states are not reconstructed
 function expectedDownload(authored, ids) {
   const byName = (a, b) => (a.schemaName < b.schemaName ? -1 : a.schemaName > b.schemaName ? 1 : 0);
   const column = (c, primaryImage) => ({
     schemaName: c.schemaName,
     displayName: c.displayName,
-    type: c.type === 'AutoNumber' ? 'Text' : c.type, // documented
+    type: c.type,
     ...(c.options ? { options: c.options } : {}),
     ...(c.globalChoice ? { globalChoice: c.globalChoice } : {}),
+    ...Object.fromEntries(['format', 'maxLength', 'minValue', 'maxValue', 'precision', 'integerFormat', 'trueLabel', 'falseLabel', 'dateFormat', 'autoNumberFormat']
+      .filter((key) => c[key] !== undefined && c[key] !== ({ precision: 2, trueLabel: 'Yes', falseLabel: 'No' })[key])
+      .map((key) => [key, c[key]])), // documented default normalization
     ...((c.type === 'File' || c.type === 'Image') && c.maxSizeKb !== undefined ? { maxSizeKb: c.maxSizeKb } : {}), // documented
     ...(c === primaryImage ? { isPrimaryImage: true } : {}), // documented
   });
@@ -376,12 +382,15 @@ function expectedDownload(authored, ids) {
     schemaName: e.schemaName,
     displayName: e.displayName,
     ...(e.pluralName !== `${e.displayName}s` ? { pluralName: e.pluralName } : {}), // documented
-    primaryAttribute: { schemaName: e.primaryAttribute.schemaName, displayName: e.primaryAttribute.displayName },
+    primaryAttribute: { schemaName: e.primaryAttribute.schemaName, displayName: e.primaryAttribute.displayName, maxLength: e.primaryAttribute.maxLength || 100 },
     columns: e.columns
       .filter((c) => c.type !== 'Customer') // warned
       .map((c) => column(c, e.columns.find((x) => x.type === 'Image'))).sort(byName),
     existing: true,
     description: e.description,
+    ...(e.statusReasons ? { statusReasons: e.statusReasons } : {}),
+    ...(e.alternateKeys ? { alternateKeys: e.alternateKeys } : {}),
+    ...(e.vectorIcon ? { vectorIcon: e.vectorIcon } : {}),
   });
   const tableName = new Map(authored.entities.map((e) => [e.schemaName, e.displayName]));
   const relationship = (r) => (r.type === 'ManyToMany'
@@ -392,12 +401,13 @@ function expectedDownload(authored, ids) {
   return {
     schemaVersion: authored.schemaVersion,
     minimumPluginVersion: authored.minimumPluginVersion,
-    solution: { uniqueName: authored.solution.uniqueName, publisherPrefix: authored.solution.publisherPrefix, description: authored.solution.description },
+    solution: { uniqueName: authored.solution.uniqueName, displayName: authored.solution.displayName, publisherPrefix: authored.solution.publisherPrefix, description: authored.solution.description },
     app: { ...authored.app, uniqueName: 'contoso_kitchensink' },
     entities: authored.entities.map(entity),
     relationships: authored.relationships.map(relationship),
-    globalChoices: authored.globalChoices.map((g) => ({ name: g.name, options: g.options, existing: true })),
-    webResources: [],
+    globalChoices: authored.globalChoices.map((g) => ({ name: g.name, displayName: g.displayName, options: g.options, existing: true })),
+    webResources: authored.webResources.filter((wr) => wr.type === 'svg' && authored.entities.some((e) => e.vectorIcon === wr.name))
+      .map((wr) => ({ name: wr.name, displayName: wr.displayName, type: wr.type, contentBase64: Buffer.from(wr.content).toString('base64'), external: true })),
     views: [],
     charts: [],
     forms: [],
@@ -409,7 +419,7 @@ function expectedDownload(authored, ids) {
       tiles: [
         { type: 'chart', name: 'Projects by Priority', entity: 'contoso_project', viewId: ids.openProjects, visualizationId: ids.chart },
         { type: 'list', name: 'Open', entity: 'contoso_project', viewId: ids.openProjects },
-        { type: 'iframe', name: 'Status', url: 'https://contoso.example/status' },
+        { type: 'iframe', name: 'Status', url: 'https://contoso.example/status', colspan: 2, rowspan: 8 },
       ],
     }],
     pages: [{ key: page.key, name: page.name, pageId: ids.page, purpose: page.purpose, dataSources: page.dataSources, prompt: `Generative page ${page.name}`, source: { kind: 'tsx', codeFile: `pages/${ids.page}/page.tsx` } }],
@@ -472,7 +482,9 @@ test('lifecycle matrix: teardown deletes everything the build made and nothing e
   t.diagnostic(`teardown ${run.timings.teardown} ms, ${s.end - s.mark} requests; whole lifecycle ${Object.values(run.timings).reduce((a, b) => a + b, 0)} ms`);
   const { result } = s.value;
   assert.equal(result.ok, true, JSON.stringify(result.errors));
-  assert.deepEqual({ errors: result.errors, skipped: result.skipped }, { errors: [], skipped: [] });
+  // Nothing fails and nothing is skipped, but for the relationship from contoso_project to itself: its table's delete took it, so its
+  // own step (planned after the tables) finds nothing and says not found.
+  assert.deepEqual({ errors: result.errors, skipped: result.skipped }, { errors: [], skipped: ['relationship contoso_project_contoso_project'] });
   assert.deepEqual(s.writes, TEARDOWN_WRITES);
   // The environment is back to where it started, but for the publisher the build made for the prefix: teardown deletes the solution and
   // never a publisher, which other solutions may share. Only THAT row is set aside — by its identity, captured after the build — so a
@@ -481,6 +493,9 @@ test('lifecycle matrix: teardown deletes everything the build made and nothing e
   assert.match(run.builtPublisher[0], / contosopublisher$/);
   const publishers = run.afterTeardown.rows.publishers;
   assert.deepEqual(publishers.filter((p) => !run.seed.rows.publishers.includes(p)), run.builtPublisher, 'the one row left that the environment did not have is the build\'s publisher');
+  // ...and the teardown says so, in the one line that follows its closing count.
+  const log = s.value.log.map((line) => line.trim());
+  assert.deepEqual(log.slice(log.findIndex((line) => /^✓ teardown complete — /.test(line)) + 1), ["▸ the publisher with prefix 'contoso' is kept: teardown never deletes a publisher, which other solutions may share — delete it in Power Apps (Solutions → Publishers) once nothing uses it"]);
   assert.deepEqual({ ...run.afterTeardown, rows: { ...run.afterTeardown.rows, publishers: publishers.filter((p) => !run.builtPublisher.includes(p)) } }, run.seed, 'every table, column, relationship, option set, row, solution component, link and page the build made is gone, and nothing the environment had before is missing');
   // ...and every artifact the environment had before holds exactly what it held: saved and published layers, metadata, page files.
   assert.deepEqual(diffContents(run.seedContents, run.contents.teardown, { added: false }), [], 'nothing the environment had before was touched');

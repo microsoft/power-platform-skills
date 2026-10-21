@@ -146,9 +146,9 @@ function createLifecycleHarness(org, root) {
 
   // build-model-app.js: the two SDK instances its makeSdk makes — one that names the solution, and the header-less one that owns the app
   // folder's workspace and recovers a form create whose answer was lost — and the deps its main() hands buildModelApp.
-  async function build(spec, { apply = true, publish = true, sampleData = true, verify = true, appFolder = appDir, workspace = workspaceDir } = {}) {
-    const sdk = createMakerSdk({ workspaceStorage: createNodeWorkspaceStorage(throwaway('sdk-')), instanceUrl: org.origin, httpClient: client, solutionUniqueName: spec.solution.uniqueName, languageCode: 1033 });
-    const provisionSdk = createMakerSdk({ workspaceStorage: createNodeWorkspaceStorage(apply ? workspace : throwaway('preview-')), instanceUrl: org.origin, httpClient: client, languageCode: 1033, createRecovery: 'adoptExact' });
+  async function build(spec, { apply = true, publish = true, sampleData = true, verify = true, appFolder = appDir, workspace = workspaceDir, languageCode = 1033 } = {}) {
+    const sdk = createMakerSdk({ workspaceStorage: createNodeWorkspaceStorage(throwaway('sdk-')), instanceUrl: org.origin, httpClient: client, solutionUniqueName: spec.solution.uniqueName, languageCode });
+    const provisionSdk = createMakerSdk({ workspaceStorage: createNodeWorkspaceStorage(apply ? workspace : throwaway('preview-')), instanceUrl: org.origin, httpClient: client, languageCode, createRecovery: 'adoptExact' });
     await provisionSdk.initWorkspace();
     const genpage = makeGenpageSdk(org.origin, { httpClient: client });
     const warnings = [];
@@ -156,9 +156,9 @@ function createLifecycleHarness(org, root) {
     try {
       const result = await buildModelApp(spec, {
         apply, publish, sampleData, verify, phases: PHASES, profile: apply ? 'deploy' : 'plan', nonInteractive: false,
-        appDir: appFolder, env: org.origin, workspaceDir: workspace, preResolvedLanguageCode: apply ? 1033 : undefined,
+        appDir: appFolder, env: org.origin, workspaceDir: workspace, preResolvedLanguageCode: apply ? languageCode : undefined,
       }, {
-        sdk, provisionSdk, genpage, sleep: async () => {}, warn: (m) => warnings.push(String(m)), log: (m) => log.push(String(m)), provisionedLanguages: async () => [1033],
+        sdk, provisionSdk, genpage, sleep: async () => {}, warn: (m) => warnings.push(String(m)), log: (m) => log.push(String(m)), provisionedLanguages: async () => org.pageServer.languages.provisioned,
         verify: async (s, o) => verifySpec(s, readerFor(provisionSdk, appUniqueName(s), { genpage, workspaceDir: workspace }), o),
       });
       return { result, warnings, log };
@@ -168,7 +168,7 @@ function createLifecycleHarness(org, root) {
   }
 
   // download-model-app.js main(), with the seams it gives: the result printer, the process exit, the auth probe, the HTTP client.
-  async function downloadApp(appUnique, outDir) {
+  async function downloadApp(appUnique, outDir, { languageCode } = {}) {
     let emitted;
     const stderr = [];
     // runDownload writes its WARNING lines to process.stderr itself (main's `stderr` seam carries the rest): both are what the maker reads.
@@ -176,7 +176,7 @@ function createLifecycleHarness(org, root) {
     process.stderr.write = (text) => { stderr.push(String(text)); return true; };
     try {
       await download.main({
-        argv: ['--env', org.origin, '--app', appUnique, '--out', outDir],
+        argv: ['--env', org.origin, '--app', appUnique, '--out', outDir, ...(languageCode ? ['--language-code', String(languageCode)] : [])],
         stderr: { write: (text) => { stderr.push(String(text)); return true; } },
         exit: (code) => { throw new Error(`download exited ${code}: ${stderr.join('')}`); },
         emitResult: (ok, payload) => { emitted = { ok, payload }; },

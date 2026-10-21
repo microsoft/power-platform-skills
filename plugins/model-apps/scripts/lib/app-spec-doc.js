@@ -17,7 +17,7 @@
 
 const lc = (s) => String(s || '').toLowerCase();
 const { labelText, lookupLabelFor } = require('./app-spec.js');
-const { appAccessCondition, appAccessModel, rolesOfPersonas, uncoveredTables, uncoveredTablesCallout } = require('./app-access.js');
+const { appAccessCondition, appAccessModel, rolesOfPersonas, roleGrantRefusals, uncoveredTables, uncoveredTablesCallout } = require('./app-access.js');
 
 // Every collection read below goes through these. The renderer runs against WORK-IN-PROGRESS specs
 // during authoring — a half-typed `jobs: "x"`, a null entry left by an edit, a `dataSources` written
@@ -418,22 +418,33 @@ function namedGrantNote(grant) {
 
 // roleGrants[]: privileges ADDED to roles that already exist. Shown with the role they extend — the persona sections above show the roles this spec owns — and,
 // when the environment was read, with how each grant stands to the roles the app has: a grant gives a role a table, not the app.
+//
+// An entry that does not name exactly one role is refused by the gate a build runs, and is shown as that refusal, in the gate's own words
+// (roleGrantRefusals), never as rows: listed with the rest, it read as a grant the build would make. Shape errors are otherwise validateAppSpec's to
+// report and not this document's — but this one is the document's own claim about what the build does.
 function roleGrantsSection(spec, model) {
   const grants = objs(spec.roleGrants);
   if (!grants.length) return [];
+  const refusals = roleGrantRefusals(spec);
+  const refused = new Set(refusals.map((r) => r.index));
   const rows = [];
-  for (const g of grants) {
+  arr(spec.roleGrants).forEach((g, index) => {
+    if (!g || typeof g !== 'object' || Array.isArray(g) || refused.has(index)) return;
     const role = typeof g.role === 'string' && g.role.trim() ? g.role.trim() : (typeof g.roleId === 'string' ? g.roleId.trim() : '');
     for (const r of privilegeRows(unionPrivileges(arr(g.privileges)))) rows.push({ role, ...r });
-  }
+  });
   const out = ['### Roles extended by `roleGrants[]`', '', 'These roles already exist. The build ADDS the privileges below and removes none, and a grant does not associate the role with the app. After a build, `verify-model-app.js` checks that each role holds them.', ''];
   if (rows.length) {
     out.push('| Role | Table | Access | Scope |', '|---|---|---|---|');
     for (const r of rows) out.push(`| ${cell(r.role)} | ${cell(r.entity)} | ${cell(r.access)} | ${cell(r.scope)} |`);
-  } else {
-    out.push('_No privileges declared._');
+    out.push('');
+  } else if (!refusals.length) {
+    out.push('_No privileges declared._', '');
   }
-  out.push('');
+  for (const { messages } of refusals) {
+    for (const message of messages) out.push(`> ✗ ${text(message)}`, '');
+  }
+  if (refusals.length) out.push('The build refuses this spec until each of these entries names one role, so their privileges are not listed.', '');
   if (model.state === 'read') {
     for (const g of model.grants) {
       if (g.status === 'not-associated') out.push(`> ⚠ Role "${text(g.label)}" is not among the roles associated with the app, so its users get these privileges but may not be able to open the app.`, '');

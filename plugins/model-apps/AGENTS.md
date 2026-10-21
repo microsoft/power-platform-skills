@@ -1475,8 +1475,26 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   writes); dry-run lists every page candidate by id and stored name without writes, marking absent
   rows as "not found" with their manifest names only.
   Best-effort continue (a failed step is recorded, teardown proceeds). A not-found (already-gone)
-  error is treated as deleted, the table delete's **not-found-on-success** is tolerated (`tolerateNotFound`),
+  error is never a failure, the table delete's **not-found-on-success** is tolerated (`tolerateNotFound`),
   and system/managed artifacts that cannot be deleted are recorded as `skipped` rather than failing.
+  A step reports `(not found)` — and the closing line counts it so — only where it knows nothing was there
+  when it began (the handler's `absentOnNotFound`, or `foundNothing` for an answer): a default-view reset
+  that finds no default view, a relationship the SDK's own lookup does not find (it sends no delete), a
+  table its step's read did not list, and a global choice, whose delete is its step's only request. A
+  teardown run again therefore reads `0 deleted, N not found` (it read every one of those `(1 deleted)`),
+  and so does the relationship from a table to itself whose table this run deleted (it went with it). A
+  not-found answer after a read that SAW the artifact — a table's, which is the not-found a re-sent metadata
+  delete gets once its first send did the work, or a relationship's to its own delete — stays a deletion.
+  The deletes sent are unchanged, and so is the exit status. One case can still mislabel: a global
+  choice delete the client sent again (after a timeout or a gateway error) whose first send had removed it
+  reads "not found", since the step makes no read that could tell.
+  **A publisher is never deleted**, and no step plans one: the build reuses any publisher that carries the
+  spec's prefix (`provisionSolution`) and other solutions may share the one it made, so a teardown cannot
+  tell that this app alone uses it. Its closing summary says so in one line after the count, on a clean
+  run and a failed one alike — `▸ the publisher with prefix '<prefix>' is kept: teardown never deletes a
+  publisher, which other solutions may share — delete it in Power Apps (Solutions → Publishers) once nothing
+  uses it` — so the row a maker finds left behind is expected (`teardown-model-app.test.js`, and the
+  lifecycle matrix's teardown).
   `--clear-workspace` prunes `.maker-workspace/` after a clean apply (not while another teardown of it
   still holds the changed-only fence). It also refuses while any unconsumed ownership records remain,
   including another app/environment. The refusal names each file and explains that teardown retires it
@@ -1536,7 +1554,52 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   `view-related-rows-filter.test.js` and `rebuild-writes-real-bundle.test.js`).
   All four survive on the live app (a rebuild into the SAME environment preserves them), but are absent
   from the downloaded spec, so edit them in Maker or a fresh spec.
-  **The omission is reported, not silent** (AB#6686423): every deployed form/view/chart is listed in the
+  **Portable schema is reconstructed, not only column types.** The download keeps Text format/length,
+  Memo length, Integer range/format, Decimal/Double range/precision, Money range, Boolean labels, DateTime
+  format, AutoNumber masks, and the primary name column's length/mask. Values equal to the SDK's
+  create defaults are left implicit; explicit defaults cannot be distinguished from omission on a
+  deployed column. Primary name lengths stay explicit even at 100, because the build's post-create
+  correction runs only for an asked length on environments that override the create's value.
+  Reads scale by the types present on each table, never by its column count:
+  String, Memo, Integer, Decimal, Double and DateTime each need one conditional cast; Money detail
+  rides its existing currency-twin read and Boolean labels ride the SDK projection. Money's
+  `PrecisionSource` is classified there too: the SDK always creates source 2 (transaction currency).
+  Only source 2 keeps numeric `Precision` metadata; its effective precision still depends on the
+  transaction currency's decimal places, so equal numeric metadata is not cross-environment
+  currency equivalence. Source 0 (column), source 1 (organization pricing), and missing/malformed/
+  unknown sources are diagnosed; the typed column and range remain, but precision is omitted.
+  Configure the required source in Power Apps on the target before relying on its behavior.
+  Custom unmanaged status reasons in Active/Inactive states keep their values, labels and colors
+  (stock reasons 1/2 are not re-declared; a stock table's reasons below the custom range are not
+  portable). Their single label is selected only in the resolved download authoring language
+  (flag, existing spec pin, then environment base), never the caller's UI language. A missing
+  requested translation is named and that reason omitted, not substituted from another LCID.
+  A read-time non-base-language flag must also be passed to the rebuild, or pinned in the spec.
+  One Status cast per table supplies the state the SDK's flattened choices omit.
+  Alternate keys, including names, columns and available display labels, ride the table-label read;
+  solution/global-choice display names and dashboard tile spans ride existing reads too. A
+  malformed or missing optional `Keys` array is diagnosed without losing the table, its primary
+  name, typed columns or navigation.
+  A table's `vectorIcon` is written only with a captured own-publisher, explicitly unmanaged SVG
+  that has content. The resource is `external: true`: shared table metadata is not proof this app
+  owns the file, so teardown of the downloaded spec must not delete it. Resource resolution may
+  need one set-name lookup plus one read per distinct SVG; navigation/table overlaps are deduplicated.
+  **Same-environment rebuilds do not re-send these schema writes when proven equal.** Scalar
+  key/icon identities ride the existing table probe. Status-label comparisons run only after all
+  labelled schema creates (including deferred keys), so they cannot strip a later create's
+  non-base-language labels. A halted attempt leaves its queued existing-table status reasons for
+  the next successful attempt. A standalone Integer format is compared before its SDK update. Unknown
+  proof keeps the existing duplicate-protected create/update path; a missing reason/key/icon or a
+  changed Integer format still writes. Existing status/key definitions are not rewritten on a
+  name/value conflict, and ordinary column lengths/ranges remain create-only, as before.
+  Missing, malformed or refused portable detail is named on stderr without dropping typed columns
+  or inventing defaults. This is not full environment cloning: script resources, raster/foreign/
+  managed table icons, `roleGrants[]`, `sampleData`, Boolean defaults, column capabilities and
+  BigInt ranges are not reconstructed. Neither are unsupported status states or managed reasons;
+  a non-primary AutoNumber's custom length/format and DateTime behavior are not authorable here.
+  Dashboard tiles still bind source view/chart ids; moving them to another environment also needs
+  those artifacts mapped, and removing a pinned source `dashboardId` when creating a new dashboard.
+  **Form/view/chart omissions are reported, not silent** (AB#6686423): every deployed form/view/chart is listed in the
   spec's `descriptionInventory`, and each run prints a note naming the counts, the tables and the
   artifacts, plus a `notRoundTripped` block on the JSON result. It is a NOTE, never a gate — every app
   has forms and views, so failing the download would break every download, and the omission is not
@@ -1708,8 +1771,24 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   check fails and says what the answer lacked. It is not listed `unverified`, which leaves `ok` and the exit
   status as they were; a relationship nobody identified must not read as a pass. (A reader that lists plain
   names, as older test doubles do, stays a name-only reader; the plugin's own reader never does.)
+  **Status reasons and alternate keys** are checked too, each declared one by its name (`lib/status-reasons-keys.js`):
+  `status-reason <table>.<label>` passes when one of the table's status reasons carries the label (in any language the spec
+  writes it in) under the state the build gives it — Active unless the spec says Inactive — and at the `value` the spec pins,
+  when it pins one. The deployed option must carry a readable integer state: a missing, null or malformed state fails with
+  an explicit unreadable-state detail, never a guessed match. `alternate-key <table>.<schemaName>` passes when the table has a key of that name over exactly the
+  declared columns, in any order (live, a key read back answers its columns in an order of its own). One that is there but
+  different says how (the other state, another value, other columns), and a missing one says when the value the build gives
+  it is another label's — a rebuild inserts the reason at that value again, which the platform refuses as already there, so a
+  reason renamed in the environment stays renamed — or when a key of another name is over the same columns. The state and
+  value are the build's own (`statusReasonTargets`, `lib/entity-provision.js`), so verify cannot hold a reason to anything the
+  build did not write. Each is ONE narrow read on the SDK's client — the Status attribute's cast read (the one the view filter's
+  label resolution makes for the column, `optionCastUrl`) and `EntityDefinitions(…)/Keys?$select=LogicalName,SchemaName,KeyAttributes`
+  — made only for a table that declares any: a spec that declares neither sends no request for them
+  (`lifecycle-scenarios-real-bundle.test.js` pins the difference to exactly those two reads). A key's index status is not read:
+  right after its create a key is `Pending` (live-measured), and a key of the declared name over the declared columns is the
+  key the spec declares. A read that fails is a failed check with its reason, never a pass.
   Content checks are additive + reader-gated (they only fire when the reader supplies `layoutxml` /
-  `entityRelationships` / `commandBar`), so existence-only callers are unaffected. A view filter's
+  `entityRelationships` / `commandBar` / `statusReasons` / `alternateKeys`), so existence-only callers are unaffected. A view filter's
   Choice label is expected as the value the **environment** gives it, which needs the reader's
   `choiceAttributes` (one memoized read per table per pass); without it the spec-only expectation
   applies. A label whose option metadata could not be read is reported as **unresolved** with the
@@ -1859,7 +1938,13 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   and archival. It is **rendered, never hand-written** — the freehand version drifted from the spec
   and shrank to a counts summary. Also returns `warnings[]` naming design gaps (no jobs captured, a
   job with no covering surface, no generative pages, a new table no persona and no `roleGrants[]`
-  entry grants a privilege on) so the orchestrator surfaces them in chat. Its Security section keeps
+  entry grants a privilege on) so the orchestrator surfaces them in chat. A `roleGrants[]` entry the
+  build refuses because it does not name exactly one role — `role` and `roleId` both, neither, or one
+  of them malformed — is named there and in the document in lint's own words: one check decides it
+  (`roleGrantIdentityErrors`, `lib/app-spec.js`), which `validateRoleGrants` reports (the gate a build
+  and `lint-app-spec.js` run) and the document reads through `roleGrantRefusals` (`lib/app-access.js`).
+  The document shows such an entry as that refusal, never as rows of privileges the build would add,
+  and does not match it against the roles the app has. Its Security section keeps
   two questions apart — who can open the APP (the roles associated with it) and who can use the
   TABLES the spec introduces (privileges) — and never calls the app administrator-only on the
   strength of a spec with no personas alone: that is a claim about the deployed app. With `--env` it
@@ -2049,12 +2134,12 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
     columns), and a PUT of the finished column — the SDK's `updateColumn`, with `MSCRM.MergeLabels: true` — is honored
     (850 → 120 → 850). So when the spec gives a length and THIS build created the table, it reads the length back with
     one typed `…/Attributes(LogicalName='…')/Microsoft.Dynamics.CRM.StringAttributeMetadata?$select=MaxLength` GET and
-    calls `updateColumn` only when it differs — LAST in the data-model phase, once every table, column, status reason,
+    calls `updateColumn` only when it differs — at the end of the data-model phase, once every table, column, new table's status reason,
     relationship and alternate key that needs no length has been created, and in the halt path too, so that a phase that
     halts after creating a table still sets that table's length (a run in a new process finds the table and leaves an
     existing table's name column alone; a length that cannot be set while the phase is halting is warned about as one such
     a run will not set either).
-    Last, because `updateColumn` starts by reading the column WITH its labels, and a label-bearing metadata read ahead of
+    There, because `updateColumn` starts by reading the column WITH its labels, and a label-bearing metadata read ahead of
     a labelled create is what strips non-base languages (measured; see `findExistingColumns`): within one attempt, nothing
     labelled in more than one language is created after it, except one kind of alternate key over the name column (below): the
     key labelled in several languages that cannot fit beside the name column before the step, which is made after it because it
@@ -2443,6 +2528,7 @@ scripts/
     safe-fs.js                 ← confined output writes and deletes: the named directory's final component must not be a link or junction (readlink, not a path-text compare, so an 8.3 name and a share root stay usable); write via exclusive temp + rename, or — with `exclusive: true` — never replace a name: the content goes to a sibling file this process created exclusively and is published with a hard link to the target name (which fails if the name exists, so the file system decides and a file that appeared meanwhile is never overwritten: `IO_ERROR` with `reason: 'exists'`; where hard links do not exist the write fails closed, `reason: 'no-hard-links'`), and only that sibling is ever removed — retried, and reported (a warning after a publish, the error after a failure) when it cannot be — and a later write of a file that still has its second name is refused naming it. Every text it writes or appends has the access tokens the process obtained taken out first (`lib/output-redaction.js` `redactOutput`; bytes are written as they are): it is the one writer of the build's journal and status file, of a download's files and of a page's file and its deployed copy. Shared by genpage markers and later callers
     hydrate-spec.js            ← reconstruct an App Spec from a deployed app (edit flow)
     verify-spec.js             ← spec-vs-deployed reconciliation core (checks are ordered tasks on a pool of 4)
+    status-reasons-keys.js     ← a table's status reasons (with their states) and alternate keys (with their columns), one narrow read each (`readStatusReasons`, `readAlternateKeys`: `{ state: 'ok' | 'absent' | 'error' }`, never a throw), and the checks of the declared ones against them (`statusReasonChecks`, held to the build's own `statusReasonTargets`; `alternateKeyChecks`) — verify's `status-reason` and `alternate-key` checks
     build-journal.js           ← durable JSONL build journal (resume diagnostics)
     form-preview.js            ← form wireframe renderer
     app-preview.js             ← whole-app design renderer (data model + sitemap + forms + page-intents + design)

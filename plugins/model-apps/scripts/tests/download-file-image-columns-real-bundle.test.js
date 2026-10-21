@@ -561,16 +561,20 @@ async function downloadWith(name, rules) {
   }
 }
 
-const TABLE_LABEL_READ = { select: 'LogicalName,Description,DisplayName,DisplayCollectionName' };
+const TABLE_LABEL_READ = { select: 'LogicalName,Description,DisplayName,DisplayCollectionName,IconVectorName' };
 
-test('a download the environment refuses only the table label read of says so of the table\'s labels alone, and still names what it cannot express', async () => {
+test('a refused table detail read names its label and portable-schema losses, and still names unexpressible columns', async () => {
   const { spec: downloaded, stderr } = await downloadWith('download-no-table-labels', ({ refuse }) => [
     refuse('GET', /^\/api\/data\/v9\.\d\/EntityDefinitions\(LogicalName='contoso_asset'\)$/, TABLE_LABEL_READ),
   ]);
   assert.deepEqual(mediaOf(downloaded), HEALTHY_MEDIA);
   // The table's label comes from the SDK's own read; its plural, which only the refused read carries, is not written.
   assert.deepEqual({ displayName: downloaded.entities[0].displayName, plural: 'pluralName' in downloaded.entities[0] }, { displayName: 'Asset', plural: false });
-  assert.deepEqual(warningsOf(stderr), [TABLE_LABEL_READ_FAILED, SENSOR_NAMED]);
+  assert.deepEqual(warningsOf(stderr), [
+    'WARNING: some portable schema detail could not be captured (contoso_asset (alternate keys and table icon: HTTP 400)). The table and its typed columns are kept, but rebuilding into a FRESH environment uses the build defaults for missing column options and cannot recreate missing status reasons, alternate keys or table icons. Re-run the download to recover unreadable detail, and resolve the stated build limits before a cross-environment rebuild.',
+    TABLE_LABEL_READ_FAILED,
+    SENSOR_NAMED,
+  ]);
 });
 
 test('a download the environment refuses the column read of still keeps each File and Image column and none of their companions, and says what that read carries', async () => {

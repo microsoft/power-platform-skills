@@ -561,10 +561,25 @@ function lintAppSpec(spec) {
   // ai block — row-summary guardrails.
   const D365_OWNED_SUMMARY_TABLES = new Set(['incident', 'lead', 'opportunity']);
   const DESCRIPTIVE_TYPES = new Set(['Text', 'Memo', 'Choice', 'MultiChoice', 'DateTime', 'Money', 'Integer', 'Decimal', 'Double', 'Boolean']);
+  // The keys the build reads from a table's entry: `enabled` (ai-candidates.js), `instruction` — the table's row-summary prompt — and
+  // `columns` (ai-prompt.js buildPromptSpec). validateAppSpec rejects no other key, so a misnamed one validated, built green and did
+  // nothing; seen live: `prompt` for the prompt, under `default: "off"`, planned no summary at all. A warning, as the schema accepts it.
+  const SUMMARY_TABLE_KEYS = ['enabled', 'instruction', 'columns'];
   if (spec.ai && spec.ai.summaries && spec.ai.summaries.tables && typeof spec.ai.summaries.tables === 'object') {
     for (const [k, v] of Object.entries(spec.ai.summaries.tables)) {
       if (D365_OWNED_SUMMARY_TABLES.has(lc(k))) {
         W(`Summary table '${k}' is a Dynamics 365 app table (Case/Lead/Opportunity) — it provides its own summaries; the row-summary feature isn't available for it`);
+      }
+      if (v && typeof v === 'object' && !Array.isArray(v)) {
+        for (const key of Object.keys(v)) {
+          if (SUMMARY_TABLE_KEYS.includes(key)) continue;
+          if (key === 'prompt') {
+            W(`ai.summaries.tables['${k}'].prompt is ignored — a table's row-summary prompt is its instruction: rename the key to ai.summaries.tables['${k}'].instruction (when a summary is enabled, omitting instruction uses the default prompt)`);
+            continue;
+          }
+          const near = nearestName(key, SUMMARY_TABLE_KEYS);
+          W(`ai.summaries.tables['${k}']: unknown key '${key}' is ignored${near ? ` — did you mean '${near}'?` : ''} (a table's entry reads only enabled, instruction and columns)`);
+        }
       }
       const ent = (spec.entities || []).find((e) => lc(e.schemaName) === lc(k));
       if (ent) {
