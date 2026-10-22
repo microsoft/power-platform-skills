@@ -22,6 +22,7 @@ Add essential SEO assets to a Power Pages code site: `robots.txt`, `sitemap.xml`
 - **Crawlability first:** Every public page must be discoverable by search engines via a valid `robots.txt` and `sitemap.xml` before any other SEO work matters.
 - **Accurate metadata:** Meta tags (title, description, Open Graph) must truthfully represent page content — misleading metadata harms rankings.
 - **Framework-aware placement:** SEO assets must be placed in the correct location for the detected framework (public directory, layout component, etc.).
+- **Preserve localized metadata:** Read `${PLUGIN_ROOT}/references/site-modification-integrity.md`. When localization exists, keep language-specific titles, descriptions, social metadata, alternate links, and static locale routes synchronized without advertising unavailable locales.
 
 **Initial request:** $ARGUMENTS
 
@@ -305,6 +306,18 @@ If a dev server is running (or start one):
 1. Navigate to the site root and use `browser_snapshot` to verify meta tags are present in the page source
 2. Navigate to `/robots.txt` and verify it loads
 3. Navigate to `/sitemap.xml` and verify it loads
+
+#### 7.2b Final site-integrity gate
+
+After all SEO source and metadata changes and browser verification are complete, run:
+
+```bash
+node "${PLUGIN_ROOT}/scripts/validate-site-integrity.js" --projectRoot "<PROJECT_ROOT>"
+```
+
+Fix every blocking error before recording completion or creating the final commit. Inspect and
+report review findings in both directions and with expanded content. Rerun this gate after any
+later source change.
 
 #### 7.3 Record Skill Usage
 

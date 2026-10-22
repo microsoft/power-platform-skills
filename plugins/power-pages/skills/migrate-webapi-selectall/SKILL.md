@@ -374,6 +374,19 @@ partial status defined in the reporting contract when applicable.
 
 **Output:** Final report and verified local migration.
 
+### Final site-integrity gate
+
+After all approved source edits, independent verification, and the SPA build
+are complete, run:
+
+```bash
+node "${PLUGIN_ROOT}/scripts/validate-site-integrity.js" --projectRoot "<PROJECT_ROOT>"
+```
+
+Fix every blocking error before claiming the migration is complete or offering
+deployment. Inspect and report review findings in both directions and with
+expanded content. Rerun this gate after any later source change.
+
 ## Phase 7: Deploy and summarize
 
 **Goal:** Publish only verified changes.

@@ -1,0 +1,67 @@
+{
+  "schemaVersion": 1,
+  "control": {
+    "namespace": "Contoso.Controls",
+    "name": "StarRating",
+    "displayName": "Star rating",
+    "description": "Shows a whole number as stars",
+    "template": "field-standard"
+  },
+  "hosts": [
+    "model"
+  ],
+  "connectivity": "online",
+  "properties": [
+    {
+      "name": "value",
+      "usage": "bound",
+      "type": "Whole.None",
+      "required": true
+    },
+    {
+      "name": "max",
+      "usage": "input",
+      "type": "Whole.None",
+      "required": false,
+      "default": "5"
+    }
+  ],
+  "features": [],
+  "deploy": {
+    "solution": "ContosoCore",
+    "publisherPrefix": null,
+    "environment": "https://contoso.crm.dynamics.com"
+  },
+  "bindings": [
+    {
+      "kind": "dataset-subgrid",
+      "table": "account",
+      "form": "Account Quick Create",
+      "formType": "quick-create",
+      "target": {
+        "controlId": "Contacts",
+        "table": "contact",
+        "view": "Active Contacts",
+        "relationship": "account_contact"
+      },
+      "parameters": {
+        "records": {
+          "dataset": {
+            "name": "records",
+            "propertySets": [
+              {
+                "name": "email",
+                "column": "emailaddress1"
+              }
+            ]
+          }
+        }
+      }
+    }
+  ],
+  "pages": {
+    "journeys": [
+      "form-field"
+    ]
+  }
+}

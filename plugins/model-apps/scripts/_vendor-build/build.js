@@ -19,6 +19,7 @@
  * {sdk-surface-contract,hardening2-real-bundle,vendor-sdk-smoke}.test.js) against the new bundle. */
 const path = require('node:path');
 const fs = require('node:fs');
+const { makeWritesBlocking } = require('../lib/output-redaction.js');
 
 const argSdk = (() => {
   const i = process.argv.indexOf('--sdk');
@@ -46,10 +47,12 @@ const PROVENANCE = path.resolve(__dirname, '../vendor/PROVENANCE.json');
 const esbuild = require('esbuild');
 
 if (!fs.existsSync(SDK_ENTRY)) {
+  makeWritesBlocking(process.stdout, process.stderr);
   console.error('SDK entry not found:', SDK_ENTRY);
   process.exit(2);
 }
 if (!fs.existsSync(SDK_NODE_ENTRY)) {
+  makeWritesBlocking(process.stdout, process.stderr);
   console.error('SDK /node adapter entry not found:', SDK_NODE_ENTRY);
   console.error('The SDK requires an injected workspaceStorage; the plugin builds one from this.');
   process.exit(2);
@@ -67,15 +70,12 @@ if (!fs.existsSync(SDK_NODE_ENTRY)) {
  * that means, and it REFUSES unless --allow-unreproducible is passed, because a source that cannot
  * be identified cannot be audited.
  */
-/* Strip merge-tool prefixes from an upstream commit subject before it is committed here.
- * See ./sanitize-subject.js for why, and why it lives in its own module. */
-const { sanitizeSubject } = require('./sanitize-subject.js');
 
 function sdkProvenance(root) {
   const git = (args) => {
     try {
-      return require('node:child_process')
-        .execFileSync('git', ['-C', root, ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] })
+      return require('../lib/process-runner.js')
+        .runSync('git', ['-C', root, ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] })
         .trim();
     } catch {
       return null;
@@ -111,9 +111,11 @@ function sdkProvenance(root) {
     }
   };
   try { walk(srcDir); } catch { /* no src tree: an export-based build, nothing to compare */ }
+  // The record has no commit subject, on purpose: the SHA is what identifies the source. The subject of the commit the build ran on is
+  // normally the monorepo's HEAD, a change that is usually not about the SDK at all, so in a public file it names unrelated work and
+  // tells a reader nothing.
   return {
     commit,
-    subject: sanitizeSubject(git(['log', '-1', '--format=%s'])),
     // null = could not determine (see above); a number = that many modified paths.
     dirtySdkPackage: dirtyRaw === null ? null : dirtyRaw.split('\n').filter(Boolean).length,
     libBuiltAt: entryMtime,
@@ -130,6 +132,7 @@ function sdkProvenance(root) {
 
 const prov = sdkProvenance(argSdk);
 if (prov.libIsStale) {
+  makeWritesBlocking(process.stdout, process.stderr);
   console.error(`REFUSING: ${SDK_ENTRY} is OLDER than the newest .ts under packages/cds-maker-sdk/src`);
   console.error(`  lib built  : ${prov.libBuiltAt}`);
   console.error(`  newest src : ${prov.newestSrcAt}`);
@@ -230,6 +233,14 @@ esbuild
     outfile: OUTFILE,
     logLevel: 'info',
     minify: true,
+    // The SDK compiles generative pages with a TypeScript compiler its HOST supplies
+    // (`MakerSdkOptions.typescript`); its `/node` entry offers `loadNodeTypeScript`, which loads
+    // `typescript` with a dynamic import. esbuild follows that import and inlined the whole compiler:
+    // 3.5 MB of a 4.4 MB bundle, measured with a metafile. The plugin passes its own compiler (the
+    // vendored one: lib/maker-sdk.js, lib/typescript-compiler.js), so nothing ever calls that loader.
+    // Left external, the import stays a lazy runtime require, and a caller of `loadNodeTypeScript`
+    // gets "Cannot find module 'typescript'" instead of a second copy of the compiler inside the bundle.
+    external: ['typescript'],
     // The bundle is entirely Microsoft's cds-maker-sdk + its designer packages; esbuild's extracted
     // legal comments were 100% redundant Microsoft copyright headers (no third-party notices — the
     // bundled OSS deps ship pre-stripped), so we drop the sidecar and carry a single copyright banner

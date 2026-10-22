@@ -32,6 +32,7 @@ If the tracking script creates or updates site setting YAML files, include those
 | add-sample-data | AddSampleData | Site/AI/Skills/AddSampleData |
 | activate-site | ActivateSite | Site/AI/Skills/ActivateSite |
 | add-seo | AddSeo | Site/AI/Skills/AddSeo |
+| add-localization | AddLocalization | Site/AI/Skills/AddLocalization |
 | create-webroles | CreateWebroles | Site/AI/Skills/CreateWebroles |
 | integrate-webapi | IntegrateWebApi | Site/AI/Skills/IntegrateWebApi |
 | setup-auth | SetupAuth | Site/AI/Skills/SetupAuth |

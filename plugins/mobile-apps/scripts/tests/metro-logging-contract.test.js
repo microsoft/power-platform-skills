@@ -48,7 +48,7 @@ test('template uses the host Metro factory that installs project-local logging',
     'utf8',
   );
   const metroConfig = fs.readFileSync(path.join(pluginRoot, 'template', 'metro.config.js'), 'utf8');
-  const gitignore = fs.readFileSync(path.join(pluginRoot, 'template', '.gitignore'), 'utf8');
+  const gitignore = fs.readFileSync(path.join(pluginRoot, 'template', 'gitignore'), 'utf8');
   const packageJson = JSON.parse(fs.readFileSync(path.join(pluginRoot, 'template', 'package.json'), 'utf8'));
 
   assert.match(
@@ -64,8 +64,6 @@ test('template uses the host Metro factory that installs project-local logging',
     'the host package must include the Metro logger introduced in 0.2.26',
   );
   assert.match(gitignore, /^\.powernative\//m);
-  assert.equal(packageJson.scripts.dev, 'expo start');
-  assert.equal(packageJson.scripts.predev, 'npm run generate-schemas && npm run type-check');
   const workflowCoversMobileApps = /plugins\/mobile-apps\/\*\*/.test(workflow);
   assert.ok(workflowCoversMobileApps || /plugins\/mobile-apps\/template\/metro\.config\.js/.test(workflow));
   assert.ok(workflowCoversMobileApps || /plugins\/mobile-apps\/template\/package\.json/.test(workflow));
@@ -87,9 +85,16 @@ test('skill contracts read logs and persist host-neutral state under .powernativ
   assert.match(createSkill, /npm run dev/);
   assert.match(createSkill, /^### Step 12 [^\r\n]*Metro writes project-local logs/m);
   assert.match(createSkill, /createPowerAppsMetroConfig/);
-  assert.match(createSkill, /npm does not launch `expo start` when either gate fails/);
+  assert.match(createSkill, /template owns the `dev` and `predev` command bodies/);
+  assert.match(createSkill, /does not require either script to expand to a particular command/);
+  assert.match(createSkill, /for \(const scriptName of \['dev', 'predev'\]\)/);
+  assert.match(createSkill, /typeof pkg\.scripts\?\.\[scriptName\] !== 'string'/);
+  assert.match(createSkill, /pkg\.scripts\[scriptName\]\.trim\(\) === ''/);
   assert.match(createSkill, /always receives a scannable code even when Metro runs in a background terminal/);
   assert.match(createSkill, /Do not rely on Expo's terminal-rendered QR as the only presentation path/);
+  // The QR generator must come from the template's pinned devDependency, never a registry fetch.
+  assert.match(createSkill, /npx --no-install qrcode -o "\$METRO_QR"/);
+  assert.doesNotMatch(createSkill, /npx --yes|npm_config_registry=/);
   assert.match(createSkill, /continue through the optional Step 12\.5 debug handoff and print the Step 13 summary/);
   assert.doesNotMatch(createSkill, /stops after Step 12/);
   assert.doesNotMatch(createSkill, /npx expo start|without rerunning the `predev` schema hook/);

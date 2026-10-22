@@ -1,0 +1,213 @@
+import * as React from "react";
+import * as ReactDOM from "react-dom";
+import * as TestUtils from "react-dom/test-utils";
+import { {{name}} } from "../{{name}}";
+import { cellEditorOverrides } from "../{{name}}/customizers/CellEditorOverrides";
+import { cellRendererOverrides } from "../{{name}}/customizers/CellRendererOverrides";
+import { IInputs } from "../{{name}}/generated/ManifestTypes";
+import { PAOneGridCustomizer } from "../{{name}}/types";
+import { mockContext, mockProperty } from "../test/pcf-context";
+
+type GridFactory = {
+    fireEvent: jest.Mock;
+};
+
+function contextWithFactory(parameters: Partial<IInputs>, factory: GridFactory): ComponentFramework.Context<IInputs> {
+    const context = mockContext<IInputs>(parameters) as ComponentFramework.Context<IInputs> & { factory: GridFactory };
+    (context as unknown as { factory: GridFactory }).factory = factory;
+    return context;
+}
+
+function initControl(context: ComponentFramework.Context<IInputs>): {{name}} {
+    const control = new {{name}}();
+    control.init(context, jest.fn(), {});
+    return control;
+}
+
+test("init delivers renderer and editor overrides through the configured EventName", () => {
+    const factory = { fireEvent: jest.fn() };
+    const context = contextWithFactory({ EventName: mockProperty("GridCustomizerLoaded") as IInputs["EventName"] }, factory);
+
+    initControl(context);
+
+    expect(factory.fireEvent).toHaveBeenCalledTimes(1);
+    expect(factory.fireEvent.mock.calls[0][0]).toBe("GridCustomizerLoaded");
+    const customizer = factory.fireEvent.mock.calls[0][1] as PAOneGridCustomizer;
+    expect(customizer.cellRendererOverrides).toBe(cellRendererOverrides);
+    expect(customizer.cellEditorOverrides).toBe(cellEditorOverrides);
+});
+
+test("missing EventName parameter object does not fire and does not crash", () => {
+    const factory = { fireEvent: jest.fn() };
+
+    initControl(contextWithFactory({}, factory));
+
+    expect(factory.fireEvent).not.toHaveBeenCalled();
+});
+
+test("unreadable EventName does not leak configuration while non-editable still registers", () => {
+    const unreadableFactory = { fireEvent: jest.fn() };
+    initControl(contextWithFactory({ EventName: mockProperty("HiddenEvent", undefined, { readable: false }) as IInputs["EventName"] }, unreadableFactory));
+
+    const readOnlyFactory = { fireEvent: jest.fn() };
+    initControl(contextWithFactory({ EventName: mockProperty("ReadOnlyEvent", undefined, { editable: false }) as IInputs["EventName"] }, readOnlyFactory));
+
+    expect(unreadableFactory.fireEvent).not.toHaveBeenCalled();
+    expect(readOnlyFactory.fireEvent).toHaveBeenCalledWith("ReadOnlyEvent", expect.any(Object));
+});
+
+test("text renderer returns null for null and undefined so the grid can use its internal renderer", () => {
+    const renderer = cellRendererOverrides.Text;
+
+    expect(renderer?.({ value: null }, { colDefs: [], columnIndex: 0 })).toBeNull();
+    expect(renderer?.({ value: undefined }, { colDefs: [], columnIndex: 0 })).toBeNull();
+});
+
+test("text renderer is pure and never mutates grid data", () => {
+    const renderer = cellRendererOverrides.Text;
+    const rowData = Object.freeze({ __rec_id: "row-1" });
+    const props = Object.freeze({ value: "Active", formattedValue: "Active" });
+    const params = Object.freeze({ colDefs: Object.freeze([]), columnIndex: 0, rowData });
+
+    const element = renderer?.(props, params);
+
+    expect(React.isValidElement(element)).toBe(true);
+    expect(rowData).toEqual({ __rec_id: "row-1" });
+    expect(props.value).toBe("Active");
+});
+
+test("text editor calls the grid change callback without mutating params", () => {
+    const editor = cellEditorOverrides.Text;
+    const rowData = Object.freeze({ __rec_id: "row-2" });
+    const onChange = jest.fn();
+    const stopEditing = jest.fn();
+    const params = Object.freeze({ colDefs: Object.freeze([]), columnIndex: 0, rowData, onCellValueChanged: jest.fn(), stopEditing });
+
+    const container = document.createElement("div");
+    TestUtils.act(() => {
+        ReactDOM.render(editor?.({ value: "Old", onChange, columnDataType: "Text" }, params) as React.ReactElement, container);
+    });
+    const input = container.querySelector("input") as HTMLInputElement;
+    TestUtils.act(() => {
+        input.value = "New";
+        TestUtils.Simulate.change(input);
+        TestUtils.Simulate.blur(input);
+    });
+
+    expect(onChange).toHaveBeenCalledWith("New");
+    expect(stopEditing).toHaveBeenCalledWith(false);
+    expect(rowData).toEqual({ __rec_id: "row-2" });
+});
+
+test("text editor seeds typed-start characters after mount and keeps user edits across rerenders", async () => {
+    const editor = cellEditorOverrides.Text;
+    const onChange = jest.fn();
+    const onCellValueChanged = jest.fn();
+    const params = Object.freeze({
+        colDefs: Object.freeze([{ name: "name", displayName: "Account name", dataType: "Text" }]),
+        columnIndex: 0,
+        rowData: Object.freeze({ __rec_id: "row-3" }),
+        onCellValueChanged,
+        stopEditing: jest.fn(),
+    });
+
+    const container = document.createElement("div");
+    const element = editor?.({
+        value: "Old",
+        charPress: "Z",
+        isRTLMode: true,
+        onChange,
+        columnDataType: "Text",
+    }, params) as React.ReactElement;
+
+    expect(onChange).not.toHaveBeenCalled();
+    expect(onCellValueChanged).not.toHaveBeenCalled();
+
+    await TestUtils.act(async () => {
+        ReactDOM.render(element, container);
+        await Promise.resolve();
+    });
+
+    const input = container.querySelector("input") as HTMLInputElement;
+    expect(input.value).toBe("Z");
+    expect(input.getAttribute("aria-label")).toBe("Account name");
+    expect(input.getAttribute("dir")).toBe("rtl");
+    expect(onChange).toHaveBeenCalledWith("Z");
+    expect(onCellValueChanged).toHaveBeenCalledWith("Z");
+
+    TestUtils.act(() => {
+        input.value = "Zed";
+        TestUtils.Simulate.change(input);
+    });
+
+    expect(onChange).toHaveBeenCalledWith("Zed");
+    expect(onCellValueChanged).toHaveBeenCalledWith("Zed");
+
+    await TestUtils.act(async () => {
+        ReactDOM.render(editor?.({
+            value: "Old",
+            charPress: "Z",
+            isRTLMode: true,
+            onChange,
+            columnDataType: "Text",
+        }, params) as React.ReactElement, container);
+        await Promise.resolve();
+    });
+
+    expect((container.querySelector("input") as HTMLInputElement).value).toBe("Zed");
+    expect(onChange.mock.calls.filter(([value]) => value === "Z")).toHaveLength(1);
+    expect(onCellValueChanged.mock.calls.filter(([value]) => value === "Z")).toHaveLength(1);
+});
+
+test("text editor publishes typed-start characters once when mounted", async () => {
+    const editor = cellEditorOverrides.Text;
+    const onChange = jest.fn();
+    const onCellValueChanged = jest.fn();
+    const params = Object.freeze({
+        colDefs: Object.freeze([]),
+        columnIndex: 0,
+        rowData: Object.freeze({ __rec_id: "row-4" }),
+        onCellValueChanged,
+        stopEditing: jest.fn(),
+    });
+
+    const container = document.createElement("div");
+    await TestUtils.act(async () => {
+        ReactDOM.render(editor?.({ value: "Old", charPress: "Z", onChange, columnDataType: "Text" }, params) as React.ReactElement, container);
+        await Promise.resolve();
+    });
+
+    expect(onChange).toHaveBeenCalledTimes(1);
+    expect(onChange).toHaveBeenCalledWith("Z");
+    expect(onCellValueChanged).toHaveBeenCalledTimes(1);
+    expect(onCellValueChanged).toHaveBeenCalledWith("Z");
+});
+
+test("text editor does not publish an initial value without typed-start characters", () => {
+    const editor = cellEditorOverrides.Text;
+    const onChange = jest.fn();
+    const onCellValueChanged = jest.fn();
+    const params = Object.freeze({
+        colDefs: Object.freeze([]),
+        columnIndex: 0,
+        rowData: Object.freeze({ __rec_id: "row-5" }),
+        onCellValueChanged,
+        stopEditing: jest.fn(),
+    });
+
+    editor?.({ value: "Old", onChange, columnDataType: "Text" }, params);
+
+    expect(onChange).not.toHaveBeenCalled();
+    expect(onCellValueChanged).not.toHaveBeenCalled();
+});
+
+test("two instances on one page publish independent event names", () => {
+    const firstFactory = { fireEvent: jest.fn() };
+    const secondFactory = { fireEvent: jest.fn() };
+
+    initControl(contextWithFactory({ EventName: mockProperty("FirstGrid") as IInputs["EventName"] }, firstFactory));
+    initControl(contextWithFactory({ EventName: mockProperty("SecondGrid") as IInputs["EventName"] }, secondFactory));
+
+    expect(firstFactory.fireEvent).toHaveBeenCalledWith("FirstGrid", expect.any(Object));
+    expect(secondFactory.fireEvent).toHaveBeenCalledWith("SecondGrid", expect.any(Object));
+});

@@ -41,7 +41,7 @@ No connector bindings.
 
 ## Localization
 
-- Detected languages (from `pac model list-languages`):
+- Detected languages (from `scripts/list-languages.js`):
   - English (United States) (1033, en-US)
   - Arabic (Saudi Arabia) (1025, ar-SA) — RTL
   - French (France) (1036, fr-FR)
@@ -49,6 +49,9 @@ No connector bindings.
 - All user-visible text via translate() helper
 - dir attribute set from locale.isRtl
 - Logical CSS properties (marginInlineStart/End, paddingInlineStart/End)
+
+## Custom API Bindings
+No custom API bindings.
 
 ## Design Preferences
 

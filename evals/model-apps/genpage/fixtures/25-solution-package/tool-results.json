@@ -1,0 +1,67 @@
+[
+  {
+    "id": "deploy-list",
+    "command": "node scripts\\genpage-upload.js --env https://contoso.crm.dynamics.com --app-id 11111111-1111-4111-8111-111111111111 --code-file list.tsx --connectors connectors.json --name-file names\\list.txt --prompt-file prompt.txt --agent-message-file agent-message.txt --model gpt-4.1 --add-to-sitemap",
+    "result": { "ok": true, "appId": "11111111-1111-4111-8111-111111111111", "pageId": "22222222-2222-4222-8222-222222222222", "updated": false }
+  },
+  {
+    "id": "deploy-schedule",
+    "command": "node scripts\\genpage-upload.js --env https://contoso.crm.dynamics.com --app-id 11111111-1111-4111-8111-111111111111 --code-file schedule.tsx --name-file names\\schedule.txt --prompt-file prompt.txt --agent-message-file agent-message.txt --model gpt-4.1 --add-to-sitemap",
+    "result": { "ok": true, "appId": "11111111-1111-4111-8111-111111111111", "pageId": "33333333-3333-4333-8333-333333333333", "updated": false }
+  },
+  {
+    "id": "deploy-metrics",
+    "command": "node scripts\\genpage-upload.js --env https://contoso.crm.dynamics.com --app-id 11111111-1111-4111-8111-111111111111 --code-file metrics.tsx --name-file names\\metrics.txt --prompt-file prompt.txt --agent-message-file agent-message.txt --model gpt-4.1 --add-to-sitemap",
+    "result": { "ok": true, "appId": "11111111-1111-4111-8111-111111111111", "pageId": "44444444-4444-4444-8444-444444444444", "updated": false }
+  },
+  {
+    "id": "solution",
+    "command": "node scripts\\provision-solution.js https://contoso.crm.dynamics.com ContosoPages Contoso",
+    "result": { "ok": true, "uniqueName": "ContosoPages", "solutionId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", "publisherPrefix": "cnt" }
+  },
+  {
+    "id": "package",
+    "command": "node scripts\\add-page-to-solution.js https://contoso.crm.dynamics.com ContosoPages 11111111-1111-4111-8111-111111111111 --page-ids 22222222-2222-4222-8222-222222222222,33333333-3333-4333-8333-333333333333,44444444-4444-4444-8444-444444444444 --connection-refs cnt_docs",
+    "requests": [
+      { "method": "GET", "path": "EntityDefinitions(LogicalName='uxagentproject')?$select=ObjectTypeCode", "response": { "status": 200, "data": { "ObjectTypeCode": 10401 } } },
+      { "method": "GET", "path": "EntityDefinitions(LogicalName='connectionreference')?$select=ObjectTypeCode", "response": { "status": 200, "data": { "ObjectTypeCode": 10402 } } },
+      { "method": "GET", "path": "connectionreferences?$filter=connectionreferencelogicalname eq 'cnt_docs'&$select=connectionreferenceid&$top=1", "response": { "status": 200, "data": { "value": [{ "connectionreferenceid": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb" }] } } },
+      { "method": "POST", "path": "AddSolutionComponent", "body": { "ComponentId": "11111111-1111-4111-8111-111111111111", "ComponentType": 80, "SolutionUniqueName": "ContosoPages", "AddRequiredComponents": true }, "response": { "status": 204, "data": {} } },
+      { "method": "POST", "path": "AddSolutionComponent", "body": { "ComponentId": "22222222-2222-4222-8222-222222222222", "ComponentType": 10401, "SolutionUniqueName": "ContosoPages", "AddRequiredComponents": true }, "response": { "status": 204, "data": {} } },
+      { "method": "POST", "path": "AddSolutionComponent", "body": { "ComponentId": "33333333-3333-4333-8333-333333333333", "ComponentType": 10401, "SolutionUniqueName": "ContosoPages", "AddRequiredComponents": true }, "response": { "status": 204, "data": {} } },
+      { "method": "POST", "path": "AddSolutionComponent", "body": { "ComponentId": "44444444-4444-4444-8444-444444444444", "ComponentType": 10401, "SolutionUniqueName": "ContosoPages", "AddRequiredComponents": true }, "response": { "status": 204, "data": {} } },
+      { "method": "POST", "path": "AddSolutionComponent", "body": { "ComponentId": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", "ComponentType": 10402, "SolutionUniqueName": "ContosoPages", "AddRequiredComponents": false }, "response": { "status": 204, "data": {} } }
+    ],
+    "result": {
+      "ok": true,
+      "added": [
+        { "type": "appmodule", "id": "11111111-1111-4111-8111-111111111111" },
+        { "type": "uxagentproject", "id": "22222222-2222-4222-8222-222222222222" },
+        { "type": "uxagentproject", "id": "33333333-3333-4333-8333-333333333333" },
+        { "type": "uxagentproject", "id": "44444444-4444-4444-8444-444444444444" },
+        { "type": "connectionreference", "logicalName": "cnt_docs", "id": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb" }
+      ]
+    }
+  },
+  {
+    "id": "readback",
+    "command": "node scripts\\dataverse-request.js https://contoso.crm.dynamics.com GET \"solutioncomponents?$filter=_solutionid_value eq aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa&$select=objectid,componenttype\"",
+    "result": {
+      "ok": true, "data": { "value": [
+        { "objectid": "11111111-1111-4111-8111-111111111111", "componenttype": 80 },
+        { "objectid": "22222222-2222-4222-8222-222222222222", "componenttype": 10401 },
+        { "objectid": "33333333-3333-4333-8333-333333333333", "componenttype": 10401 },
+        { "objectid": "44444444-4444-4444-8444-444444444444", "componenttype": 10401 },
+        { "objectid": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", "componenttype": 10402 },
+        { "objectid": "cccccccc-cccc-4ccc-8ccc-cccccccccccc", "componenttype": 62 }
+      ] }
+    }
+  },
+  {
+    "id": "bad-identity",
+    "command": "node scripts\\add-page-to-solution.js https://contoso.crm.dynamics.com ContosoPages bad-app-id --page-ids 22222222-2222-4222-8222-222222222222,33333333-3333-4333-8333-333333333333,44444444-4444-4444-8444-444444444444 --connection-refs cnt_docs",
+    "requests": [],
+    "result": { "ok": false, "error": "Not a GUID: app id 'bad-app-id'. Nothing was added to ContosoPages." },
+    "userMessage": "Not a GUID: app id 'bad-app-id'. Nothing was added to ContosoPages."
+  }
+]

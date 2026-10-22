@@ -80,7 +80,7 @@ For skills that process multiple entities (e.g., audit-permissions auditing many
 |-------|--------|-------------------|
 | `/deploy-site` | 6 phases (prereqs → auth → env → build/upload → verify → summarize) | None |
 | `/integrate-webapi` | 7 phases (prereqs → analyze → plan → implement → verify → permissions → deploy) | Per-table tasks in Phase 4 |
-| `/audit-permissions` | 7 phases (prereqs → discover → analyze → audit → cross-check → report → present) | Per-table tasks in Phase 4 (checklist A-K) |
+| `/audit-permissions` | 8 phases (verify → gather → discover → audit → score → root cause → report → present) | Per-table tasks in Phase 4 (checklist A-K) |
 | `/create-site` | 8 phases (prereqs → gather → plan → scaffold → implement → validate → deploy → summarize) | None |
 
 > **Acceptance criterion:** Every linear skill must create all phase tasks upfront at Phase 1 start. A branching skill must create all path-agnostic tasks upfront and append the selected branch's tasks as soon as the branch is known. Each task must have `subject`, `activeForm`, and `description`. Tasks must be marked `in_progress` when starting and `completed` when done.
@@ -112,7 +112,7 @@ After implementation, always run a standalone verification phase that:
 |-------|-------------------|----------------|
 | `/deploy-site` | Phase 5 | Upload succeeded, site responds, activation status |
 | `/integrate-webapi` | Phase 5 | File inventory matches plan, all imports resolve, build passes |
-| `/audit-permissions` | Phase 6 | Findings report generated, all tables audited, cross-checks complete |
+| `/audit-permissions` | Phase 7 | Report rendered and passes `validate-audit.js`, all tables audited, cross-checks complete |
 | `/create-site` | Phase 6 | All pages render, design foundations applied, build passes |
 | `/create-webroles` | PostToolUse hook | Web role YAML validates (schema, naming conventions, booleans) |
 

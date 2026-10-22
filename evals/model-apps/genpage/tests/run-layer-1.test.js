@@ -40,14 +40,14 @@ function mockEval2Artifacts() {
 - Solution selection question SKIPPED (code-only flow)
 - EnterPlanMode → approved
 ## Phase 2 — SKIPPED (mock data)
-## Phase 4 — pac model genpage generate-types not run (mock data)
+## Phase 4 — genpage.js types not run (mock data)
 ## Phase 5b — single-page fast path, inlined build
 - Data mode: mock
 - read verified-icons.txt
 - read samples/8-dashboard-with-charts.tsx
 - icon verification: grep "react-icons", verified icons against verified-icons.txt
 ## Phase 6
-- pac model genpage upload --app-id 1 --code-file p.tsx --prompt "x" --model claude-sonnet --name "p" --agent-message "m" --add-to-sitemap
+- node scripts/genpage-upload.js --env https://contoso.crm.dynamics.com --app-id 1 --code-file p.tsx --prompt-file prompt.txt --model claude-sonnet --name-file page-name.txt --agent-message-file agent-message.txt --add-to-sitemap
 `,
     'genpage-plan.md': `# Genpage Plan
 ## User Requirements
@@ -72,6 +72,8 @@ No entity creation required — all entities already exist.
 None
 ## Connector Bindings
 No connector bindings.
+## Custom API Bindings
+No custom API bindings.
 ## Design Preferences
 - Styling: clean
 - Features: mock dashboard

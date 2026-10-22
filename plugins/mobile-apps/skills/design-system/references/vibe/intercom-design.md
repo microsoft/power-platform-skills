@@ -532,7 +532,7 @@ Intercom resists drop shadows. Depth is communicated by the white-on-cream surfa
 1. Focus on ONE component at a time and reference it by its `components:` token name.
 2. When introducing a section, decide first whether it sits on `{colors.canvas}` cream (default) or whether it lifts onto a `{colors.surface-1}` white card.
 3. Default body to `{typography.body}` at weight 400.
-4. Run `npx @google/design.md lint DESIGN.md` after edits.
+4. If `@google/design.md` is installed locally, run `npx --no-install @google/design.md lint DESIGN.md` after edits.
 5. Add new variants as separate component entries.
 6. Treat Fin Orange as a product accent: Fin CTA and Fin badge only.
 7. Lead every section with a product screenshot.

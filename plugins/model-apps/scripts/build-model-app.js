@@ -10,49 +10,90 @@
 //        [--only <phases>] [--skip <phases>] [--from <phase>] [--to <phase>]
 //        [--workspace <dir>]
 //   phases: solution,data-model,sample-data,web-resources,views,charts,forms,commands,dashboards,app-shell,pages,ai-features,security,publish
-const os = require('node:os');
 const fs = require('node:fs');
 const path = require('node:path');
-const { validateAppSpec, migrateAppSpec, normalizePageSource, normalizeLanguageCode } = require('./lib/app-spec.js');
-const { runSdkBuild, planFor, appUniqueName, compileFormIntent, resolveExistingFormId } = require('./lib/sdk-build.js');
+const { randomUUID } = require('node:crypto');
+const { sha256 } = require('./lib/hash.js');
+const { validateAppSpec, migrateAppSpec, normalizePageSource, normalizeLanguageCode, specDeclaresAttribute } = require('./lib/app-spec.js');
+const { runSdkBuild, planFor, appUniqueName, compileFormIntent, resolveExistingFormId, normalizeFormId, settleOwedPublishes, collectOwedPublishes, settleOwedLengths } = require('./lib/sdk-build.js');
+const { specTables } = require('./lib/table-publish.js');
 const { stagePhasesOrResolve, PHASES, STAGES } = require('./lib/stages.js');
 // #455: resolves the authoring LCID over the transport hatch, BEFORE constructing the SDK that
 // bakes it into the App/Form/Dashboard adapters.
-const { resolveAuthoringLanguage } = require('./lib/entity-provision.js');
-const { createAzHttpClient } = require('./lib/sdk-http-client.js');
-const { parseArgs, validateFlags, readAliasedFlag, readJsonArg, emitResult, dataverseRequest, readProvisionedLanguages, preflightAuth } = require('./lib/dataverse-auth.js');
+const { resolveAuthoringLanguage, BuildHalt } = require('./lib/entity-provision.js');
+const { createAzHttpClient, SQL_DEADLOCK_VICTIM } = require('./lib/sdk-http-client.js');
+const { judgeFailure, retryPolicyFor, throttleAskOf } = require('./lib/retry-policy.js');
+const { makeThrottleBudget, waitDoesNotFit } = require('./lib/throttle-budget.js');
+const { workspaceBindingError, workspaceBindingNote } = require('./lib/workspace-binding.js');
+const { parseArgs, validateFlags, readAliasedFlag, readJsonArg, emitResult, dataverseRequest, readProvisionedLanguages, preflightAuth, dataverseOrigin } = require('./lib/dataverse-auth.js');
 const { openJournal } = require('./lib/build-journal.js');
+const { assertSafeOutputDir, assertPlainFileTarget, writeFileSafe } = require('./lib/safe-fs.js');
 const { diffPhases, summarizeDiff } = require('./lib/phase-diff.js');
-const { annotateContentHashes, pageSourceFileErrors } = require('./lib/content-hash.js');
+const { annotateContentHashes, appSourceFileErrors } = require('./lib/content-hash.js');
+const { baselinePath, confinedReader, writeBaseline, readBaseline } = require('./lib/deployed-baseline.js');
 const { runChangedOnlyApply, resolveLiveIdentity } = require('./lib/changed-only-flow.js');
 const applySnapshotStore = require('./lib/apply-snapshot-store.js');
 const { classifyOps, sitemapTargets } = require('./lib/op-diff.js');
+const { navigationHolds } = require('./lib/app-navigation.js');
 // Unattended-mode detection lives in one module so /app-builder and /genpage cannot drift apart
 // on what "unattended" means. Re-exported from here because callers and tests already import it
 // from this file.
 const { envTruthy } = require('./lib/interaction-mode.js');
-// R3 (auto-verify): after a successful --apply the build can reconcile the spec against what actually
+// Auto-verify: after a successful --apply the build can reconcile the spec against what actually
 // deployed, so a silent partial build surfaces in the same run instead of only on a separate manual
 // `verify-model-app.js` pass. Reuses the read-only reconcile core + the SDK reader (DRY — same code the
 // standalone verifier runs). The sibling CLI is safe to require (it has a `require.main` guard).
 const { verifySpec } = require('./lib/verify-spec.js');
-const { readerFor } = require('./verify-model-app.js');
-const { makeGenpageCli } = require('./lib/genpage-cli.js');
+const { isTranslationExport } = require('./lib/translation-labels.js');
+const { readerFor, isolatedReaderFor } = require('./verify-model-app.js');
+const { makeGenpageSdk } = require('./lib/genpage-sdk.js');
+const { leftOnDiskWarning } = require('./lib/left-on-disk.js');
+const { makeTempWorkspace } = require('./lib/temp-workspace.js');
+const { makeWritesBlocking } = require('./lib/output-redaction.js');
+
+// The folder an app's workspace lives in, checked before anything is built on it. An APPLY makes the folder if it is
+// missing and re-checks it (mkdir on an existing junction succeeds, so the re-check is what refuses one). A DRY RUN
+// only ever reads from it, so a folder that is not there — or cannot be inspected — is just one with no workspace; a
+// link or a file in its place is refused either way, as everywhere the plugin takes a workspace.
+function assertWorkspaceDir(workspaceDir, { create }) {
+  try {
+    assertSafeOutputDir(workspaceDir, { create });
+  } catch (err) {
+    if (create || !(err && err.reason === 'uninspectable')) throw err;
+  }
+}
 
 // Construct the SDK against the vendored bundle + an az-token HttpClient. Two clients:
 //   sdk          — carries solutionUniqueName (metadata + record writes auto-join the
 //                  solution via the MSCRM.SolutionUniqueName header); does no workspace I/O.
-//   provisionSdk — header-less; owns the PERSISTENT workspace. Every discovery read
-//                  (findTables/findColumns/fetchEntityMetadata) and every artifact
-//                  (views/charts/forms/app) lands here, so the app folder accumulates the
-//                  metadata for reuse/edits. Construction is offline (no token until first call).
-async function makeSdk(env, spec, workspaceDir, languageCode) {
-  const { createMakerSdk, createNodeWorkspaceStorage } = require('./vendor/cds-maker-sdk.cjs');
-  const httpClient = createAzHttpClient(env);
-  const sdkTempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'model-app-'));
+//   provisionSdk — header-less; owns a workspace. In an APPLY (`persistent`) that is the app
+//                  folder's PERSISTENT one: every discovery read (findTables/findColumns/
+//                  fetchEntityMetadata) and every artifact (views/charts/forms/app) lands there, so
+//                  the app folder accumulates the metadata for reuse/edits — and opening it binds it
+//                  to the environment of this run (lib/workspace-binding.js). In a DRY RUN it is a
+//                  throwaway inside the SDK's own temp dir: a preview builds nothing, so it must not
+//                  bind a folder to an environment it only previewed (the next --apply, against the
+//                  environment the operator meant, would be refused), and every read its live plan
+//                  makes goes to the server anyway. The persistent folder is only ASKED, read-only,
+//                  which environment it belongs to, and the answer comes back as `folderNote` so the
+//                  preview can warn that an --apply would stop. Construction is offline (no token
+//                  until first call).
+async function makeSdk(env, spec, workspaceDir, languageCode, { persistent = true, throttle } = {}) {
+  // A link at the workspace root would make the provision SDK's storage follow it. Refuse
+  // before either constructor: the first SDK does not use this directory, but once the
+  // directory has been refused the factory must not run at all.
+  assertWorkspaceDir(workspaceDir, { create: persistent });
+  const { createMakerSdk, createNodeWorkspaceStorage } = require('./lib/maker-sdk.js');
+  // The one client of both SDK instances and of verify's isolated reader draws its waits for a throttled answer from the run's budget (`throttle`, made by main()).
+  // The build's own `--verify` reads a form's captions in a language the form read does not carry from a translation export (verify-model-app.js readerFor), through this client:
+  // that request is sent once whatever answers it (isTranslationExport), as in the standalone verify — a long action, which a re-send would run a second time.
+  const httpClient = createAzHttpClient(env, { throttle, sendOnce: isTranslationExport });
+  const sdkTempDir = makeTempWorkspace('model-app-');
   const cleanup = () => {
     fs.rmSync(sdkTempDir, { recursive: true, force: true });
   };
+  // Inside the temp dir that `cleanup` removes, so a preview has nothing more to strand.
+  const provisionDir = persistent ? workspaceDir : path.join(sdkTempDir, 'preview-workspace');
   // Everything fallible after the directory exists runs INSIDE this guard, because the caller's
   // `finally { cleanup() }` only becomes reachable once this function RETURNS — so anything that
   // throws before the return strands the throwaway workspace for the life of the machine.
@@ -67,6 +108,7 @@ async function makeSdk(env, spec, workspaceDir, languageCode) {
   // throwaway, so a failed run must leave it exactly as it found it.
   let sdk;
   let provisionSdk;
+  let folderNote = null;
   try {
     sdk = createMakerSdk({
       workspaceStorage: createNodeWorkspaceStorage(sdkTempDir), // unused (no workspace ops)
@@ -78,27 +120,58 @@ async function makeSdk(env, spec, workspaceDir, languageCode) {
       // (undefined) means the SDK's own DEFAULT_LCID, which preserves the previous behaviour exactly.
       ...(languageCode ? { languageCode } : {}),
     });
-    fs.mkdirSync(workspaceDir, { recursive: true });
     provisionSdk = createMakerSdk({
-      workspaceStorage: createNodeWorkspaceStorage(workspaceDir),
+      workspaceStorage: createNodeWorkspaceStorage(provisionDir),
       instanceUrl: env,
       httpClient,
       // Must match the `sdk` instance above: `pushArtifact` refuses a push whose stored artifact
       // language disagrees with the SDK performing it (for language-sensitive registrations), so two
       // instances at different LCIDs would make every push of a fetched artifact fail.
       ...(languageCode ? { languageCode } : {}),
+      // A form create whose answer was lost converges instead of halting. The HTTP client re-sends a POST that
+      // got no answer; when the first attempt had committed, the SDK sees the re-send's 412 for the id it minted
+      // and, without this, reports ARTIFACT_ALREADY_EXISTS — a halt a re-run repeats until the workspace is
+      // reset by hand (requireSuccessfulPush). With it the SDK reads that row and adopts it ONLY when it is
+      // exactly what was sent, writing nothing (a Main form only; anything else is refused with the reason,
+      // and the halt is as before). It is on THIS instance because it pushes every form. This instance is
+      // header-less, so no solution membership is demanded of the row — a form joins its solution after its
+      // push. An adoption reports `saved: false`; pushFailed knows that is not a failure.
+      createRecovery: 'adoptExact',
     });
-    await provisionSdk.initWorkspace();
+    if (!persistent) fs.mkdirSync(provisionDir);
+    try {
+      await provisionSdk.initWorkspace();
+    } catch (err) {
+      // `initWorkspace` is where the SDK refuses a workspace that belongs to another environment, before it
+      // reads or writes anything, and where it reads a manifest the JSON parser may reject. That is an
+      // operator's problem to solve, not a crash: say which environments are involved and what the safe ways
+      // forward are (lib/workspace-binding.js). Only an apply can meet it: a preview's workspace is brand new.
+      throw workspaceBindingError(err, { env, workspaceDir }) || err;
+    }
+    if (!persistent) {
+      // The preview did not open the app folder's workspace, so it cannot be refused by it — but an --apply
+      // would be, and the operator is better told now than after the plan has been read and approved.
+      try {
+        const probe = createMakerSdk({ workspaceStorage: createNodeWorkspaceStorage(workspaceDir), instanceUrl: env, httpClient });
+        folderNote = await workspaceBindingNote(probe, { env, workspaceDir });
+      } catch { /* advisory only: nothing here may stop a preview */ }
+    }
   } catch (err) {
     cleanup();
     throw err;
   }
-  // Only the two SDK instances and the cleanup are returned. The raw `httpClient` used to come back
-  // with them so the caller could wire verify's role-privilege reader — that read had no SDK surface
-  // and had to compose an absolute `EntityDefinitions(...)?$select=Privileges` request itself. The
-  // vendored bundle now exposes `getEntityPrivileges`, so the reader takes the SDK and the raw client
-  // has no caller. Returning it anyway would advertise a bypass this file no longer takes.
-  return { sdk, provisionSdk, cleanup };
+  // Only the two SDK instances, the cleanup and verify's isolated dashboard reader are returned (and, for a
+  // preview, the note it owes about the app folder). The raw `httpClient` used to come back with them so the
+  // caller could wire verify's role-privilege reader — that read had no SDK surface and had to compose an
+  // absolute `EntityDefinitions(...)?$select=Privileges` request itself. The vendored bundle now exposes
+  // `getEntityPrivileges`, so the reader takes the SDK and the raw client has no caller. Returning it anyway
+  // would advertise a bypass this file no longer takes.
+  //
+  // The isolated reader is built HERE so it shares this client, and with it the Azure CLI token: made by the
+  // caller, it created a client of its own, and a second `az account get-access-token`, for every build's
+  // dashboard verify. Each read still gets its own throwaway workspace and SDK (verify-model-app.js).
+  const isolatedReader = isolatedReaderFor(env, { httpClient });
+  return { sdk, provisionSdk, cleanup, isolatedReader, folderNote };
 }
 
 // Turn engine progress events into a phase-grouped, status-marked build log:
@@ -165,18 +238,20 @@ async function discoverOpDiffState(spec, provision) {
   const forms = [];
   for (const f of spec.forms || []) {
     const def = compileFormIntent(spec, f, {});
-    if (!def.__explicitLayout) continue;
+    if (!def.__explicitLayout || def.__prune === false) continue;
     // Resolve by (entity, name, TYPE) — NOT name alone. A table routinely has same-named Main / Quick View
     // / Card forms, so a name-only lookup matched multiple rows and the SDK's AmbiguousArtifactError halted
     // this preflight (fail-closed), blocking the edit. Type-scoped resolution targets the requested form.
     const id = await resolveExistingFormId(provision, def);
     if (!id) continue; // not deployed yet → nothing to prune
     await provision.fetchArtifact('form', id); // seed the workspace copy so getArtifact can read it
-    forms.push({ label: `form "${f.name || f.entity}" (${String(f.entity).toLowerCase()})`, deployedForm: await provision.getArtifact('form', id) || {}, def });
+    forms.push({ formId: id, label: `form "${f.name || f.entity}" (${String(f.entity).toLowerCase()})`, deployedForm: await provision.getArtifact('form', id) || {}, def });
   }
-  // Sitemap removals only make sense when the app already exists (a fresh app has no deployed sitemap).
+  // Sitemap removals only make sense when the app already exists (a fresh app has no deployed sitemap) and the build will write a navigation. A spec
+  // whose appShell has no `areas` array is refused by the navigation check before anything is written (lib/app-navigation.js: `appDef` has nothing to
+  // build a sitemap from), so listing every live entry as dropped would ask the maker to authorize a removal the build is then going to refuse.
   let sitemap = null;
-  if (spec.appShell && collision.appExists) {
+  if (navigationHolds(spec).declared && collision.appExists) {
     const appId = await provision.findArtifact('app', { uniqueName: collision.appUnique });
     if (appId) {
       await provision.fetchArtifact('app', appId);
@@ -187,12 +262,154 @@ async function discoverOpDiffState(spec, provision) {
   return { collision, forms, sitemap };
 }
 
+const DESTRUCTIVE_APPROVAL_FILE = 'destructive-approval.json';
+
+function destructiveApprovalPath(workspaceDir) {
+  return workspaceDir ? path.join(workspaceDir, DESTRUCTIVE_APPROVAL_FILE) : null;
+}
+
+// Approval records are deliberately tiny and human-readable because they bind a later
+// `--allow-destructive` run to the exact refusal list a maker reviewed:
+//   {
+//     "schemaVersion": 1,
+//     "generatedAt": "2026-01-01T00:00:00.000Z",
+//     "formRemovals": { "<form-id>": { "label": "form \"Main\" (new_table)", "fields": ["new_field"] } },
+//     "sitemapRemovals": ["entity:new_table", "url:https://contoso.crm.dynamics.com/help"],
+//     "runId": "<the build that wrote it>"
+//   }
+// `runId` makes every record's bytes unique, so a record's content fingerprint says which build wrote
+// it (see approvalFingerprint). Reading ignores it.
+// Treat every malformed shape as unreadable: guessing at a damaged approval would widen destructive
+// authority, which is exactly what this file is meant to prevent.
+function normalizeApprovalRecord(value) {
+  if (!value || value.schemaVersion !== 1 || !value.formRemovals || Array.isArray(value.formRemovals) || typeof value.formRemovals !== 'object' || !Array.isArray(value.sitemapRemovals)) return null;
+  const formRemovals = {};
+  for (const [formId, entry] of Object.entries(value.formRemovals)) {
+    if (!entry || !Array.isArray(entry.fields)) return null;
+    const normalizedFormId = normalizeFormId(formId);
+    if (!normalizedFormId) return null;
+    formRemovals[normalizedFormId] = {
+      label: typeof entry.label === 'string' ? entry.label : normalizedFormId,
+      fields: entry.fields.map((f) => String(f).toLowerCase()),
+    };
+  }
+  return {
+    schemaVersion: 1,
+    generatedAt: typeof value.generatedAt === 'string' ? value.generatedAt : '',
+    formRemovals,
+    sitemapRemovals: value.sitemapRemovals.map((target) => String(target)),
+  };
+}
+
+// One read yields both the record and the fingerprint of the bytes it was parsed from, so the record a
+// build compares with and the one it later claims as "the record I saw" cannot differ.
+function readApprovalRecord(workspaceDir) {
+  const file = destructiveApprovalPath(workspaceDir);
+  if (!file) return { exists: false, file, record: null, fingerprint: null };
+  let raw;
+  try {
+    raw = fs.readFileSync(file);
+  } catch (err) {
+    if (err && err.code === 'ENOENT') return { exists: false, file, record: null, fingerprint: null };
+    return { exists: true, file, error: err, fingerprint: `unreadable:${(err && err.code) || 'error'}` };
+  }
+  const fingerprint = sha256(raw);
+  try {
+    const record = normalizeApprovalRecord(JSON.parse(raw.toString('utf8')));
+    if (!record) throw new Error('record has an unsupported shape');
+    return { exists: true, file, record, fingerprint };
+  } catch (err) {
+    return { exists: true, file, error: err, fingerprint };
+  }
+}
+
+// The content fingerprint of the record on disk, or null when there is none. A file that cannot be
+// read gets a fingerprint no build ever wrote, so an owner check never consumes or replaces it.
+function approvalFingerprint(workspaceDir) {
+  return readApprovalRecord(workspaceDir).fingerprint;
+}
+
+// Writes atomically and returns the fingerprint of what it wrote.
+function writeApprovalRecord(workspaceDir, removals, runId) {
+  const file = destructiveApprovalPath(workspaceDir);
+  if (!file) return null;
+  // Same rule as the workspace check above: a link at the workspace, or at the approval
+  // file name, must not be followed. writeFileSafe replaces a plain file and refuses a link.
+  assertSafeOutputDir(workspaceDir, { create: true });
+  const text = JSON.stringify({ schemaVersion: 1, generatedAt: new Date().toISOString(), ...removals, runId }, null, 2) + '\n';
+  writeFileSafe(file, text);
+  return sha256(text);
+}
+
+function deleteApprovalRecord(workspaceDir) {
+  const file = destructiveApprovalPath(workspaceDir);
+  if (!file) return;
+  try { fs.unlinkSync(file); } catch (err) { if (!err || err.code !== 'ENOENT') throw err; }
+}
+
+function removalRecordFromOps(removals) {
+  const byForm = new Map();
+  const sitemap = [];
+  for (const op of removals || []) {
+    if (op.kind === 'form-field-removal') {
+      const formId = normalizeFormId(op.formId);
+      if (!formId) continue;
+      if (!byForm.has(formId)) byForm.set(formId, { formId, label: op.label, fields: [] });
+      byForm.get(formId).fields.push(...(op.fields || []));
+    } else if (op.kind === 'sitemap-removal') {
+      sitemap.push(...(op.targets || []));
+    }
+  }
+  const formRemovals = {};
+  for (const entry of byForm.values()) {
+    formRemovals[entry.formId] = { label: entry.label, fields: [...new Set(entry.fields.map((f) => String(f).toLowerCase()))] };
+  }
+  return {
+    formRemovals,
+    sitemapRemovals: [...new Set(sitemap.map((target) => String(target)))],
+  };
+}
+
+function authorizedFormRemovalMap(state, removals) {
+  const map = new Map();
+  for (const f of (state && state.forms) || []) {
+    if (f && f.formId && f.def && f.def.__explicitLayout && f.def.__prune !== false) map.set(normalizeFormId(f.formId), new Set());
+  }
+  for (const [formId, entry] of Object.entries(removalRecordFromOps(removals).formRemovals)) {
+    const normalizedFormId = normalizeFormId(formId);
+    if (!normalizedFormId) continue;
+    if (!map.has(normalizedFormId)) map.set(normalizedFormId, new Set());
+    for (const field of entry.fields || []) map.get(normalizedFormId).add(field);
+  }
+  return map;
+}
+
+function findNewlyUnapprovedRemovals(current, approved) {
+  const approvedSitemap = new Set(approved.sitemapRemovals || []);
+  const newOps = [];
+  for (const [formId, entry] of Object.entries(current.formRemovals || {})) {
+    const normalizedFormId = normalizeFormId(formId);
+    const approvedEntry = (approved.formRemovals || {})[normalizedFormId];
+    const ok = new Set((approvedEntry && approvedEntry.fields) || []);
+    const fields = (entry.fields || []).filter((field) => !ok.has(field));
+    if (fields.length) newOps.push({ kind: 'form-field-removal', label: entry.label, fields });
+  }
+  const sitemap = (current.sitemapRemovals || []).filter((target) => !approvedSitemap.has(target));
+  if (sitemap.length) newOps.push({ kind: 'sitemap-removal', label: 'app sitemap', targets: sitemap });
+  return newOps;
+}
+
+function formatNewRemovalDetail(op) {
+  if (op.kind === 'form-field-removal') return `removes field(s): ${op.fields.join(', ')} — not on the list the maker approved (another maker may have added them, or the spec changed since)`;
+  return `drops navigation target(s): ${op.targets.join(', ')} — not on the list the maker approved (another maker may have added them, or the spec changed since)`;
+}
+
 async function buildModelApp(spec, opts, deps) {
   const v = validateAppSpec(spec, { profile: opts.profile || 'deploy' });
   if (!v.ok) {
     return { ok: false, errors: v.errors };
   }
-  const fileErrors = pageSourceFileErrors(spec, opts.appDir);
+  const fileErrors = appSourceFileErrors(spec, opts.appDir);
   if (fileErrors.length) return { ok: false, errors: fileErrors };
   const log = deps.log || (() => undefined);
   // Surface non-blocking validation advisories (e.g. a PRE-EXISTING duplicate page name the build does
@@ -205,8 +422,60 @@ async function buildModelApp(spec, opts, deps) {
   const baseEmit = deps.emit || cliEmit(log, { apply: opts.apply, counts });
   const emit = journal ? (e) => { baseEmit(e); journal.record(e); } : baseEmit;
   const sleep = deps.sleep || ((ms) => new Promise((res) => setTimeout(res, ms)));
+  // One budget for all the waiting a run does when a service throttles — the HTTP client's waits before it sends a throttled read, publish, delete or column create again, the page backend's waits between the sends of a page write (a `$batch` the
+  // client never re-sends) and this loop's own waits before it runs a phase again — so the run can neither wait twenty silent minutes for one page nor forget, where one layer hands over to the other, what the service asked (lib/throttle-budget.js).
+  // main() makes it before the SDK and hands it to the client the SDK is made over, to the page backend (through the engine's `throttle`) and here (`deps.throttle`); a caller that gives none gets one of its own, which only the layers it is handed to
+  // draw from. The waits that are not for a throttle — a 5xx, a reset connection, a deadlock victim — keep the clients' own schedules and are not drawn. `now` is the clock the page backend stamps the moment before which nothing may be sent on
+  // (`retryNotBefore`): a test seam, with `sleep`.
+  const throttle = deps.throttle || makeThrottleBudget({ warn: deps.warn });
+  const now = deps.now || Date.now;
+  let authorizedFormRemovals;
+  let authorizedSitemapRemovals;
+  let currentDestructiveApproval;
+  // The approval record binds the run that SHOWED a list. Two builds can share a workspace, so this run
+  // consumes or replaces only a record it found at its start (`seen`) or wrote itself (`owned`), by
+  // content fingerprint, and does the check and the change under the workspace lease the apply snapshot
+  // uses (lib/apply-snapshot-store.js). Without that, a build that finished with nothing kept deleted
+  // the record another build had just written for its refusal, and that build's approved re-run was
+  // bound to nothing. Captured before any discovery, from the same read the gate compares with.
+  const approvalAtStart = opts.apply && opts.workspaceDir ? readApprovalRecord(opts.workspaceDir) : { exists: false, fingerprint: null };
+  const approvalRun = { id: randomUUID(), seen: approvalAtStart.fingerprint, owned: new Set() };
+  // What a record on disk is to this run: 'none'; 'ours' (the one it started with, or one it wrote);
+  // 'unreadable', whose content is unknown, so it never proves ownership (two unreadable reads say
+  // nothing about whether it is the same file); or 'foreign', another build's.
+  const approvalOwnership = (fingerprint) => {
+    if (fingerprint === null) return 'none';
+    if (typeof fingerprint === 'string' && fingerprint.startsWith('unreadable:')) return 'unreadable';
+    return fingerprint === approvalRun.seen || approvalRun.owned.has(fingerprint) ? 'ours' : 'foreign';
+  };
+  // Every writer holds the lease for milliseconds, so a few short waits ride out a collision. A lease
+  // that stays held is reported, and each caller decides what is safe without it.
+  const withApprovalLease = async (fn) => {
+    const attempts = deps.approvalLeaseAttempts || 10;
+    let reason = 'held';
+    for (let i = 0; i < attempts; i += 1) {
+      const lease = applySnapshotStore.acquireLease(opts.workspaceDir);
+      if (lease.ok) {
+        try { return { locked: true, value: fn() }; } finally { applySnapshotStore.releaseLease(lease); }
+      }
+      reason = lease.reason || reason;
+      if (i < attempts - 1) await sleep(200);
+    }
+    return { locked: false, reason };
+  };
+  // Write this run's record under the lease. `ifOurs` refuses to replace another build's record, or one
+  // it cannot read.
+  const recordApproval = (record, { ifOurs = false } = {}) => withApprovalLease(() => {
+    const owner = ifOurs ? approvalOwnership(approvalFingerprint(opts.workspaceDir)) : 'none';
+    if (owner === 'unreadable' || owner === 'foreign') return owner;
+    approvalRun.owned.add(writeApprovalRecord(opts.workspaceDir, record, approvalRun.id));
+    return 'written';
+  });
+  // Only the forms and app-shell phases remove anything, and a changed-only fast apply runs neither.
+  const runsRemovalPhases = (opts.phases || PHASES).includes('forms') && (opts.phases || PHASES).includes('app-shell')
+    && !(opts.changedOnly && opts.changedOnly.fastApply);
 
-  // I1: on APPLY, the ONLY safe phase selections are the FULL build or EXACTLY the `data` stage
+  // Partial-apply guard: on APPLY, the ONLY safe phase selections are the FULL build or EXACTLY the `data` stage
   // (solution+data-model+sample-data). Every other partial range (--from/--to/--only/--skip, or any other
   // --stage) is dry-run-only (design §14): its range is not dependency-closed and the app id is not carried
   // across runs, so applying it would run phases against an incomplete result map. Recovery from a halt is
@@ -214,10 +483,10 @@ async function buildModelApp(spec, opts, deps) {
   if (opts.apply) {
     const active = opts.phases || PHASES;
     const sameSet = (a, b) => a.length === b.length && a.every((x, i) => x === b[i]);
-    // I1 exception: a `--changed-only` pages-only FAST apply is the ONE sanctioned partial range. It is
+    // Exception: a `--changed-only` pages-only FAST apply is the ONE sanctioned partial range. It is
     // pre-gated by the changed-only flow (snapshot eligibility + identity match + classify proved every
     // change is a pure page-content re-upload) and self-hydrates the app id via
-    // opts.changedOnly.resolvedAppId (the sdk-build seam), so it does NOT hit the cross-phase-id hazard I1
+    // opts.changedOnly.resolvedAppId (the sdk-build seam), so it does NOT hit the cross-phase-id hazard this guard
     // guards against. Any other partial range on --apply is still refused.
     const isChangedOnlyPages = !!(opts.changedOnly && opts.changedOnly.fastApply) && sameSet(active, ['pages']);
     if (!isChangedOnlyPages && !sameSet(active, PHASES) && !sameSet(active, STAGES.data)) {
@@ -237,7 +506,7 @@ async function buildModelApp(spec, opts, deps) {
   // #changed-only EXEMPTION: a pages-only fast apply is pre-gated by the changed-only flow (snapshot
   // eligibility + live identity match + classify proved every change is a pure page-content re-upload) and
   // touches NO data model, so the collision/destructive preflight does not apply. Running it would (a) HARD-
-  // STOP the fast path in --non-interactive because the app always exists (Opus H3), and (b) do slow full
+  // STOP the fast path in --non-interactive because the app always exists, and (b) do slow full
   // form/sitemap reads for nothing. The pages phase keeps its own removal/shared/membership safety gates.
   const isFastApply = !!(opts.changedOnly && opts.changedOnly.fastApply);
   if (opts.apply && !isFastApply && (deps.discoverOpDiffState || (deps.provisionSdk && opts.checkCollisions !== false))) {
@@ -245,6 +514,13 @@ async function buildModelApp(spec, opts, deps) {
     const allowDestructive = opts.allowDestructive === true;
     let state;
     let discoveryError = null;
+    const priorApproval = allowDestructive && opts.workspaceDir ? approvalAtStart : { exists: false };
+    if (priorApproval.error) {
+      const msg = `${priorApproval.file} could not be read as a destructive approval record — delete it or re-run without --allow-destructive to see the list again.`;
+      log(`\n✗ ${msg}`);
+      if (journal) journal.close({ status: 'halt', phase: 'preflight', label: 'destructive-approval-unreadable', detail: priorApproval.file, ...counts });
+      return { ok: false, errors: [msg] };
+    }
     try {
       state = deps.discoverOpDiffState
         ? await deps.discoverOpDiffState(spec, deps.provisionSdk)
@@ -257,6 +533,12 @@ async function buildModelApp(spec, opts, deps) {
     // the environment is unhealthy, letting an unattended-collision overwrite or a form/sitemap removal
     // slip through (design §11 — "can't verify safety ⇒ refuse", not "⇒ proceed"). Re-running usually
     // clears a transient read failure; --allow-destructive is the explicit escape hatch.
+    if (discoveryError && priorApproval.exists) {
+      const msg = `preflight safety check could not run (discovery failed: ${(discoveryError && discoveryError.message) || discoveryError}) — live removals cannot be compared with the approved list in ${DESTRUCTIVE_APPROVAL_FILE}. Re-run to retry before writing.`;
+      log(`\n✗ ${msg}`);
+      if (journal) journal.close({ status: 'halt', phase: 'preflight', label: 'destructive-approval-compare-failed', detail: String((discoveryError && discoveryError.message) || discoveryError), ...counts });
+      return { ok: false, errors: [msg] };
+    }
     if (discoveryError && !allowDestructive) {
       const msg = `preflight safety check could not run (discovery failed: ${(discoveryError && discoveryError.message) || discoveryError}) — refusing to write without verifying the apply is non-destructive. Re-run to retry, or pass --allow-destructive to proceed without the check.`;
       log(`\n✗ ${msg}`);
@@ -285,12 +567,72 @@ async function buildModelApp(spec, opts, deps) {
       //     app-collision op is handled above (interactive/non-interactive nuance), so exclude it here.
       const diff = classifyOps(spec, state, { teardown: false });
       const removals = diff.destructive.filter((o) => o.kind === 'form-field-removal' || o.kind === 'sitemap-removal');
+      authorizedFormRemovals = authorizedFormRemovalMap(state, removals);
+      const currentApproval = removalRecordFromOps(removals);
+      currentDestructiveApproval = currentApproval;
+      if (state.sitemap) authorizedSitemapRemovals = new Set(currentApproval.sitemapRemovals);
       if (removals.length && !allowDestructive) {
         const lines = removals.map((o) => `  • ${o.label} — ${o.detail}`);
         const msg = `refusing ${removals.length} destructive operation(s) without --allow-destructive:\n${lines.join('\n')}`;
+        if (opts.workspaceDir) {
+          try {
+            // The newest refusal is the list the maker is looking at, so it replaces any older record.
+            const lock = await recordApproval(currentApproval);
+            if (!lock.locked) log(`\n⚠ could not lock the workspace to write ${DESTRUCTIVE_APPROVAL_FILE} (${lock.reason}) — re-run this refusal before approving it with --allow-destructive.`);
+          } catch (err) {
+            // Approval records are a safety aid for the NEXT invocation. The refusal itself is the
+            // primary guard, so a disk failure must not replace the exact destructive-op list the maker
+            // needs to review now.
+            log(`\n⚠ could not write ${DESTRUCTIVE_APPROVAL_FILE}: ${(err && err.message) || err}`);
+          }
+        }
         log(`\n✗ ${msg}`);
         if (journal) journal.close({ status: 'halt', phase: 'preflight', label: 'destructive-ops', detail: removals.map((o) => o.kind).join(','), ...counts });
         return { ok: false, errors: [msg] };
+      }
+      if (allowDestructive && opts.workspaceDir) {
+        if (priorApproval.exists) {
+          const newlyUnapproved = findNewlyUnapprovedRemovals(currentApproval, priorApproval.record);
+          if (newlyUnapproved.length) {
+            try {
+              const lock = await recordApproval(currentApproval);
+              if (!lock.locked) log(`\n⚠ could not lock the workspace to refresh ${DESTRUCTIVE_APPROVAL_FILE} (${lock.reason})`);
+            } catch (err) { log(`\n⚠ could not refresh ${DESTRUCTIVE_APPROVAL_FILE}: ${(err && err.message) || err}`); }
+            const lines = newlyUnapproved.map((o) => `  • ${o.label} — ${formatNewRemovalDetail(o)}`);
+            const msg = `refusing ${newlyUnapproved.length} destructive operation(s) that were not on the list the maker approved:\n${lines.join('\n')}`;
+            log(`\n✗ ${msg}`);
+            if (journal) journal.close({ status: 'halt', phase: 'preflight', label: 'destructive-ops-new', detail: newlyUnapproved.map((o) => o.kind).join(','), ...counts });
+            return { ok: false, errors: [msg] };
+          }
+        }
+        // Persist the gate-time list BEFORE the first mutation. If the engine later keeps a new field
+        // and then fails, the next approved run must still be bound to what this run saw. That holds
+        // for an EMPTY list too: with nothing recorded, a retry after a failure that kept a field
+        // another maker added would have removed it without showing it. A run without the removal
+        // phases can keep nothing, so it records only a list it actually has.
+        if (removals.length || runsRemovalPhases) {
+          let lock = null;
+          let writeError = null;
+          try { lock = await recordApproval(currentApproval, { ifOurs: true }); } catch (err) { writeError = err; }
+          // Fail closed: only a list that is verifiably on disk binds a retry. The comparison above was
+          // with the record this run read; a record some other build wrote since then (or one that can
+          // no longer be read) means that comparison no longer describes what is on disk. Either way,
+          // stop before any write rather than run unbound.
+          const halt = writeError
+            ? `could not record what this run may remove in ${DESTRUCTIVE_APPROVAL_FILE} (${(writeError && writeError.message) || writeError}) — nothing was changed; fix the workspace folder and re-run.`
+            : !lock.locked
+              ? `could not lock the workspace to record what this run may remove (${lock.reason}) — re-run once no other build or teardown of this workspace is running.`
+              : lock.value === 'unreadable'
+                ? `${DESTRUCTIVE_APPROVAL_FILE} could not be read while this build was starting — nothing was changed; check the workspace folder and re-run.`
+                : lock.value !== 'written'
+                  ? `${DESTRUCTIVE_APPROVAL_FILE} changed while this build was starting — another build may be using this workspace. Re-run once it has finished.`
+                  : null;
+          if (halt) {
+            log(`\n✗ ${halt}`);
+            if (journal) journal.close({ status: 'halt', phase: 'preflight', label: 'destructive-approval-changed', detail: halt, ...counts });
+            return { ok: false, errors: [halt] };
+          }
+        }
       }
     }
   }
@@ -301,20 +643,34 @@ async function buildModelApp(spec, opts, deps) {
   // Injectable apply seam: production defaults to runSdkBuild; tests inject a stub to drive verify
   // without a live SDK.
   const runBuild = deps.runBuild || runSdkBuild;
+  // What failed attempts still owe for the views and forms they saved and deferred (sdk-build.js: the default-view
+  // enrichment 4b, the reconcile of existing views and forms), by target. Every attempt re-runs every phase, but a
+  // later one can halt before the step an earlier one owed from, so each debt is kept until a publish phase pays it
+  // (`owedPaid`), and the final halt settles the rest.
+  const owedAcrossAttempts = new Map();
+  // What failed attempts still owe for the primary name column of a table they created and did not finish setting the length of
+  // (sdk-build.js: `owedLengths` on the halt, the records the data-model phase keeps). Handed to every attempt, which pays what it can
+  // at the end of its own data-model phase; what a halt carries replaces it, being everything that is still owed. A halt that carries
+  // no list (one thrown before the engine, or by a stand-in for it) leaves it as it was.
+  let owedLengths = [];
   let r;
+  // How many waits the HTTP client has been refused by the budget (lib/throttle-budget.js, `declined`): the count at the start of a run of the phases says whether one happened in it.
+  const declinedCount = () => (typeof throttle.declined === 'function' ? throttle.declined().count : 0);
   for (let attempt = 1; ; attempt++) {
     counts.ok = counts.skip = counts.error = 0; // summary reflects the final (successful) attempt
+    const declinedBefore = declinedCount();
     try {
       r = await runBuild(spec, {
         sdk: deps.sdk,
         provisionSdk: deps.provisionSdk,
+        owedLengths,
         apply: opts.apply,
         sampleData: opts.sampleData,
         publish: opts.publish,
         livePlan: opts.livePlan,
         phases: opts.phases,
         appDir: opts.appDir, // resolves web-resource `contentPath` relative to the app folder
-        env: opts.env, // for the pages phase (pac model genpage upload --environment)
+        env: opts.env, // for the pages phase (its page backend is made for this environment)
         languageCode: opts.languageCode,
         // Forwarded explicitly because this is a fresh literal, not a spread of `opts`: without it
         // the data-model phase re-resolves, and on a transient org-read failure that fallback lands
@@ -324,52 +680,107 @@ async function buildModelApp(spec, opts, deps) {
         // Injected so the pure lib stays free of transport. Only consulted for an EXPLICIT override.
         provisionedLanguages: deps.provisionedLanguages,
         warn: deps.warn,
-        genpageCli: deps.genpageCli, // injectable seam for tests; else constructed from env
+        genpage: deps.genpage, // injectable seam for tests (lib/genpage-sdk.js's shape); else made from env
         workspaceDir: opts.workspaceDir, // lease/staging live under the real workspace dir
-        allowDestructive: opts.allowDestructive, // pages phase gates destructive page removals (Imp6)
+        authorizedFormRemovals,
+        authorizedSitemapRemovals,
+        allowDestructive: opts.allowDestructive, // pages phase gates destructive page removals
         changedOnly: opts.changedOnly, // #changed-only: pages-only fast-apply seams (resolvedAppId + skipSitemapFinalize)
+        // AB#6726727: the spec last applied to, or downloaded from, this environment — lets the sitemap
+        // rewrite keep a nav change made in the designer since then instead of reverting it.
+        baselineSpec: opts.baselineSpec,
+        // The budget of waiting the page backend spends from, one for every attempt of this run.
+        throttle,
         emit,
       });
       break;
     } catch (err) {
-      if (attempt <= maxRetries && isTransientHalt(err)) {
-        const delay = opts.retryDelayMs != null ? opts.retryDelayMs : backoffMs(attempt);
-        if (journal) journal.record({ phase: err && err.phase, status: 'retry', label: `transient error (attempt ${attempt}/${maxRetries}) — retrying in ${delay}ms`, detail: String((err && err.message) || err) });
-        log(`\n⟳ transient error in ${err && err.phase} — retrying (attempt ${attempt}/${maxRetries}) after ${delay}ms…`);
-        await sleep(delay);
-        continue;
+      if (err && err.owedPaid) owedAcrossAttempts.clear();
+      collectOwedPublishes(owedAcrossAttempts, err && err.owedPublishes);
+      if (err && Array.isArray(err.owedLengths)) owedLengths = err.owedLengths;
+      let halted = err;
+      const transient = isTransientHalt(err, { spec });
+      const ask = transient ? throttleAskOf(err) : null;
+      // The words of the halt for a wait that does not fit: stop, and say what the service asked. The build is idempotent, so a later run goes on from here.
+      const budgetHalt = (askedMs, waitMs) => new BuildHalt(`${err && err.phase ? `${err.phase} stopped` : 'the build stopped'}: ${waitDoesNotFit(throttle, { askedMs, waitMs })}`, {
+        phase: err && err.phase, code: 'throttle-budget-exhausted', recoverable: true, cause: err, retry: retryPolicyFor(err), statusCode: 429,
+      });
+      // A throttle that stopped a request in THIS run of the phases: the HTTP client draws its waits from the budget too, and a wait that does not fit is not taken — the answer comes back as the 429 it is, which carries nothing of what the service
+      // asked (the SDK's error holds no headers), and the client tells the budget instead (`declined`, lib/throttle-budget.js). The service said it was not ready for longer than the run may wait, so running the phases again would meet the
+      // same answer: stop here, as for a wait of the build's own that does not fit — and so on the last run as on the first.
+      const refused = transient && ask.throttled && declinedCount() > declinedBefore ? throttle.declined() : null;
+      if (refused) {
+        halted = budgetHalt(Math.max(ask.askedMs, refused.askedMs), refused.waitMs);
+      } else if (attempt <= maxRetries && transient) {
+        const backoff = opts.retryDelayMs != null ? opts.retryDelayMs : backoffMs(attempt);
+        // What the service asked of the next send, carried across the layers (retry-policy.js, throttleAskOf): when the page backend's sends ran out it handed over the moment before which nothing may be
+        // sent. The wait is what is LEFT of it — the layers between did work — in whole seconds, the unit `Retry-After` counts in, and never less than the build's own backoff.
+        const asked = ask.notBefore > 0 ? Math.ceil(Math.min(ask.askedMs || Infinity, Math.max(0, ask.notBefore - now())) / 1000) * 1000 : 0;
+        const delay = Math.max(backoff, asked);
+        if (ask.throttled && !throttle.fits(delay)) {
+          // The wait does not fit what is left of the run's budget.
+          halted = budgetHalt(ask.askedMs || asked, delay);
+        } else {
+          if (ask.throttled) throttle.spend(delay);
+          if (journal) journal.record({ phase: err && err.phase, status: 'retry', label: `transient error (attempt ${attempt}/${maxRetries}) — retrying in ${delay}ms`, detail: String((err && err.message) || err) });
+          const askNote = asked > 0 ? ` (the service asked to wait ${Math.ceil((ask.askedMs || asked) / 1000)} s)` : '';
+          log(`\n⟳ transient error in ${err && err.phase} — retrying (attempt ${attempt}/${maxRetries}) after ${delay}ms${askNote}…`);
+          await sleep(delay);
+          continue;
+        }
       }
-      // A non-transient (or retries-exhausted) halt — journal where/why it stopped, then propagate.
-      // Resume by re-running the same command (idempotent) or with --from <phase>.
-      if (journal) journal.close({ status: 'halt', phase: err && err.phase, code: err && err.code, recoverable: !!(err && err.recoverable), message: String((err && err.message) || err), ...counts });
-      throw err;
+      // A non-transient (or retries-exhausted, or out-of-budget) halt — journal where/why it stopped, then propagate.
+      // Resume by re-running the same command (idempotent): a partial range (--from and the like) is
+      // refused on --apply.
+      //
+      // First publish the views and forms this build's attempts had saved and no publish phase paid: no
+      // retry follows now (see settleOwedPublishes, sdk-build.js). Best-effort, so the halt below is still
+      // what this run reports. The spec's tables ride along so the settle can say what they still hold saved and
+      // not published — but only for a build that stopped BEFORE a publish phase it has: an apply with --publish
+      // and the phase in its range, not a halt before anything was written, and not one after the phase completed
+      // (`owedPaid`: the halt of a step that runs after it, the AI features' re-confirmation, say). What the phase
+      // published is live, and a line that says the build stopped before it would be false.
+      const hadPublishPhase = opts.apply && opts.publish && (opts.phases || PHASES).includes('publish') && !(err && err.phase === 'preflight') && !(err && err.owedPaid);
+      await settleOwedPublishes(deps.provisionSdk || deps.sdk, [...owedAcrossAttempts.values()], deps.warn, hadPublishPhase ? { tables: specTables(spec) } : undefined);
+      // And set the name column length of a table whose debt no attempt got as far as paying (the last one halted before its data-model phase).
+      await settleOwedLengths({ sdk: deps.sdk, provision: deps.provisionSdk || deps.sdk, spec, owed: owedLengths, warn: deps.warn, sleep });
+      if (journal) journal.close({ status: 'halt', phase: halted && halted.phase, code: halted && halted.code, recoverable: !!(halted && halted.recoverable), message: String((halted && halted.message) || halted), ...counts });
+      throw halted;
     }
   }
   // #559: a dry run's whole purpose is to say what an apply would DO, so summarise the decision
   // rather than only listing the spec back. `unknown` is counted separately and never folded into
-  // either real decision — an unresolved probe is missing information, not a verdict.
+  // either real decision — an unresolved probe is missing information, not a verdict. Within it, an item
+  // the environment ANSWERED and the answer is "this would stop the build" (`wouldHalt`: a view filter
+  // label that names no option) is a verdict too, so it is not counted as unreadable.
   if (r && r.dryRun && Array.isArray(r.planItems)) {
     const n = (s) => r.planItems.filter((p) => p.state === s).length;
     const unprobed = r.planItems.filter((p) => !p.state).length;
+    const wouldHalt = r.planItems.filter((p) => p.state === 'unknown' && p.wouldHalt).length;
+    const unreadable = n('unknown') - wouldHalt;
     const parts = [`${n('create')} to create`, `${n('reuse')} already present`];
-    if (n('unknown')) parts.push(`${n('unknown')} could not be read`);
+    if (unreadable) parts.push(`${unreadable} could not be read`);
+    if (wouldHalt) parts.push(`${wouldHalt} would stop the build`);
     if (unprobed) parts.push(`${unprobed} not probed`);
+    // A dry run that says a step would stop the build must not then tell the maker to run it. The spec-only summary counts those steps too: with no live
+    // probe the navigation check can still refuse a spec on its own, and it marks the app step the same way.
+    const closing = wouldHalt ? 'Fix the steps marked ? above, then re-run with --apply to execute.' : 'Re-run with --apply to execute.';
     log(r.livePlan
-      ? `\n▢ dry run — ${parts.join(', ')} (${r.planItems.length} steps). Re-run with --apply to execute.`
-      : `\n▢ dry run — ${r.planItems.length} steps, spec-only (no live probe; --no-live-plan). Re-run with --apply to execute.`);
+      ? `\n▢ dry run — ${parts.join(', ')} (${r.planItems.length} steps). ${closing}`
+      : `\n▢ dry run — ${r.planItems.length} steps, spec-only (no live probe; --no-live-plan)${wouldHalt ? `, ${wouldHalt} would stop the build` : ''}. ${closing}`);
   }
   if (opts.apply && r && r.ok && !r.dryRun) {
     log(`\n✓ build complete — ${counts.ok} created, ${counts.skip} skipped, ${counts.error} failed (${counts.ok + counts.skip + counts.error} steps)`);
-    // R3 — auto-verify: reconcile the spec against what actually deployed so a silent partial build
+    // Auto-verify: reconcile the spec against what actually deployed so a silent partial build
     // (an artifact created but not wired, or a phase that quietly produced nothing) surfaces now
     // instead of only when the user opens the app. Read-only; injected (deps.verify) so tests drive it.
     // A verify failure does NOT undo the build (it already ran) — it is reported and returned in
     // r.verify so the CLI can exit non-zero.
     //
-    // MANDATORY + FAIL-CLOSED for page-bearing specs (design §13.1, C6):
+    // MANDATORY + FAIL-CLOSED for page-bearing specs (design §13.1):
     //   - Page verify runs even without --verify when the spec has implemented pages AND the pages
     //     phase was applied (appliedPagesPhase). A --stage data apply (pages NOT selected) must NOT
-    //     trigger mandatory verify (RECONCILIATION 2).
+    //     trigger mandatory verify.
     //   - A verify that CANNOT run (no verifier wired, or verifySpec throws) yields
     //     r.verify={ok:false,unableToRun:true} → non-zero exit. An unverifiable page set never passes
     //     silently — distinguish reader-incapacity (unableToRun) from ordinary miss (ok:false only).
@@ -398,7 +809,10 @@ async function buildModelApp(spec, opts, deps) {
           // written and every later run would fall back to a full build. Without the second, the
           // `--changed-only` FAST path (which runs `phases: ['pages']`, so it produces no skip list
           // at all) fails the same way on every run after the first.
-          const vr = await deps.verify(spec, { environmentSkipped: r.skipped, phases: opts.phases });
+          // The language the build wrote its labels in goes too: the flag it was given and what its SDK was made for. A build run with
+          // `--language-code` in an organization whose base language is another one publishes its captions in the flag's language, and a
+          // verify that does not know it holds them to the organization's and reports the captions it was just given as missing.
+          const vr = await deps.verify(spec, { environmentSkipped: r.skipped, phases: opts.phases, baselineSpec: opts.baselineSpec, languageCode: opts.languageCode, preResolvedLanguageCode: opts.preResolvedLanguageCode });
           const present = vr.checks.length - vr.missing.length;
           log(`\n${vr.ok ? '✓ verify PASS' : `✗ verify FAIL — ${vr.missing.length} missing`} (${present}/${vr.checks.length} present)`);
           // Named explicitly rather than folded into the pass, so a green verify never reads as
@@ -412,13 +826,19 @@ async function buildModelApp(spec, opts, deps) {
           if (vr.phaseSkipped && vr.phaseSkipped.length) {
             log(`  ⊘ ${vr.phaseSkipped.length} check(s) not verified because their phase did not run in this build: ${vr.phaseSkipped.join(', ')}`);
           }
+          // A check verify could not DECIDE is neither of those and neither a pass nor a failure: named beside the PASS, with its reason, so a
+          // green verify never reads as "everything the spec declares is deployed" while a label was not compared.
+          if (vr.unverified && vr.unverified.length) {
+            log(`  ⊘ ${vr.unverified.length} check${vr.unverified.length === 1 ? '' : 's'} could not be verified — ${vr.unverified.length === 1 ? 'it is' : 'they are'} neither passed nor failed:`);
+            for (const u of vr.unverified) log(`      ⊘ ${u}`);
+          }
           // Include `detail` on a failure so a READ that failed (throttling, auth expiry, a 5xx) is
           // not reported identically to an artifact that is genuinely absent.
           if (!vr.ok) for (const m of vr.missing) log(`  ✗ ${m.kind}: ${m.name}${m.detail ? ` — ${m.detail}` : ''}`);
-          // Propagate unableToRun from verifySpec (RECONCILIATION 1): verifySpec itself sets
+          // Propagate unableToRun from verifySpec: verifySpec itself sets
           // unableToRun when the reader lacks pages/pageCode methods. Only include the property
           // when truthy so existing callers using deepStrictEqual are not affected on the normal path.
-          r.verify = { ok: vr.ok, present, total: vr.checks.length, missing: vr.missing.map((m) => `${m.kind}:${m.name}${m.detail ? ` (${m.detail})` : ''}`), ...(vr.unableToRun ? { unableToRun: true } : {}), ...(vr.environmentSkipped && vr.environmentSkipped.length ? { environmentSkipped: vr.environmentSkipped } : {}), ...(vr.phaseSkipped && vr.phaseSkipped.length ? { phaseSkipped: vr.phaseSkipped } : {}) };
+          r.verify = { ok: vr.ok, present, total: vr.checks.length, missing: vr.missing.map((m) => `${m.kind}:${m.name}${m.detail ? ` (${m.detail})` : ''}`), ...(vr.unableToRun ? { unableToRun: true } : {}), ...(vr.environmentSkipped && vr.environmentSkipped.length ? { environmentSkipped: vr.environmentSkipped } : {}), ...(vr.phaseSkipped && vr.phaseSkipped.length ? { phaseSkipped: vr.phaseSkipped } : {}), ...(vr.unverified && vr.unverified.length ? { unverified: vr.unverified } : {}) };
           if (journal) journal.record({ phase: 'verify', status: vr.ok ? 'ok' : 'error', label: `verify ${present}/${vr.checks.length} present`, ...(vr.ok ? {} : { detail: r.verify.missing.join(', ') }) });
         } catch (e) {
           if (mustVerifyPages) {
@@ -437,24 +857,86 @@ async function buildModelApp(spec, opts, deps) {
   } else if (journal) {
     journal.close({ status: r && r.dryRun ? 'dry-run' : 'done', ...counts });
   }
+  if (opts.apply && r && r.ok && !r.dryRun && (!r.verify || r.verify.ok) && opts.workspaceDir) {
+    const kept = (((r.skipped || {}).unauthorizedRemovals) || []);
+    if (kept.length) {
+      const record = currentDestructiveApproval || { formRemovals: {}, sitemapRemovals: [] };
+      const names = kept.map((x) => `${x.form || x.formId || 'form'}:${x.field}`).join(', ');
+      try {
+        const lock = await recordApproval(record, { ifOurs: true });
+        if (!lock.locked) {
+          log(`\n⚠ kept unauthorized form removal(s) (${names}), but could not lock the workspace to record them (${lock.reason}).`);
+        } else if (lock.value === 'unreadable') {
+          log(`\n⚠ kept unauthorized form removal(s) (${names}), but ${DESTRUCTIVE_APPROVAL_FILE} could not be read, so it was left as it is.`);
+        } else if (lock.value === 'foreign') {
+          // That build's list binds its own approval; any kept field it does not name is still new to it.
+          log(`\n⚠ kept unauthorized form removal(s) (${names}); ${DESTRUCTIVE_APPROVAL_FILE} was written by another build since this one started, so it was left as it is.`);
+        } else {
+          log(`\n⚠ kept unauthorized form removal(s) (${names}); ${DESTRUCTIVE_APPROVAL_FILE} was left for review, so the next run will ask about them before removing anything.`);
+        }
+      } catch (err) {
+        log(`\n⚠ kept unauthorized form removal(s), but could not write ${DESTRUCTIVE_APPROVAL_FILE}: ${(err && err.message) || err}`);
+      }
+    } else if (runsRemovalPhases) {
+      try {
+        const lock = await withApprovalLease(() => {
+          const owner = approvalOwnership(approvalFingerprint(opts.workspaceDir));
+          if (owner !== 'ours') return owner;
+          deleteApprovalRecord(opts.workspaceDir);
+          return 'deleted';
+        });
+        if (!lock.locked) log(`\n⚠ could not lock the workspace to consume ${DESTRUCTIVE_APPROVAL_FILE} (${lock.reason}); it was left, so the next run may ask about its removals again.`);
+        else if (lock.value === 'unreadable') log(`\n⚠ left ${DESTRUCTIVE_APPROVAL_FILE}: it could not be read, so this build cannot tell whose it is.`);
+        else if (lock.value === 'foreign') log(`\n⚠ left ${DESTRUCTIVE_APPROVAL_FILE}: another build wrote it after this one started.`);
+      } catch (err) { log(`\n⚠ could not delete ${DESTRUCTIVE_APPROVAL_FILE}: ${(err && err.message) || err}`); }
+    }
+  }
   // Attach non-blocking validation advisories to the result JSON so programmatic callers see them too
   // (they were already narrated via `log` above). Never overrides an error result's shape.
   if (r && typeof r === 'object' && (v.warnings || []).length) r.warnings = v.warnings;
   return r;
 }
 
-// A halt is transient (safe to auto-retry, since the build is idempotent) when the underlying HTTP
-// status is 429/503, or the message names a known transient server condition (customization lock,
-// concurrent-op guard, SQL timeout, "try again later"). NOTE: the engine's `recoverable` flag means
-// "re-runnable phase", NOT "transient error", so it is deliberately NOT used here.
-function isTransientHalt(err) {
+// A failure is transient (safe to auto-retry, since the build is idempotent) when the SERVICE said so, by the
+// structure of its answer: the HTTP status it answered (429, 502, 503, 504), a timeout or a reset of the
+// transport, or a condition it names by the `error.code` of its answer (a customization or solution lock, SQL
+// giving up waiting, a concurrent request on the same record, a SQL deadlock victim — the generic SQL error code
+// with the platform's deadlock signature in the service's own answer — the lag of a column the spec creates). A
+// status that is not one of those — a 403, a 404, a 400, a 500 — is final, whatever the answer says: an answer
+// echoes what the maker named, and "SQL Timeout Reader" is a legal name for a view, a role, a persona, a flow,
+// a page, and — `contoso_customizationlockexception` — a table. Only a failure that carries no HTTP status at
+// all (a plain error, the words a helper reported by value) is read by the service's own words as a fallback:
+// customization lock, concurrent-op guard, SQL timeout, "try again later". What the build or the maker named
+// is never read: a halt's message quotes views, roles, personas, flows, pages, paths and the workspace's
+// folder. So the decision is made from the STRUCTURE of the failure first, and the plugin's own text is out of
+// it — lib/retry-policy.js holds the rule (`judgeFailure`), and tests/halt-retry-policy.test.js holds every
+// halt the build raises to a policy of its own. A failure that says it must not be retried (`transient: false`
+// anywhere along its causes) or that the SDK or the plugin types as a refusal (VALIDATION_ERROR,
+// VERSION_CONFLICT, a file system error) is never retried, whatever it quotes.
+// NOTE: the engine's `recoverable` flag means "re-runnable phase", NOT "transient error", so it is
+// deliberately NOT used here.
+//
+// `spec` (optional) enables the one condition that depends on what the build itself creates — the lag of a
+// column the spec declares (see MISSING_ATTRIBUTE_CODES in lib/retry-policy.js). Without it that condition never
+// fires, so a caller that passes no spec gets exactly the classification it always had.
+function isTransientHalt(err, { spec } = {}) {
   if (!err) return false;
-  const status = (err.cause && err.cause.statusCode) || err.statusCode;
-  const msg = String((err.message || '') + ' ' + ((err.cause && err.cause.message) || ''));
+  // A dashboard the build could neither add to its solution nor remove again says `transient: false`
+  // (sdk-build.js): its message quotes the causes verbatim — a customization lock, "try again later" —
+  // but a retry would find the dashboard as a lone name match and reuse it outside the solution, the
+  // state the undo exists to prevent. `never` is that, and the typed refusals, and a status that says no.
+  const judgement = judgeFailure(err, spec ? { declares: (table, column) => specDeclaresAttribute(spec, table, column) } : {});
+  if (judgement.never) return false;
+  if (judgement.transient) return true;
+  // Here the failure carries no HTTP status at all. `text` is only what the service said — a halt's own
+  // message, and what an error says of its url, are not in it — unless an error declares its own words
+  // (`retryText`), and then those alone are.
+  const msg = judgement.text;
   return (
-    status === 429 ||
-    status === 503 ||
-    /CustomizationLockException|another solution (install|removal)|try again later|SQL timeout|concurrent [dD]elete/i.test(msg)
+    /CustomizationLockException|another solution (install|removal)|try again later|SQL timeout|concurrent [dD]elete/i.test(msg) ||
+    // A SQL deadlock victim was rolled back, so the idempotent build can simply run again — the same
+    // footing as the "SQL timeout" above, with a less ambiguous outcome (see SQL_DEADLOCK_VICTIM).
+    SQL_DEADLOCK_VICTIM.test(msg)
   );
 }
 
@@ -485,7 +967,7 @@ function parseLanguageCode(value) {
 // Refuse to mutate unless the changed-only snapshot was demonstrably invalidated (#587 item 3).
 //
 // Extracted from main() so it can be tested by BEHAVIOUR. The first version of this guard was
-// covered only by a source-level test, and an adversarial review proved that test worthless: both
+// covered only by a source-level test, which proved worthless: both
 // `if (false && …)` and a catch that manufactures `{ ok: true }` passed the whole file. A guard
 // whose test survives its own removal is not a guard.
 //
@@ -511,6 +993,37 @@ function assertSnapshotInvalidated(store, workspaceDir) {
   return inv;
 }
 
+// #3: after a clean apply, persist the applied spec so the NEXT dry-run can diff against it and show
+// what changed. Only on a real, successful, FULL apply, OR a changed-only fast apply (whose deployed
+// state matches the spec: unchanged artifacts persist idempotently and the changed pages were just
+// re-uploaded). A partial --stage data apply is NOT the whole desired state, so it must not overwrite
+// the snapshot. Gated on EFFECTIVE success (verify passed) — a build that applied but whose auto-verify
+// found a silent partial must NOT record its spec as the deployed baseline. Best-effort:
+// returns whether the baseline was written, and never throws.
+//
+// The spec is persisted ANNOTATED with on-disk content hashes (#2) so the next dry-run's diff can
+// detect a .tsx / contentPath byte edit, not just a spec-JSON change. It records the content that was
+// actually deployed by THIS apply, stamped with the environment and app it was deployed to, and the
+// dashboard/page ids this apply resolved there (AB#6726727: the sitemap baseline lines entries up by
+// them, and a spec downloaded elsewhere carries another environment's). A page's hash is the one of the
+// source the pages phase read and sent (`created.pageSourceShas`), not of the file as it is when the build
+// ends: a page saved while the build ran must read as changed next time, and the build's Griffel check
+// judges a page against this record (deployed-baseline.js annotateForBaseline). `write` is a test seam.
+function persistAppliedBaseline(r, { spec, opts, workspaceDir, appDirAbs, baselineIdentity }, write = writeBaseline) {
+  const fullPhaseApply = (opts.phases || PHASES).length === PHASES.length;
+  const changedOnlyApplied = !!(r && r.changedOnly && (r.changedOnly.decision === 'fast' || r.changedOnly.decision === 'full'));
+  const effectiveSuccess = !!(r && r.ok && (!r.verify || r.verify.ok));
+  if (!(effectiveSuccess && opts.apply && !r.dryRun && (fullPhaseApply || changedOnlyApplied))) return false;
+  try {
+    // A changed-only run that found nothing to apply (`noop`, with no `created`) sent nothing, so it has no source to record: every page keeps the record it had.
+    const created = r.created || (r.noop === true ? { pageSourceShas: {} } : r.created);
+    write(workspaceDir, spec, { appDir: appDirAbs, ...baselineIdentity, created, previous: opts.baselineSpec });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 async function main() {
   const argv = process.argv.slice(2);
   const { positional, flags } = parseArgs(argv);
@@ -534,6 +1047,7 @@ async function main() {
     needValue: ['env', 'spec', 'stage', 'only', 'skip', 'from', 'to', 'language-code', 'languageCode', 'workspace'],
   });
   if (flagError) {
+    makeWritesBlocking(process.stdout, process.stderr);
     process.stderr.write(`✗ ${flagError}\n${USAGE}\n`);
     process.exit(1);
   }
@@ -556,6 +1070,30 @@ async function main() {
   const specPath = path.resolve(specArg.startsWith('@') ? specArg.slice(1) : specArg);
   const spec = migrateAppSpec(readJsonArg('@' + specPath));
   const workspaceDir = flags.workspace || path.join(path.dirname(specPath), '.maker-workspace');
+  // Before auth, language resolution, and SDK construction. A link planted as the workspace
+  // root is refused here so the factory below is never called; a real directory is allowed.
+  // Only an --apply creates it: a dry run never opens this workspace (see makeSdk).
+  try {
+    assertWorkspaceDir(workspaceDir, { create: flags.apply === true });
+  } catch (err) {
+    emitResult(false, err instanceof Error ? err : new Error(String(err)));
+    return;
+  }
+  // The journal is apply-only and best-effort. A LINK at its log name must still be refused
+  // before auth and before the SDK factory, or the throwaway SDK directory is created and then
+  // stranded when the journal later refuses the write. Any other reason the log cannot be used —
+  // a folder at that name, an unreadable entry — is the journal's ordinary best-effort case:
+  // openJournal disables journaling with a warning, and the build goes on.
+  if (flags.apply === true) {
+    try {
+      assertPlainFileTarget(path.join(workspaceDir, 'build-log.jsonl'));
+    } catch (err) {
+      if (err && (err.reason === 'link' || err.reason === 'hard-link')) {
+        emitResult(false, err instanceof Error ? err : new Error(String(err)));
+        return;
+      }
+    }
+  }
   const languageCode = parseLanguageCode(readLanguageFlag(flags));
   const phases = stagePhasesOrResolve({ stage: flags.stage, only: list(flags.only), skip: list(flags.skip), from: flags.from, to: flags.to });
   // Phases that stamp an authoring language onto something. `data-model` writes Dataverse label
@@ -612,7 +1150,7 @@ async function main() {
   // — none of which names the actual cause. Dry runs skip it: they perform no writes and need no
   // identity. An INCONCLUSIVE verdict never blocks; see preflightAuth.
   if (opts.apply) {
-    const auth = await preflightAuth(env);
+    const auth = await preflightAuth(env, { identityOnSuccess: false });
     // A single, already-explained failure uses `error`, not `errors: [...]`. `emitResult` reserves
     // the array for a genuine PARTIAL failure and summarises it as a COUNT ("completed with 1
     // error(s); see stdout JSON") — which would replace a message written specifically to tell the
@@ -630,12 +1168,26 @@ async function main() {
   opts.preResolvedLanguageCode = authoringLanguageCode;
   // Construct for both dry-run and apply: proves the vendored bundle + adapter wire up
   // (offline), and apply needs it. A spec validation error short-circuits before any write.
-  const { sdk, provisionSdk, cleanup } = await makeSdk(env, spec, workspaceDir, authoringLanguageCode);
+  // Only an apply opens (and so binds) the app folder's workspace; a dry run works in a throwaway one and
+  // hands back a note when the folder would stop an --apply.
+  // The run's budget for waiting out a throttled service (lib/throttle-budget.js), made before anything that sends so that every layer draws from the one: the HTTP client the SDK is made over, the page backend (through the engine's
+  // `throttle`) and the build's own retry loop (`deps.throttle`). A wait of more than a few seconds is announced on stderr — stdout carries the JSON result.
+  const throttle = makeThrottleBudget({ warn: (m) => process.stderr.write(`⚠ ${m}\n`) });
+  const { sdk, provisionSdk, cleanup, isolatedReader, folderNote } = await makeSdk(env, spec, workspaceDir, authoringLanguageCode, { persistent: opts.apply, throttle });
+  if (folderNote) process.stderr.write(`⚠ ${folderNote}\n`);
   // Durable build journal (apply runs only): a per-run record of steps + where a run halted,
   // written to <workspace>/build-log.jsonl. Resume = re-run the same command (idempotent).
-  const journal = opts.apply
-    ? openJournal(workspaceDir, { app: spec.app && spec.app.name, solution: spec.solution && spec.solution.uniqueName, apply: true, phases: opts.phases })
-    : null;
+  // Opened here, after the SDK exists, so a refusal still runs cleanup. The preflight above
+  // is what keeps a link present at the start from constructing the SDK at all.
+  let journal = null;
+  try {
+    journal = opts.apply
+      ? openJournal(workspaceDir, { app: spec.app && spec.app.name, solution: spec.solution && spec.solution.uniqueName, apply: true, phases: opts.phases })
+      : null;
+  } catch (err) {
+    cleanup();
+    throw err;
+  }
   // Surface the live-progress files so a long build is observable even if this process's stdout is
   // buffered by the launching shell (e.g. piping through Select-Object). `build-status.json` holds the
   // current step; `build-log.jsonl` is the full trace.
@@ -645,23 +1197,16 @@ async function main() {
   // #3 (track the diff): on a DRY-RUN, if a prior apply left a snapshot, report which phases changed
   // since — so a small edit is visibly "only pages changed", not a re-read of the whole plan. Advisory
   // only (it does not yet gate --apply; see docs/app-builder-capabilities.md). Never fatal.
-  const lastAppliedPath = path.join(workspaceDir, 'last-applied.json');
+  const lastAppliedPath = baselinePath(workspaceDir);
   // #2 (content-aware diff): resolve a page codeFile / web-resource contentPath the SAME way the build
-  // engine does — relative to the app folder (opts.appDir) — and return its bytes, or null when it can't
-  // be read. Confined to appDir: a '..'-escaping or absolute path (already rejected at spec-validation
-  // time) resolves outside and returns null rather than reading an arbitrary file. A null result makes
-  // annotateContentHashes emit __contentSha:null, so an unreadable/vanished source reads as CHANGED
-  // (fail-closed) instead of a silent no-op. Bytes are read raw (Buffer) so the hash matches regardless
-  // of encoding; the diff only cares whether the bytes changed, not how they decode.
+  // engine does — relative to the app folder (opts.appDir) — confined to it (deployed-baseline.js).
   const appDirAbs = path.resolve(opts.appDir || '.');
-  const readContent = (relPath) => {
-    try {
-      const abs = path.resolve(appDirAbs, relPath);
-      const rel = path.relative(appDirAbs, abs);
-      if (rel === '..' || rel.startsWith('..' + path.sep) || path.isAbsolute(rel)) return null;
-      return fs.readFileSync(abs);
-    } catch { return null; }
-  };
+  const readContent = confinedReader(appDirAbs);
+  // The environment and app a baseline must describe to count (see deployed-baseline.js).
+  const baselineIdentity = { environment: dataverseOrigin(env), appUniqueName: appUniqueName(spec) };
+  // AB#6726727: the same snapshot is the sitemap rewrite's baseline. Read BEFORE the apply, which
+  // replaces it on success; a missing or mismatched one just means the spec wins and the build says so.
+  if (opts.apply) opts.baselineSpec = readBaseline(workspaceDir, baselineIdentity) || undefined;
   if (!opts.apply) {
     try {
       if (fs.existsSync(lastAppliedPath)) {
@@ -677,20 +1222,32 @@ async function main() {
   }
   let r;
   try {
-    // deps.verify (R3): the real reconcile, wired to the live provision SDK. Only invoked when
+    // deps.verify: the real reconcile, wired to the live provision SDK. Only invoked when
     // opts.verify AND the build applied successfully. Constructed here (not in buildModelApp) so the
     // core stays free of SDK-reader wiring and fully injectable for tests.
     const deps = {
       log: (m) => process.stderr.write(m + '\n'),
       warn: (m) => process.stderr.write(`⚠ ${m}\n`),
-      sdk, provisionSdk, journal,
+      sdk, provisionSdk, journal, throttle,
       // The role-privileges check must actually RUN here. verify-spec skips it unless BOTH
       // `rolePrivileges` and `entityPrivileges` readers are present, and `entityPrivileges` used to
       // need the raw client plus the org URL — omitting them degraded silently, so `--apply --verify`
       // reported a clean PASS having never checked what any persona's role grants. Caught live:
       // standalone verify ran 10 checks against the same app where the build's inline verify ran 8.
       // The reader now takes its privilege read off the SDK, so there is nothing left to forget.
-      verify: (s, verifyOpts) => verifySpec(s, readerFor(provisionSdk, appUniqueName(s), { genpageCli: makeGenpageCli(env), workspaceDir }), verifyOpts),
+      verify: async (s, verifyOpts) => {
+        // The page reads go through a backend of their own, in a throwaway workspace — not the app folder's `.maker-workspace`, which
+        // would be left holding a copy of every page read — removed as soon as this verify ends.
+        const genpage = makeGenpageSdk(env, { throttle });
+        try {
+          return await verifySpec(s, readerFor(provisionSdk, appUniqueName(s), { genpage, workspaceDir, isolatedReader }), verifyOpts);
+        } finally {
+          // Awaited: a read the pass gave up on can still be running, and the workspace is removed only once the storage calls it had under way have settled. A folder it could not
+          // remove holds page source, so it is a warning: the verify result is not changed by it.
+          const leftOnDisk = leftOnDiskWarning(await genpage.dispose());
+          if (leftOnDisk) deps.warn(leftOnDisk);
+        }
+      },
       // The set of LCIDs this organization actually has. Injected so the pure lib stays free of
       // transport, and only consulted for an EXPLICIT `--language-code` / spec `languageCode`.
       provisionedLanguages: () => readProvisionedLanguages(env),
@@ -732,23 +1289,9 @@ async function main() {
   } finally {
     cleanup();
   }
-  // #3: after a clean apply, persist the applied spec so the NEXT dry-run can diff against it and show
-  // what changed. Only on a real, successful, FULL apply, OR a changed-only fast apply (whose deployed
-  // state matches the spec: unchanged artifacts persist idempotently and the changed pages were just
-  // re-uploaded). A partial --stage data apply is NOT the whole desired state, so it must not overwrite
-  // the snapshot. Gated on EFFECTIVE success (verify passed) — a build that applied but whose auto-verify
-  // found a silent partial must NOT record its spec as the deployed baseline (Sol #13). Best-effort.
-  const fullPhaseApply = (opts.phases || PHASES).length === PHASES.length;
-  const changedOnlyApplied = !!(r && r.changedOnly && (r.changedOnly.decision === 'fast' || r.changedOnly.decision === 'full'));
-  const effectiveSuccess = r.ok && (!r.verify || r.verify.ok);
-  if (effectiveSuccess && opts.apply && !r.dryRun && (fullPhaseApply || changedOnlyApplied)) {
-    // Persist the applied spec ANNOTATED with on-disk content hashes (#2) so the next dry-run's diff can
-    // detect a .tsx / contentPath byte edit, not just a spec-JSON change. Records the content that was
-    // actually deployed by THIS apply.
-    try { fs.writeFileSync(lastAppliedPath, JSON.stringify(annotateContentHashes(spec, readContent))); } catch { /* non-fatal */ }
-  }
+  persistAppliedBaseline(r, { spec, opts, workspaceDir, appDirAbs, baselineIdentity });
   // emitResult() calls process.exit(), so emit AFTER cleanup() has run. A build that applied cleanly
-  // but whose auto-verify found missing artifacts exits NON-ZERO (the silent-partial signal R3 exists
+  // but whose auto-verify found missing artifacts exits NON-ZERO (the silent-partial signal auto-verify exists
   // to raise), while r still carries the full build + verify detail.
   const ok = r.ok && (!r.verify || r.verify.ok);
   emitResult(ok, r);
@@ -757,4 +1300,4 @@ async function main() {
 if (require.main === module) {
   main().catch((err) => emitResult(false, err));
 }
-module.exports = { buildModelApp, planFor, isTransientHalt, checkCollisions, discoverOpDiffState, envTruthy, parseLanguageCode, assertSnapshotInvalidated };
+module.exports = { buildModelApp, planFor, isTransientHalt, checkCollisions, discoverOpDiffState, envTruthy, parseLanguageCode, assertSnapshotInvalidated, persistAppliedBaseline };

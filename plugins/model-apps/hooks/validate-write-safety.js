@@ -46,6 +46,9 @@ if (process.env.MODEL_APPS_DISABLE_HOOKS === '1' || process.env.MODEL_APPS_DISAB
   process.exit(0);
 }
 
+const { readUtf8Stream } = require('../scripts/lib/utf8-stream.js');
+const { makeWritesBlocking } = require('../scripts/lib/output-redaction.js');
+
 function debug(msg) {
   if (DEBUG) process.stderr.write(`[write-safety] ${msg}\n`);
 }
@@ -53,6 +56,7 @@ function debug(msg) {
 // Non-blocking warning. Exit 1 (not 2) so Claude Code shows this on stderr to the
 // USER and still lets the write through — the guard flags, it does not block.
 function warn(userMsg) {
+  makeWritesBlocking(process.stdout, process.stderr);
   process.stderr.write(`[model-apps] ${userMsg}\n`);
   process.exit(1);
 }
@@ -132,9 +136,7 @@ function extractWritePaths(toolName, toolInput) {
   return [];
 }
 
-let inputData = '';
-process.stdin.on('data', (c) => { inputData += c; });
-process.stdin.on('end', () => {
+readUtf8Stream(process.stdin).then((inputData) => {
   if (SKIP) {
     debug('MODEL_APPS_SKIP_WRITE_GUARD=1 — bypassing');
     process.exit(0);
@@ -144,6 +146,7 @@ process.stdin.on('end', () => {
   try {
     input = JSON.parse(inputData);
   } catch (err) {
+    makeWritesBlocking(process.stdout, process.stderr);
     debug(`stdin parse failed: ${err.message}`);
     process.exit(0); // never block on hook-side bugs
   }
@@ -174,6 +177,11 @@ process.stdin.on('end', () => {
     }
   }
 
+  makeWritesBlocking(process.stdout, process.stderr);
   debug(`OK ${toolName} ${extractWritePaths(toolName, toolInput).join(',')}`);
+  process.exit(0);
+}).catch((err) => {
+  makeWritesBlocking(process.stdout, process.stderr);
+  debug(`stdin read failed: ${err.message}`);
   process.exit(0);
 });

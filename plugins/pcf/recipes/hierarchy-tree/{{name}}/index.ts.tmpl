@@ -1,0 +1,509 @@
+import { IInputs, IOutputs } from "./generated/ManifestTypes";
+import { openRecord } from "./navigation";
+import "./css/{{name}}.css";
+
+type DataSet = ComponentFramework.PropertyTypes.DataSet;
+type DataSetRecord = ComponentFramework.PropertyHelper.DataSetApi.EntityRecord;
+
+const DATA_SET_NAME = "sampleDataSet";
+const PRIMARY_NAME_COLUMN = "primaryName";
+const PARENT_RECORD_COLUMN = "parentRecord";
+const HIERARCHY_TREE_LOAD_LIMIT = 500;
+
+interface TreeNode {
+    id: string;
+    normalizedId: string;
+    record: DataSetRecord;
+    label: string;
+    parentId: string | null;
+    parentLabel: string;
+    children: TreeNode[];
+    cycle: boolean;
+}
+
+interface TreeModel {
+    roots: TreeNode[];
+    orphaned: TreeNode[];
+    warnings: string[];
+    partial: boolean;
+    truncated: boolean;
+}
+
+interface VisibleTreeItem {
+    key: string;
+    parentKey: string | null;
+    node: TreeNode | null;
+    hasChildren: boolean;
+    expanded: boolean;
+}
+
+export class {{name}} implements ComponentFramework.StandardControl<IInputs, IOutputs> {
+    private root: HTMLDivElement | null = null;
+    private message: HTMLDivElement | null = null;
+    private treeHost: HTMLDivElement | null = null;
+    private previousButton: HTMLButtonElement | null = null;
+    private nextButton: HTMLButtonElement | null = null;
+    private context: ComponentFramework.Context<IInputs> | null = null;
+    private dataSet: DataSet | null = null;
+    private pagingRequestPending = false;
+    private expanded = new Set<string>();
+    private initializedExpansion = new Set<string>();
+    private visibleItems: VisibleTreeItem[] = [];
+    private focusedItemKey: string | null = null;
+    private focusAfterRender = false;
+
+    public init(
+        context: ComponentFramework.Context<IInputs>,
+        _notifyOutputChanged: () => void,
+        _state: ComponentFramework.Dictionary,
+        container: HTMLDivElement,
+    ): void {
+        this.context = context;
+
+        this.root = document.createElement("div");
+        this.root.className = "{{cssClass}}";
+
+        this.message = document.createElement("div");
+        this.message.className = "{{cssMessageClass}}";
+        this.message.setAttribute("aria-live", "polite");
+
+        this.treeHost = document.createElement("div");
+        this.treeHost.className = "{{nameLower}}-tree-host";
+
+        const pager = document.createElement("div");
+        pager.className = "{{nameLower}}-pager";
+        this.previousButton = document.createElement("button");
+        this.previousButton.type = "button";
+        this.previousButton.textContent = this.stringResource("Previous_Page_Key", "Previous");
+        this.previousButton.addEventListener("click", this.loadPreviousPage);
+        this.nextButton = document.createElement("button");
+        this.nextButton.type = "button";
+        this.nextButton.textContent = this.stringResource("Next_Page_Key", "Next");
+        this.nextButton.addEventListener("click", this.loadNextPage);
+        pager.append(this.previousButton, this.nextButton);
+
+        this.root.append(this.message, this.treeHost, pager);
+        container.append(this.root);
+        this.updateView(context);
+    }
+
+    public updateView(context: ComponentFramework.Context<IInputs>): void {
+        this.context = context;
+        this.dataSet = context.parameters[DATA_SET_NAME] as DataSet | undefined || null;
+        // Paging guarantees a completion update, not an intermediate loading update.
+        // See: https://learn.microsoft.com/en-us/power-apps/developer/component-framework/reference/paging
+        if (this.pagingRequestPending && (this.dataSet?.loading !== true || this.dataSet?.error === true)) {
+            this.clearPagingRequest();
+        }
+        this.render();
+    }
+
+    public getOutputs(): IOutputs {
+        return {};
+    }
+
+    public destroy(): void {
+        this.previousButton?.removeEventListener("click", this.loadPreviousPage);
+        this.nextButton?.removeEventListener("click", this.loadNextPage);
+        this.root?.remove();
+        this.root = null;
+        this.message = null;
+        this.treeHost = null;
+        this.previousButton = null;
+        this.nextButton = null;
+        this.context = null;
+        this.dataSet = null;
+        this.pagingRequestPending = false;
+        this.expanded.clear();
+        this.initializedExpansion.clear();
+    }
+
+    private readonly loadNextPage = (): void => {
+        this.requestPage("next");
+    };
+
+    private readonly loadPreviousPage = (): void => {
+        this.requestPage("previous");
+    };
+
+    private requestPage(direction: "next" | "previous"): void {
+        if (!this.dataSet || this.pagingRequestPending || this.dataSet.loading === true) return;
+        const paging = this.dataSet.paging;
+        const canLoad = direction === "next" ? paging.hasNextPage : paging.hasPreviousPage;
+        if (!canLoad) return;
+
+        // Paging methods return void; completion is delivered by a later updateView after the
+        // framework finishes loading the page, so the lock cannot be released on a microtask.
+        // See: https://learn.microsoft.com/en-us/power-apps/developer/component-framework/reference/paging
+        this.pagingRequestPending = true;
+        try {
+            if (direction === "next") paging.loadNextPage();
+            else paging.loadPreviousPage();
+        } catch (error) {
+            this.clearPagingRequest();
+            throw error;
+        }
+        this.render();
+    }
+
+    private clearPagingRequest(): void {
+        this.pagingRequestPending = false;
+    }
+
+    private render(): void {
+        if (!this.treeHost || !this.message || !this.previousButton || !this.nextButton) return;
+        const restoreFocus = this.focusAfterRender || this.treeHost.contains(document.activeElement);
+        this.focusAfterRender = false;
+        this.visibleItems = [];
+        this.treeHost.replaceChildren();
+        const dataSet = this.dataSet;
+
+        if (!dataSet) {
+            this.showMessage(this.stringResource("Missing_Dataset_Key", "No dataset parameter was provided."));
+            this.updatePaging(null);
+            return;
+        }
+        if (dataSet.loading) {
+            this.showMessage(this.stringResource("Loading_Key", "Loading records..."));
+            this.updatePaging(dataSet);
+            return;
+        }
+        if (dataSet.error) {
+            this.showMessage(String(dataSet.errorMessage || this.stringResource("Dataset_Error_Key", "The dataset could not be loaded.")));
+            this.updatePaging(dataSet);
+            return;
+        }
+
+        const model = this.buildTreeModel(dataSet);
+        if (model.roots.length === 0 && model.orphaned.length === 0) {
+            this.showMessage(this.stringResource("Empty_Key", "No records to show."));
+            this.updatePaging(dataSet);
+            return;
+        }
+
+        const notices = [...model.warnings];
+        if (model.partial) notices.push(this.partialTreeMessage(model.truncated));
+        this.showMessage(notices.join(" "));
+        this.message.hidden = notices.length === 0;
+
+        const tree = document.createElement("ul");
+        tree.className = "{{nameLower}}-tree";
+        tree.setAttribute("role", "tree");
+        tree.setAttribute("aria-label", this.stringResource("Tree_Label_Key", "Hierarchy tree"));
+        for (const node of model.roots) tree.append(this.renderNode(node, 1, null));
+        if (model.orphaned.length) tree.append(this.renderParentNotLoadedGroup(model.orphaned));
+        this.treeHost.append(tree);
+        this.ensureFocusedItem();
+        this.applyRovingTabIndex(restoreFocus);
+        this.updatePaging(dataSet);
+    }
+
+    private buildTreeModel(dataSet: DataSet): TreeModel {
+        const limitedIds = dataSet.sortedRecordIds.slice(0, HIERARCHY_TREE_LOAD_LIMIT);
+        const idByNormalized = new Map<string, string>();
+        for (const id of limitedIds) idByNormalized.set(this.normalizeId(id), id);
+
+        const nodes = new Map<string, TreeNode>();
+        for (const id of limitedIds) {
+            const record = dataSet.records[id];
+            if (!record) continue;
+            const normalizedId = this.normalizeId(id);
+            const parentRef = this.parentReference(record);
+            nodes.set(normalizedId, {
+                id,
+                normalizedId,
+                record,
+                label: this.recordLabel(record, id),
+                parentId: parentRef.id,
+                parentLabel: parentRef.name,
+                children: [],
+                cycle: false,
+            });
+        }
+
+        const cycleIds = this.detectCycles(nodes);
+        const roots: TreeNode[] = [];
+        const orphaned: TreeNode[] = [];
+        for (const node of nodes.values()) {
+            node.cycle = cycleIds.has(node.normalizedId);
+            const parentNode = node.parentId ? nodes.get(node.parentId) : undefined;
+            if (node.cycle) {
+                roots.push(node);
+            } else if (parentNode && !parentNode.cycle) {
+                parentNode.children.push(node);
+            } else if (node.parentId && !idByNormalized.has(node.parentId)) {
+                orphaned.push(node);
+            } else {
+                roots.push(node);
+            }
+        }
+
+        return {
+            roots,
+            orphaned,
+            warnings: cycleIds.size ? [this.stringResource("Cycle_Warning_Key", "Cycle detected. Some parent links were not shown.")] : [],
+            partial: dataSet.paging.hasNextPage || dataSet.paging.hasPreviousPage || orphaned.length > 0 || dataSet.sortedRecordIds.length > limitedIds.length,
+            truncated: dataSet.sortedRecordIds.length > limitedIds.length,
+        };
+    }
+
+    private detectCycles(nodes: Map<string, TreeNode>): Set<string> {
+        const cycleIds = new Set<string>();
+        for (const node of nodes.values()) {
+            const path: string[] = [];
+            const seenAt = new Map<string, number>();
+            let current: TreeNode | undefined = node;
+            while (current) {
+                const seen = seenAt.get(current.normalizedId);
+                if (seen !== undefined) {
+                    for (const id of path.slice(seen)) cycleIds.add(id);
+                    break;
+                }
+                seenAt.set(current.normalizedId, path.length);
+                path.push(current.normalizedId);
+                current = current.parentId ? nodes.get(current.parentId) : undefined;
+            }
+        }
+        return cycleIds;
+    }
+
+    private renderParentNotLoadedGroup(children: TreeNode[]): HTMLLIElement {
+        const key = "synthetic:parent-not-loaded";
+        const item = document.createElement("li");
+        item.className = "{{nameLower}}-tree-item {{nameLower}}-parent-not-loaded";
+        item.setAttribute("role", "treeitem");
+        item.setAttribute("aria-level", "1");
+        item.setAttribute("aria-expanded", "true");
+        item.dataset.treeKey = key;
+        this.visibleItems.push({ key, parentKey: null, node: null, hasChildren: children.length > 0, expanded: true });
+        item.addEventListener("keydown", (event) => this.onTreeItemKeyDown(event, key));
+        const row = document.createElement("div");
+        row.className = "{{nameLower}}-node-row";
+        const label = document.createElement("span");
+        label.className = "{{nameLower}}-node-label";
+        label.textContent = this.stringResource("Parent_Not_Loaded_Key", "Parent not loaded");
+        row.append(label);
+        const group = document.createElement("ul");
+        group.setAttribute("role", "group");
+        for (const child of children) group.append(this.renderNode(child, 2, key));
+        item.append(row, group);
+        return item;
+    }
+
+    private renderNode(node: TreeNode, level: number, parentKey: string | null): HTMLLIElement {
+        this.ensureExpansion(node);
+        const hasChildren = node.children.length > 0;
+        const expanded = hasChildren && this.expanded.has(node.normalizedId);
+        const key = this.recordKey(node);
+        const item = document.createElement("li");
+        item.className = "{{nameLower}}-tree-item";
+        item.setAttribute("role", "treeitem");
+        item.setAttribute("aria-level", String(level));
+        if (hasChildren) item.setAttribute("aria-expanded", String(expanded));
+        item.dataset.treeKey = key;
+        // Roving tabindex follows the WAI-ARIA tree pattern: only one visible treeitem is in the
+        // tab order, while arrow keys move focus within the tree.
+        // See: https://www.w3.org/WAI/ARIA/apg/patterns/treeview/
+        this.visibleItems.push({ key, parentKey, node, hasChildren, expanded });
+        item.addEventListener("keydown", (event) => this.onTreeItemKeyDown(event, key));
+
+        const row = document.createElement("div");
+        row.className = "{{nameLower}}-node-row";
+        if (hasChildren) {
+            const toggle = document.createElement("button");
+            toggle.type = "button";
+            toggle.className = "{{nameLower}}-toggle";
+            toggle.tabIndex = -1;
+            toggle.setAttribute("aria-label", expanded
+                ? this.format(this.stringResource("Collapse_Label_Key", "Collapse {0}"), node.label)
+                : this.format(this.stringResource("Expand_Label_Key", "Expand {0}"), node.label));
+            toggle.addEventListener("click", () => this.toggle(node));
+            row.append(toggle);
+        } else {
+            const spacer = document.createElement("span");
+            spacer.className = "{{nameLower}}-toggle-spacer";
+            row.append(spacer);
+        }
+
+        const label = document.createElement("span");
+        label.className = "{{nameLower}}-node-label";
+        label.textContent = node.label;
+        row.append(label);
+
+        const open = document.createElement("button");
+        open.type = "button";
+        open.className = "{{nameLower}}-open";
+        open.tabIndex = -1;
+        open.textContent = this.stringResource("Open_Button_Key", "Open");
+        open.setAttribute("aria-label", this.format(this.stringResource("Open_Record_Label_Key", "Open {0}"), node.label));
+        open.addEventListener("click", () => openRecord(this.dataSet, node.record));
+        row.append(open);
+        item.append(row);
+
+        if (hasChildren && expanded) {
+            const group = document.createElement("ul");
+            group.setAttribute("role", "group");
+            for (const child of node.children) group.append(this.renderNode(child, level + 1, key));
+            item.append(group);
+        }
+        return item;
+    }
+
+    private onTreeItemKeyDown(event: KeyboardEvent, key: string): void {
+        const item = this.visibleItems.find((candidate) => candidate.key === key);
+        if (!item) return;
+        const index = this.visibleItems.findIndex((candidate) => candidate.key === key);
+
+        if (event.key === "ArrowDown") {
+            this.focusVisibleItem(Math.min(index + 1, this.visibleItems.length - 1));
+            event.preventDefault();
+        } else if (event.key === "ArrowUp") {
+            this.focusVisibleItem(Math.max(index - 1, 0));
+            event.preventDefault();
+        } else if (event.key === "Home") {
+            this.focusVisibleItem(0);
+            event.preventDefault();
+        } else if (event.key === "End") {
+            this.focusVisibleItem(this.visibleItems.length - 1);
+            event.preventDefault();
+        } else if (event.key === "ArrowRight") {
+            if (this.isRTL()) this.moveLeft(item);
+            else this.moveRight(item, index);
+            event.preventDefault();
+        } else if (event.key === "ArrowLeft") {
+            if (this.isRTL()) this.moveRight(item, index);
+            else this.moveLeft(item);
+            event.preventDefault();
+        } else if (event.key === "Enter" && item.node) {
+            openRecord(this.dataSet, item.node.record);
+            event.preventDefault();
+        } else {
+            return;
+        }
+        event.stopPropagation();
+    }
+
+    private isRTL(): boolean {
+        return this.context?.userSettings?.isRTL ?? false;
+    }
+
+    private moveRight(item: VisibleTreeItem, index: number): void {
+        if (!item.hasChildren) return;
+        if (!item.expanded && item.node) {
+            this.expanded.add(item.node.normalizedId);
+            this.focusedItemKey = item.key;
+            this.focusAfterRender = true;
+            this.render();
+            return;
+        }
+        const next = this.visibleItems[index + 1];
+        if (next && next.parentKey === item.key) this.focusItem(next.key);
+    }
+
+    private moveLeft(item: VisibleTreeItem): void {
+        if (item.hasChildren && item.expanded && item.node) {
+            this.expanded.delete(item.node.normalizedId);
+            this.focusedItemKey = item.key;
+            this.focusAfterRender = true;
+            this.render();
+        } else if (item.parentKey) {
+            this.focusItem(item.parentKey);
+        }
+    }
+
+    private toggle(node: TreeNode): void {
+        if (this.expanded.has(node.normalizedId)) this.expanded.delete(node.normalizedId);
+        else this.expanded.add(node.normalizedId);
+        this.focusedItemKey = this.recordKey(node);
+        this.focusAfterRender = true;
+        this.render();
+    }
+
+    private focusVisibleItem(index: number): void {
+        const item = this.visibleItems[index];
+        if (item) this.focusItem(item.key);
+    }
+
+    private focusItem(key: string): void {
+        this.focusedItemKey = key;
+        this.applyRovingTabIndex(true);
+    }
+
+    private ensureFocusedItem(): void {
+        if (!this.visibleItems.length) {
+            this.focusedItemKey = null;
+            return;
+        }
+        if (!this.focusedItemKey || !this.visibleItems.some((item) => item.key === this.focusedItemKey)) {
+            this.focusedItemKey = this.visibleItems[0].key;
+        }
+    }
+
+    private applyRovingTabIndex(focusCurrent: boolean): void {
+        if (!this.treeHost || !this.focusedItemKey) return;
+        const items = Array.from(this.treeHost.querySelectorAll<HTMLElement>('[role="treeitem"]'));
+        for (const item of items) item.tabIndex = item.dataset.treeKey === this.focusedItemKey ? 0 : -1;
+        if (focusCurrent) {
+            items.find((item) => item.dataset.treeKey === this.focusedItemKey)?.focus();
+        }
+    }
+
+    private ensureExpansion(node: TreeNode): void {
+        if (this.initializedExpansion.has(node.normalizedId)) return;
+        this.initializedExpansion.add(node.normalizedId);
+        this.expanded.add(node.normalizedId);
+    }
+
+    private recordKey(node: TreeNode): string {
+        return `record:${node.normalizedId}`;
+    }
+
+    private parentReference(record: DataSetRecord): { id: string | null; name: string } {
+        const raw = record.getValue(PARENT_RECORD_COLUMN) as unknown;
+        const formatted = record.getFormattedValue(PARENT_RECORD_COLUMN) || "";
+        const candidate = Array.isArray(raw) ? raw[0] : raw;
+        if (!candidate) return { id: null, name: formatted };
+        if (typeof candidate === "string") return { id: this.normalizeId(candidate), name: formatted || candidate };
+        if (typeof candidate === "object") {
+            const lookup = candidate as { id?: unknown; guid?: unknown; name?: unknown; entityType?: unknown };
+            const id = typeof lookup.id === "string" ? lookup.id : typeof lookup.guid === "string" ? lookup.guid : "";
+            if (id) return { id: this.normalizeId(id), name: typeof lookup.name === "string" && lookup.name ? lookup.name : formatted || id };
+        }
+        return { id: null, name: formatted };
+    }
+
+    private recordLabel(record: DataSetRecord, fallback: string): string {
+        return record.getFormattedValue(PRIMARY_NAME_COLUMN) || String(record.getValue(PRIMARY_NAME_COLUMN) ?? fallback);
+    }
+
+    private partialTreeMessage(truncated: boolean): string {
+        const template = truncated
+            ? this.stringResource("Partial_Tree_Limit_Key", "Partial tree shown. This control renders up to {0} records from the loaded page; use paging to inspect the rest.")
+            : this.stringResource("Partial_Tree_Key", "Partial tree shown. Some related records may be on another page or unavailable.");
+        return this.format(template, String(HIERARCHY_TREE_LOAD_LIMIT));
+    }
+
+    private showMessage(text: string): void {
+        if (!this.message) return;
+        this.message.hidden = !text;
+        this.message.textContent = text;
+    }
+
+    private updatePaging(dataSet: DataSet | null): void {
+        const busy = this.pagingRequestPending || dataSet?.loading === true;
+        if (this.previousButton) this.previousButton.disabled = busy || !dataSet?.paging.hasPreviousPage;
+        if (this.nextButton) this.nextButton.disabled = busy || !dataSet?.paging.hasNextPage;
+    }
+
+    private normalizeId(value: string): string {
+        return value.replace(/[{}]/g, "").toLowerCase();
+    }
+
+    private stringResource(key: string, fallback: string): string {
+        return this.context?.resources?.getString(key) || fallback;
+    }
+
+    private format(template: string, value: string): string {
+        return template.replace("{0}", value);
+    }
+}

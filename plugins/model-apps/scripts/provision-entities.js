@@ -5,14 +5,15 @@
 //
 // Usage:
 //   node provision-entities.js --env <orgUrl> --input @<path> [--apply] [--sample-data] [--language-code|--languageCode <lcid>]
-const os = require('node:os');
 const fs = require('node:fs');
 const path = require('node:path');
 const { validateProvisionInput } = require('./lib/provision-input.js');
-const { makeRunner, provisionSolution, provisionDataModel, provisionSampleData } = require('./lib/entity-provision.js');
-const { quickCreateEnabledFor, normalizeLanguageCode } = require('./lib/app-spec.js');
+const { makeRunner, provisionSolution, provisionDataModel, provisionSampleData, relationshipsInCreateOrder } = require('./lib/entity-provision.js');
+const { quickCreateEnabledFor, normalizeLanguageCode, askedPrimaryNameLength, keyWaitsForNameLength } = require('./lib/app-spec.js');
 const { createAzHttpClient } = require('./lib/sdk-http-client.js');
 const { parseArgs, validateFlags, readAliasedFlag, readJsonArg, emitResult, readProvisionedLanguages } = require('./lib/dataverse-auth.js');
+const { makeTempWorkspace } = require('./lib/temp-workspace.js');
+const { makeWritesBlocking } = require('./lib/output-redaction.js');
 
 // Construct the SDK against the vendored bundle + an az-token HttpClient. Two clients:
 //   sdk          — carries solutionUniqueName (metadata + record writes auto-join the
@@ -20,10 +21,10 @@ const { parseArgs, validateFlags, readAliasedFlag, readJsonArg, emitResult, read
 //   provision    — header-less; used for discovery reads (findTables/findColumns/
 //                  fetchEntityMetadata/queryRecords).
 async function makeSdk(env, input) {
-  const { createMakerSdk, createNodeWorkspaceStorage } = require('./vendor/cds-maker-sdk.cjs');
+  const { createMakerSdk, createNodeWorkspaceStorage } = require('./lib/maker-sdk.js');
   const httpClient = createAzHttpClient(env);
-  const sdkTempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'provision-'));
-  const provisionTempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'provision-'));
+  const sdkTempDir = makeTempWorkspace('provision-');
+  const provisionTempDir = makeTempWorkspace('provision-');
   const cleanup = () => {
     fs.rmSync(sdkTempDir, { recursive: true, force: true });
     fs.rmSync(provisionTempDir, { recursive: true, force: true });
@@ -63,6 +64,9 @@ function computeTotal(input, opts) {
   // entities + columns + status reasons + alternate keys
   for (const e of input.entities || []) {
     total += 1; // table
+    // primary name column length step — MUST match provisionDataModel's condition (entity-provision.js) and buildPlan below:
+    // one narrated step (run, or skipped with the reason) whenever the input gives the name column a length.
+    if (askedPrimaryNameLength(e) !== undefined) total += 1;
     // quick-create enable step — MUST match provisionDataModel's condition (entity-provision.js) and
     // buildPlan below, or [n/total] drifts. This CLI's input has no forms[], so quickCreateEnabledFor
     // fires only on an explicit entities[].quickCreate === true.
@@ -108,11 +112,13 @@ function buildPlan(input, opts) {
       plan.push(`status reason ${e.schemaName}: ${sr.label}`);
     }
     for (const k of e.alternateKeys || []) {
-      plan.push(`alt key ${e.schemaName}.${k.schemaName}`);
+      if (!keyWaitsForNameLength(e, k)) plan.push(`alt key ${e.schemaName}.${k.schemaName}`);
     }
   }
   
-  for (const rel of input.relationships || []) {
+  // In the order the apply creates them — a lookup labelled in several languages goes first — so the plan lists
+  // the steps in the order the run takes them (lib/entity-provision.js relationshipsInCreateOrder).
+  for (const rel of relationshipsInCreateOrder(input)) {
     if (rel.type === 'OneToMany') {
       plan.push(`relationship 1:N ${rel.referenced}->${rel.referencing}`);
     } else if (rel.type === 'ManyToMany') {
@@ -120,6 +126,20 @@ function buildPlan(input, opts) {
     }
   }
   
+  // After the relationships: where provisionDataModel sets the length of a table it creates (computeTotal counts the step too).
+  for (const e of input.entities || []) {
+    if (askedPrimaryNameLength(e) !== undefined) plan.push(`primary column length ${e.schemaName}.${e.primaryAttribute.schemaName}`);
+  }
+  // Then the alternate keys over a name column whose length is set: the apply makes such a key once that length is right
+  // (keyWaitsForNameLength, which depends on what the key's label is sent as and not on the language), where a table it creates has it.
+  // A key labelled in several languages that the environment made the name column too long to fit beside is made there too, which only the
+  // environment can say, so the plan lists it with its table and the apply makes it after the length step. computeTotal counts them with the other keys.
+  for (const e of input.entities || []) {
+    for (const k of e.alternateKeys || []) {
+      if (keyWaitsForNameLength(e, k)) plan.push(`alt key ${e.schemaName}.${k.schemaName}`);
+    }
+  }
+
   if (opts.sampleData && input.sampleData) {
     for (const [entityKey, records] of Object.entries(input.sampleData)) {
       if (Array.isArray(records) && records.length > 0) {
@@ -301,6 +321,7 @@ async function main() {
     needValue: ['env', 'input', 'language-code', 'languageCode'],
   });
   if (flagError) {
+    makeWritesBlocking(process.stdout, process.stderr);
     process.stderr.write(`✗ ${flagError}\n${USAGE}\n`);
     process.exit(1);
   }
@@ -320,6 +341,7 @@ async function main() {
   if (rawLang !== undefined) {
     languageCode = normalizeLanguageCode(rawLang);
     if (languageCode === null) {
+      makeWritesBlocking(process.stdout, process.stderr);
       process.stderr.write(`✗ --language-code / --languageCode must be digits only, a positive integer LCID up to 65535 (got '${rawLang}')\n`);
       process.exit(1);
     }

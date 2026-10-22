@@ -29,6 +29,7 @@ For already-registered flows, the skill skips metadata and role creation and goe
 - **Web roles drive access**: Every flow must have at least one web role. Anonymous Users role is valid but must be confirmed.
 - **Scenario determines roles**: Understand what each flow does and who triggers it before picking roles.
 - **Use TaskCreate/TaskUpdate**: Track all phases upfront before starting any work.
+- **Preserve site integrity**: Before wiring a flow into a page or component, read `${PLUGIN_ROOT}/references/site-modification-integrity.md`; localize every new visible state when configured and keep the UI bidirectional and expansion-safe.
 
 > **Prerequisites:**
 > - An existing Power Pages code site with `.powerpages-site` deployed
@@ -586,6 +587,18 @@ Read the service file created in Phase 7 and verify:
 - [ ] At least one UI component or page imports and calls the trigger function(s)
 
 If any check fails, fix the issue in the service file or UI before continuing.
+
+### 8.1c Final site-integrity gate
+
+After all cloud-flow UI integration and skill-specific verification are complete, run:
+
+```bash
+node "${PLUGIN_ROOT}/scripts/validate-site-integrity.js" --projectRoot "<PROJECT_ROOT>"
+```
+
+Fix every blocking error before presenting completion or asking to deploy. Inspect and report
+review findings in both directions and with expanded content. Rerun this gate after any later
+source change.
 
 ### 8.2 Record Skill Usage
 

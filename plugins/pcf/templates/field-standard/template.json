@@ -1,0 +1,9 @@
+{
+  "id": "field-standard",
+  "kind": "field",
+  "controlType": "standard",
+  "dependencySet": "standard",
+  "hosts": ["model", "pages"],
+  "title": "Standard field control",
+  "description": "A standard PCF field control for model-driven apps and Power Pages."
+}

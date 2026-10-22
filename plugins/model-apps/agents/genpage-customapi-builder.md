@@ -6,6 +6,9 @@ description: >-
   entity-bound Actions/Functions) plus their declared request-parameter kinds, and produces
   the ## Custom API Bindings contract. Invoked only by the top-level genpage orchestrator from
   BOTH the create and edit flows; never invoked by planners or directly by users.
+  Works only on generative pages in a Power Apps model-driven app. Never use it for
+  a generic React or web app, or when the user rules out Power Platform, Dataverse,
+  or model-driven apps (for example "no Power Platform").
 color: green
 # Two naming schemes on purpose: Claude Code names first, then the portable
 # Copilot aliases for the same capabilities. Every host ignores tool names it
@@ -100,12 +103,12 @@ Write both of these into the working directory, then return a one-line summary:
    plan's `## Custom API Bindings` section. It is **either** the exact literal
    `No custom API bindings.` **or** the binding table described in Step 5. The caller splices
    this verbatim into `genpage-plan.md`.
-2. **`actions.json`** — the working-dir binding file for `pac model genpage upload --actions`.
+2. **`actions.json`** — the working-dir binding file for `genpage-upload.js --actions`.
    It is a **bare JSON array** of bindings (see `${PLUGIN_ROOT}/references/custom-api.md`), or
    `[]` when there are none. Never the `{ "actionBindings": [...] }` object wrapper — that is
-   the deployed page `config.json` shape, which `pac` writes. The file is named `actions.json`
-   because it matches the runtime wire contract (`actionBindings`) and the pac `--actions`
-   verb; see the "Vocabulary" note in `custom-api.md`.
+   the deployed page `config.json` shape, which the upload writes for you. The file is named
+   `actions.json` because it matches the runtime wire contract (`actionBindings`) and the
+   upload's `--actions` flag; see the "Vocabulary" note in `custom-api.md`.
 
 Log every command you run (with its purpose) into the working directory's `workflow-log.md`.
 
@@ -132,8 +135,8 @@ Record the result in `workflow-log.md` (e.g. `feature-flags.js custom-api → di
 Only when it prints `enabled` (exit 0) do you continue to Step 2. The flag lives in
 `plugins/model-apps/feature-flags.json`; it is flipped to `true` (or
 `GENPAGE_ENABLE_CUSTOM_API=1` for a single run) once the AIBuilder action prompt, the shared
-action runtime + UCI/Controls hosts, the pac `upload --actions` verb, and the
-`GenUxPluginActionAllowList` setting are all released.
+action runtime + UCI/Controls hosts, the `actionBindings` the upload writes into the page's
+`config.json`, and the `GenUxPluginActionAllowList` setting are all released.
 
 ## Step 2 — Discovery (enabled only)
 

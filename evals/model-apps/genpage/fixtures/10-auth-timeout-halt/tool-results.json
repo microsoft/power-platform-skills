@@ -1,0 +1,24 @@
+[
+  {
+    "id": "auth-first",
+    "command": "node scripts\\check-auth.js --env https://contoso.crm.dynamics.com --require-pac",
+    "result": {
+      "ok": false, "blocker": "az_timeout",
+      "message": "`az account show` did not answer within 60 s. Azure CLI can be slow on a busy machine; retry once, or set POWER_PLATFORM_SKILLS_AZ_TIMEOUT_MS=120000.",
+      "warnings": [], "azUser": null, "pacUser": "maker@contoso.com",
+      "envUrl": "https://contoso.crm.dynamics.com", "identitiesMatch": false, "whoAmI": null
+    },
+    "userMessage": "`az account show` did not answer within 60 s. Azure CLI can be slow on a busy machine; retry once, or set POWER_PLATFORM_SKILLS_AZ_TIMEOUT_MS=120000."
+  },
+  {
+    "id": "auth-retry",
+    "command": "node scripts\\check-auth.js --env https://contoso.crm.dynamics.com --require-pac",
+    "result": {
+      "ok": false, "blocker": "az_timeout",
+      "message": "`az account show` did not answer within 60 s. Azure CLI can be slow on a busy machine; retry once, or set POWER_PLATFORM_SKILLS_AZ_TIMEOUT_MS=120000.",
+      "warnings": [], "azUser": null, "pacUser": "maker@contoso.com",
+      "envUrl": "https://contoso.crm.dynamics.com", "identitiesMatch": false, "whoAmI": null
+    },
+    "userMessage": "`az account show` did not answer within 60 s. Azure CLI can be slow on a busy machine; retry once, or set POWER_PLATFORM_SKILLS_AZ_TIMEOUT_MS=120000."
+  }
+]

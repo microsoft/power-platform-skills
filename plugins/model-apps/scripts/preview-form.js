@@ -9,6 +9,7 @@ const path = require('node:path');
 const { renderForms } = require('./lib/form-preview.js');
 const { parseArgs, validateFlags, readJsonArg } = require('./lib/dataverse-auth.js');
 const { migrateAppSpec, validateAppSpec } = require('./lib/app-spec.js');
+const { makeWritesBlocking } = require('./lib/output-redaction.js');
 
 function main() {
   const argv = process.argv.slice(2);
@@ -16,6 +17,7 @@ function main() {
   const USAGE = 'Usage: node scripts/preview-form.js --spec @<app-folder>/app-spec.json [--entity <schemaName>]';
   const flagError = validateFlags(argv, { known: ['spec', 'entity'], needValue: ['spec', 'entity'] });
   if (flagError) {
+    makeWritesBlocking(process.stdout, process.stderr);
     process.stderr.write(`✗ ${flagError}\n${USAGE}\n`);
     process.exit(1);
   }
@@ -30,6 +32,7 @@ function main() {
   if (!validation.ok) {
     // Validate before rendering because the wireframe renderer intentionally assumes the App Spec
     // contract (for example forms[].entity); a clear validation error is better than a TypeError.
+    makeWritesBlocking(process.stdout, process.stderr);
     process.stderr.write(`Invalid App Spec:\n${validation.errors.map((e) => `  - ${e}`).join('\n')}\n`);
     process.exit(1);
   }

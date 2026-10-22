@@ -11,10 +11,11 @@
 // the user invokes /preview-offline-scope or /list-connections.
 //
 // Usage:
-//   node verify-offline-profile.js <envUrl> [--project-root <path>]
+//   node verify-offline-profile.js <envUrl> [--project-root <path>] [--tenant-id <id>]
 //
 //   <envUrl>           - Dataverse env URL (e.g. https://org123.crm.dynamics.com)
 //   --project-root     - Path containing offline-profile.json. Default: cwd.
+//   --tenant-id        - Resolved environment tenant; no ambient fallback when supplied.
 //
 // Output (single-line JSON to stdout):
 //   { "status": "ok", "profileId": "...", "checks": [ ... ] }
@@ -39,14 +40,24 @@ function parseArgs() {
   const out = {
     envUrl: argv[0].replace(/\/+$/, ''),
     projectRoot: process.cwd(),
+    tenantId: null,
   };
 
   for (let i = 1; i < argv.length; i++) {
     const flag = argv[i];
     const next = argv[i + 1];
     switch (flag) {
-      case '--project-root': out.projectRoot = next; i++; break;
-      default:               usage(`Unknown flag: ${flag}`);
+      case '--project-root':
+        if (!next || next.startsWith('--')) usage('--project-root requires a path');
+        out.projectRoot = next;
+        i++;
+        break;
+      case '--tenant-id':
+        if (!next || !next.trim() || next.startsWith('--')) usage('--tenant-id requires a value');
+        out.tenantId = next.trim();
+        i++;
+        break;
+      default: usage(`Unknown flag: ${flag}`);
     }
   }
 
@@ -55,7 +66,7 @@ function parseArgs() {
 
 function usage(msg) {
   process.stderr.write(`Error: ${msg}\n\n`);
-  process.stderr.write('Usage: node verify-offline-profile.js <envUrl> [--project-root <path>]\n');
+  process.stderr.write('Usage: node verify-offline-profile.js <envUrl> [--project-root <path>] [--tenant-id <id>]\n');
   process.exit(1);
 }
 
@@ -78,7 +89,7 @@ async function dvGet(envUrl, apiPath, token) {
 }
 
 async function main() {
-  const { envUrl, projectRoot } = parseArgs();
+  const { envUrl, projectRoot, tenantId } = parseArgs();
 
   // Load snapshot
   const snapshotPath = path.join(projectRoot, 'offline-profile.json');
@@ -101,7 +112,7 @@ async function main() {
     process.exit(1);
   }
 
-  const token = await getAuthToken(envUrl);
+  const token = await getAuthToken(envUrl, tenantId);
   if (!token) {
     console.log(JSON.stringify({
       status: 'error',
@@ -142,7 +153,7 @@ async function main() {
   checks.push({
     name: 'profile published',
     ok: profile.publishedon != null,
-    detail: profile.publishedon || 'publishedon is null — re-run PublishAllXml',
+    detail: profile.publishedon || 'publishedon is null — retry the approved targeted publication',
   });
   checks.push({
     name: 'profile is in published state',

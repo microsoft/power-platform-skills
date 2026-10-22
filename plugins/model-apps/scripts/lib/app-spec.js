@@ -2,7 +2,10 @@
 // the app-builder's LLM proposal and the deterministic builder.
 
 const path = require('node:path');
+const { isAppSourcePath } = require('./app-source-path.js');
 const { normalizeSpecShape } = require('./spec-shape.js');
+const { isMainForm, selectDefaultForm, ordersByHand } = require('./form-order.js');
+const { AUTO_TAB_NAME, AUTO_SECTION_NAME, placementOf, resolvePlacement } = require('./form-subgrid-placement.js');
 
 // URL scheme allowlist for spec-supplied URLs that the built app will RENDER (iframe dashboard tiles,
 // sitemap URL subareas). Only http(s) is allowed — a `javascript:`, `data:`, `vbscript:`, or `file:`
@@ -22,9 +25,18 @@ function isSafeHttpUrl(u) {
 // https://learn.microsoft.com/power-apps/developer/data-platform/reference/entities/systemform#type-choicesoptions
 const FORM_TYPE_CODE = { Main: 2, QuickView: 6, QuickCreate: 7, Card: 11 };
 
+// Later phases must address the same type-scoped identity as the forms phase, not whichever
+// same-named Main/QuickView sibling happened to be built last.
+function formIdentityKey(f) {
+  return `${String(f.entity).toLowerCase()}|${f.formType || 'Main'}|${f.name || ''}`;
+}
+
 // A canonical GUID (used to validate an author-pinned forms[].formId, which is interpolated UNQUOTED into
 // an Edm.Guid OData filter). Anchored so it can neither over-match nor be an injection seam.
 const FORM_GUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+// A page's model id (`pages[].model`), e.g. `gpt-4.1` or `claude-3-5-sonnet@20240620`: a short token, stored as the page's
+// `model` in its config.json. Shared with download, which carries only a model the spec can hold.
+const PAGE_MODEL_RE = /^[A-Za-z0-9][A-Za-z0-9._:/@+-]{0,99}$/;
 
 // Security-authoring enums (personas[]). These mirror the vendored SDK's security surface
 // (cds-maker-sdk src/types/security.ts) EXACTLY — the app-spec validator is a lint-time echo of the
@@ -33,7 +45,7 @@ const FORM_GUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{
 //   PrivilegeScope depth, least->most permissive (user->Basic … organization->Global)
 // Keep these in lockstep with the SDK; vendor-sdk-smoke asserts the vendored bundle still exposes them.
 const ACCESS_LEVELS = new Set(['read', 'create', 'write', 'delete', 'append', 'appendTo', 'assign', 'share']);
-const { AI_FEATURE_KEYS, AI_FEATURE_MAX_VALUE } = require('./ai-app-settings.js');
+const { AI_FEATURE_KEYS, AI_FEATURE_MAX_VALUE, AI_SETTING_CODEC } = require('./ai-app-settings.js');
 const PRIVILEGE_SCOPES = new Set(['user', 'businessUnit', 'parentChild', 'organization']);
 
 // The exact ownership marker the vendored SDK (cds-maker-sdk SecurityApi) stamps on the `description`
@@ -170,7 +182,9 @@ function choiceValueMap(entity, spec) {
   }
   const map = Object.create(null);
   for (const c of entity.columns || []) {
-    if (c.type !== 'Choice' && c.type !== 'MultiChoice') continue;
+    // A column with no string schemaName cannot be keyed; validateAppSpec reports it by name
+    // ("a column is missing schemaName") — this helper must not crash that report instead.
+    if (!c || (c.type !== 'Choice' && c.type !== 'MultiChoice') || typeof c.schemaName !== 'string') continue;
     let byLabel = null;
     if (Array.isArray(c.options) && c.options.length) {
       byLabel = indexOptions(c.options);
@@ -276,7 +290,8 @@ function resolveParentRelationship(spec, parentEntity, childEntity, wanted) {
 // auto-layout and default-view enrichment call this to surface the parent links (otherwise the
 // parent lookup is invisible on the form/grid). N:N relationships use an intersect table and place
 // no lookup column on either side, so they're excluded. Deduped by logical name; declared order
-// preserved. Returns [{ logical, displayName }].
+// preserved. Returns [{ logical, displayName, source, rel }] — `displayName` is the label the column
+// carries (see lookupLabelFor), `source` where it came from, and `rel` the relationship it belongs to.
 function lookupColumnsFor(spec, entityLogical) {
   const child = String(entityLogical || '').toLowerCase();
   const seen = new Set();
@@ -287,9 +302,115 @@ function lookupColumnsFor(spec, entityLogical) {
     const logical = String((r.lookup && r.lookup.schemaName) || '').toLowerCase();
     if (!logical || seen.has(logical)) continue;
     seen.add(logical);
-    out.push({ logical, displayName: labelText((r.lookup && r.lookup.displayName), spec && spec.languageCode) || (r.lookup && r.lookup.schemaName) || logical });
+    const { label, source } = lookupLabelFor(spec, r);
+    out.push({ logical, displayName: labelText(label, spec && spec.languageCode) || (r.lookup && r.lookup.schemaName) || logical, source, rel: r });
   }
   return out;
+}
+
+// --- 1:N lookup column labels (ADO 6691205) ------------------------------------------------------
+//
+// A relationship's lookup column is labelled by `relationships[].lookup.displayName`. When the author
+// omits it the label used to be whatever the SDK fell back to: the build passed `lookupDisplayName:
+// undefined` and the vendored SDK substitutes the REFERENCED table's LOGICAL name —
+//     DisplayName: label(opts.lookupDisplayName ?? opts.referencedEntity, lcid)      // "new_project"
+// — so the column read "new_project" where a maker expects "Project", and so did every form cell: the
+// SDK derives a bound control's label from the column's DisplayName when it pushes. The maker portal
+// does the opposite and labels a new lookup with the related table's display name.
+//
+// ONE rule serves every consumer — the build (what is sent), the form/preview/doc/eval surfaces (what
+// is shown) and the rebuild repair (what an old default becomes) — so none can disagree. In order:
+//   1. an explicit `lookup.displayName`, string or LCID map, kept as written ('explicit');
+//   2. the referenced table's own `displayName` when entities[] declares it, string or LCID map, kept
+//      as the map: the SDK serializes a map into one LocalizedLabel per language ('table');
+//   3. the display name the ENVIRONMENT reports for a parent whose name the spec cannot give: a table
+//      it does not declare — account, contact, systemuser… — or one it declares WITHOUT a displayName
+//      that the build does not create (see lookupParentNeedsEnvironment). Only a caller that read it can
+//      supply `liveReferencedLabel`, so offline surfaces skip this step ('environment');
+//   4. a humanized form of the table's name ("contoso_ProjectPhase" -> "Project Phase"), only when
+//      nothing above applies: an offline surface, a failed environment read, or a declared table that
+//      has no displayName of its own and is created by the build ('derived').
+// A blank explicit label counts as omitted, because every create site already treats it that way
+// (`x.displayName || x.schemaName`), so "" and undefined reach Dataverse identically.
+//
+// `liveReferencedLabel` is ignored when it is only the table's own identifier — its logical name, or its
+// schema name as written (exact, case-sensitive: "Contact" is a name, "contact" is not). That is what a
+// build writes as the label of a table whose spec sets no displayName, so reading it back is no more a
+// name than the humanized fallback is, and using it would reproduce the very label this rule replaces.
+function lookupLabelFor(spec, rel, opts = {}) {
+  const explicit = rel && rel.lookup && rel.lookup.displayName;
+  if (!labelIsMissing(explicit)) return { label: explicit, source: 'explicit' };
+  const wanted = String((rel && rel.referenced) || '').toLowerCase();
+  const parent = ((spec && spec.entities) || []).find((e) => e && String(e.schemaName || '').toLowerCase() === wanted);
+  if (parent && !labelIsMissing(parent.displayName)) return { label: parent.displayName, source: 'table' };
+  const live = opts && opts.liveReferencedLabel;
+  if (typeof live === 'string' && live.trim() && live !== wanted && !(parent && live === parent.schemaName)) return { label: live, source: 'environment' };
+  return { label: humanizeTableName(parent ? parent.schemaName : rel && rel.referenced), source: 'derived' };
+}
+
+// Must a build ask the ENVIRONMENT for this lookup's parent name? (It does the asking — this file does no
+// I/O.) Meaningful only when the lookup sets no label of its own.
+//   * a parent the spec does not declare: always — account, contact, systemuser… have no displayName here;
+//   * a parent the spec declares WITH a displayName: never — the spec names it (lookupLabelFor, step 2);
+//   * a parent declared WITHOUT one: when the build did not create it. `existing: true` says the table
+//     pre-exists (incident is "Case", systemuser is "User", which a humanized "Incident"/"Systemuser" would
+//     contradict), and `reused` — the declared tables, lower-case, that the data-model phase found already
+//     in the environment — covers one that merely was there. `existing` records ownership, not presence,
+//     so a flagged table the build had to create is still labelled by what the build wrote (its schema
+//     name, which lookupLabelFor discards) and falls through to the humanized name.
+// A declared table the build creates with no displayName has nothing worth reading: it is labelled with
+// its own schema name, so the answer would only ever be the identifier.
+function lookupParentNeedsEnvironment(spec, rel, { reused } = {}) {
+  const wanted = String((rel && rel.referenced) || '').toLowerCase();
+  const parent = ((spec && spec.entities) || []).find((e) => e && String(e.schemaName || '').toLowerCase() === wanted);
+  if (!parent) return true;
+  if (!labelIsMissing(parent.displayName)) return false;
+  return parent.existing === true || !!(reused && reused.has(wanted));
+}
+
+// A person's name for a table, from its Dataverse name:
+//   contoso_ProjectPhase -> "Project Phase"      new_project -> "Project"      account -> "Account"
+//   contoso_work_item    -> "Work Item"          contoso_SLA -> "SLA"
+// A Dataverse table name is `<publisher prefix>_<name>`; the prefix is bookkeeping, not part of what a
+// person calls the table, and a name with no underscore (`account`) has none. A cased schema name
+// ("ProjectPhase") splits on its capitals; an all-lowercase logical name has nothing to split on, so
+// "budgetline" stays one word — the reason this is the LAST resort rather than the rule.
+function humanizeTableName(name) {
+  const parts = String(name == null ? '' : name).trim().split('_').filter(Boolean);
+  const words = [];
+  for (const part of parts.length > 1 ? parts.slice(1) : parts) {
+    for (const word of part.replace(/([a-z0-9])([A-Z])/g, '$1 $2').split(' ')) {
+      if (word) words.push(word.charAt(0).toUpperCase() + word.slice(1));
+    }
+  }
+  return words.join(' ');
+}
+
+// The strings a lookup was labelled with when no label was supplied. All of them are identifiers, never
+// something a person writes as a label, which is what lets a rebuild repair them without risking a label a maker
+// chose. Which strings count depends on what carries the label, because each is exactly what some build wrote
+// THERE and nothing else is:
+//   * the COLUMN: the referenced table's LOWER-CASE logical name — what the vendored SDK substitutes for an
+//     omitted `lookupDisplayName` (this plugin hands it `referenced` lower-cased). No build wrote anything else on
+//     a column, so a column labelled with the lookup's own name is somebody's label, and is never repaired;
+//   * the form FIELD: that same name, inherited from the column, or — when the SDK cannot resolve the column at
+//     push — the field's own LOWER-CASE logical name, because its control normalization defaults `label` to
+//     `fieldName`, which is the lower-case logical name, not the schema name the spec spells with capitals.
+//
+// Exactly those strings, not their case variants. A match that ignored case would call a correct "Contact"
+// (the display name of the table `contact`) an old default: every rebuild would read the label and then the
+// table's name to find out it was already right, and a maker's "Contact" on a table the org later renamed
+// would be overwritten. A map is never the default either: the old default was written in one language only,
+// so a label carrying several was touched since.
+const lowerName = (n) => (n == null ? '' : String(n).toLowerCase());
+const isExactlyOneOf = (label, names) => typeof label === 'string' && label !== '' && names.includes(label);
+
+function isOldLookupColumnLabel(rel, label) {
+  return isExactlyOneOf(label, [lowerName(rel && rel.referenced)]);
+}
+
+function isOldLookupFieldLabel(rel, label) {
+  return isExactlyOneOf(label, [lowerName(rel && rel.referenced), lowerName(rel && rel.lookup && rel.lookup.schemaName)]);
 }
 
 // The child relationships to show as sub-grids on `entityLogical`'s (parent) form: every 1:N where
@@ -380,6 +501,74 @@ function manyToManySchemaName(rel, publisherPrefix) {
   return prefixedRelationshipName(a, b, publisherPrefix);
 }
 
+// The relationship a form's sub-grid for `childEntity` shows — a 1:N where the child holds the lookup, else an N:N
+// — as the schema name the grid control carries (`RelationshipName`), or null when the two tables have none. One
+// definition for the build, which writes the control, and `--verify`, which looks for it by that name.
+function subgridRelationshipName(spec, formEntity, childEntity) {
+  const prefix = spec && spec.solution && spec.solution.publisherPrefix;
+  const oneToMany = relationshipFor(spec, formEntity, childEntity);
+  if (oneToMany) return relationshipSchemaName(oneToMany, prefix);
+  const manyToMany = manyToManyFor(spec, formEntity, childEntity);
+  return manyToMany ? manyToManySchemaName(manyToMany, prefix) : null;
+}
+
+// Effective schema name, or null when the entry cannot name one. An explicit schemaName wins
+// verbatim (the same rule relationshipSchemaName / manyToManySchemaName use). Incomplete entries
+// are skipped: composing them would yield a shared "_" name and a false collision.
+function effectiveRelationshipSchemaName(rel, publisherPrefix) {
+  if (!rel || typeof rel !== 'object' || Array.isArray(rel)) return null;
+  const explicit = typeof rel.schemaName === 'string' && rel.schemaName.trim() ? rel.schemaName : '';
+  if (rel.type === 'ManyToMany') {
+    if (explicit) return explicit;
+    if (typeof rel.entity1 !== 'string' || !rel.entity1.trim() || typeof rel.entity2 !== 'string' || !rel.entity2.trim()) return null;
+    return manyToManySchemaName(rel, publisherPrefix);
+  }
+  if (rel.type === 'OneToMany') {
+    if (explicit) return explicit;
+    if (typeof rel.referenced !== 'string' || !rel.referenced.trim() || typeof rel.referencing !== 'string' || !rel.referencing.trim()) return null;
+    return relationshipSchemaName(rel, publisherPrefix);
+  }
+  return null;
+}
+
+// Pairs whose EFFECTIVE schema names compare equal, ignoring case.
+// Dataverse allows one relationship per name. The RelationshipDefinitions alternate key is
+// case-sensitive (a differently-cased spelling 404s), but a create of the other casing still
+// collides, so the gate compares the names the build would actually send.
+// -> [{ name, first, second }] with name lower-cased and indices into relationships[].
+function relationshipNameCollisions(relationships, publisherPrefix) {
+  const named = [];
+  (Array.isArray(relationships) ? relationships : []).forEach((rel, index) => {
+    let name;
+    try { name = effectiveRelationshipSchemaName(rel, publisherPrefix); } catch { name = null; }
+    if (!name) return;
+    named.push({ index, name: String(name).toLowerCase() });
+  });
+  const hits = [];
+  for (let i = 0; i < named.length; i += 1) {
+    for (let j = i + 1; j < named.length; j += 1) {
+      if (named[i].name === named[j].name) hits.push({ name: named[i].name, first: named[i].index, second: named[j].index });
+    }
+  }
+  return hits;
+}
+
+function relationshipEndsBrief(rel) {
+  const lc = (v) => String(v || '').toLowerCase();
+  if (!rel || typeof rel !== 'object') return 'invalid relationship';
+  if (rel.type === 'ManyToMany') return `N:N ${lc(rel.entity1)} <-> ${lc(rel.entity2)}`;
+  if (rel.type === 'OneToMany') return `1:N ${lc(rel.referenced)} -> ${lc(rel.referencing)}`;
+  return String(rel.type || 'relationship');
+}
+
+// Both gates must emit this exact sentence. Built here so they cannot drift.
+function relationshipCollisionMessage(relationships, collision) {
+  const list = Array.isArray(relationships) ? relationships : [];
+  const a = relationshipEndsBrief(list[collision.first]);
+  const b = relationshipEndsBrief(list[collision.second]);
+  return `relationships[${collision.first}] (${a}) and relationships[${collision.second}] (${b}) both use the schema name '${collision.name}'. Dataverse allows one relationship per name, so the second would not be created. Give one of them an explicit "schemaName".`;
+}
+
 // Turn author-friendly sample records into Web-API bodies: Choice / MultiChoice values
 // written as labels ("Platinum", or "Low,High" for multi-select) are resolved to their
 // option ints — for inline-option AND global-choice columns (pass `spec` so global
@@ -387,7 +576,7 @@ function manyToManySchemaName(rel, publisherPrefix) {
 // booleans, ISO dates, and unknown tokens all still work).
 function resolveSampleRecords(entity, records, spec) {
   const choices = choiceValueMap(entity, spec);
-  const multi = new Set((entity.columns || []).filter((c) => c.type === 'MultiChoice').map((c) => c.schemaName.toLowerCase()));
+  const multi = new Set((entity.columns || []).filter((c) => c && c.type === 'MultiChoice' && typeof c.schemaName === 'string').map((c) => c.schemaName.toLowerCase()));
   return (records || []).map((rec) => {
     const out = {};
     for (const [k, v] of Object.entries(rec)) {
@@ -522,13 +711,13 @@ const BUSINESS_RULE_SCOPES = ['Entity'];
 //
 // v1 is deliberately a SINGLE-ENTITY, linear flow: ordered stages, each with ordered steps bound to
 // columns of that same entity. The SDK's artifact additionally models `category`, `nextStageId`,
-// `relationshipName`, `branch`, stage `actions` and `securityRoles`, and those are NOT exposed here:
-//   * cross-entity stages / branching change what the flow MEANS and need live verification per
-//     shape before being offered;
-//   * `securityRoles` needs role IDs (the SDK grants CRUD privileges on the backing table that
-//     ACTIVATION creates, via `reconcileBpfSecurityRoles({ roleId, access })`) — that is the
-//     `security` phase's job, not this one, and is tracked as a follow-up.
-// Offering a knob the build cannot verify is how a spec deploys something the author did not mean.
+// `relationshipName`, `branch` and stage `actions`, and those are NOT exposed here: cross-entity
+// stages and branching change what the flow MEANS and need live verification per shape before being
+// offered. Offering a knob the build cannot verify is how a spec deploys something the author did not
+// mean. The SDK's `securityRoles` started on this list and has since shipped, in a different shape:
+// persona names rather than role ids (validateBpfSecurityRoles below), applied by the `security`
+// phase — the grants are privileges on the backing table that ACTIVATION creates, so they can only be
+// written once both the flow and the personas' roles exist.
 const BPF_STATUSES = ['Active', 'Draft'];
 
 // `businessProcessFlows[].securityRoles` — who may run a flow. #513.
@@ -650,7 +839,7 @@ const ENTITY_KEYS = new Set([
   'schemaName', 'displayName', 'pluralName', 'description', 'primaryAttribute', 'columns',
   'hasNotes', 'quickCreate', 'existing', 'enrichDefaultViews',
   'vectorIcon', 'iconDescription', 'icon',
-  'statusReasons', 'alternateKeys',
+  'statusReasons', 'alternateKeys', 'mainFormOrder',
 ]);
 
 // What to write INSTEAD, for the keys an author is most likely to reach for. A bare "unknown key"
@@ -663,6 +852,250 @@ const ENTITY_KEY_HINTS = Object.assign(Object.create(null), {
   languageCode: ' — the authoring language is build-wide, not per-table: set the spec-level `languageCode`, which applies to every table',
   localizedLabels: ' — write the LCID map on the label FIELD itself (e.g. "displayName": { "1033": "Baseline", "3082": "Línea base" }), not in a separate per-table block; see references/app-spec-schema.md → "Localized labels"',
 });
+
+// The most characters a table's primary name column may be asked for. A single line of text elsewhere in a table takes up
+// to 4,000, but the name column of a table does not: asked for more than 850 in a table create that also carried other columns, the
+// platform refuses it — HTTP 400, "The maximum length of Primary attribute 'new_name' is 4000. The maximum allowed limit
+// is 850." (live-measured, with 4000 asked for). `primaryAttribute.maxLength` was accepted and ignored until the build
+// began sending it, so a value the platform cannot take is refused at the spec gate rather than part-way through a build.
+// See: https://learn.microsoft.com/en-us/power-apps/maker/data-platform/types-of-fields
+const PRIMARY_NAME_MAX_LENGTH = 850;
+
+// Why a `primaryAttribute.maxLength` cannot be used, or null when it can; an omitted one is fine (the build then asks for
+// 100, as it always has). The ONE rule behind both gates — validateAppSpec and the
+// provision-entities input validator, the entry point of /genpage and /app-builder — so that neither accepts what the other
+// refuses. `!== undefined`, so an explicit null or 0 is refused rather than read as "not given".
+function primaryNameLengthProblem(length) {
+  if (length === undefined) return null;
+  if (Number.isInteger(length) && length >= 1 && length <= PRIMARY_NAME_MAX_LENGTH) return null;
+  return `primaryAttribute.maxLength must be a whole number from 1 to ${PRIMARY_NAME_MAX_LENGTH} (got ${describeSpecValue(length)})`;
+}
+
+// A column of type `AutoNumber` needs a format to be created with. The SDK refuses to create one without — an InvalidArgumentError raised before
+// any request, for a missing, null, empty or blank format (measured against the vendored bundle for createColumn and createColumns alike; a format
+// that is not a string does not get that far: the SDK throws a TypeError of its own) — where the SDK it replaced created a plain text column,
+// which is all an autonumber column is until it carries a format.
+// See: https://learn.microsoft.com/en-us/power-apps/maker/data-platform/autonumber-fields
+// So a spec with an AutoNumber column and no format used to build, as text, and now halts the data-model phase at that column, after the solution
+// and the tables exist. It is refused here instead, where nothing has been written, with both ways out: give the column a format, or declare it
+// `Text`, which is also what a column an earlier release made from such a spec is.
+//
+// The ONE rule behind both gates — validateAppSpec and the provision-entities input validator, the entry point of /genpage and /app-builder — so
+// that neither accepts what the other refuses. Each puts the table and the column in front of the text it returns (null when the column is fine).
+// It looks at the AutoNumber TYPE only: a `Text` column that carries an `autoNumberFormat` is built as it always was (the format is not passed on),
+// and the primary name column keeps its own rule — an absent or blank `primaryAttribute.autoNumberFormat` has always meant a plain text name column
+// (the table create sends no format for it), a valid spec that builds as before. A format with no {SEQNUM} token stays the lint's warning.
+function autoNumberFormatProblem(column) {
+  if (!column || column.type !== 'AutoNumber') return null;
+  const format = column.autoNumberFormat;
+  let found;
+  if (format === undefined || format === null) found = 'missing';
+  else if (typeof format !== 'string') found = `not a string (got ${describeSpecValue(format)})`;
+  else if (!format.trim()) found = 'blank';
+  else return null;
+  return `is an AutoNumber column but its autoNumberFormat is ${found} — give it a format such as "C-{SEQNUM:5}", or use type "Text" for a plain text column`;
+}
+
+// What a column's — or the primary name column's — `required` may be: true (Dataverse's ApplicationRequired, "Business Required"), "recommended"
+// (Recommended) or false (None); or nothing, which asks nothing of a new column's create (it is created not required) and leaves an existing column as
+// it is. The build reads exactly these (REQUIRED, lib/entity-provision.js) and took every other value for None, so every other value was a silent
+// one: `"ApplicationRequired"`, `"true"`, `"required"`, `"Recommended"`, `1` or `null` made a new column not required and, on an existing column —
+// which the build reconciles whenever the spec states a `required` — wrote None where the level differed, demoting a column a maker had made
+// Business Required. Refused here instead, naming what was written and what to write. `undefined` is "not stated", as it is for every optional
+// field of the spec (JSON cannot carry one), and the build reads it that way too (hasExplicitRequired).
+// Not the other `required`s of a spec: a business process flow step's (a boolean, gated where the flow is), a business rule's SetBusinessRequired
+// action's, a form's.
+// See: https://learn.microsoft.com/en-us/power-apps/developer/data-platform/webapi/reference/attributerequiredlevel
+// The ONE rule behind both gates, like autoNumberFormatProblem; the callers put the column — or `primaryAttribute.required` — in front of the text it
+// returns.
+function requiredValueProblem(value) {
+  if (value === undefined || value === true || value === false || value === 'recommended') return null;
+  // The usual slips are the names Dataverse gives the levels, a boolean written as text, and a flag written as a number.
+  const spelled = typeof value === 'string' ? value.trim().toLowerCase() : value;
+  let hint;
+  if (['applicationrequired', 'true', 'required', 'yes', 1].includes(spelled)) hint = 'write true for a required column';
+  else if (spelled === 'recommended') hint = 'write "recommended" for a recommended column';
+  else if (['none', 'false', 'no', 'optional', 0].includes(spelled)) hint = 'write false for a column that is not required';
+  else hint = 'true makes a column required, "recommended" makes it recommended and false makes it not required';
+  return `must be true, false or "recommended" (got ${describeSpecValue(value)}) — ${hint}; omit the key to leave an existing column's level as it is`;
+}
+
+// The length the spec asks for a table's primary name column, or undefined when it does not ask. The build, its dry-run plan
+// and its progress total all key on this one answer — it decides whether the build has a "primary column length" step for
+// the table — so they cannot disagree about it (the same arrangement as quickCreateEnabledFor).
+function askedPrimaryNameLength(entity) {
+  const asked = entity && entity.primaryAttribute && entity.primaryAttribute.maxLength;
+  return asked === undefined || asked === null ? undefined : asked;
+}
+
+// Whether an alternate key is over its table's primary name column while the spec asks that column for a length (askedPrimaryNameLength):
+// the key is then in the way of the length. The platform validates a key when it is created, and a key may hold at most 1,700 bytes
+// (KEY_BYTES_LIMIT) — 2 for each character of a text column.
+// See: https://learn.microsoft.com/en-us/power-apps/developer/data-platform/define-alternate-keys-entity#create-alternate-keys
+// A new table's name column is created asking for a length, but some environments make it 850 characters (1,700 bytes) whatever is
+// asked (DEFAULT_PRIMARY_NAME_LENGTH, lib/entity-provision.js) — the whole of what a key may hold, so a key over it and another column
+// can be created only once the build has set the length the spec asks for (keyHasRoomOnlyAfterLength). Matched case-insensitively: a
+// column's logical name is its schema name in lower case.
+function keyNeedsNameLength(entity, key) {
+  if (askedPrimaryNameLength(entity) === undefined || !key || !Array.isArray(key.columns)) return false;
+  const name = String(entity.primaryAttribute.schemaName || '').toLowerCase();
+  return name !== '' && key.columns.some((column) => String(column).toLowerCase() === name);
+}
+
+// Whether a label goes out in ONE language: what the SDK sends for it is a single `LocalizedLabels` entry. The SDK writes a plain string as one
+// entry in the language the build writes in, and a language map as one entry per language it names, so a string and a map that names one
+// language are the same request, byte for byte, whichever language that is. What decides is what is sent — not the shape of the value, and not
+// the language the build is authored in, which a map does not use (it names its own) and a string takes: the same request is the same label
+// under every authoring language, so where its key is made cannot depend on it. A map that names several languages or none, or a name that is
+// not an LCID, is not one label.
+function labelGoesOutInOneLanguage(value) {
+  if (!isLocalizedLabelMap(value)) return true;
+  const languages = Object.keys(value);
+  return languages.length === 1 && /^[1-9]\d*$/.test(languages[0]);
+}
+
+// Whether an alternate key must wait for its table's primary name column to get the length the spec asks for. The one rule behind the
+// data-model phase and both plans, so that they cannot disagree about where such a key is made: true when the key needs the length
+// (keyNeedsNameLength) and its label goes out in ONE language (labelGoesOutInOneLanguage).
+//
+// The build sets the length LAST in the phase: the SDK's update reads the column with its labels, and a read that carries labels ahead of
+// a create that carries several languages is what makes Dataverse keep only the base one. A key with one label has nothing for such a read
+// to strip, so it may follow the step; a key labelled in several languages keeps the place it has always had, ahead of it — except where
+// the environment made the name column too long for the key to fit beside the others, which only the environment can say
+// (keyHasRoomOnlyAfterLength, decided by the build from the length it reads) — and where the platform then refuses it for the length of
+// its column, the build says so (alternateKeyAheadOfLength, lib/entity-provision.js).
+//
+// It does not depend on the language the build writes in, so the dry run and the apply cannot disagree about it however either is given one.
+//
+// This is the half of the rule the spec decides. The other half is the build's: a table that already existed is never written to, so
+// its keys are made where they always were, and only a table whose length is still to be set (one this build created, or one a failed
+// attempt of the same build left unset) makes its keys wait.
+function keyWaitsForNameLength(entity, key) {
+  return keyNeedsNameLength(entity, key) && labelGoesOutInOneLanguage(key.displayName);
+}
+
+// The most bytes an alternate key may hold. The platform's own answer to a key that is too large names the limit — HTTP 400, code 0x80060895:
+//   { "error": { "code": "0x80060895", "message": "Index size exceeded the size limit of 1700 bytes. The key is too large. Try removing some columns or making the strings in string columns shorter." } }
+// That was measured at 1,700 bytes: a key over a name column of 850 characters (2 bytes each, the most a name column may have: PRIMARY_NAME_MAX_LENGTH)
+// alone was accepted, and one that held any other column beside it — even one of a single character — was refused. Microsoft Learn documents 900
+// bytes, so this number is what one environment answered, not a promise about all of them: the build uses it only to know that a key CANNOT fit in a
+// place (keyHasRoomOnlyAfterLength) — never to refuse one, which the platform does.
+// See: https://learn.microsoft.com/en-us/power-apps/developer/data-platform/define-alternate-keys-entity#create-alternate-keys
+const KEY_BYTES_LIMIT = 1700;
+
+// The length the SDK gives a text column it is asked to create without one. The attribute it sends for a `string` and for an `autonumber` column
+// alike is built with `MaxLength: t.maxLength ?? 100` (vendor/cds-maker-sdk.cjs, for createColumn and createColumns).
+const SDK_TEXT_MAX_LENGTH = 100;
+
+// The `maxLength` the build passes on to the SDK when it creates a column of the spec, or undefined when it passes none: only a column that names its
+// type `Text` or `Memo` carries one, and only a value that is truthy, as written — the platform judges it. So an auto-number column, and a column that
+// gives no type (which the build creates as text all the same), are made SDK_TEXT_MAX_LENGTH characters long whatever `maxLength` the spec writes for
+// them. The ONE rule behind what the build sends (columnOptions, lib/entity-provision.js) and the length a key counts a column at (keyBytesAtLeast), so
+// that a key is never sized from a length the build does not create.
+function maxLengthSent(column) {
+  return column && (column.type === 'Text' || column.type === 'Memo') && column.maxLength ? column.maxLength : undefined;
+}
+
+// The types of the spec the build creates as a single line of text — a StringAttributeMetadata, which a key holds at 2 bytes a character: `Text`, which
+// is also what a column that gives no type is made as (SDK_COLUMN_TYPE[c.type || 'Text'], lib/entity-provision.js), and `AutoNumber`, a text column
+// with a format.
+const TEXT_COLUMN_TYPES = new Set(['Text', 'AutoNumber']);
+
+// How many characters long the build creates a column of the spec that it creates as a single line of text, or undefined for a column it creates as
+// something else (or not at all): the length it sends (maxLengthSent), else the SDK's. A value it sends that is not a whole number of characters is
+// the platform's to refuse or to read as it will, so it counts for the one character every text column has.
+function textLengthCreated(column) {
+  if (!column || typeof column !== 'object' || !TEXT_COLUMN_TYPES.has(column.type || 'Text')) return undefined;
+  const sent = maxLengthSent(column);
+  if (sent === undefined) return SDK_TEXT_MAX_LENGTH;
+  return Number.isInteger(sent) && sent > 0 ? sent : 1;
+}
+
+// The fewest bytes a key holds when its table's name column is `nameLength` characters long: a floor, so that what it shows is certain. Each column
+// counts as the build creates it. A single line of text takes 2 bytes for each character — the name column at the length the environment made it, and a
+// column of the spec at the length the build creates it with (textLengthCreated: a `Text` column's `maxLength`, else 100; an auto-number column, and a
+// column that gives no type, 100 whatever `maxLength` they carry). Every other column counts for 1 byte: a column of another type a key can hold —
+// Integer, Decimal, DateTime, Choice, a lookup — whose size the limit was not measured with, and one the spec does not describe. That can leave the
+// floor under what the platform counts, never over it, and it changes nothing for a key that fits at the length the spec asks: beside a name column of
+// 850 characters, 1,700 bytes by themselves, one byte is already too much, and at the length asked such a key's floor is within the limit whatever its
+// other columns take. A key whose floor is over KEY_BYTES_LIMIT cannot fit; one whose floor is under it may or may not, and the platform decides.
+// Never throws: a key or an entity that is not what it should be holds what can be counted of it.
+function keyBytesAtLeast(entity, key, nameLength) {
+  const name = String((entity && entity.primaryAttribute && entity.primaryAttribute.schemaName) || '').toLowerCase();
+  const declared = (entity && Array.isArray(entity.columns)) ? entity.columns : [];
+  let bytes = 0;
+  for (const column of (key && Array.isArray(key.columns)) ? key.columns : []) {
+    const logical = String(column).toLowerCase();
+    if (name !== '' && logical === name) {
+      bytes += 2 * (Number.isInteger(nameLength) && nameLength > 0 ? nameLength : 1);
+      continue;
+    }
+    const length = textLengthCreated(declared.find((c) => c && String(c.schemaName).toLowerCase() === logical));
+    bytes += length === undefined ? 1 : 2 * length;
+  }
+  return bytes;
+}
+
+// Whether the key cannot fit while the name column is `nameLength` characters long (see keyBytesAtLeast).
+const keyCannotFitAt = (entity, key, nameLength) => keyBytesAtLeast(entity, key, nameLength) > KEY_BYTES_LIMIT;
+
+// Whether the length of the name column decides where a key can be made: the key holds the name column (keyNeedsNameLength), cannot fit while that column
+// is as long as a name column can be — PRIMARY_NAME_MAX_LENGTH characters are KEY_BYTES_LIMIT bytes by themselves, so any other column in the key is
+// too much — and may fit at the length the spec asks. Only then can the length the environment made of the column (850 where it ignores the length asked
+// of the create) keep the platform from taking the key, and only then can setting the length first change the platform's answer. A key over the name
+// column alone always fits, and one that cannot fit at the length asked either would be refused after the length step as well: waiting helps neither.
+// This is the half the spec decides; the other is the length the environment made, which the build reads.
+function keyHasRoomOnlyAfterLength(entity, key) {
+  return keyNeedsNameLength(entity, key)
+    && keyCannotFitAt(entity, key, PRIMARY_NAME_MAX_LENGTH)
+    && !keyCannotFitAt(entity, key, askedPrimaryNameLength(entity));
+}
+
+// The keys the build READS on each `appShell` level (appDef, sdk-build.js), for the same reason as
+// ENTITY_KEYS (#537). The levels name their title differently — areas and groups take `label`,
+// subareas take `title` — and a key with no reader was accepted and dropped: an area written with
+// `title` deployed untitled while lint, the build and `--verify` all passed (#631). Adding a key here
+// without a reader would re-open that hole. `iconDescription` is read by the icon-authoring step,
+// not the build, and is validated where it is used.
+const APP_SHELL_KEYS = {
+  area: new Set(['label', 'icon', 'vectorIcon', 'iconDescription', 'groups']),
+  group: new Set(['label', 'iconDescription', 'subAreas']),
+  subArea: new Set(['title', 'entity', 'dashboard', 'url', 'page', 'icon', 'vectorIcon', 'iconDescription']),
+};
+// The mix-ups an author is most likely to make, with the fix. Prototype-less for the reason given
+// on ENTITY_KEY_HINTS: the lookup key comes from the spec.
+const LABEL_NOT_TITLE = ' — did you mean `label`? Areas and groups take `label`; only subAreas take `title`';
+const APP_SHELL_KEY_HINTS = {
+  area: Object.assign(Object.create(null), { title: LABEL_NOT_TITLE, subAreas: ' — subAreas belong to a group: areas[].groups[].subAreas' }),
+  group: Object.assign(Object.create(null), {
+    title: LABEL_NOT_TITLE,
+    icon: ' — a sitemap group has no icon; set it on the area or on each subArea',
+    vectorIcon: ' — a sitemap group has no icon; set it on the area or on each subArea',
+    groups: ' — groups belong to an area: areas[].groups',
+  }),
+  subArea: Object.assign(Object.create(null), {
+    label: ' — did you mean `title`? SubAreas take `title`; areas and groups take `label`',
+    table: ' — did you mean `entity`?',
+  }),
+};
+
+// Report every key on one `appShell` node that the build does not read. Guarded like the entity
+// check: a non-object node is reported by the shape checks, and enumerating a caller's object can
+// throw (a Proxy), which must become an error rather than escape the validator.
+function reportUnknownAppShellKeys(node, level, where, errors) {
+  if (!node || typeof node !== 'object' || Array.isArray(node)) return;
+  let keys;
+  try {
+    keys = Object.keys(node);
+  } catch {
+    errors.push(`${where} could not be inspected: enumerating its keys threw`);
+    return;
+  }
+  for (const k of keys) {
+    if (APP_SHELL_KEYS[level].has(k)) continue;
+    errors.push(`${where}: unknown key '${k}'${APP_SHELL_KEY_HINTS[level][k] || ''} (allowed: ${[...APP_SHELL_KEYS[level]].join(', ')})`);
+  }
+}
 
 // The column logical names an entity legitimately exposes to a rule / process step: its declared
 // columns, its primary name column, and any lookup a relationship creates ON it (a lookup is a real
@@ -682,6 +1115,32 @@ function declaredColumnLogicals(spec, entitySchemaName) {
     }
   }
   return cols;
+}
+
+// Does the spec itself create column `attributeLogical` on table `tableLogical`? Counts the table's primary
+// name column, its declared columns, and the lookup a 1:N relationship places on its referencing side.
+//
+// Both names compare case-insensitively, because the caller holds what DATAVERSE reported — logical, so
+// lower-case ('new_customerid') — while the spec carries schema names ('new_CustomerId'). That is also why
+// this is not `declaredColumnLogicals`: that one matches the entity schemaName EXACTLY, the contract the
+// business-rule and BPF validators were written against, and loosening it would change what they accept.
+function specDeclaresAttribute(spec, tableLogical, attributeLogical) {
+  const table = String(tableLogical || '').toLowerCase();
+  const attribute = String(attributeLogical || '').toLowerCase();
+  if (!spec || !table || !attribute) return false;
+  const lc = (v) => String(v || '').toLowerCase();
+  for (const ent of spec.entities || []) {
+    if (!ent || lc(ent.schemaName) !== table) continue;
+    // Only attributes this build can MATERIALIZE count — lag can explain a column the build just
+    // created, never one it skips. A `Lookup` entry in columns[] is skipped by provisioning (a lookup is
+    // the side effect of a OneToMany relationship, handled below), so it is not a column this build
+    // creates. The primary attribute always counts: `existing: true` records ownership, not presence —
+    // a downloaded spec rebuilt into another environment still creates the table and its primary column.
+    if (ent.primaryAttribute && lc(ent.primaryAttribute.schemaName) === attribute) return true;
+    if ((ent.columns || []).some((c) => c && lc(c.type) !== 'lookup' && lc(c.schemaName) === attribute)) return true;
+  }
+  return (spec.relationships || []).some((rel) => rel && rel.type === 'OneToMany'
+    && lc(rel.referencing) === table && rel.lookup && lc(rel.lookup.schemaName) === attribute);
 }
 
 // Normalize a Dataverse language identifier (LCID) to a positive integer, or null if it is not one.
@@ -779,6 +1238,19 @@ function labelText(value, languageCode) {
   const first = localizedLabelLcids(value)[0];
   const hit = pick(wanted) ?? pick(1033) ?? pick(first);
   return typeof hit === 'string' ? hit : '';
+}
+
+// The plural a build gives a table whose spec sets no `pluralName`: its display name in the build's
+// language, else its schema name, plus "s" — "Ticket" -> "Tickets", "Tag" -> "Tags". This is the ONE
+// derivation, so nothing that relies on it can disagree with what the build writes: the build sends it
+// as the table's DisplayCollectionName (entity-provision.js), lint predicts the "Active <plural>"
+// default-view names with it (spec-lint.js), and a download leaves out exactly the plural that equals
+// it (download-model-app.js entityFromMetadata) — a "Tag Catalog" is kept, because a rebuild of a spec
+// without it would name the table "Tags". English only: appending "s" is not a plural rule in most
+// languages, which is why validateAppSpec requires an explicit `pluralName` beside a localized
+// `displayName` rather than reaching this.
+function derivedPluralName(entity, languageCode) {
+  return `${labelText(entity && entity.displayName, languageCode) || (entity && entity.schemaName)}s`;
 }
 
 // Every string a label can legitimately be NAMED by: a plain label is itself; a localized label is
@@ -1018,6 +1490,27 @@ function validateDescription(value, label, errors, opts = {}) {
   }
 }
 
+// `app.aiDescription` (#583) — the app's ROUTING description: what an agent or router reads to choose
+// between sibling apps over the same tables ("prefer My Work when the request is about the signed-in
+// contributor's own assigned work"). It is distinct from `app.description`, which is the text on the
+// app tile. It maps to the platform's `appmodule.aiappdescription`, a Memo of up to 1,048,576 characters:
+// https://learn.microsoft.com/en-us/power-apps/developer/data-platform/reference/entities/appmodule#BKMK_aiappdescription
+//
+// ABSENT means "leave the deployed value alone": the platform can write this text itself, so the build
+// never writes the field unless the spec sets it. That makes an empty string the one value that could
+// blank a description nobody asked to remove, so it is refused rather than written.
+const AI_DESCRIPTION_MAX = 1048576;
+function validateAiDescription(value, errors) {
+  if (value === undefined || value === null) return;
+  if (typeof value !== 'string') {
+    errors.push('app.aiDescription must be a string');
+  } else if (!value.trim()) {
+    errors.push('app.aiDescription must not be blank — omit it to leave the deployed value alone');
+  } else if (value.length > AI_DESCRIPTION_MAX) {
+    errors.push(`app.aiDescription is ${value.length} characters (max ${AI_DESCRIPTION_MAX})`);
+  }
+}
+
 // Per-control form-field options: `readOnly`, `hidden`, `after`.
 //
 // Reachable two ways — inline on an EXPLICIT layout's `sections[].fields[]` entry, or via the
@@ -1145,6 +1638,52 @@ function sampleKeyIdentity(v) {
   return JSON.stringify([typeof v, v]);
 }
 
+// Identity of a dashboard NAME, shared by the author-time gate in `validateAppSpec` and the download's
+// withholding in `readDashboards` (download-model-app.js). The two MUST agree, or a download could
+// hand back a spec that its own gate then rejects.
+//
+// A dashboard has no identity but its name: a sitemap subarea names it, and the build reuses an
+// existing one that a server-side `name eq '…'` filter finds (resolveArtifact, sdk-build.js). That
+// comparison follows the environment's SQL collation — case-insensitive in every language, accent-
+// insensitive in most — so two names can differ on the page and still be ONE dashboard to the lookup.
+// See: https://learn.microsoft.com/en-us/power-platform/admin/language-collations
+//
+// What this folds is MEASURED, not assumed: pairs were written to a live English environment and read
+// back with `eq`. The server treated as EQUAL: case (Latin, Greek, Cyrillic); Latin, Greek and
+// Vietnamese accents, whether precomposed or decomposed; Hebrew points; the Devanagari nukta; kana
+// voicing marks; katakana vs hiragana; full- vs half-width; the ligatures and expansions ß/ss, Æ/AE,
+// Œ/OE, ﬁ/fi; the stroke letters Ø Ł Đ; final vs medial sigma; Arabic tatweel; and TRAILING spaces.
+// It kept as DIFFERENT: a LEADING space; a trailing tab or no-break space; Devanagari and Thai vowel
+// signs and Arabic harakat (letters, not accents); and Cyrillic й vs и — though ё vs е is equal, so
+// on Cyrillic only the breve counts. An earlier version stripped every combining mark and trimmed
+// both ends, which rejected distinct names such as 'कार' / 'कर' (a vowel sign is a letter).
+//
+// Where it cannot mirror the server exactly it folds MORE — accents in the accent-sensitive
+// languages, and a decomposed Hangul syllable, which the server keeps distinct from its precomposed
+// form. The costs are lopsided: a false rejection is loud and fixed by a rename, while a missed
+// collision silently drops a dashboard from the app.
+const DASHBOARD_FOLDED_MARK = /[\u0300-\u036f\u1ab0-\u1aff\u1dc0-\u1dff\u0591-\u05bd\u05bf\u05c1\u05c2\u05c4\u05c5\u05c7\u093c\u09bc\u0a3c\u0abc\u0b3c\u0cbc\u3099\u309a\u0640]/u;
+const DASHBOARD_LETTER_FOLDS = { 'ß': 'ss', 'æ': 'ae', 'œ': 'oe', 'ø': 'o', 'ł': 'l', 'đ': 'd', 'ς': 'σ' };
+function dashboardNameKey(name) {
+  // Trailing U+0020 is stripped BEFORE the compatibility decomposition: NFKD turns a no-break space
+  // into a plain one, and the server keeps a trailing no-break space significant.
+  const raw = String(name == null ? '' : name).replace(/ +$/, '');
+  let out = '';
+  let cyrillicBase = false;
+  for (const ch of raw.normalize('NFKD')) {
+    if (DASHBOARD_FOLDED_MARK.test(ch)) {
+      if (ch === '\u0306' && cyrillicBase) out += ch; // й / ў are letters of their own, not accented и / у
+      continue;
+    }
+    cyrillicBase = /\p{Script=Cyrillic}/u.test(ch);
+    out += ch;
+  }
+  return out.toLowerCase()
+    .replace(/[ßæœøłđς]/g, (c) => DASHBOARD_LETTER_FOLDS[c])
+    // Katakana → hiragana: the same kana, one code-point block apart (0x60).
+    .replace(/[\u30a1-\u30f6\u30fd\u30fe]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0x60));
+}
+
 // The names the form compiler generates for an UNNAMED tab/section, shared with artifact-intent.js
 // so the spec gate and the compiler cannot disagree about what a container will actually be called.
 //
@@ -1173,6 +1712,155 @@ function formColumnsOf(tab) {
   if (!tab || typeof tab !== 'object') return [];
   if (Array.isArray(tab.columns)) return tab.columns;
   return [{ width: '100%', sections: Array.isArray(tab.sections) ? tab.sections : [] }];
+}
+
+// Every section name an explicit layout DECLARES, under the name the compiler gives it, lower-cased.
+// The build and verify both take it from here, so their label and position passes skip exactly the
+// same containers (form-container-match.js `claimedByAuthoredName`). Engine-owned sections — the
+// notes section, sub-grid hosts — are never in it: the compiler appends those, the author does not.
+// `{ named: true }` keeps only the names the author GAVE, leaving out the ones generated from a
+// section's position.
+function authoredSectionNames(formSpec, { named = false } = {}) {
+  const names = new Set();
+  const tabs = formSpec && Array.isArray(formSpec.tabs) ? formSpec.tabs : [];
+  tabs.forEach((t, ti) => formColumnsOf(t).forEach((col, ci) => {
+    ((col && Array.isArray(col.sections)) ? col.sections : []).forEach((sec, si) => {
+      if (sec && typeof sec === 'object' && (!named || sec.name)) names.add(String(sec.name || generatedSectionName(ti, ci, si)).toLowerCase());
+    });
+  }));
+  return names;
+}
+
+// Every tab name an explicit layout declares, under the name the compiler gives it, lower-cased — the
+// tabs' counterpart of authoredSectionNames, for the same reason: a deployed tab another tab of the
+// layout claims by name is not handed to a different one by label or position. Without it, a tab
+// declared mid-layout took the next existing tab by POSITION, and that tab's own want — its name now
+// taken — created a second tab of the same name.
+function authoredTabNames(formSpec) {
+  const names = new Set();
+  const tabs = formSpec && Array.isArray(formSpec.tabs) ? formSpec.tabs : [];
+  tabs.forEach((t, ti) => { if (t && typeof t === 'object') names.add(String(t.name || generatedTabName(ti)).toLowerCase()); });
+  return names;
+}
+
+// The tabs, form-columns and sections a form's layout DECLARES, under the names the compiler gives them,
+// lower-cased — the vocabulary `subgrids[].tab/after/before` is written in, and what the build, verify and the
+// wireframe resolve a placement against (lib/form-subgrid-placement.js). Unlike the name sets above it keeps the
+// STRUCTURE, because "right after this section" and "in this tab's second form-column" need to know which
+// column a section is in. An auto layout (no `tabs`) is its one tab, holding one section.
+function formLayoutNames(formSpec) {
+  if (!formSpec || !Array.isArray(formSpec.tabs)) return [{ name: AUTO_TAB_NAME, columns: [{ sections: [AUTO_SECTION_NAME] }] }];
+  return formSpec.tabs.map((t, ti) => ({
+    name: String((t && t.name) || generatedTabName(ti)).toLowerCase(),
+    columns: formColumnsOf(t).map((col, ci) => ({
+      sections: ((col && Array.isArray(col.sections)) ? col.sections : [])
+        .map((s, si) => String((s && s.name) || generatedSectionName(ti, ci, si)).toLowerCase()),
+    })),
+  }));
+}
+
+// The keys a `subgrids[]` entry reads. The build ignores any other, so a mistyped placement key (`After`,
+// `afterSection`) would leave the grid at the end of the form with nothing said — hence a warning. A warning,
+// not an error: entries written before the placement keys existed carry whatever extra keys their authors
+// tried, and the build never read them, so refusing those now would break a spec that built.
+const SUBGRID_KEYS = ['childEntity', 'view', 'label', 'tab', 'column', 'after', 'before'];
+
+// The keys of a `subgrids[]` entry that nothing reads, as messages that start with the entry (the caller adds
+// the form) — with the key it most likely meant when the name differs only in case or by a suffix.
+function subgridUnknownKeys(sg) {
+  if (!sg || typeof sg !== 'object' || Array.isArray(sg)) return [];
+  return Object.keys(sg).filter((k) => !SUBGRID_KEYS.includes(k)).map((k) => {
+    const lower = k.toLowerCase();
+    const meant = SUBGRID_KEYS.find((known) => lower === known.toLowerCase() || (known.length >= 3 && lower.startsWith(known.toLowerCase())));
+    return `subgrid '${sg.childEntity}' has the key '${k}', which nothing reads${meant ? ` — did you mean '${meant}'?` : ''} (the keys are ${SUBGRID_KEYS.join(', ')})`;
+  });
+}
+
+// What is wrong with where a `subgrids[]` entry places its grid, as messages that start with the entry (the
+// caller adds the form). Empty for an entry that places nothing. The spec gate and the standalone lint both ask
+// this one function, so they cannot disagree about what is a valid placement — a placement that validates here
+// is one the build resolves, and one it resolves is one `--verify` can check.
+//
+// Types are checked first and stop the rest: a placement whose values are not names or a whole number cannot be
+// resolved against the layout, and a second message about it would only restate the first.
+function subgridPlacementProblems(formSpec, sg) {
+  const out = [];
+  if (!sg || typeof sg !== 'object' || Array.isArray(sg)) return out;
+  const who = `subgrid '${sg.childEntity}'`;
+  for (const key of ['tab', 'after', 'before']) {
+    if (sg[key] !== undefined && !(typeof sg[key] === 'string' && sg[key].trim() !== '')) {
+      out.push(`${who} has ${key} ${JSON.stringify(sg[key])} — it must be the name of a ${key === 'tab' ? 'tab' : 'section'} on this form, as a non-empty string`);
+    }
+  }
+  if (sg.column !== undefined && (!Number.isInteger(sg.column) || sg.column < 0)) {
+    out.push(`${who} has column ${JSON.stringify(sg.column)} — it must be a whole number from 0, the first form-column of its tab`);
+  }
+  if (out.length) return out;
+  const placement = placementOf(sg);
+  if (!placement) return out;
+  const layout = formLayoutNames(formSpec);
+  const resolved = resolvePlacement(layout, placement);
+  if (resolved.ok) return out;
+  const explicit = Array.isArray(formSpec && formSpec.tabs);
+  const tabs = layout.map((t) => t.name).join(', ');
+  const sections = layout.flatMap((t) => t.columns.flatMap((c) => c.sections)).join(', ');
+  const autoNote = explicit ? '' : ` (an auto layout has the one tab '${AUTO_TAB_NAME}' holding the one section '${AUTO_SECTION_NAME}' — declare tabs[] for more)`;
+  switch (resolved.code) {
+    case 'both':
+      out.push(`${who} sets both 'after' and 'before' — give one: the grid goes right after a section or right before one, not both`);
+      break;
+    case 'tab':
+      out.push(`${who} places the grid in tab '${sg.tab}', which this form does not declare (its tabs: ${tabs})${autoNote}`);
+      break;
+    case 'column':
+      out.push(`${who} places the grid in column ${sg.column} of tab '${layout[resolved.tabIndex].name}', which has ${resolved.columns} form-column(s) — count from 0`);
+      break;
+    case 'anchor':
+      out.push(`${who} places the grid ${resolved.anchor.side} section '${sg[resolved.anchor.side]}', which this form does not declare (its sections: ${sections || 'none'})${autoNote}`);
+      break;
+    case 'anchor-tab':
+      out.push(`${who} places the grid ${resolved.anchor.side} section '${sg[resolved.anchor.side]}', which is in tab '${resolved.actualTab}', not in tab '${sg.tab}' — the grid goes in its anchor's tab, so drop 'tab' or name the right one`);
+      break;
+    case 'anchor-column':
+      out.push(`${who} places the grid ${resolved.anchor.side} section '${sg[resolved.anchor.side]}', which is in form-column ${resolved.actualColumn} of its tab, not ${sg.column} — the grid goes in its anchor's column, so drop 'column' or name the right one`);
+      break;
+    default:
+      break;
+  }
+  return out;
+}
+
+// The entries of a form's `subgrids[]` that name ONE relationship, as { errors, warnings } of messages that start with
+// the entry (the caller adds the form). A form holds one grid per relationship — the build finds a grid by it, and an
+// entry whose grid is already there adds nothing — so of several entries only one can say where the grid goes, and the
+// others' placement could never be honoured, silently: a check looks a grid up by its relationship, so every entry
+// for it would read the same grid and pass or fail together.
+//
+// An ERROR when any of the entries declares where the grid goes. Those keys are new, so no spec that built before can
+// carry one. A repeat that places nothing is a WARNING: specs have always been able to carry it and the build has always
+// ignored the extra entry, so refusing it now would break a spec that built. Entries are grouped by the relationship
+// they resolve to (subgridRelationshipName — what the build writes and verify looks for), so the same table spelled in
+// another case counts, and an entry with no relationship is left to the error it already gets. The gate and the lint
+// both ask this one function.
+function subgridDuplicateProblems(spec, formSpec) {
+  const out = { errors: [], warnings: [] };
+  const groups = new Map();
+  (Array.isArray(formSpec && formSpec.subgrids) ? formSpec.subgrids : []).forEach((sg, index) => {
+    if (!sg || typeof sg !== 'object' || Array.isArray(sg) || typeof sg.childEntity !== 'string') return;
+    const relationship = subgridRelationshipName(spec, formSpec.entity, sg.childEntity);
+    if (!relationship) return;
+    const key = relationship.toLowerCase();
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push({ index, sg });
+  });
+  for (const entries of groups.values()) {
+    if (entries.length < 2) continue;
+    const which = entries.map((e) => `subgrids[${e.index}]`).join(', ');
+    const said = `subgrids lists the sub-grid for '${entries[0].sg.childEntity}' more than once (${which}) — a form holds one grid per relationship`;
+    if (entries.some((e) => placementOf(e.sg))) out.errors.push(`${said}, so only one entry can say where it goes; keep one`);
+    else out.warnings.push(`${said}, so the build adds one and ignores the rest`);
+  }
+  return out;
 }
 
 // The plugin's own version, read from its manifest, for the `minimumPluginVersion` capability gate.
@@ -1214,6 +1902,103 @@ function compareVersions(a, b) {
     if (d) return d;
   }
   return 0;
+}
+
+const APP_MEMBERSHIP_MIN_VERSION = '2.13.0';
+const isPluginVersion = (value) => typeof value === 'string' && /^\d+(?:\.\d+)*(?:[-+][0-9A-Za-z.-]+)?$/.test(value);
+
+function sitemapEntityTables(spec) {
+  const tables = new Set();
+  for (const area of (spec.appShell && spec.appShell.areas) || []) {
+    for (const group of area.groups || []) {
+      for (const sub of group.subAreas || []) {
+        if (sub && typeof sub.entity === 'string' && !sub.page && !sub.dashboard && !sub.url) {
+          tables.add(sub.entity.toLowerCase());
+        }
+      }
+    }
+  }
+  return [...tables];
+}
+
+function validateAppMembership(spec, errors) {
+  const app = spec.app || {};
+  if (app.tables !== undefined) {
+    if (!Array.isArray(app.tables) || app.tables.some((name) => typeof name !== 'string' || !name.trim())) {
+      errors.push('app.tables must be an array of non-empty table logical names');
+    } else {
+      const seen = new Set();
+      for (const table of app.tables) {
+        const key = table.toLowerCase();
+        if (seen.has(key)) errors.push(`app.tables lists table '${table}' more than once (logical names compare case-insensitively)`);
+        seen.add(key);
+      }
+    }
+  }
+  if (app.mainForms === undefined) return;
+  if (!app.mainForms || typeof app.mainForms !== 'object' || Array.isArray(app.mainForms)) {
+    errors.push('app.mainForms must be an object mapping a sitemap table to a non-empty list of Main form names');
+    return;
+  }
+  const navigated = new Set(sitemapEntityTables(spec));
+  const seenTables = new Set();
+  for (const [table, names] of Object.entries(app.mainForms)) {
+    const key = table.toLowerCase();
+    const label = `app.mainForms['${table}']`;
+    if (seenTables.has(key)) errors.push(`${label}: table is listed more than once (logical names compare case-insensitively)`);
+    seenTables.add(key);
+    if (!navigated.has(key)) {
+      errors.push(`${label}: '${table}' is not a sitemap Entity table (sitemap tables: ${[...navigated].join(', ') || 'none'})`);
+    }
+    if (!Array.isArray(names) || !names.length || names.some((name) => typeof name !== 'string' || !name.trim())) {
+      errors.push(`${label}: must be a non-empty array of Main form names; an app with no Main form offers every form of the table`);
+      continue;
+    }
+    const seenNames = new Set();
+    const mains = (spec.forms || []).filter((form) => isMainForm(form) && String(form.entity || '').toLowerCase() === key);
+    for (const name of names) {
+      const normalized = dashboardNameKey(name);
+      if (seenNames.has(normalized)) errors.push(`${label}: Main form '${name}' is listed more than once (names compare ignoring case and accents)`);
+      seenNames.add(normalized);
+      if (mains.filter((form) => dashboardNameKey(form.name) === normalized).length > 1) {
+        errors.push(`${label}: '${name}' is ambiguous among the declared Main forms of this table — rename one`);
+      }
+      // A declared QuickView named "Information" can coexist with an undeclared stock Main of that
+      // name. Only the active Main catalog can prove a wrong type, so resolution makes that decision.
+    }
+  }
+}
+
+function appMembershipWarnings(spec) {
+  const warnings = [];
+  const app = spec.app || {};
+  if (app.tables === undefined && app.mainForms === undefined) return warnings;
+  const floor = spec.minimumPluginVersion;
+  if (!isPluginVersion(floor) || compareVersions(floor, APP_MEMBERSHIP_MIN_VERSION) < 0) {
+    warnings.push(`set minimumPluginVersion to '${APP_MEMBERSHIP_MIN_VERSION}' or newer when using app.tables or app.mainForms — older plugins ignore these fields`);
+  }
+  const navigated = new Set(sitemapEntityTables(spec));
+  for (const table of Array.isArray(app.tables) ? app.tables : []) {
+    if (typeof table === 'string' && navigated.has(table.toLowerCase())) {
+      warnings.push(`app.tables: '${table.toLowerCase()}' is already in the navigation; listing it again is redundant`);
+    }
+  }
+  if (!app.mainForms || typeof app.mainForms !== 'object' || Array.isArray(app.mainForms)) return warnings;
+  for (const [table, names] of Object.entries(app.mainForms)) {
+    if (!Array.isArray(names)) continue;
+    const allowed = new Set(names.filter((name) => typeof name === 'string').map(dashboardNameKey));
+    const key = table.toLowerCase();
+    const flagged = (spec.forms || []).find((form) => isMainForm(form) && String(form.entity || '').toLowerCase() === key && form.isDefault === true);
+    const entity = (spec.entities || []).find((entry) => entry && String(entry.schemaName || '').toLowerCase() === key);
+    const ordered = entity && Array.isArray(entity.mainFormOrder) && entity.mainFormOrder[0];
+    const defaults = new Set([flagged && flagged.name, ordered].filter(Boolean));
+    for (const name of defaults) {
+      if (!allowed.has(dashboardNameKey(name))) {
+        warnings.push(`app.mainForms['${table}'] excludes '${name}', the explicit default or first mainFormOrder form — the app cannot offer that form`);
+      }
+    }
+  }
+  return warnings;
 }
 
 // Keys an author reasonably reaches for that FormXml has no place for. Naming the real mechanism is
@@ -1637,10 +2422,20 @@ function validateSampleDataRows(entityKey, records, errors) {
 
 function validateAppSpec(spec, opts = {}) {
   const profile = opts.profile || 'deploy';
+  // The column rules below (an AutoNumber column's format, a `required` value) say what the BUILD can use, so every profile that builds or plans a
+  // build holds a spec to them. The structural profile — teardown's, which also serves preview and the eval harness — does not: it reads a spec for
+  // the tables and components it names, and a spec an earlier release accepted and built (an AutoNumber column made as text, a `required: "true"`
+  // made not required) must still be torn down. The same arrangement as the relationship-name collisions checked at the end of this function.
+  const checksColumnValues = profile !== 'structural';
   const errors = [];
   // Non-blocking advisories (e.g. a PRE-EXISTING duplicate page name the current run did not create).
   // Additive to the return shape — callers that only read { ok, errors } are unaffected.
   const warnings = [];
+  // Where the two column rules' findings go: errors, or — for read-only verification, which passes `columnValues: 'warn'` — warnings. Verification creates
+  // and updates nothing and only reads whether each column exists, so rules that keep a BUILD from misreading a column's declaration have nothing to
+  // protect there, and the spec of an app an earlier release built from a value they refuse must still reach its deployment. The same arrangement as
+  // `relationshipCollisions: 'warn'` at the end of this function; every other caller keeps the error.
+  const columnValueFindings = opts.columnValues === 'warn' ? warnings : errors;
   if (!VALIDATION_PROFILES.includes(profile)) {
     return { ok: false, errors: [`unknown validation profile '${profile}' (valid: ${VALIDATION_PROFILES.join(', ')})`], warnings };
   }
@@ -1672,7 +2467,7 @@ function validateAppSpec(spec, opts = {}) {
     // and compareVersions' `parseInt(n, 10) || 0` then read the empty component as 0 and enforced
     // 2.0.9 — a different floor than the author wrote, with no error. The optional `-pre`/`+build`
     // suffix is permitted because compareVersions deliberately compares the release CORE.
-    if (typeof want !== 'string' || !/^\d+(?:\.\d+)*(?:[-+][0-9A-Za-z.-]+)?$/.test(want)) {
+    if (!isPluginVersion(want)) {
       errors.push(`minimumPluginVersion must be a dotted version string like '2.9.0', got ${JSON.stringify(want)}`);
     } else {
       const have = pluginVersion();
@@ -1723,6 +2518,8 @@ function validateAppSpec(spec, opts = {}) {
   if (spec.app && spec.app.headerNavigationRefresh !== undefined && typeof spec.app.headerNavigationRefresh !== 'boolean') {
     errors.push('app.headerNavigationRefresh must be a boolean');
   }
+  validateAiDescription(spec.app && spec.app.aiDescription, errors);
+  if (profile !== 'structural') validateAppMembership(spec, errors);
   if (spec.languageCode !== undefined && normalizeLanguageCode(spec.languageCode) === null) {
     // Keep the leading clause stable — the CLI flag and two test suites match on it. The appended
     // guidance exists because the bare message named the mistake without naming the fix, and a
@@ -1816,6 +2613,16 @@ function validateAppSpec(spec, opts = {}) {
     if (!e.primaryAttribute || !e.primaryAttribute.schemaName) {
       errors.push(`entity ${e.schemaName}: primaryAttribute.schemaName required`);
     }
+    // The length of the table's name column, asked for when the table is created (an existing table's column is left as it
+    // is).
+    if (e.primaryAttribute && typeof e.primaryAttribute === 'object') {
+      const lengthProblem = primaryNameLengthProblem(e.primaryAttribute.maxLength);
+      if (lengthProblem) errors.push(`entity ${e.schemaName}: ${lengthProblem}`);
+      if (checksColumnValues) {
+        const requiredProblem = requiredValueProblem(e.primaryAttribute.required);
+        if (requiredProblem) columnValueFindings.push(`entity ${e.schemaName}: primaryAttribute.required ${requiredProblem}`);
+      }
+    }
     if (e.quickCreate !== undefined && typeof e.quickCreate !== 'boolean') {
       errors.push(`entity ${e.schemaName}: quickCreate must be a boolean`);
     }
@@ -1849,6 +2656,13 @@ function validateAppSpec(spec, opts = {}) {
       }
       if (c.type && !TYPE_MAP[c.type]) {
         errors.push(`entity ${e.schemaName}: column ${c.schemaName} has unknown type '${c.type}'`);
+      }
+      // An AutoNumber column needs a format, and `required` is true, false or "recommended" (see checksColumnValues).
+      if (checksColumnValues) {
+        const formatProblem = autoNumberFormatProblem(c);
+        if (formatProblem) columnValueFindings.push(`entity ${e.schemaName}: column ${c.schemaName} ${formatProblem}`);
+        const requiredProblem = requiredValueProblem(c.required);
+        if (requiredProblem) columnValueFindings.push(`entity ${e.schemaName}: column ${c.schemaName} required ${requiredProblem}`);
       }
       if ((c.type === 'Choice' || c.type === 'MultiChoice') && !(Array.isArray(c.options) && c.options.length) && !c.globalChoice) {
         errors.push(`column ${c.schemaName}: ${c.type} needs options[] or a globalChoice reference`);
@@ -1934,6 +2748,14 @@ function validateAppSpec(spec, opts = {}) {
     if (wr.content === undefined && wr.contentBase64 === undefined && !wr.contentPath) {
       errors.push(`webResource ${wr.name}: needs content, contentBase64, or contentPath`);
     }
+    // The path is read only when it is the effective source (sdk-build.js webResourceOpts takes
+    // contentBase64, then content, then contentPath) and only by a profile that builds or verifies.
+    // Teardown's structural profile reads no source, so a spec an earlier release accepted with an
+    // unconfined path can still be torn down; build and verify refuse it until the path is fixed.
+    const readsContentPath = wr.contentBase64 === undefined && wr.content === undefined && wr.contentPath !== undefined;
+    if (readsContentPath && profile !== 'structural' && !isAppSourcePath(wr.contentPath)) {
+      errors.push(`webResource ${wr.name}: contentPath must be an app-folder-confined relative path (no parent escape, rooted or drive path, or alternate stream)`);
+    }
   }
   // AB#6686426: `isDefault` picks which Main form a table opens with. Explicit beats the fallback
   // (first Main form in spec order), and both are order-independent — which is the property the old
@@ -1957,6 +2779,77 @@ function validateAppSpec(spec, opts = {}) {
   for (const [ent, names] of Object.entries(defaultByEntity)) {
     if (names.length > 1) {
       errors.push(`entity '${ent}': ${names.length} Main forms set isDefault (${names.join(', ')}) — exactly one form can be the table's default`);
+    }
+  }
+
+  // AB#6736948: `entities[].mainFormOrder` — the table's Main Form Set order, first to last. The first
+  // form is the one the table opens with; lib/form-order.js has the platform's model of it and what
+  // was measured. Every name must address exactly one Main form of the table in forms[], because the
+  // build writes the order onto the forms it resolves, and a name it cannot resolve would silently
+  // leave a different form first.
+  for (const e of spec.entities || []) {
+    if (!e || typeof e !== 'object' || e.mainFormOrder === undefined) continue;
+    const label = `entity '${e.schemaName}'`;
+    const list = e.mainFormOrder;
+    if (!Array.isArray(list) || !list.length || list.some((n) => typeof n !== 'string' || !n.trim())) {
+      errors.push(`${label}: mainFormOrder must be a non-empty array of Main form names from forms[] (got ${describeSpecValue(list)})`);
+      continue;
+    }
+    const key = String(e.schemaName || '').toLowerCase();
+    const formsOfEntity = (spec.forms || []).filter((f) => f && typeof f === 'object' && String(f.entity || '').toLowerCase() === key);
+    const mains = formsOfEntity.filter(isMainForm);
+    const seen = new Set();
+    for (const name of list) {
+      // Repeats are compared case-insensitively: Dataverse matches a form name that way, so two
+      // spellings of one name would still be one form.
+      const k = name.trim().toLowerCase();
+      if (seen.has(k)) { errors.push(`${label}: mainFormOrder lists '${name}' more than once`); continue; }
+      seen.add(k);
+      // The build finds a deployed form with a server-side `name eq` filter, which compares names the way
+      // Dataverse does — ignoring case and, in most languages, accents (dashboardNameKey: a dashboard is a
+      // systemform too, so its measured folding is a form name's) — so Main forms whose names compare
+      // equal there are one name to the build, and the order could not address either. The listed name
+      // must still be spelled exactly as in forms[]: it is a cross-reference into this spec, resolved
+      // exactly (listedMainForms, form-order.js).
+      const twins = mains.filter((f) => dashboardNameKey(f.name) === dashboardNameKey(name));
+      const matches = twins.filter((f) => f.name === name);
+      if (twins.length > 1) {
+        const spellings = [...new Set(twins.map((f) => `'${f.name}'`))];
+        errors.push(`${label}: mainFormOrder names '${name}', but ${twins.length} Main forms of this table share that name${spellings.length > 1 ? ` (${spellings.join(', ')}: Dataverse compares form names ignoring case and, in most languages, accents)` : ''} — rename one so the order can address it`);
+      } else if (!matches.length) {
+        const other = formsOfEntity.find((f) => f.name === name);
+        errors.push(other
+          ? `${label}: mainFormOrder names '${name}', a ${other.formType} form — only Main forms are in the Main Form Set`
+          : `${label}: mainFormOrder names '${name}', which is not a Main form of this table in forms[] (its Main forms: ${mains.map((f) => `'${f.name || '(unnamed)'}'`).join(', ') || 'none'})`);
+      }
+    }
+    const flagged = mains.find((f) => f.isDefault === true);
+    if (flagged && list[0] !== flagged.name) {
+      errors.push(`${label}: form '${flagged.name}' sets isDefault, so it must come first in mainFormOrder (which starts with '${list[0]}') — the first form in the order is the one the table opens with`);
+    }
+    const byHand = mains.filter((f) => f.securityRoles && typeof f.securityRoles === 'object' && f.securityRoles.order !== undefined);
+    if (byHand.length) {
+      errors.push(`${label}: mainFormOrder and forms[].securityRoles.order (on ${byHand.map((f) => `'${f.name || f.entity}'`).join(', ')}) both set this table's form order — keep one of them`);
+    }
+  }
+  // `securityRoles.order` writes the same attribute, so a table ordered that way is ordered by hand and
+  // the build leaves it alone — which means the default form opens first only when ITS order is the
+  // lowest. Warned, not rejected: the combination is legal and can be exactly what the author meant.
+  const orderedByHandSeen = new Set();
+  for (const f of spec.forms || []) {
+    if (!isMainForm(f)) continue;
+    const key = String(f.entity || '').toLowerCase();
+    if (orderedByHandSeen.has(key)) continue;
+    orderedByHandSeen.add(key);
+    const entSpec = (spec.entities || []).find((e) => e && String(e.schemaName || '').toLowerCase() === key);
+    if (!ordersByHand(spec, key) || (entSpec && entSpec.mainFormOrder !== undefined)) continue;
+    const chosen = selectDefaultForm(spec, key);
+    if (!chosen) continue;
+    const mine = chosen.form.securityRoles && chosen.form.securityRoles.order;
+    const rivals = (spec.forms || []).filter((o) => o !== chosen.form && isMainForm(o) && String(o.entity || '').toLowerCase() === key
+      && o.securityRoles && Number.isInteger(o.securityRoles.order) && (!Number.isInteger(mine) || o.securityRoles.order <= mine));
+    if (!Number.isInteger(mine) || rivals.length) {
+      warnings.push(`entity '${key}': forms[].securityRoles.order sets this table's form order, so the build does not reorder its Main forms — '${chosen.form.name || key}' opens first only if its securityRoles.order is lower than every other Main form's${rivals.length ? ` (${rivals.map((o) => `'${o.name || key}': ${o.securityRoles.order}`).join(', ')})` : ''}. Or declare entities[].mainFormOrder instead.`);
     }
   }
 
@@ -2047,6 +2940,7 @@ function validateAppSpec(spec, opts = {}) {
             errors.push(`form ${f.entity}: a subgrid is missing childEntity`);
             continue;
           }
+          for (const message of subgridUnknownKeys(sg)) warnings.push(`form ${f.entity}: ${message}`);
           if (badEntityRef(sg.childEntity, `form ${f.entity}: subgrid childEntity`)) continue;
           if (!entityByLower.has(String(sg.childEntity).toLowerCase())) {
             errors.push(`form ${f.entity}: subgrid references unknown childEntity '${sg.childEntity}'`);
@@ -2057,6 +2951,17 @@ function validateAppSpec(spec, opts = {}) {
               `form ${f.entity}: no OneToMany or ManyToMany relationship between '${f.entity}' and subgrid childEntity '${sg.childEntity}'`
             );
           }
+          // Where the grid goes (tab / column / after / before). A non-Main form already fails for hosting a
+          // grid at all, so its placement is not judged on top of that.
+          if (formType === 'Main') {
+            for (const message of subgridPlacementProblems(f, sg)) errors.push(`form ${f.entity}: ${message}`);
+          }
+        }
+        // …and a relationship listed more than once (an error when an entry places the grid, else a warning).
+        if (formType === 'Main') {
+          const duplicates = subgridDuplicateProblems(spec, f);
+          for (const message of duplicates.errors) errors.push(`form ${f.entity}: ${message}`);
+          for (const message of duplicates.warnings) warnings.push(`form ${f.entity}: ${message}`);
         }
       }
     }
@@ -2417,8 +3322,69 @@ function validateAppSpec(spec, opts = {}) {
   const DASH_TILE_TYPES = new Set(['chart', 'list', 'iframe', 'webresource']);
   const viewNamesSet = new Set((spec.views || []).map((v) => v.name));
   const chartNamesSet = new Set((spec.charts || []).map((c) => c.name));
+  // Name → the tables that declare it. A tile names its view and chart, but both are unique only PER
+  // TABLE, and the build resolves them on the tile's table: when names repeat across tables, a tile
+  // that does not pin its table — or whose chart lives on a different one — deploys one table's view
+  // under another table's chart, which the platform accepts and publishes (live-measured).
+  const entitiesByName = (items) => {
+    const m = new Map();
+    for (const x of items || []) {
+      if (!x || !x.name || !x.entity) continue;
+      if (!m.has(x.name)) m.set(x.name, new Set());
+      m.get(x.name).add(String(x.entity).toLowerCase());
+    }
+    return m;
+  };
+  const viewTables = entitiesByName(spec.views);
+  const chartTables = entitiesByName(spec.charts);
+  const seenDashboardNames = new Map(); // dashboardNameKey → the first dashboard's name as written
+  const seenDashboardIds = new Map(); // pinned dashboardId (bare, lower) → the dashboard's name as written
+  // The table a name-based chart/list tile shows, or null when it cannot be determined (reported).
+  const tileTable = (d, t) => {
+    const tables = viewTables.get(t.view);
+    if (!tables) return null; // unknown view — reported by the caller
+    if (t.entity) {
+      const want = String(t.entity).toLowerCase();
+      if (!tables.has(want)) {
+        errors.push(`dashboard '${d.name}': ${t.type} tile names view '${t.view}' on ${t.entity}, but that view is declared on ${[...tables].join(', ')}`);
+        return null;
+      }
+      return want;
+    }
+    if (tables.size > 1) {
+      errors.push(`dashboard '${d.name}': ${t.type} tile's view '${t.view}' is declared on more than one table (${[...tables].join(', ')}) — set the tile's entity to say which`);
+      return null;
+    }
+    return [...tables][0];
+  };
   for (const d of spec.dashboards || []) {
     if (!d || !d.name) { errors.push('a dashboard is missing a name'); continue; }
+    // A DOWNLOADED dashboard carries its deployed id (edit-snapshot only, like pages[].pageId), which a
+    // rebuild binds to before trying the name. Two entries pinning one id would bind two nav targets
+    // to one dashboard, so each must be a distinct GUID.
+    if (d.dashboardId !== undefined) {
+      // A bare GUID, or one in braces as Dataverse writes it in sitemap XML — both braces or none: an id
+      // with a lone brace is malformed, not one to bind a dashboard to.
+      const raw = typeof d.dashboardId === 'string' ? d.dashboardId.trim() : '';
+      const pin = (/^\{.*\}$/.test(raw) ? raw.slice(1, -1) : raw).toLowerCase();
+      if (!FORM_GUID_RE.test(pin)) {
+        errors.push(`dashboard '${d.name}': dashboardId must be a GUID (got ${JSON.stringify(d.dashboardId)}) — it is the deployed dashboard's id, which a download writes; leave it out of an authored spec`);
+      } else if (seenDashboardIds.has(pin)) {
+        errors.push(`dashboard '${d.name}': has the same dashboardId as dashboard '${seenDashboardIds.get(pin)}' — each entry must pin a different dashboard`);
+      } else {
+        seenDashboardIds.set(pin, d.name);
+      }
+    }
+    // A sitemap subarea and the build both find a dashboard BY NAME, the build through a server-side
+    // filter that ignores case (and usually accents), so two names that compare equal there cannot be
+    // told apart: both subareas resolve to one dashboard and the other silently leaves the nav
+    // (#586 item 4). See dashboardNameKey for exactly what is folded.
+    const dashKey = dashboardNameKey(d.name);
+    if (seenDashboardNames.has(dashKey)) {
+      errors.push(`dashboard '${d.name}': has the same name as dashboard '${seenDashboardNames.get(dashKey)}' — Dataverse compares names ignoring case (and, in most languages, accents), and a sitemap subarea and the build find a dashboard by name, so each name must be unique`);
+    } else {
+      seenDashboardNames.set(dashKey, d.name);
+    }
     validateDescription(d.description, `dashboard '${d.name}'`, errors);
     if (!Array.isArray(d.tiles) || !d.tiles.length) { errors.push(`dashboard '${d.name}': needs tiles[]`); continue; }
     for (const t of d.tiles) {
@@ -2440,6 +3406,13 @@ function validateAppSpec(spec, opts = {}) {
         } else {
           if (!t.chart || !chartNamesSet.has(t.chart)) errors.push(`dashboard '${d.name}': chart tile references unknown chart '${t.chart}'`);
           if (!t.view || !viewNamesSet.has(t.view)) errors.push(`dashboard '${d.name}': chart tile needs a declared view for its data — '${t.view}' not found`);
+          else {
+            const table = tileTable(d, t);
+            const chartOn = chartTables.get(t.chart);
+            if (table && chartOn && !chartOn.has(table)) {
+              errors.push(`dashboard '${d.name}': chart tile shows ${table} (view '${t.view}'), but chart '${t.chart}' is declared on ${[...chartOn].join(', ')} — a tile's chart and view must be on the same table`);
+            }
+          }
         }
       } else if (t.type === 'list') {
         if (byId) {
@@ -2447,6 +3420,8 @@ function validateAppSpec(spec, opts = {}) {
           else badEntityRef(t.entity, `dashboard '${d.name}': list tile`);
         } else if (!t.view || !viewNamesSet.has(t.view)) {
           errors.push(`dashboard '${d.name}': list tile references unknown view '${t.view}'`);
+        } else {
+          tileTable(d, t);
         }
       } else if (t.type === 'iframe') {
         if (!t.url) errors.push(`dashboard '${d.name}': iframe tile needs a url`);
@@ -2474,30 +3449,13 @@ function validateAppSpec(spec, opts = {}) {
   // slugify (:686) which always conforms; a hand-authored v2 key must too, since the key is the
   // cross-reference identity (navigatesTo.targetKey, PAGEREF_<key>, appShell page subareas).
   const PAGE_KEY_GRAMMAR = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/;
-  // GUID pattern for pages[].pageId — a 36-char hyphenated hex UUID as minted by Dataverse / PAC CLI.
+  // GUID pattern for pages[].pageId — a 36-char hyphenated hex UUID as minted by Dataverse or by the SDK on a page create.
   // A spec page carrying this field is an EDIT-SNAPSHOT (env-specific, downloaded from a live app);
   // a portable fresh-authored spec omits it. When present it must be exactly this shape so
   // reconcilePageIds can use it as the highest identity authority without silently accepting garbage
-  // (e.g. a cross-env GUID that happens to match an unrelated page). Addenda Task 4 / C3.
+  // (e.g. a cross-env GUID that happens to match an unrelated page).
   const PAGE_ID_GUID = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
-  const pageCodeFilesNorm = new Set(); // implemented-page normalized codeFile uniqueness (Critical 4)
-  // A codeFile must resolve INSIDE the working directory. Use path.normalize to canonicalize before
-  // checking — this catches aliases like 'pages/./x.tsx' and 'pages/../pages/x.tsx' that resolve to
-  // the same file but evade a naive string-split check (addendum Crit 4). path.isAbsolute is
-  // platform-specific (on POSIX it does NOT flag a Windows drive-letter path like 'C:/x'), so we ALSO
-  // match a drive-letter prefix explicitly — a spec authored on Windows must be rejected the same way
-  // on a Linux CI runner. After normalization, a path starting with '..' has escaped the workspace
-  // root. sdk-build resolves codeFile with path.resolve(appDir, codeFile) at :1037-1041, so an
-  // unconfined path reaches the filesystem outside the app folder — reject it here, before any write. Design §7.2.
-  const codeFileConfined = (codeFile) => {
-    const cf = String(codeFile);
-    // Drive-letter guard (/^[a-zA-Z]:[/\\]/) catches 'C:\x'/'C:/x' on POSIX where path.isAbsolute misses it.
-    if (path.isAbsolute(cf) || /^[a-zA-Z]:[/\\]/.test(cf)) return false;
-    const normalized = path.normalize(cf);
-    // normalized === '..' means the codeFile IS the parent directory.
-    // normalized.startsWith('..' + path.sep) means it is a path beneath the parent directory.
-    return normalized !== '..' && !normalized.startsWith('..' + path.sep);
-  };
+  const pageCodeFilesNorm = new Set(); // implemented-page normalized codeFile uniqueness
   for (const p of spec.pages || []) {
     if (!p || !p.name) { errors.push('a page is missing a name'); continue; }
     pageNamesSet.add(p.name);
@@ -2505,10 +3463,15 @@ function validateAppSpec(spec, opts = {}) {
     // (see "page-name uniqueness" below) so it can distinguish a NEW page from a PRE-EXISTING one.
     // A page MAY carry its own deployed `pageId` (edit-snapshot marker). A portable fresh-authored spec
     // omits it — absence is never an error. When present it MUST be a valid 36-char GUID: the
-    // reconcilePageIds authority logic (addenda Task 4 / C3) consumes it as the HIGHEST identity source,
+    // reconcilePageIds authority logic consumes it as the HIGHEST identity source,
     // so silently accepting a malformed / empty value would cause reconcile to bind the wrong page.
     if (p.pageId !== undefined && !PAGE_ID_GUID.test(String(p.pageId))) {
       errors.push(`page '${p.key || p.name}': pageId must be a 36-char GUID`);
+    }
+    // The id of the model that generated the page — what the page's config.json records as `model`, and
+    // what a download writes back. A short token (e.g. `gpt-4.1`).
+    if (p.model !== undefined && (typeof p.model !== 'string' || !PAGE_MODEL_RE.test(p.model))) {
+      errors.push(`page '${p.key || p.name}': model must be a model id such as 'gpt-4.1' (letters, digits and . _ : / @ + -, at most 100 characters)`);
     }
     const src = normalizePageSource(p);
     // Track whether a structural source error was emitted so the profile check below doesn't
@@ -2532,16 +3495,16 @@ function validateAppSpec(spec, opts = {}) {
         errors.push(`page '${p.key || p.name}': needs a source ({ kind: 'intent' } or { kind: 'tsx', codeFile })`);
       }
     }
-    // codeFile confinement + path-uniqueness (Critical 4). Only checked for implemented tsx pages
+    // codeFile confinement + path-uniqueness. Only checked for implemented tsx pages
     // (intent pages have no codeFile; the codeFile presence was already validated above). Normalize
     // the path before checking so that 'pages/./x.tsx' and 'pages/../pages/x.tsx' are detected as
-    // duplicates of 'pages/x.tsx' (addendum Crit 4). Replace backslashes with forward slashes before
+    // duplicates of 'pages/x.tsx'. Replace backslashes with forward slashes before
     // lowercasing for cross-platform-safe comparison in the set.
     if (src && src.kind === 'tsx' && typeof src.codeFile === 'string' && src.codeFile) {
-      if (!codeFileConfined(src.codeFile)) {
-        errors.push(`page '${p.key || p.name}': codeFile '${src.codeFile}' must be a workspace-confined relative path (no '..' escape, no absolute path)`);
+      if (!isAppSourcePath(src.codeFile)) {
+        errors.push(`page '${p.key || p.name}': codeFile '${src.codeFile}' must be a workspace-confined relative path (no parent escape, rooted or drive path, or alternate stream)`);
       }
-      const cfNorm = path.normalize(src.codeFile).replace(/\\/g, '/').toLowerCase();
+      const cfNorm = path.posix.normalize(src.codeFile.replace(/\\/g, '/')).toLowerCase();
       if (pageCodeFilesNorm.has(cfNorm)) errors.push(`page '${p.key || p.name}': duplicate codeFile '${src.codeFile}' (another page already uses this path)`);
       else pageCodeFilesNorm.add(cfNorm);
     }
@@ -2560,7 +3523,7 @@ function validateAppSpec(spec, opts = {}) {
   // edit-snapshot can legitimately carry a PRE-EXISTING duplicate the run did NOT create (two pages
   // authored by different people/tools), and blocking every build — even an unrelated form edit that
   // never touches pages — on a dupe the run is not changing is wrong (the pages phase matches by id/key,
-  // never by name: genpage-cli.js enumerateEnv is id-keyed, and download's assignPageKeys de-dups keys
+  // never by name: lib/genpage-sdk.js enumerateEnv is id-keyed, and download's assignPageKeys de-dups keys
   // with a -N suffix, so distinct-id same-name pages build fine). Signal: a page carrying a deployed
   // `pageId` is PRE-EXISTING (an edit-snapshot marker); a page WITHOUT one is NEW (authored this run).
   //   - collision involving a NEW page  → ERROR  (prevent authoring/adding a duplicate)
@@ -2676,6 +3639,20 @@ function validateAppSpec(spec, opts = {}) {
       warnings.push(`${label}: icon reference '${val}' points at a custom web resource ('${wrName}') that is NOT declared in webResources[] — it will render only on an environment that already has it (a rebuild into a fresh env shows a broken icon). Declare that web resource so the build recreates it; a downloaded spec does this automatically.`);
     }
   };
+  (spec.appShell && spec.appShell.areas || []).forEach((a, ai) => {
+    // Named by whatever the author wrote, so a mistaken `title` still identifies the node it is on.
+    const nodeName = (n, i) => {
+      const v = n && typeof n === 'object' ? (n.label || n.title) : '';
+      return typeof v === 'string' && v.trim() ? `"${v}"` : `#${i + 1}`;
+    };
+    reportUnknownAppShellKeys(a, 'area', `sitemap area ${nodeName(a, ai)}`, errors);
+    ((a && a.groups) || []).forEach((g, gi) => {
+      reportUnknownAppShellKeys(g, 'group', `sitemap group ${nodeName(g, gi)} in area ${nodeName(a, ai)}`, errors);
+      ((g && g.subAreas) || []).forEach((sa, si) => {
+        reportUnknownAppShellKeys(sa, 'subArea', `sitemap subArea ${nodeName(sa, si)} in group ${nodeName(g, gi)}`, errors);
+      });
+    });
+  });
   for (const a of (spec.appShell && spec.appShell.areas) || []) {
     checkIcon(a.icon, `sitemap area "${a.label || ''}"`);
     checkPortableIconRef(a.icon, `sitemap area "${a.label || ''}"`);
@@ -2719,7 +3696,7 @@ function validateAppSpec(spec, opts = {}) {
         checkPortableIconRef(sa.icon, `sitemap subArea "${sa.title || ''}"`);
         checkPortableIconRef(sa.vectorIcon, `sitemap subArea "${sa.title || ''}"`);
         validateIconDescription(sa.iconDescription, `sitemap subArea "${sa.title || ''}"`, errors);
-        // Ask 3: don't SILENTLY drop an entity-subarea vectorIcon. A valid platform ref round-trips
+        // Don't SILENTLY drop an entity-subarea vectorIcon. A valid platform ref round-trips
         // (emitted by the build); a BARE token can't be emitted on an entity subarea (it breaks the
         // modern app-designer), so surface it as a warning at author time rather than a silent drop.
         if (sa.entity && sa.vectorIcon && !isPlatformIconRef(sa.vectorIcon)) {
@@ -2741,7 +3718,7 @@ function validateAppSpec(spec, opts = {}) {
       }
     }
   }
-  // MEMBERSHIP invariant (Plan 5 v2 / Task 3): every generative page MUST appear as a sitemap subarea.
+  // MEMBERSHIP invariant: every generative page MUST appear as a sitemap subarea.
   // A model-driven app's membership IS sitemap presence — there is no hidden-but-navigable subarea.
   // A page that is only a navigatesTo target (no subarea) is NOT owned by the app's navigation: build
   // will create it, but download enumeration (membership = sitemap) and verify (membership check) will
@@ -2827,7 +3804,14 @@ function validateAppSpec(spec, opts = {}) {
             for (const key of Object.keys(rec)) if (key.toLowerCase() === want) return rec[key];
             return undefined;
           };
-          const filled = (col) => v.length > 0 && v.every((r) => {
+          // The loader decides on RESOLVED values: buildSeedGroup runs resolveSampleRecords before
+          // chooseMatchOn, so a Choice label, its other-language alias and the raw option integer
+          // ('Open', 'Ouvert', 100000000) are ONE key there. Comparing the values as authored passed
+          // exactly those specs, and the seed then refused them mid-build (#586 item 2). Resolved one
+          // row at a time so a malformed row — already reported above — cannot throw out of the gate.
+          const isRow = (r) => r && typeof r === 'object' && !Array.isArray(r);
+          const resolved = v.map((r) => (isRow(r) ? resolveSampleRecords(ent, [r], spec)[0] : r));
+          const filled = (col) => resolved.length > 0 && resolved.every((r) => {
             const x = valueOf(r, col);
             return x !== undefined && x !== null && x !== '';
           });
@@ -2843,19 +3827,23 @@ function validateAppSpec(spec, opts = {}) {
             .find((c) => c && filled(c));
           const matchOnCol = altKeyCol || (!hasSafeKey && filled(ent.primaryAttribute.schemaName) ? ent.primaryAttribute.schemaName : null);
           if (matchOnCol) {
-            const seen = new Set();
-            for (const r of v) {
-              const raw = valueOf(r, matchOnCol);
+            const seen = new Map(); // resolved key → the value as the author wrote it
+            for (let i = 0; i < v.length; i++) {
+              const raw = valueOf(v[i], matchOnCol);
               // Keyed through the SHARED `sampleKeyIdentity` the loader uses, so this gate cannot
               // decide "duplicate" differently from the code that actually refuses the seed. A
               // plain `String(...)` key made `1` and `'1'` collide here while the loader treats them
               // as distinct — rejecting, at author time, a spec that builds.
-              const key = sampleKeyIdentity(raw);
+              const key = sampleKeyIdentity(valueOf(resolved[i], matchOnCol));
               if (seen.has(key)) {
-                errors.push(`sampleData['${k}']: duplicate ${String(matchOnCol).toLowerCase()} value '${String(raw)}'. ${altKeyCol ? `${String(matchOnCol).toLowerCase()} is the single-column alternate key used as matchOn` : `With no single-column alternate key, ${String(matchOnCol).toLowerCase()} is used as matchOn`}, so Dataverse could resolve or deduplicate the wrong row. Make ${String(matchOnCol).toLowerCase()} unique across the sample rows.`);
+                // Two DIFFERENT spellings of one option read as a false alarm unless the message
+                // says why they are the same.
+                const prev = seen.get(key);
+                const alias = sampleKeyIdentity(prev) === sampleKeyIdentity(raw) ? '' : ` (the same option as '${String(prev)}')`;
+                errors.push(`sampleData['${k}']: duplicate ${String(matchOnCol).toLowerCase()} value '${String(raw)}'${alias}. ${altKeyCol ? `${String(matchOnCol).toLowerCase()} is the single-column alternate key used as matchOn` : `With no single-column alternate key, ${String(matchOnCol).toLowerCase()} is used as matchOn`}, so Dataverse could resolve or deduplicate the wrong row. Make ${String(matchOnCol).toLowerCase()} unique across the sample rows.`);
                 break;
               }
-              seen.add(key);
+              seen.set(key, raw);
             }
           }
         }
@@ -2969,8 +3957,9 @@ function validateAppSpec(spec, opts = {}) {
           for (const [k, v] of Object.entries(spec.ai.appFeatures)) {
             if (!AI_FEATURE_KEYS.has(k)) errors.push(`ai.appFeatures: unknown key '${k}' (allowed: ${AI_FEATURE_KEYS_LIST})`);
             // These map to NUMERIC Dataverse app settings, not booleans: `true`/`false` are the
-            // ergonomic spellings of 1/0, but the platform also defines other values (notably 2 =
-            // "on for everyone"), which a boolean-only contract made inexpressible (ADO 6560699).
+            // ergonomic spellings of each setting's On/Off value (see AI_SETTING_CODEC), but every one
+            // of them is a tri-state, and a boolean-only contract made the third state — notably `0`,
+            // the platform default for most — inexpressible (ADO 6560699).
             // Accept a boolean or a non-negative integer; reject anything else (a string like '2'
             // would silently bypass the range check downstream).
             //
@@ -2980,7 +3969,10 @@ function validateAppSpec(spec, opts = {}) {
             // front, where the maker gets a message naming the field. `isSafeInteger` (not
             // `isInteger`) because beyond 2^53 an "integer" double no longer round-trips.
             if (typeof v !== 'boolean' && !(typeof v === 'number' && Number.isSafeInteger(v) && v >= 0 && v <= AI_FEATURE_MAX_VALUE)) {
-              errors.push(`ai.appFeatures.${k}: must be a boolean or an integer between 0 and ${AI_FEATURE_MAX_VALUE} (e.g. true, false, or 2 for "on for everyone")`);
+              // The example names THIS setting's platform default: it is 0 for most, but 1 (Auto) for
+              // nlChart, where 0 means Off.
+              const platformDefault = AI_SETTING_CODEC[k] ? AI_SETTING_CODEC[k].platformDefault : '0';
+              errors.push(`ai.appFeatures.${k}: must be a boolean or an integer between 0 and ${AI_FEATURE_MAX_VALUE} (e.g. true, false, or ${platformDefault} to leave it to the platform default)`);
             }
           }
         }
@@ -3161,6 +4153,18 @@ function validateAppSpec(spec, opts = {}) {
   (spec.relationships || []).forEach((r, i) => {
     if (r && r.lookup) validateLabel(r.lookup.displayName, `relationships[${i}] (${r.lookup.schemaName || '?'}): lookup.displayName`, errors, { warnings, baseLanguageCode: spec.languageCode });
   });
+  // Structural is teardown: an already-built colliding spec must still tear down. Read-only verify
+  // passes relationshipCollisions: 'warn' so a spec built before this check can still be verified;
+  // the endpoint-aware checks then name whatever holds the name. Every other profile refuses,
+  // because the second create would be swallowed as "already exists" and never materialize.
+  if (profile !== 'structural') {
+    const prefix = spec.solution && spec.solution.publisherPrefix;
+    for (const hit of relationshipNameCollisions(spec.relationships, prefix)) {
+      const msg = relationshipCollisionMessage(spec.relationships, hit);
+      if (opts.relationshipCollisions === 'warn') warnings.push(msg);
+      else errors.push(msg);
+    }
+  }
   for (const e of spec.entities || []) {
     (e && Array.isArray(e.alternateKeys) ? e.alternateKeys : []).forEach((k, i) => {
       if (k) validateLabel(k.displayName, `entity ${e.schemaName}: alternateKeys[${i}] displayName`, errors, { warnings, baseLanguageCode: spec.languageCode });
@@ -3413,16 +4417,41 @@ function migrateAppSpec(spec) {
 module.exports = {
   rejectLocalizedGlobalChoice,
   sampleKeyIdentity,
+  dashboardNameKey,
+  compareVersions,
+  APP_MEMBERSHIP_MIN_VERSION,
+  isPluginVersion,
+  sitemapEntityTables,
+  appMembershipWarnings,
   generatedTabName,
   generatedSectionName,
   formColumnsOf,
+  authoredSectionNames,
+  authoredTabNames,
+  formLayoutNames,
+  subgridPlacementProblems,
+  subgridDuplicateProblems,
+  subgridUnknownKeys,
   validateAppSpec,
+  PRIMARY_NAME_MAX_LENGTH,
+  primaryNameLengthProblem,
+  autoNumberFormatProblem,
+  requiredValueProblem,
+  askedPrimaryNameLength,
+  keyNeedsNameLength,
+  keyWaitsForNameLength,
+  KEY_BYTES_LIMIT,
+  maxLengthSent,
+  keyBytesAtLeast,
+  keyCannotFitAt,
+  keyHasRoomOnlyAfterLength,
   validateSampleDataRows,
   normalizePageSource,
   normalizeLanguageCode,
   validateChoiceOptionLabels,
   ambiguousChoiceAliases,
   labelText,
+  derivedPluralName,
   labelAliases,
   isLocalizedLabelMap,
   labelIsMissing,
@@ -3432,7 +4461,9 @@ module.exports = {
   isPlatformIconRef,
   webResourceNameFromRef,
   FORM_TYPE_CODE,
+  formIdentityKey,
   FORM_GUID_RE,
+  PAGE_MODEL_RE,
   ACCESS_LEVELS,
   PRIVILEGE_SCOPES,
   ROLE_GRANT_KEYS,
@@ -3466,6 +4497,11 @@ module.exports = {
   relationshipFor,
   resolveParentRelationship,
   lookupColumnsFor,
+  lookupLabelFor,
+  lookupParentNeedsEnvironment,
+  humanizeTableName,
+  isOldLookupColumnLabel,
+  isOldLookupFieldLabel,
   // Exported so every raw-spec form reader — including the offline eval harness — goes through the
   // one helper that understands BOTH tab shapes. A reader that opens `tab.sections` directly silently
   // skips every multi-column tab, which is exactly how a lint rule came to report such a tab as
@@ -3476,6 +4512,10 @@ module.exports = {
   prefixedRelationshipName,
   manyToManyFor,
   manyToManySchemaName,
+  subgridRelationshipName,
+  relationshipNameCollisions,
+  relationshipCollisionMessage,
+  specDeclaresAttribute,
   isSafeHttpUrl,
   CHART_TYPES,
 };

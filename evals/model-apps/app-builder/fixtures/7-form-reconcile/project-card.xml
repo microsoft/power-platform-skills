@@ -1,0 +1,16 @@
+<form>
+  <tabs>
+    <tab name="tab_card" visible="true" expanded="true">
+      <labels><label description="Project" languagecode="1033"/></labels>
+      <columns><column width="100%"><sections>
+        <section name="section_card" columns="1" visible="true" showlabel="true">
+          <labels><label description="Project" languagecode="1033"/></labels>
+          <rows>
+            <row><cell><control datafieldname="cnt_name"/></cell></row>
+            <row><cell><control datafieldname="cnt_code"/></cell></row>
+          </rows>
+        </section>
+      </sections></column></columns>
+    </tab>
+  </tabs>
+</form>

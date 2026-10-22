@@ -53,7 +53,7 @@ function realisticSpec() {
         {
           name: 'Triage new tickets',
           description: 'See what came in overnight',
-          privileges: [{ entity: 'new_ticket', access: ['read', 'write'], scope: 'user' }],
+          privileges: [{ entity: 'new_ticket', access: ['read', 'write'], scope: 'user' }, { entity: 'new_customer', access: ['read'], scope: 'organization' }],
           surfaces: ['Active Tickets', 'overview'],
         },
         {
@@ -106,6 +106,16 @@ function unescapedPipeCount(row) {
   for (let i = 0; i < row.length; i++) if (row[i] === '|' && row[i - 1] !== '\\') n += 1;
   return n;
 }
+
+test('the routing description is shown beside the tile text, and only when the spec sets one (#583)', () => {
+  const spec = realisticSpec();
+  assert.ok(!renderAppSpecDoc(spec, {}).includes('Routing description'));
+  spec.app.aiDescription = 'Support work. Prefer My Tickets for your own assigned items.';
+  const md = renderAppSpecDoc(spec, {});
+  const at = md.indexOf('**Routing description:** Support work. Prefer My Tickets for your own assigned items.');
+  assert.ok(at > md.indexOf(spec.app.description), 'after the tile description');
+  assert.ok(at < md.indexOf('## Environment'), 'in the overview, before the first section');
+});
 
 test('renders every expected section heading in document order', () => {
   const md = renderAppSpecDoc(realisticSpec(), { envUrl: 'https://x.crm.dynamics.com' });
@@ -372,7 +382,7 @@ test('CLI fails cleanly when the spec is not valid JSON', () => {
   }
 });
 
-// --- Round-2 corrections (from adversarial review) -------------------------------------------
+// --- Corrections from adversarial review -------------------------------------------
 
 test('privilege scope is unioned per (table, ACCESS), never per table', () => {
   // Collapsing to one scope per table rendered `read@organization` + `write@user` as
@@ -435,7 +445,7 @@ test('a malformed or half-typed spec renders instead of throwing', () => {
   }
 });
 
-// --- Round-3 corrections (from adversarial review) -------------------------------------------
+// --- Corrections from adversarial review -------------------------------------------
 
 test('forms render their canonical formType, not the non-existent `type` field', () => {
   // Reading `f.type` rendered every QuickCreate/QuickView form as "main", hiding a real difference

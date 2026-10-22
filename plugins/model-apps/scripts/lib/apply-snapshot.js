@@ -13,7 +13,7 @@
 //      never leave a stale snapshot that reads eligible.
 //   3. debt accrues on any unsupported/removal edit; eligible:true requires empty debt; debt clears ONLY
 //      by a verifier that matches the SPECIFIC debt reason (a plain full rebuild that re-skips a stale
-//      artifact must NOT clear it — Sol build-time note).
+//      artifact must NOT clear it).
 //   4. Identity binding: orgId (live WhoAmI) + envUrl + appUniqueName must match the live target, else the
 //      snapshot is for a DIFFERENT env/app and MUST be ignored (full build).
 //   5. A teardown writes a TOMBSTONE (eligible:false + teardown-in-progress debt) BEFORE deleting anything.
@@ -90,7 +90,7 @@ function serializeEnvelope(envelope) {
 // live = { orgId, envUrl, appUniqueName, appId? }. orgId + envUrl + appUniqueName must ALL match. appId is a
 // STRONG identity signal: if the snapshot recorded an appId, the live app MUST resolve to exactly that id —
 // a null live appId (app deleted, or the discovery query failed) is treated as a MISMATCH, never a vacuous
-// pass (Sol #4 / Opus C1: an eligible snapshot must not survive its app being deleted into a false noop).
+// pass (an eligible snapshot must not survive its app being deleted into a false noop).
 // A snapshot with NO recorded appId (a legacy/partial write) skips the appId check. Returns { ok, reason }.
 function identityMatches(envelope, live) {
   if (!isEnvelope(envelope)) return { ok: false, reason: 'no valid snapshot' };
@@ -103,14 +103,6 @@ function identityMatches(envelope, live) {
     if (normId(envelope.appId) !== normId(l.appId)) return { ok: false, reason: 'appId mismatch (app deleted+recreated under same unique name)' };
   }
   return { ok: true, reason: 'identity matches' };
-}
-
-function hasDebt(envelope) {
-  return isEnvelope(envelope) && envelope.debt.length > 0;
-}
-
-function listDebt(envelope) {
-  return isEnvelope(envelope) ? envelope.debt.slice() : [];
 }
 
 // Record a debt: an artifact whose intended state could NOT be safely applied incrementally (an
@@ -131,7 +123,7 @@ function addDebt(envelope, entry) {
 
 // Clear debt entries for which `predicate(entry)` is true. The caller MUST only clear debt with a verifier
 // that matches the SPECIFIC reason — e.g. a placement re-verify may clear a placement debt but must NOT
-// clear an event/quick-view debt (Sol build-time note). The pure module just applies the caller's
+// clear an event/quick-view debt. The pure module just applies the caller's
 // predicate; it deliberately offers no "clear all" shortcut. Mutates + returns env.
 function clearDebtMatching(envelope, predicate) {
   if (!isEnvelope(envelope) || typeof predicate !== 'function') return envelope;
@@ -194,13 +186,18 @@ function generationMatches(diskEnvelope, expectedGeneration) {
 }
 
 // THE gate: may we take the `--changed-only` fast path against `live`? Fail-closed — returns
-// { eligible:false, reason } unless EVERY condition holds: valid schema-3 envelope, identity matches live,
-// not tombstoned, eligible flag true, empty debt, and a generation present (needed for the write-CAS).
+// { eligible:false, reason } unless EVERY condition holds: valid schema-3 envelope, not tombstoned, identity
+// matches live, eligible flag true, empty debt, and a generation present (needed for the write-CAS).
+//
+// The tombstone is checked BEFORE identity so it is the reason reported. A teardown that found no snapshot
+// writes a fresh tombstone that carries no identity (it never asks WhoAmI), and an identity-first gate
+// called that "orgId mismatch (different Dataverse org)" — fail-closed either way, but it sent the reader
+// looking for the wrong problem.
 function isFastPathEligible(envelope, live) {
   if (!isEnvelope(envelope)) return { eligible: false, reason: 'no valid snapshot (full build)' };
+  if (isTombstoned(envelope)) return { eligible: false, reason: 'snapshot tombstoned by a teardown' };
   const idm = identityMatches(envelope, live);
   if (!idm.ok) return { eligible: false, reason: idm.reason };
-  if (isTombstoned(envelope)) return { eligible: false, reason: 'snapshot tombstoned by a teardown' };
   if (envelope.eligible !== true) return { eligible: false, reason: 'snapshot not eligible (last apply was full/unsupported or invalidated)' };
   if (envelope.debt.length > 0) return { eligible: false, reason: `snapshot carries ${envelope.debt.length} open debt entr${envelope.debt.length === 1 ? 'y' : 'ies'}` };
   if (!envelope.generation) return { eligible: false, reason: 'snapshot missing generation token (cannot CAS)' };
@@ -217,8 +214,6 @@ module.exports = {
   parseEnvelope,
   serializeEnvelope,
   identityMatches,
-  hasDebt,
-  listDebt,
   addDebt,
   clearDebtMatching,
   markIneligible,

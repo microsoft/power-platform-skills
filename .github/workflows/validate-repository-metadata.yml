@@ -11,23 +11,30 @@ jobs:
         env:
             POWER_PLATFORM_SKILLS_TELEMETRY_POWER_PAGES_OPTOUT: "1"
             POWER_PLATFORM_SKILLS_TELEMETRY_MODEL_APPS_OPTOUT: "1"
+            POWER_PLATFORM_SKILLS_TELEMETRY_PCF_OPTOUT: "1"
         steps:
             - name: checkout
-              uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+              uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
             - name: setup-node
-              uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+              uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
               with:
                   node-version: 20
 
             - name: validate-open-plugin-names
               run: node scripts/validate-plugin-names.js
 
+            - name: test-legacy-compatibility-validator
+              run: node --test scripts/tests/validate-legacy-compatibility.test.js
+
             - name: validate-legacy-compatibility
               run: node scripts/validate-legacy-compatibility.js
 
             - name: validate-skill-descriptions
               run: node scripts/validate-skill-descriptions.js
+
+            - name: test-telemetry-ikeys-validator
+              run: node --test scripts/tests/validate-telemetry-ikeys.test.js
 
             - name: validate-telemetry-ikeys
               run: node scripts/validate-telemetry-ikeys.js
@@ -66,3 +73,33 @@ jobs:
 
             - name: validate-no-real-environments
               run: node scripts/validate-no-real-environments.js
+
+            # pcf ships physical copies of model-apps/shared files. Copies must never drift, and this
+            # is the one check that runs whatever the PR touches.
+            - name: test-plugin-copies-validator
+              run: node --test scripts/tests/validate-plugin-copies.test.js
+
+            - name: validate-plugin-copies
+              run: node scripts/validate-plugin-copies.js
+
+    test-installer:
+        name: test-installer (${{ matrix.os }})
+        runs-on: ${{ matrix.os }}
+        env:
+            POWER_PLATFORM_SKILLS_TELEMETRY_POWER_PAGES_OPTOUT: "1"
+            POWER_PLATFORM_SKILLS_TELEMETRY_MODEL_APPS_OPTOUT: "1"
+            POWER_PLATFORM_SKILLS_TELEMETRY_PCF_OPTOUT: "1"
+        strategy:
+            matrix:
+                os: [ubuntu-latest, windows-latest]
+        steps:
+            - name: checkout
+              uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+            - name: setup-node
+              uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+              with:
+                  node-version: 20
+
+            - name: test-installer
+              run: node --test scripts/tests/install.test.js

@@ -1,0 +1,15 @@
+{
+  "1-account-card-gallery": { "contractVersion": 1, "provenance": "historical" },
+  "2-mock-dashboard": { "contractVersion": 1, "provenance": "historical" },
+  "2-mock-dashboard-real": { "contractVersion": 1, "provenance": "historical" },
+  "4-case-wizard": { "contractVersion": 1, "provenance": "historical" },
+  "5-kanban-task-board": { "contractVersion": 1, "provenance": "historical" },
+  "7-job-candidates-new-entities": { "contractVersion": 1, "provenance": "historical" },
+  "11-recruitment-multi-page": { "contractVersion": 1, "provenance": "historical", "navigationPhase": "legacy-authored" },
+  "11-recruitment-pages-real": { "contractVersion": 1, "provenance": "historical", "navigationPhase": "resolved" },
+  "13-contact-localization": { "contractVersion": 1, "provenance": "historical" },
+  "15-support-tickets-real": { "contractVersion": 1, "provenance": "historical" },
+  "17-weather-mock-data": { "contractVersion": 1, "provenance": "historical" },
+  "18-sharepoint-connectors": { "contractVersion": 1, "provenance": "historical" },
+  "19-add-weather-connector": { "contractVersion": 1, "provenance": "historical" }
+}

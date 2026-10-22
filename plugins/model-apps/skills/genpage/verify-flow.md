@@ -94,9 +94,24 @@ complete visual record for the deployment summary.
 
 ## 7.5 Fix and Re-deploy
 
-If issues are found: fix the code, re-deploy using the **update form** from
-Phase 6 — `node "${PLUGIN_ROOT}/scripts/genpage-upload.js"` with `--page-id` and
-no `--add-to-sitemap`. Per the "Prompt semantics" rule, the prompt for this
+If issues are found: fix the code, check it, and re-deploy using the **update form**
+from Phase 6 — `node "${PLUGIN_ROOT}/scripts/genpage-upload.js"` with `--page-id` and
+no `--add-to-sitemap`. A fix is new code, and new code can write a CSS shorthand that Griffel
+drops at runtime (the page then deploys without its border, color or reset — the rule is
+`references/rules.md` Common Pitfalls 5, and Phase 5b step 9 runs the same gate), so check the
+fixed page before the re-deploy:
+
+```powershell
+node "${PLUGIN_ROOT}/scripts/check-griffel-styles.js" --file '<working-dir>/<file>.tsx'
+```
+
+Do not upload until it exits 0: fix what it reports (each key's line, column and longhands)
+and run it again. `genpage-upload.js` makes the same check and refuses a page that adds a key the
+deployed page did not already have, or gives one it had another value (`griffel-shorthand`), so skipping this step costs a refused
+upload, not a shipped defect. A key the page already had before your fix, set the same, is reported as well:
+delete it to keep the page looking as it does, or write the longhands to make the style start to
+render (a visible change, so only when it is wanted).
+Per the "Prompt semantics" rule, the prompt for this
 re-deploy describes the fix delta only — e.g.
 `"Fix sort handler on Name column; correct accidental DataGrid type prop"` —
 not a re-statement of the full page description. Write it to a file and pass
@@ -106,20 +121,35 @@ Omitting `--data-sources` here is safe: the page's existing table bindings are
 read and re-sent, so a fix re-deploy does not unbind it. Pass `--data-sources`
 to change the bindings, or `--clear-data-sources` to remove them deliberately.
 
-```powershell
-Set-Content -Path "<working-dir>/prompt.txt" -Encoding UTF8 -NoNewline `
-  -Value "Fix sort handler on Name column; correct accidental DataGrid type prop"
-Set-Content -Path "<working-dir>/agent-message.txt" -Encoding UTF8 -NoNewline `
-  -Value "Phase 7.5 fix re-deploy"
+Pass the same `--code-file` that Phase 6 (or Edit Phase 6) uploaded: that upload
+wrote the page's base marker beside it from the hash of the file it uploaded.
+When the readback matched, the marker source is `upload` and this update's
+divergence check passes unless someone else saved the page since. When the
+readback differed, the source is `upload-unverified` and records that uploaded
+hash, not the bytes the service returned, so this update refuses
+`deployed-changed` until the page is compared with `genpage-base.js check`. A
+`no-base`, `deployed-changed`, or `deployed-unreadable` refusal is a stop:
+**attended**, show the summary and ask exactly "Overwrite the deployed changes"
+or "Stop so I can merge", and record the answer as its own line before the
+upload command, exactly `Choice: Overwrite the deployed changes` or
+`Choice: Stop so I can merge`; **unattended**, STOP and report the code and
+`deployedCopy` when present. Never pass `--overwrite-deployed` unless the user
+chose "Overwrite the deployed changes". Log the refusal and that `Choice:` line
+in `workflow-log.md`.
 
+Check and clear `prompt.txt` and `agent-message.txt` as in SKILL.md Phase 6, then write them with your
+file-writing tool — `prompt.txt` holding the fix delta and `agent-message.txt` holding
+`Phase 7.5 fix re-deploy` — and deploy:
+
+```powershell
 node "${PLUGIN_ROOT}/scripts/genpage-upload.js" `
-  --env <org-url> `
-  --app-id <app-id> `
-  --page-id <page-id> `
-  --code-file "<working-dir>/<file>.tsx" `
-  --prompt-file "<working-dir>/prompt.txt" `
-  --model "<current-model-id>" `
-  --agent-message-file "<working-dir>/agent-message.txt"
+  --env '<org-url>' `
+  --app-id '<app-id>' `
+  --page-id '<page-id>' `
+  --code-file '<working-dir>/<file>.tsx' `
+  --prompt-file '<working-dir>/prompt.txt' `
+  --model '<current-model-id>' `
+  --agent-message-file '<working-dir>/agent-message.txt'
 ```
 
 **Common Playwright issues:**

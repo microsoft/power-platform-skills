@@ -1,0 +1,731 @@
+'use strict';
+
+const test = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+const { spawnSync } = require('node:child_process');
+const { auditBidirectionalReadiness } = require('../lib/bidirectional-readiness');
+const {
+  parseArgs,
+} = require('../audit-bidirectional-readiness');
+const { createTempProject, writeProjectFile } = require('./test-utils');
+
+const cliPath = path.join(__dirname, '..', 'audit-bidirectional-readiness.js');
+
+function createSymlinkOrSkip(t, target, linkPath, type) {
+  try {
+    fs.symlinkSync(target, linkPath, type);
+    return true;
+  } catch (error) {
+    if (['EACCES', 'EPERM', 'ENOTSUP'].includes(error.code)) {
+      t.skip(`Symlink creation is unavailable: ${error.code}`);
+      return false;
+    }
+    throw error;
+  }
+}
+
+test('parses an optional project root without consuming other options', () => {
+  assert.deepEqual(parseArgs([]), {});
+  assert.equal(parseArgs(['--projectRoot', '.']).projectRoot, path.resolve('.'));
+  assert.throws(
+    () => parseArgs(['--projectRoot']),
+    /"--projectRoot" requires a value/
+  );
+  assert.throws(
+    () => parseArgs(['--projectRoot', '--unexpected']),
+    /"--projectRoot" requires a value/
+  );
+  assert.throws(
+    () => parseArgs(['--projectRoot', '']),
+    /"--projectRoot" requires a value/
+  );
+  assert.throws(
+    () => parseArgs(['--projectRoot', '.', '--projectRoot', '..']),
+    /"--projectRoot" may be specified only once/
+  );
+  assert.throws(
+    () => parseArgs(['--unexpected']),
+    /Unknown or misplaced argument "--unexpected"/
+  );
+});
+
+test('CLI reports malformed project-root usage without auditing another path', () => {
+  const result = spawnSync(
+    process.execPath,
+    [cliPath, '--projectRoot', '--unexpected'],
+    { encoding: 'utf8' }
+  );
+
+  assert.equal(result.status, 2);
+  assert.equal(result.stdout, '');
+  assert.match(result.stderr, /"--projectRoot" requires a value/);
+  assert.match(result.stderr, /Usage: audit-bidirectional-readiness/);
+});
+
+test('accepts logical directional CSS', (t) => {
+  const projectRoot = createTempProject(t);
+  writeProjectFile(projectRoot, 'src/theme.css', `
+    .callout {
+      margin-inline-start: 1rem;
+      padding-inline-end: 2rem;
+      border-inline-start: 0.25rem solid;
+      text-align: start;
+    }
+  `);
+
+  const result = auditBidirectionalReadiness(projectRoot);
+  assert.equal(result.summary.error, 0, JSON.stringify(result.findings));
+});
+
+test('blocks unexplained direction-sensitive physical CSS', (t) => {
+  const projectRoot = createTempProject(t);
+  writeProjectFile(projectRoot, 'src/theme.css', `
+    .callout {
+      margin-left: 1rem;
+      border-right: 0.25rem solid;
+      text-align: left;
+    }
+  `);
+
+  const result = auditBidirectionalReadiness(projectRoot);
+  assert.equal(result.summary.error, 3);
+  assert.ok(result.findings.every((item) => item.rule === 'directional-physical-css'));
+});
+
+test('blocks physical framework style-object properties', (t) => {
+  const projectRoot = createTempProject(t);
+  writeProjectFile(
+    projectRoot,
+    'src/Card.tsx',
+    `const padding = { "paddingLeft": '1rem' };
+     const alignment = { textAlign: 'left' };
+     const quoted = { 'margin-right': '1rem' };
+     const template = '<div style="padding-left: 1rem"></div>';`
+  );
+
+  const result = auditBidirectionalReadiness(projectRoot);
+  assert.equal(result.summary.error, 4);
+  assert.ok(result.findings.every((item) => item.rule === 'directional-physical-css'));
+});
+
+test('accepts an adjacent validated physical exception', (t) => {
+  const projectRoot = createTempProject(t);
+  writeProjectFile(projectRoot, 'src/map.css', `
+    .map-controls {
+      /* bidi-physical: Map controls follow provider placement; verify=ltr,rtl */
+      right: 1rem;
+    }
+  `);
+
+  const result = auditBidirectionalReadiness(projectRoot);
+  assert.equal(result.summary.error, 0, JSON.stringify(result.findings));
+  assert.equal(result.findings.length, 0);
+});
+
+test('rejects an unwrapped physical exception without exempting the declaration', (t) => {
+  const projectRoot = createTempProject(t);
+  writeProjectFile(projectRoot, 'src/map.css', `
+    bidi-physical: Map controls follow provider placement; verify=ltr,rtl
+    .map-controls { margin-left: 1rem; }
+  `);
+
+  const result = auditBidirectionalReadiness(projectRoot);
+  assert.deepEqual(
+    result.findings.map((item) => item.rule),
+    ['invalid-physical-exception', 'directional-physical-css']
+  );
+});
+
+test('rejects half-wrapped physical exceptions without exempting the declaration', (t) => {
+  const projectRoot = createTempProject(t);
+  writeProjectFile(projectRoot, 'src/map.css', `
+    /* bidi-physical: Opening wrapper only is not a valid directive; verify=ltr,rtl
+    .opening-only { margin-left: 1rem; }
+    bidi-physical: Closing wrapper only is not a valid directive; verify=ltr,rtl */
+    .closing-only { padding-right: 1rem; }
+  `);
+
+  const result = auditBidirectionalReadiness(projectRoot);
+  assert.deepEqual(
+    result.findings.map((item) => item.rule),
+    [
+      'invalid-physical-exception',
+      'directional-physical-css',
+      'invalid-physical-exception',
+      'directional-physical-css',
+    ]
+  );
+});
+
+test('does not treat directive-like string content as an exception', (t) => {
+  const projectRoot = createTempProject(t);
+  writeProjectFile(projectRoot, 'src/map.ts', `
+    const guidance = "bidi-physical: Example text only; verify=ltr,rtl";
+    const style = { marginLeft: '1rem' };
+  `);
+
+  const result = auditBidirectionalReadiness(projectRoot);
+  assert.equal(result.summary.error, 1, JSON.stringify(result.findings));
+  assert.equal(result.findings[0].rule, 'directional-physical-css');
+});
+
+test('allows one declaration per physical exception', (t) => {
+  const projectRoot = createTempProject(t);
+  writeProjectFile(projectRoot, 'src/map.css', `
+    /* bidi-physical: Map controls follow provider placement; verify=ltr,rtl */
+    .map-controls { margin-left: 1rem; padding-right: 1rem; }
+  `);
+
+  const result = auditBidirectionalReadiness(projectRoot);
+  assert.equal(result.summary.error, 1);
+  assert.equal(result.findings[0].rule, 'directional-physical-css');
+});
+
+test('applies a physical exception to the first declaration in source order', (t) => {
+  const projectRoot = createTempProject(t);
+  writeProjectFile(projectRoot, 'src/map.css', `
+    /* bidi-physical: Pin remains on the provider-defined physical edge; verify=ltr,rtl */
+    .map-controls { left: 0; margin-left: 1rem; }
+  `);
+
+  const result = auditBidirectionalReadiness(projectRoot);
+  assert.equal(result.summary.error, 1);
+  assert.equal(result.summary.review, 0);
+  assert.equal(result.findings[0].rule, 'directional-physical-css');
+});
+
+test('rejects unused or non-adjacent physical exceptions', (t) => {
+  const projectRoot = createTempProject(t);
+  writeProjectFile(projectRoot, 'src/map.css', `
+    /* bidi-physical: Map controls follow provider placement; verify=ltr,rtl */
+
+    .map-controls {
+      right: 1rem;
+    }
+  `);
+
+  const result = auditBidirectionalReadiness(projectRoot);
+  assert.equal(result.summary.error, 1);
+  assert.equal(result.findings[0].rule, 'unused-physical-exception');
+});
+
+test('reports physical geometry and visual reordering for review', (t) => {
+  const projectRoot = createTempProject(t);
+  writeProjectFile(projectRoot, 'src/carousel.css', `
+    .track {
+      flex-direction: row-reverse;
+      transform: translateX(-100%);
+    }
+  `);
+
+  const result = auditBidirectionalReadiness(projectRoot);
+  assert.equal(result.summary.error, 0);
+  assert.deepEqual(
+    new Set(result.findings.map((item) => item.rule)),
+    new Set(['visual-order-review', 'directional-geometry-review'])
+  );
+});
+
+test('reports fixed text dimensions in expanded and compact CSS', (t) => {
+  const projectRoot = createTempProject(t);
+  writeProjectFile(projectRoot, 'src/cards.css', `
+    .expanded {
+      width: 8rem;
+    }
+    .compact { inline-size: 12px; }
+    .multiple { color: red; block-size: 2.5em; padding: 1rem; }
+    .no-semicolon { height: 40px }
+  `);
+
+  const result = auditBidirectionalReadiness(projectRoot);
+  assert.equal(result.summary.error, 0);
+  assert.equal(
+    result.findings.filter((item) => item.rule === 'fixed-content-size-review').length,
+    4
+  );
+});
+
+test('ignores flexible dimensions and fixed-size text outside declarations', (t) => {
+  const projectRoot = createTempProject(t);
+  writeProjectFile(projectRoot, 'src/cards.css', `
+    .bounded { max-width: 8rem; }
+    .fluid { width: 100%; height: auto; }
+    /* .example { width: 8rem; } */
+  `);
+  writeProjectFile(
+    projectRoot,
+    'src/guidance.ts',
+    'const guidance = "width: 8rem;";\n'
+  );
+
+  const result = auditBidirectionalReadiness(projectRoot);
+  assert.equal(
+    result.findings.filter((item) => item.rule === 'fixed-content-size-review').length,
+    0,
+    JSON.stringify(result.findings)
+  );
+});
+
+test('does not traverse symlinked directories or directory cycles', (t) => {
+  const projectRoot = createTempProject(t);
+  const externalRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'powerpages-external-'));
+  t.after(() => fs.rmSync(externalRoot, { recursive: true, force: true }));
+  writeProjectFile(externalRoot, 'outside.css', '.outside { margin-left: 1rem; }');
+  fs.mkdirSync(path.join(projectRoot, 'src'), { recursive: true });
+
+  const directoryType = process.platform === 'win32' ? 'junction' : 'dir';
+  if (!createSymlinkOrSkip(
+    t,
+    externalRoot,
+    path.join(projectRoot, 'src', 'external'),
+    directoryType
+  )) return;
+  if (!createSymlinkOrSkip(
+    t,
+    path.join(projectRoot, 'src'),
+    path.join(projectRoot, 'src', 'loop'),
+    directoryType
+  )) return;
+
+  const result = auditBidirectionalReadiness(projectRoot);
+  assert.deepEqual(result.findings, []);
+});
+
+test('does not audit symlinked source files', (t) => {
+  const projectRoot = createTempProject(t);
+  const externalRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'powerpages-external-'));
+  t.after(() => fs.rmSync(externalRoot, { recursive: true, force: true }));
+  const externalFile = writeProjectFile(
+    externalRoot,
+    'outside.css',
+    '.outside { padding-right: 1rem; }'
+  );
+  fs.mkdirSync(path.join(projectRoot, 'src'), { recursive: true });
+
+  if (!createSymlinkOrSkip(
+    t,
+    externalFile,
+    path.join(projectRoot, 'src', 'linked.css'),
+    'file'
+  )) return;
+
+  const result = auditBidirectionalReadiness(projectRoot);
+  assert.deepEqual(result.findings, []);
+});
+
+test('blocks invisible bidi controls in source', (t) => {
+  const projectRoot = createTempProject(t);
+  writeProjectFile(projectRoot, 'src/example.ts', "const route = '/safe\u202Egnp';\n");
+
+  const result = auditBidirectionalReadiness(projectRoot);
+  assert.equal(result.summary.error, 1);
+  assert.equal(result.findings[0].rule, 'unexpected-bidi-control');
+});
+
+test('ignores physical-property examples inside multiline comments', (t) => {
+  const projectRoot = createTempProject(t);
+  writeProjectFile(projectRoot, 'src/theme.css', `
+    /*
+     * Avoid physical properties such as:
+     * margin-left: 1rem;
+     * text-align: right;
+     */
+    .card {
+      margin-inline-start: 1rem;
+    }
+  `);
+
+  const result = auditBidirectionalReadiness(projectRoot);
+  assert.equal(result.summary.error, 0, JSON.stringify(result.findings));
+});
+
+test('ignores line-comment findings without requiring whitespace before the comment', (t) => {
+  const projectRoot = createTempProject(t);
+  writeProjectFile(projectRoot, 'src/example.ts', `
+    const count = 1// margin-left: 1rem;
+    const ready = true// direction: 'ltr';
+    const step = 2// track.scrollLeft += 100;
+    retry: // padding-right: 1rem;
+  `);
+
+  const result = auditBidirectionalReadiness(projectRoot);
+  assert.equal(result.summary.error, 0, JSON.stringify(result.findings));
+  assert.equal(result.summary.review, 0, JSON.stringify(result.findings));
+});
+
+test('preserves URL double slashes without hiding later findings', (t) => {
+  const projectRoot = createTempProject(t);
+  writeProjectFile(projectRoot, 'src/theme.css', `
+    .cdn { background: url(//cdn.example.com/a//b/image.png); margin-left: 1rem; }
+    .remote { background: url(https://example.com/a//b/*/image.png); padding-right: 1rem; }
+  `);
+  writeProjectFile(
+    projectRoot,
+    'index.html',
+    '<p>https://example.com/a//b</p><img src=//cdn.example.com/image.png><div style="margin-left: 1rem"></div>'
+  );
+
+  const result = auditBidirectionalReadiness(projectRoot);
+  assert.equal(result.summary.error, 3, JSON.stringify(result.findings));
+});
+
+test('carries quote state across lines so literal comment markers cannot hide code', (t) => {
+  const projectRoot = createTempProject(t);
+  writeProjectFile(projectRoot, 'src/example.ts', `
+    const marker = \`
+      /*
+    \`;
+    const styles = { marginLeft: '1rem' };
+  `);
+
+  const result = auditBidirectionalReadiness(projectRoot);
+  assert.equal(result.summary.error, 1, JSON.stringify(result.findings));
+  assert.equal(result.findings[0].rule, 'directional-physical-css');
+});
+
+test('blocks fixed CSS and element direction but allows the root document direction', (t) => {
+  const projectRoot = createTempProject(t);
+  writeProjectFile(projectRoot, 'index.html', '<html lang="he-IL" dir="rtl"><body></body></html>');
+  writeProjectFile(projectRoot, 'src/Form.tsx', `
+    const styles = { direction: 'ltr' };
+    const multilineStyles = {
+      direction: 'rtl',
+    };
+    export const Form = () => <input dir="ltr" style={styles} />;
+  `);
+  writeProjectFile(projectRoot, 'src/Menu.vue', `<Menu :dir="'ltr'" />`);
+  writeProjectFile(projectRoot, 'src/dialog.component.html', `<dialog [attr.dir]="'ltr'"></dialog>`);
+  writeProjectFile(projectRoot, 'src/Multiline.tsx', `
+    export const Input = () => <input
+      onChange={() =>
+        update()
+      }
+      dir="ltr"
+    />;
+  `);
+  writeProjectFile(projectRoot, 'src/locale.ts', `
+    export const localeMetadata = { direction: 'ltr' };
+    export const multilineLocaleMetadata = {
+      direction: 'rtl',
+    };
+  `);
+  writeProjectFile(projectRoot, 'src/data.html', `<div data-dir="ltr"></div>`);
+
+  const result = auditBidirectionalReadiness(projectRoot);
+  assert.equal(result.summary.error, 6, JSON.stringify(result.findings));
+  assert.ok(result.findings.every((item) => item.rule === 'fixed-direction'));
+  assert.ok(result.findings.every((item) => /^[a-f0-9]{64}$/.test(item.fingerprint)));
+});
+
+test('ignores examples in comments and comment braces do not leak style context', (t) => {
+  const projectRoot = createTempProject(t);
+  writeProjectFile(projectRoot, 'src/Example.astro', `
+    <!-- Example only:
+      <code dir="ltr">npm run build</code>
+    -->
+  `);
+  writeProjectFile(projectRoot, 'src/styles.ts', `
+    const styles = {
+      color: 'red', // {
+    };
+    // track.scrollTo({ left: 100 });
+    const localeMetadata = {
+      direction: 'ltr',
+    };
+  `);
+
+  const result = auditBidirectionalReadiness(projectRoot);
+  assert.equal(result.summary.error, 0, JSON.stringify(result.findings));
+  assert.equal(result.summary.review, 0, JSON.stringify(result.findings));
+});
+
+test('accepts one adjacent documented fixed-direction exception', (t) => {
+  const projectRoot = createTempProject(t);
+  writeProjectFile(projectRoot, 'src/machine-values.css', `
+    .email-value {
+      /* bidi-fixed: Email addresses preserve LTR character order; verify=ltr,rtl */
+      direction: ltr;
+    }
+  `);
+  writeProjectFile(projectRoot, 'src/Code.astro', `
+    <!-- bidi-fixed: Source-code text preserves authored character order; verify=ltr,rtl -->
+    <code dir="ltr">npm run build</code>
+  `);
+
+  const result = auditBidirectionalReadiness(projectRoot);
+  assert.equal(result.summary.error, 0, JSON.stringify(result.findings));
+});
+
+test('blocks permanent auto direction on native free-form controls', (t) => {
+  const projectRoot = createTempProject(t);
+  writeProjectFile(projectRoot, 'src/Message.tsx', `
+    export const Message = () => (
+      <textarea
+        dir="auto"
+        dirname="message.dir"
+        placeholder="Type a message"
+      />
+    );
+  `);
+  writeProjectFile(projectRoot, 'src/Search.vue', `
+    <input :dir="'auto'" placeholder="Search" />
+  `);
+  writeProjectFile(projectRoot, 'src/comment.component.html', `
+    <textarea [attr.dir]="'auto'"></textarea>
+    <input [dir]="'auto'" />
+  `);
+  writeProjectFile(projectRoot, 'src/LongForm.vue', `
+    <textarea
+      v-bind:dir="'auto'"
+      placeholder="Details"></textarea>
+  `);
+  writeProjectFile(projectRoot, 'src/plain.html', `
+    <input dir=auto placeholder="Name">
+  `);
+  writeProjectFile(projectRoot, 'src/NotDirection.tsx', `
+    export const NotDirection = () => (
+      <>
+        <input aria-label={"Example text: dir='auto'"} />
+        <input-field dir="auto" />
+        <textarea-wrapper dir="auto" />
+      </>
+    );
+  `);
+  writeProjectFile(projectRoot, 'src/TemplateDirection.tsx', `
+    export const TemplateDirection = () => <input dir={\`auto\`} />;
+  `);
+
+  const result = auditBidirectionalReadiness(projectRoot);
+  const findings = result.findings.filter(
+    (item) => item.rule === 'static-auto-control-direction'
+  );
+  assert.equal(findings.length, 7, JSON.stringify(result.findings));
+  assert.ok(findings.every((item) =>
+    /active UI direction while empty/.test(item.message)
+  ));
+});
+
+test('accepts adaptive free-form direction and documented machine controls', (t) => {
+  const projectRoot = createTempProject(t);
+  writeProjectFile(projectRoot, 'src/Message.tsx', `
+    const freeFormDirection = (value, uiDirection) =>
+      value.length === 0 ? uiDirection : 'auto';
+    export const Message = ({ value, uiDirection }) => (
+      <textarea
+        dir={freeFormDirection(value, uiDirection)}
+        dirname="message.dir"
+        value={value}
+      />
+    );
+  `);
+  writeProjectFile(projectRoot, 'src/Search.vue', `
+    <input :dir="query.length === 0 ? uiDirection : 'auto'" v-model="query" />
+  `);
+  writeProjectFile(projectRoot, 'src/comment.component.html', `
+    <textarea
+      [attr.dir]="comment.length === 0 ? uiDirection : 'auto'"
+      dirname="comment.dir"></textarea>
+  `);
+  writeProjectFile(projectRoot, 'src/Contact.astro', `
+    <textarea id="message" dirname="message.dir"></textarea>
+    <script>
+      const control = document.querySelector('#message');
+      const syncDirection = () => {
+        control.dir = control.value.length === 0
+          ? document.documentElement.dir
+          : 'auto';
+      };
+      control.addEventListener('input', syncDirection);
+      new MutationObserver(syncDirection).observe(document.documentElement, {
+        attributes: true,
+        attributeFilter: ['dir'],
+      });
+      syncDirection();
+    </script>
+  `);
+  writeProjectFile(projectRoot, 'src/Email.astro', `
+    <!-- bidi-fixed: Email addresses preserve LTR character order; verify=ltr,rtl -->
+    <input type="email" dir="ltr" dirname="email.dir" />
+  `);
+
+  const result = auditBidirectionalReadiness(projectRoot);
+  assert.equal(result.summary.error, 0, JSON.stringify(result.findings));
+});
+
+test('ignores commented controls after apostrophes in HTML text', (t) => {
+  const projectRoot = createTempProject(t);
+  writeProjectFile(projectRoot, 'src/form.html', `
+    <p>Don't submit the archived example.</p>
+    <!--
+      <textarea dir="auto" placeholder="Old example"></textarea>
+    -->
+    <textarea :dir="message.length === 0 ? uiDirection : 'auto'"></textarea>
+  `);
+
+  const result = auditBidirectionalReadiness(projectRoot);
+  assert.equal(result.summary.error, 0, JSON.stringify(result.findings));
+});
+
+test('rejects vague, non-adjacent, and mismatched fixed-direction exceptions', (t) => {
+  const projectRoot = createTempProject(t);
+  writeProjectFile(projectRoot, 'src/invalid.css', `
+    /* bidi-fixed: needed; verify=ltr,rtl */
+    direction: ltr;
+
+    /* bidi-fixed: Email addresses preserve LTR character order; verify=ltr,rtl */
+
+    direction: ltr;
+
+    /* bidi-fixed: Email addresses preserve LTR character order; verify=ltr,rtl */
+    margin-left: 1rem;
+
+    /* bidi-fixed: Email addresses preserve LTR character order; verify=ltr,rtl */
+    /* unrelated comment */
+    direction: ltr;
+
+    /* bidi-fixed: First stale reason must not disappear; verify=ltr,rtl */
+    /* bidi-fixed: Email addresses preserve LTR character order; verify=ltr,rtl */
+    direction: ltr;
+  `);
+
+  const result = auditBidirectionalReadiness(projectRoot);
+  assert.ok(result.findings.some((item) => item.rule === 'invalid-fixed-exception'));
+  assert.ok(result.findings.some((item) => item.rule === 'unused-fixed-exception'));
+  assert.ok(result.findings.some((item) => item.rule === 'fixed-direction'));
+  assert.ok(result.findings.some((item) => item.rule === 'directional-physical-css'));
+});
+
+test('blocks physical utility classes including responsive variants', (t) => {
+  const projectRoot = createTempProject(t);
+  writeProjectFile(projectRoot, 'src/Card.tsx', `
+    export const Card = () =>
+      <div className="ml-4 text-left md:right-0 rtl:-mr-2">Card</div>;
+    export const ReactBound = () => <div className={"pl-2"} />;
+  `);
+  writeProjectFile(projectRoot, 'src/Card.vue', `<div :class="'mr-4'"></div>`);
+  writeProjectFile(projectRoot, 'src/card.component.html', `<div [class]="'left-0'"></div>`);
+
+  const result = auditBidirectionalReadiness(projectRoot);
+  const utilityFindings = result.findings.filter(
+    (item) => item.rule === 'directional-physical-utility'
+  );
+  assert.equal(utilityFindings.length, 7, JSON.stringify(result.findings));
+});
+
+test('allows logical utility classes', (t) => {
+  const projectRoot = createTempProject(t);
+  writeProjectFile(projectRoot, 'src/Card.tsx', `
+    export const Card = () =>
+      <div className="ms-4 text-start md:end-0 ps-2">Card</div>;
+  `);
+
+  const result = auditBidirectionalReadiness(projectRoot);
+  assert.equal(result.summary.error, 0, JSON.stringify(result.findings));
+});
+
+test('blocks asymmetric physical spacing and corner-radius shorthands', (t) => {
+  const projectRoot = createTempProject(t);
+  writeProjectFile(projectRoot, 'src/theme.css', `
+    .field { padding: 0 1rem 0 2rem; }
+    .card { border-radius: 1rem 0.5rem 0.25rem 0; }
+    .safe { margin: 0 1rem; padding: 0 2rem 0 2rem; border-radius: 1rem; }
+    .safe-ellipse { border-radius: 50% / 25%; }
+    .unsafe-calculated { border-radius: calc(10px / 2) calc(20px / 2); }
+  `);
+  writeProjectFile(projectRoot, 'src/styles.ts', `
+    const unsafe = { padding: '0 1rem 0 2rem', color: 'red' };
+    const safe = { margin: '0 1rem 0 1rem' };
+  `);
+
+  const result = auditBidirectionalReadiness(projectRoot);
+  const shorthandFindings = result.findings.filter(
+    (item) => item.rule === 'directional-physical-shorthand'
+  );
+  assert.equal(shorthandFindings.length, 4, JSON.stringify(result.findings));
+});
+
+test('blocks unicode bidi overrides', (t) => {
+  const projectRoot = createTempProject(t);
+  writeProjectFile(projectRoot, 'src/theme.css', `
+    .unsafe { unicode-bidi: bidi-override; }
+    .safe { unicode-bidi: isolate; }
+  `);
+
+  const result = auditBidirectionalReadiness(projectRoot);
+  assert.equal(result.summary.error, 1, JSON.stringify(result.findings));
+  assert.equal(result.findings[0].rule, 'unicode-bidi-override');
+});
+
+test('reports raw horizontal scrolling and additional physical geometry for review', (t) => {
+  const projectRoot = createTempProject(t);
+  writeProjectFile(projectRoot, 'src/Carousel.ts', `
+    track.scrollLeft += 100;
+    track.scrollTo({ left: 0, behavior: 'smooth' });
+    track.scrollTo(100, 0);
+    track.scrollBy(100, 0);
+    track.scroll({ left: 100 });
+    track.scrollTo({
+      left: offset,
+      behavior: 'smooth',
+    });
+    track.scrollBy(
+      offset,
+      0
+    );
+  `);
+  writeProjectFile(projectRoot, 'src/icons.css', `
+    .next { transform: scaleX(-1); }
+    .hero { background-position: left center; }
+    .move { transform: translate(20px, 0); }
+    .individual { translate: 20px 0; }
+    .vertical { transform: translate3d(0, 20px, 0); }
+  `);
+
+  const result = auditBidirectionalReadiness(projectRoot);
+  assert.equal(
+    result.findings.filter((item) => item.rule === 'directional-scroll-review').length,
+    7
+  );
+  assert.equal(
+    result.findings.filter((item) => item.rule === 'directional-geometry-review').length,
+    4
+  );
+});
+
+test('allows a fixed-direction annotation on a multiline element', (t) => {
+  const projectRoot = createTempProject(t);
+  writeProjectFile(projectRoot, 'src/Code.tsx', `
+    /* bidi-fixed: Source-code text preserves authored character order; verify=ltr,rtl */
+    export const Code = () => <code
+      dir="ltr"
+    >npm run build</code>;
+  `);
+
+  const result = auditBidirectionalReadiness(projectRoot);
+  assert.equal(result.summary.error, 0, JSON.stringify(result.findings));
+});
+
+test('CLI prints findings and exits nonzero only for deterministic errors', (t) => {
+  const failingRoot = createTempProject(t);
+  writeProjectFile(failingRoot, 'src/theme.css', '.field { text-align: left; }');
+  const failing = spawnSync(
+    process.execPath,
+    [cliPath, '--projectRoot', failingRoot],
+    { encoding: 'utf8' }
+  );
+  assert.equal(failing.status, 1);
+  assert.equal(JSON.parse(failing.stdout).summary.error, 1);
+
+  const reviewRoot = createTempProject(t);
+  writeProjectFile(reviewRoot, 'src/Carousel.ts', 'track.scrollLeft += 100;');
+  const review = spawnSync(
+    process.execPath,
+    [cliPath, '--projectRoot', reviewRoot],
+    { encoding: 'utf8' }
+  );
+  assert.equal(review.status, 0);
+  assert.equal(JSON.parse(review.stdout).summary.review, 1);
+});

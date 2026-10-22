@@ -7,10 +7,10 @@ populate the `package.json` written into each working dir during Phase 0.5.
 This makes the working dir installable (`npm install`) so VSCode IntelliSense,
 type-checking, and "go to definition" work after generation.
 
-**Source of truth:** This doc tracks
-`scripts/lib/supported-dependencies.js`. When the upstream genux runtime team
-publishes an authoritative version list, update that file — this doc and the
-generator both read from there.
+**Source of truth:** `scripts/lib/supported-dependencies.js`. When the upstream
+genux runtime team publishes an authoritative version list, update that file —
+this doc, `references/rules.md`, and the generator are validated against it by
+`scripts/tests/supported-dependencies-docs.test.js`.
 
 ## Confidence levels
 
@@ -65,6 +65,6 @@ When upstream confirms versions or a runtime upgrade lands:
 
 1. Edit `scripts/lib/supported-dependencies.js` — change the `version` field and (if applicable) flip `confidence` from `compatible` to `pinned`.
 2. Re-run `node --test plugins/model-apps/scripts/tests/generate-page-manifest.test.js` — the tests assert the generated manifest's dependency map, feature-flag handling, and `--force` behavior.
-3. Update this doc to reflect the new versions (the table is hand-maintained from the JS module — a small sync script could automate it later).
+3. Update this doc and `references/rules.md` to reflect the new versions; `scripts/tests/supported-dependencies-docs.test.js` fails if they drift from the JS module.
 4. Bump the plugin minor or patch version in `.plugin/plugin.json`.
 5. CHANGELOG entry under the appropriate version section.

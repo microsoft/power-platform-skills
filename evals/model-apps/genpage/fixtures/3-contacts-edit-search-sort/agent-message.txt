@@ -1,0 +1,1 @@
+Added a search box that filters contacts by full name, company name or email, and header sorting on every column with Company name ascending as the default. The query, cache, columns and record navigation are unchanged.

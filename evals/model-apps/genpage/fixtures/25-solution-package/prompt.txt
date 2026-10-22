@@ -1,0 +1,1 @@
+Build three mock operations pages and package every deployed page with the app and existing document connection reference.

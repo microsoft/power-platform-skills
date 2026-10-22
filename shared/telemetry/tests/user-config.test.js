@@ -180,3 +180,21 @@ test("isTransmissionOptedOut: config off still opts out with no env var set", ()
   setTelemetryChoice(dir, "power-pages", "off");
   assert.equal(isTransmissionOptedOut(dir, "power-pages", {}), true);
 });
+
+test("readTelemetryChoice returns null when the dir or plugin is missing", () => {
+  const dir = mkTmp();
+  assert.equal(readTelemetryChoice("", "power-pages"), null);
+  assert.equal(readTelemetryChoice(dir, ""), null);
+  assert.equal(setTelemetryChoice("", "power-pages", "off"), false);
+});
+
+test("setTelemetryChoice returns false when config.json cannot be written", () => {
+  const dir = mkTmp();
+  // mkdir of the config dir succeeds; the write itself must fail. A directory
+  // where the file should be makes writeFileSync throw, which the catch turns
+  // into false — a success return here would report a saved choice that is not
+  // on disk.
+  fs.mkdirSync(path.join(dir, CONFIG_FILE_NAME));
+  assert.equal(setTelemetryChoice(dir, "power-pages", "off"), false);
+  assert.equal(readTelemetryChoice(dir, "power-pages"), null);
+});

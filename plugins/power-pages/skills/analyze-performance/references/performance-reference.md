@@ -116,7 +116,7 @@ Scanned in code files (`.ts/.tsx/.js/.jsx/.mjs/.cjs/.vue/.svelte/.astro/.html/.h
 | `PERF-WEBAPI-SELECT-STAR` | `/_api/` URL with `$select=*` | high | No | Returns every column; list only the columns the UI binds. |
 | `PERF-WEBAPI-NO-SELECT` | `/_api/` URL with query options but no `$select` | warning | No | Default projection returns all columns — more data than needed. |
 | `PERF-WEBAPI-MANY-COLUMNS` | `$select` lists more than `WEBAPI_MAX_SELECT_COLUMNS` (20) columns | info | No | Wide projections increase payload size and client parsing cost. |
-| `PERF-WEBAPI-NO-TOP` | `/_api/` collection query (`$filter`/`$orderby`/`$expand`/`$apply`) with no `$top` | warning | No | Unbounded result set slows the page and can hit throttling limits. |
+| `PERF-WEBAPI-NO-TOP` | `/_api/` collection query with neither a `$top` safety cap nor a `Prefer: odata.maxpagesize=N` cursor-page size in the enclosing request | warning | No | An unbounded result set slows the page and can hit throttling limits. Use `Prefer` + `@odata.nextLink` for page navigation; reserve `$top` for a total-result cap. |
 | `PERF-WEBAPI-LARGE-TOP` | `$top` > `WEBAPI_MAX_TOP` (100) | warning | No | Large single-response payloads slow rendering and increase throttling risk; prefer smaller pages. |
 | `PERF-WEBAPI-COUNT` | `$count=true` on a Web API request | info | No | Forces Dataverse to compute the total matching row count; only worth it when the UI displays a total. |
 | `PERF-WEBAPI-EXPAND-NO-SELECT` | `$expand=...` without a nested `$select` | warning | No | Expanded related rows can return more columns than the page needs. |

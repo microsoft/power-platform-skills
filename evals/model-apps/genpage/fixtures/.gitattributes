@@ -1,0 +1,8 @@
+# Evidence text files (prompt, agent-message and page-name files) are compared byte for byte with
+# the approved text recorded in each fixture.json: the upload contract fails a prompt file that
+# differs from what the user approved, because pac receives the file's exact contents.
+#
+# Without this rule a Windows checkout (core.autocrlf=true) rewrites their LF to CRLF, so the same
+# commit passes on Linux and macOS and fails on Windows. `-text` checks them out verbatim everywhere,
+# the same treatment the repo gives other files whose bytes are asserted.
+*.txt -text

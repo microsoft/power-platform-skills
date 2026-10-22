@@ -2,10 +2,15 @@
 // Pure App Spec guardrail. Returns { ok, errors, warnings }. errors block the plan
 // gate; warnings teach. Bakes in the modeling lessons hit live — notably the
 // relationship schema-name vs lookup-name collision Dataverse rejects.
-const { relationshipSchemaName, relationshipFor, invalidChoiceSampleTokens, isPlatformIconRef, labelText } = require('./app-spec.js');
+const { relationshipSchemaName, relationshipFor, invalidChoiceSampleTokens, isPlatformIconRef, labelText, derivedPluralName, appMembershipWarnings, subgridPlacementProblems, subgridDuplicateProblems, subgridUnknownKeys } = require('./app-spec.js');
+const { compileFormIntent, formFieldLogicals, NON_FORM_RENDERABLE_TYPES } = require('./artifact-intent.js');
 const { normalizeSpecShape } = require('./spec-shape.js');
 const { resolveSurfaces, unresolvedSurfaceMessage } = require('./surface-resolver.js');
 const { nearestName } = require('./nearest-name.js');
+const { isAppSourcePath } = require('./app-source-path.js');
+const { labelLintWarnings } = require('./view-filter-labels.js');
+const { navigationVerdict } = require('./app-navigation.js');
+const { noPersonasWarning, uncoveredTables, uncoveredTablesWarning } = require('./app-access.js');
 
 const CHOICE_OPTION_WARN = 12;
 const SEQNUM_RE = /\{SEQNUM(:\d+)?\}/i;
@@ -92,6 +97,7 @@ function lintAppSpec(spec) {
   const shape = normalizeSpecShape(spec);
   for (const m of shape.errors) E(m);
   spec = shape.spec;
+  warnings.push(...appMembershipWarnings(spec));
 
   const prefix = spec.solution && spec.solution.publisherPrefix;
   const entityNames = new Set();
@@ -110,6 +116,8 @@ function lintAppSpec(spec) {
     if (!wr.name) E('A webResource is missing a name');
     if (!WEB_RESOURCE_KINDS.has(lc(wr.type || 'js'))) E(`webResource '${wr.name}' has unknown type '${wr.type}'`);
     if (wr.content === undefined && wr.contentBase64 === undefined && !wr.contentPath) E(`webResource '${wr.name}' needs content, contentBase64, or contentPath`);
+    // Same precedence as the build (webResourceOpts): a contentPath behind inline content is never read.
+    if (wr.content === undefined && wr.contentBase64 === undefined && wr.contentPath !== undefined && !isAppSourcePath(wr.contentPath)) E(`webResource '${wr.name}': contentPath must be an app-folder-confined relative path (no parent escape, rooted or drive path, or alternate stream)`);
     if (lc(wr.type || 'js') === 'js' && wr.name && !lc(wr.name).endsWith('.js')) W(`web resource '${wr.name}' is a script but its name doesn't end in .js — Dataverse convention expects the extension`);
     if (prefix && wr.name && !lc(wr.name).startsWith(lc(prefix) + '_')) W(`web resource '${wr.name}' does not use the solution prefix '${prefix}_'`);
   }
@@ -158,12 +166,24 @@ function lintAppSpec(spec) {
     }
   }
 
+  // An explicit foreign-prefix name 400s on create. A downloaded relationship marked existing
+  // already has that name in this environment, so lint warns instead of refusing the download's
+  // own output. A rebuild can reuse it only where it already exists.
+  const foreignRelationshipName = (rel, publisherPrefix, error, warn) => {
+    const name = rel.schemaName;
+    const kind = rel.type === 'ManyToMany' ? 'N:N relationship schema name' : 'Relationship schema name';
+    if (rel.existing === true) {
+      warn(`${kind} '${name}' does not start with this solution's publisher prefix '${publisherPrefix}_'. It is adopted from the environment (existing: true); a rebuild can reuse it only where that relationship already exists. A new environment cannot create that name under this publisher.`);
+      return;
+    }
+    error(`${kind} '${name}' must start with the publisher prefix '${publisherPrefix}_' (Dataverse rejects an unprefixed relationship name); omit schemaName to auto-generate a valid one`);
+  };
   for (const r of spec.relationships || []) {
     if (r.type === 'ManyToMany') {
       if (!entityNames.has(lc(r.entity1))) E(`N:N relationship references unknown entity '${r.entity1}'`);
       if (!entityNames.has(lc(r.entity2))) E(`N:N relationship references unknown entity '${r.entity2}'`);
       if (prefix && r.schemaName && !lc(r.schemaName).startsWith(lc(prefix) + '_')) {
-        E(`N:N relationship schema name '${r.schemaName}' must start with the publisher prefix '${prefix}_' (Dataverse rejects an unprefixed relationship name); omit schemaName to auto-generate a valid one`);
+        foreignRelationshipName(r, prefix, E, W);
       }
       continue;
     }
@@ -185,7 +205,7 @@ function lintAppSpec(spec) {
     // name is auto-prefixed (incl. relationships to standard tables like systemuser/account), but an
     // EXPLICIT rel.schemaName is honored verbatim — so catch an explicit name that would 400 at build.
     if (prefix && r.schemaName && !lc(r.schemaName).startsWith(lc(prefix) + '_')) {
-      E(`Relationship schema name '${r.schemaName}' must start with the publisher prefix '${prefix}_' (Dataverse rejects an unprefixed relationship name); omit schemaName to auto-generate a valid one`);
+      foreignRelationshipName(r, prefix, E, W);
     }
   }
 
@@ -222,7 +242,33 @@ function lintAppSpec(spec) {
         if (!Array.isArray(sections) || sections.length === 0) E(`Form ${f.entity} explicit tab '${t.label || t.name || ''}' has no sections — add at least one section with fields`);
       }
     }
+    // Under an AUTO layout the build writes a `readOnly` / `hidden` flag only on a field the layout
+    // places — the primary column, the table's declared columns and its parent lookups — so a flag on any
+    // other field (a stock column on an existing form, say) is never applied, and `--verify` does not
+    // prove it. The placed set is the compiler's own, the list the build reconciles.
+    if (!isExplicit && f.fieldOptions && typeof f.fieldOptions === 'object' && !Array.isArray(f.fieldOptions)) {
+      let placed = null;
+      try { placed = new Set(formFieldLogicals(compileFormIntent(spec, f))); } catch { /* a malformed form is the validator's to report */ }
+      for (const [key, opt] of Object.entries(placed ? f.fieldOptions : {})) {
+        const flags = [opt && opt.readOnly === true && 'readOnly', opt && opt.hidden === true && 'hidden'].filter(Boolean);
+        if (!flags.length || placed.has(lc(key))) continue;
+        // Why the field is off the form decides the advice. A DECLARED column the layout still leaves off is
+        // either a type with no form control at all (BigInt — validation explains it) or a type the auto
+        // layout simply does not place (a Customer column, say), which an explicit layout can list.
+        const ent = arrOf(spec.entities).find((e) => e && lc(e.schemaName) === lc(f.entity));
+        const col = ent && arrOf(ent.columns).find((c) => c && lc(c.schemaName) === lc(key));
+        const what = `Form ${f.entity} '${f.name || ''}': fieldOptions['${key}'] sets ${flags.join(' and ')}`;
+        if (col && NON_FORM_RENDERABLE_TYPES.has(col.type)) {
+          W(`${what} on a ${col.type} column, which has no form control, so the auto layout leaves it off the form and the build never applies it.`);
+        } else if (col) {
+          W(`${what} on a ${col.type} column, a type the auto layout does not place, so the build never applies it. List '${key}' in an explicit layout to place it (prune: false keeps the rest of the form).`);
+        } else {
+          W(`${what} on a field the auto layout does not place — it places the primary column, the table's declared columns and its parent lookups — so the build never applies it. Declare '${key}' as a column, or list it in an explicit layout (prune: false keeps the rest of the form).`);
+        }
+      }
+    }
     for (const sg of f.subgrids || []) {
+      for (const message of subgridUnknownKeys(sg)) W(`Form ${f.entity} ${message}`);
       const has1N = (spec.relationships || []).some(
         (r) => r.type === 'OneToMany' && lc(r.referenced) === lc(f.entity) && lc(r.referencing) === lc(sg.childEntity)
       );
@@ -230,6 +276,16 @@ function lintAppSpec(spec) {
         (r) => r.type === 'ManyToMany' && ((lc(r.entity1) === lc(f.entity) && lc(r.entity2) === lc(sg.childEntity)) || (lc(r.entity1) === lc(sg.childEntity) && lc(r.entity2) === lc(f.entity)))
       );
       if (!has1N && !hasNN) E(`Form ${f.entity} sub-grid for ${sg.childEntity} has no matching OneToMany or ManyToMany relationship`);
+      // Where the grid goes — the SAME judgement validateAppSpec makes, from the one function, so a spec that
+      // lints clean is not refused by the build's gate for a placement the lint never looked at.
+      if (formType === 'Main') for (const message of subgridPlacementProblems(f, sg)) E(`Form ${f.entity} ${message}`);
+    }
+    // A relationship listed more than once — likewise the one judgement of the spec gate: an error when an entry says
+    // where the grid goes, a warning when none does.
+    if (formType === 'Main') {
+      const duplicates = subgridDuplicateProblems(spec, f);
+      for (const message of duplicates.errors) E(`Form ${f.entity} ${message}`);
+      for (const message of duplicates.warnings) W(`Form ${f.entity} ${message}`);
     }
     for (const ev of f.events || []) {
       if (!FORM_EVENTS.has(lc(ev.event))) { E(`Form ${f.entity} has an event with unknown type '${ev.event}' (use onload/onsave/onchange)`); continue; }
@@ -346,6 +402,14 @@ function lintAppSpec(spec) {
     for (const ds of p.dataSources || []) {
       if (!entityLowerSet.has(lc(ds))) W(`Page '${p.name}' data source '${ds}' isn't a declared entity — ok if it's a standard table, otherwise a likely typo`);
     }
+    // A warning, not an error: a page's name is stored exactly as given, in the page and in the navigation title. Pages an earlier release
+    // created through pac hold each ASCII `"` as `\"` on the page's own record (the build repairs that name on its next update), so the same
+    // name can read differently from page to page. The warning is kept — reworded, because pac no longer writes pages — since the app-builder
+    // eval (evals/model-apps/app-builder/lib/assertions.js) and references/app-spec-schema.md still treat it as part of the lint contract;
+    // retire it together with them.
+    if (typeof p.name === 'string' && p.name.includes('"')) {
+      W(`Page '${p.name}': the name has an ASCII double quote (") — it is stored exactly as written, but a page an earlier release created holds each one as \\" on the page's own record until a build rewrites its name — use typographic quotes (“ ”) or an apostrophe instead`);
+    }
   }
   // The sitemap `VectorIcon` attribute must be an SVG path (e.g. /_imgs/TableIconsFluentV9/x.svg) or
   // a $webresource:<name>.svg reference — NOT a bare Fluent token, which breaks the modern
@@ -375,6 +439,16 @@ function lintAppSpec(spec) {
       }
     }
   }
+  // A navigation a NEW app cannot be built from. validateAppSpec accepts it (data-only specs have no navigation, and a downloaded spec carries
+  // the app's own, which can be empty), but a build that includes the app step refuses it for a new app before it writes anything. Whether the
+  // app exists is not known here, so this is a warning, and it says who is spared by asking the same rule again for an app that exists.
+  const navigation = navigationVerdict(spec, { appExists: false });
+  if (navigation.outcome === 'refuse') {
+    const forExisting = navigationVerdict(spec, { appExists: true }).outcome;
+    const spared = forExisting === 'ok' ? ' An app that already exists is not affected.'
+      : forExisting === 'warn' ? ' An app that already exists is built with no navigation entries, and the build says so.' : '';
+    W(`appShell: ${navigation.message}${spared}`);
+  }
 
   for (const ch of spec.charts || []) {
     const ent = (spec.entities || []).find((e) => lc(e.schemaName) === lc(ch.entity));
@@ -394,11 +468,14 @@ function lintAppSpec(spec) {
     // author picks a distinct name (or knowingly customizes the stock default).
     const ve = (spec.entities || []).find((x) => lc(x.schemaName) === lc(v.entity));
     if (ve && v.name) {
-      const plural = labelText(ve.pluralName, spec && spec.languageCode) || `${labelText(ve.displayName, spec && spec.languageCode) || ve.schemaName}s`;
+      const plural = labelText(ve.pluralName, spec && spec.languageCode) || derivedPluralName(ve, spec && spec.languageCode);
       if (lc(v.name) === `active ${lc(plural)}` || lc(v.name) === `inactive ${lc(plural)}`) {
         W(`View '${v.name}' has the same name as ${ve.schemaName}'s stock default view — it will MERGE onto that default (columns are unioned and the stock "Created On" is kept, but its filters/sort are ignored). Use a distinct name to author a separate view.`);
       }
     }
+    // ADO 6691114: offline, a label can only be checked against what the spec declares. Say when one will
+    // be checked against the environment at build time instead, so the author is not surprised by the halt.
+    for (const w of labelLintWarnings(spec, v)) W(w);
     for (const f of v.filters || []) {
       if (!f.attr) { E(`View '${v.name}' has a filter without an attr`); continue; }
       const op = f.op || 'eq';
@@ -510,9 +587,14 @@ function lintAppSpec(spec) {
     }
   }
 
-  dupWarn((spec.views || []).map((v) => v.name), 'view', W);
-  dupWarn((spec.charts || []).map((c) => c.name), 'chart', W);
-  dupWarn((spec.forms || []).map((f) => f.name).filter(Boolean), 'form', W);
+  // Views, charts and forms belong to a TABLE, and the build finds each by its table and name (a form also
+  // by its type) — so one name on two tables is two artifacts, not a duplicate; a dashboard tile that
+  // could mean either is refused by validation until it names its table. Only a repeat on ONE table
+  // collides. Warning on the name alone flagged the supported same-named-charts-on-two-tables shape.
+  const forms = (spec.forms || []).filter((f) => f && f.name);
+  dupWarn(spec.views || [], 'view', W, (v) => `${lc(v.entity)}|${lc(v.name)}`);
+  dupWarn(spec.charts || [], 'chart', W, (c) => `${lc(c.entity)}|${lc(c.name)}`);
+  dupWarn(forms, 'form', W, (f) => `${lc(f.entity)}|${lc(f.formType || 'Main')}|${lc(f.name)}`);
 
   // Design-completeness warnings. These are WARNINGS, never errors: a spec without personas or pages
   // is still buildable, and the author may have good reason. They exist because all three were steps
@@ -528,10 +610,17 @@ function lintAppSpec(spec) {
     .filter((j) => j && typeof j === 'object')
     .map((j) => ({ persona: p.persona, job: j })));
   if (!personas.length) {
-    W('no personas[] — no jobs-to-be-done are recorded and no security role is authored, so the app opens only for system administrators. Capture who uses this app and what each of them needs to get done.');
+    // Says what the spec authors, and who can open the app only as a condition: no personas[] is also how an extension of an app that already has roles
+    // is written on purpose (a persona's role is converged to the declared privileges, so it is not how to add one table to somebody else's role), and
+    // a spec cannot tell the lint whether the app is new. See lib/app-access.js.
+    W(noPersonasWarning(spec));
   } else if (!jobs.length) {
     W('personas[] declares no jobs — a persona with no jobs-to-be-done neither documents the app nor sizes its security role.');
   }
+  // A table this spec creates is used by the users of a role only once a privilege on it is granted: by a persona, or by a roleGrants[] entry for a role that
+  // already exists. Whatever roles the app has, nothing here gives any of them this table.
+  const withoutAccess = uncoveredTables(spec);
+  if (withoutAccess.length) W(uncoveredTablesWarning(withoutAccess));
   for (const { persona, job } of jobs) {
     if (!(Array.isArray(job.surfaces) && job.surfaces.length)) {
       W(`persona "${persona}" job "${job.name}" is not mapped to a surface (jobs[].surfaces[]) — nothing in this app demonstrably lets that persona do the job.`);
@@ -558,11 +647,12 @@ function lintAppSpec(spec) {
   return { ok: errors.length === 0, errors, warnings };
 }
 
-function dupWarn(names, kind, W) {
+function dupWarn(items, kind, W, keyOf) {
   const seen = new Set();
-  for (const n of names) {
-    const k = String(n || '').toLowerCase();
-    if (k && seen.has(k)) W(`Duplicate ${kind} name: ${n}`);
+  for (const item of items) {
+    if (!item || typeof item !== 'object' || !item.name) continue;
+    const k = keyOf(item);
+    if (seen.has(k)) W(`Duplicate ${kind} name on ${item.entity || '?'}: ${item.name}`);
     seen.add(k);
   }
 }

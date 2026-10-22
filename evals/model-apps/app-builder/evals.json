@@ -4,6 +4,7 @@
   "common_stage_assertions": [
     "author: validateAppSpec(plan profile) passes with no errors",
     "author: spec-lint reports no errors",
+    "author: page quote warnings remain visible without rewriting approved names",
     "plan: every planned item targets a known engine phase",
     "security: the plan authors exactly one role per declared persona",
     "security: each app-access persona role injects app-module read; opted-out personas do not",
@@ -14,9 +15,12 @@
     "data: schema-facts provision exactly the expected tables",
     "data: schema-facts provision exactly the expected relationships",
     "ui: wire-facts build exactly the expected views and charts",
+    "ui: explicit container names display flags and field state match authored intent",
     "app: every sitemap subarea resolves to a concrete target (no dangling entity/page/dashboard)",
     "app: every navigatesTo target resolves to a known page key",
     "verify: reconcile against an all-present reader returns ok with no missing",
+    "verify: every required check kind actually ran",
+    "verify: served Main form order is checked or explicitly unavailable",
     "generate-pages: no PAGEREF_ navigation target is left unresolved",
     "teardown: the solution container is deleted last",
     "teardown: every declared table has a teardown step",
@@ -24,6 +28,7 @@
     "round-trip: download hydrate recovers the same solution and tables",
     "round-trip: the sitemap round-trips with the same subareas",
     "round-trip: generative pages preserve their keys",
+    "round-trip: generative pages preserve their names and models",
     "round-trip: authored directEntry survives unchanged",
     "teardown: every declared dashboard has a teardown step",
     "teardown: every declared command bar has a teardown step",
@@ -190,6 +195,100 @@
       "expectations": [
         "ui: an explicit layout compiles to the authored tab, form-column and section topology (it is not flattened)",
         "ui: an authored colspan and rowspan survive into the compiled cell"
+      ]
+    },
+    {
+      "id": 7,
+      "tier": "full",
+      "spec": "app-spec.json",
+      "prompt": "Reconcile a delivery form: insert Intake, reorder the Details and Administration tabs and the Notes and Execution sections, hide containers and fields, keep read-only state, split omitted column widths equally, preserve the Project Quick View, and serve Work Item before Work Item Review.",
+      "expect": {
+        "tables": ["cnt_project", "cnt_workitem"],
+        "relationships": ["cnt_project_cnt_workitem"],
+        "views": [],
+        "charts": [],
+        "formReconcile": {
+          "entity": "cnt_workitem",
+          "form": "Work Item",
+          "beforeTabs": ["tab_admin", "tab_details"],
+          "afterTabs": ["tab_intake", "tab_details", "tab_admin"],
+          "insertedTabs": ["tab_intake"],
+          "sectionTab": "tab_details",
+          "beforeSections": ["section_execution", "section_notes"],
+          "afterSections": ["section_notes", "section_execution"],
+          "beforeMainFormOrder": ["Work Item Review", "Work Item"],
+          "afterMainFormOrder": ["Work Item", "Work Item Review"],
+          "quickViews": 1
+        }
+      },
+      "expectations": [
+        "ui: an explicit layout compiles to the authored tab, form-column and section topology (it is not flattened)",
+        "ui: an authored colspan and rowspan survive into the compiled cell",
+        "verify: form reconciliation exercises an inserted tab and reordered existing containers",
+        "verify: Quick View bindings survive form reconciliation"
+      ]
+    },
+    {
+      "id": 8,
+      "tier": "full",
+      "spec": "app-spec.json",
+      "prompt": "Download order pages whose own names differ from their sitemap titles. Unescape the PAC-stored Revenue \\\"FY\\\" name, preserve its gpt-4.1 model and table source, leave an absent model absent, and omit an invalid model with an explicit diagnostic.",
+      "expect": {
+        "tables": ["cnt_order"],
+        "relationships": [],
+        "views": [],
+        "charts": [],
+        "pages": ["revenue", "help", "archive"],
+        "unkeptModels": [
+          { "pageId": "00000000-0000-0000-0000-000000000803", "model": "model with spaces" }
+        ]
+      },
+      "expectations": [
+        "round-trip: invalid downloaded models are omitted with explicit diagnostics"
+      ]
+    },
+    {
+      "id": 9,
+      "tier": "full",
+      "spec": "app-spec.json",
+      "prompt": "Compare an identity-bound last-applied Orders baseline with edited page bytes. Only overview changed: classify a fast re-upload of that page alone. Adding cnt_priority instead requires a full data-model build, and comparing identical spec and source bytes must report noop.",
+      "expect": {
+        "tables": ["cnt_order"],
+        "relationships": [],
+        "views": [],
+        "charts": [],
+        "pages": ["overview", "detail"],
+        "changedOnly": [
+          { "name": "page-only", "verdict": "fast", "changedPhases": ["pages"],
+            "fastChanges": [{ "shape": "page", "phase": "pages", "identity": "overview" }], "fullReasons": [] },
+          { "name": "column-edit", "verdict": "full", "changedPhases": ["data-model"],
+            "fastChanges": [], "fullReasons": ["data-model: changed"] },
+          { "name": "identical", "verdict": "noop", "changedPhases": [], "fastChanges": [], "fullReasons": [] }
+        ]
+      },
+      "expectations": [
+        "changed-only: page bytes use a page-only fast path data-model edits use full and identical inputs are noop"
+      ]
+    },
+    {
+      "id": 10,
+      "tier": "full",
+      "spec": "app-spec.json",
+      "prompt": "Give Orders and Tickets the same Information form, Queue view, and Status Summary chart names without cross-table duplicate warnings. Preserve approved page names verbatim: warn for Revenue \"FY\", but not for Clerk's Queue or Revenue \u201cFY\u201d. Same-table duplicates remain invalid for this fixture.",
+      "expect": {
+        "tables": ["cnt_order", "cnt_ticket"],
+        "relationships": [],
+        "views": ["Queue", "Queue"],
+        "charts": ["Status Summary", "Status Summary"],
+        "pages": ["straight-quote", "apostrophe", "typographic"],
+        "nameScope": [
+          { "kind": "form", "name": "Information", "formType": "Main", "entities": ["cnt_order", "cnt_ticket"] },
+          { "kind": "view", "name": "Queue", "entities": ["cnt_order", "cnt_ticket"] },
+          { "kind": "chart", "name": "Status Summary", "entities": ["cnt_order", "cnt_ticket"] }
+        ]
+      },
+      "expectations": [
+        "author: artifact-name warnings use per-table and form-type scope"
       ]
     }
   ]

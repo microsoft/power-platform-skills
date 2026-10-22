@@ -10,15 +10,15 @@
 // ahead of GA and flip it on in a one-line follow-up PR (or per-run via env var)
 // once the dependencies are released — instead of carrying an un-merged branch.
 //
-// A GA flag is flipped to `true` FIRST and removed in a later change, not both at once.
+// A flag is flipped to `true` FIRST and removed in a later change, not both at once.
 // Flipping is reversible in one line if the rollout turns out to be incomplete in some
 // tenant; deleting the gate in the same change that enables the feature leaves no way
-// back except a revert. `connectors` is in that window now: GA, shipping `true`, gate
-// retained as a rollback switch.
+// back except a revert. Once a release has shipped with the flag on and no rollback was
+// needed, remove it so unknown flags fail closed instead of staying permanently probed.
 //
 // Precedence (highest first), mirroring the telemetry opt-out convention in
 // AGENTS.md where an env var overrides committed config:
-//   1. env var  GENPAGE_ENABLE_<FLAG>   (e.g. GENPAGE_ENABLE_CONNECTORS)
+//   1. env var  GENPAGE_ENABLE_<FLAG>
 //   2. committed feature-flags.json at the plugin root
 //   3. default: false  (fail-closed — unknown/unset flags are OFF)
 //
@@ -33,6 +33,44 @@ const path = require('node:path');
 // The committed flag file lives at the plugin root; from scripts/lib that's two up.
 const FLAGS_PATH = path.resolve(__dirname, '..', '..', 'feature-flags.json');
 
+// Catalog of every flag the skill knows about, with lifecycle status so makers
+// and devs can see what is experimental / in-progress vs GA. `status` is one of
+// 'experimental' | 'in-progress' | 'ga'. Keep this the single source of truth —
+// feature-flags.json only carries the on/off value; this catalog carries the
+// metadata (what it enables, what it depends on, how to turn it on).
+const FLAGS = {
+  'custom-api': {
+    status: 'in-progress',
+    summary:
+      'GenPage Dataverse Custom API (plug-in) invocation — calling a Custom API Action or Function ' +
+      'from a generated page via dataApi.executeAction / executeFunction / listBoundActions, gated by ' +
+      "the page's revision-bound actionBindings manifest.",
+    dependencies:
+      'the AIBuilder CoderAgent action prompt, the shared pai-gen-ux-action-runtime plus the UCI ' +
+      'and Controls host runtimes, the page `actionBindings` the plugin writes into config.json ' +
+      '(through the SDK, from genpage-upload.js --actions and the build), and the ' +
+      'GenUxPluginActionAllowList ECS setting — all live in PROD.',
+    enableEnv: 'GENPAGE_ENABLE_CUSTOM_API=1',
+  },
+  'custom-telemetry': {
+    status: 'in-progress',
+    summary:
+      'Custom page telemetry — a generated page reporting its own events, metrics, traces and ' +
+      "exceptions to the customer's Application Insights resource via an optional props.appInsights " +
+      'surface, emitted only when the maker explicitly asks to measure or track something.',
+    dependencies:
+      'the page telemetry facade in the UCI host runtime, the GenUX authoring control ' +
+      '(power-platform-ux), the AIBuilder CoderAgent telemetry prompt, and the ' +
+      'GenUxEnableCustomTelemetry ECS setting — all live in PROD.',
+    enableEnv: 'GENPAGE_ENABLE_CUSTOM_TELEMETRY=1',
+  },
+};
+
+// Flag names the skill knows about, derived from the catalog. Used to validate the
+// committed file (catch typo'd keys that would silently stay OFF — or, after a flip
+// to true, an unintended key) and to enumerate state via `describe()`.
+const KNOWN_FLAGS = Object.keys(FLAGS);
+
 // Truthy env values follow the common CLI convention (dotnet/bash style):
 // 1/true/yes/on enable; 0/false/no/off disable; anything else (including unset
 // or empty) returns null so the caller defers to the next precedence layer
@@ -46,7 +84,7 @@ function parseBool(value) {
   return null;
 }
 
-// 'connectors' -> GENPAGE_ENABLE_CONNECTORS. Non-alphanumeric runs in a flag name
+// 'custom-api' -> GENPAGE_ENABLE_CUSTOM_API. Non-alphanumeric runs in a flag name
 // collapse to a single '_' so multi-word flags still map to a legal env var name.
 function envVarName(flag) {
   return 'GENPAGE_ENABLE_' + String(flag).toUpperCase().replace(/[^A-Z0-9]+/g, '_');
@@ -75,89 +113,19 @@ function readFlagsFile(flagsPath) {
  * @returns {boolean}
  */
 function isEnabled(flag, opts = {}) {
+  if (!Object.prototype.hasOwnProperty.call(FLAGS, flag)) return false;
+
   const env = opts.env || process.env;
   const envValue = parseBool(env[envVarName(flag)]);
-  if (envValue !== null) return envValue; // env override wins
+  if (envValue !== null) return envValue; // env override wins for known flags only
 
   const flags = opts.flags || readFlagsFile(opts.flagsPath || FLAGS_PATH);
   // Strictly === true; anything else (false, missing, non-boolean) is OFF.
   return flags[flag] === true;
 }
 
-function isConnectorsEnabled(opts) {
-  return isEnabled('connectors', opts);
-}
-
 function isCustomApiEnabled(opts) {
   return isEnabled('custom-api', opts);
-}
-
-// Catalog of every flag the skill knows about, with lifecycle status so makers
-// and devs can see what is experimental / in-progress vs GA. `status` is one of
-// 'experimental' | 'in-progress' | 'ga'. Keep this the single source of truth —
-// feature-flags.json only carries the on/off value; this catalog carries the
-// metadata (what it enables, what it depends on, how to turn it on).
-const FLAGS = {
-  connectors: {
-    status: 'ga',
-    summary:
-      'GenPage connector authoring (SharePoint, weather, Office 365, SQL, custom REST) ' +
-      'and ALM packaging of connection references.',
-    dependencies:
-      'pac CLI connector verbs (PowerPlatform-Scale-AdminTools), the GenUX authoring ' +
-      'control (power-platform-ux), and the maker/admin ECS setting — all live in PROD.',
-    enableEnv: 'GENPAGE_ENABLE_CONNECTORS=1',
-  },
-  'custom-api': {
-    status: 'in-progress',
-    summary:
-      'GenPage Dataverse Custom API (plug-in) invocation — calling a Custom API Action or Function ' +
-      'from a generated page via dataApi.executeAction / executeFunction / listBoundActions, gated by ' +
-      "the page's revision-bound actionBindings manifest.",
-    dependencies:
-      'the AIBuilder CoderAgent action prompt, the shared pai-gen-ux-action-runtime plus the UCI ' +
-      'and Controls host runtimes, a pac CLI `model genpage upload --actions` verb ' +
-      '(PowerPlatform-Scale-AdminTools) to persist actionBindings into config.json, and the ' +
-      'GenUxPluginActionAllowList ECS setting — all live in PROD.',
-    enableEnv: 'GENPAGE_ENABLE_CUSTOM_API=1',
-  },
-  'custom-telemetry': {
-    status: 'in-progress',
-    summary:
-      'Custom page telemetry — a generated page reporting its own events, metrics, traces and ' +
-      "exceptions to the customer's Application Insights resource via an optional props.appInsights " +
-      'surface, emitted only when the maker explicitly asks to measure or track something.',
-    dependencies:
-      'the page telemetry facade in the UCI host runtime, the GenUX authoring control ' +
-      '(power-platform-ux), the AIBuilder CoderAgent telemetry prompt, and the ' +
-      'GenUxEnableCustomTelemetry ECS setting — all live in PROD.',
-    enableEnv: 'GENPAGE_ENABLE_CUSTOM_TELEMETRY=1',
-  },
-};
-
-// Flag names the skill knows about, derived from the catalog. Used to validate the
-// committed file (catch typo'd keys that would silently stay OFF — or, after a flip
-// to true, an unintended key) and to enumerate state via `describe()`.
-const KNOWN_FLAGS = Object.keys(FLAGS);
-
-// Fail-closed gate shared by every connector script entry point. Centralizing it
-// (instead of each script inlining the same `if (!isConnectorsEnabled()) exit 3`)
-// keeps the disabled message and exit code (3 = "feature off", distinct from
-// 1 = runtime/usage error) consistent and prevents drift. `exit`/`write` are
-// injectable for unit testing.
-//
-// connectors is GA and ships ON, so this normally does nothing. It is retained for one
-// release as the rollback path: if the cross-repo dependencies turn out to be incomplete
-// in some tenant, `"connectors": false` restores the previous behaviour in one line
-// rather than requiring a revert.
-function exitIfConnectorsDisabled(opts = {}) {
-  const exit = opts.exit || process.exit;
-  const write = opts.write || ((s) => process.stderr.write(s));
-  if (!isConnectorsEnabled(opts)) {
-    write(connectorsDisabledMessage() + '\n');
-    return exit(3);
-  }
-  return undefined;
 }
 
 // Fail-closed gate shared by every Custom API (Dataverse Action/Function) script entry
@@ -209,18 +177,6 @@ function validateFlags(flags) {
   return warnings;
 }
 
-// Standard operator-facing message printed when a connector entrypoint is invoked
-// while the flag is OFF. Centralized so every connector script speaks with one voice.
-function connectorsDisabledMessage() {
-  return (
-    'Connector support is disabled (feature flag "connectors" is OFF). ' +
-    'It is GA and ships ON, so this means it was explicitly turned off — either ' +
-    'GENPAGE_ENABLE_CONNECTORS=0 in this environment, or "connectors": false in ' +
-    'plugins/model-apps/feature-flags.json. Set it back to true (or unset the env var) ' +
-    'to re-enable connector authoring.'
-  );
-}
-
 // Standard operator-facing message printed when a Custom API entrypoint is invoked while
 // the flag is OFF. Centralized so every Custom API script speaks with one voice about why it
 // stopped and how to turn the feature on.
@@ -228,8 +184,8 @@ function customApiDisabledMessage() {
   return (
     'Dataverse Custom API support is disabled (feature flag "custom-api" is OFF). ' +
     'GenPage Custom API invocation requires the AIBuilder action prompt, the shared action ' +
-    'runtime, the UCI and Controls host runtimes, a pac CLI `model genpage upload --actions` ' +
-    'verb, and the GenUxPluginActionAllowList setting to all be live in PROD. To enable for a ' +
+    'runtime, the UCI and Controls host runtimes, and the GenUxPluginActionAllowList setting to ' +
+    'all be live in PROD. To enable for a ' +
     'single run set GENPAGE_ENABLE_CUSTOM_API=1, or flip "custom-api" to true in ' +
     'plugins/model-apps/feature-flags.json once the dependencies are released.'
   );
@@ -237,11 +193,8 @@ function customApiDisabledMessage() {
 
 module.exports = {
   isEnabled,
-  isConnectorsEnabled,
   isCustomApiEnabled,
-  connectorsDisabledMessage,
   customApiDisabledMessage,
-  exitIfConnectorsDisabled,
   exitIfCustomApiDisabled,
   describe,
   validateFlags,
@@ -259,6 +212,9 @@ module.exports = {
 if (require.main === module) {
   const arg = process.argv[2];
   if (arg === '--list') {
+    // The list ends with a warning for each bad entry of the flags file, and the process exits right after it: the writes are
+    // made blocking first, or a pipe on Linux and macOS takes only what fits at once (output-redaction.js).
+    require('./output-redaction.js').makeWritesBlocking(process.stdout, process.stderr);
     for (const { flag, enabled, source, status } of describe()) {
       process.stdout.write(
         `${flag}: ${enabled ? 'enabled' : 'disabled'} (status: ${status}, source: ${source})\n`

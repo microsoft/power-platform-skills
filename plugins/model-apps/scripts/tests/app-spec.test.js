@@ -2,7 +2,7 @@ const { test } = require('node:test');
 const assert = require('node:assert');
 const path = require('node:path');
 const fs = require('node:fs');
-const { validateAppSpec, columnTypeMap, relationshipFor, lookupColumnsFor, childRelationshipsFor, relationshipSchemaName, manyToManySchemaName, resolveSampleRecords, migrateAppSpec, quickCreateEnabledFor } = require(path.join(__dirname, '..', 'lib', 'app-spec.js'));
+const { validateAppSpec, columnTypeMap, relationshipFor, lookupColumnsFor, childRelationshipsFor, relationshipSchemaName, manyToManySchemaName, resolveSampleRecords, migrateAppSpec, quickCreateEnabledFor, dashboardNameKey } = require(path.join(__dirname, '..', 'lib', 'app-spec.js'));
 
 const sample = JSON.parse(
   fs.readFileSync(path.join(__dirname, '..', '..', 'samples', 'app-spec.project-tracker.json'), 'utf8')
@@ -103,7 +103,7 @@ test('validateAppSpec TOLERATES a platform icon reference (OOB / $webresource pa
   }
 });
 
-test('validateAppSpec WARNS (does not error) on a dropped BARE-TOKEN entity-subarea vectorIcon (Ask 3 — no silent drop)', () => {
+test('validateAppSpec WARNS (does not error) on a dropped BARE-TOKEN entity-subarea vectorIcon (no silent drop)', () => {
   const s = JSON.parse(JSON.stringify(sample));
   s.appShell.areas[0].groups[0].subAreas[0].vectorIcon = 'Shop'; // bare Fluent token on an entity subarea
   const r = validateAppSpec(s, { profile: 'deploy' });
@@ -134,8 +134,8 @@ test('validateAppSpec WARNS on a custom-prefixed platform icon ref that is NOT d
   assert.ok(!(r3.warnings || []).some((w) => /NOT declared in webResources/.test(w)), 'an OOB/system icon ref is not flagged (present on every env)');
 });
 
-// F12 — URL scheme allowlist: only http(s) URLs may be shipped in an app the maker renders.
-test('validateAppSpec rejects a sitemap subArea url with a non-http(s) scheme (F12)', () => {
+// URL scheme allowlist: only http(s) URLs may be shipped in an app the maker renders.
+test('validateAppSpec rejects a sitemap subArea url with a non-http(s) scheme', () => {
   const s = JSON.parse(JSON.stringify(sample));
   s.appShell.areas[0].groups[0].subAreas.push({ title: 'Evil', url: 'javascript:alert(1)' });
   const r = validateAppSpec(s);
@@ -143,14 +143,14 @@ test('validateAppSpec rejects a sitemap subArea url with a non-http(s) scheme (F
   assert.ok(r.errors.some((e) => /url must be an http\(s\) URL/.test(e)), JSON.stringify(r.errors));
 });
 
-test('validateAppSpec accepts a sitemap subArea url with https (F12)', () => {
+test('validateAppSpec accepts a sitemap subArea url with https', () => {
   const s = JSON.parse(JSON.stringify(sample));
   s.appShell.areas[0].groups[0].subAreas.push({ title: 'Docs', url: 'https://learn.microsoft.com/' });
   const r = validateAppSpec(s);
   assert.strictEqual(r.ok, true, JSON.stringify(r.errors));
 });
 
-test('validateAppSpec rejects an iframe dashboard tile url with a non-http(s) scheme (F12)', () => {
+test('validateAppSpec rejects an iframe dashboard tile url with a non-http(s) scheme', () => {
   const s = JSON.parse(JSON.stringify(sample));
   s.dashboards = [{ name: 'Ops', tiles: [{ type: 'iframe', name: 'Map', url: 'javascript:alert(1)' }] }];
   const r = validateAppSpec(s);
@@ -442,12 +442,110 @@ test('validateAppSpec rejects a command with no function', () => {
 
 test('validateAppSpec accepts a dashboard with chart + list tiles on declared view/chart', () => {
   const ok = cloneDesk();
+  // The chart and its view must be on the SAME table (a mismatch cross-wires the tile, #586 item 3).
+  const chart = ok.charts[0];
+  const view = ok.views.find((v) => v.entity === chart.entity);
   ok.dashboards = [{ name: 'Ops', tiles: [
-    { type: 'chart', chart: ok.charts[0].name, view: ok.views[0].name },
+    { type: 'chart', chart: chart.name, view: view.name },
     { type: 'list', view: ok.views[0].name, name: 'List' },
   ] }];
   const r = validateAppSpec(ok);
   assert.strictEqual(r.ok, true, JSON.stringify(r.errors));
+});
+
+// #586 item 3: view and chart names are unique only PER TABLE, and the build resolves both on the
+// tile's table. Same names across tables are legitimate; a tile that mixes tables, or cannot say
+// which table it means, is not.
+test('validateAppSpec accepts same-named charts on two tables when each tile stays on one table', () => {
+  const ok = cloneDesk();
+  const ticketChart = ok.charts.find((c) => c.entity === 'new_ticket');
+  ok.charts.push({ ...ticketChart, entity: 'new_customer', groupBy: 'new_segment' }); // same name, other table
+  ok.dashboards = [{ name: 'Ops', tiles: [{ type: 'chart', chart: ticketChart.name, view: 'Active Tickets' }] }];
+  const r = validateAppSpec(ok);
+  assert.strictEqual(r.ok, true, JSON.stringify(r.errors));
+});
+
+test("validateAppSpec rejects a chart tile whose chart is declared on a different table than its view", () => {
+  const bad = cloneDesk();
+  const ticketChart = bad.charts.find((c) => c.entity === 'new_ticket');
+  bad.dashboards = [{ name: 'Ops', tiles: [{ type: 'chart', chart: ticketChart.name, view: 'Active Customers' }] }];
+  const r = validateAppSpec(bad);
+  assert.ok(r.errors.some((e) => /chart tile shows new_customer .* is declared on new_ticket/.test(e)), JSON.stringify(r.errors));
+});
+
+test('validateAppSpec requires a tile to name its table when its view name exists on more than one', () => {
+  const spec = cloneDesk();
+  const customerView = spec.views.find((v) => v.entity === 'new_customer');
+  spec.views.push({ ...customerView, name: 'Active Tickets' }); // now "Active Tickets" exists on two tables
+  spec.dashboards = [{ name: 'Ops', tiles: [{ type: 'list', view: 'Active Tickets', name: 'List' }] }];
+  const ambiguous = validateAppSpec(spec);
+  assert.ok(ambiguous.errors.some((e) => /declared on more than one table .* set the tile's entity/.test(e)), JSON.stringify(ambiguous.errors));
+  spec.dashboards[0].tiles[0].entity = 'new_ticket';
+  const pinned = validateAppSpec(spec);
+  assert.strictEqual(pinned.ok, true, JSON.stringify(pinned.errors));
+});
+
+test("validateAppSpec rejects a tile whose entity does not declare the view it names", () => {
+  const bad = cloneDesk();
+  bad.dashboards = [{ name: 'Ops', tiles: [{ type: 'list', view: 'Active Customers', entity: 'new_ticket', name: 'List' }] }];
+  const r = validateAppSpec(bad);
+  assert.ok(r.errors.some((e) => /names view 'Active Customers' on new_ticket, but that view is declared on new_customer/.test(e)), JSON.stringify(r.errors));
+});
+
+// #586 item 4: a sitemap subarea and the build find a dashboard by NAME, through a Dataverse filter
+// that ignores case, most accents and trailing spaces, so two such names collapse into one dashboard
+// and the other leaves the nav.
+test('validateAppSpec rejects two dashboards whose names Dataverse would treat as one', () => {
+  const bad = cloneDesk();
+  const tile = { type: 'list', view: bad.views[0].name, name: 'List' };
+  for (const [first, second] of [['Overview', 'OVERVIEW '], ['Café', 'CAFE'], ['Overview', 'Overview']]) {
+    bad.dashboards = [{ name: first, tiles: [tile] }, { name: second, tiles: [tile] }];
+    const r = validateAppSpec(bad);
+    assert.ok(r.errors.some((e) => e.includes(`dashboard '${second}': has the same name as dashboard '${first}'`)), `${first} / ${second}: ${JSON.stringify(r.errors)}`);
+  }
+  // Differences the server keeps must stay legal: a leading space, and a vowel sign (a letter, not an accent).
+  for (const [first, second] of [['Overview', 'Pipeline'], ['Overview', ' Overview'], ['कार', 'कर']]) {
+    bad.dashboards = [{ name: first, tiles: [tile] }, { name: second, tiles: [tile] }];
+    assert.strictEqual(validateAppSpec(bad).ok, true, `${JSON.stringify(first)} / ${JSON.stringify(second)} are distinct`);
+  }
+});
+
+// Every pair below was written to a live English environment and read back with `eq`; `server` is what
+// Dataverse answered. The key must agree, except where it deliberately folds MORE (a false rejection
+// is loud and fixed by a rename; a missed collision silently drops a dashboard).
+test('dashboardNameKey folds exactly what the server was measured to ignore', () => {
+  const MEASURED = [
+    ['Alpha', 'ALPHA', true], ['Café', 'Cafe', true], ['Résumé', 'Re\u0301sume\u0301', true],
+    ['Bravo', 'Bravo ', true], ['Charlie ', 'Charlie', true], [' Delta', 'Delta', false],
+    ['Echo\u00a0', 'Echo', false], ['Foxtrot\t', 'Foxtrot', false], ['कार', 'कर', false], ['กิน', 'กน', false],
+    ['ばす', 'はす', true], ['مُحَمَّد', 'محمد', false], ['йод', 'иод', false], ['ёж', 'еж', true], ['Жук', 'ЖУК', true],
+    ['Straße', 'Strasse', true], ['Ｇolf', 'Golf', true], ['Æther', 'AEther', true], ['ﬁle', 'file', true],
+    ['Άλφα', 'Αλφα', true], ['Việt', 'Viet', true], ['שָׁלוֹם', 'שלום', true], ['Tăng', 'Tang', true],
+    ['Øre', 'Ore', true], ['Łódź', 'Lodz', true], ['Đà', 'Da', true], ['Œuvre', 'Oeuvre', true],
+    ['İstanbul', 'Istanbul', true], ['ｶﾅ', 'カナ', true], ['カナ', 'かな', true], ['λόγος', 'λόγοσ', true],
+    ['عـلم', 'علم', true], ['क़', 'क', true],
+  ];
+  for (const [a, b, server] of MEASURED) {
+    assert.strictEqual(dashboardNameKey(a) === dashboardNameKey(b), server, `${JSON.stringify(a)} vs ${JSON.stringify(b)}: the server says ${server ? 'equal' : 'distinct'}`);
+  }
+  // The one accepted over-fold: the server keeps a decomposed Hangul syllable distinct from its
+  // precomposed form, which no keyboard produces for a dashboard name.
+  assert.strictEqual(dashboardNameKey('한'), dashboardNameKey('\u1112\u1161\u11ab'));
+  assert.notStrictEqual(dashboardNameKey('Sales Overview'), dashboardNameKey('SalesOverview'), 'inner space still counts');
+  assert.strictEqual(dashboardNameKey(undefined), '');
+});
+
+// A column with no schemaName is reported by name. The sample-data gate resolves Choice values through
+// the loader's helpers, which used to key every Choice/MultiChoice column by `schemaName.toLowerCase()`
+// and threw a TypeError instead — taking validate, verify and even a teardown dry-run down with it.
+test('validateAppSpec reports a Choice column with no schemaName instead of crashing on its sample data', () => {
+  const s = cloneDesk();
+  const e = s.entities[0];
+  e.columns = [...(e.columns || []), { displayName: 'Tags', type: 'MultiChoice' }, { displayName: 'Tier', type: 'Choice', options: ['A', 'B'] }];
+  s.sampleData = { [e.schemaName]: [{ [e.primaryAttribute.schemaName]: 'One' }] };
+  let r;
+  assert.doesNotThrow(() => { r = validateAppSpec(s); });
+  assert.ok(r.errors.some((m) => /a column is missing schemaName/.test(m)), JSON.stringify(r.errors));
 });
 
 test('validateAppSpec accepts id-passthrough dashboard tiles (viewId/visualizationId + entity, no declared view/chart)', () => {
@@ -501,7 +599,7 @@ test('validateAppSpec: a quick-view matches its form by (name, targetEntity) —
 test('validateAppSpec: a quick-view prefers the QuickView form when a same-named Main exists on the SAME target entity', () => {
   const ok = cloneDesk();
   // new_customer has BOTH a Main and a QuickView named "Information"; the quick-view must resolve the
-  // QuickView, not be rejected because the Main appears first (order-dependent name matching — Sol).
+  // QuickView, not be rejected because the Main appears first (order-dependent name matching).
   ok.forms = [
     { entity: 'new_ticket', name: 'Ticket', formType: 'Main', quickViews: [{ lookup: 'new_customerid', targetEntity: 'new_customer', form: 'Information' }] },
     { entity: 'new_customer', name: 'Information', formType: 'Main' },      // same name, Main — appears FIRST
@@ -645,7 +743,9 @@ test('#544 a row that is its own parent is rejected as a cycle', () => {
 
 test('#544 TWO relationships for one pair make a $parent ambiguous unless it names the lookup', () => {
   const s = selfRefDesk();
-  s.relationships.push({ type: 'OneToMany', referenced: 'new_org', referencing: 'new_org', lookup: { schemaName: 'new_GroupAncestorId', displayName: 'Group Ancestor' } });
+  // A second 1:N on the same pair derives the same schema name. The ambiguity under test is the
+  // $parent bind, so this one carries an explicit name — otherwise the collision gate rejects it first.
+  s.relationships.push({ type: 'OneToMany', schemaName: 'new_org_group_ancestor', referenced: 'new_org', referencing: 'new_org', lookup: { schemaName: 'new_GroupAncestorId', displayName: 'Group Ancestor' } });
   const ambiguous = validateAppSpec(s);
   assert.strictEqual(ambiguous.ok, false);
   assert.ok(ambiguous.errors.some((e) => /ambiguous/.test(e) && /new_ParentOrgId/.test(e) && /new_GroupAncestorId/.test(e)), JSON.stringify(ambiguous.errors));
@@ -750,14 +850,14 @@ test('childRelationshipsFor returns the child (many) side of each 1:N where the 
   assert.deepStrictEqual(childRelationshipsFor(spec, 'new_task'), []);
 });
 
-// === Task 3 (Plan 3): page-spec validation BEFORE any write (Critical 4) ===
+// === page-spec validation BEFORE any write ===
 // These checks run on every validateAppSpec call — author plan, run-1/run-2, teardown, verify —
 // so a malformed page spec is rejected before the pages phase writes anything. Design §7.2.
 
 // A minimal v2 spec that passes everything EXCEPT the page rule under test. schemaVersion 2 so the
 // stable-key rules apply; one entity so the base validation is satisfied.
 function pageSpec(pages) {
-  // Build a subarea per page so the every-page-placed rule (Task 3 / Plan 5) does not add spurious
+  // Build a subarea per page so the every-page-placed rule does not add spurious
   // errors for tests that exercise OTHER page validations (key grammar, codeFile paths, etc.).
   // Rejection tests already check for their specific error via .some(), so an extra "unknown page"
   // error for an invalid key does not break them.
@@ -772,7 +872,7 @@ function pageSpec(pages) {
   };
 }
 
-test('validateAppSpec rejects case-insensitive duplicate page names (Critical 4)', () => {
+test('validateAppSpec rejects case-insensitive duplicate page names', () => {
   const r = validateAppSpec(pageSpec([
     { key: 'a', name: 'Overview', source: { kind: 'tsx', codeFile: 'a.tsx' } },
     { key: 'b', name: 'overview', source: { kind: 'tsx', codeFile: 'b.tsx' } },
@@ -805,7 +905,7 @@ test('validateAppSpec still ERRORS when a NEW page (no pageId) collides with a p
   assert.ok(!r.ok && r.errors.some((e) => /duplicate page name/i.test(e)), 'a NEW page colliding with a pre-existing name is rejected');
 });
 
-test('validateAppSpec rejects duplicate implemented codeFile paths (Critical 4)', () => {
+test('validateAppSpec rejects duplicate implemented codeFile paths', () => {
   const r = validateAppSpec(pageSpec([
     { key: 'a', name: 'A', source: { kind: 'tsx', codeFile: 'pages/x.tsx' } },
     { key: 'b', name: 'B', source: { kind: 'tsx', codeFile: 'pages/x.tsx' } },
@@ -813,10 +913,10 @@ test('validateAppSpec rejects duplicate implemented codeFile paths (Critical 4)'
   assert.ok(!r.ok && r.errors.some((e) => /duplicate .*codeFile|codeFile .*already/i.test(e)), r.errors.join('; '));
 });
 
-// Addendum Crit 4: path aliases that resolve to the same file must be detected as duplicates.
+// Path aliases that resolve to the same file must be detected as duplicates.
 // path.normalize('pages/./x.tsx') and path.normalize('pages/x.tsx') resolve identically; without
 // normalization these would evade the duplicate check as different strings.
-test('validateAppSpec rejects normalized path duplicates: pages/x.tsx vs pages/./x.tsx (addendum Crit 4)', () => {
+test('validateAppSpec rejects normalized path duplicates: pages/x.tsx vs pages/./x.tsx', () => {
   const r = validateAppSpec(pageSpec([
     { key: 'a', name: 'A', source: { kind: 'tsx', codeFile: 'pages/x.tsx' } },
     { key: 'b', name: 'B', source: { kind: 'tsx', codeFile: 'pages/./x.tsx' } },
@@ -824,14 +924,14 @@ test('validateAppSpec rejects normalized path duplicates: pages/x.tsx vs pages/.
   assert.ok(!r.ok && r.errors.some((e) => /duplicate .*codeFile|codeFile .*already/i.test(e)), `pages/./x.tsx alias should be detected as duplicate: ${r.errors.join('; ')}`);
 });
 
-test('validateAppSpec rejects a codeFile that escapes the workspace (.. or absolute) (Critical 4)', () => {
+test('validateAppSpec rejects a codeFile that escapes the workspace (.. or absolute)', () => {
   for (const bad of ['../evil.tsx', '/etc/evil.tsx', 'C:/evil.tsx', 'a/../../evil.tsx']) {
     const r = validateAppSpec(pageSpec([{ key: 'a', name: 'A', source: { kind: 'tsx', codeFile: bad } }]), { profile: 'plan' });
     assert.ok(!r.ok && r.errors.some((e) => /codeFile.*(outside|escape|confin|absolute|\.\.)/i.test(e)), `${bad}: ${r.errors.join('; ')}`);
   }
 });
 
-test('validateAppSpec rejects an invalid stable key grammar (Critical 4)', () => {
+test('validateAppSpec rejects an invalid stable key grammar', () => {
   for (const bad of ['Overview', 'wo_detail', '-lead', 'lead-', 'a b']) {
     const r = validateAppSpec(pageSpec([{ key: bad, name: 'A', source: { kind: 'tsx', codeFile: 'a.tsx' } }]), { profile: 'plan' });
     assert.ok(!r.ok && r.errors.some((e) => /key.*grammar|invalid.*key|key '/i.test(e)), `${bad}: ${r.errors.join('; ')}`);
@@ -930,7 +1030,7 @@ test('validateAppSpec passes when ai is absent (no regression)', () => {
   assert.strictEqual(r.ok, true, JSON.stringify(r.errors));
 });
 
-// Task 3 — every page must be an appShell subarea + accept optional pages[].pageId (edit-snapshot).
+// Every page must be an appShell subarea + accept optional pages[].pageId (edit-snapshot).
 // v2PagesSpec builds a minimal schemaVersion-2 spec; subAreas is the sitemap group's subAreas array;
 // extraPageFields is merged into the FIRST page (overview) so we can exercise per-page fields like pageId.
 function v2PagesSpec(subAreas, extraPageFields) {
@@ -970,7 +1070,7 @@ test('the structural profile does NOT enforce page placement (shape-only / eval-
   assert.ok(!r.errors.some((e) => /not placed in the sitemap/.test(e)), JSON.stringify(r.errors));
 });
 
-test('validateAppSpec ACCEPTS a valid pages[].pageId GUID (edit-snapshot, C3)', () => {
+test('validateAppSpec ACCEPTS a valid pages[].pageId GUID (edit-snapshot)', () => {
   const spec = v2PagesSpec(
     [{ page: 'overview', title: 'Overview' }, { page: 'order-detail', title: 'Order Detail' }],
     { pageId: '13ecbc57-a3a4-4132-b0a2-a6c6b12691e8' }
@@ -992,6 +1092,19 @@ test('validateAppSpec REJECTS a non-GUID pages[].pageId', () => {
     { pageId: '' }
   );
   assert.ok(!validateAppSpec(emptySpec, { profile: 'deploy' }).ok, 'empty pageId is rejected');
+});
+
+// pages[].model is the id a download writes back and the build sends to pac's `--model`, so it is a short token.
+test('validateAppSpec ACCEPTS a model id and REJECTS anything that is not one', () => {
+  const withModel = (model) => v2PagesSpec([{ page: 'overview', title: 'Overview' }, { page: 'order-detail', title: 'Order Detail' }], { model });
+  for (const good of ['gpt-4.1', 'gpt-5-mini', 'org/model:v2_1', 'claude-3-5-sonnet@20240620', 'model+tuned', 'm'.repeat(100)]) {
+    const r = validateAppSpec(withModel(good), { profile: 'deploy' });
+    assert.ok(r.ok, `${good}: ${JSON.stringify(r.errors)}`);
+  }
+  for (const bad of ['', ' gpt-4.1', 'gpt 4.1', '-gpt', 'gpt"4', 'm'.repeat(101), 41, null]) {
+    const r = validateAppSpec(withModel(bad), { profile: 'deploy' });
+    assert.ok(r.errors.some((e) => /page 'overview': model must be a model id such as 'gpt-4\.1'/.test(e)), `${JSON.stringify(bad)}: ${JSON.stringify(r.errors)}`);
+  }
 });
 
 // --- entities[].quickCreate (Allow quick create table flag) --------------------------------------
@@ -1017,6 +1130,49 @@ test('validateAppSpec rejects a non-boolean entities[].quickCreate', () => {
   assert.ok(r.errors.some((e) => /quickCreate must be a boolean/.test(e)), 'the error names the field');
 });
 
+// --- entities[].primaryAttribute.maxLength (the length of the table's name column) ----------------
+// Accepted and ignored until the build began sending it, so a value the platform cannot take is refused at the spec gate, not
+// part-way through a build. The platform's limit for a table's name column is 850, well under the 4,000 of other text columns:
+// asked for more, the table create is refused — "The maximum length of Primary attribute '<name>' is <asked>. The maximum
+// allowed limit is 850."
+test('validateAppSpec accepts primaryAttribute.maxLength from 1 to 850, and an omitted one', () => {
+  for (const maxLength of [undefined, 1, 100, 120, 849, 850]) {
+    const primaryAttribute = { schemaName: 'new_name', displayName: 'Name', ...(maxLength === undefined ? {} : { maxLength }) };
+    const r = validateAppSpec(quickCreateSpec({ primaryAttribute }), { profile: 'deploy' });
+    assert.ok(r.ok, `${maxLength}: ${JSON.stringify(r.errors)}`);
+  }
+});
+
+test('validateAppSpec rejects a primaryAttribute.maxLength that is not a whole number from 1 to 850, naming the field and the value', () => {
+  for (const bad of [0, -1, 851, 4000, 4001, 12.5, '120', null, true, [], {}]) {
+    const r = validateAppSpec(quickCreateSpec({ primaryAttribute: { schemaName: 'new_name', displayName: 'Name', maxLength: bad } }), { profile: 'deploy' });
+    assert.ok(!r.ok, `${JSON.stringify(bad)} must be rejected`);
+    assert.ok(r.errors.some((e) => e.startsWith('entity new_ticket: primaryAttribute.maxLength must be a whole number from 1 to 850 (got ')), `${JSON.stringify(bad)}: ${JSON.stringify(r.errors)}`);
+  }
+  assert.ok(validateAppSpec(quickCreateSpec({ primaryAttribute: { schemaName: 'new_name', maxLength: 851 } }), { profile: 'deploy' }).errors.some((e) => /\(got 851\)/.test(e)), 'the value is quoted back');
+});
+
+// /genpage and /app-builder reach the build through the provision-entities input gate, not validateAppSpec: it must refuse
+// exactly what the spec gate refuses, because the length goes into the table request as it is written.
+test('the provision-entities input gate applies the same primaryAttribute.maxLength rule as validateAppSpec', () => {
+  const { validateProvisionInput } = require(path.join(__dirname, '..', 'lib', 'provision-input.js'));
+  const lengthErrors = (errors) => errors.filter((e) => /primaryAttribute\.maxLength/.test(e)).map((e) => e.slice(e.indexOf('primaryAttribute.maxLength')));
+  for (const maxLength of [undefined, 1, 120, 850, 851, 4000, 5000, 0, 1.5, -3, '120', null, true, [], {}]) {
+    const primaryAttribute = { schemaName: 'new_name', displayName: 'Name', ...(maxLength === undefined ? {} : { maxLength }) };
+    const spec = validateAppSpec(quickCreateSpec({ primaryAttribute }), { profile: 'deploy' });
+    const input = validateProvisionInput({
+      solution: { uniqueName: 'S', publisherPrefix: 'new' },
+      entities: [{ schemaName: 'new_ticket', displayName: 'Ticket', primaryAttribute, columns: [] }],
+      relationships: [],
+    });
+    const label = JSON.stringify(maxLength);
+    assert.deepStrictEqual(lengthErrors(input.errors), lengthErrors(spec.errors), `${label}: the same verdict and wording from both gates`);
+    assert.strictEqual(input.ok, spec.ok, label);
+    const valid = maxLength === undefined || (Number.isInteger(maxLength) && maxLength >= 1 && maxLength <= 850);
+    assert.strictEqual(lengthErrors(input.errors).length === 0, valid, `${label} is ${valid ? 'accepted' : 'rejected'}`);
+  }
+});
+
 test('quickCreateEnabledFor: true for an explicit flag, a derived QuickCreate form, else false', () => {
   const entity = { schemaName: 'new_ticket', primaryAttribute: { schemaName: 'new_name' }, columns: [] };
   // explicit flag — the flag lives on the ENTITY object passed (quickCreateEnabledFor reads entity.quickCreate)
@@ -1032,7 +1188,7 @@ test('quickCreateEnabledFor: true for an explicit flag, a derived QuickCreate fo
   assert.strictEqual(quickCreateEnabledFor(quickCreateSpec({}, [{ entity: 'new_other', formType: 'QuickCreate' }]), entity), false, 'a QuickCreate form for another entity does not leak');
 });
 
-// --- Security personas validation (Group N P1) ---------------------------------------------
+// --- Security personas validation ---------------------------------------------
 const withPersonas = (personas) => Object.assign(JSON.parse(JSON.stringify(sample)), { personas });
 
 test('validateAppSpec accepts a well-formed persona', () => {

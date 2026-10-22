@@ -12,7 +12,9 @@ test('check-auth.js enumerates all blocker codes', () => {
   for (const code of [
     'az_missing',
     'az_not_logged_in',
+    'az_timeout',
     'pac_not_logged_in',
+    'pac_timeout',
     'no_env_url',
     'whoami_403',
     'whoami_401',
@@ -24,7 +26,7 @@ test('check-auth.js enumerates all blocker codes', () => {
 
 test('check-auth.js: a missing PAC login blocks only under --require-pac (genpage); otherwise it is a warning', () => {
   // Gap 4: the app-builder build/verify/teardown flow authenticates to Dataverse with the az token,
-  // so a missing pac login must NOT block it. Genpage (which uploads pages via `pac model genpage`)
+  // so a missing pac login must NOT block it. Genpage (which discovers connections through pac)
   // opts back into the hard block with --require-pac.
   assert.match(scriptSrc, /requirePac/, 'pac requirement is gated behind a --require-pac flag');
   assert.match(scriptSrc, /argv\.includes\('--require-pac'\)/);
@@ -119,35 +121,146 @@ const { loadCli } = require('./helpers/cli-harness.js');
 const ENVURL = 'https://contoso.crm.dynamics.com';
 
 // runQuiet() shells out via execFileSync and treats a throw as "absent". These stubs therefore
-// model each CLI as either returning stdout or throwing, exactly as a missing binary would.
-function makeExec({ azVersion = 'azure-cli 2.60.0', azUser = 'maker@contoso.com', pacOrg = null }) {
+// model each CLI as either returning stdout or throwing, exactly as a missing binary would — and a
+// missing binary fails EVERY invocation, not only `--version`. Each call is recorded in order.
+function makeExec({ azVersion = 'azure-cli 2.60.0', azUser = 'maker@contoso.com' }, calls) {
   return (cmd, args) => {
     const argv = (args || []).join(' ');
-    if (cmd === 'az' && argv.includes('--version')) {
-      if (azVersion === null) throw new Error('spawn az ENOENT');
-      return azVersion;
-    }
+    calls.push(`${cmd} ${argv}`);
+    if (cmd === 'az' && azVersion === null) throw new Error('spawn az ENOENT');
+    if (cmd === 'az' && argv.includes('--version')) return azVersion;
     if (cmd === 'az' && argv.includes('account show')) {
       if (azUser === null) throw new Error('Please run az login');
       return azUser;
-    }
-    if (cmd === 'pac' && argv.includes('org who')) {
-      if (pacOrg === null) throw new Error('spawn pac ENOENT');
-      return pacOrg;
     }
     throw new Error(`unexpected command: ${cmd} ${argv}`);
   };
 }
 
-async function run({ argv = [], exec = {}, whoAmI, whoAmIThrows }) {
+// `pac org who` runs through the async execFile so its cold start overlaps the az probes. The
+// callback is deferred with setImmediate, like a real child that exits while the synchronous az
+// calls hold the event loop.
+// What execFile hands the callback when `timeout` elapses: the child was killed, with the kill signal.
+const timedOut = (cmd) => Object.assign(new Error(`Command failed: ${cmd}`), { killed: true, signal: 'SIGTERM', code: null });
+
+function makeExecFile({ pacOrg = null, azUser = 'maker@contoso.com', azVersion = 'azure-cli 2.60.0', slow = [], notOnPath = [] }, calls) {
+  return (cmd, args, opts, cb) => {
+    const argv = (args || []).join(' ');
+    // Starting a CLI can also THROW instead of calling back — Node's execFile throws synchronously on some launch
+    // errors. check-auth must read that throw like any launch failure, never crash on it.
+    if (notOnPath.includes(cmd)) {
+      calls.push(`not on PATH: ${cmd} ${argv}`);
+      throw Object.assign(new Error(`spawn ${cmd} ENOENT: not found on PATH`), { code: 'ENOENT' });
+    }
+    if (slow.some((what) => `${cmd} ${argv}`.includes(what))) {
+      calls.push(`${cmd} ${argv} (timeout ${opts && opts.timeout})`);
+      process.nextTick(() => cb(timedOut(`${cmd} ${argv}`), '', ''));
+      return { stdin: { end() {} }, kill() { calls.push(`kill ${cmd} ${argv}`); } };
+    }
+    if (cmd === 'az' && argv.includes('account show')) {
+      calls.push(`az ${argv}`);
+      process.nextTick(() => {
+        if (azVersion === null) cb(new Error('spawn az ENOENT'), '', '');
+        else if (azUser === null) cb(new Error('Please run az login'), '', '');
+        else cb(null, azUser, '');
+      });
+      return { stdin: { end() {} }, kill() {} };
+    }
+    if (cmd === 'az' && argv.includes('--version')) {
+      calls.push(`az ${argv}`);
+      process.nextTick(() => {
+        if (azVersion === null) cb(new Error('spawn az ENOENT'), '', '');
+        else cb(null, azVersion, '');
+      });
+      return { stdin: { end() {} }, kill() {} };
+    }
+    calls.push(`start ${cmd} ${argv}`);
+    setTimeout(() => {
+      calls.push(`done ${cmd}`);
+      if (cmd !== 'pac' || pacOrg === null) cb(new Error(`spawn ${cmd} ENOENT`), '', '');
+      else cb(null, pacOrg, '');
+    }, 0);
+    return { stdin: { end() {} }, kill() { calls.push(`kill ${cmd} ${argv}`); } };
+  };
+}
+
+function makeCancelableExecFile({ pacOrg = null, azUser = 'maker@contoso.com', azVersion = 'azure-cli 2.60.0', pacTimer = false, pacDelayMs = null }, calls) {
+  return (cmd, args, _opts, cb) => {
+    const argv = (args || []).join(' ');
+    calls.push(`start ${cmd} ${argv}`);
+    const child = {
+      killed: false,
+      stdin: { end() {} },
+      kill() { this.killed = true; calls.push(`kill ${cmd} ${argv}`); },
+    };
+    if (cmd === 'pac') {
+      let settled = false;
+      const finish = (fn) => {
+        if (settled || child.killed) return;
+        settled = true;
+        fn();
+      };
+      if (pacTimer) {
+        setTimeout(() => finish(() => {
+          calls.push(`timeout ${cmd}`);
+          cb(new Error('pac timed out'), '', '');
+        }), 5);
+      }
+      const finishSuccess = () => finish(() => {
+        calls.push(`done ${cmd}`);
+        if (pacOrg === null) cb(new Error(`spawn ${cmd} ENOENT`), '', '');
+        else cb(null, pacOrg, '');
+      });
+      if (pacDelayMs !== null) setTimeout(finishSuccess, pacDelayMs);
+      // With pac's own 5 ms timeout armed (pacTimer), its success must come first whatever holds the event loop:
+      // setImmediate loses to an expired timer when the loop was busy for 5 ms first (the module warm-up of a
+      // file's first test is), and the test then staged a pac timeout it never meant to. nextTick runs before any timer.
+      else if (pacTimer) process.nextTick(finishSuccess);
+      else setImmediate(finishSuccess);
+      return child;
+    }
+    setImmediate(() => {
+      if (child.killed) return;
+      calls.push(`done ${cmd}`);
+      if (cmd === 'az' && argv.includes('--version')) {
+        if (azVersion === null) cb(new Error('spawn az ENOENT'), '', '');
+        else cb(null, azVersion, '');
+      } else if (cmd === 'az' && argv.includes('account show')) {
+        if (azUser === null) cb(new Error('Please run az login'), '', '');
+        else cb(null, azUser, '');
+      } else {
+        cb(new Error(`unexpected command: ${cmd} ${argv}`), '', '');
+      }
+    });
+    return child;
+  };
+}
+
+async function run({ argv = [], exec = {}, whoAmI, whoAmIThrows, tokenFailure = null }) {
+  const calls = [];
+  // The token read is an `az` call too: with the Azure CLI missing or logged out it fails, as it would live.
+  const azUnusable = exec.azVersion === null || exec.azUser === null || (exec.notOnPath || []).includes('az');
   const cli = loadCli(scriptPath, {
     argv,
     requires: {
-      'child_process': { execFileSync: makeExec(exec) },
+      // check-auth starts every CLI through the process runner; its execFileAsync keeps execFile's shape.
+      './lib/process-runner': { execFileAsync: makeExecFile(exec, calls), runSync: makeExec(exec, calls) },
       './lib/dataverse-auth': {
         parseArgs: require('../lib/dataverse-auth.js').parseArgs,
         validateFlags: require('../lib/dataverse-auth.js').validateFlags,
+        getAuthToken: (url) => {
+          calls.push(`token ${url}`);
+          return 'token-value';
+        },
+        getAuthTokenAsync: async (url, opts = {}) => {
+          calls.push(`token ${url}`);
+          if (opts.signal) opts.signal.addEventListener('abort', () => calls.push(`abort token ${url}`));
+          return tokenFailure || azUnusable ? null : 'token-value';
+        },
+        tokenFailureKind: () => tokenFailure,
+        tokenFailureMessage: (url, fallback) => (tokenFailure === 'timeout' ? `token for ${url} timed out` : fallback),
         dataverseRequest: async () => {
+          calls.push('whoami');
           if (whoAmIThrows) throw new Error(whoAmIThrows);
           return whoAmI || { status: 200, data: { UserId: 'u-1', OrganizationId: 'o-1' } };
         },
@@ -160,31 +273,205 @@ async function run({ argv = [], exec = {}, whoAmI, whoAmIThrows }) {
   } catch (e) {
     if (e.exitCode === undefined) throw e;
   }
-  return JSON.parse(cli.stdoutText());
+
+  const result = JSON.parse(cli.stdoutText());
+  // Non-enumerable, so assertions on the emitted payload never see it.
+  Object.defineProperty(result, 'calls', { value: calls });
+  return result;
 }
 
-test('a missing az CLI blocks with az_missing before anything else is probed', async () => {
+async function runWithAsyncChildren({ argv = [], exec = {}, token, whoAmI } = {}) {
+  const calls = [];
+  const cli = loadCli(scriptPath, {
+    argv,
+    requires: {
+      './lib/process-runner': {
+        runSync: () => { throw new Error('sync child processes must not be used by check-auth'); },
+        execFileAsync: makeCancelableExecFile(exec, calls),
+      },
+      './lib/dataverse-auth': {
+        parseArgs: require('../lib/dataverse-auth.js').parseArgs,
+        validateFlags: require('../lib/dataverse-auth.js').validateFlags,
+        getAuthToken: () => { throw new Error('sync token acquisition must not be used by check-auth'); },
+        getAuthTokenAsync: async (url) => {
+          calls.push(`token ${url}`);
+          return typeof token === 'function' ? token(calls) : 'token-value';
+        },
+        tokenFailureKind: () => null,
+        tokenFailureMessage: (url, fallback) => fallback,
+        dataverseRequest: async () => {
+          calls.push('whoami');
+          return whoAmI || { status: 200, data: { UserId: 'u-1', OrganizationId: 'o-1' } };
+        },
+      },
+    },
+  });
+  try {
+    await cli.main();
+  } catch (e) {
+    if (e.exitCode === undefined) throw e;
+  }
+  const result = JSON.parse(cli.stdoutText());
+  Object.defineProperty(result, 'calls', { value: calls });
+  return result;
+}
+
+test('a missing az CLI blocks with az_missing; the token read started beside the account probe is cancelled and no WhoAmI is sent', async () => {
   const r = await run({ argv: ['--env', ENVURL], exec: { azVersion: null } });
   assert.equal(r.ok, false);
   assert.equal(r.blocker, 'az_missing');
   assert.match(r.message, /aka\.ms\/azure-cli/);
+  assert.ok(!r.calls.includes('whoami'), r.calls.join(' | '));
+  assert.ok(r.calls.includes(`abort token ${ENVURL}`), `the token read must not outlive the verdict: ${r.calls.join(' | ')}`);
+});
+
+// A launch that THROWS instead of calling back (Node's execFile does, synchronously, for some launch errors) is a verdict
+// like any other launch failure — here az_missing — not a crash of the pre-flight.
+test('an az launch that throws synchronously still blocks with a verdict (az_missing)', async () => {
+  const r = await run({ argv: ['--env', ENVURL], exec: { notOnPath: ['az'] } });
+  assert.equal(r.ok, false);
+  assert.equal(r.blocker, 'az_missing');
+  assert.ok(r.calls.some((c) => c.startsWith('not on PATH: az ')), r.calls.join(' | '));
+  assert.ok(!r.calls.includes('whoami'), r.calls.join(' | '));
 });
 
 test('az installed but logged out blocks with az_not_logged_in', async () => {
   const r = await run({ argv: ['--env', ENVURL], exec: { azUser: null } });
   assert.equal(r.blocker, 'az_not_logged_in');
   assert.match(r.message, /az login/);
+  // `az --version` is what tells "logged out" apart from "not installed".
+  assert.ok(r.calls.includes('az --version'), r.calls.join(' | '));
 });
 
-test('a missing pac login is a WARNING for the app-builder path, not a blocker', async () => {
-  // The build/verify/teardown flow authenticates with the az token; only the genpage pages phase
-  // shells out to pac. Blocking here would stop a build that would have worked.
+// A slow Azure CLI is reported as SLOW. A cached-token read was measured at 44.6 s on a busy machine,
+// past the old 30 s budget; check-auth then called the installed CLI "not installed" (az_missing), and
+// the token path said "run az login" — neither of which fixes anything.
+test('an az probe that runs out of time blocks with az_timeout — not az_missing or az_not_logged_in', async () => {
+  for (const slow of ['account show', '--version']) {
+    const exec = slow === '--version' ? { azUser: null, slow: ['az --version'] } : { slow: ['az account show'] };
+    const r = await run({ argv: ['--env', ENVURL], exec });
+    assert.equal(r.ok, false, slow);
+    assert.equal(r.blocker, 'az_timeout', slow);
+    assert.match(r.message, /did not answer within 60 s[\s\S]*POWER_PLATFORM_SKILLS_AZ_TIMEOUT_MS=120000/, slow);
+    assert.ok(r.calls.some((c) => /\(timeout 60000\)$/.test(c)), `the az budget is 60 s: ${r.calls.join(' | ')}`);
+    assert.ok(r.calls.includes('kill pac org who'), `the pac probe is cancelled: ${r.calls.join(' | ')}`);
+    assert.ok(r.calls.includes(`abort token ${ENVURL}`), `the token read is cancelled too: ${r.calls.join(' | ')}`);
+  }
+  // An account-show timeout is not followed by `az --version`: nothing it answers changes the verdict.
+  const r = await run({ argv: ['--env', ENVURL], exec: { slow: ['az account show'] } });
+  assert.ok(!r.calls.includes('az --version'), r.calls.join(' | '));
+});
+
+test('POWER_PLATFORM_SKILLS_AZ_TIMEOUT_MS sets the az budget', async () => {
+  const saved = process.env.POWER_PLATFORM_SKILLS_AZ_TIMEOUT_MS;
+  process.env.POWER_PLATFORM_SKILLS_AZ_TIMEOUT_MS = '90000';
+  try {
+    const r = await run({ argv: ['--env', ENVURL], exec: { slow: ['az account show'] } });
+    assert.ok(r.calls.includes('az account show --query user.name -o tsv (timeout 90000)'), r.calls.join(' | '));
+    assert.match(r.message, /within 90 s[\s\S]*=180000/);
+  } finally {
+    if (saved === undefined) delete process.env.POWER_PLATFORM_SKILLS_AZ_TIMEOUT_MS;
+    else process.env.POWER_PLATFORM_SKILLS_AZ_TIMEOUT_MS = saved;
+  }
+});
+
+test('a token read that runs out of time is az_timeout, without a second wait inside WhoAmI', async () => {
+  const warmed = await run({ argv: ['--env', ENVURL], exec: { pacOrg: 'Connected as maker@contoso.com\n' }, tokenFailure: 'timeout' });
+  assert.equal(warmed.blocker, 'az_timeout');
+  assert.match(warmed.message, /token for https:\/\/contoso\.crm\.dynamics\.com timed out/);
+  assert.ok(!warmed.calls.includes('whoami'), warmed.calls.join(' | '));
+  // With the env URL from pac nothing is warmed, and WhoAmI reads the token — a timeout there too is az_timeout.
+  const viaPac = await run({ exec: { pacOrg: `Connected as maker@contoso.com\nOrg URL: ${ENVURL}/\n` }, whoAmIThrows: 'token timed out', tokenFailure: 'timeout' });
+  assert.equal(viaPac.blocker, 'az_timeout');
+  assert.equal(viaPac.message, 'token timed out');
+  // Any other token failure is still WhoAmI's to report.
+  const other = await run({ argv: ['--env', ENVURL], whoAmIThrows: 'getaddrinfo ENOTFOUND', tokenFailure: 'failed' });
+  assert.equal(other.blocker, 'whoami_error');
+});
+
+test('a pac probe that runs out of time says so: pac_timeout under --require-pac, a warning otherwise', async () => {
+  const required = await run({ argv: ['--env', ENVURL, '--require-pac'], exec: { slow: ['pac org who'] } });
+  assert.equal(required.blocker, 'pac_timeout');
+  assert.match(required.message, /pac org who` did not answer within 60 s/);
+  assert.ok(required.calls.includes('pac org who (timeout 60000)'), required.calls.join(' | '));
+  const optional = await run({ argv: ['--env', ENVURL], exec: { slow: ['pac org who'] } });
+  assert.equal(optional.ok, true);
+  assert.match(optional.warnings[0], /did not answer within 60 s[\s\S]*unknown, not missing/);
+  // The ready message agrees with the warning: a slow pac's login is unknown, never "not logged in".
+  assert.match(optional.message, /PAC's login is unknown/);
+  assert.doesNotMatch(optional.message, /not logged in/);
+  const signedOut = await run({ argv: ['--env', ENVURL], exec: {} });
+  assert.match(signedOut.message, /PAC is not logged in/, 'a pac that answered without a login is still "not logged in"');
+});
+
+test('a working az login costs ONE az call before WhoAmI: `az --version` only classifies a failure', async () => {
+  const r = await run({ argv: ['--env', ENVURL], exec: { pacOrg: 'Connected as maker@contoso.com\n' } });
+  assert.equal(r.ok, true);
+  assert.deepEqual(r.calls.filter((c) => c.startsWith('az ')), ['az account show --query user.name -o tsv']);
+});
+
+test('pac org who starts before the az probes, and the WhoAmI token is warmed while it runs', async () => {
+  // Measured cold starts on Windows: pac org who ~7 s, each az call ~3-5 s. Run one after another the
+  // preflight cost ~19 s at the start of every run; overlapped it costs about the slower branch.
+  // With an explicit environment the token read now starts beside `az account show` (it needs
+  // nothing from it), and WhoAmI is sent as soon as the token is in hand — before pac has answered.
+  const r = await run({ argv: ['--env', ENVURL], exec: { pacOrg: 'Connected as maker@contoso.com\n' } });
+  assert.equal(r.ok, true);
+  assert.deepEqual(r.calls, [
+    'start pac org who',
+    'az account show --query user.name -o tsv',
+    `token ${ENVURL}`,
+    'whoami',
+    'done pac',
+  ]);
+});
+
+test('pac success is delivered even when async az/token work takes longer than pac timeout', async () => {
+  const r = await runWithAsyncChildren({
+    argv: ['--env', ENVURL, '--require-pac'],
+    exec: { pacOrg: 'Connected as maker@contoso.com\n', pacTimer: true },
+    token: () => new Promise((resolve) => setTimeout(() => resolve('token-value'), 20)),
+  });
+  assert.equal(r.ok, true);
+  assert.equal(r.pacUser, 'maker@contoso.com');
+  assert.notEqual(r.blocker, 'pac_not_logged_in');
+});
+
+test('az_missing cancels the pending pac probe before emitting', async () => {
+  const r = await runWithAsyncChildren({
+    argv: ['--env', ENVURL],
+    exec: { azUser: null, azVersion: null, pacOrg: 'Connected as maker@contoso.com\n', pacDelayMs: 50 },
+  });
+  assert.equal(r.blocker, 'az_missing');
+  assert.ok(r.calls.indexOf('kill pac org who') !== -1, r.calls.join(' | '));
+  assert.ok(!r.calls.includes('done pac'), r.calls.join(' | '));
+});
+
+test('az_not_logged_in cancels the pending pac probe before emitting', async () => {
+  const r = await runWithAsyncChildren({
+    argv: ['--env', ENVURL],
+    exec: { azUser: null, azVersion: 'azure-cli 2.60.0', pacOrg: 'Connected as maker@contoso.com\n', pacDelayMs: 50 },
+  });
+  assert.equal(r.blocker, 'az_not_logged_in');
+  assert.ok(r.calls.includes('kill pac org who'), r.calls.join(' | '));
+});
+
+test('without --env the token is not warmed early, because the env URL comes from pac', async () => {
+  const r = await run({ exec: { pacOrg: `Connected as maker@contoso.com\nOrg URL: ${ENVURL}/\n` } });
+  assert.equal(r.ok, true);
+  assert.ok(!r.calls.some((c) => c.startsWith('token ')), r.calls.join(' | '));
+});
+
+test('a missing pac login is a WARNING for a caller that does not pass --require-pac, not a blocker', async () => {
+  // A flow that authenticates with the az token alone (the app-builder build/verify/teardown, and the pages) needs no pac
+  // login; blocking here would stop a build that would have worked. The wording is pinned below.
   const r = await run({ argv: ['--env', ENVURL], exec: { pacOrg: null } });
   assert.equal(r.ok, true);
   assert.equal(r.blocker, null);
   assert.equal(r.pacUser, null);
   assert.equal(r.warnings.length, 1);
-  assert.match(r.warnings[0], /genpage/i);
+  assert.match(r.warnings[0], /only a step that runs `pac` needs the login/);
+  assert.doesNotMatch(r.warnings[0], /pac model genpage/, 'pages are written through the SDK: the warning no longer says pac deploys them');
 });
 
 test('--require-pac turns the same missing pac login into a hard block', async () => {
@@ -192,6 +479,67 @@ test('--require-pac turns the same missing pac login into a hard block', async (
   assert.equal(r.ok, false);
   assert.equal(r.blocker, 'pac_not_logged_in');
   assert.match(r.message, /pac auth create/);
+});
+
+// --- the sign-in text is true in every plugin that ships this script ---------------------------------------
+//
+// plugins/pcf carries this file byte for byte (scripts/validate-plugin-copies.js keeps the copies equal), and the
+// steps that run pac differ between the plugins. A sentence about one plugin's flows ("discover connections",
+// "table/column/form/view/app/page builds") was therefore printed in the other's runs: pcf's push path passes
+// --require-pac and never reaches the warning, but a pcf verification or inventory run does. The wording states the
+// one rule that holds in both — only a step that runs `pac` needs the login — and leaves the steps to the skill.
+// The same words are pinned in plugins/pcf/scripts/tests/pcf-check-auth.test.js.
+const PLUGIN_FLOW_WORDS = /connection|connector|deployment[- ]setting|table\/column|genpage|app-builder|entity creation|\bSDK\b/i;
+const PAC_RULE = 'only a step that runs `pac` needs the login, and so does reading the environment when --env is omitted';
+
+test('a missing pac login is explained by the one rule that holds in every plugin, naming no plugin\'s flows', async () => {
+  const r = await run({ argv: ['--env', ENVURL], exec: { pacOrg: null } });
+  assert.equal(r.ok, true);
+  assert.deepEqual(r.warnings, [
+    `PAC CLI is not logged in. That does not block a step that signs in with the az token alone: ${PAC_RULE}. Run \`pac auth create --environment <url>\` before such a step.`,
+  ]);
+  assert.doesNotMatch(r.warnings[0], PLUGIN_FLOW_WORDS);
+});
+
+test('a pac probe that ran out of time is explained the same way, and still as unknown rather than missing', async () => {
+  const r = await run({ argv: ['--env', ENVURL], exec: { slow: ['pac org who'] } });
+  assert.equal(r.ok, true);
+  assert.deepEqual(r.warnings, [
+    '`pac org who` did not answer within 60 s — the PAC CLI can be that slow to start on a busy machine, so its login is unknown, not missing. '
+      + `That does not block a step that signs in with the az token alone: ${PAC_RULE}.`,
+  ]);
+  assert.doesNotMatch(r.warnings[0], PLUGIN_FLOW_WORDS);
+});
+
+test('the Ready messages say only that a step that runs pac needs the login, and name no plugin\'s flows', async () => {
+  const signedOut = await run({ argv: ['--env', ENVURL], exec: { pacOrg: null } });
+  assert.equal(signedOut.message, `Ready (az signed in as maker@contoso.com, env ${ENVURL}). PAC is not logged in — only a step that runs pac needs it.`);
+  const unknown = await run({ argv: ['--env', ENVURL], exec: { slow: ['pac org who'] } });
+  assert.equal(unknown.message, `Ready (az signed in as maker@contoso.com, env ${ENVURL}). PAC's login is unknown — \`pac org who\` did not answer in time; only a step that runs pac needs it.`);
+  const other = await run({ argv: ['--env', ENVURL], exec: { pacOrg: 'Connected as dev@contoso.com\n' } });
+  assert.equal(other.ok, true);
+  assert.equal(other.message, 'Ready, but az ("maker@contoso.com") and pac ("dev@contoso.com") use different identities. WhoAmI passed so this works for now — but if a later step returns 403, run `az login --username dev@contoso.com` to align them.');
+  for (const r of [signedOut, unknown, other]) assert.doesNotMatch(r.message, PLUGIN_FLOW_WORDS);
+});
+
+test('the hard blocks are unchanged: pac_not_logged_in and pac_timeout under --require-pac, in the same neutral words', async () => {
+  const missing = await run({ argv: ['--env', ENVURL, '--require-pac'], exec: { pacOrg: null } });
+  assert.equal(missing.blocker, 'pac_not_logged_in');
+  assert.equal(missing.message, 'PAC CLI is not logged in. Run `pac auth create --environment <url>` to authenticate.');
+  const slow = await run({ argv: ['--env', ENVURL, '--require-pac'], exec: { slow: ['pac org who'] } });
+  assert.equal(slow.blocker, 'pac_timeout');
+  assert.match(slow.message, /^`pac org who` did not answer within 60 s .* so its login is unknown, not missing\. Retry\.$/);
+  for (const r of [missing, slow]) assert.doesNotMatch(r.message, PLUGIN_FLOW_WORDS);
+});
+
+test('plugins/pcf ships this script byte for byte, so the text above is the text pcf prints', (t) => {
+  const copy = path.join(__dirname, '..', '..', '..', 'pcf', 'scripts', 'check-auth.js');
+  if (!fs.existsSync(copy)) {
+    t.skip('plugins/pcf is not present (an installed plugin, not a repo checkout)');
+    return;
+  }
+  assert.ok(fs.readFileSync(scriptPath).equals(fs.readFileSync(copy)),
+    'copy plugins/model-apps/scripts/check-auth.js over plugins/pcf/scripts/check-auth.js (scripts/validate-plugin-copies.js lists the pair)');
 });
 
 test('the env URL is recovered from `pac org who` when --env is omitted', async () => {
@@ -282,4 +630,236 @@ test('a mismatched-but-working identity is reported as ready WITH the caveat', a
   assert.equal(r.identitiesMatch, false);
   assert.match(r.message, /different identities/);
   assert.match(r.message, /403/);
+});
+
+// --- the independent probes overlap, the verdicts do not move ------------------------------------------
+//
+// Gated children: every probe answers only when the test says so, which is what lets a test PROVE the order
+// things started in (not just the order they finished in) and drive each completion order by hand.
+const settle = async () => { for (let i = 0; i < 6; i += 1) await new Promise((resolve) => setImmediate(resolve)); };
+function deferred() {
+  let resolve;
+  const promise = new Promise((res) => { resolve = res; });
+  return { promise, resolve };
+}
+
+function runGated({ argv = ['--env', ENVURL], requirePac = false, tokenKind = null, whoAmIRequest = null } = {}) {
+  const events = [];
+  const gates = { account: deferred(), token: deferred(), pac: deferred(), who: deferred() };
+  const child = (label) => ({
+    killed: false,
+    stdin: { end() {} },
+    kill() { this.killed = true; events.push(`kill ${label}`); },
+  });
+  const execFileAsync = (cmd, args, _opts, cb) => {
+    const argvText = (args || []).join(' ');
+    const c = child(`${cmd} ${argvText}`);
+    if (cmd === 'pac') {
+      events.push('start pac');
+      gates.pac.promise.then((out) => { if (!c.killed) { events.push('pac answered'); cb(out === null ? new Error('spawn pac ENOENT') : null, out || '', ''); } });
+    } else if (argvText.includes('account show')) {
+      events.push('start account');
+      gates.account.promise.then((out) => { if (!c.killed) { events.push('account answered'); cb(out === null ? new Error('Please run az login') : null, out || '', ''); } });
+    } else {
+      // `az --version`, only ever run to classify an account failure.
+      events.push('start az --version');
+      setImmediate(() => cb(null, 'azure-cli 2.60.0', ''));
+    }
+    return c;
+  };
+  const cli = loadCli(scriptPath, {
+    argv: requirePac ? [...argv, '--require-pac'] : argv,
+    requires: {
+      './lib/process-runner': { execFileAsync, runSync: () => { throw new Error('sync child processes must not be used by check-auth'); } },
+      './lib/dataverse-auth': {
+        parseArgs: require('../lib/dataverse-auth.js').parseArgs,
+        validateFlags: require('../lib/dataverse-auth.js').validateFlags,
+        getAuthToken: () => { throw new Error('sync token acquisition must not be used by check-auth'); },
+        getAuthTokenAsync: (url, opts = {}) => {
+          events.push('start token');
+          if (opts.signal) opts.signal.addEventListener('abort', () => events.push('abort token'));
+          return gates.token.promise.then((value) => { events.push(value ? 'token ready' : 'token failed'); return value; });
+        },
+        tokenFailureKind: () => tokenKind,
+        tokenFailureMessage: (url, fallback) => (tokenKind === 'timeout' ? `token for ${url} timed out` : fallback),
+        // `whoAmIRequest(events)` swaps in a different WhoAmI (the real dataverseRequest over a stub transport, say);
+        // by default WhoAmI is a gate the test opens by hand.
+        dataverseRequest: whoAmIRequest ? whoAmIRequest(events) : () => {
+          events.push('start whoami');
+          return gates.who.promise.then((value) => {
+            events.push('whoami answered');
+            if (value instanceof Error) throw value;
+            return value;
+          });
+        },
+      },
+    },
+  });
+  const finished = cli.main().then(() => null, (e) => { if (e.exitCode === undefined) throw e; })
+    .then(() => JSON.parse(cli.stdoutText()));
+  return { events, gates, finished };
+}
+
+const WHO_OK = { status: 200, data: { UserId: 'u-1', OrganizationId: 'o-1' } };
+
+test('the account probe, the token read and pac are all in flight before any of them answers', async () => {
+  const { events, gates, finished } = runGated();
+  await settle();
+  assert.deepEqual(events, ['start pac', 'start account', 'start token'],
+    'with an explicit --env nothing waits for another probe to start (before: the token read waited for the account probe)');
+  gates.account.resolve('maker@contoso.com');
+  gates.token.resolve('token-value');
+  gates.pac.resolve('Connected as maker@contoso.com\n');
+  gates.who.resolve(WHO_OK);
+  const r = await finished;
+  assert.equal(r.ok, true);
+  assert.equal(r.message, 'Ready (az + pac both signed in as maker@contoso.com, env https://contoso.crm.dynamics.com).');
+});
+
+test('WhoAmI is sent the moment the token is ready, while the account probe and pac are still running', async () => {
+  const { events, gates, finished } = runGated();
+  await settle();
+  gates.token.resolve('token-value');
+  await settle();
+  assert.deepEqual(events, ['start pac', 'start account', 'start token', 'token ready', 'start whoami'],
+    'WhoAmI starts on the token alone (before: after the account probe, the token and pac had all finished)');
+  gates.who.resolve(WHO_OK);
+  await settle();
+  assert.ok(!events.includes('pac answered') && !events.includes('account answered'), 'both slower probes are still running');
+  gates.account.resolve('maker@contoso.com');
+  gates.pac.resolve('Connected as maker@contoso.com\n');
+  const r = await finished;
+  assert.equal(r.ok, true);
+  assert.deepEqual(r.whoAmI, { ok: true, userId: 'u-1', organizationId: 'o-1' });
+});
+
+test('an account failure outranks a token and WhoAmI that already succeeded, and cancels every probe it left running', async () => {
+  const { events, gates, finished } = runGated();
+  await settle();
+  gates.token.resolve('token-value');
+  gates.who.resolve(WHO_OK);
+  await settle();
+  assert.ok(events.includes('whoami answered'), 'WhoAmI had already answered when the account probe failed');
+  gates.account.resolve(null);
+  const r = await finished;
+  assert.equal(r.ok, false);
+  assert.equal(r.blocker, 'az_not_logged_in', 'the verdict order is unchanged: the account probe speaks first');
+  assert.ok(events.includes('kill pac org who'), events.join(' | '));
+  assert.ok(events.includes('abort token'), events.join(' | '));
+  assert.equal(events.filter((e) => e === 'start token').length, 1, 'no second token acquisition');
+});
+
+test('pac still outranks a WhoAmI failure that arrived first (--require-pac)', async () => {
+  const { gates, finished } = runGated({ requirePac: true });
+  await settle();
+  gates.token.resolve('token-value');
+  gates.who.resolve(new Error('getaddrinfo ENOTFOUND'));
+  gates.account.resolve('maker@contoso.com');
+  await settle();
+  gates.pac.resolve(null);
+  const r = await finished;
+  assert.equal(r.blocker, 'pac_not_logged_in', 'before and after: pac is judged before WhoAmI');
+});
+
+test('a WhoAmI failure that arrives before pac does is reported once pac has answered, and is never unhandled', async () => {
+  const unhandled = [];
+  const onUnhandled = (reason) => unhandled.push(reason);
+  process.on('unhandledRejection', onUnhandled);
+  try {
+    const { gates, finished } = runGated();
+    await settle();
+    gates.token.resolve('token-value');
+    gates.who.resolve(new Error('getaddrinfo ENOTFOUND'));
+    gates.account.resolve('maker@contoso.com');
+    await settle();
+    gates.pac.resolve('Connected as maker@contoso.com\n');
+    const r = await finished;
+    assert.equal(r.blocker, 'whoami_error');
+    assert.match(r.message, /WhoAmI probe failed: getaddrinfo ENOTFOUND/);
+    await settle();
+    assert.deepEqual(unhandled, []);
+  } finally {
+    process.off('unhandledRejection', onUnhandled);
+  }
+});
+
+test('a token read that times out is az_timeout with no WhoAmI, and pac is cancelled', async () => {
+  const { events, gates, finished } = runGated({ tokenKind: 'timeout' });
+  await settle();
+  gates.token.resolve(null);
+  gates.account.resolve('maker@contoso.com');
+  const r = await finished;
+  assert.equal(r.blocker, 'az_timeout');
+  assert.match(r.message, /token for https:\/\/contoso\.crm\.dynamics\.com timed out/);
+  assert.ok(!events.includes('start whoami'), 'with no token WhoAmI is not started early (it would run a blocking token read of its own)');
+  assert.ok(events.includes('kill pac org who'), events.join(' | '));
+});
+
+test('without --env nothing is started early, because the environment comes from pac', async () => {
+  const { events, gates, finished } = runGated({ argv: [] });
+  await settle();
+  assert.deepEqual(events, ['start pac', 'start account']);
+  gates.account.resolve('maker@contoso.com');
+  gates.pac.resolve(`Connected as maker@contoso.com\nOrg URL: ${ENVURL}/\n`);
+  await settle();
+  assert.ok(!events.includes('start token'), 'check-auth never reads a token early for an environment it does not know yet');
+  gates.who.resolve(WHO_OK);
+  const r = await finished;
+  assert.equal(r.envUrl, ENVURL);
+  assert.equal(r.ok, true);
+});
+
+// The real dataverseRequest over a stub transport: a 401 makes it replace the token with a SYNCHRONOUS Azure CLI read
+// (seconds on a cold Windows process, with the whole event loop — pac's timeout timer and the other az probe included —
+// frozen), up to twice. A wrong-tenant 401 is exactly what this preflight is run to diagnose, so the early WhoAmI must not
+// do that while the other probes are running.
+test('an early WhoAmI answered 401 does not refresh the token while the other probes run: it is sent again after pac, where the refresh blocks nothing', async () => {
+  const { dataverseRequest: realRequest } = require('../lib/dataverse-auth.js');
+  let sent = 0;
+  const { events, gates, finished } = runGated({
+    whoAmIRequest: (log) => (url, method, apiPath, body, options) => {
+      log.push('start whoami');
+      return realRequest(url, method, apiPath, body, {
+        ...options,
+        getToken: (_origin, tokenOptions) => { log.push(tokenOptions && tokenOptions.fresh ? 'refresh token (synchronous az call)' : 'token from memo'); return 'TOK'; },
+        // The first two sends are refused, the third (after a refresh) is accepted.
+        request: async () => {
+          sent += 1;
+          log.push(sent < 3 ? 'WhoAmI answered 401' : 'WhoAmI answered 200');
+          return sent < 3 ? { statusCode: 401, body: '' } : { statusCode: 200, body: JSON.stringify({ UserId: 'u-1', OrganizationId: 'o-1' }) };
+        },
+      });
+    },
+  });
+  await settle();
+  gates.token.resolve('token-value');
+  await settle();
+  assert.deepEqual(events.slice(3), ['token ready', 'start whoami', 'token from memo', 'WhoAmI answered 401'], 'the early WhoAmI was refused while pac and the account probe were still running');
+  assert.ok(!events.some((e) => /refresh/.test(e)), `no synchronous refresh while other probes run: ${events.join(' | ')}`);
+  gates.account.resolve('maker@contoso.com');
+  gates.pac.resolve('Connected as maker@contoso.com\n');
+  const r = await finished;
+  assert.equal(r.ok, true, JSON.stringify(r));
+  assert.deepEqual(r.whoAmI, { ok: true, userId: 'u-1', organizationId: 'o-1' });
+  const after = events.slice(events.indexOf('pac answered') + 1);
+  assert.deepEqual(after.filter((e) => e !== 'account answered'), ['start whoami', 'token from memo', 'WhoAmI answered 401', 'refresh token (synchronous az call)', 'WhoAmI answered 200'],
+    'WhoAmI is sent again at its old place, after pac, and only that request refreshes the token');
+  assert.equal(events.filter((e) => /refresh/.test(e)).length, 1);
+});
+
+test('an early WhoAmI that is still refused after the refresh reports whoami_401, as it always did', async () => {
+  const { dataverseRequest: realRequest } = require('../lib/dataverse-auth.js');
+  const { gates, finished } = runGated({
+    whoAmIRequest: () => (url, method, apiPath, body, options) => realRequest(url, method, apiPath, body, {
+      ...options, getToken: () => 'TOK', request: async () => ({ statusCode: 401, body: '' }),
+    }),
+  });
+  await settle();
+  gates.token.resolve('token-value');
+  gates.account.resolve('maker@contoso.com');
+  gates.pac.resolve('Connected as maker@contoso.com\n');
+  const r = await finished;
+  assert.equal(r.ok, false);
+  assert.equal(r.blocker, 'whoami_401');
+  assert.match(r.message, /Dataverse rejected the token \(401\)/);
 });

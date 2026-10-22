@@ -41,6 +41,9 @@ incident, contact
 
 No connector bindings.
 
+## Custom API Bindings
+No custom API bindings.
+
 ## Design Preferences
 
 - 3 steps: customer info → case details → review

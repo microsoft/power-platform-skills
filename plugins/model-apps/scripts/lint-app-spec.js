@@ -37,7 +37,7 @@ const path = require('node:path');
 const { parseArgs, validateFlags, readJsonArg, emitResult } = require('./lib/dataverse-auth.js');
 const { validateAppSpec, migrateAppSpec, VALIDATION_PROFILES } = require('./lib/app-spec.js');
 const { lintAppSpec } = require('./lib/spec-lint.js');
-const { pageSourceFileErrors } = require('./lib/content-hash.js');
+const { appSourceFileErrors } = require('./lib/content-hash.js');
 
 const USAGE = 'Usage: node lint-app-spec.js --spec @<path-to-app-spec.json> [--profile design|plan|deploy|structural] [--strict] [--json]';
 
@@ -87,7 +87,7 @@ function lintSpec(rawSpec, opts) {
     lint = { ok: false, errors: [`lint could not run on this spec: ${err.message}`], warnings: [] };
   }
 
-  const fileErrors = opts && opts.appDir ? pageSourceFileErrors(spec, opts.appDir) : [];
+  const fileErrors = opts && opts.appDir ? appSourceFileErrors(spec, opts.appDir) : [];
   const errors = [
     ...validationErrors.map((e) => `schema: ${e}`),
     ...fileErrors.map((e) => `schema: ${e}`),
@@ -195,13 +195,13 @@ function main() {
           : `app spec has ${report.warnings.length} warning(s) and --strict was set; see stdout JSON\n`
       );
     }
-    // Set the code and RETURN rather than process.exit(). Node's stdout is asynchronous when it is a
-    // TTY on Windows, and process.exit() tears the process down without draining it — so an
-    // interactive Windows run of a large report could lose its tail. MEASURED: a 5 MB write over a
-    // PIPE survives process.exit() intact on Windows, so a `--json | jq` CI consumer was never at
-    // risk; this is the interactive case and the idiomatic pattern, not a fix for a reproduced bug.
-    // The non-JSON usage-error paths still exit through emitResult's process.exit() — deliberately
-    // out of scope here, since that is shared behaviour across every CLI in this directory.
+    // Set the code and RETURN rather than process.exit(). Node writes to a pipe asynchronously on Linux
+    // and macOS (and to a TTY on Windows), and process.exit() tears the process down without draining
+    // it — so a `--json | jq` consumer there could lose the tail of a large report. MEASURED: a 5 MB
+    // write over a PIPE survives process.exit() intact on Windows, where a pipe on stdout is
+    // synchronous — which is why a Windows run never showed it. The non-JSON usage-error paths exit
+    // through emitResult, which makes its writes blocking before it exits (lib/output-redaction.js
+    // makeWritesBlocking), so they are whole too.
     // https://nodejs.org/api/process.html#a-note-on-process-io
     process.exitCode = failed ? 1 : 0;
     return;

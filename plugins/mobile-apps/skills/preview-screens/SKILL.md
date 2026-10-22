@@ -6,6 +6,8 @@ allowed-tools: Read, Write, Glob, Grep, Bash
 model: sonnet
 ---
 
+> **Plugin check**: Run `node "${PLUGIN_ROOT}/scripts/check-version.js"` - if it outputs a message, show it to the user before proceeding.
+
 **Shared instructions: [shared-instructions.md](../../shared/shared-instructions.md)** — read first.
 
 # Preview Screens
@@ -67,6 +69,10 @@ Glob pattern="app/**/*.tsx" path="<working_dir>"
 - `+not-found.tsx` (Expo Router error boundary)
 - Files in directories starting with `.`
 - `index.tsx` at the app root if it only contains an auth redirect (read it to check)
+- The untouched template `app/(app)/home.tsx` when at least one other visible screen exists.
+  Recognize it only when its source still contains both `Power Apps Standalone` and
+  `Build your first screen by connecting data sources`.
+  Keep it when it is the only visible screen so the preview is never empty.
 
 **Derive screen names** from file paths:
 - `app/(app)/home.tsx` → "Home"
@@ -83,7 +89,12 @@ Build an ordered list: `[ { path, screenName, screenId } ]`.
 
 Sort the list with this priority:
 
-1. **Home / dashboard first.** The first screen matching any of these paths (in this priority): `app/(app)/home.tsx`, `app/(app)/index.tsx`, `app/(app)/dashboard.tsx`, `app/index.tsx` (only if it's a real home screen — not the auth redirect you already filtered out in Step 2). If `native-app-plan.md` flags one screen as the home/landing screen, prefer that.
+1. **Home / dashboard first.** Prefer the screen that `native-app-plan.md` identifies as the
+   home or landing screen.
+   Otherwise, use the first remaining screen matching any of these paths (in this priority):
+   `app/(app)/home.tsx`, `app/(app)/index.tsx`, `app/(app)/dashboard.tsx`, `app/index.tsx`
+   (only if it is a real home screen, not an auth redirect or the untouched starter route filtered
+   out in Step 2).
 2. **Then up to two detail screens.** A "detail" screen is any TSX whose route segment uses a dynamic param — file path contains `[` and `]` (e.g. `app/(app)/recipes/[id].tsx`, `app/(app)/orders/[orderId]/edit.tsx`). Take the first two in the order they were discovered (alphabetical by path is fine).
 3. **Then everything else** in discovery order.
 
@@ -184,11 +195,12 @@ Print confirmation:
 Read the flag and act:
 
 ```bash
-grep -E "^visual_companion:[[:space:]]*(yes|no)" "<working_dir>/memory-bank.md" 2>/dev/null
+grep -E "^visual_companion:[[:space:]]*(yes|no)" '<working_dir>/memory-bank.md' 2>/dev/null
 ```
 
 | Flag | Action |
 |---|---|
+| `MOBILE_APP_EMBED_PREVIEW=1` | Print the link and stop. The owning edit plan embeds the screens. |
 | `visual_companion: no` | Print the link and stop. Do not auto-open. |
 | `visual_companion: yes` (or missing memory-bank, or standalone invocation) | Print the link, then auto-open. |
 
@@ -203,13 +215,17 @@ grep -E "^visual_companion:[[:space:]]*(yes|no)" "<working_dir>/memory-bank.md" 
 Then try OS-appropriate openers in sequence and fall back to printing the link if none work:
 
 ```bash
-open "<working_dir>/preview.html" 2>/dev/null \
-  || xdg-open "<working_dir>/preview.html" 2>/dev/null \
-  || powershell.exe -NoProfile -Command "Start-Process '<working_dir>\preview.html'" 2>/dev/null \
-  || echo "Could not auto-open. Open this URL in your browser: file://<working_dir>/preview.html"
+open '<working_dir>/preview.html' 2>/dev/null \
+  || xdg-open '<working_dir>/preview.html' 2>/dev/null \
+  || MOBILE_APP_PREVIEW_PATH='<working_dir>/preview.html' \
+     powershell.exe -NoProfile -Command 'Start-Process -FilePath $env:MOBILE_APP_PREVIEW_PATH' 2>/dev/null \
+  || printf '%s\n' 'Could not auto-open. Open this URL in your browser: file://<working_dir>/preview.html'
 ```
 
-`open` is macOS-only; the chain covers Linux (`xdg-open`) and Windows / WSL (`powershell.exe Start-Process`). On headless / SSH sessions all three fail silently and the user just opens the link they were already given.
+`open` is macOS-only; the chain also tries Linux (`xdg-open`) and Windows
+(`powershell.exe Start-Process`). The Windows path is passed as data, not
+PowerShell source. On headless or unsupported cross-host sessions, report the
+failed launch and manual link instead of claiming the browser opened.
 
 ---
 

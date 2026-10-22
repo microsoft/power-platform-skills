@@ -3,29 +3,59 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
-const os = require("node:os");
 const path = require("node:path");
 const { spawnSync } = require("node:child_process");
+
+const {
+  STUB_BANNER,
+  TRAP_BANNER,
+  startedMarker,
+  writePacExecutable,
+  isolatePath,
+} = require("./fixtures/stub-pac/install.js");
+const { makeTempDir } = require("./helpers/temp-dirs.js");
 
 const PLUGIN_ROOT = path.resolve(__dirname, "..", "..");
 const HOOK = path.join(PLUGIN_ROOT, "hooks", "run-user-prompt-telemetry.js");
 
+// A forbidden native `pac` is prepended to the parent PATH. Every hook spawn replaces
+// PATH with only the stub directory, so this binary must never start — if a test
+// starts inheriting PATH again, the trap runs and the suite fails.
+let stubDir;
+let trapDir;
+let stubBuilt = false;
+test.before(() => {
+  const root = makeTempDir("modelapps-uptel-pac-");
+  stubDir = path.join(root, "stub");
+  trapDir = path.join(root, "trap");
+  stubBuilt = writePacExecutable(stubDir, STUB_BANNER);
+  writePacExecutable(trapDir, TRAP_BANNER);
+  const delim = path.delimiter;
+  for (const key of Object.keys(process.env)) {
+    if (key.toUpperCase() === "PATH") process.env[key] = trapDir + delim + process.env[key];
+  }
+});
+
 function mkTemp() {
-  return fs.mkdtempSync(path.join(os.tmpdir(), "modelapps-uptel-"));
+  return makeTempDir("modelapps-uptel-");
 }
 
 function runHook({ input, configDir, ikeyPath, fakeProbe }) {
   return spawnSync(process.execPath, [HOOK], {
     input,
     encoding: "utf8",
-    env: {
-      ...process.env,
-      POWER_PLATFORM_SKILLS_CONFIG_DIR: configDir,
-      POWER_PLATFORM_SKILLS_IKEY_JSON: ikeyPath || "",
-      POWER_PLATFORM_SKILLS_TELEMETRY_MODEL_APPS_OPTOUT: "",
-      POWER_PLATFORM_SKILLS_FAKE_HTTPS: fakeProbe || "",
-    },
-    timeout: 30_000,
+    env: isolatePath(
+      {
+        ...process.env,
+        POWER_PLATFORM_SKILLS_CONFIG_DIR: configDir,
+        POWER_PLATFORM_SKILLS_IKEY_JSON: ikeyPath || "",
+        POWER_PLATFORM_SKILLS_TELEMETRY_MODEL_APPS_OPTOUT: "",
+        POWER_PLATFORM_SKILLS_FAKE_HTTPS: fakeProbe || "",
+        MODEL_APPS_DISABLE_HOOKS: "",
+      },
+      stubDir
+    ),
+    timeout: 15_000,
   });
 }
 
@@ -37,6 +67,23 @@ function waitForFile(filePath, timeoutMs) {
   const deadline = Date.now() + timeoutMs;
   while (!fs.existsSync(filePath) && Date.now() < deadline) sleep(25);
   return fs.existsSync(filePath);
+}
+
+// The dispatcher writes the probe with a plain writeFileSync (scripts/lib/telemetry/lib/emit-dispatcher.js,
+// writeProbe), so a read that lands while it is still writing finds an empty or partial file and fails with
+// "Unexpected end of JSON input". Wait until the probe reads as one whole JSON document with the event's body.
+function waitForProbe(filePath, timeoutMs) {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    try {
+      const probe = JSON.parse(fs.readFileSync(filePath, "utf8"));
+      if (probe && typeof probe.body === "string") return probe;
+    } catch {
+      // Not there yet, or only partly written: read it again.
+    }
+    if (Date.now() >= deadline) return null;
+    sleep(25);
+  }
 }
 
 function writeProvisionedConfig(configDir) {
@@ -87,8 +134,8 @@ test("provisioned config → /model-apps:genpage prompt emits skill_started, WIT
     fakeProbe: probePath,
   });
   assert.equal(status, 0);
-  assert.ok(waitForFile(probePath, 5000), "dispatcher should have written the probe");
-  const probe = JSON.parse(fs.readFileSync(probePath, "utf8"));
+  const probe = waitForProbe(probePath, 5000);
+  assert.ok(probe, "dispatcher should have written the probe");
   const body = JSON.parse(probe.body);
   assert.equal(body.name, "ModelAppsTestStream");
   assert.equal(body.data.eventName, "skill_started");
@@ -109,8 +156,9 @@ test("bare /genpage prompt is also recognized (host may drop the plugin prefix)"
     fakeProbe: probePath,
   });
   assert.equal(status, 0);
-  assert.ok(waitForFile(probePath, 5000), "bare /genpage should emit");
-  const body = JSON.parse(JSON.parse(fs.readFileSync(probePath, "utf8")).body);
+  const probe = waitForProbe(probePath, 5000);
+  assert.ok(probe, "bare /genpage should emit");
+  const body = JSON.parse(probe.body);
   assert.equal(body.data.skillName, "genpage");
 });
 
@@ -140,4 +188,37 @@ test("enabled config but placeholder key → prompt path emits nothing (no probe
   });
   assert.equal(status, 0);
   assert.equal(waitForFile(probePath, 1500), false, "placeholder key must not emit on the prompt path");
+});
+
+test("provisioned hooks never use ambient PAC or credentials", (t) => {
+  if (!stubBuilt) {
+    t.skip("no C# compiler (csc.exe) on this Windows machine to build the native pac stub");
+    return;
+  }
+  const configDir = mkTemp();
+  const probePath = path.join(configDir, "probe.json");
+  const ikeyPath = writeProvisionedConfig(configDir);
+  fs.rmSync(startedMarker(stubDir), { force: true });
+  fs.rmSync(startedMarker(trapDir), { force: true });
+
+  const { status } = runHook({
+    input: JSON.stringify({ prompt: "/model-apps:genpage build a dashboard", session_id: "s1" }),
+    configDir,
+    ikeyPath,
+    fakeProbe: probePath,
+  });
+  assert.equal(status, 0);
+  assert.ok(waitForProbe(probePath, 5000), "dispatcher should have written the probe");
+  const probeText = fs.readFileSync(probePath, "utf8");
+  const body = JSON.parse(JSON.parse(probeText).body);
+  assert.equal(body.data.orgId, STUB_BANNER.orgId);
+  assert.equal(body.data.tenantId, STUB_BANNER.tenantId);
+  assert.equal(body.data.pacCliVersion, STUB_BANNER.version);
+  assert.equal(body.data.eventInfo, undefined);
+  assert.equal(probeText.includes(STUB_BANNER.objectId), false, "Entra object id must not be emitted");
+  assert.equal(probeText.includes(STUB_BANNER.user), false, "user principal must not be emitted");
+  assert.equal(probeText.includes("aadObjectId"), false);
+  assert.equal(probeText.includes(TRAP_BANNER.orgId), false, "trap org must not be the source");
+  assert.equal(fs.existsSync(startedMarker(stubDir)), true, "stub pac must have run");
+  assert.equal(fs.existsSync(startedMarker(trapDir)), false, "ambient pac on the parent PATH must not start");
 });

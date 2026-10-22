@@ -1,0 +1,27 @@
+{
+  "schemaVersion": 2,
+  "solution": { "uniqueName": "ContosoPageRoundtrip", "publisherPrefix": "cnt" },
+  "app": { "name": "Order Pages", "description": "Keep a page's own name and model separate from its navigation title" },
+  "entities": [
+    { "schemaName": "cnt_order", "displayName": "Order", "pluralName": "Orders",
+      "primaryAttribute": { "schemaName": "cnt_name", "displayName": "Name" },
+      "columns": [{ "schemaName": "cnt_status", "displayName": "Status", "type": "Choice", "options": ["Open", "Done"] }] }
+  ],
+  "forms": [],
+  "views": [],
+  "charts": [],
+  "pages": [
+    { "key": "revenue", "name": "Revenue \"FY\"", "pageId": "00000000-0000-0000-0000-000000000801",
+      "dataSources": ["cnt_order"], "model": "gpt-4.1", "source": { "kind": "intent" } },
+    { "key": "help", "name": "Clerk's Guide", "pageId": "00000000-0000-0000-0000-000000000802",
+      "source": { "kind": "intent" } },
+    { "key": "archive", "name": "Archived Orders", "pageId": "00000000-0000-0000-0000-000000000803",
+      "dataSources": ["cnt_order"], "source": { "kind": "intent" } }
+  ],
+  "appShell": { "areas": [{ "label": "Orders", "groups": [{ "label": "Pages", "subAreas": [
+    { "page": "revenue", "title": "Revenue Navigation" },
+    { "page": "help", "title": "Help Navigation" },
+    { "page": "archive", "title": "Archive Navigation" },
+    { "entity": "cnt_order", "title": "Orders" }
+  ] }] }] }
+}

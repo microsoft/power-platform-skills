@@ -17,6 +17,7 @@ const FRAMEWORKS = new Set(['react', 'vue', 'angular', 'astro']);
 const AUDIENCES = new Set(['internal', 'external']);
 const ERROR_CLASSES = new Set([
   'ImportSolutionAsync',
+  'PacSolutionImport',
   'PacPagesClone',
   'NpmInstall',
   'NpmBuild',
@@ -100,7 +101,7 @@ function buildTemplateOutcomeEvent(fields = {}, deps = {}) {
     : { ...readAiAgent(deps.env || process.env), pacCliVersion: readPacCliVersion() };
   const payload = {
     pluginName: 'power-pages',
-    pluginVersion: readPluginVersion({ ...deps, pluginVersion: fields.pluginVersion }),
+    pluginVersion: readPluginVersion(deps),
     sessionId: getSessionId(resolveSessionId(fields, deps.env || process.env)),
     correlationId: fields.correlationId || (deps.randomUUID || crypto.randomUUID)(),
     osName: fields.osName || osFriendlyName(os.platform()),

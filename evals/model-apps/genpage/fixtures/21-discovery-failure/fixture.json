@@ -1,0 +1,9 @@
+{
+  "contractVersion": 2,
+  "provenance": "synthetic",
+  "description": "Constructed unreadable-discovery refusal, not an agent capture. No empty-success fallback, connection setup, reference creation, generation or upload is authorized.",
+  "contracts": ["plugins/model-apps/agents/genpage-connector-builder.md Step 1: Connection discovery"],
+  "expectedOutcome": "refused",
+  "refusal": { "stage": "discovery" },
+  "toolResults": "tool-results.json"
+}

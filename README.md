@@ -4,7 +4,7 @@ Official agent skills/plugins for Power Platform development by Microsoft.
 
 ## Overview
 
-This repository is a **plugin marketplace** containing Claude Code/GitHub Copilot plugins for Power Platform services. Each plugin provides skills, agents, and commands to help developers build on the Power Platform.
+This repository is a **plugin marketplace** containing GitHub Copilot/Claude Code plugins for Power Platform services. Each plugin provides skills, agents, and commands to help developers build on the Power Platform.
 
 ## Installation
 
@@ -27,13 +27,30 @@ curl -fsSL https://raw.githubusercontent.com/microsoft/power-platform-skills/mai
 The installer automatically:
 
 - Installs `pac` CLI if not already installed
-- Detects available tools (Claude Code, GitHub Copilot CLI)
-- Registers the plugin marketplace and installs all listed plugins
+- Detects available tools (GitHub Copilot CLI, Claude Code)
+- Registers the plugin marketplace and installs all listed plugins except `dataverse`
 - Enables auto-update so plugins stay current
+
+The installer validates plugin names in local and downloaded marketplace manifests before
+installation. Names must follow the Open Plugins format: 1–64 lowercase ASCII letters or
+digits, with single dots or hyphens allowed between alphanumeric endpoints. CLI arguments
+are passed directly to executables; Windows batch launchers accept only shell-inert arguments.
+
+To also install the [Dataverse](#dataverse-external) plugin, pass `--include-dataverse`:
+
+```powershell
+iwr https://raw.githubusercontent.com/microsoft/power-platform-skills/main/scripts/install.js -OutFile install.js; node install.js --include-dataverse; del install.js
+```
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/microsoft/power-platform-skills/main/scripts/install.js | node - --include-dataverse
+```
+
+The `-` tells Node to read the piped script, so the arguments after it reach the installer.
 
 ### Manual Installation
 
-If you prefer to install manually, run these commands inside a Claude Code or GitHub Copilot CLI session:
+If you prefer to install manually, run these commands inside a GitHub Copilot CLI or Claude Code session:
 
 1. Add the marketplace
 
@@ -46,12 +63,15 @@ If you prefer to install manually, run these commands inside a Claude Code or Gi
     ```bash
     /plugin install power-pages@power-platform-skills
     /plugin install model-apps@power-platform-skills
+    /plugin install pcf@power-platform-skills
     /plugin install mcp-apps@power-platform-skills
     /plugin install code-apps-preview@power-platform-skills
     /plugin install mobile-app@power-platform-skills
     /plugin install power-apps-mobile-extension@power-platform-skills
     /plugin install canvas-apps@power-platform-skills
     /plugin install power-automate@power-platform-skills
+    /plugin install process-intelligence@power-platform-skills
+    /plugin install dataverse@power-platform-skills
     ```
 
 ## Available Plugins
@@ -70,7 +90,17 @@ Build model-driven Power Apps end to end, and the generative pages that go in th
 views, charts, security roles, app + sitemap — from a natural-language intent; `/genpage` builds
 generative pages for an app that already exists. Use either independently — neither requires the other
 
-**Stack**: React + TypeScript + Fluent, deployed via PAC CLI and the headless `cds-maker-sdk`
+**Stack**: React + TypeScript + Fluent, deployed through the headless `cds-maker-sdk` (PAC CLI signs you in and chooses the environment)
+
+### [PCF](plugins/pcf/README.md) (`plugins/pcf`)
+
+Build, test, diagnose, upgrade, deploy, verify and inventory Power Apps component framework (PCF) code components for model-driven apps, with guided setup for Power Pages field controls and canvas apps. Canvas apps need an admin to turn on **Power Apps component framework for canvas apps** in each environment.
+
+**Skills**: `/pcf:pcf` scaffolds Microsoft-maintained PCF templates and recipes, runs gates, deploys with PAC, and verifies registration and bindings.
+
+**Status**: Preview — see [capabilities](plugins/pcf/docs/pcf-capabilities.md)
+
+**Stack**: Node.js 20+, Power Apps component framework, PAC CLI, .NET SDK, and Azure CLI for verification/inventory
 
 ### [MCP Apps](plugins/mcp-apps/README.md) (`plugins/mcp-apps`)
 
@@ -117,12 +147,53 @@ Build, edit, run, and debug Power Automate cloud flows via the FlowAgent MCP ser
 
 **Stack**: Node.js 18+, Azure CLI (`az login`), self-contained MCP bundle
 
+### [Process Intelligence](plugins/process-intelligence/README.md) (`plugins/process-intelligence`)
+
+Analyze Power Automate Process Mining data, including bottlenecks, variants,
+cohorts, rework and object-centric executions through guided MCP workflows.
+
+**Skills**: `/analytics` and `/investigate-process` guide analysis;
+`/analyze-performance`, `/analyze-variants`, `/analyze-drivers`, `/compare-cohorts`,
+`/derive-metric` and `/analyze-objects` answer focused questions.
+`/setup` and `/report-issue` handle connection setup and support drafts.
+See the [skill catalog](plugins/process-intelligence/README.md#skills).
+
+**Stack**: Node.js 22 or 24 LTS, Azure CLI, self-contained MCP bundle
+
+GCC, GCC High, DoD and Mooncake are not supported yet.
+
+### [Dataverse](https://github.com/microsoft/Dataverse-skills) (external)
+
+Work with Microsoft Dataverse: connect to an environment, query and change records, manage tables and columns, and handle security, administration, and solutions.
+
+**Stack**: Dataverse MCP server, Dataverse CLI, Python SDK, and PAC CLI
+
+This plugin is maintained in [microsoft/Dataverse-skills](https://github.com/microsoft/Dataverse-skills), and this marketplace installs it straight from that repository's default branch.
+Report issues and send changes there.
+If you already installed `dataverse` from the `dataverse-skills` marketplace, keep only one of the two installs so its skills are not loaded twice.
+
 ## Local Development
 
 To develop and test plugins locally, follow these steps:
 
 1. Clone this repository
-1. Launch Claude Code with plugin path:
+1. Launch GitHub Copilot CLI or Claude Code with the plugin path:
+
+    GitHub Copilot CLI:
+
+    ```bash
+    copilot --plugin-dir /path/to/power-platform-skills/plugins/power-pages
+    copilot --plugin-dir /path/to/power-platform-skills/plugins/model-apps
+    copilot --plugin-dir /path/to/power-platform-skills/plugins/mcp-apps
+    copilot --plugin-dir /path/to/power-platform-skills/plugins/code-apps
+    copilot --plugin-dir /path/to/power-platform-skills/plugins/mobile-apps
+    copilot --plugin-dir /path/to/power-platform-skills/plugins/power-apps-mobile-extension
+    copilot --plugin-dir /path/to/power-platform-skills/plugins/canvas-apps
+    copilot --plugin-dir /path/to/power-platform-skills/plugins/power-automate
+    copilot --plugin-dir /path/to/power-platform-skills/plugins/process-intelligence
+    ```
+
+    Claude Code:
 
     ```bash
     claude --plugin-dir /path/to/power-platform-skills/plugins/power-pages
@@ -133,13 +204,41 @@ To develop and test plugins locally, follow these steps:
     claude --plugin-dir /path/to/power-platform-skills/plugins/power-apps-mobile-extension
     claude --plugin-dir /path/to/power-platform-skills/plugins/canvas-apps
     claude --plugin-dir /path/to/power-platform-skills/plugins/power-automate
+    claude --plugin-dir /path/to/power-platform-skills/plugins/process-intelligence
     ```
+
+For Process Intelligence, first follow its [setup instructions](plugins/process-intelligence/README.md#installation),
+including the explicit profile and absolute plugin root needed to avoid duplicate workspace MCP loads.
 
 ## Running Without Interruption
 
 Plugins in this repo may invoke multiple tools (file edits, shell commands, MCP servers) during a session, which can result in frequent approval prompts. Use the options below to reduce or eliminate these interruptions.
 
 > **Warning**: Auto-approval options give the agent the same access you have on your machine. Only use these in trusted or sandboxed environments.
+
+### GitHub Copilot CLI
+
+#### Option 1 — Allow specific tools (recommended)
+
+Pre-approve only the tools your workflow needs:
+
+```bash
+copilot --allow-tool 'write' --allow-tool 'shell(npm run build)' --allow-tool 'shell(pac *)'
+```
+
+#### Option 2 — Allow all tools in Copilot
+
+```bash
+copilot --allow-all-tools
+```
+
+To allow everything except dangerous commands:
+
+```bash
+copilot --allow-all-tools --deny-tool 'shell(rm)' --deny-tool 'shell(git push)'
+```
+
+See the [Copilot CLI docs](https://docs.github.com/en/copilot/how-tos/use-copilot-agents/use-copilot-cli) for the full reference.
 
 ### Claude Code
 
@@ -171,30 +270,6 @@ claude --dangerously-skip-permissions
 ```
 
 See the [Claude Code permissions docs](https://code.claude.com/docs/en/permissions) for the full reference.
-
-### GitHub Copilot CLI
-
-#### Option 1 — Allow specific tools (recommended)
-
-Pre-approve only the tools your workflow needs:
-
-```bash
-copilot --allow-tool 'write' --allow-tool 'shell(npm run build)' --allow-tool 'shell(pac *)'
-```
-
-#### Option 2 — Allow all tools in Copilot
-
-```bash
-copilot --allow-all-tools
-```
-
-To allow everything except dangerous commands:
-
-```bash
-copilot --allow-all-tools --deny-tool 'shell(rm)' --deny-tool 'shell(git push)'
-```
-
-See the [Copilot CLI docs](https://docs.github.com/en/copilot/how-tos/use-copilot-agents/use-copilot-cli) for the full reference.
 
 ## Repository Structure
 
@@ -249,10 +324,16 @@ power-platform-skills/
 │   │   │   └── plugin.json
 │   │   ├── shared/
 │   │   └── skills/
-│   └── canvas-apps/          # Canvas Apps plugin
+│   ├── canvas-apps/          # Canvas Apps plugin
+│   │   ├── .plugin/
+│   │   │   └── plugin.json
+│   │   ├── references/       # Technical + design guides
+│   │   └── skills/
+│   └── process-intelligence/ # Process Mining analytics plugin
 │       ├── .plugin/
 │       │   └── plugin.json
-│       ├── references/       # Technical + design guides
+│       ├── server/           # Self-contained MCP bundle
+│       ├── references/
 │       └── skills/
 ├── AGENTS.md                 # Development guidelines
 └── README.md
@@ -266,6 +347,11 @@ plugin entry is intentionally just `name` plus repository-root-relative `source`
 Plugin descriptions, versions, licenses, and keywords are controlled from each
 plugin's `.plugin/plugin.json`. This keeps existing subscriptions updating without
 duplicating display/update metadata.
+
+Plugins maintained in other repositories, such as `dataverse`, use a remote `source` object instead of a path.
+Copilot CLI reads `marketplace.json` and Claude Code reads `.claude-plugin/marketplace.json`, and they spell a plugin in a repository subdirectory differently.
+So `marketplace.json` uses `"source": "github"` with `repo` and `path`, and the legacy file uses `"source": "git-subdir"` with `url` and `path`.
+`scripts/validate-legacy-compatibility.js` enforces that pairing.
 
 ## Documentation
 
@@ -294,6 +380,6 @@ Any use of third-party trademarks or logos are subject to those third-party's po
 
 ## Telemetry
 
-Power Pages, Mobile Apps, and Model Apps ship 1DS telemetry code, but their committed configurations and event schemas differ. Power Pages and Mobile Apps telemetry are enabled and default-on. Power Pages events can include Dataverse organization and Entra tenant GUIDs when PAC is signed in, plus the signed-in user's Entra object ID when PAC exposes it. Mobile Apps excludes those identity fields and records its documented invocation, project-instance, checkpoint, and App Insights selection fields. Model Apps ships hard-disabled (`disabled: true`), so it currently transmits no events and writes no local telemetry mirror; if enabled later, its events can include organization and tenant GUIDs but exclude the signed-in user's Entra object ID.
+Power Pages, Mobile Apps, Model Apps, and Power Automate ship 1DS telemetry code, but their committed configurations and event schemas differ. All four are enabled and default-on. Power Pages events can include Dataverse organization and Entra tenant GUIDs when PAC is signed in, plus the signed-in user's Entra object ID when PAC exposes it. Power Pages also records approved create-site/localization choices, canonical locales, public localization package names and versions, stable validation failure codes, and localization completion data. It never records site names, free-text requirements, paths, prompts, raw errors, evidence URLs, or private-use locale subtags. Mobile Apps excludes those identity fields and records its documented invocation, project-instance, checkpoint, and App Insights selection fields. Model Apps events can include organization and tenant GUIDs but exclude the signed-in user's Entra object ID. Power Automate records the same identity fields as Power Pages from its skill hooks, and its bundled MCP server and CLI additionally record a per-invocation outcome (success or failure), duration, and, on failure, the error's class name and code — never the error message. Power Automate provisions public-cloud ingestion only, so events outside public cloud stay in the local mirror.
 
 For an enabled plugin, users opt out of transmission via `/<plugin>:telemetry off` (for example, `/power-pages:telemetry off`), stored in `~/.power-platform-skills/config.json`. The local diagnostic mirror is still written after this transmission-only opt-out. Each adopting plugin also honors `POWER_PLATFORM_SKILLS_TELEMETRY_<PLUGIN>_OPTOUT` for automation and CI. The environment variable has highest precedence and disables transmission regardless of the saved command choice. See the [shared telemetry guide](shared/telemetry/README.md) for the full field list, current plugin states, geo-routing behavior, kill-switch semantics, and local-mirror behavior.

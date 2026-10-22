@@ -1,0 +1,19 @@
+import * as React from "react";
+import { CellRendererOverrides } from "../types";
+
+export const cellRendererOverrides: CellRendererOverrides = {
+    Text: (props) => {
+        if (props.value == null) return null;
+        const text = props.formattedValue ?? String(props.value);
+
+        return React.createElement(
+            "span",
+            {
+                className: "{{nameLower}}-text-renderer",
+                dir: props.isRTLMode ? "rtl" : undefined,
+                title: text,
+            },
+            text,
+        );
+    },
+};

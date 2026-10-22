@@ -2,9 +2,11 @@
 name: open-wrap-url
 description: Use when the user wants to open the Power Apps Wrap page for an app ID in the active environment.
 user-invocable: true
-allowed-tools: Bash
+allowed-tools: Read, Bash
 model: haiku
 ---
+
+> **Plugin check**: Run `node "${PLUGIN_ROOT}/scripts/check-version.js"` - if it outputs a message, show it to the user before proceeding.
 
 **📋 Shared instructions: [shared-instructions.md](../../shared/shared-instructions.md)** — read first.
 

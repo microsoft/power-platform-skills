@@ -781,7 +781,13 @@ Ask via \`AskUserQuestion\`:
 });
 
 test('CANCEL_LEAVES_VOCAB export has the documented values', () => {
-  const required = ['nothing', 'validated-stage-run', 'partial-manifest', 'attachment-block-modified'];
+  const required = [
+    'nothing',
+    'localized-site-files',
+    'validated-stage-run',
+    'partial-manifest',
+    'attachment-block-modified',
+  ];
   for (const v of required) {
     assert.ok(CANCEL_LEAVES_VOCAB.has(v), `CANCEL_LEAVES_VOCAB missing: ${v}`);
   }

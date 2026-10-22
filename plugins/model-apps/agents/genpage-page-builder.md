@@ -5,6 +5,9 @@ description: >-
   Reads genpage-plan.md for page specification, RuntimeTypes.ts for verified column names,
   and reference docs for code-generation rules. Writes one .tsx file per invocation.
   Called by the genpage skill in parallel — not invoked directly by users.
+  Works only on generative pages in a Power Apps model-driven app. Never use it for a
+  generic React or web app, or when the user rules out Power Platform, Dataverse, or
+  model-driven apps (for example "no Power Platform").
 color: green
 # Two naming schemes on purpose: Claude Code names first, then the portable
 # Copilot aliases for the same capabilities. Every host ignores tool names it
@@ -12,6 +15,9 @@ color: green
 # search and todo tools even on a host that does not implement the compatible-
 # alias table. `TaskCreate`/`TaskUpdate` are NOT aliases anywhere — `todo` is
 # the portable name. No `execute`/`Bash`: this agent only authors page source.
+# Declaring a tool makes a host recognize it, not hand it to a subagent: a
+# Copilot CLI session gave this agent no task tool at all, so Steps 4 and 7 say
+# what to do without one.
 # See references/agent-interaction-contract.md.
 tools:
   - Read
@@ -137,13 +143,39 @@ import has been Grep-validated against the verified list.
 
 ## Step 2.6 — Runtime-only Griffel validation
 
-`pac model genpage transpile` type-checks the page but does not execute
-`makeStyles`; unsupported Griffel shorthands can therefore compile and then log
-runtime errors in the browser. Before returning, Grep the generated `.tsx` with
-the regex `['"]?borderWidth['"]?\s*:` so unquoted, quoted, and spaced property
-syntax are all caught. Replace every match with the four explicit longhands:
-`borderTopWidth`, `borderRightWidth`, `borderBottomWidth`, and
-`borderLeftWidth`. Do not return a file that still matches the regex.
+The upload compiles the page with the TypeScript the bundled SDK carries, and that
+compile is a transpile (`transpileModule`), not a type check: it refuses a page that
+does not parse or has no default export, but a type error, or a reference to a column
+that does not exist, still compiles and writes JavaScript, and it does not execute
+`makeStyles`. A clean compile is therefore no proof that the page is type-safe, and
+unsupported Griffel shorthands can compile and then log runtime errors in the
+browser. Before returning, review every `makeStyles` object you wrote against this rule:
+
+Griffel does not support ten CSS shorthands, and `makeStyles` drops them at
+runtime: the page type-checks, transpiles and deploys, then renders without the
+border, color or reset. They are `all`, `borderColor`, `borderStyle`,
+`borderWidth`, `borderBlock`, `borderBlockStart`, `borderBlockEnd`,
+`borderInline`, `borderInlineStart` and `borderInlineEnd`. Write longhands
+instead: `borderColor`, `borderStyle` and `borderWidth` become one longhand per
+side, `border` + `Top`, `Right`, `Bottom` or `Left` + `Color`, `Style` or `Width`
+(`borderWidth` → `borderTopWidth`, `borderRightWidth`, `borderBottomWidth`,
+`borderLeftWidth`); `borderBlock`, `borderInline` and their `Start` and `End`
+forms become the `Width`, `Style` and `Color` longhands of the sides they name
+(`borderBlockStart` → `borderBlockStartWidth`, `borderBlockStartStyle`,
+`borderBlockStartColor`; `borderBlock` → those and the three `borderBlockEnd…`
+ones); `all` has no longhands, so set the properties you need one by one. Every
+other shorthand (`padding`, `margin`, `border`, `borderRadius`, `gap`,
+`outline`) is supported, and an inline `style={{ … }}` is not Griffel at all.
+
+You have no shell, so you cannot run the checker: after you return, the
+orchestrator runs `${PLUGIN_ROOT}/scripts/check-griffel-styles.js` on your file and
+fixes anything it reports before the page is deployed. It reads the style objects
+written inline in the call, `makeStyles({ … })`, so write every one that way. To
+list the places to look, Grep the file with the regex
+`(^|[\s{,'"])(all|borderColor|borderStyle|borderWidth|borderBlock|borderBlockStart|borderBlockEnd|borderInline|borderInlineStart|borderInlineEnd)['"]?\]?\s*:`
+and look at each match: one inside a `makeStyles` object is the defect, and one in
+a string, a comment or an inline `style={{ … }}` is fine. Do not return a file that
+still has one in a `makeStyles` object.
 
 ## Step 3 — Read References and Samples
 
@@ -177,10 +209,13 @@ Custom-API-backed and also read:
 ${PLUGIN_ROOT}/references/custom-api.md
 ```
 
-If the `## Custom API Bindings` section is the literal `No custom API bindings.`, is
-empty, is missing entirely, or contains no binding row, the page has **no Custom APIs** —
-do not read custom-api.md and do not emit any `executeAction` / `executeFunction` /
-`listBoundActions` code.
+If the `## Custom API Bindings` section is exactly `No custom API bindings.`, the page has
+**no Custom APIs** — do not read custom-api.md and do not emit any `executeAction` /
+`executeFunction` / `listBoundActions` code. That sentinel is the only way a plan says
+"none". If the section is empty, missing entirely, or neither the sentinel nor a binding
+table, **stop and report it instead of writing the page**: the orchestrator halts on such a
+plan before dispatch, so reaching you means the plan is broken, and treating it as "no
+Custom APIs" would silently drop an approved binding.
 
 Only when your dispatch says **`Telemetry: enabled`** *and* the maker's own request
 asks to measure, track, monitor, or diagnose something do you instrument the page and
@@ -221,11 +256,18 @@ mount, the data-fetching reference is authoritative for the in-flight de-dupe +
 `window` cache + readiness-dep pattern that survives the host double-mount.
 **Never put `dataApi` in a dependency array** (see rules.md Rule 15).
 
-## Step 4 — Create a Task
+## Step 4 — Track the Page
 
-Call `TaskCreate` for: "Generate [Page Name] page"
+Your progress on this page is one task: "Generate [Page Name] page". A host can hand a
+subagent no task tool (a Copilot CLI session gives this agent only its file and search
+tools), so check the tools you were actually given, once:
 
-Mark it as in_progress immediately.
+- **If you have a task tool** (`TaskCreate`/`TaskUpdate` on Claude Code, `todo` where
+  Copilot provides it): create the task and mark it `in_progress`.
+- **If you have none**: do not search for one, do not call a tool you were not given, and
+  never say you created a task. Open your first message with
+  `Task: Generate [Page Name] page — in progress` instead; Step 7 closes it. The page is
+  judged by the orchestrator's completeness gate, so nothing else about the work changes.
 
 ## Step 5 — Generate the Complete .tsx File
 
@@ -304,6 +346,8 @@ export default GeneratedComponent;
   - TimePicker from `@fluentui/react-timepicker-compat`
 - **Single-file architecture** — all components, utilities, styles in one `.tsx` file
 - **No external libraries** — only React, Fluent UI V9, approved Fluent icons, D3.js for charts
+  (see `references/supported-dependencies.md`; `scripts/lib/supported-dependencies.js`
+  is the source of truth for the generated package names, versions, and feature gates)
 - **makeStyles with tokens** — no inline styles for static values
   ```typescript
   const useStyles = makeStyles({
@@ -357,8 +401,28 @@ export default GeneratedComponent;
   Do NOT invent a fake GUID. Do NOT use `recordId` for a custom identifier. Do NOT use a page's
   **display name** — only the key / file stem above. **Always wrap the placeholder in double
   quotes and place it as the `pageId` value** — the resolver only rewrites a `"PAGEREF_<token>"`
-  at a real `navigateTo` call site; a single-quoted, back-ticked, or concatenated form, or any
-  decoy string elsewhere, is rejected by the pre-deploy scan. Under `/app-builder` every
+  at a real `navigateTo` call site; a single-quoted, back-ticked, concatenated, or
+  expression-tailed (`"PAGEREF_x".slice(8)`) form, or any decoy string elsewhere, is
+  rejected by the pre-deploy scan. A plain cast right after the literal (`"PAGEREF_x" as const`, or
+  `as Name` / `satisfies Name` with `Name` a plain or dotted identifier) is accepted and kept as written; a generic, a union or
+  a string-literal type is not — write the literal alone unless a type needs the cast.
+  **Write the options object inline in the `navigateTo` call.** An object built in a variable and
+  passed by name (`const options = { pageType: "generative", pageId: "PAGEREF_x" }; navigateTo(options)`)
+  is not recognised, so the token in it halts the build as stray. **Write the plain form,
+  `navigateTo({ … })`** — a parenthesised callee, `(navigateTo)({ … })`, is read only at the start of a
+  statement or after `;` `{` `(` `[` `,` `:` a ternary `?`, an operator ending in `=`, `=>`, `&&`, `||` or `??`,
+  or the keyword `return` on the same line (`return (navigateTo)({ … })`; not `await` or `yield`),
+  and any other spelling (`factory!(navigateTo)({ … })`) halts as stray. A `PAGEREF_` token may appear
+  nowhere but that double-quoted `pageId` literal — **not in a comment of any kind**: a `//` comment, a
+  block comment, a trailing comment (`navigateTo({ … }); // PAGEREF_x`) and a JSX `{/* PAGEREF_x */}` all halt
+  the build, so write a comment without the token. Keep the
+  code before a navigation call unambiguous: the checker has no parser, so where it cannot tell a division from
+  a regex, or a comparison from an element — a `/` or `<` right after a `}` (write `({ … }) / 2`, not
+  `{ … } / 2`), after a `)` whose `(` is far back, after a word that can be a keyword or a name (`of`, `type`,
+  `get`, `as` …), after a `>`, or on a later line than the operand before it (`type Value = number` then a
+  regex line); an identifier written with a `\u` escape — it does not trust a `PAGEREF_` token at or after
+  that spot, or a `navigateTo` call whose object or arguments reach it. Put the operand in parentheses, end the
+  statement with `;`, or write the navigation call above it. Under `/app-builder` every
   `PAGEREF_<key>` must have a matching `navigatesTo` entry in the spec (the build enforces exact
   parity); under `/genpage` every token must match a `File` in the plan's `## Pages` table.
 - **Every linked page must be sitemap-placed.** A page targeted by a `PAGEREF_<key>` nav
@@ -499,12 +563,15 @@ Write the complete `.tsx` file to the working directory at the target file path.
 
 ## Step 7 — Return Result
 
-Mark the task as complete. Return a concise result to the orchestrating skill:
+Close the task from Step 4 (mark it complete if you have a task tool). Return a concise
+result to the orchestrating skill:
 
 ```
 Page: [Page Name]
 File: [working directory]/[filename].tsx
 Status: Written
+Task: Generate [Page Name] page — complete
+Task tool: [TaskCreate/TaskUpdate | todo | none on this host]
 ```
 
 ## Critical Constraints

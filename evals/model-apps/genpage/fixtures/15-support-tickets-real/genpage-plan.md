@@ -50,6 +50,10 @@ None
 
 No connector bindings.
 
+## Custom API Bindings
+
+No custom API bindings.
+
 ## Design Preferences
 - Styling: Color-coded priority badges (Critical = red, High = orange, Medium = yellow, Low = green); status shown as pill/tag labels; due dates with overdue urgency cue (red text when past due)
 - Features: Filter by status and priority; sort by due date; clickable rows to open record detail; search by ticket name

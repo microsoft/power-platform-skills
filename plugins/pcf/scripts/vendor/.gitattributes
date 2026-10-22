@@ -1,0 +1,16 @@
+# The vendored SDK bundle is a GENERATED artifact whose bytes are claimed — PROVENANCE.json records
+# its sha256, and scripts/tests/sdk-async-surface.test.js asserts the committed file matches.
+#
+# Without this rule, git's end-of-line normalisation makes that claim platform-dependent: a Windows
+# checkout (autocrlf) rewrites every LF to CRLF, so the same commit produces a different file size
+# and a different hash than on Linux or macOS. That is exactly how it was caught — the provenance
+# test passed on ubuntu and macOS and failed on windows-latest with a 60-byte difference.
+#
+# `-text` tells git to store and check this file out verbatim on every platform, which is the
+# correct treatment for generated output nobody hand-edits.
+cds-maker-sdk.cjs -text
+
+# The vendored TypeScript compiler (typescript/, built by _vendor-build/build-typescript.js) is generated too, and its
+# PROVENANCE.json records the hash of every file in it: brotli bytes are binary, and the license texts are kept exactly
+# as the npm package ships them.
+typescript/** -text

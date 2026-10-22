@@ -135,6 +135,19 @@ test('app ICON/description change -> full (not a sitemap-only edit)', () => {
   assert.ok(r.fullReasons.some((x) => /app object/.test(x)));
 });
 
+// #583: the fast app-shell apply writes only the sitemap, so a routing-description edit riding on it
+// would be dropped. The app object is compared WHOLE, which is what routes this to a full build — pin
+// it so narrowing that comparison to named keys cannot silently skip `app.aiDescription`.
+test('#583 an app.aiDescription-only change -> full, and phase-diff reports app-shell', () => {
+  const prior = spec();
+  const cur = spec();
+  cur.app.aiDescription = 'Route order work here.';
+  const r = C.classifyChanges(cur, prior);
+  assert.strictEqual(r.verdict, 'full');
+  assert.ok(r.fullReasons.some((x) => /app object/.test(x)));
+  assert.deepStrictEqual(require('../lib/phase-diff.js').diffPhases(cur, prior), ['app-shell']);
+});
+
 test('data-model change -> full build, NO debt (a full build applies it)', () => {
   const cur = spec();
   cur.entities[0].columns.push({ schemaName: 'new_amount', type: 'Money' });

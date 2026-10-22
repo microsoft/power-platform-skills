@@ -1,0 +1,97 @@
+[
+  {
+    "id": "interaction-mode",
+    "command": "node scripts\\resolve-interaction-mode.js",
+    "result": { "ok": true, "interactive": true, "reason": "default (attended)" }
+  },
+  {
+    "id": "plan-prepare-1",
+    "command": "node scripts\\genpage-plan-provenance.js prepare --plan genpage-plan.md",
+    "result": { "ok": true, "action": "prepare", "planPath": "D:\\work\\account-tracking\\genpage-plan.md", "quarantinedPath": null }
+  },
+  {
+    "id": "plan-verify-1",
+    "command": "node scripts\\genpage-plan-provenance.js verify --plan genpage-plan.md --approved @.approved-genpage-plan.md",
+    "result": { "ok": true, "action": "verify", "planPath": "D:\\work\\account-tracking\\genpage-plan.md", "kind": "create", "targets": ["account.tsx", "account.tsx"], "writtenHash": "e0fbb49f3c98f30d484fa069c3ebe304ec6eb093112131d3eca05d662b4b9ea8" }
+  },
+  {
+    "id": "page-files-1",
+    "command": "node scripts\\check-page-files.js --plan genpage-plan.md",
+    "artifact": ".genpage-provenance/genpage-plan.stale-e0fbb49f3c98.md",
+    "result": { "ok": false, "workingDir": "D:\\work\\account-tracking", "files": ["account.tsx", "account.tsx"], "problems": [{ "file": "account.tsx", "code": "collision", "message": "\"account.tsx\" and \"account.tsx\" collide on a case-insensitive filesystem" }] },
+    "exitCode": 3
+  },
+  {
+    "id": "plan-prepare-2",
+    "command": "node scripts\\genpage-plan-provenance.js prepare --plan genpage-plan.md",
+    "result": { "ok": true, "action": "prepare", "planPath": "D:\\work\\account-tracking\\genpage-plan.md", "quarantinedPath": "D:\\work\\account-tracking\\.genpage-provenance\\genpage-plan.stale-e0fbb49f3c98.md", "staleHash": "e0fbb49f3c98f30d484fa069c3ebe304ec6eb093112131d3eca05d662b4b9ea8" }
+  },
+  {
+    "id": "plan-verify-2",
+    "command": "node scripts\\genpage-plan-provenance.js verify --plan genpage-plan.md --approved @.approved-genpage-plan.md",
+    "result": { "ok": true, "action": "verify", "planPath": "D:\\work\\account-tracking\\genpage-plan.md", "kind": "create", "targets": ["account-edit.tsx", "account-list.tsx"], "writtenHash": "5a6d56872fd01d5f200958bcbe4e74ca207ce3a4058e3c7caafc286f1d8effcf" }
+  },
+  {
+    "id": "page-files-2",
+    "command": "node scripts\\check-page-files.js --plan genpage-plan.md",
+    "artifact": "genpage-plan.md",
+    "result": { "ok": true, "workingDir": "D:\\work\\account-tracking", "files": ["account-list.tsx", "account-edit.tsx"], "problems": [] },
+    "exitCode": 0
+  },
+  {
+    "id": "stamp-list",
+    "command": "node scripts\\genpage-worker-output.js --stamp --file account-list.tsx",
+    "result": { "ok": true, "action": "stamp", "filePath": "D:\\work\\account-tracking\\account-list.tsx", "existed": false }
+  },
+  {
+    "id": "stamp-edit",
+    "command": "node scripts\\genpage-worker-output.js --stamp --file account-edit.tsx",
+    "result": { "ok": true, "action": "stamp", "filePath": "D:\\work\\account-tracking\\account-edit.tsx", "existed": false }
+  },
+  {
+    "id": "builder-list",
+    "command": "Task genpage-page-builder: Accounts, target file account-list.tsx",
+    "artifact": "before/account-list.tsx",
+    "result": "Page: Accounts\nFile: D:\\work\\account-tracking\\account-list.tsx\nStatus: Written"
+  },
+  {
+    "id": "builder-edit",
+    "command": "Task genpage-page-builder: Edit Account, target file account-edit.tsx",
+    "artifact": "before/account-edit.tsx",
+    "result": "Page: Edit Account\nFile: D:\\work\\account-tracking\\account-edit.tsx\nStatus: Written"
+  },
+  {
+    "id": "gate-list",
+    "command": "node scripts\\genpage-worker-output.js --file account-list.tsx",
+    "artifact": "before/account-list.tsx",
+    "result": { "ok": true, "filePath": "D:\\work\\account-tracking\\account-list.tsx", "problems": [] },
+    "exitCode": 0
+  },
+  {
+    "id": "gate-edit",
+    "command": "node scripts\\genpage-worker-output.js --file account-edit.tsx",
+    "artifact": "before/account-edit.tsx",
+    "result": { "ok": true, "filePath": "D:\\work\\account-tracking\\account-edit.tsx", "problems": [] },
+    "exitCode": 0
+  },
+  {
+    "id": "list-create",
+    "command": "node scripts\\genpage-upload.js --env https://contoso.crm.dynamics.com --app-id 11111111-1111-4111-8111-111111111111 --code-file before\\account-list.tsx --name-file names\\account-list.txt --data-sources account --prompt-file prompt.txt --agent-message-file agent-message.txt --model claude-sonnet-4.5 --add-to-sitemap",
+    "result": { "ok": true, "pageId": "14141414-1414-4414-8414-141414141401", "appId": "11111111-1111-4111-8111-111111111111", "updated": false }
+  },
+  {
+    "id": "edit-create",
+    "command": "node scripts\\genpage-upload.js --env https://contoso.crm.dynamics.com --app-id 11111111-1111-4111-8111-111111111111 --code-file before\\account-edit.tsx --name-file names\\account-edit.txt --data-sources account --prompt-file prompt.txt --agent-message-file agent-message.txt --model claude-sonnet-4.5 --add-to-sitemap",
+    "result": { "ok": true, "pageId": "14141414-1414-4414-8414-141414141402", "appId": "11111111-1111-4111-8111-111111111111", "updated": false }
+  },
+  {
+    "id": "list-fixup",
+    "command": "node scripts\\genpage-upload.js --env https://contoso.crm.dynamics.com --app-id 11111111-1111-4111-8111-111111111111 --page-id 14141414-1414-4414-8414-141414141401 --code-file account-list.tsx --data-sources account --prompt-file fixup-prompt.txt --agent-message-file fixup-message.txt --model claude-sonnet-4.5",
+    "result": { "ok": true, "pageId": "14141414-1414-4414-8414-141414141401", "appId": "11111111-1111-4111-8111-111111111111", "updated": true }
+  },
+  {
+    "id": "edit-fixup",
+    "command": "node scripts\\genpage-upload.js --env https://contoso.crm.dynamics.com --app-id 11111111-1111-4111-8111-111111111111 --page-id 14141414-1414-4414-8414-141414141402 --code-file account-edit.tsx --data-sources account --prompt-file fixup-prompt.txt --agent-message-file fixup-message.txt --model claude-sonnet-4.5",
+    "result": { "ok": true, "pageId": "14141414-1414-4414-8414-141414141402", "appId": "11111111-1111-4111-8111-111111111111", "updated": true }
+  }
+]

@@ -1,7 +1,7 @@
 'use strict';
 const { test } = require('node:test');
 const assert = require('node:assert');
-const { annotateContentHashes, pageContentPath, pageSourceFileErrors } = require('../lib/content-hash.js');
+const { annotateContentHashes, recordedContentSha, pageContentPath, pageSourceFileErrors } = require('../lib/content-hash.js');
 const { diffPhases } = require('../lib/phase-diff.js');
 
 // A minimal spec with one implemented tsx page + one contentPath web resource + one inline web resource.
@@ -142,4 +142,24 @@ test('pageSourceFileErrors: a lexically confined link resolving outside the work
   assert.deepStrictEqual(errors, [
     "page 'overview': codeFile 'pages/overview.tsx' resolves outside the workspace",
   ]);
+});
+
+// What the build compares a page's source with: the hash an earlier apply recorded in last-applied.json (the annotated spec readBaseline returns). Anything that is not a recorded
+// hash is "no record" — which no source can be said to match — and never a hash that could be mistaken for one.
+test('recordedContentSha: the hash an earlier apply recorded for a page by its key (or its name, for a spec with no key), and null for anything that is not a recorded hash', () => {
+  const recorded = annotateContentHashes(spec(), resolver(baseStore()));
+  const sha = recorded.pages[0].__contentSha;
+  assert.match(sha, /^[0-9a-f]{64}$/);
+  assert.strictEqual(recordedContentSha(recorded, 'overview'), sha);
+  // The same bytes hash to the same record, and an edit does not: that is the comparison the build makes.
+  assert.strictEqual(recordedContentSha(annotateContentHashes(spec(), resolver(baseStore())), 'overview'), sha);
+  assert.notStrictEqual(recordedContentSha(annotateContentHashes(spec(), resolver({ ...baseStore(), 'pages/overview.tsx': 'edited' })), 'overview'), sha);
+  assert.strictEqual(recordedContentSha({ pages: [{ name: 'Legacy', __contentSha: sha }] }, 'Legacy'), sha, 'a page with no key is found by its name');
+  // No record: an intent page (nothing on disk to hash), a page that is not there, a source that could not be read then, a hash that is not text, and no baseline at all.
+  assert.strictEqual(recordedContentSha(recorded, 'design-only'), null);
+  assert.strictEqual(recordedContentSha(recorded, 'missing'), null);
+  assert.strictEqual(recordedContentSha(annotateContentHashes(spec(), resolver({})), 'overview'), null, 'recorded as null when its source could not be read');
+  assert.strictEqual(recordedContentSha({ pages: [{ key: 'overview', __contentSha: '' }] }, 'overview'), null);
+  assert.strictEqual(recordedContentSha({ pages: [{ key: 'overview', __contentSha: 7 }] }, 'overview'), null);
+  for (const none of [undefined, null, {}, { pages: null }, { pages: 'x' }, { pages: [null, 3, 'x'] }]) assert.strictEqual(recordedContentSha(none, 'overview'), null, JSON.stringify(none));
 });

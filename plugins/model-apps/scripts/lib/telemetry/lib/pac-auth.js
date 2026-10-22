@@ -1,11 +1,13 @@
 "use strict";
 
-const { execFileSync } = require("node:child_process");
+const { runNative } = require("./native-exec");
 
-// Reads PAC CLI auth state by shelling out to `pac auth who` and parsing the
+// Reads PAC CLI auth state by running `pac auth who` and parsing the
 // banner output. Matches the convention used by
 // plugins/power-pages/scripts/lib/validation-helpers.js (getPacAuthInfo /
 // getEnvironmentUrl) so telemetry stays consistent with the rest of the repo.
+// pac is started by absolute path from PATH, never by bare name (see
+// native-exec.js).
 //
 // PAC's JSON profile files are an internal/undocumented format that varies
 // across versions. The banner output is stable and is what other code paths
@@ -40,7 +42,7 @@ function readPacAuth(opts = {}) {
     cache = null;
     return null;
   }
-  const exec = typeof opts._exec === "function" ? opts._exec : execFileSync;
+  const exec = typeof opts._exec === "function" ? opts._exec : runNative;
   let output;
   try {
     output = exec("pac", ["auth", "who"], {

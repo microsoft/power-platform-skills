@@ -24,11 +24,14 @@ usage telemetry for this plugin. Default to `status` when no argument is given.
   remains under `~/.power-platform-skills/telemetry/<plugin>/sessions/`.
 - `on` re-enables transmission. The choice is **per-user and per-plugin** and
   takes effect on the next event (no restart).
-- Mobile Apps records start-only operational fields such as skill name, plugin
-  version, session and correlation IDs, OS/Node versions, AI-agent name/version,
-  invocation source, and a random per-project app instance ID. It never includes
-  file paths, prompts, tool inputs, site names, URLs, credentials, usernames,
-  hostnames, Dataverse organization or tenant IDs, or Entra object IDs.
+- Mobile Apps records operational and measured lifecycle fields such as
+  skill/checkpoint names, plugin/agent/OS/Node versions, generated
+  session/run/span/event IDs, durations, outcomes, fixed error classes,
+  invocation source, and a random per-project app instance ID. Verified target
+  operations can add environment, tenant, and Dataverse organization IDs. It
+  never includes Entra user/object IDs, Dataverse user IDs, business records,
+  document contents, file paths, prompts, tool inputs, URLs, credentials,
+  usernames, email addresses, hostnames, or raw error descriptions.
 - A repository configuration with `disabled: true` is a hard-off: it writes no
   local mirror and sends no event, regardless of the saved user preference.
 - **Automation/CI** can disable telemetry by setting the opt-out env var

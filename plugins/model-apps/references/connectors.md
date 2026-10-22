@@ -5,14 +5,13 @@ name. The `connectorLogicalName` string in TSX **MUST** equal a
 `connectorBindings[].logicalName` value in the page `config.json`, and that
 logical name must exist as a connection reference in the target environment.
 
-> **GA.** Connector authoring is on by default. A `connectors` flag is retained for one
-> release as a rollback switch — when it is off, pages are Dataverse / mock-data only and
-> no connector code is emitted. See the Feature Flags section in the plugin `AGENTS.md`.
+> **No feature flag.** Connector authoring is always available. Pages emit connector code only when
+> the plan carries actual connector bindings.
 
 ## Binding shape: `connectors.json` (array) vs page `config.json` (object)
 
 The skill writes a **bare JSON array** of bindings to working-dir
-`connectors.json`. `pac model genpage upload --connectors <connectors.json>` then
+`connectors.json`. `genpage-upload.js --connectors <connectors.json>` then
 persists that array into the deployed page's `config.json` under a
 `connectorBindings` property. The two files therefore have **different shapes** —
 do not write the object wrapper to `connectors.json`.
@@ -37,7 +36,7 @@ do not write the object wrapper to `connectors.json`.
 ]
 ```
 
-**page `config.json`** — what `pac` writes into the deployed page (the same array
+**page `config.json`** — what the upload writes into the deployed page (the same array
 wrapped under `connectorBindings`; the skill never writes this file directly):
 
 ```json
@@ -105,7 +104,7 @@ serialized; parse/format it at the display boundary only when needed.
 
 REST/action connectors do not use `dataset`/`table`. The planner records the
 selected operation, discovered `Parameters`, and discovered `Response` shape in
-`## Connector Bindings` from `get-connector-schema --operation`.
+`## Connector Bindings` from `connector.js schema --operation`.
 
 Rules:
 - Build request parameter objects only from discovered `Parameters` plus the

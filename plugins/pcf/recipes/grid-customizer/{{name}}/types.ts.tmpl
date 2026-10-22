@@ -1,0 +1,107 @@
+import * as React from "react";
+
+export interface PAOneGridCustomizer {
+    cellRendererOverrides?: CellRendererOverrides;
+    cellEditorOverrides?: CellEditorOverrides;
+}
+
+export type CellRendererOverrides = Partial<Record<ColumnDataType, (
+    props: CellRendererProps,
+    rendererParams: GetRendererParams,
+) => React.ReactElement | null | undefined>>;
+
+export type CellEditorOverrides = Partial<Record<ColumnDataType, (
+    defaultProps: CellEditorProps,
+    rendererParams: GetEditorParams,
+) => React.ReactElement | null | undefined>>;
+
+export interface CellRendererProps {
+    readonly value: unknown;
+    readonly isRTLMode?: boolean;
+    readonly onCellClicked?: (event?: React.MouseEvent<HTMLElement, MouseEvent> | MouseEvent) => void;
+    readonly validationError?: Error | null;
+    readonly isRightAligned?: boolean;
+    readonly startEditing?: (editorInitValue?: unknown) => void;
+    readonly isLastRow?: boolean;
+    readonly rowHeight?: number;
+    readonly columnDataType?: ColumnDataType;
+    readonly formattedValue?: string;
+    readonly cellContainerElement?: HTMLElement;
+    readonly cellErrorLabelId?: string;
+    readonly columnEditable?: boolean;
+}
+
+export interface GetRendererParams {
+    readonly colDefs: readonly ColumnDefinition[];
+    readonly columnIndex: number;
+    readonly rowData?: RowData;
+    readonly allowTabKeyNavigation?: boolean;
+}
+
+export interface CellEditorProps {
+    readonly secured?: boolean;
+    readonly value: unknown;
+    readonly isRTLMode?: boolean;
+    readonly rowHeight?: number;
+    readonly isRequired?: boolean;
+    readonly charPress?: string | null;
+    readonly columnDataType?: ColumnDataType;
+    readonly onChange: (newValue: unknown) => void;
+}
+
+export interface GetEditorParams {
+    readonly colDefs: readonly ColumnDefinition[];
+    readonly columnIndex: number;
+    readonly onCellValueChanged: (newValue: unknown) => void;
+    readonly rowData?: RowData;
+    readonly stopEditing: (cancel?: boolean) => void;
+}
+
+export interface RowData {
+    readonly __rec_id: string;
+}
+
+export interface ColumnDefinition {
+    readonly name: string;
+    readonly displayName?: string;
+    readonly colId?: string;
+    readonly dataType: string;
+    readonly CustomRendererType?: string;
+    readonly width?: number;
+    readonly minWidth?: number;
+    readonly maxWidth?: number;
+    readonly hide?: boolean;
+    readonly isPrimary?: boolean;
+}
+
+export type ColumnDataType =
+    | "Text"
+    | "Email"
+    | "Phone"
+    | "Ticker"
+    | "URL"
+    | "TextArea"
+    | "Lookup"
+    | "Customer"
+    | "Owner"
+    | "MultiSelectPicklist"
+    | "OptionSet"
+    | "TwoOptions"
+    | "Duration"
+    | "Language"
+    | "Multiple"
+    | "TimeZone"
+    | "Integer"
+    | "Currency"
+    | "Decimal"
+    | "FloatingPoint"
+    | "AutoNumber"
+    | "DateOnly"
+    | "DateAndTime"
+    | "Image"
+    | "File"
+    | "Persona"
+    | "RichText"
+    | "UniqueIdentifier";
+
+

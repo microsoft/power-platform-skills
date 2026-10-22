@@ -501,6 +501,69 @@ test("dispatcher uses an injected resolver.js to pick iKey/collector", () => {
   assert.equal(probe.headers["x-apikey"], "ikeyusresolved");
 });
 
+// Static-key ikey.json plus a resolver.js that only supplies formatEnvelope — the
+// optional seam a plugin uses to reshape the wire envelope for its tenant's schema.
+function mkFormatterPlugin(tmp, formatterSource) {
+  const ikeyPath = path.join(tmp, "ikey.json");
+  fs.writeFileSync(
+    ikeyPath,
+    JSON.stringify({
+      instrumentationKey: "static-ikey-32-chars-minimum-aaaaaaaaaaaa",
+      collector_url: "https://example.invalid/OneCollector/1.0/",
+      event_stream_name: "event",
+      disabled: false,
+    })
+  );
+  fs.writeFileSync(
+    path.join(tmp, "resolver.js"),
+    "module.exports = { async resolve() { return null; }, isProvisioned: () => true, formatEnvelope: " +
+      formatterSource + " };"
+  );
+  return ikeyPath;
+}
+
+test("dispatcher sends the envelope a resolver's formatEnvelope returns", () => {
+  const tmp = mkTmp();
+  const probePath = path.join(tmp, "probe.json");
+  const ikeyPath = mkFormatterPlugin(
+    tmp,
+    "({ eventName, time, data, iKey, eventStreamName }) => ({ ver: '4.0', name: eventStreamName, time," +
+      " iKey: 'o:' + iKey.split('-')[0], data: { event_Name: data.eventName, from: eventName," +
+      " customDimensions: JSON.stringify({ skillName: data.skillName }) } })"
+  );
+  const { status } = runDispatcher({
+    event: fakeEvent,
+    env: { configDir: tmp, iKey: "", collectorUrl: "", fakeProbe: probePath, ikeyJsonPath: ikeyPath },
+  });
+  assert.equal(status, 0);
+  const probe = JSON.parse(fs.readFileSync(probePath, "utf8"));
+  const body = JSON.parse(probe.body);
+  assert.equal(body.name, "event");
+  assert.equal(body.iKey, "o:static");
+  assert.equal(body.data.event_Name, "skill_started");
+  assert.equal(body.data.from, "PowerPagesPluginEvent");
+  assert.deepEqual(JSON.parse(body.data.customDimensions), { skillName: "add-seo" });
+  assert.equal(body.data.pluginName, undefined, "the default shape must not leak through");
+});
+
+for (const [label, formatter] of [
+  ["throws", "() => { throw new Error('boom'); }"],
+  ["returns nothing", "() => null"],
+]) {
+  test(`dispatcher fails closed (no POST, mirror kept) when formatEnvelope ${label}`, () => {
+    const tmp = mkTmp();
+    const probePath = path.join(tmp, "probe.json");
+    const ikeyPath = mkFormatterPlugin(tmp, formatter);
+    const { status } = runDispatcher({
+      event: fakeEvent,
+      env: { configDir: tmp, iKey: "", collectorUrl: "", fakeProbe: probePath, ikeyJsonPath: ikeyPath },
+    });
+    assert.equal(status, 0);
+    assert.equal(fs.existsSync(probePath), false, "a broken formatter must not fall back to the default shape");
+    assert.ok(fs.existsSync(mirrorPath(tmp)), "the local mirror is still written");
+  });
+}
+
 test("dispatcher falls back to the static key when a resolver resolves to nothing", () => {
   // Documented precedence is resolver → static → none. A resolver present but
   // returning null/undefined must NOT suppress a configured static key.

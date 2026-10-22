@@ -7,6 +7,9 @@ description: >-
   present for approval. Writes genpage-plan.md, for downstream agents to consume,
   once the orchestrator re-invokes it with the approval outcome.
   Called by the genpage skill — not invoked directly by users.
+  Works only on generative pages in a Power Apps model-driven app. Never use it for a
+  generic React or web app, or when the user rules out Power Platform, Dataverse, or
+  model-driven apps (for example "no Power Platform").
 color: cyan
 # Two naming schemes on purpose: Claude Code names first, then the portable
 # Copilot aliases for the same capabilities. Every host ignores tool names it
@@ -75,7 +78,10 @@ section MUST record commands and structured calls verbatim — not just their
 outcomes — because the eval harness greps the log for these tokens. Concretely:
 
 - Every shell command invocation is recorded on its own line as
-  `` `node --version` `` / `` `pac help` `` / `` `pac auth list` `` / `` `pac model list-tables --search '<term>'` ``. Include the literal flag values. Result goes on the next line.
+  `` `node --version` `` / `` `pac help` `` / `` `pac auth list` `` /
+  `` `node "${PLUGIN_ROOT}/scripts/list-languages.js" --env '<envUrl>'` `` /
+  `` `node "${PLUGIN_ROOT}/scripts/list-tables.js" --env '<envUrl>' --search '<term>'` `` /
+  `` `node "${PLUGIN_ROOT}/scripts/apps.js" list --env '<envUrl>'` ``. Include the literal flag values. Result goes on the next line.
 - Every question **the orchestrator asks on your behalf** is recorded as
   `AskUserQuestion: <question text> → <selected option>`. The literal string
   `AskUserQuestion` is required. You do not make that call — you return a
@@ -113,8 +119,7 @@ pac help
 ```
 
 `pac help` output includes the version number. Verify the version is **> 2.10.0**
-(required for `pac model create` support and the genpage `upload` connector/Custom API
-flags). If the version is older, instruct the user to update:
+(the plugin's minimum; see the README prerequisites). If the version is older, instruct the user to update:
 `dotnet tool update --global Microsoft.PowerApps.CLI.Tool`.
 
 If either command fails, inform the user and provide installation instructions.
@@ -156,21 +161,61 @@ These questions are asked by the ORCHESTRATOR, one at a time. Return them as a
 
 1. **"Create new page(s) or edit an existing one?"**
    - If edit: return immediately with `{ "action": "edit" }` — the orchestrator
-     handles edits inline, not through agents. **Do not run `list-languages` or
+     handles edits inline, not through agents. **Do not run `list-languages.js` or
      continue further.**
    - If new: continue to next question.
 
 ### Detect Configured Languages
 
-After confirming the user wants to create **new** pages, detect configured languages:
+After confirming the user wants to create **new** pages, detect the languages the
+environment has provisioned with the plugin's own script. It is the only source: it reads them
+through the SDK with the Azure CLI (`az`) token, which every `/genpage` page operation needs anyway.
 
-```powershell
-pac model list-languages
+```bash
+node "${PLUGIN_ROOT}/scripts/list-languages.js" --env '<envUrl>'
 ```
 
-Note the output. If multiple languages are configured (or any non-English language),
-localization will be included in the generated code. Include the detected languages
-when reporting the environment to the user.
+`<envUrl>` is the selected environment's `Environment Url` from the `pac auth list` table
+(Step 2; the `Org URL:` line of `pac org who` is the same address): the https origin only — no
+path, no trailing slash — as the `$ENV_URL` the Solution Selection query below passes to
+`dataverse-request.js`.
+
+**Exit 0** — stdout is one JSON line. Its non-ASCII characters (the dash in `summary`, an
+accented name) are written as `\uXXXX` escapes, so that no console code page can garble them:
+read the decoded strings.
+
+```json
+{"ok":true,"baseLanguage":{"lcid":1033,"code":"en-US","name":"English (United States)","rtl":false},"languages":[{"lcid":1033,"code":"en-US","name":"English (United States)","rtl":false},{"lcid":1025,"code":"ar-SA","name":"Arabic (Saudi Arabia)","rtl":true}],"unmapped":[],"summary":["1033 en-US \u2014 RTL: No","1025 ar-SA \u2014 RTL: Yes"]}
+```
+
+`languages` are the **provisioned** languages — the ones a page can be written in — in the
+server's order; `baseLanguage` is the environment's base language. If multiple languages are
+configured (or any non-English language), localization will be included in the generated
+code. Include the detected languages when reporting the environment to the user. Record each
+language's **LCID, Code and RTL** exactly as the script reports them — its `summary` lines
+are the form the plan carries, written with a real `—`, for example `1025 ar-SA — RTL: Yes`.
+
+The page builder takes text direction from that RTL value, never from a list of LCIDs it
+remembers (`references/localization.md` → *RTL Layout Support*).
+
+- **An LCID in `unmapped`** has no culture code in the plugin's table, so its `code`,
+  `name` and `rtl` are `null` and its summary line reads `<LCID> unknown — RTL: unknown`.
+  Record it that way and tell the user which LCID it is. Do not guess a code or a
+  direction: the page builder gives such a language no entry of its own.
+
+**Any non-zero exit — or no answer before your shell tool gives up — means the script could not read the languages; decide by the exit status, never by the wording of the message.** A failed read prints
+`{ "ok": false, "error": "…", "code": "…" }` on stdout (`code` only when the SDK gave one); a
+usage error, such as an `--env` that carries a path, prints nothing there and names the flag on
+stderr. The cause is most often the Azure CLI: not installed, not signed in, too slow to answer,
+or signed in to another tenant than the `pac` profile — the SDK reports all of these alike, as
+`CONNECTION_ERROR`, so no code tells them apart.
+
+**A failed read ends language detection: report why and stop.** Put the script's `error` (or its stderr when
+stdout is empty) in your report of the environment, record the command and that result in `workflow-log.md`
+verbatim, and do not go on to requirements gathering with a guess. Never assume the environment is
+English-only — the plan's localization decision depends on this answer — and never read languages from any
+other source: there is none. Fixing the cause is the maker's (`az login` with the same identity as the
+`pac` profile; `check-auth.js` says which part is wrong).
 
 ### Continue Requirements Gathering
 
@@ -197,24 +242,29 @@ when reporting the environment to the user.
 
 ### Entity Detection
 
-Use `pac model list-tables` to check which entities exist in the environment.
-Pass the user's requested entity logical names via `--search` (comma-separated):
+Use `scripts/list-tables.js` to check which entities exist in the environment.
+Pass the user's requested entity logical names via `--search` (comma-separated) with
+`--exact`; `<envUrl>` is the environment URL from the language step above:
 
 ```powershell
-pac model list-tables --search "entity1,entity2"
+node "${PLUGIN_ROOT}/scripts/list-tables.js" --env '<envUrl>' --search 'entity1,entity2' --exact
 ```
 
-**Important:** `--search` matches **substrings** across logical name, schema name,
-and display name — so `--search "account"` also returns `accountleads`,
-`accountlevelmonitoring`, etc. You **must** post-process the results and compare
-the `Logical Name` column against your requested entities using **exact equality**:
+It prints one JSON line: `{ "ok": true, "search": [...], "exact": true, "count": N,
+"tables": [{ "logicalName", "displayName", "schemaName", "isCustom" }], "missing": [...] }`.
 
-- For each requested entity, look for a row where `Logical Name == <entity>`.
+**Important:** without `--exact`, `--search` matches **substrings** across logical name,
+schema name, and display name — so `--search 'account'` also returns `accountleads`,
+`accountlevelmonitoring`, etc. `--exact` keeps only the tables whose logical name **is** a
+search term (any letter case) and names the terms that have none in `missing`:
+
+- For each requested entity, look for a table whose `logicalName` equals it.
 - If found → mark as **"exists"**.
-- If not found → mark as **"needs creation"**.
+- If it is in `missing` → mark as **"needs creation"**.
 
-Do NOT trust the raw output as "exists" just because the search returned a match —
-the search is fuzzy, your check must be exact.
+If the script fails (exit 1, `{ "ok": false, "error", "code" }`), entity detection did not
+happen. Report why (most often the Azure CLI is missing, signed out or signed in to another
+tenant) and stop: a failed read is never "no entities exist", and nothing is created on it.
 
 #### Dominant-prefix detection (for solution UX)
 
@@ -222,12 +272,12 @@ Also run a broader scan to detect the env's working prefix. This lets the
 solution question (later) steer the user to a consistent choice:
 
 ```powershell
-pac model list-tables
+node "${PLUGIN_ROOT}/scripts/list-tables.js" --env '<envUrl>' --type custom
 ```
 
-From the full output, look at the **Custom** rows only (Type column = Custom).
-Extract each logical name's prefix (everything before the first `_`). Count
-prefixes excluding system ones (`msdyn`, `msdynce`, `msdynmkt`, `adx`, `msa`,
+`--type custom` keeps only the custom tables (`isCustom: true`; a table a managed solution
+brought counts as custom). Extract each `logicalName`'s prefix (everything before the first
+`_`). Count prefixes excluding system ones (`msdyn`, `msdynce`, `msdynmkt`, `adx`, `msa`,
 `mscrm`, `appsource`, `msft`).
 
 - If one non-system prefix accounts for **≥50%** of custom tables AND there
@@ -242,7 +292,7 @@ If any entities need creating, note that entity creation requires:
 - **Azure CLI (`az`)** logged in with the same identity as the active `pac auth` profile
 - A target solution (the planner asks you to pick one in the next step)
 
-Detection uses `pac model list-tables` natively; creation runs through the
+Detection uses `scripts/list-tables.js`; creation runs through the
 plugin's own Web API scripts under `${PLUGIN_ROOT}/scripts/`.
 
 ### Connector Detection (handled by the orchestrator, not by you)
@@ -283,9 +333,8 @@ Two cases:
    environment or the wrong mode cannot be undone. Return this only after your
    auth/environment steps have run, so both values are real.
 
-`genpage-connector-builder` remains the single owner of the connectors rollback gate,
-connection / connection-ref discovery, connection-reference creation, and the binding
-contract. When no connectors are involved, write the exact sentinel
+`genpage-connector-builder` remains the single owner of connection / connection-ref
+discovery, connection-reference creation, and the binding contract. When no connectors are involved, write the exact sentinel
 `No connector bindings.` into the plan.
 
 When the orchestrator forwards results it provides:
@@ -355,8 +404,17 @@ mock data only), write `## Custom API Bindings` as exactly `No custom API bindin
 Run:
 
 ```powershell
-pac model list
+node "${PLUGIN_ROOT}/scripts/apps.js" list --env '<envUrl>'
 ```
+
+It prints `{ "ok": true, "count": N, "apps": [{ "id", "name", "uniqueName", "description",
+"published", "unpublishedChanges" }] }` — the model-driven apps, drafts included. Offer each app by its
+`name` and `id`. `name` and `description` come from the app's saved layer (what a maker sees in the
+designer): an app whose rename is saved but not yet published (`unpublishedChanges: true`) is listed by
+its new name, which its users see only after a publish. `published` (users can open the app) and `unpublishedChanges`
+(a saved edit is waiting for a publish) are two separate facts about it — an app can be both published and
+have changes — so say which applies when it matters. If the script fails (exit 1), report why and stop: a
+failed read is never "no apps".
 
 - **0 apps:** Return a `needs_input` request: "No model-driven apps found. Would you
   like to create a new one, or cancel?"
@@ -450,8 +508,9 @@ in the plan's `## Environment`. Specifics:
   Omit `--publisher` to use the env's Default Publisher (prefix `new`).
   If the uniqueName collides, retry once with a numeric suffix.
 - **Default Solution** → `Solution: Default`, `Publisher Prefix: new`. Note: this
-  is mandatory because `pac model create` errors out with
-  `"The given solution name is not valid: ()"` if `--solution` is omitted.
+  is mandatory because `apps.js create` refuses a call without `--solution` (it has no
+  "active solution" fallback), and a system solution such as `Default` already holds every
+  component, so creating an app into it needs no solution add.
 
 If the chosen prefix differs from `detectedPrefix`, log a one-line warning to
 the user before continuing:
@@ -461,7 +520,8 @@ the user before continuing:
 
 ## Step 5 — Hand the Plan Back for Approval
 
-Create tasks via `TaskCreate`:
+If you have a task tool (`TaskCreate`, or `todo`), create tasks; if you have none, skip this
+and never say you created a task:
 1. "Design page plan and data strategy"
 2. "Write plan document (genpage-plan.md)"
 
@@ -492,7 +552,9 @@ plan mode does not reach the user from a subagent.
 - [solution unique name and prefix — always shown, "Default / new" for code-only flows]
 
 ### Localization
-- [list detected languages, or "English only — no localization needed"]
+- [each detected language as `<LCID> <Code> — RTL: Yes|No` — the `summary` lines of `list-languages.js`
+  (e.g. `1025 ar-SA — RTL: Yes`) —
+  or "English only — no localization needed"]
 
 ### Design
 - [styling preferences, features, accessibility notes from requirements]
@@ -519,7 +581,9 @@ ${PLUGIN_ROOT}/references/plan-schema.md
 ```
 
 Read that file before writing the plan. Every required section must be present with
-the exact heading. Page filenames in the `## Pages` table must be unique.
+the exact heading. Page filenames in the `## Pages` table must be unique, and use only letters,
+digits, `-`, `_` and `.` — kebab-case such as `project-overview.tsx`, never a space or a shell
+character: the dispatch gate refuses any other name, and the build halts.
 
 ### CRITICAL — Prefix discipline in `## Entity Creation Required`
 
@@ -534,7 +598,7 @@ constructs `${prefix}_${suffix}` at runtime.
   no underscores, no separators)
 
 **Even if you're inspired by an existing entity in the env** (e.g., you ran
-`pac model list-tables` and saw `crb2b_testclaude007`), do NOT copy its prefix
+`list-tables.js` and saw `crb2b_testclaude007`), do NOT copy its prefix
 into the plan. Strip the prefix and write only the suffix. The prefix you
 record in `## Environment` is the one downstream agents will use — and any
 prefix you embed in a column name is a silent footgun.

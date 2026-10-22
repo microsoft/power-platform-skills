@@ -78,14 +78,14 @@ Then verify:
 
 	```bash
 	node "${PLUGIN_ROOT}/scripts/validate-mobile-files.js" \
-		--project-root "<working_dir>" \
+		--project-root '<working_dir>' \
 		--file package.json \
 		--approved-js-dependency "<package>@<exact-version>" \
 		[--approved-js-dependency "<another-package>@<exact-version>" ...]
 	```
 
 	The approval arguments are deterministic exceptions for package names that the baseline conservatively classifies as native-like. They do not classify package contents and cannot override packages known to require native runtime support.
-- `npx tsc --noEmit` passes after the consuming code is built
+- `npx --no-install tsc --noEmit` passes after the consuming code is built
 
 If installed contents reveal native code/config or an incompatible runtime dependency, remove only the newly added package, report the block, and do not let builders import it. Pure-JavaScript additions do not need `/add-native`, `app.config.js`, CocoaPods, Gradle, a native rebuild, or a rewrap-base update.
 

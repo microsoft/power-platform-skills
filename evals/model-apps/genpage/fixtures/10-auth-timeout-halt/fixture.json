@@ -1,0 +1,9 @@
+{
+  "contractVersion": 2,
+  "provenance": "synthetic",
+  "description": "Constructed refusal trace, not an agent capture. Exercises the current auth timeout retry and halt contract.",
+  "contracts": ["plugins/model-apps/skills/genpage/SKILL.md Phase 2a: Pre-flight: az + pac + Dataverse"],
+  "expectedOutcome": "refused",
+  "refusal": { "stage": "auth" },
+  "toolResults": "tool-results.json"
+}

@@ -38,7 +38,10 @@ same relative position so downstream parsers can find them predictably:
 - App: [app name] ([app-id]) OR "create new: [name]"
 - Mode: app-builder    ← **only** when the plan was projected from an App Spec by
   `scripts/write-page-plan.js`; omitted for a planner-authored (standalone `/genpage`) plan
-- Languages: [detected languages with LCIDs, or "English (1033) only"]
+- Languages: [each detected language with its LCID and code, marked `— RTL` when `scripts/list-languages.js`
+  reports `rtl: true` for it — e.g. "English (1033, en-US); Arabic (Saudi Arabia) (1025,
+  ar-SA) — RTL" — or "English (1033) only". A language the script could not name keeps its number and is written
+  "<LCID> (no culture code)" with no mark. The page builder takes text direction from that mark.]
 - Solution: [solution unique name — ALWAYS present, default fallback is "Default"]
 - Publisher Prefix: [prefix tied to the solution's publisher — ALWAYS present, default fallback is "new"]
 
@@ -55,16 +58,15 @@ planner picks them by asking the user (when metadata work is needed) or by
 writing the safe defaults `Solution: Default` + `Publisher Prefix: new` (when
 no question is needed). They are never omitted.
 
-Why mandatory: `pac model create --solution <name>` errors out with
-`"The given solution name is not valid: ()"` when `--solution` is missing —
-its documented "active solution" fallback does not work in practice. Always
-writing the field eliminates a fragile conditional branch in the orchestrator.
+Why mandatory: `apps.js create --solution <name>` takes the solution the new app and its
+sitemap are added to, and has no "active solution" fallback — a missing `--solution` is a usage
+error. Always writing the field eliminates a fragile conditional branch in the orchestrator.
 
 Downstream consumers honour them:
 - `genpage-entity-builder` passes `--solution <Solution>` on every script call
   so newly-created tables/columns/relationships land in that solution. It also
   uses `Publisher Prefix` to build schema names (e.g. `<prefix>_Candidate`).
-- The orchestrator (skill) passes `--solution <Solution>` to `pac model create`
+- The orchestrator (skill) passes `--solution <Solution>` to `apps.js create`
   when provisioning a new model-driven app.
 
 ## Pages
@@ -147,7 +149,7 @@ executeAction) or Function (read-only; called with executeFunction). `Bound Enti
 table logical name for an entity-bound API, or `(Global)` for an unbound one. `Parameters`
 lists each request parameter as `name: Kind` using the declared Dataverse parameter kind.
 All values are discovered by genpage-customapi-builder via list-custom-apis.js — never
-fabricated. Persisted (via `pac ... upload --actions`) into config.json's `actionBindings`.]
+fabricated. Persisted (via `genpage-upload.js --actions`) into config.json's `actionBindings`.]
 | Name | Kind | Bound Entity | Display Name | Parameters (name: kind) |
 |------|------|--------------|--------------|-------------------------|
 | new_ApproveOrder | Action | salesorder | Approve Order | Comment: String, Amount: Decimal |
@@ -201,13 +203,13 @@ connector bindings." sentinel).]
 | Section | Consumers | Rules |
 |---------|-----------|-------|
 | `# Genpage Plan` | N/A | Title only, no content |
-| `## User Requirements` | Orchestrator — used as the `--prompt` value on the **first** `pac model genpage upload` for each new page only. Subsequent uploads (Phase 6.5 PAGEREF re-upload, Phase 7.5 fix re-deploy, edit flow) use delta prompts, NOT this field. | Verbatim user input |
+| `## User Requirements` | Orchestrator — used as the `--prompt` value on the **first** `genpage-upload.js` upload (the create) for each new page only. Subsequent uploads (Phase 6.5 PAGEREF re-upload, Phase 7.5 fix re-deploy, edit flow) use delta prompts, NOT this field. | Verbatim user input |
 | `## Working Directory` | All downstream agents | Absolute path, forward slashes on Windows |
 | `## Plugin Root` | Page-builder (to Read references/samples) | Absolute path |
 | `## Environment` | Orchestrator | URL, app decision, languages |
-| `## Pages` | Orchestrator (page list for Phase 5 dispatch) | File names must be unique |
+| `## Pages` | Orchestrator (page list for Phase 5 dispatch) | File names must be unique, and use only letters, digits, `.`, `-` and `_` (kebab-case, e.g. `project-overview.tsx`). Exactly one Pages table with a File column: `check-page-files.js` refuses a plan with a second, one quoted in `## User Requirements` included |
 | `## Entity Creation Required` | Entity-builder | Exact literal "No entity creation required..." when empty, else per-entity subsections |
-| `## Existing Entities` | Orchestrator (for `pac model genpage generate-types --data-sources`) | Comma-separated logical names |
+| `## Existing Entities` | Orchestrator (for `genpage.js types --data-sources`) | Comma-separated logical names |
 | `## Connector Bindings` | Planner, page-builder, orchestrator deploy | Exact literal "No connector bindings." when empty; logical names must match Dataverse connectionreferences; tabular bindings must include discovered optional `Fields`; REST/action bindings must include discovered `Parameters` and `Response` |
 | `## Custom API Bindings` | Planner, page-builder, orchestrator deploy | Exact literal "No custom API bindings." when empty; names must match existing Dataverse Custom APIs (`customapi.uniquename`); entity-bound rows carry the bound table (else `(Global)`); every row carries its discovered `Parameters` kinds |
 | `## Solution Packaging` | Orchestrator (Phase 6.7) | Opt-in; absent = skip |

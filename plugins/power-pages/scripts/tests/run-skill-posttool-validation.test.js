@@ -186,6 +186,7 @@ test('reconcile backstop is exit-code-neutral: a blocking validator status is un
   writeJson(path.join(withPlan, 'docs', '.alm-plan-data.json'), {
     SITE_NAME: 'T', steps: [{ name: 'Deploy via pipeline to Staging', status: 'pending' }],
   });
+
   backdatePlan(withPlan);
   const resWith = runHook(withPlan, 'deploy-pipeline');
 
@@ -198,4 +199,31 @@ test('reconcile backstop is exit-code-neutral: a blocking validator status is un
   assert.equal(resWithout.status, 2, 'blocking validator must surface exit 2 with no plan');
   assert.equal(resWith.status, resWithout.status,
     'the reconcile backstop must not change the validator-determined exit code');
+});
+
+test('hook does not claim post-implementation integrity at Skill tool return time', (t) => {
+  const root = makeProject(t);
+  writeJson(path.join(root, 'powerpages.config.json'), {});
+  fs.mkdirSync(path.join(root, 'src'), { recursive: true });
+  fs.writeFileSync(path.join(root, 'src', 'bad.css'), '.bad { margin-left: 1rem; }', 'utf8');
+
+  // Skill PostToolUse runs when instructions finish loading, before the agent
+  // applies the skill. Shared integrity is therefore an explicit final phase in
+  // source-mutating SKILL.md files, not an early hook responsibility.
+  const res = runHook(root, 'add-localization');
+
+  assert.equal(res.status, 0);
+  assert.doesNotMatch(res.stderr, /site integrity validation failed/i);
+});
+
+test('hook does not run site integrity for a non-source-mutating skill', (t) => {
+  const root = makeProject(t);
+  writeJson(path.join(root, 'powerpages.config.json'), {});
+  fs.mkdirSync(path.join(root, 'src'), { recursive: true });
+  fs.writeFileSync(path.join(root, 'src', 'bad.css'), '.bad { margin-left: 1rem; }', 'utf8');
+
+  const res = runHook(root, 'test-site');
+
+  assert.equal(res.status, 0);
+  assert.doesNotMatch(res.stderr, /site integrity validation failed/i);
 });

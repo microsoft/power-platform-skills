@@ -1,0 +1,56 @@
+{
+  "schemaVersion": 2,
+  "solution": { "uniqueName": "ContosoFormReconcile", "publisherPrefix": "cnt" },
+  "app": { "name": "Delivery Review", "description": "Reorder existing forms while preserving display state and related cards" },
+  "entities": [
+    { "schemaName": "cnt_project", "displayName": "Project", "pluralName": "Projects",
+      "primaryAttribute": { "schemaName": "cnt_name", "displayName": "Name" },
+      "columns": [{ "schemaName": "cnt_code", "displayName": "Code", "type": "Text" }] },
+    { "schemaName": "cnt_workitem", "displayName": "Work Item", "pluralName": "Work Items",
+      "primaryAttribute": { "schemaName": "cnt_title", "displayName": "Title" },
+      "columns": [
+        { "schemaName": "cnt_status", "displayName": "Status", "type": "Choice", "options": ["Open", "Done"] },
+        { "schemaName": "cnt_notes", "displayName": "Notes", "type": "Memo" },
+        { "schemaName": "cnt_reviewer", "displayName": "Reviewer", "type": "Text" },
+        { "schemaName": "cnt_approved", "displayName": "Approved", "type": "Boolean" }
+      ],
+      "mainFormOrder": ["Work Item", "Work Item Review"] }
+  ],
+  "relationships": [
+    { "type": "OneToMany", "referenced": "cnt_project", "referencing": "cnt_workitem",
+      "lookup": { "schemaName": "cnt_ProjectId", "displayName": "Project" } }
+  ],
+  "forms": [
+    { "entity": "cnt_workitem", "name": "Work Item Review", "layout": "auto" },
+    { "entity": "cnt_workitem", "name": "Work Item",
+      "tabs": [
+        { "name": "tab_intake", "label": "Intake",
+          "sections": [{ "name": "section_intake", "label": "Intake", "columns": 1, "fields": ["cnt_approved"] }] },
+        { "name": "tab_details", "label": "Details",
+          "columns": [
+            { "sections": [
+              { "name": "section_notes", "label": "Notes", "columns": 1, "visible": false,
+                "fields": [{ "name": "cnt_notes", "hidden": true, "rowspan": 2 }] },
+              { "name": "section_execution", "label": "Execution", "columns": 2, "showLabel": false,
+                "fields": [{ "name": "cnt_title", "colspan": 2 }, "cnt_status", { "name": "cnt_reviewer", "readOnly": true }] }
+            ] },
+            { "sections": [
+              { "name": "section_context", "label": "Context", "columns": 1,
+                "fields": [{ "name": "cnt_projectid", "hidden": true, "readOnly": true }] }
+            ] }
+          ] },
+        { "name": "tab_admin", "label": "Administration", "visible": false, "expanded": false,
+          "sections": [{ "name": "section_admin", "label": "Administration", "showLabel": false, "fields": [] }] }
+      ],
+      "quickViews": [{ "lookup": "cnt_projectid", "targetEntity": "cnt_project", "form": "Project Card", "label": "Project Snapshot" }] },
+    { "entity": "cnt_project", "name": "Project Card", "formType": "QuickView",
+      "tabs": [{ "name": "tab_card", "label": "Project",
+        "sections": [{ "name": "section_card", "label": "Project", "fields": ["cnt_name", "cnt_code"] }] }] }
+  ],
+  "views": [],
+  "charts": [],
+  "appShell": { "areas": [{ "label": "Delivery", "groups": [{ "label": "Work", "subAreas": [
+    { "entity": "cnt_workitem", "title": "Work Items" },
+    { "entity": "cnt_project", "title": "Projects" }
+  ] }] }] }
+}

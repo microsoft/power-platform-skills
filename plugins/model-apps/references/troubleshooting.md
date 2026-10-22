@@ -8,10 +8,11 @@ Deployment, runtime, and environment issues. For generation-time anti-patterns
 
 ## User Wants to Create a New Model-Driven App
 
-This plugin creates **pages within existing** model-driven apps — it cannot create a new app. If the user asks to create a new model-driven app:
+Both skills can create one:
 
-- Direct them to [Power Apps maker portal](https://make.powerapps.com) to create the app: **New App → Start with Design → Blank page with Navigation**
-- Once the app exists, they can use `/genpage` to add pages to it
+- `/genpage` creates an app to host its pages when the plan chooses a new app: it deploys the first page, then creates the app from it with `scripts/apps.js create` (Phase 6), and adds the other pages to it.
+- `/app-builder` builds a whole app from a description: tables, forms, views, the app and its sitemap.
+- An app created in the [Power Apps maker portal](https://make.powerapps.com) (**New App → Start with Design → Blank page with Navigation**) works too; `/genpage` can then add pages to it.
 
 ---
 
@@ -35,28 +36,38 @@ This plugin creates **pages within existing** model-driven apps — it cannot cr
 
 ## Schema Generation Fails
 
+`node "${PLUGIN_ROOT}/scripts/genpage.js" types …` prints `{ "ok": false, "error", "code" }` and exits 1 when it cannot write the schema — read `error` first.
+
 - Verify entity names are logical names (singular, lowercase: `"account"` not `"Account"`)
-- Check authentication: `pac auth list`
+- A table the environment does not have prints `"code": "GENPAGE_TABLE_NOT_FOUND"` with the `table` it names — check the logical name (not the display name; a custom table has its publisher prefix) and that the environment is the one that holds the table.
+- The type generator signs in with the Azure CLI, like every page operation: `az` missing, signed out, too slow, or signed in to another tenant than the `pac` profile fails with a connection error — run `node "${PLUGIN_ROOT}/scripts/check-auth.js" --require-pac` to see which
 - Try one entity at a time to isolate the issue
-- Ensure the entities exist in your environment
-- Check for typos in entity logical names
+- The output file's name is checked before the environment is asked: a link, or a folder, at that name is refused
 
 ---
 
 ## Page Upload Fails
 
-- Verify app-id: run `pac model list` to get the correct GUID
-- Ensure `--name` is provided for new pages
-- Check `.tsx` file exists and has no syntax errors
+- Verify app-id: run `node "${PLUGIN_ROOT}/scripts/apps.js" list --env '<envUrl>'` and take the app's `id`
+- Ensure the page's display name is provided for new pages — written to a file and passed with `--name-file`, so a shell never reads it
+- A page display name is stored exactly as written, a straight double quote (`"`) included: nothing is refused or escaped. (A page an earlier release created through `pac` holds each `"` as `\"` until its name is rewritten.)
+- An update that names no `--name-file`, `--model` or `--data-sources` keeps the page's own name, model and data sources; it never resets one to empty
+- A failed upload exits 1 and prints what it knows: `error`, the page's `pageId` once the write got as far as the send, `outcome` and the SDK's `code`. `"outcome": "nothing"` means nothing was written — fix what the message names and run it again. `"outcome": "unknown"` means the answer was lost and the write may have landed: do not send it again blindly — an update is compared with the file first (`genpage-base.js check`), a create is looked for by its `pageId` first
+- Every page operation signs in with the Azure CLI. `az` missing, signed out, too slow, or signed in to another tenant than the `pac` profile fails the upload with a connection error — run `node "${PLUGIN_ROOT}/scripts/check-auth.js" --require-pac` to see which
+- `--prompt-file …/prompt.txt is a symbolic link or junction, not a file written in place` (or `is a hard link`,
+  for any input file): something other than the skill left a link at that name, and writing it may have changed
+  the file it points to. Check that file, delete the link, and re-run; the skill then writes a plain file there
+- Check `.tsx` file exists and has no syntax errors (a page that does not compile is refused before anything is written)
 - Verify `--data-sources` matches entities used in code
 - Ensure schema was generated for entity-based pages
-- If updating, ensure `--page-id` is correct (get from `pac model genpage list`)
+- If updating, ensure `--page-id` is correct (get it from `node "${PLUGIN_ROOT}/scripts/genpage.js" list --env '<envUrl>' --app-id '<app-id>'`)
 
 ---
 
 ## Page Not Appearing in App
 
-- Verify `--add-to-sitemap` was used for new pages
+- Verify the page was placed: `--add-to-sitemap` on its upload into an existing app, or its id in `--page-id` of `apps.js create` for a new app
+- Check `apps.js list`: an app with `published: false` was never published, and `unpublishedChanges: true` means saved edits are waiting for a publish — users see the published layer
 - Refresh the browser / clear cache
 - Check user permissions in Power Apps
 - Verify the app-id is correct for the target app
@@ -69,7 +80,7 @@ Dialog: **"Failed to load generative page"**, carrying a Dataverse OData error s
 
 > A binary operator with incompatible types was detected. Found operand types 'Edm.Guid' and 'Edm.String' for operator kind 'Equal'.
 
-The page itself deployed correctly — this is a **runtime data** failure, so `pac model genpage list` and the sitemap both still look right. Diagnose from the failing request, never from the dialog:
+The page itself deployed correctly — this is a **runtime data** failure, so `genpage.js list` and the sitemap both still look right. Diagnose from the failing request, never from the dialog:
 
 - **Capture the query first**: F12 → Network → filter `api/data` → find the 4xx response. Copy its `$filter` (or the request body for an `Execute`/action call). That one string decides which cause below applies; the dialog alone cannot distinguish them.
 
@@ -93,10 +104,10 @@ See: <https://learn.microsoft.com/en-us/power-apps/developer/data-platform/webap
 
 ## RuntimeTypes Issues
 
-- Generate schema BEFORE uploading: `pac model genpage generate-types --data-sources "entity1" --output-file RuntimeTypes.ts`
+- Generate schema BEFORE uploading: `node "${PLUGIN_ROOT}/scripts/genpage.js" types --env '<envUrl>' --data-sources 'entity1' --output-file '<working-dir>/RuntimeTypes.ts'`
 - Keep `RuntimeTypes.ts` in the same directory as the `.tsx` file
 - Regenerate schema if Dataverse metadata has changed
-- If column names don't match, re-run `generate-types` — never guess column names
+- If column names don't match, re-run `genpage.js types` — never guess column names
 
 ---
 

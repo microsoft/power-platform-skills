@@ -8,7 +8,7 @@
 > (see `app-spec-schema.md` → `languageCode` and *Localized labels*).
 
 Read this only when the planner has detected multiple configured languages OR any
-non-English language via `pac model list-languages`. English-only environments
+non-English language via `scripts/list-languages.js`. English-only environments
 should skip this entire file — the page-builder will write the page without any
 localization scaffolding.
 
@@ -19,7 +19,7 @@ section, not unconditionally.
 
 ### When to Apply
 
-Only apply localization when `pac model list-languages` (run by the planner during requirements gathering) returns **multiple languages** or **any non-English language**. English-only environments skip this entire section.
+Only apply localization when `scripts/list-languages.js` (run by the planner during requirements gathering; it is the only source of the environment's languages) reports **multiple languages** or **any non-English language**. English-only environments skip this entire section.
 
 ### Language Detection
 
@@ -30,8 +30,13 @@ const language = React.useMemo(() => {
   const uiLanguageId = (typeof Xrm !== "undefined" &&
     Xrm.Utility?.getGlobalContext()?.userSettings?.languageId) || 1033;
   const langMap: Record<number, { code: string; name: string; isRtl: boolean }> = {
-    // Populate entries from pac model list-languages output, mapped to LCID info.
-    // Example: 1033: { code: "en-US", name: "English", isRtl: false },
+    // One entry per language in the plan's `## Environment` → `Languages` line, e.g.
+    //   English (1033, en-US); Arabic (Saudi Arabia) (1025, ar-SA) — RTL
+    // becomes 1033: { code: "en-US", name: "English", isRtl: false } and
+    // 1025: { code: "ar-SA", name: "Arabic (Saudi Arabia)", isRtl: true }.
+    // `isRtl` is true exactly where the line carries `— RTL` (see RTL Layout Support) — never from memory.
+    // A language the plan lists with no code has nothing to key a translation by: it gets no entry, and the
+    // fallback below serves that user in English.
   };
   return langMap[uiLanguageId] || { code: "en-US", name: "English", isRtl: false };
 }, []);
@@ -67,7 +72,29 @@ Usage: `<Text>{translate("title")}</Text>` — never `<Text>Dashboard</Text>`.
 
 ### RTL Layout Support
 
-Detect RTL from the language LCID. Arabic (1025, 2049, 3073, 4097, 5121) and Hebrew (1037) are RTL.
+Take each language's direction from the `rtl` field of `scripts/list-languages.js` (carried into the
+plan's `## Environment` → `Languages` line as a `— RTL` mark) — never from a hand-written list of LCIDs. The script reads
+it from a table of Windows culture data, and a list always misses some: Windows culture data marks more than 40
+right-to-left cultures — every Arabic region, Persian and Dari, Urdu, Pashto, Sindhi, Uyghur, Divehi, Syriac, Central
+Kurdish, Hebrew and Yiddish among them — and a language a list forgot renders left-to-right.
+
+If the plan marks no direction for a language (a plan written before the script reported one), compute the flag from
+the language's **Code** instead. Direction is a
+property of the script a language is written in, and `Intl.Locale#maximize()` fills in the likely script
+from CLDR (`fa` → `fa-Arab-IR`, `ur-PK` → `ur-Arab-PK`, `dv-MV` → `dv-Thaa-MV`):
+
+```typescript
+// ISO 15924 scripts written right-to-left.
+const RTL_SCRIPTS = new Set(["Arab", "Hebr", "Syrc", "Thaa", "Nkoo", "Adlm", "Rohg", "Mand", "Samr"]);
+const isRtlLocale = (code: string): boolean => {
+  try {
+    // `Intl.Locale` is typed only from the ES2020 lib, so the cast keeps an older `lib` setting compiling.
+    return RTL_SCRIPTS.has(new (Intl as any).Locale(code).maximize().script ?? "");
+  } catch {
+    return false; // not a valid BCP-47 tag
+  }
+};
+```
 
 - Wrap the root element with the `dir` attribute: `<div dir={language.isRtl ? "rtl" : "ltr"}>`.
 - Use **logical CSS properties** instead of physical ones:

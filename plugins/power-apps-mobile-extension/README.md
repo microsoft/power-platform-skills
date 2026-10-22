@@ -1,11 +1,23 @@
 # Power Apps Mobile Extension Plugin
 
-Claude Code / GitHub Copilot plugin for creating **third-party controls for Power Apps Mobile
+GitHub Copilot / Claude Code plugin for creating **third-party controls for Power Apps Mobile
 (PAM)**. It helps design, generate, test, package, and publish a native control using public tooling
 and package registries.
 
 The plugin produces a `.ppmplugin` bundle for the Power Apps Wrap runtime and a matching dispatcher
 PCF control for use in a Canvas app.
+
+## Usage telemetry
+
+**This release enables skill-usage telemetry with transmission on by default.**
+The bundled `/power-apps-mobile-extension:telemetry on|off|status` control manages
+the per-user transmission preference. Node.js 20+ is needed for that control;
+no PAC or sign-in is required.
+
+`telemetry off` stops transmission, **not local diagnostic logging**, which can
+include organization, tenant and Entra user object IDs from existing PAC sign-in.
+The implementation is limited to ROW/EU and honors saved and environment opt-outs.
+See [telemetry details, validation status and controls](shared/telemetry.md).
 
 ---
 
@@ -33,7 +45,7 @@ claude --plugin-dir /path/to/power-platform-skills/plugins/power-apps-mobile-ext
 
 ### Option B — marketplace (no clone needed)
 
-Inside a Claude Code or GitHub Copilot CLI session, add the marketplace once and install the
+Inside a GitHub Copilot CLI or Claude Code session, add the marketplace once and install the
 plugin:
 
 ```text
@@ -107,6 +119,9 @@ with `/generate-ppmplugin`.
 `/generate-ppmplugin-manifest`, `/build-android-binary`, `/build-ios-binary`,
 `/assemble-ppmplugin`, and `/audit-ppmplugin` for you. Invoke a stage directly only when you need to
 rerun or debug that stage.
+
+**Support:** `/power-apps-mobile-extension:telemetry on|off|status` manages the
+per-user transmission preference. It is not counted as a workflow invocation.
 
 ## Integrate the control into an existing Canvas app
 

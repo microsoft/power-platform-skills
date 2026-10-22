@@ -66,6 +66,22 @@ test('vendored bundle exports createMakerSdk', () => {
   assert.strictEqual(typeof mod.createMakerSdk, 'function');
 });
 
+// The SDK's genPage compiler takes TypeScript from its host, and its `loadNodeTypeScript` helper loads
+// it with a dynamic import that esbuild would otherwise follow: the compiler then made up 3.5 MB of a
+// 4.4 MB bundle. The plugin passes its own compiler (lib/maker-sdk.js), so `_vendor-build/build.js` marks
+// `typescript` external. A rebuild that drops that flag inlines it again, and this fails on the size of the text.
+test('the vendored bundle does not carry the TypeScript compiler, and loading one fails closed', async () => {
+  const text = fs.readFileSync(BUNDLE, 'utf8');
+  assert.ok(text.length < 2 * 1024 * 1024, `bundle is ${Math.round(text.length / 1024)} KB — was the TypeScript compiler inlined?`);
+  const mod = require(BUNDLE);
+  assert.strictEqual(typeof mod.loadNodeTypeScript, 'function', 'the SDK still offers the loader');
+  // Only while `typescript` cannot be resolved from the bundle's folder: then the loader must reject
+  // with the resolution error, never resolve to something the bundle carried itself.
+  let resolvable = true;
+  try { require.resolve('typescript', { paths: [path.dirname(BUNDLE)] }); } catch { resolvable = false; }
+  if (!resolvable) await assert.rejects(mod.loadNodeTypeScript(), /Cannot find module 'typescript'/);
+});
+
 test('createArtifact serializes every artifact type headlessly (no browser)', async () => {
   const sdk = await freshSdk();
   for (const [type, def] of [
@@ -529,7 +545,8 @@ test('CONTRACT: queryRecords({ paginate:true }) THROWS on a malformed page inste
   // A well-formed OData collection page always carries `value` as an array (empty only on the last page).
   // A missing/null/non-array `value` — or a bare-string `value` that `for..of` would iterate char-by-char
   // — must fail LOUD (returning partial results silently under-counts, which is dangerous for the
-  // cross-app page scan and cascade-delete enumeration). The single-page (non-paginate) path stays lenient.
+  // cross-app page scan and cascade-delete enumeration). Since the SDK's defect pass the single-page (non-paginate) path is
+  // just as strict: an absent collection is not an empty one, so a 2xx answer without `value` is a ConnectionError there too.
   const meta = (url) => { const ln = (url.match(/LogicalName='([^']+)'/) || [])[1] || 'x'; return { status: 200, headers: {}, body: { MetadataId: '33333333-3333-3333-3333-333333333333', EntitySetName: `${ln}s`, LogicalName: ln } }; };
 
   // (a) malformed MID-pagination: page 1 is a valid page + nextLink, page 2 has value:null → THROW (not page-1-only).
@@ -550,13 +567,15 @@ test('CONTRACT: queryRecords({ paginate:true }) THROWS on a malformed page inste
   };
   await assert.rejects(async () => (await sdkWith(strClient)).queryRecords('appmodule', { paginate: true }), /malformed page|value/i, 'a bare-string value throws (no char-row fabrication)');
 
-  // (c) the single-page (non-paginate) path is UNCHANGED — a missing value is leniently treated as empty.
-  const lenientClient = {
-    get: async (url) => { if (/EntityDefinitions\(LogicalName=/i.test(url)) return meta(url); return { status: 200, headers: {}, body: {} }; },
+  // (c) the single-page (non-paginate) path refuses a missing `value` too — never an empty result. It used to read it as empty.
+  const bodyOf = (body) => ({
+    get: async (url) => { if (/EntityDefinitions\(LogicalName=/i.test(url)) return meta(url); return { status: 200, headers: {}, body }; },
     post: async () => ({ status: 204, headers: {}, body: {} }), patch: async () => ({ status: 204, headers: {}, body: {} }), delete: async () => ({ status: 204, headers: {}, body: {} }), put: async () => ({ status: 204, headers: {}, body: {} }),
-  };
-  const rows = await (await sdkWith(lenientClient)).queryRecords('appmodule', {});
-  assert.deepStrictEqual(rows, [], 'the non-paginate single-page path stays lenient (missing value → empty)');
+  });
+  await assert.rejects(async () => (await sdkWith(bodyOf({}))).queryRecords('appmodule', {}), (e) => e && e.code === 'CONNECTION_ERROR' && /malformed page/.test(e.message), 'a missing value is a ConnectionError, not an empty result');
+  await assert.rejects(async () => (await sdkWith(bodyOf({ value: 'abc' }))).queryRecords('appmodule', {}), (e) => e && e.code === 'CONNECTION_ERROR' && /malformed page/.test(e.message), 'and so is a value that is not an array');
+  // A well-formed EMPTY page is an empty result: the only absence there is.
+  assert.deepStrictEqual(await (await sdkWith(bodyOf({ value: [] }))).queryRecords('appmodule', {}), [], 'a well-formed empty page is still an empty result');
 });
 
 test('CONTRACT: createGlobalOptionSet is idempotent by Name — reuses an existing set (no duplicate POST), fixing rebuild id-loss', async () => {
@@ -595,7 +614,7 @@ test('CONTRACT: createGlobalOptionSet is idempotent by Name — reuses an existi
   assert.ok(/GlobalOptionSetDefinitions/i.test(created[0].url), 'the create POSTs to GlobalOptionSetDefinitions');
 });
 
-// --- Security authoring surface (Group N P1) -----------------------------------------------
+// --- Security authoring surface -----------------------------------------------
 
 test('CONTRACT: the vendored facade exposes the security-authoring methods the engine calls', async () => {
   const sdk = await freshSdk();

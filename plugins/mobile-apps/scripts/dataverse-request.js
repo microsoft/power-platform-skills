@@ -185,6 +185,19 @@ async function doRequest(envUrl, method, apiPath, body, token, includeHeaders, s
       : READ_REQUEST_TIMEOUT_MS,
   });
 
+  if (
+    res.statusCode >= 200 &&
+    res.statusCode < 300 &&
+    /^WhoAmI(?:\(\))?(?:\?|$)/i.test(apiPath)
+  ) {
+    try {
+      const whoAmI = JSON.parse(res.body);
+      require('./emit-telemetry-checkpoint')
+        .captureSuccessfulDataverseRequest(envUrl, token, whoAmI);
+    } catch {
+      // Telemetry enrichment cannot change a successful Dataverse response.
+    }
+  }
   return res;
 }
 

@@ -154,7 +154,10 @@ test('CLI: writes package.json and genpage.d.ts to working dir', () => {
 test('CLI: idempotent — does NOT overwrite without --force', () => {
   const dir = mkdirTemp();
   try {
-    fs.writeFileSync(path.join(dir, 'package.json'), '{"name":"already-here"}');
+    fs.writeFileSync(
+      path.join(dir, 'package.json'),
+      JSON.stringify(buildPackageJson('already-here', []), null, 2) + '\n'
+    );
     const r = runScript([dir, 'my-page']);
     assert.equal(r.code, 0);
     const pkg = JSON.parse(fs.readFileSync(path.join(dir, 'package.json'), 'utf8'));
@@ -186,6 +189,119 @@ test('CLI: --features charts includes d3 in written package.json', () => {
     const pkg = JSON.parse(fs.readFileSync(path.join(dir, 'package.json'), 'utf8'));
     assert.ok(pkg.dependencies['d3'], 'd3 in dependencies');
     assert.ok(pkg.devDependencies['@types/d3'], '@types/d3 in devDeps');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('CLI: rerunning with a new feature refuses a stale package.json instead of reporting success', () => {
+  const dir = mkdirTemp();
+  try {
+    const first = runScript([dir, 'chart-page']);
+    assert.equal(first.code, 0);
+
+    const second = runScript([dir, 'chart-page', '--features', 'charts']);
+    assert.equal(second.code, 2);
+    assert.match(second.stderr, /package\.json/);
+    assert.match(second.stderr, /d3/);
+    assert.match(second.stderr, /--force/);
+
+    const pkg = JSON.parse(fs.readFileSync(path.join(dir, 'package.json'), 'utf8'));
+    assert.equal(pkg.dependencies.d3, undefined, 'existing package.json must not be silently overwritten');
+    assert.equal(pkg.devDependencies['@types/d3'], undefined, 'existing package.json must not be silently overwritten');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// Windows PowerShell's `Set-Content -Encoding UTF8` writes a byte-order mark, which npm reads fine and JSON.parse
+// refuses — so a valid package.json halted every rerun. It is read without the mark, and left as it is.
+test('CLI: an existing package.json saved with a UTF-8 byte-order mark is read, and left as it is', () => {
+  const dir = mkdirTemp();
+  try {
+    assert.equal(runScript([dir, 'bom-page']).code, 0);
+    const file = path.join(dir, 'package.json');
+    const withBom = `\uFEFF${fs.readFileSync(file, 'utf8')}`;
+    fs.writeFileSync(file, withBom, 'utf8');
+    const again = runScript([dir, 'bom-page']);
+    assert.equal(again.code, 0, again.stderr);
+    assert.equal(fs.readFileSync(file, 'utf8'), withBom, 'the file is not rewritten');
+    // CONTROL: a manifest broken past the mark is still refused.
+    fs.writeFileSync(file, '\uFEFF{ not json', 'utf8');
+    const broken = runScript([dir, 'bom-page']);
+    assert.equal(broken.code, 2);
+    assert.match(broken.stderr, /could not be parsed/);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// A package.json whose dependencies cannot be checked is not proof the page's dependencies are there.
+test('CLI: an existing package.json that cannot be verified is refused, not skipped as fine', () => {
+  const dir = mkdirTemp();
+  try {
+    // Unparseable: nothing proves it has the dependencies, but --force can regenerate a regular file.
+    fs.writeFileSync(path.join(dir, 'package.json'), '{ "name": "half-written",');
+    const broken = runScript([dir, 'broken-page']);
+    assert.equal(broken.code, 2);
+    assert.match(broken.stderr, /could not be parsed[\s\S]*--force/);
+    assert.equal(fs.readFileSync(path.join(dir, 'package.json'), 'utf8'), '{ "name": "half-written",', 'left as it was');
+    // Not a regular file: never read or written through, and --force is not offered as a way out.
+    fs.rmSync(path.join(dir, 'package.json'));
+    fs.mkdirSync(path.join(dir, 'package.json'));
+    const odd = runScript([dir, 'odd-page']);
+    assert.equal(odd.code, 2);
+    assert.match(odd.stderr, /is a directory[\s\S]*replace it with a regular file/);
+    assert.doesNotMatch(odd.stderr, /--force/);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// A dependency whose value npm cannot use — null, an object, an empty string — installs nothing, so it is
+// missing, not drifted: the stale-manifest gate refuses it instead of reporting success over it. A usable
+// entry for the same package in the other section still counts.
+test('CLI: a dependency with no usable version counts as missing', () => {
+  for (const bad of [null, {}, '', '   ']) {
+    const dir = mkdirTemp();
+    try {
+      const pkg = buildPackageJson('odd-deps', []);
+      const [name] = Object.keys(pkg.dependencies);
+      pkg.dependencies[name] = bad;
+      fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify(pkg, null, 2) + '\n');
+      const r = runScript([dir, 'odd-deps']);
+      assert.equal(r.code, 2, `${JSON.stringify(bad)}: ${r.stdout}`);
+      assert.match(r.stderr, new RegExp(`missing requested generated-page dependencies: dependencies\\.${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}=`), JSON.stringify(bad));
+      // CONTROL: the same package, usable in the other section, satisfies it.
+      pkg.devDependencies[name] = buildPackageJson('x', []).dependencies[name];
+      fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify(pkg, null, 2) + '\n');
+      assert.equal(runScript([dir, 'odd-deps']).code, 0, `${JSON.stringify(bad)} beside a usable entry`);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  }
+});
+
+// A version the user pinned or bumped is their edit, not staleness: failing on it would make every
+// rerun fail unless --force threw the edit away. It is kept, and reported, so an old pin is visible.
+test('CLI: a package present at a different version is kept and reported, not refused', () => {
+  const dir = mkdirTemp();
+  try {
+    const pkg = buildPackageJson('pinned-page', []);
+    const [name] = Object.keys(pkg.dependencies);
+    pkg.dependencies[name] = '0.0.1-user-pin';
+    // A package the user moved to the other section still installs, so it still counts as present.
+    const [devName] = Object.keys(pkg.devDependencies);
+    pkg.dependencies[devName] = pkg.devDependencies[devName];
+    delete pkg.devDependencies[devName];
+    const body = JSON.stringify(pkg, null, 2) + '\n';
+    fs.writeFileSync(path.join(dir, 'package.json'), body);
+    const r = runScript([dir, 'pinned-page']);
+    assert.equal(r.code, 0, r.stderr);
+    assert.equal(fs.readFileSync(path.join(dir, 'package.json'), 'utf8'), body, 'the user\'s edits are untouched');
+    const out = JSON.parse(r.stdout);
+    assert.equal(out.files['package.json'].wrote, false);
+    assert.deepEqual(out.files['package.json'].versionDrift, [`${name} 0.0.1-user-pin (generated pages expect ${buildPackageJson('x', []).dependencies[name]})`]);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
@@ -525,12 +641,12 @@ test('without --force a hard-linked existing file is skipped, and the run still 
   const work = fs.mkdtempSync(path.join(os.tmpdir(), 'gpm-hlskip-'));
   try {
     const victim = path.join(outside, 'precious.json');
-    fs.writeFileSync(victim, '{"keep":true}');
+    fs.writeFileSync(victim, JSON.stringify(buildPackageJson('already-here', []), null, 2) + '\n');
     try { fs.linkSync(victim, path.join(work, 'package.json')); }
     catch { return t.skip('cannot create a hard link on this filesystem'); }
     const r = runScript([work, 'probe-page']);
     assert.strictEqual(r.code, 0, `a run without --force must not fail on an existing file; stderr: ${r.stderr}`);
-    assert.strictEqual(fs.readFileSync(victim, 'utf8'), '{"keep":true}', 'the linked file is untouched');
+    assert.strictEqual(JSON.parse(fs.readFileSync(victim, 'utf8')).name, 'already-here', 'the linked file is untouched');
     assert.ok(fs.existsSync(path.join(work, 'genpage.d.ts')), 'and the other output is still written');
     return undefined;
   } finally {

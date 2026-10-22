@@ -87,7 +87,9 @@ function indexArtifacts(spec, created, opts = {}) {
   }
   for (const ch of Array.isArray(s.charts) ? s.charts : []) {
     if (!ch || typeof ch !== 'object') continue;
-    const id = c.charts && c.charts[ch.name];
+    // `created.charts` is keyed `entity|name` — the same identity as `identityOf.chart` — because two
+    // tables may each own a chart with the same name.
+    const id = c.charts && c.charts[identityOf.chart(ch)];
     if (id) out.charts[identityOf.chart(ch)] = { id };
   }
   for (const cm of Array.isArray(s.commands) ? s.commands : []) {

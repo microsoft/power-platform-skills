@@ -2,9 +2,9 @@
 'use strict';
 
 // Layer 1 eval runner — grades workflow artifacts (workflow-log.md,
-// genpage-plan.md, entity-creation-log.md) against the common_workflow_assertions
-// and per-eval Phase/Edit-Phase expectations defined in evals.json. Pure file
-// I/O + regex; no Anthropic API, no Dataverse.
+// genpage-plan.md, genpage-entity-creation-log.md or its legacy alias) against the common_workflow_assertions
+// and per-eval Phase/Edit-Phase expectations defined in evals.json. Offline file
+// I/O, associated result evidence and pure contract helpers; no agent or Dataverse calls.
 //
 // Usage:
 //   node run-layer-1.js [--fixtures <dir>] [--eval <id>] [--tier <tier>]
@@ -53,9 +53,10 @@ Fixtures directory layout:
       dashboard.tsx                  (consumed by Layer 2)
       workflow-log.md                (consumed by Layer 1)
       genpage-plan.md                (consumed by Layer 1)
-      [entity-creation-log.md]       (consumed by Layer 1 when entities created)
+      [genpage-entity-creation-log.md] (consumed by Layer 1 when entities created)
 
-Layer 1 reads workflow-log.md / genpage-plan.md / entity-creation-log.md and
+Layer 1 reads workflow-log.md / genpage-plan.md / genpage-entity-creation-log.md
+(or the legacy entity-creation-log.md alias) and
 greps them for evidence of the assertions in evals.json. Workflow assertions
 that need AST analysis or schema cross-check are marked SKIP rather than
 guessed.
@@ -69,6 +70,34 @@ function loadEvals() {
 
 function isPhaseExpectation(text) {
   return /^Phase\s|^Edit Phase\s/.test(text);
+}
+
+function getExpectationCheck(text) {
+  return isPhaseExpectation(text) ? PHASE_EXPECTATIONS.get(text) : undefined;
+}
+
+// Grades one fixture: the common workflow assertions, then its eval's per-eval Phase/Edit Phase
+// expectations, in report order. `kind` says which list a result came from. main() reports exactly
+// these results, and evals/model-apps/tests/eval-coverage-contract.test.js reads the same ones, so
+// the contract can never grade something the runner does not.
+function gradeFixture(fix, ev, evalsData) {
+  if (!ev) {
+    return [{ kind: 'gate', text: `fixture references eval id ${fix.id}`, result: { status: 'fail', reason: `no eval with id ${fix.id} in evals.json` } }];
+  }
+  const results = [];
+  for (const text of evalsData.common_workflow_assertions) {
+    const check = WORKFLOW_ASSERTIONS.get(text);
+    results.push({ kind: 'common', text, result: check
+      ? check({ fixture: fix, eval: ev })
+      : { status: 'skip', reason: 'no check registered for this assertion text' } });
+  }
+  for (const text of ev.expectations.filter(isPhaseExpectation)) {
+    const check = getExpectationCheck(text);
+    results.push({ kind: 'expectation', text, result: check
+      ? check({ fixture: fix, eval: ev })
+      : { status: 'skip', reason: 'no check registered for this expectation' } });
+  }
+  return results;
 }
 
 function main() {
@@ -113,35 +142,9 @@ function main() {
 
   for (const fix of selected) {
     reporter.startFixture(fix.dirName);
-    const ev = evalById.get(fix.id);
-    if (!ev) {
-      reporter.assertion(
-        `fixture references eval id ${fix.id}`,
-        { status: 'fail', reason: `no eval with id ${fix.id} in evals.json` }
-      );
-      reporter.endFixture();
-      continue;
+    for (const { text, result } of gradeFixture(fix, evalById.get(fix.id), evalsData)) {
+      reporter.assertion(text, result);
     }
-
-    // common workflow assertions
-    for (const assertionText of evalsData.common_workflow_assertions) {
-      const check = WORKFLOW_ASSERTIONS.get(assertionText);
-      const result = check
-        ? check({ fixture: fix, eval: ev })
-        : { status: 'skip', reason: 'no check registered for this assertion text' };
-      reporter.assertion(assertionText, result);
-    }
-
-    // per-eval Phase/Edit Phase expectations
-    const phaseExp = ev.expectations.filter(isPhaseExpectation);
-    for (const expectationText of phaseExp) {
-      const check = PHASE_EXPECTATIONS.get(expectationText);
-      const result = check
-        ? check({ fixture: fix, eval: ev })
-        : { status: 'skip', reason: 'no check registered for this expectation' };
-      reporter.assertion(expectationText, result);
-    }
-
     reporter.endFixture();
   }
 
@@ -151,4 +154,4 @@ function main() {
 
 if (require.main === module) main();
 
-module.exports = { main, parseArgs };
+module.exports = { main, parseArgs, isPhaseExpectation, getExpectationCheck, gradeFixture };

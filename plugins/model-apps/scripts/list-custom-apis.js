@@ -31,6 +31,8 @@ const {
   emitResult,
 } = require('./lib/dataverse-auth');
 const { exitIfCustomApiDisabled } = require('./lib/feature-flags');
+const { odataLit } = require('./lib/odata');
+const { makeWritesBlocking } = require('./lib/output-redaction.js');
 
 // customapi.bindingtype is a Dataverse option set. Only the value→meaning mapping matters here;
 // a page invokes a record-bound API via boundTo, so we surface Entity as bound and Global as unbound.
@@ -68,11 +70,6 @@ function mapParameterKind(typeValue) {
   return PARAMETER_KIND_BY_TYPE[typeValue];
 }
 
-function escapeODataString(value) {
-  // OData string literals escape a single quote by doubling it, e.g. O'Brien -> 'O''Brien'.
-  return String(value).replace(/'/g, "''");
-}
-
 // Builds the $filter for the customapi query: every Global API (bindingtype 0), plus the entity-bound
 // APIs for the page's tables when `entities` is non-empty. When NO tables are supplied, return ONLY
 // Global APIs — returning every entity-bound API in the environment can explode the result set (and
@@ -86,7 +83,7 @@ function buildCustomApiFilter(entities) {
     return 'bindingtype eq 0';
   }
   const bound = list
-    .map((e) => `boundentitylogicalname eq '${escapeODataString(e)}'`)
+    .map((e) => `boundentitylogicalname eq '${odataLit(e)}'`)
     .join(' or ');
   return `bindingtype eq 0 or (${bound})`;
 }
@@ -133,6 +130,7 @@ async function main() {
   const USAGE = 'Usage: node list-custom-apis.js <envUrl> [--entities <logicalName1,logicalName2>]';
   const flagError = validateFlags(argv, { known: ['entities'], needValue: ['entities'] });
   if (flagError) {
+    makeWritesBlocking(process.stdout, process.stderr);
     process.stderr.write(`✗ ${flagError}\n${USAGE}\n`);
     process.exit(1);
   }
@@ -193,5 +191,4 @@ module.exports = {
   buildCustomApiFilter,
   parameterKindsFromRows,
   toCustomApiEntry,
-  escapeODataString,
 };

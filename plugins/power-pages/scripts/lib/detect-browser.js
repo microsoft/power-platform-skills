@@ -1,8 +1,9 @@
 #!/usr/bin/env node
 
 // Detects the best available Chromium-based browser on the system.
-// Returns a Playwright channel name ('msedge', 'chrome', 'chromium').
-// Used by the Playwright MCP launcher and the axe-core audit script.
+// Returns either the legacy Playwright channel name or launch options. Linux
+// distro Chromium needs its executable path; channel "chromium" would instead
+// select Playwright's separately downloaded browser.
 
 const { execFileSync } = require('child_process');
 const fs = require('fs');
@@ -21,6 +22,17 @@ function whichExists(cmd) {
     return true;
   } catch {
     return false;
+  }
+}
+
+function whichPath(cmd, executeFile = execFileSync) {
+  try {
+    return executeFile('which', [cmd], {
+      encoding: 'utf8',
+      shell: false,
+    }).trim() || null;
+  } catch {
+    return null;
   }
 }
 
@@ -69,4 +81,29 @@ function detectBrowser() {
   return 'chromium';
 }
 
-module.exports = { detectBrowser };
+function detectBrowserLaunchOptions(options = {}) {
+  const platform = options.platform || os.platform();
+  const commandExists = options.whichExists || whichExists;
+  const commandPath = options.whichPath || whichPath;
+  if (platform === 'linux') {
+    for (const command of ['google-chrome', 'google-chrome-stable']) {
+      if (commandExists(command)) return { channel: 'chrome' };
+    }
+    for (const command of ['microsoft-edge', 'microsoft-edge-stable']) {
+      if (commandExists(command)) return { channel: 'msedge' };
+    }
+    for (const command of ['chromium-browser', 'chromium']) {
+      const executablePath = commandPath(command);
+      if (executablePath) return { executablePath };
+    }
+    return {};
+  }
+  const channel = detectBrowser();
+  return channel === 'chromium' ? {} : { channel };
+}
+
+module.exports = {
+  detectBrowser,
+  detectBrowserLaunchOptions,
+  whichPath,
+};

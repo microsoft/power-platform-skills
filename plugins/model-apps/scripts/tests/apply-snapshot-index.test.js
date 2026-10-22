@@ -28,7 +28,7 @@ function created() {
     entities: { new_x: 'ent-1' },
     views: { 'new_x|Active X': 'view-1' },
     forms: { new_x: 'form-1' }, // Main only, keyed by entity logical
-    charts: { 'By Status': 'chart-1' },
+    charts: { 'new_x|By Status': 'chart-1' },
     commands: { new_x: 'cmd-1' },
     dashboards: { Ops: 'dash-1' },
     webResources: { wr_a: 'wr-1' },

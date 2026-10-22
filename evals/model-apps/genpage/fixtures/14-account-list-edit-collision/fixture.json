@@ -1,0 +1,40 @@
+{
+  "contractVersion": 2,
+  "provenance": "synthetic",
+  "description": "Constructed attended two-page trace, not an agent capture. The first approved plan gives both pages the file name account.tsx; the Phase 5a page-file gate (check-page-files.js) refuses it with a collision before any builder is stamped or dispatched; the orchestrator re-plans through genpage-planner, the renamed files (account-list.tsx, account-edit.tsx) are re-approved, the earlier plan is quarantined and the rewritten genpage-plan.md is provenance-verified; then two page builders run in parallel, both pages deploy, and Phase 6.5 resolves their mutual navigation. before/ holds each page as authored and first uploaded; the top-level pages are the Phase 6.5 resolved files. .genpage-provenance/ holds the quarantined colliding plan.",
+  "contracts": [
+    "plugins/model-apps/skills/genpage/SKILL.md Phase 5a: Validate the plan before dispatch",
+    "plugins/model-apps/scripts/check-page-files.js collision refusal",
+    "plugins/model-apps/skills/genpage/SKILL.md Phase 1: Plan, Steps 5-7 (re-presentation, approval writeback, plan provenance)",
+    "plugins/model-apps/skills/genpage/SKILL.md Phase 5c: Multi-page: invoke page-builders in parallel",
+    "plugins/model-apps/skills/genpage/SKILL.md Phase 6: Deploy",
+    "plugins/model-apps/skills/genpage/SKILL.md Phase 6.5: Navigation Fix-Up",
+    "plugins/model-apps/references/plan-schema.md ## Pages file name rules",
+    "plugins/model-apps/references/rules.md Generative Page Navigation"
+  ],
+  "expectedOutcome": "deployed",
+  "toolResults": "tool-results.json",
+  "artifacts": [
+    ".genpage-provenance/genpage-plan.stale-e0fbb49f3c98.md",
+    ".approved-genpage-plan.md",
+    "before/account-list.tsx",
+    "before/account-edit.tsx",
+    "prompt.txt",
+    "agent-message.txt",
+    "fixup-prompt.txt",
+    "fixup-message.txt",
+    "names/account-list.txt",
+    "names/account-edit.txt"
+  ],
+  "navigation": {
+    "pageMap": {
+      "account-list": "14141414-1414-4414-8414-141414141401",
+      "account-edit": "14141414-1414-4414-8414-141414141402"
+    },
+    "sources": [
+      { "key": "account-list", "file": "account-list.tsx", "before": "before/account-list.tsx" },
+      { "key": "account-edit", "file": "account-edit.tsx", "before": "before/account-edit.tsx" }
+    ],
+    "expectedTargets": { "account-list": ["account-edit"], "account-edit": ["account-list"] }
+  }
+}

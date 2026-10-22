@@ -1,6 +1,6 @@
 'use strict';
 
-const { execFileSync } = require('child_process');
+const { AzureCliLaunchError, runAzureCli } = require('./azure-cli');
 const fs = require('fs');
 const https = require('https');
 const path = require('path');
@@ -90,6 +90,15 @@ function readCachedResolution(target, projectRoot) {
   return null;
 }
 
+function readProjectEnvironment(projectRoot) {
+  const powerConfig = readJsonFile(path.join(projectRoot, 'power.config.json'));
+  const configuredEnvironmentId = powerConfig && powerConfig.environmentId;
+  if (configuredEnvironmentId && !GUID_RE.test(configuredEnvironmentId)) return null;
+  const cached = readCachedResolution(configuredEnvironmentId || null, projectRoot);
+  if (!cached || !GUID_RE.test(cached.environmentId || '')) return null;
+  return toEnvironmentResult(cached, 'cache');
+}
+
 function hasCachedEnvironmentDetails(value) {
   return Boolean(value && value.environmentUrl && value.tenantId);
 }
@@ -136,12 +145,13 @@ function writeCacheIfProject(result, projectRoot, options = {}) {
 
 function getAzTenantId() {
   try {
-    return execFileSync('az', ['account', 'show', '--query', 'tenantId', '-o', 'tsv'], {
+    return runAzureCli(['account', 'show', '--query', 'tenantId', '-o', 'tsv'], {
       encoding: 'utf8',
       timeout: 10000,
       stdio: ['ignore', 'pipe', 'ignore'],
     }).trim() || null;
-  } catch {
+  } catch (error) {
+    if (!Number.isInteger(error.status) || error.status <= 0) throw error;
     return null;
   }
 }
@@ -151,12 +161,13 @@ function getAzToken(resource, tenantId = null) {
   if (tenantId) args.push('--tenant', tenantId);
   args.push('--resource', resource, '--query', 'accessToken', '-o', 'tsv');
   try {
-    return execFileSync('az', args, {
+    return runAzureCli(args, {
       encoding: 'utf8',
       timeout: 20000,
       stdio: ['ignore', 'pipe', 'ignore'],
     }).trim() || null;
-  } catch {
+  } catch (error) {
+    if (!Number.isInteger(error.status) || error.status <= 0) throw error;
     return null;
   }
 }
@@ -305,7 +316,6 @@ async function resolveEnvironment(target, projectRoot = process.cwd(), allowLega
     return result;
   }
 
-  const loginTenantId = getAzTenantId();
   let resolved;
   if (isUrl(target)) {
     const normalizedUrl = normalizeUrl(target);
@@ -320,9 +330,12 @@ async function resolveEnvironment(target, projectRoot = process.cwd(), allowLega
     };
   } else if (GUID_RE.test(target)) {
     try {
-      resolved = await resolveEnvironmentId(target, loginTenantId);
+      resolved = await resolveEnvironmentId(target, getAzTenantId());
     } catch (error) {
       if (cached && cached.environmentUrl) {
+        if (error instanceof AzureCliLaunchError) {
+          process.stderr.write(`${error.message} Using matching cached environment details.\n`);
+        }
         resolved = {
           environmentUrl: cached.environmentUrl,
           environmentId: cached.environmentId || target,
@@ -361,6 +374,7 @@ module.exports = {
   describeResponseShape,
   formatRequestFailure,
   redactDiagnostic,
+  readProjectEnvironment,
   resolveEnvironment,
   shouldWriteCache,
   writeCacheIfProject,

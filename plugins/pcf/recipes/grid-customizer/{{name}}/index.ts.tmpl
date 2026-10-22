@@ -1,0 +1,37 @@
+import * as React from "react";
+import { cellEditorOverrides } from "./customizers/CellEditorOverrides";
+import { cellRendererOverrides } from "./customizers/CellRendererOverrides";
+import { fireGridCustomizerEvent } from "./customizerBridge";
+import { IInputs, IOutputs } from "./generated/ManifestTypes";
+import { PAOneGridCustomizer } from "./types";
+import "./css/{{name}}.css";
+
+const EMPTY_VIEW = React.createElement(React.Fragment);
+
+export class {{name}} implements ComponentFramework.ReactControl<IInputs, IOutputs> {
+    public init(
+        context: ComponentFramework.Context<IInputs>,
+        _notifyOutputChanged: () => void,
+        _state: ComponentFramework.Dictionary,
+    ): void {
+        const eventNameParameter = context.parameters.EventName;
+        const eventName = eventNameParameter?.security?.readable === false ? null : eventNameParameter?.raw;
+        if (!eventName) return;
+
+        const customizer: PAOneGridCustomizer = { cellRendererOverrides, cellEditorOverrides };
+        fireGridCustomizerEvent(context, eventName, customizer);
+    }
+
+    public updateView(_context: ComponentFramework.Context<IInputs>): React.ReactElement {
+        return EMPTY_VIEW;
+    }
+
+    public getOutputs(): IOutputs {
+        return {};
+    }
+
+    public destroy(): void {
+        // This control only registers pure renderer/editor functions with the grid during init. The
+        // grid owns those React element lifecycles, so there are no DOM listeners or async work to undo.
+    }
+}

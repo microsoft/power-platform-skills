@@ -189,7 +189,7 @@ const GeneratedComponent = (props: GeneratedComponentProps) => {
         // for OOB record context and may not arrive reliably.
         xrm?.Navigation?.navigateTo({
             pageType: 'generative',
-            pageId: 'PAGEREF_10-detail-with-pageinput',
+            pageId: "PAGEREF_10-detail-with-pageinput",
             entityName: 'contact',
             recordId: contactId,
         });

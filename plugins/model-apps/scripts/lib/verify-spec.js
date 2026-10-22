@@ -2,20 +2,147 @@
 // Reconcile an App Spec against a DEPLOYED app: for every declared entity/column/view/chart/form and
 // every sitemap subarea (+ icon), check whether it actually exists server-side. Catches silent
 // partial builds. Pure/testable: `read` provides the server lookups; `verifySpec` returns
-// { ok, checks:[{kind,name,present,detail}], missing:[…] }.
+// { ok, checks:[{kind,name,present,detail}], missing:[…] } and, only when a check could not be decided
+// (neither a pass nor a failure), `unverified: ["<kind>:<name> (<reason>)"]`.
 
 const { odataLit } = require('./odata.js');
-const { matchContainer, isEngineOwnedSection } = require('./form-container-match.js');
-const { decodeXmlEntities } = require('./sitemap-pages.js');
-const { normalizePageSource, relationshipSchemaName, manyToManySchemaName, SDK_ROLE_MARKER, canonicalPersonaName, bpfUniqueName, BPF_ROLE_ACCESS, generatedTabName, generatedSectionName, formColumnsOf } = require('./app-spec.js');
-const { resolveExistingFormId, resolveRoleBusinessUnit, roleBuClause, appUniqueName, businessRuleFilter, bpfFilter, viewDef } = require('./sdk-build.js');
-const { extractNavTargets } = require('./pageref-resolver.js');
-const { AI_APP_SETTING, resolveAiFlags, specOptsIntoAi, featureWantValue, sameSettingValue, resolveAppModuleId, proveAppOverride } = require('./ai-app-settings.js');
+const { matchContainer, isEngineOwnedSection, isEngineHostSection, claimedByAuthoredName } = require('./form-container-match.js');
+const { authoredSectionNames, authoredTabNames } = require('./app-spec.js');
+const { sitemapEntityTables } = require('./app-spec.js');
+// XML_TAG / XML_ATTR are the one tag and attribute grammar for FormXML and SiteMap XML; they live with
+// liveNavEntries in sitemap-pages.js so the form-identity scan and the navigation reader cannot drift.
+const { decodeXmlEntities, liveNavEntries, XML_TAG, XML_ATTR } = require('./sitemap-pages.js');
+const { normalizePageSource, relationshipSchemaName, manyToManySchemaName, SDK_ROLE_MARKER, canonicalPersonaName, bpfUniqueName, BPF_ROLE_ACCESS, generatedTabName, generatedSectionName, formColumnsOf, formLayoutNames, subgridRelationshipName, normalizeLanguageCode, isLocalizedLabelMap } = require('./app-spec.js');
+const { sameRelationship, compareRelationship, describeRelationship, describeIncomplete } = require('./relationship-metadata.js');
+const { resolveExistingFormId, resolveRoleBusinessUnit, roleBuClause, appUniqueName, businessRuleFilter, bpfFilter, viewDef, dashboardsInSolution, findDashboardsByName, findPinnedDashboard } = require('./sdk-build.js');
+const { DASHBOARD_LAUNCHER_URL, isDashboardLauncherUrl, subAreaTargetKey, specSubAreaTargetKey, specSubAreas, chromeByTargetKey, keepsLiveValue } = require('./sitemap-merge.js');
+// Recorded on an icon check the build's keep rule satisfies (keepsLiveValue, sitemap-merge.js).
+const KEPT_BY_DESIGNER = 'kept as the environment has it: changed in the designer since the spec\u2019s baseline, which the spec still matches';
+const { extractNavTargets, strayPageRefs, describePageRefLocations } = require('./pageref-resolver.js');
+const { AI_APP_SETTING, resolveAiFlags, specOptsIntoAi, featureWantValue, sameSettingValue, resolveAppModuleId, proveAppOverride, proofBudget } = require('./ai-app-settings.js');
 const { declaredPrivileges, compareRolePrivileges } = require('./role-privileges.js');
 const { resolveSurfaces } = require('./surface-resolver.js');
 const { selectSummaryTables } = require('./ai-candidates.js');
-const { isVisualizationUnsupported } = require('./entity-provision.js');
-const { sectionGridWidth, mergeFieldOptions, fieldOptionsMap, normalizeFieldEntry } = require('./artifact-intent.js');
+const { isVisualizationUnsupported, mapLimit, resolveLanguageCode } = require('./entity-provision.js');
+const { settleCaption } = require('./translation-labels.js');
+const { sectionGridWidth, mergeFieldOptions, fieldOptionsMap, normalizeFieldEntry, compileFormIntent, isNonFieldControl, formFieldLogicals, declaredSectionByField } = require('./artifact-intent.js');
+// The fields an explicit layout prunes, as the destructive gate and the build's prune pass both name them.
+const { formRemovals } = require('./op-diff.js');
+const { rowOccupancy } = require('./form-occupancy.js');
+const { wantsTimeline, timelineVerifyProblem, FULL_BUILD } = require('./form-timeline.js');
+const { placementOf, resolvePlacement, columnSequence, neighbourOf, tokenLabel, findGridSection, AUTO_TAB_NAME } = require('./form-subgrid-placement.js');
+const { isMainForm, selectDefaultForm, plannedMainFormSequence, displayConditionsOrder, compareServedOrder } = require('./form-order.js');
+const { hasLabelUses, resolveViewFilterLabels, memoizeChoiceReader, describeProblem } = require('./view-filter-labels.js');
+const { hostsCustomControl } = require('./dashboard-tiles.js');
+
+// How many verification reads may be in flight at once. A verify pass is nothing but reads, but each is a
+// Dataverse request that already retries on its own 429s (lib/sdk-http-client.js), so the bound is small:
+// enough to hide the per-request latency that made a pass cost the SUM of its reads, not so many that a
+// large spec turns into a burst. `opts.concurrency` overrides it; 1 runs the checks one after another, in the
+// order they are reported, which is the oracle the verify-parallel-checks tests compare the overlapped report with.
+const VERIFY_CONCURRENCY = 4;
+
+// The pass as an ordered list of tasks. Every check of a verify pass is a task that reads and then reports
+// into ITS OWN buffer; the report is the buffers joined in task order, which is the order the checks have
+// always been reported in, whatever order the reads answered in. The pool is entity-provision's mapLimit,
+// the limiter every other bounded fan-out of this plugin uses, with its `firstInOrder` rule: tasks START in
+// list order, nothing starts once one has failed, and the failure that is thrown is the one of the
+// lowest-numbered task — the error a pass that ran them one after another would have met first.
+//
+// A task may wait for an EARLIER one (a promise `section`/`each` returned). That cannot deadlock: tasks start
+// in order, so everything a task waits for has already started.
+function makeCheckPlan(concurrency) {
+  const tasks = [];
+  // A section's promise -> its task, to find where in the report the section sits (`unlessFailed`).
+  const taskOf = new Map();
+  // Marks a promise as handled: its failure is the POOL's to report (as the failed task's error); only a
+  // dependent task reads it, and one that never starts must not leave an unhandled rejection behind.
+  const handled = (promise) => { promise.catch(() => {}); return promise; };
+  // One check section: `fn` is handed the three places a check reports into. Resolves when it has run.
+  const section = (fn) => {
+    let settle;
+    const done = handled(new Promise((resolve, reject) => { settle = { resolve, reject }; }));
+    const task = async (buffers) => {
+      try {
+        await fn(buffers);
+        settle.resolve();
+      } catch (error) {
+        settle.reject(error);
+        throw error;
+      }
+    };
+    tasks.push(task);
+    taskOf.set(done, task);
+    return done;
+  };
+  // A section whose items read independently of each other: one task per item, each handed `[item]` and the
+  // item's index in the list, so the loop a section already has runs unchanged over its one item.
+  const each = (items, fn) => handled(Promise.all(Array.from(items, (item, index) => section((buffers) => fn(buffers, [item], index)))));
+  // A slow read that depends on no check's answer can be started WITH the pass instead of after the checks
+  // listed before it. It is a task of its own, listed first, that reports nothing — so the report is
+  // unchanged and it is one of the `concurrency` reads in flight like any other. `fn` must not throw: the
+  // check that consumes its answer (`consumer`, the promise its `section` returned) throws it, in that check's own
+  // place in the report. One read at a time there is nothing to overlap, so `fn` runs where its consumer first
+  // asks — the original read order.
+  //
+  // It is also a read the pass stops waiting for once a check LISTED BEFORE ITS CONSUMER has failed (`unlessFailed`).
+  // The pass throws the failure of the lowest-numbered task, so after that the consumer cannot change what is thrown
+  // whatever it reports — and the read can be slow as far as this pass is concerned (it is a run of requests to the
+  // environment, which the pass cannot cancel), so draining it would turn a failure that used to be immediate into a
+  // hang. A check listed AFTER the consumer is another matter: the consumer's own failure outranks it, and the
+  // pass must still throw that one, as it did when the checks ran one after another — so a failure there does not
+  // end the wait. A read the pass gave up on is left to finish, or hang, on its own; `abandonedReads()` says there
+  // was one, so that whoever started it can end it.
+  let lowestFailure = Infinity;
+  const watchers = new Set();
+  let gaveUp = false;
+  const abandoned = Symbol('abandoned');
+  const positionOf = (consumer) => tasks.indexOf(taskOf.get(consumer));
+  const notifyFailed = (position) => {
+    if (position >= lowestFailure) return;
+    lowestFailure = position;
+    for (const check of [...watchers]) check();
+  };
+  // Answers `read`'s answer, or `abandoned` once a task listed before `consumer` has failed. A consumer that cannot
+  // be found in the list is never given up on.
+  const unlessFailed = (read, consumer) => new Promise((resolve, reject) => {
+    const check = () => {
+      const position = positionOf(consumer);
+      if (position < 0 || lowestFailure >= position) return;
+      watchers.delete(check);
+      gaveUp = true;
+      resolve(abandoned);
+    };
+    watchers.add(check);
+    read.then((answer) => { watchers.delete(check); resolve(answer); }, (error) => { watchers.delete(check); reject(error); });
+    check();
+  });
+  const early = (fn, consumer) => { if (concurrency > 1) tasks.unshift(async () => { await unlessFailed(fn(), consumer); }); };
+  const run = async () => {
+    const buffers = await mapLimit(tasks, concurrency, async (task, position) => {
+      const b = { checks: [], environmentSkipped: [], phaseSkipped: [], unverified: [] };
+      b.add = (kind, name, present, detail) => b.checks.push({ kind, name, present: !!present, detail: detail || '' });
+      try {
+        await task(b);
+      } catch (error) {
+        notifyFailed(position);
+        throw error;
+      }
+      return b;
+    }, { firstInOrder: true });
+    return {
+      checks: buffers.flatMap((b) => b.checks),
+      environmentSkipped: buffers.flatMap((b) => b.environmentSkipped),
+      phaseSkipped: buffers.flatMap((b) => b.phaseSkipped),
+      unverified: buffers.flatMap((b) => b.unverified),
+    };
+  };
+  return { section, each, early, unlessFailed, abandoned, abandonedReads: () => gaveUp, run };
+}
+
+// Memoizes an async read for ONE pass: every consumer, however many sections ask at once, awaits the single
+// read in flight. (A Map of these is the same thing keyed.) The read starts on first use, never earlier.
+const once = (read) => { let started; return () => (started || (started = Promise.resolve().then(read))); };
 
 // The PER-APP setting each AI feature writes now lives in ./ai-app-settings.js, together with the
 // flag-resolution and override-proof helpers the BUILD uses — see that module for why one source of
@@ -23,10 +150,22 @@ const { sectionGridWidth, mergeFieldOptions, fieldOptionsMap, normalizeFieldEntr
 
 // `opts.proofAttempts` / `opts.proofDelayMs` tune the app-scope override retry (see the ai-feature
 // block below). They exist so tests can drive the absent path without paying real backoff; the
-// defaults are what the CLIs use.
+// defaults are the budget the build's own proof after a publish shares (AI_PROOF_BUDGET).
+//
+// `opts.languageCode` / `opts.preResolvedLanguageCode` are the language the BUILD wrote its labels in, as the
+// build holds it: its `--language-code` flag, and the language its SDK was made for (which is what every
+// label was written in). A form's string tab and section labels are held to it, ahead of the spec's
+// `languageCode` and the organization's base language (see `authoringLanguage`).
 async function verifySpec(spec, read, opts = {}) {
-  const checks = [];
-  const add = (kind, name, present, detail) => checks.push({ kind, name, present: !!present, detail: detail || '' });
+  if (read && typeof read.beginVerificationPass === 'function') read.beginVerificationPass();
+  // Every check below is a task of this plan and reports into its own buffers (see makeCheckPlan), which
+  // are joined at the end in the order the tasks are listed — the order the checks were always reported in.
+  // The section bodies keep the indentation they had when they ran one after another, so this reads as
+  // additions around unchanged code.
+  if (opts.concurrency !== undefined && (!Number.isInteger(opts.concurrency) || opts.concurrency < 1)) {
+    throw new Error(`verify concurrency must be a positive integer (got ${JSON.stringify(opts.concurrency)})`);
+  }
+  const plan = makeCheckPlan(opts.concurrency === undefined ? VERIFY_CONCURRENCY : opts.concurrency);
   // Artifacts the BUILD reported as impossible on this environment, keyed `entity|name`. Supplied by
   // the caller because verify is also runnable standalone, where no build result exists — in that
   // case the set is empty and every declared rule is checked, which is the right default: absent a
@@ -49,32 +188,34 @@ async function verifySpec(spec, read, opts = {}) {
   // Two DIFFERENT reasons a check was not performed, kept apart because they warrant opposite
   // messages. Reporting a phase that simply did not run as "this environment cannot host it" tells
   // an operator on a perfectly healthy environment that their environment is broken — and on the
-  // normal `--changed-only` fast-apply path that would be wrong every single time.
-  const environmentSkipped = [];
-  const phaseSkipped = [];
+  // normal `--changed-only` fast-apply path that would be wrong every single time. A THIRD thing is
+  // neither: a check verify could not decide (`unverified` — the language a form's labels were written in
+  // could not be established, or the form's read does not carry it). It is not a pass and it is not a failure, so it is listed apart and never
+  // counted in `checks` or `missing`. (Each task collects its own `environmentSkipped` / `phaseSkipped` /
+  // `unverified`; the plan joins them in report order.)
 
   const selectedDefaultForms = new Map();
+  const declaredMainFormsByEntity = new Map();
   for (const f of spec.forms || []) {
-    const formType = f.formType || 'Main';
-    if (formType !== 'Main') continue;
+    if (!isMainForm(f)) continue;
     const entity = String(f.entity || '').toLowerCase();
     if (!entity) continue;
-    // Mirror the BUILD's promotion guard exactly (sdk-build.js `isOwnCustomTable`): the build
-    // refuses to re-point the default form of a reused or stock table, because that is an
-    // environment-wide side effect on a table the spec does not own. Asserting `isdefault` for a
-    // table the build deliberately never promotes makes `--verify` permanently unsatisfiable for any
-    // spec that puts a Main form on `account`, `contact`, or an `existing: true` table.
-    const entSpec = (spec.entities || []).find((e) => e && String(e.schemaName || '').toLowerCase() === entity);
-    const prefix = spec.solution && spec.solution.publisherPrefix;
-    const isOwnCustomTable = !!(entSpec && entSpec.existing !== true && prefix &&
-      String(entSpec.schemaName).toLowerCase().startsWith(String(prefix).toLowerCase() + '_'));
-    if (!isOwnCustomTable) continue;
-    const current = selectedDefaultForms.get(entity);
-    if (!current || (f.isDefault === true && current.isDefault !== true)) selectedDefaultForms.set(entity, f);
+    if (!declaredMainFormsByEntity.has(entity)) declaredMainFormsByEntity.set(entity, []);
+    declaredMainFormsByEntity.get(entity).push(f);
+  }
+  // Mirror the BUILD's choice exactly (lib/form-order.js `selectDefaultForm`, which sdk-build.js
+  // promotes): an explicit `isDefault` or `mainFormOrder` on any table, the first-Main-form fallback
+  // only on a table the spec owns. Asserting `isdefault` for a table the build deliberately never
+  // promotes would make `--verify` permanently unsatisfiable for any spec that puts a Main form on
+  // `account`, `contact`, or an `existing: true` table without choosing its default.
+  for (const entity of declaredMainFormsByEntity.keys()) {
+    const chosen = selectDefaultForm(spec, entity);
+    if (chosen) selectedDefaultForms.set(entity, chosen.form);
   }
 
   // Entities + their declared columns.
-  for (const e of spec.entities || []) {
+  plan.each(spec.entities || [], async ({ add }, entities) => {
+  for (const e of entities) {
     const logical = e.schemaName.toLowerCase();
     const tbl = await read.findTable(logical);
     add('entity', e.schemaName, tbl);
@@ -110,14 +251,26 @@ async function verifySpec(spec, read, opts = {}) {
       }
     }
   }
+  });
 
   // Views / charts / forms — by (entity, name) identity.
-  for (const v of spec.views || []) {
+  //
+  // ADO 6691114: a filter's option LABEL is written as the value the ENVIRONMENT holds for it, so the value
+  // verify expects has to come from there too — against the spec's own 100000000+n numbering, a value the
+  // build resolved live (a global choice that already existed, a column of an existing table) would fail
+  // here although it is exactly right. Reader-gated, as the other content checks are: a reader without
+  // `choiceAttributes` keeps the spec-only expectation. One read per table for the whole pass.
+  const readChoices = typeof read.choiceAttributes === 'function'
+    ? memoizeChoiceReader((entity) => read.choiceAttributes(entity, { languageCode: spec.languageCode }))
+    : null;
+  plan.each(spec.views || [], async ({ add }, views) => {
+  for (const v of views) {
     const viewName = `${String(v.entity).toLowerCase()}.${v.name}`;
-    // Also select layoutxml so a CONTENT check can catch a view whose column set drifted from the spec
-    // (reconcileView is additive-union, so a removed/renamed spec column would otherwise silently NOT
-    // apply and still pass an existence-only verify). Best-effort: the column check only runs when the
-    // deployed row actually carries layoutxml — an existence-only reader (no layoutxml) skips it.
+    // Also select layoutxml so a CONTENT check can catch a spec column the view does not carry (an
+    // added or renamed column that never landed would otherwise pass an existence-only verify). It
+    // cannot catch a column REMOVED from the spec: reconcileView is additive-union, so the column stays
+    // deployed, and an extra deployed column is deliberately not a failure (see below). Best-effort: the
+    // column check only runs when the deployed row actually carries layoutxml.
     let rows = [];
     let readError = null;
     try {
@@ -137,21 +290,45 @@ async function verifySpec(spec, read, opts = {}) {
       add('view-columns', viewName, missingCols.length === 0, missingCols.length ? `missing column(s): ${missingCols.join(', ')}` : '');
     }
     if (row && Object.prototype.hasOwnProperty.call(row, 'fetchxml')) {
-      const expected = expectedViewFetchParts(spec, v);
+      const labels = readChoices && hasLabelUses(spec, v) ? await resolveViewFilterLabels(spec, [v], { read: readChoices }) : null;
+      // A label no option answers to cannot be proven deployed — and a deployed value equal to the label's own
+      // text is the very defect — so it is reported by name, with the labels that are valid, instead.
+      const unresolved = labels ? labels.problems : [];
+      // A label whose option metadata could not be READ is not resolved either: what the expectation below holds
+      // for it is only the build's fallback (the spec's numbering, or the label as written), which a deployed
+      // value from the environment may rightly differ from. Where a different value is deployed, that is reported
+      // as UNRESOLVED, with the reason — never as a missing filter, which would call a correct view wrong because
+      // a read failed. Where the fallback IS deployed, it was right, and it verifies; and where the view carries
+      // no condition on the attribute at all, the filter is missing, and is reported as missing.
+      // Keyed `<attribute>|<value>` — the identity a deployed condition is compared by.
+      const guesses = new Map((labels ? labels.inconclusive : []).map((p) => [`${p.attr}|${p.assumed}`, p]));
+      const expected = expectedViewFetchParts(spec, v, labels);
       // Dataverse stores savedquery.fetchxml as the authoritative query content for a system view, so
       // the verifier proves the DEPLOYED predicates/orders rather than trusting the build's intended
       // view definition. Subset semantics are deliberate: Dataverse may add platform-owned predicates
       // that the App Spec never authored, and those must not block a good app.
       // See: https://learn.microsoft.com/en-us/power-apps/developer/data-platform/reference/entities/savedquery
-      if (!row.fetchxml && (expected.conditions.length || expected.orders.length)) {
-        if (expected.conditions.length) add('view-filters', viewName, false, 'could not read deployed savedquery.fetchxml to prove authored filters');
+      if (!row.fetchxml && (expected.conditions.length || expected.orders.length || unresolved.length)) {
+        if (expected.conditions.length || unresolved.length) add('view-filters', viewName, false, [...unresolved.map(describeProblem), ...(expected.conditions.length ? ['could not read deployed savedquery.fetchxml to prove authored filters'] : [])].join(' | '));
         if (expected.orders.length) add('view-sort', viewName, false, 'could not read deployed savedquery.fetchxml to prove authored sort');
         continue;
       }
       const actual = parseFetchXml(row.fetchxml);
-      if (expected.conditions.length) {
-        const missing = expected.conditions.filter((want) => !actual.conditions.some((got) => conditionMatches(want, got)));
-        add('view-filters', viewName, missing.length === 0, missing.length ? `missing filter(s): ${missing.map(formatCondition).join('; ')}` : '');
+      if (expected.conditions.length || unresolved.length) {
+        const absent = expected.conditions.filter((want) => !actual.conditions.some((got) => conditionMatches(want, got)));
+        // An absent condition is only UNRESOLVED where the view carries SOME condition on that attribute with that
+        // operator — a value that may be the one the failed read would have named. A view with no such condition
+        // at all is missing the filter, whatever the options are, and says so.
+        const unresolvable = (c) => guesses.has(`${c.attribute}|${c.value}`)
+          && actual.conditions.some((got) => got.attribute === c.attribute && got.operator === c.operator);
+        const guessed = absent.filter(unresolvable);
+        const missing = absent.filter((c) => !unresolvable(c));
+        const notes = [
+          ...unresolved.map(describeProblem),
+          ...[...new Set(guessed.map((c) => guesses.get(`${c.attribute}|${c.value}`)))].map(describeProblem),
+          ...(missing.length ? [`missing filter(s): ${missing.map(formatCondition).join('; ')}`] : []),
+        ];
+        add('view-filters', viewName, notes.length === 0, notes.join(' | '));
       }
       if (expected.orders.length) {
         // Sort PRECEDENCE is the whole point of a sort, so membership is not enough: a deployed
@@ -174,11 +351,145 @@ async function verifySpec(spec, read, opts = {}) {
       }
     }
   }
-  for (const ch of spec.charts || []) {
+  });
+  plan.each(spec.charts || [], async ({ add }, charts) => {
+  for (const ch of charts) {
     const rows = await read.queryRecords('savedqueryvisualization', { select: ['savedqueryvisualizationid'], filter: `primaryentitytypecode eq '${String(ch.entity).toLowerCase()}' and name eq '${odataLit(ch.name)}'`, top: 1 });
     add('chart', ch.name, rows && rows[0]);
   }
-  for (const f of spec.forms || []) {
+  });
+  // DASHBOARDS — existence, then that every deployed chart tile is internally consistent (#586 item 3).
+  // A chart tile names a table (`TargetEntityType`), a view and a chart. The platform accepts and
+  // publishes a tile whose chart belongs to ANOTHER table, and two same-named charts on different
+  // tables made the build produce exactly that — live, with the dashboard present and verify passing.
+  // So a dashboard is proven only when each chart tile's view and chart both belong to its table.
+  //
+  // That is a check of the tiles the BUILD makes, so it holds native chart tiles only. A tile that is no native chart is skipped,
+  // as it always was: the Assistant, an iframe, a web resource, and any custom control — a grid or a chart a custom control hosts
+  // among them. The SDK types such a chart `chart`, as it does a native one (it used to type every custom-control tile as the
+  // Assistant), but the App Spec cannot describe it and the build never writes or edits it, so the chart and view it carries are
+  // not ones the spec declares: holding it to them failed a dashboard the build had left untouched. It is skipped, not listed
+  // `unverified`, because that is for a check verify sets out to make and cannot decide, and this is one it never makes — the
+  // same answer as before the SDK change. The classification is the download's (lib/dashboard-tiles.js), so the two agree.
+  //
+  // Existence is checked for every dashboard. The tile check needs `dashboardComponents` on the
+  // reader (additive and reader-gated, like the other content checks); the CLI's reader supplies it.
+  // Every read failure is reported as unverified, never as correct.
+  const ownerTable = async (table, idColumn, entityColumn, id) => {
+    if (!id) return undefined;
+    try {
+      const rows = await read.queryRecords(table, { select: [entityColumn], filter: `${idColumn} eq ${id}`, top: 1 });
+      return rows && rows[0] ? String(rows[0][entityColumn] || '').toLowerCase() : null; // null = no such row
+    } catch { return undefined; } // undefined = could not look
+  };
+  // Tile parameters carry braced GUIDs (`{…}`); a filter needs the bare, unquoted form.
+  const bareGuid = (g) => { const s = String(g || '').replace(/[{}]/g, '').trim().toLowerCase(); return /^[0-9a-f-]{36}$/.test(s) ? s : ''; };
+  // The dashboard this spec builds, by name → `{ id }`, or `{ id: null, detail }` when it is absent or
+  // cannot be told apart. A name can also match another app's dashboard (names are not unique, and
+  // Dataverse compares them ignoring case, most accents and trailing spaces), so with several matches
+  // it is the one the app's solution holds — the one the build reuses (dashboardsInSolution,
+  // sdk-build.js). The dashboard check below and the sitemap subarea check both ask this, so the two
+  // can never pick different dashboards: live, the subarea check took the first match, and a
+  // same-named dashboard of another app sorted first and failed a correctly wired app. Memoized per
+  // name, so each name is read once.
+  const ownDashboards = new Map();
+  // A downloaded dashboard's pinned id (dashboards[].dashboardId) is what the build binds first, so it
+  // is what verify checks first — after a rename in the designer the name alone finds nothing.
+  const pinByName = new Map((spec.dashboards || []).filter((d) => d && d.name && d.dashboardId).map((d) => [d.name, d.dashboardId]));
+  const identifyDashboard = async (name) => {
+    if (pinByName.has(name)) {
+      try {
+        const pinned = await findPinnedDashboard(read, pinByName.get(name));
+        if (pinned) return { id: pinned.id };
+      } catch (e) {
+        return { id: null, detail: `its dashboardId could not be resolved (${(e && e.message) || e}) — unverified, not proven correct` };
+      }
+    }
+    let rows = null;
+    try {
+      rows = await findDashboardsByName(read, name);
+    } catch (e) {
+      return { id: null, detail: `could not be read (${(e && e.message) || e}) — unverified, not proven correct` };
+    }
+    if (!rows || !rows.length) return { id: null, detail: '' };
+    if (rows.length === 1) return { id: rows[0].id };
+    let ours = null;
+    let why = '';
+    try {
+      const members = await dashboardsInSolution(read, spec.solution && spec.solution.uniqueName, rows.map((r) => r.id));
+      ours = members ? rows.filter((r) => members.has(String(r.id).replace(/[{}]/g, '').toLowerCase())) : null;
+    } catch (e) {
+      why = ` (${(e && e.message) || e})`;
+    }
+    if (ours && ours.length === 1) return { id: ours[0].id };
+    const reason = ours === null
+      ? `this app's solution cannot say which is its own${why}`
+      : `${ours.length ? `${ours.length} of them are` : 'none of them is'} in this app's solution`;
+    return { id: null, detail: `${rows.length} dashboards share this name and ${reason}, so the one this spec builds cannot be identified` };
+  };
+  const ownDashboard = (name) => {
+    if (!ownDashboards.has(name)) ownDashboards.set(name, identifyDashboard(name));
+    return ownDashboards.get(name);
+  };
+  plan.each(spec.dashboards || [], async ({ add }, dashboards) => {
+  for (const d of dashboards) {
+    if (!d || !d.name) continue;
+    const own = await ownDashboard(d.name);
+    if (!own.id) { add('dashboard', d.name, false, own.detail); continue; }
+    const dashboardId = own.id;
+    if (typeof read.dashboardComponents !== 'function') { add('dashboard', d.name, true); continue; }
+    const problems = [];
+    let components = null;
+    try { components = await read.dashboardComponents(dashboardId); } catch (e) {
+      problems.push(`its tiles could not be read (${(e && e.message) || e}) — unverified, not proven correct`);
+    }
+    for (const c of components || []) {
+      if (!c || c.type !== 'chart' || hostsCustomControl(c)) continue;
+      const p = c.parameters || {};
+      const table = String(p.TargetEntityType || '').toLowerCase();
+      const label = `chart tile '${c.name || '(unnamed)'}'`;
+      const chartTable = await ownerTable('savedqueryvisualization', 'savedqueryvisualizationid', 'primaryentitytypecode', bareGuid(p.VisualizationId));
+      const viewTable = await ownerTable('savedquery', 'savedqueryid', 'returnedtypecode', bareGuid(p.ViewId));
+      if (chartTable === undefined || viewTable === undefined) {
+        problems.push(`${label}: its chart or view could not be resolved — unverified, not proven correct`);
+      } else if (chartTable !== table || viewTable !== table) {
+        const wrong = [];
+        if (chartTable !== table) wrong.push(`its chart ${chartTable ? `belongs to ${chartTable}` : 'does not exist'}`);
+        if (viewTable !== table) wrong.push(`its view ${viewTable ? `belongs to ${viewTable}` : 'does not exist'}`);
+        problems.push(`${label} shows ${table || '(no table)'}, but ${wrong.join(' and ')}`);
+      }
+    }
+    add('dashboard', d.name, problems.length === 0, problems.join('; '));
+  }
+  });
+  // One published systemform row feeds the default flag, the layout proof and the stored order.
+  // formRow selects all of them. Memoized for THIS verify only: the reader is reused, and a later
+  // verify must observe a row that changed in between (a recorded FormXML can be rewritten).
+  const publishedFormP = new Map();
+  const useCombinedFormRead = typeof read.formRow === 'function';
+  const publishedForm = (entity, formId) => {
+    const key = String(formId || '').toLowerCase();
+    if (!publishedFormP.has(key)) publishedFormP.set(key, Promise.resolve().then(() => read.formRow(entity, formId)));
+    return publishedFormP.get(key);
+  };
+  const readDefaultState = async (entity, formId) => {
+    if (useCombinedFormRead) {
+      const row = await publishedForm(entity, formId);
+      return row ? { isDefault: row.isDefault === true } : null;
+    }
+    return read.formDefaultState(entity, formId);
+  };
+  const readFormXml = async (entity, formId) => {
+    if (useCombinedFormRead) {
+      const row = await publishedForm(entity, formId);
+      return (row && row.formxml) || null;
+    }
+    return read.formTopology(entity, formId);
+  };
+  const canReadDefault = useCombinedFormRead || typeof read.formDefaultState === 'function';
+  const resolvedMainFormsByIndex = [];
+  const formsResolved = plan.each(spec.forms || [], async ({ add }, forms, formIndex) => {
+  for (const f of forms) {
     const name = f.name || `${f.entity} form`;
     // Resolve with the SAME identity the build reconcile uses — (entity, name, TYPE) or a validated pinned
     // formId (which checks the row's table/type/name) — so verify can't be fooled by a same-named sibling
@@ -191,10 +502,13 @@ async function verifySpec(spec, read, opts = {}) {
     } catch { id = null; }
     add('form', name, id);
     const entityLogical = String(f.entity || '').toLowerCase();
-    if (id && selectedDefaultForms.get(entityLogical) === f && typeof read.formDefaultState === 'function') {
+    if (id && declaredMainFormsByEntity.has(entityLogical) && (f.formType || 'Main') === 'Main') {
+      resolvedMainFormsByIndex[formIndex] = { entityLogical, form: f, name, id };
+    }
+    if (id && selectedDefaultForms.get(entityLogical) === f && canReadDefault) {
       let state = null;
       let readError = null;
-      try { state = await read.formDefaultState(entityLogical, id); } catch (e) { readError = (e && e.message) || String(e); }
+      try { state = await readDefaultState(entityLogical, id); } catch (e) { readError = (e && e.message) || String(e); }
       // Default-form promotion is a stored systemform flag, not a property of the App Spec or the
       // build result. A form can exist with the right name/type while still not being the table's
       // default, so this proves the platform row the model-driven runtime uses.
@@ -206,28 +520,184 @@ async function verifySpec(spec, read, opts = {}) {
           : `expected this Main form to be the table default, but deployed systemform.isdefault is ${state && state.isDefault === false ? 'false' : 'unreadable'}`);
     }
   }
+  });
+  // The forms that resolved as a declared Main form, per table, in the order the spec lists them — the
+  // order the checks below report in — however the resolutions finished. They wait for every form's
+  // resolution (`formsResolved`); tasks start in order, so those have all started by the time they ask.
+  const resolvedMainForms = once(async () => {
+    await formsResolved;
+    const byEntity = new Map();
+    for (const r of resolvedMainFormsByIndex) {
+      if (!r) continue;
+      if (!byEntity.has(r.entityLogical)) byEntity.set(r.entityLogical, []);
+      byEntity.get(r.entityLogical).push({ form: r.form, name: r.name, id: r.id });
+    }
+    return byEntity;
+  });
+  if (canReadDefault) {
+    plan.each([...selectedDefaultForms], async ({ add }, defaults) => {
+    for (const [entityLogical, selected] of defaults) {
+      const resolvedMainFormsByEntity = await resolvedMainForms();
+      const selectedName = selected.name || `${selected.entity} form`;
+      for (const sibling of resolvedMainFormsByEntity.get(entityLogical) || []) {
+        if (sibling.form === selected) continue;
+        let state = null;
+        let readError = null;
+        try { state = await readDefaultState(entityLogical, sibling.id); } catch (e) { readError = (e && e.message) || String(e); }
+        const present = !!(state && state.isDefault !== true && !readError);
+        add('form-default-unique', `${entityLogical}.${sibling.name}`, present, present ? '' :
+          readError
+            ? `could not read deployed systemform.isdefault: ${readError}`
+            : state && state.isDefault === true
+              ? `another spec-declared Main form is also default; expected only '${selectedName}' to be default`
+              : 'could not prove this spec-declared Main form is not also default');
+      }
+    }
+    });
+  }
 
-  // Relationships (existence) — currently a build can declare a relationship that silently fails to
-  // materialize and still pass verify (relationships weren't checked at all). Best-effort: only when the
-  // reader can list a child entity's relationship schema names (`entityRelationships`). Match the same
-  // schema name the build/teardown compute (relationshipSchemaName / manyToManySchemaName), so an
-  // explicit schemaName or an auto-prefixed system-table relationship is compared correctly.
+  // AB#6736948 — the Main Form Set order, for every table the build orders (lib/form-order.js). Two
+  // checks, because they answer different questions:
+  //   form-order         what is STORED: each form's published <DisplayConditions Order>, which must
+  //                      rise along the build's order. Independent of who runs verify.
+  //   form-order-served  what the platform SERVES: the public RetrieveFilteredForms answer for the user
+  //                      running verify. It sees what the stored check cannot — a form this spec does
+  //                      not declare whose order puts it first — but only through that user's security
+  //                      roles, so a form they may not open cannot be placed from their answer: that is
+  //                      reported as not verifiable here, never as a pass.
+  // Neither sees a user's remembered form (the one they last switched to), which opens first for them
+  // while they may open it; it is per user and not configuration (references/app-spec-schema.md).
+  if (useCombinedFormRead || typeof read.formTopology === 'function') {
+    plan.each([...declaredMainFormsByEntity], async ({ add, environmentSkipped }, declaredMain) => {
+    for (const [entityLogical, declared] of declaredMain) {
+      if (!plannedMainFormSequence(spec, entityLogical)) continue;
+      const resolvedMainFormsByEntity = await resolvedMainForms();
+      const resolved = resolvedMainFormsByEntity.get(entityLogical) || [];
+      const idOf = new Map(resolved.map((r) => [r.form, r.id]));
+      const nameOf = new Map(resolved.map((r) => [r.form, r.name]));
+      // A form that did not resolve is already reported missing by its own check; its place cannot be.
+      if (declared.some((f) => !idOf.get(f))) continue;
+      const current = new Map();
+      let readError = null;
+      for (const f of declared) {
+        try {
+          current.set(f, displayConditionsOrder(await readFormXml(entityLogical, idOf.get(f))).order);
+        } catch (e) {
+          readError = `'${nameOf.get(f)}': ${(e && e.message) || e}`;
+          break;
+        }
+      }
+      const sequence = plannedMainFormSequence(spec, entityLogical, current);
+      const label = `${entityLogical}: ${sequence.map((f) => nameOf.get(f)).join(' > ')}`;
+      if (readError) {
+        add('form-order', label, false, `could not read the deployed form order (${readError})`);
+        continue;
+      }
+      let problem = '';
+      for (let i = 0; i < sequence.length && !problem; i += 1) {
+        const o = current.get(sequence[i]);
+        const prev = i > 0 ? current.get(sequence[i - 1]) : undefined;
+        if (!Number.isFinite(o)) problem = `'${nameOf.get(sequence[i])}' has no form order in its published formxml`;
+        else if (i > 0 && !(o > prev)) problem = `'${nameOf.get(sequence[i])}' (order ${o}) is not after '${nameOf.get(sequence[i - 1])}' (order ${prev})`;
+      }
+      add('form-order', label, !problem, problem ? `${problem} — build the spec again with --publish to put them in this order` : '');
+      if (problem || typeof read.servedMainForms !== 'function') continue;
+
+      let served = null;
+      try { served = await read.servedMainForms(entityLogical); } catch (e) {
+        add('form-order-served', entityLogical, false, `could not read the order the platform serves (RetrieveFilteredForms): ${(e && e.message) || e}`);
+        continue;
+      }
+      const planned = sequence.map((f) => ({ name: nameOf.get(f), id: idOf.get(f) }));
+      const cmp = compareServedOrder(planned, (served || []).map((s) => s.id));
+      const first = planned[0].name;
+      if (cmp.ok === null) {
+        environmentSkipped.push(`form-order-served:${entityLogical} (the user running verify may not open '${first}' — check it as a user with that form's security roles)`);
+      } else if (cmp.reason === 'order') {
+        add('form-order-served', `${entityLogical} opens with '${first}'`, false, `'${cmp.before}' is served before '${cmp.after}' — build the spec again with --publish`);
+      } else if (cmp.reason === 'ahead') {
+        const ahead = (served || []).find((s) => String(s.id).replace(/[{}]/g, '').toLowerCase() === cmp.aheadId);
+        const aheadName = (ahead && ahead.name) || cmp.aheadId;
+        add('form-order-served', `${entityLogical} opens with '${first}'`, false,
+          `users without a remembered form open '${aheadName}' first: a Main form this spec does not declare, whose form order is not after '${first}'. Move it down in Maker (Form settings > Form order), or declare it in forms[] and list it in entities[].mainFormOrder`);
+      } else {
+        add('form-order-served', `${entityLogical} opens with '${first}'`, true);
+      }
+    }
+    });
+  }
+
+  // Relationships. A name on the child is not proof: a 1:N and an N:N between the same pair derive
+  // the same schema name, and the second create used to be skipped. Match the endpoints the build
+  // sends. Plain-string rows (older test doubles) stay name-only. A read failure stays an empty
+  // list, which fails closed, same as before.
+  plan.section(async ({ add }) => {
   if (typeof read.entityRelationships === 'function') {
     const prefix = spec.solution && spec.solution.publisherPrefix;
-    const relCache = new Map(); // childLogical -> Set(schemaName lower) — one metadata read per child
+    const relCache = new Map();
     for (const r of spec.relationships || []) {
-      const schema = String(r.type === 'ManyToMany' ? manyToManySchemaName(r, prefix) : relationshipSchemaName(r, prefix)).toLowerCase();
-      // A 1:N relationship lives on the referencing (child) entity; an N:N is symmetric — check entity1.
+      if (!r || (r.type !== 'OneToMany' && r.type !== 'ManyToMany')) continue;
+      const rawSchema = r.type === 'ManyToMany' ? manyToManySchemaName(r, prefix) : relationshipSchemaName(r, prefix);
+      const schema = String(rawSchema).toLowerCase();
+      // A 1:N lives on the referencing (child) entity; an N:N is symmetric — check entity1.
       const child = String((r.type === 'ManyToMany' ? (r.entity1 || r.entity2) : r.referencing) || '').toLowerCase();
       if (!child) continue;
       if (!relCache.has(child)) {
-        let names = [];
-        try { names = (await read.entityRelationships(child)) || []; } catch { names = []; }
-        relCache.set(child, new Set(names.map((n) => String(n).toLowerCase())));
+        let rows = [];
+        try { rows = (await read.entityRelationships(child)) || []; } catch { rows = []; }
+        relCache.set(child, rows);
       }
-      add('relationship', schema, relCache.get(child).has(schema));
+      const rows = relCache.get(child);
+      const nameOnly = rows.length > 0 && rows.every((row) => typeof row === 'string');
+      if (nameOnly) {
+        add('relationship', schema, rows.some((n) => String(n).toLowerCase() === schema));
+        continue;
+      }
+      const declared = Object.assign({}, r, { schemaName: rawSchema });
+      const detailed = rows.filter((row) => row && typeof row === 'object');
+      const named = (row) => String(row.schemaName || row.SchemaName || '').toLowerCase() === schema;
+      if (detailed.some((row) => named(row) && sameRelationship(declared, row))) {
+        add('relationship', schema, true);
+        continue;
+      }
+      // A relationship is verified only when the answer states its whole identity (compareRelationship). One that leaves a part out
+      // is neither verified nor shown to be another relationship, so the check FAILS and says what the answer lacked. It is not listed
+      // `unverified`: that list leaves `ok` and the exit status as they were, and a relationship nobody identified must not read as a pass.
+      const unproven = (verdict) => `exists, but ${describeIncomplete(verdict.missing)}, so verify cannot prove it is the declared ${describeRelationship(declared)}`;
+      const nameHit = detailed.find(named);
+      if (nameHit) {
+        const verdict = compareRelationship(declared, nameHit);
+        add('relationship', schema, false, verdict.state === 'incomplete' ? unproven(verdict) : `exists as ${describeRelationship(nameHit)}`);
+        continue;
+      }
+      // The typed collection on this side cannot see a holder of the other type (a 1:N is not in
+      // the parent's ManyToMany list). Ask the shared exact-name lookup so the failure names it.
+      if (typeof read.relationshipHolder === 'function') {
+        let holder = null;
+        try {
+          const candidates = r.type === 'ManyToMany' ? [r.entity1, r.entity2] : [r.referenced, r.referencing];
+          holder = await read.relationshipHolder(rawSchema, candidates);
+        } catch (e) {
+          add('relationship', schema, false, `could not read the relationship that holds '${schema}' (${(e && e.message) || e})`);
+          continue;
+        }
+        if (holder && holder.found === true) {
+          const verdict = compareRelationship(declared, holder.holder);
+          if (verdict.state === 'same') { add('relationship', schema, true); continue; }
+          if (verdict.state === 'incomplete') { add('relationship', schema, false, unproven(verdict)); continue; }
+          const declaredKind = r.type === 'ManyToMany' ? 'N:N' : '1:N';
+          add('relationship', schema, false, `${schema} exists as ${describeRelationship(holder.holder)}, not as the declared ${declaredKind}`);
+          continue;
+        }
+        if (holder && holder.found === null) {
+          add('relationship', schema, false, `could not read the relationship that holds '${schema}'${holder.status ? ` (HTTP ${holder.status})` : ''}`);
+          continue;
+        }
+      }
+      add('relationship', schema, false);
     }
   }
+  });
 
   // Form TOPOLOGY. Existence is not proof of shape: every wrong-layout defect this plugin has hit —
   // fields flattened into the first section, a duplicate tab appended on each rebuild, a relocated
@@ -247,15 +717,81 @@ async function verifySpec(spec, read, opts = {}) {
   // applies to a MISSING READER CAPABILITY too: gating the whole oracle on
   // `typeof read.formTopology === 'function'` let a reader without it skip every layout check, so an
   // explicit form passed verify on identity and default checks alone with no layout proof at all.
-  const canReadTopology = typeof read.formTopology === 'function';
+  const canReadTopology = useCombinedFormRead || typeof read.formTopology === 'function';
+  // The language the build wrote a STRING tab or section label in, which a label is held to (labelProblem). It is the build's own resolution
+  // (resolveLanguageCode), whose first answer is the language the build was HANDED: `opts.preResolvedLanguageCode`, what its SDK was made for
+  // and so what every label was written in, else `opts.languageCode`, its `--language-code` flag (the standalone verify takes the same flag);
+  // then the spec's `languageCode`, then the organization's base language. A build run with the flag in an organization whose base language
+  // is another one publishes its captions in the flag's language, so a verify that held them to the organization's called them missing.
+  //
+  // Known or not: the build falls back to 1033 when it cannot read the organization, but for the build that is a CHOICE of language, and here
+  // it would be evidence about what an existing deployment was written in — a guess that passes a stale caption as readily as it fails a
+  // correct one. So when nothing answers, the string labels are reported `unverified` with the reason (`undetermined`), not held to a language.
+  // `fromOrganization` says the language was inferred, not given, so a mismatch can tell the maker a build run with another one needs the flag.
+  // Read once per pass, and only when a form authors a string label.
+  //
+  // A language that is known is not always one the form's READ can show (labelProblem says why): a label compared in a language no label of the
+  // form is in is listed `unverified` too, whichever way the language was learnt — unless the translation export of the app's solution (below) can settle it.
+  let authoringLanguageP;
+  const authoringLanguage = () => authoringLanguageP || (authoringLanguageP = (async () => {
+    let fromOrganization = false;
+    let reason;
+    const lcid = await resolveLanguageCode({
+      provision: read && typeof read.queryRecords === 'function' ? { queryRecords: (...args) => { fromOrganization = true; return read.queryRecords(...args); } } : undefined,
+      spec,
+      languageCode: opts.preResolvedLanguageCode || opts.languageCode,
+      undetermined: (why) => { reason = why; return null; },
+    });
+    return lcid ? { lcid, fromOrganization } : { reason };
+  })());
+  // The translation export of the app's solution: the one read that carries a tab's and a section's caption in EVERY provisioned language, where the form's own read carries the
+  // languages the platform chooses to show (labelProblem). It is a request that takes seconds (7.5–11.2 s measured, for a solution of one table, and more as the solution grows),
+  // so it is made only when some caption needs it — the settling step of the form loop, below, is the one place that asks — and once for the whole pass: every form's task awaits the same
+  // promise. `reason` is why there is no export; a reader that cannot ask for one (`translationLabels` is optional, like the other reads) is treated as no export at all, with no reason
+  // to give, so the captions are listed exactly as they were before an export was read.
+  const solutionName = spec.solution && spec.solution.uniqueName;
+  const canReadTranslations = typeof read.translationLabels === 'function' && typeof solutionName === 'string' && solutionName !== '';
+  const translations = once(async () => {
+    let answer;
+    try {
+      answer = await read.translationLabels(solutionName);
+    } catch (e) {
+      return { ok: false, reason: (e && e.message) || String(e) };
+    }
+    if (!answer || typeof answer !== 'object') return { ok: false, reason: 'the reader gave no answer' };
+    if (answer.ok === false) return { ok: false, reason: typeof answer.reason === 'string' && answer.reason !== '' ? answer.reason : 'no reason was given' };
+    if (answer.ok !== true || !Array.isArray(answer.languages) || typeof answer.lookup !== 'function') return { ok: false, reason: 'the reader\'s answer is not an export' };
+    return answer;
+  });
   {
-    for (const f of spec.forms || []) {
-      if (!Array.isArray(f.tabs) || !f.tabs.length) continue;
+    plan.each(spec.forms || [], async ({ add, unverified }, forms) => {
+    for (const f of forms) {
+      const explicit = Array.isArray(f.tabs) && f.tabs.length > 0;
       const entity = String(f.entity || '').toLowerCase();
       const name = f.name || `${f.entity} form`;
       const formFieldOptions = fieldOptionsMap(f);
+      // An AUTO layout declares no shape, so it has no topology to prove — but its `fieldOptions` can
+      // still make a field read-only or hidden, which the build asserts on every apply. Those flags are
+      // proven on their own (`form-field-state`); without this an auto-layout form's declared state was
+      // never checked at all. Exactly the flags the BUILD writes are proven: those on the fields the
+      // compiled layout places (autoLayoutFieldFlags). A flag on any other field is never applied, so
+      // proving it failed a form the build had never been asked to change.
+      const flagsAny = !explicit && Object.values(formFieldOptions).some((o) => o.readOnly === true || o.hidden === true);
+      let autoFlagged = [];
+      let autoCompileError = null;
+      if (flagsAny) {
+        try { autoFlagged = autoLayoutFieldFlags(spec, f); } catch (e) { autoCompileError = (e && e.message) || String(e); }
+      }
+      const kind = explicit ? 'form-topology' : autoFlagged.length || autoCompileError ? 'form-field-state' : 'form-identities';
+      if (autoCompileError) {
+        // Only an unvalidated spec reaches this (validation requires every table's primary column), but a
+        // layout the compiler cannot read cannot say which fields the build places — so nothing is proven.
+        add(kind, `${entity}.${name}`, false,
+          `could not compile the layout to tell which fields the build places (${autoCompileError}) — the field state is unverified, not proven correct`);
+        continue;
+      }
       if (!canReadTopology) {
-        add('form-topology', `${entity}.${name}`, false,
+        add(kind, `${entity}.${name}`, false,
           'this reader exposes no deployed-layout source, so the layout is UNVERIFIED — not proven correct');
         continue;
       }
@@ -270,7 +806,7 @@ async function verifySpec(spec, read, opts = {}) {
         // and correct, and silently skipping the layout check let a transient read failure pass as a
         // verified layout.
         if (idError) {
-          add('form-topology', `${entity}.${name}`, false,
+          add(kind, `${entity}.${name}`, false,
             `could not resolve the deployed form id (${idError}) — the layout is unverified, not proven correct`);
         }
         continue;
@@ -278,14 +814,166 @@ async function verifySpec(spec, read, opts = {}) {
 
       let xml = null;
       let readError = null;
-      try { xml = await read.formTopology(entity, id); } catch (e) { readError = (e && e.message) || String(e); }
+      try { xml = await readFormXml(entity, id); } catch (e) { readError = (e && e.message) || String(e); }
       if (!xml) {
-        add('form-topology', `${entity}.${name}`, false,
+        add(kind, `${entity}.${name}`, false,
           `could not read the deployed form layout${readError ? `: ${readError}` : ''} — the layout is unverified, not proven correct`);
         continue;
       }
 
-      const deployed = parseFormTopology(xml);
+      // A duplicated cell/control ID can bind two otherwise valid rows to one UI identity. Check
+      // the whole form, including header/footer and unbound controls, even for an unshaped auto form.
+      const identityProblems = formIdentityProblems(xml);
+      add('form-identities', `${entity}.${name}`, identityProblems.length === 0, identityProblems.join('; '));
+      const { tabs: deployed, outer, languages: carriedLanguages } = parseFormTopology(xml);
+      // The Notes timeline, on any layout: Dynamics renders it only under the control id `notescontrol` in a
+      // tall cell (lib/form-timeline.js), so a form that carries it in the shape an older build wrote — or not at
+      // all — has not got the timeline the spec asks for, however many other checks pass. The form need only
+      // carry ONE timeline that renders: a maker may have moved it, or added their own, and the build never edits
+      // a timeline it does not own. The engine's own host is judged by its rows as well (the build converges
+      // them, so rows still missing are a fix not applied); a timeline a maker added, by its id and span alone.
+      // What the detail tells the maker to do follows what a build will do about THIS form, which is not always
+      // "build again" (timelineVerifyProblem) — and what it does to the fields in the host first is predicted from the
+      // spec and this published form (notesHostInspector).
+      if (wantsTimeline(spec, f)) {
+        const problem = timelineVerifyProblem(deployed, isEngineHostSection, { inspect: notesHostInspector(spec, f, deployed) });
+        add('form-timeline', `${entity}.${name}`, !problem, problem);
+      }
+      // Sub-grids that declare where they go (`tab` / `column` / `after` / `before`) are checked against the
+      // deployed form on every layout; the others have no place to hold the form to. An explicit layout's tabs
+      // and sections are matched the way the build matched them (further down, where the matches are made); an
+      // auto layout's one tab and section are looked up by the names the compiler gives them.
+      const placedGridChecks = (match) => {
+        for (const c of subgridPlacementChecks(spec, f, deployed, match)) add('form-subgrid', `${entity}.${name}: ${c.name}`, c.ok, c.detail);
+      };
+      if (!explicit) {
+        const autoTab = layoutAutoMatch(deployed);
+        placedGridChecks(autoTab);
+      }
+      if (!explicit && !autoFlagged.length) continue;
+
+      const problems = [];
+      // A declared flag against the deployed attribute, where an absent attribute is what the form
+      // renders without one: shown, expanded, labelled, editable. Reported in the spec's own terms
+      // (`specClause`), which for `hidden` is the inverse of the attribute it sets.
+      const flagProblem = (what, xmlAttr, deployedValue, wantAttr, renderedDefault, specClause) => {
+        const got = deployedValue === undefined ? renderedDefault : deployedValue;
+        if (got !== wantAttr) {
+          problems.push(`${what} is deployed with ${xmlAttr}="${got}"${deployedValue === undefined ? ' (absent, the default)' : ''}, the spec declares ${specClause}`);
+        }
+      };
+      const stateFlag = (what, specKey, xmlAttr, deployedValue, want) => flagProblem(what, xmlAttr, deployedValue, want, true, `${specKey}: ${want}`);
+      // A container's published labels against the one the spec AUTHORS for it, language by language. A label is a (languagecode,
+      // description) pair: the platform keeps one per language, and a maker's translations stay beside the one the build writes, so
+      // a label is held to the pair the spec declares and never to the same text in any other language — "Summary" published only in
+      // French is not the English relabel that never landed. A string is the build's authoring language (`language`); a localized
+      // label, a map keyed by LCID, is one pair per entry, and only what it declares is held (a translation it does not mention is a
+      // maker's). A declared label the published container carries in no such language — or carries no label at all — is a mismatch
+      // like any other: nothing published is no proof of the caption, so it never certifies one. Not compared: a container the spec
+      // gives no label (the compiler's `General` / `Details` default is what the build writes on create and fills in on a rebuild, but
+      // the spec never asked for it, and a maker's own caption on such a container is not a relabel that failed to land).
+      // `language` is the form's authoring language (authoringLanguage): a string label is held to it, and where it is not known there is nothing
+      // to hold the string to — it is listed in `unverifiedLabels`, neither passed nor failed. A label map names its own languages and is compared
+      // as ever. `comparedInOrganizationLanguage` is set when a string was held to a language inferred from the organization and the container
+      // carries captions only in others, which is what a build run with a language flag leaves: the detail then says what to give verify.
+      //
+      // A language is also one the READ may not show, however well known: the platform decides which languages' labels go into the FormXML a caller
+      // reads, and it can return fewer than the form stores. Measured live — a form built and published with Spanish (3082) captions in an
+      // organization whose base language is English (1033) keeps both languages (a translation export finds them), yet the published FormXML
+      // comes back with every label in 1033 alone, whether or not the request asks for the other language:
+      //   <tab name="t"><labels><label description="Overview" languagecode="1033" /></labels> …
+      // The Spanish caption is then missing from the READ, not from the form, and failing it as missing failed a build that had written it right. So
+      // when no label anywhere in the form — `carriedLanguages`, any element's — is in the language a label is compared in, that language is one this
+      // read cannot show: the label is not compared but listed in `unshownLabels`, neither passed nor failed, like a language that cannot be
+      // established. A map is split the same way, entry by entry: the languages the read carries are compared and the others listed. A language
+      // that some label does carry is compared exactly as above, strictly — a stale caption in it fails. `carriedLanguages` is empty only for a form
+      // that publishes no label at all, which names no language to be missing from: what such a form lacks is a caption, and is a mismatch as ever
+      // (the read measured live carried every label of the form, in the base language).
+      // RetrieveLocLabels cannot read them either (a form's `formxml` "does not support localized labels": HTTP 400). A translation export can — it carries every provisioned
+      // language, the published layer, one row per tab or section keyed by the id the element has in the FormXML — so the captions a read cannot show are looked up there
+      // (the settling step below, which asks for the export once per pass and only when there is such a caption), and only the ones the export cannot settle stay `unverified`.
+      const unverifiedLabels = [];
+      const unshownLabels = new Map();
+      let comparedInOrganizationLanguage;
+      const labelProblem = (what, container, authored, language) => {
+        const known = language && language.lcid;
+        if (typeof authored === 'string' && authored !== '' && !known) { unverifiedLabels.push(what); return; }
+        const have = (container && container.labels) || [];
+        for (const [lcid, text] of declaredLabels(authored, known)) {
+          if (carriedLanguages.length && !carriedLanguages.includes(lcid)) {
+            if (!unshownLabels.has(lcid)) unshownLabels.set(lcid, { items: [] });
+            // Each caption is kept with the id of the deployed tab or section it was compared against and the text the spec declares: all a translation export needs to settle it.
+            // A string label is compared in the language verify is told, so a read that carries others is something a maker can act on by telling it one of them;
+            // a map names its languages itself, and there is nothing to tell.
+            unshownLabels.get(lcid).items.push({ what, id: container && container.id, text, string: typeof authored === 'string' });
+            continue;
+          }
+          if (have.some((l) => l.lcid === lcid && l.text === text)) continue;
+          const declared = `the spec declares label: ${JSON.stringify(text)} in language ${lcid}`;
+          const same = have.filter((l) => l.lcid === lcid);
+          if (same.length) problems.push(`${what} is deployed with ${same.length === 1 ? 'label' : 'labels'} ${same.map((l) => JSON.stringify(l.text)).join(', ')} in language ${lcid}, ${declared}`);
+          else if (have.length) {
+            problems.push(`${what} is deployed with no label in language ${lcid} (it has ${have.map((l) => `${JSON.stringify(l.text)} in ${l.lcid === undefined ? 'no language' : l.lcid}`).join(', ')}), ${declared}`);
+            if (typeof authored === 'string' && language.fromOrganization) comparedInOrganizationLanguage = known;
+          } else problems.push(`${what} is deployed with no label, ${declared}`);
+        }
+      };
+      // The state the build asserts for a field: only the ENABLED flags are ever written (a rebuild never
+      // clears a lock or a hide applied in the designer), so only `true` is proven. `where` says where a SECOND (or
+      // later) cell of the field sits — "section 'x'", "the form header" — which the message then names as another placement; the first
+      // cell reads as it always did.
+      const fieldStateProblems = (fl, eff, dc, where) => {
+        const what = where === undefined ? `field '${fl}'` : `field '${fl}' (another placement, in ${where})`;
+        if (eff.hidden === true) flagProblem(what, 'visible', dc.visible, false, true, 'hidden: true');
+        if (eff.readOnly === true) flagProblem(what, 'disabled', (dc.control || {}).disabled, true, false, 'readOnly: true');
+      };
+      // EVERY cell of a bound field on the published form, each with where it sits: the body's sections in form order, then the form's
+      // header and its footer, and each tab's own header and footer, which hold cells of their own (a maker can place a field there). The
+      // build asserts a read-only or hidden field on all of them (a deployed form can hold a field more than once: a maker can place it in
+      // a second section, or in the header), so verify holds all of them to it — a second placement left editable or visible is a mismatch,
+      // like the first.
+      const bodyCellsOf = (fl) => {
+        const out = [];
+        for (const t of deployed) for (const c of t.columns || []) for (const s of c.sections || []) for (const r of s.rows || []) for (const cell of r.cells || []) {
+          if (cell.control && cell.control.fieldName === fl && !isNonFieldControl(cell.control)) out.push({ cell, where: `section '${String(s.name || '(unnamed)')}'` });
+        }
+        return out;
+      };
+      const cellsOf = (fl) => [...bodyCellsOf(fl), ...outer
+        .filter(({ cell }) => cell.control && cell.control.fieldName === fl && !isNonFieldControl(cell.control))
+        .map(({ part, tab, cell }) => ({ cell, where: part === 'header' || part === 'footer' ? `the form ${part}` : `the ${part.slice(3)} of tab '${String(tab || '(unnamed)')}'` }))];
+      // The cells of `fl` other than `first` — the one already judged — held to the same flags.
+      const otherPlacementProblems = (fl, eff, first) => {
+        for (const { cell, where } of cellsOf(fl)) if (cell !== first) fieldStateProblems(fl, eff, cell, where);
+      };
+      if (!explicit) {
+        // Every field here is one the build places on the form, so a flagged field the deployed form does not carry is a
+        // mismatch: its state cannot be deployed without it. Skipping it passed a form whose read-only
+        // field a maker had removed. The build asserts the flags on every cell of the field, so each cell is proven.
+        for (const { field, readOnly, hidden } of autoFlagged) {
+          // The first cell is the one the layout places, in the body: a field only the header holds is not on the form's layout.
+          const dc = (bodyCellsOf(field)[0] || {}).cell;
+          if (!dc) {
+            const declared = [readOnly && 'readOnly: true', hidden && 'hidden: true'].filter(Boolean).join(' and ');
+            problems.push(`field '${field}' is not on the deployed form, so its ${declared} is not deployed`);
+            continue;
+          }
+          fieldStateProblems(field, { readOnly, hidden }, dc);
+          otherPlacementProblems(field, { readOnly, hidden }, dc);
+        }
+        add(kind, `${entity}.${name}`, problems.length === 0,
+          problems.length ? `deployed field state does not match the authored one — ${problems.slice(0, 6).join('; ')}${problems.length > 6 ? `; +${problems.length - 6} more` : ''}` : '');
+        continue;
+      }
+      // What the COMPILER emitted for this layout — tab state, form-column widths, section state — taken
+      // from the compiler itself rather than re-derived, so verify expects exactly what the build was asked
+      // to converge (an undeclared width is the equal split, an undeclared flag is `true`). Its tabs, their
+      // form-columns and their sections line up index for index with the spec's; the compiler only APPENDS
+      // (the notes section, after the first tab's authored sections). The build compiled this same layout,
+      // so it compiles here too.
+      // The language a string label of this layout is held to, when it authors one (labelProblem).
+      const labelLanguage = authorsStringLabel(f) ? await authoringLanguage() : undefined;
+      const compiledTabs = compileFormIntent(spec, f).tabs || [];
       // Where the DEPLOYED form actually placed each bound field, as the IDENTITY of the section
       // holding it — not merely its name.
       //
@@ -302,13 +990,36 @@ async function verifySpec(spec, read, opts = {}) {
         for (const fl of sec.fields || []) if (!placedIn.has(fl)) placedIn.set(fl, sec);
       }
 
-      const problems = [];
+      // ORDER. The authored containers must deploy in the layout's order — the build moves them into it
+      // (planOrderMoves). Only their RELATIVE order is compared: a tab or section the layout does not
+      // mention (a maker's own, an engine host) has no place in it. `matched` holds the deployed index of
+      // each container matched, in layout order.
+      const orderProblem = (matched, what) => {
+        if (matched.every((m, i) => i === 0 || matched[i - 1].index < m.index)) return;
+        const deployedOrder = matched.slice().sort((a, b) => a.index - b.index).map((m) => m.name);
+        problems.push(`${what} are deployed in the order ${deployedOrder.join(', ')}; the spec orders them ${matched.map((m) => m.name).join(', ')}`);
+      };
+      const sameWidth = (got, want) => {
+        const pct = (w) => { const m = /^\s*(\d+(?:\.\d+)?)\s*%\s*$/.exec(String(w === undefined ? '' : w)); return m ? Number(m[1]) : null; };
+        return pct(got) !== null && pct(got) === pct(want);
+      };
       // Match containers the way the BUILD does — name, then label, then position — using the same
       // function it uses. A label- or position-matched container deliberately KEEPS its deployed
       // name (form scripts and business rules reference section names), so looking one up by the
       // AUTHORED name reported a perfectly good auto-to-explicit migration as "section absent" and
       // failed a build that had done exactly what was asked. Live-reproduced.
       const claimedTabs = new Set();
+      const tabOrder = [];
+      // Where each authored tab / section was matched on the deployed form — what a sub-grid's placement is
+      // judged against (subgridPlacementChecks), since a matched container keeps its deployed name.
+      const matchedTabs = [];
+      const matchedSections = new Map();
+      // The section names the author declared — the same set the build's compiler records — so the
+      // label and position passes skip a section another want owns by name, exactly as the build does.
+      // Tabs follow the same rule, from the same kind of set.
+      const authoredNames = authoredSectionNames(f);
+      const tabSkip = claimedByAuthoredName(authoredTabNames(f));
+      const otherPlacementsChecked = new Set();
       f.tabs.forEach((t, ti) => {
         if (!t || typeof t !== 'object') return;
         const tabName = String(t.name || generatedTabName(ti)).toLowerCase();
@@ -316,28 +1027,51 @@ async function verifySpec(spec, read, opts = {}) {
         // a tab to 'General' and a section to 'Details', so the deployed container carries the
         // default — comparing against `undefined` would skip the label pass and fall through to
         // position, picking a different container than the build did.
-        const tabHit = matchContainer(deployed, { name: tabName, label: t.label || 'General' }, ti, { claimed: claimedTabs });
+        const tabHit = matchContainer(deployed, { name: tabName, label: t.label || 'General' }, ti, { claimed: claimedTabs, skip: tabSkip });
         if (!tabHit) { problems.push(`tab '${tabName}' is absent`); return; }
         claimedTabs.add(tabHit.index);
+        tabOrder.push({ name: tabName, index: tabHit.index });
+        matchedTabs[ti] = tabHit.index;
         const got = tabHit.item;
+        const compiledTab = compiledTabs[ti] || {};
+        stateFlag(`tab '${tabName}'`, 'expanded', 'expanded', got.expanded, compiledTab.expanded !== false);
+        stateFlag(`tab '${tabName}'`, 'visible', 'visible', got.visible, compiledTab.visible !== false);
+        labelProblem(`tab '${tabName}'`, got, t.label, labelLanguage);
         const authoredColumns = formColumnsOf(t);
         if ((got.columns || []).length < authoredColumns.length) {
           problems.push(`tab '${tabName}' has ${(got.columns || []).length} form-column(s), the spec declares ${authoredColumns.length}`);
         }
         authoredColumns.forEach((col, ci) => {
           const sections = (col && Array.isArray(col.sections)) ? col.sections : [];
-          const deployedSections = ((got.columns || [])[ci] || {}).sections || [];
+          const deployedColumn = (got.columns || [])[ci];
+          const deployedSections = (deployedColumn || {}).sections || [];
+          const compiledColumn = (compiledTab.columns || [])[ci] || {};
+          // The width the build writes on every apply — the authored one, or the compiler's equal split.
+          if (deployedColumn && compiledColumn.width !== undefined && !sameWidth(deployedColumn.width, compiledColumn.width)) {
+            problems.push(`tab '${tabName}' form-column ${ci + 1} is deployed ${deployedColumn.width === undefined ? 'with no width' : `${deployedColumn.width} wide`}, the spec declares ${compiledColumn.width}`);
+          }
           const claimedSections = new Set();
+          const sectionOrder = [];
           sections.forEach((sec, si) => {
             if (!sec || typeof sec !== 'object') return;
             const secName = String(sec.name || generatedSectionName(ti, ci, si)).toLowerCase();
+            // Every want here is authored (the spec's own sections), and an authored section never
+            // matches an engine HOST by name, label or position — the same rule the build's topology pass
+            // follows, a host a maker added a field to included. A section a maker filled with a control
+            // but that carries the authored name is still found by it.
             const secHit = matchContainer(deployedSections, { name: secName, label: sec.label || 'Details' }, si,
-              { claimed: claimedSections, skip: isEngineOwnedSection });
+              { claimed: claimedSections, skip: (s) => isEngineOwnedSection(s) || isEngineHostSection(s) || claimedByAuthoredName(authoredNames)(s), nameSkip: isEngineHostSection });
             if (!secHit) {
               problems.push(`section '${secName}' is absent from tab '${tabName}' form-column ${ci + 1}`);
               return;
             }
             claimedSections.add(secHit.index);
+            sectionOrder.push({ name: secName, index: secHit.index });
+            matchedSections.set(secName, { ti: tabHit.index, ci, si: secHit.index });
+            const compiledSection = (compiledColumn.sections || [])[si] || {};
+            stateFlag(`section '${secName}'`, 'visible', 'visible', secHit.item.visible, compiledSection.visible !== false);
+            stateFlag(`section '${secName}'`, 'showLabel', 'showlabel', secHit.item.showLabel, compiledSection.showLabel !== false);
+            labelProblem(`section '${secName}'`, secHit.item, sec.label, labelLanguage);
             // The grid width the COMPILER emits for this authored section — taken from the same
             // function the compiler uses, never re-derived here. Reading the raw `columns` instead
             // failed forms that deployed exactly as compiled: an omitted `columns` compiles to 1,
@@ -364,20 +1098,11 @@ async function verifySpec(spec, read, opts = {}) {
             // sitting under a rowspan — live, `[name rowspan=2, tier] / [code, zeta]` in a 2-column
             // section passed, with row 2 needing three columns.
             if (Number.isFinite(secCols) && secCols >= 1) {
-              let carried = []; // one entry per reserving cell: its width and the rows it still covers
-              for (const [ri, drow] of (secHit.item.rows || []).entries()) {
-                const own = (drow.cells || []).reduce((n, c) => n + (Number(c.colspan) || 1), 0);
-                const reserved = carried.reduce((n, r) => n + r.width, 0);
-                const used = own + reserved;
-                if (used > secCols) {
-                  problems.push(`section '${secName}' row ${ri + 1} carries ${used} columns of content`
-                    + (reserved ? ` (${reserved} reserved by a row-spanning cell above)` : '')
+              for (const [ri, occupancy] of rowOccupancy(secHit.item.rows || []).entries()) {
+                if (occupancy.used > secCols) {
+                  problems.push(`section '${secName}' row ${ri + 1} carries ${occupancy.used} columns of content`
+                    + (occupancy.reserved ? ` (${occupancy.reserved} reserved by a row-spanning cell above)` : '')
                     + ` in a ${secCols}-column section`);
-                }
-                carried = carried.map((r) => ({ width: r.width, left: r.left - 1 })).filter((r) => r.left > 0);
-                for (const c of drow.cells || []) {
-                  const rs = Number(c.rowspan) || 1;
-                  if (rs > 1) carried.push({ width: Number(c.colspan) || 1, left: rs - 1 });
                 }
               }
             }
@@ -390,7 +1115,7 @@ async function verifySpec(spec, read, opts = {}) {
             // every `fieldOptions` span unverified — including one the build had to skip.
             const deployedCellOf = (logical) => (secHit.item.rows || [])
               .flatMap((r2) => r2.cells || [])
-              .find((c) => c.control && c.control.fieldName === logical);
+              .find((c) => c.control && c.control.fieldName === logical && !isNonFieldControl(c.control));
             for (const entry of (sec.fields || [])) {
               const inline = normalizeFieldEntry(entry);
               const fl = inline.name;
@@ -398,6 +1123,13 @@ async function verifySpec(spec, read, opts = {}) {
               const eff = mergeFieldOptions(formFieldOptions[fl], inline, fl);
               const dc = deployedCellOf(fl);
               if (!dc) continue; // placement is reported separately below
+              fieldStateProblems(fl, eff, dc);
+              // …and every other cell the form holds the field in, wherever it sits — once per field: a layout that lists one twice
+              // (the spec gate refuses it) would otherwise report its other placements twice.
+              if (!otherPlacementsChecked.has(fl)) {
+                otherPlacementsChecked.add(fl);
+                otherPlacementProblems(fl, eff, dc);
+              }
               for (const key of ['colspan', 'rowspan']) {
                 const declared = Number(eff[key]);
                 if (!Number.isFinite(declared) || declared < 1) continue; // not declared
@@ -435,12 +1167,77 @@ async function verifySpec(spec, read, opts = {}) {
               }
             }
           });
+          orderProblem(sectionOrder, `the sections of tab '${tabName}' form-column ${ci + 1}`);
         });
       });
+      orderProblem(tabOrder, 'the tabs');
+
+      // The captions the form's read cannot show (`unshownLabels`) are looked up in the translation export of the app's solution — by the id of the tab or section each was compared
+      // against, in the language the spec declares it in — and judged like any other: the same text is right, and anything else is a mismatch (an empty cell is a caption that is not
+      // there). What the export cannot say stays in `unshownLabels`, with the reason, to be listed `unverified` as it was before an export was read; `held.note` is what the entry
+      // says of the export then — that it could not be read, or what it could not settle. A mismatch is a problem of THIS form, so this runs before its check is reported.
+      if (unshownLabels.size && canReadTranslations) {
+        const exported = await translations();
+        for (const [lcid, held] of unshownLabels) {
+          const whys = [];
+          held.items = held.items.filter((item) => {
+            if (!exported.ok) return true;
+            const settled = settleCaption(exported, { entity, id: item.id, lcid, text: item.text, what: item.what });
+            if (settled.state === 'same') return false;
+            if (settled.state === 'unsettled') {
+              if (!whys.includes(settled.why)) whys.push(settled.why);
+              return true;
+            }
+            const declared = `the spec declares label: ${JSON.stringify(item.text)} in language ${lcid}`;
+            const others = settled.others.map((other) => `${JSON.stringify(other.text)} in ${other.lcid}`).join(', ');
+            const source = `the translation export of solution '${solutionName}'`;
+            const absent = `the form read does not carry language ${lcid}`;
+            problems.push(settled.have === ''
+              ? `${item.what} is deployed with no label in language ${lcid} (${source} has none${others ? `, only ${others}` : ''}; ${absent}), ${declared}`
+              : `${item.what} is deployed with label ${JSON.stringify(settled.have)} in language ${lcid} (${source} shows it; ${absent}), ${declared}`);
+            // A string label held to the language the organization has is held to a guess when the build was run in another: the detail below says what to give verify.
+            if (item.string && labelLanguage && labelLanguage.fromOrganization) comparedInOrganizationLanguage = lcid;
+            return false;
+          });
+          if (held.items.length === 0) unshownLabels.delete(lcid);
+          else held.note = exported.ok ? { whys } : { failed: exported.reason };
+        }
+      }
 
       add('form-topology', `${entity}.${name}`, problems.length === 0,
-        problems.length ? `deployed layout does not match the authored one — ${problems.slice(0, 6).join('; ')}${problems.length > 6 ? `; +${problems.length - 6} more` : ''}` : '');
+        problems.length ? `deployed layout does not match the authored one — ${problems.slice(0, 6).join('; ')}${problems.length > 6 ? `; +${problems.length - 6} more` : ''}${
+          comparedInOrganizationLanguage === undefined ? '' : ` — the labels were compared in the organization's base language (${comparedInOrganizationLanguage}), because verify was told no other: if the build was run with --language-code, give verify the same flag (or pin "languageCode" in the spec)`}` : '');
+      if (unverifiedLabels.length) {
+        const n = unverifiedLabels.length;
+        unverified.push(`form-labels:${entity}.${name} (${n === 1 ? 'the label' : 'the labels'} of ${unverifiedLabels.slice(0, 6).join(', ')}${n > 6 ? `, +${n - 6} more` : ''} ${n === 1 ? 'was' : 'were'} not compared: `
+          + `the language the build wrote ${n === 1 ? 'it' : 'them'} in could not be established (${labelLanguage.reason}). `
+          + `Pass --language-code <lcid> (the one the build was run with) or set "languageCode" in the spec to compare ${n === 1 ? 'it' : 'them'})`);
+      }
+      // The labels compared in a language the form's read does not carry (labelProblem), one entry per language: what happened, and what to do. A string
+      // label's language is the one verify was told, so the maker may also tell it another the read carries — and where it was not told but inferred from
+      // the organization, the flag that gives it the build's own is what most likely settles it.
+      for (const [lcid, held] of unshownLabels) {
+        const whats = held.items.map((item) => item.what);
+        const n = whats.length;
+        const string = held.items.some((item) => item.string);
+        const inferred = string && labelLanguage && labelLanguage.fromOrganization
+          ? ` (verify used the organization's base language, because it was told no other: if the build was run with --language-code, give verify the same flag, or pin "languageCode" in the spec)`
+          : '';
+        // What the translation export, asked for these captions, could not do about them: be read at all, or settle them.
+        const exportNote = !held.note ? '' : held.note.failed !== undefined
+          ? `A translation export of solution '${solutionName}' could not be read (${held.note.failed}). `
+          : `A translation export of solution '${solutionName}' was read, but it cannot settle ${n === 1 ? 'it' : 'them'}: ${held.note.whys.join('; ')}. `;
+        unverified.push(`form-labels:${entity}.${name} (${n === 1 ? 'the label' : 'the labels'} of ${whats.slice(0, 6).join(', ')}${n > 6 ? `, +${n - 6} more` : ''} in language ${lcid} ${n === 1 ? 'was' : 'were'} not compared: `
+          + `the environment's form read returns labels only in ${carriedLanguages.join(', ')}, so labels written in ${lcid} cannot be read back from it. `
+          + exportNote
+          + `Check ${n === 1 ? 'it' : 'them'} in Power Apps with that language${string ? `, or verify in a language the read carries${inferred}` : ''})`);
+      }
+      placedGridChecks({
+        tab: (i) => matchedTabs[i],
+        section: (secName) => matchedSections.get(secName),
+      });
     }
+    });
   }
 
   // Commands (existence) — a spec can declare a command bar that didn't build and still pass verify
@@ -448,11 +1245,13 @@ async function verifySpec(spec, read, opts = {}) {
   // effort: only when the reader can resolve a command bar (`commandBar(entity)` -> truthy when present).
   if (typeof read.commandBar === 'function') {
     const cmdEntities = new Set((spec.commands || []).map((c) => String(c.entity).toLowerCase()));
-    for (const entity of cmdEntities) {
+    plan.each([...cmdEntities], async ({ add }, entities) => {
+    for (const entity of entities) {
       let present = false;
       try { present = !!(await read.commandBar(entity)); } catch { present = false; }
       add('command', `${entity} command bar`, present);
     }
+    });
   }
 
   // Business rules. A rule that EXISTS is not a rule that RUNS: a Draft (statecode 0) rule is inert,
@@ -465,7 +1264,8 @@ async function verifySpec(spec, read, opts = {}) {
   //   existence   — the rule never built at all
   //   cardinality — more than one row for the same (entity, name) fires the logic repeatedly
   //   state       — deployed Draft when the spec asked for Active (or the reverse)
-  for (const rule of spec.businessRules || []) {
+  plan.each(spec.businessRules || [], async ({ add, environmentSkipped, phaseSkipped }, rules) => {
+  for (const rule of rules) {
     const entityLogical = String(rule.entity).toLowerCase();
     const name = `${entityLogical}.${rule.name}`;
     // A rule the BUILD skipped because this environment cannot host business rules at all is not a
@@ -537,12 +1337,14 @@ async function verifySpec(spec, read, opts = {}) {
     add('business-rule', name, wantActive === isActive,
       wantActive === isActive ? '' : (wantActive ? 'deployed but DRAFT — the rule does not run' : 'deployed ACTIVE but the spec asks for Draft — the rule is running'));
   }
+  });
 
   // Business process flows. Reconciled on the same three axes as business rules, because a BPF fails
   // the same three silent ways: it never built, it built twice (users are offered the same process
   // more than once), or it is deployed Draft and therefore invisible on the form. Activation is
   // best-effort in the build, so verify is what makes the outcome loud.
-  for (const flow of spec.businessProcessFlows || []) {
+  plan.each(spec.businessProcessFlows || [], async ({ add }, flows) => {
+  for (const flow of flows) {
     const entityLogical = String(flow.entity).toLowerCase();
     const name = `${entityLogical}.${flow.name}`;
     let rows;
@@ -571,11 +1373,52 @@ async function verifySpec(spec, read, opts = {}) {
     add('business-process-flow', name, wantActive === isActive,
       wantActive === isActive ? '' : (wantActive ? 'deployed but DRAFT — the process does not appear on the form' : 'deployed ACTIVE but the spec asks for Draft — the process is running'));
   }
+  });
 
   // Sitemap subareas (+ icons). Scope every check to the specific element type (and, for a subarea
   // icon, the owning entity) so an icon/entity value reused elsewhere in the XML can't satisfy an
   // unrelated check (e.g. an Area icon must not make a missing SubArea icon look present).
-  const xml = (await read.sitemapXml()) || '';
+  //
+  // The sitemap is read once for the pass, by whichever check needs it first: this section always reads it
+  // (as it always has), and the page checks read the same promise.
+  const sitemapXml = once(async () => (await read.sitemapXml()) || '');
+  plan.section(async ({ add }) => {
+  const xml = await sitemapXml();
+  // AB#6726727: a rebuild KEEPS a nav entry's icon that changed in the designer since the spec's
+  // baseline while the spec did not (sitemap-merge.js), and its own --verify must not fail on that.
+  // Such a failing icon check is accepted only when the build's rule (keepsLiveValue) holds for the
+  // LIVE entry the subarea targets — found by the target key the build matches on, resolved with the
+  // dashboard and page ids this verify resolves, so an entry missing from the sitemap (or a sitemap
+  // that could not be read) still fails. Resolved once, and only if an icon check fails.
+  let keepContext = null;
+  const keptByBuild = async (sa, field) => {
+    if (!opts.baselineSpec) return false;
+    if (!keepContext) keepContext = (async () => {
+      const ids = { dashboards: {}, pages: {} };
+      const dashboards = [];
+      for (const s of specSubAreas(spec)) {
+        if (!s.dashboard) continue;
+        const own = await ownDashboard(s.dashboard);
+        if (own.id) dashboards.push([s.dashboard, own.id]);
+      }
+      ids.dashboards = Object.fromEntries(dashboards);
+      if (specSubAreas(spec).some((s) => s.page)) {
+        // The same page identity the page checks below use: the spec's own pageId, then the manifest's.
+        let man = null;
+        try { man = typeof read.manifest === 'function' ? await read.manifest() : null; } catch { man = null; }
+        const byKey = new Map(((man && man.pages) || []).filter((p) => p && p.key && p.pageId).map((p) => [p.key, p.pageId]));
+        ids.pages = Object.fromEntries((spec.pages || []).filter((p) => p && (p.key || p.name))
+          .map((p) => [p.key || p.name, p.pageId || byKey.get(p.key || p.name)]).filter(([, id]) => id));
+      }
+      return { ids, live: liveNavEntries(xml), base: chromeByTargetKey(opts.baselineSpec, ids) };
+    })();
+    const { ids, live, base } = await keepContext;
+    const key = specSubAreaTargetKey(sa, ids);
+    // An unreadable sitemap (liveNavEntries answered null) proves nothing was kept.
+    const entries = key && live ? live.get(key) : undefined;
+    if (!entries || entries.length !== 1) return false;
+    return keepsLiveValue(field, sa[field], entries[0][field], base.get(key));
+  };
   for (const a of (spec.appShell && spec.appShell.areas) || []) {
     if (a.icon) add('area-icon', a.label || '', hasElement(xml, 'Area', { Icon: a.icon }));
     if (a.vectorIcon) add('area-vectorIcon', a.label || '', hasElement(xml, 'Area', { VectorIcon: a.vectorIcon }));
@@ -583,28 +1426,48 @@ async function verifySpec(spec, read, opts = {}) {
       for (const sa of g.subAreas || []) {
         if (sa.entity) add('subarea', sa.title || sa.entity, hasElement(xml, 'SubArea', { Entity: sa.entity }));
         if (sa.dashboard) {
-          // Resolve the declared dashboard (a system dashboard = systemform type 0) by name, then
-          // confirm the sitemap points a SubArea at THAT dashboard id — not just that some dashboard
-          // subarea exists. Missing/unresolvable dashboard => not present.
-          const rows = await read.queryRecords('systemform', { select: ['formid'], filter: `type eq 0 and name eq '${odataLit(sa.dashboard)}'`, top: 1 });
-          const dashId = rows && rows[0] && rows[0].formid;
-          add('subarea', sa.title || sa.dashboard, dashId ? subareaHasDashboard(xml, dashId) : false);
+          // Confirm the sitemap points a SubArea at the dashboard this spec builds — not just that
+          // some dashboard subarea exists, and not at another app's same-named dashboard, which the
+          // name lookup returns too (see ownDashboard above). Absent or unidentifiable => not present.
+          const own = await ownDashboard(sa.dashboard);
+          const wired = own.id ? subareaHasDashboard(xml, own.id) : false;
+          add('subarea', sa.title || sa.dashboard, wired, own.id ? '' : own.detail);
+          // AB#6726727: pointing at the dashboard is not enough. An entry without the launcher Url shows
+          // a placeholder icon and is not a dashboard entry to the designer — the shape earlier builds
+          // wrote over designer-made entries, which the check above passed.
+          if (wired) {
+            const launcher = subareaDashboardHasLauncher(xml, own.id);
+            // Wired, but by a `<SubArea …>` that is no nav entry (in a comment, outside
+            // SiteMap/Area/Group), or in a sitemap the walk cannot read: there is no entry to fault
+            // for a missing Url, so say what is actually wrong.
+            const detail = launcher ? ''
+              : dashboardNavEntries(xml, own.id).length
+                ? `its nav entry has no Url="${DASHBOARD_LAUNCHER_URL}", so the app shows a placeholder icon for it and the designer does not treat it as a dashboard entry — a rebuild restores it`
+                : 'no nav entry points at it: the SubArea that does is not directly under SiteMap/Area/Group (or is inside a comment), or the sitemap XML could not be read';
+            add('subarea-dashboard-launcher', sa.title || sa.dashboard, launcher, detail);
+          }
         }
         if (sa.icon) {
           // Prefer matching the icon on the SubArea that also declares this entity; fall back to any
           // SubArea carrying the icon when the subarea has no entity identity.
           const present = sa.entity ? hasElement(xml, 'SubArea', { Entity: sa.entity, Icon: sa.icon }) : hasElement(xml, 'SubArea', { Icon: sa.icon });
-          add('subarea-icon', sa.title || '', present);
+          // AB#6726727: an icon changed in the designer since the spec's baseline, which the spec has not
+          // changed, is one the build deliberately KEEPS — accepted here in exactly that case, or the
+          // build's own --verify would fail on it.
+          const kept = !present && await keptByBuild(sa, 'icon');
+          add('subarea-icon', sa.title || '', present || kept, kept ? KEPT_BY_DESIGNER : '');
         }
         if (sa.vectorIcon) {
           // VectorIcon serializes as its own sitemap attribute, so check it independently from the
           // raster Icon attribute while keeping the same SubArea scoping rules.
           const present = sa.entity ? hasElement(xml, 'SubArea', { Entity: sa.entity, VectorIcon: sa.vectorIcon }) : hasElement(xml, 'SubArea', { VectorIcon: sa.vectorIcon });
-          add('subarea-vectorIcon', sa.title || '', present);
+          const kept = !present && await keptByBuild(sa, 'vectorIcon');
+          add('subarea-vectorIcon', sa.title || '', present || kept, kept ? KEPT_BY_DESIGNER : '');
         }
       }
     }
   }
+  });
 
   // App-module TABLE membership (appmodulecomponent componenttype 1).
   //
@@ -614,28 +1477,27 @@ async function verifySpec(spec, read, opts = {}) {
   // check above passes, because the table EXISTS and the sitemap DOES name it. Verify reported PASS
   // on exactly that app, which is what made the divergence invisible.
   //
-  // Scoped to SITEMAP-VISIBLE entities on purpose. A spec entity with no subarea is a legitimate
-  // data-model-only/supporting table that the build does not pin, so requiring it would fail every
-  // app that declares one.
+  // Navigation tables and explicit app.tables are membership instructions. A data-model-only entity
+  // with neither is not: requiring every entities[] entry would incorrectly pin supporting tables.
   //
   // Optional capability: verify-spec is also driven by minimal readers, and an optional reader must
   // never become a TypeError for them (same rule as `columnVisualization`).
-  if (typeof read.appEntityComponents === 'function') {
-    const sitemapEntities = [];
-    for (const a of (spec.appShell && spec.appShell.areas) || []) {
-      for (const g of a.groups || []) {
-        for (const sa of g.subAreas || []) {
-          const logical = sa && sa.entity ? String(sa.entity).toLowerCase() : null;
-          if (logical && !sitemapEntities.includes(logical)) sitemapEntities.push(logical);
-        }
-      }
-    }
+  const hiddenTables = Array.isArray(spec.app && spec.app.tables) ? spec.app.tables : [];
+  plan.section(async ({ add }) => {
+  if (typeof read.appEntityComponents === 'function' || hiddenTables.length) {
+    const sitemapEntities = [...new Set([...sitemapEntityTables(spec), ...hiddenTables.map((name) => String(name).toLowerCase())])];
     if (sitemapEntities.length) {
-      const res = await read.appEntityComponents(sitemapEntities);
+      let res;
+      try {
+        res = typeof read.appEntityComponents === 'function' ? await read.appEntityComponents(sitemapEntities)
+          : { ok: false, reason: 'app table membership reader is unavailable' };
+      } catch (error) {
+        res = { ok: false, reason: (error && error.message) || String(error) };
+      }
       if (!res || res.ok !== true) {
         // Fail closed. "We could not look" must never read as "the app is fine" — that is the exact
         // shape of the bug this check exists to catch.
-        add('app-table-component', 'app tables', false, `could not be read: ${(res && res.reason) || 'unknown'}`);
+        add('app-table-component', 'app tables', false, `could not be read: ${(res && res.reason) || 'unknown'} — unverified, not proven correct`);
       } else {
         // Case-insensitive: Dataverse does not guarantee the casing of a resolved logical name.
         const present = new Set((res.present || []).map((n) => String(n).toLowerCase()));
@@ -651,10 +1513,43 @@ async function verifySpec(spec, read, opts = {}) {
       }
     }
   }
+  });
+
+  const mainForms = spec.app && spec.app.mainForms;
+  plan.section(async ({ add }) => {
+  if (mainForms && Object.keys(mainForms).length) {
+    let membership;
+    try {
+      membership = typeof read.appMainForms === 'function'
+        ? await read.appMainForms(appUniqueName(spec), mainForms)
+        : { kind: 'inconclusive', reason: 'app Main-form membership reader is unavailable' };
+    } catch (error) {
+      membership = { kind: 'inconclusive', reason: (error && error.message) || String(error) };
+    }
+    for (const rawTable of Object.keys(mainForms)) {
+      const table = rawTable.toLowerCase();
+      const result = membership && membership.kind === 'read' && Array.isArray(membership.tables)
+        && membership.tables.find((entry) => entry && String(entry.table).toLowerCase() === table);
+      if (!result || !Array.isArray(result.extras) || !Array.isArray(result.missing)) {
+        add('app-main-forms', table, false,
+          `Main-form membership could not be read: ${(membership && membership.reason) || `no complete result for '${table}'`} — unverified, not proven correct`);
+        continue;
+      }
+      const names = (ids) => ids.map((id) => `'${(membership.formNames && membership.formNames[id]) || id}'`).join(', ');
+      const problems = [];
+      if (result.missing.length) problems.push(`Main form(s) ${names(result.missing)} are missing; re-run the build`);
+      if (result.extras.length) {
+        problems.push(`Main form(s) ${names(result.extras)} are outside the list; an existing app keeps forms it already offered — `
+          + `remove them in Maker (app designer -> ${table} -> Forms) or list them`);
+      }
+      add('app-main-forms', table, problems.length === 0, problems.join('; '));
+    }
+  }
+  });
 
   // Pages (design §13.1). Match BY ID against three authorities — IDENTITY (manifest), EXISTENCE
   // (env-wide id set), MEMBERSHIP (app sitemap ids). Reader must supply sitemapPageIds(),
-  // existenceIds(), manifest(), and pageCode(id) when any page has nav. Fail-closed (Imp7):
+  // existenceIds(), manifest(), and pageCode(id) when any page has nav. Fail-closed:
   // reader-incapacity OR an absent/uncorrelatable manifest on a page-bearing spec → unableToRun
   // (NOT "every page missing" — without an id correlation we cannot tell what is there vs. absent).
   const implementedPages = (spec.pages || []).filter((p) => { const s = normalizePageSource(p); return s && s.kind === 'tsx' && s.codeFile; });
@@ -665,27 +1560,79 @@ async function verifySpec(spec, read, opts = {}) {
     typeof read.existenceIds !== 'function' ||
     typeof read.manifest !== 'function'
   )) || !!(hasNavPages && typeof read.pageCode !== 'function');
+  // Build key→id from the manifest (IDENTITY authority). A spec page's own pageId (edit-snapshot)
+  // OUTRANKS the manifest entry for the same key — use idOf() consistently.
+  const pageIdOf = (man) => {
+    const idByKey = new Map(
+      ((man && man.pages) || [])
+        .filter((p) => p && p.key && p.pageId)
+        .map((p) => [p.key, p.pageId]),
+    );
+    // idOf: spec pageId first (highest authority), then manifest key→id.
+    return (p) => p.pageId || idByKey.get(p.key || p.name);
+  };
+  // The page checks' slow reads, made in the order the checks have always made them: the three authorities
+  // (one is the environment's page listing) and then the code of the pages whose navigation is checked,
+  // which a reader that can (`pageCodes`) reads a few at a time instead of one after another. One memo, so
+  // the early start below and the check share the same reads. It never throws: a failed read is handed to the
+  // pages check, which throws it in its own place in the report — the read is no longer made at that point,
+  // and the error that ends the pass must not depend on when it was.
+  const pageReads = once(async () => {
+    try {
+      const sitemapIds = new Set((await read.sitemapPageIds()).map((id) => String(id).toLowerCase()));
+      const existenceIds = new Set((await read.existenceIds()).map((id) => String(id).toLowerCase()));
+      const man = await read.manifest();
+      let codes = null;
+      if (typeof read.pageCodes === 'function') {
+        // Only pages the checks below will read: deployed, in this app, with navigation to check — once
+        // each, in spec order. A page that ends up unresolved here is simply asked for by itself later.
+        const idOf = pageIdOf(man);
+        const wanted = [];
+        const seen = new Set();
+        for (const p of implementedPages) {
+          const id = idOf(p);
+          const key = id ? String(id).toLowerCase() : '';
+          if (!key || !(p.navigatesTo || []).length || seen.has(key)) continue;
+          if (!existenceIds.has(key) || !sitemapIds.has(key)) continue;
+          seen.add(key);
+          wanted.push(id);
+        }
+        // One page is the one-page download, which pageCode already is.
+        if (wanted.length > 1) {
+          try { codes = await read.pageCodes(wanted); } catch { codes = null; }
+        }
+      }
+      return { sitemapIds, existenceIds, man, codes };
+    } catch (error) {
+      return { error };
+    }
+  });
+  const pagesCheck = plan.section(async ({ add }) => {
+  const xml = await sitemapXml();
   if (implementedPages.length) {
     if (unableToRun) {
       // Reader is missing required page-authority methods — add a sentinel check and skip the loop.
       add('page-verify', 'pages', false, 'the verify reader cannot read existence / membership / manifest (unable to run)');
     } else {
-      // ONE cached snapshot of each authority (Imp7 — never re-query per page). Throws from
+      // ONE cached snapshot of each authority (never re-query per page). Throws from
       // sitemapPageIds/existenceIds propagate out of verifySpec; the build gate's try/catch converts them
       // to a non-zero exit (design §13.1). The caller that constructed the reader bears fail-closed responsibility.
-      const sitemapIds = new Set((await read.sitemapPageIds()).map((id) => String(id).toLowerCase()));
-      const existenceIds = new Set((await read.existenceIds()).map((id) => String(id).toLowerCase()));
-      const man = await read.manifest();
-      // Build key→id from the manifest (IDENTITY authority). A spec page's own pageId (edit-snapshot,
-      // C3) OUTRANKS the manifest entry for the same key — use idOf() consistently.
-      const idByKey = new Map(
-        ((man && man.pages) || [])
-          .filter((p) => p && p.key && p.pageId)
-          .map((p) => [p.key, p.pageId]),
-      );
-      // idOf: spec pageId first (highest authority), then manifest key→id (C3 outranks C1).
-      const idOf = (p) => p.pageId || idByKey.get(p.key || p.name);
-      // Imp7: if NO implemented page can be given an id (manifest empty/absent AND no spec pageIds),
+      // The pass stops waiting for these reads once a check listed before this one has failed (see makeCheckPlan's
+      // unlessFailed): whatever this check would go on to report cannot change what the pass throws then. A failure
+      // in a check listed after this one does not end the wait — this check's own failure outranks it.
+      const reads = await plan.unlessFailed(pageReads(), pagesCheck);
+      if (reads === plan.abandoned) return;
+      if (reads.error) throw reads.error;
+      const { sitemapIds, existenceIds, man, codes } = reads;
+      const idOf = pageIdOf(man);
+      // The code `pageCodes` already fetched, else that one page's own download.
+      const pageCodeOf = async (id) => {
+        const got = codes && codes.get(String(id).toLowerCase());
+        if (!got) return read.pageCode(id);
+        if ('error' in got) throw got.error;
+        return got.code;
+      };
+      // If NO implemented page can be given an id (manifest empty/absent AND no spec pageIds),
       // the verifier cannot correlate spec pages to live ids → unableToRun (page-identity), NOT N misses.
       const resolvable = implementedPages.filter((p) => !!idOf(p));
       if (resolvable.length === 0) {
@@ -716,19 +1663,22 @@ async function verifySpec(spec, read, opts = {}) {
           let code;
           try {
             // Download THAT page's code by id (not all pages) — the real reader caches per id.
-            code = (await read.pageCode(id)) || '';
+            code = (await pageCodeOf(id)) || '';
           } catch (e) {
             // A single page's download blip is a specific verifiable miss, not reader-incapacity.
             add('page-code', p.name, false, String((e && e.message) || e));
             continue;
           }
           // THE SINGLE STRUCTURAL ORACLE: parse the deployed page's real navigateTo call sites.
-          // A decoy id in a comment, a stale GUID, or a dynamic pageId all FAIL (C1).
+          // A decoy id in a comment, a stale GUID, or a dynamic pageId all FAIL.
           const targets = extractNavTargets(code);
-          // No residual/malformed PAGEREF_ in deployed code means the resolve+upload step ran on this page.
-          add('page-no-pageref', p.name, !targets.some((t) => t.kind === 'pageref' || t.kind === 'pageref-malformed'));
-          // Every declared nav edge must resolve to the ACTUAL target's deployed id at a REAL call site.
-          const navLiteralIds = new Set(targets.filter((t) => t.kind === 'literal').map((t) => String(t.pageId).toLowerCase()));
+          // No residual/malformed PAGEREF_ in deployed code means the resolve+upload step ran on this page. A token that no call accounts for
+          // is read as well (strayPageRefs): the lexer can hide a call — and so its token — behind a misread, which the targets alone miss.
+          const strays = strayPageRefs(code);
+          add('page-no-pageref', p.name, !targets.some((t) => t.kind === 'pageref' || t.kind === 'pageref-malformed') && strays.length === 0, strays.length ? describePageRefLocations(strays) : '');
+          // Every declared nav edge must resolve to the ACTUAL target's deployed id at a REAL call site. A literal at or after a place the
+          // lexer reads by guess is not one: it may be text read as code (see the trust frontier in pageref-resolver.js).
+          const navLiteralIds = new Set(targets.filter((t) => t.kind === 'literal' && !t.afterFrontier).map((t) => String(t.pageId).toLowerCase()));
           for (const edge of nav) {
             // Target id via the same resolution order (spec pageId > manifest) for nav targets.
             const targetPage = (spec.pages || []).find((pp) => (pp.key || pp.name) === edge.targetKey);
@@ -736,7 +1686,7 @@ async function verifySpec(spec, read, opts = {}) {
             add('page-nav', `${p.name} -> ${edge.targetKey}`, !!targetId && navLiteralIds.has(String(targetId).toLowerCase()));
           }
         }
-        // Set-equality (Imp7): a live sitemap page not mapped by any spec page's id → page-extra.
+        // Set-equality: a live sitemap page not mapped by any spec page's id → page-extra.
         // The deployed app has a page the spec doesn't declare — surface it rather than silently ignore.
         for (const liveId of sitemapIds) {
           if (!specIds.has(liveId)) add('page-extra', liveId, false, 'a sitemap page not declared in the spec');
@@ -744,6 +1694,8 @@ async function verifySpec(spec, read, opts = {}) {
       }
     }
   }
+  });
+  if (implementedPages.length && !unableToRun) plan.early(pageReads, pagesCheck);
 
   // Persona security roles. Existence + SDK-ownership is a sufficient content oracle here (unlike the
   // additive view/form checks): the SDK applies a role's privileges with ReplacePrivilegesRole, so an
@@ -757,7 +1709,21 @@ async function verifySpec(spec, read, opts = {}) {
     if (!appRoleIdsP) appRoleIdsP = read.appRoleIds();
     return appRoleIdsP;
   };
-  for (const p of spec.personas || []) {
+  // The same table's privilege set, and the same role's privileges, are asked for by several personas,
+  // grants and flows. Each is read once per pass (a failed read is remembered with it, which is how every
+  // caller already treats a failure: a finding, never a pass).
+  const readPerKey = (fn) => {
+    const answers = new Map();
+    return (key) => {
+      const k = String(key).trim().toLowerCase();
+      if (!answers.has(k)) answers.set(k, Promise.resolve().then(() => fn(key)));
+      return answers.get(k);
+    };
+  };
+  const entityPrivilegesOf = readPerKey((entity) => read.entityPrivileges(entity));
+  const rolePrivilegesOf = readPerKey((roleId) => read.rolePrivileges(roleId));
+  plan.each(spec.personas || [], async ({ add }, personas) => {
+  for (const p of personas) {
     const roleName = canonicalPersonaName(p); // trimmed — matches the SDK's created name
     if (!roleName) continue;
     let row;
@@ -796,7 +1762,7 @@ async function verifySpec(spec, read, opts = {}) {
       const declared = declaredPrivileges(p);
       let actual = null;
       try {
-        actual = await read.rolePrivileges(row.roleid);
+        actual = await rolePrivilegesOf(row.roleid);
       } catch { actual = null; }
       if (!Array.isArray(actual)) {
         // Fail CLOSED: an unreadable role is not a role we can call correct.
@@ -806,7 +1772,7 @@ async function verifySpec(spec, read, opts = {}) {
         const entityPrivileges = new Map();
         for (const entity of new Set(declared.map((d) => d.entity))) {
           try {
-            const privs = await read.entityPrivileges(entity);
+            const privs = await entityPrivilegesOf(entity);
             if (Array.isArray(privs)) entityPrivileges.set(entity, privs);
           } catch { /* left absent → reported as a finding by compareRolePrivileges */ }
         }
@@ -818,6 +1784,7 @@ async function verifySpec(spec, read, opts = {}) {
       }
     }
   }
+  });
 
   // Role grants (`roleGrants[]`) — privileges ADDED to a pre-existing role. AB#6686429.
   //
@@ -828,7 +1795,8 @@ async function verifySpec(spec, read, opts = {}) {
   // role holds beyond the declared set is somebody else's and must never be a finding.
   //
   // Deliberately NOT checked: the SDK ownership marker. The role belongs to someone else by definition.
-  for (const g of spec.roleGrants || []) {
+  plan.each(spec.roleGrants || [], async ({ add }, grants) => {
+  for (const g of grants) {
     const declaredName = typeof g.role === 'string' ? g.role.trim() : '';
     const label = declaredName || String(g.roleId || '?');
     let row;
@@ -856,7 +1824,7 @@ async function verifySpec(spec, read, opts = {}) {
     }
     let actual = null;
     try {
-      actual = await read.rolePrivileges(row.roleid);
+      actual = await rolePrivilegesOf(row.roleid);
     } catch { actual = null; }
     if (!Array.isArray(actual)) {
       add('role-grant-privileges', label, false, 'could not read the role\'s privileges');
@@ -866,7 +1834,7 @@ async function verifySpec(spec, read, opts = {}) {
     const entityPrivileges = new Map();
     for (const entity of new Set(declared.map((d) => d.entity))) {
       try {
-        const privs = await read.entityPrivileges(entity);
+        const privs = await entityPrivilegesOf(entity);
         if (Array.isArray(privs)) entityPrivileges.set(entity, privs);
       } catch { /* left absent → reported as a finding by compareRolePrivileges */ }
     }
@@ -875,6 +1843,7 @@ async function verifySpec(spec, read, opts = {}) {
       ? `${declared.length} granted privilege(s) held`
       : cmp.missing.map((m) => `${m.entity}.${m.access}: ${m.reason}`).join('; '));
   }
+  });
 
   // Business process flow role grants (`businessProcessFlows[].securityRoles`). #513.
   //
@@ -882,7 +1851,8 @@ async function verifySpec(spec, read, opts = {}) {
   // named `bpfUniqueName(flow.name)` (live-measured), and holding privileges on it is what lets a
   // persona run the process. Subset semantics as everywhere else — a persona legitimately holds far
   // more than this one grant.
-  for (const f of spec.businessProcessFlows || []) {
+  plan.each(spec.businessProcessFlows || [], async ({ add }, flows) => {
+  for (const f of flows) {
     if (!f || !f.securityRoles || !Array.isArray(f.securityRoles.personas)) continue;
     if (typeof read.rolePrivileges !== 'function' || typeof read.entityPrivileges !== 'function') continue;
     // READ the deployed unique name, do not derive it. A flow authored in Maker, or one renamed
@@ -921,7 +1891,7 @@ async function verifySpec(spec, read, opts = {}) {
     }
     let privs = null;
     try {
-      privs = await read.entityPrivileges(backingTable);
+      privs = await entityPrivilegesOf(backingTable);
     } catch { privs = null; }
     if (!Array.isArray(privs)) {
       // Fail CLOSED: an unreadable backing table is not proof the grant landed. It also catches the
@@ -945,7 +1915,7 @@ async function verifySpec(spec, read, opts = {}) {
       } catch { row = undefined; }
       if (!row) { add('bpf-roles', `${f.name} / ${roleName}`, false, 'persona role not found'); continue; }
       let actual = null;
-      try { actual = await read.rolePrivileges(row.roleid); } catch { actual = null; }
+      try { actual = await rolePrivilegesOf(row.roleid); } catch { actual = null; }
       if (!Array.isArray(actual)) { add('bpf-roles', `${f.name} / ${roleName}`, false, "could not read the role's privileges"); continue; }
       const actualByPrivilegeId = new Map(actual.map((a) => [String((a && a.privilegeId) || '').trim().toLowerCase(), a && a.depth]));
       const declared = BPF_ROLE_ACCESS.map((access) => ({ entity: backingTable, access, scope: 'organization' }));
@@ -955,6 +1925,7 @@ async function verifySpec(spec, read, opts = {}) {
         : cmp.missing.map((m) => `${m.access}: ${m.reason}`).join('; '));
     }
   }
+  });
 
   // AI app features. The verifier previously had NO awareness of `spec.ai` at all, so a build whose
   // every requested AI feature was skipped (admin gate off) or silently not persisted still reported a
@@ -983,6 +1954,7 @@ async function verifySpec(spec, read, opts = {}) {
   // Reader-gated like the other content checks: this needs BOTH `retrieveSetting` (context) and
   // `queryRecords` (the proof), so an existence-only reader skips it entirely rather than falling
   // back to the unsound effective-value compare. The shipped CLI reader has both.
+  plan.section(async ({ add }) => {
   const requestedFeatures = resolveAiFlags(spec);
   if (requestedFeatures && typeof read.retrieveSetting === 'function' && typeof read.queryRecords === 'function') {
     // MUST be the same identity the build wrote under — `appUniqueName(spec)`, which falls back to
@@ -996,15 +1968,15 @@ async function verifySpec(spec, read, opts = {}) {
     for (const [feature, requested] of Object.entries(requestedFeatures)) {
       const setting = AI_APP_SETTING[feature];
       if (!setting) continue; // unknown key — validation already reports it
-      // Feature-aware: `true` means '2' for the form-fill family and '1' elsewhere. Comparing
-      // against the wrong spelling reports a correctly-applied feature as missing.
+      // Feature-aware: `true` is '2' for every AI setting, while `false` is '1' for most and '0' for
+      // nlChart. Comparing against the wrong spelling reports a correctly-applied feature as missing.
       const want = featureWantValue(requested, feature);
 
       // (1) Authoritative: does an app-scope override row exist, holding `want`?
       //     A small retry on the ABSENT case only: an override row can lag briefly behind the write
       //     that created it, and a single read turns that lag into a false FAIL on the build's exit
       //     code (`--verify` gates it). A read ERROR is not retried — see proveAppOverride.
-      const proof = app.error ? { error: app.error } : await proveAppOverride(read, app.appModuleId, setting, { attempts: opts.proofAttempts === undefined ? 3 : opts.proofAttempts, delayMs: opts.proofDelayMs === undefined ? 500 : opts.proofDelayMs });
+      const proof = app.error ? { error: app.error } : await proveAppOverride(read, app.appModuleId, setting, proofBudget(opts));
 
       // (2) Context only: what is currently in force (may be the ENVIRONMENT fallback). This read is
       //     genuinely non-load-bearing — it never participates in the comparison, so a transport
@@ -1017,7 +1989,7 @@ async function verifySpec(spec, read, opts = {}) {
 
       // Fail-closed: when the proof could not be run we could LOOK and looking failed, so we must not
       // claim PASS on the strength of a value that may simply be the environment default.
-      const present = !proof.error && proof.exists && sameSettingValue(proof.value, want);
+      const present = !proof.error && proof.exists && sameSettingValue(proof.value, want, feature);
       const inForce = effective === undefined ? '(unreadable)' : effective === '' ? '(unset)' : effective;
       add('ai-feature', feature, present, present ? '' :
         proof.error
@@ -1027,6 +1999,34 @@ async function verifySpec(spec, read, opts = {}) {
             : `requested '${want}' but the app-scope override for '${setting}' holds '${proof.value === '' || proof.value === undefined ? '(empty)' : proof.value}'`);
     }
   }
+  });
+
+  // App routing description (`app.aiDescription`, #583). Asserted only when the spec sets one: absent
+  // means the build left the deployed value alone, so there is nothing to compare. The oracle is the
+  // row's own `appmodule.aiappdescription`, found by the SAME identity the build wrote under
+  // (`appUniqueName(spec)`). Reader-gated on `queryRecords`; a failed read FAILS the check, because a
+  // routing description nobody can read back is not proven applied.
+  plan.section(async ({ add }) => {
+  const wantAiDescription = spec.app && typeof spec.app.aiDescription === 'string' && spec.app.aiDescription.trim()
+    ? spec.app.aiDescription : null;
+  if (wantAiDescription && typeof read.queryRecords === 'function') {
+    let got;
+    let error;
+    try {
+      const rows = await read.queryRecords('appmodule', { select: ['aiappdescription'], filter: `uniquename eq '${odataLit(appUniqueName(spec))}'`, top: 1 });
+      if (!rows || !rows[0]) error = `no app module with unique name '${appUniqueName(spec)}' was found`;
+      else got = rows[0].aiappdescription;
+    } catch (e) {
+      error = (e && e.message) || String(e);
+    }
+    const present = !error && got === wantAiDescription;
+    const shown = (s) => JSON.stringify(s.length > 80 ? `${s.slice(0, 77)}...` : s);
+    add('app-ai-description', 'app.aiDescription', present, present ? ''
+      : error ? `could not read the app's routing description: ${error}`
+        : got ? `the deployed routing description ${shown(got)} differs from the spec's`
+          : 'the app has no routing description (appmodule.aiappdescription is empty)');
+  }
+  });
 
   // AI row summaries (`ai.summaries`). AB#6689110.
   //
@@ -1056,7 +2056,8 @@ async function verifySpec(spec, read, opts = {}) {
   // `--verify` exit code, and it hits most specs, since almost every table has a text column.
   const summaryTables = specOptsIntoAi(spec) ? selectSummaryTables(spec) : [];
   if (summaryTables.length && typeof read.queryRecords === 'function') {
-    for (const logical of summaryTables) {
+    plan.each(summaryTables, async ({ add }, tables) => {
+    for (const logical of tables) {
       const modelName = `${String(logical).toLowerCase()} row summary`;
       let rows = null;
       let readError = null;
@@ -1097,7 +2098,26 @@ async function verifySpec(spec, read, opts = {}) {
             + 'The build reports this as a skip when the environment does not license the row-summary (AI Builder) capability — '
             + 'run against a licensed environment, or set the table to enabled:false so the spec stops requesting it.');
     }
+    });
   }
+
+  // Every check above is registered and none has run yet: run them. The reads overlap (at most
+  // `concurrency` at a time); the report below does not depend on which answered first.
+  //
+  // A page read the pass gave up on (see makeCheckPlan) can still be running when the pass ends: a request already sent
+  // finishes on its own, and a read still to start would begin behind a pass that no longer needs it. So the reader is asked
+  // to end what it started — to start no more page reads — before the pass returns, or throws, whichever it is, because a
+  // verify CLI exits the moment it does. Best-effort: nothing it throws may replace the outcome of the pass.
+  let ran;
+  try {
+    ran = await plan.run();
+  } finally {
+    if (plan.abandonedReads() && read && typeof read.endPageReads === 'function') {
+      try { await read.endPageReads(); } catch { /* the pass's own outcome stands */ }
+    }
+  }
+  const { checks, environmentSkipped, phaseSkipped, unverified } = ran;
+  const add = (kind, name, present, detail) => checks.push({ kind, name, present: !!present, detail: detail || '' });
 
   // JTBD rollup — translates a technical failure into the business impact it caused. Every other
   // check answers "is this artifact deployed?"; this one answers "can this persona still do this
@@ -1133,7 +2153,7 @@ async function verifySpec(spec, read, opts = {}) {
 
   const missing2 = checks.filter((c) => !c.present);
   // Keep unableToRun absent (undefined) on the normal path so existing callers and tests are unaffected.
-  // `environmentSkipped` / `phaseSkipped` are likewise omitted when empty, for the same reason.
+  // `environmentSkipped` / `phaseSkipped` / `unverified` are likewise omitted when empty, for the same reason.
   return {
     ok: missing2.length === 0 && !unableToRun,
     checks,
@@ -1141,6 +2161,7 @@ async function verifySpec(spec, read, opts = {}) {
     unableToRun: unableToRun || undefined,
     ...(environmentSkipped.length ? { environmentSkipped } : {}),
     ...(phaseSkipped.length ? { phaseSkipped } : {}),
+    ...(unverified.length ? { unverified } : {}),
   };
 }
 
@@ -1148,8 +2169,8 @@ function escapeRe(s) {
   return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
-function expectedViewFetchParts(spec, view) {
-  const def = viewDef(spec, view);
+function expectedViewFetchParts(spec, view, resolution) {
+  const def = viewDef(spec, view, resolution);
   const conditions = [];
   const walk = (group) => {
     for (const c of (group && group.conditions) || []) {
@@ -1166,7 +2187,10 @@ function expectedViewFetchParts(spec, view) {
     attribute: String(s.attribute || '').toLowerCase(),
     descending: s.descending === true,
   }));
-  return { conditions: conditions.filter((c) => c.attribute && c.operator), orders };
+  // A label the environment could not resolve stays in `def` as the text it was written with; it is no
+  // expectation of what is deployed, and the caller reports it as a problem of its own.
+  const unresolved = new Set(((resolution && resolution.problems) || []).map((p) => `${p.attr}|${p.label}`));
+  return { conditions: conditions.filter((c) => c.attribute && c.operator && !unresolved.has(`${c.attribute}|${c.value}`)), orders };
 }
 
 function xmlDecode(value) {
@@ -1283,6 +2307,332 @@ function parseFetchXml(xml) {
   return { conditions, orders };
 }
 
+// The read-only / hidden flags the build writes for an AUTO-layout form: one entry per field the compiled
+// layout places — the primary column, the table's declared columns, its parent lookups — whose compiled cell
+// carries a flag, in the cell's own terms (`control.isReadOnly`, `visible: false`). These are exactly the
+// fields the build's reconcile places and re-asserts (`want` → applyFieldControlOptions in sdk-build.js); a
+// `fieldOptions` flag on any other field is never written (spec-lint warns about it).
+function autoLayoutFieldFlags(spec, formSpec) {
+  const out = [];
+  const seen = new Set();
+  const def = compileFormIntent(spec, formSpec);
+  for (const t of def.tabs || []) for (const col of t.columns || []) for (const sec of col.sections || []) {
+    for (const row of sec.rows || []) for (const cell of row.cells || []) {
+      const fn = cell.control && cell.control.fieldName;
+      if (!fn || isNonFieldControl(cell.control)) continue;
+      const field = String(fn).toLowerCase();
+      if (seen.has(field)) continue;
+      seen.add(field);
+      const readOnly = cell.control.isReadOnly === true;
+      const hidden = cell.visible === false;
+      if (readOnly || hidden) out.push({ field, readOnly, hidden });
+    }
+  }
+  return out;
+}
+
+// What a build does with each OTHER cell of a Notes host before it judges the section — the answer
+// `timelineVerifyProblem` (form-timeline.js) asks for one cell at a time:
+//
+//   (cell) → {}                          not a bound field (a maker's web resource, a quick view, a sub-grid, a spacer): a build
+//                                        never touches it, so it stays
+//            { name }                    a field the build leaves where it is
+//            { name, goes }              a field the build takes out of the host first — `destructive` when it removes it, which
+//                                        takes --allow-destructive
+//            { name, unsure, destructive? }  a field verify cannot tell the build's treatment of; `unsure` says why
+//
+// The build repairs the host LAST (repairTimelineHost) and declines a host that still holds another control, but by then
+// its field passes have run, and they take out of the host the fields the spec says belong elsewhere. `--verify` reads the
+// published form BEFORE any of that, so judging the form as published would send the maker to move by hand a field the
+// build moves or removes itself. A bound field leaves the host by:
+//   · placement  an explicit layout that declares it in another section moves its cell there (placeFieldInSection);
+//   · an anchor  `fieldOptions[field].after` moves it beside the anchor (applyFieldPositions) — on any layout, whatever
+//                `prune` says — unless the anchor is not on the form or sits in a section the build owns, where no field
+//                is placed (planFieldAdjacent). The build places anchored fields in DEPENDENCY order, so an anchor that
+//                sits in the host but has an anchor of its own is moved out first, and the field follows it (canAnchor);
+//   · the prune  an explicit layout with prune on removes a field it does not list. That is `formRemovals`, the function
+//                behind the destructive gate, so the two cannot disagree about which fields go; the removal needs
+//                --allow-destructive.
+//
+// What a pass does is predicted only for a field the published form has ONE cell of. Each of those passes acts on a single cell
+// of a field — the first it finds in the form's order AT THAT MOMENT, and the prune removes one cell of a field per run — and that
+// is not the published order: the topology pass has reordered tabs and sections and moved named sections between tabs by then
+// (planOrderMoves), and a pass can move the very cell a later pass looks for. With two cells in different sections nothing
+// short of replaying the build says which one it acts on, so for a field the form has more than once that a pass WOULD act on
+// verify does not predict either way: it says it cannot tell (`unsure`), rather than promise a repair the build then declines or
+// send the maker to move by hand what the build moves itself. A field that no pass touches stays whichever cell is acted on, so
+// that stays a plain "the build leaves it", one cell of it or several. The same uncertainty reaches a field anchored to an ANCHOR
+// the form has more than once, one of whose cells is in a section the build owns — its own anchor, or the end of a chain of
+// anchors (canAnchor) — and the reason names the field the form has more than once, not an anchor of one cell on the way to it.
+//
+// This is a prediction from the spec and the published form. It cannot see what only happens as the build runs: a removal
+// the maker declines at the preflight, or one the build holds back because the form changed since, or a move it skips
+// because the rows it would split carry a row-span. Where it is wrong the build says so (`skipped.layout`) and the form
+// still fails `--verify` afterwards: the build's own report is the authority, and this spares the maker only the advice
+// that is wrong for the common case.
+//
+// Returns nothing for a layout the compiler cannot read (only a spec that was never validated): nothing can be predicted
+// for it, and `timelineVerifyProblem` then counts every other cell as in the way, as it does for a form it knows nothing about.
+function notesHostInspector(spec, formSpec, deployed) {
+  let def;
+  try { def = compileFormIntent(spec, formSpec); } catch (e) { return undefined; }
+  const want = new Set(formFieldLogicals(def));
+  // An auto layout declares no section for a field and relocates nothing; only an explicit one places.
+  const declaredIn = def.__explicitLayout ? declaredSectionByField(def.tabs) : {};
+  // formRemovals takes a form, and `deployed` is the tabs array verify parsed from its FormXML.
+  const removals = new Set(formRemovals({ tabs: deployed }, def));
+  const anchors = def.__fieldPositions || {};
+  // Every cell that binds a field, per field, in the published form's order, with the section it is in. A quick view carries
+  // its lookup's name in `datafieldname` and is not that field — the build skips it when it looks for a field's cell
+  // (findFieldCellLocation), so it must not count as one here.
+  const cellsOf = new Map();
+  for (const tab of deployed || []) for (const column of (tab && tab.columns) || []) for (const section of (column && column.sections) || []) {
+    for (const row of (section && section.rows) || []) for (const cell of (row && row.cells) || []) {
+      const control = cell && cell.control;
+      if (!control || !control.fieldName || isNonFieldControl(control)) continue;
+      const logical = String(control.fieldName).toLowerCase();
+      if (!cellsOf.has(logical)) cellsOf.set(logical, []);
+      cellsOf.get(logical).push({ section, cell });
+    }
+  }
+  // Whether the build, positioning a field beside `field`, finds it in a section it does not own: `true` — it moves the field
+  // there; `false` — it declines (planFieldAdjacent: the anchor is on the form in a section the build owns, or not on it at
+  // all); `{ chain }` — that depends on which of several cells of a field the build finds first. `chain` runs from `field`
+  // through the anchors it is itself placed after, down to that field: a field placed after one that hangs on such a field is
+  // as uncertain as it is.
+  const canAnchor = (field, seen = new Set()) => {
+    const cells = cellsOf.get(field);
+    // Not on the form: the build adds it, to a section of the form's own, when the layout places it.
+    if (!cells) return want.has(field);
+    if (cells.every((c) => !isEngineHostSection(c.section))) return true;
+    if (cells.length > 1) return { chain: [field] };
+    // One cell, in a section the build owns. It is taken out before anything is positioned beside it when the layout declares
+    // it elsewhere, and when it is anchored itself its own move is made first (dependency order) — a field anchored to it
+    // follows it out. `seen` ends a cycle, which the build refuses to place at all.
+    if (declaredIn[field] !== undefined) return true;
+    const next = anchors[field];
+    if (!next || seen.has(field)) return false;
+    seen.add(field);
+    const below = canAnchor(next, seen);
+    return below && below.chain ? { chain: [field, ...below.chain] } : below;
+  };
+  // Why a field cannot be predicted when its anchors lead to a field the form has more than once, in the chain's own terms: the
+  // anchors on the way have one cell each and are not called otherwise. ['new_other', 'new_area'] reads "its anchor 'new_other'
+  // follows 'new_area', which is on the form more than once"; a chain of one is the anchor itself.
+  const moreThanOnce = (chain) => (chain.length === 1
+    ? `its anchor '${chain[0]}' is on the form more than once`
+    : `its anchor '${chain[0]}' follows ${chain.slice(1).map((f) => `'${f}'`).join(', which follows ')}, which is on the form more than once`);
+  // What the build does with the cell of `logical` it acts on — the same three rules, in the order the passes run them — or
+  // nothing when no pass touches the field.
+  const ruleFor = (logical) => {
+    if (declaredIn[logical] !== undefined) return { goes: `your layout places it in section '${declaredIn[logical]}', so it is moved there` };
+    if (removals.has(logical)) return { goes: 'your layout does not list it, so it is removed', destructive: true };
+    const anchor = anchors[logical];
+    if (!anchor) return undefined;
+    const usable = canAnchor(anchor);
+    if (usable && usable.chain) return { unsure: moreThanOnce(usable.chain) };
+    return usable ? { goes: `fieldOptions places it after '${anchor}', so it is moved there` } : undefined;
+  };
+  return (cell) => {
+    const control = cell && cell.control;
+    if (!control || !control.fieldName || isNonFieldControl(control)) return {};
+    const logical = String(control.fieldName).toLowerCase();
+    const name = `the field '${logical}'`;
+    const cells = cellsOf.get(logical) || [];
+    const mine = cells.find((c) => c.cell === cell);
+    if (!mine) return { name };
+    const rule = ruleFor(logical);
+    if (!rule) {
+      // No pass touches the field, so every cell of it stays. A further cell of it in the same section is named as one, so the
+      // advice never names one field twice.
+      const nth = cells.filter((c) => c.section === mine.section).indexOf(mine);
+      return { name: nth === 0 ? name : `${nth === 1 ? 'a second' : 'another'} cell of ${name}` };
+    }
+    if (cells.length === 1) return Object.assign({ name }, rule);
+    return Object.assign({ name, unsure: 'it is on the form more than once' }, rule.destructive ? { destructive: true } : {});
+  };
+}
+
+// Repeated field bindings are valid (body/header), but duplicated cell/control identities are not.
+// Collect definitions across the whole form, not only the sections an explicit layout declares.
+function formIdentityProblems(xml) {
+  const markup = String(xml || '')
+    .replace(/<!--[\s\S]*?-->/g, '')
+    .replace(/<!\[CDATA\[[\s\S]*?\]\]>/g, '')
+    .replace(/<\?[\s\S]*?\?>/g, '');
+  // Reuse the quote-aware XML token patterns used by the sitemap oracle. A literal <control> in
+  // a comment/CDATA is not a definition, and raw '>' inside a quoted attribute is not a tag end.
+  const tags = [...markup.matchAll(XML_TAG)];
+  if (tags.length !== (markup.match(/</g) || []).length) return ['could not parse the deployed FormXML to verify identities'];
+  const open = [];
+  const seen = { cell: new Set(), control: new Set() };
+  const problems = [];
+  let roots = 0;
+  for (const [, closing, name, body, selfClosing] of tags) {
+    if (closing) {
+      if (open[open.length - 1] !== name) return ['could not parse the deployed FormXML to verify identities'];
+      open.pop();
+      continue;
+    }
+    const kind = name.toLowerCase();
+    if (!open.length && kind === 'form') roots += 1;
+    if (open.length && open[0].toLowerCase() === 'form' && (kind === 'cell' || kind === 'control')) {
+      for (const match of body.matchAll(XML_ATTR)) {
+        if (match[1].toLowerCase() !== 'id') continue;
+        const id = decodeXmlEntities(match[2] !== undefined ? match[2] : match[3]).trim();
+        if (!id) continue;
+        // Cell IDs and GUID-shaped control IDs may arrive as "{ABC...}" or "abc...". Non-GUID
+        // control names remain exact strings; the two ID namespaces are independent.
+        const unwrapped = id.startsWith('{') && id.endsWith('}') ? id.slice(1, -1) : id;
+        const key = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(unwrapped)
+          ? unwrapped.toLowerCase() : id;
+        if (seen[kind].has(key)) problems.push(`duplicate ${kind} id '${id}' in the deployed form`);
+        seen[kind].add(key);
+      }
+    }
+    if (!selfClosing) open.push(name);
+  }
+  if (open.length || roots !== 1) return ['could not parse one deployed FormXML root to verify identities'];
+  return problems;
+}
+
+// How an AUTO layout's compiler-named containers are found on a deployed form: by name, because nothing there is
+// matched by label or position (an explicit layout's matches are made where the layout is walked).
+function layoutAutoMatch(deployed) {
+  const lower = (v) => String(v == null ? '' : v).toLowerCase();
+  return {
+    tab: (i) => {
+      const at = deployed.findIndex((t) => lower(t.name) === AUTO_TAB_NAME);
+      return i === 0 && at >= 0 ? at : undefined;
+    },
+    section: (name) => {
+      for (let ti = 0; ti < deployed.length; ti += 1) {
+        for (let ci = 0; ci < (deployed[ti].columns || []).length; ci += 1) {
+          const sections = deployed[ti].columns[ci].sections || [];
+          for (let si = 0; si < sections.length; si += 1) {
+            if (lower(sections[si].name) === name && !isEngineHostSection(sections[si])) return { ti, ci, si };
+          }
+        }
+      }
+      return undefined;
+    },
+  };
+}
+
+// Whether each sub-grid that declares where it goes (`tab` / `column` / `after` / `before`) is where the spec
+// puts it on the DEPLOYED form: in the form-column of its anchor and DIRECTLY beside it (or beside the grid
+// anchored there ahead of it — see neighbourOf), or in the tab (and column) it names. The build converges these,
+// so a grid still elsewhere means the fix was not applied — the same reason every other placement is verified,
+// and the reason this is judged against what the form really holds rather than against the build's report.
+// `match` says where the layout's tabs and sections are on the deployed form: { tab(specIndex) → deployed index,
+// section(name) → { ti, ci, si } }, each undefined when absent. A grid with no placement is not checked.
+function subgridPlacementChecks(spec, f, deployed, match) {
+  const placed = [];
+  for (const sg of f.subgrids || []) {
+    const raw = placementOf(sg);
+    if (!raw || !sg.childEntity) continue;
+    const rel = subgridRelationshipName(spec, f.entity, sg.childEntity);
+    if (rel) placed.push({ raw, rel, key: rel.toLowerCase(), child: String(sg.childEntity).toLowerCase() });
+  }
+  if (!placed.length) return [];
+  const layout = formLayoutNames(f);
+  // The anchored grids of each layout form-column, in declared order: what the build's sequence is made of.
+  const groups = new Map();
+  const resolvedOf = new Map();
+  for (const p of placed) {
+    const resolved = resolvePlacement(layout, p.raw);
+    resolvedOf.set(p, resolved);
+    if (!resolved.ok || !resolved.anchor) continue;
+    const key = `${resolved.tabIndex}:${resolved.columnIndex}`;
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push({ key: p.key, [resolved.anchor.side]: resolved.anchor.name });
+  }
+  const tabName = (ti) => String((deployed[ti] || {}).name || `#${ti + 1}`);
+  const out = [];
+  const judged = new Set();
+  for (const p of placed) {
+    const resolved = resolvedOf.get(p);
+    const name = `sub-grid ${p.child}`;
+    const fail = (detail) => out.push({ name, ok: false, detail });
+    // A form holds one grid per relationship, and the spec gate refuses an entry that places a grid a second time. A
+    // spec that reaches verify without the gate must not PASS such an entry: the grid sits where the first one puts it,
+    // so the later entry's placement was never what the build honoured.
+    if (judged.has(p.key)) { fail(`the sub-grid for ${p.rel} is listed more than once, and a form holds one grid per relationship — only the first entry's placement is checked`); continue; }
+    judged.add(p.key);
+    if (!resolved.ok) { fail('its placement does not resolve against the layout this spec declares'); continue; }
+    const at = findGridSection(deployed, p.rel);
+    if (!at) { fail(`the grid for relationship ${p.rel} is not on the deployed form`); continue; }
+    const problems = [];
+    if (resolved.anchor) {
+      const anchor = match.section(resolved.anchor.name);
+      if (!anchor) { fail(`its anchor section '${resolved.anchor.name}' is not on the deployed form, so where the grid sits cannot be proven`); continue; }
+      if (at.ti !== anchor.ti || at.ci !== anchor.ci) {
+        problems.push(`the grid is in tab '${tabName(at.ti)}' form-column ${at.ci + 1}, but the spec places it ${resolved.anchor.side} section '${resolved.anchor.name}', in tab '${tabName(anchor.ti)}' form-column ${anchor.ci + 1}`);
+      } else {
+        const key = `${resolved.tabIndex}:${resolved.columnIndex}`;
+        const seq = columnSequence(layout[resolved.tabIndex].columns[resolved.columnIndex].sections, groups.get(key) || []);
+        // Where a token of the sequence sits on the deployed form-column of the anchor. A grid counts only in the
+        // section the build owns: one a maker put in a section of their own is nothing the build places by.
+        const siOf = (token) => {
+          if (token.section !== undefined) {
+            const hit = match.section(token.section);
+            return hit && hit.ti === anchor.ti && hit.ci === anchor.ci ? hit.si : undefined;
+          }
+          const hit = findGridSection(deployed, token.grid);
+          return hit && hit.engine && hit.ti === anchor.ti && hit.ci === anchor.ci ? hit.si : undefined;
+        };
+        const near = neighbourOf(seq, p.key, (token) => siOf(token) !== undefined);
+        if (!near) { fail(`its anchor section '${resolved.anchor.name}' is not on the deployed form, so where the grid sits cannot be proven`); continue; }
+        const refSi = siOf(near.token);
+        const wantSi = near.side === 'after' ? refSi + 1 : refSi - 1;
+        if (at.si !== wantSi) {
+          const sections = deployed[anchor.ti].columns[anchor.ci].sections || [];
+          const ref = tokenLabel(near.token, (gridKey) => (placed.find((q) => q.key === gridKey) || {}).child);
+          const from = near.side === 'after' ? refSi + 1 : at.si + 1;
+          const between = near.side === 'after' ? sections.slice(refSi + 1, at.si) : sections.slice(at.si + 1, refSi);
+          const names = between.map((s, i) => `'${s.name || `#${from + i + 1}`}'`).join(', ');
+          const wrongSide = near.side === 'after' ? at.si < refSi : at.si > refSi;
+          problems.push(wrongSide
+            ? `the grid is ${near.side === 'after' ? 'above' : 'below'} ${ref} in tab '${tabName(anchor.ti)}' form-column ${anchor.ci + 1}, but the spec places it directly ${near.side} it`
+            : `the grid is not directly ${near.side} ${ref} in tab '${tabName(anchor.ti)}' form-column ${anchor.ci + 1}: ${names} ${between.length === 1 ? 'sits' : 'sit'} between them`);
+        }
+      }
+    } else {
+      const ti = match.tab(resolved.tabIndex);
+      if (ti === undefined) { fail(`tab '${layout[resolved.tabIndex].name}' is not on the deployed form, so where the grid sits cannot be proven`); continue; }
+      if (at.ti !== ti) problems.push(`the grid is in tab '${tabName(at.ti)}', but the spec places it in tab '${tabName(ti)}'`);
+      else if (resolved.columnIndex !== undefined && at.ci !== resolved.columnIndex) problems.push(`the grid is in form-column ${at.ci + 1} of tab '${tabName(ti)}', but the spec places it in form-column ${resolved.columnIndex + 1}`);
+    }
+    // What to do about a grid that is not where the spec puts it depends on whether a build will move it: it moves the
+    // section it owns (a `section_grid_*` host) and leaves a grid a maker put in a section of their own. A full build —
+    // `--changed-only` skips a spec that has not changed, which a form an older build left never reaches the fix by.
+    const advice = at.engine
+      ? `run ${FULL_BUILD} to move it`
+      : 'it sits in a section a build did not create, so a build leaves it there — move that section in the maker, or delete it to let a build place a grid of its own';
+    out.push({ name, ok: problems.length === 0, detail: problems.length ? `deployed where the spec does not place it — ${problems.join('; ')} — ${advice}` : '' });
+  }
+  return out;
+}
+
+// The (LCID, text) pairs a spec's tab or section label declares. A non-empty string is one pair, in `language` — the language the build
+// writes a string label in; a localized label, a map keyed by LCID ({ "1033": "Overview", "1036": "Aperçu" }), is one pair per entry
+// that has a valid LCID and a non-empty text; anything else (no label, an empty one, a shape the build cannot write) declares nothing, and so
+// is not held to anything.
+function declaredLabels(authored, language) {
+  if (typeof authored === 'string') return authored === '' ? [] : [[language, authored]];
+  if (!isLocalizedLabelMap(authored)) return [];
+  return Object.entries(authored)
+    .map(([key, text]) => [normalizeLanguageCode(key), text])
+    .filter(([lcid, text]) => lcid !== null && typeof text === 'string' && text !== '');
+}
+
+// Whether a form's explicit layout authors a tab or section label as a string, which is held to the build's authoring language.
+function authorsStringLabel(f) {
+  const isString = (label) => typeof label === 'string' && label !== '';
+  return (f.tabs || []).some((t) => t && typeof t === 'object' && (isString(t.label)
+    || formColumnsOf(t).some((c) => c && Array.isArray(c.sections) && c.sections.some((s) => s && typeof s === 'object' && isString(s.label)))));
+}
+
 // Parse a deployed form's FormXml into the container tree `--verify` needs to prove a layout.
 //
 // Why this exists: form verification used to prove only that a form row EXISTS with the right
@@ -1299,6 +2649,16 @@ function parseFetchXml(xml) {
 //           <row><cell ...><control datafieldname="new_name" .../></cell></row>
 //   … and a cell may carry no control at all (a spacer), or a control with no datafieldname
 //   (a sub-grid, the notes timeline, a web resource) — those are NOT bound fields and are skipped.
+//   The form's HEADER and FOOTER, and a tab's own TABHEADER and TABFOOTER (before the tab's <columns>), hold cells in rows of their own,
+//   outside the sections of the body:
+//     <header id="…"><rows><row><cell …><control datafieldname="new_name" disabled="false" /></cell></row></rows></header>
+//   They are returned beside the tabs, as `outer`: [{ part: 'header' | 'footer' | 'tabheader' | 'tabfooter', tab, cell }] in document
+//   order, `tab` being the name of the tab a tabheader or tabfooter belongs to. A field placed there is a placement of the field as much as
+//   a section's is, and the build flags it (artifact-intent.js findFieldOuterCells), so verify must see it.
+//   `languages` is every language a label of the form is in — a tab's, a section's, a field's, a header cell's alike — as the LCIDs the labels name,
+//   ascending: `<label description="Overview" languagecode="1033" />` adds 1033, and a label that names no language adds none. It is what the READ
+//   carries of the form (see labelProblem, which is where it matters). A tab and a section also carry their `id`, when the FormXML gives them one: the key a translation
+//   export has their captions by.
 //
 // Written as a depth scanner rather than nested non-greedy regexes: tabs contain columns contain
 // sections contain rows contain cells, and a non-greedy `<section>[\s\S]*?</section>` stops at the
@@ -1306,14 +2666,30 @@ function parseFetchXml(xml) {
 function parseFormTopology(xml) {
   const s = String(xml || '');
   const tabs = [];
-  let tab = null, column = null, section = null, row = null, cell = null;
+  const outer = [];
+  const languages = new Set();
+  // `part` is the form's header or footer, or a tab's own, while the scan is inside one: a cell then belongs to `outer`, not to a section's row.
+  let tab = null, column = null, section = null, row = null, cell = null, part = null;
   // A <cell> carries its own <labels>, so a cell's label must not be attributed to its section.
   let inCell = false;
-  const re = /<(\/?)(tab|column|section|row|cell|control|label)\b([^>]*?)(\/?)>/gi;
+  const re = /<(\/?)(tab|column|section|row|cell|control|label|relationshipname|header|footer|tabheader|tabfooter)\b([^>]*?)(\/?)>/gi;
+  const isPart = (name) => name === 'header' || name === 'footer' || name === 'tabheader' || name === 'tabfooter';
   const attr = (raw, name) => {
     const m = new RegExp(`\\b${name}\\s*=\\s*(?:"([^"]*)"|'([^']*)')`, 'i').exec(raw || '');
     return m ? (m[1] != null ? m[1] : m[2]) : undefined;
   };
+  // The display flags verify compares — tab `expanded`/`visible`, section `visible`/`showlabel`, cell
+  // `visible`, control `disabled` — are `xs:boolean`, so "true"/"false" or "1"/"0", and the schema gives
+  // none of them a default. An absent (or unreadable) one stays undefined; the comparison applies what
+  // the form renders without it.
+  // See: https://learn.microsoft.com/en-us/power-apps/developer/model-driven-apps/form-xml-schema
+  const flag = (raw, name) => {
+    const v = String(attr(raw, name) === undefined ? '' : attr(raw, name)).trim().toLowerCase();
+    return v === 'true' || v === '1' ? true : (v === 'false' || v === '0' ? false : undefined);
+  };
+  // The `id` of a tab or a section as the FormXML writes it (`<tab id="0a0a0a0a-…" name="tab_one" …>`), kept only when the element has one. It is what a translation
+  // export keys the element's captions by (lib/translation-labels.js), so the captions a read of this form cannot show can be found there.
+  const idOf = (raw) => { const id = attr(raw, 'id'); return id === undefined ? {} : { id }; };
   let m;
   while ((m = re.exec(s)) !== null) {
     const closing = m[1] === '/';
@@ -1326,16 +2702,18 @@ function parseFormTopology(xml) {
       else if (tag === 'section') { section = null; row = null; cell = null; }
       else if (tag === 'row') { row = null; cell = null; }
       else if (tag === 'cell') { inCell = false; cell = null; }
+      else if (isPart(tag)) { part = null; row = null; cell = null; }
       continue;
     }
-    if (tag === 'tab') { tab = { name: attr(raw, 'name'), label: undefined, columns: [] }; tabs.push(tab); if (selfClosing) tab = null; }
+    if (isPart(tag)) { part = selfClosing ? null : tag; continue; }
+    if (tag === 'tab') { tab = { name: attr(raw, 'name'), ...idOf(raw), label: undefined, expanded: flag(raw, 'expanded'), visible: flag(raw, 'visible'), columns: [] }; tabs.push(tab); if (selfClosing) tab = null; }
     else if (tag === 'column' && tab) { column = { width: attr(raw, 'width'), sections: [] }; tab.columns.push(column); if (selfClosing) column = null; }
     else if (tag === 'section' && column) {
       const ratio = attr(raw, 'columns');
       // `columns` is a width RATIO string, not a count: "11" is two equal columns, "1111" is four.
       // ABSENT means the width is UNKNOWN — left undefined so the occupancy check skips rather than
       // assuming a 1-column grid and inventing an overflow that is not there.
-      section = { name: attr(raw, 'name'), label: undefined, columns: ratio ? String(ratio).length : undefined, rows: [], fields: [] };
+      section = { name: attr(raw, 'name'), ...idOf(raw), label: undefined, columns: ratio ? String(ratio).length : undefined, visible: flag(raw, 'visible'), showLabel: flag(raw, 'showlabel'), rows: [], fields: [] };
       column.sections.push(section);
       if (selfClosing) section = null;
     }
@@ -1343,32 +2721,67 @@ function parseFormTopology(xml) {
     else if (tag === 'cell') {
       inCell = !selfClosing;
       // A cell with no <control> child stays control-less, which is what keeps a SPACER from
-      // reading as engine-owned.
-      cell = { colspan: Number(attr(raw, 'colspan')) || 1, rowspan: Number(attr(raw, 'rowspan')) || 1 };
+      // reading as engine-owned. `auto` is the cell's own attribute (the timeline's cell carries
+      // auto="false"); it is read only so the timeline helpers see the same cell either tree shape gives.
+      cell = { colspan: Number(attr(raw, 'colspan')) || 1, rowspan: Number(attr(raw, 'rowspan')) || 1, visible: flag(raw, 'visible') };
+      if (attr(raw, 'auto') !== undefined) cell.auto = attr(raw, 'auto');
       if (row) row.cells.push(cell);
+      else if (part) outer.push({ part, tab: tab ? tab.name : undefined, cell });
       if (selfClosing) cell = null;
     }
     // FormXML carries the display label in a nested <labels><label description="..."/></labels>,
     // not an attribute. The BUILD matches containers name -> label -> position, so without this the
     // verifier can never make the label pass and would disagree with a label-matched reshape.
-    else if (tag === 'label' && !inCell) {
+    // `label` is the FIRST one, which is what the container matching reads; `labels` is every language the container carries,
+    // each as { lcid, text } (a label per <label languagecode="1033" description="…">), which is what --verify holds the layout's
+    // label against: the build writes one language and a maker's translations stay beside it, listed in whatever order the platform
+    // gives them. The language is kept because a label is only the spec's if it is the spec's in ITS language; one a label never
+    // names (no `languagecode`) has `lcid: undefined`, and is the spec's in no language.
+    // `languages` is wider than that: the language of EVERY label, a cell's (a field's caption, the empty one of a header cell) included, because it
+    // answers a different question — which languages this read of the form carries at all (live: every label of a published form's read, the
+    // fields' and the header cells' as much as the tabs' and sections', was in the one language, 1033).
+    else if (tag === 'label') {
+      const lcid = normalizeLanguageCode(attr(raw, 'languagecode'));
+      if (lcid !== null) languages.add(lcid);
       const d = attr(raw, 'description') === undefined ? undefined : decodeXmlEntities(attr(raw, 'description'));
-      if (d !== undefined) {
-        if (section && section.label === undefined) section.label = d;
-        else if (!section && tab && tab.label === undefined) tab.label = d;
+      if (d !== undefined && !inCell) {
+        const owner = section || tab;
+        if (owner) {
+          (owner.labels = owner.labels || []).push({ lcid: lcid === null ? undefined : lcid, text: d });
+          if (owner.label === undefined) owner.label = d;
+        }
       }
     }
-    else if (tag === 'control' && section) {
+    else if (tag === 'control' && (section || part)) {
       // Only BOUND fields reach `fields[]`. A control with no `datafieldname` is a sub-grid, the
       // notes timeline or a web resource — engine-owned, never something the spec's field list
       // claims to place. The CELL still records that a control was present, because that is what
-      // distinguishes an engine-owned section from a merely empty one.
+      // distinguishes an engine-owned section from a merely empty one — and its `classid`
+      // (`{06375649-C143-495E-A496-C962E5B4488E}`, braces and case as written), which is what still
+      // marks a timeline or sub-grid host a maker added a field to (isEngineHostSection).
       const f = attr(raw, 'datafieldname');
-      if (f) section.fields.push(String(f).toLowerCase());
-      if (cell) cell.control = f ? { fieldName: String(f).toLowerCase() } : {};
+      const classId = attr(raw, 'classid');
+      const controlId = attr(raw, 'id');
+      const disabled = flag(raw, 'disabled');
+      // A quick view binds a LOOKUP's datafieldname too, but it is not that field: counted as one, it placed
+      // the lookup wherever the quick view sat and lent the field its visibility and state. The build skips it
+      // the same way (isNonFieldControl) when it picks the cell to place or patch.
+      if (section && f && !isNonFieldControl({ classId })) section.fields.push(String(f).toLowerCase());
+      // `id` is what tells a timeline Dynamics renders (`notescontrol`) from one it does not (a generated id).
+      if (cell) cell.control = Object.assign(f ? { fieldName: String(f).toLowerCase() } : {}, classId ? { classId } : {}, controlId === undefined ? {} : { id: controlId }, disabled === undefined ? {} : { disabled });
+    }
+    // A sub-grid names the relationship it shows as ELEMENT text, not as an attribute:
+    //   <control id="…" classid="{E7A81278-8635-4D9E-8D4D-59480B391C5B}"><parameters>
+    //     <RelationshipName>new_customer_new_ticket</RelationshipName><TargetEntityType>new_ticket</TargetEntityType>…
+    // It is the only parameter verify reads — it is what says WHICH grid a section holds — so it is read up to the
+    // next tag and kept on the control for findGridSection (lib/form-subgrid-placement.js).
+    else if (tag === 'relationshipname' && !selfClosing && cell && cell.control) {
+      const end = s.indexOf('<', re.lastIndex);
+      const text = (end < 0 ? s.slice(re.lastIndex) : s.slice(re.lastIndex, end)).trim();
+      if (text) cell.control.relationshipName = decodeXmlEntities(text);
     }
   }
-  return tabs;
+  return { tabs, outer, languages: [...languages].sort((a, b) => a - b) };
 }
 
 function conditionMatches(want, got) {
@@ -1427,6 +2840,24 @@ function subareaHasDashboard(xml, dashId) {
   return false;
 }
 
+// The live nav entries pointing at dashboard `dashId`, read by the nav-entry walk (liveNavEntries below):
+// only a `SubArea` element directly under SiteMap/Area/Group counts, never one in a comment, a CDATA
+// section, a processing instruction or elsewhere in the document. None when the walk cannot account for
+// the sitemap (fail-closed), so nothing unreadable can vouch for an entry.
+function dashboardNavEntries(xml, dashId) {
+  const live = liveNavEntries(xml);
+  return (live && live.get(subAreaTargetKey({ type: 'DashBoard', dashboardId: dashId }))) || [];
+}
+
+// True when a nav entry pointing at `dashId` also carries the dashboard launcher Url, e.g.
+//   <SubArea Id="ops" Url="/workplace/home_dashboards.aspx" DefaultDashboard="{280948EC-…}" …>
+// Read through the walk rather than by matching `<SubArea …>` start tags in the raw text, which would take
+// a decoy in a comment or outside navigation carrying the Url as the entry. The Url is compared
+// XML-decoded, as the runtime and the designer read it (isDashboardLauncherUrl, sitemap-merge.js).
+function subareaDashboardHasLauncher(xml, dashId) {
+  return dashboardNavEntries(xml, dashId).some((e) => isDashboardLauncherUrl(e.url));
+}
+
 // True when some sitemap `<SubArea GenPageId="<id>">` in the XML binds this page id. Generative-page
 // subareas store the id in the GenPageId attribute SPECIFICALLY (vendor cds-maker-sdk.cjs:50 parses
 // /GenPageId="([0-9a-fA-F-]{36})"/), so match THAT attribute only — a decoy id elsewhere on the
@@ -1450,4 +2881,4 @@ function appShellReferencesPage(spec, key) {
   return false;
 }
 
-module.exports = { verifySpec, hasElement, subareaHasDashboard, subareaHasGenPage, appShellReferencesPage, layoutColumnNames, parseFetchXml };
+module.exports = { verifySpec, hasElement, subareaHasDashboard, subareaDashboardHasLauncher, liveNavEntries, subareaHasGenPage, appShellReferencesPage, layoutColumnNames, parseFetchXml, notesHostInspector };

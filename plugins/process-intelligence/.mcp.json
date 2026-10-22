@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "process-intelligence": {
+      "command": "node",
+      "args": [
+        "-e",
+        "const p=require('node:path'),fs=require('node:fs'),u=require('node:url');const r=process.env.PLUGIN_ROOT||process.env.CLAUDE_PLUGIN_ROOT||process.cwd();const f=p.resolve(r,'server','mcp.mjs');if(!fs.existsSync(f)){console.error('Process Intelligence MCP not found at '+f+'. Set PLUGIN_ROOT to the installed plugin directory and run setup.');process.exit(1);}import(u.pathToFileURL(f).href).then(m=>m.launch(['serve'])).catch(()=>{console.error('Unable to load Process Intelligence MCP server. Run setup.');process.exitCode=1;});"
+      ]
+    }
+  }
+}

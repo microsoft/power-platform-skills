@@ -1,0 +1,37 @@
+{
+  "schemaVersion": 2,
+  "solution": { "uniqueName": "ContosoNameScope", "publisherPrefix": "cnt" },
+  "app": { "name": "Scoped Names", "description": "Reuse artifact display names on different tables without changing approved page names" },
+  "entities": [
+    { "schemaName": "cnt_order", "displayName": "Order", "pluralName": "Orders",
+      "primaryAttribute": { "schemaName": "cnt_name", "displayName": "Name" },
+      "columns": [{ "schemaName": "cnt_status", "displayName": "Status", "type": "Choice", "options": ["Open", "Done"] }] },
+    { "schemaName": "cnt_ticket", "displayName": "Ticket", "pluralName": "Tickets",
+      "primaryAttribute": { "schemaName": "cnt_name", "displayName": "Name" },
+      "columns": [{ "schemaName": "cnt_status", "displayName": "Status", "type": "Choice", "options": ["Open", "Done"] }] }
+  ],
+  "forms": [
+    { "entity": "cnt_order", "name": "Information", "layout": "auto" },
+    { "entity": "cnt_ticket", "name": "Information", "layout": "auto" }
+  ],
+  "views": [
+    { "entity": "cnt_order", "name": "Queue", "columns": ["cnt_name", "cnt_status"], "activeOnly": true },
+    { "entity": "cnt_ticket", "name": "Queue", "columns": ["cnt_name", "cnt_status"], "activeOnly": true }
+  ],
+  "charts": [
+    { "entity": "cnt_order", "name": "Status Summary", "groupBy": "cnt_status", "measure": "count", "chartType": "Pie" },
+    { "entity": "cnt_ticket", "name": "Status Summary", "groupBy": "cnt_status", "measure": "count", "chartType": "Pie" }
+  ],
+  "pages": [
+    { "key": "straight-quote", "name": "Revenue \"FY\"", "source": { "kind": "intent" } },
+    { "key": "apostrophe", "name": "Clerk's Queue", "source": { "kind": "intent" } },
+    { "key": "typographic", "name": "Revenue \u201cFY\u201d", "source": { "kind": "intent" } }
+  ],
+  "appShell": { "areas": [{ "label": "Names", "groups": [{ "label": "Review", "subAreas": [
+    { "entity": "cnt_order", "title": "Orders" },
+    { "entity": "cnt_ticket", "title": "Tickets" },
+    { "page": "straight-quote", "title": "Revenue Navigation" },
+    { "page": "apostrophe", "title": "Clerk Navigation" },
+    { "page": "typographic", "title": "Typographic Navigation" }
+  ] }] }] }
+}

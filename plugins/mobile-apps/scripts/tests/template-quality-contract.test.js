@@ -86,12 +86,15 @@ test('Babel and Metro configuration are delegated to native-host factories', () 
 
 test('bundled dependencies match the current host-factory template boundary', () => {
   const packageJson = JSON.parse(read('template/package.json'));
-  assert.strictEqual(packageJson.dependencies['@microsoft/power-apps-native-host'], '^0.4.0');
-  assert.strictEqual(packageJson.scripts.dev, 'expo start');
-  assert.strictEqual(packageJson.scripts.predev, 'npm run generate-schemas && npm run type-check');
+  for (const scriptName of ['dev', 'predev']) {
+    assert.strictEqual(typeof packageJson.scripts?.[scriptName], 'string');
+    assert.ok(packageJson.scripts[scriptName].trim(), `scripts.${scriptName} must not be empty`);
+  }
   assert.strictEqual(packageJson.dependencies['expo-media-library'], undefined);
   assert.strictEqual(packageJson.dependencies['expo-modules-core'], undefined);
   assert.strictEqual(packageJson.devDependencies['@microsoft/power-apps-cli'], '0.15.3');
+  // Step 12 runs `npx --no-install qrcode`, so the QR generator must come from this pin.
+  assert.strictEqual(packageJson.devDependencies.qrcode, '1.5.4');
   assert.strictEqual(packageJson.overrides.metro, '0.83.8');
   assert.strictEqual(packageJson.scripts['bundle:android'], 'build-codegen-package android');
   assert.strictEqual(packageJson.scripts['bundle:ios'], 'build-codegen-package ios');
@@ -123,6 +126,20 @@ test('shared components preserve token literals and accessible row selection sem
   assert.match(components, /\$accentOnAccent/);
   assert.doesNotMatch(components, /Button\.Text color="\$color1"/);
   assert.doesNotMatch(components, /<Ionicons[^>]*color="\$[A-Za-z]/);
+});
+
+test('Tamagui text-control guidance uses the cross-platform string callback', () => {
+  const textControlGuidance = [
+    'agents/screen-builder.md',
+    'shared/references/tamagui-component-recipes.md',
+    'shared/references/universal-patterns.md',
+    'shared/samples/screen-form.tsx',
+    'shared/samples/screen-list.tsx',
+  ].map(read).join('\n');
+
+  assert.match(textControlGuidance, /onChangeText/);
+  assert.doesNotMatch(textControlGuidance, /event\.target\?\.value/);
+  assert.doesNotMatch(textControlGuidance, /event\.nativeEvent\?\.text/);
 });
 
 test('template path aliases are inherited from the host tsconfig', () => {

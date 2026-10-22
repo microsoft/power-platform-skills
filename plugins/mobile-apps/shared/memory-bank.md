@@ -29,6 +29,7 @@ This file is the per-project notebook the agent maintains across `/create-mobile
 | Active environment name | |
 | Environment URL | _e.g. https://orgXXXX.crm.dynamics.com — captured at /add-dataverse Step 1_ |
 | Power Apps CLI identity | |
+| CLI Binary | _pa / power-apps — resolved per `cli-binary.md`_ |
 | App registration (Entra) | _clientId pasted during /create-mobile-app or manual /set-app-registration-native_ |
 | Solution unique name | _e.g. `Default` or `<AppNameSolution>` — captured at /add-dataverse Step 3b. Required for the `--solution` flag on every metadata POST so artifacts land in our solution._ |
 | Publisher prefix | _e.g. `cr3e9` — from the solution's publisher's `customizationprefix`. All schema names use this prefix._ |
@@ -73,7 +74,7 @@ associationsCount:     # number of mobileofflineprofileitemassociation rows
 
 | Capability | Module | Wrapper file | When added | Justification |
 |---|---|---|---|---|
-| _e.g. camera_ | _expo-camera_ | _src/native/camera.ts_ | _ISO date_ | _from plan_ |
+| _e.g. camera_ | _expo-image-picker_ | _src/native/camera.ts_ | _ISO date_ | _from plan_ |
 
 ## Connectors
 

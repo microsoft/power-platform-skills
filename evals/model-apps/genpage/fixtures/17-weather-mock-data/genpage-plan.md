@@ -39,6 +39,9 @@ No entity creation required — all entities already exist.
 
 No connector bindings.
 
+## Custom API Bindings
+No custom API bindings.
+
 ## Design Preferences
 
 - Inline mock weather data (maker chose mock data — no connector binding requested)

@@ -1,0 +1,15 @@
+{
+  "event_stream_name": "paintegrations.event",
+  "disabled": false,
+  "default_region": "us",
+  "regions": {
+    "us": {
+      "instrumentation_key": "2e7728f9f7ea42269fee5fbc9ea8a4f7-c026ab0c-92d3-4115-be4f-9d778dbe883f-7400",
+      "collector_url": "https://us-mobile.events.data.microsoft.com/OneCollector/1.0/"
+    },
+    "eu": {
+      "instrumentation_key": "2bab69432aa84ef098c68cbc8756e40f-d2c36df3-d2d7-432a-af54-0136a07a0217-7486",
+      "collector_url": "https://eu-mobile.events.data.microsoft.com/OneCollector/1.0/"
+    }
+  }
+}

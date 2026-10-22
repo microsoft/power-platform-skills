@@ -275,6 +275,16 @@ test('scanHtmlHead does NOT flag async/defer/module head scripts or scripts outs
   assert.deepEqual(scanHtmlHead('<head></head><body><script src="/a.js"></script></body>', 'p.html'), []);
 });
 
+test('scanHtmlHead does not mistake async/defer/type words inside src values for attributes', () => {
+  for (const src of ['/assets/async.js', '/assets/defer.js', '/bundle.js?type=module']) {
+    const html = `<head><script src="${src}"></script></head>`;
+    assert.ok(
+      tags(scanHtmlHead(html, 'p.html')).includes('PERF-RENDER-BLOCKING-SCRIPT'),
+      `${src} must remain blocking without an actual async/defer/type attribute`,
+    );
+  }
+});
+
 // ── Runtime CSS rule (render-blocking @import) ───────────────────────────────
 
 test('scanCssContent flags @import as PERF-CSS-IMPORT', () => {
@@ -307,6 +317,26 @@ test('scanWebApiContent flags a query with options but no $select as PERF-WEBAPI
 test('scanWebApiContent flags a collection query with no $top as PERF-WEBAPI-NO-TOP', () => {
   const code = 'fetch("/_api/contacts?$select=fullname&$orderby=createdon desc")';
   assert.ok(tags(scanWebApiContent(code, 'a.js')).includes('PERF-WEBAPI-NO-TOP'));
+});
+
+test('scanWebApiContent accepts Prefer maxpagesize cursor pagination without $top', () => {
+  const code = [
+    'fetch("/_api/contacts?$select=fullname&$orderby=createdon desc", {',
+    '  headers: { Prefer: "odata.maxpagesize=25" },',
+    '});',
+  ].join('\n');
+  const found = tags(scanWebApiContent(code, 'a.js'));
+  assert.ok(!found.includes('PERF-WEBAPI-NO-TOP'));
+});
+
+test('scanWebApiContent accepts template-based Prefer maxpagesize cursor pagination', () => {
+  const code = [
+    'powerPagesFetch("/_api/contacts?$select=fullname", {',
+    '  headers: { Prefer: `odata.include-annotations="*",odata.maxpagesize=${pageSize}` },',
+    '});',
+  ].join('\n');
+  const found = tags(scanWebApiContent(code, 'a.js'));
+  assert.ok(!found.includes('PERF-WEBAPI-NO-TOP'));
 });
 
 test('scanWebApiContent flags a bare collection request as missing $select and $top', () => {
@@ -575,6 +605,30 @@ test('analyze() supports a non-SPA PAC download with root-level metadata', (t) =
   assert.equal(coverage['Web roles'], '2');
 });
 
+test('analyze() preserves the detected tracking field and target type in auto-fixes', (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'perf-tracking-fields-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  fs.mkdirSync(path.join(root, 'web-files'), { recursive: true });
+  fs.mkdirSync(path.join(root, 'web-pages'), { recursive: true });
+  fs.writeFileSync(
+    path.join(root, 'web-files', 'asset.webfile.yml'),
+    'adx_name: Asset\nenabletracking: true\n',
+  );
+  fs.writeFileSync(
+    path.join(root, 'web-pages', 'home.webpage.yml'),
+    'adx_name: Home\nadx_enabletracking: true\n',
+  );
+
+  const result = analyze(root);
+  const webFile = result.findings.find((finding) => finding.tag === 'PERF-WEBFILE-TRACKING');
+  const webPage = result.findings.find((finding) => finding.tag === 'PERF-WEBPAGE-TRACKING');
+
+  assert.equal(webFile.fixAction.field, 'enabletracking');
+  assert.match(webFile.title, /file tracking/);
+  assert.equal(webPage.fixAction.field, 'adx_enabletracking');
+  assert.match(webPage.title, /page tracking/);
+});
+
 test('analyze() rejects SPA websites', (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'perf-spa-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
@@ -636,6 +690,11 @@ test('analyze() emits a single PERF-NONE finding for a clean project', (t) => {
   const result = analyze(root);
   assert.equal(result.findings.length, 1);
   assert.equal(result.findings[0].tag, 'PERF-NONE');
+  assert.deepEqual(result.severityCounts, { info: 1 });
+  const coverage = Object.fromEntries(
+    result.details.entries.map((entry) => [entry.key, entry.value]),
+  );
+  assert.equal(coverage['Total findings'], '1');
 });
 
 test('analyze() skips build-output directories', (t) => {

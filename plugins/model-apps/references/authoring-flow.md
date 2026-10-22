@@ -27,15 +27,14 @@ section MUST record commands and structured calls verbatim — not just their
 outcomes — because the eval harness greps the log for these tokens. Concretely:
 
 - Every shell command invocation is recorded on its own line as
-  `` `node --version` `` / `` `pac help` `` / `` `pac auth list` `` / `` `pac model list-tables --search '<term>'` ``. Include the literal flag values. Result goes on the next line.
+  `` `node --version` `` / `` `pac help` `` / `` `pac auth list` `` / `` `node "${PLUGIN_ROOT}/scripts/list-tables.js" --env '<envUrl>' --search '<term>'` `` / `` `node "${PLUGIN_ROOT}/scripts/apps.js" list --env '<envUrl>'` ``. Include the literal flag values. Result goes on the next line.
 - Every `AskUserQuestion` call is recorded as
   `AskUserQuestion: <question text> → <selected option>`. The literal string
   `AskUserQuestion` is required.
 - The plan-presentation call is recorded as `EnterPlanMode called` followed
   by the user's response (`approved` / `revised`).
-- The PAC CLI version output is recorded explicitly (the assertion checks
-  for `>= 2.7.0`-shaped text — `PAC CLI Version 2.7.x` is the canonical
-  form).
+- The PAC CLI version output is recorded explicitly (the assertion parses the recorded version and
+  requires `> 2.10.0`, e.g. `PAC CLI Version 2.11.0`; an older pac fails).
 
 Decisions and outcomes can be summarized at the end of the section, but they
 do **not** substitute for command-level entries. See an existing fixture
@@ -55,8 +54,8 @@ node --version
 pac help
 ```
 
-`pac help` output includes the version number. Verify the version is **>= 2.7.0**
-(required for `pac model create` support). If the version is older, instruct the
+`pac help` output includes the version number. Verify the version is **> 2.10.0**
+(the plugin's minimum; see the README prerequisites). If the version is older, instruct the
 user to update: `dotnet tool update --global Microsoft.PowerApps.CLI.Tool`.
 
 If either command fails, inform the user and provide installation instructions.
@@ -94,7 +93,9 @@ pac org who
 ```
 
 Extract the `Org URL:` line (strip any trailing slash). Store this as `$ENV_URL`
-for use in solution-listing and any downstream build calls.
+for use in solution-listing and any downstream build calls. It is also the `--env`
+of the table and app reads below (`<envUrl>`): the https origin only — no path, no
+trailing slash.
 
 Report: "Working with environment: [name] ([url])" and proceed.
 
@@ -102,25 +103,29 @@ Report: "Working with environment: [name] ([url])" and proceed.
 
 ### Entity Detection
 
-Use `pac model list-tables` to check which entities the user has mentioned or
+Use `scripts/list-tables.js` to check which entities the user has mentioned or
 that are implied by their requirements. Pass requested entity logical names via
-`--search` (comma-separated):
+`--search` (comma-separated) with `--exact`:
 
 ```powershell
-pac model list-tables --search "entity1,entity2"
+node "${PLUGIN_ROOT}/scripts/list-tables.js" --env '<envUrl>' --search 'entity1,entity2' --exact
 ```
 
-**Important:** `--search` matches **substrings** across logical name, schema name,
-and display name — so `--search "account"` also returns `accountleads`,
-`accountlevelmonitoring`, etc. You **must** post-process the results and compare
-the `Logical Name` column against your requested entities using **exact equality**:
+It prints one JSON line: `{ "ok": true, "search": [...], "exact": true, "count": N,
+"tables": [{ "logicalName", "displayName", "schemaName", "isCustom" }], "missing": [...] }`.
 
-- For each requested entity, look for a row where `Logical Name == <entity>`.
+**Important:** without `--exact`, `--search` matches **substrings** across logical name,
+schema name, and display name — so `--search 'account'` also returns `accountleads`,
+`accountlevelmonitoring`, etc. `--exact` keeps only the tables whose logical name **is** a
+search term (any letter case) and names the terms that have none in `missing`:
+
+- For each requested entity, look for a table whose `logicalName` equals it.
 - If found → mark as **"exists"** (build around it).
-- If not found → mark as **"needs creation"**.
+- If it is in `missing` → mark as **"needs creation"**.
 
-Do NOT trust the raw output as "exists" just because the search returned a match —
-the search is fuzzy; your check must be exact.
+If the script fails (exit 1, `{ "ok": false, "error", "code" }`), entity detection did not
+happen. Report why (most often the Azure CLI is missing, signed out or signed in to another
+tenant) and stop: a failed read is never "no entities exist", and nothing is created on it.
 
 #### Dominant-prefix detection (for solution UX)
 
@@ -128,12 +133,12 @@ Also run a broader scan to detect the env's working prefix. This lets the
 solution question steer the user to a consistent choice:
 
 ```powershell
-pac model list-tables
+node "${PLUGIN_ROOT}/scripts/list-tables.js" --env '<envUrl>' --type custom
 ```
 
-From the full output, look at the **Custom** rows only (Type column = Custom).
-Extract each logical name's prefix (everything before the first `_`). Count
-prefixes excluding system ones (`msdyn`, `msdynce`, `msdynmkt`, `adx`, `msa`,
+`--type custom` keeps the custom tables only (`isCustom: true`; a table a managed solution
+brought counts as custom). Extract each `logicalName`'s prefix (everything before the first
+`_`). Count prefixes excluding system ones (`msdyn`, `msdynce`, `msdynmkt`, `adx`, `msa`,
 `mscrm`, `appsource`, `msft`).
 
 - If one non-system prefix accounts for **≥50%** of custom tables AND there
@@ -149,8 +154,18 @@ Store: `detectedPrefix`, `detectedTableCount` for use in solution selection.
 Run:
 
 ```powershell
-pac model list
+node "${PLUGIN_ROOT}/scripts/apps.js" list --env '<envUrl>'
 ```
+
+It prints `{ "ok": true, "count": N, "apps": [{ "id", "name", "uniqueName", "description",
+"published", "unpublishedChanges" }] }`, drafts included. Offer each app by its `name` and `id`.
+`name` and `description` come from the app's saved layer (what a maker sees in the designer): an
+app whose rename is saved but not yet published (`unpublishedChanges: true`) is listed by its new
+name, which its users see only after a publish.
+`published` (users can open the app) and `unpublishedChanges` (a saved edit is waiting for a
+publish) are two separate facts about it — an app can be both published and have changes — so
+say which applies when it matters. If the script fails (exit 1), report why and stop; a failed
+read is never "no apps".
 
 - **0 apps:** Ask user via `AskUserQuestion`: "No model-driven apps found. Would you
   like to create a new one, or cancel?"
@@ -321,8 +336,9 @@ clearly, then use `AskUserQuestion` to confirm or refine:
 
 Column `type` is one of: `Text · Memo · Choice · MultiChoice · Boolean · Money · DateTime ·
 Integer · BigInt · Decimal · Double · File · Image · AutoNumber · Customer`. A `Choice`/`MultiChoice`
-column needs `options[]` **or** a `globalChoice` reference. Lookups are **not** a column type —
-declare a `OneToMany` relationship instead.
+column needs `options[]` **or** a `globalChoice` reference, and an `AutoNumber` column needs an
+`autoNumberFormat` such as `"C-{SEQNUM:5}"` (`Text` is the plain text column). Lookups are **not** a
+column type — declare a `OneToMany` relationship instead.
 
 > **Author from [`references/app-spec-schema.md`](./app-spec-schema.md) — it is the source for
 > everything an app always has; [`app-spec-schema-advanced.md`](./app-spec-schema-advanced.md)
@@ -440,6 +456,13 @@ is optional — omit it to title the grid with the child entity's `pluralName` (
 supply it to override. To ship only your form and hide the blank stock "Information" form, set
 `"deactivateOtherMainForms": true` on the form (opt-in; only affects tables this build owns).
 
+By default a grid's section goes at the **end** of the form. To put it elsewhere — a full-width
+related-records grid between two sections, say — declare the form's layout (`tabs[].name` /
+`sections[].name`) and name where the grid goes: `"after": "<section>"` or `"before": "<section>"`, or
+`"tab": "<tab>"` (with `"column": <n>` for a form-column of that tab). A grid is as wide as the
+form-column it is in, so for a full-width grid use a tab of one form-column. The wireframe draws a
+placed grid where it will land; see app-spec-schema.md (*Where a sub-grid goes*).
+
 **Choosing auto vs an explicit layout.** `auto` is the right default and already adapts: it puts
 the primary field first and switches to **two columns above six fields** (Quick Create stays one
 column, which Dataverse requires). What it cannot do is *group by task*.
@@ -509,6 +532,19 @@ field the user actually prioritizes by. Direct-column filters on the view's own
 table are supported, including current-user (`ownerid` / `eq-userid`) and relative
 dates; a filter **through a related table** is not expressible and must not be
 faked — say so and propose a supported alternative.
+
+A filter on a Choice column may name the option by its label, in any language it has. The build
+resolves the label against the options the environment holds for that column, and stops — before it
+writes anything where the environment already shows the label is wrong, and in any case before any
+view is written — when a label matches no option (the error lists the valid ones), so spell it exactly
+as the column does, or use the option's integer value. (Where your spec numbers the options — inline
+`options[]`, or a global choice you declare — an option a maker renamed in the environment still resolves
+to the number your spec gave it, with a warning, unless the environment shows the options are numbered
+otherwise, as when you added options after the column was built; then it stops.) A spec with a localized
+label is checked only
+in the views phase, after the tables and columns are written, because reading option labels ahead of
+creating a multi-language label can cost it every language but the base one. This covers a column of a
+table you reuse (`account.industrycode`) without declaring it.
 
 Two edit-time limits worth stating up front, because both bite silently:
 an authored view whose name collides with the table's stock default view MERGES
@@ -665,6 +701,14 @@ The builder authors **one role per persona**, unioning every job's declared acce
 per entity+access), and grants the app to that role so it **opens for that persona, not just for
 system administrators** (`appAccess: false` opts a role out).
 
+**Extending an app that already has roles** (a downloaded spec): leave `personas[]` out. The roles
+associated with an existing app are not changed by a spec that authors none, and a persona's role is
+converged to exactly the privileges declared (so naming an existing role there is the opposite of
+leaving it alone). Give an existing role access to a new table with a `roleGrants[]` entry instead —
+it adds privileges and removes none (see [`app-spec-schema-advanced.md`](./app-spec-schema-advanced.md)
+→ `roleGrants[]`). The lint's "no access declared" warning names each new table that no persona job
+and no grant covers.
+
 **Render the proposed roles and their per-entity access as a table in your chat reply**, then
 confirm with `AskUserQuestion` — the user cannot approve an access model they cannot see, and
 tool output is collapsed and invisible to them.
@@ -745,6 +789,7 @@ even though the underlying spec stores the schemaName as provided:
 ### App
 - Name: [app name]
 - Description: [description]
+- Routing description: [app.aiDescription — omit the line when the spec does not set one]
 - Action: [Create new | Use existing: <app-id>]
 
 ### Solution
@@ -822,7 +867,7 @@ Plan-mode approval is the **single build approval**. After the user approves, pr
 1. **Data pre-build** — `build-model-app.js --stage data --apply` (solution + data-model only;
    no rows — sample data is created in the full build). Only `--stage data` is apply-safe; do not
    apply any other stage in isolation.
-2. **Type generation** — `pac model genpage generate-types` → `RuntimeTypes.ts`.
+2. **Type generation** — `genpage.js types` → `RuntimeTypes.ts`.
 3. **Page generation** — headless `page-builder` worker (via `Task`) fills each intent page's
    `.tsx`; all-or-nothing transition `source: intent → { kind: "tsx", codeFile }`.
 
@@ -843,7 +888,7 @@ The spec shape follows `plugins/model-apps/samples/app-spec.support-desk.json`:
 {
   "schemaVersion": 2,
   "solution": { "uniqueName": "...", "displayName": "...", "publisherPrefix": "..." },
-  "app": { "name": "...", "description": "..." },
+  "app": { "name": "...", "description": "...", "aiDescription?": "..." },
   "entities": [ { "schemaName", "displayName", "pluralName", "primaryAttribute", "columns" } ],
   "relationships": [ { "type", "referenced", "referencing", "lookup" } ],
   "forms": [ { "entity", "type", "name", "layout", "subgrids?" } ],
@@ -918,7 +963,7 @@ Mark the "Write app-spec.json and model-app-plan.md" task complete.
 
 - **Do NOT write to Dataverse during authoring.** Table/column/relationship creation and
   record insertion happen in **Phase 2 (Build)**, driven by the `cds-maker-sdk` build engine —
-  not here. Authoring only reads (`pac` discovery) and writes local files.
+  not here. Authoring only reads (`pac auth` / `pac org who` for the environment, `list-tables.js` and `apps.js list` for what exists) and writes local files.
 - **Do NOT hand-write metadata XML or solution ZIP files.** The build engine
   (`build-model-app.js` → `lib/sdk-build.js`) produces all FormXml/FetchXml/sitemap and Web API
   writes via the SDK.

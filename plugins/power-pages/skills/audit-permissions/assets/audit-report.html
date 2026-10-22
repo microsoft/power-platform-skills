@@ -68,10 +68,21 @@ h3{font-size:15px;font-weight:700;color:var(--text-bright);margin-top:24px;margi
 
 /* Severity badges */
 .severity{font-size:9px;font-weight:700;padding:3px 8px;border-radius:3px;font-family:var(--mono);display:inline-block;text-transform:uppercase;letter-spacing:0.5px;}
+.sev-legend{font-size:11px;color:var(--text-dim);line-height:1.75;margin-top:10px;}
+.sev-legend b{font-weight:700;}
 .severity-critical{color:var(--critical);background:var(--critical-bg);border:1px solid var(--critical-border);}
 .severity-warning{color:var(--warning);background:var(--warning-bg);border:1px solid var(--warning-border);}
 .severity-info{color:var(--info);background:var(--info-bg);border:1px solid var(--info-border);}
 .severity-pass{color:var(--pass);background:var(--pass-bg);border:1px solid var(--pass-border);}
+.severity-major{color:var(--critical);background:var(--critical-bg);border:1px solid var(--critical-border);}
+.severity-minor{color:var(--warning);background:var(--warning-bg);border:1px solid var(--warning-border);}
+
+/* Root-cause badges */
+.rc{font-size:10px;font-weight:600;padding:2px 8px;border-radius:10px;display:inline-block;white-space:nowrap;}
+.rc-permissions{color:var(--accent);background:var(--accent-bg);border:1px solid var(--accent-border);}
+.rc-mixed{color:var(--purple);background:var(--purple-bg);border:1px solid var(--purple-border);}
+.rc-upstream{color:var(--info);background:var(--info-bg);border:1px solid var(--info-border);}
+.rootcause-block{background:var(--surface2);border-left:2px solid var(--purple);border-radius:var(--radius-sm);padding:10px 14px;margin-top:10px;font-size:12px;color:var(--text);line-height:1.7;}
 
 /* Finding cards */
 .finding-card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);margin-bottom:12px;transition:box-shadow 0.2s;overflow:hidden;}
@@ -144,7 +155,7 @@ h3{font-size:15px;font-weight:700;color:var(--text-bright);margin-top:24px;margi
   <div class="layout">
     <div class="sidebar">
       <button class="nav-btn active" data-tab="overview"><span class="nav-icon">&#9673;</span> Overview</button>
-      <button class="nav-btn" data-tab="findings"><span class="nav-icon">&#9888;</span> Findings
+      <button class="nav-btn" data-tab="findings"><span class="nav-icon">&#9888;</span> Issues
         <span class="nav-badge" id="navFindingsCount" style="background:var(--critical-bg);color:var(--critical);"></span>
       </button>
       <button class="nav-btn" data-tab="inventory"><span class="nav-icon">&#9638;</span> Inventory</button>
@@ -157,22 +168,50 @@ h3{font-size:15px;font-weight:700;color:var(--text-bright);margin-top:24px;margi
         <h2>Audit Overview</h2>
         <p class="section-desc">__AUDIT_DESC__</p>
 
-        <div class="stats-grid">
-          <div class="stat-card" style="--accent-color:var(--critical)"><div class="stat-num" style="color:var(--critical)" id="statCritical">0</div><div class="stat-label">Critical</div></div>
-          <div class="stat-card"><div class="stat-num" style="color:var(--warning)" id="statWarning">0</div><div class="stat-label">Warning</div></div>
-          <div class="stat-card"><div class="stat-num" style="color:var(--info)" id="statInfo">0</div><div class="stat-label">Info</div></div>
-          <div class="stat-card"><div class="stat-num" style="color:var(--pass)" id="statPassed">0</div><div class="stat-label">Passed</div></div>
-        </div>
-
         <h3>Audit Summary</h3>
         <div class="card" id="summaryBox" style="line-height:1.75;">__SUMMARY__</div>
+
+        <h3 style="margin-top:18px;">Issues</h3>
+        <div class="stats-grid">
+          <div class="stat-card" style="--accent-color:var(--critical)"><div class="stat-num" style="color:var(--critical)" id="statMajor">0</div><div class="stat-label">Major</div></div>
+          <div class="stat-card"><div class="stat-num" style="color:var(--warning)" id="statMinor">0</div><div class="stat-label">Minor</div></div>
+        </div>
+        <div class="sev-legend">
+          <div><b style="color:var(--critical)">Major</b> &mdash; breaks a flow or exposes data to the wrong audience.</div>
+          <div><b style="color:var(--warning)">Minor</b> &mdash; cosmetic, forward-looking, or nice-to-have.</div>
+        </div>
+
+
+        <div id="ovScoreWrap" style="display:none;">
+          <h3>Verdict</h3>
+          <div style="margin:4px 0 2px;">
+            <span id="ovVerdict" style="font-size:30px;font-weight:800;line-height:1.2;">&mdash;</span>
+          </div>
+          <div id="ovVerdictNote" style="font-size:11px;color:var(--text-dim);margin-bottom:4px;">&nbsp;</div>
+          <h3 style="margin-top:18px;">Category Scores</h3>
+          <div class="card" id="ovCategoryBox" style="line-height:1.7;"></div>
+        </div>
+
+        <div id="ovPartialWrap" style="display:none;">
+          <h3>Verdict</h3>
+          <div class="card" style="line-height:1.7;"><strong>Partial audit:</strong> the data model was not available, so no verdict or scores were produced. The issues listed were found from the permissions, web roles, site code, and site settings.</div>
+        </div>
+
+        <div id="ovReportWrap" style="display:none;">
+          <h3>Full evaluation reports</h3>
+          <div class="card" id="ovReportBox" style="line-height:1.9;"></div>
+        </div>
 
       </div>
 
       <!-- FINDINGS -->
       <div class="section" id="tab-findings">
-        <h2>Findings</h2>
+        <h2>Issues</h2>
         <p class="section-desc" id="findingsDesc"></p>
+        <div class="sev-legend" style="margin-bottom:14px;">
+          <div><b style="color:var(--critical)">Major</b> &mdash; breaks a flow or exposes data to the wrong audience.</div>
+          <div><b style="color:var(--warning)">Minor</b> &mdash; cosmetic, forward-looking, or nice-to-have.</div>
+        </div>
         <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;">
           <div class="filter-bar" id="filterBar" style="margin-bottom:0;"></div>
           <button class="filter-btn" id="expandAllBtn" style="white-space:nowrap;">Expand All</button>
@@ -233,10 +272,13 @@ h3{font-size:15px;font-weight:700;color:var(--text-bright);margin-top:24px;margi
 <script>
 // Data populated by the audit-permissions skill
 const FINDINGS = __JSON_FINDINGS_DATA__;
-// Each finding: { id, severity (critical|warning|info|pass), title, table, scope, permission, reasoning, fix, details }
+// Each finding: { id, severity (major|minor), title, table, scope, permission, reasoning, fix, details, rootCause, rootCauseReason }
 
 const INVENTORY = __JSON_INVENTORY_DATA__;
 // Each item: { name, table, scope, roles, read, create, write, delete, append, appendto }
+
+const SCORECARD = __JSON_SCORECARD_DATA__;
+// null when scoring was skipped, else { categories:[{name,score}], reportPaths:[{label,path}] }
 
 // Tab navigation
 document.querySelectorAll('.nav-btn').forEach(btn => {
@@ -252,31 +294,44 @@ document.querySelectorAll('.nav-btn').forEach(btn => {
 function esc(s) { if (!s) return ''; return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;'); }
 function escAttr(s) { return String(s || '').replace(/[^a-zA-Z0-9_.-]/g, ''); }
 const sevConfig = {
-  critical: { color: 'var(--critical)', label: 'CRITICAL', icon: '\u2716' },
-  warning:  { color: 'var(--warning)',  label: 'WARNING',  icon: '\u26A0' },
-  info:     { color: 'var(--info)',     label: 'INFO',     icon: '\u2139' },
-  pass:     { color: 'var(--pass)',     label: 'PASSED',   icon: '\u2714' }
+  major: { color: 'var(--critical)', label: 'MAJOR' },
+  minor: { color: 'var(--warning)',  label: 'MINOR' }
 };
 
 const scopeNames = { 756150000:'Global', 756150001:'Contact', 756150002:'Account', 756150003:'Parent', 756150004:'Self' };
 function scopeName(s) { return scopeNames[s] || s; }
 
-// Stats
-const criticalCount = FINDINGS.filter(f => f.severity === 'critical').length;
-const warningCount = FINDINGS.filter(f => f.severity === 'warning').length;
-const infoCount = FINDINGS.filter(f => f.severity === 'info').length;
-const passCount = FINDINGS.filter(f => f.severity === 'pass').length;
-const issueCount = criticalCount + warningCount + infoCount;
+// Root cause (Step 6) of each major finding.
+const rootCauseConfig = {
+  'permissions':     { label: 'Permissions only',            cls: 'rc-permissions' },
+  'mixed':           { label: 'Permissions + upstream',      cls: 'rc-mixed' },
+  'data-model':      { label: 'Upstream: data model',        cls: 'rc-upstream' },
+  'webapi-code':     { label: 'Upstream: site code',         cls: 'rc-upstream' },
+  'webapi-settings': { label: 'Upstream: Web API settings',  cls: 'rc-upstream' }
+};
+function rootCauseOf(f) {
+  const cfg = rootCauseConfig[f.rootCause];
+  return cfg ? { cfg: cfg, reason: f.rootCauseReason || '' } : null;
+}
 
-document.getElementById('statCritical').textContent = criticalCount;
-document.getElementById('statWarning').textContent = warningCount;
-document.getElementById('statInfo').textContent = infoCount;
-document.getElementById('statPassed').textContent = passCount;
+// Stats
+const majorCount = FINDINGS.filter(f => f.severity === 'major').length;
+const minorCount = FINDINGS.filter(f => f.severity === 'minor').length;
+const issueCount = majorCount + minorCount;
+
+document.getElementById('statMajor').textContent = majorCount;
+document.getElementById('statMinor').textContent = minorCount;
 document.getElementById('navFindingsCount').textContent = issueCount > 0 ? issueCount : '';
 
 document.getElementById('findingsDesc').textContent =
-  FINDINGS.length + ' check' + (FINDINGS.length !== 1 ? 's' : '') +
-  ' \u2014 ' + criticalCount + ' critical, ' + warningCount + ' warning, ' + infoCount + ' info, ' + passCount + ' passed.';
+  FINDINGS.length + ' issue' + (FINDINGS.length !== 1 ? 's' : '') +
+  ' \u2014 ' + majorCount + ' major, ' + minorCount + ' minor.' +
+  (function () {
+    const labelled = FINDINGS.filter(f => f.severity === 'major').map(rootCauseOf).filter(Boolean);
+    if (!labelled.length) return '';
+    const permOnly = labelled.filter(r => r.cfg === rootCauseConfig.permissions).length;
+    return ' Of the major issues, ' + permOnly + ' are permissions only and ' + (labelled.length - permOnly) + ' involve upstream artifacts.';
+  })();
 
 document.getElementById('invDesc').textContent =
   INVENTORY.length + ' table permission' + (INVENTORY.length !== 1 ? 's' : '') + ' currently configured.';
@@ -285,8 +340,8 @@ document.getElementById('invDesc').textContent =
 let activeFilter = 'all';
 function renderFilterBar() {
   const c = document.getElementById('filterBar');
-  const counts = { all: FINDINGS.length, critical: criticalCount, warning: warningCount, info: infoCount, pass: passCount };
-  const labels = { all: 'All', critical: 'Critical', warning: 'Warning', info: 'Info', pass: 'Passed' };
+  const counts = { all: FINDINGS.length, major: majorCount, minor: minorCount };
+  const labels = { all: 'All', major: 'Major', minor: 'Minor' };
   let html = '';
   Object.entries(labels).forEach(([key, label]) => {
     if (counts[key] === 0 && key !== 'all') return;
@@ -305,22 +360,25 @@ function renderFindings() {
   const c = document.getElementById('findingsContainer');
   const filtered = activeFilter === 'all' ? FINDINGS : FINDINGS.filter(f => f.severity === activeFilter);
 
-  const order = { critical: 0, warning: 1, info: 2, pass: 3 };
+  const order = { major: 0, minor: 1 };
   const sorted = [...filtered].sort((a, b) => (order[a.severity] ?? 99) - (order[b.severity] ?? 99));
 
   let html = '';
   sorted.forEach(f => {
-    const sev = sevConfig[f.severity] || sevConfig.info;
+    const sev = sevConfig[f.severity] || sevConfig.minor;
     const fid = escAttr(f.id);
     const fsev = escAttr(f.severity);
+    const rc = rootCauseOf(f);
     html += '<div class="finding-card" id="finding-' + fid + '">' +
       '<div class="finding-header">' +
         '<span class="severity severity-' + fsev + '">' + esc(sev.label) + '</span>' +
         '<span class="finding-title">' + esc(f.title) + '</span>' +
+        (rc ? '<span class="rc ' + rc.cfg.cls + '">' + esc(rc.cfg.label) + '</span>' : '') +
         (f.table ? '<span class="finding-table">' + esc(f.table) + '</span>' : '') +
         '<span class="finding-chevron">&#9654;</span>' +
       '</div>' +
       '<div class="finding-body">' +
+        (rc ? '<div style="margin-top:10px;"><div class="field-label">Root cause</div><div class="rootcause-block"><span class="rc ' + rc.cfg.cls + '">' + esc(rc.cfg.label) + '</span>' + (rc.reason ? ' ' + esc(rc.reason) : '') + '</div></div>' : '') +
         (f.permission ? '<div style="margin-top:10px;font-size:12px;"><span class="field-label">Permission:</span> <span style="font-weight:600;color:var(--text-bright)">' + esc(f.permission) + '</span></div>' : '') +
         (f.scope ? '<div style="margin-top:6px;font-size:12px;"><span class="field-label">Scope:</span> <span class="scope-tag scope-' + escAttr(scopeName(f.scope)) + '" style="font-size:10px;padding:1px 6px;min-width:auto;">' + esc(scopeName(f.scope)) + '</span></div>' : '') +
         (f.details ? '<div style="margin-top:10px;font-size:12px;color:var(--text);line-height:1.7;">' + esc(f.details) + '</div>' : '') +
@@ -331,7 +389,7 @@ function renderFindings() {
   });
 
   if (sorted.length === 0) {
-    html = '<div style="text-align:center;padding:40px;color:var(--text-dim);font-size:14px;">No findings for this filter.</div>';
+    html = '<div style="text-align:center;padding:40px;color:var(--text-dim);font-size:14px;">No issues for this filter.</div>';
   }
   c.innerHTML = html;
 }
@@ -370,6 +428,56 @@ function renderInventory() {
   c.innerHTML = html;
 }
 
+// Render grader score into the Overview tab (no separate scorecard tab)
+function renderOverviewScore() {
+  if (!SCORECARD) {
+    var partial = document.getElementById('ovPartialWrap');
+    if (partial) partial.style.display = '';
+    return;
+  }
+  var S = SCORECARD;
+
+  var ovWrap = document.getElementById('ovScoreWrap');
+  if (ovWrap) ovWrap.style.display = '';
+  var set = function(id, val){ var el = document.getElementById(id); if (el) el.textContent = val; };
+  // Reuses the Major tally from FINDINGS so the verdict can never contradict the Issues row.
+  var safe = majorCount === 0;
+  var vEl = document.getElementById('ovVerdict');
+  if (vEl) {
+    vEl.textContent = safe ? 'Safe to go' : 'Needs revision';
+    vEl.style.color = safe ? 'var(--pass)' : 'var(--critical)';
+  }
+  set('ovVerdictNote', safe
+    ? 'No major issues identified.'
+    : majorCount + ' major issue' + (majorCount === 1 ? '' : 's') + ' identified.');
+
+  var catHtml = (S.categories || []).map(function(c){
+    var pct = Math.max(0, Math.min(100, ((c.score||0)/5)*100));
+    return '<div style="margin-bottom:12px;">' +
+      '<div style="display:flex;justify-content:space-between;font-size:13px;margin-bottom:4px;">' +
+        '<span style="color:var(--text-bright);font-weight:600;">' + esc(c.name) + '</span>' +
+        '<span style="font-family:var(--mono);color:var(--accent);">' + (typeof c.score==='number'?c.score.toFixed(2):esc(c.score)) + ' / 5.00</span>' +
+      '</div>' +
+      '<div style="height:8px;background:var(--accent-bg);border-radius:4px;overflow:hidden;"><div style="height:100%;width:' + pct + '%;background:var(--accent);"></div></div>' +
+    '</div>';
+  }).join('') || '<div style="color:var(--text-dim);">No category data.</div>';
+  var cbox = document.getElementById('ovCategoryBox'); if (cbox) cbox.innerHTML = catHtml;
+
+  // Full evaluation report paths
+  var paths = (Array.isArray(S.reportPaths) ? S.reportPaths : []).filter(function(p){
+    return p && typeof p.path === 'string' && p.path;
+  });
+  var rWrap = document.getElementById('ovReportWrap');
+  var rBox = document.getElementById('ovReportBox');
+  if (paths.length && rBox) {
+    if (rWrap) rWrap.style.display = '';
+    rBox.innerHTML = paths.map(function(p){
+      return '<div><span style="color:var(--text-dim);font-size:12px;">' + esc(p.label || 'Report') + ':</span> ' +
+        '<code style="font-size:12px;color:var(--accent);background:var(--accent-bg);padding:1px 6px;border-radius:3px;border:1px solid var(--accent-border);word-break:break-all;">' + esc(p.path || '') + '</code></div>';
+    }).join('');
+  }
+}
+
 document.getElementById('expandAllBtn').addEventListener('click', toggleExpandAll);
 
 // Event delegation — no inline onclick handlers
@@ -384,6 +492,7 @@ document.addEventListener('click', function(e) {
 renderFilterBar();
 renderFindings();
 renderInventory();
+renderOverviewScore();
 </script>
 <footer style="position:fixed;bottom:0;left:0;right:0;text-align:center;padding:10px;font-size:12px;color:#605e5c;border-top:1px solid #c8c6c4;background:#ffffff;z-index:100;">AI-generated content may be incorrect</footer>
 </body>

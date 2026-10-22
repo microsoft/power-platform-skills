@@ -40,6 +40,9 @@ const SKILL_SDK_SURFACE = [
   'createAlternateKey',
   'createArtifact',
   'createColumn',
+  // A new table's ordinary columns follow the table in ONE atomic change set (entity-provision.js), which needs the
+  // transport's `postRaw` (lib/sdk-http-client.js); a refusal falls back to `createColumn` per column.
+  'createColumns',
   'createCustomerColumn',
   'createGlobalOptionSet',
   'createPersonaRole',
@@ -57,22 +60,53 @@ const SKILL_SDK_SURFACE = [
   'deleteSolution',
   'deleteTable',
   'deleteWebResource',
+  // A reconcile pushes an artifact only when its workspace copy differs from the last-synced snapshot
+  // (unsynced-edits.js). The check fails open: without this method the engine writes as it always did.
+  'diffArtifact',
   'disassociateRecords',
   'enrichDefaultViews',
+  // `scripts/solution-settings.js template --solution` exports the solution it makes the deployment settings of (unmanaged), then reads the
+  // package by staging it (`getDeploymentSettingsTemplate`); `import` applies the settings file in the import (`importSolution`).
+  'exportSolution',
   'fetchArtifact',
   'fetchEntityMetadata',
   'findArtifact',
   'findColumns',
   'findTables',
+  // `scripts/genpage.js types` writes the RuntimeTypes a page is authored against (lib/genpage-sdk.js `runtimeTypes`): the SDK's own generator, one read of the
+  // tables' metadata that loads no compiler — in place of `pac model genpage generate-types`.
+  'generateGenPageRuntimeTypes',
   'getAiReadiness',
   'getArtifact',
   'getColumnVisualization',
+  // `scripts/connector.js` reads a connector's operations and one operation's schema through the Power Apps connectors API (the SDK's
+  // connectivity reads, which need the factory's `connectivity` option); `scripts/list-connections.js` lists the connections.
+  'getConnectorOperationSchema',
+  'getDeploymentSettingsTemplate',
   'getEntityPrivileges',
+  // `scripts/list-languages.js` reads the environment's languages (the planner's language detection, in place of
+  // `pac model list-languages`): LCIDs only — three GETs, no workspace — and maps them to culture codes itself.
+  'getEnvironmentLanguages',
+  // The dry run's read-only question to the app folder's workspace (workspaceBindingNote in lib/workspace-binding.js): which
+  // environment it belongs to. It reads manifest.json and nothing else — unlike `listArtifacts`, which also parses every
+  // saved copy it lists.
+  'getManifest',
   'getSolution',
+  'importSolution',
   'initWorkspace',
   'insertStatusValue',
+  // The deferred routing-description push reads the app copy's dirty flag, so it never replays an earlier
+  // run's unpushed edits (sdk-build.js).
+  'listArtifacts',
+  'listConnections',
+  'listConnectorOperations',
   'moveElement',
   'publishArtifact',
+  // Step 8 publishes the app and every table whose default-view enrichment was saved but not yet
+  // published in ONE PublishXml envelope (one customization lock, one publish job) instead of one
+  // call per artifact. `publishArtifact` stays above: it is the per-target fallback when the batch
+  // is refused or a target in it fails.
+  'publishArtifacts',
   'pushArtifact',
   'queryRecords',
   'removeElement',
@@ -87,9 +121,17 @@ const SKILL_SDK_SURFACE = [
   // `systemformrole` entity — they live inside `formxml` as `<DisplayConditions>`, so this dedicated
   // call is the only way to write them.
   'setFormSecurityRoles',
+  // Reads a form's <DisplayConditions> back — including its `Order`, the form's place in the table's
+  // Main Form Set, which the forms phase sets and keeps (AB#6736948).
+  'getFormSecurityRoles',
   // Written by the app-shell phase for `app.newLook` — the modern shell is a per-app SETTING
   // (`NewLookAlwaysOn`), not an appmodule column.
   'saveSettingValue',
+  // The SDK's own write wrapper: it runs a schema write, then forgets the metadata the SDK cached for the table. The name column's length of
+  // a table an earlier attempt created is written through the raw client, addressed by MetadataId, instead of through `updateColumn`, which
+  // resolves the column by name (entity-provision.js, updateTextColumnLengthById) — and so asks for the same cache invalidation. The call is
+  // optional (an SDK without it has no cache to forget), which is why a bundle that drops it must be noticed HERE: nothing else would fail.
+  'schemaWrite',
   'setEntityIcon',
   // Wave 2 header/navigation refresh (`app.headerNavigationRefresh`). Used instead of a raw setting
   // write because the value is a Number TRI-STATE where ON is '2', not '1' — writing '1' is accepted

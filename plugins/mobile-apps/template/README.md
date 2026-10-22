@@ -35,19 +35,17 @@ connector wiring.
 	3. Find the Power Platform mobile-app plugin and select **Install**.
 	4. Reload VS Code if prompted, then open Copilot Chat in Agent mode.
 
-	Alternatively, install it from a terminal with GitHub Copilot CLI:
+	Alternatively, run these manual commands **inside a Claude Code or GitHub
+	Copilot CLI session**, not a shell:
 
-	```sh
-	copilot plugin marketplace add microsoft/power-platform-skills
-	copilot plugin install mobile-app@power-platform-skills
+	```text
+	/plugin marketplace add microsoft/power-platform-skills
+	/plugin install mobile-app@power-platform-skills
 	```
 
-	For Claude CLI:
-
-	```sh
-	claude plugin marketplace add microsoft/power-platform-skills
-	claude plugin install mobile-app@power-platform-skills --scope user
-	```
+	See the [public manual installation instructions](https://github.com/microsoft/power-platform-skills#manual-installation).
+	If installed but disabled or not loaded, enable/load the plugin in your host.
+	Installation is optional and never performed automatically by app guidance.
 
 3. Open the template folder in VS Code and run the skill from Copilot Chat:
 
@@ -73,26 +71,27 @@ connector wiring.
 
 	Create the registration on that page, copy its **Application (client) ID**,
 	and paste it when `/create-mobile-app` asks. The Wrap experience configures
-	the native app registration for this flow. You do not need to add redirect
-	URIs or API permissions manually, and tenant-wide admin consent is not
-	required.
+	the native app registration for this flow. Do not add redirect URIs or API
+	permissions manually; use Wrap to repair missing configuration. Some repairs
+	and consent operations require an Azure tenant admin.
 
 	If the app was created without a client ID, run
-	`/set-app-registration-native` later from the app folder. It opens the same
-	environment-specific page and writes the pasted client ID to
-	`auth.config.json`.
+	`/set-app-registration-native` later from the app folder. It discovers
+	tenant-visible registrations, checks the required permission profile, and
+	writes the selected client ID to `auth.config.json`.
 
 	### Required API permissions
 
-	The Microsoft Entra app registration requires these delegated permissions
-	from the **Power Platform API**:
-
-	- `PowerApps.Apps.Play`
-	- `PowerApps.Apps.Read`
-	- `Connectivity.Connectors.Read`
-	- `Connectivity.Connections.Read`
-	- `Connectivity.Connections.Write`
-	- `Connectivity.Connections.UserConsent`
+	The read-only checker validates the native runtime profile. The baseline is
+	Dynamics CRM `user_impersonation` plus Power Platform API
+	`PowerApps.Apps.Read`. Apps using Power Platform connectors additionally
+	require Azure API Connections `Runtime.All` and the Power Platform API
+	`Connectivity.Connectors.Read`, `Connectivity.Connections.Read`,
+	`Connectivity.Connections.Write`, and
+	`Connectivity.Connections.UserConsent` scopes. The checker does not require
+	unrelated Wrap packaging permissions. Redirect platforms, packaging
+	permissions, third-party-app allowlisting, and admin consent are finalized in
+	Wrap.
 
 
 5. Start mobile app:
@@ -110,11 +109,67 @@ connector wiring.
 	npm run dev
 	```
 
+	### Multi-tenant support
+
+	To let users choose among environments in multiple Microsoft Entra tenants,
+	set the app registration's supported account type to accounts in any
+	organizational directory and add the following fields under
+	`expo.extra.powerappsNative` in `app.json`:
+
+	```json
+	{
+	  "tenantMode": "multi",
+	  "appDisplayName": "My App",
+	  "appName": "MyApp",
+	  "tenantPolicy": "organizations"
+	}
+	```
+
+	Use `{ "allowedTenantIds": ["<tenant-guid>"] }` for `tenantPolicy` to
+	restrict access to specific tenants. The native host supplies the sign-in,
+	environment discovery, and environment-selection screens.
+
+	### Dev tunneling
+
+	When a device cannot reach the workstation over the local network, start an
+	authenticated Microsoft Dev Tunnel:
+
+	```bash
+	az login
+	npm run dev -- --tunnel
+	```
+
+	Pass `--tunnel-tenant <tenant-id>` to select an Entra tenant. The command
+	creates no anonymous access rule and deletes the tunnel when Metro exits.
+
 
 6. Preview the app by scanning the QR code with the Power Apps Mobile Preview app
 
 	- App store: https://apps.apple.com/us/app/power-apps-developer/id6753083462
 	- Play store: https://play.google.com/store/apps/details?id=com.microsoft.PreviewApp
+
+## App-local agent guidance
+
+[AGENTS.md](AGENTS.md) is the canonical guidance for agents working in this app.
+[CLAUDE.md](CLAUDE.md) imports it, and
+[.github/copilot-instructions.md](.github/copilot-instructions.md) links to it
+relatively, so the guidance travels with the app without private plugin paths.
+It routes relevant requests to skills advertised by the current host, keeps
+small edits small, and separates startup diagnosis from upgrades.
+
+Approved fresh-template preparation adds only missing guidance files and preserves
+existing customer guidance byte-for-byte. Existing apps can opt into guidance
+adoption separately; do not run fresh-template preparation over them.
+`/debug-app` can diagnose startup failures before the app loads. An agent already
+running creation can offer that workflow after observing a failure, but
+`npm run dev` alone does not wake an agent or install a monitor. No automatic
+hooks or watchers are added.
+
+For app problems (including dependency installation, startup, runtime, or QR
+opening), try the available `/debug-app` skill first before reporting an issue.
+This is a recommendation, not a prerequisite: honor explicit direct report
+requests. Plugin installation/loading failures can make app diagnosis unavailable;
+do not block reporting in those cases.
 
 ## Upgrade the Native Host
 
@@ -194,7 +249,7 @@ when the app uses Dataverse only.
 
 To publish as a Code App, run `npm run bundle:web`, set `appType` to `CodeApp`
 and `buildPath` to `dist-web` in `power.config.json`, then run
-`npx power-apps push`. Ensure Code App and the Mobile App have different app id by removing the appId field before pushing the app
+`npx --no-install pa app push`. Ensure Code App and the Mobile App have different app id by removing the appId field before pushing the app
 
 To publish to Power Pages, run `npm run bundle:web -- powerpages`, then use the Power Pages
 skills to upload the generated `dist-web` directory.

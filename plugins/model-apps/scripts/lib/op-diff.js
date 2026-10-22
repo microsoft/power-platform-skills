@@ -39,9 +39,11 @@ function sitemapTargets(container) {
 // reconcileForm prune (sdk-build.js:707-733): only an explicit layout prunes; an auto layout is purely
 // additive and never removes, so it can never be destructive. `def` is a compiled form intent
 // (compileFormIntent); `deployedForm` is the fetched deployed form. Never counts the primary field
-// (reconcile never prunes it). Returns [] for an auto layout or when nothing is removed.
+// (reconcile never prunes it). Returns [] for an auto layout, prune:false, or when nothing is removed.
 function formRemovals(deployedForm, def) {
-  if (!def || !def.__explicitLayout) return [];
+  // Keep the read-only classifier tied to the engine's own destructive gate: sdk-build.js only enters
+  // the prune pass for explicit layouts whose compiled intent has `__prune !== false`.
+  if (!def || !def.__explicitLayout || def.__prune === false) return [];
   const want = new Set(formFieldLogicals(def));
   const primary = def.__primaryField;
   const removed = [];
@@ -85,7 +87,7 @@ function classifyOps(spec, discovered = {}, opts = {}) {
   for (const f of discovered.forms || []) {
     const removed = formRemovals(f.deployedForm, f.def);
     if (removed.length) {
-      destructive.push({ kind: 'form-field-removal', label: f.label, detail: `removes field(s): ${removed.join(', ')}` });
+      destructive.push({ kind: 'form-field-removal', formId: f.formId, label: f.label, fields: removed, detail: `removes field(s): ${removed.join(', ')}` });
     }
   }
 
@@ -93,7 +95,7 @@ function classifyOps(spec, discovered = {}, opts = {}) {
     const want = new Set(discovered.sitemap.wantTargets || []);
     const dropped = (discovered.sitemap.deployedTargets || []).filter((t) => !want.has(t));
     if (dropped.length) {
-      destructive.push({ kind: 'sitemap-removal', label: 'app sitemap', detail: `drops navigation target(s): ${dropped.join(', ')}` });
+      destructive.push({ kind: 'sitemap-removal', label: 'app sitemap', targets: dropped, detail: `drops navigation target(s): ${dropped.join(', ')}` });
     }
   }
 

@@ -16,7 +16,8 @@
 // PURE: no I/O. The CLI wrapper (scripts/write-app-spec-doc.js) owns writing the file.
 
 const lc = (s) => String(s || '').toLowerCase();
-const { labelText } = require('./app-spec.js');
+const { labelText, lookupLabelFor } = require('./app-spec.js');
+const { appAccessCondition, appAccessModel, rolesOfPersonas, uncoveredTables, uncoveredTablesCallout } = require('./app-access.js');
 
 // Every collection read below goes through these. The renderer runs against WORK-IN-PROGRESS specs
 // during authoring — a half-typed `jobs: "x"`, a null entry left by an edit, a `dataSources` written
@@ -38,10 +39,25 @@ const text = (value, fallback = '') => {
   return s || fallback;
 };
 
+// Where a sub-grid says it goes (`tab` / `column` / `after` / `before`), worded for the plan; empty for a grid
+// that says nothing, which is how every grid read before the keys existed. A value of the wrong type is skipped:
+// reporting it is validateAppSpec's job, not the plan's.
+function gridPlacement(sg) {
+  const parts = [];
+  if (typeof sg.tab === 'string' && sg.tab.trim()) parts.push(`tab ${sg.tab.trim()}`);
+  if (Number.isInteger(sg.column)) parts.push(`column ${sg.column}`);
+  if (typeof sg.after === 'string' && sg.after.trim()) parts.push(`after ${sg.after.trim()}`);
+  if (typeof sg.before === 'string' && sg.before.trim()) parts.push(`before ${sg.before.trim()}`);
+  return parts.join(', ');
+}
+
 function overview(spec) {
   const app = spec.app || {};
   const out = [`# ${text(app.name, 'Model-driven app')} — design`, ''];
   if (app.description) out.push(text(app.description), '');
+  // #583: the routing description is reviewed beside the tile text, since the two now say different
+  // things — the tile stays short, and the routing text says who the app is for and what it leaves out.
+  if (app.aiDescription) out.push(`**Routing description:** ${text(app.aiDescription)}`, '');
   out.push(
     'Generated from `app-spec.json` by `scripts/write-app-spec-doc.js`. **Regenerate rather than',
     'hand-edit** — `app-spec.json` is the source of truth, so a manual edit here is lost on the next',
@@ -74,10 +90,12 @@ function jobsSection(spec) {
   const personas = objs(spec.personas);
   const out = ['## Jobs to be done', ''];
   if (!personas.length) {
+    // All the spec can say here is what it does NOT author: who can open the app is decided by the roles associated with it, and a spec with no
+    // personas[] leaves those as they are (the Security section says what that means, and what the environment holds when it was read).
     out.push(
-      '> ⚠ No `personas[]` were captured, so this app has no recorded jobs-to-be-done and no security',
-      '> roles — it will open only for system administrators. Capture who uses the app and what each',
-      "> of them needs to get done, then regenerate this document.",
+      '> ⚠ No `personas[]` were captured, so this app has no recorded jobs-to-be-done and this spec authors no security role.',
+      '> That does not say who can open the app — see **Security**. Capture who uses the app and what each of them needs',
+      '> to get done, then regenerate this document.',
       ''
     );
     return out;
@@ -133,7 +151,8 @@ function dataModel(spec) {
     if (pa) out.push(`| ${cell(labelText(pa.displayName, spec && spec.languageCode) || pa.schemaName)} | ${cell(pa.type, 'Text')} | primary name${pa.autoNumberFormat ? `, auto-number \`${cell(pa.autoNumberFormat)}\`` : ''} |`);
     for (const c of objs(e.columns)) {
       const notes = [];
-      if (c.required) notes.push('required');
+      if (c.required === true) notes.push('required');
+      else if (c.required === 'recommended') notes.push('recommended');
       // `o.label` is the legacy object-option shape. A LOCALIZED option is also an object but has no
       // `label` key, so the legacy branch rendered every one as an empty cell — resolve through
       // labelText first and only then fall back.
@@ -146,10 +165,12 @@ function dataModel(spec) {
   }
   const rels = objs(spec.relationships);
   if (rels.length) {
-    out.push('### Relationships', '', '| Kind | From | To | Lookup |', '|---|---|---|---|');
+    // `Label` is what the lookup column (and its form field) is called: the author's lookup.displayName, else
+    // the parent table's name — see lookupLabelFor — so the plan reads "Project", not a logical name.
+    out.push('### Relationships', '', '| Kind | From | To | Lookup | Label |', '|---|---|---|---|---|');
     for (const r of rels) {
-      if (r.type === 'ManyToMany') out.push(`| N:N | ${cell(lc(r.entity1))} | ${cell(lc(r.entity2))} | — |`);
-      else out.push(`| 1:N | ${cell(lc(r.referenced))} | ${cell(lc(r.referencing))} | ${cell(r.lookup && r.lookup.schemaName)} |`);
+      if (r.type === 'ManyToMany') out.push(`| N:N | ${cell(lc(r.entity1))} | ${cell(lc(r.entity2))} | — | — |`);
+      else out.push(`| 1:N | ${cell(lc(r.referenced))} | ${cell(lc(r.referencing))} | ${cell(r.lookup && r.lookup.schemaName)} | ${cell(labelText(lookupLabelFor(spec, r).label, spec && spec.languageCode))} |`);
     }
     out.push('');
   }
@@ -191,7 +212,7 @@ function surfaces(spec) {
   else {
     out.push('| Form | Table | Type | Layout | Sub-grids |', '|---|---|---|---|---|');
     for (const f of forms) {
-      const sg = objs(f.subgrids).map((s) => cell(lc(s.childEntity))).join(', ');
+      const sg = objs(f.subgrids).map((s) => { const where = gridPlacement(s); return `${cell(lc(s.childEntity))}${where ? ` (${cell(where)})` : ''}`; }).join(', ');
       // `formType` is the canonical field (Main / QuickCreate / QuickView), defaulting to Main —
       // NOT `type`. Reading the wrong one rendered every QuickCreate/QuickView form as "main",
       // hiding a real difference in what the form does.
@@ -306,51 +327,151 @@ const scopeRank = (s) => {
   return r === undefined ? 0 : r;
 };
 
-function security(spec) {
+// The privileges a list declares, per table and per ACCESS: table -> access -> most permissive declared scope.
+function unionPrivileges(privileges) {
+  const byEntity = new Map();
+  for (const pr of privileges) {
+    if (!pr || typeof pr !== 'object') continue;
+    const entity = lc(pr.entity);
+    if (!entity) continue;
+    let byAccess = byEntity.get(entity);
+    if (!byAccess) { byAccess = new Map(); byEntity.set(entity, byAccess); }
+    const scope = String(pr.scope || 'user');
+    for (const a of Array.isArray(pr.access) ? pr.access : []) {
+      const prev = byAccess.get(a);
+      if (prev === undefined || scopeRank(scope) > scopeRank(prev)) byAccess.set(a, scope);
+    }
+  }
+  return byEntity;
+}
+
+// The rows of a privilege table, one per (table, scope). The accesses that share a scope are grouped so the common case stays one row, while a genuine
+// split (read@organization + write@user) renders as two — visibly different access levels.
+function privilegeRows(byEntity) {
+  const rows = [];
+  for (const [entity, byAccess] of byEntity) {
+    const byScope = new Map();
+    for (const [access, scope] of byAccess) {
+      if (!byScope.has(scope)) byScope.set(scope, []);
+      byScope.get(scope).push(access);
+    }
+    const scopes = [...byScope.keys()].sort((a, b) => scopeRank(b) - scopeRank(a));
+    for (const scope of scopes) rows.push({ entity, access: byScope.get(scope).join(', '), scope });
+  }
+  return rows;
+}
+
+// What in the spec may be an associated role, for the table of the roles the app has. A role is one of (name, business unit) and the read carries no business unit,
+// so a grant that names only a name, and a persona (whose role is made in its own business unit), match a role by name alone: "may be", never "is". Only a grant that
+// names the role's id says what the role is — and what a build does for a persona is said of the persona's role ("if it is"), not of the role a name happens to match.
+function roleSources(role) {
+  if (!role.sources.length) return 'not touched by this spec';
+  return role.sources.map((s) => {
+    if (s.kind === 'roleGrant') return s.certain ? 'extended by `roleGrants[]`' : 'may be the role `roleGrants[]` extends (matched by name only)';
+    return s.getsApp
+      ? `may be the role of persona \`${s.label}\` (matched by name); if it is, a build keeps this association`
+      : `may be the role of persona \`${s.label}\` (matched by name, \`appAccess: false\`); if it is, a build removes this association`;
+  }).join('; ');
+}
+
+// WHO CAN OPEN THE APP, kept apart from who can use a table. The roles associated with the app decide which users see it. A build associates the roles of the
+// personas that get the app (`appAccess` is not false), removes the association of those that opt out, and leaves every other role's as it is; the SPEC alone says
+// nothing more, and — when the environment was read (--env) — the ENVIRONMENT says what the app has. Every sentence here follows the model (lib/app-access.js
+// appAccessModel): which personas get the app, which role is which, whether the app is known to be administrator-only. That claim is made only on the evidence of a
+// read — an app the environment has with no role associated with it, or one neither layer has yet — and only while no persona gets the app.
+function appAccessSection(spec, model, opts) {
+  const { gets, optedOut } = model.personas;
+  const out = ['### Access to the app', ''];
+  const where = opts.envUrl ? text(opts.envUrl) : 'the environment';
+  const app = model.appUnique ? `The app \`${model.appUnique}\`` : 'The app';
+  // Why a build associates no role of its own with the app, when no persona gets it.
+  const noneBecause = optedOut.length ? 'its personas are data-only: `appAccess: false`' : 'it authors no role';
+  if (model.state === 'read' && model.roles.length) {
+    out.push(`${app} already exists in ${where} and these roles are associated with it, so their users can open it:`, '', '| Role | In this spec |', '|---|---|');
+    for (const r of model.roles) out.push(`| ${cell(r.name || r.roleId)} | ${cell(roleSources(r))} |`);
+    const changes = [];
+    if (gets.length) changes.push(`associates the app with ${rolesOfPersonas(gets)}`);
+    if (optedOut.length) changes.push(`removes it from ${rolesOfPersonas(optedOut)} (\`appAccess: false\`) where it is associated`);
+    const build = changes.length ? `A build with this spec ${changes.join(', ')}, and leaves every other association as it is.` : 'A build with this spec leaves these associations as they are.';
+    out.push('', `${build} Opening the app is one thing and using a table another: the privileges on the tables this spec introduces are declared separately, below.`, '');
+  } else if (model.state === 'read') {
+    out.push(`${app} exists in ${where}, but no role is associated with it, so only administrators and other makers (System Customizer, Environment Maker) can open it. ${gets.length ? `A build with this spec associates the app with ${rolesOfPersonas(gets)}.` : `This spec associates none with it (${noneBecause}), so that does not change.`}`, '');
+  } else if (model.state === 'absent') {
+    out.push(gets.length
+      ? `${app} does not exist in ${where} yet. A build creates it and associates the System Administrator role with it, and ${rolesOfPersonas(gets)}.`
+      : `${app} does not exist in ${where} yet. A build creates it and associates the System Administrator role with it; this spec associates no other role (${noneBecause}), so users without a maker-level role cannot open it until a role is associated with it.`, '');
+  } else if (model.state === 'unreadable') {
+    out.push(`> ⚠ The roles associated with the app could not be read from ${where} (${text(model.reason)}), so who can open it was not checked.`, '', appAccessCondition(spec), '');
+  } else {
+    out.push(appAccessCondition(spec), '', 'The roles associated with the app were not read: pass `--env <envUrl>` to read them.', '');
+  }
+  return out;
+}
+
+// A grant that names a role only by name, beside the roles of that name the app has: which of them the grant extends, if any, is for the business unit to say.
+function namedGrantNote(grant) {
+  const n = grant.candidates.length;
+  const have = n === 1 ? '1 associated role has that name' : `${n} associated roles have that name`;
+  const ids = `${n === 1 ? 'id' : 'ids'} ${grant.candidates.map((c) => text(c.roleId)).join(', ')}`;
+  return `Role "${text(grant.label)}" is named without a role id: ${have} (${ids}), and roles are per business unit, so ${n === 1 ? 'it may not be' : 'at most one of them is'} the role this grant extends. Pin the role with \`roleId\` to be sure.`;
+}
+
+// roleGrants[]: privileges ADDED to roles that already exist. Shown with the role they extend — the persona sections above show the roles this spec owns — and,
+// when the environment was read, with how each grant stands to the roles the app has: a grant gives a role a table, not the app.
+function roleGrantsSection(spec, model) {
+  const grants = objs(spec.roleGrants);
+  if (!grants.length) return [];
+  const rows = [];
+  for (const g of grants) {
+    const role = typeof g.role === 'string' && g.role.trim() ? g.role.trim() : (typeof g.roleId === 'string' ? g.roleId.trim() : '');
+    for (const r of privilegeRows(unionPrivileges(arr(g.privileges)))) rows.push({ role, ...r });
+  }
+  const out = ['### Roles extended by `roleGrants[]`', '', 'These roles already exist. The build ADDS the privileges below and removes none, and a grant does not associate the role with the app. After a build, `verify-model-app.js` checks that each role holds them.', ''];
+  if (rows.length) {
+    out.push('| Role | Table | Access | Scope |', '|---|---|---|---|');
+    for (const r of rows) out.push(`| ${cell(r.role)} | ${cell(r.entity)} | ${cell(r.access)} | ${cell(r.scope)} |`);
+  } else {
+    out.push('_No privileges declared._');
+  }
+  out.push('');
+  if (model.state === 'read') {
+    for (const g of model.grants) {
+      if (g.status === 'not-associated') out.push(`> ⚠ Role "${text(g.label)}" is not among the roles associated with the app, so its users get these privileges but may not be able to open the app.`, '');
+      else if (g.status === 'maybe') out.push(namedGrantNote(g), '');
+    }
+  }
+  return out;
+}
+
+function security(spec, opts) {
   const personas = Array.isArray(spec.personas) ? spec.personas.filter((p) => p && typeof p === 'object') : [];
-  if (!personas.length) return [];
+  const model = appAccessModel(spec, opts.appAccess);
   const out = ['## Security', ''];
+  if (!personas.length) out.push('This spec authors no security role (`personas[]` is empty).', '');
   for (const p of personas) {
     out.push(`### Role: ${text(p.persona)}`, '');
     out.push(p.appAccess === false ? '_Data-only — the app is **not** granted to this role._' : 'The app is granted to this role, so it opens for this persona.', '');
 
-    // entity -> access -> most permissive declared scope
-    const byEntity = new Map();
-    const add = (pr) => {
-      if (!pr || typeof pr !== 'object') return;
-      const entity = lc(pr.entity);
-      if (!entity) return;
-      let byAccess = byEntity.get(entity);
-      if (!byAccess) { byAccess = new Map(); byEntity.set(entity, byAccess); }
-      const scope = String(pr.scope || 'user');
-      for (const a of Array.isArray(pr.access) ? pr.access : []) {
-        const prev = byAccess.get(a);
-        if (prev === undefined || scopeRank(scope) > scopeRank(prev)) byAccess.set(a, scope);
-      }
-    };
+    const privileges = [];
     for (const j of Array.isArray(p.jobs) ? p.jobs : []) {
-      if (j && typeof j === 'object') for (const pr of Array.isArray(j.privileges) ? j.privileges : []) add(pr);
+      if (j && typeof j === 'object') privileges.push(...(Array.isArray(j.privileges) ? j.privileges : []));
     }
-    for (const pr of Array.isArray(p.additionalPrivileges) ? p.additionalPrivileges : []) add(pr);
-
-    if (byEntity.size) {
+    privileges.push(...(Array.isArray(p.additionalPrivileges) ? p.additionalPrivileges : []));
+    const rows = privilegeRows(unionPrivileges(privileges));
+    if (rows.length) {
       out.push('| Table | Access | Scope |', '|---|---|---|');
-      for (const [entity, byAccess] of byEntity) {
-        // Group the accesses that share a scope so the common case stays one row, while a genuine
-        // split (read@organization + write@user) renders as two — visibly different access levels.
-        const byScope = new Map();
-        for (const [access, scope] of byAccess) {
-          if (!byScope.has(scope)) byScope.set(scope, []);
-          byScope.get(scope).push(access);
-        }
-        const scopes = [...byScope.keys()].sort((a, b) => scopeRank(b) - scopeRank(a));
-        for (const scope of scopes) out.push(`| ${cell(entity)} | ${cell(byScope.get(scope).join(', '))} | ${cell(scope)} |`);
-      }
+      for (const r of rows) out.push(`| ${cell(r.entity)} | ${cell(r.access)} | ${cell(r.scope)} |`);
       out.push('');
     } else {
       out.push('_No privileges declared._', '');
     }
   }
+  // The persona sections already say, per role, whether the app is granted to it; the section on the app is for what they cannot: a spec that gives the app to
+  // no role, and what the environment says.
+  if ((!model.personas.gets.length && !model.personas.optedOut.length) || model.state !== 'unread') out.push(...appAccessSection(spec, model, opts));
+  out.push(...roleGrantsSection(spec, model));
+  const withoutAccess = uncoveredTables(spec);
+  if (withoutAccess.length) out.push('### Tables with no access declared', '', `> ⚠ ${uncoveredTablesCallout(withoutAccess)}`, '');
   return out;
 }
 
@@ -390,7 +511,7 @@ function aiFeatures(spec) {
 /**
  * Render an App Spec as a readable Markdown design document.
  * @param {object} spec migrated App Spec
- * @param {object} [opts] { envUrl }
+ * @param {object} [opts] { envUrl, appAccess } `appAccess` is the answer of lib/app-roles.js `appRolesOf` for the app when the environment was read, else absent
  * @returns {string} markdown
  */
 function renderAppSpecDoc(spec, opts = {}) {
@@ -402,7 +523,7 @@ function renderAppSpecDoc(spec, opts = {}) {
     ...dataModel(s),
     ...surfaces(s),
     ...navigation(s),
-    ...security(s),
+    ...security(s, opts),
     ...sampleData(s),
     ...designContract(s),
     ...aiFeatures(s),

@@ -1,5 +1,5 @@
 'use strict';
-// Projection/verifier framework for safe `--changed-only` (design v7, deliverable #1).
+// Projection/verifier framework for safe `--changed-only` (design deliverable #1).
 //
 // PURE + I/O-free. Produces canonical, id-free, normalized PROJECTIONS of the artifacts on the
 // `--changed-only` fast path, so a spec-side projection and a deployed-side projection can be compared
@@ -15,14 +15,9 @@
 
 const { stableStringify } = require('./phase-diff.js');
 const { sha256 } = require('./hash.js');
-
-// Dataverse control class ids that occupy a cell but are NOT bound form fields (a quick-view even
-// carries a fieldName). Kept in sync with artifact-intent.js NON_FIELD_CONTROL_CLASS_IDS.
-const NON_FIELD_CONTROL_CLASS_IDS = new Set([
-  '5C5600E0-1D6E-4205-A272-BE80DA87FD42', // QuickView
-  'E7A81278-8635-4D9E-8D4D-59480B391C5B', // Subgrid / Grid
-  '06375649-C143-495E-A496-C962E5B4488E', // Notes / Timeline
-]);
+// The non-field control rule (quick-view, sub-grid, notes/timeline class ids) lives in the compiler
+// that places those controls, so the verifier and the compiler cannot disagree about what counts.
+const { isNonFieldControl } = require('./artifact-intent.js');
 
 // Normalize a GUID for comparison: drop braces, lowercase. Non-guid strings pass through lowercased-trim.
 function normId(s) {
@@ -31,10 +26,6 @@ function normId(s) {
 
 function normClassId(id) {
   return String(id || '').replace(/[{}]/g, '').toUpperCase();
-}
-
-function isNonFieldControl(ctrl) {
-  return !!(ctrl && ctrl.classId && NON_FIELD_CONTROL_CLASS_IDS.has(normClassId(ctrl.classId)));
 }
 
 // One cell's projection: a bound field (name + required), a sub-grid (relationship/target/view/label,
@@ -65,7 +56,7 @@ function cellProjection(cell) {
 // Placement-EXACT form projection over the NEW topology tabs → columns → sections → rows → cells.
 // Captures ORDER + placement + binding + isRequired + subgrid, and NO ids/widths that the adapter
 // defaults — so two forms with identical field NAMES but different tab/section/cell/requiredness/subgrid
-// produce DIFFERENT projections (Sol adversarial test #1). Works for a compiled intent OR a fetched form.
+// produce DIFFERENT projections (adversarial test #1). Works for a compiled intent OR a fetched form.
 function formProjection(form) {
   const tabs = (form && form.tabs ? form.tabs : []).map((t) => ({
     label: String(t.label || ''),
@@ -86,7 +77,7 @@ function formProjectionHash(form) {
 
 // Normalized structural sitemap projection: ordered areas → groups → subareas as {type, ref}, with every
 // id normId'd. GUID casing/brace + env-url noise are removed (compare EQUAL), while a reordered / renamed
-// / retargeted subarea compares UNEQUAL (Sol adversarial test #3). Accepts the SDK siteMap object shape
+// / retargeted subarea compares UNEQUAL (adversarial test #3). Accepts the SDK siteMap object shape
 // { areas:[{ title/label, groups:[{ title/label, subAreas:[{ type, entity|genPageId|dashboardId|url }] }] }] }.
 function sitemapProjection(siteMap) {
   const areas = (siteMap && siteMap.areas ? siteMap.areas : []).map((a) => ({

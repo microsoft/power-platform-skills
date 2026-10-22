@@ -27,6 +27,9 @@ charts	chart "Tickets by Status" (Column) for new_ticket
 forms	form for new_customer (sub-grids: new_ticket)
 forms	form for new_ticket (sub-grids: new_comment)
 forms	form for new_comment
+forms	form order for new_customer
+forms	form order for new_ticket
+forms	form order for new_comment
 app-shell	app module "Support Desk" + sitemap
 app-shell	app icon (generated) new_supportdesk_icon
 pages	finalize sitemap (genpage subareas)

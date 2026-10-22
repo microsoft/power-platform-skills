@@ -1,0 +1,1 @@
+Build two pages for tracking Account records — one for listing all accounts and one for editing a single account.

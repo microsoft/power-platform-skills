@@ -16,6 +16,8 @@ their runtime for restrictive hosts or use public CDNs when explicitly allowed.
 ### From a local clone
 
 ```bash
+copilot --plugin-dir /path/to/power-platform-skills/plugins/mcp-apps
+# or
 claude --plugin-dir /path/to/power-platform-skills/plugins/mcp-apps
 ```
 

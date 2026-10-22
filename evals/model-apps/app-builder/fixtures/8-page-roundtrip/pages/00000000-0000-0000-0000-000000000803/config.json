@@ -1,0 +1,4 @@
+{
+  "dataSources": ["cnt_order"],
+  "model": "model with spaces"
+}

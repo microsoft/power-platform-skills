@@ -5,6 +5,7 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
+const { spawnSync } = require("node:child_process");
 
 const {
   appendLocal,
@@ -246,3 +247,110 @@ test("latestSessionLog returns null when every session dir lacks a log", () => {
   fs.mkdirSync(path.join(pluginLogDir(root, "power-pages"), "orphan"), { recursive: true });
   assert.equal(latestSessionLog(root, "power-pages"), null);
 });
+
+test("appendLocal does not rotate a session log of exactly ROTATE_BYTES", () => {
+  const root = mkTmp();
+  const dir = path.join(root, "telemetry", "power-pages", "sessions", "s1");
+  fs.mkdirSync(dir, { recursive: true });
+  const logFile = path.join(dir, LOG_FILE_NAME);
+  // The cap is exclusive: a file of exactly ROTATE_BYTES must keep growing.
+  // Changing `>` to `>=` would rotate this file and fail the assertion.
+  fs.writeFileSync(logFile, Buffer.alloc(ROTATE_BYTES, 0x78));
+  assert.equal(fs.statSync(logFile).size, ROTATE_BYTES);
+
+  appendLocal(
+    { name: "STILL", data: { pluginName: "power-pages", sessionId: "s1" } },
+    { configDir: root }
+  );
+
+  const olds = fs.readdirSync(dir).filter((f) => f.endsWith(".old"));
+  assert.equal(olds.length, 0);
+  assert.match(fs.readFileSync(logFile, "utf8"), /STILL/);
+});
+
+test("appendLocal swallows a failure to append the session log", () => {
+  const root = mkTmp();
+  const dir = path.join(root, "telemetry", "power-pages", "sessions", "s1");
+  // events.jsonl is a directory, so appendFileSync throws. The catch must
+  // swallow that — telemetry must not break the caller.
+  fs.mkdirSync(path.join(dir, LOG_FILE_NAME), { recursive: true });
+  assert.doesNotThrow(() => {
+    appendLocal(
+      { name: "X", data: { pluginName: "power-pages", sessionId: "s1" } },
+      { configDir: root }
+    );
+  });
+  assert.ok(fs.statSync(path.join(dir, LOG_FILE_NAME)).isDirectory());
+});
+
+test("pruneOldSessions keeps a session at exactly the retention boundary", () => {
+  const root = mkTmp();
+  appendLocal(
+    { name: "edge", data: { pluginName: "power-pages", sessionId: "edge" } },
+    { configDir: root }
+  );
+  const log = sessionLog(root, "power-pages", "edge");
+  const mtime = fs.statSync(log).mtimeMs;
+  const windowMs = MAX_LOG_AGE_DAYS * 24 * 60 * 60 * 1000;
+  // Strict greater-than: an event last written exactly one window ago is kept.
+  pruneOldSessions(root, "power-pages", mtime + windowMs);
+  assert.ok(fs.existsSync(log), "exactly the retention window must be kept");
+  pruneOldSessions(root, "power-pages", mtime + windowMs + 1);
+  assert.equal(fs.existsSync(path.dirname(log)), false, "one millisecond past the window must be pruned");
+});
+
+test("pruneOldSessions leaves the session in place when removal throws", () => {
+  const root = mkTmp();
+  appendLocal(
+    { name: "old", data: { pluginName: "power-pages", sessionId: "old" } },
+    { configDir: root }
+  );
+  const oldLog = sessionLog(root, "power-pages", "old");
+  const oldDir = path.dirname(oldLog);
+  const fifteenDaysAgo = new Date(Date.now() - 15 * 24 * 60 * 60 * 1000);
+  fs.utimesSync(oldLog, fifteenDaysAgo, fifteenDaysAgo);
+  // A locked file makes rmSync throw on some platforms and not others. Force the
+  // throw in a child so the best-effort catch is what this test actually hits,
+  // without patching fs in the test process.
+  const script = path.join(root, "prune-throws.js");
+  fs.writeFileSync(
+    script,
+    [
+      '"use strict";',
+      'const fs = require("node:fs");',
+      "const { pruneOldSessions } = require(" + JSON.stringify(path.join(__dirname, "../lib/local-log")) + ");",
+      "let called = false;",
+      'fs.rmSync = () => { called = true; throw new Error("locked"); };',
+      "pruneOldSessions(" + JSON.stringify(root) + ", \"power-pages\");",
+      "if (!called) process.exit(2);",
+      "",
+    ].join("\n")
+  );
+  const result = spawnSync(process.execPath, [script], { encoding: "utf8" });
+  assert.equal(result.status, 0, result.stderr);
+  assert.ok(fs.existsSync(oldDir), "a failed removal must not delete the session or escape");
+});
+
+test("appendLocal tolerates a missing record and still does not throw", () => {
+  const root = mkTmp();
+  assert.doesNotThrow(() => appendLocal(null, { configDir: root }));
+  assert.doesNotThrow(() => appendLocal({}, { configDir: root }));
+  assert.ok(fs.existsSync(sessionLog(root, "unknown", "nosession")));
+});
+
+test("retention and newest-log selection ignore non-directory entries", () => {
+  const root = mkTmp();
+  appendLocal(
+    { name: "real", data: { pluginName: "power-pages", sessionId: "real" } },
+    { configDir: root }
+  );
+  const sessionsRoot = pluginLogDir(root, "power-pages");
+  const stray = path.join(sessionsRoot, "notes.txt");
+  fs.writeFileSync(stray, "not a session");
+  const fifteenDaysAgo = new Date(Date.now() - 15 * 24 * 60 * 60 * 1000);
+  fs.utimesSync(stray, fifteenDaysAgo, fifteenDaysAgo);
+  pruneOldSessions(root, "power-pages");
+  assert.ok(fs.existsSync(stray), "a file in the sessions root is not a session dir");
+  assert.equal(latestSessionLog(root, "power-pages"), sessionLog(root, "power-pages", "real"));
+});
+

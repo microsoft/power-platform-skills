@@ -1,0 +1,16 @@
+{
+  "contractVersion": 2,
+  "provenance": "synthetic",
+  "description": "Constructed discovery, enabled-gate, create, preserve and explicit-clear lifecycle, not an agent capture. Nested source is the actual pre-clear TSX snapshot; top-level page.tsx is the final cleared page.",
+  "contracts": ["plugins/model-apps/skills/genpage/SKILL.md Phase 4.6 and Phase 6 Custom API matrix", "plugins/model-apps/agents/genpage-customapi-builder.md Steps 1-5", "plugins/model-apps/references/custom-api.md Binding shape and Runtime requirements"],
+  "toolResults": "tool-results.json",
+  "artifacts": ["stages/with-api.tsx", "actions.json", "clear-actions.json", "created/config.json", "preserved/config.json", "cleared/config.json", "page-name.txt", "create-prompt.txt", "create-message.txt", "preserve-prompt.txt", "preserve-message.txt", "clear-prompt.txt", "clear-message.txt"],
+  "customApi": {
+    "outputs": { "cnt_ApproveOrder": ["NewStatus"], "cnt_GetOrderSummary": ["Total"] },
+    "stages": [
+      { "id": "create", "target": "page.tsx", "source": "stages/with-api.tsx", "actions": "actions.json", "afterConfig": "created/config.json", "upload": "create" },
+      { "id": "preserve", "target": "page.tsx", "source": "stages/with-api.tsx", "beforeConfig": "created/config.json", "afterConfig": "preserved/config.json", "upload": "preserve" },
+      { "id": "clear", "target": "page.tsx", "source": "page.tsx", "actions": "clear-actions.json", "beforeConfig": "preserved/config.json", "afterConfig": "cleared/config.json", "upload": "clear", "change": { "clear": true } }
+    ]
+  }
+}

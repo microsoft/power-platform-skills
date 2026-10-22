@@ -1,0 +1,4 @@
+[
+  { "name": "cnt_ApproveOrder", "isFunction": false, "boundEntityLogicalName": "salesorder", "displayName": "Approve Order", "parameterKinds": { "Comment": "String", "Amount": "Decimal" } },
+  { "name": "cnt_GetOrderSummary", "isFunction": true, "displayName": "Summary", "parameterKinds": { "OrderId": "Guid" } }
+]

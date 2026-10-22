@@ -59,7 +59,8 @@ must cover all of these categories:
 - **FetchXML query controls** — advanced query hints (`options`,
   `latematerialize`, `no-lock`, `useraworderby`, filter `hint`) and request-time
   values or explicit settings that bypass server-side query caching.
-- **Web API anti-patterns** — `$select=*`, missing `$select`, missing `$top`,
+- **Web API anti-patterns** — `$select=*`, missing `$select`, no page bound
+  (`$top` safety cap or `Prefer: odata.maxpagesize=N` cursor paging),
   too many selected columns, oversized `$top`, `$count=true`, `$expand` without
   a nested `$select`, `contains`/`endswith` filters, request-time date filters,
   related-table ordering, request-per-item/N+1 loops, and short-interval polling.
@@ -275,12 +276,15 @@ node "${PLUGIN_ROOT}/scripts/build-review-data.js" \
 node "${PLUGIN_ROOT}/scripts/render-review.js" \
   --data "<TEMP_DIR>/data.json" \
   --output "<PROJECT_ROOT>/docs/performance-analysis-<YYYY-MM-DD-HHMMSS>.html"
+
+node "${PLUGIN_ROOT}/skills/analyze-performance/scripts/validate-analyze-performance.js" \
+  --reportPath "<PROJECT_ROOT>/docs/performance-analysis-<YYYY-MM-DD-HHMMSS>.html"
 ```
 
 `<SITE_NAME>` comes from the site's `website.yml`; fall back to the folder name.
 The filename **must** include the local timestamp (e.g.,
 `performance-analysis-2026-05-14-053805.html`). Delete `<TEMP_DIR>` after the
-render succeeds and open the report in the browser.
+render and explicit validation succeed, then open the report in the browser.
 
 ### Step 6.4 — Summarize and route follow-ups
 

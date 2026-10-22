@@ -19,8 +19,10 @@ const VALIDATOR_PATH = path.join(
   'validate-analyze-performance.js',
 );
 
-function runValidator(projectRoot) {
-  return spawnSync(process.execPath, [VALIDATOR_PATH], {
+function runValidator(projectRoot, reportPath = null) {
+  const args = [VALIDATOR_PATH];
+  if (reportPath) args.push('--reportPath', reportPath);
+  return spawnSync(process.execPath, args, {
     input: JSON.stringify({ cwd: projectRoot }),
     encoding: 'utf8',
   });
@@ -57,64 +59,107 @@ test('approves when the project has no performance report yet (in-progress / pre
 
 test('approves a well-formed timestamped performance report', (t) => {
   const projectRoot = createTempProject(t);
-  writeProjectFile(projectRoot, 'docs/performance-analysis-2026-05-14-053805.html', GOOD_REPORT);
+  const reportPath = writeProjectFile(
+    projectRoot,
+    'docs/performance-analysis-2026-05-14-053805.html',
+    GOOD_REPORT,
+  );
+
+  const result = runValidator(projectRoot, reportPath);
+  assert.equal(result.status, 0, result.stderr);
+});
+
+test('validates the explicit report instead of historical reports', (t) => {
+  const projectRoot = createTempProject(t);
+  writeProjectFile(projectRoot, 'docs/performance-analysis-2026-01-01-000000.html', 'tiny');
+  const currentReport = writeProjectFile(
+    projectRoot,
+    'docs/performance-analysis-2026-05-14-053805.html',
+    GOOD_REPORT,
+  );
+
+  const result = runValidator(projectRoot, currentReport);
+  assert.equal(result.status, 0, result.stderr);
+});
+
+test('hook mode ignores historical malformed reports', (t) => {
+  const projectRoot = createTempProject(t);
+  writeProjectFile(projectRoot, 'docs/performance-analysis-2026-01-01-000000.html', 'tiny');
 
   const result = runValidator(projectRoot);
   assert.equal(result.status, 0, result.stderr);
 });
 
-test('picks the newest report when several exist', (t) => {
+test('blocks when the explicit report was not created', (t) => {
   const projectRoot = createTempProject(t);
-  // Older report is broken; newest is good. Lexicographic sort ⇒ newest wins,
-  // so the validator must approve based on the newest file.
-  writeProjectFile(projectRoot, 'docs/performance-analysis-2026-01-01-000000.html', 'tiny');
-  writeProjectFile(projectRoot, 'docs/performance-analysis-2026-05-14-053805.html', GOOD_REPORT);
+  const missing = path.join(projectRoot, 'docs', 'performance-analysis-2026-05-14-053805.html');
 
-  const result = runValidator(projectRoot);
-  assert.equal(result.status, 0, result.stderr);
+  const result = runValidator(projectRoot, missing);
+  assert.equal(result.status, 2);
+  assert.match(result.stderr, /was not created/);
 });
 
 test('blocks a report with unreplaced template placeholders', (t) => {
   const projectRoot = createTempProject(t);
   // __REVIEW_DATA__ left in place means render-template.js could not populate it.
   const broken = '<html><body>' + 'y'.repeat(600) + '__REVIEW_DATA__</body></html>';
-  writeProjectFile(projectRoot, 'docs/performance-analysis-2026-05-14-053805.html', broken);
+  const reportPath = writeProjectFile(
+    projectRoot,
+    'docs/performance-analysis-2026-05-14-053805.html',
+    broken,
+  );
 
-  const result = runValidator(projectRoot);
+  const result = runValidator(projectRoot, reportPath);
   assert.equal(result.status, 2);
   assert.match(result.stderr, /unreplaced template placeholders/);
 });
 
 test('blocks a suspiciously small report', (t) => {
   const projectRoot = createTempProject(t);
-  writeProjectFile(projectRoot, 'docs/performance-analysis-2026-05-14-053805.html', '<html></html>');
+  const reportPath = writeProjectFile(
+    projectRoot,
+    'docs/performance-analysis-2026-05-14-053805.html',
+    '<html></html>',
+  );
 
-  const result = runValidator(projectRoot);
+  const result = runValidator(projectRoot, reportPath);
   assert.equal(result.status, 2);
   assert.match(result.stderr, /suspiciously small/);
 });
 
 test('approves a non-SPA site (only .powerpages-site, no config) with a good report', (t) => {
   const projectRoot = createTempProject(t); // seeds .powerpages-site/ but no config
-  writeProjectFile(projectRoot, 'docs/performance-analysis-2026-05-14-053805.html', GOOD_REPORT);
+  const reportPath = writeProjectFile(
+    projectRoot,
+    'docs/performance-analysis-2026-05-14-053805.html',
+    GOOD_REPORT,
+  );
 
-  const result = runValidator(projectRoot);
+  const result = runValidator(projectRoot, reportPath);
   assert.equal(result.status, 0, result.stderr);
 });
 
 test('approves a non-SPA PAC download with a good report', (t) => {
   const projectRoot = createNonSpaProject(t);
-  writeProjectFile(projectRoot, 'docs/performance-analysis-2026-05-14-053805.html', GOOD_REPORT);
+  const reportPath = writeProjectFile(
+    projectRoot,
+    'docs/performance-analysis-2026-05-14-053805.html',
+    GOOD_REPORT,
+  );
 
-  const result = runValidator(projectRoot);
+  const result = runValidator(projectRoot, reportPath);
   assert.equal(result.status, 0, result.stderr);
 });
 
 test('blocks a suspiciously small non-SPA PAC download report', (t) => {
   const projectRoot = createNonSpaProject(t);
-  writeProjectFile(projectRoot, 'docs/performance-analysis-2026-05-14-053805.html', '<html></html>');
+  const reportPath = writeProjectFile(
+    projectRoot,
+    'docs/performance-analysis-2026-05-14-053805.html',
+    '<html></html>',
+  );
 
-  const result = runValidator(projectRoot);
+  const result = runValidator(projectRoot, reportPath);
   assert.equal(result.status, 2);
   assert.match(result.stderr, /suspiciously small/);
 });

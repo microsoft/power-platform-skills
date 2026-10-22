@@ -1,0 +1,15 @@
+<form>
+  <tabs><tab><columns><column><sections><section><rows><row>
+    <cell><control id="Contacts" classid="{E7A81278-8635-4D9E-8D4D-59480B391C5B}" uniqueid="{66666666-6666-4666-8666-666666666666}">
+      <parameters><TargetEntityType>contact</TargetEntityType><ViewId>{77777777-7777-4777-8777-777777777777}</ViewId><RelationshipName>new_account_contact</RelationshipName></parameters>
+    </control></cell>
+  </row></rows></section></sections></column></columns></tab></tabs>
+  <controlDescriptions>
+    <controlDescription forControl="{66666666-6666-4666-8666-666666666666}">
+      <customControl id="{E7A81278-8635-4D9E-8D4D-59480B391C5B}"><parameters><TargetEntityType>contact</TargetEntityType></parameters></customControl>
+      <customControl formFactor="0" name="new_Contoso.Controls.ContactDataset"><parameters><data-set name="records"><property-set name="email"><column>emailaddress1</column></property-set></data-set></parameters></customControl>
+      <customControl formFactor="1" name="new_Contoso.Controls.ContactDataset"><parameters><data-set name="records"><property-set name="email"><column>emailaddress1</column></property-set></data-set></parameters></customControl>
+      <customControl formFactor="2" name="new_Contoso.Controls.ContactDataset"><parameters><data-set name="records"><property-set name="email"><column>emailaddress1</column></property-set></data-set></parameters></customControl>
+    </controlDescription>
+  </controlDescriptions>
+</form>

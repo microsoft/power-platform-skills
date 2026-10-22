@@ -9,6 +9,9 @@ const { readWebsiteYml } = require('./lib/detect-project-context');
 
 const GUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const CLONED_IDENTITY_PATH = path.join('.powerpages-site', 'website.yml');
+const PORTAL_CONFIG_PATH = path.join('.powerpages-site', '.portalconfig');
+const GENERIC_MANIFEST_NAME = 'manifest.yml';
+const GENERIC_MANIFEST_PATH = path.join(PORTAL_CONFIG_PATH, GENERIC_MANIFEST_NAME);
 
 function parseArgs(argv) {
   const args = {};
@@ -60,7 +63,10 @@ function copyMissingTemplateFiles(sourcePath, clonedPath, fsImpl = fs) {
     const sourceDir = path.join(sourcePath, relativeDir);
     for (const entry of fsImpl.readdirSync(sourceDir, { withFileTypes: true })) {
       const relativePath = path.join(relativeDir, entry.name);
-      if (relativePath === CLONED_IDENTITY_PATH) continue;
+      // The released 311 template contains no portal manifest; PAC creates that state
+      // during clone/upload. Skipping a source manifest remains defense-in-depth for
+      // local or custom templates so PAC's generated clone state stays authoritative.
+      if (relativePath === CLONED_IDENTITY_PATH || relativePath === GENERIC_MANIFEST_PATH) continue;
       const sourceEntryPath = path.join(sourcePath, relativePath);
       const clonedEntryPath = path.join(clonedPath, relativePath);
       const sourceStat = fsImpl.lstatSync(sourceEntryPath);
@@ -69,13 +75,40 @@ function copyMissingTemplateFiles(sourcePath, clonedPath, fsImpl = fs) {
       }
 
       if (sourceStat.isDirectory()) {
-        if (fsImpl.existsSync(clonedEntryPath)) {
-          const clonedStat = fsImpl.lstatSync(clonedEntryPath);
-          if (clonedStat.isSymbolicLink() || !clonedStat.isDirectory()) {
-            throw new Error(`Clone path conflicts with template directory: ${relativePath}`);
+        const MAX_DIR_CREATION_ATTEMPTS = 3;
+        let created = false;
+        let lastError = null;
+        for (let attempt = 1; attempt <= MAX_DIR_CREATION_ATTEMPTS; attempt++) {
+          try {
+            // Use an atomic mkdir rather than a separate existence check to avoid a TOCTOU race.
+            fsImpl.mkdirSync(clonedEntryPath, { recursive: false });
+            created = true;
+            break;
+          } catch (err) {
+            lastError = err;
+            if (err.code !== 'EEXIST' && err.code !== 'ENOTDIR' && err.code !== 'ENOENT') throw err;
+            try {
+              const clonedStat = fsImpl.lstatSync(clonedEntryPath);
+              if (clonedStat.isSymbolicLink() || !clonedStat.isDirectory()) {
+                throw new Error(`Clone path conflicts with template directory: ${relativePath}`);
+              }
+              created = true;
+              break;
+            } catch (lstatErr) {
+              if (lstatErr.code === 'ENOENT') {
+                // The conflicting path vanished before we could stat it. Retry.
+                lastError = lstatErr;
+                continue;
+              }
+              if (lstatErr.code === 'ENOTDIR') {
+                throw new Error(`Clone path conflicts with template directory: ${relativePath}`);
+              }
+              throw lstatErr;
+            }
           }
-        } else {
-          fsImpl.mkdirSync(clonedEntryPath, { recursive: true });
+        }
+        if (!created) {
+          throw new Error(`Failed to create directory after ${MAX_DIR_CREATION_ATTEMPTS} attempts: ${relativePath} (last error: ${lastError.code})`);
         }
         queue.push(relativePath);
         continue;
@@ -203,13 +236,19 @@ function canonicalPathForCreation(targetPath, fsImpl = fs) {
   return path.join(canonicalParent, ...missingSegments);
 }
 
+function normalizePathForPlatform(value, platform = process.platform) {
+  const resolved = path.resolve(value);
+  return platform === 'win32' ? resolved.toLowerCase() : resolved;
+}
+
+function pathEquals(firstPath, secondPath, platform = process.platform) {
+  return normalizePathForPlatform(firstPath, platform) ===
+    normalizePathForPlatform(secondPath, platform);
+}
+
 function pathContains(parentPath, childPath, platform = process.platform) {
-  const normalize = (value) => {
-    const resolved = path.resolve(value);
-    return platform === 'win32' ? resolved.toLowerCase() : resolved;
-  };
-  const parent = normalize(parentPath);
-  const child = normalize(childPath);
+  const parent = normalizePathForPlatform(parentPath, platform);
+  const child = normalizePathForPlatform(childPath, platform);
   return child === parent || child.startsWith(parent + path.sep);
 }
 
@@ -248,6 +287,111 @@ function removeScriptCreatedOutputDirectory(outputDirectory, existedBeforeRun, f
   } catch {
     return false;
   }
+}
+
+function isPortalFileContentUploadFailure(result) {
+  const output = `${String(result.stderr || '')}\n${String(result.stdout || '')}`;
+  return /PortalFileContentUploadFailed/i.test(output);
+}
+
+function isRetryManifestName(name, platform = process.platform) {
+  const comparableName = platform === 'win32' ? name.toLowerCase() : name;
+  return comparableName === GENERIC_MANIFEST_NAME ||
+    comparableName.endsWith('-manifest.yml');
+}
+
+function removePacManifestsForRetry(clonedPath, deps = {}) {
+  const fsImpl = deps.fs || fs;
+  const platform = deps.platform || process.platform;
+  const resolvedClonedPath = path.resolve(clonedPath);
+  const portalConfigPath = path.join(resolvedClonedPath, PORTAL_CONFIG_PATH);
+
+  let clonedStat;
+  try {
+    clonedStat = fsImpl.lstatSync(resolvedClonedPath);
+  } catch (err) {
+    throw new Error(`Could not inspect the cloned project safely: ${err.message}`);
+  }
+  if (clonedStat.isSymbolicLink() || !clonedStat.isDirectory()) {
+    throw new Error(`Cloned project path is not a real directory: ${resolvedClonedPath}`);
+  }
+
+  let canonicalClonedPath;
+  try {
+    canonicalClonedPath = fsImpl.realpathSync(resolvedClonedPath);
+  } catch (err) {
+    throw new Error(`Could not resolve the cloned project safely: ${err.message}`);
+  }
+
+  let portalConfigStat;
+  try {
+    portalConfigStat = fsImpl.lstatSync(portalConfigPath);
+  } catch (err) {
+    if (err && err.code === 'ENOENT') return [];
+    throw new Error(`Could not inspect the PAC portal configuration directory: ${err.message}`);
+  }
+  if (portalConfigStat.isSymbolicLink() || !portalConfigStat.isDirectory()) {
+    throw new Error(`PAC portal configuration path is not a real directory: ${portalConfigPath}`);
+  }
+
+  let canonicalPortalConfigPath;
+  try {
+    canonicalPortalConfigPath = fsImpl.realpathSync(portalConfigPath);
+  } catch (err) {
+    throw new Error(`Could not resolve the PAC portal configuration directory safely: ${err.message}`);
+  }
+  const expectedCanonicalPortalConfigPath = path.join(canonicalClonedPath, PORTAL_CONFIG_PATH);
+  if (!pathEquals(expectedCanonicalPortalConfigPath, canonicalPortalConfigPath, platform)) {
+    throw new Error(`PAC portal configuration directory resolves outside its expected path: ${portalConfigPath}`);
+  }
+
+  let entries;
+  try {
+    entries = fsImpl.readdirSync(portalConfigPath, { withFileTypes: true });
+  } catch (err) {
+    throw new Error(`Could not read the PAC portal configuration directory: ${err.message}`);
+  }
+
+  const manifests = [];
+  for (const entry of entries) {
+    if (!isRetryManifestName(entry.name, platform)) continue;
+    const manifestPath = path.join(portalConfigPath, entry.name);
+    let manifestStat;
+    try {
+      manifestStat = fsImpl.lstatSync(manifestPath);
+    } catch (err) {
+      throw new Error(`Could not inspect PAC manifest ${entry.name} safely: ${err.message}`);
+    }
+    if (manifestStat.isSymbolicLink() || !manifestStat.isFile()) {
+      throw new Error(`PAC manifest is not a real regular file: ${manifestPath}`);
+    }
+    let canonicalManifestPath;
+    try {
+      canonicalManifestPath = fsImpl.realpathSync(manifestPath);
+    } catch (err) {
+      throw new Error(`Could not resolve PAC manifest ${entry.name} safely: ${err.message}`);
+    }
+    if (
+      !pathEquals(path.dirname(canonicalManifestPath), canonicalPortalConfigPath, platform) ||
+      !pathEquals(
+        canonicalManifestPath,
+        path.join(canonicalPortalConfigPath, entry.name),
+        platform
+      )
+    ) {
+      throw new Error(`PAC manifest resolves through a linked or unexpected path: ${manifestPath}`);
+    }
+    manifests.push({ name: entry.name, path: manifestPath });
+  }
+
+  for (const manifest of manifests) {
+    try {
+      fsImpl.unlinkSync(manifest.path);
+    } catch (err) {
+      throw new Error(`Could not delete PAC manifest ${manifest.name}: ${err.message}`);
+    }
+  }
+  return manifests.map((manifest) => manifest.name);
 }
 
 function provisionTemplateSite(options, deps = {}) {
@@ -400,19 +544,50 @@ function provisionTemplateSite(options, deps = {}) {
     };
   }
 
-  const uploadResult = pac([
+  const uploadArgs = [
     'pages', 'upload-code-site',
     '--rootPath', clonedPath,
     '--siteName', siteName,
-  ], pacCommandOptions);
+  ];
+  const uploadResult = pac(uploadArgs, pacCommandOptions);
   if (uploadResult.status !== 0) {
-    return {
-      ok: false,
-      step: 'upload',
-      clonedPath,
-      ...clonedIdentity,
-      error: commandError('pac pages upload-code-site', uploadResult),
-    };
+    const originalUploadError = commandError('pac pages upload-code-site', uploadResult);
+    if (isPortalFileContentUploadFailure(uploadResult)) {
+      try {
+        removePacManifestsForRetry(clonedPath, deps);
+      } catch (err) {
+        return {
+          ok: false,
+          step: 'upload',
+          clonedPath,
+          ...clonedIdentity,
+          error: `${originalUploadError}\nPAC manifest cleanup could not continue: ${err.message}`,
+        };
+      }
+
+      const retryResult = pac(uploadArgs, pacCommandOptions);
+      if (retryResult.status !== 0) {
+        return {
+          ok: false,
+          step: 'upload',
+          clonedPath,
+          ...clonedIdentity,
+          error: [
+            `${originalUploadError}`,
+            'PAC manifest cleanup was attempted, but the upload retry failed.',
+            commandError('pac pages upload-code-site retry', retryResult),
+          ].join('\n'),
+        };
+      }
+    } else {
+      return {
+        ok: false,
+        step: 'upload',
+        clonedPath,
+        ...clonedIdentity,
+        error: originalUploadError,
+      };
+    }
   }
   return {
     ok: true,
@@ -437,9 +612,13 @@ module.exports = {
   findCodeSiteRoot,
   inspectCompiledOutput,
   inspectClonedSiteIdentity,
+  isPortalFileContentUploadFailure,
+  isRetryManifestName,
   parseArgs,
   pathContains,
+  pathEquals,
   provisionTemplateSite,
+  removePacManifestsForRetry,
   removeScriptCreatedOutputDirectory,
   runNpm,
   runPac,

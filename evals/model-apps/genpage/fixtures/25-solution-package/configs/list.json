@@ -1,0 +1,6 @@
+{
+  "model": "gpt-4.1",
+  "connectorBindings": [
+    { "logicalName": "cnt_docs", "connectorId": "/providers/Microsoft.PowerApps/apis/shared_sharepointonline", "dataset": "https://contoso.sharepoint.com/sites/team", "tables": ["77777777-7777-4777-8777-777777777777"], "tableDisplayNames": ["Documents"] }
+  ]
+}

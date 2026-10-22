@@ -20,7 +20,12 @@ const fs = require('node:fs');
 // re-implemented: it is a pure lexer over TSX text, not part of the thing this harness judges, and
 // two divergent copies of a tokenizer is exactly how a false-green assertion creeps back in. Evals
 // never ship, so reaching into the plugin directory here is in-repo only.
-const { blankLiterals } = require('../../../../plugins/model-apps/scripts/lib/source-literals.js');
+const { blankLiterals, blankNonCodePreservingTemplateExpressions, commentRanges, findElisionMarker } = require('../../../../plugins/model-apps/scripts/lib/source-literals.js');
+const { pageStructureProblems } = require('../../../../plugins/model-apps/scripts/lib/page-structure.js');
+const { navigationProblems } = require('./navigation-contract.js');
+const { workerProblems } = require('./worker-contract.js');
+const { customApiProblems } = require('./custom-api-contract.js');
+const { gradeEvidence } = require('./evidence-utils.js');
 
 let _verifiedIcons = null;
 function getVerifiedIcons() {
@@ -84,6 +89,17 @@ function pass() { return { status: 'pass', reason: '' }; }
 function skip(reason) { return { status: 'skip', reason }; }
 
 const ASSERTIONS = new Map();
+
+ASSERTIONS.set(
+  'Generated .tsx passes the production completeness gate (complete module, JSX, brackets, strings, comments and no prose fences)',
+  ({ files }) => {
+    for (const file of files) {
+      const problems = pageStructureProblems(file.content);
+      if (problems.length) return fail(`${file.name}: ${problems[0]}`);
+    }
+    return pass();
+  }
+);
 
 ASSERTIONS.set(
   'Generated .tsx is a single file with `export default GeneratedComponent`',
@@ -240,14 +256,11 @@ ASSERTIONS.set(
 ASSERTIONS.set(
   'Generated .tsx does NOT include any `TODO`, `FIXME`, ellipsis placeholders, or incomplete function bodies',
   ({ files }) => {
-    const offender = files.find((f) => {
-      if (/\b(TODO|FIXME)\b/.test(f.content)) return true;
-      if (/\/\/\s*\.\.\./.test(f.content)) return true;
-      if (/\/\*\s*\.\.\.\s*\*\//.test(f.content)) return true;
-      if (/^\s*\.\.\.\s*(\/\/.*)?$/m.test(f.content)) return true;
-      return false;
-    });
-    return offender ? fail(`${offender.name}: contains TODO/FIXME or ellipsis placeholder`) : pass();
+    // The same rule the plugin's worker-output gate applies (findElisionMarker), so an eval and the
+    // runtime cannot disagree about one file. It looks in comments and bare lines only: "Loading…" in
+    // a label is UI copy, not an elided function body.
+    const offender = files.find((f) => findElisionMarker(f.content));
+    return offender ? fail(`${offender.name}: contains ${findElisionMarker(offender.content)}`) : pass();
   }
 );
 
@@ -440,8 +453,11 @@ ASSERTIONS.set(
 
 ASSERTIONS.set(
   'For multi-page builds, cross-page navigation uses quoted `"PAGEREF_<filename>"` placeholders that the orchestrator\'s Phase 6.5 resolves to real GUIDs',
-  ({ files }) => {
+  ({ files, fixture }) => {
     if (files.length <= 1) return skip('single-page fixture');
+    const result = gradeEvidence(navigationProblems, { ...fixture, files });
+    if (result.status === 'fail') return result;
+    if (fixture?.manifest?.navigation || fixture?.manifest?.navigationPhase === 'resolved') return result;
     const hasPageref = files.some((f) => /["']PAGEREF_[a-zA-Z0-9_-]+["']/.test(f.content));
     const hasNav = files.some((f) => /Xrm\.Navigation\.navigateTo/.test(f.content));
     if (hasNav && !hasPageref) {
@@ -470,6 +486,16 @@ ASSERTIONS.set(
 );
 
 const PHASE5_EXPECTATIONS = new Map();
+
+PHASE5_EXPECTATIONS.set(
+  'Phase 5: Custom API discovery, gate, bare bindings, runtime calls and update preservation or explicit clear agree',
+  ({ fixture, files }) => gradeEvidence(customApiProblems, { ...fixture, files })
+);
+
+PHASE5_EXPECTATIONS.set(
+  'Phase 5: A rejected worker artifact prevents upload until a stamped, complete regeneration passes the production gate',
+  ({ fixture, files }) => gradeEvidence(workerProblems, { ...fixture, files })
+);
 
 PHASE5_EXPECTATIONS.set(
   'Phase 5b: Generated .tsx uses only column names verified from RuntimeTypes.ts — no guessed names',
@@ -580,6 +606,169 @@ PHASE5_EXPECTATIONS.set(
 PHASE5_EXPECTATIONS.set(
   'Phase 5 (Page Builder): Generated .tsx uses the choice enum names from RuntimeTypes.ts (not magic numbers)',
   () => skip('choice enum verification requires RuntimeTypes.ts fixture')
+);
+
+// Hardcoded currency symbols and date formats in the TEXT a page shows or formats with. The text
+// view keeps only string, template and JSX text at its original offsets: the template-preserving
+// lexer view leaves `${…}` bodies as code, and comment ranges are dropped, so a comment explaining
+// the rule never trips it. Raw shapes this catches (references/localization.md forbids all of them):
+//   <Text>${total}</Text>                 `$` in JSX text right before a code `{`
+//   `$${amount.toFixed(2)}`               `$` in template text before the `${` delimiter
+//   '$' + total / 'Total: $' + total      `$` ending a string that is concatenated onto an amount
+//   amount + ' $'                         `$` opening a string concatenated after an amount
+//   'Total: €' / '$100'                   a symbol in a string
+//   'MM/dd/yyyy', 'yyyy-MM-dd'            a date pattern instead of usersettings.dateformatstring
+//   { style: 'currency', currency: 'USD' } a currency code instead of usersettings.currencysymbol
+//   d.toLocaleDateString('en-US')         a fixed locale's date format
+// Not currency: a bare `${x}` interpolation (its `$` is the template delimiter), an OData query
+// option such as '?$select=' + cols (`$` is followed by a name), and a `currency:` key outside a
+// `style: 'currency'` number format (e.g. a translation dictionary `{ currency: 'Devise' }`).
+const DATE_PART = '(?:d{1,2}|D{1,2}|M{1,4}|y{2,4}|Y{2,4})';
+const DATE_PATTERN = new RegExp(`\\b${DATE_PART}([/.\\-])${DATE_PART}\\1${DATE_PART}\\b`);
+
+// The object literal around `at` in the code view, by brace depth: from the nearest unmatched `{`
+// before it to its matching `}`. Strings are already blanked in `keep`, so braces inside them
+// cannot unbalance the scan. Returns [start, end) offsets, or null when `at` is not inside one.
+function enclosingObject(keep, at) {
+  let depth = 0;
+  let open = -1;
+  for (let i = at - 1; i >= 0; i -= 1) {
+    if (keep[i] === '}') depth += 1;
+    else if (keep[i] === '{') {
+      if (depth === 0) { open = i; break; }
+      depth -= 1;
+    }
+  }
+  if (open < 0) return null;
+  depth = 0;
+  for (let i = open; i < keep.length; i += 1) {
+    if (keep[i] === '{') depth += 1;
+    else if (keep[i] === '}' && --depth === 0) return [open, i + 1];
+  }
+  return [open, keep.length];
+}
+
+/**
+ * Object-literal properties named `name`, written bare (`currency:`) or quoted (`"currency":`),
+ * found in CODE only and only in key position (after `{` or `,`), so a ternary such as
+ * `x ? 'currency' : 'decimal'` is not mistaken for a key. Each value is classified:
+ *   kind 'fixed'   — a quoted string, or a template literal with no `${…}` (text = its content)
+ *   kind 'runtime' — anything else: an identifier, a call, an interpolated template
+ * @returns {Array<{at: number, kind: 'fixed'|'runtime', text: string|null}>}
+ */
+function objectProperties(content, keep, isLiteral, name) {
+  const out = [];
+  const re = new RegExp(`(?:\\b${name}\\b|(['"])${name}\\1)\\s*:`, 'g');
+  for (const m of content.matchAll(re)) {
+    const at = m.index;
+    // Bare key: the identifier itself must be code. Quoted key: its opening quote must be a
+    // delimiter (code), not a quote character inside some other string.
+    if (m[1] ? isLiteral(at) : keep[at] !== content[at]) continue;
+    const colon = at + m[0].length - 1;
+    if (keep[colon] !== ':') continue;
+    let p = at - 1;
+    while (p >= 0 && /\s/.test(content[p])) p -= 1;
+    if (p >= 0 && content[p] !== '{' && content[p] !== ',') continue;
+    let v = colon + 1;
+    while (v < content.length && /\s/.test(content[v])) v += 1;
+    const q = content[v];
+    if (q === '\'' || q === '"' || q === '`') {
+      // The closing delimiter is the next character of the same kind that the code view kept.
+      // For a template, any kept non-blank character before it is a `${…}` body: a runtime value.
+      let k = v + 1;
+      let interpolated = false;
+      while (k < content.length && !(content[k] === q && keep[k] === q)) {
+        if (q === '`' && keep[k] === content[k] && !/\s/.test(content[k])) interpolated = true;
+        k += 1;
+      }
+      out.push(interpolated ? { at, kind: 'runtime', text: null } : { at, kind: 'fixed', text: content.slice(v + 1, k) });
+    } else {
+      out.push({ at, kind: 'runtime', text: null });
+    }
+  }
+  return out;
+}
+
+function hardcodedFormatProblem(content) {
+  const keep = blankNonCodePreservingTemplateExpressions(content);
+  const comment = new Uint8Array(content.length);
+  for (const { start, end } of commentRanges(content)) comment.fill(1, start, end);
+  // A literal character: blanked in the code view and not part of a comment. The view blanks string,
+  // template, JSX-text AND regex bodies alike but keeps their delimiters, e.g.
+  //   raw.replace(/[$€]/g, '')   →   raw.replace(/    /g, '')
+  // so which kind of literal a character belongs to is the delimiter that OPENED its run: tracked in
+  // one forward pass as the last non-blank code character. Regex bodies are input-matching syntax,
+  // not displayed text — `raw.replace(/[$€£]/g, '')` strips symbols from input, it shows none.
+  const isLiteral = (i) => keep[i] !== content[i] && !comment[i];
+  const inRegex = new Uint8Array(content.length);
+  let opener = '';
+  for (let i = 0; i < content.length; i += 1) {
+    if (isLiteral(i)) { if (opener === '/') inRegex[i] = 1; }
+    else if (!comment[i] && !/\s/.test(content[i])) opener = content[i];
+  }
+  const isText = (i) => isLiteral(i) && !inRegex[i];
+  const text = content.split('').map((ch, i) => (isText(i) ? ch : ' ')).join('');
+  // The code character next to a string literal's delimiter, skipping whitespace, in direction dir.
+  const codeNeighbour = (from, dir) => {
+    let k = from;
+    while (k >= 0 && k < content.length && /\s/.test(content[k])) k += dir;
+    return k >= 0 && k < content.length && !isText(k) ? content[k] : '';
+  };
+  for (const m of text.matchAll(/[$\u20ac\u00a3\u00a5\u20b9]/g)) {
+    const i = m.index;
+    if (m[0] !== '$') return `hardcoded currency symbol "${m[0]}"`;
+    let j = i + 1;
+    while (j < content.length && /[ \t]/.test(content[j])) j += 1;
+    const amount = /\d/.test(content[j] || '');
+    const templateCurrency = content[i + 1] === '$' && content[i + 2] === '{';
+    const jsxCurrency = content[j] === '{' && !isText(j);
+    // String-boundary currency: the `$` is the last text character before a closing quote that is
+    // followed by `+`, or the first text character after an opening quote that is preceded by `+`.
+    // Whitespace is skipped unconditionally: the text view blanks string contents to spaces, so a
+    // space inside the string is indistinguishable from code here. Quote DELIMITERS stay visible in
+    // the code view (a quote inside text is blanked), which is what `!isText` tests below.
+    let end = i + 1;
+    while (end < content.length && /[ \t]/.test(content[end])) end += 1;
+    let start = i - 1;
+    while (start >= 0 && /[ \t]/.test(content[start])) start -= 1;
+    const prefixConcat = /['"`]/.test(content[end] || '') && !isText(end) && codeNeighbour(end + 1, 1) === '+';
+    const suffixConcat = start >= 0 && /['"`]/.test(content[start]) && !isText(start) && codeNeighbour(start - 1, -1) === '+';
+    if (amount || templateCurrency || jsxCurrency || prefixConcat || suffixConcat) return 'hardcoded "$" currency symbol';
+  }
+  const pattern = DATE_PATTERN.exec(text);
+  if (pattern && /[dD]/.test(pattern[0]) && /M/.test(pattern[0]) && /[yY]/.test(pattern[0])) return `hardcoded date format "${pattern[0]}"`;
+  // Intl formats a currency only when the SAME options object sets style: 'currency', and the code is
+  // hardcoded only when the `currency` VALUE is a fixed literal. Read real property keys — bare or
+  // quoted ({ "style": "currency", "currency": "USD" } is the same object) — and classify each value:
+  //   'USD' / "USD" / `USD`         fixed  (a template with no ${…} is still a constant)
+  //   `${currencyCode}` / code / x  runtime (comes from usersettings or other input — allowed)
+  // A `currency:` key outside such an object (a translation dictionary { currency: 'Devise' }) is
+  // an ordinary label, not a number format.
+  const currencyOptions = objectProperties(content, keep, isLiteral, 'currency');
+  if (currencyOptions.some((c) => c.kind === 'fixed')) {
+    const styles = objectProperties(content, keep, isLiteral, 'style').filter((s) => s.kind === 'fixed' && s.text === 'currency');
+    for (const c of currencyOptions.filter((p) => p.kind === 'fixed')) {
+      const span = enclosingObject(keep, c.at);
+      if (span && styles.some((s) => s.at > span[0] && s.at < span[1] && String(enclosingObject(keep, s.at)) === String(span))) {
+        return 'hardcoded currency code in a number format';
+      }
+    }
+  }
+  for (const call of keep.matchAll(/\b(?:toLocaleDateString|toLocaleString|toLocaleTimeString|DateTimeFormat)\s*\(\s*/g)) {
+    if (/^['"`][a-z]{2,3}(?:-[A-Za-z]{2,4})?['"`]/.test(content.slice(call.index + call[0].length))) return 'hardcoded locale for date formatting';
+  }
+  return null;
+}
+
+PHASE5_EXPECTATIONS.set(
+  'Phase 5 (Page Builder): Generated .tsx does NOT hardcode currency symbols or date formats',
+  ({ files }) => {
+    for (const file of files) {
+      const problem = hardcodedFormatProblem(file.content);
+      if (problem) return fail(`${file.name}: ${problem}`);
+    }
+    return pass();
+  }
 );
 
 PHASE5_EXPECTATIONS.set(

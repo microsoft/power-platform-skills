@@ -1,0 +1,19 @@
+{
+  "contractVersion": 2,
+  "provenance": "synthetic",
+  "description": "Constructed trace of an attended /genpage create run for eval 8, not an agent capture: apps.js list returns zero apps, the maker chooses to create a new app named Account Metrics, the solution question is asked because a new app is metadata work (dominant prefix cnt, choice ContosoCore recorded in ## Environment), and Phase 3 creates nothing. Phase 6 deploys an account dashboard with genpage-upload.js and no --app-id, then runs apps.js create with --solution, the first page's id and --publish; the create pins the page's tables into the new app itself, so nothing is uploaded after it.",
+  "contracts": [
+    "plugins/model-apps/skills/genpage/SKILL.md Phase 1: Plan",
+    "plugins/model-apps/agents/genpage-planner.md App Detection — 0 apps: create a new one, or cancel",
+    "plugins/model-apps/agents/genpage-planner.md Solution Selection and Dominant-prefix detection",
+    "plugins/model-apps/references/plan-schema.md ## Environment — App: create new, Solution, Publisher Prefix",
+    "plugins/model-apps/skills/genpage/SKILL.md Phase 3: App Creation/Selection — nothing is created; the app is made in Phase 6 from the first page",
+    "plugins/model-apps/skills/genpage/SKILL.md Phase 4: Generate RuntimeTypes (Conditional)",
+    "plugins/model-apps/skills/genpage/SKILL.md Phase 6: Deploy — For Dataverse entity pages (first upload — create)",
+    "plugins/model-apps/skills/genpage/SKILL.md Phase 6: A new app: the first page, then the app, then the rest",
+    "plugins/model-apps/references/data-caching.md Pattern 1 — List / array cache"
+  ],
+  "expectedOutcome": "deployed",
+  "toolResults": "tool-results.json",
+  "artifacts": ["prompt.txt", "agent-message.txt", "page-name.txt"]
+}

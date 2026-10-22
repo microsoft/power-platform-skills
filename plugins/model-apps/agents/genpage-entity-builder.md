@@ -5,6 +5,9 @@ description: >-
   in genpage-plan.md using the plugin's Node.js Web API scripts. Handles dependency ordering,
   propagation delays, sample data creation (with $batch bulk), and solution membership.
   Called by the genpage skill when new entities need creating — not invoked directly by users.
+  Works only on generative pages in a Power Apps model-driven app. Never use it for a
+  generic React or web app, or when the user rules out Power Platform, Dataverse, or
+  model-driven apps (for example "no Power Platform").
 color: yellow
 # Two naming schemes on purpose: Claude Code names first, then the portable
 # Copilot aliases for the same capabilities. Every host ignores tool names it
@@ -174,7 +177,8 @@ You will populate each section as you provision entities in Step 5.
 
 ## Step 4 — Build Provisioning Input JSON
 
-Create a `TaskCreate` task: "Build entity provisioning input".
+If you have a task tool (`TaskCreate`, or `todo`), create a task: "Build entity provisioning
+input". If you have none, skip this and never say you created a task.
 
 From the parsed `## Entity Creation Required` + `## Environment` data (Step 1),
 construct a single JSON file at `<working-dir>/provision-input.json` with the
@@ -306,11 +310,12 @@ For Choice columns, each option's value is `100000000 + index` (0-based).
 
 Write the completed JSON to `<working-dir>/provision-input.json`.
 
-Mark the task complete.
+Mark the task complete (if you created one).
 
 ## Step 5 — Provision Entities via SDK
 
-Create a `TaskCreate` task: "Provision entities to Dataverse".
+If you have a task tool (`TaskCreate`, or `todo`), create a task: "Provision entities to
+Dataverse". If you have none, skip this and never say you created a task.
 
 Run the single provisioning command:
 
@@ -417,7 +422,7 @@ node "${PLUGIN_ROOT}/scripts/provision-entities.js" --env "$ENV_URL" --input @<w
 
 If sample data is created (Step 7), append `--sample-data` to the command.
 
-Mark the task complete.
+Mark the task complete (if you created one).
 
 ## Step 6 — Ask About Sample Data
 

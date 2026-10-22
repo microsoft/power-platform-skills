@@ -1,0 +1,335 @@
+'use strict';
+
+// Structured readers for the evidence a /genpage run leaves behind, used by the per-eval Phase
+// expectations about discovery, provisioning, schema generation and deployment.
+//
+// Every reader turns ONE artifact into plain data so a check compares values instead of re-grepping
+// prose: commands come from workflowCalls (a contract-2 fixture's ordered tool-results.json, or the
+// command lines of a historical workflow-log.md), entity definitions from the plan's
+// `## Entity Creation Required`, transactions from genpage-entity-creation-log.md, and choice enums
+// from the RuntimeTypes.ts the type generator (`genpage.js types`, or `pac model genpage generate-types` in a capture made before the script) wrote from the LIVE schema.
+//
+// Nothing here executes evidence: command text is tokenized by commandInfo, never evaluated. A command is read as text, and the verb of the plugin's scripts the way the script reads it — after
+// its flags (evidence-utils.js, "How the graders read a recorded command", which also lists what is not read).
+
+const { workflowCalls, isUpload, resultObject } = require('./workflow-evidence.js');
+const { commandInfo, fileName, scriptRuns } = require('./evidence-utils.js');
+const { planSection, parseMarkdownRows } = require('./plan-evidence.js');
+
+const PAC = String.raw`\bpac(?:\.exe|\.cmd)?\s+model\s+`;
+
+// A pattern for one verb of one of the plugin's scripts — `apps.js list`, `genpage.js types` — with what a RegExp is asked: `test(text)`. `written` reads the verb right after the script's path, as
+// these patterns always did; `legacy` is the pac command the script replaced. The verb is ALSO read the way the script reads it (evidence-utils.js scriptRuns): the first positional argument after
+// its flags, so `genpage.js --env <url> types …` is the run `genpage.js types --env <url> …` is. Only the second used to count, and the "types … SKIPPED (mock data)" expectation passed for a run that
+// HAD generated them. `text` is a command, a log line, a step or a whole log: a mention in prose counts, as it always did. `withFlag` asks for a run that has a flag, before its verb or right after
+// it, so "genpage.js types not run" is a mention and no run. `script(text)` is `test` without the pac command.
+function scriptVerbPattern({ script, verb, legacy, written, withFlag = false }) {
+  const read = (text) => written.test(text) || scriptRuns(text, script).some((run) => run.verb === verb && (!withFlag || run.hasFlag));
+  return { test: (text) => legacy.test(text) || read(text), script: read };
+}
+// The plugin's own scripts replaced `pac model list-tables`, `pac model list` and `pac model create` (scripts/list-tables.js, apps.js list, apps.js create). A capture made before them
+// records the pac form, and it is still read: each pattern accepts both. A script path is usually quoted (`node 'D:/repo/…/apps.js' list`), so the pattern allows a closing quote
+// between `apps.js` and its subcommand.
+const LIST_TABLES = new RegExp(`${PAC}list-tables\\b|\\blist-tables\\.js\\b`);
+const LIST_APPS = scriptVerbPattern({ script: 'apps.js', verb: 'list', legacy: new RegExp(`${PAC}list(?![\\w-])`), written: /\bapps\.js['"]?\s+list\b/ });
+const CREATE_APP = scriptVerbPattern({ script: 'apps.js', verb: 'create', legacy: new RegExp(`${PAC}create\\b`), written: /\bapps\.js['"]?\s+create\b/ });
+// Language discovery is the plugin's own `scripts/list-languages.js` — the only source since the `pac model list-languages` fallback was removed (every /genpage page operation needs the
+// Azure CLI the script reads with). `pac model list-languages` is the command the captures made before that script record, and still counts as the planner having looked.
+const LIST_LANGUAGES = new RegExp(`${PAC}list-languages\\b|\\blist-languages\\.js\\b`);
+// The type generator, the page listing and the page download are `scripts/genpage.js types | list | download`; a capture made before the script records `pac model genpage generate-types | list |
+// download`, and is still read: each pattern accepts both. A script path is usually quoted (`node 'D:/repo/…/genpage.js' types`), so the pattern allows a closing quote between `genpage.js` and
+// its command. None may read a verb that merely starts with its own (`pac model genpage list-connector-tables` is no `list`), hence the lookahead.
+const GENERATE_TYPES = scriptVerbPattern({ script: 'genpage.js', verb: 'types', legacy: new RegExp(`${PAC}genpage\\s+generate-types\\b`), written: /\bgenpage\.js['"]?\s+types(?![\w-])/ });
+const GENPAGE_LIST = scriptVerbPattern({ script: 'genpage.js', verb: 'list', legacy: new RegExp(`${PAC}genpage\\s+list(?![\\w-])`), written: /\bgenpage\.js['"]?\s+list(?![\w-])/ });
+const GENPAGE_DOWNLOAD = scriptVerbPattern({ script: 'genpage.js', verb: 'download', legacy: new RegExp(`${PAC}genpage\\s+download\\b`), written: /\bgenpage\.js['"]?\s+download(?![\w-])/ });
+// A RUN of the type generator in a log: the script (`genpage.js types --…`, its flags before the verb or after it) or the verb it replaced (`generate-types --…`, which a capture made before the
+// script records, with or without the `pac model genpage` before it). A flag must be there, so prose such as "genpage.js types not run" is no invocation.
+const TYPES_RUN = scriptVerbPattern({ script: 'genpage.js', verb: 'types', legacy: /\bgenerate-types\s+--/, written: /\bgenpage\.js['"]?\s+types\s+--/, withFlag: true });
+const PROVISION = /\bprovision-entities\.js\b/;
+// The pre-SDK entity-builder created each table, column, relationship and row with its own script.
+const LEGACY_PROVISION = /\b(?:create-table|add-column|create-relationship|create-record)\.js\b/;
+
+// A list-tables result that says the searched table is absent. The captures phrase it as
+//   `pac model list-tables --search 'cr_candidate'` — exact logical-name match: NOT FOUND
+//   No tables found matching the specified criteria. / Result: cr_ticket does NOT exist
+// and scripts/list-tables.js says it as data: `{ "ok": true, "search": ["cr_candidate"], "exact": true, "count": 0, "tables": [], "missing": ["cr_candidate"] }` — see tableAbsent.
+const NOT_FOUND = /\bNOT\s+FOUND\b|\bdoes\s+not\s+exist\b|\bdo\s+not\s+exist\b|\bNo\s+tables?\s+found\b/i;
+
+// `--data-sources 'incident,contact'` → ['incident', 'contact']. commandInfo already removed the
+// one pair of quotes that wrapped the token; stray backticks from a Markdown code span go here.
+function csvList(value) {
+  if (typeof value !== 'string') return [];
+  return value.split(',').map((item) => item.trim().replace(/^[`'"]+|[`'"]+$/g, '').toLowerCase()).filter(Boolean);
+}
+
+const sameSet = (a, b) => a.length === b.length && a.every((item) => b.includes(item));
+const containsAll = (have, wanted) => wanted.every((item) => have.includes(item));
+
+// A logical name's suffix: `cr_candidate` → `candidate`. The plan stores suffixes only and the
+// prefix comes from the SELECTED solution's publisher, so a run that picked a `cnt` publisher
+// correctly creates `cnt_widget` for a prompt that said `cr_widget`.
+const suffixOf = (name) => String(name).toLowerCase().replace(/^[a-z0-9]+_/, '');
+
+// Commands matching `pattern`, each with its parsed flags and the text recorded with it (the
+// result lines that follow a historical log command, or a contract-2 event's result).
+function commandCalls(fixture, pattern) {
+  return workflowCalls(fixture).filter((call) => pattern.test(call.command)).map((call) => {
+    // A historical log wraps the command in a Markdown code span and keeps going after it:
+    //   - Command: `genpage.js types --env https://contoso.crm.dynamics.com --data-sources "task" --output-file "D:/x/RuntimeTypes.ts"`   (or `pac model genpage generate-types --data-sources …` in an older capture)
+    //   `node …/provision-entities.js --env https://… --input @…/provision-input.json --apply --sample-data`
+    // The closing backtick would otherwise glue onto the last token (`--sample-data\`` is then no
+    // flag at all), so drop the span delimiters before tokenizing. Recorded argv is used untouched.
+    const info = commandInfo(call.argv ? call : { ...call, command: String(call.command).replace(/`/g, ' ') });
+    const result = typeof call.result === 'string' ? call.result : call.result ? JSON.stringify(call.result) : '';
+    return { call, flags: info.flags, text: [call.text || call.command, result].join('\n') };
+  });
+}
+
+function listTablesSearches(fixture) {
+  return commandCalls(fixture, LIST_TABLES).filter((c) => typeof c.flags.search === 'string')
+    .map((c) => ({ ...c, terms: csvList(c.flags.search) }));
+}
+
+// Whether a list-tables search says `name` is NOT a table. scripts/list-tables.js answers as data, and the answer is read as data: a table exists when one of `tables` has exactly that
+// logical name (any letter case) — whatever else a substring search returned beside it — and is absent when none has. A capture made before the script records prose, which NOT_FOUND reads.
+function tableAbsent(search, name) {
+  const result = resultObject(search.call);
+  if (result && result.ok === true && Array.isArray(result.tables)) {
+    return !result.tables.some((table) => String(table && table.logicalName).toLowerCase() === String(name).toLowerCase());
+  }
+  return NOT_FOUND.test(search.text);
+}
+
+// A list-tables run that did not read the tables: `{ "ok": false, "error": "…", "code": "…" }`. Nothing was learned about any table, so it neither confirms one exists nor that one is absent.
+function searchFailed(search) {
+  return resultObject(search.call)?.ok === false;
+}
+
+function generateTypesCalls(fixture) {
+  return commandCalls(fixture, GENERATE_TYPES).map((c) => ({ ...c, sources: csvList(c.flags['data-sources']) }));
+}
+
+// Both transports — raw `pac model genpage upload` and scripts/genpage-upload.js — take the same
+// `--code-file` / `--data-sources` / `--page-id` flags, so one reader serves both (isUpload).
+function uploadCalls(fixture) {
+  return commandCalls(fixture, /./).filter((c) => isUpload(c.call.command))
+    .map((c) => ({ ...c, file: fileName(c.flags['code-file']), sources: csvList(c.flags['data-sources']), update: Boolean(c.flags['page-id']) }));
+}
+
+function provisionCalls(fixture) {
+  return commandCalls(fixture, PROVISION);
+}
+
+function legacyProvisionCalls(fixture) {
+  return commandCalls(fixture, LEGACY_PROVISION);
+}
+
+function envField(text, label) {
+  const section = planSection(text, 'Environment') || '';
+  const match = new RegExp(`^\\s*[-*]?\\s*${label}:\\s*(\\S+)`, 'mi').exec(section);
+  return match ? match[1].trim() : null;
+}
+
+const planPrefix = (plan) => envField(plan, 'Publisher Prefix')?.toLowerCase() || null;
+const planSolution = (plan) => envField(plan, 'Solution');
+
+// Rows of a markdown table, minus the `| none | none |` placeholder rows plan-schema.md allows for
+// an empty Choice Columns or Relationships table.
+function tableRows(text, columns) {
+  return parseMarkdownRows(text, columns).filter((row) => !Object.values(row).every((cell) => /^(none|)$/i.test(cell)));
+}
+
+// `Low (100000000), Medium (100000001)` → [{ label: 'Low', value: 100000000 }, …]
+function parseOptions(cell) {
+  return [...String(cell || '').matchAll(/([^,()]+?)\s*\((\d+)\)/g)].map((m) => ({ label: m[1].trim(), value: Number(m[2]) }));
+}
+
+// The `### <suffix>` blocks of `## Entity Creation Required` (plan-schema.md), e.g.
+//   ### candidate
+//   - Columns:
+//     | Suffix | Type | Required | Notes |
+//   - Choice Columns:
+//     | Column Suffix | Options |
+//   - Relationships:
+//     | Type | Related Table | Lookup Suffix | Cascade |
+// A Relationships row lives in the block of the REFERENCING table and names the referenced one.
+function planEntityBlocks(plan) {
+  const section = planSection(plan, 'Entity Creation Required');
+  if (!section || /No entity creation required/i.test(section)) return [];
+  const blocks = [];
+  let current = null;
+  for (const line of section.split(/\r?\n/)) {
+    const heading = /^###\s+(.+?)\s*$/.exec(line);
+    if (heading) {
+      current = { suffix: heading[1].trim().toLowerCase(), lines: [] };
+      blocks.push(current);
+    } else if (current) {
+      current.lines.push(line);
+    }
+  }
+  return blocks.map(({ suffix, lines }) => {
+    const text = lines.join('\n');
+    return {
+      suffix,
+      columns: tableRows(text, ['Suffix', 'Type']).map((row) => ({ suffix: row.suffix.toLowerCase(), type: row.type })),
+      choices: tableRows(text, ['Column Suffix', 'Options']).map((row) => ({ suffix: row['column suffix'].toLowerCase(), options: parseOptions(row.options) })),
+      relationships: tableRows(text, ['Type', 'Related Table', 'Lookup Suffix']).map((row) => ({
+        type: row.type, related: suffixOf(row['related table']), lookup: row['lookup suffix'].toLowerCase(),
+      })),
+    };
+  });
+}
+
+// `## Existing Entities` holds a comma/line separated list, `None.` or a sentence about mock data.
+function existingEntities(plan) {
+  const section = planSection(plan, 'Existing Entities') || '';
+  return (section.match(/\b[a-z][a-z0-9_]*\b/g) || []).filter((word) => !/^(none|mock|data|page)$/.test(word));
+}
+
+// genpage-entity-creation-log.md as written by agents/genpage-entity-builder.md Step 5:
+//   ## Environment            - Solution: Crdec34 / - Publisher Prefix: cr
+//   ## Created Tables         ### Ticket / - Resolved Full Name: cr_ticket / - Metadata ID: n/a
+//   ## Created Columns        | Table | Display Name | Schema Name | Resolved Full Name | Metadata ID |
+//   ## Created Relationships  | Type | From | To | Lookup Schema Name | Resolved Full Name |
+// Table order is kept: it is the order the transactions were recorded in.
+function entityLog(text) {
+  if (!text) return null;
+  const tables = [];
+  let current = null;
+  for (const line of (planSection(text, 'Created Tables') || '').split(/\r?\n/)) {
+    const heading = /^###\s+(.+?)\s*$/.exec(line);
+    if (heading) {
+      current = { title: heading[1], resolved: null, metadataId: null };
+      tables.push(current);
+      continue;
+    }
+    const field = /^\s*[-*]\s*(Resolved Full Name|Metadata ID):\s*(.*?)\s*$/i.exec(line);
+    if (current && field) current[/^Resolved/i.test(field[1]) ? 'resolved' : 'metadataId'] = field[2].toLowerCase() || null;
+  }
+  return {
+    solution: envField(text, 'Solution'),
+    prefix: envField(text, 'Publisher Prefix')?.toLowerCase() || null,
+    tables,
+    columns: parseMarkdownRows(planSection(text, 'Created Columns') || '', ['Table', 'Resolved Full Name'])
+      .map((row) => ({ table: row.table.toLowerCase(), resolved: row['resolved full name'].toLowerCase(), metadataId: row['metadata id'] ?? null })),
+    relationships: parseMarkdownRows(planSection(text, 'Created Relationships') || '', ['From', 'To'])
+      .map((row) => ({ from: row.from.toLowerCase(), to: row.to.toLowerCase(), resolved: (row['resolved full name'] || '').toLowerCase() })),
+  };
+}
+
+// The tables a run actually created: the transaction log's resolved names (Dataverse may normalize
+// them), else the plan's `<prefix>_<suffix>` when no log was captured.
+function createdTableNames(fixture) {
+  const log = entityLog(fixture.entityCreationLog);
+  const resolved = (log?.tables || []).map((t) => t.resolved).filter(Boolean);
+  if (resolved.length) return resolved;
+  const prefix = planPrefix(fixture.genpagePlan);
+  return prefix ? planEntityBlocks(fixture.genpagePlan).map((b) => `${prefix}_${b.suffix}`) : [];
+}
+
+// RuntimeTypes.ts as the type generator writes it (`genpage.js types`, and `pac model genpage generate-types` before it — the registrations and enums are the same):
+//   export interface EnumRegistrations extends BaseEnumRegistrations {
+//       "cr_ticket-cr_priority": cr_ticket_cr_priority,
+//   }
+//   const enum cr_ticket_cr_priority {
+//   "Low" = 100000000,
+//   }
+// Members are quoted labels (they may contain spaces); a bare identifier is accepted too.
+function runtimeEnums(source) {
+  const text = String(source || '');
+  const registrations = new Map();
+  const block = /interface\s+EnumRegistrations\b[^{]*\{([^}]*)\}/.exec(text);
+  for (const m of (block?.[1] || '').matchAll(/"([^"]+)"\s*:\s*([A-Za-z_$][\w$]*)/g)) registrations.set(m[1].toLowerCase(), m[2]);
+  const enums = new Map();
+  for (const m of text.matchAll(/\benum\s+([A-Za-z_$][\w$]*)\s*\{([^}]*)\}/g)) {
+    enums.set(m[1], [...m[2].matchAll(/(?:"([^"]+)"|([A-Za-z_$][\w$]*))\s*=\s*(-?\d+)/g)]
+      .map((x) => ({ label: x[1] ?? x[2], value: Number(x[3]) })));
+  }
+  return { registrations, enums };
+}
+
+// The enum registered for `<table>-<column>`, matched on suffixes (see suffixOf).
+function choiceEnum(source, tableSuffix, columnSuffix) {
+  const { registrations, enums } = runtimeEnums(source);
+  for (const [key, name] of registrations) {
+    const [table, column] = key.split('-');
+    if (suffixOf(table) === tableSuffix && suffixOf(column) === columnSuffix) return { key, name, members: enums.get(name) || null };
+  }
+  return null;
+}
+
+// The rows of an app or page listing — apps from `scripts/apps.js list` (or `pac model list` in an older capture), pages from `scripts/genpage.js list` (or `pac model genpage list`) — as
+// { id, name }. Five recorded shapes (the last two are the scripts' stdout, one line of JSON; a capture keeps it as the object it parsed to, as the text it is, or as the `Result: {…}` line of a log):
+//   App ID                                Display Name   Unique Name        (raw PAC table)
+//   11111111-2222-3333-4444-555555555555  Sales Hub      SalesHub
+//   - Sales Hub — 11111111-2222-3333-4444-555555555555 (SalesHub)          (log bullet)
+//   { "apps": [ { "appId": "…", "displayName": "…" } ] }                     (structured result of an older capture)
+//   { "ok": true, "count": 1, "apps": [ { "id": "…", "name": "Sales Hub", "uniqueName": "sales_hub_1a2b3c4d", "published": true, "unpublishedChanges": false } ] }   (apps.js list)
+//   { "ok": true, "scope": "app", "appId": "…", "layer": "published", "count": 1, "pages": [ { "pageId": "…", "name": "Seattle Weather", "title": "Weather" } ] }   (genpage.js list --app-id)
+const GUID_RE = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i;
+// What the JSON of a result starts like: an object with a key (or none), or a list of objects, strings or nothing. A PAC output line such as `[INFO] …` does not.
+const JSON_START = /^\s*(?:\{\s*(?:"|\})|\[\s*(?:\{|\]|"))/;
+
+// The rows of a listing that is data: the items of each list it holds, by the first GUID in each.
+function listedRows(listing) {
+  const rows = [];
+  for (const value of Object.values(listing && typeof listing === 'object' ? listing : {})) {
+    if (!Array.isArray(value)) continue;
+    for (const item of value) {
+      const id = item && Object.values(item).find((v) => typeof v === 'string' && GUID_RE.test(v));
+      if (id) rows.push({ id: GUID_RE.exec(id)[0].toLowerCase(), name: String(item.displayName || item.name || '').trim() });
+    }
+  }
+  return rows;
+}
+
+// The JSON a result kept as text holds: all of it, or the first line that starts like JSON (a capture may hold what the script wrote to stderr beside its one line). undefined when the text holds no
+// JSON at all — a PAC table, a log's bullets — and null when it holds JSON that does not parse.
+function jsonOf(text) {
+  const candidates = [text.trim(), ...text.split(/\r?\n/).map((line) => line.trim())].filter((candidate) => JSON_START.test(candidate));
+  for (const candidate of candidates) {
+    try { return JSON.parse(candidate); } catch { /* the line that is the JSON may be the next candidate */ }
+  }
+  return candidates.length ? null : undefined;
+}
+
+function listingRows(call) {
+  const rows = [];
+  const result = call.result;
+  // An object is data: an event's result as it parsed, or a log's `Result: {…}` line that workflowCalls decoded. The other results a log decodes (`ok=true`, `{ ok: true, ... }`) hold no list; the lines
+  // under its command are the listing then.
+  if (result && typeof result === 'object' && (!call.historical || Object.values(result).some(Array.isArray))) return listedRows(result);
+  // JSON kept as text is data as well; JSON that does not parse lists nothing, where the table reader below would take the GUIDs of its text for rows and name them after the fragment before each.
+  if (typeof result === 'string' && !call.historical) {
+    const listing = jsonOf(result);
+    if (listing !== undefined) return listedRows(listing);
+  }
+  const text = typeof result === 'string' && !call.historical ? result : String(call.text || '').split(/\r?\n/).slice(1).join('\n');
+  for (const line of text.split(/\r?\n/)) {
+    const m = GUID_RE.exec(line);
+    if (!m) continue;
+    const before = line.slice(0, m.index).replace(/^[\s*-]+/, '').replace(/[\s`(—–-]+$/, '').trim();
+    const after = line.slice(m.index + m[0].length).split(/\s{2,}/).map((s) => s.trim()).filter(Boolean)[0] || '';
+    rows.push({ id: m[0].toLowerCase(), name: before || after.replace(/[`)]+$/, '') });
+  }
+  return rows;
+}
+
+// The run in order, one entry per step, for requirements that span commands AND the conversation
+// (questions, plan presentations). A contract-2 fixture that records its AskUserQuestion turns as
+// tool-result events is read from those events; otherwise the workflow-log's lines are the record,
+// since contract-2 events of the other fixtures hold commands only.
+function conversationSteps(fixture) {
+  const events = Array.isArray(fixture.events) ? fixture.events : null;
+  if (events && events.some((e) => /^AskUserQuestion\b/.test(e.command))) {
+    return events.map((e) => `${e.command}\n${typeof e.result === 'string' ? e.result : JSON.stringify(e.result ?? '')}`);
+  }
+  return String(fixture.workflowLog || '').split(/\r?\n/);
+}
+
+module.exports = {
+  LIST_TABLES, LIST_LANGUAGES, LIST_APPS, CREATE_APP, GENPAGE_LIST, GENPAGE_DOWNLOAD, GENERATE_TYPES, TYPES_RUN, NOT_FOUND, GUID_RE,
+  csvList, sameSet, containsAll, suffixOf, commandCalls, listTablesSearches, tableAbsent, searchFailed, generateTypesCalls, uploadCalls,
+  provisionCalls, legacyProvisionCalls, planPrefix, planSolution, planEntityBlocks, existingEntities, entityLog,
+  createdTableNames, runtimeEnums, choiceEnum, parseOptions, listingRows, conversationSteps,
+};

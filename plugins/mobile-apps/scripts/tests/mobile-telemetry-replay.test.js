@@ -24,7 +24,8 @@ test('prior event scan reads nested and rotated logs without Dirent path metadat
   }));
   const makeRecord = (sessionId, time) => ({
     time, name: 'event',
-    data: { pluginName: 'mobile-app', eventName: 'skill_started', sessionId,
+    data: { pluginName: 'mobile-app', skillName: 'create-mobile-app',
+      eventName: 'skill_started', sessionId,
       eventInfo: { appInstanceId } },
   });
   const records = [
@@ -63,7 +64,8 @@ test('first resolution replays this app across sessions without duplicating logs
     clusterEnvironment: 'Prod', clusterGeoName: 'EU' }));
   const makeRecord = (sessionId, identity = appInstanceId) => ({
     time: '2026-09-07T01:00:00.000Z', name: 'event',
-    data: { pluginName: 'mobile-app', eventName: 'skill_started', sessionId, eventInfo: { appInstanceId: identity } },
+    data: { pluginName: 'mobile-app', skillName: 'create-mobile-app',
+      eventName: 'skill_started', sessionId, eventInfo: { appInstanceId: identity } },
   });
   appendLocal(makeRecord('first'), { configDir });
   appendLocal(makeRecord('second'), { configDir });
@@ -91,6 +93,22 @@ test('first resolution replays this app across sessions without duplicating logs
   const log = path.join(history, 'events.20260907010000.old');
   assert.equal(fs.readFileSync(log, 'utf8').trim().split('\n').length, 1);
   fs.writeFileSync(probe, 'unchanged');
+  const optedOutReplay = spawnSync(
+    process.execPath,
+    [path.resolve(__dirname, '../lib/mobile-telemetry-dispatcher.js')],
+    {
+      cwd: os.tmpdir(),
+      env: { ...env, POWER_PLATFORM_SKILLS_TELEMETRY_MOBILE_APP_OPTOUT: '1' },
+      input: JSON.stringify({
+        data: { pluginName: 'mobile-app' },
+        replay: [makeRecord('first')],
+      }),
+      encoding: 'utf8',
+      timeout: 5000,
+    },
+  );
+  assert.equal(optedOutReplay.status, 0);
+  assert.equal(fs.readFileSync(probe, 'utf8'), 'unchanged');
   assert.equal(run().status, 0);
   await delay(100);
   assert.equal(fs.readFileSync(probe, 'utf8'), 'unchanged');
@@ -169,7 +187,13 @@ test('dispatcher preserves the original event shape for unresolved, opted-out an
   const run = (sessionId, childEnv = env) => {
     const result = spawnSync(process.execPath, [path.resolve(__dirname, '../lib/mobile-telemetry-dispatcher.js')], {
       cwd: root, env: childEnv, encoding: 'utf8', timeout: 5000,
-      input: JSON.stringify({ name: 'event', data: { pluginName: 'mobile-app', sessionId, eventInfo: { appInstanceId } } }),
+      input: JSON.stringify({ name: 'event', data: {
+        pluginName: 'mobile-app',
+        skillName: 'create-mobile-app',
+        eventName: 'skill_started',
+        sessionId,
+        eventInfo: { appInstanceId },
+      } }),
     });
     assert.equal(result.status, 0, result.stderr);
   };
@@ -188,6 +212,12 @@ test('dispatcher preserves the original event shape for unresolved, opted-out an
     assert.deepEqual(Object.keys(record).sort(), ['data', 'name', 'time']);
     assert.equal(record.name, 'event');
     assert.ok(Number.isFinite(Date.parse(record.time)));
-    assert.deepEqual(record.data, { pluginName: 'mobile-app', sessionId, eventInfo: { appInstanceId } });
+    assert.deepEqual(record.data, {
+      pluginName: 'mobile-app',
+      skillName: 'create-mobile-app',
+      eventName: 'skill_started',
+      sessionId,
+      eventInfo: { appInstanceId },
+    });
   }
 });

@@ -1,0 +1,1 @@
+Add a search bar and column sorting by company name

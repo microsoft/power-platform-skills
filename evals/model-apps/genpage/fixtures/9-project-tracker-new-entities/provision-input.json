@@ -1,0 +1,77 @@
+{
+  "solution": {
+    "uniqueName": "ContosoProjects",
+    "publisherPrefix": "cr"
+  },
+  "entities": [
+    {
+      "schemaName": "cr_Project",
+      "displayName": "Project",
+      "pluralName": "Projects",
+      "description": "A tracked project with an owner, schedule, budget and status.",
+      "primaryAttribute": {
+        "schemaName": "cr_Name",
+        "displayName": "Project Name",
+        "maxLength": 100
+      },
+      "columns": [
+        { "schemaName": "cr_Manager", "displayName": "Project Manager", "type": "Text", "maxLength": 100, "required": true },
+        { "schemaName": "cr_StartDate", "displayName": "Start Date", "type": "DateTime", "dateFormat": "DateOnly", "required": true },
+        { "schemaName": "cr_TargetDate", "displayName": "Target Date", "type": "DateTime", "dateFormat": "DateOnly", "required": true },
+        { "schemaName": "cr_Budget", "displayName": "Budget", "type": "Money", "precision": 2, "minValue": 0 },
+        { "schemaName": "cr_Status", "displayName": "Status", "type": "Choice", "options": ["Planning", "Active", "On Hold", "Completed"] }
+      ]
+    },
+    {
+      "schemaName": "cr_Milestone",
+      "displayName": "Milestone",
+      "pluralName": "Milestones",
+      "description": "A dated checkpoint that belongs to one project.",
+      "primaryAttribute": {
+        "schemaName": "cr_Name",
+        "displayName": "Milestone Name",
+        "maxLength": 100
+      },
+      "columns": [
+        { "schemaName": "cr_DueDate", "displayName": "Due Date", "type": "DateTime", "dateFormat": "DateOnly", "required": true },
+        { "schemaName": "cr_PercentComplete", "displayName": "Percent Complete", "type": "Integer", "minValue": 0, "maxValue": 100 },
+        { "schemaName": "cr_Status", "displayName": "Status", "type": "Choice", "options": ["Not Started", "In Progress", "Completed", "Blocked"] }
+      ]
+    }
+  ],
+  "relationships": [
+    {
+      "type": "OneToMany",
+      "schemaName": "cr_project_cr_milestone",
+      "referenced": "cr_Project",
+      "referencing": "cr_Milestone",
+      "lookup": {
+        "schemaName": "cr_Project",
+        "displayName": "Project"
+      },
+      "cascadeDelete": "RemoveLink"
+    }
+  ],
+  "sampleData": {
+    "cr_Project": [
+      { "cr_name": "Contoso Website Redesign", "cr_manager": "Avery Chen", "cr_startdate": "2026-07-06", "cr_targetdate": "2026-12-18", "cr_budget": 185000, "cr_status": "Active" },
+      { "cr_name": "Warehouse Scanner Rollout", "cr_manager": "Priya Natarajan", "cr_startdate": "2026-08-03", "cr_targetdate": "2027-02-26", "cr_budget": 92000, "cr_status": "On Hold" },
+      { "cr_name": "Customer Portal Migration", "cr_manager": "Diego Ramirez", "cr_startdate": "2026-10-19", "cr_targetdate": "2027-04-30", "cr_budget": 240000, "cr_status": "Planning" },
+      { "cr_name": "Q3 Sales Enablement Program", "cr_manager": "Hannah Okafor", "cr_startdate": "2026-06-01", "cr_targetdate": "2026-09-30", "cr_budget": 38500, "cr_status": "Completed" }
+    ],
+    "cr_Milestone": [
+      { "cr_name": "Discovery and stakeholder interviews", "cr_duedate": "2026-07-31", "cr_percentcomplete": 100, "cr_status": "Completed", "$parent": { "entity": "cr_Project", "match": { "cr_name": "Contoso Website Redesign" } } },
+      { "cr_name": "Design system and wireframes approved", "cr_duedate": "2026-09-25", "cr_percentcomplete": 100, "cr_status": "Completed", "$parent": { "entity": "cr_Project", "match": { "cr_name": "Contoso Website Redesign" } } },
+      { "cr_name": "Content migration complete", "cr_duedate": "2026-11-13", "cr_percentcomplete": 45, "cr_status": "In Progress", "$parent": { "entity": "cr_Project", "match": { "cr_name": "Contoso Website Redesign" } } },
+      { "cr_name": "Launch and DNS cutover", "cr_duedate": "2026-12-18", "cr_percentcomplete": 0, "cr_status": "Not Started", "$parent": { "entity": "cr_Project", "match": { "cr_name": "Contoso Website Redesign" } } },
+      { "cr_name": "Pilot at Redmond distribution center", "cr_duedate": "2026-09-11", "cr_percentcomplete": 100, "cr_status": "Completed", "$parent": { "entity": "cr_Project", "match": { "cr_name": "Warehouse Scanner Rollout" } } },
+      { "cr_name": "Handheld device procurement", "cr_duedate": "2026-10-02", "cr_percentcomplete": 70, "cr_status": "Blocked", "$parent": { "entity": "cr_Project", "match": { "cr_name": "Warehouse Scanner Rollout" } } },
+      { "cr_name": "Regional rollout wave 1", "cr_duedate": "2026-12-04", "cr_percentcomplete": 10, "cr_status": "In Progress", "$parent": { "entity": "cr_Project", "match": { "cr_name": "Warehouse Scanner Rollout" } } },
+      { "cr_name": "Requirements sign-off", "cr_duedate": "2026-11-06", "cr_percentcomplete": 20, "cr_status": "In Progress", "$parent": { "entity": "cr_Project", "match": { "cr_name": "Customer Portal Migration" } } },
+      { "cr_name": "Identity provider integration", "cr_duedate": "2027-01-22", "cr_percentcomplete": 0, "cr_status": "Not Started", "$parent": { "entity": "cr_Project", "match": { "cr_name": "Customer Portal Migration" } } },
+      { "cr_name": "Curriculum finalized", "cr_duedate": "2026-06-26", "cr_percentcomplete": 100, "cr_status": "Completed", "$parent": { "entity": "cr_Project", "match": { "cr_name": "Q3 Sales Enablement Program" } } },
+      { "cr_name": "Regional workshops delivered", "cr_duedate": "2026-09-18", "cr_percentcomplete": 100, "cr_status": "Completed", "$parent": { "entity": "cr_Project", "match": { "cr_name": "Q3 Sales Enablement Program" } } },
+      { "cr_name": "Certification results published", "cr_duedate": "2026-09-30", "cr_percentcomplete": 100, "cr_status": "Completed", "$parent": { "entity": "cr_Project", "match": { "cr_name": "Q3 Sales Enablement Program" } } }
+    ]
+  }
+}

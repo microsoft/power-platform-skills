@@ -1,0 +1,24 @@
+{
+  "schemaVersion": 2,
+  "solution": { "uniqueName": "ContosoChangedOnly", "publisherPrefix": "cnt" },
+  "app": { "name": "Orders", "uniqueName": "cnt_orders", "description": "Classify safe partial applies from an identity-bound baseline" },
+  "entities": [
+    { "schemaName": "cnt_order", "displayName": "Order", "pluralName": "Orders",
+      "primaryAttribute": { "schemaName": "cnt_name", "displayName": "Name" },
+      "columns": [{ "schemaName": "cnt_status", "displayName": "Status", "type": "Choice", "options": ["Open", "Done"] }] }
+  ],
+  "forms": [],
+  "views": [],
+  "charts": [],
+  "pages": [
+    { "key": "overview", "name": "Order Overview", "pageId": "00000000-0000-0000-0000-000000000901",
+      "dataSources": ["cnt_order"], "source": { "kind": "tsx", "codeFile": "overview.tsx" } },
+    { "key": "detail", "name": "Order Detail", "pageId": "00000000-0000-0000-0000-000000000902",
+      "dataSources": ["cnt_order"], "source": { "kind": "tsx", "codeFile": "detail.tsx" } }
+  ],
+  "appShell": { "areas": [{ "label": "Orders", "groups": [{ "label": "Pages", "subAreas": [
+    { "page": "overview", "title": "Overview" },
+    { "page": "detail", "title": "Detail" },
+    { "entity": "cnt_order", "title": "Orders" }
+  ] }] }] }
+}

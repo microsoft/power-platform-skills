@@ -542,8 +542,9 @@ function scanWebpageApiContent(content, relPath) {
 // Scans code for Power Pages Web API (`/_api/`) calls. Raw shapes handled:
 //   fetch("/_api/cr123_products?$select=*&$filter=statecode eq 0")
 //   fetch(`/_api/contacts?$filter=...&$orderby=createdon desc`)   // no $top / no $select
-// The webapi-integration agent already enforces explicit $select + $top, so these
-// fire on hand-written calls that drifted from that convention.
+// The webapi-integration agent enforces explicit projections and a page bound
+// (`$top` for a total cap or `Prefer: odata.maxpagesize=N` for cursor paging), so
+// these fire on hand-written calls that drifted from that convention.
 function scanWebApiContent(content, relPath) {
   const out = [];
   if (!content.includes('/_api/')) return out;
@@ -570,6 +571,25 @@ function scanWebApiContent(content, relPath) {
     const hasAnyOption = /[?&]\$(filter|orderby|expand|apply|select|top|count)=/i.test(url);
     const topMatch = url.match(/[?&]\$top=(\d+)/i);
     const hasTop = Boolean(topMatch);
+    // Power Pages cursor pagination intentionally omits `$top`: the page size is
+    // carried in the request's `Prefer: odata.maxpagesize=N` header and subsequent
+    // pages follow `@odata.nextLink`. Inspect the enclosing request expression
+    // rather than the URL alone so compliant list calls are not reported as
+    // unbounded. The window is capped to avoid borrowing a header from a distant
+    // unrelated request in the same source file.
+    const requestStart = Math.max(
+      0,
+      content.lastIndexOf(';', m.index) + 1,
+      content.lastIndexOf('\n\n', m.index) + 2,
+    );
+    const nextSemicolon = content.indexOf(';', m.index + m[0].length);
+    const requestEnd = Math.min(
+      content.length,
+      nextSemicolon >= 0 ? nextSemicolon + 1 : m.index + m[0].length + 1200,
+      m.index + m[0].length + 1200,
+    );
+    const requestExpression = content.slice(requestStart, requestEnd);
+    const hasMaxPageSize = /odata\.maxpagesize\s*=\s*(?:\d+|\$\{[^}]+\})/i.test(requestExpression);
     const expandMatch = url.match(/[?&]\$expand=([^&]+)/i);
     const selectMatch = url.match(/[?&]\$select=([^&]+)/i);
     const filterMatch = decodedUrl.match(/[?&]\$filter=([^&]+)/i);
@@ -602,16 +622,19 @@ function scanWebApiContent(content, relPath) {
       }));
     }
 
-    if (isCollectionQuery && !hasTop) {
+    if (isCollectionQuery && !hasTop && !hasMaxPageSize) {
       out.push(finding({
         tag: 'PERF-WEBAPI-NO-TOP',
         severity: SEVERITY.WARNING,
-        title: 'Web API collection query has no $top',
+        title: 'Web API collection query has no page bound',
         location: at,
         details:
-          'This /_api/ collection query has no $top, so the result set is unbounded. Large ' +
-          'responses slow the page and can hit throttling limits.',
-        fix: 'Add $top=<n> (and page with @odata.nextLink) to bound the result set.',
+          'This /_api/ collection query has neither a $top safety cap nor a ' +
+          'Prefer: odata.maxpagesize=N cursor-page size. Large responses slow the page and can ' +
+          'hit throttling limits.',
+        fix:
+          'For page-by-page navigation, send Prefer: odata.maxpagesize=<n> and follow ' +
+          '@odata.nextLink. Use $top=<n> only when the total result set should be capped.',
         autoFixAvailable: false,
       }));
     }
@@ -900,8 +923,22 @@ function scanHtmlHead(content, relPath) {
   let m;
   while ((m = scriptRe.exec(headInner)) !== null) {
     const tag = m[0];
+    // Parse attribute names and values so words inside `src` (for example
+    // `/assets/async.js`) cannot masquerade as actual async/defer/type attributes.
+    const attributes = new Map();
+    const attributeRe = /\s([^\s=/>]+)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+)))?/g;
+    let attributeMatch;
+    while ((attributeMatch = attributeRe.exec(tag)) !== null) {
+      attributes.set(
+        attributeMatch[1].toLowerCase(),
+        attributeMatch[2] ?? attributeMatch[3] ?? attributeMatch[4] ?? '',
+      );
+    }
     // async / defer make the download non-blocking; type="module" is deferred by spec.
-    const nonBlocking = /\b(?:async|defer)\b/i.test(tag) || /\btype\s*=\s*(['"])module\1/i.test(tag);
+    const nonBlocking =
+      attributes.has('async') ||
+      attributes.has('defer') ||
+      String(attributes.get('type')).toLowerCase() === 'module';
     if (nonBlocking) continue;
     out.push(finding({
       tag: 'PERF-RENDER-BLOCKING-SCRIPT',
@@ -1408,7 +1445,22 @@ function analyze(projectRoot) {
   }
   for (const f of scanLargeAssets(assets)) findings.push(f);
 
-  // Assign stable sequential ids AFTER all rules run.
+  if (findings.length === 0) {
+    findings.push({
+      tag: 'PERF-NONE',
+      severity: SEVERITY.INFO,
+      title: 'No performance anti-patterns detected',
+      location: null,
+      details: 'The analyzer found no known Power Pages performance anti-patterns in the scanned files.',
+      fix: null,
+      autoFixAvailable: false,
+      fixSkill: null,
+      fixAction: null,
+    });
+  }
+
+  // Assign stable sequential ids AFTER all rules and the clean-scan sentinel run,
+  // so counts and coverage describe the same final finding collection.
   findings.forEach((f, i) => { f.id = `perf-${i + 1}`; });
 
   const severityCounts = findings.reduce((acc, f) => {
@@ -1429,21 +1481,6 @@ function analyze(projectRoot) {
       { key: 'Total findings', value: String(findings.length) },
     ],
   };
-
-  if (findings.length === 0) {
-    findings.push({
-      id: 'perf-1',
-      tag: 'PERF-NONE',
-      severity: SEVERITY.INFO,
-      title: 'No performance anti-patterns detected',
-      location: null,
-      details: 'The analyzer found no known Power Pages performance anti-patterns in the scanned files.',
-      fix: null,
-      autoFixAvailable: false,
-      fixSkill: null,
-      fixAction: null,
-    });
-  }
 
   return { status: 'ok', findings, details, severityCounts };
 }

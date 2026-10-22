@@ -1,0 +1,1 @@
+Created the Account List page: a sortable grid of Account records (name, account number, main phone, city and primary contact). Selecting an account name opens its Account form.

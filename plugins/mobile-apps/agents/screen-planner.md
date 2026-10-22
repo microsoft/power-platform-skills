@@ -22,7 +22,7 @@ You will be invoked by `native-app-planner` in parallel with `data-model-archite
 ## Hard Rules
 
 - **Read-only.** You MUST NOT write TSX, install packages, or modify any project files except your output section file.
-- **Power Apps CLI failure refresh.** Follow [shared-instructions.md](../shared/shared-instructions.md) command-failure handling for any failed `npx power-apps *` command; retry the original command once after auth is corrected.
+- **Power Apps CLI failure refresh.** Follow [shared-instructions.md](../shared/shared-instructions.md) command-failure handling for any failed `$PA` (Power Apps CLI) command; retry the original command once after auth is corrected.
 - **No questions.** The planner runs the approval gate. Make confident decisions from the inputs provided. If a detail is genuinely ambiguous, list it under "Open Questions" in your output for the planner to surface.
 - **Connectivity intent ownership.** Follow
   [`shared/references/connectivity-intent-ownership.md`](../shared/references/connectivity-intent-ownership.md)
@@ -55,7 +55,7 @@ The orchestrator uses separate graph and specs gates so the user can edit the sc
 
 **Hard rule — single-write in `phase: specs`.** Assemble the complete replacement, including the Step 6 markdown summary when requested, before one update to `plan_path`. A retry replaces the previous specs-owned output; it never adds a second copy. Do not write `_screens_section.md` or delete old sections in a separate operation before inserting their replacements.
 
-**The scaffolded project IS available at `<working_dir>/`.** The orchestrator's Step 2d background pipeline finishes the full template scaffold (clone → fixes → npm install → `npx power-apps init -t MobileApp --display-name <name> --environment-id <environment-id> --non-interactive` → schemas → tsc smoke) in parallel with your run. By the time you start, `<working_dir>/` is populated with the complete template tree. Safe to `Glob` and `Read`:
+**The scaffolded project IS available at `<working_dir>/`.** The orchestrator's Step 2d background pipeline finishes the full template scaffold (clone → fixes → npm install → `pa app init -t MobileApp --display-name <name> --environment-id <environment-id> --non-interactive` → schemas → tsc smoke) in parallel with your run. By the time you start, `<working_dir>/` is populated with the complete template tree. Safe to `Glob` and `Read`:
 
 - `<working_dir>/app/index.tsx`, `app/login.tsx`, `app/oauth-callback.tsx`, `app/(app)/_layout.tsx`, `app/(app)/home.tsx` — existing routes
 - `<working_dir>/tamagui.config.ts` — design tokens
@@ -69,7 +69,7 @@ The orchestrator uses separate graph and specs gates so the user can edit the sc
 - `<working_dir>/_plan_preview.html` (only when `skip_preview` is unset/false)
 - `<working_dir>/.tmp/*` (scratch)
 
-If you discover a real issue in `app/`, `src/`, `package.json`, `tamagui.config.ts`, `tsconfig.json`, `power.config.json`, `node_modules/`, or `memory-bank.md`, return `DONE_WITH_CONCERNS: <issue>` — DO NOT silently edit. Those paths are owned by the orchestrator's bg pipeline and writing to them races `cp -R`, `npx power-apps init`, or `npm install`.
+If you discover a real issue in `app/`, `src/`, `package.json`, `tamagui.config.ts`, `tsconfig.json`, `power.config.json`, `node_modules/`, or `memory-bank.md`, return `DONE_WITH_CONCERNS: <issue>` — DO NOT silently edit. Those paths are owned by the orchestrator's bg pipeline and writing to them races `cp -R`, `pa app init`, or `npm install`.
 
 Specifically — `memory-bank.md` is OFF-LIMITS during `phase: graph` and `phase: specs`. If a sub-agent (data-model architect, etc.) returns a concern that needs persisting, stash the line in `<working_dir>/.tmp/pending-memory-bank-appends.txt` (orchestrator's Step 6.7 flushes this after JOIN). Do not append to `memory-bank.md` directly.
 
@@ -440,7 +440,7 @@ For each screen the user adds, provide this compact shape:
 - **Audit** (omit for read-only / non-write screens) — one line per audit-bearing action: `<trigger>: event <code> (<event label>); payload: <field, field, field>`. Example: `On submit: event 100000006 (Inspection Submitted); payload: inspectionId, submittedAt, defectCount, openCriticalCount.` The screen-builder wraps the payload field list in `JSON.stringify({...})` and writes the full `cr3e9_audit_log_entriesService.create(...)` call from the Generated Services table — do NOT spell out the wrapper or service name.
 - **Lookup writes** — for form/edit screens that set a parent reference (Task → Project, Comment → Task, etc.), explicitly copy the exact quoted `@odata.bind` property from the generated target model and pair it with the entity set, e.g. `'cr3e9_projectid@odata.bind': '/cr3e9_projects(<guid>)'` when that exact key exists in `src/generated/models/<Entity>Model.ts`. Never derive casing from Dataverse schema-name conventions. Without the generated-model key, mark the spec `BLOCKED: lookup write key not verified`. Skip for read-only and no-lookup screens.
 - **Pagination** — `cursor` if the table has no natural record ceiling (visits, inspections, work orders, tickets, any user-created records over time); `none` if the table is a bounded lookup (status types, categories, job types). When `cursor`, include SDK `maxPageSize: 50`, deterministic `orderBy` with a unique key, `select`, `skipToken` continuation support, and server-side `filter` for search in the data spec. Do not imply that `top: 50` alone is pagination.
-- **Native capabilities** — which native modules/wrappers it uses, and which iOS/Android platforms or permission states need fallback handling. For PDF/pen screens, be precise: `document-picker` (`expo-document-picker`) for user-picked files; `pdf-report` (`expo-print`, plus `expo-sharing` only when present and sharing is required) for generated local PDFs; `native-pdf-viewer` (`@microsoft/power-apps-native-pdf-viewer` 0.2.9+) for HTTPS PDF URLs and local `file://` URIs; `pen-input` (`@microsoft/power-apps-native-pen-input`) for signature/ink capture. For location screens, distinguish `geolocation` (`@microsoft/power-apps-native-bglocation`) — continuous/background tracking with native Dataverse sync, needs start/stop/tracking-status UI plus a permission-denied state — from one-shot `location` (`expo-location`) for a single foreground coordinate read.
+- **Native capabilities** — which native modules/wrappers it uses, and which iOS/Android platforms or permission states need fallback handling. For PDF/pen screens, be precise: `document-picker` (`expo-document-picker`) for user-picked files; `pdf-report` (`expo-print`, plus `expo-sharing` only when present and sharing is required) for generated local PDFs; `native-pdf-viewer` (`@microsoft/power-apps-native-pdf-viewer` 0.2.9+) for HTTPS PDF URLs and local `file://` URIs; `pen-input` (`@microsoft/power-apps-native-pen-input`) for signature/ink capture. For location screens, distinguish `geolocation` (`@microsoft/power-apps-native-bglocation`) — continuous/background tracking with native Dataverse sync, needs start/stop/tracking-status UI plus a permission-denied state — from one-shot `location` (`expo-location`) for a single foreground coordinate read. For haptics, name the exact interaction plus wrapper call: impact and strength for deliberate presses, selection for changed choices, or notification and outcome for completed operations; also name the visible feedback that accompanies it.
 - **Calendar library** — REQUIRED for screens with `Calendar pattern` unless the pattern is `timeline-day-list`. Write `react-native-calendars` and name the exact components expected, for example `CalendarProvider`, `ExpandableCalendar`, `AgendaList`, `Calendar`, `CalendarList`, or `Agenda`. The package must also appear in `### JavaScript Dependencies`; the screen-builder imports it directly after the orchestrator installs it. No `/add-native` wrapper or native rebuild is involved.
 - **Navigation** — what links to it / what it links to
 - **Navigation intent** — for each outgoing action, explicitly name `navigate`, `push`, or `replace` (must match Navigation Contracts `Intent`)
@@ -487,7 +487,7 @@ This is the target shape for every spec. ~120 words, ~450 tokens. No inlined cat
 - **Audit:** On zone Save: event 100000001 (Zone Step Completed); payload: zoneIndex, zoneName, completedAt, evidenceCount, defectCount.
 - **Lookup writes:** exact generated-model key, for example `'cr3e9_inspectionid@odata.bind': '/cr3e9_inspections(<id>)'`, on every zone-progress upsert.
 - **Pagination:** `none` (6-row bounded set).
-- **Native capabilities:** `expo-camera`, `expo-image-picker` (capture tiles).
+- **Native capabilities:** `expo-image-picker` (capture tiles).
 - **Navigation:** from inspection detail; pushes to defect form; pops back to inspection summary on last zone Save.
 - **State delta:** empty defects = `"No defects logged"` + add CTA; error = `"Couldn't load this zone, retry"`.
 - **Key user actions:** capture photo, add defect, navigate prev/next, save zone.
@@ -568,7 +568,7 @@ Section format (emit only the subsections owned by the current phase):
 | Inspections list | `/(app)/inspections` | `app/(app)/inspections/index.tsx` | default | List + filter | `cr123_inspectionService.getAll` | — | new |
 | Inspection detail | `/(app)/inspections/[id]` | `app/(app)/inspections/[id]/index.tsx` | default | View + edit one | `getById`, `update` | — | new |
 | New inspection | `/(app)/inspections/new` | `app/(app)/inspections/new.tsx` | modal | Create form, slides up from list | `create` | — | new |
-| Capture photo | `/(app)/inspections/[id]/photo` | `app/(app)/inspections/[id]/photo.tsx` | modal | Take or pick photo | `update` (photo column) | `expo-camera`, `expo-image-picker` | new |
+| Capture photo | `/(app)/inspections/[id]/photo` | `app/(app)/inspections/[id]/photo.tsx` | modal | Take or pick photo | `update` (photo column) | `expo-image-picker` | new |
 | Profile | `/(app)/profile` | `app/(app)/profile.tsx` | default | User info + sign out | `useAuth()` only | — | new |
 
 > **Why the File column matters:** the orchestrator's Step 10b walks this column to (1) compute top-level tab/drawer entries (one per unique `app/(app)/<name>` — folder OR flat file) and (2) emit per-folder `_layout.tsx` files with the right modal options. Each builder reads its own row's File path as `target_file`. Without this column, the orchestrator falls back to flat `app/(app)/<screen-name>.tsx` for every screen — phantom tabs return.

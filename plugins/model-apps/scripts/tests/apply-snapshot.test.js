@@ -74,7 +74,7 @@ test('missing orgId/envUrl/appUniqueName on EITHER side is a mismatch (never a v
   assert.strictEqual(S.identityMatches(bare, LIVE).ok, false, 'a snapshot with no orgId cannot match a live org');
 });
 
-test('a snapshot that recorded an appId requires a NON-NULL matching live appId (deleted-app hole, C1)', () => {
+test('a snapshot that recorded an appId requires a NON-NULL matching live appId (deleted-app hole)', () => {
   const env = eligibleEnvelope(); // records appId app-1...
   // App deleted (or discovery failed) -> live.appId is null. A snapshot that recorded an appId must NOT
   // vacuously match — else an eligible snapshot survives its app being deleted into a false noop.
@@ -91,6 +91,16 @@ test('tombstone: eligible->false + teardown debt, and the gate refuses even a pr
   assert.strictEqual(env.eligible, false);
   assert.ok(S.isTombstoned(env));
   assert.ok(env.debt.some((d) => d.reason === S.TEARDOWN_DEBT_REASON));
+  const gate = S.isFastPathEligible(env, LIVE);
+  assert.strictEqual(gate.eligible, false);
+  assert.match(gate.reason, /tombstone/);
+});
+
+// A teardown that found no snapshot writes a fresh tombstone with no identity (it never asks WhoAmI). An
+// identity-first gate reported that as another org — fail-closed, but pointing at the wrong problem.
+test('a tombstone with no identity is reported as tombstoned, not as a different org', () => {
+  const env = S.makeEnvelope({});
+  S.tombstone(env);
   const gate = S.isFastPathEligible(env, LIVE);
   assert.strictEqual(gate.eligible, false);
   assert.match(gate.reason, /tombstone/);

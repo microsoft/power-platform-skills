@@ -1,0 +1,31 @@
+{
+  "contractVersion": 2,
+  "provenance": "synthetic",
+  "description": "Constructed evidence, not an agent capture: an app-less create (the first page of a new app, which apps.js create then builds the app around), an independent existing-page edit that omits every field it keeps, and a create into an existing app whose name holds a straight double quote and is stored exactly. `forwarded` records what genpage-upload.js hands the page backend (an omitted flag is absent); config and own-page metadata read-backs are separate.",
+  "contracts": ["plugins/model-apps/skills/genpage/SKILL.md Phase 6: Deploy and Prompt semantics", "plugins/model-apps/skills/genpage/edit-flow.md Edit Phase 6"],
+  "toolResults": "tool-results.json",
+  "artifacts": ["create/page-name.txt", "create/prompt.txt", "create/agent-message.txt", "create/config-after.json", "create/page-after.json", "edit/prompt.txt", "edit/agent-message.txt", "edit/config-before.json", "edit/config-after.json", "edit/page-before.json", "edit/page-after.json", "quote/page-name.txt", "quote/config-after.json", "quote/page-after.json"],
+  "uploads": [
+    {
+      "event": "create", "mode": "create",
+      "approvedName": "Revenue $100 $(Get-Date)",
+      "approvedPrompt": "Build the \"Revenue\" summary.\nKeep %PATH%, &, | and all approved text.\n",
+      "approvedAgentMessage": "Created the approved \"Revenue\" summary.\n",
+      "afterConfig": "create/config-after.json", "afterPage": "create/page-after.json", "changes": {}
+    },
+    {
+      "event": "edit", "mode": "update",
+      "approvedPrompt": "Add sorting only.\n",
+      "approvedAgentMessage": "Added sorting; kept the own name, model and all existing bindings.\n",
+      "beforeConfig": "edit/config-before.json", "afterConfig": "edit/config-after.json",
+      "beforePage": "edit/page-before.json", "afterPage": "edit/page-after.json", "changes": {}
+    },
+    {
+      "event": "quote-create", "mode": "create",
+      "approvedName": "Say \"hi\"",
+      "approvedPrompt": "Build the \"Revenue\" summary.\nKeep %PATH%, &, | and all approved text.\n",
+      "approvedAgentMessage": "Created the approved \"Revenue\" summary.\n",
+      "afterConfig": "quote/config-after.json", "afterPage": "quote/page-after.json", "changes": {}
+    }
+  ]
+}

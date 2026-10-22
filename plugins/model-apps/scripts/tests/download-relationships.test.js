@@ -41,6 +41,8 @@ test('reconstructs a 1:N between two app tables with the properly-cased lookup n
     referencing: 'new_ticket',
     // Cased as deployed — the SDK's own projection lowercases this to `new_customerid`.
     lookup: { schemaName: 'new_CustomerId', displayName: 'Customer' },
+    // Ownership is unprovable from a download, so teardown must retain it like the tables (#587 item 6).
+    existing: true,
   }]);
 });
 
@@ -108,6 +110,13 @@ test('emits an explicit schemaName only when it diverges from the generated defa
   // beside the existing one instead of matching it.
   const diff = await readRelationships(mk('new_CustomerTicketLink'), ['new_customer', 'new_ticket'], 'new');
   assert.strictEqual(diff.relationships[0].schemaName, 'new_CustomerTicketLink');
+  // With the publisher prefix UNKNOWN (the spec carries a placeholder), a name equal to the generated default
+  // is carried too: omitted, a rebuild under the placeholder generated another name and created it twice. A
+  // foreign-prefix name is carried as it is, not renamed.
+  for (const deployed of ['new_customer_new_ticket', 'zzz_CustomerTicketLink']) {
+    const unknown = await readRelationships(mk(deployed), ['new_customer', 'new_ticket'], 'new', undefined, { prefixUnknown: true });
+    assert.strictEqual(unknown.relationships[0].schemaName, deployed, deployed);
+  }
 });
 
 // An unreadable parent and a confirmed-custom parent are different facts. Collapsing them made a
@@ -135,11 +144,11 @@ test('a divergent schemaName under a foreign prefix is reported as a RENAME, not
   const warnings = [];
   const { relationships, skipped } = await readRelationships(sdk, ['new_customer', 'new_ticket'], 'new', (m) => warnings.push(m));
   assert.strictEqual(relationships.length, 1);
-  assert.strictEqual(relationships[0].schemaName, undefined, 'a foreign-prefix name would fail the publisher-prefix lint');
-  // It IS carried into the spec, just under the generated name — so reporting it as skipped made the
-  // summary say it was "absent from the rebuildable spec", the opposite of what happens.
+  assert.strictEqual(relationships[0].schemaName, 'zzz_LegacyLink', 'the deployed name is what a same-environment rebuild must reuse');
+  assert.strictEqual(relationships[0].existing, true);
   assert.deepStrictEqual(skipped, [], 'an emitted relationship must not be counted as skipped');
-  assert.ok(warnings.some((w) => /publisher prefix/i.test(w) && /generated name/i.test(w)), `the rename must still be reported; got ${JSON.stringify(warnings)}`);
+  assert.ok(warnings.some((w) => /zzz_LegacyLink/.test(w) && /new environment/i.test(w) && /cannot create/i.test(w)), JSON.stringify(warnings));
+  assert.ok(!warnings.some((w) => /generated name/i.test(w)), 'renaming onto the generated name is what made the rebuild halt');
 });
 
 test('reconstructs N:N only when both ends are in the app, and reports the rest (#567)', async () => {
@@ -156,7 +165,7 @@ test('reconstructs N:N only when both ends are in the app, and reports the rest 
   // `manyToManySchemaName` SORTS the pair, so it would compose `new_tag_new_ticket`. Without the
   // deployed name a rebuild into this environment creates a SECOND intersect relationship instead of
   // matching the existing one.
-  assert.deepStrictEqual(relationships, [{ type: 'ManyToMany', entity1: 'new_ticket', entity2: 'new_tag', schemaName: 'new_ticket_new_tag' }]);
+  assert.deepStrictEqual(relationships, [{ type: 'ManyToMany', entity1: 'new_ticket', entity2: 'new_tag', schemaName: 'new_ticket_new_tag', existing: true }]);
   assert.strictEqual(skipped.length, 1);
   assert.match(skipped[0].reason, /does not include both tables/i);
 });
@@ -174,7 +183,7 @@ test('an N:N is emitted once even though it appears on BOTH tables metadata (#56
   const r = rel({ SchemaName: 'new_ticket_new_tag', Entity1LogicalName: 'new_ticket', Entity2LogicalName: 'new_tag' });
   const sdk = makeSdk({ m2m: { new_ticket: [r], new_tag: [r] } });
   const { relationships } = await readRelationships(sdk, ['new_ticket', 'new_tag'], 'new');
-  assert.deepStrictEqual(relationships, [{ type: 'ManyToMany', entity1: 'new_ticket', entity2: 'new_tag', schemaName: 'new_ticket_new_tag' }]);
+  assert.deepStrictEqual(relationships, [{ type: 'ManyToMany', entity1: 'new_ticket', entity2: 'new_tag', schemaName: 'new_ticket_new_tag', existing: true }]);
 });
 
 test('a failed relationship read is REPORTED, not silently read as "this table has none" (#567)', async () => {
@@ -206,4 +215,117 @@ test('the skipped-relationship warning names each one and its reason (#567)', ()
   // It must NOT repeat notRoundTrippedSummary's claim that everything omitted is recorded under
   // descriptionInventory — skipped relationships are not.
   assert.ok(!/descriptionInventory/.test(out));
+});
+
+
+const { validateAppSpec } = require('../lib/app-spec.js');
+
+function downloadedSpec(relationships) {
+  return {
+    solution: { uniqueName: 'Contoso', publisherPrefix: 'contoso' },
+    app: { name: 'Projects' },
+    entities: [
+      { schemaName: 'contoso_project', displayName: 'Project', primaryAttribute: { schemaName: 'contoso_name', displayName: 'Name' } },
+      { schemaName: 'contoso_task', displayName: 'Task', primaryAttribute: { schemaName: 'contoso_name', displayName: 'Name' } },
+    ],
+    relationships,
+  };
+}
+
+test('known prefix: two foreign 1:N on one pair keep both deployed names', async () => {
+  // Omitting either name would derive contoso_project_contoso_task for both, and the collision
+  // gate would refuse the download. The deployed names are distinct and must round-trip.
+  const sdk = makeSdk({
+    m2o: {
+      contoso_task: [
+        rel({ SchemaName: 'zzz_ProjectLink', ReferencedEntity: 'contoso_project', ReferencingEntity: 'contoso_task', ReferencingAttribute: 'contoso_projectid' }),
+        rel({ SchemaName: 'yyy_ProjectOwner', ReferencedEntity: 'contoso_project', ReferencingEntity: 'contoso_task', ReferencingAttribute: 'contoso_ownerid' }),
+      ],
+    },
+  });
+  const { relationships, skipped } = await readRelationships(sdk, ['contoso_project', 'contoso_task'], 'contoso');
+  assert.deepStrictEqual(skipped, []);
+  assert.deepStrictEqual(relationships.map((r) => r.schemaName).sort(), ['yyy_ProjectOwner', 'zzz_ProjectLink']);
+  const v = validateAppSpec(downloadedSpec(relationships), { profile: 'plan', reconstructed: true });
+  assert.strictEqual(v.ok, true, JSON.stringify(v.errors));
+});
+
+test('known prefix: a foreign 1:N and N:N on one pair keep both deployed names', async () => {
+  const sdk = makeSdk({
+    m2o: { contoso_task: [rel({ SchemaName: 'zzz_ProjectTask', ReferencedEntity: 'contoso_project', ReferencingEntity: 'contoso_task', ReferencingAttribute: 'contoso_projectid' })] },
+    m2m: { contoso_project: [rel({ SchemaName: 'yyy_ProjectTaskNN', Entity1LogicalName: 'contoso_project', Entity2LogicalName: 'contoso_task' })] },
+  });
+  const { relationships, skipped } = await readRelationships(sdk, ['contoso_project', 'contoso_task'], 'contoso');
+  assert.deepStrictEqual(skipped, []);
+  const byType = Object.fromEntries(relationships.map((r) => [r.type, r.schemaName]));
+  assert.strictEqual(byType.OneToMany, 'zzz_ProjectTask');
+  assert.strictEqual(byType.ManyToMany, 'yyy_ProjectTaskNN');
+  const v = validateAppSpec(downloadedSpec(relationships), { profile: 'plan', reconstructed: true });
+  assert.strictEqual(v.ok, true, JSON.stringify(v.errors));
+});
+
+const { lintAppSpec } = require('../lib/spec-lint.js');
+
+test('a colliding foreign-prefix download lints with warnings only', async () => {
+  const sdk = makeSdk({
+    m2o: {
+      contoso_task: [
+        rel({ SchemaName: 'zzz_ProjectLink', ReferencedEntity: 'contoso_project', ReferencingEntity: 'contoso_task', ReferencingAttribute: 'contoso_projectid' }),
+        rel({ SchemaName: 'yyy_ProjectOwner', ReferencedEntity: 'contoso_project', ReferencingEntity: 'contoso_task', ReferencingAttribute: 'contoso_ownerid' }),
+      ],
+    },
+    m2m: { contoso_project: [rel({ SchemaName: 'qqq_ProjectTaskNN', Entity1LogicalName: 'contoso_project', Entity2LogicalName: 'contoso_task' })] },
+  });
+  const { relationships } = await readRelationships(sdk, ['contoso_project', 'contoso_task'], 'contoso');
+  const lint = lintAppSpec(downloadedSpec(relationships));
+  assert.strictEqual(lint.ok, true, JSON.stringify(lint.errors));
+  for (const name of ['zzz_ProjectLink', 'yyy_ProjectOwner', 'qqq_ProjectTaskNN']) {
+    assert.ok(lint.warnings.some((w) => w.includes(name) && /publisher prefix/.test(w)), JSON.stringify(lint.warnings));
+  }
+});
+
+test('a single foreign 1:N keeps its deployed name and a same-environment rebuild reuses it', async () => {
+  const sdk = makeSdk({
+    m2o: { contoso_task: [rel({ SchemaName: 'legacy_ProjectTask', ReferencedEntity: 'contoso_project', ReferencingEntity: 'contoso_task', ReferencingAttribute: 'contoso_projectid' })] },
+  });
+  const warnings = [];
+  const { relationships, skipped } = await readRelationships(sdk, ['contoso_project', 'contoso_task'], 'contoso', (m) => warnings.push(m));
+  assert.deepStrictEqual(skipped, []);
+  assert.strictEqual(relationships[0].schemaName, 'legacy_ProjectTask');
+  assert.strictEqual(relationships[0].lookup.schemaName, 'contoso_projectid');
+  const spec = downloadedSpec(relationships);
+  const lint = lintAppSpec(spec);
+  assert.strictEqual(lint.ok, true, JSON.stringify(lint.errors));
+  assert.ok(warnings.some((w) => /legacy_ProjectTask/.test(w) && /new environment/i.test(w)), JSON.stringify(warnings));
+
+  const { provisionDataModel, makeRunner } = require('../lib/entity-provision.js');
+  let created = 0;
+  const buildSdk = {
+    createTable: async (o) => ({ logicalName: o.schemaName.toLowerCase(), entitySetName: o.schemaName.toLowerCase() + 's', metadataId: 't' }),
+    createColumn: async () => ({ logicalName: 'x', metadataId: 'c' }),
+    createRelationship: async () => { created += 1; throw new Error('must not create'); },
+  };
+  const provision = {
+    findTables: async () => [],
+    findColumns: async () => [],
+    dataverse: {
+      get: async (p) => {
+        if (p.includes("/EntityDefinitions(LogicalName='contoso_project')/OneToManyRelationships")) {
+          return { status: 200, body: { value: [{ SchemaName: 'legacy_ProjectTask', ReferencingEntity: 'contoso_task', ReferencingAttribute: 'contoso_projectid' }] } };
+        }
+        return { status: 200, body: { value: [] } };
+      },
+    },
+  };
+  const built = {
+    ...spec,
+    entities: spec.entities.map((e) => ({ ...e, columns: [] })),
+  };
+  const events = [];
+  await provisionDataModel({
+    sdk: buildSdk, provision, runner: makeRunner({ emit: (e) => events.push(e), total: 8 }),
+    spec: built, apply: true, sleep: async () => {},
+  });
+  assert.strictEqual(created, 0);
+  assert.ok(events.some((e) => e.status === 'skip' && /legacy_ProjectTask/.test(e.label) && /\(exists\)/.test(e.label)), JSON.stringify(events));
 });

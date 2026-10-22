@@ -6,11 +6,16 @@
  * the Open Plugins marketplace and install plugins for Claude Code and GitHub Copilot.
  *
  * Usage:
- *   node scripts/install.js                                              (from local clone)
+ *   node scripts/install.js [--include-dataverse]                        (from local clone)
  *   curl -fsSL https://raw.githubusercontent.com/microsoft/power-platform-skills/main/scripts/install.js | node
+ *   curl -fsSL https://raw.githubusercontent.com/microsoft/power-platform-skills/main/scripts/install.js | node - --include-dataverse
+ *
+ * Options:
+ *   --include-dataverse   Also install the dataverse plugin (maintained in microsoft/Dataverse-skills)
+ *   -h, --help            Show this help
  */
 
-const { execSync } = require("child_process");
+const { execFileSync } = require("child_process");
 const fs = require("fs");
 const path = require("path");
 const os = require("os");
@@ -21,6 +26,17 @@ const REPO = "microsoft/power-platform-skills";
 const MARKETPLACE_NAME = "power-platform-skills";
 const GITHUB_RAW = `https://raw.githubusercontent.com/${REPO}/main`;
 const HOME = os.homedir();
+
+// Marketplace plugins that are installed only when their flag is passed. dataverse is
+// maintained in microsoft/Dataverse-skills, and many users already install it from that
+// repository's own marketplace; installing it here by default would load its skills twice.
+const OPT_IN_PLUGINS = { dataverse: "--include-dataverse" };
+
+const USAGE = `Usage: node install.js [--include-dataverse]
+
+Options:
+  --include-dataverse   Also install the dataverse plugin (maintained in microsoft/Dataverse-skills)
+  -h, --help            Show this help`;
 
 // ── Colors (disabled when output is piped) ────────────────────
 const tty = process.stdout.isTTY;
@@ -35,25 +51,120 @@ const fail = (msg) => console.log(`  ${red("✗")} ${msg}`);
 const header = (msg) => console.log(`\n${bold(msg)}`);
 const info = (msg) => console.log(`  ${msg}`);
 
-// ── Helpers ───────────────────────────────────────────────────
-function hasCommand(cmd) {
-  try {
-    const which = process.platform === "win32" ? "where" : "which";
-    execSync(`${which} ${cmd}`, { stdio: "pipe" });
-    return true;
-  } catch {
-    return false;
+// ── Arguments ─────────────────────────────────────────────────
+// `process.argv` differs by launch mode, and the script's own arguments start at index 2
+// whenever any are present:
+//   node scripts/install.js --include-dataverse  -> [node, /abs/install.js, "--include-dataverse"]
+//   curl ... | node - --include-dataverse         -> [node, "-", "--include-dataverse"]
+//   curl ... | node                               -> [node]
+// Unknown arguments fail instead of being ignored, so a typo cannot silently drop a plugin.
+function parseArgs(args) {
+  const options = { help: false, includedOptIn: new Set() };
+  const optInByFlag = new Map(Object.entries(OPT_IN_PLUGINS).map(([plugin, flag]) => [flag, plugin]));
+  for (const arg of args) {
+    if (arg === "-h" || arg === "--help") {
+      options.help = true;
+    } else if (optInByFlag.has(arg)) {
+      options.includedOptIn.add(optInByFlag.get(arg));
+    } else {
+      throw new Error(`Unknown argument '${arg}'.\n\n${USAGE}`);
+    }
   }
+  return options;
 }
 
-function run(cmd, opts = {}) {
+function selectPlugins(pluginNames, includedOptIn) {
+  const selected = [];
+  const skipped = [];
+  for (const name of pluginNames) {
+    if (Object.prototype.hasOwnProperty.call(OPT_IN_PLUGINS, name) && !includedOptIn.has(name)) {
+      skipped.push(name);
+    } else {
+      selected.push(name);
+    }
+  }
+  return { selected, skipped };
+}
+
+// ── Helpers ───────────────────────────────────────────────────
+function envValue(name) {
+  if (process.platform !== "win32") return process.env[name];
+  // Match Node's case-insensitive environment lookup, including duplicate PATH spellings.
+  const key = Object.keys(process.env).filter((k) => k.toUpperCase() === name.toUpperCase()).sort()[0];
+  return key === undefined ? undefined : process.env[key];
+}
+
+function isFullyQualifiedPath(file) {
+  // Windows considers \tools absolute, but it still depends on the current drive.
+  // A longer root identifies a drive-qualified or UNC path instead.
+  return path.isAbsolute(file) && (process.platform !== "win32" || path.parse(file).root.length > 1);
+}
+
+function resolveCommand(cmd) {
+  if (typeof cmd !== "string" || /^[a-z0-9-]+$/.exec(cmd)?.[0] !== cmd) {
+    throw new Error("Invalid command name");
+  }
+  const win = process.platform === "win32";
+  const paths = String(envValue("PATH") || "").split(win ? ";" : ":");
+  const extensions = win
+    ? String(envValue("PATHEXT") || ".COM;.EXE;.BAT;.CMD").split(";")
+      .map((ext) => ext.trim().toLowerCase()).filter((ext) => /^\.(?:com|exe|bat|cmd)$/.test(ext))
+    : [""];
+  for (const entry of paths) {
+    // On POSIX, whitespace and quotes are literal directory-name characters.
+    const dir = win ? entry.trim().replace(/^"(.*)"$/, "$1") : entry;
+    // Skip implicit working-directory lookup and relative PATH entries.
+    if (!isFullyQualifiedPath(dir)) continue;
+    for (const ext of extensions) {
+      const file = path.join(dir, cmd + ext);
+      try {
+        if (!fs.statSync(file).isFile()) continue;
+        if (!win) fs.accessSync(file, fs.constants.X_OK);
+        return file;
+      } catch (err) {
+        if (!["ENOENT", "ENOTDIR", "EACCES", "EPERM"].includes(err.code)) throw err;
+      }
+    }
+  }
+  return null;
+}
+
+function hasCommand(cmd) {
+  return resolveCommand(cmd) !== null;
+}
+
+function run(cmd, args = [], opts = {}) {
   try {
-    const output = execSync(cmd, {
+    let file = resolveCommand(cmd);
+    if (!file) throw new Error(`${cmd} was not found on PATH`);
+    let argv = args;
+    const options = {
       stdio: "pipe",
       timeout: 120_000,
       cwd: opts.cwd,
-      shell: true,
-    });
+      shell: false,
+      windowsHide: true,
+    };
+    if (process.platform === "win32" && /\.(?:cmd|bat)$/i.test(file)) {
+      // Node cannot execute Windows batch shims directly. cmd.exe parses the /c line
+      // and the shim's %* again, so only inert argument tokens may cross this boundary.
+      // The installer is also downloaded/piped alone: it cannot require a repo-local runner.
+      // See: https://nodejs.org/api/child_process.html#spawning-bat-and-cmd-files-on-windows
+      if (/["%!\u0000-\u001f\u007f]/.test(file)
+        || !args.every((arg) => typeof arg === "string" && /^[A-Za-z0-9_./:@=-]+$/.exec(arg)?.[0] === arg)) {
+        throw new Error(`Cannot safely pass the executable path or arguments to ${cmd}'s Windows batch launcher`);
+      }
+      const comspec = envValue("ComSpec");
+      const systemRoot = envValue("SystemRoot") || "C:\\Windows";
+      const shell = comspec && isFullyQualifiedPath(comspec) && path.basename(comspec).toLowerCase() === "cmd.exe"
+        ? comspec : path.join(systemRoot, "System32", "cmd.exe");
+      if (!isFullyQualifiedPath(shell)) throw new Error("Windows command interpreter path must be fully qualified");
+      argv = ["/d", "/s", "/v:off", "/c", `""${file}" ${args.join(" ")}"`];
+      file = shell;
+      options.windowsVerbatimArguments = true;
+      options.env = { ...process.env, NoDefaultCurrentDirectoryInExePath: "1" };
+    }
+    const output = execFileSync(file, argv, options);
     return { ok: true, output: output.toString().trim() };
   } catch (err) {
     const stderr = err.stderr ? err.stderr.toString().trim() : err.message;
@@ -82,12 +193,30 @@ function httpsGet(url) {
   });
 }
 
+function isValidPluginName(name) {
+  // Use the Open Plugins grammar shared with the repository validator. Compare the
+  // whole match because JavaScript's $ anchor also accepts a trailing newline.
+  const match = typeof name === "string" && /^[a-z0-9](?:[a-z0-9.-]{0,62}[a-z0-9])?$/.exec(name);
+  return Boolean(match && match[0] === name && !name.includes("--") && !name.includes(".."));
+}
+
 function parseMarketplaceManifest(raw) {
   const manifest = JSON.parse(raw);
+  if (!manifest || typeof manifest !== "object" || Array.isArray(manifest)) {
+    throw new Error("marketplace manifest must be an object");
+  }
   if (manifest.name !== MARKETPLACE_NAME) {
     throw new Error(
       `manifest name is '${manifest.name || "(missing)"}', expected '${MARKETPLACE_NAME}'`
     );
+  }
+  if (!Array.isArray(manifest.plugins)) {
+    throw new Error("marketplace plugins must be an array");
+  }
+  for (const [index, plugin] of manifest.plugins.entries()) {
+    if (!plugin || typeof plugin !== "object" || Array.isArray(plugin) || !isValidPluginName(plugin.name)) {
+      throw new Error(`plugins[${index}].name does not follow Open Plugins name constraints`);
+    }
   }
   return manifest;
 }
@@ -117,7 +246,9 @@ function enableAutoUpdate(configFile, getMarketplaces) {
 
 // ── Marketplace loader ────────────────────────────────────────
 async function loadMarketplace() {
-  const scriptDir = process.argv[1] ? path.dirname(path.resolve(process.argv[1])) : process.cwd();
+  // `node -` (piped with arguments) sets argv[1] to "-", which is not a script path.
+  const scriptPath = process.argv[1] && process.argv[1] !== "-" ? process.argv[1] : null;
+  const scriptDir = scriptPath ? path.dirname(path.resolve(scriptPath)) : process.cwd();
   // Script lives in scripts/, so the repo root is one level up
   const repoRoot = path.resolve(scriptDir, "..");
   const roots = [...new Set([repoRoot, process.cwd()])];
@@ -136,6 +267,7 @@ async function loadMarketplace() {
           return parseMarketplaceManifest(fs.readFileSync(filePath, "utf8"));
         } catch (err) {
           errors.push(`${filePath}: ${err.message}`);
+          warn(`Ignoring invalid marketplace manifest: ${filePath}: ${err.message}`);
         }
       }
     }
@@ -160,7 +292,7 @@ function installClaude(plugins) {
 
   // 1. Register marketplace via CLI (CLI clones the repo automatically)
   info("Registering marketplace...");
-  const addResult = run(`claude plugin marketplace add "${REPO}"`);
+  const addResult = run("claude", ["plugin", "marketplace", "add", REPO]);
   if (addResult.ok) {
     ok("Marketplace registered");
   } else if (addResult.output.includes("already")) {
@@ -172,7 +304,7 @@ function installClaude(plugins) {
 
   // 2. Update marketplace
   info("Updating marketplace...");
-  const updateResult = run(`claude plugin marketplace update "${MARKETPLACE_NAME}"`);
+  const updateResult = run("claude", ["plugin", "marketplace", "update", MARKETPLACE_NAME]);
   if (updateResult.ok) {
     ok("Marketplace updated");
   } else {
@@ -186,9 +318,7 @@ function installClaude(plugins) {
   // 4. Install each plugin via CLI
   for (const plugin of plugins) {
     info(`Installing ${plugin}...`);
-    const installResult = run(
-      `claude plugin install "${plugin}@${MARKETPLACE_NAME}" --scope user`
-    );
+    const installResult = run("claude", ["plugin", "install", `${plugin}@${MARKETPLACE_NAME}`, "--scope", "user"]);
     if (installResult.ok) {
       ok(`${plugin} installed`);
     } else if (installResult.output.includes("already installed")) {
@@ -200,7 +330,7 @@ function installClaude(plugins) {
 
   // 5. Verify installation
   info("Verifying installation...");
-  const listResult = run("claude plugin list");
+  const listResult = run("claude", ["plugin", "list"]);
   if (listResult.ok) {
     const installed = plugins.filter((p) => listResult.output.includes(p));
     if (installed.length > 0) {
@@ -217,7 +347,7 @@ function installCopilot(plugins) {
 
   // 1. Register marketplace via CLI (CLI clones the repo automatically)
   info("Registering marketplace...");
-  const addResult = run(`copilot plugin marketplace add "${REPO}"`);
+  const addResult = run("copilot", ["plugin", "marketplace", "add", REPO]);
   if (addResult.ok) {
     ok("Marketplace registered");
   } else if (addResult.output.includes("already")) {
@@ -234,7 +364,7 @@ function installCopilot(plugins) {
   // 3. Install each plugin via CLI
   for (const plugin of plugins) {
     info(`Installing ${plugin}...`);
-    const installResult = run(`copilot plugin install "${plugin}@${MARKETPLACE_NAME}"`);
+    const installResult = run("copilot", ["plugin", "install", `${plugin}@${MARKETPLACE_NAME}`]);
     if (installResult.ok) {
       ok(`${plugin} installed`);
     } else if (installResult.output.includes("already installed")) {
@@ -246,7 +376,7 @@ function installCopilot(plugins) {
 
   // 4. Verify installation
   info("Verifying installation...");
-  const listResult = run("copilot plugin list");
+  const listResult = run("copilot", ["plugin", "list"]);
   if (listResult.ok) {
     const installed = plugins.filter((p) => listResult.output.includes(p));
     if (installed.length > 0) {
@@ -259,6 +389,12 @@ function installCopilot(plugins) {
 
 // ── Main ──────────────────────────────────────────────────────
 async function main() {
+  const options = parseArgs(process.argv.slice(2));
+  if (options.help) {
+    console.log(USAGE);
+    return;
+  }
+
   console.log("");
   console.log(bold("Power Platform Skills — Installer"));
   console.log("──────────────────────────────────");
@@ -271,12 +407,12 @@ async function main() {
   const tools = [];
 
   if (hasCommand("claude")) {
-    const ver = run("claude --version");
+    const ver = run("claude", ["--version"]);
     tools.push("claude");
     ok(`Claude Code ${ver.ok ? ver.output : "(version unknown)"}`);
   }
   if (hasCommand("copilot")) {
-    const ver = run("copilot --version");
+    const ver = run("copilot", ["--version"]);
     tools.push("copilot");
     ok(`GitHub Copilot CLI ${ver.ok ? ver.output : "(version unknown)"}`);
   }
@@ -294,7 +430,7 @@ async function main() {
   header("Power Platform CLI (pac)");
 
   if (hasCommand("pac")) {
-    const ver = run("pac help");
+    const ver = run("pac", ["help"]);
     const versionMatch = ver.ok && ver.output.match(/Version:\s*(.+)/i);
     ok(`PAC CLI ${versionMatch ? versionMatch[1].trim() : "(installed)"}`);
 
@@ -317,9 +453,7 @@ async function main() {
       } else if (latestVersion) {
         info(`Newer version available: ${latestVersion} (installed: ${localVersion || "unknown"})`);
         info("Updating PAC CLI...");
-        const updateResult = run(
-          "dotnet tool update --global Microsoft.PowerApps.CLI.Tool"
-        );
+        const updateResult = run("dotnet", ["tool", "update", "--global", "Microsoft.PowerApps.CLI.Tool"]);
         if (updateResult.ok) {
           ok(`Updated to ${latestVersion}`);
         } else {
@@ -332,9 +466,7 @@ async function main() {
 
     if (hasCommand("dotnet")) {
       info("Installing PAC CLI via dotnet tool...");
-      const installResult = run(
-        "dotnet tool install --global Microsoft.PowerApps.CLI.Tool"
-      );
+      const installResult = run("dotnet", ["tool", "install", "--global", "Microsoft.PowerApps.CLI.Tool"]);
       if (installResult.ok) {
         ok("PAC CLI installed");
         info("You may need to restart your terminal for the 'pac' command to be available.");
@@ -358,7 +490,7 @@ async function main() {
   header("Azure CLI (az)");
 
   if (hasCommand("az")) {
-    const ver = run("az version -o tsv");
+    const ver = run("az", ["version", "-o", "tsv"]);
     const versionLine = ver.ok && ver.output.split("\n")[0];
     const azVersion = versionLine ? versionLine.split("\t")[0] : null;
     ok(`Azure CLI ${azVersion || "(installed)"}`);
@@ -368,9 +500,8 @@ async function main() {
     let installed = false;
     if (process.platform === "win32" && hasCommand("winget")) {
       info("Installing Azure CLI via winget...");
-      const installResult = run(
-        "winget install -e --id Microsoft.AzureCLI --accept-source-agreements --accept-package-agreements"
-      );
+      const installResult = run("winget", ["install", "-e", "--id", "Microsoft.AzureCLI",
+        "--accept-source-agreements", "--accept-package-agreements"]);
       if (installResult.ok) {
         ok("Azure CLI installed");
         info("You may need to restart your terminal for the 'az' command to be available.");
@@ -380,7 +511,7 @@ async function main() {
       }
     } else if (process.platform === "darwin" && hasCommand("brew")) {
       info("Installing Azure CLI via Homebrew...");
-      const installResult = run("brew install azure-cli");
+      const installResult = run("brew", ["install", "azure-cli"]);
       if (installResult.ok) {
         ok("Azure CLI installed");
         installed = true;
@@ -404,11 +535,18 @@ async function main() {
   header("Reading marketplace");
 
   const manifest = await loadMarketplace();
-  const plugins = manifest.plugins.map((p) => p.name);
+  const { selected: plugins, skipped } = selectPlugins(
+    manifest.plugins.map((p) => p.name),
+    options.includedOptIn
+  );
 
   console.log(`  Marketplace : ${manifest.name}`);
   console.log("  Plugins     :");
   for (const p of plugins) console.log(`    - ${p}`);
+  for (const p of skipped) info(`Skipping ${p} (pass ${OPT_IN_PLUGINS[p]} to install it)`);
+  for (const p of options.includedOptIn) {
+    if (!plugins.includes(p)) warn(`${OPT_IN_PLUGINS[p]} was passed, but ${p} is not in the marketplace`);
+  }
 
   if (plugins.length === 0) {
     warn("No plugins found in the marketplace.");
@@ -432,7 +570,18 @@ async function main() {
   console.log("");
 }
 
-main().catch((err) => {
-  fail(`Installation failed: ${err.message}`);
-  process.exit(1);
-});
+// Run when executed directly. Piped input (`curl ... | node`) leaves require.main undefined,
+// so checking only `require.main === module` would make the one-line installer do nothing.
+// Match the stdin module id instead of a missing require.main: `node -e "require(...)"` also
+// leaves require.main undefined, and must import the helpers without starting an install.
+if (require.main === module || module.id === "[stdin]") {
+  main().catch((err) => {
+    fail(`Installation failed: ${err.message}`);
+    process.exit(1);
+  });
+}
+
+module.exports = {
+  parseArgs, selectPlugins, OPT_IN_PLUGINS, isValidPluginName, parseMarketplaceManifest,
+  loadMarketplace, resolveCommand, run, installClaude, installCopilot, main,
+};

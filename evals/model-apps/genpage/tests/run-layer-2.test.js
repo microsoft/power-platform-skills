@@ -20,8 +20,8 @@ function writeFixture(rootDir, fixtureName, files) {
   }
 }
 
-function runRunner(args) {
-  const result = spawnSync(process.execPath, [runner, ...args], { encoding: 'utf8' });
+function runRunner(args, nodeArgs = []) {
+  const result = spawnSync(process.execPath, [...nodeArgs, runner, ...args], { encoding: 'utf8' });
   return { code: result.status, stdout: result.stdout, stderr: result.stderr };
 }
 
@@ -216,4 +216,68 @@ export default GeneratedComponent;`,
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
+});
+
+test('runner: the registered Phase-5b column checker executes and can fail the replay', (t) => {
+  const root = mkTempFixturesDir();
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  writeFixture(root, '1-phase-5b', {
+    'page.tsx': `import { makeStyles } from '@fluentui/react-components';
+const useStyles = makeStyles({ root: {} });
+const data = [{ name: 'First' }, { name: 'Second' }];
+const GeneratedComponent = (props) => {
+  const { pageInput } = props;
+  void pageInput;
+  const styles = useStyles();
+  return <div className={styles.root}>{data.length}</div>;
+};
+export default GeneratedComponent;`,
+  });
+  const args = ['--fixtures', root, '--eval', '1'];
+  const green = runRunner(args);
+  assert.equal(green.code, 0, green.stdout + green.stderr);
+  assert.match(green.stdout, /Phase 5b: Generated \.tsx uses only column names verified from RuntimeTypes\.ts/);
+  assert.match(green.stdout, /# SKIP column-name verification requires RuntimeTypes\.ts fixture/);
+
+  // The column oracle is intentionally still a SKIP. Inject a failing result at its real
+  // registry entry to prove routing invokes that callback and propagates failure, not just text.
+  const preload = path.join(root, 'phase-5b-probe.cjs');
+  const library = path.join(__dirname, '..', 'lib', 'assertions-layer-2.js');
+  fs.writeFileSync(preload, `
+const { PHASE5_EXPECTATIONS } = require(${JSON.stringify(library)});
+const text = [...PHASE5_EXPECTATIONS.keys()].find((key) => key.startsWith('Phase 5b: Generated .tsx uses only column names'));
+const original = PHASE5_EXPECTATIONS.get(text);
+PHASE5_EXPECTATIONS.set(text, (args) => ({ status: 'fail', reason: 'Phase-5b callback executed: ' + original(args).reason }));
+`);
+  const red = runRunner(args, ['--require', preload]);
+  assert.equal(red.code, 1, red.stdout + red.stderr);
+  assert.match(red.stdout, /not ok \d+ - Phase 5b: Generated \.tsx uses only column names/);
+  assert.match(red.stdout, /Phase-5b callback executed: column-name verification requires RuntimeTypes\.ts fixture/);
+});
+
+test('runner routing and lookup functions expose every registered phase check', () => {
+  const workflow = require('../run-layer-1.js');
+  const code = require('../run-layer-2.js');
+  const { PHASE_EXPECTATIONS } = require('../lib/assertions-layer-1.js');
+  const { PHASE5_EXPECTATIONS } = require('../lib/assertions-layer-2.js');
+  assert.equal(typeof workflow.isPhaseExpectation, 'function');
+  assert.equal(typeof workflow.getExpectationCheck, 'function');
+  assert.equal(typeof code.isPhase5Expectation, 'function');
+  assert.equal(typeof code.getExpectationCheck, 'function');
+  for (const [text, check] of PHASE_EXPECTATIONS) {
+    assert.equal(workflow.isPhaseExpectation(text), true, text);
+    assert.equal(workflow.getExpectationCheck(text), check, text);
+  }
+  for (const [text, check] of PHASE5_EXPECTATIONS) {
+    assert.equal(code.isPhase5Expectation(text), true, text);
+    assert.equal(code.getExpectationCheck(text), check, text);
+  }
+  for (const text of ['Phase 5a: unknown', 'Phase 5b: unknown', 'Phase 5c: unknown', 'Phase 5: unknown']) {
+    assert.equal(code.isPhase5Expectation(text), true, text);
+    assert.equal(code.getExpectationCheck(text), undefined, text);
+  }
+  assert.equal(code.isPhase5Expectation('Phase 50: wrong phase'), false);
+  assert.equal(code.isPhase5Expectation('Edit Phase 5: not routed by this layer'), false);
+  assert.equal(workflow.getExpectationCheck('Phase 1: unregistered'), undefined);
+  assert.equal(code.getExpectationCheck('Phase 1: unregistered'), undefined);
 });

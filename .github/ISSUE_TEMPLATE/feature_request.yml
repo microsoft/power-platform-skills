@@ -13,8 +13,10 @@ body:
         - mcp-apps
         - mobile-app
         - model-apps
+        - pcf
         - power-automate
         - power-pages
+        - process-intelligence
     validations:
       required: true
 

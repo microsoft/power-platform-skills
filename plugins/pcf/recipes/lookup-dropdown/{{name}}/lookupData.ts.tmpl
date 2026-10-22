@@ -1,0 +1,113 @@
+import { IInputs } from "./generated/ManifestTypes";
+
+export type LookupOption = ComponentFramework.LookupValue;
+
+type MetadataObject = Record<string, unknown>;
+
+interface LookupMetadata {
+    tableName: string;
+    idColumn: string;
+    nameColumn: string;
+    selectableFilter: string;
+}
+
+const PAGE_SIZE = 25;
+const MAX_LOOKUP_PAGES = 4;
+
+export interface LookupLoadResult {
+    options: LookupOption[];
+    moreRowsExist: boolean;
+}
+
+export async function loadLookupOptions(
+    context: ComponentFramework.Context<IInputs>,
+): Promise<LookupLoadResult> {
+    const metadata = await readLookupMetadata(context);
+    const select = `$select=${[metadata.idColumn, metadata.nameColumn].map(encodeURIComponent).join(",")}`;
+    const selectableFilter = metadata.selectableFilter.trim();
+    const filter = selectableFilter ? `&$filter=${encodeURIComponent(selectableFilter)}` : "";
+    const orderBy = `$orderby=${encodeURIComponent(`${metadata.nameColumn} asc`)}`;
+    const results: LookupOption[] = [];
+    let options: string | undefined = `?${select}${filter}&${orderBy}`;
+    let pageCount = 0;
+
+    while (options && pageCount < MAX_LOOKUP_PAGES) {
+        pageCount += 1;
+        const page = await context.webAPI.retrieveMultipleRecords(metadata.tableName, options, PAGE_SIZE);
+        for (const row of page.entities) {
+            const id = stringField(row, metadata.idColumn);
+            if (!id) continue;
+            results.push({
+                id,
+                name: stringField(row, metadata.nameColumn) || id,
+                entityType: metadata.tableName,
+            });
+        }
+        options = nextLinkOptions(page.nextLink);
+    }
+
+    // Lookup editors run inside form update cycles. A broad table can contain thousands of rows, so
+    // stop after a small documented cap and tell makers to narrow the selectable filter instead of
+    // blocking the form while a sample control pages an entire table.
+    return { options: results, moreRowsExist: Boolean(options) };
+}
+
+async function readLookupMetadata(
+    context: ComponentFramework.Context<IInputs>,
+): Promise<LookupMetadata> {
+    if (typeof context.utils?.getEntityMetadata !== "function") {
+        throw new Error("Lookup metadata is unavailable in this host.");
+    }
+
+    const tableName = targetTable(context);
+    if (!tableName) throw new Error("Target table configuration is required.");
+
+    const metadata = await context.utils.getEntityMetadata(tableName);
+    const record = metadata as MetadataObject;
+    const idColumn = stringMetadata(record, "primaryIdAttribute");
+    const nameColumn = stringMetadata(record, "primaryNameAttribute");
+    if (!idColumn || !nameColumn) {
+        throw new Error("Lookup metadata did not include primary id and primary name columns.");
+    }
+
+    return {
+        tableName,
+        idColumn,
+        nameColumn,
+        // Learn's PCF EntityMetadata exposes the primary columns but not a documented active-state
+        // predicate, so row eligibility comes from maker configuration rather than a label match or
+        // a hard-coded `statecode eq 0`.
+        selectableFilter: stringParameter(context.parameters.selectableFilter?.raw),
+    };
+}
+
+function stringField(entity: ComponentFramework.WebApi.Entity, key: string): string {
+    const value = entity[key];
+    return typeof value === "string" ? value : value == null ? "" : String(value);
+}
+
+function stringParameter(value: unknown): string {
+    return typeof value === "string" ? value : "";
+}
+
+function targetTable(context: ComponentFramework.Context<IInputs>): string {
+    const configured = stringParameter(context.parameters.targetTable?.raw).trim();
+    return /^[A-Za-z_][A-Za-z0-9_]*$/.test(configured) ? configured : "";
+}
+
+function stringMetadata(record: MetadataObject | undefined, key: string): string {
+    if (!record) return "";
+    const value = record[key];
+    return typeof value === "string" ? value : "";
+}
+
+function nextLinkOptions(nextLink: string | undefined): string | undefined {
+    if (!nextLink) return undefined;
+    if (nextLink.startsWith("?")) return nextLink;
+    try {
+        const parsed = new URL(nextLink);
+        return `${parsed.search}${parsed.hash}`;
+    } catch {
+        return nextLink;
+    }
+}

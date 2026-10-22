@@ -1,0 +1,1 @@
+Remove both Custom API controls and explicitly clear all Custom API bindings.

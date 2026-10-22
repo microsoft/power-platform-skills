@@ -1,0 +1,107 @@
+export interface SelectedAttachmentFile {
+    name: string;
+    type: string;
+    size: number;
+    contentBase64: string;
+}
+
+export interface BrowserFilePickerValidation {
+    acceptedMimeTypes: string[];
+    maxBytes: number;
+    fileTooLargeMessage: string;
+    typeNotAllowedMessage: string;
+}
+
+export interface AnnotationPayload extends ComponentFramework.WebApi.Entity {
+    filename: string;
+    mimetype: string;
+    documentbody: string;
+    isdocument: true;
+    subject: string;
+}
+
+export interface AttachmentAdapters {
+    pickFile: (accept: string, validation?: BrowserFilePickerValidation) => Promise<SelectedAttachmentFile | null>;
+    createAnnotation: (payload: AnnotationPayload) => Promise<ComponentFramework.LookupValue>;
+}
+
+export function createDataverseNoteClient(webAPI: ComponentFramework.WebApi): Pick<AttachmentAdapters, "createAnnotation"> {
+    return {
+        createAnnotation(payload) {
+            if (typeof webAPI?.createRecord !== "function") {
+                return Promise.reject(new Error("WebAPI createRecord is not available."));
+            }
+            return webAPI.createRecord("annotation", payload);
+        },
+    };
+}
+
+export function createBrowserFilePicker(container: HTMLElement): Pick<AttachmentAdapters, "pickFile"> {
+    return {
+        pickFile(accept, validation) {
+            return new Promise((resolve, reject) => {
+                const ownerDocument = container.ownerDocument;
+                const input = ownerDocument.createElement("input");
+                const cleanup = () => input.remove();
+                input.type = "file";
+                input.accept = accept;
+                input.style.display = "none";
+                input.addEventListener("cancel", () => {
+                    cleanup();
+                    resolve(null);
+                }, { once: true });
+                input.addEventListener("change", () => {
+                    void (async () => {
+                        const file = input.files?.[0] ?? null;
+                        cleanup();
+                        if (!file) {
+                            resolve(null);
+                            return;
+                        }
+                        const validationError = validateFileMetadata(file, validation);
+                        if (validationError) {
+                            reject(new Error(validationError));
+                            return;
+                        }
+                        try {
+                            const contentBase64 = await readFileAsBase64(file);
+                            resolve({
+                                name: file.name,
+                                type: file.type,
+                                size: file.size,
+                                contentBase64,
+                            });
+                        } catch (error) {
+                            reject(error);
+                        }
+                    })();
+                }, { once: true });
+                container.append(input);
+                input.click();
+            });
+        },
+    };
+}
+
+function validateFileMetadata(file: File, validation: BrowserFilePickerValidation | undefined): string | null {
+    if (!validation) return null;
+    if (file.size > validation.maxBytes) return validation.fileTooLargeMessage;
+    const fileType = file.type.toLowerCase();
+    if (validation.acceptedMimeTypes.length > 0 && !validation.acceptedMimeTypes.includes(fileType)) {
+        return validation.typeNotAllowedMessage;
+    }
+    return null;
+}
+
+function readFileAsBase64(file: File): Promise<string> {
+    return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.addEventListener("load", () => {
+            const result = typeof reader.result === "string" ? reader.result : "";
+            const comma = result.indexOf(",");
+            resolve(comma >= 0 ? result.slice(comma + 1) : result);
+        }, { once: true });
+        reader.addEventListener("error", () => reject(reader.error ?? new Error("File read failed.")), { once: true });
+        reader.readAsDataURL(file);
+    });
+}
