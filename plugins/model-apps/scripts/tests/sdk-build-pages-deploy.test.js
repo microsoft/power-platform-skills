@@ -1424,13 +1424,14 @@ test('deploy: the pages phase records the hash of the source it read for each pa
     const genpageCli = mockGenpageCli();
     const r = await runSdkBuild(spec, { sdk: mockSdk().sdk, apply: true, env: 'https://x', appDir, genpageCli, phases: PHASES });
     const source = (file) => sha256(fs.readFileSync(path.join(appDir, file)));
-    assert.deepStrictEqual(r.created.pageSourceShas, { overview: source('overview.tsx'), detail: source('detail.tsx') });
+    // The result's page maps are null-prototype objects (lib/own-keys.js: a page's key can be `constructor`), so their entries are compared.
+    assert.deepStrictEqual({ ...r.created.pageSourceShas }, { overview: source('overview.tsx'), detail: source('detail.tsx') });
     assert.notStrictEqual(r.created.pageDeployedShas.overview, r.created.pageSourceShas.overview, 'the copy that is uploaded has the target\'s id where the source has PAGEREF_: it is another hash');
     // Only a page that is sent is recorded: a changed-only run that selects one page records that page.
     const selected = await runSdkBuild(spec, { sdk: mockSdk({ pageManifest: Buffer.from(JSON.stringify({ schemaVersion: 1, pages: [{ key: 'overview', name: 'Overview', pageId: OVERVIEW_ID }, { key: 'detail', name: 'Detail', pageId: DETAIL_ID }] }), 'utf8').toString('base64'), liveSitemapXml: pageSitemap([OVERVIEW_ID, DETAIL_ID]), pageRows: [{ uxagentprojectid: OVERVIEW_ID, name: 'Overview' }, { uxagentprojectid: DETAIL_ID, name: 'Detail' }] }).sdk,
       apply: true, env: 'https://x', appDir, genpageCli: mockGenpageCli([{ pageId: OVERVIEW_ID, name: 'Overview' }, { pageId: DETAIL_ID, name: 'Detail' }]), phases: PAGES_ONLY,
       changedOnly: { fastApply: true, resolvedAppId: APP_ID, skipSitemapFinalize: true, selectedKeys: ['detail'] } });
-    assert.deepStrictEqual(selected.created.pageSourceShas, { detail: source('detail.tsx') });
+    assert.deepStrictEqual({ ...selected.created.pageSourceShas }, { detail: source('detail.tsx') });
   } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
 });
 
@@ -2525,7 +2526,8 @@ test('deploy: an UNCHANGED rebuild of an app with two pages sends no change set 
     // Nothing changed.
     let from = server.requests.length;
     const again = await rebuildPages(spec, appDir, server, ids);
-    assert.deepStrictEqual(again.created.pages, ids, 'the same two pages');
+    // `created.pages` is a null-prototype map (lib/own-keys.js), so its entries are compared with the plain copy `ids`.
+    assert.deepStrictEqual({ ...again.created.pages }, ids, 'the same two pages');
     const unchanged = requestsOf(server, from);
     assert.deepStrictEqual([unchanged.changeSets, unchanged.publishes, unchanged.otherWrites], [0, 0, 0], 'an unchanged page costs no change set, no publish and no other write');
     assert.ok(unchanged.reads > 0, 'only reads: each page is read to see that it holds what the spec asks for');
@@ -2562,7 +2564,7 @@ test('deploy: pages that link to each other are published once and then left alo
 
     const from = server.requests.length;
     const again = await rebuildPages(spec, appDir, server, ids);
-    assert.deepStrictEqual(again.created.pages, ids);
+    assert.deepStrictEqual({ ...again.created.pages }, ids);
     const unchanged = requestsOf(server, from);
     assert.deepStrictEqual([unchanged.changeSets, unchanged.publishes, unchanged.otherWrites], [0, 0, 0], 'an unchanged rebuild of linked pages writes and publishes nothing either');
     assert.ok(unchanged.reads > 0);
@@ -3341,6 +3343,28 @@ test('deploy: a build whose pages read no table makes no app operation; a change
     assert.deepStrictEqual(run.genpageCli.uploads.map((u) => u.name), ['Overview'], 'only the selected page was written');
     assert.deepStrictEqual(run.genpageCli.placements, [{ appId: APP_ID, pages: [], dataSources: ['contoso_item'] }], 'so only its table is pinned: the page left alone writes nothing the app needs');
   } finally { app.cleanup(); }
+});
+
+// A page key is a lowercase slug, so a page can be keyed `constructor` — a member of Object.prototype. The pages this run wrote are the ones
+// `created.pages` holds, and a page it left alone must read as not written whatever its key is.
+test('deploy: a changed-only run pins only the tables of the pages it wrote when the page it left alone is keyed constructor', async () => {
+  const { appDir, spec } = makeTwoPageApp();
+  try {
+    fs.writeFileSync(path.join(appDir, 'overview.tsx'), 'export default function Overview(){ return null; }', 'utf8');
+    spec.pages[0].navigatesTo = undefined;
+    spec.pages[1].key = 'constructor';
+    spec.appShell.areas[0].groups[0].subAreas[1].page = 'constructor';
+    spec.pages[0].dataSources = ['contoso_item'];
+    spec.pages[1].dataSources = ['contoso_note'];
+    const live = [{ pageId: OVERVIEW_ID, name: 'Overview' }, { pageId: DETAIL_ID, name: 'Detail' }];
+    const manifest = Buffer.from(JSON.stringify({ schemaVersion: 1, pages: [{ key: 'overview', name: 'Overview', pageId: OVERVIEW_ID }, { key: 'constructor', name: 'Detail', pageId: DETAIL_ID }] }), 'utf8').toString('base64');
+    const { sdk } = mockSdk({ pageManifest: manifest, liveSitemapXml: pageSitemap([OVERVIEW_ID, DETAIL_ID]), pageRows: live.map((p) => ({ uxagentprojectid: p.pageId, name: p.name })) });
+    const genpageCli = mockGenpageCli(live);
+    const r = await runSdkBuild(spec, { sdk, apply: true, env: 'https://x', appDir, genpageCli, phases: PAGES_ONLY, changedOnly: { fastApply: true, resolvedAppId: APP_ID, skipSitemapFinalize: true, selectedKeys: ['overview'] } });
+    assert.deepStrictEqual(genpageCli.uploads.map((u) => u.name), ['Overview'], 'only the selected page was written');
+    assert.deepStrictEqual(Object.keys(r.created.pages), ['overview'], 'and only it is in the result');
+    assert.deepStrictEqual(genpageCli.placements, [{ appId: APP_ID, pages: [], dataSources: ['contoso_item'] }], 'so only its table is pinned, not the table of the page keyed constructor');
+  } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
 });
 
 test('deploy: the pin carries the request to send before the app is written — a function the placement awaits, which sends nothing without --publish — and what it is asked to pin is still only data', async () => {

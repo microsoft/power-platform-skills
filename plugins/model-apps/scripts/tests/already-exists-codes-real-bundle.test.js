@@ -180,7 +180,8 @@ test('a status reason refused in Spanish because its value is taken (0x80044310)
   assert.deepStrictEqual(english.unmodelled, []);
   assert.strictEqual(english.error, undefined, english.error && english.error.message);
   assert.ok(english.steps.includes('skip status reason contoso_Project: En revision (exists)'), english.steps.join(' | '));
-  assert.deepStrictEqual(english.result.statusReasonValues, { contoso_project: { 'En revision': { value: 100000000, stateCode: 0 } } }, 'the pinned value is kept for the sample data');
+  // `statusReasonValues` holds each table's reasons in a null-prototype map (lib/own-keys.js: a label can be `__proto__`); its JSON is compared.
+  assert.deepStrictEqual(JSON.parse(JSON.stringify(english.result.statusReasonValues)), { contoso_project: { 'En revision': { value: 100000000, stateCode: 0 } } }, 'the pinned value is kept for the sample data');
   const spanish = await build(STATUSED, statusRefusedWith(refused('0x80044310', 'El valor de estado 100000000 no es valido para el conjunto de opciones 00000000-0000-0000-0000-000000000001 porque ya existe otra opcion con ese valor')));
   assert.strictEqual(spanish.error, undefined, spanish.error && spanish.error.message);
   assert.deepStrictEqual(outcomeOf(spanish), outcomeOf(english), 'the same steps, warnings, requests and result as the English answer');

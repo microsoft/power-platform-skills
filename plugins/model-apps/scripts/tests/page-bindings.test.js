@@ -741,7 +741,8 @@ async function downloadThenRebuild({ edit } = {}) {
   const before = genpage.of('update').length;
   const rebuilt = await runSdkBuild(spec, { sdk, genpage, appDir, env: ENV, apply: true, phases: PHASES });
   assert.ok(rebuilt.ok);
-  assert.deepStrictEqual(rebuilt.created.pages, { weather: WEATHER_ID, detail: DETAIL_ID });
+  // `created.pages` is a null-prototype map (lib/own-keys.js: a page's key can be `constructor`), so its entries are compared.
+  assert.deepStrictEqual({ ...rebuilt.created.pages }, { weather: WEATHER_ID, detail: DETAIL_ID });
   const updates = genpage.of('update').slice(before);
   assert.strictEqual(updates.length, 2, 'one update per page');
   assert.strictEqual(genpage.of('create').length, 0, 'a downloaded page is updated, never created');

@@ -30,6 +30,7 @@
 // earlier build of this plugin gave them.
 
 const { GENPAGE_DEFAULT_VECTOR_ICON } = require('./genpage-subarea.js');
+const { ownValue } = require('./own-keys.js');
 
 // The fixed launcher path the designer gives every dashboard entry it creates, and the one the
 // runtime keys the dashboard glyph on.
@@ -448,9 +449,8 @@ function adoptLiveSitemap(desired, live, opts = {}) {
   return { siteMap: { ...(desired || {}), areas: out }, notes };
 }
 
-// The id a plain `{ <name or key>: id }` map holds for `name` — only as the map's OWN entry, so a
-// dashboard named `constructor` never resolves to Object.prototype's.
-const ownId = (map, name) => (map && typeof map === 'object' && Object.prototype.hasOwnProperty.call(map, name) ? map[name] : undefined);
+// A dashboard's or page's id is read from `ids` only as the map's OWN entry (ownValue, lib/own-keys.js),
+// so a dashboard named `constructor` never resolves to Object.prototype's.
 const idMap = (v) => (v && typeof v === 'object' && !Array.isArray(v) ? v : {});
 
 // Every subarea of an App Spec, in document order.
@@ -472,8 +472,8 @@ function specSubAreas(spec) {
 function specSubAreaTargetKey(s, ids = {}) {
   if (!s || typeof s !== 'object') return undefined;
   if (s.entity) return subAreaTargetKey({ type: 'Entity', entity: s.entity });
-  if (s.dashboard) return subAreaTargetKey({ type: 'DashBoard', dashboardId: ownId(idMap(ids.dashboards), s.dashboard) });
-  if (s.page) return subAreaTargetKey({ type: 'GenPage', genPageId: ownId(idMap(ids.pages), s.page) });
+  if (s.dashboard) return subAreaTargetKey({ type: 'DashBoard', dashboardId: ownValue(idMap(ids.dashboards), s.dashboard) });
+  if (s.page) return subAreaTargetKey({ type: 'GenPage', genPageId: ownValue(idMap(ids.pages), s.page) });
   if (s.url) return subAreaTargetKey({ type: 'URL', url: s.url });
   return undefined;
 }

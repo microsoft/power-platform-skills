@@ -34,6 +34,7 @@ const {
 } = require('./app-spec.js');
 const { readColumnLabels, makeTableLabelReader, lookupKey, labelsByLcid } = require('./lookup-labels.js');
 const { topoOrderEntities, entityByLogical } = require('./_graph.js');
+const { ownValue } = require('./own-keys.js');
 // OData string-literal escaping for spec-controlled values interpolated into $filter (a solution
 // uniquename / publisher prefix with a `'` would otherwise break the query or inject a clause).
 const { odataLit } = require('./odata.js');
@@ -992,10 +993,12 @@ const STATE_CODE = { Active: 0, Inactive: 1 };
 // The state and the value the build gives each of a table's declared status reasons, in the spec's order: the declared state (Active
 // unless it says Inactive; any other word has always read as Active) and the declared `value`, else 100000000 + the reason's place in the
 // list. The data-model phase inserts each at these, and verify (lib/status-reasons-keys.js) holds a deployed reason to the same two.
+// The state is the spec's own word, read as an own key of STATE_CODE: `constructor` or `toString` is another word, and reads as Active
+// too — never as the inherited function, which no request can carry.
 function statusReasonTargets(entity) {
   return ((entity && entity.statusReasons) || []).map((statusReason, index) => ({
     statusReason,
-    stateCode: STATE_CODE[statusReason.state] !== undefined ? STATE_CODE[statusReason.state] : 0,
+    stateCode: Object.hasOwn(STATE_CODE, statusReason.state) ? STATE_CODE[statusReason.state] : 0,
     value: typeof statusReason.value === 'number' ? statusReason.value : 100000000 + index,
   }));
 }
@@ -1841,7 +1844,9 @@ async function applyStatusReasons({ sdk, provision, runner, warn }, { entity, lo
     warn(`could not read status reasons for ${logical} (${read.failed}); using the duplicate-protected insert instead`);
   }
   for (const { statusReason: sr, stateCode, value: pinned } of statusReasonTargets(entity)) {
-    (result.statusReasonValues[logical] = result.statusReasonValues[logical] || {})[sr.label] = { value: pinned, stateCode };
+    // The table's reasons by LABEL — the maker's text, which can be `__proto__` or `constructor` — in a null-prototype map, so each label is
+    // an own entry (lib/own-keys.js). On a plain object the `__proto__` reason was never stored: its value object became the map's prototype.
+    (result.statusReasonValues[logical] = result.statusReasonValues[logical] || Object.create(null))[sr.label] = { value: pinned, stateCode };
     const same = (read.options || []).some((o) => o && o.Value === pinned && o.State === stateCode
       && labelsByLcid(o.Label)[languageCode] === sr.label
       && (sr.color === undefined || o.Color === sr.color));
@@ -2923,7 +2928,9 @@ function buildSeedGroup({ spec, e, records, statusReasonValues }) {
     // captured during the data-model phase (insertStatusValue); if that phase was skipped this run
     // the value is unknown — halt loudly instead of silently inserting a default status.
     if (raw && raw.statusReason) {
-      const sv = (statusReasonValues[e.schemaName.toLowerCase()] || {})[raw.statusReason];
+      // An OWN entry of the captured values (lib/own-keys.js): a label such as `constructor` that was not captured — the data-model phase
+      // did not run — must halt here like any other, not read the inherited member as a captured value.
+      const sv = ownValue(statusReasonValues[e.schemaName.toLowerCase()], raw.statusReason);
       if (!sv) throw refusal(`record sets statusReason '${raw.statusReason}' on ${e.schemaName}, but its status value wasn't captured — include the data-model phase (don't --skip data-model) so the custom status reason is created and its option value captured`);
       body.statuscode = sv.value; body.statecode = sv.stateCode;
     }

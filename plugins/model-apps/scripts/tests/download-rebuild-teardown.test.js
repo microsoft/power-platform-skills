@@ -266,7 +266,8 @@ test('downloaded ownership survives rebuild and teardown planning', async () => 
     });
     assert.strictEqual(rebuild.ok, true);
     assert.strictEqual(rebuild.created.app, APP_ID, 'a display-name rename cannot redirect the rebuild');
-    assert.deepStrictEqual(rebuild.created.pages, { overview: OVERVIEW_ID, detail: DETAIL_ID });
+    // `created.pages` is a null-prototype map (lib/own-keys.js: a page's key can be `constructor`), so its entries are compared.
+    assert.deepStrictEqual({ ...rebuild.created.pages }, { overview: OVERVIEW_ID, detail: DETAIL_ID });
     assert.ok(!fixture.calls.some((c) => ['createTable', 'createRelationship', 'enrichDefaultViews'].includes(c.method)),
       `reused tables and relationships are not recreated or enriched: ${JSON.stringify(fixture.calls.filter((c) => ['createTable', 'createRelationship', 'enrichDefaultViews'].includes(c.method)))}`);
     assert.strictEqual(spec.entities.every((e) => e.existing === true), true);
@@ -571,7 +572,7 @@ async function redeployAfterRedownload(earlierKeyOfId, { fromEmptyFolder = false
     const rebuilt = await deploy(portable(again));
     // What matters first: the other environment's pages. Each id holds its own name and content, as it did before the second download.
     assert.deepStrictEqual(held(target, TARGET_IDS), before, 'each page of the other environment still holds its own name and content');
-    assert.deepStrictEqual(rebuilt.created.pages, { [earlierKeyOfId[OVERVIEW_ID]]: TARGET_IDS[0], [earlierKeyOfId[DETAIL_ID]]: TARGET_IDS[1] });
+    assert.deepStrictEqual({ ...rebuilt.created.pages }, { [earlierKeyOfId[OVERVIEW_ID]]: TARGET_IDS[0], [earlierKeyOfId[DETAIL_ID]]: TARGET_IDS[1] });
     assert.strictEqual(target.genpage.of('create').length, 0, 'no page is created: every key binds the page it built');
     // And why: each page has the key it had.
     assert.deepStrictEqual(keysByName(again), expectedKeys, 'every page keeps the key it had');

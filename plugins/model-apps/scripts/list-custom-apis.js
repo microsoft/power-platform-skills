@@ -85,7 +85,11 @@ function buildCustomApiFilter(entities) {
 // mapParameterKind). Because the rows arrive nested under their parent API there is no parent id to
 // group on — unlike the flat cross-API query this replaced.
 function parameterKindsFromRows(rows) {
-  const kinds = {};
+  // A null-prototype map: a parameter's unique name carries no publisher prefix (letters, digits and `_`, the shape lib/page-bindings.js
+  // accepts), so `__proto__` is a name a parameter can have, and on a plain object it would call the prototype setter and be left out of the
+  // list (lib/own-keys.js). JSON.stringify writes the map as it writes a plain object with the same entries.
+  // See: https://learn.microsoft.com/power-apps/developer/data-platform/custom-api-tables#customapirequestparameter-table-columns
+  const kinds = Object.create(null);
   for (const row of rows || []) {
     const name = row.uniquename;
     const kind = mapParameterKind(row.type);
@@ -100,7 +104,8 @@ function parameterKindsFromRows(rows) {
 // names outside parameterKinds so a required lookup does not disappear when its kind is omitted.
 // See: https://learn.microsoft.com/power-apps/developer/data-platform/reference/entities/customapirequestparameter
 function lookupParametersFromRows(rows) {
-  const lookups = {};
+  // Null-prototype for the same reason as parameterKindsFromRows: here a `__proto__` lookup's object would have become the map's prototype.
+  const lookups = Object.create(null);
   for (const row of rows || []) {
     if (Number(row.type) !== 5 || !row.uniquename) continue;
     const lookup = { isOptional: row.isoptional === true };

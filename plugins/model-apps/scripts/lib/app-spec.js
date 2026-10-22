@@ -2706,7 +2706,9 @@ function validateAppSpec(spec, opts = {}) {
       if (c.type === 'Customer' && c.description) {
         warnings.push(`entity ${e.schemaName}: column ${c.schemaName} is a Customer column — the SDK's createCustomerColumn accepts no description, so this one will NOT be written to Dataverse`);
       }
-      if (c.type && !TYPE_MAP[c.type]) {
+      // An own key of TYPE_MAP: `constructor`, `toString` and the other members of Object.prototype are no column type, and a plain
+      // `TYPE_MAP[c.type]` read answered them with the inherited member, so a column of such a type passed this check.
+      if (c.type && !Object.hasOwn(TYPE_MAP, c.type)) {
         errors.push(`entity ${e.schemaName}: column ${c.schemaName} has unknown type '${c.type}'`);
       }
       // An AutoNumber column needs a format, and `required` is true, false or "recommended" (see checksColumnValues).
@@ -2813,7 +2815,10 @@ function validateAppSpec(spec, opts = {}) {
   // (first Main form in spec order), and both are order-independent — which is the property the old
   // behaviour lacked, when every Main form promoted itself from inside a concurrent loop and the last
   // to finish won.
-  const defaultByEntity = {};
+  // Null-prototype maps here and in the Main-form counts below: the key is the table a form names, as the spec writes it, and this loop
+  // runs before that name is checked — `(map[key] = map[key] || []).push(…)` on a plain object threw for `constructor` and `__proto__`
+  // (it read the inherited member), and the counts below turned into text. A table the spec does not declare is reported further down.
+  const defaultByEntity = Object.create(null);
   for (const f of spec.forms || []) {
     if (!f) continue;
     if (f.isDefault !== undefined && typeof f.isDefault !== 'boolean') {
@@ -2912,8 +2917,8 @@ function validateAppSpec(spec, opts = {}) {
   // ground: deactivating every other Main form is a DESTRUCTIVE, entity-wide act, and a spec that
   // declares a sibling Main form alongside a flagged one is asking for that sibling to be built and
   // then immediately deactivated — almost certainly not what the author meant.
-  const mainFormsByEntity = {};
-  const flaggedByEntity = {};
+  const mainFormsByEntity = Object.create(null);
+  const flaggedByEntity = Object.create(null);
   for (const f of spec.forms || []) {
     if (!f || (f.formType !== undefined && f.formType !== 'Main')) continue;
     const key = String(f.entity || '').toLowerCase();

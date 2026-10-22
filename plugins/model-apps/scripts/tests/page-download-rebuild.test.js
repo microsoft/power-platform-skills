@@ -117,7 +117,8 @@ test('download-hydrate-rebuild preserves page identity name model and bindings',
         const rebuilt = await runSdkBuild(spec, { sdk, genpage, appDir, env: ENV, apply: true, phases: ['solution', 'data-model', 'app-shell', 'pages'] });
         assert.ok(rebuilt.ok);
         assert.strictEqual(rebuilt.created.app, APP_ID);
-        assert.deepStrictEqual(rebuilt.created.pages, { overview: OVERVIEW_ID, detail: DETAIL_ID });
+        // `created.pages` is a null-prototype map (lib/own-keys.js: a page's key can be `constructor`), so its entries are compared.
+        assert.deepStrictEqual({ ...rebuilt.created.pages }, { overview: OVERVIEW_ID, detail: DETAIL_ID });
         const updates = genpage.of('update').slice(start);
         assert.strictEqual(updates.length, 2, 'exactly one update per page');
         assert.strictEqual(genpage.of('create').length, 0, 'a downloaded page must be updated, never created');

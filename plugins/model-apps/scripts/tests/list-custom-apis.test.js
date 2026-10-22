@@ -94,6 +94,8 @@ test('buildCustomApiFilter includes Global plus the page tables, escaping quotes
   assert.match(escaped, /boundentitylogicalname eq 'o''brien'/);
 });
 
+// The kind and lookup maps are null-prototype objects (a parameter can be called `__proto__`, lib/own-keys.js), so the assertions below
+// compare their entries: `{ ...map }`.
 test('parameterKindsFromRows maps one API\'s expanded params and drops unknown types', () => {
   // Rows arrive inline via $expand — each element has uniquename + type, but no parent id.
   const kinds = parameterKindsFromRows([
@@ -102,24 +104,24 @@ test('parameterKindsFromRows maps one API\'s expanded params and drops unknown t
     { uniquename: 'Mystery', type: 999 }, // unknown → dropped
     { uniquename: null, type: 10 },       // no name → dropped
   ]);
-  assert.deepEqual(kinds, { Comment: 'String', Amount: 'Decimal' });
+  assert.deepEqual({ ...kinds }, { Comment: 'String', Amount: 'Decimal' });
 });
 
 test('parameterKindsFromRows tolerates missing/empty input', () => {
-  assert.deepEqual(parameterKindsFromRows(undefined), {});
-  assert.deepEqual(parameterKindsFromRows([]), {});
+  assert.deepEqual({ ...parameterKindsFromRows(undefined) }, {});
+  assert.deepEqual({ ...parameterKindsFromRows([]) }, {});
 });
 
 test('lookup request parameters remain absent from the declared primitive kind map', () => {
-  assert.deepEqual(parameterKindsFromRows([
+  assert.deepEqual({ ...parameterKindsFromRows([
     { uniquename: 'Ref', type: 5 },
     { uniquename: 'Note', type: 10 },
-  ]), { Note: 'String' });
+  ]) }, { Note: 'String' });
 });
 
 test('every emitted declared kind belongs to the ten supported primitive kinds', () => {
   const rows = Array.from({ length: 13 }, (_, type) => ({ uniquename: `Parameter${type}`, type }));
-  assert.deepEqual(parameterKindsFromRows(rows), {
+  assert.deepEqual({ ...parameterKindsFromRows(rows) }, {
     Parameter0: 'Boolean',
     Parameter1: 'DateTime',
     Parameter2: 'Decimal',
@@ -169,11 +171,11 @@ test('toCustomApiEntry retains lookup names, optionalness and table hints outsid
     bindingtype: 0,
     CustomAPIRequestParameters: rows,
   }, parameterKindsFromRows(rows));
-  assert.deepEqual(entry.lookupParameters, {
+  assert.deepEqual({ ...entry.lookupParameters }, {
     Ref: { isOptional: false, logicalEntityName: 'account' },
     Fallback: { isOptional: true },
   });
-  assert.deepEqual(entry.parameterKinds, { Note: 'String' });
+  assert.deepEqual({ ...entry.parameterKinds }, { Note: 'String' });
 });
 
 // The child runs the real CLI, argument parser, feature gate and Dataverse request implementation.

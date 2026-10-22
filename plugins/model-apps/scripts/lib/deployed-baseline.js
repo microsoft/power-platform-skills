@@ -27,6 +27,7 @@ const { annotateContentHashes, recordedContentSha } = require('./content-hash.js
 const { migrateAppSpec } = require('./app-spec.js');
 const { writeFileAtomic } = require('./apply-snapshot-store.js');
 const { resolveAppSource } = require('./app-source-path.js');
+const { ownValue } = require('./own-keys.js');
 
 const FILE = 'last-applied.json';
 // Stored beside the spec's own top-level keys. phase-diff.js compares only its per-phase slices, so
@@ -68,18 +69,18 @@ function confinedReader(appDir) {
  * An entry no source has is left out, so the next build resolves it itself.
  */
 function deployedIdsFor(spec, { created, previous, fromSpec = false } = {}) {
-  const own = (map, name) => (map && typeof map === 'object' && Object.prototype.hasOwnProperty.call(map, name) ? map[name] : undefined);
   const prior = (previous && previous[IDS_KEY]) || {};
   const list = (v) => (Array.isArray(v) ? v : []);
   // Object.fromEntries defines each name as an own data property — a dashboard named `__proto__` is
-  // recorded, not turned into the object's prototype.
+  // recorded, not turned into the object's prototype. Every source is read as its OWN entry (ownValue,
+  // lib/own-keys.js), so a dashboard named `constructor` never resolves to Object.prototype's.
   const dashboards = Object.fromEntries(list(spec && spec.dashboards)
     .filter((d) => d && typeof d.name === 'string' && d.name)
-    .map((d) => [d.name, (fromSpec && d.dashboardId) || own(created && created.dashboards, d.name) || own(prior.dashboards, d.name)])
+    .map((d) => [d.name, (fromSpec && d.dashboardId) || ownValue(created && created.dashboards, d.name) || ownValue(prior.dashboards, d.name)])
     .filter(([, id]) => typeof id === 'string' && id));
   const pages = Object.fromEntries(list(spec && spec.pages)
     .filter((p) => p && typeof p.key === 'string' && p.key)
-    .map((p) => [p.key, (fromSpec && p.pageId) || own(created && created.pages, p.key) || own(prior.pages, p.key)])
+    .map((p) => [p.key, (fromSpec && p.pageId) || ownValue(created && created.pages, p.key) || ownValue(prior.pages, p.key)])
     .filter(([, id]) => typeof id === 'string' && id));
   return { dashboards, pages };
 }

@@ -156,7 +156,8 @@ function validateProvisionInput(input) {
           errors.push(`entity '${e.schemaName}': column.schemaName is required and must be a string`);
         }
 
-        if (c.type && !TYPE_MAP[c.type]) {
+        // An own key of TYPE_MAP, as in validateAppSpec: a member of Object.prototype (`constructor`, `toString`, …) is no column type.
+        if (c.type && !Object.hasOwn(TYPE_MAP, c.type)) {
           errors.push(`entity '${e.schemaName}': column '${c.schemaName || ''}' has unknown type '${c.type}'`);
         }
 

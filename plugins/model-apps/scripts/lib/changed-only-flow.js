@@ -26,6 +26,7 @@ const { classifyChanges } = require('./classify-changes.js');
 const snap = require('./apply-snapshot.js');
 const store = require('./apply-snapshot-store.js');
 const { indexArtifacts } = require('./apply-snapshot-index.js');
+const { ownValue } = require('./own-keys.js');
 const { odataLit } = require('./odata.js');
 
 // ---- PURE decision ------------------------------------------------------------------------------------
@@ -164,14 +165,19 @@ function assembleFastSnapshot({ snapshot, annotatedSpec, created, pageKeys, gene
   if (!env.artifacts) env.artifacts = {};
   if (!env.artifacts.pages) env.artifacts.pages = {};
   const selected = new Set(pageKeys || []);
+  // Each map is read by the page's key as an OWN entry (lib/own-keys.js): a key can be `constructor`, which a plain object — the
+  // snapshot's parsed JSON, or the `{}` of a build that measured no deployed hash — answers with the Object function, and that
+  // function would be recorded as the page's id or deployed hash (and then dropped from the JSON written to disk).
   const deployedShas = (created && created.pageDeployedShas) || {};
   for (const p of annotatedSpec.pages || []) {
     if (!p || typeof p !== 'object') continue;
     const key = p.key || p.name;
     if (!selected.has(key)) continue; // only refresh the pages we actually re-uploaded
     const sourceSha = p.__contentSha != null ? p.__contentSha : null;
-    const deployedSha = deployedShas[key] != null ? deployedShas[key] : sourceSha;
-    const pageId = (created && created.pages && created.pages[key]) || (env.artifacts.pages[key] && env.artifacts.pages[key].pageId) || null;
+    const measured = ownValue(deployedShas, key);
+    const deployedSha = measured != null ? measured : sourceSha;
+    const recorded = ownValue(env.artifacts.pages, key);
+    const pageId = ownValue(created && created.pages, key) || (recorded && recorded.pageId) || null;
     env.artifacts.pages[key] = { pageId, sourceSha, deployedSha };
   }
   snap.bumpGeneration(env, generation);

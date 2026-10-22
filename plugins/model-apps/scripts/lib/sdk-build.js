@@ -144,6 +144,7 @@ const { hasUnsyncedEdits } = require('./unsynced-edits.js');
 const { createSolutionMembership, ensureSolutionComponent } = require('./solution-membership.js');
 const { openUnconfirmedWebResources } = require('./web-resource-records.js');
 const { openDashboardCreations } = require('./dashboard-creation-records.js');
+const { ownValue } = require('./own-keys.js');
 const { navigationEntryKind, navigationHolds, navigationIsPagesOnly, navigationVerdict } = require('./app-navigation.js');
 const { isAppTextMap, appTextKind, localizedAppText } = require('./app-header-text.js');
 // The build's retry policy (retry-policy.js): every halt below is raised with what a run again may do — RETRY.NEVER, or a policy decided from the failure it wraps — and every failure the engine
@@ -531,9 +532,10 @@ function commandDef(entityLogical, cmds, webResources) {
   return { entityLogicalName: entityLogical, commandBars };
 }
 
-// Group an entity's commands (keyed by lowercased entity logical name).
+// Group an entity's commands (keyed by lowercased entity logical name). A null-prototype map: the name is the spec's text, and
+// `(map[k] = map[k] || []).push(…)` on a plain object throws for `constructor` or `__proto__` (it reads the inherited member).
 function commandsByEntity(spec) {
-  const byEntity = {};
+  const byEntity = Object.create(null);
   for (const c of spec.commands || []) {
     const k = String(c.entity).toLowerCase();
     (byEntity[k] = byEntity[k] || []).push(c);
@@ -1605,7 +1607,9 @@ function appDef(spec, result, opts = {}) {
     // page entries left out of a new app's first navigation below are the ones it does not count.
     const kind = navigationEntryKind(s);
     if (kind === 'dashboard') {
-      const dashboardId = (result.dashboards || {})[s.dashboard];
+      // Read as an OWN entry (lib/own-keys.js): a dashboard may be called `constructor` or `__proto__`, and a map a caller hands in — or the
+      // `{}` of a result with no dashboards — answers those names with an inherited member, which would pass for a built dashboard's id.
+      const dashboardId = ownValue(result.dashboards, s.dashboard);
       if (!dashboardId) throw refusal(`sitemap subarea "${s.title}" references dashboard '${s.dashboard}' which wasn't built — declare it in dashboards[] and don't skip the dashboards phase`);
       // The designer gives every dashboard entry it creates this launcher Url, recognizes a dashboard
       // entry by it, and the runtime shows the dashboard glyph only for it — without it the entry
@@ -1613,7 +1617,8 @@ function appDef(spec, result, opts = {}) {
       return { ...withVector, type: 'DashBoard', dashboardId, dashboardUrl: DASHBOARD_LAUNCHER_URL };
     }
     if (kind === 'page') {
-      const genPageId = (result.pages || {})[s.page];
+      // An own entry too: a page key is a lowercase slug, so `constructor` is a key a page can have.
+      const genPageId = ownValue(result.pages, s.page);
       if (!genPageId) {
         // During the initial app-create (app_early) pages aren't uploaded yet — omit the subarea;
         // the pages phase rewrites the sitemap once the genPageIds exist. A genuinely-missing page
@@ -3010,7 +3015,13 @@ async function runSdkBuildPhases(spec, opts, owed) {
   runner.stopIfRefused('preflight');
 
   const createdFormsThisRun = new Set();
-  const result = { ok: true, created: { entities: {}, relationships: {}, records: {}, webResources: {}, views: {}, charts: {}, forms: {}, formIds: {}, businessRules: {}, businessProcessFlows: {}, bpfBackingTables: {}, commands: {}, dashboards: {}, pages: {}, pageDeployedShas: {}, pageSourceShas: {}, ai: { appFeatures: null, summaries: {} }, roles: {}, roleGrants: {}, bpfRoleGrants: {}, app: null }, skipped: { businessRules: [], aiSummaries: [], layout: [], unauthorizedRemovals: [] } };
+  // The maps keyed by a name a maker writes freely — a dashboard's, a page's key, a persona's (its role's), a business process flow's — are
+  // null-prototype objects (lib/own-keys.js): any such name can be `__proto__`, `constructor`, `toString`, … and must be stored and read as an
+  // entry like any other. On a plain object a dashboard called `__proto__` was never stored, and a page keyed `constructor` that was not built
+  // yet read the Object function as its id. JSON.stringify writes them exactly as it writes a plain object with the same entries. The other maps
+  // are keyed by Dataverse logical names (a table's, a web resource's: the publisher prefix and `_`, or a system component's), by GUIDs or by
+  // `entity|name` pairs, none of which can be such a member.
+  const result = { ok: true, created: { entities: {}, relationships: {}, records: {}, webResources: {}, views: {}, charts: {}, forms: {}, formIds: {}, businessRules: {}, businessProcessFlows: {}, bpfBackingTables: {}, commands: {}, dashboards: Object.create(null), pages: Object.create(null), pageDeployedShas: Object.create(null), pageSourceShas: Object.create(null), ai: { appFeatures: null, summaries: {} }, roles: Object.create(null), roleGrants: {}, bpfRoleGrants: Object.create(null), app: null }, skipped: { businessRules: [], aiSummaries: [], layout: [], unauthorizedRemovals: [] } };
   // #changed-only (pages-only fast apply): seed the LIVE app id (discovered by unique name upstream) so the
   // pages phase's `pages-requires-app` guard passes WITHOUT running the app-shell phase in this invocation.
   // The full-build path never sets opts.changedOnly, so result.created.app stays null and app-shell
