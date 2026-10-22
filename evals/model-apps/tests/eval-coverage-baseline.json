@@ -8,7 +8,7 @@
     "status is \"deferred\" when an offline check could grade the stored artifacts, \"manual\" when a person has to",
     "judge the generated page (Layer 3).",
     "neverGraded: registered checks that return SKIP on every fixture they run on, so they verify nothing yet.",
-    "eval null is a common assertion. reason is the SKIP reason the check gives."
+    "eval null is a common assertion. Every entry's reason says why it is not graded yet, and what would close it."
   ],
   "genpage": {
     "uncaptured": [],
@@ -16,130 +16,58 @@
       {
         "eval": 2,
         "status": "deferred",
-        "text": "Phase 1 (Planner): Plan mentions mock data, D3.js for chart, DataGrid for customers table, KPI cards"
+        "text": "Phase 1 (Planner): Plan mentions mock data, D3.js for chart, DataGrid for customers table, KPI cards",
+        "reason": "Gradeable from the plan text, but the captured run 2-mock-dashboard-real shows real drift: its plan draws the chart in inline SVG and uses Table, not D3.js and DataGrid (references/rules.md: D3.js for all charts). A correct check fails that capture, the runners have no expected-failure mark, and a check loosened to accept SVG or Table would hide the drift."
       },
       {
         "eval": 3,
         "status": "deferred",
-        "text": "Edit Phase 1b: If the app has zero genpages, the user is told there are no pages to edit and the flow stops"
-      },
-      {
-        "eval": 3,
-        "status": "manual",
-        "text": "Edit Phase 5: Existing functionality is preserved per the edit plan's Preservation Constraints"
-      },
-      {
-        "eval": 4,
-        "status": "manual",
-        "text": "Phase 5 (Page Builder): Generated code includes step state management (current step tracking) and Next/Back navigation"
-      },
-      {
-        "eval": 4,
-        "status": "manual",
-        "text": "Phase 5 (Page Builder): Step 3 (review) shows a summary of entered data before submission"
-      },
-      {
-        "eval": 9,
-        "status": "manual",
-        "text": "Phase 2b (Entity Builder): Sample data is provisioned via provision-entities.js; realistic values (not lorem ipsum)"
+        "text": "Edit Phase 1b: If the app has zero genpages, the user is told there are no pages to edit and the flow stops",
+        "reason": "A branch no fixture exercises: the only eval-3 fixture's app lists a page. Grading it needs a fixture whose genpage.js list returns no pages and whose run stops at Edit Phase 1b, and the eval's later edit-phase checks and the common workflow assertions have no refusal stage for a run that ends there, so that fixture would fail them."
       },
       {
         "eval": 10,
         "status": "deferred",
-        "text": "Phase 1 (Planner): cr_widget is identified as NOT existing (exact logical-name match, not fuzzy)"
-      },
-      {
-        "eval": 10,
-        "status": "deferred",
-        "text": "Phase 2a: If blocker:'whoami_403', orchestrator surfaces the message including the specific `az login --username <pacUser>` command and halts"
-      },
-      {
-        "eval": 10,
-        "status": "deferred",
-        "text": "Phase 2a: If ok:true but identitiesMatch:false, orchestrator proceeds but surfaces a one-line warning"
-      },
-      {
-        "eval": 12,
-        "status": "manual",
-        "text": "Phase 5 (Page Builder): Generated code implements the revised plan (includes BOTH filter toolbar AND search box)"
+        "text": "Phase 2a: If ok:true but identitiesMatch:false, orchestrator proceeds but surfaces a one-line warning",
+        "reason": "A branch no fixture exercises: every eval-10 fixture halts at the auth gate (a timeout, a signed-out Azure CLI, a 403). Grading it needs a create run that passes an ok:true, identitiesMatch:false gate, shows the warning, and goes on through provisioning and upload."
       },
       {
         "eval": 13,
         "status": "deferred",
-        "text": "Phase 5 (Page Builder): Generated .tsx fetches usersettings via dataApi.retrieveRow and uses formatDate/formatNumber/formatCurrency helpers"
+        "text": "Phase 5 (Page Builder): Generated .tsx fetches usersettings via dataApi.retrieveRow and uses formatDate/formatNumber/formatCurrency helpers",
+        "reason": "Gradeable from the page source, but the only eval-13 fixture, 13-contact-localization, shows real drift: it never reads usersettings and formats nothing through formatDate/formatNumber/formatCurrency (references/localization.md makes the usersettings read mandatory). A correct check fails it, and the runners have no expected-failure mark."
       },
       {
         "eval": 15,
         "status": "deferred",
-        "text": "Phase 2b (Entity Builder): cr_ticket is provisioned with choice columns via provision-entities.js input JSON; picklist options include {value,label} pairs"
+        "text": "Phase 2b (Entity Builder): cr_ticket is provisioned with choice columns via provision-entities.js input JSON; picklist options include {value,label} pairs",
+        "reason": "The expectation names an input shape provision-entities.js refuses: its input validation reads each Choice option as a label (a string, or a map of LCID to label) and rejects a {label, value} object ('label' is not an LCID); values are assigned 100000000 + index. It needs rewording to the label form together with agents/genpage-entity-builder.md Step 4, which documents the same refused shape, and the only eval-15 fixture, 15-support-tickets-real, did not capture its input JSON."
       }
     ],
     "neverGraded": [
       {
-        "runner": "layer-1",
-        "eval": 1,
-        "text": "Phase 5b: Generated .tsx uses only column names verified from RuntimeTypes.ts — no guessed names",
-        "reason": "column-name verification needs schema cross-check"
-      },
-      {
         "runner": "layer-2",
         "eval": null,
         "text": "For Dataverse pages with fetching, separate setState calls inside async callbacks are batched into a single setData(...) call (Rule 14)",
-        "reason": "Rule 14 batched-setState requires AST analysis"
-      },
-      {
-        "runner": "layer-2",
-        "eval": 1,
-        "text": "Phase 5b: Generated .tsx uses only column names verified from RuntimeTypes.ts — no guessed names",
-        "reason": "column-name verification requires RuntimeTypes.ts fixture"
-      },
-      {
-        "runner": "layer-2",
-        "eval": 4,
-        "text": "Phase 5 (Page Builder): All form fields have aria-labels or aria-labelledby for accessibility",
-        "reason": "aria-label coverage requires AST analysis"
-      },
-      {
-        "runner": "layer-2",
-        "eval": 5,
-        "text": "Phase 5 (Page Builder): All components and utilities are separate top-level functions (no nested function definitions)",
-        "reason": "nested function detection requires AST analysis"
+        "reason": "Gradeable from the page source, but a correct check fails historical fixtures 1-account-card-gallery, 7-job-candidates-new-entities, 11-recruitment-multi-page and 13-contact-localization: each sets its rows in try and calls setLoading(false) in finally, the pattern Rule 14 names as an intermediate render. Rule 14 predates them, so it is real drift; the runners have no expected-failure mark, and skipping historical fixtures would hide it."
       },
       {
         "runner": "layer-2",
         "eval": 7,
         "text": "Phase 5 (Page Builder): Generated code uses ONLY verified column names from RuntimeTypes.ts",
-        "reason": "column-name verification requires RuntimeTypes.ts fixture"
-      },
-      {
-        "runner": "layer-1",
-        "eval": 10,
-        "text": "Phase 2a: If the script returns blocker:'az_not_logged_in', orchestrator surfaces the message ('Run `az login`...') to the user and halts (entity-builder is NOT invoked)",
-        "reason": "az_not_logged_in blocker not in scenario"
+        "reason": "The column check exists (lib/column-contract.js, the one eval 1 grades with), but the only eval-7 fixture, 7-job-candidates-new-entities, is a historical trace that kept no RuntimeTypes.ts, so there is no schema to check its page's column names against. It grades once an eval-7 fixture keeps the RuntimeTypes.ts its run generated."
       },
       {
         "runner": "layer-1",
         "eval": 10,
         "text": "Phase 2b: genpage-entity-builder is only invoked AFTER check-auth returns ok:true",
-        "reason": "entity-builder not invoked"
-      },
-      {
-        "runner": "layer-2",
-        "eval": 13,
-        "text": "Phase 5 (Page Builder): All user-visible text goes through a translate() helper — no hardcoded display strings in JSX",
-        "reason": "translate() coverage requires AST analysis"
-      },
-      {
-        "runner": "layer-2",
-        "eval": 15,
-        "text": "Phase 5 (Page Builder): Generated .tsx uses the choice enum names from RuntimeTypes.ts (not magic numbers)",
-        "reason": "choice enum verification requires RuntimeTypes.ts fixture"
+        "reason": "Every eval-10 fixture halts at the auth gate, so none invokes the entity-builder; it grades once a fixture proceeds past an ok:true gate (see the identitiesMatch:false entry under unscored)."
       },
       {
         "runner": "layer-2",
         "eval": 6,
         "text": "Phase 5 (Page Builder): Generated code has no unnecessary complexity matching the 'clean and minimal' request",
-        "reason": "subjective; defer to Layer 3 UX rubric"
+        "reason": "Subjective: whether code is more complex than a clean and minimal request needs is a judgement, not a property the source can be checked for; the Layer 3 UX rubric scores it."
       }
     ]
   },

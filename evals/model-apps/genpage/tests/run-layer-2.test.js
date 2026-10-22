@@ -239,8 +239,9 @@ export default GeneratedComponent;`,
   assert.match(green.stdout, /Phase 5b: Generated \.tsx uses only column names verified from RuntimeTypes\.ts/);
   assert.match(green.stdout, /# SKIP column-name verification requires RuntimeTypes\.ts fixture/);
 
-  // The column oracle is intentionally still a SKIP. Inject a failing result at its real
-  // registry entry to prove routing invokes that callback and propagates failure, not just text.
+  // A fixture without RuntimeTypes.ts has no schema for the column oracle (lib/column-contract.js) to
+  // check against, so it SKIPs. Inject a failing result at its real registry entry to prove routing
+  // invokes that callback and propagates failure, not just text.
   const preload = path.join(root, 'phase-5b-probe.cjs');
   const library = path.join(__dirname, '..', 'lib', 'assertions-layer-2.js');
   fs.writeFileSync(preload, `

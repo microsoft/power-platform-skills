@@ -1,0 +1,1 @@
+Created the Accounts Gallery page: a scrollable gallery of Account cards showing name, website, email and main phone. Selecting a card opens its Account form.

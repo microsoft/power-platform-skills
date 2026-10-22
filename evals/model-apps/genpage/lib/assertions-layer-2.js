@@ -26,6 +26,12 @@ const { navigationProblems } = require('./navigation-contract.js');
 const { workerProblems } = require('./worker-contract.js');
 const { customApiProblems } = require('./custom-api-contract.js');
 const { gradeEvidence } = require('./evidence-utils.js');
+const {
+  wizardNavigationProblems, reviewSummaryProblems, formFieldLabelProblems, searchAndFilterProblems,
+  translateCoverageProblems, choiceEnumProblems,
+} = require('./page-checks.js');
+const { nestedDefinitionProblems } = require('./tsx-structure.js');
+const { columnProblems } = require('./column-contract.js');
 
 let _verifiedIcons = null;
 function getVerifiedIcons() {
@@ -87,6 +93,41 @@ function extractIconImports(content) {
 function fail(reason) { return { status: 'fail', reason }; }
 function pass() { return { status: 'pass', reason: '' }; }
 function skip(reason) { return { status: 'skip', reason }; }
+
+// A page check (lib/page-checks.js) over every file: a file it does not apply to returns null. Passes
+// when every file it applies to has no problem, fails on the first problem, and skips with `none` when
+// it applies to no file.
+function everyFile(files, problemsOf, none) {
+  let applied = false;
+  for (const file of files) {
+    const problems = problemsOf(file);
+    if (problems === null) continue;
+    applied = true;
+    if (problems.length) return fail(`${file.name}: ${problems[0]}`);
+  }
+  return applied ? pass() : skip(none);
+}
+
+// A page check that one page of the fixture must meet (the wizard, the revised list page): passes when
+// some file has no problem, else fails with the first problem of the first file.
+function someFile(files, problemsOf) {
+  let first = null;
+  for (const file of files) {
+    const problems = problemsOf(file);
+    if (!problems.length) return pass();
+    if (!first) first = `${file.name}: ${problems[0]}`;
+  }
+  return fail(first || 'no .tsx file');
+}
+
+// The column names the pages give their dataApi calls, checked against the RuntimeTypes.ts the run kept
+// (lib/column-contract.js). Without it there is no schema to verify a name against.
+function columnsVerified(files, fixture) {
+  if (!fixture?.runtimeTypes) return skip('column-name verification requires RuntimeTypes.ts fixture');
+  const problems = columnProblems(files, fixture.runtimeTypes);
+  if (problems === null) return skip('the pages name no Dataverse column for RuntimeTypes.ts to verify');
+  return problems.length ? fail(problems[0]) : pass();
+}
 
 const ASSERTIONS = new Map();
 
@@ -294,7 +335,9 @@ ASSERTIONS.set(
 
 ASSERTIONS.set(
   'For Dataverse pages with fetching, separate setState calls inside async callbacks are batched into a single setData(...) call (Rule 14)',
-  () => skip('Rule 14 batched-setState requires AST analysis')
+  // Not a parser gap: a correct check fails historical fixtures that set their rows in `try` and loading in
+  // `finally` (the drift is recorded, with the fixtures, in evals/model-apps/tests/eval-coverage-baseline.json).
+  () => skip('not graded yet: a correct Rule 14 check fails historical fixtures (see tests/eval-coverage-baseline.json)')
 );
 
 // A connector read is frequently factored into a local helper that the effect calls:
@@ -499,7 +542,7 @@ PHASE5_EXPECTATIONS.set(
 
 PHASE5_EXPECTATIONS.set(
   'Phase 5b: Generated .tsx uses only column names verified from RuntimeTypes.ts — no guessed names',
-  () => skip('column-name verification requires RuntimeTypes.ts fixture')
+  ({ files, fixture }) => columnsVerified(files, fixture)
 );
 
 PHASE5_EXPECTATIONS.set(
@@ -563,7 +606,26 @@ PHASE5_EXPECTATIONS.set(
 
 PHASE5_EXPECTATIONS.set(
   'Phase 5 (Page Builder): All form fields have aria-labels or aria-labelledby for accessibility',
-  () => skip('aria-label coverage requires AST analysis')
+  ({ files }) => everyFile(files, (file) => formFieldLabelProblems(file.content), 'no form fields')
+);
+
+// eval 4's wizard: step state that chooses what renders, and Next/Back buttons that move it
+// (lib/page-checks.js wizardNavigationProblems).
+PHASE5_EXPECTATIONS.set(
+  'Phase 5 (Page Builder): Generated code includes step state management (current step tracking) and Next/Back navigation',
+  ({ files }) => someFile(files, (file) => wizardNavigationProblems(file.content))
+);
+
+PHASE5_EXPECTATIONS.set(
+  'Phase 5 (Page Builder): Step 3 (review) shows a summary of entered data before submission',
+  ({ files }) => someFile(files, (file) => reviewSummaryProblems(file.content))
+);
+
+// eval 12: the page built from the REVISED plan has both the search box the revision added and the
+// filter toolbar the first plan had (lib/page-checks.js searchAndFilterProblems).
+PHASE5_EXPECTATIONS.set(
+  'Phase 5 (Page Builder): Generated code implements the revised plan (includes BOTH filter toolbar AND search box)',
+  ({ files }) => someFile(files, (file) => searchAndFilterProblems(file.content))
 );
 
 PHASE5_EXPECTATIONS.set(
@@ -600,12 +662,16 @@ PHASE5_EXPECTATIONS.set(
 
 PHASE5_EXPECTATIONS.set(
   'Phase 5 (Page Builder): All user-visible text goes through a translate() helper — no hardcoded display strings in JSX',
-  () => skip('translate() coverage requires AST analysis')
+  ({ files }) => everyFile(files, (file) => translateCoverageProblems(file.content), 'no .tsx file')
 );
 
+// The values are read from the captured RuntimeTypes.ts, the schema the type generator wrote: without
+// it there is nothing to verify a choice value or its name against.
 PHASE5_EXPECTATIONS.set(
   'Phase 5 (Page Builder): Generated .tsx uses the choice enum names from RuntimeTypes.ts (not magic numbers)',
-  () => skip('choice enum verification requires RuntimeTypes.ts fixture')
+  ({ files, fixture }) => (fixture?.runtimeTypes
+    ? everyFile(files, (file) => choiceEnumProblems(file.content, fixture.runtimeTypes), 'the page compares no choice value')
+    : skip('choice enum verification requires RuntimeTypes.ts fixture'))
 );
 
 // Hardcoded currency symbols and date formats in the TEXT a page shows or formats with. The text
@@ -817,12 +883,12 @@ PHASE5_EXPECTATIONS.set(
 
 PHASE5_EXPECTATIONS.set(
   'Phase 5 (Page Builder): All components and utilities are separate top-level functions (no nested function definitions)',
-  () => skip('nested function detection requires AST analysis')
+  ({ files }) => everyFile(files, (file) => nestedDefinitionProblems(file.content), 'no .tsx file')
 );
 
 PHASE5_EXPECTATIONS.set(
   'Phase 5 (Page Builder): Generated code uses ONLY verified column names from RuntimeTypes.ts',
-  () => skip('column-name verification requires RuntimeTypes.ts fixture')
+  ({ files, fixture }) => columnsVerified(files, fixture)
 );
 
 PHASE5_EXPECTATIONS.set(
