@@ -115,7 +115,8 @@ other spellings, and out of text cut short or split between two writes.
   prompt (`instruction`); renaming it does not enable a summary.
 - **The genpage eval's offline Custom API check follows the new contract.** It accepts a lookup passed as `{ entityName, id }` with
   no declared kind when its id is a string the page already holds, and refuses an invented or numeric id, a missing required lookup
-  and a parameter discovery did not return; a binding an edited page already held is accepted unchanged only for that same page.
+  and a parameter discovery did not return; a binding an edited page already held is accepted unchanged only for that same page, and
+  the page's earlier copy is judged by the download that saved it, not by another download of that page.
 
 ### Fixed
 
@@ -135,7 +136,11 @@ other spellings, and out of text cut short or split between two writes.
   joins the solution and the record is cleared, and pages already created are adopted, not created twice. A row of that name the
   record does not hold is reused as before, and a recorded id now under another name, or a recorded name now under another id,
   stops recovery without touching the other row. When the record cannot be saved, the build does not retry on its own. The
-  workspace-reset advice keeps these records. Not covered: a process killed while the SDK publishes, and another workspace.
+  workspace-reset advice keeps these records. Builds that share a workspace keep each other's entries: each change is made under a
+  short lock to the record as it is then, and a clear removes only the write its build verified, so a later unconfirmed write of the
+  same row stays for the next run. A note is not made when another build has meanwhile recorded another row under that name, or holds
+  the lock for more than about a second; that is said once, as when the record cannot be saved. Not covered: a process killed while
+  the SDK publishes, and another workspace.
 - **A dashboard a build created and then stopped before adding to the app's solution joins the solution on the next build.** A build
   killed between the create and the add, one whose create's answer was lost, or one whose add and undo both failed left a row outside
   the solution. The next build reused that row without adding it to the solution — or created a second dashboard if its name lookup
@@ -143,8 +148,13 @@ other spellings, and out of text cut short or split between two writes.
   before the create; the next build reads that id in the saved layer and adds the same dashboard to the solution. Anything it cannot
   prove — another kind of row, a rename, both the sent and the reported id answering, an add refused — stops the step with nothing
   added, deleted or created, and it never asks to delete a dashboard that may be another app's. The record never adopts a namesake,
-  teardown never reads it, and the workspace-reset advice keeps it; a first build and an unchanged rebuild send what they sent
-  before. Not covered: a dashboard created before this release or from another workspace.
+  teardown never reads it, and the workspace-reset advice keeps it. Builds that share a workspace keep each other's entries: each
+  change is made under a short lock to the record as it is then and compares both ids, and when recovery reads every recorded id as
+  absent but another build has changed the entry since this build read it, it stops before creating a dashboard and asks for a run
+  again. A note refused because another build changed the entry or held the lock for more than about a second is said once, and that
+  build goes on without the record. A first build and an unchanged rebuild send what they sent before. Not covered: a dashboard
+  created before this release or from another workspace, and an entry another build cleared after this build read it (the lock covers
+  the record, not two builds' dashboard steps).
 - **An unknown key in a form's `fieldOptions` entry is refused instead of ignored.** A misspelling such as `readOnlyy` or `colSpan`
   passed validation and was dropped by the build, so the option was never applied. Lint, a dry run and a build now refuse it before
   any write, naming the form, table, field and key, the option it most likely meant, and the keys an entry takes (`readOnly`,
