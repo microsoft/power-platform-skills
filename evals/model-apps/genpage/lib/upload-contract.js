@@ -1,8 +1,9 @@
 'use strict';
 
 const { isDeepStrictEqual } = require('node:util');
+const path = require('node:path');
 const { currentContract, workflowCalls, isUpload, isObject, resultObject, unassociatedCallProblems } = require('./workflow-evidence.js');
-const { artifactText, artifactJson, commandInfo, isGuid, scriptRuns } = require('./evidence-utils.js');
+const { artifactText, artifactJson, commandInfo, isGuid, scriptRuns, pathKey } = require('./evidence-utils.js');
 
 const sameJson = (left, right) => isDeepStrictEqual(JSON.parse(JSON.stringify(left)), JSON.parse(JSON.stringify(right)));
 const switchOn = (value) => value === true || value === 'true';
@@ -107,6 +108,20 @@ function sameRecordedEnvironment(left, right) {
   catch { return false; }
 }
 
+// A repeated page ID does not identify a snapshot's source. The recorded destination associates
+// `--output-directory before` with `before/page.json` or `before/<pageId>/page.json`, not a sibling
+// `before-other/`. These are archive paths: normalize separators/dot segments, never inspect the
+// filesystem or infer a working directory. null means the source cannot be associated safely.
+function downloadContainsSnapshot(source, downloaded, snapshot) {
+  const directory = Object.hasOwn(source, 'output-directory') ? source['output-directory'] : downloaded.outputDirectory;
+  if (typeof directory !== 'string' || !directory.trim() || typeof snapshot !== 'string' || !snapshot.trim()) return null;
+  const folder = path.posix.normalize(pathKey(directory));
+  const file = path.posix.normalize(pathKey(snapshot));
+  if (folder === '.') return file !== '.' && file !== '..' && !file.startsWith('../')
+    && !path.posix.isAbsolute(file) && !/^[A-Za-z]:/.test(file);
+  return file.startsWith(`${folder.replace(/\/+$/, '')}/`);
+}
+
 // This is the identity slice of the upload contract, not the optional full upload assertion.
 // A binding-preservation consumer must call it itself before treating a before blob as authority.
 function beforePageIdentityProblems(fixture, row, call, beforeConfig, afterConfig) {
@@ -130,10 +145,11 @@ function beforePageIdentityProblems(fixture, row, call, beforeConfig, afterConfi
   const calls = workflowCalls(fixture);
   const earlier = calls.slice(0, calls.findIndex((entry) => entry.id === call.id));
   let recordedDownloads = 0;
-  let matchingDownloads = 0;
+  const producers = [];
   for (const download of earlier) {
     const runs = scriptRuns(download, 'genpage.js');
-    if (!runs.some((run) => run.verb === 'download') || resultObject(download)?.ok !== true) continue;
+    const downloaded = resultObject(download);
+    if (!runs.some((run) => run.verb === 'download') || downloaded?.ok !== true) continue;
     recordedDownloads += 1;
     if (runs.length !== 1) {
       problems.push(`${event}: ambiguous download context cannot establish before-page provenance`);
@@ -142,8 +158,18 @@ function beforePageIdentityProblems(fixture, row, call, beforeConfig, afterConfi
     const { flags: source } = commandInfo(download);
     const ids = typeof source['page-id'] === 'string' ? source['page-id'].split(',').map((id) => id.trim()) : [];
     if (!ids.includes(beforePage.pageId)) continue;
-    matchingDownloads += 1;
-    const downloaded = resultObject(download);
+    const associated = downloadContainsSnapshot(source, downloaded, row.beforePage);
+    if (associated === false) continue;
+    producers.push({ source, ids, downloaded, associated });
+  }
+  // A known different directory is unrelated history. An unknown destination is still a possible
+  // producer, not permission to borrow a better-looking download or guess the first/latest match.
+  if (recordedDownloads && (producers.length !== 1 || producers[0].associated !== true)) {
+    problems.push(`${event}: before-page identity has no unique associated recorded download source`);
+    return problems;
+  }
+  if (producers.length === 1) {
+    const { source, ids, downloaded } = producers[0];
     const hasPages = Object.hasOwn(downloaded, 'pages');
     // Array.from also visits unreadable holes in direct object evidence; map would skip them.
     const returnedIds = Array.isArray(downloaded.pages)
@@ -163,9 +189,6 @@ function beforePageIdentityProblems(fixture, row, call, beforeConfig, afterConfi
     if (source['app-id'] !== undefined && source['app-id'] !== flags['app-id']) {
       problems.push(`${event}: before-page app context differs from the upload target`);
     }
-  }
-  if (recordedDownloads && !matchingDownloads) {
-    problems.push(`${event}: before-page identity has no matching recorded download provenance`);
   }
   return problems;
 }

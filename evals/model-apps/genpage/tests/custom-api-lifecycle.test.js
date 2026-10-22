@@ -947,3 +947,112 @@ test('download result pages: valid current and historical identities retain pres
     }
   }
 });
+
+function addSeparateDirectoryDownload(fixture, after = false) {
+  const producer = event(fixture, 'download');
+  const unrelated = structuredClone(producer);
+  unrelated.id = 'unrelated-download';
+  unrelated.command = unrelated.command
+    .replace('https://contoso.crm.dynamics.com', 'https://fabrikam.crm.dynamics.com')
+    .replace('--output-directory before', '--output-directory unrelated');
+  fixture.events.splice(fixture.events.indexOf(producer) + (after ? 1 : 0), 0, unrelated);
+  return unrelated;
+}
+
+test('before-page download source: unrelated earlier directory does not taint the actual snapshot', async (t) => {
+  for (const layer of [1, 2]) {
+    await t.test(`before-page download source: unrelated earlier directory, layer ${layer}`, () => {
+      const fixture = privateBeforePublicAddFixture();
+      addSeparateDirectoryDownload(fixture);
+      const result = score(fixture, layer);
+      assert.equal(result.status, 'pass', result.reason);
+    });
+  }
+});
+
+test('before-page download source: actual producer environment and app mismatches still refuse', async (t) => {
+  for (const field of ['environment', 'app']) {
+    for (const layer of [1, 2]) {
+      await t.test(`before-page download source: actual ${field} mismatch, layer ${layer}`, () => {
+        const fixture = privateBeforePublicAddFixture();
+        addSeparateDirectoryDownload(fixture);
+        const producer = event(fixture, 'download');
+        producer.command = field === 'environment'
+          ? producer.command.replace('https://contoso.crm.dynamics.com', 'https://example.crm.dynamics.com')
+          : producer.command.replace('11111111-1111-4111-8111-111111111111', '22222222-2222-4222-8222-222222222222');
+        const result = score(fixture, layer);
+        assert.equal(result.status, 'fail', result.reason);
+        assert.match(result.reason, /before|source|context|environment|app/i);
+      });
+    }
+  }
+});
+
+test('before-page download source: ambiguous or unassociated producers refuse instead of guessing', async (t) => {
+  for (const [label, mutate] of [
+    ['two matching destinations', (fixture) => {
+      const duplicate = structuredClone(event(fixture, 'download'));
+      duplicate.id = 'duplicate-download';
+      fixture.events.splice(fixture.events.indexOf(event(fixture, 'download')), 0, duplicate);
+    }],
+    ['one matching and one unlocated destination', (fixture) => {
+      const duplicate = structuredClone(event(fixture, 'download'));
+      duplicate.id = 'unlocated-download';
+      duplicate.command = duplicate.command.replace(' --output-directory before', '');
+      fixture.events.splice(fixture.events.indexOf(event(fixture, 'download')), 0, duplicate);
+    }],
+    ['no recorded destination', (fixture) => {
+      const producer = event(fixture, 'download');
+      producer.command = producer.command.replace(' --output-directory before', '');
+    }],
+    ['present malformed destination cannot use result fallback', (fixture) => {
+      const producer = event(fixture, 'download');
+      producer.command = producer.command.replace('--output-directory before', '--output-directory');
+      producer.result.outputDirectory = 'before';
+    }],
+    ['a sibling prefix is not the producing directory', (fixture) => {
+      fixture.artifacts['before-other/page.json'] = fixture.artifacts['before/page.json'];
+      fixture.manifest.uploads[0].beforePage = 'before-other/page.json';
+    }],
+  ]) {
+    for (const layer of [1, 2]) {
+      await t.test(`before-page download source: ${label}, layer ${layer}`, () => {
+        const fixture = privateBeforePublicAddFixture();
+        mutate(fixture);
+        const result = score(fixture, layer);
+        assert.equal(result.status, 'fail', `${label}: ${result.reason}`);
+        assert.match(result.reason, /before|source|download|provenance|ambiguous/i);
+      });
+    }
+  }
+});
+
+test('before-page download source: recorded destination forms preserve the correct producer', async (t) => {
+  for (const [label, mutate] of [
+    ['later unrelated directory', (fixture) => { addSeparateDirectoryDownload(fixture, true); }],
+    ['Windows separators', (fixture) => {
+      event(fixture, 'download').command = event(fixture, 'download').command.replace('--output-directory before', '--output-directory before\\');
+      fixture.manifest.uploads[0].beforePage = 'before\\page.json';
+    }],
+    ['explicit result directory in abbreviated command evidence', (fixture) => {
+      const producer = event(fixture, 'download');
+      producer.command = producer.command.replace(' --output-directory before', '');
+      producer.result.outputDirectory = 'before';
+    }],
+    ['current per-page directory layout', (fixture) => {
+      const pageId = JSON.parse(fixture.artifacts['before/page.json']).pageId;
+      const file = `before/${pageId}/page.json`;
+      fixture.artifacts[file] = fixture.artifacts['before/page.json'];
+      fixture.manifest.uploads[0].beforePage = file;
+    }],
+  ]) {
+    for (const layer of [1, 2]) {
+      await t.test(`before-page download source: ${label}, layer ${layer}`, () => {
+        const fixture = privateBeforePublicAddFixture();
+        mutate(fixture);
+        const result = score(fixture, layer);
+        assert.equal(result.status, 'pass', `${label}: ${result.reason}`);
+      });
+    }
+  }
+});
