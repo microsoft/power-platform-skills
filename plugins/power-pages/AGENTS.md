@@ -8,6 +8,7 @@ Read `PLUGIN_DEVELOPMENT_GUIDE.md` for UX and reliability standards when creatin
 
 ## Key Conventions
 
+- **Governance is temporarily disabled pending Product approval.** Keep `skills/manage-governance/SKILL.disabled.md` archived; do not create its discoverable `SKILL.md` or invoke the preserved workflow until explicitly approved. Scripts and consent tests are retained. Follow the re-enablement checklist in `skills/manage-governance/HOW_IT_WORKS.md`; the governance component description below documents implementation, not availability.
 - **DRY** — Never duplicate logic. Shared scripts live in `scripts/` (e.g., `generate-uuid.js`, `scripts/lib/validation-helpers.js`, `scripts/lib/discover-site-components.js`). Shared reference docs live in `references/`. Always check for existing helpers before writing new code.
 - **Validation scripts** must import from `scripts/lib/validation-helpers.js` for boilerplate, path finders, auth helpers, and constants.
 - **UUID generation** must use the shared `scripts/generate-uuid.js` — never copy it into skill-specific directories.
@@ -204,6 +205,10 @@ User-invocable via `/power-pages:<skill-name>`:
 For small mid-cycle changes (one file, one snippet, one site setting) that previously used a separate hotfix solution: instead, run `setup-solution` in sync mode to adopt the modified components into the existing base solution, bump the solution version, and use `deploy-pipeline` to ship. This keeps a single solution lineage (cleaner audit trail, simpler dependency management) and avoids solution sprawl. Power Platform Pipelines computes incremental imports internally, so re-deploying the base after a small fix is fast.
 
 Skills are defined in `SKILL.md` files with YAML frontmatter (name, description, allowed-tools, model). Skill-specific `hooks:` blocks are not used — hook registration is centralized.
+
+### Temporarily disabled skills
+
+- `manage-governance` — **Disabled pending Product approval; not user-invocable or automatically discoverable.** Its preserved tenant-admin workflow applies and inspects 21 governance policies through Apply / Fetch Env / Fetch Site, with environment/site resolution, per-change consent, rollout polling, and verification. The implementation remains in `skills/manage-governance/`, but the entry is `SKILL.disabled.md`, not `SKILL.md`. Do not invoke or re-enable it without explicit approval. See [the preserved workflow and re-enablement checklist](skills/manage-governance/HOW_IT_WORKS.md#temporary-disablement).
 
 ### Hooks
 

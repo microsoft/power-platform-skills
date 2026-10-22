@@ -770,6 +770,29 @@ Most prompts gather validated configuration before the Phase 3 plan gate.
 
 ---
 
+### 6.35 `manage-governance` (temporarily disabled)
+
+This skill is not discoverable: its workflow is preserved as
+`skills/manage-governance/SKILL.disabled.md`, not `SKILL.md`. The rows below
+use Kind `disabled` to archive the consent contracts without declaring active
+gates. When Product approves enabling the skill, restore the entry filename
+and change both rows back to Kind `gate` in the same change.
+
+Phase 2.2 documents the NLP-path consent contract; Phase 4.2.3 implements that
+same contract. These are not two consecutive prompts. Fire the applicable
+consent once per policy/environment/scope change, after the Impact Summary and
+before the POST. Each follow-up change and each prerequisite parent-policy
+change needs fresh consent; a previous iteration's approval never carries over.
+`nothing` means this iteration adds no governance change; earlier approved
+changes are not rolled back.
+
+| ID | Kind | Category | Phase | Trigger / question | Cancel leaves |
+|---|---|---|---|---|---|
+| `manage-governance:2.2.consent` | disabled | consent | 2.2 | NLP-path consent after the resolved impact summary: *"Proceed with this change?"* — **Apply now / Cancel**. Fires PER CHANGE; implemented by 4.2.3, not a second approval. | nothing |
+| `manage-governance:4.2.3.consent` | disabled | consent | 4.2.3 | After rendering the live Current State / New State summary: *"Proceed with this change?"* — **Apply now / Cancel**. Fires PER LOOP ITERATION, including prerequisite parent-policy changes. Only a selected **Apply now** authorizes the POST. | nothing |
+
+---
+
 ### Cross-plugin shared skills — out of catalog scope
 
 `report-issue` — Its prompts are cross-plugin, not power-pages-specific, so they are not catalogued here. If the shared workflow is ever governed by per-plugin approval-gate linting, add a `report-issue:*` section to this catalog.

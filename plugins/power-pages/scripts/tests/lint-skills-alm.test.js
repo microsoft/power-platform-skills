@@ -530,6 +530,49 @@ test('findPromptLines: matches backticked AskUserQuestion followed by colon', ()
   assert.deepEqual(lines, [2, 3]);
 });
 
+test('preserved manage-governance consent call sites require markers when re-enabled', (t) => {
+  const skill = fs.readFileSync(
+    path.join(__dirname, '../../skills/manage-governance/SKILL.disabled.md'),
+    'utf8',
+  );
+  const gates = [
+    {
+      id: 'manage-governance:2.2.consent',
+      start: '## 2.2 Validate',
+      end: '## 2.3 Supported policies',
+    },
+    {
+      id: 'manage-governance:4.2.3.consent',
+      start: '#### 4.2.3 Confirm before posting',
+      end: '#### 4.2.4 Apply and watch',
+    },
+  ];
+  for (const gate of gates) {
+    const start = skill.indexOf(gate.start);
+    const end = skill.indexOf(gate.end, start);
+    assert.ok(start >= 0 && end > start, `consent section ${gate.id} must exist`);
+    const section = skill.slice(start, end);
+    const markers = extractGateMarkers(section);
+    assert.equal(markers.length, 1);
+    assert.equal(markers[0].gateId, gate.id);
+    assert.equal(markers[0].category, 'consent');
+    assert.equal(markers[0].cancelLeaves, 'nothing');
+    assert.ok(findPromptLines(section).length > 0, `${gate.id} must have a detectable prompt`);
+
+    // Isolate each real call site so another phase's data-gathering marker
+    // cannot accidentally satisfy the missing-marker check.
+    const root = mkPluginRoot(t);
+    writeCatalog(root, [gate.id]);
+    writeSkill(root, 'manage-governance', section);
+    assert.deepEqual(collectFindings({ pluginRoot: root }), []);
+    writeSkill(root, 'manage-governance', section.replace(/<!--\s*gate:[^\n]+-->/g, ''));
+    assert.ok(
+      collectFindings({ pluginRoot: root }).some((finding) => finding.rule === 'GATE-must-have-marker'),
+      `removing ${gate.id} must fail lint`,
+    );
+  }
+});
+
 test('splitIntoSections: treats ## and ### as section boundaries; not ####', () => {
   const content = [
     'preamble',

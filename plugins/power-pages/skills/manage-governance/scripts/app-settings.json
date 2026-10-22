@@ -1,0 +1,27 @@
+{
+  "_comment": "Single-switch routing config for the manage-governance skill. Set activeRing to TIP or Prod and BOTH env-list (BAP) AND governance-gateway calls follow it. This file is the source of truth for ring selection; a missing/invalid file fails open to the built-in defaults in governance-context.js so calls never break.",
+
+  "activeRing": "TIP",
+  "_activeRing_comment": "THE endpoint switch: 'TIP' (Preprod / TEST) or 'Prod'. Drives env-list BAP routing AND the governance gateway.",
+
+  "targetEnv": "",
+  "_targetEnv_comment": "Default Power Platform environment GUID used when a script is called without --envId. Empty = fall back to the signed-in PAC env. Overridden by PP_GOV_ENV_ID or an explicit --envId.",
+
+  "rings": {
+    "TIP": {
+      "gatewayHost": "https://api.preprod.powerplatform.com",
+      "tokenStrategy": "device-code",
+      "bapStrategy": "rest",
+      "bapHost": "https://tip1.api.bap.microsoft.com",
+      "bapResource": "https://service.powerapps.com/"
+    },
+    "Prod": {
+      "gatewayHost": "https://api.powerplatform.com",
+      "tokenStrategy": "az",
+      "bapStrategy": "pac",
+      "bapHost": "https://api.bap.microsoft.com",
+      "bapResource": "https://service.powerapps.com/"
+    }
+  },
+  "_rings_comment": "Per-ring endpoints. GOVERNANCE GATEWAY: gatewayHost (overridden by PP_GOV_API_HOST / PP_GOV_TIP_HOST); tokenStrategy = how the gateway bearer is minted ('device-code' via tip-auth.js — the only path with PowerPages delegated scopes — or 'az'). ENV LIST (BAP): bapStrategy selects the fetch path — 'pac' runs `pac admin list --json` (follows PAC's signed-in cloud; used for Prod), 'rest' does a direct GET to bapHost/providers/Microsoft.BusinessAppPlatform/scopes/admin/environments with an az token for bapResource (used for TIP, which PAC cannot reach without a separate Preprod sign-in). bapResource = az token audience (service.powerapps.com for both rings). TIP hosts MUST stay api.preprod.powerplatform.com / tip1.api.bap.microsoft.com — the api.tip... form does not resolve in DNS."
+}
