@@ -6,7 +6,9 @@
 // build does with the error is in lib/sdk-build.js (writeOwnedWebResource, persistPageManifest). What it needs from a run that FOLLOWS — the
 // build's own re-run of a transient halt, and a new invocation — is to know that the row of that name is one this plugin wrote and could not
 // confirm, so that it writes the content again by id (`updateWebResource(id, { content })`, which publishes and verifies again) instead of
-// reusing it untouched as it reuses any web resource that exists. The server holds nothing that says so: a same-named row can be another
+// reusing it untouched as it reuses any web resource that exists. (The page manifest is compared with its published copy on every run, and kept
+// where that copy already holds what the run would write; for it the record supplies the id of a manifest no plain read finds, and keeps its
+// name from being created again.) The server holds nothing that says so: a same-named row can be another
 // maker's; its name alone grants no right to overwrite it. So the build keeps the id of its own write rather than inferring ownership from content or a name.
 //
 // Under the customization lock, a later accepted publish was observed publishing the OLD content after earlier lock-refused publishes,

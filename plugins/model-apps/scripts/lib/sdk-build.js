@@ -1165,7 +1165,8 @@ function defaultAppIconSvg(appName) {
 // The row is therefore never created again (a second create of the name is refused), and its content may be what was written, the old content, or
 // none. What the build does about it is the same at every site that writes one (the spec's web resources, the generated app icon, the page manifest):
 // it records the row — in the run's result, and in the workspace (lib/web-resource-records.js), so that the run that follows writes its content again
-// by id instead of reusing it untouched — adds it to the solution as the success path does, and stops with what a run again does.
+// by id instead of reusing it untouched (the page manifest: unless its published copy already holds what that run would write, which it keeps) — adds it
+// to the solution as the success path does, and stops with what a run again does.
 const isUnconfirmedWrite = (e) => Boolean(e) && e.code === 'WEB_RESOURCE_UNVERIFIED' && typeof e.id === 'string' && e.id.length > 0;
 // The SDK's answer to a write by an id whose row is gone: HTTP 404 (`ensureSuccess` throws it as a ConnectionError).
 const isGoneRow = (e) => Boolean(e) && e.code === 'CONNECTION_ERROR' && e.statusCode === 404;
@@ -1175,10 +1176,17 @@ const contentOf = (options) => (options.contentBase64 !== undefined ? { contentB
 // that recovers it), then the plugin's — what this build did with the row and what a run again does, which makes that call. Its code is the SDK's, so the
 // runner's halt carries it, and the SDK's error is its cause: the build's retry reads that as the wrapper it is (lib/retry-policy.js, CAUSE_WRAPPER_CODES),
 // judged by the failure the SDK's error carries, and run again when it carries none.
-function unconfirmedWebResource(error, { name, recorded, inSolution }) {
+// What a run again does is not the same at every site. The spec's web resources and the generated icon are written again by id whatever was published
+// (writeOwnedWebResource). The page manifest is first compared with its PUBLISHED copy, and written again only where that copy is not the content the run
+// would write (persistPageManifest, `comparesPublished`): live, a manifest created and never published — each of its publishes refused — was read back
+// with that content by the run that followed (the build's own retry), and kept, its record cleared. So its stop says so, and does not promise a write.
+function unconfirmedWebResource(error, { name, recorded, inSolution, comparesPublished = false }) {
   const solution = inSolution === true ? 'added it to the solution' : `could not add it to the solution (${(inSolution && inSolution.message) || inSolution}; a run again adds it)`;
+  const nextRun = comparesPublished
+    ? 'it reads the published copy and keeps it if it already holds the content that build would write; otherwise it writes the content again by that id, publishes it and reads it back (the call the message names is made for you)'
+    : 'it writes the content again by that id, publishes it and reads it back (the call the message names is made for you)';
   const remedy = recorded
-    ? `this build recorded the row as its own and ${solution}. Its publication is UNCONFIRMED, not lost: run the build again — it writes the content again by that id, publishes it and reads it back (the call the message names is made for you).`
+    ? `this build recorded the row as its own and ${solution}. Its publication is UNCONFIRMED, not lost: run the build again — ${nextRun}.`
     : `this build ${solution}, but could not save its local recovery record. Its publication is UNCONFIRMED, not lost: this build will not automatically retry it without that record. Write its content again by the id above in Power Apps once the cause is resolved; keep the same writable build workspace for automatic recovery.`;
   // SDK updates report only the id; the build also knows the authored name, which is what a maker needs to find the resource.
   const detail = error.webResourceName ? error.message : `Web resource '${name}' (${error.id}): ${error.message}`;
@@ -1190,12 +1198,13 @@ function unconfirmedWebResource(error, { name, recorded, inSolution }) {
 }
 
 // Records a row the SDK wrote and could not confirm, puts it in the solution, and answers the error to stop the step with (unconfirmedWebResource).
-// The record is written FIRST: it is local, and it is what the next run needs whatever happens to the add.
-async function keepUnconfirmedWebResource(error, { name, unconfirmed, addToSolution }) {
+// The record is written FIRST: it is local, and it is what the next run needs whatever happens to the add. `comparesPublished` is the page manifest's:
+// the next run compares it with its published copy before it writes it again (see unconfirmedWebResource).
+async function keepUnconfirmedWebResource(error, { name, unconfirmed, addToSolution, comparesPublished = false }) {
   const recorded = unconfirmed.note(name, error.id);
   let inSolution = true;
   try { await addToSolution(error.id); } catch (e) { inSolution = e; }
-  return unconfirmedWebResource(error, { name, recorded, inSolution });
+  return unconfirmedWebResource(error, { name, recorded, inSolution, comparesPublished });
 }
 
 // A receipt authorizes only its original id, never a different row that came to hold the same name after it. This check costs nothing
@@ -1352,7 +1361,7 @@ async function persistPageManifest(provision, spec, keyToId, sol, appUnique, exi
       }
       return (await provision.createWebResource({ name, displayName: `${spec.app.name} Page Manifest`, type: 'js', content })).id;
     } catch (e) {
-      if (isUnconfirmedWrite(e)) throw await keepUnconfirmedWebResource(e, { name, unconfirmed, addToSolution });
+      if (isUnconfirmedWrite(e)) throw await keepUnconfirmedWebResource(e, { name, unconfirmed, addToSolution, comparesPublished: true });
       throw e;
     }
   };

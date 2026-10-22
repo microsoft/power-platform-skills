@@ -7,7 +7,7 @@
 // second create of the name is refused. Before the build handled it, the step threw before it recorded the row or added it to the solution, and every
 // run after that found the name and reused the row untouched: outside the solution, its content never confirmed. Now the build records the row (in the
 // run's result, and in the workspace: lib/web-resource-records.js), adds it to the solution, and stops with what a run again does — which is to write the
-// content again by id, never to create the name again. Held here:
+// content again by id (the page manifest: unless its published copy already holds that content, which is kept), never to create the name again. Held here:
 //   1. the record itself;
 //   2. the build's retry policy for the error: it is judged by the failure it carries, and when it carries none — the read-back differed — it is run again;
 //   3. each site, over the real bundle and the stateful fake of helpers/fake-app-build-org.js (a web resource held in a saved and a published layer, a plain
@@ -202,6 +202,7 @@ test('a spec web resource whose publish the lock refuses: the build stops naming
   assert.equal(first.halt.phase, 'web-resources');
   assert.match(first.halt.message, new RegExp(`Web resource '${SCRIPT.replace(/[/.]/g, '\\$&')}' \\(${id}\\)`), 'it names the web resource and its id');
   assert.match(first.halt.message, /this build recorded the row as its own and added it to the solution\. Its publication is UNCONFIRMED, not lost: run the build again — it writes the content again by that id, publishes it and reads it back/);
+  assert.match(first.halt.message, /run the build again — it writes the content again by that id, publishes it and reads it back \(the call the message names is made for you\)\.$/, 'written again whatever was published: the stop promises the write');
   assert.equal(added(first.calls, id).length, 1, 'the row is added to the solution as the success path adds it');
   assert.equal(openUnconfirmedWebResources({ workspaceDir: s.dir, environment: s.org.origin }).idOf(SCRIPT), id, 'and recorded for the next run');
   assert.equal(retryPolicyFor(first.halt), RETRY.SERVICE, 'a lock is the service\'s to clear');
@@ -545,6 +546,7 @@ test('the generated app icon whose publish the lock refuses: the app step stops 
   assert.equal(first.halt.phase, 'app-shell');
   const id = s.row(ICON).webresourceid;
   assert.match(first.halt.message, new RegExp(`'${ICON}' \\(${id}\\)`));
+  assert.match(first.halt.message, /Its publication is UNCONFIRMED, not lost: run the build again — it writes the content again by that id, publishes it and reads it back \(the call the message names is made for you\)\.$/, 'the icon is written again whatever was published: the stop promises the write');
   assert.equal(added(first.calls, id).length, 1, 'in the solution');
   assert.equal(s.org.appId(), undefined, 'the app is not written over an icon that is not confirmed');
   const next = await s.build(APP_SPEC(), { phases: ['app-shell'] });
@@ -649,6 +651,36 @@ test('a page manifest whose first write the lock refuses: the pages step stops n
   assert.ok(next.calls.some((c) => c.method === 'PATCH' && c.path === `/webresourceset(${id})`), 'it writes it by the id the record holds — no plain read finds a manifest never published');
   assert.deepEqual(listsPages(p.manifest()), p.created, 'the published manifest names the page');
   assert.equal(fs.existsSync(unconfirmedRecordPath(p.dir, p.org.origin)), false);
+});
+
+// What the stop for the manifest says the next build does is what that build does. The manifest is first compared with its PUBLISHED copy
+// (persistPageManifest): where that copy already holds the content the build would write it is kept, and otherwise written again by id. Live,
+// a manifest created and never published — each of its publishes refused — was read back with that content by the run that followed, and
+// kept — so the stop must not promise a write, as it does for the spec's web resources and the generated icon, which are written again
+// whatever was published. The fake's plain read answers only a row's published copy; the first case sets it to what the platform answered there.
+test('the stop for a page manifest whose publication was not confirmed says the next build keeps a published copy that already holds the content, or writes it again by id — and that build does one or the other', async (t) => {
+  const MANIFEST_ADVICE = /Its publication is UNCONFIRMED, not lost: run the build again — it reads the published copy and keeps it if it already holds the content that build would write; otherwise it writes the content again by that id, publishes it and reads it back \(the call the message names is made for you\)\.$/;
+  for (const kept of [true, false]) {
+    const p = pageScenario(t);
+    refuseWebResourcePublishes(p.org);
+    const first = await p.build(p.pageSpec());
+    assert.equal(first.halt && first.halt.code, 'WEB_RESOURCE_UNVERIFIED', String(first.halt && first.halt.message));
+    assert.match(first.halt.message, MANIFEST_ADVICE, 'the manifest\'s stop says what the next build does in either case');
+    assert.doesNotMatch(first.halt.message, /run the build again — it writes the content again by that id/, 'and does not promise a write');
+    assert.equal(retryPolicyFor(first.halt), RETRY.SERVICE, 'a lock is still the service\'s to clear');
+    assert.equal(isTransientHalt(first.halt), true, 'so the build still runs again');
+    const row = p.row(MANIFEST);
+    assert.equal(added(first.calls, row.webresourceid).length, 1, 'the row is in the solution already');
+    if (kept) row.publishedContent = row.content;
+    const next = await p.build(p.pageSpec());
+    assert.ok(next.outcome && next.outcome.ok, String(next.halt && next.halt.message));
+    const manifestWrites = next.calls.filter((c) => c.method !== 'GET' && /^\/webresourceset/.test(c.path));
+    if (kept) assert.deepEqual(manifestWrites, [], 'the published copy holds the content: kept, not written');
+    else assert.deepEqual(manifestWrites.map((c) => `${c.method} ${c.path}`), [`PATCH /webresourceset(${row.webresourceid})`], 'the published copy does not: written again by id');
+    assert.equal(manifestCreates(p.org.calls), 1, 'never created a second time');
+    assert.equal(fs.existsSync(unconfirmedRecordPath(p.dir, p.org.origin)), false, 'either way the record is cleared');
+    assert.deepEqual(listsPages(p.manifest()), p.created);
+  }
 });
 
 test('the same, inside one invocation: the build\'s own re-run of the halt binds the page it created, writes the manifest by id and finishes', async (t) => {

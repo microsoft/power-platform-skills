@@ -480,7 +480,8 @@ phase re-uses what's already created and only fills the gaps. SDK metadata is pe
 `--from <phase>` shortcut; a full rerun is the correct and safe recovery path — after a `WEB_RESOURCE_UNVERIFIED`
 halt too: a web resource was written but its publication could not be confirmed (often because another customization
 held the environment's lock), the build recorded it, and a rerun using the **same writable workspace** writes it
-again by its id; do not delete or rename it. If the halt says its recovery record could not be saved, or reports
+again by its id (the page manifest only when its published copy does not already hold that content; otherwise the
+rerun keeps it); do not delete or rename it. If the halt says its recovery record could not be saved, or reports
 a conflicting name/id, follow that explicit resolution instead — automatic retry is unsafe without the identity.
 One exception: an
 `already-exists` halt recurs on a rerun until that workspace directory is deleted — follow its message.

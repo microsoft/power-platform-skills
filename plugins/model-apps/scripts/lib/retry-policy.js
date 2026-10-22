@@ -89,7 +89,8 @@ const EMBEDDED_ANSWER = /^(?:HTTP (\d{3}) from|Transport failure reaching) (\S+)
 // The errors that are typed and WRAP a failure they carry as their `cause` — attached NOT enumerably (the SDK's attachCause, a native Error's `cause`), which
 // causeChain reads all the same — so what decides is that failure, never the wrapper's code or its words (which name what the maker named). One today:
 // WEB_RESOURCE_UNVERIFIED, the SDK's error for a web resource it wrote whose PUBLISHED content it could not confirm, and the build's own error around it
-// (lib/sdk-build.js, unconfirmedWebResource). The row exists; a run again writes its content again by id. So:
+// (lib/sdk-build.js, unconfirmedWebResource). The row exists; a run again writes its content again by id (the page manifest: unless its published copy
+// already holds that content, which it keeps). So:
 //   - it carries a failure — its publish's, or that of the read-back of what was published: that failure is judged by the rule above, a lock refusal (429
 //     `0x80071151`), a 503 or a reset is run again, a 400, 401, 403, 404, a 412 (the SDK's typed VERSION_CONFLICT) or another typed refusal is not;
 //   - it carries none: the read-back answered content that is not what was written, or no content — the write did not apply, or whether it did is

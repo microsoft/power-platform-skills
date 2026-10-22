@@ -5161,9 +5161,13 @@ real bundle, because a stub stays green through a change in the SDK's own rule.
   A web resource of that name the record does not
   hold — another maker's, or one whose write was confirmed — is reused untouched, as before. The page manifest's own
   dedup compares with its PUBLISHED copy (what `readPageManifest` reads), so an update whose publication was not
-  confirmed is written again whenever that copy is still old; the record supplies the id of a manifest created and never
-  published, which no plain read finds (assumed, not measured). The pages a halted run created are bound by their
-  creation receipts, so none is created twice. The build's retry reads the error as a wrapper of its cause
+  confirmed is written again whenever that copy is still old; the record supplies the id of a manifest that no plain read
+  finds — assumed of one created and never published, though live, a manifest created and never published (each of its
+  publishes refused) was read back with that content by the run that followed, the build's own retry. Where that copy
+  already holds what the run would write, the manifest is kept as it is and its record cleared (as it was there), so the
+  manifest's stop says that the next run reads the published copy and keeps it, or else writes the content again by id;
+  the stop for a spec web resource or the icon, which are written again whatever was published, promises the write. The
+  pages a halted run created are bound by their creation receipts, so none is created twice. The build's retry reads the error as a wrapper of its cause
   (`CAUSE_WRAPPER_CODES`, `lib/retry-policy.js`): a lock refusal, a 503 or a reset is run again, a 400, 401, 403, 404,
   412 or a typed refusal is not, and no cause (the read-back differed or carried no content) is run again. An unchanged
   rebuild reads one local file and sends nothing more. Recovery of a recorded spec resource or icon checks its published
