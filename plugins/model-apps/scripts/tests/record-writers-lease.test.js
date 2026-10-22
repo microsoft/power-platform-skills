@@ -16,6 +16,8 @@
 //      that has gone makes nothing
 //   3. the lease: one that another live run holds is waited for a bounded time, and then the change is not made — said once, the file left as it
 //      was, never a hang; one left by a run that is gone is taken over; reads never wait for it
+//   4. an entry is compared whole: a web-resource entry by its id AND the revision of the note that made it, a dashboard entry by both its ids — so a
+//      newer entry of the same row, or a reported id recorded since, is never taken on the word of an older one
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -263,4 +265,110 @@ test('a held lease never hangs a build: with the real pause, a change gives up a
   assert.ok(ms < bound + 5000, `and then gave up (${Math.round(ms)} ms)`);
   assert.deepEqual(r.onDisk(dir), { [a]: ID_A });
   assert.deepEqual({ attempts: recordLease().LEASE_ATTEMPTS, waitMs: recordLease().LEASE_WAIT_MS }, { attempts: LEASE_ATTEMPTS, waitMs: LEASE_WAIT_MS }, 'the module waits as long as it says');
+});
+
+// --- 4. an entry is compared whole ---------------------------------------------------------------------------------------------------------------------
+//
+// An id alone does not say which build's entry it is. A web resource's id is the row's own, so a build that writes the same row again and cannot confirm
+// that write records the SAME id; a dashboard's entry gains the id the service reported after it was noted. A change that matched the id alone took
+// another build's newer entry — a write nothing has confirmed, or the row a re-keyed create made — on the word of an older one.
+
+test('the web-resource record: a clear by a build that verified an EARLIER write of the row leaves the entry another build noted since for the same row — a later write nothing has confirmed', () => {
+  const r = RECORDS[0];
+  const [a] = r.names;
+  const dir = makeTempDir('record-lease-');
+  assert.equal(r.open(dir).note(a, ID_A), true, 'an earlier build could not confirm its write of the row');
+  const A = r.open(dir);
+  const B = r.open(dir);
+  assert.deepEqual(r.ids(A, a), [ID_A], 'A reads it, writes the row again by that id, and verifies the write');
+  assert.deepEqual(r.ids(B, a), [ID_A], 'B reads it too');
+  assert.equal(B.note(a, ID_A), true, 'B writes the same row again after that, and cannot confirm its write');
+  A.clear(a);
+  assert.deepEqual(r.onDisk(dir), { [a]: ID_A }, 'A\'s clear did not take B\'s later entry: the next build writes the row again');
+  B.clear(a);
+  assert.equal(fs.existsSync(r.file(dir)), false, 'B\'s own clear, once its write is verified, does');
+});
+
+test('the web-resource record: the name-to-id map keeps its shape, a revision beside it; an entry written without one is matched by its id, as before, and stays without one', () => {
+  const r = RECORDS[0];
+  const [a, b] = r.names;
+  const dir = makeTempDir('record-lease-');
+  assert.equal(r.open(dir).note(a, ID_A), true);
+  const written = JSON.parse(fs.readFileSync(r.file(dir), 'utf8'));
+  assert.deepEqual(written.webResources, { [a]: ID_A }, 'name to id, as before');
+  assert.deepEqual(Object.keys(written.revisions), [a]);
+  assert.match(written.revisions[a], /^[0-9a-f]{16}$/, 'and the revision of that note beside it');
+  // The record as a build wrote it before there were revisions.
+  fs.writeFileSync(r.file(dir), `${JSON.stringify({ schemaVersion: 1, environmentFingerprint: written.environmentFingerprint, webResources: { [a]: ID_A, [b]: ID_B } })}\n`);
+  const run = r.open(dir);
+  assert.deepEqual(r.ids(run, a), [ID_A]);
+  run.clear(a);
+  assert.deepEqual(r.onDisk(dir), { [b]: ID_B }, 'an entry without a revision is cleared by its id');
+  assert.equal('revisions' in JSON.parse(fs.readFileSync(r.file(dir), 'utf8')), false, 'and the rest is written as it was: no revision is made up for it');
+  run.clear(b);
+  assert.equal(fs.existsSync(r.file(dir)), false);
+});
+
+test('the dashboard record: a clear by a build that read the entry before its creator recorded the id its push reported leaves the entry — both ids — and answers null', () => {
+  const r = RECORDS[1];
+  const [a] = r.names;
+  const dir = makeTempDir('record-lease-');
+  const A = r.open(dir);
+  assert.equal(A.note(a, ID_A), true, 'A notes the id it sends its create with');
+  const B = r.open(dir);
+  assert.deepEqual(r.ids(B, a), [ID_A], 'B reads the entry');
+  assert.equal(A.observe(a, ID_C), true, 'A\'s push reports another id: the row its create made');
+  assert.equal(B.clear(a), null, 'B\'s clear leaves it, and says the entry changed');
+  assert.deepEqual(r.onDisk(dir), { [a]: [ID_A, ID_C] }, 'both ids stay');
+  assert.equal(A.clear(a), true, 'A, which knows both, removes it');
+  assert.equal(fs.existsSync(r.file(dir)), false);
+});
+
+test('the dashboard record: a note by a build that read the entry before the reported id was recorded does not replace it — said once, and it answers false', () => {
+  const r = RECORDS[1];
+  const [a] = r.names;
+  const dir = makeTempDir('record-lease-');
+  const A = r.open(dir);
+  assert.equal(A.note(a, ID_A), true);
+  const warnings = [];
+  const B = r.open(dir, { warn: (w) => warnings.push(w) });
+  assert.deepEqual(r.ids(B, a), [ID_A]);
+  assert.equal(A.observe(a, ID_C), true);
+  assert.equal(B.note(a, ID_B), false, 'B does not replace it');
+  assert.deepEqual(r.onDisk(dir), { [a]: [ID_A, ID_C] }, 'both of A\'s ids stay');
+  assert.equal(warnings.length, 1, `said once: ${JSON.stringify(warnings)}`);
+  assert.match(warnings[0], new RegExp(`already holds '${a}' as ${ID_A} \\(the service reported ${ID_C}\\), which another build recorded since this one read it`));
+});
+
+test('the dashboard record: a note of the id the entry holds already keeps the id the service reported beside it — by the build that noted it, or another', () => {
+  const r = RECORDS[1];
+  const [a] = r.names;
+  const dir = makeTempDir('record-lease-');
+  const run = r.open(dir);
+  assert.equal(run.note(a, ID_A), true);
+  assert.equal(run.observe(a, ID_C), true);
+  assert.equal(run.note(a, ID_A), true);
+  assert.deepEqual(r.onDisk(dir), { [a]: [ID_A, ID_C] }, 'the reported id stays');
+  assert.deepEqual(r.ids(run, a), [ID_A, ID_C]);
+  assert.equal(r.open(dir).note(a, ID_A), true, 'another build that read the entry');
+  assert.deepEqual(r.onDisk(dir), { [a]: [ID_A, ID_C] });
+});
+
+test('the dashboard record: an observe adds a reported id only to the entry as its build noted it — never over another reported id recorded since — said once', () => {
+  const r = RECORDS[1];
+  const [a] = r.names;
+  const dir = makeTempDir('record-lease-');
+  assert.equal(r.open(dir).note(a, ID_A), true);
+  const warnings = [];
+  const A = r.open(dir);
+  const B = r.open(dir, { warn: (w) => warnings.push(w) });
+  assert.deepEqual(r.ids(A, a), [ID_A]);
+  assert.deepEqual(r.ids(B, a), [ID_A]);
+  assert.equal(A.observe(a, ID_C), true);
+  assert.equal(B.observe(a, ID_B), false, 'B does not write over the reported id A recorded');
+  assert.deepEqual(r.onDisk(dir), { [a]: [ID_A, ID_C] });
+  assert.equal(warnings.length, 1, `said once: ${JSON.stringify(warnings)}`);
+  assert.match(warnings[0], new RegExp(`no longer holds '${a}' as ${ID_A} — another build has changed it since`));
+  assert.equal(B.observe(a, ID_C), true, 'the reported id the record holds already is no conflict');
+  assert.deepEqual(r.onDisk(dir), { [a]: [ID_A, ID_C] });
 });

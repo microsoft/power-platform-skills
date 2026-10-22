@@ -405,6 +405,36 @@ test('the build\'s own re-run of the halt writes it again by id in the same invo
   assert.equal(s.row(SCRIPT).publishedContent, base64(SCRIPT_CODE));
 });
 
+// Two builds that share the workspace recover the same row. A writes it again by its recorded id and verifies the write; while A waits for the answer
+// to its membership add, B writes the same row again from a newer spec, the lock refuses B's publish, and B records its unconfirmed write — under the
+// same id, since it is the same row. A's clear comes after that: it must take only the entry A verified, so that the next build writes B's content again
+// by id instead of reusing the row with A's content published.
+test('a recovery whose membership add is answered after another build recorded a later, unconfirmed write of the same row leaves that record: the next build writes the newer content again by id', async () => {
+  const s = scenario();
+  refuseWebResourcePublishes(s.org);
+  await s.build(spec());
+  const id = s.row(SCRIPT).webresourceid;
+  const NEWER = 'var Form = { onLoad: function () { return 2; } };';
+  let other;
+  const stop = s.org.intercept((c) => c.method === 'POST' && c.path === '/AddSolutionComponent' && String(c.body.ComponentId).toLowerCase() === id, async (c) => {
+    stop();
+    refuseWebResourcePublishes(s.org);
+    other = await s.build(spec([{ name: SCRIPT, type: 'js', content: NEWER }]));
+    return s.org.fake.httpClient.post(`${s.org.origin}/api/data/v9.2${c.path}`, c.body);
+  });
+  const recovered = await s.build(spec());
+  assert.ok(recovered.outcome && recovered.outcome.ok, String(recovered.halt && recovered.halt.message));
+  assert.ok(other && other.halt, 'the other build ran while A waited for its add, and stopped');
+  assert.equal(other.halt.code, 'WEB_RESOURCE_UNVERIFIED', 'its write of the same row unconfirmed');
+  assert.equal(openUnconfirmedWebResources({ workspaceDir: s.dir, environment: s.org.origin }).idOf(SCRIPT), id, 'A\'s clear left the record of that later write');
+  assert.equal(s.row(SCRIPT).publishedContent, base64(SCRIPT_CODE), 'what is published is still what A verified');
+  const next = await s.build(spec([{ name: SCRIPT, type: 'js', content: NEWER }]));
+  assert.ok(next.outcome && next.outcome.ok, String(next.halt && next.halt.message));
+  assert.deepEqual(writesOf(next.calls), ['PATCH /webresourceset(id)', 'POST /PublishXml webresource', 'POST /AddSolutionComponent web resource'], 'the next build writes the row again by id');
+  assert.equal(s.row(SCRIPT).publishedContent, base64(NEWER), 'and what is published is the newer content');
+  assert.equal(fs.existsSync(unconfirmedRecordPath(s.dir, s.org.origin)), false, 'confirmed, the record is gone');
+});
+
 test('a web resource of the name that this build did not write — or whose write it confirmed — is reused untouched, as before: not written, not added', async () => {
   const s = scenario();
   // Another maker's row, published: it is in the plain read by name.

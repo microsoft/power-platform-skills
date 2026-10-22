@@ -44,6 +44,13 @@
 // reads the file as it is then, applies its one change to that, and writes it: a note adds an entry or replaces the one this run knows, an observe adds
 // a reported id to this run's entry, a clear removes this run's entry, and none of them touches another build's. A file that has become unreadable since
 // is not written over. Reads take no lease.
+//
+// An entry is compared WHOLE — the id its create was sent with AND the id the service reported for it — because the reported id is added after the entry
+// was noted: a build that read the entry before its creator recorded the reported id knows only the sent one, and removing or replacing what it knows
+// would drop the reported id, which names the row the create made. So a change that finds the entry other than this run knows it leaves it; a note of
+// the id the entry already holds keeps the reported id beside it; and a clear that finds the entry changed says so to its caller (it answers null), so
+// that the recovery of an interrupted create stops rather than create a second dashboard on the word of the older entry (sdk-build.js
+// recoverRecordedDashboard).
 const fs = require('node:fs');
 const path = require('node:path');
 const { sha256 } = require('./hash.js');
@@ -66,6 +73,10 @@ function idOf(value) {
 }
 const recordFile = (root, fingerprint, app, solution) => path.join(root, `${PREFIX}${sha256(JSON.stringify([fingerprint, app, solution]))}.json`);
 const byKey = ([a], [b]) => (a < b ? -1 : a > b ? 1 : 0);
+// The same entry: the same sent id and the same reported id — none on either side is the same as none.
+const sameEntry = (a, b) => Boolean(a) && Boolean(b) && a.id === b.id && (a.reportedId || '') === (b.reportedId || '');
+// An entry's ids, for a message: "<sent>" or "<sent> (the service reported <reported>)".
+const idsText = (entry) => `${entry.id}${entry.reportedId ? ` (the service reported ${entry.reportedId})` : ''}`;
 
 // Where the record of `appUniqueName`'s dashboards in `solutionUniqueName` and `environment` is kept — for a caller that has to point at it (a message, a
 // test), never to read it.
@@ -136,11 +147,13 @@ function writeDashboardCreations(workspaceDir, environment, appUniqueName, solut
  * The record for one run of the build: read once, then each change made to the file as it is then, under the record's writer lease. `idsOf(name)` is
  * every id an earlier run recorded for the dashboard — the one it sent first, then the one the service reported when that was another — or undefined (what
  * this run read, with its own changes); `note(name, id)` records the id a create is about to be sent with, `observe(name, reportedId)` the id its push
- * reported, and `clear(name)` removes the dashboard; each answers whether that is now on disk. Each touches only what this run knows: `note` does not
- * replace an entry another build recorded since this run read the record (said once; it answers false), `observe` adds only to the entry this run noted,
- * and `clear` leaves one another build has recorded since under another id. `path()` is the file, for a message. None of them throws: a record that
- * cannot be read or written, or a lease another build holds past the bounded wait, is said once on `warn`, and a run without a workspace, an environment
- * or a solution (a caller that gives none; the CLI always gives all three) records nothing. `lease` is for tests: the lib/record-lease.js seams.
+ * reported, and `clear(name)` removes the dashboard; each answers whether that is now on disk. Each touches only the entry as this run knows it, both ids
+ * compared: `note` does not replace an entry another build recorded or changed since this run read the record (said once; it answers false), and a note
+ * of the id the entry holds already keeps its reported id; `observe` adds only to the entry as this run noted it (said once otherwise); `clear` leaves an
+ * entry another build has changed since, and then answers null — true once this run's entry is gone, false when the change could not be made. `path()`
+ * is the file, for a message. None of them throws: a record that cannot be read or written, or a lease another build holds past the bounded wait, is said
+ * once on `warn`, and a run without a workspace, an environment or a solution (a caller that gives none; the CLI always gives all three) records nothing.
+ * `lease` is for tests: the lib/record-lease.js seams.
  */
 function openDashboardCreations({ workspaceDir, environment, appUniqueName, solutionUniqueName, warn, lease } = {}) {
   const usable = Boolean(workspaceDir) && Boolean(environment) && Boolean(solutionUniqueName);
@@ -169,9 +182,10 @@ function openDashboardCreations({ workspaceDir, environment, appUniqueName, solu
     return entries;
   };
   // One change, made under the record's lease to the record as it is on disk now — never to this run's copy, which another build may have changed
-  // since. `apply(disk)` changes the Map it is given and answers true when there is something to write, false when there is not, or the reason this
-  // run's change is refused (a string, said once). Answers whether the change is made. `create` is false for a removal: a workspace that is not there
-  // holds nothing to remove, and is not made for it.
+  // since. `apply(disk)` changes the Map it is given and answers true when there is something to write, false when there is not, null when the record
+  // holds the entry as another build changed it and this change leaves it, or the reason this run's change is refused (a string, said once). Answers
+  // true when the change is made, null when another build's entry was left, false otherwise. `create` is false for a removal: a workspace that is not
+  // there holds nothing to remove, and is not made for it.
   const change = (apply, create = true) => {
     if (!usable || !readable) return false;
     let verdict;
@@ -197,7 +211,7 @@ function openDashboardCreations({ workspaceDir, environment, appUniqueName, solu
       return false;
     }
     if (typeof verdict === 'string') { say(verdict); return false; }
-    return true;
+    return verdict === null ? null : true;
   };
   return {
     idsOf: (name) => {
@@ -208,20 +222,22 @@ function openDashboardCreations({ workspaceDir, environment, appUniqueName, solu
       const sent = idOf(id);
       if (!usable || !sent) return false;
       const key = dashboardNameKey(name);
-      const entry = { name: String(name), id: sent };
+      let entry = { name: String(name), id: sent };
       const known = load().get(key);
       const made = change((disk) => {
         const held = disk.get(key);
-        // Another build recorded this dashboard since this run read the record, under another id: that entry may be the only trace of a dashboard that
-        // build created outside its solution, and replacing it would lose it.
-        if (held && held.id !== sent && !(known && known.id === held.id)) {
-          return `the record of the dashboards builds create (${where()}) already holds '${held.name}' as ${held.id}, which another build recorded since this one read it; it is left as it is, and this build's create of '${entry.name}' (${sent}) is not recorded: ${notFound}`;
+        // The record holds this create already, and with it the id the service reported for it, when it has one: that observation stays.
+        if (held && held.id === sent) { entry = held; return false; }
+        // Another build recorded or changed this dashboard's entry since this run read the record: that entry may be the only trace of a dashboard a
+        // build created outside its solution — its reported id the row the create made — and replacing it would lose it.
+        if (held && !sameEntry(held, known)) {
+          return `the record of the dashboards builds create (${where()}) already holds '${held.name}' as ${idsText(held)}, which another build recorded since this one read it; it is left as it is, and this build's create of '${entry.name}' (${sent}) is not recorded: ${notFound}`;
         }
         disk.set(key, entry);
         return true;
       });
-      if (made) entries.set(key, entry);
-      return made;
+      if (made === true) entries.set(key, entry);
+      return made === true;
     },
     observe: (name, reportedId) => {
       const reported = idOf(reportedId);
@@ -232,16 +248,16 @@ function openDashboardCreations({ workspaceDir, environment, appUniqueName, solu
       const next = { ...entry, reportedId: reported };
       const made = change((disk) => {
         const held = disk.get(key);
-        // Only to the entry this run noted: one another build has replaced or removed since is not this run's create.
-        if (!held || held.id !== entry.id) {
-          return `the record of the dashboards builds create (${where()}) no longer holds '${entry.name}' as ${entry.id} — another build has changed it since this one recorded it — so it is left as it is, and the id the service reported for this build's create (${reported}) is not recorded: ${notFound}`;
+        if (sameEntry(held, next)) return false;
+        // Only to the entry as this run noted it: one another build has replaced, removed or given another reported id since is not this run's to change.
+        if (!sameEntry(held, entry)) {
+          return `the record of the dashboards builds create (${where()}) no longer holds '${entry.name}' as ${idsText(entry)} — another build has changed it since this one recorded it — so it is left as it is, and the id the service reported for this build's create (${reported}) is not recorded: ${notFound}`;
         }
-        if (held.reportedId === reported) return false;
         disk.set(key, { ...held, reportedId: reported });
         return true;
       });
-      if (made) entries.set(key, next);
-      return made;
+      if (made === true) entries.set(key, next);
+      return made === true;
     },
     clear: (name) => {
       const key = dashboardNameKey(name);
@@ -249,12 +265,15 @@ function openDashboardCreations({ workspaceDir, environment, appUniqueName, solu
       if (!known) return false;
       const made = change((disk) => {
         const held = disk.get(key);
-        // Only the entry this run knows: one another build has recorded since, under another id, is that build's, and stays.
-        if (!held || held.id !== known.id) return false;
+        if (!held) return false;
+        // Only the entry as this run knows it, both ids: one another build has changed since — a reported id it recorded, another create — stays, and
+        // the caller is told (null).
+        if (!sameEntry(held, known)) return null;
         disk.delete(key);
         return true;
       }, false);
-      if (made) entries.delete(key);
+      // Removed, or left as another build changed it: either way this run's own entry is no longer in the record.
+      if (made !== false) entries.delete(key);
       return made;
     },
     path: where,

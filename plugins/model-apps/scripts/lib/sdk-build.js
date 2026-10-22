@@ -290,7 +290,9 @@ function systemFormType(raw) {
 // reported when that was another. The two are not equal evidence: after such a re-key the reported row is the one the create made, and the sent id was
 // never seen to make anything. Each is read in the saved layer (readSavedSystemForm):
 //   - none is there: the create never committed, or the row was deleted since — the record is cleared and the build goes on as it always did, looking the
-//     dashboard up by name (answers undefined);
+//     dashboard up by name (answers undefined). Unless another build sharing the workspace has changed the entry since this build read it — recorded the
+//     id its push reported, say, which names the row its create made: then the absence of the ids THIS build read proves nothing, the entry is left, and
+//     the step stops without creating a dashboard;
 //   - the row the create made is (the sent one, or the reported one after a re-key), a standard dashboard with this name: THAT row is added to the
 //     solution — idempotent: a component the solution already holds is not added twice — and reused, and the record cleared (answers its id). Its tiles
 //     are what the interrupted run pushed, and are not repaired;
@@ -314,7 +316,11 @@ async function recoverRecordedDashboard(provision, { dash, ids, sol, runner, cre
   }
   const present = reads.filter((r) => r.state === 'present');
   if (!present.length) {
-    creations.clear(dash.name);
+    // Absent — but only by the ids this build READ. Another build sharing the workspace may have changed the entry since (recorded the id its own push
+    // reported, which names the row its create made): the clear then leaves the entry (it answers null), and nothing is created on the older word.
+    if (creations.clear(dash.name) === null) {
+      return stop(refusal(`dashboard "${dash.name}": the record this build read named ${created} for it — a create an earlier build had not seen join solution '${sol.uniqueName}' — and no row has ${reported ? 'either id' : 'that id'} now, but another build sharing this workspace has changed that entry of ${creations.path()} since this build read it. Nothing was added to the solution or deleted, and no dashboard was created: this build does not act on what it read. Run the build again once the other build has finished; it then reads the record as it is.`));
+    }
     return undefined;
   }
   // The way out names the row the service reported and asks for no delete: either row may be another app's, and this record is no authority over it.

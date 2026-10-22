@@ -497,6 +497,41 @@ test('the push reports another id than the one the build sent: both are recorded
   assert.deepEqual(recordReads(env.org, rerun.mark, reported).map((r) => r.status), [200]);
 });
 
+// Two builds that share the workspace, one of them creating the dashboard. A has noted the id it sends its create with; B reads that entry and, settling
+// it, reads the id in the saved layer — and no row has it, because the service gave A's create another id. Before B's read is answered, A's push is,
+// and A records the id the service reported. B's conclusion "absent" is about the older entry only: its clear must leave the newer one, and B must not
+// create a second dashboard on that older word.
+test('a build settling an entry that another build changed after it read it — recording the id its push reported — stops: nothing created, added or deleted, and the record keeps both ids', async () => {
+  const env = environment();
+  const sent = '0a0a0a0a-1111-4111-8111-00000000000a';
+  const reported = '0b0b0b0b-1111-4111-8111-00000000000b';
+  const A = records().openDashboardCreations({ workspaceDir: env.harness.workspaceDir, environment: env.org.origin, appUniqueName: APP, solutionUniqueName: SOLUTION });
+  assert.equal(A.note(BOARD, sent), true, 'A notes the id it sends its create with');
+  // The row A's create made, under the id the service gave it: never published, outside the solution.
+  await inMaker(env.org, 'POST', '/systemforms', { formid: reported, name: BOARD, type: 0, formxml: '<form><tabs /></form>' });
+  const answered = env.add('GET', isRecordRead(sent), (req) => {
+    assert.equal(A.observe(BOARD, reported), true, 'A records the id its push reported');
+    return env.org.request(req);
+  });
+  const halted = await env.harness.measure(() => env.harness.build(spec()));
+  assert.equal(answered.lift(), 1, 'B read the id it read from the record');
+  assert.deepEqual(creates(env.org, halted.mark), [], 'no second dashboard is created');
+  assert.deepEqual(memberships(env.org, halted.mark), [], 'nothing is added to the solution');
+  assert.deepEqual(formDeletes(env.org, halted.mark), [], 'nothing is deleted');
+  assert.ok(halted.error, 'B stops');
+  assert.match(halted.error.message, new RegExp(`dashboard "${BOARD}": the record this build read named ${sent} for it — a create an earlier build had not seen join solution '${SOLUTION}' — and no row has that id now, but another build sharing this workspace has changed that entry of .*dashboard-creation\\.[0-9a-f]{64}\\.json since this build read it\\. Nothing was added to the solution or deleted, and no dashboard was created: this build does not act on what it read\\. Run the build again once the other build has finished; it then reads the record as it is\\.`));
+  assert.doesNotMatch(halted.error.message, /(?<!not )\bdelete\b/i, 'it asks for no dashboard to be deleted');
+  assert.deepEqual(recorded(env), { [BOARD]: { id: sent, reportedId: reported } }, 'the record keeps both ids');
+  assert.deepEqual(boards(env.org), [reported]);
+  assert.deepEqual(halted.unexpected, []);
+  // Once A has stopped, the next build reads the record as it is now and adds the row A's create made.
+  const rerun = ran(await env.harness.measure(() => env.harness.build(spec())), 'the next build');
+  assert.deepEqual(creates(env.org, rerun.mark), [], 'still no dashboard is created');
+  assert.equal(memberships(env.org, rerun.mark, reported).length, 1, 'the row A\'s create made is added');
+  assert.deepEqual(members(env.org), [reported]);
+  assert.equal(recorded(env), null);
+});
+
 // --- 3. what the record never does ---------------------------------------------------------------------------------------------------------------------------
 
 // Another maker's dashboard of the same name, made and published in Maker, in no solution of this app.
