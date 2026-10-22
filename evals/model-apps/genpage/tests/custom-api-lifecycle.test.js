@@ -701,6 +701,42 @@ const GeneratedComponent`)
   return fixture;
 }
 
+function plainArrowDefaultFixture(writesInput = false) {
+  const fixture = selectedRecordLookupFixture();
+  fixture.artifacts['stages/with-api.tsx'] = fixture.artifacts['stages/with-api.tsx']
+    .replace('  const pending = { current: false };', `  const record = { accountid: 'fresh draft' };
+  const inspectRecord = (record = props.selectedAccount) => {
+    ${writesInput ? "record.accountid = 'edited input';" : 'void record.accountid;'}
+  };
+  inspectRecord();
+  record.accountid = 'edited draft';
+  const pending = { current: false };`);
+  return fixture;
+}
+
+test('plain arrow declaration: a default parameter stays separate from a later outer write', async (t) => {
+  for (const layer of [1, 2]) {
+    await t.test(`plain arrow declaration: independent outer write, layer ${layer}`, () => {
+      const fixture = plainArrowDefaultFixture();
+      assertKnownApiReceivers(fixture.artifacts['stages/with-api.tsx']);
+      const result = score(fixture, layer);
+      assert.equal(result.status, 'pass', result.reason);
+    });
+  }
+});
+
+test('plain arrow declaration: writing its default input still refuses lookup provenance', async (t) => {
+  for (const layer of [1, 2]) {
+    await t.test(`plain arrow declaration: default input mutation, layer ${layer}`, () => {
+      const fixture = plainArrowDefaultFixture(true);
+      assertKnownApiReceivers(fixture.artifacts['stages/with-api.tsx']);
+      const result = score(fixture, layer);
+      assert.equal(result.status, 'fail', result.reason);
+      assert.match(result.reason, /lookup|Ref|provenance/i);
+    });
+  }
+});
+
 test('scoped assignment origin: unrelated helper parameter remains independent', async (t) => {
   for (const layer of [1, 2]) {
     await t.test(`scoped assignment origin: unrelated helper parameter, layer ${layer}`, () => {

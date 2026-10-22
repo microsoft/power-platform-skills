@@ -106,15 +106,12 @@ Layers 1 and 2 are automated. Layer 3 is human judgment by design — visual qua
 
 Plus per-eval `expectations` for **Phase 5, 5a, 5b and 5c**. `Edit Phase 5` entries remain Layer-1 expectations. The registered Phase-5b column checker now executes; its existing `column-name verification requires RuntimeTypes.ts fixture` SKIP is explicit, not silently excluded by routing. Column/schema verification itself remains unimplemented. Other unregistered/AST-dependent expectations are reported as skips, not claimed as coverage. The API request scorer supports literal request objects in named helpers and scalar annotations; it is not a TypeScript compiler or a runtime execution oracle.
 
-**Known conservative limitation — Custom API checks in Layers 1 and 2:** The offline
-lookup-provenance check may refuse a valid page when an arrow function parameter with a
-default shares its name with an outer variable that is later written. This can happen even
-when the arrow only reads the selected input and the later write changes a separate outer
-object. Arrow parameters remain opaque to the bounded value/caller proof, so its conservative
-outer-binding union can attribute the default input to the unrelated outer write. This
-limitation only causes false refusals, never incorrect acceptance of such code. Rename the
-arrow parameter (for example, from `record` to `selectedRecord`) and update its references
-inside that arrow; leave the outer variable and its writes unchanged.
+**Bounded Custom API declaration tracking (Layers 1 and 2):** Potential-write checks
+distinguish a definite plain arrow parameter declaration, including a default, from an
+unrelated outer variable with the same name. Arrow values and callers remain opaque; this
+does not prove lookup input values or relax receiver/RHS checks. Ambiguous binding patterns
+retain conservative outer-write possibilities, and actual writes to the selected input
+still refuse lookup provenance.
 
 **Runner:** `evals/model-apps/genpage/run-layer-2.js`
 **Library:** `lib/assertions-layer-2.js`

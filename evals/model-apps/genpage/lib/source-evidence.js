@@ -331,6 +331,7 @@ function arrowScopes(mask) {
   for (const match of mask.matchAll(/=>/g)) {
     const before = mask.slice(0, match.index).replace(/\s+$/, '');
     let names = [];
+    let plainNames = [];
     let paramsOpen = -1;
     let close = before.length - 1;
     if (before[close] !== ')') {
@@ -341,17 +342,20 @@ function arrowScopes(mask) {
       paramsOpen = groupStart(mask, close);
       if (paramsOpen < 0) continue;
       names = boundNames(mask.slice(paramsOpen + 1, close));
+      plainNames = splitTopLevel(mask, paramsOpen, close)
+        .map((param) => /^([A-Za-z_$][\w$]*)(?=\s*(?:[:=]|$))/.exec(param)?.[1]).filter(Boolean);
     } else {
       const single = /([A-Za-z_$][\w$]*)$/.exec(before);
       if (!single || /^(?:async|await|return)$/.test(single[1])) continue;
       names = [single[1]];
+      plainNames = [single[1]];
       paramsOpen = before.length - single[1].length;
     }
     let body = match.index + 2;
     while (/\s/.test(mask[body] || '')) body += 1;
     const bodyEnd = mask[body] === '{' ? groupEnd(mask, body) : expressionEnd(mask, body);
     const paramsEnd = before[close] === ')' ? close : before.length;
-    scopes.push({ arrow: true, names, paramsOpen, paramsEnd, body: match.index, end: bodyEnd });
+    scopes.push({ arrow: true, names, plainNames, paramsOpen, paramsEnd, body: match.index, end: bodyEnd });
   }
   // `function (…) {` and `function* (…) {` with no name: a value, so its callers are untraceable too.
   for (const match of mask.matchAll(/\bfunction\s*\*?\s*\(/g)) {
@@ -383,7 +387,8 @@ function bindingsOf(ctx, name, at, potentialWrite = false, parameterHeader = fal
     || (parameterHeader && potentialWrite && !entry.isComponent && entry.paramsOpen < at && entry.paramsEnd > at))) {
     const level = scope.body < at ? scope.body : scope.paramsOpen;
     if (scope.arrow) {
-      if (scope.names.includes(name)) found.push({ level, kind: 'opaque', at: scope.paramsOpen, scope });
+      if (scope.names.includes(name)) found.push({ level, kind: 'opaque', at: scope.paramsOpen, scope,
+        definiteParameter: scope.plainNames?.includes(name) === true });
       continue;
     }
     if (scope.isComponent) {
@@ -538,13 +543,10 @@ function identityPaths(ctx, expr, at, depth = 0) {
     // Opaque patterns over-approximate names: `{ other = (outer = input) }` can assign an
     // enclosing `outer`, not declare a parameter. Keep the original body-only possibilities
     // too; ambiguity may refuse provenance but must never silently discard a possible write.
-    // Arrow parameters are opaque to value/caller proof, so this union also applies to a
-    // definite plain arrow parameter with a default. Known conservative limitation: if its
-    // name matches an outer variable that is later written, a valid page may be refused even
-    // when the arrow only reads the input and the outer write affects a separate object.
-    // This limitation only adds refusals, never incorrect acceptance of such code. Rename
-    // the arrow parameter and its references inside the arrow to avoid the false refusal.
-    const opaqueHeader = assigned.some((binding) => binding.kind === 'opaque' && binding.scope
+    // A plain arrow parameter definitely declares its own name even though value/caller
+    // evidence stays opaque. It cannot assign a same-named outer variable in its header;
+    // only genuinely ambiguous patterns need the body-only outer possibilities.
+    const opaqueHeader = assigned.some((binding) => binding.kind === 'opaque' && !binding.definiteParameter && binding.scope
       && binding.scope.paramsOpen < assignment.index && binding.scope.paramsEnd > assignment.index);
     const outsideHeader = opaqueHeader ? bindingsOf(ctx, name, assignment.index, true) : null;
     const possible = outsideHeader ? [...assigned, ...outsideHeader] : assigned;
