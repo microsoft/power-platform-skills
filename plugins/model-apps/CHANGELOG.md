@@ -48,17 +48,18 @@ other spellings, and out of text cut short or split between two writes.
   their connections, the Custom APIs and the service resources the bindings point at.
 - **A download keeps much more of each table's schema**: Text format and length, Memo length, Integer range and format, Decimal and
   Double range and precision, Money range, Boolean labels, DateTime format, AutoNumber masks, and the primary name column's length
-  (written even at 100, so a fresh build corrects an environment that overrides it) and mask; custom unmanaged Active and Inactive
-  status reasons with their values and colors, labelled in the download's authoring language; alternate keys with their columns and
-  labels; solution and global-choice display names; dashboard tile sizes; and a table's own unmanaged SVG icon, carried as
-  `external: true` so a teardown of the downloaded spec never deletes it. Values equal to the build's defaults are left out. A Money
-  column's precision is kept only when it follows the transaction currency, the only kind the build creates; for another source the
-  download says so and leaves it out. A detail it cannot read is named on stderr without dropping the column or table or guessing a
-  default, and a status reason with no label in the authoring language is named and left out. It is still not a clone: Boolean
-  defaults, column capabilities, BigInt ranges, DateTime behavior, script resources, raster, foreign or managed table icons,
-  `roleGrants[]` and `sampleData` are not carried. The download reads once more per table for its status reasons, once per column
-  type present (Text, Memo, Integer, Decimal, Double, DateTime) and once per icon it captures, plus one lookup of the web-resource
-  table's entity set name before the first icon when that name is not yet known.
+  (written even at 100, so a fresh build corrects an environment that overrides it; a lookup to that table made before the correction
+  keeps the overridden length on its name column) and mask; custom unmanaged Active and Inactive status reasons with their values and
+  colors, labelled in the download's authoring language; alternate keys with their columns and labels; solution and global-choice
+  display names; dashboard tile sizes; and a table's own unmanaged SVG icon, carried as `external: true` so a teardown of the
+  downloaded spec never deletes it. Values equal to the build's defaults are left out. A Money column's precision is kept only when it
+  follows the transaction currency, the only kind the build creates; for another source the download says so and leaves it out. A
+  detail it cannot read is named on stderr without dropping the column or table or guessing a default, and a status reason with no
+  label in the authoring language is named and left out. It is still not a clone: Boolean defaults, column capabilities, BigInt
+  ranges, DateTime behavior, script resources, raster, foreign or managed table icons, `roleGrants[]` and `sampleData` are not
+  carried. The download reads once more per table for its status reasons, once per column type present (Text, Memo, Integer, Decimal,
+  Double, DateTime) and once per icon it captures, plus one lookup of the web-resource table's entity set name before the first icon
+  when that name is not yet known.
 - **Verification checks declared status reasons and alternate keys** — `verify-model-app.js`, and the verification a build runs (with
   `--verify`, and on every build that applies a spec's generative pages). A status reason passes when the table holds its label
   under the state the build gives it and at the value the spec pins, if it pins one; a state the answer does not give readably
@@ -81,9 +82,10 @@ other spellings, and out of text cut short or split between two writes.
     is checked when an app is read — before and after its sitemap is read — and again before the app is written; each check is two
     reads (the app's current layer and its SiteMap component) where a read of an app made one name lookup, and deleting an app also
     reads which apps use its sitemap;
-  - an app create whose rollback the customization lock refused or interrupted now names the lock as the reason — the partial app
-    kept because its rollback deleted nothing, or its removal unconfirmed because the rollback may not have run — and says to check,
-    once the lock frees, that its rows exist and are the create's own before removing them; other rollback outcomes read as before.
+  - an app create whose rollback the customization lock is shown to have refused or interrupted now names the lock as the reason — the
+    partial app kept because its rollback deleted nothing, or its removal unconfirmed because the rollback may not have run — and says
+    to check, once the lock frees, that its rows exist and are the create's own before removing them; a rollback answer that does not
+    show the lock, and other rollback outcomes, read as before.
 - **The HTTP client sends a publish (`PublishXml`, `PublishAllXml`) once.** It sent one again after a 429, 500, 502, 503 or 504 or a
   reset or timed-out connection, up to six sends; measured under the customization lock, a refused publish is no proof that nothing
   changed, and an accepted re-send published old content. A publish is still sent again after a 401 (with a new token) and after a
@@ -114,8 +116,6 @@ other spellings, and out of text cut short or split between two writes.
 - **The genpage eval's offline Custom API check follows the new contract.** It accepts a lookup passed as `{ entityName, id }` with
   no declared kind when its id is a string the page already holds, and refuses an invented or numeric id, a missing required lookup
   and a parameter discovery did not return; a binding an edited page already held is accepted unchanged only for that same page.
-  Known limit: it can refuse a valid page whose arrow function has a parameter with a default named like an outer variable that is
-  written later. Rename the parameter (`evals/model-apps/genpage/EVAL_GUIDE.md`).
 
 ### Fixed
 
