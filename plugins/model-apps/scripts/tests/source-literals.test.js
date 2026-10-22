@@ -543,6 +543,200 @@ test('hasDefaultExport requires the export itself to be complete', () => {
   }
 });
 
+// A default export may be a generic arrow. In a .tsx file TypeScript reads the `<` after `export default` by its rule for a `<` where an assignment expression starts
+// (parser.ts, isParenthesizedArrowFunctionExpressionWorker, the JSX branch, https://github.com/microsoft/TypeScript/blob/v5.8.3/src/compiler/parser.ts; opensTypeParameters in
+// source-literals.js): type parameters when, after an optional `const`, the first name is followed by a `,`, an `=`, or `extends` and a token that is not `=`, `>` or `/`, and
+// an element otherwise. The export pattern took no `<` after `default`, so a complete page whose default export is a generic arrow was refused as having no default export.
+// [what, page]
+const GENERIC_ARROW_EXPORTS = [
+  ['a trailing comma and a block body', 'type Props<T> = { items: T[] };\nexport default <T,>(props: Props<T>) => {\n  return <div>{props.items.length}</div>;\n};\n'],
+  ['a constraint and an element body', 'export default <T extends object>(p: T) => <div/>;\n'],
+  ['a const modifier', 'export default <const T,>(p: T) => <div/>;\n'],
+  ['a const modifier and a constraint', 'export default <const T extends readonly unknown[]>(p: T) => <div>{p.length}</div>;\n'],
+  ['a default and a trailing comma', 'export default <T = string,>(p: T) => null;\n'],
+  ['a default', 'export default <T = string>(p: T) => null;\n'],
+  ['a constraint and a default', 'export default <T extends object = {}>(p: T) => null;\n'],
+  ['two type parameters', 'export default <T, U extends T>(p: T, q: U) => null;\n'],
+  ['a return type', 'export default <T,>(p: T): JSX.Element => <div/>;\n'],
+  ['an object return type', 'export default <T,>(p: T): { a: T; b: string } => ({ a: p, b: "" });\n'],
+  ['a generic return type', 'export default <T,>(p: T): Promise<Array<T>> => Promise.resolve([p]);\n'],
+  ['a parenthesised function type for the return type', 'export default <T,>(p: T): ((x: T) => T) => (x) => x;\n'],
+  ['a function type for the return type', 'export default <T,>(p: T): (x: T) => T => (x) => x;\n'],
+  ['a type predicate for the return type', 'export default <T,>(p: unknown): p is T => p !== null;\n'],
+  ['a conditional return type', 'export default <T,>(p: T): T extends string ? "s" : "o" => null as never;\n'],
+  ['a constraint that is a function type', 'export default <T extends (a: string) => void>(cb: T) => null;\n'],
+  ['a constraint that is an object type', 'export default <T extends { id: string; name: string }>(row: T) => <div>{row.id}</div>;\n'],
+  ['nested type arguments', 'export default <T extends Record<string, Array<number>>>(p: T) => null;\n'],
+  ['type parameters across lines, with a comment', 'export default <\n  T extends object, // the row\n>(p: T) => null;\n'],
+  ['a destructured parameter', 'export default <T,>({ items }: { items: T[] }) => <ul>{items.length}</ul>;\n'],
+  ['a rest parameter', 'export default <T,>(...args: T[]) => null;\n'],
+  ['no parameters', 'export default <T,>() => null;\n'],
+  ['a default value that is an element with a parenthesis in its text', 'export default <T,>(p = <b>(</b>) => p;\n'],
+  ['a comment before the "<"', 'export default /* the page */ <T,>(p: T) => null;\n'],
+  ['a line break before the "<"', 'export default\n<T,>(p: T) => null;\n'],
+  ['no semicolon at the end of the file', 'export default <T,>(p: T) => null'],
+  ['a name beyond ASCII', 'export default <Τύπος,>(p: Τύπος) => null;\n'],
+  ['an async arrow with a block body', 'export default async <T,>(p: T) => {\n  await Promise.resolve(p);\n  return null;\n};\n'],
+  ['an async arrow with a return type', 'export default async <T extends object>(p: T): Promise<null> => null;\n'],
+  ['an import, and a string that holds the same head', 'import * as React from "react";\nconst label = "<T,>";\nexport default <T,>(p: T) => <p>{label}</p>;\n'],
+];
+// A line break before the arrow is an error that TypeScript's checker reports (TS1200), not its parser, so the page compiles; Babel's parser refuses it.
+const GENERIC_ARROW_EXPORT_LINE_BREAK = 'export default <T,>(p: T)\n=> null;\n';
+// What stays refused: a generic arrow cut off before its body (its brackets balance, so no other check sees the cut), a `<` that TypeScript reads as an element (no
+// component the host can mount, or no page that parses at all), and prose. [what, page]
+const GENERIC_ARROW_REFUSALS = [
+  ['cut after the parameter list', 'import * as React from "react";\nexport default <T,>(props: P<T>)'],
+  ['cut before the arrow, after a return type', 'export default <T,>(props: P<T>): JSX.Element'],
+  ['cut inside the return type', 'export default <T,>(props: P<T>): Promise<'],
+  ['cut at the arrow', 'export default <T,>(props: P<T>) =>'],
+  ['cut after the arrow and a space', 'export default <T,>(props: P<T>) => '],
+  ['cut after the arrow and a line break', 'export default <T,>(props: P<T>) =>\n'],
+  ['cut after the type parameters', 'export default <T extends object>'],
+  ['cut after the type parameters and their trailing comma', 'export default <T,>'],
+  ['cut inside the type parameters', 'export default <T,'],
+  ['cut inside a constraint that holds an arrow', 'export default <T extends (a: string) => void'],
+  ['cut right after the "<"', 'export default <'],
+  ['cut inside the parameter list', 'export default <T,>(props: P<T>'],
+  ['a parameter list, then another statement', 'export default <T,>(props: P<T>)\nconst f = () => 1;\n'],
+  ['a return type, then another statement', 'export default <T,>(props: P<T>): X\nconst f = () => 1;\n'],
+  ['a return type and a semicolon', 'export default <T,>(props: P<T>): X;\nf(() => 1);\n'],
+  ['a body cut at an operator', 'export default <T,>(p: T) => p +'],
+  ['a body cut at a cast', 'export default <T,>(p: T) => p as'],
+  ['an async arrow cut after the parameter list', 'export default async <T,>(props: P<T>)'],
+  ['an async arrow cut at the arrow', 'export default async <T,>(p: T) =>'],
+  ['an async arrow cut inside a constraint that holds an arrow', 'export default async <T extends (a: string) => void'],
+  ['an element', 'export default <div/>;\n'],
+  ['an element with text', 'export default <div>Hello</div>;\n'],
+  ['a fragment', 'export default <></>;\n'],
+  ['one type parameter and no comma: an element in .tsx', 'export default <T>(x) => x;\n'],
+  ['one type parameter and no comma, with a typed parameter', 'export default <T>(x: T) => x;\n'],
+  ['`extends` and then `>`: an element', 'export default <T extends>x</T>;\n'],
+  ['a constraint and no parameter list', 'export default <T extends X>text</T>;\n'],
+  ['a variance modifier, which the rule reads as an element', 'export default <in T,>(x: T) => x;\n'],
+  ['`await` for the name, which is no identifier in an export', 'export default <await,>(x) => x;\n'],
+  ['prose that writes a generic arrow', 'The page says export default <T,>(props: P<T>) => null is required.\n'],
+  ['a generic arrow in a string', 'const s = "export default <T,>(p: T) => null";\n'],
+  ['a generic arrow in a comment', '// export default <T,>(p: T) => null\nconst x = 1;\n'],
+  ['a generic arrow in a template', 'const t = `\nexport default <T,>(p: T) => null\n`;\n'],
+];
+// `yield` for the name: TypeScript's parser takes it for an identifier outside a generator (its strict-mode error is the binder's), but whether it is one takes the
+// function around it, which the lexer does not track, so the rule's answer is the guess `generic` and the element is read (opensTypeParameters). Refused, as before.
+const GENERIC_ARROW_GUESSED = 'export default <yield,>(x) => x;\n';
+
+test('hasDefaultExport accepts a complete generic-arrow default export, sync and async', () => {
+  for (const [what, code] of [...GENERIC_ARROW_EXPORTS, ['a line break before the arrow', GENERIC_ARROW_EXPORT_LINE_BREAK]]) {
+    assert.equal(hasDefaultExport(code), true, what);
+    // The whole gate accepts the page: the brackets balance and nothing is cut off.
+    assert.deepStrictEqual(pageStructureProblems(code), [], what);
+  }
+});
+
+test('hasDefaultExport still refuses a generic arrow cut off before its body, an element and prose', () => {
+  for (const [what, code] of [...GENERIC_ARROW_REFUSALS, ['`yield` for the name', GENERIC_ARROW_GUESSED]]) {
+    assert.equal(hasDefaultExport(code), false, what);
+    assert.match(pageStructureProblems(code).join('\n'), /no complete default export/, what);
+  }
+  // Unchanged around it: an async arrow whose `<` the rule reads as an element is no generic arrow (TypeScript reads `async<T>(x: T)` as a call, and the page compile
+  // refuses the arrow after it), so it is judged as it always was — an `=>` and something after it — and an async arrow with no type parameters too.
+  assert.equal(hasDefaultExport('export default async <T>(x: T) => x;\n'), true);
+  assert.equal(hasDefaultExport('export default async (x) => x;\n'), true);
+  assert.equal(hasDefaultExport('export default async (x) =>'), false);
+  // `async` and a line break: `async` is an exported name, and what follows is another statement.
+  assert.equal(hasDefaultExport('export default async\n<T,>(x: T) => x;\n'), false);
+  // A complete export elsewhere in the page still counts, whatever the generic arrow before it is.
+  assert.equal(hasDefaultExport('export default <T,>(p: T)\nexport default function Page() { return null; }\n'), true);
+});
+
+// The pages above, and a matrix of heads, parameter lists, return types and bodies, sync and async, against TypeScript 5.8 — the compiler the SDK builds a page with — and
+// Babel. The gate accepts exactly the pages TypeScript parses as an arrow with type parameters, and refuses every text cut off between the `<` and the end of the arrow,
+// which TypeScript refuses too. Babel parses every page the gate accepts as such an arrow as well; it also takes `<T>(x) => x` for one, which TypeScript reads as an
+// element in .tsx, so it is no judge of the refusals. A return type that is itself a function type is left out of the cuts: its own `=>` is the first after the parameter
+// list, so a text cut after it reads as complete, as it does for an arrow without type parameters (`export default (x): (y: T) => T`), and the page compile refuses it.
+test('TypeScript and Babel: the gate accepts exactly the generic-arrow default exports TypeScript parses, and refuses every cut before the body', (t) => {
+  const ts = loadTypescriptOracle();
+  if (!ts) return t.skip('no TypeScript parser oracle: set TYPESCRIPT_ORACLE_PATH to a typescript package to run it');
+  // What TypeScript reads `export default` as: 'error' where the page does not parse.
+  const typeScriptReads = (code) => {
+    const source = ts.createSourceFile('page.tsx', code, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+    if (source.parseDiagnostics.length > 0) return 'error';
+    const exported = source.statements.find((statement) => ts.isExportAssignment(statement));
+    if (!exported) return 'no export';
+    if (ts.isArrowFunction(exported.expression)) return exported.expression.typeParameters ? 'generic arrow' : 'arrow';
+    return ts.SyntaxKind[exported.expression.kind];
+  };
+  const refusedByTypeScript = (reading) => reading === 'error' || reading === 'no export' || /^Jsx/.test(reading);
+  for (const [what, code] of GENERIC_ARROW_EXPORTS) assert.strictEqual(typeScriptReads(code), 'generic arrow', what);
+  assert.strictEqual(typeScriptReads(GENERIC_ARROW_EXPORT_LINE_BREAK), 'generic arrow');
+  for (const [what, code] of GENERIC_ARROW_REFUSALS) assert.ok(refusedByTypeScript(typeScriptReads(code)), `${what}: TypeScript reads ${typeScriptReads(code)}`);
+  assert.strictEqual(typeScriptReads(GENERIC_ARROW_GUESSED), 'generic arrow', 'the one refusal TypeScript parses: a guess of the lexer');
+
+  const GENERIC_HEADS = ['<T,>', '<T extends object>', '<const T,>', '<const T extends readonly unknown[]>', '<T = string>', '<T extends object = {}>', '<T, U extends T>',
+    '<T extends (a: string) => void>', '<T extends Record<string, Array<number>>>', '<\n  T,\n>', '<T /* c */,>', '<T extends X>'];
+  // Heads the rule reads as an element: `<T>`, `<T extends>`, a modifier, a tag name, a fragment.
+  const ELEMENT_HEADS = ['<T>', '<T extends>', '<in T,>', '<div>', '<>'];
+  const PARAMETERS = ['()', '(p: T)', '({ a }: { a: T }, ...rest: T[])', '(p = <b>(</b>)'];
+  const RETURNS = ['', ': JSX.Element', ': { a: T; b: string }', ': Promise<Array<T>>', ': ((x: T) => T)'];
+  const BODIES = [' => null', ' => <div/>', ' => {\n  return null;\n}'];
+  const exports = [];
+  for (const head of [...GENERIC_HEADS, ...ELEMENT_HEADS]) exports.push(['', head]);
+  // After `async` a `<` is never an element, and one the rule reads as an element is judged as before (above): only the generic heads.
+  for (const head of GENERIC_HEADS) exports.push(['async ', head]);
+  let accepted = 0;
+  let cuts = 0;
+  for (const [modifier, head] of exports) {
+    for (const parameters of PARAMETERS) {
+      for (const returns of RETURNS) {
+        for (const body of BODIES) {
+          const code = `export default ${modifier}${head}${parameters}${returns}${body};\n`;
+          const reading = typeScriptReads(code);
+          assert.ok(reading === 'generic arrow' || refusedByTypeScript(reading), `${JSON.stringify(code)}: TypeScript reads ${reading}`);
+          assert.strictEqual(pageStructureProblems(code).length === 0, reading === 'generic arrow', `${JSON.stringify(code)}: TypeScript reads ${reading}`);
+          if (reading === 'generic arrow') accepted += 1;
+        }
+        // Every cut from the `<` to the end of the arrow. TypeScript reads no arrow in any of them: it reports an error, or reads what is left as something else
+        // (`export default async <T` is the comparison `async < T`, which is no component either).
+        const whole = `export default ${modifier}${head}${parameters}${returns} => null;\n`;
+        const arrowEnd = whole.lastIndexOf('=>') + 2;
+        for (let end = whole.indexOf('<') + 1; end <= arrowEnd; end += 1) {
+          const cut = whole.slice(0, end);
+          assert.ok(!/arrow$/.test(typeScriptReads(cut)), `${JSON.stringify(cut)}: TypeScript reads an arrow in the cut`);
+          assert.strictEqual(hasDefaultExport(cut), false, JSON.stringify(cut));
+          cuts += 1;
+        }
+      }
+    }
+  }
+  assert.ok(accepted >= 1000, `generic-arrow pages accepted: ${accepted}`);
+  t.diagnostic(`${accepted} generic-arrow pages accepted as TypeScript parses them; ${cuts} cuts refused`);
+
+  const babel = loadBabelOracle();
+  if (!babel) return t.diagnostic('no Babel parser oracle: set BABEL_ORACLE_PATH to an @babel/parser package to compare the readings');
+  const babelReads = (code) => {
+    let tree;
+    try {
+      tree = babel.parse(code, { sourceType: 'module', plugins: ['jsx', 'typescript'] });
+    } catch {
+      return 'error';
+    }
+    const exported = tree.program.body.find((statement) => statement.type === 'ExportDefaultDeclaration');
+    if (!exported) return 'no export';
+    const value = exported.declaration;
+    return value.type === 'ArrowFunctionExpression' && value.typeParameters ? 'generic arrow' : value.type;
+  };
+  for (const [what, code] of GENERIC_ARROW_EXPORTS) assert.strictEqual(babelReads(code), 'generic arrow', what);
+  assert.strictEqual(babelReads(GENERIC_ARROW_EXPORT_LINE_BREAK), 'error', 'Babel refuses a line break before the arrow');
+  for (const [modifier, head] of exports.filter(([, head]) => !ELEMENT_HEADS.includes(head))) {
+    for (const parameters of PARAMETERS) {
+      for (const returns of RETURNS) {
+        for (const body of BODIES) {
+          const code = `export default ${modifier}${head}${parameters}${returns}${body};\n`;
+          assert.strictEqual(babelReads(code), 'generic arrow', JSON.stringify(code));
+        }
+      }
+    }
+  }
+});
+
 test('endsMidStatement distinguishes dangling operators from postfix and JSX or regex closers', () => {
   for (const [what, code] of [
     ['relational greater-than needs a right operand', 'const count = 1;\nexport default () => count >'],

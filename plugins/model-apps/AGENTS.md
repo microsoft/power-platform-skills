@@ -3029,7 +3029,14 @@ expression, a loop that stops at the first `>` or `}`) has to skip comments and 
 itself to be complete (a function or class reaches its body; a bare name is one the module
 declares or imports, not a token that merely appears — the `as` of `import * as React` is not a
 binding), because a write cut inside its export line balances; any complete `export default` will
-do, for overloads. And `endsMidStatement` catches the cuts that leave every bracket balanced: the
+do, for overloads. A **generic arrow** is a default export too (`export default <T,>(props: P<T>) => …`,
+and after `async`): the `<` is read by the same TypeScript rule as any `<` where an expression starts — type
+parameters for `<T,>`, `<T = X>` and `<T extends X>`, after an optional `const` — and any other head is an
+element (`<div/>`, `<T>(x) => x`), which is no component and stays refused; the type parameters must close and a
+parameter list and an arrow with a body must follow (`genericArrowIsComplete`). The export pattern once took no
+`<` after `default`, and every such page was refused as having no default export. The one cut it cannot see is right
+after a return type that is itself a function type (`(p): (x: T) => T`, whose own `=>` reads as the arrow), as for an
+arrow without type parameters; the page compile refuses that one. And `endsMidStatement` catches the cuts that leave every bracket balanced: the
 lexer reports when a file stops inside a string, template, comment or JSX element, and a file
 may not end on a token that needs more (`a +`, `React.`, `=>`). Both gates run all three checks.
 A backslash continues a string over one line terminator, and CR LF is **one** terminator

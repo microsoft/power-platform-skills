@@ -4063,9 +4063,10 @@ function blankNonCodePreservingTemplateExpressions(code, opts) {
  * Both spellings count:
  *   export default <expr|function|class|async function>
  *   export { P as default }   /   export { default } from './x'
+ * and the expression may be a generic arrow, `export default <T,>(props: P<T>) => …` (genericArrowIsComplete).
  */
 // Identifiers may be non-ASCII (`Página`), so every name below is matched by Unicode property. White space is TypeScript's (WS, WS_SINGLE_LINE: see isTrivia), as everywhere in this file.
-const DEFAULT_EXPORT = new RegExp(String.raw`(?:^${WS_SINGLE_LINE}*|[;}]${WS_SINGLE_LINE}*)export${WS_SINGLE_LINE}+default${WS}+[\p{ID_Continue}$({[*]`, 'gmu');
+const DEFAULT_EXPORT = new RegExp(String.raw`(?:^${WS_SINGLE_LINE}*|[;}]${WS_SINGLE_LINE}*)export${WS_SINGLE_LINE}+default${WS}+[\p{ID_Continue}$({[*<]`, 'gmu');
 const NAMED_DEFAULT_EXPORT = new RegExp(String.raw`(?:^${WS_SINGLE_LINE}*|[;}]${WS_SINGLE_LINE}*)export${WS_SINGLE_LINE}*\{[^}]*\bdefault\b[^}]*\}`, 'm');
 const EXPORT_MODIFIER = new RegExp(String.raw`^(async|abstract)\b${WS_SINGLE_LINE}*`);
 const ARROW_CUT_OFF = new RegExp(String.raw`=>${WS}*$`);
@@ -4096,6 +4097,8 @@ function hasDefaultExport(code) {
 // `at` is where the exported thing starts in `bare` (blanked code, so strings and comments are gone).
 function defaultExportIsComplete(bare, at) {
   const rest = bare.slice(at);
+  // A `<` is a generic arrow's type parameters or an element, by TypeScript's rule; only a complete arrow is an export the host can mount.
+  if (rest[0] === '<') return genericArrowIsComplete(rest);
   // `async` and `abstract` only modify what follows. Cut right after one, or inside the keyword it
   // modifies (`export default abstract clas`), the export is incomplete. Followed by `;` or a line
   // break instead, the word is a plain exported name (it is a legal identifier), handled below.
@@ -4104,6 +4107,9 @@ function defaultExportIsComplete(bare, at) {
     const after = rest.slice(mod[0].length);
     if (!trimTrivia(after)) return false;
     if (!/^(?:function|class)\b/.test(after) && !/^(?:;|[\r\n\u2028\u2029])/.test(after)) {
+      // After `async` on its line TypeScript asks the same rule of a `<` (isParenthesizedArrowFunctionExpressionWorker steps over the `async`), so an async generic
+      // arrow is read as a plain one is. A head the rule reads as an element makes no arrow (TypeScript reads `async<T>(x: T)` as a call), and is judged below, as it always was.
+      if (mod[1] === 'async' && after[0] === '<' && opensTypeParameters(after, 0, null, true).generic) return genericArrowIsComplete(after);
       // Only an async ARROW is left — `async (x) => …`, `async x => …` — and it needs its `=>` and body.
       return mod[1] === 'async' && /=>/.test(after) && !ARROW_CUT_OFF.test(after);
     }
@@ -4173,6 +4179,69 @@ function defaultExportIsComplete(bare, at) {
   }
   // `export default GeneratedComponent;` — the module must declare or import the name.
   return declaresName(bare, name[1]);
+}
+
+// `export default <T,>(props: Props<T>) => { … }`: a generic arrow, from its `<` (`rest` is blanked code), with or without `async` before it. In a .tsx file TypeScript reads a
+// `<` where an assignment expression starts by one rule (parser.ts, isParenthesizedArrowFunctionExpressionWorker, the JSX branch,
+// https://github.com/microsoft/TypeScript/blob/v5.8.3/src/compiler/parser.ts), which opensTypeParameters reads: type parameters when, after an optional `const`, the first name is
+// followed by a `,`, an `=`, or `extends` and a token that is not `=`, `>` or `/` —
+//   <T,>(props: P<T>) => …      <T extends object>(p: T) => …      <const T,>(p: T) => …      <T = string>(p: T) => …
+// and an element for any other head: `<div/>`, `<></>`, and `<T>(x) => x`, which in .tsx is the element `<T>` and does not parse. An element is no component the host can
+// mount, so it is refused, as it always was. What follows `export default` is an expression (parseExportAssignment), so the rule is asked as it is where an expression is known
+// to start (`inExpression`): a head it reads as an element is no function type here. The type parameters must then close (skipTypeArguments, as for a function's), a
+// parameter list must follow them (an arrow with type parameters always has one), and an arrow with a body must follow the list. A write cut off anywhere before the body
+// balances its brackets when it stops between them, so only this sees it:
+//   export default <T,>(props: P<T>)      export default <T,>(props: P<T>): JSX.Element      export default <T extends (a: A) => void
+function genericArrowIsComplete(rest) {
+  if (!opensTypeParameters(rest, 0, null, true).generic) return false;
+  let k = skipTypeArguments(rest, 0);
+  while (k < rest.length && isTrivia(rest[k])) k += 1;
+  if (rest[k] !== '(') return false;
+  let depth = 0;
+  for (; k < rest.length; k += 1) {
+    if (rest[k] === '(') depth += 1;
+    else if (rest[k] === ')' && --depth === 0) break;
+  }
+  if (k >= rest.length) return false;
+  const arrow = arrowAfterParameterList(rest, k + 1);
+  if (arrow === -1 || !trimTrivia(rest.slice(arrow + 2))) return false;
+  // The body is taken as written, as any exported expression is (its brackets are checked separately), unless the file stops at a token that needs more: `p +`, `p as`.
+  return !DANGLING_TAIL.test(rest) && !DANGLING_CAST.test(rest);
+}
+
+// The index of the `=>` of an arrow whose parameter list closes just before `from` in `rest` (blanked code), or -1 where the export ends without one. The arrow follows the
+// list at once, or after a return type, which may hold brackets, type arguments and an `=>` of its own at a deeper level:
+//   (props) => …      (props): JSX.Element => …      (p): { a: T; b: U } => …      (p): Promise<Array<T>> => …      (p): ((x: T) => T) => …
+// A `;`, a `,` or a bare `=` at the return type's own level, or a word that only starts a statement (STATEMENT_WORDS, as hasDeclarationBody reads a function's), ends the export
+// with no arrow: `(props: P)` and then `const f = () => 1;` on the next line is no arrow, although an `=>` comes later. A return type that is itself a function type,
+// `(p): (x: T) => T => …`, has its own `=>` at that level, and that one is found first: a write cut right after such a return type reads as complete, as it does for an arrow
+// with no type parameters (`export default (p): (x: T) => T`), and the page compile refuses it.
+function arrowAfterParameterList(rest, from) {
+  let k = from;
+  while (k < rest.length && isTrivia(rest[k])) k += 1;
+  if (rest[k] === '=' && rest[k + 1] === '>') return k;
+  if (rest[k] !== ':') return -1;
+  let depth = 0;
+  for (k += 1; k < rest.length; k += 1) {
+    const c = rest[k];
+    if (c === '=' && rest[k + 1] === '>') {
+      if (depth === 0) return k;
+      k += 1;
+    } else if (c === '(' || c === '[' || c === '{' || c === '<') depth += 1;
+    else if (c === ')' || c === ']' || c === '}' || c === '>') {
+      if (--depth < 0) return -1;
+    } else if (depth === 0 && (c === ';' || c === ',' || c === '=')) return -1;
+    else if (/[\p{ID_Start}$_]/u.test(c)) {
+      let j = k + 1;
+      while (j < rest.length && /[\p{ID_Continue}$\u200c\u200d]/u.test(rest[j])) j += 1;
+      let p = k - 1;
+      while (p >= 0 && isTrivia(rest[p])) p -= 1;
+      // A statement word, unless reached as a property of a qualified type: `(): Schema.module => …`.
+      if (depth === 0 && STATEMENT_WORDS.has(rest.slice(k, j)) && rest[p] !== '.') return -1;
+      k = j - 1;
+    }
+  }
+  return -1;
 }
 
 // True when `name` is a local object binding. This is narrower than declaresName on purpose:

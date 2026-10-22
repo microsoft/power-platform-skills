@@ -18,6 +18,9 @@ const CASES = [
   // A tilde fence needs no escaping inside a template literal, which is how a page embeds markdown help.
   ['fence inside a template literal is data', 'const help = \u0060\n~~~md\nx\n~~~\n\u0060;\nexport default function P() { return <div>{help}</div>; }\n'],
   ['elided body', 'export default function P() {\n  // ... rest of the component\n  return null;\n}\n'],
+  // A generic arrow is a default export (its `<` opens type parameters by TypeScript's rule for .tsx); an element is not, and is no component the host can mount.
+  ['generic-arrow default export', 'export default <T,>(props: { items: T[] }) => <div>{props.items.length}</div>;\n'],
+  ['element for the default export', 'export default <div>ok</div>;\n'],
 ];
 
 for (const [name, code] of CASES) {
@@ -35,4 +38,6 @@ test('a complete page passes and each failure is named', () => {
   assert.match(pageStructureProblems(CASES[6][1]).join('\n'), /markdown code fence/);
   assert.deepEqual(pageStructureProblems(CASES[7][1]), []);
   assert.match(pageStructureProblems(CASES[8][1]).join('\n'), /the page is incomplete/);
+  assert.deepEqual(pageStructureProblems(CASES[9][1]), []);
+  assert.deepEqual(pageStructureProblems(CASES[10][1]), [pageStructureProblems(CASES[2][1])[0]]);
 });
