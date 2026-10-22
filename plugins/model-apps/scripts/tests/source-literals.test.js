@@ -579,6 +579,13 @@ const GENERIC_ARROW_EXPORTS = [
   ['an async arrow with a block body', 'export default async <T,>(p: T) => {\n  await Promise.resolve(p);\n  return null;\n};\n'],
   ['an async arrow with a return type', 'export default async <T extends object>(p: T): Promise<null> => null;\n'],
   ['an import, and a string that holds the same head', 'import * as React from "react";\nconst label = "<T,>";\nexport default <T,>(p: T) => <p>{label}</p>;\n'],
+  // A `>` in a string or template type is no end of the type parameters, nor of a return type.
+  ['a string type and a template type that hold ">"', 'export default <T extends "a>b" | `c${string}>`>(p: T): "x>y" => "x>y";\n'],
+  ['a mapped return type', 'export default <T,>(p: T): { [K in keyof T]: T[K] } => p;\n'],
+  ['an assertion for the return type', 'export default <T,>(p: unknown): asserts p is T => {};\n'],
+  ['a return type named like a statement word, through a qualified name', 'export default <T,>(p: T): Schema.module => null as never;\n'],
+  ['a name written with an escape', 'export default <\\u0054,>(p: \\u0054) => p;\n'],
+  ['CRLF line endings', 'import * as React from "react";\r\nexport default <T extends object>(props: T): JSX.Element => {\r\n  return <div>ok</div>;\r\n};\r\n'],
 ];
 // A line break before the arrow is an error that TypeScript's checker reports (TS1200), not its parser, so the page compiles; Babel's parser refuses it.
 const GENERIC_ARROW_EXPORT_LINE_BREAK = 'export default <T,>(p: T)\n=> null;\n';
