@@ -1704,7 +1704,8 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   checks what the lists name before it writes anything** (`lib/page-binding-targets.js`, called from
   `checkPageBindingsBeforeWriting` next to the navigation check, and in a dry run's plan): it reads the
   environment's `connectionreference` rows and `customapi` rows for the names the pages it writes state —
-  the pages a changed-only run selects and the navigation targets it may have to make — and **stops**
+  every page of a full build; in a changed-only run, the pages it selects and a navigation target only when the
+  target is absent (below) — and **stops**
   (`BuildHalt`, phase `preflight`, code `pages-binding-reference-conflict`, never retried, nothing written) at a
   connection reference of that name whose connector is another than the binding's `connectorId` (compared by the
   connector's name, the last segment of its id). It never guesses and never makes a reference: the author gives the
@@ -1731,6 +1732,16 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   version than the page was made with. A reference whose row names no custom connector gets no definition read, and
   its binding's operations are said as not checked: a null lookup is what a connector the platform publishes has, but
   it is no proof of one (a reference made through the Web API can leave it unset).
+  **A changed-only run checks the pages it writes, and no page it leaves alone.** Its pages phase makes an ABSENT
+  navigation target from the target's spec entry, bindings and all, and leaves one that exists as it is — but it
+  learns which targets exist only after the check. So the changed-only flow tells the build the pages its snapshot
+  records the last verified apply deployed (`changedOnly.deployedKeys`, the keys with a page id): such a target is
+  neither read nor judged, and one it is not told of is checked (fail closed). A target it was told of and that the
+  pages phase finds absent after all (deleted in Maker since) is checked there, before it is made
+  (`pagesMadeUnchecked`), with the same verdict and the same halt; the fast apply runs the pages phase alone, so
+  nothing is written yet. A run with an earlier phase ignores `deployedKeys` (`bindingCheckScope`) and checks every
+  navigation target before it writes anything. A dry run's plan applies the same rule; it does not list the
+  environment's pages, so it cannot mark a target the apply would find absent only then.
   **What a rebuild cannot bring to another environment is what the lists name,
   and the download says so**: when any page holds a binding it prints `NOTE:` on stderr and returns
   `pageBindings` — `pages` (each page's key, name and the connection references / Custom APIs its bindings go by),
@@ -1747,7 +1758,10 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   `page-bindings-real-bundle.test.js` what the real SDK does with the lists: a page read with them, a rebuild
   that writes no row, a changed list that keeps what the spec could not state, a create in another environment, and
   the record of an older publish (the build-level version, with the real pages phase, is in
-  `sdk-build-pages-deploy.test.js`).
+  `sdk-build-pages-deploy.test.js`, which also pins what a changed-only run checks).
+  `page-binding-targets-real-bundle.test.js` runs a changed-only apply through the flow over the real SDK and the
+  real page backend: an edit of one page leaves an existing navigation target's binding unread, an edit of the target
+  itself is refused, and a target deleted since the last apply is refused before it is made.
   **A download is written in a fixed order, so two downloads of one app match byte for byte** and a diff
   between them shows only what changed. Dataverse promises no row order for a query without `$orderby`,
   and a directory listing is in the file system's order (name order on NTFS, hash order on ext4), so

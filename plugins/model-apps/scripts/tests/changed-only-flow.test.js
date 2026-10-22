@@ -265,6 +265,44 @@ test('run: FAST apply calls buildModelApp pages-only + re-blesses the snapshot e
   } finally { rm(dir); }
 });
 
+// The fast apply writes the changed pages, and a navigation target only when it is absent (the pages phase makes it first). The build checks a page's bindings before it writes anything, before the pages
+// phase has read which targets exist, so the flow tells it the pages its snapshot records the last verified apply deployed: a target among them is not checked, and one that is not may be absent.
+test('run: a FAST apply tells the build which pages its snapshot records as deployed — each with a page id, and no other', async () => {
+  const dir = ws();
+  try {
+    const prior = annotate(baseSpec(), 'v1');
+    const env = snap.makeEnvelope(LIVE, { generation: 'g0' });
+    env.priorSpec = prior;
+    env.artifacts = { pages: {
+      overview: { pageId: 'page-1', sourceSha: prior.pages[0].__contentSha, deployedSha: prior.pages[0].__contentSha },
+      detail: { pageId: 'page-2', sourceSha: 'sha-detail', deployedSha: 'sha-detail' },
+      unplaced: { pageId: null, sourceSha: 'sha-unplaced', deployedSha: 'sha-unplaced' },
+    } };
+    snap.markEligible(env);
+    store.writeSnapshotAtomic(dir, env);
+    const record = [];
+    const r = await flow.runChangedOnlyApply({ spec: baseSpec(), opts: { workspaceDir: dir, apply: true }, deps: baseDeps(dir, { record, buildModelApp: stubBuild(record), readContent: readFor('v2') }) });
+    assert.strictEqual(r.changedOnly.decision, 'fast');
+    assert.deepStrictEqual(record[0].changedOnly.selectedKeys, ['overview']);
+    assert.deepStrictEqual([...record[0].changedOnly.deployedKeys].sort(), ['detail', 'overview'], 'a record without a page id proves no page');
+  } finally { rm(dir); }
+});
+
+test('run: a FAST apply over a snapshot that records no pages tells the build that none is deployed — so it checks every navigation target', async () => {
+  const dir = ws();
+  try {
+    const prior = annotate(baseSpec(), 'v1');
+    const env = snap.makeEnvelope(LIVE, { generation: 'g0' });
+    env.priorSpec = prior;
+    snap.markEligible(env);
+    store.writeSnapshotAtomic(dir, env);
+    const record = [];
+    const r = await flow.runChangedOnlyApply({ spec: baseSpec(), opts: { workspaceDir: dir, apply: true }, deps: baseDeps(dir, { record, buildModelApp: stubBuild(record), readContent: readFor('v2') }) });
+    assert.strictEqual(r.changedOnly.decision, 'fast');
+    assert.deepStrictEqual(record[0].changedOnly.deployedKeys, []);
+  } finally { rm(dir); }
+});
+
 test('run: a fast apply whose page VERIFY did not pass is NOT re-blessed (fail-closed)', async () => {
   const dir = ws();
   try {

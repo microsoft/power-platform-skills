@@ -187,6 +187,13 @@ function assembleFastSnapshot({ snapshot, annotatedSpec, created, pageKeys, gene
   return env;
 }
 
+// The pages a snapshot records as deployed by the last verified apply: the keys whose record holds a page id (apply-snapshot-index.js `indexArtifacts`, assembleFastSnapshot). A record without one proves
+// no page, and a snapshot that records none (an older one) names none — so the build checks every navigation target, as it always did.
+function deployedPageKeys(snapshot) {
+  const pages = (snapshot && snapshot.artifacts && snapshot.artifacts.pages) || {};
+  return Object.keys(pages).filter((key) => pages[key] && pages[key].pageId);
+}
+
 // ---- orchestration ------------------------------------------------------------------------------------
 
 // Run the `--apply --changed-only` flow. `deps.buildModelApp` is injected (no require cycle) so this
@@ -329,7 +336,10 @@ async function runChangedOnlyApply({ spec, opts, deps }) {
       return { ok: false, errors: [msg], changedOnly: decision };
     }
     // selectedKeys: upload ONLY the changed pages (never clobber an unchanged one).
-    const fastOpts = { ...fullApplyOpts(opts), phases: ['pages'], changedOnly: { fastApply: true, resolvedAppId: live.appId, skipSitemapFinalize: true, selectedKeys: decision.pageKeys } };
+    // deployedKeys: the pages the snapshot records its last verified apply deployed. The build checks the bindings of the pages it writes before it writes anything, and it writes a navigation target only
+    // when the target is absent — which it learns only later, in its pages phase. So it is told which pages are there, and leaves their bindings unread; one it was told of and finds absent after all
+    // (deleted in Maker since) it checks before it makes it (sdk-build.js, pagesMadeUnchecked).
+    const fastOpts = { ...fullApplyOpts(opts), phases: ['pages'], changedOnly: { fastApply: true, resolvedAppId: live.appId, skipSitemapFinalize: true, selectedKeys: decision.pageKeys, deployedKeys: deployedPageKeys(snapshot) } };
     const { r, moved } = await buildHolding(ws, inv.generation, log, () => deps.buildModelApp(spec, fastOpts, deps.buildDeps));
     // Re-bless ONLY on a fully successful apply whose mandatory page verify PASSED (a fast apply always
     // applies the pages phase, so verify is mandatory and r.verify is always set — a missing/failed verify

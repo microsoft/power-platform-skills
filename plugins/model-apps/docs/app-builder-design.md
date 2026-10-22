@@ -685,6 +685,14 @@ of the touched artifacts only. A pre-mutation live-projection equality check ref
 Maker-drifted artifact (a page write is checked against the page's version only between its own read and its write — the residual concurrent-edit race is documented as
 unsupported).
 
+The pages-only fast apply checks the bindings of the pages it WRITES before it writes anything: its changed
+keys, and a navigation target only when the target is absent (the pages phase creates it from its spec entry,
+bindings and all, and leaves an existing one as it is). Whether a target exists the pages phase learns only
+after that check, so the flow passes the page keys the snapshot records as deployed (`changedOnly.deployedKeys`):
+a listed target is not read, an unlisted one is checked (fail closed), and a listed one the pages phase finds
+absent (deleted in Maker since the last apply) is checked there before it is created — still before any write,
+because the fast apply runs the pages phase alone.
+
 **CONFIRMED landmine (validated against `sdk-build.js`) — the pages-only fast path MUST skip the sitemap
 finalize.** The pages phase's finalize (`sdk-build.js:1428-1437`) rebuilds the WHOLE sitemap via
 `appDef(spec, result.created)` and writes `/siteMap` + `components`. In a pages-only run `result.created`

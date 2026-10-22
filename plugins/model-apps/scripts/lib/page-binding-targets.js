@@ -53,23 +53,35 @@ const referenceConnectorKey = (id) => (typeof id === 'string' && CONNECTOR_API_I
 const bindingConnectorKey = (id) => (typeof id === 'string' && (CONNECTOR_API_ID.test(id) || CONNECTOR_NAME.test(id)) ? connectorKey(id) : null);
 
 // The pages a build writes that state a binding: [{ key, name, connectorBindings?, actionBindings? }], with the lists as the spec states them, in the spec's order. A page with no source the build can deploy is not
-// written, and a page that states no entry has nothing to check. A changed-only run writes the pages it selected and any page another one navigates to (the build makes an absent target first, from its own
-// spec entry, so it may have to write it), and no other.
+// written, and a page that states no entry has nothing to check.
+// A changed-only run (`changedOnly.selectedKeys`) writes the pages it selected, and a page another one navigates to only when that page is ABSENT: the pages phase makes an absent target first, from its own spec
+// entry, bindings and all, and leaves one that exists as it is (sdk-build.js, `uploadedThisRun`). Which targets exist is settled by the pages phase, after this check has run, so the run may be told which of its
+// pages are deployed (`changedOnly.deployedKeys`: the changed-only flow passes the pages its last verified apply recorded). A target it is told of is left out; one it is not told of may be absent, so it is checked —
+// what is not known is never read as "it exists". A target it was told of and that the pages phase finds absent after all (deleted in Maker since) is checked there, before it is made (pagesMadeUnchecked).
 function pagesStatingBindings(spec, { changedOnly } = {}) {
   const pages = Array.isArray(spec && spec.pages) ? spec.pages : [];
   const selected = changedOnly && Array.isArray(changedOnly.selectedKeys) ? new Set(changedOnly.selectedKeys) : null;
+  const deployed = new Set(selected && Array.isArray(changedOnly.deployedKeys) ? changedOnly.deployedKeys : []);
   const navigatedTo = new Set(pages.flatMap((page) => ((page && page.navigatesTo) || []).map((target) => target && target.targetKey)));
   const out = [];
   for (const page of pages) {
     const source = normalizePageSource(page);
     if (!(source && source.kind === 'tsx' && source.codeFile)) continue;
     const key = page.key || page.name;
-    if (selected && !selected.has(key) && !navigatedTo.has(key)) continue;
+    if (selected && !selected.has(key) && !(navigatedTo.has(key) && !deployed.has(key))) continue;
     const lists = statedPageBindings(page);
     if (!Object.values(lists).some((list) => list.length)) continue;
     out.push({ key, name: page.name, ...lists });
   }
   return out;
+}
+
+// The pages the pages phase is about to MAKE (`made`: the keys of the absent navigation targets it creates) that state a binding the check before writing did not read, because the run was told the page is
+// deployed (pagesStatingBindings): each is checked before the first is made, as that check would have checked it. Every other page the run writes was checked before it wrote anything, so this is [] for a run
+// that was told nothing, and for a full build.
+function pagesMadeUnchecked(spec, { changedOnly, made }) {
+  const checked = new Set(pagesStatingBindings(spec, { changedOnly }).map((page) => page.key));
+  return pagesStatingBindings(spec).filter((page) => made.has(page.key) && !checked.has(page.key));
 }
 
 // The names the pages state for one kind of binding: each once, as the first page spells it (the service compares them without regard to case, and the match here is made in lower case).
@@ -355,4 +367,4 @@ function judgeBindingTargets(pages, targets) {
   return { findings, unchecked };
 }
 
-module.exports = { connectorKey, pagesStatingBindings, readBindingTargets, judgeBindingTargets, definedOperations };
+module.exports = { connectorKey, pagesStatingBindings, pagesMadeUnchecked, readBindingTargets, judgeBindingTargets, definedOperations };

@@ -6,7 +6,7 @@
 // exists for ANOTHER connector is refused — the page would call that connector under this name, and the name cannot tell them apart — and a name that is not there, or a Custom API of another kind, is said by name.
 const { test } = require('node:test');
 const assert = require('node:assert');
-const { connectorKey, pagesStatingBindings, readBindingTargets, judgeBindingTargets, definedOperations } = require('../lib/page-binding-targets.js');
+const { connectorKey, pagesStatingBindings, pagesMadeUnchecked, readBindingTargets, judgeBindingTargets, definedOperations } = require('../lib/page-binding-targets.js');
 
 const WEATHER = { logicalName: 'contoso_msnweather', connectorId: '/providers/Microsoft.PowerApps/apis/shared_msnweather', dataset: '', operations: ['CurrentWeather'] };
 const SHAREPOINT = { logicalName: 'contoso_sharepoint', connectorId: '/providers/Microsoft.PowerApps/apis/shared_sharepointonline', dataset: 'https://contoso.sharepoint.com/sites/x', tables: ['11111111-2222-3333-4444-555555555555'] };
@@ -58,6 +58,52 @@ test('pagesStatingBindings: a changed-only run writes the pages it selected, and
   assert.deepStrictEqual(keys({ selectedKeys: ['a'] }), ['a', 'c'], 'the selected page, and c, which b navigates to');
   assert.deepStrictEqual(keys({ selectedKeys: [] }), ['c']);
   assert.deepStrictEqual(keys({ resolvedAppId: 'x' }), ['a', 'b', 'c', 'd'], 'a changed-only run that selects nothing by key is not narrowed');
+});
+
+// A changed-only run makes a navigation target only when the target is absent; one that exists is left as it is, so its bindings are not written and not checked. Whether it exists is known only to what the
+// run is told (`deployedKeys`, the pages its last verified apply deployed): a target it is not told of may be absent, and is checked.
+test('pagesStatingBindings: a changed-only run told which pages are deployed checks a navigation target only when it is absent — and every target it is not told of', () => {
+  const spec = { pages: [
+    pageOf('a', { connectorBindings: [WEATHER] }),
+    pageOf('b', { connectorBindings: [SHAREPOINT], navigatesTo: [{ targetKey: 'c' }] }),
+    pageOf('c', { actionBindings: [APPROVE] }),
+    pageOf('d', { actionBindings: [SUMMARY] }),
+  ] };
+  const keys = (changedOnly) => pagesStatingBindings(spec, { changedOnly }).map((p) => p.key);
+  const ALL = ['a', 'b', 'c', 'd'];
+  assert.deepStrictEqual(keys({ selectedKeys: ['a'], deployedKeys: ALL }), ['a'], 'c exists: the run leaves it as it is, so its bindings are not read');
+  assert.deepStrictEqual(keys({ selectedKeys: ['b'], deployedKeys: ALL }), ['b'], 'nor when the page that navigates to it is the one written');
+  assert.deepStrictEqual(keys({ selectedKeys: ['a'], deployedKeys: ['a', 'b', 'd'] }), ['a', 'c'], 'c is not deployed: the run makes it, bindings and all');
+  assert.deepStrictEqual(keys({ selectedKeys: ['c'], deployedKeys: ALL }), ['c'], 'a selected page is written whether or not it exists');
+  assert.deepStrictEqual(keys({ selectedKeys: [], deployedKeys: ALL }), []);
+  assert.deepStrictEqual(keys({ selectedKeys: ['a'], deployedKeys: [] }), ['a', 'c']);
+  // Not told, or told in a form that says nothing: c may be absent, so it is checked, as before.
+  assert.deepStrictEqual(keys({ selectedKeys: ['a'] }), ['a', 'c']);
+  for (const deployedKeys of [undefined, null, 'c', { c: true }, 7]) assert.deepStrictEqual(keys({ selectedKeys: ['a'], deployedKeys }), ['a', 'c'], JSON.stringify(deployedKeys));
+  // A run that is not changed-only writes every page, whatever it is told.
+  assert.deepStrictEqual(keys({ deployedKeys: ALL }), ALL);
+  assert.deepStrictEqual(keys({ resolvedAppId: 'x', deployedKeys: ALL }), ALL);
+});
+
+// The pages phase settles which targets are absent, after the check before writing ran: a target the run was told of that it then finds absent (deleted in Maker since the last apply) is made from its spec
+// entry, so it is handed back to be checked before it is made. Nothing else is: every other page the run writes was checked before it wrote anything.
+test('pagesMadeUnchecked is the pages about to be made that the check before writing left out — the targets the run was told of and found absent — and nothing else', () => {
+  const spec = { pages: [
+    pageOf('a', { connectorBindings: [WEATHER] }),
+    pageOf('b', { connectorBindings: [SHAREPOINT], navigatesTo: [{ targetKey: 'c' }, { targetKey: 'e' }] }),
+    pageOf('c', { actionBindings: [APPROVE] }),
+    pageOf('d', { actionBindings: [SUMMARY] }),
+    pageOf('e'),
+  ] };
+  const keys = (changedOnly, made) => pagesMadeUnchecked(spec, { changedOnly, made: new Set(made) }).map((p) => p.key);
+  assert.deepStrictEqual(keys({ selectedKeys: ['a'], deployedKeys: ['a', 'b', 'c', 'd', 'e'] }, ['c']), ['c'], 'c was said to be deployed, and is about to be made: it is checked now');
+  assert.deepStrictEqual(pagesMadeUnchecked(spec, { changedOnly: { selectedKeys: ['a'], deployedKeys: ['a', 'b', 'c', 'd', 'e'] }, made: new Set(['c']) }), [{ key: 'c', name: 'C', actionBindings: [APPROVE] }], 'with the lists as the spec states them');
+  assert.deepStrictEqual(keys({ selectedKeys: ['a'], deployedKeys: ['a', 'b', 'c', 'd', 'e'] }, ['c', 'e']), ['c'], 'e states no binding: nothing to check');
+  assert.deepStrictEqual(keys({ selectedKeys: ['a'], deployedKeys: ['a', 'b', 'c', 'd', 'e'] }, []), [], 'nothing is about to be made');
+  assert.deepStrictEqual(keys({ selectedKeys: ['a'], deployedKeys: ['a', 'b', 'd', 'e'] }, ['c']), [], 'c was not said to be deployed: it was checked before anything was written');
+  assert.deepStrictEqual(keys({ selectedKeys: ['a'] }, ['c']), [], 'a run told nothing checked every target before anything was written');
+  assert.deepStrictEqual(keys(undefined, ['c']), [], 'and a full build checked every page');
+  assert.deepStrictEqual(keys({ selectedKeys: ['c'], deployedKeys: ['a', 'b', 'c', 'd', 'e'] }, ['c']), [], 'a selected page was checked before anything was written');
 });
 
 // ── reading the environment ──────────────────────────────────────────────────────────────────────────────────────────────────

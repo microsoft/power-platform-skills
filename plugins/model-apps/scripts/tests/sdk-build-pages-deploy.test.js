@@ -2856,6 +2856,179 @@ test('changed-only: a binding whose reference is another connector\'s stops a ru
   } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
 });
 
+// ── a changed-only run leaves alone the bindings of a navigation target that exists ─────────────────────────────────────────────────────────
+// Three pages: Alpha, Bravo — which navigates to Charlie — and Charlie, whose connector binding goes through `contoso_msnweather`, a connection reference this environment holds for ANOTHER connector. A
+// changed-only run writes the pages it selected, and makes a navigation target only when the target is ABSENT (from its spec entry, bindings and all); one that exists it leaves as it is. Which targets exist
+// is settled by the pages phase, after the check before writing, so the changed-only flow tells the build the pages its last verified apply deployed (`deployedKeys`): such a target is not checked, and one
+// the pages phase then finds absent after all is checked there, before it is made. A run told nothing, a run that writes before its pages phase, and a full build check every target, as they always did.
+const ABC_IDS = { alpha: 'a1a1a1a1-0000-4000-8000-00000000000a', bravo: 'b2b2b2b2-0000-4000-8000-00000000000b', charlie: 'c3c3c3c3-0000-4000-8000-00000000000c' };
+const ABC_NAMES = { alpha: 'Alpha', bravo: 'Bravo', charlie: 'Charlie' };
+const ABC_KEYS = Object.keys(ABC_IDS);
+const reference = (logicalName, connector) => ({ connectionreferencelogicalname: logicalName, connectorid: `/providers/Microsoft.PowerApps/apis/${connector}`, connectionid: `${connector}-0001`, _customconnectorid_value: null });
+// Charlie's reference, as the environment holds it: for another connector than Charlie's binding says.
+const CHARLIE_REFERENCE = reference('contoso_msnweather', 'shared_office365users');
+const SHAREPOINT_BINDING = { logicalName: 'contoso_sharepoint', connectorId: '/providers/Microsoft.PowerApps/apis/shared_sharepointonline', dataset: 'https://contoso.sharepoint.com/sites/x', tables: ['11111111-2222-3333-4444-555555555555'] };
+
+// `present`: the pages the environment holds — the rest are absent, as a page deleted in Maker since the last apply is. `alpha`: what Alpha states besides its source.
+function abcApp({ present = ABC_KEYS, alpha = {} } = {}) {
+  const appDir = fs.mkdtempSync(path.join(os.tmpdir(), 'abc-bindings-'));
+  fs.writeFileSync(path.join(appDir, 'alpha.tsx'), 'export default function A(){ return null; }', 'utf8');
+  fs.writeFileSync(path.join(appDir, 'bravo.tsx'), `export default function B(){ ${NAV('charlie')} return null; }`, 'utf8');
+  fs.writeFileSync(path.join(appDir, 'charlie.tsx'), 'export default function C(){ return null; }', 'utf8');
+  const spec = {
+    schemaVersion: 2,
+    solution: { uniqueName: 'AbcBindings', displayName: 'Abc', publisherPrefix: 'contoso' },
+    app: { name: 'Abc Bindings App' },
+    entities: [{ schemaName: 'contoso_item', displayName: 'Item', primaryAttribute: { schemaName: 'contoso_name', displayName: 'Name' }, columns: [] }],
+    pages: [
+      { key: 'alpha', name: 'Alpha', source: { kind: 'tsx', codeFile: 'alpha.tsx' }, ...alpha },
+      { key: 'bravo', name: 'Bravo', navigatesTo: [{ targetKey: 'charlie' }], source: { kind: 'tsx', codeFile: 'bravo.tsx' } },
+      { key: 'charlie', name: 'Charlie', source: { kind: 'tsx', codeFile: 'charlie.tsx' }, connectorBindings: [HELD_WEATHER] },
+    ],
+    appShell: { areas: [{ label: 'Main', groups: [{ label: 'G', subAreas: [...ABC_KEYS.map((key) => ({ page: key, title: ABC_NAMES[key] })), TABLE_ENTRY] }] }] },
+  };
+  const live = present.map((key) => ({ pageId: ABC_IDS[key], name: ABC_NAMES[key] }));
+  const manifest = { schemaVersion: 1, pages: present.map((key) => ({ key, name: ABC_NAMES[key], pageId: ABC_IDS[key] })) };
+  // Every read of what the bindings name, and every write to the SDK, whatever the run.
+  const reads = [];
+  const writes = [];
+  const run = (options, references = [CHARLIE_REFERENCE]) => {
+    const { sdk } = mockSdk({ pageManifest: Buffer.from(JSON.stringify(manifest), 'utf8').toString('base64'), liveSitemapXml: pageSitemap(live.map((p) => p.pageId)), pageRows: live.map((p) => ({ uxagentprojectid: p.pageId, name: p.name })) });
+    const answer = sdk.queryRecords;
+    sdk.queryRecords = async (entity, query) => {
+      if (!['connectionreference', 'customapi', 'connector'].includes(entity)) return answer(entity, query);
+      reads.push({ entity, filter: query && query.filter });
+      return entity === 'connectionreference' ? references : [];
+    };
+    for (const method of Object.keys(sdk).filter((name) => /^(create|update|push|publish|add|remove|set|enrich|seed)/.test(name))) {
+      const original = sdk[method];
+      sdk[method] = (...args) => { writes.push(method); return original(...args); };
+    }
+    const genpage = abcGenpage(live);
+    return { genpage, built: runSdkBuild(spec, { sdk, env: 'https://x', appDir, genpageCli: genpage, apply: true, phases: PAGES_ONLY, ...options }) };
+  };
+  return { appDir, spec, reads, writes, run };
+}
+
+// The page backend of the three pages: the environment's pages are `live`, and a create makes the page under its own id.
+function abcGenpage(live) {
+  const uploads = [];
+  const answer = (o, pageId) => ({ pageId, name: o.name, publish: { kind: 'verified', detail: '' }, warnings: [] });
+  return {
+    uploads,
+    enumerateEnv: async () => ({ ok: true, ids: live.map((p) => p.pageId.toLowerCase()), pages: live }),
+    create: async (o) => {
+      const key = ABC_KEYS.find((k) => ABC_NAMES[k] === o.name);
+      uploads.push(`create ${o.name}`);
+      return answer(o, ABC_IDS[key]);
+    },
+    update: async (id, o) => { uploads.push(`update ${o.name}`); return answer(o, id); },
+    placeInApp: async () => ({ added: [], alreadyPlaced: [], pinnedViews: [], warnings: [], appEdited: false }),
+  };
+}
+const fastApply = (selectedKeys, extra = {}) => ({ changedOnly: { fastApply: true, resolvedAppId: APP_ID, skipSitemapFinalize: true, selectedKeys, ...extra } });
+const conflictOn = (page) => (e) => e.code === 'pages-binding-reference-conflict' && e.phase === 'preflight' && e.recoverable === false && e.transient === false
+  && new RegExp(`page "${page}": connector binding "[a-z_]+" is for connector shared_[a-z0-9]+, but the connection reference of that name in this environment is for connector shared_[a-z0-9]+`).test(e.message)
+  && /The build stopped before writing anything\./.test(e.message);
+
+test('changed-only: an edit of one page leaves alone the bindings of a navigation target that exists — not read, not refused, not said — though its reference is another connector\'s', async () => {
+  const app = abcApp();
+  try {
+    const warnings = [];
+    const { genpage, built } = app.run({ ...fastApply(['alpha'], { deployedKeys: ABC_KEYS }), warn: (m) => warnings.push(String(m)) });
+    const result = await built;
+    assert.ok(result.ok, JSON.stringify(result));
+    assert.deepStrictEqual(genpage.uploads, ['update Alpha'], 'Alpha alone is written: Charlie exists, so it is not made, and Bravo is not selected');
+    assert.deepStrictEqual(app.reads, [], 'no page the run writes states a binding, so nothing is read of what bindings name');
+    assert.deepStrictEqual(warnings.filter((w) => /contoso_msnweather|"Charlie"/.test(w)), [], 'and nothing is said of Charlie\'s binding');
+  } finally { fs.rmSync(app.appDir, { recursive: true, force: true }); }
+});
+
+test('changed-only: the read is for the bindings of the pages the run writes — a target that exists adds no name to it', async () => {
+  const app = abcApp({ alpha: { connectorBindings: [SHAREPOINT_BINDING] } });
+  try {
+    const { genpage, built } = app.run(fastApply(['alpha'], { deployedKeys: ABC_KEYS }), [CHARLIE_REFERENCE, reference('contoso_sharepoint', 'shared_sharepointonline')]);
+    assert.ok((await built).ok);
+    assert.deepStrictEqual(genpage.uploads, ['update Alpha']);
+    assert.deepStrictEqual(app.reads.map((r) => r.entity), ['connectionreference'], 'one read of the references, as for any page that states a connector binding');
+    assert.strictEqual(app.reads[0].filter, "connectionreferencelogicalname eq 'contoso_sharepoint'", 'for Alpha\'s reference alone');
+  } finally { fs.rmSync(app.appDir, { recursive: true, force: true }); }
+});
+
+test('changed-only: a page the run writes is still refused for a reference that is another connector\'s — before anything is written', async () => {
+  const app = abcApp({ alpha: { connectorBindings: [SHAREPOINT_BINDING] } });
+  try {
+    const { genpage, built } = app.run(fastApply(['alpha'], { deployedKeys: ABC_KEYS }), [CHARLIE_REFERENCE, reference('contoso_sharepoint', 'shared_office365users')]);
+    await assert.rejects(built, conflictOn('Alpha'));
+    assert.deepStrictEqual(genpage.uploads, [], 'nothing was uploaded');
+    assert.deepStrictEqual(app.writes, [], 'and nothing else was written');
+  } finally { fs.rmSync(app.appDir, { recursive: true, force: true }); }
+});
+
+test('changed-only: an ABSENT navigation target is made by the run, bindings and all, so it is refused before anything is written — told of the pages that exist, or told nothing', async () => {
+  for (const extra of [{ deployedKeys: ['alpha', 'bravo'] }, {}]) {
+    const app = abcApp({ present: ['alpha', 'bravo'] });
+    try {
+      const { genpage, built } = app.run(fastApply(['alpha'], extra));
+      await assert.rejects(built, conflictOn('Charlie'), JSON.stringify(extra));
+      assert.deepStrictEqual(genpage.uploads, [], 'Charlie was not made, and Alpha not written');
+      assert.deepStrictEqual(app.writes, []);
+    } finally { fs.rmSync(app.appDir, { recursive: true, force: true }); }
+  }
+});
+
+// The flow's record is of its last verified apply, and a maker can delete a page in Maker after it. The run is then told Charlie exists, and the pages phase finds it absent and makes it from its spec entry:
+// its bindings are checked there, before the first page is written, with the same halt — never left unchecked because the record said the page was there.
+test('changed-only: a target the run was told exists, and finds absent, is checked before it is made — the same halt, and nothing written', async () => {
+  const app = abcApp({ present: ['alpha', 'bravo'] });
+  try {
+    const { genpage, built } = app.run(fastApply(['alpha'], { deployedKeys: ABC_KEYS }));
+    await assert.rejects(built, (e) => conflictOn('Charlie')(e) && /^1 connector binding\(s\) name a connection reference this environment already has for ANOTHER connector: /.test(e.message));
+    assert.deepStrictEqual(genpage.uploads, [], 'Charlie was not made, and Alpha not written');
+    assert.deepStrictEqual(app.writes, [], 'and nothing else was written');
+    assert.deepStrictEqual(app.reads, [{ entity: 'connectionreference', filter: "connectionreferencelogicalname eq 'contoso_msnweather'" }], 'Charlie\'s reference was read once, when the run found it was to make the page');
+  } finally { fs.rmSync(app.appDir, { recursive: true, force: true }); }
+});
+
+test('changed-only: a run that is told nothing of which pages exist checks every navigation target before it writes anything, as before', async () => {
+  const app = abcApp();
+  try {
+    const { genpage, built } = app.run(fastApply(['alpha']));
+    await assert.rejects(built, conflictOn('Charlie'));
+    assert.deepStrictEqual(genpage.uploads, []);
+    assert.deepStrictEqual(app.writes, []);
+  } finally { fs.rmSync(app.appDir, { recursive: true, force: true }); }
+});
+
+test('a full build writes every page, so a target\'s binding is refused before anything is written — and so is it in a changed-only run that writes before its pages phase, whatever it is told', async () => {
+  for (const extra of [{}, { changedOnly: { selectedKeys: ['alpha'], deployedKeys: ABC_KEYS } }]) {
+    const app = abcApp();
+    try {
+      const { genpage, built } = app.run({ phases: PHASES, ...extra });
+      await assert.rejects(built, conflictOn('Charlie'), JSON.stringify(extra));
+      assert.deepStrictEqual(genpage.uploads, []);
+      assert.deepStrictEqual(app.writes, [], 'no solution, table, app or page');
+    } finally { fs.rmSync(app.appDir, { recursive: true, force: true }); }
+  }
+});
+
+test('changed-only: a dry run marks the pages an apply would stop at, and no other — by the same rule', async () => {
+  const marked = async (options, present) => {
+    const app = abcApp(present ? { present, alpha: options.alpha } : { alpha: options.alpha });
+    try {
+      const { built } = app.run({ ...fastApply(['alpha'], options.extra), apply: false }, options.references);
+      const planned = await built;
+      assert.strictEqual(planned.dryRun, true);
+      return { halts: planned.planItems.filter((item) => item.wouldHalt).map((item) => item.label), reads: app.reads.length };
+    } finally { fs.rmSync(app.appDir, { recursive: true, force: true }); }
+  };
+  assert.deepStrictEqual(await marked({ extra: { deployedKeys: ABC_KEYS } }), { halts: [], reads: 0 }, 'Charlie exists: an apply writes Alpha alone');
+  assert.deepStrictEqual(await marked({ extra: { deployedKeys: ['alpha', 'bravo'] } }, ['alpha', 'bravo']), { halts: ['page "Charlie"'], reads: 1 }, 'Charlie is absent: an apply makes it, and stops');
+  assert.deepStrictEqual(await marked({ extra: {} }), { halts: ['page "Charlie"'], reads: 1 }, 'told nothing, the plan checks every target, as the apply does');
+  const alphaConflict = { alpha: { connectorBindings: [SHAREPOINT_BINDING] }, references: [CHARLIE_REFERENCE, reference('contoso_sharepoint', 'shared_office365users')] };
+  assert.deepStrictEqual(await marked({ ...alphaConflict, extra: { deployedKeys: ABC_KEYS } }), { halts: ['page "Alpha"'], reads: 1 }, 'the page an apply writes is marked');
+});
+
 test('deploy: the record keeps only the pages the spec still binds — a page it no longer names is dropped when the next is written', async () => {
   const { appDir, spec } = twoPageApp();
   const server = new FakeGenPageServer();
