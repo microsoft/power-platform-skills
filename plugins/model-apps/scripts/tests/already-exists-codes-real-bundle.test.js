@@ -13,8 +13,8 @@
 // written for these tests, to be words the English rule cannot read. The codes are the ones lib/entity-provision.js documents
 // (ALREADY_EXISTS_CODES). What must not move: a code of ANOTHER create, a generic code, and a code that the words only quote do not by
 // themselves make an answer an already-exists one — given words the English rule cannot read, such an answer stops the build (the 409
-// and English-word rules are unchanged and still apply whatever code an answer carries); and the reads that decide a table and a
-// relationship are made as before.
+// and English-word rules are unchanged and still apply whatever code an answer carries, save a key create's 0x80060894, whose words are
+// never read: see its own section below); and the reads that decide a table and a relationship are made as before.
 //
 // Two codes are broader than the create they are listed for, and are pinned on both sides of the read that decides: the table create's
 // 0x80044363 (a schema name that is not unique — what an existing table's create was answered, live, but a name another kind of
@@ -156,6 +156,148 @@ test('an alternate key refused in another language with a code that does not say
   ]) {
     const run = await build(KEYED, keyRefusedWith(keyAnswer));
     assertStopsAt(run, 'alt key contoso_Project.contoso_CodeKey', keyAnswer.body.error.message, what);
+  }
+});
+
+// --- an alternate key refused because ANOTHER key of the table is over its columns (0x80060894) ------------------------------------
+// The platform allows one key per set of columns, and answers the create of a second one with EntityKeyWithSelectedAttributesExists, in the
+// reference's words:
+//   HTTP 400 {"error":{"code":"0x80060894","message":"An entity key with the selected attributes already exists on entity."}}
+// That does not say the DECLARED key exists: the key over those columns can be another one. Its English words read as an already-exists answer
+// all the same, so an English build skipped the key — never created, and its verification then found it missing — while the same answer in
+// Spanish stopped the build with the platform's words. The code decides now, in every language: the build reads the table's keys again (the
+// read that finds the table) and skips the key only where the key over those columns is the declared one; a key of another name stops the
+// build naming it, the columns and what to do; and a read that fails, or shows no key over exactly those columns, stops it with the
+// platform's own error. The Spanish text is written for these tests; the English one is the reference's.
+const { isTransientHalt } = require('../build-model-app.js');
+const { retryPolicyFor, RETRY } = require('../lib/retry-policy.js');
+
+const KEYS_PROBE = `${PROBE}&$expand=Keys($select=SchemaName,KeyAttributes)`;
+const TABLE_LIST = '/EntityDefinitions?$select=LogicalName,SchemaName,EntitySetName,DisplayName,IsCustomEntity';
+const tableWithKeys = (keys) => ok({ LogicalName: 'contoso_project', EntitySetName: 'contoso_projects', ...(keys ? { Keys: keys } : {}) });
+const COLUMNS_TAKEN = {
+  English: 'An entity key with the selected attributes already exists on entity.',
+  Spanish: 'Ya existe una clave de entidad con los atributos seleccionados en la entidad.',
+};
+// A key a maker made in Power Apps over the column the spec's key is over, under a name of its own.
+const MAKERS_KEY = { SchemaName: 'contoso_ProjectCode', KeyAttributes: ['contoso_code'] };
+// The route of a build whose key create gets `keyAnswer`. `reads` answers the read that finds the table and each read of it after that, in
+// turn (the last one answers any further read); an Error is a request that got no answer.
+const keyAnsweredWith = (keyAnswer, reads) => {
+  let n = 0;
+  return (method, asked) => {
+    if (method === 'GET' && asked === KEYS_PROBE) {
+      n += 1;
+      const read = reads[Math.min(n, reads.length) - 1];
+      if (read instanceof Error) throw read;
+      return read;
+    }
+    if (method === 'GET' && asked === TABLE_LIST) return ok({ value: [{ LogicalName: 'contoso_project', SchemaName: 'contoso_Project', EntitySetName: 'contoso_projects', IsCustomEntity: true }] });
+    if (method === 'GET' && asked === COLUMN_LIST) return PROJECT_COLUMNS;
+    if (method === 'POST' && asked === KEYS) return keyAnswer;
+    return undefined;
+  };
+};
+const AFTER_FOUND = [`GET ${KEYS_PROBE}`, `GET ${COLUMN_LIST}`, `POST ${KEYS}`];
+
+test('an alternate key refused because another key of the table is over its columns (0x80060894) stops the build naming that key, the columns and what to do — in English as in Spanish, never skipped on the words', async () => {
+  const runs = {};
+  for (const [language, words] of Object.entries(COLUMNS_TAKEN)) {
+    const run = await build(KEYED, keyAnsweredWith(refused('0x80060894', words), [tableWithKeys([MAKERS_KEY])]));
+    assert.deepStrictEqual(run.unmodelled, [], language);
+    assert.ok(run.error instanceof BuildHalt, `${language}: the build stops — ${run.error && run.error.message}`);
+    assert.strictEqual(run.error.phase, 'data-model', language);
+    assert.strictEqual(run.steps[run.steps.length - 1], 'error alt key contoso_Project.contoso_CodeKey', `${language}: at the key — ${run.steps.join(' | ')}`);
+    const message = run.error.message;
+    assert.match(message, /^data-model failed: alt key contoso_Project\.contoso_CodeKey was not created: /, `${language}: the declared key`);
+    assert.match(message, /the key contoso_ProjectCode over the same column \(contoso_code\)/, `${language}: the key the table has, as the platform names it, and its column`);
+    assert.match(message, /Dataverse allows one key per set of columns/, `${language}: why`);
+    assert.match(message, /set this key's schemaName to 'contoso_ProjectCode'/, `${language}: what to do to keep that key`);
+    assert.match(message, /if contoso_ProjectCode is a leftover that nothing uses, delete it in Power Apps/, `${language}: and what to do if it is a leftover`);
+    assert.ok(!message.includes(words), `${language}: the build's own words, not the platform's`);
+    assert.strictEqual(retryPolicyFor(run.error), RETRY.NEVER, `${language}: a run again meets the same key`);
+    assert.strictEqual(isTransientHalt(run.error), false, `${language}: so the build does not run again`);
+    assert.deepStrictEqual(run.requests, [...AFTER_FOUND, `GET ${KEYS_PROBE}`], `${language}: the table's keys are read once more after the refusal, and nothing else is sent`);
+    runs[language] = run;
+  }
+  assert.deepStrictEqual(outcomeOf(runs.Spanish), outcomeOf(runs.English), 'the same steps, warnings, requests and result in either language');
+  assert.strictEqual(runs.Spanish.error.message, runs.English.error.message, 'and the same stop');
+});
+
+test('a key of several columns refused with 0x80060894 names the other key whatever the order and the case of its columns', async () => {
+  const pair = { solution: SOLUTION, relationships: [], entities: [project({
+    columns: [{ schemaName: 'contoso_Code', type: 'Text' }],
+    alternateKeys: [{ schemaName: 'contoso_PairKey', displayName: 'Clave doble', columns: ['contoso_Name', 'contoso_Code'] }],
+  })] };
+  const other = { SchemaName: 'contoso_CodeAndName', KeyAttributes: ['contoso_code', 'contoso_name'] };
+  const run = await build(pair, keyAnsweredWith(refused('0x80060894', COLUMNS_TAKEN.Spanish), [tableWithKeys([other])]));
+  assert.ok(run.error instanceof BuildHalt, run.error && run.error.message);
+  assert.match(run.error.message, /alt key contoso_Project\.contoso_PairKey was not created: the table contoso_project already has the key contoso_CodeAndName over the same columns \(contoso_name, contoso_code\)/);
+});
+
+test('an alternate key refused with 0x80060894 is skipped as an existing key is when the table\'s keys show the DECLARED key over those columns, under its name in any case — in English as in Spanish', async () => {
+  // The read that finds the table fails, so the key could not be proven before it was asked for (as above); the read after the refusal shows it.
+  const declared = { SchemaName: 'CONTOSO_CODEKEY', KeyAttributes: ['CONTOSO_CODE'] };
+  const reads = [answer(500, GENERIC, 'An unexpected error occurred.'), tableWithKeys([MAKERS_KEY, declared])];
+  const english = await build(KEYED, keyAnsweredWith(refused('0x80060894', COLUMNS_TAKEN.English), reads));
+  assert.deepStrictEqual(english.unmodelled, []);
+  assert.strictEqual(english.error, undefined, english.error && english.error.message);
+  assert.strictEqual(english.steps[english.steps.length - 1], 'skip alt key contoso_Project.contoso_CodeKey (exists)', english.steps.join(' | '));
+  assert.deepStrictEqual(english.requests, [`GET ${KEYS_PROBE}`, `GET ${TABLE_LIST}`, `GET ${COLUMN_LIST}`, `POST ${KEYS}`, `GET ${KEYS_PROBE}`], 'the keys are read once more after the refusal');
+  const spanish = await build(KEYED, keyAnsweredWith(refused('0x80060894', COLUMNS_TAKEN.Spanish), reads));
+  assert.strictEqual(spanish.error, undefined, spanish.error && spanish.error.message);
+  assert.deepStrictEqual(outcomeOf(spanish), outcomeOf(english), 'the same steps, warnings, requests and result as the English answer');
+});
+
+test('an alternate key refused with 0x80060894 whose table\'s keys cannot be read, or show no key over exactly those columns, stops the build with the platform\'s own error — in English as in Spanish', async () => {
+  for (const [what, read] of [
+    ['a read answered 500', answer(500, GENERIC, 'An unexpected error occurred.')],
+    ['a read that got no answer', new Error('socket hang up')],
+    ['a read whose answer carries no keys', tableWithKeys(undefined)],
+    ['a read that shows a key over another column', tableWithKeys([{ SchemaName: 'contoso_NameKey', KeyAttributes: ['contoso_name'] }])],
+    ['a read that shows a key over those columns and one more', tableWithKeys([{ SchemaName: 'contoso_Pair', KeyAttributes: ['contoso_code', 'contoso_name'] }])],
+    ['a read that shows a key whose columns cannot be read', tableWithKeys([{ SchemaName: 'contoso_Odd', KeyAttributes: null }])],
+  ]) {
+    for (const [language, words] of Object.entries(COLUMNS_TAKEN)) {
+      const run = await build(KEYED, keyAnsweredWith(refused('0x80060894', words), [tableWithKeys([]), read]));
+      assertStopsAt(run, 'alt key contoso_Project.contoso_CodeKey', words, `${what}, ${language}`);
+      assert.deepStrictEqual(run.requests, [...AFTER_FOUND, `GET ${KEYS_PROBE}`], `${what}, ${language}: read once, and not guessed at`);
+      assert.strictEqual(retryPolicyFor(run.error), RETRY.NEVER, `${what}, ${language}: the platform's refusal is final, as it always was`);
+    }
+  }
+});
+
+test('a spec that declares two keys over the same columns stops at the second, saying the spec declares both', async () => {
+  const twice = { solution: SOLUTION, relationships: [], entities: [project({
+    columns: [{ schemaName: 'contoso_Code', type: 'Text' }],
+    alternateKeys: [
+      { schemaName: 'contoso_CodeKey', displayName: 'Clave de codigo', columns: ['contoso_code'] },
+      { schemaName: 'contoso_CodeKey2', displayName: 'Otra clave de codigo', columns: ['contoso_Code'] },
+    ],
+  })] };
+  const first = { SchemaName: 'contoso_CodeKey', KeyAttributes: ['contoso_code'] };
+  for (const [language, words] of Object.entries(COLUMNS_TAKEN)) {
+    const run = await build(twice, keyAnsweredWith(refused('0x80060894', words), [tableWithKeys([first])]));
+    assert.ok(run.error instanceof BuildHalt, `${language}: ${run.error && run.error.message}`);
+    assert.deepStrictEqual(run.steps.slice(-2), ['skip alt key contoso_Project.contoso_CodeKey (exists)', 'error alt key contoso_Project.contoso_CodeKey2'], language);
+    assert.match(run.error.message, /alt key contoso_Project\.contoso_CodeKey2 was not created: the table contoso_project already has the key contoso_CodeKey over the same column \(contoso_code\), and the spec declares both/, language);
+    assert.match(run.error.message, /Keep one of them in the table's alternateKeys/, `${language}: what to do`);
+    assert.doesNotMatch(run.error.message, /Power Apps/, `${language}: nothing to delete in the environment: the spec asks for both`);
+  }
+});
+
+test('a key refused with 0x80060893, with a 409, or in English words that carry no code, is skipped without reading the table again, as before', async () => {
+  for (const [what, keyAnswer] of [
+    ['0x80060893 in English', KEY_IN_ENGLISH],
+    ['0x80060893 in Spanish', refused('0x80060893', 'Ya existe una clave de entidad con el nombre contoso_codekey en la entidad contoso_project.')],
+    ['a 409', { status: 409, body: { error: { message: 'Conflict.' } } }],
+    ['English words with no code', { status: 400, body: { error: { message: 'An entity key with the name contoso_codekey already exists on entity contoso_project.' } } }],
+  ]) {
+    const run = await build(KEYED, keyAnsweredWith(keyAnswer, [tableWithKeys([])]));
+    assert.deepStrictEqual(run.unmodelled, [], what);
+    assert.strictEqual(run.error, undefined, `${what}: ${run.error && run.error.message}`);
+    assert.strictEqual(run.steps[run.steps.length - 1], 'skip alt key contoso_Project.contoso_CodeKey (exists)', what);
+    assert.deepStrictEqual(run.requests, AFTER_FOUND, `${what}: nothing is read after the refusal`);
   }
 });
 

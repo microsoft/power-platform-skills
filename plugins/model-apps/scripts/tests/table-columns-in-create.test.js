@@ -2754,6 +2754,39 @@ test('a key that waits and that the platform then refuses, or finds already ther
   assert.deepStrictEqual(finished(there).slice(-1), [['skip', 'alt key new_ticket.new_namekey (exists)']]);
 });
 
+// A key whose columns another key of the table is over: the platform allows one key per set of columns, and answers the create of a second
+// one HTTP 400 0x80060894, "An entity key with the selected attributes already exists on entity." (the reference's words), whose English
+// words read as "already exists". The build decides it by its code instead, from the keys the table holds, wherever the key is made: here
+// the keys that wait for the length step, and those made ahead of it because their label goes out in several languages.
+const sameColumnSet = (a, b) => [...a].map((c) => c.toLowerCase()).sort().join('\n') === [...b].map((c) => c.toLowerCase()).sort().join('\n');
+const columnsTaken = (body, table) => ([...table.keys.values()].some((k) => sameColumnSet(k.body.KeyAttributes, body.KeyAttributes))
+  ? { status: 400, headers: {}, body: { error: { code: '0x80060894', message: 'An entity key with the selected attributes already exists on entity.' } } }
+  : null);
+
+test('a key that waits for the length, refused because another key of the table is over its columns (0x80060894), stops the build naming that key: its words do not make it a skip', async () => {
+  const twin = { schemaName: 'new_namekey2', displayName: 'Name Key 2', columns: ['new_name'] };
+  const run = await provisionOver(keyedTable([NAME_KEY, twin]), { dataverse: { keyFails: columnsTaken }, capture: true });
+  assert.ok(run.error instanceof BuildHalt, 'the build stops');
+  assert.match(run.error.message, /^data-model failed: alt key new_ticket\.new_namekey2 was not created: the table new_ticket already has the key new_namekey over the same column \(new_name\), and the spec declares both/);
+  assert.deepStrictEqual(finished(run).slice(-3), [['ok', 'primary column length new_ticket.new_name -> 120'], ['ok', 'alt key new_ticket.new_namekey'], ['error', 'alt key new_ticket.new_namekey2']], 'both keys waited for the length step');
+  assert.deepStrictEqual([...run.dv.tables.get('new_ticket').keys.keys()], ['new_namekey']);
+  const lines = run.dv.log.map(requestLine);
+  assert.strictEqual(lines[lines.length - 1], "GET /EntityDefinitions(LogicalName='new_ticket')?$select=LogicalName,EntitySetName&$expand=Keys($select=SchemaName,KeyAttributes)", 'the keys are read after the refusal, by the narrow read that finds the table — no label in it');
+  assert.deepStrictEqual(run.warnings, [], 'nothing about the length: it was set');
+});
+
+test('a key labelled in several languages, made ahead of the length step and refused because another key of the table is over its columns, stops the build naming that key — and is not warned about as a key too large for its column', async () => {
+  const first = { schemaName: 'new_namekey', displayName: { 1033: 'Name Key', 3082: 'Clave del nombre' }, columns: ['new_name'] };
+  const twin = { schemaName: 'new_namekey2', displayName: { 1033: 'Name Key 2', 3082: 'Otra clave del nombre' }, columns: ['new_name'] };
+  const run = await provisionOver(keyedTable([first, twin]), { dataverse: { keyFails: columnsTaken }, capture: true });
+  assert.ok(run.error instanceof BuildHalt, 'the build stops');
+  assert.match(run.error.message, /^data-model failed: alt key new_ticket\.new_namekey2 was not created: the table new_ticket already has the key new_namekey over the same column \(new_name\), and the spec declares both/);
+  const lines = run.dv.log.map(requestLine);
+  assert.ok(lines.filter((l) => /\/Keys$/.test(l)).length === 2 && lines.findIndex((l) => l.startsWith('PUT ')) > lines.lastIndexOf("POST /EntityDefinitions(LogicalName='new_ticket')/Keys"), 'both keys were asked for ahead of the length step');
+  assert.deepStrictEqual(run.warnings.filter((w) => /alt key new_ticket\.new_namekey2/.test(w)), [], 'the platform refused the key for its columns, not its size');
+  assert.strictEqual(run.dv.tables.get('new_ticket').primaryLength, 120, 'the length is still set as the build stops');
+});
+
 // What the build's own retry does with a name column length that an attempt which created the table left unset. The build runs a phase
 // that halts on a transient answer again (build-model-app.js); the attempt that created the table sets the length in its `finally`, but
 // that step can fail too — the lock that stopped the phase may still be held — and the retry, which finds the table, used to leave its

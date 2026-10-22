@@ -2158,13 +2158,21 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   the name, or of the lookup column's owner, proves, and any other relationship holding it — or an answer the read cannot prove —
   stops the build.
   The codes only add recognition, and prove no more than the English words of the same refusal: the 409 and English-word rules are
-  unchanged, and they apply whatever code the answer carries, an unlisted one included — an English `0x80060894` answer (another key
-  over the same columns, "An entity key with the selected attributes already exists on entity.") is still a skip, as it was. A code
-  another create answers, a generic code (`0x80040216`) and a code the message only quotes do not count by themselves: such an answer
-  stops the build unless the 409 or the English words read it as an already-exists one — an answer worded in another language, which
-  the English rule does not read, stops. Pinned by
+  unchanged, and they apply whatever code the answer carries, an unlisted one included — with one exception: a key create answered
+  `0x80060894` (EntityKeyWithSelectedAttributesExists, "An entity key with the selected attributes already exists on entity.": the
+  platform allows one key per set of columns, and another key is over the declared key's) is never read by its words. Those words
+  read as an already-exists answer, so an English build skipped a key that was never created (and its verification then found it
+  missing), while a Spanish one stopped. The key step decides that code in every language from the table's keys, read once more by
+  the table probe's narrow request (`keyOverSameColumns`, `lib/entity-provision.js`): the declared key over those columns (its
+  schema name in any case) is a skip, as an existing key is; a key of another name stops the build — a refusal, not retried —
+  naming that key, the columns and what to do (declare that key's name instead, or delete it in Power Apps if it is a leftover; or,
+  where the spec declares both, keep one); a read that fails or shows no key over exactly those columns stops it with the
+  platform's own error. A code another create answers, a generic code (`0x80040216`) and a code the message only quotes do not
+  count by themselves: such an answer stops the build unless the 409 or the English words read it as an already-exists one — an
+  answer worded in another language, which the English rule does not read, stops. Pinned by
   `already-exists-codes-real-bundle.test.js`, which runs each of those creates through the real bundle answered in English and
-  in another language, and requires the same outcome.
+  in another language, and requires the same outcome; the key that waits for its table's name column length, and the key made
+  ahead of it, by `table-columns-in-create.test.js`.
 - **Bounded parallelism in the read-heavy and publish-heavy paths.** Each item below has tests that count
   requests and prove the overlap (`verify-parallel-checks`, `verify-page-code-batch`,
   `download-parallel-reads`, `teardown-publish-once`, `table-columns-in-create`, and the check-auth tests),

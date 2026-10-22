@@ -50,7 +50,7 @@ const { readOrgLanguageCode, readProvisionedLanguages } = require('./dataverse-a
 const { RETRY, retryPolicyFor, refusal, serviceFailure, serviceCodeOf } = require('./retry-policy.js');
 // What the run's throttle budget says when it refuses a wait (the words of the build's own halt for it), for the step guard in makeRunner.
 const { waitDoesNotFit } = require('./throttle-budget.js');
-const { readStatusOptions, alternateKeyMatches } = require('./table-schema-metadata.js');
+const { readStatusOptions, alternateKeyMatches, alternateKeyOverColumns } = require('./table-schema-metadata.js');
 
 // App Spec column type -> SDK ColumnType. Lookup is omitted (side effect of a OneToMany
 // relationship); Customer is handled specially (createCustomerColumn).
@@ -1070,7 +1070,7 @@ function causeChain(err, maxDepth = 6) {
 // and the rebuild halted, because only the English words below were read. The code is the same in every language. A code is listed only
 // for the create that answers it, and only where the platform's reference gives it an "already exists" meaning for what that create
 // makes — never a generic code such as 0x80040216 ("An unexpected error occurred."), and never a neighbouring condition: a key over the
-// same columns under another name (0x80060894, EntityKeyWithSelectedAttributesExists — the declared key is not there), a record that
+// same columns under another name (0x80060894, EntityKeyWithSelectedAttributesExists — the declared key may not be there), a record that
 // already holds a key's values (0x80060892). Two codes are broader than the thing created — the name or the navigation property they speak
 // of can be held by something else — and each is listed for one create only, where a read that follows the refusal decides: 0x80044363
 // (SchemaNameisNotUnique) for the table create, 0x80072551 (NavigationPropertyAlreadyExists) for the 1:N relationship create. A listed
@@ -1078,8 +1078,10 @@ function causeChain(err, maxDepth = 6) {
 // is skipped on it (a column's code can name a companion the platform makes beside the column, as its words can), and for a table or a
 // relationship it is only the cue to read what exists, which alone decides what is reused. The lists only ADD recognition:
 // isAlreadyExists keeps its 409 and English-word rules unchanged, and they still read an answer whatever code it carries, an unlisted one
-// included — an English 0x80060894 answer ("An entity key with the selected attributes already exists on entity.") is still a skip, as it
-// always was. Names and messages are the platform's reference:
+// included. The one answer that never reaches them is a key create's 0x80060894: its English words ("An entity key with the selected
+// attributes already exists on entity.") read as an already-exists answer, which made an English build skip a key that was never created
+// while a Spanish one stopped, so the key step decides that code by the table's keys before anything reads its words (KEY_OVER_SAME_COLUMNS).
+// Names and messages are the platform's reference:
 // See: https://learn.microsoft.com/en-us/power-apps/developer/data-platform/reference/web-service-error-codes
 // Lower case, because serviceCodeOf (lib/retry-policy.js) lower-cases what it reads: the platform writes a code in either case (the
 // reference spells 0x8004432B with a capital).
@@ -1142,7 +1144,8 @@ const NO_CODES = Object.freeze(new Set());
 // column WAS made) carries a code that is not the create's. The code only ADDS recognition: the 409 and English-word rules are
 // the ones this function always had, and they apply whatever code the answer carries — a code of another create, a generic code or
 // a code the message only quotes does not count by itself, and does not stop the words from counting either. Kept deliberately
-// narrow so a genuine failure (bad key attribute, etc.) still surfaces.
+// narrow so a genuine failure (bad key attribute, etc.) still surfaces. A key create's 0x80060894 never reaches it: the key step
+// decides that answer by the table's keys (KEY_OVER_SAME_COLUMNS), because its English words would read as an already-exists one.
 function isAlreadyExists(err, codes = NO_CODES) {
   if (!err) return false;
   const status = err.statusCode || err.status || (err.cause && (err.cause.statusCode || err.cause.status));
@@ -1695,6 +1698,19 @@ async function resolveAuthoringLanguage({ envUrl, languageCode, spec, warn, read
   });
 }
 
+// The table probe's request (findExistingTable): one narrow read of a table by its logical name — and, with `includeKeys`, the identity of
+// each of its alternate keys, its schema name and its columns, which are scalars, never a label:
+//   GET /EntityDefinitions(LogicalName='contoso_project')?$select=LogicalName,EntitySetName&$expand=Keys($select=SchemaName,KeyAttributes)
+//   -> { "LogicalName": "contoso_project", "EntitySetName": "contoso_projects",
+//        "Keys": [ { "SchemaName": "contoso_CodeKey", "KeyAttributes": [ "contoso_code" ], "MetadataId": "<guid>" } ] }
+// A quote in the name is doubled, as an OData string literal escapes it. Also the read of a table's keys after a key create the platform
+// refused because another key is over the same columns (keyOverSameColumns).
+// See: https://learn.microsoft.com/en-us/power-apps/developer/data-platform/define-alternate-keys-entity#retrieve-and-delete-alternate-keys
+function tableProbeUrl(logical, { includeKeys = false } = {}) {
+  const escaped = logical.replace(/'/g, "''");
+  return `/EntityDefinitions(LogicalName='${escaped}')?$select=LogicalName,EntitySetName${includeKeys ? '&$expand=Keys($select=SchemaName,KeyAttributes)' : ''}`;
+}
+
 // Discover-then-create global choices, tables, columns, status reasons, alternate keys,
 // and relationships (idempotent). Returns captured maps used by sample data + later phases.
 // Does this table already exist? Returns { logicalName, entitySetName } or null.
@@ -1727,10 +1743,9 @@ async function findExistingTable(provision, schemaName, { hasLocalizedLabels = f
   const logical = String(schemaName).toLowerCase();
   const raw = provision && provision.dataverse;
   if (raw && typeof raw.get === 'function') {
-    const escaped = logical.replace(/'/g, "''");
     // Keys' identities are scalars, so they can ride this already-required probe
     // without a label-bearing read ahead of a localized create.
-    const url = `/EntityDefinitions(LogicalName='${escaped}')?$select=LogicalName,EntitySetName${includeKeys ? '&$expand=Keys($select=SchemaName,KeyAttributes)' : ''}`;
+    const url = tableProbeUrl(logical, { includeKeys });
     // Retried only for a LOCALIZED entity, where the alternative to a conclusive answer is a halt.
     // For everything else one attempt then `findTables` is both cheaper and exactly the old
     // behaviour.
@@ -1895,13 +1910,73 @@ async function payOwedLengths({ runner, sdk, provision, spec, warn, sleep }, owe
   return outcomes;
 }
 
+// The code of a key create the platform refuses because ANOTHER key of the table is over the same columns — it allows one key per set of
+// columns: EntityKeyWithSelectedAttributesExists, in the reference's words
+//   HTTP 400 {"error":{"code":"0x80060894","message":"An entity key with the selected attributes already exists on entity."}}
+// That does not say the DECLARED key is there: the key over those columns may be another one. Its English words read as an already-exists
+// answer all the same (isAlreadyExists), so an English build skipped the key — which was then never created, and the build's verification
+// found it missing — while the same answer in Spanish stopped the build with the platform's words. So the key step decides this code, in
+// every language and before any word is read, from the keys the table holds (keyOverSameColumns).
+// See: https://learn.microsoft.com/en-us/power-apps/developer/data-platform/reference/web-service-error-codes
+const KEY_OVER_SAME_COLUMNS = '0x80060894';
+
+// What the table's keys say of a key create refused with KEY_OVER_SAME_COLUMNS, read once, by the table probe's request (tableProbeUrl):
+//   { state: 'declared' }       a key of the declared schema name, in any case, over exactly the declared columns (alternateKeyMatches): the
+//                               declared key is there, and the step is a skip — as for a key the probe found before the create;
+//   { state: 'other', holder }  a key of another name over exactly those columns (alternateKeyOverColumns): the table's key,
+//                               `{ SchemaName, KeyAttributes }`, beside which the declared key cannot be made;
+//   { state: 'unknown' }        the read failed, or showed no key over exactly those columns: nothing says which key the platform means, so
+//                               nothing is guessed, and the create's own error stops the build.
+// The read carries no label — it is the narrow read the build makes of a table ahead of its labelled creates — so a create in several
+// languages that follows it keeps its labels (findExistingTable). The client resolves a status that is not 2xx and throws only for a request
+// that got no answer; neither throws here.
+async function keyOverSameColumns(provision, logical, key) {
+  const raw = provision && provision.dataverse;
+  if (!raw || typeof raw.get !== 'function') return { state: 'unknown' };
+  let res;
+  try { res = await raw.get(tableProbeUrl(logical, { includeKeys: true })); } catch { return { state: 'unknown' }; }
+  const keys = res && res.status >= 200 && res.status < 300 && res.body && Array.isArray(res.body.Keys) ? res.body.Keys : null;
+  if (!keys) return { state: 'unknown' };
+  if (alternateKeyMatches(keys, key)) return { state: 'declared' };
+  const holder = alternateKeyOverColumns(keys, key);
+  return holder ? { state: 'other', holder } : { state: 'unknown' };
+}
+
+// The stop for a key the platform refused because the key `holder` of the table is over the same columns: the declared key, the key the
+// table has (as the platform names it), the columns, and what to do — declare that key under its own name, or delete it where nothing uses
+// it. Where the spec declares that key too, deleting it is no way out (the next build makes it again): the spec asks for two keys over one
+// set of columns.
+function keyOverSameColumnsStop(entity, logical, key, holder) {
+  const columns = (key.columns || []).map((c) => String(c).toLowerCase());
+  const over = `the same column${columns.length === 1 ? '' : 's'} (${columns.join(', ')})`;
+  const head = `alt key ${entity.schemaName}.${key.schemaName} was not created: the table ${logical} already has the key ${holder.SchemaName} over ${over}`;
+  const declaredToo = (entity.alternateKeys || []).some((k) => k && k !== key && String(k.schemaName).toLowerCase() === holder.SchemaName.toLowerCase());
+  if (declaredToo) {
+    return `${head}, and the spec declares both — Dataverse allows one key per set of columns. Keep one of them in the table's alternateKeys, or give the other different columns.`;
+  }
+  return `${head}, and Dataverse allows one key per set of columns. To keep that key, declare it as it is — set this key's schemaName to '${holder.SchemaName}' — `
+    + `or, if ${holder.SchemaName} is a leftover that nothing uses, delete it in Power Apps (the table's Keys) and run the build again.`;
+}
+
 // One alternate key: a narrated step. The SDK has no key lister, so a re-run that finds the key already there gets an
-// already-exists answer, which is a skip and not a halt. The same step wherever the key is made — with its table, or after the
-// length of the table's name column (createWaitingKeys).
-function alternateKeyStep({ runner, sdk, entity, logical, key, languageCode }) {
-  return runner.run('data-model', `alt key ${entity.schemaName}.${key.schemaName}`,
-    () => sdk.createAlternateKey(logical, { schemaName: key.schemaName, displayName: key.displayName || key.schemaName, keyAttributes: (key.columns || []).map((x) => x.toLowerCase()), languageCode }),
-    { recoverable: true, skipIf: (err) => isAlreadyExists(err, ALREADY_EXISTS_CODES.alternateKey) });
+// already-exists answer, which is a skip and not a halt. The same step wherever the key is made — with its table, ahead of the
+// length of the table's name column (alternateKeyAheadOfLength), or after it (createWaitingKeys). A refusal because another key is over
+// the key's columns (KEY_OVER_SAME_COLUMNS) is decided by the table's keys instead: a skip where they show the declared key, a stop that
+// says what to do where they show another (a refusal: a run again meets the same key), and the create's own error otherwise. Either stop
+// goes the way a key the platform refuses always went: a failed step, which halts the phase.
+function alternateKeyStep({ runner, sdk, provision, entity, logical, key, languageCode }) {
+  // What the table's keys said of a KEY_OVER_SAME_COLUMNS refusal; unset for any other answer, which is read as it always was.
+  let overSameColumns;
+  return runner.run('data-model', `alt key ${entity.schemaName}.${key.schemaName}`, async () => {
+    try {
+      return await sdk.createAlternateKey(logical, { schemaName: key.schemaName, displayName: key.displayName || key.schemaName, keyAttributes: (key.columns || []).map((x) => x.toLowerCase()), languageCode });
+    } catch (err) {
+      if (serviceCodeOf(err) !== KEY_OVER_SAME_COLUMNS) throw err;
+      overSameColumns = await keyOverSameColumns(provision, logical, key);
+      if (overSameColumns.state === 'other') throw refusal(keyOverSameColumnsStop(entity, logical, key, overSameColumns.holder), { cause: err });
+      throw err;
+    }
+  }, { recoverable: true, skipIf: (err) => (overSameColumns ? overSameColumns.state === 'declared' : isAlreadyExists(err, ALREADY_EXISTS_CODES.alternateKey)) });
 }
 
 // What the build can tell of an alternate key over a table's name column with that column at the length the spec asks — the one wording every
@@ -1953,11 +2028,14 @@ function keyRoomAtAskedLength(entity, key) {
 // the key, if the length the spec asks leaves room for it, and where that run is refused the same way, the platform's error and the sizes of
 // the key's columns say why.
 // See: https://learn.microsoft.com/en-us/power-apps/developer/data-platform/define-alternate-keys-entity#create-alternate-keys
-async function alternateKeyAheadOfLength({ runner, sdk, entity, logical, key, languageCode, warn }) {
+async function alternateKeyAheadOfLength({ runner, sdk, provision, entity, logical, key, languageCode, warn }) {
   try {
-    await alternateKeyStep({ runner, sdk, entity, logical, key, languageCode });
+    await alternateKeyStep({ runner, sdk, provision, entity, logical, key, languageCode });
   } catch (err) {
-    if (typeof warn === 'function') {
+    // A key refused because another key of the table is over its columns (KEY_OVER_SAME_COLUMNS) was refused for its columns, not for its
+    // size: the stop says what to do about that, and the advice below — about the length of the name column — does not apply to it.
+    const refusedForItsColumns = causeChain(err).some((e) => serviceCodeOf(e) === KEY_OVER_SAME_COLUMNS);
+    if (typeof warn === 'function' && !refusedForItsColumns) {
       const column = String(entity.primaryAttribute.schemaName).toLowerCase();
       const asked = askedPrimaryNameLength(entity);
       // Said from the languages the label goes out in, which is what keeps the key from waiting. A key that does not wait is a map that does not
@@ -2022,7 +2100,7 @@ async function keyMustWaitForShorterNameColumn({ provision, entity, logical, key
 // failed with, which the halt declares), the code of the service's answer, a reset, an explicit "never retry" — and never the halt's own
 // words or code. The retry then finds the length still owed (`owedLengths`), sets it, and asks for the key.
 // See: https://learn.microsoft.com/en-us/power-apps/developer/data-platform/define-alternate-keys-entity#create-alternate-keys
-async function createWaitingKeys({ runner, sdk }, waitingKeys, outcomes) {
+async function createWaitingKeys({ runner, sdk, provision }, waitingKeys, outcomes) {
   for (const { entity, logical, key, languageCode } of waitingKeys) {
     const outcome = outcomes.get(logical);
     if (outcome && !outcome.ok && !outcome.left) {
@@ -2045,7 +2123,7 @@ async function createWaitingKeys({ runner, sdk }, waitingKeys, outcomes) {
       );
       await runner.run('data-model', `alt key ${entity.schemaName}.${key.schemaName}`, async () => { throw halt; }, { recoverable: true });
     }
-    await alternateKeyStep({ runner, sdk, entity, logical, key, languageCode });
+    await alternateKeyStep({ runner, sdk, provision, entity, logical, key, languageCode });
   }
 }
 
@@ -2482,10 +2560,10 @@ async function provisionDataModelSteps({ sdk, provision, runner, spec, apply, la
           waitingKeys.push({ entity: e, logical, key: k, languageCode: resolvedLanguageCode });
           continue;
         }
-        await alternateKeyAheadOfLength({ runner, sdk, entity: e, logical, key: k, languageCode: resolvedLanguageCode, warn });
+        await alternateKeyAheadOfLength({ runner, sdk, provision, entity: e, logical, key: k, languageCode: resolvedLanguageCode, warn });
         continue;
       }
-      await alternateKeyStep({ runner, sdk, entity: e, logical, key: k, languageCode: resolvedLanguageCode });
+      await alternateKeyStep({ runner, sdk, provision, entity: e, logical, key: k, languageCode: resolvedLanguageCode });
     }
   }
 

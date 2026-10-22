@@ -77,15 +77,31 @@ function alternateKeysFromMetadata(keys, labelOf, omitted = []) {
   return out.sort((a, b) => compareText(a.schemaName, b.schemaName));
 }
 
-function alternateKeyMatches(keys, key) {
-  const names = (values) => Array.isArray(values) && values.every((v) => typeof v === 'string' && v)
+// The columns of a key as one set that compares: their logical names in lower case, sorted — or null when one is not a name, an answer the
+// build cannot read. The platform answers a key's columns in an order of its own, so the order never counts.
+function keyColumnSet(values) {
+  return Array.isArray(values) && values.every((v) => typeof v === 'string' && v)
     ? values.map((v) => v.toLowerCase()).sort(compareText) : null;
-  const wanted = names(key.columns);
+}
+const sameKeyColumns = (found, wanted) => !!found && found.length === wanted.length && found.every((v, i) => v === wanted[i]);
+
+function alternateKeyMatches(keys, key) {
+  const wanted = keyColumnSet(key.columns);
   return !!wanted && wanted.length > 0 && Array.isArray(keys) && keys.some((candidate) => {
     if (!candidate || String(candidate.SchemaName).toLowerCase() !== String(key.schemaName).toLowerCase()) return false;
-    const found = names(candidate.KeyAttributes);
-    return found && found.length === wanted.length && found.every((v, i) => v === wanted[i]);
+    return sameKeyColumns(keyColumnSet(candidate.KeyAttributes), wanted);
   });
 }
 
-module.exports = { readStatusOptions, statusReasonsFromOptions, alternateKeysFromMetadata, alternateKeyMatches };
+// The key of `keys` — the `Keys` a read of the table answers, `[{ SchemaName, KeyAttributes }]` — that is over exactly the columns `key`
+// declares, whatever its name, or null. The platform allows one key per set of columns, so there is at most one; it is the key the platform
+// means when it refuses the create of `key` because a key with the selected attributes already exists (lib/entity-provision.js,
+// KEY_OVER_SAME_COLUMNS).
+function alternateKeyOverColumns(keys, key) {
+  const wanted = keyColumnSet(key.columns);
+  if (!wanted || !wanted.length || !Array.isArray(keys)) return null;
+  return keys.find((candidate) => !!candidate && typeof candidate.SchemaName === 'string' && candidate.SchemaName !== ''
+    && sameKeyColumns(keyColumnSet(candidate.KeyAttributes), wanted)) || null;
+}
+
+module.exports = { readStatusOptions, statusReasonsFromOptions, alternateKeysFromMetadata, alternateKeyMatches, alternateKeyOverColumns };
