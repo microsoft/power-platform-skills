@@ -191,10 +191,10 @@ other spellings, and out of text cut short or split between two writes.
   returned by the unpublished-aware read … Retry.", which no retry could pass. Teardown now reads the app's row version, proves that
   sitemap gone — by its id, in the published and the saved layer, with no other app's navigation naming it and the link unchanged —
   and deletes the app on its own: the delete is conditioned on that version and touches no sitemap, and the app is then read back
-  gone. When it cannot prove that, when the app changed while it was proving it, or when the app was never published, it refuses with
-  what it found and asks you to delete the app in Power Apps and run the teardown again. An app with live generative pages still stops
-  earlier, at the page check, because its pages are proven from the navigation that is gone; delete such an app in Power Apps, then
-  run the teardown again.
+  gone. When it cannot prove that, or when the app was never published, it refuses with what it found and asks you to delete the app
+  in Power Apps and run the teardown again; when the app changed while it was proving it, it deletes nothing and asks you to run the
+  teardown again. An app with live generative pages still stops earlier, at the page check, because its pages are proven from the
+  navigation that is gone; delete such an app in Power Apps, then run the teardown again.
 
 ## [2.17.0]
 
