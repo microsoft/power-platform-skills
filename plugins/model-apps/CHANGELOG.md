@@ -149,12 +149,12 @@ other spellings, and out of text cut short or split between two writes.
   prove — another kind of row, a rename, both the sent and the reported id answering, an add refused — stops the step with nothing
   added, deleted or created, and it never asks to delete a dashboard that may be another app's. The record never adopts a namesake,
   teardown never reads it, and the workspace-reset advice keeps it. Builds that share a workspace keep each other's entries: each
-  change is made under a short lock to the record as it is then and compares both ids, and when recovery reads every recorded id as
-  absent but another build has changed the entry since this build read it, it stops before creating a dashboard and asks for a run
-  again. A note refused because another build changed the entry or held the lock for more than about a second is said once, and that
-  build goes on without the record. A first build and an unchanged rebuild send what they sent before. Not covered: a dashboard
-  created before this release or from another workspace, and an entry another build cleared after this build read it (the lock covers
-  the record, not two builds' dashboard steps).
+  change is made under a short lock to the record as it is then and compares both ids. When recovery reads every recorded id as absent
+  and its clear then finds that another build changed the entry, it stops before creating a dashboard and asks for another run. A note
+  refused because another build changed the entry or held the lock for more than about a second is said once, and that build goes on
+  without the record. A first build and an unchanged rebuild send what they sent before. Not covered: a dashboard created before this
+  release or from another workspace, and an entry another build cleared after this build read it (the lock covers the record, not two
+  builds' dashboard steps).
 - **An unknown key in a form's `fieldOptions` entry is refused instead of ignored.** A misspelling such as `readOnlyy` or `colSpan`
   passed validation and was dropped by the build, so the option was never applied. Lint, a dry run and a build now refuse it before
   any write, naming the form, table, field and key, the option it most likely meant, and the keys an entry takes (`readOnly`,
