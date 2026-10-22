@@ -21,11 +21,18 @@
 // An entry is written BEFORE anything else the build does about the error (the add to the solution, the halt), and removed only once a write by
 // that id was verified and the row is in the solution again. A file that cannot be read — damaged, a link where the file should be, too large —
 // is "nothing is recorded", which is what the build did before there was a record: the rows are reused as they are. Written atomically.
+//
+// Builds that share a workspace and an environment share this file, and each change replaces it whole. So a change is never made to what a run
+// read earlier — another build may have written its own entry since, and writing the earlier copy back dropped it (A notes `a`, B notes `b`: only
+// `b` was left; A then clears `a`: the file went, `b` with it). A change takes the record's writer lease (lib/record-lease.js), reads the file as it
+// is then, applies its one change to that, and writes it: a note adds or replaces one entry, a clear removes one, and neither touches another
+// build's. Reads take no lease.
 const fs = require('node:fs');
 const path = require('node:path');
 const { sha256 } = require('./hash.js');
 const { writeFileAtomic } = require('./apply-snapshot-store.js');
 const { environmentFingerprint, workspaceRoot } = require('./page-ownership-records.js');
+const { withRecordLease } = require('./record-lease.js');
 
 const PREFIX = 'web-resource-unconfirmed.';
 const SCHEMA_VERSION = 1;
@@ -65,7 +72,8 @@ function readUnconfirmedWebResources(workspaceDir, environment) {
   return known;
 }
 
-// Replace the record of `environment` with `entries` (the Map readUnconfirmedWebResources answers); an empty map removes the file.
+// Replace the record of `environment` with `entries` (the Map readUnconfirmedWebResources answers); an empty map removes the file. It takes no lease:
+// a caller that shares the workspace with another build holds the record's lease across its read and this write (openUnconfirmedWebResources).
 function writeUnconfirmedWebResources(workspaceDir, environment, entries) {
   const fingerprint = environmentFingerprint(environment);
   if (!entries.size) {
@@ -82,12 +90,15 @@ function writeUnconfirmedWebResources(workspaceDir, environment, entries) {
 }
 
 /**
- * The record for one run of the build: read once, then written through. `idOf(name)` is the id an earlier run recorded for the name;
- * `note(name, id)` records one and answers whether that is now on disk; `clear(name)` removes one. None of them throws: a workspace that
- * cannot be written is said once on `warn`, and a run without a workspace or an environment (a caller that gives neither; the CLI always
- * gives both) records nothing — `note` then answers false.
+ * The record for one run of the build: read once, then each change made to the file as it is then, under the record's writer lease. `idOf(name)`
+ * is the id an earlier run recorded for the name (what this run read, with its own changes); `note(name, id)` records one and answers whether that
+ * is now on disk; `clear(name)` removes the entry this run knows — one another build has recorded since under another id stays. `note` does not
+ * replace an entry another build recorded since this run read the record, under another id: that is said once, and it answers false. None of them
+ * throws: a workspace that cannot be written, or a lease another build holds past the bounded wait, is said once on `warn`, and a run without a
+ * workspace or an environment (a caller that gives neither; the CLI always gives both) records nothing — `note` then answers false. `lease` is for
+ * tests: the lib/record-lease.js seams.
  */
-function openUnconfirmedWebResources({ workspaceDir, environment, warn } = {}) {
+function openUnconfirmedWebResources({ workspaceDir, environment, warn, lease } = {}) {
   const usable = Boolean(workspaceDir) && Boolean(environment);
   let entries;
   let warned = false;
@@ -96,39 +107,74 @@ function openUnconfirmedWebResources({ workspaceDir, environment, warn } = {}) {
     warned = true;
     warn(message);
   };
+  const unreadable = (e) => `the record of the web resources an earlier build could not confirm were published could not be read (${(e && e.message) || e}), so this build reuses every web resource that exists as it is`;
   const load = () => {
     if (entries) return entries;
     entries = new Map();
     if (!usable) return entries;
-    try { entries = readUnconfirmedWebResources(workspaceDir, environment); } catch (e) {
-      say(`the record of the web resources an earlier build could not confirm were published could not be read (${(e && e.message) || e}), so this build reuses every web resource that exists as it is`);
-    }
+    try { entries = readUnconfirmedWebResources(workspaceDir, environment); } catch (e) { say(unreadable(e)); }
     return entries;
   };
-  const save = (next) => {
+  // One change, made under the record's lease to the record as it is on disk now — never to this run's copy, which another build may have changed
+  // since. `apply(disk, file)` changes the Map it is given and answers true when there is something to write, false when there is not, or the reason
+  // this run's change is refused (a string, said once). Answers whether the change is made. `create` is false for a removal: a workspace that is not
+  // there holds nothing to remove, and is not made for it.
+  const change = (apply, create = true) => {
     if (!usable) return false;
+    let verdict;
     try {
-      writeUnconfirmedWebResources(workspaceDir, environment, next);
-      entries = next;
-      return true;
+      const root = workspaceRoot(workspaceDir, create);
+      if (!root) return true;
+      const file = recordFile(root, environmentFingerprint(environment));
+      const leased = withRecordLease(root, path.basename(file), () => {
+        let disk;
+        // Unreadable now, as a first read can be (load, above): nothing is recorded, and a change replaces the file — what a note always did.
+        try { disk = readUnconfirmedWebResources(workspaceDir, environment); } catch (e) { say(unreadable(e)); disk = new Map(); }
+        const answer = apply(disk, file);
+        if (answer === true) writeUnconfirmedWebResources(workspaceDir, environment, disk);
+        return answer;
+      }, lease);
+      if (!leased.ok) throw new Error(leased.reason);
+      verdict = leased.value;
     } catch (e) {
       say(`the record of the web resources this build could not confirm were published could not be written (${(e && e.message) || e})`);
       return false;
     }
+    if (typeof verdict === 'string') { say(verdict); return false; }
+    return true;
   };
   return {
     idOf: (name) => { const entry = load().get(keyOf(name)); return entry ? entry.id : undefined; },
     note: (name, id) => {
       if (!usable || !GUID.test(String(id).toLowerCase())) return false;
-      const next = new Map(load());
-      next.set(keyOf(name), { name: String(name), id: String(id).toLowerCase() });
-      return save(next);
+      const key = keyOf(name);
+      const entry = { name: String(name), id: String(id).toLowerCase() };
+      const known = load().get(key);
+      const made = change((disk, file) => {
+        const held = disk.get(key);
+        // Another build recorded this name since this run read the record, under another id: that entry is the other build's way back to the row it
+        // wrote, and replacing it would lose it.
+        if (held && held.id !== entry.id && !(known && known.id === held.id)) {
+          return `the record of the web resources builds could not confirm were published (${file}) already holds '${held.name}' as ${held.id}, which another build recorded since this one read it; it is left as it is, and this build's write of '${entry.name}' (${entry.id}) is not recorded`;
+        }
+        disk.set(key, entry);
+        return true;
+      });
+      if (made) entries.set(key, entry);
+      return made;
     },
     clear: (name) => {
-      if (!load().has(keyOf(name))) return;
-      const next = new Map(load());
-      next.delete(keyOf(name));
-      save(next);
+      const key = keyOf(name);
+      const known = load().get(key);
+      if (!known) return;
+      const made = change((disk) => {
+        const held = disk.get(key);
+        // Only the entry this run knows: one another build has recorded since, under another id, is that build's, and stays.
+        if (!held || held.id !== known.id) return false;
+        disk.delete(key);
+        return true;
+      }, false);
+      if (made) entries.delete(key);
     },
   };
 }

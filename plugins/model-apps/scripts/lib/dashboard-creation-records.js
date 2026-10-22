@@ -37,12 +37,20 @@
 // is never skipped on its own: what it held may be the only trace of a dashboard outside its solution, and a record that went on being written would
 // lose it (a note() would replace the file, a clear() of the last good entry would delete it). The run then writes no record of its own either, so a
 // file it cannot read is never replaced or removed; the warning names it, for a person to look at and remove.
+//
+// Builds that share a workspace share this file (the same app and solution in the same environment), and each change replaces it whole. So a change
+// is never made to what a run read earlier — another build may have written its own entry since, and writing the earlier copy back dropped it (A notes
+// `a`, B notes `b`: only `b` was left; A then clears `a`: the file went, `b` with it). A change takes the record's writer lease (lib/record-lease.js),
+// reads the file as it is then, applies its one change to that, and writes it: a note adds an entry or replaces the one this run knows, an observe adds
+// a reported id to this run's entry, a clear removes this run's entry, and none of them touches another build's. A file that has become unreadable since
+// is not written over. Reads take no lease.
 const fs = require('node:fs');
 const path = require('node:path');
 const { sha256 } = require('./hash.js');
 const { writeFileAtomic } = require('./apply-snapshot-store.js');
 const { environmentFingerprint, workspaceRoot } = require('./page-ownership-records.js');
 const { dashboardNameKey } = require('./app-spec.js');
+const { withRecordLease } = require('./record-lease.js');
 
 const PREFIX = 'dashboard-creation.';
 const SCHEMA_VERSION = 1;
@@ -103,7 +111,8 @@ function readDashboardCreations(workspaceDir, environment, appUniqueName, soluti
   return known;
 }
 
-// Replace the record with `entries` (the Map readDashboardCreations answers); an empty map removes the file.
+// Replace the record with `entries` (the Map readDashboardCreations answers); an empty map removes the file. It takes no lease: a caller that shares the
+// workspace with another build holds the record's lease across its read and this write (openDashboardCreations).
 function writeDashboardCreations(workspaceDir, environment, appUniqueName, solutionUniqueName, entries) {
   const fingerprint = environmentFingerprint(environment);
   const app = lower(appUniqueName);
@@ -124,13 +133,16 @@ function writeDashboardCreations(workspaceDir, environment, appUniqueName, solut
 }
 
 /**
- * The record for one run of the build: read once, then written through. `idsOf(name)` is every id an earlier run recorded for the dashboard — the one it
- * sent first, then the one the service reported when that was another — or undefined; `note(name, id)` records the id a create is about to be sent with,
- * `observe(name, reportedId)` the id its push reported, and `clear(name)` removes the dashboard; each answers whether that is now on disk. `path()` is the
- * file, for a message. None of them throws: a record that cannot be read or written is said once on `warn`, and a run without a workspace, an environment
- * or a solution (a caller that gives none; the CLI always gives all three) records nothing.
+ * The record for one run of the build: read once, then each change made to the file as it is then, under the record's writer lease. `idsOf(name)` is
+ * every id an earlier run recorded for the dashboard — the one it sent first, then the one the service reported when that was another — or undefined (what
+ * this run read, with its own changes); `note(name, id)` records the id a create is about to be sent with, `observe(name, reportedId)` the id its push
+ * reported, and `clear(name)` removes the dashboard; each answers whether that is now on disk. Each touches only what this run knows: `note` does not
+ * replace an entry another build recorded since this run read the record (said once; it answers false), `observe` adds only to the entry this run noted,
+ * and `clear` leaves one another build has recorded since under another id. `path()` is the file, for a message. None of them throws: a record that
+ * cannot be read or written, or a lease another build holds past the bounded wait, is said once on `warn`, and a run without a workspace, an environment
+ * or a solution (a caller that gives none; the CLI always gives all three) records nothing. `lease` is for tests: the lib/record-lease.js seams.
  */
-function openDashboardCreations({ workspaceDir, environment, appUniqueName, solutionUniqueName, warn } = {}) {
+function openDashboardCreations({ workspaceDir, environment, appUniqueName, solutionUniqueName, warn, lease } = {}) {
   const usable = Boolean(workspaceDir) && Boolean(environment) && Boolean(solutionUniqueName);
   let entries;
   // False once the file was there and could not be read: nothing is written over it.
@@ -144,26 +156,48 @@ function openDashboardCreations({ workspaceDir, environment, appUniqueName, solu
   const where = () => {
     try { return dashboardCreationRecordPath(workspaceDir, environment, appUniqueName, solutionUniqueName); } catch { return 'the build workspace'; }
   };
+  const unreadable = (e) => `the record of the dashboards earlier builds created and did not see join solution '${solutionUniqueName}' (${where()}) could not be read (${(e && e.message) || e}), so this build finds dashboards by name, as before, and records none of its own: a dashboard it creates is not found again if it stops before adding it to the solution. Remove the file once you have looked at it`;
+  const notFound = `the dashboard is not found again if this build stops before adding it to solution '${solutionUniqueName}'`;
   const load = () => {
     if (entries) return entries;
     entries = new Map();
     if (!usable) return entries;
     try { entries = readDashboardCreations(workspaceDir, environment, appUniqueName, solutionUniqueName); } catch (e) {
       readable = false;
-      say(`the record of the dashboards earlier builds created and did not see join solution '${solutionUniqueName}' (${where()}) could not be read (${(e && e.message) || e}), so this build finds dashboards by name, as before, and records none of its own: a dashboard it creates is not found again if it stops before adding it to the solution. Remove the file once you have looked at it`);
+      say(unreadable(e));
     }
     return entries;
   };
-  const save = (next) => {
+  // One change, made under the record's lease to the record as it is on disk now — never to this run's copy, which another build may have changed
+  // since. `apply(disk)` changes the Map it is given and answers true when there is something to write, false when there is not, or the reason this
+  // run's change is refused (a string, said once). Answers whether the change is made. `create` is false for a removal: a workspace that is not there
+  // holds nothing to remove, and is not made for it.
+  const change = (apply, create = true) => {
     if (!usable || !readable) return false;
+    let verdict;
     try {
-      writeDashboardCreations(workspaceDir, environment, appUniqueName, solutionUniqueName, next);
-      entries = next;
-      return true;
+      const root = workspaceRoot(workspaceDir, create);
+      if (!root) return true;
+      const file = recordFile(root, environmentFingerprint(environment), lower(appUniqueName), lower(solutionUniqueName));
+      const leased = withRecordLease(root, path.basename(file), () => {
+        let disk;
+        try { disk = readDashboardCreations(workspaceDir, environment, appUniqueName, solutionUniqueName); } catch (e) {
+          // Unreadable now, though this run read it before: from now on it is not written over, as one unreadable at the first read is not (above).
+          readable = false;
+          return unreadable(e);
+        }
+        const answer = apply(disk);
+        if (answer === true) writeDashboardCreations(workspaceDir, environment, appUniqueName, solutionUniqueName, disk);
+        return answer;
+      }, lease);
+      if (!leased.ok) throw new Error(leased.reason);
+      verdict = leased.value;
     } catch (e) {
       say(`the record of the dashboards this build creates (${where()}) could not be written (${(e && e.message) || e}): a dashboard it creates is not found again if it stops before adding it to solution '${solutionUniqueName}'`);
       return false;
     }
+    if (typeof verdict === 'string') { say(verdict); return false; }
+    return true;
   };
   return {
     idsOf: (name) => {
@@ -173,24 +207,55 @@ function openDashboardCreations({ workspaceDir, environment, appUniqueName, solu
     note: (name, id) => {
       const sent = idOf(id);
       if (!usable || !sent) return false;
-      const next = new Map(load());
-      next.set(dashboardNameKey(name), { name: String(name), id: sent });
-      return save(next);
+      const key = dashboardNameKey(name);
+      const entry = { name: String(name), id: sent };
+      const known = load().get(key);
+      const made = change((disk) => {
+        const held = disk.get(key);
+        // Another build recorded this dashboard since this run read the record, under another id: that entry may be the only trace of a dashboard that
+        // build created outside its solution, and replacing it would lose it.
+        if (held && held.id !== sent && !(known && known.id === held.id)) {
+          return `the record of the dashboards builds create (${where()}) already holds '${held.name}' as ${held.id}, which another build recorded since this one read it; it is left as it is, and this build's create of '${entry.name}' (${sent}) is not recorded: ${notFound}`;
+        }
+        disk.set(key, entry);
+        return true;
+      });
+      if (made) entries.set(key, entry);
+      return made;
     },
     observe: (name, reportedId) => {
       const reported = idOf(reportedId);
-      const entry = load().get(dashboardNameKey(name));
+      const key = dashboardNameKey(name);
+      const entry = load().get(key);
       if (!entry || !reported) return false;
       if (reported === entry.id || reported === entry.reportedId) return true;
-      const next = new Map(load());
-      next.set(dashboardNameKey(name), { ...entry, reportedId: reported });
-      return save(next);
+      const next = { ...entry, reportedId: reported };
+      const made = change((disk) => {
+        const held = disk.get(key);
+        // Only to the entry this run noted: one another build has replaced or removed since is not this run's create.
+        if (!held || held.id !== entry.id) {
+          return `the record of the dashboards builds create (${where()}) no longer holds '${entry.name}' as ${entry.id} — another build has changed it since this one recorded it — so it is left as it is, and the id the service reported for this build's create (${reported}) is not recorded: ${notFound}`;
+        }
+        if (held.reportedId === reported) return false;
+        disk.set(key, { ...held, reportedId: reported });
+        return true;
+      });
+      if (made) entries.set(key, next);
+      return made;
     },
     clear: (name) => {
-      if (!load().has(dashboardNameKey(name))) return false;
-      const next = new Map(load());
-      next.delete(dashboardNameKey(name));
-      return save(next);
+      const key = dashboardNameKey(name);
+      const known = load().get(key);
+      if (!known) return false;
+      const made = change((disk) => {
+        const held = disk.get(key);
+        // Only the entry this run knows: one another build has recorded since, under another id, is that build's, and stays.
+        if (!held || held.id !== known.id) return false;
+        disk.delete(key);
+        return true;
+      }, false);
+      if (made) entries.delete(key);
+      return made;
     },
     path: where,
   };

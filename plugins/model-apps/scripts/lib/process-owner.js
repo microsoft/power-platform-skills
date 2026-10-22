@@ -2,9 +2,10 @@
 // Who made a lock or a temporary workspace, and whether that process is gone.
 //
 // WHY. A run that is killed outright — SIGKILL, "End task", an agent's timeout, a power cut — cannot clean up after itself, so it leaves what it
-// held: the pages lock a build takes on an app's workspace (lib/sdk-build.js), and the throwaway workspaces it made in the temp folder
-// (lib/temp-workspace.js), which hold the page source it read and the environment's address. A later run may take such a thing over ONLY when it can
-// prove that its maker is gone; everything else is left exactly as it was. That proof is made here, once, for both. It is deliberately one-sided:
+// held: the pages lock a build takes on an app's workspace (lib/sdk-build.js), the writer lease of a recovery record in it (lib/record-lease.js), and
+// the throwaway workspaces it made in the temp folder (lib/temp-workspace.js), which hold the page source it read and the environment's address. A later
+// run may take such a thing over ONLY when it can prove that its maker is gone; everything else is left exactly as it was. That proof is made here, once,
+// for all of them. It is deliberately one-sided:
 // every doubt answers "keep" — a lock that stays costs a person one delete, and a lock or a workspace taken from a run that is still going costs it
 // its work.
 //
