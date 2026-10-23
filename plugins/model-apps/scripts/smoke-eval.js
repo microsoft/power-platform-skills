@@ -12,6 +12,7 @@ const os = require('node:os');
 const fs = require('node:fs');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
+const { makeWritesBlocking } = require('./lib/output-redaction.js');
 
 // A minimal 1x1 transparent PNG (base64) for the nav-icon web resource.
 const PNG_1x1 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==';
@@ -166,6 +167,10 @@ function dvGet(env, apiPath) {
 }
 
 async function main(env, prefix) {
+  // This run forwards each step's output (spawnSync, which leaves this process's event loop idle meanwhile) and ends in the
+  // caller's `process.exit`: a write a pipe could not take at once would wait for a loop turn that never comes. So every write
+  // is blocking from the start (lib/output-redaction.js makeWritesBlocking) — a maintainer's run, read to its end.
+  makeWritesBlocking(process.stdout, process.stderr);
   const spec = buildSmokeSpec(prefix);
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'smoke-eval-'));
   const specPath = path.join(dir, 'app-spec.json');

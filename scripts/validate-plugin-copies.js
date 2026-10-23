@@ -15,6 +15,9 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const REPO_ROOT = path.resolve(__dirname, '..');
+// The model-apps TSX lexer, loaded from THIS checkout (never from the repository being checked, whose files a test may replace):
+// it blanks every comment, string, template and regex literal while keeping offsets, which is what finding a function's end needs.
+const { blankLiterals } = require(path.join(REPO_ROOT, 'plugins', 'model-apps', 'scripts', 'lib', 'source-literals.js'));
 
 const COPY_SETS = [
   {
@@ -22,6 +25,7 @@ const COPY_SETS = [
     verbatim: [
       ['scripts/lib/process-runner.js', 'scripts/lib/process-runner.js'],
       ['scripts/lib/sdk-http-client.js', 'scripts/lib/sdk-http-client.js'],
+      ['scripts/lib/output-redaction.js', 'scripts/lib/output-redaction.js'],
       ['scripts/lib/odata.js', 'scripts/lib/odata.js'],
       ['scripts/lib/source-literals.js', 'scripts/lib/source-literals.js'],
       ['scripts/lib/interaction-mode.js', 'scripts/lib/interaction-mode.js'],
@@ -193,18 +197,64 @@ function identifiersInSource(source) {
 
 function referencedDeclarations(sourcePath, sourceModule, copyModule, subset, sourceDeclarations = topLevelDeclarations(sourcePath)) {
   const referenced = new Set(subset.requiredDeclarations || []);
-  const names = new Set(subset.requiredExports || []);
+  // The copy's emitResult is its own (a JSON error contract of pcf's), so what the SOURCE's emitResult uses — model-apps'
+  // asciiJson, say — is nothing the copy needs.
+  const names = new Set((subset.requiredExports || []).filter((name) => name !== subset.exceptExport));
   for (const exportName of Object.keys(copyModule)) {
     if (exportName !== subset.exceptExport) names.add(exportName);
   }
+  const pending = [];
   for (const name of names) {
     const fn = sourceModule[name];
-    if (typeof fn !== 'function') continue;
-    for (const ident of identifiersInSource(Function.prototype.toString.call(fn))) {
-      if (sourceDeclarations.has(ident)) referenced.add(ident);
+    if (typeof fn === 'function') pending.push(Function.prototype.toString.call(fn));
+  }
+  for (const name of referenced) {
+    if (sourceDeclarations.has(name)) pending.push(sourceDeclarations.get(name));
+  }
+  // Transitively: a required declaration's own text can use another one. getAuthToken calls the helper function readAzToken,
+  // which reads authTokenMemo and noteTokenFailure, which reads tokenFailures — each must be in the copy, or the copy throws
+  // ReferenceError the first time that path runs (a function body is only resolved when it is called).
+  while (pending.length) {
+    for (const ident of identifiersInSource(pending.pop())) {
+      if (sourceDeclarations.has(ident) && !referenced.has(ident)) {
+        referenced.add(ident);
+        pending.push(sourceDeclarations.get(ident));
+      }
     }
   }
   return referenced;
+}
+
+// Top-level function declarations, name -> full text. Like the `const` declarations below they are found at column 0, which is
+// how every top-level declaration in these files is written:
+//   function readAzToken(resource, opts = {}) {
+//   async function preflightAuth(envUrl) {
+// The head also reads the generator forms (`function* name(`, `async function* name(`) and uneven spacing; a head it does not
+// read is a helper the copy is never asked for, so scripts/tests/validate-plugin-copies.test.js pins every form.
+// The search runs over the source with every comment, string, template and regex literal blanked (offsets kept), so `function`
+// in a comment is no declaration and a `}` inside a literal does not end a body early. The parameter list is skipped before the
+// body is looked for: a default value such as `opts = {}` holds braces of its own.
+function topLevelFunctions(source) {
+  const blank = blankLiterals(source);
+  const functions = new Map();
+  const head = /^(?:async[ \t]+)?function[ \t]*\*?[ \t]*([A-Za-z_$][\w$]*)[ \t]*\(/gm;
+  for (const match of blank.matchAll(head)) {
+    let at = match.index + match[0].length;
+    for (let depth = 1; at < blank.length && depth > 0; at++) {
+      if (blank[at] === '(') depth++;
+      else if (blank[at] === ')') depth--;
+    }
+    const open = blank.indexOf('{', at);
+    if (open < 0) continue;
+    for (let at2 = open, depth = 0; at2 < blank.length; at2++) {
+      if (blank[at2] === '{') depth++;
+      else if (blank[at2] === '}' && --depth === 0) {
+        functions.set(match[1], source.slice(match.index, at2 + 1));
+        break;
+      }
+    }
+  }
+  return functions;
 }
 
 function topLevelDeclarations(file) {
@@ -215,6 +265,9 @@ function topLevelDeclarations(file) {
     for (const name of declarationNames(match[0])) {
       declarations.set(name, normalizeDeclaration(match[0]));
     }
+  }
+  for (const [name, text] of topLevelFunctions(source)) {
+    declarations.set(name, normalizeDeclaration(text));
   }
   return declarations;
 }
@@ -256,6 +309,9 @@ function checkSubset(repoRoot, setName, subset) {
     }
   }
   for (const [name, declaration] of copyDeclarations) {
+    // emitResult is the copy's own on purpose (its contract is checked below), and an exported function's text was compared
+    // above as an export; every other declaration, helper functions included, must be the source's.
+    if (name === subset.exceptExport || typeof copyModule[name] === 'function') continue;
     if (sourceDeclarations.get(name) !== declaration) {
       findings.push(finding(setName, 'declaration-drift', name, subset.copy, subsetFix(name)));
     }
@@ -329,6 +385,7 @@ module.exports = {
   checkVerbatimPair,
   checkSubset,
   topLevelDeclarations,
+  topLevelFunctions,
   referencedDeclarations,
   normalizeDeclaration,
   formatFinding,

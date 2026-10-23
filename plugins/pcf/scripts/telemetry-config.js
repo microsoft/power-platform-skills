@@ -10,6 +10,7 @@ const {
 } = require('./lib/telemetry/lib/user-config.js');
 const { pluginLogDir, latestSessionLog } = require('./lib/telemetry/lib/local-log.js');
 const { isProvisioned } = require('./lib/telemetry/resolver.js');
+const { makeWritesBlocking } = require('./lib/output-redaction.js');
 
 const USAGE = 'USAGE: node scripts/telemetry-config.js [--action <on|off|status>]';
 
@@ -18,6 +19,7 @@ function main(argv = process.argv.slice(2)) {
   const flagError = validateFlags(argv, { known: ['action'], needValue: ['action'] });
   const action = flags.action || 'status';
   if (flagError || positional.length || !['on', 'off', 'status'].includes(action)) {
+    makeWritesBlocking(process.stdout, process.stderr);
     process.stderr.write(`${flagError || 'Action must be on, off or status.'}\n${USAGE}\n`);
     process.exit(1);
   }

@@ -42,9 +42,9 @@ test('a view, chart or form name repeated on another table is not a duplicate; o
   ]);
 });
 
-// pac stores each ASCII `"` in a page's name as `\"` on the page's own record (live-measured) and changes nothing else.
-// A warning: the navigation shows the subarea title, which the build writes as given.
-test('a page name with an ASCII double quote is warned about; the characters pac keeps are not', () => {
+// A page's name is stored exactly as given. A page an earlier release created through pac holds each ASCII `"` as `\"` on the page's own record, so the
+// warning stays — reworded: it no longer says pac stores the name, it says what a page of an earlier release holds.
+test('a page name with an ASCII double quote is warned about; a backslash, typographic quotes and an apostrophe are not', () => {
   const s = base();
   s.pages = [
     { key: 'a', name: 'Say "hi" now', source: { kind: 'tsx', file: 'pages/a.tsx' } },
@@ -52,8 +52,9 @@ test('a page name with an ASCII double quote is warned about; the characters pac
   ];
   const r = lintAppSpec(s);
   assert.deepStrictEqual(r.warnings.filter((w) => /double quote/.test(w)), [
-    'Page \'Say "hi" now\': pac stores each ASCII double quote (") in a page\'s name as \\" on the page\'s own record — use typographic quotes (“ ”) or an apostrophe instead',
+    'Page \'Say "hi" now\': the name has an ASCII double quote (") — it is stored exactly as written, but a page an earlier release created holds each one as \\" on the page\'s own record until a build rewrites its name — use typographic quotes (“ ”) or an apostrophe instead',
   ]);
+  assert.ok(!r.warnings.some((w) => /pac stores/.test(w)), 'pac no longer writes pages');
   assert.strictEqual(r.errors.length, 0, 'a warning, never an error');
 });
 
@@ -679,6 +680,65 @@ test('lint warns on lead and opportunity D365-owned tables', () => {
   const r = lintAppSpec(s);
   assert.ok(r.warnings.some((w) => /lead/i.test(w) && /Dynamics 365/i.test(w)));
   assert.ok(r.warnings.some((w) => /opportunity/i.test(w) && /Dynamics 365/i.test(w)));
+});
+
+// A table's entry in ai.summaries.tables is read for three keys only — `enabled`, `instruction` (its row-summary prompt) and `columns` — and
+// validation rejects none of the others, so a misnamed key validates, builds green and does nothing. Seen live: `prompt` for the prompt.
+test('lint warns on a per-table summary prompt key that is never read, naming where the prompt goes', () => {
+  const s = base();
+  s.ai = { summaries: { default: 'off', tables: { new_ticket: { enabled: true, prompt: 'Summarise the ticket in two sentences.', instructions: 'x', colour: 'red' } } } };
+  const { validateAppSpec } = require('../lib/app-spec.js');
+  assert.deepStrictEqual(validateAppSpec(s, { profile: 'plan' }).errors.filter((e) => /ai\.summaries/.test(e)), [], 'validation does not reject an unknown key, so lint is where it is caught');
+  const r = lintAppSpec(s);
+  assert.deepStrictEqual(r.errors, [], 'a warning, not an error');
+  assert.deepStrictEqual(r.warnings.filter((w) => /ai\.summaries\.tables/.test(w)), [
+    "ai.summaries.tables['new_ticket'].prompt is ignored — a table's row-summary prompt is its instruction: rename the key to ai.summaries.tables['new_ticket'].instruction (when a summary is enabled, omitting instruction uses the default prompt)",
+    "ai.summaries.tables['new_ticket']: unknown key 'instructions' is ignored — did you mean 'instruction'? (a table's entry reads only enabled, instruction and columns)",
+    "ai.summaries.tables['new_ticket']: unknown key 'colour' is ignored (a table's entry reads only enabled, instruction and columns)",
+  ]);
+  // The keys the build reads say nothing.
+  const ok = base();
+  ok.ai = { summaries: { tables: { new_ticket: { enabled: true, instruction: 'Summarise the ticket.', columns: ['new_priority'] }, new_customer: { enabled: false } } } };
+  assert.deepStrictEqual(lintAppSpec(ok).warnings.filter((w) => /is ignored/.test(w)), []);
+});
+
+test('a prompt warning does not enable a disabled-by-default summary', () => {
+  const { validateAppSpec } = require('../lib/app-spec.js');
+  const { selectSummaryTables } = require('../lib/ai-candidates.js');
+  const { buildPromptSpec } = require('../lib/ai-prompt.js');
+  const instruction = 'Summarise the ticket in two sentences.';
+  const defaultInstruction = 'Summarize this Ticket as a short paragraph highlighting the most important details and any recent activity.';
+  for (const [mode, enabled, selected] of [
+    ['off', undefined, []],
+    ['off', true, ['new_ticket']],
+    ['auto', false, []],
+    ['auto', undefined, ['new_ticket']],
+  ]) {
+    const s = base();
+    s.app = { name: 'Ticket summaries' };
+    const override = { prompt: instruction };
+    if (enabled !== undefined) override.enabled = enabled;
+    s.ai = { summaries: { default: mode, tables: { new_ticket: override } } };
+    const before = structuredClone(s);
+    assert.strictEqual(validateAppSpec(s, { profile: 'plan' }).ok, true);
+    assert.deepStrictEqual(selectSummaryTables(s), selected);
+    const r = lintAppSpec(s);
+    assert.deepStrictEqual(s, before, 'lint must not change summary selection or the authored spec');
+    assert.deepStrictEqual(r.errors, []);
+    assert.deepStrictEqual(r.warnings.filter((w) => /ai\.summaries\.tables/.test(w)), [
+      "ai.summaries.tables['new_ticket'].prompt is ignored — a table's row-summary prompt is its instruction: rename the key to ai.summaries.tables['new_ticket'].instruction (when a summary is enabled, omitting instruction uses the default prompt)",
+    ]);
+    const prompts = () => selectSummaryTables(s).map((schema) =>
+      buildPromptSpec(s.entities.find((e) => e.schemaName === schema), { spec: s, override }).instruction);
+    assert.deepStrictEqual(prompts(), selected.map(() => defaultInstruction), 'only a selected summary gets the default prompt');
+
+    delete override.prompt;
+    override.instruction = instruction;
+    assert.strictEqual(validateAppSpec(s, { profile: 'plan' }).ok, true);
+    assert.deepStrictEqual(lintAppSpec(s).warnings.filter((w) => /ai\.summaries\.tables/.test(w)), []);
+    assert.deepStrictEqual(selectSummaryTables(s), selected, 'renaming prompt to instruction does not enable a summary');
+    assert.deepStrictEqual(prompts(), selected.map(() => instruction));
+  }
 });
 
 test('lint warns when a summary table has no descriptive columns', () => {

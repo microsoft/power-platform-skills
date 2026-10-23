@@ -1,8 +1,9 @@
 'use strict';
 // REAL-BUNDLE contract tests for app deletion (teardown's primary destructive step).
 //
-// An app is TWO rows: an `appmodule` and a `sitemaps` row, with NO lookup between them and no
-// server-side cascade — the only link is `sitemap.sitemapnameunique === appmodule.uniquename`.
+// An app is TWO rows: an `appmodule` and a `sitemaps` row, with no server-side cascade. Its CURRENT
+// appmoduleidunique layer links type-62 appmodulecomponents to the sitemap; only an absent component
+// permits a safe same-name fallback. A component-linked sitemap may legitimately have another name.
 // Deleting just the appmodule strands the sitemap forever AND, because `sitemapnameunique` is
 // unique-constrained, permanently BURNS that unique name: a later build of an app with the same
 // name fails with "The name <x> is already in use by an existing site map", which the user cannot
@@ -13,9 +14,8 @@
 // The SDK now deletes both rows in ONE atomic OData `$batch` change set, so it requires an
 // `HttpClient.postRaw` and refuses (APP_DELETE_NOT_ATOMIC) without one. It also fails closed on
 // every read it cannot trust: the app must carry an ETag and the sitemap's by-id read must return its
-// ROW token (so each DELETE can be conditional on the row actually inspected), and the sitemap must
-// still carry the app's `sitemapnameunique` (so a row re-pointed between read and delete is not
-// destroyed).
+// ROW token (so each DELETE can be conditional on the row actually inspected). Shared or changed links
+// are refused; a name-fallback candidate must still carry the app's name.
 const test = require('node:test');
 const assert = require('node:assert');
 const os = require('node:os');
@@ -24,6 +24,7 @@ const fs = require('node:fs');
 
 const BUNDLE = path.resolve(__dirname, '..', 'vendor', 'cds-maker-sdk.cjs');
 const { createAzHttpClient } = require('../lib/sdk-http-client.js');
+const { appSitemapLinkRows } = require('./helpers/app-sitemap-link-rows.js');
 
 const APP_ID = '11111111-1111-1111-1111-111111111111';
 const APP_UNIQUE_ID = '22222222-2222-2222-2222-222222222222';
@@ -73,7 +74,7 @@ function batchResponseFor(requestBody, statusFor = () => 204) {
 
 /** The rows a fake Dataverse hands back, shared by the injected-client and real-transport fakes. */
 function appRow(opts = {}) {
-  const row = { appmoduleid: APP_ID, appmoduleidunique: APP_UNIQUE_ID, uniquename: APP_UNIQUE, name: 'Support Desk' };
+  const row = { appmoduleid: APP_ID, appmoduleidunique: APP_UNIQUE_ID, componentstate: 0, uniquename: APP_UNIQUE, name: 'Support Desk' };
   if (!opts.noAppEtag) row['@odata.etag'] = 'W/"1001"';
   return row;
 }
@@ -104,6 +105,15 @@ function sitemapByIdResponse(opts = {}) {
 }
 const SITEMAP_BY_ID = /\/sitemaps\([^)]+\)/;
 
+function linkRows(url, opts = {}) {
+  return appSitemapLinkRows(url, {
+    apps: [appRow(opts)],
+    components: opts.noSitemap || opts.foreignSitemap ? [] : [{
+      _appmoduleidunique_value: APP_UNIQUE_ID, objectid: SITEMAP_ID, componenttype: 62,
+    }],
+  });
+}
+
 /**
  * A real SDK over a fake Dataverse that models the two-row app. `opts`:
  *   appReadStatus       - HTTP status for GET /appmodules(<id>)  (models a transient read failure)
@@ -129,8 +139,9 @@ async function freshSdk(opts = {}) {
       // argument. e.g. /EntityDefinitions(LogicalName='appmodulecomponent')?$select=EntitySetName
       const meta = /EntityDefinitions\(LogicalName='([^']+)'\)/.exec(url);
       if (meta) return { status: 200, headers: {}, body: { LogicalName: meta[1], EntitySetName: `${meta[1]}s` } };
-      // By-id app retrieve — the source of the `uniquename` the sitemap is linked by, and of the
-      // ETag the conditional delete is issued against.
+      const linked = linkRows(url, opts);
+      if (linked !== undefined) return { status: 200, headers: {}, body: { value: linked } };
+      // By-id app retrieve supplies the name-fallback identity and the conditional delete's ETag.
       if (/\/appmodules\([^)]+\)/.test(url)) {
         const status = opts.appReadStatus || 200;
         if (status !== 200) return { status, headers: {}, body: null };
@@ -209,8 +220,7 @@ test('REAL BUNDLE: both rows are deleted in ONE atomic $batch change set, never 
 });
 
 test('REAL BUNDLE: the sitemap is resolved BEFORE the app delete, never after', async () => {
-  // Afterwards the `uniquename` -> sitemap link is unrecoverable, so ordering is the whole
-  // guarantee: read first, then destroy.
+  // Afterwards the app's layer/component link is unrecoverable: read first, then destroy.
   const { sdk, calls } = await freshSdk();
   await sdk.deleteAppCascade(APP_ID, APP_UNIQUE_ID);
   const sitemapLookup = calls.findIndex((c) => c.method === 'GET' && c.url.includes('/sitemaps'));
@@ -235,9 +245,9 @@ test('REAL BUNDLE: an INCONCLUSIVE sitemap lookup refuses to delete the app (fai
   }
 });
 
-test("REAL BUNDLE: a sitemap that no longer carries this app's unique name is NOT deleted", async () => {
-  // Ownership is name equality only. If the row was re-pointed between the read and the delete it
-  // belongs to a different app now, and destroying it would be cross-app data loss.
+test("REAL BUNDLE: a NAME-FALLBACK candidate renamed after lookup is NOT deleted", async () => {
+  // No component links this fixture, so the fallback name must survive the subsequent by-id read.
+  // A valid type-62 link with a different name is a separate, supported identity.
   const { sdk, calls } = await freshSdk({ foreignSitemap: true });
   await assert.rejects(() => sdk.deleteAppCascade(APP_ID, APP_UNIQUE_ID), /no longer this app|APP_SITEMAP_UNRESOLVED/);
   assert.strictEqual(deletedPaths(calls).length, 0, 'nothing may be deleted when ownership cannot be proven');
@@ -326,6 +336,8 @@ test('REAL BUNDLE + REAL TRANSPORT: the plugin HttpClient satisfies the SDK atom
     wire.push({ url, method, body, headers });
     const meta = /EntityDefinitions\(LogicalName='([^']+)'\)/.exec(url);
     if (meta) return { statusCode: 200, headers: {}, body: JSON.stringify({ LogicalName: meta[1], EntitySetName: `${meta[1]}s` }) };
+    const linked = linkRows(url);
+    if (linked !== undefined) return { statusCode: 200, headers: {}, body: JSON.stringify({ value: linked }) };
     if (/\/\$batch$/.test(url)) return { statusCode: 200, headers: {}, body: batchResponseFor(body) };
     if (/\/appmodules\([^)]+\)/.test(url)) return { statusCode: 200, headers: {}, body: JSON.stringify(appRow()) };
     // The row token travels ONLY in the response header here (real Dataverse also puts it in the
@@ -371,6 +383,8 @@ test('REAL BUNDLE + REAL TRANSPORT: an app delete whose change set lost a SQL de
   const request = async ({ url, body }) => {
     const meta = /EntityDefinitions\(LogicalName='([^']+)'\)/.exec(url);
     if (meta) return { statusCode: 200, headers: {}, body: JSON.stringify({ LogicalName: meta[1], EntitySetName: `${meta[1]}s` }) };
+    const linked = linkRows(url);
+    if (linked !== undefined) return { statusCode: 200, headers: {}, body: JSON.stringify({ value: linked }) };
     if (/\/\$batch$/.test(url)) {
       batches.push(body);
       return batches.length === 1 ? { statusCode: 500, headers: {}, body: deadlocked } : { statusCode: 200, headers: {}, body: batchResponseFor(body) };
@@ -414,6 +428,8 @@ for (const [shape, refusal] of [
     const request = async ({ url, body }) => {
       const meta = /EntityDefinitions\(LogicalName='([^']+)'\)/.exec(url);
       if (meta) return { statusCode: 200, headers: {}, body: JSON.stringify({ LogicalName: meta[1], EntitySetName: `${meta[1]}s` }) };
+      const linked = linkRows(url);
+      if (linked !== undefined) return { statusCode: 200, headers: {}, body: JSON.stringify({ value: linked }) };
       if (/\/\$batch$/.test(url)) {
         batches.push(body);
         return batches.length === 1 ? refusal : { statusCode: 200, headers: {}, body: batchResponseFor(body) };

@@ -1,0 +1,5 @@
+{"type":"system","subtype":"init","cwd":"<workspace>","session_id":"00000000-0000-0000-0000-000000000000","tools":["Glob","Grep","Read","Skill"],"skills":["model-apps:app-builder","model-apps:genpage","model-apps:report-issue","model-apps:telemetry","design"],"plugins":[{"name":"model-apps","path":"<plugin>","source":"model-apps@inline","version":"2.16.0"}]}
+{"type":"assistant","message":{"id":"msg_01","role":"assistant","content":[{"type":"text","text":"None of the available skills applies, so I will look at the workspace first."}]}}
+{"type":"assistant","message":{"id":"msg_01","role":"assistant","content":[{"type":"tool_use","id":"toolu_21","name":"Glob","input":{"pattern":"**/*"}}]}}
+{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_21","content":"No files found"}]}}
+{"type":"assistant","message":{"id":"msg_02","role":"assistant","content":[{"type":"tool_use","id":"toolu_22","name":"Skill","input":{"skill":"model-apps:genpage","args":"Build a generic React dashboard website."}}]}}

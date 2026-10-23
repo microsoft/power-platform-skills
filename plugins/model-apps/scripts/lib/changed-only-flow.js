@@ -58,7 +58,7 @@ function decideChangedOnly({ annotatedSpec, snapshot, live, distrust = null }) {
   }
   // Eligible + EVERY change is the wired page-content shape → pages-only fast apply. Requires a live appId
   // (the fast path seeds result.created.app from it to satisfy pages-requires-app); a null appId would
-  // otherwise HALT, so fall back to a full build instead (M6). identityMatches already guarantees a live
+  // otherwise HALT, so fall back to a full build instead. identityMatches already guarantees a live
   // appId when the snapshot recorded one, so this is a belt-and-suspenders guard for a legacy no-appId
   // snapshot.
   if (classify.verdict === 'fast' && classify.fastChanges.length > 0 && classify.fastChanges.every((c) => c.shape === 'page')) {
@@ -117,15 +117,15 @@ async function resolveLiveIdentity({ sdk, envUrl, appUniqueName, whoAmI }) {
 // ---- snapshot assembly (post-apply) -------------------------------------------------------------------
 
 // Assemble the baseline snapshot to persist after a FULL apply. Two fail-closed rules:
-//  1. FRESH-CREATE-ONLY eligibility (Sol #7 / Opus H2): a full `--apply` is ADDITIVE — on a PRE-EXISTING
+//  1. FRESH-CREATE-ONLY eligibility: a full `--apply` is ADDITIVE — on a PRE-EXISTING
 //     app it re-SKIPS diverged chart/command/dashboard/web-resource-content edits, so the deployed state may
 //     not match the spec even though the build "succeeded". We can only PROVE convergence when the app was
 //     CREATED fresh this run (it did not exist when the flow started: appPreExisted=false). If the app
 //     pre-existed, the baseline is recorded INELIGIBLE with an `uncertified-baseline` debt — a page edit then
 //     stays on the full-build path until a clean teardown+rebuild recreates everything fresh. This also
-//     subsumes the AI/data-model divergence concern (Sol #8): any full-build-triggering edit on an existing
+//     subsumes the AI/data-model divergence concern: any full-build-triggering edit on an existing
 //     app yields an ineligible baseline, regardless of the specific phase.
-//  2. STICKY debt (Sol build-time note): new snapshot debt = prior debt UNION this build's classify debt;
+//  2. STICKY debt: new snapshot debt = prior debt UNION this build's classify debt;
 //     eligible only when empty. A plain full rebuild never self-heals debt (the additive engine re-skips a
 //     stale artifact); debt clears only when a clean teardown DELETES the snapshot and it is recreated fresh.
 function assembleBaselineSnapshot({ annotatedSpec, created, live, prior, appPreExisted, sampleDataApplied }) {
@@ -155,8 +155,8 @@ function assembleBaselineSnapshot({ annotatedSpec, created, live, prior, appPreE
 // Refresh the snapshot after a pages-only FAST apply: keep the eligible envelope, update priorSpec and the
 // re-uploaded pages' hashes. sourceSha is the spec's on-disk hash; deployedSha is the MEASURED hash of the
 // bytes actually uploaded (created.pageDeployedShas[key] — differs from source when PAGEREF nav is resolved,
-// so it must never be assumed equal to the source hash; Sol #2/#3). Only the SELECTED (re-uploaded) keys are
-// refreshed — an unchanged page keeps its recorded hashes. Re-checks empty debt via markEligible (Opus L8)
+// so it must never be assumed equal to the source hash). Only the SELECTED (re-uploaded) keys are
+// refreshed — an unchanged page keeps its recorded hashes. Re-checks empty debt via markEligible
 // and bumps the generation for the CAS write.
 function assembleFastSnapshot({ snapshot, annotatedSpec, created, pageKeys, generation }) {
   const env = snap.parseEnvelope(snap.serializeEnvelope(snapshot)); // deep clone
@@ -286,7 +286,7 @@ async function runChangedOnlyApply({ spec, opts, deps }) {
   }
 
   // Whether the app already existed when the flow STARTED — the only proof a subsequent full build is a
-  // fresh create (→ eligible baseline). Captured before any write (Sol #7 / Opus H2).
+  // fresh create (→ eligible baseline). Captured before any write.
   //
   // An UNREADABLE app id counts as pre-existing. "We could not look" must not certify a fresh baseline:
   // the alternative is that one transient app-query failure mints an eligible snapshot for an additive
@@ -296,7 +296,7 @@ async function runChangedOnlyApply({ spec, opts, deps }) {
   const appPreExisted = live.appIdKnown === false ? true : !!live.appId;
 
   let decision = decideChangedOnly({ annotatedSpec, snapshot, live, distrust });
-  // Sample-data guard (Sol #11): the baseline records whether --sample-data was applied. If THIS run asks
+  // Sample-data guard: the baseline records whether --sample-data was applied. If THIS run asks
   // for sample data but the eligible baseline did not seed it, a fast/noop would never seed the rows —
   // force a full build so the sample-data phase runs.
   if (opts.sampleData && snapshot && snapshot.sampleDataApplied !== true && (decision.decision === 'fast' || decision.decision === 'noop')) {
@@ -322,12 +322,12 @@ async function runChangedOnlyApply({ spec, opts, deps }) {
       log(`✗ ${msg}`);
       return { ok: false, errors: [msg], changedOnly: decision };
     }
-    // selectedKeys: upload ONLY the changed pages (never clobber an unchanged one — Sol #1).
+    // selectedKeys: upload ONLY the changed pages (never clobber an unchanged one).
     const fastOpts = { ...fullApplyOpts(opts), phases: ['pages'], changedOnly: { fastApply: true, resolvedAppId: live.appId, skipSitemapFinalize: true, selectedKeys: decision.pageKeys } };
     const { r, moved } = await buildHolding(ws, inv.generation, log, () => deps.buildModelApp(spec, fastOpts, deps.buildDeps));
     // Re-bless ONLY on a fully successful apply whose mandatory page verify PASSED (a fast apply always
     // applies the pages phase, so verify is mandatory and r.verify is always set — a missing/failed verify
-    // leaves the snapshot invalidated, fail-closed; Sol #2/#3, Opus H4). CAS `expected` = the post-invalidate
+    // leaves the snapshot invalidated, fail-closed). CAS `expected` = the post-invalidate
     // generation (inv.generation), which the invalidate wrote; a concurrent writer that bumped it again is
     // detected and this re-bless is refused.
     if (r && r.ok && !r.dryRun && r.verify && r.verify.ok && moved) {

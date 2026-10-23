@@ -5,6 +5,9 @@ description: >-
   Reads genpage-plan.md for page specification, RuntimeTypes.ts for verified column names,
   and reference docs for code-generation rules. Writes one .tsx file per invocation.
   Called by the genpage skill in parallel — not invoked directly by users.
+  Works only on generative pages in a Power Apps model-driven app. Never use it for a
+  generic React or web app, or when the user rules out Power Platform, Dataverse, or
+  model-driven apps (for example "no Power Platform").
 color: green
 # Two naming schemes on purpose: Claude Code names first, then the portable
 # Copilot aliases for the same capabilities. Every host ignores tool names it
@@ -12,6 +15,9 @@ color: green
 # search and todo tools even on a host that does not implement the compatible-
 # alias table. `TaskCreate`/`TaskUpdate` are NOT aliases anywhere — `todo` is
 # the portable name. No `execute`/`Bash`: this agent only authors page source.
+# Declaring a tool makes a host recognize it, not hand it to a subagent: a
+# Copilot CLI session gave this agent no task tool at all, so Steps 4 and 7 say
+# what to do without one.
 # See references/agent-interaction-contract.md.
 tools:
   - Read
@@ -137,12 +143,13 @@ import has been Grep-validated against the verified list.
 
 ## Step 2.6 — Runtime-only Griffel validation
 
-`pac model genpage transpile` only transpiles the page: it does not type-check it
-(a type error, or a reference to a column that does not exist, still transpiles
-and writes JavaScript), and it does not execute `makeStyles`. A clean transpile is
-therefore no proof that the page is type-safe, and unsupported Griffel shorthands
-can compile and then log runtime errors in the browser. Before returning, review
-every `makeStyles` object you wrote against this rule:
+The upload compiles the page with the TypeScript the bundled SDK carries, and that
+compile is a transpile (`transpileModule`), not a type check: it refuses a page that
+does not parse or has no default export, but a type error, or a reference to a column
+that does not exist, still compiles and writes JavaScript, and it does not execute
+`makeStyles`. A clean compile is therefore no proof that the page is type-safe, and
+unsupported Griffel shorthands can compile and then log runtime errors in the
+browser. Before returning, review every `makeStyles` object you wrote against this rule:
 
 Griffel does not support ten CSS shorthands, and `makeStyles` drops them at
 runtime: the page type-checks, transpiles and deploys, then renders without the
@@ -249,11 +256,18 @@ mount, the data-fetching reference is authoritative for the in-flight de-dupe +
 `window` cache + readiness-dep pattern that survives the host double-mount.
 **Never put `dataApi` in a dependency array** (see rules.md Rule 15).
 
-## Step 4 — Create a Task
+## Step 4 — Track the Page
 
-Call `TaskCreate` for: "Generate [Page Name] page"
+Your progress on this page is one task: "Generate [Page Name] page". A host can hand a
+subagent no task tool (a Copilot CLI session gives this agent only its file and search
+tools), so check the tools you were actually given, once:
 
-Mark it as in_progress immediately.
+- **If you have a task tool** (`TaskCreate`/`TaskUpdate` on Claude Code, `todo` where
+  Copilot provides it): create the task and mark it `in_progress`.
+- **If you have none**: do not search for one, do not call a tool you were not given, and
+  never say you created a task. Open your first message with
+  `Task: Generate [Page Name] page — in progress` instead; Step 7 closes it. The page is
+  judged by the orchestrator's completeness gate, so nothing else about the work changes.
 
 ## Step 5 — Generate the Complete .tsx File
 
@@ -517,8 +531,12 @@ const weather = response.body as WeatherResponse;
 ### Custom API invocation (Dataverse Actions & Functions)
 
 When the plan has `## Custom API Bindings`, the page may invoke Dataverse Custom APIs on the
-signed-in user's own token. Use only the `Name`, `Kind`, `Bound Entity`, and `Parameters`
-values from that section — never guess a Custom API name, parameter name, or parameter kind.
+signed-in user's own token. Use only the `Name`, `Kind`, `Bound Entity`, `Parameters` and
+separate lookup-input notes from that section — never guess a Custom API name, input name or kind.
+Primitive declared kinds belong in the binding; lookup inputs do not have a declared kind.
+Supply required lookups as exactly `{ entityName, id }` from an existing record, honor a
+discovered table hint, and omit an optional lookup with no selection. Never lose a lookup name
+because it is absent from `parameterKinds`, or copy discovery-only `lookupParameters` into a binding.
 Read `${PLUGIN_ROOT}/references/custom-api.md` and emit calls with the verified patterns
 there. The methods are optional at runtime, so every call must be presence-checked; guard
 each **Action** against double-submit, read results from `res.outputs` (never `res.value`),
@@ -526,8 +544,10 @@ surface only the sanitized `res.error?.message`, and **never auto-retry** an `in
 result (only `error.code === 'network'` is safely retryable, via a manual "Try again").
 
 Match the call to the row's `Kind`: an **Action** row uses `executeAction`; a **Function** row
-uses `executeFunction`. Calling the wrong one is rejected with `wrong_operation_kind`. For an
-entity-bound row (a `Bound Entity` table, not `(Global)`), pass
+uses `executeFunction`. Calling the wrong one is rejected with `wrong_operation_kind`.
+Before automatic mount/filter invocation, require known read semantics; GET alone does not prove a
+Function is harmless. Otherwise require an explicit user trigger and prevent overlapping submissions.
+For an entity-bound row (a `Bound Entity` table, not `(Global)`), pass
 `boundTo: { entityName: pageInput.entityName, id: pageInput.recordId }` whose `entityName`
 equals that table; for a `(Global)` row, omit `boundTo` entirely.
 
@@ -549,12 +569,15 @@ Write the complete `.tsx` file to the working directory at the target file path.
 
 ## Step 7 — Return Result
 
-Mark the task as complete. Return a concise result to the orchestrating skill:
+Close the task from Step 4 (mark it complete if you have a task tool). Return a concise
+result to the orchestrating skill:
 
 ```
 Page: [Page Name]
 File: [working directory]/[filename].tsx
 Status: Written
+Task: Generate [Page Name] page — complete
+Task tool: [TaskCreate/TaskUpdate | todo | none on this host]
 ```
 
 ## Critical Constraints

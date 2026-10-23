@@ -28,7 +28,9 @@ function client(routes) {
 const ONE_TO_MANY_BASE = "/RelationshipDefinitions(SchemaName='contoso_project_contoso_task')?$select=SchemaName,RelationshipType";
 const ONE_TO_MANY_CAST = "/RelationshipDefinitions(SchemaName='contoso_project_contoso_task')/Microsoft.Dynamics.CRM.OneToManyRelationshipMetadata?$select=SchemaName,ReferencedEntity,ReferencingEntity,ReferencingAttribute";
 const MANY_TO_MANY_BASE = "/RelationshipDefinitions(SchemaName='contoso_project_contoso_tag')?$select=SchemaName,RelationshipType";
-const MANY_TO_MANY_CAST = "/RelationshipDefinitions(SchemaName='contoso_project_contoso_tag')/Microsoft.Dynamics.CRM.ManyToManyRelationshipMetadata?$select=SchemaName,Entity1LogicalName,Entity2LogicalName";
+const MANY_TO_MANY_CAST = "/RelationshipDefinitions(SchemaName='contoso_project_contoso_tag')/Microsoft.Dynamics.CRM.ManyToManyRelationshipMetadata?$select=SchemaName,Entity1LogicalName,Entity2LogicalName,IntersectEntityName,Entity1IntersectAttribute,Entity2IntersectAttribute";
+// The N:N properties beyond its two tables: the table that holds its links and the column each table has in it.
+const MANY_TO_MANY_SELECT = 'SchemaName,Entity1LogicalName,Entity2LogicalName,IntersectEntityName,Entity1IntersectAttribute,Entity2IntersectAttribute';
 
 test('readRelationshipsOf uses the narrow collection selects and stamps the queried end', async () => {
   const c = client([
@@ -43,9 +45,12 @@ test('readRelationshipsOf uses the narrow collection selects and stamps the quer
       body: { value: [{ SchemaName: 'contoso_project_contoso_task', ReferencedEntity: 'contoso_project', ReferencingAttribute: 'contoso_projectid' }] },
     },
     {
-      path: "/EntityDefinitions(LogicalName='contoso_project')/ManyToManyRelationships?$select=SchemaName,Entity1LogicalName,Entity2LogicalName",
+      path: `/EntityDefinitions(LogicalName='contoso_project')/ManyToManyRelationships?$select=${MANY_TO_MANY_SELECT}`,
       status: 200,
-      body: { value: [{ SchemaName: 'contoso_project_contoso_tag', Entity1LogicalName: 'contoso_project', Entity2LogicalName: 'contoso_tag' }] },
+      body: { value: [{
+        SchemaName: 'contoso_project_contoso_tag', Entity1LogicalName: 'contoso_project', Entity2LogicalName: 'contoso_tag',
+        IntersectEntityName: 'contoso_project_contoso_tag', Entity1IntersectAttribute: 'contoso_projectid', Entity2IntersectAttribute: 'contoso_tagid',
+      }] },
     },
   ]);
   const one = await readRelationshipsOf(c, 'contoso_project', 'OneToMany');
@@ -54,7 +59,10 @@ test('readRelationshipsOf uses the narrow collection selects and stamps the quer
   assert.deepStrictEqual(one, { ok: true, rows: [{ schemaName: 'contoso_project_contoso_task', type: 'OneToMany', referencedEntity: 'contoso_project', referencingEntity: 'contoso_task', referencingAttribute: 'contoso_projectid' }] });
   assert.deepStrictEqual(many.rows[0].referencingEntity, 'contoso_task');
   assert.strictEqual(many.rows[0].referencedEntity, 'contoso_project');
-  assert.deepStrictEqual(nn.rows[0], { schemaName: 'contoso_project_contoso_tag', type: 'ManyToMany', entity1: 'contoso_project', entity2: 'contoso_tag' });
+  assert.deepStrictEqual(nn.rows[0], {
+    schemaName: 'contoso_project_contoso_tag', type: 'ManyToMany', entity1: 'contoso_project', entity2: 'contoso_tag',
+    intersectEntityName: 'contoso_project_contoso_tag', entity1IntersectAttribute: 'contoso_projectid', entity2IntersectAttribute: 'contoso_tagid',
+  });
 });
 
 test('a 404 on the table is an empty read, not a failure', async () => {
@@ -66,7 +74,7 @@ test('a 404 on the table is an empty read, not a failure', async () => {
 test('a quote in a logical name is escaped with odataLit', async () => {
   const c = client([{ test: () => true, status: 200, body: { value: [] } }]);
   await readRelationshipsOf(c, "contoso_o'brien", 'ManyToMany');
-  assert.strictEqual(c.paths[0], "/EntityDefinitions(LogicalName='contoso_o''brien')/ManyToManyRelationships?$select=SchemaName,Entity1LogicalName,Entity2LogicalName");
+  assert.strictEqual(c.paths[0], `/EntityDefinitions(LogicalName='contoso_o''brien')/ManyToManyRelationships?$select=${MANY_TO_MANY_SELECT}`);
 });
 
 test('findRelationshipHolder reads the 1:N cast after the base type', async () => {
@@ -83,11 +91,14 @@ test('findRelationshipHolder reads the 1:N cast after the base type', async () =
 test('findRelationshipHolder reads the N:N cast after the base type', async () => {
   const c = client([
     { path: MANY_TO_MANY_BASE, status: 200, body: { '@odata.type': '#Microsoft.Dynamics.CRM.ManyToManyRelationshipMetadata', SchemaName: 'contoso_project_contoso_tag', RelationshipType: 'ManyToManyRelationship' } },
-    { path: MANY_TO_MANY_CAST, status: 200, body: { SchemaName: 'contoso_project_contoso_tag', Entity1LogicalName: 'contoso_tag', Entity2LogicalName: 'contoso_project' } },
+    { path: MANY_TO_MANY_CAST, status: 200, body: { SchemaName: 'contoso_project_contoso_tag', Entity1LogicalName: 'contoso_tag', Entity2LogicalName: 'contoso_project', IntersectEntityName: 'contoso_project_contoso_tag', Entity1IntersectAttribute: 'contoso_tagid', Entity2IntersectAttribute: 'contoso_projectid' } },
   ]);
   const found = await findRelationshipHolder(c, 'contoso_project_contoso_tag', { candidates: [] });
   assert.deepStrictEqual(c.paths, [MANY_TO_MANY_BASE, MANY_TO_MANY_CAST]);
-  assert.strictEqual(describeRelationship(found.holder), 'N:N contoso_tag <-> contoso_project');
+  assert.strictEqual(describeRelationship(found.holder), 'N:N contoso_tag <-> contoso_project (intersect contoso_project_contoso_tag)');
+  assert.strictEqual(found.holder.intersectEntityName, 'contoso_project_contoso_tag');
+  assert.strictEqual(found.holder.entity1IntersectAttribute, 'contoso_tagid');
+  assert.strictEqual(found.holder.entity2IntersectAttribute, 'contoso_projectid');
 });
 
 test('a case-sensitive 404 falls back to the candidate collections and finds the other casing', async () => {
@@ -135,6 +146,33 @@ test('a 429 on the exact-name read is found:null with status 429', async () => {
   assert.ok(!c.paths.some((p) => p.includes('/EntityDefinitions(')));
 });
 
+// A read that failed is reported by value, and the halt raised around it (lib/entity-provision.js) hands the service's code to the build's retry (lib/retry-policy.js, serviceFailure's
+// `answered`): so the OData `error` of the answer rides along on the result — not enumerable, so a result prints and compares as it did — and only an object is one.
+test('a failed read carries the OData error of its answer, unseen: the exact-name read, its cast, and a candidate collection', async () => {
+  const LOCKED = { code: '0x8004F064', message: 'Cannot start the requested operation [Update] because there is another [EntityCustomization] running at this moment.' };
+  const TIMEOUT = { code: '0x80044151', message: 'SQL timeout expired.' };
+  const exact = await findRelationshipHolder(client([{ test: (p) => p.startsWith('/RelationshipDefinitions('), status: 409, body: { error: LOCKED } }]), 'contoso_project_contoso_task', { candidates: [] });
+  assert.deepStrictEqual(exact, { found: null, status: 409, error: LOCKED.message }, 'the result is what it was');
+  assert.deepStrictEqual(exact.answered, LOCKED, 'and the answer\'s error rides along');
+  assert.ok(!Object.keys(exact).includes('answered'), 'unseen');
+  const cast = await findRelationshipHolder(client([
+    { path: ONE_TO_MANY_BASE, status: 200, body: { SchemaName: 'contoso_project_contoso_task', RelationshipType: 'OneToManyRelationship' } },
+    { path: ONE_TO_MANY_CAST, status: 500, body: { error: TIMEOUT } },
+  ]), 'contoso_project_contoso_task', { candidates: [] });
+  assert.deepStrictEqual([cast.found, cast.status, cast.answered], [null, 500, TIMEOUT], 'the read of the cast');
+  const collection = await findRelationshipHolder(client([
+    { test: (p) => p.startsWith('/RelationshipDefinitions('), status: 404, body: { error: { message: 'does not exist' } } },
+    { test: (p) => p.includes('/EntityDefinitions('), status: 500, body: { error: TIMEOUT } },
+  ]), 'contoso_project_contoso_task', { candidates: ['contoso_project'] });
+  assert.deepStrictEqual(collection, { found: null, status: 500, error: TIMEOUT.message });
+  assert.deepStrictEqual(collection.answered, TIMEOUT, 'a candidate collection');
+  const listed = await readRelationshipsOf(client([{ test: () => true, status: 500, body: { error: TIMEOUT } }]), 'contoso_project', 'OneToMany');
+  assert.deepStrictEqual([listed, listed.answered], [{ ok: false, status: 500, error: TIMEOUT.message }, TIMEOUT], 'and the collection read itself');
+  // A body whose error is not an object carries none.
+  const plain = await findRelationshipHolder(client([{ test: () => true, status: 500, body: { error: 'SQL timeout expired.' } }]), 'contoso_project_contoso_task', { candidates: [] });
+  assert.strictEqual(plain.answered, undefined);
+});
+
 test('projectionHolder turns the SDK row into ends before compare or describe', () => {
   const { projectionHolder } = require(path.join(__dirname, '..', 'lib', 'relationship-metadata.js'));
   const one = projectionHolder(
@@ -172,7 +210,10 @@ test('sameRelationship matches endpoints case-insensitively and rejects a differ
     { schemaName: 'contoso_project_contoso_task', type: 'OneToMany', referencedEntity: 'contoso_project', referencingEntity: 'contoso_task', referencingAttribute: 'contoso_projectid' },
   ), false);
   assert.strictEqual(sameRelationship(
-    { type: 'ManyToMany', entity1: 'contoso_tag', entity2: 'contoso_project' },
-    { type: 'ManyToMany', entity1: 'contoso_project', entity2: 'contoso_tag' },
+    { type: 'ManyToMany', schemaName: 'contoso_project_contoso_tag', entity1: 'contoso_tag', entity2: 'contoso_project' },
+    {
+      type: 'ManyToMany', schemaName: 'contoso_project_contoso_tag', entity1: 'contoso_project', entity2: 'contoso_tag',
+      intersectEntityName: 'contoso_project_contoso_tag', entity1IntersectAttribute: 'contoso_projectid', entity2IntersectAttribute: 'contoso_tagid',
+    },
   ), true);
 });

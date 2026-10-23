@@ -7,7 +7,9 @@ const os = require('node:os');
 const path = require('node:path');
 const { runDownload, preserveAuthoredLanguageCode } = require('../download-model-app.js');
 const { APP, PUBLISHED, CURRENT, PAGE, FORM_A, FORM_B, DASHBOARD } = require('./helpers/app-membership-sdk.js');
+const { fakeGenpage } = require('./helpers/fake-genpage.js');
 const FORM_C = '33333333-0000-4000-8000-000000000004';
+const FORM_D = '33333333-0000-4000-8000-000000000006';
 const UNKNOWN = '33333333-0000-4000-8000-000000000005';
 const SITEMAP = '55555555-0000-4000-8000-000000000001';
 const NINE = ['account', 'contact', 'task', 'email', 'appointment', 'phonecall', 'systemuser', 'team', 'annotation'];
@@ -124,18 +126,7 @@ async function download(t, options = {}, priorFloor) {
   try {
     result = await runDownload({
       sdk: fake.sdk, appId: APP, appUnique: options.unpublishedOnly ? undefined : 'contoso_membership', outDir: directory,
-      genpageCli: {
-        enumerateEnv: async () => ({ ok: true, ids: options.page ? [PAGE] : [], pages: options.page ? [{ pageId: PAGE, name: 'Draft Overview' }] : [] }),
-        download: async ({ outputDir, pageIds }) => {
-          for (const id of pageIds) {
-            const dir = path.join(outputDir, id);
-            fs.mkdirSync(dir, { recursive: true });
-            fs.writeFileSync(path.join(dir, 'page.tsx'), 'export default function Page() { return null; }');
-            fs.writeFileSync(path.join(dir, 'config.json'), '{"dataSources":[]}');
-          }
-          return true;
-        },
-      },
+      genpage: fakeGenpage({ pages: options.page ? [{ pageId: PAGE, name: 'Draft Overview', source: 'export default function Page() { return null; }', dataSources: [] }] : [] }),
     });
   } finally { process.stderr.write = original; }
   assert.equal(result.ok, options.expectRefusal ? false : true, JSON.stringify(result));
@@ -309,6 +300,25 @@ test('a non-empty strict active Main subset emits names and the capability floor
   assert.deepEqual(result.spec.forms, [], 'membership capture must not invent a lossy form layout');
 });
 
+test('the Main names of a restriction are listed in code-unit order, whatever the host locale collates them as', async (t) => {
+  // "Übersicht" collates before "Zusammenfassung" in the root locale ("Ü" sorts as a U) and after it in code units, so a list
+  // sorted with `localeCompare` came out differently on a machine with another locale or ICU version.
+  const { result } = await download(t, {
+    tables: ['account', 'contact'], members: [FORM_A, FORM_B],
+    catalog: [catalogForm(FORM_A, '\u00dcbersicht'), catalogForm(FORM_B, 'Zusammenfassung'), catalogForm(FORM_C, 'Other')],
+  });
+  assert.deepEqual(result.spec.app.mainForms, { account: ['Zusammenfassung', '\u00dcbersicht'] });
+});
+
+test('the Main names of a restriction stay in alphabetical order whatever their case', async (t) => {
+  // Raw code units would put "Summary" before "alternate"; the order is the dictionary's, as it was.
+  const { result } = await download(t, {
+    tables: ['account', 'contact'], members: [FORM_A, FORM_B],
+    catalog: [catalogForm(FORM_A, 'Summary'), catalogForm(FORM_B, 'alternate'), catalogForm(FORM_C, 'Other')],
+  });
+  assert.deepEqual(result.spec.app.mainForms, { account: ['alternate', 'Summary'] });
+});
+
 test('full active Main membership is omitted instead of inventing a restriction', async (t) => {
   const { result } = await download(t, { tables: ['account', 'contact'], members: [FORM_A, FORM_B] });
   assert.equal(result.spec.app.mainForms, undefined);
@@ -330,6 +340,36 @@ test('ambiguous Main names, including inactive normalized twins, are not emitted
   });
   assert.equal(result.spec.app.mainForms, undefined);
   assert.match(warnings.join(''), /not.round.tripped.*ambiguous.*Resume/i);
+});
+
+test('the note about Main forms that cannot be named lists them in code-unit order, whatever order the catalog answers in', async (t) => {
+  // Two active forms are named "Summary" and two "Alternate"; one of each is in the app. Neither name is unique in the catalog, so the restriction cannot be written
+  // by name and the note names the forms it could not address. The catalog query has no `$orderby`, so it answers in an order Dataverse does not fix: two downloads
+  // of one app, which differ in nothing else, then said "'Summary', 'Alternate'" in one and "'Alternate', 'Summary'" in the other, in the structured result and on stderr.
+  const catalog = [catalogForm(FORM_A, 'Summary'), catalogForm(FORM_B, 'Alternate'), catalogForm(FORM_C, 'Summary'), catalogForm(FORM_D, 'Alternate')];
+  const runs = [];
+  for (const order of [catalog, [...catalog].reverse()]) {
+    const { result, warnings } = await download(t, { tables: ['account', 'contact'], members: [FORM_A, FORM_B], catalog: order });
+    runs.push({ spec: result.spec, notRoundTripped: result.notRoundTripped, stderr: warnings.join('') });
+  }
+  const [forward, reversed] = runs;
+  assert.equal(forward.spec.app.mainForms, undefined, 'an ambiguous name is not written into the spec');
+  const note = forward.notRoundTripped.appMembership.find((entry) => entry.table === 'account' && /ambiguous/.test(entry.reason));
+  assert.match(note.reason, /^ambiguous or unreadable Main form name\(s\) 'Alternate', 'Summary' of account;/);
+  assert.deepEqual(reversed.notRoundTripped, forward.notRoundTripped, 'the structured result does not depend on the catalog order');
+  assert.equal(reversed.stderr, forward.stderr, 'nor does what the download says on stderr');
+  assert.deepEqual(reversed.spec, forward.spec);
+});
+
+test('a form without a name is listed in that note by its id, among the names and in the same order', async (t) => {
+  // A member with no readable name is named by its id, which sorts with the names ('3' before 'a'), whatever order the catalog answers in. "Alternate" is not unique
+  // in the catalog either, so both members are ambiguous.
+  const catalog = [catalogForm(FORM_A, ''), catalogForm(FORM_B, 'Alternate'), catalogForm(FORM_C, 'Alternate'), catalogForm(FORM_D, 'Summary')];
+  for (const order of [catalog, [...catalog].reverse()]) {
+    const { result } = await download(t, { tables: ['account', 'contact'], members: [FORM_A, FORM_B], catalog: order });
+    const note = result.notRoundTripped.appMembership.find((entry) => entry.table === 'account' && /ambiguous/.test(entry.reason));
+    assert.match(note.reason, new RegExp(`name\\(s\\) '${FORM_A}', 'Alternate' of account;`));
+  }
 });
 
 test('inactive and deleted pins do not erase the active restriction; their losses are named', async (t) => {

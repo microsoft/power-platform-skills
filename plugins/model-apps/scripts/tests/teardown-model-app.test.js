@@ -10,6 +10,7 @@ const vm = require('node:vm');
 const { teardownModelApp: engineTeardownModelApp, cliEmit } = require(path.join(__dirname, '..', 'teardown-model-app.js'));
 const teardownModelApp = (spec, opts, deps) => engineTeardownModelApp(spec, { env: 'https://contoso.crm.dynamics.com', ...opts }, deps);
 const { validateFlagsFromParsed } = require('./helpers/fake-auth.js');
+const { validateAppSpec } = require(path.join(__dirname, '..', 'lib', 'app-spec.js'));
 
 const desk = JSON.parse(fs.readFileSync(path.join(__dirname, '..', '..', 'samples', 'app-spec.support-desk.json'), 'utf8'));
 
@@ -108,6 +109,51 @@ test('apply --allow-destructive performs the deletes', async () => {
   const r = await teardownModelApp(desk, { apply: true, allowDestructive: true }, { sdk });
   assert.strictEqual(r.ok, true);
   assert.ok(sdk.calls.some((c) => c.method === 'deleteAppCascade'), 'app deleted');
+});
+
+// A key a form's `fieldOptions` entry does not take is refused by the build and the lint, but a release before that check
+// accepted it and built the form without the option. Teardown reads the spec under the structural profile, where that finding
+// is a warning, so an app built from such a spec is still torn down, behind the same authorization as any other.
+const FIELD_OPTION_TYPO = "form 'Ticket' (table new_ticket): unknown key 'readOnlyy' on fieldOptions['new_priority'] — did you mean 'readOnly'? (allowed: readOnly, hidden, after, colspan, rowspan)";
+function deskWithFieldOptionTypo() {
+  const spec = JSON.parse(JSON.stringify(desk));
+  spec.forms.find((f) => f.entity === 'new_ticket').fieldOptions = { new_priority: { readOnlyy: true } };
+  return spec;
+}
+
+test('a spec whose fieldOptions entry carries a key it does not take is still torn down: the dry run lists the same plan', async () => {
+  const structural = validateAppSpec(deskWithFieldOptionTypo(), { profile: 'structural' });
+  assert.deepStrictEqual([structural.ok, structural.errors, structural.warnings], [true, [], [FIELD_OPTION_TYPO]], 'the finding is a warning there');
+  const reads = [];
+  const r = await teardownModelApp(deskWithFieldOptionTypo(), { apply: false }, { sdk: { queryRecords: async (entity) => { reads.push(entity); return []; } } });
+  assert.strictEqual(r.ok, true, JSON.stringify(r.errors));
+  assert.strictEqual(r.dryRun, true);
+  const plain = await teardownModelApp(desk, { apply: false }, { sdk: { queryRecords: async () => [] } });
+  assert.deepStrictEqual(r.plan, plain.plan, 'the plan of the same spec without the key');
+  assert.deepStrictEqual(reads, ['webresource']);
+});
+
+test('such a spec still needs --allow-destructive to be torn down, and with it the deletes run', async () => {
+  const held = presentSdk();
+  const refused = await teardownModelApp(deskWithFieldOptionTypo(), { apply: true }, { sdk: held });
+  assert.strictEqual(refused.ok, false);
+  assert.ok(refused.errors.some((e) => /requires --allow-destructive/.test(e)), JSON.stringify(refused.errors));
+  assert.ok(!refused.errors.some((e) => /unknown key/.test(e)), JSON.stringify(refused.errors));
+  assert.strictEqual(held.calls.length, 0, 'nothing was touched');
+  const sdk = presentSdk();
+  const r = await teardownModelApp(deskWithFieldOptionTypo(), { apply: true, allowDestructive: true }, { sdk });
+  assert.strictEqual(r.ok, true, JSON.stringify(r.errors));
+  assert.ok(sdk.calls.some((c) => c.method === 'deleteAppCascade'), 'app deleted');
+});
+
+test('such a spec is still refused before any teardown for any other problem, and the fieldOptions key is no part of the refusal', async () => {
+  const spec = deskWithFieldOptionTypo();
+  spec.forms.push({ entity: 'new_missing', name: 'Ghost' });
+  const sdk = presentSdk();
+  const r = await teardownModelApp(spec, { apply: true, allowDestructive: true }, { sdk });
+  assert.strictEqual(r.ok, false);
+  assert.deepStrictEqual(r.errors, ["form references unknown entity 'new_missing'"]);
+  assert.strictEqual(sdk.calls.length, 0, 'no SDK calls on a bad spec');
 });
 
 // REVERSED by #587 item 5, deliberately. This test used to assert that teardown CONTINUES after a
@@ -227,6 +273,30 @@ test('dry-run lists the plan with a ▢ marker and no summary', async () => {
   await teardownModelApp(desk, { apply: false }, { sdk: throwing, log: cap.log });
   assert.ok(cap.logs.some((l) => /\[\d+\/\d+\] ▢ /.test(l)), 'plan items use the ▢ marker');
   assert.ok(!cap.logs.some((l) => /teardown complete/.test(l)), 'no summary on a dry-run');
+  assert.ok(!cap.logs.some((l) => /publisher/.test(l)), 'nor the publisher line, which belongs to the summary');
+});
+
+// A publisher is never deleted: the build reuses any publisher with the spec's prefix, and other solutions may share the one it made,
+// so nothing tells a teardown that this app alone uses it. A maker who checks the environment afterwards finds it there, so the
+// summary says so — one line, right after the closing count, on a clean run and on a failed one alike.
+const PUBLISHER_KEPT = "▸ the publisher with prefix 'new' is kept: teardown never deletes a publisher, which other solutions may share — delete it in Power Apps (Solutions → Publishers) once nothing uses it";
+test('the teardown summary says the publisher is kept, in one line after the closing count', async () => {
+  const clean = logCapture();
+  const sdk = presentSdk();
+  const r = await teardownModelApp(desk, { apply: true, allowDestructive: true }, { sdk, log: clean.log });
+  assert.strictEqual(r.ok, true, JSON.stringify(r.errors));
+  const closing = clean.logs.findIndex((l) => /teardown complete — /.test(l));
+  assert.ok(closing >= 0, clean.logs.join('\n'));
+  assert.deepStrictEqual(clean.logs.slice(closing + 1), [PUBLISHER_KEPT]);
+  assert.ok(!sdk.calls.some((c) => /publisher/i.test(JSON.stringify(c))), 'and nothing is asked of a publisher');
+
+  const failed = logCapture();
+  const refusing = presentSdk();
+  refusing.deleteWebResource = async () => { throw new Error('HTTP 500: boom'); };
+  const f = await teardownModelApp(desk, { apply: true, allowDestructive: true }, { sdk: refusing, log: failed.log });
+  assert.strictEqual(f.ok, false);
+  const closingFailed = failed.logs.findIndex((l) => /teardown finished with errors — /.test(l));
+  assert.deepStrictEqual(failed.logs.slice(closingFailed + 1), [PUBLISHER_KEPT]);
 });
 
 test('cliEmit: an error event with no detail has no dangling separator', () => {
@@ -278,7 +348,12 @@ function loadTeardownCli({
   const customRequire = (id) => {
     if (id === 'node:fs') return fakeFs;
     if (id === 'node:path') return path;
+    // The throwaway workspace is made by the plugin's one maker of them (lib/temp-workspace.js), which works on the real file system: the harness stands
+    // in for it with the very call the script made before it existed, so what this test pins — where the workspace is, and that it is removed — is as it was.
+    if (id === './lib/temp-workspace.js') return { makeTempWorkspace: (prefix) => fakeFs.mkdtempSync(path.join('D:\\Projects\\power-platform-skills-sdk\\.test-workspace', prefix)) };
     if (id === 'node:os') return { tmpdir: () => 'D:\\Projects\\power-platform-skills-sdk\\.test-workspace' };
+    // The real module: the script makes this sandbox's stand-in streams blocking before a last write, and a stand-in has no handle to change.
+    if (id === './lib/output-redaction.js') return require('../lib/output-redaction.js');
     if (id === './lib/app-spec.js') {
       return {
         validateAppSpec: () => validation,
@@ -346,7 +421,7 @@ function loadTeardownCli({
         TEARDOWN_BEAT_MS: 60000,
       };
     }
-    if (id === './vendor/cds-maker-sdk.cjs') {
+    if (id === './lib/maker-sdk.js') {
         return {
           // The CLI builds its store explicitly via the /node adapter now, so the mocked bundle
           // must expose it too. The marker carries the root so the assertions below can still

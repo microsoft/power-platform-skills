@@ -1,8 +1,8 @@
 'use strict';
-const { isSafeHttpUrl, webResourceNameFromRef, FORM_GUID_RE } = require('./app-spec.js');
+const { isSafeHttpUrl, webResourceNameFromRef, FORM_GUID_RE, statedPageBindings } = require('./app-spec.js');
 // Reconstruct a COMPLETE app-spec from a DEPLOYED app (the edit flow's "pull everything" step). Pure
 // + testable: `read` supplies the deployed state — the app (sitemap JSON, via the SDK's app read
-// path which surfaces entity/genPage/icon subareas), its generative pages (via pac list+download),
+// path which surfaces entity/genPage/icon subareas), its generative pages (read through the SDK),
 // its entities (mapped from metadata), and its solution. hydrateSpec composes these into a spec that
 // round-trips through build() with no changes, so create == edit and nothing (incl. Maker-made
 // pages) is dropped.
@@ -23,7 +23,7 @@ function subAreaToSpec(sa, pageRefById, dashboardNameById) {
   if (sa.type === 'GenPage' && sa.genPageId) {
     const pageRef = pageRefById.get(String(sa.genPageId).toLowerCase());
     // An unmapped GenPageId cannot validate as an App Spec page reference, so drop the subarea rather
-    // than emitting a broken round-trip spec when PAC's page list is incomplete.
+    // than emitting a broken round-trip spec when the page list is incomplete.
     return pageRef ? { ...base, page: pageRef } : null;
   }
   if (sa.type === 'DashBoard' && sa.dashboardId) {
@@ -196,6 +196,10 @@ async function hydrateSpec(read) {
     };
   };
 
+  // A page's connector and Custom API bindings, as the download read them — written when the page has any. An empty list says nothing the page does not already say by having none, and
+  // a spec that stated one would claim the page's bindings were cleared on purpose (a rebuild writes a stated list as the page's own, `[]` clearing it), as `dataSources` is left out when empty.
+  const bindingsOf = (p) => Object.fromEntries(Object.entries(statedPageBindings(p)).filter(([, list]) => list.length));
+
   const spec = {
     // schemaVersion 2 only when pages carry keys (v2 shape); omitted for legacy back-compat.
     ...(hasKeys ? { schemaVersion: 2 } : {}),
@@ -227,7 +231,7 @@ async function hydrateSpec(read) {
     webResources,
     views: [],
     // NOT reconstructed (documented limitation): views, charts, forms, and commands. VIEWS were
-    // tried (F3) but reverted — the deployed savedquery set can't reliably distinguish app-builder-
+    // tried but reverted — the deployed savedquery set can't reliably distinguish app-builder-
     // authored views from Dataverse's auto-generated Active/Inactive/QuickFind/Lookup/AdvancedFind
     // system views (LIVE-verified: `isdefault` marks the AUTHORED primary "Active" view TRUE and the
     // SYSTEM "Inactive" view FALSE, so no `isdefault`/`querytype` filter isolates author views — it
@@ -264,7 +268,7 @@ async function hydrateSpec(read) {
       ? {
           key: p.key,
           name: p.name,
-          // Carry the deployed GenPageId so the downloaded spec is a self-describing EDIT-SNAPSHOT (C3):
+          // Carry the deployed GenPageId so the downloaded spec is a self-describing EDIT-SNAPSHOT:
           // a rebuild reuses this id (reconcilePageIds authority #1) instead of minting a new one, even for
           // a page the user added in Maker that our manifest never knew about. A portable fresh-authored
           // spec has no pageIds; a downloaded edit-snapshot does — that is the intended distinction.
@@ -273,6 +277,7 @@ async function hydrateSpec(read) {
           ...(p.purpose !== undefined ? { purpose: p.purpose } : {}),
           ...(p.dataSources && p.dataSources.length ? { dataSources: p.dataSources } : {}),
           ...(p.model ? { model: p.model } : {}),
+          ...bindingsOf(p),
           ...(p.navigatesTo ? { navigatesTo: p.navigatesTo } : {}),
           ...(p.pageInput !== undefined ? { pageInput: p.pageInput } : {}),
           ...directEntryOf(p),
@@ -285,6 +290,7 @@ async function hydrateSpec(read) {
           name: p.name,
           ...(p.dataSources && p.dataSources.length ? { dataSources: p.dataSources } : {}),
           ...(p.model ? { model: p.model } : {}),
+          ...bindingsOf(p),
           ...(p.prompt !== undefined ? { prompt: p.prompt } : {}),
           codeFile: p.codeFile,
         })),

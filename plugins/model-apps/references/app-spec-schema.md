@@ -71,6 +71,25 @@ sample data (incl. multi-parent junction links + status reasons), and publish.
   **Omit it** and the build generates a simple default SVG icon **inside the solution** — either
   way the app never depends on an arbitrary external/managed icon (which would fail to import into
   a new environment). The app's **sitemap** is also added to the solution automatically.
+  **The icon is set when the app is created, and a rebuild cannot change it** (the platform stores it once): when
+  `app.icon` names a web resource that is not the icon the app has, the build warns that it was **not applied** —
+  change it in the app designer, or point `app.icon` at the web resource the app already uses. A spec with no
+  `app.icon` is never compared, so an icon a maker chose is left alone.
+- **`app.name`** and **`app.description`** — the app's display name and the text on its tile. **A rebuild applies a
+  change to either** on the existing app (on the push that already writes its navigation), where it used to leave the
+  old text. The app is found by its **unique name**, which a rebuild never changes: a spec that pins `app.uniqueName`
+  (a download does) renames the app, while one that does not derives the unique name from `app.name`, so a different
+  name there is a *different* app. Only a non-blank text is written and only when it differs from the deployed one, so
+  an omitted `description`, or the `""` a download writes, never blanks one a maker typed — and a text changed in Maker
+  is put back to the spec's. Two cases leave the text as it is, and **warn that it was not applied** while the rest of
+  the build goes ahead: an app that was **never published** (Dataverse takes no write to its name or description until
+  it is — publish it in Power Apps and re-run), and a name or description that is **localized** (held as one text per
+  language, or any other value that is not plain text), which a rebuild never replaces with one text: change it in
+  Power Apps. Only that one text is held back: the SDK writes just the texts that changed, so the other text, and an
+  `app.aiDescription`, are applied as usual — a localized name beside a changed plain description writes the
+  description alone and leaves every translation of the name as it is. A text that is not plain is never sent, even
+  when the SDK's own read of the header fails (the build takes it off the copy it pushes); the HTTP client still
+  refuses a write of one, with `APP_HEADER_NOT_PLAIN_TEXT`, for a push the build did not make itself.
 - **`app.newLook`** *(optional, default off)* — opt into the **modern ("new look") shell** for this app.
   Writes the per-app `NewLookAlwaysOn` setting, which Dataverse describes as enabling the new look and
   **hiding the user switch** — so the result is deterministic rather than a per-user preference. It is
@@ -173,9 +192,14 @@ sample data (incl. multi-parent junction links + status reasons), and publish.
   **Absent means "leave it alone":** the platform can write this text itself, so the build writes the
   field only when the spec sets it (at create, or on an existing app when the value differs) and never
   blanks it. A download carries it back when the app has one, and `--verify` checks the deployed value
-  whenever the spec sets one. Changing it on an app that has an **unpublished** change to its name,
-  description or routing description (saved in Maker but not published) halts the build: Dataverse
-  refuses the write until that change is published, so publish the app (or discard the change) first.
+  whenever the spec sets one. Changing it on an app that was **never published** halts the build
+  (`app-header-unpublished`): Dataverse refuses a write to a never-published app's name, description or
+  routing description, so publish the app in Power Apps, then re-run. On a published app, a change to
+  those texts saved in Maker and not yet published is kept: the build's push is saved with it. If the app
+  changes while the build runs, the push is refused as a concurrent edit (`version-conflict`): download
+  the app again and rebuild, which never overwrites the other edit.
+  While the app's name or description is **localized** (or otherwise not plain text) that text is left as it is, and
+  this is still **applied**: the SDK writes only what changed, so the routing description is written alone.
   **Rules:** a non-empty string of at most 1,048,576 characters, the column's maximum.
 - **`languageCode`** *(optional)* — the [LCID](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-lcid/)
   stamped on the Dataverse labels the build creates: data-model labels (table, column, choice, status
@@ -186,7 +210,19 @@ sample data (incl. multi-parent junction links + status reasons), and publish.
   **Normally omit it**: the build reads the organization's base language
   (`organization.languagecode`) and uses that, which is always a language the org has provisioned.
   Set it only to deliberately author labels in a *different* provisioned language than the org
-  default; `--language-code <lcid>` overrides it for a single run.
+  default; `--language-code <lcid>` overrides it for a single run. **`verify-model-app.js` takes the same
+  flag, and a build run with it needs it there**: the build writes a form's tab and section captions in that
+  language, and `--verify` holds them to the language it is told (the flag, else this field, else the
+  organization's base language) — so without the flag, or this field pinned in the spec, such a form is held to
+  the organization's language and its captions cannot be confirmed: they are reported missing, or, when the form's
+  read carries no label in that language, looked up in a translation export (below). (The build's own `--verify` is told
+  the language the build used.)
+  When no language can be established at all — the organization cannot be read — those captions are listed
+  as **unverified**, neither passed nor failed. A caption compared in a language the environment's form
+  read does not carry is read from a **translation export** of the app's solution instead: the platform decides which
+  languages' labels the FormXML it returns carries (a form built with Spanish captions in an English-language organization
+  reads back with its labels in English only), and the export is the one read that carries them all. It is one request,
+  made only when such a caption is there to check; the captions it cannot settle stay **unverified**.
   If the organization has **not** provisioned the LCID you pin, the build stops at the start of the
   data-model phase and lists the ones it does have — Dataverse would otherwise accept the table and
   Choice labels (silently storing them under the org's base language) and then reject the first
@@ -276,7 +312,18 @@ languages resolves to the same artifact. One option, one value, several names.
 **Round-trip.** `download-model-app` reconstructs localized labels from Dataverse: a table, plural,
 column or option labelled in several languages comes back as a map, and one labelled in a single
 language comes back as a plain string (so no existing spec changes shape). The download emits
-`pluralName` alongside a localized `displayName`, so its own output re-validates.
+`pluralName` alongside a localized `displayName`, so its own output re-validates, and beside a plain one
+whenever it is not the `"<displayName>s"` a rebuild would derive — `"Tag Catalog"` for `"Tag"` comes back,
+`"Tags"` does not (it is the default).
+A navigation `label` or `title` is always a plain string (the spec has no map form for one), read in the
+language a rebuild writes it in: `--language-code`, else the `languageCode` the spec already on disk pins,
+else the environment's base language. When none of the three gives one — the base language could not be
+read — the download writes nothing (`"code": "navigation-language-unknown"`) rather than guess one: run it
+again, or pass `--language-code <lcid>` (it decides the language the titles are read in and is not written
+into the spec, so a language other than the environment's base language must be passed to the build and to
+`verify-model-app.js` too, or pinned as the spec's `languageCode`, or a rebuild writes those titles as
+base-language titles). A title a node holds only in another language is not in the spec, and a rebuild into the
+same environment leaves it as it is.
 
 ## `description` — write one on everything that takes one
 
@@ -320,15 +367,16 @@ partial rebuildable artifacts. Null or absent Dataverse descriptions are omitted
 `""`.
 
 **Rebuild behaviour:** a description is written at CREATE, and is additionally **reconciled on an
-artifact that already exists** for **views and charts** — so authoring one on a table whose
-Dataverse-generated *"Active &lt;Plural&gt;"* view the build reconciles onto still lands. Those two
-write only when the spec **explicitly sets** a description **and** it differs from the deployed
-value, so an ordinary rebuild issues no extra write and an omitted description never blanks text a
-maker typed in the UI.
+artifact that already exists** for **views, charts and the app itself (`app.description`)** — so authoring
+one on a table whose Dataverse-generated *"Active &lt;Plural&gt;"* view the build reconciles onto still
+lands, and an edited `app.description` reaches the app on the next build (a never-published app, or one whose
+description is localized, is left as it is with a warning — see `app.name` and `app.description` above). These write only when the spec
+**explicitly sets** a description **and** it differs from the deployed value, so an ordinary rebuild
+issues no extra write and an omitted description never blanks text a maker typed in the UI.
 
 Everything else is **create-only** — the description reaches Dataverse when the artifact is first
 created and is not revisited: tables, columns, the solution, global choices, `webResources[]`,
-`app.description`, forms, dashboards and business rules. Adding a description to one of those *after*
+forms, dashboards and business rules. Adding a description to one of those *after*
 it exists is accepted by validation, builds green, and does not change the deployed artifact.
 
 **The routing signal goes in `app.aiDescription`, not `app.description`.** An orchestrator deciding
@@ -344,7 +392,7 @@ the signed-in contributor's own assigned items."`
 Weak: `"An app for managing projects."` (no persona, no scope boundary, nothing to disambiguate)
 
 It follows its own rules, not the ones above: up to **1,048,576** characters, and **one string for
-every language** — the column is not localizable, so it takes no LCID map. Unlike `app.description`
+every language** — the column is not localizable, so it takes no LCID map. Like `app.description`
 it is **reconciled on an existing app**: a rebuild writes it whenever it differs from the deployed
 value. A download copies the deployed value into the spec — including one the platform generated —
 and from then on the spec owns it: if the platform later rewrites it, `--verify` reports the
@@ -425,14 +473,37 @@ spec with its last snapshot, not with the deployed row, so it does not notice).
 - **Column `type`:** `Text · Memo · Choice · MultiChoice · Boolean · Money · DateTime ·
   Integer · BigInt · Decimal · Double · File · Image · AutoNumber · Customer`.
   **Lookups are NOT columns** — declare a `OneToMany` relationship instead.
-- **Per-type options** (all optional): `required: true` / `"recommended"`; Text → `maxLength`,
+- **Per-type options** (all optional except an AutoNumber column's `autoNumberFormat`): `required: true` /
+  `"recommended"` / `false`; Text/Memo → `maxLength`; Text →
   `format` (`Text`/`Email`/`Url`/`Phone`); numeric → `minValue`/`maxValue`/`precision`;
   Integer → also `integerFormat` (`None`/`Duration`/`TimeZone`/`Language`/`Locale` — e.g. render a
   raw minute count as a Duration picker instead of a plain number); DateTime → `dateFormat`
   (`DateOnly`/`DateAndTime`); Boolean → `trueLabel`/`falseLabel`/`defaultValue` (explicit `true` or
   `false` — see note below); File/Image → `maxSizeKb`, Image → `isPrimaryImage`; AutoNumber →
-  `autoNumberFormat` (e.g. `"C-{SEQNUM:5}"`); Calculated/Rollup → `source: "Calculated"|"Rollup"` +
+  `autoNumberFormat` (**required** on an AutoNumber column, e.g. `"C-{SEQNUM:5}"` — see the
+  AutoNumber note below); Calculated/Rollup → `source: "Calculated"|"Rollup"` +
   `formula`.
+- **Downloaded column options are canonical, not a record of which defaults the author typed.**
+  Text format/length, Memo length, Integer range/format, Decimal/Double range/precision, Money range,
+  Boolean labels, DateTime format and AutoNumber masks are reconstructed, as are the primary name
+  column's length/mask. Options equal to the bundled SDK's create defaults are omitted: Text
+  length 100/format `Text`, Memo length 2000, Integer range -2147483648..2147483647/format `None`,
+  Decimal/Double range -100000000000..100000000000/precision 2, Money range 0..1000000000/precision 2,
+  Boolean `Yes`/`No` and DateTime `DateAndTime`. A primary name length stays explicit even at 100:
+  some environments override the length in a table create, and the post-create correction runs only
+  when `primaryAttribute.maxLength` is present. A missing or malformed detail read is named on
+  stderr; the typed column remains, but a fresh build cannot recover the missing option.
+  **Money precision is not generally portable.** The SDK always creates `PrecisionSource: 2`
+  (transaction currency). Download retains numeric `Precision` metadata only for source 2, and
+  even then the effective precision depends on the transaction currency's decimal places in the
+  target; equal numeric metadata does not prove currency equivalence. Source 0 (column precision),
+  source 1 (organization pricing), and missing/malformed/unknown sources are diagnosed with
+  precision omitted, without losing the typed Money column or its range. Configure the required
+  source in Power Apps on the target rather than relying on this spec to recreate it.
+  See [Money PrecisionSource](https://learn.microsoft.com/en-us/dotnet/api/microsoft.xrm.sdk.metadata.moneyattributemetadata.precisionsource).
+  This does not reconstruct `required`, Boolean `defaultValue`, `isValidFor*`, visualization,
+  BigInt ranges or DateTime behavior. A non-primary AutoNumber's custom length/format cannot be
+  authored through this spec; its number mask is carried.
 - **Write permissions** (optional, every column type **except Customer**): `isValidForCreate` /
   `isValidForUpdate` / `isValidForRead` — see `isValidForCreate / isValidForUpdate /
   isValidForRead` below.
@@ -442,23 +513,40 @@ spec with its last snapshot, not with the deployed row, so it does not notice).
   column (not `BigInt`/`Decimal`/`Double`/`Money`, even though they share the same numeric
   `minValue`/`maxValue`/`precision` options) — either mismatch is rejected by name at validation
   time rather than surfacing as a mid-build SDK error.
-- **`required` converges on rebuild only when authored explicitly.** For a new column, `true` creates
+- **`required` is `true`, `false` or `"recommended"` — and converges on rebuild only when authored
+  explicitly.** `true` is Dataverse `ApplicationRequired` (Business Required), `"recommended"` is
+  `Recommended` and `false` is `None`. Any other value — `"ApplicationRequired"`, `"true"`,
+  `"required"`, `"Recommended"`, `1`, `null` — is refused at validation, on a column and on
+  `primaryAttribute` alike, naming the table, the column and the value (the build would otherwise
+  read it as not required, and write that over an existing column's level); omit the key instead to
+  leave an existing column as it is. For a new column, `true` creates
   Dataverse `ApplicationRequired` and `"recommended"` creates `Recommended`. For a column that
   already exists (including the primary/name column), a rebuild first reads its current
   `RequiredLevel` and only writes when the explicit spec value differs. If `required` is omitted,
   the build leaves the existing column alone instead of treating omission as `None`, so it never
-  silently demotes a field a maker already made Business Required.
-- **`defaultValue`, `integerFormat`, and `isValidFor*` converge differently: by re-assertion, not
-  by diff.** Unlike `required` above, a rebuild does not read the column's current state first —
-  it simply re-sends whichever of these fields the spec sets explicitly, on every build, for both a
-  brand-new column and one that already exists. This is safe because re-sending an already-correct
-  value is a no-op on the wire; it does mean (unlike `required`) there is no "leave it alone if
-  omitted" behavior to rely on for a value set by hand in the portal — omit the field entirely to
-  leave portal-set state untouched, exactly as for `visualization` below.
+  silently demotes a field a maker already made Business Required. The primary/name column's
+  `required` is applied on a **new** table too: it is asked in the table's create, and because a plain
+  text name column is stored not required whatever the create asks (an auto-numbered one keeps the
+  level), the build's SDK reads the level back and sets it with one update. The build says the level
+  was applied on create only once the SDK has confirmed it (for `false`, once it has seen the table
+  created). When it cannot be confirmed the table still exists: the build stops (or, for a table found
+  after the answer to its create was lost, or an existing table whose columns could not be read,
+  warns — `false` too, since nothing shows what the column holds), and running the build again finds
+  the table and sets the level as it does for any existing column — it never creates the table twice.
+- **`defaultValue` and `isValidFor*` converge by re-assertion.** A rebuild re-sends whichever of
+  these fields the spec sets explicitly for an existing column; an omitted field leaves portal-set
+  state untouched, exactly as for `visualization` below. **A standalone `integerFormat` is
+  compared first:** an equal scalar format skips the SDK's read-mutate-write, while a different
+  or unreadable one keeps that update path. When other capabilities are authored alongside the
+  format, the existing combined update is still re-asserted.
 - **Choice / MultiChoice** need `options[]` (string labels) **or** a `globalChoice` reference
   (see `globalChoices` below). **Customer** is a polymorphic account/contact lookup.
 - **AutoNumber** can also be the **primary** column — put `autoNumberFormat` on `primaryAttribute`
   (above) instead of adding a separate column, so the generated number is the record identity.
+  An `AutoNumber` **column** needs its `autoNumberFormat` — a non-blank string such as `"C-{SEQNUM:5}"`.
+  One without it is refused when the spec is validated, before anything is built, naming the table and
+  the column: the platform would create a plain text column instead, so write `type: "Text"` for a plain
+  text column. On the primary column the format stays optional: without one the name column is plain text.
 - **Primary column length — `primaryAttribute.maxLength`** (optional; a whole number from 1 to 850, the
   most Dataverse allows for a table's name column — more is refused by Dataverse, so
   anything else is rejected at validation, for `/genpage` and `/app-builder` input as well). Without it
@@ -478,13 +566,51 @@ spec with its last snapshot, not with the deployed row, so it does not notice).
   `maxLength`, it is not reconciled afterwards; to change it on an existing table, change it in Maker. If
   the length cannot be set after the create, the build reports a failed `primary column length` step that
   names the table, the length asked and the length the platform made, and goes on — or, when the data model
-  stopped first, says so, and that a re-run leaves the column as it is. One exception to
+  stopped first, says so, and that a later run leaves the column as it is (the build's own automatic retry of a
+  transient failure is not a later run: it sets the length the stopped attempt could not, and says so — to the
+  table that attempt created, which it checks by the table's MetadataId first and then writes to by that id, so a
+  table another maker deleted and made again in the meantime — even in the middle of the update — is left as it is,
+  with a warning). One exception to
   "applied when the table is created": a table the build finds **after** its create — the answer to the
   create was lost, or another maker created the table first — is not written to, because nothing shows that
   this build made it. The build reads its name column's length once instead, and warns when it is not the
   length the spec asks for (or cannot be read). A build that stops because the table was created but cannot
   be read back yet (`TABLE_METADATA_NOT_VISIBLE`) warns that the length may not have been applied, since a
   re-run leaves an existing table's name column alone.
+- **A key over the name column — give the column a `maxLength`.** A key may hold only so many bytes (2 for
+  each character of text) and Dataverse refuses one that is too large: Microsoft Learn documents 900 bytes, and the
+  platform's own answer on the environment this was measured on named 1,700. Some environments make a new name
+  column 850 characters long whatever length the table's create asks for — 1,700 bytes by itself, so a key over that
+  column alone is accepted there, and a key that holds any other column beside it is refused. When the spec gives the
+  name column a `maxLength` and a table's `alternateKeys[]` entry holds that column, the build makes the key after it has
+  set the length — so the first build succeeds — and does not send it when the length could not be set: it stops
+  with a message that says why and what to do instead of the platform's refusal. Keep the key within 900 bytes to be
+  safe on every environment (at most 450 characters when the name column is its only column). Without a `maxLength` the build leaves the
+  column as the environment made it and makes the key with its table, so on such an environment the key is
+  refused: give one. This holds for a key whose `displayName` goes out in one language: a string, or a language
+  map that names exactly one language, whichever it is — the SDK sends either as one label, the same request, and
+  where the key is made does not depend on the language the build writes in. A key labelled in several languages
+  (`{ "1033": "…", "3082": "…" }`) is made **before** the length is set,
+  because the update that sets the length reads the column with its labels, and Dataverse keeps only the base
+  language of a create that comes straight after such a read. The exception is a key that holds the name column **and
+  another column** where the environment made the name column too long for it (the key then cannot fit beside the
+  column, and shortening the column is what lets it): the build reads the column's length once, before it asks for such
+  a key, and makes the key after the length is set — with both labels, so the first build succeeds. A key labelled in several
+  languages over the name column alone is made before the length is set whatever the column's length. Where the platform refuses a key made before
+  the length is set for its size all the same, the first build stops there, and the build **warns**, naming the key. What the
+  warning says depends on what the build can tell of the key's size. It counts the key's columns as it creates them, 2 bytes
+  for each character of text — a `Text` column at its `maxLength` (100 without one), an `AutoNumber` column at 100 (the build
+  gives it no other length) — and any other column at one byte, so the count is a minimum. When even that minimum is over
+  1,700 bytes at the length you give the name column, the key is **proven** too large: the warning says so, with its size, and
+  that running the build again does not create it — take a column out of the key, or make its text columns shorter. Otherwise
+  the count is **inconclusive** (a column that is not text can take more than one byte, and an environment may allow less than
+  1,700), so the warning promises nothing: running the build again may create the key, since the length is set as the build
+  stops, if the name column at the length you give leaves room for it; if that run is refused the same way, compare Dataverse's
+  error with the sizes of the key's columns. Labelling the key in one language changes where it is made, not its size. The
+  stop for a key that waited for a length the build could not set says the same of the key: proven too large, no run creates
+  it as the spec has it; otherwise, once the name column has the length you give (set it in Maker, or clear what stopped the
+  build), running the build again may create the key, which the build does not promise. Nothing
+  is said where the environment keeps the length asked and the key is made.
 
 ### `visualization` — custom grid rendering (optional, PREVIEW)
 
@@ -550,6 +676,22 @@ without needing a business rule or a plug-in to enforce it.
 "alternateKeys": [ { "schemaName": "new_emailkey", "displayName": "Email Key", "columns": ["new_email"] } ],
 "mainFormOrder": ["Work Item", "Work Item — Summary"]   // the Main Form Set order — see forms[] → "Which form a table opens with"
 ```
+
+A download keeps unmanaged custom `statusReasons` with Active/Inactive state, label, color and
+value (omitting `value` only when the build would assign the same number by index). Stock values
+1/2, managed reasons and stock-table reasons below 100000000 are not re-declared. Other states or
+incomplete metadata are named rather than fabricated. `alternateKeys` keep their schema names,
+column sets and available display labels; managed keys are not re-declared. Status labels use only
+the resolved download language (`--language-code`, the existing spec's `languageCode`, then the
+environment base language), not the caller's UI language. A reason missing that translation is
+omitted with a diagnostic, never relabelled from another LCID. A non-base-language download flag
+is read-time only: pass the same flag on rebuild or pin `languageCode` in the spec.
+A malformed or missing optional `Keys` array is diagnosed and recovers no keys, without dropping
+the table, its primary name, typed columns or navigation. On rebuild an equal
+status value/state/label in the authoring language (and color, when authored), or an equal key
+name/column set, skips the insert. An unknown or conflicting answer keeps the existing
+duplicate-protected create path: it is not an instruction to rewrite a conflicting deployed
+definition.
 
 ## Conditional features — read `app-spec-schema-advanced.md` when you use one
 
@@ -633,6 +775,10 @@ run the lint, so an unlinted spec hits the failure at build time instead).
 ```
 - A **plain N:N** (no extra fields on the link) — use `ManyToMany`. A form sub-grid can sit on
   *either* side (the builder resolves the N:N relationship name automatically).
+- `intersectEntityName` (optional) names the table that holds the links. Leave it out and the build names it
+  after the relationship (its schema name, lower-cased). A build and `verify-model-app.js` hold the relationship
+  to the name you give it: an N:N that already uses the schema name on another intersect table is refused by the
+  build and fails verify. With no `intersectEntityName` the relationship is reused whichever intersect table it has.
 - **N:N that needs attributes on the link** (e.g. a role/date per assignment) — model a
   **junction entity** with two `OneToMany` relationships into it, and put the payload columns on
   the junction. Sample rows then bind **both** parents via `$parents` (see sampleData). This is the
@@ -1015,8 +1161,8 @@ A table's Main forms are served in its **Main Form Set order**, and a user opens
 they may open** — unless they switched forms earlier: the platform remembers the last Main form each
 user opened for a table and opens that one for them while they may still open it. The order is
 stored on each form (its formxml `<DisplayConditions Order="n">`), and `systemform.isdefault` does
-not change it: measured, moving the flag reordered nothing, and a table's three new Main forms — all
-at the same order, as every new form is — were served with the `isdefault` form *last*.
+not change it: measured, moving the flag reordered nothing, and a table's three new Main forms, all at
+the same order, were served with the `isdefault` form *last*.
 
 - **`forms[].isDefault: true`** — this form opens first: it becomes the table's default **and** comes
   first in the order. Applied on any table.
@@ -1193,8 +1339,30 @@ artifact edit**. A failed write cannot leave an appended-but-unpositioned new fi
 intermediate row, or duplicated trailing cells. A retry uses either the prior layout or the complete
 planned layout, preserving existing cell/control identities.
 
-`--verify` checks tab/section order, row occupancy and **cell/control ID uniqueness across each
-whole form**, including headers, footers and unbound controls. Auto forms also require readable
+`--verify` checks tab/section order, the tab and section **labels** a layout authors, row occupancy and
+**cell/control ID uniqueness across each whole form**, including headers, footers and unbound controls.
+A label is compared in the language the build wrote it — a string label in the build's authoring language (the
+`--language-code` the build was given, which `verify-model-app.js` takes too; else the spec's `languageCode`; else the
+organization's base language), a label map at each language it declares, with no
+word about a translation it leaves out — so a relabel that never reached the published form fails even when
+ANOTHER language carries the wanted text, and a caption the published form lacks in a language it carries is a mismatch, never a pass.
+Where the build's language cannot be established (the organization cannot be read, and nothing else says it), a string label is
+reported **unverified** — neither passed nor failed — with the reason, and every other check still runs.
+The same goes for a language the environment's form read does not carry: the platform decides which languages' labels go
+into the FormXML it returns, and it can return fewer than the form stores (measured: a form built and published with Spanish
+(`3082`) captions in an English-language (`1033`) organization keeps both languages, yet its published FormXML carries every label in
+`1033` alone). When no label of the form — on any element — is in the language a label is compared in, while the read carries labels
+in other languages, the labels compared in it are read from **one translation export of the app's solution** — the one read that
+carries every provisioned language — by the `id` the tab or section has in the FormXML: the caption the spec declares passes, another
+text or an empty cell is a mismatch and fails, and a label map `{ "1033": …, "3082": … }` is compared language by language. What the
+export cannot settle (it fails or cannot be read, the form gives the element no id, the export has no row for it or no column for the
+language) is reported **unverified** with the reason (what to do: check those captions in Power Apps with that language), and `ok`
+and the exit status are those of everything that could be compared. **Cost:** one request per verify, made only when there is such
+a caption to check — measured at 7.5–11.2 s for a solution of one table, more as the solution grows (it exports every label of it) —
+and it shows the published layer: a caption saved and not published is not in it. A language the read does carry is compared
+strictly, from the read: a stale caption in it fails. A form whose read carries no label at all names no language that could be
+missing from the read: the captions the spec declares for it are missing, and fail.
+A label the spec does not write is not compared. Auto forms also require readable
 FormXML for the identity check. Repeated bindings of one field with distinct IDs are allowed.
 It does **not** check field order or `after` adjacency.
 To reposition an existing field, use `fieldOptions[x].after` outside the explicit field list, below.
@@ -1212,6 +1380,13 @@ A form field can carry these per-control options. Declare them **form-level** in
 (keyed by column logical name) — the only route under an `auto` layout, which has no field list —
 or **inline** on an explicit layout's `fields[]` entry as `{ "name": …, "readOnly": …, "hidden": … }`.
 Where both apply to one field the inline entry wins; a plain string entry keeps working unchanged.
+An entry takes only the options below — `readOnly`, `hidden`, `after`, `colspan` and `rowspan` — and
+an inline entry its `name` as well; a `fieldOptions` entry takes no `name`, because its key names the
+field. Any other key (a misspelling such as `readOnlyy` or `colSpan`) is **rejected** at author time —
+by the lint, a dry run and a build — naming the key it most likely meant, rather than accepted and
+silently ignored. A spec an earlier release built with such a `fieldOptions` key can still be read:
+`verify-model-app.js` reports the key as a warning, and teardown and `preview-form.js` accept it. The
+option stays unapplied until the key is fixed.
 
 - **`readOnly: true`** locks the control (`disabled="true"`), leaving it visible. Use it for a value
   the platform generates but does **not** make immutable — an AutoNumber column is writable through
@@ -1258,6 +1433,12 @@ them and writes *nothing* when you do not, so a rebuild never clears a lock or a
 in the form designer. The corollary is that `readOnly: false` / `hidden: false` cannot turn a flag
 back off — they are rejected at author time rather than accepted and ignored. To un-set one, clear it
 in the designer, or drop the field and let the next build re-add it.
+
+A flag goes on **every** cell the deployed form holds of the field. A layout lists a field once per form
+(a second cell is rejected), but a maker can place one in two sections in the designer, or in the form's
+**header** or **footer** or a tab's own header or footer (Main forms); the build flags each of those cells — the
+rest of the cell, its attributes and its control, is kept as it is — and `--verify` checks each, naming the
+section, the header or the footer of one that is not flagged.
 
 **Under an `auto` layout the flags apply to the fields the layout places** — the primary column, the
 table's declared columns and its parent lookups. A `readOnly`/`hidden` on any other field (a stock
@@ -1374,40 +1555,56 @@ custom control), but the spec validator emits a warning.
   create (authored by different people/tools), and an unrelated edit (e.g. a form change) must still
   build. The pages phase matches by `pageId`/`key`, never by name, so distinct-id same-name pages
   build correctly; rename one in Maker to disambiguate the navigation.
-- **A straight double quote (`"`) in a page `name`** draws a lint warning: pac stores each one as `\"`
-  on the page's own record, and the backslashes stay there. The navigation shows the page subarea's
-  `title`, which the build writes as given. A download writes the name without pac's backslashes, so a
-  rebuild does not add more. Use typographic quotes (“ ”) or an apostrophe — pac stores those, and
-  every other character, exactly.
+- **A straight double quote (`"`) in a page `name`** draws a lint warning. The name is stored exactly as
+  written, but a page an earlier release created through `pac` holds each one as `\"` on the page's own
+  record until a build rewrites its name. The navigation shows the page subarea's `title`, which the build
+  writes as given. A download reads the name without those backslashes, so a rebuild does not add more.
+  Use typographic quotes (“ ”) or an apostrophe to keep the name the same in every page, old or new.
 - **`pageInput`**: `{ "data": { … } }` — the input this page expects when navigated to.
 - **Durable page manifest.** The build writes a `<app-unique-name>_pagemanifest` web resource
   carrying `{ schemaVersion, pages: [{ key, name, pageId, purpose, dataSources, navigatesTo, pageInput }], design }`.
   This manifest is the source of truth for a download round-trip: download fetches it, enumerates
   deployed pages fail-closed, and uses `reconcilePageIds` to reconstruct keys and reverse-normalize
-  navigation placeholders back to `"PAGEREF_<key>"` in each page's source. Legacy apps with no
-  manifest get fresh keys assigned on first download.
+  navigation placeholders back to `"PAGEREF_<key>"` in each page's source. A page the manifest does not
+  bind (a legacy or Maker-authored app) keeps the `key` an earlier download of the app gave it — read from
+  the `app-spec.json` already in the output folder when it names this app in `app.uniqueName`, matched by
+  `pageId` — and only a page with neither gets a fresh key. A key never changes between two downloads of an
+  unchanged app: a copy of the spec deployed to another environment is bound to the pages it built there by
+  key. When that file gives one key to two pages (or one page two keys) for a page the manifest does not bind,
+  the download stops (`page-keys-ambiguous`) unless `--reset-page-keys` says to give those pages fresh keys.
 - **Three-authority page identity.** Generative-page management consults three authorities, each
   for a distinct question — all matching is **by id**, never by display name:
   1. **IDENTITY** — the `<appUnique>_pagemanifest` (`key → pageId` map). For an *edit-snapshot* spec
      (downloaded from a live app), the spec's own `pages[].pageId` is the highest authority and
      outranks the manifest.
-  2. **EXISTENCE** — env-wide `pac model genpage list` (no `--app-id`). This set alone decides
+  2. **EXISTENCE** — the env-wide page list read through the SDK (every page of the environment,
+     drafts included; no app filter). This set alone decides
      whether an id is still live. An unplaced id needs a local creation receipt for this app/key/id
      and a decoded stored name exactly equal to the spec page name; otherwise `unproven-manifest-id` halts,
      never requests a replacement CREATE. The build takes this app's PUBLISHED navigation as proof: a page
      that is only in its saved but unpublished navigation halts with advice to publish the app first. If it is this app's page, add it to the
-     app's navigation in the maker, publish the app and re-run; otherwise remove the stale id from the manifest/spec (or delete the
-     page) and re-run. A read failure HALTs (`pages-existence-failed`).
-     An uncertain CLI CREATE stops and reports each new candidate's id, stored name and `createdon`.
-     No candidate is automatically adopted, even with a matching name/date. If the candidate is yours,
-     re-run the upload explicitly with `--page-id`; otherwise leave it and re-run the create.
+     app's navigation with `node "${PLUGIN_ROOT}/scripts/genpage.js" add-to-app --env <envUrl> --app-id <this app's id> --page-id <page id>` (it publishes the app and proves the page in what runs)
+     and re-run; otherwise remove the stale id from the manifest/spec (or delete the page with `node "${PLUGIN_ROOT}/scripts/genpage.js" delete --env <envUrl> --page-id <page id>`,
+     which says what it would remove and deletes nothing until it is run again with `--allow-destructive` — ask the user first, it is permanent) and re-run. A read failure HALTs (`pages-existence-failed`).
+     A create's identity is written down before the create is sent (a `pending` record in the build
+     workspace), so a create whose answer was lost is settled by the next build and never repeated as a
+     second page: the page found under the name the create sent is adopted (a creation receipt is written)
+     and updated like any page that build created; one found under another name is a
+     `pages-identity-conflict` — neither adopted nor updated; with none found, the create is sent once more
+     under the same id.
   3. **MEMBERSHIP** — the app's sitemap `GenPageId` set (read via `fetchSitemap` —
      fail-closed, discriminated). This set alone decides placement, download enumeration, and verify
      coverage. A read failure HALTs (`pages-sitemap-read-failed`).
 - **Teardown page scope.** The manifest supplies candidates, not permission to delete. A candidate
-  is deleted only when it is in this app's sitemap (published, or saved but unpublished — a page another app's
+  is deleted only when it is in this app's sitemap (published, or saved but unpublished — an app that was never published has
+  only the saved one, which is read for it — a page another app's
   saved navigation still references is refused by the platform and kept) or a local app/key/id creation receipt proves it,
-  with its stored name corroborating the receipt. Other candidates are kept with a manual-removal hint.
+  with its stored name corroborating the receipt. "In this app's sitemap" means an ENTRY of its navigation names the page (a
+  `SubArea` under `SiteMap/Area/Group`, either quote style; names exact, as XML is case-sensitive): a `GenPageId` that sits in a comment, a
+  CDATA section or a processing instruction is text and proves nothing, and a navigation that is not exactly one well-formed XML document
+  (one root, balanced tags, quoted unique attributes, no document type declaration) keeps every page and records nothing. A sitemap found by the app's unique name
+  (a never-published app whose layer has no sitemap component) is the app's only when its current row carries that name.
+  Other candidates are kept with a manual-removal hint.
   The build writes `page-ownership.created.<hash>.json` in its workspace after an acknowledged create,
   before manifest persistence/placement. Version-2 records include an opaque SHA-256 fingerprint of
   the normalized target HTTPS origin (lower-case host, no path or trailing slash), not its URL.
@@ -1440,16 +1637,102 @@ custom control), but the spec validator emits a warning.
   highest identity authority (outranks the manifest), confirmed against EXISTENCE — so a downloaded
   app (including Maker-added pages) rebuilds against the correct existing page without duplication.
 - **What a page round-trip carries — and what it does not.** A download brings back each page's
-  code, prompt, `dataSources`, the id of the **model** that generated it (`pages[].model`) and its
-  identity; the build re-sends the model with every upload, because pac stores whatever an upload says
-  and an upload without one stored it empty. A page's **connector and Custom API bindings** have no App
-  Spec field, so they are not in the spec. The build uploads without them, and pac leaves a page's
-  existing bindings in place when they are omitted: a rebuild in the **same environment** keeps the
-  bindings working, but that is preservation, not reconstruction — the same spec rebuilt in **another
-  environment** deploys the page without them (bind them there with `/genpage`).
+  code, prompt, `dataSources`, the id of the **model** that generated it (`pages[].model`), its
+  **connector and Custom API bindings** (`pages[].connectorBindings`, `pages[].actionBindings`, below) and its
+  identity; the build sends the model with every update, and the page's own is kept when the spec has none
+  (the SDK writes only what differs). What no spec can bring to **another environment** is what the bindings
+  *name* — the connection references, the Custom APIs and the service resources (below).
 - **`model` (optional).** The model id a page was generated with, e.g. `"gpt-4.1"` — letters, digits and
   `. _ : / @ + -`, at most 100 characters. A download writes it (an id outside that shape is left out, with
-  a warning); an authored spec may omit it, and then a rebuild of an existing page stores it empty.
+  a warning); an authored spec may omit it, and then a rebuild of an existing page keeps the model that page has.
+- **`connectorBindings` and `actionBindings` (optional).** The two lists a page holds in its `config.json`, each a
+  list of objects. A spec states an entry by **the properties the references document, each with a value of a
+  conservative shape known to be safe** — an allowlist (`references/connectors.md` and `references/custom-api.md`
+  say what they mean):
+  ```jsonc
+  { "connectorBindings": [ { "logicalName": "new_msnweather", "connectorId": "/providers/Microsoft.PowerApps/apis/shared_msnweather", "dataset": "", "operations": ["CurrentWeather"] } ],
+    "actionBindings":    [ { "name": "new_ApproveOrder", "isFunction": false, "boundEntityLogicalName": "salesorder", "displayName": "Approve Order", "parameterKinds": { "Comment": "String" } } ] }
+  ```
+  | List | Property | Its value |
+  |---|---|---|
+  | `connectorBindings` | `logicalName` | an identifier: a letter, then letters, digits, `_ . -` |
+  | | `connectorId` | `/providers/Microsoft.PowerApps/apis/<identifier>`, or the identifier |
+  | | `dataset` | `""`, a plain name (`server,database`, `default`), or an `http(s)` URL with no user-info, no query and no fragment, whose host is DNS labels and whose decoded path segments are labels, written in its canonical form — exactly as a URL parser gives it back: no `.` or `..` segment (plain or percent-encoded), a lower-case scheme and host, no default port |
+  | | `tables` | a list of GUIDs or plain names (`[dbo].[Orders]`) |
+  | | `tableDisplayNames` | a list of labels: letters, digits, dashes, spaces and `_ . , ; : ' ( ) & + !` — no URL, no `=` |
+  | | `operations` | a list of identifiers |
+  | `actionBindings` | `name`, `boundEntityLogicalName` | an identifier |
+  | | `displayName` | a label |
+  | | `isFunction` | `true` or `false` |
+  | | `parameterKinds` | a map from a parameter name (a letter or `_`, then letters, digits, `_`) to one of the ten declared primitive kinds the page runtime accepts (`Boolean`, `DateTime`, `Decimal`, `Float`, `Integer`, `Money`, `Picklist`, `String`, `StringArray`, `Guid`) |
+
+  `EntityReference`, `Entity` and `EntityCollection` are not declared kinds: an unsupported declared
+  kind makes the runtime drop the whole binding. Lookup inputs remain structural call values, not
+  entries in this map; lookup authoring hints are discovery-only metadata, never App Spec binding
+  properties. Sparse primitive maps are valid; a lookup-only API can state `parameterKinds: {}`.
+  To deliberately correct an existing bad map, state its verified primitive entries explicitly
+  (or `{}` for lookup-only inputs). Omitting `actionBindings` preserves the page's existing payload
+  instead of correcting it; no unsupported declaration is silently stripped or changed to `Guid`.
+
+  No text of any of them may be shaped like a token (a known token prefix such as `ghp_` or `eyJ`, an
+  authorization scheme such as `Bearer …`, or a run of 32 or more letters and digits that mixes both).
+  **Nothing else is in a spec, and a list is stated only WHOLE.** A binding a page holds can carry anything: a
+  connection id of the environment it was made in, a credential someone wrote into a `connectors.json`
+  (`genpage-upload.js` takes any JSON array) — as a value, as the NAME of a property, in a URL's user-info, query or
+  fragment — or a property a later runtime adds. The spec is what is committed and shared, so when ANY entry of a list
+  holds a key that is not on the allowlist, or a value without its shape, a download leaves the **whole list** out of
+  the spec — it never states part of an entry, because an entry stated without its identity or a property would make a
+  rebuild replace the page's entry with less — and reports it in `pageBindings.notCarried` (stderr: `WARNING:`) by the
+  page, the list, the entry's place and the vetted property, or "an unrecognized property": **never a value and never an
+  unrecognized key**. A list left out is one a rebuild does not send, so the page keeps it as it is, with no write and no
+  publish. The page folder's own `config.json` is the page as the environment holds it and is not rewritten, so it still
+  holds everything: keep that folder out of version control if a value there is a credential. A spec that states such a
+  property or value is **refused** by the validator, in the same words. A list that is not a list of objects is left out
+  whole too; neither is ever a refusal of the download.
+  A download writes the lists a page holds (an empty list, or `null`, is left out). The build writes a list a
+  spec states, and **leaves the page's own alone when the spec does not state it**; a list that is stated —
+  `[]` too — is the page's list, as `dataSources` is. It is read against the page's own entries: a page that
+  already holds what the spec states is **not written and not published**, and an entry the spec changes keeps
+  the properties the spec does not state (an entry is matched by `logicalName` / `name`). `logicalName` (a
+  connector binding) and `name` (a Custom API binding) is what the page's code finds an entry by, so an entry
+  without one draws a warning.
+  The spec carries the lists, which are text; it cannot carry what they name, and a rebuild creates none of it,
+  so each must already exist in the environment you rebuild into: the **connection reference** each connector
+  binding goes through, and the connection behind it, which holds a user's sign-in (create the reference with
+  `create-connection-reference.js`, or move it in a solution with `add-page-to-solution.js --connection-refs` and
+  `solution-settings.js`); the **Custom API** each action binding names, a solution component and not an App Spec
+  item; and, for a connector binding that names a `dataset` or `tables` (a SharePoint site and its list ids),
+  the same resources. A download names what it found, on stderr and as `pageBindings` in its JSON result.
+  **A rebuild checks them before it writes anything** (a build, and a dry run in its plan): it reads the
+  environment's connection references and Custom APIs for the names the pages it writes state, and
+  - **stops** — `pages-binding-reference-conflict`, phase `preflight`, nothing written — at a connection reference
+    of that name that is for **another connector** than the binding's `connectorId` (compared by the connector's
+    name, so `/providers/Microsoft.PowerApps/apis/shared_msnweather` and `shared_msnweather` agree): the page
+    would call that connector under that name. Give the binding the logical name of a reference that is for the
+    right connector, or, when the reference that is there is the one the page should call (a custom connector made
+    separately in each environment has another id in each), set the binding's `connectorId` to the one this
+    environment has. Nothing is guessed or made, and a connector that a binding or a reference does not name is
+    never a conflict;
+  - **says by name** (a warning, and the page is written with its binding all the same — a reference made, or given
+    its connection, later makes the page work without a rebuild) each reference and Custom API that is not there, a
+    reference that is there with **no connection** (what a solution import leaves when no settings file gives one), an
+    **operation** a binding lists that the **custom connector** of its reference there does not define, a Custom API
+    that is the other kind (Action or Function) or bound to another table, and a read that failed (the bindings were
+    then not checked);
+  - **says as NOT CHECKED**, by name, what the environment's answer did not prove — never reading it as compatible,
+    and never refusing for it: a reference row that does not say which connector it is for, or whether it has a
+    connection — or says it in a form the build cannot read (a `connectorid` that is not
+    `/providers/Microsoft.PowerApps/apis/shared_<name>`, a `connectionid` that is not text) — and the operations of a
+    binding whose reference names no custom connector. Only two valid connector ids that differ stop the build. Operations are checked
+    only through a custom connector's definition (its `connector` row), which is the environment's own and can be
+    another version than the page was made with; a reference whose custom connector lookup is absent, null or not a
+    GUID — which a connector the platform publishes also has — is not proof of which connector defines them.
+
+  `/app-builder` never authors these lists — it writes no connector or Custom API code — so they come from a page
+  a download read. A page you reset to `source.kind: "intent"` to regenerate it is generated without connector
+  code: delete its bindings from the spec too, or it keeps bindings its code no longer uses. The `custom-api`
+  feature flag gates what the `/genpage` agents author, not the download or the rebuild of bindings a page
+  already holds.
 - **Safety HALTs (pages phase).** The build halts on identity/safety violations rather than
   proceeding with potentially wrong state:
   - `pages-identity-conflict` — spec `pageId` and manifest disagree on a key, or a duplicate id is
@@ -1457,7 +1740,10 @@ custom control), but the spec validator emits a warning.
   - `pages-manifest-corrupt` — the manifest web resource cannot be parsed (two keys mapping to the
     same id). Fix or delete the manifest and rebuild.
   - `pages-shared-across-apps` — a page appears in another app's sitemap, published or only saved (not yet
-    published — an app that was never published counts). Detach it in Maker first. `--allow-destructive` does NOT bypass this halt. If another app's
+    published — an app that was never published counts). Detach it from that app first — ask the user, since this changes another app: the halt names the app and prints the command with the app's `id`
+    filled in (`<id of app …>` stands where the id could not be read, and `scripts/apps.js list --env <envUrl> --search <name>` gives it), and `node "${PLUGIN_ROOT}/scripts/genpage.js" remove-from-app --env <envUrl> --app-id <that app's id> --page-id <page id>`
+    takes the page out of its navigation and publishes it (everything that app has saved goes live with it; the page itself stays) — or detach it in Maker.
+    `--allow-destructive` does NOT bypass this halt. If another app's
     saved navigation, or the list of apps that were never published, cannot be read, the build halts as `pages-shared-check-failed` instead of assuming it is clear.
     The check runs again right before the first page is updated in place, so a page another app takes in while the build runs halts it there too ("became shared
     across apps while this build ran"); one taken in while the pages upload is written by then, and is reported after the uploads as a warning naming the app.
@@ -1489,6 +1775,27 @@ custom control), but the spec validator emits a warning.
   of a `dashboards[]` entry — auto-pinned as an app component so the app includes it), `url`, or
   `page` (the **`key`** of a `pages[]` generative page at schemaVersion 2; the **name** for legacy specs
   — surfaced as a `GenPage` sitemap subarea).
+- **The navigation needs an entry Dataverse will take — for a new app.** Dataverse refuses to **create** a sitemap with no
+  non-empty area holding a non-empty group (HTTP 400: "SiteMap needs to have a non-empty Area with a non-empty Group"); it
+  accepts the same navigation when the sitemap of an app that **already exists** is updated (measured: saved and published).
+  A **new** app whose navigation has an `entity`, `dashboard` or `url` entry is created before its pages exist: its first
+  navigation leaves every `page` entry out, and the pages phase writes them in afterwards. A **new** app whose navigation
+  holds **only `page` entries** is built the other way round: the build creates the pages first and then the app, with them
+  already in its first navigation (as `apps.js create --page-id` makes an app around a page). So a new app needs **at least
+  one entry in a group in an area** — a table, dashboard, url or page entry. A run that cannot create the pages first (one
+  without the pages phase, or a changed-only re-upload) still refuses a navigation of only `page` entries for a new app. An
+  **existing** app is refused for neither a navigation of only `page` entries (its navigation is
+  written from the whole spec once its pages are built) nor one with no entry at all: the build goes on, and for the empty
+  one it **warns** that the app is left with no navigation entries — any it has now are removed, which the destructive-
+  operation check asks `--allow-destructive` for. A spec with no `appShell.areas` is refused for every app, since there is no
+  navigation to build the app's sitemap from. A spec with no `appShell`, `areas: []`, an area with no group, or a group with
+  no entry still **validates** — a data-only spec has no navigation, and a downloaded
+  spec carries the app's own, which can be empty — but a build that includes the app-shell phase refuses what a new app
+  cannot be built from **before it writes anything**: the dry run marks the app step `? unknown` with the reason and counts it
+  among the steps that would stop the build (with a live plan or without one), `--apply` halts with `app-navigation-empty`,
+  and `lint-app-spec` warns. Whether the app exists is read only when the verdict depends on it (a navigation of pages only,
+  or with no entry); when it cannot be read (`--no-live-plan`, a failed read) that navigation is not refused: the build
+  warns that it could not check, and goes on.
 - **Areas and groups take `label`; subareas take `title`.** Each level accepts only the keys the build
   reads — area: `label`, `icon`, `vectorIcon`, `iconDescription`, `groups`; group: `label`,
   `iconDescription`, `subAreas`; subarea: `title`, one target, `icon`, `vectorIcon`, `iconDescription` —
@@ -1498,6 +1805,15 @@ custom control), but the spec validator emits a warning.
   written onto the live entry it corresponds to (a subarea by its target; an area or group by its
   label), so the live entry's id, its other attributes (`Client`, `Sku`, `AvailableOffline`, …) and its
   titles in other languages survive; only the label, title, target and icons the spec sets are applied.
+  **A title the spec does not give is kept:** an area, group or entry whose `label` / `title` is empty or
+  left out keeps the title it has in the environment, and the build says so — a rebuild never clears one,
+  so state a title to change it. (An entry whose title the baseline below shows the spec used to state,
+  and the spec now leaves out, loses it: that is an edit.)
+  **An area or group with no entries and no label** — what an earlier download wrote for each empty group of an
+  environment whose base language is not 1033 — is the environment's empty group when there is one of each. With more than
+  one on either side, which is which cannot be told, so none is paired: the spec's are written as new, untitled
+  ones, and the build names each environment group it does not keep, with its title. Give the spec's group the
+  label it has in the environment to keep it.
   A `dashboard` entry is written the way the designer writes one, with
   `Url="/workplace/home_dashboards.aspx"` — without it the app shows a placeholder icon for the entry,
   and `--verify` fails it.
@@ -1715,12 +2031,22 @@ auto-selects tables that are good row-summary candidates and skips those that ar
 - **Lint warnings:**
   - `incident`, `lead`, and `opportunity` are Dynamics 365 app tables (Case / Lead / Opportunity) that provide their own row summaries — configuring one as a summary table warns, because the row-summary feature is not available for them.
   - A table with no descriptive columns (only lookups / system fields) warns that a row summary may not be useful.
+  - A table's entry is read for `enabled`, `instruction` and `columns` only, and validation rejects no other key — so any other key warns that it is ignored. The prompt is `instruction`: a `prompt` key warns and names it. When a summary is enabled, omitting `instruction` uses the default prompt; setting `instruction` alone does not enable a table under `default: "off"`.
 
 ## personas[] (optional — security roles)
 
 Authors one **security role per persona**, sized to the entity access that persona's
-**jobs-to-be-done** need. Without at least one role the generated app runs only for system
-administrators; `personas[]` produces a working access model so the app opens for real users.
+**jobs-to-be-done** need, and associates the app with it. A **new** app is associated with the System
+Administrator role only, so without a persona role users who have no maker-level role cannot open it;
+`personas[]` produces a working access model so the app opens for real users.
+
+An app that **already exists** keeps the roles associated with it: a spec with no `personas[]` leaves
+them as they are, which is how an extension of such an app is written (a download carries none). Do
+not list an existing role as a persona to silence the lint — a persona's role is converged to exactly
+the privileges declared, and a role the build did not author is refused. Give an existing role access
+to a table the spec adds with `roleGrants[]` (below). Opening the app and using a table are two
+questions: lint and `write-app-spec-doc.js` keep them apart, and flag a new table that no persona job
+and no `roleGrants[]` entry grants a privilege on ("no access declared").
 
 `personas[]` is captured **first** during authoring (Level (a0), before the data model): the jobs
 are what the app exists to do, so they drive which tables and surfaces exist. `privileges[]` is

@@ -8,8 +8,7 @@
 > (see `app-spec-schema.md` → `languageCode` and *Localized labels*).
 
 Read this only when the planner has detected multiple configured languages OR any
-non-English language via `scripts/list-languages.js` (or `pac model list-languages --environment '<envUrl>'`, which the planner
-runs when that script cannot read them). English-only environments
+non-English language via `scripts/list-languages.js`. English-only environments
 should skip this entire file — the page-builder will write the page without any
 localization scaffolding.
 
@@ -20,7 +19,7 @@ section, not unconditionally.
 
 ### When to Apply
 
-Only apply localization when `scripts/list-languages.js` (run by the planner during requirements gathering; its fallback is `pac model list-languages --environment '<envUrl>'`) reports **multiple languages** or **any non-English language**. English-only environments skip this entire section.
+Only apply localization when `scripts/list-languages.js` (run by the planner during requirements gathering; it is the only source of the environment's languages) reports **multiple languages** or **any non-English language**. English-only environments skip this entire section.
 
 ### Language Detection
 
@@ -74,8 +73,7 @@ Usage: `<Text>{translate("title")}</Text>` — never `<Text>Dashboard</Text>`.
 ### RTL Layout Support
 
 Take each language's direction from the `rtl` field of `scripts/list-languages.js` (carried into the
-plan's `## Environment` → `Languages` line as a `— RTL` mark; when the planner fell back to `pac model list-languages --environment '<envUrl>'`,
-from that table's RTL column) — never from a hand-written list of LCIDs. The script reads
+plan's `## Environment` → `Languages` line as a `— RTL` mark) — never from a hand-written list of LCIDs. The script reads
 it from a table of Windows culture data, and a list always misses some: Windows culture data marks more than 40
 right-to-left cultures — every Arabic region, Persian and Dari, Urdu, Pashto, Sindhi, Uyghur, Divehi, Syriac, Central
 Kurdish, Hebrew and Yiddish among them — and a language a list forgot renders left-to-right.

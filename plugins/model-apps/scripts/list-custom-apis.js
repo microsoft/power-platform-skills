@@ -1,15 +1,18 @@
 #!/usr/bin/env node
 
 // Lists the Dataverse Custom APIs a GenPage can bind to — Global ones plus those bound to the
-// page's table(s) — with each API's declared request-parameter kinds. The genpage-customapi-builder
+// page's table(s) — with primitive declared kinds and separate lookup-authoring metadata. The genpage-customapi-builder
 // agent turns this into actions.json entries ({ name, isFunction, boundEntityLogicalName?,
-// displayName, parameterKinds }) that pac persists into the page config.json under `actionBindings`.
+// displayName, parameterKinds }) that the SDK persists into config.json under `actionBindings`.
+// `lookupParameters` is discovery-only: it keeps lookup input names available to the author without
+// declaring a kind the runtime would reject or copying authoring hints into the wire binding.
 //
 // Unlike connectors (whose metadata lives outside Dataverse and needs pac verbs), Custom API metadata
 // IS in ordinary Dataverse tables, so discovery is a plain Web API query — no new pac verb needed.
 //   customapi                  — the API definitions (uniquename, isfunction, bindingtype, bound entity)
 //   customapirequestparameter  — each API's request parameters and their declared `type` (pulled inline
 //                                via $expand so discovery stays a single request — see main())
+//   customapiresponseproperty  — response types, used to exclude unsupported Entity/EntityCollection outputs
 // See: https://learn.microsoft.com/power-apps/developer/data-platform/custom-api
 //
 // Usage:
@@ -17,11 +20,11 @@
 //     --entities  Restrict entity-bound results to these table logical names (the page's tables).
 //                 When omitted, ONLY Global APIs are returned (a page that needs entity-bound
 //                 operations knows its own table(s) and passes them here); this keeps the result set
-//                 and the follow-up parameter query bounded.
+//                 bounded without per-API follow-up queries.
 //
 // Output:
 //   { "ok": true, "customApis": [ { name, displayName, isFunction, bindingType,
-//                                   boundEntityLogicalName?, parameterKinds } ] }
+//                                   boundEntityLogicalName?, parameterKinds, lookupParameters? } ] }
 
 const {
   dataverseRequest,
@@ -32,32 +35,21 @@ const {
 } = require('./lib/dataverse-auth');
 const { exitIfCustomApiDisabled } = require('./lib/feature-flags');
 const { odataLit } = require('./lib/odata');
+const { makeWritesBlocking } = require('./lib/output-redaction.js');
 
 // customapi.bindingtype is a Dataverse option set. Only the value→meaning mapping matters here;
 // a page invokes a record-bound API via boundTo, so we surface Entity as bound and Global as unbound.
 // See: https://learn.microsoft.com/power-apps/developer/data-platform/reference/entities/customapi
 const BINDING_TYPE = { 0: 'Global', 1: 'Entity', 2: 'EntityCollection' };
 
-// customapirequestparameter.type is a Dataverse option set whose integer values map to the runtime's
-// DataverseParameterKind strings. The runtime reads these from the page manifest (`parameterKinds`)
+// Only primitive customapirequestparameter.type values map to declared DataverseParameterKind strings.
+// Types 3/4 (Entity/EntityCollection) are not supported; type 5 is recognized structurally at call time
+// as { entityName, id }, never declared as EntityReference. An unsupported declared kind drops the
+// WHOLE binding. The runtime reads primitive kinds from the page manifest (`parameterKinds`)
 // and has no other source, so record them exactly — an Integer mis-recorded as Decimal (or a Guid as
 // String) changes how the value is serialized on the wire.
 // See: https://learn.microsoft.com/power-apps/developer/data-platform/reference/entities/customapirequestparameter
-const PARAMETER_KIND_BY_TYPE = {
-  0: 'Boolean',
-  1: 'DateTime',
-  2: 'Decimal',
-  3: 'Entity',
-  4: 'EntityCollection',
-  5: 'EntityReference',
-  6: 'Float',
-  7: 'Integer',
-  8: 'Money',
-  9: 'Picklist',
-  10: 'String',
-  11: 'StringArray',
-  12: 'Guid',
-};
+const { PARAMETER_KIND_BY_TYPE } = require('./lib/custom-api-kinds.js');
 
 function bindingTypeLabel(bindingtype) {
   return BINDING_TYPE[bindingtype] || 'Global';
@@ -69,7 +61,7 @@ function mapParameterKind(typeValue) {
   return PARAMETER_KIND_BY_TYPE[typeValue];
 }
 
-// Builds the $filter for the customapi query: every Global API (bindingtype 0), plus the entity-bound
+// Builds the $filter for public customapis: Global APIs (bindingtype 0), plus the entity-bound
 // APIs for the page's tables when `entities` is non-empty. When NO tables are supplied, return ONLY
 // Global APIs — returning every entity-bound API in the environment can explode the result set (and
 // make the follow-up request-parameter query URL, an OR of per-API ids, too long). A page that wants
@@ -79,12 +71,13 @@ function buildCustomApiFilter(entities) {
   if (list.length === 0) {
     // No page tables supplied: Global only (see above). This matches the genpage-customapi-builder
     // contract — omit --entities for a mock/global-only page.
-    return 'bindingtype eq 0';
+    return 'isprivate eq false and (bindingtype eq 0)';
   }
   const bound = list
     .map((e) => `boundentitylogicalname eq '${odataLit(e)}'`)
     .join(' or ');
-  return `bindingtype eq 0 or (${bound})`;
+  // Parenthesize the whole scope: otherwise the OR branch would admit private entity-bound APIs.
+  return `isprivate eq false and (bindingtype eq 0 or (${bound}))`;
 }
 
 // Maps one API's request-parameter rows (returned inline via $expand of CustomAPIRequestParameters)
@@ -102,8 +95,25 @@ function parameterKindsFromRows(rows) {
   return kinds;
 }
 
-// Projects one customapi row (+ its parameter kinds) into the discovery shape the builder writes to
-// actions.json. `boundEntityLogicalName` is included only for a truly entity-bound API with a table.
+// Lookup rows arrive as { uniquename: 'Ref', type: 5, isoptional: false, logicalentityname: 'account' }.
+// The table hint is optional (a lookup can be unrestricted); never invent it. Keep optionalness and
+// names outside parameterKinds so a required lookup does not disappear when its kind is omitted.
+// See: https://learn.microsoft.com/power-apps/developer/data-platform/reference/entities/customapirequestparameter
+function lookupParametersFromRows(rows) {
+  const lookups = {};
+  for (const row of rows || []) {
+    if (Number(row.type) !== 5 || !row.uniquename) continue;
+    const lookup = { isOptional: row.isoptional === true };
+    if (typeof row.logicalentityname === 'string' && row.logicalentityname) {
+      lookup.logicalEntityName = row.logicalentityname;
+    }
+    lookups[row.uniquename] = lookup;
+  }
+  return lookups;
+}
+
+// Projects discovery metadata, NOT an actions.json entry: the builder must explicitly omit
+// bindingType and lookupParameters when writing the bare wire binding.
 function toCustomApiEntry(api, parameterKinds) {
   const bindingType = bindingTypeLabel(api.bindingtype);
   const entry = {
@@ -116,7 +126,88 @@ function toCustomApiEntry(api, parameterKinds) {
   if (bindingType !== 'Global' && api.boundentitylogicalname) {
     entry.boundEntityLogicalName = api.boundentitylogicalname;
   }
+  const lookups = lookupParametersFromRows(api.CustomAPIRequestParameters);
+  if (Object.keys(lookups).length) entry.lookupParameters = lookups;
   return entry;
+}
+
+function requireCompleteExpansion(api, property, rows, envUrl) {
+  const context = `Custom API '${api.uniquename}' ${property} metadata`;
+  // These are single-level expansions: their ordinary relationship links repeat the same related
+  // rows, not a next page. At the documented 5,000-row cap, however, completeness is ambiguous even
+  // without an annotation. Never follow a link or mistake token absence for a complete capped set.
+  // See: https://learn.microsoft.com/power-apps/developer/data-platform/webapi/query/join-tables#single-expand-on-collection-valued-navigation-properties
+  if (rows.length >= 5000) {
+    throw new Error(`${context} reaches the 5000-row expansion limit; completeness is ambiguous.`);
+  }
+  const annotation = api[`${property}@odata.nextLink`];
+  if (annotation === undefined) return;
+  let link;
+  try {
+    if (typeof annotation !== 'string') throw new Error();
+    link = new URL(annotation);
+  } catch {
+    throw new Error(`${context} has an unreadable relationship link; completeness is ambiguous.`);
+  }
+  const origin = new URL(envUrl).origin;
+  const expectedPath = `/api/data/v9.2/customapis(${api.customapiid})/${property}`;
+  const expectedFields = property === 'CustomAPIRequestParameters'
+    ? ['uniquename', 'type', 'isoptional', 'logicalentityname']
+    : ['type'];
+  const options = [...link.searchParams.keys()];
+  const fields = (link.searchParams.get('$select') || '').split(',').map((field) => field.trim()).sort();
+  // Accept only the same related collection and the options in our known single-level query.
+  // Paging, limiting, foreign-resource and otherwise unexplained links fail explicitly, without
+  // sending another request or echoing a potentially sensitive URL into diagnostics.
+  if (link.origin !== origin || link.username || link.password || link.hash
+    || link.pathname.toLowerCase() !== expectedPath.toLowerCase()
+    || options.length !== 1 || options[0] !== '$select'
+    || fields.join(',') !== expectedFields.sort().join(',')) {
+    throw new Error(`${context} has an incomplete or ambiguous relationship link.`);
+  }
+}
+
+function requireRequestMetadata(api, rows) {
+  const names = new Set();
+  for (const [index, row] of rows.entries()) {
+    const context = `Custom API '${api.uniquename}' request parameter ${index + 1}`;
+    const name = row.uniquename;
+    // The existing projection maps use ordinary objects: __proto__ would invoke a setter instead
+    // of retaining an own input name. Refuse it explicitly rather than lose a required parameter.
+    if (typeof name !== 'string' || !name.trim() || name === '__proto__') {
+      throw new Error(`${context} metadata is unreadable: uniquename must be a safely representable nonempty string.`);
+    }
+    if (names.has(name)) throw new Error(`${context} '${name}' has a duplicate uniquename.`);
+    names.add(name);
+    if (row.type !== 5) continue;
+    // The projection helpers keep their permissive compatibility shape; the CLI must establish
+    // lookup authoring facts first, rather than invent requiredness or drop a malformed table hint.
+    if (typeof row.isoptional !== 'boolean') {
+      throw new Error(`${context} '${name}' metadata is unreadable: lookup isoptional must be boolean.`);
+    }
+    if (row.logicalentityname != null && (typeof row.logicalentityname !== 'string'
+      || !row.logicalentityname.trim() || row.logicalentityname !== row.logicalentityname.trim())) {
+      throw new Error(`${context} '${name}' metadata is unreadable: logicalentityname must be a table hint string or absent.`);
+    }
+  }
+}
+
+function supportsApiParameters(api, envUrl) {
+  const collections = ['CustomAPIRequestParameters', 'CustomAPIResponseProperties'];
+  for (const property of collections) {
+    const rows = api[property];
+    // An omitted expansion is not an empty collection. Calling it supported would conceal an
+    // unreadable type-3/4 parameter or output; fail explicitly instead of emitting unsafe bindings.
+    if (!Array.isArray(rows) || rows.some((row) => !row || !Number.isInteger(row.type) || row.type < 0 || row.type > 12)) {
+      throw new Error('Custom API request/response type metadata is unreadable or unsupported.');
+    }
+    requireCompleteExpansion(api, property, rows, envUrl);
+  }
+  // Match authoring eligibility for both directions. A primitive input does not make an API whose
+  // output is Entity/EntityCollection callable, and collection-bound APIs are excluded separately.
+  if (collections.some((property) => api[property].some((row) => row.type === 3 || row.type === 4))) return false;
+  requireRequestMetadata(api, api.CustomAPIRequestParameters);
+  return true;
 }
 
 async function main() {
@@ -129,6 +220,7 @@ async function main() {
   const USAGE = 'Usage: node list-custom-apis.js <envUrl> [--entities <logicalName1,logicalName2>]';
   const flagError = validateFlags(argv, { known: ['entities'], needValue: ['entities'] });
   if (flagError) {
+    makeWritesBlocking(process.stdout, process.stderr);
     process.stderr.write(`✗ ${flagError}\n${USAGE}\n`);
     process.exit(1);
   }
@@ -148,22 +240,37 @@ async function main() {
     // every matched API id into one $filter. A real environment has hundreds of Global Custom APIs
     // (system + custom — 800+ is normal), and an OR-of-ids filter over that many rows overruns the
     // server's URL-length limit (HTTP 414). $expand keeps discovery to a single request whose URL
-    // length is independent of how many APIs match; request parameters per API are few, so the nested
-    // collection is never truncated.
-    const expand = encodeURIComponent('CustomAPIRequestParameters($select=uniquename,type,isoptional)');
+    // length is independent of how many APIs match. Expand response types too: unsupported outputs
+    // must exclude an API just as unsupported inputs do.
+    const expand = encodeURIComponent(
+      'CustomAPIRequestParameters($select=uniquename,type,isoptional,logicalentityname),CustomAPIResponseProperties($select=type)'
+    );
     const apisRes = await dataverseRequest(
       envUrl,
       'GET',
-      'customapis?$select=customapiid,uniquename,name,displayname,isfunction,bindingtype,boundentitylogicalname' +
+      'customapis?$select=customapiid,uniquename,name,displayname,isfunction,bindingtype,boundentitylogicalname,isprivate' +
         `&$filter=${filter}&$expand=${expand}`
     );
     ensureOk(apisRes, 'List custom APIs');
-    const apis = (apisRes.data?.value || [])
+    if (!Array.isArray(apisRes.data?.value)) {
+      throw new Error('Custom API metadata is unreadable: expected an API value array.');
+    }
+    // Never claim a complete inventory or eligibility from a paged-away portion. Keep discovery's
+    // bounded single-query contract explicit rather than following an unchecked continuation URL.
+    if (apisRes.data['@odata.nextLink'] !== undefined) {
+      throw new Error('Custom API metadata is incomplete; the API query returned a continuation.');
+    }
+    const apis = apisRes.data.value
       .filter((a) => a.uniquename)
+      .filter((a) => {
+        if (typeof a.isprivate !== 'boolean') throw new Error('Custom API privacy metadata is unreadable.');
+        return !a.isprivate;
+      })
       // Exclude EntityCollection-bound APIs (bindingtype 2). The generated-page runtime's boundTo is a
       // single record ({ entityName, id }); there is no collection-bound invocation shape, so surfacing
       // one would only let the builder emit a binding that fails. See genpage-customapi-builder.md.
-      .filter((a) => Number(a.bindingtype) !== 2);
+      .filter((a) => Number(a.bindingtype) !== 2)
+      .filter((api) => supportsApiParameters(api, envUrl));
 
     const customApis = apis
       .map((api) => toCustomApiEntry(api, parameterKindsFromRows(api.CustomAPIRequestParameters)))

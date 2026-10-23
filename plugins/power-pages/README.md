@@ -42,10 +42,10 @@ This keeps hook behavior in one place and avoids relying on skill-frontmatter ho
 
 ## Skills
 
-The plugin provides 38 skills: 37 user-invocable skills and one model-only worker.
+The plugin provides 39 skills: 38 user-invocable skills and one model-only worker.
 They cover the full lifecycle of a Power Pages site - scaffolding,
 non-SPA authoring, deployment, data modeling, backend integration, authentication, localization,
-ALM and CI/CD, security review, testing, auditing, and platform migrations. Each user-invocable
+ALM and CI/CD, security review, performance analysis, testing, auditing, and platform migrations. Each user-invocable
 skill is invoked conversationally - just describe what you want to do.
 
 ### Site scaffolding and deployment
@@ -524,6 +524,19 @@ Adds search engine optimization artifacts: `robots.txt`, `sitemap.xml`, and meta
 - Auto-discovers routes from your framework's router
 - Generates sitemap with production URLs
 - Adds viewport, charset, description, and social sharing meta tags
+
+#### `/analyze-performance`
+
+> "Check my site for performance anti-patterns"
+
+Statically scans the entire local codebase for Power Pages performance anti-patterns — unpaginated lists, webpages/web templates used as APIs, FetchXML over-fetching, N+1 queries, wildcard/contains-style filters, advanced query hints, query cache bypassing, unbounded/over-expanded Web API calls, related-column ordering, disabled header/footer output caching, sign-in and page tracking, and oversized assets — then enriches the static checks with AI-driven suggestions and mitigations grounded in the affected customer-code snippets, produces an HTML report by severity, and offers safe auto-fixes with per-fix approval.
+
+- Grounded in the Site Checker performance checklist and FetchXML/Web API best practices
+- Supports non-SPA Power Pages websites; SPA projects with `powerpages.config.json` are rejected with a clear message
+- Reviews list pagination, webpage-as-API endpoints, FetchXML hints, and cache-busting patterns
+- Findings grouped by severity with concrete fixes, AI mitigation guidance, and precise `file:line` locations
+- Auto-fixes site-setting/tracking issues on explicit per-finding consent; leaves code changes to you
+- Persists the shared review-style HTML report under the website's `docs/` folder
 
 ### Migration
 

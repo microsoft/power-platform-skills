@@ -71,7 +71,7 @@ test('localized content authoring remains model-invocable without a direct user 
   assert.match(customization, /^user-invocable: true$/m);
   assert.match(customization, /Invoke only `author-webpage-content` through the `Skill` tool/);
   assert.match(integration, /Invoke `author-webpage-content` with the exact existing localized body target/);
-  assert.match(readme, /37 user-invocable skills and one model-only worker/);
+  assert.match(readme, /38 user-invocable skills and one model-only worker/);
   assert.doesNotMatch(readme, /^#### `\/author-webpage-content`/m);
 });
 

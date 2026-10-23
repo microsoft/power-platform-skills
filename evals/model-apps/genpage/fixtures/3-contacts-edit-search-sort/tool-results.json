@@ -42,28 +42,36 @@
   },
   {
     "id": "list-apps",
-    "command": "pac model list",
+    "command": "node 'D:/repo/plugins/model-apps/scripts/apps.js' list --env 'https://contoso.crm.dynamics.com'",
     "exitCode": 0,
-    "result": "App ID                                Display Name          Unique Name\n11111111-2222-3333-4444-555555555555  Sales Hub             SalesHub\n44444444-5555-6666-7777-888888888888  Customer Service Hub  CustomerServiceHub"
+    "result": { "ok": true, "count": 2, "apps": [
+      { "id": "11111111-2222-3333-4444-555555555555", "name": "Sales Hub", "uniqueName": "SalesHub", "description": "", "published": true, "unpublishedChanges": false },
+      { "id": "44444444-5555-6666-7777-888888888888", "name": "Customer Service Hub", "uniqueName": "CustomerServiceHub", "description": "", "published": true, "unpublishedChanges": false }
+    ] }
   },
   {
     "id": "list-pages",
-    "command": "pac model genpage list --app-id '11111111-2222-3333-4444-555555555555'",
+    "command": "node 'D:/repo/plugins/model-apps/scripts/genpage.js' list --env 'https://contoso.crm.dynamics.com' --app-id '11111111-2222-3333-4444-555555555555'",
     "exitCode": 0,
-    "result": "Page ID                               Name\n22222222-3333-4444-5555-666666666666  Contacts Directory\n33333333-4444-5555-6666-777777777777  Pipeline Snapshot"
+    "result": { "ok": true, "scope": "app", "appId": "11111111-2222-3333-4444-555555555555", "layer": "published", "count": 2, "pages": [
+      { "pageId": "22222222-3333-4444-5555-666666666666", "name": "Contacts Directory", "title": "Contacts Directory" },
+      { "pageId": "33333333-4444-5555-6666-777777777777", "name": "Pipeline Snapshot", "title": "Pipeline Snapshot" }
+    ] }
   },
   {
     "id": "download",
-    "command": "pac model genpage download --app-id '11111111-2222-3333-4444-555555555555' --page-id '22222222-3333-4444-5555-666666666666' --output-directory 'D:/work/contacts-search-sort'",
+    "command": "node 'D:/repo/plugins/model-apps/scripts/genpage.js' download --env 'https://contoso.crm.dynamics.com' --app-id '11111111-2222-3333-4444-555555555555' --page-id '22222222-3333-4444-5555-666666666666' --output-directory 'D:/work/contacts-search-sort'",
     "exitCode": 0,
-    "result": "Downloaded page 22222222-3333-4444-5555-666666666666 to D:/work/contacts-search-sort/22222222-3333-4444-5555-666666666666 (page.tsx, page.js, config.json, prompt.txt)",
+    "result": { "ok": true, "outputDirectory": "D:/work/contacts-search-sort", "pages": [
+      { "pageId": "22222222-3333-4444-5555-666666666666", "name": "Contacts Directory", "directory": "D:/work/contacts-search-sort/22222222-3333-4444-5555-666666666666", "files": ["page.tsx", "config.json", "prompt.txt"] }
+    ] },
     "artifacts": ["before/page.tsx", "before/config.json", "before/prompt.txt"]
   },
   {
     "id": "generate-types",
-    "command": "pac model genpage generate-types --data-sources 'contact' --output-file 'D:/work/contacts-search-sort/RuntimeTypes.ts'",
+    "command": "node 'D:/repo/plugins/model-apps/scripts/genpage.js' types --env 'https://contoso.crm.dynamics.com' --data-sources 'contact' --output-file 'D:/work/contacts-search-sort/RuntimeTypes.ts'",
     "exitCode": 0,
-    "result": "Types written to D:/work/contacts-search-sort/RuntimeTypes.ts"
+    "result": { "ok": true, "outputFile": "D:/work/contacts-search-sort/RuntimeTypes.ts", "dataSources": ["contact"], "detail": "none", "bytes": 9210 }
   },
   {
     "id": "edit-planner-questions",

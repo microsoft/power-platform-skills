@@ -1,0 +1,358 @@
+'use strict';
+// What a rebuild checks of the environment it writes a page's bindings into.
+//
+// A binding names what it goes through — a connection reference by the logical name a page calls it by, a Custom API by its unique name — and the spec can state the name and the connector the binding was made for
+// (`connectorId`) but cannot make the reference: a connection holds a user's sign-in, and a Custom API is a solution component. So before a rebuild writes a binding it reads what the environment has for the names
+// the spec states (readBindingTargets) and judges it (judgeBindingTargets):
+//   - a reference that exists for ANOTHER connector is refused. The page calls a binding through the reference's logical name, so it would call that connector's operation under this name, with the signed-in user's
+//     connection to it, and the name cannot tell the two apart. Nothing is guessed or made: the author gives the binding a name that is the right reference's, or states the connector this environment has;
+//   - a reference or a Custom API that is not there is said by name. The page is written with its binding all the same: the page finds the reference by name when it runs, so one made afterwards makes the page work
+//     without a rebuild;
+//   - a Custom API of the other kind (an Action for a Function) or bound to another table is said by name: the runtime refuses such a call before it is sent, so it is a warning and never a refusal;
+//   - a reference of the right connector that has NO connection is said by name — what a solution import leaves when no settings file gives one: the page's calls through it fail until it has one;
+//   - an operation a binding calls that the connector there does not define is said by name, where the environment holds the connector's definition. A connector the platform publishes — every connector that is
+//     not a custom one — has one definition for every environment of its cloud, the one the binding's operations were read from (connector.js), so a reference for the same connector offers them, and nothing is
+//     read for it. A CUSTOM connector's definition is a row of the environment it is in (the `connector` table's `openapidefinition`, which the reference points at through `customconnectorid`), and the copy
+//     there can be another version than the page was made with: that one is read, and an operation it does not define is a warning — the call fails, it does not reach another service.
+// A read that fails is said — the bindings were not checked — and never read as "nothing is there"; a row that answers without a column the check needs (successful but incomplete) is said the same way, as
+// not checked, and never read as "compatible". Nothing is refused without evidence that contradicts the binding.
+const { odataLit } = require('./odata.js');
+const { normalizePageSource } = require('./app-spec.js');
+const { PAGE_BINDINGS, statedPageBindings } = require('./page-bindings.js');
+
+// A filter is bounded: the names of a long list are read in requests of this many, not in one URL.
+const CHUNK = 25;
+// A name is quoted in a message as far as a reader needs to find it, not as far as it goes on.
+const MAX_SHOWN = 80;
+const shown = (name) => {
+  const text = String(name);
+  return text.length > MAX_SHOWN ? `${text.slice(0, MAX_SHOWN - 3)}...` : text;
+};
+const quoted = (name) => JSON.stringify(shown(name));
+
+// The name of a connector, whatever form its id is written in: the last segment of its path, lower-cased.
+//   /providers/Microsoft.PowerApps/apis/shared_msnweather   a connection reference's `connectorid`, and what the planner writes into a binding
+//   shared_msnweather                                       the bare name
+// Two ids name the same connector when their names are equal. A custom connector's name is `shared_<name>-5f<hash>`, and the same connector made separately in two environments has another hash in each, so a
+// binding made with one does not match the other: that is a conflict the author settles by stating the connector this environment has. null when there is no name.
+// See: https://learn.microsoft.com/power-platform/admin/connector-reference-in-the-environment
+function connectorKey(id) {
+  if (typeof id !== 'string') return null;
+  const last = id.trim().replace(/\/+$/, '').split('/').pop().toLowerCase();
+  return last || null;
+}
+
+// The connector ids that are COMPARED, each checked for its syntax first — a value of another shape is evidence of nothing, so it is never compared, and so never a conflict (it is reported as not checked).
+//   a reference row's `connectorid`  exactly the API id Dataverse writes: `/providers/Microsoft.PowerApps/apis/shared_<name>` — a standard connector (`shared_msnweather`) or a custom one
+//                                    (`shared_contoso-5fwidgets-5f6a8c`, whose own identity is the `_customconnectorid_value` lookup). `***`, a bare name, a number or an object is not one.
+//   a binding's `connectorId`        that API id, or its bare `shared_<name>` (both are what a spec may state; references/connectors.md)
+// Each answers the lower-cased connector name, or null.
+const CONNECTOR_API_ID = /^\/providers\/Microsoft\.PowerApps\/apis\/(shared_[A-Za-z0-9_.-]{1,128})$/i;
+const CONNECTOR_NAME = /^(shared_[A-Za-z0-9_.-]{1,128})$/i;
+const referenceConnectorKey = (id) => (typeof id === 'string' && CONNECTOR_API_ID.test(id) ? id.match(CONNECTOR_API_ID)[1].toLowerCase() : null);
+const bindingConnectorKey = (id) => (typeof id === 'string' && (CONNECTOR_API_ID.test(id) || CONNECTOR_NAME.test(id)) ? connectorKey(id) : null);
+
+// The pages a build writes that state a binding: [{ key, name, connectorBindings?, actionBindings? }], with the lists as the spec states them, in the spec's order. A page with no source the build can deploy is not
+// written, and a page that states no entry has nothing to check. A changed-only run writes the pages it selected and any page another one navigates to (the build makes an absent target first, from its own
+// spec entry, so it may have to write it), and no other.
+function pagesStatingBindings(spec, { changedOnly } = {}) {
+  const pages = Array.isArray(spec && spec.pages) ? spec.pages : [];
+  const selected = changedOnly && Array.isArray(changedOnly.selectedKeys) ? new Set(changedOnly.selectedKeys) : null;
+  const navigatedTo = new Set(pages.flatMap((page) => ((page && page.navigatesTo) || []).map((target) => target && target.targetKey)));
+  const out = [];
+  for (const page of pages) {
+    const source = normalizePageSource(page);
+    if (!(source && source.kind === 'tsx' && source.codeFile)) continue;
+    const key = page.key || page.name;
+    if (selected && !selected.has(key) && !navigatedTo.has(key)) continue;
+    const lists = statedPageBindings(page);
+    if (!Object.values(lists).some((list) => list.length)) continue;
+    out.push({ key, name: page.name, ...lists });
+  }
+  return out;
+}
+
+// The names the pages state for one kind of binding: each once, as the first page spells it (the service compares them without regard to case, and the match here is made in lower case).
+function namesOf(pages, kind) {
+  const identity = PAGE_BINDINGS[kind];
+  const names = new Map();
+  for (const page of pages) {
+    for (const entry of page[kind] || []) {
+      const name = entry && typeof entry[identity] === 'string' ? entry[identity].trim() : '';
+      if (name && !names.has(name.toLowerCase())) names.set(name.toLowerCase(), name);
+    }
+  }
+  return [...names.values()];
+}
+
+async function readNamed(provision, entity, select, column, names) {
+  const rows = [];
+  for (let at = 0; at < names.length; at += CHUNK) {
+    const filter = names.slice(at, at + CHUNK).map((name) => `${column} eq '${odataLit(name)}'`).join(' or ');
+    rows.push(...((await provision.queryRecords(entity, { select, filter, paginate: true })) || []));
+  }
+  return rows;
+}
+
+const text = (value) => (typeof value === 'string' && value.trim() ? value : undefined);
+
+const GUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+// The operations a binding calls (`operations`, the operation ids `executeConnectorOperation` is given), each once, in its order.
+function operationsOf(entry) {
+  const listed = entry && Array.isArray(entry.operations) ? entry.operations : [];
+  return [...new Set(listed.filter((operation) => typeof operation === 'string' && operation !== ''))];
+}
+
+// The HTTP methods under which a Swagger 2.0 path item holds an operation. Its other members — `parameters` (shared by its operations), `$ref`, an `x-ms-…` extension — are not operations.
+// See: https://swagger.io/specification/v2/#path-item-object
+const HTTP_METHODS = ['get', 'put', 'post', 'delete', 'options', 'head', 'patch'];
+
+// The operation ids a custom connector's definition declares — its `openapidefinition`, the Swagger 2.0 document the connector was made from, as text:
+//   { "swagger": "2.0", "info": { … }, "host": "widgets.contoso.example",
+//     "paths": { "/widgets": { "parameters": [ … ], "get": { "operationId": "ListWidgets", … }, "post": { "operationId": "AddWidget", … } }, "/widgets/{id}": { "get": { "operationId": "GetWidget", … } } } }
+// as a Set, matched exactly — case included — as the bundled SDK matches a connector's operation ids (projectConnectorOperations, which is how connector.js lists the ids a binding's `operations` hold).
+// null when the text is not such a document, or holds a path item it cannot see into (a `$ref` to one elsewhere): its operations are then NOT checked, which is never "it defines none".
+function definedOperations(definition) {
+  let document;
+  try {
+    document = typeof definition === 'string' ? JSON.parse(definition.replace(/^\uFEFF/, '')) : null;
+  } catch {
+    return null;
+  }
+  const paths = document && typeof document === 'object' && !Array.isArray(document) ? document.paths : null;
+  if (!paths || typeof paths !== 'object' || Array.isArray(paths)) return null;
+  const ids = new Set();
+  for (const item of Object.values(paths)) {
+    if (!item || typeof item !== 'object' || Array.isArray(item) || Object.prototype.hasOwnProperty.call(item, '$ref')) return null;
+    for (const method of HTTP_METHODS) {
+      const operation = item[method];
+      if (operation && typeof operation === 'object' && typeof operation.operationId === 'string' && operation.operationId !== '') ids.add(operation.operationId);
+    }
+  }
+  return ids;
+}
+
+// The definitions of the custom connectors `ids` names (lower-cased `connector` ids): Map<id, Set<operation id> | { problem }>. A connector the read does not return, a definition that is not a document
+// this reads (definedOperations), and a read that fails are each a `problem` of the connectors it concerns — never an empty definition.
+// A `connector` row as the Web API answers it (https://learn.microsoft.com/power-apps/developer/data-platform/reference/entities/connector):
+//   { "connectorid": "c0000000-0000-4000-8000-0000000000a1", "openapidefinition": "{\"swagger\":\"2.0\",\"paths\":{…}}" }
+async function readDefinitions(reader, ids) {
+  const definitions = new Map();
+  try {
+    if (!reader) throw new Error('the rows cannot be read here');
+    for (let at = 0; at < ids.length; at += CHUNK) {
+      const filter = ids.slice(at, at + CHUNK).map((id) => `connectorid eq ${id}`).join(' or ');
+      for (const row of (await reader.queryRecords('connector', { select: ['connectorid', 'openapidefinition'], filter, paginate: true })) || []) {
+        const id = row && typeof row.connectorid === 'string' ? row.connectorid.toLowerCase() : '';
+        if (!ids.includes(id) || definitions.has(id)) continue;
+        const defined = definedOperations(row.openapidefinition);
+        definitions.set(id, defined || { problem: 'its definition is not a Swagger document this build can read' });
+      }
+    }
+    for (const id of ids) if (!definitions.has(id)) definitions.set(id, { problem: 'no connector row of that id was found' });
+  } catch (error) {
+    for (const id of ids) definitions.set(id, { problem: String((error && error.message) || error) });
+  }
+  return definitions;
+}
+
+// What the environment has for the names `pages` state: { references, apis, definitions, problems }.
+//   references   Map<lower-cased logical name, { connectorId, connected?, customConnectorId? }> of the connection references (`connectionreference` rows) — or null when no page states a connector binding, or
+//                the read failed. Each piece is kept only as the row PROVES it, and anything else is left out — which judgeBindingTargets reads as "not known", never as "fine":
+//                  connectorId        the row's `connectorid` when it is a connector's API id (referenceConnectorKey); absent, null, blank or of any other shape leaves it out (the connector is then not compared)
+//                  connected          true or false when the row's `connectionid` is a text or null (null or blank: no connection); absent, or a value of another type, leaves it out (whether it has one is then
+//                                     not checked)
+//                  customConnectorId  the lower-cased GUID in `_customconnectorid_value`; absent, null or not a GUID leaves it out. A null lookup is NOT proof that the connector is not a custom one — a reference
+//                                     made through the Web API can leave it unset — so the operations through such a reference are reported as not checked, not as defined
+// SUCCESSFUL BUT INCOMPLETE: a read that answers 200 with a row that lacks a column is as much "not known" as a read that fails. Nothing here infers compatibility from a value that is not there.
+//   apis         Map<lower-cased unique name, { isFunction, boundEntity? }> of the Custom APIs (`customapi` rows) — or null likewise
+//   definitions  Map<custom connector id, Set<operation id> | { problem }> (readDefinitions) of the custom connectors a binding that calls operations goes through — or null when there is none
+//   problems     { references?, apis? }: why a read failed, as the service said it. A failed read does not stop the other, and is never an empty answer.
+// Only the rows of the names asked for are kept, whatever the service answered.
+// A connection reference row as the Web API answers it (https://learn.microsoft.com/power-apps/developer/data-platform/reference/entities/connectionreference); `connectionid` is null while it has no
+// connection, and `_customconnectorid_value` null when no custom connector is recorded for it:
+//   { "connectionreferencelogicalname": "contoso_msnweather", "connectorid": "/providers/Microsoft.PowerApps/apis/shared_msnweather", "connectionid": "shared-msnweather-…", "_customconnectorid_value": null }
+// and a Custom API row (https://learn.microsoft.com/power-apps/developer/data-platform/reference/entities/customapi), `bindingtype` 0 Global, 1 Entity, 2 EntityCollection:
+//   { "uniquename": "contoso_ApproveOrder", "isfunction": false, "bindingtype": 1, "boundentitylogicalname": "contoso_item" }
+async function readBindingTargets(provision, pages) {
+  const targets = { references: null, apis: null, definitions: null, problems: {} };
+  const reader = provision && typeof provision.queryRecords === 'function' ? provision : null;
+  const read = async (kind, entity, select, column, keyOf, valueOf, target) => {
+    const names = namesOf(pages, kind);
+    if (!names.length) return;
+    try {
+      if (!reader) throw new Error('the rows cannot be read here');
+      const wanted = new Set(names.map((name) => name.toLowerCase()));
+      const found = new Map();
+      for (const row of await readNamed(reader, entity, select, column, names)) {
+        const key = row && typeof keyOf(row) === 'string' ? keyOf(row).trim().toLowerCase() : '';
+        if (key && wanted.has(key) && !found.has(key)) found.set(key, valueOf(row));
+      }
+      targets[target] = found;
+    } catch (error) {
+      targets.problems[target] = String((error && error.message) || error);
+    }
+  };
+  await read('connectorBindings', 'connectionreference', ['connectionreferencelogicalname', 'connectorid', 'connectionid', '_customconnectorid_value'], 'connectionreferencelogicalname',
+    (row) => row.connectionreferencelogicalname,
+    (row) => ({
+      // Only a connector id of the shape Dataverse writes is kept (referenceConnectorKey): a malformed one is left out, and so read as not known — never as a connector to refuse a binding over.
+      ...(referenceConnectorKey(row.connectorid) ? { connectorId: row.connectorid } : {}),
+      // A text is the connection (blank: none), and null is none; any other value — a number, an object — says nothing, and is left out like an absent column.
+      ...(row.connectionid === null || typeof row.connectionid === 'string' ? { connected: Boolean(text(row.connectionid)) } : {}),
+      ...(typeof row._customconnectorid_value === 'string' && GUID.test(row._customconnectorid_value) ? { customConnectorId: row._customconnectorid_value.toLowerCase() } : {}),
+    }), 'references');
+  // The definitions of the custom connectors the bindings that call operations go through — each once, by id. A binding that calls none needs none, and one whose reference names no custom connector cannot
+  // be given one: its operations are reported as not checked (judgeBindingTargets).
+  if (targets.references instanceof Map) {
+    const ids = [];
+    for (const page of pages) {
+      for (const entry of page.connectorBindings || []) {
+        const name = entry && typeof entry[PAGE_BINDINGS.connectorBindings] === 'string' ? entry[PAGE_BINDINGS.connectorBindings].trim().toLowerCase() : '';
+        const reference = name ? targets.references.get(name) : undefined;
+        if (reference && reference.customConnectorId && operationsOf(entry).length && !ids.includes(reference.customConnectorId)) ids.push(reference.customConnectorId);
+      }
+    }
+    if (ids.length) targets.definitions = await readDefinitions(reader, ids);
+  }
+  await read('actionBindings', 'customapi', ['uniquename', 'isfunction', 'bindingtype', 'boundentitylogicalname'], 'uniquename',
+    (row) => row.uniquename,
+    (row) => ({ isFunction: row.isfunction === true, ...(text(row.boundentitylogicalname) && Number(row.bindingtype) !== 0 ? { boundEntity: row.boundentitylogicalname } : {}) }), 'apis');
+  return targets;
+}
+
+const joined = (names) => names.map(shown).join(', ');
+const plural = (names, one, many) => (names.length === 1 ? one : many);
+const pagesWords = (pages) => `${plural(pages, 'page', 'pages')} ${pages.map((page) => quoted(page.name)).join(', ')}`;
+
+// What `targets` says of the bindings `pages` state: { findings, unchecked }.
+//   findings   [{ severity: 'refuse' | 'warn', kind, page: { key, name }, text, … }], a page at a time, in the order a page lists its bindings: its connector conflicts, the references it has none of, the references it
+//              has with no connection, the operations a custom connector there does not define, the Custom APIs it has none of, the Custom APIs that are not as the binding says. `refuse` is a connector conflict
+//              and nothing else: a binding that is refused is not judged further.
+//   unchecked  [{ what, text }] for what could not be checked, and why: a page at a time, what its references' rows did not say (their connector, whether they have a connection, which custom connector they
+//              are for), then the operations of a binding whose custom connector's definition could not be read; then each read that failed. Missing evidence is never a finding and never "compatible".
+function judgeBindingTargets(pages, targets) {
+  const findings = [];
+  const unchecked = [];
+  const nameOf = (entry, identity) => (entry && typeof entry[identity] === 'string' && entry[identity].trim() ? entry[identity].trim() : undefined);
+  const sameName = (names, name) => names.some((seen) => seen.toLowerCase() === name.toLowerCase());
+  for (const page of pages) {
+    const at = { key: page.key, name: page.name };
+    const connectors = (page.connectorBindings || []).filter((entry) => nameOf(entry, PAGE_BINDINGS.connectorBindings));
+    const actions = (page.actionBindings || []).filter((entry) => nameOf(entry, PAGE_BINDINGS.actionBindings));
+    const missingReferences = [];
+    const disconnected = [];
+    const undefinedOperations = [];
+    // What the rows did not say (readBindingTargets keeps a piece only as a row proves it): kept apart from what they said, and reported as not checked.
+    const connectorUnknown = [];
+    const connectionUnknown = [];
+    const customUnknown = [];
+    const missingApis = [];
+    const mismatches = [];
+    if (targets.references instanceof Map) {
+      for (const entry of connectors) {
+        const name = nameOf(entry, PAGE_BINDINGS.connectorBindings);
+        const reference = targets.references.get(name.toLowerCase());
+        if (!reference) {
+          if (!sameName(missingReferences, name)) missingReferences.push(name);
+          continue;
+        }
+        // A conflict is only ever PROVEN: both sides name a connector, and they are not the same one.
+        const expected = bindingConnectorKey(entry.connectorId);
+        const found = referenceConnectorKey(reference.connectorId);
+        if (expected && found && expected !== found) {
+          findings.push({
+            severity: 'refuse', kind: 'connector-conflict', page: at, binding: name, expected, found,
+            text: `page ${quoted(page.name)}: connector binding ${quoted(name)} is for connector ${shown(expected)}, but the connection reference of that name in this environment is for connector ${shown(found)}`,
+          });
+          continue;
+        }
+        // The binding names a connector and the row did not say which one the reference is for: nothing contradicts the binding, and nothing proves it either.
+        if (expected && !found && !sameName(connectorUnknown, name)) connectorUnknown.push(name);
+        // Only a row that says it has no connection is one with none; a row that does not carry the column says nothing (readBindingTargets).
+        if (reference.connected === false && !sameName(disconnected, name)) disconnected.push(name);
+        if (reference.connected === undefined && !sameName(connectionUnknown, name)) connectionUnknown.push(name);
+        // The operations of a custom connector, whose definition is the environment's own (see the header). A reference that names no custom connector — the lookup absent, null or not a GUID — is not
+        // proven to be for a connector the platform publishes, so its operations are not checked, and that is said.
+        const operations = operationsOf(entry);
+        if (!operations.length) continue;
+        if (!reference.customConnectorId) {
+          if (!sameName(customUnknown, name)) customUnknown.push(name);
+          continue;
+        }
+        const defined = targets.definitions instanceof Map ? targets.definitions.get(reference.customConnectorId) : undefined;
+        if (!(defined instanceof Set)) {
+          const why = defined && defined.problem ? defined.problem : 'its definition was not read';
+          const said = `could not read the definition of the custom connector that connection reference ${shown(name)} is for in this environment (${shown(why)}), so the operations connector binding ${quoted(name)} of page ${quoted(page.name)} calls were not checked against it`;
+          if (!unchecked.some((u) => u.text === said)) unchecked.push({ what: 'custom connector definitions', text: said });
+          continue;
+        }
+        const absent = operations.filter((operation) => !defined.has(operation));
+        if (!absent.length) continue;
+        const said = `page ${quoted(page.name)}: connector binding ${quoted(name)} calls ${plural(absent, 'operation', 'operations')} ${joined(absent)}, which the custom connector that connection reference is for in this environment does not define, so the page's ${plural(absent, 'call to it fails', 'calls to them fail')} there until it does (import the solution that holds the connector as the page was made with it)`;
+        if (!undefinedOperations.some((u) => u.text === said)) undefinedOperations.push({ binding: name, operations: absent, text: said });
+      }
+    }
+    if (missingReferences.length) {
+      findings.push({
+        severity: 'warn', kind: 'reference-missing', page: at, names: missingReferences,
+        text: `page ${quoted(page.name)}: ${plural(missingReferences, 'connection reference', 'connection references')} ${joined(missingReferences)} ${plural(missingReferences, 'is', 'are')} not in this environment, so the page is written with ${plural(missingReferences, 'a binding', 'bindings')} it cannot resolve yet. A page finds its connector by the ${plural(missingReferences, "reference's logical name", "references' logical names")}: create the ${plural(missingReferences, 'reference', 'references')} here (create-connection-reference.js, or import the solution that holds ${plural(missingReferences, 'it', 'them')}) and the page works without a rebuild`,
+      });
+    }
+    if (disconnected.length) {
+      const them = plural(disconnected, 'it', 'them');
+      findings.push({
+        severity: 'warn', kind: 'connection-missing', page: at, names: disconnected,
+        text: `page ${quoted(page.name)}: ${plural(disconnected, 'connection reference', 'connection references')} ${joined(disconnected)} ${plural(disconnected, 'is', 'are')} in this environment but ${plural(disconnected, 'has', 'have')} no connection, so the page's calls through ${them} fail until ${plural(disconnected, 'it has', 'they have')} one. Give ${them} a connection (import the solution that holds ${them} with a settings file that does: solution-settings.js, or set ${them} in Power Apps, in the solution's connection references) and the page works without a rebuild`,
+      });
+    }
+    for (const missing of undefinedOperations) findings.push({ severity: 'warn', kind: 'operation-missing', page: at, binding: missing.binding, operations: missing.operations, text: missing.text });
+    // What the rows did not say, a page at a time and by name: never "fine", never a refusal.
+    const bindingsWords = (names) => `${plural(names, 'connector binding', 'connector bindings')} ${names.map(quoted).join(', ')} of page ${quoted(page.name)}`;
+    if (connectorUnknown.length) unchecked.push({ what: 'reference connectors', text: `this environment's ${plural(connectorUnknown, 'row', 'rows')} for connection ${plural(connectorUnknown, 'reference', 'references')} ${joined(connectorUnknown)} did not give a connector id this build can read (absent, or not of the form /providers/Microsoft.PowerApps/apis/shared_<name>), so whether ${bindingsWords(connectorUnknown)} ${plural(connectorUnknown, 'goes', 'go')} through the connector ${plural(connectorUnknown, 'it was', 'they were')} made for was not checked` });
+    if (connectionUnknown.length) unchecked.push({ what: 'reference connections', text: `this environment's ${plural(connectionUnknown, 'row', 'rows')} for connection ${plural(connectionUnknown, 'reference', 'references')} ${joined(connectionUnknown)} did not say, in a form this build can read, whether ${plural(connectionUnknown, 'it has', 'they have')} a connection, so that was not checked for page ${quoted(page.name)}` });
+    if (customUnknown.length) unchecked.push({ what: 'custom connector definitions', text: `the operations that ${bindingsWords(customUnknown)} call were not checked: this environment does not name a custom connector for ${plural(customUnknown, 'its connection reference', 'their connection references')}, and only a custom connector's definition is read here (a connector the platform publishes defines the same operations in every environment of its cloud)` });
+    if (targets.apis instanceof Map) {
+      for (const entry of actions) {
+        const name = nameOf(entry, PAGE_BINDINGS.actionBindings);
+        const api = targets.apis.get(name.toLowerCase());
+        if (!api) {
+          if (!sameName(missingApis, name)) missingApis.push(name);
+          continue;
+        }
+        // `isFunction` that is not stated is an Action, as references/custom-api.md says; `boundEntityLogicalName` that is not stated is a Global operation.
+        const refused = (what) => `the runtime refuses the call (${what})`;
+        if (Boolean(entry.isFunction) !== api.isFunction) {
+          mismatches.push({
+            binding: name,
+            text: `page ${quoted(page.name)}: Custom API binding ${quoted(name)} says it is ${entry.isFunction ? 'a Function' : 'an Action'}, but the Custom API of that name in this environment is ${api.isFunction ? 'a Function' : 'an Action'} — ${refused('wrong_operation_kind')}`,
+          });
+        }
+        const wantsTable = text(entry.boundEntityLogicalName);
+        if ((wantsTable || '').toLowerCase() !== (api.boundEntity || '').toLowerCase()) {
+          const says = wantsTable ? `is bound to table ${shown(wantsTable)}` : 'is for a Global operation';
+          const finds = api.boundEntity ? `is bound to table ${shown(api.boundEntity)}` : 'is Global';
+          mismatches.push({ binding: name, text: `page ${quoted(page.name)}: Custom API binding ${quoted(name)} ${says}, but the Custom API of that name in this environment ${finds} — ${refused('invalid_bound_to')}` });
+        }
+      }
+    }
+    if (missingApis.length) {
+      findings.push({
+        severity: 'warn', kind: 'api-missing', page: at, names: missingApis,
+        text: `page ${quoted(page.name)}: ${plural(missingApis, 'Custom API', 'Custom APIs')} ${joined(missingApis)} ${plural(missingApis, 'is', 'are')} not in this environment (list-custom-apis.js lists what it has), so a call through ${plural(missingApis, 'the binding is', 'a binding is')} refused until ${plural(missingApis, 'it is', 'they are')} deployed here`,
+      });
+    }
+    for (const mismatch of mismatches) findings.push({ severity: 'warn', kind: 'api-mismatch', page: at, binding: mismatch.binding, text: mismatch.text });
+  }
+  const unread = (what, kind, problem, listed) => {
+    if (!problem) return;
+    const affected = pages.filter((page) => (page[kind] || []).some((entry) => nameOf(entry, PAGE_BINDINGS[kind])));
+    if (affected.length) unchecked.push({ what, text: `could not read this environment's ${what} (${shown(problem)}), so the ${listed} of ${pagesWords(affected)} were not checked against them` });
+  };
+  unread('connection references', 'connectorBindings', targets.problems && targets.problems.references, 'connector bindings');
+  unread('Custom APIs', 'actionBindings', targets.problems && targets.problems.apis, 'Custom API bindings');
+  return { findings, unchecked };
+}
+
+module.exports = { connectorKey, pagesStatingBindings, readBindingTargets, judgeBindingTargets, definedOperations };

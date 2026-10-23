@@ -6,8 +6,10 @@ const { pageStructureProblems } = require('../../../../plugins/model-apps/script
 const { workflowCalls, isGeneration, isUpload, isMutation, resultObject, unassociatedCallProblems } = require('./workflow-evidence.js');
 const { artifactText, artifactJson, commandInfo, fileName, isGuid, pathKey } = require('./evidence-utils.js');
 const { planSection, parseMarkdownRows } = require('./plan-evidence.js');
-const { actionCalls, literalString, objectFields, receiverIsDataApi, escapeRe } = require('./source-evidence.js');
-const { desiredBindings, sameBindings } = require('./upload-contract.js');
+const { actionCalls, literalString, objectFields, receiverIsDataApi, stringRecordMemberIsInput, escapeRe } = require('./source-evidence.js');
+const {
+  desiredBindings, sameBindings, uploadResultIdentityMatches, beforePageIdentityProblems, sameRecordedEnvironment,
+} = require('./upload-contract.js');
 
 const KINDS = new Set(Object.values(PARAMETER_KIND_BY_TYPE));
 const isGate = (command) => /\bfeature-flags\.js\b[^\n]*\bcustom-api\b/.test(command);
@@ -39,14 +41,36 @@ function planBindings(fixture) {
 }
 
 function projectBinding(entry) {
-  if (!entry || typeof entry.name !== 'string' || typeof entry.isFunction !== 'boolean' || !entry.displayName
-    || !entry.parameterKinds || Object.values(entry.parameterKinds).some((kind) => !KINDS.has(kind))) {
+  if (!entry || typeof entry.name !== 'string' || typeof entry.isFunction !== 'boolean'
+    || typeof entry.displayName !== 'string' || !entry.displayName
+    || !entry.parameterKinds || typeof entry.parameterKinds !== 'object' || Array.isArray(entry.parameterKinds)
+    || Object.values(entry.parameterKinds).some((kind) => !KINDS.has(kind))) {
     throw new Error('discovered/bound API is missing its name, kind, display name or parameter kinds');
   }
   if (entry.bindingType && !['Global', 'Entity'].includes(entry.bindingType)) throw new Error('collection-bound API is not a supported record binding');
   if (entry.bindingType === 'Global' && entry.boundEntityLogicalName) throw new Error('global API incorrectly declares a bound entity');
+  if (entry.boundEntityLogicalName !== undefined
+    && (typeof entry.boundEntityLogicalName !== 'string' || !entry.boundEntityLogicalName)) {
+    throw new Error('bound API has an unreadable bound entity');
+  }
   return { name: entry.name, isFunction: entry.isFunction, displayName: entry.displayName, parameterKinds: entry.parameterKinds,
     ...(entry.boundEntityLogicalName && { boundEntityLogicalName: entry.boundEntityLogicalName }) };
+}
+
+function discoveredLookupParameters(entry) {
+  const lookups = entry.lookupParameters;
+  if (lookups === undefined) return {};
+  if (!lookups || typeof lookups !== 'object' || Array.isArray(lookups)) {
+    throw new Error(`${entry.name}: unreadable discovery-only lookup parameters`);
+  }
+  for (const [name, lookup] of Object.entries(lookups)) {
+    if (!name || Object.hasOwn(entry.parameterKinds, name) || !lookup || typeof lookup !== 'object'
+      || Array.isArray(lookup) || typeof lookup.isOptional !== 'boolean'
+      || (lookup.logicalEntityName !== undefined && (typeof lookup.logicalEntityName !== 'string' || !lookup.logicalEntityName))) {
+      throw new Error(`${entry.name}.${name}: unreadable discovery-only lookup metadata`);
+    }
+  }
+  return lookups;
 }
 
 function customApiGateProblems(fixture) {
@@ -70,7 +94,7 @@ function customApiGateProblems(fixture) {
   }
   if (bindings.length && !calls.some((call) => isGate(call.command))) problems.push('Custom API table has no applicable feature gate');
   if (fixture.manifest?.expectedOutcome === 'refused') {
-    if (latest === 'enabled' || !bindings.length || (fixture.files || []).length || calls.some((call) => isGeneration(call.command) || isMutation(call.command))) {
+    if (latest === 'enabled' || !bindings.length || (fixture.files || []).length || calls.some((call) => isGeneration(call.command) || isMutation(call))) {
       problems.push('Custom API refusal must have a blocked gate and zero generation or mutations');
     }
     if (!/\bhalt(?:ed)?\b|\bneeds_input\b/i.test(fixture.workflowLog || '')) problems.push('Custom API gate refusal did not surface a halt');
@@ -88,10 +112,39 @@ function parameterMatches(value, kind, prefix) {
   if (kind === 'Boolean') return /^(true|false)$/.test(value) || annotation === 'boolean';
   if (kind === 'DateTime') return annotation === 'Date' || (literal !== null && /^\d{4}-\d\d-\d\dT/.test(literal));
   if (kind === 'StringArray') return annotation === 'string[]';
-  return value.trim().startsWith('{') || (kind === 'EntityCollection' && value.trim().startsWith('['));
+  return false;
 }
 
-function runtimeProblems(code, bindings, declaredOutputs) {
+function existingRecordId(value, prefix, call) {
+  if (literalString(value) !== null) return false;
+  return (/^[\w$]+$/.test(value) && parameterMatches(value, 'Guid', prefix))
+    || Boolean(call && stringRecordMemberIsInput(call.mask, call.scopes, value, call.start));
+}
+
+function lookupParameterProblems(parameters, lookups, operation, prefix, call) {
+  const problems = [];
+  for (const [name, lookup] of Object.entries(lookups)) {
+    if (!parameters.has(name)) {
+      if (!lookup.isOptional) problems.push(`${operation}.${name}: required discovered lookup input is missing`);
+      continue;
+    }
+    let fields;
+    try { fields = objectFields(parameters.get(name)); }
+    catch { problems.push(`${operation}.${name}: lookup must be the structural { entityName, id } object`); continue; }
+    const entity = literalString(fields.get('entityName') || '');
+    if (fields.size !== 2 || !entity || !fields.has('id')) {
+      problems.push(`${operation}.${name}: lookup must have exactly entityName and id`);
+    } else if (lookup.logicalEntityName && entity !== lookup.logicalEntityName) {
+      problems.push(`${operation}.${name}: lookup table disagrees with discovery`);
+    }
+    if (!existingRecordId(fields.get('id') || '', prefix, call)) {
+      problems.push(`${operation}.${name}: lookup id must come from string-typed existing page input, never an invented or numeric id`);
+    }
+  }
+  return problems;
+}
+
+function runtimeProblems(code, bindings, declaredOutputs, lookupMetadata) {
   const problems = pageStructureProblems(code);
   const calls = actionCalls(code);
   const known = new Map(bindings.map((binding) => [binding.name, binding]));
@@ -115,17 +168,25 @@ function runtimeProblems(code, bindings, declaredOutputs) {
     const match = presence.exec(prefixMask);
     if (!match || !/^['"]function['"]/.test(prefix.slice(match.index + match[0].length - 1))) problems.push(`${name}: method is not presence-checked on the same receiver in its helper before the call`);
     const parameters = call.fields.has('parameters') ? objectFields(call.fields.get('parameters')) : new Map();
-    if ([...parameters.keys()].sort().join('|') !== Object.keys(binding.parameterKinds).sort().join('|')) problems.push(`${name}: runtime parameter names differ from the declared kinds`);
+    // Sparse declared kinds do not enumerate lookup inputs. Use discovery-only metadata to allow
+    // their names and enforce required lookups without persisting structural kinds in the binding.
+    const lookups = lookupMetadata.get(name) || {};
+    const allowed = new Set([...Object.keys(binding.parameterKinds), ...Object.keys(lookups)]);
+    if ([...parameters.keys()].some((parameter) => !allowed.has(parameter))
+      || Object.keys(binding.parameterKinds).some((parameter) => !parameters.has(parameter))) {
+      problems.push(`${name}: runtime parameter names differ from the declared kinds and discovered lookups`);
+    }
     for (const [parameter, kind] of Object.entries(binding.parameterKinds)) {
       if (!parameterMatches(parameters.get(parameter) || '', kind, prefix)) problems.push(`${name}.${parameter}: runtime value does not match ${kind}`);
     }
+    problems.push(...lookupParameterProblems(parameters, lookups, name, prefix, call));
     if (binding.boundEntityLogicalName) {
       if (!call.fields.has('boundTo')) problems.push(`${name}: entity-bound operation omits boundTo`);
       else {
         const bound = objectFields(call.fields.get('boundTo'));
         if (literalString(bound.get('entityName') || '') !== binding.boundEntityLogicalName) problems.push(`${name}: boundTo uses the wrong entity`);
         const id = bound.get('id') || '';
-        if (literalString(id) !== null || !/^[\w$.]+$/.test(id) || !parameterMatches(id, 'Guid', prefix)) {
+        if (!existingRecordId(id, prefix)) {
           problems.push(`${name}: bound record id must come from string-typed existing page input, never a hard-coded GUID or numeric value`);
         }
       }
@@ -163,12 +224,64 @@ function customApiProblems(fixture) {
   const declared = planBindings(fixture);
   const calls = workflowCalls(fixture);
   const discovered = new Map();
+  const lookupMetadata = new Map();
   for (const call of calls.filter((entry) => /\blist-custom-apis\.js\b/.test(entry.command))) {
     const result = resultObject(call);
     if (result?.ok !== true || !Array.isArray(result.customApis)) problems.push('Custom API discovery failed or returned unreadable metadata');
-    else for (const entry of result.customApis) discovered.set(entry.name, projectBinding(entry));
+    else for (const entry of result.customApis) {
+      discovered.set(entry.name, projectBinding(entry));
+      lookupMetadata.set(entry.name, discoveredLookupParameters(entry));
+    }
   }
-  for (const binding of declared) if (!isDeepStrictEqual(discovered.get(binding.name), binding)) problems.push(`${binding.name}: plan kind, bound entity or parameter kinds do not match discovery`);
+  const beforeByStage = new Map();
+  const verifiedBefore = new Set();
+  const producedConfigs = new Map();
+  for (const stage of contract.stages) {
+    const uploads = calls.filter((entry) => entry.id === stage.upload && isUpload(entry.command));
+    const call = uploads.length === 1 ? uploads[0] : null;
+    const flags = call ? commandInfo(call).flags : {};
+    const result = call ? resultObject(call) : null;
+    if (stage.beforeConfig) {
+      const config = artifactJson(fixture, stage.beforeConfig);
+      const before = config.actionBindings === undefined ? [] : config.actionBindings;
+      desiredBindings(before, undefined, 'name');
+      for (const binding of before) projectBinding(binding);
+      beforeByStage.set(stage, before);
+      const identityProblems = [];
+      if (!call || !flags['page-id'] || result?.ok !== true || !uploadResultIdentityMatches(flags, result)) {
+        identityProblems.push(`${stage.id}: before-config preservation requires an unambiguous existing update target`);
+      }
+      const rows = fixture.manifest?.uploads;
+      if (rows !== undefined) {
+        const associated = Array.isArray(rows) ? rows.filter((row) => row.event === stage.upload) : [];
+        if (associated.length !== 1) {
+          identityProblems.push(`${stage.id}: before-page identity evidence has no unique upload association`);
+        } else if (call) {
+          identityProblems.push(...beforePageIdentityProblems(fixture, associated[0], call, stage.beforeConfig, stage.afterConfig));
+        }
+      } else {
+        // A prior successful lifecycle stage can associate its exact read-back snapshot with its
+        // result identity. A first-stage arbitrary artifact path cannot establish page ownership.
+        const prior = producedConfigs.get(pathKey(stage.beforeConfig));
+        if (!prior || prior.pageId !== flags['page-id'] || prior.appId !== flags['app-id']) {
+          identityProblems.push(`${stage.id}: before-config lacks same-page/app identity provenance`);
+        } else if (prior.env !== undefined && !sameRecordedEnvironment(prior.env, flags.env)) {
+          identityProblems.push(`${stage.id}: before-config environment differs from the update target`);
+        }
+      }
+      problems.push(...identityProblems);
+      if (!identityProblems.length) verifiedBefore.add(stage);
+    }
+    if (call && result?.ok === true && uploadResultIdentityMatches(flags, result)) {
+      producedConfigs.set(pathKey(stage.afterConfig), { pageId: result.pageId, appId: result.appId, env: flags.env });
+    }
+  }
+  const beforeBindings = [...verifiedBefore].flatMap((stage) => beforeByStage.get(stage));
+  for (const binding of declared) {
+    const fresh = isDeepStrictEqual(discovered.get(binding.name), binding);
+    const existing = beforeBindings.some((before) => isDeepStrictEqual(projectBinding(before), binding));
+    if (!fresh && !existing) problems.push(`${binding.name}: plan kind, bound entity or parameter kinds do not match discovery or unchanged before-config evidence`);
+  }
   let previousId = null;
   for (const stage of contract.stages) {
     const uploadIndex = calls.findIndex((call) => call.id === stage.upload);
@@ -179,7 +292,7 @@ function customApiProblems(fixture) {
     if (fileName(flags['code-file']) !== stage.target || result?.ok !== true) problems.push(`${stage.id}: upload target/result does not match the generated API page`);
     if (previousId && (flags['page-id'] !== previousId || result.pageId !== previousId)) problems.push(`${stage.id}: update changes the API page's identity`);
     previousId = result?.pageId;
-    const before = stage.beforeConfig ? artifactJson(fixture, stage.beforeConfig).actionBindings || [] : declared;
+    const before = stage.beforeConfig ? beforeByStage.get(stage) : declared;
     const desired = stage.beforeConfig ? desiredBindings(before, stage.change, 'name') : declared;
     if (stage.beforeConfig && stage.change === undefined && flags.actions) problems.push(`${stage.id}: unchanged APIs must omit --actions`);
     if (!stage.beforeConfig || stage.change !== undefined) {
@@ -189,14 +302,20 @@ function customApiProblems(fixture) {
     }
     const after = artifactJson(fixture, stage.afterConfig).actionBindings;
     if (!sameBindings(after, desired, 'name')) problems.push(`${stage.id}: API config read-back loses preservation or explicit-clear intent`);
+    const authoredNames = new Set((stage.change?.add || []).map((binding) => binding.name));
     for (const binding of desired) {
       const projected = projectBinding(binding);
-      if (!isDeepStrictEqual(discovered.get(binding.name), projected)) problems.push(`${binding.name}: actions file differs from discovered metadata`);
+      const fresh = isDeepStrictEqual(discovered.get(binding.name), projected);
+      // Only an exact unchanged stage-before entry has preservation provenance. An explicit
+      // addition/replacement still needs eligible discovery, even when its name already existed.
+      const preserved = verifiedBefore.has(stage) && !authoredNames.has(binding.name)
+        && before.some((entry) => isDeepStrictEqual(entry, binding));
+      if (!fresh && !preserved) problems.push(`${binding.name}: actions file differs from discovered metadata or unchanged before-config evidence`);
     }
     const code = artifactText(fixture, stage.source);
     const write = calls.slice(0, uploadIndex).filter((entry) => /^Write\s+/.test(entry.command) && fileName(entry.command.slice(6)) === stage.target).at(-1);
     if (!write || artifactText(fixture, write.artifact) !== code) problems.push(`${stage.id}: uploaded API source is not the actual preceding generated snapshot`);
-    problems.push(...runtimeProblems(code, desired, contract.outputs));
+    problems.push(...runtimeProblems(code, desired, contract.outputs, lookupMetadata));
   }
   const last = contract.stages.at(-1);
   if (artifactText(fixture, last.target) !== artifactText(fixture, last.source)) problems.push('final API TSX differs from the final lifecycle stage');

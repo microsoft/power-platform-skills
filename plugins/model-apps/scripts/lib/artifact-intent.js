@@ -11,7 +11,7 @@
 // the SDK's generic mutation surface without hardcoding form-model logic everywhere.
 
 const { entityByLogical } = require('./_graph.js');
-const { lookupColumnsFor, generatedTabName, generatedSectionName, formColumnsOf, authoredSectionNames, authoredTabNames } = require('./app-spec.js');
+const { lookupColumnsFor, generatedTabName, generatedSectionName, formColumnsOf, authoredSectionNames, authoredTabNames, FIELD_OPTION_KEYS } = require('./app-spec.js');
 const { SDK_COLUMN_TYPE } = require('./entity-provision.js');
 const { timelineCellIntent, timelineRowsIntent, wantsTimeline } = require('./form-timeline.js');
 
@@ -97,7 +97,7 @@ function equalColumnWidths(n) {
 
 // Minimal push-ready bound-field cell.
 //
-// SDK T4 tenet: mutations express intent; the adapter applies defaults. The SDK
+// SDK tenet: mutations express intent; the adapter applies defaults. The SDK
 // adapter derives classId from the Dataverse attribute type and label from the
 // attribute's display name. Precomputing classId or label here would drift from the
 // adapter's metadata-derived values and mis-render on foreign or renamed attributes.
@@ -159,6 +159,36 @@ function fieldCellIntent(logical, opts) {
 // custom control — but validateAppSpec emits a warning so the choice is deliberate rather than accidental.
 const NON_FORM_RENDERABLE_TYPES = new Set(['BigInt']);
 
+// A span is `undefined` only when the author SAID NOTHING. An explicit 1 is preserved as 1: the
+// previous rule mapped every value <= 1 to undefined, which made "author asked for the default"
+// and "author said nothing" IDENTICAL — the opposite of what its comment claimed. The consequence
+// was live-reproduced: changing an authored colspan from 2 to 1 compiled to "no colspan",
+// reconcile read that as "no desired span", and the deployed cell stayed at 2 across two applies.
+function optSpan(v) {
+  if (v === undefined || v === null || v === '') return undefined; // said nothing
+  const n = Number(v);
+  return Number.isFinite(n) && n >= 1 ? Math.floor(n) : undefined; // an explicit 1 IS intent
+}
+
+// How each per-field option reaches the canonical entry, the same from both routes that declare one
+// (an inline `fields[]` entry and a form-level `fieldOptions` entry). The projection walks
+// FIELD_OPTION_KEYS (app-spec.js), the list validation accepts, so the two cannot drift apart: a key
+// added there without a projector here fails the first compile, and a key that is not there never
+// reaches a form, because the spec gate refuses it instead of this projection dropping it in silence.
+const FIELD_OPTION_PROJECTORS = {
+  readOnly: (v) => v === true,
+  hidden: (v) => v === true,
+  after: (v) => (v ? String(v).toLowerCase() : undefined),
+  colspan: optSpan,
+  rowspan: optSpan,
+};
+
+function projectFieldOptions(name, source) {
+  const entry = { name };
+  for (const key of FIELD_OPTION_KEYS) entry[key] = FIELD_OPTION_PROJECTORS[key](source[key]);
+  return entry;
+}
+
 // Normalize one entry of `tabs[].sections[].fields[]`.
 //
 // An entry is either a bare logical name (the original and still most common shape) or an object
@@ -170,30 +200,12 @@ const NON_FORM_RENDERABLE_TYPES = new Set(['BigInt']);
 //   { "name": "co_description",    "colspan": 2 }
 // Returns a canonical { name, readOnly, hidden, after, colspan, rowspan } with `name`/`after`
 // lower-cased, because every downstream comparison (form field logicals, cell pointers, Dataverse
-// attribute logical names) is lower-case.
-//
-// A span is `undefined` only when the author SAID NOTHING. An explicit 1 is preserved as 1: the
-// previous rule mapped every value <= 1 to undefined, which made "author asked for the default"
-// and "author said nothing" IDENTICAL — the opposite of what its comment claimed. The consequence
-// was live-reproduced: changing an authored colspan from 2 to 1 compiled to "no colspan",
-// reconcile read that as "no desired span", and the deployed cell stayed at 2 across two applies.
+// attribute logical names) is lower-case. Spans keep optSpan's omission-vs-value rule.
 function normalizeFieldEntry(entry) {
-  const span = (v) => {
-    if (v === undefined || v === null || v === '') return undefined; // said nothing
-    const n = Number(v);
-    return Number.isFinite(n) && n >= 1 ? Math.floor(n) : undefined; // an explicit 1 IS intent
-  };
   if (entry && typeof entry === 'object' && !Array.isArray(entry)) {
-    return {
-      name: String(entry.name || '').toLowerCase(),
-      readOnly: entry.readOnly === true,
-      hidden: entry.hidden === true,
-      after: entry.after ? String(entry.after).toLowerCase() : undefined,
-      colspan: span(entry.colspan),
-      rowspan: span(entry.rowspan),
-    };
+    return projectFieldOptions(String(entry.name || '').toLowerCase(), entry);
   }
-  return { name: String(entry || '').toLowerCase(), readOnly: false, hidden: false, after: undefined, colspan: undefined, rowspan: undefined };
+  return projectFieldOptions(String(entry || '').toLowerCase(), {});
 }
 
 // Form-level per-field control options, keyed by column logical name:
@@ -202,12 +214,6 @@ function normalizeFieldEntry(entry) {
 // This is the ONLY way to reach these attributes under an AUTO layout, which has no field list to
 // hang an inline object off. Under an EXPLICIT layout both work and the inline entry wins, because
 // the more specific declaration should not be silently overridden by a form-wide default.
-function optSpan(v) {
-  if (v === undefined || v === null || v === '') return undefined;
-  const n = Number(v);
-  return Number.isFinite(n) && n >= 1 ? Math.floor(n) : undefined;
-}
-
 function fieldOptionsMap(formSpec) {
   const map = {};
   const fo = formSpec && formSpec.fieldOptions;
@@ -215,15 +221,7 @@ function fieldOptionsMap(formSpec) {
   for (const key of Object.keys(fo)) {
     const v = fo[key];
     if (!v || typeof v !== 'object' || Array.isArray(v)) continue;
-    map[String(key).toLowerCase()] = {
-      name: String(key).toLowerCase(),
-      readOnly: v.readOnly === true,
-      hidden: v.hidden === true,
-      after: v.after ? String(v.after).toLowerCase() : undefined,
-      // Same omission-vs-value rule as normalizeFieldEntry: an explicit 1 is a claim, absence is not.
-      colspan: optSpan(v.colspan),
-      rowspan: optSpan(v.rowspan),
-    };
+    map[String(key).toLowerCase()] = projectFieldOptions(String(key).toLowerCase(), v);
   }
   return map;
 }
@@ -274,7 +272,7 @@ function notesSectionIntent(notesClassId) {
   };
 }
 
-// #5 (2026-07-15 review): a full-width (1-column) SectionIntent that hosts ONLY a sub-grid control.
+// A full-width (1-column) SectionIntent that hosts ONLY a sub-grid control.
 // Each authored/auto sub-grid gets its own section so it SPANS the form, instead of being spliced as
 // a single cell into an existing 2-column field section (which rendered the grid half-width with an
 // empty column beside it). `label` is the grid's title — the engine passes the child's plural/display
@@ -500,7 +498,7 @@ function compileFormIntent(spec, formSpec, opts) {
   // Compute per-field required flag. isRequired is explicit authored intent (the primary
   // field and required===true columns are required regardless of Dataverse defaults).
   // classId and label are NOT computed here — the SDK adapter derives them from Dataverse
-  // attribute metadata (SDK T4). Computing them here would drift from adapter-derived values.
+  // attribute metadata. Computing them here would drift from adapter-derived values.
   const requiredFor = function (logical) {
     if (entity && logical === entity.primaryAttribute.schemaName.toLowerCase()) return true;
     const c = entity && (entity.columns || []).find(function (x) { return x.schemaName.toLowerCase() === logical; });
@@ -864,6 +862,60 @@ function findFieldCellLocations(formJson, logical) {
   return found;
 }
 
+// The cells of the form's HEADER and FOOTER, and of each tab's own `tabheader` and `tabfooter`, that host the bound field `logical` —
+// the form's two parts first, header before footer, then the tabs' in tab order, each in document order. They are the placements
+// findFieldCellLocations does not see, which a field the spec makes read-only or hidden is as much in as a section's.
+//
+// The SDK does not model those parts: it keeps their XML in the bag of the form (header, footer) or of the tab (tabheader, tabfooter), as
+// raw nodes, and writes it back as it read it. A node
+// is `{ n: 'cell', a: [['visible', 'true'], …], c: [child nodes] }` — `a` the attribute pairs in document order, `c` the children —
+// and the markup is a section's own rows:
+//   <header id="…" columns="1"><rows><row><cell id="…" visible="true"><labels>…</labels>
+//     <control id="header_new_code" classid="{4273EDBD-…}" datafieldname="new_code" disabled="false" /></cell></row></rows></header>
+// A tab's own parts are the same markup under `<tab>`, before its `<columns>`: <tab …><labels>…</labels><tabheader …>…</tabheader>
+// <tabfooter …>…</tabfooter><columns>…</columns></tab>.
+// See: https://learn.microsoft.com/en-us/power-apps/developer/model-driven-apps/form-xml-schema
+// A location gives the JSON pointer of the cell and of its control, and the nodes (for the attributes a caller reads). The SDK takes an
+// `updateElement` at `<pointer>/a/<n>` with a new `[name, value]` pair, and an `addElement` at `<pointer>/a` with one to append, and
+// validates nothing else there — so a caller must edit exactly the attribute it means to and leave every other of the node as it is.
+// Same exclusions as the body scan: a control that is not the field itself (a quick view bound to the lookup) is skipped.
+function findFieldOuterCells(formJson, logical) {
+  const lg = String(logical || '').toLowerCase();
+  const found = [];
+  const named = (node, name) => (node && Array.isArray(node.c)
+    ? node.c.map((child, index) => ({ child, index })).filter(({ child }) => child && child.n === name) : []);
+  const attr = (node, name) => {
+    const pair = ((node && node.a) || []).find((p) => Array.isArray(p) && String(p[0]).toLowerCase() === name);
+    return pair ? pair[1] : undefined;
+  };
+  // The cells of one part. `base` is the JSON pointer of the part's node, `tab` the name of the tab that holds it when it is a tab's own.
+  const collect = (part, base, tab) => {
+    for (const rows of named(part, 'rows')) {
+      for (const row of named(rows.child, 'row')) {
+        for (const cell of named(row.child, 'cell')) {
+          for (const control of named(cell.child, 'control')) {
+            const fieldName = attr(control.child, 'datafieldname');
+            if (!fieldName || String(fieldName).toLowerCase() !== lg || isNonFieldControl({ classId: attr(control.child, 'classid') })) continue;
+            const cellPointer = base + '/c/' + rows.index + '/c/' + row.index + '/c/' + cell.index;
+            found.push({ part: part.n, ...(tab === undefined ? {} : { tab }), cellPointer, controlPointer: cellPointer + '/c/' + control.index, cell: cell.child, control: control.child });
+          }
+        }
+      }
+    }
+  };
+  (((formJson && formJson.bag) || {}).c || []).forEach((entry, i) => {
+    const part = entry && entry.node;
+    if (part && (part.n === 'header' || part.n === 'footer')) collect(part, '/bag/c/' + i + '/node');
+  });
+  ((formJson && formJson.tabs) || []).forEach((tab, t) => {
+    (((tab && tab.bag) || {}).c || []).forEach((entry, i) => {
+      const part = entry && entry.node;
+      if (part && (part.n === 'tabheader' || part.n === 'tabfooter')) collect(part, '/tabs/' + t + '/bag/c/' + i + '/node', tab.name);
+    });
+  });
+  return found;
+}
+
 // A deployed section, located by NAME (case-insensitive) across the WHOLE form, or null.
 //
 // The search is form-wide rather than scoped to the expected tab on purpose: section names are
@@ -973,6 +1025,7 @@ module.exports = {
   findFieldCellPointer,
   findFieldCellLocation,
   findFieldCellLocations,
+  findFieldOuterCells,
   findSectionLocation,
   findSectionById,
   declaredSectionByField,

@@ -29,6 +29,8 @@
 // spot duplicates); areas and groups have no target, so they correspond by label, then by the id an
 // earlier build of this plugin gave them.
 
+const { GENPAGE_DEFAULT_VECTOR_ICON } = require('./genpage-subarea.js');
+
 // The fixed launcher path the designer gives every dashboard entry it creates, and the one the
 // runtime keys the dashboard glyph on.
 const DASHBOARD_LAUNCHER_URL = '/workplace/home_dashboards.aspx';
@@ -100,7 +102,9 @@ const rawAttr = (node, key) => {
  *   - a title where the live node has no `<Titles>` at all: an empty wrapper is added first in the
  *     node (where the SDK puts a synthesized one) for the SDK to fill;
  *   - no title where the live node has one at this language: that `<Title>` is dropped, and the other
- *     languages' titles are kept — the bag-less write this replaces dropped every language.
+ *     languages' titles are kept — the bag-less write this replaces dropped every language. Only an
+ *     entry whose title the spec's baseline shows the author took out ever reaches this: a node the
+ *     spec merely says nothing about keeps its title (adoptLiveSitemap).
  * Bag children are `{ i, node }` with absolute child indices (modeled children fill the gaps), so an
  * insertion shifts every index after it up, and a removal shifts every index after it down — or a
  * modeled child would fill the vacated slot ahead of the kept ones, e.g. a `<SubArea>` written before
@@ -134,6 +138,13 @@ const CHROME = [
   { field: 'vectorIcon', same: (a, b) => text(a).toLowerCase() === text(b).toLowerCase() },
 ];
 
+// Whether `liveValue` is an icon the platform gave the entry rather than one somebody chose, for an entry whose spec names none. A generative page entry that names no `vectorIcon` holds the
+// platform's page icon (genpage-subarea.js) — the SDK writes it whenever it serializes one — so the live entry has an icon the spec and its baseline never did, and without this the rebuild
+// read that as a change made in the designer and said it had kept it, on every rebuild. Only for a spec that says nothing about the field (a spec that names an icon is compared with the live
+// one like any other), and only for the page entry's vector icon: no other kind of entry is given one, so a live icon there was put there by someone.
+const isPlatformDefault = (specEntry, field, liveValue) => specEntry.type === 'GenPage' && field === 'vectorIcon'
+  && text(specEntry[field]) === '' && text(liveValue).toLowerCase() === GENPAGE_DEFAULT_VECTOR_ICON.toLowerCase();
+
 /**
  * Whether a rebuild KEEPS a live nav entry's `field` rather than writing the spec's value: the spec
  * still has the value its baseline (`base`, from chromeByTargetKey) recorded for the entry and the
@@ -155,8 +166,21 @@ function keepsLiveValue(field, specValue, liveValue, base) {
  * would collide with an adopted id. `notes` lists what happened to existing nodes, for the build to
  * report (`node` is 'area' | 'group' | 'subArea'):
  *   { kind: 'kept', node, target, field, live, spec }    — see `baseChrome`
+ *   { kind: 'kept', node, target, field: 'title', live, spec: '', unspecified: true } — the spec gives
+ *                                                          the node no title, so the live one stays
  *   { kind: 'changed', node, target, field, live, spec, intended? } — the build changes this value;
  *                                                          `intended` when the baseline shows the spec did
+ *   { kind: 'replaced', node, target, live, unlabelled, empty } — an area or group with no entries whose title
+ *                                                          the rebuild does not keep: the spec's `unlabelled` empty
+ *                                                          nodes could not be matched one to one to the environment's
+ *                                                          `empty` ones, and is written as new (see the passes below)
+ *
+ * A node's title the spec does not state is KEPT, never cleared. An empty label or title says nothing:
+ * the download of an environment whose base language is not 1033 once wrote every one empty, and an
+ * author who leaves a title out has not asked for the title to go either. The exception is an ENTRY
+ * (subarea) whose title the spec's baseline shows the spec used to state — the author took it out, an
+ * edit like any other, so it is applied. Areas and groups have no target to find a baseline by, so
+ * theirs are always kept; state a title to change one.
  *
  * `opts.baseChrome` (optional) maps a subarea target key to `{ title, icon, vectorIcon }` as the spec
  * last applied to — or downloaded from — this environment described it. With it, a value the spec
@@ -172,6 +196,13 @@ function adoptLiveSitemap(desired, live, opts = {}) {
   const desiredAreas = (desired && Array.isArray(desired.areas)) ? desired.areas : [];
   const kids = (node, key) => (node && Array.isArray(node[key]) ? node[key] : []);
   const notes = [];
+  // The title an adopted node is written with when the spec gives it none and the live node has one (see above): the live one, which the SDK writes back as it is. True when it was kept.
+  const keepUnstatedTitle = (next, liveNode, node, target) => {
+    if (text(next.title) !== '' || text(liveNode.title) === '') return false;
+    next.title = liveNode.title;
+    notes.push({ kind: 'kept', node, target, field: 'title', live: text(liveNode.title), spec: '', unspecified: true });
+    return true;
+  };
 
   // Correspondence is decided in PASSES over a whole level, never node by node in document order: a
   // weaker rule must not let an earlier node take a live node that a later one matches by a stronger
@@ -189,7 +220,12 @@ function adoptLiveSitemap(desired, live, opts = {}) {
   //      node with no entries to go by is recognized — but never a live node whose label an unpaired spec
   //      node still wants, nor two nodes whose entries all differ;
   //   4. with no label at the SDK's language (a downloaded app titled only in another language) and no
-  //      entries on either side, the next such live node in document order.
+  //      entries on either side, the next such live node in document order;
+  //   5. an unlabelled node with no entries, and a live node with none that nothing above paired — what is
+  //      left of the empty nodes an earlier download wrote with no label, beside a live one the designer
+  //      gave an id of its own and a title at the SDK's language. One on each side can only be each other.
+  //      More than one on either side is a choice by position, which is never made: the live node is
+  //      replaced, and its title goes with it, so that is said (a `replaced` note).
   // A repeated label, or none, decides nothing by position where entries can speak. Taking the first
   // live "Main", or the one whose id appDef's numbering happened to repeat, or the next unlabelled one,
   // gave a new or reordered node another node's id and bag — with two live "Main"s and the first renamed
@@ -237,7 +273,7 @@ function adoptLiveSitemap(desired, live, opts = {}) {
     }
     return tied ? null : at;
   };
-  const correspond = (want, have, targetsOfNode) => {
+  const correspond = (want, have, targetsOfNode, node) => {
     const live = have.filter((n) => n && typeof n === 'object');
     const taken = new Set();
     const match = new Array(want.length);
@@ -274,10 +310,24 @@ function adoptLiveSitemap(desired, live, opts = {}) {
       const l = live.find((n) => !taken.has(n) && text(n.title) === '' && !haveTargets.get(n).size);
       if (l) pair(i, l);
     });
+    // An unlabelled node with no entries that pass 4 left unpaired means no live node with no entries and no title was free for it, so each live node with no entries that is still free has a
+    // title at the SDK's language, and one it is dropped for takes that title with it.
+    const bare = [];
+    unpaired((d, i) => { if (text(d.title) === '' && !wantTargets[i].size) bare.push(i); });
+    if (bare.length) {
+      const left = live.filter((n) => !taken.has(n) && !haveTargets.get(n).size && !stillWanted(labelKey(n)));
+      if (bare.length === 1 && left.length === 1) {
+        pair(bare[0], left[0]);
+      } else {
+        for (const n of left) {
+          if (text(n.title) !== '') notes.push({ kind: 'replaced', node, target: `${node} "${text(n.title)}"`, live: text(n.title), unlabelled: bare.length, empty: left.length });
+        }
+      }
+    }
     return match;
   };
-  const areaMatch = correspond(desiredAreas, liveAreas, areaTargets);
-  const groupMatch = desiredAreas.map((a, ai) => correspond(kids(a, 'groups'), kids(areaMatch[ai], 'groups'), groupTargets));
+  const areaMatch = correspond(desiredAreas, liveAreas, areaTargets, 'area');
+  const groupMatch = desiredAreas.map((a, ai) => correspond(kids(a, 'groups'), kids(areaMatch[ai], 'groups'), groupTargets, 'group'));
 
   // Subareas correspond by navigation target: first within the live group their own group adopted (an
   // entry that stayed put), then anywhere (an entry that moved). Each live node is adopted at most once.
@@ -305,9 +355,10 @@ function adoptLiveSitemap(desired, live, opts = {}) {
     if (liveArea) {
       nextArea.id = liveArea.id;
       nextArea.bag = cloneBag(liveArea.bag);
-      reconcileTitleChild(nextArea.bag, area.title, liveArea.title, lcid);
-      if (text(area.title) !== text(liveArea.title)) {
-        notes.push({ kind: 'changed', node: 'area', target: `area "${text(liveArea.title) || liveArea.id}"`, field: 'title', live: text(liveArea.title), spec: text(area.title) });
+      keepUnstatedTitle(nextArea, liveArea, 'area', `area "${text(liveArea.title)}"`);
+      reconcileTitleChild(nextArea.bag, nextArea.title, liveArea.title, lcid);
+      if (text(nextArea.title) !== text(liveArea.title)) {
+        notes.push({ kind: 'changed', node: 'area', target: `area "${text(liveArea.title) || liveArea.id}"`, field: 'title', live: text(liveArea.title), spec: text(nextArea.title) });
       }
     }
     kids(area, 'groups').forEach((group, gi) => {
@@ -316,9 +367,10 @@ function adoptLiveSitemap(desired, live, opts = {}) {
       if (liveGroup) {
         nextGroup.id = liveGroup.id;
         nextGroup.bag = cloneBag(liveGroup.bag);
-        reconcileTitleChild(nextGroup.bag, group.title, liveGroup.title, lcid);
-        if (text(group.title) !== text(liveGroup.title)) {
-          notes.push({ kind: 'changed', node: 'group', target: `group "${text(liveGroup.title) || liveGroup.id}"`, field: 'title', live: text(liveGroup.title), spec: text(group.title) });
+        keepUnstatedTitle(nextGroup, liveGroup, 'group', `group "${text(liveGroup.title)}"`);
+        reconcileTitleChild(nextGroup.bag, nextGroup.title, liveGroup.title, lcid);
+        if (text(nextGroup.title) !== text(liveGroup.title)) {
+          notes.push({ kind: 'changed', node: 'group', target: `group "${text(liveGroup.title) || liveGroup.id}"`, field: 'title', live: text(liveGroup.title), spec: text(nextGroup.title) });
         }
       }
       kids(group, 'subAreas').forEach((sub, si) => {
@@ -337,9 +389,10 @@ function adoptLiveSitemap(desired, live, opts = {}) {
           const base = baseChrome.get(pick.key);
           const label = text(liveSub.title) || text(sub.title) || pick.key;
           for (const { field: f, same } of CHROME) {
-            if (same(sub[f], liveSub[f])) {
-              // Equal as far as the platform cares (an icon name differing only in case): re-emit the
-              // live string, so the node round-trips byte-for-byte.
+            if (same(sub[f], liveSub[f]) || isPlatformDefault(sub, f, liveSub[f])) {
+              // Equal as far as the platform cares (an icon name differing only in case, or the icon the
+              // platform gave an entry the spec gives none): re-emit the live string, so the node
+              // round-trips byte-for-byte.
               if (text(liveSub[f])) nextSub[f] = liveSub[f];
               continue;
             }
@@ -348,6 +401,10 @@ function adoptLiveSitemap(desired, live, opts = {}) {
               if (text(liveSub[f])) nextSub[f] = liveSub[f];
               else delete nextSub[f];
               notes.push({ kind: 'kept', node: 'subArea', target: `nav entry "${label}"`, field: f, live: text(liveSub[f]), spec: text(sub[f]) });
+            } else if (f === 'title' && text(sub.title) === '' && !(base && text(base.title) !== '')) {
+              // No title in the spec, and nothing to show the spec ever stated one: it says nothing, so the live title stays (keepUnstatedTitle). A baseline that states one
+              // is the other case — the author took it out — and falls through to be applied; a baseline with none was handled above.
+              keepUnstatedTitle(nextSub, liveSub, 'subArea', `nav entry "${label}"`);
             } else {
               notes.push({ kind: 'changed', node: 'subArea', target: `nav entry "${label}"`, field: f, live: text(liveSub[f]), spec: text(sub[f]), ...(base ? { intended: true } : {}) });
             }
@@ -458,12 +515,18 @@ function describeSitemapNotes(notes) {
   const shown = (v) => (v ? `'${v}'` : '(none)');
   const lines = [];
   for (const n of notes || []) {
-    if (n.kind === 'kept') {
+    if (n.kind === 'kept' && n.unspecified) {
+      lines.push(`${n.target}: kept the environment's ${n.field} ${shown(n.live)} — the spec has none for it, so it is left as it is. State one in the spec to change it.`);
+    } else if (n.kind === 'kept') {
       lines.push(`${n.target}: kept the environment's ${n.field} ${shown(n.live)} — it changed there after this spec was last applied or downloaded, and the spec still has ${shown(n.spec)}. Change the spec to change it.`);
     } else if (n.kind === 'changed' && n.node === 'subArea' && !n.intended) {
       lines.push(`${n.target}: ${n.field} changes from ${shown(n.live)} to the spec's ${shown(n.spec)}. No baseline in this spec's workspace records the entry, so a change made in the designer cannot be told from one made in the spec.`);
     } else if (n.kind === 'changed' && n.node !== 'subArea') {
       lines.push(`${n.target}: ${n.field} changes from ${shown(n.live)} to the spec's ${shown(n.spec)}.`);
+    } else if (n.kind === 'replaced') {
+      // A node with no entries gives nothing to tell it by, and the spec gave it no label: with more than one candidate on either side, which is which would be a guess.
+      lines.push(`${n.target}: has no entries, and the spec's unlabelled empty ${n.node}s cannot be matched to the environment's empty ${n.node}s one to one (${n.unlabelled} against ${n.empty}), `
+        + `so the spec's are written as new, untitled ${n.node}s and this one, with its title ${shown(n.live)}, is not kept. Label the spec's ${n.node} ${shown(n.live)} to keep it.`);
     }
   }
   return lines;

@@ -19,17 +19,17 @@
   { "id": "ask-new-or-edit", "command": "AskUserQuestion: Create new page(s) or edit an existing one?", "result": { "answer": "Create new page(s)" } },
   {
     "id": "list-languages",
-    "command": "pac model list-languages",
-    "result": { "languages": [{ "lcid": 1033, "language": "English", "code": "en-US", "rtl": false }] },
+    "command": "node 'D:/repo/plugins/model-apps/scripts/list-languages.js' --env 'https://contoso.crm.dynamics.com'",
+    "result": { "ok": true, "baseLanguage": { "lcid": 1033, "code": "en-US", "name": "English (United States)", "rtl": false }, "languages": [{ "lcid": 1033, "code": "en-US", "name": "English (United States)", "rtl": false }], "unmapped": [], "summary": ["1033 en-US \u2014 RTL: No"] },
     "exitCode": 0
   },
   { "id": "ask-requirements", "command": "AskUserQuestion: Any specific requirements?", "result": { "answer": "Clean and minimal design" } },
   {
     "id": "app-list",
-    "command": "pac model list",
-    "result": { "apps": [
-      { "name": "Contoso Marketing Hub", "appId": "11111111-2222-4333-8444-555555555555" },
-      { "name": "Field Service Lite", "appId": "99999999-8888-4777-8666-555555555555" }
+    "command": "node 'D:/repo/plugins/model-apps/scripts/apps.js' list --env 'https://contoso.crm.dynamics.com'",
+    "result": { "ok": true, "count": 2, "apps": [
+      { "id": "11111111-2222-4333-8444-555555555555", "name": "Contoso Marketing Hub", "uniqueName": "ContosoMarketingHub", "description": "", "published": true, "unpublishedChanges": false },
+      { "id": "99999999-8888-4777-8666-555555555555", "name": "Field Service Lite", "uniqueName": "FieldServiceLite", "description": "", "published": true, "unpublishedChanges": false }
     ] },
     "exitCode": 0
   },

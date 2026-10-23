@@ -1,18 +1,16 @@
 'use strict';
 
-// Verify reads the code of the pages whose navigation it checks. It ran `pac model genpage download` once per
-// page — a process start, an auth and a round trip each. A reader that can (`pageCodes`) now downloads the pages
-// together, and the page reads begin with the pass instead of after every other check. These tests count pac
-// runs and prove each page is still reported exactly as it was.
+// Verify reads the code of the pages whose navigation it checks. It once ran `pac model genpage download` per page —
+// a process start, an auth and a round trip each — and then one run per chunk of pages. The reader now reads each page
+// through the SDK by its id (`pageCodes`: a few reads at a time, each page answered on its own), and the page reads begin
+// with the pass instead of after every other check. These tests count the reads and prove each page is still reported
+// exactly as it was.
 
 const { test } = require('node:test');
 const assert = require('node:assert');
-const fs = require('node:fs');
 const os = require('node:os');
-const path = require('node:path');
 const { readerFor } = require('../verify-model-app.js');
 const { verifySpec } = require('../lib/verify-spec.js');
-const { makeGenpageCli } = require('../lib/genpage-cli.js');
 const { instrument } = require('./helpers/read-probe.js');
 
 const pid = (n) => `${String(n).padStart(8, '0')}-0000-4000-8000-0000000000aa`;
@@ -27,120 +25,139 @@ const stubSdk = () => ({
   findColumns: async () => [],
 });
 
-// Stands in for `pac model genpage download`: writes <outDir>/<dirName(id)>/page.tsx for each id it is given.
-function fakeGenpageCli({ dirName = (id) => id, omitInBatch = new Set(), failBatch = false, failIds = new Set(), extraDirs = {} } = {}) {
-  const runs = [];
+// Stands in for the page backend (lib/genpage-sdk.js): `read(id)` answers the page's source, throws what the backend throws for a page it
+// cannot read, and records every read and how many were in flight at once.
+// `hold`, a promise, keeps every read open until it settles — for a test that must prove an order without a clock.
+function fakeGenpage({ failIds = new Set(), rawIds = new Set(), delayMs = 0, hold } = {}) {
+  const reads = [];
+  const state = { inFlight: 0, peak: 0 };
   return {
-    runs,
-    enumerateEnv: async () => ({ ok: true, ids: [] }),
-    download: async ({ outputDir, pageIds }) => {
-      runs.push([...pageIds]);
-      if (failBatch && pageIds.length > 1) throw new Error('pac genpage download failed: the batch was refused');
-      const bad = pageIds.find((id) => failIds.has(String(id).toLowerCase()));
-      if (bad) throw new Error(`pac genpage download failed: page ${bad} was not found`);
-      for (const id of pageIds) {
-        if (pageIds.length > 1 && omitInBatch.has(String(id).toLowerCase())) continue;
-        fs.mkdirSync(path.join(outputDir, dirName(id)), { recursive: true });
-        fs.writeFileSync(path.join(outputDir, dirName(id), 'page.tsx'), source(id), 'utf8');
+    reads,
+    state,
+    enumerateEnv: async () => ({ ok: true, ids: [], pages: [] }),
+    read: async (id) => {
+      reads.push(id);
+      state.inFlight += 1;
+      state.peak = Math.max(state.peak, state.inFlight);
+      try {
+        if (delayMs) await new Promise((resolve) => setTimeout(resolve, delayMs));
+        if (hold) await hold;
+        if (failIds.has(String(id).toLowerCase())) throw Object.assign(new Error(`page ${id} does not exist in this environment`), { code: 'GENPAGE_NOT_FOUND' });
+        if (rawIds.has(String(id).toLowerCase())) throw Object.assign(new Error(`page ${id} has no source this tool can read`), { code: 'GENPAGE_NO_SOURCE' });
+        return { id, name: 'Page', source: source(id) };
+      } finally {
+        state.inFlight -= 1;
       }
-      for (const [dir, text] of Object.entries(extraDirs)) {
-        fs.mkdirSync(path.join(outputDir, dir), { recursive: true });
-        fs.writeFileSync(path.join(outputDir, dir, 'page.tsx'), text, 'utf8');
-      }
-      return true;
     },
   };
 }
 
-const readerWith = (genpageCli) => readerFor(stubSdk(), 'contoso_app', { genpageCli, workspaceDir: os.tmpdir() });
+const readerWith = (genpage) => readerFor(stubSdk(), 'contoso_app', { genpage, workspaceDir: os.tmpdir() });
 
-test('the code of several pages comes from ONE pac run, each page answered with its own code', async () => {
-  const cli = fakeGenpageCli();
-  const reader = readerWith(cli);
+test('the code of several pages is read by id, each page answered with its own code', async () => {
+  const genpage = fakeGenpage();
+  const reader = readerWith(genpage);
   const ids = [1, 2, 3, 4, 5].map(pid);
   const answers = await reader.pageCodes(ids);
-  assert.deepStrictEqual(cli.runs, [ids], 'one download holding every id, in order (five before)');
+  assert.deepStrictEqual([...genpage.reads].sort(), [...ids].sort(), 'every id read once');
   assert.deepStrictEqual([...answers.keys()], ids);
-  const single = readerWith(fakeGenpageCli());
+  const single = readerWith(fakeGenpage());
   for (const id of ids) {
     assert.deepStrictEqual(answers.get(id), { code: source(id) });
     assert.strictEqual(answers.get(id).code, await single.pageCode(id), 'byte-for-byte the code the one-page reader returns');
   }
 });
 
-test('a long list goes in chunks of 25 ids — one run per chunk, no id in two runs', async () => {
-  for (const [count, shape] of [[25, [25]], [26, [25, 1]], [60, [25, 25, 10]]]) {
-    const cli = fakeGenpageCli();
+test('a long list is read a few pages at a time — never more than four in flight — and every id exactly once', async () => {
+  for (const count of [1, 4, 5, 26, 60]) {
+    const genpage = fakeGenpage({ delayMs: 2 });
     const ids = Array.from({ length: count }, (_, n) => pid(n + 1));
-    const answers = await readerWith(cli).pageCodes(ids);
-    assert.deepStrictEqual(cli.runs.map((run) => run.length), shape, `${count} ids`);
-    assert.deepStrictEqual(cli.runs.flat(), ids, `${count} ids: every id once, in order`);
+    const answers = await readerWith(genpage).pageCodes(ids);
+    assert.ok(genpage.state.peak <= 4, `${count} ids: ${genpage.state.peak} reads at once`);
+    if (count >= 4) assert.strictEqual(genpage.state.peak, 4, `${count} ids: the reads overlap`);
+    assert.deepStrictEqual([...genpage.reads].sort(), [...ids].sort(), `${count} ids: every id once`);
     assert.strictEqual(answers.size, count);
     for (const id of ids) assert.deepStrictEqual(answers.get(id), { code: source(id) });
   }
 });
 
-test('a page is found by its own directory name, whatever the case, and never from another page\'s files', async () => {
-  const cli = fakeGenpageCli({ dirName: (id) => id.toUpperCase(), extraDirs: { 'not-a-requested-page': '// stray code' } });
+test('a page is found by the id it was asked for, whatever the case, and never from another page\'s source', async () => {
+  const genpage = fakeGenpage();
   const ids = [1, 2, 3].map(pid);
-  const answers = await readerWith(cli).pageCodes(ids);
-  assert.strictEqual(cli.runs.length, 1);
-  for (const id of ids) assert.deepStrictEqual(answers.get(id), { code: source(id) });
-  assert.ok([...answers.values()].every((a) => !/stray/.test(a.code)), 'a directory nobody asked for is nobody\'s code');
+  const answers = await readerWith(genpage).pageCodes(ids.map((id) => id.toUpperCase()));
+  assert.deepStrictEqual([...answers.keys()], ids, 'answers are keyed by the lower-cased id');
+  for (const id of ids) assert.deepStrictEqual(answers.get(id), { code: source(id.toUpperCase()) });
+  assert.ok([...answers.entries()].every(([id, a]) => a.code === source(id)), 'each answer is its own page\'s source');
 });
 
-test('a page the successful batch left no directory for is asked for by itself, as before', async () => {
-  const missing = pid(3);
-  const cli = fakeGenpageCli({ omitInBatch: new Set([missing]) });
-  const answers = await readerWith(cli).pageCodes([pid(1), pid(2), missing, pid(4)]);
-  assert.deepStrictEqual(cli.runs, [[pid(1), pid(2), missing, pid(4)], [missing]]);
-  assert.deepStrictEqual(answers.get(missing), { code: source(missing) });
-  assert.deepStrictEqual(answers.get(pid(4)), { code: source(pid(4)) });
-});
-
-test('a batch pac refuses falls back to one run per page — a bad page costs its own miss, not its neighbours\'', async () => {
+test('a page the backend cannot read costs its own miss — the neighbours are answered — and the miss carries what the one-page read throws', async () => {
   const bad = pid(2);
-  const cli = fakeGenpageCli({ failBatch: true, failIds: new Set([bad]) });
-  const reader = readerWith(cli);
+  const genpage = fakeGenpage({ failIds: new Set([bad]) });
+  const reader = readerWith(genpage);
   const answers = await reader.pageCodes([pid(1), bad, pid(3)]);
-  assert.deepStrictEqual(cli.runs, [[pid(1), bad, pid(3)], [pid(1)], [bad], [pid(3)]], 'the batch, then each page alone');
   assert.deepStrictEqual(answers.get(pid(1)), { code: source(pid(1)) });
   assert.deepStrictEqual(answers.get(pid(3)), { code: source(pid(3)) });
   const alone = await reader.pageCode(bad).then(() => null, (e) => e);
   assert.ok(answers.get(bad).error instanceof Error);
-  assert.strictEqual(answers.get(bad).error.message, alone.message, 'the miss carries what the one-page download throws');
+  assert.strictEqual(answers.get(bad).error.message, alone.message);
+  assert.strictEqual(answers.get(bad).error.code, 'GENPAGE_NOT_FOUND');
 });
 
-test('pages already downloaded are not downloaded again, and a duplicate in the list is fetched once', async () => {
-  const cli = fakeGenpageCli();
-  const reader = readerWith(cli);
+test('a page the SDK holds as raw files is a MISS, never empty code that a page check would read as "no navigation"', async () => {
+  const raw = pid(3);
+  const reader = readerWith(fakeGenpage({ rawIds: new Set([raw]) }));
+  const answers = await reader.pageCodes([pid(1), raw]);
+  assert.deepStrictEqual(answers.get(pid(1)), { code: source(pid(1)) });
+  assert.ok(answers.get(raw).error instanceof Error);
+  assert.strictEqual(answers.get(raw).error.code, 'GENPAGE_NO_SOURCE');
+  assert.ok(!('code' in answers.get(raw)));
+  await assert.rejects(reader.pageCode(raw), (e) => e.code === 'GENPAGE_NO_SOURCE');
+});
+
+test('pages already read are not read again, and a duplicate in the list is read once', async () => {
+  const genpage = fakeGenpage();
+  const reader = readerWith(genpage);
   await reader.pageCode(pid(1));
   const answers = await reader.pageCodes([pid(1), pid(2), pid(3), pid(2).toUpperCase(), pid(3)]);
-  assert.deepStrictEqual(cli.runs, [[pid(1)], [pid(2), pid(3)]]);
+  assert.deepStrictEqual([...genpage.reads].sort(), [pid(1), pid(2), pid(3)].sort());
   assert.strictEqual(answers.size, 3);
   await reader.pageCodes([pid(3), pid(2), pid(1)]);
-  assert.strictEqual(cli.runs.length, 2, 'asked again: answered from what was downloaded');
+  assert.strictEqual(genpage.reads.length, 3, 'asked again: answered from what was read');
 });
 
-test('through the real genpage CLI wrapper, N pages are one `pac model genpage download --page-id a,b,c` run', async () => {
-  const downloads = [];
-  const run = async (args) => {
-    if (args[2] !== 'download') return { status: 0, stdout: '', stderr: '' };
-    downloads.push(args);
-    const outDir = args[args.indexOf('--output-directory') + 1];
-    for (const id of args[args.indexOf('--page-id') + 1].split(',')) {
-      fs.mkdirSync(path.join(outDir, id), { recursive: true });
-      fs.writeFileSync(path.join(outDir, id, 'page.tsx'), source(id), 'utf8');
-    }
-    return { status: 0, stdout: '', stderr: '' };
-  };
-  const genpageCli = makeGenpageCli('https://contoso.crm.dynamics.com', { run, sleep: async () => {} });
-  const ids = [1, 2, 3, 4].map(pid);
-  const answers = await readerWith(genpageCli).pageCodes(ids);
-  assert.strictEqual(downloads.length, 1, 'one pac run for four pages');
-  assert.strictEqual(downloads[0][downloads[0].indexOf('--page-id') + 1], ids.join(','));
-  assert.strictEqual(downloads[0][downloads[0].indexOf('--app-id') + 1], 'app-uuid-1');
-  for (const id of ids) assert.deepStrictEqual(answers.get(id), { code: source(id) });
+test('once a pass ends its page reads none starts until the next pass begins — a read that is still to start is refused, not made behind the pass', async () => {
+  const genpage = fakeGenpage();
+  const reader = readerWith(genpage);
+  await reader.endPageReads();
+  await assert.rejects(reader.pageCode(pid(1)), /page reads were ended/);
+  await assert.rejects(reader.existenceIds(), /page reads were ended/);
+  const answers = await reader.pageCodes([pid(1)]);
+  assert.match(answers.get(pid(1)).error.message, /page reads were ended/, 'a batch reports the same miss for each page it was asked for');
+  assert.deepStrictEqual(genpage.reads, [], 'nothing was read');
+  reader.beginVerificationPass();
+  assert.deepStrictEqual(await reader.pageCode(pid(1)), source(pid(1)), 'the next pass reads again');
+});
+
+// The read is held open until the test lets it go, so "endPageReads did not wait for it" is proven by order, not by a clock: the
+// earlier form (a 20 ms read, endPageReads back within 15 ms) failed on a loaded machine. The 5 s race only turns a regression —
+// endPageReads waiting for the read, which never ends while it is held — into a failure instead of a hang.
+test('ending the reads never waits for, or cancels, a read in flight — it is a request, and finishes by itself', async () => {
+  let release;
+  const genpage = fakeGenpage({ hold: new Promise((resolve) => { release = resolve; }) });
+  const reader = readerWith(genpage);
+  const reading = reader.pageCode(pid(1));
+  let readSettled = false;
+  reading.then(() => { readSettled = true; }, () => { readSettled = true; });
+  let timer;
+  const stillWaiting = new Promise((resolve) => { timer = setTimeout(() => resolve('still waiting'), 5000); });
+  try {
+    assert.strictEqual(await Promise.race([reader.endPageReads().then(() => 'ended'), stillWaiting]), 'ended', 'endPageReads does not wait for the read');
+  } finally {
+    clearTimeout(timer);
+  }
+  assert.strictEqual(readSettled, false, 'the read was still in flight when the reads were ended');
+  release();
+  assert.strictEqual(await reading, source(pid(1)), 'the read in flight finishes');
 });
 
 // --- verify ----------------------------------------------------------------------------------------
@@ -200,19 +217,19 @@ test('verify asks for the code of the pages it checks in one batch — same page
   const batched = pageReader({ batch: true });
   const before = await verifySpec(pagesSpec(), perPage.read);
   const after = await verifySpec(pagesSpec(), batched.read);
-  assert.deepStrictEqual(perPage.calls.pageCode, [pid(0), pid(1), pid(3)], 'one pac run per page before');
+  assert.deepStrictEqual(perPage.calls.pageCode, [pid(0), pid(1), pid(3)], 'one read per page before');
   assert.deepStrictEqual(batched.calls.pageCodes, [[pid(0), pid(1), pid(3)]], 'one batch: deployed pages with navigation, once each, in spec order');
   assert.deepStrictEqual(batched.calls.pageCode, [], 'and no per-page run');
   assert.deepStrictEqual(after, before);
   assert.ok(after.checks.some((c) => c.kind === 'page-nav' && c.present) && after.checks.some((c) => c.kind === 'page-nav' && !c.present), 'the fixture reports passes and failures');
 });
 
-test('a page whose code could not be downloaded is the same page-code miss with or without the batch', async () => {
-  const failing = { [pid(1)]: 'pac genpage download failed: page was not found' };
+test('a page whose code could not be read is the same page-code miss with or without the batch', async () => {
+  const failing = { [pid(1)]: 'page was not found' };
   const before = await verifySpec(pagesSpec(), pageReader({ failing }).read);
   const after = await verifySpec(pagesSpec(), pageReader({ batch: true, failing }).read);
   assert.deepStrictEqual(after, before);
-  assert.deepStrictEqual(after.checks.filter((c) => c.kind === 'page-code').map((c) => [c.name, c.present, c.detail]), [['Page 1', false, 'pac genpage download failed: page was not found']]);
+  assert.deepStrictEqual(after.checks.filter((c) => c.kind === 'page-code').map((c) => [c.name, c.present, c.detail]), [['Page 1', false, 'page was not found']]);
 });
 
 test('a reader whose pageCodes fails outright is asked page by page — the report is unchanged', async () => {
@@ -223,7 +240,7 @@ test('a reader whose pageCodes fails outright is asked page by page — the repo
   assert.deepStrictEqual(broken.calls.pageCode, [pid(0), pid(1), pid(3)]);
 });
 
-test('a single page with navigation is the one-page download — no batch', async () => {
+test('a single page with navigation is the one-page read — no batch', async () => {
   const one = pageReader({ count: 2, batch: true });
   const result = await verifySpec(pagesSpec(2), one.read);
   assert.deepStrictEqual(one.calls.pageCodes, []);
@@ -241,13 +258,13 @@ test('the page reads start with the pass, ahead of the other checks — and at t
     return { existence: names.indexOf('existenceIds'), lastEntityRead: names.lastIndexOf('findColumns') };
   };
   const overlapped = await order(4);
-  assert.ok(overlapped.existence < overlapped.lastEntityRead, `the pac listing started at read ${overlapped.existence}, before the entity checks were through (${overlapped.lastEntityRead})`);
+  assert.ok(overlapped.existence < overlapped.lastEntityRead, `the page listing started at read ${overlapped.existence}, before the entity checks were through (${overlapped.lastEntityRead})`);
   const sequential = await order(1);
   assert.ok(sequential.existence > sequential.lastEntityRead, 'one at a time it is made where the page checks come, after the entity checks');
 });
 
 test('a failed page-authority read ends the pass with the same error wherever it happened, and an earlier failure outranks it', async () => {
-  const boom = new Error('pac listing failed');
+  const boom = new Error('the page listing failed');
   const failingListing = (extra = {}) => ({ ...pageReader({ batch: true }).read, existenceIds: async () => { throw boom; }, ...extra });
   for (const concurrency of [1, 4]) {
     await assert.rejects(verifySpec(pagesSpec(), failingListing(), { concurrency }), (e) => e === boom, `width ${concurrency}`);

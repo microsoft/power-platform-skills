@@ -1,15 +1,17 @@
 'use strict';
-// Failure-ordering + restart-convergence for the §9 pages protocol (I6/C5): the sitemap is committed ONLY
+// Failure-ordering + restart-convergence for the §9 pages protocol: the sitemap is committed ONLY
 // after every resolved upload; a halt directly after the FIRST create converges on re-run without
-// duplicate creates; and the descoped advisory lease refuses a fresh concurrent build (I4).
+// duplicate creates; and the descoped advisory lease refuses a fresh concurrent build.
 const { test } = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { runSdkBuild, appUniqueName, acquireAppPagesLease } = require('../lib/sdk-build.js');
+const { fakeGenpage } = require('./helpers/fake-genpage.js');
+const { startTarget } = require('./helpers/kill-target-client.js');
 
-// Real GUIDs for the three-authority sitemap mock (Imp9). fetchSitemap(self) resolves via SELF_* to a
+// Real GUIDs for the three-authority sitemap mock. fetchSitemap(self) resolves via SELF_* to a
 // page-less EMPTY sitemap — these ordering/restart tests converge on EXISTENCE (env list), not membership.
 const APP_ID = 'a1b2c3d4-0000-4000-8000-000000000001';
 const SELF_UNIQUE_VALUE = 'c0ffee00-0000-4000-8000-00000000dddd';
@@ -18,10 +20,9 @@ const EMPTY_SITEMAP_XML = '<SiteMap><Area><Group></Group></Area></SiteMap>';
 const OVERVIEW_ID = '11111111-0000-4000-8000-000000000001';
 const DETAIL_ID = '22222222-0000-4000-8000-000000000002';
 
-// Stateful harness: enumerate() reflects pages a create appended; the manifest webresource persists in
-// `store`/`manifestB64`; uploads are recorded in the shared `calls` sequence log.
+// Stateful harness: the page backend's environment reflects the pages a create added; the manifest webresource persists in
+// `store`/`manifestB64`; page writes are recorded in the shared `calls` sequence log.
 function harness() {
-  const live = [];
   const calls = [];
   const store = {};
   let manifestB64 = null;
@@ -40,7 +41,7 @@ function harness() {
       }
       if (e === 'solution') return [];
       if (e === 'webresource') { if (/_pagemanifest'/.test(filter)) return manifestB64 ? [{ webresourceid: 'wr-m', content: manifestB64 }] : []; return []; }
-      if (e === 'uxagentproject') return live.filter((p) => filter.includes(p.pageId)).map((p) => ({ uxagentprojectid: p.pageId, name: p.name }));
+      if (e === 'uxagentproject') return [...genpage.pages.values()].filter((p) => filter.includes(p.id)).map((p) => ({ uxagentprojectid: p.id, name: p.name }));
       if (e === 'systemform') return [];
       if (e === 'savedquery') return [{ savedqueryid: 'defview-x', isdefault: true }];
       return [{ publisherid: 'pub-1' }];
@@ -65,19 +66,18 @@ function harness() {
     // The shared-page scan's one read of the apps that were never published: the app is the only one, and it is published.
     dataverse: { get: async (url) => (url.startsWith('/appmodules/') ? { status: 200, body: { value: [{ appmoduleid: APP_ID, appmoduleidunique: SELF_UNIQUE_VALUE, componentstate: 0 }] } } : { status: 404, body: null }) },
   };
-  const genpageCli = {
-    uploads: [],
-    // EXISTENCE reflects pages a create appended to `live` (env-wide, Task 2).
-    enumerateEnv: async () => ({ ok: true, ids: live.map((p) => String(p.pageId).toLowerCase()), pages: live.slice() }),
-    upload: async (o) => {
-      const pageId = o.pageId || (o.name === 'Detail' ? DETAIL_ID : OVERVIEW_ID);
-      genpageCli.uploads.push({ name: o.name, requestedId: o.pageId, resolvedId: pageId });
-      calls.push({ name: 'upload', args: [o.name] });
-      if (!o.pageId && !live.some((p) => p.name === o.name)) live.push({ pageId, name: o.name });
-      return { pageId };
-    },
-  };
-  return { sdk, genpageCli, calls, live };
+  // The page backend. EXISTENCE reflects the pages a create added (env-wide). The id is fixed per name, so a restart can be told from a duplicate, and every
+  // write joins the shared `calls` sequence the ordering tests read.
+  const genpage = fakeGenpage({
+    newId: (a) => (a.name === 'Detail' ? DETAIL_ID : OVERVIEW_ID),
+    onCreate: (a) => { calls.push({ name: 'upload', args: [a.name] }); },
+    onUpdate: (id, a) => { calls.push({ name: 'upload', args: [a.name] }); },
+  });
+  // The writes the backend received: a create has no requested id.
+  const uploads = () => genpage.calls
+    .filter((c) => c.method === 'create' || c.method === 'update')
+    .map((c) => (c.method === 'create' ? { name: c.args[0].name, requestedId: undefined } : { name: c.args[1].name, requestedId: c.args[0] }));
+  return { sdk, genpage, uploads, calls };
 }
 
 const NAV = (key) => `Xrm.Navigation.navigateTo({ pageType: "generative", pageId: "PAGEREF_${key}", data: {} });`;
@@ -95,17 +95,19 @@ function twoPageApp() {
       { key: 'overview', name: 'Overview', navigatesTo: [{ targetKey: 'detail' }], source: { kind: 'tsx', codeFile: 'overview.tsx' } },
       { key: 'detail', name: 'Detail', source: { kind: 'tsx', codeFile: 'detail.tsx' } },
     ],
-    appShell: { areas: [{ label: 'Main', groups: [{ label: 'Pages', subAreas: [{ page: 'overview', title: 'Overview' }, { page: 'detail', title: 'Detail' }] }] }] },
+    // A new app is created with its navigation minus the pages, and Dataverse refuses a navigation with nothing left
+    // (lib/app-navigation.js), so the app has an entry that is not a page beside its pages.
+    appShell: { areas: [{ label: 'Main', groups: [{ label: 'Pages', subAreas: [{ page: 'overview', title: 'Overview' }, { page: 'detail', title: 'Detail' }, { entity: 'contoso_item', title: 'Items' }] }] }] },
   };
   return { appDir, spec };
 }
 const PHASES = ['solution', 'data-model', 'app-shell', 'pages'];
 
-test('SEQUENCE: uploads → per-create manifest persist → sitemap finalize; no manifest write after finalize (I6)', async () => {
+test('SEQUENCE: uploads → per-create manifest persist → sitemap finalize; no manifest write after finalize', async () => {
   const { appDir, spec } = twoPageApp();
   try {
     const h = harness();
-    await runSdkBuild(spec, { sdk: h.sdk, apply: true, env: 'https://x', appDir, genpageCli: h.genpageCli, phases: PHASES });
+    await runSdkBuild(spec, { sdk: h.sdk, apply: true, env: 'https://x', appDir, genpage: h.genpage, phases: PHASES });
     const idxs = (pred) => h.calls.map((c, i) => (pred(c) ? i : -1)).filter((i) => i >= 0);
     const uploadIdxs = idxs((c) => c.name === 'upload');
     const manifestIdxs = idxs((c) => (c.name === 'createWebResource' && /_pagemanifest$/.test(c.args[0].name)) || c.name === 'updateWebResource');
@@ -117,26 +119,26 @@ test('SEQUENCE: uploads → per-create manifest persist → sitemap finalize; no
   } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
 });
 
-test('RESTART-CONVERGENCE: a halt directly after the FIRST page CREATE re-runs with NO duplicate create (C5)', async () => {
+test('RESTART-CONVERGENCE: a halt directly after the FIRST page CREATE re-runs with NO duplicate create', async () => {
   const { appDir, spec } = twoPageApp();
   const workspaceDir = path.join(appDir, '.maker-workspace');
   try {
     const h = harness();
     let n = 0;
-    const realUpload = h.genpageCli.upload;
-    h.genpageCli.upload = async (o) => { n += 1; if (n === 2) throw new Error('crash directly after the first page create'); return realUpload(o); };
-    await assert.rejects(runSdkBuild(spec, { sdk: h.sdk, apply: true, env: 'https://x', appDir, workspaceDir, genpageCli: h.genpageCli, phases: PHASES }));
-    const created1 = h.genpageCli.uploads.filter((u) => !u.requestedId);
+    const realCreate = h.genpage.create;
+    h.genpage.create = async (o) => { n += 1; if (n === 2) throw new Error('crash directly after the first page create'); return realCreate(o); };
+    await assert.rejects(runSdkBuild(spec, { sdk: h.sdk, apply: true, env: 'https://x', appDir, workspaceDir, genpage: h.genpage, phases: PHASES }));
+    const created1 = h.uploads().filter((u) => !u.requestedId);
     assert.strictEqual(created1.length, 1, 'exactly ONE create landed before the crash; the manifest was persisted right after it');
     const firstName = created1[0].name; // 'Detail' (the absent nav target minted first)
     // Re-run the FULL build. The local creation receipt and manifest bind the created page -> it is only
     // UPDATEd this run, and the un-created page is created once. No duplicate of the first page.
-    h.genpageCli.upload = realUpload;
-    const before = h.genpageCli.uploads.length;
-    await runSdkBuild(spec, { sdk: h.sdk, apply: true, env: 'https://x', appDir, workspaceDir, genpageCli: h.genpageCli, phases: PHASES });
-    const run2 = h.genpageCli.uploads.slice(before);
+    h.genpage.create = realCreate;
+    const before = h.uploads().length;
+    await runSdkBuild(spec, { sdk: h.sdk, apply: true, env: 'https://x', appDir, workspaceDir, genpage: h.genpage, phases: PHASES });
+    const run2 = h.uploads().slice(before);
     assert.ok(run2.filter((u) => u.name === firstName).every((u) => !!u.requestedId), 'the already-created page is only UPDATEd in run 2 (seeded from the persisted manifest + enumeration)');
-    assert.strictEqual(h.live.filter((p) => p.name === firstName).length, 1, 'the first page exists exactly once — no duplicate');
+    assert.strictEqual([...h.genpage.pages.values()].filter((p) => p.name === firstName).length, 1, 'the first page exists exactly once — no duplicate');
   } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
 });
 
@@ -144,14 +146,14 @@ test('FAILURE-ORDER: an upload failure before the finalize leaves the sitemap un
   const { appDir, spec } = twoPageApp();
   try {
     const h = harness();
-    const realUpload = h.genpageCli.upload;
-    h.genpageCli.upload = async (o) => { if (o.name === 'Overview' && o.codeFile && /pageref-deploy/.test(o.codeFile)) throw new Error('pac upload failed'); return realUpload(o); };
-    await assert.rejects(runSdkBuild(spec, { sdk: h.sdk, apply: true, env: 'https://x', appDir, genpageCli: h.genpageCli, phases: PHASES }));
+    const realCreate = h.genpage.create;
+    h.genpage.create = async (o) => { if (o.name === 'Overview') throw new Error('the page could not be written'); return realCreate(o); };
+    await assert.rejects(runSdkBuild(spec, { sdk: h.sdk, apply: true, env: 'https://x', appDir, genpage: h.genpage, phases: PHASES }));
     assert.ok(!h.calls.some((c) => c.name === 'updateElement' && c.args[2] === '/siteMap'), 'the sitemap is NOT finalized when an upload fails before the commit point');
   } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
 });
 
-test('CONCURRENCY: a second build HALTs (pages-locked) while a FRESH app-scoped lock is held (I4)', async () => {
+test('CONCURRENCY: a second build HALTs (pages-locked) while a FRESH app-scoped lock is held', async () => {
   const { appDir, spec } = twoPageApp();
   try {
     const wsDir = path.join(appDir, '.maker-workspace');
@@ -159,16 +161,47 @@ test('CONCURRENCY: a second build HALTs (pages-locked) while a FRESH app-scoped 
     fs.writeFileSync(path.join(wsDir, `pages-${appUniqueName(spec).replace(/[^A-Za-z0-9_-]/g, '_')}.lock`), JSON.stringify({ pid: 999999, at: Date.now() }));
     const h = harness();
     await assert.rejects(
-      runSdkBuild(spec, { sdk: h.sdk, apply: true, env: 'https://x', appDir, genpageCli: h.genpageCli, phases: PHASES }),
+      runSdkBuild(spec, { sdk: h.sdk, apply: true, env: 'https://x', appDir, genpage: h.genpage, phases: PHASES }),
       (e) => e && e.phase === 'pages' && e.code === 'pages-locked'
     );
-    assert.strictEqual(h.genpageCli.uploads.length, 0, 'no page uploaded while the lease is held by another build');
+    assert.strictEqual(h.uploads().length, 0, 'no page uploaded while the lease is held by another build');
   } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
 });
 
-// Direct unit tests of the DESCOPED advisory lease (review R2 Critical 3): the DESCOPED advisory lease
-// NEVER steals and NEVER age-reclaims — a held lock HALTs a second acquire (manual delete required);
-// release is owner-checked. Correctness rests on the convergence spine, not the lock.
+// A build that was KILLED while it held the lock (a real process, ended with SIGKILL) leaves the lock behind. The next build releases it itself and says so;
+// while the build that took it is still running, the lock holds and nothing is written. (The unit tests of the lock are in pages-lock-dead-owner.test.js.)
+test('CONCURRENCY: the lock a KILLED build left is released by the next build, which warns, goes on and releases it again — while a RUNNING build\'s lock still HALTs it', async (t) => {
+  const { appDir, spec } = twoPageApp();
+  try {
+    const wsDir = path.join(appDir, '.maker-workspace');
+    const lockPath = path.join(wsDir, `pages-${appUniqueName(spec).replace(/[^A-Za-z0-9_-]/g, '_')}.lock`);
+    const holder = startTarget(t, ['lock', wsDir, appUniqueName(spec)]);
+    await holder.waitFor(/^held$/);
+
+    const blocked = harness();
+    await assert.rejects(
+      runSdkBuild(spec, { sdk: blocked.sdk, apply: true, env: 'https://x', appDir, genpage: blocked.genpage, phases: PHASES }),
+      (e) => e && e.phase === 'pages' && e.code === 'pages-locked'
+    );
+    assert.strictEqual(blocked.uploads().length, 0, 'nothing was written while the build that holds the lock is running');
+
+    await holder.kill();
+    assert.ok(fs.existsSync(lockPath), 'the killed build\'s lock is still there');
+    const warnings = [];
+    const h = harness();
+    const result = await runSdkBuild(spec, { sdk: h.sdk, apply: true, env: 'https://x', appDir, genpage: h.genpage, phases: PHASES, warn: (m) => warnings.push(m) });
+    assert.deepStrictEqual(Object.keys(result.created.pages).sort(), ['detail', 'overview'], 'the build went on and made both pages');
+    const released = warnings.filter((w) => /released the pages lock/.test(w));
+    assert.strictEqual(released.length, 1, `one warning that says so: ${JSON.stringify(warnings)}`);
+    assert.ok(released[0].includes(`pid ${holder.pid}`), released[0]);
+    assert.ok(!fs.existsSync(lockPath), 'and the build that took it over released it when it finished');
+  } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
+});
+
+// Direct unit tests of the DESCOPED advisory lease: the DESCOPED advisory lease
+// NEVER steals from a build that may still be running and NEVER age-reclaims — a held lock HALTs a second acquire (manual
+// delete required) unless its owner is provably gone (pages-lock-dead-owner.test.js); release is owner-checked.
+// Correctness rests on the convergence spine, not the lock.
 test('LEASE: a FRESH lock HALTs a second acquire (never steals); release then allows re-acquire', () => {
   const wsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'lease-'));
   try {

@@ -87,6 +87,8 @@ function membershipSdk({ existing = false, page = false, forms, warnings = [], m
       },
       post: async (url, body) => {
         events.push(['post', url, clone(body)]);
+        // A PublishXml that names tables and no app is a table publish: it needs no app, and it neither publishes the app nor changes what is pending on it.
+        if (url === '/PublishXml' && !/<appmodule>/.test(String((body && body.ParameterXml) || ''))) return { status: 204, body: null };
         assertExists();
         if (url === '/AddAppComponents') {
           if (!dropPin) for (const component of body.Components) {

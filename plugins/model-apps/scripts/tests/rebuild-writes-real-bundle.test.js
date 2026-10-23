@@ -641,6 +641,35 @@ test('rebuild writes: a spec column a maker removed from a view in Dataverse is 
   assert.deepEqual(s.fake.unpublished(), [], 'and it is published');
 });
 
+// A view's filter can hold a `<link-entity>`: a condition on RELATED rows ("tickets with a task that has a due date",
+// `link-type="any"`). The SDK keeps such a filter — the whole of it, its sibling conditions included — only in its own copy
+// of the view's FetchXML, so the typed `filters` of a fetched view are empty. A rebuild changes a view's columns and
+// description and nothing else of its query, so the filter a maker made must come through it untouched.
+test('rebuild writes: a view whose filter holds a related-rows condition keeps it when a column is added, and an unchanged rebuild writes nothing', async () => {
+  const s = scenario();
+  await s.build(specFor());
+  const view = () => s.fake.rows('savedqueries').find((r) => r.data.name === 'Open Tickets');
+  const filter = '<filter type="and"><condition attribute="new_code" operator="eq" value="A" />'
+    + '<link-entity name="new_task" from="new_taskid" to="new_taskid" link-type="any"><filter type="and"><condition attribute="new_due" operator="not-null" /></filter></link-entity></filter>';
+  // The maker adds the condition in the designer: the query gains the filter, and the row moves on.
+  view().data.fetchxml = view().data.fetchxml.replace(/<\/entity>/, `${filter}</entity>`);
+  view().version += 1;
+
+  const grown = await s.build(specFor({ viewColumns: ['new_name', 'new_code', 'new_area'] }));
+  assert.equal(grown.writes['PATCH savedqueries'], 1, JSON.stringify(grown.writes));
+  const [save] = s.fake.saves(grown.mark);
+  assert.match(save.body.layoutxml, /<cell name="new_area"/, 'the spec\u2019s new column is written');
+  assert.match(save.body.fetchxml, /<attribute name="new_area"/, 'and fetched');
+  const spaced = (xml) => xml.replace(/\s*\/>/g, ' />');
+  assert.ok(spaced(save.body.fetchxml).includes(spaced(filter)), `the filter, link-entity and all, is written back as it was:\n${save.body.fetchxml}`);
+  assert.ok(spaced(view().data.fetchxml).includes(spaced(filter)), 'and is what the view holds now');
+
+  const again = await s.build(specFor({ viewColumns: ['new_name', 'new_code', 'new_area'] }));
+  assert.equal(again.writes['PATCH savedqueries'], undefined, JSON.stringify(again.writes));
+  assert.ok(spaced(view().data.fetchxml).includes(spaced(filter)));
+  assert.deepEqual(s.fake.unpublished(), []);
+});
+
 test('rebuild writes: a description the spec sets, changed by a maker in Dataverse, is pushed back', async () => {
   const s = scenario();
   const spec = () => specFor({ viewDescription: 'Spec text.' });

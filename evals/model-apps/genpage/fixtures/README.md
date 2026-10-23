@@ -114,7 +114,7 @@ of step with the fixtures.
 | `18-sharepoint-connectors/` | 18 | Historical synthetic | green | Connector-backed source and discovery |
 | `19-add-weather-connector/` | 19 | Historical synthetic | green | Add-from-none edit compatibility |
 | `10-auth-timeout-halt/` | 10 | Current synthetic | green | Associated timeout results, one retry/advice, halt with no TSX/mutation |
-| `20-upload-preservation/` | 20 | Current synthetic | green | Exact create file transport; independent edit read-backs; quote refusal |
+| `20-upload-preservation/` | 20 | Current synthetic | green | App-less create (first page of a new app); exact create file transport; independent edit read-backs; a straight quote stored exactly |
 | `21-discovery-failure/` | 21 | Current synthetic | green | Unreadable discovery is needs_input, never setup/upload; no generated TSX |
 | `22-navigation-contract/` | 22 | Current synthetic | green | Actual before/after source, optional calls/overrides/escaped keys/Unicode terminators, affected-only upload |
 | `23-worker-completeness/` | 23 | Current synthetic | green | Failed production gate blocks upload until fresh complete regeneration |
@@ -122,7 +122,7 @@ of step with the fixtures.
 | `25-solution-package/` | 25 | Current synthetic | green | Every deployed page, dynamic component types, app-first writes, read-back and invalid-id refusal |
 | `3-contacts-edit-search-sort/` | 3 | Current synthetic | green | Edit flow: discovered app/page, download snapshot in `before/`, inline edit adding SearchBox + header sorting, `--page-id` delta upload without `--add-to-sitemap` |
 | `6-traffic-analytics-mock/` | 6 | Current synthetic | green | Clean, minimal mock-data analytics with D3 only; no entity work; upload omits `--data-sources` |
-| `8-account-metrics-new-app/` | 8 | Current synthetic | green | Zero apps → create-new-app choice, solution question, `pac model create --solution`, new app-id used for upload |
+| `8-account-metrics-new-app/` | 8 | Current synthetic | green | Zero apps → create-new-app choice, solution question, first page uploaded with no app, then `apps.js create --solution --page-id --publish`, which pins the page's tables itself, so no upload follows |
 | `9-project-tracker-new-entities/` | 9 | Current synthetic | green | Two new related tables, auth gate, dependency-ordered provisioning, `$parent`/match sample data, both tables as data sources |
 | `12-account-plan-revision/` | 12 | Current synthetic | green | First plan rejected, revised plan re-presented and approved; page has both search box and filter toolbar |
 | `14-account-list-edit-collision/` | 14 | Current synthetic | green | Colliding file names refused by the Phase 5a gate, re-plan, two parallel builders, Phase 6.5 navigation fix-up |
@@ -132,6 +132,14 @@ Historical captures remain compatibility/parser evidence, not proof of today's
 file transport, binding preservation or full skill compliance. Their current
 plans already contain the Custom API no-bindings section. Capture-local READMEs
 can contain capture-era counts/claims; the inventory above is the current roster.
+
+Historical captures also record the `pac model list-tables`, `pac model list`,
+`pac model list-languages`, `pac model create` and raw `pac model genpage upload`
+commands that the plugin's own scripts (`list-tables.js`, `apps.js`,
+`list-languages.js`, `genpage-upload.js`) have since replaced. They are not
+rewritten — a captured transcript is evidence of what ran — and the graders
+still read those forms. The current synthetic fixtures record the scripts and the
+JSON they print.
 
 Expected failures belong in discriminating scorer unit tests, or in an explicit
 refusal/recovery trace that satisfies its declared outcome. The corpus is never

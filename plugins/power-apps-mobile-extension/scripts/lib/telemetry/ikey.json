@@ -1,0 +1,15 @@
+{
+  "event_stream_name": "event",
+  "disabled": false,
+  "default_region": "us",
+  "regions": {
+    "us": {
+      "instrumentation_key": "5c3a61f48d7c4522912765ae7465ab5c-f9cba087-ed82-4591-93d0-ce7eb8bbfcf5-7021",
+      "collector_url": "https://browser.events.data.microsoft.com/OneCollector/1.0/"
+    },
+    "eu": {
+      "instrumentation_key": "5c3a61f48d7c4522912765ae7465ab5c-f9cba087-ed82-4591-93d0-ce7eb8bbfcf5-7021",
+      "collector_url": "https://eu-mobile.events.data.microsoft.com/OneCollector/1.0/"
+    }
+  }
+}

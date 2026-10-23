@@ -8,6 +8,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { untypedColumnNames, collectGlobalChoices, finalizeGlobalChoices, resolveAppId, collectSitemap, parseDownloadedPages, entityFromMetadata, readEntityWithDescriptions, readDescriptionInventory, iconWebResources, readDashboards, readRelationships, droppedSubareaCount, preserveAuthoredLanguageCode } = require('../download-model-app.js');
 const { currentReadSdk, APP: COMPONENT_APP_ID, CURRENT: COMPONENT_LAYER_ID } = require('./helpers/app-membership-sdk.js');
+const { fakeGenpage } = require('./helpers/fake-genpage.js');
 
 test('resolveAppId returns a guid as-is, else resolves by uniquename', async () => {
   const guid = '11111111-2222-3333-4444-555555555555';
@@ -124,7 +125,7 @@ test('iconWebResources reports an own-prefix icon read FAILURE as unresolved (no
 test('iconWebResources with an UNVERIFIED prefix (publisher read failed) surfaces a genuine own custom icon as unresolved instead of silently dropping it; a managed/OOB ref stays silent', async () => {
   // prefixResolved=false + a fallback prefix ('new') that does NOT match the app's real 'crba3' icons.
   // Without the guard, crba3_nav.svg fails startsWith('new_') and is silently skipped with no warning
-  // (Opus/Sol finding). It must instead be surfaced as unresolved; the OOB CDSEntity ref must stay silent.
+  // — it must instead be surfaced as unresolved; the OOB CDSEntity ref must stay silent.
   const sdk = { queryRecords: async (e, o) => {
     const name = (o.filter.match(/name eq '([^']*)'/) || [])[1];
     if (name === 'crba3_nav.svg') return [{ name, webresourcetype: 11, content: 'PHN2Zz4=', ismanaged: false }]; // genuine own custom svg
@@ -138,7 +139,7 @@ test('iconWebResources with an UNVERIFIED prefix (publisher read failed) surface
 });
 
 test('iconWebResources: a WR referenced BOTH by a bare name AND a platform path inherits external:true (overlap keeps teardown protection)', async () => {
-  // Sol finding: if the bare pass emitted the WR without external and `seen` then suppressed the path
+  // If the bare pass emitted the WR without external and `seen` then suppressed the path
   // classification, teardown would delete a shared nav icon. The path pass runs first / the bare entry
   // inherits external when it is also a customRef.
   const sdk = { queryRecords: async (e, o) => {
@@ -152,7 +153,7 @@ test('iconWebResources: a WR referenced BOTH by a bare name AND a platform path 
   assert.strictEqual(webResources[0].external, true, 'an overlapping bare+path WR is external (teardown must not delete a shared nav icon)');
 });
 
-test('parseDownloadedPages reads pac page tree (<pageId>/page.tsx + config + prompt) into pages[]', () => {
+test('parseDownloadedPages reads the page tree a download writes (<pageId>/page.tsx + config + prompt) into pages[]', () => {
   const out = fs.mkdtempSync(path.join(os.tmpdir(), 'dl-'));
   const pagesRoot = path.join(out, 'pages');
   const pid = '6e0c28a2-cdbf-41ec-9186-d10fd5de6e35';
@@ -249,7 +250,7 @@ test('readEntityWithDescriptions reads descriptions through the RAW dataverse cl
 
   // The $select also carries the DISPLAY labels now, so a table/column labelled in more than one
   // language round-trips (AB#6686428). The SDK's flattened `displayName` keeps only one.
-  assert.ok(gets.some((u) => /^\/EntityDefinitions\(LogicalName='new_order'\)\?\$select=LogicalName,Description,DisplayName,DisplayCollectionName$/.test(u)), `table read URL wrong: ${gets.join(' | ')}`);
+  assert.ok(gets.some((u) => u === "/EntityDefinitions(LogicalName='new_order')?$select=LogicalName,Description,DisplayName,DisplayCollectionName,IconVectorName&$expand=Keys($select=SchemaName,DisplayName,KeyAttributes,IsManaged)"), `table read URL wrong: ${gets.join(' | ')}`);
   assert.ok(gets.some((u) => /^\/EntityDefinitions\(LogicalName='new_order'\)\/Attributes\?\$select=LogicalName,Description,DisplayName,IsLogical,AttributeOf,AttributeTypeName$/.test(u)), `attribute read URL wrong: ${gets.join(' | ')}`);
   assert.strictEqual(e.description, 'Order table purpose.');
   const status = e.columns.find((c) => c.schemaName === 'new_status');
@@ -465,7 +466,7 @@ test('#564 a LOCAL option set downloads as a real Choice with inline options[], 
   // The cast segment is required: Attributes is a heterogeneous collection, so OptionSet can only be
   // expanded through it. Pin the exact URL so a silent shape change is caught here, not live.
   assert.ok(
-    urls.some((u) => u === "/EntityDefinitions(LogicalName='new_ticket')/Attributes/Microsoft.Dynamics.CRM.PicklistAttributeMetadata?$select=LogicalName&$expand=OptionSet($select=Name,IsGlobal,Options)"),
+    urls.some((u) => u === "/EntityDefinitions(LogicalName='new_ticket')/Attributes/Microsoft.Dynamics.CRM.PicklistAttributeMetadata?$select=LogicalName&$expand=OptionSet($select=Name,DisplayName,IsGlobal,Options)"),
     'picklist read URL wrong: ' + urls.join(' | ')
   );
 });
@@ -904,10 +905,12 @@ test('readDescriptionInventory captures view, chart, form, business-rule, and gl
 
   assert.deepStrictEqual(inv.views[0], { id: VIEW_ID, name: 'Active Orders', entity: 'new_order', description: 'Work queue.' });
   assert.strictEqual('description' in inv.charts[0], false, 'null chart descriptions are omitted');
-  assert.deepStrictEqual(inv.forms[0], { id: FORM_ID, name: 'Main', entity: 'new_order', description: 'Primary form.' });
+  // By table, then name, then id — not the order Dataverse answered in (the Main form came first there).
+  assert.deepStrictEqual(inv.forms.map((f) => f.name), ['Dispatcher', 'Main']);
+  assert.deepStrictEqual(inv.forms.find((f) => f.id === FORM_ID), { id: FORM_ID, name: 'Main', entity: 'new_order', description: 'Primary form.' });
   // The role-restriction flag must NOT ride on the form entries: sanitizeDescriptionInventory spreads
   // those into `app-spec.json`, and a diagnostic has no business in the user-facing spec.
-  assert.strictEqual('roleRestricted' in inv.forms[1], false,
+  assert.ok(inv.forms.every((f) => !('roleRestricted' in f)),
     'the flag belongs on the sibling key, not on each form entry');
   // BEHAVIOURAL: only the restricted form is recorded, and it is recorded by (entity, name) so the
   // warning can name it. A source regex could not catch dropping `formxml` from the $select —
@@ -1087,7 +1090,7 @@ test('readDashboards withholds a dashboard whose name cannot be read, instead of
   assert.deepStrictEqual(named.map((d) => d.name), ['Ops Board']);
 });
 
-// ── Task 11: assignPageKeys + missingDownloads + full round-trip ──────────────
+// ── assignPageKeys + missingDownloads + full round-trip ──────────────
 const { assignPageKeys, missingDownloads, runDownload, recoverAppSolution, appComponentEntities } = require('../download-model-app.js');
 const { reconcilePageIds, buildManifest } = require('../lib/page-manifest.js');
 const { hydrateSpec } = require('../lib/hydrate-spec.js');
@@ -1100,16 +1103,14 @@ const { resolvePageRefs, reverseResolveNavIds } = require('../lib/pageref-resolv
 const { OBJECT_DIVISION_PAGE, LONG_KEY, lookBehindPage } = require('./helpers/misread-page.js');
 
 test('runDownload translates a fail-closed app read into a graceful error, not a raw SDK throw', async () => {
-  // `fetchArtifact('app')` fails closed (`APP_SITEMAP_UNRESOLVED`) rather than hand back an app whose
-  // navigation is untrustworthy. The sitemap IS this function's membership oracle, so that is a
-  // LOGICAL failure of the class its contract says it RETURNS rather than throws — otherwise the CLI
-  // surfaces an opaque SDK error for the very ordinary case of an unpublished app.
-  for (const code of ['APP_SITEMAP_UNRESOLVED', 'APP_UPDATE_NO_ETAG']) {
+  // An unresolved or shared sitemap is not a partial download: none of its navigation can be trusted
+  // as this app's membership. Preserve that refusal as a logical error before reading or writing pages.
+  for (const code of ['APP_SITEMAP_UNRESOLVED', 'APP_SITEMAP_SHARED', 'APP_UPDATE_NO_ETAG']) {
     const err = new Error('app sitemap could not be resolved');
     err.code = code;
     const sdk = { fetchArtifact: async () => { throw err; } };
-    const genpageCli = { enumerateEnv: async () => ({ ok: true, pages: [] }), download: async () => true };
-    const res = await runDownload({ sdk, genpageCli, outDir: __dirname, appId: 'app-1', appUnique: 'new_app' });
+    const genpage = fakeGenpage();
+    const res = await runDownload({ sdk, genpage, outDir: __dirname, appId: 'app-1', appUnique: 'new_app' });
     assert.strictEqual(res.ok, false, `${code} must return ok:false`);
     assert.match(res.error, /cannot read app app-1/, `${code} error names the app`);
     assert.match(res.error, /sitemap could not be resolved/, `${code} keeps the underlying reason`);
@@ -1117,19 +1118,19 @@ test('runDownload translates a fail-closed app read into a graceful error, not a
 });
 
 test('runDownload still propagates a genuinely unexpected error (no blanket swallow)', async () => {
-  // Only the two fail-closed read codes are translated. An unexpected I/O error must keep propagating
+  // Only the fail-closed read codes are translated. An unexpected I/O error must keep propagating
   // to main().catch, or a real defect would be reported as an ordinary "download failed".
   const err = new Error('EACCES: permission denied');
   err.code = 'EACCES';
   const sdk = { fetchArtifact: async () => { throw err; } };
-  const genpageCli = { enumerateEnv: async () => ({ ok: true, pages: [] }), download: async () => true };
+  const genpage = fakeGenpage();
   await assert.rejects(
-    runDownload({ sdk, genpageCli, outDir: __dirname, appId: 'app-1', appUnique: 'new_app' }),
+    runDownload({ sdk, genpage, outDir: __dirname, appId: 'app-1', appUnique: 'new_app' }),
     (caught) => caught && caught.code === 'EACCES'
   );
 });
 
-test('assignPageKeys: reuses the manifest key + v2 semantics for a reconcile-bound page, mints fresh keys otherwise (I3/§7.3)', () => {
+test('assignPageKeys: reuses the manifest key + v2 semantics for a reconcile-bound page, mints fresh keys otherwise (§7.3)', () => {
   const GP_O = '13ecbc57-a3a4-4132-b0a2-a6c6b12691e8';
   const GP_X = '9f2b1a3c-77de-4a10-8b6e-2c4d5e6f7a8b';
   const manifest = { schemaVersion: 1, pages: [{ key: 'overview', name: 'Overview', pageId: GP_O, purpose: 'Home', navigatesTo: [{ targetKey: 'detail' }], pageInput: { data: {} } }] };
@@ -1154,7 +1155,7 @@ test('assignPageKeys: mints unique keys (no manifest) with -N de-dup on slug col
   assert.deepStrictEqual(downloaded.map((p) => p.key), ['work-order', 'work-order-2']);
 });
 
-test('missingDownloads flags a gap in EITHER direction (I3 exact enumerated<->downloaded equality)', () => {
+test('missingDownloads flags a gap in EITHER direction (exact enumerated<->downloaded equality)', () => {
   const enumPages = [{ pageId: 'gp-o', name: 'Overview' }, { pageId: 'gp-d', name: 'Detail' }];
   const downloaded = [{ pageId: 'gp-o', name: 'Overview' }];
   assert.deepStrictEqual(missingDownloads(enumPages, downloaded).map((p) => p.pageId), ['gp-d'], 'enumerated-but-not-downloaded');
@@ -1162,7 +1163,7 @@ test('missingDownloads flags a gap in EITHER direction (I3 exact enumerated<->do
   assert.deepStrictEqual(missingDownloads(enumPages, enumPages), []);
 });
 
-test('ROUND-TRIP: manifest → download → reverse → hydrate → validate → resolve reproduces the deployed ids (Critical 2/I3)', async () => {
+test('ROUND-TRIP: manifest → download → reverse → hydrate → validate → resolve reproduces the deployed ids', async () => {
   const GP_O = '13ecbc57-a3a4-4132-b0a2-a6c6b12691e8';
   const GP_D = '5c0a4889-45fd-46ea-91a8-ff876914d644';
   const manifest = buildManifest({ pages: [{ key: 'overview', name: 'Overview', navigatesTo: [{ targetKey: 'detail' }] }, { key: 'detail', name: 'Detail' }] }, new Map([['overview', GP_O], ['detail', GP_D]]));
@@ -1192,7 +1193,7 @@ test('ROUND-TRIP: manifest → download → reverse → hydrate → validate →
   assert.ok(resolved.includes(`pageId: "${GP_D}"`) && !/PAGEREF_/.test(resolved), 'reverse∘resolve returns the deployed id — the loop is closed');
 });
 
-// ── Task 6: sitemap-membership + download-by-id + keep pageId + env-wide names + injectable seam ─
+// ── sitemap-membership + download-by-id + keep pageId + env-wide names + injectable seam ─
 
 test('lexical navigation variants survive deploy-download-rebuild', async () => {
   const overviewId = 'aaaaaaaa-0000-4000-8000-000000000001';
@@ -1247,23 +1248,15 @@ test('lexical navigation variants survive deploy-download-rebuild', async () => 
       fetchEntityMetadata: async (logical) => ({ schemaName: logical, displayName: 'Item', primaryNameAttribute: 'contoso_name', attributes: [], relationships: [] }),
       dataverse: { get: async () => ({ status: 200, body: { value: [] } }) },
     };
-    const genpageCli = {
-      enumerateEnv: async () => ({ ok: true, ids: [overviewId, detailId], pages: [{ pageId: overviewId, name: 'Overview' }, { pageId: detailId, name: 'Detail' }] }),
-      download: async ({ outputDir, pageIds }) => {
-        assert.deepStrictEqual([...pageIds].sort(), [overviewId, detailId].sort());
-        for (const id of pageIds) {
-          const dir = path.join(outputDir, id);
-          fs.mkdirSync(dir, { recursive: true });
-          fs.writeFileSync(path.join(dir, 'page.tsx'), id === overviewId ? deployed : detailCode, 'utf8');
-          fs.writeFileSync(path.join(dir, 'config.json'), '\uFEFF{"dataSources":["contoso_item"]}', 'utf8');
-        }
-        return true;
-      },
-    };
+    const genpage = fakeGenpage({ pages: [
+      { pageId: overviewId, name: 'Overview', source: deployed, dataSources: ['contoso_item'] },
+      { pageId: detailId, name: 'Detail', source: detailCode, dataSources: ['contoso_item'] },
+    ] });
     const downloaded = await runDownload({
       sdk: currentReadSdk(sdk, { appId, layerId: appUniqueId, sitemapXml: xml }),
-      genpageCli, outDir: out, appId, appUnique,
+      genpage, outDir: out, appId, appUnique,
     });
+    assert.deepStrictEqual(genpage.of('read').map((c) => c.args[0]).sort(), [overviewId, detailId].sort(), 'exactly the sitemap\'s pages are read, each by id');
     assert.ok(downloaded.ok, JSON.stringify(downloaded));
     const validation = validateAppSpec(downloaded.spec);
     assert.ok(validation.ok, validation.errors.join('; '));
@@ -1318,24 +1311,16 @@ async function downloadOverview(deployedOverview, detailKey = 'detail') {
     fetchEntityMetadata: async (logical) => ({ schemaName: logical, displayName: 'Item', primaryNameAttribute: 'contoso_name', attributes: [], relationships: [] }),
     dataverse: { get: async () => ({ status: 200, body: { value: [] } }) },
   };
-  const genpageCli = {
-    enumerateEnv: async () => ({ ok: true, ids: [overviewId, detailId], pages: [{ pageId: overviewId, name: 'Overview' }, { pageId: detailId, name: 'Detail' }] }),
-    download: async ({ outputDir, pageIds }) => {
-      for (const id of pageIds) {
-        const dir = path.join(outputDir, id);
-        fs.mkdirSync(dir, { recursive: true });
-        fs.writeFileSync(path.join(dir, 'page.tsx'), id === overviewId ? deployedOverview(detailId) : 'export default function Detail() { return null; }\n', 'utf8');
-        fs.writeFileSync(path.join(dir, 'config.json'), '\uFEFF{"dataSources":[]}', 'utf8');
-      }
-      return true;
-    },
-  };
+  const genpage = fakeGenpage({ pages: [
+    { pageId: overviewId, name: 'Overview', source: deployedOverview(detailId), dataSources: [] },
+    { pageId: detailId, name: 'Detail', source: 'export default function Detail() { return null; }\n', dataSources: [] },
+  ] });
   const warned = [];
   const realWrite = process.stderr.write.bind(process.stderr);
   process.stderr.write = (chunk) => { warned.push(String(chunk)); return true; };
   let downloaded;
   try {
-    downloaded = await runDownload({ sdk: currentReadSdk(sdk, { appId, layerId: appUniqueId, sitemapXml: xml }), genpageCli, outDir: out, appId, appUnique });
+    downloaded = await runDownload({ sdk: currentReadSdk(sdk, { appId, layerId: appUniqueId, sitemapXml: xml }), genpage, outDir: out, appId, appUnique });
   } finally { process.stderr.write = realWrite; }
   const overview = downloaded.ok && downloaded.spec.pages.find((p) => p.key === 'overview');
   return {
@@ -1470,7 +1455,7 @@ test('download is silent about page ids when every one is turned back into a tok
   } finally { run.cleanup(); }
 });
 
-test('Task-6: Maker-added page (sitemap, not in manifest) gets a minted key, keeps pageId (C3)', () => {
+test('Maker-added page (sitemap, not in manifest) gets a minted key, keeps pageId', () => {
   const GP_O = '13ecbc57-a3a4-4132-b0a2-a6c6b12691e8';
   const GP_MAKER = '9f2b1a3c-77de-4a10-8b6e-2c4d5e6f7a8b';
   // manifest knows only GP_O; GP_MAKER was added in Maker and is only in the sitemap
@@ -1485,16 +1470,16 @@ test('Task-6: Maker-added page (sitemap, not in manifest) gets a minted key, kee
   const idToKey = assignPageKeys(pages, manifest, keyToId);
   // Manifest-bound page reuses its key
   assert.strictEqual(pages[0].key, 'overview', 'manifest-bound page reuses its key');
-  assert.strictEqual(pages[0].pageId, GP_O, 'pageId preserved (C3)');
+  assert.strictEqual(pages[0].pageId, GP_O, 'pageId preserved');
   // Maker-added page gets a fresh key and keeps its pageId
   assert.ok(pages[1].key, 'Maker-added page has a minted key');
-  assert.strictEqual(pages[1].pageId, GP_MAKER, 'Maker-added page pageId preserved for edit-snapshot adoption (C3)');
+  assert.strictEqual(pages[1].pageId, GP_MAKER, 'Maker-added page pageId preserved for edit-snapshot adoption');
   // Both ids are in idToKey so nav reverse-resolve covers all pages
   assert.strictEqual(idToKey.get(GP_O), 'overview');
   assert.ok(idToKey.has(GP_MAKER), 'Maker-added page id is in idToKey (nav reverse-resolve works)');
 });
 
-test('Task-6: sitemap id not downloaded → missingDownloads catches it → download aborts (I3)', () => {
+test('sitemap id not downloaded → missingDownloads catches it → download aborts', () => {
   const GP_A = '13ecbc57-a3a4-4132-b0a2-a6c6b12691e8';
   const GP_B = '5c0a4889-45fd-46ea-91a8-ff876914d644';
   // Both GP_A and GP_B are in the sitemap, but only GP_A was downloaded
@@ -1507,7 +1492,7 @@ test('Task-6: sitemap id not downloaded → missingDownloads catches it → down
   assert.deepStrictEqual(missingDownloads(downloaded, smPages), []);
 });
 
-test('Task-6: env-wide id→name used as the page name; sitemap title is fallback only', () => {
+test('env-wide id→name used as the page name; sitemap title is fallback only', () => {
   const GP = '13ecbc57-a3a4-4132-b0a2-a6c6b12691e8';
   const out = fs.mkdtempSync(path.join(os.tmpdir(), 'dl-nm-'));
   try {
@@ -1526,7 +1511,144 @@ test('Task-6: env-wide id→name used as the page name; sitemap title is fallbac
   }
 });
 
-test('Task-6: full round-trip via runDownload → hydrateSpec → validateAppSpec ok, pages carry pageId (injectable seam)', async () => {
+// ── the page folders a download writes from what the SDK read ─────────────────────────────────────────────────────────────────────
+
+// An app with the given pages in its navigation, served through the stand-in SDK the other runDownload tests use.
+function pagesApp(pageIds) {
+  const APP_ID = 'a1b2c3d4-0000-4000-8000-000000000001';
+  const LAYER = 'c0ffee00-0000-4000-8000-00000000dddd';
+  const xml = `<SiteMap><Area><Group>${pageIds.map((id, i) => `<SubArea GenPageId="${id}" Title="Title ${i}"/>`).join('')}<SubArea Entity="contoso_item"/></Group></Area></SiteMap>`;
+  const sdk = {
+    fetchArtifact: async () => ({
+      name: 'Pages App', description: '',
+      siteMap: { areas: [{ title: 'M', groups: [{ title: 'G', subAreas: [
+        ...pageIds.map((id, i) => ({ type: 'GenPage', genPageId: id, title: `Title ${i}` })),
+        { type: 'Entity', entity: 'contoso_item' },
+      ] }] }] },
+    }),
+    queryRecords: async (logical, opts) => {
+      const filter = (opts && opts.filter) || '';
+      if (logical === 'appmodule') {
+        const m = filter.match(/uniquename eq '([^']+)'/);
+        if (m) return m[1] === 'test_pages' ? [{ appmoduleid: APP_ID, appmoduleidunique: LAYER }] : [];
+        return [{ appmoduleid: APP_ID, appmoduleidunique: LAYER, uniquename: 'test_pages' }];
+      }
+      if (logical === 'appmodulecomponent') return [{ objectid: '5111e0f2-0000-4000-8000-0000000000aa', componenttype: 62 }];
+      if (logical === 'sitemap') return [{ sitemapxml: xml }];
+      return [];
+    },
+    fetchEntityMetadata: async (logical) => ({ schemaName: logical, displayName: 'Item', primaryNameAttribute: `${String(logical).split('_')[0]}_name` }),
+  };
+  return { sdk: currentReadSdk(sdk, { appId: APP_ID, layerId: LAYER, sitemapXml: xml }), appId: APP_ID, appUnique: 'test_pages' };
+}
+
+test('runDownload writes pages/<id>/{page.tsx,config.json,prompt.txt} from the page the SDK read — the source exactly as stored, no BOM and no CRLF added', async () => {
+  const GP_A = '13ecbc57-a3a4-4132-b0a2-a6c6b12691e8';
+  const GP_B = '5c0a4889-45fd-46ea-91a8-ff876914d644';
+  const SOURCE_A = 'export default function A() {\n  return null;\n}';
+  const out = fs.mkdtempSync(path.join(os.tmpdir(), 'dl-tree-'));
+  try {
+    const app = pagesApp([GP_A, GP_B]);
+    const genpage = fakeGenpage({ pages: [
+      { pageId: GP_A, name: 'Alpha', source: SOURCE_A, dataSources: ['contoso_item'], model: 'gpt-4.1', actionBindings: [{ action: 'x' }],
+        conversation: [{ sender: 'user', message: 'Show items' }, { sender: 'agent', message: 'Shown' }, { sender: 'user', message: 'Add a chart' }] },
+      { pageId: GP_B, name: 'Beta', source: 'export default () => null;\r\n', prompt: 'Only prompt' },
+    ] });
+    const result = await runDownload({ ...app, genpage, outDir: out });
+    assert.ok(result.ok, JSON.stringify(result));
+    const bytes = (id, name) => fs.readFileSync(path.join(out, 'pages', id, name));
+
+    assert.deepStrictEqual(bytes(GP_A, 'page.tsx'), Buffer.from(SOURCE_A, 'utf8'), 'the stored source, byte for byte: no BOM, nothing appended');
+    assert.deepStrictEqual(bytes(GP_B, 'page.tsx'), Buffer.from('export default () => null;\r\n', 'utf8'), 'a source that ends in CRLF keeps it — it is the page\'s own');
+    assert.deepStrictEqual(JSON.parse(bytes(GP_A, 'config.json').toString('utf8')), { dataSources: ['contoso_item'], model: 'gpt-4.1', actionBindings: [{ action: 'x' }] });
+    assert.strictEqual(bytes(GP_A, 'prompt.txt').toString('utf8'), 'Conversation with 2 prompts:\r\n1. Show items\r\n2. Add a chart', 'several prompts: the transcript an earlier release wrote');
+    assert.strictEqual(bytes(GP_B, 'prompt.txt').toString('utf8'), 'Only prompt', 'one prompt: the bare text');
+    assert.ok(![...bytes(GP_A, 'page.tsx').slice(0, 3)].every((b, i) => b === [0xef, 0xbb, 0xbf][i]), 'no BOM');
+
+    // What a rebuild reads back is what the page holds.
+    const alpha = result.spec.pages.find((p) => p.pageId === GP_A);
+    assert.strictEqual(alpha.name, 'Alpha');
+    assert.deepStrictEqual(alpha.dataSources, ['contoso_item']);
+    assert.strictEqual(alpha.model, 'gpt-4.1');
+    assert.strictEqual(alpha.prompt, 'Conversation with 2 prompts:\r\n1. Show items\r\n2. Add a chart');
+    assert.deepStrictEqual(genpage.of('read').map((c) => c.args[0]).sort(), [GP_A, GP_B].sort(), 'each sitemap page is read once, by id');
+    assert.strictEqual(genpage.of('enumerateEnv').length, 1);
+  } finally {
+    fs.rmSync(out, { recursive: true, force: true });
+  }
+});
+
+test('runDownload: a page the SDK cannot read — missing, unreadable, or held as raw files — FAILS the download with its id and reason, and writes no page folder', async () => {
+  const GP_A = '13ecbc57-a3a4-4132-b0a2-a6c6b12691e8';
+  const GP_RAW = '5c0a4889-45fd-46ea-91a8-ff876914d644';
+  const GP_GONE = '9f2b1a3c-77de-4a10-8b6e-2c4d5e6f7a8b';
+  const out = fs.mkdtempSync(path.join(os.tmpdir(), 'dl-unreadable-'));
+  try {
+    const app = pagesApp([GP_A, GP_RAW, GP_GONE]);
+    const genpage = fakeGenpage({ pages: [{ pageId: GP_A, name: 'Fine' }, { pageId: GP_RAW, name: 'Hand made', raw: true }] });
+    const result = await runDownload({ ...app, genpage, outDir: out });
+    assert.strictEqual(result.ok, false);
+    assert.match(result.error, /^page download failed: /);
+    assert.match(result.error, new RegExp(`${GP_RAW}: .*no source this tool can read`), 'a raw-file page is reported, never written as an empty page');
+    assert.match(result.error, new RegExp(`${GP_GONE}: .*does not exist`), 'every page that could not be read is named, in the sitemap\'s order');
+    assert.ok(!result.error.includes(`${GP_A}:`), 'the page that could be read is not blamed');
+    assert.strictEqual(result.spec, undefined, 'no spec is emitted that would drop them');
+    assert.ok(!fs.existsSync(path.join(out, 'pages')), 'nothing was written: a partial page set is never left behind');
+  } finally {
+    fs.rmSync(out, { recursive: true, force: true });
+  }
+});
+
+test('runDownload: a failed listing of the environment\'s pages fails the download before any page is read', async () => {
+  const GP_A = '13ecbc57-a3a4-4132-b0a2-a6c6b12691e8';
+  const out = fs.mkdtempSync(path.join(os.tmpdir(), 'dl-listing-'));
+  try {
+    const genpage = fakeGenpage({ pages: [{ pageId: GP_A, name: 'Fine' }], enumerateError: 'could not list the environment\'s generative pages: HTTP 503' });
+    const result = await runDownload({ ...pagesApp([GP_A]), genpage, outDir: out });
+    assert.strictEqual(result.ok, false);
+    assert.match(result.error, /page enumeration failed during download: .*HTTP 503/);
+    assert.deepStrictEqual(genpage.of('read'), []);
+  } finally {
+    fs.rmSync(out, { recursive: true, force: true });
+  }
+});
+
+test('runDownload replaces the pages tree as a whole — a page deleted since the last download does not linger — and an app with no page leaves an existing tree alone', async () => {
+  const GP_A = '13ecbc57-a3a4-4132-b0a2-a6c6b12691e8';
+  const STALE = '77777777-7777-4777-8777-777777777777';
+  const out = fs.mkdtempSync(path.join(os.tmpdir(), 'dl-replace-'));
+  try {
+    fs.mkdirSync(path.join(out, 'pages', STALE), { recursive: true });
+    fs.writeFileSync(path.join(out, 'pages', STALE, 'page.tsx'), 'export default () => null;');
+    const result = await runDownload({ ...pagesApp([GP_A]), genpage: fakeGenpage({ pages: [{ pageId: GP_A, name: 'Alpha' }] }), outDir: out });
+    assert.ok(result.ok, JSON.stringify(result));
+    assert.deepStrictEqual(fs.readdirSync(path.join(out, 'pages')), [GP_A], 'only the pages the app has now');
+    assert.strictEqual(result.pages.length, 1);
+  } finally {
+    fs.rmSync(out, { recursive: true, force: true });
+  }
+});
+
+test('runDownload: the ids are folder names only after the backend has read them — a navigation naming anything but a page id is never read, so it cannot name a path', async () => {
+  const out = fs.mkdtempSync(path.join(os.tmpdir(), 'dl-ids-'));
+  try {
+    const hostile = '..\\..\\outside';
+    const app = pagesApp([hostile]);
+    // The sitemap parser takes only GUIDs as GenPageId values (a malformed id makes the whole sitemap unreadable), so the download refuses
+    // before anything is read or written.
+    const genpage = fakeGenpage();
+    const result = await runDownload({ ...app, genpage, outDir: out });
+    assert.strictEqual(result.ok, false);
+    assert.match(result.error, /could not read the app sitemap during download \(malformed\)/);
+    assert.deepStrictEqual(genpage.of('read'), []);
+    assert.ok(!fs.existsSync(path.join(out, 'pages')));
+    assert.ok(!fs.existsSync(path.join(path.dirname(out), 'outside')));
+  } finally {
+    fs.rmSync(out, { recursive: true, force: true });
+  }
+});
+
+test('full round-trip via runDownload → hydrateSpec → validateAppSpec ok, pages carry pageId (injectable seam)', async () => {
   const GP_A = '13ecbc57-a3a4-4132-b0a2-a6c6b12691e8';
   const GP_B = '5c0a4889-45fd-46ea-91a8-ff876914d644';
   const APP_ID   = 'a1b2c3d4-0000-4000-8000-000000000001';
@@ -1558,7 +1680,7 @@ test('Task-6: full round-trip via runDownload → hydrateSpec → validateAppSpe
         if (logical === 'sitemap') return [{ sitemapxml: SM_XML }];
         if (logical === 'webresource') return []; // no manifest → fresh keys
         // The app belongs to a real unmanaged solution — recoverAppSolution returns its uniquename, but the
-        // publisher PREFIX must still come from the app uniquename ('test'), NOT this solution (Sol F2).
+        // publisher PREFIX must still come from the app uniquename ('test'), NOT this solution.
         if (logical === 'solutioncomponent') return [{ _solutionid_value: 'sol-x' }];
         if (logical === 'solution') return [{ solutionid: 'sol-x', uniquename: 'ContosoSln', ismanaged: false, description: 'The Contoso field-operations solution.' }];
         return [];
@@ -1567,36 +1689,22 @@ test('Task-6: full round-trip via runDownload → hydrateSpec → validateAppSpe
         schemaName: logical, displayName: 'Item', primaryNameAttribute: `${String(logical).split('_')[0]}_name`,
       }),
     };
-    const mockGenpageCli = {
-      // Env-wide names differ from sitemap titles (the core addenda new-1 distinction)
-      enumerateEnv: async () => ({
-        ok: true,
-        ids: [GP_A.toLowerCase(), GP_B.toLowerCase()],
-        pages: [{ pageId: GP_A, name: 'Env Name A' }, { pageId: GP_B, name: 'Env Name B' }],
-      }),
-      download: async ({ outputDir, pageIds }) => {
-        // Write minimal page files so parseDownloadedPages can read them
-        for (const pid of (pageIds || [])) {
-          fs.mkdirSync(path.join(outputDir, pid), { recursive: true });
-          fs.writeFileSync(path.join(outputDir, pid, 'page.tsx'), 'export default function P() { return null; }');
-        }
-        return true;
-      },
-    };
+    // Env-wide names differ from sitemap titles
+    const mockGenpage = fakeGenpage({ pages: [{ pageId: GP_A, name: 'Env Name A' }, { pageId: GP_B, name: 'Env Name B' }] });
 
     const result = await runDownload({
       sdk: currentReadSdk(mockSdk, { appId: APP_ID, layerId: APP_UNIQ_VALUE, sitemapXml: SM_XML }),
-      genpageCli: mockGenpageCli, outDir: out, appId: APP_ID, appUnique: APP_UNIQUE,
+      genpage: mockGenpage, outDir: out, appId: APP_ID, appUnique: APP_UNIQUE,
     });
     assert.ok(result.ok, JSON.stringify(result));
     const { spec } = result;
     // Full spec validates (profile:'plan' enforces every page is a sitemap subarea)
     const v = validateAppSpec(spec, { profile: 'plan' });
     assert.ok(v.ok, v.errors.join('; '));
-    // Every page carries its pageId (C3 edit-snapshot self-description)
+    // Every page carries its pageId (an edit snapshot describes itself)
     assert.ok(spec.pages.every((p) => p.pageId !== undefined), 'every page in the spec carries its pageId');
     assert.strictEqual(spec.pages.length, 2, 'recovered spec has every sitemap page (no drop)');
-    // Env-wide names used (not sitemap titles) — the core addenda new-1 assertion
+    // Env-wide names used (not sitemap titles)
     const pageA = spec.pages.find((p) => p.pageId === GP_A);
     assert.strictEqual(pageA.name, 'Env Name A', 'env-wide name used as page name (not sitemap title "Sitemap A")');
     // App identity round-trips: the REAL immutable uniquename is captured (so a rebuild resolves the
@@ -1616,10 +1724,11 @@ test('Task-6: full round-trip via runDownload → hydrateSpec → validateAppSpe
   }
 });
 
-// pac stores each ASCII `"` in a page name as `\"` — in the row name the env-wide listing shows, and in a navigation
-// title it writes (live-measured). The spec's name is what a rebuild sends to pac, which would escape it again, so a
-// download must write the name pac was given: kept as read, every round trip added a backslash.
-test('download writes page names without pac\'s \\" escaping, from the env-wide listing and from a title fallback', async () => {
+// An earlier release's `pac` stored each ASCII `"` in a page name as `\"` — in the row name the env-wide listing shows, and in a
+// navigation title it writes (live-measured). Pages made then exist on every environment that used it. The spec's name is what a
+// rebuild sends back, and the SDK stores a name exactly, so a download must write the name the page was GIVEN: kept as read, every
+// round trip would add a backslash.
+test('download writes page names without an earlier release\'s \\" escaping, from the env-wide listing and from a title fallback', async () => {
   const GP_A = '13ecbc57-a3a4-4132-b0a2-a6c6b12691e8';
   const GP_B = '5c0a4889-45fd-46ea-91a8-ff876914d644';
   const APP_ID = 'a1b2c3d4-0000-4000-8000-000000000001';
@@ -1649,19 +1758,13 @@ test('download writes page names without pac\'s \\" escaping, from the env-wide 
       },
       fetchEntityMetadata: async (logical) => ({ schemaName: logical, displayName: 'Item', primaryNameAttribute: `${String(logical).split('_')[0]}_name` }),
     };
-    const genpageCli = {
-      // Page B is missing from the env-wide listing, so its name falls back to the (pac-written) navigation title.
-      enumerateEnv: async () => ({ ok: true, ids: [GP_A.toLowerCase()], pages: [{ pageId: GP_A, name: 'Say \\"hi\\" now' }] }),
-      download: async ({ outputDir, pageIds }) => {
-        for (const pid of (pageIds || [])) {
-          fs.mkdirSync(path.join(outputDir, pid), { recursive: true });
-          fs.writeFileSync(path.join(outputDir, pid, 'page.tsx'), 'export default function P() { return null; }');
-          // A's model is one the spec can hold; B's is not, so it is left out — and said so.
-          fs.writeFileSync(path.join(outputDir, pid, 'config.json'), '\uFEFF' + JSON.stringify({ dataSources: [], model: pid === GP_A ? 'gpt-4.1' : 'has space' }));
-        }
-        return true;
-      },
-    };
+    // A's model is one the spec can hold; B's is not, so it is left out — and said so.
+    const genpage = fakeGenpage({ pages: [
+      { pageId: GP_A, name: 'Say \\"hi\\" now', model: 'gpt-4.1' },
+      { pageId: GP_B, name: 'not the name the spec gets', model: 'has space' },
+    ] });
+    // Page B is missing from the env-wide listing, so its name falls back to the (pac-written) navigation title.
+    genpage.enumerateEnv = async () => ({ ok: true, ids: [GP_A.toLowerCase()], pages: [{ pageId: GP_A, name: 'Say \\"hi\\" now' }] });
     const warned = [];
     const write = process.stderr.write;
     process.stderr.write = (chunk, ...rest) => { warned.push(String(chunk)); return true; };
@@ -1669,7 +1772,7 @@ test('download writes page names without pac\'s \\" escaping, from the env-wide 
     try {
       result = await runDownload({
         sdk: currentReadSdk(sdk, { appId: APP_ID, layerId: 'c0ffee00-0000-4000-8000-00000000dddd', sitemapXml: SM_XML }),
-        genpageCli, outDir: out, appId: APP_ID, appUnique: 'test_roundtrip',
+        genpage, outDir: out, appId: APP_ID, appUnique: 'test_roundtrip',
       });
     } finally {
       process.stderr.write = write;
@@ -1850,8 +1953,8 @@ async function runCapturing(sdk, APP_ID, APP_UNIQUE) {
   const origWrite = process.stderr.write;
   try {
     process.stderr.write = (chunk) => { written.push(String(chunk)); return true; };
-    const genpageCli = { enumerateEnv: async () => ({ ok: true, ids: [], pages: [] }), download: async () => true };
-    const res = await runDownload({ sdk, genpageCli, outDir: out, appId: APP_ID, appUnique: APP_UNIQUE });
+    const genpage = fakeGenpage();
+    const res = await runDownload({ sdk, genpage, outDir: out, appId: APP_ID, appUnique: APP_UNIQUE });
     return { res, written };
   } finally {
     process.stderr.write = origWrite;
@@ -2127,15 +2230,15 @@ test('runDownload: a sitemap table with no primary name HARD-FAILS naming it; a 
     // Both report an EMPTY PrimaryNameAttribute (the shape the SDK really returns).
     fetchEntityMetadata: async (logical) => ({ logicalName: logical, schemaName: logical, displayName: logical, primaryNameAttribute: '' }),
   }, { appId: APP_ID, layerId: APP_UNIQ_VALUE, sitemapXml: SM_XML });
-  const genpageCli = { enumerateEnv: async () => ({ ok: true, ids: [], pages: [] }), download: async () => true };
+  const genpage = fakeGenpage();
   try {
-    const failed = await runDownload({ sdk: mkSdk(), genpageCli, outDir: out, appId: APP_ID, appUnique: APP_UNIQUE });
+    const failed = await runDownload({ sdk: mkSdk(), genpage, outDir: out, appId: APP_ID, appUnique: APP_UNIQUE });
     assert.strictEqual(failed.ok, false, 'a sitemap table with no primary name must abort the download');
     assert.match(failed.error, /account/, 'the failure names the offending sitemap table');
     assert.ok(!/annotation/.test(failed.error), 'a component-only table must NOT be named as a hard failure');
     assert.match(failed.error, /--allow-lossy-download/, 'the hard failure advertises its override');
     // ...and with the override it degrades to a warning instead of producing nothing at all.
-    const lossy = await runDownload({ sdk: mkSdk(), genpageCli, outDir: out, appId: APP_ID, appUnique: APP_UNIQUE, allowLossy: true });
+    const lossy = await runDownload({ sdk: mkSdk(), genpage, outDir: out, appId: APP_ID, appUnique: APP_UNIQUE, allowLossy: true });
     assert.strictEqual(lossy.ok, true, `--allow-lossy-download must let the download complete: ${JSON.stringify(lossy)}`);
   } finally {
     fs.rmSync(out, { recursive: true, force: true });
@@ -2389,7 +2492,7 @@ test('runDownload WARNS on stderr about a role-restricted form, naming it', asyn
     }),
     dataverse: { get: async () => ({ status: 404, headers: {}, body: {} }) },
   };
-  const genpageCli = { enumerateEnv: async () => ({ ok: true, ids: [], pages: [] }), download: async () => true };
+  const genpage = fakeGenpage();
 
   // The warning goes to stderr (non-fatal), the pattern used elsewhere in this suite.
   const origWrite = process.stderr.write.bind(process.stderr);
@@ -2399,7 +2502,7 @@ test('runDownload WARNS on stderr about a role-restricted form, naming it', asyn
   try {
     res = await runDownload({
       sdk: currentReadSdk(sdk, { appId: APP_ID, layerId: APP_ID, sitemapXml: SM_XML }),
-      genpageCli, outDir: out, appId: APP_ID, appUnique: APP_UNIQUE,
+      genpage, outDir: out, appId: APP_ID, appUnique: APP_UNIQUE,
     });
   } finally {
     process.stderr.write = origWrite;
@@ -2432,11 +2535,11 @@ test('runDownload WARNS on stderr about a role-restricted form, naming it', asyn
   assert.ok(res.notRoundTripped, 'the summary must ride on the runDownload result, not only on stderr');
   assert.strictEqual(res.notRoundTripped.total, 2, JSON.stringify(res.notRoundTripped));
   // SORTED, not in the order the mock returned them. `notRoundTripped` is compared between runs, so
-  // it sorts at every level; `descriptionInventory` below is the raw read and keeps Dataverse's
-  // order, which is why the two lists differ here.
+  // it sorts at every level, and `descriptionInventory` below is ordered the same way (table, then
+  // name, then id): the two lists carry the same forms in the same order.
   assert.deepStrictEqual(res.notRoundTripped.entities, [{ entity: 'new_order', forms: ['Dispatcher Form', 'Everyone Form'], views: [], charts: [], businessRules: [] }]);
   // The spec on disk still carries them under descriptionInventory — the note's claim must be true.
-  assert.deepStrictEqual((res.spec.descriptionInventory.forms || []).map((f) => f.name), ['Everyone Form', 'Dispatcher Form']);
+  assert.deepStrictEqual((res.spec.descriptionInventory.forms || []).map((f) => f.name), ['Dispatcher Form', 'Everyone Form']);
 });
 
 test('runDownload stays SILENT when no form is role-restricted', async () => {
@@ -2470,14 +2573,14 @@ test('runDownload stays SILENT when no form is role-restricted', async () => {
     }),
     dataverse: { get: async () => ({ status: 404, headers: {}, body: {} }) },
   };
-  const genpageCli = { enumerateEnv: async () => ({ ok: true, ids: [], pages: [] }), download: async () => true };
+  const genpage = fakeGenpage();
   const origWrite = process.stderr.write.bind(process.stderr);
   const written = [];
   process.stderr.write = (chunk, ...rest) => { written.push(String(chunk)); return origWrite(chunk, ...rest); };
   try {
     const result = await runDownload({
       sdk: currentReadSdk(sdk, { appId: APP_ID, layerId: APP_ID, sitemapXml: SM_XML }),
-      genpageCli, outDir: out, appId: APP_ID, appUnique: 'new_nowarn',
+      genpage, outDir: out, appId: APP_ID, appUnique: 'new_nowarn',
     });
     assert.strictEqual(result.ok, true, JSON.stringify(result));
   } finally {
@@ -2815,7 +2918,7 @@ test('#564 an attribute whose IsLogical could not be read is KEPT, not dropped',
   assert.deepStrictEqual(e.columns.map((c) => c.schemaName), ['pp_real']);
 });
 // ---------------------------------------------------------------------------
-// Review round: findings from the adversarial review of the #564 work.
+// Findings from the adversarial review of the #564 work.
 // ---------------------------------------------------------------------------
 
 // Builds the `/Attributes?$select=...` row the label/shape read returns.
@@ -2840,7 +2943,7 @@ function sdkFull({ attributes, attrRows = [], picklist = [], multiSelect = [], p
   };
 }
 
-test('REVIEW-A a cross-language AMBIGUOUS option set leaves the column untyped instead of aborting the whole download', async () => {
+test('a cross-language AMBIGUOUS option set leaves the column untyped instead of aborting the whole download', async () => {
   // Reported by adversarial review, proven reachable. Option labels need not be unique across
   // options OR languages in Dataverse, so this set is legal:
   //   options[0] = "Open"                       (English only)
@@ -2870,7 +2973,7 @@ test('REVIEW-A a cross-language AMBIGUOUS option set leaves the column untyped i
   assert.deepStrictEqual(res.errors, [], res.errors.join(' | '));
 });
 
-test('REVIEW-A duplicate PLAIN labels are still typed (they are a warning, not an error)', async () => {
+test('duplicate PLAIN labels are still typed (they are a warning, not an error)', async () => {
   // Only the localized/hidden collision is an error. Two identical plain strings provisioned fine
   // before this rule existed, so refusing to type them would reject specs that still work.
   const sdk = sdkFull({
@@ -2882,7 +2985,7 @@ test('REVIEW-A duplicate PLAIN labels are still typed (they are a warning, not a
   assert.strictEqual(e.columns.find((c) => c.schemaName === 'pp_status').type, 'Choice');
 });
 
-test('REVIEW-B a MultiChoice survives an unusable option label - untyped and NAMED, never dropped', async () => {
+test('a MultiChoice survives an unusable option label - untyped and NAMED, never dropped', async () => {
   // Reported by adversarial review. A MultiSelectPicklist is `Virtual`, so before this the ONLY
   // thing keeping it in columns[] was a successfully PARSED option set. An unusable label made
   // optionSetFromRow return null, the cast membership was discarded, and the column vanished from
@@ -2898,7 +3001,7 @@ test('REVIEW-B a MultiChoice survives an unusable option label - untyped and NAM
   assert.deepStrictEqual(untypedColumnNames([e]), ['pp_t.pp_tags'], 'and it must be NAMED, so the loss is never silent');
 });
 
-test('REVIEW-B/D a MultiChoice survives a FAILED or EMPTY option-set read, identified by AttributeTypeName', async () => {
+test('a MultiChoice survives a FAILED or EMPTY option-set read, identified by AttributeTypeName', async () => {
   // Two shapes, same requirement. The cast can fail (503) or answer 200 with an empty value[] — the
   // second does not even throw, so nothing was recorded and the column disappeared with ZERO
   // operator signal. `AttributeTypeName` identifies a multi-select INDEPENDENTLY of the cast, so
@@ -2916,7 +3019,7 @@ test('REVIEW-B/D a MultiChoice survives a FAILED or EMPTY option-set read, ident
   }
 });
 
-test('REVIEW-C a LOGICAL choice column is not dropped when the option-set read fails', async () => {
+test('a LOGICAL choice column is not dropped when the option-set read fails', async () => {
   // The isLogical shadow filter keyed off `optionSet === undefined`, so a genuine logical Choice
   // whose option read failed was DROPPED rather than left untyped — and the warning then promised a
   // Text column that a rebuild would never create. Positive type evidence (AttributeTypeName) now
@@ -2939,7 +3042,7 @@ test('REVIEW-C a LOGICAL choice column is not dropped when the option-set read f
   assert.deepStrictEqual(untypedColumnNames([e]), ['pp_t.pp_logchoice']);
 });
 
-test('REVIEW-B a failing SECOND cast does not discard the successful first one', async () => {
+test('a failing SECOND cast does not discard the successful first one', async () => {
   // readOptionSets threw on the first non-2xx, so a 503 on the multi-select cast threw away an
   // already-valid Picklist map and every Choice on the table lost its type.
   const sdk = sdkFull({
@@ -2954,7 +3057,7 @@ test('REVIEW-B a failing SECOND cast does not discard the successful first one',
   assert.ok(meta.optionSetReadFailed, 'the partial failure is still recorded');
 });
 
-test('REVIEW-C globalChoices declares only sets an EMITTED column actually references', async () => {
+test('globalChoices declares only sets an EMITTED column actually references', async () => {
   // collectGlobalChoices scanned raw metadata, so a set bound only by a SYSTEM attribute (filtered
   // out of columns[]) or by a table later dropped for having no primary name still produced a
   // declaration — and the build then creates or reuses every declaration in the target environment.
@@ -2976,7 +3079,7 @@ test('REVIEW-C globalChoices declares only sets an EMITTED column actually refer
   assert.deepStrictEqual(decls.map((g) => g.name), ['bound_set'], 'the orphan set must not be declared');
 });
 
-test('REVIEW-D a global-choice reference is canonicalized to the declaration casing', async () => {
+test('a global-choice reference is canonicalized to the declaration casing', async () => {
   // Declarations dedupe case-insensitively but each column kept its own raw casing, and
   // entity-provision looks up `globalChoiceIds[c.globalChoice]` CASE-SENSITIVELY — so a second
   // casing left that column unbound and it fell back to an empty inline option list.
@@ -2992,7 +3095,7 @@ test('REVIEW-D a global-choice reference is canonicalized to the declaration cas
   assert.deepStrictEqual(decls.map((g) => g.name), ['Shared_Set']);
   assert.deepStrictEqual(e.columns.map((c) => c.globalChoice), ['Shared_Set', 'Shared_Set'], 'every reference must match the declaration exactly');
 });
-test('REVIEW-C runDownload emits ONLY referenced globalChoices (drives the real wiring, not the helper)', async () => {
+test('runDownload emits ONLY referenced globalChoices (drives the real wiring, not the helper)', async () => {
   // Deliberately driven through runDownload. An earlier version of this test called
   // finalizeGlobalChoices directly, and a mutation that reverted the ACCESSOR to
   // `[...globalChoiceDecls.values()]` survived it — the helper was right while the wiring was not.
@@ -3051,11 +3154,11 @@ test('REVIEW-C runDownload emits ONLY referenced globalChoices (drives the real 
         },
       },
     };
-    const genpageCli = { enumerateEnv: async () => ({ ok: true, ids: [], pages: [] }), download: async () => true };
+    const genpage = fakeGenpage();
     const res = await runDownload({
       sdk: currentReadSdk(sdk, { appId: APP_ID, layerId: 'c0ffee00-0000-4000-8000-0000000000c3',
         sitemapXml: '<SiteMap><Area><Group><SubArea Entity="contoso_item"/></Group></Area></SiteMap>' }),
-      genpageCli, outDir: out, appId: APP_ID, appUnique: APP_UNIQUE,
+      genpage, outDir: out, appId: APP_ID, appUnique: APP_UNIQUE,
     });
     assert.ok(res.ok, JSON.stringify(res));
     assert.deepStrictEqual((res.spec.globalChoices || []).map((g) => g.name), ['bound_set'],
@@ -3082,7 +3185,7 @@ test('REVIEW-C runDownload emits ONLY referenced globalChoices (drives the real 
   }
 });
 
-test('REVIEW-B cast membership still keeps a column when the ATTRIBUTE read also failed', async () => {
+test('cast membership still keeps a column when the ATTRIBUTE read also failed', async () => {
   // The combination neither guard covers alone: no AttributeTypeName (attribute read 403) AND an
   // unparseable option label. Cast MEMBERSHIP is then the only evidence the column exists, so the
   // entry must be recorded even when its options cannot be parsed.
@@ -3314,7 +3417,9 @@ test('readRelationships carries a divergent N:N SchemaName, and omits it when it
   assert.deepStrictEqual((foreign.skipped || []).filter((s) => /zzz_ForeignPrefixLink/.test(s.name)), [],
     'and never counted as skipped — it IS in the rebuildable spec');
 });
-// LIVE-REPRODUCED: `pac model genpage download` writes config.json starting `ef bb bf`. Node's
+// An earlier release's `pac model genpage download` wrote every file of a page folder starting `ef bb bf`, so a folder it wrote can still be
+// read by a rebuild — and the BOM is only an encoding marker.
+// LIVE-REPRODUCED: that config.json starts `ef bb bf`. Node's
 // 'utf8' decode keeps that BOM as U+FEFF and JSON.parse REJECTS a leading U+FEFF, so a perfectly
 // valid downloaded config threw and the old catch substituted `{}` — the page's table bindings
 // vanished from the emitted spec, and the rebuilt page queried a table it was no longer bound to.
@@ -3376,7 +3481,11 @@ test('a BOM-prefixed downloaded prompt.txt does not keep the BOM in the prompt',
 // download REFUSES to emit a spec because of it — the policy is what protects the user, and making
 // the gate unconditionally false left the parse test passing while `runDownload` happily returned
 // ok:true with the bindings silently dropped. This asserts the GATE, not just the parse.
-test('runDownload REFUSES to emit a spec when a page config is unreadable, unless the loss is accepted', async () => {
+//
+// The page folder is written by the plugin from what the SDK read, so its config.json is always well-formed JSON; what can still be
+// unreadable is the page's own `dataSources` — a value the spec cannot hold (a blank entry, one that is no table name), which would be
+// written into the spec as a binding to nothing.
+test('runDownload REFUSES to emit a spec when a page\'s data sources cannot be understood, unless the loss is accepted', async () => {
   const GP = '13ecbc57-a3a4-4132-b0a2-a6c6b12691e8';
   const APP_ID = 'a1b2c3d4-0000-4000-8000-00000000beef';
   const APP_UNIQ_VALUE = 'c0ffee00-0000-4000-8000-00000000cafe';
@@ -3408,24 +3517,14 @@ test('runDownload REFUSES to emit a spec when a page config is unreadable, unles
       schemaName: logical, displayName: 'Item', primaryNameAttribute: `${String(logical).split('_')[0]}_name`,
     }),
   }, { appId: APP_ID, layerId: APP_UNIQ_VALUE, sitemapXml: SM_XML });
-  // pac downloads the page, but its config.json is unreadable — the live BOM case before the fix,
-  // and any future pac format change after it.
-  const genpageCli = {
-    enumerateEnv: async () => ({ ok: true, ids: [GP.toLowerCase()], pages: [{ pageId: GP, name: 'Env Page' }] }),
-    download: async ({ outputDir, pageIds }) => {
-      for (const pid of (pageIds || [])) {
-        fs.mkdirSync(path.join(outputDir, pid), { recursive: true });
-        fs.writeFileSync(path.join(outputDir, pid, 'page.tsx'), 'export default () => null;');
-        fs.writeFileSync(path.join(outputDir, pid, 'config.json'), Buffer.from('{ truncated', 'utf8'));
-      }
-      return true;
-    },
-  };
+  // The page exists and is read, but its data sources are not table names — a blank entry and a number.
+  const genpage = fakeGenpage({ pages: [{ pageId: GP, name: 'Env Page', dataSources: ['', 3] }] });
 
   try {
-    const refused = await runDownload({ sdk: mkSdk(), genpageCli, outDir: out, appId: APP_ID, appUnique: APP_UNIQUE });
+    const refused = await runDownload({ sdk: mkSdk(), genpage, outDir: out, appId: APP_ID, appUnique: APP_UNIQUE });
     assert.strictEqual(refused.ok, false, `an unreadable config must abort the download; got ${JSON.stringify(refused).slice(0, 300)}`);
     assert.match(refused.error, /config\.json/, 'the failure names what could not be read');
+    assert.match(refused.error, /non-empty table logical names/, 'and why');
     assert.match(refused.error, /--allow-lossy-download/, 'and advertises the override');
     assert.strictEqual(refused.spec, undefined, 'no spec may be produced — emitting one IS the silent loss');
 
@@ -3435,7 +3534,7 @@ test('runDownload REFUSES to emit a spec when a page config is unreadable, unles
     process.stderr.write = (chunk, ...rest) => { warned.push(String(chunk)); return realWrite(chunk, ...rest); };
     let lossy;
     try {
-      lossy = await runDownload({ sdk: mkSdk(), genpageCli, outDir: out, appId: APP_ID, appUnique: APP_UNIQUE, allowLossy: true });
+      lossy = await runDownload({ sdk: mkSdk(), genpage, outDir: out, appId: APP_ID, appUnique: APP_UNIQUE, allowLossy: true });
     } finally { process.stderr.write = realWrite; }
     assert.strictEqual(lossy.ok, true, `--allow-lossy-download must let it through: ${JSON.stringify(lossy).slice(0, 300)}`);
     assert.ok(warned.some((w) => /unreadable/i.test(w) && /DROPPED/.test(w)),

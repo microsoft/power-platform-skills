@@ -26,7 +26,7 @@ test('check-auth.js enumerates all blocker codes', () => {
 
 test('check-auth.js: a missing PAC login blocks only under --require-pac (genpage); otherwise it is a warning', () => {
   // Gap 4: the app-builder build/verify/teardown flow authenticates to Dataverse with the az token,
-  // so a missing pac login must NOT block it. Genpage (which uploads pages via `pac model genpage`)
+  // so a missing pac login must NOT block it. Genpage (which discovers connections through pac)
   // opts back into the hard block with --require-pac.
   assert.match(scriptSrc, /requirePac/, 'pac requirement is gated behind a --require-pac flag');
   assert.match(scriptSrc, /argv\.includes\('--require-pac'\)/);
@@ -212,6 +212,10 @@ function makeCancelableExecFile({ pacOrg = null, azUser = 'maker@contoso.com', a
         else cb(null, pacOrg, '');
       });
       if (pacDelayMs !== null) setTimeout(finishSuccess, pacDelayMs);
+      // With pac's own 5 ms timeout armed (pacTimer), its success must come first whatever holds the event loop:
+      // setImmediate loses to an expired timer when the loop was busy for 5 ms first (the module warm-up of a
+      // file's first test is), and the test then staged a pac timeout it never meant to. nextTick runs before any timer.
+      else if (pacTimer) process.nextTick(finishSuccess);
       else setImmediate(finishSuccess);
       return child;
     }
@@ -458,15 +462,16 @@ test('without --env the token is not warmed early, because the env URL comes fro
   assert.ok(!r.calls.some((c) => c.startsWith('token ')), r.calls.join(' | '));
 });
 
-test('a missing pac login is a WARNING for the app-builder path, not a blocker', async () => {
-  // The build/verify/teardown flow authenticates with the az token; only the genpage pages phase
-  // shells out to pac. Blocking here would stop a build that would have worked.
+test('a missing pac login is a WARNING for a caller that does not pass --require-pac, not a blocker', async () => {
+  // A flow that authenticates with the az token alone (the app-builder build/verify/teardown, and the pages) needs no pac
+  // login; blocking here would stop a build that would have worked. The wording is pinned below.
   const r = await run({ argv: ['--env', ENVURL], exec: { pacOrg: null } });
   assert.equal(r.ok, true);
   assert.equal(r.blocker, null);
   assert.equal(r.pacUser, null);
   assert.equal(r.warnings.length, 1);
-  assert.match(r.warnings[0], /genpage/i);
+  assert.match(r.warnings[0], /only a step that runs `pac` needs the login/);
+  assert.doesNotMatch(r.warnings[0], /pac model genpage/, 'pages are written through the SDK: the warning no longer says pac deploys them');
 });
 
 test('--require-pac turns the same missing pac login into a hard block', async () => {
@@ -474,6 +479,67 @@ test('--require-pac turns the same missing pac login into a hard block', async (
   assert.equal(r.ok, false);
   assert.equal(r.blocker, 'pac_not_logged_in');
   assert.match(r.message, /pac auth create/);
+});
+
+// --- the sign-in text is true in every plugin that ships this script ---------------------------------------
+//
+// plugins/pcf carries this file byte for byte (scripts/validate-plugin-copies.js keeps the copies equal), and the
+// steps that run pac differ between the plugins. A sentence about one plugin's flows ("discover connections",
+// "table/column/form/view/app/page builds") was therefore printed in the other's runs: pcf's push path passes
+// --require-pac and never reaches the warning, but a pcf verification or inventory run does. The wording states the
+// one rule that holds in both — only a step that runs `pac` needs the login — and leaves the steps to the skill.
+// The same words are pinned in plugins/pcf/scripts/tests/pcf-check-auth.test.js.
+const PLUGIN_FLOW_WORDS = /connection|connector|deployment[- ]setting|table\/column|genpage|app-builder|entity creation|\bSDK\b/i;
+const PAC_RULE = 'only a step that runs `pac` needs the login, and so does reading the environment when --env is omitted';
+
+test('a missing pac login is explained by the one rule that holds in every plugin, naming no plugin\'s flows', async () => {
+  const r = await run({ argv: ['--env', ENVURL], exec: { pacOrg: null } });
+  assert.equal(r.ok, true);
+  assert.deepEqual(r.warnings, [
+    `PAC CLI is not logged in. That does not block a step that signs in with the az token alone: ${PAC_RULE}. Run \`pac auth create --environment <url>\` before such a step.`,
+  ]);
+  assert.doesNotMatch(r.warnings[0], PLUGIN_FLOW_WORDS);
+});
+
+test('a pac probe that ran out of time is explained the same way, and still as unknown rather than missing', async () => {
+  const r = await run({ argv: ['--env', ENVURL], exec: { slow: ['pac org who'] } });
+  assert.equal(r.ok, true);
+  assert.deepEqual(r.warnings, [
+    '`pac org who` did not answer within 60 s — the PAC CLI can be that slow to start on a busy machine, so its login is unknown, not missing. '
+      + `That does not block a step that signs in with the az token alone: ${PAC_RULE}.`,
+  ]);
+  assert.doesNotMatch(r.warnings[0], PLUGIN_FLOW_WORDS);
+});
+
+test('the Ready messages say only that a step that runs pac needs the login, and name no plugin\'s flows', async () => {
+  const signedOut = await run({ argv: ['--env', ENVURL], exec: { pacOrg: null } });
+  assert.equal(signedOut.message, `Ready (az signed in as maker@contoso.com, env ${ENVURL}). PAC is not logged in — only a step that runs pac needs it.`);
+  const unknown = await run({ argv: ['--env', ENVURL], exec: { slow: ['pac org who'] } });
+  assert.equal(unknown.message, `Ready (az signed in as maker@contoso.com, env ${ENVURL}). PAC's login is unknown — \`pac org who\` did not answer in time; only a step that runs pac needs it.`);
+  const other = await run({ argv: ['--env', ENVURL], exec: { pacOrg: 'Connected as dev@contoso.com\n' } });
+  assert.equal(other.ok, true);
+  assert.equal(other.message, 'Ready, but az ("maker@contoso.com") and pac ("dev@contoso.com") use different identities. WhoAmI passed so this works for now — but if a later step returns 403, run `az login --username dev@contoso.com` to align them.');
+  for (const r of [signedOut, unknown, other]) assert.doesNotMatch(r.message, PLUGIN_FLOW_WORDS);
+});
+
+test('the hard blocks are unchanged: pac_not_logged_in and pac_timeout under --require-pac, in the same neutral words', async () => {
+  const missing = await run({ argv: ['--env', ENVURL, '--require-pac'], exec: { pacOrg: null } });
+  assert.equal(missing.blocker, 'pac_not_logged_in');
+  assert.equal(missing.message, 'PAC CLI is not logged in. Run `pac auth create --environment <url>` to authenticate.');
+  const slow = await run({ argv: ['--env', ENVURL, '--require-pac'], exec: { slow: ['pac org who'] } });
+  assert.equal(slow.blocker, 'pac_timeout');
+  assert.match(slow.message, /^`pac org who` did not answer within 60 s .* so its login is unknown, not missing\. Retry\.$/);
+  for (const r of [missing, slow]) assert.doesNotMatch(r.message, PLUGIN_FLOW_WORDS);
+});
+
+test('plugins/pcf ships this script byte for byte, so the text above is the text pcf prints', (t) => {
+  const copy = path.join(__dirname, '..', '..', '..', 'pcf', 'scripts', 'check-auth.js');
+  if (!fs.existsSync(copy)) {
+    t.skip('plugins/pcf is not present (an installed plugin, not a repo checkout)');
+    return;
+  }
+  assert.ok(fs.readFileSync(scriptPath).equals(fs.readFileSync(copy)),
+    'copy plugins/model-apps/scripts/check-auth.js over plugins/pcf/scripts/check-auth.js (scripts/validate-plugin-copies.js lists the pair)');
 });
 
 test('the env URL is recovered from `pac org who` when --env is omitted', async () => {

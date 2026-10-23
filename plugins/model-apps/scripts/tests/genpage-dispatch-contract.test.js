@@ -434,10 +434,12 @@ test('the docs say the gates hold a page to what a run would add, and say what e
   assert.match(holds, /\*Unrecorded\* [^.]*fails \*\*open\*\* on purpose/);
   assert.match(holds, /a page that does not exist is always held, record or not/);
   assert.match(holds, /\*\*`genpage-upload\.js`\*\* has the deployed page in hand/);
-  assert.match(holds, /`griffelProblemsNotIn`: the same key set to the same value in the same place \(`within`: its slot, selectors and at-rules\), or failing that the same key and value anywhere that nothing else has claimed/);
+  assert.match(holds, /`griffelProblemsNotIn`: only the same key set to the same value in the same place \(`within`: its slot, selectors and at-rules — of the same `makeStyles` call, `owner`: the name its hook is bound to at the top of the page, read through a type annotation \(`const usePanel: Hook = …` is `usePanel`, not `Hook`\) and for a property it is assigned to \(`hooks\.panel = …`\); and the same arm of every condition between the call and the key — `branch` for the call's own argument, and `arms` below it: [^)]*\) is the deployed page's own — one set to the same value in \*another\* place is new, so an edit that removes a key from one place and sets it in another has added one/);
+  assert.match(holds, /a key moved to another hook's `root` or into the other arm of a condition, at any level: the source cannot tell it from a removal and an addition[^.]*where the correspondence cannot be shown[^.]*the key is new, never inherited/);
+  assert.match(holds, /\*\*Only a unique name at the top of the page proves which hook a call is\*\* — not its order among the calls, not the type it is annotated with, not the function it is written in[^.]*is nobody's \(`owner: null`\)[^.]*a key in it is refused on an update like any new one/);
   assert.match(holds, /A key given \*\*another value\*\* is new too: Griffel drops the new value as it dropped the old one, so the page would show none of the change the maker meant/);
   assert.match(holds, /the hash recorded is of the source the pages phase \*read and checked\* \(`created\.pageSourceShas`\), not of the file when the baseline is written as the build ends/);
-  assert.match(holds, /What is sent is what was checked: every page, a navigation source or not, goes to pac from a staging copy of the bytes the scan read \(`writeStagingFile`\), never from its own file, so a save made after the check does not ship until a build has checked it\./);
+  assert.match(holds, /Every page is written as the text the scan read — the SDK takes a page's text, so there is no file for a later save to reach — and a page saved after the scan does not ship: the next build checks it, because the record holds the source that was checked and the file no longer matches it\./);
   assert.doesNotMatch(holds, /sent from its own file|ships unchecked/, 'no page is uploaded from its canonical file any more, so the guide must not describe the gap that closed');
   assert.match(holds, /`--overwrite-deployed` is no way past that/);
   assert.match(holds, /A call the checker cannot read\*\* is not CSS Griffel drops, and is not said to be/);
@@ -448,7 +450,9 @@ test('the docs say the gates hold a page to what a run would add, and say what e
   assert.match(editFlow, /\*\*delete the key\*\* — nothing changes on screen, so it is the edit that preserves the page — or \*\*write the longhands\*\*, which makes the style start to render, so the page changes\. Delete it unless the user asked for that change/);
   const skill = read('skills', 'genpage', 'SKILL.md');
   assert.match(skill, /An update is held to what it \*\*adds\*\*\./);
-  assert.match(skill, /\*\*delete the key\*\* \(nothing changes on screen\) or \*\*write the longhands\*\* \(the style starts to render, so the page changes\)\. Only a key the deployed page did not have — or one it had, given another value, because Griffel drops the new value just as it dropped the old, so the page would show none of the change — stops the upload\./);
+  assert.match(skill, /\*\*delete the key\*\* \(nothing changes on screen\) or \*\*write the longhands\*\* \(the style starts to render, so the page changes\)\. Only a key the deployed page did not have in that place stops the upload: a key it had in another place \(an edit that removes it from one slot and sets it in another, or renames the slot, or moves it to another hook's slot of the same name — every hook has a `root` — or into the other arm of a condition, at any level, has added a key there\), or one it had, given another value, because Griffel drops the new value just as it dropped the old, so the page would show none of the change\./);
+  assert.match(skill, /the same place \(the same `makeStyles` hook — told by the name it is bound to at the top of the file, even with a type annotation — and its slot and selector, and the same arm of every condition above the key\)/);
+  assert.match(skill, /A hook whose name the file does not prove — written inside a function or a block, passed as an argument, exported as the default, or bound to a name two hooks share — has no earlier self to be compared with, so a key in it is refused on an update like any new one: delete it, or write the longhands\./);
   assert.match(read('skills', 'genpage', 'verify-flow.md'), /delete it to keep the page looking as it does, or write the longhands to make the style start to render/);
   const appBuilder = read('skills', 'app-builder', 'SKILL.md');
   assert.match(appBuilder, /The build runs the same check on every page it uploads that is new or that you changed since the last successful apply of this app, and halts as `pages-griffel-shorthand`/);
@@ -461,53 +465,111 @@ test('the docs say the gates hold a page to what a run would add, and say what e
   assert.match(schema, /is sent as it is and the build \*\*warns\*\* with the same detail instead: it ships nothing new\./);
 });
 
-// A pac upload that stalls is stopped, and what the script — and so the agent — does next depends on what the stalled call can have done: pac writes the page, records the prompt
-// and the agent message, prints its Page ID, then publishes. The first version of these instructions said an UPDATE is simply sent again ("a second send cannot create anything"),
-// which is false — a call stalled in the publish has already written everything, so a re-send records the prompt twice and overwrites whatever was saved meanwhile — and its
-// advice for a create ("update it") is refused when the stalled create left the page out of the app's navigation. scripts/tests/genpage-cli.test.js runs what the script does.
-test('the docs say a stalled upload is never sent again by the script, what to check after an update that timed out, and what finishes a create that stalled', () => {
-  const skill = squash(readDoc(path.join(PLUGIN, 'skills', 'genpage', 'SKILL.md')));
-  assert.match(skill, /A listing or a download that times out is retried once\. An \*\*upload is never sent again by the script\*\*/);
-  assert.match(skill, /sending it again can record the prompt a second time or overwrite a change someone saved in the meantime\. Follow the message the script prints; do not simply re-run the command\./);
-  assert.match(skill, /\*\*An update that timed out, or failed,\*\* "MAY HAVE LANDED" — pac can fail while publishing, after it wrote the page, so neither is sent again by the script\. \(A failure pac reports for its own arguments or files is an ordinary error: fix what it names and re-run\.\) Compare the deployed page with your file first: `node "\$\{PLUGIN_ROOT\}\/scripts\/genpage-base\.js" check --env '<org-url>' --app-id '<app-id>' --page-id '<page-id>' --file '<working-dir>\/<file>\.tsx'`/);
-  assert.match(skill, /`"contentSame": true` means the update landed: do not upload it again/);
-  assert.match(skill, /`"deployed": "unchanged"` means it did not land, and re-running the update is safe\./);
-  assert.match(skill, /\*\*A create that timed out\*\* is an \*uncertain\* create, and is never run again — by the script, or by you\./);
-  assert.match(skill, /If the message says the page was \*\*created as `<page-id>`\*\*, it exists but was stopped before it was published/);
-  assert.match(skill, /Add it to the app's navigation \(in Maker, or `pac model genpage add --environment '<org-url>' --app-id '<app-id>' --page-id '<page-id>' --publish`\)/);
-  assert.match(skill, /An update of a page that is not in the app's navigation is refused, and a second create makes a duplicate — so neither is the way on\. A create that \*\*failed\*\* \(not timed out\) after pac had printed a `Page ID` is in the same state: its error says the page was \*\*created as `<page-id>`\*\* and that the create was not run again, with the same two ways on rather than "re-run it as an update"\. The build never re-sends such a create by itself either: every one of these errors is marked as one that is not to be retried\./);
-  assert.match(skill, /The same goes for a message that says the environment could not be listed after the create, so nothing is known about what it made\./);
+// A page write that cannot say what it did must never be sent again blindly, and what the maker or the agent does next depends on what the write can have done. The SDK writes a page as ONE atomic change
+// set, so a write either landed whole or wrote nothing; an unknown outcome is settled by reading the page, and the advice an update's refusal carries depends on the caller. AGENTS.md says so,
+// and says every page-write error is final for the build's own retry — but a throttle (HTTP 429) the service refused the write with, which is waited out and sent again, and left to the build when it outlasts the waits.
+// scripts/tests/genpage-sdk.test.js and genpage-sdk-real-bundle.test.js run what the backend does.
+test('AGENTS.md says a page write whose outcome is not known is never sent again blindly, where each caller is pointed, that a throttled write is waited out and why that is safe, and that every other page-write error is final for the build\'s retry', () => {
   const agents = squash(readDoc(path.join(PLUGIN, 'AGENTS.md')));
-  assert.match(agents, /A timed-out list or download is read-only, so it is retried once\. A timed-out \*\*update\*\* is \*\*not\*\* retried, though it names a page that exists/);
-  assert.match(agents, /It is reported as one that \*may have landed\*, and what it sends you to look at depends on the caller \(`upload\(\)`'s `caller`\): the upload script's message names `genpage-base\.js check`/);
-  // The build keeps no base marker and sends every page from a staging copy it deletes, so the script's advice fails there: it gets its own, and its error is never retried by the build.
-  assert.match(agents, /The \*\*build\*\* keeps no base marker, so that check could only answer "unknown", and every page's code file is a staging copy its cleanup deletes, so the command would fail on a missing file: the build's message tells you to read the deployed page with `pac model genpage download`/);
-  // A FAILED update is in the same state as a stalled one (pac can fail in the publish), so it is not retried either; only a refusal of pac's own arguments is ordinary.
-  assert.match(agents, /An \*\*update\*\* that \*\*fails\*\* — a non-zero exit, or an exit 0 with no `Page ID` — is handled the same way, for the same reason \(pac can fail in the publish, after everything else is written\): it is \*\*not\*\* retried/);
-  assert.match(agents, /Only a non-zero exit that pac reports for its own arguments or input files \(`isDeterministic`\) is an ordinary error, because pac checks those before it sends anything — and only when pac printed no `Page ID`:/);
-  assert.match(agents, /and to open the `page\.tsx` in the folder named for the id, which pac writes in its own letter case\) and then run the build again, which sends the page once more to the same id — nothing new is created, but if the stalled send did land, the page's history now records its prompt a second time/);
-  assert.match(agents, /The error carries `transient: false`, so the build's own retry of transient halts never re-sends it\./);
-  assert.match(agents, /A `Page ID` pac had already printed names the page it created, whether the call then stalled or \*\*failed\*\* \(exited non-zero\): it is reported as \*created as `<id>`, stalled \(or failed\) before publish or placement\*, the create is \*\*not\*\* sent again however the environment's listing looks/);
-  assert.match(agents, /a create that failed and left a candidate gets the same way on, not "re-run it as an update with `--page-id`"/);
-  // Every error that follows a create whose outcome is not known to be nothing is one the build's own retry cannot re-send — the page's name and pac's words are what that retry reads —
-  // and a create that failed outright and left nothing is retried, as in 2.13.0.
-  assert.match(agents, /\*\*Every error that follows a create whose outcome is not known to be nothing carries `transient: false`\*\* \(`neverRetriedError`\) — a stall, a printed Page ID, a candidate in the listing, a listing that cannot be read: the build re-runs a phase when a halt reads as transient/);
-  assert.match(agents, /A create that failed outright and left nothing in the listing, and a listing that fails \*before\* the create was sent, leave nothing to duplicate: both are still retried — by the upload \(3 sends\) and, when the error's text reads as transient, by the build — as in 2\.13\.0\./);
-  assert.doesNotMatch(agents, /Every error that follows a create that was sent|every error that follows a sent create/, 'the claim is made for the creates whose outcome is not known to be nothing, not for every create that was sent');
-  // The retired claim is in none of them, nor in the wrapper's own comments.
-  for (const [name, text] of [['the genpage skill', skill], ['AGENTS.md', agents], ['lib/genpage-cli.js', squash(fs.readFileSync(path.join(PLUGIN, 'scripts', 'lib', 'genpage-cli.js'), 'utf8'))]]) {
+  assert.match(agents, /\*\*Generative pages are written through the SDK\*\*/);
+  assert.match(agents, /so a write either landed whole or wrote nothing/);
+  assert.match(agents, /A \*\*create\*\* mints the page's id on the client before anything is sent, so what it did can always be found out by reading that id\./);
+  assert.match(agents, /absent — nothing has landed \*yet\*, so it is sent \*\*once more under the same id\*\*: a first send that lands late collides on the id, so no second page can exist\./);
+  assert.match(agents, /the page is as it was — nothing has landed yet, and it is sent \*\*once more\*\*/);
+  assert.match(agents, /anything else — refused, \*\*not\*\* sent again, with where to look\./);
+  // What a failure may claim: only a proven refusal is "nothing was written", and a send with no usable answer stays open — a later failure, or a read that finds nothing, does not settle it.
+  assert.match(agents, /Only a failure that PROVES nothing was written is reported as `nothing` and not sent again/);
+  assert.match(agents, /A send that got no usable answer stays \*\*open\*\*: it can still reach the service after anything the operation has read or been told/);
+  assert.match(agents, /The turn keeps \*\*one identity\*\* across that read \(`newTurn\.id`, minted per update\)/);
+  // The advice depends on the caller: the upload script has a base marker to check against, the build has none and reads every page again when it runs.
+  assert.match(agents, /the upload script's message names `genpage-base\.js check` \(the deployed page against the file and the base marker beside it\), and a re-run goes back through the script's own guards; the \*\*build\*\* keeps no base marker and reads every page again when it runs, so its message says to run the build again\./);
+  // A refusal with a throttle is the one write that is not a known failure of the page: it is waited out and sent again, and why that cannot write a page twice is written down.
+  assert.match(agents, /\*\*A first send the service refuses with a throttle \(HTTP 429\) is waited out and sent again\*\* \(`pushThroughThrottle`\), where any other 4xx is final\./);
+  assert.match(agents, /A 429 is the service declining to \*start\* the request, so the atomic change set committed nothing; and sending it again cannot write a page twice: a create's ids are minted before the first send/);
+  assert.match(agents, /an update's turn carries one identity from which the SDK derives its messages' ids\. An update's send goes through the SDK's version check again, so a page someone saved during the wait is refused as `VERSION_CONFLICT` and not written over/);
+  assert.match(agents, /an update's writes carry `If-Match: \*`, and `lib\/sdk-http-client\.js` re-sends a `\$batch` only when it is made of conditional deletes/);
+  assert.match(agents, /The wait is the schedule that client gives every throttled request \(`throttleBackoffMs`: 1 s, 2 s, 4 s, 8 s, 8 s, plus jitter\) or the answer's `Retry-After` when that asks for longer, \*\*waited whole\*\*/);
+  assert.match(agents, /inside \*\*one budget of five minutes for the waiting a throttled page write costs a build run\*\*/);
+  // What the budget bounds: all the waiting a run does for a throttle — the HTTP client's own waits too, when it is given the budget — and not the waits that are not for a throttle, which keep the schedule they always had.
+  assert.match(agents, /\*\*The budget bounds all the waiting a run does for a throttle — the HTTP client's waits as well as the backend's and the build's\.\*\*/);
+  assert.match(agents, /A wait that does not fit is \*\*not taken\*\*: the throttled answer comes back as it came — the SDK reports the 429 it is, a refusal that started nothing, and not a failure of the transport, which it would treat as an unknown outcome — and the client tells the budget what the service asked \(`decline`; the SDK's error holds no headers\), which the build's retry loop reads: the build stops with `throttle-budget-exhausted`, saying what the service asked, on the last run as on the first, and does not run the phases again to meet the same answer\./);
+  assert.match(agents, /What is not throttling keeps its own schedule and is not drawn from the budget — a 5xx \(a customization lock or a SQL deadlock victim is a 500, a gateway's hiccup a 502, 503 or 504\) whatever `Retry-After` it carries, a reset connection, the re-send of a deadlock victim — and so does a client that is given no budget/);
+  // What the engine's guard lets through: the name column's length a run owes, which no later run can set — in the pass that completes the phase as in the settlement of a halt.
+  assert.match(agents, /what pays what the run owes is let through \(`settling`: the name column's length of a table the run created, which no later run can set — a run that finds the table leaves its name column as it is, so a stop would leave the table at the platform's default for good — and which is therefore paid in the settlement of a halted data-model phase and in the pass that completes one, where the refusal of one table's update does not keep the next table's from being set/);
+  assert.match(agents, /a resumed create that brings an earlier payload up to date hands the same budget — the one it was given, or the one it made for itself — on to the update it makes/);
+  assert.match(agents, /which reads an answer only when it is complete and well-formed — its outer boundary closes, every change set in it closes, and every part is a complete response whose first line is a status line — and takes ANYTHING missing or malformed/);
+  assert.match(agents, /takes ANYTHING missing or malformed \(a part with no response in it, a part with no status line or one cut off, a change set that is never closed, one that is declared and never opened, one whose delimiters are not the boundary it declares, a body shorter or longer than the `Content-Length` its response gives, a part that declares a `Transfer-Encoding`\) as proving nothing/);
+  assert.match(agents, /a part that declares a `Transfer-Encoding` \(chunked or any other\) is not read at all, whole stream or not — the delimiters around it say nothing of whether its chunk stream is finished, so it never certifies a refusal or a deadlock victim/);
+  assert.doesNotMatch(agents, /all the waiting of the run one budget|the ONE budget a run spends on waiting out a throttled service/, 'AGENTS.md says the budget bounds all the waiting of a run');
+  assert.match(agents, /at most six sends in all, and `dispose\(\)` ends a wait that is under way\. \*\*A change set the service refuses as a whole is answered HTTP 200 with the one part that failed\*\*/);
+  assert.match(agents, /when every part is one 400, 403 or 404 the change set is a known refusal and is sent \*\*once\*\*, create and update/);
+  assert.match(agents, /A mix of statuses, an answer cut off or incomplete inside, a 409 or 412 \(the ids of an earlier send that landed\) and a 500 prove nothing about the change set and stay unknown outcomes/);
+  assert.match(agents, /A \*\*resumed\*\* create is not sent again this way/);
+  assert.match(agents, /alone among the errors a page write raises — \*\*without\*\* `transient: false` \(`throttledError`\), carrying `statusCode: 429` and what the last answer asked \(`retryAfterMs`, and `retryNotBefore`: the moment before which nothing may be sent\), so the build runs the phase again/);
+  assert.match(agents, /\*\*waits for what the service asked, not for its own shorter backoff\*\*/);
+  assert.match(agents, /the build stops with `throttle-budget-exhausted` — a transient halt that says the service asked to wait N seconds and that a later run continues\. A wait of more than five seconds is announced on stderr/);
+  assert.match(agents, /A 502, 503 or 504 is not waited out as a throttle: an intermediary answered, so the write may have committed and it is \*unknown\*/);
+  assert.match(agents, /A write that was throttled and then taken says so in the `warnings` of its result \(which the build prints with the page's name\)/);
+  // Every other error is final for the build's own retry of a halt that reads as transient — the page's name and the service's words are what that retry reads.
+  assert.match(agents, /\*\*Every other page-write error carries `transient: false`\*\*/);
+  assert.match(agents, /so without the marker a re-run would send a write again\./);
+  assert.match(agents, /A \*publish\* that fails after a write is not an error: it is returned \(`publish\.kind: 'failed'`\) with the page's id, because the caller must still record that the page exists\./);
+  assert.match(agents, /halts on it as `pages-publish-failed` \(re-runnable: the page is reused and published, not written again\)/);
+  // The retired claims are in none of the places that could carry them, nor in the backend's own comments.
+  for (const [name, text] of [['AGENTS.md', agents], ['lib/genpage-sdk.js', squash(fs.readFileSync(path.join(PLUGIN, 'scripts', 'lib', 'genpage-sdk.js'), 'utf8'))]]) {
     assert.doesNotMatch(text, /cannot create anything|So it is retried\.|a time out is retried once, and so is an \*\*update\*\*/i, `${name} still says a second send of an update is harmless`);
+    assert.doesNotMatch(text, /POWER_PLATFORM_SKILLS_PAC_TIMEOUT_MS|time-bounded|runPac/, `${name} still describes the pac wrapper's time limits`);
   }
 });
 
-// Measured against the PAC CLI: `pac model genpage transpile` accepted a `string` assigned to a
-// `number` and a selected column that does not exist, exited 0 and wrote JavaScript. So no instruction
-// may present it as a type check — a worker that believes it is one ships unchecked types with false
-// confidence — and the page-builder, the one place that names the command, must say what it is not.
+// The build's retry decides from the structure of a failure, and a SQL deadlock victim is the one condition that structure names in two places: the generic SQL error code every SQL failure carries, and the platform's signature in the
+// service's own answer. lib/retry-policy.js has the rule and scripts/tests/retry-policy.test.js and halt-retry-policy.test.js run it, with the real SDK and the real retry loop; this pins that the plugin's guide says it, and no longer says it is not run again.
+test('AGENTS.md says a SQL deadlock victim is run again by the build — the generic SQL error code and the platform\'s signature in the service\'s own answer, never either alone — and no longer says it is final', () => {
+  const agents = squash(readDoc(path.join(PLUGIN, 'AGENTS.md')));
+  assert.match(agents, /The SQL deadlock victim a service answers with a 500 is run again, narrowly \(`isDeadlockVictimAnswer`\): its code, `0x80044150`, is the generic SQL error every SQL failure carries, so it takes that code — read from the `error\.code` of the answer's body, never from text — AND the platform's deadlock signature \(`Sql Number: 1205`, the HTTP client's `SQL_DEADLOCK_VICTIM`\) in the service's own answer, which is what follows the url in the SDK's message, so a name the maker put in the url is not read\./);
+  assert.match(agents, /The code beside another SQL number \(a constraint, a lock timeout\) and the signature with no such code — a 500 whose words only quote it, a display name that reads as one — stay final, and a deadlock victim is counted as any transient failure is: the build runs the phase again up to three times\./);
+  assert.match(agents, /The number that counts is the LAST one the answer gives: the platform writes its own diagnostic after the SQL text, and the SQL text can quote what a maker named \(a duplicate key quotes the value that collided\), so a name spelled `Sql Number: 1205` in front of a unique-key violation \(2627\) is not a deadlock, and one that quotes another number in front of the platform's 1205 does not hide one — the same pattern is the HTTP client's own signature for its deadlock re-sends\./);
+  assert.match(agents, /a SQL deadlock victim \(the generic SQL error code `0x80044150` AND the platform's `Sql Number: 1205` — the last SQL number the answer gives — in the service's own answer, `isDeadlockVictimAnswer`\)/);
+  assert.doesNotMatch(agents, /deadlock victim[^.]*is therefore final for the build/, 'AGENTS.md says a deadlock victim is final for the build');
+  const policy = squash(fs.readFileSync(path.join(PLUGIN, 'scripts', 'lib', 'retry-policy.js'), 'utf8'));
+  assert.doesNotMatch(policy, /NOT here, on purpose: the SQL deadlock victim/, 'lib/retry-policy.js still says a deadlock victim is not recovered');
+});
+
+// What the /genpage skill tells the agent to do when a page write cannot say what it did. The page is written through the SDK (lib/genpage-sdk.js), so there is no pac process to stall,
+// no time limit of its own and no `pac model genpage upload` to compose: the advice follows what the backend reports (`outcome`, `pageId`, `code`) — AGENTS.md has the behaviour,
+// scripts/tests/genpage-sdk.test.js and genpage-upload.test.js run it, and this pins that the skill says it.
+test('the genpage skill gives the advice for a page write whose answer was lost, in the backend\'s own terms', () => {
+  const skill = squash(readDoc(path.join(PLUGIN, 'skills', 'genpage', 'SKILL.md')));
+  assert.match(skill, /\*\*A write whose answer was lost is never sent again blindly\.\*\* `genpage-upload\.js` writes a page as one atomic change set, so a write either landed whole or wrote nothing\./);
+  assert.match(skill, /sends a create at most once more, under the same id — so no second page can exist\./);
+  assert.match(skill, /exit 1 and a JSON object with `error`, the page's `pageId` once the write got as far as the send, `outcome` and the SDK's `code`\. Follow the message; do not simply re-run the command\./);
+  assert.match(skill, /\*\*`"outcome": "nothing"`\*\* — nothing was written \(the SDK refused before it sent anything, or the service rejected the whole change set\): fix what the message names and run the command again\./);
+  // An update that may have landed is compared with the file first, through the base marker.
+  assert.match(skill, /\*\*An update with `"outcome": "unknown"`\*\* "MAY HAVE LANDED" and is not sent again\. Compare the deployed page with your file first: `node "\$\{PLUGIN_ROOT\}\/scripts\/genpage-base\.js" check --env '<org-url>' --app-id '<app-id>' --page-id '<page-id>' --file '<working-dir>\/<file>\.tsx'`/);
+  assert.match(skill, /`"contentSame": true` means the update landed: do not upload it again/);
+  assert.match(skill, /`"deployed": "unchanged"` means it did not land, and re-running the update is safe\./);
+  // A create that may have landed is looked for by its id before it is made again: a second run would mint a second page.
+  assert.match(skill, /\*\*A create with `"outcome": "unknown"`\*\* is an \*uncertain\* create: its message says to look for the page by its `pageId` before creating it again, and it is never run again until that is done — a second run mints a second page\./);
+  assert.match(skill, /An update of a page that is not in the app's navigation is refused, and a second create makes a duplicate — so neither is the way on while the page is unaccounted for\./);
+  // A create that wrote the page and could not publish or place it is finished by the same command with --page-id, never created twice.
+  assert.match(skill, /\*\*A create that did not finish\.\*\* A create reports `ok: false` \*\*with the page's `pageId`\*\* when the page was written but its publish failed, or — with `--add-to-sitemap` — when it could not be placed in the app\./);
+  assert.match(skill, /Run the \*\*same command again with `--page-id '<page-id>'` added\*\* and nothing else changed \(keep `--add-to-sitemap` if it was given\): that publishes the page and places it, without the check of the app's navigation an ordinary update makes — for that page only/);
+  assert.match(skill, /Never create the page a second time\./);
+  assert.match(skill, /`--add-to-sitemap` is \*\*refused\*\* together with `--page-id` — an update cannot add a sitemap entry, and the page it names is already placed\. The one exception is finishing a page this script created and did not finish/);
+  // What the pac wrapper's advice said is gone with the wrapper: its time limits, its two-step page write, the `Page ID` it printed, and the rules about names it stored.
+  assert.doesNotMatch(skill, /POWER_PLATFORM_SKILLS_PAC_TIMEOUT_MS|A pac call that stalls|pac can fail while publishing|pac writes the page|after pac had printed a `Page ID`|created as `<page-id>`/i, 'the genpage skill still describes the pac upload that stalled');
+  assert.doesNotMatch(skill, /cannot create anything|So it is retried\.|a time out is retried once, and so is an \*\*update\*\*/i, 'the genpage skill still says a second send of an update is harmless');
+  assert.doesNotMatch(skill, /pac\.cmd|pac stores each one|upload --help|requires a pac build|PowerPlatform-Scale-AdminTools/, 'the genpage skill still carries a rule of the pac upload');
+});
+
+// Measured against the SDK's page compile (genpage-sdk-real-bundle.test.js, "the compile is a transpile"): the compile the upload runs — TypeScript's `transpileModule`, in the bundled SDK —
+// accepted a `string` assigned to a `number` and a selected column that does not exist, and wrote JavaScript. It refuses only a page that does not parse, has no default export or imports a value
+// from RuntimeTypes that it does not hold. So no instruction may present the compile as a type check — a worker that believes it is one ships unchecked types with false confidence — and the
+// page-builder, the one place that explains the compile, must say what it is not.
 //
-// The claim can be worded many ways ("to type-check the page", "a clean transpile means it is
+// The claim can be worded many ways ("to type-check the page", "a clean compile means it is
 // type-safe", "catches type errors", "fails on type errors", "type errors are caught during
-// transpilation"), and one exact phrase in four files would miss all of them. So
+// compilation"), and one exact phrase in four files would miss all of them. So
 // every agent, skill and reference document is read CLAUSE by clause, and a clause fails when it
 // ATTRIBUTES a type guarantee to transpiling that no negation governs. It is a tripwire, not a parser: a
 // correct sentence it flags is reworded with the checker as its subject, or with the denial stated
@@ -588,10 +650,10 @@ const BRIDGE = /^(?:a|an|the|any|its|their|this|that|there|page|pages|code|file|
 // Clause boundaries: `;`, a `:` that is not a URL's, a spaced dash, a comma before a conjunction, and the
 // conjunctions that start a new statement.
 const CLAUSE_BREAK = /\s*(?:;|:(?!\/\/)|\s[—–]\s|,(?=\s*(?:and|but|then|so|yet|while|whereas|although|though|however)\b)|(?<=\S)\s+(?=(?:and|but|then|whereas|although|though)\s))\s*/i;
-// Who a claim can belong to: `t` transpiling (the whole command is one mention), `x` a checker the reader
+// Who a claim can belong to: `t` the compile — transpiling or compiling, whatever the document calls the step the upload runs — `x` a checker the reader
 // runs itself — named, or a generic "type-check script" — and `r` the reader.
 const ACTOR = new RegExp([
-  String.raw`(?<t>\x60pac model genpage transpile\x60|transpil\w*)`,
+  String.raw`(?<t>transpil\w*|\bcompil(?:e|es|ed|ing|ation)\b)`,
   String.raw`(?<x>\x60?\btsc\b\x60?|\bTypeScript compiler\b|\btype[- ]?checker\b|\x60npm run [^\x60]*\x60|\btype[- ]?check(?:ing)? (?:script|command|step|task|job)\b)`,
   String.raw`(?<r>\b(?:you|yourself|we)\b)`,
 ].join('|'), 'gi');
@@ -705,7 +767,7 @@ function transpileTypeClaims(markdown) {
 
 test('the transpile claim detector catches reworded claims and allows negated ones', () => {
   for (const claim of [
-    'Run `pac model genpage transpile` to type-check the page before deploy.',
+    'Run the compile to type-check the page before deploy.',
     'A clean transpile means the page is type-safe.',
     'Transpilation catches type errors early.',
     'The transpile step validates the types of every prop.',
@@ -732,7 +794,7 @@ test('the transpile claim detector catches reworded claims and allows negated on
     'Type-check the page by transpiling it.',
     'To type-check the page, run the transpile.',
     'To type-check the page, transpile it.',
-    'Type-check the page with `pac model genpage transpile`.',
+    'Type-check the page with the compile.',
     'Type-check in the transpile step.',
     'Transpile runs `tsc` to type-check the page.',
     // A step that FAILS on type errors, and the passive of catching them, are the same guarantee.
@@ -746,7 +808,7 @@ test('the transpile claim detector catches reworded claims and allows negated on
     'Transpiling runs `tsc`, which means the page is type-checked by `tsc`.',
     // A purpose with "for", a non-zero exit, and a checker step that transpiling itself includes.
     'For type-checking, transpile the page.',
-    '`pac model genpage transpile` exits non-zero on type errors.',
+    'The compile exits non-zero on type errors.',
     'Transpile returns a non-zero exit code for type errors.',
     'Run the transpile. It exits non-zero on type errors.',
     'Run the transpile. It returns non-zero on type errors.',
@@ -783,17 +845,24 @@ test('the transpile claim detector catches reworded claims and allows negated on
     '- Transpile does not bundle anything\n- Transpile type-checks the page',
     '| Transpile does not bundle | Transpile type-checks the page |',
     '## Transpile does not bundle\nTranspile type-checks the page.',
+    // The step the upload runs is the compile, whatever a document calls it: the same claims about it are the same guarantee.
+    'A clean compile means the page is type-safe.',
+    'The compile step fails on type errors.',
+    'Type errors are caught during compilation.',
+    'Compilation validates the types of every prop.',
+    'The SDK compile type-checks the page.',
+    'Run the compile. It type-checks the page.',
   ]) {
     assert.ok(transpileTypeClaims(claim).length > 0, `must be caught: ${claim}`);
   }
   for (const fine of [
-    '`pac model genpage transpile` only transpiles the page: it does not type-check it.',
+    'The compile only transpiles the page: it does not type-check it.',
     'A clean transpile is not proof that the types are correct.',
     'A clean transpile is therefore no proof that the page is type-safe.',
     'A transpile that succeeds does not mean the page is type-safe.',
     'Transpile never type-checks.',
     'Transpile cannot type-check.',
-    'It passes TypeScript and `pac model genpage transpile`, then logs a runtime error.',
+    'It passes TypeScript and the compile, then logs a runtime error.',
     'Run the type check separately, before you upload the page.',
     'Transpile first, then type-check separately with `tsc`.',
     'Transpile the page and use `tsc` to type-check it.',
@@ -817,7 +886,7 @@ test('the transpile claim detector catches reworded claims and allows negated on
     'Transpile does not minify, bundle or type-check the page.',
     'Transpile does not bundle it or type-check it.',
     // The truth about the exit code, a generic checker step, and a "for" purpose served by a checker.
-    '`pac model genpage transpile` exits 0 even with type errors.',
+    'The compile exits 0 even with type errors.',
     "After transpiling, run the project's type-check script.",
     'For type-checking, use `tsc`.',
     'Run the transpile. That means you must type-check it yourself.',
@@ -846,10 +915,10 @@ test('the transpile claim detector catches reworded claims and allows negated on
     'Transpile the page, then run `tsc`. It type-checks every prop.',
     'Transpile before invoking the type checker.',
     // A type error named as a SUBJECT is the opposite of a claim.
-    '`pac model genpage transpile` only transpiles the page: a type error still transpiles and writes JavaScript.',
+    'The compile only transpiles the page: a type error still compiles and writes JavaScript.',
     '- Transpile the page.\n- It does not type-check it.',
     // A sentence that continues with something other than `it` making the claim is about something else.
-    '`pac model genpage transpile` only transpiles the page. That is what the type check in Step 5 is for.',
+    'The compile only transpiles the page. That is what the type check in Step 5 is for.',
     'Transpile the page; it is important to type-check it too.',
     // After a heading, `It` is whatever the heading names.
     'Transpile the page.\n\n## The type checker\nIt type-checks every prop.',
@@ -866,6 +935,12 @@ test('the transpile claim detector catches reworded claims and allows negated on
     'Transpile the page and the type check runs separately.',
     // Fenced code is commands, not claims.
     '```\ntranspile && npm run typecheck\n```',
+    // The compile is a transpile: it parses the page, and says so when it does not check its types.
+    'A clean compile is no proof that the page is type-safe.',
+    'The compile does not type-check the page; run `tsc` for that.',
+    'The upload compiles the page and refuses one that does not parse; it does not type-check it.',
+    'Compile the page, then type-check separately with `tsc`.',
+    'After compiling, the page is type-checked by `tsc`.',
   ]) {
     assert.deepEqual(transpileTypeClaims(fine), [], `must be allowed: ${fine}`);
   }
@@ -905,12 +980,17 @@ test('every claim family is caught directly and as a continuation, so the two vo
   for (const c of CAUGHT) assert.ok(transpileTypeClaims(`Type errors are ${c} during transpilation.`).length > 0, `must be caught: ${c}`);
 });
 
-test('no genpage instruction presents transpilation as a type check', () => {
+test('no genpage instruction presents the compile or the transpile as a type check — and the page-builder says what the upload\'s compile is', () => {
   for (const file of mdFiles()) {
-    assert.deepEqual(transpileTypeClaims(readDoc(file)), [], `${rel(file)} must not present transpilation as a type check`);
+    assert.deepEqual(transpileTypeClaims(readDoc(file)), [], `${rel(file)} must not present the compile as a type check`);
   }
-  const builder = readDoc(path.join(PLUGIN, 'agents', 'genpage-page-builder.md'));
-  assert.match(builder, /genpage transpile`\s+only transpiles the page: it does not type-check it/, 'the page-builder must say transpilation is not a type check');
+  // The point the page-builder's Step 2.6 makes: the upload's compile (TypeScript's `transpileModule` in the bundled SDK) is a transpile, a clean one is no proof the page is type-safe,
+  // and the Griffel shorthands still compile. genpage-sdk-real-bundle.test.js runs the real compile on a page with type errors, so a re-vendored SDK that began to type-check fails there first.
+  const builder = squash(readDoc(path.join(PLUGIN, 'agents', 'genpage-page-builder.md')));
+  assert.match(builder, /The upload compiles the page with the TypeScript the bundled SDK carries, and that compile is a transpile \(`transpileModule`\), not a type check: it refuses a page that does not parse or has no default export, but a type error, or a reference to a column that does not exist, still compiles and writes JavaScript, and it does not execute `makeStyles`\./, 'the page-builder must say the upload\'s compile is a transpile, not a type check');
+  assert.match(builder, /A clean compile is therefore no proof that the page is type-safe, and unsupported Griffel shorthands can compile and then log runtime errors in the browser\./, 'and that a clean compile does not mean the page is type-safe');
+  // No instruction still names the pac verb whose place the upload's compile took.
+  for (const file of mdFiles()) assert.doesNotMatch(readDoc(file), /genpage\s+transpile/, `${rel(file)} still names the pac transpile`);
 });
 
 // --- App Spec schema split -------------------------------------------------

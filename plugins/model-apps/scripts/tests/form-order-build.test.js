@@ -3,16 +3,17 @@
 //
 // What a table opens with is decided by the ORDER of its Main forms (each form's formxml
 // `<DisplayConditions Order="n">`), not by `systemform.isdefault`: measured live, moving `isdefault` did
-// not reorder the forms a user is served, and three new forms at EQUAL Order (every new form carries
-// Order 0) were served with the `isdefault` form LAST. So a build that only promoted `isdefault` left a
-// table with three new Main forms opening with an alternate one. These tests drive the forms phase against a
-// small model of the environment's forms and pin, per scenario, which forms get which Order, which are
-// never touched, and what the build says when it cannot make its choice stick.
+// not reorder the forms a user is served, and three new forms at the SAME Order (0, which is what the SDK
+// then gave every new form) were served with the `isdefault` form LAST. So a build that only promoted
+// `isdefault` left a table with three new Main forms opening with an alternate one. A form the SDK creates
+// carries no Order at all, so the build writes each form's place itself. These tests drive the forms
+// phase against a small model of the environment's forms and pin, per scenario, which forms get which
+// Order, which are never touched, and what the build says when it cannot make its choice stick.
 const test = require('node:test');
 const assert = require('node:assert');
 
 const { runSdkBuild, planFor } = require('../lib/sdk-build.js');
-const { makeSimpleMockSdk } = require('./helpers/mock-sdk.js');
+const { makeSimpleMockSdk, rolesOfDisplayConditions, applyRolesWrite } = require('./helpers/mock-sdk.js');
 
 const FORM_TYPE = { Main: 2, QuickCreate: 7, QuickView: 6 };
 const T = 'new_workitem';
@@ -46,8 +47,8 @@ function specFor({ existing = false, forms, mainFormOrder, personas } = {}) {
 // `seed` lists forms that already exist: { id, name, entity?, type?, active?, isdefault?, dc? } where `dc`
 // is the form's <DisplayConditions> ({ everyone | roleIds, fallbackForm, order }) or undefined for none.
 // A form the build creates behaves as the SDK's does: its local copy carries the <DisplayConditions> the
-// SDK gives every new form (Order 0, offered to everyone) in its root bag, and it exists on the server —
-// with whatever that copy says — only once it is pushed.
+// SDK gives every new form (offered to everyone, with no Order: helpers/mock-sdk.js seeds it as the bundle
+// does) in its root bag, and it exists on the server — with whatever that copy says — only once it is pushed.
 function makeEnv(seed = [], failures = {}, options = {}) {
   const { sdk } = makeSimpleMockSdk();
   const provision = Object.create(sdk);
@@ -60,9 +61,9 @@ function makeEnv(seed = [], failures = {}, options = {}) {
   provision.createArtifact = async (t, def) => {
     const art = await sdk.createArtifact(t, def);
     if (t === 'form') {
-      const local = await sdk.getArtifact('form', art.id);
-      if (!options.noDisplayConditions) {
-        local.bag.c.push({ i: 3, node: { n: 'DisplayConditions', a: [['Order', '0'], ['FallbackForm', 'true']], c: [{ n: 'Everyone', a: [], c: [] }] } });
+      if (options.noDisplayConditions) {
+        const local = await sdk.getArtifact('form', art.id);
+        local.bag.c = local.bag.c.filter((e) => !(e && e.node && e.node.n === 'DisplayConditions'));
       }
       unpushed.set(art.id, { entity: def.entityLogicalName, name: def.name, type: FORM_TYPE[def.formType || 'Main'] });
     }
@@ -75,9 +76,9 @@ function makeEnv(seed = [], failures = {}, options = {}) {
       unpushed.delete(id);
       const local = await sdk.getArtifact('form', id);
       const node = (local.bag.c.find((e) => e && e.node && e.node.n === 'DisplayConditions') || {}).node;
-      const order = node ? Number((node.a.find(([n]) => n === 'Order') || [])[1]) : undefined;
-      add({ id, ...meta, dc: node ? { everyone: true, fallbackForm: true, order } : undefined });
-      log.push(['created', meta.name, order]);
+      const dc = rolesOfDisplayConditions(node);
+      add({ id, ...meta, dc });
+      log.push(['created', meta.name, dc ? dc.order : undefined]);
     }
     return out;
   };
@@ -114,26 +115,14 @@ function makeEnv(seed = [], failures = {}, options = {}) {
     if (!f) throw new Error(`no form ${id}`);
     return f.dc ? { ...f.dc } : undefined;
   };
-  // The SDK's contract (vendored FormApi): roles/everyone REPLACE the element; order/fallbackForm alone
-  // re-attach the existing one and change only those attributes — and are refused when there is none.
+  // The SDK's contract (vendored FormApi), applied by helpers/mock-sdk.js: roles/everyone REPLACE the element; order/fallbackForm
+  // alone re-attach the existing one and change only those attributes — and are refused when there is none.
   provision.setFormSecurityRoles = async (id, opts) => {
     const f = forms.get(id);
     if (!f) throw new Error(`no form ${id}`);
     log.push(['set', f.name, opts]);
     if (failures.failWrite) throw new Error(failures.failWrite);
-    const wantsElement = opts.everyone || (opts.roleIds && opts.roleIds.length > 0);
-    if (!wantsElement) {
-      if (!f.dc) throw new Error('`order`/`fallbackForm` were supplied without `roleIds` or `everyone`, but this form has no <DisplayConditions> to attach them to');
-      if (opts.order !== undefined) f.dc.order = opts.order;
-      if (opts.fallbackForm !== undefined) f.dc.fallbackForm = opts.fallbackForm;
-      return;
-    }
-    const prior = f.dc || {};
-    f.dc = {
-      ...(opts.everyone ? { everyone: true } : { roleIds: [...opts.roleIds] }),
-      fallbackForm: opts.fallbackForm !== undefined ? opts.fallbackForm : (prior.fallbackForm !== undefined ? prior.fallbackForm : false),
-      ...(opts.order !== undefined ? { order: opts.order } : (prior.order !== undefined ? { order: prior.order } : {})),
-    };
+    f.dc = applyRolesWrite(f.dc, opts);
   };
   provision.addSolutionComponent = async () => undefined;
   const order = (name) => { const f = byName(name); return f && f.dc ? f.dc.order : undefined; };
@@ -163,9 +152,9 @@ test('own table, three new Main forms, no choice made: the first in spec order i
   const { res, step, warnings } = await build(specFor(), env);
   assert.strictEqual(res.ok, true);
   assert.deepStrictEqual([env.order(STD), env.order(ALT), env.order(SUM)], [0, 1, 2]);
-  // Every new form arrives with Order 0, so the first is already in place: only the others are written.
-  assert.deepStrictEqual(env.writes(), [[ALT, { order: 1 }], [SUM, { order: 2 }]]);
-  assert.deepStrictEqual(env.created(), [[STD, 0], [ALT, 0], [SUM, 0]], 'a table the spec orders is ordered after the creates, not in them');
+  // A new form arrives with no Order, so none is in place yet: every Main form is written, the first included.
+  assert.deepStrictEqual(env.writes(), [[STD, { order: 0 }], [ALT, { order: 1 }], [SUM, { order: 2 }]]);
+  assert.deepStrictEqual(env.created(), [[STD, undefined], [ALT, undefined], [SUM, undefined]], 'a table the spec orders is ordered after the creates, not in them');
   assert.strictEqual(env.byName(STD).isdefault, true, 'the same form is still promoted to isdefault');
   const [s] = step(/^form order for new_workitem/);
   assert.strictEqual(s.status, 'ok');
@@ -281,7 +270,7 @@ test('QuickCreate and QuickView forms are never ordered, and do not count as Mai
   });
   const env = makeEnv();
   const { step } = await build(spec, env);
-  assert.deepStrictEqual(env.writes(), [[ALT, { order: 1 }]]);
+  assert.deepStrictEqual(env.writes(), [[STD, { order: 0 }], [ALT, { order: 1 }]]);
   assert.strictEqual(step(/^form order for/).length, 1);
   assert.strictEqual(step(/^form order for/)[0].label, "form order for new_workitem: 'Work Item', then 1 more");
 });
@@ -359,8 +348,9 @@ test('existing table, deactivateOtherMainForms on the explicit default is NOT ap
 });
 
 test('existing table, a NEW alternate form and no choice: it is put after the table\u2019s other Main forms, which are not touched', async () => {
-  // AC 2: adding an alternate form must not change what the table opens with. A new form carries Order 0,
-  // which would tie with the form everyone opens today — and the platform, not the build, orders a tie.
+  // Adding an alternate form must not change what the table opens with. A new form carries no Order, and where the
+  // platform serves a form with none among the table's others is not the build's choice — so the build gives it an
+  // order of its own, after theirs.
   const env = makeEnv([
     { id: 'e1', name: STD, isdefault: true, dc: { everyone: true, fallbackForm: true, order: 0 } },
     { id: 'e3', name: SUM, dc: { everyone: true, fallbackForm: true, order: 3 } },
@@ -368,7 +358,7 @@ test('existing table, a NEW alternate form and no choice: it is put after the ta
   ]);
   const { step, warnings } = await build(specFor({ existing: true }), env);
   // Highest other order (3) + 1 + its index among the spec's Main forms (1): created at 5, in ONE write —
-  // the create — never at the Order 0 every new form starts with.
+  // the create — so the form is never left without an order, as the SDK makes it.
   assert.deepStrictEqual(env.created(), [[ALT, 5]]);
   assert.deepStrictEqual(env.writes(), [], 'no separate order write');
   assert.strictEqual(env.order(STD), 0);
@@ -435,8 +425,8 @@ test('securityRoles WITHOUT an order keeps the position the forms phase gave the
 });
 
 test('a declared Main form the forms phase produced no id for: the table is not ordered, and the step names the form', async () => {
-  // The guard behind this skip: ordering the other forms without that one would leave it at Order 0,
-  // tied with the first — so the order the step reports would not be the order users are served.
+  // The guard behind this skip: ordering the other forms without that one would leave it with no order,
+  // so the order the step reports would not be the order users are served.
   const env = makeEnv();
   const basePush = env.provision.pushArtifact;
   env.provision.pushArtifact = async (t, id) => {
@@ -523,8 +513,9 @@ test('the step count stays honest: every planned form-order step is emitted exac
 // --- a new form is created in its place --------------------------------------------------------------
 //
 // On a table whose order the build does not set, a new Main form's order is part of its create. A separate
-// write after the create left the form at Order 0 — possibly ahead of the form the table opened with — on
-// any failure between the two, and a later build cannot tell the form is new, so it could never repair it.
+// write after the create left the form with no order of its own — where the platform serves it is not the
+// build's choice, so possibly ahead of the form the table opened with — on any failure between the two, and a
+// later build cannot tell the form is new, so it could never repair it.
 
 const existingWithOriginal = () => makeEnv([{ id: 'e1', name: STD, isdefault: true, dc: { everyone: true, fallbackForm: true, order: 5 } }]);
 const addAlternate = () => specFor({ existing: true, forms: [{ entity: T, name: STD, formType: 'Main' }, { entity: T, name: ALT, formType: 'Main' }] });
@@ -579,7 +570,7 @@ test('a failure placing a new form fails its create before anything is pushed', 
     return update(t, id, ptr, value);
   };
   await assert.rejects(build(addAlternate(), env), /local copy refused the edit/);
-  assert.strictEqual(env.byName(ALT), undefined, 'the form was never pushed, so nothing is left at Order 0');
+  assert.strictEqual(env.byName(ALT), undefined, 'the form was never pushed, so nothing is left without a place');
 });
 
 test('a new form whose SDK copy carries no <DisplayConditions> is created as the SDK makes it, and the build says so', async () => {
@@ -592,10 +583,10 @@ test('a new form whose SDK copy carries no <DisplayConditions> is created as the
 test('forms on a table the spec orders, or orders by hand, are not placed in their create', async () => {
   const own = makeEnv();
   await build(specFor(), own);
-  assert.deepStrictEqual(own.created(), [[STD, 0], [ALT, 0], [SUM, 0]], 'the order step orders them after the creates');
+  assert.deepStrictEqual(own.created(), [[STD, undefined], [ALT, undefined], [SUM, undefined]], 'the order step orders them after the creates');
   const byHand = makeEnv([{ id: 'e1', name: STD, dc: { everyone: true, fallbackForm: true, order: 5 } }]);
   await build(specFor({ existing: true, forms: [{ entity: T, name: STD, formType: 'Main', securityRoles: { everyone: true, order: 1 } }, { entity: T, name: ALT, formType: 'Main' }] }), byHand);
-  assert.deepStrictEqual(byHand.created(), [[ALT, 0]], 'the author orders this table');
+  assert.deepStrictEqual(byHand.created(), [[ALT, undefined]], 'the author orders this table: the form is left as the SDK makes it, with no order');
 });
 
 // A form with no order at all is served after every form that has one. Appending the new form after the

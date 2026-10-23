@@ -7,6 +7,7 @@ const path = require('node:path');
 const ownership = require('../lib/page-ownership-records.js');
 const snapshots = require('../lib/apply-snapshot-store.js');
 const { loadCli } = require('./helpers/cli-harness.js');
+const { fakeGenpage } = require('./helpers/fake-genpage.js');
 
 const ENV = 'https://contoso.crm.dynamics.com';
 const OTHER_ENV = 'https://fabrikam.crm.dynamics.com';
@@ -37,7 +38,7 @@ async function runClear(dir, { sdk, spec, realEngine = false } = {}) {
         emitResult: (ok, result) => { emissions.push({ ok, result }); },
       },
       './lib/sdk-http-client.js': { createAzHttpClient: () => ({}) },
-      './vendor/cds-maker-sdk.cjs': {
+      './lib/maker-sdk.js': {
         createNodeWorkspaceStorage: () => ({}),
         createMakerSdk: () => sdk || ({ initWorkspace: async () => {} }),
       },
@@ -104,8 +105,14 @@ for (const outcome of ['deleted', 'confirmed absent']) {
         if (entity === 'appmodulecomponent') return [{ objectid: sitemapId, componenttype: 62 }];
         if (entity === 'sitemap') return state.app ? [{ sitemapxml: '<SiteMap />' }] : [];
         if (entity === 'webresource') return state.manifest ? [{ webresourceid: 'manifest-id', content: state.manifest }] : [];
-        if (entity === 'uxagentproject') return state.page ? [{ uxagentprojectid: ID, name: 'Overview' }] : [];
         return [];
+      },
+      // The pages in their saved layer, which is where teardown looks for them; the navigation's saved layer is not modelled here, so reading it fails as it does without a client.
+      dataverse: {
+        get: async (url) => {
+          if (!url.startsWith('/uxagentprojects/Microsoft.Dynamics.CRM.RetrieveUnpublishedMultiple()')) throw new Error(`not modelled: ${url}`);
+          return { status: 200, body: { value: state.page ? [{ uxagentprojectid: ID, name: 'Overview', componentstate: 0 }] : [] } };
+        },
       },
       createWebResource: async (o) => { state.manifest = Buffer.from(o.content, 'utf8').toString('base64'); return { id: 'manifest-id' }; },
       updateWebResource: async (id, o) => { state.manifest = Buffer.from(o.content, 'utf8').toString('base64'); },
@@ -117,8 +124,8 @@ for (const outcome of ['deleted', 'confirmed absent']) {
         return [];
       },
       deleteAppCascade: async () => { state.app = false; return { success: true, deleted: [], failures: [] }; },
-      deleteRecord: async (entity, id) => {
-        assert.equal(entity, 'uxagentproject');
+      deleteRemoteArtifact: async (kind, id) => {
+        assert.equal(kind, 'genPage');
         assert.equal(id, ID);
         state.page = false;
         state.deletes++;
@@ -127,20 +134,20 @@ for (const outcome of ['deleted', 'confirmed absent']) {
       deleteSolution: async () => { state.solution = false; },
       deleteTable: async (logical) => { assert.equal(logical, 'contoso_item'); },
     };
+    const genpage = fakeGenpage({
+      newId: () => ID,
+      onCreate: () => {
+        state.page = true;
+        state.creates++;
+      },
+    });
     await require('../lib/sdk-build.js').runSdkBuild(spec, {
       sdk, apply: true, env: ENV, appDir, workspaceDir: dir, phases: ['pages'],
       changedOnly: { resolvedAppId: appId, skipSitemapFinalize: true },
-      genpageCli: {
-        enumerateEnv: async () => ({ ok: true, ids: [], pages: [] }),
-        upload: async (o) => {
-          assert.equal(o.pageId, undefined, 'this is an acknowledged CREATE, not a reused id');
-          state.page = true;
-          state.creates++;
-          return { pageId: ID };
-        },
-      },
+      genpage,
     });
     assert.equal(state.creates, 1);
+    assert.equal(genpage.of('update').length, 0, 'this is an acknowledged CREATE, not a reused id');
     assert.equal(ownership.readPageOwnership(dir, APP, ENV).created.length, 1);
     assert.equal(ownership.checkPageOwnershipClearable(dir).ok, false);
     if (outcome === 'confirmed absent') state.page = false;

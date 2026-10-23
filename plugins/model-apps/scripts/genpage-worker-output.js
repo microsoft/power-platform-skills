@@ -23,6 +23,7 @@ const { pageStructureProblems: structuralProblems } = require('./lib/page-struct
 const STAMP_SUFFIX = '.dispatch-stamp.json';
 const stampPathFor = (abs) => path.join(path.dirname(abs), `.${path.basename(abs)}${STAMP_SUFFIX}`);
 const { sha256 } = require('./lib/hash.js');
+const { makeWritesBlocking } = require('./lib/output-redaction.js');
 
 function stampPageTarget({ filePath }) {
   if (!filePath) return { ok: false, action: 'stamp', problems: ['--file is required'] };
@@ -135,6 +136,9 @@ function parseArgv(argv) {
 function main() {
   const args = parseArgv(process.argv.slice(2));
   const result = args.stamp ? stampPageTarget(args) : validatePageOutput(args);
+  // The result quotes the path it was given and the page's problems, and the process exits right after it:
+  // the write is made blocking first, or a pipe on Linux and macOS takes only what fits at once (lib/output-redaction.js).
+  makeWritesBlocking(process.stdout, process.stderr);
   process.stdout.write(JSON.stringify(result) + '\n');
   process.exit(result.ok ? 0 : 3);
 }

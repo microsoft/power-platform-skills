@@ -15,6 +15,7 @@ const { runNodeScript, runNpm } = require('./lib/node-tool.js');
 const { runPac } = require('./lib/pac-exec.js');
 const { validateControlName, validatePublisherPrefix } = require('./lib/pcf-names.js');
 const { parseXml, findAll, attr } = require('./lib/xml-lite.js');
+const { makeWritesBlocking } = require('./lib/output-redaction.js');
 
 const USAGE = `Usage:
   node scripts/pcf-ci-build.js [--all | --templates | --template <id> | --recipe <id>] [--latest] [--keep] [--package] [--npm-cli <path>]
@@ -38,6 +39,7 @@ const EXPECTED_GATE_IDS = ['manifest', 'code', 'lint', 'test', 'build'];
 const DIAGNOSTIC_LIMIT = 2000;
 
 function usageError(message) {
+  makeWritesBlocking(process.stdout, process.stderr);
   process.stderr.write(`${USAGE}\n${message}\n`);
   process.exit(1);
 }
