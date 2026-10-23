@@ -167,8 +167,11 @@ export async function registerForPushNotifications(
   topic: string = ALL_USERS_TOPIC,
 ): Promise<PushResult<string>> {
   const push = loadPush();
-  if (!push) return { ok: false, reason: 'UNAVAILABLE' };
-  const { fcm, messaging, notifications } = push;
+  return push ? registerWith(push, topic) : { ok: false, reason: 'UNAVAILABLE' };
+}
+
+/** Registration with loaded modules, so the hook registers with the instance it listens on. */
+async function registerWith({ fcm, messaging, notifications }: Push, topic: string): Promise<PushResult<string>> {
   try {
     const { granted } = await notifications.requestPermissionsAsync();
     if (!granted) return { ok: false, reason: 'PERMISSION_DENIED' };
@@ -191,12 +194,18 @@ export function showPushMessage({ notification }: PushMessage): void {
 /**
  * Topic (un)subscriptions run one at a time, across effect runs and across mounts: signing out
  * unmounts the signed-in layout, so the next sign-in's registration must wait for the previous
- * session's unsubscribe, which in turn waits for any registration still in flight.
+ * session's unsubscribe, which in turn waits for any registration still in flight. A failed one
+ * doesn't hold up the next, and is logged in development builds.
  */
 let topicUpdates: Promise<void> = Promise.resolve();
 
 function updateTopic(update: () => Promise<unknown>): void {
-  topicUpdates = topicUpdates.then(update).then(() => undefined, () => undefined);
+  topicUpdates = topicUpdates.then(update).then(
+    () => undefined,
+    (error: unknown) => {
+      if (__DEV__) console.log('[push] topic update failed', error instanceof Error ? error.message : String(error));
+    },
+  );
 }
 
 /**
@@ -227,7 +236,7 @@ export function usePushNotifications(
     const register = () =>
       updateTopic(async () => {
         if (!active || registered) return;
-        const result = await registerForPushNotifications(topic);
+        const result = await registerWith(push, topic);
         registered = result.ok;
         if (__DEV__) console.log('[push] registration', result.ok ? 'succeeded' : result.reason, result.ok ? '' : result.message ?? '');
       });
