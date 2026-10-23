@@ -1,7 +1,8 @@
 'use strict';
 // A name a maker writes freely can be exactly a member of Object.prototype: a dashboard, a persona (its security role), a business process
 // flow and a status reason called `__proto__`, `constructor`, `toString` or `hasOwnProperty`, a page whose key is `constructor`, a Custom API
-// parameter called `__proto__`. Each is a legal name, and the plugin must treat it as one more name.
+// parameter called `constructor` or `toString` (Dataverse refuses a parameter called `__proto__`: its name must begin with a letter). Each is a
+// legal name, and the plugin must treat it as one more name.
 //
 // A plain object `{}` used as a map gets both directions wrong for such a name:
 //   - a READ of a name nobody stored answers the inherited member — the Object function, a function, the prototype itself — and each is
@@ -250,6 +251,8 @@ test('a status reason whose state is a member of Object.prototype is placed in t
 
 // --- Custom API parameters (list-custom-apis.js) -------------------------------------------------------------------------------------------------------------
 
+// `__proto__` cannot name a parameter (Dataverse requires a letter first); it stays in NAMES because the maps are null-prototype as a defence,
+// and must hold it all the same.
 test('a Custom API parameter called like a member of Object.prototype is listed with its kind, and a lookup one with its table', () => {
   const primitives = NAMES.map((uniquename, i) => ({ uniquename, type: [10, 7, 0, 12][i], isoptional: false }));
   const kinds = parameterKindsFromRows(primitives);

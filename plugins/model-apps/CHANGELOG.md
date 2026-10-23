@@ -67,14 +67,13 @@ the bytes the plugin's file writers are given, and the genpage evals grade 17 mo
   reconcile a key whose columns are not those the spec declares for it. When the read cannot tell, the build stops with the platform's
   error.
 - **A name that is also a built-in JavaScript property name works like any other name.** `__proto__`, `constructor`, `toString`,
-  `hasOwnProperty` and the like can name a dashboard, a persona, a business process flow, a status reason or a Custom API parameter,
-  and `constructor` a page key. A dashboard called `__proto__` in the navigation stopped the app step; a new app whose navigation held
-  a page keyed `constructor` stopped at the pages step, after the app was created; a persona called `__proto__` named by a flow's or a
-  form's security roles stopped the security phase; a sample record could be created with the default status when such a status
-  reason's value had not been captured; and such names were left out of the build result, the changed-only snapshot and the
-  `list-custom-apis.js` output. The App Spec check and the provisioning input check refuse a column type such as `constructor` or
-  `toString` as unknown, and the App Spec check reports a form whose table is called `constructor` or `__proto__` instead of stopping
-  with a TypeError.
+  `hasOwnProperty` and the like can name a dashboard, a persona, a business process flow or a status reason, and `constructor` a page
+  key. A dashboard called `__proto__` in the navigation stopped the app step; a new app whose navigation held a page keyed `constructor`
+  stopped at the pages step, after the app was created; a persona called `__proto__` named by a flow's or a form's security roles
+  stopped the security phase; a sample record could be created with the default status when such a status reason's value had not been
+  captured; and such names were left out of the build result and the changed-only snapshot. The App Spec check and the provisioning
+  input check refuse a column type such as `constructor` or `toString` as unknown, and the App Spec check reports a form whose table is
+  called `constructor` or `__proto__` instead of stopping with a TypeError.
 - **A generated page whose default export is a generic arrow function is accepted.** `export default <T,>(props: Props<T>) => …` —
   with a constraint, a `const` type parameter, a default or a return type — compiles, but `/genpage`'s worker-output check and
   `/app-builder`'s page promotion refused it as having "no complete default export". A default export that TypeScript reads as a JSX

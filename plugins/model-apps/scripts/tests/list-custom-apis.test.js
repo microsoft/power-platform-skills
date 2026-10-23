@@ -94,8 +94,8 @@ test('buildCustomApiFilter includes Global plus the page tables, escaping quotes
   assert.match(escaped, /boundentitylogicalname eq 'o''brien'/);
 });
 
-// The kind and lookup maps are null-prototype objects (a parameter can be called `__proto__`, lib/own-keys.js), so the assertions below
-// compare their entries: `{ ...map }`.
+// The kind and lookup maps are null-prototype objects (a defence, lib/own-keys.js — Dataverse requires a parameter's name to begin with a
+// letter, so none is called `__proto__`), so the assertions below compare their entries: `{ ...map }`.
 test('parameterKindsFromRows maps one API\'s expanded params and drops unknown types', () => {
   // Rows arrive inline via $expand — each element has uniquename + type, but no parent id.
   const kinds = parameterKindsFromRows([
