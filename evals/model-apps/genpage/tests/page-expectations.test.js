@@ -280,10 +280,8 @@ test('eval 5: a nested utility\'s own locals are not bindings it closes over', (
   assertFail(grade(TOP_LEVEL, sibling), /utility percent is defined inside another function but reads nothing from it/);
 });
 
-test('eval 4: every submit is reachable only on the review step', () => {
-  assertFail(grade(REVIEW, withPage(E4, 'page.tsx', ['{step < 3 ? (', '{step < 1 ? ('])), /submit button .*not only on the review step/);
-  assertFail(grade(REVIEW, withPage(E4, 'page.tsx', ['            <div className={styles.nav}>', '            <Button onClick={handleSubmit}>Submit now</Button>\n            <div className={styles.nav}>'])), /submit button .*not only on the review step/);
-  const page = (submit) => inline(`const GeneratedComponent = () => {
+// A two-step page whose review step (step 2) shows the title step 1 enters, with `submit` placed as given.
+const twoStepPage = (submit) => inline(`const GeneratedComponent = () => {
   const [step, setStep] = useState(1);
   const [title, setTitle] = useState('');
   return <div>
@@ -292,7 +290,12 @@ test('eval 4: every submit is reachable only on the review step', () => {
     ${submit}
   </div>;
 };`);
-  const SUBMIT = "<Button onClick={() => dataApi.createRow('incident', { title })}>Submit</Button>";
+const SUBMIT = "<Button onClick={() => dataApi.createRow('incident', { title })}>Submit</Button>";
+
+test('eval 4: every submit is reachable only on the review step', () => {
+  assertFail(grade(REVIEW, withPage(E4, 'page.tsx', ['{step < 3 ? (', '{step < 1 ? ('])), /submit button .*not only on the review step/);
+  assertFail(grade(REVIEW, withPage(E4, 'page.tsx', ['            <div className={styles.nav}>', '            <Button onClick={handleSubmit}>Submit now</Button>\n            <div className={styles.nav}>'])), /submit button .*not only on the review step/);
+  const page = twoStepPage;
   // Disabled on every step but the review is gated too; so is the false side of a boundary that ends at it.
   assertPass(grade(REVIEW, page(SUBMIT.replace('<Button ', '<Button disabled={step !== 2} '))));
   assertPass(grade(REVIEW, page(`{step < 2 ? <Button onClick={() => setStep(step + 1)}>Next</Button> : ${SUBMIT}}`)));
@@ -303,6 +306,25 @@ test('eval 4: every submit is reachable only on the review step', () => {
   // A condition read through a declaration counts like the comparison it holds.
   const aliased = inline(page(`{isReview && ${SUBMIT}}`).files[0].content.replace('const [title', 'const isReview = step === 2;\n  const [title'));
   assertPass(grade(REVIEW, aliased));
+});
+
+// `a ?? b` falls back to b only when a is null or undefined, so it is not `||`: `false ?? (step !== 3)` is
+// false, and the button it disables can be pressed. Literals are read for what they are.
+test('eval 4: `??` and literal conditions decide whether a submit can be pressed the way JavaScript evaluates them', () => {
+  const extra = (disabled) => withPage(E4, 'page.tsx', ['            <div className={styles.nav}>', `            <Button onClick={handleSubmit} disabled={${disabled}}>Submit now</Button>\n            <div className={styles.nav}>`]);
+  assertPass(grade(REVIEW, extra('submitting || (step !== 3)')));
+  assertFail(grade(REVIEW, extra('submitting ?? (step !== 3)')), /submit button "Submit now" can be pressed when step is 1 or 2, not only on the review step/);
+  // A nullish left side does fall back, and a literal true disables for good ...
+  for (const disabled of ['undefined ?? (step !== 3)', 'null ?? (step !== 3)', 'true']) assertPass(grade(REVIEW, extra(disabled)));
+  // ... while false, null and undefined disable nothing.
+  for (const disabled of ['false', 'null', 'undefined']) assertFail(grade(REVIEW, extra(disabled)), /submit button "Submit now" can be pressed when step is 1 or 2/);
+  // The only submit, disabled for good, leaves nothing to press on the review step.
+  assertFail(grade(REVIEW, twoStepPage(`{step === 2 && ${SUBMIT.replace('<Button ', '<Button disabled={true} ')}}`)), /no submit button can be pressed on the review step/);
+  // In JSX, `x ?? <Submit/>` shows the fallback wherever x may be nullish; inside a step's branch it stays there.
+  assertFail(grade(REVIEW, twoStepPage(`{pending ?? ${SUBMIT}}`)), /can be pressed when step is 1, not only on the review step/);
+  assertPass(grade(REVIEW, twoStepPage(`{step === 2 && (pending ?? ${SUBMIT})}`)));
+  // A comparison is never nullish, so the fallback after it is never shown, on any step.
+  assertFail(grade(REVIEW, twoStepPage(`{(step !== 2) ?? ${SUBMIT}}`)), /no submit button can be pressed on the review step/);
 });
 
 test('eval 4: an empty label is no label', () => {

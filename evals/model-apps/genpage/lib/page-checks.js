@@ -142,15 +142,20 @@ function enclosingContainer(code, at) {
 }
 
 // --- Which step values render an element -----------------------------------------------------------------
-// A condition is read for the step values it MAY hold on and those it MUST hold on (a condition about
-// something else may hold on any value and must hold on none). Comparisons of the step with a whole
-// number are exact; `&&`, `||`, `??` and `!` combine them; a name declared as a condition
-// (`const isReview = step === 3;`) is read through its declaration.
+// A condition is read, over the values the step takes, for where its value MAY be truthy and where it MUST be
+// (`may`, `must`), and likewise where it may and must be null or undefined (`mayNull`, `mustNull`). Both are
+// needed because `??` is not `||`: `a ?? b` falls back to b only where a is nullish, so `false ?? (step !== 3)`
+// is false and disables nothing, while `false || (step !== 3)` is the comparison. Comparisons of the step with
+// a whole number are exact (a boolean, never nullish); the literals true, false, null, undefined, a number
+// and a plain string are what they are; `&&`, `||`, `??` and `!` combine them as JavaScript evaluates them;
+// a name declared as a condition (`const isReview = step === 3;`) is read through its declaration. Anything
+// else may be truthy or not, and nullish or not, on every value, so it proves nothing.
 const COMPARE = { '===': (a, b) => a === b, '==': (a, b) => a === b, '!==': (a, b) => a !== b, '!=': (a, b) => a !== b, '<': (a, b) => a < b, '<=': (a, b) => a <= b, '>': (a, b) => a > b, '>=': (a, b) => a >= b };
 const FLIP = { '<': '>', '<=': '>=', '>': '<', '>=': '<=' };
 const setOf = (values) => new Set(values);
 const intersect = (a, b) => setOf([...a].filter((v) => b.has(v)));
 const minus = (a, b) => setOf([...a].filter((v) => !b.has(v)));
+const union = (a, b) => setOf([...a, ...b]);
 
 function trimRange(code, start, end) {
   while (start < end && /\s/.test(code[start])) start += 1;
@@ -158,30 +163,53 @@ function trimRange(code, start, end) {
   return [start, end];
 }
 
+// How each operator combines what is known of its two sides, a and b (JavaScript's own rules):
+//   a || b   a if a is truthy, else b: truthy where either is; nullish only where a is falsy and b nullish
+//   a ?? b   a unless a is nullish, else b: truthy where a is, or where a is nullish and b truthy
+//   a && b   a if a is falsy, else b: truthy where both are; nullish where a is, or a is truthy and b nullish
+const COMBINE = {
+  '||': (all, a, b) => ({
+    may: union(a.may, b.may), must: union(a.must, b.must),
+    mayNull: intersect(minus(all, a.must), b.mayNull), mustNull: intersect(minus(all, a.may), b.mustNull),
+  }),
+  '??': (all, a, b) => ({
+    may: union(a.may, intersect(a.mayNull, b.may)), must: union(a.must, intersect(a.mustNull, b.must)),
+    mayNull: intersect(a.mayNull, b.mayNull), mustNull: intersect(a.mustNull, b.mustNull),
+  }),
+  '&&': (all, a, b) => ({
+    may: intersect(a.may, b.may), must: intersect(a.must, b.must),
+    mayNull: union(a.mayNull, intersect(a.may, b.mayNull)), mustNull: union(a.mustNull, intersect(a.must, b.mustNull)),
+  }),
+};
+
 function conditionValues(content, text, state, domain, depth = 0) {
   const all = setOf(domain);
-  const unknown = { may: all, must: setOf([]) };
+  const none = setOf([]);
+  const unknown = { may: all, must: none, mayNull: all, mustNull: none };
+  const constant = (truthy, nullish = false) => ({ may: truthy ? all : none, must: truthy ? all : none, mayNull: nullish ? all : none, mustNull: nullish ? all : none });
   const { code } = sourceView(text);
   const [start, end] = trimRange(code, 0, code.length);
   if (start >= end) return unknown;
   if (code[start] === '(' && matchingClose(code, start) === end - 1) return conditionValues(content, text.slice(start + 1, end - 1), state, domain, depth);
-  for (const operator of ['||', '??']) {
+  // `||` and `??` cannot be mixed without parentheses, so the first that splits the condition is its loosest operator.
+  for (const operator of ['||', '??', '&&']) {
     const parts = splitTopLevel(code, start, end, operator);
     if (parts.length > 1) {
-      const each = parts.map(([s, e]) => conditionValues(content, text.slice(s, e), state, domain, depth));
-      return { may: setOf(each.flatMap((c) => [...c.may])), must: setOf(each.flatMap((c) => [...c.must])) };
+      return parts.map(([s, e]) => conditionValues(content, text.slice(s, e), state, domain, depth))
+        .reduce((a, b) => COMBINE[operator](all, a, b));
     }
-  }
-  const ands = splitTopLevel(code, start, end, '&&');
-  if (ands.length > 1) {
-    const each = ands.map(([s, e]) => conditionValues(content, text.slice(s, e), state, domain, depth));
-    return { may: each.reduce((acc, c) => intersect(acc, c.may), all), must: each.reduce((acc, c) => intersect(acc, c.must), all) };
   }
   const bare = code.slice(start, end);
   if (bare[0] === '!' && bare[1] !== '=') {
     const inner = conditionValues(content, text.slice(start + 1, end), state, domain, depth);
-    return { may: minus(all, inner.must), must: minus(all, inner.may) };
+    return { may: minus(all, inner.must), must: minus(all, inner.may), mayNull: none, mustNull: none };
   }
+  if (bare === 'true' || bare === 'false') return constant(bare === 'true');
+  if (bare === 'null' || bare === 'undefined') return constant(false, true);
+  if (/^\d+(?:\.\d+)?$/.test(bare)) return constant(Number(bare) !== 0);
+  // A plain string literal, read from the source (the code view blanks its text): '' is falsy, anything else truthy.
+  const literal = /^(['"])([^'"\\]*)\1$/.exec(text.slice(start, end));
+  if (literal) return constant(literal[2] !== '');
   const name = escapeRe(state.value);
   const forward = new RegExp(`^${name}\\s*(===|!==|==|!=|<=|>=|<|>)\\s*(\\d+)$`).exec(bare);
   const backward = new RegExp(`^(\\d+)\\s*(===|!==|==|!=|<=|>=|<|>)\\s*${name}$`).exec(bare);
@@ -189,7 +217,7 @@ function conditionValues(content, text, state, domain, depth = 0) {
     const op = forward ? forward[1] : FLIP[backward[2]] || backward[2];
     const n = Number(forward ? forward[2] : backward[1]);
     const holds = setOf(domain.filter((v) => COMPARE[op](v, n)));
-    return { may: holds, must: holds };
+    return { may: holds, must: holds, mayNull: none, mustNull: none };
   }
   const alias = /^[A-Za-z_$][\w$]*$/.test(bare) && depth < 2 ? declarationSource(content, bare) : null;
   const value = alias && /^\s*(?:const|let|var)\s+[A-Za-z_$][\w$]*\s*(?::[^=]+)?=\s*([\s\S]*?);?\s*$/.exec(alias);
@@ -200,7 +228,8 @@ function conditionValues(content, text, state, domain, depth = 0) {
 // The step values for which the branch of an expression `[start, end)` that holds `at` is rendered:
 //   cond ? A : B      A on what cond may hold for, B on what it need not hold for
 //   a && b && X       X on what every condition may hold for
-//   a || X, a ?? X    X on what a need not hold for
+//   a || X            X on what a need not hold for (a may be falsy)
+//   a ?? X            X on what a may be null or undefined for — a comparison never is, so X never shows
 // read down to the element (a JSX element or anything else restricts nothing further).
 function branchValues(content, code, start, end, at, state, domain) {
   const all = setOf(domain);
@@ -242,9 +271,10 @@ function branchValues(content, code, start, end, at, state, domain) {
     const parts = splitTopLevel(code, start, end, operator);
     if (parts.length > 1) {
       const holder = parts.findIndex(([s, e]) => at >= s && at < e);
-      const before = parts.slice(0, Math.max(holder, 0)).map(([s, e]) => conditionValues(content, src.slice(s, e), state, domain));
-      const reached = before.reduce((acc, c) => minus(acc, c.must), all);
-      return holder < 0 ? all : intersect(reached, branchValues(content, code, parts[holder][0], parts[holder][1], at, state, domain));
+      if (holder < 0) return all;
+      const before = parts.slice(0, holder).map(([s, e]) => conditionValues(content, src.slice(s, e), state, domain));
+      const reached = before.reduce((acc, c) => intersect(acc, operator === '??' ? c.mayNull : minus(all, c.must)), all);
+      return intersect(reached, branchValues(content, code, parts[holder][0], parts[holder][1], at, state, domain));
     }
   }
   const ands = splitTopLevel(code, start, end, '&&');
