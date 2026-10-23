@@ -215,6 +215,17 @@ function isLiveSourced(ev, stageKey) {
     ev.valueSources[stageKey] === 'live');
 }
 
+// Provenance marker for cells written by backfillEnvVarValuesFromSettings
+// (`ev.valueSources[stageKey] === 'settings'`). Like live cells these are NOT
+// manual overrides: when deployment-settings.json changes, the next backfill
+// must replace them. Without the tag a cell carried forward from an earlier
+// run (carryForwardEnvVarValues) looks identical to a hand edit and the old
+// file value would freeze. Untagged cells remain manual overrides.
+function isSettingsSourced(ev, stageKey) {
+  return !!(ev && ev.valueSources && typeof ev.valueSources === 'object' &&
+    ev.valueSources[stageKey] === 'settings');
+}
+
 function setValueSource(ev, stageKey, source) {
   if (source) {
     ev.valueSources = (ev.valueSources && typeof ev.valueSources === 'object') ? ev.valueSources : {};
@@ -274,8 +285,11 @@ function carryForwardEnvVarValues(previous, incoming) {
 // the rendered plan's "Values by Environment" matrix auto-populates after
 // deploy-pipeline runs. Idempotent: an existing non-empty value on
 // ev.values[stageName] is preserved (manual overrides win) unless that value
-// was written by a previous live query — the local file is preferred over the
-// live environment. Returns the number of cells filled in this call.
+// was written by a previous live query or a previous backfill (tagged
+// valueSources[stage] = 'live' | 'settings') — the current file wins over both.
+// Cells it writes are tagged 'settings'. Schema names match case-insensitively
+// (Dataverse schema names are case-insensitive; files and discovery can differ
+// in casing). Returns the number of cells filled or changed in this call.
 //
 // Values set in Power Platform Admin Center (bypassing the file) are merged in
 // by mergeLiveEnvVarValues when the caller passes `--live`.
@@ -285,20 +299,27 @@ function backfillEnvVarValuesFromSettings(planData, projectRoot) {
   if (!settings) return 0;
   const bySchema = extractPerStageValues(settings);
   if (!bySchema || Object.keys(bySchema).length === 0) return 0;
+  const bySchemaLower = new Map();
+  for (const [schemaName, stages] of Object.entries(bySchema)) {
+    bySchemaLower.set(schemaName.toLowerCase(), stages);
+  }
 
   let filled = 0;
   for (const ev of planData.envVars) {
     if (!ev || typeof ev.schemaName !== 'string') continue;
-    const matches = bySchema[ev.schemaName];
+    const matches = bySchemaLower.get(ev.schemaName.toLowerCase());
     if (!matches) continue;
     ev.values = (ev.values && typeof ev.values === 'object') ? ev.values : {};
     for (const [stageName, value] of Object.entries(matches)) {
-      // Manual override / prior call wins — never overwrite a populated cell,
-      // except one that only holds a live-queried value (local file wins).
+      // Manual override wins — never overwrite a populated untagged cell. A
+      // live-queried or previously backfilled cell is replaced by the file.
       const existing = ev.values[stageName];
-      if (existing != null && existing !== '' && !isLiveSourced(ev, stageName)) continue;
+      const populated = existing != null && existing !== '';
+      const settingsCell = isSettingsSourced(ev, stageName);
+      if (populated && !isLiveSourced(ev, stageName) && !settingsCell) continue;
+      if (populated && settingsCell && existing === value) continue;
       ev.values[stageName] = value;
-      setValueSource(ev, stageName, null);
+      setValueSource(ev, stageName, 'settings');
       filled += 1;
     }
   }
@@ -463,6 +484,14 @@ function mergeLiveEnvVarValues(planData, projectRoot, live) {
     }
   }
   const labels = new Set([...stageByLabel.keys(), ...Object.keys(live.byStage)]);
+  const liveLowerByStage = new Map();
+  for (const [label, valuesBySchema] of Object.entries(live.byStage)) {
+    const lower = new Map();
+    for (const [schemaName, value] of Object.entries(valuesBySchema || {})) {
+      lower.set(schemaName.toLowerCase(), value);
+    }
+    liveLowerByStage.set(label, lower);
+  }
 
   for (const ev of planData.envVars) {
     if (!ev || typeof ev.schemaName !== 'string') continue;
@@ -481,9 +510,10 @@ function mergeLiveEnvVarValues(planData, projectRoot, live) {
         continue;
       }
       // Query failed or stage not queried: leave its cells exactly as they are.
-      if (!Object.prototype.hasOwnProperty.call(live.byStage, label)) continue;
-      const valuesBySchema = live.byStage[label];
-      const liveValue = valuesBySchema ? valuesBySchema[ev.schemaName] : undefined;
+      if (!liveLowerByStage.has(label)) continue;
+      // Case-insensitive: the plan's schemaName can come from a discovery
+      // sidecar whose casing differs from what this env's query returned.
+      const liveValue = liveLowerByStage.get(label).get(ev.schemaName.toLowerCase());
       if (liveValue == null || liveValue === '') {
         if (currentIsLive) {
           delete ev.values[label];

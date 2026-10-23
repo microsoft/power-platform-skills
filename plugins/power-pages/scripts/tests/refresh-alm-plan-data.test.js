@@ -2130,7 +2130,7 @@ test('live: merge fills empty cells, prefers deployment-settings.json and manual
     Production: 'manual-prod',
     'Deploy to Staging': 'https://file-staging.example.com',
   }, 'local file (any stage alias) and manual values must win over live');
-  assert.equal(planData.envVars[0].valueSources, undefined);
+  assert.deepEqual(planData.envVars[0].valueSources, { 'Deploy to Staging': 'settings' });
   assert.deepEqual(planData.envVars[1].values, { Staging: 'false' });
   assert.deepEqual(planData.envVars[1].valueSources, { Staging: 'live' });
   assert.deepEqual(counts, { filled: 1, updated: 0, cleared: 0 });
@@ -2164,7 +2164,7 @@ test('live: live-sourced cells are updated, cleared, and superseded by the local
   });
   mergeLiveEnvVarValues(planData, root, { byStage: { Staging: { cr5fe_apiBaseUrl: 'new-live' } } });
   assert.deepEqual(planData.envVars[0].values, { Staging: 'file-value' });
-  assert.equal(planData.envVars[0].valueSources, undefined);
+  assert.deepEqual(planData.envVars[0].valueSources, { Staging: 'settings' });
 });
 
 test('live: runCli --live merges live values into the refreshed plan and reports a summary', async (t) => {
@@ -2225,17 +2225,17 @@ test('live: a local value under the composite "{label} (Deploy to {label})" alia
     byStage: { Staging: { cr5fe_apiBaseUrl: 'https://ppac-staging.example.com' } },
   });
   assert.deepEqual(planData.envVars[0].values, { 'Staging (Deploy to Staging)': 'file-composite' });
-  assert.equal(planData.envVars[0].valueSources, undefined);
+  assert.deepEqual(planData.envVars[0].valueSources, { 'Staging (Deploy to Staging)': 'settings' });
   assert.deepEqual(counts, { filled: 0, updated: 0, cleared: 0 });
 
   // A pre-existing live cell under the bare label is dropped once the composite local value exists.
   planData.envVars[0].values.Staging = 'stale-live';
-  planData.envVars[0].valueSources = { Staging: 'live' };
+  planData.envVars[0].valueSources = { ...planData.envVars[0].valueSources, Staging: 'live' };
   mergeLiveEnvVarValues(planData, root, {
     byStage: { Staging: { cr5fe_apiBaseUrl: 'https://ppac-staging.example.com' } },
   });
   assert.deepEqual(planData.envVars[0].values, { 'Staging (Deploy to Staging)': 'file-composite' });
-  assert.equal(planData.envVars[0].valueSources, undefined);
+  assert.deepEqual(planData.envVars[0].valueSources, { 'Staging (Deploy to Staging)': 'settings' });
 });
 
 test('live: a new local alias replaces a stale live cell even when that stage query failed', (t) => {
@@ -2256,7 +2256,7 @@ test('live: a new local alias replaces a stale live cell even when that stage qu
     byStage: { Production: { cr5fe_apiBaseUrl: 'live-prod' } },
   });
   assert.deepEqual(planData.envVars[0].values, { Production: 'live-prod', 'Deploy to Staging': 'file-staging' });
-  assert.deepEqual(planData.envVars[0].valueSources, { Production: 'live' });
+  assert.deepEqual(planData.envVars[0].valueSources, { Production: 'live', 'Deploy to Staging': 'settings' });
   assert.deepEqual(counts, { filled: 0, updated: 0, cleared: 1 });
 });
 
@@ -2293,4 +2293,66 @@ test('live: re-ingesting last-env-vars.json keeps values/provenance when a stage
   assert.deepEqual(planData.envVars[1].values, { Staging: 'marker-flag' });
   assert.equal(planData.envVars[1].valueSources, undefined);
   assert.deepEqual(planData.envVars[2].values || {}, {});
+});
+
+test('live: a changed deployment-settings.json value replaces the earlier file value across configure runs', async (t) => {
+  const root = makeProject(t);
+  const settingsPath = path.join(root, 'deployment-settings.json');
+  const writeSettings = (value) => writeJson(settingsPath, {
+    Staging: { EnvironmentVariables: [{ SchemaName: 'cr5fe_apiBaseUrl', Value: value }] },
+  });
+  writeJson(path.join(root, 'docs', '.alm-plan-data.json'), {
+    stages: [{ label: 'Staging', envUrl: LIVE_STAGING, type: 'target' }],
+    envVars: [{ schemaName: 'cr5fe_apiBaseUrl', values: { Production: 'manual-prod' } }],
+    steps: [{ name: 'Configure environment variables', status: 'pending' }],
+  });
+  // The discovery sidecar is present on every run, so values are carried forward.
+  writeJson(path.join(root, 'docs', 'alm', 'last-env-vars.json'), {
+    envVars: [{ schemaName: 'cr5fe_apiBaseUrl', type: 'String' }],
+  });
+  const deps = { getToken: () => 'tok', request: fakeLiveRequest(LIVE_TABLES) };
+  const run = () => runCli({ projectRoot: root, phase: 'configure-env-variables', render: false, live: true }, deps);
+  const read = () => readJson(path.join(root, 'docs', '.alm-plan-data.json')).envVars[0];
+
+  writeSettings('file-v1');
+  await run();
+  assert.deepEqual(read().values, { Production: 'manual-prod', Staging: 'file-v1' });
+  assert.deepEqual(read().valueSources, { Staging: 'settings' });
+
+  writeSettings('file-v2');
+  await run();
+  assert.deepEqual(read().values, { Production: 'manual-prod', Staging: 'file-v2' },
+    'the updated file value must replace the earlier backfilled one; the manual cell is untouched');
+  assert.deepEqual(read().valueSources, { Staging: 'settings' });
+});
+
+test('live: schema names match case-insensitively when a stage query succeeds', async (t) => {
+  const root = makeProject(t);
+  writeJson(path.join(root, 'docs', '.alm-plan-data.json'), {
+    stages: [{ label: 'Staging', envUrl: LIVE_STAGING, type: 'target' }],
+    envVars: [
+      { schemaName: 'cr5fe_apiBaseUrl', values: { Staging: 'old-live' }, valueSources: { Staging: 'live' } },
+      { schemaName: 'cr5fe_localLoginEnabled' },
+    ],
+    steps: [{ name: 'Configure environment variables', status: 'pending' }],
+  });
+  // Sidecar casing differs from what the env returns (cr5fe_apiBaseUrl / cr5fe_localLoginEnabled).
+  writeJson(path.join(root, 'docs', 'alm', 'last-env-vars.json'), {
+    envVars: [
+      { schemaName: 'CR5FE_APIBASEURL', type: 'String' },
+      { schemaName: 'CR5FE_LOCALLOGINENABLED', type: 'Boolean' },
+    ],
+  });
+  const result = await runCli(
+    { projectRoot: root, phase: 'configure-env-variables', render: false, live: true },
+    { getToken: () => 'tok', request: fakeLiveRequest(LIVE_TABLES) },
+  );
+  assert.deepEqual(result.liveEnvVars.queriedStages, ['Staging']);
+  assert.deepEqual({ filled: result.liveEnvVars.filled, updated: result.liveEnvVars.updated, cleared: result.liveEnvVars.cleared },
+    { filled: 1, updated: 1, cleared: 0 });
+  const planData = readJson(path.join(root, 'docs', '.alm-plan-data.json'));
+  assert.deepEqual(planData.envVars[0].values, { Staging: 'https://ppac-staging.example.com' });
+  assert.deepEqual(planData.envVars[0].valueSources, { Staging: 'live' });
+  assert.deepEqual(planData.envVars[1].values, { Staging: 'false' });
+  assert.deepEqual(planData.envVars[1].valueSources, { Staging: 'live' });
 });
