@@ -8,8 +8,8 @@ evidence and trade-offs behind a change live in its PR, in `docs/`, or in the li
 ## [2.19.0]
 
 The bundled SDK is unchanged (power-platform-ux a3443479, as in 2.18.0). A `--changed-only` apply no longer stops over the bindings of
-a page it does not write, a regression of 2.18.0. Two applies of one app no longer run at once in one workspace, the pages lock no
-longer depends on how the app's name is spelled, and a new table's column or status reason that Dataverse refuses moments after the
+a deployed page it leaves alone, a regression of 2.18.0. Two applies of one app no longer run at once in one workspace, the pages lock
+no longer depends on how the app's name is spelled, and a new table's column or status reason that Dataverse refuses moments after the
 table's create is sent again once a read proves it missing. A name such as `__proto__` or `constructor` works like any other name, a
 key over another key's columns stops the build in every language instead of being skipped in English, and a generated page whose
 default export is a generic arrow function is accepted. The token guard also takes out the base64 of each part of a token and reads
@@ -32,20 +32,20 @@ the bytes the plugin's file writers are given, and the genpage evals grade 17 mo
 
 ### Fixed
 
-- **A `--changed-only` apply no longer stops over the bindings of a page it does not write — a regression of 2.18.0.** It checked the
-  connector and Custom API bindings of every page another page navigates to, as if it might create each one, so a conflict on a page
-  it leaves alone (`pages-binding-reference-conflict`) stopped the edit of another page. It creates such a page only when the page is
-  missing, and now checks only the pages it writes: the changed ones, and a navigation target that is missing — one its last apply
-  recorded and that was deleted since is checked in the pages step, before it is created again. Each binding name is read once per
-  attempt: a deleted target adds no read of a name a changed page shares, and the names only it states are read in a query of their
-  own. A full build checks every page, as before.
-- **Two applies of one app no longer run at the same time in one workspace.** Two overlapping builds of one app both found the app's
-  icon or a web resource missing and both created it — two icons in the solution, say. A second `--apply` of the app in that workspace
-  — a full build, its data stage or a `--changed-only` run — is now refused at once, before it sends a request: `build-locked`, on
-  stderr (`another build may be applying '<app>' in this workspace`), exit 1 and no JSON on stdout. Run it again once the first has
-  finished. A lock is taken over only from a build proven no longer running, never for its age. Not covered: builds in two workspaces
-  or on two machines, a build of an earlier release (finish those first), and a teardown, download, `/genpage` or `apps.js` command
-  run beside an apply.
+- **A `--changed-only` apply no longer stops over the bindings of a deployed page it leaves alone — a regression of 2.18.0.** It
+  checked the connector and Custom API bindings of every page another page navigates to, as if it might create each one, so a conflict
+  on a page it leaves alone (`pages-binding-reference-conflict`) stopped the edit of another page. It creates such a page only when
+  the page is missing, so it now leaves out a navigation target its last apply recorded as deployed, and checks the changed pages and
+  every other target; a recorded target that was deleted since is checked in the pages step, before it is created again. Each binding
+  name is read once per attempt: such a target adds no read of a name a changed page shares, and the names only it states are read in
+  a query of their own. A full build checks every page, as before.
+- **Two applies of one app no longer run at the same time in one workspace.** Two overlapping builds of one app each looked for what
+  was missing and created it — measured, two generated app icons in the solution. A second `--apply` of the app in that workspace — a
+  full build, its data stage or a `--changed-only` run — is now refused at once, before it sends a request: `build-locked`, on stderr
+  (`another build may be applying '<app>' in this workspace`), exit 1 and no JSON on stdout. Run it again once the first has finished.
+  A lock is taken over only from a build proven no longer running, never for its age. Not covered: builds in two workspaces or on two
+  machines, a build of an earlier release (finish those first), and a teardown, download, `/genpage` or `apps.js` command run beside
+  an apply.
 - **The pages lock no longer depends on how the app's name is spelled.** On a case-sensitive file system `Contoso_App` and
   `contoso_app` took two locks, so two builds of one app could deploy its pages at once. The lock now ignores case, and the lock file
   earlier releases take is still taken too, so a build of an earlier release that spells the app the same way is still kept out of the
