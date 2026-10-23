@@ -918,32 +918,312 @@ function outcomeUnknown(err) {
 // and tells the budget; the service has asked the run to hold back, so the columns are NOT then created one by one — each would be one more request to a service that said to wait — and the phase stops
 // with the budget's halt. `stop`, when there is a budget, is the check that says so (the runner's `stopIfRefused`): it throws when the budget has refused, and does nothing otherwise, so a change
 // set that was refused by anything else, or whose sends ran out while the budget still had room, falls back exactly as it always did.
-async function createColumnsInOneRequest({ sdk, provision, table, tableSchemaName, columns, optionsFor, warn, sleep, stop }) {
+//
+// And one refusal is the lag of the table itself (`lagTable`, a table this attempt has just created — see "The lag of a table this attempt just
+// created" below): the change set refused with HTTP 400 and `0x80040216` or `0x80090457` in its first part is not taken for an ordinary refusal.
+// The table's columns are read, and what follows depends on what that read PROVES (recoverRefusedBatch): every column there is adopted; every
+// missing one proved absent sends the change set once more, or creates the missing ones one by one; a column the read cannot place is read again,
+// within the table's budget; and a budget spent with a column still missing stops the build — `terminal` — before any further column is sent.
+//
+// Answers { map, terminal }: `map` holds the columns confirmed, keyed by the column object, each with the id createColumn would have answered;
+// `terminal`, when there is one, is the failure the column loop stops with at the first column the map does not hold (it sends nothing more).
+async function createColumnsInOneRequest({ sdk, provision, table, tableSchemaName, columns, optionsFor, warn, sleep, stop, lagTable }) {
   try {
     // The options are built inside the try: a column the options cannot be built for fails the way it always did, in its own step
     // on the per-column path, instead of failing the phase from here.
     await sdk.createColumns(table.logicalName, columns.map(optionsFor));
   } catch (err) {
     if (typeof stop === 'function') stop();
-    if (outcomeUnknown(err)) {
-      // ONE read, and only an answer that shows EVERY column counts: the change set is atomic, so a table that has only some of them
-      // did not get them from it (a column the platform makes itself under the name of one the spec asks for is there either way).
-      const found = await confirmInlineColumns(provision, table, columns, { sleep, attempts: 1 });
-      if (found.size === columns.length) {
-        if (typeof warn === 'function') warn(`the answer to the request that creates the ${columns.length} ordinary column(s) of table ${tableSchemaName} was lost or could not be read (${briefReason(err)}), but the table has every one of them`);
-        return found;
+    const code = lagTable ? batchLagCodeOf(err) : null;
+    if (code) return recoverRefusedBatch({ sdk, provision, table, tableSchemaName, columns, optionsFor, warn, sleep, stop, lagTable, original: err, code });
+    return { map: await afterRefusedBatch(err, { provision, table, tableSchemaName, columns, warn, sleep }) };
+  }
+  return { map: await confirmInlineColumns(provision, table, columns, { warn, sleep }) };
+}
+
+// What follows a change set that was not created as sent, for every refusal but the lag of the table (above): the columns found when its answer was
+// lost and the table proves it committed, and otherwise none — the columns are then created one by one, with `warn` saying why.
+async function afterRefusedBatch(err, { provision, table, tableSchemaName, columns, warn, sleep }) {
+  if (outcomeUnknown(err)) {
+    // ONE read, and only an answer that shows EVERY column counts: the change set is atomic, so a table that has only some of them
+    // did not get them from it (a column the platform makes itself under the name of one the spec asks for is there either way).
+    const found = await confirmInlineColumns(provision, table, columns, { sleep, attempts: 1 });
+    if (found.size === columns.length) {
+      if (typeof warn === 'function') warn(`the answer to the request that creates the ${columns.length} ordinary column(s) of table ${tableSchemaName} was lost or could not be read (${briefReason(err)}), but the table has every one of them`);
+      return found;
+    }
+  }
+  if (typeof warn === 'function') {
+    // A ConnectionError carries `.statusCode`; any other error may wrap one as its `cause`.
+    const status = err && (err.statusCode || err.status || (err.cause && (err.cause.statusCode || err.cause.status)));
+    warn(status === 429
+      ? `table ${tableSchemaName} was throttled (${briefReason(err)}), so its ${columns.length} ordinary column(s) are created one by one instead of in one request`
+      : `could not create the ${columns.length} ordinary column(s) of table ${tableSchemaName} in one request (${briefReason(err)}) — creating them one by one`);
+  }
+  return new Map();
+}
+
+// ---- The lag of a table this attempt just created ---------------------------------------------------------------------------------------------------
+//
+// Right after a table is created, a column create or a status-reason insert for it is intermittently refused, and the same create succeeds on a
+// re-run. Measured live on an environment whose only language is Spanish, in three of four first builds, the same way in two releases:
+//   POST $batch (the columns of a new table)  HTTP 400, first change-set part  {"error":{"code":"0x80040216","message":"An unexpected error occurred."}}
+//   POST …/Attributes (one column)             HTTP 400                         {"error":{"code":"0x80040216","message":"An unexpected error occurred."}}
+//   POST /InsertStatusValue                    HTTP 400                         {"error":{"code":"0x80090457","message":"Component of type Entity with name  and id <id> does not exist."}}
+// Nothing retried them: a 400 is final to the HTTP client and to the build's own retry (lib/retry-policy.js), and neither code means "already
+// exists" (ALREADY_EXISTS_CODES). Both codes are generic, so neither is ever read as a success or as a condition to run the build again; a create
+// refused with one of them is sent again ONLY when all of these hold:
+//   - THIS attempt created the table (not a table that existed, not one found after a create whose answer was lost, not a later attempt);
+//   - the create is the column change set, one column's create, or a status reason's insert, for that table;
+//   - the answer is HTTP 400 with one of the two codes, read from the OData error of the answer (the change set's from its first part);
+//   - a read made after the refusal PROVES the thing absent: a list that holds the table's own stock entry — its primary name column, or the
+//     stock status reason 1 or 2 — and not the thing. A 404, a 400 `0x80090457`, an answer that is no list, or one without the stock entry proves
+//     nothing and is read again; any other failure of the read stops the build with that failure; a column or a reason the read shows is
+//     ADOPTED, never sent again;
+//   - the table's budget still has room: 20 seconds of the time spent waiting for those reads, the waits between them and the resends (time
+//     spent elsewhere is not counted), at most 8 reads, at most 4 resends of one create or insert and 1 of the change set. A budget that runs
+//     out with the create still missing — proved absent or not — stops the build with the original refusal, and says the build may be run again.
+// The read of a status reason carries labels, and a label-bearing read ahead of a labelled create keeps only the base language of that create,
+// so a refused insert is not read in the table loop: it is queued, and read and sent again after every other labelled create of the phase
+// (drainLagStatuses). Nothing here deletes or updates anything, and no wait is a fire-and-forget: every read, wait and resend is awaited.
+const LAG_CODES = Object.freeze(new Set(['0x80040216', '0x80090457']));
+const LAG_VISIBILITY_CODE = '0x80090457';
+const LAG_ADMISSION_MS = 20000;
+const LAG_PROBES = 8;
+const LAG_SINGLE_RESENDS = 4;
+const LAG_DELAYS_MS = Object.freeze([1000, 2000, 4000, 8000]);
+const LAG_JITTER = 0.25;
+const LAG_SKIP = 'refused just after the table was created — retrying after the other schema creates';
+const LAG_REMEDY = ' — the refusal persisted after the bounded check. The table was created. Run the build again to reconcile what is already there; a refusal that is not lag will persist';
+// The refusals a budget ran out on: the halt the runner raises around one adds LAG_REMEDY (operatorRemedy). Kept here, beside the error and not in
+// its words, so that the error the step reports while it runs, and every rule that reads an error, see the SDK's error exactly as it was.
+const persistedLagRefusals = new WeakSet();
+const persisted = (err) => { if (err && typeof err === 'object') persistedLagRefusals.add(err); return err; };
+
+// The code of a single create's refusal when it is the lag of the table: HTTP 400 and one of LAG_CODES as the `error.code` of its answer
+// (serviceCodeOf reads it from the SDK's ConnectionError, whose `cause` is the body; a code only the message names is not the code). Else null.
+function lagCodeOf(err) {
+  const status = err && (err.statusCode || err.status);
+  if (status !== 400) return null;
+  const code = serviceCodeOf(err);
+  return code !== null && LAG_CODES.has(code) ? code : null;
+}
+
+// The same for a refused change set. The SDK's ConnectionError for a `$batch` carries the multipart answer as its `cause` (a string), e.g.
+//   --batchresponse_1\r\nContent-Type: multipart/mixed; boundary=changesetresponse_1\r\n\r\n--changesetresponse_1\r\nContent-Type: application/http\r\n
+//   Content-Transfer-Encoding: binary\r\nContent-ID: 1\r\n\r\nHTTP/1.1 400 Bad Request\r\nContent-Type: application/json\r\n\r\n
+//   {"error":{"code":"0x80040216","message":"An unexpected error occurred."}}\r\n--changesetresponse_1--\r\n--batchresponse_1--
+// The change set's boundary is the one its part declares; its FIRST part is split off at that boundary, its MIME headers and then the headers of
+// the HTTP response inside it are skipped (each ends at a blank line), and the body left is parsed as JSON. Only the `error.code` of that JSON
+// counts: an answer that is not in this shape, a part that is not a response, or a body that does not parse is no lag refusal — and neither is
+// an error with no body at all (the SDK's word that a change set was rolled back). The message is never searched for a code.
+function batchLagCodeOf(err) {
+  if (!err || err.code !== 'CONNECTION_ERROR' || err.statusCode !== 400 || typeof err.cause !== 'string') return null;
+  const code = firstChangeSetErrorCode(err.cause);
+  return code !== null && LAG_CODES.has(code) ? code : null;
+}
+const afterBlankLine = (text) => {
+  const blank = /\r?\n\r?\n/.exec(text);
+  return blank ? text.slice(blank.index + blank[0].length) : null;
+};
+function firstChangeSetErrorCode(text) {
+  const declared = /^Content-Type:\s*multipart\/mixed;\s*boundary=("?)([^"\s;]+)\1\s*$/im.exec(text);
+  if (!declared) return null;
+  const parts = text.split(`--${declared[2]}`);
+  const first = parts.length > 2 ? parts[1] : null;
+  if (first === null || first.startsWith('--')) return null;
+  const response = afterBlankLine(first);
+  if (response === null || !/^HTTP\/1\.[01] \d{3}\b/.test(response)) return null;
+  const body = afterBlankLine(response);
+  if (body === null) return null;
+  try {
+    const parsed = JSON.parse(body.trim());
+    const code = parsed && parsed.error && parsed.error.code;
+    return typeof code === 'string' && code ? code.toLowerCase() : null;
+  } catch {
+    return null;
+  }
+}
+
+// The lag work of one provisionDataModel run: its clock, waits and jitter (seams for tests; the real ones otherwise), the budget of each table
+// (created when lag work for the table starts, and shared by its change set, its single creates and its queued status reasons), and the queue
+// of refused status reasons the phase's tail drains.
+function lagContext({ now, sleep, random, warn }) {
+  return {
+    now: typeof now === 'function' ? now : Date.now,
+    sleep: typeof sleep === 'function' ? sleep : (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+    random: typeof random === 'function' ? random : Math.random,
+    warn: typeof warn === 'function' ? warn : () => undefined,
+    budgets: new Map(),
+    statuses: [],
+  };
+}
+
+// The lag window of a table this attempt created: what a read of it needs — its MetadataId (a read by id answers for this table and no other
+// that comes to hold its name), its schema name for the messages, and the logical name of the primary name column it was created with, the stock
+// entry whose presence makes a read's list complete enough to prove a column absent. No id, or no raw client to read with: no window, and every
+// create of the table is handled as it always was.
+function lagWindow(lag, provision, entity, createdTable) {
+  const tableId = createdTable && guidOf(createdTable.metadataId);
+  if (!lag || !tableId || !provision || !provision.dataverse || typeof provision.dataverse.get !== 'function') return null;
+  const logical = entity.schemaName.toLowerCase();
+  if (!lag.budgets.has(logical)) lag.budgets.set(logical, { spentMs: 0, probes: 0, warned: false });
+  return { lag, raw: provision.dataverse, logical, schemaName: entity.schemaName, tableId, primaryLogical: String(entity.primaryAttribute.schemaName).toLowerCase(), budget: lag.budgets.get(logical) };
+}
+
+const lagSpent = (budget) => budget.spentMs >= LAG_ADMISSION_MS || budget.probes >= LAG_PROBES;
+
+// Runs `fn` and charges the table's budget with the time it took, sampled around it: only what the lag work itself awaits is counted.
+async function charged(window, fn) {
+  const started = window.lag.now();
+  try {
+    return await fn();
+  } finally {
+    window.budget.spentMs += Math.max(0, window.lag.now() - started);
+  }
+}
+
+// Waits before the `index`-th read or resend of one create: 1 s, 2 s, 4 s, 8 s, 8 s …, plus up to a quarter more, and never past what is left of
+// the table's budget — a wait that would run past it is not taken, and the answer is false (the budget is spent). True when the wait was taken
+// and room is left after it.
+async function lagWait(window, index) {
+  const base = LAG_DELAYS_MS[Math.min(index, LAG_DELAYS_MS.length - 1)];
+  const delay = Math.round(base * (1 + LAG_JITTER * window.lag.random()));
+  if (delay >= LAG_ADMISSION_MS - window.budget.spentMs) return false;
+  await charged(window, () => window.lag.sleep(delay));
+  return !lagSpent(window.budget);
+}
+
+// Said once per table, when its lag work starts. It names what was refused and the code; no address and no id.
+function sayLagOnce(window, what, code) {
+  if (window.budget.warned) return;
+  window.budget.warned = true;
+  window.lag.warn(`creating ${what} was refused just after the table was created (HTTP 400 ${code}) — checking whether it exists before a bounded retry`);
+}
+
+// What a read made during lag work says, before it is asked about any one thing: { kind: 'list', items } for an answer that can prove something,
+// { kind: 'unknown' } for one that proves nothing (the table is not visible to the read yet — a 404, or a 400 `0x80090457` — or a 2xx that is not
+// the expected shape), or { kind: 'failed', error } for any other answer, which stops the build as that read's own failure, with its status and
+// code (statusError). A read that throws — a failure of the transport — is thrown as it is. Every read counts against the table's 8.
+async function lagRead(window, url, itemsOf, what) {
+  window.budget.probes += 1;
+  const res = await charged(window, () => window.raw.get(url));
+  if (res && res.status >= 200 && res.status < 300) {
+    const items = itemsOf(res.body);
+    return Array.isArray(items) ? { kind: 'list', items } : { kind: 'unknown' };
+  }
+  const answered = res && res.body && res.body.error;
+  if (res && (res.status === 404 || (res.status === 400 && answered && typeof answered.code === 'string' && answered.code.toLowerCase() === LAG_VISIBILITY_CODE))) return { kind: 'unknown' };
+  return { kind: 'failed', error: statusError(`could not read ${what} of table ${window.schemaName} to check whether a refused create landed`, res) };
+}
+
+// The table's columns, by its id: ids and logical names only — no labels, so the read may come before the phase's labelled creates.
+//   GET /EntityDefinitions(<id>)/Attributes?$select=MetadataId,LogicalName   →   { "value": [{ "MetadataId": "…", "LogicalName": "new_name" }, …] }
+// A `list` answer is turned into the columns it shows (logical name → MetadataId), and `complete` when it shows the table's primary name column.
+async function readLagColumns(window) {
+  const read = await lagRead(window, `/EntityDefinitions(${window.tableId})/Attributes?$select=MetadataId,LogicalName`, (body) => body && body.value, 'the columns');
+  if (read.kind !== 'list') return read;
+  const ids = new Map();
+  for (const a of read.items) if (a && a.LogicalName && a.MetadataId) ids.set(String(a.LogicalName).toLowerCase(), String(a.MetadataId));
+  return { kind: 'list', ids, complete: ids.has(window.primaryLogical) };
+}
+// One column against such a read: 'present' (with its id), 'absent' (a complete list without it), or 'unknown'.
+function columnState(read, logical) {
+  if (read.kind !== 'list') return { state: 'unknown' };
+  if (read.ids.has(logical)) return { state: 'present', id: read.ids.get(logical) };
+  return { state: read.complete ? 'absent' : 'unknown' };
+}
+
+const adoptColumnWarning = (window, column, code) => `column ${window.schemaName}.${column.schemaName} was refused (HTTP 400 ${code}) and then found on the table, so it is reused`;
+
+// The change set of a table this attempt created, refused with the table's lag (createColumnsInOneRequest): read, and act on what the read proves.
+// Answers { map, terminal } as createColumnsInOneRequest does:
+//   - every column found: adopted — nothing is sent;
+//   - every missing column proved absent, none found and the change set not yet sent again: it is sent once more (after a wait); a refusal of that
+//     with the lag is read again, any other refusal is handled as every refused change set is (afterRefusedBatch), and a change set that commits is
+//     confirmed as every one is;
+//   - every missing column proved absent otherwise (some found, or the change set already sent again): the found ones are adopted and the column
+//     loop creates the missing ones one by one — the table's lag still covers those creates;
+//   - a missing column the read cannot place: read again, after a wait;
+//   - the budget spent while a column is still missing — proved absent or not — or a read that failed: `terminal`, with the found ones in `map`.
+async function recoverRefusedBatch({ sdk, provision, table, tableSchemaName, columns, optionsFor, warn, sleep, stop, lagTable: window, original, code }) {
+  sayLagOnce(window, `the ${columns.length} ordinary column(s) of table ${tableSchemaName} in one request`, code);
+  const confirmed = new Map();
+  let resent = false;
+  for (let waits = 0; ;) {
+    if (lagSpent(window.budget)) return { map: confirmed, terminal: persisted(original) };
+    let read;
+    try {
+      read = await readLagColumns(window);
+    } catch (e) {
+      return { map: confirmed, terminal: e };
+    }
+    if (read.kind === 'failed') return { map: confirmed, terminal: read.error };
+    let unknown = 0;
+    for (const c of columns) {
+      if (confirmed.has(c)) continue;
+      const logicalName = c.schemaName.toLowerCase();
+      const found = columnState(read, logicalName);
+      if (found.state === 'present') {
+        confirmed.set(c, { logicalName, metadataId: found.id });
+        if (typeof warn === 'function') warn(adoptColumnWarning(window, c, code));
+      } else if (found.state === 'unknown') unknown += 1;
+    }
+    if (confirmed.size === columns.length) return { map: confirmed };
+    if (lagSpent(window.budget)) return { map: confirmed, terminal: persisted(original) };
+    if (unknown === 0 && (confirmed.size > 0 || resent)) return { map: confirmed };
+    if (!(await lagWait(window, waits++))) return { map: confirmed, terminal: persisted(original) };
+    if (unknown > 0) continue;
+    // Every column proved absent and none found: the change set committed nothing (it is atomic), and is sent once more.
+    if (typeof stop === 'function') stop();
+    resent = true;
+    try {
+      await charged(window, () => sdk.createColumns(table.logicalName, columns.map(optionsFor)));
+    } catch (err) {
+      if (typeof stop === 'function') stop();
+      if (batchLagCodeOf(err)) continue;
+      return { map: await afterRefusedBatch(err, { provision, table, tableSchemaName, columns, warn, sleep }) };
+    }
+    return { map: await confirmInlineColumns(provision, table, columns, { warn, sleep }) };
+  }
+}
+
+// One column's create for a table this attempt created (`create` sends it): sent as always, and when its refusal is the table's lag, read, and acted
+// on as the read proves — a column found is adopted with the id the read gave it; one proved absent is sent again after a wait, up to 4 times; one
+// the read cannot place is read again. A resend refused with the lag is read again; refused otherwise, that failure is thrown as it is, and the step
+// handles it as any (an "already exists" answer is its skip). A budget that runs out with the column still missing throws the original refusal,
+// which the step's halt then says may be run again (persistedLagRefusals); a read that failed throws that failure.
+async function createInLagWindow(create, { window, column, stop, warn }) {
+  try {
+    return await create();
+  } catch (err) {
+    const code = window ? lagCodeOf(err) : null;
+    if (!code) throw err;
+    sayLagOnce(window, `column ${window.schemaName}.${column.schemaName}`, code);
+    const logicalName = column.schemaName.toLowerCase();
+    let resends = 0;
+    for (let waits = 0; ;) {
+      if (lagSpent(window.budget)) throw persisted(err);
+      const read = await readLagColumns(window);
+      if (read.kind === 'failed') throw read.error;
+      const found = columnState(read, logicalName);
+      if (found.state === 'present') {
+        if (typeof warn === 'function') warn(adoptColumnWarning(window, column, code));
+        return { logicalName, metadataId: found.id };
+      }
+      if (lagSpent(window.budget)) throw persisted(err);
+      if (found.state === 'absent' && resends >= LAG_SINGLE_RESENDS) throw persisted(err);
+      if (!(await lagWait(window, waits++))) throw persisted(err);
+      if (found.state !== 'absent') continue;
+      if (typeof stop === 'function') stop();
+      resends += 1;
+      try {
+        return await charged(window, create);
+      } catch (again) {
+        if (!lagCodeOf(again)) throw again;
       }
     }
-    if (typeof warn === 'function') {
-      // A ConnectionError carries `.statusCode`; any other error may wrap one as its `cause`.
-      const status = err && (err.statusCode || err.status || (err.cause && (err.cause.statusCode || err.cause.status)));
-      warn(status === 429
-        ? `table ${tableSchemaName} was throttled (${briefReason(err)}), so its ${columns.length} ordinary column(s) are created one by one instead of in one request`
-        : `could not create the ${columns.length} ordinary column(s) of table ${tableSchemaName} in one request (${briefReason(err)}) — creating them one by one`);
-    }
-    return new Map();
   }
-  return confirmInlineColumns(provision, table, columns, { warn, sleep });
 }
 
 // Which of a new table's columns that went in the change set the table really has, with the MetadataId each createColumn answer
@@ -1531,6 +1811,10 @@ const RESET_WORKSPACE = 'stop any other build or teardown using the .maker-works
 // message ends with "Do NOT re-run the create" and the SDK call that sets the level. Running this build again is the fix: it finds the table (it
 // is not created twice) and sets the level the way it does for any existing column with an explicit `required`.
 function operatorRemedy(err) {
+  // A create refused with the lag of a table this attempt just created, still refused when the bounded check ran out (createInLagWindow,
+  // recoverRefusedBatch, drainLagStatuses). Recognised by the error object itself, never by its words: the event the step reported while the
+  // lease was held carries the SDK's message as it was, and only this halt — which the command prints after its lease is let go — says more.
+  if (persistedLagRefusals.has(err)) return LAG_REMEDY;
   if (err && err.code === 'PRIMARY_COLUMN_REQUIRED_NOT_APPLIED') {
     return ' — the table exists. Run the build again: it finds the table, does not create it again, and sets the required level of its primary name column (the call the message names is made for you).';
   }
@@ -1838,9 +2122,11 @@ async function provisionDataModel(args) {
   const carriedIn = new Set(owed.keys());
   const waitingKeys = [];
   const waitingStatuses = [];
+  // The lag work of the tables this attempt creates ("The lag of a table this attempt just created", above). `now`, `sleep` and `random` are seams.
+  const lag = lagContext(args);
   let result;
   try {
-    result = await provisionDataModelSteps(args, { owed, carriedIn, waitingKeys, waitingStatuses });
+    result = await provisionDataModelSteps(args, { owed, carriedIn, waitingKeys, waitingStatuses, lag });
   } catch (err) {
     await payOwedLengths(args, owed, carriedIn, { halted: true, waitingKeys });
     throw err;
@@ -1850,10 +2136,12 @@ async function provisionDataModel(args) {
   // Option labels must be read only AFTER every labelled schema create (including deferred keys).
   // Reading them inside the table loop can strip later creates' non-base-language labels.
   for (const status of waitingStatuses) await applyStatusReasons(args, status, result, true);
+  // The status reasons a table this attempt created refused with its lag, read and sent again here for the same reason (drainLagStatuses).
+  await drainLagStatuses(args, lag, result);
   return result;
 }
 
-async function applyStatusReasons({ sdk, provision, runner, warn }, { entity, logical, languageCode }, result, checkExisting = false) {
+async function applyStatusReasons({ sdk, provision, runner, warn }, { entity, logical, languageCode, window }, result, checkExisting = false) {
   const read = checkExisting ? await readStatusOptions(provision && provision.dataverse, logical) : {};
   if (read.failed && typeof warn === 'function') {
     warn(`could not read status reasons for ${logical} (${read.failed}); using the duplicate-protected insert instead`);
@@ -1862,9 +2150,7 @@ async function applyStatusReasons({ sdk, provision, runner, warn }, { entity, lo
     // The table's reasons by LABEL — the maker's text, which can be `__proto__` or `constructor` — in a null-prototype map, so each label is
     // an own entry (lib/own-keys.js). On a plain object the `__proto__` reason was never stored: its value object became the map's prototype.
     (result.statusReasonValues[logical] = result.statusReasonValues[logical] || Object.create(null))[sr.label] = { value: pinned, stateCode };
-    const same = (read.options || []).some((o) => o && o.Value === pinned && o.State === stateCode
-      && labelsByLcid(o.Label)[languageCode] === sr.label
-      && (sr.color === undefined || o.Color === sr.color));
+    const same = (read.options || []).some((o) => statusOptionIs(o, { pinned, stateCode, label: sr.label, color: sr.color, languageCode }));
     if (same) {
       runner.skip('data-model', `status reason ${entity.schemaName}: ${sr.label} (exists — reuse)`);
       continue;
@@ -1872,6 +2158,75 @@ async function applyStatusReasons({ sdk, provision, runner, warn }, { entity, lo
     await runner.run('data-model', `status reason ${entity.schemaName}: ${sr.label}`, async () => {
       const value = await sdk.insertStatusValue(logical, { label: sr.label, stateCode, color: sr.color, value: pinned, languageCode });
       result.statusReasonValues[logical][sr.label] = { value: typeof value === 'number' ? value : pinned, stateCode };
+    }, {
+      recoverable: true,
+      skipIf: (err) => {
+        if (isAlreadyExists(err, ALREADY_EXISTS_CODES.statusReason)) return true;
+        // A table this attempt created (`window`): the insert refused with the table's lag is not sent again here, and its options are not read
+        // here either — that read carries labels. It is queued for the end of the phase (drainLagStatuses); the step is a skip that says so.
+        const code = window ? lagCodeOf(err) : null;
+        if (!code) return false;
+        sayLagOnce(window, `status reason ${entity.schemaName}: ${sr.label}`, code);
+        window.lag.statuses.push({ window, entity, logical, languageCode, sr, stateCode, pinned, original: err, code });
+        return LAG_SKIP;
+      },
+    });
+  }
+}
+
+// Whether a status option the environment holds is the status reason the spec declares: its pinned value, its state, its label in the authoring
+// language — and its colour, when the spec declares one.
+function statusOptionIs(o, { pinned, stateCode, label, color, languageCode }) {
+  return !!o && o.Value === pinned && o.State === stateCode && labelsByLcid(o.Label)[languageCode] === label && (color === undefined || o.Color === color);
+}
+
+// The status reasons a table this attempt created refused with its lag (applyStatusReasons), after every labelled create of the phase: for each,
+// one narrated step that reads the table's status options and acts on what the read proves —
+//   - the pinned value there, with the declared state, label and colour: adopted, nothing sent;
+//   - the pinned value there with another state, label or a declared colour it does not have: the original refusal, and nothing is sent, adopted
+//     or updated — that option is not this reason;
+//   - the pinned value absent from a list that holds the stock reason 1 or 2: sent again, after a wait, up to 4 times; a resend refused with the
+//     lag is read again, refused otherwise is that failure (an "already exists" answer is the step's skip);
+//   - a read that proves nothing: read again, after a wait.
+// The table's budget is the one its column work used, if any; a budget spent with the reason still missing stops the build with the original
+// refusal (persistedLagRefusals), a read that failed with that failure. A step that throws stops the phase there: the reasons after it are not tried.
+//   GET /EntityDefinitions(<id>)/Attributes/Microsoft.Dynamics.CRM.StatusAttributeMetadata?$select=LogicalName&$expand=OptionSet($select=Options)
+//   → { "value": [{ "LogicalName": "statuscode", "OptionSet": { "Options": [{ "Value": 1, "State": 0, "Label": {…}, "Color": null }, …] } }] }
+// See: https://learn.microsoft.com/en-us/power-apps/developer/data-platform/webapi/reference/statusoptionmetadata
+async function drainLagStatuses({ sdk, runner, warn }, lag, result) {
+  for (const queued of lag.statuses.splice(0)) {
+    const { window, entity, logical, languageCode, sr, stateCode, pinned, original, code } = queued;
+    await runner.run('data-model', `status reason ${entity.schemaName}: ${sr.label} (retried after the other schema creates)`, async () => {
+      let resends = 0;
+      for (let waits = 0; ;) {
+        if (lagSpent(window.budget)) throw persisted(original);
+        const read = await lagRead(window, `/EntityDefinitions(${window.tableId})/Attributes/Microsoft.Dynamics.CRM.StatusAttributeMetadata?$select=LogicalName&$expand=OptionSet($select=Options)`, (body) => {
+          const status = body && Array.isArray(body.value) && body.value.find((a) => a && String(a.LogicalName).toLowerCase() === 'statuscode');
+          return status && status.OptionSet ? status.OptionSet.Options : undefined;
+        }, 'the status reasons');
+        if (read.kind === 'failed') throw read.error;
+        const options = read.kind === 'list' ? read.items : null;
+        const held = options && options.find((o) => o && o.Value === pinned);
+        if (held) {
+          if (!statusOptionIs(held, { pinned, stateCode, label: sr.label, color: sr.color, languageCode })) throw original;
+          if (typeof warn === 'function') warn(`status reason ${entity.schemaName}: ${sr.label} was refused (HTTP 400 ${code}) and then found, so it is reused`);
+          return;
+        }
+        const absent = !!options && options.some((o) => o && (o.Value === 1 || o.Value === 2));
+        if (lagSpent(window.budget)) throw persisted(original);
+        if (absent && resends >= LAG_SINGLE_RESENDS) throw persisted(original);
+        if (!(await lagWait(window, waits++))) throw persisted(original);
+        if (!absent) continue;
+        if (typeof runner.stopIfRefused === 'function') runner.stopIfRefused('data-model');
+        resends += 1;
+        try {
+          const value = await charged(window, () => sdk.insertStatusValue(logical, { label: sr.label, stateCode, color: sr.color, value: pinned, languageCode }));
+          result.statusReasonValues[logical][sr.label] = { value: typeof value === 'number' ? value : pinned, stateCode };
+          return;
+        } catch (again) {
+          if (!lagCodeOf(again)) throw again;
+        }
+      }
     }, { recoverable: true, skipIf: (err) => isAlreadyExists(err, ALREADY_EXISTS_CODES.statusReason) });
   }
 }
@@ -2162,7 +2517,7 @@ async function settleOwedLengths({ sdk, provision, spec, owed, warn, sleep } = {
 // `owed` is the Map provisionDataModel keeps (see there): this attempt's tables whose length is to be set, and those an earlier attempt
 // left unset. `carriedIn` is the set of the second kind as the phase found them; `waitingKeys` collects the alternate keys that wait for
 // a length step, for createWaitingKeys to make once the steps have run.
-async function provisionDataModelSteps({ sdk, provision, runner, spec, apply, languageCode, warn, provisionedLanguages, preResolvedLanguageCode, sleep, reconcileLookupLabels = false, inlineColumns = true }, { owed, carriedIn, waitingKeys, waitingStatuses }) {
+async function provisionDataModelSteps({ sdk, provision, runner, spec, apply, languageCode, warn, provisionedLanguages, preResolvedLanguageCode, sleep, reconcileLookupLabels = false, inlineColumns = true }, { owed, carriedIn, waitingKeys, waitingStatuses, lag }) {
   // `lookupLabels` records the label each spec lookup column carries once this phase is done
   // (`<referencing>|<lookup logical>` -> { label }), so a later phase that repairs something derived
   // from it — an existing form's cell label — repairs it to what the column now says.
@@ -2334,10 +2689,17 @@ async function provisionDataModelSteps({ sdk, provision, runner, spec, apply, la
     }
     // A table THIS build created gets its ordinary columns in one change set (createColumnsInOneRequest). A table found after its
     // create is not given one: nothing shows what it already holds, and the per-column path below skips what exists.
+    // The same table is in its lag window (lagWindow): its column creates and status reason inserts refused with the table's lag are read and
+    // sent again within its budget. Every other table — one that existed, one found after its create — has none, and nothing changes for it.
+    const window = createdTable ? lagWindow(lag, provision, e, createdTable) : null;
+    // A change set whose bounded check ran out with a column still missing (`terminal`): the column loop sends no further column, and stops at
+    // the first one the check did not confirm.
+    let inlineTerminal = null;
+    const stopIfRefused = typeof runner.stopIfRefused === 'function' ? () => runner.stopIfRefused('data-model') : undefined;
     if (createdTable && inlineEnabled) {
       const inlineSet = inlineColumnsOf(buildable, { primaryName: e.primaryAttribute && e.primaryAttribute.schemaName, tableLogical: logical });
       if (inlineSet.length) {
-        inlineConfirmed = await createColumnsInOneRequest({
+        const inline = await createColumnsInOneRequest({
           sdk,
           provision,
           table: { metadataId: createdTable.metadataId, logicalName: createdTable.logicalName || logical },
@@ -2347,8 +2709,11 @@ async function provisionDataModelSteps({ sdk, provision, runner, spec, apply, la
           warn,
           sleep,
           // A runner without the check (a stand-in for one) never stops here.
-          stop: typeof runner.stopIfRefused === 'function' ? () => runner.stopIfRefused('data-model') : undefined,
+          stop: stopIfRefused,
+          lagTable: window,
         });
+        inlineConfirmed = inline.map;
+        inlineTerminal = inline.terminal || null;
       }
     }
     // columns: every buildable column (all scalar types + Customer; Lookup comes from a
@@ -2368,9 +2733,14 @@ async function provisionDataModelSteps({ sdk, provision, runner, spec, apply, la
     for (const c of buildable) if (existingCols.has(c.schemaName.toLowerCase())) runner.skip('data-model', `column ${e.schemaName}.${c.schemaName} (exists)`);
     const toCreate = buildable.filter((c) => !existingCols.has(c.schemaName.toLowerCase()));
     const colResults = await runner.mapLimit(toCreate, 1, (c) => runner.run('data-model', `column ${e.schemaName}.${c.schemaName} (${c.type || 'Text'})`,
-      () => inlineConfirmed.get(c) || (c.type === 'Customer'
-        ? sdk.createCustomerColumn(logical, { schemaName: c.schemaName, displayName: c.displayName || c.schemaName, required: REQUIRED(c), languageCode: resolvedLanguageCode })
-        : sdk.createColumn(logical, columnOptions(c, globalChoiceIds, spec.globalChoices, resolvedLanguageCode))),
+      () => {
+        const confirmed = inlineConfirmed.get(c);
+        if (confirmed) return confirmed;
+        if (inlineTerminal) throw inlineTerminal;
+        if (c.type === 'Customer') return sdk.createCustomerColumn(logical, { schemaName: c.schemaName, displayName: c.displayName || c.schemaName, required: REQUIRED(c), languageCode: resolvedLanguageCode });
+        // A Customer column is created by an action of its own, which the lag was not seen on: it is not in the window.
+        return createInLagWindow(() => sdk.createColumn(logical, columnOptions(c, globalChoiceIds, spec.globalChoices, resolvedLanguageCode)), { window, column: c, stop: stopIfRefused, warn });
+      },
       { skipIf: (err) => isAlreadyExists(err, ALREADY_EXISTS_CODES.column) }));
     if (existingTable) {
       const existingColMeta = new Map(existingColRows.map((c) => [String(c.logicalName || c.schemaName || '').toLowerCase(), c]));
@@ -2545,7 +2915,8 @@ async function provisionDataModelSteps({ sdk, provision, runner, spec, apply, la
     // proof keeps that duplicate-protected path. A fresh insert records the server-returned value.
     // The same statusReasonTargets supply both the insert and verification state/value contract.
     if (e.statusReasons && e.statusReasons.length) {
-      const status = { entity: e, logical, languageCode: resolvedLanguageCode };
+      // `window`: a table this attempt created, whose inserts refused with its lag are queued for the end of the phase (applyStatusReasons).
+      const status = { entity: e, logical, languageCode: resolvedLanguageCode, window };
       if (existingTable && provision.dataverse && typeof provision.dataverse.get === 'function') waitingStatuses.push(status);
       else await applyStatusReasons({ sdk, provision, runner, warn }, status, result);
     }
