@@ -18,18 +18,12 @@
 // It does not judge behaviour — that a kept query still returns the same rows — which the Layer 3 rubric
 // does; and constraints written only in prose, with no code span, are skipped for a person to judge.
 
-const { commentRanges } = require('../../../../plugins/model-apps/scripts/lib/source-literals.js');
 const { planSection } = require('./plan-evidence.js');
 const { fileName } = require('./evidence-utils.js');
 const { currentContract } = require('./workflow-evidence.js');
+const { withoutComments } = require('./tsx-structure.js');
 
 const IDENTIFIER = /[A-Za-z_$][\w$]*/g;
-
-function withoutComments(source) {
-  const text = String(source || '').split('');
-  for (const { start, end } of commentRanges(source)) for (let i = start; i < end; i += 1) if (text[i] !== '\n') text[i] = ' ';
-  return text.join('');
-}
 
 const uses = (text, name) => new RegExp(`(?<![\\w$])${name.replace(/\$/g, '\\$')}(?![\\w$])`).test(text);
 

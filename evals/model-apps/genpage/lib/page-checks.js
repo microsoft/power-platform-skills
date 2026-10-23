@@ -11,7 +11,7 @@
 // label never counts as code, and code is never taken for text. What each one does NOT judge is said
 // beside it; a person still judges the rest in the Layer 3 rubric.
 
-const { sourceView, jsxElements, jsxTextRuns, declarationSource, matchingClose } = require('./tsx-structure.js');
+const { sourceView, jsxElements, jsxTextRuns, declarationSource, matchingClose, patternNames } = require('./tsx-structure.js');
 const { runtimeEnums } = require('./expectation-evidence.js');
 const { escapeRe } = require('./source-evidence.js');
 
@@ -63,8 +63,86 @@ function stepChoosesView(code, step) {
   return new RegExp(`(?<![.\\w$])${name}\\s*(?:===?|!==?|<=?|>=?)|(?:===?|!==?|<=?|>=?)\\s*${name}(?![\\w$])|\\bswitch\\s*\\(\\s*${name}\\s*\\)|\\[\\s*${name}\\s*\\]`).test(code);
 }
 
-// Next/Back buttons that move the step: a button labelled Next (or Continue) whose handler calls the
-// step's setter and adds one, and one labelled Back (or Previous) whose handler calls it and subtracts one.
+// The top-level pieces of `code` between `start` and `end` split at `separator` (a comma or an operator
+// such as `&&`), as [start, end) ranges; brackets nest, and strings are already blank in the code view.
+function splitTopLevel(code, start, end, separator) {
+  const parts = [];
+  let depth = 0;
+  let from = start;
+  for (let i = start; i < end; i += 1) {
+    const c = code[i];
+    if (c === '(' || c === '[' || c === '{') depth += 1;
+    else if (c === ')' || c === ']' || c === '}') depth -= 1;
+    else if (depth === 0 && code.startsWith(separator, i)) {
+      parts.push([from, i]);
+      i += separator.length - 1;
+      from = i + 1;
+    }
+  }
+  parts.push([from, end]);
+  return parts;
+}
+
+// The argument source of every call of `setter` in a handler's source: `setStep((s) => s + 1)` gives `(s) => s + 1`.
+function setterArguments(text, setter) {
+  const { code } = sourceView(text);
+  const out = [];
+  for (const m of code.matchAll(new RegExp(`(?<![.\\w$])${escapeRe(setter)}\\s*\\(`, 'g'))) {
+    const open = m.index + m[0].length - 1;
+    const close = matchingClose(code, open);
+    if (close > open) out.push(text.slice(open + 1, close));
+  }
+  return out;
+}
+
+// Whether `expression` is `name` moved by one: `name + 1` or `1 + name` forward, `name - 1` back, also inside
+// a clamp (`Math.min(3, name + 1)`).
+function movesByOne(expression, name, direction) {
+  const { code } = sourceView(expression);
+  const n = escapeRe(name);
+  const re = direction > 0
+    ? new RegExp(`(?<![.\\w$])${n}\\s*\\+\\s*1(?![\\w$.])|(?<![\\w$.])1\\s*\\+\\s*${n}(?![\\w$])`)
+    : new RegExp(`(?<![.\\w$])${n}\\s*-\\s*1(?![\\w$.])`);
+  return re.test(code);
+}
+
+// Whether one argument a handler gives the step's setter is the step moved by one. The value has to BE
+// the argument — an increment computed beside the call does not move anything:
+//   setStep((s) => Math.min(3, s + 1))          an updater moving its own parameter
+//   setStep(step + 1)                           the state, moved
+//   const next = step + 1; setStep(next)        a local holding it
+//   const goTo = (n) => setStep(n); goTo(step + 1)   a helper's parameter, given the moved value where it is called
+//   const next = step + 1; setStep(step)        NOT a move: the setter gets the value it already has
+function argumentMoves(arg, handler, state, direction) {
+  const updater = /^\s*(?:async\s+)?(?:\(\s*([A-Za-z_$][\w$]*)\s*(?::[^)]*)?\)|([A-Za-z_$][\w$]*))\s*=>/.exec(arg);
+  if (updater) return movesByOne(arg.slice(updater[0].length), updater[1] || updater[2], direction);
+  if (movesByOne(arg, state.value, direction)) return true;
+  const name = /^\s*([A-Za-z_$][\w$]*)\s*$/.exec(arg)?.[1];
+  if (!name) return false;
+  const { code } = sourceView(handler);
+  const local = new RegExp(`\\b(?:const|let|var)\\s+${escapeRe(name)}\\s*(?::[^=;]+)?=([^;\\n]+)`).exec(code);
+  if (local) {
+    const valueStart = local.index + local[0].length - local[1].length;
+    if (movesByOne(handler.slice(valueStart, local.index + local[0].length), state.value, direction)) return true;
+  }
+  const helpers = /\b(?:(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*(?:async\s*)?\(([^)]*)\)\s*(?::[^=]+)?=>|function\s+([A-Za-z_$][\w$]*)\s*\(([^)]*)\))/g;
+  for (const m of code.matchAll(helpers)) {
+    const helper = m[1] || m[3];
+    const index = patternNames(m[2] ?? m[4]).indexOf(name);
+    if (index < 0) continue;
+    for (const call of code.matchAll(new RegExp(`(?<![.\\w$])${escapeRe(helper)}\\s*\\(`, 'g'))) {
+      const open = call.index + call[0].length - 1;
+      const close = matchingClose(code, open);
+      if (close < 0) continue;
+      const given = splitTopLevel(code, open + 1, close, ',')[index];
+      if (given && movesByOne(handler.slice(given[0], given[1]), state.value, direction)) return true;
+    }
+  }
+  return false;
+}
+
+// Next/Back buttons that move the step: a button labelled Next (or Continue) whose handler gives the step's
+// setter the step plus one, and one labelled Back (or Previous) whose handler gives it the step minus one.
 function stepButtons(content, state) {
   const { src } = sourceView(content);
   const found = { next: false, back: false };
@@ -72,10 +150,10 @@ function stepButtons(content, state) {
     const label = buttonLabel(src, button);
     const onClick = button.attrs.get('onClick');
     if (!onClick || onClick.kind !== 'expression') continue;
-    const handler = sourceView(handlerSource(content, onClick.value)).code;
-    if (!word(state.setter).test(handler)) continue;
-    if (/\b(?:next|continue)\b/i.test(label) && /\+\s*1\b|\+\+|\+=\s*1\b/.test(handler)) found.next = true;
-    if (/\b(?:back|previous|prev)\b/i.test(label) && /-\s*1\b|--|-=\s*1\b/.test(handler)) found.back = true;
+    const handler = handlerSource(content, onClick.value);
+    const args = setterArguments(handler, state.setter);
+    if (/\b(?:next|continue)\b/i.test(label) && args.some((arg) => argumentMoves(arg, handler, state, 1))) found.next = true;
+    if (/\b(?:back|previous|prev)\b/i.test(label) && args.some((arg) => argumentMoves(arg, handler, state, -1))) found.back = true;
   }
   return found;
 }
@@ -96,7 +174,7 @@ function wizardNavigationProblems(content) {
   return problems;
 }
 
-// The JSX shown for each value of the step, as { step, start, end } over the code view:
+// The JSX shown for each value of the step, as { step, start, end, kind } over the code view:
 //   {step === 3 && ( … )}      {step === 3 ? ( … ) : …}      switch (step) { case 3: return ( … ); }
 function stepRegions(code, step) {
   const regions = [];
@@ -104,14 +182,14 @@ function stepRegions(code, step) {
   for (const m of code.matchAll(new RegExp(`(?<![.\\w$])${name}\\s*===?\\s*(\\d+)\\s*(?:&&|\\?)\\s*\\(`, 'g'))) {
     const open = m.index + m[0].length - 1;
     const close = matchingClose(code, open);
-    if (close > open) regions.push({ step: Number(m[1]), start: open, end: close });
+    if (close > open) regions.push({ step: Number(m[1]), start: open, end: close, kind: 'branch' });
   }
   for (const m of code.matchAll(new RegExp(`\\bswitch\\s*\\(\\s*${name}\\s*\\)\\s*\\{`, 'g'))) {
     const open = m.index + m[0].length - 1;
     const close = matchingClose(code, open);
     if (close < 0) continue;
     const cases = [...code.slice(open, close).matchAll(/\bcase\s+(\d+)\s*:/g)].map((c) => ({ step: Number(c[1]), start: open + c.index }));
-    cases.forEach((c, i) => regions.push({ step: c.step, start: c.start, end: i + 1 < cases.length ? cases[i + 1].start : close }));
+    cases.forEach((c, i) => regions.push({ step: c.step, start: c.start, end: i + 1 < cases.length ? cases[i + 1].start : close, kind: 'case' }));
   }
   return regions;
 }
@@ -153,26 +231,161 @@ function enclosingContainer(code, at) {
   return -1;
 }
 
-// Whether the element at `at` is rendered from a JSX expression that tests the step: walking out through
-// the expression containers around it (`{step < 3 ? … : <Button>Submit</Button>}`) up to the function
-// body or block the JSX is returned from (a `{` after `)` or `=>`), one of them names the step.
-function renderedForStep(code, at, step) {
-  let pos = at;
+// --- Which step values render an element -----------------------------------------------------------------
+// A condition is read for the step values it MAY hold on and those it MUST hold on (a condition about
+// something else may hold on any value and must hold on none). Comparisons of the step with a whole
+// number are exact; `&&`, `||`, `??` and `!` combine them; a name declared as a condition
+// (`const isReview = step === 3;`) is read through its declaration.
+const COMPARE = { '===': (a, b) => a === b, '==': (a, b) => a === b, '!==': (a, b) => a !== b, '!=': (a, b) => a !== b, '<': (a, b) => a < b, '<=': (a, b) => a <= b, '>': (a, b) => a > b, '>=': (a, b) => a >= b };
+const FLIP = { '<': '>', '<=': '>=', '>': '<', '>=': '<=' };
+const setOf = (values) => new Set(values);
+const intersect = (a, b) => setOf([...a].filter((v) => b.has(v)));
+const minus = (a, b) => setOf([...a].filter((v) => !b.has(v)));
+
+function trimRange(code, start, end) {
+  while (start < end && /\s/.test(code[start])) start += 1;
+  while (end > start && /\s/.test(code[end - 1])) end -= 1;
+  return [start, end];
+}
+
+function conditionValues(content, text, state, domain, depth = 0) {
+  const all = setOf(domain);
+  const unknown = { may: all, must: setOf([]) };
+  const { code } = sourceView(text);
+  const [start, end] = trimRange(code, 0, code.length);
+  if (start >= end) return unknown;
+  if (code[start] === '(' && matchingClose(code, start) === end - 1) return conditionValues(content, text.slice(start + 1, end - 1), state, domain, depth);
+  for (const operator of ['||', '??']) {
+    const parts = splitTopLevel(code, start, end, operator);
+    if (parts.length > 1) {
+      const each = parts.map(([s, e]) => conditionValues(content, text.slice(s, e), state, domain, depth));
+      return { may: setOf(each.flatMap((c) => [...c.may])), must: setOf(each.flatMap((c) => [...c.must])) };
+    }
+  }
+  const ands = splitTopLevel(code, start, end, '&&');
+  if (ands.length > 1) {
+    const each = ands.map(([s, e]) => conditionValues(content, text.slice(s, e), state, domain, depth));
+    return { may: each.reduce((acc, c) => intersect(acc, c.may), all), must: each.reduce((acc, c) => intersect(acc, c.must), all) };
+  }
+  const bare = code.slice(start, end);
+  if (bare[0] === '!' && bare[1] !== '=') {
+    const inner = conditionValues(content, text.slice(start + 1, end), state, domain, depth);
+    return { may: minus(all, inner.must), must: minus(all, inner.may) };
+  }
+  const name = escapeRe(state.value);
+  const forward = new RegExp(`^${name}\\s*(===|!==|==|!=|<=|>=|<|>)\\s*(\\d+)$`).exec(bare);
+  const backward = new RegExp(`^(\\d+)\\s*(===|!==|==|!=|<=|>=|<|>)\\s*${name}$`).exec(bare);
+  if (forward || backward) {
+    const op = forward ? forward[1] : FLIP[backward[2]] || backward[2];
+    const n = Number(forward ? forward[2] : backward[1]);
+    const holds = setOf(domain.filter((v) => COMPARE[op](v, n)));
+    return { may: holds, must: holds };
+  }
+  const alias = /^[A-Za-z_$][\w$]*$/.test(bare) && depth < 2 ? declarationSource(content, bare) : null;
+  const value = alias && /^\s*(?:const|let|var)\s+[A-Za-z_$][\w$]*\s*(?::[^=]+)?=\s*([\s\S]*?);?\s*$/.exec(alias);
+  if (value && !/=>/.test(value[1])) return conditionValues(content, value[1], state, domain, depth + 1);
+  return unknown;
+}
+
+// The step values for which the branch of an expression `[start, end)` that holds `at` is rendered:
+//   cond ? A : B      A on what cond may hold for, B on what it need not hold for
+//   a && b && X       X on what every condition may hold for
+//   a || X, a ?? X    X on what a need not hold for
+// read down to the element (a JSX element or anything else restricts nothing further).
+function branchValues(content, code, start, end, at, state, domain) {
+  const all = setOf(domain);
+  [start, end] = trimRange(code, start, end);
+  if (start >= end) return all;
+  if (code[start] === '(' && matchingClose(code, start) === end - 1) return branchValues(content, code, start + 1, end - 1, at, state, domain);
+  const src = content;
+  // The top-level `?` of a conditional (not `?.` or `??`) and its `:`.
+  let depth = 0;
+  let question = -1;
+  for (let i = start; i < end; i += 1) {
+    const c = code[i];
+    if (c === '(' || c === '[' || c === '{') depth += 1;
+    else if (c === ')' || c === ']' || c === '}') depth -= 1;
+    else if (depth === 0 && c === '?' && code[i + 1] !== '?' && code[i - 1] !== '?' && !(code[i + 1] === '.' && !/\d/.test(code[i + 2] || ''))) { question = i; break; }
+  }
+  if (question > 0) {
+    let nested = 0;
+    let colon = -1;
+    depth = 0;
+    for (let i = question + 1; i < end; i += 1) {
+      const c = code[i];
+      if (c === '(' || c === '[' || c === '{') depth += 1;
+      else if (c === ')' || c === ']' || c === '}') depth -= 1;
+      else if (depth === 0 && c === '?' && code[i + 1] !== '?' && code[i - 1] !== '?' && !(code[i + 1] === '.' && !/\d/.test(code[i + 2] || ''))) nested += 1;
+      else if (depth === 0 && c === ':') {
+        if (nested === 0) { colon = i; break; }
+        nested -= 1;
+      }
+    }
+    if (colon > 0) {
+      const cond = conditionValues(content, src.slice(start, question), state, domain);
+      if (at > question && at < colon) return intersect(cond.may, branchValues(content, code, question + 1, colon, at, state, domain));
+      if (at > colon) return intersect(minus(all, cond.must), branchValues(content, code, colon + 1, end, at, state, domain));
+      return all;
+    }
+  }
+  for (const operator of ['||', '??']) {
+    const parts = splitTopLevel(code, start, end, operator);
+    if (parts.length > 1) {
+      const holder = parts.findIndex(([s, e]) => at >= s && at < e);
+      const before = parts.slice(0, Math.max(holder, 0)).map(([s, e]) => conditionValues(content, src.slice(s, e), state, domain));
+      const reached = before.reduce((acc, c) => minus(acc, c.must), all);
+      return holder < 0 ? all : intersect(reached, branchValues(content, code, parts[holder][0], parts[holder][1], at, state, domain));
+    }
+  }
+  const ands = splitTopLevel(code, start, end, '&&');
+  if (ands.length > 1) {
+    const holder = ands.findIndex(([s, e]) => at >= s && at < e);
+    if (holder !== ands.length - 1) return all;
+    const conditions = ands.slice(0, -1).map(([s, e]) => conditionValues(content, src.slice(s, e), state, domain));
+    const reached = conditions.reduce((acc, c) => intersect(acc, c.may), all);
+    return intersect(reached, branchValues(content, code, ands[holder][0], ands[holder][1], at, state, domain));
+  }
+  return all;
+}
+
+// The step values on which the element at `at` is rendered AND can be pressed: the switch case it sits
+// in, every JSX expression around it up to the function body the JSX is returned from (a `{` after `)`
+// or `=>`), and its own `disabled` (disabled for good, or on the values where the condition must hold).
+function reachableSteps(content, code, element, state, domain, regions) {
+  let values = setOf(domain);
+  const cases = regions.filter((r) => r.kind === 'case' && r.start <= element.start && element.start < r.end);
+  if (cases.length) values = intersect(values, setOf(cases.map((r) => r.step)));
+  let pos = element.start;
   for (let open = enclosingContainer(code, pos); open >= 0; open = enclosingContainer(code, pos)) {
     let k = open - 1;
     while (k >= 0 && /\s/.test(code[k])) k -= 1;
-    if (code[k] === ')' || (code[k] === '>' && code[k - 1] === '=')) return false;
-    if (word(step).test(code.slice(open, at))) return true;
+    if (code[k] === ')' || (code[k] === '>' && code[k - 1] === '=')) break;
+    const close = matchingClose(code, open);
+    if (close > open) values = intersect(values, branchValues(content, code, open + 1, close, element.start, state, domain));
     pos = open;
   }
-  return false;
+  const disabled = element.attrs.get('disabled');
+  if (disabled?.kind === 'flag' || (disabled?.kind === 'string' && disabled.value !== 'false')) return setOf([]);
+  if (disabled?.kind === 'expression') values = minus(values, conditionValues(content, disabled.value, state, domain).must);
+  return values;
+}
+
+// The values the step takes: each value the page renders on its own, and the step state's initial value.
+function stepDomain(code, state, regions) {
+  const values = setOf(regions.map((r) => r.step));
+  const init = new RegExp(`\\[\\s*${escapeRe(state.value)}\\s*,\\s*${escapeRe(state.setter)}\\s*\\]\\s*=\\s*(?:React\\s*\\.\\s*)?useState(?:<[^>()]*>)?\\s*\\(\\s*(\\d+)\\s*\\)`).exec(code);
+  if (init) values.add(Number(init[1]));
+  return [...values].sort((a, b) => a - b);
 }
 
 // eval 4: "Step 3 (review) shows a summary of entered data before submission". The review step is the
 // last step the page renders on its own; it must show every value the earlier steps' form controls
-// bind, and the button that submits (labelled Submit/Create/Save/Finish, or whose handler writes with
-// createRow/updateRow) must be rendered there, or from an expression that tests the step — so it is
-// reached only after the summary. It does not judge how the summary looks.
+// bind, and EVERY button that submits (labelled Submit/Create/Save/Finish, or whose handler writes with
+// createRow/updateRow) must be reachable only on the review step: rendered and enabled for no other value
+// of the step (reachableSteps), so the summary is always seen first. A second, unconditional submit, or a
+// boundary that lets the submit show on an earlier step (`step < 1 ? Next : Submit`), fails it. A condition
+// the reader cannot tie to the step (`ready ? Submit : null`) proves nothing and fails it too. It does not
+// judge how the summary looks.
 function reviewSummaryProblems(content) {
   const { src, code } = sourceView(content);
   const [state] = stepStates(content);
@@ -191,28 +404,43 @@ function reviewSummaryProblems(content) {
     return /\b(?:submit|create|save|finish)\b/i.test(buttonLabel(src, button)) || /\b(?:createRow|updateRow)\b/.test(handler);
   });
   if (!submits.length) return [...problems, 'no button submits the entered data'];
-  const gated = submits.some((button) => (button.start > review.start && button.start < review.end) || renderedForStep(code, button.start, state.value));
-  if (!gated) problems.push(`the submit button is rendered on every step, not only after the review (${state.value} === ${review.step})`);
+  const domain = stepDomain(code, state, regions);
+  for (const button of submits) {
+    const reached = [...reachableSteps(content, code, button, state, domain, regions)];
+    if (reached.some((value) => value !== review.step)) {
+      problems.push(`the submit button "${buttonLabel(src, button)}" can be pressed when ${state.value} is ${reached.filter((v) => v !== review.step).join(' or ')}, not only on the review step (${state.value} === ${review.step})`);
+    }
+  }
+  if (!submits.some((button) => reachableSteps(content, code, button, state, domain, regions).has(review.step))) {
+    problems.push(`no submit button can be pressed on the review step (${state.value} === ${review.step})`);
+  }
   return problems;
 }
 
 // eval 4: "All form fields have aria-labels or aria-labelledby for accessibility". A control is labelled
 // by its own aria-label/aria-labelledby, or by what gives it the same accessible name: a Fluent UI
 // `<Field label=…>` around it (Field wires its label to the control with aria-labelledby), a `label`
-// prop on a Checkbox/Switch/Radio (rendered as its <label>), or an `id` that a `<Label htmlFor>`
-// names. A spread (`{...props}`) may carry a label the page does not show, so it is not reported.
-// A hidden input (`type="hidden"`) is no field. Returns null when the page has no form control.
+// prop on a Checkbox/Switch/Radio (rendered as its <label>), or an `id` that a `<Label htmlFor>` with
+// some content names. A label only counts when it can name something: an empty string, `{''}`, `{null}`,
+// `{undefined}` or `{false}` is no label, whereas a computed one (`label={translate('title')}`) is. A
+// spread (`{...props}`) may carry a label the page does not show, so it is not reported. A hidden input
+// (`type="hidden"`) is no field. Returns null when the page has no form control.
+const STATIC_EMPTY = /^\s*(?:(['"`])\s*\1|null|undefined|false)\s*$/;
+const names = (attr) => Boolean(attr) && ((attr.kind === 'string' && attr.value.trim() !== '')
+  || (attr.kind === 'expression' && attr.value.trim() !== '' && !STATIC_EMPTY.test(attr.value)));
 function formFieldLabelProblems(content) {
+  const { src } = sourceView(content);
   const controls = jsxElements(content, FORM_CONTROLS).filter((c) => c.attrs.get('type')?.value !== 'hidden');
   if (!controls.length) return null;
-  const fields = jsxElements(content, /^Field$/).filter((f) => f.attrs.has('label'));
-  const htmlFor = new Set(jsxElements(content, /^(?:Label|label)$/).map((l) => l.attrs.get('htmlFor')?.value).filter((v) => typeof v === 'string' && v));
-  const nonEmpty = (attr) => attr && (attr.kind === 'expression' || (attr.kind === 'string' && attr.value.trim()));
+  const fields = jsxElements(content, /^Field$/).filter((f) => names(f.attrs.get('label')));
+  const htmlFor = new Set(jsxElements(content, /^(?:Label|label)$/)
+    .filter((l) => src.slice(l.childrenStart, l.childrenEnd).replace(/<[^>]*>/g, '').trim() !== '')
+    .map((l) => l.attrs.get('htmlFor')?.value).filter((v) => typeof v === 'string' && v));
   const problems = [];
   for (const control of controls) {
     const { attrs } = control;
-    if (nonEmpty(attrs.get('aria-label')) || nonEmpty(attrs.get('aria-labelledby')) || attrs.has('...')) continue;
-    if (/^(?:Checkbox|Switch|Radio)$/.test(control.name) && nonEmpty(attrs.get('label'))) continue;
+    if (names(attrs.get('aria-label')) || names(attrs.get('aria-labelledby')) || attrs.has('...')) continue;
+    if (/^(?:Checkbox|Switch|Radio)$/.test(control.name) && names(attrs.get('label'))) continue;
     if (fields.some((field) => control.start >= field.childrenStart && control.start < field.childrenEnd)) continue;
     const id = attrs.get('id');
     if (id && id.kind === 'string' && htmlFor.has(id.value)) continue;
@@ -249,11 +477,61 @@ function searchAndFilterProblems(content) {
 // eval 13: "All user-visible text goes through a translate() helper — no hardcoded display strings in JSX".
 // The helper is `translate` (references/localization.md) or its usual short form `t`, declared in the
 // page and called. Text is hardcoded when a JSX text run holds a letter (`<Text>Contacts</Text>`), a
-// shown attribute is a string with a letter (`placeholder="Search"`, `aria-label={'Contacts'}`), or an
-// expression child is only a string (`{'No contacts'}`). Character references are not letters
-// (`&nbsp;`), nor are punctuation and digits (`({rows.length})`). NOT read: a string a function returns
-// to JSX (`renderHeaderCell: () => 'Name'`) or one inside a longer expression (`{x ? 'Yes' : 'No'}`).
+// shown attribute is a string with a letter (`placeholder="Search"`), or a JSX expression — a child
+// `{…}` or a shown attribute's value — can RESULT in a string or template with a letter
+// (displayedLiterals): `{'No contacts'}`, `{rows.length ? 'Contacts' : t('empty')}`, `{error || 'Failed'}`,
+// `{`${n} contacts`}`. A string passed to a call (`t('empty')`) is a key, not a result. Character
+// references are not letters (`&nbsp;`), nor are punctuation and digits (`({rows.length})`, `{`${n}`}`).
+// NOT read: a string a function returns to JSX (`renderHeaderCell: () => 'Name'`) or a variable holding one.
 const SHOWN_ATTRIBUTES = new Set(['label', 'placeholder', 'title', 'aria-label', 'aria-description', 'alt', 'header', 'description', 'content', 'hint', 'validationMessage', 'text']);
+
+// The string and template literals an expression can evaluate to, as { quote, text }: the expression
+// itself, both sides of a conditional, the right side of `&&`, and every side of `||` and `??`, through
+// parentheses. Anything else — a call, a name, a member, a JSX element — results in no literal.
+function displayedLiterals(text) {
+  const { code } = sourceView(text);
+  const out = [];
+  const visit = (from, to) => {
+    let [start, end] = trimRange(code, from, to);
+    if (start >= end) return;
+    if (code[start] === '(' && matchingClose(code, start) === end - 1) { visit(start + 1, end - 1); return; }
+    let depth = 0;
+    for (let i = start; i < end; i += 1) {
+      const c = code[i];
+      if (c === '(' || c === '[' || c === '{') depth += 1;
+      else if (c === ')' || c === ']' || c === '}') depth -= 1;
+      else if (depth === 0 && c === '?' && code[i + 1] !== '?' && code[i - 1] !== '?' && !(code[i + 1] === '.' && !/\d/.test(code[i + 2] || ''))) {
+        let nested = 0;
+        let inner = 0;
+        for (let j = i + 1; j < end; j += 1) {
+          const d = code[j];
+          if (d === '(' || d === '[' || d === '{') inner += 1;
+          else if (d === ')' || d === ']' || d === '}') inner -= 1;
+          else if (inner === 0 && d === '?' && code[j + 1] !== '?' && code[j - 1] !== '?' && !(code[j + 1] === '.' && !/\d/.test(code[j + 2] || ''))) nested += 1;
+          else if (inner === 0 && d === ':') {
+            if (nested === 0) { visit(i + 1, j); visit(j + 1, end); return; }
+            nested -= 1;
+          }
+        }
+        return;
+      }
+    }
+    for (const operator of ['||', '??']) {
+      const parts = splitTopLevel(code, start, end, operator);
+      if (parts.length > 1) { for (const [s, e] of parts) visit(s, e); return; }
+    }
+    const ands = splitTopLevel(code, start, end, '&&');
+    if (ands.length > 1) { visit(...ands.at(-1)); return; }
+    const quote = code[start];
+    if (/['"`]/.test(quote) && code[end - 1] === quote && !code.slice(start + 1, end - 1).trim()) out.push({ quote, text: text.slice(start + 1, end - 1) });
+  };
+  visit(0, text.length);
+  return out;
+}
+
+// Letters a literal shows: a template's `${…}` parts are values, not text.
+const shownLetters = ({ quote, text }) => hasLetter(quote === '`' ? text.replace(/\$\{[^}]*\}/g, ' ') : text);
+
 function translateCoverageProblems(content) {
   const { src, code } = sourceView(content);
   const helper = ['translate', 't'].find((name) => declarationSource(content, name) && new RegExp(`(?<![.\\w$])${name}\\s*\\(`).test(code.replace(new RegExp(`\\b(?:const|let|var|function)\\s+${name}\\b`, 'g'), '')));
@@ -265,10 +543,8 @@ function translateCoverageProblems(content) {
   for (const element of jsxElements(content)) {
     for (const [name, attr] of element.attrs) {
       if (!SHOWN_ATTRIBUTES.has(name)) continue;
-      // A string, or an expression that is only a string or a template: `{'Contacts'}`, `{`Step ${n}`}`
-      // (the words around an interpolation are text too).
-      const literal = attr.kind === 'string' ? attr.value : attr.kind === 'expression' ? /^\s*(['"`])([^]*)\1\s*$/.exec(attr.value)?.[2] : null;
-      if (literal && hasLetter(literal.replace(/\$\{[^}]*\}/g, ' '))) problems.push(`hardcoded ${name} "${literal.slice(0, 40)}" on <${element.name}>`);
+      const literals = attr.kind === 'string' ? [{ quote: '"', text: attr.value }] : attr.kind === 'expression' ? displayedLiterals(attr.value) : [];
+      for (const literal of literals.filter(shownLetters)) problems.push(`hardcoded ${name} ${literal.quote}${literal.text.slice(0, 40)}${literal.quote} on <${element.name}>`);
     }
   }
   for (let i = code.indexOf('{'); i >= 0; i = code.indexOf('{', i + 1)) {
@@ -278,8 +554,9 @@ function translateCoverageProblems(content) {
     if ((code[k] !== '>' && code[k] !== '}') || (code[k] === '>' && code[k - 1] === '=')) continue;
     const close = matchingClose(code, i);
     if (close < 0) continue;
-    const inner = /^\s*(['"`])([^]*)\1\s*$/.exec(src.slice(i + 1, close));
-    if (inner && /^\s*(['"`])\s*\1\s*$/.test(code.slice(i + 1, close)) && hasLetter(inner[2])) problems.push(`hardcoded JSX string {${inner[1]}${inner[2].slice(0, 40)}${inner[1]}}`);
+    for (const literal of displayedLiterals(src.slice(i + 1, close)).filter(shownLetters)) {
+      problems.push(`hardcoded JSX string ${literal.quote}${literal.text.slice(0, 40)}${literal.quote}`);
+    }
   }
   return problems;
 }

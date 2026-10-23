@@ -26,7 +26,7 @@
 // See https://learn.microsoft.com/power-apps/developer/data-platform/reference/about-entity-reference
 // (the common columns of a user-owned table). Write keys holding `@` (an `@odata.bind`) are another rule's.
 
-const { sourceView, declarationSource, matchingClose } = require('./tsx-structure.js');
+const { sourceView, declarationSource, matchingClose, withoutComments } = require('./tsx-structure.js');
 
 const SYSTEM_COLUMNS = new Set([
   'createdon', 'modifiedon', 'overriddencreatedon', 'versionnumber', 'importsequencenumber',
@@ -76,12 +76,13 @@ function stringValue(text) {
   return m[2];
 }
 
-// An argument's source, or — when it is a bare name — the value of that name's declaration in the page.
+// An argument's source, or — when it is a bare name — the value of that name's declaration in the page,
+// with its comments blanked like the rest of what is read here.
 function resolved(content, text) {
   const name = /^\s*([A-Za-z_$][\w$]*)\s*$/.exec(text)?.[1];
   if (!name) return text;
   const declared = declarationSource(content, name);
-  const value = declared && /=\s*([\s\S]*?);?\s*$/.exec(declared);
+  const value = declared && /=\s*([\s\S]*?);?\s*$/.exec(withoutComments(declared));
   return value ? value[1].replace(/\s+as\s+const\s*$/, '') : null;
 }
 
@@ -138,7 +139,8 @@ function topLevelProperties(src) {
   return props;
 }
 
-// The contents of the string literals in a short source (an array of column names, an object's values).
+// The contents of the string literals in a short, comment-free source (an array of column names, an
+// object's values).
 const strings = (src) => [...String(src || '').matchAll(/(['"`])([^'"`]*)\1/g)].map((m) => m[2]);
 
 // The string literals of a whole page, found by the lexer (a quote in JSX text, "Don't", is no delimiter).
@@ -170,9 +172,12 @@ function expressionColumns(text) {
   return out.filter((name) => !/^(?:and|or|not|null|true|false|eq|ne|gt|ge|lt|le|asc|desc)$/i.test(name));
 }
 
-// Every column a page names in its dataApi calls, as { table, column, where }.
+// Every column a page names in its dataApi calls, as { table, column, where }. Arguments, and the
+// declarations a bare name resolves to, are read from the source with its comments blanked, so
+// `select: ['accountid', /* was 'old_name' */ 'name']` names accountid and name only.
 function namedColumns(content) {
-  const { src, code } = sourceView(content);
+  const { code } = sourceView(content);
+  const src = withoutComments(content);
   const out = [];
   for (const m of code.matchAll(CALLS)) {
     const method = m[1];

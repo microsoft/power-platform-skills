@@ -308,6 +308,15 @@ function patternNames(text) {
   return names;
 }
 
+// The source with every comment replaced by spaces (line breaks kept), so offsets still map 1:1 and a
+// name or a quoted word inside a comment is never read as code or as a string the code holds.
+function withoutComments(content) {
+  const src = String(content || '');
+  const out = src.split('');
+  for (const { start, end } of commentRanges(src)) for (let i = start; i < end; i += 1) if (out[i] !== '\n' && out[i] !== '\r') out[i] = ' ';
+  return out.join('');
+}
+
 // Every function body in the page — of an arrow, a `function` declaration or expression, or a
 // method — with its parameter names: { start, end, params }.
 function functionScopes(code) {
@@ -397,17 +406,24 @@ function namedFunctions(code) {
   return out.sort((a, b) => a.start - b.start);
 }
 
-// The names a scope's own body declares at any depth: const/let/var bindings (destructured too) and
-// function declarations. A superset of what the scope binds directly, which is the safe side for the
-// closure test in nestedDefinitionProblems: a name it reads from a deeper block is still the page's own.
-function declaredNames(code, scope) {
-  const body = code.slice(scope.start, scope.end);
-  const names = new Set(scope.params);
-  for (const m of body.matchAll(/\b(?:const|let|var)\s+(\[[^\]=]*\]|\{[^}=]*\}|[A-Za-z_$][\w$]*)/g)) {
-    for (const name of patternNames(m[1])) names.add(name);
+// Every binding the page declares, with where: const/let/var names (destructured too) and function
+// declarations, as { name, at } over the code view. A binding belongs to the innermost function scope
+// around `at` (innermostScope); one in no function scope belongs to the module.
+function declarations(code) {
+  const out = [];
+  for (const m of code.matchAll(/\b(?:const|let|var)\s+(\[[^\]=]*\]|\{[^}=]*\}|[A-Za-z_$][\w$]*)/g)) {
+    for (const name of patternNames(m[1])) out.push({ name, at: m.index });
   }
-  for (const m of body.matchAll(/\bfunction\s+([A-Za-z_$][\w$]*)/g)) names.add(m[1]);
-  return names;
+  for (const m of code.matchAll(/\bfunction\s+([A-Za-z_$][\w$]*)/g)) out.push({ name: m[1], at: m.index });
+  return out;
+}
+
+function innermostScope(scopes, at) {
+  let best = null;
+  for (const scope of scopes) {
+    if (scope.start <= at && at < scope.end && (!best || scope.end - scope.start < best.end - best.start)) best = scope;
+  }
+  return best;
 }
 
 // Rule 3 of references/rules.md: "All code (components, utilities) in one file; each as separate
@@ -419,10 +435,18 @@ function declaredNames(code, scope) {
 // A nested function that does read their bindings is a handler or an effect's loader — the rules'
 // own samples write those inside the component — and is not reported. Unnamed callbacks (`onClick={() => …}`,
 // `useEffect(() => …)`, `rows.map((r) => …)`) are not definitions and are not reported either.
+// What a function reads from around it is decided by scope: a binding counts when it is declared directly
+// in an enclosing function (its innermost function scope is one of them) or is one of their parameters —
+// never a binding declared inside the function itself or inside a sibling — and the function's own
+// parameters and locals shadow an enclosing name of the same spelling, so
+//   const percent = (n) => { const rounded = Math.round(n * 100); return rounded; };
+// reads nothing from the component, whatever the component itself declares.
 // Returns a list of problems, empty when every component and utility is top level.
 function nestedDefinitionProblems(content) {
   const { code } = sourceView(content);
   const scopes = functionScopes(code);
+  const declared = declarations(code);
+  const homes = declared.map((d) => ({ ...d, home: innermostScope(scopes, d.at) }));
   const problems = [];
   for (const fn of namedFunctions(code)) {
     const around = scopes.filter((s) => s.start < fn.start && fn.start < s.end && !(s.start === fn.body.start && s.end === fn.body.end));
@@ -432,9 +456,13 @@ function nestedDefinitionProblems(content) {
       continue;
     }
     const outer = new Set();
-    for (const scope of around) for (const name of declaredNames(code, scope)) outer.add(name);
+    for (const scope of around) for (const name of scope.params) outer.add(name);
+    for (const d of homes) if (d.home && around.includes(d.home)) outer.add(d.name);
     outer.delete(fn.name);
-    for (const own of fn.params) outer.delete(own);
+    const own = new Set(fn.params);
+    const fnScope = innermostScope(scopes, fn.body.start);
+    for (const d of homes) if (d.home && d.home === fnScope) own.add(d.name);
+    for (const name of own) outer.delete(name);
     const body = code.slice(fn.body.start, fn.body.end);
     const closes = [...outer].some((name) => new RegExp(`(?<![.\\w$])${name.replace(/\$/g, '\\$')}(?![\\w$])`).test(body));
     if (!closes) problems.push(`utility ${fn.name} is defined inside another function but reads nothing from it`);
@@ -444,5 +472,5 @@ function nestedDefinitionProblems(content) {
 
 module.exports = {
   sourceView, jsxElements, jsxTextRuns, declarationSource, matchingClose, patternNames,
-  namedFunctions, nestedDefinitionProblems,
+  namedFunctions, nestedDefinitionProblems, withoutComments,
 };

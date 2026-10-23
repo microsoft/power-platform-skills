@@ -126,7 +126,7 @@ test('eval 4: the review step shows every entered field and gates the submit', (
     <Button onClick={() => dataApi.createRow('incident', { title })}>Submit</Button>
   </div>;
 };`;
-  assertFail(grade(REVIEW, inline(ungated)), /submit button is rendered on every step/);
+  assertFail(grade(REVIEW, inline(ungated)), /submit button "Submit" can be pressed when step is 1, not only on the review step/);
   assertPass(grade(REVIEW, inline(ungated.replace('<Button onClick', '{step === 2 && <Button onClick').replace('Submit</Button>', 'Submit</Button>}'))));
 });
 
@@ -233,4 +233,96 @@ test('evals 1 and 7: payload keys, annotations and named options are read; anoth
   assertPass(grade(COLUMNS_7, page("const label = row['_primarycontactid_value@OData.Community.Display.V1.FormattedValue'];")));
   assertFail(grade(COLUMNS_7, page("const label = row['_parentcustomerid_value@OData.Community.Display.V1.FormattedValue'];")), /FormattedValue of _parentcustomerid_value/);
   assertSkip(grade(COLUMNS_7, inline('const P = () => <Text>static</Text>;', { runtimeTypes })), /name no Dataverse column/);
+});
+
+// --- Graded holes the first version let through -------------------------------------------------------------
+// Each test below failed on the first version of these checks: a page that breaks the expectation was graded
+// PASS, or a correct page FAIL. The checks now read the evidence the expectation is about.
+
+test('columns: a column quoted in a comment is not a column the page names', () => {
+  assertPass(grade(COLUMNS_5B, withPage(E1, 'account-gallery.tsx', ["select: ['accountid', 'name',", "select: ['accountid', /* formerly 'retired_name' */ 'name',"])));
+  assertPass(grade(COLUMNS_5B, withPage(E1, 'account-gallery.tsx', ["select: ['accountid', 'name',", "select: [\n                    'accountid', // was 'legacy_id'\n                    'name',"])));
+  assertPass(grade(COLUMNS_5B, withPage(E1, 'account-gallery.tsx', ["orderBy: 'name asc',", "orderBy: /* was 'createdate desc' */ 'name asc',"])));
+  // The real names around the comments are still read.
+  assertFail(grade(COLUMNS_5B, withPage(E1, 'account-gallery.tsx', ["select: ['accountid', 'name', 'websiteurl',", "select: ['accountid', /* 'name' */ 'name', 'website',"])), /select names website, which RuntimeTypes\.ts does not declare/);
+  assertFail(grade(COLUMNS_5B, withPage(E1, 'account-gallery.tsx', ["orderBy: 'name asc',", "orderBy: /* sort */ 'nickname asc',"])), /orderBy names nickname/);
+  // A select list the call names through a constant is read from the constant's declaration, without its comments.
+  const declared = (list) => withPage(E1, 'account-gallery.tsx',
+    ["select: ['accountid', 'name', 'websiteurl', 'emailaddress1', 'telephone1'],", 'select: ACCOUNT_COLUMNS,'],
+    ["const CACHE_KEY = '__ppAccountsGallery_accountCache';", `const ACCOUNT_COLUMNS = ${list};\nconst CACHE_KEY = '__ppAccountsGallery_accountCache';`]);
+  assertPass(grade(COLUMNS_5B, declared("['accountid', /* was 'retired_name' */ 'name', 'websiteurl', 'emailaddress1', 'telephone1']")));
+  assertFail(grade(COLUMNS_5B, declared("['accountid', /* 'name' */ 'website']")), /select names website, which RuntimeTypes\.ts does not declare/);
+});
+
+test('eval 5: a nested utility\'s own locals are not bindings it closes over', () => {
+  const insert = (helper) => withPage(E5, 'task-board.tsx', ['    const handleDragEnd = () => {', `${helper}\n    const handleDragEnd = () => {`]);
+  assertFail(grade(TOP_LEVEL, insert('    const percent = (n: number) => {\n        const rounded = Math.round(n * 100);\n        return rounded;\n    };')), /utility percent is defined inside another function but reads nothing from it/);
+  // A parameter or a local that shadows the component's own names (tasks, hoverCol) reads nothing from it either.
+  assertFail(grade(TOP_LEVEL, insert('    const share = (tasks: number) => {\n        const hoverCol = tasks * 100;\n        return hoverCol;\n    };')), /utility share is defined inside another function/);
+  // A handler with locals of its own that sets the component's state still closes over it.
+  assertPass(grade(TOP_LEVEL, insert('    const clearHover = () => {\n        const none = null;\n        setHoverCol(none);\n    };')));
+  // A name a SIBLING declares is not one the component declares: `percent` reads the module's `scale`.
+  const sibling = withPage(E5, 'task-board.tsx',
+    ['// ---- Status constants', 'const scale = 100;\n\n// ---- Status constants'],
+    ['    const handleDragEnd = () => {', '    const handleScale = () => {\n        const scale = 2;\n        setHoverCol(null);\n        return scale;\n    };\n    const percent = (n: number) => Math.round(n * scale);\n    const handleDragEnd = () => {']);
+  assertFail(grade(TOP_LEVEL, sibling), /utility percent is defined inside another function but reads nothing from it/);
+});
+
+test('eval 4: Next and Back must give the setter the moved value, not merely mention an increment', () => {
+  const NEXT = 'onClick={() => setStep((s) => Math.min(3, s + 1))}';
+  const BACK = 'onClick={() => setStep((s) => Math.max(1, s - 1))}';
+  const HELPER = ['const handleSubmit = async () => {', 'const goTo = (n: number) => setStep(n);\n\n    const handleSubmit = async () => {'];
+  assertFail(grade(WIZARD, withPage(E4, 'page.tsx', [NEXT, 'onClick={() => { const next = step + 1; setStep(step); }}'])), /no Next button whose handler advances setStep/);
+  assertFail(grade(WIZARD, withPage(E4, 'page.tsx', [BACK, 'onClick={() => { const prev = step - 1; setStep(step); }}'])), /no Back button whose handler moves setStep back/);
+  // The moved value may come through a local, or through a helper's parameter.
+  assertPass(grade(WIZARD, withPage(E4, 'page.tsx', [NEXT, 'onClick={() => { const next = step + 1; setStep(next); }}'])));
+  assertPass(grade(WIZARD, withPage(E4, 'page.tsx', HELPER, [NEXT, 'onClick={() => goTo(step + 1)}'], [BACK, 'onClick={() => goTo(step - 1)}'])));
+  assertFail(grade(WIZARD, withPage(E4, 'page.tsx', HELPER, [NEXT, 'onClick={() => goTo(step)}'])), /no Next button/);
+});
+
+test('eval 4: every submit is reachable only on the review step', () => {
+  assertFail(grade(REVIEW, withPage(E4, 'page.tsx', ['{step < 3 ? (', '{step < 1 ? ('])), /submit button .*not only on the review step/);
+  assertFail(grade(REVIEW, withPage(E4, 'page.tsx', ['            <div className={styles.nav}>', '            <Button onClick={handleSubmit}>Submit now</Button>\n            <div className={styles.nav}>'])), /submit button .*not only on the review step/);
+  const page = (submit) => inline(`const GeneratedComponent = () => {
+  const [step, setStep] = useState(1);
+  const [title, setTitle] = useState('');
+  return <div>
+    {step === 1 && (<Input aria-label="Title" value={title} onChange={(_, d) => setTitle(d.value)} />)}
+    {step === 2 && (<Text>{title}</Text>)}
+    ${submit}
+  </div>;
+};`);
+  const SUBMIT = "<Button onClick={() => dataApi.createRow('incident', { title })}>Submit</Button>";
+  // Disabled on every step but the review is gated too; so is the false side of a boundary that ends at it.
+  assertPass(grade(REVIEW, page(SUBMIT.replace('<Button ', '<Button disabled={step !== 2} '))));
+  assertPass(grade(REVIEW, page(`{step < 2 ? <Button onClick={() => setStep(step + 1)}>Next</Button> : ${SUBMIT}}`)));
+  // With steps 1 and 2, `step !== 1` IS the review step; `step !== 2` is the first step.
+  assertPass(grade(REVIEW, page(`{step !== 1 && ${SUBMIT}}`)));
+  assertFail(grade(REVIEW, page(`{step !== 2 && ${SUBMIT}}`)), /can be pressed when step is 1, not only on the review step/);
+  assertFail(grade(REVIEW, page(`{ready ? ${SUBMIT} : null}`)), /not only on the review step/);
+  // A condition read through a declaration counts like the comparison it holds.
+  const aliased = inline(page(`{isReview && ${SUBMIT}}`).files[0].content.replace('const [title', 'const isReview = step === 2;\n  const [title'));
+  assertPass(grade(REVIEW, aliased));
+});
+
+test('eval 4: an empty label is no label', () => {
+  const TITLE = '<Field label="Title">\n                        <Input\n                            aria-label="Title"';
+  assertFail(grade(LABELS, withPage(E4, 'page.tsx', [TITLE, '<Field label="">\n                        <Input'])), /<Input> has no aria-label, aria-labelledby or label/);
+  assertFail(grade(LABELS, withPage(E4, 'page.tsx', [TITLE, '<Field label={null}>\n                        <Input'])), /<Input> has no aria-label/);
+  assertFail(grade(LABELS, withPage(E4, 'page.tsx', [TITLE, "<Field>\n                        <Input\n                            aria-label={''}"])), /<Input> has no aria-label/);
+  // A translated or computed label still names the control.
+  assertPass(grade(LABELS, withPage(E4, 'page.tsx', [TITLE, "<Field label={translate('title')}>\n                        <Input"])));
+});
+
+test('eval 13: literal text in a conditional or a template child is hardcoded too', () => {
+  const child = (expression) => withPage(E13, 'page.tsx', ["<Text>{t('empty')}</Text>", `<Text>{${expression}}</Text>`]);
+  assertFail(grade(TRANSLATED, child("rows.length ? 'Contacts' : 'No contacts.'")), /hardcoded JSX string '(?:Contacts|No contacts\.)'/);
+  assertFail(grade(TRANSLATED, child("rows.length === 0 && 'No contacts.'")), /hardcoded JSX string 'No contacts\.'/);
+  assertFail(grade(TRANSLATED, child("error || 'Something went wrong'")), /hardcoded JSX string 'Something went wrong'/);
+  assertFail(grade(TRANSLATED, child("error ?? 'Unknown error'")), /hardcoded JSX string 'Unknown error'/);
+  assertFail(grade(TRANSLATED, child('`${rows.length} contacts`')), /hardcoded JSX string `/);
+  assertFail(grade(TRANSLATED, withPage(E13, 'page.tsx', ["<Spinner label={t('title')} />", "<Spinner label={rows.length ? 'Loading' : t('title')} />"])), /hardcoded label 'Loading' on <Spinner>/);
+  // Keys inside the helper's call, and branches that are translated or only numbers, are not text.
+  assertPass(grade(TRANSLATED, child("rows.length ? t('title') : t('empty')")));
+  assertPass(grade(TRANSLATED, child('error ? t(\'empty\') : `${rows.length}`')));
 });
