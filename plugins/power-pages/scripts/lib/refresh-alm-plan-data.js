@@ -226,6 +226,50 @@ function setValueSource(ev, stageKey, source) {
   if (Object.keys(ev.valueSources).length === 0) delete ev.valueSources;
 }
 
+// Replace planData.envVars with a freshly discovered definition list (the
+// last-env-vars.json sidecar) WITHOUT losing per-stage values{} / valueSources{}
+// already in the plan. Discovery rows carry only
+//   { schemaName, displayName, type, defaultValue, description, siteSetting }
+// so a plain replace would drop every matrix cell. That is unrecoverable when
+// the same run's live query for a stage fails (the stage is absent from
+// liveEnvVarValues.byStage, so the merge can't refill it) or for manual cells
+// that only ever lived in the plan.
+//   - Matched by schemaName, case-insensitively (Dataverse schema names are
+//     case-insensitive and discovery may return different casing).
+//   - A definition missing from `incoming` is dropped on purpose — it was
+//     removed from the solution, so its values go with it.
+//   - Values/valueSources on the incoming row win per stage key; prior
+//     provenance is kept only for keys the incoming row doesn't set.
+function carryForwardEnvVarValues(previous, incoming) {
+  if (!Array.isArray(incoming)) return incoming;
+  const isObj = (o) => !!o && typeof o === 'object' && !Array.isArray(o);
+  const priorBySchema = new Map();
+  for (const ev of (Array.isArray(previous) ? previous : [])) {
+    if (ev && typeof ev.schemaName === 'string') priorBySchema.set(ev.schemaName.toLowerCase(), ev);
+  }
+  return incoming.map((row) => {
+    if (!row || typeof row.schemaName !== 'string') return row;
+    const prior = priorBySchema.get(row.schemaName.toLowerCase());
+    if (!prior || !isObj(prior.values) || Object.keys(prior.values).length === 0) return row;
+    const rowValues = isObj(row.values) ? row.values : {};
+    const rowSources = isObj(row.valueSources) ? row.valueSources : {};
+    const priorSources = isObj(prior.valueSources) ? prior.valueSources : {};
+    const values = {};
+    const sources = {};
+    for (const [key, value] of Object.entries(prior.values)) {
+      if (Object.prototype.hasOwnProperty.call(rowValues, key)) continue;
+      values[key] = value;
+      if (priorSources[key]) sources[key] = priorSources[key];
+    }
+    Object.assign(values, rowValues);
+    Object.assign(sources, rowSources);
+    const out = { ...row, values };
+    if (Object.keys(sources).length > 0) out.valueSources = sources;
+    else delete out.valueSources;
+    return out;
+  });
+}
+
 // Backfill planData.envVars[i].values{} from deployment-settings.json so
 // the rendered plan's "Values by Environment" matrix auto-populates after
 // deploy-pipeline runs. Idempotent: an existing non-empty value on
@@ -357,19 +401,35 @@ async function fetchLiveEnvVarValues(planData, deps = {}) {
   return { byStage, queriedStages, errors };
 }
 
-// True when ev.values carries a local (non-live) value for `stage` under any
-// alias the renderer collapses onto the same column — the bare label,
-// "Deploy to {label}", the env display name, or the env URL.
-function hasLocalStageValue(ev, stage, label) {
+// True when a values{} key is an alias the renderer collapses onto `label`'s
+// column. Must stay in step with buildEnvVarValuesMatrix() in
+// skills/plan-alm/scripts/render-alm-plan.js, which maps all of these onto the
+// same column:
+//   "Staging"                          bare label
+//   "Deploy to Staging"                pipeline stage name
+//   "Staging (Deploy to Staging)"      composite label used by some settings files
+//   "CitizenServicesStaging"           stage.envName
+//   "https://contoso.crm.dynamics.com/" stage.envUrl
+// Label-derived aliases are compared case-insensitively (hand-edited settings
+// files drift in casing); envName / envUrl are exact, like the renderer.
+function isStageAlias(key, stage, label) {
+  if (typeof key !== 'string') return false;
   const lowerLabel = label.toLowerCase();
+  const lowerKey = key.trim().toLowerCase();
+  if (normalizeStageLabel(key).toLowerCase() === lowerLabel) return true;
+  if (lowerKey === `${lowerLabel} (deploy to ${lowerLabel})`) return true;
+  if (stage && stage.envName && key === String(stage.envName)) return true;
+  if (stage && stage.envUrl && key === String(stage.envUrl)) return true;
+  return false;
+}
+
+// True when ev.values carries a local (non-live) value for `stage` under any
+// alias the renderer collapses onto the same column (see isStageAlias).
+function hasLocalStageValue(ev, stage, label) {
   for (const [key, value] of Object.entries(ev.values || {})) {
     if (value == null || value === '') continue;
     if (isLiveSourced(ev, key)) continue;
-    if (normalizeStageLabel(key).toLowerCase() === lowerLabel ||
-        (stage && stage.envName && key === stage.envName) ||
-        (stage && stage.envUrl && key === stage.envUrl)) {
-      return true;
-    }
+    if (isStageAlias(key, stage, label)) return true;
   }
   return false;
 }
@@ -382,6 +442,14 @@ function hasLocalStageValue(ev, stage, label) {
 // Live-sourced cells are tagged in ev.valueSources so a later query can update
 // them, and they are cleared when the live record has since been deleted (only
 // for stages whose query succeeded). Returns { filled, updated, cleared }.
+//
+// Local precedence is enforced for EVERY plan stage, not just the ones queried
+// successfully: if an earlier refresh left a live `Staging` cell and the user
+// has since added `Deploy to Staging` to deployment-settings.json, that stale
+// live cell must go even when this run's Staging query failed — otherwise the
+// renderer (which prefers the exact-label key) keeps showing the stale live
+// value over the local override. Live fills/updates and deleted-record cleanup
+// stay restricted to stages present in `live.byStage`.
 function mergeLiveEnvVarValues(planData, projectRoot, live) {
   const counts = { filled: 0, updated: 0, cleared: 0 };
   backfillEnvVarValuesFromSettings(planData, projectRoot);
@@ -390,13 +458,16 @@ function mergeLiveEnvVarValues(planData, projectRoot, live) {
 
   const stageByLabel = new Map();
   for (const stage of (Array.isArray(planData.stages) ? planData.stages : [])) {
-    if (stage && typeof stage.label === 'string') stageByLabel.set(stage.label.trim(), stage);
+    if (stage && typeof stage.label === 'string' && stage.label.trim()) {
+      stageByLabel.set(stage.label.trim(), stage);
+    }
   }
+  const labels = new Set([...stageByLabel.keys(), ...Object.keys(live.byStage)]);
 
   for (const ev of planData.envVars) {
     if (!ev || typeof ev.schemaName !== 'string') continue;
     ev.values = (ev.values && typeof ev.values === 'object') ? ev.values : {};
-    for (const [label, valuesBySchema] of Object.entries(live.byStage)) {
+    for (const label of labels) {
       const stage = stageByLabel.get(label) || null;
       const currentIsLive = isLiveSourced(ev, label);
       if (hasLocalStageValue(ev, stage, label)) {
@@ -409,6 +480,9 @@ function mergeLiveEnvVarValues(planData, projectRoot, live) {
         }
         continue;
       }
+      // Query failed or stage not queried: leave its cells exactly as they are.
+      if (!Object.prototype.hasOwnProperty.call(live.byStage, label)) continue;
+      const valuesBySchema = live.byStage[label];
       const liveValue = valuesBySchema ? valuesBySchema[ev.schemaName] : undefined;
       if (liveValue == null || liveValue === '') {
         if (currentIsLive) {
@@ -887,7 +961,8 @@ function refreshSetupSolution(planData, projectRoot) {
     // valid post-state: setup-solution may have skipped all env vars (Tier 1
     // Skip-all + no Tier 2 promotions), in which case the tab should reflect
     // the empty existing state instead of carrying stale planned counts.
-    planData.envVars = envVarsMarker.envVars;
+    // Per-stage values/valueSources are carried forward by schema name.
+    planData.envVars = carryForwardEnvVarValues(planData.envVars, envVarsMarker.envVars);
   }
   // Refresh sizeAnalysis.envVarCount so the Overview stat card + Size Analysis
   // signal reflect the post-setup-solution count (after OAuth promotions,
@@ -1118,7 +1193,8 @@ function refreshConfigureEnvVariables(planData, projectRoot) {
   }
   const envVarsMarker = projectRoot ? readJson(almPath(projectRoot, 'lastEnvVars')) : null;
   if (envVarsMarker && Array.isArray(envVarsMarker.envVars)) {
-    planData.envVars = envVarsMarker.envVars;
+    // Keep per-stage values/valueSources by schema name — discovery rows have none.
+    planData.envVars = carryForwardEnvVarValues(planData.envVars, envVarsMarker.envVars);
   }
   // Backfill is the major payoff for this phase — the user just authored
   // per-stage values in deployment-settings.json and the rendered plan should
