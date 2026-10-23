@@ -2229,9 +2229,11 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   (`app-pages.<hash>.lock`, then the legacy `pages-<spelling>.lock`), so two spellings of one app's name share the lock on a
   case-sensitive file system as they share the page-publish record, and a build of an earlier release — which takes no build
   lock — is still kept out of the pages phase when it spells the app the same way. A lock is taken over only from a build
-  proven gone (`process-owner.js`), and said. The limits: builds in different workspaces are not excluded (do not bypass a
-  refusal with `--workspace`); a teardown, a download, `/genpage`, `apps.js` and a workspace clear take no build lock; a
-  build of 2.17/2.18 does its pre-pages work without one; different apps in one workspace hold different locks. Pinned by
+  proven gone (`process-owner.js`), and said; a warning callback that throws never leaves a lock held (the release is guarded
+  from the moment a lock is taken, and a warning given while locks are let go cannot stop the release). The limits:
+  builds in different workspaces are not excluded (do not bypass a refusal with `--workspace`); a teardown, a download,
+  `/genpage`, `apps.js` and a workspace clear take no build lock; a build of 2.17/2.18 does its pre-pages work without one;
+  different apps in one workspace hold different locks. Pinned by
   `app-build-lease.test.js`, `build-lease-cli.test.js`, `build-lease-real-bundle.test.js` (two builds over the real bundle,
   the second started inside the first's icon lookup, authored web resource write or pages-only app create: one of each, and
   a build that meets no other sends exactly the requests it sent before), `app-pages-lease.test.js` and

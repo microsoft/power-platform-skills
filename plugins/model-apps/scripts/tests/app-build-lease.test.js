@@ -341,6 +341,38 @@ test('a late release leaves a lock another build holds now as it is, without a w
   fs.rmSync(buildLock(stuck));
 });
 
+test('a warning callback that throws never leaves the lease behind: one that throws while a take-over is said lets the lock go, and is what the build throws; one that throws while the lock is let go changes nothing the build answers', async () => {
+  const logger = () => { throw new Error('logger unavailable'); };
+  // The take-over of a lock whose build is gone, said to a callback that throws.
+  const dir = makeTempDir('build-lease-warn-');
+  fs.writeFileSync(buildLock(dir), JSON.stringify({ ...ownerStamp({ pid: deadPid() }), rnd: 'held' }));
+  const first = solutionDouble();
+  await assert.rejects(engineBuild(spec(), dir, { sdk: first.sdk, warn: logger }), /^Error: logger unavailable$/);
+  assert.deepStrictEqual(first.reads, [], 'the build did not run');
+  assert.ok(!fs.existsSync(buildLock(dir)), 'and the lock it took over was let go — not left stamped with this process, which runs');
+  assert.strictEqual((await engineBuild(spec(), dir, { sdk: solutionDouble().sdk })).ok, true, 'the next apply proceeds');
+  // A release it cannot confirm, said to a callback that throws: the build's own result — or its own error — is what it answers.
+  for (const [what, sdk, outcome] of [
+    ['a build that succeeded', solutionDouble().sdk, (settled) => settled.value && settled.value.ok === true],
+    ['a build that failed', { queryRecords: async () => { throw new Error('the solution read failed'); } }, (settled) => settled.error && /the solution read failed/.test(settled.error.message)],
+  ]) {
+    const stuck = makeTempDir('build-lease-warn-');
+    const rmSync = fs.rmSync;
+    fs.rmSync = (target, ...rest) => {
+      if (path.resolve(String(target)) === path.resolve(buildLock(stuck))) throw Object.assign(new Error('EPERM: operation not permitted'), { code: 'EPERM' });
+      return rmSync.call(fs, target, ...rest);
+    };
+    let settled;
+    try {
+      settled = await engineBuild(spec(), stuck, { sdk, warn: logger }).then((value) => ({ value }), (error) => ({ error }));
+    } finally {
+      fs.rmSync = rmSync;
+    }
+    assert.ok(outcome(settled), `${what}: ${settled.error ? settled.error.stack : JSON.stringify(settled.value)}`);
+    fs.rmSync(buildLock(stuck));
+  }
+});
+
 test('a link or a folder at the lock\'s name is the file system problem it is, not another build applying — and nothing runs', async () => {
   const dir = makeTempDir('build-lease-planted-');
   fs.mkdirSync(buildLock(dir));

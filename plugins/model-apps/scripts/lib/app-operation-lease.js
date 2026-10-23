@@ -82,7 +82,7 @@ function takeLockFile(dir, file, { owner = {}, now = Date.now, stamp }) {
 // this holder's exact token, and a lock that holds another token now — a build that took it over after this one was judged gone — is that build's,
 // and is left without a word. A removal that cannot be confirmed (the file still holds the token when read back, or cannot be read at all: an
 // unreadable lock is not a removed one) is a warning, never an error: the work the lock guarded has already finished, so this must not turn a
-// finished build into a failure. A later build takes the lock over once this process is gone.
+// finished build into a failure. A later build takes the lock over once this process is gone. Never throws (sayAfterRelease).
 function releaseLockFile(handle, { warn, kind, appUnique }) {
   if (!handle || !handle.path || !handle.token) return;
   let confirmed = false;
@@ -98,8 +98,20 @@ function releaseLockFile(handle, { warn, kind, appUnique }) {
   } catch (e) {
     confirmed = !!e && e.code === 'ENOENT';
   }
-  if (!confirmed && typeof warn === 'function') {
-    warn(`could not confirm removal of the ${kind} lock for '${appUnique}': ${handle.path}. This run has finished; keep the workspace and its recovery records. If a later run still stops here, confirm no build is running before removing only this lock.`);
+  if (!confirmed) {
+    sayAfterRelease(warn, `could not confirm removal of the ${kind} lock for '${appUnique}': ${handle.path}. This run has finished; keep the workspace and its recovery records. If a later run still stops here, confirm no build is running before removing only this lock.`);
+  }
+}
+
+// A warning given while locks are let go, through the caller's `warn`. The release is done by then, and by the rule above it must not change what
+// the build answers — so a callback that throws (a logger that is gone, a pipe that closed) is not let out of here either: it would replace the
+// build's own result or error, and stop the release of the files still held after this one. The warning is lost; no lock is.
+function sayAfterRelease(warn, message) {
+  if (typeof warn !== 'function') return;
+  try {
+    warn(message);
+  } catch {
+    // Deliberately nothing: see above.
   }
 }
 
@@ -131,8 +143,10 @@ function pagesLocked(appUnique, blocking, lease) {
 // stopped on them until a person deleted the file. A later build now takes such a lock over itself when the process that took it is PROVABLY gone
 // (lib/process-owner.js), and every doubt keeps it: a pid that still runs, a lock made on another machine, platform or pid namespace, one with no
 // readable record — none is ever taken by age. The take-over is said through `deps.warn` — once for each build the locks belonged to (one build's
-// two files are one owner), and also when the second file then refuses and the first is let go again: the take-over did happen. Cross-machine or
-// cross-worktree concurrency for the SAME app is UNSUPPORTED. `deps` = seams: now, warn, and owner (the process-owner.js seams).
+// two files are one owner), and also when the second file then refuses and the first is let go again: the take-over did happen. A `warn` that throws
+// while it says so rolls the acquire back like a refusal and its error is thrown; one that throws while the files are let go is not let out
+// (sayAfterRelease). Cross-machine or cross-worktree concurrency for the SAME app is UNSUPPORTED. `deps` = seams: now, warn, and owner (the
+// process-owner.js seams).
 function acquireAppPagesLease(wsDir, appUnique, deps = {}) {
   const now = deps.now || (() => Date.now());
   const owner = deps.owner || {};
@@ -166,7 +180,15 @@ function acquireAppPagesLease(wsDir, appUnique, deps = {}) {
       throw pagesLocked(appUnique, path.join(wsDir, file), lease);
     }
     held.push(lease);
-    sayTakenOver(lease);
+    // The caller's `warn` runs only once the file is in `held`, inside the same rollback as a refusal: a callback that throws lets go of every file
+    // this call took — rather than leave them stamped with this process, which is alive, so no later build could take them over — and its error is
+    // what the caller gets, as for any acquire that failed.
+    try {
+      sayTakenOver(lease);
+    } catch (e) {
+      letGo();
+      throw e;
+    }
   }
   return { release: letGo };
 }
@@ -208,7 +230,9 @@ function buildLeaseInvalid() {
 // A lock whose owner is PROVEN gone is taken over, and `warn` says so; one whose owner is gone but that could not be taken over adds why. A create
 // that failed for another reason than the lock being there (a folder that cannot be written) is that error. The lease is let go only when
 // `operation` has settled — every request it awaited has answered — never by a timer, a signal handler or an exit hook that could fire while a
-// write is still in flight; a release that cannot confirm the lock is gone says so through `warn` and does not change the result.
+// write is still in flight; a release that cannot confirm the lock is gone says so through `warn` and does not change the result. The release is
+// guarded from the moment the lock is ours: a `warn` that throws while it says the take-over lets the lock go, and its error is thrown (the
+// operation does not run); one that throws while the lock is let go is not let out (sayAfterRelease).
 // `owner` and `now` are the process-owner.js seams, for tests.
 async function withAppBuildLease({ workspaceDir, appUniqueName, buildLease, warn, owner, now }, operation) {
   // A link or a file at the workspace's name is refused, a missing one is made (lib/safe-fs.js), and the answer is the folder's real path: what a
@@ -226,13 +250,15 @@ async function withAppBuildLease({ workspaceDir, appUniqueName, buildLease, warn
     if (lease.error) throw lease.error;
     throw buildLocked(appUniqueName, path.join(workspaceDir, file), lease);
   }
-  if (lease.reclaimed && typeof warn === 'function') {
-    warn(`released the build lock for '${appUniqueName}': the build that held it (${describeOwner(lease.previous)}) is no longer running`);
-  }
   const capability = Object.freeze({});
   const record = { root, app, active: true };
   capabilities.set(capability, record);
   try {
+    // Inside the guard: the caller's `warn` is the first thing outside this module that runs once the lock is ours, and a callback that throws must
+    // not leave the lock stamped with this process, which is alive — no later build could take it over.
+    if (lease.reclaimed && typeof warn === 'function') {
+      warn(`released the build lock for '${appUniqueName}': the build that held it (${describeOwner(lease.previous)}) is no longer running`);
+    }
     return await operation(capability);
   } finally {
     record.active = false;

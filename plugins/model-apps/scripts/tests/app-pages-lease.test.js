@@ -230,3 +230,34 @@ test('a release leaves a lock another build holds now as it is, without a word â
   assert.deepStrictEqual(names(stuck), [legacyName(app)], 'the hashed lock was removed; the one that could not be is reported, and left');
   fs.rmSync(legacy);
 });
+
+test('a warning callback that throws never leaves a pages lock behind: one that throws while a take-over is said lets go of every file the call took, and is what it throws; one that throws while the files are let go does not stop the release of the others', () => {
+  const app = 'contoso_app';
+  const logger = () => { throw new Error('logger unavailable'); };
+  const gone = JSON.stringify({ ...ownerStamp({ pid: deadPid() }), rnd: 'held' });
+  // The take-over of the hashed file, and of the legacy one (the hashed one then taken as it was free).
+  for (const [what, planted] of [['the hashed file', canonicalName(app)], ['the legacy file', legacyName(app)]]) {
+    const dir = makeTempDir('pages-warn-');
+    fs.writeFileSync(path.join(dir, planted), gone);
+    assert.throws(() => acquireAppPagesLease(dir, app, { warn: logger }), /^Error: logger unavailable$/, what);
+    assert.deepStrictEqual(names(dir), [], `${what}: every file the call took was let go`);
+    acquireAppPagesLease(dir, app).release();
+    assert.deepStrictEqual(names(dir), [], `${what}: and the next build takes both`);
+  }
+  // The legacy file cannot be removed, and the warning about it throws: the hashed file is let go all the same, and the release does not throw.
+  const dir = makeTempDir('pages-warn-');
+  const held = acquireAppPagesLease(dir, app, { warn: logger });
+  const legacy = path.join(dir, legacyName(app));
+  const rmSync = fs.rmSync;
+  fs.rmSync = (target, ...rest) => {
+    if (path.resolve(String(target)) === path.resolve(legacy)) throw Object.assign(new Error(`EPERM: operation not permitted, unlink '${legacy}'`), { code: 'EPERM' });
+    return rmSync.call(fs, target, ...rest);
+  };
+  try {
+    assert.doesNotThrow(() => held.release());
+  } finally {
+    fs.rmSync = rmSync;
+  }
+  assert.deepStrictEqual(names(dir), [legacyName(app)], 'the hashed lock was let go after the legacy one could not be');
+  fs.rmSync(legacy);
+});
