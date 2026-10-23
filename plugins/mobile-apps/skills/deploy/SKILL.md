@@ -163,17 +163,7 @@ If a native packaging step fails, surface the error and STOP. If the app renders
 **Push notifications.** When the app has its own Firebase client files in `firebase/` (added by `/add-native push-notifications`), the packaging step publishes each one in its platform's asset package and pins it in `manifest.json` as `pushNotificationsConfig`, and fails on an incomplete file. The template's placeholder files are never published. The wrap injects the file when push notifications are turned on for that platform in the wrap wizard; makers can upload the file there instead. Report what was packaged — this check only warns and never blocks the deploy:
 
 ```bash
-node -e '
-const fs = require("fs");
-const { exp } = require("expo/config").getConfig(process.cwd(), { skipSDKVersionRequirement: true });
-const defaults = { android: "firebase/google-services.json", ios: "firebase/GoogleService-Info.plist" };
-for (const [platform, defaultFile] of Object.entries(defaults)) {
-  const file = exp[platform]?.googleServicesFile ?? defaultFile;
-  if (!fs.existsSync(file) || fs.readFileSync(file, "utf8").includes("google_app_id_tag")) continue;
-  const { pushNotificationsConfig } = JSON.parse(fs.readFileSync(`dist/powerapps-customer-assets-${platform}/manifest.json`, "utf8"));
-  if (pushNotificationsConfig) console.log(`✓ ${platform} Firebase client file packaged for push notifications (${pushNotificationsConfig.path})`);
-  else console.warn(`⚠ ${file} was not packaged for ${platform}: push notifications need @microsoft/power-apps-native-host 0.6.0 or later (then rerun npm run bundle:${platform}), or the file uploaded in the wrap wizard.`);
-}'
+node "${PLUGIN_ROOT}/scripts/firebase-client-files.js" report-packaged
 ```
 
 ### Step 2.5 — Offline profile coverage gate

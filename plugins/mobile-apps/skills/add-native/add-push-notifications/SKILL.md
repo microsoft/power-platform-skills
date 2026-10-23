@@ -52,37 +52,7 @@ Validate every file the user gives before anything is written. Pass the bundle I
 
 ```bash
 cd -- '<working_dir>' || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
-node - '<bundle-id>' '<firebase-file-path>' '<second-firebase-file-path>' <<'NODE'
-const fs = require('fs');
-const path = require('path');
-const plist = require('@expo/plist');
-const [bundleId, ...files] = process.argv.slice(2);
-const isValue = (value) => typeof value === 'string' && value.trim() !== '' && !value.endsWith('_tag');
-const problems = [];
-for (const file of files) {
-  const name = path.basename(file);
-  try {
-    if (file.endsWith('.json')) {
-      const config = JSON.parse(fs.readFileSync(file, 'utf8'));
-      const client = (config.client ?? []).find((c) => c.client_info?.android_client_info?.package_name === bundleId);
-      if (!client) { problems.push(`${name} has no Android app for package ${bundleId}`); continue; }
-      const values = [config.project_info?.project_id, config.project_info?.project_number, client.client_info?.mobilesdk_app_id, client.api_key?.[0]?.current_key];
-      if (!values.every(isValue)) { problems.push(`${name} is incomplete or holds placeholder values`); continue; }
-      console.log(`OK: ${name} (Android) for ${bundleId}, Firebase project ${config.project_info.project_id}`);
-    } else if (file.endsWith('.plist')) {
-      const config = (plist.default ?? plist).parse(fs.readFileSync(file, 'utf8'));
-      if (config.BUNDLE_ID !== bundleId) { problems.push(`${name} is for bundle ID ${config.BUNDLE_ID}, not ${bundleId}`); continue; }
-      if (![config.GOOGLE_APP_ID, config.API_KEY, config.GCM_SENDER_ID, config.PROJECT_ID].every(isValue)) { problems.push(`${name} is incomplete or holds placeholder values`); continue; }
-      console.log(`OK: ${name} (iOS) for ${bundleId}, Firebase project ${config.PROJECT_ID}`);
-    } else {
-      problems.push(`${name} is neither a google-services.json nor a GoogleService-Info.plist`);
-    }
-  } catch (error) {
-    problems.push(`${name} could not be read: ${error.message}`);
-  }
-}
-if (problems.length) { console.error('INVALID: ' + problems.join('; ')); process.exit(1); }
-NODE
+node "${PLUGIN_ROOT}/scripts/firebase-client-files.js" validate '<bundle-id>' '<firebase-file-path>' '<second-firebase-file-path>' --project-root '<working_dir>'
 ```
 
 On `INVALID`, show the reason and ask for the right file; never edit a Firebase file's contents. A `google-services.json` may also list other Android apps (for example a development package); the wrap uses the one for the wrap bundle ID. Use files from one Firebase project for both platforms, so a notification sent to a topic or the app reaches both.
