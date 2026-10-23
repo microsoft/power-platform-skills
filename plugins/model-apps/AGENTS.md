@@ -2184,8 +2184,10 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   unchanged, and they apply whatever code the answer carries, an unlisted one included — with one exception: a key create answered
   `0x80060894` (EntityKeyWithSelectedAttributesExists, "An entity key with the selected attributes already exists on entity.": the
   platform allows one key per set of columns, and another key is over the declared key's) is never read by its words. Those words
-  read as an already-exists answer, so an English build skipped a key that was never created (and its verification then found it
-  missing), while a Spanish one stopped. The key step decides that code in every language from the table's keys, read once more by
+  read as an already-exists answer, so where the platform's message was in English the build skipped a key that was never created
+  (and its verification then found it missing), and where it was in another language the build stopped — the language of the
+  message, not of the environment: one whose only language is Spanish answered in English. The key step decides that code, whatever
+  the language of the answer, from the table's keys, read once more by
   the table probe's narrow request (`keyOverSameColumns`, `lib/entity-provision.js`): the declared key over those columns (its
   schema name in any case) is a skip, as an existing key is; a key of another name stops the build — a refusal, not retried —
   naming that key, the columns and what to do: declare that key's name instead, or delete it in Power Apps if it is a leftover;

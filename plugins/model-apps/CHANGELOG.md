@@ -11,7 +11,7 @@ The bundled SDK is unchanged (power-platform-ux a3443479, as in 2.18.0). A `--ch
 a deployed page it leaves alone, a regression of 2.18.0. Two applies of one app no longer run at once in one workspace, the pages lock
 no longer depends on how the app's name is spelled, and a new table's column or status reason that Dataverse refuses moments after the
 table's create is sent again once a read proves it missing. A name such as `__proto__` or `constructor` works like any other name, a
-key over another key's columns stops the build in every language instead of being skipped in English, and a generated page whose
+key over another key's columns stops the build instead of being skipped when the platform answers in English, and a generated page whose
 default export is a generic arrow function is accepted. The token guard also takes out the base64 of each part of a token and reads
 the bytes the plugin's file writers are given, and the genpage evals grade 17 more of their expectations.
 
@@ -57,13 +57,15 @@ the bytes the plugin's file writers are given, and the genpage evals grade 17 mo
   table; a status reason refused this way is added at the end of the data-model step. Any other refusal, and a refusal for a table
   that already existed, is handled as before; a check that runs out stops the build with the original refusal and says to run the
   build again.
-- **An alternate key over the columns of another key stops the build in every language** (`0x80060894`). Dataverse allows one key per
-  set of columns. An English build skipped such a key as if it already existed — it was never created, and verification then reported
-  it missing — and a build in another language stopped with the platform's raw error. The build now reads the table's keys after that
-  refusal: it skips the key only when the key over those columns is the declared one, and otherwise stops, naming the existing key and
-  its columns and what to do — declare that key's name or delete it if it is a leftover, keep one of two keys the spec declares over
-  the same columns, or first reconcile a key whose columns are not those the spec declares for it. When the read cannot tell, the
-  build stops with the platform's error.
+- **An alternate key over the columns of another key stops the build whatever language the platform answers in** (`0x80060894`).
+  Dataverse allows one key per set of columns. When the platform's message was in English, the build skipped such a key as if it already
+  existed — it was never created, and verification then reported it missing — and when the message was in another language it stopped
+  with the platform's raw error. That is the language of the platform's message, not of the build or the environment: an environment
+  whose only language is Spanish answered in English. The build now reads the table's keys after that refusal: it skips the key only
+  when the key over those columns is the declared one, and otherwise stops, naming the existing key and its columns and what to do —
+  declare that key's name or delete it if it is a leftover, keep one of two keys the spec declares over the same columns, or first
+  reconcile a key whose columns are not those the spec declares for it. When the read cannot tell, the build stops with the platform's
+  error.
 - **A name that is also a built-in JavaScript property name works like any other name.** `__proto__`, `constructor`, `toString`,
   `hasOwnProperty` and the like can name a dashboard, a persona, a business process flow, a status reason or a Custom API parameter,
   and `constructor` a page key. A dashboard called `__proto__` in the navigation stopped the app step; a new app whose navigation held

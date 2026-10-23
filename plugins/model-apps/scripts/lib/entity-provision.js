@@ -1389,8 +1389,9 @@ function causeChain(err, maxDepth = 6) {
 // relationship it is only the cue to read what exists, which alone decides what is reused. The lists only ADD recognition:
 // isAlreadyExists keeps its 409 and English-word rules unchanged, and they still read an answer whatever code it carries, an unlisted one
 // included. The one answer that never reaches them is a key create's 0x80060894: its English words ("An entity key with the selected
-// attributes already exists on entity.") read as an already-exists answer, which made an English build skip a key that was never created
-// while a Spanish one stopped, so the key step decides that code by the table's keys before anything reads its words (KEY_OVER_SAME_COLUMNS).
+// attributes already exists on entity.") read as an already-exists answer, which made a build skip a key that was never created when the
+// platform's message was in English, and stop when it was in another language, so the key step decides that code by the table's keys before
+// anything reads its words (KEY_OVER_SAME_COLUMNS).
 // Names and messages are the platform's reference:
 // See: https://learn.microsoft.com/en-us/power-apps/developer/data-platform/reference/web-service-error-codes
 // Lower case, because serviceCodeOf (lib/retry-policy.js) lower-cases what it reads: the platform writes a code in either case (the
@@ -2312,9 +2313,11 @@ async function payOwedLengths({ runner, sdk, provision, spec, warn, sleep }, owe
 // columns: EntityKeyWithSelectedAttributesExists, in the reference's words
 //   HTTP 400 {"error":{"code":"0x80060894","message":"An entity key with the selected attributes already exists on entity."}}
 // That does not say the DECLARED key is there: the key over those columns may be another one. Its English words read as an already-exists
-// answer all the same (isAlreadyExists), so an English build skipped the key — which was then never created, and the build's verification
-// found it missing — while the same answer in Spanish stopped the build with the platform's words. So the key step decides this code, in
-// every language and before any word is read, from the keys the table holds (keyOverSameColumns).
+// answer all the same (isAlreadyExists), so when the platform's message was in English the build skipped the key — which was then never
+// created, and the build's verification found it missing — while the same answer in another language stopped the build with the platform's
+// words. Which of the two happened depends on the language of the MESSAGE, not of the build or the environment: measured live, an environment
+// whose only language is Spanish answered this code in English. So the key step decides this code, whatever the language of the answer and
+// before any word is read, from the keys the table holds (keyOverSameColumns).
 // See: https://learn.microsoft.com/en-us/power-apps/developer/data-platform/reference/web-service-error-codes
 const KEY_OVER_SAME_COLUMNS = '0x80060894';
 
