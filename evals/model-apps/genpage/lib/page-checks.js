@@ -1,17 +1,23 @@
 'use strict';
 
 // Layer 2 checks of how a generated page is built, for the per-eval Phase 5 expectations that
-// assertions-layer-2.js registers: a wizard's step state and its Next/Back buttons, the review step's
-// summary, the labels of form fields, a search box beside a filter toolbar, text that goes through the
-// translate helper, and choice values written as the enum names RuntimeTypes.ts declares. Each
-// returns a list of problems (empty when the page meets the expectation), or null when the page holds
-// nothing the expectation is about; the registrations turn that into pass / fail / skip.
+// assertions-layer-2.js registers: the review step of a wizard and its submit, the labels of form fields,
+// a search box beside a filter toolbar, text that goes through the translate helper, and choice values
+// written as the enum names RuntimeTypes.ts declares. Each returns a list of problems (empty when the page
+// meets the expectation), or null when the page holds nothing the expectation is about; the registrations
+// turn that into pass / fail / skip.
+//
+// A wizard's Next/Back navigation is NOT graded here: whether a button moves the step is the value the
+// step's setter receives — an updater's return value, a local, a helper's argument — and a scan of the
+// handler's text cannot prove it (`setStep((s) => { const next = s + 1; return s; })` mentions the
+// increment and never moves). It needs data-flow analysis, so tests/eval-coverage-baseline.json records it
+// as unscored instead.
 //
 // Every check reads structure through lib/tsx-structure.js, so a word in a comment, a string or a
 // label never counts as code, and code is never taken for text. What each one does NOT judge is said
 // beside it; a person still judges the rest in the Layer 3 rubric.
 
-const { sourceView, jsxElements, jsxTextRuns, declarationSource, matchingClose, patternNames } = require('./tsx-structure.js');
+const { sourceView, jsxElements, jsxTextRuns, declarationSource, matchingClose } = require('./tsx-structure.js');
 const { runtimeEnums } = require('./expectation-evidence.js');
 const { escapeRe } = require('./source-evidence.js');
 
@@ -58,11 +64,6 @@ function stepStates(content) {
   return out;
 }
 
-function stepChoosesView(code, step) {
-  const name = escapeRe(step);
-  return new RegExp(`(?<![.\\w$])${name}\\s*(?:===?|!==?|<=?|>=?)|(?:===?|!==?|<=?|>=?)\\s*${name}(?![\\w$])|\\bswitch\\s*\\(\\s*${name}\\s*\\)|\\[\\s*${name}\\s*\\]`).test(code);
-}
-
 // The top-level pieces of `code` between `start` and `end` split at `separator` (a comma or an operator
 // such as `&&`), as [start, end) ranges; brackets nest, and strings are already blank in the code view.
 function splitTopLevel(code, start, end, separator) {
@@ -81,97 +82,6 @@ function splitTopLevel(code, start, end, separator) {
   }
   parts.push([from, end]);
   return parts;
-}
-
-// The argument source of every call of `setter` in a handler's source: `setStep((s) => s + 1)` gives `(s) => s + 1`.
-function setterArguments(text, setter) {
-  const { code } = sourceView(text);
-  const out = [];
-  for (const m of code.matchAll(new RegExp(`(?<![.\\w$])${escapeRe(setter)}\\s*\\(`, 'g'))) {
-    const open = m.index + m[0].length - 1;
-    const close = matchingClose(code, open);
-    if (close > open) out.push(text.slice(open + 1, close));
-  }
-  return out;
-}
-
-// Whether `expression` is `name` moved by one: `name + 1` or `1 + name` forward, `name - 1` back, also inside
-// a clamp (`Math.min(3, name + 1)`).
-function movesByOne(expression, name, direction) {
-  const { code } = sourceView(expression);
-  const n = escapeRe(name);
-  const re = direction > 0
-    ? new RegExp(`(?<![.\\w$])${n}\\s*\\+\\s*1(?![\\w$.])|(?<![\\w$.])1\\s*\\+\\s*${n}(?![\\w$])`)
-    : new RegExp(`(?<![.\\w$])${n}\\s*-\\s*1(?![\\w$.])`);
-  return re.test(code);
-}
-
-// Whether one argument a handler gives the step's setter is the step moved by one. The value has to BE
-// the argument — an increment computed beside the call does not move anything:
-//   setStep((s) => Math.min(3, s + 1))          an updater moving its own parameter
-//   setStep(step + 1)                           the state, moved
-//   const next = step + 1; setStep(next)        a local holding it
-//   const goTo = (n) => setStep(n); goTo(step + 1)   a helper's parameter, given the moved value where it is called
-//   const next = step + 1; setStep(step)        NOT a move: the setter gets the value it already has
-function argumentMoves(arg, handler, state, direction) {
-  const updater = /^\s*(?:async\s+)?(?:\(\s*([A-Za-z_$][\w$]*)\s*(?::[^)]*)?\)|([A-Za-z_$][\w$]*))\s*=>/.exec(arg);
-  if (updater) return movesByOne(arg.slice(updater[0].length), updater[1] || updater[2], direction);
-  if (movesByOne(arg, state.value, direction)) return true;
-  const name = /^\s*([A-Za-z_$][\w$]*)\s*$/.exec(arg)?.[1];
-  if (!name) return false;
-  const { code } = sourceView(handler);
-  const local = new RegExp(`\\b(?:const|let|var)\\s+${escapeRe(name)}\\s*(?::[^=;]+)?=([^;\\n]+)`).exec(code);
-  if (local) {
-    const valueStart = local.index + local[0].length - local[1].length;
-    if (movesByOne(handler.slice(valueStart, local.index + local[0].length), state.value, direction)) return true;
-  }
-  const helpers = /\b(?:(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*(?:async\s*)?\(([^)]*)\)\s*(?::[^=]+)?=>|function\s+([A-Za-z_$][\w$]*)\s*\(([^)]*)\))/g;
-  for (const m of code.matchAll(helpers)) {
-    const helper = m[1] || m[3];
-    const index = patternNames(m[2] ?? m[4]).indexOf(name);
-    if (index < 0) continue;
-    for (const call of code.matchAll(new RegExp(`(?<![.\\w$])${escapeRe(helper)}\\s*\\(`, 'g'))) {
-      const open = call.index + call[0].length - 1;
-      const close = matchingClose(code, open);
-      if (close < 0) continue;
-      const given = splitTopLevel(code, open + 1, close, ',')[index];
-      if (given && movesByOne(handler.slice(given[0], given[1]), state.value, direction)) return true;
-    }
-  }
-  return false;
-}
-
-// Next/Back buttons that move the step: a button labelled Next (or Continue) whose handler gives the step's
-// setter the step plus one, and one labelled Back (or Previous) whose handler gives it the step minus one.
-function stepButtons(content, state) {
-  const { src } = sourceView(content);
-  const found = { next: false, back: false };
-  for (const button of jsxElements(content, BUTTON_TAGS)) {
-    const label = buttonLabel(src, button);
-    const onClick = button.attrs.get('onClick');
-    if (!onClick || onClick.kind !== 'expression') continue;
-    const handler = handlerSource(content, onClick.value);
-    const args = setterArguments(handler, state.setter);
-    if (/\b(?:next|continue)\b/i.test(label) && args.some((arg) => argumentMoves(arg, handler, state, 1))) found.next = true;
-    if (/\b(?:back|previous|prev)\b/i.test(label) && args.some((arg) => argumentMoves(arg, handler, state, -1))) found.back = true;
-  }
-  return found;
-}
-
-// eval 4: "Generated code includes step state management (current step tracking) and Next/Back navigation".
-function wizardNavigationProblems(content) {
-  const { code } = sourceView(content);
-  const states = stepStates(content);
-  if (!states.length) return ['no step state (a useState whose value is the current step, e.g. const [step, setStep] = useState(1))'];
-  const problems = [];
-  for (const state of states) {
-    if (!stepChoosesView(code, state.value)) { problems.push(`${state.value} never chooses what the page renders`); continue; }
-    const buttons = stepButtons(content, state);
-    if (buttons.next && buttons.back) return [];
-    if (!buttons.next) problems.push(`no Next button whose handler advances ${state.setter} by one`);
-    if (!buttons.back) problems.push(`no Back button whose handler moves ${state.setter} back by one`);
-  }
-  return problems;
 }
 
 // The JSX shown for each value of the step, as { step, start, end, kind } over the code view:
@@ -610,6 +520,6 @@ function choiceEnumProblems(content, runtimeTypes) {
 }
 
 module.exports = {
-  wizardNavigationProblems, reviewSummaryProblems, formFieldLabelProblems, searchAndFilterProblems,
+  reviewSummaryProblems, formFieldLabelProblems, searchAndFilterProblems,
   translateCoverageProblems, choiceEnumProblems, stepStates, boundFields,
 };

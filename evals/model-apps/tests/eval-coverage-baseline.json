@@ -20,6 +20,12 @@
         "reason": "Gradeable from the plan text, but the captured run 2-mock-dashboard-real shows real drift: its plan draws the chart in inline SVG and uses Table, not D3.js and DataGrid (references/rules.md: D3.js for all charts). A correct check fails that capture, the runners have no expected-failure mark, and a check loosened to accept SVG or Table would hide the drift."
       },
       {
+        "eval": 4,
+        "status": "deferred",
+        "text": "Phase 5 (Page Builder): Generated code includes step state management (current step tracking) and Next/Back navigation",
+        "reason": "Gradeable offline only with data-flow analysis. Whether Next and Back move the step is the value the step's setter receives: what an updater callback returns, or what a local or a helper's argument holds when the setter runs. A syntactic scan of the handler can find an increment but cannot prove the setter receives it: setStep((s) => { const next = s + 1; return s; }) computes the next step and returns the old one, so the wizard never advances. Grading it needs a parse of the handler and the updater's return value, which the lexer-based page checks do not have; a check that scans the handler's text would pass that page."
+      },
+      {
         "eval": 13,
         "status": "deferred",
         "text": "Phase 5 (Page Builder): Generated .tsx fetches usersettings via dataApi.retrieveRow and uses formatDate/formatNumber/formatCurrency helpers",

@@ -27,7 +27,7 @@ const { workerProblems } = require('./worker-contract.js');
 const { customApiProblems } = require('./custom-api-contract.js');
 const { gradeEvidence } = require('./evidence-utils.js');
 const {
-  wizardNavigationProblems, reviewSummaryProblems, formFieldLabelProblems, searchAndFilterProblems,
+  reviewSummaryProblems, formFieldLabelProblems, searchAndFilterProblems,
   translateCoverageProblems, choiceEnumProblems,
 } = require('./page-checks.js');
 const { nestedDefinitionProblems } = require('./tsx-structure.js');
@@ -609,12 +609,11 @@ PHASE5_EXPECTATIONS.set(
   ({ files }) => everyFile(files, (file) => formFieldLabelProblems(file.content), 'no form fields')
 );
 
-// eval 4's wizard: step state that chooses what renders, and Next/Back buttons that move it
-// (lib/page-checks.js wizardNavigationProblems).
-PHASE5_EXPECTATIONS.set(
-  'Phase 5 (Page Builder): Generated code includes step state management (current step tracking) and Next/Back navigation',
-  ({ files }) => someFile(files, (file) => wizardNavigationProblems(file.content))
-);
+// eval 4's wizard: "Generated code includes step state management (current step tracking) and Next/Back
+// navigation" has NO check. Whether Next and Back move the step is the value the step's setter receives,
+// which a scan of the handler's text cannot prove (an updater can compute the next step and return the
+// old one); grading it needs data-flow analysis, so tests/eval-coverage-baseline.json records it as
+// unscored rather than registering a check that would pass a wizard that never advances.
 
 PHASE5_EXPECTATIONS.set(
   'Phase 5 (Page Builder): Step 3 (review) shows a summary of entered data before submission',

@@ -2,15 +2,16 @@
 
 // Unit tests for the Phase 5 page checks graded from how a generated page is BUILT
 // (lib/page-checks.js, lib/tsx-structure.js and lib/column-contract.js, registered in
-// lib/assertions-layer-2.js): eval 4's wizard steps, review summary and field labels, eval 5's top-level
-// functions, eval 12's search box beside a filter toolbar, eval 13's translated text, eval 15's choice
-// names, and the column names evals 1 and 7 verify against RuntimeTypes.ts.
+// lib/assertions-layer-2.js): eval 4's review summary and field labels (its step navigation is recorded as
+// unscored instead, and a test pins why), eval 5's top-level functions, eval 12's search box beside a filter
+// toolbar, eval 13's translated text, eval 15's choice names, and the column names evals 1 and 7 verify
+// against RuntimeTypes.ts.
 //
 // Each check PASSES on the committed fixture it grades, FAILS on an in-memory mutation of that page
 // that introduces exactly the regression it exists to catch, and SKIPs only where its evidence is not
 // part of a page. Mutations go through `edit`, which asserts the text it replaces is really there, so a
 // fixture change cannot silently turn a failing case into a vacuous one. Small inline pages pin the
-// equivalent forms a check accepts (a handler followed one level, a Fluent Field's label).
+// equivalent forms a check accepts (a condition read through a declaration, a Fluent Field's label).
 
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
@@ -19,6 +20,9 @@ const path = require('node:path');
 const { PHASE5_EXPECTATIONS } = require('../lib/assertions-layer-2.js');
 const { loadFixtures } = require('../lib/fixture-loader.js');
 const { nestedDefinitionProblems, jsxElements, jsxTextRuns, patternNames } = require('../lib/tsx-structure.js');
+const layer1 = require('../run-layer-1.js');
+const layer2 = require('../run-layer-2.js');
+const BASELINE = require('../../tests/eval-coverage-baseline.json');
 
 const FIXTURES = loadFixtures(path.join(__dirname, '..', 'fixtures'));
 
@@ -95,22 +99,20 @@ const WIZARD = 'Phase 5 (Page Builder): Generated code includes step state manag
 const REVIEW = 'Phase 5 (Page Builder): Step 3 (review) shows a summary of entered data before submission';
 const LABELS = 'Phase 5 (Page Builder): All form fields have aria-labels or aria-labelledby for accessibility';
 
-test('eval 4: step state chooses the step and Next/Back buttons move it by one', () => {
-  assertPass(grade(WIZARD, committed(E4)));
-  assertFail(grade(WIZARD, withPage(E4, 'page.tsx', ['onClick={() => setStep((s) => Math.min(3, s + 1))}', 'onClick={() => undefined}'])), /no Next button whose handler advances setStep/);
-  assertFail(grade(WIZARD, withPage(E4, 'page.tsx', ['setStep((s) => Math.max(1, s - 1))', 'setStep((s) => s)'])), /no Back button whose handler moves setStep back/);
-  assertFail(grade(WIZARD, withPage(E4, 'page.tsx', ['const [step, setStep] = React.useState(1);', 'const [phase, setPhase] = React.useState(1);'])), /no step state/);
-});
-
-test('eval 4: a Next handler is followed one level, and step state must choose what renders', () => {
-  const page = (body) => `const GeneratedComponent = () => {
-  const [currentStep, setCurrentStep] = useState(0);
-  const goNext = () => setCurrentStep((s) => s + 1);
-  const goBack = () => setCurrentStep(currentStep - 1);
-  return <div>${body}<Button onClick={goBack}>Back</Button><Button onClick={() => goNext()}>{translate('next')}</Button></div>;
-};`;
-  assertPass(grade(WIZARD, inline(page('{currentStep === 0 && <A />}'))));
-  assertFail(grade(WIZARD, inline(page('<A />'))), /currentStep never chooses what the page renders/);
+// The step navigation is recorded as unscored (tests/eval-coverage-baseline.json): whether Next and Back move
+// the step is the value the step's setter RECEIVES, and a syntactic scan of a handler cannot prove that —
+// `setStep((s) => { const next = s + 1; return s; })` computes the next step and returns the old one, so the
+// wizard never advances, though the increment is right there in the handler. Grading it needs data-flow
+// analysis, so no check is registered in either runner rather than one that passes a page like that.
+test('eval 4: step state and Next/Back navigation stay unscored, because what the setter receives needs data-flow analysis', () => {
+  assert.equal(PHASE5_EXPECTATIONS.has(WIZARD), false, 'no Layer 2 check is registered for the step navigation');
+  assert.equal(layer2.getExpectationCheck(WIZARD), undefined, 'the Layer 2 runner finds no check for it');
+  assert.equal(layer1.getExpectationCheck(WIZARD), undefined, 'the Layer 1 runner finds no check for it');
+  const entry = BASELINE.genpage.unscored.find((e) => e.text === WIZARD);
+  assert.ok(entry, 'the coverage baseline records the expectation as unscored');
+  assert.equal(entry.eval, 4);
+  assert.equal(entry.status, 'deferred');
+  assert.match(entry.reason, /data-flow analysis/);
 });
 
 test('eval 4: the review step shows every entered field and gates the submit', () => {
@@ -276,18 +278,6 @@ test('eval 5: a nested utility\'s own locals are not bindings it closes over', (
     ['// ---- Status constants', 'const scale = 100;\n\n// ---- Status constants'],
     ['    const handleDragEnd = () => {', '    const handleScale = () => {\n        const scale = 2;\n        setHoverCol(null);\n        return scale;\n    };\n    const percent = (n: number) => Math.round(n * scale);\n    const handleDragEnd = () => {']);
   assertFail(grade(TOP_LEVEL, sibling), /utility percent is defined inside another function but reads nothing from it/);
-});
-
-test('eval 4: Next and Back must give the setter the moved value, not merely mention an increment', () => {
-  const NEXT = 'onClick={() => setStep((s) => Math.min(3, s + 1))}';
-  const BACK = 'onClick={() => setStep((s) => Math.max(1, s - 1))}';
-  const HELPER = ['const handleSubmit = async () => {', 'const goTo = (n: number) => setStep(n);\n\n    const handleSubmit = async () => {'];
-  assertFail(grade(WIZARD, withPage(E4, 'page.tsx', [NEXT, 'onClick={() => { const next = step + 1; setStep(step); }}'])), /no Next button whose handler advances setStep/);
-  assertFail(grade(WIZARD, withPage(E4, 'page.tsx', [BACK, 'onClick={() => { const prev = step - 1; setStep(step); }}'])), /no Back button whose handler moves setStep back/);
-  // The moved value may come through a local, or through a helper's parameter.
-  assertPass(grade(WIZARD, withPage(E4, 'page.tsx', [NEXT, 'onClick={() => { const next = step + 1; setStep(next); }}'])));
-  assertPass(grade(WIZARD, withPage(E4, 'page.tsx', HELPER, [NEXT, 'onClick={() => goTo(step + 1)}'], [BACK, 'onClick={() => goTo(step - 1)}'])));
-  assertFail(grade(WIZARD, withPage(E4, 'page.tsx', HELPER, [NEXT, 'onClick={() => goTo(step)}'])), /no Next button/);
 });
 
 test('eval 4: every submit is reachable only on the review step', () => {
