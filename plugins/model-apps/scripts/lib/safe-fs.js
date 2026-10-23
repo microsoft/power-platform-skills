@@ -27,8 +27,9 @@ const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
 // Everything this module writes has the access tokens the process obtained taken out first: it is the one writer of the build's journal and status file, of what a download writes, of a page's file and its deployed copy
-// (tests/output-token-writers.test.js lists every other write in the plugin and why none of them can carry a token). Text only: bytes a caller gives are written as they are.
-const { redactOutput } = require('./output-redaction.js');
+// (tests/output-token-writers.test.js lists every other write in the plugin and why none of them can carry a token). A text is cleaned as a text; bytes — any view of an ArrayBuffer, or a string given with a `hex`,
+// `base64` or `base64url` encoding — are read as the bytes the file gets, and a hit is masked with as many `*` (redactFileData).
+const { redactFileData } = require('./output-redaction.js');
 
 const UNSAFE = 'UNSAFE_OUTPUT';
 
@@ -49,6 +50,17 @@ function unsafe(message, reason) {
 
 function sleepSync(ms) {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+// `data` with the access tokens the process obtained taken out (redactFileData), and the options to write it with. A string given with a `hex`, `base64` or `base64url` encoding that held a token comes back as the
+// masked bytes it stands for, and those are written WITHOUT that encoding: `writeFileSync` and `appendFileSync` would otherwise decode them a second time. Every other option, and the encoding of anything else, is
+// the caller's. Throws, before anything is created or written, for data that cannot be checked — never writes it unchecked.
+function checkedForTokens(data, opts) {
+  const checked = redactFileData(data, opts);
+  if (checked === data || typeof data !== 'string' || typeof checked === 'string') return { data: checked, opts };
+  const decoded = { ...opts };
+  delete decoded.encoding;
+  return { data: checked, opts: decoded };
 }
 
 function renameWithRetry(fsImpl, from, to) {
@@ -234,7 +246,7 @@ function assertPlainFileTarget(filePath, opts) {
 
 function writeFileSafe(filePath, data, opts) {
   if (typeof filePath !== 'string' || !filePath.trim()) unsafe('refusing to write: no path was given', 'uninspectable');
-  data = redactOutput(data);
+  ({ data, opts } = checkedForTokens(data, opts));
   const fsImpl = (opts && opts.fs) || fs;
   const resolved = path.resolve(filePath);
   const realDir = assertSafeOutputDir(path.dirname(resolved), { fs: fsImpl });
@@ -444,7 +456,8 @@ function removeTreeWithRetry(dir, opts) {
 
 function appendFileSafe(filePath, data, opts) {
   if (typeof filePath !== 'string' || !filePath.trim()) unsafe('refusing to append: no path was given', 'uninspectable');
-  data = redactOutput(data);
+  // The chunk is checked on its own, before anything is opened: the file is not read, and a token split between two appends is two chunks. A failed check writes nothing.
+  ({ data, opts } = checkedForTokens(data, opts));
   const fsImpl = (opts && opts.fs) || fs;
   const resolved = path.resolve(filePath);
   const realDir = assertSafeOutputDir(path.dirname(resolved), { fs: fsImpl });
