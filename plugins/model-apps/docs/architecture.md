@@ -225,6 +225,15 @@ deterministic, idempotent, narrated SDK build. Create and **edit share one path*
 `--non-interactive`/autopilot mode suppresses prompts only — it never bypasses safety gates.
 The durable `<app>_pagemanifest` web resource carries page semantics across download and rebuild.
 
+**One apply at a time (build lease):** each `--apply` run — the data pre-build (run 1), the full build
+(run 2) and a `--changed-only` apply — holds the app's build lease in its workspace
+(`<workspace>/app-build.<hash>.lock`, `lib/app-operation-lease.js`) from before its auth check to its
+result: a second apply of the same app in that workspace stops at once with `build-locked`, before it
+reads or writes anything. Page generation between run 1 and run 2 holds no lease; run 2 takes a new one
+and rediscovers state. Inside run 2 the pages phase also holds the two pages locks
+(`app-pages.<hash>.lock` and the legacy `pages-<spelling>.lock`). Teardown, download, `/genpage` and
+`apps.js` take no build lease, and builds in different workspaces are not excluded.
+
 **Three-authority page identity (pages phase):** generative-page management consults three
 authorities — all matching by id, never by display name:
 (1) **IDENTITY** — the `<app>_pagemanifest` (`key → pageId`); a downloaded spec's own

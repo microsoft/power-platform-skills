@@ -139,6 +139,16 @@ full build     (engine, run 2)  build --apply (FULL, idempotent) → ui + app + 
   data-model *discovery* (a few metadata reads, no writes) — acceptable and DRY.
 - **LLM code-gen stays in the main loop, between the two engine runs** (invariant §4). The engine
   never awaits an agent.
+- **One apply of an app at a time per workspace.** Each engine run that applies — run 1, run 2, or a
+  `--changed-only` apply — holds the app's build lease (`<workspace>/app-build.<hash>.lock`,
+  `lib/app-operation-lease.js`) for all of its work, from before its auth check to its result, so a
+  second run of the same app cannot interleave its discovery and creates with this one's: the generated
+  app icon, the app, a web resource or a page would otherwise be found missing by both and created twice.
+  The second run stops at once (`build-locked`) and is re-run after the first finishes. The lease is
+  released between run 1 and run 2 (page generation holds none); run 2 rediscovers state, as above. It
+  is a local courtesy between cooperating runs of this version — not a server transaction, not across
+  workspaces or machines, and a build of an earlier release takes none (the legacy pages lock still keeps
+  such a build out of the pages phase when it spells the app the same way).
 
 Stages are therefore a **vocabulary and orchestration layer**, not independent write
 invocations. `data` executes in run 1; `generate-pages` in the main loop; `ui`/`app`/`publish`/
