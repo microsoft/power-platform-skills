@@ -3040,7 +3040,15 @@ its own (`(p): (x: T) => T => …`, `new () => T`), so the first `=>` after the 
 a write cut right after such a type has neither the arrow nor a body; and any word may name a type (`module<T>`,
 `namespace`, `declare` — TypeScript reads a type's name as an identifier name), so no word marks the end of one.
 Where TypeScript reads `(…)` as a function type is its own rule (`isUnambiguouslyStartOfFunctionType`: `(A) => T`
-is one, `(A | B)` is not), and a return type nested deeper than any page (200 levels) is refused rather than read.
+is one, `(A | B)` is not, and nor is a parenthesised object type whose key is an index signature's or a mapped
+type's — `({ [key: string]: T })`, `({ [K in keyof T]: boolean })` — since that key holds no expression and so
+makes no binding pattern, where `({ [key]: v })` and `({ [K in T]: v })` do), and a return type nested deeper than
+any page (200 levels) is refused rather than read. **Known limit:** a default value in a binding pattern of a
+function type's parameter is passed over to the next `,` or closing bracket at its own level, and the comma between
+a generic call's type arguments is taken for one (`({ a = f<T, U>() }) => R`): the pattern then reads as none, the
+parentheses as a parenthesised type and the function type's `=>` as the arrow, so a write cut right after such a
+return type (`export default <T,>(p: T): ({ a = f<T,T>() }) => T`) is accepted — the page compile refuses it
+(TypeScript: `'=>' expected`), and `source-literals.test.js` pins it. With the call in parentheses the cut is refused.
 The export pattern once took no `<` after `default`, and every such page was refused as having no default export.
 And `endsMidStatement` catches the cuts that leave every bracket balanced: the
 lexer reports when a file stops inside a string, template, comment or JSX element, and a file

@@ -4390,7 +4390,9 @@ function returnTypeEnd(src, from) {
     return after.kind === ')' && at(after.end).kind === '=>';
   };
   // parseObjectBindingPattern and parseArrayBindingPattern, whose `{` or `[` is at `open`: the index just past the pattern, or -1 where it does not parse with no error. A
-  // default value is passed over to the `,` or the bracket that ends it.
+  // default value is passed over to the `,` or the bracket that ends it (defaultValueEnd) — a known limit: the comma between a generic call's type arguments,
+  // `{ a = f<T, U>() }`, is taken for the end of the value, the pattern reads as none, and a write cut right after a function type with such a parameter is accepted
+  // (AGENTS.md, "TSX source lexer — known limits"; the page compile refuses it).
   const bindingPatternEnd = (open) => nested(() => {
     const object = src[open] === '{';
     const closer = object ? '}' : ']';
@@ -4405,9 +4407,9 @@ function returnTypeEnd(src, from) {
       if (token.kind === '...') token = at(token.end);
       let end;
       if (object) {
-        // A property name — a word, a string, a number or a computed `[…]` — then `:` and the element; or a binding name alone.
+        // A property name — a word, a string, a number or a computed `[…]` that holds an expression — then `:` and the element; or a binding name alone.
         if (token.kind === 'word' || token.kind === 'string' || token.kind === 'number') end = token.end;
-        else if (token.kind === '[') end = typeGroupEnd(src, token.start);
+        else if (token.kind === '[' && computedKeyIsExpression(token.start)) end = typeGroupEnd(src, token.start);
         else return -1;
         if (end === -1) return -1;
         const colon = at(end);
@@ -4432,6 +4434,71 @@ function returnTypeEnd(src, from) {
     const token = at(k);
     if (token.kind === '[' || token.kind === '{') return bindingPatternEnd(token.start);
     return bindingIdentifier(token) ? token.end : -1;
+  };
+  // Whether the `[` at `open` holds an expression, as a binding pattern's computed key must (parseComputedPropertyName: parseExpression, `in` allowed). The same brackets hold
+  // an index signature's key, `[key: string]`, and a mapped type's, `[K in keyof T]`, `[K in keyof T as …]`, in an object type — and neither is an expression: a `:` that no `?`
+  // opened, or a word right after an operand (`keyof` is a name in an expression, and `T` follows it), ends the reading. So `({ [key: string]: T }) => …` holds a
+  // parenthesised type and the arrow, where `({ [key]: v }) => …` and `({ [K in T]: v }) => …` (`K in T` is an expression) hold a function type's parameters. The
+  // expression is read only as far as that needs — operands, prefix and binary operators, `?` and `:`, member access, calls, indexes, `!`, type arguments where they close and
+  // what follows can follow them (canFollowTypeArgumentsInExpression), and a type after `as` or `satisfies` — and what it does not know (an arrow, `function`, a regex, JSX)
+  // is taken for no expression: a type then, never a function type's parameters, so the reading can let a page TypeScript refuses through but never refuse one it parses.
+  const computedKeyIsExpression = (open) => {
+    const close = typeGroupEnd(src, open);
+    if (close === -1) return false;
+    const groupEnd = (token) => {
+      const end = typeGroupEnd(src, token.start);
+      return end !== -1 && end < close ? end : -1;
+    };
+    let k = open + 1;
+    let operand = false;
+    let questions = 0;
+    for (;;) {
+      const token = at(k);
+      if (token.start >= close - 1) return token.start === close - 1 && operand && questions === 0;
+      const word = token.kind === 'word' ? token.text : null;
+      if (!operand) {
+        // A prefix operator, then an operand: a name or a keyword that is a value, a literal, or a group (a parenthesised expression, an array, an object).
+        if (['!', '~', '+', '-', '++', '--'].includes(token.kind) || ['typeof', 'void', 'delete', 'await', 'new'].includes(word)) k = token.end;
+        else if (word !== null && (!(RESERVED_WORDS.has(word) || word === 'const') || ['this', 'null', 'true', 'false', 'super'].includes(word))) { operand = true; k = token.end; }
+        else if (token.kind === 'number' || token.kind === 'string' || token.kind === 'template') { operand = true; k = token.end; }
+        else if (token.kind === '(' || token.kind === '[' || token.kind === '{') { k = groupEnd(token); operand = true; if (k === -1) return false; }
+        else return false;
+      } else if (token.kind === '.' || token.kind === '?.') {
+        // A member, or after `?.` a call or an index (read next).
+        const name = at(token.end);
+        if (name.kind === 'word') k = name.end;
+        else if (token.kind === '?.' && (name.kind === '(' || name.kind === '[')) k = token.end;
+        else return false;
+      } else if (token.kind === '(' || token.kind === '[') {
+        // A call, or an index — which holds an argument: `T[]` is no expression.
+        k = groupEnd(token);
+        if (k === -1 || (token.kind === '[' && at(token.end).start === k - 1)) return false;
+      } else if (token.kind === '!' || token.kind === '++' || token.kind === '--' || token.kind === 'template') {
+        k = token.end;
+      } else if (token.kind === '<') {
+        // Type arguments where they close and what follows can follow them — `(`, a template, the end, or a binary operator; a comparison otherwise.
+        const end = typeAnglesEnd(src, token.start);
+        const next = end === -1 || end >= close ? null : at(end);
+        if (next !== null && (next.start === close - 1 || ['(', 'template', ',', '?', ':', '==', '===', '!=', '!==', '&&', '||', '??', '|', '&', '^', '*', '/', '%'].includes(next.kind) || ['in', 'instanceof', 'as', 'satisfies'].includes(next.kind === 'word' ? next.text : null))) k = end;
+        else {
+          operand = false;
+          k = token.end;
+        }
+      } else if ((word === 'as' || word === 'satisfies') && !token.newline) {
+        const end = type(token.end, false);
+        if (end === -1 || end >= close) return false;
+        k = end;
+      } else if (token.kind === '?' || token.kind === ':' || word === 'in' || word === 'instanceof'
+        || ['+', '-', '*', '/', '%', '<', '>', '&', '|', '^', '=', ',', '==', '===', '!=', '!==', '&&', '||', '??', '*=', '|=', '&='].includes(token.kind)) {
+        if (token.kind === '?') questions += 1;
+        if (token.kind === ':' && --questions < 0) return false;
+        operand = false;
+        k = token.end;
+      } else {
+        // An operand right after an operand (`keyof T`), or what this reading does not know.
+        return false;
+      }
+    }
   };
   const defaultValueEnd = (k, closer) => {
     for (let j = k; j < src.length; j += 1) {

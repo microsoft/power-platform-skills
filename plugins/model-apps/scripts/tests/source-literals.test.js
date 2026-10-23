@@ -677,6 +677,19 @@ const GENERIC_ARROW_RETURN_TYPES = [
   ['type arguments on a dotted name, and an array', 'export default <T,>(p: T): A.B.C<D>[] => [];\n'],
   ['a leading "|"', 'export default <T,>(p: T): | "a" | "b" => "a";\n'],
   ['an async function type for the return type', 'export default async <T,>(p: T): Promise<(x: T) => T> => (x) => x;\n'],
+  // A parenthesised object type whose key is an index signature's or a mapped type's: no binding pattern (the key holds no expression), so the parentheses hold a type and
+  // the arrow follows them.
+  ['a parenthesised index signature', 'export default <T,>(p: T): ({ [key: string]: T }) => ({ item: p });\n'],
+  ['a parenthesised index signature, async', 'export default async <T,>(p: T): ({ [key: string]: T }) => ({ item: p });\n'],
+  ['a parenthesised index signature with a number key', 'export default <T,>(p: T): ({ [index: number]: T }) => [p];\n'],
+  ['a parenthesised index signature with a symbol key', 'export default <T,>(p: T): ({ [key: symbol]: T }) => ({});\n'],
+  ['a parenthesised index signature with a template key', 'export default <T,>(p: T): ({ [key: `data-${string}`]: T }) => ({});\n'],
+  ['a parenthesised mapped type', 'export default <T extends object>(p: T): ({ [K in keyof T]: boolean }) => null as never;\n'],
+  ['a parenthesised mapped type, async', 'export default async <T extends object>(p: T): ({ [K in keyof T]: boolean }) => null as never;\n'],
+  ['a parenthesised mapped type with its keys remapped', 'export default <T extends object>(p: T): ({ [K in keyof T as `get${string & K}`]: () => T[K] }) => null as never;\n'],
+  ['a parenthesised optional mapped type', 'export default <T extends object>(p: T): ({ [K in keyof T]?: T[K] }) => ({});\n'],
+  // A binding pattern with a computed key is a function type's parameter: the arrow follows the function type.
+  ['a function type whose parameter has a computed key', 'export default <T,>(p: T): ({ [key]: value }: Record<string, T>) => void => () => {};\n'],
 ];
 // [what, page]: cut off right after a type that holds an `=>`, or a return type that takes the arrow for its own, or no body after the arrow.
 const GENERIC_ARROW_RETURN_TYPE_REFUSALS = [
@@ -692,6 +705,11 @@ const GENERIC_ARROW_RETURN_TYPE_REFUSALS = [
   // TypeScript reads these return types as function types, which take the `=>` that was meant for the arrow.
   ['one name in parentheses, which is a function type', 'export default <T,>(p: T): (A) => p;\n'],
   ['a binding pattern in parentheses, which is a function type', 'export default <T,>(p: T): ({ a: T }) => p;\n'],
+  // A computed key that holds an expression is a binding pattern's — `K in T` is an expression, unlike `K in keyof T` — so these are function types too.
+  ['a binding pattern with a computed key in parentheses', 'export default <T,>(p: T): ({ [key]: value }) => p;\n'],
+  ['a binding pattern whose computed key is an `in` expression', 'export default <T,>(p: T): ({ [K in T]: boolean }) => p;\n'],
+  ['a binding pattern whose computed key has a cast', 'export default <T,>(p: T): ({ [K in Keys as X]: boolean }) => p;\n'],
+  ['cut after a function type whose parameter has a computed key', 'export default <T,>(p: T): ({ [key]: value }: Record<string, T>) => void'],
   // A function type after a `|` must be parenthesised (TS1385).
   ['a function type after "|"', 'export default <T,>(p: T): A | (x: T) => B => p;\n'],
   // No body after the arrow: TypeScript reports `Expression expected`.
@@ -723,6 +741,25 @@ test('hasDefaultExport reads a generic arrow\'s return type to its end, and want
     const code = `let n = 0;\nexport default <T,>(p: T) => ${body};\n`;
     assert.equal(hasDefaultExport(code), true, what);
     assert.deepStrictEqual(pageStructureProblems(code), [], what);
+  }
+});
+
+// A known limit, pinned as it is: a default value in a binding pattern of a function type's parameter is passed over to the next `,` or closing bracket at its own level,
+// and the comma between a generic call's type arguments (`f<T, U>()`) is taken for one. The pattern then reads as none, the parentheses as a parenthesised type, and the
+// function type's own `=>` as the arrow, so a write cut right after such a function type — no arrow, no body — is accepted here. The page compile refuses it (TypeScript:
+// `'=>' expected`). The page it was cut from is accepted, as it should be.
+test('known limit: a generic call with two type arguments in a default value of a function type\'s parameter', () => {
+  assert.equal(hasDefaultExport('export default <T,>(p: T): ({ a = f<T,T>() }) => T'), true, 'the cut is accepted: the known limit');
+  assert.equal(hasDefaultExport('export default <T,>(p: T): ({ a = f<T,T>() }) => T => null as never;\n'), true);
+  // With the call in parentheses the default value is passed over whole, the pattern is read, and the cut is refused.
+  assert.equal(hasDefaultExport('export default <T,>(p: T): ({ a = (f<T,T>()) }) => T'), false);
+  assert.equal(hasDefaultExport('export default <T,>(p: T): ({ a = (f<T,T>()) }) => T => null as never;\n'), true);
+});
+
+// An arrow with no type parameters is read as it always was (defaultExportIsComplete reads it, not genericArrowIsComplete), whatever its return type holds.
+test('an arrow without type parameters keeps its reading of a return type', () => {
+  for (const type of ['({ [key: string]: T })', '({ [K in keyof T]: boolean })', '({ [key]: value })', '(x: T) => T', 'module<T>', '(A) => T']) {
+    assert.equal(hasDefaultExport(`export default (p: T): ${type} => null as never;\n`), true, type);
   }
 });
 
@@ -822,6 +859,17 @@ test('TypeScript and Babel: the gate accepts exactly the generic-arrow default e
     ['?string', false], ['string?', false], ['!string', false], ['T!', false], ['*', false], ['function(string): number', false],
     ['A | (x: T) => B', true], ['A & new () => B', true], ['keyof', true], ['new', true], ['this.x', true], ['A\n[]', true], ['Promise\n<T>', true], ['T\nextends U ? X : Y', true],
     ['p\nis T', true], ['A || B', true],
+    // Parenthesised object types whose key is an index signature's or a mapped type's (no expression, so no binding pattern): types, and the arrow follows.
+    ['({ [key: string]: T })', true], ['({ [index: number]: T })', true], ['({ [key: symbol]: T })', true], ['({ [key: `data-${string}`]: T })', true],
+    ['({ [key: string]: T; a: T })', true], ['({ [key: string, x]: T })', false], ['({ [K in keyof T]: boolean })', true],
+    ['({ [K in keyof T as `get${string & K}`]: () => T[K] })', true], ['({ [K in keyof T]?: T[K] })', true], ['({ readonly [K in keyof T]: T[K] })', true],
+    ['({ -readonly [K in keyof T]-?: T[K] })', true],
+    // A computed key that holds an expression makes a binding pattern, and the parentheses a function type's parameters: these take the arrow (TypeScript refuses the
+    // pages), and with a return type of their own they are function types followed by the arrow.
+    ['({ [k]: v })', true], ['({ [K in T]: boolean })', true], ['({ [K in Keys as X]: boolean })', true], ['({ [K in "a" | "b"]: boolean })', true],
+    ['({ ["a"]: v, [f(x)]: w })', true], ['({ [a ? b : c]: v })', true], ['({ [k as K]: v })', true], ['({ [typeof k]: v })', true], ['({ [k!]: v })', true],
+    ['({ [-1]: v })', true], ['({ [K in Union<A>]: v })', true], ['({ [k]: v }: X) => void', true], ['({ [k]: v = 1, ["s"]: w }: X) => void', true],
+    ['({ [a ? b : c]: v }) => T', true], ['({ [K in T]: v }) => T', true], ['({ [new X()]: v }: X) => void', true],
   ];
   const RETURN_BODIES = [' => null', ' => (x: T) => x', ' => {\n  return null as never;\n}'];
   const returnPage = (modifier, type, body) => `export default ${modifier}<T,>(p: T): ${type}${body};\n`;
