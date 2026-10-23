@@ -925,8 +925,9 @@ function outcomeUnknown(err) {
 // missing one proved absent sends the change set once more, or creates the missing ones one by one; a column the read cannot place is read again,
 // within the table's budget; and a budget spent with a column still missing stops the build — `terminal` — before any further column is sent.
 //
-// Answers { map, terminal }: `map` holds the columns confirmed, keyed by the column object, each with the id createColumn would have answered;
-// `terminal`, when there is one, is the failure the column loop stops with at the first column the map does not hold (it sends nothing more).
+// Answers { map, terminal?, fallback? }: `map` holds the columns confirmed, keyed by the column object, each with the id createColumn would have
+// answered; `terminal`, when there is one, is the failure the column loop stops with at the first column the map does not hold (it sends nothing
+// more); `fallback`, when there is one, is the lag's own one-by-one fallback (recoverRefusedBatch), whose creates the table's budget gates.
 async function createColumnsInOneRequest({ sdk, provision, table, tableSchemaName, columns, optionsFor, warn, sleep, stop, lagTable }) {
   try {
     // The options are built inside the try: a column the options cannot be built for fails the way it always did, in its own step
@@ -977,12 +978,14 @@ async function afterRefusedBatch(err, { provision, table, tableSchemaName, colum
 //   - the create is the column change set, one column's create, or a status reason's insert, for that table;
 //   - the answer is HTTP 400 with one of the two codes, read from the OData error of the answer (the change set's from its first part);
 //   - a read made after the refusal PROVES the thing absent: a list that holds the table's own stock entry — its primary name column, or the
-//     stock status reason 1 or 2 — and not the thing. A 404, a 400 `0x80090457`, an answer that is no list, or one without the stock entry proves
-//     nothing and is read again; any other failure of the read stops the build with that failure; a column or a reason the read shows is
-//     ADOPTED, never sent again;
-//   - the table's budget still has room: 20 seconds of the time spent waiting for those reads, the waits between them and the resends (time
-//     spent elsewhere is not counted), at most 8 reads, at most 4 resends of one create or insert and 1 of the change set. A budget that runs
-//     out with the create still missing — proved absent or not — stops the build with the original refusal, and says the build may be run again.
+//     stock status reason 1 or 2 — and not the thing, every entry of which can be told apart (a column named with its id, an option with its
+//     value). A 404, a 400 `0x80090457`, an answer that is no list, one without the stock entry, or one with an entry that cannot be told apart
+//     — the thing itself named without its id, say — proves nothing and is read again; any other failure of the read stops the build with that
+//     failure; a column or a reason the read shows is ADOPTED, never sent again;
+//   - the table's budget still has room: 20 seconds of the time spent waiting for those reads, the waits between them and the check's own sends
+//     — the resends, and the one-by-one creates of the change set's columns that a read proved absent (time spent elsewhere is not counted) —
+//     at most 8 reads, at most 4 resends of one create or insert and 1 of the change set. A budget that runs out with the create still missing —
+//     proved absent or not — stops the build with the original refusal, before any further POST, and says the build may be run again.
 // The read of a status reason carries labels, and a label-bearing read ahead of a labelled create keeps only the base language of that create,
 // so a refused insert is not read in the table loop: it is queued, and read and sent again after every other labelled create of the phase
 // (drainLagStatuses). Nothing here deletes or updates anything, and no wait is a fire-and-forget: every read, wait and resend is awaited.
@@ -1119,31 +1122,52 @@ async function lagRead(window, url, itemsOf, what) {
 
 // The table's columns, by its id: ids and logical names only — no labels, so the read may come before the phase's labelled creates.
 //   GET /EntityDefinitions(<id>)/Attributes?$select=MetadataId,LogicalName   →   { "value": [{ "MetadataId": "…", "LogicalName": "new_name" }, …] }
-// A `list` answer is turned into the columns it shows (logical name → MetadataId), and `complete` when it shows the table's primary name column.
+// A `list` answer is turned into what it shows, row by row, and nothing in it is dropped unread: a row is USABLE when it names a column
+// (`LogicalName`, a non-empty string) and carries that column's id (`MetadataId`, a GUID), and only a usable row shows a column present.
+//   - `ids`: logical name → MetadataId, from usable rows;
+//   - `named`: every logical name a row names, usable or not — a column named without a usable id, or named twice with two ids, is in the list
+//     and cannot be adopted (`unclear`), so it is neither present nor absent;
+//   - `complete`: the list can prove a column ABSENT — it holds the table's primary name column, and every row in it is usable. A row that names
+//     no column, or names one without its id, could be the very column asked about, and a list that holds one proves no column absent.
+// Such a read is never permission to create: only `absent` is (columnState).
 async function readLagColumns(window) {
   const read = await lagRead(window, `/EntityDefinitions(${window.tableId})/Attributes?$select=MetadataId,LogicalName`, (body) => body && body.value, 'the columns');
   if (read.kind !== 'list') return read;
   const ids = new Map();
-  for (const a of read.items) if (a && a.LogicalName && a.MetadataId) ids.set(String(a.LogicalName).toLowerCase(), String(a.MetadataId));
-  return { kind: 'list', ids, complete: ids.has(window.primaryLogical) };
+  const named = new Set();
+  const unclear = new Set();
+  let usable = true;
+  for (const a of read.items) {
+    const logical = a && typeof a.LogicalName === 'string' && a.LogicalName ? a.LogicalName.toLowerCase() : null;
+    const id = a && typeof a.MetadataId === 'string' && GUID_RE.test(a.MetadataId) ? a.MetadataId : null;
+    if (!logical) { usable = false; continue; }
+    named.add(logical);
+    if (!id || (ids.has(logical) && ids.get(logical).toLowerCase() !== id.toLowerCase())) { usable = false; unclear.add(logical); continue; }
+    ids.set(logical, id);
+  }
+  for (const logical of unclear) ids.delete(logical);
+  return { kind: 'list', ids, named, complete: usable && ids.has(window.primaryLogical) };
 }
-// One column against such a read: 'present' (with its id), 'absent' (a complete list without it), or 'unknown'.
+// One column against such a read: 'present' (a usable row names it, with its id), 'absent' (a complete list that does not name it at all), or
+// 'unknown' — which includes a column the list names without a usable id: it may well be there, and is read again rather than created again.
 function columnState(read, logical) {
   if (read.kind !== 'list') return { state: 'unknown' };
   if (read.ids.has(logical)) return { state: 'present', id: read.ids.get(logical) };
+  if (read.named.has(logical)) return { state: 'unknown' };
   return { state: read.complete ? 'absent' : 'unknown' };
 }
 
 const adoptColumnWarning = (window, column, code) => `column ${window.schemaName}.${column.schemaName} was refused (HTTP 400 ${code}) and then found on the table, so it is reused`;
 
 // The change set of a table this attempt created, refused with the table's lag (createColumnsInOneRequest): read, and act on what the read proves.
-// Answers { map, terminal } as createColumnsInOneRequest does:
+// Answers { map, terminal?, fallback? } as createColumnsInOneRequest does:
 //   - every column found: adopted — nothing is sent;
 //   - every missing column proved absent, none found and the change set not yet sent again: it is sent once more (after a wait); a refusal of that
 //     with the lag is read again, any other refusal is handled as every refused change set is (afterRefusedBatch), and a change set that commits is
 //     confirmed as every one is;
-//   - every missing column proved absent otherwise (some found, or the change set already sent again): the found ones are adopted and the column
-//     loop creates the missing ones one by one — the table's lag still covers those creates;
+//   - every missing column proved absent otherwise (some found, or the change set already sent again), with the budget not spent: `fallback` — the
+//     found ones are adopted, and the column loop creates the missing ones one by one, each create gated on and charged to the table's budget
+//     (`fallback.columns` are those columns, `fallback.original` the refusal the loop stops with once the budget is spent);
 //   - a missing column the read cannot place: read again, after a wait;
 //   - the budget spent while a column is still missing — proved absent or not — or a read that failed: `terminal`, with the found ones in `map`.
 async function recoverRefusedBatch({ sdk, provision, table, tableSchemaName, columns, optionsFor, warn, sleep, stop, lagTable: window, original, code }) {
@@ -1171,7 +1195,7 @@ async function recoverRefusedBatch({ sdk, provision, table, tableSchemaName, col
     }
     if (confirmed.size === columns.length) return { map: confirmed };
     if (lagSpent(window.budget)) return { map: confirmed, terminal: persisted(original) };
-    if (unknown === 0 && (confirmed.size > 0 || resent)) return { map: confirmed };
+    if (unknown === 0 && (confirmed.size > 0 || resent)) return { map: confirmed, fallback: { original, columns: new Set(columns.filter((c) => !confirmed.has(c))) } };
     if (!(await lagWait(window, waits++))) return { map: confirmed, terminal: persisted(original) };
     if (unknown > 0) continue;
     // Every column proved absent and none found: the change set committed nothing (it is atomic), and is sent once more.
@@ -1192,10 +1216,12 @@ async function recoverRefusedBatch({ sdk, provision, table, tableSchemaName, col
 // on as the read proves — a column found is adopted with the id the read gave it; one proved absent is sent again after a wait, up to 4 times; one
 // the read cannot place is read again. A resend refused with the lag is read again; refused otherwise, that failure is thrown as it is, and the step
 // handles it as any (an "already exists" answer is its skip). A budget that runs out with the column still missing throws the original refusal,
-// which the step's halt then says may be run again (persistedLagRefusals); a read that failed throws that failure.
-async function createInLagWindow(create, { window, column, stop, warn }) {
+// which the step's halt then says may be run again (persistedLagRefusals); a read that failed throws that failure. `charge`: the first send is
+// itself one of the check's sends — a column of the lag's own fallback (recoverRefusedBatch), which the caller sends only while the budget has
+// room — and the time it takes is charged to the table's budget like every resend's.
+async function createInLagWindow(create, { window, column, stop, warn, charge = false }) {
   try {
-    return await create();
+    return await (charge ? charged(window, create) : create());
   } catch (err) {
     const code = window ? lagCodeOf(err) : null;
     if (!code) throw err;
@@ -2185,9 +2211,10 @@ function statusOptionIs(o, { pinned, stateCode, label, color, languageCode }) {
 //   - the pinned value there, with the declared state, label and colour: adopted, nothing sent;
 //   - the pinned value there with another state, label or a declared colour it does not have: the original refusal, and nothing is sent, adopted
 //     or updated — that option is not this reason;
-//   - the pinned value absent from a list that holds the stock reason 1 or 2: sent again, after a wait, up to 4 times; a resend refused with the
-//     lag is read again, refused otherwise is that failure (an "already exists" answer is the step's skip);
-//   - a read that proves nothing: read again, after a wait.
+//   - the pinned value absent from a list that holds the stock reason 1 or 2, every option of which carries an integer value: sent again, after a
+//     wait, up to 4 times; a resend refused with the lag is read again, refused otherwise is that failure (an "already exists" answer is the
+//     step's skip);
+//   - a read that proves nothing — the pinned value held twice, an option without a value, no stock reason: read again, after a wait.
 // The table's budget is the one its column work used, if any; a budget spent with the reason still missing stops the build with the original
 // refusal (persistedLagRefusals), a read that failed with that failure. A step that throws stops the phase there: the reasons after it are not tried.
 //   GET /EntityDefinitions(<id>)/Attributes/Microsoft.Dynamics.CRM.StatusAttributeMetadata?$select=LogicalName&$expand=OptionSet($select=Options)
@@ -2205,14 +2232,17 @@ async function drainLagStatuses({ sdk, runner, warn }, lag, result) {
           return status && status.OptionSet ? status.OptionSet.Options : undefined;
         }, 'the status reasons');
         if (read.kind === 'failed') throw read.error;
+        // An option is USABLE when it is an object with an integer `Value`; only a list of usable options proves the pinned value absent — an
+        // option without a value could be this very reason. Two options at the pinned value cannot both be it: that proves nothing either way.
         const options = read.kind === 'list' ? read.items : null;
-        const held = options && options.find((o) => o && o.Value === pinned);
-        if (held) {
-          if (!statusOptionIs(held, { pinned, stateCode, label: sr.label, color: sr.color, languageCode })) throw original;
+        const atPinned = options ? options.filter((o) => o && o.Value === pinned) : [];
+        if (atPinned.length === 1) {
+          if (!statusOptionIs(atPinned[0], { pinned, stateCode, label: sr.label, color: sr.color, languageCode })) throw original;
           if (typeof warn === 'function') warn(`status reason ${entity.schemaName}: ${sr.label} was refused (HTTP 400 ${code}) and then found, so it is reused`);
           return;
         }
-        const absent = !!options && options.some((o) => o && (o.Value === 1 || o.Value === 2));
+        const usable = !!options && options.every((o) => o && typeof o === 'object' && Number.isInteger(o.Value));
+        const absent = usable && atPinned.length === 0 && options.some((o) => o.Value === 1 || o.Value === 2);
         if (lagSpent(window.budget)) throw persisted(original);
         if (absent && resends >= LAG_SINGLE_RESENDS) throw persisted(original);
         if (!(await lagWait(window, waits++))) throw persisted(original);
@@ -2695,6 +2725,10 @@ async function provisionDataModelSteps({ sdk, provision, runner, spec, apply, la
     // A change set whose bounded check ran out with a column still missing (`terminal`): the column loop sends no further column, and stops at
     // the first one the check did not confirm.
     let inlineTerminal = null;
+    // A change set the table's lag refused, whose missing columns a read then proved absent (`fallback`): the column loop creates them one by one,
+    // but each of those creates is one of the check's own sends — made only while the table's budget has room, and charged to it — and once the
+    // budget is spent, by them or by the reads and waits between them, the loop stops at the next column it has not confirmed, as `terminal` does.
+    let inlineFallback = null;
     const stopIfRefused = typeof runner.stopIfRefused === 'function' ? () => runner.stopIfRefused('data-model') : undefined;
     if (createdTable && inlineEnabled) {
       const inlineSet = inlineColumnsOf(buildable, { primaryName: e.primaryAttribute && e.primaryAttribute.schemaName, tableLogical: logical });
@@ -2714,6 +2748,7 @@ async function provisionDataModelSteps({ sdk, provision, runner, spec, apply, la
         });
         inlineConfirmed = inline.map;
         inlineTerminal = inline.terminal || null;
+        inlineFallback = inline.fallback || null;
       }
     }
     // columns: every buildable column (all scalar types + Customer; Lookup comes from a
@@ -2737,9 +2772,13 @@ async function provisionDataModelSteps({ sdk, provision, runner, spec, apply, la
         const confirmed = inlineConfirmed.get(c);
         if (confirmed) return confirmed;
         if (inlineTerminal) throw inlineTerminal;
+        // Proved absent is not permission to create once the budget is spent: the change set's refusal, here, before any further POST.
+        if (inlineFallback && lagSpent(window.budget)) throw persisted(inlineFallback.original);
         if (c.type === 'Customer') return sdk.createCustomerColumn(logical, { schemaName: c.schemaName, displayName: c.displayName || c.schemaName, required: REQUIRED(c), languageCode: resolvedLanguageCode });
         // A Customer column is created by an action of its own, which the lag was not seen on: it is not in the window.
-        return createInLagWindow(() => sdk.createColumn(logical, columnOptions(c, globalChoiceIds, spec.globalChoices, resolvedLanguageCode)), { window, column: c, stop: stopIfRefused, warn });
+        return createInLagWindow(() => sdk.createColumn(logical, columnOptions(c, globalChoiceIds, spec.globalChoices, resolvedLanguageCode)), {
+          window, column: c, stop: stopIfRefused, warn, charge: !!inlineFallback && inlineFallback.columns.has(c),
+        });
       },
       { skipIf: (err) => isAlreadyExists(err, ALREADY_EXISTS_CODES.column) }));
     if (existingTable) {

@@ -2202,11 +2202,14 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   Separately, the generic codes are retried in one window only — the lag of a table this build attempt has just created
   (`entity-provision.js`, "The lag of a table this attempt just created"): a column create (in the change set or on its own) or a
   status-reason insert for that table, refused with HTTP 400 `0x80040216` or `0x80090457`, is sent again only after a read made
-  after the refusal proves it absent, within the table's budget (20 seconds of the check's own reads and waits, 8 reads, 4 resends
-  of one create, 1 of the change set). A create the read shows is adopted, never sent again; a read that fails stops the build with
-  that failure; a status reason is read and sent again only after every other labelled create of the phase. A spent check still
-  stops the build, with the original refusal (`retry: NEVER`) and a halt — printed after the build lease is let go — that says the
-  build may be run again. Neither code is read as "already exists" or as a reason to run the build again, and a table that existed
+  after the refusal proves it absent — a list that holds the table's primary name column (or a stock status reason), every entry
+  of which names a column with its id (or carries its option value once), and not this one; a column the list names without its
+  id proves nothing and is read again, never created again — within the table's budget (20 seconds of the check's own reads, waits
+  and sends, the one-by-one creates of the change set's proved-absent columns included; 8 reads; 4 resends of one create, 1 of the
+  change set). A create the read shows is adopted, never sent again; a read that fails stops the build with that failure; a status
+  reason is read and sent again only after every other labelled create of the phase. A spent check still stops the build — at the
+  next create, before any further POST, even of one a read proved absent — with the original refusal (`retry: NEVER`) and a halt —
+  printed after the build lease is let go — that says the build may be run again. Neither code is read as "already exists" or as a reason to run the build again, and a table that existed
   or any other error keeps its existing handling. Pinned by `post-create-lag.test.js`.
 - **One apply of an app at a time in its workspace (the build lease).** Two builds of the same app that overlap both read
   "missing" and both create — measured over the real bundle: two lookups of the generated `<app>_icon`, two creates, two

@@ -129,6 +129,28 @@ const columnIds = (env, table) => {
 // The halt is the runner's, around the failure the step threw; its message is the step's failure and, for a refusal the check ran out on, more.
 const haltOf = (run) => { assert.ok(run.error instanceof BuildHalt, `the phase halts: ${run.error && run.error.stack}`); return run.error; };
 
+// The fake's own answer to a read of the table's columns, with its rows reworked by `rework(rows)` — the answer a platform could give that is a list,
+// and that names the table's primary name column, and yet is not usable row by row.
+const reworked = (env, rework) => async (req) => {
+  const res = await env.through(req);
+  const body = JSON.parse(res.body);
+  return { ...res, body: JSON.stringify({ ...body, value: rework(body.value) }) };
+};
+// The row of the column `logical` without its id: the column is named, and nothing can be adopted from that row.
+const withoutIdOf = (logical) => (rows) => rows.map((a) => (String(a.LogicalName).toLowerCase() === logical ? { LogicalName: a.LogicalName } : a));
+// A change set refused with the lag every time it is sent.
+const lagBatch = (env) => env.fault('POST', isBatch, () => batchRefused({ code: '0x80040216', message: UNEXPECTED }));
+// The halt of a change set's refusal, the check having run out.
+const changeSetHalt = (run, what) => {
+  assert.ok(run.error instanceof BuildHalt, `${what}: the phase halts: ${run.error && run.error.stack}`);
+  const halt = run.error;
+  assert.ok(halt.message.endsWith(SUFFIX), `${what}: ${halt.message}`);
+  assert.strictEqual(halt.cause.statusCode, 400, `${what}: the change set's refusal`);
+  assert.ok(String(halt.cause.cause).includes('{"error":{"code":"0x80040216"'), `${what}: its own answer, which holds the code in its first part`);
+  assert.strictEqual(halt.retry, 'never', what);
+  return halt;
+};
+
 // --- the change set ---------------------------------------------------------------------------------------------------------------------------------------
 
 test('a change set refused with the lag of its new table is sent again once, after a read proves its columns absent — and its columns are the ones that read and the commit give', async () => {
@@ -257,6 +279,61 @@ test('a proof of absence that comes when the budget is spent sends nothing: not 
   }
 });
 
+test('the columns of a refused change set that a read proved absent are created one by one only while the table\'s budget has room: once it is spent — by a read, by the reads\' cap or by those creates themselves — the phase stops at the next column, with the change set\'s refusal, and sends nothing more', async () => {
+  const titleSteps = (run) => steps(run, 'column contoso_ticket.').map((e) => `${e.label} ${e.status}`);
+  const stopped = ['column contoso_ticket.contoso_title (Text) ok', 'column contoso_ticket.contoso_code (Text) error'];
+  // (1) The time: the read that finds the first column — its own create committed, and its answer was the lag's refusal — takes what is left.
+  {
+    const env = await lagEnv();
+    const clk = clock();
+    lagBatch(env);
+    env.fault('POST', columnPost('contoso_ticket', 'contoso_title'), async (req, n) => (n === 1 ? (await env.through(req), refused('0x80040216')) : undefined));
+    env.fault('GET', isProbe, (req, n) => { if (n === 3) clk.advance(19000); });
+    const run = await phase(env, lagSpec(), { clk });
+    changeSetHalt(run, 'the time');
+    assert.strictEqual(posts(run, columnPost('contoso_ticket', 'contoso_code')).length, 0, 'the time: the second column is never sent');
+    assert.deepStrictEqual(titleSteps(run), stopped, 'the time: the first column is adopted, the second stops the phase');
+    assert.strictEqual(probes(run).length, 3);
+  }
+  // (2) The reads: the third to the seventh prove nothing, and the eighth — the last the budget has — finds the first column.
+  {
+    const env = await lagEnv();
+    const clk = clock();
+    lagBatch(env);
+    env.fault('POST', columnPost('contoso_ticket', 'contoso_title'), async (req, n) => (n === 1 ? (await env.through(req), refused('0x80040216')) : undefined));
+    env.fault('GET', isProbe, (req, n) => (n >= 3 && n <= 7 ? list([]) : undefined));
+    const run = await phase(env, lagSpec(), { clk: { ...clk, sleep: async (ms) => { clk.waits.push(ms); clk.advance(1); } } });
+    changeSetHalt(run, 'the reads');
+    assert.strictEqual(posts(run, columnPost('contoso_ticket', 'contoso_code')).length, 0, 'the reads: the second column is never sent');
+    assert.deepStrictEqual(titleSteps(run), stopped);
+    assert.strictEqual(probes(run).length, 8, 'eight reads, and no ninth');
+  }
+  // (3) The creates: they are the check's own sends, and their time is the budget's. The first read takes 17 s and the first column's create 2 s.
+  {
+    const env = await lagEnv();
+    const clk = clock();
+    lagBatch(env);
+    env.fault('GET', isProbe, (req, n) => { if (n === 1) clk.advance(17000); });
+    env.fault('POST', columnPost('contoso_ticket', 'contoso_title'), () => { clk.advance(2000); });
+    const run = await phase(env, lagSpec(), { clk });
+    changeSetHalt(run, 'the creates');
+    assert.strictEqual(posts(run, columnPost('contoso_ticket', 'contoso_title')).length, 1, 'the creates: the first column was created');
+    assert.strictEqual(posts(run, columnPost('contoso_ticket', 'contoso_code')).length, 0, 'the creates: the second, started when the budget was spent, was not');
+    assert.deepStrictEqual(titleSteps(run), stopped);
+  }
+  // Control: the same fallback, with the budget to spare, creates each column once.
+  {
+    const env = await lagEnv();
+    lagBatch(env);
+    const run = await phase(env, lagSpec());
+    assert.ifError(run.error);
+    assert.deepStrictEqual(posts(run, (w) => /\/Attributes$/.test(w)).map((r) => JSON.parse(r.body).SchemaName), ['contoso_title', 'contoso_code']);
+    const ids = columnIds(env, 'contoso_ticket');
+    assert.deepStrictEqual(run.result.columns.contoso_ticket.map((c) => [c.logicalName, c.metadataId !== undefined]), [['contoso_title', true], ['contoso_code', true]]);
+    assert.ok(ids.contoso_title && ids.contoso_code);
+  }
+});
+
 // --- one column on its own -------------------------------------------------------------------------------------------------------------------------------
 
 test('a column refused with the lag of its new table is sent again only after a read proves it absent — and its step is ok, with its id', async () => {
@@ -353,6 +430,73 @@ test('a read of the columns that fails — a 403, a 400 that is not the lag, a 5
   }
 });
 
+test('a read that names the column without its id proves nothing — the column is neither adopted nor sent again: a later read with its id adopts it, and a budget spent without one stops the build with the original refusal', async () => {
+  // (1) Its own create committed and was answered with the lag's refusal; the first read names it without an id, the second with one.
+  {
+    const env = await lagEnv();
+    env.fault('POST', columnPost('contoso_ticket', 'contoso_title'), async (req, n) => (n === 1 ? (await env.through(req), refused('0x80040216')) : undefined));
+    env.fault('GET', isProbe, (req, n) => (n === 1 ? reworked(env, withoutIdOf('contoso_title'))(req) : undefined));
+    const run = await phase(env, lagSpec(), { inlineColumns: false });
+    assert.ifError(run.error);
+    assert.strictEqual(posts(run, columnPost('contoso_ticket', 'contoso_title')).length, 1, 'never sent again');
+    assert.deepStrictEqual(steps(run, 'column contoso_ticket.contoso_title').map((e) => e.status), ['ok']);
+    assert.strictEqual(run.result.columns.contoso_ticket.find((c) => c.logicalName === 'contoso_title').metadataId, columnIds(env, 'contoso_ticket').contoso_title, 'with the id the second read gave');
+    assert.strictEqual(probes(run).length, 2);
+  }
+  // (2) Every read names it without an id: nothing is sent again, and the budget's end stops the build.
+  {
+    const env = await lagEnv();
+    env.fault('POST', columnPost('contoso_ticket', 'contoso_title'), async (req, n) => (n === 1 ? (await env.through(req), refused('0x80040216')) : undefined));
+    env.fault('GET', isProbe, (req) => reworked(env, withoutIdOf('contoso_title'))(req));
+    const run = await phase(env, lagSpec(), { inlineColumns: false });
+    const halt = haltOf(run);
+    assert.strictEqual(posts(run, columnPost('contoso_ticket', 'contoso_title')).length, 1, 'never sent again');
+    assert.ok(halt.message.endsWith(SUFFIX), halt.message);
+    assert.strictEqual(serviceCodeOf(halt.cause), '0x80040216');
+    assert.deepStrictEqual(steps(run, 'column contoso_ticket.contoso_title').map((e) => e.status), ['error']);
+  }
+  // (3) A row that names no column at all could be this column: the read proves nothing, and the create is sent again only after a read that does.
+  {
+    const env = await lagEnv();
+    env.fault('POST', columnPost('contoso_ticket', 'contoso_title'), (req, n) => (n === 1 ? refused('0x80040216') : undefined));
+    env.fault('GET', isProbe, (req, n) => (n === 1 ? reworked(env, (rows) => [...rows, { MetadataId: '44444444-0000-4000-8000-000000000001' }])(req) : undefined));
+    const run = await phase(env, lagSpec(), { inlineColumns: false });
+    assert.ifError(run.error);
+    const sent = posts(run, columnPost('contoso_ticket', 'contoso_title'));
+    assert.strictEqual(sent.length, 2, 'sent again, once');
+    const between = run.wire.slice(run.wire.indexOf(sent[0]) + 1, run.wire.indexOf(sent[1]));
+    assert.deepStrictEqual(between.map((r) => `${r.method} ${isProbe(r.path) ? 'probe' : r.path}`), ['GET probe', 'GET probe'], 'after the read that proved it absent, not the one before it');
+  }
+});
+
+test('a change set\'s column that a read names without its id is neither created on its own nor sent again in the change set: a later read with its id adopts it, and a budget spent without one stops the phase at it', async () => {
+  // The change set committed, and its answer was the lag's refusal.
+  const committed = (env) => env.fault('POST', isBatch, async (req, n) => (n === 1 ? (await env.through(req), batchRefused({ code: '0x80040216', message: UNEXPECTED })) : undefined));
+  // (1) The first read names the first column without an id, and shows the second; the next read shows both.
+  {
+    const env = await lagEnv();
+    committed(env);
+    env.fault('GET', isProbe, (req, n) => (n === 1 ? reworked(env, withoutIdOf('contoso_title'))(req) : undefined));
+    const run = await phase(env, lagSpec());
+    assert.ifError(run.error);
+    assert.strictEqual(posts(run, isBatch).length, 1, 'the change set is not sent again');
+    assert.strictEqual(posts(run, (w) => /\/Attributes$/.test(w)).length, 0, 'and no column is sent on its own');
+    const ids = columnIds(env, 'contoso_ticket');
+    assert.deepStrictEqual(run.result.columns.contoso_ticket.map((c) => [c.logicalName, c.metadataId]), [['contoso_title', ids.contoso_title], ['contoso_code', ids.contoso_code]]);
+  }
+  // (2) Every read names the first column without an id: the second is adopted, nothing is sent, and the budget's end stops the phase at the first.
+  {
+    const env = await lagEnv();
+    committed(env);
+    env.fault('GET', isProbe, (req) => reworked(env, withoutIdOf('contoso_title'))(req));
+    const run = await phase(env, lagSpec());
+    changeSetHalt(run, 'never an id');
+    assert.strictEqual(posts(run, isBatch).length, 1);
+    assert.strictEqual(posts(run, (w) => /\/Attributes$/.test(w)).length, 0, 'no column is sent on its own');
+    assert.deepStrictEqual(steps(run, 'column contoso_ticket.').map((e) => `${e.label} ${e.status}`), ['column contoso_ticket.contoso_title (Text) error']);
+  }
+});
+
 // --- the status reasons ------------------------------------------------------------------------------------------------------------------------------------
 
 // The table the status reason waits for, and after it in the phase: a table whose column and key are labelled in two languages, and a relationship whose
@@ -417,6 +561,27 @@ test('a status reason the read shows is adopted when its value, state, label and
       assert.ok(!run.warnings.some((w) => /then found/.test(w)), `${what}: not adopted`);
     }
     assert.strictEqual(run.wire.filter((r) => ['PUT', 'PATCH', 'DELETE'].includes(r.method)).length, 0, `${what}: nothing changed`);
+  }
+});
+
+test('a read of the status reasons proves the reason absent only when every option carries its value once: an option without one, or the pinned value held twice, proves nothing, and the insert is sent again only after a read that does', async () => {
+  const stock = { Value: 1, State: 0, Label: { LocalizedLabels: [{ Label: 'Active', LanguageCode: 1033 }] }, Color: null };
+  const inReview = (label) => ({ Value: 100000000, State: 0, Label: { LocalizedLabels: [{ Label: label, LanguageCode: 1033 }] }, Color: null });
+  for (const [what, options] of [
+    ['an option whose value is not a number', [stock, { ...inReview('In Review'), Value: '100000000' }]],
+    ['the pinned value held twice', [stock, inReview('In Review'), inReview('Another')]],
+  ]) {
+    const env = await lagEnv();
+    env.fault('POST', isInsert, (req, n) => (n === 1 ? refused('0x80090457', NOT_THERE) : undefined));
+    env.fault('GET', (w) => STATUS_READ.test(w), (req, n) => (n === 1 ? list([{ LogicalName: 'statuscode', OptionSet: { Options: options } }]) : undefined));
+    const run = await phase(env, lagSpec([ticket({ statusReasons: [{ label: 'In Review', state: 'Active' }] })]));
+    assert.ifError(run.error);
+    const reads = run.wire.filter((r) => r.method === 'GET' && STATUS_READ.test(r.path));
+    const inserts = posts(run, isInsert);
+    assert.strictEqual(reads.length, 2, `${what}: read again`);
+    assert.strictEqual(inserts.length, 2, `${what}: the original, and one insert`);
+    assert.ok(run.wire.indexOf(inserts[1]) > run.wire.indexOf(reads[1]), `${what}: after the read that proved it absent`);
+    assert.ok(!run.warnings.some((w) => /then found/.test(w)), `${what}: nothing adopted`);
   }
 });
 
