@@ -5,6 +5,98 @@ All notable changes to the **model-apps** plugin.
 Entries are deliberately short: what changed and why it matters to you. The reasoning,
 evidence and trade-offs behind a change live in its PR, in `docs/`, or in the linked issue.
 
+## [2.19.0]
+
+The bundled SDK is unchanged (power-platform-ux a3443479, as in 2.18.0). A `--changed-only` apply no longer stops over the bindings of
+a page it does not write, a regression of 2.18.0. Two applies of one app no longer run at once in one workspace, the pages lock no
+longer depends on how the app's name is spelled, and a new table's column or status reason that Dataverse refuses moments after the
+table's create is sent again once a read proves it missing. A name such as `__proto__` or `constructor` works like any other name, a
+key over another key's columns stops the build in every language instead of being skipped in English, and a generated page whose
+default export is a generic arrow function is accepted. The token guard also takes out the base64 of each part of a token and reads
+the bytes the plugin's file writers are given, and the genpage evals grade 17 more of their expectations.
+
+### Changed
+
+- **The genpage evals now grade 17 of the 23 expectations their coverage baseline recorded as ungraded** (#688). A wizard's review
+  step and its field labels, components kept at the top level, a search box beside a filter toolbar, shown text through the translate
+  helper, choice values named after their RuntimeTypes.ts members, the columns a page's data calls name (against the RuntimeTypes.ts
+  the run kept, for evals 1 and 7), an edit that keeps what its plan's Preservation Constraints quote and one that stops when the app
+  lists no pages, realistic sample data, and for eval 10 the exact search for its table, its signed-out and WhoAmI 403 blockers shown
+  verbatim, and an identity warning shown before the run goes on to the entity-builder, are now checked against the stored evidence.
+  Six synthetic fixtures were added for them, and the Layer-1 smoke tier replays eight fixtures, none failing (#630). The six still
+  ungraded each have their reason in the baseline: eval 4's Next/Back navigation (proving that a button moves the step needs data-flow
+  analysis), three that a correct check would fail on drift the captured fixtures really show (evals 2 and 13, and the batched-state
+  rule), eval 15's (it names an input shape `provision-entities.js` refuses) and eval 6's (a person judges it). Two limits of the
+  label check are kept: it counts a label whose empty value holds a comment (`{/* hidden */ null}`), and it does not count one written
+  only in character references (`&#84;&#105;…`).
+
+### Fixed
+
+- **A `--changed-only` apply no longer stops over the bindings of a page it does not write — a regression of 2.18.0.** It checked the
+  connector and Custom API bindings of every page another page navigates to, as if it might create each one, so a conflict on a page
+  it leaves alone (`pages-binding-reference-conflict`) stopped the edit of another page. It creates such a page only when the page is
+  missing, and now checks only the pages it writes: the changed ones, and a navigation target that is missing — one its last apply
+  recorded and that was deleted since is checked in the pages step, before it is created again. Each binding name is read once per
+  attempt: a deleted target adds no read of a name a changed page shares, and the names only it states are read in a query of their
+  own. A full build checks every page, as before.
+- **Two applies of one app no longer run at the same time in one workspace.** Two overlapping builds of one app both found the app's
+  icon or a web resource missing and both created it — two icons in the solution, say. A second `--apply` of the app in that workspace
+  — a full build, its data stage or a `--changed-only` run — is now refused at once, before it sends a request: `build-locked`, on
+  stderr (`another build may be applying '<app>' in this workspace`), exit 1 and no JSON on stdout. Run it again once the first has
+  finished. A lock is taken over only from a build proven no longer running, never for its age. Not covered: builds in two workspaces
+  or on two machines, a build of an earlier release (finish those first), and a teardown, download, `/genpage` or `apps.js` command
+  run beside an apply.
+- **The pages lock no longer depends on how the app's name is spelled.** On a case-sensitive file system `Contoso_App` and
+  `contoso_app` took two locks, so two builds of one app could deploy its pages at once. The lock now ignores case, and the lock file
+  earlier releases take is still taken too, so a build of an earlier release that spells the app the same way is still kept out of the
+  pages step; one that spells it differently is not.
+- **A column or status reason that Dataverse refuses moments after its new table's create no longer stops the first build.** On a
+  Spanish environment such a create was refused with HTTP 400 `0x80040216` ("An unexpected error occurred.") or `0x80090457` ("… does
+  not exist"), and the next run succeeded. For a table the run has just created, the build now reads whether the column or status
+  reason is there and adopts it when it is, and sends it again only once a usable read proves it missing, within about 20 seconds per
+  table; a status reason refused this way is added at the end of the data-model step. Any other refusal, and a refusal for a table
+  that already existed, is handled as before; a check that runs out stops the build with the original refusal and says to run the
+  build again.
+- **An alternate key over the columns of another key stops the build in every language** (`0x80060894`). Dataverse allows one key per
+  set of columns. An English build skipped such a key as if it already existed — it was never created, and verification then reported
+  it missing — and a build in another language stopped with the platform's raw error. The build now reads the table's keys after that
+  refusal: it skips the key only when the key over those columns is the declared one, and otherwise stops, naming the existing key and
+  its columns and what to do — declare that key's name or delete it if it is a leftover, keep one of two keys the spec declares over
+  the same columns, or first reconcile a key whose columns are not those the spec declares for it. When the read cannot tell, the
+  build stops with the platform's error.
+- **A name that is also a built-in JavaScript property name works like any other name.** `__proto__`, `constructor`, `toString`,
+  `hasOwnProperty` and the like can name a dashboard, a persona, a business process flow, a status reason or a Custom API parameter,
+  and `constructor` a page key. A dashboard called `__proto__` in the navigation stopped the app step; a new app whose navigation held
+  a page keyed `constructor` stopped at the pages step, after the app was created; a persona called `__proto__` named by a flow's or a
+  form's security roles stopped the security phase; a sample record could be created with the default status when such a status
+  reason's value had not been captured; and such names were left out of the build result, the changed-only snapshot and the
+  `list-custom-apis.js` output. The App Spec check and the provisioning input check refuse a column type such as `constructor` or
+  `toString` as unknown, and the App Spec check reports a form whose table is called `constructor` or `__proto__` instead of stopping
+  with a TypeError.
+- **A generated page whose default export is a generic arrow function is accepted.** `export default <T,>(props: Props<T>) => …` —
+  with a constraint, a `const` type parameter, a default or a return type — compiles, but `/genpage`'s worker-output check and
+  `/app-builder`'s page promotion refused it as having "no complete default export". A default export that TypeScript reads as a JSX
+  element (`export default <div/>`, or `<T>(x) => x` in a `.tsx` file) is still refused, and so is a generic arrow cut off before its
+  body — now an `async` one too, which was let through when cut inside its type parameters, right after a return type that is itself a
+  function type, or with no body after its arrow. Two rare return types that TypeScript parses are refused, and so are their `async`
+  forms, which 2.18.0 let through: a mapped type whose key type is in parentheses inside a parenthesised return type
+  (`(p): ({ [K in (keyof T)]: boolean }) => …`), and a function type whose parameter has a computed key starting with a regular
+  expression and whose own return type starts with `|`. Write the key type without its parentheses or drop the leading `|`, or name
+  the type with a type alias. A page cut off right after a function-type return type whose parameter's default value holds a generic
+  call (`({ a = f<T, U>() }) => R`) passes this check; the deploy compile refuses it.
+- **The stop for a page manifest whose publication could not be confirmed says what the next build does.** It said that build writes
+  the manifest again by its id; that build keeps the published copy when the copy already holds the content, and otherwise writes it
+  again by id. The message for a spec web resource and for the generated app icon is unchanged.
+- **An access token is also kept out of the base64 of each of its parts, and out of the bytes the plugin's file writers are given**
+  (#757). The base64 of each part of 24 characters or more is taken out like the token — standard and URL-safe, at each of the three
+  byte alignments — and what `writeFileSafe`, `appendFileSafe` and `writeFileAtomic` are given as bytes (a Buffer, a typed array or a
+  DataView, or a string written as hex, base64 or base64url) is read too, a hit masked with `*` so the file keeps its length. After a
+  nested write and the write around it are both refused, the next write keeps the escape context of the last accepted output, so JSON
+  written in pieces stays JSON. Still left: a piece shorter than 24 characters, the middle piece of a token written in three or more
+  writes, a short piece on the far side of an escape split between two writes, base64 of a piece that is not a whole part, a token
+  split between two appends to a file, a token another process obtained, and a file written other than through the plugin's writers.
+  pcf's copy of the module takes out the same spellings and keeps the same escape context.
+
 ## [2.18.0]
 
 The bundled SDK is updated to power-platform-ux a3443479. An app whose sitemap's unique name is not the app's — first-party apps
