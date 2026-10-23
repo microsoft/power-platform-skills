@@ -58,7 +58,7 @@ const {
   statedPageBindings,
 } = require('./app-spec.js');
 const { PHASES } = require('./stages.js');
-const { pagesStatingBindings, pagesMadeUnchecked, readBindingTargets, judgeBindingTargets } = require('./page-binding-targets.js');
+const { pagesStatingBindings, pagesMadeUnchecked, pagesLeftOutAsDeployed, bindingReads, readBindingTargets, judgeBindingTargets, unconfirmedDeployedText } = require('./page-binding-targets.js');
 const { topoOrderEntities, entityByLogical } = require('./_graph.js');
 const {
   isMainForm,
@@ -138,7 +138,7 @@ const { DASHBOARD_LAUNCHER_URL, adoptLiveSitemap, chromeByTargetKey, describeSit
 const { buildPromptSpec } = require('./ai-prompt.js');
 const { odataLit } = require('./odata.js');
 const { isRestrictedSolution } = require('./system-solutions.js');
-const { tableRefs, pinAppTables, publishAppComponents, resolveMainForms, appComponentsFor, applyAppMainForms, explainAppPushWarnings } = require('./app-components.js');
+const { tableRefs, pinAppTables, publishAppComponents, resolveMainForms, appComponentsFor, applyAppMainForms, explainAppPushWarnings, savedPageRows } = require('./app-components.js');
 const { appWriteTables, appPushTables, preAppTables, publishTablesXml, readSavedNotPublished, describeSavedNotPublished, readAppFormChartTables, describePreAppRefusal, describeUnreadAppComponents } = require('./table-publish.js');
 const { hasUnsyncedEdits } = require('./unsynced-edits.js');
 const { createSolutionMembership, ensureSolutionComponent } = require('./solution-membership.js');
@@ -1512,9 +1512,10 @@ async function checkNavigationBeforeWriting(spec, { provision, phases, changedOn
 //     to another table, and a read that failed are SAID, by name, and the build goes on: the page is written with its binding (a reference made, or given its connection, later makes the page work without a
 //     rebuild), and an ordinary read failure says only that the bindings were not checked. A refused throttle wait is still the attempt's budget stop, checked by its runner before any mutation.
 // Only a run that has the pages phase writes a binding, and a changed-only run writes the pages it selected and the navigation targets it has to make (pagesStatingBindings). A spec that states none reads nothing.
-async function readPageBindingVerdict(spec, { provision, phases, changedOnly }) {
+// `seen` is what the attempt has read of what bindings name (bindingReads); the pages phase's check of a target it makes is given the same one.
+async function readPageBindingVerdict(spec, { provision, phases, changedOnly, seen }) {
   if (!phases.includes('pages')) return null;
-  return judgePageBindings(provision, pagesStatingBindings(spec, { changedOnly: bindingCheckScope(phases, changedOnly) }));
+  return judgePageBindings(provision, pagesStatingBindings(spec, { changedOnly: bindingCheckScope(phases, changedOnly) }), seen);
 }
 
 // What a run is told of the pages that are deployed (`changedOnly.deployedKeys`, pagesStatingBindings) is heeded only by a run whose pages phase is its FIRST writer — the changed-only fast apply runs that
@@ -1527,10 +1528,10 @@ function bindingCheckScope(phases, changedOnly) {
   return pagesWriteFirst ? changedOnly : { ...changedOnly, deployedKeys: undefined };
 }
 
-// What the environment has for the names `pages` state, judged (lib/page-binding-targets.js): null when no page states one, which reads nothing.
-async function judgePageBindings(provision, pages) {
+// What the environment has for the names `pages` state, judged (lib/page-binding-targets.js): null when no page states one, which reads nothing. A name `seen` already holds is not read again.
+async function judgePageBindings(provision, pages, seen) {
   if (!pages.length) return null;
-  return judgeBindingTargets(pages, await readBindingTargets(provision, pages));
+  return judgeBindingTargets(pages, await readBindingTargets(provision, pages, seen));
 }
 
 // The apply's answer to a verdict: a conflict stops the build, and all else is said.
@@ -1549,15 +1550,50 @@ function haltOnPageBindingConflicts(verdict, warn) {
   if (typeof warn === 'function') for (const text of [...verdict.unchecked.map((u) => u.text), ...verdict.findings.map((finding) => finding.text)]) warn(text);
 }
 
-async function checkPageBindingsBeforeWriting(spec, { provision, phases, changedOnly, warn }) {
-  haltOnPageBindingConflicts(await readPageBindingVerdict(spec, { provision, phases, changedOnly }), warn);
+async function checkPageBindingsBeforeWriting(spec, { provision, phases, changedOnly, warn, seen }) {
+  haltOnPageBindingConflicts(await readPageBindingVerdict(spec, { provision, phases, changedOnly, seen }), warn);
+}
+
+// A dry run has no pages phase, which is what finds a navigation target absent (reconcilePageIds: the spec's page id, or the manifest's, that the environment still lists). So for each target a
+// changed-only run was told is deployed (`changedOnly.deployedKeys`) and would leave unread (pagesLeftOutAsDeployed), the dry run asks the environment, read only, whether the page is still there —
+// never taking the record of an earlier apply as proof. Two reads, made only when there is such a target:
+//   GET <webresource set>?$select=webresourceid,content&$filter=name eq '<app>_pagemanifest'&$top=1                    the manifest (readPageManifest): each page's key and id
+//   GET /uxagentprojects/Microsoft.Dynamics.CRM.RetrieveUnpublishedMultiple()?$select=uxagentprojectid,name,componentstate&$filter=uxagentprojectid eq <id> or …
+//                                                                                                                    the pages in the SAVED layer, a never-published one included (savedPageRows)
+// A target whose page answers to the id the spec or the manifest gives it is there: its binding is left unread, as the apply leaves it. One whose ids answer to no page is absent — the apply
+// makes it — and one these reads cannot settle (no id, a read that fails) is not known to be there: both are checked, as if the build will make them, and a read that failed is said. Answers the
+// run's `changedOnly` with `deployedKeys` keeping only the targets found.
+async function confirmDeployedTargets(spec, { provision, phases, changedOnly, warn }) {
+  const scoped = bindingCheckScope(phases, changedOnly);
+  const leftOut = pagesLeftOutAsDeployed(spec, scoped);
+  if (!leftOut.length) return scoped;
+  const found = new Set();
+  let unsettled;
+  try {
+    const { manifest } = await readPageManifest(provision, appUniqueName(spec));
+    const manifestIds = new Map(((manifest && manifest.pages) || []).map((entry) => [entry.key, entry.pageId]));
+    const specIds = new Map((spec.pages || []).map((page) => [page.key || page.name, page.pageId]));
+    const idsOf = new Map(leftOut.map((page) => [page.key, [specIds.get(page.key), manifestIds.get(page.key)].filter((id) => typeof id === 'string' && FORM_GUID_RE.test(id)).map((id) => id.toLowerCase())]));
+    const wanted = [...new Set([...idsOf.values()].flat())];
+    if (wanted.length && !(provision.dataverse && typeof provision.dataverse.get === 'function')) unsettled = 'the pages cannot be read here';
+    else if (wanted.length) {
+      const rows = await savedPageRows(provision.dataverse, wanted, { label: 'the pages recorded as deployed' });
+      for (const page of leftOut) if (idsOf.get(page.key).some((id) => rows.has(id))) found.add(page.key);
+    }
+  } catch (error) {
+    unsettled = (error && error.message) || String(error);
+  }
+  if (unsettled !== undefined && typeof warn === 'function') warn(unconfirmedDeployedText(leftOut, unsettled));
+  const unfound = new Set(leftOut.filter((page) => !found.has(page.key)).map((page) => page.key));
+  return unfound.size ? { ...scoped, deployedKeys: scoped.deployedKeys.filter((key) => !unfound.has(key)) } : scoped;
 }
 
 // The dry run's share: say on the page's own line that an apply would stop there, and why. The line is marked as a view the build would refuse is (annotateLivePlan): `? unknown` with the reason, and `wouldHalt` so
 // the summary counts it among the steps that would stop the build. What an apply would only say is said the same way. The pages judged are those an apply judges before it writes anything
-// (readPageBindingVerdict); a target an apply was told is deployed and finds absent only in its pages phase (pagesMadeUnchecked) is not, since a plan does not list the environment's pages.
+// (readPageBindingVerdict) — save a target the run was told is deployed that the dry run does not find in the environment (confirmDeployedTargets): the apply's pages phase makes that one, and
+// stops on it (pagesMadeUnchecked), so the plan judges it too.
 async function checkPageBindingsInPlan(plan, spec, { provision, phases, changedOnly, warn }) {
-  const verdict = await readPageBindingVerdict(spec, { provision, phases, changedOnly });
+  const verdict = await readPageBindingVerdict(spec, { provision, phases, changedOnly: await confirmDeployedTargets(spec, { provision, phases, changedOnly, warn }) });
   if (!verdict) return;
   const refusedBy = new Map();
   for (const finding of verdict.findings.filter((f) => f.severity === 'refuse')) refusedBy.set(finding.page.name, [...(refusedBy.get(finding.page.name) || []), finding.text]);
@@ -3038,8 +3074,10 @@ async function runSdkBuildPhases(spec, opts, owed) {
   // A navigation Dataverse will refuse stops the build here, before anything is written, rather than at the app step
   // after the solution, tables, columns, views and forms have been (app-navigation.js). Only a run that has the app step.
   if (has('app-shell')) await checkNavigationBeforeWriting(spec, { provision, phases, changedOnly: opts.changedOnly, warn: opts.warn });
-  // A binding whose connection reference is another connector's stops the build here too, before anything is written, for the same reason (checkPageBindingsBeforeWriting).
-  await checkPageBindingsBeforeWriting(spec, { provision, phases, changedOnly: opts.changedOnly, warn: opts.warn });
+  // A binding whose connection reference is another connector's stops the build here too, before anything is written, for the same reason (checkPageBindingsBeforeWriting). What it reads is kept for
+  // the attempt (bindingReads): the pages phase judges a navigation target it finds it has to make by the same reads, and reads only a name this check did not.
+  const bindingReadsOfAttempt = bindingReads();
+  await checkPageBindingsBeforeWriting(spec, { provision, phases, changedOnly: opts.changedOnly, warn: opts.warn, seen: bindingReadsOfAttempt });
   runner.stopIfRefused('preflight');
 
   const createdFormsThisRun = new Set();
@@ -7098,13 +7136,14 @@ async function runSdkBuildPhases(spec, opts, owed) {
           }
         }
       }
-      // The navigation targets this run MAKES (absent: `keyToId` holds no id for them) whose bindings the check before writing did not read, because the run was told the page is deployed
-      // (bindingCheckScope, `changedOnly.deployedKeys`) — one deleted in Maker since the last apply. The create sends the page's spec entry, bindings and all, so they are read and judged now, before the
-      // first page is written, by the same verdict and with the same halt as that check (`preflight`: nothing is written yet — such a run writes nothing before its pages phase). A refused throttle wait
-      // stops the run here, as it does after that check. A run that was told nothing has none: every target was checked before it wrote anything.
+      // The navigation targets this run MAKES (absent: `keyToId` holds no id for them) whose bindings the check before writing did not judge, because the run was told the page is deployed
+      // (bindingCheckScope, `changedOnly.deployedKeys`) — one deleted in Maker since the last apply. The create sends the page's spec entry, bindings and all, so they are judged now, before the
+      // first page is written, by the same verdict and with the same halt as that check (`preflight`: nothing is written yet — such a run writes nothing before its pages phase), and by what the
+      // attempt has already read (bindingReadsOfAttempt): a name that check read is not read again, so a read here can neither add a request for it nor, failing, undo what that read proved. A
+      // refused throttle wait stops the run here, as it does after that check. A run that was told nothing has none: every target was checked before it wrote anything.
       const madeUnchecked = pagesMadeUnchecked(spec, { changedOnly: bindingCheckScope(phases, opts.changedOnly), made: new Set(implemented.filter((p) => navTargets.has(keyOf(p)) && !keyToId.has(keyOf(p))).map(keyOf)) });
       if (madeUnchecked.length) {
-        haltOnPageBindingConflicts(await judgePageBindings(provision, madeUnchecked), opts.warn);
+        haltOnPageBindingConflicts(await judgePageBindings(provision, madeUnchecked, bindingReadsOfAttempt), opts.warn);
         runner.stopIfRefused('preflight');
       }
       // After the whole scan, so a build that halts on a later page says only why it halted. Nothing has been written yet, and the pages that are warned about are sent as they are.

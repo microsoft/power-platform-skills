@@ -40,31 +40,33 @@ const WEATHER = { logicalName: 'contoso_msnweather', connectorId: '/providers/Mi
 // The reference of that name, as the environment holds it now: for another connector.
 const OTHER_CONNECTOR = { connectionreferencelogicalname: 'contoso_msnweather', connectorid: '/providers/Microsoft.PowerApps/apis/shared_office365users', connectionid: 'shared-office365users-0001', _customconnectorid_value: null };
 
-function abcSpec() {
+function abcSpec({ alpha = {} } = {}) {
   return {
     schemaVersion: 2,
     solution: { uniqueName: 'ContosoReview', displayName: 'Contoso Review', publisherPrefix: 'contoso' },
     app: { name: 'Binding Targets', uniqueName: 'contoso_bindingtargets' },
     entities: [{ schemaName: 'contoso_item', displayName: 'Item', existing: true, primaryAttribute: { schemaName: 'contoso_name', displayName: 'Name' }, columns: [] }],
     pages: [
-      { key: 'alpha', name: 'Alpha', source: { kind: 'tsx', codeFile: 'Alpha.tsx' } },
+      { key: 'alpha', name: 'Alpha', source: { kind: 'tsx', codeFile: 'Alpha.tsx' }, ...alpha },
       { key: 'bravo', name: 'Bravo', navigatesTo: [{ targetKey: 'charlie' }], source: { kind: 'tsx', codeFile: 'Bravo.tsx' } },
       { key: 'charlie', name: 'Charlie', source: { kind: 'tsx', codeFile: 'Charlie.tsx' }, connectorBindings: [WEATHER] },
     ],
     appShell: { areas: [{ label: 'Main', groups: [{ label: 'Pages', subAreas: [{ entity: 'contoso_item', title: 'Items' }, { page: 'alpha' }, { page: 'bravo' }, { page: 'charlie' }] }] }] },
   };
 }
+// Alpha names Charlie's connection reference too, and states the connector the environment's reference is for: Alpha is fine, Charlie conflicts.
+const SHARED_ALPHA = { connectorBindings: [{ ...WEATHER, connectorId: OTHER_CONNECTOR.connectorid, operations: [] }] };
 
 // The app as a first build leaves it — its three pages created and in its navigation — with the changed-only baseline its flow records for it. `references` is what the environment answers for
-// connection references from then on (none while the app was built).
-async function builtApp(t) {
+// connection references from then on (none while the app was built); `answerReferences`, when set, answers each read of their rows instead (a refusal, say). `alpha`: what Alpha states besides its source.
+async function builtApp(t, { alpha } = {}) {
   const org = createFakeBuildOrg({ entities: { contoso_item: { attributes: { contoso_name: 'String' } } }, solution: { uniqueName: 'ContosoReview' } });
   const server = new FakeGenPageServer();
   const dir = makeTempDir('binding-targets-');
   for (const [file, text] of Object.entries(SOURCES)) fs.writeFileSync(path.join(dir, file), text);
-  const state = { references: [] };
+  const state = { references: [], answerReferences: null };
   org.intercept((c) => c.method === 'GET' && /^\/EntityDefinitions\(LogicalName='connectionreference'\)/.test(c.path), () => ({ status: 200, headers: {}, body: { EntitySetName: 'connectionreferences' } }));
-  org.intercept((c) => c.method === 'GET' && /^\/connectionreferences\?/.test(c.path), () => ({ status: 200, headers: {}, body: { value: state.references } }));
+  org.intercept((c) => c.method === 'GET' && /^\/connectionreferences\?/.test(c.path), () => (state.answerReferences ? state.answerReferences() : { status: 200, headers: {}, body: { value: state.references } }));
   const pages = makeGenpageSdk(org.origin, { httpClient: server.http() });
   t.after(async () => { await pages.dispose(); });
   // The page backend the build uses, the real one. A page it creates is listed by the environment's own page table too, which the build reads through the provisioning SDK.
@@ -87,7 +89,7 @@ async function builtApp(t) {
     await sdk.initWorkspace();
     return sdk;
   };
-  const spec = abcSpec();
+  const spec = abcSpec({ alpha });
   const first = await runSdkBuild(spec, { sdk: await makeSdk(), apply: true, phases: ['app-shell', 'pages'], workspaceDir: dir, appDir: dir, env: org.origin, genpage: backend });
   assert.equal(first.ok, true);
   assert.deepEqual(Object.keys(first.created.pages).sort(), ['alpha', 'bravo', 'charlie'], 'the first build made the three pages');
@@ -136,8 +138,10 @@ const conflict = (page) => (error) => error && error.code === 'pages-binding-ref
   && error.message.includes('The build stopped before writing anything.');
 
 test('the spec these cases build is valid, so none of them rests on a spec the CLI would refuse', () => {
-  const validated = validateAppSpec(abcSpec(), { profile: 'deploy' });
-  assert.deepEqual({ ok: validated.ok, errors: validated.errors }, { ok: true, errors: [] });
+  for (const spec of [abcSpec(), abcSpec({ alpha: SHARED_ALPHA })]) {
+    const validated = validateAppSpec(spec, { profile: 'deploy' });
+    assert.deepEqual({ ok: validated.ok, errors: validated.errors }, { ok: true, errors: [] });
+  }
 });
 
 test('REAL BUNDLE: a changed-only apply of an edit to one page writes that page, and neither reads nor judges the binding of a navigation target that exists — though its reference is another connector\'s', async (t) => {
@@ -181,4 +185,42 @@ test('REAL BUNDLE: a changed-only apply after the navigation target was deleted 
   assert.equal(run.referenceReads.filter((c) => /^\/connectionreferences\?/.test(c.path)).length, 1, 'the references were read once, when the run found it had to make the page');
   assert.deepEqual(run.orgWrites, [], 'nothing was written to the environment');
   assert.deepEqual(run.pageWrites, [], 'no page was made or written');
+});
+
+// Alpha and the deleted Charlie name the same reference. The check before writing reads it for Alpha (Alpha is fine); the pages phase, about to make Charlie, judges Charlie by that read: the
+// name is read once in the attempt, so a second read — refused here — is never made, and the conflict it already proved stops the run before anything is written.
+async function deletedCharlieSharingAlphasReference(t) {
+  const app = await builtApp(t, { alpha: SHARED_ALPHA });
+  const charlie = app.first.created.pages.charlie;
+  const removed = await app.server.http().delete(`${app.org.origin}/api/data/v9.0/uxagentprojects(${charlie})`);
+  assert.ok(removed.status < 300, `the page service deleted the page: ${removed.status}`);
+  app.org.pages.delete(charlie);
+  app.state.references = [OTHER_CONNECTOR];
+  app.edit('Alpha.tsx');
+  return app;
+}
+
+test('REAL BUNDLE: a deleted navigation target that names the edited page\'s reference is judged by the one read of it — a refused second read cannot let the target be made unchecked', async (t) => {
+  const app = await deletedCharlieSharingAlphasReference(t);
+  let rowReads = 0;
+  app.state.answerReferences = () => {
+    rowReads += 1;
+    return rowReads === 1
+      ? { status: 200, headers: {}, body: { value: app.state.references } }
+      : { status: 403, headers: {}, body: { error: { code: '0x80040220', message: 'The user does not hold the privilege to read connection references.' } } };
+  };
+  const run = await app.changedOnlyApply();
+  assert.ok(conflict('Charlie')(run.error), String(run.error && run.error.stack));
+  assert.equal(rowReads, 1, 'the rows of the reference were read once in the attempt');
+  assert.deepEqual(run.orgWrites, [], 'nothing was written to the environment');
+  assert.deepEqual(run.pageWrites, [], 'no page was made or written');
+});
+
+test('REAL BUNDLE: a deleted navigation target that names the edited page\'s reference adds no read of it — one request for its rows in the attempt', async (t) => {
+  const app = await deletedCharlieSharingAlphasReference(t);
+  const run = await app.changedOnlyApply();
+  assert.ok(conflict('Charlie')(run.error), String(run.error && run.error.stack));
+  assert.equal(run.referenceReads.filter((c) => /^\/connectionreferences\?/.test(c.path)).length, 1);
+  assert.deepEqual(run.orgWrites, []);
+  assert.deepEqual(run.pageWrites, []);
 });

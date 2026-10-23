@@ -1739,9 +1739,17 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   neither read nor judged, and one it is not told of is checked (fail closed). A target it was told of and that the
   pages phase finds absent after all (deleted in Maker since) is checked there, before it is made
   (`pagesMadeUnchecked`), with the same verdict and the same halt; the fast apply runs the pages phase alone, so
-  nothing is written yet. A run with an earlier phase ignores `deployedKeys` (`bindingCheckScope`) and checks every
-  navigation target before it writes anything. A dry run's plan applies the same rule; it does not list the
-  environment's pages, so it cannot mark a target the apply would find absent only then.
+  nothing is written yet. **Both checks of one attempt share what it has read** (`bindingReads`): a name is read
+  once per attempt, and that answer — a row, no row, a failure — stands for both, so the pages-phase check reads
+  only names the first did not, and a second read can never fail and turn a conflict the first one proved into "not
+  checked" (only names it could not read at all are said by name as not checked — `unread`). A run with an earlier
+  phase ignores `deployedKeys` (`bindingCheckScope`) and checks every navigation target before it writes anything.
+  A dry run's plan applies the same rule, but has no pages phase to find a target absent, so for each target it was
+  told is deployed and would leave unread (`pagesLeftOutAsDeployed`) it asks the environment, read only, whether the
+  page is still there (`confirmDeployedTargets`: the page manifest, then the generative pages in the SAVED layer by
+  the ids the spec and the manifest give it — `savedPageRows`); a target none of whose ids answers is checked, as the
+  apply checks it, and one it cannot settle (no id, a read that fails, which it says) is checked too: the record of an
+  earlier apply is never taken as proof that a page is there.
   **What a rebuild cannot bring to another environment is what the lists name,
   and the download says so**: when any page holds a binding it prints `NOTE:` on stderr and returns
   `pageBindings` — `pages` (each page's key, name and the connection references / Custom APIs its bindings go by),
@@ -1761,7 +1769,8 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   `sdk-build-pages-deploy.test.js`, which also pins what a changed-only run checks).
   `page-binding-targets-real-bundle.test.js` runs a changed-only apply through the flow over the real SDK and the
   real page backend: an edit of one page leaves an existing navigation target's binding unread, an edit of the target
-  itself is refused, and a target deleted since the last apply is refused before it is made.
+  itself is refused, and a target deleted since the last apply is refused before it is made — also when it shares a
+  reference name with the edited page, by the attempt's one read of that name.
   **A download is written in a fixed order, so two downloads of one app match byte for byte** and a diff
   between them shows only what changed. Dataverse promises no row order for a query without `$orderby`,
   and a directory listing is in the file system's order (name order on NTFS, hash order on ext4), so

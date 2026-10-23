@@ -691,7 +691,8 @@ bindings and all, and leaves an existing one as it is). Whether a target exists 
 after that check, so the flow passes the page keys the snapshot records as deployed (`changedOnly.deployedKeys`):
 a listed target is not read, an unlisted one is checked (fail closed), and a listed one the pages phase finds
 absent (deleted in Maker since the last apply) is checked there before it is created — still before any write,
-because the fast apply runs the pages phase alone.
+because the fast apply runs the pages phase alone. The two checks share what the attempt has read, so a name is
+read once per attempt and a later read can never undo what an earlier one proved.
 
 **CONFIRMED landmine (validated against `sdk-build.js`) — the pages-only fast path MUST skip the sitemap
 finalize.** The pages phase's finalize (`sdk-build.js:1428-1437`) rebuilds the WHOLE sitemap via

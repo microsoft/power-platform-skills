@@ -76,12 +76,20 @@ function pagesStatingBindings(spec, { changedOnly } = {}) {
   return out;
 }
 
-// The pages the pages phase is about to MAKE (`made`: the keys of the absent navigation targets it creates) that state a binding the check before writing did not read, because the run was told the page is
-// deployed (pagesStatingBindings): each is checked before the first is made, as that check would have checked it. Every other page the run writes was checked before it wrote anything, so this is [] for a run
-// that was told nothing, and for a full build.
+// The pages the pages phase is about to MAKE (`made`: the keys of the absent navigation targets it creates) that state a binding the check before writing did not judge, because the run was told the page
+// is deployed (pagesStatingBindings): each is checked before the first is made, as that check would have checked it, and by what the attempt has already read (bindingReads). Every other page the run
+// writes was checked before it wrote anything, so this is [] for a run that was told nothing, and for a full build.
 function pagesMadeUnchecked(spec, { changedOnly, made }) {
   const checked = new Set(pagesStatingBindings(spec, { changedOnly }).map((page) => page.key));
   return pagesStatingBindings(spec).filter((page) => made.has(page.key) && !checked.has(page.key));
+}
+
+// The pages that state a binding and that the check before writing leaves out only because the run was told they are deployed (pagesStatingBindings): what a dry run, which has no pages phase to
+// find one absent, asks the environment about before it leaves them out (sdk-build.js, confirmDeployedTargets). [] for a run told nothing, and for a full build.
+function pagesLeftOutAsDeployed(spec, changedOnly) {
+  if (!changedOnly || !Array.isArray(changedOnly.deployedKeys)) return [];
+  const checked = new Set(pagesStatingBindings(spec, { changedOnly }).map((page) => page.key));
+  return pagesStatingBindings(spec, { changedOnly: { ...changedOnly, deployedKeys: undefined } }).filter((page) => !checked.has(page.key));
 }
 
 // The names the pages state for one kind of binding: each once, as the first page spells it (the service compares them without regard to case, and the match here is made in lower case).
@@ -169,6 +177,14 @@ async function readDefinitions(reader, ids) {
   return definitions;
 }
 
+// What one attempt of a build has read of what the pages' bindings name, for readBindingTargets: per kind, Map<lower-cased name, { row } | { none: true } | { problem }>, and the custom connectors'
+// definitions by id. The check before writing and the pages phase's check of a navigation target it finds it has to make (sdk-build.js) share one, so a name is read ONCE per attempt, and what
+// that read answered — a row, no row, a failure — stands for every check of the attempt. A later check never asks again: it adds no request, and a second read that fails can never turn what
+// the first one proved (a reference for another connector) into "not checked". A new attempt (the build's re-run of a halt) starts a new one, and reads again.
+function bindingReads() {
+  return { references: new Map(), apis: new Map(), definitions: new Map() };
+}
+
 // What the environment has for the names `pages` state: { references, apis, definitions, problems }.
 //   references   Map<lower-cased logical name, { connectorId, connected?, customConnectorId? }> of the connection references (`connectionreference` rows) — or null when no page states a connector binding, or
 //                the read failed. Each piece is kept only as the row PROVES it, and anything else is left out — which judgeBindingTargets reads as "not known", never as "fine":
@@ -181,30 +197,56 @@ async function readDefinitions(reader, ids) {
 //   apis         Map<lower-cased unique name, { isFunction, boundEntity? }> of the Custom APIs (`customapi` rows) — or null likewise
 //   definitions  Map<custom connector id, Set<operation id> | { problem }> (readDefinitions) of the custom connectors a binding that calls operations goes through — or null when there is none
 //   problems     { references?, apis? }: why a read failed, as the service said it. A failed read does not stop the other, and is never an empty answer.
+//   unread       { references?, apis? }: Map<lower-cased name, why> — present only beside answered names, which only an attempt's LATER check meets (below): the names an earlier read of the attempt could not
+//                read. They are not checked and are said so, by name, while the names that were read are judged.
 // Only the rows of the names asked for are kept, whatever the service answered.
+// `seen` (bindingReads) is what the attempt has read so far: a name it holds is not asked for again, and its answer — a row, no row, a failure — is the one this check is given. One check alone (a
+// fresh `seen`) reads every name once and answers exactly as a single read always did: the rows found, or null and why the read failed.
 // A connection reference row as the Web API answers it (https://learn.microsoft.com/power-apps/developer/data-platform/reference/entities/connectionreference); `connectionid` is null while it has no
 // connection, and `_customconnectorid_value` null when no custom connector is recorded for it:
 //   { "connectionreferencelogicalname": "contoso_msnweather", "connectorid": "/providers/Microsoft.PowerApps/apis/shared_msnweather", "connectionid": "shared-msnweather-…", "_customconnectorid_value": null }
 // and a Custom API row (https://learn.microsoft.com/power-apps/developer/data-platform/reference/entities/customapi), `bindingtype` 0 Global, 1 Entity, 2 EntityCollection:
 //   { "uniquename": "contoso_ApproveOrder", "isfunction": false, "bindingtype": 1, "boundentitylogicalname": "contoso_item" }
-async function readBindingTargets(provision, pages) {
+async function readBindingTargets(provision, pages, seen = bindingReads()) {
   const targets = { references: null, apis: null, definitions: null, problems: {} };
   const reader = provision && typeof provision.queryRecords === 'function' ? provision : null;
   const read = async (kind, entity, select, column, keyOf, valueOf, target) => {
     const names = namesOf(pages, kind);
     if (!names.length) return;
-    try {
-      if (!reader) throw new Error('the rows cannot be read here');
-      const wanted = new Set(names.map((name) => name.toLowerCase()));
-      const found = new Map();
-      for (const row of await readNamed(reader, entity, select, column, names)) {
-        const key = row && typeof keyOf(row) === 'string' ? keyOf(row).trim().toLowerCase() : '';
-        if (key && wanted.has(key) && !found.has(key)) found.set(key, valueOf(row));
+    const known = seen[target];
+    const fresh = names.filter((name) => !known.has(name.toLowerCase()));
+    if (fresh.length) {
+      try {
+        if (!reader) throw new Error('the rows cannot be read here');
+        const wanted = new Set(fresh.map((name) => name.toLowerCase()));
+        const found = new Map();
+        for (const row of await readNamed(reader, entity, select, column, fresh)) {
+          const key = row && typeof keyOf(row) === 'string' ? keyOf(row).trim().toLowerCase() : '';
+          if (key && wanted.has(key) && !found.has(key)) found.set(key, valueOf(row));
+        }
+        for (const name of wanted) known.set(name, found.has(name) ? { row: found.get(name) } : { none: true });
+      } catch (error) {
+        const problem = String((error && error.message) || error);
+        for (const name of fresh) known.set(name.toLowerCase(), { problem });
       }
-      targets[target] = found;
-    } catch (error) {
-      targets.problems[target] = String((error && error.message) || error);
     }
+    const answers = names.map((name) => [name.toLowerCase(), known.get(name.toLowerCase())]);
+    const why = [...new Set(answers.map(([, answer]) => answer.problem))];
+    // Every name unread for one reason — the one read failed, as a single read's failure always read: null, and why.
+    if (why.length === 1 && why[0] !== undefined) {
+      targets.problems[target] = why[0];
+      return;
+    }
+    const rows = new Map();
+    for (const [name, answer] of answers) {
+      if (answer.row) rows.set(name, answer.row);
+      else if (answer.problem !== undefined) {
+        if (!targets.unread) targets.unread = {};
+        if (!targets.unread[target]) targets.unread[target] = new Map();
+        targets.unread[target].set(name, answer.problem);
+      }
+    }
+    targets[target] = rows;
   };
   await read('connectorBindings', 'connectionreference', ['connectionreferencelogicalname', 'connectorid', 'connectionid', '_customconnectorid_value'], 'connectionreferencelogicalname',
     (row) => row.connectionreferencelogicalname,
@@ -226,7 +268,11 @@ async function readBindingTargets(provision, pages) {
         if (reference && reference.customConnectorId && operationsOf(entry).length && !ids.includes(reference.customConnectorId)) ids.push(reference.customConnectorId);
       }
     }
-    if (ids.length) targets.definitions = await readDefinitions(reader, ids);
+    if (ids.length) {
+      const fresh = ids.filter((id) => !seen.definitions.has(id));
+      if (fresh.length) for (const [id, definition] of await readDefinitions(reader, fresh)) seen.definitions.set(id, definition);
+      targets.definitions = new Map(ids.map((id) => [id, seen.definitions.get(id)]));
+    }
   }
   await read('actionBindings', 'customapi', ['uniquename', 'isfunction', 'bindingtype', 'boundentitylogicalname'], 'uniquename',
     (row) => row.uniquename,
@@ -243,12 +289,20 @@ const pagesWords = (pages) => `${plural(pages, 'page', 'pages')} ${pages.map((pa
 //              has with no connection, the operations a custom connector there does not define, the Custom APIs it has none of, the Custom APIs that are not as the binding says. `refuse` is a connector conflict
 //              and nothing else: a binding that is refused is not judged further.
 //   unchecked  [{ what, text }] for what could not be checked, and why: a page at a time, what its references' rows did not say (their connector, whether they have a connection, which custom connector they
-//              are for), then the operations of a binding whose custom connector's definition could not be read; then each read that failed. Missing evidence is never a finding and never "compatible".
+//              are for), then the operations of a binding whose custom connector's definition could not be read, and the names of its bindings an earlier read of the attempt could not read (`unread`);
+//              then each read that failed. Missing evidence is never a finding and never "compatible".
 function judgeBindingTargets(pages, targets) {
   const findings = [];
   const unchecked = [];
   const nameOf = (entry, identity) => (entry && typeof entry[identity] === 'string' && entry[identity].trim() ? entry[identity].trim() : undefined);
   const sameName = (names, name) => names.some((seen) => seen.toLowerCase() === name.toLowerCase());
+  // Why a name was not read, when an earlier read of the attempt could not read it while other names were read (readBindingTargets `unread`) — undefined for a name that was read.
+  const unreadWhy = (target, name) => (targets.unread && targets.unread[target] ? targets.unread[target].get(name.toLowerCase()) : undefined);
+  const noteUnread = (byWhy, why, name) => {
+    const names = byWhy.get(why) || [];
+    if (!sameName(names, name)) names.push(name);
+    byWhy.set(why, names);
+  };
   for (const page of pages) {
     const at = { key: page.key, name: page.name };
     const connectors = (page.connectorBindings || []).filter((entry) => nameOf(entry, PAGE_BINDINGS.connectorBindings));
@@ -260,11 +314,19 @@ function judgeBindingTargets(pages, targets) {
     const connectorUnknown = [];
     const connectionUnknown = [];
     const customUnknown = [];
+    // The names that were not read at all, by why: not checked, and said so by name — never "not there".
+    const referencesUnread = new Map();
+    const apisUnread = new Map();
     const missingApis = [];
     const mismatches = [];
     if (targets.references instanceof Map) {
       for (const entry of connectors) {
         const name = nameOf(entry, PAGE_BINDINGS.connectorBindings);
+        const notRead = unreadWhy('references', name);
+        if (notRead !== undefined) {
+          noteUnread(referencesUnread, notRead, name);
+          continue;
+        }
         const reference = targets.references.get(name.toLowerCase());
         if (!reference) {
           if (!sameName(missingReferences, name)) missingReferences.push(name);
@@ -325,9 +387,15 @@ function judgeBindingTargets(pages, targets) {
     if (connectorUnknown.length) unchecked.push({ what: 'reference connectors', text: `this environment's ${plural(connectorUnknown, 'row', 'rows')} for connection ${plural(connectorUnknown, 'reference', 'references')} ${joined(connectorUnknown)} did not give a connector id this build can read (absent, or not of the form /providers/Microsoft.PowerApps/apis/shared_<name>), so whether ${bindingsWords(connectorUnknown)} ${plural(connectorUnknown, 'goes', 'go')} through the connector ${plural(connectorUnknown, 'it was', 'they were')} made for was not checked` });
     if (connectionUnknown.length) unchecked.push({ what: 'reference connections', text: `this environment's ${plural(connectionUnknown, 'row', 'rows')} for connection ${plural(connectionUnknown, 'reference', 'references')} ${joined(connectionUnknown)} did not say, in a form this build can read, whether ${plural(connectionUnknown, 'it has', 'they have')} a connection, so that was not checked for page ${quoted(page.name)}` });
     if (customUnknown.length) unchecked.push({ what: 'custom connector definitions', text: `the operations that ${bindingsWords(customUnknown)} call were not checked: this environment does not name a custom connector for ${plural(customUnknown, 'its connection reference', 'their connection references')}, and only a custom connector's definition is read here (a connector the platform publishes defines the same operations in every environment of its cloud)` });
+    for (const [why, names] of referencesUnread) unchecked.push({ what: 'connection references', text: `could not read this environment's connection references (${shown(why)}), so ${bindingsWords(names)} ${plural(names, 'was', 'were')} not checked against them` });
     if (targets.apis instanceof Map) {
       for (const entry of actions) {
         const name = nameOf(entry, PAGE_BINDINGS.actionBindings);
+        const notRead = unreadWhy('apis', name);
+        if (notRead !== undefined) {
+          noteUnread(apisUnread, notRead, name);
+          continue;
+        }
         const api = targets.apis.get(name.toLowerCase());
         if (!api) {
           if (!sameName(missingApis, name)) missingApis.push(name);
@@ -356,6 +424,7 @@ function judgeBindingTargets(pages, targets) {
       });
     }
     for (const mismatch of mismatches) findings.push({ severity: 'warn', kind: 'api-mismatch', page: at, binding: mismatch.binding, text: mismatch.text });
+    for (const [why, names] of apisUnread) unchecked.push({ what: 'Custom APIs', text: `could not read this environment's Custom APIs (${shown(why)}), so ${plural(names, 'Custom API binding', 'Custom API bindings')} ${names.map(quoted).join(', ')} of page ${quoted(page.name)} ${plural(names, 'was', 'were')} not checked against them` });
   }
   const unread = (what, kind, problem, listed) => {
     if (!problem) return;
@@ -367,4 +436,9 @@ function judgeBindingTargets(pages, targets) {
   return { findings, unchecked };
 }
 
-module.exports = { connectorKey, pagesStatingBindings, pagesMadeUnchecked, readBindingTargets, judgeBindingTargets, definedOperations };
+// What a dry run says of the pages it was told are deployed when it cannot find out whether they still are (sdk-build.js, confirmDeployedTargets): it checks them, as if the build will make them.
+function unconfirmedDeployedText(pages, why) {
+  return `could not tell whether ${pagesWords(pages)}, recorded as deployed, ${plural(pages, 'is', 'are')} still in this environment (${shown(why)}), so ${plural(pages, 'its', 'their')} bindings are checked as if the build will make ${plural(pages, 'it', 'them')}`;
+}
+
+module.exports = { connectorKey, pagesStatingBindings, pagesMadeUnchecked, pagesLeftOutAsDeployed, bindingReads, readBindingTargets, judgeBindingTargets, unconfirmedDeployedText, definedOperations };

@@ -6,7 +6,7 @@
 // exists for ANOTHER connector is refused — the page would call that connector under this name, and the name cannot tell them apart — and a name that is not there, or a Custom API of another kind, is said by name.
 const { test } = require('node:test');
 const assert = require('node:assert');
-const { connectorKey, pagesStatingBindings, pagesMadeUnchecked, readBindingTargets, judgeBindingTargets, definedOperations } = require('../lib/page-binding-targets.js');
+const { connectorKey, pagesStatingBindings, pagesMadeUnchecked, pagesLeftOutAsDeployed, bindingReads, readBindingTargets, judgeBindingTargets, definedOperations } = require('../lib/page-binding-targets.js');
 
 const WEATHER = { logicalName: 'contoso_msnweather', connectorId: '/providers/Microsoft.PowerApps/apis/shared_msnweather', dataset: '', operations: ['CurrentWeather'] };
 const SHAREPOINT = { logicalName: 'contoso_sharepoint', connectorId: '/providers/Microsoft.PowerApps/apis/shared_sharepointonline', dataset: 'https://contoso.sharepoint.com/sites/x', tables: ['11111111-2222-3333-4444-555555555555'] };
@@ -170,6 +170,94 @@ test('readBindingTargets quotes a name into the filter as OData text, reads many
   const cannot = await readBindingTargets({}, [{ key: 'a', name: 'A', connectorBindings: [WEATHER] }]);
   assert.strictEqual(cannot.references, null);
   assert.match(cannot.problems.references, /cannot be read here/, 'a reader that cannot read is a read that failed');
+});
+
+// One attempt of a build can check bindings twice: before it writes anything, and in its pages phase for a navigation target it finds it has to make (sdk-build.js). Both go through what the
+// attempt has read (bindingReads): a name is read once per attempt, and what that read answered — a row, no row, a failure — stands for every check of the attempt.
+test('readBindingTargets: an attempt reads a name once — a later check of the same attempt asks only for the names it has not read', async () => {
+  const seen = bindingReads();
+  const { provision, calls } = readerOf({ connectionreference: [reference('contoso_msnweather', 'shared_msnweather'), reference('contoso_sharepoint', 'shared_sharepointonline')] });
+  const first = await readBindingTargets(provision, [{ key: 'a', name: 'A', connectorBindings: [WEATHER] }], seen);
+  assert.deepStrictEqual([...first.references.keys()], ['contoso_msnweather']);
+  const second = await readBindingTargets(provision, [{ key: 'c', name: 'C', connectorBindings: [{ ...WEATHER, logicalName: 'CONTOSO_MSNWEATHER' }, SHAREPOINT, { logicalName: 'contoso_absent' }] }], seen);
+  assert.deepStrictEqual(calls.map((c) => c.options.filter), [
+    "connectionreferencelogicalname eq 'contoso_msnweather'",
+    "connectionreferencelogicalname eq 'contoso_sharepoint' or connectionreferencelogicalname eq 'contoso_absent'",
+  ], 'the second check asks only for the names the first did not read, whatever their case');
+  assert.deepStrictEqual(second.references, new Map([['contoso_msnweather', { connectorId: api('shared_msnweather') }], ['contoso_sharepoint', { connectorId: api('shared_sharepointonline') }]]));
+  const third = await readBindingTargets(provision, [{ key: 'd', name: 'D', connectorBindings: [WEATHER, { logicalName: 'contoso_absent' }] }], seen);
+  assert.strictEqual(calls.length, 2, 'a check whose names were all read asks nothing — a name that is not there is an answer too');
+  assert.deepStrictEqual(third.references, new Map([['contoso_msnweather', { connectorId: api('shared_msnweather') }]]));
+  assert.deepStrictEqual(judgeBindingTargets([{ key: 'd', name: 'D', connectorBindings: [{ logicalName: 'contoso_absent' }] }], third).findings.map((f) => f.kind), ['reference-missing']);
+});
+
+test('readBindingTargets: what an attempt has read stands — a later read that fails leaves a proven conflict a refusal, and says by name only what it could not read', async () => {
+  const seen = bindingReads();
+  const filters = [];
+  let refuse = false;
+  const provision = {
+    queryRecords: async (entity, options) => {
+      filters.push(options.filter);
+      if (refuse) throw new Error('connectionreference: HTTP 403');
+      return [reference('contoso_msnweather', 'shared_office365users')];
+    },
+  };
+  await readBindingTargets(provision, [{ key: 'a', name: 'A', connectorBindings: [{ ...WEATHER, connectorId: api('shared_office365users') }] }], seen);
+  refuse = true;
+  const pages = [{ key: 'c', name: 'C', connectorBindings: [WEATHER, SHAREPOINT] }];
+  const targets = await readBindingTargets(provision, pages, seen);
+  assert.deepStrictEqual(filters, ["connectionreferencelogicalname eq 'contoso_msnweather'", "connectionreferencelogicalname eq 'contoso_sharepoint'"]);
+  const verdict = judgeBindingTargets(pages, targets);
+  assert.deepStrictEqual(verdict.findings.map((f) => [f.severity, f.kind, f.binding, f.found]), [['refuse', 'connector-conflict', 'contoso_msnweather', 'shared_office365users']], 'the first read proved the conflict, and the failed one does not undo it');
+  assert.deepStrictEqual(verdict.unchecked.map((u) => [u.what, u.text]), [['connection references', 'could not read this environment\'s connection references (connectionreference: HTTP 403), so connector binding "contoso_sharepoint" of page "C" was not checked against them']]);
+});
+
+test('readBindingTargets: a read that failed stands for the attempt too — a later check asks nothing, and says, as the one read did, that the bindings were not checked', async () => {
+  const seen = bindingReads();
+  const denied = readerOf({}, { failOn: ['connectionreference'] });
+  await readBindingTargets(denied.provision, [{ key: 'a', name: 'A', connectorBindings: [WEATHER] }], seen);
+  const pages = [{ key: 'c', name: 'C', connectorBindings: [WEATHER] }];
+  const targets = await readBindingTargets(denied.provision, pages, seen);
+  assert.strictEqual(denied.calls.length, 1, 'not asked again');
+  assert.strictEqual(targets.references, null);
+  assert.deepStrictEqual(targets.problems, { references: 'connectionreference: HTTP 403' });
+  assert.deepStrictEqual(judgeBindingTargets(pages, targets).unchecked.map((u) => u.text), ['could not read this environment\'s connection references (connectionreference: HTTP 403), so the connector bindings of page "C" were not checked against them']);
+});
+
+test('readBindingTargets: a Custom API, and the definition of a custom connector, are read once per attempt as well', async () => {
+  const seen = bindingReads();
+  const CONNECTOR_ID = 'c0000000-0000-4000-8000-0000000000a1';
+  const WIDGETS = { logicalName: 'contoso_widgets', connectorId: api('shared_contoso-5fwidgets-5f6a8c'), dataset: '', operations: ['ListWidgets'] };
+  const { provision, calls } = readerOf({
+    connectionreference: [{ connectionreferencelogicalname: 'contoso_widgets', connectorid: api('shared_contoso-5fwidgets-5f6a8c'), connectionid: 'shared-widgets-0001', _customconnectorid_value: CONNECTOR_ID }],
+    connector: [{ connectorid: CONNECTOR_ID, openapidefinition: JSON.stringify({ swagger: '2.0', paths: { '/widgets': { get: { operationId: 'ListWidgets' } } } }) }],
+    customapi: [customApi('contoso_ApproveOrder', { boundentitylogicalname: 'contoso_item', bindingtype: 1 })],
+  });
+  const page = (key) => ({ key, name: key.toUpperCase(), connectorBindings: [WIDGETS], actionBindings: [APPROVE] });
+  const first = await readBindingTargets(provision, [page('a')], seen);
+  const second = await readBindingTargets(provision, [page('c')], seen);
+  assert.deepStrictEqual(calls.map((c) => c.entity), ['connectionreference', 'connector', 'customapi'], 'each read once, in the first check');
+  assert.deepStrictEqual(second, first, 'and the second check is answered with what it read');
+  assert.deepStrictEqual(judgeBindingTargets([page('c')], second), { findings: [], unchecked: [] });
+});
+
+test('pagesLeftOutAsDeployed is the pages the check before writing leaves out because the run was told they are deployed — what a dry run asks the environment about', () => {
+  const spec = { pages: [
+    pageOf('a', { connectorBindings: [WEATHER] }),
+    pageOf('b', { connectorBindings: [SHAREPOINT], navigatesTo: [{ targetKey: 'c' }, { targetKey: 'e' }] }),
+    pageOf('c', { actionBindings: [APPROVE] }),
+    pageOf('d', { actionBindings: [SUMMARY] }),
+    pageOf('e'),
+  ] };
+  const ALL = ['a', 'b', 'c', 'd', 'e'];
+  const keys = (changedOnly) => pagesLeftOutAsDeployed(spec, changedOnly).map((p) => p.key);
+  assert.deepStrictEqual(keys({ selectedKeys: ['a'], deployedKeys: ALL }), ['c'], 'e states no binding, so there is nothing to leave out');
+  assert.deepStrictEqual(pagesLeftOutAsDeployed(spec, { selectedKeys: ['a'], deployedKeys: ALL }), [{ key: 'c', name: 'C', actionBindings: [APPROVE] }]);
+  assert.deepStrictEqual(keys({ selectedKeys: ['a'], deployedKeys: ['a', 'b', 'd', 'e'] }), [], 'c was not said to be deployed: it is checked');
+  assert.deepStrictEqual(keys({ selectedKeys: ['c'], deployedKeys: ALL }), [], 'a selected page is checked');
+  assert.deepStrictEqual(keys({ selectedKeys: ['a'] }), []);
+  assert.deepStrictEqual(keys({ deployedKeys: ALL }), [], 'a run that is not changed-only leaves out nothing');
+  assert.deepStrictEqual(keys(undefined), []);
 });
 
 // ── judging what was read ────────────────────────────────────────────────────────────────────────────────────────────────────

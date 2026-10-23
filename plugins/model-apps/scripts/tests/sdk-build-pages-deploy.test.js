@@ -2869,8 +2869,9 @@ const reference = (logicalName, connector) => ({ connectionreferencelogicalname:
 const CHARLIE_REFERENCE = reference('contoso_msnweather', 'shared_office365users');
 const SHAREPOINT_BINDING = { logicalName: 'contoso_sharepoint', connectorId: '/providers/Microsoft.PowerApps/apis/shared_sharepointonline', dataset: 'https://contoso.sharepoint.com/sites/x', tables: ['11111111-2222-3333-4444-555555555555'] };
 
-// `present`: the pages the environment holds — the rest are absent, as a page deleted in Maker since the last apply is. `alpha`: what Alpha states besides its source.
-function abcApp({ present = ABC_KEYS, alpha = {} } = {}) {
+// `present`: the pages the environment holds — the rest are absent, as a page deleted in Maker since the last apply is. `recorded`: the pages the app's manifest and navigation still name (by default
+// the present ones; a page deleted in Maker stays in both). `alpha`: what Alpha states besides its source.
+function abcApp({ present = ABC_KEYS, recorded = present, alpha = {} } = {}) {
   const appDir = fs.mkdtempSync(path.join(os.tmpdir(), 'abc-bindings-'));
   fs.writeFileSync(path.join(appDir, 'alpha.tsx'), 'export default function A(){ return null; }', 'utf8');
   fs.writeFileSync(path.join(appDir, 'bravo.tsx'), `export default function B(){ ${NAV('charlie')} return null; }`, 'utf8');
@@ -2888,17 +2889,31 @@ function abcApp({ present = ABC_KEYS, alpha = {} } = {}) {
     appShell: { areas: [{ label: 'Main', groups: [{ label: 'G', subAreas: [...ABC_KEYS.map((key) => ({ page: key, title: ABC_NAMES[key] })), TABLE_ENTRY] }] }] },
   };
   const live = present.map((key) => ({ pageId: ABC_IDS[key], name: ABC_NAMES[key] }));
-  const manifest = { schemaVersion: 1, pages: present.map((key) => ({ key, name: ABC_NAMES[key], pageId: ABC_IDS[key] })) };
-  // Every read of what the bindings name, and every write to the SDK, whatever the run.
+  const manifest = { schemaVersion: 1, pages: recorded.map((key) => ({ key, name: ABC_NAMES[key], pageId: ABC_IDS[key] })) };
+  // Every read of what the bindings name, every read of the generative pages in the saved layer, and every write to the SDK, whatever the run.
   const reads = [];
+  const pageReads = [];
   const writes = [];
-  const run = (options, references = [CHARLIE_REFERENCE]) => {
-    const { sdk } = mockSdk({ pageManifest: Buffer.from(JSON.stringify(manifest), 'utf8').toString('base64'), liveSitemapXml: pageSitemap(live.map((p) => p.pageId)), pageRows: live.map((p) => ({ uxagentprojectid: p.pageId, name: p.name })) });
+  // `references`: the rows the environment answers for connection references — or a function of the read's number (1, 2, …) that answers them, or throws as a refused read does.
+  // `failPageRows`: the read of the generative pages in the saved layer is refused.
+  const run = (options, references = [CHARLIE_REFERENCE], { failPageRows = false } = {}) => {
+    const { sdk } = mockSdk({ pageManifest: Buffer.from(JSON.stringify(manifest), 'utf8').toString('base64'), liveSitemapXml: pageSitemap(recorded.map((key) => ABC_IDS[key])), pageRows: live.map((p) => ({ uxagentprojectid: p.pageId, name: p.name })) });
     const answer = sdk.queryRecords;
     sdk.queryRecords = async (entity, query) => {
       if (!['connectionreference', 'customapi', 'connector'].includes(entity)) return answer(entity, query);
       reads.push({ entity, filter: query && query.filter });
+      if (typeof references === 'function') return references(entity, reads.length);
       return entity === 'connectionreference' ? references : [];
+    };
+    // The generative pages in the SAVED layer, by id (lib/app-components.js savedPageRows), as the environment holds them:
+    //   GET /uxagentprojects/Microsoft.Dynamics.CRM.RetrieveUnpublishedMultiple()?$select=uxagentprojectid,name,componentstate&$filter=uxagentprojectid eq <id> or uxagentprojectid eq <id>
+    const get = sdk.dataverse.get;
+    sdk.dataverse.get = async (url) => {
+      if (!url.startsWith('/uxagentprojects/Microsoft.Dynamics.CRM.RetrieveUnpublishedMultiple()')) return get(url);
+      pageReads.push(url);
+      if (failPageRows) return { status: 503, body: { error: { message: 'Service Unavailable' } } };
+      const asked = [...url.matchAll(/uxagentprojectid eq ([0-9a-f-]{36})/gi)].map((m) => m[1].toLowerCase());
+      return { status: 200, body: { value: live.filter((p) => asked.includes(p.pageId.toLowerCase())).map((p) => ({ uxagentprojectid: p.pageId, name: p.name, componentstate: 0 })) } };
     };
     for (const method of Object.keys(sdk).filter((name) => /^(create|update|push|publish|add|remove|set|enrich|seed)/.test(name))) {
       const original = sdk[method];
@@ -2907,7 +2922,7 @@ function abcApp({ present = ABC_KEYS, alpha = {} } = {}) {
     const genpage = abcGenpage(live);
     return { genpage, built: runSdkBuild(spec, { sdk, env: 'https://x', appDir, genpageCli: genpage, apply: true, phases: PAGES_ONLY, ...options }) };
   };
-  return { appDir, spec, reads, writes, run };
+  return { appDir, spec, reads, pageReads, writes, run };
 }
 
 // The page backend of the three pages: the environment's pages are `live`, and a create makes the page under its own id.
@@ -3027,6 +3042,90 @@ test('changed-only: a dry run marks the pages an apply would stop at, and no oth
   assert.deepStrictEqual(await marked({ extra: {} }), { halts: ['page "Charlie"'], reads: 1 }, 'told nothing, the plan checks every target, as the apply does');
   const alphaConflict = { alpha: { connectorBindings: [SHAREPOINT_BINDING] }, references: [CHARLIE_REFERENCE, reference('contoso_sharepoint', 'shared_office365users')] };
   assert.deepStrictEqual(await marked({ ...alphaConflict, extra: { deployedKeys: ABC_KEYS } }), { halts: ['page "Alpha"'], reads: 1 }, 'the page an apply writes is marked');
+});
+
+// Alpha and Charlie name the same connection reference. Alpha's binding states the connector the environment's reference is for, so Alpha is fine; Charlie's states another, so Charlie's
+// conflicts. Charlie was deleted in Maker since the last apply, while the run is told it is deployed: the check before writing reads the reference for Alpha, and the pages phase, about to
+// make Charlie, judges Charlie by what that read answered. A name is read once per attempt — so a second read cannot be refused and turn the proven conflict into "not checked".
+const SHARED_NAME_ALPHA = { connectorBindings: [{ ...HELD_WEATHER, connectorId: CHARLIE_REFERENCE.connectorid, operations: [] }] };
+
+test('changed-only: a target found absent is judged by what the attempt already read of a name it shares — a later read that would fail cannot let it be made unchecked', async () => {
+  const app = abcApp({ present: ['alpha', 'bravo'], recorded: ABC_KEYS, alpha: SHARED_NAME_ALPHA });
+  try {
+    const { genpage, built } = app.run(fastApply(['alpha'], { deployedKeys: ABC_KEYS }), (entity, number) => {
+      if (number === 1) return [CHARLIE_REFERENCE];
+      throw new Error('connectionreference: HTTP 403');
+    });
+    await assert.rejects(built, conflictOn('Charlie'));
+    assert.deepStrictEqual(genpage.uploads, [], 'Charlie was not made, and Alpha not written');
+    assert.deepStrictEqual(app.writes, [], 'and nothing else was written');
+    assert.deepStrictEqual(app.reads, [{ entity: 'connectionreference', filter: "connectionreferencelogicalname eq 'contoso_msnweather'" }], 'the shared name was read once, before anything was written');
+  } finally { fs.rmSync(app.appDir, { recursive: true, force: true }); }
+});
+
+test('changed-only: a name the check before writing read is not read again for a target found absent — one read of it in the attempt, as before the fix', async () => {
+  const app = abcApp({ present: ['alpha', 'bravo'], recorded: ABC_KEYS, alpha: SHARED_NAME_ALPHA });
+  try {
+    const { genpage, built } = app.run(fastApply(['alpha'], { deployedKeys: ABC_KEYS }));
+    await assert.rejects(built, conflictOn('Charlie'));
+    assert.deepStrictEqual(genpage.uploads, []);
+    assert.strictEqual(app.reads.length, 1, 'the reference is read once in the attempt');
+  } finally { fs.rmSync(app.appDir, { recursive: true, force: true }); }
+});
+
+// A dry run has no pages phase to find a target absent, so for each target it was told is deployed it asks the environment, read only, whether the page is still there — and checks the one that is
+// not, as the apply will. Plan and apply are run here with the SAME options against the SAME environment.
+test('changed-only: a dry run finds a target it was told is deployed absent, and marks it — as the apply with the same options and environment stops on it', async () => {
+  const app = abcApp({ present: ['alpha', 'bravo'], recorded: ABC_KEYS });
+  try {
+    const options = fastApply(['alpha'], { deployedKeys: ABC_KEYS });
+    const planned = await app.run({ ...options, apply: false }).built;
+    assert.strictEqual(planned.dryRun, true);
+    assert.deepStrictEqual(planned.planItems.filter((item) => item.wouldHalt).map((item) => item.label), ['page "Charlie"']);
+    assert.strictEqual(app.pageReads.length, 1, 'one read of the pages, for the target it was told is deployed');
+    assert.strictEqual(app.reads.length, 1, 'and Charlie\'s reference, which the apply reads too');
+    const { genpage, built } = app.run(options);
+    await assert.rejects(built, conflictOn('Charlie'));
+    assert.deepStrictEqual(genpage.uploads, []);
+  } finally { fs.rmSync(app.appDir, { recursive: true, force: true }); }
+});
+
+test('changed-only: a dry run that finds the target it was told is deployed still there leaves its binding unread — one read of the pages, none of references', async () => {
+  const app = abcApp();
+  try {
+    const planned = await app.run({ ...fastApply(['alpha'], { deployedKeys: ABC_KEYS }), apply: false }).built;
+    assert.deepStrictEqual(planned.planItems.filter((item) => item.wouldHalt), []);
+    assert.strictEqual(app.pageReads.length, 1);
+    assert.deepStrictEqual(app.reads, []);
+  } finally { fs.rmSync(app.appDir, { recursive: true, force: true }); }
+});
+
+test('changed-only: a dry run told a target is deployed that neither the spec nor the manifest gives an id checks it — there is no page to ask the environment about', async () => {
+  const app = abcApp({ present: ['alpha', 'bravo'] });
+  try {
+    const planned = await app.run({ ...fastApply(['alpha'], { deployedKeys: ABC_KEYS }), apply: false }).built;
+    assert.deepStrictEqual(planned.planItems.filter((item) => item.wouldHalt).map((item) => item.label), ['page "Charlie"']);
+    assert.strictEqual(app.pageReads.length, 0);
+    assert.strictEqual(app.reads.length, 1);
+  } finally { fs.rmSync(app.appDir, { recursive: true, force: true }); }
+});
+
+// A dry run that cannot tell whether such a target is still there checks it, as if the apply will make it — never the record of an earlier apply taken as proof. It says so: the mark may be one
+// the apply does not make (Charlie IS there, so the apply below writes Alpha alone).
+test('changed-only: a dry run that cannot read whether a target it was told is deployed is there checks it, and says why — fail closed', async () => {
+  const app = abcApp();
+  try {
+    const options = fastApply(['alpha'], { deployedKeys: ABC_KEYS });
+    const warnings = [];
+    const planned = await app.run({ ...options, apply: false, warn: (m) => warnings.push(String(m)) }, undefined, { failPageRows: true }).built;
+    assert.deepStrictEqual(planned.planItems.filter((item) => item.wouldHalt).map((item) => item.label), ['page "Charlie"']);
+    const said = warnings.filter((w) => /recorded as deployed/.test(w));
+    assert.strictEqual(said.length, 1, warnings.join('\n'));
+    assert.match(said[0], /^could not tell whether page "Charlie", recorded as deployed, is still in this environment \(the pages recorded as deployed: HTTP 503 .*\), so its bindings are checked as if the build will make it$/);
+    const { genpage, built } = app.run(options);
+    assert.ok((await built).ok);
+    assert.deepStrictEqual(genpage.uploads, ['update Alpha']);
+  } finally { fs.rmSync(app.appDir, { recursive: true, force: true }); }
 });
 
 test('deploy: the record keeps only the pages the spec still binds — a page it no longer names is dropped when the next is written', async () => {
