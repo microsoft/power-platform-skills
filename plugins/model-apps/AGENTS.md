@@ -3049,6 +3049,19 @@ a generic call's type arguments is taken for one (`({ a = f<T, U>() }) => R`): t
 parentheses as a parenthesised type and the function type's `=>` as the arrow, so a write cut right after such a
 return type (`export default <T,>(p: T): ({ a = f<T,T>() }) => T`) is accepted — the page compile refuses it
 (TypeScript: `'=>' expected`), and `source-literals.test.js` pins it. With the call in parentheses the cut is refused.
+**Known limits, refused although TypeScript parses them** (both rare; 2.18.0 refused every generic-arrow default
+export, so neither is a regression), pinned in `source-literals.test.js`:
+- a mapped type whose key type is in parentheses, inside a parenthesised return type — `(p): ({ [K in (keyof T)]: boolean }) => …`,
+  and so `((keyof T))`, `(keyof T) as K` and a parenthesised conditional key type. The key's reading takes any group in
+  parentheses for an operand, so `K in (keyof T)` reads as an expression, the braces as a binding pattern, the parentheses
+  as a function type's parameters and the arrow as that function type's, and the page as cut off. Write `[K in keyof T]`,
+  drop the parentheses around the return type (`(p): { [K in (keyof T)]: boolean } => …`), or name the type with a type
+  alias (`type Flags<T> = { [K in (keyof T)]: boolean }`, then `(p): Flags<T> => …`);
+- a return type that is a function type whose parameter has a computed key the reading does not know — one that starts with
+  a regular expression, `({ [/key/.source]: value }: Record<string, T>) => …` — and whose own return type starts with a
+  leading `|` (`=> | typeof value | null`). The key is taken for no expression, the parentheses for a parenthesised type,
+  the function type's `=>` for the arrow, and the `|` after it begins no body. Drop the leading `|`, write the key as a name
+  or a string, or name the function type with a type alias.
 The export pattern once took no `<` after `default`, and every such page was refused as having no default export.
 And `endsMidStatement` catches the cuts that leave every bracket balanced: the
 lexer reports when a file stops inside a string, template, comment or JSX element, and a file

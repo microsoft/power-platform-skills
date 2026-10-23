@@ -756,6 +756,42 @@ test('known limit: a generic call with two type arguments in a default value of 
   assert.equal(hasDefaultExport('export default <T,>(p: T): ({ a = (f<T,T>()) }) => T => null as never;\n'), true);
 });
 
+// Known limits, pinned as they are: two rare return types that TypeScript parses and the gate refuses (2.18.0 refused every generic-arrow default export). A binding
+// pattern's computed key is read as an expression only as far as telling an index signature's or a mapped type's key from one needs, and any group in parentheses counts
+// as an operand: `K in (keyof T)` reads as an expression, so `({ [K in (keyof T)]: boolean })` reads as a function type's parameters, which take the arrow. And a key the
+// reading does not know — one that starts with a regular expression — is taken for no expression: the parentheses around a function type's parameters then read as a
+// parenthesised type, the function type's `=>` as the arrow, and a leading `|` of its own return type as no body. The workarounds (AGENTS.md, "TSX source lexer — known
+// limits") are accepted.
+test('known limits: a mapped type with its key type in parentheses, and a computed key the reading does not know', () => {
+  const refused = [];
+  for (const key of ['(keyof T)', '((keyof T))', '(keyof T) as K', '(T extends object ? keyof T : never)']) {
+    for (const modifier of ['', 'async ']) refused.push(`export default ${modifier}<T extends object>(p: T): ({ [K in ${key}]: boolean }) => null as never;\n`);
+  }
+  const regexKey = '<T,>(p: T): ({ [/key/.source]: value }: Record<string, T>) =>';
+  refused.push(`export default ${regexKey} | typeof value | null => () => null;\n`, `export default async ${regexKey} | typeof value | null => () => null;\n`);
+  for (const code of refused) assert.equal(hasDefaultExport(code), false, `refused, a known limit: ${JSON.stringify(code)}`);
+  // The workarounds: no parentheses around the key's type, none around the return type, a type alias; no leading `|`, a key written as a string. And an arrow
+  // without type parameters keeps its reading.
+  for (const code of [
+    'export default <T extends object>(p: T): ({ [K in keyof T]: boolean }) => null as never;\n',
+    'export default <T extends object>(p: T): { [K in (keyof T)]: boolean } => null as never;\n',
+    'type Flags<T> = { [K in (keyof T)]: boolean };\nexport default <T extends object>(p: T): Flags<T> => null as never;\n',
+    `export default ${regexKey} typeof value | null => () => null;\n`,
+    'export default <T,>(p: T): ({ ["key"]: value }: Record<string, T>) => | typeof value | null => () => null;\n',
+    'type Pick1<T> = (pair: Record<string, T>) => | T | null;\nexport default <T,>(p: T): Pick1<T> => () => null;\n',
+    'export default (p: T): ({ [/key/.source]: value }: Record<string, T>) => | typeof value | null => () => null;\n',
+  ]) assert.deepStrictEqual(pageStructureProblems(code), [], code);
+  // A group that holds an expression is one, as TypeScript reads it: these are function types that take the arrow, refused here and by TypeScript.
+  const grouped = ['(a + b)', 'keyof(T)'].map((key) => `export default <T,>(p: T): ({ [${key}]: v }) => p;\n`);
+  for (const code of grouped) assert.equal(hasDefaultExport(code), false, code);
+  // With the TypeScript parser oracle set: TypeScript parses every page refused above — a known limit, not a cut — and none of the grouped expressions.
+  const ts = loadTypescriptOracle();
+  if (!ts) return;
+  const diagnostics = (code) => ts.createSourceFile('page.tsx', code, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX).parseDiagnostics.length;
+  for (const code of refused) assert.strictEqual(diagnostics(code), 0, `TypeScript parses ${JSON.stringify(code)}`);
+  for (const code of grouped) assert.ok(diagnostics(code) > 0, `TypeScript refuses ${JSON.stringify(code)}`);
+});
+
 // An arrow with no type parameters is read as it always was (defaultExportIsComplete reads it, not genericArrowIsComplete), whatever its return type holds.
 test('an arrow without type parameters keeps its reading of a return type', () => {
   for (const type of ['({ [key: string]: T })', '({ [K in keyof T]: boolean })', '({ [key]: value })', '(x: T) => T', 'module<T>', '(A) => T']) {
