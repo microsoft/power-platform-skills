@@ -767,9 +767,18 @@ PHASE_EXPECTATIONS.set(
   ({ fixture }) => gradeEvidence(workerProblems, fixture)
 );
 
+// A refusal is graded whole: its failed gate, the halt, and nothing provisioned or uploaded. A run that went
+// on is graded only when an auth call timed out on the way — it must then have retried once and been
+// authorized by a later ok:true gate (authGateProblems counts the attempts). A run with no timeout at all
+// has nothing for this expectation to grade.
 PHASE_EXPECTATIONS.set(
   'Phase 2a: Auth timeout retries once then halts before provisioning or upload',
-  ({ fixture }) => checkProblems(refusalProblems(fixture))
+  ({ fixture }) => {
+    if (fixture.manifest?.expectedOutcome === 'refused') return checkProblems(refusalProblems(fixture));
+    const timedOut = workflowCalls(fixture).some((call) => isAuth(call.command) && /^(az|pac)_timeout$/.test(resultObject(call)?.blocker || ''));
+    if (!timedOut) return skip('no auth timeout in this scenario');
+    return checkProblems(authGateProblems(fixture, { required: true }));
+  }
 );
 
 PHASE_EXPECTATIONS.set(
@@ -1155,11 +1164,22 @@ PHASE_EXPECTATIONS.set(
   }
 );
 
+// The builder is found among the recorded calls — its dispatch (`Task genpage-entity-builder`) or the
+// provisioning only it runs (BUILDER_CALL) — and the latest check-auth.js result before the first of them must
+// be ok:true. A capture that predates both says "entity-builder invoked" in prose, and is read by position.
 PHASE_EXPECTATIONS.set(
   'Phase 2b: genpage-entity-builder is only invoked AFTER check-auth returns ok:true',
   ({ fixture }) => {
     const log = fixture.workflowLog;
     if (!log) return fail('no workflow-log.md');
+    const calls = workflowCalls(fixture);
+    const builderAt = calls.findIndex((call) => BUILDER_CALL.test(call.command));
+    if (builderAt !== -1) {
+      const gate = calls.slice(0, builderAt).filter((call) => isAuth(call.command)).at(-1);
+      if (!gate) return fail('entity-builder invoked before check-auth.js');
+      if (resultObject(gate)?.ok !== true) return fail('entity-builder invoked although the check-auth.js result before it is not ok:true');
+      return checkProblems(authGateProblems(fixture, { required: true }));
+    }
     const idxCheck = log.search(/check-auth\.js/);
     const idxBuilder = log.search(/genpage-entity-builder\s+invoked|entity-builder\s+invoked/i);
     if (idxBuilder === -1) return skip('entity-builder not invoked');
@@ -2001,6 +2021,42 @@ PHASE_EXPECTATIONS.set(
     if (calls.slice(at + 1).some((call) => isMutation(call) || isGeneration(call.command))) return fail('the run provisioned, generated or uploaded after the whoami_403 blocker');
     if (!/\bhalt(?:ed)?\b|\bstop(?:ped)?\b/i.test(log)) return fail('the workflow did not halt after the whoami_403 blocker');
     return pass();
+  }
+);
+
+// check-auth.js answers a working sign-in whose az and pac identities differ with ok:true and a warning, not a
+// blocker (scripts/check-auth.js):
+//   { "ok": true, "blocker": null, "identitiesMatch": false, "azUser": "admin@…", "pacUser": "maker@…",
+//     "message": "Ready, but az (\"admin@…\") and pac (\"maker@…\") use different identities. WhoAmI passed so this
+//                 works for now — but if a later step returns 403, run `az login --username maker@…` to align them." }
+// SKILL.md Phase 2a: proceed to 2b, but surface the `message` to the user as an inline warning. The orchestrator's
+// gate is the one graded (a builder's re-probe logs its warning in the transaction log, which authGateProblems
+// checks): its one-line message must reach the user verbatim, carry the `az login --username <pacUser>` fix, and
+// the run must go on to the entity-builder rather than stop.
+PHASE_EXPECTATIONS.set(
+  'Phase 2a: If ok:true but identitiesMatch:false, orchestrator proceeds but surfaces a one-line warning',
+  ({ fixture }) => {
+    const log = fixture.workflowLog;
+    if (!log) return fail('no workflow-log.md');
+    const calls = workflowCalls(fixture);
+    const at = calls.findIndex((call) => isAuth(call.command) && call.by !== 'genpage-entity-builder'
+      && resultObject(call)?.ok === true && resultObject(call).identitiesMatch === false);
+    if (at === -1) return skip('no ok:true, identitiesMatch:false auth result in this scenario');
+    const result = resultObject(calls[at]);
+    if (currentContract(fixture)) {
+      const warning = typeof result.message === 'string' ? result.message.trim() : '';
+      if (!warning) return fail('the identity-mismatch result carries no warning message');
+      if (calls[at].userMessage !== result.message) return fail('the identity-mismatch warning was not surfaced to the user verbatim');
+      if (/[\r\n]/.test(warning)) return fail('the identity-mismatch warning is not one line');
+      if (typeof result.pacUser === 'string' && result.pacUser && !warning.includes(`az login --username ${result.pacUser}`)) {
+        return fail(`the identity-mismatch warning does not name \`az login --username ${result.pacUser}\``);
+      }
+    } else if (!/\baz login --username\b/.test(log)) {
+      return fail('the log records no identity-mismatch warning naming `az login --username`');
+    }
+    if (fixture.manifest?.expectedOutcome === 'refused') return fail('the run stopped although its only auth finding was a warning-only identity mismatch');
+    if (!calls.slice(at + 1).some((call) => isMutation(call) || isGeneration(call.command))) return fail('the run did not go on past the ok:true, identitiesMatch:false gate');
+    return checkProblems(authGateProblems(fixture, { required: true }));
   }
 );
 

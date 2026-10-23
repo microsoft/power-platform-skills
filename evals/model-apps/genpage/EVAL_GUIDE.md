@@ -81,6 +81,7 @@ Layers 1 and 2 are automated. Layer 3 is human judgment by design — visual qua
   unmatched or ambiguous producers refuse preservation rather than guessing a historical source.
 - Prefix discipline holds across plan, entity-creation log, and resolved names
 - An auth blocker the eval names (`az_not_logged_in`, `whoami_403`) is read from check-auth.js's own result: its advice — `az login`, or `az login --username <pacUser>` when az and pac are different identities — reaches the user verbatim, and nothing provisions, generates or uploads after it
+- A gate that passes with az and pac signed in as different identities (`ok: true`, `identitiesMatch: false`) is a warning, not a blocker: the orchestrator shows its one-line `message` verbatim, with the `az login --username <pacUser>` fix, and goes on to the entity-builder, whose dispatch is read from the recorded calls; a builder re-probe that sees the same mismatch logs a one-line warning in its transaction log (`agents/genpage-entity-builder.md` Step 2)
 - An edit keeps what its plan's Preservation Constraints promise: every identifier a constraint quotes in a code span and the downloaded page (`before/`) uses is still used by the edited page (comments do not count). Constraints written only in prose are left to a person
 - Sample data handed to `provision-entities.js` is realistic: no lorem ipsum, no placeholder word (`test`, `sample`, `TBD`, `N/A`…) or numbered table name (`Project 1`), and no table whose rows repeat one name
 - Per-eval discovery, provisioning, schema and deployment expectations compare structured evidence read by `lib/expectation-evidence.js` — `list-tables`/`list-languages`/the type generator/upload flags and their recorded results, the plan's entity blocks, the entity-creation transactions, and the choice enums in the captured `RuntimeTypes.ts` — on either upload transport. The plugin's own scripts are read as data: `scripts/list-tables.js` (a table exists when `tables` holds its exact logical name; `missing` names the terms with none; a failed read confirms nothing), `scripts/apps.js list` (`apps`), `scripts/genpage.js list` (`pages`, each with its `pageId` and `name`) and `scripts/list-languages.js` (`languages`; it is the only source, so a failed read detects nothing and a `pac model list-languages` after it is not credited). The type generator is `scripts/genpage.js types` and the edit flow's download `scripts/genpage.js download`; a capture made before the scripts records the `pac model list-tables`, `pac model list`, `pac model list-languages`, `pac model genpage list | download | generate-types` forms, and those are read too. The new-app expectations (eval 8) require the plugin's order: the first page uploaded with no app and no `--add-to-sitemap`, then `apps.js create --solution --page-id --publish` (which pins the first page's tables itself, so nothing has to follow it), and every upload after it naming the app it returned — `pac model create` does not satisfy them. These recognizers read a script's verb the way the mutation checks do, so a verb after its flags (`genpage.js --env <url> types …`) counts, and a "types … SKIPPED (mock data)" expectation fails for a run that generated types that way. A listing recorded as the JSON the scripts print — one line, as a parsed result, as text, or as a log's `Result: {…}` line — is read as data (`id`/`pageId`/`appId` and `name`); JSON that does not parse lists nothing, and only output that is not JSON (a PAC table, a log's bullets) goes to the older table reader
@@ -152,7 +153,7 @@ All eval definitions live in `evals.json` alongside this file. The file contains
 - `common_code_assertions`: **21** registered code checks.
 - `evals`: **25** prompt definitions, each with `id`, `tier`, `prompt`, `data`, and per-eval `expectations`.
 
-The `data` field specifies scenario assumptions for a manual capture or constructed fixture. The offline harness does not provide responses to `AskUserQuestion` or verify every recorded answer. The corpus contains **31 fixture directories / 36 top-level TSX files**, representing 25 prompt IDs. IDs **none** have no fixture — every registered prompt is executed.
+The `data` field specifies scenario assumptions for a manual capture or constructed fixture. The offline harness does not provide responses to `AskUserQuestion` or verify every recorded answer. The corpus contains **32 fixture directories / 37 top-level TSX files**, representing 25 prompt IDs. IDs **none** have no fixture — every registered prompt is executed.
 
 ### Enumerating registered and unmatched checks
 
@@ -263,7 +264,7 @@ The suite ships both kinds:
 | 17 | `17-weather-mock-data` (historical) | — |
 | 18 | `18-sharepoint-connectors` (historical) | — |
 | 19 | `19-add-weather-connector` (historical edit) | — |
-| 10 | `10-auth-timeout-halt`, `10-az-signed-out-halt`, `10-whoami-403-halt` (current refusals) | — |
+| 10 | `10-auth-timeout-halt`, `10-az-signed-out-halt`, `10-whoami-403-halt` (current refusals), `10-identity-mismatch-proceeds` (current, proceeds past an identity warning) | — |
 | 20 | `20-upload-preservation` (current create/edit/refusal) | — |
 | 21 | `21-discovery-failure` (current refusal) | — |
 | 22 | `22-navigation-contract` (current before/after) | — |
@@ -324,13 +325,13 @@ Exit codes:
 ```bash
 node run-layer-1.js --tier smoke    # 7 stored fixtures, 5 prompt definitions
 node run-layer-1.js --tier full     # 19 stored fixtures, 17 prompt definitions
-node run-layer-1.js --tier stress   # 5 stored fixtures, 3 prompt definitions
+node run-layer-1.js --tier stress   # 6 stored fixtures, 3 prompt definitions
 ```
 
 A tier runs only existing fixtures, not every prompt definition. An empty selection reports
 `no fixtures matched the filter` and exits 2. The stress tier now replays the three synthetic auth
-refusals (a timeout, a signed-out Azure CLI and a WhoAmI 403), the plan-revision trace and the
-filename-collision trace.
+refusals (a timeout, a signed-out Azure CLI and a WhoAmI 403), a run that passes the auth gate with an
+identity warning and goes on, the plan-revision trace and the filename-collision trace.
 
 ### Filter by eval id (debugging)
 

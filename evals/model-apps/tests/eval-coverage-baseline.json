@@ -26,12 +26,6 @@
         "reason": "A branch no fixture exercises: the only eval-3 fixture's app lists a page. Grading it needs a fixture whose genpage.js list returns no pages and whose run stops at Edit Phase 1b, and the eval's later edit-phase checks and the common workflow assertions have no refusal stage for a run that ends there, so that fixture would fail them."
       },
       {
-        "eval": 10,
-        "status": "deferred",
-        "text": "Phase 2a: If ok:true but identitiesMatch:false, orchestrator proceeds but surfaces a one-line warning",
-        "reason": "A branch no fixture exercises: every eval-10 fixture halts at the auth gate (a timeout, a signed-out Azure CLI, a 403). Grading it needs a create run that passes an ok:true, identitiesMatch:false gate, shows the warning, and goes on through provisioning and upload."
-      },
-      {
         "eval": 13,
         "status": "deferred",
         "text": "Phase 5 (Page Builder): Generated .tsx fetches usersettings via dataApi.retrieveRow and uses formatDate/formatNumber/formatCurrency helpers",
@@ -50,12 +44,6 @@
         "eval": null,
         "text": "For Dataverse pages with fetching, separate setState calls inside async callbacks are batched into a single setData(...) call (Rule 14)",
         "reason": "Gradeable from the page source, but a correct check fails historical fixtures 1-account-card-gallery, 7-job-candidates-new-entities, 11-recruitment-multi-page and 13-contact-localization: each sets its rows in try and calls setLoading(false) in finally, the pattern Rule 14 names as an intermediate render. Rule 14 predates them, so it is real drift; the runners have no expected-failure mark, and skipping historical fixtures would hide it."
-      },
-      {
-        "runner": "layer-1",
-        "eval": 10,
-        "text": "Phase 2b: genpage-entity-builder is only invoked AFTER check-auth returns ok:true",
-        "reason": "Every eval-10 fixture halts at the auth gate, so none invokes the entity-builder; it grades once a fixture proceeds past an ok:true gate (see the identitiesMatch:false entry under unscored)."
       },
       {
         "runner": "layer-2",

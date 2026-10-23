@@ -121,6 +121,14 @@ function unassociatedCallProblems(fixture) {
     .map(([key]) => `${key}: logged command has no associated result event`);
 }
 
+// The entity-builder's one-line identity warning in genpage-entity-creation-log.md: a line that says it is a
+// warning and names both identities check-auth.js reported, e.g. under the log's `## Environment`:
+//   - Warning: az (admin@contoso.onmicrosoft.com) and pac (maker@contoso.onmicrosoft.com) use different identities; WhoAmI passed, so provisioning proceeds.
+function identityWarningLogged(log, result) {
+  const names = [result.azUser, result.pacUser].filter((name) => typeof name === 'string' && name);
+  return String(log || '').split(/\r?\n/).some((line) => /\bwarn/i.test(line) && names.every((name) => line.includes(name)));
+}
+
 function authGateProblems(fixture, { required = false } = {}) {
   const calls = workflowCalls(fixture);
   const gates = calls.filter((call) => isAuth(call.command));
@@ -155,8 +163,16 @@ function authGateProblems(fixture, { required = false } = {}) {
           || (plannedEnv && normalizedEnv(plannedEnv) !== normalizedEnv(result.envUrl)))) {
           problems.push('successful auth gate belongs to a different command/plan environment');
         }
-        if (strict && result.identitiesMatch === false && call.userMessage !== result.message) {
-          problems.push('warning-only identity mismatch was not surfaced verbatim');
+        if (strict && result.identitiesMatch === false) {
+          // A working sign-in whose az and pac identities differ is a warning, not a blocker. SKILL.md Phase 2a
+          // has the orchestrator proceed and show the result's `message` to the user; the entity-builder re-probes
+          // the same way but is headless, so agents/genpage-entity-builder.md Step 2 has it log a one-line warning
+          // in its transaction log instead. Each is graded where its spec says the warning goes.
+          if (call.by === 'genpage-entity-builder') {
+            if (!identityWarningLogged(fixture.entityCreationLog, result)) problems.push('the entity-builder did not log its identity-mismatch warning in genpage-entity-creation-log.md');
+          } else if (call.userMessage !== result.message) {
+            problems.push('warning-only identity mismatch was not surfaced verbatim');
+          }
         }
         timeoutAttempts = 0;
       } else {

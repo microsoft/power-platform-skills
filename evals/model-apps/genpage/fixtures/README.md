@@ -90,7 +90,7 @@ Two rules for evidence files:
 
 ## Current state
 
-This directory has **31 fixtures, 36 top-level TSX files and 25 represented
+This directory has **32 fixtures, 37 top-level TSX files and 25 represented
 prompt IDs**. All are green under both runners. Directories listed in
 `contracts.json` are historical contract-1 evidence; every other directory is a
 current contract-2 synthetic. Registered prompts with no fixture:
@@ -116,6 +116,7 @@ of step with the fixtures.
 | `10-auth-timeout-halt/` | 10 | Current synthetic | green | Exact-match discovery of the missing table; associated timeout results, one retry/advice, halt with no TSX/mutation |
 | `10-az-signed-out-halt/` | 10 | Current synthetic | green | Exact-match discovery; Azure CLI signed out: the `az login` advice is shown verbatim and the run halts with no TSX/mutation |
 | `10-whoami-403-halt/` | 10 | Current synthetic | green | Exact-match discovery; WhoAmI 403 with different az and pac identities: the `az login --username <pacUser>` advice is shown verbatim and the run halts |
+| `10-identity-mismatch-proceeds/` | 10 | Current synthetic | green | Exact-match discovery; `ok: true` with different az and pac identities: the one-line warning is shown verbatim and the run goes on — the entity-builder (which logs the same warning in its transaction log) provisions the table and the page is uploaded |
 | `20-upload-preservation/` | 20 | Current synthetic | green | App-less create (first page of a new app); exact create file transport; independent edit read-backs; a straight quote stored exactly |
 | `21-discovery-failure/` | 21 | Current synthetic | green | Unreadable discovery is needs_input, never setup/upload; no generated TSX |
 | `22-navigation-contract/` | 22 | Current synthetic | green | Actual before/after source, optional calls/overrides/escaped keys/Unicode terminators, affected-only upload |

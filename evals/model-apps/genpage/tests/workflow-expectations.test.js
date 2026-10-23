@@ -2,8 +2,8 @@
 
 // Unit tests for the per-eval workflow expectations that grade a run's recorded evidence
 // (lib/assertions-layer-1.js and lib/preservation-contract.js): eval 3's Preservation Constraints,
-// eval 9's realistic sample data, eval 1's column names in the workflow layer, and eval 10's discovery
-// and auth-blocker branches.
+// eval 9's realistic sample data, eval 1's column names in the workflow layer, and eval 10's discovery,
+// its auth-blocker branches and the branch that proceeds past an identity warning.
 //
 // Each check PASSES on the committed fixture whose evidence it reads, FAILS on an in-memory mutation
 // of that fixture that introduces exactly the regression it exists to catch, and SKIPs only where its
@@ -148,4 +148,73 @@ test('eval 10: a signed-out Azure CLI surfaces the az login advice verbatim and 
     workflowLog: '- Command: `node scripts/check-auth.js`\n  - Result: ok=false, blocker=az_not_logged_in\n- Told the user to run `az login`; halted.\n' };
   assertPass(grade(SIGNED_OUT, historical));
   assertFail(grade(SIGNED_OUT, { ...historical, workflowLog: historical.workflowLog.replace('Told the user to run `az login`; ', '') }), /no `az login` advice/);
+});
+
+// --- Eval 10: the branch that proceeds ----------------------------------------------------------------------
+// A working sign-in whose az and pac identities differ is a warning, not a blocker: the run shows it and goes on.
+
+const PROCEEDS = '10-identity-mismatch-proceeds';
+const MISMATCH = 'Phase 2a: If ok:true but identitiesMatch:false, orchestrator proceeds but surfaces a one-line warning';
+const BUILDER_AFTER_OK = 'Phase 2b: genpage-entity-builder is only invoked AFTER check-auth returns ok:true';
+const TIMEOUT = 'Phase 2a: Auth timeout retries once then halts before provisioning or upload';
+const GATE_FIRST = 'Phase 2a: Orchestrator runs scripts/check-auth.js BEFORE invoking entity-builder; parses the returned JSON';
+
+// The same event with its result's message and the message the user saw replaced together.
+const withMessage = (change) => (e) => {
+  const message = change(e.result.message);
+  return { ...e, result: { ...e.result, message }, userMessage: message };
+};
+
+test('eval 10: an ok:true gate with mismatched identities shows its one-line warning verbatim and goes on', () => {
+  const base = committed(PROCEEDS);
+  assertPass(grade(MISMATCH, base));
+  // The refusals have no such gate, nor does a run whose identities match.
+  for (const dir of E10) assertSkip(grade(MISMATCH, committed(dir)), /no ok:true, identitiesMatch:false auth result/);
+  assertSkip(grade(MISMATCH, committed('9-project-tracker-new-entities')), /no ok:true, identitiesMatch:false auth result/);
+  assertFail(grade(MISMATCH, withEvent(base, 'auth-preflight', (e) => { delete e.userMessage; return e; })), /not surfaced to the user verbatim/);
+  assertFail(grade(MISMATCH, withEvent(base, 'auth-preflight', (e) => ({ ...e, userMessage: 'Heads up: az and pac differ.' }))), /not surfaced to the user verbatim/);
+  assertFail(grade(MISMATCH, withEvent(base, 'auth-preflight', withMessage((m) => m.replace(' WhoAmI passed', '\nWhoAmI passed')))), /is not one line/);
+  assertFail(grade(MISMATCH, withEvent(base, 'auth-preflight', withMessage((m) => m.replace(/ — but if a later step.*$/, '.')))), /does not name `az login --username maker@contoso\.onmicrosoft\.com`/);
+  // Stopping at a warning is the regression: the run must go on to the entity-builder.
+  const stopped = { ...base, events: base.events.slice(0, base.events.findIndex((e) => e.id === 'auth-preflight') + 1) };
+  assertFail(grade(MISMATCH, stopped), /did not go on past the ok:true, identitiesMatch:false gate/);
+  assertFail(grade(MISMATCH, { ...base, manifest: { ...base.manifest, expectedOutcome: 'refused', refusal: { stage: 'auth' } } }), /run stopped although its only auth finding was a warning-only identity mismatch/);
+});
+
+test('eval 10: a builder re-probe that sees the mismatch logs the warning in its transaction log', () => {
+  const base = committed(PROCEEDS);
+  assertPass(grade(GATE_FIRST, base));
+  const unlogged = { ...base, entityCreationLog: base.entityCreationLog.split(/\r?\n/).filter((line) => !/^- Warning:/.test(line)).join('\n') };
+  assertFail(grade(GATE_FIRST, unlogged), /the entity-builder did not log its identity-mismatch warning/);
+  // The orchestrator's own gate still owes the user the verbatim warning.
+  assertFail(grade(GATE_FIRST, withEvent(base, 'auth-preflight', (e) => { delete e.userMessage; return e; })), /warning-only identity mismatch was not surfaced verbatim/);
+});
+
+test('eval 10: the entity-builder is dispatched only after an ok:true gate, read from the recorded calls', () => {
+  const base = committed(PROCEEDS);
+  assertPass(grade(BUILDER_AFTER_OK, base));
+  for (const dir of E10) assertSkip(grade(BUILDER_AFTER_OK, committed(dir)), /entity-builder not invoked/);
+  const builder = base.events.find((e) => e.id === 'entity-builder-1');
+  assertFail(grade(BUILDER_AFTER_OK, { ...base, events: [builder, ...base.events.filter((e) => e !== builder)] }), /entity-builder invoked before check-auth\.js/);
+  const blocked = withEvent(base, 'auth-preflight', (e) => ({ ...e, result: { ...e.result, ok: false, blocker: 'whoami_403' } }));
+  assertFail(grade(BUILDER_AFTER_OK, blocked), /the check-auth\.js result before it is not ok:true/);
+  // A capture made before the calls were recorded is read from its log lines.
+  const historical = { dirName: 'historical', id: 10, contractVersion: 1, manifest: { contractVersion: 1 }, events: undefined, files: [],
+    workflowLog: '- Command: `node scripts/check-auth.js`\n  - Result: ok=true\n- genpage-entity-builder invoked with the plan\n' };
+  assertPass(grade(BUILDER_AFTER_OK, historical));
+  assertFail(grade(BUILDER_AFTER_OK, { ...historical, workflowLog: '- genpage-entity-builder invoked with the plan\n- Command: `node scripts/check-auth.js`\n  - Result: ok=true\n' }), /entity-builder invoked before check-auth\.js/);
+});
+
+test('eval 10: the timeout expectation grades a refusal whole, and a run that went on only when it timed out', () => {
+  assertPass(grade(TIMEOUT, committed('10-auth-timeout-halt')));
+  const base = committed(PROCEEDS);
+  assertSkip(grade(TIMEOUT, base), /no auth timeout in this scenario/);
+  const gate = base.events.find((e) => e.id === 'auth-preflight');
+  const advice = 'Azure CLI did not answer within 60 s; retry once or set POWER_PLATFORM_SKILLS_AZ_TIMEOUT_MS=120000.';
+  const slow = (id) => ({ id, command: gate.command, exitCode: 1, result: { ok: false, blocker: 'az_timeout', message: advice, warnings: [], envUrl: null, identitiesMatch: false, whoAmI: null }, userMessage: advice });
+  const at = base.events.indexOf(gate);
+  const retried = (...extra) => ({ ...base, events: [...base.events.slice(0, at), ...extra, ...base.events.slice(at)] });
+  // One timeout, one retry that passes: the run went on legitimately.
+  assertPass(grade(TIMEOUT, retried(slow('auth-slow'))));
+  assertFail(grade(TIMEOUT, retried(slow('auth-slow-1'), slow('auth-slow-2'), slow('auth-slow-3'))), /auth timeout retried more than once/);
 });
