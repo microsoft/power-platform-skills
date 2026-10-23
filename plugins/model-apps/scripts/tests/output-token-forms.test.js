@@ -193,10 +193,13 @@ test('a token PERCENT-ENCODED (upper- or lower-case hex) or spelled with HTML EN
   assert.equal(redactTokens(`plain ${SPECIAL} end`, [SPECIAL]), `plain ${MARK} end`, 'and the token as it is, as before');
 });
 
-test('spellingsOf is the list of the other spellings taken out: base64 of the token, standard and URL-safe, at each alignment; percent and HTML spellings only where they differ — a JWT has none; nothing shorter than the floor', () => {
+test('spellingsOf is the list of the other spellings taken out: base64 of the token and of each of its parts of 24 characters or more, standard and URL-safe, at each alignment; percent and HTML spellings only where they differ — a JWT has none; nothing shorter than the floor', () => {
   const { spellingsOf } = redaction;
   const jwt = spellingsOf(TOKEN);
-  assert.deepEqual([...jwt].sort(), [...new Set(BASE64)].sort(), 'what is spelled the same whatever stands around the token, at each of the three alignments, in both alphabets — and nothing else: a JWT is base64url and dots');
+  const plain = redaction.needlesOf(TOKEN);
+  const expected = [...new Set(plain.flatMap((needle) => [...base64Of(needle, 'base64'), ...base64Of(needle, 'base64url')]))].filter((spelling) => spelling.length >= FLOOR && !plain.includes(spelling));
+  assert.deepEqual([...jwt].sort(), expected.sort(), 'what is spelled the same whatever stands around the token or one of its parts, at each of the three alignments, in both alphabets — and nothing else: a JWT is base64url and dots');
+  for (const part of PARTS) assert.ok(base64Of(part, 'base64').every((spelling) => jwt.includes(spelling)), `the base64 of ${part} at each alignment`);
   assert.ok(jwt.every((spelling) => spelling.length >= FLOOR));
   const special = spellingsOf(SPECIAL);
   const upper = encodeURIComponent(SPECIAL);
@@ -208,6 +211,110 @@ test('spellingsOf is the list of the other spellings taken out: base64 of the to
   assert.deepEqual(spellingsOf(''), []);
   assert.deepEqual(spellingsOf(undefined), []);
   assert.deepEqual(redaction.needlesOf(TOKEN), [TOKEN, PARTS[2], PARTS[1], PARTS[0]], 'and the list the Dataverse client scrubs with is what it was');
+});
+
+// A token whose parts are 24, 25 and 26 characters long: the three lengths a part's base64 can end with — no fringe and no padding; a character that also holds bits of what follows, and `==`; and one and `=`. The second
+// ends with `y`, whose last two bits make the character after the part's own ones `Q`.
+const RESIDUE_PARTS = ['residueHeaderPartNotReal', 'residuePayloadNotARealKey', 'residueSignatureNotRealKey'];
+const RESIDUE_TOKEN = RESIDUE_PARTS.join('.');
+
+test('the BASE64 of each PART of a token — 24 characters or more, standard and URL-safe, at each of the three byte alignments — is taken out: a text that is exactly the characters made of the part\'s own bits becomes the marker, and JSON around it is JSON still', () => {
+  assert.deepEqual(RESIDUE_PARTS.map((part) => part.length % 3), [0, 1, 2]);
+  const failures = [];
+  for (const [token, parts] of [[TOKEN, PARTS], [RESIDUE_TOKEN, RESIDUE_PARTS]]) {
+    for (const part of parts) {
+      for (const alphabet of ['base64', 'base64url']) {
+        base64Of(part, alphabet).forEach((spelling, offset) => {
+          const where = `${part}, ${alphabet}, alignment ${offset}`;
+          if (spelling.length < FLOOR) failures.push(`${where}: a spelling shorter than the floor`);
+          if (redactTokens(spelling, [token]) !== MARK) failures.push(`${where}: ${redactTokens(spelling, [token])}`);
+          const json = redactTokens(JSON.stringify({ err: spelling, ok: false }), [token]);
+          try {
+            if (JSON.parse(json).err !== MARK) failures.push(`${where}: in JSON ${json}`);
+          } catch {
+            failures.push(`${where}: no JSON ${json}`);
+          }
+          if (redactTokens(`Rejected ${spelling} for this write`, [token]) !== `Rejected ${MARK} for this write`) failures.push(`${where}: in a sentence`);
+        });
+      }
+    }
+  }
+  assert.deepEqual(failures, []);
+});
+
+test('a COMPLETE base64 encoding of a part — alone, and inside a longer value at each alignment, standard and URL-safe — loses the characters made of the part\'s own bits, and only those: the characters that also hold bits of what stands around it, the padding and the rest of the value stay', () => {
+  const failures = [];
+  for (const [token, parts] of [[TOKEN, PARTS], [RESIDUE_TOKEN, RESIDUE_PARTS]]) {
+    const spellings = [...new Set(parts.flatMap((part) => [...base64Of(part, 'base64'), ...base64Of(part, 'base64url')]))];
+    for (const part of parts) {
+      for (const alphabet of ['base64', 'base64url']) {
+        for (const before of ['', 'B', 'Be', 'Bearer ']) {
+          for (const after of ['', 'x', '\r\n', ' and the rest of the header']) {
+            const encoded = Buffer.from(`${before}${part}${after}`).toString(alphabet);
+            // Where the part's own characters stand in it, found with the spelling that is the same whatever stands around the part (base64Of), not with the module's arithmetic.
+            const own = base64Of(part, alphabet)[before.length % 3];
+            const at = encoded.indexOf(own);
+            const expected = `${encoded.slice(0, at)}${MARK}${encoded.slice(at + own.length)}`;
+            const where = `${part}, ${alphabet}, ${JSON.stringify(before)} + part + ${JSON.stringify(after)}`;
+            if (at < 0) failures.push(`${where}: the spelling is not in the encoding`);
+            const alone = redactTokens(encoded, [token]);
+            if (alone !== expected) failures.push(`${where}: ${alone} is not ${expected}`);
+            const inBlob = redactTokens(`blob ${encoded} end`, [token]);
+            if (inBlob !== `blob ${expected} end`) failures.push(`${where}: in a blob ${inBlob}`);
+            const json = redactTokens(JSON.stringify({ blob: encoded, ok: false }), [token]);
+            try {
+              if (JSON.parse(json).blob !== expected) failures.push(`${where}: in JSON ${json}`);
+            } catch {
+              failures.push(`${where}: no JSON ${json}`);
+            }
+            if (piecesIn(inBlob, spellings).length > 0) failures.push(`${where}: a piece of a spelling is left in ${inBlob}`);
+          }
+        }
+      }
+    }
+  }
+  assert.deepEqual(failures, []);
+  // The fringe as it is written: a 25-character part that ends with `y`, encoded alone, keeps the character after its own ones and the padding.
+  assert.equal(redactTokens(Buffer.from(RESIDUE_PARTS[1]).toString('base64'), [RESIDUE_TOKEN]), `${MARK}Q==`);
+  // A whole token's complete encoding the same way: its own characters are the marker, its fringe and padding stay.
+  const whole = Buffer.from(RESIDUE_TOKEN).toString('base64');
+  const own = base64Of(RESIDUE_TOKEN, 'base64')[0];
+  assert.equal(whole.indexOf(own), 0);
+  assert.ok(whole.length > own.length, 'the encoding of a token of 77 characters has a fringe and padding');
+  assert.equal(redactTokens(whole, [RESIDUE_TOKEN]), `${MARK}${whole.slice(own.length)}`);
+  assert.equal(redactTokens(own, [RESIDUE_TOKEN]), MARK, 'a text that is exactly its own characters is one marker');
+});
+
+test('what the base64 of a part does NOT reach: a part shorter than 24 characters has no spelling, a piece of a token that is not a whole part is not read in base64, a token of 18 characters keeps the one spelling it has, and the Dataverse client still scrubs the token and its parts only', () => {
+  const { spellingsOf, needlesOf } = redaction;
+  // A part of 23 characters is no needle, so its base64 is none either — though that base64 is longer than the floor.
+  const short = 'shortPartIsNotANeedle23';
+  assert.equal(short.length, FLOOR - 1);
+  const withShort = `${short}.${RESIDUE_PARTS[2]}`;
+  assert.ok(!needlesOf(withShort).includes(short));
+  const shortSpellings = [...base64Of(short, 'base64'), ...base64Of(short, 'base64url')];
+  assert.ok(shortSpellings.every((spelling) => spelling.length >= FLOOR && !spellingsOf(withShort).includes(spelling)), 'no spelling of the short part');
+  const encodedShort = Buffer.from(short).toString('base64');
+  assert.equal(redactTokens(`blob ${encodedShort} end`, [withShort]), `blob ${encodedShort} end`);
+  // Thirty characters from the middle of a part: not a whole part, so its base64 is ordinary data.
+  const slice = PARTS[1].slice(4, 34);
+  for (const alphabet of ['base64', 'base64url']) {
+    const encoded = Buffer.from(slice).toString(alphabet);
+    assert.equal(redactTokens(encoded, [TOKEN]), encoded, alphabet);
+    assert.equal(redactTokens(`blob ${encoded} end`, [TOKEN], { edges: true }), `blob ${encoded} end`, alphabet);
+  }
+  // A token of 18 characters: its base64 at the first alignment is 24 characters, and it stays a spelling (the floor is the spelling's length, not the token's).
+  const eighteen = 'eighteenCharsTokn1';
+  assert.equal(eighteen.length, 18);
+  const first = base64Of(eighteen, 'base64')[0];
+  assert.equal(first.length, FLOOR);
+  assert.ok(spellingsOf(eighteen).includes(first));
+  assert.equal(redactTokens(`x ${first} y`, [eighteen]), `x ${MARK} y`);
+  // The client's scrubber reads the token and its parts, as it did: the base64 of a part stays in what it scrubs.
+  const { scrub } = require('../lib/sdk-http-client.js');
+  const partBase64 = base64Of(PARTS[1], 'base64')[0];
+  assert.ok(scrub(`refused: ${partBase64}`, TOKEN).includes(partBase64), 'the client scrubs with needlesOf, which is what it was');
+  assert.deepEqual(needlesOf(RESIDUE_TOKEN), [RESIDUE_TOKEN, RESIDUE_PARTS[2], RESIDUE_PARTS[1], RESIDUE_PARTS[0]]);
 });
 
 // ── A token a formatter cut short ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────

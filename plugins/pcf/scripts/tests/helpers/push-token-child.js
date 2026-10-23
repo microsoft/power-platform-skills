@@ -3,7 +3,9 @@
 // (HTTP 403) with a diagnostic repeating the access token the process sent, folded onto several lines, so a test can read what reached the process's descriptors and its folders: stdout, stderr, the receipt
 // `pcf-receipt.json` and the SDK's workspace. Run by tests/pcf-push-token.test.js:
 //   node push-token-child.js <project folder> <how the diagnostic spells the token>
-// `how` is `folded` (every eight characters, as a gateway wraps a long header), `plain`, `escaped-fold` (the fold written as the JSON escape `\r\n`, as a diagnostic that was itself JSON holds it) or `none` (a diagnostic with no token in it).
+// `how` is `folded` (every eight characters, as a gateway wraps a long header), `plain`, `escaped-fold` (the fold written as the JSON escape `\r\n`, as a diagnostic that was itself JSON holds it), `part-base64` (the
+// characters of the signature's base64 that are made of its own bits, at the second alignment: what a longer encoded value holds of it), `part-base64-complete` (the signature's complete base64, padding and all) or `none`
+// (a diagnostic with no token in it).
 const fs = require('node:fs');
 const path = require('node:path');
 const Module = require('node:module');
@@ -11,7 +13,7 @@ const Module = require('node:module');
 const SCRIPTS = path.resolve(__dirname, '..', '..');
 const { createAzHttpClient } = require(path.join(SCRIPTS, 'lib', 'sdk-http-client.js'));
 const data = require(path.join(SCRIPTS, 'lib', 'pcf-dataverse.js'));
-const { TOKEN } = require('./push-token.js');
+const { TOKEN, PARTS, base64Of } = require('./push-token.js');
 
 const [, , project, how = 'folded'] = process.argv;
 const ORG = 'https://contoso.crm.dynamics.com';
@@ -19,6 +21,8 @@ const spelling = {
   plain: TOKEN,
   folded: TOKEN.match(/.{1,8}/g).join('\r\n '),
   'escaped-fold': TOKEN.match(/.{1,8}/g).join('\\r\\n '),
+  'part-base64': base64Of(PARTS[2])[1],
+  'part-base64-complete': Buffer.from(PARTS[2]).toString('base64'),
   none: 'nothing secret here',
 }[how];
 if (spelling === undefined) throw new Error(`unknown spelling ${how}`);

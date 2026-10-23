@@ -13,4 +13,20 @@ const SECRETS = [TOKEN, ...PARTS];
 const views = (text) => [text, text.replace(/\s+/g, ''), text.replace(/\\+[rntf]/g, '').replace(/\s+/g, '')];
 const leaksIn = (text, secrets = SECRETS) => secrets.filter((secret) => views(String(text)).some((view) => view.includes(secret)));
 
-module.exports = { PARTS, TOKEN, SECRETS, leaksIn };
+// The base64 of `text` as it stands inside a longer value, at each of the three byte alignments, found by trying rather than by the module's arithmetic: the characters that stay the same whatever bytes stand before
+// and after it (the characters at either end that also hold bits of a neighbour change with it, and are not the text's own).
+function base64Of(text, alphabet = 'base64') {
+  const spellings = [];
+  for (let offset = 0; offset < 3; offset += 1) {
+    const zeros = Buffer.concat([Buffer.alloc(offset, 0x00), Buffer.from(text), Buffer.alloc(3, 0x00)]).toString(alphabet);
+    const ones = Buffer.concat([Buffer.alloc(offset, 0xff), Buffer.from(text), Buffer.alloc(3, 0xff)]).toString(alphabet);
+    let from = 0;
+    while (zeros[from] !== ones[from]) from += 1;
+    let to = from;
+    while (to < zeros.length && zeros[to] === ones[to]) to += 1;
+    spellings.push(zeros.slice(from, to));
+  }
+  return spellings;
+}
+
+module.exports = { PARTS, TOKEN, SECRETS, leaksIn, base64Of };

@@ -9,7 +9,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
-const { TOKEN, SECRETS, leaksIn } = require('./helpers/push-token.js');
+const { TOKEN, SECRETS, PARTS, leaksIn, base64Of } = require('./helpers/push-token.js');
 
 const SCRIPTS = path.resolve(__dirname, '..');
 const CHILD = path.join(__dirname, 'helpers', 'push-token-child.js');
@@ -66,6 +66,28 @@ test('a refusal that does not repeat the token is written to the receipt as the 
   const receipt = JSON.parse(ran.files.get('pcf-receipt.json'));
   assert.match(receipt.registered.reason, /^HTTP 403 from \S+: Header check failed for value nothing secret here$/);
   assert.deepEqual(leaksIn(ran.stdout), []);
+});
+
+// The base64 of one part of the token — the signature — in the diagnostic: the characters made of its own bits are taken out; a complete encoding keeps the character that also holds the padding's bits, and the padding.
+test('a refusal that repeats the BASE64 of a part of the token writes a receipt without it: exactly its own characters become the marker, and a complete encoding keeps only its fringe and padding — JSON still', () => {
+  const own = base64Of(PARTS[2]);
+  const spellings = [...own, ...base64Of(PARTS[2], 'base64url')];
+  const windows = (secret) => Array.from({ length: Math.max(0, secret.length - 23) }, (_, i) => secret.slice(i, i + 24));
+  const left = (text) => spellings.flatMap(windows).filter((window) => text.includes(window));
+  const complete = Buffer.from(PARTS[2]).toString('base64');
+  const fringe = complete.slice(own[0].length);
+  assert.ok(complete.startsWith(own[0]) && fringe.length > 0, 'the complete encoding is the signature\'s own characters, a fringe character and padding');
+  for (const [how, ending] of [['part-base64', MARK], ['part-base64-complete', `${MARK}${fringe}`]]) {
+    const ran = pushWith(how);
+    assert.equal(ran.status, 1, `${how}: ${ran.stderr.slice(0, 500)}`);
+    const receipt = JSON.parse(ran.files.get('pcf-receipt.json'));
+    assert.ok(receipt.registered.reason.startsWith('HTTP 403 from '), receipt.registered.reason);
+    assert.ok(receipt.registered.reason.endsWith(`: Header check failed for value ${ending}`), `${how}: ${receipt.registered.reason}`);
+    assert.deepEqual(left(ran.files.get('pcf-receipt.json')), [], `${how}: the receipt holds a piece of 24 characters of the signature's base64`);
+    assert.deepEqual(left(ran.stdout), [], `${how}: stdout`);
+    assert.deepEqual(left(ran.stderr), [], `${how}: stderr`);
+    assert.equal(JSON.parse(ran.stdout).registered.reason, receipt.registered.reason, 'the receipt says what the result says');
+  }
 });
 
 test('the receipt is the one file this plugin writes that carries a service\'s words, and it is written through the guard — every other write of file content is listed, with the reason it cannot carry a token', () => {

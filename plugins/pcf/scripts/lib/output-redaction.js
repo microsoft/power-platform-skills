@@ -37,7 +37,8 @@
 //     token written in two pieces leaves the shorter piece when it is under 24 characters; the first one is written before the second exists); a piece from the MIDDLE of a token that neither begins nor ends a needle (a
 //     token written in three pieces or more, or cut at both ends); the start of a write read through an escape's letters (it is read on the first reading only: a literal backslash before its first letter leaves that letter);
 //     the piece of a token that an escape cut between two writes leaves on its far side when that piece is shorter than 24 characters (the escape stays whole, so its characters count for neither piece);
-//     a spelling other than those below (a partial percent-encoding, a numeric entity for every character, base64 of a part alone, hex, a token spelled backwards — a reader that guessed at them would blank ordinary data);
+//     a spelling other than those below (a partial percent-encoding, a numeric entity for every character, base64 of a substring that is not a whole part — or of a part shorter than 24 characters, or of a base64
+//     spelling —, hex, a token spelled backwards — a reader that guessed at them would blank ordinary data);
 //     a cut other than util.inspect's, an ellipsis or the end of a text the process writes; inside BYTES only whole needles and the edges of a write are read (no cut, no fold, no escape); bytes given to a FILE writer (the
 //     writers below clean text); the cuts and edges of a token searched for literally (one with white space, a backslash or an ESC of its own — no token a service issues); a raw control character other than white space
 //     and ESC between two of its characters.
@@ -50,8 +51,9 @@
 // the token. The span from the token's first character to its last — the folds and escapes inside it included, an escape always whole — becomes `<token>`, and the white space before and after it stays. In JSON text the
 // span is always inside one string and never leaves half of an escape, so what was JSON is still JSON (the baseline and the journal are read back by the next run).
 //
-// OTHER SPELLINGS of a token the process obtained are needles of their own, read the same way (spellingsOf): its base64, standard and URL-safe, at each of the three byte alignments it can have inside a longer value (a
-// whole `Authorization` header, a body encoded once more), and its percent-encoded and HTML spellings where they differ from it. Exact spellings of a KNOWN token — nothing in a text is decoded to look inside it.
+// OTHER SPELLINGS of a token the process obtained are needles of their own, read the same way (spellingsOf): its base64 and that of each of its parts of 24 characters or more, standard and URL-safe, at each of the three
+// byte alignments it can have inside a longer value (a whole `Authorization` header, a body encoded once more, the one part a diagnostic complains about) — the characters made of its own bits, not the ones beside them that
+// also hold bits of their neighbours, nor the padding — and its percent-encoded and HTML spellings where they differ from it. Exact spellings of a KNOWN token — nothing in a text is decoded to look inside it.
 //
 // A TOKEN CUT SHORT. A formatter that cuts a long text keeps its beginning, and the end of what it kept can be the beginning of a token: util.inspect prints at most 10,000 characters of a string and then says how many it
 // left out (`'Rejected bearer syntheticHeaderPartNotA'... 9876 more characters`), and a text cut to a length by hand ends with an ellipsis (`...`, `…`). Where a text says it was cut, the run before it that BEGINS a needle — 24
@@ -106,12 +108,15 @@ const HTML_ENTITIES = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "
 
 /**
  * The other spellings of `token` that are taken out of what the process writes, each an exact needle read as any needle is (with folds and escapes in it):
- *   - its base64, standard and URL-safe (https://www.rfc-editor.org/rfc/rfc4648#section-4 and #section-5), as it is spelled INSIDE a longer value: base64 spells three bytes as four characters of six bits, so the token's
- *     first byte can stand at any of three places in a group and each place spells it differently. Of each, only the characters made of the token's own bits — a character that also holds bits of the byte before or
- *     after it changes with that byte, so it is left out at either end;
+ *   - the base64, standard and URL-safe (https://www.rfc-editor.org/rfc/rfc4648#section-4 and #section-5), of the token AND of each of its parts of 24 characters or more (needlesOf) — a diagnostic can encode the one
+ *     part it complains about as well as the whole header — as each is spelled INSIDE a longer value: base64 spells three bytes as four characters of six bits, so a needle's first byte can stand at any of three
+ *     places in a group and each place spells it differently. Of each, only the characters made of the needle's own bits — a character that also holds bits of the byte before or after it changes with that byte,
+ *     so it is left out at either end: a complete encoding of a part keeps that character and its padding (`<token>Q==`), and so does one of the token;
  *   - its percent-encoded spelling (upper- and lower-case hex) and its HTML spelling, and those of each of its parts of 24 characters or more — only where they differ from it: a JWT is base64url and dots, which
  *     neither changes, so a JWT has base64 spellings only.
- * Each is kept only when it is MIN_TOKEN_PART_LENGTH characters or more, as a part is; a spelling that is already a needle of the token is not repeated. The longest first.
+ * Each is kept only when it is MIN_TOKEN_PART_LENGTH characters or more — the length of the SPELLING, so that a token of 18 characters keeps the 24 characters of its first alignment; a part shorter than 24 characters
+ * is no needle and so has no spelling — and a spelling that is already a needle of the token, or another needle's spelling, is not repeated. The longest first. needlesOf is not changed by any of it: the Dataverse
+ * client scrubs the answers it fails with by that list alone (lib/sdk-http-client.js).
  * @param {string} token
  * @returns {string[]}
  */
@@ -122,13 +127,15 @@ function spellingsOf(token) {
   const keep = (spelled) => {
     if (spelled.length >= MIN_TOKEN_PART_LENGTH && !plain.includes(spelled)) spellings.add(spelled);
   };
-  const bytes = Buffer.from(token, 'utf8');
-  for (let offset = 0; offset < 3; offset += 1) {
-    // With `offset` bytes before the token, its bits are bits [8 * offset, 8 * (offset + n)) of the value, and character i holds bits [6i, 6i + 6): the characters from ceil(8 * offset / 6) to floor(8 * (offset + n) / 6)
-    // hold the token's bits and nothing else.
-    const standard = Buffer.concat([Buffer.alloc(offset), bytes]).toString('base64').slice(Math.ceil((4 * offset) / 3), Math.floor((4 * (offset + bytes.length)) / 3));
-    keep(standard);
-    keep(standard.replace(/\+/g, '-').replace(/\//g, '_'));
+  for (const needle of plain) {
+    const bytes = Buffer.from(needle, 'utf8');
+    for (let offset = 0; offset < 3; offset += 1) {
+      // With `offset` bytes before the needle, its bits are bits [8 * offset, 8 * (offset + n)) of the value, and character i holds bits [6i, 6i + 6): the characters from ceil(8 * offset / 6) to floor(8 * (offset + n) / 6)
+      // hold the needle's bits and nothing else.
+      const standard = Buffer.concat([Buffer.alloc(offset), bytes]).toString('base64').slice(Math.ceil((4 * offset) / 3), Math.floor((4 * (offset + bytes.length)) / 3));
+      keep(standard);
+      keep(standard.replace(/\+/g, '-').replace(/\//g, '_'));
+    }
   }
   for (const needle of plain) {
     keep(percentSpelling(needle, true));
