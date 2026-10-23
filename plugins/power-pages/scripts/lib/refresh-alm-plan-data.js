@@ -301,7 +301,11 @@ function backfillEnvVarValuesFromSettings(planData, projectRoot) {
   if (!bySchema || Object.keys(bySchema).length === 0) return 0;
   const bySchemaLower = new Map();
   for (const [schemaName, stages] of Object.entries(bySchema)) {
-    bySchemaLower.set(schemaName.toLowerCase(), stages);
+    // extractPerStageValues groups by exact spelling, so `cr5fe_x` (Staging)
+    // and `CR5FE_X` (Production) arrive as separate entries. Merge their stage
+    // maps rather than letting the second spelling replace the first.
+    const key = schemaName.toLowerCase();
+    bySchemaLower.set(key, { ...(bySchemaLower.get(key) || {}), ...stages });
   }
 
   let filled = 0;

@@ -2356,3 +2356,25 @@ test('live: schema names match case-insensitively when a stage query succeeds', 
   assert.deepEqual(planData.envVars[1].values, { Staging: 'false' });
   assert.deepEqual(planData.envVars[1].valueSources, { Staging: 'live' });
 });
+
+test('live: settings entries whose schema names differ only by case are merged across stages', (t) => {
+  const root = makeProject(t);
+  writeJson(path.join(root, 'deployment-settings.json'), {
+    Staging: { EnvironmentVariables: [{ SchemaName: 'cr5fe_apiBaseUrl', Value: 'file-staging' }] },
+    Production: { EnvironmentVariables: [{ SchemaName: 'CR5FE_APIBASEURL', Value: 'file-prod' }] },
+  });
+  const planData = {
+    stages: [{ label: 'Staging', envUrl: LIVE_STAGING }, { label: 'Production', envUrl: LIVE_PROD }],
+    envVars: [{ schemaName: 'cr5fe_apiBaseUrl' }],
+  };
+  const counts = mergeLiveEnvVarValues(planData, root, {
+    byStage: {
+      Staging: { cr5fe_apiBaseUrl: 'https://ppac-staging.example.com' },
+      Production: { cr5fe_apiBaseUrl: 'https://ppac-prod.example.com' },
+    },
+  });
+  assert.deepEqual(planData.envVars[0].values, { Staging: 'file-staging', Production: 'file-prod' },
+    'both stages keep their local value; neither spelling may drop the other');
+  assert.deepEqual(planData.envVars[0].valueSources, { Staging: 'settings', Production: 'settings' });
+  assert.deepEqual(counts, { filled: 0, updated: 0, cleared: 0 });
+});
