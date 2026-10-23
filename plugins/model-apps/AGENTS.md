@@ -2165,8 +2165,11 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   missing), while a Spanish one stopped. The key step decides that code in every language from the table's keys, read once more by
   the table probe's narrow request (`keyOverSameColumns`, `lib/entity-provision.js`): the declared key over those columns (its
   schema name in any case) is a skip, as an existing key is; a key of another name stops the build — a refusal, not retried —
-  naming that key, the columns and what to do (declare that key's name instead, or delete it in Power Apps if it is a leftover; or,
-  where the spec declares both, keep one); a read that fails or shows no key over exactly those columns stops it with the
+  naming that key, the columns and what to do: declare that key's name instead, or delete it in Power Apps if it is a leftover;
+  where the spec declares both over those columns, keep one; and where the spec declares that key over OTHER columns — the key
+  in the environment drifted from the spec, and the build, which skips a key whose name exists, does not change its columns —
+  the stop names both column sets and asks for that key to be reconciled (deleted where nothing relies on it) first, never for
+  a valid declaration to be dropped. A read that fails or shows no key over exactly those columns stops it with the
   platform's own error. A code another create answers, a generic code (`0x80040216`) and a code the message only quotes do not
   count by themselves: such an answer stops the build unless the 409 or the English words read it as an already-exists one — an
   answer worded in another language, which the English rule does not read, stops. Pinned by

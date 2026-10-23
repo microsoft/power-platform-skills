@@ -50,7 +50,7 @@ const { readOrgLanguageCode, readProvisionedLanguages } = require('./dataverse-a
 const { RETRY, retryPolicyFor, refusal, serviceFailure, serviceCodeOf } = require('./retry-policy.js');
 // What the run's throttle budget says when it refuses a wait (the words of the build's own halt for it), for the step guard in makeRunner.
 const { waitDoesNotFit } = require('./throttle-budget.js');
-const { readStatusOptions, alternateKeyMatches, alternateKeyOverColumns } = require('./table-schema-metadata.js');
+const { readStatusOptions, alternateKeyMatches, alternateKeyOverColumns, sameKeyColumnSet } = require('./table-schema-metadata.js');
 
 // App Spec column type -> SDK ColumnType. Lookup is omitted (side effect of a OneToMany
 // relationship); Customer is handled specially (createCustomerColumn).
@@ -1943,16 +1943,28 @@ async function keyOverSameColumns(provision, logical, key) {
 }
 
 // The stop for a key the platform refused because the key `holder` of the table is over the same columns: the declared key, the key the
-// table has (as the platform names it), the columns, and what to do — declare that key under its own name, or delete it where nothing uses
-// it. Where the spec declares that key too, deleting it is no way out (the next build makes it again): the spec asks for two keys over one
-// set of columns.
+// table has (as the platform names it), the columns, and what to do. Which advice is right depends on what the spec says of the holder's name:
+//   - nothing: the holder is not the spec's — declare it under its own name, or delete it where nothing uses it;
+//   - another of the table's keys under that name over the SAME columns: the spec itself asks for two keys over one set of columns, so deleting
+//     the holder is no way out (the next build makes it again) — one of the two has to go, or change its columns;
+//   - another of the table's keys under that name over OTHER columns: the spec is valid, and the key in the environment drifted from it (the spec
+//     changed that key's columns, or the key was made otherwise). Its name exists, so the build skipped it (0x80060893) and does not change its
+//     columns; it has to be reconciled — deleted, where nothing relies on it as it is — before the declared key can be made. Asking to drop or
+//     change a declaration would be wrong here: keeping only that key leaves it skipped again, and verification still finds its columns wrong.
 function keyOverSameColumnsStop(entity, logical, key, holder) {
-  const columns = (key.columns || []).map((c) => String(c).toLowerCase());
+  const lower = (list) => (list || []).map((c) => String(c).toLowerCase());
+  const columns = lower(key.columns);
   const over = `the same column${columns.length === 1 ? '' : 's'} (${columns.join(', ')})`;
   const head = `alt key ${entity.schemaName}.${key.schemaName} was not created: the table ${logical} already has the key ${holder.SchemaName} over ${over}`;
-  const declaredToo = (entity.alternateKeys || []).some((k) => k && k !== key && String(k.schemaName).toLowerCase() === holder.SchemaName.toLowerCase());
-  if (declaredToo) {
+  const named = (entity.alternateKeys || []).filter((k) => k && k !== key && String(k.schemaName).toLowerCase() === holder.SchemaName.toLowerCase());
+  if (named.some((k) => sameKeyColumnSet(k.columns, key.columns))) {
     return `${head}, and the spec declares both — Dataverse allows one key per set of columns. Keep one of them in the table's alternateKeys, or give the other different columns.`;
+  }
+  if (named.length) {
+    const declared = lower(named[0].columns);
+    return `${head}, and Dataverse allows one key per set of columns. The spec declares ${holder.SchemaName} over other columns (${declared.join(', ')}): `
+      + `the key in the environment is not the one the spec describes, and a build does not change the columns of a key that exists. `
+      + `Reconcile ${holder.SchemaName} first: if nothing relies on it as it is (an integration that writes records by it, say), delete it in Power Apps (the table's Keys) and run the build again — it then creates both keys as the spec declares them.`;
   }
   return `${head}, and Dataverse allows one key per set of columns. To keep that key, declare it as it is — set this key's schemaName to '${holder.SchemaName}' — `
     + `or, if ${holder.SchemaName} is a leftover that nothing uses, delete it in Power Apps (the table's Keys) and run the build again.`;

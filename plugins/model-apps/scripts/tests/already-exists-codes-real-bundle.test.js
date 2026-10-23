@@ -286,6 +286,45 @@ test('a spec that declares two keys over the same columns stops at the second, s
   }
 });
 
+// The spec declares two keys over different columns — which is valid — but the environment's key of the first name is over the second key's
+// column: it drifted from the spec (the spec changed that key's columns, or the key was made otherwise). The first create is refused because its
+// name exists (0x80060893) and skipped, as it always was; the second is refused because that key is over its column. The spec does not declare two
+// keys over one set of columns, so the stop must not say it does, nor ask to drop or change a declaration: it names the key in the environment, the
+// columns it is over and the columns the spec declares for it, which is what has to be reconciled before the second key can be made.
+test('a key refused with 0x80060894 because the environment\'s key of another DECLARED name is over its columns — that key drifted from the spec — stops naming that key\'s columns and the declared ones, not a duplicate in the spec', async () => {
+  const drifted = { solution: SOLUTION, relationships: [], entities: [project({
+    columns: [{ schemaName: 'contoso_Code', type: 'Text' }],
+    alternateKeys: [
+      { schemaName: 'contoso_CodeKey', displayName: 'Clave de codigo', columns: ['contoso_code'] },
+      { schemaName: 'contoso_NameKey', displayName: 'Clave de nombre', columns: ['contoso_name'] },
+    ],
+  })] };
+  const environments = { SchemaName: 'contoso_CodeKey', KeyAttributes: ['contoso_name'] };
+  const NAME_TAKEN = {
+    English: KEY_IN_ENGLISH,
+    Spanish: refused('0x80060893', 'Ya existe una clave de entidad con el nombre contoso_codekey en la entidad contoso_project.'),
+  };
+  for (const [language, words] of Object.entries(COLUMNS_TAKEN)) {
+    const reads = keyAnsweredWith(undefined, [tableWithKeys([environments])]);
+    const route = (method, asked, body) => {
+      if (method === 'POST' && asked === KEYS) return body.SchemaName === 'contoso_CodeKey' ? NAME_TAKEN[language] : refused('0x80060894', words);
+      return reads(method, asked, body);
+    };
+    const run = await build(drifted, route);
+    assert.deepStrictEqual(run.unmodelled, [], language);
+    assert.ok(run.error instanceof BuildHalt, `${language}: ${run.error && run.error.message}`);
+    assert.deepStrictEqual(run.steps.slice(-2), ['skip alt key contoso_Project.contoso_CodeKey (exists)', 'error alt key contoso_Project.contoso_NameKey'], `${language}: the key whose name exists is skipped, as before`);
+    const message = run.error.message;
+    assert.match(message, /alt key contoso_Project\.contoso_NameKey was not created: the table contoso_project already has the key contoso_CodeKey over the same column \(contoso_name\)/, `${language}: the key in the environment and the columns it is over`);
+    assert.match(message, /The spec declares contoso_CodeKey over other columns \(contoso_code\)/, `${language}: and the columns the spec declares for it`);
+    assert.match(message, /a build does not change the columns of a key that exists/, `${language}: why the build cannot make the second key`);
+    assert.match(message, /Reconcile contoso_CodeKey first: if nothing relies on it as it is .*, delete it in Power Apps \(the table's Keys\) and run the build again/, `${language}: what to do, and with what care`);
+    assert.doesNotMatch(message, /the spec declares both|Keep one of them|give the other different columns|set this key's schemaName/, `${language}: no advice to drop or change a declaration that is valid`);
+    assert.strictEqual(retryPolicyFor(run.error), RETRY.NEVER, `${language}: a run again meets the same key`);
+    assert.deepStrictEqual(run.requests, [`GET ${KEYS_PROBE}`, `GET ${COLUMN_LIST}`, `POST ${KEYS}`, `POST ${KEYS}`, `GET ${KEYS_PROBE}`], `${language}: one read, after the refusal that needs it`);
+  }
+});
+
 test('a key refused with 0x80060893, with a 409, or in English words that carry no code, is skipped without reading the table again, as before', async () => {
   for (const [what, keyAnswer] of [
     ['0x80060893 in English', KEY_IN_ENGLISH],

@@ -104,4 +104,11 @@ function alternateKeyOverColumns(keys, key) {
     && sameKeyColumns(keyColumnSet(candidate.KeyAttributes), wanted)) || null;
 }
 
-module.exports = { readStatusOptions, statusReasonsFromOptions, alternateKeysFromMetadata, alternateKeyMatches, alternateKeyOverColumns };
+// Whether two lists of key columns are the same set (keyColumnSet): the comparison the build makes of a key the environment holds with one the
+// spec declares, here for two lists of names — two keys of one spec, say.
+function sameKeyColumnSet(a, b) {
+  const wanted = keyColumnSet(b);
+  return !!wanted && wanted.length > 0 && sameKeyColumns(keyColumnSet(a), wanted);
+}
+
+module.exports = { readStatusOptions, statusReasonsFromOptions, alternateKeysFromMetadata, alternateKeyMatches, alternateKeyOverColumns, sameKeyColumnSet };
