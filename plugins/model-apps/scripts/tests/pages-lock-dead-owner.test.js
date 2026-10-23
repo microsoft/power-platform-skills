@@ -10,6 +10,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { acquireAppPagesLease } = require('../lib/sdk-build.js');
 const { ownerStamp } = require('../lib/process-owner.js');
+const { sha256 } = require('../lib/hash.js');
 const { startTarget, tempEnv, privateTempRoot, deadPid, removeWhenTestEnds } = require('./helpers/kill-target-client.js');
 
 const APP = 'contoso_app';
@@ -20,6 +21,9 @@ const workspace = (t) => {
   return dir;
 };
 const lockFile = (dir, app = APP) => path.join(dir, `pages-${app}.lock`);
+// The pages lock is two files (lib/app-operation-lease.js): the hashed one, keyed without regard to case, is taken first, so it is the one that refuses a
+// second build of this release; the legacy one above is the one every earlier release takes, and refuses a build of this release while one of those holds it.
+const canonicalFile = (dir, app = APP) => path.join(dir, `app-pages.${sha256(app.toLowerCase())}.lock`);
 // The refusal's words, as they have always been: a person and the skills read them, so they are pinned.
 const REFUSAL = (lock, app = APP) => `another build is deploying pages for '${app}' — refusing a second concurrent pages deploy (would risk duplicate page creation). Retry after it finishes, or delete ${lock} if it is stale.`;
 const refused = (lock, app = APP) => (e) => e && e.code === 'pages-locked' && e.phase === 'pages' && e.recoverable === true && e.message === REFUSAL(lock, app);
@@ -30,9 +34,10 @@ test('REAL KILL: the lock a killed build left is released by the next build, whi
   await holder.waitFor(/^held$/);
   const file = lockFile(dir);
   assert.ok(fs.existsSync(file), 'the build holds the lock');
+  assert.ok(fs.existsSync(canonicalFile(dir)), 'both of its files');
 
-  // While the build is running its lock holds, in the words it has always had.
-  assert.throws(() => acquireAppPagesLease(dir, APP), refused(file));
+  // While the build is running its lock holds, in the words it has always had — naming the file that refused, the hashed one a build of this release takes first.
+  assert.throws(() => acquireAppPagesLease(dir, APP), refused(canonicalFile(dir)));
 
   await holder.kill();
   assert.ok(fs.existsSync(file), 'a killed process cannot release its lock: it is still there');
@@ -42,10 +47,11 @@ test('REAL KILL: the lock a killed build left is released by the next build, whi
   const lease = acquireAppPagesLease(dir, APP, { warn: (message) => warnings.push(message) });
   assert.notStrictEqual(fs.readFileSync(file, 'utf8'), killedLock, 'the lock is no longer the killed build\'s');
   assert.strictEqual(JSON.parse(fs.readFileSync(file, 'utf8')).pid, process.pid, 'it names this process');
-  assert.strictEqual(warnings.length, 1, `one warning, never silent: ${JSON.stringify(warnings)}`);
+  assert.strictEqual(JSON.parse(fs.readFileSync(canonicalFile(dir), 'utf8')).pid, process.pid, 'and so does the hashed one');
+  assert.strictEqual(warnings.length, 1, `one warning for the one build that held both files, never silent: ${JSON.stringify(warnings)}`);
   assert.ok(warnings[0].includes(`'${APP}'`) && warnings[0].includes(`pid ${holder.pid}`) && /no longer running/.test(warnings[0]), warnings[0]);
   // And it is a lock like any other: a third build is refused while this one holds it, and may take it once this one lets go.
-  assert.throws(() => acquireAppPagesLease(dir, APP), refused(file));
+  assert.throws(() => acquireAppPagesLease(dir, APP), refused(canonicalFile(dir)));
   lease.release();
   assert.ok(!fs.existsSync(file), 'released');
   assert.deepStrictEqual(fs.readdirSync(dir), [], 'and nothing else is left in the workspace, a reclaim claim included');
@@ -121,19 +127,23 @@ test('a lock whose recorded start is empty, truncated or malformed is not taken 
     const first = acquireAppPagesLease(dir, APP, { owner: here });
     const held = JSON.parse(fs.readFileSync(file, 'utf8'));
     assert.strictEqual(held.start, `${BOOT}:900`, 'control: the lock records the start it was taken with');
-    // Only the start is damaged: the lock is still JSON, and says whose it is.
+    // Only the start is damaged, in both files the build holds: each is still JSON, and says whose it is.
     const damaged = JSON.stringify({ ...held, start });
+    const damagedHashed = JSON.stringify({ ...JSON.parse(fs.readFileSync(canonicalFile(dir), 'utf8')), start });
     fs.writeFileSync(file, damaged);
+    fs.writeFileSync(canonicalFile(dir), damagedHashed);
     const what = JSON.stringify(start);
     // The same process (a build that is running): a second lease before the first is released.
-    assert.throws(() => acquireAppPagesLease(dir, APP, { owner: here }), refused(file), `${what}: this process's own lock`);
+    assert.throws(() => acquireAppPagesLease(dir, APP, { owner: here }), refused(canonicalFile(dir)), `${what}: this process's own lock`);
     // A process that is not found: an untrusted record is not a dead one's.
     const warnings = [];
-    assert.throws(() => acquireAppPagesLease(dir, APP, { owner: { ...here, pid: 100, probe: () => 'gone' }, warn: (message) => warnings.push(message) }), refused(file), `${what}: a pid that is not found`);
+    assert.throws(() => acquireAppPagesLease(dir, APP, { owner: { ...here, pid: 100, probe: () => 'gone' }, warn: (message) => warnings.push(message) }), refused(canonicalFile(dir)), `${what}: a pid that is not found`);
     assert.strictEqual(fs.readFileSync(file, 'utf8'), damaged, `${what}: the lock is as it was`);
+    assert.strictEqual(fs.readFileSync(canonicalFile(dir), 'utf8'), damagedHashed, `${what}: the hashed one too`);
     assert.deepStrictEqual(warnings, []);
     first.release();
     assert.strictEqual(fs.readFileSync(file, 'utf8'), damaged, `${what}: the first build's late release leaves a lock that is not its token alone`);
+    assert.strictEqual(fs.readFileSync(canonicalFile(dir), 'utf8'), damagedHashed, `${what}: the hashed one too`);
   }
 });
 
@@ -143,14 +153,16 @@ test('a lock held by a process that is running is never taken — however old it
   const holder = startTarget(t, ['lock', dir, APP]);
   await holder.waitFor(/^held$/);
   // Much later, by the clock the function is given: a lock is never old enough to be taken from a process that is still running.
-  assert.throws(() => acquireAppPagesLease(dir, APP, { now: () => Date.now() + 10 * 24 * 3600 * 1000 }), refused(file));
+  assert.throws(() => acquireAppPagesLease(dir, APP, { now: () => Date.now() + 10 * 24 * 3600 * 1000 }), refused(canonicalFile(dir)));
   assert.strictEqual(JSON.parse(fs.readFileSync(file, 'utf8')).pid, holder.pid, 'the holder\'s lock is untouched');
+  assert.strictEqual(JSON.parse(fs.readFileSync(canonicalFile(dir), 'utf8')).pid, holder.pid, 'both of its files');
   await holder.kill();
   fs.rmSync(file);
+  fs.rmSync(canonicalFile(dir));
 
   // This process's own lock: a second build in the same process is a second build, and is refused.
   const mine = acquireAppPagesLease(dir, APP);
-  assert.throws(() => acquireAppPagesLease(dir, APP), refused(file));
+  assert.throws(() => acquireAppPagesLease(dir, APP), refused(canonicalFile(dir)));
   mine.release();
 });
 
@@ -161,7 +173,7 @@ test('the lock is taken exclusively, and released only by the build that holds i
   const record = JSON.parse(fs.readFileSync(file, 'utf8'));
   assert.strictEqual(record.pid, process.pid);
   assert.strictEqual(typeof record.at, 'number');
-  assert.throws(() => acquireAppPagesLease(dir, APP), refused(file));
+  assert.throws(() => acquireAppPagesLease(dir, APP), refused(canonicalFile(dir)));
   // Another build now holds the lock (the file says so): this one's late release leaves it alone.
   const others = JSON.stringify({ ...record, pid: record.pid + 1, rnd: 'someone-else' });
   fs.writeFileSync(file, others);
@@ -200,10 +212,11 @@ test('a lock whose owner is gone but that cannot be released — another build i
 
 test('a workspace that cannot be written is that error, as it always was — not a refusal that says another build is deploying pages', (t) => {
   const dir = workspace(t);
-  // The workspace's own path is a file: nothing can be created in it.
+  // The workspace's own path is a file: nothing can be created in it. The folder is checked as every folder the plugin writes into is (lib/safe-fs.js),
+  // so the error is that check's refusal of a path that is not a folder.
   const blocked = path.join(dir, 'not-a-folder');
   fs.writeFileSync(blocked, '');
-  assert.throws(() => acquireAppPagesLease(blocked, APP), (e) => !(e && e.code === 'pages-locked') && /ENOTDIR|EEXIST|ENOENT/.test(String(e && e.code)), 'the file system\'s own error');
+  assert.throws(() => acquireAppPagesLease(blocked, APP), (e) => !(e && e.code === 'pages-locked') && e.code === 'UNSAFE_OUTPUT' && e.reason === 'not-directory', 'the file system\'s own problem');
 });
 
 // Several builds that start at once, and each finds the lock: not there at all, or left by a build that was killed. Exactly one of them takes it.
@@ -230,7 +243,8 @@ for (const [what, killedFirst] of [['no lock at all', false], ['the lock of a ki
       assert.strictEqual(winners.length, 1, `round ${round}: one winner, got ${JSON.stringify(answers)}`);
       assert.ok(answers.filter((a) => a !== 'held').every((a) => a === 'refused pages-locked'), `round ${round}: the others are refused: ${JSON.stringify(answers)}`);
       assert.strictEqual(JSON.parse(fs.readFileSync(lockFile(dir, app), 'utf8')).pid, winners[0].pid, `round ${round}: the lock names the winner`);
-      assert.deepStrictEqual(fs.readdirSync(dir), [`pages-${app}.lock`], `round ${round}: no claim or other file is left`);
+      assert.strictEqual(JSON.parse(fs.readFileSync(canonicalFile(dir, app), 'utf8')).pid, winners[0].pid, `round ${round}: both of its files`);
+      assert.deepStrictEqual(fs.readdirSync(dir).sort(), [path.basename(canonicalFile(dir, app)), `pages-${app}.lock`].sort(), `round ${round}: no claim or other file is left`);
       await Promise.all(racers.map((racer) => racer.kill()));
     }
   });
