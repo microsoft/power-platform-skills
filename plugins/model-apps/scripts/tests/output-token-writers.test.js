@@ -252,7 +252,11 @@ test('an append that writes part of its chunk and fails: the part it wrote is of
   const calls = [];
   const partial = { ...fs, appendFileSync(file, data, ...rest) { calls.push(['appendFileSync', file]); fs.appendFileSync(file, data.subarray(0, 40), ...rest); throw failure; }, unlinkSync(...args) { calls.push(['unlinkSync', ...args]); return fs.unlinkSync(...args); }, renameSync(...args) { calls.push(['renameSync', ...args]); return fs.renameSync(...args); } };
   assert.throws(() => appendFileSafe(target, Buffer.from(`{"line":1,"error":"${TOKEN}"}\n`), { fs: partial }), (error) => error === failure);
-  assert.deepStrictEqual(calls, [['appendFileSync', target]], 'one append, no retry, no delete');
+  // appendFileSafe appends to the file in the folder's REAL path (assertSafeOutputDir resolves it with realpathSync.native), so the
+  // path the append is given is that one: a temp folder reached through a link (macOS's /var is /private/var) or an 8.3 short name
+  // (`C:\Users\RUNNER~1\…` on a Windows runner) is not the path the test made the file under.
+  const appendedTo = path.join(fs.realpathSync.native(dir), 'build-log.jsonl');
+  assert.deepStrictEqual(calls, [['appendFileSync', appendedTo]], 'one append, no retry, no delete');
   const text = fs.readFileSync(target, 'latin1');
   assert.strictEqual(text, `{"line":0}\n${`{"line":1,"error":"${STARS(TOKEN)}"}\n`.slice(0, 40)}`, 'the part written is the masked chunk\'s');
 });
