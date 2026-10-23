@@ -1,0 +1,116 @@
+[
+  {
+    "id": "manifest",
+    "command": "node 'D:/repo/plugins/model-apps/scripts/generate-page-manifest.js' 'D:/work/contacts-search-sort' 'contacts-search-sort'",
+    "exitCode": 0,
+    "result": {
+      "workingDir": "D:\\work\\contacts-search-sort",
+      "slug": "contacts-search-sort",
+      "features": [],
+      "files": {
+        "package.json": {
+          "wrote": true
+        },
+        "genpage.d.ts": {
+          "wrote": true
+        }
+      }
+    }
+  },
+  {
+    "id": "interaction-mode",
+    "command": "node 'D:/repo/plugins/model-apps/scripts/resolve-interaction-mode.js'",
+    "exitCode": 0,
+    "result": {
+      "ok": true,
+      "interactive": true,
+      "reason": "default (attended)"
+    }
+  },
+  {
+    "id": "node-version",
+    "command": "node --version",
+    "exitCode": 0,
+    "result": "v20.20.2"
+  },
+  {
+    "id": "pac-help",
+    "command": "pac help",
+    "exitCode": 0,
+    "result": "Microsoft PowerPlatform CLI Version: 2.11.0"
+  },
+  {
+    "id": "auth-list",
+    "command": "pac auth list",
+    "exitCode": 0,
+    "result": "Index Active Kind      Name Friendly Name User                           Cloud  Type Environment Environment Url\n[1]   *      UNIVERSAL           Contoso       maker@contoso.onmicrosoft.com Public User Contoso     https://contoso.crm.dynamics.com/"
+  },
+  {
+    "id": "planner-route",
+    "command": "Task genpage-planner (create/edit decision: edit)",
+    "result": {
+      "action": "edit"
+    }
+  },
+  {
+    "id": "auth",
+    "command": "node 'D:/repo/plugins/model-apps/scripts/check-auth.js' --require-pac",
+    "exitCode": 0,
+    "result": {
+      "ok": true,
+      "blocker": null,
+      "message": "Ready (az + pac both signed in as maker@contoso.onmicrosoft.com, env https://contoso.crm.dynamics.com).",
+      "warnings": [],
+      "azUser": "maker@contoso.onmicrosoft.com",
+      "pacUser": "maker@contoso.onmicrosoft.com",
+      "envUrl": "https://contoso.crm.dynamics.com",
+      "identitiesMatch": true,
+      "whoAmI": {
+        "ok": true,
+        "userId": "55555555-6666-7777-8888-999999999999",
+        "organizationId": "66666666-7777-8888-9999-aaaaaaaaaaaa"
+      }
+    }
+  },
+  {
+    "id": "list-apps",
+    "command": "node 'D:/repo/plugins/model-apps/scripts/apps.js' list --env 'https://contoso.crm.dynamics.com'",
+    "exitCode": 0,
+    "result": {
+      "ok": true,
+      "count": 2,
+      "apps": [
+        {
+          "id": "11111111-2222-3333-4444-555555555555",
+          "name": "Sales Hub",
+          "uniqueName": "SalesHub",
+          "description": "",
+          "published": true,
+          "unpublishedChanges": false
+        },
+        {
+          "id": "44444444-5555-6666-7777-888888888888",
+          "name": "Customer Service Hub",
+          "uniqueName": "CustomerServiceHub",
+          "description": "",
+          "published": true,
+          "unpublishedChanges": false
+        }
+      ]
+    }
+  },
+  {
+    "id": "list-pages",
+    "command": "node 'D:/repo/plugins/model-apps/scripts/genpage.js' list --env 'https://contoso.crm.dynamics.com' --app-id '11111111-2222-3333-4444-555555555555'",
+    "exitCode": 0,
+    "result": {
+      "ok": true,
+      "scope": "app",
+      "appId": "11111111-2222-3333-4444-555555555555",
+      "layer": "published",
+      "count": 0,
+      "pages": []
+    },
+    "userMessage": "This app has no generative pages to edit. Did you mean to create a new page?"
+  }
+]

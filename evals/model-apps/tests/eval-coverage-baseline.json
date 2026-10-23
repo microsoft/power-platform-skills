@@ -20,12 +20,6 @@
         "reason": "Gradeable from the plan text, but the captured run 2-mock-dashboard-real shows real drift: its plan draws the chart in inline SVG and uses Table, not D3.js and DataGrid (references/rules.md: D3.js for all charts). A correct check fails that capture, the runners have no expected-failure mark, and a check loosened to accept SVG or Table would hide the drift."
       },
       {
-        "eval": 3,
-        "status": "deferred",
-        "text": "Edit Phase 1b: If the app has zero genpages, the user is told there are no pages to edit and the flow stops",
-        "reason": "A branch no fixture exercises: the only eval-3 fixture's app lists a page. Grading it needs a fixture whose genpage.js list returns no pages and whose run stops at Edit Phase 1b, and the eval's later edit-phase checks and the common workflow assertions have no refusal stage for a run that ends there, so that fixture would fail them."
-      },
-      {
         "eval": 13,
         "status": "deferred",
         "text": "Phase 5 (Page Builder): Generated .tsx fetches usersettings via dataApi.retrieveRow and uses formatDate/formatNumber/formatCurrency helpers",

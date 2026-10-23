@@ -90,7 +90,7 @@ Two rules for evidence files:
 
 ## Current state
 
-This directory has **32 fixtures, 37 top-level TSX files and 25 represented
+This directory has **33 fixtures, 37 top-level TSX files and 25 represented
 prompt IDs**. All are green under both runners. Directories listed in
 `contracts.json` are historical contract-1 evidence; every other directory is a
 current contract-2 synthetic. Registered prompts with no fixture:
@@ -124,6 +124,7 @@ of step with the fixtures.
 | `24-custom-api-lifecycle/` | 24 | Current synthetic | green | Bound Action/global Function discovery, re-probe, runtime, preserve and clear |
 | `25-solution-package/` | 25 | Current synthetic | green | Every deployed page, dynamic component types, app-first writes, read-back and invalid-id refusal |
 | `3-contacts-edit-search-sort/` | 3 | Current synthetic | green | Edit flow: discovered app/page, download snapshot in `before/`, inline edit adding SearchBox + header sorting, `--page-id` delta upload without `--add-to-sitemap` |
+| `3-edit-no-pages-stop/` | 3 | Current synthetic | green | Edit flow refused at Edit Phase 1b: the chosen app's `genpage.js list` succeeds with no pages, the user is told there is nothing to edit, and the run stops with no download, plan, TSX or upload |
 | `6-traffic-analytics-mock/` | 6 | Current synthetic | green | Clean, minimal mock-data analytics with D3 only; no entity work; upload omits `--data-sources` |
 | `8-account-metrics-new-app/` | 8 | Current synthetic | green | Zero apps → create-new-app choice, solution question, first page uploaded with no app, then `apps.js create --solution --page-id --publish`, which pins the page's tables itself, so no upload follows |
 | `9-project-tracker-new-entities/` | 9 | Current synthetic | green | Two new related tables, auth gate, dependency-ordered provisioning, `$parent`/match sample data, both tables as data sources |

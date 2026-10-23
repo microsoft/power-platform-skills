@@ -1,9 +1,10 @@
 'use strict';
 
 // Unit tests for the per-eval workflow expectations that grade a run's recorded evidence
-// (lib/assertions-layer-1.js and lib/preservation-contract.js): eval 3's Preservation Constraints,
-// eval 9's realistic sample data, eval 1's column names in the workflow layer, and eval 10's discovery,
-// its auth-blocker branches and the branch that proceeds past an identity warning.
+// (lib/assertions-layer-1.js and lib/preservation-contract.js): eval 3's Preservation Constraints and
+// its stop at an app with no pages, eval 9's realistic sample data, eval 1's column names in the workflow
+// layer, and eval 10's discovery, its auth-blocker branches and the branch that proceeds past an identity
+// warning.
 //
 // Each check PASSES on the committed fixture whose evidence it reads, FAILS on an in-memory mutation
 // of that fixture that introduces exactly the regression it exists to catch, and SKIPs only where its
@@ -14,9 +15,10 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const path = require('node:path');
 
-const { PHASE_EXPECTATIONS } = require('../lib/assertions-layer-1.js');
+const { PHASE_EXPECTATIONS, WORKFLOW_ASSERTIONS } = require('../lib/assertions-layer-1.js');
 const { loadFixtures } = require('../lib/fixture-loader.js');
 const { quotedIdentifiers } = require('../lib/preservation-contract.js');
+const { refusalProblems } = require('../lib/workflow-evidence.js');
 
 const FIXTURES = loadFixtures(path.join(__dirname, '..', 'fixtures'));
 
@@ -75,6 +77,56 @@ test('eval 3: every identifier the Preservation Constraints quote and the downlo
   const noBefore = { ...base, artifacts: Object.fromEntries(Object.entries(base.artifacts).filter(([name]) => !name.startsWith('before/'))) };
   assertFail(grade(PRESERVED, noBefore), /downloaded page .* was not captured/);
   assert.deepEqual(quotedIdentifiers('- Keep `queryTable(\'contact\')` and `[dataReady]`; omit `--connectors`.'), ['queryTable', 'contact', 'dataReady', 'connectors']);
+});
+
+// --- Eval 3: an app with no pages ---------------------------------------------------------------------------
+
+const NO_PAGES = '3-edit-no-pages-stop';
+const ZERO_PAGES = 'Edit Phase 1b: If the app has zero genpages, the user is told there are no pages to edit and the flow stops';
+const LISTED_FOR_APP = 'Edit Phase 1b: After app selection, genpage.js list --app-id <selected> is run to discover pages — orchestrator does NOT guess or invent page names';
+const APPS_PRESENTED = 'Edit Phase 1a: Apps are presented to the user via AskUserQuestion using the actual app name and app-id GUID from the apps.js list output';
+const PAGES_PRESENTED = 'Edit Phase 1b: Pages are presented to the user via AskUserQuestion using the actual page names and page-id GUIDs from genpage.js list output';
+const DOWNLOADED = 'Edit Phase 2: genpage.js download produces <working-dir>/<page-id>/ with page.tsx, config.json, prompt.txt';
+const CONTACTS_PAGE = { pageId: '22222222-3333-4444-5555-666666666666', name: 'Contacts Directory', title: 'Contacts Directory' };
+const DOWNLOAD = { id: 'download', command: "node 'D:/repo/plugins/model-apps/scripts/genpage.js' download --env 'https://contoso.crm.dynamics.com' --app-id '11111111-2222-3333-4444-555555555555' --page-id '22222222-3333-4444-5555-666666666666' --output-directory 'D:/work/contacts-search-sort'", exitCode: 0, result: { ok: true } };
+
+test('eval 3: an app with no pages is reported to the user and the edit flow stops', () => {
+  const base = committed(NO_PAGES);
+  assertPass(grade(ZERO_PAGES, base));
+  assertSkip(grade(ZERO_PAGES, committed(E3)), /no page listing came back empty in this scenario/);
+  assertFail(grade(ZERO_PAGES, withEvent(base, 'list-pages', (e) => { delete e.userMessage; return e; })), /the user was not told the app has no pages to edit/);
+  assertFail(grade(ZERO_PAGES, withEvent(base, 'list-pages', (e) => ({ ...e, userMessage: 'Done.' }))), /the user was not told the app has no pages to edit/);
+  // A listing that returned a page is not this branch, and a failed listing is never "no pages".
+  assertFail(grade(ZERO_PAGES, withEvent(base, 'list-pages', (e) => ({ ...e, result: { ...e.result, count: 1, pages: [CONTACTS_PAGE] } }))), /the page listing returned pages to edit/);
+  assertFail(grade(ZERO_PAGES, withEvent(base, 'list-pages', (e) => ({ ...e, exitCode: 1, result: { ok: false, error: 'request failed' } }))), /a failed listing is never "no pages"/);
+  // A navigation entry whose page no longer exists is no page to offer.
+  assertPass(grade(ZERO_PAGES, withEvent(base, 'list-pages', (e) => ({ ...e, result: { ...e.result, count: 1, pages: [{ ...CONTACTS_PAGE, name: null, exists: false }] } }))));
+  // Going on after the empty listing is the regression, and so is a log that never says the flow stopped.
+  assertFail(grade(ZERO_PAGES, { ...base, events: [...base.events, DOWNLOAD] }), /went on to download, plan, edit or upload after the app listed no pages/);
+  assertFail(grade(ZERO_PAGES, { ...base, events: [...base.events, { id: 'planner', command: 'Task genpage-edit-planner (intent, app/page ids)', result: { action: 'plan' } }] }), /went on to download, plan, edit or upload/);
+  assertFail(grade(ZERO_PAGES, { ...base, workflowLog: base.workflowLog.replace(/\bstop(?:s|ped)?\b/gi, 'went on') }), /does not record that the edit flow stopped/);
+});
+
+test('eval 3: a run that stopped at an app with no pages is graded as that refusal, not as a broken edit', () => {
+  const base = committed(NO_PAGES);
+  assert.deepEqual(refusalProblems(base), []);
+  assert.match(refusalProblems({ ...base, events: [...base.events, DOWNLOAD] }).join('\n'), /went on to download/);
+  // The create flow's plan checks and the edit phases after the listing do not apply to it ...
+  assertSkip(WORKFLOW_ASSERTIONS.get('Phase 1 (Planner): genpage-plan.md is written to the working directory, conforming to references/plan-schema.md')({ fixture: base }), /edit flow/);
+  for (const text of [PAGES_PRESENTED, DOWNLOADED]) assertSkip(grade(text, base), /the run stopped at Edit Phase 1b: the app has no pages to edit/);
+  // ... while a full edit run is still graded by them.
+  assertPass(grade(PAGES_PRESENTED, committed(E3)));
+  assertPass(grade(DOWNLOADED, committed(E3)));
+  // The listing it stopped at must be of an app apps.js list returned and the user was offered.
+  assertPass(grade(LISTED_FOR_APP, base));
+  assertPass(grade(APPS_PRESENTED, base));
+  const elsewhere = withEvent(base, 'list-pages', (e) => ({ ...e, command: e.command.replace('11111111-2222-3333-4444-555555555555', '99999999-2222-3333-4444-555555555555') }));
+  assertFail(grade(LISTED_FOR_APP, elsewhere), /genpage\.js list ran for app 99999999-2222-3333-4444-555555555555, which apps\.js list did not return/);
+  assertFail(grade(APPS_PRESENTED, elsewhere), /the app the run continued with \(99999999-2222-3333-4444-555555555555\) is not in the listing/);
+  // Without the declared refusal, the same evidence is a broken edit run.
+  const undeclared = { ...base, manifest: { ...base.manifest, expectedOutcome: 'deployed', refusal: undefined } };
+  assertFail(grade(LISTED_FOR_APP, undeclared), /genpage\.js download was not run/);
+  assertFail(grade(DOWNLOADED, undeclared), /genpage\.js download \(or pac model genpage download\) not invoked/);
 });
 
 // --- Eval 9: realistic sample data ---------------------------------------------------------------------

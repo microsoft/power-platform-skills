@@ -153,7 +153,7 @@ All eval definitions live in `evals.json` alongside this file. The file contains
 - `common_code_assertions`: **21** registered code checks.
 - `evals`: **25** prompt definitions, each with `id`, `tier`, `prompt`, `data`, and per-eval `expectations`.
 
-The `data` field specifies scenario assumptions for a manual capture or constructed fixture. The offline harness does not provide responses to `AskUserQuestion` or verify every recorded answer. The corpus contains **32 fixture directories / 37 top-level TSX files**, representing 25 prompt IDs. IDs **none** have no fixture — every registered prompt is executed.
+The `data` field specifies scenario assumptions for a manual capture or constructed fixture. The offline harness does not provide responses to `AskUserQuestion` or verify every recorded answer. The corpus contains **33 fixture directories / 37 top-level TSX files**, representing 25 prompt IDs. IDs **none** have no fixture — every registered prompt is executed.
 
 ### Enumerating registered and unmatched checks
 
@@ -271,7 +271,7 @@ The suite ships both kinds:
 | 23 | `23-worker-completeness` (current rejection/recovery) | — |
 | 24 | `24-custom-api-lifecycle` (current create/preserve/clear) | — |
 | 25 | `25-solution-package` (current packaging/refusal) | — |
-| 3 | `3-contacts-edit-search-sort` (current edit) | — |
+| 3 | `3-contacts-edit-search-sort` (current edit), `3-edit-no-pages-stop` (current refusal: the app has no pages) | — |
 | 6 | `6-traffic-analytics-mock` (current mock data) | — |
 | 8 | `8-account-metrics-new-app` (current new app) | — |
 | 9 | `9-project-tracker-new-entities` (current new tables + sample data) | — |
@@ -302,7 +302,7 @@ The first seven contract-2 fixtures exercise these current contracts:
 | `24-custom-api-lifecycle` | Discovery, re-probe, bare actions, runtime and config stages | Disabled/unreadable gate, invented kind/name/parameter, wrong method/bound record, unsafe response or lost bindings |
 | `25-solution-package` | Explicit page IDs, dynamic types, app-first writes and read-back | Omitted page/wrong solution/type/order; invalid ID writes; partial failure reported as success |
 
-Expected refusals are green **only when the recorded refusal contract is satisfied**. Fixtures 10 and 21 legitimately contain no generated TSX; Layer 2 grades their failed gate and absence of generation/mutations rather than manufacturing a page. Fixture 23's rejected snapshot is nested evidence; the top-level page is the accepted regeneration. Expected-failure mutations live in unit tests, never unexplained red corpus directories.
+Expected refusals are green **only when the recorded refusal contract is satisfied**. The refusal fixtures of evals 10 and 21, and `3-edit-no-pages-stop`, legitimately contain no generated TSX; Layer 2 grades their failed gate and absence of generation/mutations rather than manufacturing a page. A refusal declares its stage in `fixture.json` (`refusal.stage`): `auth` and `discovery` stop at a failed check-auth.js or list-connections.js result, `custom-api` at a disabled or unreadable feature gate, and `edit-pages` at an app whose `genpage.js list` succeeded with no page to offer — the user is told so and nothing is downloaded, planned or uploaded after it, and the edit phases that would follow the page choice skip for that run. Fixture 23's rejected snapshot is nested evidence; the top-level page is the accepted regeneration. Expected-failure mutations live in unit tests, never unexplained red corpus directories.
 
 ---
 
@@ -323,7 +323,7 @@ Exit codes:
 ### Filter by tier
 
 ```bash
-node run-layer-1.js --tier smoke    # 7 stored fixtures, 5 prompt definitions
+node run-layer-1.js --tier smoke    # 8 stored fixtures, 5 prompt definitions
 node run-layer-1.js --tier full     # 19 stored fixtures, 17 prompt definitions
 node run-layer-1.js --tier stress   # 6 stored fixtures, 3 prompt definitions
 ```

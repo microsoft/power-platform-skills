@@ -16,7 +16,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { pageFileProblems } = require('../../../../plugins/model-apps/scripts/lib/page-file-targets.js');
-const { currentContract, workflowCalls, isAuth, isDiscovery, authGateProblems, discoveryProblems, refusalProblems, resultObject, isGeneration, isUpload, isMutation } = require('./workflow-evidence.js');
+const { currentContract, workflowCalls, isAuth, isDiscovery, authGateProblems, discoveryProblems, refusalProblems, emptyPageListingProblems, resultObject, isGeneration, isUpload, isMutation } = require('./workflow-evidence.js');
 const { gradeEvidence, isGuid, fileName, artifactText, commandInfo } = require('./evidence-utils.js');
 const { navigationProblems, navTargets } = require('./navigation-contract.js');
 const { workerProblems } = require('./worker-contract.js');
@@ -71,7 +71,14 @@ function skip(reason) { return { status: 'skip', reason }; }
 // COMMON assertions was never exercised, and the first edit fixture added reported six false
 // failures that say nothing about the page under test.
 function isEditFlowFixture(fixture) {
-  return Boolean(fixture && fixture.genpageEditPlan && !fixture.genpagePlan);
+  return Boolean(fixture && ((fixture.genpageEditPlan && !fixture.genpagePlan) || noPagesRefusal(fixture)));
+}
+
+// An edit run refused at Edit Phase 1b because the chosen app has no generative pages (fixture.json
+// `"expectedOutcome": "refused", "refusal": { "stage": "edit-pages" }`). It ends before a page is chosen, so it
+// writes no plan of either kind, and refusalProblems grades the stop itself.
+function noPagesRefusal(fixture) {
+  return fixture?.manifest?.expectedOutcome === 'refused' && fixture.manifest.refusal?.stage === 'edit-pages';
 }
 
 function beforePlanningRefusal(fixture) {
@@ -2535,8 +2542,21 @@ PHASE_EXPECTATIONS.set(
     if (!fixture.workflowLog) return fail('no workflow-log.md');
     const calls = workflowCalls(fixture);
     const at = (pattern) => calls.findIndex((c) => pattern.test(c.command));
+    // commandCalls re-reads the log, so locate its calls in `calls` by their recorded command text.
+    const positionOf = (entry) => calls.findIndex((c) => c.command === entry.call.command);
     const download = commandCalls(fixture, evidence.GENPAGE_DOWNLOAD)[0];
-    if (!download) return fail('genpage.js download was not run, so no page was selected');
+    if (!download) {
+      if (!noPagesRefusal(fixture)) return fail('genpage.js download was not run, so no page was selected');
+      // The run stopped at this listing (the app has no pages), so the listing is what is graded: it must
+      // be of an app the apps.js list output returned, run after that discovery.
+      const list = commandCalls(fixture, GENPAGE_LIST).at(-1);
+      if (!list) return fail('genpage.js list --app-id <selected> was not run');
+      const listedApp = String(list.flags['app-id'] || '').toLowerCase();
+      const apps = commandCalls(fixture, LIST_APPS).at(-1);
+      if (!apps || positionOf(apps) > positionOf(list)) return fail('pages were listed before the app was discovered with apps.js list');
+      if (!listedApp || !listingRows(apps.call).some((r) => r.id === listedApp)) return fail(`genpage.js list ran for app ${listedApp || '(none)'}, which apps.js list did not return`);
+      return pass();
+    }
     const app = String(download.flags['app-id'] || '').toLowerCase();
     const page = String(download.flags['page-id'] || '').toLowerCase();
     const lists = commandCalls(fixture, GENPAGE_LIST).filter((c) => String(c.flags['app-id'] || '').toLowerCase() === app);
@@ -2549,8 +2569,6 @@ PHASE_EXPECTATIONS.set(
     const listed = (c) => c.text.split(/\r?\n/).some((line) => !/\bselect/i.test(line) && line.toLowerCase().includes(page));
     if (!page || !lists.some(listed)) return fail(`page ${page || '(none)'} does not appear in the recorded genpage list output`);
     const appsAt = at(LIST_APPS);
-    // commandCalls re-reads the log, so locate its calls in `calls` by their recorded command text.
-    const positionOf = (entry) => calls.findIndex((c) => c.command === entry.call.command);
     const listAt = positionOf(lists[0]);
     if (appsAt === -1 || appsAt > listAt) return fail('pages were listed before the app was discovered with apps.js list');
     if (listAt > positionOf(download)) return fail('the page was downloaded before pages were listed');
@@ -2704,7 +2722,10 @@ const pageFilesOf = (plan) => pageRowsOf(plan).map((r) => r.file);
 
 PHASE_EXPECTATIONS.set(
   'Edit Phase 1a: Apps are presented to the user via AskUserQuestion using the actual app name and app-id GUID from the apps.js list output',
-  ({ fixture }) => resultOf(presentedFromListingProblems(fixture, { listing: LIST_APPS, noun: 'app', selected: downloadTarget(fixture)?.app }))
+  // The app the run went on with: the one it downloaded from, or — for a run that stopped because that app
+  // listed no pages — the one whose pages it listed.
+  ({ fixture }) => resultOf(presentedFromListingProblems(fixture, { listing: LIST_APPS, noun: 'app',
+    selected: downloadTarget(fixture)?.app ?? (String(commandCalls(fixture, GENPAGE_LIST).at(-1)?.flags['app-id'] || '').toLowerCase() || undefined) }))
 );
 
 PHASE_EXPECTATIONS.set(
@@ -3455,6 +3476,31 @@ PHASE_EXPECTATIONS.set(
     return calls.some((c) => c.sources.includes('account')) ? pass() : fail('genpage.js types was not run for account');
   }
 );
+
+// --- Eval 3: an app with no pages ---------------------------------------------------------------------
+
+PHASE_EXPECTATIONS.set(
+  'Edit Phase 1b: If the app has zero genpages, the user is told there are no pages to edit and the flow stops',
+  ({ fixture }) => {
+    const listing = commandCalls(fixture, GENPAGE_LIST).at(-1);
+    const result = listing ? resultObject(listing.call) : null;
+    const empty = result?.ok === true && Array.isArray(result.pages) && !result.pages.some((page) => page && page.exists !== false);
+    if (!empty && !noPagesRefusal(fixture)) return skip('no page listing came back empty in this scenario');
+    return resultOf(emptyPageListingProblems(fixture));
+  }
+);
+
+// A run that stopped at Edit Phase 1b because the app has no pages never reaches a page choice, a download,
+// an edit plan, an edit or an upload, so the expectations of those phases do not apply to it: they skip with
+// that reason instead of failing. The stop itself is graded by the zero-pages expectation above and by
+// refusalProblems (the common upload assertion and Layer 2's refusal gate).
+const AFTER_PAGE_LISTING = /^Edit Phase (?:1b: Pages are presented\b|1c\b|[2-9])/;
+for (const [text, check] of PHASE_EXPECTATIONS) {
+  if (!AFTER_PAGE_LISTING.test(text)) continue;
+  PHASE_EXPECTATIONS.set(text, (context) => (noPagesRefusal(context.fixture)
+    ? skip('the run stopped at Edit Phase 1b: the app has no pages to edit')
+    : check(context)));
+}
 
 module.exports = {
   WORKFLOW_ASSERTIONS,

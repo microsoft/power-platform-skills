@@ -269,6 +269,37 @@ function discoveryProblems(fixture, { required = false, needsBinding = false } =
   return problems;
 }
 
+// edit-flow.md Edit Phase 1b: "0 pages: Tell the user 'This app has no generative pages to edit. Did you mean to
+// create a new page?' and stop the edit flow." The page listing (scripts/genpage.js list) answers
+//   { "ok": true, "scope": "app", "appId": "…", "layer": "published", "count": 0, "pages": [] }
+// and an entry whose page is gone (`"exists": false`) is no page to offer, so a listing of only those is empty
+// too. A failed listing (`"ok": false`) is never "no pages" (edit-flow.md: "a failed read is never 'no pages'").
+// What the run must then show: the user was told (the listing's `userMessage` in a current trace, the log's prose
+// in an older one), nothing was downloaded, planned, generated or written after the listing, and the log says the
+// flow stopped. Returns the problems with the run's LAST page listing, empty when that stop is shown.
+function emptyPageListingProblems(fixture) {
+  // Loaded here, not at the top: expectation-evidence.js builds on this module, so a top-level require would
+  // hand it a half-initialized copy of these exports.
+  const { GENPAGE_LIST, GENPAGE_DOWNLOAD } = require('./expectation-evidence.js');
+  const calls = workflowCalls(fixture);
+  const at = calls.findLastIndex((call) => GENPAGE_LIST.test(call.command));
+  if (at === -1) return ['genpage.js list was not run, so no page listing came back empty'];
+  const listing = resultObject(calls[at]);
+  if (!listing || listing.ok !== true || !Array.isArray(listing.pages)) return ['the page listing did not succeed, and a failed listing is never "no pages"'];
+  if (listing.pages.some((page) => page && page.exists !== false)) return ['the page listing returned pages to edit'];
+  const problems = [];
+  const toldNoPages = (text) => typeof text === 'string' && /\bno\b[^.\n]*\bpages?\b/i.test(text);
+  if (currentContract(fixture) ? !toldNoPages(calls[at].userMessage) : !toldNoPages(fixture.workflowLog)) {
+    problems.push('the user was not told the app has no pages to edit');
+  }
+  if (calls.slice(at + 1).some((call) => GENPAGE_DOWNLOAD.test(call.command) || /\bgenpage-edit-planner\b/.test(call.command)
+    || isGeneration(call.command) || isMutation(call))) {
+    problems.push('the run went on to download, plan, edit or upload after the app listed no pages');
+  }
+  if (!/\bstop(?:s|ped)?\b|\bhalt(?:s|ed)?\b/i.test(fixture.workflowLog || '')) problems.push('the workflow does not record that the edit flow stopped');
+  return problems;
+}
+
 function refusalProblems(fixture) {
   if (fixture.manifest?.expectedOutcome !== 'refused') return ['fixture does not declare an expected refusal'];
   const stage = fixture.manifest.refusal?.stage;
@@ -283,6 +314,10 @@ function refusalProblems(fixture) {
     const { customApiGateProblems } = require('./custom-api-contract.js');
     return problems.concat(customApiGateProblems(fixture));
   }
+  // A run refused at Edit Phase 1b because the chosen app has no generative pages: its "gate" is the empty
+  // page listing, and an auth call it made on the way (the edit flow captures its environment with
+  // check-auth.js) must still be well formed.
+  if (stage === 'edit-pages') return problems.concat(emptyPageListingProblems(fixture), authGateProblems(fixture));
   const predicate = stage === 'auth' ? isAuth : stage === 'discovery' ? isDiscovery : null;
   if (!predicate) return [...problems, `unsupported refusal stage: ${stage}`];
   const gate = calls.filter((call) => predicate(call.command)).at(-1);
@@ -292,6 +327,6 @@ function refusalProblems(fixture) {
 
 module.exports = {
   currentContract, isObject, isUpload, isAuth, isDiscovery, isMutation, isGeneration,
-  resultObject, workflowCalls, authGateProblems, discoveryProblems, refusalProblems,
+  resultObject, workflowCalls, authGateProblems, discoveryProblems, refusalProblems, emptyPageListingProblems,
   unassociatedCallProblems,
 };
