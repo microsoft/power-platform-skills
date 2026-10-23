@@ -145,10 +145,12 @@ function createLifecycleHarness(org, root) {
   const throwaway = (prefix) => fs.mkdtempSync(path.join(root, prefix));
 
   // build-model-app.js: the two SDK instances its makeSdk makes — one that names the solution, and the header-less one that owns the app
-  // folder's workspace and recovers a form create whose answer was lost — and the deps its main() hands buildModelApp.
-  async function build(spec, { apply = true, publish = true, sampleData = true, verify = true, appFolder = appDir, workspace = workspaceDir, languageCode = 1033 } = {}) {
+  // folder's workspace and recovers a form create whose answer was lost — and the deps its main() hands buildModelApp. `sdkWorkspace` is
+  // where that second one keeps its copies: the build's workspace, as the CLI makes it, unless a test says otherwise — the CLI makes no SDK
+  // for an apply its build lease refuses, so a second build a test starts beside a running one is given copies of its own.
+  async function build(spec, { apply = true, publish = true, sampleData = true, verify = true, appFolder = appDir, workspace = workspaceDir, sdkWorkspace = workspace, languageCode = 1033 } = {}) {
     const sdk = createMakerSdk({ workspaceStorage: createNodeWorkspaceStorage(throwaway('sdk-')), instanceUrl: org.origin, httpClient: client, solutionUniqueName: spec.solution.uniqueName, languageCode });
-    const provisionSdk = createMakerSdk({ workspaceStorage: createNodeWorkspaceStorage(apply ? workspace : throwaway('preview-')), instanceUrl: org.origin, httpClient: client, languageCode, createRecovery: 'adoptExact' });
+    const provisionSdk = createMakerSdk({ workspaceStorage: createNodeWorkspaceStorage(apply ? sdkWorkspace : throwaway('preview-')), instanceUrl: org.origin, httpClient: client, languageCode, createRecovery: 'adoptExact' });
     await provisionSdk.initWorkspace();
     const genpage = makeGenpageSdk(org.origin, { httpClient: client });
     const warnings = [];

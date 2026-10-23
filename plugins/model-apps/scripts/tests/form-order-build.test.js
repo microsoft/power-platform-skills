@@ -12,7 +12,10 @@
 const test = require('node:test');
 const assert = require('node:assert');
 
-const { runSdkBuild, planFor } = require('../lib/sdk-build.js');
+// An apply that names no app folder and no workspace gets an app folder of its own: it holds its build lease in its workspace (helpers/own-app-folder.js).
+const { inOwnFolder } = require('./helpers/own-app-folder.js');
+const { runSdkBuild: runSdkBuildInPlace, planFor } = require('../lib/sdk-build.js');
+const runSdkBuild = inOwnFolder(runSdkBuildInPlace);
 const { makeSimpleMockSdk, rolesOfDisplayConditions, applyRolesWrite } = require('./helpers/mock-sdk.js');
 
 const FORM_TYPE = { Main: 2, QuickCreate: 7, QuickView: 6 };

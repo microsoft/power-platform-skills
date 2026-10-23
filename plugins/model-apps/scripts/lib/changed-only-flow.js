@@ -28,6 +28,9 @@ const store = require('./apply-snapshot-store.js');
 const { indexArtifacts } = require('./apply-snapshot-index.js');
 const { ownValue } = require('./own-keys.js');
 const { odataLit } = require('./odata.js');
+// The app's build lease (lib/app-operation-lease.js), and the one derivation of the app's unique name it is keyed by.
+const { withAppBuildLease, applyWorkspaceOf } = require('./app-operation-lease.js');
+const { appUniqueName } = require('./sdk-build.js');
 
 // ---- PURE decision ------------------------------------------------------------------------------------
 
@@ -200,7 +203,20 @@ function deployedPageKeys(snapshot) {
 // module orchestrates without importing the CLI wrapper; `deps.buildDeps` is the deps object passed
 // through to buildModelApp (sdk/provisionSdk/journal/verify/log). Returns the buildModelApp result
 // augmented with `.changedOnly` (the decision), or a noop/abort result.
+//
+// The FIRST thing it does is take the app's build lease, or borrow the one its caller holds (`opts.buildLease`, the CLI's): before the spec's
+// content is read, before the snapshot and the distrust markers are read, and before the live identity is resolved (a WhoAmI). A second apply of
+// the same app in this workspace is refused there (`build-locked`), and reads nothing — it would otherwise decide fast/full/noop from a snapshot
+// the running build is about to change. Everything below runs under the lease, and the builds it starts borrow it: one lease for the whole flow,
+// let go when it returns or throws. The workspace is resolved once (lib/app-operation-lease.js applyWorkspaceOf), so the lease and the flow name
+// the same folder.
 async function runChangedOnlyApply({ spec, opts, deps }) {
+  const ws = applyWorkspaceOf(opts);
+  return withAppBuildLease({ workspaceDir: ws, appUniqueName: appUniqueName(spec), buildLease: opts.buildLease, warn: deps.warn },
+    (buildLease) => runChangedOnlyApplyHeld({ spec, opts: { ...opts, workspaceDir: ws, buildLease }, deps }));
+}
+
+async function runChangedOnlyApplyHeld({ spec, opts, deps }) {
   const log = deps.log || (() => {});
   const ws = opts.workspaceDir;
   const annotate = (s) => annotateContentHashes(s, deps.readContent);

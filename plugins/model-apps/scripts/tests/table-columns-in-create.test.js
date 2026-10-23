@@ -16,6 +16,8 @@ const os = require('node:os');
 const path = require('node:path');
 const { makeRunner, provisionDataModel, BuildHalt } = require('../lib/entity-provision.js');
 const { hash } = require('./helpers/read-probe.js');
+// An apply that names no app folder and no workspace gets an app folder of its own: it holds its build lease in its workspace (helpers/own-app-folder.js).
+const { inOwnFolder } = require('./helpers/own-app-folder.js');
 
 const BUNDLE = path.resolve(__dirname, '..', 'vendor', 'cds-maker-sdk.cjs');
 const ORG = 'https://contoso.crm.dynamics.com';
@@ -528,6 +530,9 @@ function oneTable(columns, primaryAttribute = { schemaName: 'new_name', displayN
     entities: [{ schemaName: 'new_ticket', displayName: 'Ticket', primaryAttribute, columns }],
   };
 }
+// A spec the engine APPLIES names its app, as every spec the build accepts does: an apply holds the app's build lease, which is keyed by the app's
+// unique name (lib/app-operation-lease.js). The phases these tests run never read it.
+const asApp = (spec) => ({ ...spec, app: { name: 'Tickets' } });
 
 test('a new table is created with only its primary name attribute and its ordinary columns follow in ONE change set instead of one request each, with the same results and events', async () => {
   const before = await provisionOver(ticketSpec(), { inlineColumns: false });
@@ -955,8 +960,10 @@ test('a change set the budget had room to wait for and the client\'s sends ran o
 });
 
 test('through the build, a change set the budget has no room to wait for halts the build once with the budget\'s halt — it is not run again, waits for nothing and creates no column one by one', async () => {
-  const { buildModelApp, isTransientHalt } = require('../build-model-app.js');
-  const { runSdkBuild } = require('../lib/sdk-build.js');
+  const { buildModelApp: buildModelAppInPlace, isTransientHalt } = require('../build-model-app.js');
+  const buildModelApp = inOwnFolder(buildModelAppInPlace);
+  const { runSdkBuild: runSdkBuildInPlace } = require('../lib/sdk-build.js');
+  const runSdkBuild = inOwnFolder(runSdkBuildInPlace);
   const { makeThrottleBudget } = require('../lib/throttle-budget.js');
   const dv = fakeDataverse({ batchFails: () => ({ status: 429, headers: { 'retry-after': '600' }, body: TABLE_LOCKED_BODY }) });
   const warnings = [];
@@ -1105,8 +1112,10 @@ test('a length step the runner stopped before it began is not a length that was 
 });
 
 test('through the build, the budget refusing the first of two owed name lengths halts the build once — the second table is set, the length refused is not sent again, and the next run finishes', async () => {
-  const { buildModelApp, isTransientHalt } = require('../build-model-app.js');
-  const { runSdkBuild } = require('../lib/sdk-build.js');
+  const { buildModelApp: buildModelAppInPlace, isTransientHalt } = require('../build-model-app.js');
+  const buildModelApp = inOwnFolder(buildModelAppInPlace);
+  const { runSdkBuild: runSdkBuildInPlace } = require('../lib/sdk-build.js');
+  const runSdkBuild = inOwnFolder(runSdkBuildInPlace);
   const { makeThrottleBudget } = require('../lib/throttle-budget.js');
   const dv = fakeDataverse({ updateFails: firstLengthThrottled() });
   const spec = { schemaVersion: 2, ...twoOwedLengths({ key: true }), app: { name: 'Budget app' } };
@@ -2036,7 +2045,8 @@ test('a length that cannot be set while the phase is halting is a failed, warned
 // table, keeps its name column as it finds it: one halt, one set. "Nothing labelled is created after the read that sets it" is therefore a claim about one attempt: the retry
 // creates what the halt kept the first attempt from, after that attempt's read (alignPrimaryNameLength). This is run through the build's own retry loop.
 test('after a transient halt that follows a sized table\'s create, the length is set exactly once — by the attempt that created the table — and the retry, which finds the table, does not set it again', async () => {
-  const { buildModelApp } = require('../build-model-app.js');
+  const { buildModelApp: buildModelAppInPlace } = require('../build-model-app.js');
+  const buildModelApp = inOwnFolder(buildModelAppInPlace);
   const spec = {
     app: { name: 'Ticket Desk' },
     solution: { uniqueName: 'TableColumns', publisherPrefix: 'new' },
@@ -2797,8 +2807,10 @@ test('a key labelled in several languages, made ahead of the length step and ref
 // stub misbehaves: the first N requests of a kind answer 503 — and, for the writes of the table, change nothing. `arrange(dv)` is a
 // last word on the stub, made after the faults are in place: a test wraps the transport in it (swapAfterIdentityRead).
 async function buildWithRetries(spec, { dataverse = OVERRIDING, faults = {}, arrange, halts = false } = {}) {
-  const { buildModelApp } = require('../build-model-app.js');
-  const { runSdkBuild } = require('../lib/sdk-build.js');
+  const { buildModelApp: buildModelAppInPlace } = require('../build-model-app.js');
+  const buildModelApp = inOwnFolder(buildModelAppInPlace);
+  const { runSdkBuild: runSdkBuildInPlace } = require('../lib/sdk-build.js');
+  const runSdkBuild = inOwnFolder(runSdkBuildInPlace);
   const dv = fakeDataverse(dataverse);
   const left = { createTable: faults.createTable || 0, createFile: faults.createFile || 0, setLength: faults.setLength || 0 };
   const refuse503 = (what, path, body) => { dv.log.push({ method: what, path: `(503) ${path}`, body }); return { status: 503, headers: {}, body: { error: { message: 'Service Unavailable' } } }; };
@@ -3201,10 +3213,11 @@ test('settleOwedLengths: a build that stops for good sets what no attempt got as
 });
 
 test('an attempt that halts before its data-model phase hands on what it was given, unpaid and untried — and a build that stops there settles it', async () => {
-  const { runSdkBuild, settleOwedLengths } = require('../lib/sdk-build.js');
+  const { runSdkBuild: runSdkBuildInPlace, settleOwedLengths } = require('../lib/sdk-build.js');
+  const runSdkBuild = inOwnFolder(runSdkBuildInPlace);
   let blocked = true;
   const dv = fakeDataverse({ updateFails: () => (blocked ? refusal() : null) });
-  const spec = oneTable([], asksFor(120));
+  const spec = asApp(oneTable([], asksFor(120)));
   const owed = new Map();
   await provisionAgain(dv, spec, { owedLengths: owed });
   assert.strictEqual(dv.tables.get('new_ticket').primaryLength, 850, 'the first attempt made the table and could not set its length');
@@ -3222,10 +3235,11 @@ test('an attempt that halts before its data-model phase hands on what it was giv
 });
 
 test('runSdkBuild carries nothing on a halt when nothing is owed and nothing was handed to it', async () => {
-  const { runSdkBuild } = require('../lib/sdk-build.js');
+  const { runSdkBuild: runSdkBuildInPlace } = require('../lib/sdk-build.js');
+  const runSdkBuild = inOwnFolder(runSdkBuildInPlace);
   const stub = { queryRecords: async () => { throw new Error('the environment is not answering'); } };
   for (const owedLengths of [undefined, [], 'new_ticket', [null, 7, {}, { table: '' }]]) {
-    const halted = await runSdkBuild(oneTable([], asksFor(120)), { sdk: stub, provisionSdk: stub, apply: true, phases: ['solution'], owedLengths }).then(() => null, (err) => err);
+    const halted = await runSdkBuild(asApp(oneTable([], asksFor(120))), { sdk: stub, provisionSdk: stub, apply: true, phases: ['solution'], owedLengths }).then(() => null, (err) => err);
     assert.match(halted.message, /not answering/);
     assert.strictEqual(halted.owedLengths, undefined, JSON.stringify(owedLengths));
   }
@@ -3402,8 +3416,10 @@ test('settleOwedLengths: a build that stops for good does not set the length of 
 });
 
 test('the final settle of a build that stops for good, after a retry that never reached the data-model phase, leaves a table another maker made again alone — and the halt is still what is reported', async () => {
-  const { buildModelApp } = require('../build-model-app.js');
-  const { runSdkBuild } = require('../lib/sdk-build.js');
+  const { buildModelApp: buildModelAppInPlace } = require('../build-model-app.js');
+  const buildModelApp = inOwnFolder(buildModelAppInPlace);
+  const { runSdkBuild: runSdkBuildInPlace } = require('../lib/sdk-build.js');
+  const runSdkBuild = inOwnFolder(runSdkBuildInPlace);
   let blocked = true;
   let refuseFile = true;
   const dv = fakeDataverse({ updateFails: () => (blocked ? refusal() : null) });
@@ -4120,12 +4136,13 @@ test('a key moved after the length step because it could not fit, whose size the
 // sent as, so the plan cannot disagree with the apply about it — whichever language the spec, the command line and the label name. This
 // goes through the entry both of them share (runSdkBuild), with the same spec and the same options: only `apply` differs.
 test('the dry-run plan and the apply put a key over the name column in the same place, whichever language the spec, the command line and the label name', async () => {
-  const { runSdkBuild } = require('../lib/sdk-build.js');
+  const { runSdkBuild: runSdkBuildInPlace } = require('../lib/sdk-build.js');
+  const runSdkBuild = inOwnFolder(runSdkBuildInPlace);
   const kinds = (labels) => labels.filter((l) => /^(alt key|primary column length) /.test(l)).map((l) => (l.startsWith('alt key') ? 'key' : 'length'));
   for (const specLanguage of [undefined, 1033, 3082]) {
     for (const override of [undefined, 1033, 3082]) {
       for (const [what, displayName] of [['a string', 'Name Key'], ['a map of 1033', { 1033: 'Name Key' }], ['a map of 3082', { 3082: 'Clave' }], ['a map of both', { 1033: 'Name Key', 3082: 'Clave' }]]) {
-        const spec = keyedTable([MAP_KEY(displayName)]);
+        const spec = asApp(keyedTable([MAP_KEY(displayName)]));
         if (specLanguage) spec.languageCode = specLanguage;
         const dv = fakeDataverse(HONOURING);
         const sdk = await realSdk(dv.httpClient);
@@ -4148,8 +4165,9 @@ test('the dry-run plan and the apply put a key over the name column in the same 
 });
 
 test('a spec written in one language and built with the command line\'s other language: the plan lists a one-language key where the apply makes it, after the length', async () => {
-  const { runSdkBuild } = require('../lib/sdk-build.js');
-  const spec = keyedTable([MAP_KEY({ 3082: 'Clave' })]);
+  const { runSdkBuild: runSdkBuildInPlace } = require('../lib/sdk-build.js');
+  const runSdkBuild = inOwnFolder(runSdkBuildInPlace);
+  const spec = asApp(keyedTable([MAP_KEY({ 3082: 'Clave' })]));
   spec.languageCode = 3082;
   const dv = fakeDataverse(HONOURING);
   const sdk = await realSdk(dv.httpClient);

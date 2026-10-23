@@ -25,9 +25,13 @@ const assert = require('node:assert');
 const crypto = require('node:crypto');
 const fs = require('node:fs');
 
-const { runSdkBuild, existingAppSitemapIsWritten, pagesFirstRule, planFor, PHASES, BuildHalt } = require('../lib/sdk-build.js');
+// An apply that names no app folder and no workspace gets an app folder of its own: it holds its build lease in its workspace (helpers/own-app-folder.js).
+const { inOwnFolder } = require('./helpers/own-app-folder.js');
+const { runSdkBuild: runSdkBuildInPlace, existingAppSitemapIsWritten, pagesFirstRule, planFor, PHASES, BuildHalt } = require('../lib/sdk-build.js');
+const runSdkBuild = inOwnFolder(runSdkBuildInPlace);
 const { STAGES } = require('../lib/stages.js');
-const { buildModelApp, isTransientHalt, discoverOpDiffState } = require('../build-model-app.js');
+const { buildModelApp: buildModelAppInPlace, isTransientHalt, discoverOpDiffState } = require('../build-model-app.js');
+const buildModelApp = inOwnFolder(buildModelAppInPlace);
 const { SHAPES, specFor } = require('./helpers/navigation-shapes.js');
 const { writesIn, environment, pagesEnvironment, pageBackend, appFolder } = require('./helpers/navigation-fakes.js');
 

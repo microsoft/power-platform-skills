@@ -34,6 +34,7 @@ const { createMakerSdk, createNodeWorkspaceStorage } = require('../lib/maker-sdk
 const { isTransientHalt } = require('../build-model-app.js');
 const { sha256 } = require('../lib/hash.js');
 const { environmentFingerprint } = require('../lib/page-ownership-records.js');
+const { leaveLocksOfKilledBuild } = require('./helpers/killed-build-locks.js');
 
 // Loaded where it is used, so that every test below fails on its own assertion when the module is not there.
 const records = () => require('../lib/dashboard-creation-records.js');
@@ -288,6 +289,8 @@ function ran(step, label) {
 
 // The build is killed the moment it sends the new dashboard's membership add: that request never answers, and nothing of the run happens after
 // it — no undo, no record cleared, no app. Answers the id the add named, which is the row the create committed. `buildSpec` is the spec it builds.
+// A kill also ends the process, which leaves the build's lock in the workspace under a pid that is gone, for the next build to take over
+// (helpers/killed-build-locks.js): the unsettled build here is in this process, so its lock is handed to such a pid.
 async function dieAtMembership(env, buildSpec = spec) {
   let named;
   const reached = new Promise((resolve) => { named = resolve; });
@@ -298,6 +301,7 @@ async function dieAtMembership(env, buildSpec = spec) {
   fault.lift();
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(settled, false, 'the killed build never finishes');
+  leaveLocksOfKilledBuild(env.harness.workspaceDir);
   return id;
 }
 

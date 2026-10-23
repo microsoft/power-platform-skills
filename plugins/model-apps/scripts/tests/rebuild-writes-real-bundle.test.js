@@ -22,7 +22,10 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { createMakerSdk, createNodeWorkspaceStorage } = require('../vendor/cds-maker-sdk.cjs');
-const { runSdkBuild, settleOwedPublishes } = require('../lib/sdk-build.js');
+// An apply that names no app folder and no workspace gets an app folder of its own: it holds its build lease in its workspace (helpers/own-app-folder.js).
+const { inOwnFolder } = require('./helpers/own-app-folder.js');
+const { runSdkBuild: runSdkBuildInPlace, settleOwedPublishes } = require('../lib/sdk-build.js');
+const runSdkBuild = inOwnFolder(runSdkBuildInPlace);
 const { createFakeDataverse } = require('./helpers/fake-dataverse.js');
 
 const COMPONENT = { view: 26, chart: 59, form: 60 };

@@ -6,7 +6,11 @@ const { test } = require('node:test');
 const assert = require('node:assert');
 const path = require('node:path');
 const fs = require('node:fs');
-const { buildModelApp, isTransientHalt, discoverOpDiffState, parseLanguageCode, assertSnapshotInvalidated } = require(path.join(__dirname, '..', 'build-model-app.js'));
+// An apply that names no app folder and no workspace gets a workspace of its own, which holds its build lease (helpers/own-app-folder.js): its specs name
+// page source that is not on disk, which an app folder would make the build check.
+const { inOwnWorkspace } = require('./helpers/own-app-folder.js');
+const { buildModelApp: buildModelAppInPlace, isTransientHalt, discoverOpDiffState, parseLanguageCode, assertSnapshotInvalidated } = require(path.join(__dirname, '..', 'build-model-app.js'));
+const buildModelApp = inOwnWorkspace(buildModelAppInPlace);
 const { verifySpec } = require(path.join(__dirname, '..', 'lib', 'verify-spec.js'));
 const { resolveLanguageCode } = require(path.join(__dirname, '..', 'lib', 'entity-provision.js'));
 const { validateAppSpec, normalizeLanguageCode } = require(path.join(__dirname, '..', 'lib', 'app-spec.js'));

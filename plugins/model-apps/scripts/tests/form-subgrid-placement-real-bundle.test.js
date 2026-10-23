@@ -6,7 +6,10 @@
 const test = require('node:test');
 const assert = require('node:assert');
 const ai = require('../lib/artifact-intent.js');
-const { runSdkBuild } = require('../lib/sdk-build.js');
+// An apply that names no app folder and no workspace gets an app folder of its own: it holds its build lease in its workspace (helpers/own-app-folder.js).
+const { inOwnFolder } = require('./helpers/own-app-folder.js');
+const { runSdkBuild: runSdkBuildInPlace } = require('../lib/sdk-build.js');
+const runSdkBuild = inOwnFolder(runSdkBuildInPlace);
 const { createHarness, seedForm, verifyForms, clone, NOTES_CLASS_ID, SUBGRID_CLASS_ID, VIEW_ID } = require('./helpers/form-store-harness.js');
 
 const TASK = 'new_ticket_new_task';

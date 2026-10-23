@@ -23,9 +23,12 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { scanHaltSites, scanBareErrors, haltSitesOf } = require('./helpers/halt-sites.js');
+// An apply that names no app folder and no workspace gets an app folder of its own: it holds its build lease in its workspace (helpers/own-app-folder.js).
+const { inOwnFolder } = require('./helpers/own-app-folder.js');
 const {
-  runSdkBuild, haltOnUnpublishedAppHeader, acquireAppPagesLease, refuseUnpushedAppCopy, assertAuthorizedSitemapRewrite, reconciledPublishHalt,
+  runSdkBuild: runSdkBuildInPlace, haltOnUnpublishedAppHeader, acquireAppPagesLease, refuseUnpushedAppCopy, assertAuthorizedSitemapRewrite, reconciledPublishHalt,
 } = require('../lib/sdk-build.js');
+const runSdkBuild = inOwnFolder(runSdkBuildInPlace);
 const { BuildHalt, makeRunner, requireSuccessfulPush, findExistingTable, resolveLanguageCode, checkLocalizedLabelLanguages } = require('../lib/entity-provision.js');
 const { buildModelApp, isTransientHalt } = require('../build-model-app.js');
 const { SdkError, ConnectionError, createMakerSdk, createNodeWorkspaceStorage } = require('../lib/maker-sdk.js');
@@ -59,6 +62,10 @@ const POLICY = {
   'relationship-name-taken': { kinds: ['never'], via: 'entity-provision.test.js' },
   'view-filter-label-unresolved': { kinds: ['by-failure'], via: 'view-filter-labels.test.js' },
   'pages-locked': { kinds: ['never'] },
+  // The build lease (lib/app-operation-lease.js): another build of the app holds the workspace, or a lease handed to an apply is not a live one for it.
+  // Running the phases again releases neither, and the refusal quotes the lock's path, which holds the maker's folder.
+  'build-locked': { kinds: ['never'] },
+  'build-lease-invalid': { kinds: ['never'] },
   'app-header-unpublished': { kinds: ['never'] },
   'app-copy-unpushed-edits': { kinds: ['never'] },
   'sitemap-removal-unapproved': { kinds: ['never'] },
@@ -367,6 +374,17 @@ const ROWS = {
     dirs.push(path.dirname(workspace));
     return haltOf(() => acquireAppPagesLease(workspace, 'contoso_app')).finally(() => held.release());
   },
+  // Raised by the real entries: a second apply of the app while a first holds its lease, in a folder whose name reads as a transient error; and an
+  // apply handed a lease that is no lease — the label itself.
+  'build-locked': async () => {
+    const workspace = path.join(tempDir('halt-policy-build'), LABEL);
+    let halt;
+    await buildModelApp(loopSpec(), { apply: true, workspaceDir: workspace, retryDelayMs: 0 }, {
+      runBuild: async (s, o) => { halt = await haltOf(() => runSdkBuild(s, { ...o, buildLease: undefined, phases: [] })); return { ok: true, dryRun: false, created: {} }; },
+    });
+    return halt;
+  },
+  'build-lease-invalid': () => haltOf(() => runSdkBuild(loopSpec(), { apply: true, workspaceDir: path.join(tempDir('halt-policy-build'), LABEL), buildLease: LABEL, phases: [] })),
   'language-not-provisioned': () => haltOf(() => resolveLanguageCode({ spec: {}, languageCode: 1031, provisionedLanguages: async () => [1033] })),
   'localized-label-language-not-provisioned': () => haltOf(() => checkLocalizedLabelLanguages({ entities: [{ schemaName: LABEL, displayName: { 1033: 'Name', 3082: 'Nombre' }, columns: [] }] }, async () => [1033])),
   'table-probe-inconclusive': ({ failure }) => haltOf(() => findExistingTable({ dataverse: { get: async () => { throw failure || Object.assign(new Error('bad request'), { statusCode: 400 }); } } }, LABEL, { hasLocalizedLabels: true, attempts: 1 })),

@@ -22,7 +22,10 @@ const path = require('node:path');
 const fs = require('node:fs');
 
 const { validateAppSpec } = require('../lib/app-spec.js');
-const { bpfDef, runSdkBuild, inspectBpfStages, applyBpfStages } = require('../lib/sdk-build.js');
+// An apply that names no app folder and no workspace gets an app folder of its own: it holds its build lease in its workspace (helpers/own-app-folder.js).
+const { inOwnFolder } = require('./helpers/own-app-folder.js');
+const { bpfDef, runSdkBuild: runSdkBuildInPlace, inspectBpfStages, applyBpfStages } = require('../lib/sdk-build.js');
+const runSdkBuild = inOwnFolder(runSdkBuildInPlace);
 const { desiredBpfStages, deployedBpfStages, diffBpfStages, describeBpfEdit, describeBpfRefusals } = require('../lib/bpf-stages.js');
 const { classifyChanges } = require('../lib/classify-changes.js');
 

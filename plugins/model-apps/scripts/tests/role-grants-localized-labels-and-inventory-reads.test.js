@@ -10,7 +10,10 @@ const assert = require('node:assert');
 const { validateAppSpec, choiceValueMap, labelText, resolveSampleRecords } = require('../lib/app-spec.js');
 const { validateProvisionInput } = require('../lib/provision-input.js');
 const { phaseInputs } = (() => { const m = require('../lib/phase-diff.js'); return { phaseInputs: m.PHASE_INPUTS || m.phaseInputs }; })();
-const { runSdkBuild, subgridLabel, viewDef } = require('../lib/sdk-build.js');
+// An apply that names no app folder and no workspace gets an app folder of its own: it holds its build lease in its workspace (helpers/own-app-folder.js).
+const { inOwnFolder } = require('./helpers/own-app-folder.js');
+const { runSdkBuild: runSdkBuildInPlace, subgridLabel, viewDef } = require('../lib/sdk-build.js');
+const runSdkBuild = inOwnFolder(runSdkBuildInPlace);
 const { notRoundTrippedSummary, notRoundTrippedWarning } = require('../download-model-app.js');
 const { currentReadSdk } = require('./helpers/app-membership-sdk.js');
 

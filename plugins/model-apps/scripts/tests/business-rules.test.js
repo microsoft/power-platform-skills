@@ -466,7 +466,10 @@ test('verify fails CLOSED when the workflow read itself errors', async () => {
 //
 // An ordered, complete read makes reuse deterministic and reports additional matches. A name
 // does not prove another definition was created by this run, so rebuild must not delete it.
-const { runSdkBuild: runBuild } = require('../lib/sdk-build.js');
+// An apply that names no app folder and no workspace gets an app folder of its own: it holds its build lease in its workspace (helpers/own-app-folder.js).
+const { inOwnFolder } = require('./helpers/own-app-folder.js');
+const { runSdkBuild: runBuildInPlace } = require('../lib/sdk-build.js');
+const runBuild = inOwnFolder(runBuildInPlace);
 
 function ruleOnlySpec() {
   const s = specWith([{

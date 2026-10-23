@@ -4129,7 +4129,8 @@ async function driveBuild(spec, appDir, { genpage, engine = runBuild, runOpts = 
   let halt = null;
   let result = null;
   try {
-    result = await buildModelApp(spec, { apply: true, env: 'https://contoso.crm.dynamics.com', appDir, retryDelayMs: 0, ...opts }, {
+    // A workspace the engine is given is the build's too, as the CLI passes one to both: the build's lease is taken in it, and each attempt borrows it there.
+    result = await buildModelApp(spec, { apply: true, env: 'https://contoso.crm.dynamics.com', appDir, retryDelayMs: 0, ...(runOpts.workspaceDir ? { workspaceDir: runOpts.workspaceDir } : {}), ...opts }, {
       sdk, provisionSdk: sdk, genpage, sleep: async () => {}, log: (m) => lines.push(m), warn: () => {}, verify: async () => ({ ok: true }),
       discoverOpDiffState: async () => ({ collision: { appExists: false, solutionExists: false }, forms: [], sitemap: null }),
       runBuild: async (s, o) => { attempts += 1; return engine(s, { ...o, phases: PHASES, ...runOpts }); },

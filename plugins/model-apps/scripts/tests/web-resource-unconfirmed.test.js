@@ -22,7 +22,8 @@ const path = require('node:path');
 const { createMakerSdk, createNodeWorkspaceStorage } = require('../vendor/cds-maker-sdk.cjs');
 const { createMakerSdk: createClientSdk } = require('../lib/maker-sdk.js');
 const { createAzHttpClient } = require('../lib/sdk-http-client.js');
-const { runSdkBuild } = require('../lib/sdk-build.js');
+const { runSdkBuild, appUniqueName } = require('../lib/sdk-build.js');
+const { withAppBuildLease } = require('../lib/app-operation-lease.js');
 const { requireSuccessfulPush } = require('../lib/entity-provision.js');
 const { buildModelApp, isTransientHalt } = require('../build-model-app.js');
 const { retryPolicyFor, judgeFailure, RETRY } = require('../lib/retry-policy.js');
@@ -411,6 +412,11 @@ test('the build\'s own re-run of the halt writes it again by id in the same invo
 // to its membership add, B writes the same row again from a newer spec, the lock refuses B's publish, and B records its unconfirmed write — under the
 // same id, since it is the same row. A's clear comes after that: it must take only the entry A verified, so that the next build writes B's content again
 // by id instead of reusing the row with A's content published.
+//
+// A build of this release can no longer run inside another of the same app and workspace: the build lease (lib/app-operation-lease.js) refuses it
+// before it writes anything. The record's revisions are still what guards against a writer the lease does not hold back — a build of an earlier
+// release, which takes no build lease — so B runs here with A's lease, which an apply borrows when it is handed it, and so runs beside A as such a
+// writer would.
 test('a recovery whose membership add is answered after another build recorded a later, unconfirmed write of the same row leaves that record: the next build writes the newer content again by id', async () => {
   const s = scenario();
   refuseWebResourcePublishes(s.org);
@@ -418,13 +424,14 @@ test('a recovery whose membership add is answered after another build recorded a
   const id = s.row(SCRIPT).webresourceid;
   const NEWER = 'var Form = { onLoad: function () { return 2; } };';
   let other;
+  let lease;
   const stop = s.org.intercept((c) => c.method === 'POST' && c.path === '/AddSolutionComponent' && String(c.body.ComponentId).toLowerCase() === id, async (c) => {
     stop();
     refuseWebResourcePublishes(s.org);
-    other = await s.build(spec([{ name: SCRIPT, type: 'js', content: NEWER }]));
+    other = await s.build(spec([{ name: SCRIPT, type: 'js', content: NEWER }]), { buildLease: lease });
     return s.org.fake.httpClient.post(`${s.org.origin}/api/data/v9.2${c.path}`, c.body);
   });
-  const recovered = await s.build(spec());
+  const recovered = await withAppBuildLease({ workspaceDir: s.dir, appUniqueName: appUniqueName(spec()) }, (held) => { lease = held; return s.build(spec(), { buildLease: held }); });
   assert.ok(recovered.outcome && recovered.outcome.ok, String(recovered.halt && recovered.halt.message));
   assert.ok(other && other.halt, 'the other build ran while A waited for its add, and stopped');
   assert.equal(other.halt.code, 'WEB_RESOURCE_UNVERIFIED', 'its write of the same row unconfirmed');

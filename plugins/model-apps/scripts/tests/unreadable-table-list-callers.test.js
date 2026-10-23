@@ -20,7 +20,10 @@ const bundle = require('../vendor/cds-maker-sdk.cjs');
 const { createMakerSdk, createNodeWorkspaceStorage } = require('../lib/maker-sdk.js');
 const { runTeardown } = require('../lib/sdk-teardown.js');
 const { findExistingTable, provisionDataModel, BuildHalt } = require('../lib/entity-provision.js');
-const { runSdkBuild, annotateLivePlan, planFor } = require('../lib/sdk-build.js');
+// An apply that names no app folder and no workspace gets an app folder of its own: it holds its build lease in its workspace (helpers/own-app-folder.js).
+const { inOwnFolder } = require('./helpers/own-app-folder.js');
+const { runSdkBuild: runSdkBuildInPlace, annotateLivePlan, planFor } = require('../lib/sdk-build.js');
+const runSdkBuild = inOwnFolder(runSdkBuildInPlace);
 const { verifySpec } = require('../lib/verify-spec.js');
 const { readerFor } = require('../verify-model-app.js');
 const { makeSimpleMockSdk } = require('./helpers/mock-sdk.js');

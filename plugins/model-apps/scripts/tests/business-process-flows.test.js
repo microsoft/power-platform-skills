@@ -20,7 +20,10 @@ const path = require('node:path');
 const fs = require('node:fs');
 
 const { validateAppSpec } = require('../lib/app-spec.js');
-const { bpfDef, bpfFilter, runSdkBuild, planFor, PHASES } = require('../lib/sdk-build.js');
+// An apply that names no app folder and no workspace gets an app folder of its own: it holds its build lease in its workspace (helpers/own-app-folder.js).
+const { inOwnFolder } = require('./helpers/own-app-folder.js');
+const { bpfDef, bpfFilter, runSdkBuild: runSdkBuildInPlace, planFor, PHASES } = require('../lib/sdk-build.js');
+const runSdkBuild = inOwnFolder(runSdkBuildInPlace);
 const { verifySpec } = require('../lib/verify-spec.js');
 const { planTeardown, KIND_HANDLERS } = require('../lib/sdk-teardown.js');
 const { PHASES: STAGE_PHASES, STAGES } = require('../lib/stages.js');

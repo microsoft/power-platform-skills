@@ -50,6 +50,8 @@ const { makeGenpageSdk } = require('./lib/genpage-sdk.js');
 const { leftOnDiskWarning } = require('./lib/left-on-disk.js');
 const { makeTempWorkspace } = require('./lib/temp-workspace.js');
 const { makeWritesBlocking } = require('./lib/output-redaction.js');
+// The lease one apply of an app holds for the whole of its work in the workspace (lib/app-operation-lease.js).
+const { withAppBuildLease, applyWorkspaceOf } = require('./lib/app-operation-lease.js');
 
 // The folder an app's workspace lives in, checked before anything is built on it. An APPLY makes the folder if it is
 // missing and re-checks it (mkdir on an existing junction succeeds, so the re-check is what refuses one). A DRY RUN
@@ -411,6 +413,17 @@ async function buildModelApp(spec, opts, deps) {
   }
   const fileErrors = appSourceFileErrors(spec, opts.appDir);
   if (fileErrors.length) return { ok: false, errors: fileErrors };
+  if (!opts.apply) return buildModelAppHeld(spec, opts, deps, v, undefined);
+  // An APPLY runs under the app's build lease (lib/app-operation-lease.js), from the approval record it reads at its start, through every attempt
+  // of the retry loop below and its waits, the settlement of what a halted run owes, the inline verify and the journal's close: a second apply of
+  // the same app in the same workspace is refused before any of that. The CLI hands its own lease in (`opts.buildLease`), and it is borrowed; a
+  // caller that holds none gets one taken here, and let go when this returns or throws.
+  return withAppBuildLease({ workspaceDir: applyWorkspaceOf(opts), appUniqueName: appUniqueName(spec), buildLease: opts.buildLease, warn: deps.warn },
+    (buildLease) => buildModelAppHeld(spec, opts, deps, v, buildLease));
+}
+
+// The body of buildModelApp, run once the spec has been validated — under the build lease `buildLease` for an apply, which every attempt below borrows.
+async function buildModelAppHeld(spec, opts, deps, v, buildLease) {
   const log = deps.log || (() => undefined);
   // Surface non-blocking validation advisories (e.g. a PRE-EXISTING duplicate page name the build does
   // not create — see validateAppSpec). These no longer HALT the build; they are narrated so the maker
@@ -682,6 +695,8 @@ async function buildModelApp(spec, opts, deps) {
         warn: deps.warn,
         genpage: deps.genpage, // injectable seam for tests (lib/genpage-sdk.js's shape); else made from env
         workspaceDir: opts.workspaceDir, // lease/staging live under the real workspace dir
+        // The build lease this apply holds (or borrowed from its caller): every attempt borrows it, so none of them takes a second one.
+        buildLease,
         authorizedFormRemovals,
         authorizedSitemapRemovals,
         allowDestructive: opts.allowDestructive, // pages phase gates destructive page removals
@@ -1132,6 +1147,25 @@ async function main() {
     env,
     workspaceDir,
   };
+  // An APPLY runs under the app's build lease from here to its result (lib/app-operation-lease.js): taken after the arguments, the spec and the
+  // paths have been checked, and BEFORE the auth check, the language read, the SDK's workspace, the journal, the baseline and the snapshot — so a
+  // second apply of the same app in this workspace is refused (`build-locked`: on stderr, exit 1, no stdout JSON) before it sends a request or
+  // touches a file another build is using. The lease covers the build's automatic re-runs and their waits, the settlement of a halt, the inline
+  // verify, the SDK's cleanup and the baseline written last, and it is let go — in the `finally` of withAppBuildLease — before the result is
+  // printed: emitResult ends the process, and a `finally` around it would never run. So the command's body ANSWERS its result, and it is printed
+  // here, after the release; an error it throws goes on to main().catch the same way. A dry run reads only, and takes no lease.
+  const command = { env, spec, languageCode, changedOnly, workspaceDir };
+  const outcome = opts.apply
+    ? await withAppBuildLease({ workspaceDir, appUniqueName: appUniqueName(spec), warn: (m) => process.stderr.write(`⚠ ${m}\n`) },
+      (buildLease) => runBuildCommand({ ...command, opts: { ...opts, buildLease } }))
+    : await runBuildCommand({ ...command, opts });
+  emitResult(outcome.ok, outcome.payload);
+}
+
+// Everything main() does once the command line has been checked: auth, the authoring language, the SDK, the journal, the build and the baseline.
+// Answers { ok, payload } for main() to print: a refusal of the identity as the `{ ok: false, error }` it has always printed, and otherwise the
+// build's result, `ok` only when the build and its verify succeeded.
+async function runBuildCommand({ env, spec, languageCode, changedOnly, workspaceDir, opts }) {
   // #455: the App, Form and Dashboard adapters bake the authoring LCID in at CONSTRUCTION, so it
   // has to be resolved before the SDK exists — which is why this reads over the transport hatch
   // rather than through `provision.queryRecords`. Resolving here also means the provisioned-language
@@ -1158,7 +1192,7 @@ async function main() {
     // error(s); see stdout JSON") — which would replace a message written specifically to tell the
     // operator which identity to sign in as. `download-model-app.js` uses `error` for the identical
     // failure, so the array here also made two sibling CLIs report the same problem differently.
-    if (!auth.ok && !auth.inconclusive) { emitResult(false, { ok: false, error: auth.error }); return; }
+    if (!auth.ok && !auth.inconclusive) return { ok: false, payload: { ok: false, error: auth.error } };
     if (auth.inconclusive) process.stderr.write(`⚠ ${auth.error}\n`);
   }
   const authoringLanguageCode = opts.apply
@@ -1291,12 +1325,12 @@ async function main() {
   } finally {
     cleanup();
   }
+  // Still under the build lease: the baseline is this build's to write, and no other build of the app may write it meanwhile.
   persistAppliedBaseline(r, { spec, opts, workspaceDir, appDirAbs, baselineIdentity });
-  // emitResult() calls process.exit(), so emit AFTER cleanup() has run. A build that applied cleanly
-  // but whose auto-verify found missing artifacts exits NON-ZERO (the silent-partial signal auto-verify exists
-  // to raise), while r still carries the full build + verify detail.
+  // main() prints this once the lease is let go (emitResult calls process.exit). A build that applied cleanly but whose auto-verify found missing
+  // artifacts exits NON-ZERO (the silent-partial signal auto-verify exists to raise), while r still carries the full build + verify detail.
   const ok = r.ok && (!r.verify || r.verify.ok);
-  emitResult(ok, r);
+  return { ok, payload: r };
 }
 
 if (require.main === module) {

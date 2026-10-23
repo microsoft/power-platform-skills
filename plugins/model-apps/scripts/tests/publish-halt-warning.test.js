@@ -16,10 +16,15 @@ const os = require('node:os');
 const path = require('node:path');
 const { randomUUID } = require('node:crypto');
 const { createMakerSdk, createNodeWorkspaceStorage } = require('../vendor/cds-maker-sdk.cjs');
-const { runSdkBuild, settleOwedPublishes } = require('../lib/sdk-build.js');
+// An apply that names no app folder and no workspace gets a workspace of its own, which holds its build lease (helpers/own-app-folder.js): its specs name
+// page source that is not on disk, which an app folder would make the build check.
+const { inOwnWorkspace } = require('./helpers/own-app-folder.js');
+const { runSdkBuild: runSdkBuildInPlace, settleOwedPublishes } = require('../lib/sdk-build.js');
+const runSdkBuild = inOwnWorkspace(runSdkBuildInPlace);
 const { validateAppSpec } = require('../lib/app-spec.js');
 const { STAGES } = require('../lib/stages.js');
-const { buildModelApp } = require('../build-model-app.js');
+const { buildModelApp: buildModelAppInPlace } = require('../build-model-app.js');
+const buildModelApp = inOwnWorkspace(buildModelAppInPlace);
 const { createFakeDataverse } = require('./helpers/fake-dataverse.js');
 
 const dirs = [];

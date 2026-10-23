@@ -20,8 +20,9 @@ const { readPageOwnership, recordPageCreation, recordPagePending, readPendingCre
 const { readPublishedPages, writePublishedPages, sameFileVersions } = require('./page-publish-records.js');
 const { leftOnDiskWarning } = require('./left-on-disk.js');
 // The pages lock: two files (one keyed without regard to case, one spelled as every earlier release spells it), each taken through the snapshot
-// lease's exclusive create-and-reclaim and reclaimed only from a build that is provably gone (lib/app-operation-lease.js).
-const { acquireAppPagesLease } = require('./app-operation-lease.js');
+// lease's exclusive create-and-reclaim and reclaimed only from a build that is provably gone; and the build lease an apply holds outside it
+// (lib/app-operation-lease.js).
+const { acquireAppPagesLease, withAppBuildLease, applyWorkspaceOf } = require('./app-operation-lease.js');
 const { unreadableAnswer } = require('./collection-answers.js');
 // normalizePageSource: read the page source from the discriminated `source` field (v2) or the
 // legacy top-level `codeFile` (pre-migration). PHASES: canonical ordered phase list — imported
@@ -2943,7 +2944,16 @@ function genpageCommand(verb, { env, pageId, app, flags = '' }) {
 // everything that app has saved, so the user is asked first), or detach it in Maker, or give this app a page of its own. `commands` are the lines `genpageCommand` made, one per app that holds the page.
 const detachAdvice = (commands) => `Detach it from the other app — ask the user first, since this changes another app: ${commands.join('; ')} (each takes the page out of that app's navigation and publishes that app, which publishes everything that app has saved; the page itself stays) — or detach it in Maker, or give this app its own page.`;
 
-// Every caller enters here; the phases run in runSdkBuildPhases. This wrapper only carries what an attempt
+// The entry every caller enters by. An APPLY holds the app's build lease for the whole of it (lib/app-operation-lease.js): one taken here when the
+// caller holds none, or the caller's own (`opts.buildLease`, which buildModelApp hands to each attempt), borrowed and left to the caller to let go. A
+// second apply of the same app in the same workspace is refused before anything is read or written, so two builds cannot both find the app's icon,
+// the app or a page missing and both create it. A dry run reads only, and takes no lease.
+async function runSdkBuild(spec, opts = {}) {
+  if (!opts.apply) return runSdkBuildAttempt(spec, opts);
+  return withAppBuildLease({ workspaceDir: applyWorkspaceOf(opts), appUniqueName: appUniqueName(spec), buildLease: opts.buildLease, warn: opts.warn }, () => runSdkBuildAttempt(spec, opts));
+}
+
+// One attempt; the phases run in runSdkBuildPhases. This wrapper only carries what an attempt
 // still owes out of a halt, for the caller that retries:
 //  - the deferred publishes (default-view enrichment, reconciled views and forms): `owedPublishes`, and
 //    `owedPaid` when this run's publish phase completed — which pays what an earlier attempt of the same
@@ -2954,7 +2964,7 @@ const detachAdvice = (commands) => `Detach it from the other app — ask the use
 //    next attempt as `opts.owedLengths` and which that attempt pays at the end of its own data-model phase, to the
 //    table it was recorded for. What is on the halt is everything still owed: what the attempt was handed and did
 //    not pay, and what it created.
-async function runSdkBuild(spec, opts = {}) {
+async function runSdkBuildAttempt(spec, opts = {}) {
   // tables: entity logical -> [type, id, names] of a saved view or form that owes its publish, and the names of
   // what is deferred onto that table: its reconciled views and forms, and its enriched default views
   // (oweTablePublish). lengths: table logical -> { table, column, asked, tried, tableId, columnId? } of a name column whose
@@ -6617,7 +6627,7 @@ async function runSdkBuildPhases(spec, opts, owed) {
     // (e.g. --from pages), there is nothing to upload against — HALT and require a FULL rerun. An app the app step left to this
     // phase to create has no id yet, by design: it is made below, once the pages exist.
     if (!result.created.app && !createAppWithPages) throw new BuildHalt('pages phase requires the app (app-shell) in the same run — the app id is not carried across invocations. Re-run a FULL build (do not use --from pages).', { phase: 'pages', code: 'pages-requires-app', recoverable: false, retry: RETRY.NEVER });
-    const wsDir = opts.workspaceDir || path.join(path.resolve(opts.appDir || '.'), '.maker-workspace');
+    const wsDir = applyWorkspaceOf(opts);
     // Advisory lease: acquired OUTSIDE the try so a failed acquire (pages-locked HALT) never triggers the
     // finally that would release a lease we never held. Correctness rests on the convergence spine, not this.
     // A lock a killed build left behind is released by this call, and `opts.warn` says so.

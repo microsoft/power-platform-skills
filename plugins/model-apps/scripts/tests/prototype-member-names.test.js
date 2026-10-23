@@ -13,7 +13,10 @@
 // tests over the real bundle and a fake environment are in prototype-member-names-real-bundle.test.js.
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { appDef, commandsByEntity, runSdkBuild } = require('../lib/sdk-build.js');
+// An apply that names no app folder and no workspace gets an app folder of its own: it holds its build lease in its workspace (helpers/own-app-folder.js).
+const { inOwnFolder } = require('./helpers/own-app-folder.js');
+const { appDef, commandsByEntity, runSdkBuild: runSdkBuildInPlace } = require('../lib/sdk-build.js');
+const runSdkBuild = inOwnFolder(runSdkBuildInPlace);
 const { indexArtifacts } = require('../lib/apply-snapshot-index.js');
 const flow = require('../lib/changed-only-flow.js');
 const snap = require('../lib/apply-snapshot.js');

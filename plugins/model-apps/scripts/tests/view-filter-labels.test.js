@@ -34,11 +34,15 @@ const {
   makeChoiceReader,
   makeGlobalChoiceReader,
 } = require('../lib/view-filter-labels.js');
-const { runSdkBuild, viewDef, annotateLivePlan, planFor, BuildHalt } = require('../lib/sdk-build.js');
+// An apply that names no app folder and no workspace gets an app folder of its own: it holds its build lease in its workspace (helpers/own-app-folder.js).
+const { inOwnFolder } = require('./helpers/own-app-folder.js');
+const { runSdkBuild: runSdkBuildInPlace, viewDef, annotateLivePlan, planFor, BuildHalt } = require('../lib/sdk-build.js');
+const runSdkBuild = inOwnFolder(runSdkBuildInPlace);
 const { verifySpec } = require('../lib/verify-spec.js');
 const { lintAppSpec } = require('../lib/spec-lint.js');
 const { makeSimpleMockSdk } = require('./helpers/mock-sdk.js');
-const { isTransientHalt, buildModelApp } = require('../build-model-app.js');
+const { isTransientHalt, buildModelApp: buildModelAppInPlace } = require('../build-model-app.js');
+const buildModelApp = inOwnFolder(buildModelAppInPlace);
 
 const BUNDLE = path.resolve(__dirname, '..', 'vendor', 'cds-maker-sdk.cjs');
 

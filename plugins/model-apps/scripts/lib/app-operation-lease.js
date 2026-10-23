@@ -11,8 +11,16 @@
 // a release removes only a file that still holds its own token) and stamped and judged by lib/process-owner.js: a lock is taken over ONLY from a
 // process that is PROVEN gone, never because it is old — a live build can be paused for as long as a laptop sleeps.
 //
+//   app-build.<sha256 of the lower-cased app unique name>.lock    one whole apply of the app (withAppBuildLease)
 //   app-pages.<sha256 of the lower-cased app unique name>.lock    the pages phase, keyed without regard to case
 //   pages-<the app unique name, unsafe characters as _>.lock     the pages phase, as every earlier release spells it
+//
+// The build lock is held for one complete apply: from before the CLI's auth check, through every phase, the automatic re-runs of a transient
+// halt and their waits, the settlement of what a halted run owes, the inline verify, the journal and the SDK's cleanup, to the baseline and the
+// snapshot the run persists — and let go only when all of that has settled. A second apply of the same app in the same workspace is refused at
+// once (`build-locked`), before it opens the SDK's workspace, the journal or the snapshot, or sends any request. The pages files are taken inside
+// it, by the pages phase, as before: a build of an earlier release takes no build lock, so the legacy pages file is the only thing that still keeps
+// it and a build of this one apart.
 //
 // The page-publish record already compares app names without regard to case (lib/page-publish-records.js), so `Contoso_App` and `contoso_app`
 // share one record; the pages lock did not, and on a case-sensitive file system the two spellings took two locks. The hashed name fixes that. It
@@ -40,6 +48,7 @@ const appHashOf = (rawApp) => sha256(canonicalAppOf(rawApp));
 
 // The file names, all inside the workspace folder. The legacy one is the earlier releases' exactly (`String(appUnique).replace(...)`): a build
 // of one of them and a build of this one must name the same file when they spell the app the same way.
+const buildLockName = (rawApp) => `app-build.${appHashOf(rawApp)}.lock`;
 const canonicalPagesLockName = (rawApp) => `app-pages.${appHashOf(rawApp)}.lock`;
 const legacyPagesLockName = (rawApp) => `pages-${String(rawApp).replace(/[^A-Za-z0-9_-]/g, '_')}.lock`;
 
@@ -162,11 +171,83 @@ function acquireAppPagesLease(wsDir, appUnique, deps = {}) {
   return { release: letGo };
 }
 
+// ---------------------------------------------------------------------------------------------------------------------
+// The build lease: one whole apply of one app in one workspace
+// ---------------------------------------------------------------------------------------------------------------------
+
+// The workspace an apply leases when its caller named none: the app folder's `.maker-workspace`, as the CLI makes it beside app-spec.json and as
+// the pages phase has always found it. Every applying entry resolves it through this one function, so the lease a caller holds and the lease its
+// callee looks for name the same folder.
+const applyWorkspaceOf = (opts = {}) => opts.workspaceDir || path.join(path.resolve(opts.appDir || '.'), '.maker-workspace');
+
+// The capabilities this process has handed out, each the proof that a lease is held: an empty frozen object that only withAppBuildLease makes,
+// recognised by identity here. Not JSON, not a flag, not an environment variable, not a pid — a callee borrows a lease only when its caller hands it
+// the very object, so two independent applies in one process still compete like two processes do (sharing a pid is not owning a lease).
+const capabilities = new WeakMap();
+
+// `retry: NEVER` for both refusals below: running the build's phases again cannot release another build's lease or make a capability valid, and a
+// refusal quotes the lock's path, which holds the maker's folder — the retry rule must never read its words. `recoverable` is the operator's: a
+// later run of the same command can proceed once the other build has finished. It never authorizes the build's own automatic re-run.
+function buildLocked(appUnique, lockPath, lease) {
+  return new BuildHalt(`another build may be applying '${appUnique}' in this workspace — refusing a second concurrent apply (would risk duplicate creation). Re-run the same command after it finishes. If no build using this workspace is running, inspect ${lockPath} and remove it only if it is abandoned; keep the workspace and its recovery records.${unreleasedNote(lease)}`, { phase: 'preflight', code: 'build-locked', recoverable: true, retry: RETRY.NEVER });
+}
+function buildLeaseInvalid() {
+  return new BuildHalt('the supplied build lease is not active for this app and workspace — refusing to apply without its own lease', { phase: 'preflight', code: 'build-lease-invalid', recoverable: false, retry: RETRY.NEVER });
+}
+
+// Runs `operation(buildLease)` while this process holds the build lease of the app `appUniqueName` (the raw name sdk-build.js appUniqueName gives)
+// in the workspace `workspaceDir`, and answers what it answered, or throws what it threw — after the lease is let go.
+//
+// `buildLease` is how a nested apply BORROWS its caller's lease instead of taking one of its own (the CLI hands it to buildModelApp, which hands it to
+// every attempt of runSdkBuild; the changed-only flow hands it to its builds): it must be a capability this function made, still active, for the same
+// workspace folder (compared as the real path safe-fs resolves it, so two spellings of one folder are one) and the same app (without regard to case). A
+// borrower runs the operation and releases nothing. Anything else — a string, a capability already released, one for another app or folder — is
+// refused (`build-lease-invalid`): an apply never runs without a lease of its own or a valid borrowed one.
+//
+// Without a `buildLease` the lease is TAKEN: a held lock refuses at once (`build-locked`); there is no wait, no age limit and no flag that skips it.
+// A lock whose owner is PROVEN gone is taken over, and `warn` says so; one whose owner is gone but that could not be taken over adds why. A create
+// that failed for another reason than the lock being there (a folder that cannot be written) is that error. The lease is let go only when
+// `operation` has settled — every request it awaited has answered — never by a timer, a signal handler or an exit hook that could fire while a
+// write is still in flight; a release that cannot confirm the lock is gone says so through `warn` and does not change the result.
+// `owner` and `now` are the process-owner.js seams, for tests.
+async function withAppBuildLease({ workspaceDir, appUniqueName, buildLease, warn, owner, now }, operation) {
+  // A link or a file at the workspace's name is refused, a missing one is made (lib/safe-fs.js), and the answer is the folder's real path: what a
+  // borrower's folder is compared with.
+  const root = assertSafeOutputDir(workspaceDir, { create: true });
+  const app = canonicalAppOf(appUniqueName);
+  if (buildLease !== undefined && buildLease !== null) {
+    const held = typeof buildLease === 'object' ? capabilities.get(buildLease) : undefined;
+    if (!held || !held.active || held.root !== root || held.app !== app) throw buildLeaseInvalid();
+    return operation(buildLease);
+  }
+  const file = buildLockName(appUniqueName);
+  const lease = takeLockFile(workspaceDir, file, { owner, now: now || Date.now });
+  if (!lease.ok) {
+    if (lease.error) throw lease.error;
+    throw buildLocked(appUniqueName, path.join(workspaceDir, file), lease);
+  }
+  if (lease.reclaimed && typeof warn === 'function') {
+    warn(`released the build lock for '${appUniqueName}': the build that held it (${describeOwner(lease.previous)}) is no longer running`);
+  }
+  const capability = Object.freeze({});
+  const record = { root, app, active: true };
+  capabilities.set(capability, record);
+  try {
+    return await operation(capability);
+  } finally {
+    record.active = false;
+    releaseLockFile(lease, { warn, kind: 'build', appUnique: appUniqueName });
+  }
+}
+
 module.exports = {
+  withAppBuildLease,
+  applyWorkspaceOf,
   acquireAppPagesLease,
+  buildLockName,
   canonicalPagesLockName,
   legacyPagesLockName,
-  // For the build lease (below the pages one in every build) and for tests.
+  // For tests.
   canonicalAppOf,
   takeLockFile,
   releaseLockFile,

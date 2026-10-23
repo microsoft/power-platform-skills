@@ -13,7 +13,10 @@
 const test = require('node:test');
 const assert = require('node:assert');
 const { validateAppSpec } = require('../lib/app-spec.js');
-const { planFor, runSdkBuild, roleGrantLabel, resolveRoleGrantTarget } = require('../lib/sdk-build.js');
+// An apply that names no app folder and no workspace gets an app folder of its own: it holds its build lease in its workspace (helpers/own-app-folder.js).
+const { inOwnFolder } = require('./helpers/own-app-folder.js');
+const { planFor, runSdkBuild: runSdkBuildInPlace, roleGrantLabel, resolveRoleGrantTarget } = require('../lib/sdk-build.js');
+const runSdkBuild = inOwnFolder(runSdkBuildInPlace);
 
 function base() {
   return {

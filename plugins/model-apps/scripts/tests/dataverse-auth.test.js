@@ -711,12 +711,13 @@ test('both CLIs report an auth-preflight failure with the SAME payload shape', (
   // for the identical failure — and the one users hit on an apply printed the count, replacing a
   // message written specifically to say which identity to sign in as.
   //
-  // Asserted on the SOURCE because the alternative is spawning both CLIs against a live tenant.
+  // Asserted on the SOURCE because the alternative is spawning both CLIs against a live tenant. build-model-app.js answers the result
+  // (`payload`) for main() to print once its build lease is let go (tests/build-lease-cli.test.js prints it through the real printer).
   const fs = require('node:fs');
   const path = require('node:path');
   for (const cli of ['build-model-app.js', 'download-model-app.js']) {
     const src = fs.readFileSync(path.join(__dirname, '..', cli), 'utf8');
-    const line = src.split('\n').find((l) => /emitResult\(false,.*auth\.error/.test(l));
+    const line = src.split('\n').find((l) => /(?:emitResult\(false,|payload:\s*\{).*auth\.error/.test(l));
     assert.ok(line, `${cli}: expected an emitResult call carrying auth.error`);
     assert.match(line, /error:\s*auth\.error/, `${cli}: a single explained failure must use \`error\`: ${line.trim()}`);
     assert.doesNotMatch(line, /errors:\s*\[/, `${cli}: \`errors: [...]\` is for PARTIAL failures and prints only a count: ${line.trim()}`);
