@@ -199,7 +199,12 @@ function cliEmit(log, opts = {}) {
       log(`  [${e.n}/${e.total}] ${mark} ${e.label}${why}`);
       return;
     }
-    if (counts) counts[e.status] = (counts[e.status] || 0) + 1;
+    if (counts) {
+      // A step taken up again later in its phase keeps its number and names the outcome it replaces (`replaces`: a status reason its table's
+      // lag deferred, then retried — makeRunner, entity-provision.js), so the summary counts each step once, by the outcome it ended with.
+      if (e.replaces && counts[e.replaces] > 0) counts[e.replaces] -= 1;
+      counts[e.status] = (counts[e.status] || 0) + 1;
+    }
     const glyph = e.status === 'ok' ? '✓' : e.status === 'skip' ? '⊘' : '✗';
     const tail = e.status === 'error' ? ` — ${e.detail || ''}` : '';
     log(`  [${e.n}/${e.total}] ${glyph} ${e.label}${tail}`);

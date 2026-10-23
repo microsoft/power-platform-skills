@@ -1752,13 +1752,19 @@ function makeRunner({ emit, total, throttle }) {
   const refusals = () => (budgeted ? throttle.declined().count : 0);
   const refusedBefore = refusals();
   const stopIfRefused = (phase) => { if (refusals() > refusedBefore) throw budgetStop(throttle, phase); };
-  const run = async (phase, label, fn, { recoverable = false, skipIf, settling = false } = {}) => {
+  // `again`: { n, replaces } takes up, later in its phase, a step that already has a number — a status reason its table's lag deferred to the end
+  // of the data-model phase (drainLagStatuses). Every step is one item of the plan whose length `total` is, so the step keeps the number it was
+  // deferred under, and its outcome names the outcome it replaces (`replaces`): a printer counts the step once, by the outcome it ended with.
+  // `skipIf` is handed the step's number, for a skip that defers the step.
+  const run = async (phase, label, fn, { recoverable = false, skipIf, settling = false, again } = {}) => {
     if (!settling) stopIfRefused(phase);
-    const myN = (n += 1);
+    const takenUp = !!again && Number.isInteger(again.n);
+    const myN = takenUp ? again.n : (n += 1);
+    const outcome = (event) => (takenUp ? { ...event, replaces: again.replaces } : event);
     emit({ phase, status: 'start', label, n: myN, total });
     try {
       const out = await fn();
-      emit({ phase, status: 'ok', label, n: myN, total });
+      emit(outcome({ phase, status: 'ok', label, n: myN, total }));
       return out;
     } catch (err) {
       // Idempotency escape hatch: a create that fails only because the component already
@@ -1769,12 +1775,12 @@ function makeRunner({ emit, total, throttle }) {
       // collision: an environment that does not declare a platform member cannot host the artifact
       // at all, and labelling that "(exists)" would tell the operator the exact opposite of what
       // happened. Boolean callers are unaffected.
-      const why = skipIf && skipIf(err);
+      const why = skipIf && skipIf(err, myN);
       if (why) {
-        emit({ phase, status: 'skip', label: `${label} (${typeof why === 'string' ? why : 'exists'})`, n: myN, total });
+        emit(outcome({ phase, status: 'skip', label: `${label} (${typeof why === 'string' ? why : 'exists'})`, n: myN, total }));
         return undefined;
       }
-      emit({ phase, status: 'error', label, n: myN, total, detail: String((err && err.message) || err) });
+      emit(outcome({ phase, status: 'error', label, n: myN, total, detail: String((err && err.message) || err) }));
       throw new BuildHalt(`${phase} failed: ${(err && err.message) || err}${operatorRemedy(err)}`, { phase, code: (err && err.code) || 'sdk-error', recoverable, cause: err, retry: retryPolicyFor(err) });
     }
   };
@@ -2190,14 +2196,15 @@ async function applyStatusReasons({ sdk, provision, runner, warn }, { entity, lo
       result.statusReasonValues[logical][sr.label] = { value: typeof value === 'number' ? value : pinned, stateCode };
     }, {
       recoverable: true,
-      skipIf: (err) => {
+      skipIf: (err, step) => {
         if (isAlreadyExists(err, ALREADY_EXISTS_CODES.statusReason)) return true;
         // A table this attempt created (`window`): the insert refused with the table's lag is not sent again here, and its options are not read
-        // here either — that read carries labels. It is queued for the end of the phase (drainLagStatuses); the step is a skip that says so.
+        // here either — that read carries labels. It is queued for the end of the phase (drainLagStatuses), with the number of its step, which
+        // the drain takes up again; the step is a skip that says so.
         const code = window ? lagCodeOf(err) : null;
         if (!code) return false;
         sayLagOnce(window, `status reason ${entity.schemaName}: ${sr.label}`, code);
-        window.lag.statuses.push({ window, entity, logical, languageCode, sr, stateCode, pinned, original: err, code });
+        window.lag.statuses.push({ window, entity, logical, languageCode, sr, stateCode, pinned, original: err, code, step });
         return LAG_SKIP;
       },
     });
@@ -2211,7 +2218,8 @@ function statusOptionIs(o, { pinned, stateCode, label, color, languageCode }) {
 }
 
 // The status reasons a table this attempt created refused with its lag (applyStatusReasons), after every labelled create of the phase: for each,
-// one narrated step that reads the table's status options and acts on what the read proves —
+// the step its insert was deferred under, taken up again — it keeps that step's number, so the phase's steps stay within the plan's total — which
+// reads the table's status options and acts on what the read proves —
 //   - the pinned value there, with the declared state, label and colour: adopted, nothing sent;
 //   - the pinned value there with another state, label or a declared colour it does not have: the original refusal, and nothing is sent, adopted
 //     or updated — that option is not this reason;
@@ -2226,7 +2234,7 @@ function statusOptionIs(o, { pinned, stateCode, label, color, languageCode }) {
 // See: https://learn.microsoft.com/en-us/power-apps/developer/data-platform/webapi/reference/statusoptionmetadata
 async function drainLagStatuses({ sdk, runner, warn }, lag, result) {
   for (const queued of lag.statuses.splice(0)) {
-    const { window, entity, logical, languageCode, sr, stateCode, pinned, original, code } = queued;
+    const { window, entity, logical, languageCode, sr, stateCode, pinned, original, code, step } = queued;
     await runner.run('data-model', `status reason ${entity.schemaName}: ${sr.label} (retried after the other schema creates)`, async () => {
       let resends = 0;
       for (let waits = 0; ;) {
@@ -2261,7 +2269,8 @@ async function drainLagStatuses({ sdk, runner, warn }, lag, result) {
           if (!lagCodeOf(again)) throw again;
         }
       }
-    }, { recoverable: true, skipIf: (err) => isAlreadyExists(err, ALREADY_EXISTS_CODES.statusReason) });
+    // The same step as the insert the lag deferred — not one more: it keeps that step's number, and its outcome replaces the deferral's skip.
+    }, { recoverable: true, skipIf: (err) => isAlreadyExists(err, ALREADY_EXISTS_CODES.statusReason), again: { n: step, replaces: 'skip' } });
   }
 }
 

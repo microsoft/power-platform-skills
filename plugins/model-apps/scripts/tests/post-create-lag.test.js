@@ -20,7 +20,7 @@ const { createAzHttpClient } = require('../lib/sdk-http-client.js');
 const { createMakerSdk, createNodeWorkspaceStorage } = require('../lib/maker-sdk.js');
 const { makeRunner, provisionDataModel, provisionSolution, BuildHalt } = require('../lib/entity-provision.js');
 const { serviceCodeOf, retryPolicyFor } = require('../lib/retry-policy.js');
-const { isTransientHalt } = require('../build-model-app.js');
+const { isTransientHalt, buildModelApp } = require('../build-model-app.js');
 const { appFolder, command, settle } = require('./helpers/build-command-harness.js');
 
 const SOLUTION = 'ContosoLag';
@@ -584,6 +584,45 @@ test('a read of the status reasons proves the reason absent only when every opti
     assert.ok(run.wire.indexOf(inserts[1]) > run.wire.indexOf(reads[1]), `${what}: after the read that proved it absent`);
     assert.ok(!run.warnings.some((w) => /then found/.test(w)), `${what}: nothing adopted`);
   }
+});
+
+test('the status reason taken up again at the end of the phase keeps the number it was deferred under: every step is numbered within the total, and the summary counts that step once, by the outcome it ended with', async () => {
+  const spec = lagSpec([ticket({ statusReasons: [{ label: 'In Review', state: 'Active' }] })]);
+  // The phase over the fake environment as the command runs it — its steps numbered against `total` and printed by the command's own printer
+  // (buildModelApp's), which also prints the summary.
+  const build = async (env, total) => {
+    const lines = [];
+    const r = await buildModelApp(spec, { apply: true, workspaceDir: makeTempDir('post-create-lag-steps-') }, {
+      log: (m) => lines.push(String(m)),
+      runBuild: async (s, o) => {
+        await provisionDataModel({
+          sdk: env.sdk, provision: env.sdk, runner: makeRunner({ emit: o.emit, total }), spec: s, apply: true, preResolvedLanguageCode: 1033,
+          provisionedLanguages: async () => [1033], sleep: async () => {}, now: () => 0, random: () => 0, warn: () => {},
+        });
+        return { ok: true, dryRun: false, created: {} };
+      },
+    });
+    assert.strictEqual(r.ok, true, JSON.stringify(r.errors));
+    const stepLines = lines.filter((l) => /^ {2}\[\d+\/\d+\] /.test(l));
+    return { stepLines, numbers: stepLines.map((l) => Number(/^ {2}\[(\d+)\//.exec(l)[1])), summary: lines.find((l) => l.includes('build complete')) };
+  };
+  // The phase with nothing refused: the steps the plan counts for it.
+  const plain = await build(await lagEnv(), 0);
+  const total = plain.stepLines.length;
+  // The same phase on a new environment whose platform refuses the status reason's first insert with the table's lag.
+  const env = await lagEnv();
+  env.fault('POST', isInsert, (req, n) => (n === 1 ? refused('0x80090457', NOT_THERE) : undefined));
+  const lag = await build(env, total);
+  const deferred = lag.stepLines.find((l) => l.includes('status reason contoso_ticket: In Review (refused just after the table was created'));
+  const retried = lag.stepLines.find((l) => l.includes('status reason contoso_ticket: In Review (retried after the other schema creates)'));
+  assert.ok(deferred && retried, lag.stepLines.join('\n'));
+  const numberOf = (line) => /^ {2}\[(\d+\/\d+)\]/.exec(line)[1];
+  assert.strictEqual(numberOf(retried), numberOf(deferred), 'the retried step keeps the number it was deferred under');
+  assert.ok(lag.numbers.every((n) => n >= 1 && n <= total), `every step within the total ${total}: ${lag.numbers}`);
+  assert.deepStrictEqual([...new Set(lag.numbers)].sort((a, b) => a - b), Array.from({ length: total }, (_, i) => i + 1), 'each step of the plan, once');
+  assert.ok(lag.stepLines.every((l) => l.includes(`/${total}] `)), 'against the plan\'s total');
+  assert.strictEqual(lag.summary, plain.summary, 'the summary counts the status reason once, as created — as when nothing was refused');
+  assert.ok(retried.startsWith(`  [${numberOf(deferred)}] ✓ status reason contoso_ticket: In Review (retried after the other schema creates)`), retried);
 });
 
 // --- one budget per table ----------------------------------------------------------------------------------------------------------------------------------
