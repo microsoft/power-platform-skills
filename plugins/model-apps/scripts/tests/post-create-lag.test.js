@@ -8,7 +8,7 @@
 // test names — the request-level fault a live check injects — so the environment holds exactly what it would after a real refusal. The clock, the
 // waits and the jitter are the phase's seams: a wait records its length and moves the clock, and nothing sleeps.
 //
-// What is held: a refused create is sent again only after a read PROVES it absent, within the table's budget (20 s of the time the check itself
+// What is held: a refused create is sent again only after a read PROVES it absent, within the table's budget (60 s of the time the check itself
 // waits, 8 reads, 4 resends of one create, 1 of the change set); a create the read shows is adopted; a read that proves nothing is read again; a
 // budget spent stops the build with the original refusal and a halt that says the build may be run again — said only by the halt, never by the
 // error the step reports; and nothing changes for a table that existed, for the other refusals, or for a build the lag never touches.
@@ -193,9 +193,9 @@ test('the code of a refused change set is read from its first part: a part that 
 test('a change set refused with the lag whose reads never prove anything stops the build at the end of its budget — no column is sent on its own, the first missing one stops it, and the halt says the build may be run again', async () => {
   const env = await lagEnv();
   env.fault('POST', isBatch, () => batchRefused({ code: '0x80040216', message: UNEXPECTED }));
-  // Every read answers that the table is not there yet; one of them takes time of its own (a slow answer), with no wait around it.
+  // Every read answers that the table is not there yet; one of them takes time of its own (a slow answer, 33 s), with no wait around it.
   const clk = clock();
-  env.fault('GET', isProbe, (req, n) => { if (n === 2) clk.advance(3000); return odata(404, { code: '0x80060888', message: 'Resource not found for the segment.' }); });
+  env.fault('GET', isProbe, (req, n) => { if (n === 2) clk.advance(33000); return odata(404, { code: '0x80060888', message: 'Resource not found for the segment.' }); });
   const run = await phase(env, lagSpec(), { clk });
   const halt = haltOf(run);
   assert.strictEqual(posts(run, isBatch).length, 1, 'the change set is not sent again');
@@ -203,7 +203,8 @@ test('a change set refused with the lag whose reads never prove anything stops t
   assert.deepStrictEqual(steps(run, 'column contoso_ticket.').map((e) => `${e.label} ${e.status}`), ['column contoso_ticket.contoso_title (Text) error'], 'the first column the check did not confirm stops the phase');
   assert.ok(halt.message.endsWith(SUFFIX), halt.message);
   assert.strictEqual(halt.retry, 'never', 'a 400 is final: the build does not run again by itself');
-  assert.ok(run.clk.now() - 1000000 >= 20000 - 8000, 'the budget was spent');
+  assert.ok(run.clk.now() - 1000000 >= 60000 - 8000, 'the budget was spent: the next wait would have run past it');
+  assert.strictEqual(probes(run).length, 6, 'six reads — the slow one among them — and no seventh: the time, not the reads\' cap, ended it');
 });
 
 test('a read that shows some columns and not the table\'s own name column proves nothing of the others: none of them is sent until a read proves it absent — and only while the budget has room', async () => {
@@ -252,11 +253,11 @@ test('a proof of absence that comes when the budget is spent sends nothing: not 
   const A = 'contoso_title';
   const cases = [
     // The read that proves every column absent takes the rest of the time.
-    ['the proof comes on the read that spends the time', (clk) => (req, n) => (n < 2 ? odata(404, { code: '0x80060888', message: 'not yet' }) : (clk.advance(20000), list([sentinel])))],
+    ['the proof comes on the read that spends the time', (clk) => (req, n) => (n < 2 ? odata(404, { code: '0x80060888', message: 'not yet' }) : (clk.advance(61000), list([sentinel])))],
     // Eight reads that prove nothing but the last: the eighth is the last the budget has, with time left.
     ['the proof comes on the eighth read', () => (req, n) => (n < 8 ? list([]) : list([sentinel]))],
     // A found, B proved absent, on the read that spends the time.
-    ['a part found and the rest proved absent on the read that spends the time', (clk) => (req, n) => (n < 2 ? odata(404, { code: '0x80060888', message: 'not yet' }) : (clk.advance(20000), list([sentinel, { LogicalName: A, MetadataId: '11111111-2222-4333-8444-555555555555' }])))],
+    ['a part found and the rest proved absent on the read that spends the time', (clk) => (req, n) => (n < 2 ? odata(404, { code: '0x80060888', message: 'not yet' }) : (clk.advance(61000), list([sentinel, { LogicalName: A, MetadataId: '11111111-2222-4333-8444-555555555555' }])))],
   ];
   for (const [what, reads] of cases) {
     const env = await lagEnv();
@@ -288,7 +289,7 @@ test('the columns of a refused change set that a read proved absent are created 
     const clk = clock();
     lagBatch(env);
     env.fault('POST', columnPost('contoso_ticket', 'contoso_title'), async (req, n) => (n === 1 ? (await env.through(req), refused('0x80040216')) : undefined));
-    env.fault('GET', isProbe, (req, n) => { if (n === 3) clk.advance(19000); });
+    env.fault('GET', isProbe, (req, n) => { if (n === 3) clk.advance(59000); });
     const run = await phase(env, lagSpec(), { clk });
     changeSetHalt(run, 'the time');
     assert.strictEqual(posts(run, columnPost('contoso_ticket', 'contoso_code')).length, 0, 'the time: the second column is never sent');
@@ -308,12 +309,12 @@ test('the columns of a refused change set that a read proved absent are created 
     assert.deepStrictEqual(titleSteps(run), stopped);
     assert.strictEqual(probes(run).length, 8, 'eight reads, and no ninth');
   }
-  // (3) The creates: they are the check's own sends, and their time is the budget's. The first read takes 17 s and the first column's create 2 s.
+  // (3) The creates: they are the check's own sends, and their time is the budget's. The first read takes 57 s and the first column's create 2 s.
   {
     const env = await lagEnv();
     const clk = clock();
     lagBatch(env);
-    env.fault('GET', isProbe, (req, n) => { if (n === 1) clk.advance(17000); });
+    env.fault('GET', isProbe, (req, n) => { if (n === 1) clk.advance(57000); });
     env.fault('POST', columnPost('contoso_ticket', 'contoso_title'), () => { clk.advance(2000); });
     const run = await phase(env, lagSpec(), { clk });
     changeSetHalt(run, 'the creates');
@@ -394,8 +395,8 @@ test('a column whose reads answer 404 until the budget is spent is not sent agai
   assert.strictEqual(halt.retry, 'never', 'the original refusal decides: a 400 is final');
   assert.strictEqual(retryPolicyFor(halt.cause), 'never');
   assert.strictEqual(isTransientHalt(halt), false);
-  assert.deepStrictEqual(run.clk.waits, [1000, 2000, 4000, 8000], 'the reads were spaced, and the next wait would have run past the budget');
-  assert.strictEqual(probes(run).length, 5);
+  assert.deepStrictEqual(run.clk.waits, [1000, 2000, 4000, 8000, 8000, 8000, 8000], 'the reads were spaced — 1, 2, 4 and then 8 s — until the eighth, the last the budget allows');
+  assert.strictEqual(probes(run).length, 8);
 });
 
 test('a column whose reads prove it absent, refused with the lag every time, is sent again four times and then stops the build — not a skip', async () => {
@@ -587,23 +588,45 @@ test('a read of the status reasons proves the reason absent only when every opti
 
 // --- one budget per table ----------------------------------------------------------------------------------------------------------------------------------
 
+test('one table\'s budget has room for the recoveries a first build meets on it — its change set\'s and a File column\'s, whose resends take 8 s and 25 s, as measured live — and still reads and recovers its status reason at the end of the phase', async () => {
+  const env = await lagEnv();
+  const clk = clock();
+  const fileColumn = { schemaName: 'contoso_doc', displayName: 'Document', type: 'File', maxSizeKb: 1024 };
+  // The change set is refused once; sent again, it takes 8 s and commits.
+  env.fault('POST', isBatch, (req, n) => (n === 1 ? batchRefused({ code: '0x80040216', message: UNEXPECTED }) : (clk.advance(8000), undefined)));
+  // The File column, created on its own, is refused once; sent again, it takes 25 s and is created.
+  env.fault('POST', columnPost('contoso_ticket', 'contoso_doc'), (req, n) => (n === 1 ? refused('0x80040216') : (clk.advance(25000), undefined)));
+  // The status reason's insert is refused once, as the platform answers one for a table it has just created.
+  env.fault('POST', isInsert, (req, n) => (n === 1 ? refused('0x80090457', NOT_THERE) : undefined));
+  const run = await phase(env, lagSpec([ticket({ columns: [...ticket().columns, fileColumn], statusReasons: [{ label: 'In Review', state: 'Active' }] })]), { clk });
+  assert.ifError(run.error);
+  assert.strictEqual(posts(run, isBatch).length, 2, 'the change set was sent again once');
+  assert.strictEqual(posts(run, columnPost('contoso_ticket', 'contoso_doc')).length, 2, 'the File column was sent again once');
+  assert.strictEqual(run.wire.filter((r) => r.method === 'GET' && STATUS_READ.test(r.path)).length, 1, 'the status reason was read at the end of the phase');
+  assert.strictEqual(posts(run, isInsert).length, 2, 'and inserted again once');
+  assert.deepStrictEqual(steps(run, 'status reason contoso_ticket: In Review').map((e) => e.status), ['skip', 'ok']);
+  assert.ok(run.clk.now() - 1000000 > 35000, `control: the two recoveries spent more than 35 s of the table's budget (${run.clk.now() - 1000000} ms)`);
+});
+
 test('one table\'s change set, its columns on their own and its status reasons share one budget; another table has its own; and a throttle the HTTP client waits out is not one of the check\'s resends', async () => {
-  // The change set's check spends 15 seconds (three reads that prove nothing, then a proof and the resend that commits it).
-  const spendOnBatch = (env) => {
+  // The change set's check spends 55 seconds: three reads that prove nothing — the first of which takes 40 s — and waits of 1, 2 and 4 s between
+  // them, then a proof, a wait of 8 s and the resend that commits it.
+  const spendOnBatch = (env, clk) => {
     env.fault('POST', isBatch, (req, n) => (n === 1 ? batchRefused({ code: '0x80040216', message: UNEXPECTED }) : undefined));
     let reads = 0;
-    env.fault('GET', isProbe, () => { reads += 1; return reads <= 3 ? odata(404, { code: '0x80060888', message: 'not yet' }) : undefined; });
+    env.fault('GET', isProbe, () => { reads += 1; if (reads === 1) clk.advance(40000); return reads <= 3 ? odata(404, { code: '0x80060888', message: 'not yet' }) : undefined; });
   };
   const fileColumn = { schemaName: 'contoso_doc', displayName: 'Document', type: 'File', maxSizeKb: 1024 };
   // The same table's File column, created on its own after the change set and refused with the lag every time, reads only what is left: 5 seconds —
   // two reads, after waits of 1 s and 2 s; the next wait (4 s) would run past the budget.
   {
     const env = await lagEnv();
-    spendOnBatch(env);
+    const clk = clock();
+    spendOnBatch(env, clk);
     let docRefused = false;
     env.fault('POST', columnPost('contoso_ticket', 'contoso_doc'), () => { docRefused = true; return refused('0x80040216'); });
     env.fault('GET', isProbe, () => (docRefused ? odata(404, { code: '0x80060888', message: 'not yet' }) : undefined));
-    const run = await phase(env, lagSpec([ticket({ columns: [...ticket().columns, fileColumn] })]));
+    const run = await phase(env, lagSpec([ticket({ columns: [...ticket().columns, fileColumn] })]), { clk });
     const halt = haltOf(run);
     assert.ok(halt.message.endsWith(SUFFIX));
     assert.deepStrictEqual(run.clk.waits, [1000, 2000, 4000, 8000, 1000, 2000], 'the File column\'s check waited only what the change set\'s left');
@@ -611,21 +634,23 @@ test('one table\'s change set, its columns on their own and its status reasons s
   // Another table's File column has a budget of its own: four waits before it stops.
   {
     const env = await lagEnv();
-    spendOnBatch(env);
+    const clk = clock();
+    spendOnBatch(env, clk);
     const other = { schemaName: 'contoso_note', displayName: 'Note', pluralName: 'Notes', primaryAttribute: { schemaName: 'contoso_subject', displayName: 'Subject' }, columns: [fileColumn] };
     env.fault('POST', columnPost('contoso_note', 'contoso_doc'), () => refused('0x80040216'));
-    const run = await phase(env, lagSpec([ticket(), other]));
+    const run = await phase(env, lagSpec([ticket(), other]), { clk });
     const halt = haltOf(run);
     assert.ok(halt.message.endsWith(SUFFIX));
     assert.deepStrictEqual(run.clk.waits, [1000, 2000, 4000, 8000, 1000, 2000, 4000, 8000], 'the other table waited a whole budget of its own');
   }
-  // The status reason of the table whose change set spent 15 seconds: its read at the end of the phase has the same 5 seconds left.
+  // The status reason of the table whose change set spent 55 seconds: its read at the end of the phase has the same 5 seconds left.
   {
     const env = await lagEnv();
-    spendOnBatch(env);
+    const clk = clock();
+    spendOnBatch(env, clk);
     env.fault('POST', isInsert, () => refused('0x80090457', NOT_THERE));
     env.fault('GET', (w) => STATUS_READ.test(w), () => odata(404, { code: '0x80060888', message: 'not yet' }));
-    const run = await phase(env, lagSpec([ticket({ statusReasons: [{ label: 'In Review', state: 'Active' }] })]));
+    const run = await phase(env, lagSpec([ticket({ statusReasons: [{ label: 'In Review', state: 'Active' }] })]), { clk });
     haltOf(run);
     assert.strictEqual(run.wire.filter((r) => r.method === 'GET' && STATUS_READ.test(r.path)).length, 3, 'three reads of the status reasons: what the shared budget had left room for');
   }

@@ -2204,7 +2204,7 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   status-reason insert for that table, refused with HTTP 400 `0x80040216` or `0x80090457`, is sent again only after a read made
   after the refusal proves it absent — a list that holds the table's primary name column (or a stock status reason), every entry
   of which names a column with its id (or carries its option value once), and not this one; a column the list names without its
-  id proves nothing and is read again, never created again — within the table's budget (20 seconds of the check's own reads, waits
+  id proves nothing and is read again, never created again — within the table's budget (60 seconds of the check's own reads, waits
   and sends, the one-by-one creates of the change set's proved-absent columns included; 8 reads; 4 resends of one create, 1 of the
   change set). A create the read shows is adopted, never sent again; a read that fails stops the build with that failure; a status
   reason is read and sent again only after every other labelled create of the phase. A spent check still stops the build — at the

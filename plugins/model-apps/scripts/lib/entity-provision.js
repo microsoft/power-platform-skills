@@ -982,16 +982,20 @@ async function afterRefusedBatch(err, { provision, table, tableSchemaName, colum
 //     value). A 404, a 400 `0x80090457`, an answer that is no list, one without the stock entry, or one with an entry that cannot be told apart
 //     — the thing itself named without its id, say — proves nothing and is read again; any other failure of the read stops the build with that
 //     failure; a column or a reason the read shows is ADOPTED, never sent again;
-//   - the table's budget still has room: 20 seconds of the time spent waiting for those reads, the waits between them and the check's own sends
+//   - the table's budget still has room: 60 seconds of the time spent waiting for those reads, the waits between them and the check's own sends
 //     — the resends, and the one-by-one creates of the change set's columns that a read proved absent (time spent elsewhere is not counted) —
 //     at most 8 reads, at most 4 resends of one create or insert and 1 of the change set. A budget that runs out with the create still missing —
 //     proved absent or not — stops the build with the original refusal, before any further POST, and says the build may be run again.
+//     Why 60: the sends are charged, and measured live on that environment one resend took 7.9–47.2 s for a change set and 20.7–26.5 s for a
+//     File column. With 20 s, the two recoveries a first build met on one new table (its change set's and a File column's) spent 36.7 s, and
+//     the status reason queued for the same table — which the platform had in fact committed — was never read: the build stopped, and only its
+//     re-run went on. A minute holds two such recoveries and the read of a third; a lag that outlasts it still stops the build, as before.
 // The read of a status reason carries labels, and a label-bearing read ahead of a labelled create keeps only the base language of that create,
 // so a refused insert is not read in the table loop: it is queued, and read and sent again after every other labelled create of the phase
 // (drainLagStatuses). Nothing here deletes or updates anything, and no wait is a fire-and-forget: every read, wait and resend is awaited.
 const LAG_CODES = Object.freeze(new Set(['0x80040216', '0x80090457']));
 const LAG_VISIBILITY_CODE = '0x80090457';
-const LAG_ADMISSION_MS = 20000;
+const LAG_ADMISSION_MS = 60000;
 const LAG_PROBES = 8;
 const LAG_SINGLE_RESENDS = 4;
 const LAG_DELAYS_MS = Object.freeze([1000, 2000, 4000, 8000]);

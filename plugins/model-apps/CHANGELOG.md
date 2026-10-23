@@ -53,7 +53,7 @@ the bytes the plugin's file writers are given, and the genpage evals grade 17 mo
 - **A column or status reason that Dataverse refuses moments after its new table's create no longer stops the first build.** On a
   Spanish environment such a create was refused with HTTP 400 `0x80040216` ("An unexpected error occurred.") or `0x80090457` ("… does
   not exist"), and the next run succeeded. For a table the run has just created, the build now reads whether the column or status
-  reason is there and adopts it when it is, and sends it again only once a usable read proves it missing, within about 20 seconds per
+  reason is there and adopts it when it is, and sends it again only once a usable read proves it missing, within about a minute per
   table; a status reason refused this way is added at the end of the data-model step. Any other refusal, and a refusal for a table
   that already existed, is handled as before; a check that runs out stops the build with the original refusal and says to run the
   build again.
