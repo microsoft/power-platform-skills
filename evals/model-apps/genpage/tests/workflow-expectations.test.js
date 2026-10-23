@@ -107,6 +107,34 @@ test('eval 3: an app with no pages is reported to the user and the edit flow sto
   assertFail(grade(ZERO_PAGES, { ...base, workflowLog: base.workflowLog.replace(/\bstop(?:s|ped)?\b/gi, 'went on') }), /does not record that the edit flow stopped/);
 });
 
+// The flow stops at the FIRST listing that came back empty; another read after it cannot take back what the
+// run did in between, and a listing that returns pages later does not make going on legitimate.
+test('eval 3: a later page listing does not hide what the run did after the app listed no pages', () => {
+  const base = committed(NO_PAGES);
+  const listing = base.events.find((e) => e.id === 'list-pages');
+  const planner = { id: 'late-planner', command: 'Task genpage-edit-planner (intent, app/page ids)', result: { action: 'plan' } };
+  const again = { ...structuredClone(listing), id: 'list-pages-again' };
+  const relisted = { ...base, events: [...base.events, planner, again] };
+  assertFail(grade(ZERO_PAGES, relisted), /went on to download, plan, edit or upload after the app listed no pages/);
+  assert.match(refusalProblems(relisted).join('\n'), /went on to download, plan, edit or upload after the app listed no pages/);
+  // A second read on its own goes on with nothing, and the user may be told at it.
+  assertPass(grade(ZERO_PAGES, { ...base, events: [...base.events, again] }));
+  const toldLater = { ...base, events: [...base.events.map((e) => (e === listing ? (({ userMessage, ...rest }) => rest)(e) : e)), again] };
+  assertPass(grade(ZERO_PAGES, toldLater));
+  // In a full edit run, an empty listing of another app before the one it edits is still a stop it went past.
+  const edit = committed(E3);
+  const pages = edit.events.find((e) => e.id === 'list-pages');
+  const otherApp = { ...structuredClone(pages), id: 'list-other-app', command: pages.command.replace('11111111-2222-3333-4444-555555555555', '44444444-5555-6666-7777-888888888888'), result: { ...pages.result, appId: '44444444-5555-6666-7777-888888888888', count: 0, pages: [] }, userMessage: 'This app has no generative pages to edit. Did you mean to create a new page?' };
+  const at = edit.events.indexOf(pages);
+  assertFail(grade(ZERO_PAGES, { ...edit, events: [...edit.events.slice(0, at), otherApp, ...edit.events.slice(at)] }), /went on to download, plan, edit or upload after the app listed no pages/);
+  // The listing the refusal stopped at is the one whose app is graded: a later listing of an offered app does not
+  // make an earlier listing of an app apps.js list never returned right.
+  const guessed = withEvent(base, 'list-pages', (e) => ({ ...e, command: e.command.replace('11111111-2222-3333-4444-555555555555', '99999999-2222-3333-4444-555555555555') }));
+  const guessedThenOffered = { ...guessed, events: [...guessed.events, again] };
+  assertFail(grade(LISTED_FOR_APP, guessedThenOffered), /genpage\.js list ran for app 99999999-2222-3333-4444-555555555555, which apps\.js list did not return/);
+  assertFail(grade(APPS_PRESENTED, guessedThenOffered), /the app the run continued with \(99999999-2222-3333-4444-555555555555\) is not in the listing/);
+});
+
 test('eval 3: a run that stopped at an app with no pages is graded as that refusal, not as a broken edit', () => {
   const base = committed(NO_PAGES);
   assert.deepEqual(refusalProblems(base), []);

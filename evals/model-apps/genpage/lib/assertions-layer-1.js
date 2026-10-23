@@ -16,7 +16,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { pageFileProblems } = require('../../../../plugins/model-apps/scripts/lib/page-file-targets.js');
-const { currentContract, workflowCalls, isAuth, isDiscovery, authGateProblems, discoveryProblems, refusalProblems, emptyPageListingProblems, resultObject, isGeneration, isUpload, isMutation } = require('./workflow-evidence.js');
+const { currentContract, workflowCalls, isAuth, isDiscovery, authGateProblems, discoveryProblems, refusalProblems, emptyPageListingProblems, isEmptyPageListing, resultObject, isGeneration, isUpload, isMutation } = require('./workflow-evidence.js');
 const { gradeEvidence, isGuid, fileName, artifactText, commandInfo } = require('./evidence-utils.js');
 const { navigationProblems, navTargets } = require('./navigation-contract.js');
 const { workerProblems } = require('./worker-contract.js');
@@ -79,6 +79,13 @@ function isEditFlowFixture(fixture) {
 // writes no plan of either kind, and refusalProblems grades the stop itself.
 function noPagesRefusal(fixture) {
   return fixture?.manifest?.expectedOutcome === 'refused' && fixture.manifest.refusal?.stage === 'edit-pages';
+}
+
+// The page listing a run refused at Edit Phase 1b stopped at: its first listing that came back empty (the
+// same stop emptyPageListingProblems grades), else its last listing.
+function stopListing(fixture) {
+  const listings = evidence.commandCalls(fixture, evidence.GENPAGE_LIST);
+  return listings.find((entry) => isEmptyPageListing(resultObject(entry.call))) || listings.at(-1);
 }
 
 function beforePlanningRefusal(fixture) {
@@ -2547,9 +2554,9 @@ PHASE_EXPECTATIONS.set(
     const download = commandCalls(fixture, evidence.GENPAGE_DOWNLOAD)[0];
     if (!download) {
       if (!noPagesRefusal(fixture)) return fail('genpage.js download was not run, so no page was selected');
-      // The run stopped at this listing (the app has no pages), so the listing is what is graded: it must
+      // The run stopped at an empty listing (the app has no pages), so that listing is what is graded: it must
       // be of an app the apps.js list output returned, run after that discovery.
-      const list = commandCalls(fixture, GENPAGE_LIST).at(-1);
+      const list = stopListing(fixture);
       if (!list) return fail('genpage.js list --app-id <selected> was not run');
       const listedApp = String(list.flags['app-id'] || '').toLowerCase();
       const apps = commandCalls(fixture, LIST_APPS).at(-1);
@@ -2723,9 +2730,9 @@ const pageFilesOf = (plan) => pageRowsOf(plan).map((r) => r.file);
 PHASE_EXPECTATIONS.set(
   'Edit Phase 1a: Apps are presented to the user via AskUserQuestion using the actual app name and app-id GUID from the apps.js list output',
   // The app the run went on with: the one it downloaded from, or — for a run that stopped because that app
-  // listed no pages — the one whose pages it listed.
+  // listed no pages — the one whose empty listing it stopped at.
   ({ fixture }) => resultOf(presentedFromListingProblems(fixture, { listing: LIST_APPS, noun: 'app',
-    selected: downloadTarget(fixture)?.app ?? (String(commandCalls(fixture, GENPAGE_LIST).at(-1)?.flags['app-id'] || '').toLowerCase() || undefined) }))
+    selected: downloadTarget(fixture)?.app ?? (String(stopListing(fixture)?.flags['app-id'] || '').toLowerCase() || undefined) }))
 );
 
 PHASE_EXPECTATIONS.set(
@@ -3482,9 +3489,8 @@ PHASE_EXPECTATIONS.set(
 PHASE_EXPECTATIONS.set(
   'Edit Phase 1b: If the app has zero genpages, the user is told there are no pages to edit and the flow stops',
   ({ fixture }) => {
-    const listing = commandCalls(fixture, GENPAGE_LIST).at(-1);
-    const result = listing ? resultObject(listing.call) : null;
-    const empty = result?.ok === true && Array.isArray(result.pages) && !result.pages.some((page) => page && page.exists !== false);
+    // Any listing that came back empty puts the run on this branch, wherever it is in the run.
+    const empty = commandCalls(fixture, GENPAGE_LIST).some((listing) => isEmptyPageListing(resultObject(listing.call)));
     if (!empty && !noPagesRefusal(fixture)) return skip('no page listing came back empty in this scenario');
     return resultOf(emptyPageListingProblems(fixture));
   }

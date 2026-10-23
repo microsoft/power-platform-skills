@@ -274,25 +274,35 @@ function discoveryProblems(fixture, { required = false, needsBinding = false } =
 //   { "ok": true, "scope": "app", "appId": "…", "layer": "published", "count": 0, "pages": [] }
 // and an entry whose page is gone (`"exists": false`) is no page to offer, so a listing of only those is empty
 // too. A failed listing (`"ok": false`) is never "no pages" (edit-flow.md: "a failed read is never 'no pages'").
-// What the run must then show: the user was told (the listing's `userMessage` in a current trace, the log's prose
-// in an older one), nothing was downloaded, planned, generated or written after the listing, and the log says the
-// flow stopped. Returns the problems with the run's LAST page listing, empty when that stop is shown.
+function isEmptyPageListing(result) {
+  return Boolean(result) && result.ok === true && Array.isArray(result.pages) && !result.pages.some((page) => page && page.exists !== false);
+}
+
+// What the run must show once a listing came back empty: the user was told (an empty listing's `userMessage`
+// in a current trace, the log's prose in an older one), nothing was downloaded, planned, generated or written
+// after it, and the log says the flow stopped. The flow stops at the FIRST empty listing, so everything after
+// it is graded against that stop: another read later cannot take back what the run did in between. Returns
+// the problems, empty when that stop is shown.
 function emptyPageListingProblems(fixture) {
   // Loaded here, not at the top: expectation-evidence.js builds on this module, so a top-level require would
   // hand it a half-initialized copy of these exports.
   const { GENPAGE_LIST, GENPAGE_DOWNLOAD } = require('./expectation-evidence.js');
   const calls = workflowCalls(fixture);
-  const at = calls.findLastIndex((call) => GENPAGE_LIST.test(call.command));
-  if (at === -1) return ['genpage.js list was not run, so no page listing came back empty'];
-  const listing = resultObject(calls[at]);
-  if (!listing || listing.ok !== true || !Array.isArray(listing.pages)) return ['the page listing did not succeed, and a failed listing is never "no pages"'];
-  if (listing.pages.some((page) => page && page.exists !== false)) return ['the page listing returned pages to edit'];
+  const listings = calls.flatMap((call, at) => (GENPAGE_LIST.test(call.command) ? [{ call, at }] : []));
+  if (!listings.length) return ['genpage.js list was not run, so no page listing came back empty'];
+  const stop = listings.find(({ call }) => isEmptyPageListing(resultObject(call)));
+  if (!stop) {
+    const last = resultObject(listings.at(-1).call);
+    return [last?.ok === true && Array.isArray(last.pages) ? 'the page listing returned pages to edit' : 'the page listing did not succeed, and a failed listing is never "no pages"'];
+  }
   const problems = [];
   const toldNoPages = (text) => typeof text === 'string' && /\bno\b[^.\n]*\bpages?\b/i.test(text);
-  if (currentContract(fixture) ? !toldNoPages(calls[at].userMessage) : !toldNoPages(fixture.workflowLog)) {
-    problems.push('the user was not told the app has no pages to edit');
-  }
-  if (calls.slice(at + 1).some((call) => GENPAGE_DOWNLOAD.test(call.command) || /\bgenpage-edit-planner\b/.test(call.command)
+  // Told at an empty listing: the stop itself, or a read after it.
+  const told = currentContract(fixture)
+    ? listings.some(({ call }) => isEmptyPageListing(resultObject(call)) && toldNoPages(call.userMessage))
+    : toldNoPages(fixture.workflowLog);
+  if (!told) problems.push('the user was not told the app has no pages to edit');
+  if (calls.slice(stop.at + 1).some((call) => GENPAGE_DOWNLOAD.test(call.command) || /\bgenpage-edit-planner\b/.test(call.command)
     || isGeneration(call.command) || isMutation(call))) {
     problems.push('the run went on to download, plan, edit or upload after the app listed no pages');
   }
@@ -328,5 +338,5 @@ function refusalProblems(fixture) {
 module.exports = {
   currentContract, isObject, isUpload, isAuth, isDiscovery, isMutation, isGeneration,
   resultObject, workflowCalls, authGateProblems, discoveryProblems, refusalProblems, emptyPageListingProblems,
-  unassociatedCallProblems,
+  isEmptyPageListing, unassociatedCallProblems,
 };
