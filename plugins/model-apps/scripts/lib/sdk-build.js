@@ -3038,7 +3038,8 @@ async function runSdkBuildPhases(spec, opts, owed) {
   if (opts.changedOnly && opts.changedOnly.resolvedAppId) result.created.app = opts.changedOnly.resolvedAppId;
   const sol = spec.solution;
   // The web resources an earlier run of this build wrote and could not confirm were published (lib/web-resource-records.js), read at first use: the
-  // spec's web resources, the generated app icon and the page manifest are written again by id when they are in it. One per run of the phases, so the
+  // spec's web resources and the generated app icon are written again by id when they are in it, and the page manifest is written again by its id where
+  // its published copy is not what the run wants (kept where it is: persistPageManifest). One per run of the phases, so the
   // build's own re-run of a halt reads what the attempt before it recorded.
   const unconfirmedWebResources = openUnconfirmedWebResources({ workspaceDir: opts.workspaceDir, environment: opts.env, warn: opts.warn });
 
@@ -6899,8 +6900,9 @@ async function runSdkBuildPhases(spec, opts, owed) {
         }
       }
 
-      // A write the SDK could not confirm leaves the manifest's row under the error's id: kept, so that this run's next persist — and the record, the next
-      // run's — writes it again by id rather than creating the name a second time (persistPageManifest).
+      // A write the SDK could not confirm leaves the manifest's row under the error's id: kept, so that this run's next persist writes it again by that id,
+      // and the record gives the next run the id to write it by where its published copy is not what that run wants (where it is, that run keeps it) —
+      // never a second create of the name (persistPageManifest).
       const persistNow = async () => {
         let pr;
         try { pr = await persistPageManifest(provision, spec, keyToId, sol, appUnique, manifestId, lastManifestContent, solutionMembers, unconfirmedWebResources); } catch (e) {

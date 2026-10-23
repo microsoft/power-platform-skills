@@ -12,7 +12,8 @@
 //   2. the build's retry policy for the error: it is judged by the failure it carries, and when it carries none — the read-back differed — it is run again;
 //   3. each site, over the real bundle and the stateful fake of helpers/fake-app-build-org.js (a web resource held in a saved and a published layer, a plain
 //      read answering the published one), with the customization lock refusing the publish: the halt, the row in the solution, the record, the next run —
-//      the build's own re-run and a new invocation — writing the content again by id, and an unchanged rebuild after it sending what it always did.
+//      the build's own re-run and a new invocation — writing the content again by id (the manifest: or keeping a published copy that already holds it),
+//      and an unchanged rebuild after it sending what it always did.
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -580,7 +581,8 @@ test('the generated icon recovers by id inside the build retry loop without crea
 //
 // The pages go through the REAL page backend over the stateful fake of the page service, as in publish-scope-real-bundle.test.js; the manifest is a web
 // resource of the app's fake. The page's identity is the manifest, the page list, and the workspace's creation receipts: what a run after an unconfirmed
-// manifest write does is proven here — it binds the page it created by its receipt, creates no second page, and writes the manifest again by id.
+// manifest write does is proven here — it binds the page it created by its receipt, creates no second page, and writes the manifest again by id where its
+// published copy is not what the run wants, or keeps that copy where it is.
 const { makeGenpageSdk } = require('../lib/genpage-sdk.js');
 const { FakeGenPageServer, ACCOUNT_TABLE } = require('./helpers/fake-genpage-server.js');
 const PAGE_CODE = "import * as React from 'react';\nexport default function Overview() { return <div>Overview</div>; }\n";
