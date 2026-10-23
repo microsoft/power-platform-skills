@@ -609,3 +609,47 @@ test('a write the stream REFUSES at once — an encoding it does not know, a chu
   eager.write(head, () => eager.write(tail));
   assert.equal(chunks.join(''), expected);
 });
+test('a write the stream REFUSES after a write made inside it was refused too leaves the memory of the last write the stream took: the write after both is what it would have been, JSON again; a write taken inside a refused one keeps the memory it made', () => {
+  const token = SPLIT_ESCAPES[0].token;
+  const head = `{"error":"${'A'.repeat(24)}\\`;
+  const tail = `/${'B'.repeat(27)}"}`;
+  const guarded = (write) => {
+    const stream = { chunks: [], write };
+    guardStream(stream, (chunk, options) => redactTokens(chunk, [token], { edges: true, ...options }));
+    return stream;
+  };
+  const control = guarded(function write(chunk) { this.chunks.push(chunk); return true; });
+  control.write(head);
+  control.write(tail);
+  const expected = control.chunks.join('');
+  assert.deepEqual(JSON.parse(expected), { error: `${MARK}/${MARK}` });
+  // The stream calls the callback of a write at once, the callback writes again and that write is refused; then the stream refuses the outer write as well. Neither wrote anything.
+  const outer = new TypeError('refused: the outer write');
+  const inner = new TypeError('refused: the write inside it');
+  const refusing = guarded(function write(chunk, callback) {
+    if (chunk === 'a nested write') throw inner;
+    if (typeof callback === 'function') {
+      assert.throws(() => this.write('a nested write'), (error) => error === inner, 'the write inside it is refused with the stream\'s own error');
+      throw outer;
+    }
+    this.chunks.push(chunk);
+    return true;
+  });
+  refusing.write(head);
+  assert.throws(() => refusing.write('interleaved', () => {}), (error) => error === outer, 'the stream\'s own error');
+  refusing.write(tail);
+  assert.equal(refusing.chunks.join(''), expected, 'the write after both refusals reads on from the last write the stream took');
+  assert.deepEqual(JSON.parse(refusing.chunks.join('')), { error: `${MARK}/${MARK}` });
+  // A write the stream TAKES inside a refused one stands: what it wrote was written, and the memory it made is the one the next write reads on from.
+  const taking = guarded(function write(chunk, callback) {
+    if (typeof callback === 'function') {
+      this.write(head);
+      throw outer;
+    }
+    this.chunks.push(chunk);
+    return true;
+  });
+  assert.throws(() => taking.write('interleaved', () => {}), (error) => error === outer);
+  taking.write(tail);
+  assert.equal(taking.chunks.join(''), expected, 'the write taken inside the refused one is the memory the next write reads on from');
+});

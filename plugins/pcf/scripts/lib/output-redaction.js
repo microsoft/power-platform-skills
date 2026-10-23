@@ -906,13 +906,17 @@ function guardStream(stream, redact = redactWritten) {
     }
     // The memory is this write's before the stream takes it, so that a callback the stream calls at once, and writes from, reads on from it. A write the stream REFUSES — it throws (an encoding it does not know, a
     // chunk that is no text and no bytes, a stream already ended) — wrote nothing, so the memory goes back to what the last written one left, unless a write made inside it has moved it on; the error is the
-    // stream's own. A write that returns false was taken (the stream asks the writer to wait): its memory stands.
+    // stream's own. A write that returns false was taken (the stream asks the writer to wait): its memory stands. A refused write also takes back its own count: a write made inside another one that the
+    // stream refuses as well wrote nothing either, and its count left behind would read, to the outer write, as a write the stream took — the outer one would then keep a memory nothing was written with.
     writes += 1;
     const mine = writes;
     try {
       return write.call(this, given, ...rest);
     } catch (error) {
-      if (writes === mine) open = before;
+      if (writes === mine) {
+        open = before;
+        writes = mine - 1;
+      }
       throw error;
     }
   };
