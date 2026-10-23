@@ -1,0 +1,1 @@
+Job candidates list over the new cr_candidate and cr_jobrequisition tables: a sortable grid of every candidate with the requisition applied for (read through the cr_jobrequisition lookup), an application status badge, the interview score out of 100 and the assigned recruiter. The candidate name opens the Dataverse record; window cache with in-flight de-dupe.

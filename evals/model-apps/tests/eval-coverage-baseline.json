@@ -52,12 +52,6 @@
         "reason": "Gradeable from the page source, but a correct check fails historical fixtures 1-account-card-gallery, 7-job-candidates-new-entities, 11-recruitment-multi-page and 13-contact-localization: each sets its rows in try and calls setLoading(false) in finally, the pattern Rule 14 names as an intermediate render. Rule 14 predates them, so it is real drift; the runners have no expected-failure mark, and skipping historical fixtures would hide it."
       },
       {
-        "runner": "layer-2",
-        "eval": 7,
-        "text": "Phase 5 (Page Builder): Generated code uses ONLY verified column names from RuntimeTypes.ts",
-        "reason": "The column check exists (lib/column-contract.js, the one eval 1 grades with), but the only eval-7 fixture, 7-job-candidates-new-entities, is a historical trace that kept no RuntimeTypes.ts, so there is no schema to check its page's column names against. It grades once an eval-7 fixture keeps the RuntimeTypes.ts its run generated."
-      },
-      {
         "runner": "layer-1",
         "eval": 10,
         "text": "Phase 2b: genpage-entity-builder is only invoked AFTER check-auth returns ok:true",

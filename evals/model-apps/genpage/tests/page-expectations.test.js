@@ -222,6 +222,16 @@ test('evals 1 and 7: every column a dataApi call names is one RuntimeTypes.ts de
   assertSkip(grade(COLUMNS_7, committed('7-job-candidates-new-entities')), /column-name verification requires RuntimeTypes\.ts fixture/);
 });
 
+test('eval 7: the job-candidates run kept the RuntimeTypes.ts it generated, so its page\'s columns are graded', () => {
+  const E7 = '7-job-candidates-verified-columns';
+  const PAGE = 'job-candidates.tsx';
+  assertPass(grade(COLUMNS_7, committed(E7)));
+  assertFail(grade(COLUMNS_7, withPage(E7, PAGE, ["'cr_interviewscore', 'cr_recruiter',", "'cr_score', 'cr_recruiter',"])), /queryTable\('cr_candidate'\) select names cr_score, which RuntimeTypes\.ts does not declare on cr_candidate/);
+  assertFail(grade(COLUMNS_7, withPage(E7, PAGE, ["'_cr_jobrequisition_value'],", "'_cr_requisition_value'],"])), /select names _cr_requisition_value/);
+  assertFail(grade(COLUMNS_7, withPage(E7, PAGE, ["orderBy: 'cr_name asc',", "orderBy: 'cr_fullname asc',"])), /orderBy names cr_fullname/);
+  assertFail(grade(COLUMNS_7, withPage(E7, PAGE, ["dataApi.queryTable('cr_candidate', {", "dataApi.queryTable('cr_candidates', {"])), /reads table cr_candidates, which RuntimeTypes\.ts does not register/);
+});
+
 test('evals 1 and 7: payload keys, annotations and named options are read; another table\'s expand is not', () => {
   const runtimeTypes = committed(E1).runtimeTypes;
   const page = (body) => inline(`const LIST = { select: SELECT, orderBy: 'name asc' };\nconst SELECT = ['accountid', 'name'] as const;\n${body}`, { runtimeTypes });

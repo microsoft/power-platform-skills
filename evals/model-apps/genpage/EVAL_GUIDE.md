@@ -152,7 +152,7 @@ All eval definitions live in `evals.json` alongside this file. The file contains
 - `common_code_assertions`: **21** registered code checks.
 - `evals`: **25** prompt definitions, each with `id`, `tier`, `prompt`, `data`, and per-eval `expectations`.
 
-The `data` field specifies scenario assumptions for a manual capture or constructed fixture. The offline harness does not provide responses to `AskUserQuestion` or verify every recorded answer. The corpus contains **30 fixture directories / 35 top-level TSX files**, representing 25 prompt IDs. IDs **none** have no fixture — every registered prompt is executed.
+The `data` field specifies scenario assumptions for a manual capture or constructed fixture. The offline harness does not provide responses to `AskUserQuestion` or verify every recorded answer. The corpus contains **31 fixture directories / 36 top-level TSX files**, representing 25 prompt IDs. IDs **none** have no fixture — every registered prompt is executed.
 
 ### Enumerating registered and unmatched checks
 
@@ -256,7 +256,7 @@ The suite ships both kinds:
 | 2 | `2-mock-dashboard` | `2-mock-dashboard-real` (historical compatibility replay) |
 | 4 | `4-case-wizard` | — |
 | 5 | — | `5-kanban-task-board` (historical compatibility replay) |
-| 7 | `7-job-candidates-new-entities` | — |
+| 7 | `7-job-candidates-new-entities`, `7-job-candidates-verified-columns` (current, keeps its RuntimeTypes.ts) | — |
 | 11 | `11-recruitment-multi-page` (historical) | `11-recruitment-pages-real` (historical, green) |
 | 13 | `13-contact-localization` | — |
 | 15 | — | `15-support-tickets-real` (historical, green) |
@@ -323,7 +323,7 @@ Exit codes:
 
 ```bash
 node run-layer-1.js --tier smoke    # 7 stored fixtures, 5 prompt definitions
-node run-layer-1.js --tier full     # 18 stored fixtures, 17 prompt definitions
+node run-layer-1.js --tier full     # 19 stored fixtures, 17 prompt definitions
 node run-layer-1.js --tier stress   # 5 stored fixtures, 3 prompt definitions
 ```
 
