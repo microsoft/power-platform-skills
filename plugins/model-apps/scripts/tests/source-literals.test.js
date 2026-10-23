@@ -756,7 +756,8 @@ test('known limit: a generic call with two type arguments in a default value of 
   assert.equal(hasDefaultExport('export default <T,>(p: T): ({ a = (f<T,T>()) }) => T => null as never;\n'), true);
 });
 
-// Known limits, pinned as they are: two rare return types that TypeScript parses and the gate refuses (2.18.0 refused every generic-arrow default export). A binding
+// Known limits, pinned as they are: two rare return types that TypeScript parses and the gate refuses (2.18.0 refused every synchronous generic-arrow default
+// export, and admitted the async forms of both, which are now refused too). A binding
 // pattern's computed key is read as an expression only as far as telling an index signature's or a mapped type's key from one needs, and any group in parentheses counts
 // as an operand: `K in (keyof T)` reads as an expression, so `({ [K in (keyof T)]: boolean })` reads as a function type's parameters, which take the arrow. And a key the
 // reading does not know — one that starts with a regular expression — is taken for no expression: the parentheses around a function type's parameters then read as a

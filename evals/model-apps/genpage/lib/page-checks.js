@@ -366,6 +366,10 @@ function reviewSummaryProblems(content) {
 // (`label={translate('title')}`) is; the same goes for the children of a label element (childrenShowText).
 // A spread (`{...props}`) may carry a label the page does not show, so it is not reported. A hidden input
 // (`type="hidden"`) is no field. Returns null when the page has no form control.
+// Two known limits, left as they are on purpose (this grades eval evidence; it is no gate a page must pass): an
+// empty value that also holds a comment (`{/* hidden */ null}`, `label={/* none */ ''}`) counts as a label, because
+// STATIC_EMPTY is tested on the source with its comments; and a label element whose text is only character references
+// (`&#84;&#105;&#116;&#108;&#101;`) is not counted, because jsxTextRuns reads a character reference as a space.
 const STATIC_EMPTY = /^\s*(?:(['"`])\s*\1|null|undefined|false)\s*$/;
 const names = (attr) => Boolean(attr) && ((attr.kind === 'string' && attr.value.trim() !== '')
   || (attr.kind === 'expression' && attr.value.trim() !== '' && !STATIC_EMPTY.test(attr.value)));

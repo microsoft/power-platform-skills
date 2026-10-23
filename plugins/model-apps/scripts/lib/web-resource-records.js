@@ -1,5 +1,5 @@
 'use strict';
-// The web resources a build WROTE and could not confirm were published, kept in the build's workspace so that the next run writes them again.
+// The web resources a build WROTE and could not confirm were published, kept in the build's workspace so that the next run can recover or confirm them.
 //
 // The bundled SDK writes a web resource, publishes it, and reads its PUBLISHED content back (a plain GET by id); when the publish fails or the
 // read-back cannot confirm what was written, it throws WEB_RESOURCE_UNVERIFIED — after the row exists, with the row's id (`error.id`). What the
