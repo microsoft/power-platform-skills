@@ -654,11 +654,97 @@ test('hasDefaultExport still refuses a generic arrow cut off before its body, an
   assert.equal(hasDefaultExport('export default <T,>(p: T)\nexport default function Page() { return null; }\n'), true);
 });
 
+// The return type of a generic arrow is read to its end as TypeScript reads a type, and the arrow's `=>` must come right after it. A return type may hold an `=>` of its
+// own — a function or constructor type, `(p): (x: T) => T => …` — so the first `=>` after the colon is not always the arrow's, and a write cut off right after such a type
+// has no arrow and no body. And any word may name a type (TypeScript reads a type's name as an identifier name): `module`, `namespace` and `declare` are names in a type,
+// not the start of a statement. [what, page]
+const GENERIC_ARROW_RETURN_TYPES = [
+  ['a type alias named `module`, async', 'type module<T> = Promise<T>;\nexport default async <T,>(p: T): module<T> => p;\n'],
+  ['a type alias named `namespace`, async', 'type namespace<T> = Promise<T>;\nexport default async <T,>(p: T): namespace<T> => p;\n'],
+  ['a type alias named `declare`', 'type declare = string;\nexport default <T,>(p: T): declare => "";\n'],
+  ['an assertion about a parameter named `module`', 'export default <T,>(module: unknown): asserts module is T => {};\n'],
+  ['a type predicate about a parameter named `module`', 'export default <T,>(module: unknown): module is T => true;\n'],
+  ['a union of names that are keywords elsewhere', 'type type = 1; type async = 2; type of = 3;\nexport default <T,>(p: T): type | async | of => 1;\n'],
+  ['a function type whose one parameter is a name, then the arrow', 'export default <T,>(p: T): (A) => T => p as never;\n'],
+  ['a parenthesised union, then the arrow', 'export default <T,>(p: T): (A | B) => p as never;\n'],
+  ['a parenthesised object type with members, then the arrow', 'export default <T,>(p: T): ({ a: T; b: string }) => ({ a: p, b: "" });\n'],
+  ['a parenthesised tuple type that is no binding pattern, then the arrow', 'export default <T,>(p: T): ([T, T][]) => [[p, p]];\n'],
+  ['a constructor type for the return type', 'export default <T,>(p: T): new () => T => null as never;\n'],
+  ['an abstract constructor type for the return type', 'export default <T,>(p: T): abstract new () => T => null as never;\n'],
+  ['a generic function type for the return type', 'export default <T,>(p: T): <U>(x: U) => U => (x) => x;\n'],
+  ['a function type that returns a function type', 'export default <T,>(p: T): (x: T) => (y: T) => T => (x) => (y) => y;\n'],
+  ['a function type in a branch of a conditional type', 'export default <T,>(p: T): T extends string ? (x: T) => T : never => null as never;\n'],
+  ['type arguments on a dotted name, and an array', 'export default <T,>(p: T): A.B.C<D>[] => [];\n'],
+  ['a leading "|"', 'export default <T,>(p: T): | "a" | "b" => "a";\n'],
+  ['an async function type for the return type', 'export default async <T,>(p: T): Promise<(x: T) => T> => (x) => x;\n'],
+];
+// [what, page]: cut off right after a type that holds an `=>`, or a return type that takes the arrow for its own, or no body after the arrow.
+const GENERIC_ARROW_RETURN_TYPE_REFUSALS = [
+  ['cut after a function type for the return type', 'export default <T,>(p: T): (x: T) => T'],
+  ['cut after a constructor type', 'export default <T,>(p: T): new () => T'],
+  ['cut after an abstract constructor type', 'export default <T,>(p: T): abstract new () => T'],
+  ['cut after a generic function type', 'export default <T,>(p: T): <U>(x: U) => U'],
+  ['cut after a function type that returns an object type', 'export default <T,>(p: T): (x: T) => { a: T }'],
+  ['cut after a function type that returns a tuple', 'export default <T,>(p: T): (x: T) => [T, T]'],
+  ['cut after a function type whose one parameter is a name', 'export default <T,>(p: T): (A) => T'],
+  ['cut after a function type in a branch of a conditional type', 'export default <T,>(p: T): T extends string ? (x: T) => T : never'],
+  ['an async arrow cut after a function type for the return type', 'export default async <T,>(p: T): (x: T) => T'],
+  // TypeScript reads these return types as function types, which take the `=>` that was meant for the arrow.
+  ['one name in parentheses, which is a function type', 'export default <T,>(p: T): (A) => p;\n'],
+  ['a binding pattern in parentheses, which is a function type', 'export default <T,>(p: T): ({ a: T }) => p;\n'],
+  // A function type after a `|` must be parenthesised (TS1385).
+  ['a function type after "|"', 'export default <T,>(p: T): A | (x: T) => B => p;\n'],
+  // No body after the arrow: TypeScript reports `Expression expected`.
+  ['a semicolon for the body', 'export default <T,>() => ;\n'],
+  ['a declaration after the arrow', 'export default <T,>() =>\nconst x = 1;\n'],
+  ['a statement word after the arrow', 'export default <T,>() => return 1;\n'],
+  ['an operator after the arrow', 'export default <T,>() => * 2;\n'],
+  ['an async arrow with a semicolon for the body', 'export default async <T,>() => ;\n'],
+];
+// [what, body]: what may follow the arrow — a block, or anything that begins an expression, a word that is a keyword elsewhere included.
+const GENERIC_ARROW_BODIES = [
+  ['an empty block', '{}'], ['a number', '0'], ['a name that is a keyword elsewhere', 'module'], ['`type`', 'type'], ['`let`, a name to the parser', 'let'],
+  ['`this`', 'this'], ['`new`', 'new Map()'], ['`typeof`', 'typeof p'], ['a class', 'class {}'], ['a function', 'function () {}'], ['`void`', 'void 0'],
+  ['a dynamic import', 'import("./x")'], ['a prefix increment', '++n'], ['a negative number', '-1'], ['a negation', '!p'], ['an array', '[p]'],
+  ['a parenthesised expression', '(p)'], ['a regular expression', '/re/.test("s")'], ['a template', '`t`'], ['a string', '"s"'], ['an element', '<div/>'],
+  ['a generic arrow', '<U,>(u: U) => u'], ['a fraction', '.5'],
+];
+
+test('hasDefaultExport reads a generic arrow\'s return type to its end, and wants a body after the arrow', () => {
+  for (const [what, code] of GENERIC_ARROW_RETURN_TYPES) {
+    assert.equal(hasDefaultExport(code), true, what);
+    assert.deepStrictEqual(pageStructureProblems(code), [], what);
+  }
+  for (const [what, code] of GENERIC_ARROW_RETURN_TYPE_REFUSALS) {
+    assert.equal(hasDefaultExport(code), false, what);
+    assert.match(pageStructureProblems(code).join('\n'), /no complete default export/, what);
+  }
+  for (const [what, body] of GENERIC_ARROW_BODIES) {
+    const code = `let n = 0;\nexport default <T,>(p: T) => ${body};\n`;
+    assert.equal(hasDefaultExport(code), true, what);
+    assert.deepStrictEqual(pageStructureProblems(code), [], what);
+  }
+});
+
+// The reading recurses once per level of a return type that nests function types, conditional types or prefix operators; past a depth no page has, the return type is
+// refused rather than read, and the text is never read twice per level: a deep or long return type neither throws nor takes long.
+test('hasDefaultExport refuses a return type nested deeper than any page has, without overflowing the stack', () => {
+  const started = Date.now();
+  for (const deep of ['(x: T) => '.repeat(20000), 'T extends U ? X : '.repeat(20000), 'keyof '.repeat(20000), '!'.repeat(20000)]) {
+    assert.equal(hasDefaultExport(`export default <T,>(p: T): ${deep}T => p;\n`), false);
+  }
+  // Long, but flat: a union of 20,000 members, and a group 20,000 deep, which is passed over as a whole.
+  assert.equal(hasDefaultExport(`export default <T,>(p: T): ${'"a" | '.repeat(20000)}"b" => "b";\n`), true);
+  assert.equal(hasDefaultExport(`export default <T,>(p: T): ${'('.repeat(20000)}T${')'.repeat(20000)} => p;\n`), true);
+  assert.ok(Date.now() - started < 10000, `took ${Date.now() - started} ms`);
+});
+
 // The pages above, and a matrix of heads, parameter lists, return types and bodies, sync and async, against TypeScript 5.8 — the compiler the SDK builds a page with — and
 // Babel. The gate accepts exactly the pages TypeScript parses as an arrow with type parameters, and refuses every text cut off between the `<` and the end of the arrow,
 // which TypeScript refuses too. Babel parses every page the gate accepts as such an arrow as well; it also takes `<T>(x) => x` for one, which TypeScript reads as an
-// element in .tsx, so it is no judge of the refusals. A return type that is itself a function type is left out of the cuts: its own `=>` is the first after the parameter
-// list, so a text cut after it reads as complete, as it does for an arrow without type parameters (`export default (x): (y: T) => T`), and the page compile refuses it.
+// element in .tsx, so it is no judge of the refusals. A second matrix holds return types of every form TypeScript's parser reads — names that are keywords elsewhere,
+// predicates, function and constructor types that hold an `=>` of their own, parenthesised types that are and are not function types, conditional types, JSDoc forms — with
+// every cut of each, and a third the first token of the body.
 test('TypeScript and Babel: the gate accepts exactly the generic-arrow default exports TypeScript parses, and refuses every cut before the body', (t) => {
   const ts = loadTypescriptOracle();
   if (!ts) return t.skip('no TypeScript parser oracle: set TYPESCRIPT_ORACLE_PATH to a typescript package to run it');
@@ -714,7 +800,64 @@ test('TypeScript and Babel: the gate accepts exactly the generic-arrow default e
     }
   }
   assert.ok(accepted >= 1000, `generic-arrow pages accepted: ${accepted}`);
-  t.diagnostic(`${accepted} generic-arrow pages accepted as TypeScript parses them; ${cuts} cuts refused`);
+
+  for (const [what, code] of GENERIC_ARROW_RETURN_TYPES) assert.strictEqual(typeScriptReads(code), 'generic arrow', what);
+  for (const [what, code] of GENERIC_ARROW_RETURN_TYPE_REFUSALS) assert.ok(refusedByTypeScript(typeScriptReads(code)), `${what}: TypeScript reads ${typeScriptReads(code)}`);
+  for (const [what, body] of GENERIC_ARROW_BODIES) assert.strictEqual(typeScriptReads(`let n = 0;\nexport default <T,>(p: T) => ${body};\n`), 'generic arrow', what);
+  // [return type, whether Babel reads it too]. TypeScript's parser reads a keyword as a type's name and the JSDoc forms, which only its checker refuses; Babel refuses them.
+  const RETURN_TYPES = [
+    ['T', true], ['module', true], ['module<T>', true], ['namespace', true], ['declare', true], ['type', true], ['async', true], ['of', true], ['is', true], ['asserts', true],
+    ['A.B.C<D>[]', true], ['A.if', true], ['T[K]', true], ['T[][]', true], ['Promise<Array<T>>', true], ['Map<string, (x: T) => T>', true],
+    ['if', false], ['const', false], ['default', false], ['class', false], ['function', false], ['let', false], ['yield', false],
+    ['void', true], ['null', true], ['undefined', true], ['true', true], ['-1', true], ['1n', true], ['"s"', true], ['`a${string}`', true], ['unique symbol', true], ['this', true],
+    ['keyof T', true], ['readonly T[]', true], ['infer U', true], ['typeof p', true], ['typeof p.x<T>', true], ['import("x").Y<T>', true], ['typeof import("x")', true],
+    ['A | B', true], ['| A | B', true], ['& A', true], ['A & B | C', true], ['T extends U ? X : Y', true], ['A extends B ? C : D extends E ? F : G', true],
+    ['T extends string ? (x: T) => T : never', true],
+    ['{ a: T; b: string }', true], ['{ [K in keyof T]: T[K] }', true], ['[a: T, b?: string, ...rest: T[]]', true], ['{}', true],
+    ['p is T', true], ['module is T', true], ['this is T', true], ['asserts p', true], ['asserts p is T', true], ['asserts this', true], ['asserts module is T', true],
+    ['(x: T) => T', true], ['() => void', true], ['(...a: T[]) => void', true], ['(this: Window) => void', true], ['(a?) => void', true], ['({ a }: X) => void', true],
+    ['(x: T) => (y: T) => T', true], ['(x: T) => { a: T }', true], ['(x: T) => [T, T]', true], ['<U>(x: U) => U', true], ['new () => T', true], ['abstract new () => T', true],
+    ['(A) => T', true], ['(x: T) => x is T', true], ['(public x) => void', false], ['(a = 1) => void', false],
+    ['(A | B)', true], ['(A[])', true], ['((x: T) => T)', true], ['({ a: T; b: string })', true], ['([A, B][])', true], ['({ a: T })', true], ['({ a })', true], ['({})', true], ['([A, B])', true],
+    ['?string', false], ['string?', false], ['!string', false], ['T!', false], ['*', false], ['function(string): number', false],
+    ['A | (x: T) => B', true], ['A & new () => B', true], ['keyof', true], ['new', true], ['this.x', true], ['A\n[]', true], ['Promise\n<T>', true], ['T\nextends U ? X : Y', true],
+    ['p\nis T', true], ['A || B', true],
+  ];
+  const RETURN_BODIES = [' => null', ' => (x: T) => x', ' => {\n  return null as never;\n}'];
+  const returnPage = (modifier, type, body) => `export default ${modifier}<T,>(p: T): ${type}${body};\n`;
+  let returnPages = 0;
+  for (const modifier of ['', 'async ']) {
+    for (const [type] of RETURN_TYPES) {
+      for (const body of RETURN_BODIES) {
+        const code = returnPage(modifier, type, body);
+        const reading = typeScriptReads(code);
+        assert.strictEqual(pageStructureProblems(code).length === 0, reading === 'generic arrow', `${JSON.stringify(code)}: TypeScript reads ${reading}`);
+        if (reading === 'generic arrow') returnPages += 1;
+      }
+      // Every cut from the end of the parameter list to the end of the arrow.
+      const whole = returnPage(modifier, type, ' => null');
+      const arrowEnd = whole.lastIndexOf('=>') + 2;
+      for (let end = whole.indexOf('):') + 1; end <= arrowEnd; end += 1) {
+        const cut = whole.slice(0, end);
+        assert.ok(!/arrow$/.test(typeScriptReads(cut)), `${JSON.stringify(cut)}: TypeScript reads an arrow in the cut`);
+        assert.strictEqual(hasDefaultExport(cut), false, JSON.stringify(cut));
+        cuts += 1;
+      }
+    }
+  }
+  assert.ok(returnPages >= 400, `pages with a return type accepted: ${returnPages}`);
+  // The first token after the arrow: a block or what begins an expression is a body; a `;`, a closing bracket, an operator or a word that only begins a statement is none.
+  const BODY_STARTS = [...GENERIC_ARROW_BODIES.map(([, body]) => body), ';', ')', ']', '}', ',', ':', '?', '=', '*', '%', '|', '&', '^', '>', '.x', '...x', '=> 1', '@d class {}',
+    'break', 'case', 'catch', 'const x = 1', 'continue', 'debugger', 'default', 'do', 'else', 'enum', 'export', 'extends', 'finally', 'for', 'if', 'in', 'instanceof', 'return 1',
+    'switch', 'throw p', 'try', 'var x', 'while', 'with', 'static', 'implements', 'interface', 'package', 'private', 'protected', 'public', 'async', 'await p', 'yield', 'null',
+    'true', 'false', 'super.x', 'delete p.x'];
+  for (const body of BODY_STARTS) {
+    // A `;` ends each page: a page that ends in a word some statements need more after (`let`, `yield`) is read as cut off, whatever comes before it (DANGLING_TAIL).
+    const code = `let n = 0;\nexport default <T,>(p: T) => ${body};\n`;
+    const reading = typeScriptReads(code);
+    assert.strictEqual(hasDefaultExport(code), reading === 'generic arrow', `${JSON.stringify(code)}: TypeScript reads ${reading}`);
+  }
+  t.diagnostic(`${accepted} generic-arrow pages accepted as TypeScript parses them, ${returnPages} with a return type; ${cuts} cuts refused; ${BODY_STARTS.length} body starts`);
 
   const babel = loadBabelOracle();
   if (!babel) return t.diagnostic('no Babel parser oracle: set BABEL_ORACLE_PATH to an @babel/parser package to compare the readings');
@@ -739,6 +882,16 @@ test('TypeScript and Babel: the gate accepts exactly the generic-arrow default e
           const code = `export default ${modifier}${head}${parameters}${returns}${body};\n`;
           assert.strictEqual(babelReads(code), 'generic arrow', JSON.stringify(code));
         }
+      }
+    }
+  }
+  for (const [what, code] of GENERIC_ARROW_RETURN_TYPES) assert.strictEqual(babelReads(code), 'generic arrow', what);
+  for (const modifier of ['', 'async ']) {
+    for (const [type, babelReadsIt] of RETURN_TYPES) {
+      if (!babelReadsIt) continue;
+      for (const body of RETURN_BODIES) {
+        const code = returnPage(modifier, type, body);
+        if (pageStructureProblems(code).length === 0) assert.strictEqual(babelReads(code), 'generic arrow', JSON.stringify(code));
       }
     }
   }

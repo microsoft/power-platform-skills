@@ -3032,11 +3032,17 @@ binding), because a write cut inside its export line balances; any complete `exp
 do, for overloads. A **generic arrow** is a default export too (`export default <T,>(props: P<T>) => …`,
 and after `async`): the `<` is read by the same TypeScript rule as any `<` where an expression starts — type
 parameters for `<T,>`, `<T = X>` and `<T extends X>`, after an optional `const` — and any other head is an
-element (`<div/>`, `<T>(x) => x`), which is no component and stays refused; the type parameters must close and a
-parameter list and an arrow with a body must follow (`genericArrowIsComplete`). The export pattern once took no
-`<` after `default`, and every such page was refused as having no default export. The one cut it cannot see is right
-after a return type that is itself a function type (`(p): (x: T) => T`, whose own `=>` reads as the arrow), as for an
-arrow without type parameters; the page compile refuses that one. And `endsMidStatement` catches the cuts that leave every bracket balanced: the
+element (`<div/>`, `<T>(x) => x`), which is no component and stays refused; the type parameters must close, a
+parameter list must follow, then the arrow — at once, or right after a return type that `returnTypeEnd` reads to
+its end as TypeScript 5.8's parser reads a type — and a body: a block or what begins an expression, not `;` or a
+statement's word (`genericArrowIsComplete`). The return type has to be read, not scanned: it may hold an `=>` of
+its own (`(p): (x: T) => T => …`, `new () => T`), so the first `=>` after the colon is not always the arrow's, and
+a write cut right after such a type has neither the arrow nor a body; and any word may name a type (`module<T>`,
+`namespace`, `declare` — TypeScript reads a type's name as an identifier name), so no word marks the end of one.
+Where TypeScript reads `(…)` as a function type is its own rule (`isUnambiguouslyStartOfFunctionType`: `(A) => T`
+is one, `(A | B)` is not), and a return type nested deeper than any page (200 levels) is refused rather than read.
+The export pattern once took no `<` after `default`, and every such page was refused as having no default export.
+And `endsMidStatement` catches the cuts that leave every bracket balanced: the
 lexer reports when a file stops inside a string, template, comment or JSX element, and a file
 may not end on a token that needs more (`a +`, `React.`, `=>`). Both gates run all three checks.
 A backslash continues a string over one line terminator, and CR LF is **one** terminator

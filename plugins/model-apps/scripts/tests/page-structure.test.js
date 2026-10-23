@@ -21,6 +21,9 @@ const CASES = [
   // A generic arrow is a default export (its `<` opens type parameters by TypeScript's rule for .tsx); an element is not, and is no component the host can mount.
   ['generic-arrow default export', 'export default <T,>(props: { items: T[] }) => <div>{props.items.length}</div>;\n'],
   ['element for the default export', 'export default <div>ok</div>;\n'],
+  // A return type that holds an `=>` of its own, read to its end: complete with the arrow after it, cut off without.
+  ['generic arrow whose return type is a function type', 'export default <T,>(p: T): (x: T) => T => (x) => x;\n'],
+  ['generic arrow cut off after a function-type return type', 'export default <T,>(p: T): (x: T) => T'],
 ];
 
 for (const [name, code] of CASES) {
@@ -40,4 +43,6 @@ test('a complete page passes and each failure is named', () => {
   assert.match(pageStructureProblems(CASES[8][1]).join('\n'), /the page is incomplete/);
   assert.deepEqual(pageStructureProblems(CASES[9][1]), []);
   assert.deepEqual(pageStructureProblems(CASES[10][1]), [pageStructureProblems(CASES[2][1])[0]]);
+  assert.deepEqual(pageStructureProblems(CASES[11][1]), []);
+  assert.deepEqual(pageStructureProblems(CASES[12][1]), [pageStructureProblems(CASES[2][1])[0]]);
 });

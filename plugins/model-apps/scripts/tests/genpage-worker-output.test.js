@@ -85,12 +85,16 @@ test('the CLI accepts a page whose default export is a generic arrow, and still 
     'export default <T extends object>(props: T) => <div>ok</div>;\n',
     'export default <const T,>(props: T): JSX.Element => <div>ok</div>;\n',
     'export default async <T,>(props: T) => {\n  await Promise.resolve(props);\n  return null;\n};\n',
+    // A return type is read to its end: a type named `module` is a name, and the arrow follows it.
+    'type module<T> = Promise<T>;\nexport default async <T,>(p: T): module<T> => p;\n',
   ]) {
     const accepted = run(code);
     assert.equal(accepted.status, 0, accepted.stdout);
     assert.deepEqual(JSON.parse(accepted.stdout).problems, [], code);
   }
-  for (const code of ['export default <T,>(props: { items: T[] })', 'export default <T,>(props: T): JSX.Element', 'export default <T>(props: T) => <div>ok</div>;\n']) {
+  // Cut off after the parameter list, after a return type, and after a return type that is a function type (its `=>` is no arrow); an element; an arrow with no body.
+  for (const code of ['export default <T,>(props: { items: T[] })', 'export default <T,>(props: T): JSX.Element', 'export default <T>(props: T) => <div>ok</div>;\n',
+    'export default <T,>(p: T): (x: T) => T', 'export default <T,>() => ;\n']) {
     const refused = run(code);
     assert.equal(refused.status, 3, code);
     assert.match(JSON.parse(refused.stdout).problems.join('\n'), /no complete default export/, code);
