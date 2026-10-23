@@ -16,6 +16,12 @@ const WEB_ROLE_ALLOWED_KEYS = new Set([
   'id',
   'name',
 ]);
+const AGGREGATE_WEB_ROLE_ALLOWED_KEYS = new Set([
+  'adx_anonymoususersrole',
+  'adx_authenticatedusersrole',
+  'adx_name',
+  'adx_webroleid',
+]);
 const WEB_ROLE_REQUIRED_KEYS = new Set([
   'anonymoususersrole',
   'authenticatedusersrole',
@@ -93,6 +99,7 @@ function validateWebRoles(projectRoot) {
   }
 
   let webRoles = [];
+  let sourceRecords = [];
   try {
     if (layout.roles.mode === 'mixed') {
       throw new Error(
@@ -100,18 +107,25 @@ function validateWebRoles(projectRoot) {
         'webrole.yml and web-roles/*.webrole.yml cannot be validated as one source.'
       );
     }
-    webRoles = layout.roles.mode === 'aggregate'
-      ? loadAggregateRecords(layout.roles.aggregateFile).map(normalizeWebRole)
-      : loadWebRoles(webRolesDir).map(normalizeWebRole);
+    sourceRecords = layout.roles.mode === 'aggregate'
+      ? loadAggregateRecords(layout.roles.aggregateFile)
+      : loadWebRoles(webRolesDir);
+    webRoles = sourceRecords.map(normalizeWebRole);
   } catch (error) {
     addFinding(findings, 'error', `Failed to parse web role YAML: ${error.message}`, {
       filePath: layout.roles.mode === 'aggregate' ? layout.roles.aggregateFile : webRolesDir,
     });
   }
 
-  for (const webRole of webRoles) {
+  const sourceAllowedKeys = layout.roles.mode === 'aggregate'
+    ? AGGREGATE_WEB_ROLE_ALLOWED_KEYS
+    : WEB_ROLE_ALLOWED_KEYS;
+
+  for (let index = 0; index < webRoles.length; index += 1) {
+    const webRole = webRoles[index];
+    const sourceRecord = sourceRecords[index];
     const fileName = path.basename(webRole.filePath);
-    const unexpectedKeys = findUnexpectedKeys(webRole, WEB_ROLE_ALLOWED_KEYS);
+    const unexpectedKeys = findUnexpectedKeys(sourceRecord, sourceAllowedKeys);
     if (unexpectedKeys.length > 0) {
       addFinding(findings, 'error', `Web role contains unexpected schema keys: ${unexpectedKeys.join(', ')}.`, {
         filePath: webRole.filePath,

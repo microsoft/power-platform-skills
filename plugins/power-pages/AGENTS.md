@@ -422,7 +422,7 @@ All skill folders are tracked. Skills without a `scripts/validate*.js` file are 
 Shared utility scripts live at `scripts/` and are referenced by multiple skills and agents via `${PLUGIN_ROOT}/scripts/`.
 
 - `generate-uuid.js`: Generates a random UUID v4. Self-contained, no dependencies. Used by `create-webroles` and the main agent when creating table permission / site setting files from the `webapi-permissions` agent plan.
-- `update-skill-tracking.js`: Updates skill usage tracking site settings. Takes `--projectRoot`, `--skillName`, and `--authoringTool` args. The agent passes its own name as `--authoringTool` (e.g., `ClaudeCode`, `GitHubCopilot`). Creates/increments a per-skill counter (`Site-AI-Skills-<SkillName>.sitesetting.yml`) and records the authoring tool (`Site-AI-Tools-AuthoringTool.sitesetting.yml`). Resolves nested SPA metadata or directly opened non-SPA PAC roots and exits silently when no site-settings directory exists. Used by every user-invocable skill (each skill calls it in its final phase per the skill-tracking convention).
+- `update-skill-tracking.js`: Updates skill usage tracking site settings. Takes `--projectRoot`, `--skillName`, and `--authoringTool` args. The agent passes its own name as `--authoringTool` (e.g., `ClaudeCode`, `GitHubCopilot`). Creates/increments a per-skill counter (`Site-AI-Skills-<SkillName>.sitesetting.yml`) and records the authoring tool (`Site-AI-Tools-AuthoringTool.sitesetting.yml`). Resolves nested SPA metadata or directly opened non-SPA PAC roots, preserves aggregate `sitesetting.yml` or per-record `site-settings/` storage, no-ops for missing storage, and rejects mixed serialization before writing. Used by every user-invocable skill (each skill calls it in its final phase per the skill-tracking convention).
 - `check-activation-status.js`: Checks whether a Power Pages site is already activated (provisioned) in the environment. Takes `--projectRoot` arg. **Site-identity resolution (`resolveSiteIdentity()`, exported + injectable for tests): (1) `powerpages.config.json` (code/SPA sites) → `siteName` + optional `websiteRecordId`; (2) else `.powerpages-site/website.yml` (non-SPA/data-model sites) → `name`→`siteName`, `id`→`websiteRecordId`; (3) `pac pages list` ONLY when the GUID is still unknown** — non-SPA sites (and SPA sites whose config included the GUID) skip the `pac pages list` exec entirely. Then queries the Power Platform GET websites API and matches by both `websiteRecordId` and `name`. Outputs JSON: `{ activated: true/false, siteName, websiteRecordId, websiteUrl }` or `{ error }`. The CLI flow is guarded by `require.main === module`; `module.exports = { resolveSiteIdentity, getWebsites }`. Used by `deploy-site` and `activate-site`.
 - `poll-async-operation.js`: Polls a Dataverse `asyncoperations` record until it reaches a terminal state (Succeeded/Failed/Canceled) or times out. Args: `--asyncJobId`, `--envUrl`, `--token` (optional, refreshed via Azure CLI if omitted), `--intervalMs` (default 5000), `--maxAttempts` (default 60). Outputs JSON status. Used by `export-solution` and `import-solution`.
 - `encode-solution-file.js`: Base64-encodes a solution zip file for use in Dataverse OData request bodies (`ImportSolutionAsync`, `StageSolution`). Args: `--zipPath`. Outputs `{ encoded, fileSizeBytes, fileName }`. Used by `import-solution`.
@@ -532,10 +532,10 @@ Checks SEO assets added to Power Pages sites: verifies `robots.txt` exists in `p
 
 ### `create-webroles/scripts/validate-webroles.js`
 
-Checks that web role YAML files were created in the resolved SPA or non-SPA `web-roles/`
-directory. Validates required fields, UUIDs, booleans, and naming conventions. The skill workflow
-separately checks duplicate IDs/names and anonymous/authenticated uniqueness constraints.
-Gracefully exits 0 when no Power Pages metadata root is found.
+Validates aggregate `webrole.yml` or per-record `web-roles/*.webrole.yml` metadata for required
+fields, UUIDs, booleans, and naming conventions. The skill workflow separately checks duplicate
+IDs/names and anonymous/authenticated uniqueness constraints. Gracefully exits 0 when no Power
+Pages metadata root or role records are found.
 
 ### `audit-permissions/scripts/collect-non-spa-permission-evidence.js`
 
@@ -559,8 +559,8 @@ For Power Pages SPA sites, verifies the shared API client
 `src/shared/services/` or `src/services/` with `/_api/` endpoint references, and corresponding
 type definition files exist in `src/types/`. Gracefully exits 0 when no integration files are
 detected (not an integration session). For non-SPA sites, scans Web Files, webpages, and Web
-Templates for `/_api/` calls, requires a supported anti-forgery-token pattern, and validates
-permission/site-setting schema from nested or direct PAC roots.
+Templates for `/_api/` calls and validates permission/site-setting schema from nested or direct
+PAC roots.
 
 ### `setup-auth/scripts/validate-auth.js`
 

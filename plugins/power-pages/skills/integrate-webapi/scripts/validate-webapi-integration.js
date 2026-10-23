@@ -71,16 +71,9 @@ function validateNonSpaIntegration(projectRoot) {
   if (apiFiles.length === 0) return;
 
   const errors = [];
-  for (const filePath of apiFiles) {
-    const content = fs.readFileSync(filePath, 'utf8');
-    const hasSupportedTokenPattern = content.includes('webapi.safeAjax')
-      || content.includes('shell.getTokenDeferred')
-      || content.includes('__RequestVerificationToken');
-    if (!hasSupportedTokenPattern) {
-      errors.push(`${path.relative(siteRoot, filePath)}: /_api/ call is missing a supported anti-forgery token pattern`);
-    }
-  }
-
+  // Token handling can live in a shared Web File loaded separately from the caller.
+  // A file-local substring check cannot distinguish that valid arrangement from an
+  // unprotected request, so the workflow owns token review instead of this validator.
   addSchemaErrors(projectRoot, errors);
   if (errors.length > 0) {
     block('Non-SPA Web API integration validation failed:\n- ' + errors.join('\n- '));

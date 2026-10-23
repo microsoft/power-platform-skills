@@ -224,6 +224,7 @@ test('web role hook validator accepts valid direct-root metadata', (t) => {
 
 test('web role hook validator accepts aggregate non-SPA metadata', (t) => {
   const siteRoot = createTempNonSpaSite(t);
+  fs.rmSync(path.join(siteRoot, 'web-roles'), { recursive: true });
   writeProjectFile(
     siteRoot,
     'webrole.yml',
@@ -249,6 +250,78 @@ test('web role hook validator accepts aggregate non-SPA metadata', (t) => {
   );
 
   assert.equal(result.status, 0, result.stderr);
+});
+
+test('web role hook validator blocks invalid aggregate metadata without a web-roles directory', (t) => {
+  const siteRoot = createTempNonSpaSite(t);
+  fs.rmSync(path.join(siteRoot, 'web-roles'), { recursive: true });
+  writeProjectFile(
+    siteRoot,
+    'webrole.yml',
+    [
+      '- adx_anonymoususersrole: false',
+      '  adx_authenticatedusersrole: true',
+      '  adx_name: Invalid',
+      '  adx_webroleid: not-a-uuid',
+      '',
+    ].join('\n')
+  );
+
+  const result = runNode(
+    path.join(
+      pluginRoot,
+      'skills',
+      'create-webroles',
+      'scripts',
+      'validate-webroles.js'
+    ),
+    [],
+    { input: JSON.stringify({ cwd: siteRoot }) }
+  );
+
+  assert.equal(result.status, 2);
+  assert.match(result.stderr, /invalid "id" UUID/);
+});
+
+test('web role hook validator blocks mixed aggregate and per-record metadata', (t) => {
+  const siteRoot = createTempNonSpaSite(t);
+  writeProjectFile(
+    siteRoot,
+    'webrole.yml',
+    [
+      '- adx_anonymoususersrole: false',
+      '  adx_authenticatedusersrole: true',
+      '  adx_name: Aggregate Members',
+      '  adx_webroleid: 778fa3d0-a2ef-4d2b-98b8-e6c7d8ce1444',
+      '',
+    ].join('\n')
+  );
+  writeProjectFile(
+    siteRoot,
+    'web-roles/per-record.webrole.yml',
+    [
+      'anonymoususersrole: false',
+      'authenticatedusersrole: true',
+      'id: 928fa3d0-a2ef-4d2b-98b8-e6c7d8ce1444',
+      'name: Per-record Members',
+      '',
+    ].join('\n')
+  );
+
+  const result = runNode(
+    path.join(
+      pluginRoot,
+      'skills',
+      'create-webroles',
+      'scripts',
+      'validate-webroles.js'
+    ),
+    [],
+    { input: JSON.stringify({ cwd: siteRoot }) }
+  );
+
+  assert.equal(result.status, 2);
+  assert.match(result.stderr, /Mixed web-role serialization/);
 });
 
 test('web role hook validator blocks invalid direct-root metadata', (t) => {
@@ -281,9 +354,28 @@ test('web role hook validator blocks invalid direct-root metadata', (t) => {
   assert.match(result.stderr, /invalid "id" UUID/);
 });
 
-test('web role hook validator preserves the no-op when the web-roles directory is absent', (t) => {
+test('web role hook validator preserves the no-op when role metadata is absent', (t) => {
   const siteRoot = createTempNonSpaSite(t);
   fs.rmSync(path.join(siteRoot, 'web-roles'), { recursive: true });
+
+  const result = runNode(
+    path.join(
+      pluginRoot,
+      'skills',
+      'create-webroles',
+      'scripts',
+      'validate-webroles.js'
+    ),
+    [],
+    { input: JSON.stringify({ cwd: siteRoot }) }
+  );
+
+  assert.equal(result.status, 0, result.stderr);
+});
+
+test('web role hook validator preserves the no-op for empty role storage', (t) => {
+  const siteRoot = createTempNonSpaSite(t);
+  fs.writeFileSync(path.join(siteRoot, 'webrole.yml'), '', 'utf8');
 
   const result = runNode(
     path.join(

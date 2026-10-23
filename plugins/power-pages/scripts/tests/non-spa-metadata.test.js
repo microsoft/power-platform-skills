@@ -6,6 +6,7 @@ const path = require('path');
 const {
   detectMetadataLayout,
   parseTopLevelSequence,
+  upsertAggregateRecord,
 } = require('../lib/non-spa-metadata');
 const {
   createTempNonSpaSite,
@@ -72,4 +73,68 @@ test('detectMetadataLayout reports mixed storage without choosing a writer', (t)
   assert.equal(layout.settings.mode, 'mixed');
   assert.equal(fs.existsSync(path.join(siteRoot, 'sitesetting.yml')), true);
   assert.equal(fs.existsSync(path.join(siteRoot, 'site-settings')), true);
+});
+
+test('upsertAggregateRecord updates one record without rewriting unrelated records', (t) => {
+  const siteRoot = createTempNonSpaSite(t);
+  const aggregatePath = writeProjectFile(
+    siteRoot,
+    'sitesetting.yml',
+    [
+      '- adx_custom: preserve-me',
+      '  adx_name: Search/Enabled',
+      '  adx_value: true',
+      '- adx_name: Site/AI/Skills/EditSite',
+      '  adx_sitesettingid: 11111111-1111-4111-8111-111111111111',
+      '  adx_value: "2"',
+      '',
+    ].join('\n'),
+  );
+  const unrelatedBlock = [
+    '- adx_custom: preserve-me',
+    '  adx_name: Search/Enabled',
+    '  adx_value: true',
+    '',
+  ].join('\n');
+
+  const result = upsertAggregateRecord(aggregatePath, {
+    matchField: 'adx_name',
+    matchValue: 'Site/AI/Skills/EditSite',
+    fields: {},
+    keyOrder: [],
+    updates: { adx_value: '3' },
+  });
+
+  assert.deepEqual(result, { created: false });
+  const updated = fs.readFileSync(aggregatePath, 'utf8');
+  assert.ok(updated.startsWith(unrelatedBlock));
+  assert.match(updated, /adx_value: "3"/);
+});
+
+test('upsertAggregateRecord rejects duplicate match keys without changing the file', (t) => {
+  const siteRoot = createTempNonSpaSite(t);
+  const aggregatePath = writeProjectFile(
+    siteRoot,
+    'sitesetting.yml',
+    [
+      '- adx_name: Duplicate',
+      '  adx_value: one',
+      '- adx_name: Duplicate',
+      '  adx_value: two',
+      '',
+    ].join('\n'),
+  );
+  const before = fs.readFileSync(aggregatePath, 'utf8');
+
+  assert.throws(
+    () => upsertAggregateRecord(aggregatePath, {
+      matchField: 'adx_name',
+      matchValue: 'Duplicate',
+      fields: {},
+      keyOrder: [],
+      updates: { adx_value: 'three' },
+    }),
+    /duplicate "adx_name" value "Duplicate"/,
+  );
+  assert.equal(fs.readFileSync(aggregatePath, 'utf8'), before);
 });

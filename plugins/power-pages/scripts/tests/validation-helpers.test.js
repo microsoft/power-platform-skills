@@ -188,6 +188,40 @@ test('findProjectRoot recognizes a declarative .powerpages-site directory as a p
   assert.equal(findProjectRoot(root), path.resolve(root));
 });
 
+test('findProjectRoot walks past a managed .powerpages-site directory to the enclosing project', (t) => {
+  const fs = require('fs');
+  const os = require('os');
+  const { findProjectRoot } = require(helpersPath);
+
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'fpr-wrapped-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const siteRoot = path.join(root, '.powerpages-site');
+  const nestedStart = path.join(siteRoot, 'web-pages', 'home');
+  fs.mkdirSync(path.join(siteRoot, '.portalconfig'), { recursive: true });
+  fs.mkdirSync(nestedStart, { recursive: true });
+  fs.writeFileSync(path.join(siteRoot, 'website.yml'), 'id: x\nname: Wrapped Site\n');
+  fs.writeFileSync(path.join(root, '.solution-manifest.json'), '{}');
+
+  assert.equal(findProjectRoot(nestedStart), path.resolve(root));
+});
+
+test('findProjectRoot does not misclassify nested SPA metadata as a direct non-SPA project', (t) => {
+  const fs = require('fs');
+  const os = require('os');
+  const { findProjectRoot } = require(helpersPath);
+
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'fpr-spa-nested-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const siteRoot = path.join(root, '.powerpages-site');
+  const nestedStart = path.join(siteRoot, 'site-settings');
+  fs.mkdirSync(path.join(siteRoot, '.portalconfig'), { recursive: true });
+  fs.mkdirSync(nestedStart, { recursive: true });
+  fs.writeFileSync(path.join(siteRoot, 'website.yml'), 'id: x\nname: SPA Metadata\n');
+  fs.writeFileSync(path.join(root, 'powerpages.config.json'), '{}');
+
+  assert.equal(findProjectRoot(nestedStart), path.resolve(root));
+});
+
 test('findProjectRoot recognizes a direct PAC declarative-site root', (t) => {
   const fs = require('fs');
   const os = require('os');

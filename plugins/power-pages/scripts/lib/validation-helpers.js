@@ -108,21 +108,22 @@ function findPath(dir, target) {
  *
  * A project root is marked by EITHER:
  *   - `powerpages.config.json` — code/SPA sites (`pac pages download-code-site`), OR
- *   - a `.powerpages-site/` directory — declarative design-studio sites
- *     (`pac pages download`; standard or enhanced data model). These have NO
- *     `powerpages.config.json`.
+ *   - a `.powerpages-site/` directory — a project-managed PAC metadata tree, OR
+ *   - `.portalconfig/` plus `website.yml` — a directly opened PAC download.
  *
- * Code sites have both markers; declarative sites have only
- * `.powerpages-site/`. Checking for either makes root discovery work for both site types.
+ * A nested `.powerpages-site/` can itself contain the direct-PAC markers. It is
+ * still metadata owned by its parent project, so an upward search must walk past
+ * that reserved directory instead of losing manifests stored alongside it.
  *
  * @returns {string|null} Project root path, or null
  */
 function findProjectRoot(dir) {
   let current = path.resolve(dir);
   while (true) {
+    const isManagedSiteDirectory = path.basename(current) === '.powerpages-site';
     if (fs.existsSync(path.join(current, 'powerpages.config.json')) ||
         fs.existsSync(path.join(current, '.powerpages-site')) ||
-        isNonSpaSiteRoot(current)) {
+        (isNonSpaSiteRoot(current) && !isManagedSiteDirectory)) {
       return current;
     }
 
@@ -141,7 +142,11 @@ function findProjectRoot(dir) {
   const fallbackPortalConfig = findPath(dir, '.portalconfig');
   if (fallbackPortalConfig) {
     const candidate = path.dirname(fallbackPortalConfig);
-    if (isNonSpaSiteRoot(candidate)) return candidate;
+    if (isNonSpaSiteRoot(candidate)) {
+      return path.basename(candidate) === '.powerpages-site'
+        ? path.dirname(candidate)
+        : candidate;
+    }
   }
   return null;
 }

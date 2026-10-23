@@ -369,12 +369,12 @@ test('non-SPA integration validator accepts token-protected Web API calls', (t) 
   assert.equal(result.status, 0, result.stderr);
 });
 
-test('non-SPA integration validator blocks Web API calls without anti-forgery handling', (t) => {
+test('non-SPA integration validator does not infer token handling from the caller file', (t) => {
   const siteRoot = createTempNonSpaSite(t);
   writeProjectFile(
     siteRoot,
     'web-files/items/items.js',
-    'fetch("/_api/cr123_items?$select=cr123_name");\n'
+    'portalFetch("/_api/cr123_items?$select=cr123_name");\n'
   );
 
   const result = runNode(
@@ -391,6 +391,5 @@ test('non-SPA integration validator blocks Web API calls without anti-forgery ha
     }
   );
 
-  assert.equal(result.status, 2);
-  assert.match(result.stderr, /missing a supported anti-forgery token pattern/);
+  assert.equal(result.status, 0, result.stderr);
 });

@@ -100,6 +100,21 @@ function renderAggregateRecord(fields, keyOrder) {
   return `${lines.join('\n')}\n`;
 }
 
+function writeFileAtomic(filePath, content) {
+  const temporaryPath = `${filePath}.${process.pid}.tmp`;
+  fs.writeFileSync(temporaryPath, content, 'utf8');
+  try {
+    fs.renameSync(temporaryPath, filePath);
+  } catch (error) {
+    try {
+      fs.unlinkSync(temporaryPath);
+    } catch {
+      // The original write error is more useful than cleanup failure.
+    }
+    throw error;
+  }
+}
+
 function appendAggregateRecord(filePath, fields, keyOrder) {
   const current = fs.existsSync(filePath) ? fs.readFileSync(filePath, 'utf8') : '';
   if (current.trim() !== '') {
@@ -112,19 +127,72 @@ function appendAggregateRecord(filePath, fields, keyOrder) {
   const separator = current.length === 0 || current.endsWith('\n') ? '' : eol;
   const record = renderAggregateRecord(fields, keyOrder).replace(/\n/g, eol);
   const next = `${current}${separator}${record}`;
-  const temporaryPath = `${filePath}.${process.pid}.tmp`;
 
-  fs.writeFileSync(temporaryPath, next, 'utf8');
-  try {
-    fs.renameSync(temporaryPath, filePath);
-  } catch (error) {
-    try {
-      fs.unlinkSync(temporaryPath);
-    } catch {
-      // The original write error is more useful than cleanup failure.
+  writeFileAtomic(filePath, next);
+}
+
+function updateAggregateRecordBlock(block, updates, eol) {
+  const lines = block.split(/\r?\n/);
+  for (const [key, value] of Object.entries(updates)) {
+    const escapedKey = key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const fieldPattern = new RegExp(`^(-\\s+|\\s{2})${escapedKey}:`);
+    const fieldIndex = lines.findIndex(line => fieldPattern.test(line));
+    if (fieldIndex >= 0) {
+      const prefix = lines[fieldIndex].match(/^(-\s+|\s{2})/)[0];
+      lines[fieldIndex] = `${prefix}${key}: ${yamlValue(value)}`;
+      continue;
     }
-    throw error;
+
+    // PAC aggregate mappings indent fields after the first sequence line by two
+    // spaces. Insert before trailing blank lines so separators remain unchanged.
+    let insertAt = lines.length;
+    while (insertAt > 0 && lines[insertAt - 1] === '') {
+      insertAt -= 1;
+    }
+    lines.splice(insertAt, 0, `  ${key}: ${yamlValue(value)}`);
   }
+  return lines.join(eol);
+}
+
+function upsertAggregateRecord(filePath, {
+  matchField,
+  matchValue,
+  fields,
+  keyOrder,
+  updates,
+}) {
+  const current = fs.existsSync(filePath) ? fs.readFileSync(filePath, 'utf8') : '';
+  const records = current.trim() === '' ? [] : parseTopLevelSequence(current, filePath);
+  const matchingIndexes = [];
+  for (let index = 0; index < records.length; index += 1) {
+    if (records[index][matchField] === matchValue) {
+      matchingIndexes.push(index);
+    }
+  }
+
+  if (matchingIndexes.length > 1) {
+    throw new Error(
+      `Aggregate metadata contains duplicate "${matchField}" value "${matchValue}" in ${filePath}.`
+    );
+  }
+  if (matchingIndexes.length === 0) {
+    appendAggregateRecord(filePath, fields, keyOrder);
+    return { created: true };
+  }
+
+  const starts = [];
+  const recordStartPattern = /^-\s+/gm;
+  let match;
+  while ((match = recordStartPattern.exec(current)) !== null) {
+    starts.push(match.index);
+  }
+  const recordIndex = matchingIndexes[0];
+  const start = starts[recordIndex];
+  const end = recordIndex + 1 < starts.length ? starts[recordIndex + 1] : current.length;
+  const eol = current.includes('\r\n') ? '\r\n' : '\n';
+  const updatedBlock = updateAggregateRecordBlock(current.slice(start, end), updates, eol);
+  writeFileAtomic(filePath, `${current.slice(0, start)}${updatedBlock}${current.slice(end)}`);
+  return { created: false };
 }
 
 function yamlFiles(dirPath, suffixPattern) {
@@ -276,5 +344,6 @@ module.exports = {
   normalizeWebRole,
   parseTopLevelSequence,
   renderAggregateRecord,
+  upsertAggregateRecord,
   yamlValue,
 };

@@ -5,6 +5,7 @@ const os = require('os');
 const path = require('path');
 
 const { detectProjectContext, readWebsiteYml } = require('../lib/detect-project-context');
+const { findProjectRoot } = require('../lib/validation-helpers');
 const { createTempProject, writeProjectFile } = require('./test-utils');
 
 test('detectProjectContext throws when neither config nor .powerpages-site/website.yml exists', (t) => {
@@ -72,6 +73,38 @@ test('detectProjectContext: direct PAC root resolves non-SPA identity and siteRo
   assert.equal(result.siteName, 'Direct Non-SPA Site');
   assert.equal(result.websiteRecordId, '3ecc32f6-8665-f111-a826-000d3a5a7777');
   assert.equal(result.environmentUrl, null);
+});
+
+test('detectProjectContext retains enclosing manifests when starting inside nested PAC metadata', (t) => {
+  const projectRoot = createTempProject(t);
+  const nestedStart = path.join(projectRoot, '.powerpages-site', 'web-pages', 'home');
+  fs.mkdirSync(nestedStart, { recursive: true });
+  writeProjectFile(projectRoot, '.powerpages-site/.portalconfig/manifest.yml', 'modelVersion: 2\n');
+  writeProjectFile(
+    projectRoot,
+    '.powerpages-site/website.yml',
+    'id: 4ecc32f6-8665-f111-a826-000d3a5a7777\nname: Wrapped Non-SPA Site\n',
+  );
+  writeProjectFile(
+    projectRoot,
+    '.solution-manifest.json',
+    JSON.stringify({ solution: { uniqueName: 'WrappedSolution' } }),
+  );
+  writeProjectFile(
+    projectRoot,
+    '.datamodel-manifest.json',
+    JSON.stringify({ tables: [{ logicalName: 'contoso_item' }] }),
+  );
+
+  const resolvedProjectRoot = findProjectRoot(nestedStart);
+  const result = detectProjectContext({ projectRoot: resolvedProjectRoot });
+
+  assert.equal(resolvedProjectRoot, projectRoot);
+  assert.equal(result.projectRoot, projectRoot);
+  assert.equal(result.siteRoot, path.join(projectRoot, '.powerpages-site'));
+  assert.equal(result.siteType, 'non-spa');
+  assert.equal(result.solutionManifest.solution.uniqueName, 'WrappedSolution');
+  assert.equal(result.datamodelManifest.tables[0].logicalName, 'contoso_item');
 });
 
 test('detectProjectContext: .powerpages-site/.portalconfig/ is the positive non-SPA signal (even without website.yml)', (t) => {
