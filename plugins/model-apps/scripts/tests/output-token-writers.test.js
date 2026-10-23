@@ -178,6 +178,13 @@ test('what does not move for bytes: bytes with no token are the very object and 
   assert.strictEqual(redactFileData(raw), raw, 'a raw ArrayBuffer is no view: passed on');
   assert.throws(() => appendFileSafe(path.join(dir, 'raw.bin'), raw), (error) => error.code === 'ERR_INVALID_ARG_TYPE');
   assert.ok(!fs.existsSync(path.join(dir, 'raw.bin')));
+  // A piece shorter than 24 characters, in one call, is no token: each call is read alone, as a text is.
+  const short = Buffer.from(`the start ${TOKEN.slice(0, 23)}`);
+  assert.strictEqual(redactFileData(short), short);
+  assert.strictEqual(redactFileData(TOKEN.slice(0, 23)), TOKEN.slice(0, 23));
+  appendFileSafe(path.join(dir, 'short.txt'), short);
+  appendFileSafe(path.join(dir, 'short.txt'), Buffer.from(TOKEN.slice(23, 40)));
+  assert.strictEqual(fs.readFileSync(path.join(dir, 'short.txt'), 'latin1'), `the start ${TOKEN.slice(0, 40)}`, 'the residual: a token split between two appends, each piece shorter than 24');
 });
 
 // A file system that writes as the real one does and records every call that is given data: what the writers handed it.
