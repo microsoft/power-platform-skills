@@ -360,21 +360,46 @@ function reviewSummaryProblems(content) {
 // eval 4: "All form fields have aria-labels or aria-labelledby for accessibility". A control is labelled
 // by its own aria-label/aria-labelledby, or by what gives it the same accessible name: a Fluent UI
 // `<Field label=…>` around it (Field wires its label to the control with aria-labelledby), a `label`
-// prop on a Checkbox/Switch/Radio (rendered as its <label>), or an `id` that a `<Label htmlFor>` with
-// some content names. A label only counts when it can name something: an empty string, `{''}`, `{null}`,
-// `{undefined}` or `{false}` is no label, whereas a computed one (`label={translate('title')}`) is. A
-// spread (`{...props}`) may carry a label the page does not show, so it is not reported. A hidden input
+// prop on a Checkbox/Switch/Radio (rendered as its <label>), or an `id` that a `<label htmlFor>` (or
+// Fluent `<Label htmlFor>`) that can show some text names. A label only counts when it can name something:
+// an empty string, `{''}`, `{null}`, `{undefined}` or `{false}` is no label, whereas a computed one
+// (`label={translate('title')}`) is; the same goes for the children of a label element (childrenShowText).
+// A spread (`{...props}`) may carry a label the page does not show, so it is not reported. A hidden input
 // (`type="hidden"`) is no field. Returns null when the page has no form control.
 const STATIC_EMPTY = /^\s*(?:(['"`])\s*\1|null|undefined|false)\s*$/;
 const names = (attr) => Boolean(attr) && ((attr.kind === 'string' && attr.value.trim() !== '')
   || (attr.kind === 'expression' && attr.value.trim() !== '' && !STATIC_EMPTY.test(attr.value)));
+
+// Whether an element's children can show any text: a run of JSX text that is not blank, or an expression
+// container that is not statically empty, at any depth of the markup inside it. `{null}`, `{''}`,
+// `{undefined}`, `{false}` and a container holding only a comment (`{/* … */}`, blank in the code view)
+// show nothing, and the tags and attributes of nested elements are no text:
+//   <label htmlFor="t">Title</label>                  shows text
+//   <label htmlFor="t">{translate('title')}</label>   may show text (a computed value is not judged)
+//   <label htmlFor="t"><span>{null}</span></label>    shows nothing
+function childrenShowText(content, element) {
+  const { src, code } = sourceView(content);
+  const from = element.childrenStart;
+  const to = element.childrenEnd;
+  if (jsxTextRuns(content).some((run) => run.start >= from && run.end <= to && run.text.trim() !== '')) return true;
+  const nested = jsxElements(content).filter((e) => e.start >= from && e.start < to);
+  const inTag = (i) => nested.some((e) => (i >= e.start && i < e.openEnd) || (!e.selfClosing && i >= e.childrenEnd && i < e.end));
+  for (let i = from; i < to; i += 1) {
+    if (code[i] !== '{' || inTag(i)) continue;
+    const close = matchingClose(code, i);
+    if (close < 0 || close > to) return true;
+    if (code.slice(i + 1, close).trim() !== '' && !STATIC_EMPTY.test(src.slice(i + 1, close))) return true;
+    i = close;
+  }
+  return false;
+}
+
 function formFieldLabelProblems(content) {
-  const { src } = sourceView(content);
   const controls = jsxElements(content, FORM_CONTROLS).filter((c) => c.attrs.get('type')?.value !== 'hidden');
   if (!controls.length) return null;
   const fields = jsxElements(content, /^Field$/).filter((f) => names(f.attrs.get('label')));
   const htmlFor = new Set(jsxElements(content, /^(?:Label|label)$/)
-    .filter((l) => src.slice(l.childrenStart, l.childrenEnd).replace(/<[^>]*>/g, '').trim() !== '')
+    .filter((l) => childrenShowText(content, l))
     .map((l) => l.attrs.get('htmlFor')?.value).filter((v) => typeof v === 'string' && v));
   const problems = [];
   for (const control of controls) {

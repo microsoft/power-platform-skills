@@ -336,6 +336,23 @@ test('eval 4: an empty label is no label', () => {
   assertPass(grade(LABELS, withPage(E4, 'page.tsx', [TITLE, "<Field label={translate('title')}>\n                        <Input"])));
 });
 
+// A `<label htmlFor>` (or Fluent `<Label htmlFor>`) names its control only if it can show some text: an
+// expression that is statically empty (`{null}`, `{''}`, `{undefined}`, `{false}`, a comment) shows nothing,
+// at any depth of the markup inside it, and a nested element's attributes are no text. Text, a non-empty
+// literal and a computed or translated value do.
+test('eval 4: a label element that shows nothing names no control', () => {
+  const TITLE = '<Field label="Title">\n                        <Input\n                            aria-label="Title"';
+  const labelled = (label) => withPage(E4, 'page.tsx', [TITLE, `<Field>\n                        ${label}\n                        <Input\n                            id="title"`]);
+  for (const tag of ['label', 'Label']) {
+    for (const nothing of ['{null}', "{''}", '{undefined}', '{false}', '{/* the title */}', '<span>{null}</span>', '<span className={styles.title}>{null}</span>', ' ']) {
+      assertFail(grade(LABELS, labelled(`<${tag} htmlFor="title">${nothing}</${tag}>`)), /<Input> has no aria-label, aria-labelledby or label/);
+    }
+    for (const shown of ['Title', "{'Title'}", "{translate('title')}", '{titleLabel}', '<span>Title</span>']) {
+      assertPass(grade(LABELS, labelled(`<${tag} htmlFor="title">${shown}</${tag}>`)));
+    }
+  }
+});
+
 test('eval 13: literal text in a conditional or a template child is hardcoded too', () => {
   const child = (expression) => withPage(E13, 'page.tsx', ["<Text>{t('empty')}</Text>", `<Text>{${expression}}</Text>`]);
   assertFail(grade(TRANSLATED, child("rows.length ? 'Contacts' : 'No contacts.'")), /hardcoded JSX string '(?:Contacts|No contacts\.)'/);
