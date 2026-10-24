@@ -19,6 +19,11 @@ in the page `config.json`, and that Custom API must exist in the target environm
 > `--actions`. So the maker-facing skill says "Custom API" while the wire format stays
 > `actionBindings` — the two describe the same thing at different layers.
 
+> **Two `actionBindings` names are not Custom APIs.** Exactly `WhoAmI` and `RetrieveVersion`
+> are reviewed built-in Dataverse Functions behind their own default-off
+> `dataverse-operations` flag: discovery here never lists them, and a missing Custom API row
+> is never their problem. See `references/dataverse-operations.md`.
+
 ## Binding shape: `actions.json` (array) vs page `config.json` (object)
 
 The skill writes a **bare JSON array** of bindings to working-dir `actions.json`.

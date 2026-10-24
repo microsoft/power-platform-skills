@@ -439,17 +439,19 @@ Read this output as:
 - **Top of each subtest:** `# Subtest: <fixture-folder-name>` — which fixture is being graded.
 - **Per-assertion line:** `ok N - <assertion text>` (pass) or `not ok N - <assertion text>` (fail) or `ok N - <text> # SKIP <reason>` (not applicable).
 - **YAML block under `not ok`:** the `reason` field names the offending file and what specifically violated the assertion.
-- **Aggregate:** `ok N - <fixture-name>` (all assertions passed) or `not ok N - <fixture-name>` (at least one fail).
-- **Final summary:** `# tests <N>` / `# pass <N>` / `# fail <N>` / `# skip <N>` / `# fixtures <N> (pass X, fail Y)`.
+- **Aggregate:** `ok N - <fixture-name>` (at least one assertion graded, and none failed), `ok N - <fixture-name> # SKIP no expectation graded` (unscored: every assertion skipped, or there was none — nothing was graded, so it is not a pass) or `not ok N - <fixture-name>` (at least one fail).
+- **Final summary:** `# tests <N>` / `# pass <N>` / `# fail <N>` / `# skip <N>` / `# fixtures <N> (pass X, fail Y)`, then `# unscored fixtures <U>` only when U > 0. An unscored fixture is in neither X nor Y, so X + Y + U = N. The app-builder runner shares this reporter and prints the same lines.
 
 **Skipped vs failed:**
-- `# SKIP <reason>` — the assertion doesn't apply (e.g., "no Dataverse files in this fixture" for a mock-data assertion), or a registered check cannot grade the stored evidence yet (e.g., "column-name verification requires RuntimeTypes.ts fixture"). **Does not fail the fixture.**
-- `not ok` — actual failure. Fixture fails. Exit code becomes 1.
+- `# SKIP <reason>` — the assertion doesn't apply (e.g., "no Dataverse files in this fixture" for a mock-data assertion), or a registered check cannot grade the stored evidence yet (e.g., "column-name verification requires RuntimeTypes.ts fixture"). **Does not fail the fixture** — but a fixture whose every assertion skips is unscored, not passed.
+- `not ok` — actual failure. Fixture fails. Exit code becomes 1. An unscored fixture does not change the exit code.
 
 **Three common skip reasons in our suite:**
 1. `no Dataverse files / no <feature> detected` — the fixture doesn't exercise this code path
 2. `not graded yet` / `requires RuntimeTypes.ts fixture` — a check that cannot grade the stored evidence: a correct check would fail a historical fixture's real drift, or the capture did not keep what the check reads. `evals/model-apps/tests/eval-coverage-baseline.json` records the reason for each
 3. `no check registered for this expectation` — the assertion text in `evals.json` doesn't have a corresponding check in the runner library. Either add the check or accept the skip as documentation-only.
+
+**One known unscored case:** `custom-api OFF: a preserving stage's generation or upload cannot be attributed to that stage, …` — a page kept while `custom-api` is OFF, unreadable or never probed (an unrelated edit, or a Custom API removal the builder defers) is not graded against the gate by the Phase 4.6 rule or either Phase 5 rule, because the grader cannot tie those calls to the stage that keeps the page. The gate covers a workflow whose plan has Custom API rows **or** whose recorded lifecycle carries one — in an upload's `--actions` file, or in a stage's before- or after-config (a file that cannot be read counts) — so an empty Custom API table is no permission. While the gate is not enabled, what still fails: a create (an upload with no `--page-id`) whose `--actions` file holds a Custom API row or cannot be read, whatever the plan says; and, when the plan has Custom API rows, any other create and any call no verified preserving stage covers — so a new or replaced Custom API row fails. Under an empty table every other call of such a workflow is unscored. A workflow that binds only WhoAmI or RetrieveVersion is outside the gate, with `custom-api` ON or OFF.
 
 ---
 

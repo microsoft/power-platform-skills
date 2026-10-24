@@ -417,6 +417,66 @@ test('pageBindingsNote says what a rebuild into another environment cannot bring
   assert.ok(!/^NOTE/.test(lost), 'no page holds a binding the spec states, so there is no note about them');
 });
 
+// ── the two reviewed built-in operations in a download ──────────────────────────────────────────────────────────────────────────
+// WhoAmI and RetrieveVersion are platform messages (lib/dataverse-operations.js), not Custom APIs: a download that lists them under `customApis` tells the operator to deploy something that
+// cannot be deployed. An EXACT catalogue name is reported under `neededInTarget.dataverseOperations` instead — a legacy or contradictory entry too, since a parameter map does not make
+// the name a Custom API — and the binding itself is carried as the page holds it: not repaired, not certified. A list that holds an unsafe field is still left out whole.
+const WHO_AM_I = { name: 'WhoAmI', isFunction: true, displayName: 'Current Dataverse identity', parameterKinds: {} };
+const RETRIEVE_VERSION = { name: 'RetrieveVersion', isFunction: true, displayName: 'Dataverse server version', parameterKinds: {} };
+
+test('built-in operations: a download names WhoAmI and RetrieveVersion as built-in operations, never as Custom APIs to deploy — legacy, contradictory and parameterized entries alike', () => {
+  const pages = [
+    { pageId: A, key: 'ops', name: 'Ops', actionBindings: [APPROVE, WHO_AM_I, RETRIEVE_VERSION] },
+    { pageId: B, key: 'legacy', name: 'Legacy', actionBindings: [{ name: 'WhoAmI' }, { name: 'RetrieveVersion', isFunction: false, parameterKinds: { Target: 'String' } }] },
+    { pageId: C, key: 'cased', name: 'Cased', actionBindings: [{ name: 'whoami', isFunction: true }] },
+  ];
+  const report = pageBindingsReport(pages, []);
+  assert.deepStrictEqual(report.neededInTarget, {
+    customApis: ['contoso_ApproveOrder', 'whoami'],
+    dataverseOperations: ['RetrieveVersion', 'WhoAmI'],
+  });
+  assert.deepStrictEqual(report.pages.map((p) => p.actionBindings), [['contoso_ApproveOrder', 'RetrieveVersion', 'WhoAmI'], ['RetrieveVersion', 'WhoAmI'], ['whoami']], 'each page still lists every binding it holds');
+  assert.match(report.note, /built-in Dataverse operations \(dataverseOperations\) are not solution components/);
+  assert.match(report.note, /preserved as the page holds them, not repaired/);
+  assert.match(report.note, /not certified/);
+
+  const text = pageBindingsNote(report);
+  const line = text.split('\n').find((l) => /built-in Dataverse operation/.test(l));
+  assert.ok(line, text);
+  assert.match(line, /^ {4}- built-in Dataverse operation\(s\) RetrieveVersion, WhoAmI: /);
+  assert.doesNotMatch(line, /deploy|list-custom-apis|solution component, not an App Spec item/i);
+  assert.match(text, /Custom API\(s\) contoso_ApproveOrder, whoami: a Custom API is a solution component/, 'the Custom APIs keep their own line');
+  assert.doesNotMatch(text.split('\n').find((l) => /Custom API\(s\)/.test(l)), /WhoAmI|RetrieveVersion/);
+  // No response value is ever part of it: a binding names an operation, it does not hold what the operation answered.
+  assert.doesNotMatch(JSON.stringify(report) + text, /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-/i);
+
+  const builtInOnly = pageBindingsReport([{ pageId: A, key: 'ops', name: 'Ops', actionBindings: [WHO_AM_I] }], []);
+  assert.deepStrictEqual(builtInOnly.neededInTarget, { dataverseOperations: ['WhoAmI'] });
+  assert.doesNotMatch(pageBindingsNote(builtInOnly), /Custom API\(s\)/);
+  // A report with no built-in operation says exactly what it always said.
+  const plain = pageBindingsReport([{ pageId: A, key: 'w', name: 'W', actionBindings: [APPROVE] }], []);
+  assert.ok(!('dataverseOperations' in plain.neededInTarget));
+  assert.doesNotMatch(plain.note + pageBindingsNote(plain), /built-in/);
+});
+
+test('built-in operations: a download carries the binding as the page holds it, and recognizing a name never rescues a list that holds an unsafe field', () => {
+  const legacy = { name: 'WhoAmI' };
+  const root = pageTree({
+    [A]: { actionBindings: [APPROVE, WHO_AM_I, RETRIEVE_VERSION, legacy] },
+    [B]: { actionBindings: [WHO_AM_I, { ...RETRIEVE_VERSION, bindingType: 'Global' }] },
+    [C]: { actionBindings: [WHO_AM_I, { ...RETRIEVE_VERSION, response: { typeName: 'Microsoft.Dynamics.CRM.RetrieveVersionResponse' } }] },
+  });
+  const unkept = [];
+  const pages = parseDownloadedPages(root, root, null, [], [], unkept);
+  const byId = new Map(pages.map((p) => [p.pageId, p]));
+  assert.deepStrictEqual(byId.get(A).actionBindings, [APPROVE, WHO_AM_I, RETRIEVE_VERSION, legacy], 'carried exactly: no isFunction or display name added to the legacy entry');
+  for (const id of [B, C]) assert.ok(!Object.hasOwn(byId.get(id), 'actionBindings'), `${id}: a descriptor key on the wire leaves the whole list out`);
+  assert.deepStrictEqual(unkept.map((u) => [u.pageId, u.field]), [[B, 'actionBindings'], [C, 'actionBindings']]);
+  const report = pageBindingsReport(pages.map((p, i) => ({ ...p, key: `p${i}`, name: `P${i}` })), unkept);
+  assert.deepStrictEqual(report.neededInTarget, { customApis: ['contoso_ApproveOrder'], dataverseOperations: ['RetrieveVersion', 'WhoAmI'] }, 'only the list the spec states is reported');
+  assert.strictEqual(report.notCarried.length, 2);
+});
+
 // ── a download, end to end over the stand-in SDK ──────────────────────────────────────────────────────────────────────────────
 
 // What one app of two pages looks like to a download: the navigation names both, and the stand-in SDK answers the reads runDownload makes.
@@ -1011,6 +1071,34 @@ test('a Custom API of the other kind, or bound to another table, is a warning by
     'page "Weather": Custom API binding "contoso_ApproveOrder" says it is an Action, but the Custom API of that name in this environment is a Function — the runtime refuses the call (wrong_operation_kind)',
     'page "Weather": Custom API binding "contoso_GetSummary" is for a Global operation, but the Custom API of that name in this environment is bound to table contoso_other — the runtime refuses the call (invalid_bound_to)',
   ]);
+});
+
+// The two reviewed built-in operations through a whole build: what the build reads for them (nothing), what it says (not checked), and what it writes (the bindings as the spec states them).
+test('built-in operations: a build reads customapi only for the Custom API names, says WhoAmI and RetrieveVersion were not checked, and writes every binding as the spec states it', async () => {
+  const { spec, outDir } = await portableCopy();
+  spec.pages.find((p) => p.key === 'weather').actionBindings = [APPROVE, WHO_AM_I, RETRIEVE_VERSION];
+  spec.pages.find((p) => p.key === 'detail').actionBindings = [WHO_AM_I];
+  assert.ok(validateAppSpec(spec).ok, validateAppSpec(spec).errors.join('; '));
+  const { sdk, reads } = targetEnvironment({ references: BOTH_REFERENCES, apis: BOTH_APIS });
+  const genpage = fakeGenpage();
+  const warnings = [];
+  const rebuilt = await runSdkBuild(spec, { sdk, genpage, appDir: outDir, env: FABRIKAM, apply: true, phases: PHASES, warn: (m) => warnings.push(m) });
+  assert.ok(rebuilt.ok);
+  assert.deepStrictEqual(reads.map((r) => [r.entity, r.options.filter]).filter(([entity]) => entity === 'customapi'), [['customapi', "uniquename eq 'contoso_ApproveOrder'"]], 'one read, of the one Custom API name');
+  const said = bindingWords(warnings).concat(warnings.filter((m) => /built-in operation/.test(m)));
+  assert.ok(said.includes('page "Weather" binds the built-in operations WhoAmI, RetrieveVersion. These are reviewed built-in operation names; their availability in this environment or player and the signed-in user\'s permissions were not checked.'), JSON.stringify(said));
+  assert.ok(said.includes('page "Item Detail" binds the built-in operation WhoAmI. These are reviewed built-in operation names; their availability in this environment or player and the signed-in user\'s permissions were not checked.'), JSON.stringify(said));
+  assert.ok(!warnings.some((m) => /Custom APIs? (WhoAmI|RetrieveVersion)|deployed here/.test(m)), 'no built-in operation is called a missing Custom API');
+  const made = new Map(genpage.of('create').map((c) => [c.args[0].name, c.args[0]]));
+  assert.deepStrictEqual(made.get('Weather').actionBindings, [APPROVE, WHO_AM_I, RETRIEVE_VERSION]);
+  assert.deepStrictEqual(made.get('Item Detail').actionBindings, [WHO_AM_I]);
+
+  // Built-ins and nothing else: the build reads no customapi row at all.
+  const only = await portableCopy();
+  only.spec.pages.find((p) => p.key === 'weather').actionBindings = [WHO_AM_I, RETRIEVE_VERSION];
+  const quiet = targetEnvironment({ references: BOTH_REFERENCES, apis: BOTH_APIS });
+  assert.ok((await runSdkBuild(only.spec, { sdk: quiet.sdk, genpage: fakeGenpage(), appDir: only.outDir, env: FABRIKAM, apply: true, phases: PHASES, warn: () => {} })).ok);
+  assert.deepStrictEqual(quiet.reads.map((r) => r.entity), ['connectionreference'], 'zero customapi reads');
 });
 
 // A page made with a CUSTOM connector: its binding goes through a reference whose connector's definition is a row of the environment (`connector.openapidefinition`), and the copy there can be another version.

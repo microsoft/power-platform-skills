@@ -399,6 +399,25 @@ Read `custom-api-bindings.md` and splice its contents verbatim into the
 If the request implies **no** server-side Custom API operation (plain Dataverse CRUD and/or
 mock data only), write `## Custom API Bindings` as exactly `No custom API bindings.`.
 
+### Built-in Dataverse Operation Detection (handled by the orchestrator, not by you)
+
+Two **built-in** Dataverse Functions — `WhoAmI` (the signed-in user's identifiers) and
+`RetrieveVersion` (the server's version) — can be offered to a page. They are not Custom APIs
+and never go into `## Custom API Bindings`. Do **not** probe the `dataverse-operations` flag, run
+`list-dataverse-operations.js`, or decide a binding yourself; `genpage-customapi-builder` owns
+the gate, the offer and the maker's selection (`references/dataverse-operations.md`).
+
+- When the maker affirmatively asks for one of them, or asks for the identity or server version
+  the page should show, return `{ "action": "dataverse_operation_discovery_required", "intent":
+  "<the maker's words>", "resolvedAction": "create" | "edit", "envUrl": "<the environment you
+  resolved>" }` — or include it beside `custom_api_discovery_required` when both are needed; the
+  orchestrator dispatches the builder once. A mere mention, a question, or "do not add" is not a
+  request. The `whoAmI` your auth preflight runs is neither signal.
+- When your prompt carries a `## Dataverse Operations` block from this run's builder, copy it
+  verbatim into the plan's `## Dataverse Operations` section, right after
+  `## Custom API Bindings` — never re-derive or edit it. Without one, write no such section: it
+  is optional, and absent means no new built-in operation.
+
 ### App Detection
 
 Run:
@@ -543,6 +562,7 @@ plan mode does not reach the user from a subagent.
 - Entities to create: [list — with columns, types, relationships, choices]
 - Connector bindings: [ready-to-bind connectionreference logical names, or "none"]
 - Custom API bindings: [bound Custom API names (Action/Function), or "none"]
+- Built-in Dataverse operations: [the WhoAmI / RetrieveVersion rows this run's builder selected, each a user-triggered button with availability, runtime and privileges not checked — or "none"]
 - Sample data: will ask after entity creation
 
 ### App

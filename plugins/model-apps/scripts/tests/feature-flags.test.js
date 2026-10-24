@@ -6,6 +6,7 @@ const fs = require('node:fs');
 const { spawnSync } = require('node:child_process');
 
 const libPath = path.join(__dirname, '..', 'lib', 'feature-flags.js');
+const lib = require(libPath);
 const {
   isEnabled,
   isCustomApiEnabled,
@@ -17,7 +18,7 @@ const {
   validateFlags,
   KNOWN_FLAGS,
   FLAGS,
-} = require(libPath);
+} = lib;
 
 // --- Committed defaults and fail-closed fallback ---------------------------
 
@@ -241,4 +242,78 @@ test('describe includes the status for each known flag', () => {
   const d = describe({ env: {}, flags: {} });
   const c = d.find((f) => f.flag === 'custom-api');
   assert.equal(c.status, FLAGS['custom-api'].status);
+});
+
+// --- dataverse-operations: its own default-OFF gate, independent of custom-api ------------------
+
+const DATAVERSE_OPERATIONS_LINE = 'Dataverse built-in operation authoring is disabled (feature flag "dataverse-operations" is OFF). '
+  + 'Set GENPAGE_ENABLE_DATAVERSE_OPERATIONS=1 to offer WhoAmI and RetrieveVersion. '
+  + 'Existing bindings are preserved; runtime governance and user privileges still apply.';
+
+test('dataverse-operations is a registered flag: its env override turns it on, and custom-api keeps its own state', () => {
+  // An unregistered flag ignores its env var (isEnabled fails closed for unknown names), so registration is what this pins.
+  assert.equal(isEnabled('dataverse-operations', { env: { GENPAGE_ENABLE_DATAVERSE_OPERATIONS: '1' } }), true);
+  assert.ok(KNOWN_FLAGS.includes('dataverse-operations'));
+  assert.equal(FLAGS['dataverse-operations'].status, 'experimental');
+  assert.equal(FLAGS['dataverse-operations'].enableEnv, 'GENPAGE_ENABLE_DATAVERSE_OPERATIONS=1');
+  assert.match(FLAGS['dataverse-operations'].summary, /WhoAmI/);
+  assert.match(FLAGS['dataverse-operations'].summary, /RetrieveVersion/);
+  assert.equal(envVarName('dataverse-operations'), 'GENPAGE_ENABLE_DATAVERSE_OPERATIONS');
+  // The two gates are independent in both directions.
+  assert.equal(isEnabled('custom-api', { env: {} }), true);
+  assert.equal(isEnabled('custom-api', { env: { GENPAGE_ENABLE_DATAVERSE_OPERATIONS: '1' } }), true);
+  assert.equal(isEnabled('custom-api', { env: { GENPAGE_ENABLE_DATAVERSE_OPERATIONS: '1', GENPAGE_ENABLE_CUSTOM_API: '0' } }), false);
+  assert.equal(isEnabled('dataverse-operations', { env: { GENPAGE_ENABLE_CUSTOM_API: '1' } }), false);
+  assert.equal(isEnabled('dataverse-operations', { env: { GENPAGE_ENABLE_CUSTOM_API: '0', GENPAGE_ENABLE_DATAVERSE_OPERATIONS: '1' } }), true);
+});
+
+test('dataverse-operations ships OFF; an unset, blank or unrecognized env value defers to the file, which is not a forced false', () => {
+  const json = JSON.parse(fs.readFileSync(path.join(__dirname, '..', '..', 'feature-flags.json'), 'utf8'));
+  assert.equal(json['dataverse-operations'], false);
+  assert.deepEqual(validateFlags(json), []);
+  assert.equal(isEnabled('dataverse-operations', { env: {} }), false);
+  for (const value of [undefined, '', '   ', 'maybe', 'enable']) {
+    const env = value === undefined ? {} : { GENPAGE_ENABLE_DATAVERSE_OPERATIONS: value };
+    assert.equal(isEnabled('dataverse-operations', { env, flags: {} }), false, `${JSON.stringify(value)} over a file without the flag`);
+    assert.equal(isEnabled('dataverse-operations', { env, flags: { 'dataverse-operations': true } }), true, `${JSON.stringify(value)} defers to a file that says true`);
+  }
+  for (const value of ['0', 'false', 'NO', ' off ']) {
+    assert.equal(isEnabled('dataverse-operations', { env: { GENPAGE_ENABLE_DATAVERSE_OPERATIONS: value }, flags: { 'dataverse-operations': true } }), false, value);
+  }
+  for (const value of ['1', 'true', 'YES', ' on ']) {
+    assert.equal(isEnabled('dataverse-operations', { env: { GENPAGE_ENABLE_DATAVERSE_OPERATIONS: value }, flags: {} }), true, value);
+  }
+  assert.equal(isEnabled('dataverse-operations', { env: {}, flags: { 'dataverse-operations': 'true' } }), false, 'only a boolean true in the file turns it on');
+  assert.equal(isEnabled('dataverse-operations', { env: {}, flagsPath: path.join(__dirname, 'no-such-flags.json') }), false, 'a missing file stays off');
+  const listed = describe({ env: {}, flags: {} }).find((f) => f.flag === 'dataverse-operations');
+  assert.deepEqual(listed, { flag: 'dataverse-operations', enabled: false, source: 'default', status: 'experimental' });
+});
+
+test('the dataverse-operations helpers print the one byte-stable gate line, exit 3, and never touch custom-api', () => {
+  assert.equal(lib.dataverseOperationsDisabledMessage(), DATAVERSE_OPERATIONS_LINE);
+  assert.equal(lib.isDataverseOperationsEnabled({ env: {} }), false);
+  assert.equal(lib.isDataverseOperationsEnabled({ env: { GENPAGE_ENABLE_DATAVERSE_OPERATIONS: 'on' } }), true);
+  let exitCode = null;
+  let written = '';
+  lib.exitIfDataverseOperationsDisabled({ env: {}, flags: {}, exit: (c) => { exitCode = c; }, write: (s) => { written += s; } });
+  assert.equal(exitCode, 3);
+  assert.equal(written, `${DATAVERSE_OPERATIONS_LINE}\n`);
+  let touched = false;
+  lib.exitIfDataverseOperationsDisabled({ env: { GENPAGE_ENABLE_DATAVERSE_OPERATIONS: '1' }, exit: () => { touched = true; }, write: () => { touched = true; } });
+  assert.equal(touched, false, 'ON is a no-op');
+  assert.equal(isCustomApiEnabled({ env: {} }), true, 'probing the new gate leaves custom-api as it was');
+  assert.doesNotMatch(customApiDisabledMessage(), /dataverse-operations|WhoAmI/);
+});
+
+test('CLI probe: dataverse-operations prints "disabled" and exits 1 by default, "enabled" and 0 with the override; usage stays exit 2', () => {
+  const env = { ...process.env };
+  delete env.GENPAGE_ENABLE_DATAVERSE_OPERATIONS;
+  const off = spawnSync(process.execPath, [libPath, 'dataverse-operations'], { encoding: 'utf8', env });
+  assert.equal(off.status, 1, off.stderr);
+  assert.equal(off.stdout, 'disabled\n');
+  const on = spawnSync(process.execPath, [libPath, 'dataverse-operations'], { encoding: 'utf8', env: { ...env, GENPAGE_ENABLE_DATAVERSE_OPERATIONS: '1' } });
+  assert.equal(on.status, 0, on.stderr);
+  assert.equal(on.stdout, 'enabled\n');
+  const usage = spawnSync(process.execPath, [libPath], { encoding: 'utf8', env });
+  assert.equal(usage.status, 2);
 });

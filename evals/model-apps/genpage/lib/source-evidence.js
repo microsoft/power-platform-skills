@@ -657,4 +657,4 @@ function stringRecordMemberIsInput(mask, scopes, expr, at) {
   });
 }
 
-module.exports = { groupEnd, literalString, objectFields, actionCalls, receiverIsDataApi, stringRecordMemberIsInput, escapeRe };
+module.exports = { groupEnd, literalString, objectFields, actionCalls, receiverIsDataApi, stringRecordMemberIsInput, escapeRe, callSites, expressionEnd };

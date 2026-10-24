@@ -24,7 +24,7 @@ const { blankLiterals, blankNonCodePreservingTemplateExpressions, commentRanges,
 const { pageStructureProblems } = require('../../../../plugins/model-apps/scripts/lib/page-structure.js');
 const { navigationProblems } = require('./navigation-contract.js');
 const { workerProblems } = require('./worker-contract.js');
-const { customApiProblems } = require('./custom-api-contract.js');
+const { gradeCustomApi } = require('./custom-api-contract.js');
 const { gradeEvidence } = require('./evidence-utils.js');
 const {
   reviewSummaryProblems, formFieldLabelProblems, searchAndFilterProblems,
@@ -532,7 +532,7 @@ const PHASE5_EXPECTATIONS = new Map();
 
 PHASE5_EXPECTATIONS.set(
   'Phase 5: Custom API discovery, gate, bare bindings, runtime calls and update preservation or explicit clear agree',
-  ({ fixture, files }) => gradeEvidence(customApiProblems, { ...fixture, files })
+  ({ fixture, files }) => gradeCustomApi({ ...fixture, files })
 );
 
 PHASE5_EXPECTATIONS.set(

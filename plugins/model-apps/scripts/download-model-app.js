@@ -43,6 +43,7 @@ const { fetchSitemap, sitemapGenPages, appNavigationMatchesSitemap } = require('
 const { isRestrictedSolution } = require('./lib/system-solutions.js');
 const { isPlatformIconRef, webResourceNameFromRef, validateAppSpec, normalizeLanguageCode, isLocalizedLabelMap, derivedPluralName, ambiguousChoiceAliases, relationshipSchemaName, manyToManySchemaName, dashboardNameKey, PAGE_MODEL_RE, sitemapEntityTables, lookupLabelFor, isOldLookupColumnLabel } = require('./lib/app-spec.js');
 const { PAGE_BINDINGS, pageBindingsProblem, statableBindings, bindingProblemText } = require('./lib/page-bindings.js');
+const { getReviewedDataverseOperation } = require('./lib/dataverse-operations.js');
 const { labelsByLcid, sameLabel } = require('./lib/lookup-labels.js');
 const { odataGuid } = require('./lib/ai-app-settings.js');
 const { APP_COMPONENT_ENTITY_SOURCES, appComponentEntities, appComponentRows, currentAppLayer, readAppComponentInventory, downloadAppMainForms, setAppMembershipFloor } = require('./lib/app-components.js');
@@ -1092,7 +1093,7 @@ function bindingNames(list, identity) {
 }
 
 // What the connector and Custom API bindings of the pages a download read come to, and what a rebuild into ANOTHER environment still cannot bring:
-//   { pages: [{ key, name, connectorBindings?: [name…], actionBindings?: [name…] }], notCarried?: [{ key, name, field, reason }], neededInTarget: { connectionReferences?, customApis?, serviceResources? }, note }
+//   { pages: [{ key, name, connectorBindings?: [name…], actionBindings?: [name…] }], notCarried?: [{ key, name, field, reason }], neededInTarget: { connectionReferences?, customApis?, dataverseOperations?, serviceResources? }, note }
 // or null when no page holds a binding or lost one. `pages` are the pages whose bindings are in the spec, in the order the spec lists its pages, each with the names its bindings go by (identifiers: a list is
 // in the spec only when every value in it has a safe shape, page-bindings.js); `notCarried` the lists a page holds that the spec cannot state (`unkept`, from parseDownloadedPages), each with the place and the
 // vetted property that kept it out, never a value — a rebuild into this environment leaves those as they are, and a rebuild into another does not carry them.
@@ -1101,12 +1102,16 @@ function bindingNames(list, identity) {
 //   - a connector binding names a CONNECTION REFERENCE by its logical name. The reference is a Dataverse row that points at a connection, and a connection holds a user's sign-in, so it stays in the environment
 //     that made it; the page resolves the reference by name, which is how the page itself can travel (https://learn.microsoft.com/power-apps/maker/data-platform/create-connection-reference);
 //   - a Custom API binding names a Custom API by its unique name. A Custom API is a solution component, not an App Spec item (https://learn.microsoft.com/power-apps/developer/data-platform/custom-api);
+//   - a binding whose name is EXACTLY WhoAmI or RetrieveVersion names a reviewed built-in Dataverse operation (lib/dataverse-operations.js), not a Custom API: it is a message the platform defines, so there
+//     is nothing to deploy, and `dataverseOperations` names it apart from `customApis` — a legacy or contradictory entry too (a parameter map does not make the name a Custom API). The binding is carried
+//     as the page holds it, not repaired, and nothing says the operation is available in another environment, its player or to its users: that is not certified. Any other spelling is a Custom API name;
 //   - what a connector binding points at inside the service — `dataset`, `tables`: a SharePoint site and its list ids, say — is written as the page holds it, and means something in another environment only if the same
 //     resources are there. `serviceResources` names the connection references whose bindings carry one.
 function pageBindingsReport(pages, unkept) {
   const held = [];
   const references = new Set();
   const apis = new Set();
+  const builtIns = new Set();
   const service = new Set();
   const nonEmpty = (list) => Array.isArray(list) && list.length > 0;
   for (const page of pages || []) {
@@ -1125,7 +1130,9 @@ function pageBindingsReport(pages, unkept) {
       entry.actionBindings = bindingNames(page.actionBindings, PAGE_BINDINGS.actionBindings);
       for (const binding of page.actionBindings) {
         const name = binding && typeof binding.name === 'string' ? binding.name.trim() : '';
-        if (name) apis.add(name);
+        // The exact name, as the catalogue matches it (`whoami` is a Custom API name).
+        if (binding && getReviewedDataverseOperation(binding.name)) builtIns.add(binding.name);
+        else if (name) apis.add(name);
       }
     }
     held.push(entry);
@@ -1143,11 +1150,14 @@ function pageBindingsReport(pages, unkept) {
     neededInTarget: {
       ...(references.size ? { connectionReferences: sorted(references) } : {}),
       ...(apis.size ? { customApis: sorted(apis) } : {}),
+      ...(builtIns.size ? { dataverseOperations: sorted(builtIns) } : {}),
       ...(service.size ? { serviceResources: sorted(service) } : {}),
     },
     note: 'The spec states these bindings, so a rebuild writes them onto each page in any environment. A rebuild cannot create what they name — the connection references and the connections behind them, the Custom APIs, and the '
       + 'service resources a connector binding points at — so each must already exist in the environment you rebuild into. A rebuild reads them there before it writes a page: it stops, before writing anything, at a connection '
-      + 'reference that is for another connector, and says by name each reference and Custom API that is not there, a reference that has no connection, and an operation a custom connector there does not define.',
+      + 'reference that is for another connector, and says by name each reference and Custom API that is not there, a reference that has no connection, and an operation a custom connector there does not define.'
+      + (builtIns.size ? ' The built-in Dataverse operations (dataverseOperations) are not solution components and there is nothing to make for them: their bindings are preserved as the page holds them, not repaired, '
+        + 'and whether an environment, its page player and the signed-in user can call them, or whether a binding matches the reviewed contract, is not certified.' : ''),
   };
 }
 
@@ -1168,6 +1178,9 @@ function pageBindingsNote(report) {
     }
     if (needed.customApis) {
       lines.push(`    - Custom API(s) ${list(needed.customApis)}: a Custom API is a solution component, not an App Spec item — deploy it there first (list-custom-apis.js lists what an environment has); one bound to a table needs that table there too`);
+    }
+    if (needed.dataverseOperations) {
+      lines.push(`    - built-in Dataverse operation(s) ${list(needed.dataverseOperations)}: an operation the platform defines, not a solution component, so there is nothing to make for it — the binding is carried as the page holds it, not repaired, and whether that environment, its page player and the signed-in user can call it is not certified (a rebuild reads nothing for it)`);
     }
     if (needed.serviceResources) {
       lines.push(`    - what the connector bindings of ${list(needed.serviceResources)} point at inside the service (dataset, tables: a SharePoint site and list ids, for example) is written as it is here, and works there only if the same resources exist`);

@@ -65,6 +65,17 @@ const FLAGS = {
       'GenUxEnableCustomTelemetry ECS setting — all live in PROD.',
     enableEnv: 'GENPAGE_ENABLE_CUSTOM_TELEMETRY=1',
   },
+  'dataverse-operations': {
+    status: 'experimental',
+    summary:
+      'Built-in Dataverse operation authoring — offers exactly WhoAmI and RetrieveVersion, two reviewed unbound Functions with no ' +
+      'inputs, as explicitly selected, user-triggered page bindings called with dataApi.executeFunction. The offer comes from a ' +
+      'fixed catalogue: it does not check the environment, the player runtime or the signed-in user privileges.',
+    dependencies:
+      'the shared pai-gen-ux-action-runtime and a host runtime that implements executeFunction, the page `actionBindings` ' +
+      'the plugin writes into config.json (genpage-upload.js --actions), and the GenUxPluginActionAllowList ECS setting.',
+    enableEnv: 'GENPAGE_ENABLE_DATAVERSE_OPERATIONS=1',
+  },
 };
 
 // Flag names the skill knows about, derived from the catalog. Used to validate the
@@ -129,6 +140,11 @@ function isCustomApiEnabled(opts) {
   return isEnabled('custom-api', opts);
 }
 
+// The built-in operation gate is its own flag, not a mode of custom-api: either can be on while the other is off (references/dataverse-operations.md).
+function isDataverseOperationsEnabled(opts) {
+  return isEnabled('dataverse-operations', opts);
+}
+
 // Fail-closed gate shared by every Custom API (Dataverse Action/Function) script entry
 // point: exit 3 = "feature off", distinct from 1 = runtime/usage error, so a caller can tell
 // "not released" from "it broke". Centralizing it (instead of each script inlining the same
@@ -142,6 +158,18 @@ function exitIfCustomApiDisabled(opts = {}) {
     return exit(3);
   }
   return undefined;
+}
+
+// The same fail-closed gate for list-dataverse-operations.js: exit 3 = "feature off", with one constant line. The line goes to stderr and the
+// process ends at once, so the write is made blocking first — on Linux and macOS a pipe's writes are otherwise queued and the exit cuts them off
+// (output-redaction.js). `exit`/`write` are injectable for unit testing.
+function exitIfDataverseOperationsDisabled(opts = {}) {
+  if (isDataverseOperationsEnabled(opts)) return undefined;
+  require('./output-redaction.js').makeWritesBlocking(process.stderr);
+  const exit = opts.exit || process.exit;
+  const write = opts.write || ((s) => process.stderr.write(s));
+  write(dataverseOperationsDisabledMessage() + '\n');
+  return exit(3);
 }
 
 // Returns the effective state of every known flag plus where the value came from
@@ -191,11 +219,24 @@ function customApiDisabledMessage() {
   );
 }
 
+// The one line list-dataverse-operations.js prints when the built-in operation gate is OFF. Byte-stable: the skill text quotes it, and a test
+// reads it through a pipe. It says what OFF does NOT mean — existing bindings stay, and the platform's own governance still decides a call.
+function dataverseOperationsDisabledMessage() {
+  return (
+    'Dataverse built-in operation authoring is disabled (feature flag "dataverse-operations" is OFF). ' +
+    'Set GENPAGE_ENABLE_DATAVERSE_OPERATIONS=1 to offer WhoAmI and RetrieveVersion. ' +
+    'Existing bindings are preserved; runtime governance and user privileges still apply.'
+  );
+}
+
 module.exports = {
   isEnabled,
   isCustomApiEnabled,
   customApiDisabledMessage,
   exitIfCustomApiDisabled,
+  isDataverseOperationsEnabled,
+  dataverseOperationsDisabledMessage,
+  exitIfDataverseOperationsDisabled,
   describe,
   validateFlags,
   envVarName,

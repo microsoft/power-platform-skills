@@ -1727,12 +1727,19 @@ custom control), but the spec validator emits a warning.
     only through a custom connector's definition (its `connector` row), which is the environment's own and can be
     another version than the page was made with; a reference whose custom connector lookup is absent, null or not a
     GUID — which a connector the platform publishes also has — is not proof of which connector defines them.
+  - **built-in operations** — an `actionBindings` entry named exactly `WhoAmI` or `RetrieveVersion` is a reviewed
+    built-in Dataverse Function, not a Custom API (`references/dataverse-operations.md`): it is left out of the
+    `customapi` read (a page that binds only them reads no `customapi` row), never called missing, and said as NOT
+    CHECKED — its availability in the environment or player and the signed-in user's permissions; one whose
+    declarations do not explicitly say "unbound Function, no inputs" draws a `dataverse-operation-shape` warning and
+    is written as the spec states it. A download names them under `pageBindings.neededInTarget.dataverseOperations`,
+    never under `customApis`: there is nothing to deploy. Any other spelling (`whoami`) is a Custom API name.
 
   `/app-builder` never authors these lists — it writes no connector or Custom API code — so they come from a page
   a download read. A page you reset to `source.kind: "intent"` to regenerate it is generated without connector
   code: delete its bindings from the spec too, or it keeps bindings its code no longer uses. The `custom-api`
-  feature flag gates what the `/genpage` agents author, not the download or the rebuild of bindings a page
-  already holds.
+  and `dataverse-operations` feature flags gate what the `/genpage` agents author, not the download or the rebuild
+  of bindings a page already holds.
 - **Safety HALTs (pages phase).** The build halts on identity/safety violations rather than
   proceeding with potentially wrong state:
   - `pages-identity-conflict` — spec `pageId` and manifest disagree on a key, or a duplicate id is

@@ -84,6 +84,10 @@ call `props.dataApi.executeAction` / `executeFunction` **even in `mock` data mod
 Global Function that computes a value). Never fabricate a Custom API name, parameter, or
 parameter kind; use only the plan's `## Custom API Bindings` values.
 
+**Built-in Dataverse operations** (`WhoAmI`, `RetrieveVersion`) are decided by the plan's
+OPTIONAL `## Dataverse Operations` table alone — never by the Custom API table, and never by a
+maker's mention. Absent, or exactly `No Dataverse operations.`, means none.
+
 ## Step 1 — Read the Plan Document
 
 Read `genpage-plan.md` at the path provided in your invocation prompt.
@@ -216,6 +220,20 @@ If the `## Custom API Bindings` section is exactly `No custom API bindings.`, th
 table, **stop and report it instead of writing the page**: the orchestrator halts on such a
 plan before dispatch, so reaching you means the plan is broken, and treating it as "no
 Custom APIs" would silently drop an approved binding.
+
+Only when the plan has a `## Dataverse Operations` section holding the built-in operation table
+(the not-checked verification line and a `| Name | Kind | …` header with at least one row) do you
+also read:
+
+```
+${PLUGIN_ROOT}/references/dataverse-operations.md
+```
+
+and generate its **button-only** pattern ("Generated call") for exactly the rows of that table —
+each an `executeFunction({ name })` behind its own button, never on mount, at render, in a
+`useEffect`, on a filter or on a timer. An absent section, or exactly `No Dataverse
+operations.`, means no built-in operation: emit no such call. On an edit that preserves the page's
+bindings, keep an existing built-in call exactly as it is written.
 
 Only when your dispatch says **`Telemetry: enabled`** *and* the maker's own request
 asks to measure, track, monitor, or diagnose something do you instrument the page and
@@ -562,6 +580,18 @@ try {
   const { NewStatus } = res.outputs as { NewStatus: string };
 } finally { setIsSubmitting(false); }
 ```
+
+### Built-in Dataverse operations (WhoAmI, RetrieveVersion)
+
+For each row of the plan's `## Dataverse Operations` table, copy the "Generated call" pattern of
+`${PLUGIN_ROOT}/references/dataverse-operations.md`: a presence-checked
+`executeFunction({ name: 'WhoAmI' })` / `executeFunction({ name: 'RetrieveVersion' })` with no
+`parameters` and no `boundTo`, called only from that operation's own button; `res.ok !== true`
+returns before `res.outputs` is read; outputs are read only as own properties of a checked
+object, all or nothing (three GUIDs, or a `Version` of 1 to 128 characters), never logged,
+stored, spread or serialized. An actual 404 says the operation is unavailable — never that a
+Custom API must be deployed. Never retrieve the `systemuser`, `businessunit` or `organization`
+row, and never copy an identity the auth preflight printed into the page.
 
 ## Step 6 — Write the .tsx File
 

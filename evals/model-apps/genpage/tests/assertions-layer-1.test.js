@@ -1023,6 +1023,44 @@ test('a Custom API Bindings table missing required schema columns is rejected', 
   assert.equal(errors.filter((e) => e.code === 'missing-customapi-table').length, 1);
 });
 
+// `## Dataverse Operations` is OPTIONAL: absent is no new built-in authoring, and every existing plan stays valid. When present it sits after Custom
+// API Bindings and before Solution Packaging, and is the exact sentinel or the built-in operation table under its not-checked verification line.
+const DATAVERSE_OPERATIONS = '## Dataverse Operations\nVerification: environment not-checked, runtime not-checked, privileges not-checked.\n'
+  + '| Name | Kind | Bound Entity | Display Name | Parameters | Response fields | Invoke |\n|------|------|--------------|--------------|------------|-----------------|--------|\n'
+  + '| WhoAmI | Function | (Global) | Current Dataverse identity | (none) | BusinessUnitId, UserId, OrganizationId | button |\n\n';
+const withOperations = (section, plan = validPlan()) => plan.replace('## Design Preferences', `${section}## Design Preferences`);
+
+test('Dataverse Operations is optional: a plan without it is unchanged, and the sentinel or the table after Custom API Bindings passes', () => {
+  assert.deepEqual(validateGenpagePlanSchema(validPlan()).filter((e) => /dataverse|order/i.test(`${e.code} ${e.section || ''}`)), []);
+  for (const section of [DATAVERSE_OPERATIONS, '## Dataverse Operations\nNo Dataverse operations.\n\n']) {
+    const errors = validateGenpagePlanSchema(withOperations(section));
+    assert.deepEqual(errors.filter((e) => e.code === 'section-order' || e.section === 'Dataverse Operations'), [], JSON.stringify(errors));
+  }
+  // Before Solution Packaging, as references/plan-schema.md orders them.
+  const both = withOperations(`${DATAVERSE_OPERATIONS}## Solution Packaging\n- Solution: ContosoApp\n\n`);
+  assert.deepEqual(validateGenpagePlanSchema(both).filter((e) => e.code === 'section-order'), []);
+});
+
+test('Dataverse Operations out of order, or anything but the sentinel or the table, is refused', () => {
+  const beforeCustomApis = validPlan()
+    .replace('## Custom API Bindings\nNo custom API bindings.\n\n', `${DATAVERSE_OPERATIONS}## Custom API Bindings\nNo custom API bindings.\n\n`);
+  assert.ok(validateGenpagePlanSchema(beforeCustomApis).some((e) => e.code === 'section-order'), 'before Custom API Bindings');
+  const afterPackaging = withOperations(`## Solution Packaging\n- Solution: ContosoApp\n\n${DATAVERSE_OPERATIONS}`);
+  assert.ok(validateGenpagePlanSchema(afterPackaging).some((e) => e.code === 'section-order'), 'after Solution Packaging');
+  for (const [label, section] of [
+    ['empty', '## Dataverse Operations\n\n'],
+    ['prose', '## Dataverse Operations\nAdd WhoAmI.\n\n'],
+    ['no verification line', DATAVERSE_OPERATIONS.replace('Verification: environment not-checked, runtime not-checked, privileges not-checked.\n', '')],
+    ['a leaked delimiter', '## Dataverse Operations\n----- BEGIN DATAVERSE OPERATIONS -----\nNo Dataverse operations.\n----- END DATAVERSE OPERATIONS -----\n\n'],
+    ['a column missing', DATAVERSE_OPERATIONS.replace(' Invoke |', '').replace('--------|\n', '\n').replace(' button |', '')],
+    ['not in the catalogue', DATAVERSE_OPERATIONS.replace('| WhoAmI |', '| whoami |')],
+    ['an on-load trigger', DATAVERSE_OPERATIONS.replace('| button |', '| on-load |')],
+  ]) {
+    const errors = validateGenpagePlanSchema(withOperations(section));
+    assert.ok(errors.some((e) => e.code === 'invalid-dataverse-operations' && e.section === 'Dataverse Operations'), `${label}: ${JSON.stringify(errors)}`);
+  }
+});
+
 test('validateGenpagePlanSchema: page file paths must stay inside the working directory', () => {
   for (const [file, codePattern] of [
     ['..\\outside.tsx', /separator|traversal|escape|absolute/i],

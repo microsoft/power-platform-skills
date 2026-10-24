@@ -5,6 +5,59 @@ All notable changes to the **model-apps** plugin.
 Entries are deliberately short: what changed and why it matters to you. The reasoning,
 evidence and trade-offs behind a change live in its PR, in `docs/`, or in the linked issue.
 
+## [2.20.0]
+
+The bundled SDK is unchanged (power-platform-ux a3443479, as in 2.19.0). `/genpage` can now offer two built-in Dataverse operations,
+WhoAmI and RetrieveVersion, as explicitly selected, button-only page calls, behind a new `dataverse-operations` feature flag that is
+off by default. The offer is a fixed catalogue: the environment, the page player and the user's permissions are not checked. A rebuild
+and a download tell those two names apart from Custom APIs, whatever the flag says. The genpage evals grade the new paths, no longer
+grade a page kept while `custom-api` is off against that gate, and report a fixture with nothing graded as unscored instead of passed.
+
+### Added
+
+- **`/genpage` can offer WhoAmI and RetrieveVersion as button-only page calls** (feature flag `dataverse-operations`, off by default;
+  `GENPAGE_ENABLE_DATAVERSE_OPERATIONS=1` turns it on for a run). They are two reviewed built-in Dataverse Functions, unbound and with
+  no inputs: WhoAmI answers the signed-in user's, business unit's and organization's ids, RetrieveVersion the server's version. A page
+  binds one only when the maker explicitly selects it — a mention, a question or an unattended run never selects one — and no other
+  Dataverse operation is offered. `scripts/list-dataverse-operations.js` lists the two from a fixed catalogue without contacting the
+  environment (no token, no request): the environment, the page player and the user's permissions are reported as not checked, so a
+  page's first click can answer 404 by design. The generated page calls an operation only from a button — never on load, at render, on
+  a timer or in an effect; a request for a call on load is refused — shows its result all or nothing, keeps it out of logs, storage
+  and URLs, and shows a fixed or sanitized message for a failed call, never advice to deploy a Custom API. A plan can carry an
+  optional `## Dataverse Operations` section. The flag gates offering and authoring only: it is independent of `custom-api` (either
+  can be on while the other is off), and turning it off never strips, repairs or revokes a binding a page holds.
+- **An edit keeps WhoAmI and RetrieveVersion bindings unless the maker removes or clears them.** An edit that adds or replaces one
+  re-probes the flag before the page is generated and stops, writing nothing, when the flag is off. Removing every Custom API keeps
+  the built-in bindings; clearing every binding of such a page needs the maker's clear choice, recorded for that upload, naming each
+  one it removes; a binding the edit keeps stays exactly as the page holds it, never upgraded. With `custom-api` off the builder
+  removes no Custom API row: the page keeps them, the run says so (`Custom API removal not performed (custom-api disabled): <names>`),
+  and a removal is never turned into a clear (on a page with no built-in binding, removing every Custom API is still the plain clear
+  it was).
+
+### Changed
+
+- **A rebuild and a download tell WhoAmI and RetrieveVersion apart from Custom APIs**, whatever the flag says. A rebuild no longer
+  reads `customapi` for a binding named exactly `WhoAmI` or `RetrieveVersion`, and no longer warns that it is a Custom API missing
+  from the environment that has to be deployed: it says the binding was not checked — its availability in the environment or the
+  player, and the user's permissions — and warns, writing the binding as the spec states it, when the binding does not explicitly
+  declare an unbound Function with no inputs. A page that binds only these makes no `customapi` read. A download lists them under
+  `pageBindings.neededInTarget.dataverseOperations` instead of `customApis`, and says there is nothing to deploy for them. Any other
+  spelling (`whoami`) is still a Custom API name.
+- **The genpage evals grade built-in operation authoring, and leave unscored what they cannot attribute.** They grade the optional
+  plan section, the two independent gates, the clear choice, and a newly authored call against the reference's button-only pattern
+  (its result never logged, stored or put in a URL). A page kept while `custom-api` is not enabled (off, unreadable or never probed)
+  is no longer graded against that gate: its generation and upload cannot be attributed to the stage that keeps the page, so the gate
+  rules report it unscored. The gate covers every workflow whose plan, or whose recorded lifecycle (an actions file, a before- or
+  after-config), carries a Custom API row. While it is not enabled, a create whose actions file holds a Custom API row, or cannot be
+  read, fails whatever the plan says; with Custom API rows in the plan, every other create and any new or replaced Custom API row fail
+  too. A workflow that binds only WhoAmI or RetrieveVersion is outside the gate.
+
+### Fixed
+
+- **An eval fixture with nothing graded is reported as unscored, not as passed** (`ok N - <fixture> # SKIP no expectation graded`, and
+  `# unscored fixtures U` after the `# fixtures` line). It was counted as passed. The exit status is unchanged: a run whose fixtures
+  are all unscored still exits 0.
+
 ## [2.19.0]
 
 The bundled SDK is unchanged (power-platform-ux a3443479, as in 2.18.0). A `--changed-only` apply no longer stops over the bindings of

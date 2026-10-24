@@ -155,6 +155,20 @@ fabricated. Persisted (via `genpage-upload.js --actions`) into config.json's `ac
 | new_ApproveOrder | Action | salesorder | Approve Order | Comment: String, Amount: Decimal |
 | new_GetOrderSummary | Function | (Global) | Get Order Summary | OrderId: Guid |
 
+## Dataverse Operations
+[OPTIONAL section — present ONLY when this run's genpage-customapi-builder added or replaced a
+built-in Dataverse operation (WhoAmI, RetrieveVersion; see references/dataverse-operations.md).
+Absent means no new built-in operation. When present it is either exactly:]
+No Dataverse operations.
+
+[or the builder's `dataverse-operations.md` body, copied verbatim: the verification line, then one
+row per selected operation in catalogue order, every cell the catalogue's own. `Invoke` is always
+`button`. These rows are never Custom APIs and never go into `## Custom API Bindings`.]
+Verification: environment not-checked, runtime not-checked, privileges not-checked.
+| Name | Kind | Bound Entity | Display Name | Parameters | Response fields | Invoke |
+|------|------|--------------|--------------|------------|-----------------|--------|
+| WhoAmI | Function | (Global) | Current Dataverse identity | (none) | BusinessUnitId, UserId, OrganizationId | button |
+
 ## Solution Packaging
 [OPTIONAL section — include ONLY when packaging into a solution. Omit it entirely
 to skip packaging; when absent, the orchestrator skips Phase 6.7. This section is
@@ -212,6 +226,7 @@ connector bindings." sentinel).]
 | `## Existing Entities` | Orchestrator (for `genpage.js types --data-sources`) | Comma-separated logical names |
 | `## Connector Bindings` | Planner, page-builder, orchestrator deploy | Exact literal "No connector bindings." when empty; logical names must match Dataverse connectionreferences; tabular bindings must include discovered optional `Fields`; REST/action bindings must include discovered `Parameters` and `Response` |
 | `## Custom API Bindings` | Planner, page-builder, orchestrator deploy | Exact literal "No custom API bindings." when empty; names must match existing Dataverse Custom APIs (`customapi.uniquename`); entity-bound rows carry the bound table (else `(Global)`); every row carries its discovered `Parameters` kinds |
+| `## Dataverse Operations` | Planner, page-builder, orchestrator deploy (Phase 4.6b) | Optional; absent = no new built-in operation. Exact literal "No Dataverse operations." or the builder's table under its not-checked verification line; only `WhoAmI` / `RetrieveVersion`, catalogue cells, `Invoke` = `button` |
 | `## Solution Packaging` | Orchestrator (Phase 6.7) | Opt-in; absent = skip |
 | `## Design Preferences` | Page-builder | Prose, free-form |
 | `## Relevant Samples` | Page-builder (for Read path resolution) | Sample filename must match a file in `${PLUGIN_ROOT}/samples/` |
@@ -228,6 +243,7 @@ Before the orchestrator fans out to builders in Phase 5, it should verify:
 - [ ] If `## Pages` contains Dataverse entities, `## Existing Entities` is non-empty OR `## Entity Creation Required` is non-empty
 - [ ] Every non-empty `## Connector Bindings` logical name matches an existing `connectionreference` in the selected environment
 - [ ] Every non-empty `## Custom API Bindings` name matches an existing `customapi` (uniquename) in the selected environment; entity-bound rows carry the bound table and every row its parameter kinds
+- [ ] A `## Dataverse Operations` section, when present, is the exact sentinel or the built-in table (WhoAmI / RetrieveVersion only); its names are never checked against `customapi`
 - [ ] Every tabular connector binding records discovered `Fields`; generated connector row interfaces must mark every field optional
 - [ ] Every REST/action connector binding records discovered `Parameters` and `Response`; generated request/response interfaces must be built from those schemas only
 

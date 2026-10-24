@@ -191,7 +191,11 @@ at a time (you are headless — see the interaction contract below):
 > `genpage-customapi-builder` agent (which owns the `custom-api` feature gate).
 >
 > - **Preserving or clearing** existing Custom API bindings needs no discovery: capture it
->   in the plan's `### Custom API Changes` and continue.
+>   in the plan's `### Custom API Changes` and continue. Clearing the Custom APIs of a page that
+>   also binds a built-in operation removes each Custom API row and keeps the built-in calls and
+>   bindings; clearing those too is the **clear all** below. With `custom-api` OFF the builder
+>   removes no Custom API row and reports the removal as not performed: keep those calls — they
+>   are still bound — and say in the plan that the removal waits for the flag.
 > - **Adding or replacing** a Custom API call that the orchestrator did not already discover
 >   — i.e. the need surfaced in *your* clarification, so your prompt carries the "preserve"
 >   action and `none — omit --actions` — you must **stop and return**
@@ -206,6 +210,31 @@ at a time (you are headless — see the interaction contract below):
 >   `executeAction` / `executeFunction` calls while upload still omits `--actions`, shipping a
 >   page whose Custom API calls have **no deployed binding**. The orchestrator will run
 >   discovery and re-invoke you with a real Custom API contract and upload-file status.
+
+> **Built-in Dataverse operations** (`WhoAmI`, `RetrieveVersion`; see
+> `${PLUGIN_ROOT}/references/dataverse-operations.md`): they share `actionBindings` with the
+> Custom APIs but are not Custom APIs, and `genpage-customapi-builder` owns their
+> `dataverse-operations` gate. Classify the intent from this page's `config.json.actionBindings`
+> and the request, and record it in the plan as `{ intent, selected, beforeNames, provenance }`
+> (`provenance` is `before-config` or `current-run-selection`):
+>
+> - **preserve** (an unrelated change) — no gate, no discovery; the existing calls and bindings
+>   stay exactly as they are (upload omits `--actions`). A table carried for preservation while
+>   the flag is off is not new authoring and does not halt.
+> - **add / replace** — only on the maker's affirmative request or picker answer (a mention, a
+>   question or "do not add" is not one): stop and return
+>   `{ "action": "dataverse_operation_discovery_required", "intent": "<the maker's words>",
+>   "resolvedAction": "edit", "envUrl": "<the environment URL you were given>" }` unless your
+>   prompt carries this run's built-in operation contract (the body of the builder's
+>   `dataverse-operations.md` between `----- BEGIN/END DATAVERSE OPERATIONS -----` lines); add or
+>   replace only the operations that block lists. When your prompt says `none — not added this
+>   run`, the builder added none: plan the edit without that call and do not signal again. A call on load, on a
+>   filter or in the background is refused (`explicit_trigger_required`): only a button.
+> - **remove** — drop only the named calls and bindings; nothing else.
+> - **clear all** — only after the maker's clear choice, which names the built-in bindings it
+>   removes (edit-flow.md, Edit Phase 6); a yes to adding or keeping one is not that choice.
+> - If the page already binds WhoAmI or RetrieveVersion and you cannot tell the intent, halt
+>   with `needs_input`: missing preserve evidence is not permission to delete the call.
 
 Mark "Analyze existing page" task complete.
 
@@ -234,6 +263,11 @@ Return this plan to the orchestrator, which presents it with `EnterPlanMode`:
 ### Custom API Changes
 - [none | add <operation> | replace <name> with <operation> | remove <name>]
   (the orchestrator delegates any add/replace/remove to genpage-customapi-builder)
+
+### Built-in Operation Changes
+- [none | preserve | add WhoAmI / RetrieveVersion (button) | remove <name> | clear all (confirmed)]
+  with `{ intent, selected, beforeNames, provenance }`
+  (the orchestrator delegates any add/replace to genpage-customapi-builder)
 
 ### Preservation Constraints
 - [What must remain unchanged — feature preservation, specific behaviors]

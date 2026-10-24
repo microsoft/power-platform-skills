@@ -733,7 +733,12 @@ connector — give the binding the logical name of a reference that is for the r
 binding's `connectorId` to the one that environment has, and never pick a reference for the user — and its
 warnings say by name each reference or Custom API that is not there yet, a reference that has no connection, an
 operation the custom connector there does not define, and what it could NOT check (a row that did not say its
-connector or connection, or operations no custom connector definition could prove): relay them. Do not write bindings into a
+connector or connection, or operations no custom connector definition could prove): relay them. A binding named
+exactly `WhoAmI` or `RetrieveVersion` is a reviewed built-in Dataverse operation, not a Custom API: the pull lists it
+under `neededInTarget.dataverseOperations` (nothing to deploy), and a rebuild reads nothing for it and says
+`These are reviewed built-in operation names; their availability in this environment or player and the signed-in
+user's permissions were not checked.` — relay that too, never as "missing" and never as "compatible"
+(`references/dataverse-operations.md`). Do not write bindings into a
 spec yourself — they come from a page a pull read — and when you reset a page to `intent` to regenerate it, delete
 its bindings from the spec: the generator writes no connector code.
 
