@@ -28,9 +28,21 @@ Check for `memory-bank.md` per [shared-instructions.md](${PLUGIN_ROOT}/shared/sh
 
 ### Step 2: Add Connector
 
-The Power Apps code-app CLI (`@microsoft/power-apps-cli`, invoked as `pa` or `power-apps` — resolve via [cli-binary.md](${PLUGIN_ROOT}/shared/cli-binary.md)) creates the connection and generates the typed service itself. Make sure the CLI is installed (`npm install`) and you are signed in (`pa auth status`, or `power-apps auth-status` on `power-apps`-only projects; it shares the same auth as the rest of the code-app skills).
+The Power Apps code-app CLI (`@microsoft/power-apps-cli`, invoked as `pa` or `power-apps` — resolve via [cli-binary.md](${PLUGIN_ROOT}/shared/cli-binary.md)) adds the data source and generates the typed service. Make sure the CLI is installed in the project (see cli-binary.md) and you are signed in (`pa auth status`, or `power-apps auth-status` on `power-apps`-only projects; it shares the same auth as the rest of the code-app skills).
 
-#### Find or Create the Connection
+Work IQ is a **non-tabular** connector (api id `shared_a365copilotchatmcp`, shown as **Work IQ Copilot MCP (Preview)**). Get its connection as described in [connector-reference.md](${PLUGIN_ROOT}/shared/connector-reference.md#connections).
+
+#### CLI 1.3.0+ (`PA_INLINE_CONNECTIONS=yes`)
+
+Tell the user that adding Work IQ may create a connection with their account, then run the add without `-c`:
+
+```bash
+pa app add data-source --connector shared_a365copilotchatmcp --non-interactive
+```
+
+Handle the result with the outcome table in connector-reference.md. Work IQ supports single sign-on, so when the user has no Work IQ connection the CLI either creates one itself or suggests `--use-sso`; with the user's OK, re-run with `--use-sso`.
+
+#### Older CLIs: Find or Create the Connection
 
 **Check for an existing connection first:**
 
@@ -38,32 +50,32 @@ The Power Apps code-app CLI (`@microsoft/power-apps-cli`, invoked as `pa` or `po
 pa connection list
 ```
 
-Look for a **Work IQ Copilot MCP (Preview)** connection (api id `shared_a365copilotchatmcp`) in the output. If one is listed, note its Connection ID and skip to "Add the Data Source" below.
+Look for a **Work IQ Copilot MCP (Preview)** connection (api id `shared_a365copilotchatmcp`) in the output. If one is listed, note its Connection ID and skip to "Older CLIs: Add the Data Source" below.
 
-**Otherwise create one** with the native `create-connection` verb:
+**Otherwise create one**, after asking the user, with the native `create-connection` verb:
 
 ```bash
 pa connection create --connector shared_a365copilotchatmcp
 ```
 
 - The environment is read automatically from the app's `power.config.json` — you do **not** need to pass an environment id.
-- This connector requires OAuth, so the CLI **opens a browser to complete sign-in/consent** (SSO-only connectors complete silently with no browser).
+- If the connection needs a browser sign-in, the CLI can only do that from an interactive terminal. If it says so, follow [Create a connection with the user](${PLUGIN_ROOT}/shared/connector-reference.md#create-a-connection-with-the-user): the user runs the same command in their own terminal.
 - On success it prints the **Connection ID** — save it for the next step.
 
-**STOP HERE — interactive sign-in required:**
+**STOP HERE if a browser sign-in is needed:**
 
-1. Tell the user the browser has opened (or share the URL the CLI prints).
+1. Tell the user the browser has opened (or ask them to run the command in their own terminal).
 2. Ask them to sign in with their Microsoft 365 account and grant consent to the **Work IQ Copilot MCP** connector.
 3. **Wait for the user to confirm** the browser shows success before continuing.
 
 **If `create-connection` fails:**
-- "not signed in" / auth error → run `pa auth status` (or `power-apps auth-status` on `power-apps`-only projects), sign in if needed, and retry.
+- "not signed in" / auth error → run `pa auth login` (or `power-apps login` on `power-apps`-only projects), then retry.
 - "Connection creation was cancelled." → the browser flow was closed early; re-run and complete it.
 - Any other non-zero exit → report the exact error and STOP.
 
 As a fallback, the user can create the connection manually in the maker portal: `https://make.powerapps.com/environments/<environment-id>/connections` → **+ New connection** → search for "Work IQ Copilot MCP" → Create, then re-run `list-connections`.
 
-#### Add the Data Source
+#### Older CLIs: Add the Data Source
 
 Once the connection exists, add it to the code app (this is what generates the typed service + model):
 

@@ -61,7 +61,7 @@ Update the memory bank immediately after completing each major step. This ensure
 ### What to Update
 
 1. **Mark completed steps** with `[x]`
-2. **Record created resources** (data sources, connectors, files)
+2. **Record created resources** (data sources, connectors, files — never connection names or IDs)
 3. **Save user decisions** (connector choice, table names, etc.)
 4. **Update current status** and next step
 5. **Add timestamp** to "Last Updated"
@@ -105,6 +105,7 @@ Update after:
 | Environment ID | [ENVIRONMENT_GUID]             |
 | App URL        | [APP_URL]                      |
 | CLI Binary     | [pa / power-apps]              |
+| CLI Version    | [e.g. 1.3.0]                   |
 | Created Date   | [DATE]                         |
 | Status         | [In Progress/Created/Deployed] |
 
@@ -228,6 +229,7 @@ When reading the memory bank, extract:
 3. **Timestamp updates**: Always update "Last Updated"
 4. **Preserve history**: Add to notes, don't overwrite
 5. **Track decisions**: Record why choices were made
+6. **Never record connections or credentials**: Don't save connection names or IDs, tokens, or sign-in/consent URLs. Connector skills look connections up again each time (see [connector-reference.md](./connector-reference.md)).
 
 ## Integration with Skills
 
