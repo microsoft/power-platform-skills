@@ -365,6 +365,21 @@ After plan-mode approval (before the full build):
    that starts with `--`, `&`, `:` or `@` is read); Fluent's `...shorthands.*(…)` and
    `...typographyStyles.*` may be spread as they are.
 
+   Review every generated page for iteration that compiles to nothing as well:
+
+   The page compiler targets ES5 without iterator downleveling or full type checking. Spreading,
+   looping over, or array-destructuring a Map, Set or iterator reads length and indices instead of
+   the iterator: values can disappear, defaults can replace them, or rest destructuring can throw.
+   This includes `[...new Set(xs)]`, `[...m.values()]`, `[...seen.values()]`,
+   `for (const [k, v] of m)`, `new Set([...prev, id])`, `[...selected]` and
+   `[...text.matchAll(re)]`. Convert with `Array.from(...)` before spreading, looping or
+   destructuring; copy a Set with `new Set(prev)` then `.add(id)`. Ordinary array spreads and loops
+   remain valid. `Object.keys`, `Object.values` and `Object.entries` return arrays. Spreads of
+   `arguments` and ordinary indexed array-likes work; rest destructuring of an array-like without
+   `slice` does not. String spread throws, and an ES5 string loop visits UTF-16 code units rather
+   than Unicode code points. See **Common Errors > 5. Iteration that compiles to nothing** in
+   `references/rules.md` for the pairs.
+
    Then validate and commit the transition — never flip `source` by hand, and never
    flip pages one at a time as workers return. Run:
    ```bash
@@ -781,6 +796,10 @@ Then:
    A page you did not touch is sent again as it is, and a
    key it already has only draws a warning — and so does a page you changed in a workspace that holds no record of it (a new or moved one, or
    another environment), where the build cannot tell what was sent: run the checker on that page yourself.
+   A page you edit by hand also follows the iteration rule of Phase 1.5, step 5 (**Common Errors > 5.
+   Iteration that compiles to nothing** in `references/rules.md`): convert a Map, Set or iterator with
+   `Array.from` before spreading, looping over or destructuring it. Converting a form the page already
+   had can make previously absent values appear, so do it only when the requested change needs it.
 3. **If the edit ADDS a page** (or resets a page's `source` back to `intent` to regenerate it),
    **re-run Phase 1.5 before Phase 2** — a downloaded spec contains only `kind: "tsx"` pages, so an
    added `intent` page has no code and Phase 2's `deploy` profile rejects it. Phase 1.5 is safe to

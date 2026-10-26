@@ -560,6 +560,28 @@ the same, go ahead with a
 `warnings` entry, but the page then goes on rendering without it — do not rely on that to
 skip this step.)
 
+Review the edited page for iteration that compiles to nothing as well:
+
+The page compiler targets ES5 without iterator downleveling or full type checking.
+Spreading, looping over, or array-destructuring a Map, Set or iterator reads length
+and indices instead of the iterator: values can disappear, defaults can replace them,
+or rest destructuring can throw. This includes `[...new Set(xs)]`, `[...m.values()]`,
+`[...seen.values()]`, `for (const [k, v] of m)`, `new Set([...prev, id])`,
+`[...selected]` and `[...text.matchAll(re)]`. Convert with `Array.from(...)` before
+spreading, looping or destructuring; copy a Set with `new Set(prev)` then `.add(id)`.
+Ordinary array spreads and loops remain valid. `Object.keys`, `Object.values` and
+`Object.entries` return arrays. Spreads of `arguments` and ordinary indexed array-likes
+work; rest destructuring of an array-like without `slice` does not. String spread
+throws, and an ES5 string loop visits UTF-16 code units rather than Unicode code
+points. See **Common Errors > 5. Iteration that compiles to nothing** in
+`references/rules.md` for the pairs.
+
+Write every form your edit adds with that conversion. A form the page already had
+before your edit loses its values today, and converting it with `Array.from` can make
+previously absent values appear or stop a throw — a change users see. Do not silently
+expand an unrelated edit: convert an existing form only when the requested change needs
+it or the user asks for it, and state any resulting behavior change in the summary.
+
 ## Edit Phase 6: Deploy Updated Page
 
 This is an **update** (existing page-id), so the prompt must describe the

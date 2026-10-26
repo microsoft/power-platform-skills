@@ -1150,3 +1150,83 @@ test('every genpage-plan-provenance.js command the genpage flows document uses o
   const editFlow = readDoc(path.join(PLUGIN, 'skills', 'genpage', 'edit-flow.md'));
   assert.doesNotMatch(editFlow, /--require-assumptions|--require-observed-lookups|--lookup-metadata/, 'neighbour: an edit plan keeps its own comparison');
 });
+
+// Iteration that compiles to nothing (references/rules.md, Critical Rule 24 and Common Errors > 5). The SDK compiles a page to ES5 without
+// iterator downleveling, so a spread, a for...of loop or an array destructure of a Map, a Set or an iterator reads length and indices: the
+// values disappear with a clean compile (scripts/tests/iteration-emit.test.js runs that emit). Nothing executes these instructions, so as
+// with the Griffel rule the one rule text is stated in the same words in every document that writes or edits a page (whitespace aside), and
+// the WRONG/CORRECT examples live in rules.md alone.
+const ITERATION_RULE = [
+  'The page compiler targets ES5 without iterator downleveling or full type checking.',
+  'Spreading, looping over, or array-destructuring a Map, Set or iterator reads length and indices instead of the iterator:',
+  'values can disappear, defaults can replace them, or rest destructuring can throw.',
+  'This includes `[...new Set(xs)]`, `[...m.values()]`, `[...seen.values()]`, `for (const [k, v] of m)`, `new Set([...prev, id])`,',
+  '`[...selected]` and `[...text.matchAll(re)]`.',
+  'Convert with `Array.from(...)` before spreading, looping or destructuring; copy a Set with `new Set(prev)` then `.add(id)`.',
+  'Ordinary array spreads and loops remain valid. `Object.keys`, `Object.values` and `Object.entries` return arrays.',
+  'Spreads of `arguments` and ordinary indexed array-likes work; rest destructuring of an array-like without `slice` does not.',
+  'String spread throws, and an ES5 string loop visits UTF-16 code units rather than Unicode code points.',
+  'See **Common Errors > 5. Iteration that compiles to nothing** in `references/rules.md` for the pairs.',
+].join(' ');
+const ITERATION_SECTION = '**Common Errors > 5. Iteration that compiles to nothing**';
+
+test('every instruction that writes or edits a page states the iteration rule in the same words, where it reviews the page', () => {
+  const docs = griffelDocs();
+  for (const [name, text] of Object.entries(docs)) {
+    assert.ok(squash(text).includes(ITERATION_RULE), `${name} must state the iteration rule in the shared words`);
+  }
+  // rules.md: the section opens with it, after Common Errors 1-4, which keep their numbers.
+  const section = docs.rules.split('\n### 5. Iteration that compiles to nothing\n');
+  assert.equal(section.length, 2, 'rules.md has one canonical section');
+  assert.ok(squash(section[1]).trimStart().startsWith(ITERATION_RULE), 'the section opens with the rule');
+  const errors = docs.rules.slice(docs.rules.indexOf('\n## Common Errors\n'));
+  const numbered = [...errors.matchAll(/^### (\d+)\. /gm)].map((match) => Number(match[1]));
+  assert.deepEqual(numbered, [1, 2, 3, 4, 5], 'Common Errors 1-4 keep their numbers and 5 follows them');
+  // Critical Rules 1-24, in order, ending with 24 before the separator.
+  const critical = docs.rules.slice(docs.rules.indexOf('\n## Critical Rules\n'), docs.rules.indexOf('\n## Supported Libraries\n'));
+  assert.deepEqual([...critical.matchAll(/^(\d+)\. \*\*/gm)].map((match) => Number(match[1])), Array.from({ length: 24 }, (_, i) => i + 1));
+  assert.match(critical, /\n22\. \*\*Consistent errors\*\*[^\n]*\n23\. \*\*Lookup identities\*\*[^\n]*\n24\. \*\*Convert iterables to arrays\*\*[^\n]*\n\n---\n/);
+  // The page-builder has no shell: its Step 2.7 gives the rule and a self-review, and no command.
+  const builderStep = docs['page-builder'].split('## Step 2.7 — Iteration that compiles to nothing')[1].split('## Step 3')[0];
+  assert.ok(squash(builderStep).includes(ITERATION_RULE), 'the page-builder states it in its own step');
+  assert.ok(docs['page-builder'].indexOf('## Step 2.6') < docs['page-builder'].indexOf('## Step 2.7'), 'after the Griffel step');
+  assert.doesNotMatch(builderStep, /node\s+"\$\{PLUGIN_ROOT\}/, 'no command for a worker to run');
+  assert.match(squash(builderStep), /Do not return a file that spreads, loops over or array-destructures one directly\./);
+  // /genpage, one page: step 9 beside the Griffel teaching, before the completeness gate of step 10.
+  const fastPath = docs['create flow'].split(/#### 5b\. Single-page fast path/)[1].split(/#### 5c\. Multi-page/)[0];
+  const step9 = fastPath.split(/\n9\. /)[1].split(/\n10\. /)[0];
+  assert.ok(squash(step9).includes(ITERATION_RULE), 'single-page generation reviews the page it wrote');
+  // An edit: before Edit Phase 6, keeping the requested scope.
+  const edit = docs['edit flow'];
+  const editRule = squash(edit).indexOf(ITERATION_RULE);
+  assert.ok(editRule > 0 && editRule < squash(edit).indexOf('## Edit Phase 6: Deploy Updated Page'), 'an edited page is reviewed before it is uploaded');
+  assert.match(squash(edit), /Do not silently expand an unrelated edit: convert an existing form only when the requested change needs it or the user asks for it, and state any resulting behavior change in the summary\./);
+  // /app-builder: Phase 1.5 step 5, before promote-intent-pages.js commits the pages.
+  const appBuilder = docs['app-builder'];
+  const appRule = squash(appBuilder).indexOf(ITERATION_RULE);
+  assert.ok(appRule > 0 && appRule < squash(appBuilder).indexOf('promote-intent-pages.js" \\'), 'generated pages are reviewed before they are promoted');
+});
+
+test('the multi-page, browser-fix and hand-edit paths point at the iteration rule, and only rules.md holds the examples', () => {
+  const docs = griffelDocs();
+  const multiPage = docs['create flow'].split(/#### 5c\. Multi-page/)[1].split(/### Phase 6: Deploy/)[0];
+  assert.ok(squash(multiPage).includes(ITERATION_SECTION), 'multi-page generation points at the rule');
+  const fix = readDoc(path.join(PLUGIN, 'skills', 'genpage', 'verify-flow.md')).split('## 7.5 Fix and Re-deploy')[1];
+  assert.ok(squash(fix).includes(ITERATION_SECTION), 'a browser-verify fix points at the rule');
+  const editing = docs['app-builder'].split('## Editing a deployed app')[1].split('## What the builder does')[0];
+  const editStep = editing.split(/\n2\. /)[1].split(/\n3\. /)[0];
+  assert.ok(squash(editStep).includes(ITERATION_SECTION), 'a page edited by hand points at the rule');
+  for (const file of mdFiles()) {
+    if (rel(file) === 'references/rules.md') continue;
+    assert.ok(!readDoc(file).includes('// WRONG — the spread contributes no values'), `${rel(file)} must point at the rules.md examples, not copy them`);
+  }
+});
+
+test('the iteration teaching promises no checker, gate code or result field', () => {
+  for (const file of [...mdFiles(), path.join(PLUGIN, 'AGENTS.md')]) {
+    const text = readDoc(file);
+    for (const word of ['check-iteration', 'iteration-compile', 'iterationChecks']) {
+      assert.ok(!text.includes(word), `${rel(file)} names ${word}, which this plugin does not ship`);
+    }
+  }
+});
