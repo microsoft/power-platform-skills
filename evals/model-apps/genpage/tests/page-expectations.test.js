@@ -132,6 +132,33 @@ test('tsx structure: a tag with type arguments of names only is read; any other 
   assert.deepEqual(unreadableElements(code), []);
 });
 
+// The closing tag of an element is found by counting the openings of its name that the one traversal of the page found,
+// which steps over every tag's type arguments: a type named `of` (an expression keyword's spelling) does not make
+// `<Field<Row>>` inside `<Box<of<Field<Row>>> />` an opening that would close the outer Field early.
+test('tsx structure: a name inside another tag\u2019s type arguments never counts toward a closing tag', () => {
+  const bounds = (page, name) => jsxElements(page, new RegExp(`^${name}$`)).map((e) => [e.start, e.openEnd, e.childrenEnd, e.end]);
+  assert.deepEqual(bounds('<A><B<of<A<T>>> /></A>', 'A'), [[0, 3, 18, 22]]);
+  const page = 'type of<T> = T;\nconst P = () => <Field label="Name"><Box<of<Field<Row>>> /><Input /></Field>;';
+  assert.deepEqual(bounds(page, 'Field'), [[32, 52, 84, 92]]);
+  assertPass(grade(LABELS, inline(page)));
+});
+
+// A tag's name may start with `_` or `$`, as any identifier may: such a tag is read, or reported, like any other.
+test('tsx structure: a tag whose name starts with _ or $ is read or reported like any other', () => {
+  const { unreadableElements } = require('../lib/tsx-structure.js');
+  const read = (page) => jsxElements(page).map((e) => [e.name, e.start, e.openEnd, e.childrenEnd, e.end, Object.fromEntries([...e.attrs].map(([k, a]) => [k, a.value]))]);
+  assert.deepEqual(read('<$Grid<Row> title="&euro;">x</$Grid>'), [['$Grid', 0, 27, 28, 36, { title: '&euro;' }]]);
+  assert.deepEqual(read('<_Grid title="a"><_Grid<Row> /></_Grid>'), [['_Grid', 0, 17, 31, 39, { title: 'a' }], ['_Grid', 17, 31, 31, 31, {}]]);
+  assert.deepEqual(unreadableElements('const P = () => <_Grid<keyof Row> title="&euro;" />;'), [{ name: '_Grid', start: 16, line: 1, column: 17 }]);
+  const code = 'const c = a <_b;\nconst d = x <$y> z;';
+  assert.deepEqual(jsxElements(code), []);
+  assert.deepEqual(unreadableElements(code), []);
+  const CURRENCY = 'Phase 5 (Page Builder): Generated .tsx does NOT hardcode currency symbols or date formats';
+  assertFail(grade(CURRENCY, inline('function t(k) { return k; }\nconst P = () => <$Grid<Row> title="&euro;">{t("ok")}</$Grid>;')), /hardcoded currency symbol "\u20ac"/);
+  assertFail(grade(CURRENCY, inline('function t(k) { return k; }\nconst P = () => <_Grid<keyof Row> title="&euro;">{t("ok")}</_Grid>;')), /<_Grid> at line 2, column 17 has type arguments that are not only names/);
+  assertPass(grade(CURRENCY, inline('function t(k) { return k; }\nconst P = () => <_Grid title={t("total")}>{t("ok")}</_Grid>;')));
+});
+
 // --- Eval 4: the wizard ----------------------------------------------------------------------------
 
 const E4 = '4-case-wizard';

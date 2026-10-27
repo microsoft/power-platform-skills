@@ -16,12 +16,14 @@
 //   view:    <Field label="··········"><Input aria-label="·····" value={form.x} /></Field>
 //   source:  <Text>Hello {name} world</Text>      view:  <Text>······{name}······</Text>
 // Limits, by design (each check that uses this says which it lives with):
-//   - an element is found where a `<Name` stands at the start of an expression (after `(`, `=`, `,`,
-//     `?`, `:`, `{`, `}`, `>`, `&&`, `return`, …); `useState<Row>(…)` and `a < b` are not elements;
+//   - an element is found where a `<Name` (its first character a letter, `_` or `$`) stands at the start of an
+//     expression (after `(`, `=`, `,`, `?`, `:`, `{`, `}`, `>`, `&&`, `return`, …); `useState<Row>(…)` and `a < b`, `a <_b`
+//     are not elements;
 //   - an element's type arguments are read when they are names only (`<DataGridRow<Row> title="…">`);
 //     any other (`<List<(r: Row) => string>>`) makes the element unreadable, and a check that reads
 //     elements or JSX text fails closed on its page (unreadableElements);
-//   - a closing tag is matched by name, counting nested same-name elements;
+//   - a closing tag is matched by name, counting the nested same-name openings of the one tag traversal,
+//     so a name inside another tag's type arguments (`<B<of<A<T>>>`) is never an opening;
 //   - JSX text is a blanked run whose nearest code character before it is `>` or `}` (a string's run
 //     follows its quote, a template's its backtick, a regex body its `/`), comments excluded;
 //   - a function's scope is a body `{…}` (or an arrow's expression) found from `=>` and `function`;
@@ -80,6 +82,9 @@ function matchingClose(code, open) {
 // list of names.
 const TYPE_OPERATOR_WORDS = new Set(['keyof', 'typeof', 'infer', 'unique', 'readonly', 'asserts', 'new', 'abstract', 'is', 'extends']);
 const TYPE_NAME = /[A-Za-z_$][\w$]*/y;
+// A JSX tag's name: an identifier (a letter, `_` or `$`, then letters, digits, `_` or `$`), with `.` for a member
+// (`Toolbar.Item`). A hyphenated intrinsic name (`<my-element>`) is not read.
+const TAG_NAME = '[A-Za-z_$][\\w$.]*';
 // Deeper nesting than this is not read (a page never needs it); it is reported as unreadable rather than recursed into.
 const MAX_TYPE_ARGUMENT_DEPTH = 64;
 
@@ -224,14 +229,11 @@ function readAttributes(src, code, from, end) {
   return attrs;
 }
 
-// Every element of the page whose tag name `accept` allows (a Set, a RegExp, or nothing for all), in
-// source order: { name, start, openEnd, selfClosing, attrs, childrenStart, childrenEnd, end }. The
-// children of a self-closing element, or of one whose closing tag cannot be found, are empty.
 // The `<Name` of every tag that stands where an element may start, in source order: { name, start, open } where `open` is
 // its openingTag, or null when its type arguments are not names only. A `<` inside a tag's type arguments that were read
 // is part of them, never a tag of its own (`<A<B<C>>>` is one tag). A closing tag (`</Name>`) is no match here.
 function* openingTags(code) {
-  const re = /<([A-Za-z][\w.]*)(?=[\s/><])/g;
+  const re = new RegExp(`<(${TAG_NAME})(?=[\\s/><])`, 'g');
   for (let m = re.exec(code); m; m = re.exec(code)) {
     if (!elementMayStart(code, m.index)) continue;
     const open = openingTag(code, m.index + m[0].length);
@@ -249,8 +251,16 @@ function jsxElements(content, accept = null) {
   const { src, code } = sourceView(content);
   const allowed = (name) => !accept || (accept instanceof Set ? accept.has(name) : accept.test(name));
   const out = [];
-  for (const { name, start, open } of openingTags(code)) {
-    if (!open || !allowed(name)) continue;
+  const tags = [...openingTags(code)].filter((tag) => tag.open);
+  // The readable openings of each name, for closingTag: found by the one traversal above, which steps over every tag's
+  // type arguments, so a name inside another tag's arguments (`<Box<of<Field<Row>>> />`) is never an opening.
+  const openings = new Map();
+  for (const tag of tags) {
+    if (!openings.has(tag.name)) openings.set(tag.name, []);
+    openings.get(tag.name).push(tag);
+  }
+  for (const { name, start, open } of tags) {
+    if (!allowed(name)) continue;
     const tag = tagEnd(code, open.attrsFrom);
     if (!tag) continue;
     const element = {
@@ -264,7 +274,7 @@ function jsxElements(content, accept = null) {
       end: tag.end + 1,
     };
     if (!tag.selfClosing) {
-      const close = closingTag(code, name, tag.end + 1);
+      const close = closingTag(code, name, tag.end + 1, openings.get(name));
       if (close) Object.assign(element, { childrenEnd: close.start, end: close.end });
     }
     out.push(element);
@@ -298,26 +308,24 @@ function unreadableElementProblems(content) {
   return [`<${first.name}> at line ${first.line}, column ${first.column} has type arguments that are not only names (a string, template, object, function or other type), which this check cannot read for certain`];
 }
 
-// The `</name>` that closes an element whose opening tag ends before `from`, counting nested
-// non-self-closing elements of the same name, with or without type arguments of names only.
-function closingTag(code, name, from) {
-  const re = new RegExp(`<(/?)${name.replace(/[.$]/g, '\\$&')}(?=[\\s/><])`, 'g');
+// The `</name>` that closes an element whose opening tag ends before `from`, counting the nested non-self-closing
+// elements of the same name among `openings` (that name's readable tags from openingTags, in source order). A closing
+// tag holds no type arguments, and names-only type arguments hold no `</`, so every `</name` match is a closing tag.
+function closingTag(code, name, from, openings = []) {
+  const re = new RegExp(`</${name.replace(/[.$]/g, '\\$&')}(?=[\\s/>])`, 'g');
   re.lastIndex = from;
   let depth = 1;
+  let next = openings.findIndex((tag) => tag.start >= from);
+  if (next < 0) next = openings.length;
   for (let m = re.exec(code); m; m = re.exec(code)) {
-    if (m[1]) {
-      if (code[m.index + m[0].length] === '<') continue;
-      depth -= 1;
-      if (depth === 0) {
-        const gt = code.indexOf('>', m.index);
-        return gt < 0 ? null : { start: m.index, end: gt + 1 };
-      }
-    } else if (elementMayStart(code, m.index)) {
-      const open = openingTag(code, m.index + m[0].length);
-      if (!open) continue;
-      if (open.typeArguments) re.lastIndex = open.attrsFrom;
-      const tag = tagEnd(code, open.attrsFrom);
+    for (; next < openings.length && openings[next].start < m.index; next += 1) {
+      const tag = tagEnd(code, openings[next].open.attrsFrom);
       if (tag && !tag.selfClosing) depth += 1;
+    }
+    depth -= 1;
+    if (depth === 0) {
+      const gt = code.indexOf('>', m.index);
+      return gt < 0 ? null : { start: m.index, end: gt + 1 };
     }
   }
   return null;

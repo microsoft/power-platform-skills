@@ -455,7 +455,7 @@ function searchAndFilterProblems(content) {
     }
     return el.attrs.has('onChange') || el.attrs.has('onInput');
   });
-  const toolbars = jsxElements(content, /^[A-Za-z][\w.]*$/).filter((el) => el.name === 'Toolbar' || el.attrs.get('role')?.value === 'toolbar');
+  const toolbars = jsxElements(content).filter((el) => el.name === 'Toolbar' || el.attrs.get('role')?.value === 'toolbar');
   const filtering = toolbars.filter((toolbar) => jsxElements(content, FILTER_CONTROLS).some((control) => control.start >= toolbar.childrenStart && control.start < toolbar.childrenEnd
     && HANDLERS.some((name) => control.attrs.has(name))));
   const problems = [];
