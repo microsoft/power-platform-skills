@@ -5,6 +5,17 @@ All notable changes to the **model-apps** plugin.
 Entries are deliberately short: what changed and why it matters to you. The reasoning,
 evidence and trade-offs behind a change live in its PR, in `docs/`, or in the linked issue.
 
+## [2.20.3]
+
+The bundled SDK is unchanged (power-platform-ux a3443479).
+
+### Fixed
+
+- **Lookup discovery takes only strings as table, column and id names.** A malformed metadata answer (a null, true/false or a
+  list) now fails the read instead of becoming a name such as "null".
+- **On Windows with Node 20, a build that meets an app lock being released or taken over reports another build**, naming the
+  file it could not inspect, instead of a file-safety or raw EPERM error.
+
 ## [2.20.2]
 
 The bundled SDK is unchanged (power-platform-ux a3443479).
