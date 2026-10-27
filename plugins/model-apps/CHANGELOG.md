@@ -5,6 +5,15 @@ All notable changes to the **model-apps** plugin.
 Entries are deliberately short: what changed and why it matters to you. The reasoning,
 evidence and trade-offs behind a change live in its PR, in `docs/`, or in the linked issue.
 
+## [2.20.2]
+
+The bundled SDK is unchanged (power-platform-ux a3443479).
+
+### Fixed
+
+- **Scripts run side by side on Windows keep their temporary workspaces where cleanup finds them.** A race could leave an
+  interrupted run's workspace outside the plugin's temp folder, where it was never removed.
+
 ## [2.20.1]
 
 The bundled SDK is unchanged (power-platform-ux a3443479).
