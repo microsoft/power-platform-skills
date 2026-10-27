@@ -53117,6 +53117,8 @@ var FlowClient = class _FlowClient {
             allowManagementFallback: false
           }));
         } catch (err) {
+          if (isTriggerRunOutcomeUnknown(err))
+            throw err;
           if (isDirectApiInputsRejected(err) || isDirectApiInputsRejected(connectorErr)) {
             throw new DirectApiTriggerInputsError(trigger.name, trigger.kind, connectorErr);
           }
