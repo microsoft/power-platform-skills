@@ -11,7 +11,10 @@
 // Under load the wait ran out, and a test that checks WHERE a workspace is made — in the plugin's folder, recorded, under the run's pid — failed
 // although the code did what it promises: verify's workspace was `<temp>/verify-<random>`, and the settings copy's work folder was not asked for
 // in the plugin's folder at all, in that test and in the next. With a temp folder of its own, no other process makes or removes this one's
-// plugin folder. Every test file that checks where a workspace is made in its own process requires this module.
+// plugin folder. Every test file that checks where a workspace is made in its own process requires this module. (Measured since, the commoner way
+// a workspace went to the plain temp folder there was another: on Windows judging the plugin's folder takes about a second, and the ends of other
+// processes kept removing it under the judgement until the maker ran out of attempts. A run now holds the folder while it judges it
+// (lib/temp-workspace.js, A RUN HOLDS THE FOLDER), and this module still keeps what such a test checks free of every other process.)
 //
 // Require it at the TOP of the test file, before anything reads os.tmpdir(), so that a path the file works out when it loads is inside the folder
 // too. A child process that a test starts with this process's environment shares the folder, as it shared the suite's before.

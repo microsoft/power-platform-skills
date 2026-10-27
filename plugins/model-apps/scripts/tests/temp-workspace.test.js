@@ -9,7 +9,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const {
-  PARENT_NAME, OWNER_FILE, REMOVING_SUFFIX, CURSOR_FILE, LENT_KEEP_MS, LIMITS, workspaceParent, makeTempWorkspace, sweepDeadWorkspaces, sweepWarning, pruneWorkspaceParents,
+  PARENT_NAME, OWNER_FILE, REMOVING_SUFFIX, CURSOR_FILE, HOLD_PREFIX, LENT_KEEP_MS, LIMITS, workspaceParent, makeTempWorkspace, sweepDeadWorkspaces, sweepWarning, pruneWorkspaceParents,
 } = require('../lib/temp-workspace.js');
 const { ownerStamp, isOwnerStamp } = require('../lib/process-owner.js');
 const { privateTempRoot, tempEnv, startTarget, deadPid, pause, waitUntil } = require('./helpers/kill-target-client.js');
@@ -1075,17 +1075,219 @@ test('where the system has no owners to compare (Windows) an EXISTING plugin\'s 
   assert.deepStrictEqual(asked, []);
 });
 
-test('a folder that is removed while its access list is being read — another run ended with nothing left in it — is made again, not taken for an unsafe one', (t) => {
+test('a folder that is removed while its access list is being read — removed whole, as a tool that empties the temp folder does: the end of another run cannot take it, see below — is made again, not taken for an unsafe one', (t) => {
   const { deps } = tempRoot(t);
   const parent = workspaceParent({ ...deps, uid: null });
   fs.mkdirSync(parent);
   let asked = 0;
   // What the reader makes of a folder that goes away under it: it cannot save a list of what is not there, and says no.
-  const own = { ...deps, uid: null, folderPrivacy: () => { asked += 1; fs.rmdirSync(parent); return { ok: false, reason: 'its access list could not be saved' }; } };
+  const own = { ...deps, uid: null, folderPrivacy: () => { asked += 1; fs.rmSync(parent, { recursive: true, force: true }); return { ok: false, reason: 'its access list could not be saved' }; } };
   const dir = makeTempWorkspace('genpage-', own);
   assert.strictEqual(path.dirname(dir), parent, 'made again in the plugin\'s folder, as the run that asked is owed — not in the temp folder, unrecorded');
   assert.ok(recordOfFolder(dir), 'and recorded');
   assert.strictEqual(asked, 1, 'the folder it was made in is the run\'s own, which is not asked about');
+});
+
+// Windows asks whether a folder is private with three programs — about a second — and the end of every run that leaves nothing in the plugin's folder removes it (`rmdir`: THE END OF A RUN). With runs starting and
+// ending side by side the folder was taken away, and made again, while it was being judged: the answer was about a folder that had gone, the run asked again about the new one, and after MAKE_ATTEMPTS answers made its
+// workspace in the plain temp folder, unrecorded (measured on one machine: about one run in twenty with three at a time, one in three with twelve). A run now HOLDS the folder while it judges it.
+// A hold is named for the machine and the run that made it: `.hold-<8 hex digits for the machine>-<pid>-<6 hex digits>`.
+const holdName = new RegExp(`^${HOLD_PREFIX.replace(/\./g, '\\.')}[0-9a-f]{8}-${process.pid}-[0-9a-f]{6}$`);
+// The hold a run leaves when it is killed while it holds the plugin's folder: made by the maker itself, on Windows terms (`deps` has `uid: null`), for the run `owner` says — its pid and
+// machine (process-owner.js seams) — on a file system that never lets a hold be removed. The workspace the run made is removed again, so the hold is what is left. Answers its path.
+function leftHold(deps, owner) {
+  const parent = workspaceParent(deps);
+  const before = new Set(fs.existsSync(parent) ? fs.readdirSync(parent) : []);
+  const sticky = { ...fs, unlinkSync: (file, ...rest) => {
+    if (path.basename(String(file)).startsWith(HOLD_PREFIX)) throw Object.assign(new Error(`EIO: i/o error, unlink '${file}'`), { code: 'EIO' });
+    return fs.unlinkSync(file, ...rest);
+  } };
+  fs.rmSync(makeTempWorkspace('genpage-', { ...deps, fs: sticky, owner }), { recursive: true, force: true });
+  const made = fs.readdirSync(parent).filter((name) => name.startsWith(HOLD_PREFIX) && !before.has(name));
+  assert.strictEqual(made.length, 1, `one hold left: ${JSON.stringify(made)}`);
+  return path.join(parent, made[0]);
+}
+// `rmdir` of a folder with something in it: ENOTEMPTY, or EEXIST where the system says so.
+const notEmpty = (code) => (code === 'EEXIST' ? 'ENOTEMPTY' : code);
+
+test('(Windows) a run that ends while another is judging the plugin\'s folder cannot take the folder from under it — the judging run holds it — so the answer is about the folder its workspace is made in', (t) => {
+  const { deps } = tempRoot(t);
+  const own = { ...deps, uid: null };
+  const parent = workspaceParent(own);
+  fs.mkdirSync(parent);
+  const ends = [];
+  // At every judgement another run ends with nothing of its own left in the folder — its end takes the folder with `rmdir`, as pruneWorkspaceParents does, which takes a folder only when it is empty — and a third
+  // run starts and makes the folder again.
+  const judging = { ...own, folderPrivacy: (folder) => {
+    try {
+      fs.rmdirSync(folder);
+      fs.mkdirSync(folder);
+      ends.push('taken, and made again');
+    } catch (e) {
+      ends.push(notEmpty(e.code));
+    }
+    return { ok: true, reason: 'private' };
+  } };
+  const dir = makeTempWorkspace('genpage-', judging);
+  assert.strictEqual(path.dirname(dir), parent, `made in the plugin's folder — not in the temp folder because every answer was about a folder that had gone: ${ends.join(', ')}`);
+  assert.ok(recordOfFolder(dir), 'and recorded, so a sweep finds it if the run is killed');
+  assert.deepStrictEqual(ends, ['ENOTEMPTY'], 'the end of the other run could not take the folder, and the folder was judged once');
+  assert.deepStrictEqual(fs.readdirSync(parent), [path.basename(dir)], 'the hold is gone once the workspace is in the folder: the workspace is all it holds');
+});
+
+test('(Windows) the hold is an empty file of the run\'s own, in the folder while it is judged and gone when makeTempWorkspace returns — whether the workspace is made there or refused — and a hold that cannot be made leaves the run as it was', (t) => {
+  const listed = (folder) => fs.readdirSync(folder).map((name) => [name, fs.lstatSync(path.join(folder, name)).size]);
+  // While the folder is judged, and while the workspace is made in it.
+  const a = tempRoot(t);
+  const own = { ...a.deps, uid: null };
+  const parent = workspaceParent(own);
+  fs.mkdirSync(parent);
+  const seen = [];
+  const dir = makeTempWorkspace('genpage-', { ...own,
+    folderPrivacy: (folder) => { seen.push(['judged', listed(folder)]); return { ok: true }; },
+    mkdtempSync: (start) => { seen.push(['made', listed(path.dirname(start))]); return fs.mkdtempSync(start); } });
+  assert.strictEqual(path.dirname(dir), parent);
+  assert.strictEqual(seen.length, 2, JSON.stringify(seen));
+  const [[whenJudged, judged], [whenMade, atMake]] = seen;
+  assert.deepStrictEqual([whenJudged, whenMade], ['judged', 'made']);
+  assert.strictEqual(judged.length, 1, `one file in the folder while it is judged: ${JSON.stringify(judged)}`);
+  const [[hold, size]] = judged;
+  assert.match(hold, holdName, 'named for the run');
+  assert.strictEqual(size, 0, 'and empty: it holds nothing');
+  assert.deepStrictEqual(atMake, [[hold, 0]], 'still there when the workspace is made: the folder judged is the folder it is made in');
+  assert.deepStrictEqual(fs.readdirSync(parent), [path.basename(dir)], 'and gone once the workspace is in the folder');
+
+  // Refused: the folder is not private, or will not take a workspace (a full disk there) — the hold goes all the same, and the workspace is made in the temp folder, as before.
+  const fullDisk = (root) => (start) => {
+    if (path.dirname(start) !== root) throw Object.assign(new Error('ENOSPC: no space left on device'), { code: 'ENOSPC' });
+    return fs.mkdtempSync(start);
+  };
+  for (const [what, extra] of [
+    ['not private', () => ({ folderPrivacy: () => ({ ok: false, reason: 'Everyone can write to it' }) })],
+    ['a full disk', (root) => ({ folderPrivacy: () => ({ ok: true }), mkdtempSync: fullDisk(root) })],
+  ]) {
+    const b = tempRoot(t);
+    const refusedDeps = { ...b.deps, uid: null, ...extra(b.root) };
+    fs.mkdirSync(workspaceParent(refusedDeps));
+    assert.strictEqual(path.dirname(makeTempWorkspace('genpage-', refusedDeps)), b.root, `${what}: made in the temp folder`);
+    assert.deepStrictEqual(fs.readdirSync(workspaceParent(refusedDeps)), [], `${what}: no hold is left in the plugin's folder`);
+  }
+
+  // A hold that cannot be made — a full disk, a folder that takes no new file — is no reason to change anything: the workspace is made in the plugin's folder, recorded, as it was before holds.
+  const c = tempRoot(t);
+  const noHold = { ...fs, openSync: (file, ...rest) => { if (path.basename(String(file)).startsWith(HOLD_PREFIX)) throw Object.assign(new Error('ENOSPC: no space left on device'), { code: 'ENOSPC' }); return fs.openSync(file, ...rest); } };
+  fs.mkdirSync(workspaceParent({ ...c.deps, uid: null }));
+  const unheld = makeTempWorkspace('genpage-', { ...c.deps, uid: null, fs: noHold });
+  assert.strictEqual(path.dirname(unheld), workspaceParent({ ...c.deps, uid: null }));
+  assert.ok(recordOfFolder(unheld));
+});
+
+// The last steps of making a workspace are to record it (its owner record), to register it for the end of the process, and to let go of the hold. Letting go can wait on a scanner that holds
+// the new file (releaseHold, the WAITS_MS pauses), and a run that is killed in that wait must leave a workspace a sweep can prove dead — not an empty folder with no record, which no sweep
+// ever takes, and which keeps the plugin's folder for good. So the hold goes last.
+test('REAL KILL: a run killed while the removal of its hold waits on a scanner has already recorded its workspace — the next sweep takes the workspace and the hold, and the folder can go', async (t) => {
+  const root = privateTempRoot(t);
+  const deps = { os: { tmpdir: () => root }, uid: null, folderPrivacy: () => ({ ok: true, reason: 'stood in for' }), folderProtect: () => ({ ok: true, reason: 'stood in for' }) };
+  const run = startTarget(t, ['workspace-hold-release', 'genpage-'], { env: tempEnv(root) });
+  const folder = (await run.waitFor(/^releasing /)).slice('releasing '.length);
+  await run.kill();
+  assert.strictEqual(path.dirname(folder), workspaceParent(deps), 'the workspace was made in the plugin\'s folder');
+  assert.ok(recordOfFolder(folder), `it was recorded before the hold was let go, so a sweep can prove its run gone: ${JSON.stringify(fs.readdirSync(folder))}`);
+  assert.ok(fs.readdirSync(workspaceParent(deps)).some((name) => name.startsWith(HOLD_PREFIX)), 'and the killed run left its hold');
+  const swept = sweepDeadWorkspaces(deps);
+  assert.deepStrictEqual(swept.removed.map((r) => [r.name, r.stamp.pid]), [[path.basename(folder), run.pid]], 'the next sweep takes the workspace');
+  assert.deepStrictEqual(fs.readdirSync(workspaceParent(deps)), [], 'and the hold: nothing is left to keep the plugin\'s folder');
+});
+
+test('POSIX: nothing is held — the folder is judged by one lstat, before anything could change — and the folder holds only the workspace', onlyPosix, (t) => {
+  const { deps } = tempRoot(t);
+  const atMake = [];
+  const dir = makeTempWorkspace('genpage-', { ...deps, mkdtempSync: (start) => { atMake.push(...fs.readdirSync(path.dirname(start))); return fs.mkdtempSync(start); } });
+  assert.strictEqual(path.dirname(dir), workspaceParent(deps));
+  assert.deepStrictEqual(atMake, [], 'no hold in the folder when the workspace is made');
+});
+
+test('(Windows) a hold that a run was killed while holding is removed by the next sweep once its pid is gone, so the folder can go when it is empty — and the hold of a run that is going, or a file of that name with something in it, is left', (t) => {
+  const { deps } = tempRoot(t);
+  const own = { ...deps, uid: null };
+  const parent = workspaceParent(own);
+  const dead = deadPid();
+  // All that is left in the folder is the hold of a run that was killed: the end of a run cannot take the folder until a sweep has removed it.
+  const deadHold = leftHold(own, { pid: dead });
+  assert.deepStrictEqual(fs.readdirSync(parent), [path.basename(deadHold)]);
+  assert.throws(() => fs.rmdirSync(parent), (e) => notEmpty(e.code) === 'ENOTEMPTY', 'the hold keeps the folder');
+  assert.deepStrictEqual([sweepDeadWorkspaces(own).removed, fs.existsSync(deadHold)], [[], false], 'the sweep removes it, and says nothing: a hold held nothing');
+  fs.rmdirSync(parent);
+  // The hold of a run that is going, and a file named like a hold that has something in it, are left.
+  const liveHold = leftHold(own, {});
+  const notAHold = leftHold(own, { pid: dead });
+  fs.writeFileSync(notAHold, 'something');
+  const swept = sweepDeadWorkspaces(own);
+  assert.ok(fs.existsSync(liveHold), 'the hold of a run that is going is left');
+  assert.ok(fs.existsSync(notAHold), 'a file of that name with something in it was not made by a run, and is left');
+  assert.deepStrictEqual([swept.removed, swept.failed], [[], []]);
+  assert.deepStrictEqual(entriesOf(parent), [path.basename(liveHold), path.basename(notAHold)].sort());
+});
+
+// A temp folder can be shared between machines — a network share, a profile that roams — and a pid says nothing on a machine that did not make it: one that no process has here may be a run
+// that is going there. So a hold names its machine, as an owner record names its host (process-owner.js), and a sweep takes only a hold of its own machine. A hold of another machine stays,
+// and so does every hold, when a sweep cannot tell which machine it runs on (no host name).
+test('(Windows) a hold names its machine: a sweep on another machine that shares the temp folder leaves it, whatever the pid in it is there — so the end of a run there cannot take the folder from under this run\'s judgement', (t) => {
+  const { deps } = tempRoot(t);
+  const own = { ...deps, uid: null };
+  const parent = workspaceParent(own);
+  fs.mkdirSync(parent);
+  // On the other machine, no process has this run's pid.
+  const otherMachine = { ...own, owner: { hostname: () => 'another-machine', probe: () => 'gone' } };
+  const seen = [];
+  const dir = makeTempWorkspace('genpage-', { ...own, owner: { hostname: () => 'this-machine' }, folderPrivacy: (folder) => {
+    // While this run judges the folder, a run on the other machine sweeps it, and ends with nothing of its own left in it.
+    sweepDeadWorkspaces(otherMachine);
+    const left = fs.readdirSync(folder);
+    let ended;
+    try {
+      fs.rmdirSync(folder);
+      fs.mkdirSync(folder);
+      ended = 'taken, and made again';
+    } catch (e) {
+      ended = notEmpty(e.code);
+    }
+    seen.push({ left, ended });
+    return { ok: true, reason: 'private' };
+  } });
+  assert.strictEqual(seen.length, 1, `the folder was judged once: ${JSON.stringify(seen)}`);
+  assert.strictEqual(seen[0].left.length, 1, `this run's hold is still in the folder after the other machine's sweep: ${JSON.stringify(seen)}`);
+  assert.ok(seen[0].left[0].startsWith(HOLD_PREFIX));
+  assert.strictEqual(seen[0].ended, 'ENOTEMPTY', 'so the end of the run there could not take the folder');
+  assert.strictEqual(path.dirname(dir), parent, 'and the workspace is in the plugin\'s folder');
+  fs.rmSync(dir, { recursive: true, force: true });
+
+  // A hold of this machine, of a run that is gone: a sweep that cannot read the name of its own machine leaves it; a sweep of this machine takes it.
+  const thisMachine = { hostname: () => 'this-machine', probe: () => 'gone' };
+  const gone = leftHold(own, { hostname: () => 'this-machine', pid: deadPid() });
+  sweepDeadWorkspaces({ ...own, owner: { ...thisMachine, hostname: () => { throw new Error('no host name'); } } });
+  assert.ok(fs.existsSync(gone), 'a sweep that cannot tell its own machine leaves every hold');
+  sweepDeadWorkspaces({ ...own, owner: thisMachine });
+  assert.ok(!fs.existsSync(gone), 'the sweep of its own machine takes it');
+});
+
+// Holds are made only where the system has no owners to compare (Windows), and only taken there: where it has (POSIX), a file of that shape in the plugin's folder is an entry like any
+// other, and a sweep leaves it as it always did, however dead the pid in its name is. Shown on every system: the folder is shown to the sweep as one this user owns, with the mode a
+// POSIX plugin folder has.
+test('POSIX: a sweep where the system has owners leaves an empty file shaped like the hold of a dead run, as it always did — holds are made, and taken, only on Windows', (t) => {
+  const { deps } = tempRoot(t);
+  const uid = POSIX ? process.getuid() : 4242;
+  const parent = workspaceParent({ ...deps, uid });
+  fs.mkdirSync(parent, { mode: 0o700 });
+  const ownedByUs = { isDirectory: () => true, isSymbolicLink: () => false, uid, mode: 0o40700 };
+  const posix = { ...deps, uid, fs: { ...fs, lstatSync: (target, ...rest) => (target === parent ? ownedByUs : fs.lstatSync(target, ...rest)) }, owner: { probe: () => 'gone' } };
+  // Named as the maker names the hold of a run of this machine that is gone — the maker made it, on Windows terms, in a temp folder of its own.
+  const windowsTerms = tempRoot(t);
+  const shaped = path.join(parent, path.basename(leftHold({ ...windowsTerms.deps, uid: null }, { pid: deadPid() })));
+  fs.writeFileSync(shaped, '');
+  const swept = sweepDeadWorkspaces(posix);
+  assert.ok(fs.existsSync(shaped), 'left where it is');
+  assert.deepStrictEqual([swept.removed, swept.failed], [[], []]);
 });
 
 test('the answer about a folder is the answer about THAT folder: one that is removed and made again — by someone else — is asked about again', (t) => {

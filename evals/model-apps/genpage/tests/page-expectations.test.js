@@ -85,7 +85,7 @@ const n = useState<Row>(null);`;
   const field = jsxElements(page, /^Field$/)[0];
   assert.ok(field.childrenStart <= inputs[0].start && inputs[0].start < field.childrenEnd);
   assert.deepEqual(jsxElements(page, /^Row$/), [], 'a type argument is not an element');
-  assert.deepEqual(jsxTextRuns(page).map((r) => r.text.trim()), ['Hello', 'world   more']);
+  assert.deepEqual(jsxTextRuns(page).map((r) => r.text.trim()), ['Hello', 'world & more']);
   assert.deepEqual(patternNames('[{ tasks, loading, error }, setData]'), ['tasks', 'loading', 'error', 'setData']);
   assert.deepEqual(patternNames('(e: React.DragEvent<HTMLDivElement>, id: string)'), ['e', 'id']);
   assert.deepEqual(patternNames('{ dataApi, pageInput: input = null }'), ['dataApi', 'input']);
@@ -434,4 +434,37 @@ test('eval 13: literal text in a conditional or a template child is hardcoded to
   // Keys inside the helper's call, and branches that are translated or only numbers, are not text.
   assertPass(grade(TRANSLATED, child("rows.length ? t('title') : t('empty')")));
   assertPass(grade(TRANSLATED, child('error ? t(\'empty\') : `${rows.length}`')));
+});
+
+// JSX decodes the character references in its text and in an attribute's string (lib/jsx-references.js, the page compiler's
+// own decoding), so a page shows `&#78;&#111;` as "No" and `&eacute;` as "é": text spelled with them is hardcoded exactly as
+// its plain spelling is, and what the compiler does not decode (`&nosuch;`, `&#X4E;`) is shown as written, letters and all.
+// A reference to white space, punctuation, a symbol or a digit shows no letter, as the plain character shows none; a
+// JavaScript string is not decoded; and a key or a value the page does not show (`t('…')`, `className`, `key`) is no text,
+// however it is spelled.
+test('eval 13: text spelled with character references is held to the rule as the text it renders', () => {
+  const text = (written) => withPage(E13, 'page.tsx', ["<Text>{t('empty')}</Text>", `<Text>${written}</Text>`]);
+  const label = (written) => withPage(E13, 'page.tsx', ["<Spinner label={t('title')} />", `<Spinner label="${written}" />`]);
+  // A problem quotes at most 40 characters of each spelling, as it always has.
+  assertFail(grade(TRANSLATED, text('&#78;&#111;&#32;&#99;&#111;&#110;&#116;&#97;&#99;&#116;&#115;&#46;')),
+    /hardcoded JSX text "No contacts\." \(written "&#78;&#111;&#32;&#99;&#111;&#110;&#116;&"\)$/);
+  assertFail(grade(TRANSLATED, text('&#x4E;&#x6F;')), /hardcoded JSX text "No" \(written "&#x4E;&#x6F;"\)$/);
+  assertFail(grade(TRANSLATED, text('&Eacute;&eacute;')), /hardcoded JSX text "Éé" \(written "&Eacute;&eacute;"\)$/);
+  assertFail(grade(TRANSLATED, text('&#1575;&#1604;')), /hardcoded JSX text "ال" \(written "&#1575;&#1604;"\)$/);
+  assertFail(grade(TRANSLATED, text('&nosuch;')), /hardcoded JSX text "&nosuch;"$/);
+  assertFail(grade(TRANSLATED, text('&#X4E;&#X6F;')), /hardcoded JSX text "&#X4E;&#X6F;"$/);
+  assertFail(grade(TRANSLATED, label('&#76;&#111;&#97;&#100;&#105;&#110;&#103;')),
+    /hardcoded label "Loading" \(written "&#76;&#111;&#97;&#100;&#105;&#110;&#103;"\) on <Spinner>$/);
+  assertFail(grade(TRANSLATED, label('&#x4C;oading')), /hardcoded label "Loading" \(written "&#x4C;oading"\) on <Spinner>$/);
+  // Plain letters were hardcoded before and still are, quoted as written when no reference changes them.
+  assertFail(grade(TRANSLATED, text('No contacts.')), /hardcoded JSX text "No contacts\."$/);
+  assertFail(grade(TRANSLATED, text('Save &amp; close')), /hardcoded JSX text "Save & close" \(written "Save &amp; close"\)$/);
+  for (const written of ['&nbsp;', '&#32;', '&mdash;', '&#x2014;', '&copy; 2026', '&middot;', '&hellip;', '&#40;3&#41;']) {
+    assertPass(grade(TRANSLATED, text(`{t('empty')} ${written}`)));
+    assertPass(grade(TRANSLATED, label(written)));
+  }
+  assertPass(grade(TRANSLATED, text("{'&#78;&#111;'}")));
+  assertFail(grade(TRANSLATED, text("{'&amp;'}")), /hardcoded JSX string '&amp;'$/);
+  assertPass(grade(TRANSLATED, text("{t('&#78;&#111;')}")));
+  assertPass(grade(TRANSLATED, text('<span className="&#78;&#111;" key="&#78;&#111;">{t(\'empty\')}</span>')));
 });

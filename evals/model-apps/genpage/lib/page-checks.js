@@ -18,6 +18,7 @@
 // beside it; a person still judges the rest in the Layer 3 rubric.
 
 const { sourceView, jsxElements, jsxTextRuns, declarationSource, matchingClose, withoutComments } = require('./tsx-structure.js');
+const { renderedText } = require('./jsx-references.js');
 const { runtimeEnums } = require('./expectation-evidence.js');
 const { escapeRe } = require('./source-evidence.js');
 
@@ -367,8 +368,8 @@ function reviewSummaryProblems(content) {
 // A spread (`{...props}`) may carry a label the page does not show, so it is not reported. A hidden input
 // (`type="hidden"`) is no field. Returns null when the page has no form control.
 // A comment is no value, so `{/* hidden */ null}` and `label={/* none */ ''}` are no label either (staticallyEmpty);
-// and a character reference is the character it stands for (shownText), so a label written `&#84;&#105;&#116;&#108;&#101;`
-// or `&amp;` names its control, while one of `&nbsp;` or `&#32;` alone does not.
+// and a character reference is the character the page compiler decodes it to (renderedText), so a label written
+// `&#84;&#105;&#116;&#108;&#101;` or `&amp;` names its control, while one of `&nbsp;` or `&#32;` alone does not.
 const STATIC_EMPTY = /^\s*(?:(['"`])\s*\1|null|undefined|false)\s*$/;
 // Whether an expression can show nothing once its comments are left out: it is blank, or only '', "", ``, null,
 // undefined or false. The comments are the ones the plugin's lexer finds (withoutComments), so `'/* x */'` stays a string.
@@ -376,24 +377,14 @@ const staticallyEmpty = (expression) => {
   const bare = withoutComments(expression);
   return bare.trim() === '' || STATIC_EMPTY.test(bare);
 };
-// JSX text, or a JSX attribute's string, as it is shown, read only to ask whether it shows anything. JSX decodes the
-// character references in both (https://react.github.io/jsx/#sec-jsx-string), as TypeScript and Babel do:
-// `&#<decimal>;` and `&#x<hex>;` (a lower-case x) up to 0x10FFFF, and the HTML 4 names. A reference is text unless
-// the character it stands for is white space: `&#84;` and `&#x54;` are a "T" and `&amp;` an "&", while `&#32;` shows
-// nothing, nor do `&nbsp;`, `&ensp;`, `&emsp;` and `&thinsp;`, the only HTML 4 names of white space. What JSX does not
-// decode is shown as written (`&nosuch;`, `&#X54;`), so it is text. jsxTextRuns reads every reference as a space
-// instead: the translate check counts no reference as a letter, but a label written in references would read as blank.
-const SPACE_REFERENCES = new Set(['nbsp', 'ensp', 'emsp', 'thinsp']);
-const shownText = (text) => String(text).replace(/&(?:#(\d+)|#x([\da-fA-F]+)|([A-Za-z][A-Za-z\d]*));/g, (reference, decimal, hex, name) => {
-  if (name !== undefined) return SPACE_REFERENCES.has(name) ? ' ' : reference;
-  const codePoint = decimal !== undefined ? Number(decimal) : Number.parseInt(hex, 16);
-  return codePoint <= 0x10ffff ? String.fromCodePoint(codePoint) : reference;
-});
-const names = (attr) => Boolean(attr) && ((attr.kind === 'string' && shownText(attr.value).trim() !== '')
+// A JSX attribute's string shows something when it is not blank as it renders (jsx-references.js): `&#84;` is a "T"
+// and `&amp;` an "&", while `&#32;` and `&nbsp;` are white space, which shows nothing; what the compiler does not decode
+// (`&nosuch;`, `&#X54;`) is shown as written, so it is text.
+const names = (attr) => Boolean(attr) && ((attr.kind === 'string' && renderedText(attr.value).trim() !== '')
   || (attr.kind === 'expression' && !staticallyEmpty(attr.value)));
 
-// Whether an element's children can show any text: a run of JSX text that is not blank once its character
-// references are read (shownText), or an expression container that is not statically empty (staticallyEmpty), at
+// Whether an element's children can show any text: a run of JSX text that is not blank as it renders (jsxTextRuns
+// decodes its character references), or an expression container that is not statically empty (staticallyEmpty), at
 // any depth of the markup inside it. `{null}`, `{''}`, `{undefined}`, `{false}`, a container holding only a comment
 // (`{/* … */}`) and one of them beside a comment (`{/* hidden */ null}`) show nothing, and the tags and attributes
 // of nested elements are no text:
@@ -405,7 +396,7 @@ function childrenShowText(content, element) {
   const { src, code } = sourceView(content);
   const from = element.childrenStart;
   const to = element.childrenEnd;
-  if (jsxTextRuns(content).some((run) => run.start >= from && run.end <= to && shownText(src.slice(run.start, run.end)).trim() !== '')) return true;
+  if (jsxTextRuns(content).some((run) => run.start >= from && run.end <= to && run.text.trim() !== '')) return true;
   const nested = jsxElements(content).filter((e) => e.start >= from && e.start < to);
   const inTag = (i) => nested.some((e) => (i >= e.start && i < e.openEnd) || (!e.selfClosing && i >= e.childrenEnd && i < e.end));
   for (let i = from; i < to; i += 1) {
@@ -469,8 +460,13 @@ function searchAndFilterProblems(content) {
 // shown attribute is a string with a letter (`placeholder="Search"`), or a JSX expression — a child
 // `{…}` or a shown attribute's value — can RESULT in a string or template with a letter
 // (displayedLiterals): `{'No contacts'}`, `{rows.length ? 'Contacts' : t('empty')}`, `{error || 'Failed'}`,
-// `{`${n} contacts`}`. A string passed to a call (`t('empty')`) is a key, not a result. Character
-// references are not letters (`&nbsp;`), nor are punctuation and digits (`({rows.length})`, `{`${n}`}`).
+// `{`${n} contacts`}`. A string passed to a call (`t('empty')`) is a key, not a result. JSX text and a shown
+// attribute's string are read as the page renders them (jsxTextRuns, renderedText): `<Text>&#72;&#105;</Text>`,
+// `<Text>&eacute;</Text>` and `placeholder="&#83;&#101;&#97;&#114;&#99;&#104;"` hold letters exactly as `Hi`, `é` and
+// `Search` do, while a reference to white space, punctuation or a symbol (`&nbsp;`, `&mdash;`, `&copy;`) holds none,
+// nor do punctuation and digits (`({rows.length})`, `{`${n}`}`). A JavaScript string or template is not decoded:
+// `{'&#72;&#105;'}` shows those characters as written. A problem quotes the text as it renders, and as written too
+// when references make the two differ.
 // NOT read: a string a function returns to JSX (`renderHeaderCell: () => 'Name'`) or a variable holding one.
 const SHOWN_ATTRIBUTES = new Set(['label', 'placeholder', 'title', 'aria-label', 'aria-description', 'alt', 'header', 'description', 'content', 'hint', 'validationMessage', 'text']);
 
@@ -521,19 +517,23 @@ function displayedLiterals(text) {
 // Letters a literal shows: a template's `${…}` parts are values, not text.
 const shownLetters = ({ quote, text }) => hasLetter(quote === '`' ? text.replace(/\$\{[^}]*\}/g, ' ') : text);
 
+// Text in a problem: as the page renders it, then as written when character references make the two differ,
+//   hardcoded JSX text "Hi" (written "&#72;&#105;")
+const quoted = (quote, shown, written = shown) => `${quote}${shown.slice(0, 40)}${quote}${written === shown ? '' : ` (written ${quote}${written.slice(0, 40)}${quote})`}`;
+
 function translateCoverageProblems(content) {
   const { src, code } = sourceView(content);
   const helper = ['translate', 't'].find((name) => declarationSource(content, name) && new RegExp(`(?<![.\\w$])${name}\\s*\\(`).test(code.replace(new RegExp(`\\b(?:const|let|var|function)\\s+${name}\\b`, 'g'), '')));
   if (!helper) return ['no translate() helper is declared and called'];
   const problems = [];
   for (const run of jsxTextRuns(content)) {
-    if (hasLetter(run.text)) problems.push(`hardcoded JSX text "${run.text.trim().slice(0, 40)}"`);
+    if (hasLetter(run.text)) problems.push(`hardcoded JSX text ${quoted('"', run.text.trim(), src.slice(run.start, run.end).trim())}`);
   }
   for (const element of jsxElements(content)) {
     for (const [name, attr] of element.attrs) {
       if (!SHOWN_ATTRIBUTES.has(name)) continue;
-      const literals = attr.kind === 'string' ? [{ quote: '"', text: attr.value }] : attr.kind === 'expression' ? displayedLiterals(attr.value) : [];
-      for (const literal of literals.filter(shownLetters)) problems.push(`hardcoded ${name} ${literal.quote}${literal.text.slice(0, 40)}${literal.quote} on <${element.name}>`);
+      const literals = attr.kind === 'string' ? [{ quote: '"', text: renderedText(attr.value), written: attr.value }] : attr.kind === 'expression' ? displayedLiterals(attr.value) : [];
+      for (const literal of literals.filter(shownLetters)) problems.push(`hardcoded ${name} ${quoted(literal.quote, literal.text, literal.written)} on <${element.name}>`);
     }
   }
   for (let i = code.indexOf('{'); i >= 0; i = code.indexOf('{', i + 1)) {
@@ -544,7 +544,7 @@ function translateCoverageProblems(content) {
     const close = matchingClose(code, i);
     if (close < 0) continue;
     for (const literal of displayedLiterals(src.slice(i + 1, close)).filter(shownLetters)) {
-      problems.push(`hardcoded JSX string ${literal.quote}${literal.text.slice(0, 40)}${literal.quote}`);
+      problems.push(`hardcoded JSX string ${quoted(literal.quote, literal.text)}`);
     }
   }
   return problems;

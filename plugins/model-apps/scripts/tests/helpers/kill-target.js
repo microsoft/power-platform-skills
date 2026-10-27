@@ -24,6 +24,9 @@
 //   node kill-target.js workspace-refused <prefix>
 //        makes one with a maker that refuses to make a folder inside the plugin's own folder (a full disk: ENOSPC), so that the workspace is made in the temp folder itself — which it says, `workspace <folder>` —
 //        and removes it, and ends: `done`. The plugin's folder was made, for the workspace that was refused.
+//   node kill-target.js workspace-hold-release <prefix>
+//        makes one on Windows terms (`uid: null`: the plugin's folder is held while it is judged; the access-list reader and maker are stood in for) with a file system on which the removal of the
+//        hold is refused (EACCES: a scanner has the new file open), and stops at the first wait to try that removal again: says `releasing <folder>` — the workspace it made — and waits to be killed.
 //   node kill-target.js workspace-loop <prefix> <n> <ms> [<gateFile>]
 //        n times: sweeps, makes a workspace, puts a file in it, waits <ms>, sweeps, checks that its own workspace is still whole (and recorded, if it is in the plugin's folder), removes it.
 //        Says `ready`, waits for <gateFile> when one is given, and says `loop-done <how many times a workspace of its own was gone or unrecorded> <how many were made in the plain temp folder>`.
@@ -158,6 +161,28 @@ async function main() {
     say(`workspace ${folder}`);
     fs.rmSync(folder, { recursive: true, force: true });
     say('done');
+  } else if (mode === 'workspace-hold-release') {
+    const { makeTempWorkspace, workspaceParent, HOLD_PREFIX } = require('../../lib/temp-workspace.js');
+    const [prefix] = args;
+    const deps = { uid: null, folderPrivacy: () => ({ ok: true, reason: 'stood in for' }), folderProtect: () => ({ ok: true, reason: 'stood in for' }) };
+    let refused = false;
+    deps.fs = { ...fs, unlinkSync: (file, ...rest) => {
+      if (path.basename(String(file)).startsWith(HOLD_PREFIX)) {
+        refused = true;
+        throw Object.assign(new Error(`EACCES: permission denied, unlink '${file}'`), { code: 'EACCES' });
+      }
+      return fs.unlinkSync(file, ...rest);
+    } };
+    // The wait before the removal of the hold is tried again: the one moment this process is killed at.
+    deps.pause = (ms) => {
+      if (!refused) { pause(ms); return; }
+      const parent = workspaceParent(deps);
+      const [folder] = fs.readdirSync(parent).filter((name) => name.startsWith(`${prefix}${process.pid}-`));
+      say(`releasing ${path.join(parent, folder)}`);
+      pause(120000);
+    };
+    makeTempWorkspace(prefix, deps);
+    say('returned');
   } else if (mode === 'workspace-loop') {
     const { makeTempWorkspace, sweepDeadWorkspaces, workspaceParent } = require('../../lib/temp-workspace.js');
     const [prefix, iterations, ms, gate] = args;

@@ -143,7 +143,7 @@ function position(xml, at) {
  *     → { ok: false, detail: 'a second root element (a document has exactly one), at line 1, column 11' }
  *
  * `path` is the names of the element's ancestors, outermost first, joined with "/" ('' for the root element); no name has a "/", so it says where the element
- * is without ambiguity. `attrs` has no prototype and holds each attribute's value as an XML parser gives it: references decoded, and a tab, a line end or a
+ * is without ambiguity. The paths are built after the document has been read to its end, so a document that is refused costs time in proportion to its length. `attrs` has no prototype and holds each attribute's value as an XML parser gives it: references decoded, and a tab, a line end or a
  * carriage return in the text of the value (not one written as `&#9;`) a space (https://www.w3.org/TR/xml/#AVNormalize). Names are exact — XML is case-sensitive —
  * and a namespace prefix is part of the name.
  *
@@ -192,6 +192,11 @@ function scan(xml, wanted, spans, maxDepth, elementOnly) {
   const elements = [];
   // The names of the elements that are open, outermost first, and the default namespace each is in (a `xmlns="…"` attribute sets it, and an element inherits it).
   const open = [];
+  // The same open elements as a chain, innermost first, so that an answered element can say where it is without the path being built while the document may still be refused: a
+  // document of n unclosed `<a>` and every element asked for would cost n²/2 characters of paths, all thrown away when the end of the text is reached. The paths are built once the
+  // document has been read to its end (pathOf), so a refusal costs time in proportion to the text read.
+  let innermost = null;
+  const answeredAt = [];
   const defaultNamespace = [];
   // With `elementOnly`, beside `open`: whether each open element holds elements and white space only.
   const openElementOnly = [];
@@ -308,9 +313,11 @@ function scan(xml, wanted, spans, maxDepth, elementOnly) {
     }
     let answered = null;
     if (wanted(name)) {
-      answered = { name, path: open.join('/'), attrs };
+      // `path` keeps its place among the keys (name, path, attrs, start, end) and is filled in at the end of the document.
+      answered = { name, path: '', attrs };
       if (spans) answered.start = from;
       elements.push(answered);
+      answeredAt.push(innermost);
     }
     if (selfClosing) {
       if (spans && answered) answered.end = p;
@@ -318,6 +325,7 @@ function scan(xml, wanted, spans, maxDepth, elementOnly) {
     } else {
       noteWhatTheSdkParserMisreads(from, p - 1, name, attrs);
       open.push(name);
+      innermost = { name, parent: innermost, path: undefined };
       if (elementOnly) openElementOnly.push(!!elementOnly(name));
       if (spans) openAnswered.push(answered);
       state = CONTENT;
@@ -358,6 +366,7 @@ function scan(xml, wanted, spans, maxDepth, elementOnly) {
     const expected = open[open.length - 1];
     if (found[0] !== expected) throw new Refusal(from, `closing tag </${found[0]}> where </${expected}> is expected`);
     open.pop();
+    innermost = innermost.parent;
     defaultNamespace.pop();
     openElementOnly.pop();
     if (spans) {
@@ -456,7 +465,31 @@ function scan(xml, wanted, spans, maxDepth, elementOnly) {
   if (state === PROLOG) throw new Refusal(n, 'there is no root element');
   if (state === CONTENT) throw new Refusal(n, `the element <${open[open.length - 1]}> is never closed`);
   if (misread) throw misread;
+  for (let i = 0; i < elements.length; i += 1) elements[i].path = pathOf(answeredAt[i]);
   return elements;
 }
 
-module.exports = { readXmlElements, XML_PREDEFINED };
+// The names of `node` and of its ancestors, outermost first, joined with "/" ('' for no node). The path of a node is kept once built, so that the next element
+// asked for under it adds one name to a path that is there; a node that is not asked for under is never given one, so an answer that is one element deep in a
+// deep document costs one walk up, as it always did.
+function pathOf(node) {
+  if (node === null) return '';
+  if (node.path === undefined) {
+    const names = [];
+    let ancestor = node;
+    while (ancestor !== null && ancestor.path === undefined) {
+      names.push(ancestor.name);
+      ancestor = ancestor.parent;
+    }
+    const own = names.reverse().join('/');
+    node.path = ancestor === null ? own : `${ancestor.path}/${own}`;
+    work.pathCharacters += node.path.length;
+  }
+  return node.path;
+}
+
+// What the reader has done that grows with the depth of a document, for the tests that hold it to "a refusal costs what was read, not what the answer would have
+// held": the characters of paths built. It is a count, not a clock, so it says the same on a loaded machine and on an idle one.
+const work = { pathCharacters: 0 };
+
+module.exports = { readXmlElements, XML_PREDEFINED, work };

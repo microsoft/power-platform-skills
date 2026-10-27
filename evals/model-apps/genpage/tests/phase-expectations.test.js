@@ -592,6 +592,27 @@ test('eval 13: generated text carries no hardcoded currency symbols or date form
   assertPass(gradeCode(text, page("const mode = isMoney ? 'currency' : 'decimal'; return null;")));
 });
 
+// JSX decodes the character references in its text and in an attribute's string (lib/jsx-references.js, the page compiler's
+// own decoding), so a page shows `&euro;` as "€" and `&#36;` as "$": a symbol or a date format spelled with them is hardcoded
+// exactly as its plain spelling is. A JavaScript string is not decoded, so `'&euro;'` shows those characters and no symbol.
+test('eval 13: a currency symbol or a date format spelled with character references in JSX is hardcoded too', () => {
+  const text = 'Phase 5 (Page Builder): Generated .tsx does NOT hardcode currency symbols or date formats';
+  const page = (body) => [{ name: 'page.tsx', content: `export default function GeneratedComponent() {\n  ${body}\n}\n` }];
+  assertFail(gradeCode(text, page('return <Text>&euro;{total}</Text>;')), /hardcoded currency symbol "\u20ac"/);
+  assertFail(gradeCode(text, page('return <Text>{total} &pound;</Text>;')), /hardcoded currency symbol "\u00a3"/);
+  assertFail(gradeCode(text, page('return <Input placeholder="&yen;" />;')), /hardcoded currency symbol "\u00a5"/);
+  assertFail(gradeCode(text, page('return <Text>&#36;{total}</Text>;')), /hardcoded "\$" currency symbol/);
+  assertFail(gradeCode(text, page('return <Text>&#x24;100</Text>;')), /hardcoded "\$" currency symbol/);
+  assertFail(gradeCode(text, page('return <Text>$&#49;00</Text>;')), /hardcoded "\$" currency symbol/);
+  assertFail(gradeCode(text, page('return <Text>MM&#47;dd&#47;yyyy</Text>;')), /hardcoded date format "MM\/dd\/yyyy"/);
+  // As when written plainly, a "$" with no amount after it is not currency, nor is a reference that is no symbol.
+  assertPass(gradeCode(text, page('return <Text>$</Text>;')));
+  assertPass(gradeCode(text, page('return <Text>&#36;</Text>;')));
+  assertPass(gradeCode(text, page('return <Text>{formatCurrency(total)} &amp; {formatDate(due)} &copy; &nbsp;</Text>;')));
+  assertPass(gradeCode(text, page("return <Text>{'&euro;'}{total}</Text>;")));
+  assertPass(gradeCode(text, page("const label = '&#36;' + total; return null;")));
+});
+
 // --- Eval 15 -----------------------------------------------------------------------------------
 
 const E15 = '15-support-tickets-real';
