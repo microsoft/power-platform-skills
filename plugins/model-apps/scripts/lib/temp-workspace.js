@@ -38,7 +38,8 @@
 // temp folder, unrecorded and never swept (measured on one machine: about one run in twenty with three at a time, one in three with twelve; no folder refused an entry). So a run HOLDS the folder from the moment
 // it has made or found it until its workspace is in it: an empty file of its own, `.hold-<pid>-<6 hex>`, which the `rmdir` of a run that ends refuses to remove (ENOTEMPTY), as it refuses a workspace. The folder
 // cannot go while it is judged, so the answer is about the folder the workspace is then made in. The hold is made after the access list of a folder this run made is set (nothing is put in a folder before that),
-// and only in a plain folder (not through a link). It holds nothing, and is removed before makeTempWorkspace returns, whatever happened; a hold that cannot be made leaves the run as it was without one (a full
+// and only in a plain folder (not through a link). It holds nothing, and is removed before makeTempWorkspace returns, whatever happened — on success only once the workspace is recorded, since its
+// removal can wait on a scanner and a run killed in that wait must leave a workspace that a sweep can take; a hold that cannot be made leaves the run as it was without one (a full
 // disk, a folder that takes no file), and one a run was killed while holding is removed by a later sweep once that run's pid is gone, so that the folder can go when it is empty. On POSIX the question is one
 // lstat, answered before anything could change, and nothing is held.
 //
@@ -702,12 +703,13 @@ function makeTempWorkspace(prefix, deps = {}) {
         }
         break;
       }
-      // The workspace is in the folder now, and keeps it from going as the hold did.
-      releaseHold(hold, deps);
+      // The workspace is in the folder now, and keeps it from going as the hold did. It is recorded and registered BEFORE the hold is let go: letting go can wait on a scanner that holds the
+      // new file (releaseHold), and a run that is killed in that wait must leave a workspace a sweep can prove dead, not an empty folder with no record, which no sweep ever takes.
       mark(dir, stamp, deps);
       // The end of the process removes what the run did not — unless it was lent: a program that was given a path in it may still be writing there (see THE END OF A RUN). A `mkdtempSync` seam that answers a
       // folder somewhere else is not the plugin's folder's, and is not touched.
       if (deps.lent !== true && path.dirname(dir) === parent) ownWorkspaces.set(dir, deps.fs || fs);
+      releaseHold(hold, deps);
       return dir;
     }
   }

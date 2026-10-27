@@ -1167,6 +1167,23 @@ test('(Windows) the hold is an empty file of the run\'s own, in the folder while
   assert.ok(recordOfFolder(unheld));
 });
 
+// The last steps of making a workspace are to record it (its owner record), to register it for the end of the process, and to let go of the hold. Letting go can wait on a scanner that holds
+// the new file (releaseHold, the WAITS_MS pauses), and a run that is killed in that wait must leave a workspace a sweep can prove dead — not an empty folder with no record, which no sweep
+// ever takes, and which keeps the plugin's folder for good. So the hold goes last.
+test('REAL KILL: a run killed while the removal of its hold waits on a scanner has already recorded its workspace — the next sweep takes the workspace and the hold, and the folder can go', async (t) => {
+  const root = privateTempRoot(t);
+  const deps = { os: { tmpdir: () => root }, uid: null, folderPrivacy: () => ({ ok: true, reason: 'stood in for' }), folderProtect: () => ({ ok: true, reason: 'stood in for' }) };
+  const run = startTarget(t, ['workspace-hold-release', 'genpage-'], { env: tempEnv(root) });
+  const folder = (await run.waitFor(/^releasing /)).slice('releasing '.length);
+  await run.kill();
+  assert.strictEqual(path.dirname(folder), workspaceParent(deps), 'the workspace was made in the plugin\'s folder');
+  assert.ok(recordOfFolder(folder), `it was recorded before the hold was let go, so a sweep can prove its run gone: ${JSON.stringify(fs.readdirSync(folder))}`);
+  assert.ok(fs.readdirSync(workspaceParent(deps)).some((name) => name.startsWith(HOLD_PREFIX)), 'and the killed run left its hold');
+  const swept = sweepDeadWorkspaces(deps);
+  assert.deepStrictEqual(swept.removed.map((r) => [r.name, r.stamp.pid]), [[path.basename(folder), run.pid]], 'the next sweep takes the workspace');
+  assert.deepStrictEqual(fs.readdirSync(workspaceParent(deps)), [], 'and the hold: nothing is left to keep the plugin\'s folder');
+});
+
 test('POSIX: nothing is held — the folder is judged by one lstat, before anything could change — and the folder holds only the workspace', onlyPosix, (t) => {
   const { deps } = tempRoot(t);
   const atMake = [];
