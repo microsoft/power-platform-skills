@@ -12,6 +12,7 @@ const { acquireAppPagesLease } = require('../lib/sdk-build.js');
 const { ownerStamp, probeProcess } = require('../lib/process-owner.js');
 const { sha256 } = require('../lib/hash.js');
 const { startTarget, tempEnv, privateTempRoot, deadPid, removeWhenTestEnds } = require('./helpers/kill-target-client.js');
+const { deletedWhileOpen, deletedNamesLinger } = require('./helpers/delete-pending.js');
 
 const APP = 'contoso_app';
 const workspace = (t) => {
@@ -217,6 +218,124 @@ test('a workspace that cannot be written is that error, as it always was — not
   const blocked = path.join(dir, 'not-a-folder');
   fs.writeFileSync(blocked, '');
   assert.throws(() => acquireAppPagesLease(blocked, APP), (e) => !(e && e.code === 'pages-locked') && e.code === 'UNSAFE_OUTPUT' && e.reason === 'not-directory', 'the file system\'s own problem');
+});
+
+// A name another build is deleting while a third process still has it open — a build reading the lock to judge its owner — lingers on Windows under
+// Node 20 until that handle closes, and every look at it and every create of it fails with EPERM meanwhile (helpers/delete-pending.js). That is the
+// moment a release or a take-over ends: another build holds the lock, or has just held it, and a build that finds the name so is refused as by a
+// held lock — not stopped with a file-safety error or a raw EPERM. Under Node 22, and on Linux and macOS, the delete removes the name at once: the same
+// steps leave no name, and each test says what a build then finds.
+const refusedNotError = (lock) => (e) => {
+  assert.strictEqual(e && e.code, 'pages-locked', String(e && e.stack));
+  return refused(lock)(e);
+};
+
+test('a claim another build is deleting as its take-over ends, while a third still has it open, is a lock in use: refused in the same words, the lock untouched', (t) => {
+  const dir = workspace(t);
+  const lingers = deletedNamesLinger(dir);
+  const mine = acquireAppPagesLease(dir, APP);
+  const held = fs.readFileSync(canonicalFile(dir), 'utf8');
+  const claim = deletedWhileOpen(`${canonicalFile(dir)}.reclaim`, JSON.stringify({ pid: process.pid, at: Date.now(), rnd: 'taking-over' }));
+  try {
+    assert.throws(() => acquireAppPagesLease(dir, APP), refusedNotError(canonicalFile(dir)), `names deleted while open linger here: ${lingers}`);
+  } finally {
+    claim.close();
+  }
+  assert.strictEqual(fs.readFileSync(canonicalFile(dir), 'utf8'), held, 'the lock is as it was');
+  mine.release();
+  assert.deepStrictEqual(fs.readdirSync(dir), [], 'released, and the claim is gone with its last handle');
+});
+
+test('a lock another build is deleting as it lets go, while a third still has it open, is refused where its name lingers, and free where it does not — never a file-safety error', (t) => {
+  const dir = workspace(t);
+  const lingers = deletedNamesLinger(dir);
+  const lock = deletedWhileOpen(canonicalFile(dir), JSON.stringify({ ...ownerStamp(), rnd: 'letting-go' }));
+  try {
+    if (lingers) assert.throws(() => acquireAppPagesLease(dir, APP), refusedNotError(canonicalFile(dir)));
+    else acquireAppPagesLease(dir, APP).release();
+  } finally {
+    lock.close();
+  }
+  assert.deepStrictEqual(fs.readdirSync(dir), [], 'nothing is left once the last handle is closed');
+  acquireAppPagesLease(dir, APP).release();
+});
+
+test('a lock that starts being deleted between a build\'s look and its create is refused where its name lingers, and taken where it does not — never the create\'s raw EPERM', (t) => {
+  const dir = workspace(t);
+  const lingers = deletedNamesLinger(dir);
+  const real = fs.writeFileSync;
+  let letGo = null;
+  // Another build lets go of the lock just after this one found the name free, while a third still reads it: the create meets the lingering name.
+  t.mock.method(fs, 'writeFileSync', function writeFileSync(file, data, opts) {
+    if (!letGo && file === canonicalFile(dir) && opts && opts.flag === 'wx') {
+      letGo = 'starting';
+      letGo = deletedWhileOpen(file, JSON.stringify({ ...ownerStamp(), rnd: 'letting-go' }));
+    }
+    return real.call(this, file, data, opts);
+  });
+  try {
+    if (lingers) assert.throws(() => acquireAppPagesLease(dir, APP), refusedNotError(canonicalFile(dir)));
+    else acquireAppPagesLease(dir, APP).release();
+  } finally {
+    if (letGo && letGo.close) letGo.close();
+  }
+  assert.ok(letGo, 'control: the create met the name being deleted');
+  t.mock.restoreAll();
+  assert.deepStrictEqual(fs.readdirSync(dir), []);
+});
+
+test('a create that fails with EPERM while nothing is at the lock\'s name is that error, as it always was — a folder this user cannot write in is not another build', (t) => {
+  const dir = workspace(t);
+  const real = fs.writeFileSync;
+  t.mock.method(fs, 'writeFileSync', function writeFileSync(file, data, opts) {
+    if (file === canonicalFile(dir) && opts && opts.flag === 'wx') throw Object.assign(new Error(`EPERM: operation not permitted, open '${file}'`), { code: 'EPERM' });
+    return real.call(this, file, data, opts);
+  });
+  assert.throws(() => acquireAppPagesLease(dir, APP), (e) => e && e.code === 'EPERM', 'the create\'s own error');
+  t.mock.restoreAll();
+  assert.deepStrictEqual(fs.readdirSync(dir), []);
+});
+
+test('on Windows a create that failed with EPERM while the name was being deleted, and finds it gone, is tried once more and takes the free lock; elsewhere it is that error', (t) => {
+  const dir = workspace(t);
+  const real = fs.writeFileSync;
+  let failed = 0;
+  // The deletion finished between the failed create and the look at the name: nothing lingers by the time the build looks.
+  t.mock.method(fs, 'writeFileSync', function writeFileSync(file, data, opts) {
+    if (file === canonicalFile(dir) && opts && opts.flag === 'wx' && failed === 0) {
+      failed += 1;
+      throw Object.assign(new Error(`EPERM: operation not permitted, open '${file}'`), { code: 'EPERM' });
+    }
+    return real.call(this, file, data, opts);
+  });
+  if (process.platform === 'win32') {
+    const lease = acquireAppPagesLease(dir, APP);
+    assert.strictEqual(JSON.parse(fs.readFileSync(canonicalFile(dir), 'utf8')).pid, process.pid, 'taken on the second try');
+    lease.release();
+  } else {
+    assert.throws(() => acquireAppPagesLease(dir, APP), (e) => e && e.code === 'EPERM', 'as it always was');
+  }
+  assert.strictEqual(failed, 1);
+  t.mock.restoreAll();
+  assert.deepStrictEqual(fs.readdirSync(dir), []);
+});
+
+test('a link or a junction at the lock\'s name or at its claim\'s is still refused as the file system problem it is, and nothing is written through it', (t) => {
+  for (const at of ['lock', 'claim']) {
+    const dir = workspace(t);
+    const elsewhere = path.join(dir, 'elsewhere');
+    fs.mkdirSync(elsewhere);
+    const name = at === 'lock' ? canonicalFile(dir) : `${canonicalFile(dir)}.reclaim`;
+    // A junction on Windows, which needs no privilege; the type is ignored elsewhere, where it is a symbolic link to the folder.
+    fs.symlinkSync(elsewhere, name, 'junction');
+    assert.throws(() => acquireAppPagesLease(dir, APP), (e) => {
+      assert.strictEqual(e && e.code, 'UNSAFE_OUTPUT', `${at}: ${String(e && e.stack)}`);
+      assert.strictEqual(e.reason, 'link', at);
+      return true;
+    });
+    assert.deepStrictEqual(fs.readdirSync(elsewhere), [], `${at}: nothing was written through it`);
+    assert.deepStrictEqual(fs.readdirSync(dir).sort(), ['elsewhere', path.basename(name)].sort(), `${at}: nothing was taken or left`);
+  }
 });
 
 // Several builds that start at once, and each finds the lock: not there at all, or left by a build that was killed. Exactly one of them takes it.

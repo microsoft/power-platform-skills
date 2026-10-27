@@ -63,19 +63,74 @@ const unreleasedNote = (lease) => (lease.stale ? ` The build that held it is no 
 // a hard link or a folder at either name is refused, not followed — a reclaim writes the lock and a release deletes it, and either would then land
 // on whatever the link points at. A missing name is what a free lock is. These checks are of names, between operations; they are no defense
 // against a hostile process that swaps a name for a link in between.
+//
+// A name that is being deleted is a lock in use, and is refused as one (Windows only; see beingDeleted below): another build is releasing the lock or
+// finishing a take-over at this very moment, which is a build that holds it or has just held it. A create that fails with EPERM is that refusal only
+// while the name is still there being deleted; one whose name is not there is tried once more — the deletion may have finished in between — and a
+// second such failure is the error it is (a folder that cannot be written), as it always was.
 function takeLockFile(dir, file, { owner = {}, now = Date.now, stamp }) {
   const lockPath = path.join(dir, file);
-  assertPlainFileTarget(lockPath);
-  assertPlainFileTarget(`${lockPath}.reclaim`);
-  return acquireLease(dir, {
-    file,
-    now,
-    stamp: stamp || ownerStamp({ ...owner, now }),
-    // Stale only when the process that took the lock is PROVEN gone (process-owner.js): a lock whose owner runs, or cannot be judged — another
-    // machine, another pid namespace, a record that is missing or damaged, a lock of a release that recorded only { pid, at } — is never stale,
-    // however old it is.
-    isStale: (held) => ownerState(held, owner).state === 'gone',
-  });
+  const beingRemoved = { ok: false, reason: 'the lock is being removed by another build at this moment' };
+  for (let attempt = 1; ; attempt += 1) {
+    if (inspectLockName(lockPath) || inspectLockName(`${lockPath}.reclaim`)) return beingRemoved;
+    const lease = acquireLease(dir, {
+      file,
+      now,
+      stamp: stamp || ownerStamp({ ...owner, now }),
+      // Stale only when the process that took the lock is PROVEN gone (process-owner.js): a lock whose owner runs, or cannot be judged — another
+      // machine, another pid namespace, a record that is missing or damaged, a lock of a release that recorded only { pid, at } — is never stale,
+      // however old it is.
+      isStale: (held) => ownerState(held, owner).state === 'gone',
+    });
+    if (process.platform !== 'win32' || lease.ok || !lease.error || lease.error.code !== 'EPERM') return lease;
+    if (beingDeleted(lockPath)) return beingRemoved;
+    if (attempt >= 2) return lease;
+  }
+}
+
+// On Windows a file deleted while another process has it open — a build reading the lock to judge its owner, a scanner — keeps its name until that
+// handle closes ("delete pending"), unless the delete asks for POSIX semantics, which libuv does only from 1.48 (Node 22): https://github.com/libuv/libuv/issues/3839,
+// https://github.com/libuv/libuv/pull/4318. Under an older libuv (Node 20) every lstat and every create of that name meanwhile fails with EPERM
+// (STATUS_DELETE_PENDING reaches Node as ERROR_ACCESS_DENIED), and a build that lost a race for the lock used to stop with a file-safety error or a raw
+// EPERM instead of the refusal it is. EPERM cannot say WHY the name is refused: a file this user may not even look at answers it too. Either way the
+// name exists and cannot be used, so refusing changes nothing but the words; nothing is written or followed. Never true on Linux or macOS, where a
+// delete removes the name at once and these paths are as they were.
+function beingDeleted(name) {
+  if (process.platform !== 'win32') return false;
+  try {
+    fs.lstatSync(name);
+    return false;
+  } catch (e) {
+    return !!e && e.code === 'EPERM';
+  }
+}
+
+// The planted-link check of one lock name (assertPlainFileTarget), which answers true when the name could not be inspected because it is being
+// deleted (above), and throws what the check throws otherwise: a link, a junction, a hard link or a folder at the name is refused exactly as before.
+// The answer is read from the lstat the check itself made — through its `fs` seam — and not from a second look, which could find the deletion
+// finished and then let the check's error through after all.
+function inspectLockName(name) {
+  if (process.platform !== 'win32') {
+    assertPlainFileTarget(name);
+    return false;
+  }
+  let firstLook = null;
+  const watched = Object.create(fs);
+  watched.lstatSync = (...args) => {
+    try {
+      return fs.lstatSync(...args);
+    } catch (e) {
+      if (!firstLook) firstLook = e;
+      throw e;
+    }
+  };
+  try {
+    assertPlainFileTarget(name, { fs: watched });
+    return false;
+  } catch (e) {
+    if (e && e.code === 'UNSAFE_OUTPUT' && e.reason === 'uninspectable' && firstLook && firstLook.code === 'EPERM') return true;
+    throw e;
+  }
 }
 
 // Releases a lock this process holds, and says so when it cannot confirm that it did. Owner-checked: the file is removed only while it still holds
