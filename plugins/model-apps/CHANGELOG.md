@@ -15,6 +15,10 @@ The bundled SDK is unchanged (power-platform-ux a3443479).
   list) now fails the read instead of becoming a name such as "null".
 - **On Windows with Node 20, a build that meets an app lock being released or taken over reports another build**, naming the
   file it could not inspect, instead of a file-safety or raw EPERM error.
+- **On Windows, a script that starts while another is still making the plugin's temp folder private asks again**, instead of
+  putting every workspace of its run in the plain temp folder. This happened where the temp folder lets other users write.
+- **On Windows, a plugin temp folder that could not be made private is removed by the script that made it**, which waits up to
+  ten seconds for other scripts to let go. Every later script used to work in the plain temp folder.
 
 ## [2.20.2]
 
