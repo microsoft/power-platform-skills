@@ -1091,7 +1091,22 @@ test('a folder that is removed while its access list is being read — removed w
 // Windows asks whether a folder is private with three programs — about a second — and the end of every run that leaves nothing in the plugin's folder removes it (`rmdir`: THE END OF A RUN). With runs starting and
 // ending side by side the folder was taken away, and made again, while it was being judged: the answer was about a folder that had gone, the run asked again about the new one, and after MAKE_ATTEMPTS answers made its
 // workspace in the plain temp folder, unrecorded (measured on one machine: about one run in twenty with three at a time, one in three with twelve). A run now HOLDS the folder while it judges it.
-const holdName = new RegExp(`^${HOLD_PREFIX.replace(/\./g, '\\.')}${process.pid}-[0-9a-f]{6}$`);
+// A hold is named for the machine and the run that made it: `.hold-<8 hex digits for the machine>-<pid>-<6 hex digits>`.
+const holdName = new RegExp(`^${HOLD_PREFIX.replace(/\./g, '\\.')}[0-9a-f]{8}-${process.pid}-[0-9a-f]{6}$`);
+// The hold a run leaves when it is killed while it holds the plugin's folder: made by the maker itself, on Windows terms (`deps` has `uid: null`), for the run `owner` says — its pid and
+// machine (process-owner.js seams) — on a file system that never lets a hold be removed. The workspace the run made is removed again, so the hold is what is left. Answers its path.
+function leftHold(deps, owner) {
+  const parent = workspaceParent(deps);
+  const before = new Set(fs.existsSync(parent) ? fs.readdirSync(parent) : []);
+  const sticky = { ...fs, unlinkSync: (file, ...rest) => {
+    if (path.basename(String(file)).startsWith(HOLD_PREFIX)) throw Object.assign(new Error(`EIO: i/o error, unlink '${file}'`), { code: 'EIO' });
+    return fs.unlinkSync(file, ...rest);
+  } };
+  fs.rmSync(makeTempWorkspace('genpage-', { ...deps, fs: sticky, owner }), { recursive: true, force: true });
+  const made = fs.readdirSync(parent).filter((name) => name.startsWith(HOLD_PREFIX) && !before.has(name));
+  assert.strictEqual(made.length, 1, `one hold left: ${JSON.stringify(made)}`);
+  return path.join(parent, made[0]);
+}
 // `rmdir` of a folder with something in it: ENOTEMPTY, or EEXIST where the system says so.
 const notEmpty = (code) => (code === 'EEXIST' ? 'ENOTEMPTY' : code);
 
@@ -1196,26 +1211,64 @@ test('(Windows) a hold that a run was killed while holding is removed by the nex
   const { deps } = tempRoot(t);
   const own = { ...deps, uid: null };
   const parent = workspaceParent(own);
-  const holdOf = (pid, text = '', random = 'a1b2c3') => {
-    fs.mkdirSync(parent, { recursive: true, mode: 0o700 });
-    const file = path.join(parent, `${HOLD_PREFIX}${pid}-${random}`);
-    fs.writeFileSync(file, text);
-    return file;
-  };
   const dead = deadPid();
   // All that is left in the folder is the hold of a run that was killed: the end of a run cannot take the folder until a sweep has removed it.
-  const deadHold = holdOf(dead);
+  const deadHold = leftHold(own, { pid: dead });
+  assert.deepStrictEqual(fs.readdirSync(parent), [path.basename(deadHold)]);
   assert.throws(() => fs.rmdirSync(parent), (e) => notEmpty(e.code) === 'ENOTEMPTY', 'the hold keeps the folder');
   assert.deepStrictEqual([sweepDeadWorkspaces(own).removed, fs.existsSync(deadHold)], [[], false], 'the sweep removes it, and says nothing: a hold held nothing');
   fs.rmdirSync(parent);
   // The hold of a run that is going, and a file named like a hold that has something in it, are left.
-  const liveHold = holdOf(process.pid);
-  const notAHold = holdOf(dead, 'something', 'd4e5f6');
+  const liveHold = leftHold(own, {});
+  const notAHold = leftHold(own, { pid: dead });
+  fs.writeFileSync(notAHold, 'something');
   const swept = sweepDeadWorkspaces(own);
   assert.ok(fs.existsSync(liveHold), 'the hold of a run that is going is left');
   assert.ok(fs.existsSync(notAHold), 'a file of that name with something in it was not made by a run, and is left');
   assert.deepStrictEqual([swept.removed, swept.failed], [[], []]);
   assert.deepStrictEqual(entriesOf(parent), [path.basename(liveHold), path.basename(notAHold)].sort());
+});
+
+// A temp folder can be shared between machines — a network share, a profile that roams — and a pid says nothing on a machine that did not make it: one that no process has here may be a run
+// that is going there. So a hold names its machine, as an owner record names its host (process-owner.js), and a sweep takes only a hold of its own machine. A hold of another machine stays,
+// and so does every hold, when a sweep cannot tell which machine it runs on (no host name).
+test('(Windows) a hold names its machine: a sweep on another machine that shares the temp folder leaves it, whatever the pid in it is there — so the end of a run there cannot take the folder from under this run\'s judgement', (t) => {
+  const { deps } = tempRoot(t);
+  const own = { ...deps, uid: null };
+  const parent = workspaceParent(own);
+  fs.mkdirSync(parent);
+  // On the other machine, no process has this run's pid.
+  const otherMachine = { ...own, owner: { hostname: () => 'another-machine', probe: () => 'gone' } };
+  const seen = [];
+  const dir = makeTempWorkspace('genpage-', { ...own, owner: { hostname: () => 'this-machine' }, folderPrivacy: (folder) => {
+    // While this run judges the folder, a run on the other machine sweeps it, and ends with nothing of its own left in it.
+    sweepDeadWorkspaces(otherMachine);
+    const left = fs.readdirSync(folder);
+    let ended;
+    try {
+      fs.rmdirSync(folder);
+      fs.mkdirSync(folder);
+      ended = 'taken, and made again';
+    } catch (e) {
+      ended = notEmpty(e.code);
+    }
+    seen.push({ left, ended });
+    return { ok: true, reason: 'private' };
+  } });
+  assert.strictEqual(seen.length, 1, `the folder was judged once: ${JSON.stringify(seen)}`);
+  assert.strictEqual(seen[0].left.length, 1, `this run's hold is still in the folder after the other machine's sweep: ${JSON.stringify(seen)}`);
+  assert.ok(seen[0].left[0].startsWith(HOLD_PREFIX));
+  assert.strictEqual(seen[0].ended, 'ENOTEMPTY', 'so the end of the run there could not take the folder');
+  assert.strictEqual(path.dirname(dir), parent, 'and the workspace is in the plugin\'s folder');
+  fs.rmSync(dir, { recursive: true, force: true });
+
+  // A hold of this machine, of a run that is gone: a sweep that cannot read the name of its own machine leaves it; a sweep of this machine takes it.
+  const thisMachine = { hostname: () => 'this-machine', probe: () => 'gone' };
+  const gone = leftHold(own, { hostname: () => 'this-machine', pid: deadPid() });
+  sweepDeadWorkspaces({ ...own, owner: { ...thisMachine, hostname: () => { throw new Error('no host name'); } } });
+  assert.ok(fs.existsSync(gone), 'a sweep that cannot tell its own machine leaves every hold');
+  sweepDeadWorkspaces({ ...own, owner: thisMachine });
+  assert.ok(!fs.existsSync(gone), 'the sweep of its own machine takes it');
 });
 
 // Holds are made only where the system has no owners to compare (Windows), and only taken there: where it has (POSIX), a file of that shape in the plugin's folder is an entry like any
@@ -1228,7 +1281,9 @@ test('POSIX: a sweep where the system has owners leaves an empty file shaped lik
   fs.mkdirSync(parent, { mode: 0o700 });
   const ownedByUs = { isDirectory: () => true, isSymbolicLink: () => false, uid, mode: 0o40700 };
   const posix = { ...deps, uid, fs: { ...fs, lstatSync: (target, ...rest) => (target === parent ? ownedByUs : fs.lstatSync(target, ...rest)) }, owner: { probe: () => 'gone' } };
-  const shaped = path.join(parent, `${HOLD_PREFIX}${deadPid()}-a1b2c3`);
+  // Named as the maker names the hold of a run of this machine that is gone — the maker made it, on Windows terms, in a temp folder of its own.
+  const windowsTerms = tempRoot(t);
+  const shaped = path.join(parent, path.basename(leftHold({ ...windowsTerms.deps, uid: null }, { pid: deadPid() })));
   fs.writeFileSync(shaped, '');
   const swept = sweepDeadWorkspaces(posix);
   assert.ok(fs.existsSync(shaped), 'left where it is');
