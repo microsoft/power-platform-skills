@@ -51952,22 +51952,6 @@ function isSystemSolution(solutionId, uniqueName) {
     return true;
   return !!uniqueName && SYSTEM_SOLUTION_NAMES.has(uniqueName.toLowerCase());
 }
-function stripConnectionReferenceLogicalNames(body) {
-  const refs = body.properties?.connectionReferences;
-  if (!refs || typeof refs !== "object")
-    return [];
-  const stripped = [];
-  for (const [key, ref] of Object.entries(refs)) {
-    if (ref && typeof ref === "object" && "connectionReferenceLogicalName" in ref) {
-      if (!ref.connectionName)
-        continue;
-      const { connectionReferenceLogicalName: _drop, ...rest } = ref;
-      refs[key] = rest;
-      stripped.push(key);
-    }
-  }
-  return stripped;
-}
 function extractLogicalNamesFromFlow(flow) {
   const refs = flow?.properties?.connectionReferences;
   if (!refs)
@@ -52287,7 +52271,7 @@ var FlowClient = class _FlowClient {
       }
     }
     this.stripInjectedAuthentication(postBody);
-    const stripped = stripConnectionReferenceLogicalNames(postBody);
+    const stripped = this.stripConnectionReferenceLogicalNames(postBody);
     if (stripped.length) {
       logger.debug(`[create-flow] standalone create, dropped connectionReferenceLogicalName on ${stripped.join(", ")}`);
     }
@@ -52339,7 +52323,7 @@ var FlowClient = class _FlowClient {
     }
     const standalone = !!ctx && !ctx.warning && !ctx.inSolution;
     if (standalone) {
-      const stripped = stripConnectionReferenceLogicalNames(workingBody);
+      const stripped = this.stripConnectionReferenceLogicalNames(workingBody);
       if (stripped.length) {
         logger.debug(`updateFlow: standalone flow, dropped connectionReferenceLogicalName on ${stripped.join(", ")}`);
       }
@@ -52381,7 +52365,7 @@ var FlowClient = class _FlowClient {
       const msg = err?.message ?? "";
       if (!standaloneShape || !/connectionReferenceName/i.test(msg))
         throw err;
-      stripConnectionReferenceLogicalNames(standaloneShape);
+      this.stripConnectionReferenceLogicalNames(standaloneShape);
       result = await this.ppapiRequestWithFallback(envId, path7, "PATCH", standaloneShape);
       warnings.push("Flow context was unavailable; saved as a standalone flow after the solution-flow format was rejected.");
     }
@@ -52711,11 +52695,42 @@ var FlowClient = class _FlowClient {
     this.walkDefinitionInputs(definition, check2);
     return found;
   }
+  /** Convert solution bindings to standalone aliases before dropping logical names. */
+  stripConnectionReferenceLogicalNames(body) {
+    const refs = body.properties?.connectionReferences;
+    if (!refs)
+      return [];
+    const logicalToKey = /* @__PURE__ */ new Map();
+    const stripped = [];
+    for (const [key, ref] of Object.entries(refs)) {
+      if (ref && typeof ref === "object" && ref.connectionName && typeof ref.connectionReferenceLogicalName === "string") {
+        logicalToKey.set(ref.connectionReferenceLogicalName, key);
+        delete ref.connectionReferenceLogicalName;
+        stripped.push(key);
+      }
+    }
+    if (body.properties?.definition) {
+      this.walkDefinitionInputs(body.properties.definition, (inputs) => {
+        if (!inputs || typeof inputs !== "object" || !("host" in inputs))
+          return;
+        const host = inputs.host;
+        if (!host || typeof host !== "object" || !("connectionReferenceName" in host))
+          return;
+        const value = host.connectionReferenceName;
+        if (typeof value !== "string")
+          return;
+        const key = logicalToKey.get(value) ?? (stripped.includes(value) ? value : void 0);
+        if (key) {
+          Object.assign(host, { connectionName: key });
+          delete host.connectionReferenceName;
+        }
+      });
+    }
+    return stripped;
+  }
   /**
-   * Return a deep clone of `definition` with every OpenApiConnection host's
-   * connection key renamed to `targetKey`. The value is carried across unchanged
-   * — only the field name differs between the two conventions. No-op for hosts
-   * that already use `targetKey`.
+   * Return a deep clone with each host's connection key renamed to targetKey.
+   * The value is unchanged; hosts already using targetKey are preserved.
    */
   normalizeHostConnectionKey(definition, targetKey) {
     const otherKey = targetKey === "connectionName" ? "connectionReferenceName" : "connectionName";
@@ -55197,6 +55212,7 @@ var FlowClient = class _FlowClient {
     ctx.workflowId = workflow.workflowid ?? null;
     ctx.workflowIdUnique = workflow.workflowidunique ?? null;
     ctx.workflowIsManaged = !!workflow.ismanaged;
+    ctx.isManaged = ctx.workflowIsManaged;
     ctx.category = typeof workflow.category === "number" ? workflow.category : null;
     ctx.ownerId = workflow._ownerid_value ?? null;
     const iscust = workflow.iscustomizable;
@@ -55213,7 +55229,7 @@ var FlowClient = class _FlowClient {
       const sol = await this.dataverseGet(url2, dvToken);
       ctx.solutionUniqueName = sol.uniquename ?? null;
       ctx.solutionFriendlyName = sol.friendlyname ?? null;
-      ctx.isManaged = !!sol.ismanaged;
+      ctx.isManaged = ctx.workflowIsManaged || !!sol.ismanaged;
       if (isSystemSolution(solutionId, ctx.solutionUniqueName)) {
         ctx.inSolution = false;
       }
@@ -55232,7 +55248,7 @@ var FlowClient = class _FlowClient {
           ctx.solutionId = pick3.solutionid ?? ctx.solutionId;
           ctx.solutionUniqueName = pick3.uniquename ?? null;
           ctx.solutionFriendlyName = pick3.friendlyname ?? null;
-          ctx.isManaged = !!pick3.ismanaged && custom2.every((s) => s.ismanaged);
+          ctx.isManaged = ctx.workflowIsManaged || custom2.every((s) => s.ismanaged);
         }
       } catch (err) {
         logger.debug(`getFlowContext: solution membership lookup failed: ${err}`);
@@ -55837,14 +55853,16 @@ init_auth_operation_queue();
 init_msal_disk_cache();
 var CONNECTIVITY_RESOURCE_COMMERCIAL = "https://api.powerplatform.com";
 function buildCompositeAuth(opts = {}) {
+  const defaultResource = opts.cloudEndpoints?.flowResource ?? opts.defaultResource ?? "https://service.flow.microsoft.com";
   const azOpts = {
     ...opts,
-    defaultResource: opts.cloudEndpoints?.flowResource
+    defaultResource
   };
   const azAuth = opts.azProvider ?? new AzCliTokenProvider(azOpts);
   let msalAuth = null;
   const azOperations = new AuthOperationQueue();
   const connectivityOperations = new AuthOperationQueue();
+  const msalResources = /* @__PURE__ */ new Set();
   const cloud = opts.cloud ?? "commercial";
   const connectivityResource = opts.cloudEndpoints?.powerPlatformApiUrl ?? CONNECTIVITY_RESOURCE_COMMERCIAL;
   const isConnectivityResource = (resource) => resource === connectivityResource || resource === CONNECTIVITY_RESOURCE_COMMERCIAL;
@@ -55868,6 +55886,7 @@ function buildCompositeAuth(opts = {}) {
     return msalAuth;
   }
   async function clearAzTokens() {
+    msalResources.clear();
     if (azAuth.invalidateAllAccessTokens)
       return await azAuth.invalidateAllAccessTokens();
     await azAuth.invalidateAccessToken?.();
@@ -55890,6 +55909,7 @@ function buildCompositeAuth(opts = {}) {
       return msalAuth?.getConnectivityAuthState?.() ?? null;
     },
     getAccessToken(resource) {
+      const canonicalResource = resource ?? defaultResource;
       const operations = isConnectivityResource(resource) ? connectivityOperations : azOperations;
       return operations.run(async () => {
         if (isConnectivityResource(resource)) {
@@ -55900,23 +55920,38 @@ function buildCompositeAuth(opts = {}) {
             throw enrichConnectivityAuthError(err, cloud);
           }
         }
+        if (msalResources.has(canonicalResource)) {
+          return connectivityOperations.run(async () => {
+            const provider = await getMsalAuth();
+            return provider.getAccessToken(canonicalResource);
+          });
+        }
         try {
           return await azAuth.getAccessToken(resource);
         } catch (err) {
           if (process.env.PA_CLIENT_ID && err?.code === "not-preauthorized") {
             logger.info(`[auth] Azure CLI not preauthorized for ${resource ?? "default resource"}; using PA_CLIENT_ID via MSAL`);
-            const provider = await getMsalAuth();
-            return await provider.getAccessToken(resource ?? opts.cloudEndpoints?.flowResource);
+            msalResources.add(canonicalResource);
+            return connectivityOperations.run(async () => {
+              const provider = await getMsalAuth();
+              return provider.getAccessToken(canonicalResource);
+            });
           }
           throw err;
         }
       });
     },
     invalidateAccessToken(resource) {
+      const canonicalResource = resource ?? defaultResource;
       const operations = isConnectivityResource(resource) ? connectivityOperations : azOperations;
       return operations.run(async () => {
         if (isConnectivityResource(resource)) {
           await resetConnectivity();
+        } else if (msalResources.has(canonicalResource)) {
+          await connectivityOperations.run(async () => {
+            const provider = await getMsalAuth();
+            await provider.invalidateAccessToken?.(canonicalResource);
+          });
         } else {
           await azAuth.invalidateAccessToken?.(resource);
         }
@@ -69173,19 +69208,27 @@ async function createMcpServer(authProvider, deps = {}) {
     try {
       const mcpCtx = getActiveMcpContext();
       const now = Date.now();
-      const recent = (recentDeletes.get(mcpCtx) ?? []).filter((t) => now - t < BULK_DELETE_WINDOW_MS);
+      const recent = (recentDeletes.get(mcpCtx) ?? []).filter((entry) => entry.pending || now - entry.time < BULK_DELETE_WINDOW_MS);
       if (recent.length >= BULK_DELETE_THRESHOLD && confirmBulk !== true) {
         recentDeletes.set(mcpCtx, recent);
         return safeError({
           code: "BulkDeleteConfirmRequired",
-          message: `Refusing to delete flow ${flow}: ${recent.length} flows were already deleted in this session in the last ${BULK_DELETE_WINDOW_MS / 6e4} minutes.`,
+          message: `Refusing to delete flow ${flow}: ${recent.length} deletions are pending or completed in this session in the last ${BULK_DELETE_WINDOW_MS / 6e4} minutes.`,
           operation: "delete_flow",
           remediation: "Stop and list the remaining flows to the user. Only after the user explicitly confirms deleting those specific flows, re-call with confirmBulk:true. Deleted flows can be recovered with list_backups / restore_backup."
         });
       }
-      await ctx.getClient().deleteFlow(ctx.resolveEnv(env), flow, { forceManaged });
-      recent.push(now);
+      const reservation = { time: now, pending: true };
+      recent.push(reservation);
       recentDeletes.set(mcpCtx, recent);
+      try {
+        await ctx.getClient().deleteFlow(ctx.resolveEnv(env), flow, { forceManaged });
+        reservation.pending = false;
+        reservation.time = Date.now();
+      } catch (error51) {
+        recentDeletes.set(mcpCtx, (recentDeletes.get(mcpCtx) ?? []).filter((entry) => entry !== reservation));
+        throw error51;
+      }
       mcpCtx.currentFlow.clearIf(flow);
       return safeResult({ success: true });
     } catch (e) {

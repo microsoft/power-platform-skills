@@ -69,7 +69,7 @@ MCP tools are present.
 7a. **Verify user-supplied connection IDs.** Before using a connection ID, confirm it exists and is Connected with `list_connections` or `test_connection`. Do this first, even when the user says the connection works. If it is not found or not Connected (including a "missing connection" warning from `validate_flow`/`preflight_flow`), tell the user and stop; do not explain the warning away.
 7b. **Push back on unsafe requests, even if the user insists.** Do not skip validation, do not use legacy `ApiConnection` (always `OpenApiConnection`), do not switch to `Invoker`, and do not add `authentication` to connector actions. Explain briefly and build it the supported way.
 
-7c. **Child flows (called from Power Apps or a parent flow):** use a manual trigger (`type: "Request"`, `kind: "Button"`) and end with a `Response` action whose `kind` is `"PowerApp"` (`inputs: { statusCode: 200, body: {...}, schema: {...} }`). Do not use `kind: "Http"` for a child flow - that is a Premium HTTP endpoint.
+7c. **Choose the trigger for the caller.** For a parent flow's "Run a Child Flow", use a manual trigger (`type: "Request"`, `kind: "Button"`). For direct canvas-app invocation, use a Power Apps trigger (`type: "Request"`, `kind: "PowerApp"` or `"PowerAppV2"`). Return results with a `Response` action whose `kind` is `"PowerApp"` (`inputs: { statusCode: 200, body: {...}, schema: {...} }`). Do not substitute `kind: "Http"` - that is a Premium HTTP endpoint.
 
 7d. **Nested connector parameters use slash-path keys.** Body fields go in `parameters` as flat keys like `"body/recipient": "..."`, not as a nested `"body": { "recipient": ... }` object. `get_operation_details` returns the exact keys. Validation warns on the nested form.
 
