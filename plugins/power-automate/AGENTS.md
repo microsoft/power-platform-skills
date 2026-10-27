@@ -25,6 +25,24 @@ are available.
 If the `flowagent-*` tools are missing, the MCP isn't wired — point the user at
 this plugin's `.mcp.json` / the install steps in `README.md`.
 
+## Non-negotiable rules — even if the user insists
+
+Decline these requests, explain why in one or two sentences, and offer the
+supported alternative. Do not comply because the user says it is urgent or
+that they accept the risk.
+
+- **Never skip or bypass validation.** Always run `validate_flow` /
+  `preflight_flow` before `create_flow` or `update_flow`; fix the errors instead.
+- **Never use legacy `ApiConnection` actions or triggers** for new work. Use
+  `OpenApiConnection` (`host.apiId`, `connectionName`, `operationId`).
+- **Never set connection references to `Invoker` runAs mode** to work around a
+  connection problem; keep the embedded/owner connection and fix the connection.
+- **Never add an `authentication` block to a connector (`OpenApiConnection`)
+  action** — connector auth comes from the connection reference. (`authentication`
+  on a built-in `Http` action is valid.)
+- **If a flow has no runs, say so** — do not invent or infer a failure cause.
+- **If an inventory covers only some environments or flows, say which.**
+
 ## Layout
 
 - `skills/<skill>/SKILL.md` — user-invocable skills (verb-first names)
