@@ -41,7 +41,7 @@
 // and only in a plain folder (not through a link). It holds nothing, and is removed before makeTempWorkspace returns, whatever happened — on success only once the workspace is recorded, since its
 // removal can wait on a scanner and a run killed in that wait must leave a workspace that a sweep can take; a hold that cannot be made leaves the run as it was without one (a full
 // disk, a folder that takes no file), and one a run was killed while holding is removed by a later sweep once that run's pid is gone, so that the folder can go when it is empty. On POSIX the question is one
-// lstat, answered before anything could change, and nothing is held.
+// lstat, answered before anything could change: nothing is held, and a sweep there takes nothing for a hold (a file of that shape is an entry like any other, as it always was).
 //
 // A WORKSPACE LENT TO ANOTHER PROGRAM (`makeTempWorkspace(prefix, { lent: true })`). A path inside a workspace is sometimes given to a program of another make — pac, writing its settings file into the
 // scratch folder of solution-settings.js. That program is not the run: on POSIX it outlives a run that is killed (SIGKILL, an agent's timeout), and a sweep that takes the folder because
@@ -580,7 +580,8 @@ function sweepDeadWorkspaces(deps = {}) {
       if (!finishInterruptedRemoval(entry.name)) result.kept += 1;
       continue;
     }
-    if (entry.isFile() && isHoldName(entry.name)) {
+    // Only where holds are made (Windows: `uid` is null, as for holdParent): elsewhere a file of that shape is an entry like any other, and is left as it always was.
+    if (uidOf(deps) === null && entry.isFile() && isHoldName(entry.name)) {
       releaseDeadHold(entry.name);
       continue;
     }

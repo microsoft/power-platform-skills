@@ -1192,9 +1192,10 @@ test('POSIX: nothing is held — the folder is judged by one lstat, before anyth
   assert.deepStrictEqual(atMake, [], 'no hold in the folder when the workspace is made');
 });
 
-test('a hold that a run was killed while holding is removed by the next sweep once its pid is gone, so the folder can go when it is empty — and the hold of a run that is going, or a file of that name with something in it, is left', (t) => {
+test('(Windows) a hold that a run was killed while holding is removed by the next sweep once its pid is gone, so the folder can go when it is empty — and the hold of a run that is going, or a file of that name with something in it, is left', (t) => {
   const { deps } = tempRoot(t);
-  const parent = workspaceParent(deps);
+  const own = { ...deps, uid: null };
+  const parent = workspaceParent(own);
   const holdOf = (pid, text = '', random = 'a1b2c3') => {
     fs.mkdirSync(parent, { recursive: true, mode: 0o700 });
     const file = path.join(parent, `${HOLD_PREFIX}${pid}-${random}`);
@@ -1205,16 +1206,33 @@ test('a hold that a run was killed while holding is removed by the next sweep on
   // All that is left in the folder is the hold of a run that was killed: the end of a run cannot take the folder until a sweep has removed it.
   const deadHold = holdOf(dead);
   assert.throws(() => fs.rmdirSync(parent), (e) => notEmpty(e.code) === 'ENOTEMPTY', 'the hold keeps the folder');
-  assert.deepStrictEqual([sweepDeadWorkspaces(deps).removed, fs.existsSync(deadHold)], [[], false], 'the sweep removes it, and says nothing: a hold held nothing');
+  assert.deepStrictEqual([sweepDeadWorkspaces(own).removed, fs.existsSync(deadHold)], [[], false], 'the sweep removes it, and says nothing: a hold held nothing');
   fs.rmdirSync(parent);
   // The hold of a run that is going, and a file named like a hold that has something in it, are left.
   const liveHold = holdOf(process.pid);
   const notAHold = holdOf(dead, 'something', 'd4e5f6');
-  const swept = sweepDeadWorkspaces(deps);
+  const swept = sweepDeadWorkspaces(own);
   assert.ok(fs.existsSync(liveHold), 'the hold of a run that is going is left');
   assert.ok(fs.existsSync(notAHold), 'a file of that name with something in it was not made by a run, and is left');
   assert.deepStrictEqual([swept.removed, swept.failed], [[], []]);
   assert.deepStrictEqual(entriesOf(parent), [path.basename(liveHold), path.basename(notAHold)].sort());
+});
+
+// Holds are made only where the system has no owners to compare (Windows), and only taken there: where it has (POSIX), a file of that shape in the plugin's folder is an entry like any
+// other, and a sweep leaves it as it always did, however dead the pid in its name is. Shown on every system: the folder is shown to the sweep as one this user owns, with the mode a
+// POSIX plugin folder has.
+test('POSIX: a sweep where the system has owners leaves an empty file shaped like the hold of a dead run, as it always did — holds are made, and taken, only on Windows', (t) => {
+  const { deps } = tempRoot(t);
+  const uid = POSIX ? process.getuid() : 4242;
+  const parent = workspaceParent({ ...deps, uid });
+  fs.mkdirSync(parent, { mode: 0o700 });
+  const ownedByUs = { isDirectory: () => true, isSymbolicLink: () => false, uid, mode: 0o40700 };
+  const posix = { ...deps, uid, fs: { ...fs, lstatSync: (target, ...rest) => (target === parent ? ownedByUs : fs.lstatSync(target, ...rest)) }, owner: { probe: () => 'gone' } };
+  const shaped = path.join(parent, `${HOLD_PREFIX}${deadPid()}-a1b2c3`);
+  fs.writeFileSync(shaped, '');
+  const swept = sweepDeadWorkspaces(posix);
+  assert.ok(fs.existsSync(shaped), 'left where it is');
+  assert.deepStrictEqual([swept.removed, swept.failed], [[], []]);
 });
 
 test('the answer about a folder is the answer about THAT folder: one that is removed and made again — by someone else — is asked about again', (t) => {
