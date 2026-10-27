@@ -52321,7 +52321,7 @@ var FlowClient = class _FlowClient {
         logger.debug(`updateFlow: flow context lookup failed: ${err.message}`);
       }
     }
-    const standalone = !!ctx && !ctx.warning && !ctx.inSolution;
+    const standalone = !!ctx && !ctx.inSolution && (!ctx.warning || ctx.warning === "workflow-not-found");
     if (standalone) {
       const stripped = this.stripConnectionReferenceLogicalNames(workingBody);
       if (stripped.length) {
@@ -52352,7 +52352,7 @@ var FlowClient = class _FlowClient {
         warnings.push(`Solution flow: Dataverse write failed (${msg}); retried through the Power Automate API.`);
       }
     }
-    const contextUnknown = !ctx || !!ctx.warning;
+    const contextUnknown = !ctx || !!ctx.warning && ctx.warning !== "workflow-not-found";
     const standaloneShape = contextUnknown ? structuredClone(workingBody) : void 0;
     if (!standalone)
       this.rewriteConnectionNamesForPpapi(workingBody);
@@ -55135,10 +55135,9 @@ var FlowClient = class _FlowClient {
    * that up first; if found AND it has a `_solutionid_value`, we expand
    * the solution row to read `ismanaged` / `uniquename` / `friendlyname`.
    *
-   * Returns a `warning` field with a reason code when the lookup couldn't
-   * complete (no-dataverse-instance, dataverse-lookup-failed, workflow-not-found, dataverse-error).
-   * Callers should treat `warning != null` as "no solution context" and
-   * fall through to non-solution code paths.
+   * Returns a `warning` field with a reason code when the lookup could not
+   * establish context. `workflow-not-found` confirms no Dataverse workflow row;
+   * other warnings mean discovery failed and callers must retain fallback behavior.
    */
   async getFlowContext(envId, flowId) {
     let ppapiFlow = null;
@@ -55283,12 +55282,12 @@ var FlowClient = class _FlowClient {
       logger.warn(`[managed-guard] ${operation} on ${flowId}: context lookup failed (${err instanceof Error ? err.message : String(err)}); allowing operation`);
       return;
     }
+    if (ctx.isManaged) {
+      throw new ManagedSolutionError(operation, flowId, ctx.solutionUniqueName, ctx.solutionFriendlyName);
+    }
     if (ctx.warning) {
       logger.debug(`[managed-guard] ${operation} on ${flowId}: context warning "${ctx.warning}", allowing operation (fail-open)`);
       return;
-    }
-    if (ctx.isManaged) {
-      throw new ManagedSolutionError(operation, flowId, ctx.solutionUniqueName, ctx.solutionFriendlyName);
     }
   }
   /**
