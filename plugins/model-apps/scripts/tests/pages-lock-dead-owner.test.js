@@ -9,7 +9,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { acquireAppPagesLease } = require('../lib/sdk-build.js');
-const { ownerStamp } = require('../lib/process-owner.js');
+const { ownerStamp, probeProcess } = require('../lib/process-owner.js');
 const { sha256 } = require('../lib/hash.js');
 const { startTarget, tempEnv, privateTempRoot, deadPid, removeWhenTestEnds } = require('./helpers/kill-target-client.js');
 
@@ -220,7 +220,14 @@ test('a workspace that cannot be written is that error, as it always was — not
 });
 
 // Several builds that start at once, and each finds the lock: not there at all, or left by a build that was killed. Exactly one of them takes it.
-for (const [what, killedFirst] of [['no lock at all', false], ['the lock of a killed build', true]]) {
+//
+// The build is killed only once every racer has started and loaded the module, and the gate opens at once after it. Windows hands a pid that is
+// free again to a new process after a while when the machine starts many processes (measured on a loaded machine: from about 8 s after the kill
+// at ~90 process starts a second), and then the killed build's lock names a pid that RUNS: process-owner.js cannot tell it from the build, so
+// every racer keeps the lock and is refused — the safe answer, pinned by the next test. Killed before the racers started, the build's
+// pid stayed free for as long as four processes took to start, which on a loaded machine is seconds: one whole-suite run saw all four refused.
+// Killed last, the pid is free only for the milliseconds the race takes, and no racer can be the process that gets it: each was running before.
+for (const [what, holderFate] of [['no lock at all', 'none'], ['the lock of a killed build', 'killed']]) {
   test(`REAL PROCESSES racing for the lock — ${what}: exactly one takes it, the others are refused, and nothing is left but the lock`, async (t) => {
     const RACERS = 4;
     const ROUNDS = 3;
@@ -228,19 +235,24 @@ for (const [what, killedFirst] of [['no lock at all', false], ['the lock of a ki
     for (let round = 1; round <= ROUNDS; round += 1) {
       const dir = fs.mkdtempSync(path.join(root, 'ws-'));
       const app = `race_${round}`;
-      if (killedFirst) {
-        const holder = startTarget(t, ['lock', dir, app], { env: tempEnv(root) });
+      let holder = null;
+      if (holderFate === 'killed') {
+        holder = startTarget(t, ['lock', dir, app], { env: tempEnv(root) });
         await holder.waitFor(/^held$/);
-        await holder.kill();
-        assert.ok(fs.existsSync(lockFile(dir, app)));
       }
       const gate = path.join(root, `gate-${round}`);
       const racers = Array.from({ length: RACERS }, () => startTarget(t, ['lock', dir, app, gate], { env: tempEnv(root) }));
       await Promise.all(racers.map((racer) => racer.waitFor(/^ready$/)));
+      if (holder) {
+        await holder.kill();
+        assert.ok(fs.existsSync(lockFile(dir, app)));
+      }
       fs.writeFileSync(gate, '');
       const answers = await Promise.all(racers.map((racer) => racer.waitFor(/^(held|refused .*)$/)));
       const winners = racers.filter((racer, i) => answers[i] === 'held');
-      assert.strictEqual(winners.length, 1, `round ${round}: one winner, got ${JSON.stringify(answers)}`);
+      // Should the killed build's pid run again all the same, the failure says so: that refusal is the rule for a running pid, not a lost race.
+      const pidAgain = holder && probeProcess(holder.pid) !== 'gone' ? ` — the killed build's pid ${holder.pid} is a running process's again` : '';
+      assert.strictEqual(winners.length, 1, `round ${round}: one winner, got ${JSON.stringify(answers)}${pidAgain}`);
       assert.ok(answers.filter((a) => a !== 'held').every((a) => a === 'refused pages-locked'), `round ${round}: the others are refused: ${JSON.stringify(answers)}`);
       assert.strictEqual(JSON.parse(fs.readFileSync(lockFile(dir, app), 'utf8')).pid, winners[0].pid, `round ${round}: the lock names the winner`);
       assert.strictEqual(JSON.parse(fs.readFileSync(canonicalFile(dir, app), 'utf8')).pid, winners[0].pid, `round ${round}: both of its files`);
@@ -249,3 +261,23 @@ for (const [what, killedFirst] of [['no lock at all', false], ['the lock of a ki
     }
   });
 }
+
+// What every racer sees when a killed build's pid has been handed to another process: a lock whose pid runs. The build here is simply not killed.
+// None of them takes it — not one, however many race — and the lock is as it was: a pid that runs is never proven gone (process-owner.js).
+test('REAL PROCESSES racing for the lock of a build whose pid runs — what a killed build\'s lock is once its pid is another process\'s: every one is refused, and the lock is untouched', async (t) => {
+  const root = privateTempRoot(t);
+  const dir = fs.mkdtempSync(path.join(root, 'ws-'));
+  const app = 'race_running';
+  const holder = startTarget(t, ['lock', dir, app], { env: tempEnv(root) });
+  await holder.waitFor(/^held$/);
+  const held = [fs.readFileSync(lockFile(dir, app), 'utf8'), fs.readFileSync(canonicalFile(dir, app), 'utf8')];
+  const gate = path.join(root, 'gate');
+  const racers = Array.from({ length: 4 }, () => startTarget(t, ['lock', dir, app, gate], { env: tempEnv(root) }));
+  await Promise.all(racers.map((racer) => racer.waitFor(/^ready$/)));
+  fs.writeFileSync(gate, '');
+  const answers = await Promise.all(racers.map((racer) => racer.waitFor(/^(held|refused .*)$/)));
+  assert.deepStrictEqual(answers, Array(4).fill('refused pages-locked'), 'no winner: a pid that runs keeps its lock');
+  assert.deepStrictEqual([fs.readFileSync(lockFile(dir, app), 'utf8'), fs.readFileSync(canonicalFile(dir, app), 'utf8')], held, 'both files are as the build left them');
+  assert.deepStrictEqual(fs.readdirSync(dir).sort(), [path.basename(canonicalFile(dir, app)), `pages-${app}.lock`].sort(), 'no claim or other file is left');
+  await Promise.all([holder, ...racers].map((target) => target.kill()));
+});
