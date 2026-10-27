@@ -1,6 +1,6 @@
 ---
 name: debug-flow
-description: Debug a failed Power Automate flow run. Use when a flow failed, has errors, or the user wants to troubleshoot a run.
+description: Debug a failed Power Automate flow run. Use when a flow failed, has errors, or the user wants to troubleshoot a run. If the flow has no runs, says so plainly instead of guessing a cause.
 user-invocable: true
 argument-hint: "[flow-id] [run-id]"
 allowed-tools: Bash, Read, Write, Glob, Grep, AskUserQuestion, mcp__flowagent__list_environments, mcp__flowagent__set_current_env, mcp__flowagent__get_current_env, mcp__flowagent__resolve_environment, mcp__flowagent__list_flows, mcp__flowagent__get_flow, mcp__flowagent__create_flow, mcp__flowagent__update_flow, mcp__flowagent__edit_flow, mcp__flowagent__copy_flow, mcp__flowagent__publish_flow, mcp__flowagent__disable_flow, mcp__flowagent__delete_flow, mcp__flowagent__run_flow, mcp__flowagent__get_run_history, mcp__flowagent__get_run_details, mcp__flowagent__get_run_actions, mcp__flowagent__get_run_action_content, mcp__flowagent__get_run_action_repetitions, mcp__flowagent__cancel_run, mcp__flowagent__cancel_all_runs, mcp__flowagent__resubmit_run, mcp__flowagent__diagnose_run, mcp__flowagent__list_connections, mcp__flowagent__list_connectors, mcp__flowagent__get_connector, mcp__flowagent__search_operations, mcp__flowagent__get_operation_details, mcp__flowagent__pick_or_create_connection, mcp__flowagent__resolve_refs, mcp__flowagent__resolve_params, mcp__flowagent__scaffold_flow, mcp__flowagent__list_templates, mcp__flowagent__validate_flow, mcp__flowagent__preflight_flow, mcp__flowagent__smoke_test, mcp__flowagent__get_expression_help, mcp__flowagent__list_desktop_flows, mcp__flowagent__list_machine_groups, mcp__flowagent__run_desktop_flow, mcp__flowagent__get_flow_context, mcp__flowagent__set_current_flow, mcp__flowagent__clear_current_flow, mcp__flowagent__invoke_operation, mcp__flowagent__get_past_trigger_inputs, mcp__flowagent__test_connection, mcp__flowagent__fix_connection, mcp__flowagent__delete_connection, mcp__flowagent__preview_update, mcp__flowagent__get_backup, mcp__flowagent__list_backups, mcp__flowagent__restore_backup, mcp__flowagent__list_trigger_emulators, mcp__flowagent__resolve_entity, mcp__flowagent__list_datasets, mcp__flowagent__list_tables, mcp__flowagent__whoami, mcp__flowagent__doctor, mcp__flowagent__reconnect, mcp__flowagent__list_accounts, mcp__flowagent__switch_account
@@ -39,8 +39,10 @@ CLI-only operations or when no MCP tools are present.
 
 1. **Identify the flow and run**
    - Parse `$ARGUMENTS` for flow ID and optional run ID.
+   - If the user names an environment (or none is set), call `resolve_environment` first so the search runs in the right environment.
    - If no flow ID, call `list_flows` with `name` param to search. Ask user to pick if ambiguous.
    - If no run ID, call `get_run_history` and find the most recent failed run.
+   - **If `get_run_history` returns no runs, stop and say so plainly** ("this flow has no recorded runs in its history"). Do not invent a failure, do not diagnose from the definition as if it had failed; offer to check the trigger configuration or to run/test the flow instead.
    - Present recent runs in a table: Run ID | Status | Start Time | Error
 
 2. **Fast triage with `diagnose_run`**
