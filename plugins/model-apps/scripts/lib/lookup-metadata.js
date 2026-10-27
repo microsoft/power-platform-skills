@@ -80,7 +80,7 @@ function tableLookups(metadata, rows) {
   for (const attribute of attributes) {
     if (!attribute || !LOOKUP_TYPES.has(attribute.attributeType)) continue;
     const column = String(attribute.logicalName || '').toLowerCase();
-    const targets = Array.isArray(attribute.targets) ? attribute.targets.map((target) => String(target).toLowerCase()) : [];
+    const targets = Array.isArray(attribute.targets) ? attribute.targets.map((target) => (typeof target === 'string' ? target.toLowerCase() : '')) : [];
     // The SDK fills `targets` from a separate cast read and leaves them out when that read fails, so a lookup without them is an
     // incomplete answer, never a lookup with no targets.
     if (!LOGICAL_NAME.test(column) || !targets.length || targets.some((target) => !LOGICAL_NAME.test(target))) {

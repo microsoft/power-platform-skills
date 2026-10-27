@@ -93,6 +93,15 @@ test('REAL BUNDLE: an incomplete main metadata answer fails the whole discovery,
   }
 });
 
+for (const target of [null, true, false, ['contact']]) {
+  test(`REAL BUNDLE: non-string Targets entry ${JSON.stringify(target)} fails discovery`, async () => {
+    const lookupTargets = TARGETS.map((entry) => (
+      entry.LogicalName === 'customerid' ? { ...entry, Targets: ['account', target] } : entry));
+    await assert.rejects(readLookups(ENV, { tables: ['opportunity'] }, transport({ lookupTargets })),
+      (err) => err.code === 'LOOKUP_METADATA_INCOMPLETE' && /customerid/.test(err.message));
+  });
+}
+
 test('REAL BUNDLE: a relationship column the read does not classify, or classifies against its Targets, fails the whole discovery', async () => {
   const retype = (change) => (body) => ({ ...body, Attributes: ATTRIBUTES.map((entry) => (entry.LogicalName === 'customerid' ? change({ ...entry }) : entry)) });
   const untyped = retype((entry) => { delete entry.AttributeType; return entry; });

@@ -81,6 +81,25 @@ test('a lookup whose targets the metadata did not state fails the read — it is
   }
 });
 
+for (const target of [null, true, false, ['contact']]) {
+  test(`a non-string lookup target ${JSON.stringify(target)} is not coerced to a table name`, () => {
+    const metadata = { ...OPPORTUNITY, attributes: OPPORTUNITY.attributes.map((entry) => (
+      entry.logicalName === 'customerid' ? { ...entry, targets: ['account', target] } : entry)) };
+    assert.throws(() => tableLookups(metadata, ROWS),
+      (err) => err.code === 'LOOKUP_METADATA_INCOMPLETE' && /customerid/.test(err.message));
+  });
+}
+
+test('lookup target validation preserves case normalization and does not mutate SDK metadata', () => {
+  const targets = Object.freeze(['ACCOUNT', 'Contact']);
+  const metadata = { ...OPPORTUNITY, attributes: OPPORTUNITY.attributes.map((entry) => (
+    entry.logicalName === 'customerid' ? { ...entry, targets } : entry)) };
+  const customer = tableLookups(metadata, ROWS).lookups[0];
+  assert.deepEqual(customer.targets, ['account', 'contact']);
+  assert.deepEqual(customer.paths.map((entry) => entry.target), ['account', 'contact']);
+  assert.deepEqual(targets, ['ACCOUNT', 'Contact']);
+});
+
 test('an attribute inventory that cannot be complete fails the read: no primary id, or a relationship column it does not list', () => {
   const without = (column) => ({ ...OPPORTUNITY, attributes: OPPORTUNITY.attributes.filter((entry) => entry.logicalName !== column) });
   for (const [label, metadata] of [
