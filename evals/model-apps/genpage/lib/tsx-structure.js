@@ -9,7 +9,9 @@
 // Everything is read from the plugin's lexer view (scripts/lib/source-literals.js `blankLiterals`),
 // where every comment, string, template, regex body and JSX text run is blanked to spaces and the
 // offsets stay 1:1 with the source, so a `>`, `{` or `=>` inside a label never moves a bracket count,
-// and the original text at the same offsets gives the value back. For example
+// and the original text at the same offsets gives the value back. The one question put to the page
+// compiler is what a character reference in JSX text or a JSX attribute's string renders
+// (jsx-references.js): that is the compiler's own table, not a structure to read. For example
 //   source:  <Field label="First name"><Input aria-label="First" value={form.x} /></Field>
 //   view:    <Field label="··········"><Input aria-label="·····" value={form.x} /></Field>
 //   source:  <Text>Hello {name} world</Text>      view:  <Text>······{name}······</Text>
@@ -23,6 +25,7 @@
 //     a declaration with no semicolon may run on into the next statement.
 
 const { blankLiterals, commentRanges } = require('../../../../plugins/model-apps/scripts/lib/source-literals.js');
+const { renderedText, characterReferences, hasReference } = require('./jsx-references.js');
 
 const IDENT_CHAR = /[\w$]/;
 // Words after which an expression (so an element) may start, as in source-literals.js EXPR_START_WORDS.
@@ -177,9 +180,10 @@ function closingTag(code, name, from) {
   return null;
 }
 
-// The text a page's JSX shows as written: each run of JSX text, { start, end, text }. HTML character
-// references (`&amp;`, `&#8212;`) are decoded to a space so that `Review &amp; submit` reads as words
-// and `&nbsp;` alone reads as none.
+// The text a page's JSX shows: each run of JSX text, { start, end, text }, where `text` is the run as it renders —
+// every character reference decoded as the page compiler decodes it (jsx-references.js): `Review &amp; submit` reads
+// "Review & submit", `&#72;&#105;` reads "Hi", and `&nbsp;` alone reads a no-break space, which is blank. A run that
+// holds no reference is its source text.
 function jsxTextRuns(content) {
   const { src, code } = sourceView(content);
   const comment = new Uint8Array(src.length);
@@ -200,7 +204,43 @@ function jsxTextRuns(content) {
     }
   }
   if (run) runs.push(run);
-  return runs.map((r) => ({ ...r, text: src.slice(r.start, r.end).replace(/&(?:#\d+|#x[0-9a-f]+|[a-z]+);/gi, ' ') }));
+  return runs.map((r) => ({ ...r, text: renderedText(src.slice(r.start, r.end)) }));
+}
+
+// The page's source as it renders where JSX decodes character references — its JSX text and its JSX attributes' strings —
+// as { shown, at }: `shown` is the source with each reference there decoded (jsx-references.js), and `shown[k]` comes from
+// `content[at[k]]` (every character of a decoded reference from its `&`). JavaScript strings, templates, comments and code
+// are copied as they are, since the compiler decodes nothing in them:
+//   source:  <Text>&euro;{total}</Text> {'&euro;'}
+//   shown:   <Text>€{total}</Text> {'&euro;'}
+// A page whose JSX holds no reference is shown as written, at the same offsets.
+function renderedSource(content) {
+  const src = String(content || '');
+  const decodedAt = new Map();
+  if (hasReference(src)) {
+    const ranges = jsxTextRuns(src).map((run) => [run.start, run.end]);
+    for (const element of jsxElements(src)) {
+      for (const attr of element.attrs.values()) if (attr.kind === 'string') ranges.push([attr.start + 1, attr.start + 1 + attr.value.length]);
+    }
+    for (const [start, end] of ranges) {
+      for (const reference of characterReferences(src.slice(start, end))) decodedAt.set(start + reference.start, { end: start + reference.end, shown: reference.shown });
+    }
+  }
+  let shown = '';
+  const at = [];
+  for (let i = 0; i < src.length;) {
+    const reference = decodedAt.get(i);
+    if (reference) {
+      shown += reference.shown;
+      for (let k = 0; k < reference.shown.length; k += 1) at.push(i);
+      i = reference.end;
+    } else {
+      shown += src[i];
+      at.push(i);
+      i += 1;
+    }
+  }
+  return { shown, at };
 }
 
 // The source of a declaration named `name` — `const name = …`, `let`/`var`, or `function name(…) {…}` —
@@ -471,7 +511,7 @@ function nestedDefinitionProblems(content) {
 }
 
 module.exports = {
-  sourceView, jsxElements, jsxTextRuns, declarationSource, matchingClose, patternNames,
+  sourceView, jsxElements, jsxTextRuns, renderedSource, declarationSource, matchingClose, patternNames,
   namedFunctions, nestedDefinitionProblems, withoutComments,
   // Exported so that a check needing a page's function scopes reads them through this reader instead of a second one.
   functionScopes,
