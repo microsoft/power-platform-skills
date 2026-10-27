@@ -51864,6 +51864,9 @@ function isDirectApiInputsRejected(err) {
     return false;
   return err.statusCode === 401 || err.statusCode === 403;
 }
+function isTriggerRunOutcomeUnknown(err) {
+  return err instanceof FlowApiError && err.statusText === "TriggerRunOutcomeUnknown";
+}
 function isEmptyTriggerBody(body) {
   if (body === void 0 || body === null)
     return true;
@@ -53105,6 +53108,8 @@ var FlowClient = class _FlowClient {
       try {
         return done("connector", await this.runFlowViaLogicFlowsConnector(envId, flowId, body, trigger.name));
       } catch (connectorErr) {
+        if (isTriggerRunOutcomeUnknown(connectorErr))
+          throw connectorErr;
         logger.debug(`Logic Flows connector transport failed for trigger "${trigger.name}": ${String(connectorErr)}`);
         try {
           return done("callback", await this.runFlowViaCallback(envId, flowId, body, trigger.name, {
@@ -53206,6 +53211,8 @@ var FlowClient = class _FlowClient {
           const r = await this.runFlowViaLogicFlowsConnector(envId, flowId, triggerBody, resolvedTrigger);
           return { status: r.status, body: r.body };
         } catch (connectorErr) {
+          if (isTriggerRunOutcomeUnknown(connectorErr))
+            throw connectorErr;
           throw new FlowApiError(400, "TriggerBodyUndeliverable", `Trigger "${resolvedTrigger}" blocks its callback URL, and the Logic Flows connector runtime could not deliver the payload (${String(connectorErr)}). The management run endpoint was not used because it discards the request body, so triggerBody() would be null inside the run. No run was started.`, "listCallbackUrl");
         }
       }
@@ -53224,7 +53231,15 @@ var FlowClient = class _FlowClient {
       body: JSON.stringify(triggerBody)
     });
     let body;
-    const text = await response.text();
+    let text;
+    try {
+      text = await response.text();
+    } catch (err) {
+      if (response.ok) {
+        throw new FlowApiError(502, "TriggerRunOutcomeUnknown", `The trigger endpoint accepted the request (HTTP ${response.status}), but its response could not be read. The run may have started. Check run history before retrying to avoid duplicate side effects.`, callbackUrl.split("?")[0]);
+      }
+      throw err;
+    }
     try {
       body = text ? JSON.parse(text) : void 0;
     } catch {
@@ -53273,7 +53288,15 @@ var FlowClient = class _FlowClient {
       },
       body: JSON.stringify(triggerBody)
     });
-    const text = await response.text();
+    let text;
+    try {
+      text = await response.text();
+    } catch (err) {
+      if (response.ok) {
+        throw new FlowApiError(502, "TriggerRunOutcomeUnknown", `The Logic Flows connector accepted the request (HTTP ${response.status}), but its response could not be read. The run may have started. Check run history before retrying to avoid duplicate side effects.`, url2);
+      }
+      throw err;
+    }
     let body;
     try {
       body = text ? JSON.parse(text) : void 0;
