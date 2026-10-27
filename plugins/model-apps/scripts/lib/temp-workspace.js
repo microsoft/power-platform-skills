@@ -28,7 +28,7 @@
 // no owner and no permissions, so an access list stands in (lib/windows-folder-acl.js): a folder this process MAKES is given an explicit, protected one before anything is put in it — only this
 // user, the system and the administrators, full control, inherited by every workspace and record made inside — and read back, and a folder that cannot be made so is removed and not used;
 // an EXISTING folder is used only if it is this user's (or the administrators') and NO entry of its list, an inherit-only one too, lets anyone else add to it, write to it, delete it
-// or take it over. The answer is asked once per folder and process. A folder that Windows is still removing — the last handle on it has not closed — refuses a new
+// or take it over. The answer is asked once per folder and process (but a "no" about a folder another run made moments ago, and has not yet given its own list, is asked again: checkParent). A folder that Windows is still removing — the last handle on it has not closed — refuses a new
 // entry and cannot be read for a moment: the attempt is made again after short pauses, and one that is still refusing after the last is not used (WAITS_MS).
 //
 // A RUN HOLDS THE FOLDER WHILE IT JUDGES IT (Windows). Asking whether a folder that is there is private starts three programs (lib/windows-folder-acl.js) and takes about a second — more on a busy machine —
@@ -157,6 +157,12 @@ const pauseSync = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),
 const windowsRefusesForAMoment = (e, deps) => uidOf(deps) === null && !!e && TRANSIENT_CODES.has(e.code);
 // The code of the failure of a folder that this process made and could not make private (Windows): the folder is not used, and not tried again by this process (`refusing`, below).
 const NOT_PRIVATE = 'ENOTPRIVATE';
+// The code of a "no" about a folder that may yet be made private by the run that made it (Windows: checkParent): the attempt is made again after a pause, and a folder that is still saying it after the last is not used for
+// this workspace — but it is not refused for the life of the process either, as a folder that is not private by anyone's choice is.
+const NOT_YET_PRIVATE = 'ENOTYETPRIVATE';
+// How long after it was made a folder whose access list is still all it took from the one above may be one that its maker has not yet given a list of its own: the maker's icacls is given 10 s
+// (lib/windows-folder-acl.js), and a maker whose icacls did not answer in that time removes the folder. Measured: about 200 ms on average, and up to about a second on a busy machine.
+const PROTECT_WINDOW_MS = 15000;
 
 // The folder the plugin keeps its workspaces in, for the temp folder `deps.os` (the real one) names. Windows gives each user a temp folder of their
 // own (GetTempPath reads TMP, TEMP, then the profile: https://learn.microsoft.com/windows/win32/api/fileapi/nf-fileapi-gettemppatha), and so does
@@ -173,6 +179,11 @@ function workspaceParent(deps = {}) {
 //
 // That is read once per folder and process, whatever the answer (the cache below): a run that makes a workspace for each of forty dashboards would otherwise start three programs
 // forty times. The key names the folder itself — its place, device, file id and creation time — so a folder that is removed and made again by someone else is judged again.
+// The one "no" that is not remembered is one that may be about to change: a folder that another run made moments ago takes the access list of the temp folder it is in until that run's icacls
+// gives it one of its own (ensureParent), and where the temp folder lets others write — `TEMP` on a data drive gives Authenticated Users "modify" — a run that judges it in between is told
+// "not private" about a folder that is private a moment later, with the same identity. Remembered, that "no" sent every later workspace of the run to the plain temp folder, unrecorded, for the
+// rest of its life (measured: about one run in sixty, eight at a time, each making six). So a "no" about a list that is still only inherited (`inherited`, lib/windows-folder-acl.js), about a
+// folder made within PROTECT_WINDOW_MS, is not remembered: it is asked again after a pause (makeTempWorkspace). A "no" about a list somebody set, or about an older folder, is final, as before.
 // `created`: this call made the folder, gave it an access list of its own and read it back (ensureParent): it is not asked about again.
 // `deps.folderPrivacy` is a test seam for the Windows reader.
 const privacyVerdicts = new Map();
@@ -199,6 +210,9 @@ function checkParent(parent, deps, { created = false } = {}) {
     // A list that could not be got at all (the folder is being removed, most likely) is no answer either, and is not remembered: it is a refusal of the kind a folder being removed
     // gives, and the caller asks again after a pause.
     if (answer.unreadable) throw Object.assign(new Error(`${parent} could not be judged: ${answer.reason}`), { code: 'EBUSY' });
+    if (!answer.ok && answer.inherited === true && Math.abs(clockOf(deps)() - st.birthtimeMs) < PROTECT_WINDOW_MS) {
+      throw Object.assign(new Error(`${parent} can be changed by others, for now: ${answer.reason}`), { code: NOT_YET_PRIVATE });
+    }
     privacyVerdicts.set(key, answer);
   }
   const verdict = privacyVerdicts.get(key);
@@ -711,6 +725,14 @@ function makeTempWorkspace(prefix, deps = {}) {
       } catch (e) {
         releaseHold(hold, deps);
         if (e && e.code === 'ENOENT') continue;
+        if (e && e.code === NOT_YET_PRIVATE) {
+          // Its maker may not have given it its own list yet (checkParent): ask again after a pause. Still "no" after the last, it is not used for this workspace, and asked about again for the next.
+          if (attempt < MAKE_ATTEMPTS) {
+            (deps.pause || pauseSync)(WAITS_MS[attempt - 1]);
+            continue;
+          }
+          break;
+        }
         if (windowsRefusesForAMoment(e, deps)) {
           if (attempt < MAKE_ATTEMPTS) {
             (deps.pause || pauseSync)(WAITS_MS[attempt - 1]);

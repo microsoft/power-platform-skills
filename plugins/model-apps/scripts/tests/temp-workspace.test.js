@@ -1312,6 +1312,60 @@ test('the answer about a folder is the answer about THAT folder: one that is rem
   assert.strictEqual(asked.length, 2);
 });
 
+// A folder another run has just made has the access list of the temp folder it is in until that run's icacls gives it one of its own (makeWindowsFolderPrivate). Where the temp folder lets others write —
+// `TEMP` on a data drive gives Authenticated Users "modify" — a run that judges the folder in between is told "no" about a folder that is private a moment later, with the same identity.
+const inheritedNo = { ok: false, inherited: true, reason: 'S-1-5-11 can add to it, remove from it or take it over' };
+
+test('(Windows) a run that judges the plugin\'s folder while the run that made it is still giving it its own access list is not refused the folder for good: that "no" is asked again, and every workspace of the run is made in the folder', (t) => {
+  const { deps } = tempRoot(t);
+  const parent = workspaceParent({ ...deps, uid: null });
+  // Run A makes the folder just before this run does (this run's mkdir answers EEXIST), and gives it its own list a moment later: during this run's first pause, or — if this run does not pause — before its next workspace.
+  let madeByA = false;
+  let protectedByA = false;
+  const racing = { ...fs, mkdirSync: (target, ...rest) => {
+    if (target === parent && !madeByA) { madeByA = true; fs.mkdirSync(parent); }
+    return fs.mkdirSync(target, ...rest);
+  } };
+  const asked = [];
+  const slept = [];
+  // The clock reads a moment after the folder was made (the file system's own creation time: a POSIX one may have none to give).
+  const runB = { ...deps, uid: null, fs: racing, owner: { now: () => (fs.existsSync(parent) ? fs.lstatSync(parent).birthtimeMs + 100 : Date.now()) },
+    folderPrivacy: () => { asked.push(protectedByA ? 'its own list' : 'inherited'); return protectedByA ? { ok: true, reason: 'private' } : inheritedNo; },
+    folderProtect: () => assert.fail('run B did not make the folder, and does not set its list'),
+    pause: (ms) => { slept.push(ms); protectedByA = true; } };
+  const made = [];
+  for (let i = 0; i < 6; i += 1) {
+    made.push(makeTempWorkspace('genpage-', runB));
+    protectedByA = true;
+  }
+  assert.deepStrictEqual(made.map((dir) => path.dirname(dir)), Array(6).fill(parent), 'every workspace of run B is made in the plugin\'s folder — none in the plain temp folder, unrecorded');
+  assert.ok(made.every((dir) => recordOfFolder(dir)), 'and recorded');
+  assert.deepStrictEqual([asked, slept], [['inherited', 'its own list'], [25]], 'the "no" about the inherited list was asked again after a pause; the "yes" is remembered');
+});
+
+test('(Windows) a "no" about a list that is still only inherited is asked again only while the folder is young: one its maker never made private is not used — every try is bounded — and once it is older than its maker could take, the "no" is final and remembered', (t) => {
+  const { root, deps } = tempRoot(t);
+  const parent = workspaceParent({ ...deps, uid: null });
+  fs.mkdirSync(parent); // made, and never given a list of its own: its maker was killed before its icacls ran
+  let now = fs.lstatSync(parent).birthtimeMs + 100; // a moment after it was made, by the file system's own clock
+  let asked = 0;
+  const slept = [];
+  const stuck = { ...deps, uid: null, owner: { now: () => now }, folderPrivacy: () => { asked += 1; return inheritedNo; }, pause: (ms) => slept.push(ms) };
+  const first = makeTempWorkspace('genpage-', stuck);
+  assert.strictEqual(path.dirname(first), root, 'not used: the plain temp folder');
+  assert.deepStrictEqual(fs.readdirSync(first), [], 'unrecorded, as before');
+  assert.deepStrictEqual([asked, slept], [6, [25, 50, 100, 200, 400]], 'asked MAKE_ATTEMPTS times, with the waits of a refusal of the moment');
+  assert.strictEqual(path.dirname(makeTempWorkspace('genpage-', stuck)), root);
+  assert.strictEqual(asked, 12, 'not refused for the life of the process: the next workspace asks again while the folder is young');
+  // Older than any maker's icacls could take (PROTECT_WINDOW_MS): the "no" is what it says.
+  now += 60000;
+  slept.length = 0;
+  assert.strictEqual(path.dirname(makeTempWorkspace('genpage-', stuck)), root);
+  assert.strictEqual(path.dirname(makeTempWorkspace('genpage-', stuck)), root);
+  assert.deepStrictEqual([asked, slept], [13, []], 'asked once, at once, and remembered: the forty-workspace run starts no more programs');
+  assert.deepStrictEqual(fs.readdirSync(parent), [], 'and nothing was made in it');
+});
+
 // ---------------------------------------------------------------------------------------------------------------------
 // A folder this process makes on Windows takes the access list of the temp folder it is in, and `mode` means nothing there — so it is given a list of its own before anything is put in it
 // ---------------------------------------------------------------------------------------------------------------------
