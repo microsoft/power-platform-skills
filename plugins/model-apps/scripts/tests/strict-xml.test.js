@@ -3,9 +3,34 @@
 // strict-xml-oracle.test.js; what a page is deleted by is in sitemap-pages.test.js and teardown-navigation-proof-real-bundle.test.js.
 const test = require('node:test');
 const assert = require('node:assert');
-const { readXmlElements, XML_PREDEFINED } = require('../lib/strict-xml.js');
+const { readXmlElements, XML_PREDEFINED, work } = require('../lib/strict-xml.js');
 
 const all = () => true;
+// What reading a document costs, without a clock that a loaded machine can stretch: the characters of paths built (see `work` in lib/strict-xml.js) by one read.
+const pathCharactersOf = (xml, wanted = all, options) => {
+  const before = work.pathCharacters;
+  const r = readXmlElements(xml, wanted, options);
+  return { r, built: work.pathCharacters - before };
+};
+// For the cost that only a clock can tell (a scan of the text): how the time of a read grows with the size of the document, in this process, between a document and one `factor`
+// times as large. Linear growth is `factor` times; the square is factor² times. The two sizes are read in turn, round after round, and the least time of each is kept: a busy machine
+// slows both alike while it is busy, and the least of several reads leaves out what it adds to one. The bound sits at three times linear, far from the square, so a loaded run
+// does not fail it and a quadratic reader cannot pass it. A small side shorter than a millisecond counts as one millisecond: timer noise is then not mistaken for growth.
+const FACTOR = 8;
+const assertLinearGrowth = (what, build, small, wanted = all, rounds = 25) => {
+  const sizes = [small, small * FACTOR];
+  const texts = sizes.map(build);
+  const best = [Infinity, Infinity];
+  texts.forEach((xml) => readXmlElements(xml, wanted));
+  for (let round = 0; round < rounds; round += 1) {
+    texts.forEach((xml, i) => {
+      const started = process.hrtime.bigint();
+      readXmlElements(xml, wanted);
+      best[i] = Math.min(best[i], Number(process.hrtime.bigint() - started) / 1e6);
+    });
+  }
+  assert.ok(best[1] < Math.max(best[0], 1) * FACTOR * 3, `${what}: ${best[0].toFixed(1)} ms at ${sizes[0]}, ${best[1].toFixed(1)} ms at ${sizes[1]} — growing faster than linearly`);
+};
 const ok = (xml, wanted = all) => {
   const r = readXmlElements(xml, wanted);
   assert.strictEqual(r.ok, true, `${JSON.stringify(xml)}: ${r.detail}`);
@@ -268,32 +293,69 @@ test('readXmlElements: the namespace an XHTML check goes by is the one in scope 
 });
 
 test('readXmlElements: it is linear — a large flat document and a deeply nested one are read at once, and a document of many kinds of element is bounded', () => {
-  const flat = `<SiteMap><Area><Group>${'<SubArea Id="s" GenPageId="11111111-1111-4111-8111-111111111111" Title="Page &amp; Page"/>'.repeat(20000)}</Group></Area></SiteMap>`;
-  let started = Date.now();
-  assert.strictEqual(ok(flat, (name) => name === 'SubArea').length, 20000);
-  assert.ok(Date.now() - started < 3000, `${Date.now() - started} ms for ${flat.length} characters`);
+  const flatOf = (count) => `<SiteMap><Area><Group>${'<SubArea Id="s" GenPageId="11111111-1111-4111-8111-111111111111" Title="Page &amp; Page"/>'.repeat(count)}</Group></Area></SiteMap>`;
+  const subArea = (name) => name === 'SubArea';
+  const flat = pathCharactersOf(flatOf(20000), subArea);
+  assert.strictEqual(flat.r.ok, true);
+  assert.strictEqual(flat.r.elements.length, 20000);
+  assert.strictEqual(flat.built, 'SiteMap/Area/Group'.length, 'twenty thousand elements under one parent share the one path built for it');
+  assertLinearGrowth('a flat document', flatOf, 500, subArea);
 
   const depth = 50000;
-  const nested = `${'<a>'.repeat(depth)}${'</a>'.repeat(depth)}`;
-  started = Date.now();
-  assert.strictEqual(ok(nested, () => false).length, 0, 'no recursion: a nesting depth costs one array slot');
-  assert.ok(Date.now() - started < 3000, `${Date.now() - started} ms for ${depth} levels`);
-  assert.strictEqual(ok(`${'<a>'.repeat(depth)}<b/>${'</a>'.repeat(depth)}`, (name) => name === 'b')[0].path.split('/').length, depth);
+  const nestedOf = (levels) => `${'<a>'.repeat(levels)}${'</a>'.repeat(levels)}`;
+  const nested = pathCharactersOf(nestedOf(depth), () => false);
+  assert.strictEqual(nested.r.ok, true);
+  assert.strictEqual(nested.r.elements.length, 0, 'no recursion: a nesting depth costs one array slot');
+  assert.strictEqual(nested.built, 0, 'a path is built for an element that is answered, and for no other');
+  // One element at the bottom of a deep document: its path is walked once, and no other is built on the way.
+  const bottom = pathCharactersOf(`${'<a>'.repeat(depth)}<b/>${'</a>'.repeat(depth)}`, (name) => name === 'b');
+  assert.strictEqual(bottom.r.elements[0].path.split('/').length, depth);
+  assert.strictEqual(bottom.built, depth * 2 - 1);
 
   const kinds = (count) => `<r>${Array.from({ length: count }, (_, i) => `<k${i}>x</k${i}>`).join('')}</r>`;
   assert.strictEqual(ok(kinds(200)).length, 201);
   assert.match(refused(kinds(300)), /more than 256 different element names/);
 
-  const aLot = `<a>${'&#38;'.repeat(100000)}${'<!-- x -->'.repeat(20000)}${'<![CDATA[x]]>'.repeat(20000)}${'<?p x?>'.repeat(20000)}</a>`;
-  started = Date.now();
-  ok(aLot);
-  assert.ok(Date.now() - started < 3000, `${Date.now() - started} ms for ${aLot.length} characters of references, comments, CDATA and PIs`);
+  const aLotOf = (count) => `<a>${'&#38;'.repeat(count * 5)}${'<!-- x -->'.repeat(count)}${'<![CDATA[x]]>'.repeat(count)}${'<?p x?>'.repeat(count)}</a>`;
+  ok(aLotOf(20000));
+  assertLinearGrowth('references, comments, CDATA sections and processing instructions', aLotOf, 500);
 });
 
 test('readXmlElements: it never reads past a refusal, so a hostile document cannot make it slow — text that is nothing but "<" or "&" is refused at once', () => {
-  const started = Date.now();
-  for (const xml of [`<a>${'<'.repeat(200000)}`, `<a>${'&'.repeat(200000)}`, `<a ${'b="1" '.repeat(1000)}>`, `<${'a'.repeat(200000)} `, `<a b="${'&amp;'.repeat(100000)}`, '<a>'.repeat(10000)]) readXmlElements(xml, all);
-  assert.ok(Date.now() - started < 3000, `${Date.now() - started} ms`);
+  // Refused where it goes wrong, not at the end of the text: the position says how far it read.
+  assert.match(refused(`<a>${'<'.repeat(200000)}`), /^a "<" that starts no element.*, at line 1, column 4$/);
+  assert.match(refused(`<a>${'&'.repeat(200000)}`), /^an "&" that is not one of the predefined entities.*, at line 1, column 4$/);
+  assert.match(refused(`<a ${'b="1" '.repeat(1000)}>`), /^attribute b twice in one tag, at line 1, column 10$/);
+  // A tag, a value and a name that are never closed are read to the end of the text once, and not again for each character.
+  const unclosedName = (size) => `<${'a'.repeat(size)} `;
+  const unclosedValue = (size) => `<a b="${'&amp;'.repeat(size)}`;
+  assert.match(refused(unclosedName(200000)), /^a tag that is never closed, at line 1, column 1$/);
+  assert.match(refused(unclosedValue(100000)), /^an attribute value that is never closed, at line 1, column 6$/);
+  assertLinearGrowth('a tag that is never closed', unclosedName, 25000);
+  assertLinearGrowth('an attribute value that is never closed', unclosedValue, 6000);
+  // Elements that are never closed, every one asked for: the document is refused at its end, so the paths of its elements — the square of its depth in characters — are never built.
+  const unclosed = (levels) => '<a>'.repeat(levels);
+  const deep = pathCharactersOf(unclosed(10000));
+  assert.strictEqual(deep.r.ok, false);
+  assert.strictEqual(deep.r.detail, 'the element <a> is never closed, at line 1, column 30001');
+  assert.strictEqual(deep.built, 0, 'nothing of what a refusal throws away is built');
+  assertLinearGrowth('elements that are never closed', unclosed, 1250);
+});
+
+// A refused document is refused after it was read to its end, and the paths of its elements are then not built; one that is read answers each element with the path it always had.
+test('readXmlElements: the path of an element is the names of its ancestors, whatever order they were read in or how many elements share them', () => {
+  const xml = '<r><a><b/><b><c/></b></a><a><c/><b><c/></b></a><d/></r>';
+  const names = (e) => `${e.path}|${e.name}`;
+  assert.deepStrictEqual(ok(xml).map(names), ['|r', 'r|a', 'r/a|b', 'r/a|b', 'r/a/b|c', 'r|a', 'r/a|c', 'r/a|b', 'r/a/b|c', 'r|d']);
+  assert.deepStrictEqual(ok(xml, (name) => name === 'c').map(names), ['r/a/b|c', 'r/a|c', 'r/a/b|c']);
+  assert.deepStrictEqual(ok(xml, (name) => name === 'd').map(names), ['r|d']);
+  // The keys of an element, and their order, are those of a document read without this: the path is in its place from the start.
+  assert.deepStrictEqual(Object.keys(ok('<r><a/></r>', (name) => name === 'a')[0]), ['name', 'path', 'attrs']);
+  assert.deepStrictEqual(Object.keys(readXmlElements('<r><a/></r>', (name) => name === 'a', { spans: true }).elements[0]), ['name', 'path', 'attrs', 'start', 'end']);
+  // Every level asked for: each path is its parent's with one name added.
+  const levels = 300;
+  const chain = ok(`${'<a>'.repeat(levels)}${'</a>'.repeat(levels)}`);
+  assert.deepStrictEqual(chain.map((e) => e.path), Array.from({ length: levels }, (_, i) => Array(i).fill('a').join('/')));
 });
 
 // An element a caller asks for says its `path`, the names of its ancestors, so a document that is nested deep and is asked for at every level costs the SQUARE of its depth in memory:
@@ -316,12 +378,12 @@ test('readXmlElements { maxDepth }: a document nested deeper than the caller all
   // The path of an element is as long as its depth, so the bound is also the bound of what the answer holds.
   const deepest = bounded(nest(5, '<z/>'), 6).elements.at(-1);
   assert.strictEqual(deepest.path.split('/').length, 5);
-  // A document of thousands of levels asked for at every one is refused at the bound, not read: the answer would be gigabytes of paths.
-  const started = Date.now();
-  const hostile = bounded(nest(6000), 32);
-  assert.strictEqual(hostile.ok, false);
-  assert.match(hostile.detail, /nested more than 32 levels deep/);
-  assert.ok(Date.now() - started < 3000, `${Date.now() - started} ms`);
+  // A document of thousands of levels asked for at every one is refused at the bound, not read: the answer would be gigabytes of paths. The refusal says where it stopped — the 33rd <a> starts
+  // after 96 characters — and no path was built on the way.
+  const hostile = pathCharactersOf(nest(6000), all, { maxDepth: 32 });
+  assert.strictEqual(hostile.r.ok, false);
+  assert.match(hostile.r.detail, /nested more than 32 levels deep, at line 1, column 97$/);
+  assert.strictEqual(hostile.built, 0);
   // Without the option nothing changes: a nesting of any depth is read, as before.
   assert.strictEqual(readXmlElements(nest(300), () => false).ok, true);
   assert.strictEqual(readXmlElements(nest(300), () => false, {}).ok, true);
