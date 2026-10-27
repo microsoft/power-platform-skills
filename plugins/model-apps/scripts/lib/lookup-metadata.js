@@ -34,6 +34,12 @@ const ATTRIBUTE_TYPES = new Set(['BigInt', 'Boolean', 'CalendarRules', 'Customer
 const TARGET_TYPES = new Set([...LOOKUP_TYPES, 'PartyList']);
 const LOGICAL_NAME = /^[a-z_][a-z0-9_]*$/;
 
+// A name the metadata answer states, lower-cased. Only a string is a name: String(value) would turn a malformed answer's null, true or
+// ['customerid'] into the plausible names "null", "true" and "customerid", so anything else is '' and fails the checks below.
+function nameOf(value) {
+  return typeof value === 'string' ? value.toLowerCase() : '';
+}
+
 function lookupError(code, message) {
   const error = new Error(message);
   error.code = code;
@@ -46,22 +52,23 @@ function lookupError(code, message) {
  * @param {object[]} rows - readRelationshipsOf lookup-details rows: { schemaName, referencedEntity, referencingAttribute, referencedAttribute, navigationProperty }
  */
 function tableLookups(metadata, rows) {
-  const table = String(metadata.logicalName || '').toLowerCase();
+  const table = nameOf(metadata.logicalName);
+  if (!LOGICAL_NAME.test(table)) throw lookupError('LOOKUP_METADATA_INCOMPLETE', "the metadata read did not state the table's logical name");
   const attributes = Array.isArray(metadata.attributes) ? metadata.attributes : [];
   // The SDK cannot say its attribute inventory is complete: it maps an absent `Attributes` expansion to [] and a missing
   // PrimaryIdAttribute to '', and it does not follow an `Attributes@odata.nextLink` continuation. So completeness is
   // established here from what must be in it — the table's primary id column, and the referencing column of every
   // ManyToOne relationship the separately paged relationship read returned (every lookup has one) — and a gap fails
   // the whole read rather than becoming a shorter list a planner reads as "no lookup".
-  const inventory = new Set(attributes.filter(Boolean).map((attribute) => String(attribute.logicalName || '').toLowerCase()));
-  const primaryId = String(metadata.primaryIdAttribute || '').toLowerCase();
+  const inventory = new Set(attributes.filter(Boolean).map((attribute) => nameOf(attribute.logicalName)));
+  const primaryId = nameOf(metadata.primaryIdAttribute);
   if (!LOGICAL_NAME.test(primaryId) || !inventory.has(primaryId)) {
     throw lookupError('LOOKUP_METADATA_INCOMPLETE', `${table}: the metadata read did not state the table's primary id column among its attributes`);
   }
   // A relationship column is classified, too: an unknown or malformed type (the SDK's 'Unknown' for a missing AttributeType),
   // or Targets on a type that cannot carry them, is an incomplete answer — never a column silently left out as "not a lookup".
   // A known non-lookup type without Targets is kept out of the lookups as before.
-  const byColumn = new Map(attributes.filter(Boolean).map((attribute) => [String(attribute.logicalName || '').toLowerCase(), attribute]));
+  const byColumn = new Map(attributes.filter(Boolean).map((attribute) => [nameOf(attribute.logicalName), attribute]));
   for (const row of rows) {
     const column = String(row.referencingAttribute || '').toLowerCase();
     if (!inventory.has(column)) {
@@ -79,8 +86,8 @@ function tableLookups(metadata, rows) {
   const lookups = [];
   for (const attribute of attributes) {
     if (!attribute || !LOOKUP_TYPES.has(attribute.attributeType)) continue;
-    const column = String(attribute.logicalName || '').toLowerCase();
-    const targets = Array.isArray(attribute.targets) ? attribute.targets.map((target) => (typeof target === 'string' ? target.toLowerCase() : '')) : [];
+    const column = nameOf(attribute.logicalName);
+    const targets = Array.isArray(attribute.targets) ? attribute.targets.map(nameOf) : [];
     // The SDK fills `targets` from a separate cast read and leaves them out when that read fails, so a lookup without them is an
     // incomplete answer, never a lookup with no targets.
     if (!LOGICAL_NAME.test(column) || !targets.length || targets.some((target) => !LOGICAL_NAME.test(target))) {
@@ -142,7 +149,7 @@ async function readLookupMetadata(sdk, tables) {
       if (missingTableOf(err, [table]) === null) throw err;
       throw lookupError('LOOKUP_TABLE_NOT_FOUND', `${table}: the environment has no table with this logical name — ${err.message}`);
     }
-    if (!metadata || String(metadata.logicalName || '').toLowerCase() !== table || !Array.isArray(metadata.attributes)) {
+    if (!metadata || nameOf(metadata.logicalName) !== table || !Array.isArray(metadata.attributes)) {
       throw lookupError('LOOKUP_METADATA_INCOMPLETE', `${table}: the metadata read did not answer for this table`);
     }
     const relationships = await readRelationshipsOf(sdk.dataverse, table, 'ManyToOne', cache, { lookupDetails: true });

@@ -102,6 +102,30 @@ for (const target of [null, true, false, ['contact']]) {
   });
 }
 
+for (const name of [true, ['customerid']]) {
+  test(`REAL BUNDLE: a non-string column name ${JSON.stringify(name)} in the attribute inventory fails discovery`, async () => {
+    // The SDK reads the targets by the column's name, so a column named by a non-string has none; typed String it would, coerced,
+    // read as the listed non-lookup column `customerid` and the lookup would silently vanish.
+    const main = (body) => ({ ...body, Attributes: ATTRIBUTES.map((entry) => (
+      entry.LogicalName === 'customerid' ? { ...entry, LogicalName: name, AttributeType: 'String' } : entry)) });
+    await assert.rejects(readLookups(ENV, { tables: ['opportunity'] }, transport({ main })), (err) => err.code === 'LOOKUP_METADATA_INCOMPLETE');
+  });
+}
+
+test('REAL BUNDLE: a lookup attribute whose name is not a string fails discovery; a non-lookup one is ignored as before', async () => {
+  const withExtra = (extra) => (body) => ({ ...body, Attributes: [...ATTRIBUTES, { ...ATTRIBUTES[1], ...extra }] });
+  await assert.rejects(readLookups(ENV, { tables: ['opportunity'] }, transport({ main: withExtra({ LogicalName: true, AttributeType: 'Lookup', AttributeTypeName: { Value: 'LookupType' } }) })),
+    (err) => err.code === 'LOOKUP_METADATA_INCOMPLETE');
+  const answer = await readLookups(ENV, { tables: ['opportunity'] }, transport({ main: withExtra({ LogicalName: true }) }));
+  assert.deepEqual(answer.tables[0].lookups.map((lookup) => lookup.column), ['customerid', 'ownerid']);
+});
+
+for (const [field, value] of [['PrimaryIdAttribute', ['opportunityid']], ['LogicalName', ['opportunity']], ['LogicalName', true]]) {
+  test(`REAL BUNDLE: the SDK passes a non-string ${field} ${JSON.stringify(value)} through and discovery rejects it`, async () => {
+    const main = (body) => ({ ...body, [field]: value });
+    await assert.rejects(readLookups(ENV, { tables: ['opportunity'] }, transport({ main })), (err) => err.code === 'LOOKUP_METADATA_INCOMPLETE');
+  });
+}
 test('REAL BUNDLE: a relationship column the read does not classify, or classifies against its Targets, fails the whole discovery', async () => {
   const retype = (change) => (body) => ({ ...body, Attributes: ATTRIBUTES.map((entry) => (entry.LogicalName === 'customerid' ? change({ ...entry }) : entry)) });
   const untyped = retype((entry) => { delete entry.AttributeType; return entry; });

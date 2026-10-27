@@ -100,6 +100,45 @@ test('lookup target validation preserves case normalization and does not mutate 
   assert.deepEqual(targets, ['ACCOUNT', 'Contact']);
 });
 
+for (const name of [true, false, null, 7, ['customerid']]) {
+  test(`a non-string lookup column name ${JSON.stringify(name)} is not coerced to a column`, () => {
+    // Listed in the inventory and named by a relationship, as the real column is: the coerced name must not satisfy either.
+    const renamed = { ...OPPORTUNITY, attributes: OPPORTUNITY.attributes.map((entry) => (
+      entry.logicalName === 'customerid' ? { ...entry, logicalName: name } : entry)) };
+    assert.throws(() => tableLookups(renamed, ROWS), (err) => err.code === 'LOOKUP_METADATA_INCOMPLETE', 'a relationship column the inventory does not list');
+    // A lookup no relationship names is caught only where the lookups are read.
+    const extra = { ...OPPORTUNITY, attributes: [...OPPORTUNITY.attributes, attribute(name, 'Lookup', ['account'])] };
+    assert.throws(() => tableLookups(extra, ROWS), (err) => err.code === 'LOOKUP_METADATA_INCOMPLETE' && /did not state the lookup's targets/.test(err.message));
+  });
+}
+
+for (const primaryIdAttribute of [['opportunityid'], true, 7]) {
+  test(`a non-string primary id ${JSON.stringify(primaryIdAttribute)} is not coerced to the id column`, () => {
+    const metadata = { ...OPPORTUNITY, primaryIdAttribute,
+      attributes: [...OPPORTUNITY.attributes, attribute(String(primaryIdAttribute), 'Uniqueidentifier')] };
+    assert.throws(() => tableLookups(metadata, ROWS), (err) => err.code === 'LOOKUP_METADATA_INCOMPLETE' && /primary id column/.test(err.message));
+  });
+}
+
+for (const logicalName of [['opportunity'], true, 7, null]) {
+  test(`a non-string table name ${JSON.stringify(logicalName)} is not coerced to the table`, async () => {
+    const metadata = { ...OPPORTUNITY, logicalName };
+    assert.throws(() => tableLookups(metadata, ROWS), (err) => err.code === 'LOOKUP_METADATA_INCOMPLETE');
+    await assert.rejects(readLookupMetadata(fakeSdk({ metadata: { opportunity: metadata } }), ['opportunity']),
+      (err) => err.code === 'LOOKUP_METADATA_INCOMPLETE' && /did not answer for this table/.test(err.message));
+  });
+}
+
+test('names are lower-cased as before, and an attribute the reader never lists keeps whatever name it has', () => {
+  const upper = { ...OPPORTUNITY, logicalName: 'Opportunity', primaryIdAttribute: 'OpportunityId',
+    attributes: OPPORTUNITY.attributes.map((entry) => ({ ...entry, logicalName: entry.logicalName.toUpperCase() })) };
+  const rows = ROWS.map((row) => ({ ...row, referencingAttribute: row.referencingAttribute.toUpperCase() }));
+  assert.deepEqual(tableLookups(upper, rows), tableLookups(OPPORTUNITY, ROWS));
+  // A String column with no usable name, or a non-string one, is no lookup and no relationship column: ignored as before.
+  const odd = { ...OPPORTUNITY, attributes: [...OPPORTUNITY.attributes, { attributeType: 'String' }, attribute(7, 'String'), attribute(['x'], 'Memo'), null] };
+  assert.deepEqual(tableLookups(odd, ROWS), tableLookups(OPPORTUNITY, ROWS));
+});
+
 test('an attribute inventory that cannot be complete fails the read: no primary id, or a relationship column it does not list', () => {
   const without = (column) => ({ ...OPPORTUNITY, attributes: OPPORTUNITY.attributes.filter((entry) => entry.logicalName !== column) });
   for (const [label, metadata] of [
