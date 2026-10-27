@@ -312,8 +312,10 @@ function protectNewParent(parent, deps) {
 // the holds of runs that are waiting for this folder to be made private come and go, and the maker's `rmdir` lands between them; the judge then finds the folder gone (ENOENT) and makes one of its own.
 // It removes only what it made: right before every `rmdir` the folder at the path must still be a plain folder with the identity it had right after this run's mkdir (`made`), and the waiting stops
 // at once when it is not. `rmdir` removes only an empty folder, in one step — never a file, never a hold — so the most a folder swapped in between that look and the `rmdir` could lose is itself,
-// empty: the same as the single `rmdir` that was here before, and as the end of every run (prune), which removes the folder by its path alone. A folder that holds anything but holds — a workspace,
-// a record, a file of anyone's — is not waited for: it is in use, or not this run's to empty. After the wait the folder is left, as it was before (the caller throws NOT_PRIVATE either way).
+// empty: the same as the single `rmdir` that was here before, and as the end of every run (prune), which removes the folder by its path alone. A folder whose listing shows anything but files named
+// as holds — a workspace, a record, a file of anyone's — is not waited for: it is in use, or not this run's to empty. A listing Windows refuses for a moment (EPERM, EACCES, EBUSY) shows nothing,
+// and is waited out like a hold: `rmdir` still removes only an empty folder, so the wait can cost time, never content. When the wait runs out, or this run is killed while it waits, the folder is
+// left, as it was before (the caller throws NOT_PRIVATE either way).
 function removeUnprotectedParent(parent, made, deps) {
   const fsx = deps.fs || fs;
   const clock = clockOf(deps);
