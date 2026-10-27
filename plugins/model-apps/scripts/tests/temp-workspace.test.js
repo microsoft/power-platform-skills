@@ -1425,6 +1425,117 @@ test('(Windows) a folder that cannot be made private is not used and not left: i
   assert.deepStrictEqual(asked, [parent], 'a folder that was refused is not made, and set, again by this process: it costs programs, and the answer will not change');
 });
 
+// A run, as another process has it: what a process remembers (its verdicts, the folders it refuses) is its own.
+function anotherRun() {
+  const file = require.resolve('../lib/temp-workspace.js');
+  const mine = require.cache[file];
+  delete require.cache[file];
+  try {
+    return require('../lib/temp-workspace.js');
+  } finally {
+    require.cache[file] = mine;
+  }
+}
+
+// THE FOLDER A FAILED MAKER LEAVES. Run A makes the plugin's folder and its icacls fails; run B, which found the folder a moment after A made it, is judging it — its hold is in it — so A's `rmdir`
+// is refused. A single `rmdir` left the folder for good: empty, with the temp folder's list, and every later run was told "no" about it once it was older than a maker could take. The maker waits
+// for the holds to go, and removes the folder it made; whatever it did not make, or anything but holds in it, it leaves.
+const holdOfB = `${HOLD_PREFIX}0a1b2c3d-4242-abcdef`;
+function failingMaker(deps, parent, { onProtect = () => fs.writeFileSync(path.join(parent, holdOfB), ''), onPause = () => {} } = {}) {
+  let now = 1000000;
+  const paused = [];
+  const run = { ...deps, uid: null, owner: { now: () => now },
+    folderProtect: () => { onProtect(); return { ok: false, reason: 'its access list could not be set (icacls could not be run)' }; },
+    pause: (ms) => { paused.push(ms); now += ms; onPause(paused.length); } };
+  return { run, paused };
+}
+
+test('(Windows) a folder its maker could not make private, while another run held it, is removed by the maker once that run lets go — and a later run makes, protects and uses a folder of its own instead of working outside it for good', (t) => {
+  const { root, deps } = tempRoot(t);
+  const parent = workspaceParent({ ...deps, uid: null });
+  // B judges the folder (holding it), is told "not yet", lets go and pauses: here, during A's third look.
+  const a = failingMaker(deps, parent, { onPause: (n) => { if (n === 3) fs.unlinkSync(path.join(parent, holdOfB)); } });
+  assert.strictEqual(path.dirname(anotherRun().makeTempWorkspace('genpage-', a.run)), root, 'run A, whose folder could not be made private, works in the plain temp folder, as before');
+  assert.ok(!fs.existsSync(parent), 'and the folder it made is not left behind: removed once B let go');
+  assert.deepStrictEqual(a.paused, [20, 20, 20], 'it looked again every REMOVE_PAUSE_MS until it could');
+  const asked = [];
+  const later = { ...deps, uid: null, owner: { now: () => (fs.existsSync(parent) ? fs.lstatSync(parent).birthtimeMs + 60000 : Date.now()) },
+    folderPrivacy: () => { asked.push('privacy'); return inheritedNo; },
+    folderProtect: (folder) => { asked.push('protect'); assert.deepStrictEqual(fs.readdirSync(folder), []); return { ok: true, reason: 'set, and read back' }; } };
+  const runC = anotherRun();
+  const made = [runC.makeTempWorkspace('genpage-', later), runC.makeTempWorkspace('genpage-', later)];
+  assert.deepStrictEqual(made.map((dir) => path.dirname(dir)), [parent, parent], 'a later run works in the plugin\'s folder — not in the plain temp folder, unrecorded');
+  assert.ok(made.every((dir) => recordOfFolder(dir)), 'and recorded');
+  assert.deepStrictEqual(asked, ['protect'], 'it made the folder, and gave it its own list');
+  // Windows refuses an rmdir with EPERM, not ENOTEMPTY, while a hold in the folder is being deleted: that is a moment, too.
+  const { root: root2, deps: deps2 } = tempRoot(t);
+  const parent2 = workspaceParent({ ...deps2, uid: null });
+  let refused = 0;
+  const b = failingMaker(deps2, parent2, { onProtect: () => {} });
+  b.run.fs = { ...fs, rmdirSync: (target, ...rest) => {
+    if (target === parent2 && refused < 2) { refused += 1; throw Object.assign(new Error(`EPERM: operation not permitted, rmdir '${target}'`), { code: 'EPERM' }); }
+    return fs.rmdirSync(target, ...rest);
+  } };
+  assert.strictEqual(path.dirname(anotherRun().makeTempWorkspace('genpage-', b.run)), root2);
+  assert.deepStrictEqual([fs.existsSync(parent2), b.paused], [false, [20, 20]], 'EPERM while a hold goes: looked again, and removed');
+});
+
+test('(Windows) a maker waiting to remove the folder it could not make private removes only that folder: one put in its place is left untouched, and so is a folder with anything but holds in it', (t) => {
+  // Renamed away during the wait, and an empty folder of someone else's put at the path: removing it would remove what this run did not make.
+  {
+    const { root, deps } = tempRoot(t);
+    const parent = workspaceParent({ ...deps, uid: null });
+    const away = path.join(root, 'moved-away');
+    let replacement = null;
+    const a = failingMaker(deps, parent, { onPause: (n) => { if (n === 2) { fs.renameSync(parent, away); fs.mkdirSync(parent); replacement = fs.lstatSync(parent); } } });
+    assert.strictEqual(path.dirname(anotherRun().makeTempWorkspace('genpage-', a.run)), root);
+    assert.deepStrictEqual(a.paused, [20, 20], 'it stopped at the first look after the swap');
+    const now = fs.lstatSync(parent);
+    assert.deepStrictEqual([now.isDirectory(), now.ino, now.birthtimeMs, fs.readdirSync(parent)], [true, replacement.ino, replacement.birthtimeMs, []], 'the replacement is there, untouched');
+    assert.deepStrictEqual(fs.readdirSync(away), [holdOfB], 'and the folder it made is where it was moved, as it was');
+  }
+  // Anything that is not a hold: it is in use, or not this run's to empty — not waited for, not touched.
+  for (const [what, put] of [
+    ['a workspace', (parent) => fs.mkdirSync(path.join(parent, `genpage-${deadPid()}-AbC123`))],
+    ['a file', (parent) => fs.writeFileSync(path.join(parent, 'notes.txt'), 'theirs')],
+    ['a folder named as a hold', (parent) => fs.mkdirSync(path.join(parent, `${HOLD_PREFIX}0a1b2c3d-4243-abcdef`))],
+    ['a hold, and a workspace', (parent) => { fs.writeFileSync(path.join(parent, holdOfB), ''); fs.mkdirSync(path.join(parent, `genpage-${deadPid()}-AbC123`)); }],
+  ]) {
+    const { root, deps } = tempRoot(t);
+    const parent = workspaceParent({ ...deps, uid: null });
+    const a = failingMaker(deps, parent, { onProtect: () => put(parent) });
+    assert.strictEqual(path.dirname(anotherRun().makeTempWorkspace('genpage-', a.run)), root, what);
+    const left = entriesOf(parent);
+    assert.deepStrictEqual([what, a.paused], [what, []], `${what}: not waited for`);
+    assert.ok(left.length > 0 && left.every((name) => fs.existsSync(path.join(parent, name))), `${what}: left as it was`);
+  }
+});
+
+test('(Windows) a maker waits for a hold that never goes for REMOVE_PATIENCE_MS at most: then the folder is left, as before, and the run works in the plain temp folder and does not try again', (t) => {
+  const { root, deps } = tempRoot(t);
+  const parent = workspaceParent({ ...deps, uid: null });
+  const a = failingMaker(deps, parent);
+  const runA = anotherRun();
+  assert.strictEqual(path.dirname(runA.makeTempWorkspace('genpage-', a.run)), root);
+  assert.deepStrictEqual([a.paused.length, a.paused.reduce((s, ms) => s + ms, 0)], [500, 10000], 'ten seconds of looks, twenty milliseconds apart');
+  assert.deepStrictEqual(fs.readdirSync(parent), [holdOfB], 'the folder is left, with the other run\'s hold in it, untouched');
+  assert.strictEqual(path.dirname(runA.makeTempWorkspace('genpage-', a.run)), root);
+  assert.strictEqual(a.paused.length, 500, 'refused for the rest of the process (NOT_PRIVATE), as before: it does not wait again');
+});
+
+test('(Windows) a run told "not yet" about a folder that another run is making private does not hold it while it pauses — so the maker, if its protection failed, can remove it meanwhile', (t) => {
+  const { deps } = tempRoot(t);
+  const parent = workspaceParent({ ...deps, uid: null });
+  fs.mkdirSync(parent);
+  const whileJudged = [];
+  const whilePaused = [];
+  const judge = { ...deps, uid: null, owner: { now: () => fs.lstatSync(parent).birthtimeMs + 100 },
+    folderPrivacy: () => { whileJudged.push(entriesOf(parent).length); return inheritedNo; },
+    pause: () => whilePaused.push(entriesOf(parent)) };
+  makeTempWorkspace('genpage-', judge);
+  assert.deepStrictEqual([whileJudged, whilePaused], [[1, 1, 1, 1, 1, 1], [[], [], [], [], []]], 'held while it is judged, and let go before every pause');
+});
+
 test('(Windows) an access list that cannot be set for a moment — icacls cannot open a folder that Windows is removing — is asked again after a short wait, and the folder made again; one that keeps failing ends as a refusal', (t) => {
   const unreadable = { ok: false, unreadable: true, reason: 'its access list could not be set (icacls /inheritance:r /grant:r)' };
   const a = tempRoot(t);
