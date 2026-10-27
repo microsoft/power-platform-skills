@@ -184,7 +184,10 @@ function makeExecFile({ pacOrg = null, azUser = 'maker@contoso.com', azVersion =
   };
 }
 
-function makeCancelableExecFile({ pacOrg = null, azUser = 'maker@contoso.com', azVersion = 'azure-cli 2.60.0', pacTimer = false, pacDelayMs = null }, calls) {
+// `pacAnswers` (a promise): pac answers when the test resolves it, and not before — a test that needs pac still running when a verdict is
+// reached gets that on any machine. A pac that answered on a timer raced the az answers, and won whenever the event loop was held up for
+// longer than the timer, as a whole-suite run holds it. `azDelayMs`: the Azure CLI answers that long after it is started (a cold start).
+function makeCancelableExecFile({ pacOrg = null, azUser = 'maker@contoso.com', azVersion = 'azure-cli 2.60.0', pacTimer = false, pacAnswers = null, azDelayMs = null }, calls) {
   return (cmd, args, _opts, cb) => {
     const argv = (args || []).join(' ');
     calls.push(`start ${cmd} ${argv}`);
@@ -211,7 +214,7 @@ function makeCancelableExecFile({ pacOrg = null, azUser = 'maker@contoso.com', a
         if (pacOrg === null) cb(new Error(`spawn ${cmd} ENOENT`), '', '');
         else cb(null, pacOrg, '');
       });
-      if (pacDelayMs !== null) setTimeout(finishSuccess, pacDelayMs);
+      if (pacAnswers) pacAnswers.then(finishSuccess);
       // With pac's own 5 ms timeout armed (pacTimer), its success must come first whatever holds the event loop:
       // setImmediate loses to an expired timer when the loop was busy for 5 ms first (the module warm-up of a
       // file's first test is), and the test then staged a pac timeout it never meant to. nextTick runs before any timer.
@@ -219,7 +222,7 @@ function makeCancelableExecFile({ pacOrg = null, azUser = 'maker@contoso.com', a
       else setImmediate(finishSuccess);
       return child;
     }
-    setImmediate(() => {
+    const answer = () => {
       if (child.killed) return;
       calls.push(`done ${cmd}`);
       if (cmd === 'az' && argv.includes('--version')) {
@@ -231,7 +234,9 @@ function makeCancelableExecFile({ pacOrg = null, azUser = 'maker@contoso.com', a
       } else {
         cb(new Error(`unexpected command: ${cmd} ${argv}`), '', '');
       }
-    });
+    };
+    if (azDelayMs !== null) setTimeout(answer, azDelayMs);
+    else setImmediate(answer);
     return child;
   };
 }
@@ -437,23 +442,28 @@ test('pac success is delivered even when async az/token work takes longer than p
   assert.notEqual(r.blocker, 'pac_not_logged_in');
 });
 
+// pac is still running when the az verdict is reached, however long the Azure CLI takes: it answers only once the test says so, after the
+// verdict. It then answers into a probe that was cancelled, which delivers nothing.
+async function cancelsPendingPac(exec) {
+  const pacAnswers = deferred();
+  const r = await runWithAsyncChildren({ argv: ['--env', ENVURL], exec: { ...exec, pacOrg: 'Connected as maker@contoso.com\n', pacAnswers: pacAnswers.promise, azDelayMs: 80 } });
+  pacAnswers.resolve();
+  await new Promise((resolve) => setImmediate(resolve));
+  return r;
+}
+
 test('az_missing cancels the pending pac probe before emitting', async () => {
-  const r = await runWithAsyncChildren({
-    argv: ['--env', ENVURL],
-    exec: { azUser: null, azVersion: null, pacOrg: 'Connected as maker@contoso.com\n', pacDelayMs: 50 },
-  });
+  const r = await cancelsPendingPac({ azUser: null, azVersion: null });
   assert.equal(r.blocker, 'az_missing');
   assert.ok(r.calls.indexOf('kill pac org who') !== -1, r.calls.join(' | '));
   assert.ok(!r.calls.includes('done pac'), r.calls.join(' | '));
 });
 
 test('az_not_logged_in cancels the pending pac probe before emitting', async () => {
-  const r = await runWithAsyncChildren({
-    argv: ['--env', ENVURL],
-    exec: { azUser: null, azVersion: 'azure-cli 2.60.0', pacOrg: 'Connected as maker@contoso.com\n', pacDelayMs: 50 },
-  });
+  const r = await cancelsPendingPac({ azUser: null, azVersion: 'azure-cli 2.60.0' });
   assert.equal(r.blocker, 'az_not_logged_in');
   assert.ok(r.calls.includes('kill pac org who'), r.calls.join(' | '));
+  assert.ok(!r.calls.includes('done pac'), r.calls.join(' | '));
 });
 
 test('without --env the token is not warmed early, because the env URL comes from pac', async () => {
