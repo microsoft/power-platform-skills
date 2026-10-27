@@ -354,9 +354,12 @@ test('a link or a junction at the lock\'s name or at its claim\'s is still refus
 test('on Windows, a claim this user may not read is refused as pages-locked and build-locked naming that claim and its access, where it cannot be inspected', { skip: process.platform !== 'win32' && 'needs Windows ACLs' }, async (t) => {
   const { execFileSync } = require('node:child_process');
   const { withAppBuildLease } = require('../lib/app-operation-lease.js');
+  // Both tools by absolute path (helpers/windows-system-tools.js): by name alone, a machine with Git's tools on PATH — the GitHub-hosted
+  // Windows runners are one — runs Git's GNU `whoami`, which rejects `/user`.
+  const { systemTool } = require('./helpers/windows-system-tools.js');
   // "<domain>\<user>","S-1-5-21-…": the SID is the last quoted field.
-  const sid = /"(S-[\d-]+)"\s*$/.exec(execFileSync('whoami', ['/user', '/fo', 'csv', '/nh'], { encoding: 'utf8' }).trim())[1];
-  const icacls = (...args) => execFileSync(path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'icacls.exe'), args, { stdio: 'ignore' });
+  const sid = /"(S-[\d-]+)"\s*$/.exec(execFileSync(systemTool('whoami'), ['/user', '/fo', 'csv', '/nh'], { encoding: 'utf8' }).trim())[1];
+  const icacls = (...args) => execFileSync(systemTool('icacls'), args, { stdio: 'ignore' });
   const buildFile = (dir) => path.join(dir, `app-build.${sha256(APP.toLowerCase())}.lock`);
   const BUILD_REFUSAL = (name) => `another build may be applying '${APP}' in this workspace — refusing a second concurrent apply (would risk duplicate creation). Re-run the same command after it finishes. If no build using this workspace is running, inspect ${name} and remove it only if it is abandoned; keep the workspace and its recovery records.`;
   for (const kind of ['pages', 'build']) {
