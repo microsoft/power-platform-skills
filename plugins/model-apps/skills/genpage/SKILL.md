@@ -911,6 +911,22 @@ subagent. Inline the page-builder workflow directly in the orchestrator:
    keys, and so is a key computed from an expression (`[key]: …`), whose name it
    cannot see (a template that starts with `--`, `&`, `:` or `@` is read); Fluent's
    `...shorthands.*(…)` and `...typographyStyles.*` may be spread as they are.
+
+   Then review the page for iteration that compiles to nothing:
+
+   The page compiler targets ES5 without iterator downleveling or full type checking.
+   Spreading, looping over, or array-destructuring a Map, Set or iterator reads length
+   and indices instead of the iterator: values can disappear, defaults can replace them,
+   or rest destructuring can throw. This includes `[...new Set(xs)]`, `[...m.values()]`,
+   `[...seen.values()]`, `for (const [k, v] of m)`, `new Set([...prev, id])`,
+   `[...selected]` and `[...text.matchAll(re)]`. Convert with `Array.from(...)` before
+   spreading, looping or destructuring; copy a Set with `new Set(prev)` then `.add(id)`.
+   Ordinary array spreads and loops remain valid. `Object.keys`, `Object.values` and
+   `Object.entries` return arrays. Spreads of `arguments` and ordinary indexed
+   array-likes work; rest destructuring of an array-like without `slice` does not.
+   String spread throws, and an ES5 string loop visits UTF-16 code units rather than
+   Unicode code points. See **Common Errors > 5. Iteration that compiles to nothing**
+   in `references/rules.md` for the pairs.
 10. Run the completeness gate on the page you wrote — the same one 5c runs on a
     worker's page, and this is also the page a 5c fallback produces:
 
@@ -1014,7 +1030,9 @@ node "${PLUGIN_ROOT}/scripts/check-griffel-styles.js" --file '<working-dir>/<fil
 ```
 
 and fix what it reports in the page yourself before Phase 6. A page that has not
-exited 0 is not deployed.
+exited 0 is not deployed. Review every generated page for iteration that compiles to
+nothing as well, and fix it yourself: the workers follow the same rule
+(`references/rules.md`, **Common Errors > 5. Iteration that compiles to nothing**).
 
 ### Phase 6: Deploy
 

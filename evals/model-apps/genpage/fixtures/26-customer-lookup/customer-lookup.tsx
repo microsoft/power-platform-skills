@@ -361,7 +361,7 @@ function PageBody(props: GeneratedComponentProps) {
       const choice = customerChoice(row);
       if (choice && !seen.has(`${choice.table}:${choice.id}`)) seen.set(`${choice.table}:${choice.id}`, choice);
     }
-    return [...seen.values()];
+    return Array.from(seen.values());
   }, [opportunities]);
   const term = searchText.trim().toLowerCase();
   // F2 searches the loaded rows only — it is not a search of every opportunity on the server.
