@@ -1,7 +1,7 @@
 'use strict';
 
 const { blankNonCodePreservingTemplateExpressions } = require('../../../../plugins/model-apps/scripts/lib/source-literals.js');
-const { jsxElements } = require('./tsx-structure.js');
+const { jsxElements, unreadableElements } = require('./tsx-structure.js');
 const { transparentBoundary } = require('./page-error-canonical.js');
 
 function groupEnd(mask, open) {
@@ -243,10 +243,13 @@ function componentNamed(mask, scopes, name) {
 // Anything else returns null, and the default export stays the component exactly as before the wrapper existed. A
 // failed proof is not evidence that a call is unrelated: what PageBody then receives is simply unproven. The proof reads
 // the source text as well as its mask (the import's module name is a string the mask blanks): without `code` it fails.
+// Type arguments of names only (`<PageBody<Props> {...props} />`) are erased before React renders, so they are read like
+// any tag; a page with an element whose type arguments are anything else (unreadableElements) proves nothing.
 const PAGE_BODY = 'PageBody';
 const PAGE_ERROR_BOUNDARY = 'PageErrorBoundary';
 function forwardedPageBody(mask, scopes, wrapper, code) {
   if (typeof code !== 'string' || code.length !== mask.length) return null;
+  if (unreadableElements(mask).length) return null;
   const propsName = wrapper?.propsName;
   if (!propsName || reassigned(mask, propsName)) return null;
   const { scope } = wrapper;

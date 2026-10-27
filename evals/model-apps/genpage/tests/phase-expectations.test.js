@@ -613,6 +613,33 @@ test('eval 13: a currency symbol or a date format spelled with character referen
   assertPass(gradeCode(text, page("const label = '&#36;' + total; return null;")));
 });
 
+// The page compiler erases a component's type arguments, so the string of a generic component's attribute renders like any
+// other: `<DataGridRow<Row> title="&euro;" />` shows "€". A tag whose type arguments are not names only (a function, string,
+// template or other type) is one the reader cannot bound for certain (lib/tsx-structure.js), so the check fails on it
+// rather than pass a symbol it could not see.
+test('eval 13: a currency symbol in a generic component\u2019s attribute is hardcoded too, and a tag the reader cannot read fails', () => {
+  const text = 'Phase 5 (Page Builder): Generated .tsx does NOT hardcode currency symbols or date formats';
+  const page = (body) => [{ name: 'page.tsx', content: `export default function GeneratedComponent() {\n  ${body}\n}\n` }];
+  for (const tag of ['<DataGridRow<Row>', '<A <Row>', '<A /* row */ <Row>', '<A\n<Row>', '<A\r\n<Row>', '<Grid<Map<string, Row[]>>', '<A.B<T | U, V & W>', '<A<B>']) {
+    assertFail(gradeCode(text, page(`return ${tag} title="&euro;" />;`)), /hardcoded currency symbol "\u20ac"/);
+  }
+  assertFail(gradeCode(text, page('return <DataGridRow<Row> title="&#36;100" />;')), /hardcoded "\$" currency symbol/);
+  assertPass(gradeCode(text, page('return <DataGridRow<Row> title={t("total")} aria-label="&amp;" />;')));
+  const unreadable = [
+    '<A<() => () => "<B<() => string>>"> title="&euro;">Hello</A>',
+    '<DataGridRow<() => () => string /* <B<() => string>> */> title="&euro;" />',
+    '<A<() => "a\\\nb"> title="&euro;" />',
+    '<A<() => "a\\\r\nb"> title="&euro;" />',
+    '<A<() => `x${string /* the type\'s name */}y`> title={t("ok")} />',
+    '<A<"a\\"//"> title="&euro;" />',
+    '<A<"a\\"/*"> title="&euro;" />',
+  ];
+  for (const tag of unreadable) {
+    const name = tag.match(/^<(\w+)/)[1];
+    assertFail(gradeCode(text, page(`return ${tag};`)), new RegExp(`^page\\.tsx: <${name}> at line 2, column 10 has type arguments that are not only names`));
+  }
+});
+
 // --- Eval 15 -----------------------------------------------------------------------------------
 
 const E15 = '15-support-tickets-real';
