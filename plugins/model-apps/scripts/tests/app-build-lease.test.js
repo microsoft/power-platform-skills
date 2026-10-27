@@ -389,17 +389,26 @@ test('a link or a folder at the lock\'s name is the file system problem it is, n
 // A claim or a lock another build is deleting while a third still has it open lingers on Windows under Node 20, and every look at it fails with EPERM
 // (helpers/delete-pending.js): a lock in use, refused as one — never a file-safety error. Elsewhere the name is gone at once, and the same steps find
 // what a build then finds: the first build's lock, or a free one.
-test('a lock or a claim another build is deleting while a third has it open is a lock in use: refused in the same words, never a file-safety error', async () => {
+const isUninspectable = (dir, name) => (e) => {
+  assert.strictEqual(e && e.code, 'build-locked', String(e && e.stack));
+  assert.strictEqual(e.phase, 'preflight');
+  assert.strictEqual(e.retry, 'never');
+  assert.strictEqual(e.message, `${REFUSAL(dir).replace(buildLock(dir), name)} Windows could not inspect ${name} (EPERM): another build may be removing it, or this user may not have access to it. If this refusal persists while no build is running, check that file's access, or remove it.`);
+  return true;
+};
+test('a lock or a claim another build is deleting while a third has it open is a lock in use: refused, never a file-safety error', async () => {
   const dir = makeTempDir('build-lease-deleting-');
   const lingers = deletedNamesLinger(dir);
   const held = gate();
   const inside = gate();
   const running = engineBuild(spec(), dir, { sdk: solutionDouble(async () => { inside.open(); await held.opened; }).sdk });
   await inside.opened;
-  const claim = deletedWhileOpen(`${buildLock(dir)}.reclaim`, JSON.stringify({ pid: process.pid, at: Date.now(), rnd: 'taking-over' }));
+  const claimName = `${buildLock(dir)}.reclaim`;
+  const claim = deletedWhileOpen(claimName, JSON.stringify({ pid: process.pid, at: Date.now(), rnd: 'taking-over' }));
   try {
     const second = solutionDouble();
-    await assert.rejects(engineBuild(spec(), dir, { sdk: second.sdk }), isBuildLocked(dir), `the claim; names deleted while open linger here: ${lingers}`);
+    // Where it lingers, the refusal names the claim Windows could not inspect, and says it may be inaccessible; elsewhere the live lock refuses.
+    await assert.rejects(engineBuild(spec(), dir, { sdk: second.sdk }), lingers ? isUninspectable(dir, claimName) : isBuildLocked(dir), `the claim; names deleted while open linger here: ${lingers}`);
     assert.deepStrictEqual(second.reads, []);
   } finally {
     claim.close();
@@ -410,7 +419,7 @@ test('a lock or a claim another build is deleting while a third has it open is a
   const lock = deletedWhileOpen(buildLock(dir), JSON.stringify({ ...ownerStamp(), rnd: 'letting-go' }));
   try {
     const next = engineBuild(spec(), dir, { sdk: solutionDouble().sdk });
-    if (lingers) await assert.rejects(next, isBuildLocked(dir), 'the lock');
+    if (lingers) await assert.rejects(next, isUninspectable(dir, buildLock(dir)), 'the lock');
     else assert.strictEqual((await next).ok, true, 'the lock is gone: free');
   } finally {
     lock.close();

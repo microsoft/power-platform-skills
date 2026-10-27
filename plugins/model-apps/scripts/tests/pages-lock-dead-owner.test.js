@@ -224,20 +224,29 @@ test('a workspace that cannot be written is that error, as it always was — not
 // Node 20 until that handle closes, and every look at it and every create of it fails with EPERM meanwhile (helpers/delete-pending.js). That is the
 // moment a release or a take-over ends: another build holds the lock, or has just held it, and a build that finds the name so is refused as by a
 // held lock — not stopped with a file-safety error or a raw EPERM. Under Node 22, and on Linux and macOS, the delete removes the name at once: the same
-// steps leave no name, and each test says what a build then finds.
+// steps leave no name, and each test says what a build then finds. A refusal for a name Windows could not inspect names THAT name — the claim, when it
+// is the claim — and adds why it may outlast every build: the same EPERM is what a file this user may not read answers.
+const UNINSPECTABLE = (name) => ` Windows could not inspect ${name} (EPERM): another build may be removing it, or this user may not have access to it. If this refusal persists while no build is running, check that file's access, or remove it.`;
+const refusedUninspectable = (name) => (e) => {
+  assert.strictEqual(e && e.code, 'pages-locked', String(e && e.stack));
+  assert.strictEqual(e.message, REFUSAL(name) + UNINSPECTABLE(name));
+  return true;
+};
 const refusedNotError = (lock) => (e) => {
   assert.strictEqual(e && e.code, 'pages-locked', String(e && e.stack));
   return refused(lock)(e);
 };
 
-test('a claim another build is deleting as its take-over ends, while a third still has it open, is a lock in use: refused in the same words, the lock untouched', (t) => {
+test('a claim another build is deleting as its take-over ends, while a third still has it open, is a lock in use: refused, naming the claim where it lingers — the lock untouched', (t) => {
   const dir = workspace(t);
   const lingers = deletedNamesLinger(dir);
   const mine = acquireAppPagesLease(dir, APP);
   const held = fs.readFileSync(canonicalFile(dir), 'utf8');
-  const claim = deletedWhileOpen(`${canonicalFile(dir)}.reclaim`, JSON.stringify({ pid: process.pid, at: Date.now(), rnd: 'taking-over' }));
+  const claimName = `${canonicalFile(dir)}.reclaim`;
+  const claim = deletedWhileOpen(claimName, JSON.stringify({ pid: process.pid, at: Date.now(), rnd: 'taking-over' }));
   try {
-    assert.throws(() => acquireAppPagesLease(dir, APP), refusedNotError(canonicalFile(dir)), `names deleted while open linger here: ${lingers}`);
+    // Where it lingers the claim is what could not be inspected; where it does not, the live lock refuses as it always has.
+    assert.throws(() => acquireAppPagesLease(dir, APP), lingers ? refusedUninspectable(claimName) : refusedNotError(canonicalFile(dir)), `names deleted while open linger here: ${lingers}`);
   } finally {
     claim.close();
   }
@@ -251,7 +260,7 @@ test('a lock another build is deleting as it lets go, while a third still has it
   const lingers = deletedNamesLinger(dir);
   const lock = deletedWhileOpen(canonicalFile(dir), JSON.stringify({ ...ownerStamp(), rnd: 'letting-go' }));
   try {
-    if (lingers) assert.throws(() => acquireAppPagesLease(dir, APP), refusedNotError(canonicalFile(dir)));
+    if (lingers) assert.throws(() => acquireAppPagesLease(dir, APP), refusedUninspectable(canonicalFile(dir)));
     else acquireAppPagesLease(dir, APP).release();
   } finally {
     lock.close();
@@ -274,7 +283,7 @@ test('a lock that starts being deleted between a build\'s look and its create is
     return real.call(this, file, data, opts);
   });
   try {
-    if (lingers) assert.throws(() => acquireAppPagesLease(dir, APP), refusedNotError(canonicalFile(dir)));
+    if (lingers) assert.throws(() => acquireAppPagesLease(dir, APP), refusedUninspectable(canonicalFile(dir)));
     else acquireAppPagesLease(dir, APP).release();
   } finally {
     if (letGo && letGo.close) letGo.close();
@@ -335,6 +344,78 @@ test('a link or a junction at the lock\'s name or at its claim\'s is still refus
     });
     assert.deepStrictEqual(fs.readdirSync(elsewhere), [], `${at}: nothing was written through it`);
     assert.deepStrictEqual(fs.readdirSync(dir).sort(), ['elsewhere', path.basename(name)].sort(), `${at}: nothing was taken or left`);
+  }
+});
+
+// The access-denied side of the same EPERM: a claim this user may not read, while no build runs at all. Under Node 20 Windows cannot inspect it, and
+// the refusal must name the claim and say to check its access — waiting cannot cure it, and the lock it would otherwise name is not even there. Under
+// Node 22 lstat is allowed for this ACL (only reading is denied), so the claim is inspected, is a plain file, and the free lock is taken. The deny is a
+// real ACL on a file this test made, and is lifted again before the folder is removed.
+test('on Windows, a claim this user may not read is refused as pages-locked and build-locked naming that claim and its access, where it cannot be inspected', { skip: process.platform !== 'win32' && 'needs Windows ACLs' }, async (t) => {
+  const { execFileSync } = require('node:child_process');
+  const { withAppBuildLease } = require('../lib/app-operation-lease.js');
+  // "<domain>\<user>","S-1-5-21-…": the SID is the last quoted field.
+  const sid = /"(S-[\d-]+)"\s*$/.exec(execFileSync('whoami', ['/user', '/fo', 'csv', '/nh'], { encoding: 'utf8' }).trim())[1];
+  const icacls = (...args) => execFileSync(path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'icacls.exe'), args, { stdio: 'ignore' });
+  const buildFile = (dir) => path.join(dir, `app-build.${sha256(APP.toLowerCase())}.lock`);
+  const BUILD_REFUSAL = (name) => `another build may be applying '${APP}' in this workspace — refusing a second concurrent apply (would risk duplicate creation). Re-run the same command after it finishes. If no build using this workspace is running, inspect ${name} and remove it only if it is abandoned; keep the workspace and its recovery records.`;
+  for (const kind of ['pages', 'build']) {
+    const dir = workspace(t);
+    const lock = kind === 'pages' ? canonicalFile(dir) : buildFile(dir);
+    const claim = `${lock}.reclaim`;
+    fs.writeFileSync(claim, '{}');
+    icacls(claim, '/deny', `*${sid}:(R)`);
+    try {
+      let look = 'inspected';
+      try { fs.lstatSync(claim); } catch (e) { look = e.code; }
+      const take = kind === 'pages'
+        ? async () => acquireAppPagesLease(dir, APP).release()
+        : () => withAppBuildLease({ workspaceDir: dir, appUniqueName: APP }, async () => {});
+      if (look === 'EPERM') {
+        await assert.rejects(take(), (e) => {
+          assert.strictEqual(e && e.code, `${kind}-locked`, `${kind}: ${String(e && e.stack)}`);
+          assert.strictEqual(e.message, (kind === 'pages' ? REFUSAL(claim) : BUILD_REFUSAL(claim)) + UNINSPECTABLE(claim), kind);
+          return true;
+        });
+        assert.ok(!fs.existsSync(lock), `${kind}: no lock was taken`);
+      } else {
+        assert.strictEqual(look, 'inspected', `${kind}: an lstat that fails otherwise is not this case`);
+        await take();
+        assert.ok(!fs.existsSync(lock), `${kind}: taken and released`);
+      }
+    } finally {
+      icacls(claim, '/remove:d', `*${sid}`);
+    }
+    assert.strictEqual(fs.readFileSync(claim, 'utf8'), '{}', `${kind}: the claim is untouched`);
+  }
+});
+
+test('a lock or claim name that cannot be inspected for another reason than EPERM is the file-safety error it always was; EPERM is a refusal on Windows only', (t) => {
+  const real = fs.lstatSync;
+  for (const code of ['EACCES', 'EIO', 'EPERM']) {
+    for (const at of ['lock', 'claim']) {
+      const dir = workspace(t);
+      const name = at === 'lock' ? canonicalFile(dir) : `${canonicalFile(dir)}.reclaim`;
+      t.mock.method(fs, 'lstatSync', function lstatSync(p, ...rest) {
+        if (path.resolve(String(p)) === name) throw Object.assign(new Error(`${code}: lstat '${p}'`), { code });
+        return real.call(this, p, ...rest);
+      });
+      try {
+        if (code === 'EPERM' && process.platform === 'win32') {
+          assert.throws(() => acquireAppPagesLease(dir, APP), refusedUninspectable(name), `${code} at the ${at}`);
+        } else {
+          assert.throws(() => acquireAppPagesLease(dir, APP), (e) => {
+            assert.strictEqual(e && e.code, 'UNSAFE_OUTPUT', `${code} at the ${at}: ${String(e && e.stack)}`);
+            assert.strictEqual(e.reason, 'uninspectable');
+            assert.strictEqual(e.message, `refusing to write ${name}: it could not be inspected (${code})`);
+            return true;
+          });
+        }
+      } finally {
+        t.mock.restoreAll();
+      }
+      assert.deepStrictEqual(fs.readdirSync(dir), [], `${code} at the ${at}: nothing was taken or left`);
+    }
   }
 });
 
