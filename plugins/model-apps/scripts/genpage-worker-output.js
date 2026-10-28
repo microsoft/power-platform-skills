@@ -10,7 +10,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 // The structural gate is shared with promote-intent-pages.js (see lib/page-structure.js).
-const { pageStructureProblems: structuralProblems } = require('./lib/page-structure.js');
+const { pageStructure, pageStructureProblems: structuralProblems } = require('./lib/page-structure.js');
 
 // A worker that returns without writing leaves whatever was at its path before, and a complete page an
 // earlier attempt left there passes every content check: the stale page was deployed instead of taking
@@ -116,7 +116,9 @@ function validatePageOutput({ filePath }) {
   }
   // Written since the stamp (or no stamp at all): the stamp has done its job.
   if (stamp) consumeStamp(abs);
-  const problems = structuralProblems(bytes.toString('utf8'));
+  const { problems, code } = pageStructure(bytes.toString('utf8'));
+  // A valid page nested too deeply for the parser is refused with the compile's own code and the page's file, not as the cut-off page the lexer's guess made of it.
+  if (code) return { ok: false, filePath: abs, code, problems: problems.map((p) => `page file "${path.basename(abs)}": ${p}`) };
   return { ok: problems.length === 0, filePath: abs, problems };
 }
 

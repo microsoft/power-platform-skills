@@ -8,16 +8,26 @@ require('./helpers/own-temp-folder.js');
 const { test } = require('node:test');
 const assert = require('node:assert');
 const { makeGenpageSdk, writeOutcome, PRE_WRITE_REFUSALS } = require('../lib/genpage-sdk.js');
-const { guardPageNesting, isStackOverflow, PAGE_NESTING_TOO_DEEP } = require('../lib/page-nesting.js');
-const { SdkError } = require('../lib/maker-sdk.js');
-const { pageStructureProblems } = require('../lib/page-structure.js');
-const { guessedPageViews } = require('../lib/typescript-views.js');
+const { guardPageNesting, isStackOverflow, PAGE_NESTING_TOO_DEEP, PAGE_NESTING_MESSAGE } = require('../lib/page-nesting.js');
+const { SdkError, createMakerSdk, createNodeWorkspaceStorage } = require('../lib/maker-sdk.js');
+const { pageStructure, pageStructureProblems } = require('../lib/page-structure.js');
+const { guessedPageViews, parseViews } = require('../lib/typescript-views.js');
+const { validatePageOutput } = require('../genpage-worker-output.js');
+const { validatePage } = require('../promote-intent-pages.js');
+const { makeTempDir } = require('./helpers/temp-dirs.js');
+const fs = require('node:fs');
+const path = require('node:path');
 const { FakeGenPageServer, INSTANCE, ACCOUNT_TABLE } = require('./helpers/fake-genpage-server.js');
 
 // A page whose root element holds `depth` nested elements. 5,000 overflows the stack on a cold or a warm compile alike, on Node 20 and 22; 100 is well inside it.
 const nested = (depth) => `import * as React from 'react';\nexport default function Page() { return ${'<div>'.repeat(depth)}x${'</div>'.repeat(depth)}; }\n`;
 const TOO_DEEP = nested(5000);
 const DEEP_BUT_FINE = nested(100);
+// A generic call signature is a guess for the lexer (an element or type parameters?), so such a page goes to TypeScript's parser — which, on 5,000 nested elements, runs out of stack.
+const GENERIC_SIGNATURE = 'interface Api { <U>(x: U): U; }\n';
+const GUESSED_TOO_DEEP = GENERIC_SIGNATURE + TOO_DEEP;
+// The same guess, on a page that really is cut off: the parser reports a diagnostic, and today's messages stand.
+const GUESSED_CUT_OFF = `${GENERIC_SIGNATURE}export default function Page() { return <div>`;
 const stackOverflow = () => new RangeError('Maximum call stack size exceeded');
 
 function makeServer() {
@@ -113,10 +123,76 @@ test('only V8\'s stack overflow counts, and an overflow that did not come out of
   assert.strictEqual(writeOutcome(Object.assign(new Error('looks typed'), { code: PAGE_NESTING_TOO_DEEP })), 'unknown', 'only an SdkError counts: the code alone is not the proof');
 });
 
-test('the parser check and the lexer meet the same page without a stack overflow: the lexer reads it whole, and a parse that overflows vouches for nothing', () => {
-  assert.deepStrictEqual(pageStructureProblems(TOO_DEEP), [], 'the lexer is iterative: a page nested 5,000 deep is a complete page to the structure gate');
-  // A generic call signature is a guess for the lexer, so the page goes to the parser, which overflows on the nesting and is read as the lexer reads it.
-  const guessed = `interface Api { <U>(x: U): U; }\n${TOO_DEEP}`;
-  assert.doesNotThrow(() => guessedPageViews(guessed));
-  assert.strictEqual(guessedPageViews(guessed).views, null);
+test('a parse that runs out of stack is told apart from every other parse failure, and only on the page it ran out on', () => {
+  // buildViews reads the enum members before it calls the parser, so the fake carries them.
+  const throwing = (error) => ({ ScriptTarget: { Latest: 99 }, ScriptKind: { TSX: 4 }, createSourceFile: () => { throw error; } });
+  assert.deepStrictEqual(parseViews('x', { ts: throwing(stackOverflow()) }), { views: null, tooDeep: true });
+  for (const other of [new Error('boom'), new RangeError('Invalid array length'), new TypeError('Maximum call stack size exceeded')]) {
+    assert.deepStrictEqual(parseViews('x', { ts: throwing(other) }), { views: null, tooDeep: false }, String(other));
+  }
+  assert.strictEqual(guessedPageViews(GUESSED_TOO_DEEP).tooDeep, true, 'the real parse of the real page');
+  assert.strictEqual(guessedPageViews(GUESSED_TOO_DEEP).views, null);
+  assert.strictEqual(guessedPageViews(GUESSED_CUT_OFF).tooDeep, false, 'a page the parser reports a diagnostic on is not a nesting problem');
+  assert.strictEqual(guessedPageViews(TOO_DEEP).tooDeep, false, 'the lexer did not guess, so no parse was asked for, and none ran out');
+  assert.strictEqual(guessedPageViews(DEEP_BUT_FINE).tooDeep, false);
 });
+
+function writePage(dir, name, text) {
+  fs.writeFileSync(path.join(dir, name), text);
+  return path.join(dir, name);
+}
+
+test('/genpage\'s output gate and the promotion gate refuse a valid page that the parser cannot read for want of stack with the compile\'s code and the page\'s name, not as a cut-off page', () => {
+  const dir = makeTempDir('nest-gates-');
+  const file = writePage(dir, 'Nested page.tsx', GUESSED_TOO_DEEP);
+  const worker = validatePageOutput({ filePath: file });
+  assert.strictEqual(worker.ok, false);
+  assert.strictEqual(worker.code, PAGE_NESTING_TOO_DEEP);
+  assert.strictEqual(worker.problems.length, 1, JSON.stringify(worker.problems));
+  assert.match(worker.problems[0], /^page file "Nested page\.tsx": the elements of the page nest too deeply to compile .* split the page into components/);
+  assert.ok(!/truncated|default export|mid-statement/.test(worker.problems.join('\n')), 'no symptom of the lexer\'s wrong reading');
+
+  // The promotion gate reads the same page and, being asked about navigation as well, says nothing of it: what it would find is read from the same wrong view.
+  const promoted = validatePage({ key: 'overview', name: 'Overview', source: { kind: 'tsx', codeFile: 'Nested page.tsx' }, navigatesTo: ['other'] }, dir);
+  assert.strictEqual(promoted.code, PAGE_NESTING_TOO_DEEP);
+  assert.strictEqual(promoted.key, 'overview');
+  assert.strictEqual(promoted.file, 'Nested page.tsx');
+  assert.strictEqual(promoted.problems.length, 1, JSON.stringify(promoted.problems));
+  assert.match(promoted.problems[0], /^page "Overview" \(Nested page\.tsx\): the elements of the page nest too deeply to compile .* split the page into components/);
+  assert.deepStrictEqual(pageStructure(GUESSED_TOO_DEEP), { problems: [PAGE_NESTING_MESSAGE], code: PAGE_NESTING_TOO_DEEP });
+});
+
+test('the gates keep today\'s answers for every page that is not one the parser ran out of stack on', () => {
+  const dir = makeTempDir('nest-gates-');
+  // The same deep page without a guess is read whole by the lexer: complete, nothing refused, no code.
+  assert.deepStrictEqual(pageStructure(TOO_DEEP), { problems: [], code: null });
+  const plain = validatePageOutput({ filePath: writePage(dir, 'plain.tsx', TOO_DEEP) });
+  assert.deepStrictEqual({ ok: plain.ok, code: plain.code, problems: plain.problems }, { ok: true, code: undefined, problems: [] });
+  assert.deepStrictEqual(validatePage({ key: 'plain', name: 'Plain', source: { kind: 'tsx', codeFile: 'plain.tsx' } }, dir), { key: 'plain', file: 'plain.tsx', problems: [] });
+
+  // A guessed page that really is cut off: the parser reports a diagnostic (no stack overflow), and the lexer's messages stand, with no code.
+  const cut = pageStructure(GUESSED_CUT_OFF);
+  assert.strictEqual(cut.code, null);
+  assert.ok(cut.problems.length > 0 && cut.problems.some((p) => /truncated|default export/.test(p)), JSON.stringify(cut.problems));
+  assert.deepStrictEqual(pageStructureProblems(GUESSED_CUT_OFF), cut.problems);
+  const refused = validatePageOutput({ filePath: writePage(dir, 'cut.tsx', GUESSED_CUT_OFF) });
+  assert.strictEqual(refused.ok, false);
+  assert.strictEqual(refused.code, undefined);
+  assert.deepStrictEqual(refused.problems, cut.problems, 'no page name is added to a problem that is not the nesting one');
+  assert.strictEqual(pageStructure('').code, null);
+  assert.deepStrictEqual(pageStructureProblems(''), ['file is empty']);
+  // A small page with a generic signature that parses is read as the parser reads it, as before.
+  assert.deepStrictEqual(pageStructure(`${GENERIC_SIGNATURE}${DEEP_BUT_FINE}`), { problems: [], code: null });
+});
+
+test('a push through the factory\'s own SDK, with no page backend over it, is refused with the same code and nothing is written; the page\'s name is the backend\'s to add', async () => {
+  const server = makeServer();
+  const folder = makeTempDir('nest-direct-');
+  const sdk = createMakerSdk({ workspaceStorage: createNodeWorkspaceStorage(folder), instanceUrl: INSTANCE, httpClient: server.http() });
+  await sdk.initWorkspace();
+  const page = await sdk.createArtifact('genPage', { name: 'Direct', source: TOO_DEEP, dataSources: ['account'], newTurn: { prompt: 'p' } });
+  await assert.rejects(sdk.pushArtifact('genPage', page.id), (e) => e instanceof SdkError && e.code === PAGE_NESTING_TOO_DEEP && !(e instanceof RangeError) && !/Maximum call stack/.test(e.message));
+  assert.deepStrictEqual(changeWrites(server), [], 'the compile comes before every write');
+  assert.strictEqual(server.state.projects.size, 0);
+});
+

@@ -28,6 +28,7 @@
 //     type (`asserts x`); `readonly` before a type that is no array or tuple; and an empty list of type arguments or type parameters (`A<>`).
 const { loadVendoredTypeScript } = require('./typescript-compiler.js');
 const { blankNonCodePreservingTemplateExpressions, isLineTerminator } = require('./source-literals.js');
+const { isStackOverflow } = require('./page-nesting.js');
 
 // The views of the last sources asked about: the oracle lexes one source several times per call (resolve, stray, residual), and each would parse it again.
 const CACHE_LIMIT = 8;
@@ -47,23 +48,32 @@ function setParserCheck(enabled) {
  * @param {{ ts?: object }} [options] `ts`: a TypeScript namespace to parse with (a test seam; the vendored compiler otherwise)
  * @returns {null | { literal: string, keep: string, comments: Array<{ start: number, end: number, text: string }>, regexEnds: Set<number>, jsxTagEnds: Set<number> }}
  */
-function typescriptViews(src, { ts = null } = {}) {
-  if (!ts && !parserCheck) return null;
+function typescriptViews(src, options) {
+  return parseViews(src, options).views;
+}
+
+// typescriptViews, and whether the parse work failed for want of stack (`tooDeep`) — the one failure told apart from the others, because it is the page's fault and the
+// maker can fix it (page-nesting.js). The caller that has no use for the difference reads `views`, which is null for it as for every other failure.
+function parseViews(src, { ts = null } = {}) {
+  if (!ts && !parserCheck) return NO_VIEWS;
   const text = String(src == null ? '' : src);
   if (!ts && cache.has(text)) return cache.get(text);
-  let views = null;
+  let result;
   try {
-    views = buildViews(ts || loadVendoredTypeScript(), text);
-  } catch {
+    result = { views: buildViews(ts || loadVendoredTypeScript(), text), tooDeep: false };
+  } catch (error) {
     // Fail closed: a compiler that cannot be loaded (its provenance check failed) or a parse that cannot be walked vouches for nothing, and the lexer's guesses stand.
-    views = null;
+    // A stack overflow in the parse or in the walk over it (one level of recursion per nested element) is the same failure, but is kept apart: it says the page nests
+    // too deeply, not that it is cut off. It is recognised by what was thrown, not by a depth, as the compile's is (page-nesting.js).
+    result = { views: null, tooDeep: isStackOverflow(error) };
   }
   if (!ts) {
     if (cache.size >= CACHE_LIMIT) cache.delete(cache.keys().next().value);
-    cache.set(text, views);
+    cache.set(text, result);
   }
-  return views;
+  return result;
 }
+const NO_VIEWS = Object.freeze({ views: null, tooDeep: false });
 
 function buildViews(ts, src) {
   const sf = ts.createSourceFile('page.tsx', src, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
@@ -201,9 +211,10 @@ function readAnotherWay(ts, src, sf, node) {
  * The lexer's executable view of `src` and its first guess (`onAmbiguity`: { at, kind }, or null), and — where it guessed — the parser's views of the page
  * (typescriptViews), which settle the guess: null where the lexer did not guess, where it guessed a JSX attribute string after trivia (no parser settles that one), and
  * where typescriptViews has none. The one place the navigation oracle (pageref-resolver.js) and the structure gate (page-structure.js) decide which reading stands,
- * so the two never decide it differently.
+ * so the two never decide it differently. `tooDeep` is true where that parse ran out of stack space (page-nesting.js): the page is valid, and the lexer's view of it,
+ * which stands, is the wrong one — the gates say the page nests too deeply, not that it is cut off.
  * @param {string} src
- * @returns {{ keep: string, frontier: null | { at: number, kind: string }, views: null | object }}
+ * @returns {{ keep: string, frontier: null | { at: number, kind: string }, views: null | object, tooDeep: boolean }}
  */
 function guessedPageViews(src) {
   let frontier = null;
@@ -214,7 +225,8 @@ function guessedPageViews(src) {
       if (!frontier || at < frontier.at) frontier = { at, kind };
     },
   });
-  return { keep, frontier, views: frontier !== null && !jsxAttribute ? typescriptViews(src) : null };
+  const parsed = frontier !== null && !jsxAttribute ? parseViews(src) : NO_VIEWS;
+  return { keep, frontier, views: parsed.views, tooDeep: parsed.tooDeep };
 }
 
-module.exports = { typescriptViews, guessedPageViews, setParserCheck };
+module.exports = { typescriptViews, parseViews, guessedPageViews, setParserCheck };
