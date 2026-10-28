@@ -49,6 +49,7 @@ const { makeThrottleBudget, waitDoesNotFit, spentNote } = require('./throttle-bu
 const { mergeBindings } = require('./page-bindings.js');
 const { isRestrictedSolution } = require('./system-solutions.js');
 const { readTargetSolution, readPageComponentType, pageComponent } = require('./page-solution.js');
+const { asPageNestingRefusal } = require('./page-nesting.js');
 
 const GUID_RE = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
 
@@ -123,6 +124,8 @@ const codeOf = (error) => (error && typeof error.code === 'string' && error.code
 //   PAGE_NESTING_TOO_DEEP             the page's elements nest so deeply that the compiler ran out of stack space (lib/page-nesting.js raises it from the
 //                                     compiler the SDK is given; the SDK compiles ahead of every write, so a push that raises it wrote nothing to the
 //                                     service, though its metadata reads may already have been made)
+//   GENPAGE_COMPILE_DEPTH_EXCEEDED    the SDK's own refusal of the same page, from a stage of its compile the guard above does not wrap; pushOnce reports it
+//                                     as PAGE_NESTING_TOO_DEEP (lib/page-nesting.js, asPageNestingRefusal), and it is listed here so the proof never depends on that
 //   GENPAGE_CONTENT_WRITE_UNSUPPORTED, GENPAGE_TURN_NOT_ATOMIC
 //                                     the transport cannot write this page as one change set (assertContentWritable / assertTurnWritable)
 //   GENPAGE_TURN_CONFLICT             the pending turn's id is already recorded as a different message (`unrecordedTurn`, a read)
@@ -135,7 +138,7 @@ const codeOf = (error) => (error && typeof error.code === 'string' && error.code
 // be one of these, on an SdkError.
 const PRE_WRITE_REFUSALS = new Set([
   'VALIDATION_ERROR',
-  'GENPAGE_COMPILER_UNAVAILABLE', 'GENPAGE_COMPILER_VERSION', 'GENPAGE_COMPILER_INVALID', 'GENPAGE_RUNTIME_TYPES_INVALID', 'PAGE_NESTING_TOO_DEEP',
+  'GENPAGE_COMPILER_UNAVAILABLE', 'GENPAGE_COMPILER_VERSION', 'GENPAGE_COMPILER_INVALID', 'GENPAGE_RUNTIME_TYPES_INVALID', 'PAGE_NESTING_TOO_DEEP', 'GENPAGE_COMPILE_DEPTH_EXCEEDED',
   'GENPAGE_CONTENT_WRITE_UNSUPPORTED', 'GENPAGE_TURN_NOT_ATOMIC', 'GENPAGE_TURN_CONFLICT',
   'GENPAGE_RETAIN_ON_CREATE', 'GENPAGE_RETAINED_ROW_MISSING', 'GENPAGE_CONTENT_NOT_TEXT', 'GENPAGE_WRITE_UNKNOWN',
   'ARTIFACT_NOT_FOUND', 'ARTIFACT_LANGUAGE_MISMATCH', 'ARTIFACT_PROJECTION_STALE',
@@ -165,6 +168,14 @@ function writeOutcome(error) {
     return Number.isInteger(status) && status >= 400 && status < 500 ? 'nothing' : 'unknown';
   }
   return PRE_WRITE_REFUSALS.has(error.code) ? 'nothing' : 'unknown';
+}
+
+// A push's failure as the maker is told it: the SDK's own refusal of a page too deep to compile is the plugin's PAGE_NESTING_TOO_DEEP, with the plugin's instruction
+// ("split the page into components"), so the maker sees one refusal whichever layer caught the overflow (lib/page-nesting.js). Only the SDK's typed error is translated.
+function nestingRefusalOf(error) {
+  if (!isSdkError(error)) return error;
+  const { SdkError } = require('./maker-sdk.js');
+  return asPageNestingRefusal(error, (code, message) => new SdkError(code, message));
 }
 
 // A send the service refused with a throttle: the SDK's typed `ConnectionError` with status 429, read from its structure and never from its words. Dataverse's service protection limits answer a request they will not
@@ -807,11 +818,12 @@ function makeGenpageSdk(env, deps = {}) {
     let result;
     try {
       result = await sdk.pushArtifact('genPage', id);
-    } catch (error) {
+    } catch (thrown) {
+      const error = nestingRefusalOf(thrown);
       return unsaved(writeOutcome(error), error);
     }
     if (result && result.saved === true) return { saved: true, result };
-    const error = result && result.error;
+    const error = nestingRefusalOf(result && result.error);
     if (error && error.code === 'ARTIFACT_ALREADY_EXISTS') return unsaved('exists', error);
     if (error && error.code === 'VERSION_CONFLICT') return unsaved('conflict', error);
     return unsaved(error ? writeOutcome(error) : 'unknown', error || new Error('the SDK did not report the page as saved'));
