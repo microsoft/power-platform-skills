@@ -1371,7 +1371,7 @@ test('download leaves an id after a place the lexer reads by guess, and says whe
     'export default function Overview() {',
     `  navigateTo({pageType:"generative",pageId:"${id}"});`,
     '  const of = 12;',
-    '  const count = of/2; const re = /\\/*$/;',
+    '  for (const x of of/2 + "") {} const re = /\\/*$/;',
     `  const note = "*/ navigateTo({pageType:'generative', pageId:'${id}'}) /*";`,
     `  navigateTo({pageType:"generative",pageId:"${id}"});`,
     '  return null;',

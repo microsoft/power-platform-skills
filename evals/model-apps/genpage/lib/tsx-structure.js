@@ -16,19 +16,27 @@
 //   view:    <Field label="··········"><Input aria-label="·····" value={form.x} /></Field>
 //   source:  <Text>Hello {name} world</Text>      view:  <Text>······{name}······</Text>
 // Limits, by design (each check that uses this says which it lives with):
-//   - an element is found where a `<Name` stands at the start of an expression (after `(`, `=`, `,`,
-//     `?`, `:`, `{`, `}`, `>`, `&&`, `return`, …); `useState<Row>(…)` and `a < b` are not elements;
-//   - a closing tag is matched by name, counting nested same-name elements;
+//   - an element is found where a `<Name` (its first character a letter, `_` or `$`) stands at the start of an
+//     expression (after `(`, `=`, `,`, `?`, `:`, `{`, `}`, `>`, `&&`, `return`, …); `useState<Row>(…)` and `a < b`, `a <_b`
+//     are not elements;
+//   - an element's type arguments are read when they are names only (`<DataGridRow<Row> title="…">`);
+//     any other (`<List<(r: Row) => string>>`) makes the element unreadable, and a check that reads
+//     elements or JSX text fails closed on its page (unreadableElements);
+//   - a closing tag is matched by name, counting the nested same-name openings of the one tag traversal,
+//     so a name inside another tag's type arguments (`<B<of<A<T>>>`) is never an opening;
 //   - JSX text is a blanked run whose nearest code character before it is `>` or `}` (a string's run
 //     follows its quote, a template's its backtick, a regex body its `/`), comments excluded;
 //   - a function's scope is a body `{…}` (or an arrow's expression) found from `=>` and `function`;
 //     a declaration with no semicolon may run on into the next statement.
 
-const { blankLiterals, commentRanges } = require('../../../../plugins/model-apps/scripts/lib/source-literals.js');
+const { blankLiterals, commentRanges, ofTakesOperand } = require('../../../../plugins/model-apps/scripts/lib/source-literals.js');
 const { renderedText, characterReferences, hasReference } = require('./jsx-references.js');
 
 const IDENT_CHAR = /[\w$]/;
-// Words after which an expression (so an element) may start, as in source-literals.js EXPR_START_WORDS.
+// Words after which an expression (so an element) may start, as in source-literals.js EXPR_START_WORDS. `of` is one wherever the lexer's
+// own rule (ofTakesOperand) cannot prove from its immediate context that it is no `for…of` keyword — a `(` right after `for` or `await`,
+// a word it cannot read whole, a bracket beyond its reach — and the page may then be misread as before; elsewhere it is a name
+// (`type of<T> = T`, `fn<of<Row>>()`).
 const EXPR_WORDS = new Set(['return', 'yield', 'await', 'default', 'case', 'else', 'do', 'in', 'of', 'typeof', 'void', 'throw']);
 const OPENERS = { '(': ')', '[': ']', '{': '}' };
 
@@ -53,7 +61,10 @@ function wordBefore(code, end) {
 function elementMayStart(code, at) {
   const k = prevSignificant(code, at);
   if (k < 0) return true;
-  if (IDENT_CHAR.test(code[k])) return EXPR_WORDS.has(wordBefore(code, k));
+  if (IDENT_CHAR.test(code[k])) {
+    const word = wordBefore(code, k);
+    return word === 'of' ? ofTakesOperand(code, k).operand : EXPR_WORDS.has(word);
+  }
   return !/[)\]]/.test(code[k]);
 }
 
@@ -73,7 +84,103 @@ function matchingClose(code, open) {
   return -1;
 }
 
-// The end of an opening tag whose name ends at `from`: the index of its `>`, and whether it is `/>`.
+// Words that start a type operator, a type predicate or a constructor type, never a type's name: `<A<keyof Row>>` is no
+// list of names.
+const TYPE_OPERATOR_WORDS = new Set(['keyof', 'typeof', 'infer', 'unique', 'readonly', 'asserts', 'new', 'abstract', 'is', 'extends']);
+const TYPE_NAME = /[A-Za-z_$][\w$]*/y;
+// A JSX tag's name: an identifier (a letter, `_` or `$`, then letters, digits, `_` or `$`), with `.` for a member
+// (`Toolbar.Item`). A hyphenated intrinsic name (`<my-element>`) is not read.
+const TAG_NAME = '[A-Za-z_$][\\w$.]*';
+// Deeper nesting than this is not read (a page never needs it); it is reported as unreadable rather than recursed into.
+const MAX_TYPE_ARGUMENT_DEPTH = 64;
+
+// The type arguments that open at `open` (a `<` in the code view, right after a tag's name and its trivia) when they are
+// made of names only, the form the plugin's lexer reads for certain (source-literals.js, its jsxTag mode: "for names and
+// their unions, arrays and nested arguments (`<DataGridRow<Account>`) this scan and TypeScript read the tag alike"):
+//   arguments := `<` type (`,` type)* `>`
+//   type      := [`|` | `&`] operand ((`|` | `&`) operand)*
+//   operand   := name (`.` name)* [arguments] (`[` `]`)*
+// with white space between any two tokens; a comment there is white space in the code view already. Returns the index just
+// after the closing `>`, or -1 for anything else: a string, template, object, tuple, function, conditional, indexed,
+// keyof/typeof or literal type — where the lexer only guesses (its `jsx-type-arguments` ambiguity), since TypeScript
+// scans those by rules the lexer does not have:
+//   <DataGridRow<Row>              → read      <Grid<Map<string, Row[]>>>   → read     <A.B<T | U, V & W>  → read
+//   <A<"a\"b">   <A<() => T>   <A<{ x: T }>   <A<[T, U]>   <A<T["k"]>   <A<keyof T>   <A<1>   → -1
+function namesOnlyTypeArguments(code, open) {
+  let i = open;
+  const skip = () => { while (i < code.length && /\s/.test(code[i])) i += 1; };
+  const name = () => {
+    TYPE_NAME.lastIndex = i;
+    const m = TYPE_NAME.exec(code);
+    if (!m) return null;
+    i += m[0].length;
+    return m[0];
+  };
+  const operand = (depth) => {
+    skip();
+    const first = name();
+    if (!first || TYPE_OPERATOR_WORDS.has(first)) return false;
+    skip();
+    while (code[i] === '.') {
+      i += 1;
+      skip();
+      if (!name()) return false;
+      skip();
+    }
+    if (code[i] === '<' && !list(depth + 1)) return false;
+    skip();
+    while (code[i] === '[') {
+      i += 1;
+      skip();
+      if (code[i] !== ']') return false;
+      i += 1;
+      skip();
+    }
+    return true;
+  };
+  const type = (depth) => {
+    skip();
+    if (code[i] === '|' || code[i] === '&') i += 1;
+    for (;;) {
+      if (!operand(depth)) return false;
+      if (code[i] !== '|' && code[i] !== '&') return true;
+      i += 1;
+    }
+  };
+  // At a `<`: the list, through its `>`.
+  const list = (depth) => {
+    if (depth > MAX_TYPE_ARGUMENT_DEPTH) return false;
+    i += 1;
+    for (;;) {
+      if (!type(depth)) return false;
+      if (code[i] !== ',') break;
+      i += 1;
+    }
+    if (code[i] !== '>') return false;
+    i += 1;
+    return true;
+  };
+  return list(0) ? i : -1;
+}
+
+// What follows a tag's name, which ends at `nameEnd` in the code view: where its attributes start, past the type arguments
+// TypeScript reads there — after white space, a line break or a comment too (parser.ts, tryParseTypeArguments,
+// https://github.com/microsoft/TypeScript/blob/v5.8.3/src/compiler/parser.ts) — or null when it has type arguments that are
+// not names only (namesOnlyTypeArguments), whose extent this reader does not know for certain:
+//   <Input value={v} />           → { attrsFrom: after `Input` }
+//   <DataGridRow<Row> key={id}>    → { attrsFrom: after `<Row>`, typeArguments: true }
+//   <List<(r: Row) => string> …>   → null
+function openingTag(code, nameEnd) {
+  let i = nameEnd;
+  while (i < code.length && /\s/.test(code[i])) i += 1;
+  if (code[i] !== '<') return { attrsFrom: nameEnd, typeArguments: false };
+  const end = namesOnlyTypeArguments(code, i);
+  // After the arguments TypeScript reads attributes, a `/>` or a `>`; anything else is no tag this reader can bound.
+  if (end < 0 || !/[\s/>{A-Za-z_$]/.test(code[end] || '')) return null;
+  return { attrsFrom: end, typeArguments: true };
+}
+
+// The end of an opening tag whose attributes start at `from`: the index of its `>`, and whether it is `/>`.
 function tagEnd(code, from) {
   let depth = 0;
   for (let i = from; i < code.length; i += 1) {
@@ -128,30 +235,52 @@ function readAttributes(src, code, from, end) {
   return attrs;
 }
 
+// The `<Name` of every tag that stands where an element may start, in source order: { name, start, open } where `open` is
+// its openingTag, or null when its type arguments are not names only. A `<` inside a tag's type arguments that were read
+// is part of them, never a tag of its own (`<A<B<C>>>` is one tag). A closing tag (`</Name>`) is no match here.
+function* openingTags(code) {
+  const re = new RegExp(`<(${TAG_NAME})(?=[\\s/><])`, 'g');
+  for (let m = re.exec(code); m; m = re.exec(code)) {
+    if (!elementMayStart(code, m.index)) continue;
+    const open = openingTag(code, m.index + m[0].length);
+    if (open && open.typeArguments) re.lastIndex = open.attrsFrom;
+    yield { name: m[1], start: m.index, open };
+  }
+}
+
 // Every element of the page whose tag name `accept` allows (a Set, a RegExp, or nothing for all), in
 // source order: { name, start, openEnd, selfClosing, attrs, childrenStart, childrenEnd, end }. The
-// children of a self-closing element, or of one whose closing tag cannot be found, are empty.
+// children of a self-closing element, or of one whose closing tag cannot be found, are empty. An element
+// with type arguments of names only (`<DataGridRow<Row> key={id}>`) is read like any other; one whose type
+// arguments are anything else is not read here, and unreadableElements reports it.
 function jsxElements(content, accept = null) {
   const { src, code } = sourceView(content);
   const allowed = (name) => !accept || (accept instanceof Set ? accept.has(name) : accept.test(name));
   const out = [];
-  for (const m of code.matchAll(/<([A-Za-z][\w.]*)(?=[\s/>])/g)) {
-    const name = m[1];
-    if (!allowed(name) || !elementMayStart(code, m.index)) continue;
-    const tag = tagEnd(code, m.index + m[0].length);
+  const tags = [...openingTags(code)].filter((tag) => tag.open);
+  // The readable openings of each name, for closingTag: found by the one traversal above, which steps over every tag's
+  // type arguments, so a name inside another tag's arguments (`<Box<of<Field<Row>>> />`) is never an opening.
+  const openings = new Map();
+  for (const tag of tags) {
+    if (!openings.has(tag.name)) openings.set(tag.name, []);
+    openings.get(tag.name).push(tag);
+  }
+  for (const { name, start, open } of tags) {
+    if (!allowed(name)) continue;
+    const tag = tagEnd(code, open.attrsFrom);
     if (!tag) continue;
     const element = {
       name,
-      start: m.index,
+      start,
       openEnd: tag.end + 1,
       selfClosing: tag.selfClosing,
-      attrs: readAttributes(src, code, m.index + m[0].length, tag.end),
+      attrs: readAttributes(src, code, open.attrsFrom, tag.end),
       childrenStart: tag.end + 1,
       childrenEnd: tag.end + 1,
       end: tag.end + 1,
     };
     if (!tag.selfClosing) {
-      const close = closingTag(code, name, tag.end + 1);
+      const close = closingTag(code, name, tag.end + 1, openings.get(name));
       if (close) Object.assign(element, { childrenEnd: close.start, end: close.end });
     }
     out.push(element);
@@ -159,22 +288,50 @@ function jsxElements(content, accept = null) {
   return out;
 }
 
-// The `</name>` that closes an element whose opening tag ends before `from`, counting nested
-// non-self-closing elements of the same name.
-function closingTag(code, name, from) {
-  const re = new RegExp(`<(/?)${name.replace(/[.$]/g, '\\$&')}(?=[\\s/>])`, 'g');
+// Every tag in element position whose type arguments are not names only, as { name, start, line, column } (1-based, in
+// UTF-16 units, a line ending at LF, CR LF or a lone CR, as an editor counts). The plugin's lexer only guesses where such a
+// tag ends (its `jsx-type-arguments` ambiguity), so the code view from there on may hold strings as code or attributes as
+// text, and jsxElements skips the tag. A check that reads elements or JSX text fails closed on a page that has one
+// (unreadableElementProblems).
+function unreadableElements(content) {
+  const { src, code } = sourceView(content);
+  const out = [];
+  for (const { name, start, open } of openingTags(code)) {
+    if (open) continue;
+    const before = src.slice(0, start);
+    const breaks = [...before.matchAll(/\r\n|\r|\n/g)];
+    const lineStart = breaks.length ? breaks.at(-1).index + breaks.at(-1)[0].length : 0;
+    out.push({ name, start, line: breaks.length + 1, column: start - lineStart + 1 });
+  }
+  return out;
+}
+
+// The problem a check reports, as its first, for a page it cannot read for certain (unreadableElements): the first such tag,
+// where it is, and why. Empty when every element is read.
+function unreadableElementProblems(content) {
+  const [first] = unreadableElements(content);
+  if (!first) return [];
+  return [`<${first.name}> at line ${first.line}, column ${first.column} has type arguments that are not only names (a string, template, object, function or other type), which this check cannot read for certain`];
+}
+
+// The `</name>` that closes an element whose opening tag ends before `from`, counting the nested non-self-closing
+// elements of the same name among `openings` (that name's readable tags from openingTags, in source order). A closing
+// tag holds no type arguments, and names-only type arguments hold no `</`, so every `</name` match is a closing tag.
+function closingTag(code, name, from, openings = []) {
+  const re = new RegExp(`</${name.replace(/[.$]/g, '\\$&')}(?=[\\s/>])`, 'g');
   re.lastIndex = from;
   let depth = 1;
+  let next = openings.findIndex((tag) => tag.start >= from);
+  if (next < 0) next = openings.length;
   for (let m = re.exec(code); m; m = re.exec(code)) {
-    if (m[1]) {
-      depth -= 1;
-      if (depth === 0) {
-        const gt = code.indexOf('>', m.index);
-        return gt < 0 ? null : { start: m.index, end: gt + 1 };
-      }
-    } else if (elementMayStart(code, m.index)) {
-      const tag = tagEnd(code, m.index + m[0].length);
+    for (; next < openings.length && openings[next].start < m.index; next += 1) {
+      const tag = tagEnd(code, openings[next].open.attrsFrom);
       if (tag && !tag.selfClosing) depth += 1;
+    }
+    depth -= 1;
+    if (depth === 0) {
+      const gt = code.indexOf('>', m.index);
+      return gt < 0 ? null : { start: m.index, end: gt + 1 };
     }
   }
   return null;
@@ -511,7 +668,8 @@ function nestedDefinitionProblems(content) {
 }
 
 module.exports = {
-  sourceView, jsxElements, jsxTextRuns, renderedSource, declarationSource, matchingClose, patternNames,
+  sourceView, jsxElements, unreadableElements, unreadableElementProblems, jsxTextRuns, renderedSource, declarationSource,
+  matchingClose, patternNames,
   namedFunctions, nestedDefinitionProblems, withoutComments,
   // Exported so that a check needing a page's function scopes reads them through this reader instead of a second one.
   functionScopes,

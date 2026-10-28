@@ -5,6 +5,23 @@ All notable changes to the **model-apps** plugin.
 Entries are deliberately short: what changed and why it matters to you. The reasoning,
 evidence and trade-offs behind a change live in its PR, in `docs/`, or in the linked issue.
 
+## [2.20.3]
+
+The bundled SDK is unchanged (power-platform-ux a3443479).
+
+### Fixed
+
+- **Lookup discovery takes only strings as table, column and id names.** A malformed metadata answer (a null, true/false or a
+  list) now fails the read instead of becoming a name such as "null".
+- **On Windows with Node 20, a build that meets an app lock being released or taken over reports another build**, naming the
+  file it could not inspect, instead of a file-safety or raw EPERM error.
+- **On Windows, a script that starts while another is still making the plugin's temp folder private asks again**, instead of
+  putting every workspace of its run in the plain temp folder. This happened where the temp folder lets other users write.
+- **On Windows, a script that cannot make its new plugin temp folder private retries removing it for up to ten seconds**; it
+  used to leave it, sending every later script to the plain temp folder. A timeout or killed script can still leave it.
+- **Pages that use `of` as a variable or type name are read correctly by the build's page checks** wherever its context rules
+  out a `for…of` keyword; where it could be one, the earlier cautious reading stays.
+
 ## [2.20.2]
 
 The bundled SDK is unchanged (power-platform-ux a3443479).

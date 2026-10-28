@@ -26,9 +26,9 @@
 //
 // WHO IS TRUSTED TO HAVE MADE THE FOLDER. On POSIX the plugin's folder must be a plain folder this user owns and nobody else can write to (uid and mode). Windows gives Node
 // no owner and no permissions, so an access list stands in (lib/windows-folder-acl.js): a folder this process MAKES is given an explicit, protected one before anything is put in it — only this
-// user, the system and the administrators, full control, inherited by every workspace and record made inside — and read back, and a folder that cannot be made so is removed and not used;
+// user, the system and the administrators, full control, inherited by every workspace and record made inside — and read back, and a folder that cannot be made so is removed (once other runs' holds have left it: removeUnprotectedParent) and not used;
 // an EXISTING folder is used only if it is this user's (or the administrators') and NO entry of its list, an inherit-only one too, lets anyone else add to it, write to it, delete it
-// or take it over. The answer is asked once per folder and process. A folder that Windows is still removing — the last handle on it has not closed — refuses a new
+// or take it over. The answer is asked once per folder and process (but a "no" about a folder another run made moments ago, and has not yet given its own list, is asked again: checkParent). A folder that Windows is still removing — the last handle on it has not closed — refuses a new
 // entry and cannot be read for a moment: the attempt is made again after short pauses, and one that is still refusing after the last is not used (WAITS_MS).
 //
 // A RUN HOLDS THE FOLDER WHILE IT JUDGES IT (Windows). Asking whether a folder that is there is private starts three programs (lib/windows-folder-acl.js) and takes about a second — more on a busy machine —
@@ -157,6 +157,18 @@ const pauseSync = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),
 const windowsRefusesForAMoment = (e, deps) => uidOf(deps) === null && !!e && TRANSIENT_CODES.has(e.code);
 // The code of the failure of a folder that this process made and could not make private (Windows): the folder is not used, and not tried again by this process (`refusing`, below).
 const NOT_PRIVATE = 'ENOTPRIVATE';
+// The code of a "no" about a folder that may yet be made private by the run that made it (Windows: checkParent): the attempt is made again after a pause, and a folder that is still saying it after the last is not used for
+// this workspace — but it is not refused for the life of the process either, as a folder that is not private by anyone's choice is.
+const NOT_YET_PRIVATE = 'ENOTYETPRIVATE';
+// How long after it was made a folder whose access list is still all it took from the one above may be one that its maker has not yet given a list of its own: the maker's icacls is given 10 s
+// (lib/windows-folder-acl.js), and a maker whose icacls did not answer in that time removes the folder. Measured: about 200 ms on average, and up to about a second on a busy machine.
+const PROTECT_WINDOW_MS = 15000;
+// How long a maker whose folder could not be made private waits for other runs' holds to leave it before it leaves it (removeUnprotectedParent), and how often it looks. A hold is kept for one judgement
+// (three programs: about a second, a few on a busy machine) and let go before every pause, so ten seconds covers several judgements back to back by several runs; a look is an lstat, an rmdir and a listing,
+// so looking every 20 ms costs nothing worth counting, and lands in the shortest pause of a judge (WAITS_MS: 25 ms). The wait happens only after a failed protection — the rare path this is for — and the
+// run then works in the plain temp folder, as it did.
+const REMOVE_PATIENCE_MS = 10000;
+const REMOVE_PAUSE_MS = 20;
 
 // The folder the plugin keeps its workspaces in, for the temp folder `deps.os` (the real one) names. Windows gives each user a temp folder of their
 // own (GetTempPath reads TMP, TEMP, then the profile: https://learn.microsoft.com/windows/win32/api/fileapi/nf-fileapi-gettemppatha), and so does
@@ -173,6 +185,11 @@ function workspaceParent(deps = {}) {
 //
 // That is read once per folder and process, whatever the answer (the cache below): a run that makes a workspace for each of forty dashboards would otherwise start three programs
 // forty times. The key names the folder itself — its place, device, file id and creation time — so a folder that is removed and made again by someone else is judged again.
+// The one "no" that is not remembered is one that may be about to change: a folder that another run made moments ago takes the access list of the temp folder it is in until that run's icacls
+// gives it one of its own (ensureParent), and where the temp folder lets others write — `TEMP` on a data drive gives Authenticated Users "modify" — a run that judges it in between is told
+// "not private" about a folder that is private a moment later, with the same identity. Remembered, that "no" sent every later workspace of the run to the plain temp folder, unrecorded, for the
+// rest of its life (measured: about one run in sixty, eight at a time, each making six). So a "no" about a list that is still only inherited (`inherited`, lib/windows-folder-acl.js), about a
+// folder made within PROTECT_WINDOW_MS, is not remembered: it is asked again after a pause (makeTempWorkspace). A "no" about a list somebody set, or about an older folder, is final, as before.
 // `created`: this call made the folder, gave it an access list of its own and read it back (ensureParent): it is not asked about again.
 // `deps.folderPrivacy` is a test seam for the Windows reader.
 const privacyVerdicts = new Map();
@@ -199,6 +216,9 @@ function checkParent(parent, deps, { created = false } = {}) {
     // A list that could not be got at all (the folder is being removed, most likely) is no answer either, and is not remembered: it is a refusal of the kind a folder being removed
     // gives, and the caller asks again after a pause.
     if (answer.unreadable) throw Object.assign(new Error(`${parent} could not be judged: ${answer.reason}`), { code: 'EBUSY' });
+    if (!answer.ok && answer.inherited === true && Math.abs(clockOf(deps)() - st.birthtimeMs) < PROTECT_WINDOW_MS) {
+      throw Object.assign(new Error(`${parent} can be changed by others, for now: ${answer.reason}`), { code: NOT_YET_PRIVATE });
+    }
     privacyVerdicts.set(key, answer);
   }
   const verdict = privacyVerdicts.get(key);
@@ -279,12 +299,48 @@ function protectNewParent(parent, deps) {
   let same = false;
   try { same = identityOf(parent, fsx.lstatSync(parent)) === before; } catch { /* gone: another process that ended with nothing in it removed it */ }
   if (answer.ok && same) return;
-  if (same) {
-    try { fsx.rmdirSync(parent); } catch { /* something is in it already, and it is not this call's to remove */ }
-  }
+  if (same) removeUnprotectedParent(parent, before, deps);
   // Gone, or replaced: ask again at once. A folder that icacls could not even open — Windows is removing it — asks again after a pause. Anything else is final for this process.
   if (!same) throw Object.assign(new Error(`${parent} was replaced while it was being made private`), { code: 'ENOENT' });
   throw Object.assign(new Error(`${parent} could not be made private: ${answer.reason}`), { code: answer.unreadable ? 'EBUSY' : NOT_PRIVATE });
+}
+
+// THE FOLDER A FAILED MAKER LEAVES (Windows). Removing the folder this run made and could not make private is refused while another run's hold is in it (ENOTEMPTY) — a run that found the folder
+// moments after it was made and is judging it — and a single `rmdir` then left it for good: an empty folder whose list is still the temp folder's, which no later run could use (its "no" is final once
+// the folder is older than PROTECT_WINDOW_MS) and none removes (only a run that used it prunes it). So the maker waits for the holds to go: it removes the folder as soon as it is empty, asking again
+// every REMOVE_PAUSE_MS for up to REMOVE_PATIENCE_MS. A judge holds the folder only while it judges it — a "not yet" lets go before it pauses (makeTempWorkspace) — so
+// the holds of runs that are waiting for this folder to be made private come and go, and the maker's `rmdir` lands between them; the judge then finds the folder gone (ENOENT) and makes one of its own.
+// It removes only what it made: right before every `rmdir` the folder at the path must still be a plain folder with the identity it had right after this run's mkdir (`made`), and the waiting stops
+// at once when it is not. `rmdir` removes only an empty folder, in one step — never a file, never a hold — so the most a folder swapped in between that look and the `rmdir` could lose is itself,
+// empty: the same as the single `rmdir` that was here before, and as the end of every run (prune), which removes the folder by its path alone. A folder whose listing shows anything but files named
+// as holds — a workspace, a record, a file of anyone's — is not waited for: it is in use, or not this run's to empty. A listing Windows refuses for a moment (EPERM, EACCES, EBUSY) shows nothing,
+// and is waited out like a hold: `rmdir` still removes only an empty folder, so the wait can cost time, never content. When the wait runs out, or this run is killed while it waits, the folder is
+// left, as it was before (the caller throws NOT_PRIVATE either way).
+function removeUnprotectedParent(parent, made, deps) {
+  const fsx = deps.fs || fs;
+  const clock = clockOf(deps);
+  const until = clock() + REMOVE_PATIENCE_MS;
+  for (;;) {
+    try {
+      const now = fsx.lstatSync(parent);
+      if (!now.isDirectory() || identityOf(parent, now) !== made) return;
+    } catch {
+      return; // gone: what was wanted
+    }
+    let refusal;
+    try {
+      fsx.rmdirSync(parent);
+      return;
+    } catch (e) {
+      refusal = e;
+    }
+    // ENOTEMPTY: something is in it. EPERM, EACCES or EBUSY (Windows): a hold that is being made or removed at that moment — a file whose removal is pending keeps its folder from going, and is not listed.
+    if (!(refusal && (refusal.code === 'ENOTEMPTY' || windowsRefusesForAMoment(refusal, deps)))) return;
+    let onlyHolds = false;
+    try { onlyHolds = fsx.readdirSync(parent, { withFileTypes: true }).every((entry) => entry.isFile() && isHoldName(entry.name)); } catch (e) { onlyHolds = windowsRefusesForAMoment(e, deps); }
+    if (!onlyHolds || clock() >= until) return;
+    (deps.pause || pauseSync)(REMOVE_PAUSE_MS);
+  }
 }
 
 // A file written WHOLE: to a file of its own name, then renamed over `file`, which is atomic — a reader (a sweep, which reads the record of a live run's folder on Linux) or a kill finds the file as it was or all of the
@@ -711,6 +767,15 @@ function makeTempWorkspace(prefix, deps = {}) {
       } catch (e) {
         releaseHold(hold, deps);
         if (e && e.code === 'ENOENT') continue;
+        if (e && e.code === NOT_YET_PRIVATE) {
+          // Its maker may not have given it its own list yet (checkParent): ask again after a pause. Still "no" after the last, it is not used for this workspace, and asked about again for the next.
+          // The hold is let go before the pause (ensureParent): a maker whose protection failed is waiting to remove the folder (removeUnprotectedParent), and must be able to.
+          if (attempt < MAKE_ATTEMPTS) {
+            (deps.pause || pauseSync)(WAITS_MS[attempt - 1]);
+            continue;
+          }
+          break;
+        }
         if (windowsRefusesForAMoment(e, deps)) {
           if (attempt < MAKE_ATTEMPTS) {
             (deps.pause || pauseSync)(WAITS_MS[attempt - 1]);

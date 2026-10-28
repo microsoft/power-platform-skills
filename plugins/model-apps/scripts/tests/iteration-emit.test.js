@@ -11,8 +11,9 @@
 // rest element throws. `transpileModule` reports syntax only, so the TS2802 error a type check would give never appears.
 //
 // Every case here is compiled by the vendored compiler with exactly those options and run in a fresh vm context; the
-// expected values are what that emit does, never what modern JavaScript would do. Results cross the context boundary as
-// JSON (undefined and thrown errors are compared separately), so nothing depends on another realm's prototypes. The host's
+// expected values are what that emit does, never what modern JavaScript would do. The last test holds those options to what
+// the real SDK bundle stores for a page, so an SDK that compiles pages another way fails here first. Results cross the context
+// boundary as JSON (undefined and thrown errors are compared separately), so nothing depends on another realm's prototypes. The host's
 // own URLSearchParams, FormData and Headers are handed in for their cases: nothing is fetched and no DOM is used.
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
@@ -269,4 +270,42 @@ test('Critical Rule 24 names the forms, the conversion and the section, after Ru
   }
   assert.match(rule[1], /See \*\*Common Errors > 5\. Iteration that compiles to nothing\*\*\.$/);
   assert.equal(RULES.split(`\n${HEADING}\n`).length, 2, 'one canonical section');
+});
+
+// ── The contract these proofs assume, read from the real SDK ──────────────────────────────────────────────────────────────────────
+
+// Everything above compiles with the options the SDK compiled pages with when it was written. This pushes a page through the REAL
+// vendored SDK bundle (over the stateful fake of the page tables, helpers/fake-genpage-server.js) and holds the compiled output it stores
+// to exactly what those options emit. When an SDK uptake compiles pages another way — with `downlevelIteration` (a spread then reads
+// `__read(…)`, a loop `__values(…)`) or an ES2015+ target (spreads and loops kept as written) — this fails first: then Critical Rule 24
+// and Common Errors §5 in references/rules.md, the skills that repeat the rule, and the expectations in this file are revised together,
+// once the maker portal is shown to compile pages the same way (the plugin keeps parity with it: lib/typescript-compiler.js).
+test('the real SDK stores a page compiled exactly as these proofs compile it: ES5, without iterator downleveling', async () => {
+  const { makeGenpageSdk } = require('../lib/genpage-sdk.js');
+  const { FakeGenPageServer, INSTANCE } = require('./helpers/fake-genpage-server.js');
+  const source = [
+    "import * as React from 'react';",
+    'const seen = new Map<string, number>([["a", 1]]);',
+    'const values = [...seen.values()];',
+    'const pairs: Array<[string, number]> = [];',
+    'for (const [k, v] of seen) pairs.push([k, v]);',
+    'const [first] = new Set(["x"]);',
+    'export default function Page() { return <div>{values.length}{pairs.length}{first}</div>; }',
+    '',
+  ].join('\n');
+  const server = new FakeGenPageServer();
+  const genpage = makeGenpageSdk(INSTANCE, { httpClient: server.http() });
+  let stored;
+  try {
+    const { pageId } = await genpage.create({ name: 'Emit', source, prompt: 'p', agentMessage: 'r' });
+    stored = server.rowText(pageId, 'src/pages/page.compiled');
+  } finally {
+    await genpage.dispose();
+  }
+  const changed = 'the vendored SDK no longer compiles pages as these proofs assume: revise Critical Rule 24, Common Errors §5 and this file';
+  assert.equal(stored, compile(source).outputText, `what the SDK stores is what the options these proofs use emit — ${changed}`);
+  assert.match(stored, /__spreadArray\(\[\], seen\.values\(\), true\)/, 'a spread reads the iterator by length and index');
+  assert.match(stored, /for \(var _i = 0, seen_1 = seen; _i < seen_1\.length; _i\+\+\)/, 'a loop walks it by index');
+  assert.match(stored, /var first = new Set\(\["x"\]\)\[0\];/, 'a destructure reads an index');
+  assert.doesNotMatch(stored, /__read|__values|\[\.\.\.seen|for \(const/, `no iterator downleveling, and no ES2015 form left as written — ${changed}`);
 });

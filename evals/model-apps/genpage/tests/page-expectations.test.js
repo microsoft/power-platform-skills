@@ -92,6 +92,97 @@ const n = useState<Row>(null);`;
   assert.deepEqual(patternNames('{ item, dragging }: TaskCardProps'), ['item', 'dragging']);
 });
 
+// A tag's type arguments (`<DataGridRow<Row> title="…">`) are erased before it renders: the tag is read like any other
+// when they are names only, the form the plugin's lexer reads for certain. Anything else in them (a function, string,
+// template, object or other type) leaves the tag unreadable: it is not read as an element, and unreadableElements reports
+// where it is, so a check can refuse the page rather than pass what it cannot see.
+test('tsx structure: a tag with type arguments of names only is read; any other is reported as unreadable', () => {
+  const { unreadableElements } = require('../lib/tsx-structure.js');
+  const read = (page) => jsxElements(page).map((e) => [e.name, e.start, e.openEnd, e.childrenEnd, e.end, Object.fromEntries([...e.attrs].map(([k, a]) => [k, a.value]))]);
+  for (const tag of ['<DataGridRow<Row>', '<A <Row>', '<A /* row */ <Row>', '<A\n<Row>', '<A\r\n<Row>', '<A // row\n<Row>', '<Grid<Map<string, Row[]>>', '<A.B<T | U, V & W>', '<A<| ns.T>', '<A<B>']) {
+    const page = `${tag} title="&euro;" />`;
+    const name = tag.match(/^<([\w.]+)/)[1];
+    assert.deepEqual(read(page), [[name, 0, page.length, page.length, page.length, { title: '&euro;' }]], tag);
+    assert.deepEqual(unreadableElements(page), [], tag);
+  }
+  // Nested elements of one name, with and without type arguments, close where they do; nothing inside the arguments is a tag.
+  const nested = '<L<Row>><L>a</L><L<Map<K, V>>>b</L></L>';
+  assert.deepEqual(read(nested).map(([name, start, openEnd, childrenEnd, end]) => [name, start, openEnd, childrenEnd, end]), [['L', 0, 8, 35, 39], ['L', 8, 11, 12, 16], ['L', 16, 30, 31, 35]]);
+  assert.deepEqual(jsxElements('<A<B<C>> />', /^[BC]$/), [], 'a type argument is no element');
+  // Not names only: not read, and reported at its line and column (a line ends at LF, CR LF or a lone CR).
+  const unreadable = [
+    '<A<() => () => "<B<() => string>>"> title="&euro;">Hello</A>',
+    '<DataGridRow<() => () => string /* <B<() => string>> */> title="&euro;" />',
+    '<A<() => "a\\\nb"> title="&euro;" />',
+    '<A<() => "a\\\r\nb"> title="&euro;" />',
+    '<A<() => `x${string /* the type\'s name */}y`> title={t("ok")} />',
+    '<A<"a\\"//"> title="&euro;" />',
+    '<A<"a\\"/*"> title="&euro;" />',
+    '<A<keyof Row> />', '<A<typeof row> />', '<A<Row["k"]> />', '<A<{ x: T }> />', '<A<[T, U]> />', '<A<1> />', '<A<(T)> />', '<A<T,> />', '<A<> />',
+  ];
+  for (const tag of unreadable) {
+    const page = `const a = 1;\r\nconst b = 2;\rconst P = () => ${tag};\nexport default P;`;
+    const name = tag.match(/^<([\w.]+)/)[1];
+    assert.deepEqual(unreadableElements(page)[0], { name, start: 43, line: 3, column: 17 }, tag);
+    assert.ok(!jsxElements(page).some((e) => e.start === 43), `${tag} is not read`);
+  }
+  // Type arguments of a call or a generic arrow, and a comparison, are no tags at all.
+  const code = 'const x = a < b;\nconst y = fn<T>(x);\nconst [r] = useState<Row>(null);\nconst f = <T,>(x: T) => x;\nconst m = useMemo<Record<string, Row[]>>(() => ({}), []);';
+  assert.deepEqual(jsxElements(code), []);
+  assert.deepEqual(unreadableElements(code), []);
+});
+
+// The closing tag of an element is found by counting the openings of its name that the one traversal of the page found,
+// which steps over every tag's type arguments: a type named `of` (an expression keyword's spelling) does not make
+// `<Field<Row>>` inside `<Box<of<Field<Row>>> />` an opening that would close the outer Field early.
+test('tsx structure: a name inside another tag\u2019s type arguments never counts toward a closing tag', () => {
+  const bounds = (page, name) => jsxElements(page, new RegExp(`^${name}$`)).map((e) => [e.start, e.openEnd, e.childrenEnd, e.end]);
+  assert.deepEqual(bounds('<A><B<of<A<T>>> /></A>', 'A'), [[0, 3, 18, 22]]);
+  const page = 'type of<T> = T;\nconst P = () => <Field label="Name"><Box<of<Field<Row>>> /><Input /></Field>;';
+  assert.deepEqual(bounds(page, 'Field'), [[32, 52, 84, 92]]);
+  assertPass(grade(LABELS, inline(page)));
+});
+
+// A tag's name may start with `_` or `$`, as any identifier may: such a tag is read, or reported, like any other.
+test('tsx structure: a tag whose name starts with _ or $ is read or reported like any other', () => {
+  const { unreadableElements } = require('../lib/tsx-structure.js');
+  const read = (page) => jsxElements(page).map((e) => [e.name, e.start, e.openEnd, e.childrenEnd, e.end, Object.fromEntries([...e.attrs].map(([k, a]) => [k, a.value]))]);
+  assert.deepEqual(read('<$Grid<Row> title="&euro;">x</$Grid>'), [['$Grid', 0, 27, 28, 36, { title: '&euro;' }]]);
+  assert.deepEqual(read('<_Grid title="a"><_Grid<Row> /></_Grid>'), [['_Grid', 0, 17, 31, 39, { title: 'a' }], ['_Grid', 17, 31, 31, 31, {}]]);
+  assert.deepEqual(unreadableElements('const P = () => <_Grid<keyof Row> title="&euro;" />;'), [{ name: '_Grid', start: 16, line: 1, column: 17 }]);
+  const code = 'const c = a <_b;\nconst d = x <$y> z;';
+  assert.deepEqual(jsxElements(code), []);
+  assert.deepEqual(unreadableElements(code), []);
+  const CURRENCY = 'Phase 5 (Page Builder): Generated .tsx does NOT hardcode currency symbols or date formats';
+  assertFail(grade(CURRENCY, inline('function t(k) { return k; }\nconst P = () => <$Grid<Row> title="&euro;">{t("ok")}</$Grid>;')), /hardcoded currency symbol "\u20ac"/);
+  assertFail(grade(CURRENCY, inline('function t(k) { return k; }\nconst P = () => <_Grid<keyof Row> title="&euro;">{t("ok")}</_Grid>;')), /<_Grid> at line 2, column 17 has type arguments that are not only names/);
+  assertPass(grade(CURRENCY, inline('function t(k) { return k; }\nconst P = () => <_Grid title={t("total")}>{t("ok")}</_Grid>;')));
+});
+
+// `of` is a keyword only inside a `for (… of …)` head, and a name outside every one (the lexer's ofTakesOperand), so
+// a `<` after a type or a value named `of` opens type arguments or compares; it never starts an element. Generic calls
+// and annotations through such a type are no tags, and the page's checks read only its real elements.
+test('tsx structure: a type or value named `of` starts no element; the `of` of a for head still does', () => {
+  const { unreadableElements } = require('../lib/tsx-structure.js');
+  const CURRENCY = 'Phase 5 (Page Builder): Generated .tsx does NOT hardcode currency symbols or date formats';
+  const body = 'function t(k) { return k; }\nexport default function P() { return <Field label={t("name")}><Input aria-label={t("name")} /><Text>{t("hi")}</Text></Field>; }\n';
+  const names = (page) => jsxElements(page).map((e) => e.name);
+  for (const head of [
+    'type of<T> = T;\nconst x = fn<of<List<() => Row>>>();\n', 'import type { of } from "./t";\nconst x = fn<of<List<() => Row>>>();\n',
+    'type of<T> = T;\nconst x = fn<of<List<Row>>>();\n', 'type of<T> = T;\nlet v: Map<string, of<List<() => Row>>>;\n',
+    'const of = 1;\nconst y = of < 2;\nconst z = of / 2;\nconst w = x.of < y;\n',
+  ]) {
+    const page = head + body;
+    assert.deepEqual(unreadableElements(page), [], head);
+    assert.deepEqual(names(page), ['Field', 'Input', 'Text'], head);
+    for (const check of [LABELS, TRANSLATED, CURRENCY]) assertPass(grade(check, inline(page)));
+  }
+  for (const head of ['for (const x of <A title="&euro;" />.props.items) {}\n', 'async function f() { for await (const x of <A title="&euro;" />) {} }\n']) {
+    assert.deepEqual(names(head + body), ['A', 'Field', 'Input', 'Text'], head);
+    assertFail(grade(CURRENCY, inline(head + body)), /hardcoded currency symbol "\u20ac"/);
+  }
+});
+
 // --- Eval 4: the wizard ----------------------------------------------------------------------------
 
 const E4 = '4-case-wizard';
@@ -205,6 +296,31 @@ test('eval 13: shown text goes through the translate helper', () => {
   assertFail(grade(TRANSLATED, withPage(E13, 'page.tsx', ["<Text>{t('empty')}</Text>", "<Text>{'No contacts.'}</Text>"])), /hardcoded JSX string/);
   assertFail(grade(TRANSLATED, inline('const P = () => <Text>{label}</Text>;')), /no translate\(\) helper/);
   assertPass(grade(TRANSLATED, inline("const translate = (k: string) => k;\nconst P = () => <Text>{translate('title')} ({count}) &nbsp;</Text>;")));
+});
+
+// A generic component's attributes are read like any other's (tsx-structure.js), so an unlabelled control, a hardcoded
+// title or a submit written with type arguments of names only is graded. A page with a tag whose type arguments are
+// anything else fails every check that reads its elements or its JSX text: what that tag holds is not known for certain.
+test('evals 4, 12 and 13: a generic component is graded like any other, and a tag the reader cannot read fails the page', () => {
+  const UNREADABLE = /<List> at line 1, column \d+ has type arguments that are not only names/;
+  assertFail(grade(LABELS, inline('const P = () => <Input<Row> value={x} />;')), /<Input> has no aria-label, aria-labelledby or label/);
+  assertPass(grade(LABELS, inline('const P = () => <Input<Row> aria-label="Title" value={x} />;')));
+  assertFail(grade(LABELS, inline('const P = () => <div><Input aria-label="Title" value={x} /><List<() => Row> /></div>;')), UNREADABLE);
+  assertFail(grade(LABELS, inline('const P = () => <List<() => Row> />;')), UNREADABLE);
+  const translated = (jsx) => inline(`const t = (k: string) => k;\nconst P = () => <div>{t('title')}${jsx}</div>;`);
+  const UNREADABLE_2 = /<List> at line 2, column \d+ has type arguments that are not only names/;
+  assertFail(grade(TRANSLATED, translated('<DataGridRow<Row> title="Hello" />')), /hardcoded title "Hello" on <DataGridRow>/);
+  assertFail(grade(TRANSLATED, translated('<DataGridRow<Row> title="&#72;&#105;" />')), /hardcoded title "Hi" \(written "&#72;&#105;"\) on <DataGridRow>/);
+  assertPass(grade(TRANSLATED, translated("<DataGridRow<Row> title={t('row')} />")));
+  assertFail(grade(TRANSLATED, translated("<List<() => Row> title={t('row')} />")), UNREADABLE_2);
+  const gated = SUBMIT.replace('<Button ', '<Button disabled={step !== 2} ');
+  assertPass(grade(REVIEW, twoStepPage(gated)));
+  assertFail(grade(REVIEW, twoStepPage(SUBMIT.replace('<Button ', '<Button<Row> '))), /can be pressed when step is 1, not only on the review step/);
+  assertFail(grade(REVIEW, twoStepPage(`${gated}<List<() => Row> />`)), /<List> at line \d+, column \d+ has type arguments that are not only names/);
+  const revised = '<div><Input type="search" onChange={(_, d) => setQ(d.value)} /><div role="toolbar"><Dropdown onOptionSelect={pick} /></div></div>';
+  assertPass(grade(REVISED, inline(`const P = () => ${revised};`)));
+  assertPass(grade(REVISED, inline(`const P = () => ${revised.replace('<Dropdown ', '<Dropdown<Row> ')};`)));
+  assertFail(grade(REVISED, inline(`const P = () => <div>${revised}<List<() => Row> /></div>;`)), UNREADABLE);
 });
 
 // --- Eval 15: choice names ------------------------------------------------------------------------------

@@ -56,6 +56,13 @@ const legacyPagesLockName = (rawApp) => `pages-${String(rawApp).replace(/[^A-Za-
 // same moment, or died doing so).
 const unreleasedNote = (lease) => (lease.stale ? ` The build that held it is no longer running, but its lock could not be released: ${lease.reason}.` : '');
 
+// What a refusal adds when Windows could not inspect a lock name (takeLockFile): the name it could not inspect, and why that may outlast every build.
+// EPERM is what a name being deleted answers, and also what a file this user may not read answers; only the second persists once no build runs,
+// and waiting or deleting the lock cannot cure it — so the refusal names THAT file, which may be the claim and not the lock, and says to check it.
+const uninspectableNote = (lease) => (lease.uninspectable ? ` Windows could not inspect ${lease.uninspectable} (EPERM): another build may be removing it, or this user may not have access to it. If this refusal persists while no build is running, check that file's access, or remove it.` : '');
+// The file a refusal names: the one Windows could not inspect, else the lock that refused.
+const blockingName = (lease, lockPath) => lease.uninspectable || lockPath;
+
 // Takes ONE lock file `file` in the folder `dir`. Answers acquireLease's result: { ok: true, path, token, reclaimed?, previous? }, or
 // { ok: false, reason, stale?, error? }.
 //
@@ -63,19 +70,77 @@ const unreleasedNote = (lease) => (lease.stale ? ` The build that held it is no 
 // a hard link or a folder at either name is refused, not followed — a reclaim writes the lock and a release deletes it, and either would then land
 // on whatever the link points at. A missing name is what a free lock is. These checks are of names, between operations; they are no defense
 // against a hostile process that swaps a name for a link in between.
+//
+// A name that is being deleted is a lock in use, and is refused as one (Windows only; see beingDeleted below): another build is releasing the lock or
+// finishing a take-over at this very moment, which is a build that holds it or has just held it. The refusal carries the name (`uninspectable`), and
+// the callers name it and say it may be inaccessible instead (uninspectableNote). A create that fails with EPERM is that refusal only while the lock's
+// name still answers EPERM; otherwise the whole take — inspections and acquireLease — runs once more (the deletion may have finished in between), and
+// a second such failure is the error it is (a folder that cannot be written), as it always was.
 function takeLockFile(dir, file, { owner = {}, now = Date.now, stamp }) {
   const lockPath = path.join(dir, file);
-  assertPlainFileTarget(lockPath);
-  assertPlainFileTarget(`${lockPath}.reclaim`);
-  return acquireLease(dir, {
-    file,
-    now,
-    stamp: stamp || ownerStamp({ ...owner, now }),
-    // Stale only when the process that took the lock is PROVEN gone (process-owner.js): a lock whose owner runs, or cannot be judged — another
-    // machine, another pid namespace, a record that is missing or damaged, a lock of a release that recorded only { pid, at } — is never stale,
-    // however old it is.
-    isStale: (held) => ownerState(held, owner).state === 'gone',
-  });
+  const beingRemoved = (name) => ({ ok: false, reason: `Windows could not inspect ${name} (EPERM)`, uninspectable: name });
+  for (let attempt = 1; ; attempt += 1) {
+    for (const name of [lockPath, `${lockPath}.reclaim`]) {
+      if (inspectLockName(name)) return beingRemoved(name);
+    }
+    const lease = acquireLease(dir, {
+      file,
+      now,
+      stamp: stamp || ownerStamp({ ...owner, now }),
+      // Stale only when the process that took the lock is PROVEN gone (process-owner.js): a lock whose owner runs, or cannot be judged — another
+      // machine, another pid namespace, a record that is missing or damaged, a lock of a release that recorded only { pid, at } — is never stale,
+      // however old it is.
+      isStale: (held) => ownerState(held, owner).state === 'gone',
+    });
+    if (process.platform !== 'win32' || lease.ok || !lease.error || lease.error.code !== 'EPERM') return lease;
+    if (beingDeleted(lockPath)) return beingRemoved(lockPath);
+    if (attempt >= 2) return lease;
+  }
+}
+
+// On Windows a file deleted while another process has it open — a build reading the lock to judge its owner, a scanner — keeps its name until that
+// handle closes ("delete pending"), unless the delete asks for POSIX semantics, which libuv does only from 1.48 (Node 22): https://github.com/libuv/libuv/issues/3839,
+// https://github.com/libuv/libuv/pull/4318. Under an older libuv (Node 20) every lstat and every create of that name meanwhile fails with EPERM
+// (STATUS_DELETE_PENDING reaches Node as ERROR_ACCESS_DENIED), and a build that lost a race for the lock used to stop with a file-safety error or a raw
+// EPERM instead of the refusal it is. EPERM cannot say WHY the name is refused: a file this user may not even look at answers it too. Either way the
+// name exists and cannot be used, so refusing changes nothing but the words; nothing is written or followed. Never true on Linux or macOS, where a
+// delete removes the name at once and these paths are as they were.
+function beingDeleted(name) {
+  if (process.platform !== 'win32') return false;
+  try {
+    fs.lstatSync(name);
+    return false;
+  } catch (e) {
+    return !!e && e.code === 'EPERM';
+  }
+}
+
+// The planted-link check of one lock name (assertPlainFileTarget), which answers true when the name could not be inspected because it is being
+// deleted (above), and throws what the check throws otherwise: a link, a junction, a hard link or a folder at the name is refused exactly as before.
+// The answer is read from the lstat the check itself made — through its `fs` seam — and not from a second look, which could find the deletion
+// finished and then let the check's error through after all.
+function inspectLockName(name) {
+  if (process.platform !== 'win32') {
+    assertPlainFileTarget(name);
+    return false;
+  }
+  let firstLook = null;
+  const watched = Object.create(fs);
+  watched.lstatSync = (...args) => {
+    try {
+      return fs.lstatSync(...args);
+    } catch (e) {
+      if (!firstLook) firstLook = e;
+      throw e;
+    }
+  };
+  try {
+    assertPlainFileTarget(name, { fs: watched });
+    return false;
+  } catch (e) {
+    if (e && e.code === 'UNSAFE_OUTPUT' && e.reason === 'uninspectable' && firstLook && firstLook.code === 'EPERM') return true;
+    throw e;
+  }
 }
 
 // Releases a lock this process holds, and says so when it cannot confirm that it did. Owner-checked: the file is removed only while it still holds
@@ -120,12 +185,13 @@ function sayAfterRelease(warn, message) {
 const ownerKeyOf = (held) => JSON.stringify([held && held.pid, held && held.host, held && held.platform, held && held.ns, held && held.start]);
 
 // The pages refusal, in the words it has always had (a person and the skills read them). `blocking` is the file that refused: the hashed one for two
-// builds of this release, the legacy one for a build of an earlier release that spells the app the same way. "Stale" in the sentence means what the
+// builds of this release, the legacy one for a build of an earlier release that spells the app the same way — or, on Windows, the lock name or claim
+// name that could not be inspected (uninspectableNote). "Stale" in the sentence means what the
 // take-over means by it — the owner is proven gone — and never that the lock is old.
 function pagesLocked(appUnique, blocking, lease) {
   // `retry: NEVER`: the lock belongs to a build that is still running, or to one that is gone but whose lock could not be released — running the
   // earlier phases again releases neither — and the message quotes the lock's path, which holds the maker's folder.
-  return new BuildHalt(`another build is deploying pages for '${appUnique}' — refusing a second concurrent pages deploy (would risk duplicate page creation). Retry after it finishes, or delete ${blocking} if it is stale.${unreleasedNote(lease)}`, { phase: 'pages', code: 'pages-locked', recoverable: true, retry: RETRY.NEVER });
+  return new BuildHalt(`another build is deploying pages for '${appUnique}' — refusing a second concurrent pages deploy (would risk duplicate page creation). Retry after it finishes, or delete ${blockingName(lease, blocking)} if it is stale.${unreleasedNote(lease)}${uninspectableNote(lease)}`, { phase: 'pages', code: 'pages-locked', recoverable: true, retry: RETRY.NEVER });
 }
 
 // SINGLE-MACHINE advisory lock over the pages phase (design §9: a courtesy, not a cross-machine guarantee): it stops two LOCAL builds of the same app
@@ -211,7 +277,7 @@ const capabilities = new WeakMap();
 // refusal quotes the lock's path, which holds the maker's folder — the retry rule must never read its words. `recoverable` is the operator's: a
 // later run of the same command can proceed once the other build has finished. It never authorizes the build's own automatic re-run.
 function buildLocked(appUnique, lockPath, lease) {
-  return new BuildHalt(`another build may be applying '${appUnique}' in this workspace — refusing a second concurrent apply (would risk duplicate creation). Re-run the same command after it finishes. If no build using this workspace is running, inspect ${lockPath} and remove it only if it is abandoned; keep the workspace and its recovery records.${unreleasedNote(lease)}`, { phase: 'preflight', code: 'build-locked', recoverable: true, retry: RETRY.NEVER });
+  return new BuildHalt(`another build may be applying '${appUnique}' in this workspace — refusing a second concurrent apply (would risk duplicate creation). Re-run the same command after it finishes. If no build using this workspace is running, inspect ${blockingName(lease, lockPath)} and remove it only if it is abandoned; keep the workspace and its recovery records.${unreleasedNote(lease)}${uninspectableNote(lease)}`, { phase: 'preflight', code: 'build-locked', recoverable: true, retry: RETRY.NEVER });
 }
 function buildLeaseInvalid() {
   return new BuildHalt('the supplied build lease is not active for this app and workspace — refusing to apply without its own lease', { phase: 'preflight', code: 'build-lease-invalid', recoverable: false, retry: RETRY.NEVER });

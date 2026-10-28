@@ -17,7 +17,7 @@
 // label never counts as code, and code is never taken for text. What each one does NOT judge is said
 // beside it; a person still judges the rest in the Layer 3 rubric.
 
-const { sourceView, jsxElements, jsxTextRuns, declarationSource, matchingClose, withoutComments } = require('./tsx-structure.js');
+const { sourceView, jsxElements, jsxTextRuns, declarationSource, matchingClose, withoutComments, unreadableElementProblems } = require('./tsx-structure.js');
 const { renderedText } = require('./jsx-references.js');
 const { runtimeEnums } = require('./expectation-evidence.js');
 const { escapeRe } = require('./source-evidence.js');
@@ -326,8 +326,11 @@ function stepDomain(code, state, regions) {
 // of the step (reachableSteps), so the summary is always seen first. A second, unconditional submit, or a
 // boundary that lets the submit show on an earlier step (`step < 1 ? Next : Submit`), fails it. A condition
 // the reader cannot tie to the step (`ready ? Submit : null`) proves nothing and fails it too. It does not
-// judge how the summary looks.
+// judge how the summary looks. A page with an element this reader cannot read (unreadableElementProblems) fails: the
+// field or submit it skips could be the one that decides.
 function reviewSummaryProblems(content) {
+  const unreadable = unreadableElementProblems(content);
+  if (unreadable.length) return unreadable;
   const { src, code } = sourceView(content);
   const [state] = stepStates(content);
   if (!state) return ['no step state, so there is no review step'];
@@ -409,7 +412,11 @@ function childrenShowText(content, element) {
   return false;
 }
 
+// A page with an element this reader cannot read (unreadableElementProblems) fails, even one with no form control in
+// sight: the skipped element may be a control, or a label, and the code after it is read by a guess.
 function formFieldLabelProblems(content) {
+  const unreadable = unreadableElementProblems(content);
+  if (unreadable.length) return unreadable;
   const controls = jsxElements(content, FORM_CONTROLS).filter((c) => c.attrs.get('type')?.value !== 'hidden');
   if (!controls.length) return null;
   const fields = jsxElements(content, /^Field$/).filter((f) => names(f.attrs.get('label')));
@@ -434,10 +441,13 @@ function formFieldLabelProblems(content) {
 // search, wired to state by an onChange/onInput handler. A filter toolbar is a Fluent UI Toolbar (or an
 // element with role="toolbar") holding at least one control — a Dropdown, Combobox, Select, toggle or
 // radio, Checkbox, Switch, MenuButton or TabList — with a handler. Whether the two narrow the same rows
-// is not judged.
+// is not judged. A page with an element this reader cannot read (unreadableElementProblems) fails: what it skips, or a
+// tag read inside its type arguments, could make or break either.
 const FILTER_CONTROLS = /^(?:Dropdown|Combobox|Select|ToggleButton|ToolbarToggleButton|ToolbarRadioButton|ToolbarRadioGroup|Checkbox|Switch|MenuButton|TabList|RadioGroup|select)$/;
 const HANDLERS = ['onOptionSelect', 'onChange', 'onClick', 'onCheckedValueChange', 'onTabSelect', 'onSelectionChange', 'onInput'];
 function searchAndFilterProblems(content) {
+  const unreadable = unreadableElementProblems(content);
+  if (unreadable.length) return unreadable;
   const searchBoxes = jsxElements(content, /^(?:SearchBox|Input|input)$/).filter((el) => {
     if (el.name !== 'SearchBox') {
       const said = ['type', 'placeholder', 'aria-label'].map((name) => el.attrs.get(name)).filter((a) => a && a.kind === 'string').map((a) => a.value).join(' ');
@@ -445,7 +455,7 @@ function searchAndFilterProblems(content) {
     }
     return el.attrs.has('onChange') || el.attrs.has('onInput');
   });
-  const toolbars = jsxElements(content, /^[A-Za-z][\w.]*$/).filter((el) => el.name === 'Toolbar' || el.attrs.get('role')?.value === 'toolbar');
+  const toolbars = jsxElements(content).filter((el) => el.name === 'Toolbar' || el.attrs.get('role')?.value === 'toolbar');
   const filtering = toolbars.filter((toolbar) => jsxElements(content, FILTER_CONTROLS).some((control) => control.start >= toolbar.childrenStart && control.start < toolbar.childrenEnd
     && HANDLERS.some((name) => control.attrs.has(name))));
   const problems = [];
@@ -468,6 +478,8 @@ function searchAndFilterProblems(content) {
 // `{'&#72;&#105;'}` shows those characters as written. A problem quotes the text as it renders, and as written too
 // when references make the two differ.
 // NOT read: a string a function returns to JSX (`renderHeaderCell: () => 'Name'`) or a variable holding one.
+// A page with an element this reader cannot read (unreadableElementProblems) fails: its attributes are not read, and the
+// JSX text after it is told from code by a guess.
 const SHOWN_ATTRIBUTES = new Set(['label', 'placeholder', 'title', 'aria-label', 'aria-description', 'alt', 'header', 'description', 'content', 'hint', 'validationMessage', 'text']);
 
 // The string and template literals an expression can evaluate to, as { quote, text }: the expression
@@ -522,6 +534,8 @@ const shownLetters = ({ quote, text }) => hasLetter(quote === '`' ? text.replace
 const quoted = (quote, shown, written = shown) => `${quote}${shown.slice(0, 40)}${quote}${written === shown ? '' : ` (written ${quote}${written.slice(0, 40)}${quote})`}`;
 
 function translateCoverageProblems(content) {
+  const unreadable = unreadableElementProblems(content);
+  if (unreadable.length) return unreadable;
   const { src, code } = sourceView(content);
   const helper = ['translate', 't'].find((name) => declarationSource(content, name) && new RegExp(`(?<![.\\w$])${name}\\s*\\(`).test(code.replace(new RegExp(`\\b(?:const|let|var|function)\\s+${name}\\b`, 'g'), '')));
   if (!helper) return ['no translate() helper is declared and called'];

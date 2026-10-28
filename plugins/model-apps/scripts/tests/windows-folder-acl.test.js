@@ -193,6 +193,27 @@ test('windowsFolderIsPrivate: not private when anyone else can change the folder
   assert.deepStrictEqual(fs.readdirSync(tmp), []);
 });
 
+// A folder made in a temp folder that lets others write takes their entries until its maker gives it its own list (makeWindowsFolderPrivate): a caller may ask again about that "no" (lib/temp-workspace.js).
+test('windowsFolderIsPrivate: a "no" about a list that is still only what the folder took from the one above — not protected, every entry inherited — says so (`inherited`); a "no" about a list anyone set does not', (t) => {
+  const tmp = scratchTemp(t);
+  const verdictFor = (sddl) => windowsFolderIsPrivate('C:\\Temp\\p', { run: fakeWindows({ sddl }).run, saveIn: tmp });
+  // What a folder made in a temp folder on a data drive has until its maker gives it its own list: Authenticated Users may modify it, by inheritance.
+  const asMade = verdictFor(`D:AI(A;OICIID;FA;;;SY)(A;OICIID;FA;;;BA)(A;ID;0x1301bf;;;AU)(A;OICIIOID;SDGXGWGR;;;AU)(A;OICIID;FA;;;${USER})`);
+  assert.deepStrictEqual([asMade.ok, asMade.inherited], [false, true], asMade.reason);
+  assert.match(asMade.reason, /S-1-5-11/);
+  for (const [sddl, why] of [
+    [`D:AI(A;OICI;0x1301bf;;;AU)(A;OICIID;FA;;;${USER})`, 'a grant somebody set, beside inherited entries'],
+    [`D:(A;OICI;0x1301bf;;;WD)(A;OICI;FA;;;${USER})`, 'a list of explicit entries'],
+    [`D:PAI(A;OICIID;0x1301bf;;;WD)(A;OICI;FA;;;${USER})`, 'a protected list: it takes nothing from above any more'],
+  ]) {
+    const verdict = verdictFor(sddl);
+    assert.deepStrictEqual([verdict.ok, verdict.inherited], [false, undefined], why);
+  }
+  const fine = verdictFor(`D:AI(A;OICIID;FA;;;SY)(A;OICIID;FA;;;${USER})`);
+  assert.deepStrictEqual([fine.ok, fine.inherited], [true, undefined], 'an inherited list that is private is a "yes", and says nothing more');
+  assert.deepStrictEqual(fs.readdirSync(tmp), []);
+});
+
 // Whoever owns a folder can rewrite its list, whatever it says now: a list that names only the right principals does not make the folder theirs.
 test('windowsFolderIsPrivate: the folder must be the user\'s (or the administrators\', which the list trusts anyway) — a list that names only the user is not enough if somebody else owns the folder', (t) => {
   const tmp = scratchTemp(t);
@@ -451,7 +472,8 @@ test('REAL ICACLS (Windows): a folder made in a temp folder that EVERYONE can wr
   const handmade = path.join(root, 'handmade');
   fs.mkdirSync(handmade);
   assert.match(savedList(handmade, root), /;;;WD\)/, 'control: a folder made here the ordinary way has Everyone on it');
-  assert.strictEqual(windowsFolderIsPrivate(handmade).ok, false, 'and is not private');
+  const asMade = windowsFolderIsPrivate(handmade);
+  assert.deepStrictEqual([asMade.ok, asMade.inherited], [false, true], `and is not private — by what it inherited, as a folder is until its maker gives it its own list: ${asMade.reason}`);
   const folder = path.join(root, 'power-platform-skills-model-apps');
   fs.mkdirSync(folder);
   const verdict = makeWindowsFolderPrivate(folder);

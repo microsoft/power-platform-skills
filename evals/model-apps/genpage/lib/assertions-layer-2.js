@@ -30,7 +30,7 @@ const {
   reviewSummaryProblems, formFieldLabelProblems, searchAndFilterProblems,
   translateCoverageProblems, choiceEnumProblems,
 } = require('./page-checks.js');
-const { nestedDefinitionProblems, renderedSource } = require('./tsx-structure.js');
+const { nestedDefinitionProblems, renderedSource, unreadableElementProblems } = require('./tsx-structure.js');
 const { columnProblems } = require('./column-contract.js');
 
 let _verifiedIcons = null;
@@ -758,7 +758,11 @@ function objectProperties(content, keep, isLiteral, name) {
   return out;
 }
 
+// A page with an element whose type arguments this reader cannot read (unreadableElementProblems) fails: its attribute
+// strings are not decoded, and which characters after it are text is the lexer's guess, so a symbol could hide there.
 function hardcodedFormatProblem(content) {
+  const [unreadable] = unreadableElementProblems(content);
+  if (unreadable) return unreadable;
   const keep = blankNonCodePreservingTemplateExpressions(content);
   const comment = new Uint8Array(content.length);
   for (const { start, end } of commentRanges(content)) comment.fill(1, start, end);

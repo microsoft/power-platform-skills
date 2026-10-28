@@ -18,7 +18,7 @@ const { execFileSync } = require('node:child_process');
 const { blankLiterals, blankNonCodePreservingTemplateExpressions, commentRanges, endsMidStatement, findElisionMarker, hasDefaultExport, hasUnbalancedBrackets } = require('../lib/source-literals.js');
 const { typescriptViews, guessedPageViews, setParserCheck } = require('../lib/typescript-views.js');
 const { loadVendoredTypeScript } = require('../lib/typescript-compiler.js');
-const { resolvePageRefs, strayPageRefs, navigationFrontier } = require('../lib/pageref-resolver.js');
+const { resolvePageRefs, strayPageRefs, navigationFrontier, navReferencedKeys } = require('../lib/pageref-resolver.js');
 const { pageStructureProblems } = require('../lib/page-structure.js');
 const { validPages, heldOpenLinePages, NAVIGATION_CALL } = require('./helpers/valid-pages.js');
 const { loadBabelOracle } = require('./helpers/typescript-oracle.js');
@@ -358,6 +358,49 @@ test('parser check: a page the lexer misreads, resolved as TypeScript parses it,
     assert.deepEqual(after.calls, before.calls.map((pageId) => (pageId === 'PAGEREF_detail' ? ID : pageId)), `${name}: every call navigates to the page id`);
     // A token left in the text of a regex or a string is data, which no call hands over: it is not rewritten, and the residue reports it (no token may stand there).
     for (const left of residual) assert.ok(!after.calls.includes(left.token), `${name}: a token left is no call's`);
+  }
+});
+
+// `of` after a binding that ends where the lexer reads no word — a letter beyond ASCII, TypeScript's non-null `!`, any type after `as` or
+// `satisfies` — is the keyword of a for head, so what follows it is a regex. The lexer reads it so and says it guessed, and the parser check, asked there,
+// finds the regex too: the call written inside it is data, which no build may rewrite, and a real call after it still resolves where the parse vouches for the page.
+test('parser check: a regex after "of" in a for head whose binding the lexer cannot read to its end is data, and is never rewritten', () => {
+  const regex = '/navigateTo({pageType:"generative",pageId:"PAGEREF_detail"})/';
+  const real = 'navigateTo({ pageType: "generative", pageId: "PAGEREF_detail" });';
+  for (const binding of ['const π', 'x!', 'x as Array<T>', 'x satisfies Array<T>', 'x as "a"', 'x as `a${string}`', 'x as void', 'x as enum', 'x satisfies enum']) {
+    for (const eol of ['\n', '\r\n']) {
+      const code = `export default function P() {${eol}let x; for (${binding} of ${regex}.source) {}${eol}return null;${eol}}${eol}`;
+      assert.equal(parses(code).parseDiagnostics.length, 0, `TypeScript parses ${binding}`);
+      assert.ok(guesses(code).has('keyword'), `${binding}: the lexer guesses`);
+      assert.deepEqual(navReferencedKeys(code), [], `${binding}: a regex is no navigation call`);
+      assert.equal(resolvePageRefs(new Map([['page', { code }]]), new Map([['detail', ID]])).deployment.get('page'), code, `${binding}: nothing is rewritten`);
+      const withCall = code.replace('return null;', `${real}${eol}return null;`);
+      const result = resolvePageRefs(new Map([['page', { code: withCall }]]), new Map([['detail', ID]]));
+      // `enum` is a reserved word used as a type's name, a page the parser check vouches for nothing in (typescript-views), so the lexer's guess
+      // stands: the build rewrites neither the call nor the regex, and reports both tokens as held.
+      if (binding.endsWith('enum')) {
+        assert.equal(result.deployment.get('page'), withCall, `${binding}: nothing is rewritten`);
+        assert.equal(result.residual.length, 2, `${binding}: both tokens are held`);
+        continue;
+      }
+      assert.equal(result.deployment.get('page'), withCall.replace(real, real.replace('PAGEREF_detail', ID)), `${binding}: the real call resolves, and the regex is kept`);
+    }
+  }
+});
+
+// A number that ends in a decimal point ends its statement at a line break, so a `for` on the next line heads a loop, though a dot stands before it:
+// the `of` in that head is the keyword, and what follows it is a regex. The lexer reads it so and says it guessed, and the call written inside the
+// regex is data, which no build may rewrite, whether the parser check is asked or not.
+test('parser check: a regex after "of" in a for head that follows a number ending in a decimal point is data, and is never rewritten', () => {
+  const regex = '/navigateTo({pageType:"generative",pageId:"PAGEREF_detail"})/';
+  for (const head of ['for', 'for await']) {
+    for (const eol of ['\n', '\r\n']) {
+      const code = `export default async function P() {${eol}const n = 1.${eol}${head} (const x of ${regex}.source) {}${eol}return n;${eol}}${eol}`;
+      assert.equal(parses(code).parseDiagnostics.length, 0, `TypeScript parses ${head}`);
+      assert.ok(guesses(code).has('keyword'), `${head}: the lexer guesses`);
+      assert.deepEqual(navReferencedKeys(code), [], `${head}: a regex is no navigation call`);
+      assert.equal(resolvePageRefs(new Map([['page', { code }]]), new Map([['detail', ID]])).deployment.get('page'), code, `${head}: nothing is rewritten`);
+    }
   }
 });
 
