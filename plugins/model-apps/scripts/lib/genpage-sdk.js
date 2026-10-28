@@ -121,7 +121,8 @@ const codeOf = (error) => (error && typeof error.code === 'string' && error.code
 //   GENPAGE_COMPILER_UNAVAILABLE / _VERSION / _INVALID, GENPAGE_RUNTIME_TYPES_INVALID
 //                                     no usable TypeScript compiler, or the page's RuntimeTypes could not be built
 //   PAGE_NESTING_TOO_DEEP             the page's elements nest so deeply that the compiler ran out of stack space (lib/page-nesting.js raises it from the
-//                                     compiler the SDK is given; the SDK compiles ahead of every write, so a push that raises it sent nothing)
+//                                     compiler the SDK is given; the SDK compiles ahead of every write, so a push that raises it wrote nothing to the
+//                                     service, though its metadata reads may already have been made)
 //   GENPAGE_CONTENT_WRITE_UNSUPPORTED, GENPAGE_TURN_NOT_ATOMIC
 //                                     the transport cannot write this page as one change set (assertContentWritable / assertTurnWritable)
 //   GENPAGE_TURN_CONFLICT             the pending turn's id is already recorded as a different message (`unrecordedTurn`, a read)

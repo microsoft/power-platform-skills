@@ -6,7 +6,8 @@
 //   RangeError: Maximum call stack size exceeded
 // out of `transpileModule`. The SDK compiles a page on every push that changes its source and does not catch that, so without this module the
 // maker was shown a bare RangeError — or, through the page backend's own settling of a push that "got no usable answer", a message about a
-// create that "was sent twice", although the SDK compiles BEFORE it sends anything and nothing was written.
+// create that "was sent twice", although the SDK compiles BEFORE it writes anything: the page was not written to the service (its metadata reads
+// may already have been made).
 //
 // The depth that overflows is not a fixed number: the first compile in a process runs in the interpreter, whose frames are larger, so it
 // overflows at roughly two thirds of the depth that a later, optimised, compile reaches (measured: a page nested 600 deep overflowed a cold
