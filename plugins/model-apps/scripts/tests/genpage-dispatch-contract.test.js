@@ -1151,24 +1151,26 @@ test('every genpage-plan-provenance.js command the genpage flows document uses o
   assert.doesNotMatch(editFlow, /--require-assumptions|--require-observed-lookups|--lookup-metadata/, 'neighbour: an edit plan keeps its own comparison');
 });
 
-// Iteration that compiles to nothing (references/rules.md, Critical Rule 24 and Common Errors > 5). The SDK compiles a page to ES5 without
-// iterator downleveling, so a spread, a for...of loop or an array destructure of a Map, a Set or an iterator reads length and indices: the
-// values disappear with a clean compile (scripts/tests/iteration-emit.test.js runs that emit). Nothing executes these instructions, so as
-// with the Griffel rule the one rule text is stated in the same words in every document that writes or edits a page (whitespace aside), and
-// the WRONG/CORRECT examples live in rules.md alone.
+// Iteration that another page compiler can lose (references/rules.md, Critical Rule 24 and Common Errors > 5). The SDK compiles a page to ES5
+// with iterator support, but a tool that compiles the page again without it (an older maker portal, pac) reads a Map, a Set or an iterator
+// by length and indices: the values disappear with a clean compile (scripts/tests/iteration-emit.test.js runs both emits). Nothing executes
+// these instructions, so as with the Griffel rule the one rule text is stated in the same words in every document that writes or edits a
+// page (whitespace aside), and the WRONG/CORRECT examples live in rules.md alone.
 const ITERATION_RULE = [
-  'The page compiler targets ES5 without iterator downleveling or full type checking.',
-  'Spreading, looping over, or array-destructuring a Map, Set or iterator reads length and indices instead of the iterator:',
-  'values can disappear, defaults can replace them, or rest destructuring can throw.',
-  'This includes `[...new Set(xs)]`, `[...m.values()]`, `[...seen.values()]`, `for (const [k, v] of m)`, `new Set([...prev, id])`,',
-  '`[...selected]` and `[...text.matchAll(re)]`.',
-  'Convert with `Array.from(...)` before spreading, looping or destructuring; copy a Set with `new Set(prev)` then `.add(id)`.',
+  'Pages this plugin uploads are compiled with iterator support (ES5 with `downlevelIteration`), so a spread, a `for...of` loop or an array',
+  'destructure of a Map, Set, iterator, generator or string reads it as modern JavaScript does.',
+  'A tool that compiles the page again without that support — an older maker portal, or `pac` — reads length and indices instead:',
+  'values disappear, defaults replace them, and rest destructuring or a string spread throws, all with a clean compile.',
+  'Keep the page correct under every compiler: convert with `Array.from(...)` before spreading, looping or destructuring, for example',
+  '`[...new Set(xs)]`, `[...m.values()]`, `[...seen.values()]`, `for (const [k, v] of m)`, `new Set([...prev, id])`, `[...selected]` and',
+  '`[...text.matchAll(re)]`; copy a Set with `new Set(prev)` then `.add(id)`.',
   'Ordinary array spreads and loops remain valid. `Object.keys`, `Object.values` and `Object.entries` return arrays.',
-  'Spreads of `arguments` and ordinary indexed array-likes work; rest destructuring of an array-like without `slice` does not.',
-  'String spread throws, and an ES5 string loop visits UTF-16 code units rather than Unicode code points.',
-  'See **Common Errors > 5. Iteration that compiles to nothing** in `references/rules.md` for the pairs.',
+  'Rest destructuring of an array-like without `slice` throws under every compiler.',
+  'A destructuring default must not write to the array being destructured: `const [a = (values[1] = 3), b] = values` leaves `b` at its old',
+  'value here, unlike modern JavaScript.',
+  'See **Common Errors > 5. Iteration that another page compiler can lose** in `references/rules.md` for the pairs.',
 ].join(' ');
-const ITERATION_SECTION = '**Common Errors > 5. Iteration that compiles to nothing**';
+const ITERATION_SECTION = '**Common Errors > 5. Iteration that another page compiler can lose**';
 
 test('every instruction that writes or edits a page states the iteration rule in the same words, where it reviews the page', () => {
   const docs = griffelDocs();
@@ -1176,7 +1178,7 @@ test('every instruction that writes or edits a page states the iteration rule in
     assert.ok(squash(text).includes(ITERATION_RULE), `${name} must state the iteration rule in the shared words`);
   }
   // rules.md: the section opens with it, after Common Errors 1-4, which keep their numbers.
-  const section = docs.rules.split('\n### 5. Iteration that compiles to nothing\n');
+  const section = docs.rules.split('\n### 5. Iteration that another page compiler can lose\n');
   assert.equal(section.length, 2, 'rules.md has one canonical section');
   assert.ok(squash(section[1]).trimStart().startsWith(ITERATION_RULE), 'the section opens with the rule');
   const errors = docs.rules.slice(docs.rules.indexOf('\n## Common Errors\n'));
@@ -1187,7 +1189,7 @@ test('every instruction that writes or edits a page states the iteration rule in
   assert.deepEqual([...critical.matchAll(/^(\d+)\. \*\*/gm)].map((match) => Number(match[1])), Array.from({ length: 24 }, (_, i) => i + 1));
   assert.match(critical, /\n22\. \*\*Consistent errors\*\*[^\n]*\n23\. \*\*Lookup identities\*\*[^\n]*\n24\. \*\*Convert iterables to arrays\*\*[^\n]*\n\n---\n/);
   // The page-builder has no shell: its Step 2.7 gives the rule and a self-review, and no command.
-  const builderStep = docs['page-builder'].split('## Step 2.7 — Iteration that compiles to nothing')[1].split('## Step 3')[0];
+  const builderStep = docs['page-builder'].split('## Step 2.7 — Iteration that another page compiler can lose')[1].split('## Step 3')[0];
   assert.ok(squash(builderStep).includes(ITERATION_RULE), 'the page-builder states it in its own step');
   assert.ok(docs['page-builder'].indexOf('## Step 2.6') < docs['page-builder'].indexOf('## Step 2.7'), 'after the Griffel step');
   assert.doesNotMatch(builderStep, /node\s+"\$\{PLUGIN_ROOT\}/, 'no command for a worker to run');

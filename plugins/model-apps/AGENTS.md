@@ -4331,7 +4331,13 @@ reverts it and the hash in `PROVENANCE.json` stops matching. Fix it upstream and
 `PROVENANCE.json`), loaded by `scripts/lib/typescript-compiler.js` and passed to the SDK as
 `MakerSdkOptions.typescript`. The SDK compiles a page's source itself on every push that changes it — TypeScript's
 `transpileModule` plus its checker, to resolve enum names — and accepts only the minor version the maker portal compiles
-with (5.8; another is refused with `GENPAGE_COMPILER_VERSION`), so a page is stored as the portal would store it. That compile is a
+with (5.8; another is refused with `GENPAGE_COMPILER_VERSION`), so a page is stored as the portal would store it. Since model-apps
+2.20.5 the bundled SDK compiles with iterator support (ES5 with `downlevelIteration`, its default iteration profile), as the maker
+portal's page compiler source does: a spread, a `for...of` loop or an array destructure of a Map, Set, iterator or string reads it as
+modern JavaScript does. A tool that compiles the page again without it (an older portal, `pac`) reads them by length and index and
+loses their values, so `references/rules.md` Critical Rule 24 keeps `Array.from`; `iteration-emit.test.js` runs both emits and pins the
+one the bundle stores. A push that does not change a page's source keeps its stored compiled output, so a page uploaded by an earlier
+release keeps the old emit until its source next changes. That compile is a
 transpile, not a type check: a page with type errors, or a reference to a column its table does not have, compiles and deploys, and only
 a page that does not parse, has no default export or imports a value `RuntimeTypes` does not hold is refused
 (`genpage-sdk-real-bundle.test.js` runs it against the real bundle). The page-builder's Step 2.6 says so, and

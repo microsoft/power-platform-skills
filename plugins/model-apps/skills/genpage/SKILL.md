@@ -914,21 +914,24 @@ subagent. Inline the page-builder workflow directly in the orchestrator:
    cannot see (a template that starts with `--`, `&`, `:` or `@` is read); Fluent's
    `...shorthands.*(…)` and `...typographyStyles.*` may be spread as they are.
 
-   Then review the page for iteration that compiles to nothing:
+   Then review the page for iteration that another page compiler can lose:
 
-   The page compiler targets ES5 without iterator downleveling or full type checking.
-   Spreading, looping over, or array-destructuring a Map, Set or iterator reads length
-   and indices instead of the iterator: values can disappear, defaults can replace them,
-   or rest destructuring can throw. This includes `[...new Set(xs)]`, `[...m.values()]`,
+   Pages this plugin uploads are compiled with iterator support (ES5 with
+   `downlevelIteration`), so a spread, a `for...of` loop or an array destructure of a Map,
+   Set, iterator, generator or string reads it as modern JavaScript does. A tool that
+   compiles the page again without that support — an older maker portal, or `pac` — reads
+   length and indices instead: values disappear, defaults replace them, and rest
+   destructuring or a string spread throws, all with a clean compile. Keep the page
+   correct under every compiler: convert with `Array.from(...)` before spreading, looping
+   or destructuring, for example `[...new Set(xs)]`, `[...m.values()]`,
    `[...seen.values()]`, `for (const [k, v] of m)`, `new Set([...prev, id])`,
-   `[...selected]` and `[...text.matchAll(re)]`. Convert with `Array.from(...)` before
-   spreading, looping or destructuring; copy a Set with `new Set(prev)` then `.add(id)`.
-   Ordinary array spreads and loops remain valid. `Object.keys`, `Object.values` and
-   `Object.entries` return arrays. Spreads of `arguments` and ordinary indexed
-   array-likes work; rest destructuring of an array-like without `slice` does not.
-   String spread throws, and an ES5 string loop visits UTF-16 code units rather than
-   Unicode code points. See **Common Errors > 5. Iteration that compiles to nothing**
-   in `references/rules.md` for the pairs.
+   `[...selected]` and `[...text.matchAll(re)]`; copy a Set with `new Set(prev)` then
+   `.add(id)`. Ordinary array spreads and loops remain valid. `Object.keys`,
+   `Object.values` and `Object.entries` return arrays. Rest destructuring of an array-like
+   without `slice` throws under every compiler. A destructuring default must not write to
+   the array being destructured: `const [a = (values[1] = 3), b] = values` leaves `b` at
+   its old value here, unlike modern JavaScript. See **Common Errors > 5. Iteration that
+   another page compiler can lose** in `references/rules.md` for the pairs.
 10. Run the completeness gate on the page you wrote — the same one 5c runs on a
     worker's page, and this is also the page a 5c fallback produces:
 
@@ -1032,9 +1035,9 @@ node "${PLUGIN_ROOT}/scripts/check-griffel-styles.js" --file '<working-dir>/<fil
 ```
 
 and fix what it reports in the page yourself before Phase 6. A page that has not
-exited 0 is not deployed. Review every generated page for iteration that compiles to
-nothing as well, and fix it yourself: the workers follow the same rule
-(`references/rules.md`, **Common Errors > 5. Iteration that compiles to nothing**).
+exited 0 is not deployed. Review every generated page for iteration that another page
+compiler can lose as well, and fix it yourself: the workers follow the same rule
+(`references/rules.md`, **Common Errors > 5. Iteration that another page compiler can lose**).
 
 ### Phase 6: Deploy
 
