@@ -19,6 +19,8 @@ The bundled SDK is unchanged (power-platform-ux a3443479).
   putting every workspace of its run in the plain temp folder. This happened where the temp folder lets other users write.
 - **On Windows, a script that cannot make its new plugin temp folder private retries removing it for up to ten seconds**; it
   used to leave it, sending every later script to the plain temp folder. A timeout or killed script can still leave it.
+- **Pages that use `of` as a variable or type name are read correctly by the build's page checks** wherever its context rules
+  out a `for…of` keyword; where it could be one, the earlier cautious reading stays.
 
 ## [2.20.2]
 
