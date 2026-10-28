@@ -17,8 +17,8 @@ The bundled SDK is unchanged (power-platform-ux a3443479).
   file it could not inspect, instead of a file-safety or raw EPERM error.
 - **On Windows, a script that starts while another is still making the plugin's temp folder private asks again**, instead of
   putting every workspace of its run in the plain temp folder. This happened where the temp folder lets other users write.
-- **On Windows, a plugin temp folder that could not be made private is removed by the script that made it**, which waits up to
-  ten seconds for other scripts to let go. Every later script used to work in the plain temp folder.
+- **On Windows, a script that cannot make its new plugin temp folder private retries removing it for up to ten seconds**; it
+  used to leave it, sending every later script to the plain temp folder. A timeout or killed script can still leave it.
 
 ## [2.20.2]
 
