@@ -195,4 +195,3 @@ test('a push through the factory\'s own SDK, with no page backend over it, is re
   assert.deepStrictEqual(changeWrites(server), [], 'the compile comes before every write');
   assert.strictEqual(server.state.projects.size, 0);
 });
-
