@@ -11,6 +11,8 @@ allowed-tools: Read, Write, Edit, Bash, Glob, Grep, WebFetch, Task, AskUserQuest
 
 > **Plugin check**: Run `node "${PLUGIN_ROOT}/scripts/check-version.js"` — if it outputs a message, show it to the user before proceeding.
 
+> **Model check (lightweight models only)**: If you are a lightweight model optimized for fast, simple tasks, tell the user in your first message that `/genpage` works best on a general-purpose coding model or an advanced reasoning model — planning the page, generating its React/TypeScript, binding it to data, deploying it and verifying it take multistep planning, tool use and validation — and recommend switching; then continue. On any other model, skip this note and say nothing about it.
+
 # Power Apps Generative Pages Builder
 
 **Triggers:** genpage, generative page, create genpage, genux page, build genux, power apps page, model page
