@@ -691,16 +691,22 @@ function wordBefore(src, j) {
 //   type of<T> = T;  const x = fn<of<List<Row>>>();     a type's name, twice: no element
 //   const half = of / 2;                                  a division
 //   for (const x of <A />.props.items) {}                 the keyword: an element
-// The word is a name for CERTAIN only where the scan PROVES it is outside every for head. The scan counts back over the lexer's output (where the
-// brackets of strings, comments, regexes and JSX text are blank) to the nearest bracket left open before the word, as statementHead does; the word is
-// in no for head when that bracket is a `[` or a `{` (an array, a pattern, a block, an object, an attribute's or a child's braces: `for (const [a =
-// of / 2] of xs)` holds a name), when it is a `(` that no `for` or `for await` stands before (`f(of / 2)`, `a.for(of / 2)`), or when the
-// scan reaches the start of the source with none left open. Inside a for head nothing is proven, whatever stands before the word: a binding can end
-// in a name the scan does not read (`π`), a non-null `!`, a `)`, `]` or `}`, or any type (`x as Array<T>`, `x as enum`), and a word or a
-// punctuator before the `of` does not say whether it ends one. There the reading is the table's, as it always was: the keyword, and a GUESS
-// (`keyword`). So is a head written with an escape or cut by a letter beyond ASCII, and a bracket too far back to be found within LOOKAHEAD.
+// The word is a name for CERTAIN only where the scan PROVES that no for head can enclose it. The scan counts back over the lexer's output (where the
+// brackets of strings, comments, regexes and JSX text are blank) to the nearest bracket left open before the word, as statementHead does, and
+// a name is proven in three cases only, each the return of NAME below:
+//   (a) that bracket is a `[` or a `{` — an array, a pattern, a block, an object, an attribute's or a child's braces: the keyword stands in the
+//       parentheses of its head and nowhere deeper, so `for (const [a = of / 2] of xs)` holds a name;
+//   (b) it is a `(` whose preceding token, read across white space and blanked comments, is read whole and is neither the word `for` nor the word
+//       `await` — a punctuator, a quote, a regex's flag, any other ASCII word (`f(of / 2)`, `if (of / 2)`);
+//   (c) the scan reaches the start of the source with no bracket left open.
+// Nothing else proves it, and no exception to a head may: a `(` after the word `for` or `await` is always a possible head, whatever stands before
+// that word — `a.for(…)` looks like a property, but the dot may be a decimal's that ends the statement before (`const n = 1.⏎for (…)`). Inside a
+// for head nothing is proven either, whatever stands before the `of`: a binding can end in a name the scan does not read (`π`), a non-null `!`, or
+// any type (`x as enum`). There, before a word cut by an escape, a `#` or a character beyond ASCII (which may be a `for` or an `await` spelled
+// otherwise), and where the bracket lies beyond LOOKAHEAD, the reading is the table's, as it always was: the keyword, and a GUESS (`keyword`).
 function ofTakesOperand(src, index) {
   const keyword = { operand: true, ambiguity: 'keyword' };
+  const NAME = { operand: false, ambiguity: null };
   let depth = 0;
   for (let j = index - 2; j >= 0; j -= 1) {
     if (index - 1 - j > LOOKAHEAD) return keyword;
@@ -708,18 +714,13 @@ function ofTakesOperand(src, index) {
     if (c === ')' || c === ']' || c === '}') depth += 1;
     else if (c === '(' || c === '[' || c === '{') {
       if (depth > 0) { depth -= 1; continue; }
-      if (c !== '(') break;
-      let head = wordBefore(src, j);
-      if (cutsWord(src, head.start)) return keyword;
-      if (head.word === 'await') {
-        head = wordBefore(src, head.start + 1);
-        if (cutsWord(src, head.start)) return keyword;
-      }
-      if (head.word === 'for' && !isPropertyName(src, head.start)) return keyword;
-      break;
+      if (c !== '(') return NAME;
+      const head = wordBefore(src, j);
+      if (head.word === 'for' || head.word === 'await' || cutsWord(src, head.start)) return keyword;
+      return NAME;
     }
   }
-  return { operand: false, ambiguity: null };
+  return NAME;
 }
 
 // The window for the scans that look back or ahead over a bounded stretch of source: the `(` of a statement head (statementHead), the `<` of

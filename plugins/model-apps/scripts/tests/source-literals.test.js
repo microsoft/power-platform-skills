@@ -9,7 +9,7 @@ const assert = require('node:assert');
 const fs = require('node:fs');
 const path = require('node:path');
 const { execFileSync, spawnSync } = require('node:child_process');
-const { blankLiterals, blankNonCodePreservingTemplateExpressions, commentRanges, endsMidStatement, findElisionMarker, hasDefaultExport, hasUnbalancedBrackets, scanTemplateExpressionEnd, expressionPosition, opensTypeParameters, elementFailsAt, elementChildren, isTrivia, isSingleLineTrivia, trimTrivia, TRIVIA_CLASS, WS, AMBIGUITY_KINDS, ANGLE_AFTER, ANGLE_AFTER_LINE_BREAK, NO_MEMBER_BEFORE, RESERVED_WORDS, TYPE_PARAMETER_MODIFIERS, MEMBER_NAME_OPERATORS } = require('../lib/source-literals.js');
+const { blankLiterals, ofTakesOperand, blankNonCodePreservingTemplateExpressions, commentRanges, endsMidStatement, findElisionMarker, hasDefaultExport, hasUnbalancedBrackets, scanTemplateExpressionEnd, expressionPosition, opensTypeParameters, elementFailsAt, elementChildren, isTrivia, isSingleLineTrivia, trimTrivia, TRIVIA_CLASS, WS, AMBIGUITY_KINDS, ANGLE_AFTER, ANGLE_AFTER_LINE_BREAK, NO_MEMBER_BEFORE, RESERVED_WORDS, TYPE_PARAMETER_MODIFIERS, MEMBER_NAME_OPERATORS } = require('../lib/source-literals.js');
 const { navReferencedKeys, strayPageRefs, resolvePageRefs } = require('../lib/pageref-resolver.js');
 const { pageStructureProblems } = require('../lib/page-structure.js');
 // These tests hold the lexer to its own rules — what it reads for certain, what it reports as a guess, and what a guess costs a page — so they read pages with
@@ -1943,14 +1943,13 @@ test('ambiguity keyword: a "/" or "<" after a word that is a keyword in some pla
 // parseForOrForInOrForOfStatement, https://github.com/microsoft/TypeScript/blob/v5.8.3/src/compiler/parser.ts). Outside every for head it is a name,
 // for certain, so a `/` after it divides and a `<` compares or opens type arguments. Read as the keyword, `type of<T> = T;` opened an element
 // at `<T>` whose text ran on over the next statement, and `fn<of<List<() => Row>>>()` one at `<of` whose type arguments the lexer could only guess.
-// The word is outside every for head when the nearest bracket left open before it is a `[` or a `{`, a `(` that no `for` stands before, or none.
+// The word is outside every for head when the nearest bracket left open before it is a `[` or a `{`, a `(` that neither `for` nor `await` stands before, or none.
 test('"of" is a name outside a for head, for certain, and the keyword after what a for head binds', () => {
   const names = [
     'type of<T> = T;\nconst x = fn<of<List<() => Row>>>();\n', 'import type { of } from "./t";\nconst x = fn<of<List<() => Row>>>();\n',
     'type of<T> = T;\nconst x = fn<of<List<Row>>>();\n', 'let v: Map<string, of<List<() => Row>>>;\n', 'const c = of < 2 && of / 2;',
     'for (const [a = of / 2] of xs) {}', 'for (const {a = of / 2 / 3} of xs) {}', 'for (const x of xs) of / 2 / 3;', 'for (const x of xs) { of / 2 / 3; }',
-    'for (const x of xs.map(() => of / 2 / 3)) {}', 'for (const x of [of / 2 / 3]) {}', 'for (;;) of / 2 / 3;', 'if (of / 2 / 3) {}', 'a.for(of / 2 / 3);',
-    'a?.for(of / 2 / 3);', 'x = {a: of / 2 / 3};', 'const e = <A x={of / 2 / 3}>{of / 2 / 3}</A>;', 'const y = x.of < y; const w = 1;',
+    'for (const x of xs.map(() => of / 2 / 3)) {}', 'for (const x of [of / 2 / 3]) {}', 'for (;;) of / 2 / 3;', 'if (of / 2 / 3) {}', 'x = {a: of / 2 / 3};', 'const e = <A x={of / 2 / 3}>{of / 2 / 3}</A>;', 'const y = x.of < y; const w = 1;',
   ];
   for (const code of names) assert.strictEqual(blankLiterals(code), code.replace('"./t"', '"   "'), `nothing but the string is blanked: ${JSON.stringify(code)}`);
   assertCertain([...names, 'const of = 12; const count = of/2; const re = /\\/*$/;', 'f(of / 2, /x/)', 'const t = `${of / 2 / 3}`; const r = /x/;',
@@ -2009,6 +2008,82 @@ test('"of" inside a for head, or past the reach of the scan, reads exactly as it
     assertAmbiguous('keyword', [[code, '/ 2 / 3']]);
   }
 });
+// A `(` after the word `for` or `await` is always a possible head, whatever stands before the word: a dot before it looks like a property
+// (`a.for(…)`), but it may be the decimal point of a number that ends the statement before, and a line break, a comment or a line separator between
+// them leaves the next statement a loop — `const n = 1.⏎for (const x of /re/.source)` is valid TypeScript, and its `of` is the keyword. Read
+// as a property there, the `of` was a name for certain, the regex after it code, and the navigation oracle rewrote the call written inside it.
+// So no exception to a head proves a name: such an `of` reads as it did before the lexer told a name from the keyword — the keyword, and a guess.
+test('"of" after a "(" that the word "for" or "await" stands before is the keyword and a guess, even where the word looks like a property', () => {
+  const regex = '/navigateTo({pageType:"generative",pageId:"PAGEREF_detail"})/';
+  for (const number of ['1.', '0.', '1_000.', '1..x', '.5', '1e3', '0x1', '1n']) {
+    for (const sep of ['\n', '\r\n', '\u2028', '\u2029', '/*\n*/', '// c.\n']) {
+      for (const code of [`const n = ${number}${sep}for (const x of ${regex}.source) {}`,
+        `async function f() { const n = ${number}${sep}for await (const x of <A>navigateTo</A>) {} }`]) {
+        assert.ok(!blankLiterals(code).includes('navigateTo'), `read as a regex or an element: ${JSON.stringify(code)}`);
+        assertAmbiguous('keyword', [[code, code.includes(regex) ? regex : '<A>']]);
+      }
+    }
+  }
+  assertAmbiguous('keyword', ['a.for(of / 2 / 3);', 'a?.for(of / 2 / 3);', 'a . for (of / 2 / 3);', 'a.\nfor(of / 2 / 3);', 'x.await(of / 2 / 3);',
+    '({ for(a = of / 2 / 3) {} });', 'class C { for(a = of / 2 / 3) {} }', 'f(πfor(of / 2 / 3));'].map((code) => [code, '/ 2 / 3']));
+  // A `(` after any other word read whole, or after no word, is no head: a name, for certain.
+  assertCertain(['xfor(of / 2 / 3);', 'forx(of / 2 / 3);', '$for(of / 2 / 3);', 'awaitx(of / 2 / 3);', 'f(of / 2 / 3);', 'f()(of / 2 / 3);',
+    'const n = 1.\nf(of / 2 / 3);', 'const n = 1.\n[of / 2 / 3];']);
+});
+
+// With the TypeScript parser oracle set: pages that put `of` before a regex, an element, a division or type arguments in and out of for and for-await heads, nested in brackets,
+// after tokens of every kind before the `for` or the `(` (numbers that end in a decimal point, strings, templates, a regex, a member dot, a
+// non-ASCII or escaped name, comments, line breaks and line separators, a label), at the top and in an async generator. Wherever the lexer's rule
+// says an `of` is a name for certain, TypeScript does not read it as the keyword of a for-of statement, and every for-of keyword before a `/` or a
+// `<` is read with a guess at it or before it.
+test('oracle: an "of" that the lexer calls a name for certain is never the keyword of a for-of statement, wherever it stands', (t) => {
+  const ts = loadTypescriptOracle();
+  if (!ts) { t.skip('TYPESCRIPT_ORACLE_PATH is not set'); return; }
+  const contexts = ['for (const x @) {}', 'for (x! @) {}', 'for (x as enum @) {}', 'for (const π @) {}', 'for /* c */ (const x @) {}', 'for await (const x @) {}',
+    'for (const [a = @] of xs) {}', 'for (a = @;;) {}', 'for (const x of f(@)) {}', 'for(@);', 'f(@);', '[@];', 'x = {a: @};', 'a.for(@);', 'x.await(@);',
+    'const v = @;'];
+  const prefixes = ['1.', '1..x', '.5', '0x1', '1n', '"s."', '`${a}`', '/a./g', 'a', 'π', 'a\\u0062', 'a.', 'a?.', '<B/>'];
+  const seps = ['', ' ', '\n', '\r\n', '\u2028', '/*\n*/', ';'];
+  let pages = 0;
+  let keywords = 0;
+  let names = 0;
+  for (const wrap of ['@@', 'async function* f() { L: { @@ } }']) {
+    for (const context of contexts) {
+      for (const prefix of prefixes) {
+        for (const sep of seps) {
+          for (const tail of ['/navigateTo/.source', '<A>navigateTo</A>', '/ 2', '<T>(x)']) {
+            const code = wrap.replace('@@', () => `const n = ${prefix}${sep}${context.replace('@', () => `of ${tail}`)}`);
+            const sf = ts.createSourceFile('page.tsx', code, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+            if (sf.parseDiagnostics.length) continue;
+            pages += 1;
+            const forOf = new Set();
+            (function visit(node) {
+              if (ts.isForOfStatement(node)) forOf.add(ts.skipTrivia(code, node.initializer.end));
+              ts.forEachChild(node, visit);
+            })(sf);
+            const view = blankLiterals(code);
+            const found = ambiguities(code);
+            for (const word of code.matchAll(/(?<![\w$.\\])of(?![\w$])/g)) {
+              const at = word.index;
+              if (view.slice(at, at + 2) !== 'of' || ofTakesOperand(view, at + 1).operand) continue;
+              names += 1;
+              assert.ok(!forOf.has(at), `a name for certain where TypeScript reads the for-of keyword: ${JSON.stringify(code)} at ${at}`);
+            }
+            for (const at of forOf) {
+              const next = at + 2 + /^\s*/.exec(code.slice(at + 2))[0].length;
+              if (code[next] !== '/' && code[next] !== '<') continue;
+              keywords += 1;
+              assert.ok(found.some(([offset]) => offset <= next), `a for-of keyword read with no guess: ${JSON.stringify(code)} at ${at}`);
+            }
+          }
+        }
+      }
+    }
+  }
+  // The sweep reaches what it is for: pages TypeScript parses, for-of keywords before a regex or an element, and names the rule proves.
+  assert.ok(pages > 1000 && keywords > 500 && names > 500, JSON.stringify({ pages, keywords, names }));
+});
+
 // `async` and a `<` on its line. TypeScript's rule for `.tsx` steps over `async` (parser.ts, isParenthesizedArrowFunctionExpressionWorker,
 // https://github.com/microsoft/TypeScript/blob/v5.8.3/src/compiler/parser.ts): with no line break before the `<`, the next tokens decide — a comma, `=` or `extends` and a token that is not
 // `=`, `>` or `/` — as they do for any `<`, and a generic shape is the head of an async generic arrow. Every other is no arrow, and `async` is then an ordinary token: a method named `async`
@@ -3616,8 +3691,8 @@ test('every scan of the lexer reads U+0085 and the zero-width space as white spa
     // `of` is the keyword, and a guess, in a `for` head, and a name outside every one: it divides there, for certain.
     const forOf = `for${c}(const${c}y${c}of${c}/navigateTo({pageType:"generative",pageId:"PAGEREF_detail"})/.exec(s)) {}\n`;
     assert.ok(!maskOf(forOf).includes('navigateTo'), `of: the regex is data: ${visible(forOf)}`);
-    assertCertain([`function f(x) { const k = of${c}/ 2 / 3; }`, `f${c}(${c}of${c}/ 2 / 3);`, `a${c}.${c}for${c}(${c}of${c}/ 2 / 3);`]);
-    assertAmbiguous('keyword', [[`for${c}(;${c}of${c}/ 2 / 3;) {}`, '/ 2 / 3']]);
+    assertCertain([`function f(x) { const k = of${c}/ 2 / 3; }`, `f${c}(${c}of${c}/ 2 / 3);`]);
+    assertAmbiguous('keyword', [[`for${c}(;${c}of${c}/ 2 / 3;) {}`, '/ 2 / 3'], [`a${c}.${c}for${c}(${c}of${c}/ 2 / 3);`, '/ 2 / 3']]);
     // A property named like a keyword is no keyword, with the `.` and the word apart: `obj.${c}return / 2 / 3` divides, with no regex.
     assertCertain([`const k = obj.${c}return / 2 / 3;`, `const k = obj${c}.${c}new / 2 / 3;`, `const k = obj?.${c}delete / 2 / 3;`, `const k = a${c}+${c}b / 2 / 3;`]);
     // `type`, `export` and `declare` before a type alias head, and a name with the white space between them.

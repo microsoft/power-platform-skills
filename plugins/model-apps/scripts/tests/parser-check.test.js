@@ -388,6 +388,22 @@ test('parser check: a regex after "of" in a for head whose binding the lexer can
   }
 });
 
+// A number that ends in a decimal point ends its statement at a line break, so a `for` on the next line heads a loop, though a dot stands before it:
+// the `of` in that head is the keyword, and what follows it is a regex. The lexer reads it so and says it guessed, and the call written inside the
+// regex is data, which no build may rewrite, whether the parser check is asked or not.
+test('parser check: a regex after "of" in a for head that follows a number ending in a decimal point is data, and is never rewritten', () => {
+  const regex = '/navigateTo({pageType:"generative",pageId:"PAGEREF_detail"})/';
+  for (const head of ['for', 'for await']) {
+    for (const eol of ['\n', '\r\n']) {
+      const code = `export default async function P() {${eol}const n = 1.${eol}${head} (const x of ${regex}.source) {}${eol}return n;${eol}}${eol}`;
+      assert.equal(parses(code).parseDiagnostics.length, 0, `TypeScript parses ${head}`);
+      assert.ok(guesses(code).has('keyword'), `${head}: the lexer guesses`);
+      assert.deepEqual(navReferencedKeys(code), [], `${head}: a regex is no navigation call`);
+      assert.equal(resolvePageRefs(new Map([['page', { code }]]), new Map([['detail', ID]])).deployment.get('page'), code, `${head}: nothing is rewritten`);
+    }
+  }
+});
+
 test('parser check: the views of a text are kept for the next check of the same text, and the lexer\'s own tests can turn the parser off', () => {
   // The views are kept for the last few texts asked about: the oracle reads a page several times per build (resolve, stray, residual).
   const code = WRAP('interface Api { <U>(x: U): U; }');
