@@ -5,6 +5,20 @@ All notable changes to the **model-apps** plugin.
 Entries are deliberately short: what changed and why it matters to you. The reasoning,
 evidence and trade-offs behind a change live in its PR, in `docs/`, or in the linked issue.
 
+## [2.20.4]
+
+The bundled SDK is unchanged (power-platform-ux a3443479).
+
+### Fixed
+
+- **A page whose elements nest too deeply to compile is refused with `PAGE_NESTING_TOO_DEEP`**, naming the page; the refused
+  page is not written to the service. It used to fail with a misleading error.
+
+### Changed
+
+- **The README recommends a general-purpose coding or advanced reasoning model for `/app-builder` and `/genpage`.** On a
+  lightweight model, each skill says so once in its first message and continues.
+
 ## [2.20.3]
 
 The bundled SDK is unchanged (power-platform-ux a3443479).

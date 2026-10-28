@@ -94,6 +94,12 @@ Custom API discovery omits private APIs and APIs with Entity/EntityCollection in
 Lookup input names stay available to the author separately from the primitive-only wire
 `parameterKinds`; see [the Custom API contract](references/custom-api.md).
 
+## Model selection
+
+Use a general-purpose coding model or an advanced reasoning model. Lightweight models optimized
+primarily for fast, simple tasks aren't recommended for `/app-builder` or `/genpage` because both
+skills require multistep planning, tool use, code generation, and validation.
+
 ## Skills
 
 PCF code components ship in the separate preview [pcf plugin](../pcf/README.md).

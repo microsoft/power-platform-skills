@@ -20,6 +20,7 @@
 //   const prose = "export default GeneratedComponent";   -> accepted
 const { blankLiterals, endsMidStatement, findElisionMarker, hasDefaultExport, hasUnbalancedBrackets, trimTrivia, WS } = require('./source-literals.js');
 const { guessedPageViews } = require('./typescript-views.js');
+const { PAGE_NESTING_TOO_DEEP, PAGE_NESTING_MESSAGE } = require('./page-nesting.js');
 
 // A line that opens a markdown fence, after the white space TypeScript skips (source-literals.js, isTrivia): U+0085 and the zero-width space before a fence are white space to it.
 const MARKDOWN_FENCE = new RegExp(`^${WS}*(\`\`\`|~~~)`, 'm');
@@ -30,14 +31,13 @@ const MARKDOWN_FENCE = new RegExp(`^${WS}*(\`\`\`|~~~)`, 'm');
 // where it does report one, or did not need to be asked, the lexer's views stand — and so they do where another reader reads the page differently or refuses it
 // (a JSX attribute string after trivia, grammar only TypeScript's parser takes), decided by guessedPageViews exactly as the navigation oracle decides it. Every
 // check is the same either way: only the views they read differ.
-function parsedViews(text) {
-  return guessedPageViews(text).views;
-}
-
-function pageStructureProblems(code) {
+// A page whose parse ran out of stack space (`tooDeep`) is a valid page nested too deeply for the parser, and the lexer's view of it, which stands, is the wrong one: its
+// guess made a complete page look cut off. It is refused for that, with the code the compile's refusal has (page-nesting.js), and not for the symptoms of the guess.
+function pageStructure(code) {
   const text = String(code == null ? '' : code);
-  if (!trimTrivia(text)) return ['file is empty'];
-  const views = parsedViews(text);
+  if (!trimTrivia(text)) return { problems: ['file is empty'], code: null };
+  const { views, tooDeep } = guessedPageViews(text);
+  if (tooDeep) return { problems: [PAGE_NESTING_MESSAGE], code: PAGE_NESTING_TOO_DEEP };
   const problems = [];
   // hasDefaultExport also refuses a file cut off INSIDE its export (`export default function P(props)`
   // with no body), so the message says so: the fix is to write the whole page, not to add an export.
@@ -57,7 +57,12 @@ function pageStructureProblems(code) {
   // Elided code (`// TODO: …`, `// ...`, "omitted for brevity"), the same rule the genpage evals apply.
   const elision = findElisionMarker(text, views);
   if (elision) problems.push(`contains ${elision} — the page is incomplete`);
-  return problems;
+  return { problems, code: null };
 }
 
-module.exports = { pageStructureProblems };
+// The problems alone, for the callers that have no use for the code.
+function pageStructureProblems(code) {
+  return pageStructure(code).problems;
+}
+
+module.exports = { pageStructure, pageStructureProblems };

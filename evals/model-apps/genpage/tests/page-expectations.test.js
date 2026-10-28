@@ -143,6 +143,27 @@ test('tsx structure: a name inside another tag\u2019s type arguments never count
   assertPass(grade(LABELS, inline(page)));
 });
 
+// closingTag finds the first opening of the name after an element's opening tag by a binary search over the source-ordered
+// openings: a scan from the first opening read n² / 2 openings for n flat siblings (2,100,223 for 2,048 `<div></div>`).
+// The count of openings read, through a proxy, is the measure, not the time.
+test('tsx structure: finding the closing tags of n same-name siblings reads about n log n openings, not n squared', () => {
+  const { closingTag, sourceView } = require('../lib/tsx-structure.js');
+  for (const n of [512, 1024, 2048]) {
+    const page = `const P = () => <>${'<div></div>'.repeat(n)}</>;`;
+    const { code } = sourceView(page);
+    const openings = [...code.matchAll(/<div>/g)].map((m) => ({ start: m.index, open: { attrsFrom: m.index + 4 } }));
+    let reads = 0;
+    const counted = new Proxy(openings, { get: (target, key, receiver) => { if (/^\d+$/.test(String(key))) reads += 1; return Reflect.get(target, key, receiver); } });
+    const ends = openings.map((tag) => closingTag(code, 'div', tag.start + 5, counted).end);
+    assert.deepEqual(ends, openings.map((tag) => tag.start + 11), `n = ${n}: each div closes itself`);
+    assert.deepEqual(jsxElements(page, /^div$/).map((e) => e.end), ends, `n = ${n}: jsxElements finds the same ends`);
+    assert.ok(reads <= n * (Math.log2(n) + 3), `n = ${n}: ${reads} openings read`);
+  }
+  // Nested same-name elements, and a same-name opening inside another tag's type arguments, keep their exact bounds.
+  const bounds = (page, name) => jsxElements(page, new RegExp(`^${name}$`)).map((e) => [e.start, e.openEnd, e.childrenEnd, e.end]);
+  assert.deepEqual(bounds('<L<T>><L>x</L><L<U> /><L<V>>y</L></L>', 'L'), [[0, 6, 33, 37], [6, 9, 10, 14], [14, 22, 22, 22], [22, 28, 29, 33]]);
+});
+
 // A tag's name may start with `_` or `$`, as any identifier may: such a tag is read, or reported, like any other.
 test('tsx structure: a tag whose name starts with _ or $ is read or reported like any other', () => {
   const { unreadableElements } = require('../lib/tsx-structure.js');

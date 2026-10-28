@@ -89,7 +89,7 @@ test('writeOutcome: what a failed SDK send says it did â€” nothing, or unknown â
     'ARTIFACT_LANGUAGE_MISMATCH', 'ARTIFACT_NOT_FOUND', 'ARTIFACT_PROJECTION_STALE',
     'GENPAGE_COMPILER_INVALID', 'GENPAGE_COMPILER_UNAVAILABLE', 'GENPAGE_COMPILER_VERSION', 'GENPAGE_CONTENT_NOT_TEXT', 'GENPAGE_CONTENT_WRITE_UNSUPPORTED',
     'GENPAGE_RETAINED_ROW_MISSING', 'GENPAGE_RETAIN_ON_CREATE', 'GENPAGE_RUNTIME_TYPES_INVALID', 'GENPAGE_TURN_CONFLICT', 'GENPAGE_TURN_NOT_ATOMIC', 'GENPAGE_WRITE_UNKNOWN',
-    'VALIDATION_ERROR',
+        'PAGE_NESTING_TOO_DEEP', 'VALIDATION_ERROR',
   ]);
   for (const code of PRE_WRITE_REFUSALS) assert.strictEqual(writeOutcome(sdkError(code, 'refused')), 'nothing', code);
   // A typed error that is not one of them is no proof: it may come from the SDK's step after the commit.
