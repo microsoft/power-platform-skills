@@ -10,6 +10,7 @@ const path = require('path');
 const { detectBrowser } = require('./lib/detect-browser');
 // npx is a batch shim on Windows; the runner starts it without a shell (see lib/process-runner.js).
 const { spawnProcess } = require('./lib/process-runner');
+const { makeWritesBlocking } = require('./lib/output-redaction.js');
 
 function buildMcpArgs(browser, {
   configPath = path.join(__dirname, 'playwright-mcp-fullscreen.config.json'),
@@ -48,6 +49,7 @@ function launch({
     // (ENOENT, EACCES, ...). Without a handler Node throws the error as an
     // uncaught exception; surface it and exit non-zero so the MCP host sees the
     // server failed to start.
+    makeWritesBlocking(process.stdout, process.stderr);
     process.stderr.write(`Failed to launch Playwright MCP server: ${err && err.message ? err.message : err}\n`);
     process.exit(1);
   },

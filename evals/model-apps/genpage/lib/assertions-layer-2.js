@@ -24,8 +24,14 @@ const { blankLiterals, blankNonCodePreservingTemplateExpressions, commentRanges,
 const { pageStructureProblems } = require('../../../../plugins/model-apps/scripts/lib/page-structure.js');
 const { navigationProblems } = require('./navigation-contract.js');
 const { workerProblems } = require('./worker-contract.js');
-const { customApiProblems } = require('./custom-api-contract.js');
+const { gradeCustomApi } = require('./custom-api-contract.js');
 const { gradeEvidence } = require('./evidence-utils.js');
+const {
+  reviewSummaryProblems, formFieldLabelProblems, searchAndFilterProblems,
+  translateCoverageProblems, choiceEnumProblems,
+} = require('./page-checks.js');
+const { nestedDefinitionProblems, renderedSource } = require('./tsx-structure.js');
+const { columnProblems } = require('./column-contract.js');
 
 let _verifiedIcons = null;
 function getVerifiedIcons() {
@@ -87,6 +93,41 @@ function extractIconImports(content) {
 function fail(reason) { return { status: 'fail', reason }; }
 function pass() { return { status: 'pass', reason: '' }; }
 function skip(reason) { return { status: 'skip', reason }; }
+
+// A page check (lib/page-checks.js) over every file: a file it does not apply to returns null. Passes
+// when every file it applies to has no problem, fails on the first problem, and skips with `none` when
+// it applies to no file.
+function everyFile(files, problemsOf, none) {
+  let applied = false;
+  for (const file of files) {
+    const problems = problemsOf(file);
+    if (problems === null) continue;
+    applied = true;
+    if (problems.length) return fail(`${file.name}: ${problems[0]}`);
+  }
+  return applied ? pass() : skip(none);
+}
+
+// A page check that one page of the fixture must meet (the wizard, the revised list page): passes when
+// some file has no problem, else fails with the first problem of the first file.
+function someFile(files, problemsOf) {
+  let first = null;
+  for (const file of files) {
+    const problems = problemsOf(file);
+    if (!problems.length) return pass();
+    if (!first) first = `${file.name}: ${problems[0]}`;
+  }
+  return fail(first || 'no .tsx file');
+}
+
+// The column names the pages give their dataApi calls, checked against the RuntimeTypes.ts the run kept
+// (lib/column-contract.js). Without it there is no schema to verify a name against.
+function columnsVerified(files, fixture) {
+  if (!fixture?.runtimeTypes) return skip('column-name verification requires RuntimeTypes.ts fixture');
+  const problems = columnProblems(files, fixture.runtimeTypes);
+  if (problems === null) return skip('the pages name no Dataverse column for RuntimeTypes.ts to verify');
+  return problems.length ? fail(problems[0]) : pass();
+}
 
 const ASSERTIONS = new Map();
 
@@ -294,7 +335,9 @@ ASSERTIONS.set(
 
 ASSERTIONS.set(
   'For Dataverse pages with fetching, separate setState calls inside async callbacks are batched into a single setData(...) call (Rule 14)',
-  () => skip('Rule 14 batched-setState requires AST analysis')
+  // Not a parser gap: a correct check fails historical fixtures that set their rows in `try` and loading in
+  // `finally` (the drift is recorded, with the fixtures, in evals/model-apps/tests/eval-coverage-baseline.json).
+  () => skip('not graded yet: a correct Rule 14 check fails historical fixtures (see tests/eval-coverage-baseline.json)')
 );
 
 // A connector read is frequently factored into a local helper that the effect calls:
@@ -489,7 +532,7 @@ const PHASE5_EXPECTATIONS = new Map();
 
 PHASE5_EXPECTATIONS.set(
   'Phase 5: Custom API discovery, gate, bare bindings, runtime calls and update preservation or explicit clear agree',
-  ({ fixture, files }) => gradeEvidence(customApiProblems, { ...fixture, files })
+  ({ fixture, files }) => gradeCustomApi({ ...fixture, files })
 );
 
 PHASE5_EXPECTATIONS.set(
@@ -499,7 +542,7 @@ PHASE5_EXPECTATIONS.set(
 
 PHASE5_EXPECTATIONS.set(
   'Phase 5b: Generated .tsx uses only column names verified from RuntimeTypes.ts — no guessed names',
-  () => skip('column-name verification requires RuntimeTypes.ts fixture')
+  ({ files, fixture }) => columnsVerified(files, fixture)
 );
 
 PHASE5_EXPECTATIONS.set(
@@ -563,7 +606,25 @@ PHASE5_EXPECTATIONS.set(
 
 PHASE5_EXPECTATIONS.set(
   'Phase 5 (Page Builder): All form fields have aria-labels or aria-labelledby for accessibility',
-  () => skip('aria-label coverage requires AST analysis')
+  ({ files }) => everyFile(files, (file) => formFieldLabelProblems(file.content), 'no form fields')
+);
+
+// eval 4's wizard: "Generated code includes step state management (current step tracking) and Next/Back
+// navigation" has NO check. Whether Next and Back move the step is the value the step's setter receives,
+// which a scan of the handler's text cannot prove (an updater can compute the next step and return the
+// old one); grading it needs data-flow analysis, so tests/eval-coverage-baseline.json records it as
+// unscored rather than registering a check that would pass a wizard that never advances.
+
+PHASE5_EXPECTATIONS.set(
+  'Phase 5 (Page Builder): Step 3 (review) shows a summary of entered data before submission',
+  ({ files }) => someFile(files, (file) => reviewSummaryProblems(file.content))
+);
+
+// eval 12: the page built from the REVISED plan has both the search box the revision added and the
+// filter toolbar the first plan had (lib/page-checks.js searchAndFilterProblems).
+PHASE5_EXPECTATIONS.set(
+  'Phase 5 (Page Builder): Generated code implements the revised plan (includes BOTH filter toolbar AND search box)',
+  ({ files }) => someFile(files, (file) => searchAndFilterProblems(file.content))
 );
 
 PHASE5_EXPECTATIONS.set(
@@ -600,12 +661,16 @@ PHASE5_EXPECTATIONS.set(
 
 PHASE5_EXPECTATIONS.set(
   'Phase 5 (Page Builder): All user-visible text goes through a translate() helper — no hardcoded display strings in JSX',
-  () => skip('translate() coverage requires AST analysis')
+  ({ files }) => everyFile(files, (file) => translateCoverageProblems(file.content), 'no .tsx file')
 );
 
+// The values are read from the captured RuntimeTypes.ts, the schema the type generator wrote: without
+// it there is nothing to verify a choice value or its name against.
 PHASE5_EXPECTATIONS.set(
   'Phase 5 (Page Builder): Generated .tsx uses the choice enum names from RuntimeTypes.ts (not magic numbers)',
-  () => skip('choice enum verification requires RuntimeTypes.ts fixture')
+  ({ files, fixture }) => (fixture?.runtimeTypes
+    ? everyFile(files, (file) => choiceEnumProblems(file.content, fixture.runtimeTypes), 'the page compares no choice value')
+    : skip('choice enum verification requires RuntimeTypes.ts fixture'))
 );
 
 // Hardcoded currency symbols and date formats in the TEXT a page shows or formats with. The text
@@ -623,6 +688,10 @@ PHASE5_EXPECTATIONS.set(
 // Not currency: a bare `${x}` interpolation (its `$` is the template delimiter), an OData query
 // option such as '?$select=' + cols (`$` is followed by a name), and a `currency:` key outside a
 // `style: 'currency'` number format (e.g. a translation dictionary `{ currency: 'Devise' }`).
+// JSX text and JSX attribute strings are read as the page renders them (renderedSource): the compiler
+// decodes their character references, so `<Text>&euro;{total}</Text>` shows "€", `<Text>&#36;{total}</Text>`
+// a "$" before the amount and `MM&#47;dd&#47;yyyy` a date pattern, exactly as if written plainly. A
+// JavaScript string or template is not decoded: `'&euro;'` shows those characters as written.
 const DATE_PART = '(?:d{1,2}|D{1,2}|M{1,4}|y{2,4}|Y{2,4})';
 const DATE_PATTERN = new RegExp(`\\b${DATE_PART}([/.\\-])${DATE_PART}\\1${DATE_PART}\\b`);
 
@@ -707,32 +776,38 @@ function hardcodedFormatProblem(content) {
     else if (!comment[i] && !/\s/.test(content[i])) opener = content[i];
   }
   const isText = (i) => isLiteral(i) && !inRegex[i];
-  const text = content.split('').map((ch, i) => (isText(i) ? ch : ' ')).join('');
+  // The symbol and date reads below run over the page as it renders (renderedSource): `shown` has the character
+  // references of its JSX text and JSX attribute strings decoded, and `shown[k]` comes from source offset `at[k]`, so
+  // which characters are text is still the lexer's reading of the source. A page whose JSX holds no reference is its own
+  // `shown`, at the same offsets.
+  const { shown, at } = renderedSource(content);
+  const isShownText = (k) => isText(at[k]);
+  const text = shown.split('').map((ch, k) => (isShownText(k) ? ch : ' ')).join('');
   // The code character next to a string literal's delimiter, skipping whitespace, in direction dir.
   const codeNeighbour = (from, dir) => {
     let k = from;
-    while (k >= 0 && k < content.length && /\s/.test(content[k])) k += dir;
-    return k >= 0 && k < content.length && !isText(k) ? content[k] : '';
+    while (k >= 0 && k < shown.length && /\s/.test(shown[k])) k += dir;
+    return k >= 0 && k < shown.length && !isShownText(k) ? shown[k] : '';
   };
   for (const m of text.matchAll(/[$\u20ac\u00a3\u00a5\u20b9]/g)) {
     const i = m.index;
     if (m[0] !== '$') return `hardcoded currency symbol "${m[0]}"`;
     let j = i + 1;
-    while (j < content.length && /[ \t]/.test(content[j])) j += 1;
-    const amount = /\d/.test(content[j] || '');
-    const templateCurrency = content[i + 1] === '$' && content[i + 2] === '{';
-    const jsxCurrency = content[j] === '{' && !isText(j);
+    while (j < shown.length && /[ \t]/.test(shown[j])) j += 1;
+    const amount = /\d/.test(shown[j] || '');
+    const templateCurrency = shown[i + 1] === '$' && shown[i + 2] === '{';
+    const jsxCurrency = shown[j] === '{' && !isShownText(j);
     // String-boundary currency: the `$` is the last text character before a closing quote that is
     // followed by `+`, or the first text character after an opening quote that is preceded by `+`.
     // Whitespace is skipped unconditionally: the text view blanks string contents to spaces, so a
     // space inside the string is indistinguishable from code here. Quote DELIMITERS stay visible in
-    // the code view (a quote inside text is blanked), which is what `!isText` tests below.
+    // the code view (a quote inside text is blanked), which is what `!isShownText` tests below.
     let end = i + 1;
-    while (end < content.length && /[ \t]/.test(content[end])) end += 1;
+    while (end < shown.length && /[ \t]/.test(shown[end])) end += 1;
     let start = i - 1;
-    while (start >= 0 && /[ \t]/.test(content[start])) start -= 1;
-    const prefixConcat = /['"`]/.test(content[end] || '') && !isText(end) && codeNeighbour(end + 1, 1) === '+';
-    const suffixConcat = start >= 0 && /['"`]/.test(content[start]) && !isText(start) && codeNeighbour(start - 1, -1) === '+';
+    while (start >= 0 && /[ \t]/.test(shown[start])) start -= 1;
+    const prefixConcat = /['"`]/.test(shown[end] || '') && !isShownText(end) && codeNeighbour(end + 1, 1) === '+';
+    const suffixConcat = start >= 0 && /['"`]/.test(shown[start]) && !isShownText(start) && codeNeighbour(start - 1, -1) === '+';
     if (amount || templateCurrency || jsxCurrency || prefixConcat || suffixConcat) return 'hardcoded "$" currency symbol';
   }
   const pattern = DATE_PATTERN.exec(text);
@@ -817,12 +892,12 @@ PHASE5_EXPECTATIONS.set(
 
 PHASE5_EXPECTATIONS.set(
   'Phase 5 (Page Builder): All components and utilities are separate top-level functions (no nested function definitions)',
-  () => skip('nested function detection requires AST analysis')
+  ({ files }) => everyFile(files, (file) => nestedDefinitionProblems(file.content), 'no .tsx file')
 );
 
 PHASE5_EXPECTATIONS.set(
   'Phase 5 (Page Builder): Generated code uses ONLY verified column names from RuntimeTypes.ts',
-  () => skip('column-name verification requires RuntimeTypes.ts fixture')
+  ({ files, fixture }) => columnsVerified(files, fixture)
 );
 
 PHASE5_EXPECTATIONS.set(

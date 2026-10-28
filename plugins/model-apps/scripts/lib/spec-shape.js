@@ -56,7 +56,8 @@ const COLLECTIONS = {
   // stage-by-stage while a process is being designed, so a mid-edit object here is realistic.
   businessProcessFlows: { children: { stages: { children: { steps: {} } } } },
   dashboards: { children: { tiles: {} } },
-  pages: { children: { navigatesTo: {}, dataSources: { scalar: true } } },
+  // A page's connector and Custom API bindings are lists of objects, carried onto its config.json as they are written.
+  pages: { children: { navigatesTo: {}, dataSources: { scalar: true }, connectorBindings: {}, actionBindings: {} } },
   personas: { children: { jobs: { children: { privileges: {} } }, additionalPrivileges: {} } },
 };
 

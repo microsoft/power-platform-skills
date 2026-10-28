@@ -11,7 +11,10 @@
 // retry follows (settleOwedPublishes; the CLI side is pinned in build-model-app.test.js).
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const { runSdkBuild, publishTargets, partialEnrichment, settleOwedPublishes, collectOwedPublishes, BuildHalt } = require('../lib/sdk-build.js');
+// An apply that names no app folder and no workspace gets an app folder of its own: it holds its build lease in its workspace (helpers/own-app-folder.js).
+const { inOwnFolder } = require('./helpers/own-app-folder.js');
+const { runSdkBuild: runSdkBuildInPlace, publishTargets, partialEnrichment, settleOwedPublishes, collectOwedPublishes, BuildHalt } = require('../lib/sdk-build.js');
+const runSdkBuild = inOwnFolder(runSdkBuildInPlace);
 const { makeSimpleMockSdk } = require('./helpers/mock-sdk.js');
 
 // Two tables: Project (with a form, so phase 8 already names it) and Task (no form, view or chart,

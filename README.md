@@ -31,6 +31,11 @@ The installer automatically:
 - Registers the plugin marketplace and installs all listed plugins except `dataverse`
 - Enables auto-update so plugins stay current
 
+The installer validates plugin names in local and downloaded marketplace manifests before
+installation. Names must follow the Open Plugins format: 1–64 lowercase ASCII letters or
+digits, with single dots or hyphens allowed between alphanumeric endpoints. CLI arguments
+are passed directly to executables; Windows batch launchers accept only shell-inert arguments.
+
 To also install the [Dataverse](#dataverse-external) plugin, pass `--include-dataverse`:
 
 ```powershell
@@ -85,7 +90,7 @@ Build model-driven Power Apps end to end, and the generative pages that go in th
 views, charts, security roles, app + sitemap — from a natural-language intent; `/genpage` builds
 generative pages for an app that already exists. Use either independently — neither requires the other
 
-**Stack**: React + TypeScript + Fluent, deployed via PAC CLI and the headless `cds-maker-sdk`
+**Stack**: React + TypeScript + Fluent, deployed through the headless `cds-maker-sdk` (PAC CLI signs you in and chooses the environment)
 
 ### [PCF](plugins/pcf/README.md) (`plugins/pcf`)
 

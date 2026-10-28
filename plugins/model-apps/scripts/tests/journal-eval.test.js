@@ -5,7 +5,10 @@
 const { test } = require('node:test');
 const fs = require('node:fs');
 const path = require('node:path');
-const { buildModelApp } = require('../build-model-app.js');
+// An apply that names no app folder and no workspace gets an app folder of its own: it holds its build lease in its workspace (helpers/own-app-folder.js).
+const { inOwnFolder } = require('./helpers/own-app-folder.js');
+const { buildModelApp: buildModelAppInPlace } = require('../build-model-app.js');
+const buildModelApp = inOwnFolder(buildModelAppInPlace);
 const { makeSimpleMockSdk } = require('./helpers/mock-sdk.js');
 const { assertGolden } = require('./helpers/golden.js');
 

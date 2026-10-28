@@ -26,7 +26,11 @@ const { classifyChanges } = require('./classify-changes.js');
 const snap = require('./apply-snapshot.js');
 const store = require('./apply-snapshot-store.js');
 const { indexArtifacts } = require('./apply-snapshot-index.js');
+const { ownValue } = require('./own-keys.js');
 const { odataLit } = require('./odata.js');
+// The app's build lease (lib/app-operation-lease.js), and the one derivation of the app's unique name it is keyed by.
+const { withAppBuildLease, applyWorkspaceOf } = require('./app-operation-lease.js');
+const { appUniqueName } = require('./sdk-build.js');
 
 // ---- PURE decision ------------------------------------------------------------------------------------
 
@@ -58,7 +62,7 @@ function decideChangedOnly({ annotatedSpec, snapshot, live, distrust = null }) {
   }
   // Eligible + EVERY change is the wired page-content shape → pages-only fast apply. Requires a live appId
   // (the fast path seeds result.created.app from it to satisfy pages-requires-app); a null appId would
-  // otherwise HALT, so fall back to a full build instead (M6). identityMatches already guarantees a live
+  // otherwise HALT, so fall back to a full build instead. identityMatches already guarantees a live
   // appId when the snapshot recorded one, so this is a belt-and-suspenders guard for a legacy no-appId
   // snapshot.
   if (classify.verdict === 'fast' && classify.fastChanges.length > 0 && classify.fastChanges.every((c) => c.shape === 'page')) {
@@ -117,15 +121,15 @@ async function resolveLiveIdentity({ sdk, envUrl, appUniqueName, whoAmI }) {
 // ---- snapshot assembly (post-apply) -------------------------------------------------------------------
 
 // Assemble the baseline snapshot to persist after a FULL apply. Two fail-closed rules:
-//  1. FRESH-CREATE-ONLY eligibility (Sol #7 / Opus H2): a full `--apply` is ADDITIVE — on a PRE-EXISTING
+//  1. FRESH-CREATE-ONLY eligibility: a full `--apply` is ADDITIVE — on a PRE-EXISTING
 //     app it re-SKIPS diverged chart/command/dashboard/web-resource-content edits, so the deployed state may
 //     not match the spec even though the build "succeeded". We can only PROVE convergence when the app was
 //     CREATED fresh this run (it did not exist when the flow started: appPreExisted=false). If the app
 //     pre-existed, the baseline is recorded INELIGIBLE with an `uncertified-baseline` debt — a page edit then
 //     stays on the full-build path until a clean teardown+rebuild recreates everything fresh. This also
-//     subsumes the AI/data-model divergence concern (Sol #8): any full-build-triggering edit on an existing
+//     subsumes the AI/data-model divergence concern: any full-build-triggering edit on an existing
 //     app yields an ineligible baseline, regardless of the specific phase.
-//  2. STICKY debt (Sol build-time note): new snapshot debt = prior debt UNION this build's classify debt;
+//  2. STICKY debt: new snapshot debt = prior debt UNION this build's classify debt;
 //     eligible only when empty. A plain full rebuild never self-heals debt (the additive engine re-skips a
 //     stale artifact); debt clears only when a clean teardown DELETES the snapshot and it is recreated fresh.
 function assembleBaselineSnapshot({ annotatedSpec, created, live, prior, appPreExisted, sampleDataApplied }) {
@@ -155,8 +159,8 @@ function assembleBaselineSnapshot({ annotatedSpec, created, live, prior, appPreE
 // Refresh the snapshot after a pages-only FAST apply: keep the eligible envelope, update priorSpec and the
 // re-uploaded pages' hashes. sourceSha is the spec's on-disk hash; deployedSha is the MEASURED hash of the
 // bytes actually uploaded (created.pageDeployedShas[key] — differs from source when PAGEREF nav is resolved,
-// so it must never be assumed equal to the source hash; Sol #2/#3). Only the SELECTED (re-uploaded) keys are
-// refreshed — an unchanged page keeps its recorded hashes. Re-checks empty debt via markEligible (Opus L8)
+// so it must never be assumed equal to the source hash). Only the SELECTED (re-uploaded) keys are
+// refreshed — an unchanged page keeps its recorded hashes. Re-checks empty debt via markEligible
 // and bumps the generation for the CAS write.
 function assembleFastSnapshot({ snapshot, annotatedSpec, created, pageKeys, generation }) {
   const env = snap.parseEnvelope(snap.serializeEnvelope(snapshot)); // deep clone
@@ -164,14 +168,19 @@ function assembleFastSnapshot({ snapshot, annotatedSpec, created, pageKeys, gene
   if (!env.artifacts) env.artifacts = {};
   if (!env.artifacts.pages) env.artifacts.pages = {};
   const selected = new Set(pageKeys || []);
+  // Each map is read by the page's key as an OWN entry (lib/own-keys.js): a key can be `constructor`, which a plain object — the
+  // snapshot's parsed JSON, or the `{}` of a build that measured no deployed hash — answers with the Object function, and that
+  // function would be recorded as the page's id or deployed hash (and then dropped from the JSON written to disk).
   const deployedShas = (created && created.pageDeployedShas) || {};
   for (const p of annotatedSpec.pages || []) {
     if (!p || typeof p !== 'object') continue;
     const key = p.key || p.name;
     if (!selected.has(key)) continue; // only refresh the pages we actually re-uploaded
     const sourceSha = p.__contentSha != null ? p.__contentSha : null;
-    const deployedSha = deployedShas[key] != null ? deployedShas[key] : sourceSha;
-    const pageId = (created && created.pages && created.pages[key]) || (env.artifacts.pages[key] && env.artifacts.pages[key].pageId) || null;
+    const measured = ownValue(deployedShas, key);
+    const deployedSha = measured != null ? measured : sourceSha;
+    const recorded = ownValue(env.artifacts.pages, key);
+    const pageId = ownValue(created && created.pages, key) || (recorded && recorded.pageId) || null;
     env.artifacts.pages[key] = { pageId, sourceSha, deployedSha };
   }
   snap.bumpGeneration(env, generation);
@@ -181,13 +190,33 @@ function assembleFastSnapshot({ snapshot, annotatedSpec, created, pageKeys, gene
   return env;
 }
 
+// The pages a snapshot records as deployed by the last verified apply: the keys whose record holds a page id (apply-snapshot-index.js `indexArtifacts`, assembleFastSnapshot). A record without one proves
+// no page, and a snapshot that records none (an older one) names none — so the build checks every navigation target, as it always did.
+function deployedPageKeys(snapshot) {
+  const pages = (snapshot && snapshot.artifacts && snapshot.artifacts.pages) || {};
+  return Object.keys(pages).filter((key) => pages[key] && pages[key].pageId);
+}
+
 // ---- orchestration ------------------------------------------------------------------------------------
 
 // Run the `--apply --changed-only` flow. `deps.buildModelApp` is injected (no require cycle) so this
 // module orchestrates without importing the CLI wrapper; `deps.buildDeps` is the deps object passed
 // through to buildModelApp (sdk/provisionSdk/journal/verify/log). Returns the buildModelApp result
 // augmented with `.changedOnly` (the decision), or a noop/abort result.
+//
+// The FIRST thing it does is take the app's build lease, or borrow the one its caller holds (`opts.buildLease`, the CLI's): before the spec's
+// content is read, before the snapshot and the distrust markers are read, and before the live identity is resolved (a WhoAmI). A second apply of
+// the same app in this workspace is refused there (`build-locked`), and reads nothing — it would otherwise decide fast/full/noop from a snapshot
+// the running build is about to change. Everything below runs under the lease, and the builds it starts borrow it: one lease for the whole flow,
+// let go when it returns or throws. The workspace is resolved once (lib/app-operation-lease.js applyWorkspaceOf), so the lease and the flow name
+// the same folder.
 async function runChangedOnlyApply({ spec, opts, deps }) {
+  const ws = applyWorkspaceOf(opts);
+  return withAppBuildLease({ workspaceDir: ws, appUniqueName: appUniqueName(spec), buildLease: opts.buildLease, warn: deps.warn },
+    (buildLease) => runChangedOnlyApplyHeld({ spec, opts: { ...opts, workspaceDir: ws, buildLease }, deps }));
+}
+
+async function runChangedOnlyApplyHeld({ spec, opts, deps }) {
   const log = deps.log || (() => {});
   const ws = opts.workspaceDir;
   const annotate = (s) => annotateContentHashes(s, deps.readContent);
@@ -286,7 +315,7 @@ async function runChangedOnlyApply({ spec, opts, deps }) {
   }
 
   // Whether the app already existed when the flow STARTED — the only proof a subsequent full build is a
-  // fresh create (→ eligible baseline). Captured before any write (Sol #7 / Opus H2).
+  // fresh create (→ eligible baseline). Captured before any write.
   //
   // An UNREADABLE app id counts as pre-existing. "We could not look" must not certify a fresh baseline:
   // the alternative is that one transient app-query failure mints an eligible snapshot for an additive
@@ -296,7 +325,7 @@ async function runChangedOnlyApply({ spec, opts, deps }) {
   const appPreExisted = live.appIdKnown === false ? true : !!live.appId;
 
   let decision = decideChangedOnly({ annotatedSpec, snapshot, live, distrust });
-  // Sample-data guard (Sol #11): the baseline records whether --sample-data was applied. If THIS run asks
+  // Sample-data guard: the baseline records whether --sample-data was applied. If THIS run asks
   // for sample data but the eligible baseline did not seed it, a fast/noop would never seed the rows —
   // force a full build so the sample-data phase runs.
   if (opts.sampleData && snapshot && snapshot.sampleDataApplied !== true && (decision.decision === 'fast' || decision.decision === 'noop')) {
@@ -322,12 +351,15 @@ async function runChangedOnlyApply({ spec, opts, deps }) {
       log(`✗ ${msg}`);
       return { ok: false, errors: [msg], changedOnly: decision };
     }
-    // selectedKeys: upload ONLY the changed pages (never clobber an unchanged one — Sol #1).
-    const fastOpts = { ...fullApplyOpts(opts), phases: ['pages'], changedOnly: { fastApply: true, resolvedAppId: live.appId, skipSitemapFinalize: true, selectedKeys: decision.pageKeys } };
+    // selectedKeys: upload ONLY the changed pages (never clobber an unchanged one).
+    // deployedKeys: the pages the snapshot records its last verified apply deployed. The build checks the bindings of the pages it writes before it writes anything, and it writes a navigation target only
+    // when the target is absent — which it learns only later, in its pages phase. So it is told which pages are there, and leaves their bindings unread; one it was told of and finds absent after all
+    // (deleted in Maker since) it checks before it makes it (sdk-build.js, pagesMadeUnchecked).
+    const fastOpts = { ...fullApplyOpts(opts), phases: ['pages'], changedOnly: { fastApply: true, resolvedAppId: live.appId, skipSitemapFinalize: true, selectedKeys: decision.pageKeys, deployedKeys: deployedPageKeys(snapshot) } };
     const { r, moved } = await buildHolding(ws, inv.generation, log, () => deps.buildModelApp(spec, fastOpts, deps.buildDeps));
     // Re-bless ONLY on a fully successful apply whose mandatory page verify PASSED (a fast apply always
     // applies the pages phase, so verify is mandatory and r.verify is always set — a missing/failed verify
-    // leaves the snapshot invalidated, fail-closed; Sol #2/#3, Opus H4). CAS `expected` = the post-invalidate
+    // leaves the snapshot invalidated, fail-closed). CAS `expected` = the post-invalidate
     // generation (inv.generation), which the invalidate wrote; a concurrent writer that bumped it again is
     // detected and this re-bless is refused.
     if (r && r.ok && !r.dryRun && r.verify && r.verify.ok && moved) {

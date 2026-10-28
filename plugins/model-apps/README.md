@@ -1,6 +1,6 @@
 # Model Apps Plugin
 
-Build and deploy generative pages (genux) for Power Apps model-driven apps. This plugin provides a complete workflow — from validating prerequisites and gathering requirements, through generating React + TypeScript + Fluent code, to deploying via PAC CLI and verifying in the browser.
+Build and deploy generative pages (genux) for Power Apps model-driven apps. This plugin provides a complete workflow — from validating prerequisites and gathering requirements, through generating React + TypeScript + Fluent code, to deploying through the bundled SDK and verifying in the browser.
 
 ## Installation
 
@@ -24,36 +24,40 @@ claude --plugin-dir /path/to/power-platform-skills/plugins/model-apps
 | Prerequisite | Required for | Install |
 |---|---|---|
 | [Node.js](https://nodejs.org/) (LTS) | All skills | `winget install OpenJS.NodeJS.LTS` |
-| [PAC CLI](https://learn.microsoft.com/en-us/power-platform/developer/cli/introduction) > 2.10.0 | Schema generation, app creation, table listing, deployment | `dotnet tool install -g Microsoft.PowerApps.CLI.Tool` |
-| [Azure CLI](https://learn.microsoft.com/en-us/cli/azure/install-azure-cli) (`az`) | Dataverse Web API auth for entity creation | `winget install Microsoft.AzureCLI` |
+| [PAC CLI](https://learn.microsoft.com/en-us/power-platform/developer/cli/introduction) > 2.10.0 | Signing in, choosing the environment and reading the CLI version (`pac auth`, `pac org who`, `pac help`); the fallbacks of the connection, connector and deployment-settings scripts; reading a tabular connector's table columns (`scripts/connector.js schema --dataset --table`); and listing a tabular connector's tables, which no script wraps (`pac model genpage list-connector-tables`) | `dotnet tool install -g Microsoft.PowerApps.CLI.Tool` |
+| [Azure CLI](https://learn.microsoft.com/en-us/cli/azure/install-azure-cli) (`az`) | Every Dataverse call — tables, apps, languages, entity creation and generative pages — and the Power Apps service token that reading connections and connector metadata uses | `winget install Microsoft.AzureCLI` |
 
-After installing `az`, run `az login` with the same identity as your active `pac auth list` profile. Without `az`, the `/genpage` skill still works for pages over existing entities or mock data — it only fails when entity creation is needed. (Detecting the environment's languages uses `az` when it is signed in and falls back to `pac model list-languages --environment '<envUrl>'` when it is not.)
+After installing `az`, run `az login` with the same identity as your active `pac auth list` profile. `az` is what every Dataverse call authenticates with — listing tables, apps and languages, entity creation, and the generative pages themselves, which are written, read and deleted through the bundled SDK, not through `pac model genpage` — and it signs in the Power Apps service token that the connection and connector-metadata reads use. **Deploying a page needs `az`**, and so does detecting the environment's languages: there is no `pac` fallback for either, so a missing or signed-out `az` ends language detection with the reason, never with an English default. `pac` signs you in and chooses the environment, and steps in for the connection, connector and deployment-settings scripts only where the SDK has no route or refuses (`connectionsSource` or `source` says which answered; `connectionsFallback` or `fallback` says why the SDK did not). It also lists a tabular connector's tables (`pac model genpage list-connector-tables`; no script wraps it), and `scripts/connector.js schema --dataset --table` reads a table's columns through `pac`: the plugin cannot build the client the SDK reads a connector's tables with. The type generator, the page listing and download, and putting a page in an app, taking it out and deleting it are the SDK's too (`scripts/genpage.js`), so they need `az` and no `pac`.
 
 Each Azure CLI call (a token, `az account show`) may take up to **60 seconds** — a busy machine can
 take most of that just to start `az`. A call that runs out of time is reported as a timeout (the
 pre-flight's `az_timeout`), never as a missing or signed-out CLI. To allow longer, set
 `POWER_PLATFORM_SKILLS_AZ_TIMEOUT_MS` in milliseconds (1000–900000), for example `120000`.
 
-Each `pac` call for generative pages is time-bounded too: **3 minutes** to list or download pages, **10 minutes** to
-upload one. A call that runs out of time is stopped together with everything it started, and the message says what to
-do; a page create whose outcome is unknown is never sent again. To allow longer, set
-`POWER_PLATFORM_SKILLS_PAC_TIMEOUT_MS` in milliseconds (1000–3600000); it applies to every `pac model genpage` call (list,
-download and upload).
+A page write whose outcome is unknown (the connection dropped before the answer) is never sent again blindly: the page is read first, and
+what it holds decides whether the write landed — the message says what to check when that cannot be told. There is no `pac` call, and so
+no timeout setting, for pages.
 
-## Feature flags (experimental & in-progress)
+## Feature flags (defaults and overrides)
 
 Some capabilities ship **OFF by default** while their cross-repo dependencies roll
-out to production. With a flag OFF, the skill behaves as if the feature doesn't
-exist and deployed pages are unchanged. Flags are catalogued (with lifecycle
-status) in `scripts/lib/feature-flags.js`; their on/off value lives in
-`feature-flags.json` at the plugin root.
+out to production: custom telemetry and built-in Dataverse operation authoring are OFF.
+Flags are catalogued (with lifecycle status) in `scripts/lib/feature-flags.js`; their on/off
+value lives in `feature-flags.json` at the plugin root.
 
-| Flag | Status | Enables | Depends on |
-|---|---|---|---|
-| `custom-api` | in-progress | Calling a Dataverse Custom API Action or Function from a generated page (`executeAction` / `executeFunction` / `listBoundActions`) | the AIBuilder action prompt, the shared action runtime, the UCI and Controls host runtimes, a pac CLI `model genpage upload --actions` verb, and the `GenUxPluginActionAllowList` setting — all live in PROD |
-| `custom-telemetry` | in-progress | A generated page reporting its own events, metrics, traces and exceptions to your Application Insights resource via `props.appInsights` | the page telemetry facade in the UCI host runtime, the GenUX authoring control, the AIBuilder telemetry prompt, and the `GenUxEnableCustomTelemetry` setting — all live in PROD |
+| Flag | Status | Default | Enables | Depends on |
+|---|---|---|---|---|
+| `custom-telemetry` | in-progress | OFF | A generated page reporting its own events, metrics, traces and exceptions to your Application Insights resource via `props.appInsights` | the page telemetry facade in the UCI host runtime, the GenUX authoring control, the AIBuilder telemetry prompt, and the `GenUxEnableCustomTelemetry` setting — all live in PROD |
+| `dataverse-operations` | experimental | OFF | Offering two reviewed built-in Dataverse Functions, WhoAmI and RetrieveVersion, as explicitly selected, button-only page calls (`executeFunction`); `scripts/list-dataverse-operations.js` lists them without contacting the environment | a host runtime that implements `executeFunction`, the page `actionBindings` the plugin writes, and the `GenUxPluginActionAllowList` setting; the environment, the page player and the signed-in user's permissions are not checked — see [the built-in operations reference](references/dataverse-operations.md) |
 
 Connector authoring is in **public preview** and no longer has a feature flag. Connector discovery, binding, deploy, and ALM packaging are always available when the required PAC and host capabilities are present.
+
+Custom API support has no feature flag either: calling a supported public Dataverse Custom API
+Action or Function from a generated page (`executeAction` / `executeFunction` /
+`listBoundActions`) is always available. `GENPAGE_ENABLE_CUSTOM_API` is ignored — `0` no longer
+turns Custom API discovery off, and there is nothing to turn on. The host runtimes,
+revision-bound `actionBindings`, environment governance and the signed-in user's privileges
+still apply.
 
 **See the current state** (status, whether each flag is on, and why):
 
@@ -61,30 +65,34 @@ Connector authoring is in **public preview** and no longer has a feature flag. C
 node scripts/lib/feature-flags.js --list
 ```
 
-**Enable a flag for a single run** via an environment variable (highest precedence):
+**Turn a flag on for a single run** via an environment variable (highest precedence):
 
 ```powershell
 # Windows (PowerShell)
-$env:GENPAGE_ENABLE_CUSTOM_API = "1"
+$env:GENPAGE_ENABLE_DATAVERSE_OPERATIONS = "1"
 ```
 
 ```bash
 # macOS / Linux (bash)
-export GENPAGE_ENABLE_CUSTOM_API=1
+export GENPAGE_ENABLE_DATAVERSE_OPERATIONS=1
 ```
 
-**Enable it persistently** by flipping the value in `feature-flags.json`:
+**Turn it on persistently** by changing its committed value in `feature-flags.json`:
 
 ```json
-{ "custom-api": true }
+{ "dataverse-operations": true }
 ```
 
-Precedence is **env var → `feature-flags.json` → default OFF** (fail-closed). Only
-turn a flag on once its "Depends on" items are actually available in your
-environment — otherwise the feature's commands will fail with a clear "disabled" or
-capability error. The env var name is always `GENPAGE_ENABLE_` plus the flag name in upper case, with
-`-` turned into `_` (`custom-api` → `GENPAGE_ENABLE_CUSTOM_API`), and unknown flags stay disabled even if
-a matching env var is set.
+Precedence is **env var → `feature-flags.json` → default OFF** for missing/unset
+configuration (fail-closed). Host capabilities and server governance still apply; turning a
+flag on grants no new privileges.
+The env var name is always `GENPAGE_ENABLE_` plus the flag name in upper case, with
+`-` turned into `_` (`dataverse-operations` → `GENPAGE_ENABLE_DATAVERSE_OPERATIONS`), and unknown
+flags stay disabled even if a matching env var is set.
+
+Custom API discovery omits private APIs and APIs with Entity/EntityCollection inputs or outputs.
+Lookup input names stay available to the author separately from the primitive-only wire
+`parameterKinds`; see [the Custom API contract](references/custom-api.md).
 
 ## Skills
 
@@ -135,13 +143,13 @@ vendored `cds-maker-sdk`. It runs an interactive, multi-turn authoring flow and 
 Creates, updates, and deploys generative pages for model-driven Power Apps. Handles the complete workflow in a single session:
 
 1. **Validate prerequisites** — checks Node.js and PAC CLI version
-2. **Authenticate** — verifies PAC CLI auth (and `az` if entity creation is needed)
+2. **Authenticate** — verifies PAC CLI auth and `az` (entity creation and page deployment both sign in through `az`)
 3. **Gather requirements** — asks about page type, data source, and specific features
 4. **Create entities** (optional) — uses the plugin's Node.js Web API scripts to create Dataverse tables, columns, relationships, and choice columns when the requested entities don't exist. Asks which solution to land them in
-5. **Create app** (optional) — runs `pac model create` if no model-driven app is targeted
-6. **Generate schema** — runs `pac model genpage generate-types` for Dataverse entity pages
+5. **Choose the app** — lists the environment's apps (`scripts/apps.js list`); when no model-driven app is targeted, the app is created in step 8, from the first page deployed (`scripts/apps.js create`), because an app opens on its pages
+6. **Generate schema** — runs `scripts/genpage.js types` (the SDK's type generator) for Dataverse entity pages
 7. **Generate code** — produces a complete single-file `.tsx` component (parallel page-builders for multi-page requests)
-8. **Deploy** — uploads via `pac model genpage upload` to the selected app
+8. **Deploy** — writes the page through the bundled SDK (`scripts/genpage-upload.js`); a page needs no app, and is added to an app's navigation only when the upload names the app (`--app-id`) and asks for the placement (`--add-to-sitemap`) — `--app-id` alone only pins the default views of the page's tables in the app. For a new app the first page is deployed first, then the app is created from it, then the other pages are added
 9. **Verify** — optionally opens the page in Playwright for interactive testing
 
 **Usage:** Invoke directly with `/genpage`, or use any of the keywords below to trigger the skill automatically:
@@ -255,7 +263,7 @@ DoD, China); an unrecognized cloud sends nothing. Then:
 - **Fluent UI V9** — `@fluentui/react-components` for styling and components
 - **Single file architecture** — each page is one `.tsx` file with `export default GeneratedComponent`
 - **DataAPI** — typed CRUD operations against Dataverse tables via `props.dataApi`
-- **PAC CLI** — schema generation (`generate-types`) and deployment (`upload`)
+- **PAC CLI** — sign-in and environment choice, the fallbacks of the connection, connector and deployment-settings scripts, and a tabular connector's tables and columns (`pac model genpage list-connector-tables`, `scripts/connector.js schema --dataset --table`); pages, their schema and their listing, download and removal go through the bundled SDK
 - **Playwright** — optional browser verification after deployment
 
 ## Documentation

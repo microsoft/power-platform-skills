@@ -1,9 +1,10 @@
 'use strict';
-const { blankNonCodePreservingTemplateExpressions, isTrivia, isLineTerminator } = require('./source-literals.js');
+const { isTrivia, isLineTerminator } = require('./source-literals.js');
+const { guessedPageViews } = require('./typescript-views.js');
 
 // Pure STRUCTURAL resolver for generative-page cross-page navigation. Authors emit a link as a stable
 // symbolic token — pageId: "PAGEREF_<key>" — because the real GenPageId is minted by the server at
-// deploy time and differs per environment (SDK opaque-identity rule T5: never bake a resolved GUID into
+// deploy time and differs per environment (SDK opaque-identity rule: never bake a resolved GUID into
 // canonical source, or a cross-env recreate ships a dead link). See references/rules.md "Generative Page
 // Navigation" and docs/app-builder-design.md §9. The ENGINE reads/writes files; this module
 // only shapes/parses strings (pure, offline).
@@ -88,7 +89,7 @@ const AMBIGUITY_TEXT = {
   'jsx-type-arguments': 'a JSX element with type arguments that hold a string, template, object or function type is read by the rules of a JSX tag, not by TypeScript\'s',
   'jsx-attribute': 'a JSX attribute value written after white space or a comment that follows its "=" is read by TypeScript as a string with escapes, and by other compilers without them, so they may disagree on where it ends when it holds a backslash; write the value right after the "="',
   'jsx-open': 'a "<" where an element may start, but that this check does not read as one (a space after it, a name beyond ASCII), may be a comparison or an element, and a closing tag that holds anything but a name and comments before its ">" (a second name, a string, a brace) is not read, so where it ends cannot be told',
-  generic: 'a "<Name>" followed by a parameter list and a ":" may be the type parameters of a call signature or an element whose text starts with a parenthesis, and so may one followed by a parameter list and no return type when a string, a template, a comment or a regex after it could hold its closing tag "</Name>" or the text after it cannot be read to the end of an element; one followed by a parameter list and "=>" is a function type unless a nested tag, an attribute string or an expression container in the list holds the arrow, and this check cannot rule that out for every "<" or "{" there; "<await" and "<yield" may be type parameters or an element, by whether the function around them is async or a generator; and a parameter list too long to scan cannot be told at all',
+  generic: 'a "<Name>" followed by a parameter list and a ":" may be the type parameters of a call signature or an element whose text starts with a parenthesis, and so may one followed by a parameter list and no return type when a string, a template, a comment or a regex after it could hold its closing tag "</Name>" or the text after it cannot be read to the end of an element; one followed by a parameter list and "=>" is a function type unless a nested tag, an attribute string or an expression container in the list holds the arrow, and this check cannot rule that out for every "<" or "{" there; "<await" and "<yield" may be type parameters or an element, by whether the function around them is async or a generator; and a parameter list too long to scan, or one that cannot be read to its end (a regex after a call in a default, a template with a template or a comment in it), cannot be told at all',
   fallback: 'a quote with no closing quote on its line is read as an ordinary character, not as the start of a string, and a "/" after a character that begins nothing in code ("#", "@") has no grammar to ask',
 };
 const AMBIGUITY_REMEDY = 'this check cannot tell for certain how the code after it is read, so it does not trust a navigation call that reaches it, '
@@ -683,12 +684,16 @@ function tokenRange(tokens, from, to) {
 // the lexer takes the regex reading, and where that is wrong it blanks code up to the next `/` and reads on in the wrong state. The same
 // holds for every guess the lexer makes, and nothing short of a parser can tell which was wrong, so nothing at or after the earliest is
 // trusted: pageRefTokens marks every token there, strayPageRefs reports each, and no consumer rewrites a call that reaches it.
+// So where the lexer guessed, the parser is asked (typescript-views.js): the TypeScript compiler the pages are compiled with, which settles every guess. Where it
+// parses the page with no diagnostic, the mask is the one built from its parse — the lexer's own format, character for character (a test holds the two equal on
+// every page the lexer reads with no guess) — and nothing in the page is a guess any more: there is no frontier. Where it reports a diagnostic, the lexer's mask and
+// frontier stand; and so they do where another reader reads the page differently or refuses it (a JSX attribute string after trivia, which TypeScript reads with
+// escapes and other compilers without, so they end it at different quotes; grammar only TypeScript's parser takes), told from the parse itself by
+// guessedPageViews, which the structure gate (page-structure.js) asks too.
 function lexNavigation(src) {
-  let frontier = null;
-  const mask = blankNonCodePreservingTemplateExpressions(src, {
-    onAmbiguity: (at, kind) => { if (!frontier || at < frontier.at) frontier = { at, kind }; },
-  });
-  return { mask, tokens: pageRefTokens(src, frontier), frontier };
+  const { keep, frontier, views } = guessedPageViews(src);
+  if (views !== null) return { mask: views.keep, tokens: pageRefTokens(src, null), frontier: null };
+  return { mask: keep, tokens: pageRefTokens(src, frontier), frontier };
 }
 
 // Everything the oracle reads from one source, computed once: the classified targets (in source order), the tokens and the frontier. A

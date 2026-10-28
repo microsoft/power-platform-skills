@@ -86,6 +86,27 @@ test('resolveNpxCli finds the Windows npm JavaScript entrypoint', () => {
   ]);
 });
 
+test('resolveNpxCli finds Debian and Ubuntu distro-installed npm', () => {
+  const expected = '/usr/share/nodejs/npm/bin/npx-cli.js';
+  const checked = [];
+
+  const resolved = resolveNpxCli({
+    execPath: '/usr/bin/node',
+    platform: 'linux',
+    existsSync(candidate) {
+      checked.push(candidate);
+      return candidate === expected;
+    },
+  });
+
+  assert.equal(resolved, expected);
+  assert.deepEqual(checked, [
+    '/usr/lib/node_modules/npm/bin/npx-cli.js',
+    '/usr/bin/node_modules/npm/bin/npx-cli.js',
+    expected,
+  ]);
+});
+
 test('fullscreen config maximizes the browser and uses the real viewport size', () => {
   const configPath = path.join(__dirname, '..', 'playwright-mcp-fullscreen.config.json');
   const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));

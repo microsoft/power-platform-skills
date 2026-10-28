@@ -1,10 +1,10 @@
 ---
 name: configure-canvas-mcp
 version: 2.1.0
-description: Configure the Canvas Authoring MCP server for the current coauthoring session. USE WHEN "configure MCP", "set up MCP server", "MCP not working", "connect Canvas Apps MCP", "canvas-authoring not available", "MCP not configured", "set up canvas apps".
+description: Configure the Canvas Authoring MCP server for the current coauthoring session. Use before starting to edit a canvas app with the /canvas-app skill if not already connected. USE WHEN "configure MCP", "set up MCP server", "MCP not working", "connect Canvas Apps MCP", "canvas-authoring not available", "MCP not configured", "set up canvas apps".
 author: Microsoft Corporation
 user-invocable: true
-allowed-tools: Bash, AskUserQuestion, mcp__canvas-authoring__connect
+allowed-tools: Bash, AskUserQuestion, mcp__canvas-authoring__connect, canvas-authoring/connect
 ---
 
 # Configure the Canvas Authoring MCP Server
@@ -58,10 +58,10 @@ Example URL: `https://make.powerapps.com/e/Default-91bee3d9-0c15-4f17-8624-c92bb
 
 ### 3. Configure the MCP server
 
-Call the `connect` MCP tool to connect the server to the user's coauthoring session:
+Call the `connect` MCP tool on the `canvas-authoring` server to connect to the user's coauthoring session.
 
 ```
-mcp__canvas-authoring__connect(
+connect(
   environment_id: ENV_ID,
   app_id: APP_ID,
   environment_category: ENVIRONMENT_CATEGORY,
@@ -76,11 +76,11 @@ mcp__canvas-authoring__connect(
 **Optional parameters — do NOT prompt the user for these.** Only include them if the user has already expressed a preference earlier in the conversation, or if a prior connect attempt failed:
 
 - `login_hint`: Pass the user's UPN or email **only if** they have indicated they want to connect as a specific/different user (e.g. "log in as alice@contoso.com"). These values cannot be derived from the maker portal URL — never guess. Omit otherwise to use the first signed-in user. When reconnecting to switch environment/app, reuse the same `login_hint` value as the previous successful connect (if known) so the same user is reused without re-prompting.
-- `auth_flow`: Pass `"browser"`, `"broker"`, or `"devicecode"` **only if** the user has explicitly stated a preferred auth flow (e.g. "use browser sign-in"). Use `"devicecode"` on headless/SSH hosts where neither broker nor browser flow can pop a UI — the verification URL and user code are surfaced via an MCP elicitation request and require a client that supports elicitation. Omit otherwise to use the default.
+- `auth_flow`: Pass `"browser"`, `"broker"`, or `"devicecode"` if the user has explicitly stated a preferred auth flow (e.g. "use browser sign-in"), or use `"browser"` for the 404 recovery below. Use `"devicecode"` on headless/SSH hosts where neither broker nor browser flow can pop a UI — the verification URL and user code are surfaced via an MCP elicitation request and require a client that supports elicitation. Omit otherwise to use the default.
 - `tenant_id`: Pass a tenant GUID **only** for Entra B2B guest access — set it to the host/resource tenant where the user is a guest so the token is issued by that tenant rather than the user's home tenant. Combine with `login_hint` (the guest's home UPN) to pre-fill the account. Omit for normal same-tenant sign-in.
-- `force_account_select`: Pass `true` **only** to force the account picker instead of silently reusing a cached account — set this when a previous connect failed with a 401/403 and no `login_hint` was given, so the user can pick the correct account. Omit otherwise.
+- `force_account_select`: Pass `true` **only** to force the account picker instead of silently reusing a cached account — set this for the 404 recovery below, or when a previous connect failed with a 401/403 and no `login_hint` was given, so the user can pick the correct account. Omit otherwise.
 
-If the `mcp__canvas-authoring__connect` tool is **not available** (the MCP server did not start), run the following command to check whether the server failed to launch due to a missing .NET 10 SDK:
+If the Canvas Authoring `connect` tool is **not available** under the current host's name, run the following command to check whether the server failed to launch due to a missing .NET 10 SDK. Do not treat the absence of the other host's tool name as a server failure.
 
 ```bash
 dotnet --list-sdks
@@ -90,7 +90,15 @@ If a version 10.x.y or higher is **not** listed, tell the user:
 
 > ⚠️ .NET 10 SDK is required to run the Canvas Authoring MCP server. It looks like you don't have it installed. Please install it from https://dotnet.microsoft.com/download/dotnet/10.0 and then try again.
 
-If the tool is available but the call returns an error, report the error and suggest checking that:
+**If `connect` fails with HTTP 404**, a likely cause is signing in with a different account from the one used for the Studio session. Report the error and recover in this order:
+
+1. Remind the user to sign in with the **same account they used for the Power Apps Studio browser session**.
+2. Run `connect` again with the same environment/app parameters and `force_account_select: true` so the user can select that account.
+3. If that retry fails, run `connect` once more with `auth_flow: "browser"` and `force_account_select: true`, keeping the same environment/app parameters. Remind the user to select their Studio account in the browser sign-in. On a headless/SSH host where browser sign-in is unavailable, use `auth_flow: "devicecode"` instead as described above.
+
+Stop retrying after a successful connection. If both recovery attempts fail, report the final error and follow the checks below; do not claim the server is configured.
+
+For other connection errors, or if 404 recovery fails, report the error and suggest checking that:
 
 1. The studio URL is correct and the browser tab is still open
 2. Coauthoring is enabled in the app settings
@@ -98,10 +106,8 @@ If the tool is available but the call returns an error, report the error and sug
 
 ### 4. Confirm
 
-Tell the user:
+Only after `connect` succeeds, tell the user:
 
 > ✅ Canvas Authoring MCP server configured for your coauthoring session.
 >
 > You can now use Canvas App skills like `/canvas-app` to create or edit your app.
->
-> To verify the setup, try: "List available Canvas App controls" — this should invoke `list_controls`.

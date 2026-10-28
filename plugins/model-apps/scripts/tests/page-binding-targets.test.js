@@ -1,0 +1,651 @@
+'use strict';
+// What a rebuild checks of the environment it writes a page's bindings into (lib/page-binding-targets.js).
+//
+// A binding names what it goes through — a connection reference by its logical name, a Custom API by its unique name — and the page calls it by that name at run time. The spec can state the name and the connector
+// it was made for (`connectorId`), and cannot make the reference: so before a rebuild writes a binding it reads the environment's references and Custom APIs for the names the spec states. A reference that
+// exists for ANOTHER connector is refused — the page would call that connector under this name, and the name cannot tell them apart — and a name that is not there, or a Custom API of another kind, is said by name.
+const { test } = require('node:test');
+const assert = require('node:assert');
+const { connectorKey, pagesStatingBindings, pagesMadeUnchecked, pagesLeftOutAsDeployed, bindingReads, readBindingTargets, judgeBindingTargets, definedOperations } = require('../lib/page-binding-targets.js');
+
+const WEATHER = { logicalName: 'contoso_msnweather', connectorId: '/providers/Microsoft.PowerApps/apis/shared_msnweather', dataset: '', operations: ['CurrentWeather'] };
+const SHAREPOINT = { logicalName: 'contoso_sharepoint', connectorId: '/providers/Microsoft.PowerApps/apis/shared_sharepointonline', dataset: 'https://contoso.sharepoint.com/sites/x', tables: ['11111111-2222-3333-4444-555555555555'] };
+const APPROVE = { name: 'contoso_ApproveOrder', isFunction: false, boundEntityLogicalName: 'contoso_item' };
+const SUMMARY = { name: 'contoso_GetSummary', isFunction: true };
+const api = (apiFor) => `/providers/Microsoft.PowerApps/apis/${apiFor}`;
+const reference = (logicalName, connector) => ({ connectionreferencelogicalname: logicalName, connectorid: connector === undefined ? undefined : api(connector) });
+const customApi = (uniquename, extra = {}) => ({ uniquename, isfunction: false, bindingtype: 0, ...extra });
+
+test('connectorKey is the name of the connector, whatever form its id is written in', () => {
+  for (const id of ['/providers/Microsoft.PowerApps/apis/shared_msnweather', 'shared_msnweather', 'SHARED_MsnWeather', ' /providers/Microsoft.PowerApps/apis/shared_msnweather/ ', '/providers/Microsoft.PowerApps/apis/SHARED_MSNWEATHER']) {
+    assert.strictEqual(connectorKey(id), 'shared_msnweather', JSON.stringify(id));
+  }
+  assert.strictEqual(connectorKey('/providers/Microsoft.PowerApps/apis/shared_contoso-5fwidgets-5f6a8c'), 'shared_contoso-5fwidgets-5f6a8c', 'a custom connector\'s id differs in every environment');
+  for (const id of [undefined, null, '', '   ', '/', 42, {}, []]) assert.strictEqual(connectorKey(id), null, JSON.stringify(id));
+});
+
+// ── which pages, which names ─────────────────────────────────────────────────────────────────────────────────────────────────
+
+const pageOf = (key, extra = {}) => ({ key, name: key.toUpperCase(), source: { kind: 'tsx', codeFile: `${key}.tsx` }, ...extra });
+
+test('pagesStatingBindings is the pages a build writes that state a binding — and only the lists they state', () => {
+  const spec = { pages: [
+    pageOf('weather', { connectorBindings: [WEATHER, SHAREPOINT], actionBindings: [] }),
+    pageOf('plain'),
+    pageOf('empty', { connectorBindings: [], actionBindings: [] }),
+    pageOf('orders', { actionBindings: [APPROVE] }),
+    { key: 'noSource', name: 'NOSOURCE', connectorBindings: [WEATHER] },
+    { key: 'legacy', name: 'LEGACY', codeFile: 'legacy.tsx', connectorBindings: [WEATHER] },
+  ] };
+  assert.deepStrictEqual(pagesStatingBindings(spec), [
+    { key: 'weather', name: 'WEATHER', connectorBindings: [WEATHER, SHAREPOINT], actionBindings: [] },
+    { key: 'orders', name: 'ORDERS', actionBindings: [APPROVE] },
+    { key: 'legacy', name: 'LEGACY', connectorBindings: [WEATHER] },
+  ]);
+  assert.deepStrictEqual(pagesStatingBindings({ pages: [] }), []);
+  assert.deepStrictEqual(pagesStatingBindings({}), []);
+});
+
+test('pagesStatingBindings: a changed-only run writes the pages it selected, and the navigation targets it may have to make — and no other', () => {
+  const spec = { pages: [
+    pageOf('a', { connectorBindings: [WEATHER] }),
+    pageOf('b', { connectorBindings: [SHAREPOINT], navigatesTo: [{ targetKey: 'c' }] }),
+    pageOf('c', { actionBindings: [APPROVE] }),
+    pageOf('d', { actionBindings: [SUMMARY] }),
+  ] };
+  const keys = (changedOnly) => pagesStatingBindings(spec, { changedOnly }).map((p) => p.key);
+  assert.deepStrictEqual(keys(undefined), ['a', 'b', 'c', 'd'], 'a full build writes every page');
+  assert.deepStrictEqual(keys({ selectedKeys: ['a'] }), ['a', 'c'], 'the selected page, and c, which b navigates to');
+  assert.deepStrictEqual(keys({ selectedKeys: [] }), ['c']);
+  assert.deepStrictEqual(keys({ resolvedAppId: 'x' }), ['a', 'b', 'c', 'd'], 'a changed-only run that selects nothing by key is not narrowed');
+});
+
+// A changed-only run makes a navigation target only when the target is absent; one that exists is left as it is, so its bindings are not written and not checked. Whether it exists is known only to what the
+// run is told (`deployedKeys`, the pages its last verified apply deployed): a target it is not told of may be absent, and is checked.
+test('pagesStatingBindings: a changed-only run told which pages are deployed checks a navigation target only when it is absent — and every target it is not told of', () => {
+  const spec = { pages: [
+    pageOf('a', { connectorBindings: [WEATHER] }),
+    pageOf('b', { connectorBindings: [SHAREPOINT], navigatesTo: [{ targetKey: 'c' }] }),
+    pageOf('c', { actionBindings: [APPROVE] }),
+    pageOf('d', { actionBindings: [SUMMARY] }),
+  ] };
+  const keys = (changedOnly) => pagesStatingBindings(spec, { changedOnly }).map((p) => p.key);
+  const ALL = ['a', 'b', 'c', 'd'];
+  assert.deepStrictEqual(keys({ selectedKeys: ['a'], deployedKeys: ALL }), ['a'], 'c exists: the run leaves it as it is, so its bindings are not read');
+  assert.deepStrictEqual(keys({ selectedKeys: ['b'], deployedKeys: ALL }), ['b'], 'nor when the page that navigates to it is the one written');
+  assert.deepStrictEqual(keys({ selectedKeys: ['a'], deployedKeys: ['a', 'b', 'd'] }), ['a', 'c'], 'c is not deployed: the run makes it, bindings and all');
+  assert.deepStrictEqual(keys({ selectedKeys: ['c'], deployedKeys: ALL }), ['c'], 'a selected page is written whether or not it exists');
+  assert.deepStrictEqual(keys({ selectedKeys: [], deployedKeys: ALL }), []);
+  assert.deepStrictEqual(keys({ selectedKeys: ['a'], deployedKeys: [] }), ['a', 'c']);
+  // Not told, or told in a form that says nothing: c may be absent, so it is checked, as before.
+  assert.deepStrictEqual(keys({ selectedKeys: ['a'] }), ['a', 'c']);
+  for (const deployedKeys of [undefined, null, 'c', { c: true }, 7]) assert.deepStrictEqual(keys({ selectedKeys: ['a'], deployedKeys }), ['a', 'c'], JSON.stringify(deployedKeys));
+  // A run that is not changed-only writes every page, whatever it is told.
+  assert.deepStrictEqual(keys({ deployedKeys: ALL }), ALL);
+  assert.deepStrictEqual(keys({ resolvedAppId: 'x', deployedKeys: ALL }), ALL);
+});
+
+// The pages phase settles which targets are absent, after the check before writing ran: a target the run was told of that it then finds absent (deleted in Maker since the last apply) is made from its spec
+// entry, so it is handed back to be checked before it is made. Nothing else is: every other page the run writes was checked before it wrote anything.
+test('pagesMadeUnchecked is the pages about to be made that the check before writing left out — the targets the run was told of and found absent — and nothing else', () => {
+  const spec = { pages: [
+    pageOf('a', { connectorBindings: [WEATHER] }),
+    pageOf('b', { connectorBindings: [SHAREPOINT], navigatesTo: [{ targetKey: 'c' }, { targetKey: 'e' }] }),
+    pageOf('c', { actionBindings: [APPROVE] }),
+    pageOf('d', { actionBindings: [SUMMARY] }),
+    pageOf('e'),
+  ] };
+  const keys = (changedOnly, made) => pagesMadeUnchecked(spec, { changedOnly, made: new Set(made) }).map((p) => p.key);
+  assert.deepStrictEqual(keys({ selectedKeys: ['a'], deployedKeys: ['a', 'b', 'c', 'd', 'e'] }, ['c']), ['c'], 'c was said to be deployed, and is about to be made: it is checked now');
+  assert.deepStrictEqual(pagesMadeUnchecked(spec, { changedOnly: { selectedKeys: ['a'], deployedKeys: ['a', 'b', 'c', 'd', 'e'] }, made: new Set(['c']) }), [{ key: 'c', name: 'C', actionBindings: [APPROVE] }], 'with the lists as the spec states them');
+  assert.deepStrictEqual(keys({ selectedKeys: ['a'], deployedKeys: ['a', 'b', 'c', 'd', 'e'] }, ['c', 'e']), ['c'], 'e states no binding: nothing to check');
+  assert.deepStrictEqual(keys({ selectedKeys: ['a'], deployedKeys: ['a', 'b', 'c', 'd', 'e'] }, []), [], 'nothing is about to be made');
+  assert.deepStrictEqual(keys({ selectedKeys: ['a'], deployedKeys: ['a', 'b', 'd', 'e'] }, ['c']), [], 'c was not said to be deployed: it was checked before anything was written');
+  assert.deepStrictEqual(keys({ selectedKeys: ['a'] }, ['c']), [], 'a run told nothing checked every target before anything was written');
+  assert.deepStrictEqual(keys(undefined, ['c']), [], 'and a full build checked every page');
+  assert.deepStrictEqual(keys({ selectedKeys: ['c'], deployedKeys: ['a', 'b', 'c', 'd', 'e'] }, ['c']), [], 'a selected page was checked before anything was written');
+});
+
+// ── reading the environment ──────────────────────────────────────────────────────────────────────────────────────────────────
+
+function readerOf(rows, { failOn } = {}) {
+  const calls = [];
+  const provision = {
+    queryRecords: async (entity, options) => {
+      calls.push({ entity, options });
+      if (failOn && failOn.includes(entity)) throw new Error(`${entity}: HTTP 403`);
+      return rows[entity] || [];
+    },
+  };
+  return { provision, calls };
+}
+
+test('readBindingTargets reads the references and the Custom APIs for the names the pages state — once each, by name — and nothing when no page states one', async () => {
+  const pages = [
+    { key: 'a', name: 'A', connectorBindings: [WEATHER, SHAREPOINT], actionBindings: [APPROVE] },
+    { key: 'b', name: 'B', connectorBindings: [{ ...WEATHER, logicalName: 'CONTOSO_MSNWEATHER' }, { dataset: 'x' }], actionBindings: [SUMMARY, APPROVE] },
+  ];
+  const { provision, calls } = readerOf({
+    connectionreference: [reference('contoso_msnweather', 'shared_msnweather'), reference('contoso_other', 'shared_other')],
+    customapi: [customApi('contoso_ApproveOrder', { boundentitylogicalname: 'contoso_item', bindingtype: 1 }), customApi('contoso_GetSummary', { isfunction: true })],
+  });
+  const targets = await readBindingTargets(provision, pages);
+  assert.deepStrictEqual(calls.map((c) => c.entity), ['connectionreference', 'customapi']);
+  assert.deepStrictEqual(calls[0].options.select, ['connectionreferencelogicalname', 'connectorid', 'connectionid', '_customconnectorid_value']);
+  assert.strictEqual(calls[0].options.paginate, true);
+  assert.strictEqual(calls[0].options.filter, "connectionreferencelogicalname eq 'contoso_msnweather' or connectionreferencelogicalname eq 'contoso_sharepoint'", 'each name once');
+  assert.deepStrictEqual(calls[1].options.select, ['uniquename', 'isfunction', 'bindingtype', 'boundentitylogicalname']);
+  assert.strictEqual(calls[1].options.filter, "uniquename eq 'contoso_ApproveOrder' or uniquename eq 'contoso_GetSummary'", 'as the spec spells them: the service compares them without regard to case, and a name is matched here in lower case');
+  // Only the names asked for are kept, whatever the service answered, by lower-cased name.
+  assert.deepStrictEqual([...targets.references], [['contoso_msnweather', { connectorId: api('shared_msnweather') }]]);
+  assert.deepStrictEqual([...targets.apis], [
+    ['contoso_approveorder', { isFunction: false, boundEntity: 'contoso_item' }],
+    ['contoso_getsummary', { isFunction: true }],
+  ]);
+  assert.deepStrictEqual(targets.problems, {});
+
+  const none = readerOf({});
+  assert.deepStrictEqual(await readBindingTargets(none.provision, [{ key: 'a', name: 'A' }]), { references: null, apis: null, definitions: null, problems: {} });
+  assert.deepStrictEqual(none.calls, [], 'no page states a binding: nothing is read');
+  const onlyReferences = readerOf({});
+  await readBindingTargets(onlyReferences.provision, [{ key: 'a', name: 'A', connectorBindings: [WEATHER] }]);
+  assert.deepStrictEqual(onlyReferences.calls.map((c) => c.entity), ['connectionreference'], 'and a Custom API is read only when a page binds one');
+});
+
+test('readBindingTargets quotes a name into the filter as OData text, reads many names in chunks, and says what it could not read instead of throwing', async () => {
+  const odd = readerOf({});
+  await readBindingTargets(odd.provision, [{ key: 'a', name: 'A', connectorBindings: [{ logicalName: "o'brien_x" }] }]);
+  assert.strictEqual(odd.calls[0].options.filter, "connectionreferencelogicalname eq 'o''brien_x'");
+
+  const many = readerOf({});
+  const bindings = Array.from({ length: 51 }, (_, i) => ({ logicalName: `contoso_ref${String(i).padStart(2, '0')}` }));
+  await readBindingTargets(many.provision, [{ key: 'a', name: 'A', connectorBindings: bindings }]);
+  assert.deepStrictEqual(many.calls.map((c) => c.options.filter.split(' or ').length), [25, 25, 1], 'a request is bounded: the filter of a long list is not');
+
+  const denied = readerOf({}, { failOn: ['connectionreference'] });
+  const targets = await readBindingTargets(denied.provision, [{ key: 'a', name: 'A', connectorBindings: [WEATHER], actionBindings: [APPROVE] }]);
+  assert.strictEqual(targets.references, null);
+  assert.deepStrictEqual(targets.problems, { references: 'connectionreference: HTTP 403' });
+  assert.ok(targets.apis instanceof Map, 'the other read is still made');
+  const cannot = await readBindingTargets({}, [{ key: 'a', name: 'A', connectorBindings: [WEATHER] }]);
+  assert.strictEqual(cannot.references, null);
+  assert.match(cannot.problems.references, /cannot be read here/, 'a reader that cannot read is a read that failed');
+});
+
+// One attempt of a build can check bindings twice: before it writes anything, and in its pages phase for a navigation target it finds it has to make (sdk-build.js). Both go through what the
+// attempt has read (bindingReads): a name is read once per attempt, and what that read answered — a row, no row, a failure — stands for every check of the attempt.
+test('readBindingTargets: an attempt reads a name once — a later check of the same attempt asks only for the names it has not read', async () => {
+  const seen = bindingReads();
+  const { provision, calls } = readerOf({ connectionreference: [reference('contoso_msnweather', 'shared_msnweather'), reference('contoso_sharepoint', 'shared_sharepointonline')] });
+  const first = await readBindingTargets(provision, [{ key: 'a', name: 'A', connectorBindings: [WEATHER] }], seen);
+  assert.deepStrictEqual([...first.references.keys()], ['contoso_msnweather']);
+  const second = await readBindingTargets(provision, [{ key: 'c', name: 'C', connectorBindings: [{ ...WEATHER, logicalName: 'CONTOSO_MSNWEATHER' }, SHAREPOINT, { logicalName: 'contoso_absent' }] }], seen);
+  assert.deepStrictEqual(calls.map((c) => c.options.filter), [
+    "connectionreferencelogicalname eq 'contoso_msnweather'",
+    "connectionreferencelogicalname eq 'contoso_sharepoint' or connectionreferencelogicalname eq 'contoso_absent'",
+  ], 'the second check asks only for the names the first did not read, whatever their case');
+  assert.deepStrictEqual(second.references, new Map([['contoso_msnweather', { connectorId: api('shared_msnweather') }], ['contoso_sharepoint', { connectorId: api('shared_sharepointonline') }]]));
+  const third = await readBindingTargets(provision, [{ key: 'd', name: 'D', connectorBindings: [WEATHER, { logicalName: 'contoso_absent' }] }], seen);
+  assert.strictEqual(calls.length, 2, 'a check whose names were all read asks nothing — a name that is not there is an answer too');
+  assert.deepStrictEqual(third.references, new Map([['contoso_msnweather', { connectorId: api('shared_msnweather') }]]));
+  assert.deepStrictEqual(judgeBindingTargets([{ key: 'd', name: 'D', connectorBindings: [{ logicalName: 'contoso_absent' }] }], third).findings.map((f) => f.kind), ['reference-missing']);
+});
+
+test('readBindingTargets: what an attempt has read stands — a later read that fails leaves a proven conflict a refusal, and says by name only what it could not read', async () => {
+  const seen = bindingReads();
+  const filters = [];
+  let refuse = false;
+  const provision = {
+    queryRecords: async (entity, options) => {
+      filters.push(options.filter);
+      if (refuse) throw new Error('connectionreference: HTTP 403');
+      return [reference('contoso_msnweather', 'shared_office365users')];
+    },
+  };
+  await readBindingTargets(provision, [{ key: 'a', name: 'A', connectorBindings: [{ ...WEATHER, connectorId: api('shared_office365users') }] }], seen);
+  refuse = true;
+  const pages = [{ key: 'c', name: 'C', connectorBindings: [WEATHER, SHAREPOINT] }];
+  const targets = await readBindingTargets(provision, pages, seen);
+  assert.deepStrictEqual(filters, ["connectionreferencelogicalname eq 'contoso_msnweather'", "connectionreferencelogicalname eq 'contoso_sharepoint'"]);
+  const verdict = judgeBindingTargets(pages, targets);
+  assert.deepStrictEqual(verdict.findings.map((f) => [f.severity, f.kind, f.binding, f.found]), [['refuse', 'connector-conflict', 'contoso_msnweather', 'shared_office365users']], 'the first read proved the conflict, and the failed one does not undo it');
+  assert.deepStrictEqual(verdict.unchecked.map((u) => [u.what, u.text]), [['connection references', 'could not read this environment\'s connection references (connectionreference: HTTP 403), so connector binding "contoso_sharepoint" of page "C" was not checked against them']]);
+});
+
+test('readBindingTargets: a read that failed stands for the attempt too — a later check asks nothing, and says, as the one read did, that the bindings were not checked', async () => {
+  const seen = bindingReads();
+  const denied = readerOf({}, { failOn: ['connectionreference'] });
+  await readBindingTargets(denied.provision, [{ key: 'a', name: 'A', connectorBindings: [WEATHER] }], seen);
+  const pages = [{ key: 'c', name: 'C', connectorBindings: [WEATHER] }];
+  const targets = await readBindingTargets(denied.provision, pages, seen);
+  assert.strictEqual(denied.calls.length, 1, 'not asked again');
+  assert.strictEqual(targets.references, null);
+  assert.deepStrictEqual(targets.problems, { references: 'connectionreference: HTTP 403' });
+  assert.deepStrictEqual(judgeBindingTargets(pages, targets).unchecked.map((u) => u.text), ['could not read this environment\'s connection references (connectionreference: HTTP 403), so the connector bindings of page "C" were not checked against them']);
+});
+
+test('readBindingTargets: a Custom API, and the definition of a custom connector, are read once per attempt as well', async () => {
+  const seen = bindingReads();
+  const CONNECTOR_ID = 'c0000000-0000-4000-8000-0000000000a1';
+  const WIDGETS = { logicalName: 'contoso_widgets', connectorId: api('shared_contoso-5fwidgets-5f6a8c'), dataset: '', operations: ['ListWidgets'] };
+  const { provision, calls } = readerOf({
+    connectionreference: [{ connectionreferencelogicalname: 'contoso_widgets', connectorid: api('shared_contoso-5fwidgets-5f6a8c'), connectionid: 'shared-widgets-0001', _customconnectorid_value: CONNECTOR_ID }],
+    connector: [{ connectorid: CONNECTOR_ID, openapidefinition: JSON.stringify({ swagger: '2.0', paths: { '/widgets': { get: { operationId: 'ListWidgets' } } } }) }],
+    customapi: [customApi('contoso_ApproveOrder', { boundentitylogicalname: 'contoso_item', bindingtype: 1 })],
+  });
+  const page = (key) => ({ key, name: key.toUpperCase(), connectorBindings: [WIDGETS], actionBindings: [APPROVE] });
+  const first = await readBindingTargets(provision, [page('a')], seen);
+  const second = await readBindingTargets(provision, [page('c')], seen);
+  assert.deepStrictEqual(calls.map((c) => c.entity), ['connectionreference', 'connector', 'customapi'], 'each read once, in the first check');
+  assert.deepStrictEqual(second, first, 'and the second check is answered with what it read');
+  assert.deepStrictEqual(judgeBindingTargets([page('c')], second), { findings: [], unchecked: [] });
+});
+
+test('pagesLeftOutAsDeployed is the pages the check before writing leaves out because the run was told they are deployed — what a dry run asks the environment about', () => {
+  const spec = { pages: [
+    pageOf('a', { connectorBindings: [WEATHER] }),
+    pageOf('b', { connectorBindings: [SHAREPOINT], navigatesTo: [{ targetKey: 'c' }, { targetKey: 'e' }] }),
+    pageOf('c', { actionBindings: [APPROVE] }),
+    pageOf('d', { actionBindings: [SUMMARY] }),
+    pageOf('e'),
+  ] };
+  const ALL = ['a', 'b', 'c', 'd', 'e'];
+  const keys = (changedOnly) => pagesLeftOutAsDeployed(spec, changedOnly).map((p) => p.key);
+  assert.deepStrictEqual(keys({ selectedKeys: ['a'], deployedKeys: ALL }), ['c'], 'e states no binding, so there is nothing to leave out');
+  assert.deepStrictEqual(pagesLeftOutAsDeployed(spec, { selectedKeys: ['a'], deployedKeys: ALL }), [{ key: 'c', name: 'C', actionBindings: [APPROVE] }]);
+  assert.deepStrictEqual(keys({ selectedKeys: ['a'], deployedKeys: ['a', 'b', 'd', 'e'] }), [], 'c was not said to be deployed: it is checked');
+  assert.deepStrictEqual(keys({ selectedKeys: ['c'], deployedKeys: ALL }), [], 'a selected page is checked');
+  assert.deepStrictEqual(keys({ selectedKeys: ['a'] }), []);
+  assert.deepStrictEqual(keys({ deployedKeys: ALL }), [], 'a run that is not changed-only leaves out nothing');
+  assert.deepStrictEqual(keys(undefined), []);
+});
+
+// ── judging what was read ────────────────────────────────────────────────────────────────────────────────────────────────────
+
+const pagesA = [{ key: 'weather', name: 'Weather', connectorBindings: [WEATHER, SHAREPOINT], actionBindings: [APPROVE, SUMMARY] }];
+// References as complete rows prove them: the connector, and a connection. Whether a reference is for a custom connector is left out — a row with a null lookup proves nothing about it.
+const targetsOf = ({ references = [], apis = [], problems = {} } = {}) => ({
+  references: new Map(references.map(([name, connector]) => [name, { connectorId: connector === undefined ? undefined : api(connector), connected: true }])),
+  apis: new Map(apis.map(([name, value]) => [name, value])),
+  problems,
+});
+
+test('judgeBindingTargets: a reference of the same name for the SAME connector, in any form of its id, is fine — and a Custom API of the same kind and table', () => {
+  const verdict = judgeBindingTargets(pagesA, targetsOf({
+    references: [['contoso_msnweather', 'SHARED_MSNWEATHER'], ['contoso_sharepoint', 'shared_sharepointonline']],
+    apis: [['contoso_approveorder', { isFunction: false, boundEntity: 'CONTOSO_ITEM' }], ['contoso_getsummary', { isFunction: true }]],
+  }));
+  assert.deepStrictEqual(verdict.findings, []);
+  // The operations Weather's binding calls are not proven to be there: no row named a custom connector whose definition could be read. That is said — it is not "fine" by default.
+  assert.deepStrictEqual(verdict.unchecked.map((u) => [u.what, u.text]), [['custom connector definitions', 'the operations that connector binding "contoso_msnweather" of page "Weather" call were not checked: this environment does not name a custom connector for its connection reference, and only a custom connector\'s definition is read here (a connector the platform publishes defines the same operations in every environment of its cloud)']]);
+});
+
+test('judgeBindingTargets refuses a reference that exists for ANOTHER connector, naming the page, the binding and both connectors', () => {
+  const verdict = judgeBindingTargets(pagesA, targetsOf({
+    references: [['contoso_msnweather', 'shared_office365users'], ['contoso_sharepoint', 'shared_sharepointonline']],
+    apis: [['contoso_approveorder', { isFunction: false, boundEntity: 'contoso_item' }], ['contoso_getsummary', { isFunction: true }]],
+  }));
+  assert.strictEqual(verdict.findings.length, 1);
+  const [conflict] = verdict.findings;
+  assert.deepStrictEqual({ ...conflict, text: undefined }, { severity: 'refuse', kind: 'connector-conflict', page: { key: 'weather', name: 'Weather' }, binding: 'contoso_msnweather', expected: 'shared_msnweather', found: 'shared_office365users', text: undefined });
+  assert.strictEqual(conflict.text, 'page "Weather": connector binding "contoso_msnweather" is for connector shared_msnweather, but the connection reference of that name in this environment is for connector shared_office365users');
+});
+
+test('judgeBindingTargets cannot prove a conflict from a connector that is not stated on both sides — a reference whose row names no connector is NOT CHECKED, said by name, and never a conflict', () => {
+  const pages = [{ key: 'a', name: 'A', connectorBindings: [{ logicalName: 'contoso_one' }, { logicalName: 'contoso_two', connectorId: api('shared_two') }, { logicalName: 'contoso_three', connectorId: '' }] }];
+  const verdict = judgeBindingTargets(pages, targetsOf({ references: [['contoso_one', 'shared_x'], ['contoso_two', undefined], ['contoso_three', 'shared_y']] }));
+  assert.deepStrictEqual(verdict.findings, []);
+  assert.deepStrictEqual(verdict.unchecked, [{ what: 'reference connectors', text: 'this environment\'s row for connection reference contoso_two did not give a connector id this build can read (absent, or not of the form /providers/Microsoft.PowerApps/apis/shared_<name>), so whether connector binding "contoso_two" of page "A" goes through the connector it was made for was not checked' }]);
+});
+
+test('judgeBindingTargets says by name which references and Custom APIs the environment does not have — one line per page, in the page\'s order', () => {
+  const pages = [
+    { key: 'weather', name: 'Weather', connectorBindings: [WEATHER, SHAREPOINT, { ...WEATHER }], actionBindings: [APPROVE] },
+    { key: 'other', name: 'Other', actionBindings: [SUMMARY] },
+  ];
+  const verdict = judgeBindingTargets(pages, targetsOf({ references: [['contoso_sharepoint', 'shared_sharepointonline']] }));
+  assert.deepStrictEqual(verdict.findings.map((f) => [f.severity, f.kind, f.page.key, f.names]), [
+    ['warn', 'reference-missing', 'weather', ['contoso_msnweather']],
+    ['warn', 'api-missing', 'weather', ['contoso_ApproveOrder']],
+    ['warn', 'api-missing', 'other', ['contoso_GetSummary']],
+  ]);
+  assert.strictEqual(verdict.findings[0].text, 'page "Weather": connection reference contoso_msnweather is not in this environment, so the page is written with a binding it cannot resolve yet. A page finds its connector by the reference\'s logical name: create the reference here (create-connection-reference.js, or import the solution that holds it) and the page works without a rebuild');
+  assert.strictEqual(verdict.findings[1].text, 'page "Weather": Custom API contoso_ApproveOrder is not in this environment (list-custom-apis.js lists what it has), so a call through the binding is refused until it is deployed here');
+  const several = judgeBindingTargets([{ key: 'a', name: 'A', connectorBindings: [WEATHER, SHAREPOINT], actionBindings: [APPROVE, SUMMARY] }], targetsOf());
+  assert.match(several.findings[0].text, /^page "A": connection references contoso_msnweather, contoso_sharepoint are not in this environment, so the page is written with bindings it cannot resolve yet\./);
+  assert.match(several.findings[1].text, /^page "A": Custom APIs contoso_ApproveOrder, contoso_GetSummary are not in this environment/);
+});
+
+test('judgeBindingTargets warns of a Custom API that is the other kind, or bound to another table — the runtime refuses such a call, so it is a warning and never a refusal', () => {
+  const verdict = judgeBindingTargets(pagesA, targetsOf({
+    references: [['contoso_msnweather', 'shared_msnweather'], ['contoso_sharepoint', 'shared_sharepointonline']],
+    apis: [['contoso_approveorder', { isFunction: true, boundEntity: 'contoso_item' }], ['contoso_getsummary', { isFunction: true, boundEntity: 'contoso_other' }]],
+  }));
+  assert.deepStrictEqual(verdict.findings.map((f) => [f.severity, f.kind, f.binding]), [['warn', 'api-mismatch', 'contoso_ApproveOrder'], ['warn', 'api-mismatch', 'contoso_GetSummary']]);
+  assert.strictEqual(verdict.findings[0].text, 'page "Weather": Custom API binding "contoso_ApproveOrder" says it is an Action, but the Custom API of that name in this environment is a Function — the runtime refuses the call (wrong_operation_kind)');
+  assert.strictEqual(verdict.findings[1].text, 'page "Weather": Custom API binding "contoso_GetSummary" is for a Global operation, but the Custom API of that name in this environment is bound to table contoso_other — the runtime refuses the call (invalid_bound_to)');
+  const unbound = judgeBindingTargets([{ key: 'a', name: 'A', actionBindings: [APPROVE] }], targetsOf({ apis: [['contoso_approveorder', { isFunction: false }]] }));
+  assert.strictEqual(unbound.findings[0].text, 'page "A": Custom API binding "contoso_ApproveOrder" is bound to table contoso_item, but the Custom API of that name in this environment is Global — the runtime refuses the call (invalid_bound_to)');
+  const differentTable = judgeBindingTargets([{ key: 'a', name: 'A', actionBindings: [APPROVE] }], targetsOf({ apis: [['contoso_approveorder', { isFunction: false, boundEntity: 'contoso_other' }]] }));
+  assert.strictEqual(differentTable.findings[0].text, 'page "A": Custom API binding "contoso_ApproveOrder" is bound to table contoso_item, but the Custom API of that name in this environment is bound to table contoso_other — the runtime refuses the call (invalid_bound_to)');
+  // An Action the binding does not say is a Function is an Action: the documented default.
+  const defaulted = judgeBindingTargets([{ key: 'a', name: 'A', actionBindings: [{ name: 'contoso_Plain' }] }], targetsOf({ apis: [['contoso_plain', { isFunction: false }]] }));
+  assert.deepStrictEqual(defaulted.findings, []);
+});
+
+test('judgeBindingTargets says what it could not check — and does not call a name missing when the read that would have found it failed', () => {
+  const verdict = judgeBindingTargets(pagesA, { references: null, apis: null, problems: { references: 'HTTP 403', apis: 'HTTP 500' } });
+  assert.deepStrictEqual(verdict.findings, []);
+  assert.deepStrictEqual(verdict.unchecked.map((u) => u.text), [
+    'could not read this environment\'s connection references (HTTP 403), so the connector bindings of page "Weather" were not checked against them',
+    'could not read this environment\'s Custom APIs (HTTP 500), so the Custom API bindings of page "Weather" were not checked against them',
+  ]);
+  const both = judgeBindingTargets([...pagesA, { key: 'b', name: 'B', connectorBindings: [WEATHER] }], { references: null, apis: new Map(), problems: { references: 'x' } });
+  assert.match(both.unchecked[0].text, /so the connector bindings of pages "Weather", "B" were not checked against them$/);
+  assert.deepStrictEqual(both.findings.map((f) => f.kind), ['api-missing'], 'the Custom APIs that were read are still judged');
+});
+
+test('a name is quoted the way a spec writes it, and a long or odd one is shortened — a message never carries more of a name than it needs', () => {
+  const long = `contoso_${'x'.repeat(200)}`;
+  const verdict = judgeBindingTargets([{ key: 'a', name: 'A', connectorBindings: [{ logicalName: long }] }], targetsOf());
+  assert.ok(verdict.findings[0].text.length < 500, String(verdict.findings[0].text.length));
+  assert.ok(!verdict.findings[0].text.includes(long));
+});
+
+// ── a reference with no connection, and the operations a custom connector defines ──────────────────────────────────────────────
+// A reference of the right connector is still no use to a page when it has no connection — what a solution import leaves when no settings file gives one — so that is said by name. And the operations a binding
+// calls are the connector's: a connector that is not a custom one has one definition for every environment of its cloud (the one the binding's operations were read from), but a CUSTOM connector's definition is a row of
+// the environment it is in — the `connector` table's `openapidefinition`, which the reference points at through `customconnectorid` — and the copy there can be another version than the page was made with.
+const WIDGETS = { logicalName: 'contoso_widgets', connectorId: api('shared_contoso-5fwidgets-5f6a8c'), dataset: '', operations: ['ListWidgets', 'GetWidget'] };
+const WIDGETS_CONNECTOR = 'c0000000-0000-4000-8000-0000000000a1';
+// A custom connector's definition as the `connector` row holds it: a Swagger 2.0 document, as text.
+const swaggerOf = (operationIds, extra = {}) => JSON.stringify({
+  swagger: '2.0', info: { title: 'Widgets', version: '1.0' }, host: 'widgets.contoso.example',
+  paths: Object.fromEntries(operationIds.map((id, i) => [`/widgets/op${i}`, { parameters: [{ name: 'id', in: 'query', type: 'string' }], [i % 2 ? 'post' : 'get']: { operationId: id, responses: { 200: { description: 'OK' } } } }])),
+  ...extra,
+});
+const connected = (row, connectionid = 'shared-connection-0001') => ({ ...row, connectionid });
+
+test('definedOperations reads the operation ids of a Swagger definition — every HTTP method of every path, and nothing else — and null for a text it cannot read as one', () => {
+  assert.deepStrictEqual([...definedOperations(swaggerOf(['ListWidgets', 'GetWidget']))], ['ListWidgets', 'GetWidget']);
+  const methods = JSON.stringify({ swagger: '2.0', paths: { '/w': { parameters: [], get: { operationId: 'A' }, put: { operationId: 'B' }, post: { operationId: 'C' }, delete: { operationId: 'D' }, options: { operationId: 'E' }, head: { operationId: 'F' }, patch: { operationId: 'G' }, 'x-ms-notification-content': { operationId: 'NotAnOperation' } } } });
+  assert.deepStrictEqual([...definedOperations(methods)], ['A', 'B', 'C', 'D', 'E', 'F', 'G'], 'a path item\'s parameters and its extensions are not operations');
+  assert.deepStrictEqual([...definedOperations(`\uFEFF${swaggerOf(['X'])}`)], ['X'], 'a byte-order mark is not part of the document');
+  assert.deepStrictEqual([...definedOperations(JSON.stringify({ swagger: '2.0', paths: {} }))], [], 'a definition with no operation defines none');
+  for (const unreadable of [undefined, null, '', 'not json', '[]', '{}', JSON.stringify({ paths: [] }), JSON.stringify({ paths: { '/w': { $ref: '#/x' } } })]) {
+    assert.strictEqual(definedOperations(unreadable), null, JSON.stringify(unreadable));
+  }
+});
+
+test('readBindingTargets keeps whether a reference has a connection and which custom connector it is for — only when the row says — and reads the definition of a custom connector a binding calls operations of, once', async () => {
+  const pages = [
+    { key: 'a', name: 'A', connectorBindings: [WIDGETS, WEATHER, SHAREPOINT] },
+    { key: 'b', name: 'B', connectorBindings: [{ ...WIDGETS, operations: ['GetWidget'] }] },
+  ];
+  const { provision, calls } = readerOf({
+    connectionreference: [
+      connected({ ...reference('contoso_widgets', 'shared_contoso-5fwidgets-5f6a8c'), _customconnectorid_value: WIDGETS_CONNECTOR.toUpperCase() }),
+      connected(reference('contoso_msnweather', 'shared_msnweather'), null),
+      { ...reference('contoso_sharepoint', 'shared_sharepointonline'), _customconnectorid_value: 'c0000000-0000-4000-8000-0000000000b2' },
+    ],
+    connector: [{ connectorid: WIDGETS_CONNECTOR, openapidefinition: swaggerOf(['ListWidgets']) }],
+  });
+  const targets = await readBindingTargets(provision, pages);
+  assert.deepStrictEqual(calls.map((c) => c.entity), ['connectionreference', 'connector'], 'the definition of the one custom connector a binding calls operations of: SharePoint\'s binding calls none');
+  assert.deepStrictEqual(calls[1].options.select, ['connectorid', 'openapidefinition']);
+  assert.strictEqual(calls[1].options.filter, `connectorid eq ${WIDGETS_CONNECTOR}`, 'by its id, once for both pages');
+  assert.deepStrictEqual([...targets.references], [
+    ['contoso_widgets', { connectorId: api('shared_contoso-5fwidgets-5f6a8c'), connected: true, customConnectorId: WIDGETS_CONNECTOR }],
+    ['contoso_msnweather', { connectorId: api('shared_msnweather'), connected: false }],
+    ['contoso_sharepoint', { connectorId: api('shared_sharepointonline'), customConnectorId: 'c0000000-0000-4000-8000-0000000000b2' }],
+  ], 'a row that does not carry `connectionid` says nothing of a connection');
+  assert.deepStrictEqual([...targets.definitions].map(([id, defined]) => [id, [...defined]]), [[WIDGETS_CONNECTOR, ['ListWidgets']]]);
+  assert.deepStrictEqual(targets.problems, {});
+
+  // A definition that is not there, or not one this can read, or a read of them that fails, is a problem of that connector's — never "it defines nothing".
+  for (const [rows, failOn, expected] of [
+    [[], undefined, /no connector row of that id was found/],
+    [[{ connectorid: WIDGETS_CONNECTOR, openapidefinition: 'not json' }], undefined, /its definition is not a Swagger document this build can read/],
+    [[], ['connector'], /connector: HTTP 403/],
+  ]) {
+    const reader = readerOf({ connectionreference: [connected({ ...reference('contoso_widgets', 'shared_contoso-5fwidgets-5f6a8c'), _customconnectorid_value: WIDGETS_CONNECTOR })], connector: rows }, { failOn });
+    const read = await readBindingTargets(reader.provision, [pages[0]]);
+    const defined = read.definitions.get(WIDGETS_CONNECTOR);
+    assert.ok(!(defined instanceof Set), JSON.stringify(rows));
+    assert.match(defined.problem, expected);
+    assert.ok(read.references instanceof Map, 'the references are still judged');
+  }
+
+  // A binding that calls no operation, or a reference for no custom connector, needs no definition: nothing more is read.
+  const plain = readerOf({ connectionreference: [connected({ ...reference('contoso_widgets', 'shared_contoso-5fwidgets-5f6a8c'), _customconnectorid_value: WIDGETS_CONNECTOR }), connected(reference('contoso_msnweather', 'shared_msnweather'))] });
+  const read = await readBindingTargets(plain.provision, [{ key: 'a', name: 'A', connectorBindings: [{ ...WIDGETS, operations: [] }, WEATHER] }]);
+  assert.deepStrictEqual(plain.calls.map((c) => c.entity), ['connectionreference']);
+  assert.strictEqual(read.definitions, null);
+});
+
+const targetsWith = (references, definitions = []) => ({
+  references: new Map(references),
+  apis: null,
+  definitions: new Map(definitions),
+  problems: {},
+});
+
+test('judgeBindingTargets says by name a reference of the right connector that has no connection — the page\'s calls through it fail until it has one — and says nothing of one whose row did not say', () => {
+  const pages = [{ key: 'weather', name: 'Weather', connectorBindings: [WEATHER, SHAREPOINT] }];
+  const one = judgeBindingTargets(pages, targetsWith([['contoso_msnweather', { connectorId: api('shared_msnweather'), connected: false }], ['contoso_sharepoint', { connectorId: api('shared_sharepointonline'), connected: true }]]));
+  assert.deepStrictEqual(one.findings.map((f) => [f.severity, f.kind, f.page.key, f.names]), [['warn', 'connection-missing', 'weather', ['contoso_msnweather']]]);
+  assert.strictEqual(one.findings[0].text, 'page "Weather": connection reference contoso_msnweather is in this environment but has no connection, so the page\'s calls through it fail until it has one. Give it a connection (import the solution that holds it with a settings file that does: solution-settings.js, or set it in Power Apps, in the solution\'s connection references) and the page works without a rebuild');
+  const both = judgeBindingTargets(pages, targetsWith([['contoso_msnweather', { connectorId: api('shared_msnweather'), connected: false }], ['contoso_sharepoint', { connectorId: api('shared_sharepointonline'), connected: false }]]));
+  assert.match(both.findings[0].text, /^page "Weather": connection references contoso_msnweather, contoso_sharepoint are in this environment but have no connection, so the page's calls through them fail until they have one\. Give them a connection/);
+  const unknown = judgeBindingTargets(pages, targetsWith([['contoso_msnweather', { connectorId: api('shared_msnweather') }], ['contoso_sharepoint', { connectorId: api('shared_sharepointonline') }]]));
+  // A row that does not carry `connectionid` proves nothing: it is NOT CHECKED, said by name — and not a finding.
+  assert.deepStrictEqual(unknown.findings, []);
+  assert.deepStrictEqual(unknown.unchecked.filter((u) => u.what === 'reference connections').map((u) => u.text), ['this environment\'s rows for connection references contoso_msnweather, contoso_sharepoint did not say, in a form this build can read, whether they have a connection, so that was not checked for page "Weather"']);
+  // A reference for another connector is refused, and nothing else is said of it.
+  const conflict = judgeBindingTargets(pages, targetsWith([['contoso_msnweather', { connectorId: api('shared_office365users'), connected: false }], ['contoso_sharepoint', { connectorId: api('shared_sharepointonline'), connected: true }]]));
+  assert.deepStrictEqual(conflict.findings.map((f) => f.kind), ['connector-conflict']);
+});
+
+test('judgeBindingTargets says by name an operation a binding calls that the custom connector of its reference does not define here — a warning, the page is written — and nothing for one it defines', () => {
+  const widgetsReference = { connectorId: WIDGETS.connectorId, connected: true, customConnectorId: WIDGETS_CONNECTOR };
+  const pages = [{ key: 'widgets', name: 'Widgets', connectorBindings: [WIDGETS, { ...WIDGETS }] }];
+  const verdict = judgeBindingTargets(pages, targetsWith([['contoso_widgets', widgetsReference]], [[WIDGETS_CONNECTOR, new Set(['ListWidgets'])]]));
+  assert.deepStrictEqual(verdict.findings.map((f) => [f.severity, f.kind, f.binding, f.operations]), [['warn', 'operation-missing', 'contoso_widgets', ['GetWidget']]], 'said once for the binding, however often the page lists it');
+  assert.strictEqual(verdict.findings[0].text, 'page "Widgets": connector binding "contoso_widgets" calls operation GetWidget, which the custom connector that connection reference is for in this environment does not define, so the page\'s call to it fails there until it does (import the solution that holds the connector as the page was made with it)');
+  const several = judgeBindingTargets(pages, targetsWith([['contoso_widgets', widgetsReference]], [[WIDGETS_CONNECTOR, new Set(['Other'])]]));
+  assert.match(several.findings[0].text, /calls operations ListWidgets, GetWidget, which the custom connector that connection reference is for in this environment does not define, so the page's calls to them fail there until it does/);
+  const defined = judgeBindingTargets(pages, targetsWith([['contoso_widgets', widgetsReference]], [[WIDGETS_CONNECTOR, new Set(['ListWidgets', 'GetWidget', 'DeleteWidget'])]]));
+  assert.deepStrictEqual(defined, { findings: [], unchecked: [] });
+  // Matched exactly, as the connector matches an operation id: another case is another operation.
+  const cased = judgeBindingTargets(pages, targetsWith([['contoso_widgets', widgetsReference]], [[WIDGETS_CONNECTOR, new Set(['listwidgets', 'GetWidget'])]]));
+  assert.deepStrictEqual(cased.findings.map((f) => f.operations), [['ListWidgets']]);
+  // A reference whose row names no custom connector — a connector the platform publishes, or a lookup left unset — is never asked for a definition, and its operations are said to be NOT CHECKED: a null
+  // lookup is no proof that the connector is not a custom one.
+  const managed = judgeBindingTargets([{ key: 'weather', name: 'Weather', connectorBindings: [WEATHER] }], targetsWith([['contoso_msnweather', { connectorId: WEATHER.connectorId, connected: true }]]));
+  assert.deepStrictEqual(managed.findings, []);
+  assert.deepStrictEqual(managed.unchecked.map((u) => u.what), ['custom connector definitions']);
+  assert.match(managed.unchecked[0].text, /^the operations that connector binding "contoso_msnweather" of page "Weather" call were not checked/);
+});
+
+test('judgeBindingTargets says which operations it could not check, and why — a definition it could not read is never one that defines nothing', () => {
+  const widgetsReference = { connectorId: WIDGETS.connectorId, connected: true, customConnectorId: WIDGETS_CONNECTOR };
+  const pages = [{ key: 'widgets', name: 'Widgets', connectorBindings: [WIDGETS] }];
+  const verdict = judgeBindingTargets(pages, targetsWith([['contoso_widgets', widgetsReference]], [[WIDGETS_CONNECTOR, { problem: 'connector: HTTP 403' }]]));
+  assert.deepStrictEqual(verdict.findings, []);
+  assert.deepStrictEqual(verdict.unchecked.map((u) => u.text), ['could not read the definition of the custom connector that connection reference contoso_widgets is for in this environment (connector: HTTP 403), so the operations connector binding "contoso_widgets" of page "Widgets" calls were not checked against it']);
+  const notRead = judgeBindingTargets(pages, { references: new Map([['contoso_widgets', widgetsReference]]), apis: null, problems: {} });
+  assert.match(notRead.unchecked[0].text, /\(its definition was not read\)/);
+});
+
+// ── successful but incomplete: a row that answers without a column the check needs ──────────────────────────────────────────────
+// A read that FAILS is said as not checked. So is a read that SUCCEEDS with a row that lacks what the check needs — the custom connector lookup absent, null or not a GUID, no `connectionid`, no
+// `connectorid`: none of it is evidence of compatibility, and none of it is evidence of a conflict either. Each is said by name as not checked; nothing is refused; what the row did prove is still judged.
+test('a successful answer that lacks a column the check needs is NOT CHECKED, by name — a missing, null or invalid lookup, a missing connectionid or connectorid — and never read as compatible', async () => {
+  const page = { key: 'widgets', name: 'Widgets', connectorBindings: [WIDGETS] };
+  const complete = { connectionreferencelogicalname: 'contoso_widgets', connectorid: WIDGETS.connectorId, connectionid: 'shared-connection-0001', _customconnectorid_value: WIDGETS_CONNECTOR };
+  const definition = { connectorid: WIDGETS_CONNECTOR, openapidefinition: swaggerOf(['ListWidgets']) };
+  const without = (row, ...keys) => { const out = { ...row }; for (const key of keys) delete out[key]; return out; };
+  const judge = async (row) => {
+    const { provision, calls } = readerOf({ connectionreference: [row], connector: [definition] });
+    return { ...judgeBindingTargets([page], await readBindingTargets(provision, [page])), reads: calls.map((c) => c.entity) };
+  };
+  const kinds = (verdict) => [verdict.findings.map((f) => f.kind), verdict.unchecked.map((u) => u.what)];
+
+  // The control: a complete row, and the definition there lacks GetWidget.
+  assert.deepStrictEqual(kinds(await judge(complete)), [['operation-missing'], []]);
+
+  for (const [label, row] of [['a missing lookup', without(complete, '_customconnectorid_value')], ['a null lookup', { ...complete, _customconnectorid_value: null }], ['a lookup that is no GUID', { ...complete, _customconnectorid_value: 'not-a-guid' }]]) {
+    const verdict = await judge(row);
+    assert.deepStrictEqual(kinds(verdict), [[], ['custom connector definitions']], label);
+    assert.deepStrictEqual(verdict.reads, ['connectionreference'], `${label}: no definition is read, as there is none to read by`);
+    assert.strictEqual(verdict.unchecked[0].text, 'the operations that connector binding "contoso_widgets" of page "Widgets" call were not checked: this environment does not name a custom connector for its connection reference, and only a custom connector\'s definition is read here (a connector the platform publishes defines the same operations in every environment of its cloud)');
+  }
+  const noConnection = await judge(without(complete, 'connectionid'));
+  assert.deepStrictEqual(kinds(noConnection), [['operation-missing'], ['reference connections']], 'what the row did prove is still judged');
+  const noConnector = await judge(without(complete, 'connectorid'));
+  assert.deepStrictEqual(kinds(noConnector), [['operation-missing'], ['reference connectors']]);
+  const bare = await judge(without(complete, 'connectorid', 'connectionid', '_customconnectorid_value'));
+  assert.deepStrictEqual(kinds(bare), [[], ['reference connectors', 'reference connections', 'custom connector definitions']]);
+  assert.ok(bare.findings.every((f) => f.severity !== 'refuse'), 'missing evidence never refuses');
+});
+
+// ── malformed, not missing: a row that answers with a value of the wrong shape ──────────────────────────────────────────────────
+// A value that is THERE but is not what the column holds proves nothing either. A `connectorid` that is not a connector's API id as Dataverse writes it (`/providers/Microsoft.PowerApps/apis/shared_<name>`) —
+// `***`, a bare name, a number, an object — is not compared: it is NOT CHECKED, said by name, and never a conflict, so it never stops a rebuild. A `connectionid` that is not a text is not "no connection":
+// only null or a blank text says that. Two VALID connector ids that differ are still refused.
+test('a malformed connectorid or connectionid in a successful answer is NOT CHECKED — never a refusal, never "no connection" — while two valid, different connectors are still refused', async () => {
+  const page = { key: 'weather', name: 'Weather', connectorBindings: [WEATHER] };
+  const judge = async (row) => {
+    const { provision } = readerOf({ connectionreference: [row] });
+    return judgeBindingTargets([page], await readBindingTargets(provision, [page]));
+  };
+  const row = { connectionreferencelogicalname: 'contoso_msnweather', connectorid: WEATHER.connectorId, connectionid: 'shared-connection-0001', _customconnectorid_value: null };
+  for (const connectorid of ['***', 'shared_office365users', '/providers/Microsoft.PowerApps/apis/', '/providers/Microsoft.PowerApps/apis/office365users', '/providers/Microsoft.PowerApps/apis/shared_x/extra', 42, { id: 'shared_x' }, ['/providers/Microsoft.PowerApps/apis/shared_x'], true]) {
+    const verdict = await judge({ ...row, connectorid });
+    assert.deepStrictEqual(verdict.findings, [], `${JSON.stringify(connectorid)}: no finding, and never a refusal`);
+    assert.ok(verdict.unchecked.some((u) => u.what === 'reference connectors'), `${JSON.stringify(connectorid)}: said as not checked`);
+  }
+  for (const connectionid of [42, { id: 'x' }, true, ['shared-connection-0001']]) {
+    const verdict = await judge({ ...row, connectionid });
+    assert.deepStrictEqual(verdict.findings, [], `${JSON.stringify(connectionid)}: not "no connection"`);
+    assert.ok(verdict.unchecked.some((u) => u.what === 'reference connections'), `${JSON.stringify(connectionid)}: said as not checked`);
+  }
+  // What the column DOES say is still judged: null or a blank text is no connection, and a valid connector id of another connector is a conflict.
+  for (const connectionid of [null, '', '  ']) assert.deepStrictEqual((await judge({ ...row, connectionid })).findings.map((f) => f.kind), ['connection-missing'], JSON.stringify(connectionid));
+  const conflict = await judge({ ...row, connectorid: '/providers/Microsoft.PowerApps/apis/SHARED_OFFICE365USERS' });
+  assert.deepStrictEqual(conflict.findings.map((f) => [f.severity, f.kind, f.found]), [['refuse', 'connector-conflict', 'shared_office365users']]);
+  // A binding whose own connectorId is not a connector id is not compared either: there is nothing to contradict.
+  const odd = { key: 'weather', name: 'Weather', connectorBindings: [{ ...WEATHER, connectorId: 'contoso' }] };
+  const { provision } = readerOf({ connectionreference: [{ ...row, connectorid: '/providers/Microsoft.PowerApps/apis/shared_office365users' }] });
+  assert.deepStrictEqual(judgeBindingTargets([odd], await readBindingTargets(provision, [odd])).findings, []);
+});
+
+// ── the two reviewed built-in operations: WhoAmI and RetrieveVersion ────────────────────────────────────────────────────────────
+// They are platform messages, not rows of `customapi` (lib/dataverse-operations.js), so a `customapi` read cannot find them and an `api-missing` warning would tell the author to deploy
+// something that is not deployable. An EXACT catalogue name leaves the Custom API read before the names are folded in case and cut into chunks; it is reported as not checked — its
+// availability in the environment or player and the user's permissions are not known — and never as "compatible". A preserved one whose declarations do not explicitly say "unbound
+// Function, no inputs" is warned of and left as it is. A name in another case (`whoami`), and every other name, stays a Custom API name.
+const WHO_AM_I = { name: 'WhoAmI', isFunction: true, displayName: 'Current Dataverse identity', parameterKinds: {} };
+const RETRIEVE_VERSION = { name: 'RetrieveVersion', isFunction: true, displayName: 'Dataverse server version', parameterKinds: {} };
+const BUILT_IN_UNCHECKED = 'These are reviewed built-in operation names; their availability in this environment or player and the signed-in user\'s permissions were not checked.';
+
+test('built-in operations: a page that binds only WhoAmI and RetrieveVersion reads no customapi row, is warned of nothing missing, and is said to be not checked', async () => {
+  const page = { key: 'ops', name: 'Ops', actionBindings: [WHO_AM_I, RETRIEVE_VERSION] };
+  const { provision, calls } = readerOf({});
+  const targets = await readBindingTargets(provision, [page]);
+  assert.deepStrictEqual(calls, [], 'zero reads');
+  assert.deepStrictEqual(targets, { references: null, apis: null, definitions: null, problems: {} });
+  const verdict = judgeBindingTargets([page], targets);
+  assert.deepStrictEqual(verdict.findings, [], 'no api-missing, and no shape warning for a binding that states the reviewed contract');
+  assert.deepStrictEqual(verdict.unchecked, [{
+    what: 'Dataverse operations', page: { key: 'ops', name: 'Ops' }, names: ['WhoAmI', 'RetrieveVersion'],
+    text: `page "Ops" binds the built-in operations WhoAmI, RetrieveVersion. ${BUILT_IN_UNCHECKED}`,
+  }]);
+  // Not checked is never "compatible": the sentence says so, and nothing claims a check.
+  assert.doesNotMatch(verdict.unchecked[0].text, /compatible|verified|deploy/i);
+});
+
+test('built-in operations: beside Custom APIs, only the Custom API names are read — and a Custom API still missing is still said', async () => {
+  const page = { key: 'mixed', name: 'Mixed', actionBindings: [APPROVE, WHO_AM_I, RETRIEVE_VERSION, SUMMARY] };
+  const { provision, calls } = readerOf({ customapi: [customApi('contoso_ApproveOrder', { boundentitylogicalname: 'contoso_item', bindingtype: 1 })] });
+  const targets = await readBindingTargets(provision, [page]);
+  assert.deepStrictEqual(calls.map((c) => [c.entity, c.options.filter]), [['customapi', "uniquename eq 'contoso_ApproveOrder' or uniquename eq 'contoso_GetSummary'"]]);
+  const verdict = judgeBindingTargets([page], targets);
+  assert.deepStrictEqual(verdict.findings.map((f) => [f.kind, f.names]), [['api-missing', ['contoso_GetSummary']]]);
+  assert.deepStrictEqual(verdict.unchecked.map((u) => [u.what, u.names]), [['Dataverse operations', ['WhoAmI', 'RetrieveVersion']]]);
+  // The Custom API read fails: the Custom API bindings are not checked — and a page that binds only built-ins is not named among them.
+  const denied = readerOf({}, { failOn: ['customapi'] });
+  const pages = [page, { key: 'ops', name: 'Ops', actionBindings: [WHO_AM_I] }];
+  const failed = judgeBindingTargets(pages, await readBindingTargets(denied.provision, pages));
+  assert.deepStrictEqual(failed.findings, []);
+  assert.deepStrictEqual(failed.unchecked.map((u) => u.text), [
+    `page "Mixed" binds the built-in operations WhoAmI, RetrieveVersion. ${BUILT_IN_UNCHECKED}`,
+    `page "Ops" binds the built-in operation WhoAmI. ${BUILT_IN_UNCHECKED}`,
+    'could not read this environment\'s Custom APIs (customapi: HTTP 403), so the Custom API bindings of page "Mixed" were not checked against them',
+  ]);
+});
+
+test('built-in operations: only an EXACT catalogue name leaves the Custom API read — whoami, a namespaced name and an effectful Function stay Custom API names', async () => {
+  const page = { key: 'p', name: 'P', actionBindings: [{ name: 'whoami', isFunction: true }, { name: 'Microsoft.Dynamics.CRM.WhoAmI', isFunction: true }, { name: 'CalculateRollupField', isFunction: true }, { name: 'RETRIEVEVERSION', isFunction: true }] };
+  const { provision, calls } = readerOf({});
+  const verdict = judgeBindingTargets([page], await readBindingTargets(provision, [page]));
+  assert.deepStrictEqual(calls.map((c) => c.options.filter), ["uniquename eq 'whoami' or uniquename eq 'Microsoft.Dynamics.CRM.WhoAmI' or uniquename eq 'CalculateRollupField' or uniquename eq 'RETRIEVEVERSION'"]);
+  assert.deepStrictEqual(verdict.findings.map((f) => [f.kind, f.names]), [['api-missing', ['whoami', 'Microsoft.Dynamics.CRM.WhoAmI', 'CalculateRollupField', 'RETRIEVEVERSION']]]);
+  assert.deepStrictEqual(verdict.unchecked, []);
+});
+
+test('built-in operations leave the read before the names are folded in case and chunked: the chunks go from ceil(nBefore/25) to ceil(nAfter/25), and whoami beside WhoAmI is still read', async () => {
+  const apis = Array.from({ length: 25 }, (_, i) => ({ name: `contoso_Api${String(i).padStart(2, '0')}`, isFunction: true }));
+  // 25 Custom APIs and both built-ins: 27 names before, 25 after — one chunk, not two.
+  const both = readerOf({});
+  await readBindingTargets(both.provision, [{ key: 'a', name: 'A', actionBindings: [...apis, WHO_AM_I, RETRIEVE_VERSION] }]);
+  assert.deepStrictEqual(both.calls.map((c) => c.options.filter.split(' or ').length), [25]);
+  assert.ok(!both.calls.some((c) => /'WhoAmI'|'RetrieveVersion'/.test(c.options.filter)));
+  // WhoAmI and whoami fold to ONE name when they are read together; WhoAmI leaves first, so whoami is read under its own spelling — subtracting every built-in binding from the
+  // folded count would have dropped it.
+  const twins = readerOf({});
+  await readBindingTargets(twins.provision, [{ key: 'a', name: 'A', actionBindings: [...apis.slice(0, 24), WHO_AM_I, { name: 'whoami', isFunction: true }] }]);
+  assert.deepStrictEqual(twins.calls.map((c) => c.options.filter.split(' or ').length), [25]);
+  assert.match(twins.calls[0].options.filter, / or uniquename eq 'whoami'$/);
+  assert.doesNotMatch(twins.calls[0].options.filter, /'WhoAmI'/);
+  const order = readerOf({});
+  await readBindingTargets(order.provision, [{ key: 'a', name: 'A', actionBindings: [{ name: 'whoami', isFunction: true }, WHO_AM_I] }]);
+  assert.deepStrictEqual(order.calls.map((c) => c.options.filter), ["uniquename eq 'whoami'"], 'whichever comes first');
+});
+
+test('built-in operations: a preserved binding that does not explicitly say "unbound Function, no inputs" is warned of — omitted apart from contradicted — and left exactly as it is', async () => {
+  const legacy = { name: 'WhoAmI', displayName: 'Who am I' };
+  const noKinds = { name: 'RetrieveVersion', isFunction: true };
+  const action = { name: 'WhoAmI', isFunction: false, displayName: 'Current Dataverse identity', parameterKinds: {} };
+  const inputs = { name: 'RetrieveVersion', isFunction: true, parameterKinds: { Target: 'String', Depth: 'Integer' } };
+  const bound = { name: 'WhoAmI', isFunction: true, boundEntityLogicalName: 'systemuser', parameterKinds: {} };
+  const pages = [
+    { key: 'old', name: 'Old', actionBindings: [legacy, noKinds] },
+    { key: 'bad', name: 'Bad', actionBindings: [action, inputs, bound] },
+  ];
+  const before = structuredClone(pages);
+  const { provision, calls } = readerOf({});
+  const verdict = judgeBindingTargets(pages, await readBindingTargets(provision, pages));
+  assert.deepStrictEqual(calls, []);
+  assert.deepStrictEqual(pages, before, 'nothing is rewritten');
+  assert.deepStrictEqual(verdict.findings.map((f) => [f.severity, f.kind, f.page.key, f.binding, f.declaration]), [
+    ['warn', 'dataverse-operation-shape', 'old', 'WhoAmI', 'omitted'],
+    ['warn', 'dataverse-operation-shape', 'old', 'RetrieveVersion', 'omitted'],
+    ['warn', 'dataverse-operation-shape', 'bad', 'WhoAmI', 'contradicted'],
+    ['warn', 'dataverse-operation-shape', 'bad', 'RetrieveVersion', 'contradicted'],
+    ['warn', 'dataverse-operation-shape', 'bad', 'WhoAmI', 'contradicted'],
+  ]);
+  const SHAPE = 'This binding does not explicitly match the reviewed unbound, zero-input Function contract. It was preserved; invocation may fail.';
+  assert.deepStrictEqual(verdict.findings.map((f) => f.text), [
+    `page "Old": built-in operation binding "WhoAmI" does not declare its kind or its inputs (isFunction, parameterKinds). ${SHAPE}`,
+    `page "Old": built-in operation binding "RetrieveVersion" does not declare its inputs (parameterKinds). ${SHAPE}`,
+    `page "Bad": built-in operation binding "WhoAmI" declares an Action (isFunction: false). ${SHAPE}`,
+    `page "Bad": built-in operation binding "RetrieveVersion" declares inputs (Target, Depth). ${SHAPE}`,
+    `page "Bad": built-in operation binding "WhoAmI" declares a bound table (systemuser). ${SHAPE}`,
+  ]);
+  // No promise of what the player answers: the runtime codes of a Custom API mismatch are not this check's to name.
+  assert.ok(verdict.findings.every((f) => !/wrong_operation_kind|invalid_bound_to|api-missing|deploy/.test(f.text)));
+  assert.deepStrictEqual(verdict.unchecked.map((u) => u.names), [['WhoAmI', 'RetrieveVersion'], ['WhoAmI', 'RetrieveVersion']], 'each page still says its built-ins were not checked');
+  // A different display label is not a shape problem: only kind, binding and inputs are.
+  assert.deepStrictEqual(judgeBindingTargets([{ key: 'l', name: 'L', actionBindings: [{ ...WHO_AM_I, displayName: 'Me' }] }], { references: null, apis: null, problems: {} }).findings, []);
+});

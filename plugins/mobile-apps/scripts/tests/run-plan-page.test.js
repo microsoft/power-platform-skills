@@ -1050,7 +1050,17 @@ test('the plan carries the same AI disclaimer as every other plan page', () => {
   // It is fixed to the viewport, so the page and the sticky device rail must both stop short of
   // it; otherwise their last line sits underneath it.
   assert.match(template, /body\{[^}]*padding-bottom:var\(--footer-h\)/);
-  assert.match(template, /\.rail\{[^}]*calc\(100vh - 65px - var\(--footer-h\)\)/);
+  assert.match(template, /\.rail\{[^}]*top:var\(--topbar-h\);height:calc\(100vh - var\(--topbar-h\) - var\(--footer-h\)\)/);
+});
+
+test('the short-phone container query overrides the default QR copy sizes', () => {
+  const template = fs.readFileSync(
+    path.resolve(__dirname, '..', '..', 'assets', 'run-plan.html'), 'utf8',
+  );
+  const compact = template.indexOf('@container (max-height:520px)');
+  assert.ok(compact > template.indexOf('.qr-title{font-size:16px'));
+  assert.ok(compact > template.indexOf('.qr-sub{font-size:12.5px'));
+  assert.ok(compact > template.indexOf('.qr-url{font-family:var(--mono);font-size:11px'));
 });
 
 test('the carousel says the mockups are not the built app, and only while they are shown', async () => {

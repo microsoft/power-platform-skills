@@ -166,9 +166,11 @@ function navTargets(p) {
 // Project the App Spec's `design` contract into the plan's `## Design Preferences` section.
 //
 // The canonical field set is fixed and validated (app-spec.js rejects unknown keys):
-// `accentColor`, `density`, `cornerRadius`, `darkMode`, `layout`. These are the tokens the user
+// `accentColor`, `density`, `cornerRadius`, `darkMode`, `layout`, `style`. The first five are tokens the user
 // approved during authoring, so every generated page must apply them — a page that ignores them is
-// visually inconsistent with the rest of the app and with the model-driven shell.
+// visually inconsistent with the rest of the app and with the model-driven shell. `style` is the maker's own
+// look in words (AB#6320143): it leads the line as `Maker-requested:`, which the page-builder applies instead of
+// the default model-driven look (references/rules.md, "Maker-requested styling"); without it the pages keep that look.
 // Values are sanitised because `design` is author-supplied (and download-derived on an edit).
 function designPreferences(design) {
   const d = design && typeof design === 'object' ? design : {};
@@ -180,13 +182,16 @@ function designPreferences(design) {
   ]
     .filter(([, v]) => v != null && String(v).trim())
     .map(([label, v]) => `${label}: ${mdText(v)}`);
+  const style = typeof d.style === 'string' ? mdText(d.style) : '';
 
   return {
     // Always name Fluent UI V9 — it is the required component library, not a preference — then
     // append the approved tokens so the worker has a single authoritative styling line.
-    styling: tokens.length
-      ? `Fluent UI V9 tokens — ${tokens.join('; ')}`
-      : 'Fluent UI V9 defaults; clean, content-first layout',
+    styling: style
+      ? `Maker-requested: ${style}${tokens.length ? ` (Fluent UI V9 components; also ${tokens.join('; ')})` : ' (Fluent UI V9 components)'}`
+      : tokens.length
+        ? `Fluent UI V9 tokens — ${tokens.join('; ')}`
+        : 'Fluent UI V9 defaults; clean, content-first layout',
     layout: d.layout ? `${mdText(d.layout)} layout, responsive` : null,
     features: 'Search, sorting and filtering where the page lists records',
     accessibility: 'WCAG AA (ARIA labels, keyboard navigation, semantic HTML)',

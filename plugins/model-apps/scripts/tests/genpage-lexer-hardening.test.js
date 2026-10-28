@@ -9,6 +9,9 @@ const { performance } = require('node:perf_hooks');
 const { blankNonCodePreservingTemplateExpressions, hasDefaultExport } = require(path.join(__dirname, '..', 'lib', 'source-literals.js'));
 const { pageStructureProblems } = require(path.join(__dirname, '..', 'lib', 'page-structure.js'));
 const { extractNavTargets, navReferencedKeys, navMalformedRefs, navigationFrontier, resolvePageRefs, strayPageRefs } = require(path.join(__dirname, '..', 'lib', 'pageref-resolver.js'));
+// These tests hold the lexer to its own rules — what it reads for certain, what it reports as a guess, and what a guess costs a page — so they read pages with
+// the lexer alone. Where the lexer guesses, the gates ask the TypeScript parser (typescript-views.js), which parser-check.test.js tests.
+require(path.join(__dirname, '..', 'lib', 'typescript-views.js')).setParserCheck(false);
 const { OBJECT_DIVISION_PAGE_RUNNABLE, MISREAD_PAGES, runnable } = require('./helpers/misread-page.js');
 
 function runNavigationSnippet(code) {

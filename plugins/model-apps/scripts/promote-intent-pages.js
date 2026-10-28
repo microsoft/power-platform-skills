@@ -19,6 +19,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { parseArgs, validateFlags, readJsonArg, emitResult } = require('./lib/dataverse-auth.js');
+const { makeWritesBlocking } = require('./lib/output-redaction.js');
 const { migrateAppSpec } = require('./lib/app-spec.js');
 const { pageKey, pageFile } = require('./lib/page-plan.js');
 const { navReferencedKeys, navMalformedRefs, navTargetParity, strayPageRefs, describePageRefLocations, pageRefAdvice, frontierNote, PAGEREF_RULE } = require('./lib/pageref-resolver.js');
@@ -75,6 +76,7 @@ function main() {
     needValue: ['spec', 'working-dir'],
   });
   if (flagError) {
+    makeWritesBlocking(process.stdout, process.stderr);
     process.stderr.write(`✗ ${flagError}\n${USAGE}\n`);
     process.exit(1);
   }
@@ -97,10 +99,12 @@ function main() {
     originalText = fs.readFileSync(specPath, 'utf8');
     raw = JSON.parse(originalText);
   } catch (e) {
+    makeWritesBlocking(process.stdout, process.stderr);
     process.stderr.write(`cannot read app spec at ${specPath}: ${e.message}\n`);
     process.exit(3);
   }
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+    makeWritesBlocking(process.stdout, process.stderr);
     process.stderr.write(`app spec at ${specPath} is not a JSON object\n`);
     process.exit(3);
   }
@@ -133,7 +137,10 @@ function main() {
   const failed = results.filter((r) => r.problems.length);
   if (failed.length) {
     // Fail-closed: the spec on disk is untouched, so the caller can regenerate just the bad pages
-    // and re-run this command.
+    // and re-run this command. Every failed page's diagnostics go out on both streams and the process
+    // exits right after, so the writes are made blocking first: on Linux and macOS a pipe would
+    // otherwise take only what fits at once (lib/output-redaction.js).
+    makeWritesBlocking(process.stdout, process.stderr);
     process.stdout.write(JSON.stringify({ ok: false, promoted: [], failed }, null, 2) + '\n');
     process.stderr.write(
       `promotion aborted — ${failed.length} of ${results.length} page(s) failed validation; app-spec.json was NOT modified\n`
@@ -176,6 +183,7 @@ function main() {
     fs.renameSync(tmp, specPath);
   } catch (e) {
     try { fs.unlinkSync(tmp); } catch { /* nothing to clean up */ }
+    makeWritesBlocking(process.stdout, process.stderr);
     process.stderr.write(`failed to write ${specPath}: ${e.message}\n`);
     process.exit(3);
   }

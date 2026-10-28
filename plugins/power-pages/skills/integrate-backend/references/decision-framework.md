@@ -1,6 +1,6 @@
 # Backend Integration Decision Framework
 
-Use this framework to recommend the right backend integration approach for a Power Pages code site. A single user request may map to one approach or a combination.
+Use this framework to recommend the right backend integration approach for a Power Pages SPA site. A single user request may map to one approach or a combination.
 ## The Four Approaches
 
 ### Web API (`/integrate-webapi`)

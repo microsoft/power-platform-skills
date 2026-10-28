@@ -1,9 +1,11 @@
 ---
 name: deploy-site
 description: >-
-  Deploys an existing Power Pages code site to a Power Pages environment using PAC CLI.
-  Handles tooling verification, authentication, environment confirmation, building, and
-  uploading. Use when the user wants to deploy, upload, or publish their code site.
+  Deploys an existing Power Pages site to a Power Pages environment using PAC CLI. Routes SPA
+  sites to the existing build and upload-code-site workflow, and PAC-downloaded non-SPA (classic)
+  sites to an isolated upload workflow with explicit data-model and website-identity checks. Handles
+  tooling verification, authentication, environment confirmation, upload approval, and
+  verification. Use when the user wants to deploy, upload, publish, or push either site type.
 user-invocable: true
 allowed-tools: Read, Bash, AskUserQuestion, Glob, Grep, TaskCreate, TaskUpdate, TaskList
 model: sonnet
@@ -11,9 +13,10 @@ model: sonnet
 
 > **Plugin check**: Run `node "${PLUGIN_ROOT}/scripts/check-version.js"` — if it outputs a message, show it to the user before proceeding.
 
-# Deploy Power Pages Code Site
+# Deploy Power Pages Site
 
-Guide the user through deploying an existing Power Pages code site to a Power Pages environment using PAC CLI. Follow a systematic approach: verify tooling, authenticate, confirm the target environment, build and upload the site, and handle any blockers.
+Route to the correct deployment workflow before running SPA build, attachment, or activation
+logic.
 
 ## Core Principles
 
@@ -22,6 +25,52 @@ Guide the user through deploying an existing Power Pages code site to a Power Pa
 - **Never change environment settings without consent**: If deployment requires modifying environment configuration (e.g., unblocking JavaScript attachments), always explain the change and get explicit user permission first.
 
 **Initial request:** $ARGUMENTS
+
+---
+
+## Site-Type Routing
+
+Classify explicit request signals first:
+
+- React, Vue, Angular, Astro, SPA, code site, or `powerpages.config.json` → **SPA site**
+- non-SPA, classic, traditional, declarative, Enhanced, EDM, Standard data model, `.portalconfig`,
+  or `website.yml` → **Non-SPA site**
+
+When the request is not explicit, search the current workspace for:
+
+- SPA roots containing `powerpages.config.json`;
+- non-SPA roots containing both `.portalconfig/` and `website.yml`, including a nested
+  `.powerpages-site/`.
+
+Exclude dependency, build-output, temporary, generated-output, and version-control directories.
+Use request paths and the current directory to resolve one project. Never choose the first result
+arbitrarily.
+
+<!-- gate: deploy-site:0.project-type | category=plan | cancel-leaves=nothing -->
+
+> 🚦 **Gate (plan · deploy-site:0.project-type):** Select the exact project when SPA and
+> non-SPA sites, or multiple valid roots, remain possible.
+>
+> **Trigger:** Project type or root is ambiguous after discovery.
+> **Why:** The two site types require incompatible PAC upload commands.
+> **Cancel leaves:** Nothing; no build or upload has started.
+
+If ambiguous, use `AskUserQuestion` to select the exact project root and detected type.
+
+- **Non-SPA site:** Read and follow
+  `${PLUGIN_ROOT}/skills/deploy-site/workflows/non-spa-site.md`. Do not continue into the
+  SPA phases below.
+- **SPA site:** Continue with the existing workflow below.
+
+### Non-SPA upload approval
+
+The authoritative markers and prompts live in `workflows/non-spa-site.md`.
+Gate `deploy-site:non-spa-4.permissions-audit` handles permission-sensitive changes before upload.
+Gate `deploy-site:non-spa-5.upload` approves the exact root, environment, website identity, model, and local change summary immediately before upload.
+
+## SPA-Site Deployment Workflow
+
+The following phases retain the existing SPA behavior.
 
 ---
 
@@ -156,7 +205,7 @@ Guide the user through deploying an existing Power Pages code site to a Power Pa
 
 ---
 
-## Phase 4: Deploy the Code Site
+## Phase 4: Deploy the SPA Site
 
 **Goal**: Locate the project, build it, and upload to Power Pages
 
@@ -205,21 +254,7 @@ Use `AskUserQuestion`:
 
 If `.powerpages-site` does **not** exist (first deployment), skip this step — there are no existing permissions to audit.
 
-### 4.3 Validate Site Integrity
-
-Before building, run the shared lifecycle check:
-
-```bash
-node "${PLUGIN_ROOT}/scripts/validate-site-integrity.js" --projectRoot "<PROJECT_ROOT>"
-```
-
-This validates deterministic bidirectional rules for every code site and, when
-`.powerpages-localization.json` exists, resource parity, protected tokens, locale availability,
-runtime direction coordination, and localization structure. It also reports content-expansion
-and geometry findings for review. If validation fails, stop and remediate the reported source or
-resource defects before deployment. This is not a new approval gate.
-
-### 4.4 Build the Site
+### 4.3 Build the Site
 
 Before uploading, ensure the site is built:
 
@@ -230,7 +265,7 @@ npm run build
 
 If the build fails, stop and help the user fix the build errors before retrying.
 
-### 4.5 Upload to Power Pages
+### 4.4 Upload to Power Pages
 
 Run the upload command:
 
@@ -360,7 +395,7 @@ Evaluate the result:
 ### 6.1 Explain the Issue
 
 Tell the user:
-> "The upload failed because JavaScript (.js) file attachments are blocked in your Power Pages environment. This is a security setting that prevents uploading .js files. To deploy a code site, this restriction needs to be relaxed for .js files."
+> "The upload failed because JavaScript (.js) file attachments are blocked in your Power Pages environment. This is a security setting that prevents uploading .js files. To deploy a SPA site, this restriction needs to be relaxed for .js files."
 
 ### 6.2 Ask for Permission
 
@@ -376,7 +411,7 @@ Use `AskUserQuestion`:
 
 | Question | Header | Options |
 |----------|--------|---------|
-| Would you like to remove the JavaScript (.js) block from the environment's blocked attachments list? This is required to deploy code sites. | Unblock JS | Yes, remove the .js block (Recommended), No, do not change environment settings |
+| Would you like to remove the JavaScript (.js) block from the environment's blocked attachments list? This is required to deploy SPA sites. | Unblock JS | Yes, remove the .js block (Recommended), No, do not change environment settings |
 
 **If "No"**: Stop and inform the user that the deployment cannot proceed without unblocking `.js` attachments.
 
@@ -462,7 +497,7 @@ If the user skips activation (or after activation completes), suggest:
 
 ### NEVER Use `pac pages upload`
 
-Always use `pac pages upload-code-site` — **never** use `pac pages upload`. The `pac pages upload` command is designed for portal-studio-style sites and will corrupt code site metadata if used on a code site project. This applies to every upload step in this skill (Phase 4.5, Phase 6.4, and troubleshooting retries).
+Always use `pac pages upload-code-site` — **never** use `pac pages upload`. The `pac pages upload` command is designed for portal-studio-style sites and will corrupt SPA site metadata if used on a SPA site project. This applies to every upload step in this skill (Phase 4.4, Phase 6.4, and troubleshooting retries).
 
 ### Throughout All Phases
 
@@ -488,7 +523,7 @@ Before starting Phase 1, create a task list with all phases using `TaskCreate`:
 | Verify PAC CLI installation | Verifying PAC CLI | Check if PAC CLI is installed, install if missing |
 | Verify authentication | Verifying authentication | Check current auth status, authenticate if needed |
 | Confirm target environment | Confirming environment | Show current environment, let user confirm or switch |
-| Deploy the code site | Deploying site | Locate project root, build, and upload via pac pages upload-code-site |
+| Deploy the SPA site | Deploying site | Locate project root, build, and upload via pac pages upload-code-site |
 | Verify deployment | Verifying deployment | Confirm .powerpages-site folder exists, review upload output, commit changes, offer activation |
 | Handle blocked JavaScript | Resolving JS block | If upload fails due to blocked JS, offer to unblock and retry |
 

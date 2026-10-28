@@ -476,23 +476,23 @@ Written by `setup-solution`, read by `export-solution`, `import-solution`, and `
 
 ---
 
-## 8. Solution Packaging — BYOC vs Traditional Portal
+## 8. Solution Packaging — BYOC vs Non-SPA Portal
 
 Power Pages supports two site types. How cloud flows and bots are packaged differs between them.
 
 **Detect site type** from `powerpages.config.json` → `powerpagesitetype`:
-- `1` = Traditional (Classic) portal — uses managed metadata v1
-- `2` = BYOC code site — uses data model v2.0 (`datamodelversion: "2.0"`)
+- `1` = Non-SPA (classic) portal — uses managed metadata v1
+- `2` = BYOC SPA site — uses data model v2.0 (`datamodelversion: "2.0"`)
 
 ### Cloud Flow Packaging
 
-| | Traditional portal | BYOC code site |
+| | Non-SPA portal | BYOC SPA site |
 |---|---|---|
 | Cloud flow component in `solutioncomponents` | `ComponentType: 29` (Workflow) | `ComponentType: 29` (Workflow) |
 | Site-level binding record | `powerpagecomponent` type **33** ("cloud flow binding") — links the flow to a specific page | **Not present.** BYOC sites call flows directly via Web API from the React/Vue/Angular app |
 | How to add to solution | Add website (pulls type-33 bindings automatically as sub-components) + add cloud flow workflow entity (type 29) separately | Add website (no type-33 records exist) + add cloud flow workflow entity (type 29) separately |
 
-> **Implication for `setup-solution`**: Querying `powerpagecomponents` for type 33 records is valid for traditional portals only. For BYOC sites this query returns 0 results — which is correct. The skill should still add cloud flow workflow entities (type 29) explicitly when present.
+> **Implication for `setup-solution`**: Querying `powerpagecomponents` for type 33 records is valid for non-SPA portals only. For BYOC sites this query returns 0 results — which is correct. The skill should still add cloud flow workflow entities (type 29) explicitly when present.
 
 ### Bot Packaging
 

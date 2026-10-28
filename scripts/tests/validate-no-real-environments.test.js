@@ -176,8 +176,18 @@ test('OData annotations are not mistaken for e-mail addresses', () => {
     '_ownerid_value@OData.Community.Display.V1.FormattedValue',
     'publisherid@odata.bind',
     'IconWebResourceId@odata.bind',
+    '_customerid_value@Microsoft.Dynamics.CRM.lookuplogicalname',
+    '_ownerid_value@Microsoft.Dynamics.CRM.associatednavigationproperty',
   ].join('\n');
   assert.deepEqual(scanText(odata), []);
+  // Only the exact annotation names: a real-looking domain that merely begins with the spelling is an address.
+  for (const address of ['tester@microsoft.dynamics.crm.example.net', 'reader@microsoft.dynamics.crm.private-mail.invalid',
+    'maker@odata.org', 'maker@odata.bind.example.org', 'maker@microsoft.dynamics.crm.lookuplogicalname.net']) {
+    assert.equal(scanText(address).length, 1, address);
+  }
+  assert.equal(isPlaceholderEmailDomain('microsoft.dynamics.crm.example.net'), false);
+  assert.equal(isPlaceholderEmailDomain('Microsoft.Dynamics.CRM.lookuplogicalname'), true);
+  assert.equal(isPlaceholderEmailDomain('odata.nextLink'), true);
 });
 
 test('isPlaceholderEmailDomain: real vs illustrative', () => {

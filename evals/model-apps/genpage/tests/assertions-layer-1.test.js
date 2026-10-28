@@ -704,34 +704,80 @@ test('prefix resolved names: fail on prefix mismatch', () => {
   assert.match(result.reason, /cr_widget/);
 });
 
-// ---------- Phase 4 generate-types ----------
+// ---------- Phase 4 type generator: genpage.js types, and the pac verb an older capture records ----------
 
-test('Phase 4 generate-types skipped: pass when log only mentions "not run"', () => {
+test('Phase 4 type generator skipped: pass when the log only mentions "not run"', () => {
   const check = PHASE_EXPECTATIONS.get('Phase 4: RuntimeTypes generation is SKIPPED (mock data)');
-  const log = `## Phase 4\n- pac model genpage generate-types not run (mock data)`;
-  const result = check({ fixture: fix({ workflowLog: log }), eval: evalStub() });
-  assert.equal(result.status, 'pass');
+  for (const log of [
+    `## Phase 4\n- genpage.js types not run (mock data)`,
+    `## Phase 4\n- pac model genpage generate-types not run (mock data)`,
+  ]) {
+    assert.equal(check({ fixture: fix({ workflowLog: log }), eval: evalStub() }).status, 'pass', log);
+  }
 });
 
-test('Phase 4 generate-types skipped: fail when actually invoked', () => {
+test('Phase 4 type generator skipped: fail when it was run, by the script — also with a quoted path — or by the pac verb of an older capture', () => {
   const check = PHASE_EXPECTATIONS.get('Phase 4: RuntimeTypes generation is SKIPPED (mock data)');
-  const log = `pac model genpage generate-types --data-sources 'account' --output-file RuntimeTypes.ts`;
-  const result = check({ fixture: fix({ workflowLog: log }), eval: evalStub() });
-  assert.equal(result.status, 'fail');
+  for (const log of [
+    `node genpage.js types --env https://contoso.crm.dynamics.com --data-sources 'account' --output-file RuntimeTypes.ts`,
+    `- \`node 'D:/repo/plugins/model-apps/scripts/genpage.js' types --env 'https://contoso.crm.dynamics.com' --data-sources 'account' --output-file 'RuntimeTypes.ts'\``,
+    `pac model genpage generate-types --data-sources 'account' --output-file RuntimeTypes.ts`,
+  ]) {
+    assert.equal(check({ fixture: fix({ workflowLog: log }), eval: evalStub() }).status, 'fail', log);
+  }
+});
+
+test('Phase 4 type generator run: genpage.js types for account — also with a quoted path — or the pac verb of an older capture; another table, or the listing, is not it', () => {
+  const check = PHASE_EXPECTATIONS.get("Phase 4: genpage.js types --data-sources 'account' --output-file <working-dir>/RuntimeTypes.ts is run");
+  const run = (workflowLog) => check({ fixture: fix({ workflowLog }), eval: evalStub() });
+  for (const log of [
+    `- \`node 'D:/repo/plugins/model-apps/scripts/genpage.js' types --env 'https://contoso.crm.dynamics.com' --data-sources 'account' --output-file 'D:/work/x/RuntimeTypes.ts'\``,
+    `node "\${PLUGIN_ROOT}/scripts/genpage.js" types --env https://contoso.crm.dynamics.com --data-sources "account" --output-file RuntimeTypes.ts`,
+    `pac model genpage generate-types --data-sources 'account' --output-file RuntimeTypes.ts`,
+  ]) assert.equal(run(log).status, 'pass', log);
+  assert.match(run(`node genpage.js types --env https://contoso.crm.dynamics.com --data-sources 'contact' --output-file RuntimeTypes.ts`).reason, /missing --data-sources account/);
+  for (const log of [
+    `node genpage.js list --env https://contoso.crm.dynamics.com --app-id 1 # --data-sources 'account'`,
+    'RuntimeTypes.ts written by hand',
+  ]) assert.match(run(log).reason, /was not invoked/, log);
+});
+
+// ---------- Edit flow: the page listing and the page download are genpage.js, and a capture made before it records the pac verbs ----------
+
+test('Edit Phase 2 (eval 3): genpage.js download — also with a quoted path — or the pac verb of an older capture; a listing is not a download', () => {
+  const check = PHASE_EXPECTATIONS.get('Edit Phase 2: genpage.js download produces <working-dir>/<page-id>/ with page.tsx, config.json, prompt.txt');
+  const run = (workflowLog) => check({ fixture: fix({ workflowLog }), eval: evalStub(3) });
+  for (const line of [
+    `- \`node 'D:/repo/plugins/model-apps/scripts/genpage.js' download --env 'https://contoso.crm.dynamics.com' --app-id 1 --page-id 2 --output-directory 'D:/work/x'\``,
+    `- \`node "\${PLUGIN_ROOT}/scripts/genpage.js" download --env https://contoso.crm.dynamics.com --page-id 2 --output-directory D:/work/x\``,
+    '- `pac model genpage download --app-id 1 --page-id 2 --output-directory D:/work/x`',
+  ]) assert.equal(run(line).status, 'pass', line);
+  for (const line of [
+    `- \`node 'D:/repo/plugins/model-apps/scripts/genpage.js' list --env 'https://contoso.crm.dynamics.com' --app-id 1\``,
+    '- `pac model genpage list --app-id 1`',
+    '- the page code was recalled from memory',
+  ]) assert.equal(run(line).status, 'fail', line);
 });
 
 // ---------- Phase 6 upload flags ----------
 
 test('Phase 6 flags: pass when all flags present', () => {
-  const check = PHASE_EXPECTATIONS.get('Phase 6: pac model genpage upload includes --app-id, --code-file, --data-sources \'account\', --prompt, --model, --name, --agent-message, --add-to-sitemap');
+  const check = PHASE_EXPECTATIONS.get('Phase 6: the upload (genpage-upload.js) includes --app-id, --code-file, --data-sources \'account\', --prompt, --model, --name, --agent-message, --add-to-sitemap');
+  const log = `node scripts/genpage-upload.js --env https://contoso.crm.dynamics.com --app-id 1 --code-file p.tsx --data-sources 'account' --prompt-file prompt.txt --model claude --name-file page-name.txt --agent-message-file agent-message.txt --add-to-sitemap`;
+  const result = check({ fixture: fix({ workflowLog: log }), eval: evalStub() });
+  assert.equal(result.status, 'pass');
+});
+
+test('Phase 6 flags: a capture made before the script, with the raw pac upload, is still read', () => {
+  const check = PHASE_EXPECTATIONS.get('Phase 6: the upload (genpage-upload.js) includes --app-id, --code-file, --data-sources \'account\', --prompt, --model, --name, --agent-message, --add-to-sitemap');
   const log = `pac model genpage upload --app-id 1 --code-file p.tsx --data-sources 'account' --prompt "x" --model claude --name "p" --agent-message "m" --add-to-sitemap`;
   const result = check({ fixture: fix({ workflowLog: log }), eval: evalStub() });
   assert.equal(result.status, 'pass');
 });
 
 test('Phase 6 flags: fail when --agent-message missing', () => {
-  const check = PHASE_EXPECTATIONS.get('Phase 6: pac model genpage upload includes --app-id, --code-file, --data-sources \'account\', --prompt, --model, --name, --agent-message, --add-to-sitemap');
-  const log = `pac model genpage upload --app-id 1 --code-file p.tsx --data-sources 'account' --prompt "x" --model claude --name "p" --add-to-sitemap`;
+  const check = PHASE_EXPECTATIONS.get('Phase 6: the upload (genpage-upload.js) includes --app-id, --code-file, --data-sources \'account\', --prompt, --model, --name, --agent-message, --add-to-sitemap');
+  const log = `node scripts/genpage-upload.js --env https://contoso.crm.dynamics.com --app-id 1 --code-file p.tsx --data-sources 'account' --prompt-file prompt.txt --model claude --name-file page-name.txt --add-to-sitemap`;
   const result = check({ fixture: fix({ workflowLog: log }), eval: evalStub() });
   assert.equal(result.status, 'fail');
   assert.match(result.reason, /--agent-message/);
@@ -739,16 +785,52 @@ test('Phase 6 flags: fail when --agent-message missing', () => {
 
 test('Phase 6 mock-data: pass when upload omits --data-sources', () => {
   const check = PHASE_EXPECTATIONS.get('Phase 6: Deployment omits --data-sources flag (mock data page)');
-  const log = `pac model genpage upload --app-id 1 --code-file p.tsx --prompt "x" --add-to-sitemap`;
+  const log = `node scripts/genpage-upload.js --app-id 1 --code-file p.tsx --prompt-file prompt.txt --add-to-sitemap`;
   const result = check({ fixture: fix({ workflowLog: log }), eval: evalStub() });
   assert.equal(result.status, 'pass');
 });
 
 test('Phase 6 mock-data: fail when upload has --data-sources', () => {
   const check = PHASE_EXPECTATIONS.get('Phase 6: Deployment omits --data-sources flag (mock data page)');
-  const log = `pac model genpage upload --data-sources 'account' --code-file p.tsx`;
+  const log = `node scripts/genpage-upload.js --data-sources 'account' --code-file p.tsx`;
   const result = check({ fixture: fix({ workflowLog: log }), eval: evalStub() });
   assert.equal(result.status, 'fail');
+});
+
+test('Phase 6 mock-data: the raw pac upload of an older capture is still read', () => {
+  const check = PHASE_EXPECTATIONS.get('Phase 6: Deployment omits --data-sources flag (mock data page)');
+  assert.equal(check({ fixture: fix({ workflowLog: `pac model genpage upload --app-id 1 --code-file p.tsx --prompt "x" --add-to-sitemap` }), eval: evalStub() }).status, 'pass');
+  assert.equal(check({ fixture: fix({ workflowLog: `pac model genpage upload --data-sources 'account' --code-file p.tsx` }), eval: evalStub() }).status, 'fail');
+});
+
+// ---------- app and table discovery: the plugin's scripts, and the pac commands older captures record ----------
+
+test('Phase 1 list-tables (eval 1): list-tables.js must be exact, and a capture made before it records pac model list-tables', () => {
+  const check = PHASE_EXPECTATIONS.get("Phase 1 (Planner): list-tables.js --search 'account' --exact is run and the result is matched by exact logical name");
+  const run = (workflowLog) => check({ fixture: fix({ workflowLog }), eval: evalStub(1) });
+  assert.equal(run(`- \`node 'D:/repo/plugins/model-apps/scripts/list-tables.js' --env 'https://contoso.crm.dynamics.com' --search 'account' --exact\` → 1 table`).status, 'pass');
+  assert.equal(run(`- \`pac model list-tables --search 'account'\` — account exists`).status, 'pass');
+  const loose = run(`- \`node scripts/list-tables.js --env https://contoso.crm.dynamics.com --search 'account'\` → 4 tables`);
+  assert.equal(loose.status, 'fail');
+  assert.match(loose.reason, /without --exact/);
+  assert.match(run(`- \`node scripts/list-tables.js --env https://contoso.crm.dynamics.com\` → every table`).reason, /without --search/);
+  assert.match(run('- no table discovery was run').reason, /not invoked/);
+});
+
+test('Edit Phase 1a (eval 3): apps.js list — also with a quoted script path — or the pac model list of an older capture; a page listing is not an app listing', () => {
+  const check = PHASE_EXPECTATIONS.get('Edit Phase 1a: apps.js list is run to discover available apps — orchestrator does NOT guess or invent app names');
+  const run = (workflowLog) => check({ fixture: fix({ workflowLog }), eval: evalStub(3) });
+  for (const line of [
+    `- \`node "\${PLUGIN_ROOT}/scripts/apps.js" list --env 'https://contoso.crm.dynamics.com'\` → 2 apps`,
+    `- \`node 'D:/repo/plugins/model-apps/scripts/apps.js' list --env 'https://contoso.crm.dynamics.com' --search sales\``,
+    '- `pac model list` → 2 apps found',
+  ]) assert.equal(run(line).status, 'pass', line);
+  for (const line of [
+    '- `pac model genpage list --app-id 11111111-2222-3333-4444-555555555555` → 2 pages',
+    `- \`node 'D:/repo/plugins/model-apps/scripts/genpage.js' list --env 'https://contoso.crm.dynamics.com' --app-id 11111111-2222-3333-4444-555555555555\` → 2 pages`,
+    `- \`node 'D:/repo/plugins/model-apps/scripts/apps.js' create --env 'https://contoso.crm.dynamics.com' --name X --solution Default --page-id 1\``,
+    '- apps recalled from memory',
+  ]) assert.equal(run(line).status, 'fail', line);
 });
 
 // ---------- entity-builder gating ----------
@@ -793,17 +875,23 @@ test('Edit flow detection: pass when "edit flow" mentioned', () => {
 });
 
 test('Edit Phase 6 page-id: fail when --add-to-sitemap present', () => {
-  const check = PHASE_EXPECTATIONS.get('Edit Phase 6: pac model genpage upload uses --page-id flag; omits --add-to-sitemap');
-  const log = `pac model genpage upload --page-id abc --add-to-sitemap`;
+  const check = PHASE_EXPECTATIONS.get('Edit Phase 6: the upload (genpage-upload.js) uses --page-id flag; omits --add-to-sitemap');
+  const log = `node scripts/genpage-upload.js --page-id abc --add-to-sitemap`;
   const result = check({ fixture: fix({ workflowLog: log }), eval: evalStub() });
   assert.equal(result.status, 'fail');
 });
 
 test('Edit Phase 6 page-id: pass when --page-id and no --add-to-sitemap', () => {
-  const check = PHASE_EXPECTATIONS.get('Edit Phase 6: pac model genpage upload uses --page-id flag; omits --add-to-sitemap');
-  const log = `pac model genpage upload --page-id abc --prompt "delta"`;
+  const check = PHASE_EXPECTATIONS.get('Edit Phase 6: the upload (genpage-upload.js) uses --page-id flag; omits --add-to-sitemap');
+  const log = `node scripts/genpage-upload.js --page-id abc --prompt-file prompt.txt`;
   const result = check({ fixture: fix({ workflowLog: log }), eval: evalStub() });
   assert.equal(result.status, 'pass');
+});
+
+test('Edit Phase 6 page-id: the raw pac upload of an older capture is still read', () => {
+  const check = PHASE_EXPECTATIONS.get('Edit Phase 6: the upload (genpage-upload.js) uses --page-id flag; omits --add-to-sitemap');
+  assert.equal(check({ fixture: fix({ workflowLog: `pac model genpage upload --page-id abc --prompt "delta"` }), eval: evalStub() }).status, 'pass');
+  assert.equal(check({ fixture: fix({ workflowLog: `pac model genpage upload --page-id abc --add-to-sitemap` }), eval: evalStub() }).status, 'fail');
 });
 
 // ---------- entity-builder --solution always ----------
@@ -935,6 +1023,44 @@ test('a Custom API Bindings table missing required schema columns is rejected', 
   assert.equal(errors.filter((e) => e.code === 'missing-customapi-table').length, 1);
 });
 
+// `## Dataverse Operations` is OPTIONAL: absent is no new built-in authoring, and every existing plan stays valid. When present it sits after Custom
+// API Bindings and before Solution Packaging, and is the exact sentinel or the built-in operation table under its not-checked verification line.
+const DATAVERSE_OPERATIONS = '## Dataverse Operations\nVerification: environment not-checked, runtime not-checked, privileges not-checked.\n'
+  + '| Name | Kind | Bound Entity | Display Name | Parameters | Response fields | Invoke |\n|------|------|--------------|--------------|------------|-----------------|--------|\n'
+  + '| WhoAmI | Function | (Global) | Current Dataverse identity | (none) | BusinessUnitId, UserId, OrganizationId | button |\n\n';
+const withOperations = (section, plan = validPlan()) => plan.replace('## Design Preferences', `${section}## Design Preferences`);
+
+test('Dataverse Operations is optional: a plan without it is unchanged, and the sentinel or the table after Custom API Bindings passes', () => {
+  assert.deepEqual(validateGenpagePlanSchema(validPlan()).filter((e) => /dataverse|order/i.test(`${e.code} ${e.section || ''}`)), []);
+  for (const section of [DATAVERSE_OPERATIONS, '## Dataverse Operations\nNo Dataverse operations.\n\n']) {
+    const errors = validateGenpagePlanSchema(withOperations(section));
+    assert.deepEqual(errors.filter((e) => e.code === 'section-order' || e.section === 'Dataverse Operations'), [], JSON.stringify(errors));
+  }
+  // Before Solution Packaging, as references/plan-schema.md orders them.
+  const both = withOperations(`${DATAVERSE_OPERATIONS}## Solution Packaging\n- Solution: ContosoApp\n\n`);
+  assert.deepEqual(validateGenpagePlanSchema(both).filter((e) => e.code === 'section-order'), []);
+});
+
+test('Dataverse Operations out of order, or anything but the sentinel or the table, is refused', () => {
+  const beforeCustomApis = validPlan()
+    .replace('## Custom API Bindings\nNo custom API bindings.\n\n', `${DATAVERSE_OPERATIONS}## Custom API Bindings\nNo custom API bindings.\n\n`);
+  assert.ok(validateGenpagePlanSchema(beforeCustomApis).some((e) => e.code === 'section-order'), 'before Custom API Bindings');
+  const afterPackaging = withOperations(`## Solution Packaging\n- Solution: ContosoApp\n\n${DATAVERSE_OPERATIONS}`);
+  assert.ok(validateGenpagePlanSchema(afterPackaging).some((e) => e.code === 'section-order'), 'after Solution Packaging');
+  for (const [label, section] of [
+    ['empty', '## Dataverse Operations\n\n'],
+    ['prose', '## Dataverse Operations\nAdd WhoAmI.\n\n'],
+    ['no verification line', DATAVERSE_OPERATIONS.replace('Verification: environment not-checked, runtime not-checked, privileges not-checked.\n', '')],
+    ['a leaked delimiter', '## Dataverse Operations\n----- BEGIN DATAVERSE OPERATIONS -----\nNo Dataverse operations.\n----- END DATAVERSE OPERATIONS -----\n\n'],
+    ['a column missing', DATAVERSE_OPERATIONS.replace(' Invoke |', '').replace('--------|\n', '\n').replace(' button |', '')],
+    ['not in the catalogue', DATAVERSE_OPERATIONS.replace('| WhoAmI |', '| whoami |')],
+    ['an on-load trigger', DATAVERSE_OPERATIONS.replace('| button |', '| on-load |')],
+  ]) {
+    const errors = validateGenpagePlanSchema(withOperations(section));
+    assert.ok(errors.some((e) => e.code === 'invalid-dataverse-operations' && e.section === 'Dataverse Operations'), `${label}: ${JSON.stringify(errors)}`);
+  }
+});
+
 test('validateGenpagePlanSchema: page file paths must stay inside the working directory', () => {
   for (const [file, codePattern] of [
     ['..\\outside.tsx', /separator|traversal|escape|absolute/i],
@@ -1028,4 +1154,334 @@ test('solutions query: the documented multi-line form (bash `\\` or PowerShell b
   // be credited to an earlier dataverse-request.js call.
   const unrelated = `${asked}node dataverse-request.js https://contoso.crm.dynamics.com GET 'WhoAmI'\n- solutions were discussed\n`;
   assert.equal(check({ fixture: fix({ workflowLog: unrelated }), eval: evalStub(8) }).status, 'fail');
+});
+
+// --- The plan's Assumptions section and per-page semantic records (references/plan-schema.md) ------------------------------------
+
+const GOOD_A1 = [
+  '### A1 — Initial-load caching',
+  '- Decision: De-duplicate and cache the initial list read.',
+  '- Alternatives considered: An empty form with no initial read; uncached loading.',
+  '- Evidence: default: this page loads on mount, so Critical Rule 15 applies.',
+  '- Resolution: planner-default',
+].join('\n');
+const withAssumptions = (body, plan = validPlan()) => plan.replace('## Working Directory', `## Assumptions\n\n${body}\n\n## Working Directory`);
+const SEMANTICS = [
+  '',
+  '#### Data semantics',
+  '',
+  '##### F1',
+  '- Kind: filter',
+  '- Definition: Cards match the account name containing the search text.',
+  '- Source: User Requirements',
+  '- Requirement quote: simple account page',
+  '',
+  '#### Lookup metadata',
+  '',
+  'None.',
+  '',
+].join('\n');
+const withSemantics = (plan, block = SEMANTICS) => `${plan.trimEnd()}\n${block}`;
+
+test('validateGenpagePlanSchema: a present but malformed Assumptions section fails invalid-assumptions; an absent one keeps the legacy pass', () => {
+  assert.deepEqual(validateGenpagePlanSchema(validPlan()), [], 'neighbour: a legacy plan without the section still passes');
+  for (const [label, body] of [
+    ['missing Resolution', GOOD_A1.replace(/\n- Resolution: planner-default/, '')],
+    ['duplicate id', `${GOOD_A1}\n\n${GOOD_A1}`],
+    ['unknown resolution', GOOD_A1.replace('planner-default', 'assumed')],
+    ['user-confirmed without Question/Answer', GOOD_A1.replace('planner-default', 'user-confirmed')],
+    ['evidence without a metadata:/sample:/default: prefix', GOOD_A1.replace('default: this page', 'this page')],
+  ]) {
+    const errors = validateGenpagePlanSchema(withAssumptions(body));
+    assert.ok(errors.some((error) => error.code === 'invalid-assumptions'), `${label}: ${JSON.stringify(errors)}`);
+  }
+  // Mode never waives malformed content: an App Spec projection with a malformed present section fails too.
+  const appBuilder = validPlan().replace('- Publisher Prefix: new', '- Mode: app-builder\n- Publisher Prefix: new');
+  assert.ok(validateGenpagePlanSchema(withAssumptions('### A1\n- Decision: x', appBuilder)).some((error) => error.code === 'invalid-assumptions'));
+});
+
+test('validateGenpagePlanSchema: Assumptions sits right after User Requirements, by name — misplaced is section-order', () => {
+  assert.deepEqual(validateGenpagePlanSchema(withAssumptions(GOOD_A1)), [], 'neighbour: a valid section in place');
+  assert.deepEqual(validateGenpagePlanSchema(withAssumptions('No assumptions.')), [], 'neighbour: the empty sentinel in place');
+  const misplaced = validPlan().replace('## Entity Creation Required', `## Assumptions\n\n${GOOD_A1}\n\n## Entity Creation Required`);
+  assert.ok(validateGenpagePlanSchema(misplaced).some((error) => error.code === 'section-order'), 'after Pages');
+  const first = validPlan().replace('## User Requirements', `## Assumptions\n\n${GOOD_A1}\n\n## User Requirements`);
+  assert.ok(validateGenpagePlanSchema(first).some((error) => error.code === 'section-order'), 'before User Requirements');
+  const late = validPlan().replace('## Plugin Root', `## Assumptions\n\n${GOOD_A1}\n\n## Plugin Root`);
+  assert.ok(validateGenpagePlanSchema(late).some((error) => error.code === 'section-order'), 'after Working Directory');
+  // The optional sections already placed by name keep their checks beside it.
+  const packaged = withAssumptions(GOOD_A1).replace('## Design Preferences', '## Solution Packaging\n- Package into solution: false\n\n## Design Preferences');
+  assert.deepEqual(validateGenpagePlanSchema(packaged).filter((error) => error.code === 'section-order'), []);
+});
+
+test('validateGenpagePlanSchema: present per-page semantic records are validated against Assumptions and the original requirements', () => {
+  assert.deepEqual(validateGenpagePlanSchema(withSemantics(withAssumptions(GOOD_A1))), [], 'neighbour: a complete record set passes');
+  const codes = (plan) => validateGenpagePlanSchema(plan).map((error) => error.code);
+  assert.deepEqual(codes(withSemantics(withAssumptions(GOOD_A1), SEMANTICS.replace('- Source: User Requirements\n- Requirement quote: simple account page', '- Source: A9'))), ['unknown-assumption']);
+  assert.deepEqual(codes(withSemantics(withAssumptions(GOOD_A1), SEMANTICS.replace('- Source: User Requirements\n', ''))), ['missing-semantic-source']);
+  assert.deepEqual(codes(withSemantics(withAssumptions(GOOD_A1), SEMANTICS.replace('simple account page', 'every account in the tenant'))), ['unmatched-requirement-quote']);
+  assert.ok(codes(withSemantics(withAssumptions(GOOD_A1), SEMANTICS.replace('None.', '| Table | Column |\n|---|---|\n| account | x |'))).every((code) => code === 'invalid-lookup-metadata'));
+  assert.deepEqual(codes(withSemantics(withAssumptions(GOOD_A1), SEMANTICS.replace('##### F1', '##### R1'))), ['invalid-data-semantics']);
+  // Required-new mode: a newly authored plan carries every part; an older plan is not asked to.
+  assert.deepEqual(validateGenpagePlanSchema(validPlan(), { requireSemantics: true }).map((error) => error.code), ['invalid-assumptions', 'invalid-data-semantics', 'invalid-lookup-metadata']);
+  assert.deepEqual(validateGenpagePlanSchema(withSemantics(withAssumptions('No assumptions.'), SEMANTICS.replace(/##### F1[\s\S]*?\n\n#### Lookup/, 'None.\n\n#### Lookup')), { requireSemantics: true }), []);
+});
+
+test('Phase 5a: a plan whose semantic records fail validation must not reach the builders', () => {
+  const check = PHASE_EXPECTATIONS.get('Phase 5a: Orchestrator validates the plan — at least one page, unique filenames, each page has a matching Per-Page Specifications subsection');
+  const built = { files: [{ name: 'account-overview.tsx', content: 'export default function P() { return null; }' }] };
+  assert.equal(check({ fixture: fix({ genpagePlan: withSemantics(withAssumptions(GOOD_A1)), ...built }), eval: evalStub() }).status, 'pass', 'neighbour: valid records');
+  for (const [label, plan] of [
+    ['malformed Assumptions', withSemantics(withAssumptions(GOOD_A1.replace('planner-default', 'assumed')))],
+    ['a dangling assumption', withSemantics(withAssumptions(GOOD_A1), SEMANTICS.replace('- Source: User Requirements\n- Requirement quote: simple account page', '- Source: A9'))],
+    ['a quote the requirements do not hold', withSemantics(withAssumptions(GOOD_A1), SEMANTICS.replace('simple account page', 'all accounts'))],
+    ['malformed lookup metadata', withSemantics(withAssumptions(GOOD_A1), SEMANTICS.replace('None.', 'Customer lookup, see metadata.'))],
+  ]) {
+    const result = check({ fixture: fix({ genpagePlan: plan, ...built }), eval: evalStub() });
+    assert.equal(result.status, 'fail', label);
+    assert.match(result.reason, /fails Phase 5a/, label);
+  }
+});
+
+// The plan-approval record is its own line: the words right after `Unattended default:` are `plan approval`, then an arrow and the
+// whole word `approved`. A semantic default — whose question, answer or reason may say "plan" or "approved" — never stands in for it.
+test('unattended plan approval is recognized only by its dedicated record, never by a semantic default that mentions approval', () => {
+  const check = WORKFLOW_ASSERTIONS.get('Phase 1 (Planner): The plan is presented via EnterPlanMode and user approval is requested');
+  const run = (log) => check({ fixture: fix({ workflowLog: log, genpagePlan: validPlan() }), eval: evalStub() });
+  for (const line of [
+    'Unattended default: plan approval → approved (unattended mode; all semantic questions resolved)',
+    'Unattended default: plan approval -> approved (--non-interactive flag)',
+    '- Unattended default: plan approval -> approved',
+    '  * Unattended default: plan approval → approved, including explicit optional packaging into ContosoPages.',
+  ]) {
+    assert.equal(run(`Unattended default: interaction mode → unattended (flag)\n${line}`).status, 'pass', line);
+  }
+  for (const line of [
+    'Unattended default: A1 / plan-status → Approved (the only status the request names)',
+    'Unattended default: A2 / opportunities-account-scope → Direct customer account only (planner default; approved plan)',
+    'Unattended default: solution selection → Default (approval not required; approved by default)',
+  ]) {
+    const result = run(`Unattended default: interaction mode → unattended (flag)\n${line}`);
+    assert.equal(result.status, 'fail', line);
+    assert.match(result.reason, /does not record plan approval/, line);
+  }
+});
+
+// ---------- a newly authored plan's semantic records (evals 26 and 27) ----------
+
+const NEW_CONTRACT = "Phase 1 (Planner): The newly authored plan records its assumptions and every page's data semantics and lookup metadata, the approved preview carries the same records, and provenance is verified with --require-assumptions";
+const { loadFixtures } = require('../lib/fixture-loader.js');
+const scenarioFixture = (id) => {
+  const found = loadFixtures(path.join(__dirname, '..', 'fixtures')).find((fixture) => fixture.id === id);
+  assert.ok(found, `fixture ${id} exists`);
+  return found;
+};
+const gradeNewContract = (fixture) => PHASE_EXPECTATIONS.get(NEW_CONTRACT)({ fixture, eval: { id: fixture.id } });
+// A Windows checkout gives a fixture's text files CRLF line ends (git's core.autocrlf), and the graders read them as they are. A variant below
+// writes its lines with `\n`; `edit` and `asIn` write each `\n` as the line end the fixture's text really has, so a variant is graded in the
+// checkout's own bytes, and `edit` fails when its text is not there: a change that finds nothing would grade the fixture itself, not a variant.
+// `from` may also be a pattern, written with `\r?\n` so that it matches either line end.
+const asIn = (text, lines) => lines.replace(/\r?\n/g, text.includes('\r\n') ? '\r\n' : '\n');
+const edit = (text, from, to) => {
+  const find = typeof from === 'string' ? asIn(text, from) : from;
+  assert.ok(typeof find === 'string' ? text.includes(find) : text.search(find) >= 0, `the fixture's text has ${JSON.stringify(String(find))}`);
+  return text.replace(find, () => asIn(text, to));
+};
+
+test('a newly authored plan passes with its records, the same approved preview and a --require-assumptions verification of exactly those records', () => {
+  const fixture = scenarioFixture(27);
+  assert.deepEqual(gradeNewContract(fixture), { status: 'pass', reason: '' });
+});
+
+test('a newly authored plan without its records, preview or matching verification fails — it never skips', () => {
+  const base = scenarioFixture(27);
+  const variant = (change) => {
+    const copy = structuredClone({ ...base, files: [] });
+    change(copy);
+    return gradeNewContract(copy);
+  };
+  for (const [label, change, reason] of [
+    ['no ## Assumptions in the written plan', (f) => { f.genpagePlan = edit(f.genpagePlan, /\r?\n## Assumptions\r?\n[\s\S]*?\r?\n## Working Directory\r?\n/, '\n## Working Directory\n'); }, /Assumptions/],
+    ['no Data semantics for the page', (f) => { f.genpagePlan = edit(f.genpagePlan, '#### Data semantics\nNone.\n\n', ''); }, /Data semantics/],
+    ['no approved preview declared', (f) => { delete f.manifest.semantics; }, /approved preview/],
+    ['an assumption the preview never showed', (f) => { f.genpagePlan = edit(f.genpagePlan, '- Resolution: planner-default\n\n### A2', '- Resolution: planner-default\n\n### A3 — Extra\n- Decision: Hide archived orders.\n- Alternatives considered: Show them.\n- Evidence: default: none stated.\n- Resolution: planner-default\n\n### A2'); }, /differs from the approved preview/],
+    ['a verification whose hash is another plan\'s', (f) => { for (const event of f.events) if (event.result?.semanticsHash) event.result.semanticsHash = '0'.repeat(64); }, /semanticsHash is not the hash/],
+    ['a verification that failed', (f) => { for (const event of f.events) if (event.result?.semanticsHash) event.result.ok = false; }, /did not pass/],
+  ]) {
+    const result = variant(change);
+    assert.equal(result.status, 'fail', label);
+    assert.match(result.reason, reason, `${label}: ${result.reason}`);
+  }
+});
+
+// ---------- eval 26: the answered question, the lookup metadata behind the records, the types and the gate ----------
+
+const SEMANTIC_QUESTION = 'Phase 1 (Planner): The open account-scope question reaches the maker as needs_input with no default, the answer returns to the planner by its question id, and the written plan and the approved preview record it as a user-confirmed assumption before approval';
+const LOOKUP_DISCOVERY = "Phase 1 (Planner): get-lookup-metadata.js reads opportunity's lookups before approval, its successful answer is the saved lookup-metadata.json, and every recorded lookup is observed with the complete targets and concrete paths it read";
+const LOOKUP_TYPES = "Phase 4: RuntimeTypes.ts is generated for opportunity and types each recorded lookup's read property with exactly its recorded targets";
+const OBSERVED_GATE = "Phase 5a: The page is generated only after provenance is verified with --require-assumptions --require-observed-lookups --lookup-metadata on this plan's records";
+const grade = (text, fixture) => PHASE_EXPECTATIONS.get(text)({ fixture, eval: { id: fixture.id } });
+// A changed copy of fixture 26: the manifest, events, artifacts and documents are cloned, so a variant never leaks into another.
+const variant26 = (change) => {
+  const copy = structuredClone({ ...scenarioFixture(26), files: [] });
+  change(copy);
+  return copy;
+};
+const event26 = (fixture, id) => fixture.events.find((event) => event.id === id);
+const interactions26 = (fixture, change) => {
+  const entries = JSON.parse(fixture.artifacts['semantic-interactions.json']);
+  fixture.artifacts['semantic-interactions.json'] = JSON.stringify(change(entries));
+};
+const moveEvent26 = (fixture, id, after) => {
+  const [moved] = fixture.events.splice(fixture.events.findIndex((event) => event.id === id), 1);
+  fixture.events.splice(fixture.events.findIndex((event) => event.id === after) + 1, 0, moved);
+};
+const assertFails26 = (text, cases) => {
+  for (const [label, change, reason] of cases) {
+    const result = grade(text, variant26(change));
+    assert.equal(result.status, 'fail', label);
+    assert.match(result.reason, reason, `${label}: ${result.reason}`);
+  }
+};
+
+test('eval 26: the answered question, the lookup metadata read, the typed lookup, the gate and the new contract all pass', () => {
+  const fixture = scenarioFixture(26);
+  for (const text of [SEMANTIC_QUESTION, LOOKUP_DISCOVERY, NEW_CONTRACT, LOOKUP_TYPES, OBSERVED_GATE]) {
+    assert.deepEqual(grade(text, fixture), { status: 'pass', reason: '' }, text);
+  }
+});
+
+// The graders read a fixture as the checkout gives it — CRLF line ends on Windows, LF elsewhere — so both scenarios are graded here in each,
+// whichever this checkout gave them: every text the loader read from a file is written with those line ends (the manifest and the events are
+// parsed JSON, with no line ends of their own). Both pass in each, and a variant whose change spans lines fails in each.
+test('eval 26 and 27: the graders give the same verdicts to a fixture with LF and with CRLF line ends', () => {
+  const withLineEnds = (fixture, eol) => {
+    const copy = structuredClone(fixture);
+    const ends = (text) => (typeof text === 'string' ? text.replace(/\r?\n/g, eol) : text);
+    for (const key of ['workflowLog', 'genpagePlan', 'genpageEditPlan', 'runtimeTypes', 'entityCreationLog']) copy[key] = ends(copy[key]);
+    for (const name of Object.keys(copy.artifacts)) copy.artifacts[name] = ends(copy.artifacts[name]);
+    for (const file of copy.files) file.content = ends(file.content);
+    return copy;
+  };
+  const [base26, base27] = [scenarioFixture(26), scenarioFixture(27)];
+  for (const [ends, eol] of [['LF', '\n'], ['CRLF', '\r\n']]) {
+    const fixture = withLineEnds(base26, eol);
+    assert.equal(fixture.genpagePlan.includes('\r\n'), eol === '\r\n', `${ends}: the plan is written with ${ends} line ends`);
+    for (const text of [SEMANTIC_QUESTION, LOOKUP_DISCOVERY, NEW_CONTRACT, LOOKUP_TYPES, OBSERVED_GATE]) {
+      assert.deepEqual(grade(text, fixture), { status: 'pass', reason: '' }, `${ends}: ${text}`);
+    }
+    assert.deepEqual(gradeNewContract(withLineEnds(base27, eol)), { status: 'pass', reason: '' }, `${ends}: eval 27`);
+    const unasked = withLineEnds(base26, eol);
+    unasked.workflowLog = edit(unasked.workflowLog, '- AskUserQuestion: Which opportunities should this account show? → Direct customer\n', '');
+    assert.equal(grade(SEMANTIC_QUESTION, unasked).status, 'fail', `${ends}: the question never asked`);
+    const unrecorded = withLineEnds(base27, eol);
+    unrecorded.genpagePlan = edit(unrecorded.genpagePlan, /\r?\n## Assumptions\r?\n[\s\S]*?\r?\n## Working Directory\r?\n/, '\n## Working Directory\n');
+    assert.equal(gradeNewContract(unrecorded).status, 'fail', `${ends}: no assumptions in the written plan`);
+  }
+});
+
+test('eval 26: a question that was not asked, answered, handed back, recorded or approved in that order fails — it never skips', () => {
+  const SCOPE_LINE = '- AskUserQuestion: Which opportunities should this account show? → Direct customer\n';
+  assertFails26(SEMANTIC_QUESTION, [
+    ['no interactions declared', (f) => { delete f.manifest.semantics.interactions; }, /semantics\.interactions/],
+    ['the answer removed before approval', (f) => interactions26(f, (entries) => entries.filter((entry) => entry.type !== 'answer')), /approved while opportunities-account-scope was unanswered/],
+    ['approval before the answer', (f) => interactions26(f, (entries) => [entries[0], entries[2], entries[1]]), /unanswered/],
+    ['a pre-settled default on a question with three candidates', (f) => {
+      event26(f, 'planner-discovery').result.questions[0].options[1].default = true;
+      interactions26(f, (entries) => { entries[0].defaults = ['Direct customer']; return entries; });
+    }, /several candidates carries no default/],
+    ['the options differ from the planner\'s', (f) => interactions26(f, (entries) => { entries[0].options = ['Direct customer']; return entries; }), /not the ones the planner returned/],
+    ['an answer that is not an option', (f) => interactions26(f, (entries) => { entries[1].selected = 'Every account'; return entries; }), /not one of the options/],
+    ['no AskUserQuestion for it in the log', (f) => { f.workflowLog = edit(f.workflowLog, SCOPE_LINE, ''); }, /AskUserQuestion: Which opportunities should this account show\? → Direct customer/],
+    ['the plan approved before the question was asked', (f) => { f.workflowLog = edit(f.workflowLog, SCOPE_LINE, '') + asIn(f.workflowLog, `\n${SCOPE_LINE}`); }, /approved before the question was answered/],
+    ['an unattended default for a question with no default', (f) => interactions26(f, (entries) => { entries[1].source = 'unattended-default'; return entries; }), /only the one option the planner marked/],
+    ['the answer never handed back to the planner', (f) => interactions26(f, (entries) => { entries[1].event = 'planner-discovery'; return entries; }), /no planner event after the question carries its answer/],
+    ['a re-invocation that does not carry the answer', (f) => { event26(f, 'planner-answers').command = 'Task genpage-planner (answers: app → Sales Hub)'; }, /does not hand back opportunities-account-scope → Direct customer/],
+    ['the written plan records another answer', (f) => { f.genpagePlan = f.genpagePlan.replace('- Answer: Direct customer', '- Answer: Parent account'); }, /the written plan records A1's Answer as "Parent account"/],
+    ['the preview records another answer', (f) => { f.artifacts['approved-plan.md'] = f.artifacts['approved-plan.md'].replace('- Answer: Direct customer', '- Answer: Customer plus contacts'); }, /the approved preview records A1's Answer/],
+    ['no Assumptions in the written plan', (f) => { f.genpagePlan = edit(f.genpagePlan, /\r?\n## Assumptions\r?\n[\s\S]*?\r?\n## Working Directory\r?\n/, '\n## Working Directory\n'); }, /the written plan records no assumption answering opportunities-account-scope/],
+    ['the preview saved before the answer reached the planner', (f) => moveEvent26(f, 'save-approved', 'planner-discovery'), /saved before the answer reached the planner/],
+    ['an approval of another preview', (f) => interactions26(f, (entries) => { entries[2].preview = 'genpage-plan.md'; return entries; }), /not the approved preview the fixture declares/],
+  ]);
+});
+
+test('eval 26: the lookup records must come from a successful lookup metadata read the run saved before approval', () => {
+  const metadata = (f) => JSON.parse(f.artifacts['lookup-metadata.json']);
+  assertFails26(LOOKUP_DISCOVERY, [
+    ['no lookup metadata declared', (f) => { delete f.manifest.semantics.lookupMetadata; }, /semantics\.lookupMetadata/],
+    ['no get-lookup-metadata.js read', (f) => { f.events = f.events.filter((event) => event.id !== 'lookup-metadata'); }, /never read opportunity/],
+    ['a saved file that is not the answer read', (f) => {
+      const changed = metadata(f);
+      changed.tables[0].lookups[0].targets = ['account'];
+      f.artifacts['lookup-metadata.json'] = JSON.stringify(changed);
+    }, /no get-lookup-metadata.js answer is the saved lookup-metadata.json/],
+    ['a failed read', (f) => {
+      const failed = { ok: false, code: 'LOOKUP_RELATIONSHIPS_UNREADABLE', error: 'opportunity: the relationship read was refused' };
+      f.artifacts['lookup-metadata.json'] = JSON.stringify(failed);
+      event26(f, 'lookup-metadata').result = failed;
+    }, /not a successful get-lookup-metadata.js answer/],
+    ['metadata read after the approval', (f) => moveEvent26(f, 'lookup-metadata', 'save-approved'), /read after the plan was approved/],
+    ['a record whose targets are not the complete set read', (f) => { f.genpagePlan = f.genpagePlan.replace('| _customerid_value | account, contact |', '| _customerid_value | account |'); }, /not the complete set read/],
+    ['an existing table\'s lookup left planned', (f) => { f.genpagePlan = f.genpagePlan.replace('customer navigation; customer picker | observed |', 'customer navigation; customer picker | planned |'); }, /recorded planned, but opportunity exists/],
+  ]);
+});
+
+test('eval 26: RuntimeTypes.ts must be generated for the table and type the lookup with exactly the recorded targets', () => {
+  assertFails26(LOOKUP_TYPES, [
+    ['RuntimeTypes.ts not captured', (f) => { f.runtimeTypes = null; }, /RuntimeTypes.ts was not captured/],
+    ['types not generated for opportunity', (f) => { f.events = f.events.filter((event) => event.id !== 'generate-types'); }, /genpage.js types was not run for opportunity/],
+    ['a one-target type', (f) => { f.runtimeTypes = edit(f.runtimeTypes, ' | `/contact(${string})`,\n    readonly customeridname', ',\n    readonly customeridname'); }, /types opportunity._customerid_value as account, the plan records account, contact/],
+    ['the read property not declared', (f) => { f.runtimeTypes = edit(f.runtimeTypes, /^ {4}_customerid_value:.*\r?\n/m, ''); }, /does not declare opportunity._customerid_value/],
+  ]);
+});
+
+test('eval 26: generation waits for a passing --require-observed-lookups verification of these records — removing the manifest key does not turn it off', () => {
+  const gate = (f) => event26(f, 'plan-verify-5a');
+  assertFails26(OBSERVED_GATE, [
+    ['no gate', (f) => { f.events = f.events.filter((event) => event.id !== 'plan-verify-5a'); }, /not gated by a verification with --require-assumptions --require-observed-lookups --lookup-metadata/],
+    ['the gate after the page was written', (f) => moveEvent26(f, 'plan-verify-5a', 'write-page'), /ran after the page was generated/],
+    ['the gate verified other records', (f) => { gate(f).result = { ...gate(f).result, semanticsHash: '0'.repeat(64) }; }, /no observed-lookups verification passed/],
+    ['the gate failed', (f) => { gate(f).result = { ok: false, action: 'verify', semanticProblems: ['opportunity.customerid is still planned'] }; }, /no observed-lookups verification passed/],
+    ['the gate read another metadata file', (f) => { gate(f).command = gate(f).command.replace('/lookup-metadata.json', '/other-metadata.json'); }, /no observed-lookups verification passed/],
+    ['a lookup still planned', (f) => { f.genpagePlan = f.genpagePlan.replace('customer navigation; customer picker | observed |', 'customer navigation; customer picker | planned |'); }, /opportunity.customerid is still planned/],
+    ['the lookup metadata declaration removed', (f) => { delete f.manifest.semantics.lookupMetadata; }, /semantics\.lookupMetadata/],
+  ]);
+});
+
+test('eval 26: an unattended run that takes the one option the planner marked, hands it back and records it as an unattended default passes — and fails without its record', () => {
+  const RECORD = 'Unattended default: A1 / opportunities-account-scope → Direct customer account only (the request names the direct customer and metadata leaves one matching path)';
+  const unattended = (change = () => {}) => variant26((f) => {
+    event26(f, 'planner-discovery').result.questions[0].options = [{ label: 'Direct customer account only', description: 'The request names the direct customer.', default: true }];
+    event26(f, 'planner-answers').command = 'Task genpage-planner (answers: opportunities-account-scope → Direct customer account only; app → Sales Hub)';
+    interactions26(f, () => [
+      { type: 'needs_input', event: 'planner-discovery', question: 'opportunities-account-scope', options: ['Direct customer account only'], defaults: ['Direct customer account only'] },
+      { type: 'answer', event: 'planner-answers', question: 'opportunities-account-scope', selected: 'Direct customer account only', source: 'unattended-default' },
+      { type: 'approval', preview: 'approved-plan.md', outcome: 'approved', source: 'unattended-default' },
+    ]);
+    const settle = (text) => edit(text, '- Resolution: user-confirmed\n- Question: opportunities-account-scope\n- Answer: Direct customer\n',
+      `- Resolution: unattended-default\n- Question: opportunities-account-scope\n- Answer: Direct customer account only\n- Default record: ${RECORD}\n`);
+    f.genpagePlan = settle(f.genpagePlan);
+    f.artifacts['approved-plan.md'] = settle(f.artifacts['approved-plan.md']);
+    f.workflowLog = edit(edit(f.workflowLog, '- AskUserQuestion: Which opportunities should this account show? → Direct customer\n', `- ${RECORD}\n`),
+      '- ExitPlanMode → user approved the plan without changes\n', '- Unattended default: plan approval → approved (unattended mode; all semantic questions resolved)\n');
+    change(f);
+  });
+  assert.deepEqual(grade(SEMANTIC_QUESTION, unattended()), { status: 'pass', reason: '' });
+  for (const [label, change, reason] of [
+    ['the default record missing from the log', (f) => { f.workflowLog = edit(f.workflowLog, `- ${RECORD}\n`, ''); }, /does not hold A1's Default record/],
+    ['no plan-approval record', (f) => { f.workflowLog = edit(f.workflowLog, '- Unattended default: plan approval → approved (unattended mode; all semantic questions resolved)\n', ''); }, /no unattended plan-approval record/],
+    // The interaction artifact still lists the approval last; only the log says it came first.
+    ['the plan approved in the log before its default was recorded', (f) => {
+      const approval = '- Unattended default: plan approval → approved (unattended mode; all semantic questions resolved)\n';
+      f.workflowLog = asIn(f.workflowLog, approval) + edit(f.workflowLog, approval, '');
+    }, /approved before its unattended default was recorded/],
+    ['a second approval record after an early one', (f) => {
+      f.workflowLog = asIn(f.workflowLog, '- Unattended default: plan approval -> approved\n') + f.workflowLog;
+    }, /approved before its unattended default was recorded/],
+    ['an answer recorded as user-confirmed', (f) => { f.genpagePlan = edit(edit(f.genpagePlan, '- Resolution: unattended-default', '- Resolution: user-confirmed'), `- Default record: ${RECORD}\n`, ''); }, /records A1 as user-confirmed, not unattended-default/],
+  ]) {
+    const result = grade(SEMANTIC_QUESTION, unattended(change));
+    assert.equal(result.status, 'fail', label);
+    assert.match(result.reason, reason, `${label}: ${result.reason}`);
+  }
 });

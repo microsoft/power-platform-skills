@@ -49,6 +49,14 @@ function writeSkill(root, skillName, content) {
   return file;
 }
 
+function writeReferenceWorkflow(root, skillName, content) {
+  const dir = path.join(root, 'skills', skillName, 'references');
+  fs.mkdirSync(dir, { recursive: true });
+  const file = path.join(dir, 'styling-workflow.md');
+  fs.writeFileSync(file, content);
+  return file;
+}
+
 function writeScript(root, scriptPath, content) {
   const file = path.join(root, 'scripts', scriptPath);
   fs.mkdirSync(path.dirname(file), { recursive: true });
@@ -809,6 +817,106 @@ function writeCatalogTable(root, rows) {
     .join('\n');
   fs.writeFileSync(path.join(root, 'references', 'approval-gates.md'), header + body + '\n');
 }
+
+test('reference workflows cover catalog gates without their own skill registration', (t) => {
+  const root = mkPluginRoot(t);
+  const ids = ['style-site:2.runtime', 'style-site:3.scope', 'style-site:5.approve', 'style-site:6.reapprove'];
+  writeCatalogTable(root, ids.map((id) => ({ id, kind: 'gate' })));
+  writeReferenceWorkflow(root, 'edit-site', ids.map((id) => [
+    `## ${id}`,
+    `<!-- gate: ${id} | category=plan | cancel-leaves=local-style-state -->`,
+    `> 🚦 **Gate (plan · ${id}):** Review this revision.`,
+    'Use `AskUserQuestion`: **Approve / Cancel**.',
+  ].join('\n')).join('\n\n'));
+  assert.equal(fs.existsSync(path.join(root, 'skills', 'style-site', 'SKILL.md')), false);
+  assert.deepEqual(collectFindings({ pluginRoot: root }), []);
+});
+
+test('branch workflows cover catalog gates without a -workflow filename suffix', (t) => {
+  const root = mkPluginRoot(t);
+  const id = 'create-site:non-spa-4-provision';
+  writeCatalogTable(root, [{ id, kind: 'gate' }]);
+  const dir = path.join(root, 'skills', 'create-site', 'workflows');
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, 'non-spa-site.md'), [
+    '# Provision',
+    `<!-- gate: ${id} | category=final | cancel-leaves=nothing -->`,
+    `> 🚦 **Gate (final · ${id}):** Approve provisioning.`,
+    'Use `AskUserQuestion`: **Create / Cancel**.',
+  ].join('\n'));
+  assert.deepEqual(collectFindings({ pluginRoot: root }), []);
+});
+
+test('branch workflows enforce marker pairing even when every marker is missing', (t) => {
+  const root = mkPluginRoot(t);
+  const dir = path.join(root, 'skills', 'create-site', 'workflows');
+  fs.mkdirSync(dir, { recursive: true });
+  const file = path.join(dir, 'non-spa-site.md');
+  fs.writeFileSync(file, '# Provision\n\nUse `AskUserQuestion`: **Create / Cancel**.\n');
+  const findings = collectFindings({ pluginRoot: root });
+  assert.deepEqual(findings.map(({ rule, file: findingFile }) => ({ rule, file: findingFile })), [
+    { rule: 'GATE-must-have-marker', file },
+  ]);
+});
+
+test('reference workflows enforce marker pairing even when every marker is missing', (t) => {
+  const root = mkPluginRoot(t);
+  const file = writeReferenceWorkflow(root, 'edit-site',
+    '# Styling\n\n## Approve\nUse `AskUserQuestion`: **Approve / Cancel**.\n');
+  const findings = collectFindings({ pluginRoot: root });
+  assert.deepEqual(findings.map(({ rule, severity, file: findingFile }) =>
+    ({ rule, severity, file: findingFile })), [
+    { rule: 'GATE-must-have-marker', severity: 'error', file },
+  ]);
+});
+
+test('reference workflows require prose outside code fences and catalog membership', (t) => {
+  const root = mkPluginRoot(t);
+  writeCatalogTable(root, []);
+  const file = writeReferenceWorkflow(root, 'edit-site', [
+    '# Styling',
+    '## Approve',
+    '<!-- gate: style-site:5.approve | category=plan | cancel-leaves=local-style-state -->',
+    '```text',
+    '> 🚦 Example only.',
+    '```',
+    'Use `AskUserQuestion`: **Approve / Cancel**.',
+  ].join('\n'));
+  const findings = collectFindings({ pluginRoot: root });
+  assert.deepEqual(findings.map((finding) => finding.rule).sort(),
+    ['GATE-must-be-in-catalog', 'GATE-prose-block-required']);
+  assert.ok(findings.every((finding) => finding.file === file && finding.severity === 'error'));
+});
+
+test('gate IDs remain unique across skills and reference workflows', (t) => {
+  const root = mkPluginRoot(t);
+  const content = [
+    '# Styling',
+    '## Approve',
+    '<!-- gate: style-site:5.approve | category=plan | cancel-leaves=local-style-state -->',
+    '> 🚦 **Gate (plan · style-site:5.approve):** Review this revision.',
+    'Use `AskUserQuestion`: **Approve / Cancel**.',
+  ].join('\n');
+  writeCatalogTable(root, [{ id: 'style-site:5.approve', kind: 'gate' }]);
+  writeSkill(root, 'edit-site', content);
+  writeReferenceWorkflow(root, 'edit-site', content);
+  const findings = collectFindings({ pluginRoot: root });
+  assert.equal(findings.length, 1);
+  assert.equal(findings[0].rule, 'GATE-id-must-be-unique');
+  assert.match(findings[0].message, /SKILL\.md:\d+/);
+  assert.match(findings[0].message, /styling-workflow\.md:\d+/);
+});
+
+test('deleting reference gate markers leaves enforceable catalog orphans', (t) => {
+  const root = mkPluginRoot(t);
+  writeCatalogTable(root, [{ id: 'style-site:5.approve', kind: 'gate' }]);
+  writeReferenceWorkflow(root, 'edit-site',
+    '# Styling\n\n## Approve\nUse `AskUserQuestion`: **Approve / Cancel**.\n');
+  const findings = collectFindings({ pluginRoot: root });
+  assert.deepEqual(findings.map((finding) => finding.rule).sort(),
+    ['CATALOG-row-must-have-marker', 'GATE-must-have-marker']);
+  assert.ok(findings.every((finding) => finding.severity === 'error'));
+});
 
 test('CATALOG-row-must-have-marker: fires when a catalog gate row has no SKILL.md marker', async (t) => {
   const root = mkPluginRoot(t);

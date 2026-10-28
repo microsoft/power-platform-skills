@@ -1,7 +1,7 @@
 ---
 name: genpage
 version: 2.3.1
-description: Creates, updates, and deploys Power Apps generative pages for model-driven apps using React v17, TypeScript, and Fluent UI V9. Orchestrates specialist agents for planning, entity creation, and code generation. Use it when user asks to build, retrieve, or update a page in an existing Microsoft Power Apps model-driven app. Use it when user mentions "generative page", "page in a model-driven", or "genux". This skill stands alone and does not require /app-builder — but if the user wants a whole app built (tables, forms, views, sitemap) rather than pages for an app that already exists, use /app-builder instead.
+description: Creates, updates, and deploys Power Apps generative pages for model-driven apps using React v17, TypeScript, and Fluent UI V9. Orchestrates specialist agents for planning, entity creation, and code generation. Use it when user asks to build, retrieve, or update a page in an existing Microsoft Power Apps model-driven app. Use it when user mentions "generative page", "page in a model-driven", or "genux". Do not use it for a generic or standalone React or web app, website, or dashboard (including a Power Apps code app), for Power Pages, canvas apps, or Power Automate, or when the user rules out Power Platform, Dataverse, or model-driven apps (for example "no Power Platform"). A generative page only runs inside a model-driven app, and this skill cannot scaffold a standalone project. This skill stands alone and does not require /app-builder — but if the user wants a whole app built (tables, forms, views, sitemap) rather than pages for an app that already exists, use /app-builder instead.
 author: Microsoft Corporation
 argument-hint: "<page description> | edit"
 user-invocable: true
@@ -32,6 +32,9 @@ This skill orchestrates specialist agents across the create and edit flows:
    (discovery is mutating), then the planner is re-invoked with its contract.
    **`genpage-customapi-builder`** — the same top-level dispatch for server-side
    Custom API (Action/Function) needs; writes `custom-api-bindings.md` + `actions.json`.
+   It also owns the default-off offer of the two built-in Dataverse Functions
+   (`WhoAmI`, `RetrieveVersion`; `dataverse_operation_discovery_required`) and writes
+   `dataverse-operations.md` for a selection made this run.
 3. **`genpage-entity-builder`** — creates Dataverse entities (tables, columns,
    relationships, choices, sample data) via the plugin's Node.js Web API scripts
 4. **`genpage-page-builder`** — generates one complete `.tsx` file per page; multiple
@@ -43,7 +46,8 @@ This skill orchestrates specialist agents across the create and edit flows:
    replaces, discovers, removes, or clears connector bindings; preserves unchanged bindings
    when the edit does not touch them.
    **`genpage-customapi-builder`** — the same top-level dispatch when an edit adds, replaces,
-   discovers, removes, or clears Custom API bindings.
+   discovers, removes, or clears Custom API bindings, or adds, replaces or removes a built-in
+   Dataverse operation binding.
 6. **`genpage-edit-planner`** — reads the downloaded page artifacts, gathers change
    requirements, presents an edit plan, writes `genpage-edit-plan.md`
 
@@ -153,10 +157,11 @@ node "${PLUGIN_ROOT}/scripts/generate-page-manifest.js" '<working-dir>' '<kebab-
 > 1. Prerequisite validation (`node --version`, `pac help` version > 2.10.0)
 > 2. Auth verification (`pac auth list`, environment selection)
 > 3. The structured "Create new / Edit existing" question (`AskUserQuestion`)
-> 4. Language detection (`node "${PLUGIN_ROOT}/scripts/list-languages.js" --env '<envUrl>'`; when that exits
->    non-zero, `pac model list-languages --environment '<envUrl>'` — the Azure CLI is not needed here) — only on new-page path
-> 5. Entity existence detection (`pac model list-tables --search`)
-> 6. App detection (`pac model list`) with proper selection prompts
+> 4. Language detection (`node "${PLUGIN_ROOT}/scripts/list-languages.js" --env '<envUrl>'` — the only source of the
+>    environment's languages: when it fails, report why and stop, never assume the environment is English-only) —
+>    only on new-page path
+> 5. Entity existence detection (`node "${PLUGIN_ROOT}/scripts/list-tables.js" --env '<envUrl>' --search '<entities>' --exact`)
+> 6. App detection (`node "${PLUGIN_ROOT}/scripts/apps.js" list --env '<envUrl>'`) with proper selection prompts
 > 7. Plan-mode presentation and approval (`EnterPlanMode` / `ExitPlanMode`)
 > 8. Telling `genpage-planner` the approval outcome — it writes `genpage-plan.md`
 >    itself — and confirming the file exists before Phase 2
@@ -211,8 +216,8 @@ the log still shows what decided the run:
 | --- | --- | --- |
 | Recording the resolved mode | Nothing to record | Write the mode itself as `Unattended default: interaction mode → unattended (<reason>)` before the first gate. Record it with this marker, not as free prose such as `Interaction mode: unattended` — the evaluator keys on the marker, and prose forms are indistinguishable from an attended log that merely mentions the word (`Mode: unattended = false`, `not unattended`). |
 | Create new / edit existing (step 2) | `AskUserQuestion` | Whatever `$ARGUMENTS` states. With nothing stated, **create new** — the only additive choice. |
-| An agent returns `needs_input` (step 4) | Ask, then re-invoke | Re-invoke with the option the agent marked `"default": true`. If it marked none, **halt**. |
-| Plan approval (step 5) | `EnterPlanMode` / `ExitPlanMode` | Treat the plan as approved and continue to step 6, which still writes `genpage-plan.md` through the planner. The plan is recorded, just not presented. Log this gate as `Unattended default: plan approval → approved (<reason>)` — the evaluator looks for the plan/approval wording and `approved` on that one line, so a paraphrase such as `→ auto-approve` is read as a missing approval record. |
+| An agent returns `needs_input` (step 4) | Ask, then re-invoke | Re-invoke with the option the agent marked `"default": true`. If it marked none, **halt**. For the planner's data-semantics questions, record `Unattended default: <assumption id> / <question id> → <answer> (<reason>)` — the answer word for word, a reason that never contains the word "approved" — and pass the same line back to the planner for the assumption's `Default record`. |
+| Plan approval (step 5) | `EnterPlanMode` / `ExitPlanMode` | Only once every data-semantics question is answered, treat the plan as approved and continue to step 6, which still writes `genpage-plan.md` through the planner. The plan is recorded, just not presented. Log this gate as its own line, `Unattended default: plan approval → approved (<reason>)` — the evaluator reads the words right after the marker, `plan approval`, then the arrow and the whole word `approved`, so a paraphrase such as `→ auto-approve` is read as a missing approval record, and a semantic default that mentions approval never stands in for it. |
 | Browser verification (Phase 7) | Offer it | Skip it. |
 
 **Suppressing a prompt never authorizes destructive work.** Editing an existing
@@ -243,18 +248,25 @@ missing and stop, so the run can be re-driven with the decision supplied.
    `{ "action": "custom_api_discovery_required" }`, invoke `genpage-customapi-builder`
    the same way (same mode, resolved environment URL, plus the returned `pageTables`),
    then re-run the planner with the builder's `## Custom API Bindings` contract and
-   `actions.json` status (see 1b).
+   `actions.json` status (see 1b). A `dataverse_operation_discovery_required` signal —
+   alone or beside `custom_api_discovery_required` — dispatches that same builder **once**
+   for both needs (see 1c).
    If `genpage-connector-builder` or `genpage-customapi-builder` instead reports
    that its declared file or process-execution tools are unavailable, do **not**
    retry the same worker. Record the worker failure, read that worker's agent
    file, and run the discovery-builder workflow inline in this orchestrator
    using the same resolved mode, environment, intent, and safety gates. This
    inline fallback is recovery from task-runtime tool exposure only; it does not
-   bypass connector/custom-API feature gates or user decisions.
+   bypass the `dataverse-operations` feature gate, the Custom API discovery rules or user decisions.
 4. If any agent returns `{ "action": "needs_input", … }`, ask its questions here
    with `AskUserQuestion`, record them in `workflow-log.md`, and re-invoke that
-   agent with the answers. Agents never prompt; they request.
-5. Present the plan with `EnterPlanMode` and get approval via `ExitPlanMode`.
+   agent with the answers. Agents never prompt; they request. The planner asks this way
+   which relationship or filter a request means when metadata leaves several candidates
+   (its Step 4, "Resolve Data Semantics"): pass each answer back with its question id and
+   everything the planner returned, including `<working-dir>/lookup-metadata.json`. Never
+   answer such a question for the maker, and never approve a plan while one is open.
+5. Present the plan with `EnterPlanMode` — its `### Assumptions` first, as the planner returns
+   it, so the maker sees what was assumed before the page list — and get approval via `ExitPlanMode`.
    On a revision request, re-invoke the planner with the requested revisions and
    present the revised plan again.
 6. **On approval, re-invoke `genpage-planner` with the approval outcome _plus
@@ -305,13 +317,16 @@ missing and stop, so the run can be re-driven with the decision supplied.
    If it exists, verify its provenance before Phase 2:
 
    ```powershell
-   node "${PLUGIN_ROOT}/scripts/genpage-plan-provenance.js" verify --plan '<working-dir>/genpage-plan.md' --approved '@<working-dir>/.approved-genpage-plan.md'
+   node "${PLUGIN_ROOT}/scripts/genpage-plan-provenance.js" verify --plan '<working-dir>/genpage-plan.md' --approved '@<working-dir>/.approved-genpage-plan.md' --require-assumptions
    ```
 
    Continue only when the JSON result has `"ok":true`, and record its `writtenHash`
-   in `workflow-log.md`. If the written plan targets other pages than the approved
+   (and `semanticsHash`) in `workflow-log.md`. If the written plan targets other pages than the approved
    plan named — an extra, missing or renamed page file — halt: downstream phases
-   would build pages the user did not approve.
+   would build pages the user did not approve. Halt too when its assumptions, data-semantics
+   decisions or lookup records differ from the approved ones, or are missing from either document
+   (`--require-assumptions`: a newly authored plan carries them all): the maker approved those
+   decisions, not just the file names. The result's `semanticProblems` lists each difference.
 
 #### 1a. Connector discovery is orchestrator-owned and never speculative
 
@@ -365,9 +380,38 @@ detected.
   verify `<working-dir>/actions.json` is a bare JSON array, then re-run the planner with the
   refreshed contract.
 
-The builder remains the single owner of the `custom-api` feature gate: it probes first, writes
-`No custom API bindings.` + `[]` when the gate is off or the page needs no Custom API, and
-performs discovery only when one is required.
+The builder remains the single owner of Custom API discovery, which has no feature flag: it writes
+`No custom API bindings.` and no Custom API row when the page needs no Custom API (`actions.json`
+is then `[]`, unless built-in operation rows were selected — 1c), and performs discovery only when
+one is required.
+
+#### 1c. Built-in Dataverse operations are orchestrator-owned too
+
+`WhoAmI` and `RetrieveVersion` are two reviewed built-in Dataverse Functions a page can call from
+a button — not Custom APIs (`${PLUGIN_ROOT}/references/dataverse-operations.md`). Their offer is
+behind the default-OFF `dataverse-operations` flag, owned by `genpage-customapi-builder`, which
+also stays the one writer of `actions.json` (Custom API rows first, then the built-in rows).
+
+- A planner returns `{ "action": "dataverse_operation_discovery_required", "intent": "...",
+  "resolvedAction": "create" | "edit", "envUrl": "..." }` when the maker affirmatively asks for
+  one of them or for the identity or server version a page should show. A mention, a question,
+  "do not add WhoAmI", or the `whoAmI` of the auth preflight is not that signal. Dispatch the
+  builder once, with both needs when a Custom API is needed too.
+- Selection is the maker's: an affirmative request or an explicit answer to the builder's
+  `needs_input` picker. Ask that question here with `AskUserQuestion`; an unattended run never
+  treats "no answer" as consent, and the selected names stay in this run's context.
+- When the builder reports `dataverse-operations.md` written **this run**, forward its body to
+  the planner as the `## Dataverse Operations` contract, delimited like the other contracts. A
+  file left by an earlier run is not forwarded. With none, the plan has no such section.
+- When it reports `dataverse-operations.md: none — not added this run` — its
+  `dataverse-operations` gate is off, or the maker declined the offer or selected neither —
+  there is no built-in contract: tell the maker that no built-in operation was added, and forward
+  the outcome `none — not added this run` (never a contract) to the planner in this and every
+  later round. The planner then completes the plan without that call instead of signalling
+  again, so the builder is not dispatched a second time for the same request — the edit flow's
+  own rule.
+- In an edit, Edit Phase 4 of edit-flow.md handles this signal, forwards the contract through
+  every edit-planner round, and re-probes the gate before an add or replace is applied.
 
 #### Invocation prompt
 
@@ -384,6 +428,14 @@ Pass a prompt that includes:
   or the literal `No custom API bindings.` when discovery was not needed
 - The Custom API upload file status: `<working-dir>/actions.json` exists and is
   a bare JSON array, or `no actions.json; omit --actions`
+- The answers to every earlier `needs_input` question, each with its question id (and, unattended,
+  its `Unattended default:` line), and the path of `<working-dir>/lookup-metadata.json` when the
+  planner saved one
+- The built-in operation contract, only when this run's builder wrote it: the full body of
+  `<working-dir>/dataverse-operations.md` between `----- BEGIN/END DATAVERSE OPERATIONS -----`
+  delimiters (copied verbatim into an optional `## Dataverse Operations` section right after
+  `## Custom API Bindings`); the outcome `none — not added this run` when this run's builder was
+  dispatched for one and added none (1c); otherwise nothing, and the plan has no such section
 
 Example:
 
@@ -437,6 +489,21 @@ Example:
 > "resolvedAction": "create" | "edit", "envUrl": "<the environment you resolved>",
 > "pageTables": "<page tables or none>" }` instead of trying to discover it yourself.
 >
+> [Only when this run's builder wrote `dataverse-operations.md`:] The built-in Dataverse
+> operation contract is between the `----- BEGIN/END DATAVERSE OPERATIONS -----` lines below
+> (prompt delimiters, not content). Copy what is between them verbatim into an optional
+> `## Dataverse Operations` section right after `## Custom API Bindings`; with no such block,
+> write no such section. If your clarification reveals an affirmative request for `WhoAmI` or
+> `RetrieveVersion` (or for the identity or server version a page shows) that this contract does
+> not cover, return `{ "action": "dataverse_operation_discovery_required", "intent": "<the
+> maker's words>", "resolvedAction": "create" | "edit", "envUrl": "<the environment you
+> resolved>" }`.
+>
+> [Only when this run's builder added none:] Built-in Dataverse operations: `none — not added
+> this run`. The builder was dispatched for this request and added none (its gate is off, or the
+> maker selected neither): plan the page without that call, write no `## Dataverse Operations`
+> section, and do not return `dataverse_operation_discovery_required` again.
+>
 > Follow the instructions in your agent file. Validate prereqs and confirm auth.
 > The create/edit decision and the resolved environment are supplied to you by the
 > orchestrator (it asks; you are headless) — use them rather than prompting. If you
@@ -465,8 +532,11 @@ consolidated pre-flight:
 node "${PLUGIN_ROOT}/scripts/check-auth.js" --require-pac
 ```
 
-Genpage deploys pages via `pac model genpage`, so pass `--require-pac` to keep a missing pac login
-a hard blocker (the app-builder skill omits the flag — its build path only needs the az token).
+`/genpage` signs in and chooses the environment with `pac` and falls back to it for connections,
+connector metadata and deployment settings — so pass `--require-pac` to keep a missing pac login a
+hard blocker (the app-builder skill omits the flag — its build path only needs the az token). Pages
+themselves are written, read and deleted through the SDK with the same az token, and so are the type
+generator and the page listing and download (`scripts/genpage.js`).
 It returns a single JSON object:
 
 ```json
@@ -485,7 +555,7 @@ It returns a single JSON object:
 - **`ok: true` and `identitiesMatch: true`** → proceed to 2b.
 - **`ok: true` and `identitiesMatch: false`** → proceed to 2b but surface the
   `message` to the user as an inline warning ("az is X, pac is Y — WhoAmI works
-  for now, but if entity creation later returns 403, run the suggested
+  for now, but if a later step returns 403, run the suggested
   `az login --username` to align them").
 - **`ok: false`** → show the `message` field to the user verbatim and
   **stop the workflow**. The script already includes a fix-it command for every
@@ -531,41 +601,64 @@ this loop, exactly as Phase 1 step 4 does:
 Repeat until it returns a completion rather than a request. Proceeding to Phase 3
 on a `needs_input` return silently drops the decision the user was asked to make.
 
+#### 2c. Reconcile planned lookups (when the plan records any)
+
+A lookup on a table this run creates is recorded `planned` in its page's `#### Lookup metadata` — there was no
+metadata to read before Phase 2. Once the tables exist, and before any page is generated, prove each one:
+
+```powershell
+node "${PLUGIN_ROOT}/scripts/get-lookup-metadata.js" --env '<envUrl>' --tables '<every source table with a recorded lookup>'
+```
+
+Save its one-line JSON answer as `<working-dir>/lookup-metadata.json` (it replaces the planning-time copy). Any
+non-zero exit means the read failed: report it and stop — a failed read is never "no targets". Then run the
+`prepare` command of Phase 1 again and re-invoke `genpage-planner` with `Lookup reconciliation:`, the path of
+that file, the approved plan body and everything it returned before. It may only promote a `planned` lookup to
+`observed` and add its measured paths; a different target set, column or use is a revised plan the maker
+approves again (Phase 1 step 5). Verify the rewritten plan against the same approved body, with the evidence:
+
+```powershell
+node "${PLUGIN_ROOT}/scripts/genpage-plan-provenance.js" verify --plan '<working-dir>/genpage-plan.md' --approved '@<working-dir>/.approved-genpage-plan.md' --require-assumptions --lookup-metadata '<working-dir>/lookup-metadata.json'
+```
+
+Continue only on `"ok":true`; on `"ok":false` halt and show the maker the `semanticProblems` it lists. Do not
+edit the plan yourself: the planner is its one author.
+
 ### Phase 3: App Creation/Selection
 
 Read `genpage-plan.md` for the app decision and the `Solution` line in
 `## Environment`.
 
-**If "create new":**
+**If "create new":** nothing is created in this phase. A new app opens on the pages it is made
+with — the platform refuses an app whose navigation is empty — so `apps.js create` needs the id
+of a page that already exists. The app is therefore created in Phase 6, right after the first page
+is deployed (see "A new app" there). Carry the app's name and the plan's `Solution` into Phase 6:
 
-```powershell
-pac model create --name '<App Name>' --solution '<Solution unique name>' --publish
-```
-
-**`--solution` is mandatory.** `pac model create` errors out with
-`"The given solution name is not valid: ()"` if you omit it — its claimed
-"active solution" fallback does not work in practice.
-
-**`--publish` is mandatory.** Without it the new appmodule stays in draft and
-the genux runtime URL errors with "app not published".
-
-- Use the plan's `Solution` value verbatim. The planner always writes one
-  (default fallback is literally `Default`).
+- Use the plan's `Solution` value verbatim. The planner always writes one (default fallback is
+  literally `Default`).
 - If the plan is somehow missing `Solution`, pass `--solution Default` —
   every Dataverse env has a built-in "Default Solution" by that unique name.
+- `--solution` is mandatory and takes the solution's **unique name**: `apps.js create` refuses
+  a call without it, or with a name no unmanaged solution has.
 
-Store the new app-id for Phase 6.
-
-**If existing app-id:** Use it directly. `pac model create` is not called, so
-the `Solution` line is informational only for this phase.
+**If existing app-id:** Use it directly. `apps.js create` is not called; the plan's `Solution`
+is still the solution every page this run creates joins (Phase 6 passes it with `--solution`).
 
 ### Phase 4: Generate RuntimeTypes (Conditional)
 
-If any page uses Dataverse entities, generate the TypeScript schema:
+If any page uses Dataverse entities, generate the TypeScript schema. `genpage.js types` is the SDK's
+type generator — the maker portal's own — read from the environment now:
 
 ```powershell
-pac model genpage generate-types --data-sources 'entity1,entity2,...' --output-file '<working-dir>/RuntimeTypes.ts'
+node "${PLUGIN_ROOT}/scripts/genpage.js" types `
+  --env '<org-url>' `
+  --data-sources 'entity1,entity2' `
+  --output-file '<working-dir>/RuntimeTypes.ts'
 ```
+
+It prints `{ "ok": true, "outputFile", "dataSources", "detail", "bytes" }`. A failure (exit 1, `"ok": false`
+with a `code` — for example `GENPAGE_TABLE_NOT_FOUND`, which names the `table` the environment does not have) ends the phase: report why,
+and never guess column names.
 
 > **Windows + Bash**: Always use forward slashes in file paths (e.g., `D:/temp/RuntimeTypes.ts`).
 
@@ -593,7 +686,7 @@ When there are real bindings, the `genpage-connector-builder` agent already wrot
 `<working-dir>/connectors.json` during planning — verify it exists and matches the
 plan table. If it is missing, derive it from the plan table as a **bare JSON
 array** (never the `{ "connectorBindings": [...] }` object wrapper — that is the
-deployed page `config.json` shape that `pac` writes):
+deployed page `config.json` shape, which the upload writes for you):
 
 ```json
 [
@@ -618,29 +711,12 @@ fills env-specific `ConnectionId` values through solution deployment settings.
 
 ### Phase 4.6: Custom API Bindings (Conditional)
 
-**Re-probe the feature gate here — do not rely on the plan content alone.** A plan
-authored while the flag was ON must not deploy Custom API bindings after it is turned OFF:
-
-```powershell
-node "${PLUGIN_ROOT}/scripts/lib/feature-flags.js" custom-api
-```
-
-**If it prints `disabled`:** Custom API support is OFF. Do not create or pass `actions.json`,
-and never add `--actions` on upload. The plan's `## Custom API Bindings` section still decides
-whether the run may go on: only a body of exactly `No custom API bindings.` continues, with no
-Custom APIs. For an **actual binding table** (a `| Name | Kind | …` header with at least one data
-row), **halt before page generation**. That plan was made while the flag was on, and page
-generation takes the table as permission to emit `executeAction` / `executeFunction` calls —
-deploying them with no bindings leaves pages calling Custom APIs that are not bound. Tell the user
-to turn the flag back on, or re-run planning (the Custom API builder writes no bindings while the
-flag is off). A missing, empty, or malformed section halts too, exactly as in the `enabled`
-branch. (Backstop: `list-custom-apis.js` also fails closed with exit 3 if invoked while OFF.)
-
-**If it prints `enabled`:** read the plan's `## Custom API Bindings` section. The section is
-mandatory: continue with no actions only when its body is exactly `No custom API bindings.`.
-Treat it as bindings only when it contains an actual binding table (a `| Name | Kind | …`
-header with at least one data row). If the section is missing, empty, or malformed, **halt**
-before page generation; do not interpret a planner/schema failure as "no Custom APIs".
+Custom API support has no feature flag, so there is nothing to probe here. Read the plan's
+`## Custom API Bindings` section. The section is mandatory: continue with no Custom API rows only
+when its body is exactly `No custom API bindings.`. Treat it as bindings only when it contains an
+actual binding table (a `| Name | Kind | …` header with at least one data row). If the section is
+missing, empty, or malformed, **halt** before page generation; do not interpret a planner/schema
+failure as "no Custom APIs".
 
 When there are real bindings, the `genpage-customapi-builder` agent already wrote
 `<working-dir>/actions.json` during planning — verify it exists and matches the plan table. If
@@ -648,7 +724,48 @@ it is missing, derive it as a **bare JSON array** of
 `{ name, isFunction, boundEntityLogicalName?, displayName, parameterKinds }` entries (Action row
 `isFunction:false`, Function `true`; `boundEntityLogicalName` only for an entity-bound, non-
 `(Global)`, row) — see `${PLUGIN_ROOT}/references/custom-api.md`. Never the
-`{ "actionBindings": [...] }` object wrapper (the deployed `config.json` shape `pac` writes).
+`{ "actionBindings": [...] }` object wrapper (the deployed `config.json` shape the upload writes).
+Compare only the **Custom API rows** of `actions.json` with this table: a built-in operation row
+(`WhoAmI`, `RetrieveVersion`) belongs to Phase 4.6b, never fails this match, and is never
+uploaded by this branch alone.
+
+This phase governs the Custom API rows only. Whether `actions.json` is written and passed at all
+is decided once, after Phase 4.6b's gate, in Phase 4.6c — this phase never takes away a built-in
+operation row the plan selected.
+
+### Phase 4.6b: Built-in Dataverse Operations (Conditional)
+
+Only when the plan has a `## Dataverse Operations` section holding the built-in operation table
+— an add or replace of this run — re-probe its own gate:
+
+```powershell
+node "${PLUGIN_ROOT}/scripts/lib/feature-flags.js" dataverse-operations
+```
+
+**If it prints `disabled`:** halt before page generation. Write no replacement `actions.json`,
+pass no `--actions`, and never write `[]` in its place (`[]` is only an explicit clear-all): the
+page keeps the bindings it has. Tell the user to turn the flag back on or re-run planning. An
+absent section, or exactly `No Dataverse operations.`, needs no probe and adds nothing; a
+preserve-only edit never consults this gate.
+
+**If it prints `enabled`:** verify that `actions.json` holds every row of the table as the
+four-key projection the builder wrote (Custom API rows first, then the built-in rows in
+catalogue order). If the builder selected a built-in operation but the plan lost its table,
+halt and re-invoke the planner — do not generate.
+
+### Phase 4.6c: The actions file, decided once (both partitions)
+
+Decide once, after Phase 4.6 and Phase 4.6b, from the complete desired array: the Custom API
+rows of the plan's `## Custom API Bindings` table (none when its body is `No custom API
+bindings.`), then the built-in operation rows of its `## Dataverse Operations` table (none when
+that section is absent or `No Dataverse operations.`; Phase 4.6b has already halted the run if its
+gate was off).
+
+- **Not empty:** `actions.json` must hold exactly that array, as the builder wrote it (Custom API
+  rows first, then the built-in rows in catalogue order) — verify it, and halt rather than
+  generate if it does not. Then the create passes `--actions '<working-dir>/actions.json'`: a page
+  that binds only built-in operations is created with them bound.
+- **Empty:** the create passes no `--actions`.
 
 ### Phase 4.7: Page Telemetry (Conditional)
 
@@ -701,6 +818,17 @@ Before invoking any builders, verify:
   spelling. On any problem, halt and re-plan instead of rewriting filenames here: a renamed
   file is a page the user did not approve, and the provenance check compares page files.
   Duplicate filenames cause silent last-writer-wins data loss under parallel execution.
+- Every relationship and every server-side or client-side filter used in `## Per-Page Specifications` traces to the user's stated text in `## User Requirements` or a named `## Assumptions` entry. The builder introduces no unrecorded business predicate, relationship or roll-up.
+  Validation proves structure, ID resolution, quote presence and agreement with approved structured decisions. It does not prove natural-language entailment, judge materiality, or discover arbitrary contradictory prose. Those remain planner/reviewer responsibilities, supplemented by scenario-specific code checks.
+- **When the plan records any lookup** (a `#### Lookup metadata` table, not `None.`), every one is
+  `observed` and matches the saved metadata read before a page is generated:
+
+  ```powershell
+  node "${PLUGIN_ROOT}/scripts/genpage-plan-provenance.js" verify --plan '<working-dir>/genpage-plan.md' --approved '@<working-dir>/.approved-genpage-plan.md' --require-assumptions --require-observed-lookups --lookup-metadata '<working-dir>/lookup-metadata.json'
+  ```
+
+  Continue only on `"ok":true`. A lookup still `planned` means Phase 2c did not run; a mismatch
+  means the metadata changed since approval — halt and re-plan, never edit the records here.
 
 See `${PLUGIN_ROOT}/references/plan-schema.md` for the full contract.
 
@@ -716,14 +844,17 @@ subagent. Inline the page-builder workflow directly in the orchestrator:
    also read `${PLUGIN_ROOT}/references/connectors.md`. Treat a
    `No connector bindings.` sentinel or an empty/missing/malformed section as
    having no connectors (same contract as Phase 4.5 and genpage-page-builder).
-3b. Only when the Phase 4.6 probe printed `enabled` **and** the plan's
-   `## Custom API Bindings` section contains an **actual binding table** (a
-   `| Name | Kind | …` header with at least one data row), also read
-   `${PLUGIN_ROOT}/references/custom-api.md`. Treat a
+3b. Only when the plan's `## Custom API Bindings` section contains an **actual
+   binding table** (a `| Name | Kind | …` header with at least one data row),
+   also read `${PLUGIN_ROOT}/references/custom-api.md`. Treat a
    `No custom API bindings.` sentinel as no Custom APIs. If the section is
    missing, empty, or malformed, halt before inline generation (same contract as
    Phase 4.6); do not downgrade a planner/schema failure to "no Custom APIs."
-   (A `disabled` probe with a binding table has already halted in Phase 4.6.)
+3c. Only when the Phase 4.6b probe printed `enabled` **and** the plan has a
+   `## Dataverse Operations` table, also read
+   `${PLUGIN_ROOT}/references/dataverse-operations.md` and generate its button-only
+   pattern for exactly those rows. Without that section (or with exactly
+   `No Dataverse operations.`), emit no built-in operation call.
 4. If the plan's Per-Page Specification has `Needs caching: true`, also read
    `${PLUGIN_ROOT}/references/data-caching.md`
 5. If the plan's `## Environment` indicates non-English languages, also read
@@ -780,6 +911,22 @@ subagent. Inline the page-builder workflow directly in the orchestrator:
    keys, and so is a key computed from an expression (`[key]: …`), whose name it
    cannot see (a template that starts with `--`, `&`, `:` or `@` is read); Fluent's
    `...shorthands.*(…)` and `...typographyStyles.*` may be spread as they are.
+
+   Then review the page for iteration that compiles to nothing:
+
+   The page compiler targets ES5 without iterator downleveling or full type checking.
+   Spreading, looping over, or array-destructuring a Map, Set or iterator reads length
+   and indices instead of the iterator: values can disappear, defaults can replace them,
+   or rest destructuring can throw. This includes `[...new Set(xs)]`, `[...m.values()]`,
+   `[...seen.values()]`, `for (const [k, v] of m)`, `new Set([...prev, id])`,
+   `[...selected]` and `[...text.matchAll(re)]`. Convert with `Array.from(...)` before
+   spreading, looping or destructuring; copy a Set with `new Set(prev)` then `.add(id)`.
+   Ordinary array spreads and loops remain valid. `Object.keys`, `Object.values` and
+   `Object.entries` return arrays. Spreads of `arguments` and ordinary indexed
+   array-likes work; rest destructuring of an array-like without `slice` does not.
+   String spread throws, and an ES5 string loop visits UTF-16 code units rather than
+   Unicode code points. See **Common Errors > 5. Iteration that compiles to nothing**
+   in `references/rules.md` for the pairs.
 10. Run the completeness gate on the page you wrote — the same one 5c runs on a
     worker's page, and this is also the page a 5c fallback produces:
 
@@ -872,7 +1019,10 @@ recorded it: the worker wrote nothing, and what is there is an earlier attempt's
 or `genpage-worker-output.js` returns `"ok":false`, do not re-dispatch that worker.
 Run the Phase 5b page-builder workflow inline for only the failed page, preserving
 the same plan and dispatch inputs. This is the same inline fallback path for missing
-and invalid worker output. The workers have no shell, so they cannot run the Griffel
+and invalid worker output. A `Task tool: none on this host` line in a worker's result
+is not a report of that kind: task tracking is optional for a worker
+(`references/agent-interaction-contract.md`), and the page is judged by its file and
+this gate. The workers have no shell, so they cannot run the Griffel
 check themselves; run it on every generated page, exactly as in step 9 of Phase 5b,
 
 ```powershell
@@ -880,53 +1030,52 @@ node "${PLUGIN_ROOT}/scripts/check-griffel-styles.js" --file '<working-dir>/<fil
 ```
 
 and fix what it reports in the page yourself before Phase 6. A page that has not
-exited 0 is not deployed.
+exited 0 is not deployed. Review every generated page for iteration that compiles to
+nothing as well, and fix it yourself: the workers follow the same rule
+(`references/rules.md`, **Common Errors > 5. Iteration that compiles to nothing**).
 
 ### Phase 6: Deploy
 
 For each `.tsx` file produced, deploy to Power Apps.
 
-If Phase 4.5 wrote `<working-dir>/connectors.json`, first pre-flight the active
-PAC CLI:
-
-```powershell
-pac model genpage upload --help
-```
-
-The help output must contain `--connectors`. If it does not, stop and surface:
-"connector deploy requires a pac build with `pac model genpage upload
---connectors` — build from PowerPlatform-Scale-AdminTools or update pac." Do
-not silently drop bindings.
+If Phase 4.5 wrote `<working-dir>/connectors.json`, pass it with `--connectors`; pass `actions.json` with `--actions` when Phase 4.6c decided so
+(its desired array is not empty — Custom API rows, built-in operation rows, or both). `genpage-upload.js` writes the bindings into
+the page's `config.json` through the SDK, so there is no `--help` to pre-flight and no minimum `pac`
+build for them; a file that is not a JSON array is refused before anything is written. Never silently
+drop bindings.
 
 Connector deployment matrix:
 - **Create (new page):** include `--connectors '<working-dir>/connectors.json'`
-  with the first `upload --add-to-sitemap`.
+  with the page's first upload (the create).
 - **Edit — connectors changed, added, or one removed:** write the full desired
   binding set to `connectors.json` and include `--connectors` with
-  `upload --page-id '<id>'` (full replace).
-- **Edit — no connector change:** omit `--connectors`; pac preserves existing
+  the update (`--page-id '<id>'`) (full replace).
+- **Edit — no connector change:** omit `--connectors`; the page keeps its existing
   bindings. Never pass a stale or empty file on an unrelated edit.
 - **Delete all connectors:** write `[]` to `connectors.json` and pass
-  `--connectors` so pac clears the page's `connectorBindings`.
-
-If Phase 4.6 wrote `<working-dir>/actions.json`, pre-flight the same way — the upload `--help`
-must contain `--actions`; if not, stop and surface "Custom API deploy requires a pac build with
-`pac model genpage upload --actions` (PowerPlatform-Scale-AdminTools)." Don't silently drop bindings.
+  `--connectors`, which clears the page's `connectorBindings`.
 
 Custom API deployment follows the **identical matrix** as connectors, substituting
-`--actions '<working-dir>/actions.json'` for `--connectors`: pass it on create; on an edit only
-when bindings changed/added/removed (full replace); omit it on an unrelated edit (pac preserves
-existing); write `[]` and pass it to clear all `actionBindings`.
+`--actions '<working-dir>/actions.json'` for `--connectors`: pass it on create when Phase 4.6c's
+array is not empty; on an edit only
+when bindings changed/added/removed (full replace); omit it on an unrelated edit (the page keeps
+its deployed `actionBindings`); write `[]` and pass it to clear all `actionBindings` — on a page
+that also binds a built-in operation (`WhoAmI`, `RetrieveVersion`) only after the maker's clear
+choice naming each one, asked before any binding is reconciled or the plan is approved (edit-flow.md,
+Edit Phase 3) and recorded again right before the upload, because removing every Custom API keeps them
+(edit-flow.md, Edit Phase 3).
+The same array carries the built-in operation rows (`WhoAmI`, `RetrieveVersion`), so the same
+rules hold for them: `--actions` is passed only when the whole desired set changed, a preserve
+omits it, a removal passes the array minus the named entries, and `[]` is passed only for a
+clear-all the maker chose — never as the result of a gate that turned off (Phase 4.6b, or in an edit the
+Edit Phase 4 re-probe, halts instead).
 
-**Deploy through `scripts/genpage-upload.js`, never by composing a raw `pac model genpage upload` command.** The script is a thin wrapper over the same upload path `/app-builder` uses: it hands the prompt and agent-message to pac **by file** (`--prompt-file`/`--agent-message-file`). A prompt is arbitrary user text — quotes, newlines, `%VAR%`, `&`, `|`, non-ASCII — and putting it on a command line means the shell gets to reinterpret it. That failed live with:
-
-```text
-Error: Not a valid command.
-Parse failed on: Inspection
-Was it quote wrapped? No, be sure to wrap values that contain spaces.
-```
-
-…for a prompt containing an ASCII-quoted multiword page name. **Never "fix" that by editing the approved prompt** (for example swapping in typographic quotes): the page would then be built from text the user never approved.
+**Deploy through `scripts/genpage-upload.js`.** It writes the page through the SDK — the same page backend
+`/app-builder` uses, signed in with the Azure CLI — and takes the maker's text **by file**
+(`--prompt-file`/`--agent-message-file`/`--name-file`). A prompt is arbitrary user text — quotes, newlines,
+`%VAR%`, `&`, `|`, non-ASCII — and putting it on a command line means the shell gets to reinterpret it.
+**Never "fix" that by editing the approved prompt** (for example swapping in typographic quotes): the page
+would then be built from text the user never approved.
 
 **Write the prompt, the agent-message and, on a create, the page's display name to files first**, then pass the
 paths. The display name is the maker's text too: substituted into a double-quoted `--name` value, PowerShell expanded `$(…)` in
@@ -950,35 +1099,41 @@ foreach ($f in 'prompt.txt', 'agent-message.txt', 'page-name.txt') {
 Then write, with the file tool, `<working-dir>/prompt.txt` holding the prompt, `<working-dir>/agent-message.txt` the
 agent message and, on a create, `<working-dir>/page-name.txt` the page's display name — each exactly its text (a
 trailing line break on the name is ignored). `genpage-upload.js` refuses any of them that is a link, a hard link or a
-folder, but only after the write. The name is the one value passed to pac inline. A name containing a straight double
-quote (`"`) is refused before anything is uploaded — pac stores each one as `\"`, in the page and in the navigation
-title it writes — so use typographic quotes (“ ”) or an apostrophe, which are stored exactly. Where pac is installed as
-a `pac.cmd` shim (Windows), a name containing `%` is refused too, so pick one without it.
+folder, but only after the write. The page's name is stored exactly as written: a straight double quote (`"`) or a `%`
+in it is neither refused nor escaped.
 
 **Log the invocation into `workflow-log.md` under a `## Phase 6 — Deploy` section before running it.** Record the flags and the prompt-file path, plus the prompt's scope, so the approved text is preserved semantically without embedding arbitrary text as an executable command. Format:
 
 ```markdown
 ## Phase 6 — Deploy
-- Command: `node "${PLUGIN_ROOT}/scripts/genpage-upload.js" --env '<org-url>' --app-id '<id>' --code-file '<path>' --data-sources '<entities>' --prompt-file '<working-dir>/prompt.txt' --model '<model-id>' --name-file '<working-dir>/page-name.txt' --agent-message-file '<working-dir>/agent-message.txt' --add-to-sitemap`
+- Command: `node "${PLUGIN_ROOT}/scripts/genpage-upload.js" --env '<org-url>' --app-id '<id>' --code-file '<path>' --data-sources '<entities>' --prompt-file '<working-dir>/prompt.txt' --model '<model-id>' --name-file '<working-dir>/page-name.txt' --agent-message-file '<working-dir>/agent-message.txt' --solution '<Solution unique name>' --add-to-sitemap`
 - Prompt scope: full page description from plan's `## User Requirements` (create) — or the delta only (update)
 - Result: page-id = <returned-id>, status = success
 ```
 
 When present, the logged command must also include `--connectors '<working-dir>/connectors.json'`
-and/or `--actions '<working-dir>/actions.json'`.
+and/or `--actions '<working-dir>/actions.json'`. A new app's first page is created with no app, so its
+logged command has neither `--app-id` nor `--add-to-sitemap` (see "A new app" below).
 
 #### Prompt semantics
 
-- **First upload** (`--add-to-sitemap`, no `--page-id`): full page description
+- **First upload** (the create: no `--page-id`): full page description
   from plan's `## User Requirements`.
-- **Any subsequent upload** (`--page-id`, no `--add-to-sitemap`): delta only —
+- **Any subsequent upload** (`--page-id`): delta only —
   the changes in this upload, written like a commit message, never a
   re-statement of the original.
 
 `--add-to-sitemap` is **refused** together with `--page-id` — an update cannot add a sitemap
-entry, and the page it names is already placed. If a create is recovered as an update after a
-mid-flight failure, the page is deployed but **not** placed, and that is reported as a failed
-(incomplete) deployment carrying the page id, not as success.
+entry, and the page it names is already placed. The one exception is finishing a page this script
+created and did not finish:
+
+**A create that did not finish.** A create reports `ok: false` **with the page's `pageId`** when the page was
+written but its publish failed, or — with `--add-to-sitemap` — when it could not be placed in the app. The page
+exists, and the base marker beside the code file records that this upload created it and did not finish it. Run
+the **same command again with `--page-id '<page-id>'` added** and nothing else changed (keep `--add-to-sitemap`
+if it was given): that publishes the page and places it, without the check of the app's navigation an ordinary
+update makes — for that page only — and a page that already holds the content is published, not written again.
+Never create the page a second time.
 
 Applies in Phase 6 updates, Phase 6.5 PAGEREF re-uploads, Phase 7.5 fix
 re-deploys, and the entire edit flow.
@@ -997,11 +1152,31 @@ node "${PLUGIN_ROOT}/scripts/genpage-upload.js" `
   --prompt-file '<working-dir>/prompt.txt' `
   --model '<current-model-id>' `
   --agent-message-file '<working-dir>/agent-message.txt' `
+  --solution '<Solution unique name>' `
   --add-to-sitemap
 ```
 
 Omit the `--connectors` line when Phase 4.5 did not write `connectors.json`, and the
-`--actions` line when Phase 4.6 did not write `actions.json`.
+`--actions` line when Phase 4.6c decided an empty array — a page that binds only built-in
+operations keeps it.
+
+**Every create passes `--solution` with the plan's `Solution` value** (`## Environment`), so the page
+joins the solution the maker chose, as the tables and the app do. A page joins no solution on its own,
+and adding an app to a solution never brings the pages it shows. The upload checks the solution before
+it writes anything: a name that is not an unmanaged solution stops the upload with nothing made. It adds
+the page last, after the page is written, published and placed, and the result says `"solution"` and
+`"addedToSolution": true`. A system solution such as `Default` already holds every page, so nothing is
+added and the result says `"systemSolution": true`. **An add that fails** exits 1 with
+`"code": "solution-add-failed"` and the page's `pageId`. The page exists and works: do not create it
+again. Run the `add-page-to-solution.js` command that the error names
+(`node "${PLUGIN_ROOT}/scripts/add-page-to-solution.js" '<org-url>' '<Solution unique name>' --page-ids '<page-id>'`).
+Updates (a later edit of the page) do not pass `--solution`, because the page is in the solution
+already. A create that did not finish, run again with `--page-id` added (see below), keeps
+`--solution`: the run that finishes the page also adds it.
+
+**A new app** (the plan says `create new`): there is no app to name yet. Create the app's **first page with no
+`--app-id` and no `--add-to-sitemap`** — a page needs no app, and one created without it is added to none — and make
+the app from that page; see "A new app" below.
 
 `genpage-upload.js` reads the code file and refuses a page whose `makeStyles` writes one of the ten Griffel shorthands
 (Phase 5b step 9): a create outright, before it lists, reads or writes anything, and an update for any key the deployed page
@@ -1009,17 +1184,20 @@ did not already have (below). The result is `"code":"griffel-shorthand"`, with e
 and what each way out does in `error` (and the same list in `problems`). That is the same check as
 `check-griffel-styles.js`, held at the one place every upload passes, so a page that skipped the earlier gate still cannot
 ship a key it added without its border. Fix the page and run the upload again; no flag skips it, and
-`--overwrite-deployed` does not. The upload sends `pac` a copy of the bytes it checked, so a change saved to the file after
-the upload started is not sent — run the upload again to send it. It does not take `--compiled-code-file`: `pac` compiles the
-checked file itself.
+`--overwrite-deployed` does not. The upload reads the code file once and writes exactly the text it checked, so a change saved
+to the file after the upload started is not sent — run the upload again to send it. It does not take `--compiled-code-file`: the SDK
+compiles the checked file itself.
 
 An update is held to what it **adds**. A page deployed before this check existed can already carry such a key — the old
-`borderWidth` grep never caught `borderColor` under `:hover` — and it renders without it today. The script downloads the
-deployed page anyway (for the base check below) and compares: a key the deployed page already had, set to the same value — the same key
-and value in the same slot and selector, or one that a renamed slot or a moved rule only relocated — goes ahead, and the result's `warnings`
-names each one with both ways out: **delete the key** (nothing changes on screen) or **write the longhands** (the style
-starts to render, so the page changes). Only a key the deployed page did not have — or one it had, given another value, because
-Griffel drops the new value just as it dropped the old, so the page would show none of the change — stops the upload. If the deployed page
+`borderWidth` grep never caught `borderColor` under `:hover` — and it renders without it today. The script reads the
+deployed page anyway (for the base check below) and compares: a key the deployed page already had, set to the same value in
+the same place (the same `makeStyles` hook — told by the name it is bound to at the top of the file, even with a type annotation — and its slot and selector, and the same arm of every condition above the key), goes ahead, and the result's `warnings` names each one with both ways out:
+**delete the key** (nothing changes on screen) or **write the longhands** (the style
+starts to render, so the page changes). Only a key the deployed page did not have in that place stops the upload: a key it had in
+another place (an edit that removes it from one slot and sets it in another, or renames the slot, or moves it to another hook's slot of the same name — every hook has a `root` — or into the other arm of a condition, at any level, has added a key there), or one it had,
+given another value, because Griffel drops the new value just as it dropped the old, so the page would show none of the change.
+A hook whose name the file does not prove — written inside a function or a block, passed as an argument, exported as the default, or bound to a name two hooks share — has no earlier self to be compared with, so a key in it is refused on an update like any new one: delete it, or write the longhands.
+If the deployed page
 cannot be read (possible only with `--overwrite-deployed`), the update goes ahead with that warning. A `makeStyles` call the
 checker cannot read for certain is refused as one it could not read, with what to change in the code, unless the file is the
 deployed page itself.
@@ -1046,17 +1224,15 @@ node "${PLUGIN_ROOT}/scripts/genpage-upload.js" `
 
 For updates, include the `--connectors` line only when this upload intentionally
 replaces or clears connector bindings; otherwise omit it to preserve the
-deployed page's current bindings. The same rule applies to `--actions` for Custom
-API bindings: include it only when this upload intentionally replaces or clears them.
+deployed page's current bindings. The same rule applies to `--actions` for the page's
+`actionBindings` — Custom API and built-in rows alike: include it only when this upload
+intentionally replaces, removes or clears them.
 
-An update without `--name-file` keeps the page's current display name, and one without `--model` its
-current model: pac would otherwise rename the page to its navigation title and store an empty model, so
-the script reads both from the deployed page and sends them again. If either cannot be read — or the
-name cannot be sent, because pac is a `pac.cmd` shim and the name holds `%` or `"` — the update still
-goes ahead and its result carries a `warnings` entry naming what may have changed; re-run with that value
-passed explicitly.
+An update that gives no `--name-file`, `--model`, `--data-sources`, `--connectors` or `--actions` keeps the page's own
+name, model, data sources and bindings: the SDK writes only what differs from the page it has just read, so an edit
+that does not rename the page omits `--name-file`, and nothing is reset to empty.
 
-Before an update, the script downloads the deployed page and compares it with the base marker written beside the code file at the previous upload (or by `genpage-base.js record` in the edit flow). A refusal is a stop, not a warning:
+Before an update, the script reads the deployed page and compares it with the base marker written beside the code file at the previous upload (or by `genpage-base.js record` in the edit flow). A refusal is a stop, not a warning:
 
 - `no-base` — no marker, or the marker is for a different page or app.
 - `deployed-changed` — the deployed page no longer matches the marker. The result includes `lines` (`added` / `removed`) and `deployedCopy`, a copy of the deployed page written next to the code file.
@@ -1066,10 +1242,33 @@ Before an update, the script downloads the deployed page and compares it with th
 
 Log the marker, the check result (`code`, `lines`, `deployedCopy`) and that `Choice:` line in `workflow-log.md`. Do not re-run `genpage-base.js record` after a successful upload; the upload records the hash of the file it uploaded. When the readback matches (a BOM or a final CRLF is not a difference), the marker source is `upload`. When the readback differs, or cannot be read, the source is `upload-unverified` and still records that uploaded hash — not the bytes the service returned — and the result warns, so the next update refuses `deployed-changed` until the page is compared with `genpage-base.js check`. A seconds-long gap between the check and the upload is not covered.
 
-**A pac call that stalls is stopped, not waited on forever.** Every `pac model genpage` call these scripts make is bounded — 3 minutes to list or download, 10 minutes to upload (`POWER_PLATFORM_SKILLS_PAC_TIMEOUT_MS`, 1 second to 60 minutes, allows longer) — and its whole process tree is ended when the time is up. A listing or a download that times out is retried once. An **upload is never sent again by the script**: pac writes the page, records its prompt and agent message, then publishes, so one that was stopped may have done most or all of that, and sending it again can record the prompt a second time or overwrite a change someone saved in the meantime. Follow the message the script prints; do not simply re-run the command.
+**A write whose answer was lost is never sent again blindly.** `genpage-upload.js` writes a page as one atomic change set, so a write either landed whole or wrote nothing. When no usable answer comes back (a dropped connection, a 5xx from something in between) it reads the page to find out which, and sends a create at most once more, under the same id — so no second page can exist. What it still cannot account for it reports as a failure: exit 1 and a JSON object with `error`, the page's `pageId` once the write got as far as the send, `outcome` and the SDK's `code`. Follow the message; do not simply re-run the command.
 
-- **An update that timed out, or failed,** "MAY HAVE LANDED" — pac can fail while publishing, after it wrote the page, so neither is sent again by the script. (A failure pac reports for its own arguments or files is an ordinary error: fix what it names and re-run.) Compare the deployed page with your file first: `node "${PLUGIN_ROOT}/scripts/genpage-base.js" check --env '<org-url>' --app-id '<app-id>' --page-id '<page-id>' --file '<working-dir>/<file>.tsx'`. `"contentSame": true` means the update landed: do not upload it again — run `genpage-base.js record` for that page and file so the marker matches what is deployed, and confirm in Maker that the page shows your change and is published. `"deployed": "unchanged"` means it did not land, and re-running the update is safe. `"deployed": "changed"` with `"contentSame": false` means someone else saved the page: treat it as the `deployed-changed` refusal above, with its choice and its `Choice:` line.
-- **A create that timed out** is an *uncertain* create, and is never run again — by the script, or by you. If the message says the page was **created as `<page-id>`**, it exists but was stopped before it was published, and before it was placed in the app if you asked for that. Add it to the app's navigation (in Maker, or `pac model genpage add --environment '<org-url>' --app-id '<app-id>' --page-id '<page-id>' --publish`), run `genpage-base.js record --app-id '<app-id>' --page-id '<page-id>' --file '<working-dir>/<file>.tsx'` (the file is what was uploaded), then run the update with `--page-id`. Or delete the page and re-run the create. Without a page id in the message, wait a few minutes and list the environment's pages (`pac model genpage list --environment '<org-url>' --include-unpublished`): a new page of yours is handled as above, and the create is re-run only when none appeared. The same goes for a message that says the environment could not be listed after the create, so nothing is known about what it made. An update of a page that is not in the app's navigation is refused, and a second create makes a duplicate — so neither is the way on. A create that **failed** (not timed out) after pac had printed a `Page ID` is in the same state: its error says the page was **created as `<page-id>`** and that the create was not run again, with the same two ways on rather than "re-run it as an update". The build never re-sends such a create by itself either: every one of these errors is marked as one that is not to be retried.
+- **`"outcome": "nothing"`** — nothing was written (the SDK refused before it sent anything, or the service rejected the whole change set): fix what the message names and run the command again.
+- **An update with `"outcome": "unknown"`** "MAY HAVE LANDED" and is not sent again. Compare the deployed page with your file first: `node "${PLUGIN_ROOT}/scripts/genpage-base.js" check --env '<org-url>' --app-id '<app-id>' --page-id '<page-id>' --file '<working-dir>/<file>.tsx'`. `"contentSame": true` means the update landed: do not upload it again — run `genpage-base.js record` for that page and file so the marker matches what is deployed, and confirm in Maker that the page shows your change and is published. `"deployed": "unchanged"` means it did not land, and re-running the update is safe. `"deployed": "changed"` with `"contentSame": false` means someone else saved the page: treat it as the `deployed-changed` refusal above, with its choice and its `Choice:` line.
+- **A create with `"outcome": "unknown"`** is an *uncertain* create: its message says to look for the page by its `pageId` before creating it again, and it is never run again until that is done — a second run mints a second page. List the environment's pages: `node "${PLUGIN_ROOT}/scripts/genpage.js" list --env '<org-url>'` prints every page of the environment, drafts included, as `{ "pageId", "name" }`, and a failed read (exit 1, `"ok": false`) is never "the page is not there". If it is there, add it to the app's navigation with `node "${PLUGIN_ROOT}/scripts/genpage.js" add-to-app --env '<org-url>' --app-id '<app-id>' --page-id '<page-id>'` (it publishes the app and proves the page shows in the published navigation), run `genpage-base.js record --app-id '<app-id>' --page-id '<page-id>' --file '<working-dir>/<file>.tsx'` (the file is what was uploaded), then run the update with `--page-id`. Or delete the page and re-run the create: `node "${PLUGIN_ROOT}/scripts/genpage.js" delete --env '<org-url>' --page-id '<page-id>'` first says what it would remove — the page, its file rows and its conversation messages — and deletes nothing; ask the user, and only if they agree run it again with `--allow-destructive`, which removes them for good — an unattended run stops at that refusal instead, since suppressing a prompt never authorizes a delete — and it is refused while an app's navigation names the page (the refusal names the apps; `genpage.js remove-from-app` takes the page out of each). If no page of yours appears after a few minutes, the create is re-run. An update of a page that is not in the app's navigation is refused, and a second create makes a duplicate — so neither is the way on while the page is unaccounted for. The first page of a new app has no app yet to be added to: once it is found, run `genpage-base.js record --page-id '<page-id>' --file '<working-dir>/<file>.tsx'` with no `--app-id` (no app holds the page yet, so the marker records the page alone, and the first update that names the new app records the app) and go on with step 2 of "A new app" below (`apps.js create --page-id`).
+- **A create that wrote the page but did not publish or place it** is not an unknown outcome: its result carries the `pageId`, and the way on is "A create that did not finish" above.
+
+#### A new app: the first page, then the app, then the rest
+
+Phase 3 created nothing, because the platform refuses an app whose navigation is empty and `apps.js create` takes the pages the app opens on. When the plan says `create new`, deploy in this order:
+
+1. **The first page, with no app.** Run the create above without `--app-id` and without `--add-to-sitemap`. Note the `pageId` it prints.
+2. **The app, from that page.**
+
+   ```powershell
+   node "${PLUGIN_ROOT}/scripts/apps.js" create `
+     --env '<org-url>' `
+     --name '<App Name>' `
+     --solution '<Solution unique name>' `
+     --page-id '<first-page-id>' `
+     --publish
+   ```
+
+   It makes the app with one area `Main`, one group `Pages` and a sub-area for the page, titled with the page's name; the app, its sitemap and its page join the solution (`inSolution` lists `app`, `sitemap` and `pages` as each joins; a system solution such as `Default` already holds every component, so the result says `systemSolution: true` and an empty `inSolution` — a create into `Default` needs no add and did not fail). **`--publish` is mandatory:** without it the new app stays in draft and the genux runtime URL errors with "app not published". It prints `{ "ok": true, "appId", "uniqueName", "published", "unpublishedChanges", "solution", "navigation", "dataSources", "pinnedViews", … }` — store `appId` for the rest of the run. The create also pins the default public view of each table the page reads into the app's components, so that the maker's "/" picker lists the page's tables (`dataSources` are the tables, `pinnedViews` the views); a `warnings` entry says when a table has no default public view to pin, or when the environment could not take the app's new header and navigation setting, and the app was made all the same.
+3. **The remaining pages.** Upload each with `--app-id '<appId>'`, `--add-to-sitemap` and `--solution` (the create above): each becomes a sub-area of the new app and joins the solution, and the default views of the tables it reads join the app's components with it.
+
+**A create of the app that failed** exits 1 and prints `{ "ok": false, "code", "error", "written", … }`; `code` and `error` are the SDK's own. `"written": false` means nothing was made: fix what the message names and run it again. `"written": true` means the app or its sitemap exists (`appId`, `sitemapId`, `left`, `published` and `unpublishedChanges` say which and in what state): its unique name is taken, so run it again with `--unique-name '<name>'`, or remove the leftovers first — the error says how. `"written": null` means the platform could not be read back, so the outcome is unknown: look in the environment for what `lookFor` names (the unique name, the app id and the sitemap id the create used) before running it again. `stage` says how far it got, and `inSolution` which of the app, its sitemap and its pages joined the solution (a create that stopped at the `solution` stage made the app: add what is missing with `add-page-to-solution.js '<org-url>' '<Solution unique name>' '<appId>' --page-ids '<page-id>'` — the app's add brings its sitemap, and a component the solution already holds is accepted).
 
 ### Phase 6.5: Navigation Fix-Up (Multi-Page Only)
 
@@ -1122,7 +1321,9 @@ The creates in Phase 6 wrote a base marker beside each uploaded file, using the 
 
 Runs only when the plan's `## Solution Packaging` has `Package into solution: true`.
 Adds the deployed app, the GenPage(s), and any connection references to the
-target solution so they travel cross-environment.
+target solution so they travel cross-environment. (The pages already joined the plan's
+`## Environment` `Solution` in Phase 6; this packages them, with the app and the connection
+references, into the solution `## Solution Packaging` names, which may be another one.)
 
 1. Ensure the solution exists — create it only if it doesn't already exist:
    `node "${PLUGIN_ROOT}/scripts/provision-solution.js" '<envUrl>' '<solutionUniqueName>' '<Friendly Name>' [--publisher '<uniqueName>']`
@@ -1141,12 +1342,59 @@ Cross-env note: the app (80) pulls the sitemap (62); the GenPage
 is added so bindings resolve. The script discovers both custom-table component
 types from `EntityDefinitions(...).ObjectTypeCode` in the target environment —
 their numeric values are environment-specific and must never be hardcoded. At import the
-deployer supplies env-specific `ConnectionId` per connection reference via
-`pac solution create-settings` + `pac solution import --settings-file`.
+deployer supplies env-specific `ConnectionId` per connection reference through deployment settings:
+`node "${PLUGIN_ROOT}/scripts/solution-settings.js" template --env '<envUrl>' --solution '<solutionUniqueName>' --out '<settings.json>'`
+writes the settings file of the solution (an empty `ConnectionId` for each connection reference, an empty
+`Value` for each environment variable; an existing `--out` is not replaced unless `--force` is given, so a
+file already filled in is not lost), the deployer fills it in, and
+`node "${PLUGIN_ROOT}/scripts/solution-settings.js" import --env '<target-envUrl>' --package '<solution.zip>' --settings '<settings.json>'`
+imports the package and applies the settings in the same import. Each prints one JSON line with
+`source` (`"sdk"`, or `"pac"` with a `fallback` that says why the SDK did not do the work). The import is
+sent once: a gateway's answer for an import the platform may have accepted is never answered with a second one.
+The one exception is the platform's refusal to start it because a publish, or another import, holds the
+environment's lock: HTTP 429 with one of the customization-lock error codes whose documented text is "Cannot
+start …" (such as "Cannot start the requested operation [Import] because there is another [Publish]
+running"), or with the generic solution-concurrency code `0x80071151` and a message that begins "Cannot start"
+("Cannot start another [Import] because there is a previous [Import] running" is what the platform has been
+measured to answer an import that meets another import). The script then waits and sends it again under a new
+job id — but only after the refused send's import job has proved that nothing of the package was applied. For
+a lock code the job does not exist (the script reads it after the wait). For `0x80071151` the code alone does not
+say that nothing started, so the job is read once, at once: it does not exist, or it is finished and its log
+says that the import failed with that error before it processed the solution or any component. The sends are at
+most five and the time at most five minutes in all, counted from the first refusal to the last send (10, 20,
+40 and 60 seconds between the sends, or the longer wait the platform asks for in `Retry-After`, in seconds or
+as a date, waited whole; the time an import the platform accepted then takes is not counted) — and the script
+says so in its output (`importAttempts`, `importRefusals`, and for `0x80071151` how the job proved it). A
+`Retry-After` that does not fit in what is left of the five minutes ends the retry at once, with no send made
+early, and a wait that ends after the five minutes (a timer that resumed late) ends it before the next send.
+When the time runs out, or the sends run out on a lock code, the failure is the platform's refusal, with a
+sentence that says which: run the import again when the other operation has finished. When the sends run out
+on a `0x80071151` refusal, the job of that last send was not read, so nothing shows that it applied nothing:
+do not run the import again until you have looked up the import job the failure names (`importjobs(<id>)`)
+and it does not exist (404), or it is finished (`completedon` set) and its log (`data`) is that of an import
+refused at the lock — the root says `succeeded="failure"` and `errorcode="-2147020463"`, every
+`solutionManifest` is `processed="false"`, and no element under the root but `upgradeHandler` and
+`validateHandler` has a `processed` other than `"false"` — and the other operation has finished; anything
+else means the import may be running or may have applied the package.
+When the job of a `0x80071151` refusal
+proves nothing — it is still running, the import failed after it began, its log is not what is expected, or it
+cannot be read — the import is sent once and the failure says why it was not sent again: do not run the import
+again until you have looked up the import job it names (`importjobs(<id>)`, or the solution history in Maker)
+and it shows that nothing was imported, and the other operation has finished. Every other refusal is sent once,
+`0x80071151` with any other words included. A secret value
+and a connection id are kept out of what they print — a text that quotes one is withheld, or has it
+replaced by `<redacted>` — with these limits: a value of fewer than six characters that is known not to be
+a secret is not hidden; one whose type is not known (the `pac` route, a name the package does not define)
+is found only as a whole word, so it is printed when glued to letters, digits, marks or underscores or
+written inside an escape the sanitizer does not decode; and a value quoted in part, hashed, base64-encoded,
+written as an HTML entity beyond XML's five, Unicode-normalized or nested in more than three levels of
+encoding is not recognised.
 
 Custom API bindings need **no** extra ALM step: `config.json`'s `actionBindings` travels
 automatically in the `uxagentprojectfile` rows already pulled with the GenPage. The
 referenced Custom APIs are a separate deployment prerequisite (bound by `name`), not added here.
+A built-in operation binding (`WhoAmI`, `RetrieveVersion`) needs nothing at all: it names an
+operation the platform defines, so there is no component to add or deploy.
 
 ### Phase 7: Verify in Browser (Optional)
 
@@ -1214,6 +1462,9 @@ For the edit flow (triggered when the `genpage-planner` returns
 `{ "action": "edit" }`), see [edit-flow.md](edit-flow.md) in this folder.
 
 The edit flow has its own 8 phases (Edit Phase 1-8): discover and select target
-app + page via `pac model list` + `pac model genpage list`, download, generate
-RuntimeTypes if needed, invoke `genpage-edit-planner`, apply the edit inline,
-deploy, verify, summarize.
+app + page via `apps.js list` + `genpage.js list`, download (`genpage.js download`), generate
+RuntimeTypes (`genpage.js types`) if needed, invoke `genpage-edit-planner`, apply the edit inline,
+deploy, verify, summarize. Built-in operations (`WhoAmI`, `RetrieveVersion`) are classified in Edit
+Phase 3; Edit Phase 4 handles `dataverse_operation_discovery_required`, forwards this run's
+built-in operation contract through every planner round, and re-probes `dataverse-operations`
+before an add or replace is applied — the create flow's Phase 4.6b is not visited.

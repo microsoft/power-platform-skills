@@ -1,6 +1,8 @@
 # Power Pages Plugin
 
-Create and deploy Power Pages code sites using modern frontend frameworks. This plugin provides a complete workflow — from scaffolding a new site to deploying it, setting up data models, authentication, and Web API integrations — all through conversational AI skills.
+Create and deploy Power Pages SPA and non-SPA sites. This plugin covers site creation, local
+authoring, deployment, data models, authentication, Web API integration, localization, and ALM
+through conversational AI skills.
 
 **Supported frameworks**: React, Angular, Vue, Astro (static SPAs)
 
@@ -40,7 +42,11 @@ This keeps hook behavior in one place and avoids relying on skill-frontmatter ho
 
 ## Skills
 
-The plugin provides 36 skills that cover the full lifecycle of a Power Pages site — scaffolding, deployment, data modeling, backend integration, authentication, localization, ALM and CI/CD, security review, testing, auditing, and platform migrations. Each skill is invoked conversationally — just describe what you want to do.
+The plugin provides 39 skills: 38 user-invocable skills and one model-only worker.
+They cover the full lifecycle of a Power Pages site - scaffolding,
+non-SPA authoring, deployment, data modeling, backend integration, authentication, localization,
+ALM and CI/CD, security review, performance analysis, testing, auditing, and platform migrations. Each user-invocable
+skill is invoked conversationally - just describe what you want to do.
 
 ### Site scaffolding and deployment
 
@@ -48,18 +54,24 @@ The plugin provides 36 skills that cover the full lifecycle of a Power Pages sit
 
 > "Create a Power Pages site with React for a job board"
 >
-> "Create a site from a Power Pages SPA template"
+> "Create a site from a Power Pages template"
 
-Starts a complete code site either from a curated SPA template or from a fresh framework scaffold.
-The template path previews installable templates, imports each selected unmanaged solution, applies optional seed data, activates the site, and opens the live URL.
+Starts a complete site from a curated SPA or non-SPA template, or from a fresh SPA framework
+scaffold. The combined template browser labels every entry as **SPA** or **Non-SPA**. SPA template
+provisioning imports supporting solutions, applies optional seed data, activates the site, and
+leaves the shared status page open with an explicit website link. Non-SPA creation provisions an
+Enhanced-model Bootstrap 5 site, downloads and validates its Liquid/Web Template baseline, and
+offers coordinated local customization.
+SPA template import status updates automatically without a pause control.
+Its status page uses the catalog description and original image filenames, with a compact SPA badge and no non-SPA preview notice.
 Solutions marked `publishChanges` in the template manifest use `pac solution import --publish-changes`; other solutions import without that flag.
 The install confirmation warns that PAC's publication step can include other pending customizations in the target environment.
 Financial seed rows use an explicitly selected existing active currency with their amounts unchanged.
 Declared attachment uploads omit generated file-name fields from record creation, and seed summaries report partial failures explicitly.
 The from-scratch path turns your aesthetic, mood, and optional brand (an existing website, or your colors and logo) into a design thesis and a page-by-page narrative, builds the pages and components with a live preview throughout, and then screenshots every page at desktop and mobile widths and refines it against a ten-category design rubric before the accessibility audit.
 
-- Start from a curated SPA template or scaffold from scratch
-- Choose from React, Vue, Angular, or Astro
+- Browse curated SPA and non-SPA templates together
+- Choose React, Vue, Angular, Astro, or Non-SPA (Liquid + Web Template)
 - Suggests the selected Dataverse environment's base language for site content,
   with a silent `en-US` fallback when the environment cannot be queried
 - Renders the implementation plan in the selected content language, including
@@ -73,6 +85,20 @@ The from-scratch path turns your aesthetic, mood, and optional brand (an existin
 - Real images from Unsplash (no placeholders)
 - Live browser preview during development
 - Git commits at each milestone
+
+#### `/edit-site`
+
+> "Turn this downloaded Event Portal into our developer conference site"
+
+Authors and coordinates local changes for a PAC-downloaded non-SPA site. It plans and verifies
+webpages, Liquid/Web Templates, content snippets, native components, assets, and guarded styling
+changes without turning the site into an SPA.
+
+- Keeps one approved customization plan and resumable execution state under `docs/edit-site/`
+- Uses Design Studio-compatible composition and Bootstrap-aware styling
+- New pages update navigation by default unless the user explicitly asks not to
+- Preserves local-only boundaries until the user explicitly runs deployment
+- Invokes the model-only `author-webpage-content` worker for localized page-body composition
 
 #### `/deploy-site`
 
@@ -114,6 +140,41 @@ errors keep affected locales unavailable. Only usable review-severity
 limitations can be enabled after the maker sees the exact impact and evidence;
 that approval is recorded in the localization manifest.
 
+#### `/practice-site-check`
+
+> "Show me how a simple Power Pages skill works"
+
+Provides a small, read-only example for learning skill development. It recognizes both SPA sites and PAC-downloaded non-SPA sites, reports their local identity, and checks framework and compiled output details when they apply.
+
+### Non-SPA site authoring
+
+Use `/edit-site` to customize local PAC CLI-downloaded non-SPA
+Power Pages sites. The following capabilities are reference workflows, not separate slash commands,
+and do not apply to React, Angular, Vue, or Astro SPA sites.
+
+| Capability | Reference |
+|---|---|
+| Root/localized webpages, routes, parents, template assignments, content shells, and navigation | [Webpages](skills/edit-site/references/webpage-authoring.md) |
+| Localized/neutral snippets, translations, Text/HTML values, Liquid, and exact caller migrations | [Content snippets](skills/edit-site/references/content-snippet-authoring.md) |
+| Site-served images, CSS, JavaScript, fonts, documents, and adjacent PAC metadata | [Web files](skills/edit-site/references/web-file-authoring.md) |
+| Liquid/HTML fragments, inherited layouts, and explicitly requested callers or bindings | [Web templates](skills/edit-site/references/web-template-authoring.md) |
+| Page-template metadata, web-template-backed layouts, rewrite templates, and requested page assignments | [Page templates](skills/edit-site/references/page-template-authoring.md) |
+| Named webpage bindings, exact-name Liquid lookups, retargeting, and dependency-safe marker changes | [Site markers](skills/edit-site/references/site-marker-authoring.md) |
+
+The [shared authoring contract](skills/edit-site/references/non-spa-site-authoring.md) owns routing,
+autonomy, dependency loading, local-only boundaries, and final verification. New pages update
+navigation by default unless you explicitly ask not to. Coordinated asset planning retains provenance,
+placement, accessibility, secure explicit Web File imports, and direct HTTPS imagery for new-site design.
+
+#### `author-webpage-content`
+
+Model-only worker invoked by `edit-site` or `integrate-webapi` with a resolved page-content
+specification, not a direct user command. Use `/edit-site` for page-authoring requests.
+
+Composes or modifies one localized `.webpage.copy.html` file from a resolved page design,
+using Design Studio-compatible sections, columns, text, images, buttons, videos, iframes,
+Generative AI Search components, Flex Containers, and spacers.
+
 ### Data modeling
 
 #### `/setup-datamodel`
@@ -154,6 +215,7 @@ Router skill that analyzes your business problem and recommends the right backen
 > "Connect my site to the Dataverse tables"
 
 Orchestrates the full Web API integration lifecycle — from analyzing your site's code to identify where data is needed, through generating typed API code for each table, to configuring table permissions and site settings so the APIs work in production.
+It processes the first table sequentially because that creates the shared client, then processes remaining tables in parallel.
 
 The skill first scans your codebase to find components using mock data, placeholder fetch calls, or hardcoded arrays, then maps them to your Dataverse tables. It processes each table sequentially, spawning a dedicated **Web API Integration** agent that creates the integration code. After all tables are wired up, a **Table Permissions** agent proposes CRUD permissions and scopes, and a **Web API Settings** agent proposes site settings with case-sensitive validated column names queried directly from Dataverse — or you can upload your own permissions diagram instead.
 
@@ -463,6 +525,19 @@ Adds search engine optimization artifacts: `robots.txt`, `sitemap.xml`, and meta
 - Generates sitemap with production URLs
 - Adds viewport, charset, description, and social sharing meta tags
 
+#### `/analyze-performance`
+
+> "Check my site for performance anti-patterns"
+
+Statically scans the entire local codebase for Power Pages performance anti-patterns — unpaginated lists, webpages/web templates used as APIs, FetchXML over-fetching, N+1 queries, wildcard/contains-style filters, advanced query hints, query cache bypassing, unbounded/over-expanded Web API calls, related-column ordering, disabled header/footer output caching, sign-in and page tracking, and oversized assets — then enriches the static checks with AI-driven suggestions and mitigations grounded in the affected customer-code snippets, produces an HTML report by severity, and offers safe auto-fixes with per-fix approval.
+
+- Grounded in the Site Checker performance checklist and FetchXML/Web API best practices
+- Supports non-SPA Power Pages websites; SPA projects with `powerpages.config.json` are rejected with a clear message
+- Reviews list pagination, webpage-as-API endpoints, FetchXML hints, and cache-busting patterns
+- Findings grouped by severity with concrete fixes, AI mitigation guidance, and precise `file:line` locations
+- Auto-fixes site-setting/tracking issues on explicit per-finding consent; leaves code changes to you
+- Persists the shared review-style HTML report under the website's `docs/` folder
+
 ### Migration
 
 #### `/migrate-bootstrap`
@@ -542,25 +617,26 @@ The plugin host must provide an absolute `PLUGIN_ROOT` (GitHub Copilot) or `CLAU
 A common end-to-end workflow looks like this:
 
 ```
-1.  /create-site            →  Start from a SPA template or scaffold + design + build pages
-2.  /deploy-site            →  Upload to Power Pages environment
-3.  /activate-site          →  Provision a public URL
-4.  /setup-datamodel        →  Create Dataverse tables
-5.  /add-sample-data        →  Populate tables with test records
-6.  /integrate-backend      →  Pick the right backend approach (Web API / Server Logic / Cloud Flow)
-7.  /add-ai-webapi          →  Wire Copilot / search / data summarization APIs into pages
-8.  /create-webroles        →  Define access roles
-9.  /setup-auth             →  Add login/logout + role-based UI
-10. /audit-permissions      →  Verify table permissions are safe
-11. /add-localization       →  Add SPA languages and a language selector
-12. /add-seo                →  Search engine optimization
-13. /deploy-site            →  Push final changes live
-14. /test-site              →  Runtime smoke test on the live URL
-15. /security-review        →  Full security review (headers, firewall, scan, permissions)
-16. /plan-alm               →  Plan multi-environment promotion (planning only — produces the plan)
-17. /setup-solution         →  Package the site into a Dataverse solution
-18. /setup-pipeline         →  Set up the Power Platform pipeline
-19. /deploy-pipeline        →  Promote through staging → production (run per stage)
+1.  /create-site            →  Choose an SPA/non-SPA template or scaffold an SPA
+2.  /edit-site              →  Customize a downloaded non-SPA site when applicable
+3.  /deploy-site            →  Upload to Power Pages environment
+4.  /activate-site          →  Provision a public URL for SPA sites
+5.  /setup-datamodel        →  Create Dataverse tables
+6.  /add-sample-data        →  Populate tables with test records
+7.  /integrate-backend      →  Pick the right backend approach (Web API / Server Logic / Cloud Flow)
+8.  /add-ai-webapi          →  Wire Copilot / search / data summarization APIs into pages
+9.  /create-webroles        →  Define access roles
+10. /setup-auth             →  Add login/logout + role-based UI
+11. /audit-permissions      →  Verify table permissions are safe
+12. /add-localization       →  Add SPA languages and a language selector
+13. /add-seo                →  Search engine optimization
+14. /deploy-site            →  Push final changes live
+15. /test-site              →  Runtime smoke test on the live URL
+16. /security-review        →  Full security review (headers, firewall, scan, permissions)
+17. /plan-alm               →  Plan multi-environment promotion (planning only - produces the plan)
+18. /setup-solution         →  Package the site into a Dataverse solution
+19. /setup-pipeline         →  Set up the Power Platform pipeline
+20. /deploy-pipeline        →  Promote through staging → production (run per stage)
 ```
 
 > Steps 17–19 are the execution sequence `/plan-alm` recommends — you run them yourself; each detects the approved plan and keeps it updated. `/plan-alm` never runs them for you.

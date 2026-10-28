@@ -1,0 +1,31 @@
+{
+  "contractVersion": 2,
+  "provenance": "synthetic",
+  "description": "Constructed trace of a compliant attended create run for eval 26, not an agent capture. An existing table (opportunity) is shown with each opportunity's Customer, a polymorphic lookup to account or contact. \"The opportunities for this account\" has three metadata-backed meanings, so the planner returns needs_input with no default; the maker answers Direct customer, the plan records that answer as a user-confirmed assumption beside three planner defaults, and the approved preview carries the same records. The lookup records come from the saved get-lookup-metadata.js answer and generation is gated by --require-observed-lookups. The page copies the lookup normalizer and the page error block of references/rules.md: it normalizes every customer with its complete targets, filters an account's opportunities through the verified customerid_account path only for an account customer, lists every customer of either table, searches only the loaded rows (and says so), opens and writes the actual table, and reports reads and the write through reportPageError. lookup-rows.json holds synthetic customer values with the state the normalizer gives each.",
+  "contracts": [
+    "plugins/model-apps/skills/genpage/SKILL.md Phase 1: Plan (Steps 1-7) and the needs_input loop",
+    "plugins/model-apps/agents/genpage-planner.md Resolve Data Semantics",
+    "plugins/model-apps/skills/genpage/SKILL.md Phase 5a and 5b: Single-page fast path",
+    "plugins/model-apps/skills/genpage/SKILL.md Phase 6: Deploy and Prompt semantics",
+    "plugins/model-apps/references/plan-schema.md Assumptions, data semantics and lookup metadata",
+    "plugins/model-apps/references/rules.md Critical Rules 22 and 23, Lookup references and Missing Error Handling",
+    "plugins/model-apps/references/data-caching.md Pattern 1"
+  ],
+  "expectedOutcome": "deployed",
+  "toolResults": "tool-results.json",
+  "artifacts": [
+    "prompt.txt",
+    "agent-message.txt",
+    "page-name.txt",
+    "approved-plan.md",
+    "lookup-metadata.json",
+    "semantic-interactions.json",
+    "lookup-rows.json"
+  ],
+  "semantics": {
+    "approvedPlan": "approved-plan.md",
+    "lookupMetadata": "lookup-metadata.json",
+    "interactions": "semantic-interactions.json",
+    "lookupRows": "lookup-rows.json"
+  }
+}

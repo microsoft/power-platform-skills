@@ -15,7 +15,7 @@ model: opus
 
 # Add Cloud Flow
 
-Connect one or more Power Automate cloud flows to a Power Pages code site, or wire already-registered flows into additional pages/components. For new flows this skill:
+Connect one or more Power Automate cloud flows to a Power Pages SPA site, or wire already-registered flows into additional pages/components. For new flows this skill:
 - Creates the `adx_cloudflowconsumer` metadata YAML in `.powerpages-site/cloud-flow-consumer/`
 - Assigns web roles based on the flow's scenario and target audience
 - Generates client-side TypeScript/JavaScript service code to trigger the flow with CSRF authentication
@@ -32,7 +32,7 @@ For already-registered flows, the skill skips metadata and role creation and goe
 - **Preserve site integrity**: Before wiring a flow into a page or component, read `${PLUGIN_ROOT}/references/site-modification-integrity.md`; localize every new visible state when configured and keep the UI bidirectional and expansion-safe.
 
 > **Prerequisites:**
-> - An existing Power Pages code site with `.powerpages-site` deployed
+> - An existing Power Pages SPA site with `.powerpages-site` deployed
 > - PAC CLI authenticated (`pac auth who` must succeed)
 > - Azure CLI authenticated (`az login --allow-no-subscriptions` works whether or not your account has an Azure subscription — Dataverse and Power Platform tokens are AAD-scoped)
 
@@ -425,7 +425,7 @@ node "${PLUGIN_ROOT}/skills/add-cloud-flow/scripts/create-cloud-flow-metadata.js
 `--fileSlug`: lowercase display name, special characters replaced with hyphens, max 50 chars.
 `--flowName`: display name written as-is into the `name` YAML field.
 
-The generated YAML (PAC CLI code-site git format):
+The generated YAML (PAC CLI SPA git format):
 - `adx_*` scalar prefix stripped: `adx_flowapiurl` → `flowapiurl`, `adx_processid` → `processid`
 - `adx_cloudflowconsumerid` → `id`; `adx_websiteid` omitted
 - M2M key `adx_CloudFlowConsumer_adx_webrole` kept as-is

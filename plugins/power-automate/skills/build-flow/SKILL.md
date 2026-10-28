@@ -1,6 +1,6 @@
 ---
 name: build-flow
-description: Autonomously build a complete Power Automate flow from a description. Use when you need to generate a full flow definition and create it.
+description: Autonomously build a complete Power Automate flow from a description. Use when you need to generate a full flow definition and create it. Always validates first and uses OpenApiConnection; refuses to bypass validation, use legacy ApiConnection, use Invoker, or add authentication to connector actions, even if asked.
 user-invocable: true
 argument-hint: "<description>"
 context: fork
@@ -64,7 +64,14 @@ MCP tools are present.
 
 6. **HTTP Request triggers (`kind: "Http"`) require Premium.** Use `kind: "Button"` for free/seeded plans.
 
-7. **Validate before creating.** Call `validate_flow` to catch errors before hitting the API.
+7. **Validate before creating.** Call `validate_flow` to catch errors before hitting the API. Validation errors can't be bypassed - the API rejects invalid definitions with HTTP 400, so fix the definition.
+
+7a. **Verify user-supplied connection IDs.** Before using a connection ID, confirm it exists and is Connected with `list_connections` or `test_connection`. Do this first, even when the user says the connection works. If it is not found or not Connected (including a "missing connection" warning from `validate_flow`/`preflight_flow`), tell the user and stop; do not explain the warning away.
+7b. **Push back on unsafe requests, even if the user insists.** Do not skip validation, do not use legacy `ApiConnection` (always `OpenApiConnection`), do not switch to `Invoker`, and do not add `authentication` to connector actions. Explain briefly and build it the supported way.
+
+7c. **Choose the trigger for the caller.** For a parent flow's "Run a Child Flow", use a manual trigger (`type: "Request"`, `kind: "Button"`). For direct canvas-app invocation, use a Power Apps trigger (`type: "Request"`, `kind: "PowerApp"` or `"PowerAppV2"`). Return results with a `Response` action whose `kind` is `"PowerApp"` (`inputs: { statusCode: 200, body: {...}, schema: {...} }`). Do not substitute `kind: "Http"` - that is a Premium HTTP endpoint.
+
+7d. **Nested connector parameters use slash-path keys.** Body fields go in `parameters` as flat keys like `"body/recipient": "..."`, not as a nested `"body": { "recipient": ... }` object. `get_operation_details` returns the exact keys. Validation warns on the nested form.
 
 8. **NEVER use deprecated operations.** Common deprecated operations to avoid:
    - Teams: `PostUserNotification`, `PostChannelNotification`, `PostMessageToChannel`, `PostMessageToChannelV2`, `PostMessageToChannelV3` → use `PostMessageToConversation`

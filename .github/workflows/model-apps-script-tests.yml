@@ -33,6 +33,7 @@ on:
             - "scripts/validate-plugin-copies.js"
             - "plugins/pcf/scripts/lib/process-runner.js"
             - "plugins/pcf/scripts/lib/sdk-http-client.js"
+            - "plugins/pcf/scripts/lib/output-redaction.js"
             - "plugins/pcf/scripts/lib/odata.js"
             - "plugins/pcf/scripts/lib/source-literals.js"
             - "plugins/pcf/scripts/lib/interaction-mode.js"
@@ -54,7 +55,7 @@ on:
 permissions:
     contents: read
 
-# A new push to the same PR supersedes the run in flight: without this, all eight jobs of the old run
+# A new push to the same PR supersedes the run in flight: without this, every job of the old run
 # kept going to completion for a result nobody reads.
 concurrency:
     group: model-apps-script-tests-${{ github.event.pull_request.number || github.ref }}
@@ -107,20 +108,26 @@ jobs:
               working-directory: plugins/model-apps
               run: node scripts/run-tests.js
 
-            # The routing eval's runner launches agent CLIs as child processes, and on Windows
-            # those are .cmd shims that must go through cmd.exe (quoting, process-tree kill). Its
-            # unit tests drive a fake agent only — no model, no credentials — so run them on every
-            # OS here; in the Ubuntu-only eval job below the Windows shim test would always skip.
-            - name: run-routing-eval-unit-tests
-              shell: bash
-              run: node --test evals/model-apps/routing/tests/*.test.js
-
+    # The eval tests and runners, on the same three systems and two Node versions as the plugin's own suite. They read
+    # committed fixtures, which a Windows checkout gives CRLF line ends (core.autocrlf), and the routing runner starts
+    # agent CLIs as child processes, which on Windows are .cmd shims that must go through cmd.exe (quoting, process-tree
+    # kill). Run on Ubuntu and Node 20 alone, a fixture or a grader that broke on another system or Node version passed CI.
     test-model-apps-evals:
-        name: test-model-apps-evals
-        runs-on: ubuntu-latest
+        name: test-model-apps-evals (${{ matrix.os }}, node ${{ matrix.node }})
+        runs-on: ${{ matrix.os }}
         timeout-minutes: 10
         env:
             POWER_PLATFORM_SKILLS_TELEMETRY_MODEL_APPS_OPTOUT: "1"
+        strategy:
+            fail-fast: false
+            matrix:
+                os:
+                    - ubuntu-latest
+                    - windows-latest
+                    - macos-latest
+                node:
+                    - 20
+                    - 22
         steps:
             - name: checkout
               uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -128,7 +135,7 @@ jobs:
             - name: setup-node
               uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
               with:
-                  node-version: 20
+                  node-version: ${{ matrix.node }}
 
             # The eval harness lives at the repo root (evals/model-apps/**) but is
             # owned by this plugin, so it is gated by the same path filter. First the
@@ -160,12 +167,23 @@ jobs:
     # CI. This job installs them for the test run only, outside the plugin (which ships no dependencies), at
     # exact versions, so a new parser release can never turn a green run red without a commit.
     test-model-apps-lexer-oracles:
-        name: test-model-apps-lexer-oracles
+        name: test-model-apps-lexer-oracles (node ${{ matrix.node }})
         runs-on: ubuntu-latest
         # The sweeps and the differential take a few minutes on top of the suite.
         timeout-minutes: 30
         env:
             POWER_PLATFORM_SKILLS_TELEMETRY_MODEL_APPS_OPTOUT: "1"
+        # Both Node versions, on one system. The lexer tells identifier characters by Unicode property escapes
+        # (\p{ID_Continue}), whose tables come with each Node version's JavaScript engine, and the parsers it is compared
+        # with carry tables of their own, so a sweep can judge differently on the other version. Each sweep compares the
+        # lexer and the parsers on the same text, so a system's own differences (line ends of a checkout, paths) reach
+        # both sides alike; the suite's differences between systems are what the matrix job above runs on all three.
+        strategy:
+            fail-fast: false
+            matrix:
+                node:
+                    - 20
+                    - 22
         steps:
             - name: checkout
               uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -173,7 +191,7 @@ jobs:
             - name: setup-node
               uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
               with:
-                  node-version: 20
+                  node-version: ${{ matrix.node }}
 
             # `--ignore-scripts` because neither package needs an install script, and `--prefix` under
             # RUNNER_TEMP so that nothing lands in the plugin's tree. The version check fails the job if a

@@ -1,0 +1,14 @@
+{
+  "contractVersion": 2,
+  "provenance": "synthetic",
+  "description": "Constructed refusal trace for eval 3's zero-pages branch, not an agent capture. The user routes to Edit existing and picks the Sales Hub app from the apps.js list output, but genpage.js list returns no generative pages in that app's navigation. The orchestrator tells the user the app has no generative pages to edit, asks whether they meant to create a new page, and stops the edit flow: no page is chosen, downloaded, planned, edited or uploaded.",
+  "contracts": [
+    "plugins/model-apps/skills/genpage/SKILL.md Phase 1: Plan (Steps 1-2, on edit jump to the Edit Flow)",
+    "plugins/model-apps/skills/genpage/edit-flow.md Edit Phase 1: Discover and Select Target App + Page (1b: 0 pages)"
+  ],
+  "expectedOutcome": "refused",
+  "refusal": {
+    "stage": "edit-pages"
+  },
+  "toolResults": "tool-results.json"
+}

@@ -24,15 +24,20 @@ instead" and back), so a wording change to one can silently start stealing the o
 
 | Field | Meaning |
 |-------|---------|
-| `expect` | The model-apps skill the agent must invoke **first** — `genpage`, `app-builder`, `report-issue`, `telemetry` — or `null` for "none of them" (a negative / bleed case) |
+| `expect` | The model-apps skill the agent must invoke **first**, at any turn (see [What counts as the decision](#what-counts-as-the-decision)) — `genpage`, `app-builder`, `report-issue`, `telemetry` — or `null` for "none of them" (a negative / bleed case) |
 | `accept` | Optional other outcomes that are also correct, for a genuinely ambiguous prompt. `null` is never implied: "ambiguous" does not mean "anything goes" |
 | `trap` | Optional. The mis-route the case exists to catch; printed when the case fails |
 | `tier` | `smoke` / `full` / `stress`, as in the other suites |
 
-The 20 committed cases cover: positives for every skill; the `/genpage` ↔ `/app-builder` boundary
+The 35 committed cases cover: positives for every skill; the `/genpage` ↔ `/app-builder` boundary
 from both sides ("add a page to my existing app" vs "an app … plus a dashboard page", "add a
 **table** to my existing app"); and negatives that share vocabulary with the plugin — Power Pages,
-canvas/Power Fx, Power Automate, a generic React dashboard, and a pure knowledge question.
+canvas/Power Fx, Power Automate, a generic React dashboard, a plain web app in the stack `/genpage` is
+written in (React, TypeScript, Fluent UI), a Power Apps code app, and a pure knowledge question. Several
+negatives say outright that the request is not for Power Platform, Dataverse or a model-driven app
+(#21–#28). The stress tier also holds positives that carry a "not" about the other skill or about the
+schema ("do not create another app", "do not change its Dataverse schema") (#29–#35): the descriptions
+rule things out, and these are how a rule-out that is read too widely would show.
 
 ## How a trial runs
 
@@ -47,7 +52,9 @@ canvas/Power Fx, Power Automate, a generic React dashboard, and a pure knowledge
 - **Read-only.** The tool set is cut to "invoke a skill + read files". The trade-off is that a real
   session offers more tools, so the model sees a slightly smaller menu.
 - **Stopped at the decision.** The JSONL transcript is parsed as it streams, and the agent is killed
-  the moment it invokes a model-apps skill, so a positive trial costs about one model turn.
+  the moment it invokes a model-apps skill, so a positive trial costs about one model turn. A run that
+  has not chosen a skill goes on to its own end, so a skill it reaches for later is seen, and graded, too
+  (see [What counts as the decision](#what-counts-as-the-decision)).
 - **Guarded.** Every trial proves the plugin's skills were loaded before its outcome counts; if they
   were not, the trial is a harness **error**, not a passing "none". Claude reports its loaded
   skills in the transcript's init event. Copilot's transcript does not, so each Copilot trial first
@@ -60,6 +67,49 @@ canvas/Power Fx, Power Automate, a generic React dashboard, and a pure knowledge
 
 Every flag is in `lib/agents.js`; every transcript shape the parser understands is documented in
 `lib/transcript.js`.
+
+## What counts as the decision
+
+A case is graded on the **first plugin skill the agent asks for, at any turn**. That is the decision a real
+session would act on, and a negative case exists to fail when the agent reaches for the plugin on a request
+that is not for it. The report also shows what the agent did in its **first turn**, beside the grade and
+never in place of it.
+
+The agent runs with a read-only menu (a skill, `view`, `glob`, `grep`: no file writes, no shell). A request
+that is plainly not for the plugin can therefore go like this: turn 0 looks at the empty workspace and
+decides that no skill applies, which is the right answer, and turn 1, with nothing to build with, asks for
+a skill as a stand-in. The grade counts that request, so the case fails, and the first turn's decision is
+what tells a stand-in from a description that pulls the request in.
+
+| | Meaning | Part of the grade |
+|---|---------|-------------------|
+| decision | the first plugin skill the agent asked for, at any turn, or none | yes: `expect` is compared with it |
+| initial decision | the plugin skill asked for in the first turn, or none | no: reported beside the grade |
+| later fallback | a plugin skill asked for only after a first turn that chose none | it is the decision; `later:` names it |
+
+The first turn is the model's first response: a skill asked for in the same response as a `view` is still a
+first-turn decision. The case line shows the first turn once a later request makes it differ from the grade:
+
+```
+not ok 21 - #21 [smoke] expect none — 1/3 (genpage×2, none×1) · first turn: 3/3 (none×3) · later: genpage×2
+# later fallbacks: 2 trial(s) in 1 case(s) chose a plugin skill only after a first turn that chose none (counted in the grade; the first-turn decision is shown beside each case)
+```
+
+Two of the three trials asked for `/genpage` after a first turn that chose none, so the case fails; its first
+turn chose none every time. A case that expects a skill and gets it only in turn 1 passes, as it always did, and
+reads `ok 1 - #1 [smoke] expect genpage — 3/3 (genpage×3) · first turn: 0/3 (none×3) · later: genpage×3`. Where
+nothing is asked for late the two decisions are the same, and the line is the plain
+`ok 1 - #1 [smoke] expect genpage — 3/3 (genpage×3)`.
+
+In the `--out` JSON each case has the grade (`status`, `rate`, `passes`, `valid`, `outcomes`), `initial` (the
+first turn's `passes`, `valid`, `rate` and `outcomes`, for every case) and `delayed` (the later fallbacks).
+Each trial has `routedTo` (the first plugin skill of the run), `initial` (the first-turn skill or `null`),
+`delayed` (the later one or `null`) and `turn` (which turn asked for the first plugin skill).
+
+Read a `later:` count as a question. In a real session the agent has file and shell tools and would do the
+work itself, so a stand-in is partly a property of this menu. A count that grows after a description edit,
+though, means the agent reached for the plugin on a request that is not for it. No option grades only the
+first turn: it would pass every negative case on any run that reads the workspace before it asks for a skill.
 
 ## Grading
 
@@ -74,15 +124,15 @@ Exit codes: `0` every case met the threshold · `1` a case failed · `2` harness
 ```
 TAP version 13
 # agent claude · model sonnet · runs 2 · threshold 2/3
-1..20
+1..35
 ok 1 - #1 [smoke] expect genpage — 2/2 (genpage×2)
 not ok 4 - #4 [smoke] expect app-builder — 1/2 (app-builder×1, genpage×1)
   ---
   prompt: "I need a Dataverse app for inventory ..."
   trap: "the word \"page\" pulling a whole-app request into /genpage"
   ...
-# cases 20 (pass 19, fail 1, error 0)
-# trials 40 (errors 0)
+# cases 35 (pass 34, fail 1, error 0)
+# trials 70 (errors 0)
 # cost >= $0.48 (killed trials do not report cost)
 ```
 
@@ -111,7 +161,9 @@ keep those local; they can contain local paths and model output.
 Measured when the suite was added: all 20 cases passed 2/2 on both Claude Code (`--model sonnet`)
 and Copilot CLI (`--model claude-sonnet-5.5`), ~5–15 s per trial. The suite is therefore a
 **regression guard** for the descriptions, not a known-failing backlog — and since every case is
-currently easy for these models, harder boundary prompts are the most useful additions.
+currently easy for these models, harder boundary prompts are the most useful additions. Cases 21–35 were
+added later: run a new one on its own (`--eval <id> --runs 3`) on the agent and model you care about
+before reading a failure as a description problem.
 
 ## Cadence
 

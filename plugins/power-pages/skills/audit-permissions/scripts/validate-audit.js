@@ -1,7 +1,13 @@
 #!/usr/bin/env node
 
+const fs = require('fs');
 const path = require('path');
-const { approve, runValidation } = require('../../../scripts/lib/validation-helpers');
+const {
+  approve,
+  block,
+  runValidation,
+  findProjectRoot,
+} = require('../../../scripts/lib/validation-helpers');
 const { validateReport } = require('../../../scripts/lib/audit-report-validation');
 
 // Telemetry is best-effort, so it is loaded only when a completion is actually
@@ -64,6 +70,19 @@ if (explicitReport) {
     fail(error);
   }
 } else {
-  // The PostToolUse(Skill) hook fires before the audit writes its report, so it can only see a previous run; Step 7.4 validates the new report.
-  runValidation(() => approve());
+  runValidation((cwd) => {
+    const projectRoot = findProjectRoot(cwd);
+    if (!projectRoot) approve();
+
+    const docsReport = path.join(projectRoot, 'docs', 'permissions-audit.html');
+    if (fs.existsSync(docsReport)) {
+      const content = fs.readFileSync(docsReport, 'utf8');
+      if (content.includes('__FINDINGS_DATA__') || content.includes('__INVENTORY_DATA__')) {
+        block('Audit report has unreplaced placeholders - data was not populated.');
+      }
+    }
+
+    // The hook fires before a new audit writes its report, so a missing report is valid.
+    approve();
+  });
 }

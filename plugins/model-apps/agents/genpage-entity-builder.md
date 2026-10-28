@@ -5,6 +5,9 @@ description: >-
   in genpage-plan.md using the plugin's Node.js Web API scripts. Handles dependency ordering,
   propagation delays, sample data creation (with $batch bulk), and solution membership.
   Called by the genpage skill when new entities need creating — not invoked directly by users.
+  Works only on generative pages in a Power Apps model-driven app. Never use it for a
+  generic React or web app, or when the user rules out Power Platform, Dataverse, or
+  model-driven apps (for example "no Power Platform").
 color: yellow
 # Two naming schemes on purpose: Claude Code names first, then the portable
 # Copilot aliases for the same capabilities. Every host ignores tool names it
@@ -174,7 +177,8 @@ You will populate each section as you provision entities in Step 5.
 
 ## Step 4 — Build Provisioning Input JSON
 
-Create a `TaskCreate` task: "Build entity provisioning input".
+If you have a task tool (`TaskCreate`, or `todo`), create a task: "Build entity provisioning
+input". If you have none, skip this and never say you created a task.
 
 From the parsed `## Entity Creation Required` + `## Environment` data (Step 1),
 construct a single JSON file at `<working-dir>/provision-input.json` with the
@@ -212,7 +216,9 @@ check is best-effort: if that read fails, provisioning proceeds unchanged.
 A `⚠ could not determine the organization's base language …` warning on stderr
 means discovery failed and 1033 was assumed — pass the flag explicitly.
 
-The input JSON follows the App Spec format. Build it with:
+The input JSON follows the App Spec format — the keys of `entities[]` and `relationships[]` in
+`${PLUGIN_ROOT}/references/app-spec-schema.md` — and `provision-entities.js` validates it with the same
+rules, so a key it does not take is refused before anything is written. Build it with:
 
 ```json
 {
@@ -224,20 +230,18 @@ The input JSON follows the App Spec format. Build it with:
     {
       "schemaName": "${PREFIX}_<TableSuffixPascal>",
       "displayName": "<Display Name>",
-      "pluralDisplayName": "<Display Plural>",
+      "pluralName": "<Display Plural>",
       "description": "<description>",
-      "primaryNameAttribute": {
+      "primaryAttribute": {
         "schemaName": "${PREFIX}_name",
         "displayName": "<Primary Name Display>",
         "maxLength": 100
       },
-      "attributes": [
+      "columns": [
         {
           "schemaName": "${PREFIX}_<columnSuffix>",
           "displayName": "<Column Display>",
-          "type": "<AppSpecType>",
-          "requiredLevel": "None",
-          ...typeSpecificProperties
+          "type": "<App Spec Type>"
         }
       ]
     }
@@ -245,18 +249,20 @@ The input JSON follows the App Spec format. Build it with:
   "relationships": [
     {
       "type": "OneToMany",
-      "referencedEntity": "${PREFIX}_<parentSuffix>",
-      "referencingEntity": "${PREFIX}_<childSuffix>",
+      "referenced": "${PREFIX}_<parentSuffix>",
+      "referencing": "${PREFIX}_<childSuffix>",
       "lookup": {
         "schemaName": "${PREFIX}_<LookupSuffixPascal>",
-        "displayName": "<Lookup Display>",
-        "requiredLevel": "None"
-      },
-      "cascadeDelete": "RemoveLink"
+        "displayName": "<Lookup Display>"
+      }
     }
   ]
 }
 ```
+
+Give each column the properties its type takes (the table below). A column the plan marks
+**Required: yes** gets `"required": true` (`"recommended"` for a recommended one); leave `required`
+out of the others. A lookup is not a column: declare it as a relationship (below).
 
 ### Type Mapping (Plan → App Spec)
 
@@ -265,16 +271,21 @@ App Spec types:
 
 | Plan Type | App Spec Type | Additional Properties |
 |-----------|---------------|----------------------|
-| `string` | `Text` | `maxLength`, `format` (e.g., `"Email"`) |
-| `int`, `integer` | `Integer` | `min`, `max` |
-| `decimal` | `Decimal` | `precision`, `min`, `max` |
-| `money` | `Money` | `precision`, `min`, `max` |
-| `memo` | `Memo` | `maxLength`, `format` (e.g., `"TextArea"`) |
-| `datetime` | `DateTime` | `format` (e.g., `"DateOnly"`), `behavior` |
-| `boolean` | `Boolean` | `defaultValue`, `trueLabel`, `falseLabel` |
-| `picklist` | `Choice` | `options: [{"label": "...", "value": 100000000}, ...]` |
+| `string` | `Text` | `maxLength`, `format` (`Text`, `Email`, `Url` or `Phone`) |
+| `int`, `integer` | `Integer` | `minValue`, `maxValue` |
+| `decimal` | `Decimal` | `precision`, `minValue`, `maxValue` |
+| `money` | `Money` | `precision`, `minValue`, `maxValue` |
+| `memo` | `Memo` | `maxLength` |
+| `datetime` | `DateTime` | `dateFormat` (`DateOnly` or `DateAndTime`) |
+| `boolean` | `Boolean` | `defaultValue` (true or false), `trueLabel`, `falseLabel` |
+| `picklist` | `Choice` | `options`: the option labels in the plan's order, e.g. `["Low", "Medium", "High"]` |
 
-For Choice columns, each option's value is `100000000 + index` (0-based).
+For Choice columns, each option is its **label**: a string, or — for a label in several languages — a
+map of LCID to label such as `{"1033": "Low", "1036": "Bas"}`. Never write an option as a
+`{"label", "value"}` object: `provision-entities.js` refuses that shape before anything is written
+(`'label' is not an LCID`). The values are not written either: the options are numbered
+`100000000 + index` (0-based) in the order given — the values the plan's `Choice Columns` lists — so keep
+the plan's order.
 
 ### Relationship Mapping
 
@@ -283,16 +294,18 @@ For Choice columns, each option's value is `100000000 + index` (0-based).
 ```json
 {
   "type": "OneToMany",
-  "referencedEntity": "${PREFIX}_<parentTableSuffix>",
-  "referencingEntity": "${PREFIX}_<childTableSuffix>",
+  "referenced": "${PREFIX}_<parentTableSuffix>",
+  "referencing": "${PREFIX}_<childTableSuffix>",
   "lookup": {
     "schemaName": "${PREFIX}_<LookupSuffixPascal>",
-    "displayName": "<Lookup Display Name>",
-    "requiredLevel": "None"
-  },
-  "cascadeDelete": "RemoveLink"
+    "displayName": "<Lookup Display Name>"
+  }
 }
 ```
+
+`referenced` is the parent (the "one" side) and `referencing` the child that gets the lookup column. The
+input has no cascade setting, so a relationship is created with Dataverse's default cascade behaviour; if
+the plan's `Cascade` column asks for another, say so in your result so that it can be set in Power Apps.
 
 **N:N relationships:**
 
@@ -306,11 +319,12 @@ For Choice columns, each option's value is `100000000 + index` (0-based).
 
 Write the completed JSON to `<working-dir>/provision-input.json`.
 
-Mark the task complete.
+Mark the task complete (if you created one).
 
 ## Step 5 — Provision Entities via SDK
 
-Create a `TaskCreate` task: "Provision entities to Dataverse".
+If you have a task tool (`TaskCreate`, or `todo`), create a task: "Provision entities to
+Dataverse". If you have none, skip this and never say you created a task.
 
 Run the single provisioning command:
 
@@ -417,7 +431,7 @@ node "${PLUGIN_ROOT}/scripts/provision-entities.js" --env "$ENV_URL" --input @<w
 
 If sample data is created (Step 7), append `--sample-data` to the command.
 
-Mark the task complete.
+Mark the task complete (if you created one).
 
 ## Step 6 — Ask About Sample Data
 

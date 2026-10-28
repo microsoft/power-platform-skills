@@ -16,6 +16,7 @@ on:
             - "scripts/validate-plugin-copies.js"
             - "plugins/model-apps/scripts/lib/process-runner.js"
             - "plugins/model-apps/scripts/lib/sdk-http-client.js"
+            - "plugins/model-apps/scripts/lib/output-redaction.js"
             - "plugins/model-apps/scripts/lib/odata.js"
             - "plugins/model-apps/scripts/lib/source-literals.js"
             - "plugins/model-apps/scripts/lib/interaction-mode.js"
@@ -66,19 +67,28 @@ jobs:
             - name: run-pcf-script-tests
               shell: bash
               run: node scripts/run-tests.js
+    # The eval tests and the full eval run, on the same three systems and two Node versions as the script tests: they
+    # read committed control projects, which a Windows checkout gives CRLF line ends (core.autocrlf), through the
+    # plugin's own manifest and source gates. Run on Ubuntu and Node 20 alone, a case that broke on another system or
+    # Node version passed CI.
     test-pcf-evals:
-        name: test-pcf-evals
-        runs-on: ubuntu-latest
+        name: test-pcf-evals (${{ matrix.os }}, node ${{ matrix.node }})
+        runs-on: ${{ matrix.os }}
         timeout-minutes: 20
         env:
             POWER_PLATFORM_SKILLS_TELEMETRY_PCF_OPTOUT: "1"
+        strategy:
+            fail-fast: false
+            matrix:
+                os: [ubuntu-latest, windows-latest, macos-latest]
+                node: [20, 22]
         steps:
             - name: checkout
               uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
             - name: setup-node
               uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
               with:
-                  node-version: 20
+                  node-version: ${{ matrix.node }}
             - name: run-pcf-eval-tests
               shell: bash
               run: node --test evals/pcf/tests/*.test.js

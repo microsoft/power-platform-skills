@@ -2,7 +2,12 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 
 const { validateSiteSettings } = require('../lib/site-settings-validator');
-const { createTempProject, writeProjectFile, findingMessages } = require('./test-utils');
+const {
+  createTempNonSpaSite,
+  createTempProject,
+  writeProjectFile,
+  findingMessages,
+} = require('./test-utils');
 
 test('validateSiteSettings accepts optional description and value', (t) => {
   const projectRoot = createTempProject(t);
@@ -121,5 +126,25 @@ test('validateSiteSettings rejects wildcard Web API fields when the setting name
   const result = validateSiteSettings(projectRoot);
   assert.ok(findingMessages(result.findings).some(message =>
     message.includes('uses unsupported wildcard field access')
+  ));
+});
+
+test('validateSiteSettings rejects unexpected keys in aggregate PAC records', (t) => {
+  const siteRoot = createTempNonSpaSite(t);
+  writeProjectFile(
+    siteRoot,
+    'sitesetting.yml',
+    [
+      '- adx_name: Webapi/product/enabled',
+      '  adx_sitesettingid: e9981fe5-6724-4111-8341-6045bd001091',
+      '  adx_value: true',
+      '  adx_vlaue: false',
+      '',
+    ].join('\n')
+  );
+
+  const result = validateSiteSettings(siteRoot);
+  assert.ok(findingMessages(result.findings).some(message =>
+    message.includes('unexpected schema keys: adx_vlaue')
   ));
 });

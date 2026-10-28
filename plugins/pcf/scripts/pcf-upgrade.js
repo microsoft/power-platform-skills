@@ -4,6 +4,7 @@
 const path = require('node:path');
 const { parseArgs, validateFlags, emitResult } = require('./lib/dataverse-auth.js');
 const { runUpgrade } = require('./lib/pcf-upgrade.js');
+const { makeWritesBlocking } = require('./lib/output-redaction.js');
 
 const USAGE = `Usage:
   node scripts/pcf-upgrade.js [--project <dir>] [--hosts model,pages] [--apply] [--steps <id,...>] [--allow-dirty] [--no-install] [--npm-cli <path>]`;
@@ -13,6 +14,7 @@ const NEED_VALUE = ['project', 'hosts', 'steps', 'npm-cli'];
 const KNOWN_HOSTS = ['model', 'pages'];
 
 function usageError(message) {
+  makeWritesBlocking(process.stdout, process.stderr);
   process.stderr.write(`${USAGE}\n${message}\n`);
   process.exit(1);
 }

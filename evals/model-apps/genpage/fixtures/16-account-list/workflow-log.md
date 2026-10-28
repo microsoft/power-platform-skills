@@ -37,13 +37,13 @@ working directory, so file arguments are relative to it.
 
 ### Discovery (genpage-planner dispatched via Task as a headless worker)
 - Dispatched `Task genpage-planner` with the requirements, working directory, plugin root, create/edit decision = create, `No connector bindings.` (connectors.json: none — omit --connectors) and `No custom API bindings.` (actions.json: none — omit --actions)
-- Planner ran `pac model list-languages` → English (1033) only, no RTL language
-- Planner ran `pac model list-tables --search 'account'` → exact logical-name match `account` (also listed: accountleads, msdyn_accountkpiitem — not exact matches, ignored); account already exists, so no entity creation
-- Planner ran `pac model list` → 2 apps: Sales Hub (11111111-2222-3333-4444-555555555555), Customer Service Hub (44444444-5555-6666-7777-888888888888)
+- Planner ran `node 'D:/repo/plugins/model-apps/scripts/list-languages.js' --env 'https://contoso.crm.dynamics.com'` → English (1033) only, no RTL language
+- Planner ran `node 'D:/repo/plugins/model-apps/scripts/list-tables.js' --env 'https://contoso.crm.dynamics.com' --search 'account' --exact` → 1 table: `account` (exact logical-name match, nothing in `missing`); account already exists, so no entity creation
+- Planner ran `node 'D:/repo/plugins/model-apps/scripts/apps.js' list --env 'https://contoso.crm.dynamics.com'` → 2 apps: Sales Hub (11111111-2222-3333-4444-555555555555), Customer Service Hub (44444444-5555-6666-7777-888888888888); both published, neither with unpublished changes
 - Planner returned the discovery summary and `{ "action": "needs_input" }` for the app choice; no connector or Custom API need was found
 
 ### App selection
-- AskUserQuestion: Which app should the page be added to? (options from the `pac model list` output: Sales Hub — 11111111-2222-3333-4444-555555555555; Customer Service Hub — 44444444-5555-6666-7777-888888888888; Create a new app) → Sales Hub (existing app)
+- AskUserQuestion: Which app should the page be added to? (options from the `apps.js list` output: Sales Hub — 11111111-2222-3333-4444-555555555555; Customer Service Hub — 44444444-5555-6666-7777-888888888888; Create a new app) → Sales Hub (existing app)
 
 ### Solution selection
 - Code-only build (no new entities, existing app) → solution selection question SKIPPED
@@ -68,7 +68,7 @@ working directory, so file arguments are relative to it.
 - SKIPPED app creation: existing app Sales Hub (11111111-2222-3333-4444-555555555555) selected
 
 ## Phase 4 — RuntimeTypes
-- `pac model genpage generate-types --data-sources 'account' --output-file 'D:/work/account-records/RuntimeTypes.ts'`
+- `node 'D:/repo/plugins/model-apps/scripts/genpage.js' types --env 'https://contoso.crm.dynamics.com' --data-sources 'account' --output-file 'D:/work/account-records/RuntimeTypes.ts'`
 - Read RuntimeTypes.ts: verified accountid, name, accountnumber, telephone1, address1_city and the `_primarycontactid_value` foreign key (display name comes from its FormattedValue annotation; `primarycontactidname` is not selectable)
 
 ## Phase 4.5 — Connector bindings

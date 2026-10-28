@@ -1,0 +1,1 @@
+Widget list over the new cr_widget table: a sortable grid of every widget with its name, SKU and quantity on hand; the widget name opens the Dataverse record; window cache with in-flight de-dupe.

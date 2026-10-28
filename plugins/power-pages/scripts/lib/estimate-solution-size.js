@@ -86,30 +86,27 @@ function parseArgs(argv) {
 // Phase 1 via detect-project-context.js, the authoritative source), and fall
 // back to a lightweight local probe of the same markers detect-project-context.js
 // resolves on (also described in the plugin's AGENTS.md "detect-project-context.js" entry):
-//   - `powerpages.config.json`          → code / SPA site
-//   - `.powerpages-site/.portalconfig/` → declarative design-studio (EDM/standard) site
-// Returns the canonical values ('code' | 'declarative') to match
-// detect-project-context.js — NOT the old hardcoded 'code-site', which mislabeled
-// every declarative/EDM site as a code site. ('declarative' was formerly labeled
-// 'data-model'; a caller still passing the legacy 'data-model' is NORMALIZED to
-// 'declarative' so the output is always canonical.) Returns 'unknown' when neither
-// marker is present (e.g. running outside a project root).
+//   - `powerpages.config.json`          → SPA site
+//   - `.powerpages-site/.portalconfig/` → non-SPA Design Studio site
+// Returns the canonical values (`spa` | `non-spa`). Released callers and persisted
+// plans may still provide `code`, `declarative`, or `data-model`; normalize those
+// legacy values before emitting the diagnostic field. Returns `unknown` when neither
+// marker is present, such as when running outside a project root.
 function resolveSiteType(explicitSiteType, projectRoot) {
-  // Normalize the caller-supplied label. 'data-model' is the legacy alias for
-  // 'declarative' (back-compat). Only canonical labels are trusted verbatim;
-  // anything else — notably an unsubstituted "{SITE_TYPE}" template literal an
+  // Only canonical labels and known legacy aliases are trusted. Anything else —
+  // notably an unsubstituted "{SITE_TYPE}" template literal an
   // agent forwarded without resolving it — is IGNORED in favor of the local
   // marker probe, so garbage never lands in the diagnostic output.
-  if (explicitSiteType === 'data-model') return 'declarative';
-  if (explicitSiteType === 'code' || explicitSiteType === 'declarative' || explicitSiteType === 'unknown') {
-    return explicitSiteType;
-  }
+  if (explicitSiteType === 'spa' || explicitSiteType === 'unknown') return explicitSiteType;
+  if (explicitSiteType === 'non-spa') return 'non-spa';
+  if (explicitSiteType === 'code') return 'spa';
+  if (explicitSiteType === 'declarative' || explicitSiteType === 'data-model') return 'non-spa';
   if (!projectRoot) return 'unknown';
   const fs = require('fs');
   const path = require('path');
   try {
-    if (fs.existsSync(path.join(projectRoot, 'powerpages.config.json'))) return 'code';
-    if (fs.existsSync(path.join(projectRoot, '.powerpages-site', '.portalconfig'))) return 'declarative';
+    if (fs.existsSync(path.join(projectRoot, 'powerpages.config.json'))) return 'spa';
+    if (fs.existsSync(path.join(projectRoot, '.powerpages-site', '.portalconfig'))) return 'non-spa';
   } catch {
     // Filesystem probe is best-effort — a diagnostic label must never be fatal.
   }
@@ -680,7 +677,7 @@ function walkDirectoryBytes(rootPath) {
   return { totalBytes, fileCount };
 }
 
-// Detects the build-output directory for a Power Pages code site. Order
+// Detects the build-output directory for a Power Pages SPA site. Order
 // matches the conventional outputs across supported frameworks (Vite, Astro,
 // Angular CLI, Nuxt-static fallback). Returns null if none of the candidates
 // exist as directories.
@@ -796,7 +793,7 @@ async function estimateSolutionSize({ envUrl, websiteRecordId, token, publisherP
   // Truncation canary — ask Dataverse for the authoritative row count and
   // compare against what discoverPowerPageComponents returned. If they disagree
   // by more than a small margin, pagination is broken (or the data changed
-  // mid-scan, which is rare for code-site inventory). Cheap: one extra
+  // mid-scan, which is rare for SPA inventory). Cheap: one extra
   // round-trip with `$count=true&$top=1`.
   const ppcGroundTruthCount = await countOData(
     envUrl,
@@ -1059,7 +1056,7 @@ async function estimateSolutionSize({ envUrl, websiteRecordId, token, publisherP
     // The disk total is the byte sum of EVERY file under the build output dir —
     // including HTML pages, source maps, and other artifacts that Power Pages
     // doesn't ship as `powerpagecomponents` type-3 web files (HTML uploads as
-    // type-2 web pages instead). For HTML-dominated code sites, the disk total
+    // type-2 web pages instead). For HTML-dominated SPA sites, the disk total
     // can legitimately exceed the Dataverse web-files total without indicating
     // an undercount. The strong signal is when disk ≫ Dataverse AND the
     // dominant disk content is media/assets (image/font/binary extensions),
@@ -1165,8 +1162,8 @@ async function estimateSolutionSize({ envUrl, websiteRecordId, token, publisherP
     // scope so reviewers can spot the divergence.
     envVarCountTenantWide,
     mediaRatio: Math.round(webMeasure.mediaRatio * 100) / 100,
-    // Build-axis label: 'code' | 'declarative' | 'unknown' (was hardcoded
-    // 'code-site', which mislabeled every declarative/EDM site). Prefers the
+    // Build-axis label: 'spa' | 'non-spa' | 'unknown' (was hardcoded
+    // 'code-site', which mislabeled every non-SPA site). Prefers the
     // caller-supplied --siteType (plan-alm Phase 1), falls back to a local marker probe.
     siteType: resolveSiteType(siteType, projectRoot),
     tables: tables.map((t) => ({ logicalName: t.logicalName, attributeCount: t.attributeCount || 0 })),

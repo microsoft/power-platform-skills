@@ -139,3 +139,63 @@ test('ADO 6691205 download: a minimal downloaded relationship validates and rebu
   assert.deepStrictEqual(checked.errors.filter((e) => /lookup|relationship/i.test(e)), []);
   assert.strictEqual(lookupColumnsFor(spec, 'new_ticket')[0].displayName, 'Customer');
 });
+
+// A lookup label held in one language other than the download's authoring language keeps its language (a one-entry LCID map, as
+// labelFromDataverse writes every such label), so a rebuild does not store it under the language it resolves. It is left out only where
+// it was left out before AND a rebuild writes the same label in the same language: the in-app parent's downloaded label (a map as it is,
+// a plain string in the authoring language), or a stock parent's label in the authoring language, the one the build reads for it.
+const readIn = (sdk, entities, languageCode) => readRelationships(sdk, ['new_customer', 'new_ticket'], 'new', undefined, { entities, languageCode });
+const stockAgent = (lookupLabel, parentLabel = label([1033, 'User'], [1036, 'Utilisateur'])) => makeSdk({
+  m2o: { new_ticket: [rel({ SchemaName: 'new_systemuser_new_ticket', ReferencedEntity: 'systemuser', ReferencingEntity: 'new_ticket', ReferencingAttribute: 'new_agentid' })] },
+  lookups: { new_ticket: [{ LogicalName: 'new_agentid', SchemaName: 'new_AgentId', DisplayName: lookupLabel, Targets: ['systemuser'] }] },
+  parents: { systemuser: parentLabel },
+});
+
+test('a carried lookup label held only in another language than the authoring one keeps its language', async () => {
+  const { relationships } = await readIn(makeSdk(ticketToCustomer(label([3082, 'Titular']))), [customer('Customer'), ticket()], 1033);
+  assert.deepStrictEqual(relationships[0].lookup, { schemaName: 'new_CustomerId', displayName: { 3082: 'Titular' } });
+  const authoring = await readIn(makeSdk(ticketToCustomer(label([3082, 'Titular']))), [customer('Customer'), ticket()], 3082);
+  assert.deepStrictEqual(authoring.relationships[0].lookup, { schemaName: 'new_CustomerId', displayName: 'Titular' }, 'in the authoring language it is the plain string');
+});
+
+test('a lookup label is left out where a rebuild writes the same label in the same language', async () => {
+  // The parent table labelled only in Spanish is downloaded as { 3082: "Cliente" }; a lookup labelled "Cliente" in Spanish is the
+  // label a rebuild inherits from it, so it is left out, as it was when both were the plain string "Cliente".
+  const inApp = await readIn(makeSdk(ticketToCustomer(label([3082, 'Cliente']))), [customer({ 3082: 'Cliente' }), ticket()], 1033);
+  assert.deepStrictEqual(inApp.relationships[0].lookup, { schemaName: 'new_CustomerId' });
+  const plain = await readIn(makeSdk(ticketToCustomer(label([1033, 'Customer']))), [customer('Customer'), ticket()], 1033);
+  assert.deepStrictEqual(plain.relationships[0].lookup, { schemaName: 'new_CustomerId' }, 'a plain parent label is in the authoring language');
+  const several = await readIn(makeSdk(ticketToCustomer(label([1033, 'Customer'], [3082, 'Cliente']))), [customer({ 1033: 'Customer', 3082: 'Cliente' }), ticket()], 1033);
+  assert.deepStrictEqual(several.relationships[0].lookup, { schemaName: 'new_CustomerId' }, 'a map is compared language for language');
+  assert.deepStrictEqual((await readIn(stockAgent(label([1033, 'User'])), [ticket()], 1033)).relationships[0].lookup, { schemaName: 'new_AgentId' },
+    'a stock parent\'s label in the authoring language is the one the build reads');
+  assert.deepStrictEqual((await readIn(stockAgent(label([1036, 'Utilisateur'])), [ticket()], 1036)).relationships[0].lookup, { schemaName: 'new_AgentId' },
+    'downloaded in French, the French label is the one the build reads');
+  const oldDefault = await readIn(makeSdk(ticketToCustomer(label([3082, 'new_customer']))), [customer('Customer'), ticket()], 1033);
+  assert.deepStrictEqual(oldDefault.relationships[0].lookup, { schemaName: 'new_CustomerId' }, 'the old default is left out in any language');
+});
+
+test('a lookup label with its in-app parent\'s text in ANOTHER language is carried, in its own language', async () => {
+  // A lookup that sets no label inherits its parent's label, language and all. With the parent labelled only in French and the lookup
+  // only in English, leaving the lookup's label out would move it into French on a rebuild — the same text is not the same label.
+  const english = await readIn(makeSdk(ticketToCustomer(label([1033, 'Contact']))), [customer({ 1036: 'Contact' }), ticket()], 1033);
+  assert.deepStrictEqual(english.relationships[0].lookup, { schemaName: 'new_CustomerId', displayName: 'Contact' });
+  const french = await readIn(makeSdk(ticketToCustomer(label([1036, 'Contact']))), [customer('Contact'), ticket()], 1033);
+  assert.deepStrictEqual(french.relationships[0].lookup, { schemaName: 'new_CustomerId', displayName: { 1036: 'Contact' } });
+  const fewer = await readIn(makeSdk(ticketToCustomer(label([3082, 'Cliente']))), [customer({ 1033: 'Customer', 3082: 'Cliente' }), ticket()], 1033);
+  assert.deepStrictEqual(fewer.relationships[0].lookup, { schemaName: 'new_CustomerId', displayName: { 3082: 'Cliente' } }, 'one of the parent\'s languages is not all of them, as before');
+});
+
+test('a lookup to a stock table is compared with the label the build reads for it in the authoring language, not in the lookup\'s own', async () => {
+  // The build reads a stock parent's label in its authoring language and writes it in that language (lib/lookup-labels.js
+  // makeTableLabelReader), so a lookup labelled in another language is not what a rebuild writes, even where the parent's label in that
+  // language has the same text.
+  const french = await readIn(stockAgent(label([1036, 'Utilisateur'])), [ticket()], 1033);
+  assert.deepStrictEqual(french.relationships[0].lookup, { schemaName: 'new_AgentId', displayName: { 1036: 'Utilisateur' } });
+  const english = await readIn(stockAgent(label([1033, 'User'])), [ticket()], 1036);
+  assert.deepStrictEqual(english.relationships[0].lookup, { schemaName: 'new_AgentId', displayName: { 1033: 'User' } });
+  // A stock parent with no label in the authoring language: the build would write its English label in Spanish. The label is carried,
+  // as it was before, rather than left out on a guess about what another environment's table is called.
+  const noSpanish = await readIn(stockAgent(label([3082, 'User']), label([1033, 'User'])), [ticket()], 3082);
+  assert.deepStrictEqual(noSpanish.relationships[0].lookup, { schemaName: 'new_AgentId', displayName: 'User' });
+});

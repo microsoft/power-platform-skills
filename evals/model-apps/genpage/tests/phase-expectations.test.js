@@ -20,6 +20,10 @@ const { loadFixtures } = require('../lib/fixture-loader.js');
 
 const FIXTURES = loadFixtures(path.join(__dirname, '..', 'fixtures'));
 
+// The two fixtures whose app listing and app create are graded in the last section of the file, where all of eval 8's tests are (eval 3 has more under its own heading).
+const E3 = '3-contacts-edit-search-sort';
+const E8 = '8-account-metrics-new-app';
+
 function committed(dirName) {
   const fixture = FIXTURES.find((f) => f.dirName === dirName);
   assert.ok(fixture, `committed fixture ${dirName} exists`);
@@ -83,18 +87,36 @@ test('eval 2: the data-source question resolves to mock data and no entity detec
   const base = committed('2-mock-dashboard');
   assertFail(grade(text, { ...base, workflowLog: `${base.workflowLog}\n- \`pac model list-tables --search 'account'\` — account exists\n` }),
     /entity detection ran/);
+  assertFail(grade(text, { ...base, workflowLog: `${base.workflowLog}\n- \`node scripts/list-tables.js --env https://contoso.crm.dynamics.com --search 'account' --exact\` — account exists\n` }),
+    /entity detection ran/);
   assertFail(grade(text, mutated('2-mock-dashboard', 'genpagePlan', '(none — mock data page)', 'account')), /existing entities \(account\)/);
 });
 
 // --- Eval 4 ------------------------------------------------------------------------------------
 
 test('eval 4: list-tables confirms incident and contact as existing tables', () => {
-  const text = "Phase 1 (Planner): pac model list-tables --search 'incident,contact' is run; both entities confirmed as existing";
+  const text = "Phase 1 (Planner): list-tables.js --search 'incident,contact' --exact is run; both entities confirmed as existing";
   assertPass(grade(text, committed('4-case-wizard')));
   assertFail(grade(text, mutated('4-case-wizard', 'workflowLog', "--search 'incident,contact'", "--search 'incident'")),
-    /no pac model list-tables --search covered contact/);
+    /no list-tables --search covered contact/);
   assertFail(grade(text, mutated('4-case-wizard', 'genpagePlan', '## Existing Entities\n\nincident, contact', '## Existing Entities\n\nincident')),
     /does not confirm contact/);
+});
+
+// scripts/list-tables.js answers as data: `tables` holds the rows, `missing` the terms no table has (with --exact). The check reads that, and still reads the prose of a capture made before it.
+const LIST_TABLES_JS = "node 'D:/repo/plugins/model-apps/scripts/list-tables.js' --env 'https://contoso.crm.dynamics.com'";
+const tableRow = (logicalName) => ({ logicalName, displayName: logicalName, schemaName: logicalName, isCustom: false });
+
+test('eval 4: list-tables.js results are read as data — a table that is in `tables` exists, one in `missing` does not', () => {
+  const text = "Phase 1 (Planner): list-tables.js --search 'incident,contact' --exact is run; both entities confirmed as existing";
+  const found = { ok: true, search: ['incident', 'contact'], exact: true, count: 2, tables: [tableRow('incident'), tableRow('contact')], missing: [] };
+  const withSearch = (result) => ({ ...committed('4-case-wizard'), events: [{ id: 'list-tables', command: `${LIST_TABLES_JS} --search 'incident,contact' --exact`, result }] });
+  assertPass(grade(text, withSearch(found)));
+  assertFail(grade(text, withSearch({ ...found, count: 1, tables: [tableRow('incident')], missing: ['contact'] })), /list-tables recorded contact as not found/);
+  // A substring search returns more rows than the table it was asked for: only an exact logical name counts.
+  assertFail(grade(text, withSearch({ ...found, exact: false, tables: [tableRow('incident'), tableRow('contactleads')], missing: [] })), /list-tables recorded contact as not found/);
+  // A failed read says nothing about the tables, and is not "they exist".
+  assertFail(grade(text, withSearch({ ok: false, error: 'the read failed', code: 'CONNECTION_ERROR' })), /list-tables failed, so incident was not confirmed to exist/);
 });
 
 test('eval 4: the entity-builder is skipped when every table exists', () => {
@@ -106,11 +128,11 @@ test('eval 4: the entity-builder is skipped when every table exists', () => {
   assertFail(grade(text, { ...base, genpagePlan: committed('7-job-candidates-new-entities').genpagePlan }), /plan schedules entity creation/);
 });
 
-test('eval 4: generate-types runs with exactly incident and contact', () => {
-  const text = "Phase 4: pac model genpage generate-types --data-sources 'incident,contact' is run";
+test('eval 4: genpage.js types runs with exactly incident and contact', () => {
+  const text = "Phase 4: genpage.js types --data-sources 'incident,contact' is run";
   assertPass(grade(text, committed('4-case-wizard')));
   assertFail(grade(text, mutated('4-case-wizard', 'workflowLog', "generate-types --data-sources 'incident,contact'", "generate-types --data-sources 'incident'")),
-    /no generate-types run has --data-sources incident,contact \(saw incident\)/);
+    /no genpage\.js types run has --data-sources incident,contact \(saw incident\)/);
   assertFail(grade(text, mutated('4-case-wizard', 'workflowLog', 'pac model genpage generate-types', 'generate types')), /was not run/);
 });
 
@@ -141,12 +163,12 @@ test('eval 5: task exists and the plan maps the three kanban columns to status v
   const text = 'Phase 1 (Planner): task entity confirmed as existing; plan describes kanban with 3 columns mapped to task statecode/statuscode values';
   assertPass(grade(text, committed('5-kanban-task-board')));
   assertFail(grade(text, mutated('5-kanban-task-board', 'workflowLog', "list-tables --search 'task'", "list-tables --search 'account'")),
-    /no pac model list-tables --search covered task/);
+    /no list-tables --search covered task/);
   assertFail(grade(text, mutated('5-kanban-task-board', 'genpagePlan', 'Three columns mapped to task statuscode values', 'Three columns')),
     /does not map the columns to task statuscode\/statecode/);
 });
 
-test('eval 5: status values identified after generate-types match the generated RuntimeTypes.ts', () => {
+test('eval 5: status values identified after the type generator match the generated RuntimeTypes.ts', () => {
   const text = 'Phase 4: RuntimeTypes.ts is read — status field enum values are identified for column mapping';
   assertPass(grade(text, committed('5-kanban-task-board')));
   assertFail(grade(text, mutated('5-kanban-task-board', 'workflowLog', '`"In Progress" = 3`', '`"In Progress" = 2`')),
@@ -163,13 +185,24 @@ test('eval 5: status values identified after generate-types match the generated 
 const E7 = '7-job-candidates-new-entities';
 
 test('eval 7: list-tables records both new tables as absent on an exact match', () => {
-  const text = 'Phase 1 (Planner): pac model list-tables --search confirms cr_candidate and cr_jobrequisition do NOT exist (exact logical-name match, not fuzzy)';
+  const text = 'Phase 1 (Planner): list-tables.js --search --exact confirms cr_candidate and cr_jobrequisition do NOT exist (named in missing — an exact logical-name match, not fuzzy)';
   assertPass(grade(text, committed(E7)));
   assertFail(grade(text, mutated(E7, 'workflowLog', "--search 'cr_candidate'` — exact logical-name match: NOT FOUND", "--search 'cr_candidate'` — fuzzy match: NOT FOUND")),
     /cr_candidate does not rest on an exact logical-name match/);
   assertFail(grade(text, mutated(E7, 'workflowLog', "--search 'cr_jobrequisition'` — exact logical-name match: NOT FOUND", "--search 'cr_jobrequisition'` — exact logical-name match: cr_jobrequisition")),
     /does not record cr_jobrequisition as absent/);
   assertFail(grade(text, mutated(E7, 'genpagePlan', '### candidate', '### applicant')), /no "### candidate" block/);
+});
+
+test('eval 7: list-tables.js --exact names both tables in `missing`; a fuzzy reading of a longer name is not an absence', () => {
+  const text = 'Phase 1 (Planner): list-tables.js --search --exact confirms cr_candidate and cr_jobrequisition do NOT exist (named in missing — an exact logical-name match, not fuzzy)';
+  const absent = { ok: true, search: ['cr_candidate', 'cr_jobrequisition'], exact: true, count: 0, tables: [], missing: ['cr_candidate', 'cr_jobrequisition'] };
+  const withSearch = (result, flags = '--exact') => ({ ...committed(E7), events: [{ id: 'list-tables', command: `${LIST_TABLES_JS} --search 'cr_candidate,cr_jobrequisition' ${flags}`, result }] });
+  assertPass(grade(text, withSearch(absent)));
+  // Without --exact the same two terms can return longer names (`cr_candidatenote`) and no row of the exact name: the table is still absent, but only the data says so, not --exact.
+  assertFail(grade(text, withSearch({ ...absent, exact: false, count: 1, tables: [tableRow('cr_candidatenote')], missing: [] }, '')), /cr_candidate does not rest on an exact logical-name match/);
+  assertFail(grade(text, withSearch({ ...absent, count: 1, tables: [tableRow('cr_candidate')], missing: ['cr_jobrequisition'] })), /does not record cr_candidate as absent/);
+  assertFail(grade(text, withSearch({ ok: false, error: 'the read failed', code: 'CONNECTION_ERROR' })), /list-tables failed, so cr_candidate was not confirmed to be absent/);
 });
 
 test('eval 7: the plan defines both tables with typed columns and the candidate → jobrequisition lookup', () => {
@@ -257,13 +290,13 @@ test('eval 7: the transaction log records every planned create and the names are
   assertFail(grade(text, { ...committed(E7), entityCreationLog: null }), /no genpage-entity-creation-log\.md/);
 });
 
-test('eval 7: generate-types and the upload use the created table names', () => {
-  const types = 'Phase 4: pac model genpage generate-types is run with the created entity names';
+test('eval 7: genpage.js types and the upload use the created table names', () => {
+  const types = 'Phase 4: genpage.js types is run with the created entity names';
   const upload = 'Phase 6: Upload includes --data-sources with both created entity names';
   assertPass(grade(types, committed(E7)));
   assertPass(grade(upload, committed(E7)));
   assertFail(grade(types, mutated(E7, 'workflowLog', "generate-types --data-sources 'cr_candidate,cr_jobrequisition'", "generate-types --data-sources 'cr_candidate'")),
-    /no generate-types run has --data-sources cr_jobrequisition,cr_candidate/);
+    /no genpage\.js types run has --data-sources cr_jobrequisition,cr_candidate/);
   assertFail(grade(upload, mutated(E7, 'workflowLog', "page.tsx --data-sources 'cr_candidate,cr_jobrequisition'", "page.tsx --data-sources 'cr_candidate'")),
     /--data-sources is cr_candidate, expected cr_jobrequisition,cr_candidate/);
 });
@@ -313,15 +346,15 @@ test('eval 11: pages are only built from a plan that passes the Phase 5a gate', 
   assertPass(grade(text, { ...invalid, files: [] }));
 });
 
-test('eval 11: generate-types runs once for contact and appointment into one RuntimeTypes.ts', () => {
-  const text = "Phase 4: pac model genpage generate-types is run ONCE with --data-sources 'contact,appointment'; a single RuntimeTypes.ts is generated";
+test('eval 11: genpage.js types runs once for contact and appointment into one RuntimeTypes.ts', () => {
+  const text = "Phase 4: genpage.js types is run ONCE with --data-sources 'contact,appointment'; a single RuntimeTypes.ts is generated";
   assertPass(grade(text, committed(E11)));
   assertPass(grade(text, committed(E11_REAL)));
   const base = committed(E11);
   assertFail(grade(text, { ...base, workflowLog: `${base.workflowLog}\n- pac model genpage generate-types --data-sources 'contact' --output-file other/RuntimeTypes.ts\n` }),
     /ran 2 time\(s\), expected once/);
   assertFail(grade(text, mutated(E11, 'workflowLog', "--data-sources 'contact,appointment' --output-file recruitment-pages/RuntimeTypes.ts", "--data-sources 'contact' --output-file recruitment-pages/RuntimeTypes.ts")),
-    /no generate-types run has --data-sources contact,appointment/);
+    /no genpage\.js types run has --data-sources contact,appointment/);
   assertFail(grade(text, mutated(E11, 'workflowLog', '--output-file recruitment-pages/RuntimeTypes.ts', '--output-file recruitment-pages/Types.ts')), /wrote Types\.ts/);
 });
 
@@ -358,7 +391,7 @@ test('eval 11: every page resolves its types from the one generated RuntimeTypes
 });
 
 test('eval 11: each page has exactly one create upload with its own --code-file', () => {
-  const text = 'Phase 6: All 3 pages are deployed via separate pac model genpage upload commands, each with the correct --code-file';
+  const text = 'Phase 6: All 3 pages are deployed via separate genpage-upload.js create uploads, each with the correct --code-file';
   assertPass(grade(text, committed(E11)));
   assertPass(grade(text, committed(E11_REAL)));
   assertFail(grade(text, mutated(E11, 'workflowLog', '--code-file recruitment-pages/hiring-metrics.tsx', '--code-file recruitment-pages/candidate-list.tsx')),
@@ -448,13 +481,12 @@ const withLog = (...replacements) => replacements.reduce((fixture, [from, to]) =
 // environment the capture's own command names.
 const originOf13 = () => /--env '([^']+)'/.exec(scriptCall())[1];
 const failedRead = () => `{"ok":false,"error":"Transport failure reaching ${originOf13()}/api/data/v9.0/organizations?$select=languagecode: Could not get an Azure CLI token for ${originOf13()}: Azure CLI (\`az\`) is not on PATH. Install it from https://aka.ms/azure-cli and run \`az login\`.","code":"CONNECTION_ERROR"}`;
-// What `pac model list-languages` prints for the same environment.
+// What `pac model list-languages` printed for the same environment — the table of a capture made before the script, and what the removed fallback would have recorded.
 const PAC_ROWS = ['1033 English (United States) en-US No', '1025 Arabic (Saudi Arabia)   ar-SA Yes', '1036 French (France)         fr-FR No'];
 const pacTable = (rows = PAC_ROWS) => `\`pac model list-languages\`\nLCID Language                Code  RTL\n${rows.join('\n')}`;
-// The planner pins the fallback to the environment the script was given (`--environment '<envUrl>'`); to the grader that is the same command.
+// The removed fallback was pinned to the environment the script was given (`--environment '<envUrl>'`); to the grader that is the same command.
 const pinnedPacTable = (rows) => pacTable(rows).replace('`pac model list-languages`', `\`pac model list-languages --environment '${originOf13()}'\``);
-// The log of a run whose script failed, the way the planner records it: the script's command and result, then the
-// `pac` command and its table, each verbatim (agents/genpage-planner.md, "Detect Configured Languages").
+// The log of a run whose script failed: the script's command and result, then what the removed fallback recorded — the `pac` command and its table, each verbatim.
 const failedScriptLog = () => `${scriptCall().split('\n')[0]}\n  Result: ${failedRead()}`;
 const fellBackLog = ({ note = '', rows } = {}) => `${failedScriptLog()}\n${note}- ${pacTable(rows)}`;
 const SAID = '- Language detection used `pac model list-languages`: the languages script exited 1 (the Azure CLI is not on PATH)\n';
@@ -492,31 +524,25 @@ test('eval 13: a result that parses as the script\u2019s own JSON is read as dat
   assertPass(grade(LANGUAGES_OUTPUT, mutated(E13, 'workflowLog', /Result: \{"ok":true[^\n]*/.exec(committed(E13).workflowLog)[0], 'Result: { ok: true, ... }\n  English (United States) (1033, en-US), Arabic (Saudi Arabia) (1025, ar-SA), French (France) (1036, fr-FR)')));
 });
 
-test('eval 13: when the script could not read the languages, the pac fallback after it is what detected them', () => {
-  // The planner falls back to `pac model list-languages` on any non-zero exit of the script and records both. The
-  // failed call found nothing, the fallback found all three, and the plan lists them.
-  const fellBack = mutated(E13, 'workflowLog', scriptCall(), fellBackLog());
-  assertPass(grade(LANGUAGES_OUTPUT, fellBack));
-  assertPass(grade(LANGUAGES_SECTION, fellBack));
-  // Saying so in a line of its own changes nothing.
-  const said = mutated(E13, 'workflowLog', scriptCall(), fellBackLog({ note: SAID }));
-  assertPass(grade(LANGUAGES_OUTPUT, said));
-  assertPass(grade(LANGUAGES_SECTION, said));
-  // The fallback as the planner runs it, pinned to the script's environment, is the same command to the grader — and its table is read the same way.
-  const pinned = mutated(E13, 'workflowLog', scriptCall(), `${failedScriptLog()}\n- ${pinnedPacTable()}`);
-  assertPass(grade(LANGUAGES_OUTPUT, pinned));
-  assertPass(grade(LANGUAGES_SECTION, pinned));
-  assertFail(grade(LANGUAGES_OUTPUT, mutated(E13, 'workflowLog', scriptCall(), `${failedScriptLog()}\n- ${pinnedPacTable(PAC_ROWS.slice(0, 2))}`)), /lacks LCID 1036/);
-  // A run that stopped at the failed script detected nothing: it is credited with no language it never read, and a
+test('eval 13: when the script could not read the languages nothing is detected — the pac fallback it used to have is gone', () => {
+  // agents/genpage-planner.md: a failed read ends language detection, and the planner reports why and stops. A `pac model list-languages` that
+  // follows a failed script is the removed fallback, so the grader credits it with none of the languages it printed.
+  for (const log of [fellBackLog(), fellBackLog({ note: SAID }), `${failedScriptLog()}\n- ${pinnedPacTable()}`]) {
+    const fellBack = mutated(E13, 'workflowLog', scriptCall(), log);
+    assertFail(grade(LANGUAGES_OUTPUT, fellBack), /lacks LCID 1033, 1025, 1036 \(saw none\)/);
+    assertFail(grade(LANGUAGES_SECTION, fellBack), /detected no languages/);
+  }
+  // A run that stopped at the failed script detected nothing as well: it is credited with no language it never read, and a
   // plan that lists languages has none to be listing.
   const stopped = mutated(E13, 'workflowLog', scriptCall(), failedScriptLog());
   assertFail(grade(LANGUAGES_OUTPUT, stopped), /lacks LCID 1033, 1025, 1036 \(saw none\)/);
   assertFail(grade(LANGUAGES_SECTION, stopped), /detected no languages/);
-  // A fallback that read fewer languages than the plan lists is caught the same way as a script that did.
-  assertFail(grade(LANGUAGES_OUTPUT, mutated(E13, 'workflowLog', scriptCall(), fellBackLog({ rows: PAC_ROWS.slice(0, 2) }))), /lacks LCID 1036/);
+  // The table of a capture made before the script has no failed script ahead of it, so it is read — and a table that lists fewer languages than the plan is caught.
+  assertPass(grade(LANGUAGES_OUTPUT, mutated(E13, 'workflowLog', scriptCall(), pacTable())));
+  assertFail(grade(LANGUAGES_OUTPUT, mutated(E13, 'workflowLog', scriptCall(), pacTable(PAC_ROWS.slice(0, 2)))), /lacks LCID 1036/);
 });
 
-test('eval 13: the whole fixture still grades clean when its language discovery is the pac fallback', () => {
+test('eval 13: the whole fixture still grades clean when its language discovery is a pac table from before the script', () => {
   // Every common assertion and the eval's own expectations, as run-layer-1.js grades a fixture — not one check alone.
   const fs = require('node:fs');
   const { gradeFixture } = require('../run-layer-1.js');
@@ -524,9 +550,7 @@ test('eval 13: the whole fixture still grades clean when its language discovery 
   const ev = evalsData.evals.find((e) => e.id === committed(E13).id);
   const failures = (fixture) => gradeFixture(fixture, ev, evalsData).filter((r) => r.result.status === 'fail').map((r) => `${r.text}: ${r.result.reason}`);
   assert.deepEqual(failures(committed(E13)), []);
-  assert.deepEqual(failures(mutated(E13, 'workflowLog', scriptCall(), fellBackLog())), []);
-  assert.deepEqual(failures(mutated(E13, 'workflowLog', scriptCall(), fellBackLog({ note: SAID }))), []);
-  assert.deepEqual(failures(mutated(E13, 'workflowLog', scriptCall(), `${failedScriptLog()}\n- ${pinnedPacTable()}`)), []);
+  assert.deepEqual(failures(mutated(E13, 'workflowLog', scriptCall(), pacTable())), []);
 });
 
 test('eval 13: generated text carries no hardcoded currency symbols or date formats', () => {
@@ -566,6 +590,27 @@ test('eval 13: generated text carries no hardcoded currency symbols or date form
   assertPass(gradeCode(text, page("const f = new Intl.NumberFormat(lang, { style: 'currency', currency: settings.currencycode }); return null;")));
   assertPass(gradeCode(text, page('const labels = { "currency": "Devise", "style": "Style" }; return null;')));
   assertPass(gradeCode(text, page("const mode = isMoney ? 'currency' : 'decimal'; return null;")));
+});
+
+// JSX decodes the character references in its text and in an attribute's string (lib/jsx-references.js, the page compiler's
+// own decoding), so a page shows `&euro;` as "€" and `&#36;` as "$": a symbol or a date format spelled with them is hardcoded
+// exactly as its plain spelling is. A JavaScript string is not decoded, so `'&euro;'` shows those characters and no symbol.
+test('eval 13: a currency symbol or a date format spelled with character references in JSX is hardcoded too', () => {
+  const text = 'Phase 5 (Page Builder): Generated .tsx does NOT hardcode currency symbols or date formats';
+  const page = (body) => [{ name: 'page.tsx', content: `export default function GeneratedComponent() {\n  ${body}\n}\n` }];
+  assertFail(gradeCode(text, page('return <Text>&euro;{total}</Text>;')), /hardcoded currency symbol "\u20ac"/);
+  assertFail(gradeCode(text, page('return <Text>{total} &pound;</Text>;')), /hardcoded currency symbol "\u00a3"/);
+  assertFail(gradeCode(text, page('return <Input placeholder="&yen;" />;')), /hardcoded currency symbol "\u00a5"/);
+  assertFail(gradeCode(text, page('return <Text>&#36;{total}</Text>;')), /hardcoded "\$" currency symbol/);
+  assertFail(gradeCode(text, page('return <Text>&#x24;100</Text>;')), /hardcoded "\$" currency symbol/);
+  assertFail(gradeCode(text, page('return <Text>$&#49;00</Text>;')), /hardcoded "\$" currency symbol/);
+  assertFail(gradeCode(text, page('return <Text>MM&#47;dd&#47;yyyy</Text>;')), /hardcoded date format "MM\/dd\/yyyy"/);
+  // As when written plainly, a "$" with no amount after it is not currency, nor is a reference that is no symbol.
+  assertPass(gradeCode(text, page('return <Text>$</Text>;')));
+  assertPass(gradeCode(text, page('return <Text>&#36;</Text>;')));
+  assertPass(gradeCode(text, page('return <Text>{formatCurrency(total)} &amp; {formatDate(due)} &copy; &nbsp;</Text>;')));
+  assertPass(gradeCode(text, page("return <Text>{'&euro;'}{total}</Text>;")));
+  assertPass(gradeCode(text, page("const label = '&#36;' + total; return null;")));
 });
 
 // --- Eval 15 -----------------------------------------------------------------------------------
@@ -625,13 +670,86 @@ test('eval 15: every create in the transaction log carries its metadata id', () 
   assertPass(grade(text, mutated(E15, 'entityCreationLog', '| cr_ticket | Due Date | cr_DueDate | cr_duedate | n/a |', '| cr_ticket | Due Date | cr_DueDate | cr_duedate | 0f8fad5b-d9cb-469f-a165-70867728950e |')));
 });
 
-test('eval 15: generate-types picks up an enum registration for every planned choice column', () => {
-  const text = 'Phase 4: pac model genpage generate-types picks up the enum registrations';
+test('eval 15: genpage.js types picks up an enum registration for every planned choice column', () => {
+  const text = 'Phase 4: genpage.js types picks up the enum registrations';
   assertPass(grade(text, committed(E15)));
   assertFail(grade(text, mutated(E15, 'runtimeTypes', '"cr_ticket-cr_status": cr_ticket_cr_status,', '')), /EnumRegistrations has no ticket-status entry/);
   assertFail(grade(text, mutated(E15, 'runtimeTypes', '"Closed" = 100000003,', '"Closed" = 100000004,')), /values 100000000,100000001,100000002,100000004 differ/);
-  assertFail(grade(text, mutated(E15, 'workflowLog', 'generate-types --data-sources "cr_ticket"', 'generate-types --data-sources "contact"')), /no generate-types run has --data-sources cr_ticket/);
+  assertFail(grade(text, mutated(E15, 'workflowLog', 'generate-types --data-sources "cr_ticket"', 'generate-types --data-sources "contact"')), /no genpage\.js types run has --data-sources cr_ticket/);
   assertSkip(grade(text, { ...committed(E15), runtimeTypes: null }), /RuntimeTypes\.ts was not captured/);
+});
+
+// The input JSON as agents/genpage-entity-builder.md Step 4 has the entity-builder write it, for eval 15's plan: each Choice option is its
+// label, in the plan's order. The capture did not keep its input, so the cases below hand it one.
+const TICKET_CHOICES = "Phase 2b (Entity Builder): cr_ticket is provisioned with choice columns via provision-entities.js input JSON; each picklist option is written as its label, in the plan's order (numbered 100000000 + index)";
+function ticketInput(priority = ['Low', 'Medium', 'High', 'Critical'], status = ['Open', 'In Progress', 'Resolved', 'Closed']) {
+  return {
+    solution: { uniqueName: 'Crdec34', publisherPrefix: 'cr' },
+    entities: [{
+      schemaName: 'cr_Ticket', displayName: 'Ticket', pluralName: 'Tickets',
+      primaryAttribute: { schemaName: 'cr_name', displayName: 'Name', maxLength: 100 },
+      columns: [
+        { schemaName: 'cr_Priority', displayName: 'Priority', type: 'Choice', options: priority },
+        { schemaName: 'cr_Status', displayName: 'Status', type: 'Choice', options: status },
+        { schemaName: 'cr_DueDate', displayName: 'Due Date', type: 'DateTime', dateFormat: 'DateOnly' },
+      ],
+    }],
+    relationships: [],
+  };
+}
+const withInput = (input) => ({ ...committed(E15), artifacts: { ...committed(E15).artifacts, 'provision-input.json': typeof input === 'string' ? input : JSON.stringify(input) } });
+
+test('eval 15: the choice options of the input JSON are labels in the plan\'s order, as provision-entities.js takes them', () => {
+  assertPass(grade(TICKET_CHOICES, withInput(ticketInput())));
+  // A label in several languages is a label too.
+  assertPass(grade(TICKET_CHOICES, withInput(ticketInput([{ 1033: 'Low', 1036: 'Bas' }, 'Medium', 'High', 'Critical']))));
+  // The shape the entity-builder page used to show: refused by the plugin's own gate, before anything is written.
+  const labelValue = ticketInput(['Low', 'Medium', 'High', 'Critical'].map((label, i) => ({ label, value: 100000000 + i })));
+  assertFail(grade(TICKET_CHOICES, withInput(labelValue)), /provision-entities\.js refuses the captured input: .*options\[0\]: 'label' is not an LCID/);
+  assertFail(grade(TICKET_CHOICES, withInput(ticketInput(['Medium', 'Low', 'High', 'Critical']))), /ticket priority options are "Medium", "Low", "High", "Critical", but the plan numbers Low, Medium, High, Critical from 100000000/);
+  assertFail(grade(TICKET_CHOICES, withInput(ticketInput(undefined, ['Open', 'Resolved', 'Closed']))), /ticket status options are .*, but the plan numbers Open, In Progress, Resolved, Closed/);
+  const noStatus = ticketInput();
+  noStatus.entities[0].columns.splice(1, 1);
+  assertFail(grade(TICKET_CHOICES, withInput(noStatus)), /declares no ticket status column/);
+  const textStatus = ticketInput();
+  textStatus.entities[0].columns[1] = { schemaName: 'cr_Status', displayName: 'Status', type: 'Text' };
+  assertFail(grade(TICKET_CHOICES, withInput(textStatus)), /ticket status is Text, not a Choice column/);
+  assertFail(grade(TICKET_CHOICES, withInput('{ not json')), /provision-input\.json is not JSON/);
+  assertFail(grade(TICKET_CHOICES, { ...withInput(ticketInput()), workflowLog: committed(E15).workflowLog.replace('--input @D:/temp/support-tickets/provision-input.json ', '') }), /not run with --input <json>/);
+});
+
+test('eval 15: a capture that did not keep its input JSON is skipped, and a current fixture without it fails', () => {
+  assertSkip(grade(TICKET_CHOICES, committed(E15)), /provision-input\.json was not captured/);
+  assertFail(grade(TICKET_CHOICES, { ...committed(E15), contractVersion: 2, manifest: { contractVersion: 2, provenance: 'synthetic' } }), /provision-input\.json was not captured/);
+});
+
+// A table is provisioned by a run that APPLIED its input: provision-entities.js without --apply only plans, writes nothing, and answers
+//   { "ok": true, "dryRun": true, "plan": [ … ] }
+// so such a run is no provisioning, however good its input. The input graded is the one the applying run was handed, not a preview's.
+function provisionedBy(events, artifacts) {
+  return { ...committed(E15), contractVersion: 2, manifest: { contractVersion: 2, provenance: 'synthetic' }, artifacts: { ...committed(E15).artifacts, ...artifacts }, events };
+}
+const provisionRun = (id, input, flags, result) => ({ id, command: `node scripts/provision-entities.js --env https://contoso.crm.dynamics.com --input @${input}${flags}`, result });
+
+test('eval 15: a dry run of provision-entities.js provisions nothing, and the input graded is the applying run\'s', () => {
+  const good = JSON.stringify(ticketInput());
+  const labelValue = JSON.stringify(ticketInput(['Low', 'Medium', 'High', 'Critical'].map((label, i) => ({ label, value: 100000000 + i }))));
+  const applied = { ok: true, entities: [{ schemaName: 'cr_Ticket', logicalName: 'cr_ticket', entitySetName: 'cr_tickets' }] };
+  const planned = { ok: true, dryRun: true, plan: [{ step: 'createTable', schemaName: 'cr_Ticket' }] };
+  assertPass(grade(TICKET_CHOICES, provisionedBy([provisionRun('apply', 'provision-input.json', ' --apply', applied)], { 'provision-input.json': good })));
+  // Planned only: no --apply, and the CLI's own dry-run answer.
+  assertFail(grade(TICKET_CHOICES, provisionedBy([provisionRun('plan', 'provision-input.json', '', planned)], { 'provision-input.json': good })),
+    /provision-entities\.js was not run with --input <json> --apply/);
+  // An answer that says it was a dry run is no apply, whatever flags were recorded with it.
+  assertFail(grade(TICKET_CHOICES, provisionedBy([provisionRun('apply', 'provision-input.json', ' --apply', planned)], { 'provision-input.json': good })),
+    /provision-entities\.js was not run with --input <json> --apply/);
+  // A preview with another input file, then the apply: the apply's input decides — either way round.
+  const previewThenApply = [provisionRun('plan', 'preview-input.json', '', planned), provisionRun('apply', 'provision-input.json', ' --apply', applied)];
+  assertPass(grade(TICKET_CHOICES, provisionedBy(previewThenApply, { 'preview-input.json': labelValue, 'provision-input.json': good })));
+  assertFail(grade(TICKET_CHOICES, provisionedBy(previewThenApply, { 'preview-input.json': good, 'provision-input.json': labelValue })),
+    /provision-entities\.js refuses the captured input: .*options\[0\]: 'label' is not an LCID/);
+  // The applying run's input was not kept: a current fixture fails, though the preview's was.
+  assertFail(grade(TICKET_CHOICES, provisionedBy(previewThenApply, { 'preview-input.json': good })), /provision-input\.json was not captured/);
 });
 
 // --- Eval 19 -----------------------------------------------------------------------------------
@@ -639,10 +757,10 @@ test('eval 15: generate-types picks up an enum registration for every planned ch
 const E19 = '19-add-weather-connector';
 
 test('eval 19: the edited page comes from a genpage list of the selected app', () => {
-  const text = 'Edit Phase 1b: After app selection, pac model genpage list --app-id <selected> is run to discover pages — orchestrator does NOT guess or invent page names';
+  const text = 'Edit Phase 1b: After app selection, genpage.js list --app-id <selected> is run to discover pages — orchestrator does NOT guess or invent page names';
   assertPass(grade(text, committed(E19)));
   assertFail(grade(text, mutated(E19, 'workflowLog', 'pac model genpage list --app-id aa112233-1122-1122-1122-aabbccdd1234', 'pac model genpage list --app-id cc334455-3344-3344-3344-ccddeeff3456')),
-    /pac model genpage list --app-id aa112233-1122-1122-1122-aabbccdd1234 was not run/);
+    /genpage\.js list --app-id aa112233-1122-1122-1122-aabbccdd1234 was not run/);
   assertFail(grade(text, mutated(E19, 'workflowLog', '  - Seattle Weather — `bb223344-2233-2233-2233-bbccddee2345`', '  - Seattle Weather')),
     /page bb223344-2233-2233-2233-bbccddee2345 does not appear in the recorded genpage list output/);
   assertFail(grade(text, mutated(E19, 'workflowLog', '- `pac model list` → 2 apps found:', '- apps recalled from memory:')), /before the app was discovered/);
@@ -685,29 +803,8 @@ function withoutArtifact(dirName, name) {
   return { ...base, artifacts };
 }
 
-// --- Eval 3 ------------------------------------------------------------------------------------
-
-const E3 = '3-contacts-edit-search-sort';
-
-test('eval 3: apps and pages are offered from the PAC listings, and the restated choice precedes download', () => {
-  const apps = 'Edit Phase 1a: Apps are presented to the user via AskUserQuestion using the actual Display Name and app-id GUID from pac model list output';
-  const pages = 'Edit Phase 1b: Pages are presented to the user via AskUserQuestion using the actual page names and page-id GUIDs from pac model genpage list output';
-  const restated = 'Edit Phase 1c: Selection is restated to the user before proceeding to download';
-  assertPass(grade(apps, committed(E3)));
-  assertPass(grade(pages, committed(E3)));
-  assertPass(grade(restated, committed(E3)));
-  // The listing names the app differently from the question: the offered name is not the listed one.
-  assertFail(grade(apps, withEvents(E3, (ev) => { event(ev, 'list-apps').result = event(ev, 'list-apps').result.replace('Sales Hub  ', 'Sales Desk '); return ev; })),
-    /offers 11111111-2222-3333-4444-555555555555 without its listed name "Sales Desk"/);
-  assertFail(grade(apps, withEvents(E3, (ev) => { event(ev, 'list-apps').result = event(ev, 'list-apps').result.split('\n').filter((l) => !/Sales Hub/.test(l)).join('\n'); return ev; })),
-    /offers 11111111-2222-3333-4444-555555555555, which the listing does not contain/);
-  // The run downloaded a page that was listed but never offered.
-  assertFail(grade(pages, withEvents(E3, (ev) => { event(ev, 'download').command = event(ev, 'download').command.replace('22222222-3333-4444-5555-666666666666', '33333333-4444-5555-6666-777777777777'); return ev; })),
-    /continued with \(33333333-4444-5555-6666-777777777777\) was not among the offered pages/);
-  assertFail(grade(restated, mutated(E3, 'workflowLog', '- "Editing **Contacts Directory** (22222222-3333-4444-5555-666666666666) in app **Sales Hub** (11111111-2222-3333-4444-555555555555). Continuing to download the existing page code…"', '- Continuing.')),
-    /no restatement of the selected app and page/);
-});
-
+// --- Eval 3: the edit flow (the app and page listing test is in the last section) ---------------
+// Each test grades one expectation of the edit flow against the committed synthetic fixture.
 test('eval 3: config.json dataSources drive RuntimeTypes generation', () => {
   const text = "Edit Phase 3: config.json is read; since dataSources contains 'contact', RuntimeTypes.ts is generated";
   assertPass(grade(text, committed(E3)));
@@ -742,45 +839,6 @@ test('eval 3: Edit Phase 5 reads the edit plan, rules, RuntimeTypes and the page
   assertFail(grade(ui, withFile(E3, 'page.tsx', '<SearchBox', '{/* <SearchBox /> */}<Text')), /no Fluent UI V9 SearchBox/);
 });
 
-// --- Eval 8 ------------------------------------------------------------------------------------
-
-const E8 = '8-account-metrics-new-app';
-
-test('eval 8: zero apps, the create-or-cancel question, and the plan recording the new app', () => {
-  const zero = 'Phase 1 (Planner): pac model list returns zero apps';
-  const asked = 'Phase 1 (Planner): User is asked via AskUserQuestion whether to create a new app or cancel';
-  const recorded = "Phase 1 (Planner): Plan records 'create new app' decision";
-  for (const text of [zero, asked, recorded]) assertPass(grade(text, committed(E8)));
-  assertFail(grade(zero, withEvents(E8, (ev) => { event(ev, 'app-list').result = { apps: [{ appId: '99999999-0000-4000-8000-000000000000', displayName: 'Old App' }] }; return ev; })),
-    /returned 1 app/);
-  assertFail(grade(zero, withEvents(E8, (ev) => { event(ev, 'app-list').result = {}; return ev; })), /does not record zero apps/);
-  assertFail(grade(asked, withEvents(E8, (ev) => ev.filter((e) => e.id !== 'ask-create-app'))), /no AskUserQuestion offered to create a new app or cancel/);
-  assertFail(grade(recorded, withEvents(E8, (ev) => { event(ev, 'ask-create-app').result.answer = 'Cancel'; return ev; })), /answered "Cancel", not create/);
-  assertFail(grade(recorded, mutated(E8, 'genpagePlan', '- App: create new: Account Metrics', '- App: create new: Metrics Hub')), /not the app the maker named \("Account Metrics"\)/);
-  assertFail(grade(recorded, mutated(E8, 'genpagePlan', '- App: create new: Account Metrics', '- App: Sales Hub (11111111-2222-3333-4444-555555555555)')), /does not record "App: create new/);
-});
-
-test('eval 8: the solution question runs for the new app and its choice is recorded', () => {
-  const text = 'Phase 1 (Planner): Because a new app will be created, the planner asks the solution selection question and records the choice in ## Environment';
-  assertPass(grade(text, committed(E8)));
-  assertFail(grade(text, mutated(E8, 'genpagePlan', '- Solution: ContosoCore', '- Solution: Default')), /maker answered "Continue in 'Contoso Core'/);
-  assertFail(grade(text, mutated(E8, 'genpagePlan', '- App: create new: Account Metrics', '- App: Sales Hub (1)')), /does not record a new app/);
-});
-
-test('eval 8: the app-id pac model create returned is the one every upload uses', () => {
-  const stored = 'Phase 3: The new app-id returned from pac model create is stored for Phase 6';
-  const used = 'Phase 6: Upload uses the newly created app-id';
-  assertPass(grade(stored, committed(E8)));
-  assertPass(grade(used, committed(E8)));
-  const otherApp = (ev) => { event(ev, 'upload').command = event(ev, 'upload').command.replace("--app-id '44444444-5555-4666-8777-888888888888'", "--app-id '11111111-2222-3333-4444-555555555555'"); return ev; };
-  assertFail(grade(stored, withEvents(E8, otherApp)), /used --app-id 11111111-2222-3333-4444-555555555555, not the created 44444444/);
-  assertFail(grade(used, withEvents(E8, otherApp)), /--app-id 11111111-2222-3333-4444-555555555555 is not the created app/);
-  assertFail(grade(stored, withEvents(E8, (ev) => { delete event(ev, 'app-create').result.appId; return ev; })), /recorded no returned app-id/);
-  assertFail(grade(stored, withEvents(E8, (ev) => { event(ev, 'app-create').command = "pac model create --name 'Account Metrics' --solution 'Default' --publish"; return ev; })),
-    /--solution Default is not the plan's Solution: ContosoCore/);
-  assertFail(grade(used, withEvents(E8, (ev) => { event(ev, 'upload').result.appId = '11111111-2222-3333-4444-555555555555'; return ev; })), /upload result names app 11111111/);
-});
-
 // --- Eval 9 ------------------------------------------------------------------------------------
 
 const E9 = '9-project-tracker-new-entities';
@@ -790,7 +848,7 @@ test('eval 9: both tables are absent, planned with the milestone → project loo
   const lookup = 'Phase 1 (Planner): Plan includes a lookup relationship (cr_milestone → cr_project)';
   const solution = 'Phase 1 (Planner): Solution selection question is asked because new entities will be created';
   for (const text of [absent, lookup, solution]) assertPass(grade(text, committed(E9)));
-  assertFail(grade(absent, withEvents(E9, (ev) => { event(ev, 'list-tables-search').result = 'Logical Name   Display Name\ncr_project     Project'; return ev; })),
+  assertFail(grade(absent, withEvents(E9, (ev) => { event(ev, 'list-tables-search').result = { ok: true, search: ['cr_project', 'cr_milestone'], exact: true, count: 1, tables: [{ logicalName: 'cr_project', displayName: 'Project', schemaName: 'cr_Project', isCustom: true }], missing: ['cr_milestone'] }; return ev; })),
     /does not record cr_project as absent/);
   assertFail(grade(lookup, mutated(E9, 'genpagePlan', '| 1:N lookup | project | project | RemoveLink |', '| none | none | none | none |')), /milestone has no lookup relationship to project/);
   assertFail(grade(solution, mutated(E9, 'genpagePlan', '- Solution: ContosoProjects', '- Solution: FieldSurveys')), /maker answered "Continue in 'ContosoProjects'/);
@@ -966,8 +1024,115 @@ test('eval 16: account exists, so the plan uses the no-creation sentence and lis
   assertPass(grade(sentinel, committed(E16)));
   assertPass(grade(existing, committed(E16)));
   assertFail(grade(sentinel, mutated(E16, 'genpagePlan', 'No entity creation required — all entities already exist.', 'No entity creation needed.')), /exact no-entity sentence/);
-  assertFail(grade(sentinel, withEvents(E16, (ev) => { event(ev, 'list-tables').command = "pac model list-tables --search 'contact'"; return ev; })), /no pac model list-tables --search covered account/);
+  assertFail(grade(sentinel, withEvents(E16, (ev) => { event(ev, 'list-tables').command = event(ev, 'list-tables').command.replace("--search 'account'", "--search 'contact'"); return ev; })), /no list-tables --search covered account/);
   assertFail(grade(existing, mutated(E16, 'genpagePlan', '## Existing Entities\naccount', '## Existing Entities\ncontact')), /lists contact, not account/);
-  assertFail(grade(existing, withEvents(E16, (ev) => { event(ev, 'generate-types').command = "pac model genpage generate-types --data-sources 'account,contact' --output-file 'RuntimeTypes.ts'"; return ev; })),
-    /generate-types used contact, which ## Existing Entities does not list/);
+  assertFail(grade(existing, withEvents(E16, (ev) => { event(ev, 'generate-types').command = "node 'D:/repo/plugins/model-apps/scripts/genpage.js' types --env 'https://contoso.crm.dynamics.com' --data-sources 'account,contact' --output-file 'RuntimeTypes.ts'"; return ev; })), /genpage\.js types used contact, which ## Existing Entities does not list/);
+});
+
+// --- Evals 3 and 8: the app listing, and the app create, through apps.js -------------------------
+//
+// All of eval 8's tests are here, and the app-listing test of eval 3; the rest of eval 3 is above. `apps.js list` is read as data (`apps`), and a new app is built from the first page
+// (SKILL.md Phase 6, "A new app") — the first page uploaded with no app, `apps.js create` after it, then every upload naming the app it returned.
+
+test('eval 3: apps and pages are offered from the app and page listings, and the restated choice precedes download', () => {
+  const apps = 'Edit Phase 1a: Apps are presented to the user via AskUserQuestion using the actual app name and app-id GUID from the apps.js list output';
+  const pages = 'Edit Phase 1b: Pages are presented to the user via AskUserQuestion using the actual page names and page-id GUIDs from genpage.js list output';
+  const restated = 'Edit Phase 1c: Selection is restated to the user before proceeding to download';
+  assertPass(grade(apps, committed(E3)));
+  assertPass(grade(pages, committed(E3)));
+  assertPass(grade(restated, committed(E3)));
+  // The listing names the app differently from the question: the offered name is not the listed one.
+  assertFail(grade(apps, withEvents(E3, (ev) => { event(ev, 'list-apps').result.apps[0].name = 'Sales Desk'; return ev; })),
+    /offers 11111111-2222-3333-4444-555555555555 without its listed name "Sales Desk"/);
+  assertFail(grade(apps, withEvents(E3, (ev) => { const listing = event(ev, 'list-apps').result; listing.apps = listing.apps.filter((app) => app.name !== 'Sales Hub'); return ev; })),
+    /offers 11111111-2222-3333-4444-555555555555, which the listing does not contain/);
+  // The run downloaded a page that was listed but never offered.
+  assertFail(grade(pages, withEvents(E3, (ev) => { event(ev, 'download').command = event(ev, 'download').command.replace('22222222-3333-4444-5555-666666666666', '33333333-4444-5555-6666-777777777777'); return ev; })),
+    /continued with \(33333333-4444-5555-6666-777777777777\) was not among the offered pages/);
+  // genpage.js list is read as data (`pages`, each with its pageId and name), as apps.js list is: the offered name is the listed one, and an offered page is one the listing holds.
+  assertFail(grade(pages, withEvents(E3, (ev) => { event(ev, 'list-pages').result.pages[0].name = 'Contacts Desk'; return ev; })),
+    /offers 22222222-3333-4444-5555-666666666666 without its listed name "Contacts Desk"/);
+  assertFail(grade(pages, withEvents(E3, (ev) => { const listing = event(ev, 'list-pages').result; listing.pages = listing.pages.filter((page) => page.name !== 'Contacts Directory'); return ev; })),
+    /offers 22222222-3333-4444-5555-666666666666, which the listing does not contain/);
+  // A listing that failed to read lists no page, and no page can be presented from it.
+  assertFail(grade(pages, withEvents(E3, (ev) => { event(ev, 'list-pages').result = { ok: false, error: 'the read failed', code: 'CONNECTION_ERROR' }; return ev; })),
+    /the page listing recorded no pages to present/);
+  assertFail(grade(pages, withEvents(E3, (ev) => ev.filter((e) => e.id !== 'list-pages'))), /the page listing command was not run/);
+  assertFail(grade(restated, mutated(E3, 'workflowLog', '- "Editing **Contacts Directory** (22222222-3333-4444-5555-666666666666) in app **Sales Hub** (11111111-2222-3333-4444-555555555555). Continuing to download the existing page code…"', '- Continuing.')),
+    /no restatement of the selected app and page/);
+});
+
+test('eval 8: the solution question runs for the new app and its choice is recorded', () => {
+  const text = 'Phase 1 (Planner): Because a new app will be created, the planner asks the solution selection question and records the choice in ## Environment';
+  assertPass(grade(text, committed(E8)));
+  assertFail(grade(text, mutated(E8, 'genpagePlan', '- Solution: ContosoCore', '- Solution: Default')), /maker answered "Continue in 'Contoso Core'/);
+  assertFail(grade(text, mutated(E8, 'genpagePlan', '- App: create new: Account Metrics', '- App: Sales Hub (1)')), /does not record a new app/);
+});
+
+test('eval 8: apps.js list returns zero apps, the create-or-cancel question is asked, and the plan records the new app', () => {
+  const zero = 'Phase 1 (Planner): apps.js list returns zero apps';
+  const asked = 'Phase 1 (Planner): User is asked via AskUserQuestion whether to create a new app or cancel';
+  const recorded = "Phase 1 (Planner): Plan records 'create new app' decision";
+  for (const text of [zero, asked, recorded]) assertPass(grade(text, committed(E8)));
+  assertFail(grade(zero, withEvents(E8, (ev) => { event(ev, 'app-list').result = { ok: true, count: 1, apps: [{ id: '99999999-0000-4000-8000-000000000000', name: 'Old App', uniqueName: 'old_app', description: '', published: true, unpublishedChanges: false }] }; return ev; })),
+    /returned 1 app/);
+  assertFail(grade(zero, withEvents(E8, (ev) => { event(ev, 'app-list').result = {}; return ev; })), /does not record zero apps/);
+  // A listing that failed to read is not an empty one.
+  assertFail(grade(zero, withEvents(E8, (ev) => { event(ev, 'app-list').result = { ok: false, code: 'CONNECTION_ERROR', error: 'the read failed' }; return ev; })), /apps\.js list failed: the read failed/);
+  assertFail(grade(zero, withEvents(E8, (ev) => ev.filter((e) => e.id !== 'app-list'))), /apps\.js list \(or pac model list\) was not run/);
+  assertFail(grade(asked, withEvents(E8, (ev) => ev.filter((e) => e.id !== 'ask-create-app'))), /no AskUserQuestion offered to create a new app or cancel/);
+  assertFail(grade(recorded, withEvents(E8, (ev) => { event(ev, 'ask-create-app').result.answer = 'Cancel'; return ev; })), /answered "Cancel", not create/);
+  assertFail(grade(recorded, mutated(E8, 'genpagePlan', '- App: create new: Account Metrics', '- App: create new: Metrics Hub')), /not the app the maker named \("Account Metrics"\)/);
+  assertFail(grade(recorded, mutated(E8, 'genpagePlan', '- App: create new: Account Metrics', '- App: Sales Hub (11111111-2222-3333-4444-555555555555)')), /does not record "App: create new/);
+});
+
+test('eval 8: the app is built from the first page — apps.js create after the first upload, then every upload names the app', () => {
+  const made = "Phase 6 (new app): apps.js create --name 'Account Metrics' --solution '<Solution from plan>' --page-id <first page> --publish is run after the first page's upload; --solution is ALWAYS passed (apps.js create refuses a call without it)";
+  const first = 'Phase 6 (new app): The first page is created with no --app-id and no --add-to-sitemap, before the app exists';
+  const used = 'Phase 6: Every upload after the app is created uses the newly created app-id';
+  for (const text of [made, first, used]) assertPass(grade(text, committed(E8)));
+
+  // --solution is mandatory and is the plan's; --name is the plan's app; --publish keeps the app out of draft; --page-id is the page the first upload made.
+  const create = (from, to) => (ev) => { event(ev, 'app-create').command = event(ev, 'app-create').command.replace(from, to); return ev; };
+  assertFail(grade(made, withEvents(E8, create(" --solution 'ContosoCore'", ''))), /apps\.js create is missing --solution/);
+  assertFail(grade(made, withEvents(E8, create("--solution 'ContosoCore'", "--solution 'Default'"))), /--solution Default is not the plan's Solution: ContosoCore/);
+  assertFail(grade(made, withEvents(E8, create("--name 'Account Metrics'", "--name 'Metrics Hub'"))), /--name Metrics Hub is not the app the plan names: Account Metrics/);
+  assertFail(grade(made, withEvents(E8, create(' --publish', ''))), /no --publish, so the new app is left in draft/);
+  assertFail(grade(made, withEvents(E8, create(" --page-id '66666666-7777-4888-8999-aaaaaaaaaaaa'", ''))), /no --page-id/);
+  assertFail(grade(made, withEvents(E8, create("--page-id '66666666-7777-4888-8999-aaaaaaaaaaaa'", "--page-id '11111111-2222-3333-4444-555555555555'"))), /is not the page the first upload created/);
+  // The command it replaced is not the way, and a create that failed made no app.
+  assertFail(grade(made, withEvents(E8, (ev) => { event(ev, 'app-create').command = "pac model create --name 'Account Metrics' --solution 'ContosoCore' --publish"; return ev; })), /not apps\.js create/);
+  assertFail(grade(made, withEvents(E8, (ev) => { event(ev, 'app-create').result = { ok: false, code: 'PAGE_NOT_FOUND', error: 'no such page', written: false }; return ev; })), /apps\.js create did not succeed: no such page/);
+  assertFail(grade(first, withEvents(E8, (ev) => { delete event(ev, 'app-create').result.appId; return ev; })), /recorded no returned appId/);
+  assertFail(grade(made, withEvents(E8, (ev) => ev.filter((e) => e.id !== 'app-create'))), /apps\.js create was not run/);
+
+  // The app is built around a page that exists, so the first upload comes first.
+  const reordered = (ev) => { const [made1] = ev.splice(ev.findIndex((e) => e.id === 'app-create'), 1); ev.splice(ev.findIndex((e) => e.id === 'upload'), 0, made1); return ev; };
+  assertFail(grade(made, withEvents(E8, reordered)), /ran before the first page was uploaded/);
+  assertFail(grade(first, withEvents(E8, reordered)), /the first page was uploaded after the app was created/);
+
+  // The first page has no app yet to name or to be placed in.
+  const firstUpload = (from, to) => (ev) => { event(ev, 'upload').command = event(ev, 'upload').command.replace(from, to); return ev; };
+  assertFail(grade(first, withEvents(E8, firstUpload('--code-file', "--app-id '44444444-5555-4666-8777-888888888888' --code-file"))), /first page's upload passed --app-id 44444444/);
+  assertFail(grade(first, withEvents(E8, firstUpload('--agent-message-file', '--add-to-sitemap --agent-message-file'))), /passed --add-to-sitemap/);
+
+  // The create pins the first page's tables into the app itself, so an app of one page is complete with it: no upload follows, and "every upload after the app is created" holds of none.
+  // A page that does follow — the second page of a plan — names the app that apps.js create printed, and nothing else.
+  const second = (flags, result = {}) => (ev) => {
+    ev.splice(ev.findIndex((e) => e.id === 'app-create') + 1, 0, {
+      id: 'second-upload',
+      command: `node 'D:/repo/plugins/model-apps/scripts/genpage-upload.js' --env 'https://contoso.crm.dynamics.com' --code-file 'account-detail.tsx' --name-file 'page-name.txt' --data-sources 'account' --prompt-file 'prompt.txt' --model 'claude-sonnet-4.5' --agent-message-file 'agent-message.txt'${flags}`,
+      result: { ok: true, pageId: '99999999-aaaa-4bbb-8ccc-dddddddddddd', updated: false, ...result },
+      exitCode: 0,
+    });
+    return ev;
+  };
+  const named = " --app-id '44444444-5555-4666-8777-888888888888' --add-to-sitemap";
+  assertPass(grade(used, withEvents(E8, second(named, { appId: '44444444-5555-4666-8777-888888888888' }))));
+  assertPass(grade(first, withEvents(E8, second(named))));
+  assertFail(grade(used, withEvents(E8, second(" --app-id '11111111-2222-3333-4444-555555555555' --add-to-sitemap"))), /--app-id 11111111-2222-3333-4444-555555555555 is not the created app/);
+  assertFail(grade(used, withEvents(E8, second(''))), /--app-id missing is not the created app/);
+  assertFail(grade(used, withEvents(E8, second(named, { appId: '11111111-2222-3333-4444-555555555555' }))), /upload result names app 11111111/);
+  // The old way — uploading the first page again to pin its tables — is still an upload that names the app, so it still passes: it is needless, not wrong.
+  assertPass(grade(used, withEvents(E8, second(" --app-id '44444444-5555-4666-8777-888888888888' --page-id '66666666-7777-4888-8999-aaaaaaaaaaaa'", { appId: '44444444-5555-4666-8777-888888888888', updated: true, unchanged: true }))));
 });

@@ -7,6 +7,8 @@ const { spawnSync } = require('node:child_process');
 
 const scriptPath = path.join(__dirname, '..', 'add-page-to-solution.js');
 const scriptSrc = fs.readFileSync(scriptPath, 'utf8');
+// How a page joins a solution — the read of its component type and its add — is lib/page-solution.js, shared by every path that adds a page.
+const pageSolutionSrc = fs.readFileSync(path.join(__dirname, '..', 'lib', 'page-solution.js'), 'utf8');
 
 test('adds appmodule (80) with required components', () => {
   assert.match(scriptSrc, /APPMODULE_COMPONENT_TYPE\s*=\s*80/);
@@ -15,12 +17,13 @@ test('adds appmodule (80) with required components', () => {
 
 test('discovers connection-reference component type from environment metadata', () => {
   assert.match(scriptSrc, /connectionreferences\?\$filter=connectionreferencelogicalname/);
-  assert.match(scriptSrc, /EntityDefinitions\(LogicalName=/);
+  assert.match(scriptSrc, /componentTypePath\(logicalName\)/);
+  assert.match(pageSolutionSrc, /EntityDefinitions\(LogicalName=/);
   assert.match(scriptSrc, /CONNECTION_REFERENCE_LOGICAL_NAME\s*=\s*'connectionreference'/);
 });
 
 test('discovers the GenPage component type from environment metadata', () => {
-  assert.match(scriptSrc, /UXAGENTPROJECT_LOGICAL_NAME\s*=\s*'uxagentproject'/);
+  assert.match(pageSolutionSrc, /UXAGENTPROJECT_LOGICAL_NAME\s*=\s*'uxagentproject'/);
   assert.match(scriptSrc, /flags\['page-ids'\]/);
 });
 
@@ -125,8 +128,8 @@ test('discovers environment-specific component types for GenPages and connection
 });
 
 test('the appmodule is packaged BEFORE any page or connection reference', async () => {
-  // Order is load-bearing: adding a uxagentproject to a solution the app is not yet in produces a
-  // solution whose page has no owning app.
+  // Order is load-bearing when an app is named: a run that stops part-way must never leave pages in the
+  // solution without the app whose navigation opens them.
   const { cli, calls } = harness({ argv: [ENV, 'sol', APP, '--page-ids', P1, '--connection-refs', 'new_sp'] });
   await cli.main();
   const types = calls.filter((c) => c.path === 'AddSolutionComponent').map((c) => c.body.ComponentType);
@@ -321,4 +324,39 @@ test('the stable app component type and dynamic entity names are pinned', () => 
   assert.equal(APPMODULE_COMPONENT_TYPE, 80);
   assert.equal(UXAGENTPROJECT_LOGICAL_NAME, 'uxagentproject');
   assert.equal(CONNECTION_REFERENCE_LOGICAL_NAME, 'connectionreference');
+});
+
+// --- Pages with no app -------------------------------------------------------
+//
+// A page made into an app that is not the run's own (an app that already existed), or one whose add failed after the page was made, joins the
+// solution on its own: a page is a component of its own, and the app is not one of its required components (the app's navigation names the page,
+// not the other way round). Adding the app as well would put another maker's app into the solution.
+
+test('with no app id, --page-ids adds the pages alone — each as the page table\u2019s type, with its files — and no app', async () => {
+  const { cli, calls, emitted } = harness({ argv: [ENV, 'sol', '--page-ids', `${P1},${P2}`] });
+  await cli.main();
+  assert.equal(emitted.length, 1);
+  assert.equal(emitted[0].ok, true);
+  const adds = calls.filter((c) => c.path === 'AddSolutionComponent').map((c) => [c.body.ComponentId, c.body.ComponentType, c.body.AddRequiredComponents, c.body.SolutionUniqueName]);
+  assert.deepEqual(adds, [[P1, 10372, true, 'sol'], [P2, 10372, true, 'sol']]);
+  assert.deepEqual(emitted[0].payload.added, [{ type: 'uxagentproject', id: P1 }, { type: 'uxagentproject', id: P2 }]);
+});
+
+test('with no app id and nothing to add, the run is a usage error: an app, a page or a connection reference is needed', async () => {
+  const res = spawnSync(process.execPath, [scriptPath, ENV, 'sol'], { encoding: 'utf8' });
+  assert.equal(res.status, 1);
+  assert.match(res.stderr, /Usage:/);
+  assert.equal(res.stdout, '');
+  // A list of separators names nothing: refused, with nothing read or written.
+  const { cli, calls, emitted } = harness({ argv: [ENV, 'sol', '--page-ids', ','] });
+  await cli.main();
+  assert.equal(emitted[0].ok, false);
+  assert.match(emitted[0].payload.message, /Nothing to add: name an app, --page-ids or --connection-refs\. Nothing was added to sol\./);
+  assert.deepEqual(calls, []);
+});
+
+test('an app id given as the third argument is still added first, before its pages', async () => {
+  const { cli, calls } = harness({ argv: [ENV, 'sol', APP, '--page-ids', P1] });
+  await cli.main();
+  assert.deepEqual(calls.filter((c) => c.path === 'AddSolutionComponent').map((c) => c.body.ComponentType), [80, 10372]);
 });

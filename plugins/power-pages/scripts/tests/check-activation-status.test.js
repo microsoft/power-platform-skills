@@ -15,7 +15,7 @@ const GUID = '11111111-2222-3333-4444-555555555555';
 // Fails the test if invoked — used to assert pac pages list is NOT shelled out.
 const throwExec = () => { throw new Error('pac pages list must NOT be called'); };
 
-test('EDM site: resolves identity from .powerpages-site/website.yml and SKIPS pac pages list', (t) => {
+test('non-SPA site resolves identity from .powerpages-site/website.yml and skips PAC list', (t) => {
   const dir = tempDir();
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   fs.mkdirSync(path.join(dir, '.powerpages-site'), { recursive: true });
@@ -26,10 +26,10 @@ test('EDM site: resolves identity from .powerpages-site/website.yml and SKIPS pa
   assert.equal(r.siteName, 'ContosoEDM');
   assert.equal(r.websiteRecordId, GUID);
   assert.equal(r.source, 'website.yml');
-  assert.equal(r.usedPacList, false, 'EDM site must NOT shell out to pac pages list');
+  assert.equal(r.usedPacList, false, 'non-SPA site must NOT shell out to pac pages list');
 });
 
-test('EDM website.yml with an inline comment is parsed cleanly (comment stripped)', (t) => {
+test('declarative website.yml with an inline comment is parsed cleanly', (t) => {
   const dir = tempDir();
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   fs.mkdirSync(path.join(dir, '.powerpages-site'), { recursive: true });
@@ -39,7 +39,7 @@ test('EDM website.yml with an inline comment is parsed cleanly (comment stripped
   assert.equal(r.websiteRecordId, GUID, 'inline comment must not corrupt the GUID');
 });
 
-test('code site with websiteRecordId in config: resolves from config, skips pac pages list', (t) => {
+test('SPA site with websiteRecordId in config: resolves from config, skips pac pages list', (t) => {
   const dir = tempDir();
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   fs.writeFileSync(path.join(dir, 'powerpages.config.json'), JSON.stringify({ siteName: 'ContosoSPA', websiteRecordId: GUID }));
@@ -51,7 +51,7 @@ test('code site with websiteRecordId in config: resolves from config, skips pac 
   assert.equal(r.usedPacList, false);
 });
 
-test('code site WITHOUT websiteRecordId: falls back to pac pages list to find the GUID', (t) => {
+test('SPA site WITHOUT websiteRecordId: falls back to pac pages list to find the GUID', (t) => {
   const dir = tempDir();
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   fs.writeFileSync(path.join(dir, 'powerpages.config.json'), JSON.stringify({ siteName: 'ContosoSPA' }));
@@ -60,7 +60,7 @@ test('code site WITHOUT websiteRecordId: falls back to pac pages list to find th
   const r = resolveSiteIdentity(dir, { execSync: fakePac });
   assert.equal(r.siteName, 'ContosoSPA');
   assert.equal(r.websiteRecordId, GUID);
-  assert.equal(r.usedPacList, true, 'code site without a GUID must consult pac pages list');
+  assert.equal(r.usedPacList, true, 'SPA site without a GUID must consult pac pages list');
 });
 
 test('neither marker present: returns a "Site name not found" error (no crash)', (t) => {

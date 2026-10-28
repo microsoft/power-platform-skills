@@ -1,5 +1,5 @@
 'use strict';
-// Coverage for the App Spec -> genpage-plan.md adapter (H4: /app-builder Phase 1.5 had no
+// Coverage for the App Spec -> genpage-plan.md adapter (/app-builder Phase 1.5 had no
 // executable page-worker contract). The worker's contract is references/plan-schema.md, so these
 // tests assert the projection is schema-faithful — every required section, in order, and every
 // required per-page field — plus the identity convergence that keeps PAGEREF resolution consistent.
@@ -9,6 +9,7 @@ const path = require('node:path');
 const fs = require('node:fs');
 const os = require('node:os');
 const { spawnSync } = require('node:child_process');
+const { makeTempDir } = require('./helpers/temp-dirs.js');
 const {
   buildPagePlan, REQUIRED_PAGE_FIELDS, pageFile, pageEntities, pageDataMode, needsCaching, navTargets,
 } = require('../lib/page-plan.js');
@@ -197,6 +198,20 @@ test('the approved design contract reaches the worker', () => {
   const bare = buildPagePlan(spec(), { workingDir: '/wd' });
   assert.match(bare, /- Styling: Fluent UI V9 defaults/);
   assert.equal(require('../../../../evals/model-apps/genpage/lib/assertions-layer-1.js').validateGenpagePlanSchema(bare).length, 0);
+});
+
+// A look of the maker's own (AB#6320143): the plan used to say "Fluent UI V9 defaults" or the tokens, whatever the maker asked for, so every page came out in the default
+// model-driven look. `design.style` leads the Styling line as `Maker-requested:`, which the page-builder applies instead of the defaults (references/rules.md).
+test('a maker-requested style in design.style leads the Styling line as Maker-requested:, sanitised, with the tokens after it', () => {
+  const s = spec();
+  s.design = { style: 'navy #0b2545 primary, gold #c9a227 accent,\nGeorgia headings | 2px corners (from: screenshot)', accentColor: '#0b2545' };
+  const md = buildPagePlan(s, { workingDir: '/wd' });
+  assert.match(md, /^- Styling: Maker-requested: navy #0b2545 primary, gold #c9a227 accent, Georgia headings \/ 2px corners \(from: screenshot\) \(Fluent UI V9 components; also Accent color: #0b2545\)$/m);
+  assert.equal(require('../../../../evals/model-apps/genpage/lib/assertions-layer-1.js').validateGenpagePlanSchema(md).length, 0);
+  const alone = buildPagePlan({ ...spec(), design: { style: 'warm earth palette #8b5e3c' } }, { workingDir: '/wd' });
+  assert.match(alone, /^- Styling: Maker-requested: warm earth palette #8b5e3c \(Fluent UI V9 components\)$/m);
+  // Without one the line is what it was: the tokens, or the defaults.
+  assert.match(buildPagePlan({ ...spec(), design: { accentColor: '#0f6cbd' } }, { workingDir: '/wd' }), /^- Styling: Fluent UI V9 tokens — Accent color: #0f6cbd$/m);
 });
 
 test('the plan declares Mode so the worker can pick the right identity rule', () => {
@@ -581,7 +596,7 @@ test('the projection does NOT default to genpage-plan.md — that filename belon
   // stems), so writing there would let a later /genpage run consume an app-builder plan and emit
   // wrong PAGEREF tokens. The worker gets the plan PATH explicitly, so the name is free to differ.
   const cli = path.join(__dirname, '..', 'write-page-plan.js');
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'plan-collision-'));
+  const dir = makeTempDir('plan-collision-');
   const specPath = path.join(dir, 'app-spec.json');
   fs.writeFileSync(specPath, JSON.stringify(spec()), 'utf8');
   const run = () => spawnSync(process.execPath, [cli, '--spec', '@' + specPath, '--working-dir', dir], { encoding: 'utf8' });

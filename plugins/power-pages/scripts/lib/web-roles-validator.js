@@ -1,7 +1,13 @@
 const fs = require('fs');
 const path = require('path');
 const { WEB_ROLE_FILE_SUFFIX, listYamlFiles } = require('./powerpages-config');
+const {
+  detectMetadataLayout,
+  loadAggregateRecords,
+  normalizeWebRole,
+} = require('./non-spa-metadata');
 const { addFinding, findUnexpectedKeys, findMissingKeys, summarize } = require('./powerpages-validation-utils');
+const { resolvePowerPagesSiteRoot } = require('./validation-helpers');
 
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const WEB_ROLE_ALLOWED_KEYS = new Set([
@@ -9,6 +15,12 @@ const WEB_ROLE_ALLOWED_KEYS = new Set([
   'authenticatedusersrole',
   'id',
   'name',
+]);
+const AGGREGATE_WEB_ROLE_ALLOWED_KEYS = new Set([
+  'adx_anonymoususersrole',
+  'adx_authenticatedusersrole',
+  'adx_name',
+  'adx_webroleid',
 ]);
 const WEB_ROLE_REQUIRED_KEYS = new Set([
   'anonymoususersrole',
@@ -59,9 +71,24 @@ function loadWebRoles(webRolesDir) {
 
 function validateWebRoles(projectRoot) {
   const findings = [];
-  const webRolesDir = path.join(projectRoot, '.powerpages-site', 'web-roles');
+  const siteRoot = resolvePowerPagesSiteRoot(projectRoot);
+  let layout;
+  try {
+    layout = detectMetadataLayout(projectRoot);
+  } catch (error) {
+    addFinding(findings, 'error', `Failed to resolve web role metadata: ${error.message}`, {
+      filePath: siteRoot,
+    });
+    return {
+      projectRoot,
+      webRoles: [],
+      findings,
+      summary: summarize(findings),
+    };
+  }
+  const webRolesDir = layout.roles.directory;
 
-  for (const filePath of listYamlFiles(webRolesDir)) {
+  for (const filePath of layout.roles.mode === 'per-record' ? listYamlFiles(webRolesDir) : []) {
     const fileName = path.basename(filePath);
     if (!fileName.endsWith(WEB_ROLE_FILE_SUFFIX)) {
       addFinding(findings, 'error', `Web role file does not follow naming convention "*${WEB_ROLE_FILE_SUFFIX}".`, {
@@ -72,17 +99,33 @@ function validateWebRoles(projectRoot) {
   }
 
   let webRoles = [];
+  let sourceRecords = [];
   try {
-    webRoles = loadWebRoles(webRolesDir);
+    if (layout.roles.mode === 'mixed') {
+      throw new Error(
+        `Mixed web-role serialization found at ${layout.siteRoot}; ` +
+        'webrole.yml and web-roles/*.webrole.yml cannot be validated as one source.'
+      );
+    }
+    sourceRecords = layout.roles.mode === 'aggregate'
+      ? loadAggregateRecords(layout.roles.aggregateFile)
+      : loadWebRoles(webRolesDir);
+    webRoles = sourceRecords.map(normalizeWebRole);
   } catch (error) {
     addFinding(findings, 'error', `Failed to parse web role YAML: ${error.message}`, {
-      filePath: webRolesDir,
+      filePath: layout.roles.mode === 'aggregate' ? layout.roles.aggregateFile : webRolesDir,
     });
   }
 
-  for (const webRole of webRoles) {
+  const sourceAllowedKeys = layout.roles.mode === 'aggregate'
+    ? AGGREGATE_WEB_ROLE_ALLOWED_KEYS
+    : WEB_ROLE_ALLOWED_KEYS;
+
+  for (let index = 0; index < webRoles.length; index += 1) {
+    const webRole = webRoles[index];
+    const sourceRecord = sourceRecords[index];
     const fileName = path.basename(webRole.filePath);
-    const unexpectedKeys = findUnexpectedKeys(webRole, WEB_ROLE_ALLOWED_KEYS);
+    const unexpectedKeys = findUnexpectedKeys(sourceRecord, sourceAllowedKeys);
     if (unexpectedKeys.length > 0) {
       addFinding(findings, 'error', `Web role contains unexpected schema keys: ${unexpectedKeys.join(', ')}.`, {
         filePath: webRole.filePath,

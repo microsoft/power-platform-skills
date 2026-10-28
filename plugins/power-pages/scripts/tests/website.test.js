@@ -109,6 +109,40 @@ test('findWebsite matches case-insensitively', async () => {
   assert.equal(result.Id, 'p1');
 });
 
+test('findWebsiteByIdentity matches exact name and subdomain case-insensitively', async () => {
+  const { findWebsiteByIdentity } = loadWebsiteWithStubs({
+    pages: [
+      {
+        skip: 0,
+        body: {
+          value: [
+            {
+              Id: 'p1',
+              Name: 'EDM No Website ID Test',
+              Subdomain: 'edm-no-website-id-test',
+              WebsiteRecordId: 'generated-id',
+            },
+          ],
+        },
+      },
+    ],
+  });
+
+  const result = await findWebsiteByIdentity({
+    siteName: 'edm no website id test',
+    subdomain: 'EDM-NO-WEBSITE-ID-TEST',
+  });
+  assert.equal(result.WebsiteRecordId, 'generated-id');
+});
+
+test('findWebsiteByIdentity requires both identity fields', async () => {
+  const { findWebsiteByIdentity } = loadWebsiteWithStubs({ pages: [] });
+  await assert.rejects(
+    () => findWebsiteByIdentity({ siteName: 'Site', subdomain: '' }),
+    /must both be non-empty strings/,
+  );
+});
+
 test('findWebsite follows @odata.nextLink across pages', async () => {
   const target = 'TARGET-ID';
   const { findWebsite } = loadWebsiteWithStubs({

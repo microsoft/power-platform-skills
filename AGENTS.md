@@ -90,7 +90,8 @@ No root-level build, lint, or test commands exist. Build/test tooling lives insi
 ## CI
 
 **Only two workflows run on every PR** — `validate-keyword-case` and `validate-repository-metadata`.
-Both are repo-wide and enforce metadata/marketplace rules, not behavior.
+Both are repo-wide and enforce metadata/marketplace rules. `validate-repository-metadata` also
+runs standalone installer regression tests on Linux and Windows.
 
 **Every test workflow is path-filtered** — to a single plugin (`power-pages` → `plugins/power-pages/**`;
 `model-apps` → `plugins/model-apps/**` + `evals/model-apps/**` + the `shared/` sources it bundles;
@@ -172,7 +173,7 @@ jobs:
 
 This opt-out suppresses **transmission only** (the local diagnostic mirror is still written), so it is safe and has no effect on what the job actually tests. Tests that need to assert that emission *happens* clear the var in their own spawned-process env and route the event to a local `POWER_PLATFORM_SKILLS_FAKE_HTTPS` probe instead of the real collector — so the job-level opt-out never breaks them. Existing reference: `.github/workflows/power-pages-script-tests.yml`. When you add a new such workflow (or a new emitting step to an existing one), add this env var in the same change; treat a CI job that runs the tests without it as a production-telemetry leak.
 
-Current adopters: `power-pages`, `mobile-apps`, `model-apps`, and `pcf` (all transmitting; `pcf` shares model-apps' tenant). Others adopt on demand. The library's own tests (`shared/telemetry/tests`) run in `.github/workflows/shared-telemetry-tests.yml` on a change to the source or to any bundled copy, and its `bundled-copies.test.js` fails when any adopter's `plugins/<plugin>/scripts/lib/telemetry/lib` differs from `shared/telemetry/lib`. The workflow sets every adopter's opt-out — add a new adopter's variable there too. power-pages and model-apps also keep a `scripts/tests/telemetry-lib-copy.test.js` that runs the same comparison in their own suites (model-apps also checks its shared skill copies, and lists `shared/telemetry/**` in its workflow's path filter so a source edit runs it too).
+Current adopters: `power-pages`, `mobile-apps`, `model-apps`, `pcf`, `power-automate`, and `power-apps-mobile-extension` (all transmitting; `pcf` shares model-apps' tenant). Others adopt on demand. The library's own tests (`shared/telemetry/tests`) run in `.github/workflows/shared-telemetry-tests.yml` on a change to the source or to any bundled copy, and its `bundled-copies.test.js` fails when any adopter's `plugins/<plugin>/scripts/lib/telemetry/lib` differs from `shared/telemetry/lib`. The workflow sets every adopter's opt-out — add a new adopter's variable there too. power-pages and model-apps also keep a `scripts/tests/telemetry-lib-copy.test.js` that runs the same comparison in their own suites (model-apps also checks its shared skill copies, and lists `shared/telemetry/**` in its workflow's path filter so a source edit runs it too).
 
 ## Legacy Marketplace Compatibility
 

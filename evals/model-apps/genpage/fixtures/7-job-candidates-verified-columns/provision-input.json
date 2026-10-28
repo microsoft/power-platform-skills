@@ -1,0 +1,69 @@
+{
+  "solution": {
+    "uniqueName": "ContosoRecruiting",
+    "publisherPrefix": "cr"
+  },
+  "entities": [
+    {
+      "schemaName": "cr_JobRequisition",
+      "displayName": "Job Requisition",
+      "pluralName": "Job Requisitions",
+      "description": "An approved opening that candidates apply for.",
+      "primaryAttribute": {
+        "schemaName": "cr_Name",
+        "displayName": "Job Title",
+        "maxLength": 100
+      },
+      "columns": [
+        { "schemaName": "cr_Department", "displayName": "Department", "type": "Text", "maxLength": 100, "required": true },
+        { "schemaName": "cr_Openings", "displayName": "Openings", "type": "Integer", "minValue": 1, "maxValue": 50 }
+      ]
+    },
+    {
+      "schemaName": "cr_Candidate",
+      "displayName": "Candidate",
+      "pluralName": "Candidates",
+      "description": "A person who applied for a job requisition.",
+      "primaryAttribute": {
+        "schemaName": "cr_Name",
+        "displayName": "Full Name",
+        "maxLength": 100
+      },
+      "columns": [
+        { "schemaName": "cr_InterviewScore", "displayName": "Interview Score", "type": "Integer", "minValue": 0, "maxValue": 100 },
+        { "schemaName": "cr_Recruiter", "displayName": "Recruiter", "type": "Text", "maxLength": 100, "required": true },
+        { "schemaName": "cr_ApplicationStatus", "displayName": "Application Status", "type": "Choice", "options": ["Applied", "Screening", "Interviewing", "Offer", "Hired", "Rejected"] }
+      ]
+    }
+  ],
+  "relationships": [
+    {
+      "type": "OneToMany",
+      "schemaName": "cr_jobrequisition_cr_candidate",
+      "referenced": "cr_JobRequisition",
+      "referencing": "cr_Candidate",
+      "lookup": {
+        "schemaName": "cr_JobRequisition",
+        "displayName": "Job Requisition"
+      },
+      "cascadeDelete": "RemoveLink"
+    }
+  ],
+  "sampleData": {
+    "cr_JobRequisition": [
+      { "cr_name": "Senior Backend Engineer", "cr_department": "Engineering", "cr_openings": 2 },
+      { "cr_name": "Product Designer", "cr_department": "Design", "cr_openings": 1 },
+      { "cr_name": "Customer Success Manager", "cr_department": "Customer Success", "cr_openings": 3 }
+    ],
+    "cr_Candidate": [
+      { "cr_name": "Maya Thompson", "cr_interviewscore": 88, "cr_recruiter": "Jordan Lee", "cr_applicationstatus": "Offer", "$parent": { "entity": "cr_JobRequisition", "match": { "cr_name": "Senior Backend Engineer" } } },
+      { "cr_name": "Ethan Brooks", "cr_interviewscore": 74, "cr_recruiter": "Jordan Lee", "cr_applicationstatus": "Interviewing", "$parent": { "entity": "cr_JobRequisition", "match": { "cr_name": "Senior Backend Engineer" } } },
+      { "cr_name": "Sofia Alvarez", "cr_recruiter": "Jordan Lee", "cr_applicationstatus": "Screening", "$parent": { "entity": "cr_JobRequisition", "match": { "cr_name": "Senior Backend Engineer" } } },
+      { "cr_name": "Liam O'Connor", "cr_interviewscore": 91, "cr_recruiter": "Priya Natarajan", "cr_applicationstatus": "Hired", "$parent": { "entity": "cr_JobRequisition", "match": { "cr_name": "Product Designer" } } },
+      { "cr_name": "Aiko Tanaka", "cr_interviewscore": 62, "cr_recruiter": "Priya Natarajan", "cr_applicationstatus": "Rejected", "$parent": { "entity": "cr_JobRequisition", "match": { "cr_name": "Product Designer" } } },
+      { "cr_name": "Noah Williams", "cr_recruiter": "Hannah Okafor", "cr_applicationstatus": "Applied", "$parent": { "entity": "cr_JobRequisition", "match": { "cr_name": "Customer Success Manager" } } },
+      { "cr_name": "Grace Kim", "cr_interviewscore": 79, "cr_recruiter": "Hannah Okafor", "cr_applicationstatus": "Interviewing", "$parent": { "entity": "cr_JobRequisition", "match": { "cr_name": "Customer Success Manager" } } },
+      { "cr_name": "Omar Haddad", "cr_recruiter": "Hannah Okafor", "cr_applicationstatus": "Screening", "$parent": { "entity": "cr_JobRequisition", "match": { "cr_name": "Customer Success Manager" } } }
+    ]
+  }
+}

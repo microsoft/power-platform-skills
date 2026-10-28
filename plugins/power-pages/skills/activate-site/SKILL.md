@@ -15,7 +15,7 @@ model: sonnet
 
 Provision a new Power Pages website in a Power Platform environment via the Power Platform REST API.
 
-> **Prerequisite:** This skill expects an existing Power Pages code site created via `/create-site`. Run that skill first if the site does not exist yet.
+> **Prerequisite:** This skill expects an existing Power Pages SPA site created via `/create-site`. Run that skill first if the site does not exist yet.
 
 ## Core Principles
 

@@ -1,0 +1,21 @@
+[
+  {
+    "id": "list-tables-search",
+    "by": "genpage-planner",
+    "command": "node scripts\\list-tables.js --env https://contoso.crm.dynamics.com --search cnt_widget --exact",
+    "exitCode": 0,
+    "result": { "ok": true, "search": ["cnt_widget"], "exact": true, "count": 0, "tables": [], "missing": ["cnt_widget"] }
+  },
+  {
+    "id": "auth",
+    "command": "node scripts\\check-auth.js --env https://contoso.crm.dynamics.com --require-pac",
+    "exitCode": 0,
+    "result": {
+      "ok": false, "blocker": "az_not_logged_in",
+      "message": "Azure CLI is installed but not logged in. Run `az login` with the same identity as your active `pac auth` profile.",
+      "warnings": [], "azUser": null, "pacUser": null,
+      "envUrl": null, "identitiesMatch": false, "whoAmI": null
+    },
+    "userMessage": "Azure CLI is installed but not logged in. Run `az login` with the same identity as your active `pac auth` profile."
+  }
+]

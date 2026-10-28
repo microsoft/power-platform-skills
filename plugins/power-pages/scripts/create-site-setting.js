@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-// Creates a site setting YAML file for Power Pages code sites.
+// Creates a site setting YAML file for Power Pages SPA or non-SPA sites.
 // Generates UUID, validates inputs, writes correctly-formatted YAML.
 //
 // Usage:
@@ -16,6 +16,12 @@ const fs = require('fs');
 const path = require('path');
 const generateUuid = require('./generate-uuid');
 const { loadSiteSettings, SITE_SETTING_FILE_SUFFIX } = require('./lib/powerpages-config');
+const {
+  appendAggregateRecord,
+  detectMetadataLayout,
+  loadAggregateRecords,
+  normalizeSiteSetting,
+} = require('./lib/non-spa-metadata');
 
 // --- CLI arg parsing (same pattern as update-skill-tracking.js) ---
 
@@ -79,16 +85,31 @@ if (isWebApiFieldsSetting && hasWildcardField) {
   process.exit(1);
 }
 
-const siteSettingsDir = path.join(projectRoot, '.powerpages-site', 'site-settings');
-if (!fs.existsSync(siteSettingsDir)) {
-  console.error(`Error: Site settings directory not found at ${siteSettingsDir}`);
-  console.error('The site must be deployed at least once before site settings can be created.');
+let layout;
+try {
+  layout = detectMetadataLayout(projectRoot);
+} catch (error) {
+  console.error(`Error: ${error.message}`);
+  process.exit(1);
+}
+if (layout.settings.mode === 'mixed') {
+  console.error(
+    `Error: Mixed site-setting serialization detected under ${layout.siteRoot}. ` +
+    'Resolve sitesetting.yml versus site-settings/*.sitesetting.yml before creating a setting.'
+  );
+  process.exit(1);
+}
+if (layout.settings.mode === 'missing') {
+  console.error(`Error: No site-setting metadata storage was found under ${layout.siteRoot}.`);
+  console.error('Download the site again with the explicit PAC model before creating settings.');
   process.exit(1);
 }
 
 let existingSiteSettings;
 try {
-  existingSiteSettings = loadSiteSettings(siteSettingsDir);
+  existingSiteSettings = layout.settings.mode === 'aggregate'
+    ? loadAggregateRecords(layout.settings.aggregateFile).map(normalizeSiteSetting)
+    : loadSiteSettings(layout.settings.directory);
 } catch (error) {
   console.error(`Error: Failed to read existing site settings. ${error.message}`);
   process.exit(1);
@@ -153,11 +174,54 @@ if (existingSettingByName) {
 }
 
 const existingSettingByFileName = existingSiteSettings.find(
-  setting => path.basename(setting.filePath).toLowerCase() === fileName.toLowerCase()
+  setting => setting.filePath
+    && path.basename(setting.filePath).toLowerCase() === fileName.toLowerCase()
 );
 if (existingSettingByFileName) {
   console.error(`Error: Site setting file "${fileName}" would collide with existing setting "${existingSettingByFileName.name}" in ${existingSettingByFileName.filePath}.`);
   process.exit(1);
+}
+
+if (layout.settings.mode === 'aggregate') {
+  if (usesEnvironmentVariable) {
+    console.error(
+      'Error: Environment-variable-backed aggregate site settings are not yet verified. ' +
+      'Create this setting through Power Pages Management and download the site again.'
+    );
+    process.exit(1);
+  }
+
+  const aggregateFields = {};
+  if (description) {
+    aggregateFields.adx_description = description;
+  }
+  aggregateFields.adx_name = settingName;
+  aggregateFields.adx_sitesettingid = uuid;
+  if (loadAggregateRecords(layout.settings.aggregateFile)
+    .some(setting => Object.prototype.hasOwnProperty.call(setting, 'adx_source'))) {
+    aggregateFields.adx_source = 0;
+  }
+  aggregateFields.adx_value = valueType === 'boolean' ? (settingValue === 'true') : settingValue;
+
+  try {
+    appendAggregateRecord(
+      layout.settings.aggregateFile,
+      aggregateFields,
+      ['adx_description', 'adx_name', 'adx_sitesettingid', 'adx_source', 'adx_value']
+    );
+  } catch (error) {
+    console.error(
+      `Error: Failed to append site setting to ${layout.settings.aggregateFile}. ${error.message}`
+    );
+    process.exit(1);
+  }
+
+  process.stdout.write(JSON.stringify({
+    id: uuid,
+    filePath: layout.settings.aggregateFile,
+    storage: 'aggregate',
+  }));
+  process.exit(0);
 }
 
 const fields = usesEnvironmentVariable
@@ -177,9 +241,9 @@ const fields = usesEnvironmentVariable
 const yamlContent = writeYaml(fields);
 
 // File name: replace / with - (e.g., "Webapi/cra5b_product/enabled" → "Webapi-cra5b_product-enabled.sitesetting.yml")
-const filePath = path.join(siteSettingsDir, fileName);
+const filePath = path.join(layout.settings.directory, fileName);
 
 fs.writeFileSync(filePath, yamlContent, 'utf8');
 
-const result = { id: uuid, filePath: filePath };
+const result = { id: uuid, filePath: filePath, storage: 'per-record' };
 process.stdout.write(JSON.stringify(result));

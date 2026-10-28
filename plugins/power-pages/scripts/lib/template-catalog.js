@@ -13,7 +13,7 @@ const DEFAULT_REPO = 'power-pages-samples';
 const DEFAULT_REF = 'latest-release';
 const DEFAULT_CATALOG_PATH = 'templates/manifest.json';
 const FRAMEWORKS = new Set(['react', 'vue', 'angular', 'astro', 'none', 'other']);
-const TEMPLATE_KINDS = new Set(['spa', 'traditional']);
+const TEMPLATE_KINDS = new Set(['spa', 'traditional', 'non-spa']);
 const ID_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const IDENTIFIER_PATTERN = /^[a-z_][a-z0-9_]*$/i;
 const CACHE_MARKER_FILE = '.powerpages-template-cache.json';
@@ -199,7 +199,7 @@ function validateSolutionSettings(solutions, templateId) {
       return `template ${templateId} solution at index ${index} is not an object`;
     }
     const keys = Object.keys(solution);
-    if (keys.some(key => !['uniqueName', 'publishChanges'].includes(key))) {
+    if (keys.some((key) => !['uniqueName', 'publishChanges'].includes(key))) {
       return `template ${templateId} solution ${solution.uniqueName || index} has unsupported fields`;
     }
     if (!isNonEmptyString(solution.uniqueName) || !IDENTIFIER_PATTERN.test(solution.uniqueName)) {
@@ -225,6 +225,11 @@ function isSpaTemplate(template) {
   return template && template.kind === 'spa';
 }
 
+function isCreateWebsiteApiTemplate(template) {
+  return template?.kind === 'non-spa' &&
+    template?.provisioning?.type === 'create-website-api';
+}
+
 function assertValidSha(sha) {
   if (!/^[0-9a-f]{40}$/i.test(sha || '')) {
     throw new Error(`Expected an immutable 40-character commit sha, got: ${sha}`);
@@ -239,9 +244,6 @@ function validateCatalogShape(catalog) {
   //       "keywords": ["311", "citizen-services"],
   //       "audience": ["makers", "developers"],
   //       "requiredDataverseLanguages": [1033],
-  //       "solutions": [
-  //         { "uniqueName": "SupplierPortal", "publishChanges": true }
-  //       ],
   //       "previewImages": ["spa/311-portal/previews/home.png"],
   //       "seedDataPath": "spa/311-portal/seed/data.json",
   //       "author": "Microsoft" }
@@ -259,7 +261,7 @@ function validateCatalogShape(catalog) {
   }
   for (const [index, template] of catalog.templates.entries()) {
     if (!template || typeof template !== 'object') return `template at index ${index} is not an object`;
-    const requiredStringFields = isNestedFamilyTemplate(template)
+    const requiredStringFields = isNestedFamilyTemplate(template) || isCreateWebsiteApiTemplate(template)
       ? ['id', 'displayName', 'description', 'kind', 'author']
       : [
           'id', 'displayName', 'description', 'kind', 'framework',
@@ -275,19 +277,44 @@ function validateCatalogShape(catalog) {
     if (!Array.isArray(template.audience) || template.audience.length === 0 || !template.audience.every(isNonEmptyString)) {
       return `template ${template.id} audience must be a non-empty array of strings`;
     }
-    if (
-      !Array.isArray(template.requiredDataverseLanguages) ||
-      template.requiredDataverseLanguages.length === 0 ||
-      !template.requiredDataverseLanguages.every((id) => Number.isInteger(id) && id > 0)
-    ) {
-      return `template ${template.id} requiredDataverseLanguages must be a non-empty array of positive integers`;
-    }
     if (!Array.isArray(template.keywords)) return `template ${template.id} keywords must be an array`;
-    if (!Array.isArray(template.previewImages)) {
-      return `template ${template.id} previewImages must be an array`;
-    }
     const solutionSettingsError = validateSolutionSettings(template.solutions, template.id);
     if (solutionSettingsError) return solutionSettingsError;
+    if (isCreateWebsiteApiTemplate(template)) {
+      if (!isNonEmptyString(template.provisioning.templateName)) {
+        return `template ${template.id} provisioning.templateName must be a non-empty string`;
+      }
+      for (const field of ['capabilities', 'requirements', 'responsivePreviews']) {
+        if (!Array.isArray(template[field])) return `template ${template.id} ${field} must be an array`;
+      }
+      const previewIds = new Set();
+      for (const preview of template.responsivePreviews) {
+        if (!preview || typeof preview !== 'object' || Array.isArray(preview)) {
+          return `template ${template.id} responsive preview must be an object`;
+        }
+        for (const field of ['id', 'displayName', 'desktop', 'mobile']) {
+          if (!isNonEmptyString(preview[field])) {
+            return `template ${template.id} responsive preview missing string field: ${field}`;
+          }
+        }
+        if (previewIds.has(preview.id)) return `template ${template.id} has duplicate responsive preview id: ${preview.id}`;
+        previewIds.add(preview.id);
+      }
+      for (const field of ['previewImages', 'requiredDataverseLanguages', 'seedDataPath', 'variants']) {
+        if (template[field] !== undefined) return `template ${template.id} create-website-api must not define ${field}`;
+      }
+    } else {
+      if (
+        !Array.isArray(template.requiredDataverseLanguages) ||
+        template.requiredDataverseLanguages.length === 0 ||
+        !template.requiredDataverseLanguages.every((id) => Number.isInteger(id) && id > 0)
+      ) {
+        return `template ${template.id} requiredDataverseLanguages must be a non-empty array of positive integers`;
+      }
+      if (!Array.isArray(template.previewImages)) {
+        return `template ${template.id} previewImages must be an array`;
+      }
+    }
     if (isNestedFamilyTemplate(template)) {
       const seenFrameworks = new Set();
       const variantEntries = Object.entries(template.variants);
@@ -350,8 +377,17 @@ function materializeCatalogArtifactPaths(catalog, catalogPath) {
       // artifact path as repository-root-relative.
       const materialized = {
         ...template,
-        previewImages: template.previewImages.map((imagePath) => resolveCatalogArtifactPath(catalogPath, imagePath)),
+        ...(Array.isArray(template.previewImages) ? {
+          previewImages: template.previewImages.map((imagePath) => resolveCatalogArtifactPath(catalogPath, imagePath)),
+        } : {}),
       };
+      if (Array.isArray(template.responsivePreviews)) {
+        materialized.responsivePreviews = template.responsivePreviews.map((preview) => ({
+          ...preview,
+          desktop: resolveCatalogArtifactPath(catalogPath, preview.desktop),
+          mobile: resolveCatalogArtifactPath(catalogPath, preview.mobile),
+        }));
+      }
       if (template.seedDataPath) {
         materialized.seedDataPath = resolveCatalogArtifactPath(catalogPath, template.seedDataPath);
       }
@@ -468,6 +504,7 @@ function requestJson(url, deps = {}) {
       deps,
       reject,
       onResponse: (res) => {
+        res.on('error', reject);
         if (res.statusCode < 200 || res.statusCode >= 300) {
           res.resume();
           reject(new Error(`GET ${url} failed with ${res.statusCode}`));
@@ -490,6 +527,10 @@ function requestJson(url, deps = {}) {
 
 function downloadFile(url, outputPath, deps = {}) {
   const fsImpl = deps.fs || fs;
+  const maxBytes = deps.maxBytes;
+  if (maxBytes !== undefined && (!Number.isSafeInteger(maxBytes) || maxBytes <= 0)) {
+    return Promise.reject(new Error('maxBytes must be a positive safe integer'));
+  }
   return new Promise((resolve, reject) => {
     fsImpl.mkdirSync(path.dirname(outputPath), { recursive: true });
     const randomBytes = deps.randomBytes || crypto.randomBytes;
@@ -511,12 +552,34 @@ function downloadFile(url, outputPath, deps = {}) {
         reject(err);
       },
       onResponse: (res) => {
+        res.on('error', (err) => {
+          file.destroy();
+          cleanup();
+          reject(err);
+        });
         if (res.statusCode < 200 || res.statusCode >= 300) {
           res.resume();
           file.destroy();
           cleanup();
           reject(new Error(`GET ${url} failed with ${res.statusCode}`));
           return;
+        }
+        const contentLength = Number((res.headers || {})['content-length']);
+        if (maxBytes !== undefined && Number.isFinite(contentLength) && contentLength > maxBytes) {
+          res.resume();
+          file.destroy();
+          cleanup();
+          reject(new Error(`GET ${url} exceeds the ${maxBytes}-byte download limit`));
+          return;
+        }
+        let downloadedBytes = 0;
+        if (maxBytes !== undefined) {
+          res.on('data', (chunk) => {
+            downloadedBytes += chunk.length;
+            if (downloadedBytes > maxBytes) {
+              res.destroy(new Error(`GET ${url} exceeds the ${maxBytes}-byte download limit`));
+            }
+          });
         }
         res.pipe(file);
         file.on('finish', () => {
@@ -608,6 +671,9 @@ function resolveCatalogRef(options = {}, deps = {}) {
   if (ref === 'latest-release') {
     return resolveLatestRelease(options, deps);
   }
+  if (/^[0-9a-f]{40}$/i.test(ref)) {
+    return { ref, sha: ref };
+  }
   return { ref, sha: resolveRefToSha({ ...options, ref }, deps) };
 }
 
@@ -630,9 +696,9 @@ async function fetchCatalog(options = {}, deps = {}) {
     const catalogError = validateCatalogShape(rawCatalog);
     if (catalogError) throw new Error(`Template catalog is malformed: ${catalogError}`);
     const catalog = materializeCatalogArtifactPaths(rawCatalog, catalogPath);
-    // Traditional templates remain in the downloaded catalog so a mixed
-    // marketplace stays valid. create-site only exposes SPA templates until the
-    // traditional solution-import provisioning path is implemented.
+    // Keep the normalized selectable view SPA-only for SPA consumers.
+    // Non-SPA Create Website API consumers read the validated full catalog
+    // below because they do not download website code or solution artifacts.
     const selectableCatalog = {
       ...catalog,
       templates: normalizeCatalogFamilies({
@@ -753,11 +819,11 @@ function validateWebsiteCodeDirectory(localPath, options = {}, deps = {}) {
   if (rootStat.isSymbolicLink() || !rootStat.isDirectory()) {
     return 'Website code directory must be a regular directory';
   }
-  // Both traditional and code sites keep PAC website source under
-  // `.powerpages-site/website.yml`. Code sites also carry the package metadata
+  // Both non-SPA and SPA sites keep PAC website source under
+  // `.powerpages-site/website.yml`. SPA sites also carry the package metadata
   // and project-local npm configuration needed to build and upload the SPA.
   // See: https://learn.microsoft.com/power-platform/developer/cli/reference/pages#pac-pages-download
-  const requiredFiles = options.kind === 'traditional'
+  const requiredFiles = options.kind === 'non-spa' || options.kind === 'traditional'
     ? []
     : ['powerpages.config.json', 'package.json', '.npmrc'];
   for (const requiredFile of requiredFiles) {
@@ -995,7 +1061,7 @@ function inspectTemplateSolutions(localSolutionsPath, kind, deps = {}) {
     const solutionError = validateUnpackedSolutionDirectory(solutionPath, {
       ...deps,
       fs: fsImpl,
-      allowWebsiteComponents: kind === 'traditional',
+      allowWebsiteComponents: kind === 'non-spa' || kind === 'traditional',
     });
     if (solutionError) return { ok: false, error: `${entry.name}: ${solutionError}` };
 
@@ -1021,23 +1087,6 @@ function inspectTemplateSolutions(localSolutionsPath, kind, deps = {}) {
   return { ok: true, solutions };
 }
 
-function applySolutionSettings(solutions, solutionSettings = []) {
-  const settingsByName = new Map(solutionSettings.map(solution => [
-    solution.uniqueName,
-    solution,
-  ]));
-  const discoveredNames = new Set(solutions.map(solution => solution.uniqueName));
-  for (const setting of solutionSettings) {
-    if (!discoveredNames.has(setting.uniqueName)) {
-      throw new Error(`Template manifest declares unknown solution: ${setting.uniqueName}`);
-    }
-  }
-  return solutions.map(solution => ({
-    ...solution,
-    publishChanges: settingsByName.get(solution.uniqueName)?.publishChanges || false,
-  }));
-}
-
 function inspectTemplateVariantDirectory(localVariantPath, kind, deps = {}) {
   const websiteCodePath = path.join(localVariantPath, 'website-code');
   const websiteCodeError = validateWebsiteCodeDirectory(websiteCodePath, { kind }, deps);
@@ -1046,6 +1095,23 @@ function inspectTemplateVariantDirectory(localVariantPath, kind, deps = {}) {
     ok: true,
     websiteCodePath,
   };
+}
+
+function applySolutionSettings(solutions, solutionSettings = []) {
+  const settingsByName = new Map(solutionSettings.map((solution) => [
+    solution.uniqueName,
+    solution,
+  ]));
+  const discoveredNames = new Set(solutions.map((solution) => solution.uniqueName));
+  for (const setting of solutionSettings) {
+    if (!discoveredNames.has(setting.uniqueName)) {
+      throw new Error(`Template manifest declares unknown solution: ${setting.uniqueName}`);
+    }
+  }
+  return solutions.map((solution) => ({
+    ...solution,
+    publishChanges: settingsByName.get(solution.uniqueName)?.publishChanges || false,
+  }));
 }
 
 function validateTemplateVariantDirectory(localVariantPath, kind, deps = {}) {
@@ -1189,6 +1255,7 @@ module.exports = {
   validateCatalogShape,
   normalizeCatalogFamilies,
   isSpaTemplate,
+  isCreateWebsiteApiTemplate,
   zipFileNames,
   assertValidSha,
 };

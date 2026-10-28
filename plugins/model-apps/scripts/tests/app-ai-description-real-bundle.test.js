@@ -92,10 +92,11 @@ async function freshSdk({ ai, componentstate = 0, headerStatus = 204, sitemapSta
         return { status: 200, headers: { etag: state.etag }, body: multi ? { value: [sitemapRow()] } : sitemapRow() };
       }
       if (/\/appmodules/.test(url)) {
-        if (state.headerReadFails && /RetrieveUnpublished/i.test(url)) return { status: 500, headers: {}, body: { error: { message: 'transient failure' } } };
-        // The halt's own draft read. While a draft exists, put the PUBLISHED row first, so the test proves
-        // the unpublished layer is found wherever it sits: the live platform returned only the draft row,
-        // but does not document that. The SDK's own reads never select componentstate, so they are unaffected.
+        const select = (new URL(url).searchParams.get('$select') || '').split(',');
+        // Fault only the push's header comparison, not its independent current-layer ownership proof.
+        if (state.headerReadFails && /RetrieveUnpublished/i.test(url) && select.includes('name')) return { status: 500, headers: {}, body: { error: { message: 'transient failure' } } };
+        // While a draft exists, put the PUBLISHED row first: the SDK must choose componentstate 1
+        // for its current-layer proof regardless of row order.
         if (/componentstate/.test(decodeURIComponent(url)) && state.componentstate === 1) {
           return { status: 200, headers: {}, body: { value: [{ ...appRow(), componentstate: 0 }, appRow()] } };
         }
@@ -181,8 +182,7 @@ test('REAL BUNDLE: an app with none has no key, refuses an update, and gets it A
   assert.strictEqual(res.saved, true, JSON.stringify(res.error && res.error.message));
   const header = headerWrites(writes);
   assert.strictEqual(header.length, 1, 'one header write');
-  assert.strictEqual(header[0].body.aiappdescription, WANT);
-  assert.strictEqual(header[0].body.description, 'Tickets', 'the tile description rides through unchanged');
+  assert.deepStrictEqual(header[0].body, { aiappdescription: WANT }, 'the routing description alone: the tile description the row already holds is not sent again');
 });
 
 test('REAL BUNDLE: a different value is updated in place and written', async () => {
@@ -244,7 +244,7 @@ test('REAL BUNDLE: over another writer\u2019s UNPUBLISHED header change, the hea
   const header = headerWrites(writes).filter((w) => w.verb === 'patch');
   assert.deepStrictEqual(header.map((w) => w.ifMatch), ['W/"5"'], 'the row token, never the content token');
   assert.strictEqual(state.ai, WANT);
-  assert.strictEqual(header[0].body.description, 'Saved in Maker, not published', 'the other writer\u2019s change rides through');
+  assert.deepStrictEqual(header[0].body, { aiappdescription: WANT }, 'the other writer\u2019s unpublished description is not sent again: the routing description is written alone');
 });
 
 test('REAL BUNDLE: a header row moved after the fetch is a concurrent edit: refused, the generic halt, and the copy kept', async () => {
@@ -258,7 +258,8 @@ test('REAL BUNDLE: a header row moved after the fetch is a concurrent edit: refu
   assert.strictEqual(res.saved, false);
   assert.strictEqual(res.error && res.error.code, 'VERSION_CONFLICT');
   assert.throws(() => requireSuccessfulPush(res, 'app Probe'), (e) => e.code === 'version-conflict');
-  assert.ok(!reads.slice(readsBefore).some((u) => /componentstate/.test(decodeURIComponent(u))), 'not re-diagnosed as a pending draft');
+  assert.deepStrictEqual(reads.slice(readsBefore).map((u) => new URL(u).searchParams.get('$select')).filter((s) => s && s.includes('componentstate')),
+    ['appmoduleid,appmoduleidunique,componentstate'], 'only the SDK current-layer proof, never a wrapper pending-draft re-diagnosis');
   assert.strictEqual(state.ai, 'Route Q1', 'nothing written');
   // The copy keeps this run's edit. The app is a composite artifact whose stored token is the sitemap's, and a
   // header-only change does not move the sitemap, so a plain re-fetch keeps the copy as it is; the next run
@@ -281,7 +282,8 @@ test('REAL BUNDLE: a sitemap 412 after the header committed is a concurrent edit
   assert.strictEqual(res.saved, false);
   assert.match(String(res.error && res.error.detail), /^Version conflict \(412\) from https:\/\/contoso\.crm\.dynamics\.com\/api\/data\/v[\d.]+\/sitemaps\(55555555-5555-5555-5555-555555555555\)$/);
   assert.throws(() => requireSuccessfulPush(res, 'app Probe'), (e) => e.code === 'version-conflict');
-  assert.ok(!reads.slice(readsBefore).some((u) => /componentstate/.test(decodeURIComponent(u))), 'not re-diagnosed as a pending draft');
+  assert.deepStrictEqual(reads.slice(readsBefore).map((u) => new URL(u).searchParams.get('$select')).filter((s) => s && s.includes('componentstate')),
+    ['appmoduleid,appmoduleidunique,componentstate'], 'only the SDK current-layer proof, never a wrapper pending-draft re-diagnosis');
   // Someone saved the sitemap: the server has moved, and the kept copy stops the re-run's plain fetch.
   state.etag = 'W/"9"';
   await assert.rejects(sdk.fetchArtifact('app', APP_ID), (e) => e && e.code === 'LOCAL_EDITS_WOULD_BE_LOST');

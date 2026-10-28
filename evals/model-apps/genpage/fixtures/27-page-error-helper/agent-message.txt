@@ -1,0 +1,1 @@
+Created the Order Approvals page: a grid of sales orders, the selected order and an Approve button that runs the Approve Order action. Each failure is reported once and shown where it happened.

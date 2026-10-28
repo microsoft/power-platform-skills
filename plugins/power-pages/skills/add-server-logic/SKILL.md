@@ -27,7 +27,7 @@ Create and manage one or more Power Pages Server Logic files — server-side Jav
 - **Preserve frontend integrity**: If Phase 9 adds or changes SPA UI, first read `${PLUGIN_ROOT}/references/site-modification-integrity.md`; synchronize visible states across configured locale resources and keep the UI bidirectional and expansion-safe. Backend-only runs do not need localization changes.
 
 > **Prerequisites:**
-> - An existing Power Pages code site created
+> - An existing Power Pages SPA site created
 > - The site **must** be deployed at least once (`.powerpages-site` folder must exist) — server logic files live inside `.powerpages-site/server-logic/`, so deployment is required before any server logic can be created
 
 **Initial request:** $ARGUMENTS
@@ -78,7 +78,7 @@ Use the **Explore agent** (via `Task` tool with `agent_type: "explore"`) to anal
 
 **Prompt for the Explore agent:**
 
-> "Analyze this Power Pages code site for server logic context. Check:
+> "Analyze this Power Pages SPA site for server logic context. Check:
 > 1. Does `.powerpages-site/server-logic/` exist? If yes, list all subdirectories and their .js files. Summarize what each server logic does (which functions it implements, what SDK features it uses). Also read the corresponding .serverlogic.yml files to check web role assignments.
 > 2. Search the frontend source code (`src/**/*.{ts,tsx,js,jsx,vue,astro}`) for any existing calls to `/_api/serverlogics/` — these indicate server logic endpoints already being consumed.
 > 3. Look for CSRF token handling patterns (`__RequestVerificationToken`, `_layout/tokenhtml`) — these show how the site currently makes authenticated API calls.
@@ -828,7 +828,7 @@ When any approved server logic item uses `Server.Connector.Dataverse`, invoke th
 
 **Prompt:**
 
-> "Analyze this Power Pages code site and propose table permissions for Dataverse tables accessed by the approved server logic plan. The following tables need permissions:
+> "Analyze this Power Pages SPA site and propose table permissions for Dataverse tables accessed by the approved server logic plan. The following tables need permissions:
 >
 > [list each table with required CRUD privileges from step 6.1, grouped by server logic item]
 >

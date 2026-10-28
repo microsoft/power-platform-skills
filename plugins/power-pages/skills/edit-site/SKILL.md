@@ -1,0 +1,534 @@
+---
+name: edit-site
+description: >-
+  Plans, coordinates and customizes PAC CLI-downloaded Standard or Enhanced data model non-SPA
+  Power Pages sites created from Microsoft templates or manually in Design Studio. Use for
+  requests involving pages, localized content, navigation, assets, snippets, site markers,
+  Liquid/web templates, page layouts, or styling. Coordinated work produces an approved
+  browser-viewable plan, executes changes in dependency order, verifies the local result,
+  and optionally hands off to deployment. Not for React, Angular, Vue, or Astro SPA sites.
+user-invocable: true
+allowed-tools: Read, Write, Edit, Grep, Glob, Bash, WebSearch, AskUserQuestion, Skill, TaskCreate, TaskUpdate, TaskList, mcp__plugin_power-pages_microsoft-learn__microsoft_docs_search, mcp__plugin_power-pages_microsoft-learn__microsoft_docs_fetch, mcp__plugin_power-pages_playwright__browser_navigate, mcp__plugin_power-pages_playwright__browser_evaluate, mcp__plugin_power-pages_playwright__browser_run_code_unsafe
+model: opus
+---
+
+> **Plugin check**: Run `node "${PLUGIN_ROOT}/scripts/check-version.js"` — if it outputs a message, show it to the user before proceeding.
+> For styling-only requests, reuse the result once per installed plugin version in the current conversation.
+
+# Customize a Non-SPA Power Pages Site
+
+Coordinate local customization using the component authoring references.
+Do not duplicate their PAC metadata, identity, serialization, or validation rules.
+
+**Initial request:** $ARGUMENTS
+
+## Preview disclosure
+
+Read `${PLUGIN_ROOT}/references/non-spa-preview.md` and apply its **Entry and handoff
+protocol**. Unless the initial request contains the explicit marker from an actual covered-skill
+handoff, present the **Customization notice** before site discovery, task creation, or any other
+project inspection. This notice is informational and does not replace plan or deployment
+approval. Include `previewNoticeShown: true` and
+`invocationSource: edit-site` in every covered child-skill request.
+
+Read:
+
+- `${PLUGIN_ROOT}/references/design-studio-site-discovery.md`
+- `${PLUGIN_ROOT}/skills/edit-site/references/non-spa-site-authoring.md`
+
+Apply **Request routing** before creating coordination tasks or starting the phases below.
+For styling-only requests outside a current approved coordinated execution, follow
+`${PLUGIN_ROOT}/skills/edit-site/references/style-site-workflow.md`
+and finish after its local verification/report, without the phases below.
+For an individual page or component request, follow the shared authoring reference and
+finish after its verification/report.
+For coordinated work, also read:
+
+- `${PLUGIN_ROOT}/references/site-design-quality.md`
+- `${PLUGIN_ROOT}/skills/edit-site/references/customization-plan-contract.md`
+- `${PLUGIN_ROOT}/skills/edit-site/references/content-and-page-compositions.md`
+- `${PLUGIN_ROOT}/skills/edit-site/references/visual-asset-planning.md`
+
+For coordinated new-site design or requested styling, also read:
+
+- `${PLUGIN_ROOT}/skills/edit-site/references/styling/design-quality.md`
+
+## Ownership
+
+For coordinated work, this skill owns:
+
+- selecting one downloaded non-SPA site;
+- understanding the complete customization intent;
+- resolving cross-operation dependencies;
+- generating and obtaining approval for one customization plan;
+- executing component workflows in dependency order;
+- independently checking the combined local result;
+- committing coherent customization units;
+- offering deployment after local verification.
+
+It authors webpage, snippet, web-file, web-template, page-template, and site-marker records only through
+`${PLUGIN_ROOT}/skills/edit-site/references/non-spa-site-authoring.md` and the selected component reference.
+The `author-webpage-content` skill owns localized body HTML; the
+`style-site` reference workflow owns guarded styling.
+It does not upload, activate, or modify Dataverse directly.
+No dev server, live preview, or generated styling mockup is required. The HTML below is an
+approval document, not a rendering of the site; local checks cannot prove Studio/runtime appearance.
+
+## Progress tracking
+
+For coordinated work, create these tasks before starting:
+
+| Task subject | Active form | Description |
+|---|---|---|
+| Discover non-SPA site | Discovering non-SPA site | Select and validate one PAC-downloaded non-SPA site |
+| Gather customization intent | Gathering customization intent | Resolve pages, content, assets, languages, preservation, and visual direction |
+| Prepare customization plan | Preparing customization plan | Build persistent JSON and browser-viewable HTML plan artifacts |
+| Approve customization plan | Reviewing customization plan | Review and approve the complete coordinated local plan |
+| Execute customization | Customizing non-SPA site | Author components, compose content, and apply styling in dependency order |
+| Verify customization | Verifying customization | Validate component results, combined references, diff, and Git state |
+| Complete customization | Completing customization | Commit coherent changes, report local/live state, and offer deployment |
+
+## Phase 1: Discover and validate the site
+
+1. Follow the shared non-SPA discovery contract. Accept a site root that is the current
+   directory or a nested directory such as `.powerpages-site/`.
+2. Require `.portalconfig/`, non-empty `website.yml`, and at least one non-SPA component
+   directory. Reject `powerpages.config.json`-only SPA sites.
+3. If several valid sites remain and request/workspace evidence does not identify one, ask the
+   user to choose. Never select the first filesystem result.
+4. Read the site identity, configured languages, existing pages, navigation,
+   snippets, site markers and their page bindings, web files, web templates, page templates,
+   CSS sources, Bootstrap evidence, logos, favicons, existing page imagery, and the exact callers
+   of site-wide brand assets.
+   For header work, resolve the active website header binding, its source/includes, localized
+   branding snippets, navigation callers, and responsive/authenticated variants. Do not assume
+   that a template named `Header` is the one the site uses.
+   For a `creationIntent: "new-site"` handoff, revalidate `verifiedBootstrapMajor` against actual
+   downloaded asset evidence with the create-site validator's `--bootstrapVersion` option.
+   Never infer Bootstrap from a template name or silently migrate an existing site.
+5. Treat missing component directories as readiness findings. Do not create directories merely
+   to make a planned operation appear supported.
+6. Establish the local comparison baseline before creating plan artifacts:
+   - when no Git repository exists, initialize one at the narrowest project root containing the
+     selected site and commit only the verified downloaded baseline as
+     `Initial non-SPA site baseline`;
+   - when Git exists, record the starting commit and pre-existing dirty paths;
+   - never absorb unrelated or pre-existing dirty files into customization commits.
+7. Define `<PROJECT_ROOT>` as the repository root that owns the selected site. For the normal
+   nested layout it is the parent of `.powerpages-site/`; for a direct-root download it is that
+   site root itself.
+8. If `docs/edit-site/current-plan.json` or
+   `docs/edit-site/current-execution.json` exists, validate the pair against the
+   selected website identity. Offer to resume the first ready pending operation when its request
+   still matches the user's intent; otherwise prepare a new plan.
+
+## Request routing
+
+Use the smallest route that fully satisfies the request:
+
+- styling-only work outside a current approved coordinated execution: follow
+  `${PLUGIN_ROOT}/skills/edit-site/references/style-site-workflow.md`,
+  including its conditional scope and exact-diff/hash approvals, then report locally.
+  Do not create coordination tasks, a broad plan, Git baseline, commits or deployment prompts;
+- one narrow component change: execute the corresponding reference workflow through
+  `${PLUGIN_ROOT}/skills/edit-site/references/non-spa-site-authoring.md`;
+- one straightforward page: use the lightweight webpage-reference workflow with one resolved
+  `author-webpage-content` composition;
+- multiple pages or cross-component dependencies: use the complete orchestration below;
+- explicit new-site design handoff: use the complete orchestration, even for a one-page site,
+  so visual direction, image delivery, structure, and final styling remain coordinated;
+- an unambiguous continuation of creating a new site: use that same new-site route even if the
+  caller omitted the literal `creationIntent` field. Establish it from the request/session intent,
+  not a file timestamp or the mere presence of template metadata;
+- a current approved execution to resume or additional approval needed by a component operation:
+  use the complete orchestration and its existing gates before writing;
+- SPA/code site: stop and explain that this skill is non-SPA-only.
+
+Do not generate a broad plan or execute every owner merely because they are available.
+
+## Phase 2: Gather customization intent
+
+Use the initial request and the template's data-model/domain and requirements context before
+asking questions. Template selection is not a visual specification. Do not ask again for
+information already established.
+
+For a broad or underspecified request, collect:
+
+- existing pages to preserve or modify;
+- new pages, routes, parent relationships, and requested navigation;
+- visitor-facing content and languages;
+- assets, reusable snippets, Liquid templates, and custom layouts;
+- required capabilities/content and any explicit user preservation preferences; for existing-site
+  work, resolve preservation versus redesign only when the requested scope is unclear;
+- aesthetic and mood for new-site design or requested visual customization.
+
+For `creationIntent: "new-site"`, the selected creation template is a data/domain and requirements
+reference, not a constraint on appearance, page composition, layout, branding, or presentation.
+Design the complete modern visitor experience from the user's intent, not the starter arrangement.
+Custom design and layout are required. Reuse needed native forms, lists, content snippets and
+their verified bindings as components; do not reuse the template's page composition by default.
+Remove or replace unneeded starter sections and component placements when the fresh composition
+calls for it. Template presence alone is not a preservation requirement; account for removals
+and their dependencies in the existing plan, without deleting backing records or unrelated callers.
+Honor explicit preservation preferences or a choice to keep the template unchanged; otherwise
+do not require separate redesign permission just to depart from it. Reuse the shared quality
+reference to choose a coherent typography system, role-based palette, spacing rhythm, responsive composition, and
+meaningful hero/supporting imagery. Make context-specific design decisions without asking for
+every font or color. Preserve required capabilities/content, valid PAC metadata, record identities
+and relationships, required forms/lists and data bindings, navigation, authentication, and locale scope.
+Native Bootstrap/Studio-compatible serialization is protected, not the template's section
+arrangement: plan supported recomposition through the native owners before final styling.
+Treat known section-layout recipes as defaults, not a pattern allowlist. Resolve explicit
+native column geometry even when the starter has no matching layout sample.
+Safe approved local layout changes with unobserved Studio editing behavior carry
+**Studio editing compatibility unverified** in the existing warnings/verification and report;
+do not add a live-check gate or silently downgrade the design. Known incompatibilities,
+unsafe source and unresolved scope remain blockers. Other element/owner contracts stay unchanged.
+Existing-site and narrow edits remain preservation-first unless redesign is requested.
+Use the native content-composition adapter below to select relevant `page-blueprints.md` narrative
+patterns once for a new-site design or approved redesign, without adopting its SPA execution rules.
+Derive the shared experience brief from known intent: audience/job, primary and secondary
+action, principal doubt, honest proof, design thesis, first-screen concept, and signature moment.
+Record the concise purpose in `summary` and the brief/narrative decisions in
+`newSiteDesign.composition`, with implementation decisions in its existing typography, palette,
+spacing, and responsive fields. For an existing-site redesign without `newSiteDesign`, use the
+existing summary and approved operation inputs. Do not add mandatory schema fields, rewrite old
+approved plans, or restart this brief in every child skill.
+Set `newSiteDesign.imageDelivery: "external-url"` for every new-site creation handoff. Add images
+using approved direct HTTPS URLs in native image components; do not download them, create image
+Web Files, or schedule image-import operations. Suitable existing template images may remain.
+
+Apply **New-site custom layout planning** in the content-and-page-compositions reference before
+choosing operations: separate the reusable-component inventory from the proposed Home/primary-journey
+composition. Put concrete section and reused-component placements in the existing operation
+inputs, not only a design aspiration in `newSiteDesign.composition`.
+Inspect similar pages for
+requirements, bindings and supported serialization, not a mandatory design to copy;
+derive a content outline and supported `section -> columns -> elements` structure, draft safe
+explanatory copy, and identify only organization-specific facts that require confirmation.
+Plan the first screen and narrative beats before styling; choose task-first layouts for forms,
+lists, and self-service pages. Map blueprint ideas to supported native layouts and real available
+capabilities, not invented component types, literal SPA grids, or fabricated live counts.
+
+Apply the visual-asset reference whenever imagery, branding, icons, illustrations, patterns, or
+fonts could materially improve the requested design. Resolve delivery first: new-site image
+additions use user-approved hosted image URLs or curated Unsplash direct URLs. Existing-site file
+imports can still use user-provided files, original safe SVGs, and staged photography. Do not add an
+asset merely to fill space. Do not generate raster images or use another stock provider.
+For a new-site design, include at least one relevant content photograph or original illustration
+with an actual page placement; a logo, favicon, icon, or decorative divider alone is insufficient.
+An explicit user choice to omit imagery is the only exception, recorded in `newSiteDesign`.
+
+For new-site design and full-site redesign, explicitly plan the site header alongside the page
+composition; do not leave it at the starter appearance by omission. Follow **Site header planning**
+in `references/content-and-page-compositions.md`, reusing known brand and navigation decisions.
+For every header update, explicitly resolve the logo or wordmark against the website requirements:
+update an unsuitable starter logo, or record justified retention. Header CSS alone does not
+complete an approved logo replacement. Follow **Logos and favicons** in the visual-asset reference
+for source selection and missing brand inputs, without a separate approval gate.
+Record concrete header treatment or a reasoned preservation decision in the existing plan, with
+native owner operations for actual changes. A narrow existing-site edit does not expand to the
+header unless requested. Header changes alone do not fulfill a new site's custom-layout brief.
+
+<!-- not-a-gate: compact clarification gathers missing content and layout inputs; Phase 4 approves the plan -->
+
+When material inputs remain, ask once with the unresolved business facts plus compact choices for
+content source, navigation placement, locales, any unresolved preservation or styling scope,
+and only the unresolved asset decisions: approved brand files, permission
+to use Unsplash photography, and preserve/supply/propose/no-change logo direction. Prefer
+site-derived defaults and do not repeat known information.
+
+Generate context-aware feature choices from the selected template and current site. Do not offer
+a capability whose required local structure is absent without presenting the missing prerequisite
+and remediation. Do not promise non-SPA form/list or data-model authoring unless a verified
+owning skill supports the requested operation. When the missing prerequisite is a basic form,
+list, multistep form (advanced form/step), or its backing Dataverse table/view/table-permission,
+never offer, as a selectable choice, to run PAC/Dataverse commands, create Dataverse tables, or
+otherwise construct that record or its backing table locally — this skill and every skill it
+invokes does not upload, activate, or modify Dataverse, and creating prerequisite tables is
+modifying Dataverse.
+
+## Phase 3: Resolve and prepare the plan
+
+1. Resolve stable existing identities before planning: exact paths, IDs, routes, locale records,
+   template bindings, image URLs, applicable asset hashes/provenance, and caller relationships.
+   For `delivery: "external-url"`, record the final HTTPS `externalUrl`, license basis, placements,
+   alt text and `preparation: { "status": "remote" }`. Put the exact URL in the consumer's static
+   inputs, with no Web File output binding. Review hosting/hotlink permission, privacy and known
+   CSP `img-src` restrictions; report unknown runtime behavior honestly, and never change CSP
+   implicitly. Do not call the staging helper for these images.
+   For Unsplash, follow the visual-asset reference's WebSearch-to-CDN flow, as in SPA creation.
+   Use a discovered direct image URL without requiring a photo-page fetch or photographer
+   lookup; retain those details when known, never invent them. Do not derive a CDN path from a
+   photo-page slug or search-result ID. A blocked photo page does not establish a CDN failure.
+   The renderer labels unchecked external images as unverified. Network source checks are
+   opt-in, not an additional prerequisite for the normal planning flow.
+   Only assets intentionally delivered as new Web Files are prepared through
+   `scripts/prepare-non-spa-asset.js`. Keep approved bytes in the project-local ignored asset
+   cache and record the returned hash, MIME type, dimensions, filename, and cache path. Do not
+   write staged bytes directly into the non-SPA site.
+2. Divide the request into the smallest coherent operations identified by:
+   `author-web-file`, `author-content-snippet`, `author-web-template`,
+   `author-page-template`, `author-webpage`, `author-site-marker`, `author-webpage-content`, and `style-site`.
+   Use the non-SPA authoring index's dispatch for component reference workflows.
+   Invoke only `author-webpage-content` through the `Skill` tool.
+   Execute `style-site` through its reference workflow.
+   New pages update navigation by default unless the user explicitly asks not to. Resolve
+   placement through the webpage reference and include it or the explicit opt-out in the
+   page operation's existing inputs and summary before approval.
+   For new-site design, map the proposed layout to actual native composition operations on Home
+   and the primary journey. Include web-template/page-template or shared-shell work when that
+   source owns the layout; reusing a form/list/snippet does not require retaining its whole page.
+   Include planned section/component removals and their rationale in operation summaries and
+   resolved inputs; use supported native `replace` or scoped `modify` operations, not invented
+   deletion actions or CSS hiding. Retain required source/bindings and explicit exceptions in `preserve`.
+   A plan containing only copy/image substitutions, additional pages and styling while leaving
+   the starter Home/layout intact is incomplete unless that scope was explicitly preserved.
+3. Order operations by actual dependencies, not by skill name. Assets/snippets/templates normally
+   precede their consumers; webpage metadata must create an exact localized copy file before
+   `author-webpage-content` fills it; styling runs after structural authoring.
+   Include planned header snippet/template changes in those dependencies before final styling.
+   CSS-only header treatment needs no dummy structural operation or website-binding change.
+4. Follow the plan contract and write a schema-version-1 JSON plan, including the complete
+   `assets` manifest and, for a new-site handoff, the complete `newSiteDesign` brief, into a fresh external review directory
+   outside the selected site root. Do not replace the canonical approved plan during review.
+
+   ```text
+   <REVIEW_DIR>/plan.json
+   ```
+
+   Use the `<PROJECT_ROOT>` resolved in Phase 1. Use a new review directory for every revision so
+   the renderer never overwrites reviewed bytes.
+   New-site styling operations must depend on all structural operations, directly or transitively.
+   Plan page/section/site placement through `style-site`; do not replace Bootstrap, `theme.css`,
+   or `portalbasictheme.css`, flatten native markup, or install a second CSS framework to achieve
+   SPA visual quality.
+5. Never write free-form unresolved values such as `TBD`, `heroImage`, `appropriate page`, or
+   `choose a snippet`. Use typed `outputBindings` for values produced by earlier operations;
+   otherwise resolve the value or stop with the exact missing input.
+6. Render the browser plan:
+
+   ```bash
+   node "${PLUGIN_ROOT}/scripts/render-edit-site-plan.js" \
+     --output "<REVIEW_DIR>/plan.html" \
+     --data "<REVIEW_DIR>/plan.json"
+   ```
+
+   If either review filename exists, create a fresh review directory instead of overwriting it.
+   By default, the renderer validates the plan without image-network requests or an image-check
+   report. It labels unchecked images unverified and returns their unique URL count as
+   `unverifiedImages`. Disclose that state in the approval summary; it does not block review.
+   Do not add a mandatory verification-choice question or live-preview requirement.
+
+   Only when the user requests source verification, append `--verifyImages true`. The verifier
+   checks each unique external URL once with bounded public-only HTTPS GETs and writes
+   `plan.html.image-checks.json` after all checks succeed. See the visual-asset reference for
+   limits and evidence semantics. If a check fails, do not request approval or silently disable
+   checks. Choose a working direct source URL, update every affected asset and consumer input,
+   and render a fresh review. Do not repeatedly retry a 404, silently drop required imagery, or
+   claim an unchecked URL is verified.
+7. Open the rendered HTML with the OS-native default-browser launcher. A launch failure does not
+   invalidate the plan; print the exact path as a fallback.
+
+## Phase 4: Approve the plan
+
+Present a short terminal summary and direct the user to the HTML for the complete user-facing
+proposal: header treatment when in scope, pages and navigation, content and page compositions,
+assets and reusable components,
+styling, preservation decisions, warnings, verification, and the local/live boundary. The HTML
+describes visible outcomes rather than authoring-skill mechanics. Do not include an inline
+technical implementation trace. Keep the complete execution details in the validated JSON,
+which remains the execution source of truth and is persisted after approval.
+
+<!-- gate: edit-site:4.approve | category=plan | cancel-leaves=plan-artifacts -->
+
+> 🚦 **Gate (plan · edit-site:4.approve):** Approve the coordinated
+> customization plan before executing any authoring operation.
+>
+> **Trigger:** JSON and HTML plan artifacts are complete, with external images explicitly
+> unverified or supported by successful requested checks for this exact plan.
+> **Why:** The next phase can create or modify several related non-SPA records.
+> **Cancel leaves:** External review artifacts only; the downloaded site and current approved plan
+> remain unchanged.
+
+Use `AskUserQuestion`:
+
+| Question | Header | Options |
+|---|---|---|
+| Does this non-SPA site customization plan look good? | Customization plan | Approve and customize, Revise plan, Cancel |
+
+On revision, create a fresh review directory, render and open it, and repeat approval. Never edit
+the rendered HTML as the source of truth.
+
+After approval, publish the approved JSON:
+
+```bash
+node "${PLUGIN_ROOT}/scripts/promote-edit-site-plan.js" \
+  --projectRoot "<PROJECT_ROOT>" \
+  --data "<APPROVED_REVIEW_DIR>/plan.json"
+```
+
+If the approved review included source checks, append
+`--imageChecks "<APPROVED_REVIEW_DIR>/plan.html.image-checks.json"`; otherwise omit it.
+
+The publisher validates the approved JSON, renders canonical HTML from that exact data, creates
+`current-execution.json`, and records hashes plus a run ID. When a current approved run exists, it
+archives the plan, HTML, execution receipt, and icon together before replacement. Use only the
+published current plan and execution receipt for authoring coordination.
+The publisher makes no image-network requests. Unchecked images remain explicitly unverified
+in the canonical HTML and command result. A supplied report must match the exact plan and contain
+successful checks; it is copied into the execution receipt. Missing, malformed, stale or failed
+supplied reports block publication, never silently downgrade it. Preserve the reviewed evidence
+state; do not drop a checked review's report or invent one for unchecked images. Changed plans
+need fresh review and approval, and fresh checks if requested.
+
+## Phase 5: Execute through owning workflows
+
+For each ready operation:
+
+1. Run the execution helper with `--action resolve`; it blocks until dependencies are complete and
+   returns the operation plus effective `resolvedInputs` combining approved static inputs with
+   actual bound outputs.
+2. Mark the operation `start`, then use the non-SPA authoring index to dispatch that resolved
+   operation. Execute reference workflows directly; invoke only
+   `author-webpage-content` as a skill. Supply the approved `designContext` when
+   returned. Carry its new-site composition and explicit preservation
+   decisions, not an implicit instruction to retain the creation template's layout or branding.
+   The shared brief supplies Bootstrap and visual direction, not permission to change unrelated
+   records, discard required capabilities/content, or bypass the owner's approval.
+   If returned, also pass `imageChecks`: reuse these source checks for unchanged URLs instead of
+   probing once per child or placement. Keep local caller/URL verification and browser failure
+   handling. Previously approved receipts without this optional field remain resumable, but do
+   not claim their image sources were checked. An unchecked new plan has the same resumable
+   behavior. A source change needs a new approved plan, with fresh checks if requested.
+3. Retain the exact selected site root, action, target identity, locales, final values, callers,
+   and preservation requirements. For a covered-skill handoff, include
+   `previewNoticeShown: true` and `invocationSource: edit-site`.
+   The operation may be expressed as structured
+   YAML/JSON or unambiguous natural language; it must resolve the same decisions as the plan
+   contract.
+4. Revalidate every supplied path and existing ID before writing; require
+   the same check in child-skill handoffs.
+5. After completion, re-read the changed files, write actual stable outputs to a temporary JSON
+   object, and mark the operation `complete --outputs <path>`. Remove that temporary file after the
+   receipt is updated.
+6. On failure, mark the operation `fail` with the concise error and stop. Do not silently adapt
+   dependent operations to an unapproved structural change. On a later session, inspect any
+   partial files before restarting that failed operation; never blindly replay it.
+7. After all operations complete, run the execution helper with `--action finish`.
+
+Execute the `author-webpage` reference workflow for page records, routes, parents, template
+assignment, localized shells, and navigation within the approved scope. Invoke `author-webpage-content` after
+that workflow resolves the page handoff. Invoke it directly only when one exact existing localized target
+file and its composition are already resolved.
+Carry the verified Bootstrap major through the page-owner handoff into section/element authoring.
+Use Bootstrap 5 serialization for the verified new-site default and the inspected site-local
+Bootstrap 3 patterns only for the explicit compatibility path.
+
+For every staged visual asset, execute the `author-web-file` reference workflow before its consumers and record the
+verified `publicUrl`. Dependent page, snippet, template, or styling operations must consume that
+URL through an approved `outputBindings` entry; never predict a Web File URL. For a global logo or
+favicon, update only the exact verified snippet, template, or setting callers. Resolve all approved
+desktop/mobile logo variants and requested locales, including the accessible brand name and
+home-link destination; do not assume one logo snippet covers every header state. Do not replace the
+whole header merely to change a logo, and preserve navigation, search, language selection,
+sign-in behavior, and authenticated/anonymous branches.
+
+For external images, pass the exact approved HTTPS URL directly to the native content owner.
+Follow **External image** in the image-component reference; keep responsive sizing and localized
+alt text, and do not invent local filenames or Web File `name` attributes. External CSS image
+URLs also belong in `style-site`'s exact `externalResources` review. `style-site` does not fetch
+them or replace the image component.
+
+For styling, execute the `style-site` reference workflow last. Its exact-diff/hash approval is a separate binding between
+the user-reviewed CSS proposal and the bytes applied; the customization-plan approval does not
+replace that safety gate.
+
+Do not execute an empty operation, and do not invoke deployment from this phase.
+
+## Phase 6: Verify the combined result
+
+1. Require every component workflow's and child skill's own verification to succeed.
+2. Re-run non-SPA site discovery and confirm the selected root and website identity are
+   unchanged.
+3. Verify planned files and records exist, generated identities are unique, locale scope matches
+   the plan, dependencies resolve, and unrequested callers/content remain unchanged. For Web File assets,
+   verify the approved SHA-256, file/YAML pair, MIME type, dimensions, public URL, localized alt
+   text, caller placement, and absence of unapproved SVG active content or Design Studio
+   placeholders.
+   For external images, verify the caller's decoded URL equals the approved `externalUrl`, alt
+   text and layout/crop intent are present, and no image cache, binary, YAML or import operation
+   was introduced. The plan hashes the URL, not mutable remote bytes; availability and CSP remain
+   pending runtime checks unless separately performed.
+4. Review the complete Git diff against the approved plan. Unexpected component categories or
+   unrelated changes block completion. Classify `docs/edit-site/**` separately as
+   orchestration evidence; it is not a PAC component category and is not uploaded.
+5. Run the create-site non-SPA validator when a website record ID is available:
+
+   ```bash
+   node "${PLUGIN_ROOT}/skills/create-site/scripts/validate-site.js" \
+     --projectRoot "<PROJECT_ROOT>" \
+     --websiteRecordId "<WEBSITE_RECORD_ID>"
+   ```
+
+   For `newSiteDesign`, append `--bootstrapVersion "<newSiteDesign.bootstrapMajor>"`.
+6. For a new-site design, compare the result with every approved brief decision and image
+   placement: approved image URLs and callers (or reused existing assets), meaningful localized alternative text, responsive
+   sizing/crops, readable text on every intended surface, and consistent hierarchy/spacing.
+   Reuse `style-site`'s local contrast checks and resolve known failures. Report desktop/mobile
+   rendering, Studio save/reopen, and unknown image-overlay contrast as pending separate live
+   checks; do not start a server or claim local validation proves visual fidelity.
+   For any planned header work, trace its branding, source and styling decisions to the changed
+   native files and retained navigation, authentication, locale and caching contracts. Confirm the
+   approved logo or wordmark in every resolved desktop/mobile caller and requested locale,
+   including its source/value, accessible name, link destination and responsive sizing intent.
+   An unchanged starter logo is incomplete when the plan approved its replacement. Report
+   missing planned header work as incomplete; mobile-menu, keyboard and live-state behavior
+   remain unverified until separately observed.
+7. Compare the completed composition with the approved experience brief once, using
+   `${PLUGIN_ROOT}/skills/edit-site/references/styling/design-critique.md`'s native interpretation of the
+   shared categories and source-only evidence.
+   Trace the planned Home/primary-journey section structure and reused-component placements to
+   the changed native files, including the source that actually owns the shell. Compare against
+   the downloaded baseline: copy/image swaps or CSS on an unchanged starter layout do not satisfy
+   a custom-layout brief. Record missing planned composition work as incomplete and return it to
+   its native owner through the existing revision/approval flow, not a completed modern design.
+   Verify that approved removals are absent from the authored source, not merely hidden by CSS,
+   and that required components, their dependencies and explicitly preserved regions remain intact.
+   A changed section count or new class name alone is not evidence of custom composition.
+   Reuse child verification and, when present, the approved image-check receipt; do not repeat unchanged network
+   probes, add a screenshot gate, or run a critique per operation. Report observed local gaps and
+   unobserved runtime checks separately, retaining unverified status for unchecked images.
+   Revisions still require the existing plan/owner approvals;
+   a low or provisional visual score does not authorize direct edits or deployment.
+
+## Phase 7: Commit, report, and offer deployment
+
+Commit coherent customization units rather than combining the untouched template baseline with
+new work. Do not commit unrelated pre-existing changes.
+
+Report:
+
+- site identity and local root;
+- current approved plan, HTML, and execution paths, plus any archived predecessor;
+- created and modified components grouped by authoring operation;
+- languages and routes affected;
+- validation and commit results;
+- warnings and pending runtime checks;
+- explicit state: local customization is not live until deployment succeeds.
+
+<!-- gate: edit-site:7.deploy | category=plan | cancel-leaves=local-customization -->
+
+> 🚦 **Gate (plan · edit-site:7.deploy):** Choose whether to dispatch the
+> verified local non-SPA project to `/deploy-site`.
+>
+> **Trigger:** Local customization and combined verification succeeded.
+> **Why:** Deployment has its own environment and final-upload consent gates.
+> **Cancel leaves:** Verified local customization and commits.
+
+Ask: **Deploy these non-SPA site changes now?** Options: **Deploy now**, **Keep changes
+local**. On deploy, invoke `/deploy-site` with the exact project root. Otherwise finish with the
+local/live distinction.
+
+Record normal successful usage as `EditSite` through
+`${PLUGIN_ROOT}/references/skill-tracking-reference.md`.

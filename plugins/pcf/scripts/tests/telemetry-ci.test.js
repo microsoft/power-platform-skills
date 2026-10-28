@@ -99,3 +99,30 @@ test('PCF script CI watches every bundled telemetry source without widening unre
     assert.ok(globs.includes(`.github/workflows/${name}`), `.github/workflows/${name} must trigger the PCF script tests that check it`);
   }
 });
+
+// The eval tests and the full eval run read committed control projects, which a Windows checkout gives CRLF line ends, through the plugin's
+// manifest and source gates, so they run on every system and Node version the script tests run on.
+test('PCF eval CI runs on every system and Node version the script tests run on', (t) => {
+  const text = workflow(t, 'pcf-script-tests.yml');
+  if (text === null) return;
+  const jobSection = text.slice(text.search(/^jobs:[ \t]*\r?$/m));
+  const jobs = [...jobSection.matchAll(/^ {4}([a-z0-9-]+):[ \t]*\r?$/gim)];
+  const block = (id) => {
+    const index = jobs.findIndex((job) => job[1] === id);
+    assert.ok(index >= 0, `${id} is a job`);
+    return jobSection.slice(jobs[index].index, jobs[index + 1]?.index);
+  };
+  // `os: [ubuntu-latest, windows-latest, macos-latest]`, under the job's `matrix:`.
+  const list = (job, key) => {
+    const found = new RegExp(`^ {16}${key}:[ \\t]*\\[([^\\]\\r\\n]*)\\][ \\t]*\\r?$`, 'm').exec(job);
+    return found && found[1].split(',').map((item) => item.trim());
+  };
+  const scripts = block('test-pcf-scripts');
+  const evals = block('test-pcf-evals');
+  assert.deepStrictEqual(list(scripts, 'os'), ['ubuntu-latest', 'windows-latest', 'macos-latest']);
+  assert.deepStrictEqual(list(scripts, 'node'), ['20', '22']);
+  assert.deepStrictEqual(list(evals, 'os'), list(scripts, 'os'), 'the eval job runs on every system the script tests run on');
+  assert.deepStrictEqual(list(evals, 'node'), list(scripts, 'node'), 'and on every Node version');
+  assert.match(evals, /^ {8}runs-on: \$\{\{ matrix\.os \}\}[ \t]*\r?$/m, 'on the system of its matrix entry');
+  assert.match(evals, /^ {18}node-version: \$\{\{ matrix\.node \}\}[ \t]*\r?$/m, 'with the Node version of its matrix entry');
+});

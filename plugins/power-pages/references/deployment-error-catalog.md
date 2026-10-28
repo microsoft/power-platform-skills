@@ -323,7 +323,7 @@ Site functions but data operations all fail silently
    ```
 3. Alternatively, re-run `setup-solution` and include the `Webapi/*` category when asked about site settings.
 
-**Prevention**: The `setup-solution` skill should ALWAYS include `Webapi/*` site settings by default — these are required for any code site that uses the Web API.
+**Prevention**: The `setup-solution` skill should ALWAYS include `Webapi/*` site settings by default — these are required for any SPA site that uses the Web API.
 
 ---
 

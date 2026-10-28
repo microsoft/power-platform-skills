@@ -32,7 +32,7 @@ test('notRoundTrippedSummary counts every omitted class and groups by table', ()
   assert.deepStrictEqual(s.classes.map((c) => [c.kind, c.count]), [['forms', 2], ['views', 1], ['charts', 1]]);
   // Sorted by table so two runs against the same app produce the same report.
   assert.deepStrictEqual(s.entities.map((e) => e.entity), ['contoso_project', 'contoso_projectbaseline']);
-  assert.deepStrictEqual(s.entities[0], { entity: 'contoso_project', forms: ['Project'], views: ['Active Projects'], charts: ['By Status'], businessRules: [] });
+  assert.deepStrictEqual(s.entities[0], { entity: 'contoso_project', forms: ['Project'], views: ['Active Projects'], charts: ['By Status'], commands: [], businessRules: [] });
 });
 
 test('notRoundTrippedSummary returns null when there is nothing to report', () => {
@@ -58,7 +58,7 @@ test('notRoundTrippedSummary skips nameless rows instead of printing blanks', ()
 
 test('notRoundTrippedSummary buckets a row with no table under "unknown" rather than dropping it', () => {
   const s = notRoundTrippedSummary({ forms: [{ id: 'f1', name: 'Orphan' }] });
-  assert.deepStrictEqual(s.entities, [{ entity: 'unknown', forms: ['Orphan'], views: [], charts: [], businessRules: [] }]);
+  assert.deepStrictEqual(s.entities, [{ entity: 'unknown', forms: ['Orphan'], views: [], charts: [], commands: [], businessRules: [] }]);
 });
 
 // --- the classes actually reported ---------------------------------------------------------------
@@ -80,6 +80,18 @@ test('a global choice is reported WITHOUT a table, because it does not belong to
   assert.deepStrictEqual(s.orgScoped, [{ kind: 'globalChoices', label: 'global choice', names: ['contoso_status'] }]);
   assert.ok(!s.entities.some((e) => e.entity === 'unknown'), 'it must not be bucketed under a fake table');
   assert.match(notRoundTrippedWarning(s), /\(environment-wide\) globalChoices: contoso_status/);
+});
+
+test('a command-bar button is reported, grouped by its table like any other artifact, and the remedy names commands[]', () => {
+  // A download does not reconstruct commands[]: a rebuild in another environment makes the app without them. They were named nowhere.
+  const s = notRoundTrippedSummary(inventory({ commands: [{ id: 'a1', name: 'Escalate', entity: 'contoso_project' }, { id: 'a2', name: 'Approve', entity: 'contoso_project' }] }));
+  assert.deepStrictEqual(s.classes.map((c) => [c.kind, c.count]), [['forms', 2], ['views', 1], ['charts', 1], ['commands', 2]]);
+  assert.strictEqual(s.total, 6);
+  assert.deepStrictEqual(s.entities.find((e) => e.entity === 'contoso_project').commands, ['Approve', 'Escalate']);
+  const w = notRoundTrippedWarning(s);
+  assert.match(w, /does not reconstruct forms\[\], views\[\], charts\[\], commands\[\] — 2 forms, 1 view, 1 chart, 2 commands on 2 table\(s\)/);
+  assert.match(w, /contoso_project — forms: Project; views: Active Projects; charts: By Status; commands: Approve, Escalate/);
+  assert.match(w, /re-declare the ones you need in forms\[\], views\[\], charts\[\], commands\[\]/);
 });
 
 // --- the wording, which is the whole point of the fix -------------------------------------------
@@ -253,4 +265,71 @@ test('a TABLE-level failure is not overwritten by a later column failure', async
   // The first reason is the more useful one to show, and both describe the same outcome.
   const meta = await readEntityWithDescriptions(twoReadSdk(async () => ({ status: 401, headers: {}, body: {} }), async () => { throw new Error('later'); }), 'new_t');
   assert.strictEqual(meta.labelReadFailed, 'HTTP 401');
+});
+
+// --- the command-bar customisations of the app's tables -------------------------------------------------------------------------
+// readDescriptionInventory reads them (readCommandInventory) when it is given the app's tables: the unmanaged `appaction` rows bound to
+// those tables, 20 tables to a request, kept when table-scoped or scoped to this app, and not a Group container or an inactive row.
+const { readDescriptionInventory } = require('../download-model-app.js');
+const APP = '11111111-0000-4000-8000-000000000001';
+const OTHER_APP = '11111111-0000-4000-8000-0000000000ff';
+// No app layer to read: the forms, views and charts are reported as unknown, which these tests do not look at.
+const NO_LAYER = { layer: { ok: false }, components: new Map(), componentProblems: new Map(), notes: [] };
+function commandSdk(rows, { fail } = {}) {
+  const queries = [];
+  return {
+    queries,
+    queryRecords: async (set, opts) => {
+      queries.push({ set, ...opts });
+      if (set !== 'appaction') return [];
+      if (fail) throw new Error(fail);
+      // `contextvalue eq '<table>'` terms of the filter: the tables this request asks about.
+      const asked = [...String(opts.filter).matchAll(/contextvalue eq '([^']+)'/g)].map((m) => m[1]);
+      return rows.filter((r) => asked.includes(r.contextvalue));
+    },
+  };
+}
+const command = (over) => ({ appactionid: `a-${over.name}`, type: 0, statecode: 0, _appmoduleid_value: null, buttonlabeltext: null, ...over });
+
+test('the command inventory keeps the app\u2019s own commands of its tables — table-scoped or this app\u2019s — and leaves every other row out', async () => {
+  const sdk = commandSdk([
+    command({ name: 'escalate', buttonlabeltext: 'Escalate', contextvalue: 'contoso_ticket' }),
+    command({ name: 'approve', buttonlabeltext: 'Approve', contextvalue: 'contoso_ticket', _appmoduleid_value: `{${APP.toUpperCase()}}` }),
+    command({ name: 'contoso_unlabelled!1a2b', contextvalue: 'contoso_ticket' }),
+    command({ name: 'other', buttonlabeltext: 'Other app only', contextvalue: 'contoso_ticket', _appmoduleid_value: OTHER_APP }),
+    command({ name: 'group', type: 3, contextvalue: 'contoso_ticket' }),
+    command({ name: 'retired', buttonlabeltext: 'Retired', statecode: 1, contextvalue: 'contoso_ticket' }),
+    command({ name: 'close', buttonlabeltext: 'Close', contextvalue: 'account' }),
+  ]);
+  const inv = await readDescriptionInventory(sdk, APP, null, new Set(), NO_LAYER, { tables: ['contoso_ticket', 'account', 'contoso_ticket'] });
+  assert.deepStrictEqual(inv.commands.map((c) => `${c.entity}: ${c.name}`), ['account: Close', 'contoso_ticket: Approve', 'contoso_ticket: contoso_unlabelled!1a2b', 'contoso_ticket: Escalate']);
+  assert.ok(!(inv.incomplete || []).some((i) => i.kind === 'commands'));
+  const reads = sdk.queries.filter((q) => q.set === 'appaction');
+  assert.strictEqual(reads.length, 1, 'one request for the tables, each named once');
+  assert.strictEqual(reads[0].filter, "ismanaged eq false and (contextvalue eq 'account' or contextvalue eq 'contoso_ticket')");
+  assert.deepStrictEqual(reads[0].select, ['appactionid', 'name', 'buttonlabeltext', 'contextvalue', 'type', 'statecode', '_appmoduleid_value']);
+  assert.strictEqual(reads[0].paginate, true);
+});
+
+test('the command inventory asks about 20 tables to a request, and a name with a quote is escaped', async () => {
+  const tables = Array.from({ length: 25 }, (_, i) => `contoso_t${String(i).padStart(2, '0')}`);
+  const sdk = commandSdk([]);
+  await readDescriptionInventory(sdk, APP, null, new Set(), NO_LAYER, { tables: [...tables, "contoso_o'neil"] });
+  const asked = sdk.queries.filter((q) => q.set === 'appaction').map((q) => [...q.filter.matchAll(/contextvalue eq '((?:[^']|'')+)'/g)].length);
+  assert.deepStrictEqual(asked, [20, 6]);
+  assert.ok(sdk.queries.some((q) => q.set === 'appaction' && q.filter.includes("contextvalue eq 'contoso_o''neil'")));
+});
+
+test('a failed command read is reported as UNKNOWN, not as an app with no commands; no tables, or none named, read nothing', async () => {
+  const failed = await readDescriptionInventory(commandSdk([], { fail: 'HTTP 403' }), APP, null, new Set(), NO_LAYER, { tables: ['contoso_ticket'] });
+  assert.strictEqual(failed.commands, undefined);
+  assert.deepStrictEqual(failed.incomplete.filter((i) => i.kind === 'commands'), [{ kind: 'commands', reason: 'HTTP 403' }]);
+  const summary = notRoundTrippedSummary(failed);
+  assert.ok(summary.incomplete.some((i) => i.kind === 'commands'));
+  assert.match(notRoundTrippedWarning(summary), /commands — HTTP 403/);
+  for (const opts of [{ tables: [] }, {}, undefined]) {
+    const sdk = commandSdk([command({ name: 'x', buttonlabeltext: 'X', contextvalue: 'contoso_ticket' })]);
+    await readDescriptionInventory(sdk, APP, null, new Set(), NO_LAYER, opts);
+    assert.deepStrictEqual(sdk.queries.filter((q) => q.set === 'appaction'), [], JSON.stringify(opts));
+  }
 });

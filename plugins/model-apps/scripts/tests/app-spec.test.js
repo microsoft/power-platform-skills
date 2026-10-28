@@ -103,7 +103,7 @@ test('validateAppSpec TOLERATES a platform icon reference (OOB / $webresource pa
   }
 });
 
-test('validateAppSpec WARNS (does not error) on a dropped BARE-TOKEN entity-subarea vectorIcon (Ask 3 — no silent drop)', () => {
+test('validateAppSpec WARNS (does not error) on a dropped BARE-TOKEN entity-subarea vectorIcon (no silent drop)', () => {
   const s = JSON.parse(JSON.stringify(sample));
   s.appShell.areas[0].groups[0].subAreas[0].vectorIcon = 'Shop'; // bare Fluent token on an entity subarea
   const r = validateAppSpec(s, { profile: 'deploy' });
@@ -134,8 +134,8 @@ test('validateAppSpec WARNS on a custom-prefixed platform icon ref that is NOT d
   assert.ok(!(r3.warnings || []).some((w) => /NOT declared in webResources/.test(w)), 'an OOB/system icon ref is not flagged (present on every env)');
 });
 
-// F12 — URL scheme allowlist: only http(s) URLs may be shipped in an app the maker renders.
-test('validateAppSpec rejects a sitemap subArea url with a non-http(s) scheme (F12)', () => {
+// URL scheme allowlist: only http(s) URLs may be shipped in an app the maker renders.
+test('validateAppSpec rejects a sitemap subArea url with a non-http(s) scheme', () => {
   const s = JSON.parse(JSON.stringify(sample));
   s.appShell.areas[0].groups[0].subAreas.push({ title: 'Evil', url: 'javascript:alert(1)' });
   const r = validateAppSpec(s);
@@ -143,14 +143,14 @@ test('validateAppSpec rejects a sitemap subArea url with a non-http(s) scheme (F
   assert.ok(r.errors.some((e) => /url must be an http\(s\) URL/.test(e)), JSON.stringify(r.errors));
 });
 
-test('validateAppSpec accepts a sitemap subArea url with https (F12)', () => {
+test('validateAppSpec accepts a sitemap subArea url with https', () => {
   const s = JSON.parse(JSON.stringify(sample));
   s.appShell.areas[0].groups[0].subAreas.push({ title: 'Docs', url: 'https://learn.microsoft.com/' });
   const r = validateAppSpec(s);
   assert.strictEqual(r.ok, true, JSON.stringify(r.errors));
 });
 
-test('validateAppSpec rejects an iframe dashboard tile url with a non-http(s) scheme (F12)', () => {
+test('validateAppSpec rejects an iframe dashboard tile url with a non-http(s) scheme', () => {
   const s = JSON.parse(JSON.stringify(sample));
   s.dashboards = [{ name: 'Ops', tiles: [{ type: 'iframe', name: 'Map', url: 'javascript:alert(1)' }] }];
   const r = validateAppSpec(s);
@@ -599,7 +599,7 @@ test('validateAppSpec: a quick-view matches its form by (name, targetEntity) —
 test('validateAppSpec: a quick-view prefers the QuickView form when a same-named Main exists on the SAME target entity', () => {
   const ok = cloneDesk();
   // new_customer has BOTH a Main and a QuickView named "Information"; the quick-view must resolve the
-  // QuickView, not be rejected because the Main appears first (order-dependent name matching — Sol).
+  // QuickView, not be rejected because the Main appears first (order-dependent name matching).
   ok.forms = [
     { entity: 'new_ticket', name: 'Ticket', formType: 'Main', quickViews: [{ lookup: 'new_customerid', targetEntity: 'new_customer', form: 'Information' }] },
     { entity: 'new_customer', name: 'Information', formType: 'Main' },      // same name, Main — appears FIRST
@@ -850,14 +850,14 @@ test('childRelationshipsFor returns the child (many) side of each 1:N where the 
   assert.deepStrictEqual(childRelationshipsFor(spec, 'new_task'), []);
 });
 
-// === Task 3 (Plan 3): page-spec validation BEFORE any write (Critical 4) ===
+// === page-spec validation BEFORE any write ===
 // These checks run on every validateAppSpec call — author plan, run-1/run-2, teardown, verify —
 // so a malformed page spec is rejected before the pages phase writes anything. Design §7.2.
 
 // A minimal v2 spec that passes everything EXCEPT the page rule under test. schemaVersion 2 so the
 // stable-key rules apply; one entity so the base validation is satisfied.
 function pageSpec(pages) {
-  // Build a subarea per page so the every-page-placed rule (Task 3 / Plan 5) does not add spurious
+  // Build a subarea per page so the every-page-placed rule does not add spurious
   // errors for tests that exercise OTHER page validations (key grammar, codeFile paths, etc.).
   // Rejection tests already check for their specific error via .some(), so an extra "unknown page"
   // error for an invalid key does not break them.
@@ -872,7 +872,7 @@ function pageSpec(pages) {
   };
 }
 
-test('validateAppSpec rejects case-insensitive duplicate page names (Critical 4)', () => {
+test('validateAppSpec rejects case-insensitive duplicate page names', () => {
   const r = validateAppSpec(pageSpec([
     { key: 'a', name: 'Overview', source: { kind: 'tsx', codeFile: 'a.tsx' } },
     { key: 'b', name: 'overview', source: { kind: 'tsx', codeFile: 'b.tsx' } },
@@ -905,7 +905,7 @@ test('validateAppSpec still ERRORS when a NEW page (no pageId) collides with a p
   assert.ok(!r.ok && r.errors.some((e) => /duplicate page name/i.test(e)), 'a NEW page colliding with a pre-existing name is rejected');
 });
 
-test('validateAppSpec rejects duplicate implemented codeFile paths (Critical 4)', () => {
+test('validateAppSpec rejects duplicate implemented codeFile paths', () => {
   const r = validateAppSpec(pageSpec([
     { key: 'a', name: 'A', source: { kind: 'tsx', codeFile: 'pages/x.tsx' } },
     { key: 'b', name: 'B', source: { kind: 'tsx', codeFile: 'pages/x.tsx' } },
@@ -913,10 +913,10 @@ test('validateAppSpec rejects duplicate implemented codeFile paths (Critical 4)'
   assert.ok(!r.ok && r.errors.some((e) => /duplicate .*codeFile|codeFile .*already/i.test(e)), r.errors.join('; '));
 });
 
-// Addendum Crit 4: path aliases that resolve to the same file must be detected as duplicates.
+// Path aliases that resolve to the same file must be detected as duplicates.
 // path.normalize('pages/./x.tsx') and path.normalize('pages/x.tsx') resolve identically; without
 // normalization these would evade the duplicate check as different strings.
-test('validateAppSpec rejects normalized path duplicates: pages/x.tsx vs pages/./x.tsx (addendum Crit 4)', () => {
+test('validateAppSpec rejects normalized path duplicates: pages/x.tsx vs pages/./x.tsx', () => {
   const r = validateAppSpec(pageSpec([
     { key: 'a', name: 'A', source: { kind: 'tsx', codeFile: 'pages/x.tsx' } },
     { key: 'b', name: 'B', source: { kind: 'tsx', codeFile: 'pages/./x.tsx' } },
@@ -924,14 +924,14 @@ test('validateAppSpec rejects normalized path duplicates: pages/x.tsx vs pages/.
   assert.ok(!r.ok && r.errors.some((e) => /duplicate .*codeFile|codeFile .*already/i.test(e)), `pages/./x.tsx alias should be detected as duplicate: ${r.errors.join('; ')}`);
 });
 
-test('validateAppSpec rejects a codeFile that escapes the workspace (.. or absolute) (Critical 4)', () => {
+test('validateAppSpec rejects a codeFile that escapes the workspace (.. or absolute)', () => {
   for (const bad of ['../evil.tsx', '/etc/evil.tsx', 'C:/evil.tsx', 'a/../../evil.tsx']) {
     const r = validateAppSpec(pageSpec([{ key: 'a', name: 'A', source: { kind: 'tsx', codeFile: bad } }]), { profile: 'plan' });
     assert.ok(!r.ok && r.errors.some((e) => /codeFile.*(outside|escape|confin|absolute|\.\.)/i.test(e)), `${bad}: ${r.errors.join('; ')}`);
   }
 });
 
-test('validateAppSpec rejects an invalid stable key grammar (Critical 4)', () => {
+test('validateAppSpec rejects an invalid stable key grammar', () => {
   for (const bad of ['Overview', 'wo_detail', '-lead', 'lead-', 'a b']) {
     const r = validateAppSpec(pageSpec([{ key: bad, name: 'A', source: { kind: 'tsx', codeFile: 'a.tsx' } }]), { profile: 'plan' });
     assert.ok(!r.ok && r.errors.some((e) => /key.*grammar|invalid.*key|key '/i.test(e)), `${bad}: ${r.errors.join('; ')}`);
@@ -1030,7 +1030,7 @@ test('validateAppSpec passes when ai is absent (no regression)', () => {
   assert.strictEqual(r.ok, true, JSON.stringify(r.errors));
 });
 
-// Task 3 — every page must be an appShell subarea + accept optional pages[].pageId (edit-snapshot).
+// Every page must be an appShell subarea + accept optional pages[].pageId (edit-snapshot).
 // v2PagesSpec builds a minimal schemaVersion-2 spec; subAreas is the sitemap group's subAreas array;
 // extraPageFields is merged into the FIRST page (overview) so we can exercise per-page fields like pageId.
 function v2PagesSpec(subAreas, extraPageFields) {
@@ -1070,7 +1070,7 @@ test('the structural profile does NOT enforce page placement (shape-only / eval-
   assert.ok(!r.errors.some((e) => /not placed in the sitemap/.test(e)), JSON.stringify(r.errors));
 });
 
-test('validateAppSpec ACCEPTS a valid pages[].pageId GUID (edit-snapshot, C3)', () => {
+test('validateAppSpec ACCEPTS a valid pages[].pageId GUID (edit-snapshot)', () => {
   const spec = v2PagesSpec(
     [{ page: 'overview', title: 'Overview' }, { page: 'order-detail', title: 'Order Detail' }],
     { pageId: '13ecbc57-a3a4-4132-b0a2-a6c6b12691e8' }
@@ -1188,7 +1188,7 @@ test('quickCreateEnabledFor: true for an explicit flag, a derived QuickCreate fo
   assert.strictEqual(quickCreateEnabledFor(quickCreateSpec({}, [{ entity: 'new_other', formType: 'QuickCreate' }]), entity), false, 'a QuickCreate form for another entity does not leak');
 });
 
-// --- Security personas validation (Group N P1) ---------------------------------------------
+// --- Security personas validation ---------------------------------------------
 const withPersonas = (personas) => Object.assign(JSON.parse(JSON.stringify(sample)), { personas });
 
 test('validateAppSpec accepts a well-formed persona', () => {

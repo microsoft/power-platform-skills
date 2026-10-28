@@ -3,10 +3,12 @@ name: integrate-webapi
 description: >-
   Integrates Power Pages Web API into a site's frontend code with proper permissions and
   deployment. Orchestrates the full integration lifecycle: code integration, table permissions
-  setup, and deployment for Dataverse CRUD operations. Use when the user wants to add Web API
-  calls, connect to Dataverse, or add data fetching to their frontend.
+  setup, and deployment for Dataverse CRUD operations. Also supports PAC-downloaded non-SPA
+  sites by preferring native Forms, Lists, and Liquid before custom Web API JavaScript. Use when
+  the user wants to add Web API calls, connect to Dataverse, add data fetching to their frontend,
+  or integrate a non-SPA page with Dataverse.
 user-invocable: true
-allowed-tools: Read, Write, Edit, Bash, Grep, Glob, AskUserQuestion, Task, TaskCreate, TaskUpdate, TaskList
+allowed-tools: Read, Write, Edit, Bash, Grep, Glob, AskUserQuestion, Skill, Task, TaskCreate, TaskUpdate, TaskList
 model: opus
 ---
 
@@ -14,7 +16,36 @@ model: opus
 
 # Integrate Web API
 
-Integrate Power Pages Web API into a code site's frontend. This skill orchestrates the full lifecycle: analyzing where integrations are needed, implementing API client code for each table, configuring permissions and site settings, and deploying the site.
+Integrate a Power Pages site with Dataverse. SPA sites retain the framework-specific client,
+service, and hook workflow. Non-SPA sites use native Forms, Lists, and Liquid first, adding
+Web API JavaScript only when the requested client interaction requires it.
+
+## Site Type Routing
+
+Before reading or executing the workflow below, perform the existing SPA project lookup first:
+
+- Look for `powerpages.config.json` in the current directory or immediate subdirectories using the
+  existing file-search patterns.
+- If found, continue with the existing SPA workflow below. Do not run any non-SPA site
+  detection or change the SPA phases, prompts, gates, generated files, or deployment behavior.
+- Only when that existing SPA lookup finds no `powerpages.config.json`, run:
+
+  ```bash
+  node "${PLUGIN_ROOT}/scripts/lib/detect-project-context.js"
+  ```
+
+- If it returns `siteType: "non-spa"`, read and follow the complete seven-phase workflow in
+  `${PLUGIN_ROOT}/skills/integrate-webapi/references/non-spa-site-workflow.md`. Do not execute
+  any of the SPA workflow below.
+- Otherwise, continue to Phase 1 and preserve its existing not-found handling.
+
+The non-SPA route supports request-focused and discovery invocation as defined in its
+workflow reference. SPA invocation semantics remain those defined by the existing workflow below.
+When `$ARGUMENTS` contains `[CALLED-BY-PARENT-SKILL]`, pass that sentinel and its optional
+`caller=<skill-name>` token into the non-SPA workflow. It suppresses commits and deployment
+handoffs only; it does not bypass the non-SPA scope approval or security planning.
+
+---
 
 ## Core Principles
 
@@ -27,7 +58,7 @@ Integrate Power Pages Web API into a code site's frontend. This skill orchestrat
 
 > **Prerequisites:**
 >
-> - An existing Power Pages code site created via `/create-site`
+> - An existing Power Pages SPA site created via `/create-site`
 > - A Dataverse data model (tables/columns) already set up via `/setup-datamodel` or created manually
 > - The site must be deployed at least once (`.powerpages-site` folder must exist) for permissions setup
 
@@ -138,7 +169,7 @@ Ask the Explore agent to identify all Dataverse tables that need Web API integra
 
 **Prompt for the Explore agent:**
 
-> "Analyze this Power Pages code site and identify all Dataverse tables that need Web API integration. Check `.datamodel-manifest.json` for the data model, then search the source code for: mock data arrays, hardcoded data, placeholder fetch calls to `/_api/`, TypeScript interfaces matching Dataverse column patterns (publisher prefix like `cr*_`), TODO/FIXME comments about API integration, and components that display table data. For each table found, report: the table logical name, the entity set name (plural), which source files reference it, what operations are needed (read/create/update/delete), and whether an existing API client or service already exists in `src/shared/` or `src/services/`. Also check if `src/shared/powerPagesApi.ts` already exists."
+> "Analyze this Power Pages SPA site and identify all Dataverse tables that need Web API integration. Check `.datamodel-manifest.json` for the data model, then search the source code for: mock data arrays, hardcoded data, placeholder fetch calls to `/_api/`, TypeScript interfaces matching Dataverse column patterns (publisher prefix like `cr*_`), TODO/FIXME comments about API integration, and components that display table data. For each table found, report: the table logical name, the entity set name (plural), which source files reference it, what operations are needed (read/create/update/delete), and whether an existing API client or service already exists in `src/shared/` or `src/services/`. Also check if `src/shared/powerPagesApi.ts` already exists."
 
 **When AI-only read mode is active (Phase 1.6 flag set):** append the following to the prompt above:
 
@@ -430,7 +461,7 @@ Use the `Task` tool to invoke the `table-permissions-architect` agent at `${PLUG
 
 **Prompt (default — full CRUD):**
 
-> "Analyze this Power Pages code site and propose table permissions. The following tables have been integrated with Web API: [list of tables integrated in Phase 4]. Check for existing web roles and table permissions. Propose a complete table permissions plan covering all integrated tables. After I approve the plan, create the web role and table permission YAML files using the deterministic scripts."
+> "Analyze this Power Pages SPA site and propose table permissions. The following tables have been integrated with Web API: [list of tables integrated in Phase 4]. Check for existing web roles and table permissions. Propose a complete table permissions plan covering all integrated tables. After I approve the plan, create the web role and table permission YAML files using the deterministic scripts."
 
 **Prompt (AI-only read mode active):** append to the default prompt:
 
@@ -454,7 +485,7 @@ Use the `Task` tool to invoke the `webapi-settings-architect` agent at `${PLUGIN
 
 **Prompt (default — full CRUD):**
 
-> "Analyze this Power Pages code site and propose Web API site settings. The following tables have been integrated with Web API: [list of tables integrated in Phase 4]. Check for existing site settings and query Dataverse for exact column LogicalNames. Propose site settings with case-sensitive validated column names. After I approve the plan, create the site setting YAML files using the deterministic scripts."
+> "Analyze this Power Pages SPA site and propose Web API site settings. The following tables have been integrated with Web API: [list of tables integrated in Phase 4]. Check for existing site settings and query Dataverse for exact column LogicalNames. Propose site settings with case-sensitive validated column names. After I approve the plan, create the site setting YAML files using the deterministic scripts."
 
 **Prompt (AI-only read mode active):** append to the default prompt:
 

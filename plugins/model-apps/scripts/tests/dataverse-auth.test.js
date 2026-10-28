@@ -125,6 +125,38 @@ test('makeRequest preserves UTF-8 characters split across response chunks', asyn
   }
 });
 
+// A file's content is bytes: a generative page's row, an image. Decoded as UTF-8, bytes that are not valid UTF-8 come back changed (each bad byte becomes
+// U+FFFD), so `binary` hands back the Buffer as it arrived — split across chunks or not — and a request body that is a Buffer goes out verbatim.
+test('makeRequest with `binary` returns the body as the bytes that arrived, never decoded; a Buffer body is sent as it is', async () => {
+  const { makeRequest } = require('../lib/dataverse-auth.js');
+  const bytes = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0xff, 0xfe, 0x00, 0xc3, 0x28, 0xe2, 0x82]);
+  let received = null;
+  const server = http.createServer((req, res) => {
+    const chunks = [];
+    req.on('data', (c) => chunks.push(c));
+    req.on('end', () => {
+      if (req.method === 'PATCH') received = Buffer.concat(chunks);
+      res.setHeader('Content-Type', 'application/octet-stream');
+      for (let i = 0; i < bytes.length; i += 1) res.write(bytes.subarray(i, i + 1));
+      res.end();
+    });
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const { port } = server.address();
+  try {
+    const got = await makeRequest({ url: `http://127.0.0.1:${port}/x/$value`, binary: true });
+    assert.ok(Buffer.isBuffer(got.body), 'a Buffer');
+    assert.ok(got.body.equals(bytes), 'byte for byte');
+    const decoded = await makeRequest({ url: `http://127.0.0.1:${port}/x/$value` });
+    assert.strictEqual(typeof decoded.body, 'string', 'without `binary`, decoded as before');
+    assert.notStrictEqual(Buffer.from(decoded.body, 'utf8').length, bytes.length, 'the control: decoding changes bytes that are not UTF-8');
+    await makeRequest({ url: `http://127.0.0.1:${port}/x`, method: 'PATCH', body: bytes, headers: { 'Content-Length': String(bytes.length) }, binary: true });
+    assert.ok(received && received.equals(bytes), 'the body went out byte for byte');
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
 test('makeRequest settles with an error when the connection closes mid-response', async () => {
   const { makeRequest } = require('../lib/dataverse-auth.js');
   // Headers and part of the body arrive, then the socket closes: no 'end', and the socket timeout
@@ -189,6 +221,71 @@ test('makeRequest keeps a timeout with no answer as a plain request failure', as
   }
 });
 
+// A request that fails comes with Node's own CODE beside the message. The message cannot say what the failure was — a certificate that does not verify quotes the host and the certificate's names, and a name can spell anything — so a
+// caller that decides whether the request is worth sending again (lib/sdk-http-client.js) reads the code. Only what Node raised for the request has one: the failures this module words itself have none.
+test('makeRequest reports Node\'s own error code beside the message of a request that failed — a refused connection, and a connection reset before any answer', async () => {
+  const { makeRequest } = require('../lib/dataverse-auth.js');
+  const probe = http.createServer();
+  await new Promise((resolve) => probe.listen(0, '127.0.0.1', resolve));
+  const { port: closedPort } = probe.address();
+  await new Promise((resolve) => probe.close(resolve));
+  const refused = await makeRequest({ url: `http://127.0.0.1:${closedPort}/x` });
+  assert.strictEqual(refused.code, 'ECONNREFUSED');
+  assert.match(refused.error, /ECONNREFUSED/);
+  assert.deepStrictEqual(Object.keys(refused).sort(), ['code', 'error'], 'the message and the code, and nothing that says the server answered');
+
+  const resetting = http.createServer((req) => req.socket.destroy());
+  await new Promise((resolve) => resetting.listen(0, '127.0.0.1', resolve));
+  try {
+    const reset = await makeRequest({ url: `http://127.0.0.1:${resetting.address().port}/x`, method: 'POST', body: '{}' });
+    assert.strictEqual(reset.code, 'ECONNRESET');
+    assert.match(reset.error, /socket hang up|ECONNRESET/);
+    assert.strictEqual(reset.incompleteResponse, undefined, 'no answer had arrived');
+  } finally {
+    await new Promise((resolve) => resetting.close(resolve));
+  }
+});
+
+test('makeRequest reports the code of a certificate that does not verify — Node raises it for the request, whatever the message quotes', async (t) => {
+  const https = require('node:https');
+  const { EventEmitter } = require('node:events');
+  const { makeRequest } = require('../lib/dataverse-auth.js');
+  const failure = Object.assign(
+    new Error("Hostname/IP does not match certificate's altnames: Host: contoso.crm.dynamics.com. is not in the cert's altnames: DNS:ECONNRESET.example.com"),
+    { code: 'ERR_TLS_CERT_ALTNAME_INVALID' },
+  );
+  let raised = failure;
+  t.mock.method(https, 'request', () => {
+    const req = new EventEmitter();
+    req.write = () => {};
+    req.end = () => setImmediate(() => req.emit('error', raised));
+    req.destroy = () => {};
+    return req;
+  });
+  assert.deepStrictEqual(await makeRequest({ url: 'https://contoso.crm.dynamics.com/api/data/v9.2/x' }), { error: failure.message, code: 'ERR_TLS_CERT_ALTNAME_INVALID' });
+  // An error Node gave no code for is reported as it always was: the message alone.
+  raised = new Error('something Node did not give a code for');
+  assert.deepStrictEqual(await makeRequest({ url: 'https://contoso.crm.dynamics.com/api/data/v9.2/x' }), { error: 'something Node did not give a code for' });
+});
+
+test('the failures makeRequest words itself — a connection closed mid-response — carry no code: they are read by their words', async () => {
+  const { makeRequest } = require('../lib/dataverse-auth.js');
+  const server = http.createServer((req, res) => {
+    res.writeHead(200, { 'Content-Type': 'application/json', 'Content-Length': '100' });
+    res.write('{"value":[');
+    setTimeout(() => res.socket.destroy(), 20);
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  try {
+    const cut = await makeRequest({ url: `http://127.0.0.1:${server.address().port}/cut` });
+    assert.match(cut.error, /before (it|the response) completed/);
+    assert.strictEqual(cut.incompleteResponse, true);
+    assert.ok(!('code' in cut), 'the words are this module\'s own, and no code is made up for them');
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
 test('dataverseRequest does not replay a POST whose response was cut off, but retries a GET', async () => {
   const { dataverseRequest } = require('../lib/dataverse-auth.js');
   const cut = (statusCode) => ({ error: 'Connection closed before the response completed', incompleteResponse: true, statusCode });
@@ -207,6 +304,80 @@ test('dataverseRequest does not replay a POST whose response was cut off, but re
   });
   assert.strictEqual(res.status, 200);
   assert.strictEqual(gets, 2);
+});
+
+// --- the access token is not in what a call that did not succeed reports ---------------------------------------------------------------------------
+// `dataverseRequest` hands back what the service answered — `{ status, data }` — and a caller that fails prints it (`ensureOk` quotes `data.error.message`; list-connections.js reads the connection
+// references with it, and prints what failed). An authorization layer, or a gateway, that rejects a token may repeat it — whole, or one part of it — in the body or in a header, and a transport failure's
+// text can repeat the request it was sending. So an answer that is not a success is handed back with the token taken out of it, and so is the text of a transport failure, by the scrubber the plugin's
+// Dataverse HttpClient uses (lib/sdk-http-client.js: one scrubber). A SUCCESS is the caller's data and is never touched, whatever it holds.
+const ECHOED = ['syntheticHeaderPartOfTheEchoedToken', 'syntheticPayloadPartOfTheEchoedToken', 'syntheticSignaturePartOfTheEchoedToken'].join('.');
+const ORG_URL = 'https://contoso.crm.dynamics.com';
+
+test('dataverseRequest takes the token out of the answer to a call that did not succeed — the body, whole or in a part, whatever its shape — and leaves the status and the typed code', async () => {
+  const { dataverseRequest, ensureOk } = require('../lib/dataverse-auth.js');
+  const [header, payload] = ECHOED.split('.');
+  const answers = [
+    [400, JSON.stringify({ error: { code: '0x80048d19', message: `Rejected bearer ${ECHOED}` } }), (res) => { assert.equal(res.data.error.message, 'Rejected bearer <token>'); assert.equal(res.data.error.code, '0x80048d19'); }],
+    [403, JSON.stringify({ error: { message: `the claim ${payload} is not valid`, details: [`and ${header}`] } }), (res) => { assert.equal(res.data.error.message, 'the claim <token> is not valid'); assert.deepEqual(res.data.error.details, ['and <token>']); }],
+    [410, `<html>Gone: Authorization: Bearer ${ECHOED}</html>`, (res) => assert.equal(res.data, '<html>Gone: Authorization: Bearer <token></html>')],
+    [404, JSON.stringify({ [`key ${ECHOED}`]: 1 }), (res) => assert.deepEqual(res.data, { 'key <token>': 1 })],
+  ];
+  for (const [statusCode, body, check] of answers) {
+    const res = await dataverseRequest(ORG_URL, 'GET', 'connectionreferences', null, { getToken: () => ECHOED, request: async () => ({ statusCode, body }) });
+    assert.equal(res.status, statusCode);
+    check(res);
+    assert.ok(!JSON.stringify(res).includes(ECHOED) && !JSON.stringify(res).includes(payload), `${statusCode}: no part of the token is left`);
+  }
+  // What a caller prints is what it quotes of the answer: the message of the failure it raises holds no token either.
+  const refused = await dataverseRequest(ORG_URL, 'GET', 'connectionreferences', null, { getToken: () => ECHOED, request: async () => ({ statusCode: 403, body: JSON.stringify({ error: { message: `Rejected bearer ${ECHOED}` } }) }) });
+  assert.throws(() => ensureOk(refused, 'List connection references'), (error) => error.message === 'List connection references failed: HTTP 403 — Rejected bearer <token>');
+});
+
+test('dataverseRequest takes the token out of an answer\u2019s headers when it hands them back — and out of the answer to the request that was sent with the token a 401 replaced', async () => {
+  const { dataverseRequest } = require('../lib/dataverse-auth.js');
+  const refreshed = 'syntheticRefreshedTokenOfTheSecondRequest0123456789';
+  const reads = [];
+  const sent = [];
+  const answers = [
+    { statusCode: 401, body: JSON.stringify({ error: { message: `token ${ECHOED} expired` } }), headers: {} },
+    { statusCode: 403, body: JSON.stringify({ error: { message: `old ${ECHOED} new ${refreshed}` } }), headers: { 'www-authenticate': `Bearer error="invalid_token", error_description="${refreshed}"`, 'x-request-id': 'abc' } },
+  ];
+  const res = await dataverseRequest(ORG_URL, 'GET', 'WhoAmI', null, {
+    includeHeaders: true,
+    getToken: (url, options) => { reads.push(options); return options && options.fresh ? refreshed : ECHOED; },
+    request: async (options) => { sent.push(options.headers.Authorization); return answers[sent.length - 1]; },
+  });
+  assert.deepEqual(sent, [`Bearer ${ECHOED}`, `Bearer ${refreshed}`], 'the first token, refused, and the one that replaced it');
+  assert.equal(res.status, 403);
+  assert.equal(res.data.error.message, 'old <token> new <token>', 'both tokens the call sent are taken out');
+  assert.deepEqual(res.headers, { 'www-authenticate': 'Bearer error="invalid_token", error_description="<token>"', 'x-request-id': 'abc' });
+});
+
+test('dataverseRequest takes the token out of the text of a transport failure — a GET that never got an answer, and a POST whose answer was cut off', async () => {
+  const { dataverseRequest } = require('../lib/dataverse-auth.js');
+  await assert.rejects(
+    dataverseRequest(ORG_URL, 'GET', 'WhoAmI', null, { getToken: () => ECHOED, request: async () => ({ error: `socket hang up while sending Authorization: Bearer ${ECHOED}` }) }),
+    (error) => error.message === 'Request failed: socket hang up while sending Authorization: Bearer <token>',
+  );
+  await assert.rejects(
+    dataverseRequest(ORG_URL, 'POST', 'accounts', { name: 'A' }, { getToken: () => ECHOED, request: async () => ({ error: `reset (${ECHOED.split('.')[1]})`, incompleteResponse: true, statusCode: 201 }) }),
+    (error) => error.message === 'Request failed: reset (<token>) — the server had already answered 201, so this POST may have been applied; it was not re-sent. Check the result before running it again.',
+  );
+});
+
+test('dataverseRequest never alters a success — its data and its headers come back exactly as they arrived, token text and all — and a value too short to be a token is never taken out of anything', async () => {
+  const { dataverseRequest } = require('../lib/dataverse-auth.js');
+  // A record whose field happens to hold the token, a text body, and a header that repeats it: successes are the caller's data.
+  const record = JSON.stringify({ value: [{ name: ECHOED, note: ECHOED.split('.')[1] }] });
+  const ok = await dataverseRequest(ORG_URL, 'GET', 'accounts', null, { includeHeaders: true, getToken: () => ECHOED, request: async () => ({ statusCode: 200, body: record, headers: { 'x-echo': ECHOED } }) });
+  assert.deepEqual(ok.data, JSON.parse(record));
+  assert.deepEqual(ok.headers, { 'x-echo': ECHOED });
+  const text = await dataverseRequest(ORG_URL, 'GET', 'accounts', null, { getToken: () => ECHOED, request: async () => ({ statusCode: 200, body: `plain ${ECHOED}` }) });
+  assert.equal(text.data, `plain ${ECHOED}`);
+  // The floor is the Dataverse client's: a token shorter than 16 characters is no access token (the tests' own stand-ins are), and taking it out would blank every place a message has the same letters.
+  const short = await dataverseRequest(ORG_URL, 'GET', 'accounts', null, { getToken: () => 'TOK', request: async () => ({ statusCode: 400, body: JSON.stringify({ error: { message: 'TOKEN TOK' } }) }) });
+  assert.equal(short.data.error.message, 'TOKEN TOK');
 });
 
 test('getAuthToken reuses a non-empty token per normalized resource URL', () => {
@@ -540,12 +711,13 @@ test('both CLIs report an auth-preflight failure with the SAME payload shape', (
   // for the identical failure — and the one users hit on an apply printed the count, replacing a
   // message written specifically to say which identity to sign in as.
   //
-  // Asserted on the SOURCE because the alternative is spawning both CLIs against a live tenant.
+  // Asserted on the SOURCE because the alternative is spawning both CLIs against a live tenant. build-model-app.js answers the result
+  // (`payload`) for main() to print once its build lease is let go (tests/build-lease-cli.test.js prints it through the real printer).
   const fs = require('node:fs');
   const path = require('node:path');
   for (const cli of ['build-model-app.js', 'download-model-app.js']) {
     const src = fs.readFileSync(path.join(__dirname, '..', cli), 'utf8');
-    const line = src.split('\n').find((l) => /emitResult\(false,.*auth\.error/.test(l));
+    const line = src.split('\n').find((l) => /(?:emitResult\(false,|payload:\s*\{).*auth\.error/.test(l));
     assert.ok(line, `${cli}: expected an emitResult call carrying auth.error`);
     assert.match(line, /error:\s*auth\.error/, `${cli}: a single explained failure must use \`error\`: ${line.trim()}`);
     assert.doesNotMatch(line, /errors:\s*\[/, `${cli}: \`errors: [...]\` is for PARTIAL failures and prints only a count: ${line.trim()}`);

@@ -1,6 +1,6 @@
 # Skill Usage Tracking
 
-This document describes how to record skill usage in Power Pages code sites. Each skill invocation creates or updates site setting YAML files that track which AI skills were used, how many times, and which authoring tool invoked them.
+This document describes how to record skill usage in Power Pages SPA sites. Each skill invocation creates or updates site setting YAML files that track which AI skills were used, how many times, and which authoring tool invoked them.
 
 Tracking only runs when `.powerpages-site/site-settings/` exists (site has been deployed at least once). The tracking settings get uploaded to Power Pages on the next deploy.
 
@@ -20,6 +20,18 @@ node "${PLUGIN_ROOT}/scripts/update-skill-tracking.js" --projectRoot "<PROJECT_R
 
 The script exits silently if `.powerpages-site/site-settings/` does not exist, so it is safe to call unconditionally.
 
+For non-SPA site styling through `edit-site`, never create `.powerpages-site`, invent non-SPA tracking records, or broaden telemetry just to record usage. Run entry-point tracking only after verified local completion or an explicitly requested instructions-only handoff, not on canceled drafts or blocked work. Where the supported tracking directory exists, disclose and summarize any tracking diff separately from the approved styling patch; otherwise accept the no-op. Tracking does not authorize an upload.
+
+The styling inspector excludes only the known `site-settings/Site-AI-Skills-*.sitesetting.yml` and `site-settings/Site-AI-Tools-*.sitesetting.yml` files from styling input hashes/inventory. This keeps final usage recording from invalidating a successfully verified proposal/receipt; other site settings and styling inputs remain subject to drift checks. It does not change tracking behavior or grant authority to edit unrelated files.
+
+For classic authoring through `edit-site`, record
+`EditSite` once after successful completion. Reference workflows are not
+skill invocations; do not record reference reads as skill runs.
+`author-webpage-content` records its own successful usage.
+Preserve existing tracking records, including `StyleSite`; styling reference execution does not
+increment that counter or emit a separate skill invocation.
+Do not create a tracking directory or invent classic tracking records.
+
 If the tracking script creates or updates site setting YAML files, include those tracking changes in the next git commit for the current phase or final summary commit.
 
 ## Skill Name Mapping
@@ -27,6 +39,7 @@ If the tracking script creates or updates site setting YAML files, include those
 | Skill | PascalCase (`--skillName`) | Setting Name |
 |-------|---------------------------|--------------|
 | create-site | CreateSite | Site/AI/Skills/CreateSite |
+| edit-site | EditSite | Site/AI/Skills/EditSite |
 | deploy-site | DeploySite | Site/AI/Skills/DeploySite |
 | setup-datamodel | SetupDatamodel | Site/AI/Skills/SetupDatamodel |
 | add-sample-data | AddSampleData | Site/AI/Skills/AddSampleData |
@@ -44,6 +57,7 @@ If the tracking script creates or updates site setting YAML files, include those
 | add-ai-webapi | AddAiWebapi | Site/AI/Skills/AddAiWebapi |
 | integrate-backend | IntegrateBackend | Site/AI/Skills/IntegrateBackend |
 | scan-site | ScanSite | Site/AI/Skills/ScanSite |
+| analyze-performance | AnalyzePerformance | Site/AI/Skills/AnalyzePerformance |
 | manage-headers | ManageHeaders | Site/AI/Skills/ManageHeaders |
 | manage-firewall | ManageFirewall | Site/AI/Skills/ManageFirewall |
 | security-review | SecurityReview | Site/AI/Skills/SecurityReview |
@@ -59,10 +73,11 @@ If the tracking script creates or updates site setting YAML files, include those
 | force-link-environment | ForceLinkEnvironment | Site/AI/Skills/ForceLinkEnvironment |
 | migrate-bootstrap | MigrateBootstrap | Site/AI/Skills/MigrateBootstrap |
 | migrate-webapi-selectall | MigrateWebapiSelectall | Site/AI/Skills/MigrateWebapiSelectall |
+| author-webpage-content | AuthorWebpageContent | Site/AI/Skills/AuthorWebpageContent |
 
 ## YAML Format
 
-The tracking script produces site setting files in code site git format (alphabetically sorted, unquoted values):
+The tracking script produces site setting files in SPA site git format (alphabetically sorted, unquoted values):
 
 ```yaml
 description: Tracks usage count of the CreateSite skill

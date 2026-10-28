@@ -27,6 +27,9 @@
 //     need to be.
 // The bundle's own decision (which URLs name one environment) is deliberately NOT re-implemented in the plugin:
 // a stub that mimicked it would stay green if the SDK changed it.
+// This file checks where lib/temp-workspace.js makes a workspace, so it works in a temp folder of its own (helpers/own-temp-folder.js): in the
+// suite's shared one, other test processes make and remove the plugin's workspace folder. Required first, so every path below is inside it.
+require('./helpers/own-temp-folder.js');
 const test = require('node:test');
 const assert = require('node:assert');
 const crypto = require('node:crypto');
@@ -37,9 +40,12 @@ const { loadCli } = require('./helpers/cli-harness.js');
 const { scriptsMatching } = require('./helpers/production-scripts.js');
 const { isWorkspaceOrgMismatch, workspaceBindingError, workspaceBindingNote } = require('../lib/workspace-binding.js');
 const { recordPageCreation } = require('../lib/page-ownership-records.js');
+const { workspaceParent } = require('../lib/temp-workspace.js');
 
 const scriptsDir = path.join(__dirname, '..');
 const BUNDLE = path.join(scriptsDir, 'vendor', 'cds-maker-sdk.cjs');
+// What the scripts make their SDK with: the bundle, given the vendored compiler (lib/maker-sdk.js).
+const FACTORY = path.join(scriptsDir, 'lib', 'maker-sdk.js');
 const WORKSPACE_ENV = 'https://contoso.crm.dynamics.com';
 const RUN_ENV = 'https://fabrikam.crm.dynamics.com';
 // A folder that does not exist, for halts built from a hand-made error: nothing in the plugin looks inside it.
@@ -314,7 +320,7 @@ const SOMETHING_SAVED = {
   'a saved copy of an artifact': (dir) => fs.writeFileSync(path.join(dir, 'apps', '11111111-1111-4111-8111-111111111111.json'), '{}'),
   'the saved metadata of an artifact': (dir) => fs.writeFileSync(path.join(dir, '.metadata', 'views', 'v.meta.json'), '{}'),
   'cached table metadata': (dir) => fs.writeFileSync(path.join(dir, '.metadata', 'entities', 'new_ticket.json'), '{}'),
-  'files the plugin staged for a deploy': (dir) => {
+  'files an earlier release staged for a deploy': (dir) => {
     fs.mkdirSync(path.join(dir, '.pageref-deploy', 'run-1'), { recursive: true });
     fs.writeFileSync(path.join(dir, '.pageref-deploy', 'run-1', 'page.tsx'), 'export {}\n');
   },
@@ -518,7 +524,7 @@ function readOnlyClient(requests = []) {
 // anything else is asked of the environment. `client` replaces the inert HTTP client, for a run that is to read.
 function loadBuild(argv, { requests = [], sdkTempDirs = [], client = null } = {}) {
   const authCli = loadCli(path.join(scriptsDir, 'lib', 'dataverse-auth.js'));
-  const real = require(BUNDLE);
+  const real = require(FACTORY);
   const cli = loadCli(path.join(scriptsDir, 'build-model-app.js'), {
     argv,
     env: { PATH: path.dirname(process.execPath), POWER_PLATFORM_SKILLS_TELEMETRY_MODEL_APPS_OPTOUT: '1' },
@@ -526,7 +532,7 @@ function loadBuild(argv, { requests = [], sdkTempDirs = [], client = null } = {}
       './lib/dataverse-auth.js': { ...authCli.exports, preflightAuth: async () => ({ ok: true }) },
       './lib/entity-provision.js': { resolveAuthoringLanguage: async () => 1033 },
       './lib/sdk-http-client.js': { createAzHttpClient: () => client || inertClient(requests), SQL_DEADLOCK_VICTIM: /Sql Number: 1205/ },
-      './vendor/cds-maker-sdk.cjs': {
+      './lib/maker-sdk.js': {
         createMakerSdk: real.createMakerSdk,
         createNodeWorkspaceStorage: (dir) => { sdkTempDirs.push(dir); return real.createNodeWorkspaceStorage(dir); },
       },
@@ -923,11 +929,11 @@ test('a folder the build bound under one spelling of the host is reopened under 
 // with the transport failure that read raised.
 function loadVerify(argv, { requests = [], sdkDirs = [], verifySpec = null } = {}) {
   const authCli = loadCli(path.join(scriptsDir, 'lib', 'dataverse-auth.js'));
-  const real = require(BUNDLE);
+  const real = require(FACTORY);
   const requires = {
     './lib/dataverse-auth.js': authCli.exports,
     './lib/sdk-http-client.js': { createAzHttpClient: () => inertClient(requests) },
-    './vendor/cds-maker-sdk.cjs': {
+    './lib/maker-sdk.js': {
       createMakerSdk: real.createMakerSdk,
       createNodeWorkspaceStorage: (dir) => { sdkDirs.push(dir); return real.createNodeWorkspaceStorage(dir); },
     },
@@ -953,7 +959,7 @@ test('verify runs against any environment: a folder bound to another one is neit
   });
   assert.ok(requests.length > 0);
   assert.deepStrictEqual(treeOf(app.workspace), before, 'the folder is exactly as verify found it');
-  assert.ok(sdkDirs.length >= 1 && sdkDirs.every((dir) => path.dirname(dir) === os.tmpdir() && !fs.existsSync(dir)), `every SDK worked in a temporary workspace that is gone again: ${JSON.stringify(sdkDirs)}`);
+  assert.ok(sdkDirs.length >= 1 && sdkDirs.every((dir) => path.dirname(dir) === workspaceParent() && !fs.existsSync(dir)), `every SDK worked in a temporary workspace (in the plugin\u2019s own folder of the OS temp directory) that is gone again: ${JSON.stringify(sdkDirs)}`);
 });
 
 test('verify does not bind a folder that has no workspace yet to the environment it verified', async () => {

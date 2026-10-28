@@ -22,9 +22,13 @@ Copilot CLI). If no MCP tools are present, the plugin is not wired up — run th
 1. **Resolve environment**:
    - If `$ARGUMENTS` contains an environment ID, use it.
    - Otherwise call `list_environments` (use `query` to filter if user mentioned a name).
+   - Reuse the returned environment metadata while browsing. It is cached in memory for up to 60 seconds; use `fresh: true` when the user explicitly needs current discovery or permissions.
    - If multiple environments, use AskUserQuestion to let user pick.
 
 2. **List flows**: Call `list_flows` on the selected environment. Use `name` param if user is looking for something specific.
+   - A partial response contains `flows`, `complete: false` and `nextCursor`. Continue with `cursor: nextCursor`, keeping `env`, `top`, `name` and `filter` unchanged.
+   - Follow cursors before reporting a complete count or claiming a search found nothing. If stopping early, label the results partial.
+   - Continuations may reuse one metadata page for up to 60 seconds, not a fresh inventory. Omit the cursor for a fresh search. If the service page changed, restart without a cursor and discard that search's earlier partial counts.
 
 3. **Present results** in a table:
 

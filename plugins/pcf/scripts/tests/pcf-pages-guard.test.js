@@ -313,6 +313,10 @@ for (const [name, relative] of [
     assert.match(text, /aliasing[^.\n]*`const d = context\.device; d\.captureImage\(\)`/i);
     assert.match(text, /dynamic dispatch/i);
     assert.match(text, /parenthesized receivers/i);
+    assert.match(text, /except a function- or block-local `const` bound to an object literal[^\n]*used only to call those functions[^\n]*fail closed/i);
+    assert.match(text, /early-return guards and calls in `else` branches are reported by design[^\n]*deliberate fail-closed limit[^\n]*positive guard block/i);
+    assert.match(text, /parenthesized receivers[^\n]*`\.bind`[^\n]*`Reflect\.apply`[^\n]*detected like direct calls/i);
+    assert.match(text, /`factory\?\.<T>\(context\.device\)\.captureImage\(\)`[^\n]*over-report/);
     assert.match(text, /runtime verification on the target Power Pages site[^.\n]*required/i);
   });
 }
@@ -432,6 +436,216 @@ test('Pages detection never promotes non-null assertions or escaped keys into gu
     assert.deepEqual(codesFor(withinGuard(`${comparison}; ${CALL};`)), [], comparison);
   }
   assert.deepEqual(codesFor(`if (!context.device?.captureImage) { ${CALL}; }`), ['PCF_PAGES_API']);
+});
+
+const DISPATCH_FORMS = [
+  ['parenthesized namespace receiver', '(context.device).captureImage()'],
+  ['parenthesized root receiver', '(context).device.captureImage()'],
+  ['nested parenthesized receivers', '((context).device).captureImage()'],
+  ['parenthesized receiver with optional call', '(context.device)?.captureImage?.()'],
+  ['parenthesized receiver after return', 'return (context.device).captureImage()'],
+  ['template-literal method key', 'context.device[`captureImage`]()'],
+  ['template-literal namespace key', 'context[`device`].captureImage()'],
+  ['escaped template-literal key', 'context.device[`capture\\u0049mage`]()'],
+  ['call dispatch', 'context.device.captureImage.call(context.device)'],
+  ['apply dispatch', 'context.device.captureImage.apply(context.device, [])'],
+  ['bind dispatch', 'context.device.captureImage.bind(context.device)()'],
+  ['optional call dispatch', 'context.device.captureImage?.call(context.device)'],
+  ['Reflect.apply dispatch', 'Reflect.apply(context.device.captureImage, context.device, [])'],
+  ['Reflect.apply of a parenthesized receiver', 'Reflect.apply((context.device).captureImage, context.device, [])'],
+  ['utility call dispatch', 'context.utils.lookupObjects.call(undefined, {})', 'Utility', 'utils', 'lookupObjects'],
+  ['parenthesized utility receiver', '(context.utils).lookupObjects({})', 'Utility', 'utils', 'lookupObjects'],
+];
+
+for (const [name, call, feature = 'Device.captureImage', namespace = 'device', method = 'captureImage'] of DISPATCH_FORMS) {
+  test(`Pages detection recognizes ${name}`, () => {
+    const statement = `${call};`;
+    const body = call.startsWith('return ') ? `function f(context) { ${statement} }` : statement;
+    const guarded = `function g(context) { if (typeof context.${namespace}?.${method} === "function") { ${statement} } }`;
+    assert.deepEqual({
+      unguarded: codesFor(body, feature),
+      guarded: codesFor(guarded, feature),
+      invalidGuard: codesFor(guarded.replace('if (typeof', 'if (ready || typeof'), feature),
+      undeclared: codesFor(body, null, ['model']),
+      textOnly: codesFor(`// ${call}\nconst note = ${JSON.stringify(call)};`, null),
+      fallback: findingsFor(guarded, feature, ['pages'], { indexer: throwingIndexer }).map((finding) => finding.code),
+    }, {
+      unguarded: ['PCF_PAGES_API'],
+      guarded: [],
+      invalidGuard: ['PCF_PAGES_API'],
+      undeclared: ['PCF_FEATURE_UNDECLARED'],
+      textOnly: [],
+      fallback: ['PCF_PAGES_API'],
+    });
+  });
+}
+
+test('Pages detection keeps call results, comma groups and dynamic keys out of the dispatch forms', () => {
+  for (const text of [
+    'foo(context.device).captureImage();',
+    'context.device.captureImage.name;',
+    'const fn = context.device.captureImage.call;',
+    'Reflect.apply(other.captureImage, context.device, []);',
+    'Reflect.apply(fn, context.device, []);',
+    'Other.apply(context.device.captureImage, context.device, []);',
+    'context.device[`capture${suffix}`]();',
+  ]) {
+    assert.deepEqual(codesFor(text, null).filter((code) => code === 'PCF_PAGES_API'), [], text);
+  }
+  // The new forms are detected only: they are not new proof syntax.
+  for (const condition of [
+    'typeof (context.device)?.captureImage === "function"',
+    'typeof context.device[`captureImage`] === "function"',
+    'typeof context.device.captureImage.call === "function"',
+  ]) {
+    assert.deepEqual(codesFor(`if (${condition}) { ${CALL}; }`), ['PCF_PAGES_API'], condition);
+  }
+});
+
+test('Pages detection reads optional and generic call arguments as arguments, not grouped receivers', () => {
+  const factory = 'const factory = (value) => ({ captureImage() { return "local"; } });\n';
+  const generic = 'function factory<T>(value: T) { return { captureImage() { return "local"; } }; }\n';
+  const method = 'const factory = { create<T>(value: T) { return { captureImage() { return "local"; } }; } };\n';
+  for (const text of [
+    `${factory}function run(context) { return factory?.(context.device).captureImage(); }`,
+    `${factory}function run(context) { return factory?.(context.device)?.captureImage(); }`,
+    `${generic}function run(context) { return factory<unknown>(context.device).captureImage(); }`,
+    `${method}function run(context) { return factory.create<unknown>(context.device).captureImage(); }`,
+    `${factory}function run(context) { return factory(context.device).captureImage(); }`,
+  ]) {
+    assert.deepEqual(codesFor(text, null), [], text);
+    assert.deepEqual(codesFor(text, null, ['model']), [], text);
+  }
+  // After an analyzer failure the fallback reads the optional call the same way.
+  assert.deepEqual(findingsFor(`${factory}factory?.(context.device).captureImage();`, null, ['pages'], { indexer: throwingIndexer })
+    .map((finding) => finding.code), []);
+  // Known limit, in the safe direction: after an optional call with type arguments the parenthesis is still
+  // read as a grouped receiver, so the factory result's method is reported as a Pages call (an over-report).
+  for (const text of [
+    `${generic}function run(context) { return factory?.<unknown>(context.device).captureImage(); }`,
+    `${method}function run(context) { return factory.create?.<unknown>(context.device).captureImage(); }`,
+  ]) {
+    assert.deepEqual(codesFor(text, null), ['PCF_FEATURE_UNDECLARED', 'PCF_PAGES_API'], text);
+  }
+  // A grouped receiver after an operator or keyword is still read through.
+  for (const text of ['ready && (context.device).captureImage();', 'value = (context.device).captureImage();', 'void (context.device).captureImage();']) {
+    assert.deepEqual(codesFor(text, null), ['PCF_FEATURE_UNDECLARED', 'PCF_PAGES_API'], text);
+  }
+});
+
+test('Pages proof refuses early exits and else branches of a negated method check by design', () => {
+  // A deliberate fail-closed limit: code that runs between a negated check and the call, such as a later
+  // operand of the same condition, can remove the method without a write the analyzer sees.
+  const negated = 'typeof context.device?.captureImage !== "function"';
+  for (const body of [
+    `if (${negated}) return; ${CALL};`,
+    `if (${negated}) { return; } ${CALL};`,
+    `if (${negated}) throw new Error("no camera"); ${CALL};`,
+    `if (!context.device?.captureImage) return; ${CALL};`,
+    `if (!(${PROOF})) return; ${CALL};`,
+    `if (${negated}) return; return ${CALL};`,
+    `if (${negated}) return; const image = ${CALL};`,
+    `if (${negated}) { consume(); } else { ${CALL}; }`,
+    `if (${negated}) consume(); else ${CALL};`,
+    `if (${negated} || !state.ready) return; return ${CALL};`,
+    `if (!(${PROOF} && state > 0)) return; ${CALL};`,
+    `if (${negated}) return; Object.assign(context.device, { captureImage: undefined }); ${CALL};`,
+  ]) {
+    assert.deepEqual(codesFor(`function capture(context, state, consume) { ${body} }`), ['PCF_PAGES_API'], body);
+  }
+  assert.deepEqual(codesFor(`function capture(contexts) { for (const context of contexts) { if (${negated}) continue; ${CALL}; } }`),
+    ['PCF_PAGES_API']);
+  const [finding] = findingsFor(`function capture(context) { if (${negated}) return; ${CALL}; }`);
+  assert.match(finding.message, /early-return guards and aliases are not recognized/);
+  // The recommended rewrite: a positive guard block around the call.
+  assert.deepEqual(codesFor(`function capture(context) { if (${PROOF}) { ${CALL}; } }`), []);
+  assert.deepEqual(codesFor(`async function capture(context, consume) { if (${PROOF}) { const image = await ${CALL}; consume(image); } }`), []);
+});
+
+test('Pages detection ignores a context-named local object literal that is provably not the PCF context', () => {
+  for (const name of ['ctx', 'context', '_context', 'pcfContext']) {
+    const text = `function render() {\n  const ${name} = { device: { captureImage() { return 1; }, "pickFile": async () => [] }, utils: { lookupObjects: function (options) { return []; }, max: 3 } };\n  ${name}.device.captureImage(); ${name}.device.pickFile(); ${name}.utils.lookupObjects(options);\n}`;
+    assert.deepEqual(codesFor(text, null), [], name);
+    assert.deepEqual(codesFor(text, null, ['model']), [], name);
+  }
+  for (const text of [
+    '{ const ctx = { device: { captureImage: () => ({ id: "local", size: [1, 2] }) } }; ctx.device.captureImage(); }',
+    'function render() { const ctx = { device: { captureImage(a, b) { return null; } } }\n  ctx?.device?.captureImage?.(a); }',
+    'function render() { const ctx = { device: { captureImage: async function named() { return; } } }; new ctx.device.captureImage(); }',
+  ]) {
+    assert.deepEqual(codesFor(text, null), [], text);
+  }
+  // A literal whose function runs other code is not set aside; the call inside is read on its own too.
+  assert.deepEqual(codesFor('function render() { const ctx = { device: { captureImage: () => context.device.captureImage() } }; ctx.device.captureImage(); }'),
+    ['PCF_PAGES_API', 'PCF_PAGES_API']);
+});
+
+test('Pages detection keeps the error for context-named objects it cannot prove local', () => {
+  const local = 'device: { captureImage() { return "local"; } }';
+  for (const body of [
+    // Not a local, inert const literal.
+    'let ctx = { device: { captureImage() {} } }; ctx.device.captureImage();',
+    'const ctx = { device: real.device }; ctx.device.captureImage();',
+    'const ctx = { device }; ctx.device.captureImage();',
+    'const ctx = { ...base }; ctx.device.captureImage();',
+    'const ctx = { [key]: {} }; ctx.device.captureImage();',
+    'const ctx = { get device() { return real; } }; ctx.device.captureImage();',
+    'const ctx = { __proto__: { device: { captureImage() {} } } }; ctx.device.captureImage();',
+    'const ctx = { device: { captureImage() {} }, device: real }; ctx.device.captureImage();',
+    'const ctx = { device: { *captureImage() {} } }; ctx.device.captureImage();',
+    'const ctx = { device: { captureImage(): void {} } }; ctx.device.captureImage();',
+    'const ctx = { device: { captureImage(v = real) {} } }; ctx.device.captureImage();',
+    'const ctx = { device: { captureImage({ device }) {} } }; ctx.device.captureImage();',
+    'const ctx = { device: { captureImage: real.captureImage } }; ctx.device.captureImage();',
+    'const ctx = { device: { captureImage() {} } } as unknown as Context; ctx.device.captureImage();',
+    'const ctx = useContext(PcfContext); ctx.device.captureImage();',
+    // A function in the literal that runs, reads or returns anything else.
+    `const ctx = { ${local}, update(value) { this.device = value.device; } }; ctx.update(api); ctx.device.captureImage();`,
+    `const ctx = { ${local}, expose() { return this; } }; Object.assign(ctx.expose(), api); ctx.device.captureImage();`,
+    `let escaped; const ctx = { ${local}, leak() { escaped = this; } }; ctx.leak(); escaped.device = api.device; ctx.device.captureImage();`,
+    `const ctx = { ${local}, update(value) { this.device = value.device; } }; ctx.update?.(api); ctx.device.captureImage();`,
+    `const ctx = { ${local}, update() { ctx.device = api.device; } }; ctx.update(); ctx.device.captureImage();`,
+    `const ctx = { ${local}, update() { super.__defineGetter__("device", () => api.device); } }; ctx.update(); ctx.device.captureImage();`,
+    'const ctx = { device: { captureImage(c) { return c.device.captureImage(); } } }; ctx.device.captureImage(api);',
+    'const ctx = { device: { captureImage: (c) => c } }; ctx.device.captureImage(api.device).captureImage();',
+    'const ctx = { device: { captureImage() { return real; } } }; ctx.device.captureImage().captureImage();',
+    'const ctx = { device: { captureImage() { return arguments; } } }; ctx.device.captureImage();',
+    'const ctx = { device: { captureImage() { consume(); return 1; } } }; ctx.device.captureImage();',
+    // A use other than a call of the literal's own function.
+    'const ctx = {}; ctx.__defineGetter__("device", () => api.device); ctx.device.captureImage();',
+    `const ctx = { ${local} }; ctx.hasOwnProperty("device"); ctx.device.captureImage();`,
+    `const ctx = { ${local} }; ctx.device.captureImage.call(api.device);`,
+    `const ctx = { ${local} }; helper(ctx); ctx.device.captureImage();`,
+    `const ctx = { ${local} }; const d = ctx.device; ctx.device.captureImage();`,
+    `const ctx = { ${local} }; ctx.device.captureImage = real; ctx.device.captureImage();`,
+    `const ctx = { ${local} }; Object.assign(ctx.device, real); ctx.device.captureImage();`,
+    `const ctx = { ${local} }; delete ctx.device; ctx.device.captureImage();`,
+    `const ctx = { ${local} }; (ctx).device.captureImage();`,
+    `const ctx = { ${local} }; const alias = ctx; alias.device = api.device; ctx.device.captureImage();`,
+    `const ctx = { ${local} }; return [ctx, ctx.device.captureImage()];`,
+    // Something else could reach the binding: eval, a with statement, an inner declaration.
+    `const ctx = { ${local} }; eval("ctx.device = api.device"); ctx.device.captureImage();`,
+    `const ctx = { ${local} }, other = 1; { const ctx = real; ctx.device.captureImage(); }`,
+    `const ctx = { ${local} }; function inner(ctx) { ctx.device.captureImage(); }`,
+    `const ctx = { ${local} }; button.onclick = (ctx) => ctx.device.captureImage();`,
+  ]) {
+    assert.ok(codesFor(`function run(api, real, base, key, device, helper, consume, button, PcfContext) { ${body} }`, null).includes('PCF_PAGES_API'), body);
+  }
+  for (const text of [
+    // Only the context-named root itself is set aside, never a receiver under another root.
+    'function run(api) { const props = { context: null }; Object.assign(props, { context: api }); props.context.device.captureImage(); }',
+    'function run(api) { const state = { context: null }; const alias = state; alias.context = api; state.context.device.captureImage(); }',
+    'function run(api) { const props = { context: { device: { captureImage() {} } } }; props.context.device.captureImage(); }',
+    // A program-level const can be reached from other scripts; a with statement can rebind the name.
+    'const ctx = { device: { captureImage() {} } }; ctx.device.captureImage();',
+    'export const ctx = { device: { captureImage() {} } }; ctx.device.captureImage();',
+    'function run(api) { const ctx = { device: { captureImage() {} } }; with (api) { ctx.device.captureImage(); } }',
+    'function render(ctx) { ctx.device.captureImage(); }',
+    'class C { init(context) { this._context = context; } run() { this._context.device.captureImage(); } }',
+  ]) {
+    assert.ok(codesFor(text, null).includes('PCF_PAGES_API'), text);
+    assert.ok(codesFor(text, null, ['model']).includes('PCF_FEATURE_UNDECLARED'), text);
+  }
 });
 
 test('Pages detection decodes escapes without evaluating malformed or non-identifier keys', () => {
@@ -881,6 +1095,110 @@ for (const [name, body] of [
   });
 }
 
+test('Pages proof expires after a parameter-default write that a same-named body declaration does not hide', () => {
+  // A function with parameter expressions evaluates its defaults before its body's declarations exist,
+  // so the default writes the outer context however the body declares the name.
+  for (const body of [
+    `function reset(v = (context.device = {})) { let context; } ${CALL};`,
+    `function reset(v = (context.device = {})) { var context; } ${CALL};`,
+    `function reset(v = (context = next)) { const context = other; consume(context); } ${CALL};`,
+    `function reset({ v = (context.device = {}) } = {}) { let context; } ${CALL};`,
+    `const reset = function (v = (context.device = {})) { var context; }; ${CALL};`,
+    `const reset = (v = (context.device = {})) => { let context; }; ${CALL};`,
+    `const h = { reset(v = (context.device = {})) { var context; } }; ${CALL};`,
+    `class H { reset(v = (context.device = {})) { let context; } } ${CALL};`,
+  ]) {
+    assert.deepEqual(codesFor(withinGuard(body)), ['PCF_PAGES_API'], body);
+  }
+});
+
+test('Pages proof keeps body declarations local when a function has parameter expressions', () => {
+  for (const body of [
+    `function reset(v = 1) { let context = next; context = other; consume(context); } ${CALL};`,
+    `function reset(v = 1) { var context = next; context.device = other; } ${CALL};`,
+    `function reset(v = (other = next)) { var context; context = next; } ${CALL};`,
+  ]) {
+    assert.deepEqual(codesFor(withinGuard(body)), [], body);
+  }
+  // A call in such a body reads the body's own declaration, which no outer proof covers.
+  for (const kind of ['let', 'var']) {
+    assert.deepEqual(codesFor(withinGuard(`function reset(v = 1) { ${kind} context = next; ${CALL}; }`)), ['PCF_PAGES_API'], kind);
+  }
+});
+
+const THIS_CONTEXT_GUARD = 'typeof this._context.device?.captureImage === "function"';
+const THIS_CONTEXT_CALL = 'this._context.device.captureImage()';
+const inGuardedMethod = (classBody, after = `${THIS_CONTEXT_CALL};`) =>
+  `class C { run() { if (${THIS_CONTEXT_GUARD}) { class D { ${classBody} } ${after} } } }`;
+
+test('Pages proof expires after a this write in a computed class member key', () => {
+  // A computed key is evaluated where the class is defined, so its `this` is the enclosing method's.
+  // https://tc39.es/ecma262/#sec-runtime-semantics-classdefinitionevaluation
+  for (const member of [
+    '[this._context.device = null]() {}',
+    '[this._context.device = null] = 1;',
+    'static [this._context.device = null]() {}',
+    'static [this._context.device = null] = 1;',
+    'get [this._context.device = null]() { return 1; }',
+    'async *[this._context.device = null]() {}',
+    'value = 1; [this._context = null]() {}',
+    'run() {} [this._context.device = null]() {}',
+    'static { consume(1); } [this._context.device = null]() {}',
+    'value\n[this._context.device = null]() {}',
+    'value: number\n[this._context.device = null]() {}',
+    'value?: string\n[this._context.device = null]() {}',
+    '#value\n[this._context.device = null]() {}',
+    'static #value\n[this._context.device = null]() {}',
+    '@decorate [this._context.device = null]() {}',
+    '@decorate() [this._context.device = null]() {}',
+    '@scope.decorate [this._context.device = null]() {}',
+    '@decorate\n[this._context.device = null]() {}',
+    'handler = () => {}\n[this._context.device = null]() {}',
+    'count = next++\n[this._context.device = null]() {}',
+    'first = 1\nsecond\n[this._context.device = null]() {}',
+    'run(): void\n[this._context.device = null]() {}',
+  ]) {
+    assert.deepEqual(codesFor(inGuardedMethod(member)), ['PCF_PAGES_API'], member);
+  }
+});
+
+test('Pages proof keeps the class instance as this inside class member bodies and initializers', () => {
+  for (const member of [
+    'run() { this._context.device = null; }',
+    'value = (this._context.device = null);',
+    '[key] = (this._context.device = null);',
+    'static { this._context = null; }',
+    'value = { a: 1 }\n[this._context.device = null];',
+    'value = source\n[this._context.device = null];',
+    'value = read()\n[this._context.device = null];',
+    'value: number[] = []\n[this._context.device = null];',
+    'value = function () { return {}; }\n[this._context.device = null];',
+    'value = class {}\n[this._context.device = null];',
+    'value = () => source\n[this._context.device = null];',
+  ]) {
+    assert.deepEqual(codesFor(inGuardedMethod(member)), [], member);
+  }
+  // A call in a computed key runs under the enclosing proof; one in a member body does not.
+  assert.deepEqual(codesFor(inGuardedMethod(`[${THIS_CONTEXT_CALL}]() {}`, '')), []);
+  assert.deepEqual(codesFor(inGuardedMethod(`value: number\n[${THIS_CONTEXT_CALL}]() {}`, '')), []);
+  assert.deepEqual(codesFor(inGuardedMethod(`value = source\n[${THIS_CONTEXT_CALL}];`, '')), ['PCF_PAGES_API']);
+  assert.deepEqual(codesFor(`class D { [${THIS_CONTEXT_CALL}]() {} }`), ['PCF_PAGES_API']);
+  assert.deepEqual(codesFor(inGuardedMethod(`run() { ${THIS_CONTEXT_CALL}; }`, '')), ['PCF_PAGES_API']);
+});
+
+test('Pages proof keeps the inner class this for a computed key after an assertion initializer or a generic decorator', () => {
+  // Known limit, behaving as before: the member scanner does not recognize these keys as member starts, so
+  // `this` in them is still read as the inner class's instance and a write there does not end the outer proof.
+  for (const member of [
+    'value = {} as object\n[this._context.device = null]() {}',
+    '@decorate<number>() [this._context.device = null]() {}',
+  ]) {
+    assert.deepEqual(codesFor(inGuardedMethod(member)), [], member);
+  }
+  // The same key on its own line after the generic decorator is recognized.
+  assert.deepEqual(codesFor(inGuardedMethod('@decorate<number>()\n[this._context.device = null]() {}')), ['PCF_PAGES_API']);
+});
+
 for (const [name, call, plainCall = CALL, proof = PROOF] of [
   ['method non-null run', 'context.device.captureImage!!()'],
   ['root and namespace non-null runs', 'context!!!.device!!?.captureImage!!()'],
@@ -1238,9 +1556,12 @@ test('.tsx sources keep TypeScript\'s JSX reading of angle brackets', () => {
 });
 
 test('.ts angle-bracket types the gate cannot blank fall back fail closed', () => {
+  // An unterminated type, and types the gate can only blank one lex at a time (each one after a
+  // comment) in a file large enough to pass the lexing budget.
+  const padding = `/*${' padding'.repeat(4000)} */\n`;
   for (const [name, text] of [
     ['unterminated type', `const value = <Record<string, unknown>raw;\n${CALL};`],
-    ['more types than the pass limit', `let v;\n${'v = <T>v;\n'.repeat(300)}${CALL};`],
+    ['types past the lexing budget', `let v;\n${padding}${'v = /* cast */ <T>v;\n'.repeat(300)}${CALL};`],
   ]) {
     assert.deepEqual(scanSource(FILE, text).map((finding) => finding.code), ['PCF_CODE_UNPARSEABLE'], name);
     const gated = gateSources({
@@ -1271,6 +1592,54 @@ test('Source analysis bounds a .ts control with many angle-bracket types', (t) =
   assert.deepEqual(findings.map((finding) => [finding.code, finding.line]), [['PCF_PAGES_API', lines.length - 2]]);
 });
 
+test('.ts files with hundreds of angle-bracket types stay analyzable', (t) => {
+  const guarded = withinGuard(`${CALL};`);
+  const control = (casts) => {
+    const lines = ['export class C {', '  public run(context: ComponentFramework.Context<IInputs>): void {', '    let v: unknown;'];
+    for (let i = 0; i < 1500; i += 1) {
+      lines.push(i % 5 === 0 && casts-- > 0
+        ? `    const el${i} = <HTMLDivElement>document.createElement("div"); v = <unknown>el${i};`
+        : `    const value${i}: Array<number> = [${i}, ${i + 1}]; total += value${i}.length > 1 ? ${i} : 0;`);
+    }
+    lines.push(`    ${guarded}`, '  }', '}');
+    return lines.join('\n');
+  };
+  const longType = `{ ${Array.from({ length: 400 }, (_, i) => `field${i}: string;`).join(' ')} }`;
+  for (const [name, text] of [
+    ['300 casts in a small file', `let v;\n${'v = <T>v;\n'.repeat(300)}${guarded}`],
+    ['600 casts in a 100 KB control', control(300)],
+    ['nested, adjacent and grouped casts', `let v;\n${'v = <A><B<C>>(<D>v); const f = <T>(x: T): T => x;\n'.repeat(100)}${guarded}`],
+    ['a type longer than 4096 characters', `const shape = <${longType}>raw;\n${guarded}`],
+  ]) {
+    const started = performance.now();
+    const gated = gateSources({ manifestModel: { features: [{ name: 'Device.captureImage' }] }, sources: [{ file: FILE, text }], hosts: ['pages'] });
+    const elapsed = performance.now() - started;
+    t.diagnostic(`${name}: ${elapsed.toFixed(3)} ms; ${Buffer.byteLength(text)} bytes`);
+    assert.deepEqual(gated, { ok: true, errors: [], warnings: [] }, name);
+    assert.ok(elapsed < PATHOLOGICAL_SCAN_LIMIT_MS, `${name}: ${elapsed.toFixed(3)} ms exceeds ${PATHOLOGICAL_SCAN_LIMIT_MS} ms`);
+    const unguarded = text.replace(guarded, `${CALL};`);
+    const callLine = unguarded.split('\n').findIndex((line) => line.includes(CALL)) + 1;
+    assert.deepEqual(findingsFor(unguarded).map((finding) => [finding.code, finding.line]), [['PCF_PAGES_API', callLine]], name);
+  }
+});
+
+test('.ts angle-bracket types in strings, comments, template text and regexes never hide code', () => {
+  const lines = [
+    'let v;',
+    'const html = "(<b>" + `(<i>${v}<u>` + \'(<s>\' + `${`(<q>`}`;',
+    '// (<T> v = 1',
+    '/* = <T> */ const re = /(<T>)/g;',
+    ...Array(60).fill('v = <T>v; v = (<T>v); if (count < limit && other > 2) { v = <Array<T>>v; }'),
+    `${CALL};`,
+    'const note = `= <b>${v}</b> = <i>`; v = <T>v;',
+    `${CALL};`,
+  ];
+  const text = lines.join('\n');
+  assert.deepEqual(scanSource(FILE, text), []);
+  assert.deepEqual(findingsFor(text).map((finding) => [finding.code, finding.line]),
+    [['PCF_PAGES_API', lines.length - 2], ['PCF_PAGES_API', lines.length]]);
+});
+
 for (const relative of [
   'AGENTS.md', path.join('references', 'pcf-testing.md'), path.join('references', 'pcf-best-practices.md'),
 ]) {
@@ -1282,8 +1651,9 @@ for (const relative of [
     assert.match(text, /Pages API calls[^.\n]*unguarded/i);
     assert.match(text, /lexer failure[^.\n]*comments?[^.\n]*strings?[^.\n]*report/i);
     if (relative === 'AGENTS.md') {
-      assert.match(text, /later release[^.\n]*parameter-default writes[^.\n]*body declarations/i);
-      assert.match(text, /computed class member keys/i);
+      assert.match(text, /parameter default reaches the outer binding[^.\n]*body declares the same name/i);
+      assert.match(text, /`this` in a computed class member key[^\n]*enclosing method's[^.\n]*ends that method's proof/i);
+      assert.match(text, /Two forms behave as before[^\n]*type assertion or `satisfies`[^\n]*decorator with type arguments/i);
       assert.match(text, /\.ts` files[^.\n]*angle-bracket types[^.\n]*JSX/i);
       assert.match(text, /unterminated such type[^.\n]*lexer-failure path/i);
     } else {

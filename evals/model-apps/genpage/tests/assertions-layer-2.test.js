@@ -514,7 +514,7 @@ export default function P() {
   assert.equal(r.status, 'fail');
 });
 
-// Round-2 hardening: the effect scoper is literal-aware and follows local helpers.
+// Hardening: the effect scoper is literal-aware and follows local helpers.
 test('connector caching: a string cannot forge or hide the effect', () => {
   const inEffect = (body, deps = '[dataReady]') => `
 const INFLIGHT_KEY = "__ppDocsInflight";

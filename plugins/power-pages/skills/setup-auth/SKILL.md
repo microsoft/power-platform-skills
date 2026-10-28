@@ -10,7 +10,7 @@ description: >
   "add Facebook login", "add Google sign in", "add Microsoft Account",
   or otherwise wants to set up
   authentication (login/logout) and role-based authorization for their
-  Power Pages code site using any supported identity provider.
+  Power Pages SPA site using any supported identity provider.
   Also sets up the IdP app registration for OIDC providers (Okta, Auth0,
   Entra External ID, and other OIDC) -- reads the provider's docs first, then
   either guides the user through the provider's console or, when the provider
@@ -25,7 +25,7 @@ model: opus
 
 # Set Up Authentication & Authorization
 
-Configure authentication (login/logout) and role-based authorization for a Power Pages code site. This skill supports multiple identity providers -- Microsoft Entra ID, Entra External ID (for customer-facing apps with self-service sign-up), OpenID Connect (Okta, Auth0, etc.), SAML2, WS-Federation, local authentication (username/password), Microsoft Account, Facebook, and Google. It also supports optional features including invitation-based registration and Terms & Conditions acceptance. Power Pages built-in 2FA is intentionally not scaffolded because the SendCode/VerifyCode pages are server-rendered and cannot be integrated into a SPA experience — use IdP-level MFA instead. It creates an auth service, type declarations, authorization utilities, auth UI components, and role-based access control patterns appropriate to the site's framework and chosen identity provider(s).
+Configure authentication (login/logout) and role-based authorization for a Power Pages SPA site. This skill supports multiple identity providers -- Microsoft Entra ID, Entra External ID (for customer-facing apps with self-service sign-up), OpenID Connect (Okta, Auth0, etc.), SAML2, WS-Federation, local authentication (username/password), Microsoft Account, Facebook, and Google. It also supports optional features including invitation-based registration and Terms & Conditions acceptance. Power Pages built-in 2FA is intentionally not scaffolded because the SendCode/VerifyCode pages are server-rendered and cannot be integrated into a SPA experience — use IdP-level MFA instead. It creates an auth service, type declarations, authorization utilities, auth UI components, and role-based access control patterns appropriate to the site's framework and chosen identity provider(s).
 
 ## Core Principles
 
@@ -38,7 +38,7 @@ Configure authentication (login/logout) and role-based authorization for a Power
 
 > **Prerequisites:**
 >
-> - An existing Power Pages code site created via `/create-site`
+> - An existing Power Pages SPA site created via `/create-site`
 > - The site must be deployed at least once (`.powerpages-site` folder must exist)
 > - Web roles must be created via `/create-webroles`
 
@@ -720,7 +720,7 @@ Then ask about optional features:
 >
 > **Invitation-based registration is NOT in this list** — it's controlled by the registration mode question above. Setting registration mode to `Invitation-only` or `Both` is what enables invitations.
 >
-> **Two-factor authentication (2FA) is intentionally NOT offered.** Power Pages' built-in 2FA flow is server-rendered (`/Account/Login/SendCode` → `/Account/Login/VerifyCode`) and cannot be intercepted from the SPA — there's no SPA-equivalent UI for the code entry step, and bouncing the user out to a server page mid-login breaks the SPA experience. If the user explicitly asks for 2FA, tell them: "Power Pages built-in 2FA requires the legacy server-rendered SendCode/VerifyCode pages, which we don't support in SPA-based code sites yet. For external providers (Entra ID, Entra External ID, OIDC), enable MFA at the identity provider instead — it's transparent to Power Pages and stays inside the IdP's branded experience. For local accounts, 2FA on SPA sites is not currently supported." Do NOT create `TwoFactorEnabled`, `RememberMeEnabled`, or `RememberBrowserEnabled` site settings.
+> **Two-factor authentication (2FA) is intentionally NOT offered.** Power Pages' built-in 2FA flow is server-rendered (`/Account/Login/SendCode` → `/Account/Login/VerifyCode`) and cannot be intercepted from the SPA — there's no SPA-equivalent UI for the code entry step, and bouncing the user out to a server page mid-login breaks the SPA experience. If the user explicitly asks for 2FA, tell them: "Power Pages built-in 2FA requires the legacy server-rendered SendCode/VerifyCode pages, which we don't support in SPA-based SPA sites yet. For external providers (Entra ID, Entra External ID, OIDC), enable MFA at the identity provider instead — it's transparent to Power Pages and stays inside the IdP's branded experience. For local accounts, 2FA on SPA sites is not currently supported." Do NOT create `TwoFactorEnabled`, `RememberMeEnabled`, or `RememberBrowserEnabled` site settings.
 
 **Profile page** — ask whether to scaffold a SPA profile page that lets signed-in users edit their own contact info via the Power Pages Web API. This is a standalone question because it has its own infrastructure implications (Web API site settings on the `contact` entity + Self-scope table permission).
 
@@ -1295,7 +1295,7 @@ Based on the detected framework:
 **Vue:**
 
 - `src/composables/useAuthorization.ts` — composable with computed roles and role-checking functions
-- `src/directives/vRole.ts` — `v-role` directive for declarative role-based visibility
+- `src/directives/vRole.ts` — `v-role` directive for non-SPA role-based visibility
 
 **Angular:**
 
@@ -1571,7 +1571,7 @@ name: Code-Site-Shell-Header
 ```html
 <div/>
 <script>
-  // Code Site Shell Header — Server-to-SPA redirect for auth pages.
+  // SPA Site Shell Header — Server-to-SPA redirect for auth pages.
   // This template runs on server-rendered pages and redirects to SPA equivalents.
   // Uses a separate template because pac pages upload-code-site wipes the original Header.
   (function () {
@@ -2183,14 +2183,14 @@ Example for two OIDC providers:
 
 **Always create** — these settings are required for all provider types:
 
-> **ProfileRedirectEnabled MUST be `false` for code sites.** If `create-site-setting.js` reports this setting already exists, read the YAML file and check its value. If it is `true`, edit the file to set `value: false`. When this is `true`, the server redirects users to `/profile` after login/registration instead of respecting the `ReturnUrl` — which breaks the SPA flow.
+> **ProfileRedirectEnabled MUST be `false` for SPA sites.** If `create-site-setting.js` reports this setting already exists, read the YAML file and check its value. If it is `true`, edit the file to set `value: false`. When this is `true`, the server redirects users to `/profile` after login/registration instead of respecting the `ReturnUrl` — which breaks the SPA flow.
 
 ```powershell
 node "${PLUGIN_ROOT}/scripts/create-site-setting.js" \
   --projectRoot "<PROJECT_ROOT>" \
   --name "Authentication/Registration/ProfileRedirectEnabled" \
   --value "false" \
-  --description "Disable profile redirect for code sites" \
+  --description "Disable profile redirect for SPA sites" \
   --type boolean
 
 node "${PLUGIN_ROOT}/scripts/create-site-setting.js" \

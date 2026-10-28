@@ -1,0 +1,126 @@
+# Site design quality
+
+Read and apply this shared visual-quality guidance when establishing a new site's identity or changing an existing visual treatment. It describes the outcome, not a framework, asset-import procedure, or preview workflow. Use the calling skill's platform adapter for authoring, approvals, asset delivery, and verification.
+
+## Experience brief and first impression
+
+For a new site or an approved redesign, derive one concise experience brief before choosing layout or tokens. Reuse supplied intent, approved brand material, and the existing site; ask only for missing business facts or material scope decisions. For narrow existing-site edits, reuse the established direction rather than requiring a new brief or redesign.
+
+| Field | Decision |
+|---|---|
+| Audience and job | Who arrives and what they need to accomplish. |
+| Primary and secondary action | The main task, its consistent label, and a quieter alternative when useful. |
+| Principal doubt | What could stop that visitor from acting. |
+| Proof strategy | Honest evidence or a real working capability that answers the doubt, placed where it matters. |
+| Design thesis | One or two sentences connecting mood, visual metaphor, typography, color roles, geometry, imagery, and motion to this organization. |
+| First-screen concept | A focal point, useful headline/context, and clear action; choose a hero or task-first welcome appropriate to the page. |
+| Signature moment | One memorable detail that demonstrates value. It can be static or a polished native interaction; it does not authorize new functionality, fabricated data, or extra animation. |
+
+The first impression is the initial viewport before scrolling. It should make the purpose, audience, trust basis, and next action clear without competing focal points. Aim for an intentional, effortless, organization-specific result, not decoration. Task pages, forms, and lists need clear task hierarchy, not an oversized marketing hero on every page.
+
+Use [page blueprints](page-blueprints.md) for role-appropriate first screens, narrative beats, section rhythm, copy, and honest proof. Map these concepts through the platform adapter, not literal framework markup. The **point of doubt** is where a visitor hesitates; place reassurance there. A **template look** is interchangeable composition, copy, or decoration that says nothing about this organization.
+
+Keep this brief in the calling workflow's existing approved plan and carry it through authoring handoffs. Do not restart discovery, ask for every design choice, or run a full critique at each component. For non-SPA work, use the [non-SPA critique adapter](../skills/edit-site/references/styling/design-critique.md) to interpret the shared categories without loading the SPA capture/fix loop. SPA sites retain their existing design references and completion contract; non-SPA exceptions do not change those rules.
+
+## Non-SPA creation templates: reference, not a design constraint
+
+Use the selected non-SPA creation template for data-model/domain context and requirements
+interpretation only, not as a visual specification. Although it provisions the native baseline,
+its appearance, page composition, layout, branding, and presentation do not constrain the new
+site's approved design. Derive the modern experience from the user's purpose and the experience
+brief. **A custom design and layout are required, not merely permitted.** Reuse required native
+forms, lists, content snippets and other working components as building blocks, not the starter
+page composition around them. Renaming the site, replacing text/images and recoloring the same
+hero, section sequence and page shell is a template reskin, not the requested custom design.
+An individually useful asset or native grid pattern may be reused; that does not justify adopting
+the template's overall arrangement. Honor an explicit preservation preference only for its named
+scope, or **Keep the template unchanged** for the whole baseline.
+
+For a fresh new-site design, remove, replace or reorder unneeded out-of-box sections and
+components, including unused form/list/snippet placements. Presence in the starter template
+alone does not make something a requirement. Account for removals in the approved composition;
+reuse is optional for components that serve no required purpose and are not explicitly preserved.
+Removing a placement does not authorize deleting its backing records, data or unrelated callers.
+
+Visual freedom does not authorize discarding required capabilities or content. Preserve valid
+PAC metadata, record identities and relationships, required forms/lists and data bindings, authentication,
+navigation behavior, locale scope, and supported Bootstrap/Studio-compatible serialization.
+Native owners may recompose sections, columns, and elements within that contract; the original
+template arrangement is not protected. Use the existing approved operations and final styling
+handoff, not a data-model migration, protected-stylesheet replacement, SPA framework, or invented
+native component. This new-site default does not turn an existing-site narrow edit into a redesign.
+Apply [custom layout planning](../skills/edit-site/references/content-and-page-compositions.md#new-site-custom-layout-planning)
+to separate component reuse from page composition and carry both into the existing approved plan.
+
+## Direction and safe brand reuse
+
+- Start with the audience, visitor journey, primary action, and approved aesthetic/mood. Carry one coherent direction through typography, palette, imagery, shapes, spacing, and interaction states; avoid unrelated effects chosen merely to look elaborate.
+- An explicit new-site design brief authorizes establishing a complete cohesive visual identity within the approved scope. Existing-site narrow changes remain preservation-first: reuse approved brand assets, typography, tokens, and successful patterns unless a redesign is requested. A new identity does not authorize changes to unrelated content or functionality.
+- Adapt inspiration rather than copying a brand, proprietary artwork, or another site's distinctive content. Do not invent official logos, endorsements, testimonials, or business claims. Reuse brand material only with appropriate ownership, licensing, privacy, and user approval.
+- Prefer distinctive, purposeful composition over a generic repeated-card template. "Modern" need not mean a dark hero, gradient, pill buttons, or oversized whitespace. A restrained solid surface is valid; atmosphere and decoration must support the content rather than substitute for it.
+
+Use these directions as starting points, not required palettes or font purchases:
+
+| Aesthetic | Mood | Typography direction | Palette direction | Motion direction |
+|---|---|---|---|---|
+| Minimal & Clean | Professional | Clear humanist sans, restrained mono accents | Neutrals with one decisive accent | Subtle or none |
+| Minimal & Clean | Creative | Geometric display paired with readable serif | Muted tones with a focused accent | Gentle reveals |
+| Bold & Vibrant | Professional | Confident display, quiet body face | Strong primary with contrasting accent | Brief, deliberate transitions |
+| Bold & Vibrant | Creative | Expressive display with a simpler text face | Saturated complementary pair | Selective staggered reveals |
+| Dark & Moody | Technical | Legible mono accents with a clear sans | Dark base with measured bright accents | Minimal fades |
+| Dark & Moody | Elegant | Editorial serif with a readable sans | Charcoal with gold or copper accents | Slow, restrained transitions |
+| Warm & Organic | Professional | Humanist sans or readable editorial serif | Earth tones with a warm accent | Gentle easing |
+| Warm & Organic | Creative | Characterful serif with quiet body typography | Terracotta, sage, and cream | Soft, limited movement |
+
+## Typography and hierarchy
+
+- Choose a small, coordinated type system for display, body, and optional technical text. Contrast size, weight, or family to make the primary heading and action unmistakable, without making every heading compete. Keep body text and secondary information genuinely readable; do not use ultra-light weights to create hierarchy.
+- Reuse approved fonts where suitable. Review licensing, privacy, loading cost, language/glyph coverage, and fallbacks before adding fonts through the platform's supported route. A design does not require a new download or a particular font vendor.
+- Use comfortable body sizing and line-height; around 45–75 characters per prose line is a useful starting point, not a limit for every component. Adjust measure and heading scale on narrow screens. Let translated labels and enlarged text wrap without clipping.
+- Keep semantic heading structure and meaningful reading order independent of visual size. Preserve native labels and text semantics; styling must not turn non-interactive text into an apparent control.
+
+## Palette roles and exact contrast
+
+Define coordinated roles for page background, surfaces, headings, body/muted text, links, button foreground/background, borders, and focus indicators. Pair each foreground with its actual surface and states. Muted text still needs readable contrast; never convey meaning through color alone.
+
+Use the [WCAG 2.2 AA text contrast thresholds](https://www.w3.org/WAI/WCAG22/Understanding/contrast-minimum.html):
+
+| Text category | Minimum size | Minimum contrast |
+|---|---|---|
+| Normal text, including 18px bold | Below the large-text cutoffs | 4.5:1 |
+| Large regular text | 24 CSS px (18pt) | 3:1 |
+| Large bold text, weight 700+ | 14pt (approximately 18.667 CSS px) | 3:1 |
+
+The bold cutoff is exactly `14 * 96 / 72` CSS pixels, not 18px. Compare ratios **without rounding**: 4.499:1 fails 4.5:1, and 2.999:1 fails 3:1. Do not enlarge text merely to pass. Necessary control boundaries, state indicators, and informative graphical objects need [non-text contrast](https://www.w3.org/WAI/WCAG22/Understanding/non-text-contrast.html) of at least 3:1 against adjacent colors where applicable; this is separate from text contrast.
+
+Inspect effective child foregrounds, inline declarations, inherited values, and every affected state, not just a container's intended color. Resolve alpha against the actual background rather than assuming white. Across imagery, gradients, or overlays, check the full text-bearing surface and responsive crops; endpoint samples or a passing isolated color pair cannot prove readability. Prefer a reliable backing surface or composition change when text would cross unpredictable detail. Unresolved values and unperformed rendering checks remain unknown, not passes.
+
+## Purposeful spacing and responsive composition
+
+- Build a consistent spacing rhythm and aligned content edges. Use proximity to group related content, larger gaps between sections, and a deliberate container width. Keep short sections content-sized rather than inflating every section to viewport height.
+- Compose a clear first impression: identity, useful headline, primary action, and a visual that explains the offering. Balance hero text with imagery and vary supporting sections according to their content rather than repeating one layout everywhere.
+- Plan desktop and mobile composition together. Stack columns when needed, keep focal content visible, and avoid arbitrary fixed heights or widths that clip text. Preserve logical DOM/keyboard order rather than visually reordering information.
+- Account for zoom, long labels, navigation, form errors, and localized content. Aim for usable reflow at 320 CSS pixels and text resizing to 200%; do not hide overflow to disguise a broken layout. Respect genuinely two-dimensional content such as data tables.
+
+## Meaningful imagery and art direction
+
+- For a new-site visual treatment, include purposeful real photographs or illustrations that communicate the offering, people, place, product, or process. Plan a relevant hero image/illustration and supporting imagery where it explains content. Logos, icons, decorative patterns, and gradient blobs alone do not satisfy content imagery.
+- Honor an explicit request for a bare baseline or a user decision to decline images. Do not force existing-site narrow edits to acquire photographs. Otherwise, unavailable source material is a dependency to resolve, not permission to silently omit meaningful imagery.
+- Reuse suitable approved assets first. If no suitable approved photo is available, an original safe SVG illustration that explains the subject is a legitimate alternative; arbitrary decoration is not. Do not copy an illustration or manufacture misleading photographic evidence.
+- Honor the platform workflow's delivery policy. Non-SPA site creation uses approved direct HTTPS image URLs rather than new image Web Files; an illustration must already have an approved hosted URL on that route. Do not publish a new asset, invent its URL, or fall back to file import implicitly.
+- Choose the subject and visual role before the source. Coordinate lighting, color temperature, style, and visual density across hero and supporting images. Specify aspect ratio, crop, focal point, and desktop/mobile treatment; avoid cutting off key people, products, or diagram labels.
+- Reserve quiet space for text or place it beside the image. When text overlaps imagery, design the backing/overlay and all text/action states for readability over the actual crop, not an assumed average color. A crop change must not expose text to a newly unreadable area.
+- Use actual approved assets with verified provenance, not placeholder data, placeholder-image services, guessed photo IDs, or unresolved image slots. Follow the existing asset workflow for source selection, legal/privacy review, user approval, safe preparation, and delivery; this reference does not replace or relax those checks.
+- Provide concise, localized alternative text for informative images and empty alternative text for purely decorative images. Keep essential text accessible and localizable rather than baking it into artwork. Preserve aspect ratio and reserve layout space; use appropriately sized files instead of unnecessarily large downloads.
+
+## Interactive states, accessibility, and motion
+
+- Design default, hover, focus, active, selected, visited, disabled, loading, and error states where applicable. Keep controls recognizable and preserve native behavior, accessible names, form labels, validation announcements, and descriptive link text. Identify links that open new windows.
+- Keep all functionality keyboard-operable, with visible focus that is not obscured. Never remove a focus outline without an accessible replacement; do not use positive `tabindex` or rely on hover alone. Size or space pointer targets to meet [WCAG 2.2 target-size requirements](https://www.w3.org/WAI/WCAG22/Understanding/target-size-minimum.html), not just visual proportions.
+- Use motion selectively to explain state or guide attention. Prefer a coherent, brief transition over continuous or scattered effects. Provide `prefers-reduced-motion` alternatives that disable or simplify nonessential movement, preserve visibility/function without animation, and simplify necessary loading feedback.
+
+## Verification boundary
+
+Inspect content, source, responsive rules, asset choices, resolved color pairs, and affected states using the calling skill's available evidence. Report which checks actually ran. Source inspection and color math are not a complete accessibility audit or proof of runtime rendering, font loading, image crop, or editor round trips. The platform adapter governs whether live verification is available or remains pending; this shared reference adds no dev-server, browser, or live-preview prerequisite.
+
+Label source-only conclusions as provisional and unavailable observations as **not observed**, never passes or failures inferred from missing evidence. A plan/status HTML document or structural wireframe is not a rendered site. A live URL shows deployed content, not unpublished local edits. A separately requested visual critique may inspect an authorized running URL; it neither deploys local changes nor authorizes its recommended fixes.

@@ -6,6 +6,11 @@ const path = require('node:path');
 const { ASSERTIONS } = require('../lib/assertions-layer-2.js');
 const { PHASE_EXPECTATIONS } = require('../lib/assertions-layer-1.js');
 const { loadFixtures } = require('../lib/fixture-loader.js');
+const { setParserCheck } = require('../../../../plugins/model-apps/scripts/lib/typescript-views.js');
+
+// What a guess of the page lexer costs a fixture where the TypeScript parser does not settle it (typescript-views.js in the plugin): the tests that pin it read
+// the page with the lexer alone. With the parser asked, as the build asks it, the same pages are read as TypeScript parses them (the tests after each).
+const lexerAlone = (t) => { setParserCheck(false); t.after(() => setParserCheck(true)); };
 
 const NAV = 'For multi-page builds, cross-page navigation uses quoted `"PAGEREF_<filename>"` placeholders that the orchestrator\'s Phase 6.5 resolves to real GUIDs';
 const FIXUP = 'Phase 6.5: Every effective navigation target resolves against the deployed page map; exact substitutions preserve non-navigation bytes and only affected pages reupload';
@@ -169,7 +174,8 @@ test('a PAGEREF_ token no navigation rewrite resolves fails the contract in eith
 // The misread pages (tests/helpers/misread-page.js): JavaScript makes the calls, and each page is a way the lexer hides one or reads
 // text as one. A fixture holding one is not a page the build would accept, so it fails the contract, the first guess named; with the
 // object literal in parentheses the first is read right and passes.
-test('a page the lexer could misread fails the contract, naming the guess, and the parenthesised page passes', () => {
+test('a page the lexer could misread fails the contract, naming the guess, and the parenthesised page passes', (t) => {
+  lexerAlone(t);
   const { OBJECT_DIVISION_PAGE, MISREAD_PAGES } = require('../../../../plugins/model-apps/scripts/tests/helpers/misread-page.js');
   const make = (code) => ({
     contractVersion: 2,
@@ -201,7 +207,8 @@ test('a page the lexer could misread fails the contract, naming the guess, and t
 // A resolved page is judged on the same view of the source as the build and verification. An id that lies in a call at or after the first place
 // the lexer guessed — or in a call that runs through it — is no evidence of navigation, though it is a deployed id from the page map: the
 // source there is not read for certain, and what the call does is not known.
-test('a resolved page whose page id lies in a call the lexer reads only by guess is refused, as verification refuses it', () => {
+test('a resolved page whose page id lies in a call the lexer reads only by guess is refused, as verification refuses it', (t) => {
+  lexerAlone(t);
   const { MISREAD_PAGES } = require('../../../../plugins/model-apps/scripts/tests/helpers/misread-page.js');
   const make = (code) => ({
     contractVersion: 2,
@@ -225,6 +232,21 @@ test('a resolved page whose page id lies in a call the lexer reads only by guess
   // Closed before the guess, the same call is evidence as it was, and a guess after it changes nothing.
   assert.equal(score(make(`${call}\n${guess}\n`)).status, 'pass');
   assert.equal(score(make(`${call}\n`)).status, 'pass');
+});
+
+// The same pages with the parser asked where the lexer guessed, as the build asks it: the misread page is read as TypeScript parses it, its every call
+// resolves, and an id in a call after a place the lexer guessed at is evidence, as verification counts it.
+test('with the parser asked, a page the lexer misreads passes the contract, and an id in a call after a guess is evidence', () => {
+  const { OBJECT_DIVISION_PAGE } = require('../../../../plugins/model-apps/scripts/tests/helpers/misread-page.js');
+  const make = (code, phase) => ({
+    contractVersion: 2,
+    manifest: { navigationPhase: phase, pageMap: IDS },
+    files: [{ name: 'overview.tsx', content: code }, { name: 'pet.tsx', content: '' }, { name: 'pet-gallery.tsx', content: '' }],
+  });
+  assert.equal(score(make(OBJECT_DIVISION_PAGE.replaceAll('PAGEREF_detail', 'PAGEREF_pet'), 'authored')).status, 'pass');
+  const call = `navigateTo({pageType:"generative", pageId:"${IDS.pet}"});`;
+  assert.equal(score(make(`const count = {valueOf(){return 12;}}/2; const half = total / 2;\n${call}\n`, 'resolved')).status, 'pass');
+  assert.equal(score(make(`navigateTo({pageType:"generative", pageId:"${IDS.pet}", data: type/2}); const re = /x/;\n`, 'resolved')).status, 'pass');
 });
 
 // Pages the lexer reads right after a line break (ASI): the text of a call in a regex after a prefix `++` is a token no rewrite resolves, so a

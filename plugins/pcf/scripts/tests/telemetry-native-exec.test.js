@@ -65,7 +65,10 @@ test('a planted cwd executable cannot replace the PATH executable on Windows', {
 }, (t) => {
   const { runNative } = nativeExec();
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'pcf-telemetry-native-'));
-  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  // On Windows a child that just exited can still hold a file in the folder for a moment, and removing it then
+  // fails with ENOTEMPTY (about one run in three). Node retries exactly those errors, with a growing delay, as
+  // model-apps' copy of this test already does.
+  t.after(() => fs.rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 }));
   const project = path.join(root, 'project');
   const tools = path.join(root, 'tools');
   fs.mkdirSync(project);

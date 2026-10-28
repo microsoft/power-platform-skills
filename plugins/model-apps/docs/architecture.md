@@ -69,9 +69,9 @@ phases (and other agents) read it.
                   │   edit-flow.md         │   <-- loaded conditionally
                   └────────────┬───────────┘
                                │
-                       pac model list
-                       pac model genpage list
-                       pac model genpage download
+                       apps.js list
+                       genpage.js list
+                       genpage.js download
                                │
                                v
                   ┌────────────────────────┐
@@ -93,7 +93,7 @@ phases (and other agents) read it.
                   on <working-dir>/<page-id>/page.tsx
                                │
                                v
-                  pac model genpage upload --page-id ...
+                  genpage-upload.js --page-id ...
 ```
 
 ## /genpage — working directory layout
@@ -106,7 +106,7 @@ Every `/genpage` run creates a kebab-case working directory with this layout:
   genpage.d.ts              <-- Phase 0.5  (ambient Xrm + window cache types)
   genpage-plan.md           <-- Phase 1    (planner writes; contract for later)
   entity-creation-log.md    <-- Phase 2b   (if entities created)
-  RuntimeTypes.ts           <-- Phase 4    (pac model genpage generate-types)
+  RuntimeTypes.ts           <-- Phase 4    (genpage.js types)
   <page>.tsx                <-- Phase 5    (page-builder writes; one per page)
   workflow-log.md           <-- written incrementally across all phases
 ```
@@ -124,9 +124,9 @@ Key sections the orchestrator and other agents rely on:
 
 | Section | Read by | Purpose |
 |---------|---------|---------|
-| `## Environment` (Solution + Publisher Prefix) | entity-builder | Solution scoping + prefix construction |
+| `## Environment` (Solution + Publisher Prefix) | entity-builder, orchestrator (Phase 6) | Solution scoping + prefix construction; the solution the new app and every page this run creates join |
 | `## Entity Creation Required` | orchestrator (Phase 2 gate) + entity-builder | Whether to invoke entity-builder; what to create |
-| `## Existing Entities` | orchestrator (Phase 4) | Which entities feed `pac model genpage generate-types` |
+| `## Existing Entities` | orchestrator (Phase 4) | Which entities feed `genpage.js types` |
 | `## Pages` | orchestrator (Phase 5) | How many builders to dispatch; target filenames |
 | `## Per-Page Specifications` | each page-builder | Each builder reads ONLY its own page's spec |
 | `## Relevant Samples` | each page-builder | Closest-match sample to read for structural reference |
@@ -166,8 +166,8 @@ deterministic, idempotent, narrated SDK build. Create and **edit share one path*
                              │
                              v
               ┌────────────────────────────┐   STAGE: generate-pages  (main loop + agents)
-              │ Generate pages             │   pac model genpage generate-types → RuntimeTypes.ts
-              │  generate-types +          │   write-page-plan.js projects the spec into
+              │ Generate pages             │   genpage.js types → RuntimeTypes.ts
+              │  genpage.js types +        │   write-page-plan.js projects the spec into
               │  write-page-plan.js +      │   app-builder-page-plan.md (NOT genpage-plan.md —
               │  page-builder agents       │   that name is /genpage's own state)
               │  (Task — parallel)         │   PAGEREF_<key> for cross-page nav; the durable
@@ -225,11 +225,19 @@ deterministic, idempotent, narrated SDK build. Create and **edit share one path*
 `--non-interactive`/autopilot mode suppresses prompts only — it never bypasses safety gates.
 The durable `<app>_pagemanifest` web resource carries page semantics across download and rebuild.
 
+**One apply at a time (build lease):** each `--apply` run — the data pre-build (run 1), the full build
+(run 2) and a `--changed-only` apply — holds the app's build lease in its workspace
+(`<workspace>/app-build.<hash>.lock`, `lib/app-operation-lease.js`) from before its auth check to its
+result: a second apply of the same app in that workspace stops at once with `build-locked`, before it
+reads or writes anything. Page generation between run 1 and run 2 holds no lease; run 2 takes a new one
+and rediscovers state. Inside run 2 the pages phase also holds the two pages locks
+(`app-pages.<hash>.lock` and the legacy `pages-<spelling>.lock`). Teardown, download, `/genpage` and
+`apps.js` take no build lease, and builds in different workspaces are not excluded.
+
 **Three-authority page identity (pages phase):** generative-page management consults three
 authorities — all matching by id, never by display name:
 (1) **IDENTITY** — the `<app>_pagemanifest` (`key → pageId`); a downloaded spec's own
-`pages[].pageId` outranks it. (2) **EXISTENCE** — env-wide `pac model genpage list` (no
-`--app-id`): decides create-vs-reuse; enables crash-safe convergence (a page present in the env
+`pages[].pageId` outranks it. (2) **EXISTENCE** — the environment's page list through the SDK (every page, drafts included; no `--app-id`): decides create-vs-reuse; enables crash-safe convergence (a page present in the env
 after a crash is reused, never re-created). (3) **MEMBERSHIP** — the app's sitemap `GenPageId`
 set, read via `fetchSitemap` (`scripts/lib/sitemap-pages.js`, fail-closed and discriminated: a
 valid-but-page-less sitemap is `{ ok:true, ids:[] }`; a missing component or unreadable XML is

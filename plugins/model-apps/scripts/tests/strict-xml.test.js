@@ -1,0 +1,423 @@
+'use strict';
+// Tests of the strict XML reader (lib/strict-xml.js): what it accepts and what it refuses, what it answers, and what it costs. The generated corpus that holds it to the SDK's own parser is in
+// strict-xml-oracle.test.js; what a page is deleted by is in sitemap-pages.test.js and teardown-navigation-proof-real-bundle.test.js.
+const test = require('node:test');
+const assert = require('node:assert');
+const { readXmlElements, XML_PREDEFINED, work } = require('../lib/strict-xml.js');
+
+const all = () => true;
+// What reading a document costs, without a clock that a loaded machine can stretch: the characters of paths built (see `work` in lib/strict-xml.js) by one read.
+const pathCharactersOf = (xml, wanted = all, options) => {
+  const before = work.pathCharacters;
+  const r = readXmlElements(xml, wanted, options);
+  return { r, built: work.pathCharacters - before };
+};
+// For the cost that only a clock can tell (a scan of the text): how the time of a read grows with the size of the document, in this process, between a document and one `factor`
+// times as large. Linear growth is `factor` times; the square is factor² times. The two sizes are read in turn, round after round, and the least time of each is kept: a busy machine
+// slows both alike while it is busy, and the least of several reads leaves out what it adds to one. The bound sits at three times linear, far from the square, so a loaded run
+// does not fail it and a quadratic reader cannot pass it. A small side shorter than a millisecond counts as one millisecond: timer noise is then not mistaken for growth.
+const FACTOR = 8;
+const assertLinearGrowth = (what, build, small, wanted = all, rounds = 25) => {
+  const sizes = [small, small * FACTOR];
+  const texts = sizes.map(build);
+  const best = [Infinity, Infinity];
+  texts.forEach((xml) => readXmlElements(xml, wanted));
+  for (let round = 0; round < rounds; round += 1) {
+    texts.forEach((xml, i) => {
+      const started = process.hrtime.bigint();
+      readXmlElements(xml, wanted);
+      best[i] = Math.min(best[i], Number(process.hrtime.bigint() - started) / 1e6);
+    });
+  }
+  assert.ok(best[1] < Math.max(best[0], 1) * FACTOR * 3, `${what}: ${best[0].toFixed(1)} ms at ${sizes[0]}, ${best[1].toFixed(1)} ms at ${sizes[1]} — growing faster than linearly`);
+};
+const ok = (xml, wanted = all) => {
+  const r = readXmlElements(xml, wanted);
+  assert.strictEqual(r.ok, true, `${JSON.stringify(xml)}: ${r.detail}`);
+  return r.elements;
+};
+const refused = (xml) => {
+  const r = readXmlElements(xml, all);
+  assert.strictEqual(r.ok, false, `${JSON.stringify(xml)} was read`);
+  assert.deepStrictEqual(Object.keys(r).sort(), ['detail', 'ok'], 'a document that is not read answers no element at all');
+  return r.detail;
+};
+
+test('readXmlElements: it answers the elements the caller asks for, in document order, with their path and their decoded attributes', () => {
+  const xml = '<SiteMap><Area Id="a"><Group Id="g"><SubArea Id="1" GenPageId="x"/><Other><SubArea Id="2"/></Other><SubArea Id="3"></SubArea></Group></Area><SubArea Id="4"/></SiteMap>';
+  const found = ok(xml, (name) => name === 'SubArea');
+  assert.deepStrictEqual(found.map((e) => [e.name, e.path, e.attrs.Id]), [
+    ['SubArea', 'SiteMap/Area/Group', '1'],
+    ['SubArea', 'SiteMap/Area/Group/Other', '2'],
+    ['SubArea', 'SiteMap/Area/Group', '3'],
+    ['SubArea', 'SiteMap', '4'],
+  ]);
+  assert.deepStrictEqual({ ...found[0].attrs }, { Id: '1', GenPageId: 'x' });
+  assert.strictEqual(Object.getPrototypeOf(found[0].attrs), null, 'no prototype: an attribute called constructor or __proto__ is an attribute');
+  assert.deepStrictEqual(ok(xml, (name) => name === 'SiteMap').map((e) => e.path), [''], 'the root has no path');
+  assert.deepStrictEqual(ok(xml, () => false), []);
+  // An attribute named like a member of Object.prototype is not read here at all: the SDK's parser (xmldom) keeps a tag's attribute names in a plain object and cannot read some such
+  // documents, so none is one a page may be deleted on. (The map above has no prototype, so such a name could never confuse this reader itself.)
+  for (const name of ['__proto__', 'constructor', 'toString', 'hasOwnProperty']) {
+    assert.match(refused(`<a ${name}="1" b="2"/>`), new RegExp(`an attribute named ${name}, which the SDK's parser cannot read`), name);
+  }
+});
+
+// `spans` is for a caller that must take elements OUT of the text and compare what is left (formxml-layers.js: a dashboard's saved and published FormXML, without
+// the labels of a language one read does not carry). Where an element is comes from the reader, so markup that is data is never one.
+test('readXmlElements { spans: true }: each element answered says where it is in the text, from its "<" to the end of its empty-element tag or of its end tag', () => {
+  const xml = '\uFEFF<?xml version="1.0"?>\n<form><labels><label description="a &gt; b" languagecode="1033" /><label description=\'x\' languagecode="3082"></label>'
+    + '\r\n<label languagecode="1036">t<b/></label></labels><!-- <label languagecode="1036"/> --><x a="/>"><![CDATA[<label/>]]><?p <label/> ?></x ></form>';
+  const r = readXmlElements(xml, (name) => name === 'label', { spans: true });
+  assert.strictEqual(r.ok, true, r.detail);
+  assert.deepStrictEqual(r.elements.map((e) => [e.path, xml.slice(e.start, e.end)]), [
+    ['form/labels', '<label description="a &gt; b" languagecode="1033" />'],
+    ['form/labels', "<label description='x' languagecode=\"3082\"></label>"],
+    ['form/labels', '<label languagecode="1036">t<b/></label>'],
+  ], 'a comment, a CDATA section and a processing instruction are data, and a ">" in a value ends nothing');
+  assert.deepStrictEqual(readXmlElements(xml, (name) => name === 'x', { spans: true }).elements.map((e) => xml.slice(e.start, e.end)),
+    ['<x a="/>"><![CDATA[<label/>]]><?p <label/> ?></x >'], 'an end tag with white space before its ">" ends at the ">"');
+  assert.deepStrictEqual({ ...r.elements[0].attrs }, { description: 'a > b', languagecode: '1033' }, 'with the attributes, as without it');
+  // An element inside another of the same name: the outer one spans the inner one.
+  const nested = '<a><b x="1"><b/></b><b></b></a>';
+  assert.deepStrictEqual(readXmlElements(nested, (name) => name === 'b', { spans: true }).elements.map((e) => [e.path, nested.slice(e.start, e.end)]),
+    [['a', '<b x="1"><b/></b>'], ['a/b', '<b/>'], ['a', '<b></b>']]);
+  assert.deepStrictEqual(readXmlElements('<r/>', () => true, { spans: true }).elements.map((e) => [e.start, e.end]), [[0, 4]], 'the root, an empty-element tag');
+  // Without it the answer is what it always was: the name, the path and the attributes, and nothing else.
+  for (const options of [undefined, {}, { spans: false }]) {
+    assert.deepStrictEqual(readXmlElements(xml, () => true, options).elements.map((e) => Object.keys(e)), Array(7).fill(['name', 'path', 'attrs']), JSON.stringify(options));
+  }
+  // A document that is not read answers no element, with it as without it.
+  const bad = readXmlElements('<a><label/><b></a>', () => true, { spans: true });
+  assert.deepStrictEqual(Object.keys(bad).sort(), ['detail', 'ok']);
+  assert.match(bad.detail, /closing tag <\/a> where <\/b> is expected/);
+});
+
+test('readXmlElements: a document that is not read answers no element — not the ones before the fault — and says what is wrong and where', () => {
+  const detail = refused('<a>\n  <b x="1"/>\r\n  <c y="2"></d>\n</a>');
+  assert.match(detail, /closing tag <\/d> where <\/c> is expected, at line 3, column 12/);
+  assert.match(refused(''), /no root element, at line 1, column 1/);
+  assert.match(refused(undefined), /not text/);
+  assert.match(refused(null), /not text/);
+  assert.match(refused(42), /not text/);
+  assert.match(refused('<a>\r<b/>\r</a> text'), /text after the root element, at line 3, column 6/, 'a lone CR ends a line');
+  assert.match(refused('<a>\r\n\r\n<b x=1/></a>'), /at line 3, column 6/, 'CR LF ends one line');
+});
+
+test('readXmlElements: attribute values are decoded as an XML parser decodes them — references, and the white space written in a value', () => {
+  const [e] = ok('<a q="&lt;&gt;&amp;&quot;&apos;" n="&#65;&#x42;&#x1F600;" s=\'x &amp;lt; y\' t="a\tb\nc\r\nd\re" r="a&#9;b&#10;c&#13;d" e="" b="--&gt; ]]&gt; > ?>"/>');
+  assert.strictEqual(e.attrs.q, '<>&"\'');
+  assert.strictEqual(e.attrs.n, 'AB\u{1F600}', 'decimal, hex and a character beyond U+FFFF');
+  assert.strictEqual(e.attrs.s, 'x &lt; y', 'one pass: a decoded "&" starts nothing');
+  assert.strictEqual(e.attrs.t, 'a b c d e', 'a tab, a line feed, CR LF (one) and a lone CR in the text of a value are one space each');
+  assert.strictEqual(e.attrs.r, 'a\tb\nc\rd', 'but a character written as a reference is that character');
+  assert.strictEqual(e.attrs.e, '');
+  assert.strictEqual(e.attrs.b, '--> ]]> > ?>', '">" and "]]>" are legal in a value');
+  assert.strictEqual(XML_PREDEFINED.lt, '<');
+  assert.deepStrictEqual(Object.keys(XML_PREDEFINED), ['lt', 'gt', 'amp', 'quot', 'apos']);
+  assert.ok(Object.isFrozen(XML_PREDEFINED));
+});
+
+// Documents that are well-formed XML, in the shapes a platform, a serializer or a person may write them.
+const WELL_FORMED = [
+  ['an empty root', '<a/>'],
+  ['an empty root with a start and an end tag', '<a></a>'],
+  ['white space inside tags, around "=", and an end tag with white space', '<a\n\t b = "1"\r\n c=\'2\'\t><b\r\n/></a\n>'],
+  ['text and references in content', '<a>text &amp; &#38; &#x26; &lt;b&gt; ]] > ] ]] </a>'],
+  ['nested elements and siblings', '<a><b><c/></b><b/><d></d></a>'],
+  ['comments, processing instructions and white space around the root', '\n<!-- c --><?pi data?> <a/> <!-- c -->\n<?pi?>\t'],
+  ['an empty comment, an empty CDATA section, a comment that starts with a ">" and one with a single "-"', '<a><!----><![CDATA[]]><!--> x--><!-- a-b --></a>'],
+  ['a CDATA section that holds markup and the markers of everything', '<a><![CDATA[ <b> </a> <!-- <? ?> --> ]] ]> ]]></a>'],
+  ['a processing instruction that holds markup', '<a><?pi <b/> <!-- ]]> ?></a>'],
+  ['a comment that holds markup', '<a><!-- <b/> <![CDATA[ <?x ?> ]]> --></a>'],
+  ['a byte order mark and an XML declaration', '\uFEFF<?xml version="1.0" encoding="utf-8" standalone="yes"?>\r\n<a/>'],
+  ['an XML declaration in single quotes with only a version', "<?xml version='1.0'?><a/>"],
+  ['a processing instruction whose target starts with xml', '<?xml-stylesheet href="x"?><a/>'],
+  ['names with colons, dots, dashes, digits and non-ASCII letters', '<a:b c.d-e_1="1" xml:space="preserve" ü="2"><保存/><Ü1/></a:b>'],
+  ['namespace declarations', '<a xmlns="urn:x" xmlns:m="urn:y" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"><m:b/></a>'],
+  ['a prefix that is not declared (a name is a name here)', '<m:a><m:b/></m:a>'],
+  ['an element named script in no namespace, holding a CDATA section with its own end tag', '<a><script><![CDATA[ </script> ]]></script></a>'],
+  ['an element of the XHTML namespace that is not script or textarea', '<a xmlns="http://www.w3.org/1999/xhtml"><p>text</p><b/></a>'],
+  ['a self-closing script in the XHTML namespace', '<a xmlns="http://www.w3.org/1999/xhtml"><script/></a>'],
+  ['an end tag with white space, for a name that has no other end tag', '<a><b></b ><c></c></a >'],
+  ['every end tag of a name with white space before its ">"', '<a><b x="1"></b ><b x="2"></b >\n</a>'],
+  ['an exact end tag text after the last start tag of its name', '<a><b></b ><b></b ><!-- </b> --></a>'],
+  ['CR LF, CR and LF line ends in the content', '<a>\r\n<b/>\r<c/>\n</a>'],
+  ['a long attribute value and long text', `<a v="${'x'.repeat(100000)}">${'y'.repeat(100000)}</a>`],
+  ['a character beyond U+FFFF in text and in a value', '<a v="\u{1F600}">\u{1F600}</a>'],
+  ['a name that is a prefix of another', '<a><ab/><a1></a1></a>'],
+];
+for (const [what, xml] of WELL_FORMED) {
+  test(`readXmlElements reads a well-formed document: ${what}`, () => {
+    ok(xml);
+  });
+}
+
+// Documents that are not one well-formed XML document, or that this reader does not understand — each is "not readable". [what, document, the words its detail has].
+const NOT_READ = [
+  ['no text', '', /no root element/],
+  ['white space only', ' \r\n\t ', /no root element/],
+  ['only a comment', '<!-- a -->', /no root element/],
+  ['only a processing instruction', '<?a b?>', /no root element/],
+  ['text before the root', 'x<a/>', /text before the root element/],
+  ['text after the root', '<a/>x', /text after the root element/],
+  ['a character reference outside the root', '&#65;<a/>', /text before the root element/],
+  ['a second root', '<a/><b/>', /second root element/],
+  ['a second root after a comment', '<a/><!-- c --><b/>', /second root element/],
+  ['a second root with a closing tag', '<a></a><a></a>', /second root element/],
+  ['a closing tag after the root', '<a/></a>', /no element open/],
+  ['a closing tag before the root', '</a><a/>', /no element open/],
+  ['a CDATA section before the root', '<![CDATA[x]]><a/>', /CDATA section outside the root element/],
+  ['a CDATA section after the root', '<a/><![CDATA[x]]>', /CDATA section outside the root element/],
+  ['an element never closed', '<a><b></a>', /closing tag <\/a> where <\/b> is expected/],
+  ['an element never closed, at the end', '<a><b>', /element <b> is never closed/],
+  ['a start tag cut short', '<a><b x="1"', /tag that is never closed/],
+  ['a start tag cut after its name', '<a', /tag that is never closed/],
+  ['an attribute value cut short', '<a b="1', /attribute value that is never closed/],
+  ['an end tag cut short', '<a></a', /closing tag that holds more than the element name/],
+  ['a mismatched end tag', '<a><b></a></b>', /closing tag <\/a> where <\/b> is expected/],
+  ['an end tag that differs in case', '<a></A>', /closing tag <\/A> where <\/a> is expected/],
+  ['an end tag with an attribute', '<a></a b="1">', /holds more than the element name/],
+  ['an end tag with text', '<a></a x>', /holds more than the element name/],
+  ['an end tag with no name', '<a></>', /no element name/],
+  ['a slash that does not close the tag', '<a / >', /not followed by ">"/],
+  ['a slash inside a tag', '<a b="1" / ></a>', /not followed by ">"/],
+  ['an attribute with no value', '<a b/>', /no value/],
+  ['an attribute with no value before another', '<a b c="1"/>', /no value/],
+  ['an attribute with no "="', '<a b "1"/>', /no value/],
+  ['an unquoted value', '<a b=1/>', /not in quotes/],
+  ['a missing value', '<a b=/>', /not in quotes/],
+  ['a value that starts with a different quote than it ends', '<a b="1\'/>', /never closed/],
+  ['attributes with no white space between them', '<a b="1"c="2"/>', /not separated by white space/],
+  ['a name with no white space before the first attribute', '<ab="1"/>', /not separated by white space/],
+  ['an attribute twice', '<a b="1" b="2"/>', /attribute b twice/],
+  ['an attribute twice in different quotes', '<a b="1" b=\'1\'/>', /attribute b twice/],
+  ['a "<" in a value', '<a b="<"/>', /"<" inside an attribute value/],
+  ['a "<" in a value in single quotes', "<a b='x<y'/>", /"<" inside an attribute value/],
+  ['a "<" that starts nothing', '<a> < </a>', /starts no element/],
+  ['a "<" before a digit', '<a><1/></a>', /starts no element/],
+  ['a bare ampersand', '<a>a & b</a>', /not one of the predefined entities/],
+  ['a bare ampersand in a value', '<a b="a & b"/>', /not one of the predefined entities/],
+  ['an ampersand with no semicolon', '<a>&amp</a>', /not one of the predefined entities/],
+  ['an entity that is not predefined', '<a>&nbsp;</a>', /not one of the predefined entities/],
+  ['an entity of the wrong case', '<a>&AMP;</a>', /not one of the predefined entities/],
+  ['an entity with white space', '<a>& amp;</a>', /not one of the predefined entities/],
+  ['an empty character reference', '<a>&#;</a>', /neither &#digits; nor &#xhexdigits;/],
+  ['an empty hex reference', '<a>&#x;</a>', /neither &#digits; nor &#xhexdigits;/],
+  ['a hex reference with an upper-case X', '<a>&#X41;</a>', /neither &#digits; nor &#xhexdigits;/],
+  ['a hex digit in a decimal reference', '<a>&#4a;</a>', /neither &#digits; nor &#xhexdigits;/],
+  ['a character reference with no semicolon', '<a>&#65</a>', /neither &#digits; nor &#xhexdigits;/],
+  ['a reference to NUL', '<a>&#0;</a>', /character that XML does not allow/],
+  ['a reference to a control character', '<a b="&#x1;"/>', /character that XML does not allow/],
+  ['a reference to a surrogate', '<a>&#xD800;</a>', /character that XML does not allow/],
+  ['a reference to U+FFFE', '<a>&#xFFFE;</a>', /character that XML does not allow/],
+  ['a reference beyond U+10FFFF', '<a>&#x110000;</a>', /character that XML does not allow/],
+  ['a reference of absurd length', `<a>&#${'9'.repeat(500)};</a>`, /character that XML does not allow/],
+  ['"]]>" in text', '<a>x ]]> y</a>', /\]\]> in character data/],
+  ['"]]>" right after a reference', '<a>&amp;]]></a>', /\]\]> in character data/],
+  ['"--" in a comment', '<a><!-- a -- b --></a>', /'--' inside a comment/],
+  ['a comment that ends in three dashes', '<a><!-- a ---></a>', /'--' inside a comment/],
+  ['a comment that never ends', '<a><!-- a', /comment that is never closed/],
+  ['a comment that is not one', '<a><!- a --></a>', /neither a comment nor a CDATA section/],
+  ['a CDATA section that never ends', '<a><![CDATA[ a ]]', /CDATA section that is never closed/],
+  ['a misspelled CDATA section', '<a><![cdata[ a ]]></a>', /neither a comment nor a CDATA section/],
+  ['a processing instruction that never ends', '<a><?p a', /processing instruction that is never closed/],
+  ['a processing instruction with no target', '<a><? a ?></a>', /no target/],
+  ['an empty processing instruction', '<a><?></a>', /no target/],
+  ['a processing instruction whose target runs into its data', '<a><?pi?x?></a>', /not followed by white space/],
+  ['a processing instruction target with a colon', '<a><?p:q x?></a>', /not followed by white space/],
+  ['a processing instruction named xml inside the root', '<a><?xml version="1.0"?></a>', /named "xml"/],
+  ['a processing instruction named XML', '<a><?XML x?></a>', /named "xml"/],
+  ['an XML declaration after white space', ' <?xml version="1.0"?><a/>', /named "xml"/],
+  ['an XML declaration after a comment', '<!-- c --><?xml version="1.0"?><a/>', /named "xml"/],
+  ['two XML declarations', '<?xml version="1.0"?><?xml version="1.0"?><a/>', /named "xml"/],
+  ['an XML declaration with no version', '<?xml encoding="utf-8"?><a/>', /XML declaration that is not/],
+  ['an XML declaration of version 1.1', '<?xml version="1.1"?><a/>', /XML declaration that is not/],
+  ['an XML declaration with its parts in the wrong order', '<?xml encoding="utf-8" version="1.0"?><a/>', /XML declaration that is not/],
+  ['an XML declaration with a bad standalone', '<?xml version="1.0" standalone="maybe"?><a/>', /XML declaration that is not/],
+  ['an XML declaration that never ends', '<?xml version="1.0"', /XML declaration that is never closed/],
+  ['a document type declaration', '<!DOCTYPE a><a/>', /document type declaration/],
+  ['a document type declaration with an internal subset', '<!DOCTYPE a [<!ENTITY e "x">]><a>&e;</a>', /document type declaration/],
+  ['a document type declaration in the root', '<a><!DOCTYPE b></a>', /document type declaration/],
+  ['an element declaration', '<a><!ELEMENT b EMPTY></a>', /neither a comment nor a CDATA section/],
+  ['a conditional section', '<a><![INCLUDE[ x ]]></a>', /neither a comment nor a CDATA section/],
+  ['a name with two colons', '<a:b:c/>', /not separated by white space/],
+  ['an attribute name with two colons', '<a b:c:d="1"/>', /no value/],
+  ['a name that starts with a colon', '<:a/>', /starts no element/],
+  ['a name that starts with a digit', '<1a/>', /starts no element/],
+  ['a name that starts with a dash', '<-a/>', /starts no element/],
+  ['a name that ends in a colon', '<a:/>', /not separated by white space/],
+  ['a name with a character beyond U+FFFF', '<\u{10000}a/>', /starts no element/],
+  ['a name with a special character (U+FEFF)', '<a\uFEFFb/>', /not separated by white space/],
+  ['a name with a symbol (U+2192)', '<a\u2192b/>', /not separated by white space/],
+  ['a name with white space that is not XML white space (U+00A0)', '<a\u00A0b="1"/>', /not separated by white space/],
+  ['a start tag with a quote in it', '<a "b"/>', /not an attribute/],
+  ['an equals sign where a name should be', '<a ="1"/>', /not an attribute/],
+  ['a control character in text', '<a>x\u0001y</a>', /character that XML does not allow/],
+  ['NUL in a value', '<a b="\u0000"/>', /character that XML does not allow/],
+  ['a lone high surrogate', '<a>\uD800</a>', /character that XML does not allow/],
+  ['a lone low surrogate', '<a>\uDC00x</a>', /character that XML does not allow/],
+  ['U+FFFE', '<a>\uFFFE</a>', /character that XML does not allow/],
+  ['U+FFFF in a comment', '<a><!-- \uFFFF --></a>', /character that XML does not allow/],
+  ['a control character in a processing instruction', '<a><?p \u0008?></a>', /character that XML does not allow/],
+  ['a byte order mark that is not first', ' \uFEFF<a/>', /text before the root element/],
+  ['a byte order mark and then another one', '\uFEFF\uFEFF<a/>', /text before the root element/],
+  // What the SDK's parser misreads (see the oracle test): a document that is well-formed XML and is not read because that parser does not read it as XML does.
+  ['end tags of one name that mix "</b>" and "</b >"', '<a><b x="1"></b><b x="2"></b ></a>', /cannot be found by the SDK's parser/],
+  ['a "</b>" in a comment before the last start tag of b, with the real end tags written "</b >"', '<a><b></b ><!-- </b> --><b></b ></a>', /cannot be found by the SDK's parser/],
+  ['a "</b>" in a CDATA section before the last start tag of b', '<a><b></b ><![CDATA[ </b> ]]><b></b ></a>', /cannot be found by the SDK's parser/],
+  ['a "</b>" in a processing instruction before the last start tag of b', '<a><b></b ><?p </b> ?><b></b ></a>', /cannot be found by the SDK's parser/],
+  ['an XHTML script element', '<a xmlns="http://www.w3.org/1999/xhtml"><script>x</script></a>', /XHTML <script> element/],
+  ['an XHTML script element that holds a CDATA section with its own end tag', '<a xmlns="http://www.w3.org/1999/xhtml"><script><![CDATA[ </script> ]]></script><b/></a>', /XHTML <script> element/],
+  ['an XHTML textarea element', '<a><textarea xmlns="http://www.w3.org/1999/xhtml">x</textarea></a>', /XHTML <textarea> element/],
+  ['an XHTML SCRIPT element in upper case', '<a xmlns="http://www.w3.org/1999/xhtml"><SCRIPT></SCRIPT></a>', /XHTML <SCRIPT> element/],
+  ['an XHTML script element that inherits its namespace from a distant ancestor', '<a xmlns="http://www.w3.org/1999/xhtml"><b><c><script/></c><script>x</script></b></a>', /XHTML <script> element/],
+];
+for (const [what, xml, detail] of NOT_READ) {
+  test(`readXmlElements does not read: ${what}`, () => {
+    assert.match(refused(xml), detail);
+  });
+}
+
+test('readXmlElements: a document that is well-formed but read differently by the SDK\'s parser is refused only when nothing is wrong with it as XML — a document that is not well-formed says so', () => {
+  assert.match(refused('<a><b x="1"></b><b x="2"></b ><c></d></a>'), /closing tag <\/d> where <\/c> is expected/);
+  assert.match(refused('<a xmlns="http://www.w3.org/1999/xhtml"><script>x</script><b x=1/></a>'), /not in quotes/);
+});
+
+test('readXmlElements: the namespace an XHTML check goes by is the one in scope — a script in another namespace, a default namespace that is reset, a prefixed script and a sibling of an XHTML element are read', () => {
+  ok('<a xmlns="urn:x"><script>x</script></a>');
+  ok('<a xmlns="http://www.w3.org/1999/xhtml"><b xmlns=""><script>x</script></b></a>');
+  ok('<a xmlns:h="http://www.w3.org/1999/xhtml"><h:script>x</h:script></a>');
+  ok('<a><b xmlns="http://www.w3.org/1999/xhtml"><p/></b><script>x</script></a>');
+  assert.match(refused('<a><b xmlns="http://www.w3.org/1999/xhtml"><b xmlns="urn:x"/><script>x</script></b></a>'), /XHTML <script> element/);
+});
+
+test('readXmlElements: it is linear — a large flat document and a deeply nested one are read at once, and a document of many kinds of element is bounded', () => {
+  const flatOf = (count) => `<SiteMap><Area><Group>${'<SubArea Id="s" GenPageId="11111111-1111-4111-8111-111111111111" Title="Page &amp; Page"/>'.repeat(count)}</Group></Area></SiteMap>`;
+  const subArea = (name) => name === 'SubArea';
+  const flat = pathCharactersOf(flatOf(20000), subArea);
+  assert.strictEqual(flat.r.ok, true);
+  assert.strictEqual(flat.r.elements.length, 20000);
+  assert.strictEqual(flat.built, 'SiteMap/Area/Group'.length, 'twenty thousand elements under one parent share the one path built for it');
+  assertLinearGrowth('a flat document', flatOf, 500, subArea);
+
+  const depth = 50000;
+  const nestedOf = (levels) => `${'<a>'.repeat(levels)}${'</a>'.repeat(levels)}`;
+  const nested = pathCharactersOf(nestedOf(depth), () => false);
+  assert.strictEqual(nested.r.ok, true);
+  assert.strictEqual(nested.r.elements.length, 0, 'no recursion: a nesting depth costs one array slot');
+  assert.strictEqual(nested.built, 0, 'a path is built for an element that is answered, and for no other');
+  // One element at the bottom of a deep document: its path is walked once, and no other is built on the way.
+  const bottom = pathCharactersOf(`${'<a>'.repeat(depth)}<b/>${'</a>'.repeat(depth)}`, (name) => name === 'b');
+  assert.strictEqual(bottom.r.elements[0].path.split('/').length, depth);
+  assert.strictEqual(bottom.built, depth * 2 - 1);
+
+  const kinds = (count) => `<r>${Array.from({ length: count }, (_, i) => `<k${i}>x</k${i}>`).join('')}</r>`;
+  assert.strictEqual(ok(kinds(200)).length, 201);
+  assert.match(refused(kinds(300)), /more than 256 different element names/);
+
+  const aLotOf = (count) => `<a>${'&#38;'.repeat(count * 5)}${'<!-- x -->'.repeat(count)}${'<![CDATA[x]]>'.repeat(count)}${'<?p x?>'.repeat(count)}</a>`;
+  ok(aLotOf(20000));
+  assertLinearGrowth('references, comments, CDATA sections and processing instructions', aLotOf, 500);
+});
+
+test('readXmlElements: it never reads past a refusal, so a hostile document cannot make it slow — text that is nothing but "<" or "&" is refused at once', () => {
+  // Refused where it goes wrong, not at the end of the text: the position says how far it read.
+  assert.match(refused(`<a>${'<'.repeat(200000)}`), /^a "<" that starts no element.*, at line 1, column 4$/);
+  assert.match(refused(`<a>${'&'.repeat(200000)}`), /^an "&" that is not one of the predefined entities.*, at line 1, column 4$/);
+  assert.match(refused(`<a ${'b="1" '.repeat(1000)}>`), /^attribute b twice in one tag, at line 1, column 10$/);
+  // A tag, a value and a name that are never closed are read to the end of the text once, and not again for each character.
+  const unclosedName = (size) => `<${'a'.repeat(size)} `;
+  const unclosedValue = (size) => `<a b="${'&amp;'.repeat(size)}`;
+  assert.match(refused(unclosedName(200000)), /^a tag that is never closed, at line 1, column 1$/);
+  assert.match(refused(unclosedValue(100000)), /^an attribute value that is never closed, at line 1, column 6$/);
+  assertLinearGrowth('a tag that is never closed', unclosedName, 25000);
+  assertLinearGrowth('an attribute value that is never closed', unclosedValue, 6000);
+  // Elements that are never closed, every one asked for: the document is refused at its end, so the paths of its elements — the square of its depth in characters — are never built.
+  const unclosed = (levels) => '<a>'.repeat(levels);
+  const deep = pathCharactersOf(unclosed(10000));
+  assert.strictEqual(deep.r.ok, false);
+  assert.strictEqual(deep.r.detail, 'the element <a> is never closed, at line 1, column 30001');
+  assert.strictEqual(deep.built, 0, 'nothing of what a refusal throws away is built');
+  assertLinearGrowth('elements that are never closed', unclosed, 1250);
+});
+
+// A refused document is refused after it was read to its end, and the paths of its elements are then not built; one that is read answers each element with the path it always had.
+test('readXmlElements: the path of an element is the names of its ancestors, whatever order they were read in or how many elements share them', () => {
+  const xml = '<r><a><b/><b><c/></b></a><a><c/><b><c/></b></a><d/></r>';
+  const names = (e) => `${e.path}|${e.name}`;
+  assert.deepStrictEqual(ok(xml).map(names), ['|r', 'r|a', 'r/a|b', 'r/a|b', 'r/a/b|c', 'r|a', 'r/a|c', 'r/a|b', 'r/a/b|c', 'r|d']);
+  assert.deepStrictEqual(ok(xml, (name) => name === 'c').map(names), ['r/a/b|c', 'r/a|c', 'r/a/b|c']);
+  assert.deepStrictEqual(ok(xml, (name) => name === 'd').map(names), ['r|d']);
+  // The keys of an element, and their order, are those of a document read without this: the path is in its place from the start.
+  assert.deepStrictEqual(Object.keys(ok('<r><a/></r>', (name) => name === 'a')[0]), ['name', 'path', 'attrs']);
+  assert.deepStrictEqual(Object.keys(readXmlElements('<r><a/></r>', (name) => name === 'a', { spans: true }).elements[0]), ['name', 'path', 'attrs', 'start', 'end']);
+  // Every level asked for: each path is its parent's with one name added.
+  const levels = 300;
+  const chain = ok(`${'<a>'.repeat(levels)}${'</a>'.repeat(levels)}`);
+  assert.deepStrictEqual(chain.map((e) => e.path), Array.from({ length: levels }, (_, i) => Array(i).fill('a').join('/')));
+});
+
+// An element a caller asks for says its `path`, the names of its ancestors, so a document that is nested deep and is asked for at every level costs the SQUARE of its depth in memory:
+// a few kilobytes of `<a><a><a>…` are enough to exhaust the heap of the process that reads them. A caller that reads a document it does not trust says how deep it may be.
+test('readXmlElements { maxDepth }: a document nested deeper than the caller allows is refused at the element that goes over — at, or one level below, the bound', () => {
+  const nest = (depth, inner = '') => `${'<a>'.repeat(depth)}${inner}${'</a>'.repeat(depth)}`;
+  const bounded = (xml, maxDepth) => readXmlElements(xml, all, { maxDepth });
+  assert.strictEqual(bounded(nest(3), 3).ok, true, 'three levels, three allowed');
+  const over = bounded(nest(4), 3);
+  assert.strictEqual(over.ok, false);
+  assert.deepStrictEqual(Object.keys(over).sort(), ['detail', 'ok'], 'a document that is not read answers no element at all');
+  assert.match(over.detail, /^elements nested more than 3 levels deep, at line 1, column 10$/, 'it says where: the fourth <a> starts after nine characters');
+  // An empty-element tag is a level of its own, as is the root.
+  assert.strictEqual(bounded(nest(2, '<b/>'), 3).ok, true);
+  assert.strictEqual(bounded(nest(3, '<b/>'), 3).ok, false);
+  assert.strictEqual(bounded('<a/>', 1).ok, true);
+  assert.strictEqual(bounded('<a><b/></a>', 1).ok, false);
+  // Siblings are not nesting: a document as wide as you like is read.
+  assert.strictEqual(bounded(`<r>${'<a><b/></a>'.repeat(5000)}</r>`, 3).elements.length, 10001);
+  // The path of an element is as long as its depth, so the bound is also the bound of what the answer holds.
+  const deepest = bounded(nest(5, '<z/>'), 6).elements.at(-1);
+  assert.strictEqual(deepest.path.split('/').length, 5);
+  // A document of thousands of levels asked for at every one is refused at the bound, not read: the answer would be gigabytes of paths. The refusal says where it stopped — the 33rd <a> starts
+  // after 96 characters — and no path was built on the way.
+  const hostile = pathCharactersOf(nest(6000), all, { maxDepth: 32 });
+  assert.strictEqual(hostile.r.ok, false);
+  assert.match(hostile.r.detail, /nested more than 32 levels deep, at line 1, column 97$/);
+  assert.strictEqual(hostile.built, 0);
+  // Without the option nothing changes: a nesting of any depth is read, as before.
+  assert.strictEqual(readXmlElements(nest(300), () => false).ok, true);
+  assert.strictEqual(readXmlElements(nest(300), () => false, {}).ok, true);
+  assert.strictEqual(readXmlElements(nest(300), () => false, { maxDepth: undefined }).ok, true);
+  // The bound is a whole number of at least one — anything else is a mistake of the caller, which must not read as "no bound".
+  for (const wrong of [0, -1, 1.5, NaN, Infinity, '3', null, {}]) assert.throws(() => readXmlElements('<a/>', all, { maxDepth: wrong }), TypeError, String(wrong));
+});
+
+// What a spreadsheet's rows and cells hold is elements. A caller that reads such a document by the elements it names must not lose what is written between them — a sentence in a
+// row, a comment, a CDATA section — because the text it skipped may be what the document meant.
+test('readXmlElements { elementOnly }: an element the caller says holds elements and white space only refuses text, a CDATA section, a comment or an instruction directly inside it', () => {
+  const holdsElements = (name) => name === 'Table' || name === 'Row';
+  const read = (xml) => readXmlElements(xml, all, { elementOnly: holdsElements });
+  const readOk = (xml) => { const r = read(xml); assert.strictEqual(r.ok, true, `${JSON.stringify(xml)}: ${r.detail}`); return r.elements; };
+  assert.deepStrictEqual(readOk('<Table>\r\n <Row> <Cell>x y</Cell>\t</Row>\n<Row/></Table>').map((e) => e.name), ['Table', 'Row', 'Cell', 'Row'], 'elements and white space: what such an element is made of');
+  for (const [what, xml, detail] of [
+    ['text before its elements', '<Table>t<Row/></Table>', /^text inside <Table>, which holds elements only, at line 1, column 8$/],
+    ['text after them', '<Table><Row/>t</Table>', /^text inside <Table>, which holds elements only, at line 1, column 14$/],
+    ['text in an element', '<Table><Row>text</Row></Table>', /text inside <Row>/],
+    ['a reference to a space', '<Table><Row>&#32;</Row></Table>', /text inside <Row>/],
+    ['a CDATA section', '<Table><Row><![CDATA[ ]]></Row></Table>', /a CDATA section inside <Row>, which holds elements only/],
+    ['a comment', '<Table><!-- c --><Row/></Table>', /a comment inside <Table>, which holds elements only/],
+    ['an instruction', '<Table><Row><?p x?></Row></Table>', /a processing instruction inside <Row>, which holds elements only/],
+  ]) {
+    const r = read(xml);
+    assert.strictEqual(r.ok, false, what);
+    assert.deepStrictEqual(Object.keys(r).sort(), ['detail', 'ok'], `${what}: no element is answered`);
+    assert.match(r.detail, detail, what);
+  }
+  // Only the elements the caller names: the text of any other is its own, and so are the prolog and the epilog.
+  assert.deepStrictEqual(readOk('<!-- c --><?p x?><Table><Cell>t<!-- c --><![CDATA[x]]><?p x?>&amp;</Cell></Table><!-- c -->').map((e) => e.name), ['Table', 'Cell']);
+  // Without the option nothing changes: text, comments, CDATA sections and instructions are read wherever they are.
+  assert.strictEqual(readXmlElements('<Table>t<!-- c --><![CDATA[x]]><?p x?><Row>t</Row></Table>', all).ok, true);
+  assert.strictEqual(readXmlElements('<Table>t</Table>', all, { elementOnly: undefined }).ok, true);
+  // It is a function of the name, or nothing.
+  for (const wrong of [true, 'Table', ['Table'], {}, null]) assert.throws(() => readXmlElements('<a/>', all, { elementOnly: wrong }), TypeError, String(wrong));
+});

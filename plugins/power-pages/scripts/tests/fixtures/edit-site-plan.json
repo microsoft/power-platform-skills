@@ -1,0 +1,142 @@
+{
+  "schemaVersion": 1,
+  "site": {
+    "name": "Contoso Event Portal",
+    "websiteRecordId": "00000000-0000-0000-0000-000000000001",
+    "templateName": "EventPortal",
+    "siteRoot": ".powerpages-site",
+    "languages": [
+      "en-US"
+    ]
+  },
+  "summary": "Adapt the Event Portal for a developer conference.",
+  "preservation": "Retain the template structure while adding pages and sections.",
+  "aesthetic": "Bold & Vibrant",
+  "mood": "Technical & Precise",
+  "capabilities": [
+    {
+      "name": "Webpage authoring",
+      "status": "ready",
+      "evidence": [
+        "web-pages/"
+      ],
+      "ownerSkill": "author-webpage",
+      "note": "Page records are available."
+    }
+  ],
+  "assets": [
+    {
+      "id": "speaker-portrait",
+      "name": "Conference speaker portrait",
+      "kind": "photograph",
+      "role": "editorial",
+      "purpose": "Introduce the speaker content with a credible, people-focused visual.",
+      "source": {
+        "type": "unsplash",
+        "sourcePage": "https://unsplash.com/photos/example",
+        "downloadUrl": "https://images.unsplash.com/photo-example?w=1200&fit=crop",
+        "photographer": "Example Photographer",
+        "license": "Unsplash License"
+      },
+      "delivery": "web-file",
+      "placements": [
+        {
+          "page": "Speakers",
+          "section": "Speaker introduction",
+          "usage": "Responsive editorial image",
+          "scope": "page"
+        }
+      ],
+      "visual": {
+        "rationale": "The portrait makes the new speaker page feel specific rather than generic.",
+        "aspectRatio": "4:3",
+        "crop": "Center crop with the subject's face retained"
+      },
+      "accessibility": {
+        "decorative": false,
+        "altByLocale": {
+          "en-US": "Conference speaker presenting to an audience"
+        }
+      },
+      "preparation": {
+        "status": "staged",
+        "cachePath": ".powerpages-customization/assets/example-speaker-1.jpg",
+        "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "mimeType": "image/jpeg",
+        "fileName": "Speaker-1.jpg",
+        "width": 1200,
+        "height": 900
+      },
+      "webFileOperationId": "add-speaker-images"
+    }
+  ],
+  "operations": [
+    {
+      "id": "add-speaker-images",
+      "skill": "author-web-file",
+      "action": "import",
+      "summary": "Add the approved speaker images.",
+      "target": {
+        "parentPage": "Home"
+      },
+      "locales": [],
+      "inputs": {
+        "sourcePath": ".powerpages-customization/assets/example-speaker-1.jpg"
+      },
+      "dependsOn": [],
+      "outputBindings": {},
+      "preserve": [],
+      "expectedOutputs": [
+        "metadataPath",
+        "publicUrl"
+      ]
+    },
+    {
+      "id": "create-speakers-page",
+      "skill": "author-webpage",
+      "action": "create",
+      "summary": "Create the Speakers page and navigation link.",
+      "target": {
+        "name": "Speakers",
+        "route": "/speakers"
+      },
+      "locales": [
+        "en-US"
+      ],
+      "inputs": {
+        "navigation": "Primary Navigation"
+      },
+      "dependsOn": [
+        "add-speaker-images"
+      ],
+      "outputBindings": {
+        "heroImageUrl": {
+          "sourceOperation": "add-speaker-images",
+          "output": "publicUrl"
+        }
+      },
+      "preserve": [],
+      "expectedOutputs": [
+        "websitePageId",
+        "localizedTargetFile",
+        "route"
+      ]
+    }
+  ],
+  "warnings": [
+    "The local changes are not live until deployment succeeds."
+  ],
+  "verification": [
+    {
+      "label": "Page relationships",
+      "description": "Verify parent, template, and navigation."
+    }
+  ],
+  "deployment": [
+    {
+      "title": "Deploy after verification",
+      "description": "Invoke deploy-site after local validation.",
+      "recommended": true
+    }
+  ]
+}

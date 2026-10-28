@@ -6,6 +6,9 @@ const { isAppSourcePath } = require('./app-source-path.js');
 const { normalizeSpecShape } = require('./spec-shape.js');
 const { isMainForm, selectDefaultForm, ordersByHand } = require('./form-order.js');
 const { AUTO_TAB_NAME, AUTO_SECTION_NAME, placementOf, resolvePlacement } = require('./form-subgrid-placement.js');
+const { PAGE_BINDINGS, pageBindingsProblem, statedPageBindings, statableBinding, bindingProblemText } = require('./page-bindings.js');
+const { nearestName } = require('./nearest-name.js');
+const { navigationHolds } = require('./app-navigation.js');
 
 // URL scheme allowlist for spec-supplied URLs that the built app will RENDER (iframe dashboard tiles,
 // sitemap URL subareas). Only http(s) is allowed — a `javascript:`, `data:`, `vbscript:`, or `file:`
@@ -34,9 +37,12 @@ function formIdentityKey(f) {
 // A canonical GUID (used to validate an author-pinned forms[].formId, which is interpolated UNQUOTED into
 // an Edm.Guid OData filter). Anchored so it can neither over-match nor be an injection seam.
 const FORM_GUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-// A page's model id (`pages[].model`), e.g. `gpt-4.1` or `claude-3-5-sonnet@20240620`: a short token, because the
-// build hands it to pac as one command-line value. Shared with download, which carries only a model the spec can hold.
+// A page's model id (`pages[].model`), e.g. `gpt-4.1` or `claude-3-5-sonnet@20240620`: a short token, stored as the page's
+// `model` in its config.json. Shared with download, which carries only a model the spec can hold.
 const PAGE_MODEL_RE = /^[A-Za-z0-9][A-Za-z0-9._:/@+-]{0,99}$/;
+
+// A generative page's connector and Custom API bindings: what a spec states of them (an allowlist of properties, each with the kind of value it holds) and how a rebuild reads it is defined in page-bindings.js.
+// The validator below holds a page to it, and the download holds what it writes to the same rule, so a download never writes a spec this refuses. Re-exported here for the callers that take them from the spec module.
 
 // Security-authoring enums (personas[]). These mirror the vendored SDK's security surface
 // (cds-maker-sdk src/types/security.ts) EXACTLY — the app-spec validator is a lint-time echo of the
@@ -853,6 +859,45 @@ const ENTITY_KEY_HINTS = Object.assign(Object.create(null), {
   localizedLabels: ' — write the LCID map on the label FIELD itself (e.g. "displayName": { "1033": "Baseline", "3082": "Línea base" }), not in a separate per-table block; see references/app-spec-schema.md → "Localized labels"',
 });
 
+// The keys of a table's `primaryAttribute`: exactly what the build reads from it — the name column's schema name and label for the
+// table's create, its number format (autoNumberFormat), its level (required) and its length (maxLength) — and what a download writes
+// (primaryColumnOptionFields). The same rule as ENTITY_KEYS one level down: any other key used to validate clean and be ignored, so a
+// `maxlength`, an `autonumberFormat` or a `requiredLevel` made the table without the length, the format or the level its author wrote.
+// Frozen, in the order the messages list them.
+const PRIMARY_ATTRIBUTE_KEYS = Object.freeze(['schemaName', 'displayName', 'autoNumberFormat', 'required', 'maxLength']);
+
+// What to write instead, for a key a near spelling cannot explain. Prototype-less for the reason ENTITY_KEY_HINTS is: the lookup key
+// comes from the spec. `type` is the one most likely to look harmless — the name column has no type to choose, so `"AutoNumber"` there
+// made a plain text name.
+const PRIMARY_ATTRIBUTE_KEY_HINTS = Object.assign(Object.create(null), {
+  requiredLevel: ' — the level is \'required\': true, "recommended" or false',
+  type: " — the primary name column is always a single line of text: leave 'type' out (for an auto-numbered name, give 'autoNumberFormat')",
+});
+
+// The findings for the keys of one table's `primaryAttribute`, each with `label` (how the caller names the table) in front: one per
+// unknown key, naming the key it most likely meant (a written hint first, then the shared single-edit matcher, which also settles a
+// casing slip such as `maxlength`) and the allowed keys. Nothing for a value that is not a plain object — the caller's
+// `primaryAttribute.schemaName` check already reports that, and `Object.keys('x')` would turn it into a bogus "unknown key '0'".
+// The ONE rule behind both gates — validateAppSpec and the provision-entities input validator — so that neither accepts what the other
+// refuses. Enumerating is guarded because the object comes from the caller, and a validator RETURNS problems rather than throw them.
+function primaryAttributeKeyProblems(primaryAttribute, label) {
+  if (!primaryAttribute || typeof primaryAttribute !== 'object' || Array.isArray(primaryAttribute)) return [];
+  let keys;
+  try {
+    keys = Object.keys(primaryAttribute);
+  } catch {
+    return [`${label}: primaryAttribute could not be inspected — enumerating its keys threw`];
+  }
+  const hintFor = (key) => {
+    if (PRIMARY_ATTRIBUTE_KEY_HINTS[key]) return PRIMARY_ATTRIBUTE_KEY_HINTS[key];
+    const near = nearestName(key, PRIMARY_ATTRIBUTE_KEYS.map((k) => k.toLowerCase()));
+    const meant = near && PRIMARY_ATTRIBUTE_KEYS.find((k) => k.toLowerCase() === near);
+    return meant ? ` — did you mean '${meant}'?` : '';
+  };
+  return keys.filter((key) => !PRIMARY_ATTRIBUTE_KEYS.includes(key))
+    .map((key) => `${label}: unknown key '${key}' on primaryAttribute${hintFor(key)} (allowed: ${PRIMARY_ATTRIBUTE_KEYS.join(', ')})`);
+}
+
 // The most characters a table's primary name column may be asked for. A single line of text elsewhere in a table takes up
 // to 4,000, but the name column of a table does not: asked for more than 850 in a table create that also carried other columns, the
 // platform refuses it — HTTP 400, "The maximum length of Primary attribute 'new_name' is 4000. The maximum allowed limit
@@ -871,12 +916,184 @@ function primaryNameLengthProblem(length) {
   return `primaryAttribute.maxLength must be a whole number from 1 to ${PRIMARY_NAME_MAX_LENGTH} (got ${describeSpecValue(length)})`;
 }
 
+// A column of type `AutoNumber` needs a format to be created with. The SDK refuses to create one without — an InvalidArgumentError raised before
+// any request, for a missing, null, empty or blank format (measured against the vendored bundle for createColumn and createColumns alike; a format
+// that is not a string does not get that far: the SDK throws a TypeError of its own) — where the SDK it replaced created a plain text column,
+// which is all an autonumber column is until it carries a format.
+// See: https://learn.microsoft.com/en-us/power-apps/maker/data-platform/autonumber-fields
+// So a spec with an AutoNumber column and no format used to build, as text, and now halts the data-model phase at that column, after the solution
+// and the tables exist. It is refused here instead, where nothing has been written, with both ways out: give the column a format, or declare it
+// `Text`, which is also what a column an earlier release made from such a spec is.
+//
+// The ONE rule behind both gates — validateAppSpec and the provision-entities input validator, the entry point of /genpage and /app-builder — so
+// that neither accepts what the other refuses. Each puts the table and the column in front of the text it returns (null when the column is fine).
+// It looks at the AutoNumber TYPE only: a `Text` column that carries an `autoNumberFormat` is built as it always was (the format is not passed on),
+// and the primary name column keeps its own rule — an absent or blank `primaryAttribute.autoNumberFormat` has always meant a plain text name column
+// (the table create sends no format for it), a valid spec that builds as before. A format with no {SEQNUM} token stays the lint's warning.
+function autoNumberFormatProblem(column) {
+  if (!column || column.type !== 'AutoNumber') return null;
+  const format = column.autoNumberFormat;
+  let found;
+  if (format === undefined || format === null) found = 'missing';
+  else if (typeof format !== 'string') found = `not a string (got ${describeSpecValue(format)})`;
+  else if (!format.trim()) found = 'blank';
+  else return null;
+  return `is an AutoNumber column but its autoNumberFormat is ${found} — give it a format such as "C-{SEQNUM:5}", or use type "Text" for a plain text column`;
+}
+
+// What a column's — or the primary name column's — `required` may be: true (Dataverse's ApplicationRequired, "Business Required"), "recommended"
+// (Recommended) or false (None); or nothing, which asks nothing of a new column's create (it is created not required) and leaves an existing column as
+// it is. The build reads exactly these (REQUIRED, lib/entity-provision.js) and took every other value for None, so every other value was a silent
+// one: `"ApplicationRequired"`, `"true"`, `"required"`, `"Recommended"`, `1` or `null` made a new column not required and, on an existing column —
+// which the build reconciles whenever the spec states a `required` — wrote None where the level differed, demoting a column a maker had made
+// Business Required. Refused here instead, naming what was written and what to write. `undefined` is "not stated", as it is for every optional
+// field of the spec (JSON cannot carry one), and the build reads it that way too (hasExplicitRequired).
+// Not the other `required`s of a spec: a business process flow step's (a boolean, gated where the flow is), a business rule's SetBusinessRequired
+// action's, a form's.
+// See: https://learn.microsoft.com/en-us/power-apps/developer/data-platform/webapi/reference/attributerequiredlevel
+// The ONE rule behind both gates, like autoNumberFormatProblem; the callers put the column — or `primaryAttribute.required` — in front of the text it
+// returns.
+function requiredValueProblem(value) {
+  if (value === undefined || value === true || value === false || value === 'recommended') return null;
+  // The usual slips are the names Dataverse gives the levels, a boolean written as text, and a flag written as a number.
+  const spelled = typeof value === 'string' ? value.trim().toLowerCase() : value;
+  let hint;
+  if (['applicationrequired', 'true', 'required', 'yes', 1].includes(spelled)) hint = 'write true for a required column';
+  else if (spelled === 'recommended') hint = 'write "recommended" for a recommended column';
+  else if (['none', 'false', 'no', 'optional', 0].includes(spelled)) hint = 'write false for a column that is not required';
+  else hint = 'true makes a column required, "recommended" makes it recommended and false makes it not required';
+  return `must be true, false or "recommended" (got ${describeSpecValue(value)}) — ${hint}; omit the key to leave an existing column's level as it is`;
+}
+
 // The length the spec asks for a table's primary name column, or undefined when it does not ask. The build, its dry-run plan
 // and its progress total all key on this one answer — it decides whether the build has a "primary column length" step for
 // the table — so they cannot disagree about it (the same arrangement as quickCreateEnabledFor).
 function askedPrimaryNameLength(entity) {
   const asked = entity && entity.primaryAttribute && entity.primaryAttribute.maxLength;
   return asked === undefined || asked === null ? undefined : asked;
+}
+
+// Whether an alternate key is over its table's primary name column while the spec asks that column for a length (askedPrimaryNameLength):
+// the key is then in the way of the length. The platform validates a key when it is created, and a key may hold at most 1,700 bytes
+// (KEY_BYTES_LIMIT) — 2 for each character of a text column.
+// See: https://learn.microsoft.com/en-us/power-apps/developer/data-platform/define-alternate-keys-entity#create-alternate-keys
+// A new table's name column is created asking for a length, but some environments make it 850 characters (1,700 bytes) whatever is
+// asked (DEFAULT_PRIMARY_NAME_LENGTH, lib/entity-provision.js) — the whole of what a key may hold, so a key over it and another column
+// can be created only once the build has set the length the spec asks for (keyHasRoomOnlyAfterLength). Matched case-insensitively: a
+// column's logical name is its schema name in lower case.
+function keyNeedsNameLength(entity, key) {
+  if (askedPrimaryNameLength(entity) === undefined || !key || !Array.isArray(key.columns)) return false;
+  const name = String(entity.primaryAttribute.schemaName || '').toLowerCase();
+  return name !== '' && key.columns.some((column) => String(column).toLowerCase() === name);
+}
+
+// Whether a label goes out in ONE language: what the SDK sends for it is a single `LocalizedLabels` entry. The SDK writes a plain string as one
+// entry in the language the build writes in, and a language map as one entry per language it names, so a string and a map that names one
+// language are the same request, byte for byte, whichever language that is. What decides is what is sent — not the shape of the value, and not
+// the language the build is authored in, which a map does not use (it names its own) and a string takes: the same request is the same label
+// under every authoring language, so where its key is made cannot depend on it. A map that names several languages or none, or a name that is
+// not an LCID, is not one label.
+function labelGoesOutInOneLanguage(value) {
+  if (!isLocalizedLabelMap(value)) return true;
+  const languages = Object.keys(value);
+  return languages.length === 1 && /^[1-9]\d*$/.test(languages[0]);
+}
+
+// Whether an alternate key must wait for its table's primary name column to get the length the spec asks for. The one rule behind the
+// data-model phase and both plans, so that they cannot disagree about where such a key is made: true when the key needs the length
+// (keyNeedsNameLength) and its label goes out in ONE language (labelGoesOutInOneLanguage).
+//
+// The build sets the length LAST in the phase: the SDK's update reads the column with its labels, and a read that carries labels ahead of
+// a create that carries several languages is what makes Dataverse keep only the base one. A key with one label has nothing for such a read
+// to strip, so it may follow the step; a key labelled in several languages keeps the place it has always had, ahead of it — except where
+// the environment made the name column too long for the key to fit beside the others, which only the environment can say
+// (keyHasRoomOnlyAfterLength, decided by the build from the length it reads) — and where the platform then refuses it for the length of
+// its column, the build says so (alternateKeyAheadOfLength, lib/entity-provision.js).
+//
+// It does not depend on the language the build writes in, so the dry run and the apply cannot disagree about it however either is given one.
+//
+// This is the half of the rule the spec decides. The other half is the build's: a table that already existed is never written to, so
+// its keys are made where they always were, and only a table whose length is still to be set (one this build created, or one a failed
+// attempt of the same build left unset) makes its keys wait.
+function keyWaitsForNameLength(entity, key) {
+  return keyNeedsNameLength(entity, key) && labelGoesOutInOneLanguage(key.displayName);
+}
+
+// The most bytes an alternate key may hold. The platform's own answer to a key that is too large names the limit — HTTP 400, code 0x80060895:
+//   { "error": { "code": "0x80060895", "message": "Index size exceeded the size limit of 1700 bytes. The key is too large. Try removing some columns or making the strings in string columns shorter." } }
+// That was measured at 1,700 bytes: a key over a name column of 850 characters (2 bytes each, the most a name column may have: PRIMARY_NAME_MAX_LENGTH)
+// alone was accepted, and one that held any other column beside it — even one of a single character — was refused. Microsoft Learn documents 900
+// bytes, so this number is what one environment answered, not a promise about all of them: the build uses it only to know that a key CANNOT fit in a
+// place (keyHasRoomOnlyAfterLength) — never to refuse one, which the platform does.
+// See: https://learn.microsoft.com/en-us/power-apps/developer/data-platform/define-alternate-keys-entity#create-alternate-keys
+const KEY_BYTES_LIMIT = 1700;
+
+// The length the SDK gives a text column it is asked to create without one. The attribute it sends for a `string` and for an `autonumber` column
+// alike is built with `MaxLength: t.maxLength ?? 100` (vendor/cds-maker-sdk.cjs, for createColumn and createColumns).
+const SDK_TEXT_MAX_LENGTH = 100;
+
+// The `maxLength` the build passes on to the SDK when it creates a column of the spec, or undefined when it passes none: only a column that names its
+// type `Text` or `Memo` carries one, and only a value that is truthy, as written — the platform judges it. So an auto-number column, and a column that
+// gives no type (which the build creates as text all the same), are made SDK_TEXT_MAX_LENGTH characters long whatever `maxLength` the spec writes for
+// them. The ONE rule behind what the build sends (columnOptions, lib/entity-provision.js) and the length a key counts a column at (keyBytesAtLeast), so
+// that a key is never sized from a length the build does not create.
+function maxLengthSent(column) {
+  return column && (column.type === 'Text' || column.type === 'Memo') && column.maxLength ? column.maxLength : undefined;
+}
+
+// The types of the spec the build creates as a single line of text — a StringAttributeMetadata, which a key holds at 2 bytes a character: `Text`, which
+// is also what a column that gives no type is made as (SDK_COLUMN_TYPE[c.type || 'Text'], lib/entity-provision.js), and `AutoNumber`, a text column
+// with a format.
+const TEXT_COLUMN_TYPES = new Set(['Text', 'AutoNumber']);
+
+// How many characters long the build creates a column of the spec that it creates as a single line of text, or undefined for a column it creates as
+// something else (or not at all): the length it sends (maxLengthSent), else the SDK's. A value it sends that is not a whole number of characters is
+// the platform's to refuse or to read as it will, so it counts for the one character every text column has.
+function textLengthCreated(column) {
+  if (!column || typeof column !== 'object' || !TEXT_COLUMN_TYPES.has(column.type || 'Text')) return undefined;
+  const sent = maxLengthSent(column);
+  if (sent === undefined) return SDK_TEXT_MAX_LENGTH;
+  return Number.isInteger(sent) && sent > 0 ? sent : 1;
+}
+
+// The fewest bytes a key holds when its table's name column is `nameLength` characters long: a floor, so that what it shows is certain. Each column
+// counts as the build creates it. A single line of text takes 2 bytes for each character — the name column at the length the environment made it, and a
+// column of the spec at the length the build creates it with (textLengthCreated: a `Text` column's `maxLength`, else 100; an auto-number column, and a
+// column that gives no type, 100 whatever `maxLength` they carry). Every other column counts for 1 byte: a column of another type a key can hold —
+// Integer, Decimal, DateTime, Choice, a lookup — whose size the limit was not measured with, and one the spec does not describe. That can leave the
+// floor under what the platform counts, never over it, and it changes nothing for a key that fits at the length the spec asks: beside a name column of
+// 850 characters, 1,700 bytes by themselves, one byte is already too much, and at the length asked such a key's floor is within the limit whatever its
+// other columns take. A key whose floor is over KEY_BYTES_LIMIT cannot fit; one whose floor is under it may or may not, and the platform decides.
+// Never throws: a key or an entity that is not what it should be holds what can be counted of it.
+function keyBytesAtLeast(entity, key, nameLength) {
+  const name = String((entity && entity.primaryAttribute && entity.primaryAttribute.schemaName) || '').toLowerCase();
+  const declared = (entity && Array.isArray(entity.columns)) ? entity.columns : [];
+  let bytes = 0;
+  for (const column of (key && Array.isArray(key.columns)) ? key.columns : []) {
+    const logical = String(column).toLowerCase();
+    if (name !== '' && logical === name) {
+      bytes += 2 * (Number.isInteger(nameLength) && nameLength > 0 ? nameLength : 1);
+      continue;
+    }
+    const length = textLengthCreated(declared.find((c) => c && String(c.schemaName).toLowerCase() === logical));
+    bytes += length === undefined ? 1 : 2 * length;
+  }
+  return bytes;
+}
+
+// Whether the key cannot fit while the name column is `nameLength` characters long (see keyBytesAtLeast).
+const keyCannotFitAt = (entity, key, nameLength) => keyBytesAtLeast(entity, key, nameLength) > KEY_BYTES_LIMIT;
+
+// Whether the length of the name column decides where a key can be made: the key holds the name column (keyNeedsNameLength), cannot fit while that column
+// is as long as a name column can be — PRIMARY_NAME_MAX_LENGTH characters are KEY_BYTES_LIMIT bytes by themselves, so any other column in the key is
+// too much — and may fit at the length the spec asks. Only then can the length the environment made of the column (850 where it ignores the length asked
+// of the create) keep the platform from taking the key, and only then can setting the length first change the platform's answer. A key over the name
+// column alone always fits, and one that cannot fit at the length asked either would be refused after the length step as well: waiting helps neither.
+// This is the half the spec decides; the other is the length the environment made, which the build reads.
+function keyHasRoomOnlyAfterLength(entity, key) {
+  return keyNeedsNameLength(entity, key)
+    && keyCannotFitAt(entity, key, PRIMARY_NAME_MAX_LENGTH)
+    && !keyCannotFitAt(entity, key, askedPrimaryNameLength(entity));
 }
 
 // The keys the build READS on each `appShell` level (appDef, sdk-build.js), for the same reason as
@@ -1068,6 +1285,19 @@ function labelText(value, languageCode) {
   return typeof hit === 'string' ? hit : '';
 }
 
+// The plural a build gives a table whose spec sets no `pluralName`: its display name in the build's
+// language, else its schema name, plus "s" — "Ticket" -> "Tickets", "Tag" -> "Tags". This is the ONE
+// derivation, so nothing that relies on it can disagree with what the build writes: the build sends it
+// as the table's DisplayCollectionName (entity-provision.js), lint predicts the "Active <plural>"
+// default-view names with it (spec-lint.js), and a download leaves out exactly the plural that equals
+// it (download-model-app.js entityFromMetadata) — a "Tag Catalog" is kept, because a rebuild of a spec
+// without it would name the table "Tags". English only: appending "s" is not a plural rule in most
+// languages, which is why validateAppSpec requires an explicit `pluralName` beside a localized
+// `displayName` rather than reaching this.
+function derivedPluralName(entity, languageCode) {
+  return `${labelText(entity && entity.displayName, languageCode) || (entity && entity.schemaName)}s`;
+}
+
 // Every string a label can legitimately be NAMED by: a plain label is itself; a localized label is
 // each of its per-language strings. Used wherever an author may reference a label by text — Choice
 // option → value resolution for `sampleData`, and `personas[].jobs[].surfaces[]` — so a reference
@@ -1089,18 +1319,44 @@ function labelAliases(value) {
 // Returns the offending aliases so the error can name them, each flagged `hidden` when at least one
 // side is a LOCALIZED label — that is the case the author cannot see by reading the line, and the
 // only one severe enough to fail a spec that provisioned correctly before this rule existed.
+//
+// One localized shape is NOT hidden: two labels that are IDENTICAL — the same text in each of the
+// same languages, whether one language or several:
+//   [ { "1036": "Ouvert" }, { "1036": "Ouvert" } ]
+//   [ { "1033": "Abierto", "3082": "Abierto" }, { "1033": "Abierto", "3082": "Abierto" } ]
+// The two lines read alike, so this is the duplicate `["Ouvert", "Ouvert"]` is, in stated languages,
+// and it is reported the same way (a warning). It is what a download finds for two options a maker
+// labelled alike, which Dataverse allows: in one language other than the download's authoring one,
+// or — as Dataverse holds them, MEASURED — in two, because it fills the environment's base language
+// in with the same text when a label is created in another language only. Refusing it made the
+// download write the labels as plain strings, which a rebuild labels in another language, or leave
+// the column untyped, which a rebuild into a fresh environment makes a text column. A map beside a
+// plain string, or beside a map that differs from it in any language, still names two options in a
+// way the line does not show, and stays hidden.
+//
+// One clash per text: a label that holds one text in several languages names it once.
 function ambiguousChoiceAliases(options) {
+  const list = options || [];
   const seen = new Map(); // alias -> { index, localized }
   const clashes = [];
-  (options || []).forEach((label, i) => {
+  list.forEach((label, i) => {
     const localized = isLocalizedLabelMap(label);
-    for (const alias of labelAliases(label)) {
+    for (const alias of new Set(labelAliases(label))) {
       const prior = seen.get(alias);
-      if (prior && prior.index !== i) clashes.push({ alias, first: prior.index, second: i, hidden: localized || prior.localized });
+      if (prior && prior.index !== i) clashes.push({ alias, first: prior.index, second: i, hidden: (localized || prior.localized) && !identicalLocalizedLabels(label, list[prior.index]) });
       else if (!prior) seen.set(alias, { index: i, localized });
     }
   });
   return clashes;
+}
+
+// Are two labels the same LOCALIZED label: both maps, keyed by the same canonical LCIDs, with the same
+// text at each? A map with a key that is no canonical LCID is never the same (validateLabel refuses it).
+function identicalLocalizedLabels(a, b) {
+  if (!isLocalizedLabelMap(a) || !isLocalizedLabelMap(b)) return false;
+  const keys = Object.keys(a);
+  if (keys.length !== Object.keys(b).length || localizedLabelLcids(a).length !== keys.length) return false;
+  return keys.every((k) => Object.prototype.hasOwnProperty.call(b, k) && a[k] === b[k]);
 }
 
 // Reject a LOCALIZED label on a global choice. AB#6686428.
@@ -1418,6 +1674,38 @@ function validateFormSecurityRoles(f, spec, errors) {
   }
 }
 
+// The per-field control options, ONE list for both routes that declare them: a form-level
+// `fieldOptions` entry takes exactly these, and an inline `fields[]` entry takes these plus its `name`
+// (FORM_FIELD_ENTRY_KEYS). A map entry takes no `name`, because its KEY names the field.
+//
+// It is also the list the compiler projects (artifact-intent.js `projectFieldOptions`), so validation
+// and the build cannot disagree about what an option is. A `fieldOptions` entry used to be checked only
+// for the values of these keys, so any other key (`readOnlyy`, `colSpan`, a subgrid's `before`)
+// validated clean and was then dropped by the projection: a green build that never applied the option.
+// Frozen, and in the order of the compiled entry.
+const FIELD_OPTION_KEYS = Object.freeze(['readOnly', 'hidden', 'after', 'colspan', 'rowspan']);
+// `readOnly?, hidden?, after?, colspan?, rowspan?`, for the messages that describe an entry's shape.
+const FIELD_OPTION_SHAPE = FIELD_OPTION_KEYS.map((k) => `${k}?`).join(', ');
+
+// What to write instead, for a key of a `fieldOptions` entry that a near spelling cannot explain.
+// Prototype-less for the reason ENTITY_KEY_HINTS is: the lookup key comes from the spec, and
+// `constructor` must not find Object's own function.
+const FIELD_OPTION_KEY_HINTS = Object.assign(Object.create(null), {
+  name: " — a fieldOptions entry is keyed by the field's logical name, so it takes no 'name'",
+  visible: " — to keep the field on the form but not show it, use 'hidden': true",
+});
+
+// The message suffix naming the option an unknown `fieldOptions` key most likely meant: a written hint
+// first, then the shared single-edit matcher, which also settles a casing slip (`colSpan` for
+// `colspan`). nearestName answers in lower case, so its match is mapped back to the spelling the spec
+// must use.
+function fieldOptionKeyHint(key) {
+  if (FIELD_OPTION_KEY_HINTS[key]) return FIELD_OPTION_KEY_HINTS[key];
+  const near = nearestName(key, FIELD_OPTION_KEYS.map((k) => k.toLowerCase()));
+  const meant = near && FIELD_OPTION_KEYS.find((k) => k.toLowerCase() === near);
+  return meant ? ` — did you mean '${meant}'?` : '';
+}
+
 // Allow-listed keys for an explicit form layout, with the reason each rejection exists.
 //
 // `tabs[]`/`sections[]` had no allow-list at all, so an invented or misspelled key validated clean
@@ -1437,7 +1725,7 @@ function validateFormSecurityRoles(f, spec, errors) {
 const FORM_TAB_KEYS = new Set(['name', 'label', 'expanded', 'visible', 'sections', 'columns']);
 const FORM_TAB_COLUMN_KEYS = new Set(['width', 'sections']);
 const FORM_SECTION_KEYS = new Set(['name', 'label', 'columns', 'showLabel', 'visible', 'fields']);
-const FORM_FIELD_ENTRY_KEYS = new Set(['name', 'readOnly', 'hidden', 'after', 'colspan', 'rowspan']);
+const FORM_FIELD_ENTRY_KEYS = new Set(['name', ...FIELD_OPTION_KEYS]);
 // Identity of a sample-data `matchOn` value, shared by the author-time gate in `validateAppSpec` and
 // the loader's own refusal in `chooseMatchOn`/`firstDuplicateNonEmpty` (entity-provision.js).
 //
@@ -2040,7 +2328,7 @@ function validateFormLayoutKeys(f, errors) {
   });
 }
 
-function validateFormFieldOptions(f, entityByLower, errors, warnings) {
+function validateFormFieldOptions(f, entityByLower, errors, warnings, unknownKeyFindings = errors) {
   const label = `form '${f.name || f.entity}'`;
   const entity = entityByLower.get(String(f.entity || '').toLowerCase());
   const columnType = (logical) => {
@@ -2078,7 +2366,7 @@ function validateFormFieldOptions(f, entityByLower, errors, warnings) {
         } else if (typeof entry === 'string') {
           listedByLayout.add(entry.toLowerCase());
         } else {
-          errors.push(`${label}: a field entry must be a column logical name or an object { name, readOnly?, hidden?, after? }`);
+          errors.push(`${label}: a field entry must be a column logical name or an object { name, ${FIELD_OPTION_SHAPE} }`);
         }
       }
     }
@@ -2091,8 +2379,17 @@ function validateFormFieldOptions(f, entityByLower, errors, warnings) {
       for (const key of Object.keys(f.fieldOptions)) {
         const v = f.fieldOptions[key];
         if (!v || typeof v !== 'object' || Array.isArray(v)) {
-          errors.push(`${label}: fieldOptions['${key}'] must be an object { readOnly?, hidden?, after?, colspan? }`);
+          errors.push(`${label}: fieldOptions['${key}'] must be an object { ${FIELD_OPTION_SHAPE} }`);
           continue;
+        }
+        // Only the entry's OWN keys (Object.keys): a key the entry does not take is reported here, worded
+        // like the inline entry's check (validateFormLayoutKeys), instead of being dropped by the compiler —
+        // as an error, or as a warning where validateAppSpec says the spec is only read (fieldOptionKeyFindings).
+        // A named form also names its table: a field belongs to a table, and two tables' forms can share
+        // a name.
+        for (const k of Object.keys(v)) {
+          if (FIELD_OPTION_KEYS.includes(k)) continue;
+          unknownKeyFindings.push(`${label}${f.name && f.entity ? ` (table ${f.entity})` : ''}: unknown key '${k}' on fieldOptions['${key}']${fieldOptionKeyHint(k)} (allowed: ${FIELD_OPTION_KEYS.join(', ')})`);
         }
         seen.push({ name: String(key).toLowerCase(), opt: v, where: `fieldOptions['${key}']`, inline: false });
       }
@@ -2237,10 +2534,31 @@ function validateSampleDataRows(entityKey, records, errors) {
 
 function validateAppSpec(spec, opts = {}) {
   const profile = opts.profile || 'deploy';
+  // The column rules below (an AutoNumber column's format, a `required` value) say what the BUILD can use, so every profile that builds or plans a
+  // build holds a spec to them. The structural profile — teardown's, which also serves preview and the eval harness — does not: it reads a spec for
+  // the tables and components it names, and a spec an earlier release accepted and built (an AutoNumber column made as text, a `required: "true"`
+  // made not required) must still be torn down. The same arrangement as the relationship-name collisions checked at the end of this function.
+  const checksColumnValues = profile !== 'structural';
   const errors = [];
   // Non-blocking advisories (e.g. a PRE-EXISTING duplicate page name the current run did not create).
   // Additive to the return shape — callers that only read { ok, errors } are unaffected.
   const warnings = [];
+  // Where the two column rules' findings go: errors, or — for read-only verification, which passes `columnValues: 'warn'` — warnings. Verification creates
+  // and updates nothing and only reads whether each column exists, so rules that keep a BUILD from misreading a column's declaration have nothing to
+  // protect there, and the spec of an app an earlier release built from a value they refuse must still reach its deployment. The same arrangement as
+  // `relationshipCollisions: 'warn'` at the end of this function; every other caller keeps the error.
+  const columnValueFindings = opts.columnValues === 'warn' ? warnings : errors;
+  // Where an unknown key of a form's `fieldOptions` entry goes (validateFormFieldOptions). Every profile that builds or plans a build
+  // keeps it an error: the build drops such a key, so the option would never be applied. A release before that check accepted and built
+  // a spec carrying one (the key was ignored), and a spec that is only READ to act on its deployment must still be read — so the
+  // structural profile (teardown, preview) takes it as a warning in the same words, and so does read-only verification, which keeps the
+  // deploy profile and passes `fieldOptionKeys: 'warn'`, as it passes `columnValues: 'warn'`. Nothing else about the entry moves.
+  const fieldOptionKeyFindings = profile === 'structural' || opts.fieldOptionKeys === 'warn' ? warnings : errors;
+  // Where an unknown key of a table's `primaryAttribute` goes (primaryAttributeKeyProblems), by the same arrangement as fieldOptions keys
+  // above: the build ignores such a key, so every profile that builds or plans a build keeps it an error, while a release before the check
+  // accepted and built a spec carrying one — so the structural profile and read-only verification (`primaryAttributeKeys: 'warn'`) take it
+  // as a warning in the same words.
+  const primaryAttributeKeyFindings = profile === 'structural' || opts.primaryAttributeKeys === 'warn' ? warnings : errors;
   if (!VALIDATION_PROFILES.includes(profile)) {
     return { ok: false, errors: [`unknown validation profile '${profile}' (valid: ${VALIDATION_PROFILES.join(', ')})`], warnings };
   }
@@ -2418,11 +2736,16 @@ function validateAppSpec(spec, opts = {}) {
     if (!e.primaryAttribute || !e.primaryAttribute.schemaName) {
       errors.push(`entity ${e.schemaName}: primaryAttribute.schemaName required`);
     }
+    primaryAttributeKeyFindings.push(...primaryAttributeKeyProblems(e.primaryAttribute, `entity ${e.schemaName}`));
     // The length of the table's name column, asked for when the table is created (an existing table's column is left as it
     // is).
     if (e.primaryAttribute && typeof e.primaryAttribute === 'object') {
       const lengthProblem = primaryNameLengthProblem(e.primaryAttribute.maxLength);
       if (lengthProblem) errors.push(`entity ${e.schemaName}: ${lengthProblem}`);
+      if (checksColumnValues) {
+        const requiredProblem = requiredValueProblem(e.primaryAttribute.required);
+        if (requiredProblem) columnValueFindings.push(`entity ${e.schemaName}: primaryAttribute.required ${requiredProblem}`);
+      }
     }
     if (e.quickCreate !== undefined && typeof e.quickCreate !== 'boolean') {
       errors.push(`entity ${e.schemaName}: quickCreate must be a boolean`);
@@ -2455,8 +2778,17 @@ function validateAppSpec(spec, opts = {}) {
       if (c.type === 'Customer' && c.description) {
         warnings.push(`entity ${e.schemaName}: column ${c.schemaName} is a Customer column — the SDK's createCustomerColumn accepts no description, so this one will NOT be written to Dataverse`);
       }
-      if (c.type && !TYPE_MAP[c.type]) {
+      // An own key of TYPE_MAP: `constructor`, `toString` and the other members of Object.prototype are no column type, and a plain
+      // `TYPE_MAP[c.type]` read answered them with the inherited member, so a column of such a type passed this check.
+      if (c.type && !Object.hasOwn(TYPE_MAP, c.type)) {
         errors.push(`entity ${e.schemaName}: column ${c.schemaName} has unknown type '${c.type}'`);
+      }
+      // An AutoNumber column needs a format, and `required` is true, false or "recommended" (see checksColumnValues).
+      if (checksColumnValues) {
+        const formatProblem = autoNumberFormatProblem(c);
+        if (formatProblem) columnValueFindings.push(`entity ${e.schemaName}: column ${c.schemaName} ${formatProblem}`);
+        const requiredProblem = requiredValueProblem(c.required);
+        if (requiredProblem) columnValueFindings.push(`entity ${e.schemaName}: column ${c.schemaName} required ${requiredProblem}`);
       }
       if ((c.type === 'Choice' || c.type === 'MultiChoice') && !(Array.isArray(c.options) && c.options.length) && !c.globalChoice) {
         errors.push(`column ${c.schemaName}: ${c.type} needs options[] or a globalChoice reference`);
@@ -2517,8 +2849,12 @@ function validateAppSpec(spec, opts = {}) {
       }
     }
   }
-  if (!entityNames.size) {
-    errors.push('at least one entity is required');
+  // A spec with no table is an app only when its navigation shows something else: generative pages, dashboards over tables
+  // the environment already has, or URLs. Such an app is real — `apps.js create --page-id` makes one, and the build makes one
+  // from a navigation of pages only by creating the pages first (app-navigation.js) — so a download of it must give a spec the
+  // build takes. Without a table AND without a navigation entry there is nothing to build an app from.
+  if (!entityNames.size && !navigationHolds(spec).entries) {
+    errors.push('at least one entity is required — or, for an app with no tables, an entry in appShell (a page, a dashboard or a URL)');
   }
   // Web resources (optional — JS/HTML/CSS shipped for form logic).
   const WEB_RESOURCE_KINDS = new Set(['js', 'html', 'css', 'xml', 'png', 'jpg', 'gif', 'xsl', 'ico', 'svg', 'resx']);
@@ -2555,7 +2891,10 @@ function validateAppSpec(spec, opts = {}) {
   // (first Main form in spec order), and both are order-independent — which is the property the old
   // behaviour lacked, when every Main form promoted itself from inside a concurrent loop and the last
   // to finish won.
-  const defaultByEntity = {};
+  // Null-prototype maps here and in the Main-form counts below: the key is the table a form names, as the spec writes it, and this loop
+  // runs before that name is checked — `(map[key] = map[key] || []).push(…)` on a plain object threw for `constructor` and `__proto__`
+  // (it read the inherited member), and the counts below turned into text. A table the spec does not declare is reported further down.
+  const defaultByEntity = Object.create(null);
   for (const f of spec.forms || []) {
     if (!f) continue;
     if (f.isDefault !== undefined && typeof f.isDefault !== 'boolean') {
@@ -2654,8 +2993,8 @@ function validateAppSpec(spec, opts = {}) {
   // ground: deactivating every other Main form is a DESTRUCTIVE, entity-wide act, and a spec that
   // declares a sibling Main form alongside a flagged one is asking for that sibling to be built and
   // then immediately deactivated — almost certainly not what the author meant.
-  const mainFormsByEntity = {};
-  const flaggedByEntity = {};
+  const mainFormsByEntity = Object.create(null);
+  const flaggedByEntity = Object.create(null);
   for (const f of spec.forms || []) {
     if (!f || (f.formType !== undefined && f.formType !== 'Main')) continue;
     const key = String(f.entity || '').toLowerCase();
@@ -2759,7 +3098,7 @@ function validateAppSpec(spec, opts = {}) {
         }
       }
     }
-    validateFormFieldOptions(f, entityByLower, errors, warnings);
+    validateFormFieldOptions(f, entityByLower, errors, warnings, fieldOptionKeyFindings);
     validateFormLayoutKeys(f, errors);
     validateFormSecurityRoles(f, spec, errors);
     // `layout: 'explicit'` with no `tabs[]` is a spec that asks for one thing and builds another.
@@ -3243,13 +3582,13 @@ function validateAppSpec(spec, opts = {}) {
   // slugify (:686) which always conforms; a hand-authored v2 key must too, since the key is the
   // cross-reference identity (navigatesTo.targetKey, PAGEREF_<key>, appShell page subareas).
   const PAGE_KEY_GRAMMAR = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/;
-  // GUID pattern for pages[].pageId — a 36-char hyphenated hex UUID as minted by Dataverse / PAC CLI.
+  // GUID pattern for pages[].pageId — a 36-char hyphenated hex UUID as minted by Dataverse or by the SDK on a page create.
   // A spec page carrying this field is an EDIT-SNAPSHOT (env-specific, downloaded from a live app);
   // a portable fresh-authored spec omits it. When present it must be exactly this shape so
   // reconcilePageIds can use it as the highest identity authority without silently accepting garbage
-  // (e.g. a cross-env GUID that happens to match an unrelated page). Addenda Task 4 / C3.
+  // (e.g. a cross-env GUID that happens to match an unrelated page).
   const PAGE_ID_GUID = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
-  const pageCodeFilesNorm = new Set(); // implemented-page normalized codeFile uniqueness (Critical 4)
+  const pageCodeFilesNorm = new Set(); // implemented-page normalized codeFile uniqueness
   for (const p of spec.pages || []) {
     if (!p || !p.name) { errors.push('a page is missing a name'); continue; }
     pageNamesSet.add(p.name);
@@ -3257,15 +3596,34 @@ function validateAppSpec(spec, opts = {}) {
     // (see "page-name uniqueness" below) so it can distinguish a NEW page from a PRE-EXISTING one.
     // A page MAY carry its own deployed `pageId` (edit-snapshot marker). A portable fresh-authored spec
     // omits it — absence is never an error. When present it MUST be a valid 36-char GUID: the
-    // reconcilePageIds authority logic (addenda Task 4 / C3) consumes it as the HIGHEST identity source,
+    // reconcilePageIds authority logic consumes it as the HIGHEST identity source,
     // so silently accepting a malformed / empty value would cause reconcile to bind the wrong page.
     if (p.pageId !== undefined && !PAGE_ID_GUID.test(String(p.pageId))) {
       errors.push(`page '${p.key || p.name}': pageId must be a 36-char GUID`);
     }
-    // The id of the model that generated the page — what `pac model genpage upload --model` records, and
-    // what a download writes back. A short token (e.g. `gpt-4.1`); it travels as a command-line value.
+    // The id of the model that generated the page — what the page's config.json records as `model`, and
+    // what a download writes back. A short token (e.g. `gpt-4.1`).
     if (p.model !== undefined && (typeof p.model !== 'string' || !PAGE_MODEL_RE.test(p.model))) {
       errors.push(`page '${p.key || p.name}': model must be a model id such as 'gpt-4.1' (letters, digits and . _ : / @ + -, at most 100 characters)`);
+    }
+    // The page's connector and Custom API bindings. That each is a list, and that none of its entries is missing, is reported above by normalizeSpecShape; an entry that is there and is no object (a string, a number) is
+    // reported here, by the rule a download holds a page's bindings to (pageBindingsProblem), so a download never writes a spec this refuses.
+    // An entry is stated by an allowlist of properties, each with a value of a shape known to be safe (page-bindings.js, which holds the threat model): a property outside it — a connection id, a credential,
+    // anything the runtime or a later version adds — or a value of another shape is an ERROR that names the vetted property or says "an unrecognized property", and never a value or an unrecognized key (a key
+    // can be the secret), because the spec is what is committed and shared, and refusing is the only thing that keeps a credential out of it.
+    // What the page finds an entry by is only a warning: an entry is written as it is given, and a page a download read the bindings of may hold one with no such property, which a refusal would leave with no spec at all.
+    for (const [kind, identity] of Object.entries(PAGE_BINDINGS)) {
+      if (!Array.isArray(p[kind])) continue;
+      const problem = pageBindingsProblem(kind, p[kind]);
+      if (problem) errors.push(`page '${p.key || p.name}': ${problem}`);
+      p[kind].forEach((entry, i) => {
+        if (!entry || typeof entry !== 'object' || Array.isArray(entry)) return;
+        const unstated = new Set(statableBinding(kind, entry).leftOut.map((found) => `page '${p.key || p.name}': ${bindingProblemText(kind, i, found)}`));
+        for (const text of unstated) errors.push(text);
+        if (typeof entry[identity] !== 'string' || !entry[identity].trim()) {
+          warnings.push(`page '${p.key || p.name}': ${kind}[${i}] has no ${identity} — the page's code finds a binding by it, so this one can never be used`);
+        }
+      });
     }
     const src = normalizePageSource(p);
     // Track whether a structural source error was emitted so the profile check below doesn't
@@ -3289,10 +3647,10 @@ function validateAppSpec(spec, opts = {}) {
         errors.push(`page '${p.key || p.name}': needs a source ({ kind: 'intent' } or { kind: 'tsx', codeFile })`);
       }
     }
-    // codeFile confinement + path-uniqueness (Critical 4). Only checked for implemented tsx pages
+    // codeFile confinement + path-uniqueness. Only checked for implemented tsx pages
     // (intent pages have no codeFile; the codeFile presence was already validated above). Normalize
     // the path before checking so that 'pages/./x.tsx' and 'pages/../pages/x.tsx' are detected as
-    // duplicates of 'pages/x.tsx' (addendum Crit 4). Replace backslashes with forward slashes before
+    // duplicates of 'pages/x.tsx'. Replace backslashes with forward slashes before
     // lowercasing for cross-platform-safe comparison in the set.
     if (src && src.kind === 'tsx' && typeof src.codeFile === 'string' && src.codeFile) {
       if (!isAppSourcePath(src.codeFile)) {
@@ -3317,7 +3675,7 @@ function validateAppSpec(spec, opts = {}) {
   // edit-snapshot can legitimately carry a PRE-EXISTING duplicate the run did NOT create (two pages
   // authored by different people/tools), and blocking every build — even an unrelated form edit that
   // never touches pages — on a dupe the run is not changing is wrong (the pages phase matches by id/key,
-  // never by name: genpage-cli.js enumerateEnv is id-keyed, and download's assignPageKeys de-dups keys
+  // never by name: lib/genpage-sdk.js enumerateEnv is id-keyed, and download's assignPageKeys de-dups keys
   // with a -N suffix, so distinct-id same-name pages build fine). Signal: a page carrying a deployed
   // `pageId` is PRE-EXISTING (an edit-snapshot marker); a page WITHOUT one is NEW (authored this run).
   //   - collision involving a NEW page  → ERROR  (prevent authoring/adding a duplicate)
@@ -3490,7 +3848,7 @@ function validateAppSpec(spec, opts = {}) {
         checkPortableIconRef(sa.icon, `sitemap subArea "${sa.title || ''}"`);
         checkPortableIconRef(sa.vectorIcon, `sitemap subArea "${sa.title || ''}"`);
         validateIconDescription(sa.iconDescription, `sitemap subArea "${sa.title || ''}"`, errors);
-        // Ask 3: don't SILENTLY drop an entity-subarea vectorIcon. A valid platform ref round-trips
+        // Don't SILENTLY drop an entity-subarea vectorIcon. A valid platform ref round-trips
         // (emitted by the build); a BARE token can't be emitted on an entity subarea (it breaks the
         // modern app-designer), so surface it as a warning at author time rather than a silent drop.
         if (sa.entity && sa.vectorIcon && !isPlatformIconRef(sa.vectorIcon)) {
@@ -3512,7 +3870,7 @@ function validateAppSpec(spec, opts = {}) {
       }
     }
   }
-  // MEMBERSHIP invariant (Plan 5 v2 / Task 3): every generative page MUST appear as a sitemap subarea.
+  // MEMBERSHIP invariant: every generative page MUST appear as a sitemap subarea.
   // A model-driven app's membership IS sitemap presence — there is no hidden-but-navigable subarea.
   // A page that is only a navigatesTo target (no subarea) is NOT owned by the app's navigation: build
   // will create it, but download enumeration (membership = sitemap) and verify (membership check) will
@@ -3825,8 +4183,11 @@ function validateAppSpec(spec, opts = {}) {
     if (typeof spec.design !== 'object' || spec.design === null || Array.isArray(spec.design)) {
       errors.push('design must be an object');
     } else {
-      const allowed = new Set(['accentColor', 'density', 'cornerRadius', 'darkMode', 'layout']);
+      const allowed = new Set(['accentColor', 'density', 'cornerRadius', 'darkMode', 'layout', 'style']);
       for (const k of Object.keys(spec.design)) if (!allowed.has(k)) errors.push(`design: unknown key '${k}' (allowed: ${[...allowed].join(', ')})`);
+      // `style` is the maker's own look in words (a screenshot read into colors and fonts, a website to match, a description), which the page plan
+      // carries as a `Maker-requested:` styling line that wins over the default look (lib/page-plan.js designPreferences). Text, or it says nothing.
+      if (spec.design.style !== undefined && (typeof spec.design.style !== 'string' || !spec.design.style.trim())) errors.push('design.style must be a non-empty string: the look the maker asked for, in words');
     }
   }
   // Security personas (optional; additive — validated on v1 and v2 specs). Each persona authors ONE
@@ -4004,6 +4365,39 @@ function canonicalPersonaName(persona) {
 // https://learn.microsoft.com/en-us/power-apps/developer/data-platform/webapi/reference/addprivilegesrole
 const ROLE_GRANT_KEYS = new Set(['role', 'roleId', 'businessUnitId', 'privileges', 'description']);
 
+// How every roleGrants[] message names its entry: `roleGrants[1] (role "Viewer")`, `roleGrants[0] (roleId <guid>)`, or `roleGrants[2]`.
+// `i` is the entry's index in the spec's roleGrants[] as written.
+function roleGrantEntryLabel(g, i) {
+  const roleName = typeof g.role === 'string' ? g.role.trim() : g.role;
+  return `roleGrants[${i}]${roleName ? ` (role "${roleName}")` : g.roleId ? ` (roleId ${g.roleId})` : ''}`;
+}
+
+// The ONE check of which role a roleGrants[] entry names: exactly one of `role` (an existing role's display name) and `roleId` (its
+// GUID). Answers the gate's messages, [] for an entry that names one role. validateRoleGrants (the gate a build and lint-app-spec.js
+// run) reports them, and the design document repeats them word for word (lib/app-access.js roleGrantRefusals → lib/app-spec-doc.js and
+// the warnings of write-app-spec-doc.js), which used to show an entry with both as a grant the build would make.
+function roleGrantIdentityErrors(g, label) {
+  const describeValue = (v) => { try { return JSON.stringify(v); } catch { return Object.prototype.toString.call(v); } };
+  const errors = [];
+  const roleName = typeof g.role === 'string' ? g.role.trim() : g.role;
+  // Exactly one identity. Accepting both would let them disagree, and the apply path can only follow
+  // one — resolving the id and ignoring a mismatched name would grant on a role the author did not name.
+  const hasName = g.role !== undefined;
+  const hasId = g.roleId !== undefined;
+  if (hasName && hasId) {
+    errors.push(`${label}: set either 'role' (the existing role's display name) or 'roleId' (its GUID), not both — they can disagree and only one can be honoured`);
+  } else if (!hasName && !hasId) {
+    errors.push(`${label}: name the existing role to extend — set 'role' (display name) or 'roleId' (GUID)`);
+  }
+  if (hasName && (typeof roleName !== 'string' || !roleName)) {
+    errors.push(`${label}: role must be the non-empty display name of an EXISTING security role (got ${describeValue(g.role)})`);
+  }
+  if (hasId && (typeof g.roleId !== 'string' || !FORM_GUID_RE.test(g.roleId))) {
+    errors.push(`${label}: roleId must be a GUID (got ${describeValue(g.roleId)})`);
+  }
+  return errors;
+}
+
 function validateRoleGrants(spec, errors) {
   const grants = spec && spec.roleGrants;
   if (grants === undefined) return;
@@ -4011,7 +4405,6 @@ function validateRoleGrants(spec, errors) {
     errors.push('roleGrants must be an array of { role | roleId, privileges[] } entries');
     return;
   }
-  const describeValue = (v) => { try { return JSON.stringify(v); } catch { return Object.prototype.toString.call(v); } };
   // A role's identity is (trimmed+folded NAME, business unit) — the same key the SDK uses. Two roles
   // may legitimately share a name in different business units, so the BU must be part of the key or
   // that valid pair is rejected; an absent BU means "the org root", which is one specific BU.
@@ -4036,22 +4429,9 @@ function validateRoleGrants(spec, errors) {
       if (!ROLE_GRANT_KEYS.has(k)) errors.push(`roleGrants[${i}]: unknown key '${k}' (allowed: ${[...ROLE_GRANT_KEYS].join(', ')})`);
     }
     const roleName = typeof g.role === 'string' ? g.role.trim() : g.role;
-    const label = `roleGrants[${i}]${roleName ? ` (role "${roleName}")` : g.roleId ? ` (roleId ${g.roleId})` : ''}`;
-    // Exactly one identity. Accepting both would let them disagree, and the apply path can only follow
-    // one — resolving the id and ignoring a mismatched name would grant on a role the author did not name.
-    const hasName = g.role !== undefined;
+    const label = roleGrantEntryLabel(g, i);
+    errors.push(...roleGrantIdentityErrors(g, label));
     const hasId = g.roleId !== undefined;
-    if (hasName && hasId) {
-      errors.push(`${label}: set either 'role' (the existing role's display name) or 'roleId' (its GUID), not both — they can disagree and only one can be honoured`);
-    } else if (!hasName && !hasId) {
-      errors.push(`${label}: name the existing role to extend — set 'role' (display name) or 'roleId' (GUID)`);
-    }
-    if (hasName && (typeof roleName !== 'string' || !roleName)) {
-      errors.push(`${label}: role must be the non-empty display name of an EXISTING security role (got ${describeValue(g.role)})`);
-    }
-    if (hasId && (typeof g.roleId !== 'string' || !FORM_GUID_RE.test(g.roleId))) {
-      errors.push(`${label}: roleId must be a GUID (got ${describeValue(g.roleId)})`);
-    }
     if (g.businessUnitId !== undefined && (typeof g.businessUnitId !== 'string' || !FORM_GUID_RE.test(g.businessUnitId))) {
       errors.push(`${label}: businessUnitId must be a GUID`);
     }
@@ -4209,6 +4589,8 @@ function migrateAppSpec(spec) {
 }
 
 module.exports = {
+  roleGrantEntryLabel,
+  roleGrantIdentityErrors,
   rejectLocalizedGlobalChoice,
   sampleKeyIdentity,
   dashboardNameKey,
@@ -4229,13 +4611,23 @@ module.exports = {
   validateAppSpec,
   PRIMARY_NAME_MAX_LENGTH,
   primaryNameLengthProblem,
+  autoNumberFormatProblem,
+  requiredValueProblem,
   askedPrimaryNameLength,
+  keyNeedsNameLength,
+  keyWaitsForNameLength,
+  KEY_BYTES_LIMIT,
+  maxLengthSent,
+  keyBytesAtLeast,
+  keyCannotFitAt,
+  keyHasRoomOnlyAfterLength,
   validateSampleDataRows,
   normalizePageSource,
   normalizeLanguageCode,
   validateChoiceOptionLabels,
   ambiguousChoiceAliases,
   labelText,
+  derivedPluralName,
   labelAliases,
   isLocalizedLabelMap,
   labelIsMissing,
@@ -4244,10 +4636,14 @@ module.exports = {
   quickCreateEnabledFor,
   isPlatformIconRef,
   webResourceNameFromRef,
+  FIELD_OPTION_KEYS,
   FORM_TYPE_CODE,
   formIdentityKey,
   FORM_GUID_RE,
   PAGE_MODEL_RE,
+  PAGE_BINDINGS,
+  pageBindingsProblem,
+  statedPageBindings,
   ACCESS_LEVELS,
   PRIVILEGE_SCOPES,
   ROLE_GRANT_KEYS,
@@ -4257,6 +4653,8 @@ module.exports = {
   ENTITY_KEYS,
   invalidLanguageCodeMessage,
   ENTITY_KEY_HINTS,
+  PRIMARY_ATTRIBUTE_KEYS,
+  primaryAttributeKeyProblems,
   DIRECT_ENTRY_BEHAVIORS,
   COLUMN_VISUALIZATIONS,
   INTEGER_FORMATS,

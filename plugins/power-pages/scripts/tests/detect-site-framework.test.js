@@ -13,7 +13,7 @@ function mkTmp() {
   return fs.mkdtempSync(path.join(os.tmpdir(), "ppskills-fw-"));
 }
 
-// Builds a Power Pages code site on disk: the `powerpages.config.json` marker
+// Builds a Power Pages SPA site on disk: the `powerpages.config.json` marker
 // plus a package.json carrying `deps` as its dependencies.
 function mkSite(root, deps, { config = true, pkg = true } = {}) {
   fs.mkdirSync(root, { recursive: true });
@@ -99,7 +99,7 @@ test("returns null when cwd contains multiple child sites", () => {
   assert.equal(detectSiteFramework(parent), null);
 });
 
-test("returns null when child workspace mixes code and declarative sites", () => {
+test("returns null when child workspace mixes code and non-SPA sites", () => {
   const parent = mkTmp();
   mkSite(path.join(parent, "react-portal"), {
     react: "^19.0.0",
@@ -112,13 +112,13 @@ test("returns null when child workspace mixes code and declarative sites", () =>
   assert.equal(detectSiteFramework(parent), null);
 });
 
-test("returns null inside a declarative site nested under a code site", () => {
-  const codeRoot = mkSite(path.join(mkTmp(), "code-site"), {
+test("returns null inside a non-SPA site nested under a SPA site", () => {
+  const codeRoot = mkSite(path.join(mkTmp(), "SPA"), {
     react: "^19.0.0",
     "@vitejs/plugin-react": "^4.3.0",
   });
-  const declarativeRoot = path.join(codeRoot, "declarative-site");
-  const nested = path.join(declarativeRoot, ".powerpages-site", ".portalconfig");
+  const nonSpaRoot = path.join(codeRoot, "declarative-site");
+  const nested = path.join(nonSpaRoot, ".powerpages-site", ".portalconfig");
   fs.mkdirSync(nested, { recursive: true });
   assert.equal(detectSiteFramework(nested), null);
 });
@@ -171,7 +171,7 @@ test("returns null when non-Astro scaffold markers conflict", () => {
   assert.equal(detectSiteFramework(root), null);
 });
 
-test("returns null for a project that is not a Power Pages code site", () => {
+test("returns null for a project that is not a Power Pages SPA site", () => {
   // package.json present, powerpages.config.json absent — an unrelated repo the
   // user happens to be sitting in must not pollute the framework metric.
   const root = mkSite(path.join(mkTmp(), "not-a-site"), { react: "^19.0.0" }, { config: false });

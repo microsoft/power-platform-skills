@@ -35,6 +35,13 @@ digits are parsed as the eval id; the slug is purely cosmetic.
 - A current synthetic `fixture.json` declares contract version 2, provenance,
   source skill/reference sections, ordered `tool-results.json` and artifact paths.
   Nested snapshots are evidence, not additional generated pages.
+- A scenario that grades a newly authored plan names its evidence under
+  `fixture.json` `semantics` (each also listed in `artifacts`): `approvedPlan` (the
+  approved preview the run saved), and for eval 26 `lookupMetadata` (the saved
+  `get-lookup-metadata.js` answer), `interactions` (the ordered `needs_input`,
+  answer and approval of its semantic question) and `lookupRows` (synthetic lookup
+  values with the state the published normalizer gives each). Its expectations fail
+  — they do not skip — when a declared key or its file is missing.
 
 ## How to capture a real fixture from /genpage
 
@@ -90,7 +97,7 @@ Two rules for evidence files:
 
 ## Current state
 
-This directory has **27 fixtures, 34 top-level TSX files and 25 represented
+This directory has **35 fixtures, 39 top-level TSX files and 27 represented
 prompt IDs**. All are green under both runners. Directories listed in
 `contracts.json` are historical contract-1 evidence; every other directory is a
 current contract-2 synthetic. Registered prompts with no fixture:
@@ -113,25 +120,41 @@ of step with the fixtures.
 | `17-weather-mock-data/` | 17 | Historical synthetic | green | Mock weather, no discovery |
 | `18-sharepoint-connectors/` | 18 | Historical synthetic | green | Connector-backed source and discovery |
 | `19-add-weather-connector/` | 19 | Historical synthetic | green | Add-from-none edit compatibility |
-| `10-auth-timeout-halt/` | 10 | Current synthetic | green | Associated timeout results, one retry/advice, halt with no TSX/mutation |
-| `20-upload-preservation/` | 20 | Current synthetic | green | Exact create file transport; independent edit read-backs; quote refusal |
+| `10-auth-timeout-halt/` | 10 | Current synthetic | green | Exact-match discovery of the missing table; associated timeout results, one retry/advice, halt with no TSX/mutation |
+| `10-az-signed-out-halt/` | 10 | Current synthetic | green | Exact-match discovery; Azure CLI signed out: the `az login` advice is shown verbatim and the run halts with no TSX/mutation |
+| `10-whoami-403-halt/` | 10 | Current synthetic | green | Exact-match discovery; WhoAmI 403 with different az and pac identities: the `az login --username <pacUser>` advice is shown verbatim and the run halts |
+| `10-identity-mismatch-proceeds/` | 10 | Current synthetic | green | Exact-match discovery; `ok: true` with different az and pac identities: the one-line warning is shown verbatim and the run goes on — the entity-builder (which logs the same warning in its transaction log) provisions the table and the page is uploaded |
+| `20-upload-preservation/` | 20 | Current synthetic | green | App-less create (first page of a new app); exact create file transport; independent edit read-backs; a straight quote stored exactly |
 | `21-discovery-failure/` | 21 | Current synthetic | green | Unreadable discovery is needs_input, never setup/upload; no generated TSX |
 | `22-navigation-contract/` | 22 | Current synthetic | green | Actual before/after source, optional calls/overrides/escaped keys/Unicode terminators, affected-only upload |
 | `23-worker-completeness/` | 23 | Current synthetic | green | Failed production gate blocks upload until fresh complete regeneration |
 | `24-custom-api-lifecycle/` | 24 | Current synthetic | green | Bound Action/global Function discovery, re-probe, runtime, preserve and clear |
 | `25-solution-package/` | 25 | Current synthetic | green | Every deployed page, dynamic component types, app-first writes, read-back and invalid-id refusal |
 | `3-contacts-edit-search-sort/` | 3 | Current synthetic | green | Edit flow: discovered app/page, download snapshot in `before/`, inline edit adding SearchBox + header sorting, `--page-id` delta upload without `--add-to-sitemap` |
+| `3-edit-no-pages-stop/` | 3 | Current synthetic | green | Edit flow refused at Edit Phase 1b: the chosen app's `genpage.js list` succeeds with no pages, the user is told there is nothing to edit, and the run stops with no download, plan, TSX or upload |
 | `6-traffic-analytics-mock/` | 6 | Current synthetic | green | Clean, minimal mock-data analytics with D3 only; no entity work; upload omits `--data-sources` |
-| `8-account-metrics-new-app/` | 8 | Current synthetic | green | Zero apps → create-new-app choice, solution question, `pac model create --solution`, new app-id used for upload |
+| `8-account-metrics-new-app/` | 8 | Current synthetic | green | Zero apps → create-new-app choice, solution question, first page uploaded with no app, then `apps.js create --solution --page-id --publish`, which pins the page's tables itself, so no upload follows |
 | `9-project-tracker-new-entities/` | 9 | Current synthetic | green | Two new related tables, auth gate, dependency-ordered provisioning, `$parent`/match sample data, both tables as data sources |
 | `12-account-plan-revision/` | 12 | Current synthetic | green | First plan rejected, revised plan re-presented and approved; page has both search box and filter toolbar |
 | `14-account-list-edit-collision/` | 14 | Current synthetic | green | Colliding file names refused by the Phase 5a gate, re-plan, two parallel builders, Phase 6.5 navigation fix-up |
 | `16-account-list/` | 16 | Current synthetic | green | Minimal single list page over an existing table; code-only, no solution question or auth gate |
+| `1-account-cards-verified-columns/` | 1 | Current synthetic | green | Account card gallery over an existing table; keeps the RuntimeTypes.ts it was written against, so every column its dataApi call names is checked against the schema |
+| `7-job-candidates-verified-columns/` | 7 | Current synthetic | green | Two new related tables (cr_jobrequisition, cr_candidate with a lookup and a status choice), auth gate, dependency-ordered provisioning, `$parent`/match sample data; keeps the RuntimeTypes.ts it generated, so the page's columns are checked against the schema |
+| `26-customer-lookup/` | 26 | Current synthetic | green | An opportunity's Customer (account or contact) normalized to its own table before it is opened, filtered by or written (the page's lookup code is not graded); the account-scope question asked with no default and its answer recorded as a user-confirmed assumption before approval; the lookup records built from the saved `get-lookup-metadata.js` read, typed in RuntimeTypes.ts and gated with `--require-observed-lookups`; synthetic customer values in `lookup-rows.json` |
+| `27-page-error-helper/` | 27 | Current synthetic | green | A newly authored plan with its assumptions, verified against the approved preview with `--require-assumptions`; its page follows the page error teaching — a cached list read, an awaited record read and a Custom API Action reporting through the canonical reporter inside the boundary — which is not graded |
 
 Historical captures remain compatibility/parser evidence, not proof of today's
 file transport, binding preservation or full skill compliance. Their current
 plans already contain the Custom API no-bindings section. Capture-local READMEs
 can contain capture-era counts/claims; the inventory above is the current roster.
+
+Historical captures also record the `pac model list-tables`, `pac model list`,
+`pac model list-languages`, `pac model create` and raw `pac model genpage upload`
+commands that the plugin's own scripts (`list-tables.js`, `apps.js`,
+`list-languages.js`, `genpage-upload.js`) have since replaced. They are not
+rewritten — a captured transcript is evidence of what ran — and the graders
+still read those forms. The current synthetic fixtures record the scripts and the
+JSON they print.
 
 Expected failures belong in discriminating scorer unit tests, or in an explicit
 refusal/recovery trace that satisfies its declared outcome. The corpus is never

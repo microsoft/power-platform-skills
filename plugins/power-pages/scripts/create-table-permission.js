@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
-// Creates a table permission YAML file for Power Pages code sites.
-// Generates UUID, validates inputs, writes correctly-formatted YAML in code site git format.
+// Creates a table permission YAML file for Power Pages SPA or non-SPA sites.
+// Generates UUID, validates inputs, writes correctly-formatted YAML in SPA site git format.
 //
 // Usage:
 //   node create-table-permission.js --projectRoot <path> --permissionName <string> --tableName <string>
@@ -20,6 +20,10 @@ const fs = require('fs');
 const path = require('path');
 const generateUuid = require('./generate-uuid');
 const { loadTablePermissions, TABLE_PERMISSION_FILE_SUFFIX } = require('./lib/powerpages-config');
+const {
+  detectMetadataLayout,
+  normalizeTablePermission,
+} = require('./lib/non-spa-metadata');
 
 // --- CLI arg parsing ---
 
@@ -148,16 +152,23 @@ if ((scopeCode === 756150000 || scopeCode === 756150004) &&
 }
 
 // Validate target directory
-const tablePermissionsDir = path.join(projectRoot, '.powerpages-site', 'table-permissions');
-if (!fs.existsSync(tablePermissionsDir)) {
-  console.error(`Error: Table permissions directory not found at ${tablePermissionsDir}`);
-  console.error('The site must be deployed at least once before table permissions can be created.');
+let layout;
+try {
+  layout = detectMetadataLayout(projectRoot);
+} catch (error) {
+  console.error(`Error: ${error.message}`);
+  process.exit(1);
+}
+const tablePermissionsDir = layout.tablePermissions.directory;
+if (!tablePermissionsDir || !fs.existsSync(tablePermissionsDir)) {
+  console.error(`Error: Table permissions directory not found for project root ${projectRoot}`);
+  console.error('The site must have downloaded or deployed Power Pages metadata before table permissions can be created.');
   process.exit(1);
 }
 
 let existingPermissions;
 try {
-  existingPermissions = loadTablePermissions(tablePermissionsDir);
+  existingPermissions = loadTablePermissions(tablePermissionsDir).map(normalizeTablePermission);
 } catch (error) {
   console.error(`Error: Failed to read existing table permissions. ${error.message}`);
   process.exit(1);
@@ -193,33 +204,42 @@ if (scopeCode === 756150003) {
 
 const uuid = generateUuid();
 
+// PAC declarative downloads use adx-prefixed fields even when the site uses
+// the enhanced Dataverse data model. SPA sites retain the established
+// normalized git schema.
+const prefix = layout.tablePermissions.fieldFormat === 'adx' ? 'adx_' : '';
+const field = name => `${prefix}${name}`;
+const idField = layout.tablePermissions.fieldFormat === 'adx'
+  ? 'adx_entitypermissionid'
+  : 'id';
+
 // Build fields object (alphabetically sorted keys)
 const fields = {};
 fields['adx_entitypermission_webrole'] = null; // special array handling
-fields['append'] = hasFlag('append');
-fields['appendto'] = hasFlag('appendto');
-fields['create'] = hasFlag('create');
-fields['delete'] = hasFlag('delete');
-fields['entitylogicalname'] = tableName;
-fields['entityname'] = permissionName;
-fields['id'] = uuid;
+fields[field('append')] = hasFlag('append');
+fields[field('appendto')] = hasFlag('appendto');
+fields[field('create')] = hasFlag('create');
+fields[field('delete')] = hasFlag('delete');
+fields[field('entitylogicalname')] = tableName;
+fields[field('entityname')] = permissionName;
+fields[idField] = uuid;
 
 if (scopeCode === 756150003) {
-  fields['parententitypermission'] = parentPermissionId;
-  fields['parentrelationship'] = parentRelationshipName;
+  fields[field('parententitypermission')] = parentPermissionId;
+  fields[field('parentrelationship')] = parentRelationshipName;
 }
 
 if (scopeCode === 756150001) {
-  fields['contactrelationship'] = contactRelationshipName;
+  fields[field('contactrelationship')] = contactRelationshipName;
 }
 
 if (scopeCode === 756150002) {
-  fields['accountrelationship'] = accountRelationshipName;
+  fields[field('accountrelationship')] = accountRelationshipName;
 }
 
-fields['read'] = hasFlag('read');
-fields['scope'] = scopeCode;
-fields['write'] = hasFlag('write');
+fields[field('read')] = hasFlag('read');
+fields[field('scope')] = scopeCode;
+fields[field('write')] = hasFlag('write');
 
 // Write YAML with alphabetically sorted keys
 // Special handling for adx_entitypermission_webrole (array with - prefix items)
@@ -248,5 +268,9 @@ const filePath = path.join(tablePermissionsDir, fileName);
 
 fs.writeFileSync(filePath, yamlContent, 'utf8');
 
-const result = { id: uuid, filePath: filePath };
+const result = {
+  id: uuid,
+  filePath: filePath,
+  fieldFormat: layout.tablePermissions.fieldFormat,
+};
 process.stdout.write(JSON.stringify(result));

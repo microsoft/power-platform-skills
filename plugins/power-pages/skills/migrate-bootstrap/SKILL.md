@@ -1,12 +1,12 @@
 ---
 name: migrate-bootstrap
 description: >-
-  Migrates a traditional Power Pages site from Bootstrap 3 to Bootstrap 5. Downloads the
+  Migrates a non-SPA (classic) Power Pages site from Bootstrap 3 to Bootstrap 5. Downloads the
   site, runs the pac pages bootstrap-migrate engine, reviews the change report, applies
   AI-assisted fixes for the residual hierarchy/CSS changes the engine only flags, uploads
   the migrated site (which auto-enables the Bootstrap 5 runtime flag), verifies the flag,
   and validates. Use when the user wants to upgrade an older Bootstrap-3 portal to
-  Bootstrap 5. NOT for code sites (React/Vue/Angular/Astro) — those are never Bootstrap-3.
+  Bootstrap 5. NOT for SPA sites (React/Vue/Angular/Astro) — those are never Bootstrap-3.
 user-invocable: true
 argument-hint: Optional website name or local site folder path
 allowed-tools: Read, Write, Edit, Bash, Grep, Glob, AskUserQuestion, Skill, Task, TaskCreate, TaskUpdate, TaskList
@@ -15,9 +15,9 @@ model: opus
 
 > **Plugin check**: Run `node "${PLUGIN_ROOT}/scripts/check-version.js"` — if it outputs a message, show it to the user before proceeding.
 
-# Migrate a Traditional Power Pages Site from Bootstrap 3 to Bootstrap 5
+# Migrate a Non-SPA Power Pages Site from Bootstrap 3 to Bootstrap 5
 
-Guide the user through migrating a **traditional / native** Power Pages site from Bootstrap 3
+Guide the user through migrating a **non-SPA / native** Power Pages site from Bootstrap 3
 to Bootstrap 5. Follow a systematic approach: verify tooling, acquire and back up the site,
 assess scope, run the `pac pages bootstrap-migrate` engine, review the change report, apply
 the residual fixes the engine can only flag, upload (which auto-enables the runtime flag),
@@ -25,10 +25,10 @@ verify, and validate.
 
 ## Core Principles
 
-- **Traditional sites only**: This skill targets traditional Power Pages sites (Liquid web templates,
+- **Non-SPA sites only**: This skill targets non-SPA Power Pages sites (Liquid web templates,
   `*.webtemplate.source.html`, `*.html/.aspx/.ascx`, `*.css`, `sitesetting.yml`). It does **NOT**
-  apply to code sites (React/Vue/Angular/Astro) — they are never Bootstrap-3-based. If the target
-  is a code site, stop and tell the user this skill doesn't apply.
+  apply to SPA sites (React/Vue/Angular/Astro) — they are never Bootstrap-3-based. If the target
+  is a SPA site, stop and tell the user this skill doesn't apply.
 - **The engine does the bulk; you do the residual**: `pac pages bootstrap-migrate` deterministically
   applies the well-known class renames. The skill's value is assisting with the **hierarchy / CSS
   changes the engine only logs** (see [references/bootstrap-v5-manual-fixes.md](references/bootstrap-v5-manual-fixes.md)).
@@ -99,14 +99,14 @@ and `upload` confirmed available, `PAC_LOG` path captured.
 
 ## Phase 2: Acquire the Site & Back Up
 
-**Goal**: Get a local copy of the traditional site to migrate, and establish a restore point.
+**Goal**: Get a local copy of the non-SPA site to migrate, and establish a restore point.
 
 **Actions**:
 
 ### 2.1 Locate or download the site
 
 - **If the user provided a local site folder path** (or `$ARGUMENTS` names one): verify it exists
-  and looks like a downloaded traditional site (contains `website.yml` and `sitesetting.yml`). Use it
+  and looks like a downloaded non-SPA site (contains `website.yml` and `sitesetting.yml`). Use it
   as `SITE_FOLDER`.
 - **Otherwise**: list available websites and download the chosen one.
 
@@ -126,9 +126,9 @@ and `upload` confirmed available, `PAC_LOG` path captured.
 
   Use the downloaded directory as `SITE_FOLDER`.
 
-> Confirm this is a **traditional** site, not a code site. A code-site project has `powerpages.config.json`
-> and a framework `package.json`; a traditional site has `website.yml`, `sitesetting.yml`, and
-> `*.webtemplate.source.html` files. If it's a code site, stop — this skill does not apply.
+> Confirm this is a **non-SPA** site, not a SPA site. A SPA project has `powerpages.config.json`
+> and a framework `package.json`; a non-SPA site has `website.yml`, `sitesetting.yml`, and
+> `*.webtemplate.source.html` files. If it's a SPA site, stop — this skill does not apply.
 
 ### 2.2 Confirm the site is ACTIVATED (not just a website record)
 
@@ -179,7 +179,7 @@ git init -q && git add -A && git commit -q -m "Pre-migration snapshot (Bootstrap
 If the folder is already a git repo, just commit any pending changes so the pre-migration state
 is captured.
 
-**Output**: `SITE_FOLDER` resolved, confirmed traditional, source snapshot committed.
+**Output**: `SITE_FOLDER` resolved, confirmed non-SPA, source snapshot committed.
 
 ---
 
@@ -326,12 +326,12 @@ Bootstrap 5 runtime."). On consent:
 pac pages upload --path "<MIGRATED_FOLDER>"
 ```
 
-Leave `--modelVersion` at its default (`Standard`) for a traditional site. `pac pages upload` uploads the
+Leave `--modelVersion` at its default (`Standard`) for a non-SPA site. `pac pages upload` uploads the
 content **and** auto-flips the server-side Bootstrap 5 flag via its post-processor (triggered by the
 `Site/BootstrapV5Enabled=true` setting).
 
-> Use `pac pages upload` — **not** `upload-code-site` (that is the code-site path and will corrupt a
-> traditional site).
+> Use `pac pages upload` — **not** `upload-code-site` (that is the SPA path and will corrupt a
+> non-SPA site).
 
 ### 7.3 Verify the flag flip (mandatory)
 
@@ -377,8 +377,8 @@ restart.
    panels/cards, forms, pagination) for layout regressions introduced by the migration.
 3. **Record skill usage** — follow `${PLUGIN_ROOT}/references/skill-tracking-reference.md`, passing
    `--projectRoot "<MIGRATED_FOLDER>"` (the folder containing `powerpages.config.json`) and
-   `--skillName "MigrateBootstrap"`. Tracking only writes when the project is a **code site**
-   (`.powerpages-site/site-settings/` exists); for a traditional/native download the script exits
+   `--skillName "MigrateBootstrap"`. Tracking only writes when the project is a **SPA site**
+   (`.powerpages-site/site-settings/` exists); for a non-SPA/native download the script exits
    silently as a no-op — that is expected, so call it unconditionally and don't treat the no-op as an
    error. If tracking files are written, include them in the final commit.
 4. **Summary** — present:
@@ -406,7 +406,7 @@ restart.
 ### Key Decision Points (Wait for User)
 
 1. Phase 1: If not authenticated, get environment URL; confirm/switch target environment.
-2. Phase 2: If multiple sites, which website to download; confirm traditional (not code) site.
+2. Phase 2: If multiple sites, which website to download; confirm non-SPA (not code) site.
 3. Phase 4: Consent to run the migration engine.
 4. Phase 6: Per-category consent before applying residual fixes.
 5. Phase 7: Final consent before uploading (outward-facing).
@@ -418,7 +418,7 @@ Before starting Phase 1, create a task list with all phases using `TaskCreate`:
 | Task subject | activeForm | Description |
 |-------------|------------|-------------|
 | Verify prerequisites | Verifying prerequisites | PAC CLI, auth, environment, and command availability (`bootstrap-migrate`, `upload`) |
-| Acquire site and back up | Acquiring site | Download/locate the traditional site; snapshot the source |
+| Acquire site and back up | Acquiring site | Download/locate the non-SPA site; snapshot the source |
 | Pre-migration assessment | Assessing scope | Inventory Bootstrap-3 usage; flag custom CSS / Liquid risk |
 | Run migration engine | Running migration | `pac pages bootstrap-migrate` → `<folder>V5` |
 | Review change report | Reviewing report | Parse `logs.txt`; group auto-applied vs hierarchy/manual |

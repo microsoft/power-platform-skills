@@ -1,6 +1,6 @@
 "use strict";
 
-// Detects which SPA framework a Power Pages **code site** is built with, for
+// Detects which SPA framework a Power Pages **SPA site** is built with, for
 // telemetry only (emitted inside the dynamic `eventInfo` column — see
 // shared/telemetry/README.md "What is sent").
 //
@@ -11,8 +11,8 @@
 const fs = require("node:fs");
 const path = require("node:path");
 
-// `powerpages.config.json` means "Power Pages code site". `.powerpages-site/`
-// marks a declarative design-studio site from `pac pages download`; it has no
+// `powerpages.config.json` means "Power Pages SPA site". `.powerpages-site/`
+// marks a non-SPA Design Studio site from `pac pages download`; it has no
 // SPA framework, but still matters as a site boundary and when deciding whether
 // a child workspace identifies exactly one site.
 const CONFIG_MARKER = "powerpages.config.json";
@@ -52,7 +52,7 @@ function readJson(filePath) {
   }
 }
 
-// A code-site marker is trusted only when it is a regular file containing a
+// A SPA marker is trusted only when it is a regular file containing a
 // JSON object. `existsSync` alone also accepts directories, and malformed JSON
 // must stop attribution rather than allowing an enclosing/adjacent site to win.
 function configMarkerState(dir) {
@@ -70,10 +70,10 @@ function configMarkerState(dir) {
 }
 
 /**
- * Resolves the root of the Power Pages code site containing `startDir`.
+ * Resolves the root of the Power Pages SPA site containing `startDir`.
  *
  * Same two-phase shape as `validation-helpers.findProjectRoot` — walk UP, then
- * scan ONE level of immediate children. Declarative markers do not produce a
+ * scan ONE level of immediate children. Non-SPA markers do not produce a
  * framework, but they stop an upward walk and participate in child ambiguity.
  *
  * The child scan is not optional polish: `create-site`'s recommended target
@@ -94,8 +94,8 @@ function findCodeSiteRoot(startDir) {
     const markerState = configMarkerState(current);
     if (markerState === MARKER_VALID) return current;
     if (markerState === MARKER_INVALID) return null;
-    // A nearer declarative site is the project under work. Continuing upward
-    // could incorrectly attribute an enclosing code site's framework.
+    // A nearer non-SPA site is the project under work. Continuing upward
+    // could incorrectly attribute an enclosing SPA site's framework.
     if (fs.existsSync(path.join(current, DECLARATIVE_MARKER))) return null;
     const parent = path.dirname(current);
     if (parent === current) break;
@@ -103,8 +103,8 @@ function findCodeSiteRoot(startDir) {
   }
 
   // A first-hit helper is correct for project discovery but not telemetry
-  // attribution. Count code and declarative children in one pass; exactly one
-  // total site must exist, and it must be a code site.
+  // attribution. Count SPA and non-SPA children in one pass; exactly one
+  // total site must exist, and it must be a SPA site.
   let childRoot = null;
   let siteCount = 0;
   try {
@@ -119,10 +119,10 @@ function findCodeSiteRoot(startDir) {
       const candidate = path.join(startDir, entry.name);
       const markerState = configMarkerState(candidate);
       const hasCodeMarker = markerState !== MARKER_ABSENT;
-      const isDeclarativeSite = fs.existsSync(
+      const isNonSpaSite = fs.existsSync(
         path.join(candidate, DECLARATIVE_MARKER)
       );
-      if (!hasCodeMarker && !isDeclarativeSite) continue;
+      if (!hasCodeMarker && !isNonSpaSite) continue;
       siteCount += 1;
       if (siteCount > 1) return null;
       childRoot = markerState === MARKER_VALID ? candidate : null;
@@ -134,14 +134,14 @@ function findCodeSiteRoot(startDir) {
 }
 
 /**
- * Resolves the framework of the Power Pages code site containing `startDir`.
+ * Resolves the framework of the Power Pages SPA site containing `startDir`.
  *
  * Known limitation: a site scaffolded into an unrelated absolute path ("Any
  * other directory") is unreachable from cwd and reports null.
  *
  * @param {string} startDir - Directory to resolve from (the hook's cwd).
  * @returns {"astro"|"angular"|"vue"|"react"|null} null when `startDir` is not
- *   inside a Power Pages code site, or the framework is not recognized.
+ *   inside a Power Pages SPA site, or the framework is not recognized.
  */
 function detectSiteFramework(startDir) {
   try {

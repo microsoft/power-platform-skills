@@ -4,6 +4,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { parseArgs, validateFlags } = require('./lib/dataverse-auth.js');
+const { makeWritesBlocking } = require('./lib/output-redaction.js');
 const { loadMatrix } = require('./lib/pcf-matrix.js');
 const { parseManifest, lintManifest, diffManifests, findManifests } = require('./lib/pcf-manifest.js');
 const { booleanFlagError } = require('./lib/pcf-cli-flags.js');
@@ -88,11 +89,15 @@ function parseFile(file) {
 }
 
 function usage(message) {
+  makeWritesBlocking(process.stdout, process.stderr);
   process.stderr.write(`✗ ${message}\n${USAGE}\n`);
   process.exit(1);
 }
 
 function emitJson(ok, payload) {
+  // The findings of every manifest under a folder can be a long text, and the process exits right after printing them: blocking writes
+  // put the whole text in the pipe first (on Linux and macOS a pipe's writes are queued, and process.exit does not wait for them — lib/output-redaction.js).
+  makeWritesBlocking(process.stdout, process.stderr);
   process.stdout.write(JSON.stringify(payload) + '\n');
   if (!ok) process.stderr.write(`${payload.error || 'PCF manifest lint failed; see stdout JSON'}\n`);
   process.exit(ok ? 0 : 1);
@@ -101,6 +106,7 @@ function emitJson(ok, payload) {
 if (require.main === module) {
   main().catch((err) => {
     const payload = { ok: false, error: String(err && err.message ? err.message : err) };
+    makeWritesBlocking(process.stdout, process.stderr);
     process.stdout.write(`${JSON.stringify(payload)}\n`);
     process.stderr.write(`${payload.error}\n`);
     process.exit(1);

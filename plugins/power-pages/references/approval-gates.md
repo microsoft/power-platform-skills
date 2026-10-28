@@ -1,12 +1,12 @@
 # Approval Gates — Power Pages Skill Catalog (v3)
 
-> **Status: v3 — extended to non-ALM skills.** v2 introduced the marker/lint design and catalogued the 12 ALM skills (§6.1–§6.12). v3 extends coverage to the 12 non-ALM skills (§6.13–§6.24), flips lint severity from warn-only to hard-fail across the plugin, and updates `AGENTS.md` so any new skill must add its gates here in the same PR.
+> **Status: v3 — extended to non-ALM skills.** v2 introduced the marker/lint design and catalogued the 12 ALM skills (§6.1–§6.12). v3 extends coverage to non-ALM skills as well (currently catalogued through §6.35), flips lint severity from warn-only to hard-fail across the plugin, and updates `AGENTS.md` so any new skill must add its gates here in the same PR.
 >
-> **Scope: all power-pages skills.** §6 enumerates every `AskUserQuestion` across the catalogued user-invocable skills. `report-issue` is a cross-plugin shared workflow — its wrapper SKILL.md contains no prompts (the workflow file at `shared/skills/report-issue/report-issue-workflow.md` lives outside the per-plugin lint scope) and is excluded from this catalog.
+> **Scope: Power Pages skills and reference workflows.** §6 enumerates every `AskUserQuestion` prompt in the per-plugin lint scope. `report-issue` delegates to its bundled cross-plugin shared workflow, whose prompts remain outside this catalog's lint scope.
 >
-> **Markers applied across all SKILL.md files.** Each gate has both a machine-readable `<!-- gate: ID | category=X | cancel-leaves=Y -->` HTML comment and a human-readable `> 🚦 **Gate (...)**` block. Each pure data-gathering prompt has a `<!-- not-a-gate: <reason> -->` comment.
+> **Markers belong to the authoritative workflow.** Each gate has both a machine-readable `<!-- gate: ID | category=X | cancel-leaves=Y -->` HTML comment and a human-readable `> 🚦 **Gate (...)**` block in its skill or `references/*-workflow.md`. Each pure data-gathering prompt has a `<!-- not-a-gate: <reason> -->` comment.
 >
-> **Lint is hard-fail for every skill.** `scripts/lint-skills-alm.js` enforces seven gate-related rules at error severity on every SKILL.md under `plugins/power-pages/skills/`: `GATE-must-have-marker`, `GATE-id-must-be-unique`, `GATE-must-be-in-catalog`, `GATE-intent-must-call-helper`, `GATE-cancel-leaves-known-vocab`, `GATE-prose-block-required` (the marker must be followed by a 🚦 prose block within 10 lines, outside any code fence), and `CATALOG-row-must-have-marker` (every `kind: gate` catalog row must have a corresponding marker in some SKILL.md — the reverse of `GATE-must-be-in-catalog`).
+> **Lint is hard-fail for skills and reference workflows.** `scripts/lint-skills-alm.js` enforces seven gate-related rules at error severity on every SKILL.md and `references/*-workflow.md` under `plugins/power-pages/skills/`: `GATE-must-have-marker`, `GATE-id-must-be-unique`, `GATE-must-be-in-catalog`, `GATE-intent-must-call-helper`, `GATE-cancel-leaves-known-vocab`, `GATE-prose-block-required` (the marker must be followed by a 🚦 prose block within 10 lines, outside any code fence), and `CATALOG-row-must-have-marker` (every `kind: gate` catalog row must have a corresponding marker in an authoritative workflow — the reverse of `GATE-must-be-in-catalog`).
 
 ---
 
@@ -129,10 +129,10 @@ The default behavior **per category** when a gate is inside a loop:
 | `final` | **PER ITERATION, full stop.** The whole point of `final` is "fire immediately before the destructive call." If the destructive call runs `N` times in a loop, the gate fires `N` times. | Hard rule — never override. |
 | `pause` | **Per occurrence of the external pending state.** Polling can re-enter PendingApproval after a retry; each entry gets its own pause prompt. | Not applicable. |
 
-**Required prose in SKILL.md** for any gate that sits inside a loop:
+**Required prose in the owning workflow** for any gate that sits inside a loop:
 
 1. The gate marker block (`> 🚦 **Gate (...)**`) must include an explicit line stating *"Fires PER LOOP ITERATION"* (or equivalent) and naming the loop variable. Example: *"Three solutions in `deploymentOrder` → three Phase 6.0 prompts."*
-2. The loop description elsewhere in the SKILL.md must call out the gate by name in the per-iteration sequence. Example: *"For each entry in `DEPLOYMENT_ORDER`: ... fire Phase 6.0 consent gate ... call `DeployPackageAsync`."*
+2. The loop description elsewhere in the workflow must call out the gate by name in the per-iteration sequence. Example: *"For each entry in `DEPLOYMENT_ORDER`: ... fire Phase 6.0 consent gate ... call `DeployPackageAsync`."*
 3. The marker block must explicitly negate the most common shortcut: *"The upstream Phase 2 stage selection (whether via interactive prompt or `--stage` argument) does NOT cover subsequent iterations."*
 
 **Why prose, not lint?** The lint catches the *presence* of a marker. It cannot prove the agent actually *fired* the `AskUserQuestion` call at runtime. Loop-semantics prose narrows the LLM's interpretation space so the shortcut becomes textually impossible — *"the gate fires N times for N iterations"* leaves no room to read it as *"once is enough"*.
@@ -143,7 +143,7 @@ The default behavior **per category** when a gate is inside a loop:
 
 ## 4. Marker syntax (proposed)
 
-Every gate gets a structural marker in SKILL.md. The marker has two parts: a **machine-readable HTML comment** (lint anchor) and a **human-readable block** (documentation).
+Every gate gets a structural marker in its owning skill or `references/*-workflow.md`. The marker has two parts: a **machine-readable HTML comment** (lint anchor) and a **human-readable block** (documentation).
 
 ### 4.1 The marker
 
@@ -157,7 +157,7 @@ Every gate gets a structural marker in SKILL.md. The marker has two parts: a **m
 > **Cancel leaves:** Explicit state description — either `nothing` (clean exit) or a specific state.
 ```
 
-`skill-name` is kebab-case; `phase-id` matches the SKILL.md phase number (`6.0`, `5.4c`, `q1b`).
+`skill-name` is the kebab-case workflow identifier; `phase-id` matches its phase or step (`6.0`, `5.4c`, `q1b`). Keep existing gate IDs stable when referenced by plans or receipts.
 
 ### 4.2 Pairing rule (replaces v1's "within 10 lines" proximity rule)
 
@@ -176,8 +176,6 @@ Required, normalized vocabulary:
 | Value | Meaning |
 |---|---|
 | `nothing` | Clean exit. No Dataverse write, no filesystem write, no state change anywhere. |
-| `rendered-plan` | A human-readable HTML plan remains under `docs/`; no implementation files, dependencies, or external state changed. |
-| `localized-site-files` | Localization changes remain in the site files but are not deployed. |
 | `validated-stage-run` | A `deploymentstageruns` row remains on the host in validated-but-not-deployed state. |
 | `partial-manifest` | `.solution-manifest.json` written but not all components added to Dataverse. |
 | `partial-solution` | Some components added to Dataverse via `AddSolutionComponent` before Cancel. |
@@ -187,6 +185,7 @@ Required, normalized vocabulary:
 | `cross-host-stamp-moved` | Pattern 15 force-link partially completed. |
 | `external-state-pending` | Skill cancelled while external system (PP Pipelines) was in `PendingApproval` — the run remains on the host in that state. |
 | `invalid-secret-in-file` | `deployment-settings.json` carries Secret values in invalid formats (e.g. `@KeyVault(...)` short-form). Cancel leaves the file as-is so the user can hand-fix with canonical Key Vault URIs. |
+| `local-style-state` | `style-site` retains local review artifacts and any earlier approved or partial local edits/receipt. Before first application only review artifacts exist; cancellation never causes new site edits, rollback, remote writes, or deployment. |
 
 Custom values are allowed when none of the above fits — lint accepts any kebab-case slug but flags duplicate slugs across the catalog for de-duplication.
 
@@ -223,7 +222,7 @@ Use `AskUserQuestion`:
 Add to `scripts/lint-skills-alm.js`:
 
 ### `GATE-must-have-marker`
-Every `AskUserQuestion` block in an ALM SKILL.md must be preceded (within the same phase section) by either:
+Every `AskUserQuestion` block in a skill, `references/*-workflow.md`, or `workflows/*.md` must be preceded (within the same section) by either:
 - A paired `<!-- gate: ID | category=X | cancel-leaves=Y -->` comment, **or**
 - An explicit `<!-- not-a-gate: <reason> -->` comment justifying why.
 
@@ -232,15 +231,15 @@ Pairing is established by section boundary (`### Phase`), not line proximity. Mu
 Waivable via `<!-- alm-lint-ignore: GATE-must-have-marker -->`. Tracked in `.almlintignore` for known exceptions.
 
 ### `GATE-id-must-be-unique`
-The `gate-id` slug must be unique across all SKILL.md files in the plugin.
+The `gate-id` slug must be unique across all skills and reference workflows in the plugin.
 
 ### `GATE-must-be-in-catalog`
-Every `gate-id` in a SKILL.md must appear in §6 of this catalog. Catches drift when a skill adds a gate without documenting it.
+Every `gate-id` in a skill or reference workflow must appear in §6 of this catalog. Catches drift when a skill adds a gate without documenting it.
 
-Strict for ALM skills (hard-fail). Warn-only for non-ALM skills until the catalog is extended to cover them (§10).
+Hard-fail for all skills and reference workflows.
 
 ### `GATE-intent-must-call-helper`
-A marker tagged `category=intent` must be in a SKILL.md section that invokes a known helper script (one of: `check-alm-plan.js`, `verify-alm-prerequisites.js`, `check-activation-status.js`). Prevents `intent` from being abused as a generic "first prompt" label.
+A marker tagged `category=intent` must be in a workflow that invokes a known helper script (one of: `check-alm-plan.js`, `verify-alm-prerequisites.js`, `check-activation-status.js`). Prevents `intent` from being abused as a generic "first prompt" label.
 
 ### `GATE-cancel-leaves-known-vocab`
 The `cancel-leaves=` value must be one of the §4.3 vocabulary entries or a kebab-case slug. Lint flags duplicate slugs across the catalog for de-duplication.
@@ -457,63 +456,81 @@ The single `AskUserQuestion` template fires once per Error finding with `autoFix
 
 ## 7. How to add a new gate
 
-When introducing a gate in an existing or new ALM skill:
+When introducing a gate in an existing or new skill or reference workflow:
 
 1. **Pick the category** from §3. If it doesn't fit, propose a new one — don't shoehorn.
-2. **Pick a gate ID** of the form `skill-name:phase-id` (kebab-case skill name; phase number / step matches the SKILL.md heading).
+2. **Pick a gate ID** of the form `skill-name:phase-id` (kebab-case workflow identifier; phase number / step matches the owning workflow).
 3. **Add a row to the catalog** (§6 table for the owning skill) with `kind`, `category`, `phase`, trigger, question, `cancel-leaves`.
-4. **Add the marker block** in SKILL.md immediately before the (possibly distant) `AskUserQuestion` call. Use both the HTML comment and the human-readable block from §4.1.
-5. **If `category=intent`**, ensure the SKILL.md section invokes a helper script (`GATE-intent-must-call-helper` lint rule).
+4. **Add the marker block** in the owning skill or `references/*-workflow.md` before the `AskUserQuestion` call in the same section. Use both the HTML comment and the human-readable block from §4.1.
+5. **If `category=intent`**, ensure the workflow invokes a helper script (`GATE-intent-must-call-helper` lint rule).
 6. **Run** `node scripts/lint-skills-alm.js`.
 
 When **removing** a gate, also remove its catalog row in the same PR.
 
 ---
 
-### 6.13 `create-site` (24 calls: 15 gates + 9 not-a-gates)
+### 6.13 `create-site` (21 gates)
 
 | ID | Kind | Category | Phase | Trigger / question | Cancel leaves |
 |---|---|---|---|---|---|
-| `create-site:1.purpose` | gate | plan | 1 | Site name, purpose, or audience unclear — path-agnostic discovery prompt | nothing |
-| `create-site:1.5.creation-path` | not-a-gate | - | 1.5 | Route preference before catalog fetch; no project directory, Dataverse write, or durable skill state exists | - |
-| `create-site:1.5.template-choice` | not-a-gate | — | 1.5 | Read-only route selection after template preview; only disposable temp preview files exist, with no project directory, Dataverse write, or durable skill state | — |
-| `create-site:1.5.from-scratch-setup` | not-a-gate | — | 1.5 | Deferred framework and directory data-gathering before any scaffold files are written | — |
-| `create-site:1.5.content-language` | not-a-gate | — | 1.5 | *"Which language should the site content use?"* — offers the Dataverse organization base language as Suggested when available, then validates the single SPA content locale for the from-scratch path; Dataverse and Power Pages system messages remain English | — |
-| `create-site:1.5.confirm-environment` | gate | consent | 1.5 | Target environment resolved from PAC/Azure auth — confirm before any environment preflight or import mutation | template-cache |
-| `create-site:1.5.unblock-js` | gate | consent | 1.5 | Target environment blocks `.js` in `blockedattachments` — remove only `js` before uploading website code | attachment-block-modified |
-| `create-site:1.5.language-requirement` | not-a-gate | - | 1.5 | Route selection after blocking template-declared Dataverse language preflight; no override option exists and no org mutation has happened | - |
-| `create-site:1.5.template-import` | gate | consent | 1.5 | Discovered solutions and website code downloaded and target env resolved — confirm importing required supporting artifacts and creating the code site | template-cache |
-| `create-site:1.5.update-installed` | gate | consent | 1.5 | One discovered solution is installed but the downloaded source is newer — confirm unmanaged update import; fires per matching solution iteration | template-cache |
-| `create-site:1.5.clone-existing` | gate | consent | 1.5 | Every supporting solution is same/newer — confirm skipping all imports and creating a new site from website code | template-cache |
-| `create-site:1.5.pack-failed` | gate | progress | 1.5 | Local validation or `pac solution pack` failed for one discovered solution before its Dataverse import attempt — retry, fall back, or stop; fires per failed solution iteration | template-cache |
-| `create-site:1.5.template-clone-location` | not-a-gate | — | 1.5 | Local destination selection before cloning the template; no directory or environment state changes until the later provisioning step | — |
-| `create-site:1.5.customize-template` | not-a-gate | — | 1.5 | Optional post-live choice to continue editing the local clone used to create the site | — |
-| `create-site:1.5.clone-failed` | gate | progress | 1.5 | Packaged SPA clone, identity inspection, dependency installation, build/output validation, or code-site upload failed - choose retry, from-scratch fallback, or stop | partial-template-clone |
-| `create-site:1.5.reinstall-unknown` | gate | consent | 1.5 | Installed-state detection failed for one discovered solution — confirm whether to import it anyway, start from scratch, or stop; fires per matching solution iteration | template-cache |
-| `create-site:1.5.import-failed` | gate | progress | 1.5 | Import failed or partial — choose retry, from-scratch fallback, or stop; fires per failed solution iteration | partial-unmanaged-template-import |
-| `create-site:1.5.seed-currency` | not-a-gate | - | 1.5 | Read-only seed planning found financial rows — choose an existing active currency with unchanged amounts or skip sample data before background writes | - |
-| `create-site:3.requirements` | gate | plan | 3 | *"Which features? / Aesthetic / Mood / Brand"* - four sub-prompts sharing this gate, plus a free-text brand follow-up (website URL, or colors and logo) when the user has a brand to match; shape the rendered Phase 4 plan | nothing |
-| `create-site:4.7.plan-approval` | gate | plan | 4.7 | Localized HTML plan rendered with agent verification separated from maker review — *"Approve and start building / I'd like to make changes"* | nothing |
+| `create-site:1.purpose` | gate | plan | 1 | Site purpose unclear — multi-question prompt (site name, framework, purpose, audience, location) | nothing |
+| `create-site:1.5.confirm-environment` | gate | consent | 1.5 | Confirm the resolved target environment before template install preflights | template-cache |
+| `create-site:1.5.unblock-js` | gate | consent | 1.5 | Approve removing `.js` from the target environment's blocked attachments before uploading website code | attachment-block-modified |
+| `create-site:1.5.template-import` | gate | consent | 1.5 | Confirm installing the selected template in the current environment | template-cache |
+| `create-site:1.5.update-installed` | gate | consent | 1.5 | Confirm updating each already-installed unmanaged template solution | template-cache |
+| `create-site:1.5.reinstall-unknown` | gate | consent | 1.5 | Installed-solution detection failed; confirm whether to import | template-cache |
+| `create-site:1.5.clone-existing` | gate | consent | 1.5 | Confirm creating a new site while reusing already-installed supporting solutions | template-cache |
+| `create-site:1.5.pack-failed` | gate | progress | 1.5 | Choose how to proceed after preparing the local solution package fails | template-cache |
+| `create-site:1.5.import-failed` | gate | progress | 1.5 | Choose how to proceed after template solution import fails | partial-unmanaged-template-import |
+| `create-site:1.5.clone-failed` | gate | progress | 1.5 | Choose how to proceed after cloning, building, or uploading the packaged template site fails | partial-template-clone |
+| `create-site:3.requirements` | gate | plan | 3 | *"Which features? / Aesthetic / Mood / Brand"* — shared SPA planning prompt, with a brand URL/colors/logo follow-up only when missing; shapes the rendered Phase 4 plan | nothing |
+| `create-site:4.7.plan-approval` | gate | plan | 4.7 | HTML plan rendered — *"Approve and start building / I'd like to make changes"* | nothing |
 | `create-site:5.7.critique-blocked` | gate | progress | 5.7 | A critical design gate still fails after three critique rounds - *"Keep fixing / Continue and record it as a known issue / Stop here"* | nothing |
-| `create-site:5.8.localization` | not-a-gate | — | 5.8 | *"Would you like to add more languages now?"* — selects whether to enter the child localization workflow after implementation and design critique; the child workflow preserves the detected document locale as its source/default and its Phase 3 gate approves every localization write | — |
 | `create-site:7.review` | gate | plan | 7 | Live site ready — *"Would you like any changes?"* | nothing |
-| `create-site:8.deploy` | gate | plan | 8 | *"Deploy now (Recommended) / Skip for now"* — invokes `/deploy-site` on Yes; when `SAMPLE CONTENT` placeholders remain, they are listed first, the question names the count, and Skip becomes the recommended option | nothing |
-
-Template-path note: when Phase 1.5 selects and installs a template, the workflow stops after activation/live preview and does **not** enter the from-scratch Phase 4 plan approval or Phase 8 deploy prompt. Those gates fire only on the from-scratch branch.
+| `create-site:8.deploy` | gate | plan | 8 | *"Deploy now (Recommended) / Skip for now"* — invokes `/deploy-site` on Yes; remaining `SAMPLE CONTENT` is listed and counted first, with Skip recommended | nothing |
+| `create-site:non-spa-1-select-model` | gate | plan | Non-SPA 1 | Confirm Enhanced data model with Bootstrap 5; Standard new-site creation is unavailable | nothing |
+| `create-site:non-spa-1-confirm-environment` | gate | consent | Non-SPA 1 | Confirm the exact Dataverse environment before non-SPA planning or provisioning | nothing |
+| `create-site:non-spa-1-confirm-capability` | gate | progress | Non-SPA 1 | Open the environment's direct admin URL and confirm **Switch to Enhanced Data Model** is on because no public read API exists | nothing |
+| `create-site:non-spa-2-select-template` | gate | plan | Non-SPA 2 | Select an exact supported non-SPA template identifier | nothing |
+| `create-site:non-spa-4-provision` | gate | final | Non-SPA 4 | Final consent immediately before Create Website creates the cloud resource | nothing |
+| `create-site:non-spa-8-customize` | gate | plan | Non-SPA 8 | Verified explicit-model baseline — *"Customize now / Keep the template unchanged"* | non-spa-baseline |
 
 ---
 
-### 6.14 `deploy-site` (8 calls)
+### 6.13.1 `edit-site` (2 calls)
+
+| ID | Kind | Category | Phase | Trigger / question | Cancel leaves |
+|---|---|---|---|---|---|
+| `edit-site:4.approve` | gate | plan | 4 | External review JSON and rendered HTML complete; external images explicitly unverified or supported by successful requested exact-plan checks — *"Approve and customize / Revise plan / Cancel"* | plan-artifacts |
+| `edit-site:7.deploy` | gate | plan | 7 | Verified local customization — *"Deploy now / Keep changes local"* | local-customization |
+
+---
+
+### 6.13.2 `add-localization` (3 gates)
+
+| ID | Kind | Category | Phase | Trigger / question | Cancel leaves |
+|---|---|---|---|---|---|
+| `add-localization:3.plan-approval` | gate | plan | 3 | Approve the complete localization delta before dependencies or site files change | rendered-plan |
+| `add-localization:7.review` | gate | plan | 7 | Accept the verified localization result or request a focused revision | localized-site-files |
+| `add-localization:8.deploy` | gate | plan | 8 | Choose whether to deploy after a standalone localization run | localized-site-files |
+
+---
+
+### 6.14 `deploy-site` (13 calls)
 
 | ID | Kind | Category | Phase | Trigger / question | Cancel leaves |
 |---|---|---|---|---|---|
 | `deploy-site:2.auth-url` | not-a-gate | — | 2 | Free-text env URL when PAC CLI not authenticated — data-gathering | — |
+| `deploy-site:0.project-type` | gate | plan | 0 | Multiple/mixed SPA and non-SPA candidates — select the exact project and type | nothing |
 | `deploy-site:3.confirm-env` | gate | consent | 3 | Echoes current env — *"Deploy to this environment? Yes / No, choose different"*. Covers the follow-up "pick different env" sub-prompt at the same step (single section, paired by marker proximity). Wrong-env deploy is destructive — confirmation is mandatory. | nothing |
+| `deploy-site:non-spa-3.confirm-env` | gate | consent | Non-SPA 3 | Confirm the exact target environment before querying and uploading the non-SPA site; repeat after switching environments | nothing |
 | `deploy-site:4.1.multi-project` | gate | plan | 4.1 | Multiple `powerpages.config.json` candidates found — *"Which project to deploy?"* | nothing |
 | `deploy-site:4.2.audit-permissions` | gate | plan | 4.2 | Re-deployment detected (`.powerpages-site` exists) — *"Run permissions audit first / Skip"* | nothing |
 | `deploy-site:5.5.1.activate` | gate | plan | 5.5.1 | Site not yet activated — *"Activate now / Skip"* | nothing |
 | `deploy-site:5.6.restart-cache` | gate | plan | 5.6 | Site activated — *"Restart site to flush cache? (brief downtime) / Skip"* | nothing |
 | `deploy-site:6.2.unblock-js` | gate | consent | 6.2 | Upload failed because `.js` is blocked — *"Remove .js block from `blockedattachments`? / No"*. Modifies tenant-wide env setting — destructive shared state. | `attachment-block-modified` |
+| `deploy-site:non-spa-4.permissions-audit` | gate | plan | Non-SPA 4 | Permission-sensitive Form/List/Liquid/Web API/settings/role/permission/page-rule diff — *"Run permissions audit / Continue without audit / Cancel"* | local-customization |
+| `deploy-site:non-spa-5.upload` | gate | final | Non-SPA 5 | Exact root/environment/deployment mode/website/model/diff confirmed — *"Upload changes" or "Create and upload" / Review again / Cancel* | local-customization |
 
 ---
 
@@ -568,7 +585,7 @@ Template-path note: when Phase 1.5 selects and installs a template, the workflow
 
 | ID | Kind | Category | Phase | Trigger / question | Cancel leaves |
 |---|---|---|---|---|---|
-| `integrate-webapi:3.2.confirm-tables` | gate | plan | 3.2 | *"Which tables to integrate? All / Let me select / Add more"* | nothing |
+| `integrate-webapi:3.2.confirm-tables` | gate | plan | 3.2 | SPA: *"Which tables to integrate? All / Let me select / Add more"*; Non-SPA: approve the focused plan or select discovered native/Web API opportunities | nothing |
 | `integrate-webapi:6.1.deploy-first` | gate | plan | 6.1 | `.powerpages-site` missing — *"Deploy now (Recommended) / Skip permissions setup"* | nothing |
 | `integrate-webapi:6.2.permissions-source` | gate | plan | 6.2 | *"Upload existing diagram / Let architects figure it out"* | nothing |
 | `integrate-webapi:6.2.permissions-approval` | gate | plan | 6.2 (Path A) | Parsed permissions plan rendered — *"Approve and create files / Request changes / Cancel"* | nothing |
@@ -618,7 +635,7 @@ Template-path note: when Phase 1.5 selects and installs a template, the workflow
 
 | ID | Kind | Category | Phase | Trigger / question | Cancel leaves |
 |---|---|---|---|---|---|
-| `audit-permissions:6.fix-offer` | gate | plan | 8 | Audit complete — *"Would you like me to fix any of these issues? Yes / No"* — declining leaves the audit report untouched; accepting routes to the table-permissions-architect agent | nothing |
+| `audit-permissions:6.fix-offer` | gate | plan | 6 | Audit complete — *"Would you like me to fix any of these issues? Yes / No"* — declining leaves the audit report untouched; accepting routes supported permission fixes to the table-permissions architect and unsupported standard/native metadata changes to an exact maker handoff | nothing |
 
 ---
 
@@ -710,7 +727,7 @@ New skill (Power Pages source & dependency security scan). Runs local static ana
 
 ### 6.31 `migrate-bootstrap` (6 calls / 5 gates + 1 sub-prompt)
 
-New skill (migrates a traditional Power Pages site from Bootstrap 3 to Bootstrap 5). The engine does the bulk class renames; the skill assists with residual hierarchy/CSS fixes, then uploads (which auto-flips the runtime flag).
+New skill (migrates a non-SPA Power Pages site from Bootstrap 3 to Bootstrap 5). The engine does the bulk class renames; the skill assists with residual hierarchy/CSS fixes, then uploads (which auto-flips the runtime flag).
 
 | ID | Kind | Category | Phase | Trigger / question | Cancel leaves |
 |---|---|---|---|---|---|
@@ -724,7 +741,7 @@ New skill (migrates a traditional Power Pages site from Bootstrap 3 to Bootstrap
 
 ### 6.32 `migrate-webapi-selectall` (6 calls / 5 gates + 1 sub-prompt)
 
-Reviews traditional and SPA sites for deprecated Web API wildcard fields settings, derives least-privilege columns from every call chain, and applies only a complete approved migration.
+Reviews non-SPA and SPA sites for deprecated Web API wildcard fields settings, derives least-privilege columns from every call chain, and applies only a complete approved migration.
 
 | ID | Kind | Category | Phase | Trigger / question | Cancel leaves |
 |---|---|---|---|---|---|
@@ -737,36 +754,49 @@ Reviews traditional and SPA sites for deprecated Web API wildcard fields setting
 
 ---
 
-### 6.33 `exceptional-web-design` (2 calls / 2 sub-prompts)
+### 6.33 Classic styling workflow (4 gate IDs + 1 data-gathering prompt)
 
-Read-only design review of an existing site from a URL or a project folder. It runs nothing in the project and writes nothing to it, so no prompt can leave state behind and none is a gate.
+Non-SPA site styling through `edit-site` and `skills/edit-site/references/style-site-workflow.md`, in a local VS Code Desktop workspace. Visible progress is Inspect/propose → Approve → Apply → Independently verify → Report, without mandatory phase tasks or final-completion confirmation. The small-change route reviews scope with exact-hash approval; only expanded/ambiguous work asks initial scope confirmation. Review the exact diff/instructions/warnings without HTML generation or browser review; only the host question tool can approve the exact proposal hash. Runtime consent is separate. Repeated revisions do not inherit approval, including unattended runs.
+
+Local authoring is the default for listed and unlisted Studio properties; the Design-panel map describes availability, not exclusive ownership. Small changes may be inline-only, stylesheet-only or inline+CSS on the selected locale, with the existing 3-component/10-group limits and at most one existing stylesheet. Shared-template inline changes require site scope, potentially every page, and expanded review. Preserve unlisted/unknown/conditional support warnings at review, approval and final report. Reserve `owner: "studio"` for explicitly requested instructions-only work with `handoffReason: "user-requested"` and `studioAction`; native support alone is not a reason. Ambiguous/unrepresentable/generated-source local work is blocked with a specific local next step, not a successful zero-write handoff. Legacy zero-write requests without the reason require regeneration and new approval; never hand-edit plans or inherit consent.
+
+General CSS declarations/raw stylesheets use pinned bundled structural parsing, not a property/gradient/part allowlist. Retain semantic-parser warnings separately from Studio warnings; fix invalid values or verify newer browser support before approval. Parser acceptance is not live rendering proof. **Every raw `style.css` requires expanded review**, including scoped selectors/conditions/global definitions, as do `global: true`, nonempty `externalResources` or `importantReason`. Ordinary broad declarations remain eligible for small changes. Disclose all global matching elements/shared names within page/site/section scope; source-free global themes need no fictitious hooks. Review URLs, CSP/availability/licensing/privacy and import placement; hash-bound warnings are not fetch permission. A reason or raw CSS cannot bypass inline/source conflicts. No new gate, browser prerequisite or inherited approval is introduced.
 
 | ID | Kind | Category | Phase | Trigger / question | Cancel leaves |
 |---|---|---|---|---|---|
-| Step 1 site prompt | sub-prompt | — | 1 | *"Which site should I review?"* - asked only when the request names no URL and no `powerpages.config.json` is found. Data-gathering. | nothing |
-| Step 2 URL prompt | sub-prompt | — | 2 | Folder without a URL - *"I'll paste a URL / Review the code only"*. Asks where the site runs (the deployed site, or a dev server the user starts); the skill starts nothing. Data-gathering. | nothing |
+| Inspect: site/page/work directory/runtime URL/appearance | sub-prompt | — | Inspect | Resolves only missing or ambiguous identity, external artifact directory, runtime URL, component/appearance/locale requirements. Grants no write or navigation authority. | Existing local files unchanged |
+| `style-site:2.runtime` | gate | progress | 2 | **Inspect this runtime page / Continue offline / Cancel** — approves opening/scoped structural inspection of the exact URL. Repeat for changed URL, redirects, signed-in context, or scope. Normal page scripts/requests run; no agent-initiated form actions, authentication, crawling or remote authoring. | local-style-state |
+| `style-site:3.scope` | gate | plan | 3 | **Confirm scope and prepare / Revise scope / Cancel** — conditional on expanded/ambiguous ownership, placement, locale, or affected pages/descendants; repeat for changes to that expanded scope. Small changes review scope at `5.approve`. If the coordinator expands the route, resolve this gate before presenting its proposal for approval; not apply consent. | local-style-state |
+| `style-site:5.approve` | gate | plan | 5 | **Approve this revision locally / Revise proposal / Cancel** — approves the exact diff, scope, warnings, and hash **per revision**. Only for explicitly requested instructions-only work: **Approve Studio handoff only**; no local styling application. | local-style-state |
+| `style-site:6.reapprove` | gate | progress | 6 | **Regenerate and review / Keep current local state and stop** — fires **per occurrence** of input/selection/target drift or partial-write failure. Return through preparation/diff review and `style-site:5.approve` for the new hash; this answer does not authorize a changed patch. | local-style-state |
+
+On the first pass, cancellation before application leaves at most inspection/proposal/review artifacts outside the site tree. After an application or partial failure, preserve and report exact current local state plus receipt/recovery evidence; never reset or silently roll back concurrent edits. After verified local or explicitly requested instructions-only completion, report without another confirmation; the entry skill records successful usage once, preserving the supported-directory no-op, existing counters and separate tracking diffs. Canceled drafts and blocked local work do not count as successful completion. Runtime/Studio visual/editing round trips remain pending; no preview or deployment is initiated. No branch initiates remote authoring or submission actions. Optional approved runtime navigation executes the portal's normal scripts/requests and can retain browser/application-defined state; explain that before inspection. If the host cannot obtain explicit approval, keep a draft and stop.
 
 ---
 
-### 6.34 `add-localization` (12 calls)
+### 6.34 `exceptional-web-design` (2 SPA / 2 non-SPA sub-prompts; routes are exclusive)
 
-Adds or extends localization for React, Vue, Angular, and Astro code-site SPAs.
-Most prompts gather validated configuration before the Phase 3 plan gate.
+Separately requested read-only design review. The existing SPA/unspecified-URL workflow remains unchanged; identified non-SPA sites use `workflows/non-spa-site.md` instead, not in addition. It runs no project code, changes no site files, and grants no write consent. The prompts only resolve the target and evidence mode; they are not gates. URL navigation still runs normal site scripts/requests. The non-SPA route is not `style-site:2.runtime` structural discovery or permission to deploy.
 
 | ID | Kind | Category | Phase | Trigger / question | Cancel leaves |
 |---|---|---|---|---|---|
-| `add-localization:1.framework` | not-a-gate | — | 1 | Conflicting framework evidence — choose an evidence-backed candidate or stop for manual framework-configuration repair | — |
-| `add-localization:1.existing-action` | not-a-gate | — | 1 | Existing setup — add languages, repair/reconfigure, or stop | — |
-| `add-localization:2.languages` | not-a-gate | — | 2.1 | Enter locales; invalid tags are rejected and canonicalization/duplicates are shown | — |
-| `add-localization:2.default` | not-a-gate | — | 2.2 | Select exactly one validated default locale when required | — |
-| `add-localization:2.mode` | not-a-gate | — | 2.3 | Angular only — official static localization or runtime Transloco | — |
-| `add-localization:2.package` | not-a-gate | — | 2.4 | Use recommendation, propose a validated alternative, or cancel | — |
-| `add-localization:2.prerelease` | not-a-gate | — | 2.4 | Explicitly acknowledge an npm prerelease before it may enter the plan | — |
-| `add-localization:2.license-review` | not-a-gate | — | 2.4 | Use the recommendation, explicitly accept the reported package license, or cancel | — |
-| `add-localization:2.translation` | not-a-gate | — | 2.5 | Agent-generated translations, blank targets, or cancel | — |
-| `add-localization:3.plan-approval` | gate | plan | 3 | Review the opened source-language `docs/add-localization-plan*.html`, then approve the exact package/mode/locale/file delta before installation or edits | rendered-plan |
-| `add-localization:7.review` | gate | plan | 7 | Accept verified localization or request revisions | localized-site-files |
-| `add-localization:8.deploy` | gate | plan | 8 | Direct invocation only — deploy now or skip; create-site child invocation suppresses this prompt | localized-site-files |
+| SPA step 1 site prompt | sub-prompt | — | 1 | *"Which site should I review?"* - asked when no URL/folder or code config is found; existing data-gathering behavior. | nothing |
+| SPA step 2 URL prompt | sub-prompt | — | 2 | Folder without a URL - *"I'll paste a URL (Recommended) / Review the code only"*. The user may supply a dev-server URL; the skill starts nothing. | nothing |
+| Non-SPA step 1 target prompt | sub-prompt | — | 1 | Resolves the selected native site/locale only when missing or ambiguous; reuses known `.portalconfig`/`website.yml` identity. | nothing |
+| Non-SPA step 2 evidence prompt | sub-prompt | — | 2 | *"I'll paste a URL / Review the source only"*. Skipped for an already supplied URL or explicit source-only request; no server, authentication, deployment, or Studio action starts. | nothing |
+
+---
+
+### 6.35 `analyze-performance` (1 loop-style gate + 1 plan gate)
+
+Static performance-analysis skill. Scans the local codebase for performance anti-patterns (FetchXML/Web API over-fetching, disabled output caching, tracking, volume/asset issues), reports them, and offers safe auto-fixes with per-fix consent. Read-only until the Phase 4 loop, which mutates only the site-setting/tracking findings the user explicitly approves.
+
+| ID | Kind | Category | Phase | Trigger / question | Cancel leaves |
+|---|---|---|---|---|---|
+| `analyze-performance:4.auto-fix` | gate | consent | 4 | Per-finding: each `autoFixAvailable` finding loops through this prompt template surfacing the tag and the exact change (site setting or YAML field). User answers Yes / No / Skip-all per finding. | nothing |
+| `analyze-performance:6.next-action` | gate | plan | 6 (`### Step 6.4`) | Post-report prompt — *"Walk me through the manual fixes / Re-scan / Done"*. Drives whether the FetchXML/Web API code-fix walkthrough runs next. Reviewing and re-scanning are read-only. | nothing |
+
+The `analyze-performance:4.auto-fix` template fires once per finding with `autoFixAvailable: true` (the output-cache and tracking findings), mirroring the `diagnose-deployment:6.auto-fix` loop-style pattern — one gate ID, content varies per finding. FetchXML/Web API findings are never auto-fixed (they need human judgment), so they are excluded from the loop and surfaced via the plan gate instead.
 
 ---
 
@@ -778,7 +808,7 @@ Most prompts gather validated configuration before the Phase 3 plan gate.
 
 ## 8. Plugin-wide enforcement (was: non-ALM deferral)
 
-> **v3 update.** This section previously listed 13 deferred non-ALM skills. Those skills are now catalogued in §6.13–§6.24 above (plus the security skills introduced by PR #151 in §6.25–§6.28) and the lint runs hard-fail across the whole plugin.
+> **v3 update.** This section previously listed deferred non-ALM skills. Those skills are now catalogued in §6 alongside the ALM skills and the lint runs hard-fail across the whole plugin.
 
 The lint rules in §5 fire at `error` severity for **every** SKILL.md under `plugins/power-pages/skills/`. There is no skill-class carve-out. When you add a new skill:
 

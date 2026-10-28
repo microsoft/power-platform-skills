@@ -97,8 +97,10 @@ caller context first; creation can already have a plan without being finished.
   entry point with its standalone prerequisites and approval gates. Do not
   silently widen it to full app creation.
 - **Existing or customized app** — use the existing-app routing below. A missing
-  plan does not make the app fresh; ask to restore the plan or approve bounded
-  implementation-only work rather than re-scaffolding it.
+  plan does not make the app fresh. After full-integration consent, invoke
+  `edit-app`; its read-only inspection infers the current-state baseline before its
+  impact and mutation approval gates. Keep implementation-only work bounded to its
+  leaf workflow.
 - **Unclear state or intent** — ask before choosing creation or editing. Do not
   infer a fresh starter solely from missing generated markers.
 

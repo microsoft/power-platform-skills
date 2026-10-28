@@ -91,7 +91,7 @@ node evals\pcf\run-pcf.js --tier full   # all cases
 node --test evals\pcf\tests\*.test.js
 ```
 
-Exit codes match app-builder: `0` all pass, `1` assertion failure, `2` harness or argument error.
+Exit codes match app-builder: `0` no case failed, `1` assertion failure, `2` harness or argument error. A case with nothing graded (below) does not fail the run.
 
 ## TAP output
 
@@ -109,3 +109,14 @@ ok 1 - 001-001-intent-field-clean
 # skip  0
 # fixtures 8 (pass 8, fail 0)
 ```
+
+The runner prints through the model-apps eval reporter: `lib/reporter.js` is a byte-for-byte copy of `evals/model-apps/genpage/lib/reporter.js`, and `tests/reporter.test.js` fails when the two differ, so change both together. A skip grades nothing, so a case passes only when at least one of its assertions was graded and none failed. A case with no graded assertion — every assertion skipped (for example `no check registered for this assertion text`), or an empty `assertions` list — is unscored, not passed:
+
+```text
+ok 1 - 001-001-intent-field-clean # SKIP no expectation graded
+...
+# fixtures 8 (pass 7, fail 0)
+# unscored fixtures 1
+```
+
+An unscored case is in neither count of `# fixtures <N> (pass X, fail Y)`; `# unscored fixtures <U>` follows that line only when U > 0, so X + Y + U = N and a run with none prints exactly what it printed before. An unscored case does not change the exit code.

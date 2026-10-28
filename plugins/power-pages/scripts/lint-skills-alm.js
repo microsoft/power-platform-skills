@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-// Lints SKILL.md files and component-creation scripts for violations of the
+// Lints skills, reference workflows and component-creation scripts for violations of the
 // ALM-aware-by-default principle documented in plugins/power-pages/AGENTS.md.
 //
 // Rules (see PLUGIN_DEVELOPMENT_GUIDE.md for authoritative descriptions):
@@ -25,11 +25,11 @@
 //     Waivable: no — new component types must be added to the discovery module.
 //
 //   GATE-must-have-marker
-//     Trigger: a SKILL.md phase section contains an `AskUserQuestion` prompt
+//     Trigger: a skill/reference workflow section contains an `AskUserQuestion` prompt
 //              (matched by `` `AskUserQuestion` `` near a `:`).
 //     Require: the same section contains at least one preceding
 //              `<!-- gate: ... -->` or `<!-- not-a-gate: ... -->` marker.
-//     Scope:   Every SKILL.md under plugins/power-pages/skills/ → severity 'error'.
+//     Scope:   Every SKILL.md, references/*-workflow.md and workflows/*.md under skills/ → severity 'error'.
 //              (v2 had a warn-only branch for non-ALM skills; v3 removed it once
 //              the catalog in references/approval-gates.md was extended to cover
 //              the full skill set — see §10 landing history.)
@@ -38,15 +38,15 @@
 //
 //   GATE-id-must-be-unique
 //     Trigger: parse all `<!-- gate: ID | ... -->` markers across all
-//              SKILL.md files.
+//              skills and reference workflows.
 //     Require: no `ID` appears twice.
 //     Waivable: no — duplicates are always a bug.
 //
 //   GATE-must-be-in-catalog
-//     Trigger: any gate-id used in a SKILL.md marker.
+//     Trigger: any gate-id used in a skill/reference workflow marker.
 //     Require: the same gate-id appears (backticked) somewhere in
 //              references/approval-gates.md (the catalog).
-//     Scope:   Every SKILL.md → 'error'. (Same v3 enforcement note as
+//     Scope:   Every skill/reference workflow → 'error'. (Same v3 enforcement note as
 //              GATE-must-have-marker above.)
 //     Waivable: yes (inline + allowlist).
 //
@@ -70,9 +70,9 @@
 //     Trigger: every `| `<gate-id>` | gate | ...` row in §6 of the catalog
 //              (references/approval-gates.md). Only rows tagged `gate` —
 //              `not-a-gate` rows are skipped because not-a-gate markers in
-//              SKILL.md don't carry an ID to match against.
+//              workflows don't carry an ID to match against.
 //     Require: at least one `<!-- gate: <gate-id> ... -->` marker in some
-//              SKILL.md under plugins/power-pages/skills/.
+//              skill or reference workflow under plugins/power-pages/skills/.
 //     Waivable: `.almlintignore` allowlist only — this rule operates on the
 //               catalog as a whole (not per SKILL.md), so inline
 //               `<!-- alm-lint-ignore: ... -->` comments are not honored.
@@ -347,7 +347,7 @@ const PPCTYPE_FILTER_PATTERN = /powerpagecomponenttype\s+eq\s+(\d+)/gi;
 
 // ---- Approval Gate parsing helpers ---------------------------------------
 //
-// SKILL.md format expected by these rules:
+// Skill and reference-workflow format expected by these rules:
 //
 //   <!-- gate: skill-name:phase-id | category=X | cancel-leaves=Y -->
 //   > 🚦 **Gate (X · skill-name:phase-id):** Description.
@@ -528,8 +528,13 @@ function checkSectionPairing(content) {
 function collectFindings({ pluginRoot }) {
   const findings = [];
   const { entries: allowlistEntries } = loadAllowlist(pluginRoot);
-  const skillFiles = walkFiles(path.join(pluginRoot, 'skills'), (p) =>
-    p.endsWith(`${path.sep}SKILL.md`)
+  // Reference and branch workflows own approval even without a skill registration.
+  // Use workflow paths rather than gate presence so deleting every marker
+  // cannot also remove that workflow from prompt/catalog enforcement.
+  const workflowFiles = walkFiles(path.join(pluginRoot, 'skills'), (p) =>
+    p.endsWith(`${path.sep}SKILL.md`) ||
+    (p.includes(`${path.sep}references${path.sep}`) && p.endsWith('-workflow.md')) ||
+    (p.includes(`${path.sep}workflows${path.sep}`) && p.endsWith('.md'))
   );
 
   const scriptFiles = walkFiles(path.join(pluginRoot, 'scripts'), (p) => {
@@ -549,7 +554,7 @@ function collectFindings({ pluginRoot }) {
 
   // Rule 1 — SKILL-must-read-manifest + Rule 3 — DISCOVER-coverage +
   // Approval Gate rules (per-file portions).
-  for (const file of skillFiles) {
+  for (const file of workflowFiles) {
     const content = fs.readFileSync(file, 'utf8');
     const ignores = extractIgnores(content);
 
@@ -727,7 +732,7 @@ function collectFindings({ pluginRoot }) {
             severity: SKILL_SEVERITY,
             file,
             message:
-              `Gate \`${gm.gateId}\` is declared in SKILL.md but is not in the catalog ` +
+              `Gate \`${gm.gateId}\` is declared in a workflow but is not in the catalog ` +
               `(references/approval-gates.md). Add a catalog row before introducing the marker, ` +
               `or remove the marker if the prompt is data-gathering (use \`<!-- not-a-gate: ... -->\` instead).`,
             hint: 'See references/approval-gates.md §6 and §7 (How to add a new gate).',
@@ -737,7 +742,7 @@ function collectFindings({ pluginRoot }) {
     }
   }
 
-  // GATE-id-must-be-unique — fire after all SKILL.md files are processed.
+  // GATE-id-must-be-unique — fire after all workflow files are processed.
   const idIndex = new Map(); // gateId → [{ file, lineNum }, ...]
   for (const m of allGateMarkers) {
     if (!idIndex.has(m.gateId)) idIndex.set(m.gateId, []);
@@ -760,7 +765,7 @@ function collectFindings({ pluginRoot }) {
   }
 
   // CATALOG-row-must-have-marker — every `kind: gate` catalog row must have at
-  // least one matching <!-- gate: ID --> marker in a SKILL.md. This is the
+  // least one matching <!-- gate: ID --> marker in a skill/reference workflow. This is the
   // reverse of GATE-must-be-in-catalog and prevents the orphan-row class of
   // bug that v3 closed by hand: catalog rows that describe gates with no
   // corresponding SKILL.md anchor accumulate silently otherwise.
@@ -776,8 +781,8 @@ function collectFindings({ pluginRoot }) {
         file: catalogFile,
         message:
           `Catalog row \`${gateId}\` (kind: gate) has no matching ` +
-          `\`<!-- gate: ${gateId} ... -->\` marker in any SKILL.md. Either add ` +
-          `the marker to the owning skill, or remove/retag the catalog row.`,
+          `\`<!-- gate: ${gateId} ... -->\` marker in any skill or reference workflow. Either add ` +
+          `the marker to the owning workflow, or remove/retag the catalog row.`,
         hint: 'See references/approval-gates.md §7 (How to add a new gate) and §10 (catalog completeness).',
       });
     }

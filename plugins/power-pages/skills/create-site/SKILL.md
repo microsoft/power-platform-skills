@@ -1,11 +1,10 @@
 ---
 name: create-site
 description: >-
-  Creates a new Power Pages code site (SPA) from a curated template or from scratch using React,
-  Angular, Vue, or Astro. Guides through the full process from initial concept to deployed site:
-  requirements discovery, template selection or scaffolding, component planning, design,
-  implementation, validation, and deployment. Use when the user wants to create, build, use a
-  template for, or scaffold a new Power Pages website or portal.
+  Creates a new Power Pages site from an SPA or non-SPA template, or scaffolds an SPA from scratch
+  using React, Angular, Vue, or Astro. Guides requirements discovery, template selection,
+  provisioning, design, validation, and deployment. Use when the user wants to create, build, use
+  a template for, or scaffold a new Power Pages website or portal.
 user-invocable: true
 argument-hint: Optional site description
 allowed-tools: Read, Write, Edit, Grep, Glob, Bash, WebSearch, AskUserQuestion, Task, TaskCreate, TaskUpdate, TaskList, Skill, mcp__plugin_power-pages_playwright__browser_navigate, mcp__plugin_power-pages_playwright__browser_snapshot, mcp__plugin_power-pages_playwright__browser_click, mcp__plugin_power-pages_playwright__browser_take_screenshot, mcp__plugin_power-pages_playwright__browser_evaluate
@@ -14,9 +13,10 @@ model: opus
 
 > **Plugin check**: Run `node "${PLUGIN_ROOT}/scripts/check-version.js"` — if it outputs a message, show it to the user before proceeding.
 
-# Create Power Pages Code Site
+# Create Power Pages Site
 
-Guide the user through creating a complete, production-quality Power Pages code site from initial concept to deployed site. Follow a systematic approach: discover requirements, scaffold and launch immediately, plan components and design, implement with design applied, validate, review, and deploy.
+Guide the user through creating a complete Power Pages site. Keep discovery and template browsing
+path-agnostic, then route the selected SPA or non-SPA creation path to its own provisioning steps.
 
 ## Core Principles
 
@@ -30,8 +30,10 @@ Guide the user through creating a complete, production-quality Power Pages code 
 - **Site content language is independent of Dataverse language**: Generate every user-visible SPA string in the approved content language. Dataverse and Power Pages platform-managed messages remain English (`en-US`, LCID `1033`) in this workflow.
 - **Bidirectional by default**: Read `${PLUGIN_ROOT}/references/bidirectional-design.md`. Every site must use direction-neutral layout, mixed-content boundaries, and script-capable typography even when its initial language has only one direction. A later LTR/RTL locale must not require a general redesign.
 - **Lifecycle-ready output**: Follow `${PLUGIN_ROOT}/references/site-modification-integrity.md` so later pages and components can preserve localization, direction, and content-expansion behavior through the shared post-modification validator.
+- **Path-specific design rules**: Read `${PLUGIN_ROOT}/references/site-design-quality.md`. SPA paths use the live scaffold workflow below. Non-SPA sites need no dev server or live preview and follow their dedicated workflow.
+- **Non-SPA route**: When the user selects **Non-SPA (Liquid + Web Template)** or a non-SPA template, read and follow `${PLUGIN_ROOT}/skills/create-site/workflows/non-spa-site.md`. Do not continue into the SPA scaffold phases.
 
-**Constraint**: Only static SPA frameworks are supported (React, Vue, Angular, Astro). NOT supported: Next.js, Nuxt.js, Remix, SvelteKit, Liquid.
+**Supported paths**: static SPA frameworks (React, Vue, Angular, Astro) and Enhanced-model non-SPA sites using Liquid + Web Templates. Next.js, Nuxt.js, Remix, and SvelteKit are not supported.
 
 **Initial request:** $ARGUMENTS
 
@@ -122,26 +124,39 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
 
 **Goal**: Route the user into the appropriate creation path after path-agnostic Discovery.
 
-> **Current implementation state:** Template discovery, selection, supporting-solution import, packaged SPA cloning/upload, optional seed data, activation, live-site preview, and terminal telemetry are implemented for `kind: "spa"`. Traditional catalog entries are accepted but not shown until their solution-only provisioning flow is implemented. The user can always choose **Start from scratch** to continue into the existing scaffold flow.
-
 **Actions**:
 
 1. Mark **Select template or choose from-scratch** as `in_progress`.
 
-2. Fetch the template catalog:
+2. Fetch the shared template catalog:
 
    ```bash
    node "${PLUGIN_ROOT}/scripts/fetch-template-catalog.js"
    ```
    Use the returned immutable commit SHA for every template artifact request in this run. Pass `--ref <tag-or-branch>` only for a deliberate test or rollback.
 
-   Evaluate the JSON result:
-   - **If `ok: false`**: tell the user templates are temporarily unavailable and continue with the from-scratch path. This is additive; a catalog failure must never block `create-site`.
-   - **If `ok: true` but `selectableCatalog.templates` is empty**: tell the user no supported SPA templates are currently available and continue with the from-scratch path. Do not offer entries from `catalog.templates` whose `kind` is `traditional`.
-   - **If supported SPA templates are available**: use `selectableCatalog.templates` for every matching, preview, browse, and selection step below. Keep `catalog.templates` only as the complete downloaded manifest.
+   Also load the supported non-SPA entries from the same pinned catalog:
 
-3. Semantically match the template families against the Phase 1 context (`$ARGUMENTS`, site name, purpose, audience, and any framework mentioned by the user):
-   - Use each family template's `displayName`, `description`, `keywords`, `audience`, available variant frameworks, and any variant-specific previews.
+   ```bash
+   node "${PLUGIN_ROOT}/skills/create-site/scripts/list-site-templates.js" \
+     --modelVersion Enhanced --bootstrapVersion 5
+   ```
+
+   Build one `SELECTABLE_TEMPLATES` collection:
+   - Add every SPA family from `selectableCatalog.templates` with category `SPA`.
+   - Add every entry from the non-SPA result's `catalog.templates` with `kind: "non-spa"`,
+     category `Non-SPA`, its `previews`, and its exact `name` provisioning identifier.
+   - Keep the pinned owner, repository, and commit SHA returned by the non-SPA result with those
+     entries.
+
+   If one catalog path fails, continue with the other path and explain which category is
+   temporarily unavailable. Continue from scratch only when no templates remain.
+
+3. Semantically match `SELECTABLE_TEMPLATES` against the Phase 1 context (`$ARGUMENTS`, site name, purpose, audience, and any framework mentioned by the user):
+   - Use each template's category, `displayName`, `description`, keywords, audience, capabilities,
+     available SPA variants, and previews.
+   - For non-SPA templates, treat the template as data-model/domain context and requirements
+     guidance, not a visual constraint. Carry explicit preservation preferences into customization.
    - Do **not** compute a numeric score or invent a ranking script. Keywords guide agent judgement; they are not counted.
    - Treat a template family as the user-facing template and a framework variant as the installable package. A family can have multiple variants (`react`, `vue`, `angular`, `astro`).
 
@@ -156,7 +171,8 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
 
    Branch on the answer:
    - **Show matching templates**: set `TEMPLATE_PREVIEW_FAMILIES` to the matched family or families and continue to browser preview.
-   - **Browse all templates**: set `TEMPLATE_PREVIEW_FAMILIES` to all entries in `selectableCatalog.templates` and continue to browser preview.
+   - **Browse all templates**: set `TEMPLATE_PREVIEW_FAMILIES` to every SPA and non-SPA entry in
+     `SELECTABLE_TEMPLATES` and continue to browser preview.
    - **Create from scratch**: set `CREATION_PATH = "from-scratch"` and continue to the deferred framework/location questions.
 
 5. Render `TEMPLATE_PREVIEW_FAMILIES` for browser preview:
@@ -166,7 +182,10 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
      node "${PLUGIN_ROOT}/scripts/fetch-template-artifact.js" --sha "<catalog-sha>" --artifactPath "<preview-image-path>"
      ```
      Replace each preview image path with the returned `localUrl`. If a preview download returns `ok: false`, omit that one image from the gallery and continue; a missing preview should not block using an otherwise-valid template.
-   - Write a temporary JSON file containing a `TEMPLATES_JSON` array with the template families the user should preview and the cached preview image URLs. Include each family's available variants so the browser can show framework badges/tabs, but keep the browser read-only.
+   - Write a temporary JSON file containing a `TEMPLATES_JSON` array with the templates the user
+     should preview. Preserve `kind` so the HTML shows `SPA` or `Non-SPA` beside every template
+     name. Include SPA variants and cached `previewImages`; include non-SPA responsive `previews`
+     unchanged. Keep the browser read-only.
    - Run:
      ```bash
      node "${PLUGIN_ROOT}/scripts/render-template-browser.js" --templatesJsonPath "<temp-json>" --outputPath "<temp-html>" --open
@@ -186,11 +205,18 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
    | One strong family + framework match | Use `<displayName>` - `<framework>` (Recommended), Choose another framework, See all templates, Start from scratch |
    | One strong family but no framework match | One option per available framework, See all templates, Start from scratch |
    | Several plausible family matches | One option per shortlisted family, See all templates, Start from scratch |
-   | Full catalog browse | One option per family, Start from scratch |
+   | Full catalog browse | One option per template formatted as `<displayName> (<SPA|Non-SPA>)`, Start from scratch |
 
-   When the user chooses **See all templates** from a matching-template branch, set `TEMPLATE_PREVIEW_FAMILIES` to all entries in `selectableCatalog.templates`, render the family-first SPA template gallery, and ask again with the **Full catalog browse** options. If the selected family has multiple variants, ask a second terminal question for the framework.
+   When the user chooses **See all templates** from a matching-template branch, set
+   `TEMPLATE_PREVIEW_FAMILIES` to all entries in `SELECTABLE_TEMPLATES`, render the combined
+   gallery, and ask again with the **Full catalog browse** options. If the selected SPA family has
+   multiple variants, ask a second terminal question for the framework.
 
 7. Branch on the user's selection:
+   - **Non-SPA template selected**: set `PRESELECTED_NON_SPA_TEMPLATE_NAME` to its exact `name`,
+     retain its pinned catalog coordinates, read
+     `${PLUGIN_ROOT}/skills/create-site/workflows/non-spa-site.md`, and follow that workflow.
+     Do not continue into the SPA template or from-scratch phases.
    - **Template family and framework variant selected**:
      1. Set `SELECTED_TEMPLATE` to the family entry and `SELECTED_TEMPLATE_VARIANT` to the exact framework variant. Resolve the selected template assets once from the pinned catalog SHA. The result combines the family's supporting solutions with the selected variant's website code:
         ```bash
@@ -413,6 +439,7 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
       # { "state": "running", "phase": "site", "message": "Preparing template site" }
       node "${PLUGIN_ROOT}/scripts/render-template-import-status.js" \
         --templateName "<SELECTED_TEMPLATE.displayName>" \
+        --templateDescription "<SELECTED_TEMPLATE.description>" \
         --statusPath "<temp-import-status-dir>/status.json" \
         --previewImagesJson '<JSON array of SELECTED_TEMPLATE.previewImages localUrl values from the template browser step>' \
         --solutionCount "<TEMPLATE_SOLUTIONS_TO_IMPORT.length, or SELECTED_TEMPLATE_SOLUTIONS.length when imports are skipped>" \
@@ -652,18 +679,21 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
        The activate-site skill owns subdomain selection, the waiting-for-input toast, final activation confirmation, provisioning-status polling, and recovery. Its foreground activation script is the only poll required by this flow.
        If activation fails, tell the user the cloned site exists but is not live and can be activated later by rerunning `/activate-site` with this identity. Do not treat activation failure as a failed supporting-solution import or site upload.
    16. When `/activate-site` returns a `siteUrl`, mark **Activate template site** as `completed` and **Show live template site** as `in_progress`.
-   17. Redirect the already-open status page to the live site:
+   17. Complete the already-open status page without redirecting it:
        ```json
        {
          "state": "succeeded",
-         "message": "Template site is live. Opening it now...",
-         "redirectUrl": "<siteUrl>",
-         "shutdownServer": true
+         "message": "Template site is live.",
+         "siteUrl": "<siteUrl>"
        }
        ```
-       Do not open a second browser page for the template path. The status page polls this file and redirects the same tab to `redirectUrl` when the URL is `http` or `https`. `shutdownServer: true` tells the local server to remove the temporary status directory after a short redirect grace period. If the user closed the status page, show the `siteUrl` for manual opening.
+       The shared provisioning page shows an **Open website** button, matching the non-SPA
+       workflow. Do not redirect the status tab or open the live site automatically. If the user
+       closed the status page, show the `siteUrl` for manual opening.
 
-       Always surface the activate-site DNS propagation caveat: the site may take a few minutes to load even after activation succeeds. Do not start a separate background command or Task to wait for the live URL to return HTTP 200. The status-page redirect and DNS note handle that delay without leaving work that can resume the conversation after the completion summary. If a reachability poll was started accidentally, stop it before marking **Show live template site** as `completed`.
+       Always surface the activate-site DNS propagation caveat: the site may take a few minutes to
+       load even after activation succeeds. Do not start a separate background command or Task to
+       wait for the live URL to return HTTP 200.
    18. Mark **Show live template site** as `completed`, then present the template-path summary:
        - Template name and framework
        - Cloned site name and Website Record ID
@@ -741,8 +771,11 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
 
    | Question | Header | Options |
    |----------|--------|---------|
-   | Which frontend framework? | Framework | React (Recommended), Vue, Angular, Astro |
+   | Which frontend framework? | Framework | React (Recommended), Vue, Angular, Astro, Non-SPA (Liquid + Web Template) |
    | Where should the project be created? | Location | Current directory, New folder in current directory (Recommended), Any other directory |
+
+   If the user selects **Non-SPA (Liquid + Web Template)**, read and follow
+   `${PLUGIN_ROOT}/skills/create-site/workflows/non-spa-site.md` and stop the SPA workflow.
 
 10. Determine the site's single content language independently of whether the
    purpose was supplied in `$ARGUMENTS`.
@@ -2068,7 +2101,7 @@ When `TEMPLATE_SOLUTIONS_TO_IMPORT` contains exactly one entry, use the task sub
 | Apply template seed data | Applying seed data | After read-only planning and any financial currency decision, insert optional template seed records in parallel with site creation; failures do not block activation |
 | Show inactive template site | Showing template site | After site creation and seeding join, use the Website Record ID written by `pac pages clone` to `.powerpages-site/website.yml` and tell the user the uploaded site is not activated yet |
 | Activate template site | Activating template site | Invoke activate-site with the resolved site name and Website Record ID |
-| Show live template site | Showing live site | Open the activated site URL in the browser and invite the user to continue customizing |
+| Show live template site | Showing live site | Show the activated site URL in the shared provisioning page and invite the user to continue customizing |
 
 If the user chooses to customize the live template, append:
 

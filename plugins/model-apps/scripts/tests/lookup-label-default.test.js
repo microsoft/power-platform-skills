@@ -1238,7 +1238,10 @@ test('REAL BUNDLE (ADO 6691205 rebuild): a lookup the form holds twice with no o
 
 // ── 7. the whole engine: data-model repair, then the existing form ────────────────────────────────
 
-const { runSdkBuild } = require('../lib/sdk-build.js');
+// An apply that names no app folder and no workspace gets an app folder of its own: it holds its build lease in its workspace (helpers/own-app-folder.js).
+const { inOwnFolder } = require('./helpers/own-app-folder.js');
+const { runSdkBuild: runSdkBuildInPlace } = require('../lib/sdk-build.js');
+const runSdkBuild = inOwnFolder(runSdkBuildInPlace);
 const { makeSimpleMockSdk } = require('./helpers/mock-sdk.js');
 
 // An existing app whose `contoso_task` form carries the lookup's cell, labelled `cellLabel`, rebuilt by the whole

@@ -93,9 +93,14 @@ const REAL_ORG_SHAPE = /^org[0-9a-f]{8}$/i;
 const PLACEHOLDER_EMAIL_DOMAIN_ROOTS = ['contoso', 'fabrikam', 'example', 'company', 'your'];
 
 // OData annotations parse as e-mail addresses but are not: `_ownerid_value@OData.Community.Display.
-// V1.FormattedValue`, `publisherid@odata.bind`. Both begin their "domain" with `odata.`, which is
-// not a registrable domain, so skipping them costs no real coverage.
-const ODATA_ANNOTATION = /^odata\./i;
+// V1.FormattedValue`, `publisherid@odata.bind`, `@odata.nextLink`. Dataverse's own instance annotations
+// read the same way under its `Microsoft.Dynamics.CRM.` namespace:
+// `_customerid_value@Microsoft.Dynamics.CRM.lookuplogicalname`, `…@Microsoft.Dynamics.CRM.associatednavigationproperty`
+// (https://learn.microsoft.com/en-us/power-apps/developer/data-platform/webapi/query/select-columns#lookup-property-data).
+// Only these exact annotation names are skipped, to the end of the "domain": a longer domain that merely
+// begins with one of the spellings (`reader@microsoft.dynamics.crm.private-mail.invalid`, `x@odata.org`) is
+// judged like any other address. Add a name here when a scanned file needs another annotation.
+const ODATA_ANNOTATION = /^(?:odata\.(?:bind|nextlink|context|count|etag|type|id)|odata\.community\.display\.v1\.formattedvalue|microsoft\.dynamics\.crm\.(?:lookuplogicalname|associatednavigationproperty|fetchxmlpagingcookie|morerecords|totalrecordcount|totalrecordcountlimitexceeded))$/i;
 
 const HOST_RE = /\b([a-z0-9][a-z0-9-]*)\.crm[a-z0-9]*\.dynamics\.com\b/gi;
 const TENANT_RE = /\b([a-z0-9][a-z0-9-]*)\.onmicrosoft\.com\b/gi;

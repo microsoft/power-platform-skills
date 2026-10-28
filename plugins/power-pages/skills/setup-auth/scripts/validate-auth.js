@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 // Validates that authentication and authorization code was created for a
-// Power Pages code site. Runs as a PostToolUse:Skill hook (configured in
+// Power Pages SPA site. Runs as a PostToolUse:Skill hook (configured in
 // hooks/hooks.json) after the `Skill` tool fires for /power-pages:setup-auth.
 //
 // Because PostToolUse fires when the Skill tool LOADS (instructions are read

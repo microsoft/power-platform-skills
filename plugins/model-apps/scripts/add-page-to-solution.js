@@ -8,12 +8,20 @@
 //     uxagentprojectfile children (incl. config.json with connectorBindings).
 //   - connectionreference is its own component and is added explicitly so
 //     the bindings resolve in the target env (at import the deployer supplies each
-//     ConnectionId via `pac solution create-settings` + `pac solution import --settings-file`).
+//     ConnectionId through scripts/solution-settings.js: `template` writes the settings file and
+//     `import --settings` applies it; `pac solution create-settings` and `pac solution import
+//     --settings-file` are only its fallback).
 //     Both are custom tables whose ObjectTypeCode varies by environment, so their
-//     component types are discovered from EntityDefinitions before any mutation.
+//     component types are discovered from EntityDefinitions before any mutation
+//     (lib/page-solution.js holds the read, and how a page is added, for every path that adds one).
+//
+// The app id is optional: with none, only the pages (and connection references) are added. That is how a page made into
+// an app that is not the run's own — or one whose add failed after it was made — joins a solution: a page is a component of
+// its own, and an app is not one of its required components (the app's navigation names the page, not the reverse), so adding
+// the app too would put an app the maker did not ask for into the solution.
 //
 // Usage:
-//   node add-page-to-solution.js <envUrl> <solutionUniqueName> <appId>
+//   node add-page-to-solution.js <envUrl> <solutionUniqueName> [<appId>]
 //     [--page-ids <uxagentprojectId1,uxagentprojectId2>]
 //     [--connection-refs <logicalName1,logicalName2>]
 //
@@ -28,8 +36,9 @@ const {
 } = require('./lib/dataverse-auth');
 const { odataLit } = require('./lib/odata');
 const { FORM_GUID_RE } = require('./lib/app-spec');
+const { makeWritesBlocking } = require('./lib/output-redaction.js');
+const { UXAGENTPROJECT_LOGICAL_NAME, PAGE_ADD_REQUIRED_COMPONENTS, componentTypePath, componentTypeOf } = require('./lib/page-solution.js');
 const APPMODULE_COMPONENT_TYPE = 80;
-const UXAGENTPROJECT_LOGICAL_NAME = 'uxagentproject';
 const CONNECTION_REFERENCE_LOGICAL_NAME = 'connectionreference';
 
 async function addComponent(envUrl, solutionUniqueName, componentId, componentType, addRequired) {
@@ -44,14 +53,9 @@ async function addComponent(envUrl, solutionUniqueName, componentId, componentTy
 }
 
 async function resolveEntityComponentType(envUrl, logicalName) {
-  const path = `EntityDefinitions(LogicalName='${odataLit(logicalName)}')?$select=ObjectTypeCode`;
-  const res = await dataverseRequest(envUrl, 'GET', path);
+  const res = await dataverseRequest(envUrl, 'GET', componentTypePath(logicalName));
   ensureOk(res, `Resolve component type for ${logicalName}`);
-  const componentType = Number(res.data?.ObjectTypeCode);
-  if (!Number.isInteger(componentType) || componentType <= 0) {
-    throw new Error(`Entity '${logicalName}' did not return a valid ObjectTypeCode`);
-  }
-  return componentType;
+  return componentTypeOf(res.data, logicalName);
 }
 
 async function resolveConnectionReferences(envUrl, refs) {
@@ -80,7 +84,7 @@ async function resolveConnectionReferences(envUrl, refs) {
 async function main() {
   const argv = process.argv.slice(2);
   const { positional, flags } = parseArgs(argv);
-  const USAGE = 'Usage: node add-page-to-solution.js <envUrl> <solutionUniqueName> <appId> [--page-ids <id1,id2>] [--connection-refs <logicalName1,logicalName2>]';
+  const USAGE = 'Usage: node add-page-to-solution.js <envUrl> <solutionUniqueName> [<appId>] [--page-ids <id1,id2>] [--connection-refs <logicalName1,logicalName2>]';
   // Both flags are comma-joined id lists. A bare one would become boolean `true`, and `true.split`
   // is a TypeError mid-way through packaging rather than a usage error before it.
   const flagError = validateFlags(argv, {
@@ -88,10 +92,12 @@ async function main() {
     needValue: ['page-ids', 'connection-refs'],
   });
   if (flagError) {
+    makeWritesBlocking(process.stdout, process.stderr);
     process.stderr.write(`✗ ${flagError}\n${USAGE}\n`);
     process.exit(1);
   }
-  if (positional.length < 3) {
+  // The app is optional, but something has to be named to add: an app, pages, or connection references.
+  if (positional.length < 2 || (positional.length < 3 && !flags['page-ids'] && !flags['connection-refs'])) {
     process.stderr.write(USAGE + '\n');
     process.exit(1);
   }
@@ -122,11 +128,16 @@ async function main() {
   // Dataverse only at its own AddSolutionComponent — after the app had been added — so the run failed
   // with the solution holding the app but not its page.
   const malformed = [
-    ...(FORM_GUID_RE.test(appId) ? [] : [`app id '${appId}'`]),
+    ...(appId === undefined || FORM_GUID_RE.test(appId) ? [] : [`app id '${appId}'`]),
     ...pageIds.filter((id) => !FORM_GUID_RE.test(id)).map((id) => `page id '${id}'`),
   ];
   if (malformed.length) {
     emitResult(false, new Error(`Not a GUID: ${malformed.join(', ')}. Nothing was added to ${solutionUniqueName}.`));
+    return;
+  }
+  // A list that holds only separators (`--page-ids ,`) names nothing, and with no app that is a run with nothing to do: said, not reported as done.
+  if (appId === undefined && !pageIds.length && !refs.length) {
+    emitResult(false, new Error(`Nothing to add: name an app, --page-ids or --connection-refs. Nothing was added to ${solutionUniqueName}.`));
     return;
   }
   try {
@@ -144,15 +155,19 @@ async function main() {
       : [];
 
     // The appmodule (type 80) with AddRequiredComponents=true pulls the sitemap and
-    // appmodulecomponent, but NOT the GenPage — the page is added explicitly below.
-    await addComponent(envUrl, solutionUniqueName, appId, APPMODULE_COMPONENT_TYPE, true);
-    added.push({ type: 'appmodule', id: appId });
+    // appmodulecomponent, but NOT the GenPage — the page is added explicitly below. When an app is
+    // named it goes first, so a run that stops part-way never leaves pages in the solution without
+    // the app whose navigation opens them.
+    if (appId !== undefined) {
+      await addComponent(envUrl, solutionUniqueName, appId, APPMODULE_COMPONENT_TYPE, true);
+      added.push({ type: 'appmodule', id: appId });
+    }
 
     // Add each GenPage (uxagentproject) explicitly. AddRequiredComponents
     // pulls its uxagentprojectfile rows — including config.json with the
     // connectorBindings that must travel with the page.
     for (const pageId of pageIds) {
-      await addComponent(envUrl, solutionUniqueName, pageId, pageComponentType, true);
+      await addComponent(envUrl, solutionUniqueName, pageId, pageComponentType, PAGE_ADD_REQUIRED_COMPONENTS);
       added.push({ type: 'uxagentproject', id: pageId });
     }
 

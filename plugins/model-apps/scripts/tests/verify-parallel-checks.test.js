@@ -31,7 +31,12 @@ function richSpec() {
     solution: { uniqueName: 'verify_checks', publisherPrefix: 'new' },
     app: { name: 'Verify Checks', uniqueName: 'new_verifychecks' },
     schemaVersion: 2,
-    entities: TABLES.map((t) => ({ schemaName: t, columns: [{ schemaName: `${t}_a` }, { schemaName: `${t}_b` }] })),
+    entities: TABLES.map((t) => ({
+      schemaName: t,
+      columns: [{ schemaName: `${t}_a` }, { schemaName: `${t}_b` }],
+      // Two tables declare status reasons and alternate keys: their reads join the overlapped pass like any other.
+      ...(t === 'new_t0' || t === 'new_t1' ? { statusReasons: [{ label: 'Held' }], alternateKeys: [{ schemaName: `${t}_key`, columns: [`${t}_a`] }] } : {}),
+    })),
     views: TABLES.map((t) => ({ entity: t, name: `Active ${t}` })),
     charts: TABLES.slice(0, 3).map((t) => ({ entity: t, name: `Chart ${t}` })),
     forms: TABLES.flatMap((t) => [
@@ -107,6 +112,9 @@ function richReader() {
     sitemapXml: async () => sitemap,
     entityRelationships: async () => [],
     commandBar: async (entity) => entity !== 'new_t2',
+    // new_t1's status reason and key are not there, so the pass reports a mix of the new checks too.
+    statusReasons: async (entity) => ({ state: 'ok', options: [{ value: 1, state: 0, labels: ['Active'], shown: 'Active' }, ...(entity === 'new_t0' ? [{ value: 100000000, state: 0, labels: ['Held'], shown: 'Held' }] : [])] }),
+    alternateKeys: async (entity) => ({ state: 'ok', keys: entity === 'new_t0' ? [{ logicalName: 'new_t0_key', schemaName: 'new_t0_key', columns: ['new_t0_a'] }] : [] }),
     appRoleIds: async () => ({ ok: true, roleIds: ['role-Agent'] }),
     // Every persona holds the same table privilege, so the same two privilege sets are asked for by all of them.
     entityPrivileges: async (entity) => [{ Name: `prvRead${entity}`, PrivilegeId: `${entity}-read`, PrivilegeType: 'Read' }],
@@ -128,7 +136,7 @@ test('the fixture reaches most of verify and reports a mix of passes and failure
   const { result } = await runRich({ concurrency: 1 }, { latency: () => 0 });
   const kinds = new Set(result.checks.map((c) => c.kind));
   assert.ok(result.checks.length >= 60, `${result.checks.length} checks`);
-  for (const kind of ['entity', 'column', 'view', 'chart', 'form', 'form-default', 'form-default-unique', 'form-order', 'form-order-served', 'relationship', 'command', 'business-rule', 'role', 'role-privileges', 'app-role', 'subarea', 'app-table-component', 'page', 'page-subarea']) {
+  for (const kind of ['entity', 'column', 'status-reason', 'alternate-key', 'view', 'chart', 'form', 'form-default', 'form-default-unique', 'form-order', 'form-order-served', 'relationship', 'command', 'business-rule', 'role', 'role-privileges', 'app-role', 'subarea', 'app-table-component', 'page', 'page-subarea']) {
     assert.ok(kinds.has(kind), `the fixture should produce '${kind}' checks (got ${[...kinds].join(', ')})`);
   }
   assert.ok(result.checks.some((c) => c.present) && result.missing.length > 0, 'some checks pass and some fail');
@@ -221,9 +229,9 @@ test('a failure in an earlier section outranks one in a later section that happe
   }
 });
 
-// The page checks' slow reads (a `pac` listing, about five seconds, with no timeout of its own) start with the pass. A pass
-// that fails must not wait for them: before the pass overlapped its reads, a failing first check threw at once, and a hung
-// `pac` could never turn that into a hang.
+// The page checks' slow reads (the environment's page listing, and every page's source) start with the pass. A pass
+// that fails must not wait for them: before the pass overlapped its reads, a failing first check threw at once, and a slow
+// read could never turn that into a hang.
 const answersWithin = (promise, ms) => new Promise((resolve) => {
   const timer = setTimeout(() => resolve({ waitedMs: ms }), ms);
   promise.then((value) => { clearTimeout(timer); resolve({ value }); }, (error) => { clearTimeout(timer); resolve({ error }); });
@@ -241,7 +249,7 @@ test('a verify that fails on its first check does not wait for a page read that 
 });
 
 test('a verify whose page check is waiting for a read that never answers still ends when an earlier check fails', async () => {
-  // The page check is listed late; it starts while an earlier table check is still waiting, and then waits on the pac
+  // The page check is listed late; it starts while an earlier table check is still waiting, and then waits on the page
   // listing that never answers. When the earlier check fails, the pass must neither wait for that listing nor lose the
   // earlier check's error to it.
   let failEarlier;
@@ -288,18 +296,18 @@ test('a failure in a check listed AFTER the page check does not discard the page
   let open;
   const gate = new Promise((resolve) => { open = resolve; });
   let laterFailed = 0;
-  const reader = laterCheckFails({ ...base, existenceIds: async () => { await gate; throw new Error('pac could not list the pages'); } }, () => { laterFailed += 1; });
+  const reader = laterCheckFails({ ...base, existenceIds: async () => { await gate; throw new Error('the page listing failed'); } }, () => { laterFailed += 1; });
   const pass = verifySpec(richSpec(), reader, { concurrency: 4 }).then(() => ({}), (error) => ({ error }));
   for (let i = 0; i < 300 && !laterFailed; i += 1) await new Promise((resolve) => setTimeout(resolve, 10));
   assert.ok(laterFailed, 'a check listed after the page check has failed while the page reads are still out');
   for (let i = 0; i < 30; i += 1) await turn();
   open();
   const outcome = await pass;
-  assert.match(outcome.error.message, /pac could not list the pages/);
+  assert.match(outcome.error.message, /the page listing failed/);
 
-  const oracleReader = laterCheckFails({ ...base, existenceIds: async () => { throw new Error('pac could not list the pages'); } }, () => {});
+  const oracleReader = laterCheckFails({ ...base, existenceIds: async () => { throw new Error('the page listing failed'); } }, () => {});
   const oracle = await verifySpec(richSpec(), oracleReader, { concurrency: 1 }).then(() => ({}), (error) => ({ error }));
-  assert.match(oracle.error.message, /pac could not list the pages/, 'one at a time reaches the page check first and throws its failure');
+  assert.match(oracle.error.message, /the page listing failed/, 'one at a time reaches the page check first and throws its failure');
 });
 
 test('a failure in a check listed after the page check still waits for the page reads — and throws that failure when the page check itself passes', async () => {
@@ -321,9 +329,9 @@ test('a failure in a check listed after the page check still waits for the page 
 });
 
 // --- ending what a pass gave up on ---------------------------------------------------------------------------
-// A pass that stops waiting for a page read leaves its pac run going — and, with a batch shim, the shim's process tree —
-// and the folder its download writes to. The verify CLI exits the moment the pass throws, so the reader is asked to end
-// them first and the pass waits for it.
+// A pass that stops waiting for a page read leaves that read going: a request already sent finishes by itself, and a read still
+// to start would begin behind a pass that no longer needs it. The verify CLI exits the moment the pass throws, so the reader is
+// asked to end its page reads first — to start no more — and the pass waits for that answer.
 
 test('a pass that gave up on a page read asks the reader to end its page reads, and waits for that before it throws', async () => {
   let started = 0;
@@ -363,111 +371,199 @@ test('a pass that gave up on nothing does not end the reader\'s page reads — a
   assert.strictEqual(ended, 0, 'the page reads had answered: nothing was given up on');
 });
 
-// The reader that does the ending: it owns the pac client and the folders.
-function pageReader(genpageCli, options = {}) {
+// The reader that does the ending: it owns the page reads and the memo of the environment's page listing.
+function pageReader(genpage, options = {}) {
   const sdk = { queryRecords: async (set) => (set === 'appmodule' ? [{ appmoduleid: 'app-1' }] : []), findTables: async () => [] };
-  return readerFor(sdk, 'new_app', { genpageCli, ...options });
+  return readerFor(sdk, 'new_app', { genpage, ...options });
 }
 
-test('endPageReads ends the downloads in flight, removes their folders before it answers, and starts nothing after it', async () => {
-  const folders = [];
-  let aborted = 0;
-  let failDownload;
-  const genpageCli = {
+test('endPageReads starts nothing after it — no read of a page, no listing — and does not cancel a read in flight on a backend that has no workspace of its own to close', async () => {
+  const reads = [];
+  let finishRead;
+  const genpage = {
     enumerateEnv: async () => ({ ok: true, ids: [] }),
-    download: ({ outputDir }) => { folders.push(outputDir); return new Promise((_, reject) => { failDownload = reject; }); },
-    // pac settles a moment after it is killed, so the reader has something to wait for.
-    abort: () => { aborted += 1; setTimeout(() => failDownload(new Error('pac was ended')), 30); },
+    read: (id) => { reads.push(id); return new Promise((resolve) => { finishRead = () => resolve({ source: `// ${id}` }); }); },
   };
-  const reader = pageReader(genpageCli);
-  const inFlight = reader.pageCode(PAGE_OVERVIEW).catch((error) => error);
-  for (let i = 0; i < 200 && !folders.length; i += 1) await turn();
-  assert.strictEqual(folders.length, 1, 'the download is out');
-  assert.ok(fs.existsSync(folders[0]), 'and its folder exists while pac runs');
+  const reader = pageReader(genpage);
+  const inFlight = reader.pageCode(PAGE_OVERVIEW);
+  for (let i = 0; i < 200 && !reads.length; i += 1) await turn();
+  assert.strictEqual(reads.length, 1, 'the read is out');
 
   await reader.endPageReads();
-  assert.strictEqual(aborted, 1, 'the pac client was told to end its runs');
-  assert.ok(!fs.existsSync(folders[0]), 'the folder is gone by the time endPageReads answers');
-  assert.match((await inFlight).message, /pac was ended/);
+  finishRead();
+  assert.strictEqual(await inFlight, `// ${PAGE_OVERVIEW}`, 'the read in flight was not cancelled: it is a request, and finishes by itself');
 
-  // Nothing starts afterwards: no download, no folder, no listing.
+  // Nothing starts afterwards: no read, no listing.
   const later = await reader.pageCode(PAGE_DETAIL).catch((error) => error);
   assert.match(later.message, /page reads were ended/);
-  const batch = await reader.pageCodes([PAGE_OVERVIEW, PAGE_DETAIL]);
-  assert.deepStrictEqual([...batch.values()].map((a) => /page reads were ended/.test(a.error && a.error.message)), [true, true], 'a batch is answered as each page\'s own failure');
+  const batch = await reader.pageCodes([PAGE_DETAIL, PAGE_DETAIL.toUpperCase()]);
+  assert.deepStrictEqual([...batch.values()].map((a) => /page reads were ended/.test(a.error && a.error.message)), [true], 'a batch is answered as each page\'s own failure');
   await assert.rejects(reader.existenceIds(), /page reads were ended/);
-  assert.strictEqual(folders.length, 1, 'no second download was started');
+  assert.strictEqual(reads.length, 1, 'no second read was started');
 });
 
-test('endPageReads: a download that was waiting for the app id when the reads were ended makes no folder and starts no pac', async () => {
-  let downloads = 0;
-  let answerAppId;
-  const sdk = { queryRecords: (set) => (set === 'appmodule' ? new Promise((resolve) => { answerAppId = () => resolve([{ appmoduleid: 'app-1' }]); }) : Promise.resolve([])), findTables: async () => [] };
-  const reader = readerFor(sdk, 'new_app', { genpageCli: { enumerateEnv: async () => ({ ok: true, ids: [] }), download: async () => { downloads += 1; return true; }, abort: () => {} } });
-  // The folders this reader makes are watched where it makes them, not by listing the temp directory: other test files, running
-  // at the same time, make `verify-page-*` folders there too.
-  const madeFolders = [];
-  const mkdtempSync = fs.mkdtempSync;
-  fs.mkdtempSync = (prefix, ...rest) => { madeFolders.push(String(prefix)); return mkdtempSync.call(fs, prefix, ...rest); };
-  let answers;
+// The guarantee the page reads had when each was a process with a folder of its own, and still has: the pass that gave up on a page read does not leave
+// the read's workspace behind. A read writes the page — its source included — into the workspace the backend made for it, and is a request, which cannot be
+// taken back. So the reader asks the backend to close that workspace: the read still in flight is refused its next write, and the folder is removed (once
+// the storage calls under way have settled) before endPageReads answers — a verify CLI that exits right after has left no folder of page sources behind.
+test('endPageReads closes and removes the workspace the page reads were writing into before it answers — the read in flight is cut short and cannot put it back — and starts nothing after it', async () => {
+  const { makeGenpageSdk } = require('../lib/genpage-sdk.js');
+  const { FakeGenPageServer, INSTANCE } = require('./helpers/fake-genpage-server.js');
+  const server = new FakeGenPageServer();
+  server.seedPage(PAGE_OVERVIEW, { name: 'Overview', source: 'export default function Overview() { return null; }\n' });
+  const http = server.http();
+  let release;
+  let reached;
+  const held = new Promise((resolve) => { release = resolve; });
+  const arrived = new Promise((resolve) => { reached = resolve; });
+  // The read stops at the download of the page's source: its workspace exists by then — the SDK is initialized — and the page is not in it yet.
+  const gated = { ...http, get: async (url, options) => { if (/\/filecontent\/\$value/.test(url)) { reached(); await held; } return http.get(url, options); } };
+  const folders = [];
+  const genpage = makeGenpageSdk(INSTANCE, { httpClient: gated, mkdtempSync: (prefix) => { const dir = fs.mkdtempSync(prefix); folders.push(dir); return dir; } });
+  const reader = pageReader(genpage);
   try {
-    const waiting = reader.pageCodes([PAGE_OVERVIEW, PAGE_DETAIL]);
-    for (let i = 0; i < 50 && !answerAppId; i += 1) await turn();
-    const ending = reader.endPageReads();
-    answerAppId();
-    answers = await waiting;
-    await ending;
+    const inFlight = reader.pageCode(PAGE_OVERVIEW).catch((error) => error);
+    await arrived;
+    assert.strictEqual(folders.length, 1, 'the read made one workspace');
+    assert.ok(fs.existsSync(folders[0]), 'and it exists while the read runs');
+
+    await reader.endPageReads();
+    assert.ok(!fs.existsSync(folders[0]), 'the workspace is gone by the time endPageReads answers');
+
+    release();
+    const outcome = await inFlight;
+    assert.ok(outcome instanceof Error, 'the read that was in flight is cut short — it fails instead of finishing');
+    for (let i = 0; i < 30; i += 1) await turn();
+    assert.ok(!fs.existsSync(folders[0]), 'and nothing it did afterwards put the folder back: no manifest, no page artifact, no page source');
+
+    // Nothing starts afterwards: no read, no listing, no workspace.
+    await assert.rejects(reader.pageCode(PAGE_DETAIL), /page reads were ended/);
+    await assert.rejects(reader.existenceIds(), /page reads were ended/);
+    assert.strictEqual(folders.length, 1, 'no second workspace was made');
+
+    // The backend is not closed by it: the next pass makes a workspace of its own, and the page is read from the server.
+    reader.beginVerificationPass();
+    assert.strictEqual(await reader.pageCode(PAGE_OVERVIEW), 'export default function Overview() { return null; }\n');
+    assert.strictEqual(folders.length, 2, 'the next pass reads through a new workspace');
   } finally {
-    fs.mkdtempSync = mkdtempSync;
+    await genpage.dispose();
+    for (const dir of folders) assert.ok(!fs.existsSync(dir), `${dir} is removed when the owner disposes the backend`);
   }
-  assert.strictEqual(downloads, 0, 'no pac was started for a pass that had ended');
-  assert.deepStrictEqual(madeFolders.filter((prefix) => path.basename(prefix).startsWith('verify-page-')), [], 'and no folder was made');
-  assert.ok([...answers.values()].every((a) => a.error), 'every page is answered as a failure of its own');
 });
 
-// The reader that was used for the pass that ended its page reads may be used for another: a listing that endPageReads cut short is
-// the answer of the pass that ended it, and not one to hand the next.
-test('a listing that endPageReads cut short is not what the next pass on the same reader is answered with', async () => {
+test('endPageReads waits for the backend to close its workspace only for a bounded time, and nothing it throws is the pass\'s failure', { timeout: 30000 }, async () => {
+  // A backend that cannot answer must not hold the pass for ever.
+  const stuck = pageReader({ enumerateEnv: async () => ({ ok: true, ids: [] }), discardWorkspaces: () => new Promise(() => {}) }, { endWaitMs: 50 });
+  const startedAt = Date.now();
+  await stuck.endPageReads();
+  assert.ok(Date.now() - startedAt < 1500, 'it answered after the bound');
+  // A backend that fails to close it is not a reason for the pass to fail with another error.
+  await pageReader({ enumerateEnv: async () => ({ ok: true, ids: [] }), discardWorkspaces: () => { throw new Error('the workspace could not be closed'); } }).endPageReads();
+  await pageReader({ enumerateEnv: async () => ({ ok: true, ids: [] }), discardWorkspaces: async () => { throw new Error('the workspace could not be closed'); } }).endPageReads();
+});
+
+// endPageReads' wait is bounded, so it can give up while the cleanup it started is still waiting on a storage call — and that cleanup goes on. The owner's
+// dispose() is verify's last act before the process exits, so it has to JOIN that cleanup: answering while the page's source is still on disk would end the
+// process with the source left behind.
+test('the final dispose() joins the cleanup a bounded endPageReads left draining — it answers only once the workspace, and the page source in it, are gone', { timeout: 30000 }, async () => {
+  const { makeGenpageSdk } = require('../lib/genpage-sdk.js');
+  const { createNodeWorkspaceStorage } = require('../lib/maker-sdk.js');
+  const { FakeGenPageServer, INSTANCE } = require('./helpers/fake-genpage-server.js');
+  const server = new FakeGenPageServer();
+  server.seedPage(PAGE_OVERVIEW, { name: 'Overview', source: 'export default function Overview() { return null; }\n' });
+  let release;
+  let reached;
+  const held = new Promise((resolve) => { release = resolve; });
+  const arrived = new Promise((resolve) => { reached = resolve; });
+  let stopped = false;
+  const folders = [];
+  // The write that stores the page's artifact — its source included — has put the file on disk and has not answered yet.
+  const stopAtThePageWrite = (dir) => {
+    const inner = createNodeWorkspaceStorage(dir);
+    const storage = {};
+    for (const method of ['readText', 'writeTextAtomic', 'deleteFile', 'deleteByPrefix', 'ensureContainer', 'exists']) {
+      if (typeof inner[method] === 'function') storage[method] = (...args) => inner[method](...args);
+    }
+    storage.writeTextAtomic = async (segments, text) => {
+      await inner.writeTextAtomic(segments, text);
+      if (!stopped && segments[0] === 'gen-pages') { stopped = true; reached(); await held; }
+    };
+    return storage;
+  };
+  const genpage = makeGenpageSdk(INSTANCE, {
+    httpClient: server.http(),
+    mkdtempSync: (prefix) => { const dir = fs.mkdtempSync(prefix); folders.push(dir); return dir; },
+    createStorage: stopAtThePageWrite,
+  });
+  const reader = pageReader(genpage, { endWaitMs: 20 });
+  const reading = reader.pageCode(PAGE_OVERVIEW).catch((error) => error);
+  try {
+    await arrived;
+    await reader.endPageReads();
+    const source = path.join(folders[0], 'gen-pages', `${PAGE_OVERVIEW}.json`);
+    assert.ok(fs.existsSync(source), 'endPageReads gave up on the cleanup while the page source is on disk');
+
+    let answered = false;
+    const disposing = genpage.dispose().then((outcome) => { answered = true; return outcome; });
+    for (let i = 0; i < 40; i += 1) await turn();
+    assert.strictEqual(answered, false, 'dispose() does not answer while that cleanup is still waiting: it has joined it');
+    assert.ok(fs.existsSync(source));
+
+    release();
+    assert.deepStrictEqual(await disposing, { left: [] });
+    assert.ok(!fs.existsSync(folders[0]), 'the workspace — and the page source in it — is gone when dispose() answers');
+  } finally {
+    release();
+    await reading;
+    await genpage.dispose();
+    for (const dir of folders) fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// The reader that was used for the pass that ended its page reads may be used for another: the listing the ended pass was
+// still waiting for is the answer of that pass, and not one to hand the next.
+test('a listing the pass that ended its reads was waiting for is not what the next pass on the same reader is answered with', async () => {
   let listings = 0;
-  let endListing;
-  const genpageCli = {
-    // The first listing hangs until its client is told to end its runs, as a pac listing does; the next one answers.
+  const answers = [];
+  const genpage = {
     enumerateEnv: () => {
       listings += 1;
-      if (listings > 1) return Promise.resolve({ ok: true, ids: [PAGE_OVERVIEW] });
-      return new Promise((resolve) => { endListing = () => resolve({ ok: false, ids: [], error: 'pac genpage list (env-wide) was ended: pac was ended' }); });
+      return new Promise((resolve) => { answers.push(resolve); });
     },
-    abort: () => endListing(),
   };
-  const reader = pageReader(genpageCli);
-  const cutShort = reader.existenceIds().catch((error) => error);
+  const reader = pageReader(genpage);
+  const first = reader.existenceIds().catch((error) => error);
+  for (let i = 0; i < 50 && !answers.length; i += 1) await turn();
   await reader.endPageReads();
-  assert.match((await cutShort).message, /was ended/, 'the pass that ended it is told so');
   reader.beginVerificationPass();
-  assert.deepStrictEqual(await reader.existenceIds(), [PAGE_OVERVIEW], 'the next pass lists again');
-  assert.strictEqual(listings, 2);
+  const next = reader.existenceIds();
+  for (let i = 0; i < 50 && answers.length < 2; i += 1) await turn();
+  assert.strictEqual(listings, 2, 'the next pass lists again instead of waiting for the ended pass\'s listing');
+  answers[1]({ ok: true, ids: [PAGE_OVERVIEW] });
+  answers[0]({ ok: true, ids: ['the-stale-listing'] });
+  assert.deepStrictEqual(await next, [PAGE_OVERVIEW]);
+  assert.deepStrictEqual(await first, ['the-stale-listing'], 'the ended pass still gets its own answer');
 });
 
-test('the next pass begins with the page reads usable again, and the wait for downloads that cannot be ended is bounded', async () => {
+test('the next pass begins with the page reads usable again', async () => {
   const code = 'export default function P() { return null; }';
-  const genpageCli = {
+  const genpage = {
     enumerateEnv: async () => ({ ok: true, ids: [PAGE_OVERVIEW] }),
-    download: async ({ outputDir, pageIds }) => { fs.mkdirSync(path.join(outputDir, pageIds[0]), { recursive: true }); fs.writeFileSync(path.join(outputDir, pageIds[0], 'page.tsx'), code); return true; },
+    read: async () => ({ source: code }),
   };
-  const reader = pageReader(genpageCli);
+  const reader = pageReader(genpage);
   await reader.endPageReads();
   await assert.rejects(reader.pageCode(PAGE_OVERVIEW), /page reads were ended/);
   reader.beginVerificationPass();
   assert.strictEqual(await reader.pageCode(PAGE_OVERVIEW), code, 'a reader may be used for another pass');
   assert.deepStrictEqual(await reader.existenceIds(), [PAGE_OVERVIEW]);
+});
 
-  // A pac client that cannot end its runs (no `abort`) must not hold the pass for ever.
-  const stuck = pageReader({ enumerateEnv: async () => ({ ok: true, ids: [] }), download: () => new Promise(() => {}) }, { endWaitMs: 50 });
-  stuck.pageCode(PAGE_DETAIL).catch(() => {});
-  for (let i = 0; i < 50; i += 1) await turn();
-  const startedAt = Date.now();
-  await stuck.endPageReads();
-  assert.ok(Date.now() - startedAt < 1500, 'it answered after the bound');
+test('a reader with no page backend exposes no page reads at all, so verify fails closed for a page-bearing spec rather than reporting a false pass', () => {
+  const reader = pageReader(undefined);
+  for (const method of ['existenceIds', 'sitemapPageIds', 'manifest', 'pageCode', 'pageCodes', 'endPageReads']) {
+    assert.strictEqual(reader[method], undefined, method);
+  }
 });
 
 test('the root business unit is read once, and every caller asking at the same time gets it', async () => {

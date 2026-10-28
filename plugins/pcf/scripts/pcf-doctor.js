@@ -14,6 +14,7 @@ const {
   collectToolchain,
   hasErrors,
 } = require('./lib/pcf-doctor.js');
+const { makeWritesBlocking } = require('./lib/output-redaction.js');
 
 const USAGE = `Usage:
   node scripts/pcf-doctor.js [--project <dir>] [--hosts model,pages] [--needs build,push] [--npm-cli <path>]`;
@@ -24,6 +25,7 @@ const KNOWN_HOSTS = ['model', 'pages'];
 const KNOWN_NEEDS = ['build', 'push'];
 
 function usageError(message) {
+  makeWritesBlocking(process.stdout, process.stderr);
   process.stderr.write(`${USAGE}\n${message}\n`);
   process.exit(1);
 }
