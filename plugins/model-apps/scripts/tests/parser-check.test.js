@@ -361,13 +361,13 @@ test('parser check: a page the lexer misreads, resolved as TypeScript parses it,
   }
 });
 
-// `of` after a binding that ends where the lexer reads no word — a letter beyond ASCII, TypeScript's non-null `!`, a type after `as` or
+// `of` after a binding that ends where the lexer reads no word — a letter beyond ASCII, TypeScript's non-null `!`, any type after `as` or
 // `satisfies` — is the keyword of a for head, so what follows it is a regex. The lexer reads it so and says it guessed, and the parser check, asked there,
-// finds the regex too: the call written inside it is data, which no build may rewrite, and a real call after it still resolves.
+// finds the regex too: the call written inside it is data, which no build may rewrite, and a real call after it still resolves where the parse vouches for the page.
 test('parser check: a regex after "of" in a for head whose binding the lexer cannot read to its end is data, and is never rewritten', () => {
   const regex = '/navigateTo({pageType:"generative",pageId:"PAGEREF_detail"})/';
   const real = 'navigateTo({ pageType: "generative", pageId: "PAGEREF_detail" });';
-  for (const binding of ['const π', 'x!', 'x as Array<T>', 'x satisfies Array<T>', 'x as "a"', 'x as `a${string}`', 'x as void']) {
+  for (const binding of ['const π', 'x!', 'x as Array<T>', 'x satisfies Array<T>', 'x as "a"', 'x as `a${string}`', 'x as void', 'x as enum', 'x satisfies enum']) {
     for (const eol of ['\n', '\r\n']) {
       const code = `export default function P() {${eol}let x; for (${binding} of ${regex}.source) {}${eol}return null;${eol}}${eol}`;
       assert.equal(parses(code).parseDiagnostics.length, 0, `TypeScript parses ${binding}`);
@@ -375,8 +375,15 @@ test('parser check: a regex after "of" in a for head whose binding the lexer can
       assert.deepEqual(navReferencedKeys(code), [], `${binding}: a regex is no navigation call`);
       assert.equal(resolvePageRefs(new Map([['page', { code }]]), new Map([['detail', ID]])).deployment.get('page'), code, `${binding}: nothing is rewritten`);
       const withCall = code.replace('return null;', `${real}${eol}return null;`);
-      const deployed = resolvePageRefs(new Map([['page', { code: withCall }]]), new Map([['detail', ID]])).deployment.get('page');
-      assert.equal(deployed, withCall.replace(real, real.replace('PAGEREF_detail', ID)), `${binding}: the real call resolves, and the regex is kept`);
+      const result = resolvePageRefs(new Map([['page', { code: withCall }]]), new Map([['detail', ID]]));
+      // `enum` is a reserved word used as a type's name, a page the parser check vouches for nothing in (typescript-views), so the lexer's guess
+      // stands: the build rewrites neither the call nor the regex, and reports both tokens as held.
+      if (binding.endsWith('enum')) {
+        assert.equal(result.deployment.get('page'), withCall, `${binding}: nothing is rewritten`);
+        assert.equal(result.residual.length, 2, `${binding}: both tokens are held`);
+        continue;
+      }
+      assert.equal(result.deployment.get('page'), withCall.replace(real, real.replace('PAGEREF_detail', ID)), `${binding}: the real call resolves, and the regex is kept`);
     }
   }
 });

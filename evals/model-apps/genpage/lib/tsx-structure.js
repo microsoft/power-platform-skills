@@ -33,8 +33,8 @@ const { blankLiterals, commentRanges, ofTakesOperand } = require('../../../../pl
 const { renderedText, characterReferences, hasReference } = require('./jsx-references.js');
 
 const IDENT_CHAR = /[\w$]/;
-// Words after which an expression (so an element) may start, as in source-literals.js EXPR_START_WORDS. `of` is one only as the keyword of a
-// `for (… of …)` head, which the lexer's own rule decides (ofTakesOperand); anywhere else it is a name (`type of<T> = T`, `fn<of<Row>>()`).
+// Words after which an expression (so an element) may start, as in source-literals.js EXPR_START_WORDS. `of` is one only inside a
+// `for (… of …)` head, which the lexer's own rule decides (ofTakesOperand); outside every one it is a name (`type of<T> = T`, `fn<of<Row>>()`).
 const EXPR_WORDS = new Set(['return', 'yield', 'await', 'default', 'case', 'else', 'do', 'in', 'of', 'typeof', 'void', 'throw']);
 const OPENERS = { '(': ')', '[': ']', '{': '}' };
 

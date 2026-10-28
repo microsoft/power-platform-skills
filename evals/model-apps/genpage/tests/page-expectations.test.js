@@ -159,7 +159,7 @@ test('tsx structure: a tag whose name starts with _ or $ is read or reported lik
   assertPass(grade(CURRENCY, inline('function t(k) { return k; }\nconst P = () => <_Grid title={t("total")}>{t("ok")}</_Grid>;')));
 });
 
-// `of` is a keyword only after what a `for (… of …)` head binds, and a name anywhere else (the lexer's ofTakesOperand), so
+// `of` is a keyword only inside a `for (… of …)` head, and a name outside every one (the lexer's ofTakesOperand), so
 // a `<` after a type or a value named `of` opens type arguments or compares; it never starts an element. Generic calls
 // and annotations through such a type are no tags, and the page's checks read only its real elements.
 test('tsx structure: a type or value named `of` starts no element; the `of` of a for head still does', () => {
