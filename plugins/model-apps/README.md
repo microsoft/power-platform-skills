@@ -111,6 +111,10 @@ Already have an app and just want to add a page? Use `/genpage` — you never ne
 `/app-builder` first. Building from scratch? `/app-builder` authors its own generative pages as part
 of the build, so you don't need to run `/genpage` afterwards.
 
+> **Model selection:** Use a general-purpose coding model or an advanced reasoning model. Lightweight
+> models optimized primarily for fast, simple tasks aren't recommended for `/app-builder` or `/genpage`
+> because both skills require multistep planning, tool use, code generation, and validation.
+
 ### `/app-builder`
 
 > Review the dry-run plan before approving, and use `teardown-model-app.js --apply` to clean up
