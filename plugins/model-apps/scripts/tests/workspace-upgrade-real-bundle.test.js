@@ -135,7 +135,7 @@ test('upgrade: an unchanged rebuild over the old workspace succeeds and sends ex
   const { upgrade, control } = await paths();
   const { value: { result, warnings } } = stage(upgrade, 'rebuild');
   assert.equal(result.ok, true, JSON.stringify(result.errors));
-  assert.deepEqual(warnings, stage(control, 'rebuild').value.warnings, 'no warning the current workspace does not give');
+  assert.deepEqual([...warnings].sort(), [...stage(control, 'rebuild').value.warnings].sort(), 'no warning the current workspace does not give (views are reconciled side by side, so in any order)');
   assert.deepEqual(upgrade.afterRebuild, upgrade.afterBuild, 'nothing created or deleted');
   assert.deepEqual(upgrade.rebuild.writes, control.rebuild.writes, 'the same writes as over a current workspace');
   // Every copy the rebuild edits is re-read and stamped current, so no later push meets the refusal. A command bar is never re-pushed by a
@@ -150,13 +150,16 @@ test('upgrade: an edited rebuild over the old workspace applies the edits as ove
   const { upgrade, control } = await paths();
   const { value: { result, warnings } } = stage(upgrade, 'editBuild');
   assert.equal(result.ok, true, JSON.stringify(result.errors));
-  assert.deepEqual(warnings, stage(control, 'editBuild').value.warnings, 'no warning the current workspace does not give');
+  assert.deepEqual([...warnings].sort(), [...stage(control, 'editBuild').value.warnings].sort(), 'no warning the current workspace does not give (views are reconciled side by side, so in any order)');
   assert.deepEqual(upgrade.editBuild.writes, control.editBuild.writes, 'the same writes as over a current workspace');
   assert.notDeepEqual(upgrade.editBuild.writes, upgrade.rebuild.writes, 'and the edits were written');
   assert.deepEqual(upgrade.edited, control.edited, 'the environment ends with the same features');
   const verify = stage(upgrade, 'verify').value;
   assert.equal(verify.ok, true, JSON.stringify(verify));
-  assert.deepEqual(verify, stage(control, 'verify').value, 'verify reports what it reports over a current workspace');
+  // The checks run side by side, so they are compared as a set.
+  const checks = (result) => result.checks.map((c) => JSON.stringify(c)).sort();
+  const current = stage(control, 'verify').value;
+  assert.deepEqual({ ...verify, checks: checks(verify) }, { ...current, checks: checks(current) }, 'verify reports what it reports over a current workspace');
 });
 
 test('upgrade: a download and a teardown after the upgrade work as after a current build, and leave the environment as it was', { skip: SKIP }, async () => {
