@@ -73,6 +73,8 @@ function editedSpec() {
   spec.dashboards[0].description = 'Project health, edited.';
   spec.appShell.areas[0].groups[0].subAreas.find((s) => s.title === 'Help').title = 'Help Center';
   spec.commands.push({ entity: 'contoso_task', label: 'Close Task', location: 'MainTab', library: 'contoso_project.js', function: 'Project.escalate' });
+  // A table the app did not hold: the update adds a component, which the bundled SDK pins to the app row it holds (a guarded change set).
+  spec.app.tables.push('account');
   return spec;
 }
 
