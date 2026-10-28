@@ -484,7 +484,7 @@ test('verifySpec pages: a residual PAGEREF_ in deployed nav code FAILS the no-pa
 // the lexer read only by guess proves no edge: after `of/2` it reads a regex up to the next `/`, and the `/*` inside it opens a comment that
 // ends inside a string, so the string's text — here a navigation call to the target — is read as code.
 test('verifySpec pages: an id in a call the lexer reads only by guess does not prove the nav edge', async () => {
-  const forgery = ['const of = 12;', 'const count = of/2; const re = /\\/*$/;', `const note = "*/ navigateTo({pageType:'generative', pageId:'${GP_DETAIL}'}) /*";`, ''].join('\n');
+  const forgery = ['const of = 12;', 'for (const x of of/2 + "") {} const re = /\\/*$/;', `const note = "*/ navigateTo({pageType:'generative', pageId:'${GP_DETAIL}'}) /*";`, ''].join('\n');
   const verify = async (code) => verifySpec(pageSpec(), pageRead({ sitemapIds: [GP_OVERVIEW, GP_DETAIL], existenceIds: [GP_OVERVIEW, GP_DETAIL], manifest: BOTH_MANIFEST, sitemap: SITEMAP_OK, code: { [GP_OVERVIEW]: code } }));
   const forged = await verify(forgery);
   assert.ok(forged.checks.some((c) => c.kind === 'page-nav' && c.name === 'Overview -> detail' && !c.present), 'the string is not a navigation');

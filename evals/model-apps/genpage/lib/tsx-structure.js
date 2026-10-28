@@ -29,11 +29,12 @@
 //   - a function's scope is a body `{…}` (or an arrow's expression) found from `=>` and `function`;
 //     a declaration with no semicolon may run on into the next statement.
 
-const { blankLiterals, commentRanges } = require('../../../../plugins/model-apps/scripts/lib/source-literals.js');
+const { blankLiterals, commentRanges, ofTakesOperand } = require('../../../../plugins/model-apps/scripts/lib/source-literals.js');
 const { renderedText, characterReferences, hasReference } = require('./jsx-references.js');
 
 const IDENT_CHAR = /[\w$]/;
-// Words after which an expression (so an element) may start, as in source-literals.js EXPR_START_WORDS.
+// Words after which an expression (so an element) may start, as in source-literals.js EXPR_START_WORDS. `of` is one only as the keyword of a
+// `for (… of …)` head, which the lexer's own rule decides (ofTakesOperand); anywhere else it is a name (`type of<T> = T`, `fn<of<Row>>()`).
 const EXPR_WORDS = new Set(['return', 'yield', 'await', 'default', 'case', 'else', 'do', 'in', 'of', 'typeof', 'void', 'throw']);
 const OPENERS = { '(': ')', '[': ']', '{': '}' };
 
@@ -58,7 +59,10 @@ function wordBefore(code, end) {
 function elementMayStart(code, at) {
   const k = prevSignificant(code, at);
   if (k < 0) return true;
-  if (IDENT_CHAR.test(code[k])) return EXPR_WORDS.has(wordBefore(code, k));
+  if (IDENT_CHAR.test(code[k])) {
+    const word = wordBefore(code, k);
+    return word === 'of' ? ofTakesOperand(code, k).operand : EXPR_WORDS.has(word);
+  }
   return !/[)\]]/.test(code[k]);
 }
 

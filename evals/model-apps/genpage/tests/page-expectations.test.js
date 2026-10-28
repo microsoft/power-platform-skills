@@ -159,6 +159,30 @@ test('tsx structure: a tag whose name starts with _ or $ is read or reported lik
   assertPass(grade(CURRENCY, inline('function t(k) { return k; }\nconst P = () => <_Grid title={t("total")}>{t("ok")}</_Grid>;')));
 });
 
+// `of` is a keyword only after what a `for (… of …)` head binds, and a name anywhere else (the lexer's ofTakesOperand), so
+// a `<` after a type or a value named `of` opens type arguments or compares; it never starts an element. Generic calls
+// and annotations through such a type are no tags, and the page's checks read only its real elements.
+test('tsx structure: a type or value named `of` starts no element; the `of` of a for head still does', () => {
+  const { unreadableElements } = require('../lib/tsx-structure.js');
+  const CURRENCY = 'Phase 5 (Page Builder): Generated .tsx does NOT hardcode currency symbols or date formats';
+  const body = 'function t(k) { return k; }\nexport default function P() { return <Field label={t("name")}><Input aria-label={t("name")} /><Text>{t("hi")}</Text></Field>; }\n';
+  const names = (page) => jsxElements(page).map((e) => e.name);
+  for (const head of [
+    'type of<T> = T;\nconst x = fn<of<List<() => Row>>>();\n', 'import type { of } from "./t";\nconst x = fn<of<List<() => Row>>>();\n',
+    'type of<T> = T;\nconst x = fn<of<List<Row>>>();\n', 'type of<T> = T;\nlet v: Map<string, of<List<() => Row>>>;\n',
+    'const of = 1;\nconst y = of < 2;\nconst z = of / 2;\nconst w = x.of < y;\n',
+  ]) {
+    const page = head + body;
+    assert.deepEqual(unreadableElements(page), [], head);
+    assert.deepEqual(names(page), ['Field', 'Input', 'Text'], head);
+    for (const check of [LABELS, TRANSLATED, CURRENCY]) assertPass(grade(check, inline(page)));
+  }
+  for (const head of ['for (const x of <A title="&euro;" />.props.items) {}\n', 'async function f() { for await (const x of <A title="&euro;" />) {} }\n']) {
+    assert.deepEqual(names(head + body), ['A', 'Field', 'Input', 'Text'], head);
+    assertFail(grade(CURRENCY, inline(head + body)), /hardcoded currency symbol "\u20ac"/);
+  }
+});
+
 // --- Eval 4: the wizard ----------------------------------------------------------------------------
 
 const E4 = '4-case-wizard';

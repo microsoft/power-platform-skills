@@ -1920,24 +1920,48 @@ test('ambiguity paren: a "/" or "<" after a ")" whose "(" is out of reach is hea
   ]);
 });
 
-// `of`, `await` and `yield` are keywords where a regex may follow and names where a division does; `type`, `get`, `async`, `as` … are keywords
+// `await` and `yield` are keywords where a regex may follow and names where a division does; `type`, `get`, `async`, `as` … are keywords
 // in a declaration or an assertion and names anywhere else. Which one it is depends on the grammar around it.
-//   const of = 12; const count = of/2; const re = /\/*$/;
+//   const yield = 12; const count = yield/2; const re = /\/*$/;
+// `of` is one too, but only in a `for` head, which the lexer finds: anywhere else it is a name for certain (the test after this one).
 const CONTEXTUAL_WORDS = ['of', 'await', 'yield', 'let', 'async', 'static', 'get', 'set', 'as', 'satisfies', 'type', 'from', 'declare', 'abstract', 'readonly',
   'keyof', 'infer', 'is', 'asserts', 'override', 'accessor', 'using', 'out', 'module', 'namespace', 'global', 'unique', 'implements'];
 test('ambiguity keyword: a "/" or "<" after a word that is a keyword in some places and a name in others', () => {
-  for (const word of CONTEXTUAL_WORDS) {
+  for (const word of CONTEXTUAL_WORDS.filter((w) => w !== 'of')) {
     assertAmbiguous('keyword', [[`var ${word} = 12; var count = ${word}/2; var re = /x/;`, '/2; var re']]);
   }
   // A `<` after `async` on its line is code, whatever follows it (the next test). After a line break `async` is a name, and what follows is a guess unless it cannot be an element:
   // `<T,>(x: T) => x` cannot, and is code there as everywhere.
-  assertAmbiguous('keyword', [['const f = async\n<T extends X>text</T>;', '<T extends X>'], ['const f = async\n<div>x</div>;', '<div>'], ['const c = of/2; const re = /\\/*$/;', '/2; const re']]);
+  assertAmbiguous('keyword', [['const f = async\n<T extends X>text</T>;', '<T extends X>'], ['const f = async\n<div>x</div>;', '<div>'], ['const c = yield/2; const re = /\\/*$/;', '/2; const re']]);
   assertCertain([
     'a.of / 2 / 3', 'obj?.get / 2 / 3', 'a.type / 2 / 3', 'ofx / 2 / 3', 'typeofx / 2 / 3', 'return /x/.test(s)', 'typeof /x/.test(s)', 'x = new /x/', 'a = await_ / 2 / 3',
     'const f = (x) => x < 3;',
   ]);
 });
 
+// `of` is the keyword in one place only: right after what the head of a `for (… of …)` or `for await (… of …)` binds (TypeScript's
+// parseForOrForInOrForOfStatement, https://github.com/microsoft/TypeScript/blob/v5.8.3/src/compiler/parser.ts). Anywhere else it is a name, for
+// certain, so a `/` after it divides and a `<` compares or opens type arguments. Read as the keyword, `type of<T> = T;` opened an element at `<T>`
+// whose text ran on over the next statement, and `fn<of<List<() => Row>>>()` one at `<of` whose type arguments the lexer could only guess.
+test('"of" is a name outside a for head, for certain, and the keyword after what a for head binds', () => {
+  const names = [
+    'type of<T> = T;\nconst x = fn<of<List<() => Row>>>();\n', 'import type { of } from "./t";\nconst x = fn<of<List<() => Row>>>();\n',
+    'type of<T> = T;\nconst x = fn<of<List<Row>>>();\n', 'let v: Map<string, of<List<() => Row>>>;\n', 'const c = of < 2 && of / 2;',
+    'for (let i = 0; i < of / 2; i++) {}', 'for (const [a = of / 2] of xs) {}', 'for (const x of xs) of / 2 / 3;', 'const y = x.of < y; const w = 1;',
+  ];
+  for (const code of names) assert.strictEqual(blankLiterals(code), code.replace('"./t"', '"   "'), `nothing but the string is blanked: ${JSON.stringify(code)}`);
+  assertCertain([...names, 'const of = 12; const count = of/2; const re = /\\/*$/;', 'f(of / 2, /x/)', 'for (const k in of) /x/.test(k);']);
+  assert.ok(blankLiterals('const of = 12; const count = of/2; const re = /navigateTo/;').includes('count = of/2; const re = /          /'), 'a division, then the regex');
+  // After what the head binds — a name, a member, a pattern — the keyword, as it always was: a regex or an element follows. A guess (`keyword`) still,
+  // because the word before it may be a keyword or a name (`for (let of …)`), as may an `of` before it (`for (const x of of …)`).
+  for (const code of [
+    'for (const x of /navigateTo/.exec(s)) {}', 'for (x.y of /navigateTo/.exec(s)) {}', 'for (const [a, b] of /navigateTo/.exec(s)) {}',
+    'async function f() { for await (const x of /navigateTo/.exec(s)) {} }', 'for (const x of <A>navigateTo</A>.props.items) {}',
+  ]) {
+    assert.ok(!blankLiterals(code).includes('navigateTo'), `read as a regex or an element: ${JSON.stringify(code)}`);
+    assertAmbiguous('keyword', [[code, code.includes('/navigateTo') ? '/navigateTo' : '<A>']]);
+  }
+});
 // `async` and a `<` on its line. TypeScript's rule for `.tsx` steps over `async` (parser.ts, isParenthesizedArrowFunctionExpressionWorker,
 // https://github.com/microsoft/TypeScript/blob/v5.8.3/src/compiler/parser.ts): with no line break before the `<`, the next tokens decide — a comma, `=` or `extends` and a token that is not
 // `=`, `>` or `/` — as they do for any `<`, and a generic shape is the head of an async generic arrow. Every other is no arrow, and `async` is then an ordinary token: a method named `async`
@@ -3044,7 +3068,7 @@ test('AMBIGUITY_KINDS names every kind the lexer reports, each with an example t
   const examples = {
     brace: 'const count = {valueOf(){return 12;}}/2; const half = total / 2;',
     paren: `if (true /*${'x'.repeat(2100)}*/) /abc/.test(text);`,
-    keyword: 'const of = 12; const count = of/2; const re = /x/;',
+    keyword: 'const yield = 12; const count = yield/2; const re = /x/;',
     angle: 'const half = total as Types . Alias<number> / 2; const re = /x/;',
     identifier: 'var Al\\u0069as = 12;',
     operator: 'const m = [.../a/.exec("a")]; const n = /b/;',
@@ -3538,10 +3562,14 @@ test('every scan of the lexer reads U+0085 and the zero-width space as white spa
       assert.ok(!maskOf(code).includes('navigateTo'), `the regex is data: ${visible(code)}`);
     }
     // A keyword before a `/` or a `<`: an expression starts. A name before one: it divides or compares.
-    for (const word of ['return', 'typeof', 'throw', 'delete', 'void', 'in', 'of']) {
+    for (const word of ['return', 'typeof', 'throw', 'delete', 'void', 'in']) {
       const code = `function f(x) { ${word}${c}/navigateTo({pageType:"generative",pageId:"PAGEREF_detail"})/.test(s); }\n`;
       assert.ok(!maskOf(code).includes('navigateTo'), `${word}: the regex is data: ${visible(code)}`);
     }
+    // `of` is the keyword after what a `for` head binds, and a name anywhere else: it divides there, for certain.
+    const forOf = `for${c}(const${c}y${c}of${c}/navigateTo({pageType:"generative",pageId:"PAGEREF_detail"})/.exec(s)) {}\n`;
+    assert.ok(!maskOf(forOf).includes('navigateTo'), `of: the regex is data: ${visible(forOf)}`);
+    assertCertain([`function f(x) { const k = of${c}/ 2 / 3; }`, `for${c}(;${c}of${c}/ 2 / 3;) {}`]);
     // A property named like a keyword is no keyword, with the `.` and the word apart: `obj.${c}return / 2 / 3` divides, with no regex.
     assertCertain([`const k = obj.${c}return / 2 / 3;`, `const k = obj${c}.${c}new / 2 / 3;`, `const k = obj?.${c}delete / 2 / 3;`, `const k = a${c}+${c}b / 2 / 3;`]);
     // `type`, `export` and `declare` before a type alias head, and a name with the white space between them.
