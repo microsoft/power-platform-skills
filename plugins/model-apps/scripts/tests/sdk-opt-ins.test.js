@@ -165,3 +165,15 @@ test('the build creates every app published: its app definition leaves `publishe
   // (RetrieveUnpublishedMultiple), where the build's own probes could not see a draft.
   assert.deepStrictEqual(scriptsMatching(/\bpublished\s*:\s*false\b/), ['apps.js'], 'no other script creates a draft app, which its own probes cannot see');
 });
+
+// --- results whose meaning the bundled SDK changed -------------------------------------------------------------
+
+// The bundled SDK's upsertRecord() reports `created` as `undefined` unless it is asked to classify the write (`reportCreated: true`):
+// a plain upsert answers 204 to an insert and to an update alike, so the `false` it used to report for every insert was wrong. And its
+// fetchSolution() now returns kinds it used to drop (environment variables, connection references, field security profiles, Custom
+// APIs, duplicate-detection rules). No script calls either, so neither change reaches a maker; a script that starts to must read
+// `created === true` / `=== false` (never `!created`) and ignore the kinds it does not model — this fails until it is looked at.
+test('no script reads upsertRecord() or fetchSolution(), whose results the bundled SDK changed', () => {
+  assert.deepStrictEqual(scriptsMatching(/\bupsertRecord\b/), [], 'upsertRecord: `created` is undefined unless reportCreated is asked; UPSERT_OUTCOME_UNKNOWN is never re-sent (lib/retry-policy.js)');
+  assert.deepStrictEqual(scriptsMatching(/\bfetchSolution\b/), [], 'fetchSolution: it now returns kinds the plugin does not model');
+});

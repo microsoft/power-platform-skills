@@ -4539,6 +4539,15 @@ to look at the change in Maker and put into the spec what should stay, then make
 re-download is no substitute: it captures no forms, views or charts, and an interrupted first build
 can leave them before the app exists.)
 
+`scripts/tests/workspace-upgrade-real-bundle.test.js` proves the whole upgrade end to end with BOTH
+bundles: the previous release's bundle (read from git history at the release commit, or the file
+`MODEL_APPS_PREVIOUS_BUNDLE` names; the test skips without either, as a shallow clone does) builds the
+lifecycle kitchen-sink app, then the vendored one runs an unchanged rebuild, an edited rebuild, verify,
+a download and a teardown on that workspace — each compared with the same steps on a workspace the
+vendored bundle wrote (same writes, same features, same verify report). A command bar's old copy is
+never re-read: the build never pushes an existing bar, so it is never refused either. On the next
+re-vendor, point `PREVIOUS_RELEASE` at the release being replaced.
+
 **Newer SDK behaviors the plugin adopts, and the options it leaves off.** Each is pinned against the
 real bundle, because a stub stays green through a change in the SDK's own rule.
 
@@ -5628,11 +5637,16 @@ that keeps an `external` web resource. Expect a clean environment afterwards *ex
 confirming it owns no other solution.
 
 **`appmodulecomponent` rows also survive an app delete, and teardown deliberately leaves them** — this
-has been re-reported as a teardown bug and re-measured. The platform exposes no way to remove them:
-the table registers only `Retrieve`/`RetrieveMultiple` (a direct `DELETE` 400s), and
-`RemoveAppComponents` returns `204` while removing nothing as long as the app exists, then `404`s once
-it is gone. Calling it would report a cleanup that never happened. The rows are unreachable metadata
-that a rebuild neither adopts nor trips over; revisit only if the platform adds a delete or a cascade.
+has been re-reported as a teardown bug and re-measured. Measured: the component rows an app records, of
+every type (tables, forms, views, charts, the sitemap), survive its delete, and no tested sequence removes
+them all. The table registers only `Retrieve`/`RetrieveMultiple` (an exact-id `DELETE` answers 400
+`0x80040800`). `RemoveAppComponents` before the delete acts on the app's current layer only: a published
+app gains a pending copy of its components, publishing it without its sitemap is refused (`0x80050114`),
+and even one atomic change set of the removal, the app delete and the sitemap delete leaves the published
+layer's rows. After the delete, `RemoveAppComponents` answers 404 (`0x80040217`). The bundled SDK's app
+delete is unchanged for the same reason, and teardown does not try a removal that would report a cleanup
+that never happened. The rows are unreachable metadata that a rebuild neither adopts nor trips over;
+revisit only if the platform adds a delete or a cascade.
 
 **After modifying the plugin also:** run `claude --debug` to confirm the plugin loads, exercise the
 skill (`/genpage` or `/app-builder`), and for genpage verify Playwright browser checks
