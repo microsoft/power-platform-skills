@@ -321,8 +321,15 @@ function closingTag(code, name, from, openings = []) {
   const re = new RegExp(`</${name.replace(/[.$]/g, '\\$&')}(?=[\\s/>])`, 'g');
   re.lastIndex = from;
   let depth = 1;
-  let next = openings.findIndex((tag) => tag.start >= from);
-  if (next < 0) next = openings.length;
+  // The first opening at or after `from`, by a lower-bound binary search: `openings` is in strictly increasing `start` order,
+  // as openingTags yields its tags (its pattern's lastIndex only moves forward), so this costs log n per element instead of
+  // a scan from the first opening, which made a page of n same-name siblings (`<div></div>` × n) cost n² / 2 visits.
+  let next = 0;
+  for (let high = openings.length; next < high;) {
+    const mid = (next + high) >>> 1;
+    if (openings[mid].start < from) next = mid + 1;
+    else high = mid;
+  }
   for (let m = re.exec(code); m; m = re.exec(code)) {
     for (; next < openings.length && openings[next].start < m.index; next += 1) {
       const tag = tagEnd(code, openings[next].open.attrsFrom);
@@ -673,4 +680,6 @@ module.exports = {
   namedFunctions, nestedDefinitionProblems, withoutComments,
   // Exported so that a check needing a page's function scopes reads them through this reader instead of a second one.
   functionScopes,
+  // Exported for its test, which counts the openings it reads to pin that finding a closing tag is not quadratic.
+  closingTag,
 };
