@@ -57,6 +57,28 @@ test('judgeFailure: an explicit never wins over everything the failure carries, 
   assert.strictEqual(judgeFailure({ message: 'x', cause: { transient: false, statusCode: 429 } }).never, true, 'the old reading of the error and its cause still holds');
 });
 
+// REAL BUNDLE: the bundled SDK's errors for a write whose answer was lost. The SDK keeps the ConnectionError the write failed with — a 503, a
+// 429, a reset — as the cause, and says the write MAY have committed and is never sent again. A whole build run again would send it again, so
+// these are never run again, whatever the cause says; any other typed error beside a 503 still is (the control).
+test('judgeFailure: an SDK write whose outcome is unknown is never run again, even when the answer it lost was a 503 or a reset', () => {
+  const bundle = require('../vendor/cds-maker-sdk.cjs');
+  const lost = (status) => new ConnectionError('https://contoso.crm.dynamics.com/api/data/v9.2/contoso_tasks(contoso_key=\'A-1\')', status, status ? 'Service Unavailable' : 'Request failed: read ECONNRESET');
+  for (const status of [503, 429, 0]) {
+    const upsert = new bundle.UpsertOutcomeUnknownError('contoso_task', { contoso_key: 'A-1' }, status, undefined, 'The upsert of contoso_task may have been written; it was not sent again.', lost(status));
+    assert.strictEqual(upsert.code, 'UPSERT_OUTCOME_UNKNOWN');
+    assert.strictEqual(judgeFailure(upsert).never, true, `UPSERT_OUTCOME_UNKNOWN over ${status}`);
+    assert.strictEqual(retryPolicyFor(upsert), RETRY.NEVER);
+    assert.strictEqual(isTransientHalt(new BuildHalt('sample-data failed', { phase: 'sample-data', cause: upsert, retry: retryPolicyFor(upsert) })), false);
+    const app = Object.assign(new SdkError('APP_UPDATE_OUTCOME_UNKNOWN', 'The app update may have committed.'), { statusCode: status });
+    Object.defineProperty(app, 'cause', { value: lost(status), enumerable: false });
+    assert.strictEqual(judgeFailure(app).never, true, `APP_UPDATE_OUTCOME_UNKNOWN over ${status}`);
+    // The control: another typed error over the same lost answer is still the service's to explain.
+    const other = Object.assign(new SdkError('SOME_OTHER_CODE', 'x'), { statusCode: status });
+    Object.defineProperty(other, 'cause', { value: lost(status), enumerable: false });
+    assert.strictEqual(judgeFailure(other).never, false, `another typed error over ${status}`);
+  }
+});
+
 test('judgeFailure: the HTTP status decides first — 429, 502, 503 and 504 are transient wherever in the chain the service\'s answer sits', () => {
   for (const status of [429, 502, 503, 504]) {
     assert.strictEqual(isTransientHalt(connectionError(status, 'nothing to read here')), true, `${status} on the error`);
