@@ -121,7 +121,7 @@ function prevSignificant(src, i) {
 //                         const n = {valueOf(){return 12;}}/2; const re = /x/;
 //   paren               `)` ends an if/for/while head (a regex follows) or an operand (a division), and its `(` is out of reach
 //                         if (true /* …2,100 characters… */) /navigateTo({…})/.test(text);
-//   keyword             a word that is a keyword in some places and a name in others (`of` only after what a `for … of` head binds: ofTakesOperand)
+//   keyword             a word that is a keyword in some places and a name in others (`of` only in a `for` head, where the scan cannot prove it a name: ofTakesOperand)
 //                         const of = 12; for (const x of of/2 + "") {} const re = /\/*$/;
 //   angle               a `>` may close type arguments, a JSX tag or a comparison; the `>` of `=>`, the closer of a cast the lexer proves is one (castKeywordIsCertain) and the end of an element
 //                       or a regex it read are certain
@@ -691,12 +691,15 @@ function wordBefore(src, j) {
 //   type of<T> = T;  const x = fn<of<List<Row>>>();     a type's name, twice: no element
 //   const half = of / 2;                                  a division
 //   for (const x of <A />.props.items) {}                 the keyword: an element
-// The head is found as the nearest bracket left open before the word, counting back over the lexer's output (where the brackets of strings,
-// comments, regexes and JSX text are blank), with no `;` at its level in between: a `for (;;)` head binds nothing with `of`, and a `;` outside any
-// bracket ends a statement. Where no bracket is left open, where it is not the `(` of a `for` head, or where the word does not follow what is bound
-// (`for (const of of xs)`, `for (k in of)`), the word is a name, CERTAIN. After what is bound (a name, `]`, `}` or `)`) it is the keyword, as the
-// table always read it, a guess (`keyword`) because a word before it may be a keyword or a name (`for (let of …)`, `for (await of …)`), and so is a
-// head too far back to be found within LOOKAHEAD.
+// The word is a name for CERTAIN only where the scan PROVES it is not that keyword. The scan counts back over the lexer's output (where the brackets of
+// strings, comments, regexes and JSX text are blank) to the nearest bracket left open before the word, with no `;` at its level in between (a
+// `for (;;)` head binds nothing with `of`, and a `;` outside any bracket ends a statement). It proves a name where there is no open bracket at all,
+// where the bracket is not the `(` of a `for` head, or, inside such a head, where what stands before the word cannot end a binding: the `(` itself
+// (`for (of of xs)`), a `,` or an `=`, `const` or `var` straight after the `(` (`for (const of of xs)`), or a reserved word that wants an operand
+// (`for (k in of)`). Anything else inside a for head may end what it binds, and the word is then the keyword, as the table always read it, and a GUESS
+// (`keyword`): a binding can end in a name the scan does not read (`π`, `café`, an escape), a non-null `!` (`x!`, `obj[0]!`), a `)`, `]` or
+// `}`, or a type (`x as Array<T>`, `x satisfies void`, `x as const`, `x as "a"`), and the word before the `of` may itself be a keyword or a name
+// (`for (let of …)`, `for (const x of of …)`). So is a head too far back to be found within LOOKAHEAD.
 function ofTakesOperand(src, index) {
   const name = { operand: false, ambiguity: null };
   const keyword = { operand: true, ambiguity: 'keyword' };
@@ -717,16 +720,15 @@ function ofTakesOperand(src, index) {
   if (head.word === 'await') head = wordBefore(src, head.start + 1);
   if (head.word !== 'for' || isPropertyName(src, head.start)) return name;
   if (cutsWord(src, head.start)) return { operand: true, ambiguity: 'identifier' };
+  const before = prevSignificant(src, start).index;
+  // An `=` is the last character of every assignment and comparison operator (`=`, `==`, `>=`, `+=` …), and of a type parameter's default, each of
+  // which wants an operand; the `=>` of an arrow ends in `>`, not here.
+  if (before === open || src[before] === ',' || src[before] === '=') return name;
   const bound = wordBefore(src, start);
-  if (bound.word === '') {
-    let p = start - 1;
-    while (p >= 0 && isTrivia(src[p])) p -= 1;
-    return src[p] === ']' || src[p] === '}' || src[p] === ')' ? keyword : name;
-  }
-  if (isPropertyName(src, bound.start)) return keyword;
-  // `const` binds the word itself; a reserved word other than those that end an operand (OPERAND_WORDS) wants an operand, which the word is.
-  const operator = bound.word === 'const' || (RESERVED_WORDS.has(bound.word) && !OPERAND_WORDS.has(bound.word));
-  return operator ? name : keyword;
+  if (bound.word === '' || cutsWord(src, bound.start) || isPropertyName(src, bound.start)) return keyword;
+  // `const` and `var` declare the word itself only straight after the `(`: `x as const` is a binding that ends in `const`.
+  if (bound.word === 'const' || bound.word === 'var') return prevSignificant(src, bound.start + 1).index === open ? name : keyword;
+  return OF_OPERAND_WORDS.has(bound.word) ? name : keyword;
 }
 
 // The window for the scans that look back or ahead over a bounded stretch of source: the `(` of a statement head (statementHead), the `<` of
@@ -803,6 +805,10 @@ function skipTrivia(src, j) {
 const RESERVED_WORDS = new Set(['break', 'case', 'catch', 'class', 'continue', 'debugger', 'default', 'delete', 'do', 'else', 'enum', 'export', 'extends', 'false',
   'finally', 'for', 'function', 'if', 'import', 'in', 'instanceof', 'new', 'null', 'return', 'super', 'switch', 'this', 'throw', 'true', 'try', 'typeof', 'var',
   'void', 'while', 'with']);
+// The reserved words after which `of` can only be an operand, so a name (ofTakesOperand): every reserved word but those that end an operand
+// (OPERAND_WORDS: `this`, `null`, `true`, `false`), `super`, which is one with what follows it, `var`, which declares only at the start of a head,
+// and `void`, which is a type as well as an operator: `for (x as void of …)` binds `x as void`, and the `of` after it is the keyword.
+const OF_OPERAND_WORDS = new Set([...RESERVED_WORDS].filter((w) => !OPERAND_WORDS.has(w) && w !== 'super' && w !== 'var' && w !== 'void'));
 
 // The words that TypeScript's parser takes before the name of a type parameter, besides `const` (which the rule reads apart): parseTypeParameter reads the modifiers of a parameter
 // there, and only the checker objects to one that is no variance modifier (`<in U>`, `<out U>`) or `const` — so `<public U>(y)` parses as a signature's type parameters. Measured against

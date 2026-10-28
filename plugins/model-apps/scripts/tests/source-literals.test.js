@@ -1962,6 +1962,28 @@ test('"of" is a name outside a for head, for certain, and the keyword after what
     assertAmbiguous('keyword', [[code, code.includes('/navigateTo') ? '/navigateTo' : '<A>']]);
   }
 });
+
+// Inside a for head the word is a name for certain only where what stands before it cannot end a binding. A binding can end in a name the lexer
+// reads no word of (a letter beyond ASCII, a combining mark), in TypeScript's non-null `!`, or in a type after `as` or `satisfies`; TypeScript and
+// Babel parse every one of these, and in each the `of` is the keyword. Read as a name there, the regex after it was code, with no guess to say so,
+// and the navigation oracle rewrote the call written inside it. So is a head that the scan cannot reach.
+test('"of" after a binding the lexer cannot read to its end, in a for head, is the keyword and a guess', () => {
+  const regex = '/navigateTo({pageType:"generative",pageId:"PAGEREF_detail"})/';
+  const bindings = ['const π', 'const café', 'let x\u0301', 'x!', 'obj.x!', 'obj[0]!', '(x)!', 'x as Array<T>', 'x as ns.Box<T>', 'x satisfies Array<T>',
+    'x as "a"', 'x as `a${string}`', 'x as const', 'x as void', 'x satisfies void', 'ąconst', `const x /*${'y'.repeat(2100)}*/`];
+  for (const binding of bindings) {
+    for (const eol of [' ', '\n', '\r\n']) {
+      for (const code of [`let x; for (${binding}${eol}of ${regex}.source) {}`, `async function f() { let x; for await (${binding}${eol}of <A>navigateTo</A>) {} }`]) {
+        assert.ok(!blankLiterals(code).includes('navigateTo'), `read as a regex or an element: ${JSON.stringify(code)}`);
+        assertAmbiguous('keyword', [[code, code.includes(regex) ? regex : '<A>']]);
+      }
+    }
+  }
+  // What stands before it inside a for head that cannot end a binding: the `(`, a `,`, an `=`, `const` or `var` straight after the `(`, a reserved
+  // word that wants an operand. A name, for certain.
+  assertCertain(['for (of of xs) {}', 'for (const of of xs) {}', 'for (var of of xs) {}', 'for (a = of / 2 / 3;;) {}', 'for (a, of / 2 / 3;;) {}',
+    'for (const k in of / 2 / 3) {}', 'for (a == of / 2 / 3;;) {}']);
+});
 // `async` and a `<` on its line. TypeScript's rule for `.tsx` steps over `async` (parser.ts, isParenthesizedArrowFunctionExpressionWorker,
 // https://github.com/microsoft/TypeScript/blob/v5.8.3/src/compiler/parser.ts): with no line break before the `<`, the next tokens decide — a comma, `=` or `extends` and a token that is not
 // `=`, `>` or `/` — as they do for any `<`, and a generic shape is the head of an async generic arrow. Every other is no arrow, and `async` is then an ordinary token: a method named `async`
