@@ -33,6 +33,7 @@
 // land in a file. The folder, the paths and every other member are the storage's own: the wrapper has it for a prototype, so a caller's `instanceof` and the SDK's own look for a file-system storage still hold.
 const bundle = require('../vendor/cds-maker-sdk.cjs');
 const { loadVendoredTypeScript } = require('./typescript-compiler.js');
+const { guardPageNesting } = require('./page-nesting.js');
 const { guardTableLists } = require('./collection-answers.js');
 const { guardAppHeaderWrites } = require('./app-header-text.js');
 const { guardWorkspaceStorage } = require('./output-redaction.js');
@@ -42,7 +43,8 @@ const { guardWorkspaceStorage } = require('./output-redaction.js');
 function withVendoredCompiler(create) {
   return (options) => {
     const { connectivity, ...forSdk } = options || {};
-    const made = { typescript: () => loadVendoredTypeScript(), ...forSdk };
+    // The compiler goes to the SDK through guardPageNesting (lib/page-nesting.js): a page nested too deeply for it to compile is refused with a code (PAGE_NESTING_TOO_DEEP), not a bare RangeError.
+    const made = { typescript: () => guardPageNesting(loadVendoredTypeScript(), (code, message) => new bundle.SdkError(code, message)), ...forSdk };
     if (made.httpClient) made.httpClient = guardTableLists(made.httpClient, (code, message) => new bundle.SdkError(code, message));
     if (made.httpClient) made.httpClient = guardAppHeaderWrites(made.httpClient, (code, message) => new bundle.SdkError(code, message));
     if (made.workspaceStorage) made.workspaceStorage = guardWorkspaceStorage(made.workspaceStorage);

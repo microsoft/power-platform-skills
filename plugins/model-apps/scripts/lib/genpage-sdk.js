@@ -120,6 +120,8 @@ const codeOf = (error) => (error && typeof error.code === 'string' && error.code
 //                                     resolve, a module that does not satisfy the page contract
 //   GENPAGE_COMPILER_UNAVAILABLE / _VERSION / _INVALID, GENPAGE_RUNTIME_TYPES_INVALID
 //                                     no usable TypeScript compiler, or the page's RuntimeTypes could not be built
+//   PAGE_NESTING_TOO_DEEP             the page's elements nest so deeply that the compiler ran out of stack space (lib/page-nesting.js raises it from the
+//                                     compiler the SDK is given; the SDK compiles ahead of every write, so a push that raises it sent nothing)
 //   GENPAGE_CONTENT_WRITE_UNSUPPORTED, GENPAGE_TURN_NOT_ATOMIC
 //                                     the transport cannot write this page as one change set (assertContentWritable / assertTurnWritable)
 //   GENPAGE_TURN_CONFLICT             the pending turn's id is already recorded as a different message (`unrecordedTurn`, a read)
@@ -132,7 +134,7 @@ const codeOf = (error) => (error && typeof error.code === 'string' && error.code
 // be one of these, on an SdkError.
 const PRE_WRITE_REFUSALS = new Set([
   'VALIDATION_ERROR',
-  'GENPAGE_COMPILER_UNAVAILABLE', 'GENPAGE_COMPILER_VERSION', 'GENPAGE_COMPILER_INVALID', 'GENPAGE_RUNTIME_TYPES_INVALID',
+  'GENPAGE_COMPILER_UNAVAILABLE', 'GENPAGE_COMPILER_VERSION', 'GENPAGE_COMPILER_INVALID', 'GENPAGE_RUNTIME_TYPES_INVALID', 'PAGE_NESTING_TOO_DEEP',
   'GENPAGE_CONTENT_WRITE_UNSUPPORTED', 'GENPAGE_TURN_NOT_ATOMIC', 'GENPAGE_TURN_CONFLICT',
   'GENPAGE_RETAIN_ON_CREATE', 'GENPAGE_RETAINED_ROW_MISSING', 'GENPAGE_CONTENT_NOT_TEXT', 'GENPAGE_WRITE_UNKNOWN',
   'ARTIFACT_NOT_FOUND', 'ARTIFACT_LANGUAGE_MISMATCH', 'ARTIFACT_PROJECTION_STALE',
