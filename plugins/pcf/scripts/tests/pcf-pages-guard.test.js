@@ -857,6 +857,8 @@ function fastest(runs, fn) {
     const started = performance.now();
     fn();
     best = Math.min(best, performance.now() - started);
+    // Already past the catastrophe ceiling: more runs only make a failing test slower.
+    if (best > CATASTROPHE_LIMIT_MS) break;
   }
   return best;
 }
@@ -1398,27 +1400,29 @@ test('Fixed-id detection keeps later JSX after unmatched braces and inside templ
 // Pathological but finite input must stay linear. Each test scales its fixture and bounds the
 // growth (see assertLinearGrowth), so a slow or busy machine cannot fail it.
 test('Pages diagnostics index line locations instead of rescanning per call', (t) => {
-  const count = 4000;
-  const text = `${CALL};\n`.repeat(count);
+  // Many findings on purpose: the quadratic term of a per-finding rescan has to outweigh the linear
+  // work by well over the growth limit, even for a cheap rescan such as splitting the prefix.
+  const count = 8000;
+  const build = (scale) => `${CALL};\n`.repeat(Math.round(count * scale));
+  const text = build(1);
   // A line-start table is built with one matchAll over the text. One table per distinct text is the
-  // design (scanSource and featureCoherence read the same text); one per finding would be 4000.
+  // design (scanSource and featureCoherence read the same text); one per finding would be 4000. The
+  // count only sees that one technique: a lookup that rescans the prefix some other way (split, a
+  // character loop) builds no table, so the growth check below is what rejects that regression.
   const original = String.prototype.matchAll;
   let tables = 0;
   String.prototype.matchAll = function countingMatchAll(...args) {
     tables += 1;
     return original.apply(this, args);
   };
-  let findings;
-  const started = performance.now();
   try {
-    findings = scanBoth(text);
+    scanBoth(text);
   } finally {
     String.prototype.matchAll = original;
   }
-  const elapsed = performance.now() - started;
-  t.diagnostic(`line-location tables: ${tables}; ${count} calls; ${elapsed.toFixed(3)} ms`);
+  t.diagnostic(`line-location tables: ${tables}; ${count} calls`);
   assert.ok(tables <= 2, `${tables} line-start tables built for one text with ${count} findings`);
-  assert.ok(elapsed < CATASTROPHE_LIMIT_MS, `${elapsed.toFixed(3)} ms exceeds ${CATASTROPHE_LIMIT_MS} ms`);
+  const findings = assertLinearGrowth(t, 'line locations', build, scanBoth);
   assert.equal(findings.length, count);
   assert.ok(findings.every((finding, i) => finding.code === 'PCF_PAGES_API' && finding.line === i + 1));
 });
