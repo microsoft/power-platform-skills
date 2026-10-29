@@ -16,11 +16,16 @@
 // HOW THE CODES ARE FOUND. The SDK publishes no list of its codes: `SdkError.code` is a free string, raised in many forms — the bundle,
 // minified, shows `new X.SdkError("CODE", …)`, `super("CODE", …)` in a subclass, `X.FOO_CODE = "CODE"` constants, `{ code: "CODE" }` and
 // `{ errorCode: "CODE" }` results by value, `warn("CODE", …)` warnings, `reasonCode: "CODE"` observations and issue kinds pushed onto a
-// list. So the scan takes EVERY code-shaped string literal in the bundle (upper case, at least one underscore) and leaves out exactly two
-// kinds of literal that are not codes: a TypeScript enum's member names (`e[e.TWO_COLUMN=1]="TWO_COLUMN"`) and identifiers that end in
-// `_CODE` (the names of the constants, not their values). Its limits: a code built at run time from pieces (`"FOO_" + kind`) is not seen —
-// none is today — and a literal that is not a code is listed (harmless: it is acknowledged once as `diagnostic`). It over-collects rather
-// than misses, which is the side a regression net must err on.
+// list. So the scan takes EVERY code-shaped string literal in the bundle (upper case, at least one underscore) and leaves out only the
+// OCCURRENCES that are provably not a code — an enum's reverse mapping and a re-export's property name (isNonCodeOccurrence) — never a
+// value because of how it is spelled: a literal is a code if any one of its occurrences is not one of those two.
+// ITS LIMITS, which a reader must know before trusting a green run:
+//   - a code that does not follow the convention — lower case, a digit first, one word with no underscore (`"FAILED"`) — is not seen;
+//   - a code built at run time from pieces (`"FOO_" + kind`, a template) is not seen — none is today;
+//   - a code that only ever arrives from the service (an OData `0x8004…` code) is not an SDK code and is the retry policy's own table;
+//   - a literal that is not a code is listed (harmless: it is acknowledged once as `diagnostic`).
+// Within the convention it over-collects rather than misses, which is the side a regression net must err on; the authoritative list is an
+// SDK-side ask.
 //
 // THE FIXTURE (fixtures/sdk-error-codes.json) names every code the scan finds, with what the skills do with it:
 //   connection                   CONNECTION_ERROR: the HTTP status it carries decides (429/502/503/504 run again; any other is final)
@@ -53,12 +58,19 @@ const FIXTURE = path.join(__dirname, 'fixtures', 'sdk-error-codes.json');
 const CATEGORIES = ['connection', 'outcome-unknown', 'outcome-unknown-run-again', 'wraps-failure', 'page-pre-write', 'typed', 'diagnostic'];
 
 const LITERAL = /["'`]([A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+)["'`]/g;
-// A TypeScript enum compiles to `(function(e){e[e.ONE_COLUMN=0]="ONE_COLUMN",e[e.TWO_COLUMN=1]="TWO_COLUMN"…})`: the quoted name is the
-// member's reverse mapping, not a code.
-const ENUM_MEMBER = /\[[\w$]+\.([A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+)=\d+\]="\1"/g;
+// The two OCCURRENCES of a code-shaped literal that are provably not a code, read from what stands right before it:
+//   e[e.ONE_COLUMN=0]="ONE_COLUMN"                         a TypeScript enum's reverse mapping: the member's name
+//   Object.defineProperty(t,"FOO_UNREADABLE_CODE",{…})     a re-export: the property's name (its VALUE is the code, a literal elsewhere)
+// Only that occurrence is left out. The same text anywhere else — `new SdkError("ONE_COLUMN", …)`, a code that happens to end in
+// `_CODE` — is a code, so no spelling can hide one.
+function isNonCodeOccurrence(source, at, literal) {
+  const before = source.slice(Math.max(0, at - 160), at);
+  return new RegExp(`\\[[\\w$]+\\.${literal}=\\d+\\]=$`).test(before) || /\bdefineProperty\(\s*[\w$.]+\s*,\s*$/.test(before);
+}
 function codesIn(source) {
-  const enumMembers = new Set([...source.matchAll(ENUM_MEMBER)].map((m) => m[1]));
-  return new Set([...source.matchAll(LITERAL)].map((m) => m[1]).filter((code) => !enumMembers.has(code) && !/_CODE$/.test(code)));
+  const codes = new Set();
+  for (const m of source.matchAll(LITERAL)) if (!isNonCodeOccurrence(source, m.index, m[1])) codes.add(m[1]);
+  return codes;
 }
 
 // Where the plugin's own sources name a code (outside the bundle and the tests), so a removed code's message says what now branches on nothing.
@@ -182,6 +194,11 @@ test('SDK codes (meta): the scan finds a code in every form the bundle raises on
   ]) assert.ok(codes.has(code), `the scan finds ${code}`);
   assert.equal(codes.has('TWO_COLUMN'), false, 'an enum member name is not a code');
   assert.equal(codes.has('COMMAND_IMMUTABLE_COLUMN_CHANGED_CODE'), false, 'a constant\'s name is not a code');
+  // Negative controls: only an OCCURRENCE that is provably not a code is left out — never a value because of how it is spelled.
+  assert.deepEqual([...codesIn('throw new SdkError("INVALID_ERROR_CODE", "bad")')], ['INVALID_ERROR_CODE'], 'a code that ends in _CODE is a code');
+  assert.deepEqual([...codesIn('e[e.TWO_COLUMN=1]="TWO_COLUMN";throw new SdkError("TWO_COLUMN", "bad")')], ['TWO_COLUMN'], 'a code that is also an enum member name is a code');
+  assert.deepEqual([...codesIn('(function(e){e[e.ONE_COLUMN=0]="ONE_COLUMN"})(x)')], [], 'an enum reverse mapping alone is not');
+  assert.deepEqual([...codesIn('Object.defineProperty(t,"FOO_UNREADABLE_CODE",{enumerable:!0,get:function(){return r.FOO_UNREADABLE_CODE}});r.FOO_UNREADABLE_CODE="FOO_UNREADABLE"')], ['FOO_UNREADABLE'], 'an export\'s property name is not a code; the constant\'s value is');
   const mentions = new Map([['OLD_CODE', new Set(['lib/sdk-build.js'])]]);
   const drift = describeCodeDrift(new Set(['KEPT', 'NEW_CODE']), { KEPT: 'typed', OLD_CODE: 'typed' }, mentions);
   assert.match(drift, /does not classify:\n {2}NEW_CODE\n/);

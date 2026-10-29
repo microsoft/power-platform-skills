@@ -133,7 +133,6 @@
   "GENPAGE_TURN_CONFLICT": "page-pre-write",
   "GENPAGE_TURN_NOT_ATOMIC": "page-pre-write",
   "GENPAGE_WRITE_UNKNOWN": "page-pre-write",
-  "HEADER_NAV_BOOLEAN_RULE": "typed",
   "IDENTITY_MISMATCH": "diagnostic",
   "INCOMPATIBLE_WORKSPACE": "typed",
   "INSPECTION_NOT_SUPPORTED": "typed",
