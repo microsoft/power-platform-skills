@@ -376,6 +376,9 @@ const BUSINESS_RULE_MEMBER = 'Microsoft.Dynamics.CRM.CreateProcessWithWfomJson';
 //   HTTP 400  {"error":{"code":"0x80040216","message":"An unexpected error occurred."}}
 // The code is generic (0x80040216 is the platform's "unexpected error"), so it is read together with the status AND the member that was
 // asked, and only for the FIRST create of a build (see isConfirmedBusinessRuleRefusal). Measured on every production-geo environment tried.
+// The SAME answer also comes from a create the platform SAVED and then failed to finish (#482: the workflow row commits, then generating
+// its UiData faults — measured as live, firing rows), so the answer alone never proves nothing was written: the build reads the rule's
+// definitions again before it calls rules unavailable (refusedCreateWroteNothing, in the business-rules phase).
 const BUSINESS_RULE_SWITCHED_OFF_CODE = '0x80040216';
 
 // True when `err` is the DEFINITIVE answer to the first send of a business-rule create that the platform answers when the member is switched off — the HTTP 400 above to
@@ -392,6 +395,8 @@ const BUSINESS_RULE_SWITCHED_OFF_CODE = '0x80040216';
 //     (`transient: false` alone is NOT such a mark: the halt requireSuccessfulPush makes around a refusal carries it, and that wrapper is transparent.) And
 //   - the plugin's HTTP client reports, on the answer's body, that no earlier send of this request was ambiguous (HTTP_SEND_HISTORY). A transport that reports nothing is
 //     not confirmed: it halts, as it did before this gate. This does not depend on the create being sent only once by anything else.
+// Even then the answer is only a CANDIDATE: a create the platform saved and then failed to finish answers the same 400 (see BUSINESS_RULE_SWITCHED_OFF_CODE). The
+// business-rules phase accepts it only after a fresh, complete read shows the rule's definitions unchanged since the snapshot taken just before the push.
 // The member is told by the request, never by a substring of a URL: the build's own reads of the rule's name (workflows?$filter=name eq '…') can quote the member's name.
 function isConfirmedBusinessRuleRefusal(err) {
   const chain = [];
@@ -5992,6 +5997,31 @@ async function runSdkBuildPhases(spec, opts, owed) {
       if (codes.includes('BUSINESS_RULE_LEFT_DEACTIVATED')) return false;
       return codes.includes('BUSINESS_RULE_API_UNAVAILABLE') ? 'unsupported in this environment' : false;
     };
+    // Whether a business-rule create that got the switched-off answer left this rule's definitions as the snapshot taken just before
+    // its push had them. Only that proves the refused create wrote nothing: the same HTTP 400 comes from a create the platform saved
+    // and then failed to finish (#482). `workflows` answers { "value": [ { "workflowid": "<id>" } ] }; a complete read is required.
+    //   { nothing: true }                    the same ids as before: nothing was created
+    //   { nothing: false, why: <warning> }    a new id (saved, then failed), or a read that failed or was incomplete (unknown)
+    const refusedCreateWroteNothing = async (name, entityLogical, beforeCreate) => {
+      const prefix = `business rule "${name}" on ${entityLogical}: the create answered HTTP 400 ${BUSINESS_RULE_SWITCHED_OFF_CODE}`;
+      let after;
+      try {
+        after = await provision.queryRecords('workflow', {
+          select: ['workflowid'], filter: businessRuleFilter(name, entityLogical), paginate: true,
+        });
+      } catch (e) {
+        return { nothing: false, why: `${prefix}, and the read that would show whether the platform saved the rule anyway failed (${String((e && e.message) || e).replace(/\s+/g, ' ').slice(0, 200)}), so the build stops instead of calling business rules unavailable here.` };
+      }
+      if (!Array.isArray(after) || after.some((w) => !w || typeof w.workflowid !== 'string' || !w.workflowid.trim())) {
+        return { nothing: false, why: `${prefix}, and the read that would show whether the platform saved the rule anyway returned an unreadable id set, so the build stops instead of calling business rules unavailable here.` };
+      }
+      const before = new Set(beforeCreate.map((w) => w.workflowid.toLowerCase()));
+      const added = after.map((w) => w.workflowid).filter((id) => !before.has(id.toLowerCase()));
+      if (added.length) {
+        return { nothing: false, why: `${prefix}, yet the rule now exists (${added.join(', ')}): the platform saved it and then failed to finish it, so business rules ARE available here and the build stops. Check that rule in Power Apps (it may be active) before running the build again; the next run reuses it.` };
+      }
+      return { nothing: true };
+    };
     for (const rule of spec.businessRules || []) {
       const entityLogical = String(rule.entity).toLowerCase();
       const existing = await provision.queryRecords('workflow', {
@@ -6069,6 +6099,9 @@ async function runSdkBuildPhases(spec, opts, owed) {
         runner.skip('business-rules', `business rule "${rule.name}" on ${rule.entity} (unsupported in this environment)`);
         continue;
       }
+      // Set by the create step when the switched-off answer was checked against a fresh read of this rule's definitions and nothing
+      // was created (refusedCreateWroteNothing); read by the step's skipIf, which is synchronous and cannot read the service itself.
+      let refusedRuleWroteNothing = false;
       await runner.run('business-rules', `business rule "${rule.name}" on ${rule.entity}`, async () => {
         const def = businessRuleDef(rule);
         const art = await provision.createArtifact('businessRule', def);
@@ -6106,7 +6139,19 @@ async function runSdkBuildPhases(spec, opts, owed) {
         if (!Array.isArray(beforeCreate) || beforeCreate.some((w) => !w || typeof w.workflowid !== 'string' || !w.workflowid.trim())) {
           throw refusal(`business rule "${rule.name}" on ${entityLogical}: before-create id snapshot is unreadable — refusing to push or delete rules without a complete id set`);
         }
-        const pushed = requireSuccessfulPush(await provision.pushArtifact('businessRule', art.id), `business rule ${rule.name}`, opts.warn);
+        let pushed;
+        try {
+          pushed = requireSuccessfulPush(await provision.pushArtifact('businessRule', art.id), `business rule ${rule.name}`, opts.warn);
+        } catch (err) {
+          // Only the answer the gate could accept is checked (every other failure halts as it is, without a read). The read decides
+          // between "switched off here" (nothing new: the step may skip) and a rule the platform saved anyway, or an unknown (halt).
+          if (businessRulesCreated === 0 && isConfirmedBusinessRuleRefusal(err)) {
+            const verdict = await refusedCreateWroteNothing(rule.name, entityLogical, beforeCreate);
+            refusedRuleWroteNothing = verdict.nothing;
+            if (!verdict.nothing && typeof opts.warn === 'function') opts.warn(verdict.why);
+          }
+          throw err;
+        }
         result.created.businessRules[`${entityLogical}|${rule.name}`] = pushed.id;
         businessRulesCreated += 1;
         await provision.addSolutionComponent({ componentId: pushed.id, componentType: COMPONENT_TYPE.workflow, solutionUniqueName: sol.uniqueName });
@@ -6138,8 +6183,9 @@ async function runSdkBuildPhases(spec, opts, owed) {
           let reason = businessRuleApiUnavailable(err);
           let notCreated = `this environment does not expose the '${BUSINESS_RULE_MEMBER}' member that the modern business-rule designer uses, so there is no supported way to author them here.`;
           let remedy = 'Re-run against an environment that exposes the member, or drop businessRules[] from the spec.';
-          if (!reason && businessRulesCreated === 0 && isConfirmedBusinessRuleRefusal(err)) {
-            // The member is declared but switched off, and the refusal is the definitive answer to the first send of the create.
+          if (!reason && businessRulesCreated === 0 && refusedRuleWroteNothing && isConfirmedBusinessRuleRefusal(err)) {
+            // The member is declared but switched off: the refusal is the definitive answer to the first send of the create, and a fresh
+            // read of the rule's definitions shows nothing was created.
             reason = 'unsupported in this environment';
             businessRulesSwitchedOff = true;
             notCreated = `this environment answered HTTP 400 ${BUSINESS_RULE_SWITCHED_OFF_CODE} ("An unexpected error occurred") to the '${BUSINESS_RULE_MEMBER}' member, which means business-rule creation is not available on it. That is a platform limit, commonly on production environments, not a fault in the rule; the first rule was refused and the remaining rules were not sent.`;
