@@ -597,7 +597,7 @@ test('REAL BUNDLE: the default view a page edit pins is added when the SDK would
       assert.deepStrictEqual(org.unexpected, []);
       assert.deepStrictEqual(inApp(org, 26), [wanted], 'the view is in the app');
       assert.deepStrictEqual(inApp(org, 60), [], 'no Main form the maker took out came back');
-      assert.deepStrictEqual(org.writeCounts(mark), { 'PATCH sitemaps': 1, 'POST AddAppComponents': 1, 'POST PublishXml': 1 }, 'the sitemap, the one limited action and one publish — as before 2.20.5: no app-row write, no change set');
+      assert.deepStrictEqual(org.writeCounts(mark), { 'PATCH sitemaps': 1, 'POST AddAppComponents': 1, 'POST PublishXml': 1 }, 'the sitemap, the one limited action and one publish — as before 2.20.6: no app-row write, no change set');
       const posted = org.writes(mark).filter((write) => /AddAppComponents/.test(write.path));
       assert.deepStrictEqual(posted.map((write) => [write.batched === true, write.body && write.body.Components]), [[false, [{ '@odata.type': 'Microsoft.Dynamics.CRM.savedquery', savedqueryid: wanted }]]]);
       assert.deepStrictEqual([placed.pinnedViews, placed.warnings, placed.appEdited], [[wanted], [], true]);

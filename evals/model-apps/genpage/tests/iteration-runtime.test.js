@@ -1,7 +1,7 @@
 'use strict';
 // Eval 26's customer choices, run the way the page is compiled. The bundled SDK compiles every page with TypeScript's
 // `transpileModule` and `{ target: ES5, module: ES2020, jsx: React, downlevelIteration: true }` — no type check. The bundles before
-// model-apps 2.20.5 compiled without `downlevelIteration`, as an older maker portal and `pac` still do, and under those options a spread
+// model-apps 2.20.6 compiled without `downlevelIteration`, as an older maker portal and `pac` still do, and under those options a spread
 // copies by `length` and index. A Map's iterator has neither, so `return [...seen.values()];` contributed nothing: the page's "Change
 // customer" Dropdown opened with no options, and the compile reported nothing. The committed page converts with `Array.from`, which
 // is right under both.

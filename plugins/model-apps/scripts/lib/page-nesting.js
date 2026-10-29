@@ -4,7 +4,7 @@
 // TypeScript parses and transforms a page with recursive functions, one level of recursion per nested JSX element (and one more per nested
 // expression). Around a thousand nested elements exhaust V8's default stack, and the compiler then throws
 //   RangeError: Maximum call stack size exceeded
-// out of `transpileModule`. The SDK compiles a page on every push that changes its source, and the bundles before model-apps 2.20.5 did not catch that, so
+// out of `transpileModule`. The SDK compiles a page on every push that changes its source, and the bundles before model-apps 2.20.6 did not catch that, so
 // without this module the maker was shown a bare RangeError — or, through the page backend's own settling of a push that "got no usable answer", a message about a
 // create that "was sent twice", although the SDK compiles BEFORE it writes anything: the page was not written to the service (its metadata reads
 // may already have been made). The bundle now refuses such a page itself (SDK_COMPILE_DEPTH_EXCEEDED below); this module keeps the plugin's code for both.

@@ -16,7 +16,7 @@ const crypto = require('node:crypto');
 const { execFileSync } = require('node:child_process');
 const { makeTempDir } = require('./temp-dirs.js');
 
-const PREVIOUS_RELEASE = 'c159268b994b218729ff69ccdd74be3c83c56f86'; // model-apps 2.20.4
+const PREVIOUS_RELEASE = 'c159268b994b218729ff69ccdd74be3c83c56f86'; // model-apps 2.20.4 (2.20.5 ships the same bundle)
 const PREVIOUS_BUNDLE_SHA256 = 'eebd70a2a7f6e12e45d18744640fd803479a738bc936b8e0dce1a9f97a0a4f8c';
 const BUNDLE_PATH = 'plugins/model-apps/scripts/vendor/cds-maker-sdk.cjs';
 const IN_CI = Boolean(process.env.GITHUB_ACTIONS);

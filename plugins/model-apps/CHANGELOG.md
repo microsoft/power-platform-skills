@@ -5,9 +5,9 @@ All notable changes to the **model-apps** plugin.
 Entries are deliberately short: what changed and why it matters to you. The reasoning,
 evidence and trade-offs behind a change live in its PR, in `docs/`, or in the linked issue.
 
-## [2.20.5]
+## [2.20.6]
 
-The bundled SDK is updated (power-platform-ux 59ae2d72e2a8).
+The bundled SDK is updated (commit 59ae2d72e2a8).
 
 ### Fixed
 
@@ -36,7 +36,7 @@ The bundled SDK is updated (power-platform-ux 59ae2d72e2a8).
 
 ## [2.20.4]
 
-The bundled SDK is unchanged (power-platform-ux a3443479).
+The bundled SDK is unchanged (commit a3443479).
 
 ### Fixed
 
@@ -50,7 +50,7 @@ The bundled SDK is unchanged (power-platform-ux a3443479).
 
 ## [2.20.3]
 
-The bundled SDK is unchanged (power-platform-ux a3443479).
+The bundled SDK is unchanged (commit a3443479).
 
 ### Fixed
 
@@ -67,7 +67,7 @@ The bundled SDK is unchanged (power-platform-ux a3443479).
 
 ## [2.20.2]
 
-The bundled SDK is unchanged (power-platform-ux a3443479).
+The bundled SDK is unchanged (commit a3443479).
 
 ### Fixed
 
@@ -76,7 +76,7 @@ The bundled SDK is unchanged (power-platform-ux a3443479).
 
 ## [2.20.1]
 
-The bundled SDK is unchanged (power-platform-ux a3443479).
+The bundled SDK is unchanged (commit a3443479).
 
 ### Fixed
 
@@ -86,7 +86,7 @@ The bundled SDK is unchanged (power-platform-ux a3443479).
 
 ## [2.20.0]
 
-The bundled SDK is unchanged (power-platform-ux a3443479).
+The bundled SDK is unchanged (commit a3443479).
 
 ### Added
 
@@ -119,7 +119,7 @@ The bundled SDK is unchanged (power-platform-ux a3443479).
 - Evals: an ungraded fixture is not counted as passed; the label check reads comments and character references.
 ## [2.19.0]
 
-The bundled SDK is unchanged (power-platform-ux a3443479, as in 2.18.0).
+The bundled SDK is unchanged (commit a3443479, as in 2.18.0).
 
 ### Changed
 
@@ -146,7 +146,7 @@ The bundled SDK is unchanged (power-platform-ux a3443479, as in 2.18.0).
 
 ## [2.18.0]
 
-The bundled SDK is updated to power-platform-ux a3443479.
+The bundled SDK is updated to commit a3443479.
 
 ### Added
 
@@ -178,7 +178,7 @@ The bundled SDK is updated to power-platform-ux a3443479.
 
 ## [2.17.0]
 
-The bundled SDK is updated to power-platform-ux d603c799.
+The bundled SDK is updated to commit d603c799.
 
 ### Changed
 
@@ -208,7 +208,7 @@ The bundled SDK is updated to power-platform-ux d603c799.
 
 ## [2.16.0]
 
-The bundled SDK is updated to power-platform-ux ccf2c1a1. A new table's primary column is created required when the spec says so,
+The bundled SDK is updated to commit ccf2c1a1. A new table's primary column is created required when the spec says so,
 and navigation titles survive a download and rebuild in any base language.
 
 ### Changed

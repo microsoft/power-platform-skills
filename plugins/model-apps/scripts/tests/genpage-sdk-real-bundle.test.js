@@ -740,7 +740,7 @@ test('REAL BUNDLE: an update whose first send lands immediately before its resen
     assert.strictEqual(out.publish.kind, 'verified');
     assert.match(out.warnings.join('\n'), /had been written — so it was not sent again/);
     // The bundled SDK names a push's versioning checkpoint after the turn it records (`uxagentproject_<turn id>`), so the resend of the
-    // same edit addresses the same checkpoint; the bundles before model-apps 2.20.5 minted a new one per send.
+    // same edit addresses the same checkpoint; the bundles before model-apps 2.20.6 minted a new one per send.
     const checkpoints = server.batches.map((body) => [...new Set(String(body).match(/MSCRM\.VersioningChangeset: \S+/g) || [])]);
     assert.strictEqual(checkpoints[1].length, 1, 'one checkpoint per change set');
     assert.deepStrictEqual(checkpoints[2], checkpoints[1], 'the resend of the same turn names the same checkpoint');

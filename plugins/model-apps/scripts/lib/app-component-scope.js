@@ -52,7 +52,7 @@
 // (percent-escapes decoded; one that cannot be read refuses the batch); a JSON batch, as text, bytes or an object, after its JSON is (`\u0041` is `A`); and the name is looked for in the rest of the text as it is and with its
 // escapes decoded.
 //
-// THE SDK'S GUARDED PIN (bundles from model-apps 2.20.5 on). On an unpublished default-mode push that holds the app row's token, the bundle reads the app's current layer after the sitemap write, and when a component its
+// THE SDK'S GUARDED PIN (bundles from model-apps 2.20.6 on). On an unpublished default-mode push that holds the app row's token, the bundle reads the app's current layer after the sitemap write, and when a component its
 // derived list names is missing from it (every app whose maker took a form, view or chart out) it sends the AddAppComponents in ONE change set of its own instead of alone (`pinDefaultComponents`):
 //   PATCH <api>/appmodules(<app>)                      If-Match: <held token>, body {}               the guard: the change set runs only on the version the push holds
 //   POST  <api>/AddAppComponents                       { "AppId": "<app>", "Components": [ …the whole derived list… ] }
@@ -60,7 +60,7 @@
 // Its action carries the whole derived list, so it is not forwarded; and its parts are not cut either — the change set would then be a write this tool composed (two app-row writes no earlier release made), sent as the SDK's.
 // For an app with an edit open, that change set (`guardedPinOf`: exactly those three parts, for that one app, and nothing else) is NOT sent, and the SDK is answered as the service answers a change set whose FIRST part
 // was refused: the service rolls such a change set back whole, and the bundle then sends the plain action once (its documented fallback for a refused guard), which this limits as it limits every other — exactly what
-// a page edit sent before 2.20.5. Nothing was sent, so the plain action is not the resend of a write whose outcome is unknown; the app's row is not written; and the SDK keeps the app token it held, as every bundle before
+// a page edit sent before 2.20.6. Nothing was sent, so the plain action is not the resend of a write whose outcome is unknown; the app's row is not written; and the SDK keeps the app token it held, as every bundle before
 // did (a page edit reads the app again before each push, so it never depends on that token). Any other change set that names the action is refused, as above. Another app's guarded pin is not this edit's and goes on as it was read.
 //
 // The SDK reads the app's tables back after the post and reports a table its sitemap opens that is not a component (`APP_COMPONENTS_NOT_PERSISTED`) as a warning of the push — which is

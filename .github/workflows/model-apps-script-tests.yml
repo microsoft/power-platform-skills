@@ -96,7 +96,7 @@ jobs:
               with:
                   node-version: ${{ matrix.node }}
 
-            # The previous release's SDK bundle (model-apps 2.20.4), for the upgrade tests: a workspace it wrote must be read by
+            # The previous release's SDK bundle (model-apps 2.20.4; 2.20.5 ships the same bytes), for the upgrade tests: a workspace it wrote must be read by
             # this release's (scripts/tests/workspace-upgrade-*-real-bundle.test.js, helpers/previous-bundle.js, which checks its
             # SHA-256). The checkout is shallow, so the release commit is fetched by its hash and only the bundle is extracted. In CI
             # the tests FAIL without it rather than skip.
@@ -231,7 +231,7 @@ jobs:
                   echo "BASE_LIB_PATH=$RUNNER_TEMP/model-apps-2.13.0/plugins/model-apps/scripts/lib" >> "$GITHUB_ENV"
                   echo "MODEL_APPS_RELEASED_SCRIPTS=$RUNNER_TEMP/model-apps-2.13.0/plugins/model-apps/scripts" >> "$GITHUB_ENV"
 
-            # The previous release's SDK bundle (model-apps 2.20.4), for the upgrade tests: a workspace it wrote must be read by
+            # The previous release's SDK bundle (model-apps 2.20.4; 2.20.5 ships the same bytes), for the upgrade tests: a workspace it wrote must be read by
             # this release's (scripts/tests/workspace-upgrade-*-real-bundle.test.js, helpers/previous-bundle.js, which checks its
             # SHA-256). The checkout is shallow, so the release commit is fetched by its hash and only the bundle is extracted. In CI
             # the tests FAIL without it rather than skip.

@@ -9,7 +9,7 @@
 // array destructure reads `__read(value, n)`, so a Map, a Set, their iterators, a generator, a native `matchAll` result,
 // URLSearchParams, FormData, Headers and a string iterate as modern JavaScript does.
 //
-// The bundles before model-apps 2.20.5 compiled WITHOUT `downlevelIteration` (the 'legacy' profile, which an older maker portal and
+// The bundles before model-apps 2.20.6 compiled WITHOUT `downlevelIteration` (the 'legacy' profile, which an older maker portal and
 // `pac` still use): ES5 emit then reads an iterable by `length` and index, so the spread contributes nothing, the loop runs zero
 // times, an element is undefined, a default replaces the real value and a rest element throws — with a clean compile, since
 // `transpileModule` reports syntax only. A page compiled again by such a tool loses those values, which is why the teaching keeps
@@ -346,7 +346,7 @@ test('Critical Rule 24 names the forms, the conversion and the section, after Ru
 
 // ── The upgrade: pages an earlier release compiled without iterator support ─────────────────────────────────────────────────────
 
-// A page uploaded by model-apps 2.20.4 or earlier holds the legacy emit: that bundle stored exactly what the legacy options emit for a
+// A page uploaded by model-apps 2.20.5 or earlier holds the legacy emit: that bundle stored exactly what the legacy options emit for a
 // page that reads no table (the sentinel this file held then). The SDK keeps a page's stored compiled output only when its source AND its data
 // sources are unchanged and that output can be kept, so the first run of this release over such a page must neither rewrite nor republish it as
 // "changed" for its new emit, nor report its published copy as different from the record a build kept of it: the page keeps the bytes it was
