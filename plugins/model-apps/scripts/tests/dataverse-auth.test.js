@@ -399,6 +399,22 @@ test('getAuthToken reuses a non-empty token per normalized resource URL', () => 
   assert.deepEqual(calls, ['https://contoso.crm.dynamics.com', 'https://fabrikam.crm.dynamics.com']);
 });
 
+test('peekAuthToken answers only what the memo holds, and never starts the Azure CLI', () => {
+  const { getAuthToken, peekAuthToken } = require('../lib/dataverse-auth.js');
+  // A host no other test in this process reads, so the memo cannot already hold it.
+  const env = 'https://peekprobe.crm.dynamics.com';
+  const oldPath = process.env.PATH;
+  process.env.PATH = ''; // an Azure CLI start here would fail the read, not succeed silently
+  try {
+    assert.equal(peekAuthToken(env), null, 'nothing read yet: null, and no process');
+    assert.equal(peekAuthToken('not a url'), null);
+    assert.equal(getAuthToken(env, { exec: () => 'PEEKED\n', fresh: true }), 'PEEKED');
+    assert.equal(peekAuthToken(`${env}/`), 'PEEKED', 'the memo, by normalized origin');
+  } finally {
+    process.env.PATH = oldPath;
+  }
+});
+
 test('a fresh acquire bypasses the memo and replaces the token it holds', () => {
   const { getAuthToken } = require('../lib/dataverse-auth.js');
   const tokens = ['OLD\n', 'NEW\n'];

@@ -38,6 +38,8 @@ const DEFAULT_CONFIG_DIR = path.join(os.homedir(), ".power-platform-skills");
 // gets a short budget; a slow or failing read only drops the IDs from the event.
 const IDENTITY_TIMEOUT_MS = 3000;
 const GUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+// Not a PAC cloud token, so resolver.js routes it nowhere; see the emit below.
+const UNROUTABLE_CLOUD = "Unrecognized";
 
 // ---- The approved eventInfo schema --------------------------------------------------------------------
 // Keep in step with shared/telemetry/README.md. Adding a key or a value needs the privacy review that
@@ -132,7 +134,8 @@ function createStepTally() {
 //   https://learn.microsoft.com/power-platform/admin/powerapps-us-government#power-apps-us-government-service-urls
 // lib/sdk-first.js connectivityCloudOf reads hosts too, but answers a different question (which route
 // the SDK can take, so GCC is "Unsupported" there); this one must name every cloud a key exists for.
-// An unknown host returns "" — with an organization ID that routes nowhere (resolver.js), so nothing is sent.
+// An unknown host returns "". The emitter never hands "" to the resolver for a run that had a target: with
+// no organization ID, "" reads as a signed-out PAC and routes to the public US default (resolver.js).
 function cloudOfEnvironment(envUrl) {
   let host = "";
   try { host = new URL(String(envUrl)).host.toLowerCase(); } catch { return ""; }
@@ -160,9 +163,11 @@ function tenantIdFromToken(token) {
   }
 }
 
-// { orgId, tenantId } of the target environment, or {} — never throws. The scripts that call this have
-// just talked to the environment, so the Azure CLI token is already in dataverse-auth's per-process memo:
-// reading it costs nothing, and the one request is a WhoAmI.
+// { orgId, tenantId } of the target environment, or {} — never throws, and never starts the Azure CLI: the
+// token is read from dataverse-auth's per-process memo (peekAuthToken), which the script filled when it
+// talked to the environment. A script that never got that far — a refused sign-in, a lock refusal, a failed
+// push — has no token there, and its event simply goes without the IDs; reading one would cost the user a
+// CLI start of seconds (up to the Azure CLI budget) for telemetry. The one request is a WhoAmI.
 // Both IDs come from an ACCEPTED WhoAmI, or neither is sent: the token's `tid` names the tenant the Azure
 // CLI signed in to, which is the environment's only if the environment accepted the token. (Observed live:
 // a CLI signed in to another tenant gets a token, and the environment answers 401.)
@@ -170,9 +175,10 @@ function tenantIdFromToken(token) {
 async function resolveEnvironmentIdentity(envUrl, deps = {}) {
   try {
     const auth = deps.auth || require("../dataverse-auth.js");
+    if (typeof auth.peekAuthToken !== "function") return {};
     const origin = auth.dataverseOrigin(envUrl);
     if (!origin) return {};
-    const token = auth.getAuthToken(origin, { fresh: false });
+    const token = auth.peekAuthToken(origin);
     if (!token) return {};
     let timer;
     const timeout = new Promise((resolve) => { timer = setTimeout(() => resolve(null), deps.timeoutMs || IDENTITY_TIMEOUT_MS); });
@@ -293,7 +299,10 @@ async function emitSkillCompleted(input, deps = {}) {
       ...(agent.aiAgentVersion ? { aiAgentVersion: agent.aiAgentVersion } : {}),
     };
     (deps.fireAndForget || emitSpawn.fireAndForget)(events.buildSkillCompleted(eventStreamName, fields), {
-      cloud: cloudOfEnvironment(input.envUrl),
+      // A host outside the known Dataverse families gets a cloud no resolver recognizes, so the event is mirrored locally and sent
+      // nowhere — never to the public default a blank cloud would select when the run has no organization ID (a lookup skipped,
+      // refused or timed out). resolver.js: an unrecognized non-empty cloud resolves to null.
+      cloud: cloudOfEnvironment(input.envUrl) || UNROUTABLE_CLOUD,
       configDir,
       fakeProbe: env.POWER_PLATFORM_SKILLS_FAKE_HTTPS || "",
       ikeyJsonPath: ikeyPath,

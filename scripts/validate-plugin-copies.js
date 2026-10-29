@@ -70,6 +70,7 @@ const COPY_SETS = [
         'requireDataverseOrigin',
         'webApiUrl',
         'getAuthToken',
+        'peekAuthToken',
         'getAuthTokenAsync',
         'tokenFailureKind',
         'tokenFailureMessage',

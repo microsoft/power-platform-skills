@@ -197,7 +197,7 @@ async function main(argv = process.argv.slice(2)) {
       stage: 'receipt',
       reason: errorReason(err),
       registered: stripPrivateRegistration(registered),
-    }, { stage: 'receipt', registered: !!registered.ok, readRegistration: !flags['no-verify'] });
+    }, { stage: 'receipt', registered: !!registered.ok });
   }
 
   const ok = !!registered.ok || !!flags['no-verify'];
@@ -208,7 +208,7 @@ async function main(argv = process.argv.slice(2)) {
     version: expectedVersion,
     registered: stripPrivateRegistration(registered),
     receipt,
-  }, { stage: 'done', ok, registered: !!registered.ok, readRegistration: !flags['no-verify'] });
+  }, { stage: 'done', ok, registered: !!registered.ok });
 }
 
 // What a push's result says, in the closed vocabulary of lib/telemetry/skill-completed.js — never a control, solution or environment name.
@@ -234,9 +234,6 @@ async function reportPush(facts, emit = emitSkillCompleted) {
     const { outcome, errorClass, eventInfo } = pushCompletion(facts);
     await emit({
       skillName: 'pcf', outcome, errorClass, eventInfo, envUrl: facts.envOrigin, durationMs: Date.now() - facts.startedAt,
-      // The organization lookup reuses the Azure CLI token the registration read left in memory; without that read (a failed push,
-      // --no-verify) it would cold-start the Azure CLI on the user's time, so the event goes without the IDs instead.
-      resolveIdentity: !!facts.readRegistration,
     });
   } catch { /* telemetry never changes the push's result */ }
 }

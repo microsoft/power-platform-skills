@@ -205,12 +205,13 @@ test('tenantIdFromToken reads the tid claim and nothing else', () => {
   assert.equal(sc.tenantIdFromToken('garbage'), undefined);
 });
 
-function fakeAuth({ whoAmI } = {}) {
+function fakeAuth({ whoAmI, peek = () => token({ tid: TENANT }) } = {}) {
   const calls = [];
   return {
     calls,
     dataverseOrigin: (u) => (/^https:\/\/[a-z0-9.-]+$/.test(u) ? u : null),
-    getAuthToken: (origin, opts) => { calls.push(['token', origin, opts]); return token({ tid: TENANT }); },
+    peekAuthToken: (origin) => { calls.push(['peek', origin]); return peek(); },
+    getAuthToken: () => { throw new Error('telemetry must never start the Azure CLI'); },
     dataverseRequest: async (origin, method, apiPath, body, opts) => { calls.push(['request', method, apiPath, opts.refreshOn401]); return whoAmI(); },
   };
 }
@@ -218,8 +219,18 @@ function fakeAuth({ whoAmI } = {}) {
 test('resolveEnvironmentIdentity: the tenant from the memoized token, the organization from one WhoAmI', async () => {
   const auth = fakeAuth({ whoAmI: async () => ({ status: 200, data: { OrganizationId: ORG.toUpperCase(), UserId: 'u' } }) });
   assert.deepEqual(await sc.resolveEnvironmentIdentity('https://contoso.crm.dynamics.com', { auth }), { orgId: ORG, tenantId: TENANT });
-  assert.deepEqual(auth.calls[0], ['token', 'https://contoso.crm.dynamics.com', { fresh: false }], 'the memoized token, never a fresh one');
+  assert.deepEqual(auth.calls[0], ['peek', 'https://contoso.crm.dynamics.com'], 'the memo only');
   assert.deepEqual(auth.calls[1], ['request', 'GET', 'WhoAmI', false], 'a 401 is not refreshed for telemetry');
+});
+
+test('resolveEnvironmentIdentity sends no request when the script never read a token (a refused sign-in, a lock refusal, a failed push)', async () => {
+  const auth = fakeAuth({ peek: () => null, whoAmI: async () => { throw new Error('no request without a token'); } });
+  assert.deepEqual(await sc.resolveEnvironmentIdentity('https://contoso.crm.dynamics.com', { auth }), {});
+  assert.deepEqual(auth.calls, [['peek', 'https://contoso.crm.dynamics.com']]);
+  // An auth module without the memo read (an older copy) is the same: no IDs, and no Azure CLI.
+  const { peekAuthToken, ...older } = fakeAuth({ whoAmI: async () => ({ status: 200, data: { OrganizationId: ORG } }) });
+  assert.equal(typeof peekAuthToken, 'function');
+  assert.deepEqual(await sc.resolveEnvironmentIdentity('https://contoso.crm.dynamics.com', { auth: older }), {});
 });
 
 test('resolveEnvironmentIdentity degrades to nothing — a slow, failed or refused WhoAmI sends neither ID, since the token\'s tenant is the environment\'s only once it accepted the token', async () => {
@@ -269,10 +280,11 @@ test('a user who opted out gets no organization lookup, and the event still goes
 });
 
 // Spawns a process that calls emitSkillCompleted with `input`, the way a script does, and returns the probe the dispatcher writes.
-function emitInChild({ input, ikeyPath, configDir, extraEnv = {} }) {
+// `identity` is what the organization lookup answers ({} for a lookup that was skipped, refused or timed out).
+function emitInChild({ input, ikeyPath, configDir, extraEnv = {}, identity = { orgId: ORG, tenantId: TENANT } }) {
   const probe = path.join(configDir, 'probe.json');
   const code = `require(${JSON.stringify(MODULE)}).emitSkillCompleted(${JSON.stringify(input)}, ` +
-    `{ resolveIdentity: async () => ({ orgId: ${JSON.stringify(ORG)}, tenantId: ${JSON.stringify(TENANT)} }) }).then((r) => process.stdout.write(String(r)));`;
+    `{ resolveIdentity: async () => (${JSON.stringify(identity)}) }).then((r) => process.stdout.write(String(r)));`;
   const res = spawnSync(process.execPath, ['-e', code], {
     encoding: 'utf8',
     env: {
@@ -341,9 +353,21 @@ test('end to end with the shipped config: the Power Apps client event carries th
   assert.ok(!body.includes('contoso.crm.dynamics.com'), 'the environment URL never reaches the wire');
 });
 
-test('an organization in an unrecognized cloud is not sent anywhere', () => {
+test('an environment in an unrecognized cloud is not sent anywhere — with an organization ID, and without one', () => {
+  for (const identity of [{ orgId: ORG, tenantId: TENANT }, {}]) {
+    const configDir = mkTemp();
+    const { res, probe } = emitInChild({ input: { ...OK_INPUT, envUrl: 'https://contoso.example.com' }, configDir, identity });
+    assert.equal(res.stdout, 'true', res.stderr);
+    // Without an ID a blank cloud would read as a signed-out PAC and take the public US default; the emitter names it unroutable instead.
+    assert.equal(waitForFile(probe, 1500), false, `routed somewhere with ${JSON.stringify(identity)}`);
+  }
+});
+
+test('a recognized public host with no organization ID (the lookup was skipped) still sends, to the configured default', () => {
   const configDir = mkTemp();
-  const { res, probe } = emitInChild({ input: { ...OK_INPUT, envUrl: 'https://contoso.example.com' }, configDir });
+  const { res, probe } = emitInChild({ input: OK_INPUT, configDir, identity: {} });
   assert.equal(res.stdout, 'true', res.stderr);
-  assert.equal(waitForFile(probe, 1500), false, 'no cloud + an organization → the resolver routes nowhere');
+  assert.ok(waitForFile(probe, 5000), 'the dispatcher wrote the probe');
+  const shipped = JSON.parse(fs.readFileSync(SHIPPED_IKEY, 'utf8'));
+  assert.equal(JSON.parse(fs.readFileSync(probe, 'utf8')).headers['x-apikey'], shipped.regions[shipped.default_region].instrumentation_key);
 });
