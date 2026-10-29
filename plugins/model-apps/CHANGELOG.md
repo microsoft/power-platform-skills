@@ -15,7 +15,7 @@ The bundled SDK is updated (power-platform-ux 59ae2d72e2a8).
   the fix at its next upload that changes its source or data sources.
 - **Where the environment refuses every business rule** (HTTP 400 `0x80040216`, common on production), a build warns once,
   skips the rules and builds the rest of the app.
-- **`check-auth` fails an identity that cannot read customizations**, naming a role to ask for.
+- **`check-auth` rejects an account Dataverse reports as having no security role** (`0x80042f09`) instead of calling it ready.
 - **Teardown never deletes a table after an incomplete table listing.**
 - **Date and Time columns state their behaviour (User local, as before)**, so later columns on the table are not refused.
 - **A page too deep to compile is refused as `PAGE_NESTING_TOO_DEEP` with nothing written**, also when the SDK's
@@ -23,12 +23,15 @@ The bundled SDK is updated (power-platform-ux 59ae2d72e2a8).
 
 ### Changed
 
-- **App updates read the app's version and components first** (three or more reads); a missing component is added in one
-  version-guarded change set. Nothing more is published.
-- **Adding a page to an app, or removing it, reads the app more**; `pinnedViews` lists only views the app holds afterwards.
+- **Eligible app rebuilds check the app's version before adding components** (one read, two more on a match, more when results
+  page); missing components then use one version-guarded change set. Publication is unchanged.
+- **Adding a page to an app, or removing it, reads the app more**; it keeps its plain, limited component add, and `pinnedViews`
+  lists only views the app holds afterwards.
 - **Every view update names its table**, as the maker portal does.
 - **Workspaces from an earlier release refresh on the first build**; interrupted, unpushed edits still need the build's reset.
 - **A page update's version checkpoint is named after its conversation turn.**
+- **Page compilation reads array-destructuring elements before their defaults run**; if a default changes a later element, split
+  those assignments as the page rules show.
 - **A Date and Time column without a behaviour stops the build**, naming the columns to set to User local.
 
 ## [2.20.4]

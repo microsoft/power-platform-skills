@@ -4495,7 +4495,7 @@ Four more files watch the SDK boundary at every re-vendor:
   release-note line (or to the change that made it), then regenerate on a developer machine:
   `UPDATE_GOLDENS=1 node --test scripts/tests/lifecycle-trail-golden-real-bundle.test.js` — that run FAILS by design (a run that rewrites a
   golden never passes); run it again without `UPDATE_GOLDENS` and review the goldens' diff. Under CI (`CI`, `GITHUB_ACTIONS` or `TF_BUILD`
-  set) `UPDATE_GOLDENS=1` is refused before anything runs or is written.
+  set) `UPDATE_GOLDENS=1` is refused: the run fails and never rewrites the committed goldens.
 - **SDK codes.** `scripts/tests/sdk-error-codes-real-bundle.test.js` fails when the bundle can report a code that
   `scripts/tests/fixtures/sdk-error-codes.json` does not classify (or no longer reports one it lists). Classify a new code first — a write
   whose outcome is unknown goes to `OUTCOME_UNKNOWN_CODES` (`lib/retry-policy.js`), a page refusal raised before any write to
