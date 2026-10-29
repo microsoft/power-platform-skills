@@ -195,11 +195,12 @@ function recordBuildFailure(error, folders) {
 }
 
 // Prints what was recorded during a test, only when that test failed (a build a test provokes and rejects on purpose passes and
-// prints nothing), and forgets it either way.
+// prints nothing), and forgets it either way. One diagnostic per line: the TAP reporter writes a newline inside one as a
+// literal `\n`.
 function flushBuildFailureDiagnostics(t) {
   const recorded = pending.splice(0);
   if (t.passed !== false) return;
-  for (const text of recorded) t.diagnostic(text);
+  for (const text of recorded) for (const line of text.split('\n')) t.diagnostic(line);
 }
 
 // Call once at the top of a test file, so the hook covers every test in it.

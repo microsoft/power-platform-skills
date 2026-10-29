@@ -82,8 +82,8 @@ test('build failure diagnostics: they are printed only when the test that threw 
   recordBuildFailure(new Error('second'), []);
   const failing = contextOf(false);
   flushBuildFailureDiagnostics(failing);
-  assert.equal(failing.recorded.length, 1, 'only what was recorded since the last test');
-  assert.match(failing.recorded[0], /\[0\] Error: second/);
+  assert.equal(failing.recorded.filter((line) => line === '--- build failure diagnostics ---').length, 1, 'only what was recorded since the last test');
+  assert.match(failing.recorded.join('\n'), /\[0\] Error: second/);
   const again = contextOf(false);
   flushBuildFailureDiagnostics(again);
   assert.deepEqual(again.recorded, []);
