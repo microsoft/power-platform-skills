@@ -79,7 +79,8 @@ test('publication: an app update publishes nothing unless it asks to; with `publ
   assert.deepEqual(plain.publishes, [], 'an app update publishes nothing by itself');
 
   await sdk.updateElement('app', FOREIGN.app, '/description', 'Widgets, described again.');
-  await sdk.updateElement('app', FOREIGN.app, '/published', true).catch(() => sdk.addElement('app', FOREIGN.app, '', { published: true }));
+  // A fetched app carries no `published` member, so the request is added, as a caller adds any member a copy lacks.
+  await sdk.addElement('app', FOREIGN.app, '', { published: true });
   const asked = await sentBy(() => sdk.pushArtifact('app', FOREIGN.app));
   assert.equal(asked.value && asked.value.saved, true, 'the app was updated again');
   assert.equal(asked.publishes.length, 1, `an update that asks to be published publishes once: ${asked.writes.join(', ')}`);
