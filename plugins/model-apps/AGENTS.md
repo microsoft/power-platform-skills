@@ -4744,8 +4744,10 @@ real bundle, because a stub stays green through a change in the SDK's own rule.
   reason and no delete is sent, while teardown's other steps run as usual. Read as "no tables" it skipped the
   system-table check, and where an environment answers every request with a page it answered the DELETE with one too,
   which the SDK takes for done and `tolerateNotFound`
-  for gone — a table reported deleted that nothing deleted; any other failure of that read keeps its documented
-  handling, and the delete goes on. **The verifier's catalog** (`verify-model-app.js`) fails the verify, where "no
+  for gone — a table reported deleted that nothing deleted. Any other failure of that read fails the step closed too
+  (since 2.20.5): the bundled SDK reads the list to its end and refuses one that says more rows exist without a link,
+  or whose next page fails, and a refused read (403) says no more — after any of them nothing says the table is gone
+  or not a system table, so no DELETE is sent from half an answer (`unreadable-table-list-callers.test.js`). **The verifier's catalog** (`verify-model-app.js`) fails the verify, where "no
   tables" reported every declared table missing. `apps.js list` (`collectionRows`: `no readable result set`) and
   `list-languages.js` (the SDK's strict reader: `ENVIRONMENT_LANGUAGES_UNREADABLE`) were probed with the same bodies
   and do not have the hole. `unreadable-collection-answers.test.js` runs those three over the real client and the real
