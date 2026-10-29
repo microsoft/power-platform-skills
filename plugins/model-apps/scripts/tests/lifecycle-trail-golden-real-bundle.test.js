@@ -32,18 +32,21 @@
 //
 // WHEN THIS FAILS: the message prints, per phase, the requests added and removed (counted by `METHOD resource`) and the first lines where
 // the golden differs. Every difference must be explained — at an SDK uptake, by a release-note line (`Changed` for a behaviour, `Fixed`
-// for a bug the new SDK fixes); in a skill change, by the change. Then regenerate the goldens and review their diff:
+// for a bug the new SDK fixes); in a skill change, by the change. Then regenerate the goldens ON A DEVELOPER MACHINE and review their diff:
 //   UPDATE_GOLDENS=1 node --test scripts/tests/lifecycle-trail-golden-real-bundle.test.js
-// (PowerShell: `$env:UPDATE_GOLDENS='1'; node --test …; Remove-Item Env:UPDATE_GOLDENS`.)
+// (PowerShell: `$env:UPDATE_GOLDENS='1'; node --test …; Remove-Item Env:UPDATE_GOLDENS`.) A run that rewrites a golden FAILS, so it is
+// never what turns a run green: run again without UPDATE_GOLDENS. Under CI (CI, GITHUB_ACTIONS or TF_BUILD set) UPDATE_GOLDENS=1 is
+// refused before anything runs or is written.
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const crypto = require('node:crypto');
+const { spawnSync } = require('node:child_process');
 const fs = require('node:fs');
 const path = require('node:path');
 const { makeTempDir } = require('./helpers/temp-dirs.js');
 const { createLifecycleOrg } = require('./helpers/fake-lifecycle-org.js');
 const { kitchenSinkSpec, createLifecycleHarness, seedForeignWork, publishesOf, appUniqueName } = require('./helpers/lifecycle-harness.js');
-const { GOLDEN_DIR, UPDATE } = require('./helpers/golden.js');
+const { GOLDEN_DIR } = require('./helpers/golden.js');
 
 const PHASES = ['build', 'rebuild', 'edit', 'download', 'verify', 'teardown'];
 const goldenFile = (phase) => path.join(GOLDEN_DIR, `lifecycle-trail.${phase}.txt`);
@@ -197,8 +200,36 @@ function describeDifference(phase, expected, actual) {
     '  then regenerate with UPDATE_GOLDENS=1 and review the golden\'s diff.',
   ].filter(Boolean).join('\n');
 }
+// The CI systems this repository's checks run on say so in the environment: GitHub Actions sets CI and GITHUB_ACTIONS, Azure Pipelines
+// TF_BUILD. See https://docs.github.com/actions/learn-github-actions/variables#default-environment-variables
+const inCi = (env) => ['CI', 'GITHUB_ACTIONS', 'TF_BUILD'].some((name) => env[name] && !/^(?:false|0)$/i.test(env[name]));
+function regenerationRefusal(env) {
+  if (env.UPDATE_GOLDENS !== '1' || !inCi(env)) return null;
+  return 'UPDATE_GOLDENS=1 is refused under CI: a CI run compares the request trail with the committed goldens and never rewrites them. Regenerate on a developer machine, review the diff, and commit it.';
+}
+
+// Compare a phase's trail with its golden. With UPDATE_GOLDENS=1 (never under CI) a golden that differs is rewritten AND the run fails,
+// so a regenerated golden is never what turns a run green: review `git diff`, then run again without it. A golden that already holds the
+// trail is left alone and passes.
+function settleGolden(phase, file, actual, env = process.env) {
+  const refused = regenerationRefusal(env);
+  if (refused) assert.fail(refused);
+  // A Windows checkout may turn the committed LF into CRLF (helpers/golden.js): compare content, not line endings.
+  const expected = fs.existsSync(file) ? fs.readFileSync(file, 'utf8').replace(/\r\n/g, '\n') : null;
+  if (actual === expected) return;
+  if (env.UPDATE_GOLDENS === '1') {
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, actual);
+    assert.fail(`regenerated ${path.basename(file)}: review its diff and explain every change, then run again without UPDATE_GOLDENS (a run that regenerates never passes).`);
+  }
+  assert.fail(expected === null ? `${path.basename(file)} is missing: regenerate it with UPDATE_GOLDENS=1 on a developer machine.` : describeDifference(phase, expected, actual));
+}
+
 for (const phase of PHASES) {
   test(`lifecycle trail: the ${phase} phase sends exactly the requests, bodies and publishes it sent before`, async (t) => {
+    // Refused before the lifecycle runs: a CI run that asks to regenerate does no work and fails.
+    const refused = regenerationRefusal(process.env);
+    if (refused) assert.fail(refused);
     const run = await lifecycle();
     const step = run.steps[phase];
     if (step.error) throw step.error;
@@ -209,15 +240,7 @@ for (const phase of PHASES) {
     if (phase === 'download') assert.equal(value.emitted && value.emitted.ok, true, `the download succeeds: ${value.stderr}`);
     assert.deepEqual(step.unexpected, [], `every request the ${phase} phase sent is one the fake models`);
     t.diagnostic(`${phase}: ${step.end - step.mark} requests in ${step.ms} ms`);
-    const actual = trailOf(run.org, step);
-    if (UPDATE) {
-      fs.mkdirSync(GOLDEN_DIR, { recursive: true });
-      fs.writeFileSync(goldenFile(phase), actual);
-      return;
-    }
-    // A Windows checkout may turn the committed LF into CRLF (helpers/golden.js): compare content, not line endings.
-    const expected = fs.readFileSync(goldenFile(phase), 'utf8').replace(/\r\n/g, '\n');
-    if (actual !== expected) assert.fail(describeDifference(phase, expected, actual));
+    settleGolden(phase, goldenFile(phase), trailOf(run.org, step));
   });
 }
 
@@ -241,4 +264,34 @@ test('lifecycle trail (meta): one more read, one more body member and a write mo
   assert.match(describeDifference('rebuild', golden, late), /The same requests by METHOD resource[\s\S]*\[1x before, 0x now\] in "up to publish 1: app":\n\s+PATCH \/systemforms\(<id>\) \{formxml:string\}/);
   assert.equal(shape({ b: [1, 'x', { c: null }], a: true }), '{a:boolean,b:[number|string|{c:null}]}');
   assert.equal(mask('/x(0a1b2c3d-0000-4000-8000-00000000abcd)?$filter=modifiedon gt 2026-01-02T03:04:05Z'), '/x(<id>)?$filter=modifiedon gt <time>');
+});
+
+// UPDATE_GOLDENS must never be the way a CI run turns green: a run that regenerates in CI compares nothing and would pass whatever was
+// sent. So the regeneration is refused under CI, before the lifecycle runs and before anything is written — proven by running this file
+// in a child process with CI's variables set (the child's own copy of this test returns at once).
+test('lifecycle trail: UPDATE_GOLDENS=1 under CI is refused before anything is written, and the run fails', () => {
+  if (process.env.LIFECYCLE_TRAIL_CHILD === '1') return;
+  const before = PHASES.map((phase) => fs.readFileSync(goldenFile(phase)));
+  const env = { ...process.env, CI: 'true', GITHUB_ACTIONS: 'true', UPDATE_GOLDENS: '1', LIFECYCLE_TRAIL_CHILD: '1' };
+  // A child of `node --test` that inherits NODE_TEST_CONTEXT reports to its parent's runner instead of running as a run of its own.
+  delete env.NODE_TEST_CONTEXT;
+  const child = spawnSync(process.execPath, ['--test', '--test-name-pattern', 'phase sends exactly', __filename], { env, encoding: 'utf8', timeout: 180000 });
+  const output = `${child.stdout}${child.stderr}`;
+  assert.notEqual(child.status, 0, `the regenerating run under CI must fail:\n${output.slice(-2000)}`);
+  assert.match(output, /UPDATE_GOLDENS=1 is refused under CI/);
+  assert.deepEqual(PHASES.map((phase) => fs.readFileSync(goldenFile(phase))), before, 'and no golden was written');
+});
+
+// The regeneration rules themselves, on a golden of the test's own: refused under CI with nothing written; locally, a golden that differs
+// is rewritten and the run fails; one that already holds the trail is not touched and passes.
+test('lifecycle trail (meta): regeneration is refused under CI, and a local run that regenerates fails', () => {
+  const file = path.join(makeTempDir('lifecycle-trail-golden-'), 'lifecycle-trail.meta.txt');
+  fs.writeFileSync(file, 'stale\n');
+  assert.throws(() => settleGolden('meta', file, 'fresh\n', { UPDATE_GOLDENS: '1', CI: 'true' }), /refused under CI/);
+  assert.throws(() => settleGolden('meta', file, 'fresh\n', { UPDATE_GOLDENS: '1', TF_BUILD: 'True' }), /refused under CI/);
+  assert.equal(fs.readFileSync(file, 'utf8'), 'stale\n', 'nothing was written under CI');
+  assert.throws(() => settleGolden('meta', file, 'fresh\n', { UPDATE_GOLDENS: '1', CI: 'false' }), /regenerated lifecycle-trail\.meta\.txt/);
+  assert.equal(fs.readFileSync(file, 'utf8'), 'fresh\n', 'a local run rewrites the golden');
+  assert.doesNotThrow(() => settleGolden('meta', file, 'fresh\n', { UPDATE_GOLDENS: '1' }), 'a golden that already holds the trail passes');
+  assert.throws(() => settleGolden('meta', file, 'other\n', {}), /trail differs/);
 });
