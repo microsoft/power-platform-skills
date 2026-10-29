@@ -59,7 +59,9 @@ apart deliberately.
   that did not say what the author wrote. An environment that does not declare that member **cannot
   host business rules** — and that is the common case rather than an edge case. Where the member is
   declared, a rule can still fail with a server-side MissingMethodException, which is a platform
-  defect on that environment rather than a rule-shape problem. The build then skips them,
+  defect on that environment rather than a rule-shape problem. A production environment declares the
+  member but answers the first rule with HTTP 400 `0x80040216` ("An unexpected error occurred."),
+  a platform limit; nothing is created. The build then skips them,
   warns once naming the member, and builds everything else normally; `--verify` reports them as *not
   applicable on this environment* rather than missing, so the exit code, the deployed baseline and
   the `--changed-only` snapshot are unaffected.

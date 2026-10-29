@@ -832,7 +832,7 @@ laid out, explicit `tabs` honored; sub-grids, quick-views, and form JS (`events[
 canonical control cells / the `/bag/c` events region via the SDK's generic `addElement` surface)
 → **business rules** (`businessRules[]` — authored as the workflow object model through the bound
 `CreateProcessWithWfomJson` member and activated; **skipped with a warning** on an environment that
-does not declare that member) →
+does not declare that member or has it switched off — HTTP 400 `0x80040216`, common on production environments) →
 **business process flows** (`businessProcessFlows[]`; a category-4 process compiled from the
 authored stages and activated — this goes through the SDK's generic artifact surface, a plain
 `workflows` row, so it is NOT subject to the bound-member gate above) →
@@ -916,8 +916,10 @@ child view id. Each step emits `[n/total]`.
     upstream because it covered 4 of the 7 action types and a single clause, so it silently narrowed
     a rule into something that did not say what the author wrote. Environments that do not declare
     the member therefore **cannot host business rules at all** — and that is the common case, not an
-    edge case. The build **skips** the rules, warns once naming the
-    member, and builds everything else normally, so an app is never left half-created. If rules are
+    edge case. **Production environments are the other common case**: they declare the member but
+    answer the first rule with HTTP 400 `0x80040216` ("An unexpected error occurred."), a platform
+    limit, and nothing is created. The build **skips** the rules in both cases, warns once naming the
+    member or the code, and builds everything else normally, so an app is never left half-created. If rules are
     essential, verify the environment first.
     **Business process flows are NOT affected by this gate** — a BPF is written as an ordinary
     `workflows` row through the SDK's generic artifact surface, with no bound member involved.

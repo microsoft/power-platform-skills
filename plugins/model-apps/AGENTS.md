@@ -626,6 +626,12 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   `<app-folder>/.maker-workspace/` for reuse/edits. The 16 phases
   (`solution·data-model·sample-data·web-resources·views·charts·forms·business-rules·business-process-flows·commands·dashboards·app-shell·pages·ai-features·security·publish`)
   are unchanged; independent ops run with bounded parallelism.
+  **Business rules are environment-gated, and the gate has two forms** (`sdk-build.js`, the `business-rules` loop; `skipIf` is the whole decision). An environment that does not declare the
+  bound `CreateProcessWithWfomJson` member answers `BUSINESS_RULE_API_UNAVAILABLE`. A **production environment** — the common case — declares the member but has it switched off, and
+  answers the FIRST create with HTTP 400 `0x80040216` ("An unexpected error occurred.") whatever the rule says; nothing is created. Both are the same skip: one warning naming the code, the
+  rules recorded in `result.skipped.businessRules` (which `--verify` reads as *not applicable on this environment*), the rest of the build running. The 400 is read as the gate only when the
+  call is to that member (`isBusinessRuleSwitchedOffAnswer`, by status, member URL and code — never by words) AND no rule of this build was created before it; the same 400 after a
+  rule was created, or any other code or status, still halts. The remaining rules are then not sent. A rule that already exists is reused and does not count as a create.
   Off-sitemap ids require a local CREATE receipt for this app/key/id plus an exact decoded stored-name
   match, including when the spec and remote manifest agree. Otherwise `unproven-manifest-id` causes
   `pages-identity-conflict`, never a replacement CREATE. Names corroborate identity, never establish it.

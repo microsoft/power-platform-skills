@@ -369,6 +369,33 @@ const FORM_EVENTS = new Set(['onload', 'onsave', 'onchange']);
 // WWF XAML substitute. Environments where the member is undeclared therefore cannot host business
 // rules at all; that is a platform-side rollout, not something a spec can work around.
 const BUSINESS_RULE_MEMBER = 'Microsoft.Dynamics.CRM.CreateProcessWithWfomJson';
+// What an environment that declares the member but has it switched off answers to EVERY create, whatever the rule holds (garbage content
+// included) — the answer a platform feature gate gives, which names nothing:
+//   POST <env>/api/data/v9.0/workflows(00000000-0000-0000-0000-000000000000)/Microsoft.Dynamics.CRM.CreateProcessWithWfomJson
+//   HTTP 400  {"error":{"code":"0x80040216","message":"An unexpected error occurred."}}
+// The code is generic (0x80040216 is the platform's "unexpected error"), so it is read together with the status AND the member that was
+// asked, and only for the FIRST create of a build (see businessRuleSwitchedOff). Measured on every production-geo environment tried.
+const BUSINESS_RULE_SWITCHED_OFF_CODE = '0x80040216';
+
+// True when `err` — or anything it was made from — is the HTTP 400 answer above to a call of the business-rule member. The SDK throws it as
+//   Error 'HTTP 400 from <url>: An unexpected error occurred.'  { code: 'CONNECTION_ERROR', statusCode: 400, url, cause: <the response body> }
+// and, where a push reports it by value, `requireSuccessfulPush` wraps it in a BuildHalt whose `cause` is that error — so the chain is walked
+// rather than only the top. The words of the message are never read: the platform answers in the caller's language, the code does not change.
+function isBusinessRuleSwitchedOffAnswer(err) {
+  const seen = new Set();
+  for (let e = err, depth = 0; e && typeof e === 'object' && depth < 6 && !seen.has(e); e = e.cause, depth += 1) {
+    seen.add(e);
+    const status = e.statusCode != null ? e.statusCode : e.status;
+    if (status !== 400 || !String(e.url || '').includes(BUSINESS_RULE_MEMBER)) continue;
+    let body = e.cause;
+    if (typeof body === 'string') {
+      try { body = JSON.parse(body); } catch { body = null; }
+    }
+    const code = body && body.error && body.error.code;
+    if (typeof code === 'string' && code.toLowerCase() === BUSINESS_RULE_SWITCHED_OFF_CODE) return true;
+  }
+  return false;
+}
 
 // The per-app setting name that turns on the modern ("new look") shell. Verified live against a real
 // organization: `settingdefinition` uniquename `NewLookAlwaysOn`, datatype 2 (boolean), default
@@ -5913,6 +5940,12 @@ async function runSdkBuildPhases(spec, opts, owed) {
     // Warn ONCE per build, not once per rule: on an environment without the member every rule skips,
     // and N copies of the same paragraph buries the rest of the build output.
     let businessRuleApiWarned = false;
+    // The two ways a rule is refused "for this environment", and what they allow. `created` counts the rules THIS build created: the
+    // switched-off answer (isBusinessRuleSwitchedOffAnswer) is read as "this environment does not host rules" only while it is the
+    // answer to the first create. After a rule was created the environment plainly hosts them, and the same answer is a failure to halt on.
+    // A rule that already existed is not a create — it proves nothing about what the member does now.
+    let businessRulesCreated = 0;
+    let businessRulesSwitchedOff = false;
     // A rule is skipped only for this ONE reason; anything else still halts. Matching is on the
     // SDK's documented `code`, never on `err.name` — the bundle is minified, so the class name is a
     // rebuild-unstable string (`Xe`, which is really the base SdkError), and matching it would
@@ -6008,6 +6041,12 @@ async function runSdkBuildPhases(spec, opts, owed) {
         }
         continue;
       }
+      if (businessRulesSwitchedOff) {
+        // The first create showed this environment does not host rules: the rest are not sent (each would be refused the same way).
+        result.skipped.businessRules.push(`${entityLogical}|${rule.name}`);
+        runner.skip('business-rules', `business rule "${rule.name}" on ${rule.entity} (unsupported in this environment)`);
+        continue;
+      }
       await runner.run('business-rules', `business rule "${rule.name}" on ${rule.entity}`, async () => {
         const def = businessRuleDef(rule);
         const art = await provision.createArtifact('businessRule', def);
@@ -6047,6 +6086,7 @@ async function runSdkBuildPhases(spec, opts, owed) {
         }
         const pushed = requireSuccessfulPush(await provision.pushArtifact('businessRule', art.id), `business rule ${rule.name}`, opts.warn);
         result.created.businessRules[`${entityLogical}|${rule.name}`] = pushed.id;
+        businessRulesCreated += 1;
         await provision.addSolutionComponent({ componentId: pushed.id, componentType: COMPONENT_TYPE.workflow, solutionUniqueName: sol.uniqueName });
         // The SDK returns the primary saved id, which is kept. It supplies no receipts for other
         // definitions, so a before/after delta cannot distinguish its retries from concurrent creates.
@@ -6073,12 +6113,21 @@ async function runSdkBuildPhases(spec, opts, owed) {
         // must not happen. The skip is recorded on the result so `--verify` and the run summary can
         // report it rather than implying the rules exist.
         skipIf: (err) => {
-          const reason = businessRuleApiUnavailable(err);
+          let reason = businessRuleApiUnavailable(err);
+          let notCreated = `this environment does not expose the '${BUSINESS_RULE_MEMBER}' member that the modern business-rule designer uses, so there is no supported way to author them here.`;
+          let remedy = 'Re-run against an environment that exposes the member, or drop businessRules[] from the spec.';
+          if (!reason && businessRulesCreated === 0 && isBusinessRuleSwitchedOffAnswer(err) && !errorCodeChain(err).includes('BUSINESS_RULE_LEFT_DEACTIVATED')) {
+            // The member is declared but switched off. `BUSINESS_RULE_LEFT_DEACTIVATED` is excluded as above, for the same reason.
+            reason = 'unsupported in this environment';
+            businessRulesSwitchedOff = true;
+            notCreated = `this environment answered HTTP 400 ${BUSINESS_RULE_SWITCHED_OFF_CODE} ("An unexpected error occurred") to the '${BUSINESS_RULE_MEMBER}' member, which means business-rule creation is not available on it. That is a platform limit, commonly on production environments, not a fault in the rule; the first rule was refused and the remaining rules were not sent.`;
+            remedy = 'Use an environment where business-rule creation is available, or drop businessRules[] from the spec.';
+          }
           if (!reason) return false;
           result.skipped.businessRules.push(`${entityLogical}|${rule.name}`);
           if (!businessRuleApiWarned && typeof opts.warn === 'function') {
             businessRuleApiWarned = true;
-            opts.warn(`business rules were NOT created: this environment does not expose the '${BUSINESS_RULE_MEMBER}' member that the modern business-rule designer uses, so there is no supported way to author them here. Everything else in the app was built normally. Re-run against an environment that exposes the member, or drop businessRules[] from the spec. Detail: ${String((err && err.message) || err).replace(/\s+/g, ' ').slice(0, 300)}`);
+            opts.warn(`business rules were NOT created: ${notCreated} Everything else in the app was built normally. ${remedy} Detail: ${String((err && err.message) || err).replace(/\s+/g, ' ').slice(0, 300)}`);
           }
           return reason;
         },

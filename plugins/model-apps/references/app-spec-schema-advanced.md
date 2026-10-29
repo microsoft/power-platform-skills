@@ -131,10 +131,15 @@ Reference from a column via `"globalChoice": "new_priority"` (built before the c
 - **Environment gate — read this first.** The SDK writes a rule through the bound
   `CreateProcessWithWfomJson` member, the same one the modern business-rule designer uses, and has
   **no fallback**. An environment that does not declare that member cannot host business rules at
-  all, and that is the common case rather than an edge case. The build then
-  **skips** `businessRules[]`, warns once naming the member, and builds everything else normally —
-  so you get a working app without the rules, not a half-built one. `--verify` will report those
-  rules as not deployed, which is the truth.
+  all, and that is the common case rather than an edge case. **Production environments are the
+  other common case**: they declare the member but have it switched off, so the first rule fails
+  with HTTP 400 `0x80040216` ("An unexpected error occurred.") whatever the rule says, and nothing is
+  created — a platform limit, not a fault in the rule. In both cases the build
+  **skips** `businessRules[]`, warns once (naming the member or the code), and builds everything
+  else normally — so you get a working app without the rules, not a half-built one. A 400
+  `0x80040216` is read this way only for the first rule of a build; after a rule was created, or with
+  any other code or status, the build halts as before. `--verify` will report those
+  rules as not applicable on this environment, which is the truth.
 - **Same-name definitions are not automatically disposable.** Rebuild reuses the oldest matching
   definition and keeps additional pre-existing ids with a warning. After a create, the SDK's returned
   definition is kept. Every other same-name id is reported as not attributable to this run, including

@@ -1281,3 +1281,172 @@ test('a failed solution add on the reuse path WARNS — it never fails an otherw
   assert.ok(warnings.some((w) => /could not be added to solution/.test(w)),
     `the operator must be told; got ${JSON.stringify(warnings)}`);
 });
+
+// --- an environment whose bound member exists but is switched off ------------------------------------
+//
+// Measured on production-geo environments: the platform declares `CreateProcessWithWfomJson` and answers EVERY create, whatever the
+// rule says (garbage content included), with
+//   HTTP 400  {"error":{"code":"0x80040216","message":"An unexpected error occurred."}}
+// and nothing is created. The member-is-missing gate cannot see it (the member IS declared), so a build used to halt at this phase and
+// leave an app built only up to it. The SDK throws that answer as
+//   Error 'HTTP 400 from <env>/api/data/v9.0/workflows(<null guid>)/Microsoft.Dynamics.CRM.CreateProcessWithWfomJson: <message>'
+//   { code: 'CONNECTION_ERROR', statusCode: 400, url, cause: <the response body> }
+// and nothing in it names the gate. The FIRST create of a build answering exactly this is read as "not available here"; the same answer
+// after a rule of this build was created, or any other failure, is not.
+const MEMBER_URL = 'https://contoso.crm.dynamics.com/api/data/v9.0/workflows(00000000-0000-0000-0000-000000000000)/Microsoft.Dynamics.CRM.CreateProcessWithWfomJson';
+function memberRefusal({ status = 400, code = '0x80040216', url = MEMBER_URL, message = 'An unexpected error occurred.' } = {}) {
+  return Object.assign(new Error(`HTTP ${status} from ${url}: ${message}`),
+    { code: 'CONNECTION_ERROR', statusCode: status, url, cause: { error: { code, message } } });
+}
+
+// `answers[i]` is what the i-th push does: an Error is thrown, `'ok'` saves, anything else is returned as the push result.
+function provisionPushing(answers) {
+  const { provision, calls } = provisionThatCannotAuthorRules();
+  let pushes = 0;
+  provision.pushArtifact = async () => {
+    const answer = answers[Math.min(pushes, answers.length - 1)];
+    pushes += 1;
+    calls.push(['pushArtifact']);
+    if (answer instanceof Error) throw answer;
+    if (answer === 'ok') return { id: `br-${pushes}`, saved: true, publish: { kind: 'notRequested' } };
+    return answer;
+  };
+  return { provision, calls };
+}
+const threeRules = () => {
+  const spec = ruleOnlySpec();
+  spec.businessRules = [{ ...RULE, name: 'Rule A' }, { ...RULE, name: 'Rule B' }, { ...RULE, name: 'Rule C' }];
+  return spec;
+};
+
+test('the first rule refused with HTTP 400 0x80040216 on the bound member SKIPS every rule and the build goes on', async () => {
+  const { sdk } = require('./helpers/mock-sdk.js').makeSimpleMockSdk();
+  const { provision, calls } = provisionPushing([memberRefusal()]);
+  const warnings = [];
+  const events = [];
+  const spec = threeRules();
+  const res = await runBuild(spec, {
+    sdk, provisionSdk: provision, apply: true, phases: ['business-rules'], warn: (m) => warnings.push(m), emit: (e) => events.push(e),
+  });
+  assert.strictEqual(res.ok, true, 'the build must complete, exactly as for a missing member');
+
+  // The refused create is the probe: the remaining rules are not sent.
+  assert.strictEqual(calls.filter((c) => c[0] === 'pushArtifact').length, 1, 'only the first rule is sent');
+  assert.strictEqual(calls.some((c) => c[0] === 'addSolutionComponent'), false);
+
+  assert.strictEqual(warnings.length, 1, `exactly one warning for three rules; got ${JSON.stringify(warnings)}`);
+  assert.match(warnings[0], /business rules were NOT created/);
+  assert.match(warnings[0], /0x80040216/, 'name the code so it can be searched for');
+  assert.match(warnings[0], /platform limit/);
+  assert.match(warnings[0], /production environments/);
+  assert.match(warnings[0], /Everything else in the app was built normally/);
+
+  const skips = events.filter((e) => e.phase === 'business-rules' && e.status === 'skip');
+  assert.strictEqual(skips.length, 3, `every rule is a skip; got ${JSON.stringify(events.map((e) => [e.status, e.label]))}`);
+  for (const s of skips) assert.match(s.label, /unsupported in this environment/);
+  assert.strictEqual(events.some((e) => e.phase === 'business-rules' && e.status === 'error'), false);
+
+  assert.deepStrictEqual(res.skipped.businessRules, spec.businessRules.map((r) => `${r.entity.toLowerCase()}|${r.name}`));
+  assert.strictEqual(Object.keys(res.created.businessRules).length, 0);
+});
+
+test('the same refusal reported BY VALUE (a saved:false result) skips too', async () => {
+  const { sdk } = require('./helpers/mock-sdk.js').makeSimpleMockSdk();
+  const { provision } = provisionPushing([
+    { type: 'businessRule', id: 'br-new', saved: false, shipped: false, publish: { kind: 'notRequested' }, error: memberRefusal() },
+  ]);
+  const warnings = [];
+  const res = await runBuild(ruleOnlySpec(), {
+    sdk, provisionSdk: provision, apply: true, phases: ['business-rules'], warn: (m) => warnings.push(m),
+  });
+  assert.strictEqual(res.ok, true);
+  assert.strictEqual(res.skipped.businessRules.length, 1);
+  assert.strictEqual(warnings.length, 1);
+});
+
+test('REAL BUNDLE: the refusal the bundle throws for HTTP 400 0x80040216 skips the rules, and verify treats them as the missing-member gate does', async () => {
+  const { createMakerSdk, createNodeWorkspaceStorage } = require(BUNDLE);
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'br-gate-'));
+  dirs.push(dir);
+  const memberPosts = [];
+  const httpClient = {
+    get: async () => ({ status: 200, headers: {}, body: { value: [] } }),
+    post: async (url) => {
+      if (!/CreateProcessWithWfomJson/.test(String(url))) return { status: 200, headers: {}, body: {} };
+      memberPosts.push(String(url));
+      return { status: 400, headers: {}, body: { error: { code: '0x80040216', message: 'An unexpected error occurred.' } } };
+    },
+    patch: async () => ({ status: 204, headers: {}, body: {} }),
+    put: async () => ({ status: 204, headers: {}, body: {} }),
+    delete: async () => ({ status: 204, headers: {}, body: {} }),
+  };
+  const real = createMakerSdk({ workspaceStorage: createNodeWorkspaceStorage(dir), instanceUrl: 'https://contoso.crm.dynamics.com', httpClient });
+  await real.initWorkspace();
+  const { sdk } = require('./helpers/mock-sdk.js').makeSimpleMockSdk();
+  // The reads (the rows already there) are the double's; what is under test is the real create, update and push of a rule.
+  const { provision } = provisionWithRules([]);
+  for (const method of ['createArtifact', 'updateElement', 'pushArtifact']) provision[method] = (...args) => real[method](...args);
+  const warnings = [];
+  const res = await runBuild(threeRules(), {
+    sdk, provisionSdk: provision, apply: true, phases: ['business-rules'], warn: (m) => warnings.push(m),
+  });
+  assert.strictEqual(res.ok, true);
+  assert.strictEqual(memberPosts.length, 1, 'the member is asked once; the other two rules are not sent');
+  assert.strictEqual(res.skipped.businessRules.length, 3);
+  assert.strictEqual(warnings.length, 1);
+  assert.match(warnings[0], /0x80040216/);
+
+  const r = await verifySpec(ruleSpec(), baseReader([]), { environmentSkipped: { businessRules: [`new_ticket|Lock when closed`] } });
+  assert.strictEqual(ruleCheck(r), undefined, 'a skipped rule is not demanded by verify');
+  assert.deepStrictEqual(r.environmentSkipped, ['business-rule:new_ticket.Lock when closed']);
+});
+
+test('a refusal that is NOT this one still HALTS: another code, another status, another member', async () => {
+  const { sdk } = require('./helpers/mock-sdk.js').makeSimpleMockSdk();
+  const refusals = [
+    memberRefusal({ code: '0x80040265' }),
+    memberRefusal({ status: 500 }),
+    memberRefusal({ status: 403, code: '0x80040220' }),
+    memberRefusal({ url: 'https://contoso.crm.dynamics.com/api/data/v9.0/workflows' }),
+    Object.assign(new Error('HTTP 400 from the bound member'), { code: 'CONNECTION_ERROR', statusCode: 400, url: MEMBER_URL }),
+  ];
+  for (const refusal of refusals) {
+    const { provision } = provisionPushing([refusal]);
+    const warnings = [];
+    await assert.rejects(
+      () => runBuild(ruleOnlySpec(), { sdk, provisionSdk: provision, apply: true, phases: ['business-rules'], warn: (m) => warnings.push(m) }),
+      `${refusal.message} (${refusal.statusCode}) must still halt the build`);
+    assert.strictEqual(warnings.length, 0, 'a halt is not announced as an environment limit');
+  }
+});
+
+test('the same refusal AFTER a rule of this build was created still HALTS', async () => {
+  // The environment hosted the first rule, so the refusal of the second is not "rules are switched off here".
+  const { sdk } = require('./helpers/mock-sdk.js').makeSimpleMockSdk();
+  const { provision, calls } = provisionPushing(['ok', memberRefusal()]);
+  const warnings = [];
+  const events = [];
+  const err = await runBuild(threeRules(), {
+    sdk, provisionSdk: provision, apply: true, phases: ['business-rules'], warn: (m) => warnings.push(m), emit: (e) => events.push(e),
+  }).then(() => null, (e) => e);
+  assert.ok(err, 'the build halts');
+  assert.match(err.message, /business-rules failed/);
+  assert.strictEqual(calls.filter((c) => c[0] === 'pushArtifact').length, 2, 'the third rule is not tried');
+  assert.strictEqual(warnings.length, 0);
+  assert.strictEqual(events.some((e) => e.phase === 'business-rules' && e.status === 'skip'), false);
+});
+
+test('a rule that already exists is reused, not counted as a create: a refusal of the next rule is still the first create of the build', async () => {
+  const { sdk } = require('./helpers/mock-sdk.js').makeSimpleMockSdk();
+  const { provision } = provisionPushing([memberRefusal()]);
+  const queryRecords = provision.queryRecords;
+  provision.queryRecords = async (entity, opts) => (entity === 'workflow' && /Rule A/.test(JSON.stringify(opts.filter))
+    ? [{ workflowid: 'existing-a', statecode: 1, createdon: '2026-01-01T00:00:00Z' }]
+    : queryRecords(entity, opts));
+  const res = await runBuild(threeRules(), {
+    sdk, provisionSdk: provision, apply: true, phases: ['business-rules'], warn: () => {},
+  });
+  assert.strictEqual(res.ok, true);
+  assert.strictEqual(res.created.businessRules['new_ticket|Rule A'], 'existing-a');
+  assert.deepStrictEqual(res.skipped.businessRules, ['new_ticket|Rule B', 'new_ticket|Rule C']);
+});
