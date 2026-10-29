@@ -396,7 +396,7 @@ const BUSINESS_RULE_SWITCHED_OFF_CODE = '0x80040216';
 //   - the plugin's HTTP client reports, on the answer's body, that no earlier send of this request was ambiguous (HTTP_SEND_HISTORY). A transport that reports nothing is
 //     not confirmed: it halts, as it did before this gate. This does not depend on the create being sent only once by anything else.
 // Even then the answer is only a CANDIDATE: a create the platform saved and then failed to finish answers the same 400 (see BUSINESS_RULE_SWITCHED_OFF_CODE). The
-// business-rules phase accepts it only after a fresh, complete read shows the rule's definitions unchanged since the snapshot taken just before the push.
+// business-rules phase accepts it only after a fresh, complete read finds no definition of the rule that the snapshot taken just before the push lacked.
 // The member is told by the request, never by a substring of a URL: the build's own reads of the rule's name (workflows?$filter=name eq '…') can quote the member's name.
 function isConfirmedBusinessRuleRefusal(err) {
   const chain = [];
@@ -5997,11 +5997,12 @@ async function runSdkBuildPhases(spec, opts, owed) {
       if (codes.includes('BUSINESS_RULE_LEFT_DEACTIVATED')) return false;
       return codes.includes('BUSINESS_RULE_API_UNAVAILABLE') ? 'unsupported in this environment' : false;
     };
-    // Whether a business-rule create that got the switched-off answer left this rule's definitions as the snapshot taken just before
-    // its push had them. Only that proves the refused create wrote nothing: the same HTTP 400 comes from a create the platform saved
-    // and then failed to finish (#482). `workflows` answers { "value": [ { "workflowid": "<id>" } ] }; a complete read is required.
-    //   { nothing: true }                    the same ids as before: nothing was created
-    //   { nothing: false, why: <warning> }    a new id (saved, then failed), or a read that failed or was incomplete (unknown)
+    // Whether a business-rule create that got the switched-off answer left no definition of this rule that the snapshot taken just
+    // before its push lacked. Only that proves the refused create wrote nothing: the same HTTP 400 comes from a create the platform
+    // saved and then failed to finish (#482). `workflows` answers { "value": [ { "workflowid": "<id>" } ] }; a complete read is required.
+    // A new id is never attributed to this create (another writer can add a same-name definition meanwhile); either way it halts.
+    //   { nothing: true }                    no id the snapshot lacked: nothing was created
+    //   { nothing: false, why: <warning> }    a new id (saved then failed, or another writer's), or a read that failed or was incomplete
     const refusedCreateWroteNothing = async (name, entityLogical, beforeCreate) => {
       const prefix = `business rule "${name}" on ${entityLogical}: the create answered HTTP 400 ${BUSINESS_RULE_SWITCHED_OFF_CODE}`;
       let after;
@@ -6018,7 +6019,7 @@ async function runSdkBuildPhases(spec, opts, owed) {
       const before = new Set(beforeCreate.map((w) => w.workflowid.toLowerCase()));
       const added = after.map((w) => w.workflowid).filter((id) => !before.has(id.toLowerCase()));
       if (added.length) {
-        return { nothing: false, why: `${prefix}, yet the rule now exists (${added.join(', ')}): the platform saved it and then failed to finish it, so business rules ARE available here and the build stops. Check that rule in Power Apps (it may be active) before running the build again; the next run reuses it.` };
+        return { nothing: false, why: `${prefix}, yet a definition of this rule that was not there just before the create now exists (${added.join(', ')}). Either the platform saved this create and then failed to finish it, or something else added that rule meanwhile, so the answer does not show that business rules are unavailable here and the build stops. Check that rule in Power Apps (it may be active) before running the build again; the next run reuses it.` };
       }
       return { nothing: true };
     };

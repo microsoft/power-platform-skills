@@ -1462,7 +1462,7 @@ test('a rule that already exists is reused, not counted as a create: a refusal o
 //
 // The workflow row commits, then generating its UiData faults, and the member answers the very same HTTP 400 0x80040216 (measured as live,
 // firing rows; pinned in sdk-uptake-contract.test.js). So the answer alone never proves nothing was written: only a fresh, complete read of
-// the rule's definitions that finds them as the before-create snapshot had them lets the build call rules unavailable here.
+// the rule's definitions that finds none the before-create snapshot lacked lets the build call rules unavailable here.
 function provisionRefusedThenRead({ before = async () => [], readAfter }) {
   const { provision, calls } = provisionPushing([memberRefusal()]);
   let pushed = false;
@@ -1491,7 +1491,8 @@ test('the switched-off answer to a create the platform SAVED anyway is not the g
   assert.strictEqual(warnings.some((w) => /NOT created|platform limit/.test(w)), false, 'nothing is called a platform limit');
   assert.strictEqual(warnings.length, 1, `one warning naming the row; got ${JSON.stringify(warnings)}`);
   assert.match(warnings[0], /saved-row-1/);
-  assert.match(warnings[0], /saved it and then failed to finish it/);
+  assert.match(warnings[0], /Either the platform saved this create and then failed to finish it, or something else added that rule meanwhile/);
+  assert.doesNotMatch(warnings[0], /business rules ARE available/i, 'the new row is not attributed to this create: another writer can add it meanwhile');
   assert.strictEqual(events.some((e) => e.phase === 'business-rules' && e.status === 'skip'), false);
 });
 

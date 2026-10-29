@@ -137,8 +137,10 @@ Reference from a column via `"globalChoice": "new_priority"` (built before the c
   created — a platform limit, not a fault in the rule. In both cases the build
   **skips** `businessRules[]`, warns once (naming the member or the code), and builds everything
   else normally — so you get a working app without the rules, not a half-built one. A 400
-  `0x80040216` is read this way only for the first rule of a build; after a rule was created, or with
-  any other code or status, the build halts as before. `--verify` will report those
+  `0x80040216` is read this way only for the first rule of a build, and only when a read right
+  after it finds no new definition of that rule (the platform can also save a rule and then fail
+  with the same answer). Otherwise — a new definition, a rule created earlier in the build, or any
+  other code or status — the build halts as before. `--verify` will report those
   rules as not applicable on this environment, which is the truth.
 - **Same-name definitions are not automatically disposable.** Rebuild reuses the oldest matching
   definition and keeps additional pre-existing ids with a warning. After a create, the SDK's returned
