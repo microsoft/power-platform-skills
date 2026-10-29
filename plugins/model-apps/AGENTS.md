@@ -4486,6 +4486,23 @@ artifacts, 2xx statuses, green build. The test therefore does two things: a **so
 fails on any un-awaited `provision.*`/`sdk.*` call to those methods (annotate a deliberate one with
 `sdk-async-ok`), and a **dynamic check** that the real bundle still returns Promises for exactly that
 list — so if a future SDK makes one synchronous again, the scan can't go on enforcing a dead rule.
+
+Four more files watch the SDK boundary at every re-vendor:
+
+- **Lifecycle request trail.** `scripts/tests/lifecycle-trail-golden-real-bundle.test.js` pins every request of the kitchen-sink lifecycle
+  (build, unchanged rebuild, edit rebuild, download, verify, teardown) over the real bundle: method, path and query, body shape with list
+  lengths, status, and everything each publish names (`scripts/tests/golden/lifecycle-trail.*.txt`). On a difference, map each one to a
+  release-note line (or to the change that made it), then regenerate on a developer machine:
+  `UPDATE_GOLDENS=1 node --test scripts/tests/lifecycle-trail-golden-real-bundle.test.js` — that run FAILS by design (a run that rewrites a
+  golden never passes); run it again without `UPDATE_GOLDENS` and review the goldens' diff. Under CI (`CI`, `GITHUB_ACTIONS` or `TF_BUILD`
+  set) `UPDATE_GOLDENS=1` is refused before anything runs or is written.
+- **SDK codes.** `scripts/tests/sdk-error-codes-real-bundle.test.js` fails when the bundle can report a code that
+  `scripts/tests/fixtures/sdk-error-codes.json` does not classify (or no longer reports one it lists). Classify a new code first — a write
+  whose outcome is unknown goes to `OUTCOME_UNKNOWN_CODES` (`lib/retry-policy.js`), a page refusal raised before any write to
+  `PRE_WRITE_REFUSALS` (`lib/genpage-sdk.js`), a maker step to `operatorRemedy` (`lib/entity-provision.js`) — then add it to the fixture.
+- **SDK options and publication.** `sdk-options-real-bundle.test.js` fails when an option a script passes is no longer read by the bundle
+  or no longer has its effect; `sdk-publication-real-bundle.test.js` pins what the SDK publishes by itself (a page push: nothing; an app
+  update: only with `published: true`).
 The same file pins the **throwaway-workspace lifecycle**: a CLI that makes a temporary workspace must
 build its SDK behind a `try` whose own `catch` or `finally` removes it (`cleanup()`, `dispose()` or
 `rmSync`), or a failed construction strands the directory. The guard is read from the syntax tree — the
