@@ -5,6 +5,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const net = require('node:net');
+const semver = require('../vendor/semver.cjs');
 
 const HOST = '@microsoft/power-apps-native-host';
 const SECTIONS = ['dependencies', 'devDependencies', 'optionalDependencies', 'peerDependencies'];
@@ -70,19 +71,10 @@ function safeInstallPath(value) {
 }
 
 function declarationSpec(value) {
-  if (typeof value !== 'string' || value.length === 0 || value.length > 256) return false;
+  if (typeof value !== 'string' || !value.trim() || value.length > 256 || /[\u0000-\u001f]/.test(value)) return false;
   if (/^file:\.\/vendor\/[a-zA-Z0-9][a-zA-Z0-9._-]*\.tgz$/.test(value)) return true;
   // Reviewed registry declarations may be ranges; the installed inventory is exact.
-  const partial = /^(?:0|[1-9]\d*|[xX*])(?:\.(?:0|[1-9]\d*|[xX*])){0,2}$/;
-  const range = (item) => {
-    const version = item.replace(/^(?:[~^]|[<>]=?|=)/, '');
-    return exactVersion(version) || partial.test(version);
-  };
-  return value.split(' || ').every((part) => {
-    const hyphen = part.split(' - ');
-    if (hyphen.length === 2) return hyphen.every(range);
-    return part.split(' ').every(range);
-  });
+  return semver.validRange(value) !== null;
 }
 
 function publicEvidence(value) {
@@ -140,6 +132,15 @@ function validateRelease(release) {
   for (const [installPath, version] of Object.entries(release.nativePackages)) {
     requireValue(safeInstallPath(installPath) && exactVersion(version), 'Invalid reviewed native package path or exact version.');
   }
+  for (const dependencies of Object.values(release.managedDependencies)) {
+    for (const [name, spec] of Object.entries(dependencies)) {
+      const version = release.nativePackages[`node_modules/${name}`];
+      if (version && !spec.startsWith('file:./vendor/')) {
+        requireValue(semver.satisfies(version, spec),
+          `Managed native dependency ${name} does not accept its reviewed exact version.`);
+      }
+    }
+  }
   requireValue(CORE.every((name) => Object.hasOwn(release.nativePackages, `node_modules/${name}`)), 'Reviewed native inventory must include the host, expo, react-native and react.');
   requireValue(exactVersion(release.nativePackages[`node_modules/${HOST}`], true),
     'Reviewed host must have an exact stable version; prerelease hosts require the separate diagnostic contract.');
@@ -191,8 +192,8 @@ function readJson(filePath, label) {
   }
 }
 
-function selectRelease(id, catalog) {
-  if (catalog === undefined) return require('./mobile-published-packages').selectPublishedContract(id);
+function selectRelease(id, catalog, options) {
+  if (catalog === undefined) return require('./mobile-published-packages').selectPublishedContract(id, options);
   validateCatalog(catalog);
   requireValue(id === undefined || id === null || (typeof id === 'string' && /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$/.test(id)), 'Use a valid reviewed release id.');
   const selected = catalog.releases.find((release) => release.id === (id ?? catalog.defaultRelease));
@@ -515,7 +516,7 @@ function selectProjectRelease(projectRoot, catalog) {
   return candidates[0];
 }
 
-function resolveProjectRelease(projectRoot, catalog, platformContext = readPlatformContext()) {
+function resolveProjectRelease(projectRoot, catalog, platformContext = readPlatformContext(), options) {
   if (catalog !== undefined) reviewedProjectCatalog(catalog);
   requireValue(keys(platformContext, ['os', 'cpu', 'libc']) && typeof platformContext.os === 'string'
     && /^[a-z0-9_-]+$/.test(platformContext.os) && typeof platformContext.cpu === 'string'
@@ -523,7 +524,7 @@ function resolveProjectRelease(projectRoot, catalog, platformContext = readPlatf
   'A valid installation platform context is required.');
   const project = readProject(projectRoot, platformContext);
   if (catalog === undefined) {
-    const release = require('./mobile-published-packages').projectContract(projectRoot, project);
+    const release = require('./mobile-published-packages').projectContract(projectRoot, project, options);
     validateRelease(release);
     validateProjectAgainstRelease(project, release);
     return release;

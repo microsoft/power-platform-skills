@@ -5,7 +5,7 @@ Tooling prerequisites only. Runtime compatibility comes from the app-matched
 file or the newest bundled template.
 
 The lifecycle's explicit `--diagnostic-artifacts` workflow is a separate
-online-only Android test selection. Published package inspection uses npm and
+offline-capable Android artifact selection. Published package inspection uses npm and
 `tar`; the diagnostic opt-in additionally needs `unzip` and an explicitly selected
 SDK `aapt2` on `PATH`. Neither path discovers devices or
 build native code. Keep normal tooling tiers unchanged, record iOS as untested,
@@ -95,11 +95,14 @@ registry declarations or safe `file:./vendor/*.tgz` specs. These policy values
 are not absolute project paths, raw config, or lockfile download URLs. Preserve
 the nested inventory when handing context to planners/builders.
 
-`--release <id>` selects an exact maintainer-verified set; `--default` requires
-a verified default. Neither means “newest”. Deployment must also check each
-actual intended base using `--platform android|ios --base-version <version>
---base-fingerprint <fingerprint>`. All three flags are required together for
-deployment. Obtain both values from the selected target's verifiable metadata;
+`--host-version <version>` selects an exact stable published host; `--release`
+is its backwards-compatible alias, not a catalogue ID. `--default` reads npm's
+default host channel and then verifies that exact package contract. Deployment
+must also check each actual intended base using `--platform android|ios
+--base-version <version> --base-fingerprint <fingerprint>
+--base-runtime-version <runtime-counter>`, together with `--project-root`.
+All four base flags are required together for deployment. Obtain the values
+from the selected target's verifiable metadata;
 do not copy the policy's expected values to make a check pass. Missing or
 mismatched fingerprint blocks deployment even when the version label matches.
 

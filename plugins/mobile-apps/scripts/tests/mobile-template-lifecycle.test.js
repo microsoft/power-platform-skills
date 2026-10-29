@@ -6,7 +6,7 @@ const { randomUUID } = require('node:crypto');
 const path = require('node:path');
 const test = require('node:test');
 const {
-  acquireTemplate, assertEmptyDestination, assertTemplateManifest, compareVersions, main, planUpdate,
+  acquireTemplate, assertEmptyDestination, assertTemplateManifest, compareVersions, inspectDestination, main, planUpdate,
 } = require('../mobile-template-lifecycle');
 const { fixtureRelease, writeProject: project, writeJson } = require('./helpers/mobile-release-fixture');
 
@@ -42,22 +42,28 @@ function manifest(entry) {
 
 function packageRunner(entry, overrides = {}) {
   const calls = [];
-  const execute = (command, args, cwd) => {
-    calls.push({ command, args, cwd });
+  const execute = (command, args, cwd, options) => {
+    const installRoot = options?.env?.npm_config_prefix;
+    calls.push({ command, args, cwd, installRoot });
     if (command === 'npm') {
       if (overrides.installError) throw new Error('Registry unavailable');
-      const packageRoot = path.join(cwd, 'node_modules', TEMPLATE);
+      assert.ok(installRoot, 'npm install must have an explicit isolated prefix');
+      const packageRoot = path.join(installRoot, 'node_modules', TEMPLATE);
       writeJson(path.join(packageRoot, 'package.json'), {
         name: TEMPLATE, version: entry.template.version,
         bin: { 'create-power-app-native': overrides.bin || 'bin/create.js' },
+        ...overrides.packageMetadata,
       });
       fs.mkdirSync(path.join(packageRoot, 'bin'));
       fs.writeFileSync(path.join(packageRoot, 'bin/create.js'), '// synthetic fixture CLI\n');
-      writeJson(path.join(cwd, 'package-lock.json'), { packages: {
+      writeJson(path.join(installRoot, 'package-lock.json'), { packages: {
         [`node_modules/${TEMPLATE}`]: {
           version: entry.template.version, integrity: overrides.integrity || entry.template.integrity,
         },
       } });
+      if (overrides.extraPackage) {
+        writeJson(path.join(installRoot, 'node_modules/unreviewed/package.json'), { name: 'unreviewed', version: '1.0.0' });
+      }
       return '';
     }
     if (args[1] === '--manifest') {
@@ -104,6 +110,41 @@ test('creation rejects existing customer files without invoking npm', (t) => {
   assert.equal(fs.readFileSync(path.join(target, 'customer.txt'), 'utf8'), 'keep');
 });
 
+test('creation-only destination inspection binds the existing parent without creating a new folder', t => {
+  const root = directory(t);
+  const target = path.join(root, 'new-parent', 'new app');
+  const inspected = inspectDestination(target);
+  assert.equal(inspected.parent, fs.realpathSync.native(root));
+  assert.equal(inspected.destination, path.join(fs.realpathSync.native(root), 'new-parent', 'new app'));
+  assert.equal(inspected.exists, false);
+  assert.equal(fs.existsSync(path.join(root, 'new-parent')), false);
+  assert.deepEqual(main(['destination', '--destination', target]), inspected);
+  fs.mkdirSync(target, { recursive: true });
+  fs.writeFileSync(path.join(target, 'customer.txt'), 'preserve');
+  assert.throws(() => inspectDestination(target), /empty real directory/);
+  assert.equal(fs.readFileSync(path.join(target, 'customer.txt'), 'utf8'), 'preserve');
+});
+
+test('template acquisition rejects unexpected dependencies before any creation CLI execution', t => {
+  const root = directory(t);
+  const entry = release();
+  for (const [index, overrides] of [
+    { packageMetadata: { dependencies: { unreviewed: '1.0.0' } } },
+    { packageMetadata: { optionalDependencies: { unreviewed: '1.0.0' } } },
+    { packageMetadata: { peerDependencies: { unreviewed: '*' } } },
+    { packageMetadata: { bundledDependencies: ['unreviewed'] } },
+    { extraPackage: true },
+  ].entries()) {
+    const target = path.join(root, `case-${index}`);
+    const runner = packageRunner(entry, overrides);
+    assert.throws(() => acquireTemplate(target, entry.id, { catalog: catalog(entry), ...runner }),
+      /self-contained|unexpected packages/);
+    assert.equal(runner.calls.length, 1, 'No --manifest or scaffold command may execute');
+    assert.equal(fs.existsSync(target), false);
+    assert.equal(fs.existsSync(runner.calls[0].installRoot), false);
+  }
+});
+
 test('acquisition validates integrity before CLI execution and cleans its temporary install', (t) => {
   const target = path.join(directory(t), 'new app with spaces');
   const entry = release();
@@ -113,10 +154,11 @@ test('acquisition validates integrity before CLI execution and cleans its tempor
   assert.equal(runner.calls.length, 3);
   assert.deepEqual(runner.calls[0].args, [
     'install', '--ignore-scripts', '--no-audit', '--no-fund', '--save-exact', `${TEMPLATE}@1.0.0`,
+    '--prefix', runner.calls[0].installRoot,
   ]);
   assert.equal(runner.calls[1].args[1], '--manifest');
   assert.equal(runner.calls[2].args[1], target);
-  assert.equal(fs.existsSync(runner.calls[0].cwd), false);
+  assert.equal(fs.existsSync(runner.calls[0].installRoot), false);
   assert.equal(fs.existsSync(path.join(target, 'node_modules')), false);
 });
 
@@ -131,9 +173,9 @@ test('published acquisition can target an empty current directory without stagin
     const result = acquireTemplate('.', entry.id, { catalog: catalog(entry), ...runner });
     assert.equal(result.installedDependencies, false);
     assert.equal(fs.existsSync(path.join(target, 'app.json')), true);
-    const relative = path.relative(target, runner.calls[0].cwd);
+    const relative = path.relative(target, runner.calls[0].installRoot);
     assert.ok(relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative));
-    assert.equal(fs.existsSync(runner.calls[0].cwd), false);
+    assert.equal(fs.existsSync(runner.calls[0].installRoot), false);
   } finally {
     process.chdir(previous);
   }
@@ -150,7 +192,7 @@ test('integrity, manifest, executable and registry failures never fall back to a
     const runner = packageRunner(entry, overrides);
     assert.throws(() => acquireTemplate(target, entry.id, { catalog: catalog(entry), ...runner }));
     assert.equal(fs.existsSync(target), false);
-    assert.equal(fs.existsSync(runner.calls[0].cwd), false);
+    assert.equal(fs.existsSync(runner.calls[0].installRoot), false);
     assert.ok(runner.calls.length <= 2);
   }
   assert.throws(() => assertTemplateManifest({

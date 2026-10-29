@@ -160,6 +160,8 @@ function validateHost(host) {
   requireValue(publication?.package === HOST && exactVersion(publication.version, true)
     && validHostIntegrity(publication.integrity) && host.pkg?.name === HOST && host.pkg.version === publication.version,
   'Invalid published host identity.');
+  requireValue(!profile?.runtimePreparation,
+    'The host is still in diagnostic runtime preparation. Wait for a finalized published release.');
   requireValue(profile?.schemaVersion === 1 && Number.isSafeInteger(profile.targetTemplateVersion)
     && profile.targetTemplateVersion > 0 && exactVersion(profile.expoVersion, true)
     && PLATFORMS.every((platform) => Number.isSafeInteger(profile.nativeRuntime?.[platform]?.version)

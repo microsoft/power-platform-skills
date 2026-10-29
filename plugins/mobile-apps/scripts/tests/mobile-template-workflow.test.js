@@ -64,4 +64,11 @@ test('creation resolves immutable published package metadata before planning or 
   assert.match(updates, /--host-version "<exact-host-version>"/);
   assert.doesNotMatch(updates, /--release "<release-id>"|empty production catalogue/);
   assert.match(lifecycle, /Per-customer optional-permission selection during wrapping\s+is not part/);
+  assert.match(create, /mobile-template-lifecycle\.js destination --destination/);
+  assert.match(create, /does\s+not apply to an existing app or a creation continuation/);
+  assert.match(create, /missing root remains `BLOCKED`/);
+  assert.match(create, /Only after acquisition\s+approval may the package CLI create the destination/);
+  const readme = read('README.md');
+  assert.ok(readme.indexOf('copilot plugin install') < readme.indexOf('resolve-mobile-release.js'));
+  assert.ok(readme.indexOf('export PLUGIN_ROOT=') < readme.indexOf('resolve-mobile-release.js'));
 });

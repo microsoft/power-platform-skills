@@ -119,6 +119,7 @@ function createFixture(t, { release = fixtureRelease(), catalog = { schemaVersio
   t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
   for (const file of [
     'scripts/lib/mobile-release.js', 'scripts/resolve-mobile-release.js',
+    'scripts/vendor/semver.cjs',
     'scripts/validate-mobile-files.js', 'scripts/lib/mobile-validator-manifest.js',
     'hooks/validate-package-deps.js', 'hooks/validate-write-safety.js', 'hooks/validate-protected-paths.js',
   ]) {

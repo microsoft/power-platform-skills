@@ -51,7 +51,8 @@ Only when the user explicitly supplies `--diagnostic-artifacts '<manifest.json>'
 for a local test, follow the lifecycle's separate artifact inspection/acquisition
 path in place of published selection. Keep new/empty destination checks,
 acquisition/install approvals, customer instructions and telemetry checkpoints.
-Limit that test to online-only Android; do not claim the normal dual-platform
+Limit artifact validation to the selected Android APK; preserve verified offline
+capability without claiming an offline sync test. Do not claim the normal dual-platform
 creation target is verified, offer offline setup, initialize/deploy a tenant app,
 or promote the test selection to the default. Carry the option into project
 resolution and package validation. No automatic local-artifact fallback exists.
@@ -243,8 +244,20 @@ itself, so it is written on every creation path after Step 0's routing decision.
 
 **Telemetry checkpoint: `validate_fresh_template`**
 
-Before project reads or commands, bind the absolute `working_dir` through
-[app-working-directory.md](../../shared/references/app-working-directory.md).
+For confirmed new-app intent with a proposed new directory, first bind its
+existing parent without creating the target. From the selected existing parent,
+run `mobile-template-lifecycle.js destination --destination '<proposed_working_dir>'`
+using the installed plugin's absolute script path. This read-only check returns
+the canonical parent/destination and rejects a nonempty or invalid target.
+Keep those returned paths as the scoped creation context. Only after acquisition
+approval may the package CLI create the destination. Then bind the resulting
+app root through
+[app-working-directory.md](../../shared/references/app-working-directory.md)
+before installation, preparation or app/data operations. This exception does
+not apply to an existing app or a creation continuation: those must bind the
+existing absolute `working_dir` through the same reference before project reads
+or commands, and a missing root remains `BLOCKED`.
+
 Apply the state-routing table above once. Classify the original request before
 considering a creation resume or testing freshness; do not derive the requested
 operation from the presence or absence of `memory-bank.md`.

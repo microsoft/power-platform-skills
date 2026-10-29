@@ -13,11 +13,11 @@ model: opus
 Resolve `<working_dir>` from `--working-dir <path>` or use the current directory. Require `package.json` and `node_modules/`, then run on every invocation. Read [mobile-release-lifecycle.md](../../shared/references/mobile-release-lifecycle.md). If the user names one package, scope discovery to it; a native/runtime package still belongs to Step 2's coupled release, not an independent bump. Explain the coupled changes and ask permission; naming a package does not approve them. Otherwise run Steps 2-4 in order.
 
 An explicitly supplied `--diagnostic-artifacts '<manifest.json>'` selects the
-lifecycle reference's immutable local **online-only Android test**, not a
+lifecycle reference's immutable local **offline-capable Android test**, not a
 published release. Keep Step 1's plugin/version check and all approvals and
 checkpoints. In Step 2 use `mobile-template-lifecycle.js plan --project-root
 '<working_dir>' --diagnostic-artifacts '<manifest.json>'` instead of published
-published-package selection. The packed migration identifies the old source;
+package selection. The packed migration identifies the old source;
 ordinary invocations never fall back to diagnostic archives. Review the
 returned manifest hash, major transition, known APK's supported counters, and
 untested iOS limitation. Use only the verified target-host CLI for migration
@@ -25,6 +25,11 @@ writes after isolated-preview approval; it binds the bundle's local archives.
 Do not pre-stage package edits or copy template source/lock into the app. Never run acquisition
 over the app, silently install packages, disable offline, or deploy this test.
 Carry the explicit diagnostic option into final resolve and package validation.
+Validate the selected offline SDK's package-owned peer/runtime contract; never
+force older apps to a hardcoded SDK version. Snapshot app-owned offline profiles,
+settings and source with the approved preview, and confirm they remain unchanged
+after success or rollback. Do not infer offline synchronization, cold-launch or
+database-migration success from an APK metadata check.
 Diagnostic replay requires a standalone npm app. Its Expo validation means the
 producer's immutable-graph, local configuration and TypeScript checks, not a
 floating remote `expo install --check`, `--fix` or doctor recommendation. Accept

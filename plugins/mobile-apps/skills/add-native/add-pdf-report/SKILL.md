@@ -51,13 +51,13 @@ native mutations; unknown/missing records block even if a dependency is present.
 
 ```bash
 cd -- '<working_dir>' || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
-node "${PLUGIN_ROOT}/scripts/resolve-mobile-release.js" --project-root '<working_dir>'
+node "${PLUGIN_ROOT}/scripts/resolve-mobile-release.js" --project-root '<working_dir>' || exit $?
 node -e "const p=require('./package.json'); const deps={...p.dependencies,...p.devDependencies}; const required='expo-print'; if (!deps[required]) { console.error('MISSING: expo-print is not in package.json. The template/app must already ship it for /add-native pdf-report. This skill will not install it or edit native config. Capability not added.'); process.exit(1); } console.log('OK: expo-print package present'); console.log(deps['expo-sharing'] ? 'OK: expo-sharing package present' : 'OPTIONAL_MISSING: expo-sharing is not in package.json; generated PDFs can be created/viewed/uploaded, but sharing helpers must not be generated.');"
 ```
 
 If the parent explicitly selected local diagnostic artifacts, append the same
 `--diagnostic-artifacts '<manifest.json>'` to resolution and package validation.
-Keep the lifecycle reference's online-only Android/no-deployment limits.
+Keep the lifecycle reference's Android-artifact/no-deployment limits and preserve offline configuration.
 
 `expo-print` is required. `expo-sharing` is optional unless sharing is required.
 Match exact installed versions/docs/types to the resolved native inventory.

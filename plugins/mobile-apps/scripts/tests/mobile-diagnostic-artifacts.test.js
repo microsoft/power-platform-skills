@@ -8,7 +8,7 @@ const { spawnSync } = require('node:child_process');
 const test = require('node:test');
 const {
   loadDiagnosticArtifacts, resolveDiagnosticProject, planDiagnosticUpdate, summary,
-  assertOnlineOnly, parseAndroidPlayerMetadata, acquireDiagnosticTemplate,
+  assertOfflineSupport, parseAndroidPlayerMetadata, acquireDiagnosticTemplate,
 } = require('../lib/mobile-diagnostic-artifacts');
 const { selectRelease } = require('../lib/mobile-release');
 const { writeJson, readJson, modifyJson, writeProject, fixtureRelease, addDependency, PLUGIN_ROOT } = require('./helpers/mobile-release-fixture');
@@ -16,6 +16,7 @@ const { writeJson, readJson, modifyJson, writeProject, fixtureRelease, addDepend
 const HOST = '@microsoft/power-apps-native-host';
 const TEMPLATE = '@microsoft/power-apps-native-template';
 const PUSH = '@microsoft/power-apps-native-push-notifications';
+const OFFLINE = '@microsoft/power-apps-native-offline';
 const LOCAL = ['auth', 'common', 'assets', 'push-notifications', 'host'].map((name) => `@microsoft/power-apps-native-${name}`);
 const hash = (file, algorithm = 'sha256', encoding = 'hex') => createHash(algorithm).update(fs.readFileSync(file)).digest(encoding);
 const version = '1.0.0-diagnostic.1';
@@ -37,7 +38,7 @@ function fixture(t, {
   inspectionOnly = false, privateTargets = false,
   hostVersion = privateTargets ? privateVersion : version,
   templatePackageVersion = privateTargets ? privateVersion : version, managedRange = false,
-  includePush = true, hostRequiresPush = includePush,
+  includePush = true, hostRequiresPush = includePush, offline = false, hostSourceVersion = '1.0.0',
 } = {}) {
   const root = path.join(__dirname, `.diagnostic-fixture-${randomUUID()}`);
   fs.mkdirSync(root);
@@ -48,6 +49,12 @@ function fixture(t, {
   release.nativePackages[`node_modules/${HOST}`] = hostVersion;
   release.managedDependencies.dependencies.expo = '57.0.0';
   release.nativePackages['node_modules/expo'] = '57.0.0';
+  if (offline) {
+    release.managedDependencies.dependencies[OFFLINE] = '0.2.0';
+    release.nativePackages[`node_modules/${OFFLINE}`] = '0.2.0';
+    release.managedDependencies.dependencies['react-native'] = '0.86.3';
+    release.nativePackages['node_modules/react-native'] = '0.86.3';
+  }
   if (managedRange) release.managedDependencies.dependencies['expo-haptics'] = '^2.0.0';
   const localPackages = LOCAL.filter((name) => name !== PUSH || includePush);
   for (const name of localPackages.filter((item) => item !== HOST)) {
@@ -64,13 +71,34 @@ function fixture(t, {
     },
     managedDependencies: { ...release.managedDependencies.dependencies },
     managedDevDependencies: {}, managedOverrides: {}, migrations: ['template-v2'],
+    ...(offline ? { runtimeFamily: 'expo57-rn86-hermes-newarch', offlineContractVersion: 1 } : {}),
   };
+  if (offline) {
+    const sdk = path.join(reference, 'node_modules', OFFLINE);
+    const artifact = 'vendor-binaries/android/arm64-v8a/libdataverseOffline.so';
+    fs.mkdirSync(path.dirname(path.join(sdk, artifact)), { recursive: true });
+    fs.writeFileSync(path.join(sdk, artifact), 'synthetic native artifact; not executable device evidence');
+    writeJson(path.join(sdk, 'package.json'), {
+      name: OFFLINE, version: '0.2.0',
+      peerDependencies: { [HOST]: '^1.0.0', 'react-native': '0.86.3' },
+    });
+    writeJson(path.join(sdk, 'compatibility.json'), {
+      schemaVersion: 2, complete: true, sourceDirty: false, packageVersion: '0.2.0',
+      runtimeFamily: profile.runtimeFamily, offlineContractVersion: 1,
+      reactNativeVersion: '0.86.3', expoSdkVersion: '57', engine: 'hermes',
+      platformArchitectures: { android: ['new'], ios: ['new'] }, hostPeerRange: '^1.0.0',
+      artifacts: { [artifact]: hash(path.join(sdk, artifact)) },
+    });
+    modifyJson(path.join(reference, 'package-lock.json'), lock => {
+      lock.packages[`node_modules/${OFFLINE}`].integrity = `sha512-${Buffer.alloc(64, 7).toString('base64')}`;
+    });
+  }
   const native = readJson(path.join(reference, 'app.json')).expo.extra.powerappsNative;
   const metadata = {
     schemaVersion: 1, supportedNativeRuntimeVersions: { android: [2], ios: [2] },
     recommendedNativeRuntimeVersions: { android: 2, ios: 2 },
     recommendedTemplatePackage: { name: TEMPLATE, version: privateTargets ? '0.1.0' : templatePackageVersion, templateVersion: 2, nativeRuntimeVersions: native.nativeRuntimeVersions },
-    diagnostic: { protocol: 'online-only-57-v1', nativeRuntime: profile.nativeRuntime },
+    diagnostic: { protocol: 'diagnostic-57-v1', nativeRuntime: profile.nativeRuntime },
   };
   const packed = [];
   for (const name of [...localPackages, TEMPLATE]) {
@@ -80,19 +108,23 @@ function fixture(t, {
     if ((inspectionOnly || privateTargets) && [HOST, TEMPLATE].includes(name)) {
       pkg.private = true;
       pkg.powerAppsDiagnostic = privateTargets ? {
-        protocol: 'online-only-57-v1',
+        protocol: 'diagnostic-57-v1',
         purpose: name === HOST ? 'upgrade-target' : 'upgrade-inspection-only',
-        sourceVersion: name === HOST ? '0.4.0' : '0.1.0',
-      } : { protocol: 'online-only-57-v1', purpose: 'upgrade-inspection-only' };
+        sourceVersion: name === HOST ? hostSourceVersion : '0.1.0',
+      } : { protocol: 'diagnostic-57-v1', purpose: 'upgrade-inspection-only' };
     }
     if (name === HOST) {
       if (hostRequiresPush) pkg.dependencies = { [PUSH]: '0.1.0' };
+      if (offline) pkg.peerDependencies = { [OFFLINE]: '0.2.0' };
       pkg.bin = { 'upgrade-template': 'bin/upgrade.js' };
       writeJson(path.join(packageRoot, 'compatibility/current.json'), profile);
       writeJson(path.join(packageRoot, 'compatibility/migrations/template-v2.json'), {
         schemaVersion: 1, id: 'template-v2', fromTemplateVersion: 1, toTemplateVersion: 2,
         packageTransitions: { dependencies: { [HOST]: privateTargets
           ? { from: '^0.3.3', to: '^1.0.0' } : { from: '^0.4.0', to: hostVersion } } },
+        ...(offline ? { targetProfile: {
+          runtimeFamily: profile.runtimeFamily, offlineContractVersion: profile.offlineContractVersion,
+        } } : {}),
       });
       fs.mkdirSync(path.join(packageRoot, 'bin'));
       fs.writeFileSync(path.join(packageRoot, 'bin/upgrade.js'),
@@ -489,7 +521,7 @@ test('controlled private targets preserve real identities, provenance and the AP
   assert.deepEqual(result.player.supportedNativeRuntimeVersions.android, [2]);
   assert.equal(result.deploymentAllowed, false);
   assert.equal(result.platformValidation.ios, 'not-validated');
-  assert.equal(readJson(path.join(f.reference, 'node_modules', HOST, 'package.json')).powerAppsDiagnostic.sourceVersion, '0.4.0');
+  assert.equal(readJson(path.join(f.reference, 'node_modules', HOST, 'package.json')).powerAppsDiagnostic.sourceVersion, '1.0.0');
   assert.equal(f.calls.some((call) => call.command === 'npm'), false);
   const destination = path.join(f.root, 'must-not-scaffold');
   assert.throws(() => acquireDiagnosticTemplate(destination, f.file, f.options), /upgrade-inspection-only/);
@@ -528,7 +560,7 @@ test('controlled private markers reject malformed provenance, mixed roles and mi
       (pkg) => { delete pkg.powerAppsDiagnostic; },
       (pkg) => { delete pkg.powerAppsDiagnostic.sourceVersion; },
       (pkg) => { pkg.powerAppsDiagnostic.sourceVersion = '^0.4.0'; },
-      (pkg) => { pkg.powerAppsDiagnostic.sourceVersion = '1.0.0'; },
+      (pkg) => { pkg.powerAppsDiagnostic.sourceVersion = privateVersion; },
       (pkg) => { pkg.powerAppsDiagnostic.protocol = 'unknown'; },
       (pkg) => { pkg.powerAppsDiagnostic.purpose = name === HOST ? 'upgrade-inspection-only' : 'upgrade-target'; },
     ]) {
@@ -600,57 +632,54 @@ test('strict diagnostic app resolution detects same-version tampering and extra 
   assert.throws(() => resolveDiagnosticProject(app, f.file, f.options), /unselected extra files/);
 });
 
-test('online-only diagnostics use the real offline contract and never convert customer configuration', (t) => {
-  const f = fixture(t);
+test('offline-capable diagnostic planning and resolution preserve app profiles, imports and configuration', (t) => {
+  const f = fixture(t, { privateTargets: true, offline: true });
   const app = path.join(f.root, 'offline-app');
   fs.cpSync(f.reference, app, { recursive: true });
-  modifyJson(path.join(app, 'app.json'), (config) => { config.expo.extra.__offlineProfile = { enabled: true }; });
-  const before = fs.readFileSync(path.join(app, 'app.json'));
-  assert.throws(() => assertOnlineOnly(app), /online-only.*Offline-enabled/);
-  assert.deepEqual(fs.readFileSync(path.join(app, 'app.json')), before);
-  modifyJson(path.join(app, 'app.json'), (config) => {
-    delete config.expo.extra.__offlineProfile;
-    config.expo.extra.appConfig = { customerData: true };
-  });
-  assertOnlineOnly(app);
+  bindToBundle(f, app);
+  modifyJson(path.join(app, 'app.json'), config => { config.expo.extra.__offlineProfile = { appConfig: { enabled: true } }; });
+  writeJson(path.join(app, 'offline-profile.json'), { profileId: 'fixture-profile', appConfig: { enabled: true }, tables: ['fixture_table'] });
   fs.writeFileSync(path.join(app, 'app.config.js'), 'throw Error("do not execute"); const __offlineProfile = {};');
-  assert.throws(() => assertOnlineOnly(app), /Dynamic app configuration/);
-  fs.unlinkSync(path.join(app, 'app.config.js'));
-  writeJson(path.join(app, 'offline-profile.json'), {});
-  assert.throws(() => assertOnlineOnly(app), /offline-compatible/);
-  fs.unlinkSync(path.join(app, 'offline-profile.json'));
   fs.mkdirSync(path.join(app, 'src'));
   fs.writeFileSync(path.join(app, 'src/offline.ts'), "import '@microsoft/power-apps-native-offline';");
-  assert.throws(() => assertOnlineOnly(app), /references the native offline package/);
+  const files = ['app.json', 'app.config.js', 'package.json', 'package-lock.json', 'offline-profile.json', 'src/offline.ts'];
+  const before = files.map(file => hash(path.join(app, file)));
+  const selection = resolveDiagnosticProject(app, f.file, f.options);
+  assert.equal(selection.offline.version, '0.2.0');
+  assert.equal(summary(selection).offline.offlineContractVersion, 1);
+  assert.equal(summary(selection).deploymentAllowed, false);
+  assert.equal(summary(selection).platformValidation.ios, 'not-validated');
+  assert.equal(Object.hasOwn(summary(selection), 'onlineOnly'), false);
+  assert.equal(planDiagnosticUpdate(app, f.file, f.options).kind, 'current');
+  assert.deepEqual(files.map(file => hash(path.join(app, file))), before);
 });
 
-test('optional baseline profile import and unused retired offline declaration are not active offline by themselves', (t) => {
-  const f = fixture(t);
-  const app = path.join(f.root, 'baseline-fixture');
-  fs.cpSync(f.reference, app, { recursive: true });
-  fs.mkdirSync(path.join(app, 'app'));
-  fs.writeFileSync(path.join(app, 'app/_layout.tsx'), "const optionalProfile = () => import('../offline-profile.json');\n");
-  const offline = '@microsoft/power-apps-native-offline';
-  modifyJson(path.join(app, 'package.json'), (pkg) => { pkg.dependencies[offline] = '^0.1.32'; });
-  assertOnlineOnly(app);
-  modifyJson(path.join(app, 'package.json'), (pkg) => { pkg.dependencies[offline] = '^0.1.33'; });
-  assert.throws(() => assertOnlineOnly(app), /Customized offline SDK declarations/);
-  modifyJson(path.join(app, 'package.json'), (pkg) => {
-    delete pkg.dependencies[offline];
-    pkg.peerDependencies = { [offline]: '^0.1.32' };
-  });
-  assert.throws(() => assertOnlineOnly(app), /Customized offline SDK declarations/);
-  modifyJson(path.join(app, 'package.json'), (pkg) => {
-    delete pkg.peerDependencies;
-    pkg.dependencies['offline-alias'] = `npm:${offline}@0.1.32`;
-  });
-  assert.throws(() => assertOnlineOnly(app), /aliases or overrides/);
+test('an older offline app can preview its forward migration without changing any customer data', t => {
+  const f = fixture(t, { privateTargets: true, offline: true });
+  const app = path.join(f.root, 'older-offline-app');
+  const source = fixtureRelease(1);
+  source.nativePackages[`node_modules/${HOST}`] = '0.5.1';
+  source.managedDependencies.dependencies[HOST] = '^0.5.1';
+  writeProject(app, source);
+  modifyJson(path.join(app, 'package.json'), pkg => { pkg.dependencies[OFFLINE] = '^0.1.32'; });
+  writeJson(path.join(app, 'offline-profile.json'), { profileId: 'existing-fixture-profile', appConfig: { enabled: true } });
+  fs.writeFileSync(path.join(app, 'AGENTS.md'), 'customer instructions');
+  const files = ['offline-profile.json', 'package.json', 'package-lock.json', 'app.json', 'AGENTS.md'];
+  const before = files.map(file => hash(path.join(app, file)));
+  const plan = planDiagnosticUpdate(app, f.file, f.options);
+  assert.equal(plan.kind, 'template-upgrade');
+  assert.equal(plan.target.offline.version, '0.2.0');
+  assert.equal(plan.target.offline.hostPeerRange, '^1.0.0');
+  assert.deepEqual(files.map(file => hash(path.join(app, file))), before);
+  assert.equal(fs.existsSync(path.join(app, '.branch-packages')), false);
 });
 
-test('quoted offline keys and computed assignments are rejected without evaluating configuration', (t) => {
+test('offline profiles and source cannot be admitted to a target without a verified offline contract', (t) => {
   const f = fixture(t);
-  const app = path.join(f.root, 'quoted-offline-fixture');
+  const app = path.join(f.root, 'offline-preservation-fixture');
   fs.cpSync(f.reference, app, { recursive: true });
+  const selection = loadDiagnosticArtifacts(f.file, f.options);
+  assert.equal(selection.offline, null);
   const config = path.join(app, 'app.config.js');
   for (const source of [
     'module.exports = {expo: {extra: {"__offlineProfile": {enabled: true}}}};',
@@ -659,26 +688,76 @@ test('quoted offline keys and computed assignments are rejected without evaluati
     'config.expo.extra.__offlineProfile ||= {enabled: true};',
   ]) {
     fs.writeFileSync(config, `throw Error("must not execute");\n${source}\n`);
-    assert.throws(() => assertOnlineOnly(app), /Dynamic app configuration references native offline behavior/);
+    assert.throws(() => assertOfflineSupport(app, selection), /no verified offline contract/);
   }
   fs.unlinkSync(config);
+  writeJson(path.join(app, 'offline-profile.json'), { appConfig: { enabled: true } });
+  assert.throws(() => planDiagnosticUpdate(app, f.file, f.options), /Preserve its profile, source and data/);
+  fs.unlinkSync(path.join(app, 'offline-profile.json'));
   fs.mkdirSync(path.join(app, 'src'));
   fs.writeFileSync(path.join(app, 'src/config.ts'), 'export const extra = {["__offlineProfile"]: {enabled: true}};\n');
-  assert.throws(() => assertOnlineOnly(app), /references the native offline package or profile/);
+  assert.throws(() => assertOfflineSupport(app, selection), /no verified offline contract/);
+  fs.unlinkSync(path.join(app, 'src/config.ts'));
+  for (const section of ['dependencies', 'optionalDependencies', 'peerDependencies', 'overrides']) {
+    const before = readJson(path.join(app, 'package.json'));
+    modifyJson(path.join(app, 'package.json'), pkg => { pkg[section] = { ...pkg[section], [OFFLINE]: '^0.1.32' }; });
+    assert.throws(() => assertOfflineSupport(app, selection), /no verified offline contract/);
+    writeJson(path.join(app, 'package.json'), before);
+  }
 });
 
-test('offline app rejection precedes artifact inspection and any target-directory creation', (t) => {
-  const f = fixture(t);
-  const app = path.join(f.root, 'offline-first-fixture');
-  writeProject(app, fixtureRelease(1));
-  writeJson(path.join(app, 'offline-profile.json'), { enabled: true });
-  const entries = fs.readdirSync(app).sort();
-  const missingManifest = path.join(f.root, 'must-not-be-inspected.json');
-  for (const action of [planDiagnosticUpdate, resolveDiagnosticProject]) {
-    assert.throws(() => action(app, missingManifest, f.options), /online-only/);
+test('offline runtime and native artifact disagreements fail closed without editing the reference', t => {
+  const f = fixture(t, { privateTargets: true, offline: true });
+  const sdk = path.join(f.reference, 'node_modules', OFFLINE);
+  const file = path.join(sdk, 'compatibility.json');
+  const original = readJson(file);
+  for (const [field, value] of [
+    ['complete', false], ['sourceDirty', true], ['packageVersion', '0.2.1'],
+    ['reactNativeVersion', '0.83.6'], ['runtimeFamily', 'old-runtime'],
+    ['expoSdkVersion', '55'], ['offlineContractVersion', 2], ['engine', 'jsc'],
+    ['hostPeerRange', '^2.0.0'], ['platformArchitectures', { android: ['new'], ios: ['legacy'] }],
+    ['platformArchitectures', { android: 'new', ios: 'new' }],
+  ]) {
+    writeJson(file, { ...original, [field]: value });
+    assert.throws(() => loadDiagnosticArtifacts(f.file, f.options), /offline|Offline/);
   }
-  assert.equal(f.calls.length, 0);
-  assert.deepEqual(fs.readdirSync(app).sort(), entries);
+  writeJson(file, original);
+  const artifact = path.join(sdk, Object.keys(original.artifacts)[0]);
+  fs.appendFileSync(artifact, 'altered');
+  const before = hash(artifact);
+  assert.throws(() => loadDiagnosticArtifacts(f.file, f.options), /Offline native artifact hash/);
+  assert.equal(hash(artifact), before);
+});
+
+test('old online-only APK protocols cannot be relabeled by the skills consumer', t => {
+  const f = fixture(t, { privateTargets: true, offline: true });
+  const metadata = structuredClone(f.manifest.player.metadata);
+  metadata.diagnostic.protocol = 'online-only-57-v1';
+  f.manifest.player.metadata = metadata;
+  writeJson(f.file, f.manifest);
+  assert.throws(() => loadDiagnosticArtifacts(f.file, {
+    run: (command, args, cwd) => command === 'unzip' ? JSON.stringify(metadata) : f.options.run(command, args, cwd),
+  }), /baked diagnostic fingerprints differ/);
+});
+
+test('offline peer validation uses stable source provenance rather than a diagnostic package label', t => {
+  const f = fixture(t, { privateTargets: true, offline: true, hostSourceVersion: '2.0.0' });
+  assert.throws(() => loadDiagnosticArtifacts(f.file, f.options), /peer requirements.*disagree/);
+});
+
+test('diagnostic host repair respects full prerelease precedence and ignores build metadata', t => {
+  const f = fixture(t);
+  const app = path.join(f.root, 'newer-prerelease');
+  fs.cpSync(f.reference, app, { recursive: true });
+  for (const version of ['1.0.0-diagnostic.2', '1.0.0+build-with-hyphen']) {
+    modifyJson(path.join(app, 'node_modules', HOST, 'package.json'), pkg => { pkg.version = version; });
+    assert.throws(() => planDiagnosticUpdate(app, f.file, f.options), /Diagnostic host downgrade/);
+  }
+  const next = fixture(t, { hostVersion: '1.0.0-diagnostic.10' });
+  const earlier = path.join(next.root, 'earlier-prerelease');
+  fs.cpSync(next.reference, earlier, { recursive: true });
+  modifyJson(path.join(earlier, 'node_modules', HOST, 'package.json'), pkg => { pkg.version = '1.0.0-diagnostic.2+build-info'; });
+  assert.equal(planDiagnosticUpdate(earlier, next.file, next.options).kind, 'host-repair');
 });
 
 test('Android metadata parser uses the actual compatibility node and supports escaped JSON', (t) => {
@@ -710,6 +789,24 @@ test('approved diagnostic acquisition uses the local template, reference lock an
   assert.equal(hash(path.join(target, 'package-lock.json')), f.manifest.referenceProject.packageLockSha256);
   assert.throws(() => acquireDiagnosticTemplate(target, f.file, f.options), /empty/);
 });
+
+for (const section of ['optionalDependencies', 'peerDependencies']) {
+  test(`diagnostic creation checks emitted ${section} before copying its reference lock`, t => {
+    const f = fixture(t);
+    repack(f, TEMPLATE, root => fs.appendFileSync(path.join(root, 'bin/create.js'), `
+if (process.argv[2] !== '--manifest') {
+  const file = path.join(process.argv[2], 'package.json');
+  const app = JSON.parse(fs.readFileSync(file, 'utf8'));
+  app[${JSON.stringify(section)}] = { 'unexpected-runtime': '1.0.0' };
+  fs.writeFileSync(file, JSON.stringify(app));
+}
+`));
+    const target = path.join(f.root, 'partial-app');
+    assert.throws(() => acquireDiagnosticTemplate(target, f.file, f.options), /declarations differ/);
+    assert.equal(fs.existsSync(path.join(target, 'package-lock.json')), false);
+    assert.ok(readJson(path.join(target, 'package.json'))[section]['unexpected-runtime']);
+  });
+}
 
 test('diagnostic acquisition can target an empty current directory without introducing scratch entries', (t) => {
   const f = fixture(t);
@@ -764,7 +861,7 @@ test('published/default and deployment options cannot mix with diagnostic artifa
 
 test('resolver and changed-file validator share the explicit diagnostic selection and JS approval gate',
   { skip: process.platform === 'win32' && 'POSIX executable shim; shared parser and inventory tests run on Windows' }, (t) => {
-  const f = fixture(t);
+  const f = fixture(t, { privateTargets: true, offline: true });
   const tools = path.join(f.root, 'tools');
   fs.mkdirSync(tools);
   const aapt = path.join(tools, 'aapt2');
@@ -799,6 +896,7 @@ test('resolver and changed-file validator share the explicit diagnostic selectio
   const validator = spawnSync(process.execPath, [path.join(PLUGIN_ROOT, 'scripts/validate-mobile-files.js'),
     '--project-root', f.reference, '--file', 'package.json', '--diagnostic-artifacts', f.file], { encoding: 'utf8', cwd: f.root, env });
   assert.equal(validator.status, 0, validator.stdout + validator.stderr);
+  assert.match(validator.stdout, /1 file/);
   const strict = spawnSync(process.execPath, [path.join(PLUGIN_ROOT, 'scripts/validate-mobile-files.js'),
     '--project-root', f.reference, '--file', 'package.json'], { encoding: 'utf8', cwd: f.root, env });
   assert.equal(strict.status, 2);

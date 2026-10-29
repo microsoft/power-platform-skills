@@ -279,8 +279,9 @@ An explicitly approved `--diagnostic-artifacts '<manifest.json>'` selection
 follows the [local diagnostic lifecycle](../../shared/references/mobile-release-lifecycle.md).
 Carry it into resolution, package validation and native helpers; preserve the
 existing impact/approval gates. Source-only edits remain available independently.
-Diagnostic native work is online-only Android, never an iOS compatibility claim,
-offline conversion, tenant mutation or deployment.
+Diagnostic native work uses the verified Android artifact and selected offline
+contract, never an iOS execution claim, implicit offline-profile conversion,
+tenant mutation or deployment. Preserve existing offline source, profiles and data.
 
 Read [release lifecycle](../../shared/references/mobile-release-lifecycle.md).
 Resolve the existing app, not the newest bundled template:

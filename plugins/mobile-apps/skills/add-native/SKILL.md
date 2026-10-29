@@ -57,7 +57,7 @@ For every other capability listed below, this skill writes the wrapper directly.
 For an explicitly approved local diagnostic, append `--diagnostic-artifacts
 '<manifest.json>'` to the resolver and changed-file validator below, and carry
 that selection into every internal helper. Follow the lifecycle reference:
-online-only Android test inventory only, iOS untested, no deployment. Do not
+verified Android test inventory and offline contract only, iOS untested, no deployment. Do not
 install a missing control or infer support from a source profile.
 
 Before adding any native control or wrapper, verify the project and run the

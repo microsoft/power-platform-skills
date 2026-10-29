@@ -66,8 +66,8 @@ prove matching native runtime content.
 
 ```bash
 cd -- '<working_dir>' || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
-node "${PLUGIN_ROOT}/scripts/resolve-mobile-release.js" --project-root '<working_dir>' --platform android --base-version "<actual-intended-android-base-version>" --base-fingerprint "<actual-intended-android-base-fingerprint>" --base-runtime-version "<actual-intended-android-runtime-version>"
-node "${PLUGIN_ROOT}/scripts/resolve-mobile-release.js" --project-root '<working_dir>' --platform ios --base-version "<actual-intended-ios-base-version>" --base-fingerprint "<actual-intended-ios-base-fingerprint>" --base-runtime-version "<actual-intended-ios-runtime-version>"
+node "${PLUGIN_ROOT}/scripts/resolve-mobile-release.js" --project-root '<working_dir>' --platform android --base-version "<actual-intended-android-base-version>" --base-fingerprint "<actual-intended-android-base-fingerprint>" --base-runtime-version "<actual-intended-android-runtime-version>" || exit $?
+node "${PLUGIN_ROOT}/scripts/resolve-mobile-release.js" --project-root '<working_dir>' --platform ios --base-version "<actual-intended-ios-base-version>" --base-fingerprint "<actual-intended-ios-base-fingerprint>" --base-runtime-version "<actual-intended-ios-runtime-version>" || exit $?
 ```
 
 Every resolver invocation must succeed. Unknown/missing package contracts or base metadata

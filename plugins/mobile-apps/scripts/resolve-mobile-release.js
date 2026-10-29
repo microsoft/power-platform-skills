@@ -62,15 +62,22 @@ function main(argv) {
   }
 
   let selected = null;
+  const context = values['--project-root'] ? { cwd: values['--project-root'] } : {};
   if (values['--template-version']) {
-    selected = require('./lib/mobile-published-packages').selectTemplateContract(values['--template-version']);
+    selected = require('./lib/mobile-published-packages').selectTemplateContract(values['--template-version'], context);
   } else if (values['--release'] || values['--host-version'] || values['--default']) {
     const version = values['--host-version'] || values['--release']
-      || require('./lib/mobile-published-packages').createSource().defaultVersion();
-    selected = selectRelease(version);
+      || require('./lib/mobile-published-packages').createSource(context).defaultVersion();
+    selected = selectRelease(version, undefined, context);
   }
-  const current = values['--project-root']
-    ? (values['--requirements-only'] ? selectProjectRelease : resolveProjectRelease)(values['--project-root']) : null;
+  let current = null;
+  if (values['--project-root']) {
+    current = values['--requirements-only']
+      ? selectProjectRelease(values['--project-root'])
+      : resolveProjectRelease(values['--project-root'], undefined, undefined, {
+          templateVersion: values['--template-version'],
+        });
+  }
   if (selected && current && selected.id !== current.id) fail('The project does not match the exact selected verified release.');
   const release = current || selected;
   if (values['--base-version'] && release.source !== 'npm'

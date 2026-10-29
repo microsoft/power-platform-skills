@@ -113,6 +113,41 @@ test('published contract derives native pins from the template lock without inve
   assert.equal(selectTemplateContract('1.0.0', f.options).id, result.id);
 });
 
+test('explicit template selection is retained when resolving a compatible installed project', t => {
+  const f = fixture(t);
+  f.template('1.0.1');
+  const installed = readProject(f.projectRoot, readPlatformContext());
+  const selected = projectContract(f.projectRoot, installed, { ...f.options, templateVersion: '1.0.0' });
+  assert.equal(selected.template.version, '1.0.0');
+  validateProjectAgainstRelease(installed, selected);
+  assert.equal(projectContract(f.projectRoot, installed, f.options).template.version, '1.0.1');
+  const records = path.join(f.directory, 'packages.json');
+  writeJson(records, Object.fromEntries(f.packages));
+  const preload = path.join(f.directory, 'published-fixture.cjs');
+  fs.writeFileSync(preload, `
+const records = require(${JSON.stringify(records)});
+const source = require(${JSON.stringify(require.resolve('../lib/mobile-published-packages'))});
+const injected = {
+  readPackage(name, version) { return structuredClone(records[name + '@' + version]); },
+  versions() { return Object.values(records).filter(record => record.pkg.name === ${JSON.stringify(TEMPLATE)}).map(record => record.pkg.version); },
+};
+for (const name of ['selectTemplateContract', 'projectContract']) {
+  const original = source[name];
+  source[name] = (...args) => {
+    const index = name === 'projectContract' ? 2 : 1;
+    args[index] = { ...injected, ...args[index] };
+    return original(...args);
+  };
+}
+`);
+  const result = spawnSync(process.execPath, [
+    '--require', preload, path.resolve(__dirname, '../resolve-mobile-release.js'),
+    '--project-root', f.projectRoot, '--template-version', '1.0.0',
+  ], { cwd: f.projectRoot, encoding: 'utf8' });
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(JSON.parse(result.stdout).template.version, '1.0.0');
+});
+
 test('same-runtime host patch uses the existing compatible template without a Player release record', (t) => {
   const f = fixture(t);
   f.host('1.0.1');
@@ -173,6 +208,8 @@ test('unpublished or unfinalized targets fail before mutation without falling ba
   assert.deepEqual(f.requests, [`${HOST}@2.0.0`]);
   f.host('2.0.0', 2, 2, [migration('__RELEASE_HOST_VERSION__')]);
   assert.throws(() => planPublishedUpdate(f.projectRoot, '2.0.0', f.options), /unfinalized/);
+  f.host('2.0.0', 2, 2, [migration()]).profile.runtimePreparation = { baseCommit: 'a'.repeat(40) };
+  assert.throws(() => planPublishedUpdate(f.projectRoot, '2.0.0', f.options), /diagnostic runtime preparation/);
   assert.equal(fs.readFileSync(path.join(f.projectRoot, 'package.json'), 'utf8'), before);
 });
 
@@ -305,15 +342,17 @@ test('host acquisition is isolated, script-disabled, integrity-bound and cannot 
   const destination = path.join(f.directory, 'tooling');
   const options = {
     ...f.options,
-    run(command, args, cwd) {
+    cwd: f.projectRoot,
+    run(command, args, cwd, invocation) {
       assert.equal(command, 'npm');
-      assert.equal(cwd, destination);
-      assert.deepEqual(args, ['install', '--ignore-scripts', '--strict-peer-deps', '--no-legacy-peer-deps', '--no-force', '--no-audit', '--no-fund']);
-      const hostRoot = path.join(cwd, 'node_modules', HOST);
+      assert.equal(cwd, fs.realpathSync.native(f.projectRoot));
+      assert.equal(invocation.env.npm_config_prefix, destination);
+      assert.deepEqual(args, ['install', '--ignore-scripts', '--strict-peer-deps', '--no-legacy-peer-deps', '--no-force', '--no-audit', '--no-fund', '--prefix', destination]);
+      const hostRoot = path.join(destination, 'node_modules', HOST);
       writeJson(path.join(hostRoot, 'package.json'), { name: HOST, version: '1.0.0', bin: { 'upgrade-template': 'scripts/upgrade.js' } });
       fs.mkdirSync(path.join(hostRoot, 'scripts'));
       fs.writeFileSync(path.join(hostRoot, 'scripts/upgrade.js'), '// fixture; never executed\n');
-      writeJson(path.join(cwd, 'package-lock.json'), { packages: {
+      writeJson(path.join(destination, 'package-lock.json'), { packages: {
         [`node_modules/${HOST}`]: { version: '1.0.0', integrity: f.packages.get(`${HOST}@1.0.0`).publication.integrity },
       } });
       return '';

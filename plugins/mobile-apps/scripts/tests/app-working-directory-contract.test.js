@@ -115,7 +115,7 @@ function fixture(t) {
     const fs = require('node:fs');
     const path = require('node:path');
     const root = process.argv[process.argv.indexOf('--project-root') + 1];
-    if (!root || fs.realpathSync(root) !== fs.realpathSync(process.cwd())) {
+    if (!root || fs.realpathSync.native(root) !== fs.realpathSync.native(process.cwd())) {
       console.error('BLOCKED: package contract inspected the wrong app root');
       process.exit(1);
     }

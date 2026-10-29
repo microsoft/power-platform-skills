@@ -5,6 +5,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { runCliSync, CliLaunchError } = require('./lib/process-runner');
+const { withNpmContext } = require('./lib/npm-context');
 const {
   selectRelease,
   selectProjectRelease,
@@ -98,7 +99,7 @@ function assertEmptyDestination(destination) {
   }
 }
 
-function run(command, args, cwd) {
+function run(command, args, cwd, { env = process.env } = {}) {
   const isNpm = command === 'npm';
   const configuredTimeoutMs = Number.parseInt(process.env.MOBILE_TEMPLATE_NPM_TIMEOUT_MS ?? '', 10);
   const timeoutMs = Number.isFinite(configuredTimeoutMs) && configuredTimeoutMs > 0
@@ -110,7 +111,7 @@ function run(command, args, cwd) {
       encoding: 'utf8',
       timeout: timeoutMs,
       maxBuffer: 4 * 1024 * 1024,
-      env: { ...process.env, npm_config_ignore_scripts: 'true' },
+      env: { ...env, npm_config_ignore_scripts: 'true' },
     });
   } catch (error) {
     if (!(error instanceof CliLaunchError) && !(Number.isInteger(error.status) && error.status > 0)) throw error;
@@ -131,6 +132,34 @@ function assertTemplateManifest(manifest, release) {
   }
 }
 
+function assertSelfContainedTemplate(installed, lock, packageRoot) {
+  if (['dependencies', 'optionalDependencies', 'peerDependencies'].some(section => (
+    Object.keys(installed[section] || {}).length > 0
+  )) || installed.bundleDependencies === true || installed.bundledDependencies === true
+    || installed.bundleDependencies?.length || installed.bundledDependencies?.length
+    || Object.keys(lock.packages || {}).some(name => name && name !== `node_modules/${TEMPLATE}`)
+    || fs.existsSync(path.join(packageRoot, 'node_modules'))) {
+    throw new Error('Template creation requires a self-contained CLI with no acquired or bundled dependencies.');
+  }
+  const modules = path.dirname(path.dirname(packageRoot));
+  if (fs.readdirSync(modules).some(name => !['.bin', '.package-lock.json', '@microsoft'].includes(name))
+    || fs.readdirSync(path.join(modules, '@microsoft')).some(name => name !== 'power-apps-native-template')) {
+    throw new Error('The template tooling installation contains unexpected packages; no creation CLI was executed.');
+  }
+}
+
+function inspectDestination(destination) {
+  const target = path.resolve(destination);
+  assertEmptyDestination(target);
+  let parent = path.dirname(target);
+  while (!fs.lstatSync(parent, { throwIfNoEntry: false })) parent = path.dirname(parent);
+  if (!fs.statSync(parent).isDirectory()) throw new Error('Creation requires an existing directory ancestor.');
+  const canonicalParent = fs.realpathSync.native(parent);
+  const resolved = path.resolve(canonicalParent, path.relative(parent, target));
+  assertEmptyDestination(resolved);
+  return { parent: canonicalParent, destination: resolved, exists: fs.existsSync(resolved) };
+}
+
 function acquireTemplate(destination, releaseId, options = {}) {
   const release = options.catalog ? selectRelease(releaseId, options.catalog)
     : require('./lib/mobile-published-packages').selectTemplateContract(releaseId, options);
@@ -141,8 +170,10 @@ function acquireTemplate(destination, releaseId, options = {}) {
   fs.chmodSync(staging, 0o700);
   try {
     fs.writeFileSync(path.join(staging, 'package.json'), '{"name":"template-acquisition","private":true}\n');
-    execute('npm', ['install', '--ignore-scripts', '--no-audit', '--no-fund', '--save-exact',
-      `${TEMPLATE}@${release.template.version}`], staging);
+    withNpmContext(options.cwd || process.cwd(), staging, (env, cwd) => execute('npm', [
+      'install', '--ignore-scripts', '--no-audit', '--no-fund', '--save-exact',
+      `${TEMPLATE}@${release.template.version}`, '--prefix', staging,
+    ], cwd, { env }));
     const packageRoot = path.join(staging, 'node_modules', TEMPLATE);
     if (!fs.lstatSync(packageRoot).isDirectory() || fs.lstatSync(packageRoot).isSymbolicLink()) {
       throw new Error('Template must be an installed registry package, not a symbolic link');
@@ -154,6 +185,7 @@ function acquireTemplate(destination, releaseId, options = {}) {
       || locked?.version !== release.template.version || locked?.integrity !== release.template.integrity) {
       throw new Error('Installed template version/integrity does not match the reviewed release');
     }
+    assertSelfContainedTemplate(installed, lock, packageRoot);
     const bin = installed.bin?.['create-power-app-native'];
     if (typeof bin !== 'string' || path.isAbsolute(bin) || bin.split(/[\\/]/).includes('..')) {
       throw new Error('Template package does not expose the supported creation CLI');
@@ -191,7 +223,10 @@ function acquireHost(destination, version, options = {}) {
   fs.writeFileSync(path.join(target, 'package.json'), `${JSON.stringify({
     name: 'mobile-upgrade-tooling', private: true, dependencies: { [HOST]: version },
   }, null, 2)}\n`, { flag: 'wx' });
-  execute('npm', ['install', '--ignore-scripts', '--strict-peer-deps', '--no-legacy-peer-deps', '--no-force', '--no-audit', '--no-fund'], target);
+  withNpmContext(options.cwd || process.cwd(), target, (env, cwd) => execute('npm', [
+    'install', '--ignore-scripts', '--strict-peer-deps', '--no-legacy-peer-deps', '--no-force', '--no-audit', '--no-fund',
+    '--prefix', target,
+  ], cwd, { env }));
   const hostRoot = path.join(target, 'node_modules', HOST);
   const installed = readJson(path.join(hostRoot, 'package.json'));
   const locked = readJson(path.join(target, 'package-lock.json')).packages?.[`node_modules/${HOST}`];
@@ -217,15 +252,19 @@ function acquireHost(destination, version, options = {}) {
 function main(argv) {
   const [action, ...args] = argv;
   const values = {};
-  const allowed = action === 'acquire'
+  const allowed = action === 'destination' ? ['--destination'] : action === 'acquire'
     ? ['--destination', '--release', '--host-version', '--template-version', '--diagnostic-artifacts']
     : ['--project-root', '--release', '--host-version', '--diagnostic-artifacts'];
-  if (!['acquire', 'plan'].includes(action)) throw new Error('Use acquire or plan with an explicit selection; the producer host CLI owns diagnostic migration writes');
+  if (!['acquire', 'plan', 'destination'].includes(action)) throw new Error('Use acquire, plan or destination with explicit arguments; the producer host CLI owns diagnostic migration writes');
   for (let index = 0; index < args.length; index += 2) {
     const key = args[index];
     if (!allowed.includes(key) || values[key] !== undefined || !args[index + 1]
       || args[index + 1].startsWith('--')) throw new Error('Unknown, duplicate, or missing lifecycle argument');
     values[key] = args[index + 1];
+  }
+  if (action === 'destination') {
+    if (!values['--destination']) throw new Error('Required: --destination for read-only creation inspection');
+    return inspectDestination(values['--destination']);
   }
   if (!values[allowed[0]] || ['--release', '--host-version', '--template-version', '--diagnostic-artifacts']
     .filter((key) => values[key]).length !== 1) {
@@ -254,4 +293,4 @@ if (require.main === module) {
   }
 }
 
-module.exports = { acquireTemplate, acquireHost, assertEmptyDestination, assertTemplateManifest, assertMajorTransition, compareVersions, main, planUpdate };
+module.exports = { acquireTemplate, acquireHost, assertEmptyDestination, assertTemplateManifest, assertMajorTransition, compareVersions, inspectDestination, main, planUpdate };

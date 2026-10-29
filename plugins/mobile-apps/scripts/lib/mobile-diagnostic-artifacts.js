@@ -6,6 +6,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { createHash } = require('node:crypto');
 const { spawnSync } = require('node:child_process');
+const semver = require('../vendor/semver.cjs');
 const {
   readProject, readProjectRequirements, readPlatformContext, validateProjectAgainstRelease, exactVersion, declarationSpec, dependencySections, npmAliasTarget,
 } = require('./mobile-release');
@@ -21,7 +22,7 @@ const OFFLINE_SOURCE = /@microsoft\/power-apps-native-offline|(?:\b__offlineProf
 const PLATFORMS = ['android', 'ios'];
 const SHA256 = /^[a-f0-9]{64}$/;
 const SRI = /^sha512-[A-Za-z0-9+/]{86}==$/;
-const INSPECTION = { protocol: 'online-only-57-v1', purpose: 'upgrade-inspection-only' };
+const INSPECTION = { protocol: 'diagnostic-57-v1', purpose: 'upgrade-inspection-only' };
 const PRIVATE_VERSION = '1.0.0-expo57-diagnostic.0';
 
 function requireValue(condition, message) {
@@ -115,7 +116,7 @@ function same(left, right) {
 function privateDiagnosticPackage(pkg, purpose) {
   const sourceVersion = pkg.powerAppsDiagnostic?.sourceVersion;
   return pkg.private === true && pkg.version === PRIVATE_VERSION
-    && exactVersion(sourceVersion) && sourceVersion.startsWith('0.')
+    && exactVersion(sourceVersion, true)
     && same(pkg.powerAppsDiagnostic, { protocol: INSPECTION.protocol, purpose, sourceVersion });
 }
 
@@ -142,30 +143,28 @@ function verifyInstalledPackage(packedRoot, installedRoot) {
   }
 }
 
-function assertOnlineOnly(projectRoot) {
+function assertOfflineSupport(projectRoot, selection) {
   const config = json(path.join(projectRoot, 'app.json'), 'app configuration');
   const extra = config.expo?.extra || {};
-  requireValue(extra.__offlineProfile == null
-    && !JSON.stringify(config.expo?.plugins || []).includes('@microsoft/power-apps-native-offline')
-    && !fs.lstatSync(path.join(projectRoot, 'offline-profile.json'), { throwIfNoEntry: false }),
-  'This diagnostic target is online-only. Offline-enabled or ambiguous offline configuration is blocked; preserve the app and wait for an offline-compatible release. Do not disable offline automatically.');
+  const profile = fs.lstatSync(path.join(projectRoot, 'offline-profile.json'), { throwIfNoEntry: false });
+  requireValue(!profile || (profile.isFile() && !profile.isSymbolicLink()),
+    'The app-owned offline profile must be a regular file; preserve it for manual review.');
+  let usesOffline = Boolean(profile || extra.__offlineProfile != null
+    || JSON.stringify(config.expo?.plugins || []).includes(OFFLINE));
   const pkg = json(path.join(projectRoot, 'package.json'), 'app package manifest');
   for (const section of ['dependencies', 'devDependencies', 'optionalDependencies', 'peerDependencies', 'overrides']) {
     for (const [name, spec] of Object.entries(pkg[section] || {})) {
-      requireValue(npmAliasTarget(spec) !== OFFLINE
-        && (name !== OFFLINE || (section === 'dependencies' && spec === '^0.1.32')),
-      'Customized offline SDK declarations, aliases or overrides cannot be converted by this online-only diagnostic. Only the unused retired baseline may be removed by its reviewed migration.');
+      usesOffline ||= name === OFFLINE || npmAliasTarget(spec) === OFFLINE;
     }
   }
   function visit(directory) {
     if (!fs.existsSync(directory)) return;
     for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
-      requireValue(!entry.isSymbolicLink(), 'Source links require manual review before an online-only diagnostic.');
+      requireValue(!entry.isSymbolicLink(), 'Source links require manual review before diagnostic planning.');
       const file = path.join(directory, entry.name);
       if (entry.isDirectory()) visit(file);
       else if (/\.[cm]?[jt]sx?$/.test(entry.name)) {
-        requireValue(!OFFLINE_SOURCE.test(fs.readFileSync(file, 'utf8')),
-          'This app references the native offline package or profile. The online-only diagnostic cannot preserve that capability; no files were converted.');
+        usesOffline ||= OFFLINE_SOURCE.test(fs.readFileSync(file, 'utf8'));
       }
     }
   }
@@ -176,9 +175,51 @@ function assertOnlineOnly(projectRoot) {
     if (!fs.existsSync(file)) continue;
     requireValue(fs.lstatSync(file).isFile() && !fs.lstatSync(file).isSymbolicLink(),
       'Dynamic app configuration must be a regular local file.');
-    requireValue(!OFFLINE_SOURCE.test(fs.readFileSync(file, 'utf8')),
-      'Dynamic app configuration references native offline behavior. Review it without execution; an online-only diagnostic cannot convert it.');
+    usesOffline ||= OFFLINE_SOURCE.test(fs.readFileSync(file, 'utf8'));
   }
+  requireValue(!usesOffline || selection.offline,
+    'This app uses offline functionality but the target has no verified offline contract. Preserve its profile, source and data; do not disable offline or remove its dependency.');
+}
+
+function readOfflineContract(reference, profile, host, project) {
+  const version = profile.managedDependencies?.[OFFLINE];
+  const locked = project.lock.packages[`node_modules/${OFFLINE}`];
+  if (version === undefined && !locked) return null;
+  requireValue(exactVersion(version, true) && locked?.version === version && SRI.test(locked.integrity || ''),
+    'Offline targets must pin the exact SDK and its integrity in the protected reference lock.');
+  const root = relativeFile(reference, `node_modules/${OFFLINE}`, true);
+  const pkg = json(relativeFile(root, 'package.json'), 'offline package manifest');
+  const contract = json(relativeFile(root, 'compatibility.json'), 'offline compatibility contract');
+  const sourceVersion = host.powerAppsDiagnostic?.sourceVersion ?? host.version;
+  requireValue(pkg.name === OFFLINE && pkg.version === version
+    && contract.schemaVersion === 2 && contract.complete === true && contract.sourceDirty === false
+    && contract.packageVersion === version && contract.reactNativeVersion === profile.managedDependencies['react-native']
+    && Number(contract.expoSdkVersion) === profile.expoSdk
+    && contract.runtimeFamily === profile.runtimeFamily && typeof contract.runtimeFamily === 'string' && contract.runtimeFamily.length > 0
+    && Number.isSafeInteger(contract.offlineContractVersion) && contract.offlineContractVersion > 0
+    && contract.offlineContractVersion === profile.offlineContractVersion
+    && contract.engine === 'hermes'
+    && PLATFORMS.every(platform => Array.isArray(contract.platformArchitectures?.[platform])
+      && contract.platformArchitectures[platform].includes('new'))
+    && typeof pkg.peerDependencies?.[HOST] === 'string' && pkg.peerDependencies[HOST].length > 0
+    && typeof pkg.peerDependencies?.['react-native'] === 'string' && pkg.peerDependencies['react-native'].length > 0
+    && typeof host.peerDependencies?.[OFFLINE] === 'string' && host.peerDependencies[OFFLINE].length > 0
+    && contract.hostPeerRange === pkg.peerDependencies?.[HOST]
+    && semver.satisfies(sourceVersion, contract.hostPeerRange)
+    && semver.satisfies(contract.reactNativeVersion, pkg.peerDependencies['react-native'])
+    && semver.satisfies(version, host.peerDependencies[OFFLINE]),
+  'Offline SDK, host provenance, peer requirements and native runtime contract disagree.');
+  const artifacts = contract.artifacts;
+  requireValue(artifacts && typeof artifacts === 'object' && !Array.isArray(artifacts)
+    && Object.keys(artifacts).length > 0, 'Offline compatibility metadata is missing native artifact hashes.');
+  for (const [file, hash] of Object.entries(artifacts)) {
+    verifyHash(relativeFile(root, file), hash, 'Offline native artifact');
+  }
+  return {
+    package: OFFLINE, version, runtimeFamily: contract.runtimeFamily,
+    reactNativeVersion: contract.reactNativeVersion, offlineContractVersion: contract.offlineContractVersion,
+    hostPeerRange: contract.hostPeerRange,
+  };
 }
 
 function parseAndroidPlayerMetadata(output) {
@@ -231,7 +272,7 @@ function summary(selection) {
     validationScope: 'local-diagnostic-only',
     manifestSha256,
     deploymentAllowed: false,
-    onlineOnly: true,
+    offline: selection.offline,
     templatePurpose: selection.inspectionOnly ? 'upgrade-inspection-only' : 'scaffold-and-upgrade',
     template: target.template,
     hostVersion: target.nativePackages[`node_modules/${HOST}`],
@@ -280,7 +321,6 @@ function loadDiagnosticArtifacts(manifestPath, options = {}) {
   const reference = relativeFile(root, manifest.referenceProject?.path, true);
   verifyHash(path.join(reference, 'package.json'), manifest.referenceProject.packageJsonSha256, 'Reference package');
   verifyHash(path.join(reference, 'package-lock.json'), manifest.referenceProject.packageLockSha256, 'Reference lock');
-  assertOnlineOnly(reference);
   requireValue(fs.existsSync(path.join(reference, 'node_modules', HOST, 'package.json')),
     'The copied diagnostic reference is not installed. After separate approval, run npm ci inside its reference directory using the protected lock and existing registry authentication. This guard never installs dependencies.');
   const project = readProject(reference, readPlatformContext());
@@ -400,8 +440,8 @@ function loadDiagnosticArtifacts(manifestPath, options = {}) {
       'Reference overrides differ from the packed host compatibility contract.');
     const nativePackages = Object.fromEntries([...project.installed].filter(([, pkg]) => pkg.native)
       .map(([installPath, pkg]) => [installPath, pkg.version]));
-    requireValue(!Object.keys(nativePackages).some((name) => name.includes('power-apps-native-offline')),
-      'The selected reference still contains native offline code; an online-only diagnostic is required.');
+    const offline = readOfflineContract(reference, profile, host.pkg, project);
+    assertOfflineSupport(reference, { offline });
     const target = {
       ...requirements, template: { package: TEMPLATE, version: template.version, integrity: template.integrity },
       managedDependencies: project.declarations, nativePackages,
@@ -414,6 +454,11 @@ function loadDiagnosticArtifacts(manifestPath, options = {}) {
         && Number.isSafeInteger(migration.fromTemplateVersion) && migration.fromTemplateVersion > 0
         && migration.toTemplateVersion === migration.fromTemplateVersion + 1,
       'Packed migrations must expose valid adjacent version edges.');
+      if (offline && migration.toTemplateVersion === profile.targetTemplateVersion) {
+        requireValue(migration.targetProfile?.runtimeFamily === offline.runtimeFamily
+          && migration.targetProfile?.offlineContractVersion === offline.offlineContractVersion,
+        'The migration target must retain the verified offline runtime contract.');
+      }
       return migration;
     });
     const player = manifest.player;
@@ -436,7 +481,7 @@ function loadDiagnosticArtifacts(manifestPath, options = {}) {
     requireValue(diagnostic?.protocol === INSPECTION.protocol && same(diagnostic.nativeRuntime, profile.nativeRuntime),
       'Selected APK baked diagnostic fingerprints differ from the packed host profile. Equal runtime counters do not prove equal native builds.');
     validatePlayer(actual, target);
-    const result = { target, migrations, player, packages: manifest.packages, reference, referenceLock: project.lock, manifestSha256, profile, inspectionOnly };
+    const result = { target, migrations, player, packages: manifest.packages, reference, referenceLock: project.lock, manifestSha256, profile, inspectionOnly, offline };
     validateProjectAgainstRelease(project, target);
     return result;
   } finally {
@@ -462,8 +507,8 @@ function verifyAppArchive(projectRoot, app, lock, item) {
 }
 
 function resolveDiagnosticProject(projectRoot, manifestPath, options) {
-  assertOnlineOnly(projectRoot);
   const selection = loadDiagnosticArtifacts(manifestPath, options);
+  assertOfflineSupport(projectRoot, selection);
   const project = readProject(projectRoot, readPlatformContext());
   const app = json(path.join(projectRoot, 'package.json'));
   requireValue(Object.entries(selection.profile.managedOverrides || {}).every(([name, value]) => same(app.overrides?.[name], value)),
@@ -498,14 +543,17 @@ function resolveDiagnosticProject(projectRoot, manifestPath, options) {
     verifyInstalledPackage(path.join(selection.reference, 'node_modules', item.name), path.join(projectRoot, 'node_modules', item.name));
   }
   validateProjectAgainstRelease(project, projectBaseline);
+  const host = json(path.join(projectRoot, 'node_modules', HOST, 'package.json'), 'installed host');
+  requireValue(same(readOfflineContract(projectRoot, selection.profile, host, project), selection.offline),
+    'Installed offline contract differs from the selected diagnostic reference.');
   // Absolute archive declarations stay internal to dependency admission; the
   // public summary always uses the canonical, package-relative reference tuple.
   return { ...selection, projectBaseline };
 }
 
 function planDiagnosticUpdate(projectRoot, manifestPath, options) {
-  assertOnlineOnly(projectRoot);
   const selection = loadDiagnosticArtifacts(manifestPath, options);
+  assertOfflineSupport(projectRoot, selection);
   const source = readProjectRequirements(projectRoot);
   const installed = json(path.join(projectRoot, 'node_modules', HOST, 'package.json'), 'installed host');
   requireValue(installed.name === HOST && exactVersion(installed.version), 'An installed exact host is required for diagnostic planning.');
@@ -514,11 +562,8 @@ function planDiagnosticUpdate(projectRoot, manifestPath, options) {
   requireValue(source.templateVersion <= target.templateVersion
     && PLATFORMS.every((platform) => source.nativeRuntimeVersions[platform] <= target.nativeRuntimeVersions[platform]),
   'Diagnostic downgrades are not supported.');
-  const numeric = (version) => version.split(/[.-]/).slice(0, 3).map(Number);
-  const a = numeric(installed.version);
-  const b = numeric(targetHost);
-  requireValue(Math.sign(a[0] - b[0] || a[1] - b[1] || a[2] - b[2]) <= 0
-    && !(a.every((value, index) => value === b[index]) && !installed.version.includes('-') && targetHost.includes('-')),
+  requireValue(semver.valid(installed.version) && semver.valid(targetHost)
+    && semver.lte(installed.version, targetHost),
   'Diagnostic host downgrade is not supported.');
   const migrationRequired = source.templateVersion < target.templateVersion;
   const edges = [];
@@ -616,8 +661,8 @@ function acquireDiagnosticTemplate(destination, manifestPath, options = {}) {
       fs.mkdirSync(path.dirname(file), { recursive: true });
       fs.copyFileSync(relativeFile(path.dirname(path.resolve(manifestPath)), local.path), file, fs.constants.COPYFILE_EXCL);
     }
-    requireValue(app.name === reference.name && same(app.dependencies, reference.dependencies)
-      && same(app.devDependencies, reference.devDependencies) && same(app.overrides, reference.overrides),
+    requireValue(app.name === reference.name
+      && same(dependencySections(app), dependencySections(reference)) && same(app.overrides, reference.overrides),
     'Fresh diagnostic template declarations differ from its verified reference lock. Preserve the partial target for review.');
     fs.writeFileSync(path.join(target, 'package.json'), `${JSON.stringify(app, null, 2)}\n`);
     fs.copyFileSync(path.join(selection.reference, 'package-lock.json'), path.join(target, 'package-lock.json'));
@@ -630,5 +675,5 @@ function acquireDiagnosticTemplate(destination, manifestPath, options = {}) {
 module.exports = {
   unpack,
   loadDiagnosticArtifacts, resolveDiagnosticProject, planDiagnosticUpdate, summary,
-  assertOnlineOnly, parseAndroidPlayerMetadata, acquireDiagnosticTemplate,
+  assertOfflineSupport, parseAndroidPlayerMetadata, acquireDiagnosticTemplate,
 };

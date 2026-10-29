@@ -138,8 +138,10 @@ Only an explicitly requested local diagnostic may substitute the lifecycle
 reference's `--diagnostic-artifacts` selection for published release resolution.
 Carry that same explicit manifest through resolve/plan/changed-file validation
 and nested skills; label the sanitized context `local-diagnostic-only`.
-It is online-only Android test scope, not a default or a tenant/store deployment
-path. Preserve every normal approval and telemetry checkpoint. Never send the
+It verifies Android artifacts, including the offline runtime contract when
+selected; it does not establish iOS execution or offline-sync success. Preserve
+app-owned offline configuration and every normal approval and telemetry
+checkpoint. It is not a default or a tenant/store deployment path. Never send the
 manifest, its local paths, archive names, raw CLI output or APK to telemetry.
 
 ---

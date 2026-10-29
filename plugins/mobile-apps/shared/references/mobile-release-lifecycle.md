@@ -72,6 +72,30 @@ that immutable package only after approval. For an upgrade, use
 tooling directory. The host CLI, not the skill, owns migration writes and install
 validation. Never independently upgrade every native dependency to npm `latest`.
 
+Isolated acquisition retains the caller's effective project npm settings and
+the original user/global configuration precedence. A project `.npmrc`, including
+scoped registry authentication, exists only in the private installation directory
+during npm execution and is removed on success or failure before invoking a
+creation CLI. npm runs from the original context with an explicit isolated
+prefix, global mode off and workspaces off, so relative TLS/auth file paths keep
+their meaning without installing into the old app's dependency graph.
+Credentials are never emitted in results or copied into the created app.
+Template creation CLIs must be self-contained: dependency declarations,
+bundled dependencies or unexpected acquired packages block execution even when
+the template's own archive integrity matches.
+
+For a proposed new app directory, the creation owner first runs
+`mobile-template-lifecycle.js destination --destination '<proposed_working_dir>'`
+from an existing parent. This only binds a canonical destination; acquisition
+still needs approval. Existing-app and continuation flows cannot use this
+creation-only exception to bypass missing-root checks.
+
+Managed native registry ranges are checked against their exact inventory
+versions with the bundled npm SemVer implementation. Reviewed vendor archives
+retain their separate archive validation. Explicit template selections remain
+attached to subsequent project resolution rather than silently choosing a
+different, newer template with the same runtime.
+
 Package compatibility and binary availability are separate. A same-runtime
 patch/minor host update needs no new Player/base record. Native changes need a
 host major, a template migration and matching native binaries before those
@@ -87,7 +111,7 @@ not prerequisites.
 
 ## Explicit local diagnostic artifacts (not a release)
 
-An explicitly requested, reviewed **online-only Android diagnostic** may select
+An explicitly requested, reviewed **offline-capable Android diagnostic** may select
 `--diagnostic-artifacts '<manifest.json>'` instead of a published release. This
 is a separate local test contract, never a catalogue entry, default promotion,
 publication claim, or deployment approval. Do not create production records or
@@ -111,9 +135,9 @@ The local JSON contract is `schemaVersion: 1`, `kind: "mobile-local-diagnostic"`
 
 | Field | Required evidence |
 |---|---|
-| `packages` | Exactly the host, auth, common, assets, and template package archives. Each has `name`, its actual exact `version`, contained relative `path`, `sha256`, and `integrity` (`sha512-…`). Use the packed identity, not a predicted production release or source-version provenance. |
+| `packages` | The host, auth, common, assets, template, and any required push-notifications package archives. Each has `name`, its actual exact `version`, contained relative `path`, `sha256`, and `integrity` (`sha512-…`). The offline SDK is installed from the protected reference lock and validated separately. Use the packed identity, not a predicted production release or source-version provenance. |
 | `referenceProject` | `path` to a protected **template staging snapshot**, `packageJsonSha256`, and `packageLockSha256`. Its `.branch-install.json` protects `package.json`, lock and local archives. Export omits `node_modules` and registry credentials. This is not an older customer app. |
-| `player` | `platform: "android"`, relative APK `path`, `sha256`, and full baked `metadata`: existing player compatibility fields plus `diagnostic: { protocol: "online-only-57-v1", nativeRuntime: <versions and fingerprints> }`. |
+| `player` | `platform: "android"`, relative APK `path`, `sha256`, and full baked `metadata`: existing player compatibility fields plus `diagnostic: { protocol: "diagnostic-57-v1", nativeRuntime: <versions and fingerprints> }`. Old online-only APKs are rejected, not relabeled. |
 
 The exported reference is intentionally uninstalled. After reviewing the supplied
 hashes, protected lock, packages and lifecycle scripts, separately approve
@@ -149,7 +173,7 @@ diagnostic package version.
 The current controlled SDK 57 host and template archives both have the actual
 private version `1.0.0-expo57-diagnostic.0`, not merely a rewritten selection
 record. Both require `private: true` and `powerAppsDiagnostic` with protocol
-`online-only-57-v1`, an exact `0.x` `sourceVersion`, and the package-specific role:
+`diagnostic-57-v1`, an exact stable `sourceVersion` (including `1.x`), and the package-specific role:
 host `purpose: "upgrade-target"`; template `purpose: "upgrade-inspection-only"`.
 The producer prepares these private artifacts before locking its reference;
 production source versions, sealing and publication guards remain unchanged.
@@ -165,9 +189,10 @@ recommendation carries the public registry and SHA-512 integrity verified by
 the producer at build time. The skill continues to admit the selected diagnostic
 by its exact artifacts, supported counters and fingerprints, not by the presence
 of a recommendation. Production-mode metadata is not a diagnostic Player.
-Previously verified schema-1 bundles retain their original historical
-recommendation data and remain inspectable; do not rewrite immutable artifacts
-to emulate the new schema or claim publication from their source labels.
+Schema-1 metadata may retain its original recommendation only when its protocol
+and native fingerprints match the selected current contract. Historical
+`online-only-57-v1` bundles cannot be used for this offline-capable rehearsal.
+Never rewrite immutable artifacts or claim publication from their source labels.
 
 The inspection-only template excludes a stale canonical lock and cannot scaffold.
 Its separately hashed staging lock is the install-graph evidence. A private
@@ -200,25 +225,27 @@ node "${PLUGIN_ROOT}/scripts/mobile-template-lifecycle.js" plan \
 
 Record the returned `manifestSha256` with the private approval. Changed
 manifest, archives, lock, player, app source or configuration invalidates the
-review. An `expo.extra.__offlineProfile`, offline profile/plugin or native offline source usage
-blocks this online-only test. Dynamic configuration is read, never executed.
-Literal offline keys in source/configuration are checked in both quoted and
-unquoted object/assignment forms; an ambiguous offline reference blocks for review.
-Do not delete profiles,
-disable offline, strip source imports or alter customer configuration to pass.
-An optional baseline import of `../offline-profile.json` is not active offline
-by itself when no profile exists. Only the unused retired
-`dependencies["@microsoft/power-apps-native-offline"] = "^0.1.32"` baseline may be
-removed by the reviewed producer migration; customized versions, placement,
-aliases or overrides block. There is no `expo.extra.appConfig` offline wrapper.
+review. Offline profiles, plugin references and imports are permitted only when
+the selected target includes a verified offline contract. Dynamic configuration
+is read, never executed. The reference SDK's exact locked version/integrity,
+host and React Native peers, runtime family, offline-contract version, Hermes/
+New Architecture declarations and native artifact hashes must agree with the
+packed host and migration target. The private host's stable `sourceVersion`
+establishes its SDK peer compatibility; its private archive identity still
+governs installation. The same checks run against the resulting installation.
+No hardcoded SDK bump is applied to old apps. Preserve profile files, source,
+custom overrides and data; an unsupported target blocks rather than removes
+offline functionality. Do not delete profiles, disable offline or remove SDK
+imports to make a blocked target pass. Offline synchronization, disconnected cold launch,
+pending-write preservation and database upgrades need separate device tests.
 
 Follow `/check-updates`' existing isolated-preview and aggregate-application
 approvals, snapshot, per-edge conflict review, rollback, and telemetry checkpoints.
 After explicit approval, keep the immutable artifact bundle in a controlled,
 stable directory. Do not re-scaffold, copy reference source/lock into an old app,
 or pre-edit its package declarations. The producer host CLI owns all migration
-writes and binds every selected local runtime archive/override itself. Offline preflight must
-precede even creating a directory inside the target app.
+writes and binds every selected local runtime archive/override itself. Offline
+compatibility and preservation review must precede creating a rehearsal copy.
 
 Use the **verified reference installation's target host CLI** for the preview,
 not an older app's host or an invented registry target. Resolve its real

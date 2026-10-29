@@ -40,7 +40,7 @@ node "${PLUGIN_ROOT}/scripts/resolve-mobile-release.js" --project-root '<working
 
 If the parent explicitly selected local diagnostic artifacts, append the same
 `--diagnostic-artifacts '<manifest.json>'` to resolution and package validation.
-Keep the lifecycle reference's online-only Android/no-deployment limits.
+Keep the lifecycle reference's Android-artifact/no-deployment limits and preserve offline configuration.
 
 Read [release lifecycle](../../../shared/references/mobile-release-lifecycle.md)
 and [native controls](../references/native-controls.md). Unknown/missing release

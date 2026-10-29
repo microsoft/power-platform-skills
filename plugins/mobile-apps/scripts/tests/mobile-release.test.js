@@ -60,6 +60,21 @@ test('selection returns the exact reviewed record, explicitly or through its def
   assert.throws(() => selectRelease(undefined, { ...catalog, defaultRelease: null }), /No verified mobile release/);
 });
 
+test('reviewed native declarations must accept the pinned npm version with standard SemVer ranges', () => {
+  const release = fixtureRelease();
+  release.nativePackages['node_modules/expo'] = '57.0.25';
+  for (const spec of ['^57.0.0', '~57.0.20', '>=57.0.21 <58', '57.x', '55 || 57', '57.0.0 - 57.0.30']) {
+    release.managedDependencies.dependencies.expo = spec;
+    assert.equal(validateRelease(release), release, spec);
+  }
+  for (const spec of ['^55.0.0', '~57.1.0', '<57.0.25']) {
+    release.managedDependencies.dependencies.expo = spec;
+    assert.throws(() => validateRelease(release), /does not accept its reviewed exact version/, spec);
+  }
+  release.managedDependencies.dependencies.expo = 'file:./vendor/expo.tgz';
+  assert.equal(validateRelease(release), release, 'Reviewed archive declarations are not registry ranges');
+});
+
 test('catalog schema, defaults and duplicate identities are strict', () => {
   const release = fixtureRelease();
   for (const catalog of [

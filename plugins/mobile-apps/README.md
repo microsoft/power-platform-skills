@@ -18,7 +18,31 @@ Start from the Power Platform mobile app template, then use the mobile-app
 skill to generate the app plan, data model, screens, native capabilities, and
 connector wiring.
 
-1. Select an exact published template version and create a new app from that immutable package:
+1. Install the mobile-app plugin before running its helper commands.
+
+    In VS Code, open Extensions, search for `@agentPlugins mobile-app`, install
+    **mobile-app**, and reload VS Code. Alternatively, use GitHub Copilot CLI:
+
+    ```sh
+    copilot plugin marketplace add microsoft/power-platform-skills
+    copilot plugin install mobile-app@power-platform-skills
+    ```
+
+    For Claude CLI:
+
+    ```sh
+    claude plugin marketplace add microsoft/power-platform-skills
+    claude plugin install mobile-app@power-platform-skills --scope user
+    ```
+
+    Restart the agent host after installation. Set `PLUGIN_ROOT` to the absolute
+    installed plugin directory reported by that host; do not assume a cache layout:
+
+    ```sh
+    export PLUGIN_ROOT='/absolute/path/to/installed/mobile-app'
+    ```
+
+2. Select an exact published template version and create a new app from that immutable package:
 
     ```sh
     npm view @microsoft/power-apps-native-template dist-tags --json
@@ -43,33 +67,16 @@ connector wiring.
     establish either. Do not substitute a Git branch or bundled snapshot.
     See [the lifecycle contract](shared/references/mobile-release-lifecycle.md).
 
-    An explicitly requested online-only Android test may instead select immutable
+    An explicitly requested offline-capable Android test may instead select immutable
     local archives with `--diagnostic-artifacts "<manifest.json>"`, following
     that contract's separate inspection/acquisition/install approvals. It verifies
     package/lock hashes and actual selected APK metadata, not release readiness.
     No catalogue/default is created; iOS remains unvalidated and diagnostic
     tenant/store deployment is prohibited.
-
-2. Install the mobile-app plugin from the Power Platform Skills marketplace.
-
-    1. Open the Extensions pane.
-    2. Enter `@agentPlugins mobile-app` in the search box.
-    3. Select the **mobile-app** plugin and install it.
-    4. Reload VS Code if prompted, then open Copilot Chat in Agent mode.
-
-    Alternatively, install it from a terminal with GitHub Copilot CLI:
-
-    ```sh
-    copilot plugin marketplace add microsoft/power-platform-skills
-    copilot plugin install mobile-app@power-platform-skills
-    ```
-
-    For Claude CLI:
-
-    ```sh
-    claude plugin marketplace add microsoft/power-platform-skills
-    claude plugin install mobile-app@power-platform-skills --scope user
-    ```
+    The current `diagnostic-57-v1` contract preserves existing offline profiles
+    and validates the selected SDK's host/RN peers and native metadata. The old
+    online-only protocol is rejected; package inspection is not an offline sync
+    or database-upgrade test.
 
 3. Open the template folder in VS Code and run the skill from Copilot Chat:
 

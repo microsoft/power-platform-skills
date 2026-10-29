@@ -4,6 +4,8 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const test = require('node:test');
+const { spawnSync } = require('node:child_process');
+const { shellBlocks } = require('./helpers/markdown-shell-blocks');
 
 const pluginRoot = path.resolve(__dirname, '../..');
 const read = (file) => fs.readFileSync(path.join(pluginRoot, file), 'utf8');
@@ -97,6 +99,28 @@ test('deploy checks both actual intended base versions and fingerprints before b
   assert.match(source, /not.*newest bundled template|never use the newest bundled template/);
 });
 
+test('multi-command native admission blocks propagate the first resolver failure', t => {
+  const root = fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'mobile-admission-gate-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const candidates = process.platform === 'win32'
+    ? (spawnSync('where.exe', ['bash'], { encoding: 'utf8' }).stdout || '').split(/\r?\n/)
+    : [];
+  const bash = candidates.find(file => /[\\/]Git[\\/]/i.test(file)) || 'bash';
+  for (const [file, marker] of [
+    ['skills/add-native/add-pdf-report/SKILL.md', "const required='expo-print'"],
+    ['skills/deploy/SKILL.md', '--platform android'],
+  ]) {
+    const block = shellBlocks(read(file)).find(value => value.includes(marker));
+    assert.ok(block, file);
+    const command = block.replaceAll('<working_dir>', root.replaceAll('\\', '/').replaceAll("'", "'\\''"));
+    const probe = 'count=0\nnode() { count=$((count + 1)); if [ \"$count\" -eq 1 ]; then return 23; fi; printf \"unexpected-followup\"; }\n';
+    const result = spawnSync(bash, ['-s'], {
+      input: probe + command, encoding: 'utf8', timeout: 10000,
+    });
+    assert.equal(result.status, 23, file);
+    assert.equal(result.stdout, '', 'No later successful command may hide native admission failure');
+  }
+});
 test('deployment retains app-ID two-pass packaging, offline reconciliation, and user confirmation', () => {
   const source = read('skills/deploy/SKILL.md');
   assert.match(source, /two full build\+push cycles are required/);
@@ -248,6 +272,13 @@ test('explicit local diagnostics are consistently scoped without promoting produ
   for (const helper of nativeHelpers) {
     assert.match(read(`skills/add-native/${helper}/SKILL.md`), /--diagnostic-artifacts/, helper);
   }
+  for (const file of [
+    'AGENTS.md', 'README.md', 'shared/shared-instructions.md', 'shared/version-check.md',
+    ...['create-mobile-app', 'check-updates', 'edit-app', 'add-native'].map(skill => `skills/${skill}/SKILL.md`),
+    ...nativeHelpers.map(helper => `skills/add-native/${helper}/SKILL.md`),
+  ]) {
+    assert.doesNotMatch(read(file), /online-only Android|online-only test inventory/, file);
+  }
   assert.equal(fs.existsSync(path.join(pluginRoot, 'shared/mobile-releases.json')), false);
   const lifecycle = read('shared/references/mobile-release-lifecycle.md');
   assert.match(lifecycle, /source manifest[\s\S]{0,120}not evidence of a matching binary/);
@@ -264,6 +295,10 @@ test('explicit local diagnostics are consistently scoped without promoting produ
   assert.match(read('skills/check-updates/SKILL.md'), /Do not continue to[\s\S]{0,30}Steps 3-4/);
   assert.match(read('skills/check-updates/SKILL.md'), /skip the[\s\S]{0,40}`npm outdated` discovery/);
   assert.match(lifecycle, /Do not disable offline automatically|Do not delete profiles,/);
+  assert.match(lifecycle, /diagnostic-57-v1/);
+  assert.match(lifecycle, /exact stable `sourceVersion` \(including `1\.x`\)/);
+  assert.match(lifecycle, /same checks run against the resulting installation/);
+  assert.match(lifecycle, /database upgrades need separate device tests/);
   assert.match(lifecycle, /new host and template package major/);
   assert.match(read('skills/deploy/SKILL.md'), /Reject any `--diagnostic-artifacts`[\s\S]{0,100}before building or pushing/);
   assert.match(read('skills/debug-app/SKILL.md'), /actual supported counters/);
