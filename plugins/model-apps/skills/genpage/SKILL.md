@@ -545,7 +545,8 @@ It returns a single JSON object:
 {
   "ok": true | false,
   "blocker": null | "usage" | "az_missing" | "az_not_logged_in" | "az_timeout" | "pac_not_logged_in"
-                 | "pac_timeout" | "no_env_url" | "whoami_403" | "whoami_401" | "whoami_error",
+                 | "pac_timeout" | "no_env_url" | "whoami_403" | "whoami_401" | "whoami_error"
+                 | "no_customization_role",
   "message": "human-readable next step",
   "warnings": ["..."],
   "azUser": "...", "pacUser": "...", "envUrl": "...",
@@ -567,6 +568,10 @@ It returns a single JSON object:
 - **`blocker: "az_timeout"`** means the Azure CLI was too slow to answer, not that it is missing or
   signed out. Retry once; if it recurs on a busy machine, set `POWER_PLATFORM_SKILLS_AZ_TIMEOUT_MS`
   (milliseconds, default 60000) for the Azure CLI budget.
+- **`blocker: "no_customization_role"`** means WhoAmI passed but the identity holds no security role, so
+  every customization read would fail (HTTP 403 `0x80042f09`). Show the `message` and stop: the maker
+  needs an administrator to assign a role such as System Customizer (or to sign in as the PAC user when
+  `message` offers it). Any other failure of that one extra read is only a `warnings` entry.
 - **`blocker: "pac_timeout"`** means `pac org who` did not answer within its fixed 60 s, so the PAC
   login is unknown, not missing. Retry once. The Azure CLI setting above does not change this budget.
 

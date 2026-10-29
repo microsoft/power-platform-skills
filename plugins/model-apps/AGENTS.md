@@ -2373,7 +2373,11 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
     abort signals only the `cmd.exe` wrapper. The early WhoAmI is sent with `refreshOn401: false`: a 401
     would otherwise refresh the token with a synchronous `az` call (seconds, with every other probe's timer
     frozen), so a 401 on the early request is re-sent at WhoAmI's old place, after `pac`, where that refresh
-    costs nothing.
+    costs nothing. After a passing WhoAmI one more GET (`solutions?$select=solutionid&$top=1`, the first read
+    a build makes) is the **capability probe**: HTTP 403 `0x80042f09` ("has not been assigned any roles") is
+    `ok: false`, blocker `no_customization_role`, because WhoAmI answers for a user who holds no role and
+    every customization read then fails. Any other outcome of the probe is a warning, never a verdict (a
+    role count would be wrong: privileges also come through teams). The script is byte-identical in `plugins/pcf`.
   - **Download** overlaps each table's auxiliary reads (entity and attribute labels, the money
     base-currency flags, option sets) and the per-table relationship reads, bounded at 4
     (`runDownload({ concurrency })`; `1` is the sequential oracle), and merges them in the original fixed
@@ -2758,7 +2762,7 @@ scripts/
   launch-playwright-mcp.js     ← Playwright MCP server launcher (fullscreen; uses lib/detect-browser.js)
   playwright-mcp-fullscreen.config.json ← Fullscreen browser config for the launcher
   regenerate-verified-icons.js ← Regenerates references/verified-icons.txt from npm
-  check-auth.js                ← Pre-flight: az present + logged in, pac identity, WhoAmI, identity match (the az probes, the token read + WhoAmI and pac overlap; the verdict order is fixed); a CLI too slow to answer is `az_timeout`/`pac_timeout`
+  check-auth.js                ← Pre-flight: az present + logged in, pac identity, WhoAmI, one `solutions` read that tells an identity with no security role (`no_customization_role`), identity match (the az probes, the token read + WhoAmI and pac overlap; the verdict order is fixed); a CLI too slow to answer is `az_timeout`/`pac_timeout`
   check-version.js             ← Skill-start update notice: compares the plugin clone with its origin/main (git runs in the plugin, never the user's repo)
   resolve-interaction-mode.js  ← Reports whether a human can answer in this run (unattended defaults)
   lint-app-spec.js             ← Validate + lint an App Spec without touching an environment
@@ -4186,7 +4190,7 @@ Dataverse simply are not in it.
 
 | Hatch | Use for | Examples in tree |
 |---|---|---|
-| `dataverseRequest()` in `lib/dataverse-auth.js` (and the `dataverse-request.js` CLI) | Dataverse surfaces the SDK does not model at all | `WhoAmI` (`check-auth.js` — an authentication probe, never a page's built-in operation binding), `customapis` (`list-custom-apis.js`), `connectionreferences` (`create-connection-reference.js`), solution-component adds (`add-page-to-solution.js`) |
+| `dataverseRequest()` in `lib/dataverse-auth.js` (and the `dataverse-request.js` CLI) | Dataverse surfaces the SDK does not model at all | `WhoAmI` (`check-auth.js` — an authentication probe, never a page's built-in operation binding; and its one capability read of `solutions`, which tells a user with no security role from one who can build), `customapis` (`list-custom-apis.js`), `connectionreferences` (`create-connection-reference.js`), solution-component adds (`add-page-to-solution.js`) |
 | The raw `httpClient` from `createAzHttpClient` | A surface the SDK *does* touch but whose response it **projects away** | **No caller today.** The one that existed — `entityPrivileges` in `verify-model-app.js` — is gone: the SDK had no privilege READ at all, and `fetchEntityMetadata` drops `Privileges` permanently by design, so the check composed its own `EntityDefinitions(...)?$select=Privileges` request. The vendored bundle now carries `getEntityPrivileges`, and the reader takes it. The hatch stays documented because the *category* recurs; opening it again needs the same justification |
 
 **Prefer `dataverseRequest()` over the raw client.** It already handles the API path, auth, headers
