@@ -195,9 +195,8 @@ test('SDK codes (meta): the scan finds a code in every form the bundle raises on
     'ARTIFACT_ALREADY_EXISTS', // a push result by value: { code: "ARTIFACT_ALREADY_EXISTS", … }
     'PREVIEW_APP_PIN_GUARD_NOT_EVALUATED', // a warning: warn("PREVIEW_APP_PIN_GUARD_NOT_EVALUATED", …)
   ]) assert.ok(codes.has(code), `the scan finds ${code}`);
-  assert.equal(codes.has('TWO_COLUMN'), false, 'an enum member name is not a code');
-  assert.equal(codes.has('COMMAND_IMMUTABLE_COLUMN_CHANGED_CODE'), false, 'a constant\'s name is not a code');
-  // Negative controls: only an OCCURRENCE that is provably not a code is left out — never a value because of how it is spelled.
+  // What is left out is proven on isolated sources, not by what the whole bundle happens to hold today (a later SDK may legitimately raise a
+  // code that is also an enum member's name): only an OCCURRENCE that is provably not a code is left out — never a value because of how it is spelled.
   assert.deepEqual([...codesIn('throw new SdkError("INVALID_ERROR_CODE", "bad")')], ['INVALID_ERROR_CODE'], 'a code that ends in _CODE is a code');
   assert.deepEqual([...codesIn('e[e.TWO_COLUMN=1]="TWO_COLUMN";throw new SdkError("TWO_COLUMN", "bad")')], ['TWO_COLUMN'], 'a code that is also an enum member name is a code');
   assert.deepEqual([...codesIn('(function(e){e[e.ONE_COLUMN=0]="ONE_COLUMN"})(x)')], [], 'an enum reverse mapping alone is not');
