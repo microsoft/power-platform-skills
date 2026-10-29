@@ -7,6 +7,7 @@ const path = require('node:path');
 const { execFileSync, spawn } = require('node:child_process');
 const { pluginTestFiles, sdkTestSpec, summarize, runPluginSuite, reportStrayFolders, withTempDir } = require('../run-tests.js');
 const { makeTempDir } = require('./helpers/temp-dirs.js');
+const { PREVIOUS_RELEASE, BUNDLE_PATH } = require('./helpers/previous-bundle.js');
 
 test('pluginTestFiles discovers every *.test.js as a scripts/tests path, sorted', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'runtests-'));
@@ -387,6 +388,22 @@ test('the model-apps CI workflow runs the suite once with pinned TypeScript and 
     release = null;
   }
   if (release !== null) assert.strictEqual(JSON.parse(release).version, '2.13.0', 'the fetched commit is the 2.13.0 release');
+});
+
+// The upgrade tests (workspace-upgrade-*-real-bundle.test.js) need the previous release's SDK bundle, which a shallow checkout does not
+// have, and FAIL in CI without it: each job that runs the suite fetches that release by its hash and names the bundle — the same commit
+// helpers/previous-bundle.js checks the bundle's SHA-256 against, so the two cannot drift apart on a re-vendor.
+test('the model-apps CI workflow gives every suite run the previous release\'s SDK bundle the upgrade tests read', () => {
+  const { PREVIOUS_RELEASE, BUNDLE_PATH } = require('./helpers/previous-bundle.js');
+  const wf = fs.readFileSync(WORKFLOW, 'utf8');
+  for (const id of ['test-model-apps-scripts', 'test-model-apps-lexer-oracles']) {
+    const job = workflowJob(wf, id);
+    const fetchAt = job.indexOf(`git fetch --no-tags --depth=1 origin ${PREVIOUS_RELEASE}`);
+    assert.ok(fetchAt >= 0, `${id} fetches the previous release (${PREVIOUS_RELEASE}) by its hash`);
+    assert.ok(job.includes(`git cat-file blob FETCH_HEAD:${BUNDLE_PATH} > "$RUNNER_TEMP/previous-cds-maker-sdk.cjs"`), `${id} extracts its bundle under RUNNER_TEMP`);
+    assert.match(job, /echo "MODEL_APPS_PREVIOUS_BUNDLE=\$RUNNER_TEMP\/previous-cds-maker-sdk\.cjs" >> "\$GITHUB_ENV"/, `${id} names it to the later steps`);
+    assert.ok(fetchAt < job.search(/^ {14}run: node scripts\/run-tests\.js[ \t]*$/m), `${id} fetches it before the suite runs`);
+  }
 });
 
 // The eval tests and runners read committed fixtures, which a Windows checkout gives CRLF line ends, and the routing runner starts agent CLIs as

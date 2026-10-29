@@ -4539,14 +4539,19 @@ to look at the change in Maker and put into the spec what should stay, then make
 re-download is no substitute: it captures no forms, views or charts, and an interrupted first build
 can leave them before the app exists.)
 
-`scripts/tests/workspace-upgrade-real-bundle.test.js` proves the whole upgrade end to end with BOTH
-bundles: the previous release's bundle (read from git history at the release commit, or the file
-`MODEL_APPS_PREVIOUS_BUNDLE` names; the test skips without either, as a shallow clone does) builds the
-lifecycle kitchen-sink app, then the vendored one runs an unchanged rebuild, an edited rebuild, verify,
-a download and a teardown on that workspace — each compared with the same steps on a workspace the
-vendored bundle wrote (same writes, same features, same verify report). A command bar's old copy is
-never re-read: the build never pushes an existing bar, so it is never refused either. On the next
-re-vendor, point `PREVIOUS_RELEASE` at the release being replaced.
+`scripts/tests/workspace-upgrade-real-bundle.test.js` and `workspace-upgrade-entry-real-bundle.test.js` prove the
+upgrade end to end with BOTH bundles (`tests/helpers/workspace-upgrade.js`): the previous release's bundle builds the
+lifecycle kitchen-sink app, and the FIRST thing the vendored one does on that workspace — an unchanged rebuild, an
+edited rebuild (with verify), a download, or a teardown, each its own path from the state the previous bundle left — is
+compared with the same step on a workspace the vendored bundle wrote (same writes, same features, same verify report,
+same downloaded spec). The edited path also keeps, by content, a view filter the typed view model does not hold (a
+Quick Find marker below the top-level filter and a multi-value condition) that a maker added and the previous bundle
+read. `bpf-stage-edits.test.js` and `business-rules.test.js` hold the same for a flow and a rule the previous bundle
+created. A command bar's or a rule's old copy is never re-read: the build never pushes an existing one, so it is never
+refused either. The previous bundle comes from `tests/helpers/previous-bundle.js` — the file `MODEL_APPS_PREVIOUS_BUNDLE`
+names (CI fetches the release commit by hash in both suite jobs) or else git history, its SHA-256 checked; without it
+the tests skip locally and FAIL in CI. On the next re-vendor, point `PREVIOUS_RELEASE` and `PREVIOUS_BUNDLE_SHA256`
+there, and the workflow's fetch (`run-tests.test.js` holds them equal), at the release being replaced.
 
 **Newer SDK behaviors the plugin adopts, and the options it leaves off.** Each is pinned against the
 real bundle, because a stub stays green through a change in the SDK's own rule.

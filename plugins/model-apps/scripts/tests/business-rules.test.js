@@ -203,6 +203,56 @@ test('REAL BUNDLE: the mapped rule reaches the wire as WfomJson naming the autho
   assert.match(wfom, /new_ticket/, 'the rule is bound to the authored table');
 });
 
+// REAL BUNDLES: a rule the PREVIOUS release's SDK created leaves its copy, stamped with its older projection, in the workspace. A rule
+// that exists is never fetched or pushed again by a build (sdk-build.js: it is reused, and only its state is set, by a record update),
+// so that copy is never refused; what this release's SDK does on that same workspace is create the next rule — and it does so exactly
+// as on a workspace it wrote, sending nothing for the old rule.
+const { skipWithoutPrevious, requirePrevious } = require('./helpers/previous-bundle.js');
+test('REAL BUNDLES: on a workspace holding a rule the previous release created, this release creates the next rule as on its own', { skip: skipWithoutPrevious() }, async () => {
+  const run = async (creatorBundle) => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'br-upgrade-'));
+    dirs.push(dir);
+    const calls = [];
+    let n = 0;
+    const httpClient = {
+      get: async () => ({ status: 200, headers: {}, body: { value: [] } }),
+      post: async (url, body) => {
+        calls.push({ url: String(url), body });
+        n += 1;
+        return { status: 204, headers: { 'odata-entityid': `https://x/workflows(5555555${n}-5555-5555-5555-555555555555)` }, body: {} };
+      },
+      patch: async (url, body) => { calls.push({ url: String(url), body }); return { status: 204, headers: {}, body: {} }; },
+      put: async () => ({ status: 204, headers: {}, body: {} }),
+      delete: async () => ({ status: 204, headers: {}, body: {} }),
+    };
+    const open = async (bundle) => {
+      const sdk = bundle.createMakerSdk({ workspaceStorage: bundle.createNodeWorkspaceStorage(dir), instanceUrl: 'https://contoso.crm.dynamics.com', httpClient });
+      await sdk.initWorkspace();
+      return sdk;
+    };
+    const author = async (sdk, rule) => {
+      const def = businessRuleDef(rule);
+      const art = await sdk.createArtifact('businessRule', def);
+      await sdk.updateElement('businessRule', art.id, '/rootCondition', def.rootCondition);
+      return sdk.pushArtifact('businessRule', art.id);
+    };
+    const first = await author(await open(creatorBundle), RULE);
+    assert.strictEqual(first.saved, true);
+    calls.length = 0;
+    const next = await author(await open(require(BUNDLE)), { ...RULE, name: 'Hide notes when closed' });
+    return { saved: next.saved, wire: calls.map((c) => ({ url: c.url, body: c.body })) };
+  };
+  const upgrade = await run(requirePrevious());
+  const control = await run(require(BUNDLE));
+  assert.strictEqual(upgrade.saved, true);
+  // The first rule was answered the id 55555551-…: nothing this release sends names it.
+  assert.ok(upgrade.wire.every((w) => !w.url.includes('55555551-')), JSON.stringify(upgrade.wire.map((w) => w.url)));
+  assert.match(upgrade.wire[0].url, /CreateProcessWithWfomJson/i);
+  // The WfomJson carries ids the SDK mints at random; the rest is compared as it is.
+  const norm = (wire) => JSON.stringify(wire).replace(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi, '<id>');
+  assert.strictEqual(norm(upgrade.wire), norm(control.wire), 'the same request as on a workspace this release wrote');
+});
+
 test('REAL BUNDLE: a valueless operator emits a unary condition with the IsNull/NotNull opcode', async () => {
   // A presence operator has nothing to compare against, so the SDK must emit NO right-hand operand
   // and the dedicated opcode — not `Equals` against an empty string, which is a different question
