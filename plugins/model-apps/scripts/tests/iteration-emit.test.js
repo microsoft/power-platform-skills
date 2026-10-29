@@ -330,10 +330,11 @@ test('Critical Rule 24 names the forms, the conversion and the section, after Ru
 // ── The upgrade: pages an earlier release compiled without iterator support ─────────────────────────────────────────────────────
 
 // A page uploaded by model-apps 2.20.4 or earlier holds the legacy emit: that bundle stored exactly what the legacy options emit for a
-// page that reads no table (the sentinel this file held then). The SDK compiles only a push that changes the source, so the first run of
-// this release over such a page must neither rewrite nor republish it as "changed" for its new emit, nor report its published copy as
-// different from the record a build kept of it: the page keeps the bytes it was published with until its source next changes.
-test('a page stored with the legacy emit keeps it on an unchanged update, a rename and a published-copy check, and takes the iterator emit only when its source changes', async () => {
+// page that reads no table (the sentinel this file held then). The SDK keeps a page's stored compiled output only when its source AND its data
+// sources are unchanged and that output can be kept, so the first run of this release over such a page must neither rewrite nor republish it as
+// "changed" for its new emit, nor report its published copy as different from the record a build kept of it: the page keeps the bytes it was
+// published with until its source or its data sources change — and then it is compiled again, with iterator support.
+test('a page stored with the legacy emit keeps it on an unchanged update, a rename and a published-copy check, and takes the iterator emit when its source changes', async () => {
   const { makeGenpageSdk } = require('../lib/genpage-sdk.js');
   const { sha256 } = require('../lib/hash.js');
   const { FakeGenPageServer, INSTANCE } = require('./helpers/fake-genpage-server.js');
@@ -369,6 +370,31 @@ test('a page stored with the legacy emit keeps it on an unchanged update, a rena
     assert.equal(changed.publish.kind, 'verified');
     assert.match(server.rowText(pageId, 'src/pages/page.compiled'), /__spreadArray\(\[\], __read\(m\.keys\(\)\), false\)/, 'a changed source is compiled with iterator support');
     assert.notEqual(changed.runtimeSha256, recorded);
+  } finally {
+    await genpage.dispose();
+  }
+});
+
+test('a page stored with the legacy emit is compiled again when only its data sources change — the same source then reads the values the legacy emit lost', async () => {
+  const { makeGenpageSdk } = require('../lib/genpage-sdk.js');
+  const { sha256 } = require('../lib/hash.js');
+  const { FakeGenPageServer, INSTANCE, ACCOUNT_TABLE } = require('./helpers/fake-genpage-server.js');
+  const source = "import * as React from 'react';\nconst m = new Map<string, number>([['a', 1]]);\nexport default function Page() { return <div>{[...m.keys()].length}</div>; }\n";
+  const legacy = compile(source, 'legacy').outputText;
+  const pageId = '5e1f0000-0000-4000-8000-000000000002';
+  const server = new FakeGenPageServer();
+  server.serveTable(ACCOUNT_TABLE);
+  server.seedPage(pageId, { name: 'Upgraded', source, compiled: legacy });
+  server.otherWorkspacePublishes(pageId);
+  const genpage = makeGenpageSdk(INSTANCE, { httpClient: server.http() });
+  try {
+    const out = await genpage.update(pageId, { source, name: 'Upgraded', dataSources: ['account'], prompt: 'p', agentMessage: 'a', runtimeEvidence: true });
+    assert.equal(out.unchanged, undefined, 'a data source was added: the page changed');
+    assert.equal(out.publish.kind, 'verified');
+    assert.equal(server.rowText(pageId, 'src/pages/page.tsx'), source, 'the source is the same bytes');
+    const compiled = server.rowText(pageId, 'src/pages/page.compiled');
+    assert.match(compiled, /__spreadArray\(\[\], __read\(m\.keys\(\)\), false\)/, 'compiled again, with iterator support');
+    assert.notEqual(out.runtimeSha256, sha256(legacy));
   } finally {
     await genpage.dispose();
   }

@@ -4336,8 +4336,9 @@ with (5.8; another is refused with `GENPAGE_COMPILER_VERSION`), so a page is sto
 portal's page compiler source does: a spread, a `for...of` loop or an array destructure of a Map, Set, iterator or string reads it as
 modern JavaScript does. A tool that compiles the page again without it (an older portal, `pac`) reads them by length and index and
 loses their values, so `references/rules.md` Critical Rule 24 keeps `Array.from`; `iteration-emit.test.js` runs both emits and pins the
-one the bundle stores. A push that does not change a page's source keeps its stored compiled output, so a page uploaded by an earlier
-release keeps the old emit until its source next changes. That compile is a
+one the bundle stores. A push keeps a page's usable stored compiled output only when its source AND its data sources are unchanged; any
+other push compiles again, so a page uploaded by an earlier release keeps the old emit until its source or its data sources change, and
+that compile then reads the iterable values the old emit lost. That compile is a
 transpile, not a type check: a page with type errors, or a reference to a column its table does not have, compiles and deploys, and only
 a page that does not parse, has no default export or imports a value `RuntimeTypes` does not hold is refused
 (`genpage-sdk-real-bundle.test.js` runs it against the real bundle). The page-builder's Step 2.6 says so, and
