@@ -402,7 +402,7 @@ test('getAuthToken reuses a non-empty token per normalized resource URL', () => 
 test('peekAuthToken answers only what the memo holds, and never starts the Azure CLI', () => {
   const { getAuthToken, peekAuthToken } = require('../lib/dataverse-auth.js');
   // A host no other test in this process reads, so the memo cannot already hold it.
-  const env = 'https://peekprobe.crm.dynamics.com';
+  const env = 'https://contoso-peekprobe.crm.dynamics.com';
   const oldPath = process.env.PATH;
   process.env.PATH = ''; // an Azure CLI start here would fail the read, not succeed silently
   try {
