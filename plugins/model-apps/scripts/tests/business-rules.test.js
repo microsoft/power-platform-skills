@@ -1294,9 +1294,14 @@ test('a failed solution add on the reuse path WARNS — it never fails an otherw
 // and nothing in it names the gate. The FIRST create of a build answering exactly this is read as "not available here"; the same answer
 // after a rule of this build was created, or any other failure, is not.
 const MEMBER_URL = 'https://contoso.crm.dynamics.com/api/data/v9.0/workflows(00000000-0000-0000-0000-000000000000)/Microsoft.Dynamics.CRM.CreateProcessWithWfomJson';
-function memberRefusal({ status = 400, code = '0x80040216', url = MEMBER_URL, message = 'An unexpected error occurred.' } = {}) {
+const { HTTP_SEND_HISTORY } = require('../lib/sdk-http-client.js');
+// `history` is what the plugin's HTTP client says of the sends that led to the answer (lib/sdk-http-client.js): the one send of a first attempt by default;
+// null is an answer from a transport that says nothing.
+function memberRefusal({ status = 400, code = '0x80040216', url = MEMBER_URL, message = 'An unexpected error occurred.', history = { sends: 1, earlierAmbiguous: false } } = {}) {
+  const body = { error: { code, message } };
+  if (history) Object.defineProperty(body, HTTP_SEND_HISTORY, { value: history, enumerable: false });
   return Object.assign(new Error(`HTTP ${status} from ${url}: ${message}`),
-    { code: 'CONNECTION_ERROR', statusCode: status, url, cause: { error: { code, message } } });
+    { code: 'CONNECTION_ERROR', statusCode: status, url, cause: body });
 }
 
 // `answers[i]` is what the i-th push does: an Error is thrown, `'ok'` saves, anything else is returned as the push result.
@@ -1369,17 +1374,19 @@ test('REAL BUNDLE: the refusal the bundle throws for HTTP 400 0x80040216 skips t
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'br-gate-'));
   dirs.push(dir);
   const memberPosts = [];
-  const httpClient = {
-    get: async () => ({ status: 200, headers: {}, body: { value: [] } }),
-    post: async (url) => {
-      if (!/CreateProcessWithWfomJson/.test(String(url))) return { status: 200, headers: {}, body: {} };
-      memberPosts.push(String(url));
-      return { status: 400, headers: {}, body: { error: { code: '0x80040216', message: 'An unexpected error occurred.' } } };
+  // The plugin's own HTTP client over a fake transport: it is the one that tells the SDK's error what the sends before the answer were.
+  const { createAzHttpClient } = require('../lib/sdk-http-client.js');
+  const httpClient = createAzHttpClient('https://contoso.crm.dynamics.com', {
+    getToken: () => 'TOK',
+    sleep: async () => {},
+    request: async ({ method, url }) => {
+      if (method === 'POST' && /CreateProcessWithWfomJson/.test(String(url))) {
+        memberPosts.push(String(url));
+        return { statusCode: 400, headers: {}, body: JSON.stringify({ error: { code: '0x80040216', message: 'An unexpected error occurred.' } }) };
+      }
+      return { statusCode: method === 'GET' ? 200 : 204, headers: {}, body: JSON.stringify({ value: [] }) };
     },
-    patch: async () => ({ status: 204, headers: {}, body: {} }),
-    put: async () => ({ status: 204, headers: {}, body: {} }),
-    delete: async () => ({ status: 204, headers: {}, body: {} }),
-  };
+  });
   const real = createMakerSdk({ workspaceStorage: createNodeWorkspaceStorage(dir), instanceUrl: 'https://contoso.crm.dynamics.com', httpClient });
   await real.initWorkspace();
   const { sdk } = require('./helpers/mock-sdk.js').makeSimpleMockSdk();
@@ -1449,4 +1456,157 @@ test('a rule that already exists is reused, not counted as a create: a refusal o
   assert.strictEqual(res.ok, true);
   assert.strictEqual(res.created.businessRules['new_ticket|Rule A'], 'existing-a');
   assert.deepStrictEqual(res.skipped.businessRules, ['new_ticket|Rule B', 'new_ticket|Rule C']);
+});
+
+// --- a refusal is the gate only when it is the definitive answer to the first send of the create ------------------------------------
+//
+// The first member create answers 503 from a gateway that may sit in front of a create that ran; the plugin's HTTP client sends it again; the second answer
+// is the 400. That 400 says nothing of the first send, so "rules are switched off here" would hide a rule that may exist and say none was created.
+// The history of the sends comes from the plugin's own HTTP client (lib/sdk-http-client.js), and is checked WITHOUT relying on anything else sending the create once.
+const LATER_PHASES = ['business-rules', 'dashboards', 'app-shell'];
+async function buildThroughAdapter(answerMember, spec = threeRules()) {
+  const { createMakerSdk, createNodeWorkspaceStorage } = require(BUNDLE);
+  const { createAzHttpClient } = require('../lib/sdk-http-client.js');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'br-hist-'));
+  dirs.push(dir);
+  const memberPosts = [];
+  const httpClient = createAzHttpClient('https://contoso.crm.dynamics.com', {
+    getToken: () => 'TOK',
+    sleep: async () => {},
+    request: async ({ method, url }) => {
+      if (method === 'POST' && /\/Microsoft\.Dynamics\.CRM\.CreateProcessWithWfomJson$/.test(String(url))) {
+        memberPosts.push(String(url));
+        return answerMember(memberPosts.length);
+      }
+      return { statusCode: method === 'GET' ? 200 : 204, headers: {}, body: JSON.stringify({ value: [] }) };
+    },
+  });
+  const real = createMakerSdk({ workspaceStorage: createNodeWorkspaceStorage(dir), instanceUrl: 'https://contoso.crm.dynamics.com', httpClient });
+  await real.initWorkspace();
+  const { sdk } = require('./helpers/mock-sdk.js').makeSimpleMockSdk();
+  // The mock SDK serves every other phase; the rows already there and the create, update and push of a rule are the ones under test.
+  const initialQuery = sdk.queryRecords;
+  const provision = { ...sdk, queryRecords: async (entity, opts) => (entity === 'workflow' ? [] : initialQuery(entity, opts)) };
+  for (const method of ['createArtifact', 'updateElement', 'pushArtifact']) {
+    const original = provision[method];
+    provision[method] = (...args) => (args[0] === 'businessRule' ? real[method](...args) : original(...args));
+  }
+  const warnings = [];
+  const events = [];
+  const outcome = await runBuild({ ...spec, dashboards: [{ name: 'Later dashboard', tiles: [] }] }, {
+    sdk, provisionSdk: provision, apply: true, phases: LATER_PHASES, warn: (m) => warnings.push(m), emit: (e) => events.push(e),
+  }).then((res) => ({ res }), (err) => ({ err }));
+  const phasesRun = [...new Set(events.filter((e) => e.status === 'ok').map((e) => e.phase))];
+  return { ...outcome, memberPosts, warnings, events, phasesRun };
+}
+const REFUSED_ANSWER = { statusCode: 400, headers: {}, body: JSON.stringify({ error: { code: '0x80040216', message: 'An unexpected error occurred.' } }) };
+const GATEWAY_ANSWER = { statusCode: 503, headers: {}, body: JSON.stringify({ error: { code: 'upstream', message: 'Gateway failed after dispatch' } }) };
+
+test('REAL BUNDLE + plugin HTTP client: a definitive refusal of the first send skips the rules and the later phases run', async () => {
+  const r = await buildThroughAdapter(() => REFUSED_ANSWER);
+  assert.ok(r.res, `the build completes; got ${r.err && r.err.message}`);
+  assert.strictEqual(r.memberPosts.length, 1);
+  assert.strictEqual(r.res.skipped.businessRules.length, 3);
+  assert.strictEqual(r.warnings.filter((w) => /business rules were NOT created/.test(w)).length, 1);
+  assert.ok(r.phasesRun.includes('dashboards') && r.phasesRun.includes('app-shell'), `the phases after business-rules run; got ${JSON.stringify(r.phasesRun)}`);
+});
+
+test('REAL BUNDLE + plugin HTTP client: a 503 sent again and then refused is NOT the gate — the build halts and nothing is called a limit', async () => {
+  const r = await buildThroughAdapter((n) => (n === 1 ? GATEWAY_ANSWER : REFUSED_ANSWER));
+  assert.ok(r.err, 'the build halts, as it did before the gate existed');
+  assert.match(r.err.message, /business-rules failed/);
+  assert.strictEqual(r.memberPosts.length, 2, 'the client sent it twice: the first send may have run');
+  assert.strictEqual(r.warnings.some((w) => /NOT created|platform limit/.test(w)), false, 'no claim that nothing was created');
+  assert.strictEqual(r.events.some((e) => e.phase === 'business-rules' && e.status === 'skip'), false);
+  assert.deepStrictEqual(r.phasesRun.filter((p) => p !== 'business-rules'), [], 'no later phase runs');
+});
+
+test('REAL BUNDLE + plugin HTTP client: a send that got no answer, sent again and then refused, is NOT the gate either', async () => {
+  const r = await buildThroughAdapter((n) => (n === 1 ? { error: 'socket hang up', code: 'ECONNRESET' } : REFUSED_ANSWER));
+  assert.ok(r.err);
+  assert.strictEqual(r.warnings.some((w) => /NOT created/.test(w)), false);
+});
+
+test('an unknown or partial outcome anywhere in the chain wins over a refusal inside it: thrown and by-value, and it still says it is unknown', async () => {
+  const { sdk } = require('./helpers/mock-sdk.js').makeSimpleMockSdk();
+  const wrappers = [
+    ['an outcome flag', () => Object.assign(new Error('The create outcome is unknown; do not assume nothing was written.'), { code: 'create-outcome-unknown', transient: false, outcome: 'unknown', cause: memberRefusal() })],
+    ['an outcome flag alone', () => Object.assign(new Error('not sure what the create did'), { outcome: 'unknown', cause: memberRefusal() })],
+    ['a code naming an unknown outcome', () => Object.assign(new Error('the row MAY have been written'), { code: 'UPSERT_OUTCOME_UNKNOWN', cause: memberRefusal() })],
+    ['an earlier gateway answer in the chain', () => Object.assign(new Error('gateway'), { code: 'CONNECTION_ERROR', statusCode: 503, cause: memberRefusal() })],
+    ['a send that got no answer in the chain', () => Object.assign(new Error('Request failed'), { code: 'CONNECTION_ERROR', statusCode: 0, cause: memberRefusal() })],
+  ];
+  for (const [what, make] of wrappers) {
+    for (const byValue of [false, true]) {
+      const { provision } = provisionPushing([byValue
+        ? { type: 'businessRule', id: 'br-new', saved: false, shipped: false, publish: { kind: 'notRequested' }, error: make() }
+        : make()]);
+      const warnings = [];
+      const events = [];
+      const err = await runBuild(threeRules(), {
+        sdk, provisionSdk: provision, apply: true, phases: ['business-rules'], warn: (m) => warnings.push(m), emit: (e) => events.push(e),
+      }).then(() => null, (e) => e);
+      assert.ok(err, `${what}${byValue ? ' (by value)' : ''} must halt`);
+      assert.strictEqual(warnings.length, 0, `${what}: no environment warning`);
+      assert.strictEqual(events.some((e) => e.status === 'skip'), false, `${what}: no skip`);
+    }
+  }
+  const { provision } = provisionPushing([wrappers[0][1]()]);
+  const err = await runBuild(ruleOnlySpec(), { sdk, provisionSdk: provision, apply: true, phases: ['business-rules'], warn: () => {} }).then(() => null, (e) => e);
+  assert.match(err.message, /outcome is unknown/, 'the halt keeps the words that say the outcome is unknown');
+});
+
+test('a plain wrapper around the confirmed refusal — nothing that says unknown — still skips', async () => {
+  // requireSuccessfulPush's BuildHalt is the by-value case above; a plain Error around the SDK's error is the same kind of wrapper.
+  const { sdk } = require('./helpers/mock-sdk.js').makeSimpleMockSdk();
+  const { provision } = provisionPushing([Object.assign(new Error('push business rule Rule A failed'), { cause: memberRefusal() })]);
+  const res = await runBuild(ruleOnlySpec(), { sdk, provisionSdk: provision, apply: true, phases: ['business-rules'], warn: () => {} });
+  assert.strictEqual(res.skipped.businessRules.length, 1);
+});
+
+test('a refusal from a transport that reports no send history is not confirmed, so it halts', async () => {
+  const { sdk } = require('./helpers/mock-sdk.js').makeSimpleMockSdk();
+  const { provision } = provisionPushing([memberRefusal({ history: null })]);
+  await assert.rejects(() => runBuild(ruleOnlySpec(), { sdk, provisionSdk: provision, apply: true, phases: ['business-rules'], warn: () => {} }));
+});
+
+test('a refusal whose earlier send was ambiguous halts even when it is the only send of its own call', async () => {
+  // The SDK can call a request again itself: the history then comes from the client's ledger, not from this call's loop.
+  const { sdk } = require('./helpers/mock-sdk.js').makeSimpleMockSdk();
+  const { provision } = provisionPushing([memberRefusal({ history: { sends: 1, earlierAmbiguous: true } })]);
+  await assert.rejects(() => runBuild(ruleOnlySpec(), { sdk, provisionSdk: provision, apply: true, phases: ['business-rules'], warn: () => {} }));
+});
+
+test('only the member itself is the gate: a failed read whose URL merely QUOTES the member is not', async () => {
+  // A rule named like the member puts the member's name into the query of the read before its create. Judged by the request, that read is not the create.
+  const { sdk } = require('./helpers/mock-sdk.js').makeSimpleMockSdk();
+  const quoted = `https://contoso.crm.dynamics.com/api/data/v9.0/workflows?$filter=name%20eq%20'Microsoft.Dynamics.CRM.CreateProcessWithWfomJson'`;
+  const lookalikes = [
+    quoted,
+    `${MEMBER_URL}2`,
+    'https://contoso.crm.dynamics.com/api/data/v9.0/workflows(00000000-0000-0000-0000-000000000000)/Xmicrosoft.Dynamics.CRM.CreateProcessWithWfomJson',
+    'https://contoso.crm.dynamics.com/api/data/v9.0/workflows(00000000-0000-0000-0000-000000000000)/Microsoft.Dynamics.CRM.UpdateProcessWithWfomJson?x=CreateProcessWithWfomJson',
+  ];
+  for (const url of lookalikes) {
+    const { provision } = provisionPushing([memberRefusal({ url })]);
+    const warnings = [];
+    await assert.rejects(
+      () => runBuild(ruleOnlySpec(), { sdk, provisionSdk: provision, apply: true, phases: ['business-rules'], warn: (m) => warnings.push(m) }),
+      `${url} is not the member`);
+    assert.strictEqual(warnings.length, 0);
+  }
+  // The same refusal raised by the read before the create (the one that really carries the quoted name) halts as well.
+  const { provision } = provisionPushing(['ok']);
+  const queryRecords = provision.queryRecords;
+  let reads = 0;
+  provision.queryRecords = async (entity, opts) => {
+    if (entity === 'workflow') { reads += 1; if (reads === 2) throw memberRefusal({ url: quoted }); }
+    return queryRecords(entity, opts);
+  };
+  const spec = ruleOnlySpec();
+  spec.businessRules[0].name = 'Microsoft.Dynamics.CRM.CreateProcessWithWfomJson';
+  const warnings = [];
+  const err = await runBuild(spec, { sdk, provisionSdk: provision, apply: true, phases: ['business-rules'], warn: (m) => warnings.push(m) }).then(() => null, (e) => e);
+  assert.ok(err, 'a failed read is not a refused create');
+  assert.strictEqual(warnings.length, 0);
 });

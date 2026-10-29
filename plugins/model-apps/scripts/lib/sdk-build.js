@@ -153,6 +153,7 @@ const { isAppTextMap, appTextKind, localizedAppText } = require('./app-header-te
 // raises itself is made by refusal() (deterministic) or serviceFailure() (the plugin's words around a failure of the service), because the build's retry reads a failure's STRUCTURE and the
 // service's words, never a message that quotes what the maker named. tests/halt-retry-policy.test.js enumerates the halts in this file and holds each to a table.
 const { RETRY, isTransientStatus, judgeFailure, retryPolicyFor, retryFrom, refusal, serviceFailure, withCause } = require('./retry-policy.js');
+const { HTTP_SEND_HISTORY } = require('./sdk-http-client.js');
 
 // Re-export from entity-provision so the export surface stays unchanged
 const BuildHalt = _BuildHalt;
@@ -374,27 +375,48 @@ const BUSINESS_RULE_MEMBER = 'Microsoft.Dynamics.CRM.CreateProcessWithWfomJson';
 //   POST <env>/api/data/v9.0/workflows(00000000-0000-0000-0000-000000000000)/Microsoft.Dynamics.CRM.CreateProcessWithWfomJson
 //   HTTP 400  {"error":{"code":"0x80040216","message":"An unexpected error occurred."}}
 // The code is generic (0x80040216 is the platform's "unexpected error"), so it is read together with the status AND the member that was
-// asked, and only for the FIRST create of a build (see businessRuleSwitchedOff). Measured on every production-geo environment tried.
+// asked, and only for the FIRST create of a build (see isConfirmedBusinessRuleRefusal). Measured on every production-geo environment tried.
 const BUSINESS_RULE_SWITCHED_OFF_CODE = '0x80040216';
 
-// True when `err` — or anything it was made from — is the HTTP 400 answer above to a call of the business-rule member. The SDK throws it as
+// True when `err` is the DEFINITIVE answer to the first send of a business-rule create that the platform answers when the member is switched off — the HTTP 400 above to
+// a call of the business-rule member — and nothing in it or behind it leaves the create's outcome open. The SDK throws the answer as
 //   Error 'HTTP 400 from <url>: An unexpected error occurred.'  { code: 'CONNECTION_ERROR', statusCode: 400, url, cause: <the response body> }
-// and, where a push reports it by value, `requireSuccessfulPush` wraps it in a BuildHalt whose `cause` is that error — so the chain is walked
-// rather than only the top. The words of the message are never read: the platform answers in the caller's language, the code does not change.
-function isBusinessRuleSwitchedOffAnswer(err) {
-  const seen = new Set();
-  for (let e = err, depth = 0; e && typeof e === 'object' && depth < 6 && !seen.has(e); e = e.cause, depth += 1) {
-    seen.add(e);
+// and, where a push reports it by value, `requireSuccessfulPush` wraps it in a BuildHalt whose `cause` is that error — so the chain is walked rather than only the top.
+// The words of the message are never read: the platform answers in the caller's language, the code does not change.
+//
+// A 400 is a refusal OF THE SEND THAT GOT IT, and says nothing of one before it. An earlier send of the same create that got no answer, or a gateway's 5xx, can have
+// created the rule; the plugin's HTTP client sends such a create again, and the SDK may call it again, and the 400 that finally comes would then read as "nothing was
+// created". So the answer is accepted only when
+//   - nothing in the chain says the outcome is unknown or partial (`outcome: 'unknown'`, a code naming an unknown outcome such as UPSERT_OUTCOME_UNKNOWN, the rule left
+//     deactivated) or is itself an answer that proves nothing (no answer, status 0; a 5xx; a success status the SDK could not use): that wins over a match further down.
+//     (`transient: false` alone is NOT such a mark: the halt requireSuccessfulPush makes around a refusal carries it, and that wrapper is transparent.) And
+//   - the plugin's HTTP client reports, on the answer's body, that no earlier send of this request was ambiguous (HTTP_SEND_HISTORY). A transport that reports nothing is
+//     not confirmed: it halts, as it did before this gate. This does not depend on the create being sent only once by anything else.
+// The member is told by the request, never by a substring of a URL: the build's own reads of the rule's name (workflows?$filter=name eq '…') can quote the member's name.
+function isConfirmedBusinessRuleRefusal(err) {
+  const chain = [];
+  for (let e = err; e && typeof e === 'object' && chain.length < 6 && !chain.includes(e); e = e.cause) chain.push(e);
+  for (const e of chain) {
     const status = e.statusCode != null ? e.statusCode : e.status;
-    if (status !== 400 || !String(e.url || '').includes(BUSINESS_RULE_MEMBER)) continue;
-    let body = e.cause;
-    if (typeof body === 'string') {
-      try { body = JSON.parse(body); } catch { body = null; }
-    }
-    const code = body && body.error && body.error.code;
-    if (typeof code === 'string' && code.toLowerCase() === BUSINESS_RULE_SWITCHED_OFF_CODE) return true;
+    if (e.outcome === 'unknown' || /outcome[-_ ]?unknown/i.test(String(e.code || '')) || e.code === 'BUSINESS_RULE_LEFT_DEACTIVATED') return false;
+    if (Number.isInteger(status) && (status === 0 || status >= 500 || (status >= 200 && status < 300))) return false;
   }
-  return false;
+  const answered = chain.find((e) => (e.statusCode != null ? e.statusCode : e.status) === 400 && isBusinessRuleMemberUrl(e.url));
+  const body = answered && answered.cause;
+  if (!body || typeof body !== 'object') return false;
+  const code = body.error && body.error.code;
+  if (typeof code !== 'string' || code.toLowerCase() !== BUSINESS_RULE_SWITCHED_OFF_CODE) return false;
+  const history = body[HTTP_SEND_HISTORY];
+  return Boolean(history) && history.earlierAmbiguous === false;
+}
+
+// Whether a request URL is a call of the business-rule member: a path that ends with it. The create is a POST of
+//   <env>/api/data/v9.0/workflows(00000000-0000-0000-0000-000000000000)/Microsoft.Dynamics.CRM.CreateProcessWithWfomJson
+// and nothing else the build sends ends so; a query string that quotes the name (…/workflows?$filter=name eq 'Microsoft.Dynamics.CRM.CreateProcessWithWfomJson') is not it.
+function isBusinessRuleMemberUrl(url) {
+  let pathname;
+  try { pathname = new URL(String(url), 'https://placeholder.invalid').pathname; } catch { return false; }
+  return pathname.endsWith(`/${BUSINESS_RULE_MEMBER}`);
 }
 
 // The per-app setting name that turns on the modern ("new look") shell. Verified live against a real
@@ -5941,7 +5963,7 @@ async function runSdkBuildPhases(spec, opts, owed) {
     // and N copies of the same paragraph buries the rest of the build output.
     let businessRuleApiWarned = false;
     // The two ways a rule is refused "for this environment", and what they allow. `created` counts the rules THIS build created: the
-    // switched-off answer (isBusinessRuleSwitchedOffAnswer) is read as "this environment does not host rules" only while it is the
+    // switched-off answer (isConfirmedBusinessRuleRefusal) is read as "this environment does not host rules" only while it is the
     // answer to the first create. After a rule was created the environment plainly hosts them, and the same answer is a failure to halt on.
     // A rule that already existed is not a create — it proves nothing about what the member does now.
     let businessRulesCreated = 0;
@@ -6116,8 +6138,8 @@ async function runSdkBuildPhases(spec, opts, owed) {
           let reason = businessRuleApiUnavailable(err);
           let notCreated = `this environment does not expose the '${BUSINESS_RULE_MEMBER}' member that the modern business-rule designer uses, so there is no supported way to author them here.`;
           let remedy = 'Re-run against an environment that exposes the member, or drop businessRules[] from the spec.';
-          if (!reason && businessRulesCreated === 0 && isBusinessRuleSwitchedOffAnswer(err) && !errorCodeChain(err).includes('BUSINESS_RULE_LEFT_DEACTIVATED')) {
-            // The member is declared but switched off. `BUSINESS_RULE_LEFT_DEACTIVATED` is excluded as above, for the same reason.
+          if (!reason && businessRulesCreated === 0 && isConfirmedBusinessRuleRefusal(err)) {
+            // The member is declared but switched off, and the refusal is the definitive answer to the first send of the create.
             reason = 'unsupported in this environment';
             businessRulesSwitchedOff = true;
             notCreated = `this environment answered HTTP 400 ${BUSINESS_RULE_SWITCHED_OFF_CODE} ("An unexpected error occurred") to the '${BUSINESS_RULE_MEMBER}' member, which means business-rule creation is not available on it. That is a platform limit, commonly on production environments, not a fault in the rule; the first rule was refused and the remaining rules were not sent.`;

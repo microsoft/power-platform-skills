@@ -630,8 +630,11 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   bound `CreateProcessWithWfomJson` member answers `BUSINESS_RULE_API_UNAVAILABLE`. A **production environment** — the common case — declares the member but has it switched off, and
   answers the FIRST create with HTTP 400 `0x80040216` ("An unexpected error occurred.") whatever the rule says; nothing is created. Both are the same skip: one warning naming the code, the
   rules recorded in `result.skipped.businessRules` (which `--verify` reads as *not applicable on this environment*), the rest of the build running. The 400 is read as the gate only when the
-  call is to that member (`isBusinessRuleSwitchedOffAnswer`, by status, member URL and code — never by words) AND no rule of this build was created before it; the same 400 after a
-  rule was created, or any other code or status, still halts. The remaining rules are then not sent. A rule that already exists is reused and does not count as a create.
+  call is to that member (`isConfirmedBusinessRuleRefusal`: the request's path, status and code — never the words or a substring of a URL) AND no rule of this build was created before it AND it is the
+  **definitive answer to the first send** of the create. A 400 says nothing of an earlier send that got no answer or a gateway's 5xx (the plugin's HTTP client sends such a create again, and the SDK can call it
+  again): `sdk-http-client.js` marks a failure's body with the history of the sends (`HTTP_SEND_HISTORY`: `{ sends, earlierAmbiguous }`, a per-request ledger kept for the client's life), the gate needs
+  `earlierAmbiguous: false`, and an unknown or partial outcome anywhere in the error chain (`outcome: 'unknown'`, a `…outcome-unknown` code, a status 0, 5xx or 2xx link) wins over a match.
+  A transport that reports no history is not confirmed. The same 400 after a rule was created, an ambiguous attempt, or any other code or status, still halts. The remaining rules are then not sent. A rule that already exists is reused and does not count as a create.
   Off-sitemap ids require a local CREATE receipt for this app/key/id plus an exact decoded stored-name
   match, including when the spec and remote manifest agree. Otherwise `unproven-manifest-id` causes
   `pages-identity-conflict`, never a replacement CREATE. Names corroborate identity, never establish it.
