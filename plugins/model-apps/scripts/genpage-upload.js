@@ -65,6 +65,7 @@ const { commandArgOrPlaceholder } = require('./lib/cli-failure.js');
 const genpageBase = require('./lib/genpage-base.js');
 const { writeFileSafe } = require('./lib/safe-fs.js');
 const { makeWritesBlocking } = require('./lib/output-redaction.js');
+const { emitSkillCompleted } = require('./lib/telemetry/skill-completed.js');
 
 const KNOWN = ['env', 'app-id', 'code-file', 'compiled-code-file', 'page-id', 'name', 'name-file',
   'data-sources', 'clear-data-sources', 'prompt', 'prompt-file', 'agent-message', 'agent-message-file',
@@ -256,6 +257,7 @@ function completionMarker(flags, base) {
 }
 
 async function main(argv = process.argv.slice(2), deps = {}) {
+  const startedAt = Date.now();
   const emit = deps.emit || emitResult;
   const readFile = deps.readFile || fs.readFileSync;
   const makeBackend = deps.makeGenpageSdk || makeGenpageSdk;
@@ -415,18 +417,49 @@ async function main(argv = process.argv.slice(2), deps = {}) {
   // the page's source in the temp directory says so.
   let outcome;
   let leftOnDisk = null;
+  // skill_completed telemetry covers an upload that was ATTEMPTED — from here on — not a refusal of the command line or its files above.
+  const report = deps.reportCompletion || emitSkillCompleted;
   try {
     outcome = await deploy({
       flags, genpage, base, completing, checkedText, styleProblems, griffelWords, stylesRefusal,
       prompt, agentMessage, pageName, bindings, clearDataSources, overwriteDeployed, addToSitemap,
     });
+  } catch (e) {
+    await reportUpload(report, flags, startedAt, { error: e });
+    throw e;
   } finally {
     try { leftOnDisk = leftOnDiskWarning(await genpage.dispose()); } catch { /* the backend's own folder; nothing to say when it cannot even answer */ }
     // A deploy that threw has no result to carry it: that failure reaches the caller as it is, so the warning goes to stderr beside it.
     if (leftOnDisk && !outcome) process.stderr.write(`WARNING: ${leftOnDisk}\n`);
   }
   if (leftOnDisk) outcome.payload = { ...outcome.payload, warnings: [...(outcome.payload.warnings || []), leftOnDisk] };
+  await reportUpload(report, flags, startedAt, outcome);
   return emit(outcome.ok, outcome.payload);
+}
+
+// What an upload's result says, in the closed vocabulary of lib/telemetry/skill-completed.js — never a message, a name or an id.
+//   ok           → success; page created | updated | unchanged, placedInApp, addedToSolution
+//   code griffel-shorthand → invalid-input (the page was refused before anything was written)
+//   any other failed result → deploy-failed;   a throw → unexpected
+function uploadCompletion({ ok, payload, error } = {}) {
+  const eventInfo = { operation: 'page-upload' };
+  if (error) return { outcome: 'failure', errorClass: 'unexpected', eventInfo };
+  const p = payload || {};
+  if (ok) {
+    eventInfo.page = p.unchanged ? 'unchanged' : p.updated ? 'updated' : 'created';
+    eventInfo.placedInApp = p.addedToSitemap === true;
+    if (typeof p.addedToSolution === 'boolean') eventInfo.addedToSolution = p.addedToSolution;
+    return { outcome: 'success', eventInfo };
+  }
+  if (typeof p.addedToSolution === 'boolean') eventInfo.addedToSolution = p.addedToSolution;
+  return { outcome: 'failure', errorClass: p.code === 'griffel-shorthand' ? 'invalid-input' : 'deploy-failed', eventInfo };
+}
+
+async function reportUpload(report, flags, startedAt, result) {
+  try {
+    const { outcome, errorClass, eventInfo } = uploadCompletion(result);
+    await report({ skillName: 'genpage', outcome, errorClass, eventInfo, envUrl: flags.env, durationMs: Date.now() - startedAt });
+  } catch { /* telemetry never changes the upload's result */ }
 }
 
 // Everything after the flags and the files have been read and checked: an update's guards, the write, the base marker and the placement in an
@@ -760,4 +793,4 @@ if (require.main === module) {
     process.exit(1);
   });
 }
-module.exports = { main, resolveText, notPlainFile };
+module.exports = { main, resolveText, notPlainFile, uploadCompletion };
