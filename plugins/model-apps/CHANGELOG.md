@@ -24,7 +24,7 @@ The bundled SDK is updated (power-platform-ux 59ae2d72e2a8).
 ### Changed
 
 - **Eligible app rebuilds check the app's version before adding components** (one read, two more on a match, more when results
-  page); missing components then use one version-guarded change set. Publication is unchanged.
+  page); missing components then use one version-guarded change set; later publishes re-read the app.
 - **Adding a page to an app, or removing it, reads the app more**; it keeps its plain, limited component add, and `pinnedViews`
   lists only views the app holds afterwards.
 - **Every view update names its table**, as the maker portal does.
