@@ -20,6 +20,9 @@ const { needlesOf, noteToken, TOKEN_MARKER } = require('./output-redaction.js');
 // Symbol.for, so a module that reads it need not load this client, and the copy of this file in another plugin agrees with it.
 const HTTP_SEND_HISTORY = Symbol.for('power-platform-skills.http-send-history');
 
+// The most distinct ambiguous writes one client remembers (see `ambiguousSends`). A build sends a few hundred writes at most, so this is far above any real use; it
+// exists only so the ledger's memory has a hard bound, not to be reached.
+const MAX_AMBIGUOUS_SENDS = 1000;
 // How Dataverse reports that SQL Server chose a request's transaction as a deadlock VICTIM and rolled
 // it back. Two live captures, both HTTP 500 (a process-flow delete during a teardown, and PublishXml):
 //   HTTP 500 from …/api/data/v9.0/workflows(<id>):  Sql error: Generic SQL error. CRM ErrorCode: -2147204784 Sql ErrorCode: -2146232060 Sql Number: 1205
@@ -719,7 +722,21 @@ function createAzHttpClient(orgUrl, deps = {}) {
   // same request — a re-send of this client's loop, or the SDK's own re-call — says nothing about it. A failure delivered afterwards says so (HTTP_SEND_HISTORY),
   // so a caller that reads the later answer as a definitive refusal (the business-rule gate in lib/sdk-build.js) can tell it is not. Kept for the client's life and
   // never cleared: it only ever turns a caller's skip into the halt it always was.
+  // Bounded at MAX_AMBIGUOUS_SENDS keys, and never by forgetting one: forgetting an ambiguous send would let a later refusal of that request read as definitive, which
+  // is the false skip this ledger exists to prevent. Past the bound the client keeps no more keys and answers "an earlier send was ambiguous" for EVERY request from
+  // then on (`ambiguityOverflowed`, sticky) — the only consumer, the business-rule gate, then halts instead of skipping, which is the safe side.
   const ambiguousSends = new Set();
+  let ambiguityOverflowed = false;
+  const earlierSendAmbiguous = (sendKey) => ambiguityOverflowed || ambiguousSends.has(sendKey);
+  const rememberAmbiguousSend = (sendKey) => {
+    if (ambiguityOverflowed || ambiguousSends.has(sendKey)) return;
+    if (ambiguousSends.size >= MAX_AMBIGUOUS_SENDS) {
+      ambiguityOverflowed = true;
+      ambiguousSends.clear();
+      return;
+    }
+    ambiguousSends.add(sendKey);
+  };
   const isAmbiguousAnswer = (res) => Boolean(res.error) || res.statusCode >= 500 || (res.statusCode === 429 && !isServiceProtectionRefusal(res));
   const scrubText = (text) => [...tokensSent].reduce((out, sent) => scrub(out, sent), String(text));
   const scrubValue = (value) => [...tokensSent].reduce((out, sent) => scrubAnswer(out, sent), value);
@@ -873,8 +890,8 @@ function createAzHttpClient(orgUrl, deps = {}) {
       const res = await request({ url, method, headers, body: bodyOut, includeHeaders: true, timeout: isWrite ? WRITE_TIMEOUT_MS : READ_TIMEOUT_MS, ...(ctl.bytes ? { binary: true } : {}) });
       // Read before this answer is recorded: what matters to a caller is whether an EARLIER send was ambiguous.
       const sendKey = `${method_} ${url}`;
-      const history = { sends: attempt + 1, earlierAmbiguous: ambiguousSends.has(sendKey) };
-      if (isWrite && isAmbiguousAnswer(res)) ambiguousSends.add(sendKey);
+      const history = { sends: attempt + 1, earlierAmbiguous: earlierSendAmbiguous(sendKey) };
+      if (isWrite && isAmbiguousAnswer(res)) rememberAmbiguousSend(sendKey);
       if (res.error) {
         if (conditional) {
           throw transportError(res, `Request failed: ${scrubText(res.error)} — this conditional ${method_} was not re-sent, because it may still commit and a re-send could only be refused as a false version conflict`);
@@ -986,4 +1003,4 @@ function createAzHttpClient(orgUrl, deps = {}) {
   };
 }
 
-module.exports = { createAzHttpClient, HTTP_SEND_HISTORY, SQL_DEADLOCK_VICTIM, DEADLOCK_RESENDS, isSqlDeadlockVictim, isBatchDeadlockVictim, isBatchThrottled, completeBatchStatus, batchRetryAfterMs, isConditionalDeleteBatch, isColumnCreateBatch, isTransientTransportFailure, TRANSIENT_TRANSPORT_CODES, SERVICE_PROTECTION_CODES, isServiceProtectionRefusal, retryAfterMs, throttleBackoffMs, RETRY_AFTER_CAP_MS, scrub, scrubAnswer, scrubBearer, MIN_SCRUBBED_TOKEN_LENGTH };
+module.exports = { createAzHttpClient, HTTP_SEND_HISTORY, MAX_AMBIGUOUS_SENDS, SQL_DEADLOCK_VICTIM, DEADLOCK_RESENDS, isSqlDeadlockVictim, isBatchDeadlockVictim, isBatchThrottled, completeBatchStatus, batchRetryAfterMs, isConditionalDeleteBatch, isColumnCreateBatch, isTransientTransportFailure, TRANSIENT_TRANSPORT_CODES, SERVICE_PROTECTION_CODES, isServiceProtectionRefusal, retryAfterMs, throttleBackoffMs, RETRY_AFTER_CAP_MS, scrub, scrubAnswer, scrubBearer, MIN_SCRUBBED_TOKEN_LENGTH };

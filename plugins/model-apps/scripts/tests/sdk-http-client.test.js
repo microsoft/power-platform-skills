@@ -1972,3 +1972,48 @@ test('a success carries no history', async () => {
   const res = await http.post(MEMBER_POST, {});
   assert.deepStrictEqual(Object.getOwnPropertySymbols(res.body), []);
 });
+
+// The ledger is bounded, and never by forgetting: past the bound every later failure reports an ambiguous earlier send, so the business-rule gate halts instead of skipping.
+const { MAX_AMBIGUOUS_SENDS } = require('../lib/sdk-http-client.js');
+const ambiguousUrl = (i) => `https://org.crm.dynamics.com/api/data/v9.0/ambiguous${i}`;
+const overflowedClient = async () => {
+  const { http, calls } = clientOver((opts) => (opts.url.includes('/ambiguous') ? { statusCode: 503, headers: {}, body: '' } : REFUSED));
+  for (let i = 0; i <= MAX_AMBIGUOUS_SENDS; i++) await http.post(ambiguousUrl(i), {});
+  return { http, calls };
+};
+
+test('the ambiguity ledger holds a fixed number of keys: the bound is a positive integer and a client at it still answers every request', async () => {
+  assert.ok(Number.isInteger(MAX_AMBIGUOUS_SENDS) && MAX_AMBIGUOUS_SENDS > 0);
+  const { http } = clientOver((opts) => (opts.url.includes('/ambiguous') ? { statusCode: 503, headers: {}, body: '' } : REFUSED));
+  for (let i = 0; i < MAX_AMBIGUOUS_SENDS; i++) assert.strictEqual((await http.post(ambiguousUrl(i), {})).status, 503);
+  // Exactly at the bound nothing is lost yet: a key never seen is still not ambiguous.
+  assert.strictEqual((await http.post(MEMBER_POST, {})).body[HTTP_SEND_HISTORY].earlierAmbiguous, false);
+});
+
+test('past the bound a request never seen reports an earlier ambiguous send (sticky, fails safe)', async () => {
+  const { http } = await overflowedClient();
+  for (let i = 0; i < 2; i++) {
+    assert.deepStrictEqual((await http.post(MEMBER_POST, {})).body[HTTP_SEND_HISTORY], { sends: 1, earlierAmbiguous: true });
+  }
+});
+
+test('past the bound a request remembered before it stays ambiguous when it is later refused', async () => {
+  let refuseAll = false;
+  const { request } = fakeTransport((opts) => (refuseAll ? REFUSED : { statusCode: 503, headers: {}, body: '' }));
+  const http = createAzHttpClient('https://org.crm.dynamics.com', { getToken: () => 'TOK', request, sleep: async () => {} });
+  for (let i = 0; i <= MAX_AMBIGUOUS_SENDS; i++) await http.post(ambiguousUrl(i), {});
+  refuseAll = true;
+  assert.strictEqual((await http.post(ambiguousUrl(0), {})).body[HTTP_SEND_HISTORY].earlierAmbiguous, true);
+});
+
+test('healthy writes add nothing to the ledger, however many are sent', async () => {
+  const { http } = clientOver((opts) => (opts.url.includes('/healthy') ? { statusCode: 200, headers: {}, body: '{"ok":true}' } : REFUSED));
+  for (let i = 0; i <= MAX_AMBIGUOUS_SENDS + 5; i++) await http.post(`https://org.crm.dynamics.com/api/data/v9.0/healthy${i}`, {});
+  assert.strictEqual((await http.post(MEMBER_POST, {})).body[HTTP_SEND_HISTORY].earlierAmbiguous, false);
+});
+
+test('repeating one ambiguous request does not grow the ledger toward the bound', async () => {
+  const { http } = clientOver((opts) => (opts.url.includes('/ambiguous') ? { statusCode: 503, headers: {}, body: '' } : REFUSED));
+  for (let i = 0; i < MAX_AMBIGUOUS_SENDS + 5; i++) await http.post(ambiguousUrl(0), {});
+  assert.strictEqual((await http.post(MEMBER_POST, {})).body[HTTP_SEND_HISTORY].earlierAmbiguous, false);
+});
