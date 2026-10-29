@@ -78,7 +78,8 @@ function shape(value) {
 //   <importexportxml><entities><entity>contoso_task</entity><entity>contoso_project</entity></entities><appmodules><appmodule>{id}</appmodule></appmodules></importexportxml>
 //   -> importexportxml(appmodules(appmodule=#id) entities(entity=contoso_project entity=contoso_task))
 // so a publish that names one more table, one more kind of component (an option set, a site map) or one fewer is a difference. A
-// ParameterXml this reader cannot take apart (an attribute, a self-closing element) is kept as it was sent, masked: never dropped.
+// ParameterXml this reader cannot take apart (an attribute, a self-closing element, text outside the one document element or beside child
+// elements, a second root) is kept as it was sent, masked: never dropped, never mistaken for a valid envelope.
 // See https://learn.microsoft.com/power-apps/developer/data-platform/webapi/reference/publishxml
 function publishTargetsOf(parameterXml) {
   // A GUID (braced or not) is written #id here, not <id>, which would read as an element.
@@ -99,8 +100,13 @@ function publishTargetsOf(parameterXml) {
     }
   }
   if (stack.length !== 1 || xml.replace(token, '') !== '') return `raw:${xml}`;
+  // Only ONE element-only document is taken apart: exactly one root, no text outside it, and no element that holds both text and
+  // elements. Anything else — `undefined<importexportxml>…`, a trailing word, `<appmodules>unexpected<appmodule>…`, two roots — is
+  // kept raw, so it can never read as the valid envelope it resembles.
+  const mixed = (node) => (node.children.length > 0 && node.text !== undefined) || node.children.some(mixed);
+  if (root.text !== undefined || root.children.length !== 1 || mixed(root.children[0])) return `raw:${xml}`;
   const render = (node) => (node.children.length ? `${node.tag}(${node.children.map(render).sort().join(' ')})` : `${node.tag}=${node.text || ''}`);
-  return root.children.map(render).sort().join(' ');
+  return render(root.children[0]);
 }
 // One phase's golden text, and the shapes its lines refer to by hash (a hash, not a running number, so one new shape does not renumber
 // every later line of the diff).
@@ -278,6 +284,20 @@ for (const phase of PHASES) {
   });
 }
 
+// The wire regression a normalizer could hide, on this run's own recorded build: every publish's ParameterXml with text before its
+// envelope (`undefined<importexportxml>…`, what a string concatenated onto an unset value sends). The fake accepts such a body, so only the
+// trail can notice it: the build's trail must then differ from the golden, and the difference must name the publishes.
+test('lifecycle trail: a build whose publishes carry text outside their envelope does not match the golden', async () => {
+  const run = await lifecycle();
+  const step = run.steps.build;
+  if (step.error) throw step.error;
+  const prefixed = run.org.requests.map((r) => (r.path === '/PublishXml' ? { ...r, body: { ...r.body, ParameterXml: `undefined${r.body.ParameterXml}` } } : r));
+  const expected = fs.readFileSync(goldenFile('build'), 'utf8').replace(/\r\n/g, '\n');
+  assert.equal(trailOf(run.org, step), expected, 'the recorded build matches its golden');
+  const seen = trailOf({ requests: prefixed }, step);
+  assert.notEqual(seen, expected, 'publishes with text outside their envelope change the trail');
+  assert.match(describeDifference('build', expected, seen), /The publishes were:[\s\S]*and are now:[\s\S]*raw:undefined<importexportxml>/);
+});
 // The guard of the guard, over the real trail builder: one more read, one more member in one body, and a write moved to the other side
 // of a publish each change the golden and are named in the description — and the one thing that is tolerated, two requests of one
 // segment sent in the other order, does not — so the golden can never rot into a check that passes whatever is sent.
@@ -308,6 +328,16 @@ test('lifecycle trail (meta): one more read, one more body member and a write mo
   const broader = { ...appOnly, body: { ParameterXml: appOnly.body.ParameterXml.replace('</importexportxml>', '<optionsets><optionset>contoso_stage</optionset></optionsets></importexportxml>') } };
   assert.notEqual(trail([broader]), trail([appOnly]), 'a publish that names one more kind of component changes the trail');
   assert.match(describeDifference('build', trail([appOnly]), trail([broader])), /The publishes were:[\s\S]*and are now:[\s\S]*optionset=contoso_stage/);
+  // A publish whose ParameterXml is not ONE element-only document is kept raw, never normalized into a valid envelope's notation: text
+  // before or after the document element (`undefined<importexportxml>…`), text beside child elements, or a second root.
+  const valid = appOnly.body.ParameterXml;
+  const targets = publishTargetsOf(valid);
+  for (const bad of [`undefined${valid}`, `${valid}x`, valid.replace('<appmodules>', '<appmodules>unexpected'), `${valid}${valid}`]) {
+    const seen = publishTargetsOf(bad);
+    assert.notEqual(seen, targets, `kept apart from the valid envelope: ${bad}`);
+    assert.match(seen, /^raw:/, `kept raw: ${bad}`);
+  }
+  assert.equal(publishTargetsOf(` \n${valid}\n `), targets, 'whitespace around the document element is not content');
 });
 
 // UPDATE_GOLDENS must never be the way a CI run turns green: a run that regenerates in CI compares nothing and would pass whatever was
