@@ -202,6 +202,10 @@ test('a string spreads, loops and destructures by code point under iterator supp
 });
 
 test('a rest destructure of an array-like without slice throws under both profiles; a custom Symbol.matchAll that returns an array spreads fine under both', () => {
+  // `arguments` is an array-like that is ALSO iterable: with iterator support its rest destructure reads it through its iterator, as modern JavaScript does.
+  const iterableLike = 'function f(..._: any[]) { const [...rest] = arguments as any; return rest; }\nconst rest = f(1, 2);\n';
+  assert.deepEqual(run(iterableLike, ['rest']).values.rest, [1, 2]);
+  assert.equal(run(iterableLike, ['rest'], { profile: 'legacy' }).threw, 'TypeError', 'without it the emitted slice is called, which arguments does not have');
   for (const profile of ['iterator', 'legacy']) {
     assert.equal(run('const like: any = { length: 1, 0: "x" };\nconst [...rest] = like;\n', ['rest'], { profile }).threw, 'TypeError', profile);
     const source = `const matcher: any = { [Symbol.matchAll](text: string) { return [text.length]; } };

@@ -1165,7 +1165,7 @@ const ITERATION_RULE = [
   '`[...new Set(xs)]`, `[...m.values()]`, `[...seen.values()]`, `for (const [k, v] of m)`, `new Set([...prev, id])`, `[...selected]` and',
   '`[...text.matchAll(re)]`; copy a Set with `new Set(prev)` then `.add(id)`.',
   'Ordinary array spreads and loops remain valid. `Object.keys`, `Object.values` and `Object.entries` return arrays.',
-  'Rest destructuring of an array-like without `slice` throws under every compiler.',
+  'Rest destructuring of a non-iterable array-like without `slice` throws under every compiler.',
   'A destructuring default must not write to the array being destructured: `const [a = (values[1] = 3), b] = values` leaves `b` at its old',
   'value here, unlike modern JavaScript.',
   'See **Common Errors > 5. Iteration that another page compiler can lose** in `references/rules.md` for the pairs.',
