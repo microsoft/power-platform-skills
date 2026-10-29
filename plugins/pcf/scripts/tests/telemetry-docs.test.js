@@ -16,7 +16,7 @@ function telemetrySection(file) {
   return section[1];
 }
 
-test('PCF README discloses default-on shared-tenant telemetry and only approved base fields', () => {
+test('PCF README discloses default-on shared-tenant telemetry and only approved fields', () => {
   const section = telemetrySection('README.md');
   assert.match(section, /enabled.*default-on/i);
   assert.match(section, /no first-run prompt/i);
@@ -31,7 +31,12 @@ test('PCF README discloses default-on shared-tenant telemetry and only approved 
   ]) assert.ok(section.includes(field), `approved field missing from disclosure: ${field}`);
   assert.match(section, /PAC is signed in/i);
   assert.match(section, /no (?:signed-in )?user object (?:ID|identifier)/i);
-  assert.match(section, /no `?eventInfo`?/i);
+  // The push's completion event and its closed eventInfo (shared/telemetry/README.md "Model Apps and PCF").
+  for (const field of ['skill_completed', 'outcome', 'durationMs', 'errorClass', 'eventInfo', '"control-push"', 'incremental', 'registration', 'steps.push']) {
+    assert.ok(section.includes(field), `completion field missing from disclosure: ${field}`);
+  }
+  assert.match(section, /enums and booleans only/i);
+  assert.match(section, /environment pushed to/i);
   for (const forbidden of ['paths', 'prompts', 'tool inputs', 'Dataverse URLs', 'credentials', 'usernames', 'hostnames']) {
     assert.ok(section.includes(forbidden), `never-sent category missing: ${forbidden}`);
   }
@@ -85,6 +90,7 @@ test('the shared adopter table pins enabled PCF and its separable base-only shar
   assert.match(row, /base fields only/i);
   assert.match(row, /orgId.*tenantId.*PAC is signed in/i);
   assert.match(row, /no.*user object ID/i);
+  assert.match(row, /skill_completed.*control push.*outcome.*durationMs.*errorClass.*eventInfo/i);
 });
 
 test('Model Apps guidance keeps PCF shared-tenant key rotations synchronized', (t) => {

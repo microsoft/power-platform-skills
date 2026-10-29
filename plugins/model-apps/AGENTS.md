@@ -2924,7 +2924,7 @@ scripts/
     detect-browser.js          ← System Chromium/Edge/Chrome detection (used by the launcher)
     modelapps-hook-utils.js    ← Tracked-skill discovery + validator lookup for the hooks
     utf8-stream.js             ← reads a hook's stdin as UTF-8 without splitting a multibyte character across pipe chunks
-    telemetry/                 ← Bundled 1DS telemetry: ikey.json (this plugin's per-region keys) + resolver.js + region/ (copy of power-pages' router) + lib/ (copy of shared/telemetry/lib)
+    telemetry/                 ← Bundled 1DS telemetry: ikey.json (this plugin's per-region keys) + resolver.js + region/ (copy of power-pages' router) + lib/ (copy of shared/telemetry/lib) + skill-completed.js (skill_completed for the build and page upload; pcf copies it)
   vendor/cds-maker-sdk.cjs     ← headless vendored SDK bundle (rebuilt via _vendor-build/)
   vendor/typescript/           ← the TypeScript 5.8.3 compiler the SDK compiles generative pages with (brotli; PROVENANCE.json; licenses)
   _vendor-build/               ← esbuild vendoring tooling (build.js + build-typescript.js + pinned deps)
@@ -4045,7 +4045,18 @@ repo-root `shared/telemetry/`; `scripts/lib/telemetry/lib` is a **physical copy*
   deliberately has no top-level static key, so a `null` resolution really does mean no
   transmission.
 - **Emission:** `hooks/run-skill-pretool-telemetry.js` (PreToolUse Skill) and
-  `hooks/run-user-prompt-telemetry.js` (UserPromptSubmit `/model-apps:<skill>`).
+  `hooks/run-user-prompt-telemetry.js` (UserPromptSubmit `/model-apps:<skill>`) send `skill_started`.
+  `skill_completed` comes from the scripts that change an environment, when they finish:
+  `build-model-app.js` on an `--apply` (`app-builder`; per-phase `{ ok, skip, error }` step counts fed by
+  `createStepTally` from the engine's progress events, outcome mapped by `completionFor`) and
+  `genpage-upload.js` once an upload was attempted (`genpage`; `uploadCompletion`). Both go through
+  `scripts/lib/telemetry/skill-completed.js`, which owns the approved `eventInfo` allowlist
+  (`shared/telemetry/README.md`, "Model Apps and PCF"), routes by the TARGET environment's host and reads
+  its `orgId` with one `WhoAmI` and its `tenantId` from the Azure CLI token's `tid` — never from PAC's
+  profile, never for an opted-out user. pcf carries a verbatim copy (`scripts/validate-plugin-copies.js`).
+  It sends nothing from inside a `node:test` run unless the test sets
+  `POWER_PLATFORM_SKILLS_TELEMETRY_TEST_EMIT=1`, so the suites that drive these scripts with stand-ins never
+  emit; a new emitting script must go through this module rather than call the dispatcher itself.
 - **Privacy:** telemetry is default-on: events can include Dataverse organization and Entra tenant GUIDs
   when PAC is signed in, never the signed-in user's Entra object ID, and the local diagnostic mirror
   (`~/.power-platform-skills/telemetry/model-apps/sessions/<id>/events.jsonl`) retains the same

@@ -52,6 +52,7 @@ const { makeTempWorkspace } = require('./lib/temp-workspace.js');
 const { makeWritesBlocking } = require('./lib/output-redaction.js');
 // The lease one apply of an app holds for the whole of its work in the workspace (lib/app-operation-lease.js).
 const { withAppBuildLease, applyWorkspaceOf } = require('./lib/app-operation-lease.js');
+const { emitSkillCompleted, createStepTally } = require('./lib/telemetry/skill-completed.js');
 
 // The folder an app's workspace lives in, checked before anything is built on it. An APPLY makes the folder if it is
 // missing and re-checks it (mkdir on an existing junction succeeds, so the re-check is what refuses one). A DRY RUN
@@ -438,7 +439,11 @@ async function buildModelAppHeld(spec, opts, deps, v, buildLease) {
   const journal = deps.journal;
   // Tee the engine's progress events into the durable journal without touching the pure engine.
   const baseEmit = deps.emit || cliEmit(log, { apply: opts.apply, counts });
-  const emit = journal ? (e) => { baseEmit(e); journal.record(e); } : baseEmit;
+  // skill_completed telemetry counts an apply's steps per phase from the same events (lib/telemetry/skill-completed.js).
+  const stepTally = opts.apply ? deps.stepTally : null;
+  const emit = journal || stepTally
+    ? (e) => { baseEmit(e); if (journal) journal.record(e); if (stepTally) stepTally.record(e); }
+    : baseEmit;
   const sleep = deps.sleep || ((ms) => new Promise((res) => setTimeout(res, ms)));
   // One budget for all the waiting a run does when a service throttles — the HTTP client's waits before it sends a throttled read, publish, delete or column create again, the page backend's waits between the sends of a page write (a `$batch` the
   // client never re-sends) and this loop's own waits before it runs a phase again — so the run can neither wait twenty silent minutes for one page nor forget, where one layer hands over to the other, what the service asked (lib/throttle-budget.js).
@@ -676,6 +681,7 @@ async function buildModelAppHeld(spec, opts, deps, v, buildLease) {
   const declinedCount = () => (typeof throttle.declined === 'function' ? throttle.declined().count : 0);
   for (let attempt = 1; ; attempt++) {
     counts.ok = counts.skip = counts.error = 0; // summary reflects the final (successful) attempt
+    if (stepTally) stepTally.reset();
     const declinedBefore = declinedCount();
     try {
       r = await runBuild(spec, {
@@ -1048,6 +1054,7 @@ function persistAppliedBaseline(r, { spec, opts, workspaceDir, appDirAbs, baseli
 }
 
 async function main() {
+  const startedAt = Date.now();
   const argv = process.argv.slice(2);
   const { positional, flags } = parseArgs(argv);
   const USAGE =
@@ -1161,17 +1168,72 @@ async function main() {
   // printed: emitResult ends the process, and a `finally` around it would never run. So the command's body ANSWERS its result, and it is printed
   // here, after the release; an error it throws goes on to main().catch the same way. A dry run reads only, and takes no lease.
   const command = { env, spec, languageCode, changedOnly, workspaceDir };
+  // skill_completed telemetry, for an APPLY only: a dry run changes nothing in the environment. Set before the run so a halt thrown out of
+  // it (main().catch) is reported too; reportCompletion awaits at most a short WhoAmI and never throws.
+  if (opts.apply) {
+    completionRun = {
+      startedAt, env, changedOnly, opts,
+      staged: !!(flags.stage || flags.only || flags.skip || flags.from || flags.to),
+      tally: createStepTally(),
+    };
+  }
   const outcome = opts.apply
     ? await withAppBuildLease({ workspaceDir, appUniqueName: appUniqueName(spec), warn: (m) => process.stderr.write(`⚠ ${m}\n`) },
-      (buildLease) => runBuildCommand({ ...command, opts: { ...opts, buildLease } }))
+      (buildLease) => runBuildCommand({ ...command, opts: { ...opts, buildLease }, stepTally: completionRun.tally }))
     : await runBuildCommand({ ...command, opts });
+  await reportCompletion(completionRun, { ok: outcome.ok, payload: outcome.payload });
   emitResult(outcome.ok, outcome.payload);
+}
+
+// The apply this process is running, for skill_completed telemetry; null for a dry run or before an apply starts.
+let completionRun = null;
+
+// What an apply's result says, in the closed vocabulary of lib/telemetry/skill-completed.js — never its messages.
+//   ok                                   → success
+//   thrown build-locked/pages-locked     → locked          (another build holds the app; nothing was sent)
+//   thrown BuildHalt with a phase        → halted, haltPhase
+//   { ok: false, error }                 → auth            (the identity preflight refused; runBuildCommand)
+//   { ok: true, verify.ok: false }       → verify-failed   (applied, but the auto-verify found it incomplete)
+//   { ok: false, errors } after a step failed → deploy-failed; before any step → halted at preflight (spec checks, approvals)
+function completionFor(run, { ok, payload, error }) {
+  const steps = run.tally.snapshot();
+  const stepErrors = Object.values(steps).some((row) => row.error > 0);
+  const eventInfo = {
+    operation: 'app-build',
+    scope: run.changedOnly ? 'changed-only' : run.staged ? 'staged' : 'full',
+    publish: !!run.opts.publish,
+    steps,
+  };
+  const verify = payload && payload.verify;
+  if (verify) eventInfo.verify = verify.ok ? 'passed' : 'failed';
+  else if (payload && !error) eventInfo.verify = 'not-run';
+  if (ok) return { outcome: 'success', eventInfo };
+  if (error) {
+    const code = error && error.code;
+    if (code === 'build-locked' || code === 'pages-locked' || code === 'build-lease-invalid') return { outcome: 'failure', errorClass: 'locked', eventInfo };
+    const phase = error && typeof error.phase === 'string' ? error.phase : undefined;
+    return phase
+      ? { outcome: 'failure', errorClass: 'halted', eventInfo: { ...eventInfo, haltPhase: phase } }
+      : { outcome: 'failure', errorClass: 'unexpected', eventInfo };
+  }
+  if (payload && payload.ok && verify && !verify.ok) return { outcome: 'failure', errorClass: 'verify-failed', eventInfo };
+  if (payload && typeof payload.error === 'string' && !Array.isArray(payload.errors)) return { outcome: 'failure', errorClass: 'auth', eventInfo: { ...eventInfo, haltPhase: 'preflight' } };
+  if (stepErrors) return { outcome: 'failure', errorClass: 'deploy-failed', eventInfo };
+  return { outcome: 'failure', errorClass: 'halted', eventInfo: { ...eventInfo, haltPhase: 'preflight' } };
+}
+
+async function reportCompletion(run, result, emit = emitSkillCompleted) {
+  if (!run) return;
+  try {
+    const { outcome, errorClass, eventInfo } = completionFor(run, result);
+    await emit({ skillName: 'app-builder', outcome, errorClass, eventInfo, envUrl: run.env, durationMs: Date.now() - run.startedAt });
+  } catch { /* telemetry never changes the build's result */ }
 }
 
 // Everything main() does once the command line has been checked: auth, the authoring language, the SDK, the journal, the build and the baseline.
 // Answers { ok, payload } for main() to print: a refusal of the identity as the `{ ok: false, error }` it has always printed, and otherwise the
 // build's result, `ok` only when the build and its verify succeeded.
-async function runBuildCommand({ env, spec, languageCode, changedOnly, workspaceDir, opts }) {
+async function runBuildCommand({ env, spec, languageCode, changedOnly, workspaceDir, opts, stepTally }) {
   // #455: the App, Form and Dashboard adapters bake the authoring LCID in at CONSTRUCTION, so it
   // has to be resolved before the SDK exists — which is why this reads over the transport hatch
   // rather than through `provision.queryRecords`. Resolving here also means the provisioned-language
@@ -1270,7 +1332,7 @@ async function runBuildCommand({ env, spec, languageCode, changedOnly, workspace
     const deps = {
       log: (m) => process.stderr.write(m + '\n'),
       warn: (m) => process.stderr.write(`⚠ ${m}\n`),
-      sdk, provisionSdk, journal, throttle,
+      sdk, provisionSdk, journal, throttle, stepTally,
       // The role-privileges check must actually RUN here. verify-spec skips it unless BOTH
       // `rolePrivileges` and `entityPrivileges` readers are present, and `entityPrivileges` used to
       // need the raw client plus the org URL — omitting them degraded silently, so `--apply --verify`
@@ -1340,6 +1402,9 @@ async function runBuildCommand({ env, spec, languageCode, changedOnly, workspace
 }
 
 if (require.main === module) {
-  main().catch((err) => emitResult(false, err));
+  main().catch(async (err) => {
+    await reportCompletion(completionRun, { ok: false, error: err });
+    emitResult(false, err);
+  });
 }
-module.exports = { buildModelApp, planFor, isTransientHalt, checkCollisions, discoverOpDiffState, envTruthy, parseLanguageCode, assertSnapshotInvalidated, persistAppliedBaseline };
+module.exports = { buildModelApp, planFor, isTransientHalt, checkCollisions, discoverOpDiffState, envTruthy, parseLanguageCode, assertSnapshotInvalidated, persistAppliedBaseline, completionFor, reportCompletion };

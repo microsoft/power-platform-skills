@@ -891,10 +891,20 @@ function scanBoth(text, feature, hosts) {
 
 // Wall-clock timing, kept only by the line-location test (see its comment): a bound on elapsed
 // time is sensitive to machine load, unlike the work counts and growth ratios used elsewhere.
+// A wall-clock limit on ONE cold run is noise-bound, not a test of the scanner: the first run pays the JIT's warm-up, and a
+// shared CI runner adds GC and scheduler pauses on top (observed: 501 ms against the 500 ms limit on a Windows runner, while
+// local single runs vary 125–253 ms for the same input). So the scan runs once untimed to warm up, then three times, and the
+// FASTEST run is compared: noise only ever adds time, while the regression these limits exist for — a quadratic rescan —
+// slows every run alike, by seconds, and still fails.
 function timedScan(text) {
-  const started = performance.now();
-  const findings = [...scanSource(FILE, text), ...findingsFor(text)];
-  return { elapsed: performance.now() - started, findings };
+  let findings = [...scanSource(FILE, text), ...findingsFor(text)];
+  let elapsed = Infinity;
+  for (let i = 0; i < 3; i += 1) {
+    const started = performance.now();
+    findings = [...scanSource(FILE, text), ...findingsFor(text)];
+    elapsed = Math.min(elapsed, performance.now() - started);
+  }
+  return { elapsed, findings };
 }
 
 // A second copy of the gate whose lexer calls are counted. The gate reads its lexer through a

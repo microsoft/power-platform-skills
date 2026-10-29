@@ -2378,3 +2378,52 @@ test('a file that starts with two byte order marks reaches the backend as the te
   assert.strictEqual(only(updating, 'update')[1].source, text);
   assert.strictEqual(pageHash(only(updating, 'update')[1].source), readMarker(file).localSha256, 'and the recorded hash is of that same text');
 });
+
+// ── skill_completed telemetry (lib/telemetry/skill-completed.js) ───────────────────────────────────────────────────────────────
+// An upload that was ATTEMPTED reports once, before its result is printed, in the closed vocabulary: what happened to the page, never its
+// name, id, prompt or the environment's URL. A refusal of the command line or its files sends nothing.
+function reporter() {
+  const sent = [];
+  return { sent, reportCompletion: async (input) => { sent.push(input); return true; } };
+}
+
+test('skill_completed: a create reports success with page "created", the target environment and a duration', async () => {
+  const spy = reporter();
+  const r = await run(createArgs(codeFile()), environment(), spy);
+  assert.strictEqual(r.ok, true, JSON.stringify(r.payload));
+  assert.strictEqual(spy.sent.length, 1);
+  const [sent] = spy.sent;
+  assert.deepStrictEqual({ ...sent, durationMs: typeof sent.durationMs }, {
+    skillName: 'genpage', outcome: 'success', errorClass: undefined, envUrl: ENV, durationMs: 'number',
+    eventInfo: { operation: 'page-upload', page: 'created', placedInApp: false },
+  });
+});
+
+test('skill_completed: an update reports page "updated"', async () => {
+  const file = codeFile('export const n = 2;\n'); // an edit of the deployed TEXT: the same bytes would be "unchanged"
+  seedBase(file);
+  const spy = reporter();
+  const r = await run(updateArgs(file), environment(), spy);
+  assert.strictEqual(r.ok, true, JSON.stringify(r.payload));
+  assert.deepStrictEqual(spy.sent.map((s) => [s.outcome, s.eventInfo.page]), [['success', 'updated']]);
+});
+
+test('skill_completed: a command the script refuses before any upload reports nothing', async () => {
+  const spy = reporter();
+  const { factory } = untouchable();
+  const r = await run(['--env', ENV, '--app-id', APP, ...NAMED], factory, spy);
+  assert.strictEqual(r.ok, false);
+  assert.deepStrictEqual(spy.sent, []);
+});
+
+test('skill_completed: uploadCompletion maps each result to its outcome and error class', () => {
+  const { uploadCompletion } = uploadMod;
+  assert.deepStrictEqual(uploadCompletion({ ok: true, payload: { ok: true, updated: true, unchanged: true, addedToSitemap: true, addedToSolution: true } }),
+    { outcome: 'success', eventInfo: { operation: 'page-upload', page: 'unchanged', placedInApp: true, addedToSolution: true } });
+  assert.deepStrictEqual(uploadCompletion({ ok: false, payload: { ok: false, code: 'griffel-shorthand', error: 'x' } }),
+    { outcome: 'failure', errorClass: 'invalid-input', eventInfo: { operation: 'page-upload' } });
+  assert.deepStrictEqual(uploadCompletion({ ok: false, payload: { code: 'solution-add-failed', addedToSolution: false } }),
+    { outcome: 'failure', errorClass: 'deploy-failed', eventInfo: { operation: 'page-upload', addedToSolution: false } });
+  assert.deepStrictEqual(uploadCompletion({ error: new Error('boom') }),
+    { outcome: 'failure', errorClass: 'unexpected', eventInfo: { operation: 'page-upload' } });
+});

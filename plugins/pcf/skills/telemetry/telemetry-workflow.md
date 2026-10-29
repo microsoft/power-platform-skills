@@ -27,10 +27,13 @@ usage telemetry. Default to `status` when no argument is given.
   are preserved. The preference takes effect on the next event.
 - `POWER_PLATFORM_SKILLS_TELEMETRY_PCF_OPTOUT=1` (or `true`) takes precedence
   over the saved preference and `on`. It disables transmission only.
-- Only `skill_started` base fields are sent: skill,
+- `skill_started` sends base fields: skill,
   plugin/PAC/agent versions, OS/Node versions, session/correlation IDs, and
-  `orgId`/`tenantId` when PAC is signed in. There is **no user object ID** and
-  no `eventInfo` payload.
+  `orgId`/`tenantId` when PAC is signed in. There is **no user object ID**.
+- When a control push finishes, `skill_completed` also records its outcome,
+  duration, a fixed error class, whether the push was incremental and whether
+  the registration was verified, with the `orgId`/`tenantId` of the environment
+  it targeted. Control, solution and environment names are never sent.
 - File paths, cwd, environment variables, prompts, arguments, tool inputs, site
   names, Dataverse URLs, stack traces, error messages, credentials, usernames
   and hostnames are never sent.
