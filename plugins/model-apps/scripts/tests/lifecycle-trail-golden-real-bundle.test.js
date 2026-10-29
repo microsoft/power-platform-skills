@@ -19,9 +19,9 @@
 //   teardown  the edited spec torn down
 //
 // Each phase's golden (scripts/tests/golden/lifecycle-trail.<phase>.txt) lists every HTTP request: method, path with query (GUIDs and
-// timestamps masked), the SHAPE of its body — member names and value types, never values: `{name:string,type:number}` — by a short hash
+// timestamps masked), the SHAPE of its body — member names, value types and how many elements of each shape a list holds, never values: `{name:string,type:number}` — by a short hash
 // into the legend at the end, and the status the fake answered; a `$batch` lists its operations, in their order, below it. The requests
-// are cut into SEGMENTS by the phase's publishes (each PublishXml, with what it names, is a segment's last line), and the segments are
+// are cut into SEGMENTS by the phase's publishes (each PublishXml, with EVERYTHING its ParameterXml names, is a segment's last line), and the segments are
 // in order: a write that moves to the other side of a publish — so that the publish no longer makes it live, or makes it live early —
 // is a difference. WITHIN a segment the requests are listed sorted and counted (`3x GET …`), not in the order they were sent: the build
 // creates and enriches the views of different tables concurrently, and measured over eight runs under load the interleaving of those
@@ -45,7 +45,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { makeTempDir } = require('./helpers/temp-dirs.js');
 const { createLifecycleOrg } = require('./helpers/fake-lifecycle-org.js');
-const { kitchenSinkSpec, createLifecycleHarness, seedForeignWork, publishesOf, appUniqueName } = require('./helpers/lifecycle-harness.js');
+const { kitchenSinkSpec, createLifecycleHarness, seedForeignWork, appUniqueName } = require('./helpers/lifecycle-harness.js');
 const { GOLDEN_DIR } = require('./helpers/golden.js');
 
 const PHASES = ['build', 'rebuild', 'edit', 'download', 'verify', 'teardown'];
@@ -58,16 +58,50 @@ const TIMESTAMP = /\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d+)?Z?/g;
 const mask = (text) => String(text).replace(GUID, '<id>').replace(TIMESTAMP, '<time>');
 
 // A body's shape: member names and value types, recursively — `{AttributeType:string,MaxLength:number,DateTimeBehavior:{Value:string}}`.
-// An array is the sorted set of its elements' shapes, so a list of three columns and of four is the same shape (the count shows as
-// requests). A raw body (a page file's content) is `string`/`bytes`.
+// An array is its elements' shapes COUNTED, in sorted order — `Attributes:[1x{…DateTimeBehavior…}|11x{…}]` — so one element more of the
+// same shape (a column more in one table create) changes it, while the order the elements were listed in does not. A raw body (a page
+// file's content) is `string`/`bytes`.
 function shape(value) {
   if (value === null) return 'null';
   if (Buffer.isBuffer(value)) return 'bytes';
-  if (Array.isArray(value)) return `[${[...new Set(value.map(shape))].sort().join('|')}]`;
+  if (Array.isArray(value)) {
+    const counts = new Map();
+    for (const element of value.map(shape)) counts.set(element, (counts.get(element) || 0) + 1);
+    return `[${[...counts.keys()].sort().map((element) => `${counts.get(element)}x${element}`).join('|')}]`;
+  }
   if (typeof value === 'object') return `{${Object.keys(value).sort().map((key) => `${mask(key)}:${shape(value[key])}`).join(',')}}`;
   return typeof value;
 }
 
+// What a publish names, WHOLE: the PublishXml's ParameterXml as a tree, every element kept, children in sorted order (the order a build
+// lists tables in is not what it publishes), GUIDs masked —
+//   <importexportxml><entities><entity>contoso_task</entity><entity>contoso_project</entity></entities><appmodules><appmodule>{id}</appmodule></appmodules></importexportxml>
+//   -> importexportxml(appmodules(appmodule=#id) entities(entity=contoso_project entity=contoso_task))
+// so a publish that names one more table, one more kind of component (an option set, a site map) or one fewer is a difference. A
+// ParameterXml this reader cannot take apart (an attribute, a self-closing element) is kept as it was sent, masked: never dropped.
+// See https://learn.microsoft.com/power-apps/developer/data-platform/webapi/reference/publishxml
+function publishTargetsOf(parameterXml) {
+  // A GUID (braced or not) is written #id here, not <id>, which would read as an element.
+  const xml = String(parameterXml).replace(/\{?[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\}?/g, '#id').replace(TIMESTAMP, '#time');
+  const token = /<(\/?)([A-Za-z_][\w.-]*)>|([^<]+)/g;
+  const root = { children: [] };
+  const stack = [root];
+  for (const m of xml.matchAll(token)) {
+    const top = stack[stack.length - 1];
+    if (m[3] !== undefined) { if (m[3].trim()) top.text = (top.text || '') + m[3].trim(); continue; }
+    if (m[1]) {
+      if (stack.length < 2 || top.tag !== m[2]) return `raw:${xml}`;
+      stack.pop();
+    } else {
+      const node = { tag: m[2], children: [] };
+      top.children.push(node);
+      stack.push(node);
+    }
+  }
+  if (stack.length !== 1 || xml.replace(token, '') !== '') return `raw:${xml}`;
+  const render = (node) => (node.children.length ? `${node.tag}(${node.children.map(render).sort().join(' ')})` : `${node.tag}=${node.text || ''}`);
+  return root.children.map(render).sort().join(' ');
+}
 // One phase's golden text, and the shapes its lines refer to by hash (a hash, not a running number, so one new shape does not renumber
 // every later line of the diff).
 function trailOf(org, step) {
@@ -79,7 +113,7 @@ function trailOf(org, step) {
     legend.set(hash, s);
     return ` #${hash}`;
   };
-  const publishes = publishesOf(org, step);
+  const publishes = org.requests.slice(step.mark, step.end).filter((r) => r.path === '/PublishXml').map((r) => publishTargetsOf(r.body && r.body.ParameterXml));
   const segments = [[]];
   for (const r of org.requests.slice(step.mark, step.end)) {
     const unit = [`${r.method} ${mask(r.path)}${r.operations ? '' : ref(r.body)} -> ${r.status}`];
@@ -258,12 +292,22 @@ test('lifecycle trail (meta): one more read, one more body member and a write mo
   const moreReads = describeDifference('build', golden, trail([read, read, view, form, publish('a'), read]));
   assert.match(moreReads, /\+1 GET appmodules/);
   const newMember = describeDifference('edit', golden, trail([read, { ...view, body: { fetchxml: '<fetch/>', returnedtypecode: 'contoso_x' } }, form, publish('a'), read]));
-  assert.match(newMember, /The same requests by METHOD resource[\s\S]*\[0x before, 1x now\] in "up to publish 1: app":\n\s+PATCH \/savedqueries\(<id>\) \{fetchxml:string,returnedtypecode:string\}/);
+  assert.match(newMember, /The same requests by METHOD resource[\s\S]*\[0x before, 1x now\] in "up to publish 1: importexportxml\(appmodules\(appmodule=a\)\)":\n\s+PATCH \/savedqueries\(<id>\) \{fetchxml:string,returnedtypecode:string\}/);
   const late = trail([read, view, publish('a'), form, read]);
   assert.notEqual(late, golden, 'a write moved past the publish that should make it live');
-  assert.match(describeDifference('rebuild', golden, late), /The same requests by METHOD resource[\s\S]*\[1x before, 0x now\] in "up to publish 1: app":\n\s+PATCH \/systemforms\(<id>\) \{formxml:string\}/);
-  assert.equal(shape({ b: [1, 'x', { c: null }], a: true }), '{a:boolean,b:[number|string|{c:null}]}');
+  assert.match(describeDifference('rebuild', golden, late), /The same requests by METHOD resource[\s\S]*\[1x before, 0x now\] in "up to publish 1: importexportxml\(appmodules\(appmodule=a\)\)":\n\s+PATCH \/systemforms\(<id>\) \{formxml:string\}/);
+  assert.equal(shape({ b: [1, 'x', { c: null }], a: true }), '{a:boolean,b:[1xnumber|1xstring|1x{c:null}]}');
   assert.equal(mask('/x(0a1b2c3d-0000-4000-8000-00000000abcd)?$filter=modifiedon gt 2026-01-02T03:04:05Z'), '/x(<id>)?$filter=modifiedon gt <time>');
+  // Nothing a request carries is collapsed away: one more element of the same shape in a body's list (a column more in a table's
+  // create), and one more kind of component in a publish (an option set beside the app), each change the trail.
+  const table = { method: 'POST', path: '/EntityDefinitions', body: { Attributes: [{ SchemaName: 'contoso_name', MaxLength: 100 }] }, status: 204 };
+  const twoColumns = { ...table, body: { Attributes: [...table.body.Attributes, { SchemaName: 'contoso_extra', MaxLength: 100 }] } };
+  assert.notEqual(trail([twoColumns]), trail([table]), 'a column more in the same request changes the trail');
+  assert.match(describeDifference('build', trail([table]), trail([twoColumns])), /\[0x before, 1x now\][\s\S]*Attributes:\[2x\{/);
+  const appOnly = publish('11111111-0000-4000-8000-000000000001');
+  const broader = { ...appOnly, body: { ParameterXml: appOnly.body.ParameterXml.replace('</importexportxml>', '<optionsets><optionset>contoso_stage</optionset></optionsets></importexportxml>') } };
+  assert.notEqual(trail([broader]), trail([appOnly]), 'a publish that names one more kind of component changes the trail');
+  assert.match(describeDifference('build', trail([appOnly]), trail([broader])), /The publishes were:[\s\S]*and are now:[\s\S]*optionset=contoso_stage/);
 });
 
 // UPDATE_GOLDENS must never be the way a CI run turns green: a run that regenerates in CI compares nothing and would pass whatever was

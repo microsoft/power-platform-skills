@@ -1,5 +1,5 @@
 # 419 requests, 11 publishes
-## up to publish 1: webresource
+## up to publish 1: importexportxml(webresources(webresource=#id))
   2x GET /EntityDefinitions(<id>)/Attributes?$select=MetadataId,LogicalName -> 200
   3x GET /EntityDefinitions(<id>)?$select=LogicalName,EntitySetName,PrimaryIdAttribute,PrimaryNameAttribute -> 200
   1x GET /EntityDefinitions(LogicalName='appmodule')?$select=EntitySetName -> 200
@@ -26,51 +26,51 @@
   2x GET /solutions?$select=solutionid&$filter=uniquename eq 'ContosoKitchen'&$top=1 -> 200
   1x GET /webresourceset?$select=webresourceid,content&$filter=name eq 'contoso_project.js'&$top=1 -> 200
   1x POST /$batch -> 200
-      > POST /EntityDefinitions(LogicalName='contoso_project')/Attributes #6241715b
-      > POST /EntityDefinitions(LogicalName='contoso_project')/Attributes #372383d8
-      > POST /EntityDefinitions(LogicalName='contoso_project')/Attributes #08e18ffa
-      > POST /EntityDefinitions(LogicalName='contoso_project')/Attributes #08e18ffa
-      > POST /EntityDefinitions(LogicalName='contoso_project')/Attributes #8b7f2581
-      > POST /EntityDefinitions(LogicalName='contoso_project')/Attributes #83e36c47
-      > POST /EntityDefinitions(LogicalName='contoso_project')/Attributes #8f6a4d4a
-      > POST /EntityDefinitions(LogicalName='contoso_project')/Attributes #ede0dcd7
-      > POST /EntityDefinitions(LogicalName='contoso_project')/Attributes #1a276a9c
-      > POST /EntityDefinitions(LogicalName='contoso_project')/Attributes #6c79ecb8
-      > POST /EntityDefinitions(LogicalName='contoso_project')/Attributes #6c79ecb8
-      > POST /EntityDefinitions(LogicalName='contoso_project')/Attributes #92d34533
+      > POST /EntityDefinitions(LogicalName='contoso_project')/Attributes #17143fc8
+      > POST /EntityDefinitions(LogicalName='contoso_project')/Attributes #78d7bbae
+      > POST /EntityDefinitions(LogicalName='contoso_project')/Attributes #3b86689e
+      > POST /EntityDefinitions(LogicalName='contoso_project')/Attributes #3b86689e
+      > POST /EntityDefinitions(LogicalName='contoso_project')/Attributes #7d59d525
+      > POST /EntityDefinitions(LogicalName='contoso_project')/Attributes #3fa06a81
+      > POST /EntityDefinitions(LogicalName='contoso_project')/Attributes #4940b353
+      > POST /EntityDefinitions(LogicalName='contoso_project')/Attributes #0207ffd9
+      > POST /EntityDefinitions(LogicalName='contoso_project')/Attributes #85166fac
+      > POST /EntityDefinitions(LogicalName='contoso_project')/Attributes #83dcbd6c
+      > POST /EntityDefinitions(LogicalName='contoso_project')/Attributes #83dcbd6c
+      > POST /EntityDefinitions(LogicalName='contoso_project')/Attributes #85806883
   1x POST /$batch -> 200
-      > POST /EntityDefinitions(LogicalName='contoso_task')/Attributes #ede0dcd7
-      > POST /EntityDefinitions(LogicalName='contoso_task')/Attributes #8b7f2581
-  1x POST /CreateCustomerRelationships #afe54a0a -> 200
-  3x POST /EntityDefinitions #51820fce -> 204
-  1x POST /EntityDefinitions(LogicalName='contoso_project')/Attributes #22bede1e -> 204
-  1x POST /EntityDefinitions(LogicalName='contoso_project')/Attributes #9acd7d6e -> 204
-  1x POST /EntityDefinitions(LogicalName='contoso_project')/Attributes #fb57c51f -> 204
-  1x POST /EntityDefinitions(LogicalName='contoso_project')/Keys #e77934e1 -> 204
-  1x POST /GlobalOptionSetDefinitions #856802de -> 204
-  1x POST /InsertStatusValue #a17a2bf2 -> 200
+      > POST /EntityDefinitions(LogicalName='contoso_task')/Attributes #0207ffd9
+      > POST /EntityDefinitions(LogicalName='contoso_task')/Attributes #7d59d525
+  1x POST /CreateCustomerRelationships #e32dd0e5 -> 200
+  3x POST /EntityDefinitions #1b412e8a -> 204
+  1x POST /EntityDefinitions(LogicalName='contoso_project')/Attributes #53686b0d -> 204
+  1x POST /EntityDefinitions(LogicalName='contoso_project')/Attributes #99efb92e -> 204
+  1x POST /EntityDefinitions(LogicalName='contoso_project')/Attributes #fab2e725 -> 204
+  1x POST /EntityDefinitions(LogicalName='contoso_project')/Keys #e84db148 -> 204
+  1x POST /GlobalOptionSetDefinitions #4898eb8f -> 204
+  1x POST /InsertStatusValue #0bad973f -> 200
   1x POST /PublishXml #1b71745d -> 204
   1x POST /RelationshipDefinitions #2770187f -> 204
-  2x POST /RelationshipDefinitions #acd7b70b -> 204
-  1x POST /contoso_projects/Microsoft.Dynamics.CRM.CreateMultiple #70963200 -> 200
-  1x POST /contoso_tasks/Microsoft.Dynamics.CRM.CreateMultiple #eb9ac7f4 -> 200
+  2x POST /RelationshipDefinitions #6f73d760 -> 204
+  1x POST /contoso_projects/Microsoft.Dynamics.CRM.CreateMultiple #e95a897a -> 200
+  1x POST /contoso_tasks/Microsoft.Dynamics.CRM.CreateMultiple #e75eb5e5 -> 200
   1x POST /publishers #4c52dd4a -> 204
   1x POST /solutions #1a52c2ed -> 204
   1x POST /webresourceset #7d3c3d0e -> 204
-  1x PUT /EntityDefinitions(<id>) #373a4cf5 -> 204
-## up to publish 2: webresource
+  1x PUT /EntityDefinitions(<id>) #2b71ae7d -> 204
+## up to publish 2: importexportxml(webresources(webresource=#id))
   1x GET /webresourceset(<id>)?$select=content -> 200
   1x GET /webresourceset?$select=webresourceid,content&$filter=name eq 'contoso_projecticon.svg'&$top=1 -> 200
   1x POST /AddSolutionComponent #c1ba6652 -> 200
   1x POST /PublishXml #1b71745d -> 204
   1x POST /webresourceset #7d3c3d0e -> 204
-## up to publish 3: contoso_project
+## up to publish 3: importexportxml(entities(entity=contoso_project))
   1x GET /EntityDefinitions(LogicalName='contoso_project') -> 200
   1x GET /webresourceset(<id>)?$select=content -> 200
   1x POST /AddSolutionComponent #c1ba6652 -> 200
   1x POST /PublishXml #1b71745d -> 204
-  1x PUT /EntityDefinitions(<id>) #e6b88ef4 -> 204
-## up to publish 4: webresource
+  1x PUT /EntityDefinitions(<id>) #d6b4b26e -> 204
+## up to publish 4: importexportxml(webresources(webresource=#id))
   1x GET /EntityDefinitions(LogicalName='appaction')?$select=EntitySetName -> 200
   1x GET /EntityDefinitions(LogicalName='contact')?$select=MetadataId,EntitySetName -> 200
   1x GET /EntityDefinitions(LogicalName='contoso_project')/Attributes/Microsoft.Dynamics.CRM.MultiSelectPicklistAttributeMetadata?$select=LogicalName&$expand=OptionSet($select=Options) -> 200
@@ -122,12 +122,12 @@
   1x POST /systemforms?$select=formid #9d0094e8 -> 201
   1x POST /systemforms?$select=formid #d59ac10f -> 201
   1x POST /webresourceset #7d3c3d0e -> 204
-## up to publish 5: contoso_project contoso_tag contoso_task
+## up to publish 5: importexportxml(entities(entity=contoso_project entity=contoso_tag entity=contoso_task))
   1x GET /appmodules?$select=appmoduleid&$filter=uniquename eq 'contoso_kitchensink'&$top=1 -> 200
   1x GET /webresourceset(<id>)?$select=content -> 200
   1x POST /AddSolutionComponent #c1ba6652 -> 200
   1x POST /PublishXml #1b71745d -> 204
-## up to publish 6: app
+## up to publish 6: importexportxml(appmodules(appmodule=#id))
   1x GET /EntityDefinitions(LogicalName='contoso_project')?$select=MetadataId,EntitySetName -> 200
   1x GET /EntityDefinitions(LogicalName='contoso_tag')?$select=MetadataId,EntitySetName -> 200
   1x GET /EntityDefinitions(LogicalName='contoso_task')?$select=MetadataId,EntitySetName -> 200
@@ -145,22 +145,22 @@
   1x GET /systemforms?$select=formid&$filter=objecttypecode eq 'contoso_project' and type eq 2 and formactivationstate eq 1 -> 200
   1x GET /systemforms?$select=formid&$filter=objecttypecode eq 'contoso_tag' and type eq 2 and formactivationstate eq 1 -> 200
   1x GET /systemforms?$select=formid&$filter=objecttypecode eq 'contoso_task' and type eq 2 and formactivationstate eq 1 -> 200
-  1x POST /AddAppComponents #49714add -> 204
+  1x POST /AddAppComponents #e1de4e0e -> 204
   1x POST /PublishXml #1b71745d -> 204
   1x POST /appmodules #b3f86741 -> 204
   1x POST /appmodules(<id>)/appmoduleroles_association/$ref #f07e5c5f -> 204
   1x POST /appsettings #1c3b649b -> 204
   1x POST /sitemaps?$select=sitemapid #c4c362c9 -> 201
-## up to publish 7: app
+## up to publish 7: importexportxml(appmodules(appmodule=#id))
   1x GET /EntityDefinitions(LogicalName='sitemap')?$select=EntitySetName -> 200
   2x GET /appmodulecomponents?$select=objectid,componenttype&$filter=_appmoduleidunique_value eq <id> and componenttype eq 1 -> 200
   1x GET /appmodules(<id>)?$select=appmoduleid -> 200
   2x GET /appmodules/Microsoft.Dynamics.CRM.RetrieveUnpublishedMultiple()?$select=appmoduleid,appmoduleidunique,componentstate&$filter=appmoduleid eq <id> -> 200
   1x GET /sitemaps?$select=sitemapid&$filter=sitemapnameunique eq 'contoso_kitchensink'&$top=1 -> 200
-  1x POST /AddAppComponents #b75c6b69 -> 204
+  1x POST /AddAppComponents #390f6b73 -> 204
   2x POST /AddSolutionComponent #c1ba6652 -> 200
   1x POST /PublishXml #1b71745d -> 204
-## up to publish 8: page
+## up to publish 8: importexportxml(uxagentprojects(uxagentproject=#id))
   1x GET /EntityDefinitions(LogicalName='appmodulecomponent')?$select=EntitySetName -> 200
   1x GET /EntityDefinitions(LogicalName='contoso_project')/Attributes/Microsoft.Dynamics.CRM.BooleanAttributeMetadata?$select=LogicalName&$expand=OptionSet($select=TrueOption,FalseOption) -> 200
   1x GET /EntityDefinitions(LogicalName='contoso_project')/Attributes/Microsoft.Dynamics.CRM.LookupAttributeMetadata?$select=LogicalName,Targets -> 200
@@ -196,13 +196,13 @@
       > POST /agentconversationmessages #43dbd5f4
       > POST /agentconversationmessages #43dbd5f4
   1x POST /PublishXml #1b71745d -> 204
-## up to publish 9: webresource
+## up to publish 9: importexportxml(webresources(webresource=#id))
   8x GET /uxagentprojectfiles(<id>)/filecontent/$value -> 200
   3x GET /uxagentprojectfiles?$select=uxagentprojectfileid,filename,filetype&$filter=_uxagentprojectid_value eq <id> -> 200
   3x GET /uxagentprojects(<id>)?$select=uxagentprojectid,name -> 200
   1x POST /PublishXml #1b71745d -> 204
   1x POST /webresourceset #7d3c3d0e -> 204
-## up to publish 10: app
+## up to publish 10: importexportxml(appmodules(appmodule=#id))
   1x GET /EntityDefinitions(LogicalName='solutioncomponent')?$select=EntitySetName -> 200
   1x GET /EntityDefinitions(LogicalName='uxagentproject')?$select=EntitySetName -> 200
   1x GET /EntityDefinitions(LogicalName='uxagentprojectfile')?$select=EntitySetName -> 200
@@ -233,10 +233,10 @@
   2x GET /uxagentprojects?$select=uxagentprojectid,versionnumber&$filter=uxagentprojectid eq <id> -> 200
   1x GET /webresourceset(<id>)?$select=content -> 200
   1x PATCH /sitemaps(<id>)?$select=sitemapid #a48e6542 -> 200
-  1x POST /AddAppComponents #db9d6078 -> 204
+  1x POST /AddAppComponents #55bd8832 -> 204
   2x POST /AddSolutionComponent #c1ba6652 -> 200
   1x POST /PublishXml #1b71745d -> 204
-## up to publish 11: contoso_project contoso_task app
+## up to publish 11: importexportxml(appmodules(appmodule=#id) entities(entity=contoso_project entity=contoso_task))
   1x GET /EntityDefinitions(LogicalName='appmodule')?$select=LogicalName,Privileges -> 200
   1x GET /EntityDefinitions(LogicalName='appmodulecomponent')?$select=EntitySetName -> 200
   1x GET /EntityDefinitions(LogicalName='businessunit')?$select=EntitySetName -> 200
@@ -272,8 +272,8 @@
   1x POST /SaveSettingValue #9bbb6c67 -> 204
   1x POST /appmodules(<id>)/appmoduleroles_association/$ref #f07e5c5f -> 204
   1x POST /roles #d13e24c0 -> 204
-  1x POST /roles(<id>)/Microsoft.Dynamics.CRM.AddPrivilegesRole #9f5072f2 -> 204
-  1x POST /roles(<id>)/Microsoft.Dynamics.CRM.ReplacePrivilegesRole #9f5072f2 -> 204
+  1x POST /roles(<id>)/Microsoft.Dynamics.CRM.AddPrivilegesRole #497ea01a -> 204
+  1x POST /roles(<id>)/Microsoft.Dynamics.CRM.ReplacePrivilegesRole #20224ada -> 204
 ## after the last publish
   1x GET /EntityDefinitions(LogicalName='contact')?$select=MetadataId -> 200
   1x GET /EntityDefinitions(LogicalName='contoso_project')/Attributes/Microsoft.Dynamics.CRM.MultiSelectPicklistAttributeMetadata?$select=LogicalName&$expand=OptionSet($select=Options) -> 200
@@ -328,63 +328,64 @@
   1x GET /webresourceset?$select=webresourceid,content&$filter=name eq 'contoso_project.js'&$top=1 -> 200
   1x GET /webresourceset?$select=webresourceid,content&$filter=name eq 'contoso_projecticon.svg'&$top=1 -> 200
 # shapes
+#0207ffd9 {@odata.type:string,AttributeType:string,AttributeTypeName:{Value:string},DisplayName:{@odata.type:string,LocalizedLabels:[1x{@odata.type:string,Label:string,LanguageCode:number}]},Format:string,MaxValue:number,MinValue:number,RequiredLevel:{CanBeChanged:boolean,ManagedPropertyLogicalName:string,Value:string},SchemaName:string}
 #02a1c789 {ContextEntity@odata.bind:string,appactionid:string,buttonlabeltext:string,context:number,contextvalue:string,location:number,name:string,sequence:number,type:number,uniquename:string}
 #05f7c2f8 {formid:string,formxml:string,name:string,objecttypecode:string,type:number}
-#08e18ffa {@odata.type:string,AttributeType:string,AttributeTypeName:{Value:string},DisplayName:{@odata.type:string,LocalizedLabels:[{@odata.type:string,Label:string,LanguageCode:number}]},OptionSet:{@odata.type:string,IsGlobal:boolean,OptionSetType:string,Options:[{Label:{@odata.type:string,LocalizedLabels:[{@odata.type:string,Label:string,LanguageCode:number}]},Value:number}]},RequiredLevel:{CanBeChanged:boolean,ManagedPropertyLogicalName:string,Value:string},SchemaName:string}
+#0bad973f {AttributeLogicalName:string,EntityLogicalName:string,Label:{@odata.type:string,LocalizedLabels:[1x{@odata.type:string,Label:string,LanguageCode:number}]},StateCode:number,Value:number}
 #0bca3f5e {name:string,uxagentprojectid:string}
-#1a276a9c {@odata.type:string,AttributeType:string,AttributeTypeName:{Value:string},DisplayName:{@odata.type:string,LocalizedLabels:[{@odata.type:string,Label:string,LanguageCode:number}]},RequiredLevel:{CanBeChanged:boolean,ManagedPropertyLogicalName:string,Value:string},SchemaName:string}
+#17143fc8 {@odata.type:string,AttributeType:string,AttributeTypeName:{Value:string},DisplayName:{@odata.type:string,LocalizedLabels:[1x{@odata.type:string,Label:string,LanguageCode:number}]},FormatName:{Value:string},MaxLength:number,RequiredLevel:{CanBeChanged:boolean,ManagedPropertyLogicalName:string,Value:string},SchemaName:string}
 #1a52c2ed {description:string,friendlyname:string,publisherid@odata.bind:string,uniquename:string,version:string}
+#1b412e8a {@odata.type:string,Attributes:[1x{@odata.type:string,AttributeType:string,AttributeTypeName:{Value:string},DisplayName:{@odata.type:string,LocalizedLabels:[1x{@odata.type:string,Label:string,LanguageCode:number}]},FormatName:{Value:string},IsPrimaryName:boolean,MaxLength:number,RequiredLevel:{CanBeChanged:boolean,ManagedPropertyLogicalName:string,Value:string},SchemaName:string}],Description:{@odata.type:string,LocalizedLabels:[1x{@odata.type:string,Label:string,LanguageCode:number}]},DisplayCollectionName:{@odata.type:string,LocalizedLabels:[1x{@odata.type:string,Label:string,LanguageCode:number}]},DisplayName:{@odata.type:string,LocalizedLabels:[1x{@odata.type:string,Label:string,LanguageCode:number}]},HasActivities:boolean,HasNotes:boolean,IsActivity:boolean,OwnershipType:string,SchemaName:string}
 #1b71745d {ParameterXml:string}
 #1c3b649b {parentappmoduleid@odata.bind:string,settingdefinitionid@odata.bind:string,value:string}
-#22bede1e {@odata.type:string,AttributeType:string,AttributeTypeName:{Value:string},DisplayName:{@odata.type:string,LocalizedLabels:[{@odata.type:string,Label:string,LanguageCode:number}]},IsPrimaryImage:boolean,MaxSizeInKB:number,RequiredLevel:{CanBeChanged:boolean,ManagedPropertyLogicalName:string,Value:string},SchemaName:string}
+#20224ada {Privileges:[5x{Depth:string,PrivilegeId:string}]}
 #2770187f {@odata.type:string,Entity1LogicalName:string,Entity2LogicalName:string,IntersectEntityName:string,SchemaName:string}
+#2b71ae7d {@odata.type:string,ChangeTrackingEnabled:boolean,CollectionSchemaName:string,Description:{LocalizedLabels:[1x{HasChanged:null,IsManaged:boolean,Label:string,LanguageCode:number,MetadataId:string}],UserLocalizedLabel:{HasChanged:null,IsManaged:boolean,Label:string,LanguageCode:number,MetadataId:string}},DisplayCollectionName:{LocalizedLabels:[1x{HasChanged:null,IsManaged:boolean,Label:string,LanguageCode:number,MetadataId:string}],UserLocalizedLabel:{HasChanged:null,IsManaged:boolean,Label:string,LanguageCode:number,MetadataId:string}},DisplayName:{LocalizedLabels:[1x{HasChanged:null,IsManaged:boolean,Label:string,LanguageCode:number,MetadataId:string}],UserLocalizedLabel:{HasChanged:null,IsManaged:boolean,Label:string,LanguageCode:number,MetadataId:string}},EntitySetName:string,HasActivities:boolean,HasNotes:boolean,IconLargeName:null,IconMediumName:null,IconSmallName:null,IconVectorName:null,IsActivity:boolean,IsCustomEntity:boolean,IsIntersect:boolean,IsManaged:boolean,IsQuickCreateEnabled:boolean,LogicalCollectionName:string,LogicalName:string,MetadataId:string,ObjectTypeCode:number,OwnershipType:string,PrimaryIdAttribute:string,PrimaryImageAttribute:null,PrimaryNameAttribute:string,Privileges:[8x{CanBeBasic:boolean,CanBeDeep:boolean,CanBeEntityReference:boolean,CanBeGlobal:boolean,CanBeLocal:boolean,CanBeParentEntityReference:boolean,Name:string,PrivilegeId:string,PrivilegeType:string}],SchemaName:string,TableType:string}
 #360d4c1c {charttype:number,datadescription:string,description:string,isdefault:boolean,name:string,presentationdescription:string,primaryentitytypecode:string,savedqueryvisualizationid:string}
 #37081196 {ContextEntity@odata.bind:string,OnClickEventJavaScriptWebResourceId@odata.bind:string,appactionid:string,buttonlabeltext:string,context:number,contextvalue:string,location:number,name:string,onclickeventjavascriptfunctionname:string,onclickeventjavascriptparameters:string,onclickeventtype:number,sequence:number,type:number,uniquename:string}
-#372383d8 {@odata.type:string,AttributeType:string,AttributeTypeName:{Value:string},DisplayName:{@odata.type:string,LocalizedLabels:[{@odata.type:string,Label:string,LanguageCode:number}]},Format:string,MaxLength:number,RequiredLevel:{CanBeChanged:boolean,ManagedPropertyLogicalName:string,Value:string},SchemaName:string}
-#373a4cf5 {@odata.type:string,ChangeTrackingEnabled:boolean,CollectionSchemaName:string,Description:{LocalizedLabels:[{HasChanged:null,IsManaged:boolean,Label:string,LanguageCode:number,MetadataId:string}],UserLocalizedLabel:{HasChanged:null,IsManaged:boolean,Label:string,LanguageCode:number,MetadataId:string}},DisplayCollectionName:{LocalizedLabels:[{HasChanged:null,IsManaged:boolean,Label:string,LanguageCode:number,MetadataId:string}],UserLocalizedLabel:{HasChanged:null,IsManaged:boolean,Label:string,LanguageCode:number,MetadataId:string}},DisplayName:{LocalizedLabels:[{HasChanged:null,IsManaged:boolean,Label:string,LanguageCode:number,MetadataId:string}],UserLocalizedLabel:{HasChanged:null,IsManaged:boolean,Label:string,LanguageCode:number,MetadataId:string}},EntitySetName:string,HasActivities:boolean,HasNotes:boolean,IconLargeName:null,IconMediumName:null,IconSmallName:null,IconVectorName:null,IsActivity:boolean,IsCustomEntity:boolean,IsIntersect:boolean,IsManaged:boolean,IsQuickCreateEnabled:boolean,LogicalCollectionName:string,LogicalName:string,MetadataId:string,ObjectTypeCode:number,OwnershipType:string,PrimaryIdAttribute:string,PrimaryImageAttribute:null,PrimaryNameAttribute:string,Privileges:[{CanBeBasic:boolean,CanBeDeep:boolean,CanBeEntityReference:boolean,CanBeGlobal:boolean,CanBeLocal:boolean,CanBeParentEntityReference:boolean,Name:string,PrivilegeId:string,PrivilegeType:string}],SchemaName:string,TableType:string}
+#390f6b73 {AppId:string,Components:[1x{@odata.id:string}]}
 #3afc734a {description:string,fetchxml:string,isdefault:boolean,layoutxml:string,name:string,querytype:number,returnedtypecode:string,savedqueryid:string}
+#3b86689e {@odata.type:string,AttributeType:string,AttributeTypeName:{Value:string},DisplayName:{@odata.type:string,LocalizedLabels:[1x{@odata.type:string,Label:string,LanguageCode:number}]},OptionSet:{@odata.type:string,IsGlobal:boolean,OptionSetType:string,Options:[3x{Label:{@odata.type:string,LocalizedLabels:[1x{@odata.type:string,Label:string,LanguageCode:number}]},Value:number}]},RequiredLevel:{CanBeChanged:boolean,ManagedPropertyLogicalName:string,Value:string},SchemaName:string}
+#3fa06a81 {@odata.type:string,AttributeType:string,AttributeTypeName:{Value:string},DisplayName:{@odata.type:string,LocalizedLabels:[1x{@odata.type:string,Label:string,LanguageCode:number}]},MaxValue:number,MinValue:number,Precision:number,PrecisionSource:number,RequiredLevel:{CanBeChanged:boolean,ManagedPropertyLogicalName:string,Value:string},SchemaName:string}
 #43dbd5f4 {RegardingObjectId_uxagentproject@odata.bind:string,agentconversationmessageid:string,message:string,messagecontext:string,messagesender:number}
 #473287f8 string
-#49714add {AppId:string,Components:[{@odata.id:string}|{@odata.type:string,formid:string}|{@odata.type:string,savedqueryid:string}|{@odata.type:string,savedqueryvisualizationid:string}|{@odata.type:string,sitemapid:string}]}
+#4898eb8f {@odata.type:string,DisplayName:{@odata.type:string,LocalizedLabels:[1x{@odata.type:string,Label:string,LanguageCode:number}]},IsGlobal:boolean,Name:string,OptionSetType:string,Options:[3x{Label:{@odata.type:string,LocalizedLabels:[1x{@odata.type:string,Label:string,LanguageCode:number}]},Value:number}]}
+#4940b353 {@odata.type:string,AttributeType:string,AttributeTypeName:{Value:string},DateTimeBehavior:{Value:string},DisplayName:{@odata.type:string,LocalizedLabels:[1x{@odata.type:string,Label:string,LanguageCode:number}]},Format:string,RequiredLevel:{CanBeChanged:boolean,ManagedPropertyLogicalName:string,Value:string},SchemaName:string}
+#497ea01a {Privileges:[1x{Depth:string,PrivilegeId:string}]}
 #4c52dd4a {customizationoptionvalueprefix:number,customizationprefix:string,friendlyname:string,uniquename:string}
-#51820fce {@odata.type:string,Attributes:[{@odata.type:string,AttributeType:string,AttributeTypeName:{Value:string},DisplayName:{@odata.type:string,LocalizedLabels:[{@odata.type:string,Label:string,LanguageCode:number}]},FormatName:{Value:string},IsPrimaryName:boolean,MaxLength:number,RequiredLevel:{CanBeChanged:boolean,ManagedPropertyLogicalName:string,Value:string},SchemaName:string}],Description:{@odata.type:string,LocalizedLabels:[{@odata.type:string,Label:string,LanguageCode:number}]},DisplayCollectionName:{@odata.type:string,LocalizedLabels:[{@odata.type:string,Label:string,LanguageCode:number}]},DisplayName:{@odata.type:string,LocalizedLabels:[{@odata.type:string,Label:string,LanguageCode:number}]},HasActivities:boolean,HasNotes:boolean,IsActivity:boolean,OwnershipType:string,SchemaName:string}
-#6241715b {@odata.type:string,AttributeType:string,AttributeTypeName:{Value:string},DisplayName:{@odata.type:string,LocalizedLabels:[{@odata.type:string,Label:string,LanguageCode:number}]},FormatName:{Value:string},MaxLength:number,RequiredLevel:{CanBeChanged:boolean,ManagedPropertyLogicalName:string,Value:string},SchemaName:string}
-#6c79ecb8 {@odata.type:string,AttributeType:string,AttributeTypeName:{Value:string},DisplayName:{@odata.type:string,LocalizedLabels:[{@odata.type:string,Label:string,LanguageCode:number}]},MaxValue:number,MinValue:number,Precision:number,RequiredLevel:{CanBeChanged:boolean,ManagedPropertyLogicalName:string,Value:string},SchemaName:string}
-#70963200 {Targets:[{@odata.type:string,contoso_billable:boolean,contoso_headcount:number,contoso_name:string,contoso_priority:number,contoso_stage:number,statecode:number,statuscode:number}]}
+#53686b0d {@odata.type:string,AttributeType:string,AttributeTypeName:{Value:string},DisplayName:{@odata.type:string,LocalizedLabels:[1x{@odata.type:string,Label:string,LanguageCode:number}]},MaxSizeInKB:number,RequiredLevel:{CanBeChanged:boolean,ManagedPropertyLogicalName:string,Value:string},SchemaName:string}
+#55bd8832 {AppId:string,Components:[3x{@odata.id:string}|6x{@odata.type:string,formid:string}|9x{@odata.type:string,savedqueryid:string}|1x{@odata.type:string,savedqueryvisualizationid:string}]}
+#6f73d760 {@odata.type:string,Lookup:{@odata.type:string,AttributeType:string,AttributeTypeName:{Value:string},DisplayName:{@odata.type:string,LocalizedLabels:[1x{@odata.type:string,Label:string,LanguageCode:number}]},RequiredLevel:{CanBeChanged:boolean,ManagedPropertyLogicalName:string,Value:string},SchemaName:string},ReferencedEntity:string,ReferencingEntity:string,SchemaName:string}
+#78d7bbae {@odata.type:string,AttributeType:string,AttributeTypeName:{Value:string},DisplayName:{@odata.type:string,LocalizedLabels:[1x{@odata.type:string,Label:string,LanguageCode:number}]},Format:string,MaxLength:number,RequiredLevel:{CanBeChanged:boolean,ManagedPropertyLogicalName:string,Value:string},SchemaName:string}
 #7a0f420e {value:string}
 #7d3c3d0e {content:string,displayname:string,name:string,webresourcetype:number}
-#83e36c47 {@odata.type:string,AttributeType:string,AttributeTypeName:{Value:string},DisplayName:{@odata.type:string,LocalizedLabels:[{@odata.type:string,Label:string,LanguageCode:number}]},MaxValue:number,MinValue:number,Precision:number,PrecisionSource:number,RequiredLevel:{CanBeChanged:boolean,ManagedPropertyLogicalName:string,Value:string},SchemaName:string}
-#856802de {@odata.type:string,DisplayName:{@odata.type:string,LocalizedLabels:[{@odata.type:string,Label:string,LanguageCode:number}]},IsGlobal:boolean,Name:string,OptionSetType:string,Options:[{Label:{@odata.type:string,LocalizedLabels:[{@odata.type:string,Label:string,LanguageCode:number}]},Value:number}]}
-#8b7f2581 {@odata.type:string,AttributeType:string,AttributeTypeName:{Value:string},DefaultValue:boolean,DisplayName:{@odata.type:string,LocalizedLabels:[{@odata.type:string,Label:string,LanguageCode:number}]},OptionSet:{@odata.type:string,FalseOption:{Label:{@odata.type:string,LocalizedLabels:[{@odata.type:string,Label:string,LanguageCode:number}]},Value:number},TrueOption:{Label:{@odata.type:string,LocalizedLabels:[{@odata.type:string,Label:string,LanguageCode:number}]},Value:number}},RequiredLevel:{CanBeChanged:boolean,ManagedPropertyLogicalName:string,Value:string},SchemaName:string}
+#7d59d525 {@odata.type:string,AttributeType:string,AttributeTypeName:{Value:string},DefaultValue:boolean,DisplayName:{@odata.type:string,LocalizedLabels:[1x{@odata.type:string,Label:string,LanguageCode:number}]},OptionSet:{@odata.type:string,FalseOption:{Label:{@odata.type:string,LocalizedLabels:[1x{@odata.type:string,Label:string,LanguageCode:number}]},Value:number},TrueOption:{Label:{@odata.type:string,LocalizedLabels:[1x{@odata.type:string,Label:string,LanguageCode:number}]},Value:number}},RequiredLevel:{CanBeChanged:boolean,ManagedPropertyLogicalName:string,Value:string},SchemaName:string}
+#83dcbd6c {@odata.type:string,AttributeType:string,AttributeTypeName:{Value:string},DisplayName:{@odata.type:string,LocalizedLabels:[1x{@odata.type:string,Label:string,LanguageCode:number}]},MaxValue:number,MinValue:number,Precision:number,RequiredLevel:{CanBeChanged:boolean,ManagedPropertyLogicalName:string,Value:string},SchemaName:string}
+#85166fac {@odata.type:string,AttributeType:string,AttributeTypeName:{Value:string},DisplayName:{@odata.type:string,LocalizedLabels:[1x{@odata.type:string,Label:string,LanguageCode:number}]},RequiredLevel:{CanBeChanged:boolean,ManagedPropertyLogicalName:string,Value:string},SchemaName:string}
+#85806883 {@odata.type:string,AttributeType:string,AttributeTypeName:{Value:string},AutoNumberFormat:string,DisplayName:{@odata.type:string,LocalizedLabels:[1x{@odata.type:string,Label:string,LanguageCode:number}]},FormatName:{Value:string},MaxLength:number,RequiredLevel:{CanBeChanged:boolean,ManagedPropertyLogicalName:string,Value:string},SchemaName:string}
 #8e40ff9d {name:string}
-#8f6a4d4a {@odata.type:string,AttributeType:string,AttributeTypeName:{Value:string},DateTimeBehavior:{Value:string},DisplayName:{@odata.type:string,LocalizedLabels:[{@odata.type:string,Label:string,LanguageCode:number}]},Format:string,RequiredLevel:{CanBeChanged:boolean,ManagedPropertyLogicalName:string,Value:string},SchemaName:string}
-#92d34533 {@odata.type:string,AttributeType:string,AttributeTypeName:{Value:string},AutoNumberFormat:string,DisplayName:{@odata.type:string,LocalizedLabels:[{@odata.type:string,Label:string,LanguageCode:number}]},FormatName:{Value:string},MaxLength:number,RequiredLevel:{CanBeChanged:boolean,ManagedPropertyLogicalName:string,Value:string},SchemaName:string}
 #97e1522c {description:string,fetchxml:string,layoutxml:string,name:string,returnedtypecode:string}
-#9acd7d6e {@odata.type:string,AttributeType:string,AttributeTypeName:{Value:string},DisplayName:{@odata.type:string,LocalizedLabels:[{@odata.type:string,Label:string,LanguageCode:number}]},MaxSizeInKB:number,RequiredLevel:{CanBeChanged:boolean,ManagedPropertyLogicalName:string,Value:string},SchemaName:string}
+#99efb92e {@odata.type:string,AttributeType:string,AttributeTypeName:{Value:string},DisplayName:{@odata.type:string,LocalizedLabels:[1x{@odata.type:string,Label:string,LanguageCode:number}]},GlobalOptionSet@odata.bind:string,RequiredLevel:{CanBeChanged:boolean,ManagedPropertyLogicalName:string,Value:string},SchemaName:string}
 #9bb0a025 {isdefault:boolean}
 #9bbb6c67 {AppUniqueName:string,SettingName:string,SolutionUniqueName:string,Value:string}
 #9d0094e8 {description:string,formid:string,formxml:string,istabletenabled:boolean,name:string,type:string}
-#9f5072f2 {Privileges:[{Depth:string,PrivilegeId:string}]}
-#a17a2bf2 {AttributeLogicalName:string,EntityLogicalName:string,Label:{@odata.type:string,LocalizedLabels:[{@odata.type:string,Label:string,LanguageCode:number}]},StateCode:number,Value:number}
 #a48e6542 {sitemapname:string,sitemapxml:string}
-#acd7b70b {@odata.type:string,Lookup:{@odata.type:string,AttributeType:string,AttributeTypeName:{Value:string},DisplayName:{@odata.type:string,LocalizedLabels:[{@odata.type:string,Label:string,LanguageCode:number}]},RequiredLevel:{CanBeChanged:boolean,ManagedPropertyLogicalName:string,Value:string},SchemaName:string},ReferencedEntity:string,ReferencingEntity:string,SchemaName:string}
-#afe54a0a {Lookup:{@odata.type:string,DisplayName:{@odata.type:string,LocalizedLabels:[{@odata.type:string,Label:string,LanguageCode:number}]},RequiredLevel:{CanBeChanged:boolean,ManagedPropertyLogicalName:string,Value:string},SchemaName:string,Targets:[string]},OneToManyRelationships:[{@odata.type:string,ReferencedEntity:string,ReferencingEntity:string,SchemaName:string}]}
 #b3f86741 {appmoduleid:string,clienttype:number,description:string,formfactor:number,name:string,navigationtype:number,uniquename:string,webresourceid:string}
-#b75c6b69 {AppId:string,Components:[{@odata.id:string}]}
 #bb920f89 {description:string,formxml:string,name:string,objecttypecode:string,type:number}
 #c1ba6652 {AddRequiredComponents:boolean,ComponentId:string,ComponentType:number,SolutionUniqueName:string}
 #c4c362c9 {sitemapid:string,sitemapname:string,sitemapnameunique:string,sitemapxml:string}
 #d13e24c0 {businessunitid@odata.bind:string,description:string,name:string}
 #d59ac10f {description:string,formid:string,formxml:string,name:string,objecttypecode:string,type:number}
-#db9d6078 {AppId:string,Components:[{@odata.id:string}|{@odata.type:string,formid:string}|{@odata.type:string,savedqueryid:string}|{@odata.type:string,savedqueryvisualizationid:string}]}
+#d6b4b26e {@odata.type:string,ChangeTrackingEnabled:boolean,CollectionSchemaName:string,Description:{LocalizedLabels:[1x{HasChanged:null,IsManaged:boolean,Label:string,LanguageCode:number,MetadataId:string}],UserLocalizedLabel:{HasChanged:null,IsManaged:boolean,Label:string,LanguageCode:number,MetadataId:string}},DisplayCollectionName:{LocalizedLabels:[1x{HasChanged:null,IsManaged:boolean,Label:string,LanguageCode:number,MetadataId:string}],UserLocalizedLabel:{HasChanged:null,IsManaged:boolean,Label:string,LanguageCode:number,MetadataId:string}},DisplayName:{LocalizedLabels:[1x{HasChanged:null,IsManaged:boolean,Label:string,LanguageCode:number,MetadataId:string}],UserLocalizedLabel:{HasChanged:null,IsManaged:boolean,Label:string,LanguageCode:number,MetadataId:string}},EntitySetName:string,HasActivities:boolean,HasNotes:boolean,IconLargeName:null,IconMediumName:null,IconSmallName:null,IconVectorName:string,IsActivity:boolean,IsCustomEntity:boolean,IsIntersect:boolean,IsManaged:boolean,IsQuickCreateEnabled:boolean,LogicalCollectionName:string,LogicalName:string,MetadataId:string,ObjectTypeCode:number,OwnershipType:string,PrimaryIdAttribute:string,PrimaryImageAttribute:string,PrimaryNameAttribute:string,Privileges:[8x{CanBeBasic:boolean,CanBeDeep:boolean,CanBeEntityReference:boolean,CanBeGlobal:boolean,CanBeLocal:boolean,CanBeParentEntityReference:boolean,Name:string,PrivilegeId:string,PrivilegeType:string}],SchemaName:string,TableType:string}
 #e0abe8e4 {formxml:string,name:string,objecttypecode:string,type:number}
+#e1de4e0e {AppId:string,Components:[3x{@odata.id:string}|6x{@odata.type:string,formid:string}|9x{@odata.type:string,savedqueryid:string}|1x{@odata.type:string,savedqueryvisualizationid:string}|1x{@odata.type:string,sitemapid:string}]}
+#e32dd0e5 {Lookup:{@odata.type:string,DisplayName:{@odata.type:string,LocalizedLabels:[1x{@odata.type:string,Label:string,LanguageCode:number}]},RequiredLevel:{CanBeChanged:boolean,ManagedPropertyLogicalName:string,Value:string},SchemaName:string,Targets:[2xstring]},OneToManyRelationships:[2x{@odata.type:string,ReferencedEntity:string,ReferencingEntity:string,SchemaName:string}]}
 #e34f0019 {ContextEntity@odata.bind:string,ParentAppActionId@odata.bind:string,appactionid:string,context:number,contextvalue:string,grouptitle:string,isgrouptitlehidden:boolean,location:number,name:string,type:number,uniquename:string}
 #e39def73 {formxml:string}
-#e6b88ef4 {@odata.type:string,ChangeTrackingEnabled:boolean,CollectionSchemaName:string,Description:{LocalizedLabels:[{HasChanged:null,IsManaged:boolean,Label:string,LanguageCode:number,MetadataId:string}],UserLocalizedLabel:{HasChanged:null,IsManaged:boolean,Label:string,LanguageCode:number,MetadataId:string}},DisplayCollectionName:{LocalizedLabels:[{HasChanged:null,IsManaged:boolean,Label:string,LanguageCode:number,MetadataId:string}],UserLocalizedLabel:{HasChanged:null,IsManaged:boolean,Label:string,LanguageCode:number,MetadataId:string}},DisplayName:{LocalizedLabels:[{HasChanged:null,IsManaged:boolean,Label:string,LanguageCode:number,MetadataId:string}],UserLocalizedLabel:{HasChanged:null,IsManaged:boolean,Label:string,LanguageCode:number,MetadataId:string}},EntitySetName:string,HasActivities:boolean,HasNotes:boolean,IconLargeName:null,IconMediumName:null,IconSmallName:null,IconVectorName:string,IsActivity:boolean,IsCustomEntity:boolean,IsIntersect:boolean,IsManaged:boolean,IsQuickCreateEnabled:boolean,LogicalCollectionName:string,LogicalName:string,MetadataId:string,ObjectTypeCode:number,OwnershipType:string,PrimaryIdAttribute:string,PrimaryImageAttribute:string,PrimaryNameAttribute:string,Privileges:[{CanBeBasic:boolean,CanBeDeep:boolean,CanBeEntityReference:boolean,CanBeGlobal:boolean,CanBeLocal:boolean,CanBeParentEntityReference:boolean,Name:string,PrivilegeId:string,PrivilegeType:string}],SchemaName:string,TableType:string}
-#e77934e1 {@odata.type:string,DisplayName:{@odata.type:string,LocalizedLabels:[{@odata.type:string,Label:string,LanguageCode:number}]},KeyAttributes:[string],SchemaName:string}
+#e75eb5e5 {Targets:[1x{@odata.type:string,contoso_ProjectId@odata.bind:string,contoso_hours:number,contoso_title:string}]}
+#e84db148 {@odata.type:string,DisplayName:{@odata.type:string,LocalizedLabels:[1x{@odata.type:string,Label:string,LanguageCode:number}]},KeyAttributes:[1xstring],SchemaName:string}
+#e95a897a {Targets:[1x{@odata.type:string,contoso_billable:boolean,contoso_headcount:number,contoso_name:string,contoso_priority:number,contoso_stage:number,statecode:number,statuscode:number}]}
 #eaa4807c {ContextEntity@odata.bind:string,OnClickEventJavaScriptWebResourceId@odata.bind:string,ParentAppActionId@odata.bind:string,appactionid:string,buttonlabeltext:string,context:number,contextvalue:string,location:number,name:string,onclickeventjavascriptfunctionname:string,onclickeventjavascriptparameters:string,onclickeventtype:number,sequence:number,type:number,uniquename:string}
-#eb9ac7f4 {Targets:[{@odata.type:string,contoso_ProjectId@odata.bind:string,contoso_hours:number,contoso_title:string}]}
-#ede0dcd7 {@odata.type:string,AttributeType:string,AttributeTypeName:{Value:string},DisplayName:{@odata.type:string,LocalizedLabels:[{@odata.type:string,Label:string,LanguageCode:number}]},Format:string,MaxValue:number,MinValue:number,RequiredLevel:{CanBeChanged:boolean,ManagedPropertyLogicalName:string,Value:string},SchemaName:string}
 #f07e5c5f {@odata.id:string}
 #f3dc5825 {filename:string,filetype:number,uxagentprojectfileid:string,uxagentprojectid@odata.bind:string}
-#fb57c51f {@odata.type:string,AttributeType:string,AttributeTypeName:{Value:string},DisplayName:{@odata.type:string,LocalizedLabels:[{@odata.type:string,Label:string,LanguageCode:number}]},GlobalOptionSet@odata.bind:string,RequiredLevel:{CanBeChanged:boolean,ManagedPropertyLogicalName:string,Value:string},SchemaName:string}
+#fab2e725 {@odata.type:string,AttributeType:string,AttributeTypeName:{Value:string},DisplayName:{@odata.type:string,LocalizedLabels:[1x{@odata.type:string,Label:string,LanguageCode:number}]},IsPrimaryImage:boolean,MaxSizeInKB:number,RequiredLevel:{CanBeChanged:boolean,ManagedPropertyLogicalName:string,Value:string},SchemaName:string}

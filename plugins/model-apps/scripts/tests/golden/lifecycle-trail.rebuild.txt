@@ -1,5 +1,5 @@
 # 333 requests, 4 publishes
-## up to publish 1: contoso_project
+## up to publish 1: importexportxml(entities(entity=contoso_project))
   1x GET /EntityDefinitions(LogicalName='appmodule')?$select=EntitySetName -> 200
   1x GET /EntityDefinitions(LogicalName='contoso_project') -> 200
   1x GET /EntityDefinitions(LogicalName='contoso_project')/Attributes/Microsoft.Dynamics.CRM.MultiSelectPicklistAttributeMetadata?$select=LogicalName&$expand=OptionSet($select=Options) -> 200
@@ -33,9 +33,9 @@
   1x GET /webresourceset?$select=webresourceid,content&$filter=name eq 'contoso_project.js'&$top=1 -> 200
   1x GET /webresourceset?$select=webresourceid,content&$filter=name eq 'contoso_projecticon.svg'&$top=1 -> 200
   1x POST /PublishXml #1b71745d -> 204
-  1x PUT /EntityDefinitions(<id>) #373a4cf5 -> 204
-  1x PUT /EntityDefinitions(<id>) #e6b88ef4 -> 204
-## up to publish 2: contoso_project contoso_tag contoso_task
+  1x PUT /EntityDefinitions(<id>) #2b71ae7d -> 204
+  1x PUT /EntityDefinitions(<id>) #d6b4b26e -> 204
+## up to publish 2: importexportxml(entities(entity=contoso_project entity=contoso_tag entity=contoso_task))
   1x GET /EntityDefinitions(LogicalName='appaction')?$select=EntitySetName -> 200
   1x GET /EntityDefinitions(LogicalName='appmodulecomponent')?$select=EntitySetName -> 200
   1x GET /EntityDefinitions(LogicalName='contact')?$select=MetadataId,EntitySetName -> 200
@@ -77,7 +77,7 @@
   4x PATCH /savedqueries(<id>)?$select=savedqueryid #97e1522c -> 200
   2x PATCH /systemforms(<id>) #9bb0a025 -> 204
   1x POST /PublishXml #1b71745d -> 204
-## up to publish 3: app
+## up to publish 3: importexportxml(appmodules(appmodule=#id))
   1x GET /EntityDefinitions(LogicalName='contoso_project')?$select=MetadataId,EntitySetName -> 200
   1x GET /EntityDefinitions(LogicalName='contoso_tag')?$select=MetadataId,EntitySetName -> 200
   1x GET /EntityDefinitions(LogicalName='contoso_task')?$select=MetadataId,EntitySetName -> 200
@@ -122,9 +122,9 @@
   1x GET /uxagentprojects?$select=uxagentprojectid,versionnumber&$filter=uxagentprojectid eq <id> -> 200
   1x GET /webresourceset?$select=webresourceid,content&$filter=name eq 'contoso_kitchensink_pagemanifest'&$top=1 -> 200
   1x PATCH /sitemaps(<id>)?$select=sitemapid #a48e6542 -> 200
-  1x POST /AddAppComponents #db9d6078 -> 204
+  1x POST /AddAppComponents #55bd8832 -> 204
   1x POST /PublishXml #1b71745d -> 204
-## up to publish 4: contoso_project contoso_task app
+## up to publish 4: importexportxml(appmodules(appmodule=#id) entities(entity=contoso_project entity=contoso_task))
   1x GET /EntityDefinitions(LogicalName='appmodule')?$select=LogicalName,Privileges -> 200
   1x GET /EntityDefinitions(LogicalName='appmodulecomponent')?$select=EntitySetName -> 200
   1x GET /EntityDefinitions(LogicalName='businessunit')?$select=EntitySetName -> 200
@@ -157,8 +157,8 @@
   1x POST /PublishXml #1b71745d -> 204
   1x POST /SaveSettingValue #9bbb6c67 -> 204
   1x POST /appmodules(<id>)/appmoduleroles_association/$ref #f07e5c5f -> 400
-  1x POST /roles(<id>)/Microsoft.Dynamics.CRM.AddPrivilegesRole #9f5072f2 -> 204
-  1x POST /roles(<id>)/Microsoft.Dynamics.CRM.ReplacePrivilegesRole #9f5072f2 -> 204
+  1x POST /roles(<id>)/Microsoft.Dynamics.CRM.AddPrivilegesRole #497ea01a -> 204
+  1x POST /roles(<id>)/Microsoft.Dynamics.CRM.ReplacePrivilegesRole #20224ada -> 204
 ## after the last publish
   1x GET /EntityDefinitions(LogicalName='contact')?$select=MetadataId -> 200
   1x GET /EntityDefinitions(LogicalName='contoso_project')/Attributes/Microsoft.Dynamics.CRM.MultiSelectPicklistAttributeMetadata?$select=LogicalName&$expand=OptionSet($select=Options) -> 200
@@ -214,13 +214,14 @@
   1x GET /webresourceset?$select=webresourceid,content&$filter=name eq 'contoso_projecticon.svg'&$top=1 -> 200
 # shapes
 #1b71745d {ParameterXml:string}
-#373a4cf5 {@odata.type:string,ChangeTrackingEnabled:boolean,CollectionSchemaName:string,Description:{LocalizedLabels:[{HasChanged:null,IsManaged:boolean,Label:string,LanguageCode:number,MetadataId:string}],UserLocalizedLabel:{HasChanged:null,IsManaged:boolean,Label:string,LanguageCode:number,MetadataId:string}},DisplayCollectionName:{LocalizedLabels:[{HasChanged:null,IsManaged:boolean,Label:string,LanguageCode:number,MetadataId:string}],UserLocalizedLabel:{HasChanged:null,IsManaged:boolean,Label:string,LanguageCode:number,MetadataId:string}},DisplayName:{LocalizedLabels:[{HasChanged:null,IsManaged:boolean,Label:string,LanguageCode:number,MetadataId:string}],UserLocalizedLabel:{HasChanged:null,IsManaged:boolean,Label:string,LanguageCode:number,MetadataId:string}},EntitySetName:string,HasActivities:boolean,HasNotes:boolean,IconLargeName:null,IconMediumName:null,IconSmallName:null,IconVectorName:null,IsActivity:boolean,IsCustomEntity:boolean,IsIntersect:boolean,IsManaged:boolean,IsQuickCreateEnabled:boolean,LogicalCollectionName:string,LogicalName:string,MetadataId:string,ObjectTypeCode:number,OwnershipType:string,PrimaryIdAttribute:string,PrimaryImageAttribute:null,PrimaryNameAttribute:string,Privileges:[{CanBeBasic:boolean,CanBeDeep:boolean,CanBeEntityReference:boolean,CanBeGlobal:boolean,CanBeLocal:boolean,CanBeParentEntityReference:boolean,Name:string,PrivilegeId:string,PrivilegeType:string}],SchemaName:string,TableType:string}
+#20224ada {Privileges:[5x{Depth:string,PrivilegeId:string}]}
+#2b71ae7d {@odata.type:string,ChangeTrackingEnabled:boolean,CollectionSchemaName:string,Description:{LocalizedLabels:[1x{HasChanged:null,IsManaged:boolean,Label:string,LanguageCode:number,MetadataId:string}],UserLocalizedLabel:{HasChanged:null,IsManaged:boolean,Label:string,LanguageCode:number,MetadataId:string}},DisplayCollectionName:{LocalizedLabels:[1x{HasChanged:null,IsManaged:boolean,Label:string,LanguageCode:number,MetadataId:string}],UserLocalizedLabel:{HasChanged:null,IsManaged:boolean,Label:string,LanguageCode:number,MetadataId:string}},DisplayName:{LocalizedLabels:[1x{HasChanged:null,IsManaged:boolean,Label:string,LanguageCode:number,MetadataId:string}],UserLocalizedLabel:{HasChanged:null,IsManaged:boolean,Label:string,LanguageCode:number,MetadataId:string}},EntitySetName:string,HasActivities:boolean,HasNotes:boolean,IconLargeName:null,IconMediumName:null,IconSmallName:null,IconVectorName:null,IsActivity:boolean,IsCustomEntity:boolean,IsIntersect:boolean,IsManaged:boolean,IsQuickCreateEnabled:boolean,LogicalCollectionName:string,LogicalName:string,MetadataId:string,ObjectTypeCode:number,OwnershipType:string,PrimaryIdAttribute:string,PrimaryImageAttribute:null,PrimaryNameAttribute:string,Privileges:[8x{CanBeBasic:boolean,CanBeDeep:boolean,CanBeEntityReference:boolean,CanBeGlobal:boolean,CanBeLocal:boolean,CanBeParentEntityReference:boolean,Name:string,PrivilegeId:string,PrivilegeType:string}],SchemaName:string,TableType:string}
+#497ea01a {Privileges:[1x{Depth:string,PrivilegeId:string}]}
+#55bd8832 {AppId:string,Components:[3x{@odata.id:string}|6x{@odata.type:string,formid:string}|9x{@odata.type:string,savedqueryid:string}|1x{@odata.type:string,savedqueryvisualizationid:string}]}
 #97e1522c {description:string,fetchxml:string,layoutxml:string,name:string,returnedtypecode:string}
 #9bb0a025 {isdefault:boolean}
 #9bbb6c67 {AppUniqueName:string,SettingName:string,SolutionUniqueName:string,Value:string}
-#9f5072f2 {Privileges:[{Depth:string,PrivilegeId:string}]}
 #a48e6542 {sitemapname:string,sitemapxml:string}
-#db9d6078 {AppId:string,Components:[{@odata.id:string}|{@odata.type:string,formid:string}|{@odata.type:string,savedqueryid:string}|{@odata.type:string,savedqueryvisualizationid:string}]}
+#d6b4b26e {@odata.type:string,ChangeTrackingEnabled:boolean,CollectionSchemaName:string,Description:{LocalizedLabels:[1x{HasChanged:null,IsManaged:boolean,Label:string,LanguageCode:number,MetadataId:string}],UserLocalizedLabel:{HasChanged:null,IsManaged:boolean,Label:string,LanguageCode:number,MetadataId:string}},DisplayCollectionName:{LocalizedLabels:[1x{HasChanged:null,IsManaged:boolean,Label:string,LanguageCode:number,MetadataId:string}],UserLocalizedLabel:{HasChanged:null,IsManaged:boolean,Label:string,LanguageCode:number,MetadataId:string}},DisplayName:{LocalizedLabels:[1x{HasChanged:null,IsManaged:boolean,Label:string,LanguageCode:number,MetadataId:string}],UserLocalizedLabel:{HasChanged:null,IsManaged:boolean,Label:string,LanguageCode:number,MetadataId:string}},EntitySetName:string,HasActivities:boolean,HasNotes:boolean,IconLargeName:null,IconMediumName:null,IconSmallName:null,IconVectorName:string,IsActivity:boolean,IsCustomEntity:boolean,IsIntersect:boolean,IsManaged:boolean,IsQuickCreateEnabled:boolean,LogicalCollectionName:string,LogicalName:string,MetadataId:string,ObjectTypeCode:number,OwnershipType:string,PrimaryIdAttribute:string,PrimaryImageAttribute:string,PrimaryNameAttribute:string,Privileges:[8x{CanBeBasic:boolean,CanBeDeep:boolean,CanBeEntityReference:boolean,CanBeGlobal:boolean,CanBeLocal:boolean,CanBeParentEntityReference:boolean,Name:string,PrivilegeId:string,PrivilegeType:string}],SchemaName:string,TableType:string}
 #e39def73 {formxml:string}
-#e6b88ef4 {@odata.type:string,ChangeTrackingEnabled:boolean,CollectionSchemaName:string,Description:{LocalizedLabels:[{HasChanged:null,IsManaged:boolean,Label:string,LanguageCode:number,MetadataId:string}],UserLocalizedLabel:{HasChanged:null,IsManaged:boolean,Label:string,LanguageCode:number,MetadataId:string}},DisplayCollectionName:{LocalizedLabels:[{HasChanged:null,IsManaged:boolean,Label:string,LanguageCode:number,MetadataId:string}],UserLocalizedLabel:{HasChanged:null,IsManaged:boolean,Label:string,LanguageCode:number,MetadataId:string}},DisplayName:{LocalizedLabels:[{HasChanged:null,IsManaged:boolean,Label:string,LanguageCode:number,MetadataId:string}],UserLocalizedLabel:{HasChanged:null,IsManaged:boolean,Label:string,LanguageCode:number,MetadataId:string}},EntitySetName:string,HasActivities:boolean,HasNotes:boolean,IconLargeName:null,IconMediumName:null,IconSmallName:null,IconVectorName:string,IsActivity:boolean,IsCustomEntity:boolean,IsIntersect:boolean,IsManaged:boolean,IsQuickCreateEnabled:boolean,LogicalCollectionName:string,LogicalName:string,MetadataId:string,ObjectTypeCode:number,OwnershipType:string,PrimaryIdAttribute:string,PrimaryImageAttribute:string,PrimaryNameAttribute:string,Privileges:[{CanBeBasic:boolean,CanBeDeep:boolean,CanBeEntityReference:boolean,CanBeGlobal:boolean,CanBeLocal:boolean,CanBeParentEntityReference:boolean,Name:string,PrivilegeId:string,PrivilegeType:string}],SchemaName:string,TableType:string}
 #f07e5c5f {@odata.id:string}

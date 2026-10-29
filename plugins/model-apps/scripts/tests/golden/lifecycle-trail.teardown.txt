@@ -1,5 +1,5 @@
 # 129 requests, 1 publishes
-## up to publish 1: contoso_project contoso_task
+## up to publish 1: importexportxml(entities(entity=contoso_project entity=contoso_task))
   4x DELETE /agentconversationmessages(<id>) -> 204
   4x DELETE /appactions(<id>) -> 204
   1x DELETE /roles(<id>) -> 204
