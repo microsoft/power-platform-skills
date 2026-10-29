@@ -253,6 +253,11 @@ DoD, China); an unrecognized cloud sends nothing. Then:
 - **What's collected:** skill name, plugin/PAC/agent versions, OS/Node versions,
   session/correlation IDs, and Dataverse organization and Entra tenant GUIDs when
   PAC is signed in. Model Apps excludes the signed-in user's Entra object ID.
+  When an app build (`--apply`) or a page upload finishes, a `skill_completed`
+  event also records its outcome, duration, a fixed error class, and how many
+  steps of each build phase were created, already present or failed (or, for a
+  page, whether it was created, updated or unchanged) — with the organization
+  and tenant GUIDs of the environment it targeted, read with one `WhoAmI`.
   Events do not include file paths, prompts, tool inputs, entity/table names, URLs,
   credentials, usernames, or hostnames.
 - **Local diagnostic mirror:** every event is also written to

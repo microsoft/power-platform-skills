@@ -23,6 +23,7 @@ on:
             - "plugins/model-apps/scripts/lib/nearest-name.js"
             - "plugins/model-apps/scripts/lib/utf8-stream.js"
             - "plugins/model-apps/scripts/lib/cli-failure.js"
+            - "plugins/model-apps/scripts/lib/telemetry/skill-completed.js"
             - "plugins/model-apps/scripts/lib/telemetry/ikey.json"
             - "plugins/model-apps/scripts/lib/dataverse-auth.js"
             - "plugins/model-apps/scripts/check-auth.js"
