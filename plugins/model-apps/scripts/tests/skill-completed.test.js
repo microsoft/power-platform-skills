@@ -10,7 +10,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
-const os = require('node:os');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 
@@ -18,6 +17,8 @@ const sc = require('../lib/telemetry/skill-completed.js');
 const { PHASES } = require('../lib/stages.js');
 const { buildModelApp, completionFor, reportCompletion } = require('../build-model-app.js');
 const { ConnectionError } = require('../lib/maker-sdk.js');
+// Removes every folder these tests make once the file is done; the suite fails on anything left in its temp folder.
+const { makeTempDir } = require('./helpers/temp-dirs.js');
 
 const MODULE = path.resolve(__dirname, '..', 'lib', 'telemetry', 'skill-completed.js');
 const SHIPPED_IKEY = path.resolve(__dirname, '..', 'lib', 'telemetry', 'ikey.json');
@@ -25,7 +26,17 @@ const ORG = '11111111-2222-4333-8444-555555555555';
 const TENANT = '66666666-7777-4888-9999-aaaaaaaaaaaa';
 
 function mkTemp() {
-  return fs.mkdtempSync(path.join(os.tmpdir(), 'modelapps-skillcompleted-'));
+  return makeTempDir('modelapps-skillcompleted-');
+}
+
+// The detached dispatcher writes the local mirror before it decides where (or whether) to send. A case that expects NO probe waits for
+// the mirror, so the child has finished with the folder before the file's cleanup removes it.
+function waitForMirror(configDir, timeoutMs = 5000) {
+  const root = path.join(configDir, 'telemetry', 'model-apps', 'sessions');
+  const has = () => fs.existsSync(root) && fs.readdirSync(root).some((d) => fs.existsSync(path.join(root, d, 'events.jsonl')));
+  const deadline = Date.now() + timeoutMs;
+  while (!has() && Date.now() < deadline) sleep(25);
+  return has();
 }
 
 function sleep(ms) {
@@ -359,6 +370,7 @@ test('an environment in an unrecognized cloud is not sent anywhere — with an o
     const { res, probe } = emitInChild({ input: { ...OK_INPUT, envUrl: 'https://contoso.example.com' }, configDir, identity });
     assert.equal(res.stdout, 'true', res.stderr);
     // Without an ID a blank cloud would read as a signed-out PAC and take the public US default; the emitter names it unroutable instead.
+    assert.ok(waitForMirror(configDir), 'the dispatcher ran (it mirrors every event it is handed)');
     assert.equal(waitForFile(probe, 1500), false, `routed somewhere with ${JSON.stringify(identity)}`);
   }
 });
