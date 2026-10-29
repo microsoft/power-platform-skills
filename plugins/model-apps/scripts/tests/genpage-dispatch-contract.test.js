@@ -1203,6 +1203,8 @@ test('every instruction that writes or edits a page states the iteration rule in
   const editRule = squash(edit).indexOf(ITERATION_RULE);
   assert.ok(editRule > 0 && editRule < squash(edit).indexOf('## Edit Phase 6: Deploy Updated Page'), 'an edited page is reviewed before it is uploaded');
   assert.match(squash(edit), /Do not silently expand an unrelated edit: convert an existing form only when the requested change needs it or the user asks for it, and state any resulting behavior change in the summary\./);
+  assert.match(squash(edit), /`Array\.from` reads the whole iterable at once: where a loop stops early or a destructure reads only the first values of a generator or another iterator, the conversion reads the rest too/, 'converting an existing form is not said to be neutral');
+  assert.doesNotMatch(squash(edit), /changes nothing here/);
   // /app-builder: Phase 1.5 step 5, before promote-intent-pages.js commits the pages.
   const appBuilder = docs['app-builder'];
   const appRule = squash(appBuilder).indexOf(ITERATION_RULE);

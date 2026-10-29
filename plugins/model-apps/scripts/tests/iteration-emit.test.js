@@ -217,6 +217,19 @@ test('the one disclosed difference of iterator support: a destructuring default 
   assert.deepEqual(run(source, ['pair'], { profile: 'legacy' }).values.pair, [3, 3], 'modern JavaScript and the legacy emit read the element after the default');
 });
 
+// skills/genpage/edit-flow.md: converting an existing form is not always neutral — `Array.from` reads the whole iterable, where a destructure or a loop that stops early reads a prefix.
+test('under iterator support a destructure or a loop that stops early reads only a prefix of a generator, and Array.from reads all of it — converting such a form runs the rest of the generator', () => {
+  const source = `let directReads = 0;
+let convertedReads = 0;
+let loopReads = 0;
+function* values(counter: () => void) { counter(); yield 1; counter(); yield 2; counter(); yield 3; }
+const [direct] = values(() => { directReads++; });
+const [converted] = Array.from(values(() => { convertedReads++; }));
+for (const v of values(() => { loopReads++; })) { if (v === 1) break; }
+`;
+  assert.deepEqual(run(source, ['direct', 'converted', 'directReads', 'convertedReads', 'loopReads']).values, { direct: 1, converted: 1, directReads: 1, convertedReads: 3, loopReads: 1 });
+});
+
 // ── The teaching: Critical Rule 24 and Common Errors §5 ───────────────────────────────────────────────────────────────────────
 
 // The section, its labelled fences in order, and each fence's role. Every fence is its own example: none shares a declaration

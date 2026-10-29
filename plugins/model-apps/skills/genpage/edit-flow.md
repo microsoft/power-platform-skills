@@ -583,7 +583,10 @@ Write every form your edit adds with that conversion. The upload compiles the wh
 again with iterator support, so a form the page already had now reads its values or stops
 throwing where an earlier release's upload lost them — a change users see, converted or
 not: say so in the summary when the page has such a form. Converting it keeps the page
-correct under an older compiler and changes nothing here. Do not silently
+correct under an older compiler, but `Array.from` reads the whole iterable at once: where a
+loop stops early or a destructure reads only the first values of a generator or another
+iterator, the conversion reads the rest too — check that doing so changes nothing the page
+shows or does before converting such a form. Do not silently
 expand an unrelated edit: convert an existing form only when the requested change needs
 it or the user asks for it, and state any resulting behavior change in the summary.
 
