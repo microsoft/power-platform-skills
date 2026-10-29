@@ -1338,7 +1338,7 @@ function makeGenpageSdk(env, deps = {}) {
     // navigation it pushes — the one the server holds: this call fetches the app, adds the page entries and the views it was asked for, and pushes that — into their active Main forms, public views and
     // charts; but on the transport of an SDK this backend made, the push's AddAppComponents is cut down to the views this edit pins (`appScope`, `pushApp`), so it adds no Main form and
     // `entityTables` is empty. Only through a lent SDK, whose transport is its owner's, does the push add them all: then `entityTables` is the tables of those Entity entries (`entityTablesOfSiteMap`).
-    // Returns { added: [pageId…], alreadyPlaced: [pageId…], pinnedViews: [viewId…], warnings: [...], appEdited, provedPublished? }. It throws, with
+    // Returns { added: [pageId…], alreadyPlaced: [pageId…], pinnedViews: [viewId…], warnings: [...], appEdited, provedPublished? } — `pinnedViews` the views it asked for that the app is read back holding. It throws, with
     // the page unplaced, when the app cannot be read, the edit is refused, `beforeAppWrite` throws, or the app's publish fails — and with `finish`, when the published
     // navigation does not show the page after the app was published.
     async placeInApp(appId, options = {}) {
@@ -1407,6 +1407,25 @@ function makeGenpageSdk(env, deps = {}) {
         await options.beforeAppWrite({ pushes: edited, entityTables: limited ? [] : entityTablesOfSiteMap(app.siteMap), mainFormsByTable: app.components && app.components.mainFormsByTable });
       }
       if (edited) await pushApp(sdk, appId, warnings, appScope, { views: pin });
+      // `pinnedViews` is what the app's current layer holds after the push, read back — not what was asked: the SDK reports a pin it could not make (a refusal, an answer it could not read) as a warning of the
+      // push and saves the navigation all the same, so a view asked for is not a view added. One that is not there, or not seen to be, is said in a warning of its own.
+      let pinnedViews = pin;
+      if (edited && pin.length) {
+        let held = null;
+        try {
+          held = await viewsHeldBy(sdk, appId);
+        } catch {
+          // Unread: nothing is confirmed, and the warning below says so.
+        }
+        pinnedViews = held ? pin.filter((id) => held.has(id)) : [];
+        const absent = pin.filter((id) => !pinnedViews.includes(id));
+        if (absent.length) {
+          const views = `the default view${absent.length === 1 ? '' : 's'} ${absent.join(', ')} of the tables the pages read`;
+          warnings.push(held
+            ? `${views} ${absent.length === 1 ? 'was' : 'were'} not added to app ${appId} — the maker's "/" picker may not list ${absent.length === 1 ? 'its table' : 'their tables'}; run the same command again to add ${absent.length === 1 ? 'it' : 'them'}`
+            : `${views} could not be confirmed in app ${appId}: its components could not be read back — treat ${absent.length === 1 ? 'it' : 'them'} as added only once seen to be`);
+        }
+      }
       const published = await publish(sdk, 'app', appId, undefined);
       // The failures below name the app and the page(s) the caller asked for, as `removeFromApp`'s do, so a caller that prints one can go on from it.
       const asked = wantedPages.map((p) => String(p.pageId));
@@ -1420,7 +1439,7 @@ function makeGenpageSdk(env, deps = {}) {
             : `the default views of the tables the pages read were saved in app ${appId}`;
         throw genpageError(`${saved}, but publishing the app failed (${published.detail}) — ${navigation ? "the pages are in the app's saved navigation and show once it is published" : 'they take effect once the app is published'}`, { code: 'GENPAGE_APP_PUBLISH_FAILED', saved: true, ...who });
       }
-      const result = { added: added.map((p) => String(p.pageId)), alreadyPlaced, pinnedViews: pin, warnings, appEdited: edited };
+      const result = { added: added.map((p) => String(p.pageId)), alreadyPlaced, pinnedViews, warnings, appEdited: edited };
       if (!finishing) return result;
 
       // The publish was accepted (a refused one threw above); what runs is the app's published navigation, so that is what confirms it. PublishXml is asynchronous
@@ -1903,12 +1922,17 @@ async function defaultViewsOf(sdk, tables, warnings) {
 async function viewsToPin(sdk, appId, tables, warnings) {
   const ids = (await defaultViewsOf(sdk, tables, warnings)).map((view) => view.viewId);
   if (!ids.length) return [];
+  const held = await viewsHeldBy(sdk, appId);
+  return held ? ids.filter((id) => !held.has(id)) : ids;
+}
+
+// The ids of the views the app's CURRENT layer holds, or null when that layer cannot be read. The layer is the one an edit now would change, and the one an edit just made wrote.
+//   appmodulecomponent rows of type 26 (savedquery): [{ objectid: '<view id>', componenttype: 26 }]
+async function viewsHeldBy(sdk, appId) {
   const { currentAppLayer, appComponentRows } = require('./app-components.js');
   const layer = sdk.dataverse ? await currentAppLayer(sdk.dataverse, appId) : { ok: false };
-  if (!layer.ok) return ids;
-  // appmodulecomponent rows of type 26 (savedquery): [{ objectid: '<view id>', componenttype: 26 }]
-  const held = new Set((await appComponentRows(sdk, layer.appModuleIdUnique, 26)).map((row) => String(row.objectid).replace(/[{}]/g, '').toLowerCase()));
-  return ids.filter((id) => !held.has(id));
+  if (!layer.ok) return null;
+  return new Set((await appComponentRows(sdk, layer.appModuleIdUnique, 26)).map((row) => String(row.objectid).replace(/[{}]/g, '').toLowerCase()));
 }
 
 // The apps whose navigation names a page, in either layer: [{ uniqueName, savedOnly, appId?, name? }]. It is the scan the build makes for a page shared across apps (sitemap-pages.js `fetchAppsForPages`: every app's
