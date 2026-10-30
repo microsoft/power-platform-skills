@@ -529,7 +529,7 @@ test('readiness is read from the rows: a required variable without a value, an u
   const elsewhere = await h.run(s, { bindings: bound, connections: async () => [{ connectionId: 'conn-9' }] });
   assert.deepEqual(C.configurationReadiness(elsewhere.result).map((b) => [b.key, b.code]), [['contoso_sp', 'CONNECTION_REFERENCE_UNBOUND'], ['contoso_Calc', 'CUSTOM_API_IMPLEMENTATION_UNPROVEN']]);
   h.org.rows('customapis')[0]._plugintypeid_value = '00000000-0000-4000-8000-0000000000aa';
-  const ready = await h.run(s, { bindings: bound, connections: async () => [{ connectionId: 'CONN-1' }] });
+  const ready = await h.run(s, { bindings: bound, connections: async () => [{ connectionId: 'CONN-1', connectorId: SP }] });
   assert.deepEqual(C.configurationReadiness(ready.result), []);
   assert.deepEqual(h.org.unexpected, []);
 });
@@ -779,7 +779,7 @@ test('build runtime, pages only: a page is gated on the rows read now, never on 
   const h = await harness();
   await h.run(referenceOnly());
   const bindings = C.readDeploymentBindings({ ConnectionReferences: [{ LogicalName: 'contoso_sp', ConnectionId: 'conn-1' }] }, referenceOnly());
-  const runtime = createConfigurationRuntime({ spec: referenceOnly(), sdk: h.sdk, opts: { creates: h.creates, configurationBindings: bindings, connections: async () => [{ connectionId: 'conn-1' }] } });
+  const runtime = createConfigurationRuntime({ spec: referenceOnly(), sdk: h.sdk, opts: { creates: h.creates, configurationBindings: bindings, connections: async () => [{ connectionId: 'conn-1', connectorId: SP }] } });
   const mark = h.org.requests.length;
   await assert.rejects(runtime.beforePages([pageUsing('orders', { references: ['contoso_sp'] })]), (e) => e.name === 'BuildHalt' && e.code === 'configuration-prerequisite-not-applied' && e.retry === 'never'
     && /page "orders"/.test(e.message) && /CONNECTION_REFERENCE_UNBOUND/.test(e.message) && /did not apply configuration/.test(e.message));
@@ -789,8 +789,29 @@ test('build runtime, pages only: a page is gated on the rows read now, never on 
   assert.deepEqual((await runtime.beforePages([pageUsing('home', {})])).blockers, []);
   // Once the binding is really on the row, the same pages-only gate lets the page through.
   h.org.rows('connectionreferences')[0].connectionid = 'conn-1';
-  const fresh = createConfigurationRuntime({ spec: referenceOnly(), sdk: h.sdk, opts: { creates: h.creates, configurationBindings: bindings, connections: async () => [{ connectionId: 'conn-1' }] } });
+  const fresh = createConfigurationRuntime({ spec: referenceOnly(), sdk: h.sdk, opts: { creates: h.creates, configurationBindings: bindings, connections: async () => [{ connectionId: 'conn-1', connectorId: SP }] } });
   assert.deepEqual((await fresh.beforePages([pageUsing('orders', { references: ['contoso_sp'] })])).blockers, []);
+});
+
+test('build runtime: a connection of another connector is not a binding, so the page that uses the reference is held', async () => {
+  const h = await harness();
+  const inventory = async () => [{ connectionId: 'conn-sql', connectorId: SQL }, { connectionId: 'conn-sp', connectorId: SP }];
+  // The settings name the declared connector, and the connection they pick is a SQL one: the row would join the two.
+  const bindings = C.readDeploymentBindings({ ConnectionReferences: [{ LogicalName: 'contoso_sp', ConnectionId: 'conn-sql', ConnectorId: SP }] }, referenceOnly());
+  const runtime = createConfigurationRuntime({ spec: referenceOnly(), sdk: h.sdk, opts: { creates: h.creates, configurationBindings: bindings, connections: inventory } });
+  const step = await runtime.apply('data-model');
+  assert.deepEqual(step.blocking.map((b) => [b.key, b.code]), [['contoso_sp', 'CONNECTION_REFERENCE_UNBOUND']]);
+  await assert.rejects(runtime.beforePages([pageUsing('orders', { references: ['contoso_sp'] })]), (e) => e.code === 'configuration-prerequisite-not-applied' && /CONNECTION_REFERENCE_UNBOUND/.test(e.message));
+  // A pages-only run reads the row now and holds the page the same way.
+  const pagesOnly = createConfigurationRuntime({ spec: referenceOnly(), sdk: h.sdk, opts: { creates: h.creates, configurationBindings: bindings, connections: inventory } });
+  await assert.rejects(pagesOnly.beforePages([pageUsing('orders', { references: ['contoso_sp'] })]), (e) => e.code === 'configuration-prerequisite-not-applied' && /CONNECTION_REFERENCE_UNBOUND/.test(e.message));
+  // A connection of the declared connector is a binding; an inventory row that does not say its connector proves nothing.
+  h.org.rows('connectionreferences')[0].connectionid = 'conn-sp';
+  const bound = createConfigurationRuntime({ spec: referenceOnly(), sdk: h.sdk, opts: { creates: h.creates, configurationBindings: bindings, connections: inventory } });
+  assert.deepEqual((await bound.beforePages([pageUsing('orders', { references: ['contoso_sp'] })])).blockers, []);
+  const unsaid = createConfigurationRuntime({ spec: referenceOnly(), sdk: h.sdk, opts: { creates: h.creates, configurationBindings: bindings, connections: async () => [{ connectionId: 'conn-sp' }] } });
+  await assert.rejects(unsaid.beforePages([pageUsing('orders', { references: ['contoso_sp'] })]), (e) => /CONNECTION_REFERENCE_BINDING_UNVERIFIED/.test(e.message));
+  assert.deepEqual(h.org.unexpected, []);
 });
 
 test('build runtime: a Custom API without an implementation blocks the page that calls it; a definition no page calls is a scaffold, not a failure', async () => {

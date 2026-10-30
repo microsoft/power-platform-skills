@@ -1547,7 +1547,16 @@ function observe(kind, key, id, entry, remote, source, connections) {
   } else if (kind === 'connectionReference') {
     if (remote.connectionId == null || remote.connectionId === '') out.binding = 'unbound';
     else if (!connections) out.binding = 'unknown';
-    else out.binding = connections.has(lower(remote.connectionId)) ? 'bound' : 'unbound';
+    else if (!connections.has(lower(remote.connectionId))) out.binding = 'unbound';
+    else {
+      // The connection is there; it binds only when it is a connection of the connector the row and the App Spec
+      // name. A connection of another connector is not a usable binding (the call fails when the page makes it),
+      // and an inventory row that does not say its connector cannot prove it.
+      const held = connections.get(lower(remote.connectionId));
+      const wanted = [remote.connectorId, entry && entry.connectorId].filter(nonEmptyString).map(connectorName);
+      if (!held || !wanted.length) out.binding = 'unknown';
+      else out.binding = wanted.every((w) => w === held) ? 'bound' : 'unbound';
+    }
   } else if (kind === 'customApi') {
     // A plug-in type proves an implementation is REGISTERED, not that it works or that a non-admin may call it.
     out.implementation = remote.pluginTypeId ? 'registered' : 'unproven';
@@ -1558,9 +1567,19 @@ function observe(kind, key, id, entry, remote, source, connections) {
   return out;
 }
 
-// The connections a binding can be proven against: a Set of lower-cased connection ids, read once per run
-// through `ctx.connections()` (the caller's inventory reader). Without a reader, or when the read fails, a
-// bound reference is not proven (binding 'unknown'): a connection id in a row, or in the settings, is a wish.
+// A connector's name, from either shape an id comes in: '/providers/Microsoft.PowerApps/apis/shared_sql' or
+// 'shared_sql' -> 'shared_sql'. Lower-cased: the platform compares connector ids case-insensitively.
+function connectorName(value) {
+  const text = lower(value).trim();
+  const match = text.match(/\/apis\/([^/]+)/);
+  return match ? match[1] : text;
+}
+
+// The connections a binding can be proven against: a Map of lower-cased connection id -> connector name (null
+// when the row does not say), read once per run through `ctx.connections()` (the caller's inventory reader, rows
+// as list-connections.js answers them: { connectionId, connectorId, displayName }). Without a reader, or when the
+// read fails, a bound reference is not proven (binding 'unknown'): a connection id in a row, or in the settings,
+// is a wish.
 function connectionInventory(ctx) {
   if (!ctx || typeof ctx.connections !== 'function') return async () => null;
   let pending;
@@ -1568,7 +1587,15 @@ function connectionInventory(ctx) {
     if (!pending) {
       pending = Promise.resolve()
         .then(() => ctx.connections())
-        .then((rows) => (Array.isArray(rows) ? new Set(rows.map((row) => lower((row && (row.connectionId || row.id || row.name)) || '')).filter(Boolean)) : null), () => null);
+        .then((rows) => {
+          if (!Array.isArray(rows)) return null;
+          const held = new Map();
+          for (const row of rows) {
+            const id = lower((row && (row.connectionId || row.id || row.name)) || '');
+            if (id) held.set(id, row && nonEmptyString(row.connectorId) ? connectorName(row.connectorId) : null);
+          }
+          return held;
+        }, () => null);
     }
     return pending;
   };
@@ -2054,7 +2081,8 @@ async function applyConfiguration(plan, ctx) {
 // of each row: the plan's read, the read-back after a write, or observeConfiguration): never from what the
 // settings ask for or what a plan meant to do. `{kind, key, code, blocksConsumers: true}` each, once per item.
 //   ENVIRONMENT_VARIABLE_VALUE_MISSING        a required variable with no value and no default
-//   CONNECTION_REFERENCE_UNBOUND              a reference with no connection (or one the inventory does not hold)
+//   CONNECTION_REFERENCE_UNBOUND              a reference with no connection, one the inventory does not hold, or one
+//                                             of another connector
 //   CONNECTION_REFERENCE_BINDING_UNVERIFIED   a connection the run could not check against the inventory
 //   CUSTOM_API_IMPLEMENTATION_UNPROVEN        no plug-in type registered: a call returns default values
 //   DUPLICATE_RULE_NOT_PUBLISHED              a rule meant to be published that is not
