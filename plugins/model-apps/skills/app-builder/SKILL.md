@@ -89,6 +89,21 @@ prod-ready** app; don't under-build (a bare table list) or over-build (surfaces 
   **ON**, so set it to `false` only when the user explicitly wants the classic header.
 - **Security & access** — one **security role per persona**, sized from that persona's jobs-to-be-done
   (the entity access each job needs, unioned into the role), so the app **opens for non-admins**.
+- **Confidential columns** — `isSecured` + `fieldSecurityProfiles[]`. Reach for them when the design
+  names a value only some people may see or change (salary, medical notes, an identifier, private
+  comments): a security role cannot hide one column, a profile can. Name who gets each profile
+  (`assignTo` users or teams, by id) — never infer them from a persona — and say in the preview who
+  gains access, or that no assignment was requested. Tell the maker that System Administrators see
+  every secured column (test as a non-admin), that an open app may need a reload, to grant `read`
+  unless `update` is needed, and that unsecuring a column deletes its permissions
+  (`--authorize isSecured:<table>.<column>`).
+- **Portable schema** — `{ "value", "label" }` options when an integration or another environment
+  depends on the option numbers; `dateTimeBehavior: "DateOnly"` for birthdays, due and renewal
+  dates, `"TimeZoneIndependent"` for a time that means the same clock everywhere (omit it for
+  timestamps); table `searchEnabled` / `duplicateDetectionEnabled` only when the maker asks. Never
+  change an existing column's date behaviour or turn duplicate detection off unasked: both need
+  `--authorize`. All need `minimumPluginVersion: "2.21.0"` — see
+  [`references/app-spec-schema-advanced.md`](../../references/app-spec-schema-advanced.md).
 - **AI-first features** (admin-gated) — form-fill assist, natural-language grid/view search, NL chart
   / AI data visualization, M365 Copilot (opt-in); per-table Copilot row summaries (Insight Cards)
   with tailored prompts, auto-selected for good-candidate tables
@@ -240,8 +255,10 @@ unless destructive authority was supplied independently.
      **opens for that persona, not just sysadmins**. **Render the roles + per-entity access as a table
      in your chat reply** (the user can't approve an access model they can't see — see the CRITICAL
      note above). If they want no roles, tell them jobs live in `personas[]` so dropping the roles
-     drops the recorded jobs too; offer read-only privileges to keep the record. (Column-level
-     security and access teams are not yet supported — see *Notes & limits*.)
+     drops the recorded jobs too; offer read-only privileges to keep the record. If a column is
+     confidential, add `isSecured` + a field security profile and name who gets it — see the
+     *Confidential columns* bullet in the toolbox. (Access teams are not yet supported — see
+     *Notes & limits*.)
    - **Whole-app preview** (design gate for Level (b)): `node "${PLUGIN_ROOT}/scripts/preview-app.js" --spec @<working-dir>/app-spec.json`
      renders data-model + sitemap + form wireframes + page-intents + design contract. **Reproduce the
      ENTIRE rendered output verbatim in your chat reply, inside a fenced ` ``` ` code block — do NOT
@@ -905,9 +922,9 @@ child view id. Each step emits `[n/total]`.
   by hand does. Individual command controls are not verified.
 - Not in scope (later): **conditional** command visibility (Power-Fx-only), **titled
   command groups** (from-scratch — needs an SDK-synthesized parent row), lookup/associated views,
-  multi-area sitemaps, **column-level (field) security**, and **access teams / hierarchy security**
-  (both tracked SDK follow-ups). The security surface today is role-per-persona plus per-form role
-  assignment, and both of those ship. Also out of scope: the BPF knobs the spec gate rejects
+  multi-area sitemaps, and **access teams / hierarchy security** (a tracked SDK follow-up). The
+  security surface today is role-per-persona, per-form role assignment and, from 2.21.0, column-level
+  security (`isSecured` + `fieldSecurityProfiles[]`). Also out of scope: the BPF knobs the spec gate rejects
   (cross-entity stages, branching, stage actions).
 - **Environment-gated (may not work where you are running):**
   - **Business rules** (`businessRules[]`). The SDK writes a rule through the bound

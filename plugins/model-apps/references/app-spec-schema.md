@@ -186,6 +186,11 @@ sample data (incl. multi-parent junction links + status reasons), and publish.
   or `app.mainForms`; lint warns without it. Download adds that floor when it emits either field and
   retains a higher authored floor. The 2.12 consumer's existing version gate refuses such a spec
   instead of silently ignoring membership instructions it cannot build.
+- **Capability floor 2.21.0:** set **`minimumPluginVersion: "2.21.0"` or newer** whenever a spec uses
+  option values (`{ "value", "label" }`), `dateTimeBehavior`, `isSecured`, a table's `searchEnabled` /
+  `changeTrackingEnabled` / `duplicateDetectionEnabled`, or `fieldSecurityProfiles[]`; validation warns
+  without it, because an older plugin ignores or rejects these fields. Download adds that floor when it
+  writes any of them.
 - **`app.aiDescription`** *(optional)* — the app's **routing description**: what an agent or router
   reads to decide whether *this* app is the right place for a request. It is **separate from
   `app.description`**, the text on the app tile, and maps to the platform's
@@ -522,7 +527,10 @@ required`.
   `format` (`Text`/`Email`/`Url`/`Phone`); numeric → `minValue`/`maxValue`/`precision`;
   Integer → also `integerFormat` (`None`/`Duration`/`TimeZone`/`Language`/`Locale` — e.g. render a
   raw minute count as a Duration picker instead of a plain number); DateTime → `dateFormat`
-  (`DateOnly`/`DateAndTime`); Boolean → `trueLabel`/`falseLabel`/`defaultValue` (explicit `true` or
+  (`DateOnly`/`DateAndTime`) and `dateTimeBehavior` (`UserLocal`/`DateOnly`/`TimeZoneIndependent`);
+  any type but Customer → `isSecured`; Choice/MultiChoice `options[]` items → a label or
+  `{ "value", "label" }` (the last three: see *Conditional features* below); Boolean →
+  `trueLabel`/`falseLabel`/`defaultValue` (explicit `true` or
   `false` — see note below); File/Image → `maxSizeKb`, Image → `isPrimaryImage`; AutoNumber →
   `autoNumberFormat` (**required** on an AutoNumber column, e.g. `"C-{SEQNUM:5}"` — see the
   AutoNumber note below); Calculated/Rollup → `source: "Calculated"|"Rollup"` +
@@ -758,6 +766,8 @@ list with "reach for it when…" guidance.
 | `dashboards[]` | chart/list/iframe/web-resource tiles |
 | `roleGrants[]` | extend a role you did NOT author |
 | `businessProcessFlows[].securityRoles` | who may run a flow |
+| `fieldSecurityProfiles[]` | confidential columns (`columns[].isSecured`) and who may read or change them |
+| `columns[].dateTimeBehavior` | portable schema: calendar-day dates, fixed option values (`{ "value", "label" }`), table search and duplicate detection (`searchEnabled` / `changeTrackingEnabled` / `duplicateDetectionEnabled`) |
 
 ## relationships[]
 ```jsonc
@@ -2197,5 +2207,6 @@ are **not** enforced at lint time (they surface as a clear build halt): whether 
 requested access, and the rule that different entities sharing one Dataverse privilege must request the
 same scope.
 
-**Not yet supported** (tracked follow-up): column-level (field) security and access teams / hierarchy
-security. The security surface today is role-per-persona plus `roleGrants[]` (below).
+**Not yet supported** (tracked follow-up): access teams / hierarchy security. The security surface
+today is role-per-persona plus `roleGrants[]` (below) and, from 2.21.0, column-level security
+(`isSecured` + `fieldSecurityProfiles[]`, in the advanced reference).

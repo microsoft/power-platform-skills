@@ -719,7 +719,8 @@ in `model-app-plan.md` — the design rationale goes with them. Offer to keep th
 minimal read-only privileges instead, which preserves the record. Only remove `personas[]` if they
 still want it gone; a job cannot be kept without `privileges[]` (validation requires it).
 
-Column-level security and access teams are not yet supported.
+Column-level security is `isSecured` + `fieldSecurityProfiles[]` (2.21.0; see
+`app-spec-schema-advanced.md`) — name who is assigned each profile. Access teams are not yet supported.
 
 Persist the fully agreed spec to `<working-dir>/app-spec.json` before Step 5.
 

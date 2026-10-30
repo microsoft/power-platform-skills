@@ -452,6 +452,138 @@ fails closed when that table cannot be read — which also catches a flow that n
 Teardown plans nothing: measured, the flow (and with it the backing table and its privileges) is
 deleted before the roles, and the run completes with 0 failures.
 
+## fieldSecurityProfiles[] (optional — confidential columns: `isSecured` and who may read or change them)
 
-**Not yet supported** (tracked follow-up): column-level (field) security and access teams / hierarchy
-security.
+Reach for these when the design names a value only some people may see or change: a salary, a
+medical note, a national identifier, a private comment. Needs `minimumPluginVersion: "2.21.0"`.
+
+```jsonc
+// on the column (any type except Customer)
+{ "schemaName": "new_salary", "displayName": "Salary", "type": "Money", "isSecured": true }
+// top level
+"fieldSecurityProfiles": [
+  { "key": "hr", "name": "HR Confidential", "description": "Read and update salary",
+    "permissions": [ { "table": "new_employee", "column": "new_salary", "read": true, "update": true } ],
+    "assignTo": { "teams": ["<team id>"], "users": ["<user id>"] } }
+]
+```
+
+- **`isSecured: true`** turns on column security: from then on, only a user given a profile that
+  permits it can read or change the value. Omitted: a new column is not secured, and an existing
+  column is left as it is. The build creates a secured column after its table (Dataverse does not
+  take one inside the table's create) and before any sample row, so no value is written into an open
+  column; it refuses to seed a column the spec declares secured while the environment still holds it
+  unsecured.
+- **`isSecured: false`** on a column that is secured removes the security **and deletes every
+  permission any profile holds on that column**. The build refuses it unless the run consents with
+  `--authorize isSecured:<table>.<column>`. Never write `false` merely to mean "not secured" — omit it.
+- **A profile** has a `key` (stable and unique in the spec), a `name` (at most 100 characters; the
+  build finds the profile by this name), an optional `description`, and `permissions[]`: one per
+  column, each `{ "table", "column", "read"?, "create"?, "update"? }`, an omitted permission being
+  `false`. Every column a permission names must be secured. Read-unmasked access is not authored, and
+  the platform's System Administrator profile is never changed. A profile that already exists with
+  other permissions stops the build (`FIELD_SECURITY_PROFILE_DIFFERS`) rather than widening or
+  narrowing someone else's access: change it in Power Apps, or give your profile another name.
+- **`assignTo`** names the users (`systemuserid`) and teams (`teamid`) to give the profile to. It is
+  explicit and additive: the build gives the profile to those it names and takes it from no one. It
+  never derives a user from a persona or a security role, and a security role does not open a
+  secured column — only a profile does. Omitted means the build gives the profile to no one; the
+  plan says *no assignment requested*. Prefer a team to a list of users.
+- **When it runs:** profiles and their permissions in the `data-model` phase, after the columns are
+  secured; assignments in the `security` phase. A `--stage data` run creates the profiles and lists
+  each assignment as **deferred**; the `app` stage gives them.
+- **Tell the maker, before the build:**
+  - *Administrators are exempt.* A System Administrator reads and changes every secured column
+    whatever profiles say, so testing as an administrator proves nothing — test as a user who has
+    only the app's role.
+  - *Refresh.* A user who already has the app open may need to reload it before a change to their
+    access shows.
+  - *Least privilege.* Give `read` where people only need to see a value, and `update` only to whoever
+    maintains it.
+  - *Unsecuring* deletes permissions (above), so it needs its own consent.
+- **Rights:** the account running the build needs to customize tables, create field security
+  profiles and give them to users and teams (for example, System Administrator).
+- **`--verify`** checks that each declared column is stored secured, that each profile holds exactly
+  its declared permissions, and that each named user and team holds the profile. These are metadata
+  reads made as the build's account; they do not prove what a user without the profile sees.
+- **Download** writes `isSecured: true` for a secured column. Profiles and their assignments are not
+  downloaded.
+
+## columns[].dateTimeBehavior · option values · table flags (optional — portable schema)
+
+Needs `minimumPluginVersion: "2.21.0"`.
+
+### Fixed option values — `{ "value", "label" }`
+
+```jsonc
+"options": [ { "value": 1, "label": "Low" }, { "value": 5, "label": { "1033": "High", "1036": "Haute" } } ]
+```
+
+Reach for it when an integration, report, flow or another environment already depends on an option's
+**number**. `value` is a whole number from 0 to 2147483647, unique within the set; `label` follows the
+usual option-label rules (a global choice's labels stay plain strings). A plain label in the same list
+keeps the number of its position (100000000 + index), so mixing the two forms is valid only when every
+resulting number is unique. Sample data and view filters may name an option by its number, which is
+how to pick between two options that share a label. The build does not renumber or replace the options
+of a column that already exists. A download writes `{ "value", "label" }` whenever an option's number
+differs from its position's default, and plain labels otherwise.
+
+### Date and Time behaviour — `dateTimeBehavior`
+
+```jsonc
+{ "schemaName": "new_renewaldate", "displayName": "Renewal Date", "type": "DateTime", "dateTimeBehavior": "DateOnly" }
+```
+
+- `UserLocal` (the default) — stored in UTC and shown in each user's time zone: a timestamp.
+- `DateOnly` — a calendar day with no time and no time-zone conversion: a birthday, a due date, a
+  renewal date. It implies the DateOnly format, so `dateFormat` may be omitted (`"DateAndTime"` is
+  refused).
+- `TimeZoneIndependent` — a date and time shown the same to everyone: a site visit at 09:00 site
+  time, a hotel check-in.
+
+Omitted: a new column is `UserLocal`, and an existing column is left as it is. Changing the behaviour
+of a column that already exists is **one-way** (`DateOnly` and `TimeZoneIndependent` cannot be changed
+back) and does **not** convert values already stored, so the build refuses it unless the run consents
+with `--authorize dateTimeBehavior:<table>.<column>`; do not change an existing column unless the maker
+asks. Declaring `UserLocal` on a column that has no behaviour at all is a repair and needs no consent.
+Before it adds a column, lookup or relationship to a table it did not create, the build reads that
+table's Date and Time behaviours once, and stops — before sending anything — when a column has none
+(`DATETIME_BEHAVIOR_MISSING`) or the read is not conclusive (`DATETIME_BEHAVIOR_UNVERIFIED`); the halt
+says how to fix it.
+
+### Table flags — `searchEnabled`, `changeTrackingEnabled`, `duplicateDetectionEnabled`
+
+```jsonc
+{ "schemaName": "new_ticket", "displayName": "Ticket", "pluralName": "Tickets",
+  "searchEnabled": true, "changeTrackingEnabled": true, "duplicateDetectionEnabled": true, "columns": [] }
+```
+
+Set a flag only when the maker asks for what it does; omitted leaves the table as it is.
+
+- `searchEnabled` puts the table in Dataverse search (`false` takes it out, which needs no consent:
+  turning it on again restores it once the table is indexed again). `true` also turns on change
+  tracking, which can never be turned off, so the spec must say `changeTrackingEnabled: true` too. A
+  table that does not allow search is refused.
+- `changeTrackingEnabled` can only be `true`.
+- `duplicateDetectionEnabled: false` on a table that has it on unpublishes every duplicate detection
+  rule of the table, and turning it on again does not republish them, so the build refuses it unless
+  the run consents with `--authorize tableFlags:<table>`.
+
+### Consent — `--authorize <key>`
+
+Repeatable, one key per change: `dateTimeBehavior:<table>.<column>`, `isSecured:<table>.<column>`,
+`tableFlags:<table>`. A key consents to exactly the change the spec declares for it and to nothing
+else; a key for a change the spec does not declare stops the build. `--allow-destructive` does not
+imply it. A refused change names the key to use, so read what the change does, then run the build
+again with it.
+
+### Download and verify
+
+A download always writes option values (as above) and `isSecured`. `--include-capabilities` also reads
+each table's Date and Time behaviours and flags (one read each per table) and writes the ones that
+differ from what a build creates by default; without it, a download makes the reads it always made. A
+spec that carries any of these fields gets `minimumPluginVersion: "2.21.0"`. `--verify` checks each
+declared value against a fresh read, and reports what it could not read as unverified, never as a
+pass.
+
+**Not yet supported** (tracked follow-up): access teams / hierarchy security.
