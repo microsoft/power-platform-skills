@@ -184,4 +184,4 @@ async function assertPageDeletionSafe(client, pageIds, options) {
   return { reads: result.reads, formsScanned: result.formsScanned };
 }
 
-module.exports = { readAllFormLayers, embeddedPageReferences, pageDeletionReferences, assertPageDeletionSafe, DEFAULT_READS_PER_PAGE };
+module.exports = { readAllFormLayers, embeddedPageReferences, pageDeletionReferences, assertPageDeletionSafe, formText, DEFAULT_READS_PER_PAGE };
