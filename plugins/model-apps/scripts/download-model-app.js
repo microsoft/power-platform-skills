@@ -7,7 +7,12 @@
 // pages (read through the SDK, incl. Maker-authored), its entities (minimal — the build reuses
 // existing tables idempotently), the icon web resources, and its solution, via hydrate-spec.
 //
-// Usage: node download-model-app.js --env <orgUrl> --app <appId|uniqueName|displayName> --out <dir> [--allow-lossy-download] [--reset-page-keys] [--language-code <lcid>]
+// Usage: node download-model-app.js --env <orgUrl> --app <appId|uniqueName|displayName> --out <dir> [--allow-lossy-download] [--reset-page-keys] [--language-code <lcid>] [--include-capabilities]
+//
+// `--include-capabilities` also reads, per downloaded table, the Date and Time behaviours of its columns and its search, change tracking
+// and duplicate detection flags (one read each, and the date read only for a table with a Date and Time column), and writes the
+// non-default ones into the spec (downloadedColumnFeatures, downloadedTableFlags). Off by default, so a download makes the reads it
+// always made.
 //
 // A page's key is its identity in a rebuild, so a download keeps the key each page already has: the one the app's page manifest binds to it, then the one an
 // earlier download of the SAME app gave it (the app-spec.json already in --out, when its app.uniqueName is this app's). If that earlier spec gives a page keys that
@@ -48,7 +53,8 @@ const { labelsByLcid, pickLabel, sameLabel } = require('./lib/lookup-labels.js')
 const { odataGuid } = require('./lib/ai-app-settings.js');
 const { APP_COMPONENT_ENTITY_SOURCES, appComponentEntities, appComponentRows, currentAppLayer, readAppComponentInventory, downloadAppMainForms, setAppMembershipFloor } = require('./lib/app-components.js');
 const { mapLimit, DEFAULT_MAX_SIZE_KB } = require('./lib/entity-provision.js');
-const { downloadedChoiceOptions, downloadedColumnFeatures } = require('./lib/schema-feature-contract.js');
+const { downloadedChoiceOptions, downloadedColumnFeatures, downloadedTableFlags, readTableFlags, setSchemaFeaturesFloor } = require('./lib/schema-feature-contract.js');
+const { readExistingDateBehaviors } = require('./lib/date-behavior.js');
 const { compareText } = require('./lib/compare-text.js');
 const { hostsCustomControl } = require('./lib/dashboard-tiles.js');
 const { readColumnOptions, columnOptionFields, primaryColumnOptionFields } = require('./lib/download-column-options.js');
@@ -1981,6 +1987,23 @@ function untypedColumnWarnings(untyped, clashes = new Map()) {
 // (`{ table, column, option, label, languageCode }`, see the option screen below), so the caller can name them.
 // `labelClashes`, when given, is filled with the Choice columns left untyped because one text names two of their options in a way
 // the App Spec refuses (`{ table, column, clashes: [{ alias, first, second }] }`, the same screen), so the caller names the clash.
+// --include-capabilities, for one downloaded table: the behaviour of each Date and Time column (one typed read, only when the table has
+// one) and the table's flags (one read), written into `entity` where they differ from what a build creates by default. Returns the
+// reasons a read gave no answer; each such fact is left out of the spec, so a rebuild uses the default rather than a guess.
+async function downloadCapabilities(sdk, logical, entity) {
+  const failed = [];
+  const dateColumns = (entity.columns || []).filter((c) => c && c.type === 'DateTime');
+  if (dateColumns.length) {
+    const evidence = await readExistingDateBehaviors(sdk, logical);
+    if (!evidence.complete) failed.push(`Date and Time behaviours: ${evidence.reason}`);
+    else for (const c of dateColumns) Object.assign(c, downloadedColumnFeatures({}, evidence.columns.get(String(c.schemaName).toLowerCase())));
+  }
+  const flags = await readTableFlags(sdk, logical);
+  if (!flags) failed.push('table flags: the read gave no answer');
+  else Object.assign(entity, downloadedTableFlags(flags));
+  return failed;
+}
+
 function entityFromMetadata(meta, logical, { unexpressible, incomplete, schemaOmissions = [], languageCode, languageLost, labelClashes } = {}) {
   const primary = meta && (meta.primaryNameAttribute || meta.primaryNameLogicalName);
   const attrs = Array.isArray(meta && meta.attributes) ? meta.attributes : (Array.isArray(meta && meta.Attributes) ? meta.Attributes : []);
@@ -2891,7 +2914,7 @@ async function readSitemapPages(genpage, ids, concurrency) {
   return { ok: true, pages: results.map(({ id, page }) => ({ pageId: String(id).toLowerCase(), files: pageFolderFiles(page) })) };
 }
 
-async function runDownload({ sdk, genpage, outDir, appId, appUnique, allowLossy = false, resetPageKeys = false, concurrency, languageCode }) {
+async function runDownload({ sdk, genpage, outDir, appId, appUnique, allowLossy = false, resetPageKeys = false, concurrency, languageCode, includeCapabilities = false }) {
   concurrency = validatedDownloadConcurrency(concurrency);
   // The caller named this directory. A link at its final component would make every page and
   // the spec land outside it. Ancestors are the caller's choice and are not inspected.
@@ -3166,6 +3189,8 @@ async function runDownload({ sdk, genpage, outDir, appId, appUnique, allowLossy 
   const globalChoiceDecls = new Map();
   const tableVectorIcons = new Map();
   const schemaReadFailures = new Map();
+  // --include-capabilities: the tables whose date behaviours or flags could not be read, with the reason.
+  const capabilityReadFailures = new Map();
   for (const logical of allLogicals) {
     let e;
     const leftOut = [];
@@ -3209,6 +3234,10 @@ async function runDownload({ sdk, genpage, outDir, appId, appUnique, allowLossy 
       continue;
     }
     entities.push(e);
+    if (includeCapabilities) {
+      const failed = await downloadCapabilities(sdk, logical, e);
+      if (failed.length) capabilityReadFailures.set(logical, failed.join('; '));
+    }
     for (const c of leftOut) unexpressibleColumns.push(`${e.schemaName}.${c.column} (${c.typeName})`);
     for (const c of shortOf) incompleteMediaColumns.push({ name: `${e.schemaName}.${c.column}`, missing: c.missing });
     for (const l of lostLabels) optionLanguageLosses.push(`${e.schemaName}.${l.column} options[${l.option}] '${l.label}' (${l.languageCode})`);
@@ -3239,6 +3268,9 @@ async function runDownload({ sdk, genpage, outDir, appId, appUnique, allowLossy 
   const failureDetail = (failures) => [...failures.entries()].sort(([a], [b]) => compareText(a, b)).map(([l, r]) => `${l} (${r})`).join(', ');
   if (schemaReadFailures.size) {
     process.stderr.write(`WARNING: some portable schema detail could not be captured (${failureDetail(schemaReadFailures)}). The table and its typed columns are kept, but rebuilding into a FRESH environment uses the build defaults for missing column options and cannot recreate missing status reasons, alternate keys or table icons. Re-run the download to recover unreadable detail, and resolve the stated build limits before a cross-environment rebuild.\n`);
+  }
+  if (capabilityReadFailures.size) {
+    process.stderr.write(`WARNING: --include-capabilities could not read every Date and Time behaviour or table flag (${failureDetail(capabilityReadFailures)}). Those are left out of the spec, so a rebuild into a FRESH environment uses the defaults for them (User local dates; search, change tracking and duplicate detection off). Re-run the download to recover them.\n`);
   }
   if (tableLabelReadFailures.size) {
     // The table's plural is carried by this read alone (download keeps one a rebuild would not derive), so it goes with it.
@@ -3480,6 +3512,9 @@ async function runDownload({ sdk, genpage, outDir, appId, appUnique, allowLossy 
     : { mainForms: {}, notes: [] };
   if (Object.keys(mainFormMembership.mainForms).length) spec.app.mainForms = mainFormMembership.mainForms;
   setAppMembershipFloor(spec);
+  // A spec that carries a 2.21.0 schema field (a valued option, a secured column, a date behaviour, a table flag) asks for 2.21.0:
+  // an older build would renumber the options or leave the column open.
+  setSchemaFeaturesFloor(spec);
   if (spec.app.tables !== undefined || spec.app.mainForms !== undefined) {
     preserveAuthoredLanguageCode(spec, path.join(outDir, 'app-spec.json'));
   }
@@ -3531,11 +3566,11 @@ async function main(deps = {}) {
     validateAppSpec: deps.validateAppSpec || validateAppSpec,
   };
   const { positional, flags } = parseArgs(argv);
-  const USAGE = 'Usage: node download-model-app.js --env <url> --app <appId|uniqueName|displayName> --out <dir> [--allow-lossy-download] [--reset-page-keys] [--language-code <lcid>]';
-  // `--allow-lossy-download` and `--reset-page-keys` are real boolean switches, so they stay out of needValue; everything else
+  const USAGE = 'Usage: node download-model-app.js --env <url> --app <appId|uniqueName|displayName> --out <dir> [--allow-lossy-download] [--reset-page-keys] [--language-code <lcid>] [--include-capabilities]';
+  // `--allow-lossy-download`, `--reset-page-keys` and `--include-capabilities` are real boolean switches, so they stay out of needValue; everything else
   // feeds a URL, an app id, a path or an LCID and must not receive `true`.
   const flagError = validateFlags(argv, {
-    known: ['env', 'app', 'out', 'output', 'allow-lossy-download', 'reset-page-keys', 'language-code', 'languageCode'],
+    known: ['env', 'app', 'out', 'output', 'allow-lossy-download', 'reset-page-keys', 'language-code', 'languageCode', 'include-capabilities'],
     needValue: ['env', 'app', 'out', 'output', 'language-code', 'languageCode'],
   });
   if (flagError) {
@@ -3550,6 +3585,7 @@ async function main(deps = {}) {
   const allowLossyDownload = flags['allow-lossy-download'] === true;
   // Off unless it is given: it is a decision about every environment that holds a copy of the earlier spec (see the header), never a default.
   const resetPageKeys = flags['reset-page-keys'] === true;
+  const includeCapabilities = flags['include-capabilities'] === true;
   if (!env || !appArg) {
     io.stderr.write(USAGE + '\n');
     io.exit(1);
@@ -3631,7 +3667,7 @@ async function main(deps = {}) {
     // The page backend reads through the download's own throwaway SDK, lent to it: nothing of its own to make or remove.
     const genpage = io.makeGenpageSdk(env, { sdk });
 
-    const result = await io.runDownload({ sdk, genpage, outDir, appId, appUnique, allowLossy: allowLossyDownload, resetPageKeys, languageCode: session.languageCode });
+    const result = await io.runDownload({ sdk, genpage, outDir, appId, appUnique, allowLossy: allowLossyDownload, resetPageKeys, languageCode: session.languageCode, includeCapabilities });
     // The run's last writes: these lines, then the result and the exit, with no turn of the event loop between them — made blocking (lib/output-redaction.js).
     makeWritesBlocking(process.stdout, io.stderr);
     if (!result.ok) { finish(false, result); return; }

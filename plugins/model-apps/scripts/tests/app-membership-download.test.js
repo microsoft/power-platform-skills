@@ -24,6 +24,7 @@ function downloadSdk({
   sdkNavigation = navigation, sdkPage = page, missingSitemap = false, unpublishedOnly = false,
   identity = 'contoso_membership', identitySpelling = 'uniqueName', displayName = 'Membership', unknownCustom = [],
   currentExtraXml = '', sdkExtraSubAreas = [],
+  attributes = [{ logicalName: 'contoso_unrelated', attributeType: 'String', isCustomAttribute: true }], capabilityReads = null,
 } = {}) {
   const calls = [];
   const metadataReads = [];
@@ -51,7 +52,7 @@ function downloadSdk({
       return {
         logicalName: logical, schemaName: logical, displayName: logical, isCustomEntity: custom.includes(logical),
         primaryNameAttribute: logical === 'annotation' ? '' : 'name',
-        attributes: [{ logicalName: 'contoso_unrelated', attributeType: 'String', isCustomAttribute: true }], relationships: [],
+        attributes, relationships: [],
       };
     },
     queryRecords: async (set, opts = {}) => {
@@ -89,6 +90,12 @@ function downloadSdk({
         return { status: 200, body: { value: draft
           ? [{ sitemapid: SITEMAP, sitemapxml: publishedXml, componentstate: 0 }, current] : [current] } };
       }
+      // The --include-capabilities reads (lib/date-behavior.js, lib/schema-feature-contract.js readTableFlags), answered per table.
+      const capability = /^\/EntityDefinitions\(LogicalName='([^']+)'\)(\/Attributes\/Microsoft\.Dynamics\.CRM\.DateTimeAttributeMetadata)?\?\$select=(IsDuplicateDetectionEnabled|LogicalName,DateTimeBehavior)/.exec(url);
+      if (capability && capabilityReads) {
+        calls.push({ capability: `${capability[2] ? 'dates' : 'flags'} ${capability[1]}` });
+        return capabilityReads[capability[2] ? 'dates' : 'flags'](capability[1]);
+      }
       const byId = /^\/EntityDefinitions\(([0-9a-f-]+)\)/i.exec(url);
       if (byId) {
         const logical = logicalOfId[byId[1].toLowerCase()];
@@ -125,7 +132,7 @@ async function download(t, options = {}, priorFloor) {
   let result;
   try {
     result = await runDownload({
-      sdk: fake.sdk, appId: APP, appUnique: options.unpublishedOnly ? undefined : 'contoso_membership', outDir: directory,
+      sdk: fake.sdk, appId: APP, appUnique: options.unpublishedOnly ? undefined : 'contoso_membership', outDir: directory, includeCapabilities: options.includeCapabilities,
       genpage: fakeGenpage({ pages: options.page ? [{ pageId: PAGE, name: 'Draft Overview', source: 'export default function Page() { return null; }', dataSources: [] }] : [] }),
     });
   } finally { process.stderr.write = original; }
@@ -434,4 +441,65 @@ test('authored-option preservation also protects the membership floor without in
   const legacy = { app: {} };
   preserveAuthoredLanguageCode(legacy, 'app-spec.json', deps);
   assert.equal(legacy.minimumPluginVersion, undefined);
+});
+
+// ------------------------------------------------------------------------------------------------ --include-capabilities and the 2.21.0 floor
+
+const DATED = [
+  { logicalName: 'contoso_due', displayName: 'Due', attributeType: 'DateTime', isCustomAttribute: true },
+  { logicalName: 'contoso_seen', displayName: 'Seen', attributeType: 'DateTime', isCustomAttribute: true },
+  { logicalName: 'contoso_note', displayName: 'Note', attributeType: 'String', isCustomAttribute: true },
+];
+const dateRows = (rows) => ({ status: 200, body: { value: rows.map(([LogicalName, behavior]) => ({ LogicalName, DateTimeBehavior: { Value: behavior }, CanChangeDateTimeBehavior: { Value: true } })) } });
+const flagsBody = (dup, tracking, search) => ({ status: 200, body: { IsDuplicateDetectionEnabled: { Value: dup }, ChangeTrackingEnabled: tracking, SyncToExternalSearchIndex: search, CanEnableSyncToExternalSearchIndex: { Value: true } } });
+const capabilityReads = (dates, flags) => ({ dates, flags });
+const capabilityCalls = (calls) => calls.filter((c) => c.capability).map((c) => c.capability).sort();
+
+test('--include-capabilities off: the download makes the reads it always made and writes no date behaviour or table flag', async (t) => {
+  const reads = capabilityReads(() => assert.fail('no date read without the flag'), () => assert.fail('no flags read without the flag'));
+  const { result, calls } = await download(t, { attributes: DATED, capabilityReads: reads });
+  assert.deepEqual(capabilityCalls(calls), []);
+  const account = result.spec.entities.find((e) => e.schemaName === 'account');
+  assert.deepEqual(account.columns.filter((c) => c.type === 'DateTime').map((c) => c.dateTimeBehavior), [undefined, undefined]);
+  assert.equal(account.searchEnabled, undefined);
+  assert.equal(result.spec.minimumPluginVersion, '2.13.0', 'a spec with no 2.21.0 field keeps the floor it had');
+});
+
+test('--include-capabilities on: one date read and one flags read per table, only the non-default answers are written, and the spec asks for 2.21.0', async (t) => {
+  const reads = capabilityReads(
+    (table) => dateRows(table === 'account' ? [['contoso_due', 'DateOnly'], ['contoso_seen', 'UserLocal']] : [['contoso_due', 'TimeZoneIndependent'], ['contoso_seen', 'UserLocal']]),
+    (table) => (table === 'account' ? flagsBody(true, true, true) : flagsBody(false, false, false)));
+  const { result, calls } = await download(t, { attributes: DATED, capabilityReads: reads, includeCapabilities: true });
+  assert.deepEqual(capabilityCalls(calls), ['dates account', 'dates contact', 'flags account', 'flags contact']);
+  const byName = (table) => result.spec.entities.find((e) => e.schemaName === table);
+  const behaviours = (table) => Object.fromEntries(byName(table).columns.filter((c) => c.type === 'DateTime').map((c) => [c.schemaName, c.dateTimeBehavior]));
+  assert.deepEqual(behaviours('account'), { contoso_due: 'DateOnly', contoso_seen: undefined });
+  assert.deepEqual(behaviours('contact'), { contoso_due: 'TimeZoneIndependent', contoso_seen: undefined });
+  assert.deepEqual([byName('account').searchEnabled, byName('account').changeTrackingEnabled, byName('account').duplicateDetectionEnabled], [true, true, true]);
+  assert.deepEqual([byName('contact').searchEnabled, byName('contact').changeTrackingEnabled, byName('contact').duplicateDetectionEnabled], [undefined, undefined, undefined], 'an off flag is left out: turning one off is never asked for');
+  assert.equal(result.spec.minimumPluginVersion, '2.21.0');
+});
+
+test('--include-capabilities on: a read that gives no answer leaves its facts out and says which table and why; a table with no Date and Time column gets no date read', async (t) => {
+  const reads = capabilityReads(() => ({ status: 503, body: {} }), (table) => (table === 'account' ? { status: 503, body: {} } : flagsBody(true, false, false)));
+  const { result, calls, warnings } = await download(t, { attributes: DATED, capabilityReads: reads, includeCapabilities: true });
+  const account = result.spec.entities.find((e) => e.schemaName === 'account');
+  assert.deepEqual(account.columns.filter((c) => c.type === 'DateTime').map((c) => c.dateTimeBehavior), [undefined, undefined]);
+  assert.equal(account.duplicateDetectionEnabled, undefined);
+  assert.equal(result.spec.entities.find((e) => e.schemaName === 'contact').duplicateDetectionEnabled, true);
+  const warning = warnings.find((w) => w.includes('--include-capabilities could not read'));
+  assert.match(warning, /account \(Date and Time behaviours: HTTP 503; table flags: the read gave no answer\), contact \(Date and Time behaviours: HTTP 503\)/);
+  assert.equal(capabilityCalls(calls).filter((c) => c.startsWith('dates')).length, 2);
+  const plain = await download(t, { capabilityReads: capabilityReads(() => assert.fail('no Date and Time column, no date read'), () => flagsBody(false, false, false)), includeCapabilities: true });
+  assert.deepEqual(capabilityCalls(plain.calls), ['flags account', 'flags contact']);
+  assert.equal(plain.result.spec.minimumPluginVersion, '2.13.0');
+});
+
+test('a downloaded secured column asks for 2.21.0 without the flag, and a higher floor on disk is kept', async (t) => {
+  const secured = [{ logicalName: 'contoso_salary', displayName: 'Salary', attributeType: 'Money', isCustomAttribute: true, isSecured: true }];
+  const { result } = await download(t, { attributes: secured });
+  assert.equal(result.spec.entities.find((e) => e.schemaName === 'account').columns.find((c) => c.schemaName === 'contoso_salary').isSecured, true);
+  assert.equal(result.spec.minimumPluginVersion, '2.21.0');
+  const kept = await download(t, { attributes: secured }, '2.24.0');
+  assert.equal(kept.result.spec.minimumPluginVersion, '2.24.0');
 });
