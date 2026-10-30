@@ -151,7 +151,10 @@ apart deliberately.
 - **App membership (offline-tested; reference transport measured):** `app.tables` preserves hidden
   table components independently of navigation; `app.mainForms` selects active Main forms by name.
   Create is exact for Main membership; updates stop adding excluded forms but never remove existing
-  members. Build and download use the current layer; verify checks the published layer.
+  members unless `app.mainFormsOnUpdate: "exact"` asks for it (2.21.0, a removal from the app that
+  needs `--allow-destructive`; the app is published only once the published layer reads back the list).
+  `app.pinDeclaredArtifacts: true` (2.21.0) also pins the spec's own forms, views, charts and
+  dashboards, so a chart of a table outside the navigation joins the app. Build and download use the current layer; verify checks the published layer.
   Download carries both fields with a `2.13.0` capability floor, without adopting schema for
   hidden stock/unclassified type-1 tables even when an asset references them. Mixed SDK/current
   navigation and unresolved immutable identity are refused rather than emitted as a rebuildable spec. See

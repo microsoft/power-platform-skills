@@ -167,6 +167,34 @@ sample data (incl. multi-parent junction links + status reasons), and publish.
   `--verify`: remove them in Maker (**app designer → table → Forms**) or include them in the list.
   Every later app push re-supplies the directive; it is not stored as a server-side allow-list.
   Quick Create, Quick View and card forms, dashboards, views and charts are unaffected.
+- **`app.mainFormsOnUpdate`** *(optional, `"addOnly"` (the default) or `"exact"`)* and
+  **`app.pinDeclaredArtifacts`** *(optional, `true`)*:
+  ```json
+  {
+    "minimumPluginVersion": "2.21.0",
+    "app": {
+      "name": "Work Items",
+      "mainForms": { "contoso_workitem": ["Work Item"] },
+      "mainFormsOnUpdate": "exact",
+      "pinDeclaredArtifacts": true
+    }
+  }
+  ```
+  **Only these forms on an existing app.** `app.mainForms` adds the forms you list. To also take the table's other Main
+  forms **out of the app** on an update, set `"mainFormsOnUpdate": "exact"` — ask the maker first, it is a removal from the
+  app's membership (no form is deleted). It needs an unmanaged, published app; the build publishes only once Dataverse reads
+  back exactly your list, and otherwise stops with the change saved and the app's publication owed.
+
+  **Pin the artifacts the spec declares.** `"pinDeclaredArtifacts": true` adds the spec's own forms, views, charts and
+  dashboards to the app explicitly — use it for a chart or view of a table that is not in the navigation. It only adds.
+  `"exact"` needs `app.mainForms` with at least one table and form (an empty list would mean "every
+  form"). On an app that already exists it is listed as a destructive operation, one per table, and
+  refused without `--allow-destructive`; on a new app it removes nothing. `--verify` reads an exact
+  list strictly and fails a form outside it. `pinDeclaredArtifacts` pins the spec's declared forms
+  (except a Main form the `app.mainForms` list leaves out), views, charts and dashboards; it never removes. Neither
+  field is stored on the app: download does not emit them, so an edited spec keeps them only if the
+  maker keeps them. If the answer to a push's component pin is lost, the build reads the app, adds what
+  is missing with at most one more push, or stops with a partial result — with or without these fields.
   This does **not** choose a default, an order or security roles. Lint warns when the list excludes
   the explicit default or first `entities[].mainFormOrder` form. A user's remembered Main form is
   **per table**, not per app. **Measured:** membership changes after first publish did not reach
@@ -183,7 +211,7 @@ sample data (incl. multi-parent junction links + status reasons), and publish.
   their occurrence counts must match. If those multisets disagree, or the SDK sitemap is missing,
   download refuses the mixed snapshot: publish the app, then download again.
 - **Capability floor:** set **`minimumPluginVersion: "2.13.0"` or newer** whenever using `app.tables`
-  or `app.mainForms`; lint warns without it. Download adds that floor when it emits either field and
+  or `app.mainForms` (**`"2.21.0"`** with `app.mainFormsOnUpdate` or `app.pinDeclaredArtifacts`); lint warns without it. Download adds that floor when it emits either field and
   retains a higher authored floor. The 2.12 consumer's existing version gate refuses such a spec
   instead of silently ignoring membership instructions it cannot build.
 - **Capability floor 2.21.0:** set **`minimumPluginVersion: "2.21.0"` or newer** whenever a spec uses

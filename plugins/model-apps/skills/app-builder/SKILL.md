@@ -87,6 +87,20 @@ prod-ready** app; don't under-build (a bare table list) or over-build (surfaces 
   tenant without the setting still gets a working app. `app.headerNavigationRefresh` controls the
   **Wave 2 header/navigation refresh** — a *separate, independent* setting whose platform default is
   **ON**, so set it to `false` only when the user explicitly wants the classic header.
+- **App membership** — which forms, views and charts the app offers (`app.mainForms`, `app.tables`).
+  **Only these forms on an existing app.** `app.mainForms` adds the forms you list. To also take the table's other Main
+  forms **out of the app** on an update, set `"mainFormsOnUpdate": "exact"` — ask the maker first, it is a removal from the
+  app's membership (no form is deleted). It needs an unmanaged, published app; the build publishes only once Dataverse reads
+  back exactly your list, and otherwise stops with the change saved and the app's publication owed.
+
+  **Pin the artifacts the spec declares.** `"pinDeclaredArtifacts": true` adds the spec's own forms, views, charts and
+  dashboards to the app explicitly — use it for a chart or view of a table that is not in the navigation. It only adds.
+  When to use them: `"exact"` only on an explicit "only these forms" / "remove the other forms" ask, after
+  showing the maker which tables it covers (the build refuses it on an existing app without
+  `--allow-destructive`); never for "add the Summary form", which `app.mainForms` alone does. Suggest
+  `pinDeclaredArtifacts: true` for a **new** app whose spec declares a chart, view or dashboard of a table
+  that is not in its navigation. Never turn either on by yourself for an existing app. Both need
+  `minimumPluginVersion: "2.21.0"`.
 - **Security & access** — one **security role per persona**, sized from that persona's jobs-to-be-done
   (the entity access each job needs, unioned into the role), so the app **opens for non-admins**.
 - **Confidential columns** — `isSecured` + `fieldSecurityProfiles[]`. Reach for them when the design

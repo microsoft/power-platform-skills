@@ -1361,8 +1361,31 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   check before any app write; a created/reused id counts once if metadata has not caught up.
   Every app push the BUILD makes carries the SDK's `components.mainFormsByTable`, after every fetch,
   and excludes conflicting explicit Main pins by ID. Create is exact; update adds only listed forms
-  and never removes old ones. SDK extras are surfaced by name with the Maker remedy, and verify
-  fails them. A generative-page edit of an app (`placeInApp`, `removeFromApp`) is no build push and
+  and never removes old ones — unless `app.mainFormsOnUpdate` is `"exact"` (2.21.0): then every app
+  push of the build asks the SDK to take the table's other Main forms out of the app (no form is
+  deleted). On an app that already exists that is a removal: `lib/op-diff.js` lists one
+  `app-main-forms-removal` op per listed table, the CLI refuses it without `--allow-destructive`
+  (it is not written to the approval record — the flag authorizes it for the run), and
+  `appWriters.push` refuses it too (`APP_MAIN_FORMS_EXACT_UNAUTHORIZED`) for a caller that skipped the
+  preflight. An exact app is published only through the SDK's guarded publish, and the obligation is
+  settled only by a read of the published layer after an accepted publish
+  (`lib/app-publication-policy.js`, created once per build in `runSdkBuild` as `appPublication`; all
+  four app publishes go through `appPublication.publishApp`, phase 8 reports its own app publish with
+  `noteAppPublication`, and `flush()` / `unsettled()` at the end of the build turn whatever is still
+  owed or unproven into one `RETRY.NEVER` `BuildHalt` with `error.incomplete`). If phase 8 fails while
+  publishing a table before it attempts the app, the build conservatively marks exact Main-form
+  publication unproven; rerun after resolving the table failure. `app.pinDeclaredArtifacts: true`
+  makes every app push (and a new app's create, through `appComponentsFor`) pin the spec's declared
+  forms, views, charts and dashboards (`declaredAppPins` / `pinDeclaredArtifacts`); it only adds.
+  Without either field, and with nothing queued, the port is a pass-through of `appWriters.publish`
+  and the request trail is unchanged. An update push whose component pin answered
+  `APP_PIN_OUTCOME_UNKNOWN` is settled in the same run by `reconcileUnconfirmedPin`
+  (`lib/app-pin-recovery.js`): confirmed from a read (no write), repaired by ONE more push of the same
+  writer, or recorded as incomplete (`APP_PIN_UNCONFIRMED`). What the push intended is read from the
+  workspace copy only when that warning appears — the SDK leaves the pushed copy as it was
+  (`app-pin-recovery-build.test.js` pins it against the real bundle) — so every other push makes the
+  calls it always made. SDK extras are surfaced by name with the Maker remedy, and verify
+  fails them (strictly, with the build remedy, for an exact list). A generative-page edit of an app (`placeInApp`, `removeFromApp`) is no build push and
   carries no directive: it adds no Main form at all, because its push is limited to the sitemap and
   the views it pins (`lib/app-component-scope.js`). This does not set a default/order/security roles. Measured: changing membership after
   first publish did not reach the runtime list within 89 minutes; remembered forms are per table.
@@ -2842,6 +2865,8 @@ scripts/
     dataverse-operations.js    ← The reviewed built-in operation catalogue (frozen, revision 1): exact-name lookup, the four-key actionBindings projection (toActionBinding) and the new-row check; no I/O, not gated
     sdk-build.js               ← app-builder build engine (idempotent; incl. the pages phase). Every way it pushes or publishes the app is one of `appWriters`, which first awaits `publishTablesBeforeApp` (the one request that publishes, before the app, the tables whose forms or charts its publish ships)
     app-components.js          ← shared current/published app layers (`currentLayerRows`, and `currentLayerRow` — the authored layer wins — for a listing), component inventory (`readAppComponentInventory`: the download's read, with two opt-ins the build's pre-app proof makes — `savedLayer`, which looks the tables of the form and chart components up in the SAVED layer, and `requireIdentified`, which reads the answer strictly: a row counts for an id the list asked about, two tables for one id or a value no table has make the read incomplete, and a row of the component list that cannot be placed — no record, no GUID objectid, another component type — makes the list unreadable), hidden-table pin/proof, Main-form resolution/membership and push directives, `collectionRows`, the one reader of a paged collection, and `savedPageRows`, the one reader of the generative-page rows in the SAVED layer (RetrieveUnpublishedMultiple, 50 ids a read): a plain read of the page table answers the published layer only, so a page that was created and never published is "not found" by it — `apps.js` and teardown read pages here
+    app-pin-recovery.js        ← settles an app push whose component pin answered `APP_PIN_OUTCOME_UNKNOWN` (`pinIntentOf`, `pinWarningOf`, `reconcileUnconfirmedPin`): confirm from a read, repair with one more push of the same writer, or report it unconfirmed; never a second repair
+    app-publication-policy.js  ← the build's app-publication port (`createAppPublication`): a pass-through of `appWriters.publish` until an exact Main-form list owes a publication; then a guarded publish, settled only by a read of the published layer, and `flush()` / `unsettled()` for what is still owed
     solution-membership.js     ← one read of a solution's components (the types the build adds, plus its tables: a table held with all its subcomponents vouches for its views, forms and charts, which have no rows of their own), so a rebuild adds just what the solution is not PROVEN to hold; every doubt reads as "add"
     unsynced-edits.js          ← the SDK's own dirty tracking (`diffArtifact`) as the one proof that a reconcile has nothing to push; every doubt reads as "push"
     table-publish.js           ← the tables a spec names (`specTables`, the wide READ-ONLY list a halted build reads), the tables the build publishes before the app (`preAppTables`: what it changed — reconciled tables, the tables of the charts it wrote — the tables whose Main forms its own write of the app adds (`appWriteTables`: the navigation's tables, from the spec and how the SDK writes the app, honouring `app.mainForms` — for a writer that sends the spec's navigation; `appPushTables` takes the Entity tables of the navigation a writer does send, the placement's and the routing-description push's, and the Main-form list that push carries), and the tables the app is PROVEN to hold a form or chart of; the spec decides nothing else, so never a table that is only declared, a lookup's target, read only by a page or only pinned in `app.tables`), the proof (`readAppFormChartTables`: the app's form and chart components on the server, looked up in the saved layer, complete and unambiguous or nothing), the ONE `PublishXml` that publishes tables by name (`publishTablesXml`: the build's pre-app publish, and the lookup-label repair's), the read of which of the spec's views, forms and charts are saved but not published (`readSavedNotPublished`, the SAVED layer through `RetrieveUnpublishedMultiple`, `componentstate` 1 and 3) with the line a halted build prints from it (`describeSavedNotPublished`), and the warnings for a refused pre-app publish and for an app whose components could not be read (`describePreAppRefusal`, `describeUnreadAppComponents`); every doubt in a read says so and names the tables, never a shorter list
