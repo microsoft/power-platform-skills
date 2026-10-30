@@ -86,6 +86,9 @@ const dependencies = {
   '@microsoft/power-apps-native-pdf-viewer': '0.2.9',
   '@microsoft/power-apps-native-pen-input': '1.0.0',
   '@microsoft/power-apps-native-bglocation': '1.0.0',
+  '@react-native-firebase/app': '25.1.0',
+  '@react-native-firebase/messaging': '25.1.0',
+  'expo-notifications': '55.0.23',
 };
 
 function fixture(t) {
