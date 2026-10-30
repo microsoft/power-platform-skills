@@ -293,7 +293,8 @@ test('unsecuring a secured column halts without consent, and is made with consen
   const m = mockSdk({ dataverseGet: metadataServer({ ...SECURE_TABLE, secured: securedRows(true) }) });
   const err = await halted(run(m, specOf([{ schemaName: 'new_salary', type: 'Money', isSecured: false }])));
   assert.equal(err.code, 'DESTRUCTIVE_NOT_AUTHORIZED');
-  assert.match(err.message, /isSecured:new_ticket\.new_salary/);
+  // The refusal names the exact consent the build command takes, so the maker can repeat the run with it.
+  assert.match(err.message, /run the build again with --authorize isSecured:new_ticket\.new_salary\b/);
   assert.deepEqual(updates(m), []);
 
   const ok = mockSdk({ dataverseGet: metadataServer({ ...SECURE_TABLE, secured: securedRows(true) }) });

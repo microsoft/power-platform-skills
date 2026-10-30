@@ -2236,7 +2236,7 @@ async function guardExistingTableDates({ sdk, provision, runner, entity, logical
   if (declared.length) {
     const plan = planDateBehaviorRepairs({ schemaName: logical, columns: declared }, evidence, { authorizedDestructive });
     if (plan.refused.length) {
-      const why = plan.refused.map((r) => `${r.target}: ${r.reason}${r.code === 'DESTRUCTIVE_NOT_AUTHORIZED' ? ` (authorize '${r.key}' to make it)` : ''}`).join('; ');
+      const why = plan.refused.map((r) => `${r.target}: ${r.reason}${r.code === 'DESTRUCTIVE_NOT_AUTHORIZED' ? ` (to make it, run the build again with --authorize ${r.key})` : ''}`).join('; ');
       await runner.run('data-model', `date and time behaviour ${name}`, async () => {
         throw refusal(`the declared Date and Time behaviour cannot be applied — ${why}. Nothing was changed.`, { code: plan.refused[0].code });
       });
@@ -3020,7 +3020,7 @@ async function provisionDataModelSteps({ sdk, provision, runner, spec, apply, la
       }
       if (plan.refused.length) {
         await runner.run('data-model', `column security ${e.schemaName}`, async () => {
-          throw refusal(`the declared column security cannot be applied — ${plan.refused.map((r) => `${r.target}: ${r.reason} (authorize '${r.key}' to make it)`).join('; ')}. Nothing was changed.`, { code: plan.refused[0].code });
+          throw refusal(`the declared column security cannot be applied — ${plan.refused.map((r) => `${r.target}: ${r.reason} (to make it, run the build again with --authorize ${r.key})`).join('; ')}. Nothing was changed.`, { code: plan.refused[0].code });
         });
       }
       for (const op of plan.operations) {
@@ -3306,7 +3306,7 @@ async function provisionDataModelSteps({ sdk, provision, runner, spec, apply, la
     for (const u of plan.unknown) if (typeof warn === 'function') warn(`could not read the current table flags of ${logical} — ${u.reason}`);
     if (!plan.refused.length && !plan.operations.length) { runner.skip('data-model', `table flags ${e.schemaName} (already as declared)`); continue; }
     await runner.run('data-model', `table flags ${e.schemaName}`, async () => {
-      const refusedOf = (list) => refusal(`the declared table flags of ${logical} cannot be applied — ${list.map((r) => `${r.reason}${r.code === 'DESTRUCTIVE_NOT_AUTHORIZED' ? ` (authorize '${r.key}' to make it)` : ''}`).join('; ')}`, { code: list[0].code });
+      const refusedOf = (list) => refusal(`the declared table flags of ${logical} cannot be applied — ${list.map((r) => `${r.reason}${r.code === 'DESTRUCTIVE_NOT_AUTHORIZED' ? ` (to make it, run the build again with --authorize ${r.key})` : ''}`).join('; ')}`, { code: list[0].code });
       // A refused flag stops the table before any of its flags is written, so a table is never left half as declared by this step.
       if (plan.refused.length) throw refusedOf(plan.refused);
       const applied = await applyTableFlags(plan, { sdk, provision, publication });
