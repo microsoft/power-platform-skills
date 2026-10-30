@@ -42,8 +42,6 @@ const {
   bindingRecord,
   driftVerdict,
   normalizeGuid,
-  PRE_WRITE_CODES,
-  rulesOf,
 } = require('./reconcile-common.js');
 
 const KIND = 'web-resource';
@@ -247,8 +245,10 @@ async function planWebResourceUpdate({ webResource, options, reads, readDependen
   const published = await reads.published(plan.id);
   let live = null;
   if (published.state === 'present') live = Buffer.from(published.content, 'base64');
-  else if (!plan.receipt) return unknown('web-resource-content-unreadable', 'the web resource\'s published content could not be read, so it was not compared');
-  // A receipt row may have no published layer yet (a create whose publication failed): its bytes are simply not known.
+  // Only a receipt row may lack a published layer (a create whose publication failed: the saved read above found the row,
+  // the documented "Does Not Exist" 404 answered the published one). An answer that could not be read is never taken for
+  // that: it would let the receipt rewrite over content nobody compared.
+  else if (!(plan.receipt && published.state === 'absent')) return unknown('web-resource-content-unreadable', 'the web resource\'s published content could not be read, so it was not compared');
   const liveSha = live ? bytesSha(live) : null;
   plan.approvalFacts = { id: plan.id, publishedSha256: liveSha, desiredSha256: plan.desiredSha, dependents: plan.dependents };
   plan.origin = binding ? binding.origin : 'adopted';
@@ -258,6 +258,12 @@ async function planWebResourceUpdate({ webResource, options, reads, readDependen
   }
   if (wanted.length === 0 && (!live || live.length > 0) && !isAuthorized(ctx.authorizedDestructive, key)) {
     return refuse('web-resource-clear-not-authorized', 'the spec empties a web resource that has content; approve clearing it first');
+  }
+  // Drift before the receipt: a receipt proves only that this build wrote the row and could not confirm the publication,
+  // not that it may replace what someone published since. The receipt stores no content hash, so a receipt write that DID
+  // publish followed by a spec change is judged against the binding too, and asks for the overwrite approval: the safe side.
+  if (binding && live && driftVerdict(binding, liveSha, plan.desiredSha) === 'drift' && !isAuthorized(ctx.authorizedOverwrite, key)) {
+    return refuse('web-resource-drift', 'the web resource\'s content was changed outside the spec; refresh the spec or approve the overwrite');
   }
   if (plan.receipt) {
     // The receipt is this build's own unconfirmed write: it is written again by id whatever one published read shows.
@@ -271,9 +277,6 @@ async function planWebResourceUpdate({ webResource, options, reads, readDependen
     plan.bindUnchanged = !!binding || adoptionApproved;
     plan.operations.push(operation({ key, kind: KIND, target: plan.id, action: 'noChange' }));
     return plan;
-  }
-  if (binding && driftVerdict(binding, liveSha, plan.desiredSha) === 'drift' && !isAuthorized(ctx.authorizedOverwrite, key)) {
-    return refuse('web-resource-drift', 'the web resource\'s content was changed outside the spec; refresh the spec or approve the overwrite');
   }
   plan.action = 'update';
   plan.operations.push(operation({ key, kind: KIND, target: plan.id, action: 'update', destructive: true }));
@@ -314,10 +317,12 @@ async function applyWebResourceUpdate(plan, { sdk }, ctx = {}) {
   try {
     await sdk.updateWebResource(plan.id, contentOf(plan.options));
   } catch (err) {
+    // updateWebResource PATCHes, publishes and reads the published bytes back inside one call, and the SDK's error codes do
+    // not say how far it got (an INVALID_ARGUMENT can come from its id check before the PATCH or from an answer after it),
+    // so no thrown code proves nothing was sent: everything but the SDK's own "written, publication unconfirmed" is unknown.
     const code = err && typeof err.code === 'string' ? err.code : '';
     if (code === 'WEB_RESOURCE_UNVERIFIED') unconfirmedOutcome(result, ctx, plan, err.id || plan.id);
-    else if (PRE_WRITE_CODES.has(code)) result.refused.push({ ...refusal(plan.key, 'web-resource-rejected', 'the SDK refused the content before anything was sent'), rules: rulesOf(err) });
-    else result.unknown.push({ ...refusal(plan.key, 'web-resource-write-unknown', 'the web resource write did not report its outcome; check it'), id: plan.id, possiblyPublished: true });
+    else result.unknown.push({ ...refusal(plan.key, 'web-resource-write-unknown', 'the web resource write did not report its outcome; check it'), id: plan.id, possiblyPublished: true, ...(code ? { sdkCode: code } : {}) });
     return result;
   }
   result.saved.push({ key: plan.key, kind: KIND, id: plan.id, published: true, ...(plan.receipt ? { clearsReceipt: true } : {}) });
@@ -330,6 +335,9 @@ async function applyCreate(plan, sdk, ctx, result, record) {
   let unverifiedId = '';
   const out = await runManagedCreate(ctx, { kind: KIND, key: plan.key, identity: { name: plan.key, uniqueName: true }, childKeys: [] }, async () => {
     // No caller id: the SDK cannot send one for a web resource, and an id the port allocated is never used for it.
+    // createWebResource POSTs, then reads the new id from the answer, publishes and reads the published bytes back; it
+    // throws INVALID_ARGUMENT AFTER the POST when the answer names no id. No code it throws proves nothing was sent, so a
+    // throw is unknown (the next run finds the row by its unique name and asks before adopting it), never refused.
     try {
       const created = await sdk.createWebResource({ ...plan.options });
       serverId = normalizeGuid(created && created.id);
@@ -340,7 +348,6 @@ async function applyCreate(plan, sdk, ctx, result, record) {
         unverifiedId = normalizeGuid(err.id);
         return { outcome: 'unknown', code };
       }
-      if (PRE_WRITE_CODES.has(code)) return { outcome: 'refused', code, rules: rulesOf(err) };
       return { outcome: 'unknown', code: /^[A-Z][A-Z0-9_]{2,63}$/.test(code) ? code : 'WRITE_OUTCOME_UNKNOWN' };
     }
   });
@@ -353,8 +360,9 @@ async function applyCreate(plan, sdk, ctx, result, record) {
     result.managedBindings.push(record(serverId, 'created'));
     return result;
   }
-  if (out.status === 'refused' && !serverId) {
-    result.refused.push({ ...refusal(plan.key, 'web-resource-rejected', 'the web resource was refused before it was created'), ...(out.rules ? { rules: out.rules } : {}) });
+  if (out.status === 'refused' && !out.executed) {
+    // The port refused without running the create (no port, a request it rejects): the SDK was never called.
+    result.refused.push(refusal(plan.key, 'web-resource-rejected', `the web resource was not created: the creation port refused it (${out.code || 'refused'})`));
     return result;
   }
   // The SDK may have created and published the row while the port's answer failed or disagreed: possibly written and live.

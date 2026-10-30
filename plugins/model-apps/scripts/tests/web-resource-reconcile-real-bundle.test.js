@@ -205,6 +205,67 @@ test('a create whose port answer fails after the SDK saved is unknown and possib
   assert.equal(noPort.writes.length, 0, 'no creation port: nothing is sent');
 });
 
+// A client whose published read of the row answers `answer` (the saved-layer and name reads are the server's own).
+function publishedAnswers(srv, answer) {
+  const base = clientOf(srv);
+  return { ...base, get: (p) => (/^\/webresourceset\([^)]*\)\?\$select=webresourceid,content$/.test(p) ? Promise.resolve(answer) : base.get(p)) };
+}
+async function runWith(srv, client, wr, ctx = {}, extra = {}) {
+  const sdk = await srv.newSdk();
+  srv.clearLog();
+  const plan = await planWebResourceUpdate({ webResource: wr, options: webResourceOpts(wr, '.'), reads: webResourceReads(client), readDependents: noDependents, ...extra }, ctx);
+  return { plan, result: await applyWebResourceUpdate(plan, { sdk }, ctx) };
+}
+
+test('a receipt does not bypass the overwrite approval: content changed outside the spec since the last build is drift', async () => {
+  const srv = server('external edit');
+  const managed = { lookup: async () => ({ id: WID, intentSha256: shaOf('last applied'), origin: 'created' }) };
+  const unconfirmed = { note: () => true, clear: () => {} };
+  const { plan, result } = await run(srv, declared('wanted'), { managed, unconfirmed }, { recordedId: WID });
+  assert.deepEqual(codes(result.refused), ['web-resource-drift']);
+  assert.equal(plan.action, null);
+  assert.equal(srv.writes.length, 0, 'nothing written over the other writer\'s content');
+  assert.equal(Buffer.from(srv.rowOf('webresourceset', WID).content, 'base64').toString(), 'external edit');
+  const approved = await run(srv, declared('wanted'), { managed, unconfirmed, authorizedOverwrite: true }, { recordedId: WID });
+  assert.equal(approved.plan.action, 'rewrite');
+  assert.deepEqual(approved.result.saved.map((s) => [s.id, s.clearsReceipt]), [[WID, true]]);
+});
+
+test('a receipt row whose published content cannot be read is unknown; one with no published layer is written again by id', async () => {
+  const managed = { lookup: async () => ({ id: WID, intentSha256: shaOf('var v = 1;'), origin: 'created' }) };
+  const unconfirmed = { note: () => true, clear: () => {} };
+  for (const answer of [{ status: 500, headers: {}, body: { error: { code: '0x80040216', message: 'busy' } } }, { status: 200, headers: {}, body: { webresourceid: WID } }]) {
+    const srv = server('var v = 1;');
+    const { plan, result } = await runWith(srv, publishedAnswers(srv, answer), declared('var v = 2;'), { managed, unconfirmed }, { recordedId: WID });
+    assert.deepEqual(codes(result.unknown), ['web-resource-content-unreadable']);
+    assert.equal(plan.action, null);
+    assert.equal(srv.writes.length, 0);
+  }
+  const srv = server('var v = 1;');
+  const absent = { status: 404, headers: {}, body: { error: { code: '0x80040217', message: 'Does Not Exist' } } };
+  const { plan, result } = await runWith(srv, publishedAnswers(srv, absent), declared('var v = 2;'), { managed, unconfirmed }, { recordedId: WID });
+  assert.equal(plan.action, 'rewrite', 'a row the build created whose publication failed has no published layer yet');
+  assert.deepEqual(result.saved.map((s) => s.id), [WID]);
+  assert.deepEqual(patches(srv).map((w) => w.url), [`${API}/webresourceset(${WID})`]);
+});
+
+test('a create the service stored but answered without its id is unknown and keeps the find-by-name route, never "refused"', async () => {
+  const srv = server(null);
+  const post = srv.httpClient.post;
+  // The SDK reads the new id from the OData-EntityId header (or the body); this answer has neither.
+  srv.httpClient.post = async (url, body, options) => {
+    const res = await post(url, body, options);
+    return /\/webresourceset$/.test(String(url)) ? { status: 204, headers: {}, body: {} } : res;
+  };
+  const { result } = await run(srv, declared('wanted'), { managed: fakeManaged(), creates: stableCreates() });
+  assert.equal(srv.store.get('webresourceset').size, 1, 'the row was written');
+  assert.deepEqual(codes(result.refused), []);
+  assert.deepEqual(codes(result.unknown), ['web-resource-write-unknown']);
+  assert.equal(result.unknown[0].possiblyPublished, true);
+  assert.match(result.unknown[0].message, /finds it by name/);
+  assert.equal(result.managedBindings.length, 0);
+});
+
 test('clearing a receipt leaves a newer note of the same name that another build made since', () => {
   const workspaceDir = makeTempDir('wr-receipt-');
   const environment = 'https://contoso.crm.dynamics.com';
