@@ -27,7 +27,8 @@ const ALL = [`1:${META.contoso_item}`, `60:${FORM_A}`, `26:${VIEW}`, `59:${CHART
 // The pin server models the app and its components; the app step also reads the solution and the app's icon, which
 // this answers: both already exist, so the build creates neither.
 // watchCopy: record what the workspace copy asks the server to hold just before and just after each app push.
-async function build(t, lose, { watchCopy = false, members, exact = false, allowDestructive } = {}) {
+// withhold: how many app publishes the SDK refuses before it sends one (APP_MAIN_FORM_PUBLISH_WITHHELD: nothing was published).
+async function build(t, lose, { watchCopy = false, members, exact = false, allowDestructive, withhold = 0 } = {}) {
   const server = appPinServer(t, { lose, members });
   const get = server.httpClient.get;
   server.httpClient.get = async (url) => {
@@ -39,6 +40,17 @@ async function build(t, lose, { watchCopy = false, members, exact = false, allow
     return get(url);
   };
   await server.sdk.initWorkspace();
+  const appPublishes = [];
+  const publish = server.sdk.publishArtifact.bind(server.sdk);
+  server.sdk.publishArtifact = async (kind, id, options) => {
+    if (kind !== 'app') return publish(kind, id, options);
+    if (appPublishes.length < withhold) {
+      appPublishes.push('withheld');
+      return { type: kind, id, shipped: false, publish: { kind: 'failed', error: { code: 'APP_MAIN_FORM_PUBLISH_WITHHELD', message: 'read-back unavailable; no publish sent' } } };
+    }
+    appPublishes.push('sent');
+    return publish(kind, id, options);
+  };
   const copies = [];
   if (watchCopy) {
     const push = server.sdk.pushArtifact.bind(server.sdk);
@@ -60,7 +72,7 @@ async function build(t, lose, { watchCopy = false, members, exact = false, allow
     error = thrown;
   }
   const changeSets = server.state.requests.filter((line) => line.startsWith('BATCH '));
-  return { ...server, result, error, warnings, changeSets, copies };
+  return { ...server, result, error, warnings, changeSets, copies, appPublishes };
 }
 
 test('build: a pin answer lost after it committed is confirmed by reading the app; no second change set', async (t) => {
@@ -118,11 +130,29 @@ test('build: "exact" Main forms on an existing app is refused without --allow-de
 });
 
 test('build: "exact" Main forms with --allow-destructive takes the other Main form out and proves the published layer', async (t) => {
-  const { state, error, result } = await build(t, [], { members: WITH_FORM_B, exact: true, allowDestructive: true });
+  const { state, error, result, appPublishes } = await build(t, [], { members: WITH_FORM_B, exact: true, allowDestructive: true });
   assert.equal(error, undefined, error && error.stack);
   assert.equal(result.incomplete, undefined);
   assert.ok(state.members.has(`60:${FORM_A}`), 'the listed Main form is in the app');
   assert.ok(!state.members.has(`60:${FORM_B}`), 'the other Main form is out of the app');
   assert.ok(state.requests.some((line) => line.startsWith('GET ') && line.includes('/appmodules(11111111-0000-4000-8000-000000000001)?$select=appmoduleidunique')),
     'the publish is proven from a read of the published layer');
+  assert.deepEqual(appPublishes, ['sent'], 'an accepted publish pays what was owed: the final flush publishes nothing more');
+});
+
+test('build: an "exact" publish withheld once is published again by the final flush, and the build succeeds', async (t) => {
+  const { state, error, result, appPublishes } = await build(t, [], { members: WITH_FORM_B, exact: true, allowDestructive: true, withhold: 1 });
+  assert.equal(error, undefined, error && error.stack);
+  assert.equal(result.incomplete, undefined);
+  assert.deepEqual(appPublishes, ['withheld', 'sent']);
+  assert.ok(!state.members.has(`60:${FORM_B}`), 'the other Main form is out of the app');
+});
+
+test('build: an "exact" publish withheld every time is tried once more, then stops the build incomplete', async (t) => {
+  const { error, appPublishes } = await build(t, [], { members: WITH_FORM_B, exact: true, allowDestructive: true, withhold: 2 });
+  assert.deepEqual(appPublishes, ['withheld', 'withheld']);
+  assert.ok(error, 'the build does not end as a success');
+  const codes = (error.incomplete || []).map((entry) => entry.code);
+  assert.ok(codes.includes('APP_MAIN_FORM_PUBLISH_WITHHELD'), JSON.stringify(error.incomplete));
+  assert.ok(codes.includes('APP_MAIN_FORMS_NOT_EXACT'), JSON.stringify(error.incomplete));
 });

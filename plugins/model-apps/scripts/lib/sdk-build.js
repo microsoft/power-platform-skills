@@ -3524,7 +3524,12 @@ async function runSdkBuildPhases(spec, opts, owed) {
       let intent;
       const pushed = await pushAppHeader(provision, appId, name, headerChanged, mainFormsByTable, opts.warn,
         { mainFormsOnUpdate, declared, onIntent: (recorded) => { intent = recorded; } });
-      if (mainFormsOnUpdate === 'exact' && pushed && pushed.saved !== false) appPublication.recordExact(appId, pushed, { name, mainFormsByTable });
+      // The saved exact list is owed a publication until one is accepted (the caller's publishApp, or the final flush once
+      // more when that one was withheld); recordExact pays it at once when the push itself published the proven layer.
+      if (mainFormsOnUpdate === 'exact' && pushed && pushed.saved !== false) {
+        appPublication.queue({ kind: 'app', id: appId, reason: 'exact Main forms' });
+        appPublication.recordExact(appId, pushed, { name, mainFormsByTable });
+      }
       // The repair push itself never reconciles again: one more push at most (no recursion, no whole-build retry).
       if (repair) return pushed;
       const settled = await reconcileUnconfirmedPin({
