@@ -33,10 +33,12 @@ const MARKDOWN_FENCE = new RegExp(`^${WS}*(\`\`\`|~~~)`, 'm');
 // check is the same either way: only the views they read differ.
 // A page whose parse ran out of stack space (`tooDeep`) is a valid page nested too deeply for the parser, and the lexer's view of it, which stands, is the wrong one: its
 // guess made a complete page look cut off. It is refused for that, with the code the compile's refusal has (page-nesting.js), and not for the symptoms of the guess.
-function pageStructure(code) {
+// `ts`: the compiler that settles a guess — a caller's (prepare-genpage.js, which hands the SDK the same one), or the vendored compiler, loaded lazily, when none is given. A
+// page is read the same way by either: the views are the parse's, whichever compiler of the same version made it.
+function pageStructure(code, { ts = null } = {}) {
   const text = String(code == null ? '' : code);
   if (!trimTrivia(text)) return { problems: ['file is empty'], code: null };
-  const { views, tooDeep } = guessedPageViews(text);
+  const { views, tooDeep } = guessedPageViews(text, { ts });
   if (tooDeep) return { problems: [PAGE_NESTING_MESSAGE], code: PAGE_NESTING_TOO_DEEP };
   const problems = [];
   // hasDefaultExport also refuses a file cut off INSIDE its export (`export default function P(props)`
@@ -61,8 +63,8 @@ function pageStructure(code) {
 }
 
 // The problems alone, for the callers that have no use for the code.
-function pageStructureProblems(code) {
-  return pageStructure(code).problems;
+function pageStructureProblems(code, options) {
+  return pageStructure(code, options).problems;
 }
 
 module.exports = { pageStructure, pageStructureProblems };

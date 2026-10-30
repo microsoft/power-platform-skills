@@ -26,18 +26,22 @@
 //     `static`, … — a module is strict code; https://tc39.es/ecma262/#sec-keywords-and-reserved-words) or a reserved word used as one (`type X = if`), outside the
 //     places a keyword may name something (a property, a member, a JSX tag: isIdentifierName); a JSDoc type (`?T`, `T!`, `*`); a type predicate outside a return
 //     type (`asserts x`); `readonly` before a type that is no array or tuple; and an empty list of type arguments or type parameters (`A<>`).
-const { loadVendoredTypeScript } = require('./typescript-compiler.js');
 const { blankNonCodePreservingTemplateExpressions, isLineTerminator } = require('./source-literals.js');
 const { isStackOverflow } = require('./page-nesting.js');
 
 // The views of the last sources asked about: the oracle lexes one source several times per call (resolve, stray, residual), and each would parse it again.
+// One cache per compiler: the vendored one's (`cache`), and one for each compiler a caller hands in (`{ ts }`: prepare-genpage.js, or a test), keyed by that
+// compiler's identity — the views of a text are a function of the text and of the parser that read it, so a cache shared across compilers could answer for a parse
+// that compiler never made. A WeakMap, so a caller's compiler is not kept alive by having been asked once.
 const CACHE_LIMIT = 8;
 const cache = new Map();
+const cacheByCompiler = new WeakMap();
 
 // The tests that hold the LEXER to its own rules — what it reads for certain, what it reports as a guess, and what a guess costs a page when nothing else can
 // settle it — read pages with the lexer alone: they turn the parser off for their process (`setParserCheck(false)`), or for a script they run, with
 // MODEL_APPS_LEXER_ALONE=1 in its environment. Everything else runs with it on. Off, the gates only refuse more: the lexer's guesses stand, as they did.
-let parserCheck = process.env.MODEL_APPS_LEXER_ALONE !== '1';
+// `process` is read through typeof: this module is on the injected preparation path (prepare-genpage.js), which may run where there is no Node process object.
+let parserCheck = !(typeof process !== 'undefined' && process.env && process.env.MODEL_APPS_LEXER_ALONE === '1');
 function setParserCheck(enabled) {
   parserCheck = Boolean(enabled);
 }
@@ -45,7 +49,7 @@ function setParserCheck(enabled) {
 /**
  * The lexer's two views of `src`, built from TypeScript's parse of it as a `.tsx` file, or null where TypeScript reports a parse diagnostic or cannot be loaded.
  * @param {string} src
- * @param {{ ts?: object }} [options] `ts`: a TypeScript namespace to parse with (a test seam; the vendored compiler otherwise)
+ * @param {{ ts?: object }} [options] `ts`: a TypeScript namespace to parse with (a caller's compiler — prepare-genpage.js — or a test's; the vendored compiler otherwise)
  * @returns {null | { literal: string, keep: string, comments: Array<{ start: number, end: number, text: string }>, regexEnds: Set<number>, jsxTagEnds: Set<number> }}
  */
 function typescriptViews(src, options) {
@@ -54,24 +58,35 @@ function typescriptViews(src, options) {
 
 // typescriptViews, and whether the parse work failed for want of stack (`tooDeep`) — the one failure told apart from the others, because it is the page's fault and the
 // maker can fix it (page-nesting.js). The caller that has no use for the difference reads `views`, which is null for it as for every other failure.
+// The vendored compiler is required where it is first needed, not at the top: a caller that hands in its own (`{ ts }`) never loads it, and with it the file-system
+// reads that check its provenance (typescript-compiler.js) — the injected preparation path needs no file system (prepare-genpage.js).
 function parseViews(src, { ts = null } = {}) {
   if (!ts && !parserCheck) return NO_VIEWS;
   const text = String(src == null ? '' : src);
-  if (!ts && cache.has(text)) return cache.get(text);
+  const kept = ts ? cacheOf(ts) : cache;
+  if (kept.has(text)) return kept.get(text);
   let result;
   try {
-    result = { views: buildViews(ts || loadVendoredTypeScript(), text), tooDeep: false };
+    result = { views: buildViews(ts || require('./typescript-compiler.js').loadVendoredTypeScript(), text), tooDeep: false };
   } catch (error) {
     // Fail closed: a compiler that cannot be loaded (its provenance check failed) or a parse that cannot be walked vouches for nothing, and the lexer's guesses stand.
     // A stack overflow in the parse or in the walk over it (one level of recursion per nested element) is the same failure, but is kept apart: it says the page nests
     // too deeply, not that it is cut off. It is recognised by what was thrown, not by a depth, as the compile's is (page-nesting.js).
     result = { views: null, tooDeep: isStackOverflow(error) };
   }
-  if (!ts) {
-    if (cache.size >= CACHE_LIMIT) cache.delete(cache.keys().next().value);
-    cache.set(text, result);
-  }
+  if (kept.size >= CACHE_LIMIT) kept.delete(kept.keys().next().value);
+  kept.set(text, result);
   return result;
+}
+// The cache of a caller's compiler. A compiler that is no object (a test's primitive stand-in) cannot key a WeakMap, and is given a cache of its own each time: nothing is kept for it.
+function cacheOf(ts) {
+  if ((typeof ts !== 'object' && typeof ts !== 'function') || ts === null) return new Map();
+  let kept = cacheByCompiler.get(ts);
+  if (!kept) {
+    kept = new Map();
+    cacheByCompiler.set(ts, kept);
+  }
+  return kept;
 }
 const NO_VIEWS = Object.freeze({ views: null, tooDeep: false });
 
@@ -214,9 +229,10 @@ function readAnotherWay(ts, src, sf, node) {
  * so the two never decide it differently. `tooDeep` is true where that parse ran out of stack space (page-nesting.js): the page is valid, and the lexer's view of it,
  * which stands, is the wrong one — the gates say the page nests too deeply, not that it is cut off.
  * @param {string} src
+ * @param {{ ts?: object }} [options] `ts`: the compiler to settle a guess with (parseViews); the vendored compiler otherwise
  * @returns {{ keep: string, frontier: null | { at: number, kind: string }, views: null | object, tooDeep: boolean }}
  */
-function guessedPageViews(src) {
+function guessedPageViews(src, { ts = null } = {}) {
   let frontier = null;
   let jsxAttribute = false;
   const keep = blankNonCodePreservingTemplateExpressions(src, {
@@ -225,7 +241,7 @@ function guessedPageViews(src) {
       if (!frontier || at < frontier.at) frontier = { at, kind };
     },
   });
-  const parsed = frontier !== null && !jsxAttribute ? parseViews(src) : NO_VIEWS;
+  const parsed = frontier !== null && !jsxAttribute ? parseViews(src, { ts }) : NO_VIEWS;
   return { keep, frontier, views: parsed.views, tooDeep: parsed.tooDeep };
 }
 
