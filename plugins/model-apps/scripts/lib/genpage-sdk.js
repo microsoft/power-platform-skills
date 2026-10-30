@@ -1400,7 +1400,8 @@ function makeGenpageSdk(env, deps = {}) {
         }
       }
       // A draft's state is said apart from the publish: `pendingPublish` is true for what it saved, and not known (null) when it saved nothing — an earlier save may be unpublished.
-      const draftState = (saved) => (draft ? { published: false, pendingPublish: saved ? true : null, placementState: saved ? 'saved' : 'unchanged' } : {});
+      // `published: !draft` is the page placement's state, not an app definition: no app is created here (see sdk-opt-ins.test.js, which scans for draft app creates).
+      const draftState = (saved) => (draft ? { published: !draft, pendingPublish: saved ? true : null, placementState: saved ? 'saved' : 'unchanged' } : {});
       if (!edited && !finishing) return { added: [], alreadyPlaced, pinnedViews: [], warnings, appEdited: false, ...draftState(false) };
 
       // The first thing sent to the app is below: the caller's word comes before it (see `beforeAppWrite`, above), and it is told what the write is.
@@ -1541,7 +1542,7 @@ function makeGenpageSdk(env, deps = {}) {
         for (const { a, g, kept } of edits) await sdk.updateElement('app', app, `/siteMap/areas/${a}/groups/${g}/subAreas`, kept);
         if (edits.length) await pushApp(sdk, app, warnings, appScope, { views: [] });
         warnings.push(`page ${page} is ${edits.length ? 'taken out of' : 'already out of'} the saved navigation of app ${app}, and the app was not published, as asked: it still shows in the app that runs until the app is published, and the page cannot be deleted before then`);
-        return { ...answer(wasInNavigation, false), published: false, pendingPublish: true, placementState: 'saved' };
+        return { ...answer(wasInNavigation, false), published: !draft, pendingPublish: true, placementState: 'saved' };
       }
       // Whether the app has ever been published, asked BEFORE the publish (afterwards every app has): it is only for the note below, so a read that fails does not stop the removal.
       let neverPublished = false;
