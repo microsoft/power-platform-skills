@@ -1996,11 +1996,26 @@ async function downloadCapabilities(sdk, logical, entity) {
   if (dateColumns.length) {
     const evidence = await readExistingDateBehaviors(sdk, logical);
     if (!evidence.complete) failed.push(`Date and Time behaviours: ${evidence.reason}`);
-    else for (const c of dateColumns) Object.assign(c, downloadedColumnFeatures({}, evidence.columns.get(String(c.schemaName).toLowerCase())));
+    else {
+      // A complete answer can still leave a known column unstated: the typed list can omit it, or list it with
+      // `DateTimeBehavior: null`. Either is unknown, not the UserLocal default, so it is named rather than silently omitted.
+      const unstated = [];
+      for (const c of dateColumns) {
+        const row = evidence.columns.get(String(c.schemaName).toLowerCase());
+        if (!row || !row.behavior) unstated.push(c.schemaName);
+        Object.assign(c, downloadedColumnFeatures({}, row));
+      }
+      if (unstated.length) failed.push(`Date and Time behaviours: the answer does not state ${unstated.join(', ')}`);
+    }
   }
   const flags = await readTableFlags(sdk, logical);
   if (!flags) failed.push('table flags: the read gave no answer');
-  else Object.assign(entity, downloadedTableFlags(flags));
+  else {
+    // readTableFlags answers `undefined` for a flag the 200 body does not state as a boolean (e.g. `{}`); that is unknown, not off.
+    const unstated = ['duplicateDetectionEnabled', 'changeTrackingEnabled', 'searchEnabled'].filter((k) => typeof flags[k] !== 'boolean');
+    if (unstated.length) failed.push(`table flags: the answer does not state ${unstated.join(', ')}`);
+    Object.assign(entity, downloadedTableFlags(flags));
+  }
   return failed;
 }
 

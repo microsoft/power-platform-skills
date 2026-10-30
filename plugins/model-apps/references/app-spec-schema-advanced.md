@@ -581,9 +581,10 @@ again with it.
 
 A download always writes option values (as above) and `isSecured`. `--include-capabilities` also reads
 each table's Date and Time behaviours and flags (one read each per table) and writes the ones that
-differ from what a build creates by default; without it, a download makes the reads it always made. A
-spec that carries any of these fields gets `minimumPluginVersion: "2.21.0"`. `--verify` checks each
-declared value against a fresh read, and reports what it could not read as unverified, never as a
-pass.
+differ from what a build creates by default; a read that fails, or an answer that does not state a
+column's behaviour or a flag, is left out and named in a warning, never taken as the default. Without
+it, a download makes the reads it always made. A spec that carries any of these fields gets
+`minimumPluginVersion: "2.21.0"`. `--verify` checks each declared value against a fresh read, and
+reports what it could not read as unverified, never as a pass.
 
 **Not yet supported** (tracked follow-up): access teams / hierarchy security.

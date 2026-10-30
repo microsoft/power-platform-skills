@@ -495,6 +495,41 @@ test('--include-capabilities on: a read that gives no answer leaves its facts ou
   assert.equal(plain.result.spec.minimumPluginVersion, '2.13.0');
 });
 
+test('--include-capabilities on: an answered read that leaves a Date and Time column or a table flag unstated names it in the warning, with no extra read', async (t) => {
+  const capabilityWarning = (warnings) => warnings.find((w) => w.includes('--include-capabilities could not read'));
+  // account: the typed list omits contoso_seen and states no behaviour for contoso_due; its flags answer states nothing.
+  // contact: every column and flag is stated (UserLocal and off flags are the quiet defaults).
+  const reads = capabilityReads(
+    (table) => (table === 'account'
+      ? { status: 200, body: { value: [{ LogicalName: 'contoso_due', DateTimeBehavior: null, CanChangeDateTimeBehavior: { Value: true } }] } }
+      : dateRows([['contoso_due', 'UserLocal'], ['contoso_seen', 'UserLocal']])),
+    (table) => (table === 'account' ? { status: 200, body: {} } : flagsBody(false, false, false)));
+  const { result, calls, warnings } = await download(t, { attributes: DATED, capabilityReads: reads, includeCapabilities: true });
+  assert.deepEqual(capabilityCalls(calls), ['dates account', 'dates contact', 'flags account', 'flags contact'], 'one date read and one flags read per table');
+  const account = result.spec.entities.find((e) => e.schemaName === 'account');
+  assert.deepEqual(account.columns.filter((c) => c.type === 'DateTime').map((c) => c.dateTimeBehavior), [undefined, undefined]);
+  assert.deepEqual([account.searchEnabled, account.changeTrackingEnabled, account.duplicateDetectionEnabled], [undefined, undefined, undefined]);
+  const warning = capabilityWarning(warnings);
+  assert.ok(warning, 'an unstated capability is reported, not taken as the default');
+  assert.match(warning, /account \([^)]*contoso_due[^)]*\)/);
+  assert.match(warning, /account \([^)]*contoso_seen[^)]*\)/);
+  assert.match(warning, /account \([^)]*table flags[^)]*duplicateDetectionEnabled[^)]*\)/);
+  assert.doesNotMatch(warning, /contact \(/, 'stated defaults stay quiet');
+
+  // A flags answer that states only some flags keeps the ones it states and names the rest.
+  const partial = await download(t, {
+    capabilityReads: capabilityReads(() => assert.fail('no Date and Time column, no date read'),
+      () => ({ status: 200, body: { IsDuplicateDetectionEnabled: { Value: true }, ChangeTrackingEnabled: 'yes' } })),
+    includeCapabilities: true,
+  });
+  assert.equal(partial.result.spec.entities.find((e) => e.schemaName === 'account').duplicateDetectionEnabled, true);
+  assert.match(capabilityWarning(partial.warnings), /account \(table flags: the answer does not state changeTrackingEnabled, searchEnabled\)/);
+
+  // Every column and flag stated: no warning at all.
+  const quiet = await download(t, { attributes: DATED, capabilityReads: capabilityReads(() => dateRows([['contoso_due', 'DateOnly'], ['contoso_seen', 'UserLocal']]), () => flagsBody(false, false, false)), includeCapabilities: true });
+  assert.equal(capabilityWarning(quiet.warnings), undefined);
+});
+
 test('a downloaded secured column asks for 2.21.0 without the flag, and a higher floor on disk is kept', async (t) => {
   const secured = [{ logicalName: 'contoso_salary', displayName: 'Salary', attributeType: 'Money', isCustomAttribute: true, isSecured: true }];
   const { result } = await download(t, { attributes: secured });
