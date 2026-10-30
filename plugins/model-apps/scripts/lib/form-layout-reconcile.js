@@ -17,18 +17,36 @@
 // Positions come from the column-slot model (form-occupancy.js slotGrid), not the width-only rowOccupancy
 // the additive path uses: keeping a maker's cell in column 1 beside a row-spanning cell needs positions.
 //
-// What is owned: the order, the section and the spans of the declared fields, plus readOnly / hidden when
-// the spec states them. An explicit `false` clears the flag, but only on a declared field's own control;
-// a flag the spec leaves out is left as it is. Existing cells keep their ids, labels and every other
-// property (the SDK round-trips them), so a re-run with nothing to change sends nothing.
+//   - a row this pack empties is kept (empty) while a maker's cell sits below it: dropping it would move
+//     every later row up, and with it controls the spec does not own.
+// Positions come from the column-slot model (form-occupancy.js slotGrid), not the width-only rowOccupancy
+// the additive path uses: keeping a maker's cell in column 1 beside a row-spanning cell needs positions.
+//
+// What is owned: the order, the section and the spans of the declared fields, the column count of a
+// declared section when the spec states it, plus readOnly / hidden when the spec states them. An explicit
+// `false` clears the flag, but only on a declared field's own control; a flag the spec leaves out is left as
+// it is. Existing cells keep their ids, labels and every other property (the SDK round-trips them), so a
+// re-run with nothing to change sends nothing.
+//
+// New cells (a declared field the form does not hold yet, and a spacer) are children of the form: their
+// cell and control ids are reserved through the creation-identity port (ctx.creates.run) BEFORE the write,
+// so an interrupted push is recovered by the same ids instead of minting a second set. The SDK keeps an id
+// it is given and mints one only for a cell or control without one.
+//
+// The baseline is the FULL layout projection of the form — where every field control sits, with its spans
+// and flags, and each section's column count — whatever the spec declares today, with a hash per part
+// (reconcile-common partsDriftVerdict). So a spec that starts declaring a flag, or a field the form already
+// holds, is an edit and not drift, while a part someone else changed since the last build still refuses.
 //
 // Refusals (nothing is written for that form): a field declared twice, a field the form holds in more
-// than one place, a declared section the form does not have, a maker's cell that no longer fits the
-// section (it overruns the grid), a layout changed outside the spec since the last build, and a first
-// edit of a form the spec has not managed before without adoption approval.
+// than one place (in any section), a declared section the form does not have, a maker's cell that no
+// longer fits the section (it overruns the grid), a layout changed outside the spec since the last build,
+// a first edit of a form the spec has not managed before without adoption approval, and a new cell the
+// creation-identity port did not allow.
 
 const { slotGrid } = require('./form-occupancy.js');
 const { fieldCellIntent, isNonFieldControl, findSectionLocation, findFieldCellLocations } = require('./artifact-intent.js');
+const { formColumnsOf } = require('./app-spec.js');
 const {
   emptyResult,
   operation,
@@ -36,10 +54,11 @@ const {
   isAuthorized,
   lookupBinding,
   bindingRecord,
-  driftVerdict,
+  partsDriftVerdict,
+  projectionBaseline,
+  createThroughPort,
   pushIfChanged,
   queuePublication,
-  intentSha256,
   canonicalJson,
   rulesOf,
 } = require('./reconcile-common.js');
@@ -71,12 +90,29 @@ function declaredFlags(formSpec) {
   const fo = formSpec && formSpec.fieldOptions;
   if (fo && typeof fo === 'object' && !Array.isArray(fo)) for (const k of Object.keys(fo)) take(k, fo[k]);
   // Inline entries win over the form-level fieldOptions default, as they do in the additive compiler.
-  for (const tab of (formSpec && formSpec.tabs) || []) {
-    for (const section of (tab && tab.sections) || []) {
-      for (const entry of (section && section.fields) || []) if (entry && typeof entry === 'object') take(entry.name, entry);
+  // Both tab shapes the spec accepts are walked: `tabs[].sections` and `tabs[].columns[].sections`
+  // (formColumnsOf is the compiler's own reading of them).
+  for (const tab of rawTabs(formSpec)) {
+    for (const column of formColumnsOf(tab)) {
+      for (const section of (column && column.sections) || []) {
+        for (const entry of (section && section.fields) || []) if (entry && typeof entry === 'object') take(entry.name, entry);
+      }
     }
   }
   return flags;
+}
+
+const rawTabs = (formSpec) => (formSpec && Array.isArray(formSpec.tabs) ? formSpec.tabs : []);
+
+// The column count the spec STATES for the section at (ti, ci, si), or undefined. The compiled intent always
+// carries a count (the compiler defaults an omitted one to 1), so reading it there would make an omitted
+// width shrink a maker's wider section. The compiled value is used when one was stated: it is already capped
+// for the form type (a Quick Create section is one column).
+function statedWidth(formSpec, ti, ci, si, compiled) {
+  const tab = rawTabs(formSpec)[ti];
+  const column = tab ? formColumnsOf(tab)[ci] : null;
+  const section = column && Array.isArray(column.sections) ? column.sections[si] : null;
+  return section && typeof section.columns === 'number' ? compiled : undefined;
 }
 
 /**
@@ -84,16 +120,20 @@ function declaredFlags(formSpec) {
  * order. Section names, field order and spans come from the COMPILED intent (compileFormIntent), so they
  * cannot disagree with what the create path builds; readOnly / hidden come from the raw spec, keeping
  * an explicit false. Non-field controls (sub-grids, notes, quick views) are not part of it.
- *   { sections: [{ section, columns, fields: [{ name, colspan?, rowspan?, readOnly?, hidden? }] }], duplicates: [name] }
+ *   { sections: [{ section, columns?, fields: [{ name, colspan?, rowspan?, readOnly?, hidden? }] }], duplicates: [name],
+ *     templates: { name: compiled cell } }
+ * `columns` is set only when the spec states the section's width; `templates` is the compiled cell of each
+ * field, the starting point for a cell the form does not hold yet (it carries isRequired).
  */
 function declaredLayoutOf(formSpec, intentTabs) {
   const flags = declaredFlags(formSpec);
   const sections = [];
   const seen = new Set();
   const duplicates = [];
-  for (const tab of intentTabs || []) {
-    for (const column of (tab && tab.columns) || []) {
-      for (const section of (column && column.sections) || []) {
+  const templates = {};
+  (intentTabs || []).forEach((tab, ti) => {
+    ((tab && tab.columns) || []).forEach((column, ci) => {
+      ((column && column.sections) || []).forEach((section, si) => {
         const fields = [];
         for (const row of (section && section.rows) || []) {
           for (const cell of (row && row.cells) || []) {
@@ -102,6 +142,7 @@ function declaredLayoutOf(formSpec, intentTabs) {
             const name = String(control.fieldName).toLowerCase();
             if (seen.has(name)) { duplicates.push(name); continue; }
             seen.add(name);
+            templates[name] = cell;
             const f = { name };
             if (cell.colspan !== undefined) f.colspan = cell.colspan;
             if (cell.rowspan !== undefined) f.rowspan = cell.rowspan;
@@ -109,11 +150,15 @@ function declaredLayoutOf(formSpec, intentTabs) {
             fields.push(f);
           }
         }
-        if (fields.length) sections.push({ section: section.name, columns: section.columns, fields });
-      }
-    }
-  }
-  return { sections, duplicates };
+        if (!fields.length) return;
+        const entry = { section: section.name, fields };
+        const width = statedWidth(formSpec, ti, ci, si, section.columns);
+        if (width !== undefined) entry.columns = width;
+        sections.push(entry);
+      });
+    });
+  });
+  return { sections, duplicates, templates };
 }
 
 const fieldOf = (cell) => {
@@ -129,9 +174,13 @@ const clone = (v) => JSON.parse(JSON.stringify(v));
  * that belong here (in order), `owned` the set of every declared field name on the form (a declared
  * field of another section that sits here is moved out), and `carried` the live cell of each declared
  * field wherever it currently is (name -> cell), so a moved or repacked cell keeps its ids and state.
- * Answers { rows } or { refused: code }.
+ * `templates` (name -> compiled cell) is the starting point of a cell the form does not hold yet, and
+ * `sectionKey` names the section in the identity keys of new cells.
+ * Answers { rows, fresh } or { refused: code }. `fresh` lists every cell this pack made new, by position in
+ * `rows`, with the creation-identity keys its ids are reserved under:
+ *   [{ row, cell, keys: { cell: 'cell:<field>' | 'spacer:<section>:<r>:<c>', control?: 'control:<field>' } }]
  */
-function packDeclaredLayout({ rows, width, fields = [], owned = new Set(), carried = {} }) {
+function packDeclaredLayout({ rows, width, fields = [], owned = new Set(), carried = {}, templates = {}, sectionKey = '' }) {
   const w = Math.max(1, Math.min(4, Math.floor(Number(width)) || 1));
   const live = slotGrid(rows, w);
   const cellAt = (p) => rows[p.row].cells[p.cell];
@@ -144,15 +193,20 @@ function packDeclaredLayout({ rows, width, fields = [], owned = new Set(), carri
     while (grid.length <= r) grid.push(new Array(w).fill(null));
     return grid[r];
   };
+  // The cells this pack creates, with their identity keys (see `fresh` above).
+  const made = new Map();
   // Live spacers by slot: a spacer re-emitted where one already stands is the same cell (same id), so an
   // unchanged layout serializes byte-for-byte as it was read.
   const liveSpacers = {};
+  // The last row a fixed obstacle starts on: rows above it may not be dropped (see the row loop below).
+  let lastFixed = -1;
   for (const p of live.placed) {
     const cell = cellAt(p);
     if (isSpacer(cell)) liveSpacers[`${p.r},${p.c}`] = cell;
     else if (!mobile(cell)) {
       for (let y = p.r; y < p.r + p.rowspan; y += 1) for (let x = p.c; x < p.c + p.colspan; x += 1) rowAt(y)[x] = { origin: [p.r, p.c] };
       rowAt(p.r)[p.c] = { origin: [p.r, p.c], cell, colspan: p.colspan, rowspan: p.rowspan };
+      lastFixed = Math.max(lastFixed, p.r);
     }
   }
   const isFree = (r, c, span, rowspan) => {
@@ -172,13 +226,14 @@ function packDeclaredLayout({ rows, width, fields = [], owned = new Set(), carri
       c += 1;
       if (c + span > w) { r += 1; c = 0; }
     }
-    const cell = was ? clone(was) : fieldCellIntent(f.name);
+    const cell = was ? clone(was) : newFieldCell(f.name, templates[f.name]);
+    if (!was) made.set(cell, { cell: `cell:${f.name}`, control: `control:${f.name}` });
     if (f.colspan !== undefined || (was && Number(was.colspan) > w)) cell.colspan = span;
     if (f.rowspan !== undefined) cell.rowspan = rowspan;
     if (f.readOnly === true) cell.control.isReadOnly = true;
-    else if (f.readOnly === false && was) cell.control.isReadOnly = false;
+    else if (f.readOnly === false && cell.control.isReadOnly !== undefined) cell.control.isReadOnly = false;
     if (f.hidden === true) cell.visible = false;
-    else if (f.hidden === false && was) cell.visible = true;
+    else if (f.hidden === false && cell.visible !== undefined) cell.visible = true;
     for (let y = r; y < r + rowspan; y += 1) for (let x = c; x < c + span; x += 1) rowAt(y)[x] = { origin: [r, c] };
     rowAt(r)[c] = { origin: [r, c], cell, colspan: span, rowspan };
     if (c + span >= w) { cr = r + 1; cc = 0; } else { cr = r; cc = c + span; }
@@ -199,7 +254,11 @@ function packDeclaredLayout({ rows, width, fields = [], owned = new Set(), carri
         // A maker's own spacer is kept where it stands (it holds a slot nothing declared needs); a new
         // one is only written when a later cell in the row must skip this slot.
         const kept = liveSpacers[`${r},${c}`];
-        if (kept) { cells.push(...spacers, kept); spacers = []; } else spacers.push({ control: null });
+        if (kept) { cells.push(...spacers, kept); spacers = []; } else {
+          const spacer = { control: null };
+          made.set(spacer, { cell: `spacer:${sectionKey}:${r}:${c}` });
+          spacers.push(spacer);
+        }
         continue;
       }
       const [or, oc] = slot.origin;
@@ -211,42 +270,62 @@ function packDeclaredLayout({ rows, width, fields = [], owned = new Set(), carri
       }
     }
     // A row that holds nothing and is not crossed by a span above is a blank line. One the maker left
-    // (empty in the live layout, and not emptied by this pack) stays; one this pack emptied goes.
+    // (empty in the live layout, and not emptied by this pack) stays. One this pack emptied goes — but
+    // only below the last maker's cell: dropping a row above one moves that cell (and every later row)
+    // up, which is moving a control the spec does not own. There the row is kept, empty.
     const liveRow = rows[r];
     const wasEmpty = liveRow && !((liveRow.cells || []).length);
-    if (!cells.length && !reserved && !wasEmpty) continue;
+    if (!cells.length && !reserved && !wasEmpty && r > lastFixed) continue;
     out.push(liveRow && !cells.length && wasEmpty ? liveRow : { ...(liveRow ? clone(liveRow) : {}), cells });
   }
-  return { rows: out };
+  const fresh = [];
+  out.forEach((row, ri) => (row.cells || []).forEach((cell, ci) => {
+    if (made.has(cell)) fresh.push({ row: ri, cell: ci, keys: made.get(cell) });
+  }));
+  return { rows: out, fresh };
 }
 
-// The owned part of a section's layout, for the drift check: where each declared field sits, plus the
-// spans and flags the spec states. Undeclared properties are not owned, so a maker changing them is not drift.
-function projectSection(sectionName, rows, width, declaredByName) {
-  const g = slotGrid(rows, width);
-  const out = [];
-  for (const p of g.placed) {
-    const cell = rows[p.row].cells[p.cell];
-    const name = fieldOf(cell);
-    const f = declaredByName[name];
-    if (!f) continue;
-    const e = { section: sectionName, name, r: p.r, c: p.c };
-    if (f.colspan !== undefined) e.colspan = p.colspan;
-    if (f.rowspan !== undefined) e.rowspan = p.rowspan;
-    if (f.readOnly !== undefined) e.readOnly = !!(cell.control && cell.control.isReadOnly === true);
-    if (f.hidden !== undefined) e.hidden = cell.visible === false;
-    out.push(e);
-  }
-  return out;
+// A cell for a declared field the form does not hold yet: the compiled cell (it carries isRequired and the
+// flags the spec sets to true) when there is one, else the bare field cell. Never with ids: those are
+// reserved through the creation-identity port and set at write time.
+function newFieldCell(name, template) {
+  const cell = template ? clone(template) : fieldCellIntent(name);
+  delete cell.id;
+  if (!cell.control) cell.control = { fieldName: name };
+  delete cell.control.id;
+  return cell;
 }
 
-const sortProjection = (list) => list.sort((a, b) => canonicalJson(a) < canonicalJson(b) ? -1 : 1);
+// The FULL layout projection of a form, by part: `field:<name>` is every placement of that field control
+// (section, slot, spans, readOnly, hidden — whatever the spec declares), and `columns:<section>` each
+// section's column count. A field the form holds twice has both placements in its part. Non-field
+// controls are not ownable here and are left out; their slots are guarded by the packer, not the baseline.
+function formProjection(tabs) {
+  const parts = {};
+  (tabs || []).forEach((tab, ti) => ((tab && tab.columns) || []).forEach((column, ci) => ((column && column.sections) || []).forEach((section, si) => {
+    const name = (section && section.name) || `/tabs/${ti}/columns/${ci}/sections/${si}`;
+    parts[`columns:${name}`] = section.columns === undefined ? null : section.columns;
+    const rows = section.rows || [];
+    const g = slotGrid(rows, section.columns);
+    for (const p of g.placed) {
+      const cell = rows[p.row].cells[p.cell];
+      const field = fieldOf(cell);
+      if (!field) continue;
+      (parts[`field:${field}`] || (parts[`field:${field}`] = [])).push({
+        section: name, r: p.r, c: p.c, colspan: p.colspan, rowspan: p.rowspan,
+        readOnly: !!(cell.control && cell.control.isReadOnly === true), hidden: cell.visible === false,
+      });
+    }
+  })));
+  for (const k of Object.keys(parts)) if (Array.isArray(parts[k])) parts[k].sort((a, b) => (canonicalJson(a) < canonicalJson(b) ? -1 : 1));
+  return parts;
+}
 
 /**
  * Plan the declared layout of one form.
  *   input: { form: formSpec, formId, intentTabs (compileFormIntent(spec, form).tabs), sdk, created? }
- *   plan:  { key, formId, action: null|'noChange'|'update', sections: [{ pointer, rows }], tabs?, desiredSha,
- *            operations, refused, unknown, origin }
+ *   plan:  { key, formId, action: null|'noChange'|'update', sections: [{ pointer, rows, columns?, fresh }], tabs?,
+ *            baseline: { intentSha256, partsSha256 }, desiredSha, operations, refused, unknown, origin }
  * `created` is true when this build made the form, which needs no adoption approval.
  */
 async function planDeclaredFormLayout({ form, formId, intentTabs, sdk, created = false }, ctx = {}) {
@@ -267,8 +346,7 @@ async function planDeclaredFormLayout({ form, formId, intentTabs, sdk, created =
     return plan;
   }
   const owned = new Set();
-  const declaredByName = {};
-  for (const s of declared.sections) for (const f of s.fields) { owned.add(f.name); declaredByName[f.name] = f; }
+  for (const s of declared.sections) for (const f of s.fields) owned.add(f.name);
 
   // Where each declared section is, and where each declared field's live cell is.
   const targets = [];
@@ -282,44 +360,53 @@ async function planDeclaredFormLayout({ form, formId, intentTabs, sdk, created =
   }
   const carried = {};
   const touched = new Map();
-  for (const t of targets) touched.set(t.loc.pointer, { loc: t.loc, fields: t.fields, width: t.columns || t.loc.section.columns });
+  for (const t of targets) touched.set(t.loc.pointer, { loc: t.loc, fields: t.fields, width: t.columns !== undefined ? t.columns : t.loc.section.columns });
   for (const name of owned) {
+    // Every live placement counts, in any section: picking the one in the declared section would quietly
+    // decide which of two controls the spec owns, and leave the other one where it is.
     const found = findFieldCellLocations(live, name);
-    const home = targets.find((t) => t.fields.some((f) => f.name === name));
-    const inHome = found.filter((l) => l.sectionPointer === home.loc.pointer);
-    const pick = inHome.length ? inHome : found;
-    if (pick.length > 1) {
+    if (found.length > 1) {
       plan.refused.push(refusal(key, 'form-layout-field-ambiguous', `the form holds ${name} in more than one place`));
       return plan;
     }
-    if (!pick.length) continue;
-    const l = pick[0];
-    const section = findSectionWhereByPointer(live, l.sectionPointer);
+    if (!found.length) continue;
+    const l = found[0];
+    const section = sectionAt(live.tabs, l.sectionPointer);
     carried[name] = section.rows[l.rowIndex].cells[l.cellIndex];
     if (!touched.has(l.sectionPointer)) touched.set(l.sectionPointer, { loc: { pointer: l.sectionPointer, section }, fields: [], width: section.columns });
   }
 
-  const liveProjection = [];
-  const desiredProjection = [];
+  const desiredTabs = clone(live.tabs || []);
+  let widthChanged = false;
   for (const [pointer, t] of touched) {
     const rows = t.loc.section.rows || [];
-    const packed = packDeclaredLayout({ rows, width: t.width, fields: t.fields, owned, carried });
+    const sectionKey = t.loc.section.name || pointer;
+    const packed = packDeclaredLayout({ rows, width: t.width, fields: t.fields, owned, carried, templates: declared.templates, sectionKey });
     if (packed.refused) {
-      plan.refused.push(refusal(key, packed.refused, `a control the spec does not declare no longer fits section ${t.loc.section.name || pointer}`));
+      plan.refused.push(refusal(key, packed.refused, `a control the spec does not declare no longer fits section ${sectionKey}`));
       return plan;
     }
-    const name = t.loc.section.name || pointer;
-    liveProjection.push(...projectSection(name, rows, t.loc.section.columns, declaredByName));
-    desiredProjection.push(...projectSection(name, packed.rows, t.width, declaredByName));
-    // Declared fields the form does not hold yet are new cells: not in the live projection.
-    if (canonicalJson(packed.rows) !== canonicalJson(rows)) plan.sections.push({ pointer, rows: packed.rows });
+    // The section's width is written with its rows: rows packed for two columns in a section that stays at
+    // one would overflow it.
+    const columns = Number(t.width) !== Number(t.loc.section.columns) ? t.width : undefined;
+    if (columns === undefined && canonicalJson(packed.rows) === canonicalJson(rows)) continue;
+    if (columns !== undefined) widthChanged = true;
+    const entry = { pointer, rows: packed.rows, fresh: packed.fresh };
+    if (columns !== undefined) entry.columns = columns;
+    plan.sections.push(entry);
+    setAt(desiredTabs, pointer.replace(/^\/tabs/, ''), 'rows', packed.rows);
+    if (columns !== undefined) setAt(desiredTabs, pointer.replace(/^\/tabs/, ''), 'columns', columns);
   }
-  const liveSha = intentSha256(sortProjection(liveProjection));
-  plan.desiredSha = intentSha256(sortProjection(desiredProjection));
+  // The baseline is the whole layout projection, the drift check judges only the parts this run changes
+  // (see the header and reconcile-common partsDriftVerdict).
+  const liveParts = formProjection(live.tabs);
+  const desiredParts = formProjection(desiredTabs);
+  plan.baseline = projectionBaseline(desiredParts);
+  plan.desiredSha = plan.baseline.intentSha256;
 
   const binding = await lookupBinding(ctx, KIND, key);
   if (binding) plan.origin = binding.origin === 'created' ? 'created' : 'adopted';
-  const verdict = driftVerdict(binding, liveSha, plan.desiredSha);
+  const verdict = partsDriftVerdict(binding, liveParts, desiredParts);
   const unapproved = verdict === 'unbound' && !created && !isAuthorized(ctx.authorizedAdoption, key);
   if (!plan.sections.length) {
     // Nothing to write: not a refusal, but no binding either unless adoption was approved (bindsUnchanged).
@@ -336,20 +423,12 @@ async function planDeclaredFormLayout({ form, formId, intentTabs, sdk, created =
     return plan;
   }
   plan.action = 'update';
-  // More than one section changes when a field moves between sections: one /tabs mutation writes the
-  // whole move, so a failure cannot leave the field in both sections or in neither.
-  if (plan.sections.length > 1) {
-    const tabs = clone(live.tabs || []);
-    for (const s of plan.sections) setAt(tabs, s.pointer.replace(/^\/tabs/, ''), 'rows', s.rows);
-    plan.tabs = tabs;
-  }
+  // More than one section changes when a field moves between sections, and a section's width changes with
+  // its rows: one /tabs mutation writes all of it, so a failure cannot leave the field in both sections or
+  // in neither, or rows packed for a width the section does not have.
+  if (plan.sections.length > 1 || widthChanged) plan.tabs = desiredTabs;
   plan.operations.push(operation({ key, kind: KIND, target: formId, action: 'update', publicationScopes: [{ type: ARTIFACT, id: formId, table: plan.table }] }));
   return plan;
-}
-
-function findSectionWhereByPointer(form, pointer) {
-  const m = /^\/tabs\/(\d+)\/columns\/(\d+)\/sections\/(\d+)$/.exec(pointer);
-  return form.tabs[Number(m[1])].columns[Number(m[2])].sections[Number(m[3])];
 }
 
 function setAt(tabs, rest, prop, value) {
@@ -357,27 +436,75 @@ function setAt(tabs, rest, prop, value) {
   tabs[Number(m[1])].columns[Number(m[2])].sections[Number(m[3])][prop] = value;
 }
 
+function sectionAt(tabs, pointer) {
+  const m = /^\/tabs\/(\d+)\/columns\/(\d+)\/sections\/(\d+)$/.exec(pointer);
+  return tabs[Number(m[1])].columns[Number(m[2])].sections[Number(m[3])];
+}
+
+// The planned write with the reserved ids set on every new cell: `/tabs` when the plan writes more than one
+// section or a width, else the one section's rows. The plan itself is left as it was (a retry re-runs this).
+function materialize(plan, childIds) {
+  const tabs = plan.tabs ? clone(plan.tabs) : null;
+  const sections = plan.sections.map((s) => {
+    const rows = tabs ? sectionAt(tabs, s.pointer).rows : clone(s.rows);
+    for (const f of s.fresh || []) {
+      const cell = rows[f.row].cells[f.cell];
+      cell.id = childIds[f.keys.cell];
+      if (f.keys.control && cell.control) cell.control.id = childIds[f.keys.control];
+    }
+    return { pointer: s.pointer, rows };
+  });
+  return { tabs, sections };
+}
+
 async function applyDeclaredFormLayout(plan, { sdk }, ctx = {}) {
   const result = emptyResult();
   result.refused.push(...plan.refused);
   result.unknown.push(...plan.unknown);
   if (plan.refused.length || plan.unknown.length || !plan.action) return result;
-  const record = () => bindingRecord(ctx, { kind: KIND, key: plan.key, id: plan.formId, intentSha256: plan.desiredSha, origin: plan.origin });
+  const record = () => bindingRecord(ctx, { kind: KIND, key: plan.key, id: plan.formId, origin: plan.origin, ...plan.baseline });
   if (plan.action === 'noChange') {
     result.unchanged.push({ key: plan.key, kind: KIND, id: plan.formId });
     if (plan.bindUnchanged) result.managedBindings.push(record());
     return result;
   }
-  try {
-    if (plan.tabs) await sdk.updateElement(ARTIFACT, plan.formId, '/tabs', plan.tabs);
-    else await sdk.updateElement(ARTIFACT, plan.formId, `${plan.sections[0].pointer}/rows`, plan.sections[0].rows);
-  } catch (err) {
-    result.refused.push({ ...refusal(plan.key, 'form-layout-rejected', 'the SDK refused the layout before writing it'), rules: rulesOf(err) });
-    return result;
+  const write = async (childIds) => {
+    const out = materialize(plan, childIds);
+    try {
+      if (out.tabs) await sdk.updateElement(ARTIFACT, plan.formId, '/tabs', out.tabs);
+      else await sdk.updateElement(ARTIFACT, plan.formId, `${out.sections[0].pointer}/rows`, out.sections[0].rows);
+    } catch (err) {
+      return { outcome: 'refused', local: true, code: 'VALIDATION_ERROR', rules: rulesOf(err) };
+    }
+    return pushIfChanged(sdk, ARTIFACT, plan.formId);
+  };
+  // Every new cell and control gets its ids from the creation-identity port before anything is sent, so
+  // an answer lost after the push is recovered by those same ids rather than a second set the SDK mints.
+  const childKeys = plan.sections.flatMap((s) => (s.fresh || []).flatMap((f) => Object.values(f.keys)));
+  let pushed = null;
+  if (childKeys.length) {
+    const run = await createThroughPort(ctx, { kind: KIND, key: plan.key, identity: [plan.formId], childKeys }, async (ids) => {
+      pushed = await write(ids.childIds || {});
+      return pushed;
+    });
+    if (run.status === 'adopted') {
+      // The maker resolved an earlier lost write by naming the cells it made. Nothing is written or bound
+      // now: the next run reads the form as it is and, if that write landed, finds nothing left to do.
+      result.refused.push(refusal(plan.key, 'creation-adopted-rerun', 'the cells an earlier write added were resolved; run again to apply the spec'));
+      return result;
+    }
+    if (!pushed) {
+      // The port refused before anything was written (no port, an unresolved earlier create, ...).
+      if (run.status === 'unknown') result.unknown.push(refusal(plan.key, 'form-layout-write-unknown', 'the form write did not report its outcome; check the form'));
+      else result.refused.push(refusal(plan.key, run.code, 'new form cells need the creation-identity port, and it did not allow this write; nothing was written'));
+      return result;
+    }
+  } else {
+    pushed = await write({});
   }
-  const pushed = await pushIfChanged(sdk, ARTIFACT, plan.formId);
   if (pushed.outcome === 'refused') {
-    result.refused.push({ ...refusal(plan.key, 'form-layout-rejected', 'the form was not saved'), rules: pushed.rules || [] });
+    const message = pushed.local ? 'the SDK refused the layout before writing it' : 'the form was not saved';
+    result.refused.push({ ...refusal(plan.key, 'form-layout-rejected', message), rules: pushed.rules || [] });
     return result;
   }
   if (pushed.outcome === 'unknown') {
@@ -390,12 +517,12 @@ async function applyDeclaredFormLayout(plan, { sdk }, ctx = {}) {
   result.managedBindings.push(record());
   return result;
 }
-
 module.exports = {
   isDeclaredForm,
   formLayoutKey,
   declaredLayoutOf,
   packDeclaredLayout,
+  formProjection,
   planDeclaredFormLayout,
   applyDeclaredFormLayout,
 };
