@@ -194,7 +194,7 @@ function orderAdds(adds) {
     .map((x) => x.op);
 }
 
-// The rows one add writes. The three ids are the ones the create port reserved for this embed BEFORE the push (DESIGN §2.0): the control's
+// The rows one add writes. The three ids are the ones the create port reserved for this embed BEFORE the push: the control's
 // `uniqueid` (the key the SDK files the page binding under), the cell's id and the control's id. The SDK keeps ids it is given and mints only
 // missing ones (mintEmbedIdentity); the `uniqueid` goes in the control's bag the way the SDK itself writes it, braced (setUniqueId).
 function blockOf(ids, op) {
@@ -205,7 +205,7 @@ function blockOf(ids, op) {
 
 // ctx: { formIdOf(formSpec) -> id|null, pageIdOf(pageRef) -> id|null, provision: { fetchArtifact }, managed: { lookup(kind, key) } }.
 // A form or a page this build has not (yet) got an id for is UNKNOWN, not refused: nothing can be said about an embed whose ends are not there.
-// `managed.lookup` is the build's managed-binding port (DESIGN §2.0, managed-artifacts.js): the embed an earlier build made for a key is found
+// `managed.lookup` is the build's managed-binding port: the embed an earlier build made for a key is found
 // by the control id its binding records, BEFORE anything is matched by page — so a key whose page changed is retargeted in place, not added
 // a second time. Without that port no embed can be told apart from another key's, so the plan says unknown (fail closed) and reads nothing.
 async function planFormPageEmbeds(spec, ctx) {
@@ -424,7 +424,7 @@ async function applyFormPageEmbeds(plan, ctx) {
   return result;
 }
 
-// A requested embed that was refused or whose outcome is unknown leaves the build incomplete (DESIGN §2.0): the maker asked for it. The
+// A requested embed that was refused or whose outcome is unknown leaves the build incomplete: the maker asked for it. The
 // halt names keys and reasons only; what WAS saved stays reported in `result` (the caller reports it before it stops).
 function requireEmbedsApplied(result, phase = 'pages') {
   const missing = [...((result && result.refused) || []).map((r) => ({ ...r, outcome: 'refused' })), ...((result && result.unknown) || []).map((u) => ({ ...u, outcome: 'unknown' }))];

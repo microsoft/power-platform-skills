@@ -1,5 +1,5 @@
 'use strict';
-// An in-memory double of the build's create-intent port, `creates.run({kind, key, identity, childKeys}, execute)` (DESIGN §2.0),
+// An in-memory double of the build's create-intent port, `creates.run({kind, key, identity, childKeys}, execute)`,
 // with the port's own semantics rather than a pass-through:
 //   - ids are allocated by the PORT (one root id, one per child slot) and the send is RECORDED (`sending`) BEFORE execute runs;
 //   - execute gets `{id, childIds}` and is called at most once per run;

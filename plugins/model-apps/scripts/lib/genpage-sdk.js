@@ -278,7 +278,7 @@ function assertTurnIntent(args, turnId, intent) {
   }
 }
 
-// A caller's turn id is BOUND to the one request it was made for, before anything is sent under it (DESIGN C15: persist before send; refuse the same id with another intent). The check above
+// A caller's turn id is BOUND to the one request it was made for, before anything is sent under it (recorded before the send; the same id with another intent is refused). The check above
 // only compares the intent a caller hands back with the one this request has, so a caller that leaves `turnIntent` out — or hands back another request's — is not held to anything by it,
 // and the SDK's own check covers the turn's MESSAGES only: the same id with the same prompt and other source would be written and published. So the id is recorded with its page and intent
 // in a durable store the caller owns (`deps.turnBindings`), and every later use of it — by this backend, another process, or a run after a crash — is held to that record whatever the
