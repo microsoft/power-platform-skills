@@ -320,6 +320,54 @@ test('REAL BUNDLE: a create under a replacement turn, from the backend that wrot
   });
 });
 
+// A create under a turn that finds its page before sending (the read above) still sends nothing the caller's `beforeSend` refuses: the gate runs once, after the page is
+// known to be this create's and before the update or the publish that takes it over.
+const refusingGate = () => {
+  const gate = { calls: 0 };
+  gate.beforeSend = async () => { gate.calls += 1; throw Object.assign(new Error('host refused send'), { code: 'HOST_REFUSED' }); };
+  return gate;
+};
+test('REAL BUNDLE: a beforeSend that refuses stops a create under a turn that found its page — one that differs (an update) and one that matches (a publish) — with nothing written or published', async () => {
+  const cases = [
+    ['differs: brought to the request by an update', [HELD], { specBindings: true }],
+    ['matches: published as it is', [STATED], {}],
+  ];
+  for (const [what, held, mode] of cases) {
+    await inWorld(async ({ server, genpage, open }) => {
+      await genpage.create({ pageId: PINNED, name: 'Bound', source: SOURCE, dataSources: ['account'], connectorBindings: held });
+      const at = mark(server);
+      const messages = server.messagesOf(PINNED).length;
+      const gate = refusingGate();
+      await assert.rejects(genpage.create(pinnedCreate({ ...mode, turnId: TURN, beforeSend: gate.beforeSend })), (e) => e.code === 'HOST_REFUSED' && e.pageId === PINNED, what);
+      assert.strictEqual(gate.calls, 1, `${what}: the gate is called once`);
+      assertNothingWritten(server, at, `${what}: nothing written and nothing published`);
+      assert.strictEqual(server.messagesOf(PINNED).length, messages, what);
+      assert.deepStrictEqual((await open().read(PINNED)).connectorBindings, held, `${what}: the page is as it was`);
+    });
+  }
+});
+
+test('REAL BUNDLE: a beforeSend that accepts is called once on every create path — a turn create that finds its page (differs or matches), one that does not, and a create without a turn', async () => {
+  const counting = () => { const gate = { calls: [], beforeSend: async (id, sent) => { gate.calls.push([id, sent.name]); } }; return gate; };
+  await inWorld(async ({ server, genpage, open }) => {
+    await genpage.create({ pageId: PINNED, name: 'Bound', source: SOURCE, dataSources: ['account'], connectorBindings: [HELD] });
+    const differs = counting();
+    const merged = await genpage.create(pinnedCreate({ specBindings: true, turnId: TURN, beforeSend: differs.beforeSend }));
+    assert.deepStrictEqual(differs.calls, [[PINNED, 'Bound']]);
+    assert.strictEqual(merged.publish.kind, 'verified');
+    assert.deepStrictEqual((await open().read(PINNED)).connectorBindings, MERGED);
+    const matches = counting();
+    await genpage.create(pinnedCreate({ specBindings: true, turnId: TURN, beforeSend: matches.beforeSend }));
+    assert.deepStrictEqual(matches.calls, [[PINNED, 'Bound']], 'the same request again: the gate before its publish');
+    const absent = counting();
+    const fresh = await genpage.create({ pageId: '34343434-5656-4787-8989-010101010101', name: 'Fresh', source: SOURCE, turnId: TURN_2, beforeSend: absent.beforeSend });
+    assert.deepStrictEqual(absent.calls, [[fresh.pageId, 'Fresh']]);
+    const plain = counting();
+    const made = await genpage.create({ name: 'Plain', source: SOURCE, beforeSend: plain.beforeSend });
+    assert.deepStrictEqual(plain.calls, [[made.pageId, 'Plain']]);
+    assert.ok(server.published.includes(made.pageId));
+  });
+});
 test('REAL BUNDLE: a spec-merge create whose answer was lost, retried from the same backend and from another, leaves one turn and keeps the connection', async () => {
   await inWorld(async ({ server, genpage, open }) => {
     await genpage.create({ pageId: PINNED, name: 'Bound', source: SOURCE, dataSources: ['account'], connectorBindings: [HELD] });

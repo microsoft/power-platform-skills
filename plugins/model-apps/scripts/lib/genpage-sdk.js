@@ -1170,13 +1170,25 @@ function makeGenpageSdk(env, deps = {}) {
         : genpageError(`generative page ${who} was not sent this time (${messageOf(error)}), but a create an earlier build sent under id ${id} was never accounted for and can still land, so whether page ${id} exists is not known. Look for page ${id} before creating it again.`, { code: error && error.code, cause: error, outcome: 'unknown', pageId: id }));
       // A page found under the id, after a send (the loop below) or, under a turn, before anything was staged (below). Answers the result when the page was brought to this create
       // by an update, and nothing when the page holds what this create asks for and goes on to be published as it is. `said`: what the open sends said, for a warning.
-      const takeOver = async (page, said, warnings, budget) => {
+      // The caller's gate before anything is sent (`beforeSend` above): awaited once per create, and a throw stops the create with nothing sent by this call.
+      const gate = async () => {
+        if (typeof args.beforeSend !== 'function') return;
+        try {
+          await args.beforeSend(id, { ...sentNow });
+        } catch (error) {
+          throw notSent(error);
+        }
+      };
+      // `gateFirst`: the page was found before this call sent anything (the turn pre-read below), so the caller's gate has not run yet — it runs after the page is known
+      // to be ours and before the update or the publish that takes it over.
+      const takeOver = async (page, said, warnings, budget, gateFirst) => {
         // A send landed — this create's, or one an earlier build made under the same id — and only its answer was lost. Whose page this is, and whether it holds all of
         // what this create asks for, are decided here, never assumed: an atomic create cannot be partial, so a page that holds neither a name nor a source anyone sent under
         // the id was changed after it was made, or is somebody else's page that came to hold an id nobody else knew.
         if (!holdsWhatWasSent(sent, page)) {
           throw genpageError(`generative page ${who} (${id}) exists, but it is not a page any create under this id sent: ${describeDivergence(sent, page)}. It was not adopted, not sent again and not published; read the page before going on.`, { code: 'GENPAGE_CREATE_DIVERGED', outcome: 'unknown', pageId: id });
         }
+        if (gateFirst) await gate();
         // A turn binds whether the binding lists are merged into the page's entries or replace them, and that holds here too: an App Spec's lists (spec-merge) are read
         // against the page's entries, so an entry keeps what the spec could not state. Without a turn id, a create plans as it always did.
         const edits = turnReq ? planEdits(fields, page, { specBindings: turnReq.request.specBindings }) : planEdits(fields, page);
@@ -1226,7 +1238,7 @@ function makeGenpageSdk(env, deps = {}) {
         if (found.kind === 'unreadable') {
           throw genpageError(`generative page ${who} was not sent: page ${id} could not be read first (${messageOf(found.error)}), and a create an earlier build sent under that id was never accounted for, so whether page ${id} exists is not known. Look for page ${id} before creating it again.`, { code: 'GENPAGE_UNREADABLE', cause: found.error, outcome: 'unknown', pageId: id });
         }
-        if (found.kind === 'present') return (await takeOver(found.page, messageOf(open[0]), warnings, budgetOf(args))) || finish(undefined, warnings);
+        if (found.kind === 'present') return (await takeOver(found.page, messageOf(open[0]), warnings, budgetOf(args), true)) || finish(undefined, warnings);
         try {
           await dropLocalCopy(sdk, id);
         } catch (error) {
@@ -1244,13 +1256,7 @@ function makeGenpageSdk(env, deps = {}) {
       } catch (error) {
         throw notSent(error);
       }
-      if (typeof args.beforeSend === 'function') {
-        try {
-          await args.beforeSend(id, { ...sentNow });
-        } catch (error) {
-          throw notSent(error);
-        }
-      }
+      await gate();
 
       const warnings = [];
       const budget = budgetOf(args);
