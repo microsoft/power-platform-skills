@@ -4,8 +4,8 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const { performance } = require('node:perf_hooks');
 const Module = require('node:module');
+const { performance } = require('node:perf_hooks');
 const { scanSource, featureCoherence, gateSources } = require('../lib/pcf-code-gate.js');
 
 const FILE = 'src/pages-control.ts';
@@ -1398,32 +1398,27 @@ test('Fixed-id detection keeps later JSX after unmatched braces and inside templ
   }
 });
 
-// Line locations are checked without a wall-clock bound, and the shipped gate carries no test hook or counter.
-// Three checks, each independent of machine load:
-//  1. The real scan of a 4000-finding file, with the string methods a rescan would use counted while it runs.
-//     A line found by re-splitting text.slice(0, offset), or by rebuilding the line-start table per finding,
-//     reads the text again for every finding, so the count passes the limit by orders of magnitude.
-//  2. The growth of lineOf itself (quarter-size against full-size, see assertLinearGrowth), on a test-only copy of
-//     the gate that exports it. Work the string methods cannot see - a loop reading text[at] from the start for
-//     every finding, or a linear search of the line-start table - is quadratic and grows 16x for 4x the lines.
-//  3. The exported surface of the shipped gate is pinned, so a test hook cannot be added to it unnoticed.
-function loadGateWithLineOf() {
-  const gatePath = require.resolve('../lib/pcf-code-gate.js');
-  const copy = new Module(gatePath, module);
-  copy.filename = gatePath;
-  copy.paths = Module._nodeModulePaths(path.dirname(gatePath));
-  // Compiled outside require.cache, so the module every other test (and the plugin) uses is untouched.
-  copy._compile(`${fs.readFileSync(gatePath, 'utf8')}\nmodule.exports.lineOf = lineOf;\n`, gatePath);
-  return copy.exports;
-}
-
-// Characters read through slice, substring, split and matchAll while `scan` runs. Slices count by the length they
-// return (the scanner's own slices are a few characters long); split and matchAll count by the text they read.
-// The methods are replaced only while the scan runs, and restored whatever happens.
+// The line-location tests place their verdict on the real scan path (scanSource and featureCoherence over a file
+// of 4000 calls), so quadratic work anywhere on it fails them - in the helper that finds a line or in its callers -
+// and the shipped gate carries no test hook or counter. Two checks, with different limits:
+//  1. A count, which does not depend on the machine: the characters read through slice, substring, split and
+//     matchAll while the scan runs. Re-splitting text.slice(0, offset), or rebuilding the line-start table, for
+//     every finding reads the text again each time, so it passes the limit by orders of magnitude. The count
+//     cannot see a loop that reads text[at] or a linear table search.
+//  2. A growth ratio (assertLinearGrowth) of the real scan, which catches the first of those. It reads the clock, so it is not
+//     load-independent: it compares the fastest of several runs at a quarter of the size with the same at full size,
+//     measures again before it fails, and keeps the 15 s catastrophe ceiling. A pause that hits one phase can
+//     still move the ratio, which is why the count above carries the cases it can see.
+// A linear search of the line-start table is quadratic too, but its few million probes cost far less than the
+// scan's own work per finding, so the ratio of the whole scan cannot see it. A third check measures lineOf alone,
+// on a test-only copy of the gate; the end-to-end check above is what proves the scan reaches the real lookup.
+// The old fixed 1500 ms bound is gone.
 function stringReadsDuring(scan) {
   const read = { chars: 0 };
   const proto = String.prototype;
   const originals = { slice: proto.slice, substring: proto.substring, split: proto.split, matchAll: proto.matchAll };
+  // Slices count by the length they return (the scanner's own slices are a few characters long); split and
+  // matchAll count by the text they read. The methods are replaced only while the scan runs, and restored whatever happens.
   proto.slice = function slice(...args) {
     const piece = originals.slice.apply(this, args);
     read.chars += piece.length;
@@ -1455,15 +1450,35 @@ function stringReadsDuring(scan) {
 // scanner's few-character slices). A split of the prefix reads about 2000 characters per source character and a
 // table rebuilt per finding about 4000. 20 leaves room for another pass without letting either through.
 const MAX_TEXT_READS = 20;
-
-test('Pages diagnostics index line locations instead of rescanning per call', () => {
-  const count = 4000;
-  const text = `${CALL};\n`.repeat(count);
-  const { chars, result: findings } = stringReadsDuring(() => [...scanSource(FILE, text), ...findingsFor(text)]);
+const LINE_LOCATION_CALLS = 4000;
+const lineLocationSource = (scale) => `${CALL};\n`.repeat(Math.round(LINE_LOCATION_CALLS * scale));
+const scanLineLocations = (text) => [...scanSource(FILE, text), ...findingsFor(text)];
+const assertLineLocations = (findings, count) => {
   assert.equal(findings.length, count);
   assert.ok(findings.every((finding, i) => finding.code === 'PCF_PAGES_API' && finding.line === i + 1));
+};
+
+test('Pages diagnostics index line locations instead of rescanning per call', () => {
+  const text = lineLocationSource(1);
+  const { chars, result: findings } = stringReadsDuring(() => scanLineLocations(text));
+  assertLineLocations(findings, LINE_LOCATION_CALLS);
   assert.ok(chars <= MAX_TEXT_READS * text.length, `the scan read ${chars} characters through slice, substring, split and matchAll for a ${text.length}-character file (limit ${MAX_TEXT_READS}x)`);
 });
+
+test('Pages diagnostics take time in proportion to the number of calls', (t) => {
+  assertLineLocations(assertLinearGrowth(t, 'line locations', lineLocationSource, scanLineLocations), LINE_LOCATION_CALLS);
+});
+
+// A test-only copy of the gate that also exports its private lineOf: the production source plus one appended line,
+// compiled outside require.cache, so the shipped module and every other test are untouched.
+function loadGateWithLineOf() {
+  const gatePath = require.resolve('../lib/pcf-code-gate.js');
+  const copy = new Module(gatePath, module);
+  copy.filename = gatePath;
+  copy.paths = Module._nodeModulePaths(path.dirname(gatePath));
+  copy._compile(`${fs.readFileSync(gatePath, 'utf8')}\nmodule.exports.lineOf = lineOf;\n`, gatePath);
+  return copy.exports;
+}
 
 test('Line lookups grow linearly with the number of lines', (t) => {
   const { lineOf } = loadGateWithLineOf();
