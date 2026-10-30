@@ -634,6 +634,7 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   **definitive answer to the first send** of the create. A 400 says nothing of an earlier send that got no answer or a gateway's 5xx (the plugin's HTTP client sends such a create again, and the SDK can call it
   again): `sdk-http-client.js` marks a failure's body with the history of the sends (`HTTP_SEND_HISTORY`: `{ sends, earlierAmbiguous }`, a per-request ledger kept for the client's life), the gate needs
   `earlierAmbiguous: false`, and an unknown or partial outcome anywhere in the error chain (`outcome: 'unknown'`, a `…outcome-unknown` code, a status 0, 5xx or 2xx link) wins over a match.
+  The ledger is bounded (`MAX_AMBIGUOUS_SENDS`): past that many distinct ambiguous requests it is dropped and every later answer is `earlierAmbiguous: true`, so the gate halts rather than skips.
   A transport that reports no history is not confirmed. The same 400 after a rule was created, an ambiguous attempt, or any other code or status, still halts. The remaining rules are then not sent. A rule that already exists is reused and does not count as a create.
   Even then the 400 is only a candidate: the same answer comes from a create the platform saved and then failed to finish (#482). So the create step reads the rule's definitions again (`refusedCreateWroteNothing`: a complete, paginated read, ids compared case-insensitively), and `skipIf` also needs that read to find no id the snapshot taken just before the push lacked. A new id halts and names the row without attributing it to this create (another writer can add one meanwhile); a read that fails or is incomplete halts too.
   Off-sitemap ids require a local CREATE receipt for this app/key/id plus an exact decoded stored-name
@@ -1543,8 +1544,10 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   business rule(s) on it could not be deleted ("<rule>"), …)` (`skip: 'kept'`, counted in the summary's
   "kept"); the rule is matched to it by logical name in any letter case, and a re-run deletes the rule, then
   the table, then the solution.
+  A **business process flow's** delete answered HTTP 500 "There is no active transaction" (code `0x80040251`; the words alone when the body has no code) is sent again, up to three times on a
+  growing wait, so the run does not stop at the flow; a re-send answered 404 reads as already gone. No other step and no other 500 is sent again.
   Only a table the run would have deleted is kept this way — a reused (`existing: true`) or system table
-  keeps its own skip reason, and what hangs on one is sent as it always was. Nothing re-sends the failed delete (a 500 does not
+  keeps its own skip reason, and what hangs on one is sent as it always was. Nothing re-sends the failed rule delete (a 500 does not
   prove it did not run). Keeping the table adds no error of its own: the rule's failure stays reported, and `ok` is false and the
   exit status a failure as before (so the solution is kept for the re-run too). What only the kept table's existence blocks is
   kept with it, not sent for the platform to refuse — each refusal used to be one more reported failure until the re-run: its
