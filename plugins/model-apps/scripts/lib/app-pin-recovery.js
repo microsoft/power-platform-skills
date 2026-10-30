@@ -90,9 +90,17 @@ function pinIntentOf(artifact) {
   };
 }
 
+// Every row of an enumeration must name its record by GUID. These reads say what the app is EXPECTED to hold, so a row
+// that cannot be placed is never dropped: dropping it would shrink the expectation, and a lost pin of that component would
+// read as complete. A well-formed empty `value: []` is a valid answer (the table has none).
+//   { "value": [ { "savedqueryid": "66666666-…" }, {}, { "savedqueryid": "not-a-guid" }, null ] }   <- rows 2, 3 and 4 refuse
 async function idsRead(client, path, key, label) {
   const rows = await collectionRows(client, path, label, { code: 'APP_PIN_UNCONFIRMED' });
-  return rows.map((row) => guidKey(row && row[key])).filter((id) => FORM_GUID_RE.test(id));
+  return rows.map((row, index) => {
+    const id = row && typeof row === 'object' && !Array.isArray(row) && typeof row[key] === 'string' ? guidKey(row[key]) : '';
+    if (!FORM_GUID_RE.test(id)) throw recoveryError('APP_PIN_UNCONFIRMED', `the ${label} hold a row it cannot place (row ${index + 1})`);
+    return id;
+  });
 }
 
 // The membership keys the intent stands for. The SDK expands every navigation table into its active Main forms (or the

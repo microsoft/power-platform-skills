@@ -135,3 +135,40 @@ test('REAL BUNDLE: no unknown answer -> reconcile reads and writes nothing', asy
   assert.equal(result.pushed, pushed, 'the push result is handed back as it came');
   assert.equal(state.requests.length, mark, 'zero extra requests');
 });
+
+// The enumerations of a table's forms, views and charts say what the app is expected to hold. A row in them that cannot be
+// placed (not a record, no id, an id that is no GUID) is an answer that cannot be relied on: dropping it would shrink what
+// is expected, and a component still missing would read as present.
+for (const [collection, malformed] of [
+  ['savedqueries', [{}]],
+  ['savedqueries', [{ savedqueryid: 'not-a-guid' }]],
+  ['savedqueries', [null]],
+  ['savedqueryvisualizations', [{ savedqueryvisualizationid: 12345 }]],
+  ['systemforms', [{ formid: '{}' }]],
+]) {
+  test(`REAL BUNDLE: an unplaceable ${collection} row ${JSON.stringify(malformed)} after a lost answer is incomplete and sends no repair`, async (t) => {
+    const { sdk, state } = server(t, { lose: ['afterCommit'] });
+    // systemforms is read only when no Main-form list names the table's forms.
+    const main = collection === 'systemforms' ? undefined : MAIN;
+    const { intent, pushed } = await firstPush(sdk, main);
+    state.members.delete(`26:${VIEW}`);
+    state.rows[collection] = malformed;
+    const mark = state.requests.length;
+    let pushes = 0;
+    const result = await reconcileUnconfirmedPin({ provision: sdk, appId: APP, intent, pushed, push: async () => { pushes += 1; return repairPush(sdk, main)(); } });
+    assert.equal(result.outcome, 'incomplete', JSON.stringify(result.pushed && result.pushed.warnings));
+    assert.equal(result.error.code, 'APP_PIN_UNCONFIRMED');
+    assert.match(result.error.message, /established \(APP_PIN_UNCONFIRMED\); nothing more was sent/, 'stopped at the first read, before any repair');
+    assert.equal(pushes, 0);
+    assert.deepEqual(writesAfter(state, mark), [], 'no repair write of any kind');
+  });
+}
+
+test('REAL BUNDLE: a well-formed empty enumeration is a valid answer, not an unreadable one', async (t) => {
+  const { sdk, state } = server(t, { lose: ['afterCommit'] });
+  const { intent, pushed } = await firstPush(sdk, MAIN);
+  state.rows.savedqueries = [];
+  state.rows.savedqueryvisualizations = [];
+  const result = await reconcileUnconfirmedPin({ provision: sdk, appId: APP, intent, pushed, push: async () => assert.fail('no push') });
+  assert.equal(result.outcome, 'confirmed', JSON.stringify(result.error && result.error.message));
+});
