@@ -43,28 +43,6 @@ function cellFitsInRow(row, cell, columns, reserved = 0) {
   return used === 0 || used + clampedCellSpan(cell, cols) <= cols;
 }
 
-// Lay field cells out on the column-slot model (form-occupancy.js slotGrid): each cell at the first free
-// slot at or after the previous one, a span reserving its column on the rows below, and a spacer
-// (`control: null`) holding a free slot a later cell in the row must skip. Unlike rowsFromCells (which
-// models width only), a row-spanning field may sit anywhere in a section, not only last: the cells after
-// it flow around the column it reserves. Only a declared-layout form uses it; it is the reconcile's own
-// packer (form-layout-reconcile.js packDeclaredLayout) run over an empty section.
-function slotRowsFromCells(cells, columns) {
-  // Required here rather than at the top: form-layout-reconcile.js requires this module.
-  const { packDeclaredLayout } = require('./form-layout-reconcile.js');
-  const fields = [];
-  const templates = {};
-  for (const cell of cells) {
-    const name = String(cell.control.fieldName).toLowerCase();
-    const f = { name };
-    if (cell.colspan !== undefined) f.colspan = cell.colspan;
-    if (cell.rowspan !== undefined) f.rowspan = cell.rowspan;
-    fields.push(f);
-    templates[name] = cell;
-  }
-  return packDeclaredLayout({ rows: [], width: columns, fields, templates }).rows;
-}
-
 function rowsFromCells(cells, columns) {
   const cols = Math.max(1, Math.min(4, columns || 1));
   const rows = [];
@@ -516,9 +494,6 @@ function compileFormIntent(spec, formSpec, opts) {
   // gated separately below: only a Main form hosts the timeline.)
   const maxCols = maxSectionColumns(formType);
   const explicit = Array.isArray(formSpec.tabs) || formSpec.layout === 'explicit';
-  // A declared-layout form (`reconcile: "declared"`) lays out its explicit sections on the column-slot
-  // model, the one its reconcile uses on an existing form, so a fresh form and a reconciled one agree.
-  const declaredLayout = formSpec.reconcile === 'declared';
 
   // Compute per-field required flag. isRequired is explicit authored intent (the primary
   // field and required===true columns are required regardless of Dataverse defaults).
@@ -605,7 +580,7 @@ function compileFormIntent(spec, formSpec, opts) {
                 visible: s.visible !== false,
                 showLabel: s.showLabel !== false,
                 columns: secCols,
-                rows: declaredLayout ? slotRowsFromCells(cells, secCols) : rowsFromCells(cells, secCols)
+                rows: rowsFromCells(cells, secCols)
               };
             })
           };

@@ -1,7 +1,6 @@
 'use strict';
 // Shared plumbing for the declared-reconciliation helpers: command-reconcile.js, quick-find.js,
-// view-reconcile.js, chart-reconcile.js, dashboard-reconcile.js, web-resource-reconcile.js,
-// form-layout-reconcile.js, rule-reconcile.js and bpf-reconcile.js.
+// view-reconcile.js and chart-reconcile.js.
 //
 // Every helper follows the same contract so the build can wire them the same way:
 //   plan(...)  -> { operations, refused, unknown, ... }   (no writes)
@@ -237,24 +236,6 @@ function driftVerdict(binding, liveSha, desiredSha) {
 }
 
 /**
- * driftVerdict for a projection whose SHAPE follows the spec: an optional part (a description, a title,
- * a tile's name) is owned only while the spec declares it. A spec that starts or stops declaring one
- * changes its own projection, so a binding recorded under the earlier ownership would never match
- * today's and every such spec edit would read as drift. `variants` are the live projections under each
- * ownership the binding may have been recorded with; one that matches the binding means the server
- * still holds what was last applied.
- */
-function ownershipDriftVerdict(binding, variants, liveSha, desiredSha) {
-  if (binding && variants.some((v) => intentSha256(v) === binding.intentSha256)) return 'none';
-  return driftVerdict(binding, liveSha, desiredSha);
-}
-
-/** Every subset of `keys`, as objects with the chosen keys set to true: the ownerships to try. */
-function ownershipSubsets(keys) {
-  return keys.reduce((acc, k) => acc.flatMap((s) => [s, { ...s, [k]: true }]), [{}]);
-}
-
-/**
  * Whether a no-op may record a binding. An artifact that already matches the spec is not thereby
  * approved for management: binding it silently would let the next, real edit skip the adoption
  * question. So an unbound artifact is bound only when the maker approved adopting it or pinned it by id.
@@ -353,8 +334,6 @@ module.exports = {
   boundIdentity,
   createThroughPort,
   driftVerdict,
-  ownershipDriftVerdict,
-  ownershipSubsets,
   bindsUnchanged,
   pushChecked,
   pushIfChanged,
