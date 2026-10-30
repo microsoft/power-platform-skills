@@ -820,7 +820,10 @@ const versionAtLeast = (v, min) => {
 };
 
 // expect.optionValues keys are a global choice name ("cnt_region") or "<table>.<column>" for an
-// inline choice; each listed value must be written as an explicit { value, label } option.
+// inline choice, each mapping a value to the label the prompt gives it ({ "1": "North" }). Each must be
+// written as an explicit { value, label } option carrying that label: as the label itself, or as the
+// entry for the spec's base language (languageCode, default 1033) of an LCID label map. A swap of two
+// labels keeps every number, so the number alone is not enough.
 ASSERTIONS.set('author: option values the maker depends on are written as { value, label } and the spec asks for 2.21.0', ({ spec, eval: ev }) => {
   const expected = ev.expect && ev.expect.optionValues;
   if (!expected || !Object.keys(expected).length) return fail('no independent option-value expectations');
@@ -837,9 +840,13 @@ ASSERTIONS.set('author: option values the maker depends on are written as { valu
       options = gc && gc.options;
     }
     if (!Array.isArray(options)) return fail(`${key}: no options declared`);
-    const written = options.filter((o) => o && typeof o === 'object' && Number.isInteger(o.value) && o.label).map((o) => o.value);
-    const missing = values.filter((v) => !written.includes(v));
-    if (missing.length) return fail(`${key}: value(s) ${missing.join(', ')} not written as { value, label }`);
+    const base = String(spec.languageCode || 1033);
+    for (const [value, label] of Object.entries(values)) {
+      const opt = options.find((o) => o && typeof o === 'object' && o.value === Number(value) && o.label);
+      if (!opt) return fail(`${key}: value ${value} not written as { value, label }`);
+      const got = typeof opt.label === 'object' ? opt.label[base] : opt.label;
+      if (got !== label) return fail(`${key}: value ${value} is labelled ${JSON.stringify(got)}, expected ${JSON.stringify(label)}`);
+    }
   }
   return PASS;
 });

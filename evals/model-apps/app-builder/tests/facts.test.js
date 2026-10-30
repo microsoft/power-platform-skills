@@ -848,3 +848,18 @@ test('2.21.0 authoring expectations pass on their fixtures and fail when the spe
   assert.strictEqual(grade(13, (s) => { s.fieldSecurityProfiles[1].assignTo = { teams: ['22222222-2222-4222-8222-222222222222'] }; }), 'fail');
   assert.strictEqual(grade(13, (s) => { s.fieldSecurityProfiles[0].permissions.pop(); }), 'fail');
 });
+
+const grade2210 = (id, mutate) => {
+  const ev = evalsManifest.evals.find((e) => e.id === id);
+  const spec = structuredClone(loadFixtures(path.join(__dirname, '..', 'fixtures')).find((f) => f.id === id).spec);
+  if (mutate) mutate(spec);
+  return ASSERTIONS.get(ev.expectations[0])({ spec, eval: ev, facts: {} }).status;
+};
+
+test('option-value grading ties each number to its label, not only to its presence', () => {
+  const priority = (s) => s.entities[0].columns.find((c) => c.schemaName === 'cnt_priority');
+  assert.strictEqual(grade2210(11), 'pass');
+  assert.strictEqual(grade2210(11, (s) => { const o = s.globalChoices[0].options; [o[0].label, o[1].label] = [o[1].label, o[0].label]; }), 'fail', 'North and South swapped keep 1 and 2');
+  assert.strictEqual(grade2210(11, (s) => { const o = priority(s).options; [o[0].label, o[1].label] = [o[1].label, o[0].label]; }), 'fail', 'Low and High swapped keep 1 and 5');
+  assert.strictEqual(grade2210(11, (s) => { priority(s).options[0].label['1036'] = 'Faible'; }), 'pass', 'a translation the prompt does not state is not graded');
+});

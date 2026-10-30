@@ -297,7 +297,7 @@
       "spec": "app-spec.json",
       "prompt": "Shipments carry a Region from a shared choice whose numbers an integration depends on (North 1, South 2, Export 10), a bilingual Priority whose numbers must not change between environments (Low 1, High 5), and a Stage whose Held option must stay 100000005. The High Priority view filters on Priority 5.",
       "expect": { "tables": ["cnt_shipment"], "relationships": [], "views": ["High Priority"], "charts": [], "pages": [],
-        "optionValues": { "cnt_region": [1, 2, 10], "cnt_shipment.cnt_priority": [1, 5], "cnt_shipment.cnt_stage": [100000005] } },
+        "optionValues": { "cnt_region": { "1": "North", "2": "South", "10": "Export" }, "cnt_shipment.cnt_priority": { "1": "Low", "5": "High" }, "cnt_shipment.cnt_stage": { "100000005": "Held" } } },
       "expectations": [
         "author: option values the maker depends on are written as { value, label } and the spec asks for 2.21.0"
       ]
