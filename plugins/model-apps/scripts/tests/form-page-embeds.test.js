@@ -372,7 +372,7 @@ test('the build step reads page ids from the build\'s Map, reports what it saved
   assert.deepStrictEqual(ok.saved.map((s) => s.key), [KEY]);
 });
 
-test('REAL BUNDLE: the embed round-trips through the SDK — the port's ids persisted, spacer rows kept, retarget in place, missing page refused before any write', async () => {
+test('REAL BUNDLE: the embed round-trips through the SDK — the port\'s ids persisted, spacer rows kept, retarget in place, missing page refused before any write', async () => {
   const pagesInEnv = new Set([PAGE]);
   const pageChecks = [];
   let losePatchAnswer = false;
