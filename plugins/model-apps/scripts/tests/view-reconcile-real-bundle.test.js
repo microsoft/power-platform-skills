@@ -82,6 +82,20 @@ test('a view this spec does not manage yet needs adoption approval; an explicit 
   assert.deepEqual(pinned.result.saved.map((s) => s.id), [VID]);
 });
 
+test('an unmanaged view that already matches is not bound without approval, so a later edit still asks', async () => {
+  const srv = server();
+  await run(srv, declared(), { authorizedAdoption: true });
+  const managed = fakeManaged();
+  srv.clearLog();
+  const same = await run(srv, declared(), { managed });
+  assert.equal(same.plan.action, 'noChange');
+  assert.deepEqual(same.result.managedBindings, [], 'matching the spec is not an approval to manage it');
+  managed.persist(same.result.managedBindings);
+  const edit = await run(srv, declared({ description: 'Contacts and their account' }), { managed });
+  assert.deepEqual(edit.result.refused.map((r) => r.code), ['view-adoption-not-authorized']);
+  assert.equal(writesOf(srv).length, 0);
+});
+
 test('a base filter the typed tree cannot represent is refused, not doubled', async () => {
   const multi = fetchXml('<filter type="and"><condition attribute="statecode" operator="eq" value="0" /><condition attribute="gendercode" operator="in"><value>1</value><value>2</value></condition></filter>');
   const srv = server({ fetchxml: multi });

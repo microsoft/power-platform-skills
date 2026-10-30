@@ -35,6 +35,7 @@ const {
   lookupBinding,
   bindingRecord,
   driftVerdict,
+  bindsUnchanged,
   intentSha256,
   canonicalJson,
   pushIfChanged,
@@ -330,6 +331,7 @@ async function planViewReconcile({ view, sdk, resolveValue, primaryName }, ctx =
   const publicationScopes = [{ type: 'view', id, table: intent.entity }];
   if (plan.changed.length === 0) {
     plan.action = 'noChange';
+    plan.bindUnchanged = bindsUnchanged(binding, ctx, key, !!intent.viewId);
     plan.operations.push(operation({ key, kind: 'view', target: id, action: 'noChange' }));
     return plan;
   }
@@ -370,7 +372,7 @@ async function applyViewReconcile(plan, { sdk }, ctx = {}) {
   const record = () => bindingRecord(ctx, { kind: 'view', key: plan.key, id, intentSha256: plan.desiredSha, origin: plan.origin });
   if (plan.action === 'noChange') {
     result.unchanged.push({ key: plan.key, kind: 'view', id });
-    result.managedBindings.push(record());
+    if (plan.bindUnchanged) result.managedBindings.push(record());
     return result;
   }
   const d = plan.desired;

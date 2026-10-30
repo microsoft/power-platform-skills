@@ -99,6 +99,9 @@ test('a flow the spec has never managed needs adoption approval; nothing is writ
   const env = await deployed();
   const d = DEPLOYED();
   const want = declared(flowOf([{ ...d.stages[0], name: 'Intake' }, d.stages[1], d.stages[2]]), { order: 4 });
+  // A declared flow that already matches is not a refusal, and is not bound without approval either.
+  const same = await rebuild(env, declared(DEPLOYED()));
+  assert.deepEqual([same.plan.action, same.result.refused, same.result.managedBindings, same.writes], ['noChange', [], [], []]);
   const refused = await rebuild(env, want);
   assert.equal(refused.stageCheck.kind, 'edit');
   assert.deepEqual(refused.result.refused.map((r) => r.code), ['bpf-adoption-not-authorized']);

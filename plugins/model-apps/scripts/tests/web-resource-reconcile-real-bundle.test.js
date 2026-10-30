@@ -63,6 +63,18 @@ test('a shared row this spec does not manage yet is refused until adoption is ap
   assert.equal(srv.writes.length, 0);
 });
 
+test('an unmanaged row that already matches is not bound without approval, so a later edit still asks', async () => {
+  const srv = server('var v = 2;');
+  const managed = fakeManaged();
+  const same = await run(srv, declared('var v = 2;'), { managed });
+  assert.equal(same.plan.action, 'noChange');
+  assert.deepEqual(same.result.managedBindings, [], 'matching the spec is not an approval to manage it');
+  managed.persist(same.result.managedBindings);
+  const edit = await run(srv, declared('var v = 3;'), { managed });
+  assert.deepEqual(edit.result.refused.map((r) => r.code), ['web-resource-adoption-not-authorized']);
+  assert.equal(srv.writes.length, 0);
+});
+
 test('content changed outside the spec since the last build is refused until the overwrite is approved', async () => {
   const srv = server();
   const managed = fakeManaged();

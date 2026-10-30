@@ -157,6 +157,9 @@ test('a maker field wider than the declared section width is refused, and nothin
 test('an unmanaged form needs adoption approval, a moved declared field is drift until the overwrite is approved, and both write nothing', async () => {
   const h = await deployed([section('sec_main', 2, [{ cells: [cell(1, 'new_name'), cell(2, 'new_code')] }])]);
   const spec = formSpec(['new_code', 'new_name']);
+  // A declared layout that already matches is not a refusal, and is not bound without approval either.
+  const same = await reconcile(h, formSpec(['new_name', 'new_code']));
+  assert.deepEqual([same.plan.action, same.result.refused, same.result.managedBindings, same.writes.length], ['noChange', [], [], 0]);
   const unapproved = await reconcile(h, spec);
   assert.deepEqual(unapproved.result.refused.map((r) => r.code), ['form-layout-adoption-not-authorized']);
   assert.equal(unapproved.writes.length, 0);

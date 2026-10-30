@@ -320,16 +320,19 @@ async function planDeclaredFormLayout({ form, formId, intentTabs, sdk, created =
   const binding = await lookupBinding(ctx, KIND, key);
   if (binding) plan.origin = binding.origin === 'created' ? 'created' : 'adopted';
   const verdict = driftVerdict(binding, liveSha, plan.desiredSha);
-  if (verdict === 'unbound' && !created && !isAuthorized(ctx.authorizedAdoption, key)) {
+  const unapproved = verdict === 'unbound' && !created && !isAuthorized(ctx.authorizedAdoption, key);
+  if (!plan.sections.length) {
+    // Nothing to write: not a refusal, but no binding either unless adoption was approved (bindsUnchanged).
+    plan.action = 'noChange';
+    plan.bindUnchanged = !unapproved;
+    return plan;
+  }
+  if (unapproved) {
     plan.refused.push(refusal(key, 'form-layout-adoption-not-authorized', 'this form exists and the spec has not managed its layout before; approve adopting it first'));
     return plan;
   }
   if (verdict === 'drift' && !isAuthorized(ctx.authorizedOverwrite, key)) {
     plan.refused.push(refusal(key, 'form-layout-drift', 'the layout of declared fields changed outside the spec since the last build; refresh the spec or approve the overwrite'));
-    return plan;
-  }
-  if (!plan.sections.length) {
-    plan.action = 'noChange';
     return plan;
   }
   plan.action = 'update';
@@ -362,7 +365,7 @@ async function applyDeclaredFormLayout(plan, { sdk }, ctx = {}) {
   const record = () => bindingRecord(ctx, { kind: KIND, key: plan.key, id: plan.formId, intentSha256: plan.desiredSha, origin: plan.origin });
   if (plan.action === 'noChange') {
     result.unchanged.push({ key: plan.key, kind: KIND, id: plan.formId });
-    result.managedBindings.push(record());
+    if (plan.bindUnchanged) result.managedBindings.push(record());
     return result;
   }
   try {

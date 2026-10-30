@@ -151,6 +151,9 @@ test('an existing rule the spec has not managed needs adoption approval; keys th
   const legacy = { name: 'Account checks', entity: 'account', conditions: [{ field: 'name', operator: 'Equals', value: 'x' }], actions: [{ type: 'SetVisibility', field: 'fax', visible: false }] };
   await seed(srv, legacy, businessRuleDef(legacy).rootCondition);
   const declared = { ...legacy, reconcile: 'declared', conditions: [{ key: 'c', field: 'name', operator: 'Equals', value: 'y' }], actions: [{ key: 'a', type: 'SetVisibility', field: 'fax', visible: false }] };
+  // A declared spec that already matches is not a refusal, and is not bound without approval either.
+  const same = await reconcile(srv, { ...declared, conditions: [{ ...declared.conditions[0], value: 'x' }] });
+  assert.deepEqual([same.plan.action, same.result.refused, same.result.managedBindings, same.writes], ['noChange', [], [], []]);
   const refused = await reconcile(srv, declared);
   assert.deepEqual(refused.result.refused.map((r) => r.code), ['rule-adoption-not-authorized']);
   assert.deepEqual(refused.writes, []);

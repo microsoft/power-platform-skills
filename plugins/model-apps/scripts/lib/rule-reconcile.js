@@ -313,7 +313,20 @@ async function planRuleReconcile({ rule, ruleId, sdk, created = false }, ctx = {
   const binding = await lookupBinding(ctx, KIND, key);
   if (binding) plan.origin = binding.origin === 'created' ? 'created' : 'adopted';
   const verdict = driftVerdict(binding, recordedUnder(binding, root, live.description, liveLabels) || liveSha, plan.desiredSha);
-  if (verdict === 'unbound' && !created && !isAuthorized(ctx.authorizedAdoption, key)) {
+  const descriptionChange = rule.description !== undefined && String(live.description || '') !== String(rule.description) ? String(rule.description) : undefined;
+  const sameTree = canonicalJson(treeProjection(root, undefined, liveLabels)) === canonicalJson(treeProjection(newRoot, undefined, labelsOwned)) && !plan.destructive;
+  const unapproved = verdict === 'unbound' && !created && !isAuthorized(ctx.authorizedAdoption, key);
+  if (sameTree && descriptionChange === undefined) {
+    // Nothing to write: not a refusal, but no binding either unless adoption was approved (bindsUnchanged).
+    plan.action = 'noChange';
+    plan.bindUnchanged = !unapproved;
+    if (plan.bindUnchanged) {
+      (rule.conditions || []).forEach((c, i) => { plan.nodeIndex[c.key] = `clauses/${i}`; });
+      (rule.actions || []).forEach((a, i) => { plan.nodeIndex[a.key] = `trueBranch/${i}`; });
+    }
+    return plan;
+  }
+  if (unapproved) {
     plan.refused.push(refusal(key, 'rule-adoption-not-authorized', 'this rule exists and the spec has not managed it before; approve adopting it first'));
     return plan;
   }
@@ -327,12 +340,7 @@ async function planRuleReconcile({ rule, ruleId, sdk, created = false }, ctx = {
   }
   (rule.conditions || []).forEach((c, i) => { plan.nodeIndex[c.key] = `clauses/${i}`; });
   (rule.actions || []).forEach((a, i) => { plan.nodeIndex[a.key] = `trueBranch/${i}`; });
-  plan.description = rule.description !== undefined && String(live.description || '') !== String(rule.description) ? String(rule.description) : undefined;
-  const sameTree = canonicalJson(treeProjection(root, undefined, liveLabels)) === canonicalJson(treeProjection(newRoot, undefined, labelsOwned)) && !plan.destructive;
-  if (sameTree && plan.description === undefined) {
-    plan.action = 'noChange';
-    return plan;
-  }
+  plan.description = descriptionChange;
   plan.action = 'update';
   plan.root = sameTree ? null : newRoot;
   plan.operations.push(operation({ key, kind: KIND, target: ruleId, action: 'update', destructive: plan.destructive }));
@@ -350,7 +358,7 @@ async function applyRuleReconcile(plan, { sdk }, ctx = {}) {
   ];
   if (plan.action === 'noChange') {
     result.unchanged.push({ key: plan.key, kind: KIND, id: plan.ruleId });
-    result.managedBindings.push(...records());
+    if (plan.bindUnchanged) result.managedBindings.push(...records());
     return result;
   }
   try {

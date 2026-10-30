@@ -31,6 +31,7 @@ const {
   lookupBinding,
   bindingRecord,
   driftVerdict,
+  bindsUnchanged,
   normalizeGuid,
   PRE_WRITE_CODES,
   rulesOf,
@@ -85,6 +86,7 @@ async function planWebResourceUpdate({ webResource, existingId, deployed, option
   plan.origin = binding ? binding.origin : 'adopted';
   if (live.equals(wanted)) {
     plan.action = 'noChange';
+    plan.bindUnchanged = bindsUnchanged(binding, ctx, key);
     plan.operations.push(operation({ key, kind: KIND, target: plan.id, action: 'noChange' }));
     return plan;
   }
@@ -124,7 +126,7 @@ async function applyWebResourceUpdate(plan, { sdk }, ctx = {}) {
   const record = () => bindingRecord(ctx, { kind: KIND, key: plan.key, id: plan.id, intentSha256: plan.desiredSha, origin: plan.origin });
   if (plan.action === 'noChange') {
     result.unchanged.push({ key: plan.key, kind: KIND, id: plan.id });
-    result.managedBindings.push(record());
+    if (plan.bindUnchanged) result.managedBindings.push(record());
     return result;
   }
   try {

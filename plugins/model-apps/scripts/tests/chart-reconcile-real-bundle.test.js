@@ -94,6 +94,18 @@ test('drift on an owned field is refused until the overwrite is approved; conver
   assert.match(srv.rowOf('savedqueryvisualizations', CID).presentationdescription, /ChartType="Bar"/);
 });
 
+test('an unmanaged chart that already matches is not bound without approval, so a later edit still asks', async () => {
+  const srv = server();
+  const managed = fakeManaged();
+  const same = await run(srv, declared({ chartType: 'Column', groupBy: 'cr_priority' }), { managed });
+  assert.equal(same.plan.action, 'noChange');
+  assert.deepEqual(same.result.managedBindings, [], 'matching the spec is not an approval to manage it');
+  managed.persist(same.result.managedBindings);
+  const edit = await run(srv, declared(), { managed });
+  assert.deepEqual(edit.result.refused.map((r) => r.code), ['chart-adoption-not-authorized']);
+  assert.equal(srv.writes.length, 0);
+});
+
 test('a spec that starts declaring a description or title is an edit, not drift', async () => {
   const srv = server({ description: 'Maker text' });
   const managed = fakeManaged();

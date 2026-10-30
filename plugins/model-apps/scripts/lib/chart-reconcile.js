@@ -31,6 +31,7 @@ const {
   bindingRecord,
   ownershipDriftVerdict,
   ownershipSubsets,
+  bindsUnchanged,
   pushIfChanged,
   queuePublication,
   normalizeGuid,
@@ -156,6 +157,7 @@ async function planChartReconcile({ chart, sdk }, ctx = {}) {
   plan.origin = binding ? binding.origin : 'adopted';
   if (plan.changed.length === 0) {
     plan.action = 'noChange';
+    plan.bindUnchanged = bindsUnchanged(binding, ctx, key);
     plan.operations.push(operation({ key, kind: 'chart', target: id, action: 'noChange' }));
     return plan;
   }
@@ -184,7 +186,7 @@ async function applyChartReconcile(plan, { sdk }, ctx = {}) {
   const record = () => bindingRecord(ctx, { kind: 'chart', key: plan.key, id, intentSha256: plan.desiredSha, origin: plan.origin });
   if (plan.action === 'noChange') {
     result.unchanged.push({ key: plan.key, kind: 'chart', id });
-    result.managedBindings.push(record());
+    if (plan.bindUnchanged) result.managedBindings.push(record());
     return result;
   }
   const rejected = (rules) => ({ ...refusal(plan.key, 'chart-rejected', 'the SDK refused the chart edit before anything was sent'), rules });

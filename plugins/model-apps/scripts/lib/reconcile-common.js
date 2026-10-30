@@ -129,6 +129,15 @@ function ownershipSubsets(keys) {
 }
 
 /**
+ * Whether a no-op may record a binding. An artifact that already matches the spec is not thereby
+ * approved for management: binding it silently would let the next, real edit skip the adoption
+ * question. So an unbound artifact is bound only when the maker approved adopting it or pinned it by id.
+ */
+function bindsUnchanged(binding, ctx, key, pinned = false) {
+  return !!binding || pinned === true || isAuthorized(ctx && ctx.authorizedAdoption, key);
+}
+
+/**
  * Pre-write refusal codes the SDK raises BEFORE it sends anything — a thrown error with one of
  * these codes is a known not-applied outcome. Any other throw from a push is an UNKNOWN outcome: a
  * push that failed part-way may have written some rows, so it must never be reported as refused
@@ -216,6 +225,7 @@ module.exports = {
   driftVerdict,
   ownershipDriftVerdict,
   ownershipSubsets,
+  bindsUnchanged,
   pushChecked,
   pushIfChanged,
   queuePublication,

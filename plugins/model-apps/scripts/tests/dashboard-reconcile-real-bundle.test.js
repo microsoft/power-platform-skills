@@ -87,6 +87,18 @@ test('an unmanaged dashboard needs adoption approval before any write', async ()
   assert.equal(srv.writes.length, 0);
 });
 
+test('an unmanaged dashboard that already matches is not bound without approval, so a later edit still asks', async () => {
+  const srv = server();
+  const managed = fakeManaged();
+  const same = await run(srv, declared([listTile()]), { managed });
+  assert.equal(same.plan.action, 'noChange');
+  assert.deepEqual(same.result.managedBindings, [], 'matching the spec is not an approval to manage it');
+  managed.persist(same.result.managedBindings);
+  const edit = await run(srv, declared([listTile({ name: 'Renamed' })]), { managed });
+  assert.deepEqual(edit.result.refused.map((r) => r.code), ['dashboard-adoption-not-authorized']);
+  assert.equal(srv.writes.length, 0);
+});
+
 test('a keyed tile with no pin that matches a live tile is refused rather than added twice', async () => {
   const srv = server();
   const { result } = await run(srv, declared([{ key: 'open', type: 'list', view: 'Open cases' }]), { authorizedAdoption: true, creates: fakeCreates() });

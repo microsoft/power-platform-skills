@@ -104,10 +104,6 @@ async function planBpfMetadata({ flow, flowId, sdk, fetched = false, created = f
   // The binding was recorded under whatever the spec owned THEN (see ownershipDriftVerdict).
   const variants = ownershipSubsets(['description', 'order']).map((o) => projectBpfForVerify(live, o));
   const verdict = ownershipDriftVerdict(binding, variants, intentSha256(liveView), plan.desiredSha);
-  if (verdict === 'unbound' && !created && !isAuthorized(ctx.authorizedAdoption, key)) {
-    plan.refused.push(refusal(key, 'bpf-adoption-not-authorized', 'this business process flow exists and the spec has not managed it before; approve adopting it first'));
-    return plan;
-  }
   if (verdict === 'drift' && !isAuthorized(ctx.authorizedOverwrite, key)) {
     plan.refused.push(refusal(key, 'bpf-drift', 'the business process flow was changed outside the spec since the last build; refresh the spec or approve the overwrite'));
     return plan;
@@ -118,7 +114,18 @@ async function planBpfMetadata({ flow, flowId, sdk, fetched = false, created = f
     plan.descriptionViaRecord = live.description === undefined;
   }
   plan.stagesDiffer = canonicalJson(liveView.stages) !== canonicalJson(desired.stages);
-  plan.action = plan.order === undefined && plan.description === undefined && !plan.stagesDiffer ? 'noChange' : 'update';
+  const unapproved = verdict === 'unbound' && !created && !isAuthorized(ctx.authorizedAdoption, key);
+  if (plan.order === undefined && plan.description === undefined && !plan.stagesDiffer) {
+    // Nothing to write: not a refusal, but no binding either unless adoption was approved (bindsUnchanged).
+    plan.action = 'noChange';
+    plan.bindUnchanged = !unapproved;
+    return plan;
+  }
+  if (unapproved) {
+    plan.refused.push(refusal(key, 'bpf-adoption-not-authorized', 'this business process flow exists and the spec has not managed it before; approve adopting it first'));
+    return plan;
+  }
+  plan.action = 'update';
   return plan;
 }
 
@@ -135,7 +142,7 @@ async function applyBpfMetadata(plan, { sdk, pushStages } = {}, ctx = {}) {
   const record = () => bindingRecord(ctx, { kind: KIND, key: plan.key, id: plan.flowId, intentSha256: plan.desiredSha, origin: plan.origin });
   if (plan.action === 'noChange') {
     result.unchanged.push({ key: plan.key, kind: KIND, id: plan.flowId });
-    result.managedBindings.push(record());
+    if (plan.bindUnchanged) result.managedBindings.push(record());
     return result;
   }
   // Stages that differ with no stage edit to apply: the stage plan refused it (a removal or a move) or

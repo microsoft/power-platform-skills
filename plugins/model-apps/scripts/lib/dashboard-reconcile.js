@@ -36,6 +36,7 @@ const {
   bindingRecord,
   ownershipDriftVerdict,
   ownershipSubsets,
+  bindsUnchanged,
   pushIfChanged,
   normalizeGuid,
   queuePublication,
@@ -223,6 +224,7 @@ async function planDashboardReconcile({ dashboard, dashboardId, sdk, resolveTile
   if (plan.refused.length) return plan;
   if (writes === 0) {
     plan.action = 'noChange';
+    plan.bindUnchanged = bindsUnchanged(dashBinding, ctx, key, pinned);
     return plan;
   }
   if (!dashBinding && !pinned && !isAuthorized(ctx.authorizedAdoption, key)) {
@@ -257,6 +259,7 @@ async function applyDashboardReconcile(plan, { sdk }, ctx = {}) {
   const dashRecord = () => bindingRecord(ctx, { kind: KIND, key: plan.key, id, intentSha256: intentSha256({ tiles: plan.tiles.map((e) => e.tileKey), description: plan.description }), origin: plan.origin });
   if (plan.action === 'noChange') {
     result.unchanged.push({ key: plan.key, kind: KIND, id });
+    if (!plan.bindUnchanged) return result;
     for (const e of plan.tiles) result.managedBindings.push(tileRecord(e, e.liveId, e.origin));
     result.managedBindings.push(dashRecord());
     return result;
