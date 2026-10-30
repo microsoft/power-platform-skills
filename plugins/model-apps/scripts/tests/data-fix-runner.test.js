@@ -1,9 +1,7 @@
 'use strict';
 // Bulk data repair (lib/data-fix-runner.js, scripts/data-fix.js) over the REAL vendored SDK and the plugin's own HTTP
-// client. The shared lifecycle fake does not model the narrow metadata reads a data fix makes (the table's
-// `IsOptimisticConcurrencyEnabled`, the per-kind attribute casts) nor `$batch` of one change set per row with
-// `odata.continue-on-error`, so this file serves a small fake of exactly those: one table, conditional PATCHes that
-// answer 412 on a moved token and 404 0x80040217 on a deleted row, and WhoAmI. Pinned here: planning sends nothing but
+// client, against the small fake of helpers/data-fix-org.js (one table, conditional PATCHes in `$batch`, WhoAmI); the
+// CLI's own runs use the same fake through helpers/data-fix-org-preload.js. Pinned here: planning sends nothing but
 // GETs; a filter plan needs an explicit maxRows; the approval binds the digest, the organization and the user; business
 // values reach only the private files, never what the runner returns or the CLI prints; another writer's change is a
 // conflict and is kept; a deleted row is gone; an unanswered request is unknown and stops the run; a crash between the
@@ -14,162 +12,14 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
-const { randomUUID } = require('node:crypto');
 const { makeTempDir } = require('./helpers/temp-dirs.js');
 const { createAzHttpClient } = require('../lib/sdk-http-client.js');
 const { createMakerSdk, createNodeWorkspaceStorage } = require('../lib/maker-sdk.js');
 const runner = require('../lib/data-fix-runner.js');
+const { withAppBuildLease, applyWorkspaceOf } = require('../lib/app-operation-lease.js');
+const { ORIGIN, SENTINEL, USER, ORG, createDataFixOrg } = require('./helpers/data-fix-org.js');
 
-const ORIGIN = 'https://contoso.crm.dynamics.com';
 const TOKEN = 'x'.repeat(48);
-const SENTINEL = 'SENTINEL-c0ffee-business-value';
-const USER = '11111111-1111-4111-8111-111111111111';
-const ORG = '22222222-2222-4222-8222-222222222222';
-
-const json = (statusCode, body, headers = {}) => ({ statusCode, headers: { 'content-type': 'application/json; odata.metadata=minimal', ...headers }, body: body === undefined ? '' : JSON.stringify(body) });
-const odataError = (statusCode, code, message) => json(statusCode, { error: { code, message } });
-
-function createDataFixOrg({ rows = 4 } = {}) {
-  const tickets = new Map();
-  let version = 100;
-  for (let i = 0; i < rows; i += 1) {
-    const id = randomUUID();
-    tickets.set(id, { contoso_ticketid: id, contoso_name: `Ticket ${i}`, contoso_note: `${SENTINEL}-${i}`, contoso_status: 'open', etag: `W/"${(version += 1)}"` });
-  }
-  const org = {
-    origin: ORIGIN,
-    tickets,
-    identity: { UserId: USER, OrganizationId: ORG, BusinessUnitId: randomUUID() },
-    requests: [],
-    // A test seam: called with each PATCH part before it is applied; may answer for it instead.
-    onPatch: null,
-    // A test seam: called with the whole `$batch` request; may answer for it instead (or throw: a lost answer).
-    onBatch: null,
-    // Another writer: a plain PATCH that moves the row's token, as a second maker's edit would.
-    touch(id, note) {
-      const row = tickets.get(id);
-      row.contoso_note = note;
-      row.etag = `W/"${(version += 1)}"`;
-    },
-  };
-  const attributes = {
-    contoso_name: { LogicalName: 'contoso_name', AttributeType: 'String', AttributeTypeName: { Value: 'StringType' }, IsValidForRead: true, IsValidForUpdate: true, IsSecured: false },
-    contoso_note: { LogicalName: 'contoso_note', AttributeType: 'String', AttributeTypeName: { Value: 'StringType' }, IsValidForRead: true, IsValidForUpdate: true, IsSecured: false },
-    contoso_status: { LogicalName: 'contoso_status', AttributeType: 'String', AttributeTypeName: { Value: 'StringType' }, IsValidForRead: true, IsValidForUpdate: true, IsSecured: false },
-    contoso_secret: { LogicalName: 'contoso_secret', AttributeType: 'String', AttributeTypeName: { Value: 'StringType' }, IsValidForRead: true, IsValidForUpdate: true, IsSecured: true },
-  };
-  const namesIn = (filter) => [...String(filter || '').matchAll(/LogicalName eq '([^']*)'/g)].map((m) => m[1]);
-  const project = (row, select) => {
-    const out = { '@odata.etag': row.etag };
-    for (const name of select) if (name in row) out[name] = row[name];
-    return out;
-  };
-
-  function patchRow(where, headers, body) {
-    const m = /^\/contoso_tickets\(([0-9a-f-]{36})\)(?:\?\$select=(.*))?$/i.exec(where);
-    if (!m) return odataError(400, '0x80040203', `unmodelled PATCH ${where}`);
-    const row = tickets.get(m[1].toLowerCase());
-    if (!row) return odataError(404, '0x80040217', 'contoso_ticket With Id = ... Does Not Exist');
-    const ifMatch = Object.entries(headers).find(([k]) => k.toLowerCase() === 'if-match');
-    if (!ifMatch || ifMatch[1] !== row.etag) return odataError(412, '0x80060882', 'The version of the existing record doesn\'t match the RowVersion property provided.');
-    Object.assign(row, body);
-    row.etag = `W/"${(version += 1)}"`;
-    return json(200, project(row, (m[2] || 'contoso_ticketid').split(',')), { ETag: row.etag });
-  }
-
-  // The SDK's `$batch` of single-operation change sets (BatchApi.renderChangeSets), e.g.
-  //   --batch_<id>
-  //   Content-Type: multipart/mixed;boundary=changeset_<id>
-  //
-  //   --changeset_<id>
-  //   Content-Type: application/http
-  //   Content-Transfer-Encoding: binary
-  //   Content-ID: 1
-  //
-  //   PATCH https://contoso.crm.dynamics.com/api/data/v9.2/contoso_tickets(<id>)?$select=... HTTP/1.1
-  //   If-Match: W/"101"
-  //   ...
-  //
-  //   {"contoso_note":"..."}
-  //   --changeset_<id>--
-  //   --batch_<id>--
-  function batch(text, headers) {
-    const outer = /^--(\S+)/.exec(text)[1];
-    const answers = [];
-    for (const segment of text.split(`--${outer}`).slice(1)) {
-      if (segment.startsWith('--')) break;
-      const changeset = /boundary=(\S+)/.exec(segment)[1];
-      const part = segment.split(`--${changeset}`)[1];
-      const whole = part.replace(/^\r\n/, '');
-      const mime = whole.slice(0, whole.indexOf('\r\n\r\n'));
-      const request = whole.slice(whole.indexOf('\r\n\r\n') + 4);
-      const contentId = /Content-ID:\s*(\S+)/i.exec(mime)[1];
-      const [head, ...rest] = request.split(/\r\n\r\n/);
-      const lines = head.split(/\r\n/);
-      const [, method, url] = /^(\w+) (\S+) HTTP\/1\.1$/.exec(lines[0]);
-      const partHeaders = Object.fromEntries(lines.slice(1).map((l) => [l.slice(0, l.indexOf(':')).trim(), l.slice(l.indexOf(':') + 1).trim()]));
-      const where = decodeURIComponent(new URL(url, ORIGIN).pathname + new URL(url, ORIGIN).search).replace(/^\/api\/data\/v9\.\d+/, '');
-      const body = rest.join('\r\n\r\n').trim() ? JSON.parse(rest.join('\r\n\r\n').trim()) : undefined;
-      const injected = org.onPatch && org.onPatch({ method, where, headers: partHeaders, body, id: (/\(([0-9a-f-]{36})\)/i.exec(where) || [])[1] });
-      answers.push({ contentId, res: injected || patchRow(where, partHeaders, body) });
-    }
-    const out = 'batchresponse_00000000-0000-0000-0000-00000000000a';
-    const lines = [];
-    for (const { contentId, res } of answers) {
-      const cs = `changesetresponse_${randomUUID()}`;
-      lines.push(`--${out}`, `Content-Type: multipart/mixed; boundary=${cs}`, '', `--${cs}`, 'Content-Type: application/http', 'Content-Transfer-Encoding: binary', `Content-ID: ${contentId}`, '',
-        `HTTP/1.1 ${res.statusCode} ${res.statusCode < 300 ? 'OK' : 'Error'}`, ...Object.entries(res.headers).map(([k, v]) => `${k}: ${v}`), '', res.body, `--${cs}--`);
-    }
-    lines.push(`--${out}--`, '');
-    return { statusCode: 200, headers: { 'content-type': `multipart/mixed; boundary=${out}` }, body: lines.join('\r\n') };
-  }
-
-  org.request = async ({ url, method, headers = {}, body }) => {
-    const parsed = new URL(url);
-    if (parsed.origin !== ORIGIN) throw new Error(`a request to another origin: ${url}`);
-    const where = decodeURIComponent(parsed.pathname + parsed.search).replace(/^\/api\/data\/v9\.\d+/, '');
-    org.requests.push({ method, path: where });
-    if (method === 'GET' && where === '/WhoAmI') return json(200, org.identity);
-    if (method === 'GET' && where.startsWith("/EntityDefinitions(LogicalName='contoso_ticket')?")) {
-      return json(200, { EntitySetName: 'contoso_tickets', PrimaryIdAttribute: 'contoso_ticketid', PrimaryNameAttribute: 'contoso_name', IsOptimisticConcurrencyEnabled: true });
-    }
-    if (method === 'GET' && where.startsWith("/EntityDefinitions(LogicalName='contoso_nowhere')")) return odataError(404, '0x80060888', 'not found');
-    const attr = /^\/EntityDefinitions\(LogicalName='contoso_ticket'\)\/Attributes(\/Microsoft\.Dynamics\.CRM\.(\w+))?\?(.*)$/.exec(where);
-    if (method === 'GET' && attr) {
-      const params = new URLSearchParams(attr[3]);
-      const names = namesIn(params.get('$filter')).filter((n) => attributes[n]);
-      if (!attr[2]) return json(200, { value: names.map((n) => attributes[n]) });
-      return json(200, { value: names.map((n) => ({ LogicalName: n, MaxLength: 200 })) });
-    }
-    const rowsRead = /^\/contoso_tickets\?(.*)$/.exec(where);
-    if (method === 'GET' && rowsRead) {
-      const params = new URLSearchParams(rowsRead[1]);
-      const select = (params.get('$select') || '').split(',');
-      const filter = params.get('$filter') || '';
-      const ids = /CRM\.In\(PropertyName='contoso_ticketid',PropertyValues=\[(.*)\]\)/.exec(filter);
-      const eq = /^(\w+) eq '([^']*)'$/.exec(filter);
-      let rows = [...tickets.values()];
-      if (ids) {
-        const wanted = new Set([...ids[1].matchAll(/'([^']*)'/g)].map((m) => m[1].toLowerCase()));
-        rows = rows.filter((r) => wanted.has(r.contoso_ticketid));
-      } else if (eq) {
-        rows = rows.filter((r) => r[eq[1]] === eq[2]);
-      } else {
-        return odataError(400, '0x80060888', `unmodelled filter ${filter}`);
-      }
-      return json(200, { value: rows.map((r) => project(r, select)) });
-    }
-    if (method === 'POST' && where === '/$batch') {
-      if (org.onBatch) {
-        const answer = await org.onBatch({ body: String(body), headers });
-        if (answer) return answer;
-      }
-      return batch(String(body), headers);
-    }
-    return odataError(501, '0x80040265', `the data fix fake does not model ${method} ${where}`);
-  };
-  return org;
-}
 
 function setup(options) {
   const org = createDataFixOrg(options);
@@ -342,4 +192,199 @@ test('the CLI prints counts, codes and paths only, and refuses a filter plan wit
   assert.equal(noMax.stdout.includes(SENTINEL) || noMax.stderr.includes(SENTINEL), false);
   const unknownVerb = spawnSync(process.execPath, [script, 'upsert', '--env', ORIGIN], { env, encoding: 'utf8' });
   assert.equal(unknownVerb.status, 1);
+});
+
+// --- the lease a build of the same app takes ---------------------------------------------------------------------
+
+test('an app-bound repair takes the lease a build of that app takes: while the build holds it, nothing is written', async () => {
+  const { org, base, ids } = setup({ rows: 1 });
+  const planned = await runner.planDataFix({ ...base, request: filterFix });
+  const mark = org.requests.length;
+  // The build's own call: build-model-app.js leases <app-dir>/.maker-workspace unless --workspace names another folder.
+  await withAppBuildLease({ workspaceDir: applyWorkspaceOf({ appDir: base.appDir }), appUniqueName: 'contoso_Tickets' }, async () => {
+    await assert.rejects(runner.applyApprovedPlan({ ...base, planId: planned.planId, approve: planned.planDigest, appUniqueName: 'contoso_tickets' }), (err) => {
+      assert.equal(err.code, 'DATA_FIX_BUSY');
+      assert.equal(err.message.includes(base.appDir), false, 'the refusal names no folder');
+      return true;
+    });
+  });
+  const workspace = makeTempDir('data-fix-build-workspace-');
+  await withAppBuildLease({ workspaceDir: workspace, appUniqueName: 'contoso_Tickets' }, async () => {
+    await assert.rejects(runner.applyApprovedPlan({ ...base, planId: planned.planId, approve: planned.planDigest, appUniqueName: 'contoso_Tickets', workspaceDir: workspace }), { code: 'DATA_FIX_BUSY' });
+  });
+  assert.deepEqual(nonGets(org, mark), [], 'no row write while a build of the app held its lease');
+  assert.equal(org.tickets.get(ids[0]).contoso_note, `${SENTINEL}-0`);
+  const applied = await runner.applyApprovedPlan({ ...base, planId: planned.planId, approve: planned.planDigest, appUniqueName: 'contoso_Tickets', workspaceDir: workspace });
+  assert.equal(applied.summary.counts.applied, 1);
+  // Every later write of this plan takes the same leases: a revert without the app (or with another workspace) is refused.
+  for (const scope of [{}, { appUniqueName: 'contoso_Tickets' }, { appUniqueName: 'contoso_Other', workspaceDir: workspace }]) {
+    // eslint-disable-next-line no-await-in-loop
+    await assert.rejects(runner.revertApplied({ ...base, planId: planned.planId, ...scope }), { code: 'DATA_FIX_LEASE_MISMATCH' });
+  }
+  const review = await runner.revertApplied({ ...base, planId: planned.planId, appUniqueName: 'CONTOSO_TICKETS', workspaceDir: workspace });
+  assert.equal(review.approvalNeeded, true);
+  await assert.rejects(runner.applyApprovedPlan({ ...base, planId: planned.planId, approve: planned.planDigest, workspaceDir: workspace }), { code: 'DATA_FIX_LEASE_MISMATCH' });
+});
+
+// --- what an operation achieved, across its runs ----------------------------------------------------------------
+
+test('resume keeps an earlier unknown row in the operation\'s outcome: a later clean run never reads as repaired', async () => {
+  const { org, base, ids } = setup({ rows: 2 });
+  const planned = await runner.planDataFix({ ...base, request: filterFix });
+  org.onBatch = async () => ({ statusCode: 502, headers: { 'content-type': 'text/html' }, body: '<html>bad gateway</html>' });
+  const applied = await runner.applyApprovedPlan({ ...base, planId: planned.planId, approve: planned.planDigest, options: { batchSize: 1 } });
+  assert.equal(applied.operation.status, 'unknown');
+  org.onBatch = null;
+  const resumed = await runner.resumeRemaining({ ...base, planId: planned.planId, approve: planned.planDigest });
+  assert.deepEqual(resumed.summary.counts, { applied: 1, conflict: 0, gone: 0, failed: 0, unknown: 0, notAttempted: 0 }, 'this run\'s own rows');
+  assert.deepEqual(resumed.operation.counts, { applied: 1, conflict: 0, gone: 0, failed: 0, unknown: 1, notAttempted: 0 }, 'the whole operation\'s rows');
+  assert.equal(resumed.operation.status, 'unknown');
+  assert.equal(org.tickets.get(ids[0]).contoso_note, `${SENTINEL}-0`, 'the unknown row was not sent again');
+  const again = await runner.resumeRemaining({ ...base, planId: planned.planId, approve: planned.planDigest });
+  assert.equal(again.nothingRemaining, true);
+  assert.equal(again.operation.status, 'unknown', 'resuming with nothing left still reports the unknown row');
+});
+
+test('a revert the service refused before writing a row can be continued, with fresh approval; a reverted row is never sent again', async () => {
+  const { org, base, ids } = setup({ rows: 2 });
+  const planned = await runner.planDataFix({ ...base, request: filterFix });
+  await runner.applyApprovedPlan({ ...base, planId: planned.planId, approve: planned.planDigest });
+  const review = await runner.revertApplied({ ...base, planId: planned.planId });
+  let batches = 0;
+  // The first row's restore lands; the service then refuses access (403) and the SDK stops with the second row notAttempted.
+  org.onBatch = async () => {
+    batches += 1;
+    if (batches === 1) return null;
+    return { statusCode: 403, headers: { 'content-type': 'application/json' }, body: JSON.stringify({ error: { code: '0x80040220', message: 'permission denied' } }) };
+  };
+  const first = await runner.revertApplied({ ...base, planId: planned.planId, approve: review.revertDigest, options: { batchSize: 1 } });
+  assert.deepEqual(first.summary.counts, { applied: 1, conflict: 0, gone: 0, failed: 0, unknown: 0, notAttempted: 1 });
+  assert.equal(first.operation.status, 'partial');
+  org.onBatch = null;
+  await assert.rejects(runner.revertApplied({ ...base, planId: planned.planId, approve: review.revertDigest }), { code: 'DATA_FIX_APPROVAL_MISMATCH' }, 'the first approval does not cover a continuation');
+  const next = await runner.revertApplied({ ...base, planId: planned.planId });
+  assert.equal(next.approvalNeeded, true);
+  assert.equal(next.rows, 1);
+  assert.notEqual(next.revertDigest, review.revertDigest);
+  const sent = [];
+  org.onPatch = ({ id }) => { sent.push(id); return null; };
+  const done = await runner.revertApplied({ ...base, planId: planned.planId, approve: next.revertDigest });
+  assert.equal(sent.length, 1);
+  assert.equal(done.operation.status, 'reverted');
+  assert.deepEqual(done.operation.counts, { applied: 2, conflict: 0, gone: 0, failed: 0, unknown: 0, notAttempted: 0 });
+  assert.deepEqual(ids.map((id) => org.tickets.get(id).contoso_note), [`${SENTINEL}-0`, `${SENTINEL}-1`]);
+  await assert.rejects(runner.revertApplied({ ...base, planId: planned.planId }), { code: 'DATA_FIX_ALREADY_REVERTED' });
+  await assert.rejects(runner.resumeRemaining({ ...base, planId: planned.planId, approve: planned.planDigest }), { code: 'DATA_FIX_REVERTED' });
+});
+
+test('a revert refused before its first write (nothing sent) can be continued, once freshly approved', async () => {
+  const { org, base } = setup({ rows: 1 });
+  const planned = await runner.planDataFix({ ...base, request: filterFix });
+  await runner.applyApprovedPlan({ ...base, planId: planned.planId, approve: planned.planDigest });
+  const review = await runner.revertApplied({ ...base, planId: planned.planId });
+  const refusing = (client) => ({ applyDataFix: async () => { throw Object.assign(new Error('the table no longer has optimistic concurrency'), { code: 'DATA_FIX_CONCURRENCY_UNSUPPORTED' }); }, client });
+  await assert.rejects(runner.revertApplied({ ...base, makeSdk: refusing, planId: planned.planId, approve: review.revertDigest }), { code: 'DATA_FIX_CONCURRENCY_UNSUPPORTED' });
+  const next = await runner.revertApplied({ ...base, planId: planned.planId });
+  assert.equal(next.approvalNeeded, true);
+  assert.notEqual(next.revertDigest, review.revertDigest);
+  const done = await runner.revertApplied({ ...base, planId: planned.planId, approve: next.revertDigest });
+  assert.equal(done.operation.status, 'reverted');
+  assert.equal(nonGets(org).length, 2, 'the apply and the one revert that was sent');
+});
+
+// --- the command line, end to end ---------------------------------------------------------------------------------
+
+// The real scripts/data-fix.js in a child process over the fake (helpers/data-fix-org-preload.js); `mutate` changes the
+// fake's rows between runs as another maker (or the service) would.
+function dataFixCli(org) {
+  const appDir = makeTempDir('data-fix-cli-app-');
+  const stateFile = path.join(makeTempDir('data-fix-cli-org-'), 'org.json');
+  fs.writeFileSync(stateFile, JSON.stringify(org.snapshot()));
+  const env = { ...process.env, FAKE_DATA_FIX_ORG: stateFile };
+  delete env.NODE_TEST_CONTEXT;
+  const read = () => JSON.parse(fs.readFileSync(stateFile, 'utf8'));
+  return {
+    appDir,
+    read,
+    mutate(change) {
+      const state = read();
+      const fake = createDataFixOrg({ seed: state });
+      change(fake, state);
+      fs.writeFileSync(stateFile, JSON.stringify({ ...state, ...fake.snapshot() }));
+    },
+    run(verb, args) {
+      const r = spawnSync(process.execPath, ['--require', path.join(__dirname, 'helpers', 'data-fix-org-preload.js'), path.join(__dirname, '..', 'data-fix.js'), verb, '--env', ORIGIN, '--app-dir', appDir, ...args], { env, encoding: 'utf8' });
+      let out = null;
+      try { out = JSON.parse(r.stdout); } catch { /* a usage error prints no JSON */ }
+      return { status: r.status, out, text: r.stdout + r.stderr };
+    },
+  };
+}
+const planArgs = ['--table', 'contoso_ticket', '--filter', "contoso_status eq 'open'", '--set', JSON.stringify({ contoso_note: 'fixed' }), '--max-rows', '10'];
+
+test('CLI: a repair that did not make every planned change exits non-zero — a conflict is not success; a clean one exits 0', () => {
+  const org = createDataFixOrg({ rows: 2 });
+  const ids = [...org.tickets.keys()];
+  const cli = dataFixCli(org);
+  const planned = cli.run('plan', planArgs);
+  assert.equal(planned.status, 0, planned.text);
+  cli.mutate((fake) => fake.touch(ids[0], 'another maker'));
+  const applied = cli.run('apply', ['--plan-id', planned.out.planId, '--approve', planned.out.planDigest]);
+  assert.deepEqual(applied.out.summary.counts, { applied: 1, conflict: 1, gone: 0, failed: 0, unknown: 0, notAttempted: 0 });
+  assert.equal(applied.out.operation.status, 'conflicted');
+  assert.equal(applied.out.ok, false);
+  assert.equal(applied.status, 1);
+  assert.equal(new Map(cli.read().tickets).get(ids[0]).contoso_note, 'another maker', 'the other maker\'s change is kept');
+  assert.equal(applied.text.includes(SENTINEL), false);
+  // The maker plans again (the row as it is now) and applies: every planned change made, exit 0.
+  const replanned = cli.run('plan', planArgs);
+  const clean = cli.run('apply', ['--plan-id', replanned.out.planId, '--approve', replanned.out.planDigest]);
+  assert.equal(clean.out.operation.status, 'repaired');
+  assert.equal(clean.out.ok, true);
+  assert.equal(clean.status, 0, clean.text);
+  // --workspace names the build lease's folder, so it means nothing without --app.
+  const noApp = cli.run('apply', ['--plan-id', replanned.out.planId, '--approve', replanned.out.planDigest, '--workspace', cli.appDir]);
+  assert.equal(noApp.status, 1);
+  assert.match(noApp.text, /--workspace needs --app/);
+});
+
+test('CLI: resume after an unknown row exits non-zero; a refused revert is continued with a fresh approval and exits 0', () => {
+  const org = createDataFixOrg({ rows: 2 });
+  const cli = dataFixCli(org);
+  const planned = cli.run('plan', planArgs);
+  const approve = ['--plan-id', planned.out.planId, '--approve', planned.out.planDigest];
+  cli.mutate((fake, state) => { state.batchAnswer = { statusCode: 502, body: 'bad gateway' }; });
+  const applied = cli.run('apply', [...approve, '--batch-size', '1']);
+  assert.equal(applied.status, 1);
+  assert.equal(applied.out.operation.status, 'unknown');
+  cli.mutate((fake, state) => { delete state.batchAnswer; });
+  const resumed = cli.run('resume', approve);
+  assert.equal(resumed.out.summary.counts.applied, 1);
+  assert.equal(resumed.out.operation.counts.unknown, 1);
+  assert.equal(resumed.out.operation.status, 'unknown');
+  assert.equal(resumed.out.ok, false);
+  assert.equal(resumed.status, 1, 'an earlier unknown row keeps the operation unsettled');
+  const review = cli.run('revert', ['--plan-id', planned.out.planId]);
+  assert.equal(review.status, 0, 'a review is not a failure');
+  assert.equal(review.out.approvalNeeded, true);
+  cli.mutate((fake, state) => { state.batchAnswer = { statusCode: 403, body: JSON.stringify({ error: { code: '0x80040220', message: 'permission denied' } }) }; });
+  const refused = cli.run('revert', ['--plan-id', planned.out.planId, '--approve', review.out.revertDigest]);
+  assert.equal(refused.status, 1);
+  assert.equal(refused.out.operation.status, 'partial');
+  cli.mutate((fake, state) => { delete state.batchAnswer; });
+  const next = cli.run('revert', ['--plan-id', planned.out.planId]);
+  assert.equal(next.out.approvalNeeded, true);
+  const done = cli.run('revert', ['--plan-id', planned.out.planId, '--approve', next.out.revertDigest]);
+  assert.equal(done.out.operation.status, 'reverted');
+  assert.equal(done.status, 0, done.text);
+});
+
+test('CLI: a service refusal is printed as its code and HTTP status in fixed words — never the service\'s own text', () => {
+  const cli = dataFixCli(createDataFixOrg({ rows: 1 }));
+  const refused = cli.run('plan', ['--table', 'contoso_secretive', '--filter', "contoso_status eq 'open'", '--set', JSON.stringify({ contoso_note: 'x' }), '--max-rows', '1']);
+  assert.equal(refused.status, 1);
+  assert.equal(refused.out.ok, false);
+  assert.equal(refused.out.statusCode, 403);
+  assert.equal(typeof refused.out.code, 'string');
+  assert.equal(refused.text.includes(SENTINEL), false, refused.text);
 });

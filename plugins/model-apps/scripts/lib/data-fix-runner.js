@@ -17,13 +17,23 @@
 //      maker plans afresh (a new plan reads the rows as they now are: rows already written read as unchanged).
 //   5. `resume` sends only the last result's `remaining` — the SDK's notAttempted rows — and never retries an
 //      `unknown` row. `revert` sends the results' own revert plans (conditional on the tokens OUR writes produced) and
-//      needs its own, fresh consent.
-//   6. One writer at a time: the app's build lease when the repair is bound to an app, otherwise a lease scoped to the
-//      environment and table.
+//      needs its own, fresh consent. A revert the SDK stopped before a row was written (a refusal before its first
+//      write, or a 403/throttle stop that left rows notAttempted) can be CONTINUED: the rows still pending get a new
+//      review and a new digest, and a row the revert already wrote — or whose outcome is unknown — is never sent again.
+//   6. One writer at a time. Every write takes a lease on the environment and table; a repair bound to an app
+//      (`appUniqueName`) also takes THE SAME build lease a build of that app takes — the app's lock in the build's
+//      workspace (lib/app-operation-lease.js applyWorkspaceOf: `<appDir>/.maker-workspace`, or the `workspaceDir` the
+//      build was given). The lease scope of an operation's first write is recorded, and every later write of it
+//      (resume, revert) must name the same app and workspace: a revert that left out `--app` would otherwise write
+//      while a build of the app is running.
+//   7. Each result carries the attempt's own `summary` AND the whole operation's `operation` — every row's outcome
+//      folded across its runs, so an `unknown` row from an earlier run is never hidden by a later clean one. Its
+//      `status` is one word (OPERATION_SUCCESS lists the ones that mean every planned change was made); the CLI exits
+//      non-zero on any other.
 const fs = require('node:fs');
 const path = require('node:path');
 const { createPrivateFile } = require('./private-folder.js');
-const { withAppBuildLease } = require('./app-operation-lease.js');
+const { withAppBuildLease, applyWorkspaceOf } = require('./app-operation-lease.js');
 const { acquireLease, releaseLease } = require('./apply-snapshot-store.js');
 const { sha256 } = require('./hash.js');
 const { GUID_RE, readOnlyHttpClient, isNonEmptyString } = require('./readonly-operations.js');
@@ -36,12 +46,18 @@ const APPROVAL_FILE = 'approval.json';
 const JOURNAL_RE = /^journal-(\d{3})-(apply|resume|revert)-(send|result)\.json$/;
 const RESULT_RE = /^result-(\d{3})-(apply|resume|revert)\.json$/;
 const ROW_STATUSES = ['applied', 'conflict', 'gone', 'failed', 'unknown', 'notAttempted'];
+// The operation statuses that mean every planned change was made (or there was none to make). Anything else —
+// unknown, failed, conflicted, partial, unverified — is a repair (or revert) that did not do what was approved.
+const OPERATION_SUCCESS = Object.freeze(['repaired', 'reverted', 'nothingToWrite', 'nothingToRevert']);
 
 class DataFixRunnerError extends Error {
   constructor(code, message, details) {
     super(message);
     this.name = 'DataFixRunnerError';
     this.code = code;
+    // Every message here is this module's own words (codes, counts, the maker's own folder) — never a service's text
+    // or a row value — so it may be printed (lib/readonly-operations.js findingOf).
+    this.publicMessage = message;
     if (details !== undefined) this.details = details;
   }
 }
@@ -245,7 +261,8 @@ function resultSummary(result) {
   };
 }
 
-// Sends one plan through the SDK with a journal entry on each side of it.
+// Sends one plan through the SDK with a journal entry on each side of it. The send entry carries the binding the caller
+// gives — the lease scope included (see withOperationLease) — so every later write of the operation can be held to it.
 async function sendJournaled({ dir, journal, phase, sdk, plan, options, binding }) {
   const seq = journal.next;
   writePrivateJson(dir, `journal-${pad(seq)}-${phase}-send.json`, { seq, phase, ...binding, planId: plan.planId, rows: plan.rows.length, at: new Date().toISOString() });
@@ -262,18 +279,99 @@ async function sendJournaled({ dir, journal, phase, sdk, plan, options, binding 
   return { result, resultFile };
 }
 
-// One writer per plan's table: the app's build lease when the repair is bound to an app, else a lease on the
-// environment and table. Both are released however the operation ends.
-async function withOperationLease({ appDir, appUniqueName, origin, table }, operation) {
-  if (isNonEmptyString(appUniqueName)) return withAppBuildLease({ workspaceDir: appDir, appUniqueName }, () => operation());
+// The lease scope of a write: the app whose build lease it holds (lower-cased: lib/app-operation-lease.js compares app
+// names without regard to case) and that lease's workspace folder — or neither, for a repair bound to no app. The
+// folder is compared as its resolved path, case-folded on Windows, where two spellings name one folder.
+function leaseScopeOf({ appDir, appUniqueName, workspaceDir }) {
+  if (!isNonEmptyString(appUniqueName)) return { app: null, workspace: null };
+  const folder = path.resolve(applyWorkspaceOf({ appDir, workspaceDir }));
+  return { app: appUniqueName.toLowerCase(), workspace: process.platform === 'win32' ? folder.toLowerCase() : folder };
+}
+
+// Every write of an operation is made under the lease scope of its first write: a resume or revert that named no app
+// (or another workspace) would take a different lock, and could write while a build of the app is applying.
+function checkLeaseScope(dir, journal, scope) {
+  const first = journal.entries.find((e) => e.event === 'send');
+  if (!first) return;
+  const recorded = readJson(path.join(dir, first.name), 'DATA_FIX_JOURNAL_UNREADABLE').leaseScope || { app: null, workspace: null };
+  if (recorded.app !== scope.app || recorded.workspace !== scope.workspace) {
+    throw new DataFixRunnerError('DATA_FIX_LEASE_MISMATCH', recorded.app
+      ? 'This plan was first written under an app\'s build lease; every later write of it needs the same --app and --workspace as that first write. Nothing was sent.'
+      : 'This plan was first written without --app; every later write of it must leave out --app and --workspace too. Nothing was sent.');
+  }
+}
+
+// One writer per plan's table, and — for a repair bound to an app — no write while a build of that app is applying.
+// The environment-and-table lease is always taken; when an app is named, the app's build lease (the very lock a build
+// takes, in the build's workspace) is taken inside it. A held build lock is DATA_FIX_BUSY with a fixed message: the
+// lease's own refusal quotes the lock's path. Both are released however the operation ends.
+async function withOperationLease({ appDir, appUniqueName, workspaceDir, origin, table }, operation) {
   const root = operationsRoot(appDir);
   const lease = acquireLease(root, { file: `data-fix.${sha256(`${origin}|${table}`).slice(0, 16)}.lock` });
   if (!lease.ok) throw new DataFixRunnerError('DATA_FIX_BUSY', `Another data fix of ${table} in this environment is running (${lease.reason}).`);
   try {
-    return await operation();
+    if (!isNonEmptyString(appUniqueName)) return await operation();
+    let entered = false;
+    try {
+      return await withAppBuildLease({ workspaceDir: applyWorkspaceOf({ appDir, workspaceDir }), appUniqueName }, () => {
+        entered = true;
+        return operation();
+      });
+    } catch (err) {
+      // Only a refusal to TAKE the lease is mapped; an error the operation itself threw passes through unchanged.
+      if (!entered && err && err.code === 'build-locked') {
+        throw new DataFixRunnerError('DATA_FIX_BUSY', 'A build of this app (or another data fix bound to it) holds its build lease; nothing was written. Run the repair again after it finishes.');
+      }
+      throw err;
+    }
   } finally {
     releaseLease(lease);
   }
+}
+
+// The status of what an operation has done so far, from its rows' folded outcomes. The worst row decides: an unknown
+// row (it may or may not have been written) outranks a failed one, that a conflict or a deleted row (another maker's
+// change kept), that a row not yet attempted, and that a written row whose read-back did not show the planned value
+// (the SDK's verification "notAsPlanned", or "unverified" when the read-back itself failed).
+function operationStatus(kind, counts, verification) {
+  if (counts.unknown) return 'unknown';
+  if (counts.failed) return 'failed';
+  if (counts.conflict || counts.gone) return 'conflicted';
+  if (counts.notAttempted) return 'partial';
+  if (verification.notAsPlanned || verification.unverified) return 'unverified';
+  return kind === 'revert' ? 'reverted' : 'repaired';
+}
+
+// Folds per-row outcomes across an operation's results, in order. Every planned row starts notAttempted; a result's
+// outcome replaces only a row still notAttempted, so a later run never overwrites an earlier unknown, conflict or
+// failure (the SDK's remaining plans hold only notAttempted rows, so a well-formed journal never asks it to).
+function foldRows(planRows, results) {
+  const rows = new Map(planRows.map((r) => [String(r.id).toLowerCase(), { status: 'notAttempted' }]));
+  for (const result of results) {
+    for (const o of result.outcomes || []) {
+      const id = String(o.id).toLowerCase();
+      const prior = rows.get(id);
+      if (!prior || prior.status === 'notAttempted') rows.set(id, { status: o.status, verification: o.verification });
+    }
+  }
+  return rows;
+}
+
+const zeroCounts = () => Object.fromEntries(ROW_STATUSES.map((s) => [s, 0]));
+const zeroVerification = () => ({ asPlanned: 0, notAsPlanned: 0, unverified: 0 });
+
+function operationOf(kind, rows) {
+  const counts = zeroCounts();
+  const verification = zeroVerification();
+  for (const row of rows.values()) {
+    counts[row.status] = (counts[row.status] || 0) + 1;
+    if (row.status === 'applied' && Object.prototype.hasOwnProperty.call(verification, row.verification)) verification[row.verification] += 1;
+  }
+  return { status: operationStatus(kind, counts, verification), counts, verification, rows: rows.size };
+}
+
+function forwardResults(dir, journal) {
+  return journal.results.filter((r) => r.phase !== 'revert').map((r) => readJson(path.join(dir, r.name), 'DATA_FIX_RESULT_UNREADABLE'));
 }
 
 async function bindAndCheck({ origin, httpClient, dir, approve }) {
@@ -287,23 +385,30 @@ async function bindAndCheck({ origin, httpClient, dir, approve }) {
 
 /**
  * Applies an approved plan once. `approve` is the plan digest; the approval is recorded first when it is not already.
- * @returns {Promise<{planId, phase:'apply', summary, resultFile}>}
+ * `appUniqueName` binds the repair to that app's build lease, in `workspaceDir` when the build was given one (else the
+ * app folder's `.maker-workspace`, as the build's own default).
+ * @returns {Promise<{planId, phase:'apply', summary, operation, resultFile}>}
  */
-async function applyApprovedPlan({ origin, httpClient, makeSdk, appDir, appUniqueName, planId, approve, options }) {
+async function applyApprovedPlan({ origin, httpClient, makeSdk, appDir, appUniqueName, workspaceDir, planId, approve, options }) {
   const dir = operationDir(appDir, planId);
   await approvePlan({ origin, httpClient, appDir, planId, digest: approve });
   const { record, binding } = await bindAndCheck({ origin, httpClient, dir, approve });
-  if (!record.plan.rows.length) return { planId: record.plan.planId, phase: 'apply', summary: { complete: true, counts: Object.fromEntries(ROW_STATUSES.map((s) => [s, 0])), nothingToWrite: true } };
-  return withOperationLease({ appDir, appUniqueName, origin, table: record.plan.table.logicalName }, async () => {
+  if (!record.plan.rows.length) {
+    return { planId: record.plan.planId, phase: 'apply', summary: { complete: true, counts: zeroCounts(), nothingToWrite: true }, operation: { status: 'nothingToWrite', counts: zeroCounts(), verification: zeroVerification(), rows: 0 } };
+  }
+  const leaseScope = leaseScopeOf({ appDir, appUniqueName, workspaceDir });
+  return withOperationLease({ appDir, appUniqueName, workspaceDir, origin, table: record.plan.table.logicalName }, async () => {
     const journal = journalOf(dir);
     refuseUnknownOutcome(journal);
+    checkLeaseScope(dir, journal, leaseScope);
     // Every send has its result here (refuseUnknownOutcome); only a result the SDK refused before writing lets the
     // plan be applied again.
     if (journal.entries.some((e) => e.phase === 'apply' && e.event === 'result' && !isRefusal(dir, e))) {
       throw new DataFixRunnerError('DATA_FIX_ALREADY_APPLIED', 'This plan was already applied; use `resume` for its remaining rows or `revert`.');
     }
-    const { result, resultFile } = await sendJournaled({ dir, journal, phase: 'apply', sdk: makeSdk(httpClient), plan: record.plan, options, binding });
-    return { planId: record.plan.planId, phase: 'apply', summary: resultSummary(result), resultFile };
+    const { result, resultFile } = await sendJournaled({ dir, journal, phase: 'apply', sdk: makeSdk(httpClient), plan: record.plan, options, binding: { ...binding, leaseScope } });
+    const operation = operationOf('apply', foldRows(record.plan.rows, forwardResults(dir, journalOf(dir))));
+    return { planId: record.plan.planId, phase: 'apply', summary: resultSummary(result), operation, resultFile };
   });
 }
 
@@ -311,82 +416,131 @@ function isRefusal(dir, entry) {
   try { return !!JSON.parse(fs.readFileSync(path.join(dir, entry.name), 'utf8')).refusedBeforeWrite; } catch { return false; }
 }
 
-function lastWriteResult(dir, journal) {
-  const writes = journal.results.filter((r) => r.phase !== 'revert');
-  if (!writes.length) return null;
-  return readJson(path.join(dir, writes[writes.length - 1].name), 'DATA_FIX_RESULT_UNREADABLE');
-}
-
 /**
  * Continues an applied plan with the last result's `remaining` — its notAttempted rows only (the same tokens the plan
  * read, so a row another writer changed meanwhile is a conflict, never overwritten). An `unknown` row is never sent
- * again. Needs the plan digest again.
+ * again, and it stays in the operation's outcome: a clean resume after it is still not a repaired operation. Refused
+ * once a revert of the plan was sent (DATA_FIX_REVERTED). Needs the plan digest again.
  */
-async function resumeRemaining({ origin, httpClient, makeSdk, appDir, appUniqueName, planId, approve, options }) {
+async function resumeRemaining({ origin, httpClient, makeSdk, appDir, appUniqueName, workspaceDir, planId, approve, options }) {
   const dir = operationDir(appDir, planId);
   const { record, binding } = await bindAndCheck({ origin, httpClient, dir, approve });
-  return withOperationLease({ appDir, appUniqueName, origin, table: record.plan.table.logicalName }, async () => {
+  const leaseScope = leaseScopeOf({ appDir, appUniqueName, workspaceDir });
+  return withOperationLease({ appDir, appUniqueName, workspaceDir, origin, table: record.plan.table.logicalName }, async () => {
     const journal = journalOf(dir);
     refuseUnknownOutcome(journal);
-    const last = lastWriteResult(dir, journal);
-    if (!last) throw new DataFixRunnerError('DATA_FIX_NOT_APPLIED', 'This plan has not been applied; apply it first.');
-    if (!last.remaining || !last.remaining.rows.length) return { planId: record.plan.planId, phase: 'resume', summary: { nothingRemaining: true, ...resultSummary(last) } };
+    checkLeaseScope(dir, journal, leaseScope);
+    // A revert put rows back to their values before the fix; resuming the fix now would write over that restore.
+    if (journal.entries.some((e) => e.phase === 'revert' && e.event === 'send')) {
+      throw new DataFixRunnerError('DATA_FIX_REVERTED', 'A revert of this plan was sent, so it cannot be resumed. Plan again to repair the rows as they are now.');
+    }
+    const results = forwardResults(dir, journal);
+    if (!results.length) throw new DataFixRunnerError('DATA_FIX_NOT_APPLIED', 'This plan has not been applied; apply it first.');
+    const last = results[results.length - 1];
+    if (!last.remaining || !last.remaining.rows.length) {
+      const operation = operationOf('apply', foldRows(record.plan.rows, results));
+      return { planId: record.plan.planId, phase: 'resume', nothingRemaining: true, summary: { nothingRemaining: true, ...resultSummary(last) }, operation };
+    }
     // `remaining` is the SDK's; this only refuses to trust it past its contract — every row in it must have been
     // notAttempted in that result.
     const notAttempted = new Set(last.outcomes.filter((o) => o.status === 'notAttempted').map((o) => o.id.toLowerCase()));
     if (!last.remaining.rows.every((row) => notAttempted.has(row.id.toLowerCase()))) {
       throw new DataFixRunnerError('DATA_FIX_REMAINING_INVALID', 'The recorded remaining rows include a row that was attempted; nothing was sent. Plan again.');
     }
-    const { result, resultFile } = await sendJournaled({ dir, journal, phase: 'resume', sdk: makeSdk(httpClient), plan: last.remaining, options, binding });
-    return { planId: record.plan.planId, phase: 'resume', summary: resultSummary(result), resultFile };
+    const { result, resultFile } = await sendJournaled({ dir, journal, phase: 'resume', sdk: makeSdk(httpClient), plan: last.remaining, options, binding: { ...binding, leaseScope } });
+    const operation = operationOf('apply', foldRows(record.plan.rows, forwardResults(dir, journalOf(dir))));
+    return { planId: record.plan.planId, phase: 'resume', summary: resultSummary(result), operation, resultFile };
   });
 }
 
-function revertPlansOf(dir, journal) {
-  return journal.results.filter((r) => r.phase !== 'revert')
-    .map((r) => readJson(path.join(dir, r.name), 'DATA_FIX_RESULT_UNREADABLE').revert).filter((p) => p && p.rows.length);
+// Where a revert stands, from its journal. The forward results' revert plans start pending. Each revert send entry
+// names the plan it sent; a result for it (not a refusal) settles that plan — its rows' outcomes are folded in — and
+// the result's own `remaining` (the rows the SDK stopped before: a 403, a throttle limit) becomes pending in its place.
+// A refusal before the first write settles nothing, so its plan stays pending. An unknown row is never pending again:
+// only `remaining`, which holds notAttempted rows alone, is.
+function revertState(dir, journal, plans) {
+  const pending = new Map(plans.map((p) => [String(p.planId).toLowerCase(), p]));
+  const results = [];
+  let sent = false;
+  let lastSeq = 0;
+  let current = null;
+  for (const entry of journal.entries.filter((e) => e.phase === 'revert')) {
+    const body = readJson(path.join(dir, entry.name), 'DATA_FIX_JOURNAL_UNREADABLE');
+    lastSeq = entry.seq;
+    if (entry.event === 'send') {
+      sent = true;
+      current = String(body.planId).toLowerCase();
+      continue;
+    }
+    if (body.refusedBeforeWrite) continue;
+    const result = readJson(path.join(dir, body.result), 'DATA_FIX_RESULT_UNREADABLE');
+    pending.delete(current);
+    results.push(result);
+    if (result.remaining && result.remaining.rows.length) {
+      const notAttempted = new Set((result.outcomes || []).filter((o) => o.status === 'notAttempted').map((o) => String(o.id).toLowerCase()));
+      if (!result.remaining.rows.every((row) => notAttempted.has(String(row.id).toLowerCase()))) {
+        throw new DataFixRunnerError('DATA_FIX_REMAINING_INVALID', 'A recorded revert result\'s remaining rows include a row that was attempted; nothing was sent.');
+      }
+      pending.set(String(result.remaining.planId).toLowerCase(), result.remaining);
+    }
+  }
+  const operation = operationOf('revert', foldRows(plans.flatMap((p) => p.rows), results));
+  return { pending: [...pending.values()], sent, lastSeq, operation };
 }
 
 /**
  * Reverts what this plan's applies wrote, from their own revert plans. Without `approve` it records a private review
  * and returns the revert digest; with `approve` equal to that digest it sends the revert plans, each row conditional
- * on the token our write produced (a row changed since is a conflict, never overwritten).
+ * on the token our write produced (a row changed since is a conflict, never overwritten). A revert the SDK stopped
+ * before every row was attempted is continued the same way — review (a new digest, covering only the rows still
+ * pending), then approve.
  */
-async function revertApplied({ origin, httpClient, makeSdk, appDir, appUniqueName, planId, approve, options }) {
+async function revertApplied({ origin, httpClient, makeSdk, appDir, appUniqueName, workspaceDir, planId, approve, options }) {
   const dir = operationDir(appDir, planId);
   const record = loadPlan(dir);
   const identity = await readIdentity(httpClient, origin);
   const field = sameIdentity(identity, record);
   if (field) throw new DataFixRunnerError('DATA_FIX_APPROVAL_MISMATCH', `This plan was applied in another ${field === 'actor' ? 'user\'s session' : 'environment'}.`, { field });
-  return withOperationLease({ appDir, appUniqueName, origin, table: record.plan.table.logicalName }, async () => {
+  const leaseScope = leaseScopeOf({ appDir, appUniqueName, workspaceDir });
+  return withOperationLease({ appDir, appUniqueName, workspaceDir, origin, table: record.plan.table.logicalName }, async () => {
     const journal = journalOf(dir);
     refuseUnknownOutcome(journal);
-    if (journal.entries.some((e) => e.phase === 'revert' && e.event === 'send')) throw new DataFixRunnerError('DATA_FIX_ALREADY_REVERTED', 'A revert of this plan was already sent.');
-    const plans = revertPlansOf(dir, journal);
-    if (!plans.length) return { planId: record.plan.planId, phase: 'revert', summary: { nothingToRevert: true } };
-    const revertDigest = digestOf({ ...identity, planDigest: record.planDigest, revert: plans });
-    const rows = plans.reduce((n, p) => n + p.rows.length, 0);
+    checkLeaseScope(dir, journal, leaseScope);
+    const plans = forwardResults(dir, journal).map((r) => r.revert).filter((p) => p && p.rows.length);
+    if (!plans.length) return { planId: record.plan.planId, phase: 'revert', summary: { nothingToRevert: true }, operation: { status: 'nothingToRevert', counts: zeroCounts(), verification: zeroVerification(), rows: 0 } };
+    const state = revertState(dir, journal, plans);
+    if (state.sent && !state.pending.length) {
+      throw new DataFixRunnerError('DATA_FIX_ALREADY_REVERTED', 'A revert of this plan was already sent and none of its rows is left to send.', { operation: state.operation });
+    }
+    // The first revert's digest covers the forward revert plans (as before); a continuation's covers only the plans
+    // still pending and the journal position it continues from, so approving an earlier revert never authorizes it.
+    const toSend = state.sent ? state.pending : plans;
+    const revertDigest = digestOf({ ...identity, planDigest: record.planDigest, revert: toSend, ...(state.sent ? { continues: state.lastSeq } : {}) });
+    const rows = toSend.reduce((n, p) => n + p.rows.length, 0);
     if (approve === undefined) {
       const name = `revert-review-${revertDigest.slice(0, 12)}.txt`;
-      const review = fs.existsSync(path.join(dir, name)) ? path.join(dir, name) : createPrivateFile(dir, name, plans.map((p) => reviewText(p, `Revert of data fix ${record.plan.planId}`)).join('\n'));
-      return { planId: record.plan.planId, phase: 'revert', approvalNeeded: true, revertDigest, rows, review };
+      const title = state.sent ? `Continuation of the revert of data fix ${record.plan.planId}` : `Revert of data fix ${record.plan.planId}`;
+      const review = fs.existsSync(path.join(dir, name)) ? path.join(dir, name) : createPrivateFile(dir, name, toSend.map((p) => reviewText(p, title)).join('\n'));
+      return { planId: record.plan.planId, phase: 'revert', approvalNeeded: true, continuation: state.sent, revertDigest, rows, review, operation: state.operation };
     }
     if (approve !== revertDigest) throw new DataFixRunnerError('DATA_FIX_APPROVAL_MISMATCH', 'The approved digest is not this revert\'s digest; run revert without --approve to review it.', { field: 'digest' });
-    const binding = { planDigest: record.planDigest, revertDigest, ...identity };
+    const binding = { planDigest: record.planDigest, revertDigest, ...identity, leaseScope };
     const summaries = [];
-    for (const plan of plans) {
+    for (const plan of toSend) {
       // eslint-disable-next-line no-await-in-loop
       const { result } = await sendJournaled({ dir, journal: journalOf(dir), phase: 'revert', sdk: makeSdk(httpClient), plan, options, binding });
       summaries.push(resultSummary(result));
     }
     const counts = Object.fromEntries(ROW_STATUSES.map((s) => [s, summaries.reduce((n, x) => n + x.counts[s], 0)]));
-    return { planId: record.plan.planId, phase: 'revert', summary: { complete: summaries.every((x) => x.complete), counts, parts: summaries } };
+    const { operation } = revertState(dir, journalOf(dir), plans);
+    return { planId: record.plan.planId, phase: 'revert', summary: { complete: summaries.every((x) => x.complete), counts, parts: summaries }, operation };
   });
 }
 
 module.exports = {
   MAX_ROWS,
   OPERATIONS_DIR,
+  OPERATION_SUCCESS,
   DataFixRunnerError,
   canonical,
   checkRequest,
