@@ -722,6 +722,150 @@ test('seed only: a secured column seeds as before; a spec that secures no column
   assert.deepStrictEqual(reads.filter((u) => /IsSecured/.test(u)), []);
 });
 
+// Field security profiles through the build: created through the create port in the data-model phase, after the columns are secured and
+// before any sample row; given to the users and teams the spec names in the security phase, only once the profile is proven as declared.
+const FSP_ID = '11111111-1111-4111-8111-111111111111';
+const FSP_USER = '33333333-3333-4333-8333-333333333333';
+const FSP_TEAM = '44444444-4444-4444-8444-444444444444';
+function fieldSecuritySpec(assignTo = { users: [FSP_USER], teams: [FSP_TEAM] }) {
+  const base = makeSpec();
+  return makeSpec({
+    entities: [{ ...base.entities[0], columns: [...base.entities[0].columns, { schemaName: 'new_secret', displayName: 'Secret', type: 'Text', isSecured: true }] }, base.entities[1]],
+    sampleData: { ...base.sampleData, new_customer: [{ new_name: 'Acme', new_tier: 'Pro', new_secret: 'x' }] },
+    fieldSecurityProfiles: [{ key: 'hr', name: 'HR', permissions: [{ table: 'new_customer', column: 'new_secret', read: true }], ...(assignTo ? { assignTo } : {}) }],
+  });
+}
+// `found`: the profile exists (the name finds FSP_ID); `held` lists the permissions the server holds for it (default: as declared);
+// `pushed`: the SDK push's answer; `head`: the status of the profile read.
+function fieldSecurityRun({ found = false, held, pushed = { saved: true }, head = 200, port = true } = {}) {
+  const { sdk, calls } = mockSdk();
+  const find = sdk.findArtifact;
+  const create = sdk.createArtifact;
+  const push = sdk.pushArtifact;
+  sdk.findArtifact = async (kind, q) => (kind === 'fieldSecurityProfile' ? (calls.push({ name: 'findProfile', args: [q] }), found ? FSP_ID : null) : find(kind, q));
+  sdk.createArtifact = (kind, a) => (kind === 'fieldSecurityProfile' ? (calls.push({ name: 'createProfile', args: [a] }), a) : create(kind, a));
+  sdk.pushArtifact = async (kind, id, ...rest) => (kind === 'fieldSecurityProfile' ? (calls.push({ name: 'pushProfile', args: [id] }), pushed) : push(kind, id, ...rest));
+  const rows = held || [{ fieldpermissionid: '22222220-2222-4222-8222-222222222222', entityname: 'new_customer', attributelogicalname: 'new_secret', canread: 4, cancreate: 0, canupdate: 0, canreadunmasked: 0 }];
+  sdk.dataverse = {
+    get: async (url) => {
+      calls.push({ name: 'dataverse.get', args: [url] });
+      if (url.startsWith(`/fieldsecurityprofiles(${FSP_ID})?`)) return { status: head, body: head === 200 ? { name: 'HR', description: null } : {} };
+      if (url.startsWith('/fieldpermissions?')) return { status: 200, body: { value: rows } };
+      if (/\/(systemuserprofiles_association|teamprofiles_association)\?/.test(url)) return { status: 200, body: { value: [] } };
+      return { status: 404, body: {} };
+    },
+  };
+  const creates = {
+    runs: [],
+    run: async (desc, fn) => {
+      creates.runs.push(desc);
+      const childIds = Object.fromEntries(desc.childKeys.map((k, i) => [k, `2222222${i}-2222-4222-8222-222222222222`]));
+      await fn({ id: FSP_ID, childIds });
+      return { outcome: 'created', id: FSP_ID, childIds };
+    },
+  };
+  const events = [];
+  const go = (spec, opts) => runSdkBuild(spec, { sdk, apply: true, ...(port ? { creates } : {}), emit: (e) => events.push(e), ...opts });
+  return { sdk, calls, creates, events, go };
+}
+const DATA_STAGE = ['solution', 'data-model', 'sample-data'];
+
+test('field security: the plan names who each profile is given to, says when no one is named, and adds nothing for a spec without one', () => {
+  const labels = planFor(fieldSecuritySpec(), {}).map((i) => `${i.phase}: ${i.label}`);
+  assert.ok(labels.includes(`data-model: field security profile "HR" (1 permission; to be given to user ${FSP_USER}, team ${FSP_TEAM})`), labels.join('\n'));
+  assert.ok(labels.includes(`security: give field security profile "HR" to user ${FSP_USER}, team ${FSP_TEAM}`));
+  const seeded = planFor(fieldSecuritySpec(), { sampleData: true }).map((i) => `${i.phase}: ${i.label}`);
+  const firstSeed = seeded.findIndex((l) => /^sample-data:/.test(l));
+  assert.ok(firstSeed > 0 && seeded.indexOf(`data-model: field security profile "HR" (1 permission; to be given to user ${FSP_USER}, team ${FSP_TEAM})`) < firstSeed, seeded.join('\n'));
+  const none = planFor(fieldSecuritySpec(null), {}).map((i) => i.label);
+  assert.ok(none.includes('field security profile "HR" (1 permission; no assignment requested)'));
+  assert.ok(!none.some((l) => /^give field security profile/.test(l)));
+  // A data-only run plans the assignment as deferred work, not as security it will do.
+  const data = planFor(fieldSecuritySpec(), { phases: DATA_STAGE, sampleData: true }).map((i) => `${i.phase}: ${i.label}`);
+  assert.ok(data.includes(`data-model: give field security profile "HR" to user ${FSP_USER}, team ${FSP_TEAM} (deferred: this run does not include the security phase)`), data.join('\n'));
+  assert.ok(!data.some((l) => /^security:/.test(l)));
+  // A table that declares a flag has exactly one step, run or skipped.
+  const flagged = makeSpec();
+  flagged.entities[1] = { ...flagged.entities[1], duplicateDetectionEnabled: true };
+  assert.deepStrictEqual(planFor(flagged, {}).filter((i) => /^table flags /.test(i.label)).map((i) => i.label), ['table flags new_ticket']);
+  // An existing spec plans exactly what it did.
+  assert.deepStrictEqual(planFor(makeSpec(), {}).filter((i) => /field security|table flags/.test(i.label)), []);
+});
+
+test('field security: a full build creates the profile through the create port before any sample row, adds it to the solution, then gives it to the named users and teams', async () => {
+  const run = fieldSecurityRun();
+  const r = await run.go(fieldSecuritySpec(), { sampleData: true });
+  assert.strictEqual(r.ok, true, JSON.stringify(r));
+  assert.deepStrictEqual(run.creates.runs, [{ kind: 'fieldSecurityProfile', key: 'hr', identity: { name: 'HR' }, childKeys: ['new_customer.new_secret'] }]);
+  const names = run.calls.map((c) => c.name);
+  assert.ok(names.indexOf('createProfile') >= 0 && names.indexOf('createProfile') < names.indexOf('seedRecordGraph'), 'the profile exists before the first sample row');
+  assert.deepStrictEqual(find(run.calls, 'addSolutionComponent').filter((c) => c.args[0].componentType === 70).map((c) => c.args[0]), [{ componentId: FSP_ID, componentType: 70, solutionUniqueName: 'ContosoSD' }]);
+  assert.deepStrictEqual(find(run.calls, 'associateRecords').map((c) => [c.args[0], c.args[1], c.args[2].targetEntity, c.args[2].targetId]), [
+    ['fieldsecurityprofile', FSP_ID, 'systemuser', FSP_USER], ['fieldsecurityprofile', FSP_ID, 'team', FSP_TEAM],
+  ]);
+  assert.deepStrictEqual(r.created.fieldSecurityProfiles, { hr: { id: FSP_ID, origin: 'created' } });
+  assert.ok(run.events.some((e) => e.status === 'ok' && e.label === `give field security profile "HR" to user ${FSP_USER}, team ${FSP_TEAM}`));
+  const total = run.events[0].total;
+  assert.ok(run.events.every((e) => e.n <= total), 'the field security steps are in the plan the progress counts');
+});
+
+test('field security: a data-only run creates the profile and reports its assignment deferred, not done', async () => {
+  const run = fieldSecurityRun();
+  const r = await run.go(fieldSecuritySpec(), { phases: DATA_STAGE });
+  assert.strictEqual(r.ok, true, JSON.stringify(r));
+  assert.strictEqual(run.creates.runs.length, 1);
+  assert.deepStrictEqual(find(run.calls, 'associateRecords'), []);
+  assert.deepStrictEqual(r.skipped.fieldSecurityAssignments, [{ profile: 'hr', principals: [`user ${FSP_USER}`, `team ${FSP_TEAM}`], deferredTo: 'security' }]);
+  assert.ok(run.events.some((e) => e.status === 'skip' && /\(deferred: this run does not include the security phase\)$/.test(e.label)));
+});
+
+test('field security: a security-only run gives a profile the environment holds as declared, and refuses one it does not', async () => {
+  const held = fieldSecurityRun({ found: true });
+  const r = await held.go(fieldSecuritySpec(), { phases: ['security'] });
+  assert.strictEqual(r.ok, true, JSON.stringify(r));
+  assert.deepStrictEqual(held.creates.runs, [], 'nothing is created in the security phase');
+  assert.strictEqual(find(held.calls, 'associateRecords').length, 2);
+  const missing = fieldSecurityRun({ found: false });
+  await assert.rejects(missing.go(fieldSecuritySpec(), { phases: ['security'] }), (e) => e.code === 'FIELD_SECURITY_PROFILE_UNRESOLVED' && e.phase === 'security' && /run the data-model phase first/.test(e.message));
+  assert.deepStrictEqual(find(missing.calls, 'associateRecords'), []);
+  const differs = fieldSecurityRun({ found: true, held: [{ fieldpermissionid: '22222220-2222-4222-8222-222222222222', entityname: 'new_customer', attributelogicalname: 'new_secret', canread: 4, cancreate: 0, canupdate: 4, canreadunmasked: 0 }] });
+  await assert.rejects(differs.go(fieldSecuritySpec(), { phases: ['security'] }), (e) => e.code === 'FIELD_SECURITY_PROFILE_DIFFERS');
+  assert.deepStrictEqual(find(differs.calls, 'associateRecords'), []);
+});
+
+test('field security: a created profile whose content is not proven stops the build before any sample row and is given to no one', async () => {
+  const run = fieldSecurityRun({ pushed: { saved: true, warnings: ['the answer did not echo every permission'] }, head: 503 });
+  await assert.rejects(run.go(fieldSecuritySpec(), { sampleData: true }), (e) => e.code === 'FIELD_SECURITY_PROFILE_UNREAD' && e.phase === 'data-model');
+  assert.deepStrictEqual(find(run.calls, 'seedRecordGraph'), []);
+  assert.deepStrictEqual(find(run.calls, 'associateRecords'), []);
+  // A build with no create port creates nothing.
+  const noPort = fieldSecurityRun({ port: false });
+  await assert.rejects(noPort.go(fieldSecuritySpec(), { phases: DATA_STAGE }), (e) => e.code === 'FIELD_SECURITY_PROFILE_UNKNOWN');
+  assert.deepStrictEqual(find(noPort.calls, 'createProfile'), []);
+});
+
+test('field security: through the pass-through create port the profile carries the ids the port minted, and a lost create answer halts the build', async () => {
+  const { createPassthroughCreates } = require('../lib/creates-passthrough.js');
+  const MINTED = '55555555-5555-4555-8555-555555555555';
+  const ids = [MINTED, '66666666-6666-4666-8666-666666666666'];
+  const run = fieldSecurityRun({ port: false });
+  const r = await run.go(fieldSecuritySpec(), { sampleData: true, creates: createPassthroughCreates({ newId: () => ids.shift() }) });
+  assert.strictEqual(r.ok, true, JSON.stringify(r));
+  const [created] = find(run.calls, 'createProfile').map((c) => c.args[0]);
+  assert.deepStrictEqual([created.id, created.permissions.map((p) => p.id)], [MINTED, ['66666666-6666-4666-8666-666666666666']]);
+  assert.deepStrictEqual(r.created.fieldSecurityProfiles, { hr: { id: MINTED, origin: 'created' } });
+  assert.deepStrictEqual(find(run.calls, 'associateRecords').map((c) => c.args[1]), [MINTED, MINTED]);
+  // The port neither swallows nor re-sends: a create whose answer was lost reaches the build's halt once, before any sample row.
+  const lost = Object.assign(new Error('socket hang up'), { code: 'ECONNRESET' });
+  const failing = fieldSecurityRun({ port: false });
+  const push = failing.sdk.pushArtifact;
+  failing.sdk.pushArtifact = async (kind, ...rest) => (kind === 'fieldSecurityProfile' ? (failing.calls.push({ name: 'pushProfile', args: rest }), Promise.reject(lost)) : push(kind, ...rest));
+  await assert.rejects(failing.go(fieldSecuritySpec(), { sampleData: true, creates: createPassthroughCreates() }), (e) => e.phase === 'data-model');
+  assert.strictEqual(find(failing.calls, 'createProfile').length, 1);
+  assert.deepStrictEqual(find(failing.calls, 'seedRecordGraph'), []);
+  assert.deepStrictEqual(find(failing.calls, 'associateRecords'), []);
+});
+
 test('existing-table entity-set name comes from findTables (sample-data binding works)', async () => {
   const { sdk, calls } = mockSdk({ existingTables: { new_customer: { entitySetName: 'new_customerset', columns: ['new_name', 'new_tier'], relationships: [] } } });
   await runSdkBuild(makeSpec(), { sdk, apply: true, sampleData: true });

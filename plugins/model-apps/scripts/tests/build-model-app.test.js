@@ -1149,6 +1149,21 @@ test('--authorize: the consented keys reach the engine, and a build without them
   assert.strictEqual(runOpts[1].authorizedDestructive, undefined, '--allow-destructive is not consent to a schema change');
 });
 
+test('create port: the engine gets the pass-through create port, or the one the caller hands in', async () => {
+  const { sdk } = mockSdk();
+  const runOpts = [];
+  await buildModelApp(desk, { apply: true, env: 'https://x', retryDelayMs: 0 }, { sdk, provisionSdk: sdk, discoverOpDiffState: async () => quietState, runBuild: successfulRunBuild(runOpts) });
+  const port = runOpts[0].creates;
+  assert.strictEqual(typeof (port && port.run), 'function', 'a field security profile has a port to be created through');
+  const calls = [];
+  const answer = await port.run({ kind: 'fieldSecurityProfile', key: 'hr', identity: { name: 'HR' }, childKeys: ['new_ticket.new_salary'] }, async (ids) => { calls.push(ids); return 'sent'; });
+  assert.deepStrictEqual(calls, [{ id: answer.id, childIds: answer.childIds }], 'the create runs once, with the ids the port minted');
+  assert.deepStrictEqual([answer.outcome, answer.result, Object.keys(answer.childIds)], ['created', 'sent', ['new_ticket.new_salary']]);
+  const own = { run: async () => ({ outcome: 'unknown' }) };
+  await buildModelApp(desk, { apply: true, env: 'https://x', retryDelayMs: 0 }, { sdk, provisionSdk: sdk, discoverOpDiffState: async () => quietState, runBuild: successfulRunBuild(runOpts), creates: own });
+  assert.strictEqual(runOpts[1].creates, own);
+});
+
 test('destructive gate: prune:false form removal is not refused and reaches runBuild', async () => {
   const { sdk } = mockSdk();
   const def = Object.assign(formOf(['new_name']), { __explicitLayout: true, __prune: false, __primaryField: 'new_name' });

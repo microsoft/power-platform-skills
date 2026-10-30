@@ -152,7 +152,8 @@ const { isAppTextMap, appTextKind, localizedAppText } = require('./app-header-te
 // The build's retry policy (retry-policy.js): every halt below is raised with what a run again may do — RETRY.NEVER, or a policy decided from the failure it wraps — and every failure the engine
 // raises itself is made by refusal() (deterministic) or serviceFailure() (the plugin's words around a failure of the service), because the build's retry reads a failure's STRUCTURE and the
 // service's words, never a message that quotes what the maker named. tests/halt-retry-policy.test.js enumerates the halts in this file and holds each to a table.
-const { securedBeforeSeed } = require('./field-security.js');
+const { securedBeforeSeed, planFieldSecurity, applyFieldSecurity, assignFieldSecurity } = require('./field-security.js');
+const { declaredTableFlags } = require('./schema-feature-contract.js');
 const { RETRY, isTransientStatus, judgeFailure, retryPolicyFor, retryFrom, refusal, serviceFailure, withCause } = require('./retry-policy.js');
 const { HTTP_SEND_HISTORY } = require('./sdk-http-client.js');
 
@@ -771,6 +772,12 @@ function planFor(spec, opts) {
         if (keyWaitsForNameLength(e, k)) items.push({ phase: 'data-model', label: `alt key ${e.schemaName}.${k.schemaName}` });
       }
     }
+    // The table flags last (provisionDataModel's step 2d): exactly one step for a table that declares one — run, or skipped as already
+    // declared — so it is countable from the spec. Then each field security profile, after its columns are secured and before any sample
+    // data; the preview names who the profile will be given to, or says that no one is named.
+    for (const e of spec.entities) if (Object.keys(declaredTableFlags(e)).length) items.push({ phase: 'data-model', label: `table flags ${e.schemaName}` });
+    for (const p of spec.fieldSecurityProfiles || []) items.push({ phase: 'data-model', label: fieldSecurityProfileLabel(p) });
+    if (!has('security')) for (const p of profilesWithAssignments(spec)) items.push({ phase: 'data-model', label: deferredAssignmentsLabel(p) });
   }
   if (has('sample-data') && opts.sampleData) {
     if (!has('data-model') && seededSecuredTables(spec).size) items.push({ phase: 'sample-data', label: SEED_SECURITY_STEP });
@@ -859,8 +866,35 @@ function planFor(spec, opts) {
   if (has('security')) for (const f of spec.businessProcessFlows || []) {
     if (f && f.securityRoles) items.push({ phase: 'security', label: `flow roles for ${f.name} (backing table ${bpfUniqueName(f.name)})` });
   }
+  // Field security profiles are given to the users and teams the spec names last, once every role exists. Each line names them.
+  if (has('security')) for (const p of profilesWithAssignments(spec)) items.push({ phase: 'security', label: fieldSecurityAssignmentsLabel(p) });
   if (has('publish') && opts.publish) items.push({ phase: 'publish', label: 'publish customizations' });
   return items;
+}
+
+// What the plan, the dry run and the progress call the field security work, by the name the spec gives each profile. The design asks the
+// preview to name who will actually gain access to the secured columns, or to say that no one is named: a profile with no `assignTo`
+// is created and bound to no one (who already holds it is left as it is), so it says so rather than imply access. The ids are the spec's
+// own (users are systemuser ids, teams are team ids); a System Administrator reads every secured column whatever this says.
+function fieldSecurityPrincipals(p) {
+  const assignTo = (p && p.assignTo) || {};
+  return [...(assignTo.users || []).map((id) => `user ${String(id).toLowerCase()}`), ...(assignTo.teams || []).map((id) => `team ${String(id).toLowerCase()}`)];
+}
+function profilesWithAssignments(spec) {
+  return ((spec && spec.fieldSecurityProfiles) || []).filter((p) => fieldSecurityPrincipals(p).length);
+}
+function fieldSecurityProfileLabel(p) {
+  const n = (p.permissions || []).length;
+  const who = fieldSecurityPrincipals(p);
+  return `field security profile "${p.name}" (${n} permission${n === 1 ? '' : 's'}; ${who.length ? `to be given to ${who.join(', ')}` : 'no assignment requested'})`;
+}
+function fieldSecurityAssignmentsLabel(p) {
+  return `give field security profile "${p.name}" to ${fieldSecurityPrincipals(p).join(', ')}`;
+}
+// A run without the security phase (`--stage data`, `--phases data-model`) creates the profile and gives it to no one: the step says the
+// assignment is still to do, and the result lists it under `skipped.fieldSecurityAssignments`, so it never reads as finished security.
+function deferredAssignmentsLabel(p) {
+  return `${fieldSecurityAssignmentsLabel(p)} (deferred: this run does not include the security phase)`;
 }
 
 // --- phase builders (pure: spec -> SDK payloads) ---------------------------------------
@@ -3103,6 +3137,73 @@ async function refuseSeedIntoUnsecuredColumns({ runner, spec, provision }) {
   });
 }
 
+// Field security profiles (lib/field-security.js), one step per declared profile, in the data-model phase after its columns are secured
+// and before any sample row is written. Each step finds the profile by name and reads what the environment holds (planFieldSecurity),
+// then creates it through the create port (`creates`, lib/creates-passthrough.js: it mints the profile's id and its permissions' ids before
+// anything is sent) or finds it already as declared. A profile that exists and differs, one whose create did not confirm, or one whose
+// content is not proven after the create stops the build with its code: nothing is changed on a profile the build did not create as
+// declared, and no row is seeded while a declared profile is not as declared. Only a profile reported saved or unchanged gets an id in
+// `ids`, so an assignment never targets a profile whose permissions are not proven. Profiles need no publish.
+// The binding is recorded in `result.created.fieldSecurityProfiles[key] = { id, origin }` ('created' or 'adopted' — an exact match is
+// managed, never owned), and only a profile this run created is added to the app's solution (component type 70, Field Security Profile:
+// https://learn.microsoft.com/power-apps/developer/data-platform/reference/entities/solutioncomponent).
+const FIELD_SECURITY_PROFILE_COMPONENT = 70;
+async function provisionFieldSecurityProfiles({ runner, spec, provision, creates, result, ids, deferAssignments }) {
+  const profiles = spec.fieldSecurityProfiles || [];
+  if (!profiles.length) return;
+  result.created.fieldSecurityProfiles = result.created.fieldSecurityProfiles || {};
+  const ctx = { sdk: provision, provision, creates };
+  for (const p of profiles) {
+    await runner.run('data-model', fieldSecurityProfileLabel(p), async () => {
+      const plan = await planFieldSecurity({ fieldSecurityProfiles: [p] }, ctx);
+      if (plan.operations.length && !(creates && typeof creates.run === 'function')) {
+        throw refusal(`field security profile "${p.name}" was not created: this build has no create port to create it through`, { code: 'FIELD_SECURITY_PROFILE_UNKNOWN' });
+      }
+      const applied = await applyFieldSecurity(plan, ctx);
+      const key = `fieldSecurityProfile:${p.key}`;
+      const binding = applied.managedBindings.find((b) => b.key === p.key);
+      if (binding) result.created.fieldSecurityProfiles[p.key] = { id: binding.id, origin: binding.origin };
+      if (binding && binding.origin === 'created') {
+        await provision.addSolutionComponent({ componentId: binding.id, componentType: FIELD_SECURITY_PROFILE_COMPONENT, solutionUniqueName: spec.solution.uniqueName });
+      }
+      const bad = applied.refused[0] || applied.unknown[0];
+      if (bad) throw refusal(`field security profile "${p.name}": ${bad.reason}`, { code: bad.code });
+      if (binding && (applied.saved.includes(key) || applied.unchanged.includes(key))) ids.set(p.key, binding.id);
+      return applied.saved.length ? 'created' : 'already as declared';
+    });
+  }
+  for (const p of deferAssignments ? profilesWithAssignments(spec) : []) {
+    runner.skip('data-model', deferredAssignmentsLabel(p));
+    (result.skipped.fieldSecurityAssignments = result.skipped.fieldSecurityAssignments || []).push({ profile: p.key, principals: fieldSecurityPrincipals(p), deferredTo: 'security' });
+  }
+}
+
+// Give each profile to the users and teams the spec names (assignFieldSecurity: additive only, a holder the spec does not name is left as
+// it is), one step per profile that names any, at the end of the security phase. The profile's id comes from this run's data-model step
+// when it ran; a run without that phase (`--phases security`) finds the profile read-only by the same plan, and gives it only when the
+// environment already holds it as declared — a profile missing, different or unreadable is refused, never created or changed here.
+async function assignFieldSecurityProfiles({ runner, spec, provision, ids }) {
+  const ctx = { sdk: provision, provision };
+  for (const p of profilesWithAssignments(spec)) {
+    await runner.run('security', fieldSecurityAssignmentsLabel(p), async () => {
+      let id = ids.get(p.key);
+      if (!id) {
+        const plan = await planFieldSecurity({ fieldSecurityProfiles: [p] }, ctx);
+        const found = plan.unchanged[0];
+        if (!found) {
+          const why = plan.refused[0] || plan.unknown[0];
+          throw refusal(`field security profile "${p.name}" was not given to anyone: ${why ? why.reason : 'it does not exist yet — run the data-model phase first, which creates it'}`, { code: why ? why.code : 'FIELD_SECURITY_PROFILE_UNRESOLVED' });
+        }
+        id = found.id;
+      }
+      const r = await assignFieldSecurity({ fieldSecurityProfiles: [p] }, ctx, { profileIds: new Map([[p.key, id]]) });
+      const bad = r.refused[0] || r.unknown[0];
+      if (bad) throw refusal(`field security profile "${p.name}": ${bad.reason}`, { code: bad.code });
+      return `${r.saved.length} given, ${r.unchanged.length} already held`;
+    });
+  }
+}
+
 async function runSdkBuildPhases(spec, opts, owed) {
   const { sdk, apply = false, sampleData = false, publish = false } = opts;
   const emit = opts.emit || (() => undefined);
@@ -3447,6 +3548,10 @@ async function runSdkBuildPhases(spec, opts, owed) {
     dataModel = await provisionDataModel({ sdk, provision, runner, spec, apply, languageCode: opts.languageCode, warn: opts.warn, provisionedLanguages: opts.provisionedLanguages, preResolvedLanguageCode: opts.preResolvedLanguageCode, reconcileLookupLabels: true, owedLengths: owed.lengths, dateBehaviorPreflight: true, authorizedDestructive: opts.authorizedDestructive });
     Object.assign(result.created.entities, dataModel.entities);
   }
+  // The field security profiles, after the columns are secured and before any sample data (provisionFieldSecurityProfiles). A spec
+  // that declares none takes no step and sends nothing.
+  const fieldSecurityIds = new Map();
+  if (has('data-model')) await provisionFieldSecurityProfiles({ runner, spec, provision, creates: opts.creates, result, ids: fieldSecurityIds, deferAssignments: !has('security') });
 
   // entity-set resolver: fresh tables cached above; existing ones via fetchEntityMetadata.
   const entitySetFor = makeEntitySetResolver({ spec, entities: dataModel.entities, provision });
@@ -8294,6 +8399,7 @@ async function runSdkBuildPhases(spec, opts, owed) {
         return sr.everyone === true ? 'every role' : `${opts2.roleIds.length} role(s)`;
       });
     }
+    await assignFieldSecurityProfiles({ runner, spec, provision, ids: fieldSecurityIds });
   }
 
   // 8. Publish (opt-in). Publish ONE artifact per entity (covers that entity's customizations)

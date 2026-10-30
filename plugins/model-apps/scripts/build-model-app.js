@@ -49,6 +49,7 @@ const { readerFor, isolatedReaderFor } = require('./verify-model-app.js');
 const { makeGenpageSdk } = require('./lib/genpage-sdk.js');
 const { leftOnDiskWarning } = require('./lib/left-on-disk.js');
 const { makeTempWorkspace } = require('./lib/temp-workspace.js');
+const { createPassthroughCreates } = require('./lib/creates-passthrough.js');
 const { makeWritesBlocking } = require('./lib/output-redaction.js');
 // The lease one apply of an app holds for the whole of its work in the workspace (lib/app-operation-lease.js).
 const { withAppBuildLease, applyWorkspaceOf } = require('./lib/app-operation-lease.js');
@@ -666,6 +667,9 @@ async function buildModelAppHeld(spec, opts, deps, v, buildLease) {
   // Injectable apply seam: production defaults to runSdkBuild; tests inject a stub to drive verify
   // without a live SDK.
   const runBuild = deps.runBuild || runSdkBuild;
+  // The create port feature creates go through (a field security profile today). A plain pass-through: it gives no fence, so a
+  // whole-build retry after a lost answer to a create can create a second row of the same name, as for every other create.
+  const creates = deps.creates || createPassthroughCreates();
   // What failed attempts still owe for the views and forms they saved and deferred (sdk-build.js: the default-view
   // enrichment 4b, the reconcile of existing views and forms), by target. Every attempt re-runs every phase, but a
   // later one can halt before the step an earlier one owed from, so each debt is kept until a publish phase pays it
@@ -713,6 +717,7 @@ async function buildModelAppHeld(spec, opts, deps, v, buildLease) {
         allowDestructive: opts.allowDestructive, // pages phase gates destructive page removals
         // The `--authorize` keys: consent to exactly the destructive schema changes they name, and to nothing else (authorizationKeys).
         authorizedDestructive: opts.authorizedDestructive,
+        creates,
         changedOnly: opts.changedOnly, // #changed-only: pages-only fast-apply seams (resolvedAppId + skipSitemapFinalize)
         // AB#6726727: the spec last applied to, or downloaded from, this environment — lets the sitemap
         // rewrite keep a nav change made in the designer since then instead of reverting it.
