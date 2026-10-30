@@ -22,10 +22,21 @@
 //     a cell as `<attribute name="acct.name" />` on the BASE table — an attribute that does not
 //     exist — so a declared columns change on that view is refused.
 //
-// Identity: an optional `viewId` (environment-bound edit pin), else the exact name on the table
-// (the build's existing view identity). A view no binding owns is shown as an adoption and needs
-// approval before its first write; a bound view whose owned parts were changed elsewhere (drift)
-// is refused until the spec is refreshed or the overwrite is approved. A no-op sends nothing.
+// Identity: an existing managed binding is the authority — a bound view is edited by its bound id
+// and nothing else (a same-name replacement is never followed; a pin that names another view is a
+// conflict to repair). Unbound, an optional `viewId` (environment-bound edit pin), else the exact
+// name on the table (the SDK refuses an ambiguous name). A view no binding owns is shown as an
+// adoption and needs approval before its first write; a bound view whose owned parts were changed
+// elsewhere (drift) is refused until the spec is refreshed or the overwrite is approved. A no-op
+// sends nothing.
+//
+// The baseline a binding records is the FULL ownable projection (all columns, filters, sort, every
+// join, the description) — not only the parts the spec declares today — so starting or stopping to
+// declare a join or a description is an edit, never drift. Drift is judged on the parts this run
+// writes (reconcile-common partsDriftVerdict).
+//
+// A new declared view is created here, through the creation-identity port (ctx.creates.run), under
+// the id the port reserved, and its binding records the baseline of what was created.
 
 const {
   emptyResult,
@@ -34,14 +45,17 @@ const {
   isAuthorized,
   lookupBinding,
   bindingRecord,
-  driftVerdict,
   bindsUnchanged,
-  intentSha256,
   canonicalJson,
   pushIfChanged,
   queuePublication,
   normalizeGuid,
   rulesOf,
+  projectionBaseline,
+  partsDriftVerdict,
+  boundIdentity,
+  createThroughPort,
+  pushChecked,
 } = require('./reconcile-common.js');
 
 const NAME_RE = /^[a-z_][a-z0-9_]{0,127}$/i;
@@ -64,10 +78,13 @@ function compileConditions(list, { at, entity, refs, resolveValue, errors }) {
       return;
     }
     const scope = f.relatedEntity === undefined ? undefined : lc(f.relatedEntity);
-    if (scope !== undefined && refs && !refs.has(scope)) {
+    if (scope !== undefined && (!refs || !refs.has(scope))) {
       errors.push({ path: `${at}[${i}].relatedEntity`, message: `'${f.relatedEntity}' is not the alias or name of a declared join` });
       return;
     }
+    // A condition on a joined table resolves its choice labels on THAT table: `statecode: 'Open'` on
+    // a joined contact is contact's option set, not the view's own table's.
+    const table = scope !== undefined ? refs.get(scope) : entity;
     const attr = lc(f.attr);
     const op = f.op || 'eq';
     const scoped = (c) => (scope ? { ...c, entityname: scope } : c);
@@ -79,11 +96,11 @@ function compileConditions(list, { at, entity, refs, resolveValue, errors }) {
       // As viewDef builds it: the SDK's typed condition is single-valued, so in/not-in become a
       // nested or/and group of eq/ne conditions.
       const subOp = op === 'in' ? 'eq' : 'ne';
-      groups.push({ type: op === 'in' ? 'or' : 'and', conditions: f.values.map((x) => scoped({ attribute: attr, operator: subOp, value: String(resolveValue(entity, attr, x)) })), groups: [] });
+      groups.push({ type: op === 'in' ? 'or' : 'and', conditions: f.values.map((x) => scoped({ attribute: attr, operator: subOp, value: String(resolveValue(table, attr, x)) })), groups: [] });
       return;
     }
     const cond = { attribute: attr, operator: op };
-    if (f.value !== undefined) cond.value = String(resolveValue(entity, attr, f.value));
+    if (f.value !== undefined) cond.value = String(resolveValue(table, attr, f.value));
     conditions.push(scoped(cond));
   });
   return { conditions, groups };
@@ -107,7 +124,7 @@ function compileViewIntent(v, o = {}) {
   if (v.viewId !== undefined && !normalizeGuid(v.viewId)) errors.push({ path: `${at}.viewId`, message: 'viewId must be a GUID' });
 
   const links = [];
-  const refs = new Set();
+  const refs = new Map(); // alias-or-name -> joined table logical name
   (v.linkEntities || []).forEach((l, i) => {
     const p = `${at}.linkEntities[${i}]`;
     if (!l || typeof l !== 'object') { errors.push({ path: p, message: 'a join must be an object' }); return; }
@@ -119,7 +136,7 @@ function compileViewIntent(v, o = {}) {
     if (typeof l.name !== 'string') return;
     const ref = refNameOf(l);
     if (refs.has(ref)) errors.push({ path: `${p}.alias`, message: `two joins are both called '${ref}'; give each its own alias` });
-    refs.add(ref);
+    refs.set(ref, lc(l.name));
     const link = { name: lc(l.name), from: lc(l.from || ''), to: lc(l.to || '') };
     if (l.alias) link.alias = lc(l.alias);
     if (l.linkType) link.linkType = l.linkType;
@@ -241,9 +258,11 @@ function hasUnboundRelatedColumn(view) {
   return (view.columns || []).some((c) => String(c.name).includes('.') && !c.relatedEntity);
 }
 
-function liveOwned(view, intent) {
-  const live = (view.linkEntities || []);
-  const declaredRefs = new Set(intent.linkEntities.map(refNameOf));
+/**
+ * The FULL ownable projection of a live view: every part a declared view can own, whatever this spec
+ * declares today (see the header). Joins are normalised (name/from/to/alias/linkType/filters).
+ */
+function liveFull(view) {
   return {
     columns: (view.columns || []).slice().sort((a, b) => a.order - b.order).map((c) => {
       const o = { name: lc(c.name) };
@@ -253,8 +272,8 @@ function liveOwned(view, intent) {
     }),
     filters: view.filters || { type: 'and', conditions: [], groups: [] },
     sort: (view.sort || []).map((s) => ({ attribute: lc(s.attribute), descending: !!s.descending, entityname: lc(s.entityname || '') })),
-    linkEntities: live.filter((l) => declaredRefs.has(refNameOf(l))).map(normLink),
-    description: intent.description === undefined ? undefined : String(view.description || ''),
+    linkEntities: (view.linkEntities || []).map(normLink),
+    description: String(view.description || ''),
   };
 }
 function normLink(l) {
@@ -265,23 +284,34 @@ function normLink(l) {
   return o;
 }
 
-/** The desired owned parts, with widths the spec left out taken from the live column. */
-function desiredOwned(intent, live) {
+/**
+ * The full projection after this run: the declared parts laid over the live ones. Widths the spec
+ * left out come from the live column; a declared join replaces the live join with the same
+ * alias/name, an undeclared live join is kept, a new one is appended; an undeclared description is
+ * kept as it is.
+ */
+function desiredFull(intent, live) {
   const liveWidth = new Map(live.columns.map((c) => [c.name, c.width]));
+  const declared = new Map(intent.linkEntities.map((l) => [refNameOf(l), normLink(l)]));
+  const kept = live.linkEntities.map((l) => declared.get(refNameOf(l)) || l);
+  const keptRefs = new Set(kept.map(refNameOf));
   return {
     columns: intent.columns.map((c) => ({ ...c, width: c.width !== undefined ? c.width : (liveWidth.has(c.name) ? liveWidth.get(c.name) : 100) })),
     filters: intent.filters,
     sort: intent.sort,
-    linkEntities: intent.linkEntities.map(normLink),
-    description: intent.description,
+    linkEntities: [...kept, ...[...declared.values()].filter((l) => !keptRefs.has(refNameOf(l)))],
+    description: intent.description !== undefined ? intent.description : live.description,
   };
 }
 
 const PARTS = ['columns', 'filters', 'sort', 'linkEntities', 'description'];
 
+/** True when a thrown read says the row is not there (HTTP 404), as opposed to "could not read". */
+const isNotFound = (err) => !!err && (err.statusCode === 404 || err.status === 404);
+
 /**
  * Plan one declared view. GET only.
- * @returns {{ key, intent, viewId, action, changed, createArtifact?, desired?, desiredSha?, origin?, operations, refused, unknown }}
+ * @returns {{ key, intent, viewId, action, changed, createArtifact?, desired?, baseline?, origin?, operations, refused, unknown }}
  */
 async function planViewReconcile({ view, sdk, resolveValue, primaryName }, ctx = {}) {
   const { errors, intent } = compileViewIntent(view, { resolveValue, primaryName });
@@ -292,12 +322,23 @@ async function planViewReconcile({ view, sdk, resolveValue, primaryName }, ctx =
     plan.errors = errors;
     return plan;
   }
-  let id = intent.viewId;
-  try {
-    if (!id) id = normalizeGuid(await sdk.findArtifact('view', { name: intent.name, entity: intent.entity }));
-  } catch {
-    plan.unknown.push(refusal(key, 'view-lookup-unreadable', 'whether the view exists could not be read'));
+  const binding = await lookupBinding(ctx, 'view', key);
+  const who = boundIdentity(binding, { pinnedId: intent.viewId, code: 'view-binding-mismatch', key });
+  if (who.refusal) {
+    plan.refused.push(who.refusal);
     return plan;
+  }
+  let id = who.id ? normalizeGuid(who.id) || who.id : '';
+  if (!id) {
+    try {
+      id = normalizeGuid(await sdk.findArtifact('view', { name: intent.name, entity: intent.entity }));
+    } catch (err) {
+      // The SDK refuses a name two rows share (AMBIGUOUS_ARTIFACT): choosing one would edit a row the spec
+      // may not mean, so the maker names it instead. Any other failure leaves existence unknown.
+      if (err && err.code === 'AMBIGUOUS_ARTIFACT') plan.refused.push(refusal(key, 'view-name-ambiguous', 'several views on the table have this name; rename or remove the extra one before it can be managed'));
+      else plan.unknown.push(refusal(key, 'view-lookup-unreadable', 'whether the view exists could not be read'));
+      return plan;
+    }
   }
   if (!id) {
     plan.action = 'create';
@@ -310,8 +351,9 @@ async function planViewReconcile({ view, sdk, resolveValue, primaryName }, ctx =
   try {
     await sdk.fetchArtifact('view', id);
     current = await sdk.getArtifact('view', id);
-  } catch {
-    if (intent.viewId) plan.refused.push(refusal(key, 'view-pinned-not-found', 'the pinned viewId could not be read in this environment'));
+  } catch (err) {
+    if (binding && isNotFound(err)) plan.refused.push(refusal(key, 'view-bound-row-missing', 'the view this key is bound to is gone; repair the binding explicitly before it can be recreated'));
+    else if (intent.viewId) plan.refused.push(refusal(key, 'view-pinned-not-found', 'the pinned viewId could not be read in this environment'));
     else plan.unknown.push(refusal(key, 'view-unreadable', 'the view could not be read'));
     return plan;
   }
@@ -319,14 +361,13 @@ async function planViewReconcile({ view, sdk, resolveValue, primaryName }, ctx =
     plan.refused.push(refusal(key, 'view-pinned-wrong-table', 'the pinned view belongs to another table'));
     return plan;
   }
-  const live = liveOwned(current, intent);
-  const desired = desiredOwned(intent, live);
-  plan.changed = PARTS.filter((p) => desired[p] !== undefined && canonicalJson(desired[p]) !== canonicalJson(live[p]));
+  const live = liveFull(current);
+  const desired = desiredFull(intent, live);
+  plan.changed = PARTS.filter((p) => canonicalJson(desired[p]) !== canonicalJson(live[p]));
   plan.desired = desired;
-  plan.desiredSha = intentSha256(desired);
+  plan.baseline = projectionBaseline(desired);
 
-  const binding = await lookupBinding(ctx, 'view', key);
-  const verdict = driftVerdict(binding, intentSha256(live), plan.desiredSha);
+  const verdict = partsDriftVerdict(binding, live, desired);
   plan.origin = binding ? binding.origin : 'adopted';
   const publicationScopes = [{ type: 'view', id, table: intent.entity }];
   if (plan.changed.length === 0) {
@@ -362,14 +403,61 @@ async function planViewReconcile({ view, sdk, resolveValue, primaryName }, ctx =
   return plan;
 }
 
-/** Apply a view plan. A plan with a refusal or unknown writes nothing. `create` is the build's (see contract). */
+/** Re-read a view and answer the baseline of what the server holds, or null when it cannot be read. */
+async function readBaseline(sdk, id) {
+  try {
+    await sdk.fetchArtifact('view', id);
+    const fresh = await sdk.getArtifact('view', id);
+    return fresh ? projectionBaseline(liveFull(fresh)) : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Create a new declared view through the creation-identity port (see the header). */
+async function applyViewCreate(plan, sdk, ctx, result) {
+  const created = await createThroughPort(ctx, { kind: 'view', key: plan.key, identity: [plan.intent.entity, plan.intent.name], childKeys: [] }, async ({ id }) => {
+    const art = await sdk.createArtifact('view', { ...plan.createArtifact, id });
+    // The port recorded `id` before this send: a view stored under any other id could never be
+    // recovered, so a create that does not keep it is refused before anything is pushed.
+    if (normalizeGuid(art && art.id) !== normalizeGuid(id)) return { outcome: 'refused', code: 'CREATE_ID_NOT_KEPT' };
+    return pushChecked(sdk, 'view', id);
+  });
+  const id = created.id ? normalizeGuid(created.id) || String(created.id) : null;
+  if (created.status === 'created') {
+    const scope = { type: 'view', id, table: plan.intent.entity };
+    result.saved.push({ key: plan.key, kind: 'view', id, created: true, parts: PARTS.slice() });
+    queuePublication(ctx, scope);
+    result.pendingPublish.push({ key: plan.key, scope });
+    const baseline = (await readBaseline(sdk, id)) || projectionBaseline(liveFull({ ...plan.createArtifact, id }));
+    result.managedBindings.push(bindingRecord(ctx, { kind: 'view', key: plan.key, id, origin: 'created', ...baseline }));
+  } else if (created.status === 'adopted') {
+    // The maker resolved a lost create by naming the view it made: bind it to what it holds now and
+    // write nothing; the next run reconciles it like any bound view.
+    const baseline = id ? await readBaseline(sdk, id) : null;
+    if (baseline) {
+      result.managedBindings.push(bindingRecord(ctx, { kind: 'view', key: plan.key, id, origin: 'created', ...baseline }));
+      result.refused.push(refusal(plan.key, 'creation-adopted-rerun', 'the view an earlier create made was bound; run again to apply the spec to it'));
+    } else {
+      result.refused.push(refusal(plan.key, 'creation-adopted-row-missing', 'the view the resolved create named could not be read; repair the binding explicitly'));
+    }
+  } else if (created.status === 'refused') {
+    result.refused.push({ ...refusal(plan.key, /^creation-/.test(created.code) ? created.code : 'view-create-refused', 'the view was not created; nothing was written'), rules: created.rules || [] });
+  } else {
+    result.unknown.push(refusal(plan.key, 'view-write-unknown', 'the view create did not report its outcome; check the table\'s views'));
+  }
+  return result;
+}
+
+/** Apply a view plan. A plan with a refusal or unknown writes nothing. */
 async function applyViewReconcile(plan, { sdk }, ctx = {}) {
   const result = emptyResult();
   result.refused.push(...plan.refused);
   result.unknown.push(...plan.unknown);
-  if (plan.refused.length || plan.unknown.length || !plan.action || plan.action === 'create') return result;
+  if (plan.refused.length || plan.unknown.length || !plan.action) return result;
+  if (plan.action === 'create') return applyViewCreate(plan, sdk, ctx, result);
   const id = plan.viewId;
-  const record = () => bindingRecord(ctx, { kind: 'view', key: plan.key, id, intentSha256: plan.desiredSha, origin: plan.origin });
+  const record = () => bindingRecord(ctx, { kind: 'view', key: plan.key, id, origin: plan.origin, ...plan.baseline });
   if (plan.action === 'noChange') {
     result.unchanged.push({ key: plan.key, kind: 'view', id });
     if (plan.bindUnchanged) result.managedBindings.push(record());
@@ -381,12 +469,17 @@ async function applyViewReconcile(plan, { sdk }, ctx = {}) {
       if (part === 'columns') {
         await sdk.updateElement('view', id, '/columns', d.columns.map((c, i) => ({ ...c, order: i })));
       } else if (part === 'linkEntities') {
-        // Declared joins replace the live join with the same alias/name; undeclared live joins are kept.
+        // Declared joins replace the live join with the same alias/name; undeclared live joins are
+        // kept as the SDK read them (their bags carry options the typed join does not).
         const current = await sdk.getArtifact('view', id);
-        const declared = new Map(d.linkEntities.map((l) => [refNameOf(l), l]));
+        const declared = new Map(plan.intent.linkEntities.map((l) => [refNameOf(l), normLink(l)]));
         const kept = (current.linkEntities || []).map((l) => declared.get(refNameOf(l)) || l);
         const keptRefs = new Set(kept.map(refNameOf));
-        await sdk.updateElement('view', id, '/linkEntities', [...kept, ...d.linkEntities.filter((l) => !keptRefs.has(refNameOf(l)))]);
+        const joins = [...kept, ...[...declared.values()].filter((l) => !keptRefs.has(refNameOf(l)))];
+        // A view with no join has no `linkEntities` member at all, and updateElement replaces only an
+        // existing pointer (PATH_NOT_FOUND otherwise): the first join is ADDED at the artifact root.
+        if (current.linkEntities === undefined) await sdk.addElement('view', id, '', { linkEntities: joins });
+        else await sdk.updateElement('view', id, '/linkEntities', joins);
       } else {
         await sdk.updateElement('view', id, `/${part}`, d[part]);
       }
@@ -412,7 +505,6 @@ async function applyViewReconcile(plan, { sdk }, ctx = {}) {
   }
   return result;
 }
-
 module.exports = {
   isDeclaredView,
   compileViewIntent,

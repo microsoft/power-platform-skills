@@ -5,7 +5,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { createRowTableServer } = require('./helpers/row-table-server.js');
-const { fakeManaged, fakePublication } = require('./helpers/feature-ports.js');
+const { fakeManaged, fakePublication, fakeCreates } = require('./helpers/feature-ports.js');
 const {
   isDeclaredView,
   compileViewIntent,
@@ -190,4 +190,123 @@ test('neighbour: a view without reconcile:"declared" stays on the legacy union p
     name: 'V', description: '', entityLogicalName: 'contact', queryType: 0, isDefault: false,
     columns: [{ name: 'fullname', width: 100, order: 0 }], filters: { type: 'and', conditions: [], groups: [] }, sort: [], linkEntities: [],
   });
+});
+
+// A plain view (no join) on account, as the probes in this block use it.
+const A = '11111111-0000-4000-8000-000000000001';
+const B = '11111111-0000-4000-8000-000000000002';
+const plainSpec = { entity: 'account', name: 'Owned view', reconcile: 'declared', activeOnly: false, columns: ['name'] };
+const plainRow = (id) => ({ savedqueryid: id, name: plainSpec.name, returnedtypecode: 'account', querytype: 0, isdefault: false, description: '',
+  fetchxml: '<fetch><entity name="account"><attribute name="name" /><attribute name="accountid" /></entity></fetch>',
+  layoutxml: '<grid name="resultset" object="1" jump="name"><row name="result" id="accountid"><cell name="name" width="100" /></row></grid>' });
+const plainServer = (...ids) => {
+  const srv = createRowTableServer({ tables: { savedqueries: 'savedqueryid' } });
+  for (const id of ids) srv.seed('savedqueries', plainRow(id));
+  return srv;
+};
+const personJoin = { name: 'contact', from: 'contactid', to: 'primarycontactid', alias: 'person', linkType: 'outer' };
+
+test('a bound view is edited by its bound id only: a same-name replacement is never followed, a conflicting pin refuses', async () => {
+  const srv = plainServer(A);
+  const managed = fakeManaged();
+  const first = await run(srv, plainSpec, { managed, authorizedAdoption: true });
+  managed.persist(first.result.managedBindings);
+  assert.equal(managed.lookup('view', 'account/Owned view').id, A);
+  srv.store.get('savedqueries').delete(A);
+  srv.seed('savedqueries', plainRow(B));
+  srv.clearLog();
+  const second = await run(srv, { ...plainSpec, sort: [{ attr: 'name', dir: 'desc' }] }, { managed, authorizedAdoption: true });
+  assert.equal(srv.writes.length, 0, 'the same-name replacement is not written');
+  assert.deepEqual(second.result.refused.map((r) => r.code), ['view-bound-row-missing']);
+  assert.deepEqual(second.result.managedBindings, [], 'the binding is not moved to the replacement');
+
+  const pinned = await run(srv, { ...plainSpec, viewId: B, sort: [{ attr: 'name', dir: 'desc' }] }, { managed, authorizedAdoption: true });
+  assert.equal(srv.writes.length, 0);
+  assert.deepEqual(pinned.result.refused.map((r) => r.code), ['view-binding-mismatch']);
+});
+
+test('two views with the declared name: nothing is chosen and nothing is written', async () => {
+  const srv = plainServer(A, B);
+  const sdk = await srv.newSdk();
+  const ctx = { managed: fakeManaged(), authorizedAdoption: true, creates: fakeCreates() };
+  const plan = await planViewReconcile({ view: { ...plainSpec, sort: [{ attr: 'name', dir: 'desc' }] }, sdk }, ctx);
+  const result = await applyViewReconcile(plan, { sdk }, ctx);
+  assert.equal(srv.writes.length, 0, 'adoption approval is not permission to choose between duplicate names');
+  assert.deepEqual(result.refused.map((r) => r.code), ['view-name-ambiguous']);
+  assert.equal(ctx.creates.calls.length, 0);
+});
+test('the first join is added to a view that has none', async () => {
+  const srv = plainServer(A);
+  const managed = fakeManaged();
+  const { result } = await run(srv, { ...plainSpec, linkEntities: [personJoin] }, { managed, authorizedAdoption: true });
+  assert.deepEqual(result.refused, []);
+  assert.deepEqual(result.saved.map((s) => s.parts), [['linkEntities']]);
+  assert.match(srv.rowOf('savedqueries', A).fetchxml, /<link-entity name="contact" from="contactid" to="primarycontactid" alias="person" link-type="outer"/);
+});
+
+test('ownership changes are edits, not drift: dropping a declared join keeps it; starting to declare a description writes it', async () => {
+  const srv = plainServer();
+  const joined = plainRow(A);
+  joined.fetchxml = joined.fetchxml.replace('</entity>', '<link-entity name="contact" from="contactid" to="primarycontactid" alias="person" link-type="outer" /></entity>');
+  srv.seed('savedqueries', joined);
+  const managed = fakeManaged();
+  const first = await run(srv, { ...plainSpec, linkEntities: [personJoin] }, { managed, authorizedAdoption: true });
+  managed.persist(first.result.managedBindings);
+  srv.clearLog();
+  const next = await run(srv, { ...plainSpec, sort: [{ attr: 'name', dir: 'desc' }] }, { managed });
+  assert.deepEqual(next.result.refused, [], 'omitting a formerly declared join is not drift');
+  assert.match(srv.rowOf('savedqueries', A).fetchxml, /alias="person"/, 'the join is kept');
+  managed.persist(next.result.managedBindings);
+  const described = await run(srv, { ...plainSpec, sort: [{ attr: 'name', dir: 'desc' }], description: 'Owned now' }, { managed });
+  assert.deepEqual(described.result.refused, []);
+  assert.equal(srv.rowOf('savedqueries', A).description, 'Owned now');
+  // Neighbour: a part someone else changed IS drift when this run writes it.
+  managed.persist(described.result.managedBindings);
+  srv.rowOf('savedqueries', A).description = 'Changed elsewhere';
+  srv.clearLog();
+  const drift = await run(srv, { ...plainSpec, sort: [{ attr: 'name', dir: 'desc' }], description: 'Mine again' }, { managed });
+  assert.deepEqual(drift.result.refused.map((r) => r.code), ['view-drift']);
+  assert.equal(srv.writes.length, 0);
+});
+
+test('a joined-table filter resolves its choice label on the joined table', () => {
+  const calls = [];
+  const view = { ...plainSpec, linkEntities: [personJoin], filters: [{ attr: 'statecode', op: 'eq', value: 'Open', relatedEntity: 'person' }, { attr: 'industrycode', op: 'in', values: ['Retail'] }] };
+  const out = compileViewIntent(view, { resolveValue: (entity, attr, value) => { calls.push([entity, attr, value]); return entity === 'contact' ? 100 : 200; } });
+  assert.deepEqual(calls, [['contact', 'statecode', 'Open'], ['account', 'industrycode', 'Retail']]);
+  assert.deepEqual(out.intent.filters.conditions, [{ attribute: 'statecode', operator: 'eq', value: '100', entityname: 'person' }]);
+});
+
+test('a new declared view is created through the creation port under the reserved id, with a baseline its first edit accepts', async () => {
+  const srv = createRowTableServer({ tables: { savedqueries: 'savedqueryid' } });
+  const managed = fakeManaged();
+  const creates = fakeCreates();
+  const view = { entity: 'account', name: 'New view', reconcile: 'declared', activeOnly: false, columns: ['name'] };
+  const first = await run(srv, view, { managed, creates });
+  assert.deepEqual(first.result.refused, []);
+  assert.equal(creates.calls.length, 1);
+  assert.deepEqual(creates.calls[0].op, { kind: 'view', key: 'account/New view', identity: ['account', 'New view'], childKeys: [] });
+  const id = creates.calls[0].ids.id;
+  assert.ok(srv.rowOf('savedqueries', id), 'the row is stored under the id the port reserved');
+  assert.deepEqual(first.result.saved.map((s) => [s.id, s.created]), [[id, true]]);
+  const [binding] = first.result.managedBindings;
+  assert.equal(binding.id, id);
+  assert.ok(binding.intentSha256 && binding.partsSha256, 'the created binding records a baseline');
+  managed.persist(first.result.managedBindings);
+  srv.clearLog();
+  const next = await run(srv, { ...view, sort: [{ attr: 'name', dir: 'desc' }] }, { managed, creates });
+  assert.deepEqual(next.result.refused, []);
+  assert.deepEqual(next.result.saved.map((s) => s.id), [id]);
+  assert.equal(creates.calls.length, 1, 'the edit is not another create');
+});
+
+test('a view create is refused without the port and while an earlier create is pending; nothing is sent', async () => {
+  const view = { entity: 'account', name: 'New view', reconcile: 'declared', activeOnly: false, columns: ['name'] };
+  for (const [ctx, code] of [[{}, 'creation-port-unavailable'], [{ creates: fakeCreates({ pendingUnknown: ['account/New view'] }) }, 'creation-pending-unknown']]) {
+    const srv = createRowTableServer({ tables: { savedqueries: 'savedqueryid' } });
+    const { result } = await run(srv, view, { managed: fakeManaged(), ...ctx });
+    assert.deepEqual(result.refused.map((r) => r.code), [code]);
+    assert.equal(srv.writes.length, 0);
+    assert.deepEqual(result.saved, []);
+  }
 });

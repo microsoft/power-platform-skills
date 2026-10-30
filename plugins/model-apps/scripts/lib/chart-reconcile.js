@@ -19,23 +19,36 @@
 // chart's own table) and ONE series that aggregates the table's primary id. A live chart with more
 // series or categories, or a measure on a joined table, was shaped outside that model; rewriting it
 // would invent semantics, so it is refused, not reduced.
+//
+// Identity: an existing managed binding is the authority — a bound chart is edited by its bound id
+// only, and a bound chart that is gone is refused (never re-resolved by name to a same-name
+// replacement). Unbound, the exact name on the table (the SDK refuses an ambiguous name).
+//
+// The binding's baseline is the FULL ownable projection (chart type, category, series, description
+// and title, whatever the spec declares today), so starting or stopping to declare a description or
+// title is an edit, never drift; drift is judged on the parts this run writes.
+//
+// A missing chart is created here, through the creation-identity port (ctx.creates.run), from the
+// artifact the build compiles for it (chartDef), under the id the port reserved.
 
 const {
   canonicalJson,
-  intentSha256,
   emptyResult,
   operation,
   refusal,
   isAuthorized,
   lookupBinding,
   bindingRecord,
-  ownershipDriftVerdict,
-  ownershipSubsets,
   bindsUnchanged,
   pushIfChanged,
+  pushChecked,
   queuePublication,
   normalizeGuid,
   rulesOf,
+  projectionBaseline,
+  partsDriftVerdict,
+  boundIdentity,
+  createThroughPort,
 } = require('./reconcile-common.js');
 
 const CHART_TYPES = ['Column', 'Bar', 'Pie', 'Line'];
@@ -80,8 +93,11 @@ function compileChartIntent(ch) {
   return { errors, intent };
 }
 
-/** The live chart's owned fields, or null when its shape is outside the supported model. */
-function liveOwned(chart, intent) {
+/**
+ * The live chart's FULL ownable projection, or null when its shape is outside the supported model.
+ * The description and title are always part of it (see the header).
+ */
+function liveFull(chart) {
   const series = chart.series || [];
   const categories = chart.categories || [];
   if (series.length !== 1 || categories.length !== 1 || series[0].relatedEntity) return null;
@@ -95,27 +111,36 @@ function liveOwned(chart, intent) {
   // group-by over it is a change, and must be seen as one.
   if (cat.relatedEntity) out.category.relatedEntity = lc(cat.relatedEntity);
   if (cat.dateGrouping) out.category.dateGrouping = cat.dateGrouping;
-  if (intent.description !== undefined) out.description = String(chart.description || '');
-  if (intent.title !== undefined) out.title = String((chart.presentation && chart.presentation.title) || '');
+  out.description = String(chart.description || '');
+  out.title = String((chart.presentation && chart.presentation.title) || '');
   return out;
 }
 
-function desiredOwned(intent) {
-  const out = { chartType: intent.chartType, category: intent.category, series: intent.series };
-  if (intent.description !== undefined) out.description = intent.description;
-  if (intent.title !== undefined) out.title = intent.title;
-  return out;
+/** The full projection after this run: the declared parts over the live ones. */
+function desiredFull(intent, live) {
+  return {
+    chartType: intent.chartType,
+    category: intent.category,
+    series: intent.series,
+    description: intent.description !== undefined ? intent.description : live.description,
+    title: intent.title !== undefined ? intent.title : live.title,
+  };
 }
 
 const PARTS = ['chartType', 'category', 'series', 'description', 'title'];
 
+const isNotFound = (err) => !!err && (err.statusCode === 404 || err.status === 404);
+
 /**
  * Plan one declared chart. GET only.
- * @returns {{ key, intent, chartId, action, changed, desiredSha?, origin?, operations, refused, unknown }}
- *   action 'create' means "not found": the build creates it through its existing path, then records
- *   the binding with {@link createdChartBinding}.
+ * @param {object} args
+ * @param {object} args.chart              the spec chart
+ * @param {object} args.sdk
+ * @param {object} [args.createArtifact]   the ChartArtifact (without id) the build compiles for it
+ *                                         (sdk-build chartDef); needed only when the chart is missing
+ * @returns {{ key, intent, chartId, action, changed, baseline?, origin?, operations, refused, unknown }}
  */
-async function planChartReconcile({ chart, sdk }, ctx = {}) {
+async function planChartReconcile({ chart, sdk, createArtifact }, ctx = {}) {
   const { errors, intent } = compileChartIntent(chart);
   const key = intent ? intent.key : `${lc(chart && chart.entity)}/${(chart && chart.name) || ''}`;
   const plan = { key, intent, chartId: null, action: null, changed: [], operations: [], refused: [], unknown: [] };
@@ -124,16 +149,23 @@ async function planChartReconcile({ chart, sdk }, ctx = {}) {
     plan.refused.push(refusal(key, 'chart-spec-invalid', 'the declared chart is outside the supported chart shape (see validation)'));
     return plan;
   }
-  plan.desiredSha = intentSha256(desiredOwned(intent));
-  let id;
-  try {
-    id = normalizeGuid(await sdk.findArtifact('chart', { name: intent.name, entity: intent.entity }));
-  } catch {
-    plan.unknown.push(refusal(key, 'chart-lookup-unreadable', 'whether the chart exists could not be read'));
-    return plan;
+  const binding = await lookupBinding(ctx, 'chart', key);
+  let id = boundIdentity(binding, { code: 'chart-binding-mismatch', key }).id;
+  if (id) id = normalizeGuid(id) || id;
+  if (!id) {
+    try {
+      id = normalizeGuid(await sdk.findArtifact('chart', { name: intent.name, entity: intent.entity }));
+    } catch (err) {
+      // The SDK refuses a name two rows share (AMBIGUOUS_ARTIFACT): choosing one would edit a row the spec
+      // may not mean, so the maker names it instead. Any other failure leaves existence unknown.
+      if (err && err.code === 'AMBIGUOUS_ARTIFACT') plan.refused.push(refusal(key, 'chart-name-ambiguous', 'several charts on the table have this name; rename or remove the extra one before it can be managed'));
+      else plan.unknown.push(refusal(key, 'chart-lookup-unreadable', 'whether the chart exists could not be read'));
+      return plan;
+    }
   }
   if (!id) {
     plan.action = 'create';
+    plan.createArtifact = createArtifact || null;
     plan.operations.push(operation({ key, kind: 'chart', target: null, action: 'create', publicationScopes: [{ type: 'chart', table: intent.entity }] }));
     return plan;
   }
@@ -142,18 +174,19 @@ async function planChartReconcile({ chart, sdk }, ctx = {}) {
   try {
     await sdk.fetchArtifact('chart', id);
     current = await sdk.getArtifact('chart', id);
-  } catch {
-    plan.unknown.push(refusal(key, 'chart-unreadable', 'the chart could not be read'));
+  } catch (err) {
+    if (binding && isNotFound(err)) plan.refused.push(refusal(key, 'chart-bound-row-missing', 'the chart this key is bound to is gone; repair the binding explicitly before it can be recreated'));
+    else plan.unknown.push(refusal(key, 'chart-unreadable', 'the chart could not be read'));
     return plan;
   }
-  const live = current ? liveOwned(current, intent) : null;
+  const live = current ? liveFull(current) : null;
   if (!live) {
     plan.refused.push(refusal(key, 'chart-shape-unsupported', 'the chart has several series or categories, or a joined-table measure; it was left as it is'));
     return plan;
   }
-  const desired = desiredOwned(intent);
-  plan.changed = PARTS.filter((p) => desired[p] !== undefined && canonicalJson(desired[p]) !== canonicalJson(live[p]));
-  const binding = await lookupBinding(ctx, 'chart', key);
+  const desired = desiredFull(intent, live);
+  plan.changed = PARTS.filter((p) => canonicalJson(desired[p]) !== canonicalJson(live[p]));
+  plan.baseline = projectionBaseline(desired);
   plan.origin = binding ? binding.origin : 'adopted';
   if (plan.changed.length === 0) {
     plan.action = 'noChange';
@@ -161,8 +194,7 @@ async function planChartReconcile({ chart, sdk }, ctx = {}) {
     plan.operations.push(operation({ key, kind: 'chart', target: id, action: 'noChange' }));
     return plan;
   }
-  const variants = ownershipSubsets(['description', 'title']).map((o) => liveOwned(current, { ...intent, description: o.description ? '' : undefined, title: o.title ? '' : undefined }));
-  const verdict = ownershipDriftVerdict(binding, variants, intentSha256(live), plan.desiredSha);
+  const verdict = partsDriftVerdict(binding, live, desired);
   if (verdict === 'drift' && !isAuthorized(ctx.authorizedOverwrite, key)) {
     plan.refused.push(refusal(key, 'chart-drift', 'an owned part of the chart was changed outside the spec; refresh the spec or approve the overwrite'));
     return plan;
@@ -176,14 +208,63 @@ async function planChartReconcile({ chart, sdk }, ctx = {}) {
   return plan;
 }
 
-/** Apply a chart plan. A plan with a refusal or an unknown writes nothing; `create` is the build's. */
+async function readBaseline(sdk, id) {
+  try {
+    await sdk.fetchArtifact('chart', id);
+    const fresh = await sdk.getArtifact('chart', id);
+    const live = fresh && liveFull(fresh);
+    return live ? projectionBaseline(live) : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Create a missing declared chart through the creation-identity port (see the header). */
+async function applyChartCreate(plan, sdk, ctx, result) {
+  if (!plan.createArtifact) {
+    result.refused.push(refusal(plan.key, 'chart-create-artifact-missing', 'the build did not pass the chart definition to create; nothing was written'));
+    return result;
+  }
+  const created = await createThroughPort(ctx, { kind: 'chart', key: plan.key, identity: [plan.intent.entity, plan.intent.name], childKeys: [] }, async ({ id }) => {
+    const art = await sdk.createArtifact('chart', { ...plan.createArtifact, id });
+    // The port recorded `id` before this send; a chart stored under another id could not be recovered.
+    if (normalizeGuid(art && art.id) !== normalizeGuid(id)) return { outcome: 'refused', code: 'CREATE_ID_NOT_KEPT' };
+    return pushChecked(sdk, 'chart', id);
+  });
+  const id = created.id ? normalizeGuid(created.id) || String(created.id) : null;
+  if (created.status === 'created') {
+    const scope = { type: 'chart', id, table: plan.intent.entity };
+    result.saved.push({ key: plan.key, kind: 'chart', id, created: true, parts: PARTS.slice() });
+    queuePublication(ctx, scope);
+    result.pendingPublish.push({ key: plan.key, scope });
+    const baseline = await readBaseline(sdk, id);
+    if (baseline) result.managedBindings.push(bindingRecord(ctx, { kind: 'chart', key: plan.key, id, origin: 'created', ...baseline }));
+    else result.unknown.push(refusal(plan.key, 'chart-created-unreadable', 'the chart was created but could not be read back to record its baseline'));
+  } else if (created.status === 'adopted') {
+    const baseline = id ? await readBaseline(sdk, id) : null;
+    if (baseline) {
+      result.managedBindings.push(bindingRecord(ctx, { kind: 'chart', key: plan.key, id, origin: 'created', ...baseline }));
+      result.refused.push(refusal(plan.key, 'creation-adopted-rerun', 'the chart an earlier create made was bound; run again to apply the spec to it'));
+    } else {
+      result.refused.push(refusal(plan.key, 'creation-adopted-row-missing', 'the chart the resolved create named could not be read; repair the binding explicitly'));
+    }
+  } else if (created.status === 'refused') {
+    result.refused.push({ ...refusal(plan.key, /^creation-/.test(created.code) ? created.code : 'chart-create-refused', 'the chart was not created; nothing was written'), rules: created.rules || [] });
+  } else {
+    result.unknown.push(refusal(plan.key, 'chart-write-unknown', 'the chart create did not report its outcome; check the table\'s charts'));
+  }
+  return result;
+}
+
+/** Apply a chart plan. A plan with a refusal or an unknown writes nothing. */
 async function applyChartReconcile(plan, { sdk }, ctx = {}) {
   const result = emptyResult();
   result.refused.push(...plan.refused);
   result.unknown.push(...plan.unknown);
-  if (plan.refused.length || plan.unknown.length || !plan.action || plan.action === 'create') return result;
+  if (plan.refused.length || plan.unknown.length || !plan.action) return result;
+  if (plan.action === 'create') return applyChartCreate(plan, sdk, ctx, result);
   const id = plan.chartId;
-  const record = () => bindingRecord(ctx, { kind: 'chart', key: plan.key, id, intentSha256: plan.desiredSha, origin: plan.origin });
+  const record = () => bindingRecord(ctx, { kind: 'chart', key: plan.key, id, origin: plan.origin, ...plan.baseline });
   if (plan.action === 'noChange') {
     result.unchanged.push({ key: plan.key, kind: 'chart', id });
     if (plan.bindUnchanged) result.managedBindings.push(record());
@@ -228,18 +309,11 @@ async function applyChartReconcile(plan, { sdk }, ctx = {}) {
   }
   return result;
 }
-
-/** The binding the build records after creating a declared chart through its existing create path. */
-function createdChartBinding(plan, id, ctx = {}) {
-  return bindingRecord(ctx, { kind: 'chart', key: plan.key, id, intentSha256: plan.desiredSha, origin: 'created' });
-}
-
 module.exports = {
   isDeclaredChart,
   compileChartIntent,
   planChartReconcile,
   applyChartReconcile,
-  createdChartBinding,
   CHART_TYPES,
   ID_MEASURES,
 };

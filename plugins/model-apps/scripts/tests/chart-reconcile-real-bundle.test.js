@@ -5,8 +5,8 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { createRowTableServer } = require('./helpers/row-table-server.js');
-const { fakeManaged, fakePublication } = require('./helpers/feature-ports.js');
-const { compileChartIntent, planChartReconcile, applyChartReconcile, createdChartBinding } = require('../lib/chart-reconcile.js');
+const { fakeManaged, fakePublication, fakeCreates } = require('./helpers/feature-ports.js');
+const { compileChartIntent, planChartReconcile, applyChartReconcile } = require('../lib/chart-reconcile.js');
 
 const CID = '44444444-0000-4000-8000-000000000001';
 const data = (groupBy = 'cr_priority', measures = '<attribute alias="aggregate_column" name="cr_caseid" aggregate="count" />') => '<datadefinition><fetchcollection><fetch mapping="logical" aggregate="true"><entity name="cr_case">'
@@ -24,9 +24,9 @@ function server(row = {}) {
 }
 const declared = (over = {}) => ({ entity: 'cr_case', name: 'Cases by priority', chartType: 'Bar', groupBy: 'cr_status', reconcile: 'declared', ...over });
 
-async function run(srv, chart, ctx = {}) {
+async function run(srv, chart, ctx = {}, createArtifact) {
   const sdk = await srv.newSdk();
-  const plan = await planChartReconcile({ chart, sdk }, ctx);
+  const plan = await planChartReconcile({ chart, sdk, createArtifact }, ctx);
   const result = await applyChartReconcile(plan, { sdk }, ctx);
   return { plan, result };
 }
@@ -141,17 +141,103 @@ test('an aggregate that means nothing on a primary id is refused before any read
   assert.equal(srv.reads.length, 0);
 });
 
-test('a missing chart plans a create for the build and writes nothing itself; the created binding carries the intent', async () => {
-  const srv = createRowTableServer({ tables: { savedqueryvisualizations: 'savedqueryvisualizationid' } });
-  const { plan, result } = await run(srv, declared());
-  assert.equal(plan.action, 'create');
+test('two charts with the declared name: nothing is chosen and nothing is written', async () => {
+  const srv = server();
+  srv.seed('savedqueryvisualizations', { ...srv.rowOf('savedqueryvisualizations', CID), savedqueryvisualizationid: '44444444-0000-4000-8000-000000000002' });
+  const { plan, result } = await run(srv, declared(), { authorizedAdoption: true, creates: fakeCreates() }, chartArtifact());
   assert.equal(srv.writes.length, 0);
+  assert.equal(plan.chartId, null);
   assert.deepEqual(result.saved, []);
-  const b = createdChartBinding(plan, CID, {});
-  assert.equal(b.origin, 'created');
-  assert.equal(b.intentSha256, plan.desiredSha);
+  assert.deepEqual(result.refused.map((r) => r.code), ['chart-name-ambiguous']);
+  assert.deepEqual(result.unknown, []);
 });
 
+// The ChartArtifact the build compiles for a declared chart (sdk-build chartDef), without an id.
+const chartArtifact = (over = {}) => ({ name: 'Cases by priority', description: '', entityLogicalName: 'cr_case', chartType: 'Bar', isDefault: false,
+  series: [{ attribute: 'cr_caseid', aggregate: 'count' }], categories: [{ attribute: 'cr_status' }], presentation: { showLegend: true, title: 'Cases by priority' }, ...over });
+
+test('a missing chart is created through the creation port under the reserved id, with a full baseline; a rerun sends nothing', async () => {
+  const srv = createRowTableServer({ tables: { savedqueryvisualizations: 'savedqueryvisualizationid' } });
+  const managed = fakeManaged();
+  const creates = fakeCreates();
+  const publication = fakePublication();
+  const { plan, result } = await run(srv, declared(), { managed, creates, publication }, chartArtifact());
+  assert.equal(plan.action, 'create');
+  assert.equal(creates.calls.length, 1);
+  assert.equal(creates.calls[0].executed, true);
+  const id = creates.calls[0].ids.id;
+  assert.deepEqual(result.saved.map((s) => [s.id, s.created]), [[id, true]]);
+  assert.ok(srv.rowOf('savedqueryvisualizations', id), 'the chart row carries the id the port reserved');
+  assert.deepEqual(publication.queued, [{ type: 'chart', id, table: 'cr_case' }]);
+  const b = result.managedBindings[0];
+  assert.equal(b.origin, 'created');
+  assert.equal(b.id, id);
+  assert.ok(b.partsSha256 && b.partsSha256.title && b.partsSha256.description, 'the baseline covers the full projection');
+  managed.persist(result.managedBindings);
+
+  srv.clearLog();
+  const again = await run(srv, declared(), { managed, creates });
+  assert.equal(again.plan.action, 'noChange');
+  assert.equal(srv.writes.length, 0);
+  assert.equal(creates.calls.length, 1);
+});
+
+test('a missing chart is never created without the creation port, without the compiled artifact, or while an earlier create is unresolved', async () => {
+  const empty = () => createRowTableServer({ tables: { savedqueryvisualizations: 'savedqueryvisualizationid' } });
+  let srv = empty();
+  let out = await run(srv, declared(), {}, chartArtifact());
+  assert.deepEqual(out.result.refused.map((r) => r.code), ['creation-port-unavailable']);
+  assert.equal(srv.writes.length, 0);
+
+  srv = empty();
+  const creates = fakeCreates();
+  out = await run(srv, declared(), { creates });
+  assert.deepEqual(out.result.refused.map((r) => r.code), ['chart-create-artifact-missing']);
+  assert.equal(creates.calls.length, 0);
+  assert.equal(srv.writes.length, 0);
+
+  srv = empty();
+  out = await run(srv, declared(), { creates: fakeCreates({ pendingUnknown: ['cr_case/Cases by priority'] }) }, chartArtifact());
+  assert.deepEqual(out.result.refused.map((r) => r.code), ['creation-pending-unknown']);
+  assert.equal(srv.writes.length, 0);
+});
+
+test('a bound chart is edited by its bound id only: a same-name replacement is refused, not adopted', async () => {
+  const srv = server();
+  const managed = fakeManaged();
+  const first = await run(srv, declared({ chartType: 'Column', groupBy: 'cr_priority' }), { managed, authorizedAdoption: true });
+  managed.persist(first.result.managedBindings);
+  assert.equal(managed.lookup('chart', 'cr_case/Cases by priority').id, CID);
+  const other = '44444444-0000-4000-8000-000000000002';
+  const row = srv.rowOf('savedqueryvisualizations', CID);
+  srv.store.get('savedqueryvisualizations').delete(CID);
+  srv.seed('savedqueryvisualizations', { ...row, savedqueryvisualizationid: other });
+  srv.clearLog();
+  const second = await run(srv, declared(), { managed, authorizedAdoption: true });
+  assert.equal(srv.writes.length, 0, 'the same-name chart was never managed by this spec');
+  assert.deepEqual(second.result.refused.map((r) => r.code), ['chart-bound-row-missing']);
+  assert.deepEqual(second.result.managedBindings, []);
+});
+
+test('a bound chart with an unrelated maker description change can still take an owned edit; the description is kept', async () => {
+  const srv = server();
+  const managed = fakeManaged();
+  const first = await run(srv, declared({ chartType: 'Column', groupBy: 'cr_priority' }), { managed, authorizedAdoption: true });
+  managed.persist(first.result.managedBindings);
+  const row = srv.rowOf('savedqueryvisualizations', CID);
+  row.description = 'Maker note';
+  srv.clearLog();
+  const second = await run(srv, declared({ chartType: 'Pie', groupBy: 'cr_priority' }), { managed });
+  assert.deepEqual(second.result.refused, [], 'a part this run leaves alone is not a conflict');
+  assert.deepEqual(second.plan.changed, ['chartType']);
+  assert.equal(srv.rowOf('savedqueryvisualizations', CID).description, 'Maker note');
+  managed.persist(second.result.managedBindings);
+  // But declaring the description now, over the maker's edit, is drift.
+  srv.clearLog();
+  const third = await run(srv, declared({ chartType: 'Pie', groupBy: 'cr_priority', description: 'Spec text' }), { managed });
+  assert.deepEqual(third.result.refused.map((r) => r.code), [], 'the maker text is the recorded baseline after the last apply');
+  assert.equal(srv.rowOf('savedqueryvisualizations', CID).description, 'Spec text');
+});
 test('a read failure is unknown, never refused or saved', async () => {
   const sdk = { findArtifact: async () => { throw new Error('socket hang up'); } };
   const plan = await planChartReconcile({ chart: declared(), sdk });
