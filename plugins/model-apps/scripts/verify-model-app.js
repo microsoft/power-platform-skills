@@ -63,6 +63,9 @@ const { depthFromMask } = require('./lib/role-privileges.js');
 const { appEntityComponentsFor, appMainFormsFor, appComponentRows } = require('./lib/app-components.js');
 const { readChoiceAttributes } = require('./lib/view-filter-labels.js');
 const { readStatusReasons, readAlternateKeys } = require('./lib/status-reasons-keys.js');
+const { readTableFlags } = require('./lib/schema-feature-contract.js');
+const { readExistingDateBehaviors } = require('./lib/date-behavior.js');
+const { verifyFieldSecurity } = require('./lib/field-security.js');
 const { sameFormXmlAcrossLayers } = require('./lib/formxml-layers.js');
 // The app's id and the ids of the roles associated with it live in lib/app-roles.js: the design document reads the same relationship. Still exported from here.
 const { appIdFor, appRoleIdsFor } = require('./lib/app-roles.js');
@@ -282,6 +285,11 @@ function readerFor(sdk, appUnique, opts) {
     // fails answers { state: 'error', why }, which verify reports on the checks it was for.
     statusReasons: (logical) => readStatusReasons(sdk.dataverse, logical),
     alternateKeys: (logical) => readAlternateKeys(sdk.dataverse, logical),
+    // Declared date behaviours, table flags and field security (lib/verify-spec.js asks only for what a spec declares). Each read
+    // answers what it could not read as unknown rather than throwing.
+    dateBehaviors: (logical) => readExistingDateBehaviors(sdk, logical),
+    tableFlags: (logical) => readTableFlags(sdk, logical),
+    fieldSecurity: (spec) => verifyFieldSecurity(spec, { sdk, provision: sdk }),
     // rolePrivileges(roleId): what the deployed role actually GRANTS, as [{ privilegeId, depth }].
     // The `roleprivileges` intersect row carries `privilegedepthmask` — a BITMASK (1 Basic /
     // 2 Local / 4 Deep / 8 Global), which is NOT the same encoding as the `Depth` name the SDK

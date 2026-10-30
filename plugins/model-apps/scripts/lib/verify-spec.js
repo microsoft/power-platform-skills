@@ -35,7 +35,8 @@ const { isMainForm, selectDefaultForm, plannedMainFormSequence, displayCondition
 const { hasLabelUses, resolveViewFilterLabels, memoizeChoiceReader, describeProblem } = require('./view-filter-labels.js');
 const { hostsCustomControl } = require('./dashboard-tiles.js');
 const { answerOf, statusReasonChecks, alternateKeyChecks } = require('./status-reasons-keys.js');
-const { columnTypeChecks } = require('./schema-feature-contract.js');
+const { columnTypeChecks, declaredTableFlags, verifyTableFlags } = require('./schema-feature-contract.js');
+const { verifyDateBehaviors } = require('./date-behavior.js');
 
 // How many verification reads may be in flight at once. A verify pass is nothing but reads, but each is a
 // Dataverse request that already retries on its own 429s (lib/sdk-http-client.js), so the bound is small:
@@ -270,8 +271,25 @@ async function verifySpec(spec, read, opts = {}) {
         const answer = await answerOf(() => read.alternateKeys(logical));
         for (const c of alternateKeyChecks(e, answer)) add('alternate-key', c.name, c.present, c.detail);
       }
+      // Date behaviours and table flags, each declared one held to a fresh read of what is deployed. Reader-gated, and read once for the
+      // table only when it declares one — a spec that declares neither sends no request for them. What the read cannot state is
+      // `unverified`, never a pass.
+      if ((e.columns || []).some((c) => c && c.type === 'DateTime' && c.dateTimeBehavior !== undefined) && typeof read.dateBehaviors === 'function') {
+        reportFeatureChecks(verifyDateBehaviors(e, await readOrNull(() => read.dateBehaviors(logical))), add, unverified);
+      }
+      if (Object.keys(declaredTableFlags(e)).length && typeof read.tableFlags === 'function') {
+        reportFeatureChecks(verifyTableFlags(e, await readOrNull(() => read.tableFlags(logical))), add, unverified);
+      }
     }
   }
+  });
+
+  // Secured columns, field security profiles and the users and teams given them: one check each, against what the environment holds.
+  // A check of what an administrator's reads show, not of what a user without the profile can see. Only for a spec that declares any.
+  const declaresFieldSecurity = (spec.fieldSecurityProfiles || []).length > 0
+    || (spec.entities || []).some((e) => (e.columns || []).some((c) => c && typeof c.isSecured === 'boolean'));
+  plan.each(declaresFieldSecurity && typeof read.fieldSecurity === 'function' ? [spec] : [], async ({ add, unverified }) => {
+    reportFeatureChecks((await readOrNull(() => read.fieldSecurity(spec))) || [], add, unverified);
   });
 
   // Views / charts / forms — by (entity, name) identity.
@@ -2929,6 +2947,21 @@ function appShellReferencesPage(spec, key) {
     for (const g of a.groups || [])
       for (const s of g.subAreas || []) if (s && s.page === key) return true;
   return false;
+}
+
+// A feature check (`{ kind, target, status: pass | fail | unknown, detail }`, lib/schema-feature-contract.js, lib/date-behavior.js,
+// lib/field-security.js) into the report: pass and fail are checks, unknown is `unverified` with what could not be read.
+function reportFeatureChecks(checks, add, unverified) {
+  for (const c of checks) {
+    // Named by its key without the key's first segment, e.g. `tableFlags:new_ticket.searchEnabled` -> new_ticket.searchEnabled,
+    // `fieldSecurityProfile:hr:users:<id>` -> hr:users:<id>.
+    const name = c.key.slice(c.key.indexOf(':') + 1);
+    if (c.status === 'unknown') unverified.push(`${c.kind}:${name} (${c.detail})`);
+    else add(c.kind, name, c.status === 'pass', c.status === 'pass' ? '' : c.detail);
+  }
+}
+async function readOrNull(read) {
+  try { return await read(); } catch (_) { return null; }
 }
 
 module.exports = { verifySpec, hasElement, subareaHasDashboard, subareaDashboardHasLauncher, liveNavEntries, subareaHasGenPage, appShellReferencesPage, layoutColumnNames, parseFetchXml, notesHostInspector };

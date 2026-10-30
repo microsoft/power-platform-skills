@@ -3658,3 +3658,79 @@ test('REAL BUNDLE: verify fails a column deployed with another type, says so by 
   assert.deepStrictEqual(legacy.requests, ['/EntityDefinitions', "/EntityDefinitions(LogicalName='appmodule')", "/EntityDefinitions(LogicalName='new_ticket')/Attributes"]);
   assert.deepStrictEqual(wrong.requests, legacy.requests);
 });
+
+// Declared date behaviours, table flags, secured columns, field security profiles and their users: each is held to a fresh read of what
+// the environment holds, through the real SDK bundle. What a read cannot state is unverified, never a pass. (The legacy spec above pins
+// that a spec declaring none of them sends no request for them.)
+test('REAL BUNDLE: verify holds declared date behaviours, table flags and field security to what is deployed', async () => {
+  const fsx = require('node:fs');
+  const os = require('node:os');
+  const path = require('node:path');
+  const { readerFor } = require('../verify-model-app.js');
+  const B = require(path.resolve(__dirname, '..', 'vendor', 'cds-maker-sdk.cjs'));
+  const PROFILE = '11111111-1111-4111-8111-111111111111';
+  const USER = '33333333-3333-4333-8333-333333333333';
+  const label = (l) => ({ UserLocalizedLabel: { Label: l, LanguageCode: 1033 }, LocalizedLabels: [{ Label: l, LanguageCode: 1033 }] });
+  const ok = (body) => ({ status: 200, headers: {}, body });
+  const run = async ({ flags = ok({ IsDuplicateDetectionEnabled: { Value: true }, ChangeTrackingEnabled: false, SyncToExternalSearchIndex: true, CanEnableSyncToExternalSearchIndex: { Value: true } }) } = {}) => {
+    const dir = fsx.mkdtempSync(path.join(os.tmpdir(), 'verify-features-'));
+    const requests = [];
+    const get = async (url) => {
+      const u = new URL(url);
+      const p = decodeURIComponent(u.pathname + u.search).replace(/^\/api\/data\/v9\.\d+/, '');
+      requests.push(p.replace(/\?.*$/, ''));
+      if (/^\/EntityDefinitions\?/.test(p)) {
+        return ok({ value: [{ LogicalName: 'new_ticket', SchemaName: 'new_Ticket', EntitySetName: 'new_tickets', MetadataId: '66666666-6666-6666-6666-666666666666', DisplayName: label('Ticket'), DisplayCollectionName: label('Tickets'), IsCustomEntity: true, PrimaryNameAttribute: 'new_name', PrimaryIdAttribute: 'new_ticketid', ObjectTypeCode: 10001 }] });
+      }
+      if (p === "/EntityDefinitions(LogicalName='new_ticket')/Attributes?$select=LogicalName,IsSecured") return ok({ value: [{ LogicalName: 'new_name', IsSecured: false }, { LogicalName: 'new_secret', IsSecured: true }] });
+      if (/^\/EntityDefinitions\(LogicalName='new_ticket'\)\/Attributes\?/.test(p)) {
+        return ok({ value: [
+          { LogicalName: 'new_name', SchemaName: 'new_Name', DisplayName: label('Name'), AttributeType: 'String', IsCustomAttribute: true },
+          { LogicalName: 'new_due', SchemaName: 'new_Due', DisplayName: label('Due'), AttributeType: 'DateTime', IsCustomAttribute: true },
+          { LogicalName: 'new_secret', SchemaName: 'new_Secret', DisplayName: label('Secret'), AttributeType: 'String', IsCustomAttribute: true },
+        ] });
+      }
+      if (/^\/EntityDefinitions\(LogicalName='new_ticket'\)\/Attributes\/Microsoft\.Dynamics\.CRM\.DateTimeAttributeMetadata\?/.test(p)) {
+        return ok({ value: [{ LogicalName: 'new_due', DateTimeBehavior: { Value: 'UserLocal' }, CanChangeDateTimeBehavior: { Value: true } }] });
+      }
+      if (/^\/EntityDefinitions\(LogicalName='new_ticket'\)\?\$select=IsDuplicateDetectionEnabled/.test(p)) return flags;
+      if (/^\/fieldsecurityprofiles\?/.test(p) && /\$filter=/.test(p)) return ok({ value: [{ fieldsecurityprofileid: PROFILE, name: 'HR' }] });
+      if (p === `/fieldsecurityprofiles(${PROFILE})?$select=name,description`) return ok({ name: 'HR', description: null });
+      if (/^\/fieldpermissions\?/.test(p)) return ok({ value: [{ fieldpermissionid: '22222220-2222-4222-8222-222222222222', entityname: 'new_ticket', attributelogicalname: 'new_secret', canread: 4, cancreate: 0, canupdate: 0, canreadunmasked: 0 }] });
+      if (p.startsWith(`/fieldsecurityprofiles(${PROFILE})/systemuserprofiles_association?`)) return ok({ value: [] });
+      return { status: 404, headers: {}, body: { error: { code: '0x80060888', message: 'Not found' } } };
+    };
+    const sdk = B.createMakerSdk({ workspaceStorage: B.createNodeWorkspaceStorage(dir), instanceUrl: 'https://contoso.crm.dynamics.com', httpClient: { get, post: get, put: get, patch: get, delete: get } });
+    const spec = {
+      entities: [{ schemaName: 'new_Ticket', duplicateDetectionEnabled: true, changeTrackingEnabled: true, columns: [
+        { schemaName: 'new_Name' },
+        { schemaName: 'new_Due', type: 'DateTime', dateTimeBehavior: 'DateOnly', dateFormat: 'DateOnly' },
+        { schemaName: 'new_Secret', isSecured: true },
+      ] }],
+      fieldSecurityProfiles: [{ key: 'hr', name: 'HR', permissions: [{ table: 'new_ticket', column: 'new_secret', read: true }], assignTo: { users: [USER] } }],
+    };
+    try {
+      await sdk.initWorkspace();
+      requests.length = 0;
+      return { result: await verifySpec(spec, readerFor(sdk, 'new_app', {})), requests };
+    } finally { fsx.rmSync(dir, { recursive: true, force: true }); }
+  };
+  const { result } = await run();
+  assert.strictEqual(result.ok, false);
+  assert.deepStrictEqual(result.checks.filter((c) => !['entity', 'column'].includes(c.kind)).map((c) => [c.kind, c.name, c.present, c.detail || '']), [
+    ['dateTimeBehavior', 'new_ticket.new_due', false, 'declared DateOnly, deployed UserLocal'],
+    ['tableFlag', 'new_ticket.changeTrackingEnabled', false, 'changeTrackingEnabled declared true, deployed false'],
+    ['tableFlag', 'new_ticket.duplicateDetectionEnabled', true, ''],
+    ['isSecured', 'new_ticket.new_secret', true, ''],
+    ['fieldSecurityProfile', 'hr', true, ''],
+    ['fieldSecurityAssignment', `hr:users:${USER}`, false, 'systemuser does not hold the profile'],
+  ]);
+  assert.strictEqual(result.unverified, undefined);
+  // A flags read that fails leaves each declared flag unverified — not passed, not failed.
+  const unread = await run({ flags: { status: 500, headers: {}, body: {} } });
+  assert.deepStrictEqual(unread.result.checks.filter((c) => c.kind === 'tableFlag'), []);
+  assert.deepStrictEqual(unread.result.unverified.filter((u) => u.startsWith('tableFlag:')), [
+    'tableFlag:new_ticket.changeTrackingEnabled (changeTrackingEnabled declared true, deployed unreadable)',
+    'tableFlag:new_ticket.duplicateDetectionEnabled (duplicateDetectionEnabled declared true, deployed unreadable)',
+  ]);
+});
