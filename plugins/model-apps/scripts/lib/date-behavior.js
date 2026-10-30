@@ -101,7 +101,9 @@ async function readExistingDateBehaviors(provision, table, { cache } = {}) {
 //   any change with CanChange not true -> refused: Learn requires CanChangeDateTimeBehavior to be true, a repair included
 //
 // `missing` lists the null-behaviour columns no planned repair covers: each one blocks a column write on the table.
-function planDateBehaviorRepairs(entity, evidence, { authorizedDestructive } = {}) {
+// `known` (lowercased names) are the columns the caller already knows the table has. One of them the typed read does not list is
+// unknown: it is not a Date and Time column there, or the answer left it out — either way it will not be created with its behaviour.
+function planDateBehaviorRepairs(entity, evidence, { authorizedDestructive, known } = {}) {
   const operations = [];
   const unknown = [];
   const refused = [];
@@ -115,11 +117,15 @@ function planDateBehaviorRepairs(entity, evidence, { authorizedDestructive } = {
   for (const c of declared) {
     const column = lower(c.schemaName);
     const current = evidence.columns.get(column);
-    if (!current) continue; // a column the table does not have yet is created with its behaviour
-    const want = c.dateTimeBehavior;
-    if (current.behavior === want) continue;
     const key = `dateTimeBehavior:${table}.${column}`;
     const target = `${table}.${column}`;
+    if (!current) {
+      // A column the table does not have yet is created with its behaviour; one it already has cannot be.
+      if (known && known.has(column)) unknown.push({ key, kind: 'dateTimeBehavior', target, code: 'DATETIME_BEHAVIOR_UNVERIFIED', reason: 'the table has the column, but the read of its Date and Time columns does not list it' });
+      continue;
+    }
+    const want = c.dateTimeBehavior;
+    if (current.behavior === want) continue;
     const refuse = (code, reason) => refused.push({ key, kind: 'dateTimeBehavior', target, code, reason });
     if (current.behavior !== null && current.behavior !== 'UserLocal') {
       refuse('DATETIME_BEHAVIOR_PERMANENT', `the column is ${current.behavior}, which cannot be changed`);

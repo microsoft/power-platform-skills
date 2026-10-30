@@ -2234,16 +2234,17 @@ async function guardExistingTableDates({ sdk, provision, runner, entity, logical
   const evidence = await readExistingDateBehaviors(provision, logical, { cache });
   const name = (entity && entity.schemaName) || logical;
   if (declared.length) {
-    const plan = planDateBehaviorRepairs({ schemaName: logical, columns: declared }, evidence, { authorizedDestructive });
+    const plan = planDateBehaviorRepairs({ schemaName: logical, columns: declared }, evidence, { authorizedDestructive, known: existingCols });
     if (plan.refused.length) {
       const why = plan.refused.map((r) => `${r.target}: ${r.reason}${r.code === 'DESTRUCTIVE_NOT_AUTHORIZED' ? ` (to make it, run the build again with --authorize ${r.key})` : ''}`).join('; ');
       await runner.run('data-model', `date and time behaviour ${name}`, async () => {
         throw refusal(`the declared Date and Time behaviour cannot be applied — ${why}. Nothing was changed.`, { code: plan.refused[0].code });
       });
     }
-    if (plan.unknown.length && !gate) {
+    if (plan.unknown.length && (!gate || evidence.complete)) {
       // A declared behaviour the read cannot confirm halts rather than reporting the column as built: what it holds is not known.
-      // (With the preflight on, its own check below halts on the same unread answer.)
+      // (With the preflight on, its own check below halts on the same unread answer; a whole answer that does not list a column the
+      // table has would pass that check, so it halts here.)
       await runner.run('data-model', `date and time behaviour ${name}`, async () => {
         throw refusal(`could not read the Date and Time behaviour of ${logical} (${plan.unknown[0].reason}), so the declared behaviour of ${plan.unknown.map((u) => u.target).join(', ')} cannot be confirmed`, { code: 'DATETIME_BEHAVIOR_UNVERIFIED' });
       });
@@ -2266,6 +2267,31 @@ async function guardExistingTableDates({ sdk, provision, runner, entity, logical
     }
     throw refusal(`could not tell whether table ${logical} can take a new column: the read of its Date and Time behaviours was not conclusive (${ready.reason})`, { code: ready.code });
   });
+}
+
+// An explicit `isSecured` on columns the table already has (`targets`, lowercased): one scalar read, then one updateColumn per column
+// that differs. `true` is written whether or not the read answered (the write is the same either way); an unread `false` halts, as a
+// declaration the build cannot confirm, and so does an unsecure without consent. Columns that declare nothing are never read or written.
+async function reconcileColumnSecurity({ sdk, provision, runner, name, logical, columns, targets, authorizedDestructive }) {
+  if (!columns.some((c) => typeof c.isSecured === 'boolean' && targets.has(c.schemaName.toLowerCase()))) return;
+  const evidence = await readColumnSecurity(provision, logical);
+  const plan = planColumnSecurity({ schemaName: logical, columns }, targets, evidence, { authorizedDestructive });
+  if (plan.unknown.length) {
+    await runner.run('data-model', `column security ${name}`, async () => {
+      throw refusal(`could not read whether ${plan.unknown.map((u) => u.target).join(', ')} ${plan.unknown.length === 1 ? 'is' : 'are'} secured (${plan.unknown[0].reason}), so the declared isSecured: false cannot be confirmed. Nothing was changed; run the build again.`, { code: 'COLUMN_SECURITY_UNREAD' });
+    });
+  }
+  if (plan.refused.length) {
+    await runner.run('data-model', `column security ${name}`, async () => {
+      throw refusal(`the declared column security cannot be applied — ${plan.refused.map((r) => `${r.target}: ${r.reason} (to make it, run the build again with --authorize ${r.key})`).join('; ')}. Nothing was changed.`, { code: plan.refused[0].code });
+    });
+  }
+  for (const op of plan.operations) {
+    await runner.run('data-model', `column security ${name}.${op.column} -> ${op.isSecured ? 'secured' : 'not secured'}`, async () => {
+      const applied = await applyColumnSecurity({ operations: [op] }, { sdk });
+      if (applied.refused.length) throw refusal(`${op.target}: ${applied.refused[0].reason}. Nothing was changed.`, { code: applied.refused[0].code });
+    });
+  }
 }
 
 async function applyStatusReasons({ sdk, provision, runner, warn }, { entity, logical, languageCode, window }, result, checkExisting = false) {
@@ -2677,6 +2703,9 @@ async function provisionDataModelSteps({ sdk, provision, runner, spec, apply, la
   // to the ones it created. A lookup to one that sets no displayName of its own is named by the
   // environment (lookupParentNeedsEnvironment), which only the table loop below can know.
   const reusedTables = new Set();
+  // The declared tables this build did not see itself create: the reused ones, and one whose create was answered "already exists" and
+  // that was then found. Each is guarded by the Date and Time preflight before a column or lookup is added to it (guardExistingTableDates).
+  const unprovenTables = new Set();
   // The typed Date and Time reads of this attempt, one per table at most (guardExistingTableDates), and the tables whose definition a
   // schema-feature change altered, published together at the end of the phase (publishChangedDefinitions).
   const dateEvidence = new Map();
@@ -2737,6 +2766,7 @@ async function provisionDataModelSteps({ sdk, provision, runner, spec, apply, la
     if (existingTable) {
       runner.skip('data-model', `table ${e.schemaName} (exists — reuse)`);
       reusedTables.add(logical);
+      unprovenTables.add(logical);
       result.entities[e.schemaName] = { logicalName: logical, entitySetName: existingTable.entitySetName };
       existingColRows = await findExistingColumns(provision, logical, warn);
       existingCols = new Set(existingColRows.map((c) => String(c.logicalName || c.schemaName || '').toLowerCase()));
@@ -2795,6 +2825,7 @@ async function provisionDataModelSteps({ sdk, provision, runner, spec, apply, la
           if (!found) throw err;
           result.entities[e.schemaName] = { logicalName: logical, entitySetName: found.entitySetName };
           foundAfterCreate = true;
+          unprovenTables.add(logical);
         }
       }, { recoverable: true });
     }
@@ -2881,7 +2912,7 @@ async function provisionDataModelSteps({ sdk, provision, runner, spec, apply, la
         || c.isValidForCreate !== undefined || c.isValidForUpdate !== undefined || c.isValidForRead !== undefined));
     for (const c of buildable) if (existingCols.has(c.schemaName.toLowerCase())) runner.skip('data-model', `column ${e.schemaName}.${c.schemaName} (exists)`);
     const toCreate = buildable.filter((c) => !existingCols.has(c.schemaName.toLowerCase()));
-    if (existingTable) await guardDates(e, logical, existingCols, toCreate.length > 0);
+    if (unprovenTables.has(logical)) await guardDates(e, logical, existingCols, toCreate.length > 0);
     // A create the platform answers "already exists" for is skipped, not created — so it carried none of what the spec declares
     // with it (a secured flag, a Date and Time behaviour). It happens when the table's columns could not be read, or another writer
     // added the column first. Each such column is reconciled below as a column the table already has.
@@ -3005,31 +3036,11 @@ async function provisionDataModelSteps({ sdk, provision, runner, spec, apply, la
       });
     }
     // An explicit `isSecured` on a column the table already has — one the read found, or one whose create was skipped because it
-    // already existed. One scalar read, only when the spec declares it on such a column; a secured column is secured in this phase,
-    // before any sample row is written. `true` is written whether or not the read answered (the write is the same either way); an
-    // unread `false` halts, as a declaration the build cannot confirm. Never on a Customer column (validation refuses it:
-    // updateColumn refuses every change to one), and the required and capability updates above never carry it.
+    // already existed (reconcileColumnSecurity). A secured column is secured in this phase, before any sample row is written. Never on a
+    // Customer column (validation refuses it: updateColumn refuses every change to one), and the required and capability updates above
+    // never carry it. A Lookup column is reconciled after the relationships that create it.
     const securityTargets = existingTable ? new Set([...existingCols, ...skippedExisting]) : skippedExisting;
-    if (buildable.some((c) => c.type !== 'Customer' && typeof c.isSecured === 'boolean' && securityTargets.has(c.schemaName.toLowerCase()))) {
-      const evidence = await readColumnSecurity(provision, logical);
-      const plan = planColumnSecurity({ schemaName: logical, columns: buildable.filter((c) => c.type !== 'Customer') }, securityTargets, evidence, { authorizedDestructive });
-      if (plan.unknown.length) {
-        await runner.run('data-model', `column security ${e.schemaName}`, async () => {
-          throw refusal(`could not read whether ${plan.unknown.map((u) => u.target).join(', ')} ${plan.unknown.length === 1 ? 'is' : 'are'} secured (${plan.unknown[0].reason}), so the declared isSecured: false cannot be confirmed. Nothing was changed; run the build again.`, { code: 'COLUMN_SECURITY_UNREAD' });
-        });
-      }
-      if (plan.refused.length) {
-        await runner.run('data-model', `column security ${e.schemaName}`, async () => {
-          throw refusal(`the declared column security cannot be applied — ${plan.refused.map((r) => `${r.target}: ${r.reason} (to make it, run the build again with --authorize ${r.key})`).join('; ')}. Nothing was changed.`, { code: plan.refused[0].code });
-        });
-      }
-      for (const op of plan.operations) {
-        await runner.run('data-model', `column security ${e.schemaName}.${op.column} -> ${op.isSecured ? 'secured' : 'not secured'}`, async () => {
-          const applied = await applyColumnSecurity({ operations: [op] }, { sdk });
-          if (applied.refused.length) throw refusal(`${op.target}: ${applied.refused[0].reason}. Nothing was changed.`, { code: applied.refused[0].code });
-        });
-      }
-    }
+    await reconcileColumnSecurity({ sdk, provision, runner, name: e.schemaName, logical, columns: buildable.filter((c) => c.type !== 'Customer'), targets: securityTargets, authorizedDestructive });
     for (const c of requiredDeclared) {
       if (existingTable && existingCols.has(c.schemaName.toLowerCase())) continue;
       // A column's level is part of its own create request — except the primary name column's: it is asked in the table's create, which
@@ -3204,10 +3215,11 @@ async function provisionDataModelSteps({ sdk, provision, runner, spec, apply, la
     // holds the name code only: those other answers are not observed for an N:N, not impossible.
     const alreadyExistsCodes = rel.type === 'OneToMany' ? ALREADY_EXISTS_CODES.oneToManyRelationship : ALREADY_EXISTS_CODES.manyToManyRelationship;
     // A 1:N adds its lookup column to the referencing table, which the Date and Time preflight guards like any other added column when
-    // the build did not create that table (one it reused, or one the spec does not declare). An N:N adds no column to either table.
+    // the build did not create that table (one it reused or found only after its create, or one the spec does not declare). An N:N adds
+    // no column to either table.
     if (rel.type === 'OneToMany') {
       const referencing = rel.referencing.toLowerCase();
-      if (reusedTables.has(referencing) || !(spec.entities || []).some((x) => String(x.schemaName).toLowerCase() === referencing)) {
+      if (unprovenTables.has(referencing) || !(spec.entities || []).some((x) => String(x.schemaName).toLowerCase() === referencing)) {
         await guardDates({ schemaName: referencing, columns: [] }, referencing, new Set(), true);
       }
     }
@@ -3289,6 +3301,16 @@ async function provisionDataModelSteps({ sdk, provision, runner, spec, apply, la
         throw serviceFailure(`could not identify the relationship that already uses schema name '${schema}' (${holder.error || 'read failed'}); the create failed because it already exists: ${(err && err.message) || err}`, { status: holder.status, words: holder.error || '', answered: holder.answered });
       }
     }, { skipIf: (e) => isAlreadyExists(e, alreadyExistsCodes) && e.sameRelationshipExists === true });
+  }
+
+  // An explicit `isSecured` on a Lookup column, now that the relationships that create lookups have run: the lookup create carries no
+  // security, and a lookup the table already had is not among the columns above. Same read and write as a scalar column's, before the
+  // field security profiles and any sample row. A lookup that declares nothing is never read.
+  for (const e of spec.entities) {
+    const logical = e.schemaName.toLowerCase();
+    const lookups = (e.columns || []).filter((c) => c && c.type === 'Lookup' && c.schemaName && typeof c.isSecured === 'boolean');
+    if (!lookups.length) continue;
+    await reconcileColumnSecurity({ sdk, provision, runner, name: e.schemaName, logical, columns: lookups, targets: new Set(lookups.map((c) => c.schemaName.toLowerCase())), authorizedDestructive });
   }
 
   // A rebuild repairs a lookup column an older build labelled with its old default (opt-in: only the app
