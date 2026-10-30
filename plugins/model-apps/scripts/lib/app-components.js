@@ -268,13 +268,42 @@ async function publishAppComponents(client, appId, { sleep } = {}) {
   }
 }
 
-function appComponentsFor(created, mainFormsByTable) {
+// Every form the spec declared, once per GUID, with what the build knows of it: `created.forms` keeps ONE Main form per
+// table (keyed by table), `created.formIds` every declared form keyed "<table>|<formType>|<name>" (app-spec.js
+// formIdentityKey), so both are read; a form named in both is the same id.
+//   forms:   { "contoso_item": "<id B>" }
+//   formIds: { "contoso_item|Main|Summary": "<id A>", "contoso_item|Main|Alternate": "<id B>", "contoso_item|QuickCreate|Quick": "<id Q>" }
+function declaredForms(created) {
+  const seen = new Set();
+  const out = [];
+  const add = (table, main, id) => {
+    if (!id || seen.has(guidKey(id))) return;
+    seen.add(guidKey(id));
+    out.push({ table: String(table).toLowerCase(), main, id });
+  };
+  for (const [table, id] of Object.entries((created && created.forms) || {})) add(table, true, id);
+  for (const [identity, id] of Object.entries((created && created.formIds) || {})) {
+    const [table, formType] = identity.split('|');
+    add(table, (formType || 'Main') === 'Main', id);
+  }
+  return out;
+}
+
+// The components a NEW app is created with. The legacy projection (no `declared`) is what every existing spec sends: one
+// Main form per table, the views and the charts. `declared: true` (app.pinDeclaredArtifacts) lists every declared form —
+// other Main forms and Quick Create forms included — and the dashboards, still leaving out a Main form that a Main-form
+// list does not name (the SDK would refuse to pin it).
+function appComponentsFor(created, mainFormsByTable, { declared = false } = {}) {
+  const allowed = (table, id) => !mainFormsByTable || !mainFormsByTable[table.toLowerCase()]
+    || mainFormsByTable[table.toLowerCase()].map(guidKey).includes(guidKey(id));
+  const forms = declared
+    ? declaredForms(created).filter((form) => !form.main || allowed(form.table, form.id)).map((form) => form.id)
+    : Object.entries(created.forms || {}).filter(([table, id]) => id && allowed(table, id)).map(([, id]) => id);
   return {
-    forms: Object.entries(created.forms || {}).filter(([table, id]) => id
-      && (!mainFormsByTable || !mainFormsByTable[table.toLowerCase()] || mainFormsByTable[table.toLowerCase()].map(guidKey).includes(guidKey(id))))
-      .map(([, id]) => id),
+    forms,
     views: Object.values(created.views || {}).filter(Boolean),
     charts: Object.values(created.charts || {}).filter(Boolean),
+    ...(declared ? { dashboards: Object.values(created.dashboards || {}).filter(Boolean) } : {}),
     ...(mainFormsByTable === undefined ? {} : { mainFormsByTable }),
   };
 }
@@ -315,10 +344,11 @@ async function applyAppMainForms(provision, appId, mainFormsByTable, { mainForms
 }
 
 // The ids the spec's declared forms, views, charts and dashboards resolved to (created or reused this run), for
-// app.pinDeclaredArtifacts. `created` is the build's result.created: { forms: { <table>: id }, views: { <key>: id }, … }.
+// app.pinDeclaredArtifacts. `created` is the build's result.created: { forms, formIds, views: { <key>: id }, … }. Every
+// declared form is listed (declaredForms); pinDeclaredArtifacts then drops a Main form the Main-form list leaves out.
 function declaredAppPins(created) {
   const values = (map) => Object.values(map || {}).filter(Boolean);
-  return { forms: values(created && created.forms), views: values(created && created.views), charts: values(created && created.charts), dashboards: values(created && created.dashboards) };
+  return { forms: declaredForms(created).map((form) => form.id), views: values(created && created.views), charts: values(created && created.charts), dashboards: values(created && created.dashboards) };
 }
 
 // app.pinDeclaredArtifacts: add the declared ids to the app copy's explicit pins before a push. A fetch carries no

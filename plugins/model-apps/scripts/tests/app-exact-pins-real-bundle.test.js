@@ -5,9 +5,9 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { applyAppMainForms, pinDeclaredArtifacts, declaredAppPins, exactMembershipOutcome } = require('../lib/app-components.js');
+const { applyAppMainForms, pinDeclaredArtifacts, declaredAppPins, appComponentsFor, exactMembershipOutcome } = require('../lib/app-components.js');
 const { APP, FORM_A, FORM_B, META } = require('./helpers/app-membership-sdk.js');
-const { appPinServer, SITEMAP, VIEW, CHART, OFFNAV_CHART } = require('./helpers/app-pin-server.js');
+const { appPinServer, SITEMAP, VIEW, CHART, OFFNAV_CHART, FORM_QUICK, OFFNAV_FORM_A, OFFNAV_FORM_B } = require('./helpers/app-pin-server.js');
 
 const MAIN = { contoso_item: [FORM_A] };
 const writes = (state) => state.requests.filter((line) => !line.startsWith('GET '));
@@ -145,4 +145,46 @@ test('exactMembershipOutcome: only every table exact AND the published layer mat
   assert.equal(exactMembershipOutcome(pushed([], 'matches')).done, false, 'no table rows is not proof');
   assert.equal(exactMembershipOutcome({ appMainForms: { mode: 'addOnly', tables: [] } }).done, false);
   assert.equal(exactMembershipOutcome({}).done, false);
+});
+
+// The build's result.created as the engine fills it (sdk-build.js): `forms` keeps ONE Main form per table (the last one
+// created), `formIds` every declared form, keyed "<table>|<formType>|<name>".
+const DECLARED = {
+  forms: { contoso_item: FORM_B, contoso_other: OFFNAV_FORM_B },
+  formIds: {
+    'contoso_item|Main|Summary': FORM_A, 'contoso_item|Main|Alternate': FORM_B, 'contoso_item|QuickCreate|Quick': FORM_QUICK,
+    'contoso_other|Main|Other summary': OFFNAV_FORM_A, 'contoso_other|Main|Other detail': OFFNAV_FORM_B,
+  },
+  views: { a: VIEW }, charts: { c: OFFNAV_CHART }, dashboards: {},
+};
+
+test('REAL BUNDLE: pinDeclaredArtifacts pins every declared form (several Main forms off the navigation, a Quick Create), never a Main form the list leaves out', async (t) => {
+  const server = await fetched(t);
+  await applyAppMainForms(server.sdk, APP, MAIN);
+  const declared = declaredAppPins(DECLARED);
+  await pinDeclaredArtifacts(server.sdk, APP, declared);
+  const pushed = await server.sdk.pushArtifact('app', APP);
+  assert.equal(pushed.saved, true, JSON.stringify(pushed.error && pushed.error.message));
+  for (const key of [`60:${FORM_A}`, `60:${FORM_QUICK}`, `60:${OFFNAV_FORM_A}`, `60:${OFFNAV_FORM_B}`, `59:${OFFNAV_CHART}`]) {
+    assert.ok(server.state.members.has(key), `${key} joined the app`);
+  }
+  assert.ok(!server.state.members.has(`60:${FORM_B}`), 'the Main form the list leaves out is not pinned');
+  assert.ok(!writes(server.state).join('\n').includes(FORM_B));
+});
+
+test('declaredAppPins: every declared form of created.formIds and created.forms, once per GUID', () => {
+  const pins = declaredAppPins({ ...DECLARED, forms: { ...DECLARED.forms, dup: `{${FORM_A.toUpperCase()}}` } });
+  assert.deepEqual(pins.forms, [FORM_B, OFFNAV_FORM_B, `{${FORM_A.toUpperCase()}}`, FORM_QUICK, OFFNAV_FORM_A], 'the first spelling of an id is kept, the second dropped');
+  assert.deepEqual(declaredAppPins({}).forms, []);
+});
+
+test('appComponentsFor: the declared projection of a new app lists every declared form and dashboard; the legacy projection is unchanged', () => {
+  const legacy = appComponentsFor(DECLARED, MAIN);
+  assert.deepEqual(legacy, { forms: [OFFNAV_FORM_B], views: [VIEW], charts: [OFFNAV_CHART], mainFormsByTable: MAIN }, 'one form per table, as before');
+  assert.deepEqual(appComponentsFor(DECLARED, undefined), { forms: [FORM_B, OFFNAV_FORM_B], views: [VIEW], charts: [OFFNAV_CHART] });
+  const declared = appComponentsFor({ ...DECLARED, dashboards: { Overview: CHART } }, MAIN, { declared: true });
+  assert.deepEqual(declared.forms, [OFFNAV_FORM_B, FORM_A, FORM_QUICK, OFFNAV_FORM_A], 'the Main form outside the list is left out; a Quick Create is kept');
+  assert.deepEqual(declared.dashboards, [CHART]);
+  assert.deepEqual(declared.mainFormsByTable, MAIN);
+  assert.deepEqual(appComponentsFor(DECLARED, undefined, { declared: true }).forms, [FORM_B, OFFNAV_FORM_B, FORM_A, FORM_QUICK, OFFNAV_FORM_A]);
 });
