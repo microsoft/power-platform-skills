@@ -1,4 +1,4 @@
-# 406 requests, 5 publishes
+# 408 requests, 5 publishes
 ## up to publish 1: importexportxml(entities(entity=contoso_project))
   1x GET /EntityDefinitions(LogicalName='appmodule')?$select=EntitySetName -> 200
   1x GET /EntityDefinitions(LogicalName='contoso_project') -> 200
@@ -10,9 +10,11 @@
   2x GET /EntityDefinitions(LogicalName='contoso_project')/OneToManyRelationships?$select=SchemaName,ReferencingEntity,ReferencingAttribute -> 200
   1x GET /EntityDefinitions(LogicalName='contoso_project')?$select=EntitySetName -> 200
   1x GET /EntityDefinitions(LogicalName='contoso_project')?$select=LogicalName,EntitySetName&$expand=Keys($select=SchemaName,KeyAttributes) -> 200
+  1x GET /EntityDefinitions(LogicalName='contoso_tag')/Attributes/Microsoft.Dynamics.CRM.DateTimeAttributeMetadata?$select=LogicalName,DateTimeBehavior,CanChangeDateTimeBehavior -> 200
   1x GET /EntityDefinitions(LogicalName='contoso_tag')/Attributes?$select=LogicalName,RequiredLevel -> 200
   1x GET /EntityDefinitions(LogicalName='contoso_tag')?$select=LogicalName,EntitySetName -> 200
   1x GET /EntityDefinitions(LogicalName='contoso_task') -> 200
+  1x GET /EntityDefinitions(LogicalName='contoso_task')/Attributes/Microsoft.Dynamics.CRM.DateTimeAttributeMetadata?$select=LogicalName,DateTimeBehavior,CanChangeDateTimeBehavior -> 200
   1x GET /EntityDefinitions(LogicalName='contoso_task')/Attributes?$select=LogicalName,RequiredLevel -> 200
   1x GET /EntityDefinitions(LogicalName='contoso_task')/ManyToManyRelationships?$select=SchemaName,Entity1LogicalName,Entity2LogicalName,IntersectEntityName,Entity1IntersectAttribute,Entity2IntersectAttribute -> 200
   1x GET /EntityDefinitions(LogicalName='contoso_task')?$select=EntitySetName -> 200

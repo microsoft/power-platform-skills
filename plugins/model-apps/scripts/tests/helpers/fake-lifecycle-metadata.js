@@ -92,7 +92,7 @@ const ATTRIBUTE_PROPS = {
   DoubleAttributeMetadata: ['MinValue', 'MaxValue', 'Precision'],
   MoneyAttributeMetadata: ['MinValue', 'MaxValue', 'Precision', 'PrecisionSource', 'IsBaseCurrency'],
   BooleanAttributeMetadata: ['DefaultValue'],
-  DateTimeAttributeMetadata: ['Format', 'DateTimeBehavior'],
+  DateTimeAttributeMetadata: ['Format', 'DateTimeBehavior', 'CanChangeDateTimeBehavior'],
   PicklistAttributeMetadata: ['DefaultFormValue'],
   MultiSelectPicklistAttributeMetadata: ['DefaultFormValue'],
   LookupAttributeMetadata: ['Targets'],
@@ -266,6 +266,16 @@ function createMetadataStore({ baseLanguage = 1033, userLanguage = baseLanguage,
     if (cls === 'StringAttributeMetadata' && attribute.MaxLength === undefined) attribute.MaxLength = 100;
     if (cls === 'StringAttributeMetadata' && !attribute.FormatName) attribute.FormatName = { Value: (sent.FormatName && sent.FormatName.Value) || 'Text' };
     if (cls === 'MemoAttributeMetadata' && attribute.MaxLength === undefined) attribute.MaxLength = 2000;
+    // A Date and Time column created on its own (a column POST, as the build sends it) holds a behaviour: the one sent, else UserLocal,
+    // the platform's default. Whether it may change is a managed property: true on a custom column, false on the platform's own
+    // (createdon, modifiedon …). The build's typed date read (lib/date-behavior.js) reads both before it adds a column to a table.
+    // See: https://learn.microsoft.com/en-us/power-apps/developer/data-platform/behavior-format-date-time-attribute
+    if (cls === 'DateTimeAttributeMetadata') {
+      if (!attribute.DateTimeBehavior) attribute.DateTimeBehavior = { Value: 'UserLocal' };
+      if (!attribute.CanChangeDateTimeBehavior) {
+        attribute.CanChangeDateTimeBehavior = { Value: attribute.IsCustomAttribute !== false, CanBeChanged: false, ManagedPropertyLogicalName: 'canchangedatetimebehavior' };
+      }
+    }
     // The column a Money column converts is not its base-currency twin (companionsOf makes that one).
     if (cls === 'MoneyAttributeMetadata' && attribute.IsBaseCurrency === undefined) attribute.IsBaseCurrency = false;
     if (attribute.OptionSet) attribute.OptionSet = storedOptionSet(attribute.OptionSet, { local: true });

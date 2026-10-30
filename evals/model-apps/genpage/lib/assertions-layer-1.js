@@ -33,6 +33,8 @@ const { blankLiterals } = require('../../../../plugins/model-apps/scripts/lib/so
 const { planTargets, sha256 } = require('../../../../plugins/model-apps/scripts/genpage-plan-provenance.js');
 // The gate provision-entities.js puts its input through, so an input the plugin would refuse is never graded as written right.
 const { validateProvisionInput } = require('../../../../plugins/model-apps/scripts/lib/provision-input.js');
+// How the plugin reads a choice option: a label (a string or a language map) numbered by its place, or an explicit `{ value, label }`.
+const { normalizeChoiceOptions, CHOICE_VALUE_BASE } = require('../../../../plugins/model-apps/scripts/lib/schema-feature-contract.js');
 const {
   writtenSemanticsProblems, readWrittenSemantics, readPreviewSemantics, requiredContractProblems, compareSemantics, semanticRecord,
   lookupEvidenceProblems, normalizeValue,
@@ -2531,9 +2533,10 @@ PHASE_EXPECTATIONS.set(
 );
 
 // What the entity-builder handed provision-entities.js for the two choice columns (agents/genpage-entity-builder.md Step 4): each option
-// is its label — a string, or a map of LCID to label — in the plan's order, and that order is what numbers it 100000000 + index. An option
-// written as a {"label", "value"} object is refused by the plugin's own gate ("'label' is not an LCID"), so the gate is asked rather than
-// its rule repeated here. Only the captured input JSON shows how the options were written: a capture made without it is skipped, a
+// is its label — a string, or a map of LCID to label — in the plan's order, and that order is what numbers it 100000000 + index. Since
+// 2.21.0 the plugin also takes an explicit `{ "value", "label" }` option; one is graded by the number it states, which must be the one
+// the plan gives its label, so the column is the same either way. A malformed option is refused by the plugin's own gate, so the gate
+// is asked rather than its rule repeated here. Only the captured input JSON shows how the options were written: a capture made without it is skipped, a
 // current fixture without it fails. Provisioned means APPLIED: without --apply the CLI only plans, writes nothing and answers
 //   { "ok": true, "dryRun": true, "plan": [ … ] }
 // so the inputs graded are the ones the applying runs were handed, each of them — never a preview's.
@@ -2569,7 +2572,8 @@ PHASE_EXPECTATIONS.set(
         if (!planned || !planned.options.length) return fail(`the plan lists no ${name} options to number the input's by`);
         const labels = [...planned.options].sort((a, b) => a.value - b.value).map((o) => o.label);
         const options = Array.isArray(column.options) ? column.options : [];
-        if (options.length !== labels.length || options.some((option, i) => !isLabel(option, labels[i]))) {
+        const read = normalizeChoiceOptions(options);
+        if (options.length !== labels.length || read.some((option, i) => option.value !== CHOICE_VALUE_BASE + i || !isLabel(option.label, labels[i]))) {
           return fail(`ticket ${name} options are ${options.map((o) => JSON.stringify(o)).join(', ')}, but the plan numbers ${labels.join(', ')} from 100000000 in that order`);
         }
       }
