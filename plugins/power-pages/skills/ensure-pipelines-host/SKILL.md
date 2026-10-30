@@ -33,13 +33,13 @@ Power Platform Pipelines need a **host environment** — a Dataverse environment
 
 ## What we know (sources of truth)
 
-This plan is grounded in three primary sources, in priority order:
+This plan is grounded in how the Power Platform UIs themselves provision and resolve a host, in priority order:
 
-1. **`useGetOrCreatePlatformEnvironment.v4.ts`** (Microsoft-internal client source; not public). Defines the exact HTTP contract for Platform Environment provisioning: endpoint, body, headers, polling.
-2. **`ProjectHostProvider.tsx`** (same repo, `src/components/ProjectHostProvider/`). Defines the exact resolution order the Power Apps UI uses to determine which environment is the project host for a source environment. We mirror that order so this skill agrees with the UI.
-3. **eng.ms `createcustompipelineshost`** (Microsoft-internal). Documents the Custom Host fast-path: a `D365_ProjectHost` org template that ships the Pipelines app pre-installed, callable through the standard environment-creation API.
+1. **Platform Environment provisioning** — the HTTP contract the `make.powerapps.com` Pipelines page uses: endpoint, body, headers, polling.
+2. **Host resolution** — the order the Power Apps UI uses to determine which environment is the project host for a source environment. We mirror that order so this skill agrees with the UI.
+3. **The Custom Host fast-path** — a `D365_ProjectHost` org template that ships the Pipelines app pre-installed, callable through the standard environment-creation API (the template PPAC's `New custom host` uses).
 
-Public Microsoft Learn (`learn.microsoft.com/power-platform/alm/{platform-host-pipelines, custom-host-pipelines, set-a-default-pipelines-host}`) is the user-facing description of the same flows; we cite it for behaviors users will recognize. HARs in `PipelinesDeployScenario.har` and `Pipelines.har` confirm the read-side calls.
+Public Microsoft Learn (`learn.microsoft.com/power-platform/alm/{platform-host-pipelines, custom-host-pipelines, set-a-default-pipelines-host}`) is the user-facing description of the same flows; we cite it for behaviors users will recognize. Browser network captures of the Pipelines pages confirm the read-side calls.
 
 ## Three host shapes the tenant can be in
 
@@ -51,7 +51,7 @@ Public Microsoft Learn (`learn.microsoft.com/power-platform/alm/{platform-host-p
 
 The current `discover-pipelines-host.js` only checks the tenant-level `DefaultCustomPipelinesHostEnvForTenant` setting. That's one signal of many. This skill implements the full resolution order.
 
-## Resolution order (mirrors `ProjectHostProvider.tsx`)
+## Resolution order (mirrors the Power Apps UI)
 
 This is the load-bearing decision tree. It is what the Power Apps UI does. We replicate it so the skill agrees with the UI.
 
@@ -116,7 +116,7 @@ This is the load-bearing decision tree. It is what the Power Apps UI does. We re
    if no admin default → use PE
 ```
 
-Source: `ProjectHostProvider.tsx` lines 100–213 (orgSetting fetch → defaultCustomPipelinesHost fetch → finalProjectHostEnvironmentId resolution).
+The Power Apps UI resolves in this order: org-setting fetch → tenant default custom host fetch → final host resolution.
 
 ## What this skill does NOT do
 
@@ -141,10 +141,10 @@ The PAC shim returns BAP-shaped data; downstream code (sku filter, ranking, clas
 
 ## Design Constraints
 
-1. **JIT provisioning is required when a PE is selected — existing or freshly provisioned.** From `ProjectHostProvider.tsx` (line 232–240 comment): *"In the Platform Environment case, the user may not already be provisioned there, so BAP cannot discover it. So we'll use the org URL we retrieve from the getOrCreate call to make this first request so that user JIT can be triggered."* When Phase 2 detects an existing PE and the user accepts it (Phase 3.A) — or when Phase 4.0 provisions a new PE via `getOrCreate` — Phase 5's `WhoAmI` call against `instanceApiUrl` triggers JIT before any subsequent host op. (For Custom Host paths the caller has access by construction.)
+1. **JIT provisioning is required when a PE is selected — existing or freshly provisioned.** In the Platform Environment case the user may not yet be provisioned there, so BAP cannot discover it; the Power Apps UI therefore sends its first request to the org URL the `getOrCreate` call returns, which triggers user JIT. When Phase 2 detects an existing PE and the user accepts it (Phase 3.A) — or when Phase 4.0 provisions a new PE via `getOrCreate` — Phase 5's `WhoAmI` call against `instanceApiUrl` triggers JIT before any subsequent host op. (For Custom Host paths the caller has access by construction.)
 2. **`CannotRedirect` is a real terminal state**, not a theoretical edge case. It happens when `ProjectHostEnvironmentId` (org setting on source env) points at PE but `DefaultCustomPipelinesHostEnvForTenant` (admin tenant setting) points elsewhere. The skill must detect this and surface it as a specific error — falling through silently would route pipeline ops at the wrong host.
-3. **Admin-only Custom Host fast-path.** PPAC's `New custom host` flow is gated by `DeploymentHubCreatePipelinesHostForAdminsOnly` and shows only for Global / Power Platform / Dynamics admins (eng.ms doc). The BAP env-create API also needs the equivalent privilege. Non-admins get 403; the skill preflight-attestation-prompts and gracefully falls back to manual paths.
-4. **404 from BAP env GET is ambiguous.** Returns 404 for *deleted*, *disabled*, *no-PE*, and *no-access* without distinguishing (`PowerPipelines_PE_Knowledge.md` §6.A). We never treat a single 404 as "no host exists" — we corroborate via list-environments and the org setting before acting.
+3. **Admin-only Custom Host fast-path.** PPAC's `New custom host` flow is gated by `DeploymentHubCreatePipelinesHostForAdminsOnly` and shows only for Global / Power Platform / Dynamics admins. The BAP env-create API also needs the equivalent privilege. Non-admins get 403; the skill preflight-attestation-prompts and gracefully falls back to manual paths.
+4. **404 from BAP env GET is ambiguous.** Returns 404 for *deleted*, *disabled*, *no-PE*, and *no-access* without distinguishing. We never treat a single 404 as "no host exists" — we corroborate via list-environments and the org setting before acting.
 5. **Each environment is bound to only one host at a time.** Rebinding requires Force Link, which is destructive in the previous host. Out of scope (see non-goals).
 6. **The skill runs in user OAuth context** — same scope and audience the Power Apps UI uses. BAP calls use `https://service.powerapps.com/` audience.
 
@@ -234,20 +234,20 @@ Cap this step at ~30 seconds. If MCP search / fetch errors out, log a one-line n
 
 This phase is read-only. It produces a `RESOLUTION` object the user-confirm phase branches on.
 
-The phase mirrors `ProjectHostProvider.tsx` exactly. The `useState` variables in that hook map to fields in our `RESOLUTION`:
+The phase mirrors the Power Apps UI's resolution exactly. Its state maps to fields in our `RESOLUTION`:
 
-| TS variable | Our field |
+| UI state | Our field |
 |---|---|
-| `orgSetting.orgDbOrgSettingValue` | `orgSettingHostEnvId` |
-| `initialProjectHostEnvironmentId` | (same) |
-| `isInitialHostPlatformEnvironment` | `isPlatform` |
-| `defaultCustomPipelinesHost` | `tenantDefaultCustomHostEnvId` |
-| `finalProjectHostEnvironmentId` | `finalHostEnvId` |
-| `projectHostStatus` | `status` |
+| the source env's `ProjectHostEnvironmentId` org setting | `orgSettingHostEnvId` |
+| the host that setting names | (same) |
+| whether that host is a Platform Environment | `isPlatform` |
+| the tenant's default custom host (`DefaultCustomPipelinesHostEnvForTenant`) | `tenantDefaultCustomHostEnvId` |
+| the resolved host | `finalHostEnvId` |
+| the resolution status | `status` |
 
 Steps:
 
-1. **Org-setting probe** (mirrors `useGetOrgDbOrgSetting('ProjectHostEnvironmentId')` line 103 in tsx). New helper `check-env-host-binding.js`:
+1. **Org-setting probe** (reads the `ProjectHostEnvironmentId` org setting, as the UI does). New helper `check-env-host-binding.js`:
 
    ```
    POST {devEnvUrl}/api/data/v9.0/GetOrgDbOrgSetting
@@ -257,7 +257,7 @@ Steps:
    - Empty `SettingValue` → no current binding. Skip to Step 4.
    - Non-empty → store as `orgSettingHostEnvId`. Continue to Step 2.
 
-2. **Resolve env via BAP** (mirrors `useGetEnvironmentByName(initialProjectHostEnvironmentId)` line 483 in tsx). New helper `resolve-env-by-id.js`:
+2. **Resolve env via BAP** (looks the host up by its environment id, as the UI does). New helper `resolve-env-by-id.js`:
 
    ```
    GET https://api.bap.microsoft.com/providers/Microsoft.BusinessAppPlatform/environments/{envId}?api-version=2020-06-01&$expand=properties.linkedEnvironmentMetadata,properties.permissions
@@ -269,7 +269,7 @@ Steps:
      - If not listed → env is genuinely deleted/disabled → set `RESOLUTION.status = "OrgSettingStale"`, recommend the user clear `ProjectHostEnvironmentId` and re-run, stop.
    - 403 → set `RESOLUTION.status = "PermissionDenied"`, stop.
 
-3. **If `isPlatform === true`**, mirror the default-custom-tenant-setting check (lines 148–213 in tsx). Reuse the existing `discover-pipelines-host.js`:
+3. **If `isPlatform === true`**, mirror the UI's default-custom-tenant-setting check. Reuse the existing `discover-pipelines-host.js`:
 
    ```bash
    node "${PLUGIN_ROOT}/scripts/lib/discover-pipelines-host.js" \
@@ -594,7 +594,7 @@ Surface the specific failure to the user. Out of automated remediation scope. Re
 > **Why we ask:** PE provisioned in wrong tenant; cannot be deleted by tenant admin.
 > **Cancel leaves:** Nothing — no provisioning fired yet.
 
-The lowest-friction host-provisioning path. Calls the idempotent BAP `getOrCreate` endpoint with a `D365_1stPartyAdminApps` + `Platform` body. Same call `make.powerapps.com → Pipelines` page makes when a user clicks "Get started" — we just invoke it directly. Spec from `useGetOrCreatePlatformEnvironment.v4.ts`. New helper `provision-platform-host.js`.
+The lowest-friction host-provisioning path. Calls the idempotent BAP `getOrCreate` endpoint with a `D365_1stPartyAdminApps` + `Platform` body. Same call `make.powerapps.com → Pipelines` page makes when a user clicks "Get started" — we just invoke it directly. New helper `provision-platform-host.js`.
 
 **No sub-prompts.** BAP picks tenant home geo + default display name; no admin role required.
 
@@ -645,7 +645,7 @@ node "${PLUGIN_ROOT}/scripts/lib/provision-platform-host.js" \
 > **Why we ask:** Installing Pipelines onto a Sandbox env without consent — sandbox envs are deletable on inactivity and have reduced capacity; pipelines may break unexpectedly.
 > **Cancel leaves:** Nothing — no app install fired.
 
-Standard env-create API with the `D365_ProjectHost` template (eng.ms-documented; same template PPAC `New custom host` uses internally). New helper `provision-custom-host.js`.
+Standard env-create API with the `D365_ProjectHost` template (the same template PPAC's `New custom host` uses). New helper `provision-custom-host.js`.
 
 **Sub-prompts (collected before the API call) via `AskUserQuestion`:**
 
@@ -801,7 +801,7 @@ node "${PLUGIN_ROOT}/scripts/lib/install-pipelines-app.js" \
 
 1. Print: `https://admin.powerplatform.microsoft.com/deployments` and instructions: *"Click 'New custom host' → fill name (suggested: '{tenant} Pipelines Host') → choose Production environment in tenant home region → Create. Provisioning takes 5–10 min."*
 
-   > Per eng.ms doc: *"the panel will default to the Production environment type. Adding Dataverse is also required... template and sample apps options are hidden here, as we use a specific organization template for this scenario."* (The template is `D365_ProjectHost` — same one Path 4.A automates.)
+   > The panel defaults to the Production environment type and requires Dataverse; its template and sample-app options are hidden because the scenario uses a specific organization template (`D365_ProjectHost` — the same one Path 4.A automates).
 
 2. Two-option `AskUserQuestion`: *"Done — provisioning kicked off"* / *"Cancel"*.
 3. After confirmation, poll BAP `list-tenant-envs.js` every 15s looking for a new env with the Pipelines marker. On detection, capture URLs, `actionTaken = "user-created-custom-ppac"`. Proceed to Phase 5.
@@ -1011,13 +1011,13 @@ These need real-environment validation:
 1. ~~**Pipelines solution `uniquename`.**~~ ✅ **RESOLVED 2026-04-28**: confirmed `msdyn_AppDeploymentAnchor` v9.1.2026034.260325188 via live query against SIP host (`pascalepipelineshost.crm.dynamics.com`). Stored as `PIPELINES_SOLUTION_UNIQUE_NAME` constant.
 2. **`MIN_PIPELINES_VERSION`.** Set after testing which Pipelines features fail on the lowest in-the-wild solution version. Initial conservative guess: `"9.0.0.0"`.
 3. ~~**Custom Host detection marker in `list-tenant-envs.js`.**~~ ✅ **RESOLVED 2026-04-28**: confirmed via live BAP env-list query (1000 envs in test tenant) — `linkedEnvironmentMetadata.templates` is **never returned** even with `$expand=properties.linkedEnvironmentMetadata`. Per-env Dataverse probe is mandatory. Probe query corrected to `solutions?$filter=uniquename eq 'msdyn_AppDeploymentAnchor'&$select=version&$top=1` (covers presence + version in one call). PE detection still straightforward via `environmentSku === 'Platform'`.
-4. **`BapApiVersion` value for env-create.** The `D365_ProjectHost` template was onboarded for Pegasus / BAP-RP / Neptune (per eng.ms PR list). The PPAC UI uses `2021-04-01` for env operations. Confirm during execution by capturing a fresh HAR from `New custom host`.
+4. **`BapApiVersion` value for env-create.** The PPAC UI uses `2021-04-01` for env operations. Confirm during execution by capturing a fresh HAR from `New custom host`.
 5. **Lifecycle-op response shape.** Need to confirm whether the Location URL returns `{ properties: { provisioningState } }` or `{ state }` or both. To be HAR'd.
 6. **Tenant home geo discovery.** Default region for 4.A. Options: `BAP_TOKEN` claims (`tid`, `xms_tcdt`?), BAP `/tenant?api-version=2021-04-01` endpoint, or `properties.azureRegionHint` from existing envs. Pick one during execution.
 7. **Cold-tenant test env.** Need a tenant with no prior Pipelines usage to validate end-to-end. A personal MSDN tenant works.
 8. **BAP env-list filter on `linkedEnvironmentMetadata.templates`?** If supported, we can pre-filter to envs created with `D365_ProjectHost` and skip the per-env Dataverse probe in Phase 2.5b. To be tested. If unsupported, the per-env probe with bounded concurrency stands.
 9. **Does env-list response actually include `linkedEnvironmentMetadata.templates`?** If yes, even without server-side filter we can client-filter cheaply. If no, the per-env Dataverse probe is the only signal. Verify by capturing a fresh BAP env-list HAR including the `$expand=properties.linkedEnvironmentMetadata` query parameter (already used by `resolve-env-by-id.js`).
-10. ~~**Per-env probe rate-limit budget.**~~ ✅ **PARTIALLY RESOLVED 2026-04-28**: Microsoft-internal test tenant has 1000 envs (526 Production sku, 453 Sandbox). Naïve probe-all is too slow even with 10-concurrent. Adopted multi-tier filter:
+10. ~~**Per-env probe rate-limit budget.**~~ ✅ **PARTIALLY RESOLVED 2026-04-28**: a large test tenant has 1000 envs (526 Production sku, 453 Sandbox). Naïve probe-all is too slow even with 10-concurrent. Adopted multi-tier filter:
     - Pre-filter envs without Dataverse (recovers ~3 envs in test tenant — minor)
     - Filter by `--skus` (default `Production`; PE always included)
     - Sort by `lastModifiedTime` desc
