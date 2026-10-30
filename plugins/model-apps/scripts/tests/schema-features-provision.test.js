@@ -322,6 +322,64 @@ test('the required update of an existing column never carries isSecured', async 
   assert.ok(sent.every((o) => !('isSecured' in o)), JSON.stringify(sent));
 });
 
+// The table exists, its columns could not be read, and the create of each declared column is answered "already exists" — the column
+// is there, created without what the spec declares on it.
+const exists = () => Object.assign(new Error('Attribute already exists.'), { statusCode: 400, cause: { error: { code: '0x80047013', message: 'Attribute already exists.' } } });
+function unreadColumnsServer(over = {}) {
+  const base = metadataServer({ tables: { new_ticket: ['new_ticketid', 'new_name'] }, ...over });
+  return (p) => (/\/Attributes\?\$select=LogicalName,RequiredLevel$/.test(p) ? { status: 500, body: {} } : base(p));
+}
+const alreadyThere = (m) => { m.sdk.createColumn = async (l, o) => { m.calls.push(['createColumn', l, o]); throw exists(); }; return m; };
+
+test('a declared secured column whose create is skipped as existing is secured, whether or not the security read answers', async () => {
+  for (const secured of [{ value: [{ LogicalName: 'new_salary', IsSecured: false }] }, () => ({ status: 503, body: {} })]) {
+    const m = alreadyThere(mockSdk({ dataverseGet: unreadColumnsServer({ secured }) }));
+    await run(m, specOf([{ schemaName: 'new_salary', type: 'Money', isSecured: true }]));
+    assert.deepEqual(updates(m).map((c) => c.slice(1)), [['new_ticket', 'new_salary', { isSecured: true }]]);
+    assert.equal(securityGets(m).length, 1);
+  }
+  // Already secured: read, nothing written.
+  const same = alreadyThere(mockSdk({ dataverseGet: unreadColumnsServer({ secured: { value: [{ LogicalName: 'new_salary', IsSecured: true }] } }) }));
+  await run(same, specOf([{ schemaName: 'new_salary', type: 'Money', isSecured: true }]));
+  assert.deepEqual(updates(same), []);
+  // Also on a table this build did not find: a create skipped as existing is the same column the spec declares.
+  const fresh = alreadyThere(mockSdk({ dataverseGet: metadataServer({ secured: { value: [{ LogicalName: 'new_salary', IsSecured: false }] } }) }));
+  await run(fresh, specOf([{ schemaName: 'new_salary', type: 'Money', isSecured: true }]));
+  assert.deepEqual(updates(fresh).map((c) => c.slice(1)), [['new_ticket', 'new_salary', { isSecured: true }]]);
+});
+
+test('an explicit isSecured: false that cannot be read halts, on a column found or skipped as existing; omitted reads nothing', async () => {
+  const found = mockSdk({ dataverseGet: metadataServer({ ...SECURE_TABLE, secured: () => ({ status: 403, body: {} }) }) });
+  const err = await halted(run(found, specOf([{ schemaName: 'new_salary', type: 'Money', isSecured: false }])));
+  assert.equal(err.code, 'COLUMN_SECURITY_UNREAD');
+  assert.match(err.message, /new_ticket\.new_salary/);
+  assert.deepEqual(updates(found), []);
+
+  const skipped = alreadyThere(mockSdk({ dataverseGet: unreadColumnsServer({ secured: () => ({ status: 403, body: {} }) }) }));
+  assert.equal((await halted(run(skipped, specOf([{ schemaName: 'new_salary', type: 'Money', isSecured: false }])))).code, 'COLUMN_SECURITY_UNREAD');
+
+  const omitted = alreadyThere(mockSdk({ dataverseGet: unreadColumnsServer({ secured: () => assert.fail('read') }) }));
+  await run(omitted, specOf([{ schemaName: 'new_salary', type: 'Money' }]));
+  assert.deepEqual([securityGets(omitted).length, updates(omitted)], [0, []]);
+});
+
+test('an explicit behaviour that cannot be read halts; one on a column skipped as existing is reconciled; omitted reads nothing', async () => {
+  const unread = mockSdk({ dataverseGet: metadataServer({ tables: NULL_TABLE.tables, dates: () => ({ status: 503, body: {} }) }) });
+  const err = await halted(run(unread, specOf([{ schemaName: 'new_due', type: 'DateTime', dateTimeBehavior: 'DateOnly' }])));
+  assert.equal(err.code, 'DATETIME_BEHAVIOR_UNVERIFIED');
+  assert.match(err.message, /new_ticket\.new_due/);
+  assert.deepEqual(updates(unread), []);
+
+  const skipped = alreadyThere(mockSdk({ dataverseGet: unreadColumnsServer({ dates: { value: [dateRow('new_due', 'UserLocal')] }, readBack: dateRow('new_due', 'UserLocal') }) }));
+  const repaired = await halted(run(skipped, specOf([{ schemaName: 'new_due', type: 'DateTime', dateTimeBehavior: 'DateOnly' }])));
+  assert.equal(repaired.code, 'DESTRUCTIVE_NOT_AUTHORIZED');
+  assert.equal(dateGets(skipped).length, 1);
+
+  const omitted = alreadyThere(mockSdk({ dataverseGet: unreadColumnsServer({ dates: () => assert.fail('read') }) }));
+  await run(omitted, specOf([{ schemaName: 'new_due', type: 'DateTime' }]));
+  assert.deepEqual([dateGets(omitted).length, updates(omitted)], [0, []]);
+});
+
 // ------------------------------------------------------------------------------------------------ table flags
 
 const flagRow = ({ dup = false, ct = false, search = false, canSearch = true } = {}) => ({ IsDuplicateDetectionEnabled: { Value: dup, CanBeChanged: true }, ChangeTrackingEnabled: ct, SyncToExternalSearchIndex: search, CanEnableSyncToExternalSearchIndex: { Value: canSearch } });
