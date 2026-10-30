@@ -584,18 +584,8 @@ function makeFinding(code, message, file, line) {
 // Retain only the last text's line starts, bounding memory across multi-file gates.
 let lineSource;
 let lineStarts;
-// The complexity tests count the work below instead of timing it, because a count does not change
-// with machine load. It is undefined in normal use, so a lookup pays one falsy check.
-let lineWork;
-function countLineWork(stats) {
-  lineWork = stats;
-}
 function lineOf(text, index) {
   if (lineSource !== text) {
-    if (lineWork) {
-      lineWork.tables += 1;
-      lineWork.indexed += text.length;
-    }
     lineSource = text;
     lineStarts = [0];
     for (const match of text.matchAll(/[\n\r\u2028\u2029]/g)) {
@@ -606,16 +596,10 @@ function lineOf(text, index) {
   }
   let lo = 0;
   let hi = lineStarts.length;
-  let probes = 0;
   while (lo < hi) {
-    probes += 1;
     const mid = (lo + hi) >>> 1;
     if (lineStarts[mid] <= index) lo = mid + 1;
     else hi = mid;
-  }
-  if (lineWork) {
-    lineWork.lookups += 1;
-    lineWork.probes += probes;
   }
   return Math.max(1, lo);
 }
@@ -2620,5 +2604,4 @@ module.exports = {
   scanSource,
   featureCoherence,
   gateSources,
-  countLineWork,
 };
