@@ -37,12 +37,12 @@
   1x GET /roles?$select=roleid,name,description,ismanaged&$filter=name eq 'Kitchen Planner' and _businessunitid_value eq <id>&$top=50 -> 200
   8x GET /savedqueries(<id>)/Microsoft.Dynamics.CRM.RetrieveUnpublished()?$select=savedqueryid,name,description,fetchxml,layoutxml,querytype,returnedtypecode,isdefault -> 200
   8x GET /savedqueries(<id>)?$select=savedqueryid -> 200
-  1x GET /savedqueries?$select=savedqueryid,name&$filter=name eq 'My Open Tasks' and returnedtypecode eq 'contoso_task'&$top=10 -> 200
-  1x GET /savedqueries?$select=savedqueryid,name&$filter=name eq 'Open Projects' and returnedtypecode eq 'contoso_project'&$top=10 -> 200
-  1x GET /savedqueries?$select=savedqueryid,name&$filter=name eq 'Open Tasks' and returnedtypecode eq 'contoso_task'&$top=10 -> 200
+  1x GET /savedqueries?$select=savedqueryid,name&$filter=name eq 'My Open Tasks' and returnedtypecode eq 'contoso_task' -> 200
+  1x GET /savedqueries?$select=savedqueryid,name&$filter=name eq 'Open Projects' and returnedtypecode eq 'contoso_project' -> 200
+  1x GET /savedqueries?$select=savedqueryid,name&$filter=name eq 'Open Tasks' and returnedtypecode eq 'contoso_task' -> 200
   1x GET /savedqueries?$select=savedqueryid,name,canbedeleted,fetchxml,createdon&$filter=returnedtypecode eq 'contoso_project' and querytype eq 0 -> 200
   1x GET /savedqueries?$select=savedqueryid,name,canbedeleted,fetchxml,createdon&$filter=returnedtypecode eq 'contoso_task' and querytype eq 0 -> 200
-  1x GET /savedqueryvisualizations?$select=savedqueryvisualizationid,name&$filter=name eq 'Projects by Priority' and primaryentitytypecode eq 'contoso_project'&$top=10 -> 200
+  1x GET /savedqueryvisualizations?$select=savedqueryvisualizationid,name&$filter=name eq 'Projects by Priority' and primaryentitytypecode eq 'contoso_project' -> 200
   1x GET /sitemaps(<id>)?$select=sitemapid -> 200
   1x GET /sitemaps/Microsoft.Dynamics.CRM.RetrieveUnpublishedMultiple()?$select=sitemapid,sitemapnameunique,sitemapxml&$filter=sitemapid eq <id>&$top=1 -> 200
   1x GET /sitemaps?$select=sitemapxml&$filter=sitemapid eq <id>&$top=1 -> 200
@@ -55,7 +55,7 @@
   1x GET /systemforms?$select=formid&$filter=objecttypecode eq 'contoso_task' and name eq 'Task' and type eq 2&$top=2 -> 200
   1x GET /systemforms?$select=formid,formactivationstate,isdefault&$filter=objecttypecode eq 'contoso_project' and type eq 2&$top=50 -> 200
   1x GET /systemforms?$select=formid,formactivationstate,isdefault&$filter=objecttypecode eq 'contoso_task' and type eq 2&$top=50 -> 200
-  1x GET /systemforms?$select=formid,name&$filter=name eq 'Kitchen Overview' and type eq 0&$top=10 -> 200
+  1x GET /systemforms?$select=formid,name&$filter=name eq 'Kitchen Overview' and type eq 0 -> 200
   1x GET /uxagentprojects/Microsoft.Dynamics.CRM.RetrieveUnpublishedMultiple()?$select=uxagentprojectid,name,componentstate&$filter=uxagentprojectid eq <id> -> 200
   1x GET /webresourceset?$select=content&$filter=name eq 'contoso_kitchensink_pagemanifest'&$top=1 -> 200
   4x PATCH /savedqueries(<id>)?$select=savedqueryid #97e1522c -> 200

@@ -1858,6 +1858,10 @@ const RESET_WORKSPACE = 'stop any other build or teardown using the .maker-works
 // platform ignored such an update while reporting it saved). The build never pushes an existing command bar — a bar that exists is reused,
 // and button edits are not reapplied (sdk-build.js, commands) — so only a push of a bar this build is creating could meet it, which has no
 // existing row; the remedy is said all the same, in case a later path pushes one.
+//
+// COMMAND_CHILD_LOCATION_MISMATCH (bundled from model-apps 2.21.0) has no remedy here: the SDK refuses, before any write, a NEW command that states a
+// Location other than its parent's, and the build states a Location only on a bar — every control, child or not, takes its bar's (sdk-build.js,
+// buildCommandControl) — so no build sends one. The SDK's own message names the fix if a later path ever does.
 function operatorRemedy(err) {
   // A create refused with the lag of a table this attempt just created, still refused when the bounded check ran out (createInLagWindow,
   // recoverRefusedBatch, drainLagStatuses). Recognised by the error object itself, never by its words: the event the step reported while the
