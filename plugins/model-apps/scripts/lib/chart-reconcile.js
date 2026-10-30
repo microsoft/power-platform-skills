@@ -30,6 +30,11 @@
 //
 // A missing chart is created here, through the creation-identity port (ctx.creates.run), from the
 // artifact the build compiles for it (chartDef), under the id the port reserved.
+//
+// A declared title is stored only where the SDK can write one: into a <Title> element the stored
+// presentation already has. An existing chart without one is refused (chart-title-not-stored) before
+// anything is written; a new chart is created from the SDK's scratch presentation, which has none, so
+// its title is reported not stored rather than saved. A title is never claimed without a read-back.
 
 const {
   canonicalJson,
@@ -114,6 +119,25 @@ function liveFull(chart) {
   out.description = String(chart.description || '');
   out.title = String((chart.presentation && chart.presentation.title) || '');
   return out;
+}
+
+/**
+ * Whether the stored presentation has a <Title> element the SDK can write a title into. The SDK keeps
+ * the presentation XML it does not model in the chart's `presentationBag`, a public HybridBag of
+ * RawNode trees ({ n: tag, a: attributes, c: children }), e.g. for `<Titles><Title Alignment="TopLeft"/></Titles>`:
+ *   { a: [...], c: [{ i: 2, node: { n: 'Titles', a: [], c: [{ n: 'Title', a: [['Alignment', 'TopLeft']], c: [] }] } }] }
+ * A chart with no bag (one built from scratch) has no title element either.
+ */
+function canHoldTitle(chart) {
+  const bag = chart && chart.presentationBag;
+  const stack = bag && Array.isArray(bag.c) ? bag.c.map((child) => child && child.node) : [];
+  while (stack.length) {
+    const node = stack.pop();
+    if (!node) continue;
+    if (node.n === 'Title') return true;
+    if (Array.isArray(node.c)) stack.push(...node.c);
+  }
+  return false;
 }
 
 /** The full projection after this run: the declared parts over the live ones. */
@@ -205,21 +229,32 @@ async function planChartReconcile({ chart, sdk, chartArtifact }, ctx = {}) {
     plan.refused.push(refusal(key, 'chart-adoption-not-authorized', 'the chart exists and is not yet managed by this spec; approve adopting it first'));
     return plan;
   }
+  if (plan.changed.includes('title') && !canHoldTitle(current)) {
+    plan.refused.push(refusal(key, 'chart-title-not-stored', 'the chart has no title element the SDK can write, so the declared title cannot be stored; nothing was written. Remove the title from the spec, or add a title to the chart in the chart designer'));
+    return plan;
+  }
   plan.action = 'update';
   plan.operations.push(operation({ key, kind: 'chart', target: id, action: 'update', publicationScopes: [{ type: 'chart', id, table: intent.entity }] }));
   return plan;
 }
 
-async function readBaseline(sdk, id) {
+/** The stored chart's full projection, read back after a write, or null when it cannot be read. */
+async function readObserved(sdk, id) {
   try {
     await sdk.fetchArtifact('chart', id);
     const fresh = await sdk.getArtifact('chart', id);
-    const live = fresh && liveFull(fresh);
-    return live ? projectionBaseline(live) : null;
+    return (fresh && liveFull(fresh)) || null;
   } catch {
     return null;
   }
 }
+
+// The SDK writes a chart title only into a <Title> element the stored presentation already has
+// (ChartAdapter applyPresentation); a chart without one, including every new chart, which starts
+// from the SDK's scratch presentation, keeps no title and the push still succeeds. So a declared
+// title is claimed only when the read-back shows it stored, and otherwise refused as not stored,
+// with the binding taken from what was read back so the next run is not false drift.
+const TITLE_NOT_STORED = 'the chart was written, but it has no title element the SDK can write, so the declared title was not stored; remove the title from the spec or add a title to the chart in the chart designer';
 
 /** Create a missing declared chart through the creation-identity port (see the header). */
 async function applyChartCreate(plan, sdk, ctx, result) {
@@ -236,16 +271,19 @@ async function applyChartCreate(plan, sdk, ctx, result) {
   const id = created.id ? normalizeGuid(created.id) || String(created.id) : null;
   if (created.status === 'created') {
     const scope = { type: 'chart', id, table: plan.intent.entity };
-    result.saved.push({ key: plan.key, kind: 'chart', id, created: true, parts: PARTS.slice() });
+    const observed = await readObserved(sdk, id);
+    // The title is claimed only when the spec declares one and the read-back shows it stored.
+    const titleStored = plan.intent.title !== undefined && !!observed && observed.title === plan.intent.title;
+    result.saved.push({ key: plan.key, kind: 'chart', id, created: true, parts: PARTS.filter((p) => p !== 'title' || titleStored) });
     queuePublication(ctx, scope);
     result.pendingPublish.push({ key: plan.key, scope });
-    const baseline = await readBaseline(sdk, id);
-    if (baseline) result.managedBindings.push(bindingRecord(ctx, { kind: 'chart', key: plan.key, id, origin: 'created', ...baseline }));
+    if (observed) result.managedBindings.push(bindingRecord(ctx, { kind: 'chart', key: plan.key, id, origin: 'created', ...projectionBaseline(observed) }));
     else result.unknown.push(refusal(plan.key, 'chart-created-unreadable', 'the chart was created but could not be read back to record its baseline'));
+    if (observed && plan.intent.title !== undefined && !titleStored) result.refused.push(refusal(plan.key, 'chart-title-not-stored', TITLE_NOT_STORED));
   } else if (created.status === 'adopted') {
-    const baseline = id ? await readBaseline(sdk, id) : null;
-    if (baseline) {
-      result.managedBindings.push(bindingRecord(ctx, { kind: 'chart', key: plan.key, id, origin: 'created', ...baseline }));
+    const observed = id ? await readObserved(sdk, id) : null;
+    if (observed) {
+      result.managedBindings.push(bindingRecord(ctx, { kind: 'chart', key: plan.key, id, origin: 'created', ...projectionBaseline(observed) }));
       result.refused.push(refusal(plan.key, 'creation-adopted-rerun', 'the chart an earlier create made was bound; run again to apply the spec to it'));
     } else {
       result.refused.push(refusal(plan.key, 'creation-adopted-row-missing', 'the chart the resolved create named could not be read; repair the binding explicitly'));
@@ -295,6 +333,26 @@ async function applyChartReconcile(plan, { sdk }, ctx = {}) {
     return result;
   }
   const pushed = await pushIfChanged(sdk, 'chart', id);
+  if (plan.changed.includes('title') && (pushed.outcome === 'unchanged' || pushed.outcome === 'saved')) {
+    const observed = await readObserved(sdk, id);
+    if (!observed || observed.title !== plan.intent.title) {
+      const parts = plan.changed.filter((p) => p !== 'title');
+      if (pushed.outcome === 'saved' && parts.length) {
+        result.saved.push({ key: plan.key, kind: 'chart', id, parts });
+        const scope = { type: 'chart', id, table: plan.intent.entity };
+        queuePublication(ctx, scope);
+        result.pendingPublish.push({ key: plan.key, scope });
+      }
+      if (observed) {
+        result.refused.push(refusal(plan.key, 'chart-title-not-stored', TITLE_NOT_STORED));
+        result.managedBindings.push(bindingRecord(ctx, { kind: 'chart', key: plan.key, id, origin: plan.origin, ...projectionBaseline(observed) }));
+      } else {
+        // Without a read-back no baseline is guessed: the next run judges the chart afresh.
+        result.unknown.push(refusal(plan.key, 'chart-title-unverified', 'the chart was written but could not be read back, so whether the declared title was stored is unknown'));
+      }
+      return result;
+    }
+  }
   if (pushed.outcome === 'unchanged') {
     result.unchanged.push({ key: plan.key, kind: 'chart', id });
     result.managedBindings.push(record());

@@ -245,3 +245,52 @@ test('a read failure is unknown, never refused or saved', async () => {
   assert.deepEqual(result.unknown.map((u) => u.code), ['chart-lookup-unreadable']);
   assert.deepEqual(result.refused, []);
 });
+
+// A presentation with no <Title> element: the SDK writes a title only into an existing one, so a
+// declared title cannot be stored on it (the scratch presentation of a new chart has none either).
+const PRES_NO_TITLE = PRES.replace(/<Titles>.*<\/Titles>/, '');
+
+test('a declared title the stored chart cannot hold is never claimed saved, and a rerun is neither a write nor drift', async () => {
+  const srv = server({ presentationdescription: PRES_NO_TITLE });
+  const managed = fakeManaged();
+  const first = await run(srv, declared(), { authorizedAdoption: true, managed });
+  assert.deepEqual(first.result.refused, []);
+  managed.persist(first.result.managedBindings);
+  srv.clearLog();
+  for (let i = 0; i < 2; i += 1) {
+    srv.clearLog();
+    const again = await run(srv, declared({ description: 'Open cases by status', title: 'By status' }), { managed });
+    assert.deepEqual(again.result.refused.map((r) => [r.key, r.code]), [['cr_case/Cases by priority', 'chart-title-not-stored']], 'the same refusal each run, never chart-drift');
+    assert.deepEqual(again.result.saved, [], 'nothing is claimed saved');
+    assert.equal(srv.writes.length, 0, 'nothing is written');
+    managed.persist(again.result.managedBindings);
+  }
+  assert.equal(srv.rowOf('savedqueryvisualizations', CID).description, '');
+  // Without the title the rest of the spec applies.
+  srv.clearLog();
+  const without = await run(srv, declared({ description: 'Open cases by status' }), { managed });
+  assert.deepEqual(without.result.refused, []);
+  assert.deepEqual(without.result.saved.map((s) => s.parts), [['description']]);
+});
+
+test('a new chart with a declared title reports the title not stored instead of saved; the rerun is not drift', async () => {
+  const srv = createRowTableServer({ tables: { savedqueryvisualizations: 'savedqueryvisualizationid' } });
+  const managed = fakeManaged();
+  const creates = fakeCreates();
+  const spec = declared({ title: 'By status' });
+  const { result } = await run(srv, spec, { managed, creates }, chartArtifact());
+  assert.equal(creates.calls.length, 1);
+  const id = creates.calls[0].ids.id;
+  assert.ok(srv.rowOf('savedqueryvisualizations', id), 'the chart itself was created');
+  assert.ok(!/By status/.test(srv.rowOf('savedqueryvisualizations', id).presentationdescription));
+  assert.equal(result.saved.length, 1);
+  assert.ok(!result.saved[0].parts.includes('title'), 'the title is not claimed saved');
+  assert.deepEqual(result.refused.map((r) => r.code), ['chart-title-not-stored']);
+  assert.equal(result.managedBindings.length, 1, 'the created chart is bound from what was read back');
+  managed.persist(result.managedBindings);
+  srv.clearLog();
+  const again = await run(srv, spec, { managed, creates });
+  assert.deepEqual(again.result.refused.map((r) => r.code), ['chart-title-not-stored']);
+  assert.equal(srv.writes.length, 0);
+  assert.equal(creates.calls.length, 1);
+});
