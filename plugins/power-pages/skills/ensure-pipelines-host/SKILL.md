@@ -35,7 +35,7 @@ Power Platform Pipelines need a **host environment** — a Dataverse environment
 
 This plan is grounded in three primary sources, in priority order:
 
-1. **`useGetOrCreatePlatformEnvironment.v4.ts`** (Microsoft-internal client source — `power-platform-ux/packages/powerapps-appdeployment-ux/src/hooks/v4/`). Defines the exact HTTP contract for Platform Environment provisioning: endpoint, body, headers, polling.
+1. **`useGetOrCreatePlatformEnvironment.v4.ts`** (Microsoft-internal client source; not public). Defines the exact HTTP contract for Platform Environment provisioning: endpoint, body, headers, polling.
 2. **`ProjectHostProvider.tsx`** (same repo, `src/components/ProjectHostProvider/`). Defines the exact resolution order the Power Apps UI uses to determine which environment is the project host for a source environment. We mirror that order so this skill agrees with the UI.
 3. **eng.ms `createcustompipelineshost`** (Microsoft-internal). Documents the Custom Host fast-path: a `D365_ProjectHost` org template that ships the Pipelines app pre-installed, callable through the standard environment-creation API.
 
