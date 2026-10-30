@@ -4,7 +4,7 @@
 // systemform row, so the typed genPage binding, the ids the SDK allocates and its own missing-page refusal are the bundle's, not a fake's.
 const test = require('node:test');
 const assert = require('node:assert');
-const { validateFormPageEmbeds, planFormPageEmbeds, applyFormPageEmbeds, requireEmbedsApplied, runFormPageEmbeds, requirePagesPhaseForEmbeds, PAGE_ROWSPAN } = require('../lib/form-page-embeds.js');
+const { validateFormPageEmbeds, planFormPageEmbeds, applyFormPageEmbeds, requireEmbedsApplied, runFormPageEmbeds, requirePagesPhaseForEmbeds, verifyFormPageEmbed, formEmbedsOfPage, PAGE_ROWSPAN } = require('../lib/form-page-embeds.js');
 const { createCreatesPortDouble } = require('./helpers/creates-port-double.js');
 const { createMakerSdk } = require('../vendor/cds-maker-sdk.cjs');
 const { createHarness, seedForm, guid, clone } = require('./helpers/form-store-harness.js');
@@ -436,6 +436,58 @@ test('every form saved: one report, the same result shape as before, and no fail
   assert.deepStrictEqual([result.saved.map((s) => s.key), result.unknown, result.refused, result.pendingPublish.length, ctx.queued.length], [[KEY, SECOND_KEY], [], [], 2, 2]);
 });
 
+// A deployed Main form as FormXML: a field row, then the page's cell (control uniqueid `body`), and the UxAgentControl description of
+// `forControl` naming `ref`. Every piece can be taken out or changed to make the form not show the page as declared.
+const PANEL = guid(800);
+function embedXml({ ref = PAGE, body = `{${PANEL}}`, forControl = `{${PANEL}}`, tab = 'tab_general', section = 'section_general', pageInput, refStatic = 'true', extraRows = '', twice = false, factors = ['2'] } = {}) {
+  const panel = body === null ? '' : `<row><cell id="{${guid(801)}}"><control id="${guid(802)}" uniqueid="${body}" classid="{F9A8A302-114E-466A-B582-6771B2AE0D92}"/></cell></row>`;
+  const again = twice ? `<row><cell><control id="${guid(803)}" uniqueid="{${guid(804)}}"/></cell></row>` : '';
+  const entry = (factor) => `<customControl name="MscrmControls.UxAgentControl" formFactor="${factor}"><parameters><RefId type="SingleLine.Text" static="${refStatic}">${ref}</RefId>${pageInput === undefined ? '' : `<PageInput type="SingleLine.Text" static="true">${pageInput}</PageInput>`}</parameters></customControl>`;
+  const description = (id) => `<controlDescription forControl="${id}">${factors.map(entry).join('')}</controlDescription>`;
+  return `<form><tabs><tab name="${tab}"><columns><column width="100%"><sections><section name="${section}" columns="1"><rows>`
+    + `<row><cell><control id="new_name" datafieldname="new_name"/></cell></row>${extraRows}${panel}${again}<row><cell><control id="new_code" datafieldname="new_code"/></cell></row>`
+    + `</rows></section></sections></column></columns></tab></tabs><controlDescriptions>${description(forControl)}${twice ? description(`{${guid(804)}}`) : ''}</controlDescriptions></form>`;
+}
+
+test('a form-placed page is verified by its embed on the form: the page, the place and the input the spec declares; a missing control, another page, an orphan description, another place or input is not', () => {
+  const ok = { ok: true };
+  const embed = { ...EMBED, after: 'new_name' };
+  assert.deepStrictEqual(verifyFormPageEmbed(embedXml(), embed, PAGE), ok, 'the form shows the page where the spec puts it');
+  assert.deepStrictEqual(verifyFormPageEmbed(embedXml({ ref: `{${PAGE.toUpperCase()}}`, factors: ['2', '0', '1'] }), EMBED, `{${PAGE}}`), ok, 'braces, case and every form factor are one page id');
+  const input = { mode: 'compact', n: 2 };
+  assert.deepStrictEqual(verifyFormPageEmbed(embedXml({ pageInput: '{&quot;data&quot;:{&quot;n&quot;:2,&quot;mode&quot;:&quot;compact&quot;}}' }), { ...embed, inputData: input }, PAGE), ok, 'the input the form hands the page, escaped as XML text');
+  assert.deepStrictEqual(verifyFormPageEmbed(embedXml({ pageInput: '<![CDATA[{"data":{"mode":"compact","n":2}}]]>' }), { ...embed, inputData: input }, PAGE), ok, 'or in a CDATA section');
+
+  const reason = (xml, e = embed, id = PAGE) => verifyFormPageEmbed(xml, e, id).reason;
+  assert.strictEqual(reason(embedXml({ body: null })), 'not-embedded', 'no control on the form: the description alone is an orphan');
+  assert.strictEqual(reason(embedXml({ forControl: `{${guid(899)}}` })), 'not-embedded', 'a description for a control that is not there');
+  assert.strictEqual(reason(embedXml({ ref: OTHER_PAGE })), 'not-embedded', 'the control shows another page');
+  assert.strictEqual(reason(embedXml({ refStatic: 'false' })), 'not-embedded', 'a page taken from a column is no declared page');
+  assert.strictEqual(reason(embedXml({ factors: [] })), 'not-embedded', 'a description with no page control');
+  assert.strictEqual(reason(embedXml({ twice: true, forControl: `{${PANEL}}` })), 'embedded-more-than-once');
+  assert.strictEqual(reason(`<form><controlDescriptions><controlDescription forControl="{${PANEL}}"><customControl name="MscrmControls.UxAgentControl"><parameters><RefId static="true">${PAGE}</RefId></parameters></customControl><customControl name="MscrmControls.UxAgentControl"><parameters><RefId static="true">${OTHER_PAGE}</RefId></parameters></customControl></controlDescription></controlDescriptions><tabs><tab name="tab_general"><columns><column><sections><section name="section_general"><rows><row><cell><control uniqueid="{${PANEL}}"/></cell></row></rows></section></sections></column></columns></tab></tabs></form>`, EMBED), 'binding-unsupported', 'form factors that disagree name no one page');
+  assert.strictEqual(reason(embedXml({ tab: 'tab_other' })), 'placement-differs', 'another tab');
+  assert.strictEqual(reason(embedXml({ section: 'section_other' })), 'placement-differs', 'another section');
+  assert.strictEqual(reason(embedXml(), { ...EMBED, after: 'new_code' }), 'placement-differs', 'above the field it should follow');
+  assert.strictEqual(reason(embedXml({ extraRows: '<row><cell><control id="new_area" datafieldname="new_area"/></cell></row>' })), 'placement-differs', 'another field between');
+  assert.strictEqual(reason(embedXml(), { ...EMBED, after: 'new_gone' }), 'placement-differs', 'the field it should follow is not there');
+  assert.strictEqual(reason(embedXml({ pageInput: '{"data":{"mode":"full"}}' }), { ...embed, inputData: { mode: 'compact' } }), 'input-differs');
+  assert.strictEqual(reason(embedXml(), { ...embed, inputData: { mode: 'compact' } }), 'input-differs', 'an input the form does not hand over');
+  assert.strictEqual(reason(embedXml({ pageInput: '{"data":{"mode":"full"}}' })), 'input-differs', 'an input the spec does not declare');
+  for (const bad of [null, '', '<form><tabs>', 42]) assert.strictEqual(reason(bad), 'form-xml-unreadable', String(bad));
+  // A place the embed does not ask for (no `after`) is the maker's: the cell may sit anywhere in its section.
+  assert.deepStrictEqual(verifyFormPageEmbed(embedXml({ extraRows: '<row><cell><control id="new_area" datafieldname="new_area"/></cell></row>' }), EMBED, PAGE), ok);
+});
+
+test('the forms that embed a page are the ones whose genPages name it, by key in a schemaVersion 2 spec and by name before it', () => {
+  const v2 = specWith({ genPages: [EMBED], placement: 'form', sitemap: false });
+  assert.deepStrictEqual(formEmbedsOfPage(v2, v2.pages[0]).map(({ form, embed }) => [form.name, embed.key]), [['Main', 'summary']]);
+  assert.deepStrictEqual(formEmbedsOfPage(v2, v2.pages[1]), [], 'a page no form embeds');
+  const v1 = specWith({ genPages: [{ ...EMBED, page: 'Case Summary' }], schemaVersion: 1 });
+  assert.deepStrictEqual(formEmbedsOfPage(v1, v1.pages[0]).map(({ embed }) => embed.key), ['summary']);
+  assert.deepStrictEqual(formEmbedsOfPage(specWith({}), v2.pages[0]), [], 'no embeds at all');
+});
+
 test('REAL BUNDLE: the embed round-trips through the SDK — the port\'s ids persisted, spacer rows kept, retarget in place, missing page refused before any write', async () => {
   const pagesInEnv = new Set([PAGE]);
   const pageChecks = [];
@@ -485,6 +537,7 @@ test('REAL BUNDLE: the embed round-trips through the SDK — the port\'s ids per
     assert.deepStrictEqual(placed.control.bag.a.find((p) => p[0] === 'uniqueid'), ['uniqueid', `{${reserved.id}}`]);
     const [binding] = first.result.managedBindings;
     assert.deepStrictEqual([binding.id, binding.cellId], [placed.control.id, placed.id], 'the ids the binding records are the ones the form persisted');
+    assert.deepStrictEqual(verifyFormPageEmbed(h.store.row.formxml, { ...EMBED, after: 'new_name', inputData: { mode: 'compact' } }, PAGE), { ok: true }, 'the FormXML the SDK wrote is verified as the spec declares it');
 
     assert.deepStrictEqual((await run([{ ...EMBED, after: 'new_name', inputData: { mode: 'compact' } }])).writes, [], 'a rebuild with the same embed writes nothing');
 
@@ -495,6 +548,9 @@ test('REAL BUNDLE: the embed round-trips through the SDK — the port\'s ids per
     rows = await readRows();
     assert.deepStrictEqual([rows[1].cells[0].id, rows[1].cells[0].control.id, rows[1].cells[0].control.genPage], [placed.id, placed.control.id, { pageId: OTHER_PAGE, inputData: { mode: 'full' } }]);
     assert.deepStrictEqual(shape(rows).filter((s) => s.includes(':')), ['Q:6'], 'one embed on the form, not two');
+    const notesEmbed = { ...EMBED, page: 'case-notes', after: 'new_name', inputData: { mode: 'full' } };
+    assert.deepStrictEqual([verifyFormPageEmbed(h.store.row.formxml, notesEmbed, OTHER_PAGE), verifyFormPageEmbed(h.store.row.formxml, { ...EMBED, after: 'new_name', inputData: { mode: 'compact' } }, PAGE)],
+      [{ ok: true }, { ok: false, reason: 'not-embedded' }], 'the retargeted form shows the new page and no longer the old one');
     pagesInEnv.delete(OTHER_PAGE);
 
     // A page that is gone by push time is the SDK's own refusal, before any write, propagated as it came.

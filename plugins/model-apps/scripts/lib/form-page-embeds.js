@@ -14,6 +14,7 @@
 //   planFormPageEmbeds(spec, ctx)     -> { operations, unknown }            reads the forms, writes nothing
 //   applyFormPageEmbeds(plan, ctx)    -> { saved, unchanged, pendingPublish, refused, unknown, managedBindings }
 //   requireEmbedsApplied(result)      -> throws a BuildHalt when a requested embed was refused or its outcome is unknown
+//   verifyFormPageEmbed(formxml, embed, pageId) -> { ok, reason? }      pure: whether a deployed form shows the page as the embed declares it
 // The plan runs after the pages phase has created the pages, because an embed names a page by its id. Ownership of the PAGE stays with
 // the page's own create receipt; an embed is a reference to it, which is why deleting an embedded page is refused (page-reference-guard.js).
 // A result names keys, ids and codes only — never a value, a token or a raw error.
@@ -474,9 +475,98 @@ async function runFormPageEmbeds(spec, ctx = {}) {
   return requireEmbedsApplied(result, ctx.phase || 'pages');
 }
 
+// The forms of `spec` that embed `page`, with the embed: the genPages entries naming the page (by key in a schemaVersion 2 spec, by name before).
+function formEmbedsOfPage(spec, page) {
+  const ref = pageRefOf(spec || {}, page);
+  const found = [];
+  if (!isText(ref)) return found;
+  for (const form of (spec && Array.isArray(spec.forms) ? spec.forms : [])) {
+    for (const embed of (form && Array.isArray(form.genPages) ? form.genPages : [])) if (embed && embed.page === ref) found.push({ form, embed });
+  }
+  return found;
+}
+
+// Whether a deployed form shows `pageId` as `embed` declares it — the verify side of a page placed on a form, which has no sitemap entry to
+// be checked by. Read from the form's own FormXML, in the shape the SDK writes (adapters/formGenPageEmbed.ts), for example
+//   <tab name="tab_general">…<section name="section_general">…<rows>
+//     <row><cell><control id="new_name" datafieldname="new_name"/></cell></row>
+//     <row><cell id="{…}" rowspan="6"><control id="{…}" uniqueid="{8e1f…}" classid="{F9A8A302-…}"/></cell></row> …
+//   <controlDescriptions><controlDescription forControl="{8e1f…}">
+//     <customControl name="MscrmControls.UxAgentControl" formFactor="2"><parameters>
+//       <RefId type="SingleLine.Text" static="true">11111111-0000-4000-8000-000000000001</RefId>
+//       <PageInput type="SingleLine.Text" static="true">{"data":{"mode":"compact"}}</PageInput></parameters></customControl> … (one per form factor)
+// The page is shown only by a control in a section of the form body whose `uniqueid` a UxAgentControl description names: a description for
+// no control on the form (an orphan) shows nothing. Every UxAgentControl entry of that description must name the same static page id and input,
+// as the SDK requires to read one (classifyBinding), else nothing can be said about it. Then the place — tab, section, and with `after` the row
+// below that field with no other field's row between, the rule the plan holds an existing cell to — and the input (PageInput's `data`, read as
+// the SDK reads it: inputDataFrom) must be the declared ones.
+// Answers { ok: true } or { ok: false, reason } with reason form-xml-unreadable | not-embedded | embedded-more-than-once | binding-unsupported |
+// placement-differs | input-differs. Pure: the caller reads the form.
+const UX_AGENT_CONTROL = 'mscrmcontrols.uxagentcontrol';
+const PLAIN_ID = /^[ \t\r\n]*\{?([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})\}?[ \t\r\n]*$/;
+const EMBED_XML = new Set(['tab', 'section', 'row', 'control', 'controlDescription', 'customControl', 'RefId', 'PageInput']);
+const BODY_CELL = /(?:^|\/)tabs\/tab\/columns\/column\/sections\/section\/rows\/row\/cell$/;
+const idIn = (text) => { const m = PLAIN_ID.exec(String(text === undefined || text === null ? '' : text)); return m ? m[1].toLowerCase() : ''; };
+
+function verifyFormPageEmbed(formxml, embed, pageId) {
+  // Lazy for the same reason as appSpec(): page-reference-guard.js and sitemap-pages.js reach app-spec.js, which requires this file.
+  const { readXmlElements } = require('./strict-xml.js');
+  const { elementText } = require('./page-reference-guard.js');
+  const { decodeXmlEntities } = require('./sitemap-pages.js');
+  const want = idIn(pageId);
+  const read = typeof formxml === 'string' && formxml ? readXmlElements(formxml, (name) => EMBED_XML.has(name), { spans: true }) : { ok: false };
+  if (!want || !read.ok) return { ok: false, reason: 'form-xml-unreadable' };
+  const els = read.elements;
+  const within = (outer, e) => e.start > outer.start && e.end <= outer.end;
+  const textOf = (e) => elementText(formxml, e.start, e.end);
+  // A static parameter's value as text: character references decoded, a CDATA section taken as written.
+  const valueOf = (e) => textOf(e).split(/(<!\[CDATA\[[\s\S]*?\]\]>)/).map((part) => (part.startsWith('<![CDATA[') ? part.slice(9, -3) : decodeXmlEntities(part))).join('');
+
+  // uniqueid -> what each UxAgentControl entry of its description names: the static page id ('' when none) and the PageInput text.
+  const bindings = new Map();
+  for (const d of els.filter((e) => e.name === 'controlDescription' && /(?:^|\/)controlDescriptions$/.test(e.path))) {
+    const uid = idIn(d.attrs.forControl);
+    if (!uid) continue;
+    if (!bindings.has(uid)) bindings.set(uid, []);
+    for (const control of els.filter((e) => e.name === 'customControl' && within(d, e) && lower(e.attrs.name || '') === UX_AGENT_CONTROL)) {
+      const params = els.filter((e) => within(control, e) && /(?:^|\/)customControl\/parameters$/.test(e.path));
+      const ref = params.find((e) => e.name === 'RefId');
+      const input = params.find((e) => e.name === 'PageInput');
+      const page = ref && ref.attrs.static === 'true' && (!input || input.attrs.static === 'true') ? idIn(textOf(ref)) : '';
+      bindings.get(uid).push({ page, input: input ? valueOf(input) : undefined });
+    }
+  }
+  const hits = [];
+  for (const control of els.filter((e) => e.name === 'control' && BODY_CELL.test(e.path))) {
+    const entries = bindings.get(idIn(control.attrs.uniqueid)) || [];
+    if (!entries.some((x) => x.page === want)) continue;
+    if (!entries.every((x) => x.page === want && x.input === entries[0].input)) return { ok: false, reason: 'binding-unsupported' };
+    hits.push({ control, input: entries[0].input });
+  }
+  if (hits.length !== 1) return { ok: false, reason: hits.length ? 'embedded-more-than-once' : 'not-embedded' };
+  const [{ control, input }] = hits;
+
+  // Elements come in document order, so the last one that contains the control is the innermost.
+  const around = (name) => els.filter((e) => e.name === name && within(e, control)).pop();
+  const tab = around('tab');
+  const section = around('section');
+  if (lower(tab.attrs.name || '') !== lower(embed.tab) || lower(section.attrs.name || '') !== lower(embed.section)) return { ok: false, reason: 'placement-differs' };
+  if (embed.after !== undefined) {
+    const rows = els.filter((e) => e.name === 'row' && within(section, e));
+    const fieldsIn = (row) => els.filter((e) => e.name === 'control' && within(row, e) && isText(e.attrs.datafieldname)).map((e) => lower(e.attrs.datafieldname));
+    const at = rows.findIndex((r) => within(r, control));
+    const afterRow = rows.findIndex((r) => fieldsIn(r).includes(lower(embed.after)));
+    if (afterRow < 0 || at <= afterRow || rows.slice(afterRow + 1, at).some((r) => fieldsIn(r).length)) return { ok: false, reason: 'placement-differs' };
+  }
+  let data;
+  try { const parsed = input === undefined ? undefined : JSON.parse(input); data = isObject(parsed) && isObject(parsed.data) ? parsed.data : undefined; } catch { data = undefined; }
+  if (inputHash(data) !== inputHash(embed.inputData)) return { ok: false, reason: 'input-differs' };
+  return { ok: true };
+}
+
 function bindingOf(op, ids, origin) {
   return { kind: op.kind, key: op.key, id: ids.controlId || null, cellId: ids.cellId || null, ...(ids.uniqueId ? { uniqueId: ids.uniqueId } : {}), parentKey: op.target.formKey,
     formId: op.target.formId, pageKey: op.target.pageKey, pageId: op.target.pageId, intentSha256: op.intentSha256, origin };
 }
 
-module.exports = { validateFormPageEmbeds, planFormPageEmbeds, applyFormPageEmbeds, requireEmbedsApplied, runFormPageEmbeds, hasFormPageEmbeds, requirePagesPhaseForEmbeds, sitemapPageRefs, EMBED_KEYS, PLACEMENTS, PAGE_ROWSPAN };
+module.exports = { validateFormPageEmbeds, planFormPageEmbeds, applyFormPageEmbeds, requireEmbedsApplied, runFormPageEmbeds, hasFormPageEmbeds, requirePagesPhaseForEmbeds, verifyFormPageEmbed, formEmbedsOfPage, sitemapPageRefs, EMBED_KEYS, PLACEMENTS, PAGE_ROWSPAN };
