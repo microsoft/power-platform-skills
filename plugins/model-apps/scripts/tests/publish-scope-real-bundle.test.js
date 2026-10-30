@@ -733,7 +733,11 @@ function pageScenario(t) {
   server.serveTable({ ...ACCOUNT_TABLE, logicalName: 'contoso_page_only', schemaName: 'contoso_PageOnly', entitySetName: 'contoso_page_onlys' });
   s.org.fake.seedDefaultViews('contoso_page_only', 'Page Data');
   const pages = makeGenpageSdk(s.org.origin, { httpClient: server.http() });
-  const placement = makeGenpageSdk(s.org.origin, { httpClient: s.org.httpClient });
+  // The placement's transport is the plugin's own client in a run (lib/sdk-http-client.js), which can send a change set (`postRaw`), so the bundle's pin may take its guarded
+  // form (lib/app-component-scope.js, THE SDK'S GUARDED PIN). The page backend does not send that change set for an app it is editing; one that reaches the app's fake was sent.
+  const placement = makeGenpageSdk(s.org.origin, {
+    httpClient: { ...s.org.httpClient, postRaw: async (url) => assert.fail(`the placement sent a change set the page backend does not send: POST ${url}`) },
+  });
   t.after(async () => { await pages.dispose(); await placement.dispose(); });
   const updates = [];
   const backend = {

@@ -62,6 +62,7 @@
 // was refused: the service rolls such a change set back whole, and the bundle then sends the plain action once (its documented fallback for a refused guard), which this limits as it limits every other — exactly what
 // a page edit sent before 2.20.6. Nothing was sent, so the plain action is not the resend of a write whose outcome is unknown; the app's row is not written; and the SDK keeps the app token it held, as every bundle before
 // did (a page edit reads the app again before each push, so it never depends on that token). Any other change set that names the action is refused, as above. Another app's guarded pin is not this edit's and goes on as it was read.
+// The bundle of model-apps 2.21.0 says so in a note of the push (`APP_PIN_TOKEN_UNCONFIRMED (guardRefused)`); `limit` takes that one note out when this answered the guard (see `limit`).
 //
 // The SDK reads the app's tables back after the post and reports a table its sitemap opens that is not a component (`APP_COMPONENTS_NOT_PERSISTED`) as a warning of the push — which is
 // what a page edit of an app whose navigation opens a table the app does not hold still says: the edit does not add it.
@@ -370,6 +371,8 @@ function makeAppComponentScope() {
   const open = new Map();
   // app id -> the end of the last edit queued for it; edits of one app run one after the other, so an edit never reads another's list
   const queue = new Map();
+  // app ids (lower case) whose guarded pin this answered as not sent during the edit under way (`limit` reads and clears it)
+  const notSent = new Set();
 
   // What to do with the action's request while some edit is open, given its body in canonical form (`canonicalOf`, which is `undefined` for one that cannot be put in it): `{ elsewhere: true }` for another app's request,
   // `{ send: null }` when nothing is left to send, `{ send }` — the body to send — or a throw, for a request that is the action and that this cannot limit. Only an entry that names a `savedqueryid` the edit pins stays:
@@ -411,7 +414,11 @@ function makeAppComponentScope() {
         if (kind === 'other') {
           // The SDK's guarded pin, to the `$batch` address (THE SDK'S GUARDED PIN, above): not sent for an app with an edit open — the bundle then sends the plain action, limited below — and sent as it was read for another app.
           const pin = raw && /\/\$batch$/.test(pathOf(address) || '') ? guardedPinOf(read) : null;
-          if (pin) return open.has(pin.appId) ? guardNotSent(pin.guardId) : client[method](address, read.send, options);
+          if (pin && open.has(pin.appId)) {
+            notSent.add(pin.appId);
+            return guardNotSent(pin.guardId);
+          }
+          if (pin) return client[method](address, read.send, options);
           // Not the action's address, so not the action's — but the body may be a `$batch` that NAMES the action, which cannot be limited, whichever method carries it. Anything else goes on as it was read.
           const problem = batchProblem(read);
           if (problem) throw refusal(problem);
@@ -442,14 +449,29 @@ function makeAppComponentScope() {
 
     // Runs `work` — a push of the app — with the post limited to `owned.views`, the ids of the views the edit pins. It answers what `work` answers, and the limit is lifted when
     // `work` ends, by an answer or a failure.
+    // One note of the answer is taken out: the bundle's `APP_PIN_TOKEN_UNCONFIRMED (guardRefused)` for THIS app, when this limit itself answered the app's guarded pin as not sent. The bundle
+    // (from model-apps 2.21.0) says so whenever a guard is refused other than by 412: it sent the plain action, and the app token it holds may be stale. Here nothing reached the service — the
+    // refusal is this tool's own, made on every page edit of an app a maker took a form, view or chart out of — and the SDK that holds that token is a page backend's, which reads the app again
+    // (`fetchArtifact` with overwrite) before each push it makes, so no later edit is made under it. The note would tell the maker to re-fetch what is already re-fetched. Every other note stays:
+    // a guard the service refused (412 or otherwise) is not this limit's, nor is a token the gate saw move (`APP_PIN_REBASE_REQUIRED (tokenMoved)`), which is a write by someone else.
     limit(appId, owned, work) {
       const key = guidKey(appId);
       const turn = (queue.get(key) || Promise.resolve()).then(async () => {
         open.set(key, new Set(((owned && owned.views) || []).map(guidKey)));
+        notSent.delete(key);
         try {
-          return await work();
+          const answer = await work();
+          if (!notSent.has(key) || !answer || typeof answer !== 'object' || !Array.isArray(answer.warnings)) return answer;
+          // The bundle's note (cds-maker-sdk `pinNotice`), whose `CODE (reason): App '<id>':` prefix it documents as stable for callers to match, e.g.:
+          //   APP_PIN_TOKEN_UNCONFIRMED (guardRefused): App '<app id>': the change set binding the pin was refused at its guard (HTTP 400) and rolled back; …
+          const ours = (warning) => {
+            const said = /^APP_PIN_TOKEN_UNCONFIRMED \(guardRefused\): App '([^']+)':/.exec(String(warning));
+            return said !== null && guidKey(said[1]) === key;
+          };
+          return answer.warnings.some(ours) ? { ...answer, warnings: answer.warnings.filter((warning) => !ours(warning)) } : answer;
         } finally {
           open.delete(key);
+          notSent.delete(key);
         }
       });
       const end = turn.then(() => undefined, () => undefined);
