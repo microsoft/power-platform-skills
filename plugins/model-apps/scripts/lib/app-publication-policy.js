@@ -2,8 +2,8 @@
 
 // The build's ONE way to owe and to make an app publication — the port features use (`ctx.publication`).
 //
-// Features never publish the app themselves. They `queue` what they leave owed (a theme saved with publish:false, a page
-// placed as a draft, a view's table). Every app publish of the build — its own existing ones and the final flush — goes
+// Features never publish the app themselves. They `queue` what they leave owed (a page placed as a draft, a view's
+// table). Every app publish of the build — its own existing ones and the final flush — goes
 // through `publishApp`, which calls `appWrite.publish`: the build's own app writers (sdk-build.js appWriters), which
 // publish through the SAME SDK instance as every other write of the app. So one publish pays everything queued for the
 // app before it, and the flush publishes only what no publish has paid yet. Going through that instance is also what

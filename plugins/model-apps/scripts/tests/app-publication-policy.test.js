@@ -27,11 +27,11 @@ function writer(answers = {}) {
 
 test('queue: one entry per kind and id (any case or braces), every reason kept, a target without kind or id refused', () => {
   const port = createAppPublication({ appWrite: writer() });
-  port.queue({ kind: 'app', id: APP, reason: 'app.theme' });
+  port.queue({ kind: 'app', id: APP, reason: 'app.tables' });
   port.queue({ kind: 'app', id: `{${APP.toUpperCase()}}`, reason: 'pages' });
-  port.queue({ kind: 'app', id: APP, reason: 'app.theme' });
+  port.queue({ kind: 'app', id: APP, reason: 'app.tables' });
   port.queue({ kind: 'table', id: 'contoso_item' });
-  assert.deepEqual(port.owed(), [{ kind: 'app', id: APP, reasons: ['app.theme', 'pages'] }, { kind: 'table', id: 'contoso_item', reasons: [] }]);
+  assert.deepEqual(port.owed(), [{ kind: 'app', id: APP, reasons: ['app.tables', 'pages'] }, { kind: 'table', id: 'contoso_item', reasons: [] }]);
   assert.throws(() => port.queue({ kind: 'app' }), { code: 'PUBLICATION_TARGET_INVALID' });
 });
 
@@ -73,7 +73,7 @@ test('a withheld exact publish (thrown or answered as failed) stays owed and is 
 test('exact obligation: raw publish refused once recorded, unsettled until a push proves it published, and a proven push settles the owed app', () => {
   const port = createAppPublication({ appWrite: writer() });
   port.assertRawPublishAllowed(APP);
-  port.queue({ kind: 'app', id: APP, reason: 'app.theme' });
+  port.queue({ kind: 'app', id: APP, reason: 'app.tables' });
   const pending = port.recordExact(APP, exactPush('notRead'), 'Membership');
   assert.equal(pending.done, false);
   assert.throws(() => port.assertRawPublishAllowed(APP.toUpperCase()), { code: 'APP_PUBLISH_BYPASS_REFUSED' });
@@ -91,7 +91,7 @@ test('exact obligation: raw publish refused once recorded, unsettled until a pus
 test('an existing app publish through publishApp pays the queued app work: queue -> publishApp -> flush publishes the app exactly once', async () => {
   const appWrite = writer();
   const port = createAppPublication({ appWrite });
-  port.queue({ kind: 'app', id: APP, reason: 'app.theme' });
+  port.queue({ kind: 'app', id: APP, reason: 'app.tables' });
   const answer = await port.publishApp(APP);
   assert.deepEqual(answer, { type: 'app', id: APP, shipped: true, publish: { kind: 'submitted' } }, 'the PublishResult comes back as it came');
   assert.deepEqual(port.owed(), []);
@@ -101,7 +101,7 @@ test('an existing app publish through publishApp pays the queued app work: queue
 
 test('publishApp: a publish answered failed keeps the app owed; a throw propagates and keeps it owed; no writer is refused by code', async () => {
   const failing = createAppPublication({ appWrite: writer({ [APP]: { publish: { kind: 'failed', error: { code: 'APP_MAIN_FORM_PUBLISH_WITHHELD' } } } }) });
-  failing.queue({ kind: 'app', id: APP, reason: 'app.theme' });
+  failing.queue({ kind: 'app', id: APP, reason: 'app.tables' });
   assert.equal((await failing.publishApp(APP)).publish.kind, 'failed');
   assert.equal(failing.owed().length, 1);
   const thrown = Object.assign(new Error('lost'), { code: 'ECONNRESET' });

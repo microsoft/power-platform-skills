@@ -77,8 +77,6 @@ const SKILL_SDK_SURFACE = [
   // tables' metadata that loads no compiler — in place of `pac model genpage generate-types`.
   'generateGenPageRuntimeTypes',
   'getAiReadiness',
-  // app.theme (lib/app-theme.js) reads the app's stored and resolved theme, and writes it with publish:false.
-  'getAppTheme',
   'getArtifact',
   'getColumnVisualization',
   // `scripts/connector.js` reads a connector's operations and one operation's schema through the Power Apps connectors API (the SDK's
@@ -119,7 +117,6 @@ const SKILL_SDK_SURFACE = [
   'retrieveSetting',
   'seedRecordGraph',
   'setAppAiFeatures',
-  'setAppTheme',
   'setColumnVisualization',
   // Offers a form to specific security roles (AB#6648526). The roles are NOT a relationship —
   // `systemform` reports `CanBeInManyToMany: { Value: false, CanBeChanged: false }` and there is no

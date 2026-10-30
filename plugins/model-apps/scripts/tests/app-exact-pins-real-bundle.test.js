@@ -206,7 +206,7 @@ test('REAL BUNDLE: an exact update published through the port is settled by the 
   const { sdk, state, pushed, appWrite } = await exactUpdate(t);
   const port = createAppPublication({ appWrite, client: sdk.dataverse });
   assert.equal(port.recordExact(APP, pushed, { name: 'Membership', mainFormsByTable: MAIN }).done, false, 'the push alone proves nothing published');
-  port.queue({ kind: 'app', id: APP, reason: 'app.theme' });
+  port.queue({ kind: 'app', id: APP, reason: 'app.tables' });
   const mark = state.requests.length;
   const answer = await port.publishApp(APP);
   assert.notEqual(answer.publish.kind, 'failed', JSON.stringify(answer.publish));
