@@ -62,6 +62,10 @@ function formRemovals(deployedForm, def) {
 //                          never flagged here.
 //   'form-field-removal' — an explicit-layout form would prune fields off the deployed form.
 //   'sitemap-removal'    — the app sitemap rewrite would drop an entity/URL subarea present today.
+//   'app-main-forms-removal' — app.mainFormsOnUpdate "exact" on an app that exists today: the push takes the
+//                          table's other Main forms out of the app's membership (no form is deleted). One op
+//                          per table listed in app.mainForms; nothing is read to list them, so the op names
+//                          the scope, not the forms.
 //   'teardown'           — a planTeardown delete step (opts.teardown mode only).
 // `opts.teardown === true` switches to teardown mode: every planTeardown step is destructive.
 function classifyOps(spec, discovered = {}, opts = {}) {
@@ -96,6 +100,21 @@ function classifyOps(spec, discovered = {}, opts = {}) {
     const dropped = (discovered.sitemap.deployedTargets || []).filter((t) => !want.has(t));
     if (dropped.length) {
       destructive.push({ kind: 'sitemap-removal', label: 'app sitemap', targets: dropped, detail: `drops navigation target(s): ${dropped.join(', ')}` });
+    }
+  }
+
+  // A NEW app holds nothing to take out, so "exact" removes nothing there; on an existing app it is a removal from
+  // its membership, gated like the other removals.
+  const app = spec && spec.app;
+  if (col && col.appExists && app && app.mainFormsOnUpdate === 'exact' && app.mainForms && typeof app.mainForms === 'object') {
+    for (const table of Object.keys(app.mainForms)) {
+      const logical = table.toLowerCase();
+      destructive.push({
+        kind: 'app-main-forms-removal',
+        key: `app.mainForms.${logical}`,
+        label: `app Main forms of ${logical}`,
+        detail: `removes other Main forms of ${logical} from the app's membership; no form is deleted`,
+      });
     }
   }
 

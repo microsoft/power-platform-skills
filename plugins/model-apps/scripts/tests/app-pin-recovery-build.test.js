@@ -5,6 +5,8 @@
 // change set; when its answer is lost the SDK says APP_PIN_OUTCOME_UNKNOWN and re-sends nothing. The build then reads
 // the app's components and either finds every intended one (no second push), makes exactly one repair push, or stops
 // incomplete — never a third change set and never a warning only (lib/app-pin-recovery.js, sdk-build.js appWriters.push).
+// The same harness drives "mainFormsOnUpdate": "exact" on the existing app: refused without the removal's authority,
+// and with it the other Main form leaves the app and the publish is proven from the published layer.
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
@@ -25,8 +27,8 @@ const ALL = [`1:${META.contoso_item}`, `60:${FORM_A}`, `26:${VIEW}`, `59:${CHART
 // The pin server models the app and its components; the app step also reads the solution and the app's icon, which
 // this answers: both already exist, so the build creates neither.
 // watchCopy: record what the workspace copy asks the server to hold just before and just after each app push.
-async function build(t, lose, { watchCopy = false } = {}) {
-  const server = appPinServer(t, { lose });
+async function build(t, lose, { watchCopy = false, members, exact = false, allowDestructive } = {}) {
+  const server = appPinServer(t, { lose, members });
   const get = server.httpClient.get;
   server.httpClient.get = async (url) => {
     const answer = (body) => { server.state.requests.push(`GET ${url}`); return { status: 200, headers: {}, body }; };
@@ -51,7 +53,9 @@ async function build(t, lose, { watchCopy = false } = {}) {
   let result;
   let error;
   try {
-    result = await runSdkBuild(membershipSpec({ hidden: false }), { sdk: server.sdk, apply: true, phases: ['app-shell'], warn: (message) => warnings.push(message), log: () => {} });
+    const spec = membershipSpec({ hidden: false });
+    if (exact) spec.app.mainFormsOnUpdate = 'exact';
+    result = await runSdkBuild(spec, { sdk: server.sdk, apply: true, allowDestructive, phases: ['app-shell'], warn: (message) => warnings.push(message), log: () => {} });
   } catch (thrown) {
     error = thrown;
   }
@@ -99,4 +103,26 @@ test('build: a pin answer that arrives reads and writes nothing more than the bu
   const writes = state.requests.filter((line) => !line.startsWith('GET ')).map((line) => line.replace(/^(\S+ \S+?)(?:\?\S*)? .*$/, '$1').replace(/https:\/\/[^/]+\/api\/data\/v9\.\d/, ''));
   assert.deepEqual(writes, ['POST /AddSolutionComponent', 'PATCH /sitemaps(55555555-0000-4000-8000-000000000001)', 'BATCH PATCH', 'POST /PublishXml', 'POST /AddSolutionComponent']);
   assert.equal(state.requests.length, 49, state.requests.join('\n'));
+});
+
+// The app as it stands before the build: its table, its navigation and a second Main form (FORM_B) the spec leaves out.
+const WITH_FORM_B = [`1:${META.contoso_item}`, '62:55555555-0000-4000-8000-000000000001', `60:${FORM_B}`];
+
+test('build: "exact" Main forms on an existing app is refused without --allow-destructive, before the push writes the app', async (t) => {
+  const { state, error, changeSets } = await build(t, [], { members: WITH_FORM_B, exact: true });
+  assert.ok(error, 'the removal needs authority');
+  assert.equal(error.code, 'APP_MAIN_FORMS_EXACT_UNAUTHORIZED', error.stack);
+  assert.match(error.message, /takes the other Main forms of contoso_item out of the existing app's membership \(no form is deleted\)/);
+  assert.deepEqual(changeSets, [], 'no change set was sent');
+  assert.ok(state.members.has(`60:${FORM_B}`), 'the other Main form is still in the app');
+});
+
+test('build: "exact" Main forms with --allow-destructive takes the other Main form out and proves the published layer', async (t) => {
+  const { state, error, result } = await build(t, [], { members: WITH_FORM_B, exact: true, allowDestructive: true });
+  assert.equal(error, undefined, error && error.stack);
+  assert.equal(result.incomplete, undefined);
+  assert.ok(state.members.has(`60:${FORM_A}`), 'the listed Main form is in the app');
+  assert.ok(!state.members.has(`60:${FORM_B}`), 'the other Main form is out of the app');
+  assert.ok(state.requests.some((line) => line.startsWith('GET ') && line.includes('/appmodules(11111111-0000-4000-8000-000000000001)?$select=appmoduleidunique')),
+    'the publish is proven from a read of the published layer');
 });

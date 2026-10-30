@@ -113,6 +113,20 @@ test('classifyOps: a dropped sitemap target is destructive', () => {
   assert.match(r.destructive[0].detail, /entity:new_ticket/);
 });
 
+test('classifyOps: "exact" Main forms on an EXISTING app is one membership removal per listed table; addOnly, omitted or a new app is none', () => {
+  const app = { name: 'Support Desk', mainForms: { New_Ticket: ['Ticket'], new_customer: ['Customer'] }, mainFormsOnUpdate: 'exact' };
+  const existing = { collision: { appExists: true, appUnique: 'new_supportdesk' } };
+  const r = classifyOps({ app }, existing);
+  assert.deepStrictEqual(r.destructive.filter((o) => o.kind === 'app-main-forms-removal'), [
+    { kind: 'app-main-forms-removal', key: 'app.mainForms.new_ticket', label: 'app Main forms of new_ticket', detail: "removes other Main forms of new_ticket from the app's membership; no form is deleted" },
+    { kind: 'app-main-forms-removal', key: 'app.mainForms.new_customer', label: 'app Main forms of new_customer', detail: "removes other Main forms of new_customer from the app's membership; no form is deleted" },
+  ]);
+  for (const other of [{ ...app, mainFormsOnUpdate: 'addOnly' }, { ...app, mainFormsOnUpdate: undefined }]) {
+    assert.deepStrictEqual(classifyOps({ app: other }, existing).destructive.map((o) => o.kind), ['app-collision']);
+  }
+  assert.deepStrictEqual(classifyOps({ app }, { collision: { appExists: false, solutionExists: true } }), { destructive: [], hasDestructive: false });
+});
+
 test('classifyOps: teardown mode maps every planTeardown step to a destructive op', () => {
   const r = classifyOps(desk, {}, { teardown: true });
   assert.strictEqual(r.hasDestructive, true);

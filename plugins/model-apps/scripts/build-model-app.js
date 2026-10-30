@@ -589,8 +589,11 @@ async function buildModelAppHeld(spec, opts, deps, v, buildLease) {
       //     dropped sitemap target) requires --allow-destructive, interactive or not — the env var /
       //     --non-interactive suppress prompts only, they never grant destructive authority. The
       //     app-collision op is handled above (interactive/non-interactive nuance), so exclude it here.
+      //     An 'app-main-forms-removal' (app.mainFormsOnUpdate "exact" on an existing app) is authorized by the
+      //     flag for this run: the approval record holds form fields and sitemap targets only, so it neither
+      //     records nor compares it (the engine refuses it too without the flag).
       const diff = classifyOps(spec, state, { teardown: false });
-      const removals = diff.destructive.filter((o) => o.kind === 'form-field-removal' || o.kind === 'sitemap-removal');
+      const removals = diff.destructive.filter((o) => o.kind === 'form-field-removal' || o.kind === 'sitemap-removal' || o.kind === 'app-main-forms-removal');
       authorizedFormRemovals = authorizedFormRemovalMap(state, removals);
       const currentApproval = removalRecordFromOps(removals);
       currentDestructiveApproval = currentApproval;

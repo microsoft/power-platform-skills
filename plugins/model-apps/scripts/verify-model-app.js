@@ -475,9 +475,9 @@ function readerFor(sdk, appUnique, opts) {
       if (!appComponentsP.has(key)) appComponentsP.set(key, appEntityComponentsFor(sdk, appUnique, wanted));
       return appComponentsP.get(key);
     },
-    appMainForms: (unique, tables) => {
-      const key = JSON.stringify([unique, tables]);
-      if (!appMainFormsP.has(key)) appMainFormsP.set(key, appMainFormsFor(sdk, unique || appUnique, tables));
+    appMainForms: (unique, tables, { strict = false } = {}) => {
+      const key = JSON.stringify([unique, tables, strict]);
+      if (!appMainFormsP.has(key)) appMainFormsP.set(key, appMainFormsFor(sdk, unique || appUnique, tables, { strict }));
       return appMainFormsP.get(key);
     },
     appRoleIds: () => appRoleIdsFor(sdk, appUnique),

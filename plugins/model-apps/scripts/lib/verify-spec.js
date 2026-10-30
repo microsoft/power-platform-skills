@@ -1584,12 +1584,15 @@ async function verifySpec(spec, read, opts = {}) {
   });
 
   const mainForms = spec.app && spec.app.mainForms;
+  // "exact" asks the app to offer ONLY the listed Main forms, so its proof reads the component list strictly: a row the
+  // read cannot place fails the check instead of being left out (readMainFormMembership's `strict`).
+  const exactMainForms = Boolean(spec.app && spec.app.mainFormsOnUpdate === 'exact');
   plan.section(async ({ add }) => {
   if (mainForms && Object.keys(mainForms).length) {
     let membership;
     try {
       membership = typeof read.appMainForms === 'function'
-        ? await read.appMainForms(appUniqueName(spec), mainForms)
+        ? await read.appMainForms(appUniqueName(spec), mainForms, exactMainForms ? { strict: true } : undefined)
         : { kind: 'inconclusive', reason: 'app Main-form membership reader is unavailable' };
     } catch (error) {
       membership = { kind: 'inconclusive', reason: (error && error.message) || String(error) };
@@ -1607,8 +1610,10 @@ async function verifySpec(spec, read, opts = {}) {
       const problems = [];
       if (result.missing.length) problems.push(`Main form(s) ${names(result.missing)} are missing; re-run the build`);
       if (result.extras.length) {
-        problems.push(`Main form(s) ${names(result.extras)} are outside the list; an existing app keeps forms it already offered — `
-          + `remove them in Maker (app designer -> ${table} -> Forms) or list them`);
+        problems.push(exactMainForms
+          ? `Main form(s) ${names(result.extras)} are outside the list, which app.mainFormsOnUpdate "exact" takes out of the app — re-run the build with --allow-destructive`
+          : `Main form(s) ${names(result.extras)} are outside the list; an existing app keeps forms it already offered — `
+            + `remove them in Maker (app designer -> ${table} -> Forms) or list them`);
       }
       add('app-main-forms', table, problems.length === 0, problems.join('; '));
     }

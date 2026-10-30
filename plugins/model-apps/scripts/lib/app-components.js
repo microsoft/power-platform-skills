@@ -551,12 +551,13 @@ async function publishedMainFormsProof(client, appId, mainFormsByTable) {
   }
 }
 
-async function appMainFormsFor(sdk, appUnique, tables) {
+// `strict` (verify of app.mainFormsOnUpdate "exact"): see readMainFormMembership.
+async function appMainFormsFor(sdk, appUnique, tables, { strict = false } = {}) {
   try {
     const layer = await publishedAppLayer(sdk, { appUnique });
     if (!layer.ok) return { kind: 'inconclusive', reason: layer.reason };
     const resolved = await resolveMainForms(sdk.dataverse, { app: { mainForms: tables } });
-    const result = await readMainFormMembership(sdk.dataverse, layer.appModuleIdUnique, resolved);
+    const result = await readMainFormMembership(sdk.dataverse, layer.appModuleIdUnique, resolved, { strict });
     if (result.kind !== 'read') return result;
     const requestedNames = {};
     for (const [table, names] of Object.entries(tables)) {

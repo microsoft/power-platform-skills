@@ -3508,7 +3508,7 @@ async function runSdkBuildPhases(spec, opts, owed) {
       const mainFormsOnUpdate = spec.app && spec.app.mainFormsOnUpdate;
       // "exact" takes the other Main forms of each listed table OUT of an app that existed before this run: a removal from its membership (no form is
       // deleted), so it needs the same authority as the build's other removals. The CLI's preflight lists it (op-diff.js 'app-main-forms-removal') and
-      // refuses it without --allow-destructive; this stops a caller that skipped that gate before anything of the app is written.
+      // refuses it without --allow-destructive; this stops a caller that skipped that gate before the push writes anything of the app.
       if (mainFormsOnUpdate === 'exact' && opts.allowDestructive !== true && !appsCreatedByThisRun.has(String(appId).toLowerCase())) {
         const tables = Object.keys((spec.app && spec.app.mainForms) || {}).map((table) => table.toLowerCase()).join(', ');
         throw new BuildHalt(`app ${name}: "mainFormsOnUpdate": "exact" takes the other Main forms of ${tables} out of the existing app's membership (no form is deleted) — refusing without --allow-destructive`,

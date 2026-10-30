@@ -1691,6 +1691,26 @@ test('destructive gate: build halts on a dropped sitemap target without --allow-
   assert.ok(!calls.some((c) => c[0] === 'createSolution'), 'halted before any write');
 });
 
+test('destructive gate: "exact" Main forms on an existing app halts without --allow-destructive and runs with it', async () => {
+  const spec = JSON.parse(JSON.stringify(desk));
+  spec.minimumPluginVersion = '2.21.0';
+  spec.app.mainForms = { new_ticket: ['Ticket'] };
+  spec.app.mainFormsOnUpdate = 'exact';
+  const state = { collision: { appExists: true, appUnique: 'new_supportdesk' }, forms: [] };
+  const { sdk, calls } = mockSdk();
+  const refused = await buildModelApp(spec, { apply: true, env: 'https://x', retryDelayMs: 0, allowDestructive: false }, { sdk, provisionSdk: sdk, discoverOpDiffState: async () => state });
+  assert.strictEqual(refused.ok, false);
+  assert.ok(refused.errors.some((e) => /allow-destructive/.test(e) && /app Main forms of new_ticket — removes other Main forms of new_ticket from the app's membership; no form is deleted/.test(e)), refused.errors.join('\n'));
+  assert.ok(!calls.some((c) => c[0] === 'createSolution'), 'halted before any write');
+  let engineOpts;
+  const allowed = await buildModelApp(spec, { apply: true, env: 'https://x', retryDelayMs: 0, allowDestructive: true }, {
+    sdk, provisionSdk: sdk, discoverOpDiffState: async () => state,
+    runBuild: async (_spec, options) => { engineOpts = options; return { ok: true }; },
+  });
+  assert.notStrictEqual(allowed.ok, false, (allowed.errors || []).join('\n'));
+  assert.strictEqual(engineOpts && engineOpts.allowDestructive, true, 'the engine is told the removal is authorized');
+});
+
 test('safety gate is FAIL-CLOSED: a discovery error halts the build (no unauthorized write)', async () => {
   // The core fail-closed invariant (design §11): if preflight discovery throws (transient 429/timeout/
   // auth), we cannot verify the apply is non-destructive, so the build must REFUSE to write rather than
