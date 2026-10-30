@@ -82,6 +82,9 @@ const POLICY = {
   'pages-identity-conflict': { kinds: ['never'], via: PAGES },
   'pages-creation-receipt-failed': { kinds: ['never'], via: PAGES },
   'pages-duplicate-name-create': { kinds: ['never'], via: PAGES },
+  // A generative page requested on a form that was refused, or whose outcome is unknown: a run again sends nothing new for an add the create port
+  // holds as unknown, and a refusal (a section that is not there, a page embedded elsewhere) is the spec's. Held with the embed doubles there.
+  'form-page-embeds-incomplete': { kinds: ['never'], via: 'form-page-embeds.test.js' },
   'pages-shared-check-failed': { kinds: ['by-failure', 'never'], via: 'sdk-build.test.js' },
   'pages-shared-across-apps': { kinds: ['never'], via: PAGES },
   'pages-blank-provenance': { kinds: ['never'], via: PAGES },
