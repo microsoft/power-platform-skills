@@ -875,3 +875,31 @@ test('field-security grading checks each profile\'s grants and named principals'
   assert.strictEqual(grade2210(13, (s) => { hr(s).assignTo.teams = hr(s).assignTo.teams.map((t) => t.toUpperCase()); }), 'pass', 'a GUID compares case-insensitively');
   assert.strictEqual(grade2210(13, (s) => { payroll(s).permissions[0].update = false; }), 'pass', 'an explicit false is no grant');
 });
+
+test('app membership expectations pass on their fixtures and fail when the spec drifts from the prompt', async () => {
+  const fixtures = loadFixtures(path.join(__dirname, '..', 'fixtures'));
+  const grade = (id, mutate, evMutate) => {
+    const ev = structuredClone(evalsManifest.evals.find((e) => e.id === id));
+    const spec = structuredClone(fixtures.find((f) => f.id === id).spec);
+    if (mutate) mutate(spec);
+    if (evMutate) evMutate(ev);
+    return ASSERTIONS.get(ev.expectations[0])({ spec, eval: ev, facts: {} }).status;
+  };
+  for (const id of [14, 15]) assert.strictEqual(grade(id), 'pass', `eval ${id}`);
+  assert.strictEqual(grade(14, (s) => { delete s.app.mainFormsOnUpdate; }), 'fail');
+  assert.strictEqual(grade(14, (s) => { s.app.mainForms.contoso_item.push('Details'); }), 'fail');
+  assert.strictEqual(grade(14, (s) => { s.minimumPluginVersion = '2.20.6'; }), 'fail');
+  // The negative: "add the Summary form" expects no "exact", so the exact fixture fails it and the plain list passes.
+  const addOnly = (ev) => { ev.prompt = 'Add the Summary form to Items.'; delete ev.expect.appMembership.mainFormsOnUpdate; };
+  assert.strictEqual(grade(14, null, addOnly), 'fail');
+  assert.strictEqual(grade(14, (s) => { delete s.app.mainFormsOnUpdate; }, addOnly), 'pass');
+  assert.strictEqual(grade(15, (s) => { delete s.app.pinDeclaredArtifacts; }), 'fail');
+  assert.strictEqual(grade(15, (s) => { s.appShell.areas[0].groups[0].subAreas.push({ entity: 'cnt_expense', title: 'Expenses' }); }), 'fail');
+  assert.strictEqual(grade(15, (s) => { s.charts = []; }), 'fail');
+
+  // The all-present reader answers an exact Main-form list only when it is read strictly.
+  const spec = fixtures.find((f) => f.id === 14).spec;
+  const reader = makeAllPresentReader(spec);
+  assert.strictEqual((await reader.appMainForms('x', spec.app.mainForms)).kind, 'inconclusive');
+  assert.deepStrictEqual((await reader.appMainForms('x', spec.app.mainForms, { strict: true })).tables, [{ table: 'contoso_item', extras: [], missing: [] }]);
+});

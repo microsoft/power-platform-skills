@@ -325,6 +325,28 @@
       "expectations": [
         "author: confidential columns are isSecured with explicit profiles; assignees are named, never inferred, and an unassigned profile says so"
       ]
+    },
+    {
+      "id": 14,
+      "tier": "full",
+      "spec": "app-spec.json",
+      "prompt": "This app should only show the Summary form for Items.",
+      "expect": { "tables": ["contoso_item"], "relationships": [], "views": ["All Items"], "charts": [], "pages": [],
+        "appMembership": { "mainForms": { "contoso_item": ["Summary"] }, "mainFormsOnUpdate": "exact" } },
+      "expectations": [
+        "author: \"only these forms\" lists them in app.mainForms with mainFormsOnUpdate \"exact\"; \"add a form\" never asks for exact"
+      ]
+    },
+    {
+      "id": 15,
+      "tier": "full",
+      "spec": "app-spec.json",
+      "prompt": "A new Project Costs app: projects in the navigation, plus a chart of expenses by category in the app.",
+      "expect": { "tables": ["cnt_project", "cnt_expense"], "relationships": [], "views": ["Active Projects"], "charts": ["Expenses by Category"], "pages": [],
+        "appMembership": { "pinDeclaredArtifacts": true, "offNavigation": ["cnt_expense"] } },
+      "expectations": [
+        "author: a new app with a chart or view of a table outside its navigation pins the declared artifacts"
+      ]
     }
   ]
 }

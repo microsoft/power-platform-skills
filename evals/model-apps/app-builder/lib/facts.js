@@ -615,6 +615,11 @@ function makeAllPresentReader(spec, formEvidence = null) {
     servedMainForms: async (entityLogical) => formEvidence
       ? ((formEvidence.servedMainForms || {})[lc(entityLogical)] || [])
       : (plannedMainFormSequence(spec, entityLogical) || []).map((f) => ({ id: `form:${mainFormName(f)}`, name: mainFormName(f) })),
+    // The app holds exactly the listed Main forms. An "exact" list (app.mainFormsOnUpdate) has to be asked for
+    // strictly: a lenient read can drop a row it cannot place, so it would prove "only these forms" from part of the list.
+    appMainForms: async (_appUnique, mainForms, opts) => (spec.app && spec.app.mainFormsOnUpdate === 'exact' && !(opts && opts.strict)
+      ? { kind: 'inconclusive', reason: 'an exact Main-form list was read without strict' }
+      : { kind: 'read', tables: Object.keys(mainForms || {}).map((table) => ({ table: lc(table), extras: [], missing: [] })), formNames: {} }),
   };
 }
 
@@ -639,6 +644,7 @@ function requiredVerifyChecks(spec, reader) {
     'form-subgrid': (spec.forms || []).reduce((n, f) => n + splitSubgrids(formLayoutNames(f), f.subgrids).placed
       .filter((p) => subgridRelationshipName(spec, f.entity, p.sg.childEntity)).length, 0),
     'form-order-served': typeof reader.servedMainForms === 'function' ? ordered.length : 0,
+    'app-main-forms': Object.keys((spec.app && spec.app.mainForms) || {}).length,
     'business-rule': (spec.businessRules || []).length,
     'business-process-flow': (spec.businessProcessFlows || []).length,
     role: (spec.personas || []).length,

@@ -911,4 +911,41 @@ ASSERTIONS.set('author: confidential columns are isSecured with explicit profile
   return PASS;
 });
 
+// per-eval expectations (evals 14-15)  app membership authoring, graded against independent
+// `expect.appMembership` blocks. "exact" removes forms from an existing app, so it must follow an
+// explicit "only these forms" ask; an "add a form" ask expects mainFormsOnUpdate absent or "addOnly".
+const sameNames = (a, b) => eq(sorted((a || []).map((n) => String(n).toLowerCase())), sorted((b || []).map((n) => String(n).toLowerCase())));
+ASSERTIONS.set('author: "only these forms" lists them in app.mainForms with mainFormsOnUpdate "exact"; "add a form" never asks for exact', ({ spec, eval: ev }) => {
+  const expected = ev.expect && ev.expect.appMembership;
+  if (!expected || !expected.mainForms) return fail('no independent app membership expectations');
+  if (!versionAtLeast(spec.minimumPluginVersion, '2.21.0')) return fail(`minimumPluginVersion ${spec.minimumPluginVersion || '(none)'} is below 2.21.0`);
+  const app = spec.app || {};
+  const listed = Object.fromEntries(Object.entries(app.mainForms || {}).map(([table, names]) => [table.toLowerCase(), names]));
+  for (const [table, names] of Object.entries(expected.mainForms)) {
+    if (!sameNames(listed[table.toLowerCase()], names)) return fail(`app.mainForms.${table} [${(listed[table.toLowerCase()] || []).join(', ')}], expected [${names.join(', ')}]`);
+  }
+  const want = expected.mainFormsOnUpdate || 'addOnly';
+  const got = app.mainFormsOnUpdate || 'addOnly';
+  return got === want ? PASS : fail(`app.mainFormsOnUpdate ${app.mainFormsOnUpdate === undefined ? '(omitted)' : app.mainFormsOnUpdate}, expected ${want}`);
+});
+
+// expect.appMembership.offNavigation names the tables the prompt keeps out of the navigation while asking
+// for one of their charts or views; the fixture must really declare such an artifact, or the eval grades nothing.
+ASSERTIONS.set('author: a new app with a chart or view of a table outside its navigation pins the declared artifacts', ({ spec, eval: ev }) => {
+  const expected = ev.expect && ev.expect.appMembership;
+  if (!expected || !Array.isArray(expected.offNavigation) || !expected.offNavigation.length) return fail('no independent off-navigation expectations');
+  if (!versionAtLeast(spec.minimumPluginVersion, '2.21.0')) return fail(`minimumPluginVersion ${spec.minimumPluginVersion || '(none)'} is below 2.21.0`);
+  const navigation = new Set(((spec.appShell && spec.appShell.areas) || []).flatMap((a) => (a.groups || []).flatMap((g) => g.subAreas || []))
+    .filter((s) => s.entity).map((s) => String(s.entity).toLowerCase()));
+  for (const table of expected.offNavigation) {
+    const t = table.toLowerCase();
+    if (navigation.has(t)) return fail(`${table} is in the navigation, expected outside it`);
+    const artifacts = [...(spec.charts || []), ...(spec.views || [])].filter((a) => String(a.entity || '').toLowerCase() === t);
+    if (!artifacts.length) return fail(`no chart or view of ${table} is declared`);
+  }
+  const app = spec.app || {};
+  return (app.pinDeclaredArtifacts === true) === (expected.pinDeclaredArtifacts === true) ? PASS
+    : fail(`app.pinDeclaredArtifacts ${app.pinDeclaredArtifacts === undefined ? '(omitted)' : app.pinDeclaredArtifacts}, expected ${expected.pinDeclaredArtifacts === true}`);
+});
+
 module.exports = { ASSERTIONS };

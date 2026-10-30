@@ -60,6 +60,8 @@ confined to the fixture directory, including when the fixtures root is a junctio
 | 11 | `11-portable-options-labels` | Option values a maker depends on: a global choice with values 1, 2, 10, sparse and mixed inline options, sample data by label and a view filtered by number. The spec asks for 2.21.0. |
 | 12 | `12-date-behavior` | Date and Time behaviours: DateOnly with and without a date format, TimeZoneIndependent, explicit UserLocal and an omitted behaviour. |
 | 13 | `13-secured-profile-principals` | Secured Money and Memo columns with explicit field security profiles: one assigned to a named team, one with no assignment, plus sample data. |
+| 14 | `14-app-exact-main-forms` | "Only the Summary form": `app.mainForms` lists it with `mainFormsOnUpdate: "exact"`; an "add the Summary form" ask must not get `exact` (negative unit probe). Verify must read an exact list strictly. The spec asks for 2.21.0. |
+| 15 | `15-app-pin-offnav-chart` | A new app with a chart of a table outside its navigation sets `app.pinDeclaredArtifacts: true`. |
 
 > **Fixture 2 note:** `appShell.subAreas[].page` references use the page's **key** (e.g. `"overview"`), not its display name (`"Overview"`). The v2 validator requires keys, and the linter accepts valid key references; `key === name` is neither required nor used by this fixture.
 
@@ -68,7 +70,7 @@ confined to the fixture directory, including when the fixtures root is a junctio
 - `skill_name` — identifies this suite.
 - `eval_instructions` — description used by eval runners.
 - `common_stage_assertions` — run for every fixture; registered in `lib/assertions.js`.
-- `evals[].expect` — independent per-eval counts/names plus form-edit, rejected-model, changed-only, name-scope, option-value, date-behaviour and field-security contracts.
+- `evals[].expect` — independent per-eval counts/names plus form-edit, rejected-model, changed-only, name-scope, option-value, date-behaviour, field-security and app-membership contracts.
 - `evals[].expectations` — additional per-eval assertion texts (can be empty).
 - `evals[].tier` — `smoke` (fast subset) or `full`.
 
