@@ -2432,7 +2432,33 @@ async function verifyConfiguration(spec, ctx) {
   return checks;
 }
 
+// What a teardown says about the configuration kinds. A teardown never deletes them: nothing proves this
+// app owns an environment variable, a connection reference, a Custom API or a duplicate rule (another app
+// or flow in the environment can use the same item), so each declared item is named as kept. Only names
+// are printed, never a value, a default or a connector. A Custom API bound to a table the spec creates
+// (not `existing: true`) blocks that table's delete in Dataverse, so its line says so.
+function configurationTeardownNotes(spec) {
+  if (!isObject(spec)) return [];
+  const kept = 'kept: a teardown does not delete configuration items it cannot prove this app owns';
+  const made = new Set((Array.isArray(spec.entities) ? spec.entities : [])
+    .filter((e) => isObject(e) && e.existing !== true && nonEmptyString(e.schemaName))
+    .map((e) => lower(e.schemaName)));
+  const list = (name) => (Array.isArray(spec[name]) ? spec[name].filter(isObject) : []);
+  const notes = [];
+  for (const v of list('environmentVariables')) notes.push(`environment variable ${v.schemaName} ${kept}`);
+  for (const r of list('connectionReferences')) notes.push(`connection reference ${r.logicalName} ${kept}`);
+  for (const api of list('customApis')) {
+    const table = nonEmptyString(api.boundEntityLogicalName) ? lower(api.boundEntityLogicalName) : null;
+    notes.push(table && made.has(table)
+      ? `Custom API ${api.uniqueName} ${kept}; it is bound to ${table}, so delete the Custom API first or the table's delete is refused`
+      : `Custom API ${api.uniqueName} ${kept}`);
+  }
+  for (const rule of list('duplicateDetectionRules')) notes.push(`duplicate detection rule ${rule.key} ${kept}`);
+  return notes;
+}
+
 module.exports = {
+  configurationTeardownNotes,
   CONFIGURATION_MIN_VERSION,
   MAX_PUBLISHED_RULES_PER_TABLE,
   usesConfiguration,

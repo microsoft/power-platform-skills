@@ -684,3 +684,31 @@ test('the shipped helpers name no document that is not in the repository', () =>
     assert.doesNotMatch(text, /DESIGN\.md|§\d|\bR\d-\d\d\b/, file);
   }
 });
+
+test('teardown: every declared configuration item is kept and named, never a value; a Custom API on a table the spec makes is called out', () => {
+  assert.deepEqual(C.configurationTeardownNotes(base()), []);
+  assert.deepEqual(C.configurationTeardownNotes(base({ environmentVariables: [] })), []);
+  const spec = base({
+    entities: [{ schemaName: 'contoso_Order' }, { schemaName: 'account', existing: true }],
+    environmentVariables: [{ schemaName: 'contoso_ApiKey', type: 'string', defaultValue: 'not-for-output' }],
+    connectionReferences: [{ logicalName: 'contoso_sp', connectorId: SP }],
+    customApis: [
+      { uniqueName: 'contoso_Approve', binding: 'entity', boundEntityLogicalName: 'contoso_order' },
+      { uniqueName: 'contoso_Touch', binding: 'entity', boundEntityLogicalName: 'account' },
+      { uniqueName: 'contoso_Ping', binding: 'global' },
+    ],
+    duplicateDetectionRules: [{ key: 'orders-by-name', name: 'Orders by name', entity: 'contoso_order' }],
+  });
+  const notes = C.configurationTeardownNotes(spec);
+  assert.equal(notes.length, 6);
+  for (const name of ['contoso_ApiKey', 'contoso_sp', 'contoso_Approve', 'contoso_Touch', 'contoso_Ping', 'orders-by-name']) {
+    assert.ok(notes.some((n) => n.includes(name)), `a note names ${name}: ${JSON.stringify(notes)}`);
+  }
+  assert.ok(notes.every((n) => /kept/.test(n)));
+  assert.ok(!notes.join('\n').includes('not-for-output'));
+  assert.ok(!notes.join('\n').includes(SP));
+  const bound = notes.filter((n) => /delete the Custom API first/.test(n));
+  assert.equal(bound.length, 1);
+  assert.match(bound[0], /contoso_Approve/);
+  assert.match(bound[0], /contoso_order/);
+});
