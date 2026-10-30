@@ -139,7 +139,10 @@ const { DASHBOARD_LAUNCHER_URL, adoptLiveSitemap, chromeByTargetKey, describeSit
 const { buildPromptSpec } = require('./ai-prompt.js');
 const { odataLit } = require('./odata.js');
 const { isRestrictedSolution } = require('./system-solutions.js');
-const { tableRefs, pinAppTables, publishAppComponents, resolveMainForms, appComponentsFor, applyAppMainForms, explainAppPushWarnings, savedPageRows } = require('./app-components.js');
+const { tableRefs, pinAppTables, publishAppComponents, resolveMainForms, appComponentsFor, applyAppMainForms, explainAppPushWarnings, savedPageRows,
+  declaredAppPins, pinDeclaredArtifacts } = require('./app-components.js');
+const { pinIntentOf, pinWarningOf, reconcileUnconfirmedPin } = require('./app-pin-recovery.js');
+const { createAppPublication } = require('./app-publication-policy.js');
 const { appWriteTables, appPushTables, preAppTables, publishTablesXml, readSavedNotPublished, describeSavedNotPublished, readAppFormChartTables, describePreAppRefusal, describeUnreadAppComponents } = require('./table-publish.js');
 const { hasUnsyncedEdits } = require('./unsynced-edits.js');
 const { createSolutionMembership, ensureSolutionComponent } = require('./solution-membership.js');
@@ -1794,7 +1797,7 @@ function appDef(spec, result, opts = {}) {
     // #583: the routing description, only when the spec sets one (see applyAppAiDescription).
     ...(spec.app.aiDescription ? { aiDescription: spec.app.aiDescription } : {}),
     ...(opts.iconWebResourceId ? { iconWebResourceId: opts.iconWebResourceId } : {}),
-    components: appComponentsFor(result, opts.mainFormsByTable) };
+    components: appComponentsFor(result, opts.mainFormsByTable, { declared: Boolean(spec.app && spec.app.pinDeclaredArtifacts === true) }) };
 }
 
 // #583: set the routing description (`app.aiDescription` → `appmodule.aiappdescription`) on the FETCHED
@@ -2008,17 +2011,33 @@ async function haltOnUnpublishedAppHeader(provision, appId, pushed, name) {
 // backend's push of the app, say. It is thrown before the header or the navigation is written, so the generic path below is the right one: the copy, which that push never recorded, is
 // reset to the server's, and the typed error is thrown as it is. Its message says a re-run normally succeeds, and `transient: false` keeps the build from running the phase again on its own:
 // whether the read answers next time is for that re-run to find out, and a retry of the same push here would hide the one thing the message tells.
-async function pushAppHeader(provision, appId, name, header, mainFormsByTable, warn) {
+async function pushAppHeader(provision, appId, name, header, mainFormsByTable, warn, { mainFormsOnUpdate, declared, onIntent } = {}) {
   const { routing, replaced, held } = header !== null && typeof header === 'object' ? header : { routing: header === true, replaced: {}, held: [] };
   const textKeys = Object.keys(replaced || {});
   const carriesHeader = routing || textKeys.length > 0;
   const attempt = async (first) => {
     try {
       if (first) {
-        await applyAppMainForms(provision, appId, mainFormsByTable);
+        await applyAppMainForms(provision, appId, mainFormsByTable, { mainFormsOnUpdate });
+        if (declared) await pinDeclaredArtifacts(provision, appId, declared);
         await takeNonPlainTextOffCopy(provision, appId, held);
       }
-      return { pushed: await explainAppPushWarnings(provision.dataverse, await provision.pushArtifact('app', appId), name) };
+      const pushed = await explainAppPushWarnings(provision.dataverse, await provision.pushArtifact('app', appId), name);
+      // What this push asked the server to hold, recorded apart from the header and navigation: the recovery's re-fetch
+      // carries neither the Main-form directives nor any explicit pin (lib/app-pin-recovery.js). It is read only when the
+      // pin's answer was lost (APP_PIN_OUTCOME_UNKNOWN), so every other push makes exactly the calls it always made. The
+      // copy read here is still the one just pushed: the SDK re-sends nothing and leaves the workspace copy as it was
+      // (pinned against the real bundle in tests/app-pin-recovery-build.test.js); a reset of the copy happens only after a
+      // FAILED push (discardUnrecordedEdits, below), which this precedes. A read that fails records nothing, and the
+      // recovery then stops the build incomplete rather than compare against a guess.
+      if (typeof onIntent === 'function' && pinWarningOf(pushed, appId)) {
+        try {
+          onIntent(pinIntentOf(await provision.getArtifact('app', appId)));
+        } catch {
+          onIntent(undefined);
+        }
+      }
+      return { pushed };
     } catch (thrown) {
       return { thrown };
     }
@@ -2944,7 +2963,7 @@ async function publishTargets(provision, runner, concurrency, entityTargets, app
         if (isApp(target)) appResult = retried;
         else if (refused(retried)) failed.push({ target, error: retried.publish.error });
       }
-      return { appPublished: published(appResult), failed };
+      return { appPublished: published(appResult), appResult, failed };
     }
   }
   const outcomes = await runner.mapLimit(entityTargets, concurrency, (async (target) => publishOne(target, labelOf(target))));
@@ -2953,7 +2972,7 @@ async function publishTargets(provision, runner, concurrency, entityTargets, app
     if (refused(outcome)) failed.push({ target, error: outcome.publish.error });
   });
   const appResult = appTarget ? await publishOne(['app', appTarget[1]], appTarget[2]) : undefined;
-  return { appPublished: published(appResult), failed };
+  return { appPublished: published(appResult), appResult, failed };
 }
 
 // What a publish target is FOR, in the words a warning or a halt prints: the names the target carries (a table's
@@ -3476,19 +3495,46 @@ async function runSdkBuildPhases(spec, opts, owed) {
     async create(def) {
       await publishTablesBeforeApp(undefined, { addedTables: async () => appWriteTables(spec, await resolvedMainForms()) });
       const art = await provision.createArtifact('app', def);
+      if (art && art.id) appsCreatedByThisRun.add(String(art.id).toLowerCase());
       return provision.pushArtifact('app', art.id);
     },
     // A push of an existing app: the SDK adds the Main forms of the tables of the navigation it sends on every one, whatever it changes. The app step's and the finalizer's write the spec's
     // navigation into the workspace copy before they push it. The push that only carries the routing description writes none (`resendsCopy`): it re-sends the workspace copy's, which is the
     // server's, so the tables are those that navigation names, read when the push is about to be made. The spec's Main-form list is applied to either (pushAppHeader).
-    async push(appId, name, headerChanged, { resendsCopy = false } = {}) {
+    // `mainFormsOnUpdate: "exact"` and `pinDeclaredArtifacts` ride every such push (the app step's and the finalizer's). A push whose component pin answered
+    // APP_PIN_OUTCOME_UNKNOWN is reconciled once from a read of the app (lib/app-pin-recovery.js): confirmed with no write, repaired by ONE more push of
+    // this writer (`repair`, which never reconciles again), or recorded as incomplete work; a pin that answered is never re-read.
+    async push(appId, name, headerChanged, { resendsCopy = false, repair = false } = {}) {
+      const mainFormsOnUpdate = spec.app && spec.app.mainFormsOnUpdate;
+      // "exact" takes the other Main forms of each listed table OUT of an app that existed before this run: a removal from its membership (no form is
+      // deleted), so it needs the same authority as the build's other removals. The CLI's preflight lists it (op-diff.js 'app-main-forms-removal') and
+      // refuses it without --allow-destructive; this stops a caller that skipped that gate before anything of the app is written.
+      if (mainFormsOnUpdate === 'exact' && opts.allowDestructive !== true && !appsCreatedByThisRun.has(String(appId).toLowerCase())) {
+        const tables = Object.keys((spec.app && spec.app.mainForms) || {}).map((table) => table.toLowerCase()).join(', ');
+        throw new BuildHalt(`app ${name}: "mainFormsOnUpdate": "exact" takes the other Main forms of ${tables} out of the existing app's membership (no form is deleted) — refusing without --allow-destructive`,
+          { phase: 'app-shell', code: 'APP_MAIN_FORMS_EXACT_UNAUTHORIZED', retry: RETRY.NEVER });
+      }
       const mainFormsByTable = await resolvedMainForms();
       await publishTablesBeforeApp(appId, {
         addedTables: async () => (resendsCopy
           ? appPushTables(entityTablesOfSiteMap(((await provision.getArtifact('app', appId)) || {}).siteMap), mainFormsByTable)
           : appWriteTables(spec, mainFormsByTable)),
       });
-      return pushAppHeader(provision, appId, name, headerChanged, mainFormsByTable, opts.warn);
+      const declared = spec.app && spec.app.pinDeclaredArtifacts === true ? declaredAppPins(result.created) : undefined;
+      let intent;
+      const pushed = await pushAppHeader(provision, appId, name, headerChanged, mainFormsByTable, opts.warn,
+        { mainFormsOnUpdate, declared, onIntent: (recorded) => { intent = recorded; } });
+      if (mainFormsOnUpdate === 'exact' && pushed && pushed.saved !== false) appPublication.recordExact(appId, pushed, { name, mainFormsByTable });
+      // The repair push itself never reconciles again: one more push at most (no recursion, no whole-build retry).
+      if (repair) return pushed;
+      const settled = await reconcileUnconfirmedPin({
+        provision, appId, intent, pushed,
+        // The fresh copy is the server's: nothing of the spec's navigation is written into it, so it re-sends the copy's
+        // own navigation (resendsCopy) and carries no header change.
+        push: () => appWriters.push(appId, name, false, { resendsCopy: true, repair: true }),
+      });
+      if (settled.outcome === 'incomplete') markIncomplete({ phase: 'app-shell', code: settled.error.code, message: `app ${name}: ${settled.error.message}` });
+      return settled.pushed;
     },
     // The publish of an app: it ships the forms the app holds, whoever last saved them. It adds none.
     async publish(appId) {
@@ -3497,6 +3543,8 @@ async function runSdkBuildPhases(spec, opts, owed) {
     },
     // The publish of the app that makes the table components pinned after its create live.
     async publishPinned(appId) {
+      // A raw PublishXml skips the SDK's exact-membership guard: refused for an app that holds an exact obligation.
+      appPublication.assertRawPublishAllowed(appId);
       await publishTablesBeforeApp(appId);
       return publishAppComponents(provision.dataverse, appId);
     },
@@ -3511,6 +3559,40 @@ async function runSdkBuildPhases(spec, opts, owed) {
       });
     },
   };
+  // The apps this run made (appWriters.create): "exact" on an app this run created removes nothing it did not just add, so it needs no authority.
+  const appsCreatedByThisRun = new Set();
+
+  // The ONE place an app's publication is owed and made (lib/app-publication-policy.js). Every app publish of the build
+  // goes through appPublication.publishApp -> appWriters.publish: the SAME SDK instance that enforces an exact Main-form
+  // obligation; `client` is that instance's DataverseClient, for the published-layer proof that settles the obligation.
+  // A queued table (a feature's view/form change) is handed to the build's own table publication: owed to phase 8 when
+  // phase 8 will publish and has not yet paid (the same rule as publishReconciled), otherwise published at the flush.
+  // Handed to phase 8 it stays owed here until phase 8 reports its answer (noteScopePublished, below); `publish` must
+  // return the SDK's PublishResult, which the port reads to decide whether the table was published.
+  // With nothing queued and no exact list asked for, the port is a pass-through of appWriters.publish and its flush
+  // sends nothing, so a build that uses neither makes exactly the requests it made before.
+  const appPublication = createAppPublication({
+    appWrite: appWriters,
+    client: provision.dataverse,
+    scopes: {
+      table: {
+        owe: (target) => {
+          if (!publishInPhase8 || owed.paid) return false;
+          oweTablePublish(String(target.id).toLowerCase(), target.artifact.type, target.artifact.id, target.reason);
+          reconciledTables.add(String(target.id).toLowerCase());
+          return true;
+        },
+        publish: async (target) => reportPartialPush(await provision.publishArtifact(target.artifact.type, target.artifact.id), target.reasons.join(', ') || `table ${target.id}`, opts.warn),
+      },
+    },
+  });
+  // Work the maker asked for that the build could not finish or prove (a pin whose outcome stays unknown, an exact
+  // Main-form list Dataverse did not read back, a publication still owed). Collected while the phases run, so one such
+  // entry never cuts the rest of the build short, and turned into ONE halt after the last phase (below): never a
+  // warning only. The change is saved; the halt is RETRY.NEVER because running the same attempt again cannot prove it —
+  // the maker re-runs once the cause is cleared.
+  const incomplete = [];
+  const markIncomplete = (entry) => { incomplete.push(entry); };
 
   // The names of what this run CREATED on each table (`view Open Tickets`, `form Ticket`, `chart By Area`), and of a
   // chart whose description it wrote — labels only. A created artifact is as unpublished as a reconciled one, but a
@@ -6743,7 +6825,12 @@ async function runSdkBuildPhases(spec, opts, owed) {
     const pinTables = async (appId, alreadyPublished) => {
       if (!refs) return;
       const pinned = await pinAppTables(provision.dataverse, appId, appTables, { refs });
-      if (pinned.added.length && alreadyPublished) await appWriters.publishPinned(appId);
+      if (pinned.added.length && alreadyPublished) {
+        // An app with an exact Main-form list is published only through the SDK's guarded publish (the push that follows
+        // in this step pays the queued entry); a raw publish here would skip that guard.
+        if (spec.app && spec.app.mainFormsOnUpdate === 'exact') appPublication.queue({ kind: 'app', id: appId, reason: 'app.tables' });
+        else await appWriters.publishPinned(appId);
+      }
     };
     // Self-contained app-tile icon: a web resource IN this solution (default generated, or the
     // author's spec.app.icon). Resolved BEFORE appDef so the id is embedded at create time — the
@@ -6855,7 +6942,7 @@ async function runSdkBuildPhases(spec, opts, owed) {
           // The header — its text (name, description) and its routing description — rides this one push, as the sitemap does.
           const header = await applyAppHeader(provision, spec, existingId, { warn: opts.warn });
           requireSuccessfulPush(await appWriters.push(existingId, def.name, header), `app ${def.name}`, opts.warn);
-          reportPartialPush(await appWriters.publish(existingId), `app ${def.name}`, opts.warn);
+          reportPartialPush(await appPublication.publishApp(existingId), `app ${def.name}`, opts.warn);
         } else if (!has('pages') && typeof (spec.app && spec.app.aiDescription) === 'string' && spec.app.aiDescription.trim()) {
           // Reached only WITHOUT the pages phase (a programmatic partial run — the CLI refuses one on
           // --apply): a page-backed app's sitemap is not written on this run, so the routing description
@@ -6873,7 +6960,7 @@ async function runSdkBuildPhases(spec, opts, owed) {
           if (header.changed) {
             // Nothing wrote the spec's navigation into the copy, so the push sends the copy's own (`resendsCopy`): the tables whose Main forms it adds are that navigation's.
             requireSuccessfulPush(await appWriters.push(existingId, def.name, header, { resendsCopy: true }), `app ${def.name} routing description`, opts.warn);
-            reportPartialPush(await appWriters.publish(existingId), `app ${def.name}`, opts.warn);
+            reportPartialPush(await appPublication.publishApp(existingId), `app ${def.name}`, opts.warn);
           }
         }
         await ensureSitemapInSolution(provision, sol, def.uniqueName, solutionMembers);
@@ -7760,7 +7847,7 @@ async function runSdkBuildPhases(spec, opts, owed) {
           const header = await applyAppHeader(provision, spec, result.created.app, { text: appWasExisting, warn: opts.warn });
           const appName = (spec.app && spec.app.name) || result.created.app;
           requireSuccessfulPush(await appWriters.push(result.created.app, appName, header), 'app sitemap finalize', opts.warn);
-          reportPartialPush(await appWriters.publish(result.created.app), `app ${appName}`, opts.warn);
+          reportPartialPush(await appPublication.publishApp(result.created.app), `app ${appName}`, opts.warn);
           return result.created.app;
         });
       } else {
@@ -8413,9 +8500,12 @@ async function runSdkBuildPhases(spec, opts, owed) {
       // and forms, its enriched default views — oweTablePublish), then what this run created or wrote there (savedOnTable,
       // sorted because artifacts are created concurrently), each name once. A failure of THIS publish then says which saved
       // changes are not live — a first build's included — instead of naming only the artifact that carries the request.
+      const tableOfTarget = new Map(); // a phase-8 target array -> its table's logical name
       const forTable = (k, [type, id]) => {
         const names = [...new Set([...((owed.tables.get(k) || [])[2] || []), ...[...(savedOnTable.get(k) || [])].sort()])];
-        return names.length ? [type, id, names] : [type, id];
+        const target = names.length ? [type, id, names] : [type, id];
+        tableOfTarget.set(target, k);
+        return target;
       };
       for (const f of spec.forms || []) {
         const k = f.entity.toLowerCase();
@@ -8444,8 +8534,23 @@ async function runSdkBuildPhases(spec, opts, owed) {
       // The app is published in the same envelope as the tables the build has artifacts of, so it is not ahead of them. It also ships the forms of tables the build did not touch, which the
       // request before the app publishes — and a run can reach this phase without the app step having made it (a run that does not write the app but publishes it): a publish alone adds no form.
       if (appTarget) await publishTablesBeforeApp(result.created.app);
-      const publishedTargets = await publishTargets(provision, runner, concurrency, perEntity, appTarget, opts.warn);
+      // A throw may come after the app's PublishXml reached the server (a lost answer): the app's exact proof is void.
+      // A throw from a table publish before the app's was sent un-proves it too — conservative: the re-run proves it again.
+      const publishedTargets = await publishTargets(provision, runner, concurrency, perEntity, appTarget, opts.warn).catch(async (error) => {
+        if (appTarget) await appPublication.noteAppPublication(result.created.app, { error });
+        throw error;
+      });
       appPublishedByPublishPhase = publishedTargets.appPublished;
+      // publishTargets answers { appPublished, appResult, failed: [{ target, error }] }, `target` being the same array forTable
+      // made, listed only when the table's publish (and its one retry) was refused. Every table the port deferred is in perEntity
+      // (oweTablePublish put it in owed.tables), so a deferred table not in `failed` was published.
+      const refusedTables = new Map(publishedTargets.failed.map(({ target, error }) => [tableOfTarget.get(target), error]));
+      for (const logical of appPublication.deferred('table')) {
+        appPublication.noteScopePublished('table', logical, refusedTables.has(logical) ? { error: refusedTables.get(logical) } : {});
+      }
+      // Every answer, not only a confirmed one: a failed-by-value publish (e.g. CONNECTION_ERROR after the server ran it)
+      // un-proves an exact app; only a WITHHELD / CONFLICT refusal keeps its proof (lib/app-publication-policy.js).
+      if (appTarget) await appPublication.noteAppPublication(result.created.app, { answer: publishedTargets.appResult });
     });
     // Paid. A target that failed to publish was reported above, and the build is idempotent, so its
     // re-run publishes it; a halt from here on owes nothing more, nor does an earlier attempt's.
@@ -8507,7 +8612,7 @@ async function runSdkBuildPhases(spec, opts, owed) {
       if (rewrite || owesPublish) {
         try {
           await provision.fetchArtifact('app', result.created.app);
-          reportPartialPush(await appWriters.publish(result.created.app), `app ${(spec.app && spec.app.name) || result.created.app}`, opts.warn);
+          reportPartialPush(await appPublication.publishApp(result.created.app), `app ${(spec.app && spec.app.name) || result.created.app}`, opts.warn);
           if (rewrite) {
             // Filed like the first write: after a publish that failed or could not be confirmed, the SDK proves
             // this write only in the unpublished layer and answers `applied` + `pendingPublish`.
@@ -8590,6 +8695,22 @@ async function runSdkBuildPhases(spec, opts, owed) {
     for (const [label, info] of byLabel) runner.skip('ai-features', `${label}: ${info.names.join(', ')} \u2014 ${info.why}`);
   }
 
+  // Everything still owed (an exact app's publish that was withheld, a table whose phase-8 publication had already run)
+  // is published once. A withheld/conflicting exact publish stays owed; the change is saved; the build is incomplete.
+  const flushed = await appPublication.flush();
+  // An app row is { id, code }; a scope row (a table) is { kind, id, code, reasons }.
+  for (const { kind = 'app', id, code } of [...flushed.withheld, ...flushed.failed]) markIncomplete({ phase: 'publish', code, message: `${kind} ${id}: its publication is owed (${code}); the change is saved, re-run once the cause is cleared` });
+  // Exact obligations not proven from the published layer (APP_MAIN_FORMS_NOT_EXACT) and queued scopes nothing can
+  // publish (PUBLICATION_SCOPE_UNBRIDGED).
+  for (const entry of appPublication.unsettled()) markIncomplete({ phase: 'publish', code: entry.code, message: entry.reason });
+  if (incomplete.length) {
+    result.incomplete = incomplete;
+    const halt = new BuildHalt(`the build ran every phase but did not finish what the spec asks for: ${incomplete.map((entry) => entry.message).join('; ')}`,
+      { phase: incomplete[0].phase, code: incomplete[0].code, recoverable: true, retry: RETRY.NEVER });
+    // Not enumerable, like owedPublishes: it rides along for the caller, never into a serialized error or the journal.
+    Object.defineProperty(halt, 'incomplete', { value: incomplete, enumerable: false, configurable: true, writable: true });
+    throw halt;
+  }
   return result;
 }
 
