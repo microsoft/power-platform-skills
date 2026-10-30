@@ -10,6 +10,9 @@ const assert = require('node:assert/strict');
 const { createRowTableServer } = require('./helpers/row-table-server.js');
 const { fakeManaged, passThroughCreates, buildPublishPaths } = require('./helpers/feature-ports.js');
 const { createPublicationBarrier, describeWithheld } = require('../lib/publication-barrier.js');
+const { createFeatureSettlement, remedyFor } = require('../lib/reconcile-common.js');
+const { createAzHttpClient } = require('../lib/sdk-http-client.js');
+const { makeTempDir } = require('./helpers/temp-dirs.js');
 const { planViewReconcile, applyViewReconcile } = require('../lib/view-reconcile.js');
 const { planChartReconcile, applyChartReconcile } = require('../lib/chart-reconcile.js');
 const { chartDef } = require('../lib/sdk-build.js');
@@ -193,4 +196,207 @@ test('an owed target noted before the block is withheld when a later attempt set
   assert.deepEqual(b.withheld(), [{ table: 'account', blockedBy: ['chart account/Withheld chart (chart-title-not-stored)'], skipped: ['settle after a halt', 'tables published before the app'] }]);
   const inert = createPublicationBarrier();
   assert.equal(inert.allowTables(list, 'x'), list, 'nothing blocked: the very list is answered');
+});
+
+// The SDK over the plugin's own HTTP client (createAzHttpClient), whose transport is this in-memory
+// service — the client the CLI makes, with the barrier's send gate on its transport when `barrier` is given.
+const ORG = 'https://contoso.crm.dynamics.com';
+const API = `${ORG}/api/data/v9.2`;
+const transportOf = (srv) => async ({ url, method, headers, body }) => {
+  const verb = String(method).toLowerCase();
+  const data = body == null ? undefined : JSON.parse(body);
+  const r = verb === 'get' ? await srv.httpClient.get(url)
+    : verb === 'patch' ? await srv.httpClient.patch(url, data, headers)
+      : verb === 'delete' ? await srv.httpClient.delete(url)
+        : await srv.httpClient[verb](url, data);
+  return { statusCode: r.status, headers: r.headers || {}, body: r.body === undefined ? '' : JSON.stringify(r.body) };
+};
+const clientOver = (transport) => createAzHttpClient(ORG, { getToken: () => 'test-token-'.padEnd(64, 'x'), request: transport, sleep: async () => {} });
+const deferred = () => {
+  let resolve;
+  const promise = new Promise((r) => { resolve = r; });
+  return { promise, resolve };
+};
+
+// An SDK whose workspace read of artifact `gate.id` pauses inside the SDK's own publish of it, before
+// any request is sent (the SDK reads the artifact from its workspace and takes its lock first).
+async function pausingSdk(httpClient, gate) {
+  const { createMakerSdk, createNodeWorkspaceStorage } = require('../vendor/cds-maker-sdk.cjs');
+  const store = createNodeWorkspaceStorage(makeTempDir('barrier-race-'));
+  const storage = new Proxy(store, { get(t, p) {
+    if (p === 'readText') {
+      return async (keys) => {
+        if (gate.id && !gate.paused && keys.some((k) => String(k).includes(gate.id))) {
+          gate.paused = true;
+          gate.entered.resolve();
+          await gate.resume.promise;
+        }
+        return t.readText(keys);
+      };
+    }
+    return typeof t[p] === 'function' ? t[p].bind(t) : t[p];
+  } });
+  const sdk = createMakerSdk({ workspaceStorage: storage, instanceUrl: ORG, httpClient });
+  await sdk.initWorkspace();
+  return sdk;
+}
+
+// A clean view's immediate publish (no publish phase) is inside the SDK when a sibling view on the same
+// table fails after saving. `gated`: the CLI's client, its transport behind the barrier's send gate.
+async function raceScenario({ gated, failSibling = true }) {
+  const srv = createRowTableServer({ tables: { savedqueries: 'savedqueryid' } });
+  const barrier = createPublicationBarrier();
+  const transport = transportOf(srv);
+  const client = clientOver(gated ? barrier.gateRequest(transport) : transport);
+  const gate = { id: null, paused: false, entered: deferred(), resume: deferred() };
+  const sdk = await pausingSdk(client, gate);
+  const ctx = { managed: fakeManaged(), creates: passThroughCreates() };
+  const paths = buildPublishPaths({ sdk, client, publish: false, barrier });
+  const apply = async (name, readFails) => {
+    const plan = await planViewReconcile({ view: view({ name }), sdk }, ctx);
+    return applyViewReconcile(plan, { sdk: readFails ? failingReadBack(sdk) : sdk }, ctx);
+  };
+  try {
+    const good = await apply('Clean sibling', false);
+    gate.id = good.saved[0].id;
+    const mark = srv.writes.length;
+    const inflight = paths.settle('view account/Clean sibling', good);
+    await gate.entered.promise;
+    const bad = await apply(failSibling ? 'Unreadable sibling' : 'Readable sibling', failSibling);
+    // A clean sibling's own publish waits for the workspace the paused publish holds, so it is only
+    // awaited after the pause ends; the failing sibling settles (and blocks) while the pause lasts.
+    const sibling = paths.settle(`view account/${failSibling ? 'Unreadable' : 'Readable'} sibling`, bad);
+    const settled = failSibling ? await sibling : null;
+    gate.resume.resolve();
+    await inflight;
+    return { srv, barrier, settled: settled || await sibling, mark };
+  } finally {
+    gate.resume.resolve();
+  }
+}
+
+test('send gate: a publish the SDK is already preparing when a sibling blocks its table is not sent', async () => {
+  const { srv, barrier, settled, mark } = await raceScenario({ gated: true });
+  assert.equal(settled.ok, false);
+  assert.deepEqual(barrier.blockedTables(), ['account']);
+  assert.equal(envelopes(srv, 'account', mark), 0, 'the blocked table must not be published after the block');
+  assert.deepEqual(barrier.withheld()[0].skipped, ['publish request (checked when sent)']);
+});
+
+test('send gate: without a failure the same race publishes both views, through the same requests gated or not', async () => {
+  const trail = async (gated) => {
+    const { srv, barrier, settled, mark } = await raceScenario({ gated, failSibling: false });
+    assert.equal(settled.ok, true);
+    assert.equal(barrier.active, false);
+    assert.equal(envelopes(srv, 'account', mark), 2);
+    return srv.writes.map((w) => [w.verb, w.url.replace(/[0-9a-f]{8}-[0-9a-f-]{27}/g, '<id>'), /PublishXml/.test(w.url) ? JSON.stringify(w.body) : '']);
+  };
+  assert.deepEqual(await trail(true), await trail(false));
+});
+
+test('send gate: what a publish request is cut to, refused as, or passed through as', async () => {
+  const sent = [];
+  const transport = (req) => { sent.push(req); return Promise.resolve({ statusCode: 204, headers: {}, body: '' }); };
+  const b = createPublicationBarrier();
+  const gate = b.gateRequest(transport);
+  const publishXml = (xml) => ({ url: `${API}/PublishXml`, method: 'POST', headers: { 'Content-Type': 'application/json; charset=utf-8' }, body: JSON.stringify({ ParameterXml: xml }) });
+  const both = publishXml('<importexportxml><entities><entity>account</entity><entity>contact</entity></entities></importexportxml>');
+  await gate(both);
+  assert.equal(sent.pop(), both, 'inert: the very request goes to the transport');
+  b.block('account', 'view account/x (view-created-unreadable)');
+  await gate(both);
+  assert.equal(JSON.parse(sent.pop().body).ParameterXml, '<importexportxml><entities><entity>contact</entity></entities></importexportxml>');
+  const only = await gate(publishXml('<importexportxml><entities><entity>Account</entity></entities><nodes/></importexportxml>'));
+  assert.equal(sent.length, 0, 'nothing left to publish: not sent');
+  assert.equal(only.statusCode, 204);
+  const withApp = publishXml('<importexportxml><entities><entity>account</entity></entities><appmodules><appmodule>{0a0a0a0a-0000-4000-8000-000000000001}</appmodule></appmodules></importexportxml>');
+  await gate(withApp);
+  assert.equal(JSON.parse(sent.pop().body).ParameterXml, '<importexportxml><appmodules><appmodule>{0a0a0a0a-0000-4000-8000-000000000001}</appmodule></appmodules></importexportxml>');
+  const all = await gate({ url: `${API}/Microsoft.Dynamics.CRM.PublishAllXml`, method: 'POST', headers: {}, body: '{}' });
+  assert.equal(all.statusCode, 409);
+  assert.equal(JSON.parse(all.body).error.code, 'publication-withheld');
+  const batch = await gate({ url: `${API}/$batch`, method: 'POST', headers: {}, body: '--b\r\nPOST PublishXml\r\n\r\n{"ParameterXml":"<importexportxml><entities><entity>account</entity></entities></importexportxml>"}\r\n--b--' });
+  assert.equal(batch.statusCode, 409);
+  const unreadable = await gate({ url: `${API}/PublishXml`, method: 'POST', headers: {}, body: 'not json' });
+  assert.equal(unreadable.statusCode, 409, 'a publish that cannot be read is not sent');
+  assert.equal(sent.length, 0);
+  const contactOnly = publishXml('<importexportxml><entities><entity>contact</entity></entities></importexportxml>');
+  const read = { url: `${API}/savedqueries`, method: 'GET', headers: {}, body: null };
+  await gate(contactOnly);
+  await gate(read);
+  assert.deepEqual(sent, [contactOnly, read], 'a request that names no blocked table goes as it came');
+  assert.deepEqual(b.withheld()[0].skipped, ['publish request (checked when sent)']);
+});
+
+for (const publish of [false, true]) {
+  const phase = publish ? 'with the publish phase' : 'without the publish phase';
+  const appPublishes = (srv, from = 0) => srv.writes.slice(from).filter((w) => /PublishXml/.test(w.url) && JSON.stringify(w.body).includes('<appmodule>')).length;
+
+  for (const [what, write] of [
+    ['holds a form of', { held: ['account'] }],
+    ['adds (navigation) a form of', { held: [], added: ['account'] }],
+    ['cannot say what it holds, and may hold a form of', { held: null }],
+  ]) {
+    test(`app write (${phase}): an app that ${what} a withheld table is not written or published`, async () => {
+      const s = await setup(publish);
+      assert.equal((await s.paths.settle('view contact', await s.apply('view', view({ entity: 'contact', name: 'Contacts' })))).ok, true);
+      const mark = s.srv.writes.length;
+      assert.equal((await s.paths.settle('chart account/Withheld chart', await failChart(s))).ok, false);
+      await assert.rejects(s.paths.writeApp(write), (err) => err.code === 'publication-withheld' && /the app was not written or published/.test(err.message) && /account/.test(err.message));
+      assert.equal(appPublishes(s.srv, mark), 0);
+      assert.equal(envelopes(s.srv, 'account', mark), 0);
+      assert.ok(s.barrier.withheld()[0].skipped.includes('app write or publish (the app holds or adds a form of the table)'));
+    });
+  }
+
+  test(`app write (${phase}): an app that neither holds nor adds a form of the withheld table is written as before`, async () => {
+    const s = await setup(publish);
+    assert.equal((await s.paths.settle('chart account/Withheld chart', await failChart(s))).ok, false);
+    const mark = s.srv.writes.length;
+    await s.paths.writeApp({ held: ['contact'], added: ['contact'] });
+    assert.equal(appPublishes(s.srv, mark), 1);
+    assert.equal(envelopes(s.srv, 'account', mark), 0);
+    assert.equal(envelopes(s.srv, 'contact', mark), publish ? 1 : 0);
+  });
+
+  test(`app write (${phase}): with nothing blocked the app write is unchanged, holdings unread or not`, async () => {
+    const s = await setup(publish);
+    assert.equal((await s.paths.settle('view', await s.apply('view', view()))).ok, true);
+    const mark = s.srv.writes.length;
+    await s.paths.writeApp({ held: null, added: ['account'] });
+    assert.equal(appPublishes(s.srv, mark), 1);
+    assert.equal(s.barrier.checkAppWrite({ added: ['account'], existingApp: true }).ok, true);
+  });
+}
+
+test('settlement blocks the table before it reports, so a reporting failure cannot leave the row publishable', () => {
+  const barrier = createPublicationBarrier();
+  const settled = [];
+  const bindings = [];
+  const settle = createFeatureSettlement({
+    barrier,
+    settled,
+    recordBinding: (b) => bindings.push(b),
+    markIncomplete: () => { throw new Error('reporting failed'); },
+  });
+  const failed = { saved: [{}], managedBindings: [{ kind: 'view', key: 'account/x' }], refused: [], unknown: [{ code: 'view-created-unreadable', message: 'read failed' }],
+    pendingPublish: [{ key: 'account/x', scope: { type: 'view', id: '1', table: 'account' }, withheld: true }] };
+  assert.throws(() => settle('views', 'view account/x', failed), /reporting failed/);
+  assert.deepEqual(barrier.blockedTables(), ['account']);
+  assert.deepEqual(bindings, [{ kind: 'view', key: 'account/x' }], 'the binding of the created row is still recorded');
+  assert.deepEqual(settled, []);
+
+  const lines = [];
+  const report = createFeatureSettlement({ barrier, settled, markIncomplete: (phase, line, detail) => lines.push([phase, line, detail]) });
+  const clean = { saved: [{}], managedBindings: [], refused: [], unknown: [], pendingPublish: [{ key: 'contact/y', scope: { type: 'view', id: '2', table: 'contact' } }] };
+  assert.deepEqual(report('views', 'view contact/y', clean), { ok: true });
+  assert.deepEqual(settled, [{ scope: { type: 'view', id: '2', table: 'contact' }, label: 'view contact/y' }]);
+  const drift = { saved: [], managedBindings: [], refused: [{ code: 'view-drift', message: 'changed on the server' }], unknown: [], pendingPublish: [] };
+  assert.deepEqual(report('views', 'view contact/z', drift), { ok: false });
+  assert.deepEqual(lines, [['views', 'view contact/z: view-drift — changed on the server', { code: 'view-drift', remedy: remedyFor('view-drift') }]]);
+  assert.deepEqual(barrier.blockedTables(), ['account'], 'a refusal before anything was written blocks nothing');
+  assert.match(remedyFor('chart-adoption-not-authorized'), /adoption approval/);
+  assert.match(remedyFor('view-columns-removal-not-authorized'), /destructive approval/);
+  assert.match(remedyFor('quick-find-empty-not-authorized'), /destructive approval/);
+  assert.equal(remedyFor('view-write-unknown'), 'repair and rerun');
 });

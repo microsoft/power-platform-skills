@@ -340,6 +340,53 @@ function commitPublication(ctx, result) {
   return result;
 }
 
+/**
+ * What a maker does about one refusal or unknown, by its code: the approval that unlocks it, or a repair.
+ *   *-adoption-not-authorized                       an existing row of the same name: the adoption approval
+ *   *-drift                                         the row was changed on the server: the overwrite approval
+ *   *-removal-not-authorized, *-empty-not-authorized the change removes something: the destructive approval
+ *   anything else (an unknown outcome, an unreadable row, a refused write)            repair and rerun
+ */
+function remedyFor(code) {
+  const c = String(code || '');
+  if (/-adoption-not-authorized$/.test(c)) return 'approve adopting the existing artifact (adoption approval) and rerun';
+  if (/-drift$/.test(c)) return 'approve overwriting the changes made on the server (overwrite approval) and rerun';
+  if (/-(?:removal|empty)-not-authorized$/.test(c)) return 'approve the destructive change (destructive approval) and rerun';
+  return 'repair and rerun';
+}
+
+/**
+ * The settlement every declared artifact's apply goes through: returns settleFeatureResult(phase, label,
+ * result) -> { ok }, and the caller stops that artifact when !ok. In this order, so that nothing which can
+ * fail after it — reporting, or recording a binding — can leave a saved-but-failed row publishable:
+ *   1. a result with a refusal or an unknown blocks the tables of its saved or possibly-saved scopes on
+ *      the run's publication barrier (`barrier.noteResult`, lib/publication-barrier.js);
+ *   2. each refusal and unknown is reported as required work not done (`markIncomplete(phase, line,
+ *      detail)`), with its code and remedy — a later artifact still runs, but the run ends incomplete;
+ *   3. the result's managed bindings are recorded (`recordBinding`; skipped when the build has no store),
+ *      even when reporting threw;
+ *   4. a clean result's publication scopes are scheduled on `settled` ([{ scope, label }]) for the phase
+ *      to commit onto the build's own queues; a result that is not clean schedules none.
+ */
+function createFeatureSettlement({ barrier, markIncomplete, settled, recordBinding } = {}) {
+  if (typeof markIncomplete !== 'function') throw new TypeError('createFeatureSettlement: markIncomplete must be a function');
+  if (!Array.isArray(settled)) throw new TypeError('createFeatureSettlement: settled must be an array');
+  return function settleFeatureResult(phase, artifactLabel, r) {
+    const refused = (r && r.refused) || [];
+    const unknown = (r && r.unknown) || [];
+    const ok = refused.length === 0 && unknown.length === 0;
+    if (!ok && barrier) barrier.noteResult(r, artifactLabel);
+    try {
+      for (const x of refused) markIncomplete(phase, `${artifactLabel}: ${x.code} — ${x.message}`, { code: x.code, remedy: remedyFor(x.code) });
+      for (const x of unknown) markIncomplete(phase, `${artifactLabel}: ${x.code} — ${x.message}`, { code: x.code, unknownOutcome: true, remedy: remedyFor(x.code) });
+    } finally {
+      if (typeof recordBinding === 'function') for (const b of (r && r.managedBindings) || []) recordBinding(b);
+    }
+    if (ok) for (const scope of settledPublications(r)) settled.push({ scope, label: artifactLabel });
+    return { ok };
+  };
+}
+
 /** Lowercased, brace-less GUID text, or '' when the value is not a GUID. */
 function normalizeGuid(value) {
   const s = String(value == null ? '' : value).trim().replace(/^\{|\}$/g, '').toLowerCase();
@@ -367,6 +414,8 @@ module.exports = {
   queuePublication,
   settledPublications,
   commitPublication,
+  remedyFor,
+  createFeatureSettlement,
   normalizeGuid,
   rulesOf,
   PRE_WRITE_CODES,

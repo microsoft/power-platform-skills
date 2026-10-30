@@ -217,14 +217,26 @@ function buildPublicationQueues() {
  *   createdView            a view the views phase created (result.created.views)
  *   beforeApp(held)        the tables published before the app: one envelope with --publish, else the
  *                          owed reconciled tables through the SDK
+ *   writeApp(...)          a write of the app: the app-write check, the tables before the app, the app's publish
  *   publishPhase()         the publish phase: one target per table from created views, charts, owed
  *   halt(warn)             the settle of a halted build over what is still owed (settleOwedPublishes)
  */
 function buildPublishPaths({ sdk, client, publish, barrier = null }) {
   const { preAppTables, publishTablesXml } = require('../../lib/table-publish.js');
   const { settleOwedPublishes } = require('../../lib/sdk-build.js');
-  const { settledPublications } = require('../../lib/reconcile-common.js');
+  const { createFeatureSettlement } = require('../../lib/reconcile-common.js');
+  const { describeWithheldApp } = require('../../lib/publication-barrier.js');
+  const API = 'https://contoso.crm.dynamics.com/api/data/v9.2';
+  const APP_ID = '0a0a0a0a-0000-4000-8000-000000000001';
   const allow = (table, path) => !barrier || barrier.allow(table, path);
+  // Settlement as the integration does it (createFeatureSettlement): the barrier first, then the report.
+  const incomplete = [];
+  const settled = [];
+  const settleFeatureResult = createFeatureSettlement({
+    barrier,
+    settled,
+    markIncomplete: (phase, line, detail) => incomplete.push({ phase, line, ...detail }),
+  });
   const owed = new Map();
   const reconciled = new Set();
   const charts = new Map();
@@ -261,17 +273,14 @@ function buildPublishPaths({ sdk, client, publish, barrier = null }) {
     createdView(table, id) {
       createdViews.push([String(table).toLowerCase(), id]);
     },
+    incomplete,
     async settle(label, result) {
-      const ok = !result.refused.length && !result.unknown.length;
-      if (!ok) {
-        if (barrier) barrier.noteResult(result, label);
-        return { ok };
-      }
-      for (const scope of settledPublications(result)) {
+      const { ok } = settleFeatureResult('views', label, result);
+      for (const { scope, label: by } of settled.splice(0)) {
         const table = String(scope.table || '').toLowerCase();
-        if (!allow(table, label)) continue;
+        if (!allow(table, by)) continue;
         if (scope.type === 'chart') charts.set(table, scope.id);
-        else if (scope.type === 'view') await publishReconciled('view', scope.id, table, label);
+        else if (scope.type === 'view') await publishReconciled('view', scope.id, table, by);
       }
       return { ok };
     },
@@ -281,6 +290,16 @@ function buildPublishPaths({ sdk, client, publish, barrier = null }) {
       await publishTablesXml(client, barrier ? barrier.allowTables(wanted, 'tables published before the app') : wanted);
       reconciled.clear();
       return undefined;
+    },
+    // A write of the app (#16): the app-write check first, then the tables before the app, then the app's own
+    // publish. `held` is what the app holds (null: could not be read); `added` what this write adds.
+    async writeApp({ held = [], added = [], existingApp = true } = {}) {
+      if (barrier && barrier.active) {
+        const verdict = barrier.checkAppWrite({ added, held: held === null ? undefined : new Set(held), existingApp });
+        if (!verdict.ok) throw Object.assign(new Error(describeWithheldApp(verdict)), { code: 'publication-withheld' });
+      }
+      await this.beforeApp(held || []);
+      await client.post(`${API}/PublishXml`, { ParameterXml: `<importexportxml><appmodules><appmodule>{${APP_ID}}</appmodule></appmodules></importexportxml>` });
     },
     async publishPhase() {
       if (!publish) return;

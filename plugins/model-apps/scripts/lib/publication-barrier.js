@@ -23,9 +23,63 @@
 // whose outcome was not reported), and never for a refusal or unknown that is reached before anything
 // is sent, so a plan-level refusal does not block its table.
 
+//
+// Two checks sit at the edges of a run, past every per-path guard:
+//   gateRequest   the HTTP transport. A publish request is checked when it is DISPATCHED, synchronously, after
+//                 every asynchronous step of its preparation (the SDK reads its workspace and takes its locks
+//                 first; the HTTP client may wait out a throttle and send it again). A sibling that blocks the
+//                 table while a publish of it is being prepared therefore still stops it.
+//   checkAppWrite a write or publish of the app. An app publish puts live the saved forms the app holds, so an
+//                 app that holds, or whose write adds, a form of a blocked table is not written in this run.
+
 /** Lowercased table logical name, or '' for anything that is not a non-empty string. */
 function tableKey(table) {
   return typeof table === 'string' ? table.trim().toLowerCase() : '';
+}
+
+// The publish actions, as lib/sdk-http-client.js (isPublishRequest) recognises them:
+//   POST https://contoso.crm.dynamics.com/api/data/v9.2/PublishXml                            { "ParameterXml": "<importexportxml>…</importexportxml>" }
+//   POST https://contoso.crm.dynamics.com/api/data/v9.2/Microsoft.Dynamics.CRM.PublishAllXml  {}
+// See https://learn.microsoft.com/power-apps/developer/data-platform/webapi/reference/publishxml
+const PUBLISH_XML = /\/(?:Microsoft\.Dynamics\.CRM\.)?PublishXml$/i;
+const PUBLISH_ALL_XML = /\/(?:Microsoft\.Dynamics\.CRM\.)?PublishAllXml$/i;
+const BATCH = /\/\$batch$/i;
+// The paths gateRequest and checkAppWrite record a withheld table as skipped by.
+const AT_SEND = 'publish request (checked when sent)';
+const APP_WRITE = 'app write or publish (the app holds or adds a form of the table)';
+// A table in a ParameterXml is one `entity` element of the `entities` list, its logical name as text:
+//   <importexportxml><entities><entity>contoso_task</entity><entity>account</entity></entities><nodes/>…</importexportxml>
+// Logical names are [a-z0-9_], so they carry no markup or entity references to decode.
+const ENTITY_ELEMENT = /<entity>\s*([^<]*?)\s*<\/entity>/gi;
+// An element left with nothing in it once its tables are cut (`<entities></entities>`, `<nodes/>`).
+const EMPTY_ELEMENT = /<([A-Za-z_][\w.-]*)(\s[^<>]*)?>\s*<\/\1>|<[A-Za-z_][\w.-]*(\s[^<>]*)?\/>/g;
+
+function pathnameOf(url) {
+  try {
+    return new URL(String(url)).pathname;
+  } catch {
+    return String(url || '');
+  }
+}
+
+function bodyText(body) {
+  if (typeof body === 'string') return body;
+  if (Buffer.isBuffer(body)) return body.toString('utf8');
+  return body == null ? '' : null;
+}
+
+// What a request the gate does not dispatch is answered with, in the transport's own shape (makeRequest,
+// lib/dataverse-auth.js: { statusCode, headers, body }). `nothingLeft`: every table it named is withheld,
+// so it would publish nothing — answered as an accepted publish of nothing (204). Otherwise the request
+// cannot be cut down (a publish of everything, a change set) and is refused with a status the build's
+// retry policy reads as final (409, lib/retry-policy.js), so it is never sent again in this run.
+function withheldAnswer(nothingLeft, message) {
+  if (nothingLeft) return { statusCode: 204, headers: {}, body: '' };
+  return {
+    statusCode: 409,
+    headers: { 'content-type': 'application/json; charset=utf-8' },
+    body: JSON.stringify({ error: { code: 'publication-withheld', message } }),
+  };
 }
 
 function createPublicationBarrier() {
@@ -107,7 +161,119 @@ function createPublicationBarrier() {
     withheld() {
       return [...blocked.values()].map((e) => ({ table: e.table, blockedBy: e.blockedBy.slice(), skipped: e.skipped.slice() }));
     },
+    /**
+     * Wrap the HTTP transport (`request` of createAzHttpClient, lib/sdk-http-client.js; makeRequest by
+     * default) so that a publish naming a blocked table is checked at the moment it is dispatched. A
+     * PublishXml is sent without the blocked tables' `entity` elements, or not at all when nothing else is
+     * left in it; a publish of everything, or a `$batch` that holds a publish of a blocked table, is not
+     * sent. Every other request, and every request while nothing is blocked, goes to the transport as it
+     * came.
+     */
+    gateRequest(request = require('./dataverse-auth.js').makeRequest) {
+      if (typeof request !== 'function') throw new TypeError('gateRequest: the transport to wrap must be a function');
+      return function gatedRequest(req) {
+        if (!blocked.size) return request(req);
+        const screened = screenPublish(req);
+        return screened.answer ? Promise.resolve(screened.answer) : request(screened.req);
+      };
+    },
+    /**
+     * May the build write or publish the app? `added`: the tables whose Main forms this write adds;
+     * `held`: the tables whose forms or charts the app holds on the server (a Set or array), or
+     * undefined when that could not be read; `existingApp`: whether the app exists on the server. An
+     * app publish puts live what the app holds, so an app that holds or adds a form of a blocked table —
+     * or an existing app whose holdings could not be read while a table is blocked — is not written:
+     * { ok: false, tables, unknownHoldings, blockedBy }, recorded against each table as skipped by the
+     * app write. { ok: true } otherwise, and always while nothing is blocked.
+     */
+    checkAppWrite({ added = [], held, existingApp = false } = {}) {
+      if (!blocked.size) return { ok: true };
+      const heldList = held instanceof Set || Array.isArray(held) ? [...held] : null;
+      const tables = [];
+      for (const name of [...(added || []), ...(heldList || [])]) {
+        const entry = blocked.get(tableKey(name));
+        if (entry && !tables.includes(entry.table)) tables.push(entry.table);
+      }
+      const unknownHoldings = !tables.length && !!existingApp && !heldList;
+      if (!tables.length && !unknownHoldings) return { ok: true };
+      const hit = tables.length ? tables : [...blocked.keys()];
+      const blockedBy = [];
+      for (const t of hit) {
+        const entry = blocked.get(t);
+        skip(entry, APP_WRITE);
+        for (const label of entry.blockedBy) if (!blockedBy.includes(label)) blockedBy.push(label);
+      }
+      return { ok: false, tables: hit, unknownHoldings, blockedBy };
+    },
   };
+
+  // The synchronous check of one request at dispatch (gateRequest). Returns { req } to send (the same
+  // object when it names no blocked table) or { answer } for a request that is not sent.
+  function screenPublish(req) {
+    if (String((req && req.method) || 'GET').toUpperCase() !== 'POST') return { req };
+    const path = pathnameOf(req.url);
+    const all = () => {
+      for (const entry of blocked.values()) skip(entry, AT_SEND);
+      return [...blocked.keys()];
+    };
+    if (PUBLISH_ALL_XML.test(path)) {
+      const tables = all();
+      return { answer: withheldAnswer(false, `a publish of every table was not sent: the publish of ${tables.join(', ')} is withheld in this run`) };
+    }
+    if (BATCH.test(path)) {
+      const text = bodyText(req.body);
+      if (text === null || !/Publish(?:All)?Xml/i.test(text)) return { req };
+      // A change set is sent whole or not at all, so one that publishes a blocked table is not sent.
+      const tables = /PublishAllXml/i.test(text) ? all() : namedBlocked(text);
+      if (!tables.length) return { req };
+      return { answer: withheldAnswer(false, `a batch that publishes ${tables.join(', ')} was not sent: the publish of those tables is withheld in this run`) };
+    }
+    if (!PUBLISH_XML.test(path)) return { req };
+    let payload = null;
+    try {
+      payload = JSON.parse(bodyText(req.body));
+    } catch {
+      payload = null;
+    }
+    if (!payload || typeof payload.ParameterXml !== 'string') {
+      // Unreadable, so it cannot be shown not to name a blocked table: fail closed.
+      const tables = all();
+      return { answer: withheldAnswer(false, `a publish request that could not be read was not sent: the publish of ${tables.join(', ')} is withheld in this run`) };
+    }
+    const hit = [];
+    const cut = payload.ParameterXml.replace(ENTITY_ELEMENT, (whole, name) => {
+      const entry = blocked.get(tableKey(name));
+      if (!entry) return whole;
+      skip(entry, AT_SEND);
+      if (!hit.includes(entry.table)) hit.push(entry.table);
+      return '';
+    });
+    if (!hit.length) return { req };
+    const xml = cut.replace(/<entities>\s*<\/entities>/gi, '');
+    let rest = xml;
+    for (let before = null; before !== rest;) {
+      before = rest;
+      rest = rest.replace(EMPTY_ELEMENT, '');
+    }
+    if (!rest.trim()) return { answer: withheldAnswer(true) };
+    const body = JSON.stringify({ ...payload, ParameterXml: xml });
+    const headers = { ...((req && req.headers) || {}) };
+    for (const name of Object.keys(headers)) if (name.toLowerCase() === 'content-length') headers[name] = String(Buffer.byteLength(body));
+    return { req: { ...req, headers, body } };
+  }
+
+  function namedBlocked(text) {
+    const tables = [];
+    for (const m of String(text).matchAll(ENTITY_ELEMENT)) {
+      const entry = blocked.get(tableKey(m[1]));
+      if (entry && !tables.includes(entry.table)) {
+        skip(entry, AT_SEND);
+        tables.push(entry.table);
+      }
+    }
+    return tables;
+  }
+
   return barrier;
 }
 
@@ -117,4 +283,14 @@ function describeWithheld(entry) {
   return `table ${entry.table} was not published: ${by} ended refused or unknown after saving, and a publish of the table would put that saved state live — its saved changes stay saved and unpublished; repair and rerun`;
 }
 
-module.exports = { createPublicationBarrier, describeWithheld };
+/** The message of the halt a build raises for an app write checkAppWrite refused (a verdict with ok: false). */
+function describeWithheldApp(verdict) {
+  const tables = (verdict.tables || []).join(', ');
+  const by = (verdict.blockedBy || []).join('; ') || 'a declared artifact';
+  const why = verdict.unknownHoldings
+    ? `the forms the app holds could not be read, so it may hold a form of ${tables}`
+    : `the app holds, or this write of it adds, a form of ${tables}`;
+  return `the app was not written or published: ${why}, whose publish is withheld because ${by} ended refused or unknown after saving. An app publish puts the saved changes of the forms it holds live ahead of their table's publish, which would leave them unpublished for good. Everything saved stays saved and unpublished; repair and rerun`;
+}
+
+module.exports = { createPublicationBarrier, describeWithheld, describeWithheldApp };
