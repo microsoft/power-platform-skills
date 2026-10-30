@@ -20,6 +20,8 @@
 //      needs its own, fresh consent. A revert the SDK stopped before a row was written (a refusal before its first
 //      write, or a 403/throttle stop that left rows notAttempted) can be CONTINUED: the rows still pending get a new
 //      review and a new digest, and a row the revert already wrote — or whose outcome is unknown — is never sent again.
+//      A forward write the SDK gives no inverse for (an `unknown` row, or one acknowledged without the token it
+//      produced) is never treated as undone: the revert reports it as `unrevertible` (see unrevertibleOf).
 //   6. One writer at a time. Every write takes a lease on the environment and table; a repair bound to an app
 //      (`appUniqueName`) also takes THE SAME build lease a build of that app takes — the app's lock in the build's
 //      workspace (lib/app-operation-lease.js applyWorkspaceOf: `<appDir>/.maker-workspace`, or the `workspaceDir` the
@@ -47,7 +49,8 @@ const JOURNAL_RE = /^journal-(\d{3})-(apply|resume|revert)-(send|result)\.json$/
 const RESULT_RE = /^result-(\d{3})-(apply|resume|revert)\.json$/;
 const ROW_STATUSES = ['applied', 'conflict', 'gone', 'failed', 'unknown', 'notAttempted'];
 // The operation statuses that mean every planned change was made (or there was none to make). Anything else —
-// unknown, failed, conflicted, partial, unverified — is a repair (or revert) that did not do what was approved.
+// unknown, failed, conflicted, partial, unverified, unrevertible — is a repair (or revert) that did not do what was
+// approved. `nothingToRevert` is a proven no-op only: no forward write may have been made.
 const OPERATION_SUCCESS = Object.freeze(['repaired', 'reverted', 'nothingToWrite', 'nothingToRevert']);
 
 class DataFixRunnerError extends Error {
@@ -378,6 +381,42 @@ function forwardResults(dir, journal) {
   return journal.results.filter((r) => r.phase !== 'revert').map((r) => readJson(path.join(dir, r.name), 'DATA_FIX_RESULT_UNREADABLE'));
 }
 
+// The forward writes no revert plan can undo. The SDK's `revert` holds only `applied` rows whose write it can prove
+// (`revertible`), so it gives no inverse for a row whose outcome is `unknown` (the answer was lost: it may or may not
+// have been written) nor for an `applied` row acknowledged without the echo that proves the token our write produced.
+// The absence of an inverse is therefore NOT proof that nothing was written: these rows are counted so a revert is
+// never reported as `reverted` or `nothingToRevert` while one remains. Nothing is ever sent for them — an inverse
+// cannot be invented, and an unknown row is never re-sent. Ids go only to the private review file.
+function unrevertibleOf(planRows, forward, plans) {
+  const inverse = new Set(plans.flatMap((p) => p.rows.map((r) => String(r.id).toLowerCase())));
+  const counts = { rows: 0, unknown: 0, noInverse: 0 };
+  const rows = [];
+  for (const [id, row] of foldRows(planRows, forward)) {
+    let reason = null;
+    if (row.status === 'unknown') reason = 'unknown';
+    else if (row.status === 'applied' && !inverse.has(id)) reason = 'noInverse';
+    if (!reason) continue;
+    counts.rows += 1;
+    counts[reason] += 1;
+    rows.push({ id, reason });
+  }
+  return { counts, rows };
+}
+
+// A revert's operation, with the forward writes it cannot undo: while one remains, a revert that otherwise finished
+// (`reverted`, or `unverified`) is `unrevertible` — not a success. A worse status (unknown, failed, conflicted,
+// partial) is kept; the counts say both.
+function withUnrevertible(operation, unrevertible) {
+  const finished = operation.status === 'reverted' || operation.status === 'unverified';
+  return { ...operation, status: unrevertible.rows && finished ? 'unrevertible' : operation.status, unrevertible };
+}
+
+function unrevertibleText(rows) {
+  if (!rows.length) return '';
+  return ['', `cannot be undone by this revert: ${rows.length} row(s) (unknown: the answer to the write was lost, so it may have been written; noInverse: written, but acknowledged without the token the revert would need) — they are left as they are:`,
+    ...rows.map((r) => `  ${r.id}  ${r.reason}`), ''].join('\n');
+}
+
 async function bindAndCheck({ origin, httpClient, dir, approve }) {
   const record = loadPlan(dir);
   if (approve !== record.planDigest) throw new DataFixRunnerError('DATA_FIX_APPROVAL_MISMATCH', 'The approved digest is not this plan\'s digest.', { field: 'digest' });
@@ -510,11 +549,17 @@ async function revertApplied({ origin, httpClient, makeSdk, appDir, appUniqueNam
     const journal = journalOf(dir);
     refuseUnknownOutcome(journal);
     checkLeaseScope(dir, journal, leaseScope);
-    const plans = forwardResults(dir, journal).map((r) => r.revert).filter((p) => p && p.rows.length);
-    if (!plans.length) return { planId: record.plan.planId, phase: 'revert', summary: { nothingToRevert: true }, operation: { status: 'nothingToRevert', counts: zeroCounts(), verification: zeroVerification(), rows: 0 } };
+    const forward = forwardResults(dir, journal);
+    const plans = forward.map((r) => r.revert).filter((p) => p && p.rows.length);
+    const { counts: unrevertible, rows: unrevertibleRows } = unrevertibleOf(record.plan.rows, forward, plans);
+    if (!plans.length) {
+      // Nothing can be sent. Only when no forward write may have been made is that a successful no-op.
+      const status = unrevertible.rows ? 'unrevertible' : 'nothingToRevert';
+      return { planId: record.plan.planId, phase: 'revert', summary: { [status === 'unrevertible' ? 'nothingRevertible' : 'nothingToRevert']: true }, unrevertible, operation: { status, counts: zeroCounts(), verification: zeroVerification(), rows: 0, unrevertible } };
+    }
     const state = revertState(dir, journal, plans);
     if (state.sent && !state.pending.length) {
-      throw new DataFixRunnerError('DATA_FIX_ALREADY_REVERTED', 'A revert of this plan was already sent and none of its rows is left to send.', { operation: state.operation });
+      throw new DataFixRunnerError('DATA_FIX_ALREADY_REVERTED', 'A revert of this plan was already sent and none of its rows is left to send.', { operation: withUnrevertible(state.operation, unrevertible) });
     }
     // The first revert's digest covers the forward revert plans (as before); a continuation's covers only the plans
     // still pending and the journal position it continues from, so approving an earlier revert never authorizes it.
@@ -524,8 +569,8 @@ async function revertApplied({ origin, httpClient, makeSdk, appDir, appUniqueNam
     if (approve === undefined) {
       const name = `revert-review-${revertDigest.slice(0, 12)}.txt`;
       const title = state.sent ? `Continuation of the revert of data fix ${record.plan.planId}` : `Revert of data fix ${record.plan.planId}`;
-      const review = fs.existsSync(path.join(dir, name)) ? path.join(dir, name) : createPrivateFile(dir, name, toSend.map((p) => reviewText(p, title)).join('\n'));
-      return { planId: record.plan.planId, phase: 'revert', approvalNeeded: true, continuation: state.sent, revertDigest, rows, review, operation: state.operation };
+      const review = fs.existsSync(path.join(dir, name)) ? path.join(dir, name) : createPrivateFile(dir, name, toSend.map((p) => reviewText(p, title)).join('\n') + unrevertibleText(unrevertibleRows));
+      return { planId: record.plan.planId, phase: 'revert', approvalNeeded: true, continuation: state.sent, revertDigest, rows, unrevertible, review, operation: withUnrevertible(state.operation, unrevertible) };
     }
     if (approve !== revertDigest) throw new DataFixRunnerError('DATA_FIX_APPROVAL_MISMATCH', 'The approved digest is not this revert\'s digest; run revert without --approve to review it.', { field: 'digest' });
     const binding = { planDigest: record.planDigest, revertDigest, ...identity, leaseScope };
@@ -537,7 +582,7 @@ async function revertApplied({ origin, httpClient, makeSdk, appDir, appUniqueNam
     }
     const counts = Object.fromEntries(ROW_STATUSES.map((s) => [s, summaries.reduce((n, x) => n + x.counts[s], 0)]));
     const { operation } = revertState(dir, journalOf(dir), plans);
-    return { planId: record.plan.planId, phase: 'revert', summary: { complete: summaries.every((x) => x.complete), counts, parts: summaries }, operation };
+    return { planId: record.plan.planId, phase: 'revert', summary: { complete: summaries.every((x) => x.complete), counts, parts: summaries }, unrevertible, operation: withUnrevertible(operation, unrevertible) };
   });
 }
 

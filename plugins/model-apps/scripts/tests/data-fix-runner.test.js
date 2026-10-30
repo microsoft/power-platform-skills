@@ -292,6 +292,78 @@ test('a revert refused before its first write (nothing sent) can be continued, o
   assert.equal(nonGets(org).length, 2, 'the apply and the one revert that was sent');
 });
 
+// --- a write the revert cannot undo -------------------------------------------------------------------------------
+
+test('a write the revert cannot undo is reported as unrevertible, never as a successful no-op; a revert of nothing written is', async () => {
+  // 1. The service commits the repair, then the answer is lost: the row is unknown (it may have been written), and the
+  //    SDK gives no inverse for it.
+  {
+    const { org, base, ids } = setup({ rows: 1 });
+    const planned = await runner.planDataFix({ ...base, request: filterFix });
+    org.onBatch = async ({ body, headers }) => {
+      org.onBatch = null;
+      await org.request({ url: `${org.origin}/api/data/v9.2/$batch`, method: 'POST', body, headers });
+      return { statusCode: 502, headers: {}, body: 'lost reply' };
+    };
+    const applied = await runner.applyApprovedPlan({ ...base, planId: planned.planId, approve: planned.planDigest });
+    assert.equal(applied.operation.status, 'unknown');
+    const mark = org.requests.length;
+    const reverted = await runner.revertApplied({ ...base, planId: planned.planId });
+    assert.equal(reverted.operation.status, 'unrevertible');
+    assert.deepEqual(reverted.operation.unrevertible, { rows: 1, unknown: 1, noInverse: 0 });
+    assert.equal(runner.OPERATION_SUCCESS.includes(reverted.operation.status), false);
+    assert.deepEqual(nonGets(org, mark), [], 'nothing is invented or re-sent for a row with no inverse');
+    assert.equal(org.tickets.get(ids[0]).contoso_note, 'fixed');
+  }
+  // 2. The write is acknowledged without the echo that proves its new token: applied but unverified, and no inverse.
+  {
+    const { org, base, ids } = setup({ rows: 1 });
+    const planned = await runner.planDataFix({ ...base, request: filterFix });
+    org.onPatch = ({ id, body }) => { org.touch(id, body.contoso_note); return { statusCode: 204, headers: {}, body: '' }; };
+    const applied = await runner.applyApprovedPlan({ ...base, planId: planned.planId, approve: planned.planDigest });
+    assert.equal(applied.operation.status, 'unverified');
+    const reverted = await runner.revertApplied({ ...base, planId: planned.planId });
+    assert.equal(reverted.operation.status, 'unrevertible');
+    assert.deepEqual(reverted.operation.unrevertible, { rows: 1, unknown: 0, noInverse: 1 });
+    assert.equal(org.tickets.get(ids[0]).contoso_note, 'fixed');
+  }
+  // 3. The neighbour that IS a no-op: every row conflicted, nothing was written, so there is nothing to revert.
+  {
+    const { org, base, ids } = setup({ rows: 1 });
+    const planned = await runner.planDataFix({ ...base, request: filterFix });
+    org.touch(ids[0], 'another maker');
+    const applied = await runner.applyApprovedPlan({ ...base, planId: planned.planId, approve: planned.planDigest });
+    assert.equal(applied.operation.status, 'conflicted');
+    const reverted = await runner.revertApplied({ ...base, planId: planned.planId });
+    assert.equal(reverted.operation.status, 'nothingToRevert');
+    assert.equal(runner.OPERATION_SUCCESS.includes(reverted.operation.status), true);
+  }
+});
+
+test('a revert that restores only the revertible rows says which writes it could not undo, and is not reverted', async () => {
+  const { org, base, ids } = setup({ rows: 2 });
+  const planned = await runner.planDataFix({ ...base, request: filterFix });
+  // The first row's write is acknowledged with no echo (no inverse); the second is a normal, revertible write.
+  org.onPatch = ({ id, body }) => {
+    if (id !== ids[0]) return null;
+    org.touch(id, body.contoso_note);
+    return { statusCode: 204, headers: {}, body: '' };
+  };
+  await runner.applyApprovedPlan({ ...base, planId: planned.planId, approve: planned.planDigest });
+  org.onPatch = null;
+  const review = await runner.revertApplied({ ...base, planId: planned.planId });
+  assert.equal(review.approvalNeeded, true);
+  assert.equal(review.rows, 1);
+  assert.deepEqual(review.unrevertible, { rows: 1, unknown: 0, noInverse: 1 });
+  assert.match(fs.readFileSync(review.review, 'utf8'), new RegExp(`cannot be undone by this revert: 1 row\\(s\\)[\\s\\S]*${ids[0]}`));
+  const done = await runner.revertApplied({ ...base, planId: planned.planId, approve: review.revertDigest });
+  assert.equal(done.operation.status, 'unrevertible');
+  assert.equal(done.operation.counts.applied, 1);
+  assert.deepEqual(done.operation.unrevertible, { rows: 1, unknown: 0, noInverse: 1 });
+  assert.equal(org.tickets.get(ids[1]).contoso_note, `${SENTINEL}-1`, 'the revertible row is restored');
+  assert.equal(org.tickets.get(ids[0]).contoso_note, 'fixed', 'the row with no inverse is left as it is');
+});
+
 test('an SDK refusal is reported by its code only when it is a code: free text in its place never reaches the message', async () => {
   const { base } = setup({ rows: 1 });
   const planned = await runner.planDataFix({ ...base, request: filterFix });
@@ -359,7 +431,7 @@ test('CLI: a repair that did not make every planned change exits non-zero — a 
   assert.match(noApp.text, /--workspace needs --app/);
 });
 
-test('CLI: resume after an unknown row exits non-zero; a refused revert is continued with a fresh approval and exits 0', () => {
+test('CLI: resume after an unknown row exits non-zero; a refused revert is continued with a fresh approval, and the unknown row it cannot undo keeps it non-zero', () => {
   const org = createDataFixOrg({ rows: 2 });
   const cli = dataFixCli(org);
   const planned = cli.run('plan', planArgs);
@@ -386,8 +458,42 @@ test('CLI: resume after an unknown row exits non-zero; a refused revert is conti
   const next = cli.run('revert', ['--plan-id', planned.out.planId]);
   assert.equal(next.out.approvalNeeded, true);
   const done = cli.run('revert', ['--plan-id', planned.out.planId, '--approve', next.out.revertDigest]);
-  assert.equal(done.out.operation.status, 'reverted');
-  assert.equal(done.status, 0, done.text);
+  assert.deepEqual(done.out.operation.counts, { applied: 1, conflict: 0, gone: 0, failed: 0, unknown: 0, notAttempted: 0 }, 'the revertible row is restored');
+  assert.equal(done.out.operation.status, 'unrevertible', 'the forward unknown row may have been written and has no inverse');
+  assert.deepEqual(done.out.operation.unrevertible, { rows: 1, unknown: 1, noInverse: 0 });
+  assert.equal(done.out.ok, false);
+  assert.equal(done.status, 1, done.text);
+});
+
+test('CLI: a revert with nothing it can undo exits non-zero when a write may have been made, and 0 only when nothing was written', () => {
+  const unknown = dataFixCli(createDataFixOrg({ rows: 1 }));
+  const planned = unknown.run('plan', planArgs);
+  unknown.mutate((fake, state) => { state.batchAnswer = { statusCode: 502, body: 'bad gateway' }; });
+  assert.equal(unknown.run('apply', ['--plan-id', planned.out.planId, '--approve', planned.out.planDigest]).out.operation.status, 'unknown');
+  unknown.mutate((fake, state) => { delete state.batchAnswer; });
+  const reverted = unknown.run('revert', ['--plan-id', planned.out.planId]);
+  assert.equal(reverted.out.operation.status, 'unrevertible');
+  assert.equal(reverted.out.ok, false);
+  assert.equal(reverted.status, 1, reverted.text);
+  const org = createDataFixOrg({ rows: 1 });
+  const ids = [...org.tickets.keys()];
+  const noop = dataFixCli(org);
+  const replanned = noop.run('plan', planArgs);
+  noop.mutate((fake) => fake.touch(ids[0], 'another maker'));
+  assert.equal(noop.run('apply', ['--plan-id', replanned.out.planId, '--approve', replanned.out.planDigest]).out.operation.status, 'conflicted');
+  const nothing = noop.run('revert', ['--plan-id', replanned.out.planId]);
+  assert.equal(nothing.out.operation.status, 'nothingToRevert');
+  assert.equal(nothing.out.ok, true);
+  assert.equal(nothing.status, 0, nothing.text);
+  // And a revert that undid every write exits 0.
+  const clean = dataFixCli(createDataFixOrg({ rows: 1 }));
+  const p = clean.run('plan', planArgs);
+  assert.equal(clean.run('apply', ['--plan-id', p.out.planId, '--approve', p.out.planDigest]).status, 0);
+  const review = clean.run('revert', ['--plan-id', p.out.planId]);
+  assert.equal(review.out.unrevertible.rows, 0);
+  const restored = clean.run('revert', ['--plan-id', p.out.planId, '--approve', review.out.revertDigest]);
+  assert.equal(restored.out.operation.status, 'reverted');
+  assert.equal(restored.status, 0, restored.text);
 });
 
 test('CLI: a service refusal is printed as its code and HTTP status in fixed words — never the service\'s own text', () => {

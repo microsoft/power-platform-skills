@@ -7,8 +7,10 @@
 //
 // Exit status: 0 only when the operation made every planned change (`operation.status` repaired / reverted /
 // nothingToWrite / nothingToRevert), or for a plan or a revert review, which write nothing. Any other operation status
-// — unknown, failed, conflicted, partial, unverified — exits 1 with the same JSON: a repair that kept another maker's
-// change or stopped part-way is not a success, even though everything it did is recorded and can be resumed or reverted.
+// — unknown, failed, conflicted, partial, unverified, unrevertible — exits 1 with the same JSON: a repair that kept
+// another maker's change or stopped part-way is not a success, and neither is a revert that left a write it cannot undo
+// (a row whose outcome is unknown, or one written without the token a revert needs), even though everything it did is
+// recorded and can be resumed or reverted.
 
 const fs = require('node:fs');
 const { parseArgs, validateFlags, emitResult, requireDataverseOrigin } = require('./lib/dataverse-auth.js');
