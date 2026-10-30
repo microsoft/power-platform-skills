@@ -1,6 +1,6 @@
 'use strict';
 // Generative pages embedded in a Main form (forms[].genPages, pages[].placement) — lib/form-page-embeds.js: the spec gate, the plan over a
-// form as read, and the apply through the build's create journal. The last test runs the REAL vendored SDK against a stub that stores one
+// form as read, and the apply through the build's create port. The last test runs the REAL vendored SDK against a stub that stores one
 // systemform row, so the typed genPage binding, the ids the SDK allocates and its own missing-page refusal are the bundle's, not a fake's.
 const test = require('node:test');
 const assert = require('node:assert');
@@ -217,22 +217,22 @@ test('an embed is added as its page row and five empty rows, so the section keep
   }
 });
 
-test('an add is sent under the ids the create port reserved, from inside the port, so intent is recorded before the push', async () => {
+test('an add is sent under the ids the create port allocated, from inside the port\'s one execute per add, in one push for the form', async () => {
   const creates = createCreatesPortDouble();
   const atPush = [];
   const provision = fakeProvision(formArtifact([general(FIELD_ROWS())]), { onPush: () => {
-    atPush.push([creates.stateOf('formPageEmbed', KEY), creates.stateOf('formPageEmbed', NOTES_KEY)]);
+    atPush.push(creates.events.map((e) => e.slice(0, 2)));
     return { type: 'form', id: FORM, saved: true };
   } });
   const ctx = ctxFor(provision, { creates });
   const spec = specWith({ genPages: [{ ...EMBED, inputData: { secretish: 'value-not-for-results' } }, { key: 'notes', page: 'case-notes', tab: 'tab_general', section: 'section_general', after: 'new_name' }] });
   const result = await applyFormPageEmbeds(await planFormPageEmbeds(spec, ctx), ctx);
 
-  assert.deepStrictEqual(atPush, [['sending', 'sending']], 'both creates were recorded as being sent when the form push began');
-  assert.deepStrictEqual([creates.stateOf('formPageEmbed', KEY), creates.stateOf('formPageEmbed', NOTES_KEY)], ['complete', 'complete'], 'and settled by the push answer');
-  const sendRecord = (label) => creates.events.find((e) => e[0] === 'record' && e[1] === label && e[2] === 'sending')[3];
+  assert.strictEqual(atPush.length, 1, 'one push');
+  assert.deepStrictEqual(atPush[0].filter((e) => e[0] === 'execute').map((e) => e[1]).sort(), [KEY, NOTES_KEY].sort(), 'the push is made inside each add\'s execute, once each');
+  assert.deepStrictEqual(creates.events.length, 4, 'nothing ran after the push');
   for (const key of [KEY, NOTES_KEY]) {
-    const reserved = sendRecord(key);
+    const reserved = creates.idsOf(key);
     const placed = [...rowsOf(provision.current())].flatMap((r) => r.cells).find((c) => c.control.id === reserved.childIds.control);
     assert.ok(placed, `${key}: the control carries the reserved control id`);
     assert.strictEqual(placed.id, reserved.childIds.cell, `${key}: the cell carries the reserved cell id`);
@@ -245,63 +245,17 @@ test('an add is sent under the ids the create port reserved, from inside the por
   assert.doesNotMatch(JSON.stringify(result), /value-not-for-results/, 'a result carries no input value');
 });
 
-test('a push whose answer is lost leaves the creates unknown, and the next build neither re-adds blindly nor duplicates a landed embed', async () => {
-  for (const landed of [false, true]) {
+test('a push that fails is the build\'s failure as it came: the port runs each add once and sends nothing again, and nothing is reported saved', async () => {
+  for (const failure of [Object.assign(new Error('socket hang up'), { code: 'ECONNRESET' }),
+    Object.assign(new Error('Refusing to push the form: it embeds generative page(s) that do not exist in this environment.'), { code: 'FORM_GENPAGE_TARGET_NOT_FOUND' })]) {
     const creates = createCreatesPortDouble();
-    const provision = fakeProvision(formArtifact([general(FIELD_ROWS())]));
-    let saved = clone(provision.current());
-    provision.fetchArtifact = async (kind, id) => { provision.calls.push(['fetch', kind, id]); return clone(saved); };
-    provision.pushArtifact = async () => {
-      provision.calls.push(['push']);
-      if (landed) saved = clone(provision.current());
-      throw Object.assign(new Error('socket hang up'), { code: 'ECONNRESET' });
-    };
+    const provision = fakeProvision(formArtifact([general(FIELD_ROWS())]), { onPush: () => { throw failure; } });
     const ctx = ctxFor(provision, { creates });
     const spec = specWith({ genPages: [{ ...EMBED, after: 'new_name' }] });
-    await assert.rejects(applyFormPageEmbeds(await planFormPageEmbeds(spec, ctx), ctx), (e) => e.code === 'ECONNRESET');
-    assert.strictEqual(creates.stateOf('formPageEmbed', KEY), 'unknown', 'a push with no answer is an unknown outcome');
-    assert.deepStrictEqual(ctx.queued, []);
-
-    // The next build reads the form again.
-    creates.newInvocation();
-    const before = provision.calls.length;
-    const next = ctxFor(provision, { creates });
-    const plan = await planFormPageEmbeds(spec, next);
-    if (landed) {
-      // It landed: the page is on the form, found and kept — not added a second time.
-      assert.deepStrictEqual(plan.operations.map((o) => o.action), ['none']);
-      const result = await applyFormPageEmbeds(plan, next);
-      assert.deepStrictEqual([result.saved, provision.calls.slice(before).map((c) => c[0])], [[], ['fetch']]);
-    } else {
-      // It did not (or not yet): the add is the port's to refuse until a maker settles what the lost send left behind.
-      await assert.rejects(applyFormPageEmbeds(plan, next), (e) => e.code === 'CREATION_PENDING_UNKNOWN' && e.outcome === 'unknown');
-      assert.deepStrictEqual(provision.calls.slice(before).map((c) => c[0]), ['fetch'], 'nothing edited, nothing pushed');
-    }
+    await assert.rejects(applyFormPageEmbeds(await planFormPageEmbeds(spec, ctx), ctx), (err) => err === failure);
+    assert.deepStrictEqual(creates.events.map((ev) => ev.slice(0, 2)), [['allocate', KEY], ['execute', KEY]], 'one execute, no second send');
+    assert.deepStrictEqual([provision.calls.filter((c) => c[0] === 'push').length, ctx.queued], [1, []]);
   }
-});
-
-test('a push the SDK refuses before writing is a refusal to the create port, and the next build sends the same ids', async () => {
-  const creates = createCreatesPortDouble();
-  let refuse = true;
-  const pushedIds = [];
-  const provision = fakeProvision(formArtifact([general(FIELD_ROWS())]), { onPush: (current) => {
-    pushedIds.push(rowsOf(current)[1].cells[0].control.id);
-    if (refuse) throw Object.assign(new Error('Refusing to push the form: it embeds generative page(s) that do not exist in this environment.'), { code: 'FORM_GENPAGE_TARGET_NOT_FOUND' });
-    return { type: 'form', id: FORM, saved: true };
-  } });
-  const ctx = ctxFor(provision, { creates });
-  const spec = specWith({ genPages: [{ ...EMBED, after: 'new_name' }] });
-  await assert.rejects(applyFormPageEmbeds(await planFormPageEmbeds(spec, ctx), ctx), (e) => e.code === 'FORM_GENPAGE_TARGET_NOT_FOUND');
-  assert.strictEqual(creates.stateOf('formPageEmbed', KEY), 'refused', 'refused before any write, not unknown');
-
-  refuse = false;
-  creates.newInvocation();
-  const fresh = fakeProvision(formArtifact([general(FIELD_ROWS())]), { onPush: (current) => { pushedIds.push(rowsOf(current)[1].cells[0].control.id); return { type: 'form', id: FORM, saved: true }; } });
-  const next = ctxFor(fresh, { creates });
-  const result = await applyFormPageEmbeds(await planFormPageEmbeds(spec, next), next);
-  assert.deepStrictEqual(result.saved.map((s) => s.action), ['add']);
-  assert.strictEqual(pushedIds[1], pushedIds[0], 'the retry sent the same reserved control id');
-  assert.strictEqual(creates.stateOf('formPageEmbed', KEY), 'complete');
 });
 
 test('an embed is found by its key\'s binding first: a new page retargets the cell in place, a changed place is refused, another key\'s cell is not adopted', async () => {
@@ -336,13 +290,13 @@ test('an embed is found by its key\'s binding first: a new page retargets the ce
   plan = await planFormPageEmbeds(specWith({ genPages: [{ ...EMBED, page: 'case-notes', after: 'new_name' }, { key: 'notes', page: 'case-summary', tab: 'tab_general', section: 'section_general', after: 'new_code' }] }), claimed);
   assert.deepStrictEqual(plan.operations.map((o) => [o.key, o.action, o.reason]), [[KEY, 'refuse', 'cell-bound-to-another-embed'], [NOTES_KEY, 'refuse', 'placement-differs']], 'and the key that owns the cell is held to its own place');
 
-  // The cell a binding names is gone: the embed is added again, under the ids the port recorded for the key.
+  // The cell a binding names is gone: the embed is added again, once, under the ids the port allocates for this add, and the binding names them.
   const gone = fakeProvision(formArtifact([general(FIELD_ROWS())]));
   const again = ctxFor(gone, { creates: ctx.creates, bindings: ctx.bindings });
   result = await applyFormPageEmbeds(await planFormPageEmbeds(at('case-notes'), again), again);
-  assert.deepStrictEqual(result.managedBindings.map((b) => [b.id, b.origin]), [[first.id, 'created']], 'the same control id as before');
   rows = rowsOf(gone.current());
-  assert.strictEqual(rows[1].cells[0].control.id, first.id);
+  assert.deepStrictEqual(shape(rows), ['new_name', 'Q:6', '-', '-', '-', '-', '-', 'new_code']);
+  assert.deepStrictEqual(result.managedBindings.map((b) => [b.id, b.origin]), [[rows[1].cells[0].control.id, 'created']], 'the binding names the control the form now holds');
 });
 
 test('the apply refuses an add with no create port, a requested embed that is not applied halts the build, and refusals and unknowns write nothing', async () => {
@@ -352,7 +306,7 @@ test('the apply refuses an add with no create port, a requested embed that is no
   plan.operations.push({ key: 'k', kind: 'formPageEmbed', action: 'refuse', reason: 'page-embedded-elsewhere', target: plan.operations[0].target });
   plan.unknown.push({ key: 'u', kind: 'formPageEmbed', reason: 'page-not-built' });
   const result = await applyFormPageEmbeds(plan, ctx);
-  assert.deepStrictEqual(result.refused.map((r) => r.reason), ['page-embedded-elsewhere', 'create-journal-unavailable']);
+  assert.deepStrictEqual(result.refused.map((r) => r.reason), ['page-embedded-elsewhere', 'create-port-unavailable']);
   assert.deepStrictEqual(result.unknown.map((u) => u.key), ['u']);
   assert.deepStrictEqual([result.saved, result.pendingPublish, ctx.queued], [[], [], []]);
   assert.deepStrictEqual(provision.calls.map((c) => c[0]), ['fetch'], 'no add, no push');
@@ -360,7 +314,7 @@ test('the apply refuses an add with no create port, a requested embed that is no
   assert.throws(() => requireEmbedsApplied(result), (e) => e.name === 'BuildHalt' && e.code === 'form-page-embeds-incomplete' && e.transient === false
     && JSON.stringify(e.notApplied) === JSON.stringify([
       { key: 'k', kind: 'formPageEmbed', reason: 'page-embedded-elsewhere', outcome: 'refused' },
-      { key: KEY, kind: 'formPageEmbed', reason: 'create-journal-unavailable', outcome: 'refused' },
+      { key: KEY, kind: 'formPageEmbed', reason: 'create-port-unavailable', outcome: 'refused' },
       { key: 'u', kind: 'formPageEmbed', reason: 'page-not-built', outcome: 'unknown' }]));
   const clean = { saved: [{ key: KEY }], unchanged: [], pendingPublish: [], refused: [], unknown: [], managedBindings: [] };
   assert.strictEqual(requireEmbedsApplied(clean), clean);
@@ -374,7 +328,7 @@ test('a push that fails by value halts like every other form push, before public
   const plan = await planFormPageEmbeds(specWith({ genPages: [EMBED] }), ctx);
   await assert.rejects(applyFormPageEmbeds(plan, ctx), (e) => e.code === 'version-conflict');
   assert.deepStrictEqual(ctx.queued, []);
-  assert.strictEqual(creates.stateOf('formPageEmbed', KEY), 'refused', 'a 412 is a complete answer that wrote nothing');
+  assert.deepStrictEqual(creates.events.filter((e) => e[0] === 'execute').length, 1, 'sent once, not again');
 });
 
 test('the build step reads page ids from the build\'s Map, reports what it saved, then halts on each requested embed it could not apply', async () => {
@@ -398,11 +352,11 @@ test('the build step reads page ids from the build\'s Map, reports what it saved
   assert.deepStrictEqual(ctx.reports[0].managedBindings.map((b) => b.key), [KEY], 'no binding is claimed for the page that was not built');
   assert.deepStrictEqual(ctx.queued, [{ kind: 'form', id: FORM, table: 'new_ticket', label: 'form new_ticket|Main|Main page embeds' }]);
 
-  // No create journal: nothing is written, and the build halts.
-  const noJournal = fakeProvision(formArtifact([general(FIELD_ROWS())]));
-  const ctx2 = stepCtx(noJournal, { creates: undefined });
-  await assert.rejects(runFormPageEmbeds(specWith({ genPages: [EMBED] }), ctx2), (e) => halted(e, [[KEY, 'refused', 'create-journal-unavailable']]));
-  assert.deepStrictEqual([noJournal.calls.map((c) => c[0]), ctx2.reports[0].managedBindings], [['fetch'], []]);
+  // No create port: nothing is written, and the build halts.
+  const noPort = fakeProvision(formArtifact([general(FIELD_ROWS())]));
+  const ctx2 = stepCtx(noPort, { creates: undefined });
+  await assert.rejects(runFormPageEmbeds(specWith({ genPages: [EMBED] }), ctx2), (e) => halted(e, [[KEY, 'refused', 'create-port-unavailable']]));
+  assert.deepStrictEqual([noPort.calls.map((c) => c[0]), ctx2.reports[0].managedBindings], [['fetch'], []]);
 
   // Two live sections answer to the requested name: nothing is guessed, nothing written.
   const twice = fakeProvision(formArtifact([general(FIELD_ROWS()), general(FIELD_ROWS())]));
@@ -418,7 +372,7 @@ test('the build step reads page ids from the build\'s Map, reports what it saved
   assert.deepStrictEqual(ok.saved.map((s) => s.key), [KEY]);
 });
 
-test('REAL BUNDLE: the embed round-trips through the SDK — reserved ids persisted, spacer rows kept, retarget in place, missing page refused before any write', async () => {
+test('REAL BUNDLE: the embed round-trips through the SDK — the port's ids persisted, spacer rows kept, retarget in place, missing page refused before any write', async () => {
   const pagesInEnv = new Set([PAGE]);
   const pageChecks = [];
   let losePatchAnswer = false;
@@ -462,8 +416,8 @@ test('REAL BUNDLE: the embed round-trips through the SDK — reserved ids persis
     assert.ok(fitsGrid(rows, 1), 'the saved section fits its grid');
     const placed = rows[1].cells[0];
     assert.deepStrictEqual(placed.control.genPage, { pageId: PAGE, inputData: { mode: 'compact' } });
-    const reserved = creates.events.find((e) => e[0] === 'record' && e[1] === KEY && e[2] === 'sending')[3];
-    assert.deepStrictEqual([placed.id, placed.control.id], [reserved.childIds.cell, reserved.childIds.control], 'the form persisted the ids the port reserved');
+    const reserved = creates.idsOf(KEY);
+    assert.deepStrictEqual([placed.id, placed.control.id], [reserved.childIds.cell, reserved.childIds.control], 'the form persisted the ids the port allocated');
     assert.deepStrictEqual(placed.control.bag.a.find((p) => p[0] === 'uniqueid'), ['uniqueid', `{${reserved.id}}`]);
     const [binding] = first.result.managedBindings;
     assert.deepStrictEqual([binding.id, binding.cellId], [placed.control.id, placed.id], 'the ids the binding records are the ones the form persisted');
@@ -479,20 +433,18 @@ test('REAL BUNDLE: the embed round-trips through the SDK — reserved ids persis
     assert.deepStrictEqual(shape(rows).filter((s) => s.includes(':')), ['Q:6'], 'one embed on the form, not two');
     pagesInEnv.delete(OTHER_PAGE);
 
-    // A page that is gone by push time is the SDK's own refusal, before any write — a refusal to the create port, not an unknown.
+    // A page that is gone by push time is the SDK's own refusal, before any write, propagated as it came.
     const writesBefore = h.writes.length;
     await assert.rejects(run([{ key: 'other', page: 'case-summary', tab: 'tab_general', section: 'section_general' }, { ...EMBED, page: 'case-notes', after: 'new_name', inputData: { mode: 'full' } }, { key: 'third', page: 'case-third', tab: 'tab_general', section: 'section_general' }], { 'case-summary': PAGE, 'case-notes': OTHER_PAGE, 'case-third': guid(44) }),
       (e) => e.code === 'FORM_GENPAGE_TARGET_NOT_FOUND');
     assert.strictEqual(h.writes.length, writesBefore, 'the refused push wrote nothing');
-    assert.strictEqual(creates.stateOf('formPageEmbed', 'new_ticket|Main|Main#third'), 'refused');
     assert.ok(pageChecks.some((url) => url.includes(guid(44))), 'the refusal came from the SDK checking the page');
 
-    // A PATCH whose answer is lost: the create is unknown, never "created".
-    creates.newInvocation();
+    // A PATCH whose answer is lost: the failure propagates, and nothing is reported saved.
     pagesInEnv.add(guid(44));
     losePatchAnswer = true;
-    await assert.rejects(run([{ ...EMBED, page: 'case-notes', after: 'new_name', inputData: { mode: 'full' } }, { key: 'third', page: 'case-third', tab: 'tab_general', section: 'section_general' }], { 'case-notes': OTHER_PAGE, 'case-third': guid(44) }));
-    assert.strictEqual(creates.stateOf('formPageEmbed', 'new_ticket|Main|Main#third'), 'unknown');
+    await assert.rejects(run([{ ...EMBED, page: 'case-notes', after: 'new_name', inputData: { mode: 'full' } }, { key: 'third', page: 'case-third', tab: 'tab_general', section: 'section_general' }], { 'case-notes': OTHER_PAGE, 'case-third': guid(44) }),
+      (e) => /socket hang up/.test(e.message));
   } finally {
     h.cleanup();
   }

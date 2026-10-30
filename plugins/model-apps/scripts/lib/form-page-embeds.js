@@ -167,12 +167,6 @@ const controlIdOf = (c) => (c && c.control && isText(c.control.id) ? lower(c.con
 const PAGE_ROWSPAN = 6;
 const PAGE_BLOCK_ROWS = PAGE_ROWSPAN;
 
-// Codes the SDK raises from a form push BEFORE it writes anything (api/FormApi.ts assertEmbeddedPagesExist / bindingsOf): the push read the
-// form, found a page the form would embed missing (or the bindings unreadable), and refused. Nothing was sent, so the create port must see a
-// refusal, not an unknown — a thrown error without a status is otherwise an unknown outcome to it (verdictOfFailure).
-const PUSH_REFUSED_BEFORE_WRITE = new Set(['FORM_GENPAGE_TARGET_NOT_FOUND', 'FORM_GENPAGE_TARGET_UNVERIFIABLE']);
-const NOT_SENT = Symbol('form-page-embeds.notSent');
-
 // What the embed means, hashed: the form, the page, where it sits and what it is given. A change of any of them is a new intent.
 function intentOf(f, e) {
   return sha256(`form-page-embed/1\n${stableStringify({ form: appSpec().formIdentityKey(f), key: e.key, page: e.page, tab: lower(e.tab), section: lower(e.section), after: e.after === undefined ? null : lower(e.after), inputData: e.inputData === undefined ? null : e.inputData })}`);
@@ -194,7 +188,7 @@ function orderAdds(adds) {
     .map((x) => x.op);
 }
 
-// The rows one add writes. The three ids are the ones the create port reserved for this embed BEFORE the push: the control's
+// The rows one add writes. The three ids are the ones the create port allocated for this embed before the push: the control's
 // `uniqueid` (the key the SDK files the page binding under), the cell's id and the control's id. The SDK keeps ids it is given and mints only
 // missing ones (mintEmbedIdentity); the `uniqueid` goes in the control's bag the way the SDK itself writes it, braced (setUniqueId).
 function blockOf(ids, op) {
@@ -321,25 +315,13 @@ async function planFormPageEmbeds(spec, ctx) {
   return { operations, unknown };
 }
 
-// An error the create port must read as "nothing was sent" (outcome 'not-sent'): a failure before the form push began. The failure itself is
-// kept apart from the port's `cause` walk on purpose — an error the SDK raised locally can carry words the port would read as unknown.
-function notSent(error) {
-  if (error && error[NOT_SENT]) return error;
-  const wrapped = new Error(`not sent: ${(error && error.message) || String(error)}`);
-  wrapped.code = error && error.code;
-  wrapped.outcome = 'not-sent';
-  wrapped.transient = false;
-  wrapped[NOT_SENT] = error;
-  return wrapped;
-}
-
 // ctx: { provision: { addElement, updateElement, pushArtifact }, creates: { run }, publication: { queue }, warn }.
-// Every add goes through ctx.creates.run (the build's create port, B1), so this feature keeps no journal of its own, and the port's record
-// covers the SEND: the runs of a form's adds are nested, and the innermost one makes the local edits under the ids every run reserved and
-// pushes the form — one push per changed form, made inside each add's execute, so the port records intent before the PATCH and judges the
-// push's own answer. A push that fails by value halts the build the way every other form push does (requireSuccessfulPush); a pending
-// unknown create of an earlier run is the port's refusal (CREATION_PENDING_UNKNOWN), and a page that went away between plan and push is the
-// SDK's (FORM_GENPAGE_TARGET_NOT_FOUND), both propagated unchanged.
+// Every add goes through ctx.creates.run, the build's create port: it allocates the ids an add is sent under (the control's uniqueid, the
+// cell's id, the control's id) and calls the add's execute once. The runs of a form's adds are nested, and the innermost one makes the local
+// edits under the ids every run allocated and pushes the form — one push per changed form. The port keeps no record and sends nothing again:
+// a push that failed is the build's failure like any other form push, and the next build plans from the form as it reads it then. A push
+// that fails by value halts the build the way every other form push does (requireSuccessfulPush), and a page that went away between plan and
+// push is the SDK's refusal (FORM_GENPAGE_TARGET_NOT_FOUND), propagated unchanged.
 async function applyFormPageEmbeds(plan, ctx) {
   const result = { saved: [], unchanged: [], pendingPublish: [], refused: [], unknown: [...((plan && plan.unknown) || [])], managedBindings: [] };
   const byForm = new Map();
@@ -359,13 +341,12 @@ async function applyFormPageEmbeds(plan, ctx) {
     const updates = ops.filter((op) => op.action === 'update');
     let adds = orderAdds(ops.filter((op) => op.action === 'add'));
     if (adds.length && !hasPort) {
-      // Fail closed: an add without the build's create port would be a write nobody recorded the intent of.
-      for (const op of adds) result.refused.push({ key: op.key, kind: op.kind, reason: 'create-journal-unavailable' });
+      // Fail closed: the port allocates the ids an add is sent under, and the binding the build records names them.
+      for (const op of adds) result.refused.push({ key: op.key, kind: op.kind, reason: 'create-port-unavailable' });
       adds = [];
     }
     if (!updates.length && !adds.length) continue;
     const ids = new Map();
-    const adopted = [];
     const sent = { pushed: false };
     const writeAndPush = async () => {
       for (const op of updates) await ctx.provision.updateElement('form', formId, op.pointer, op.value);
@@ -375,36 +356,19 @@ async function applyFormPageEmbeds(plan, ctx) {
         for (let r = 0; r < block.length; r++) await ctx.provision.addElement('form', formId, op.pointer, block[r], { position: { index: op.index + r } });
       }
       sent.pushed = true;
-      try {
-        return await ctx.provision.pushArtifact('form', formId);
-      } catch (error) {
-        throw PUSH_REFUSED_BEFORE_WRITE.has(error && error.code) ? notSent(error) : error;
-      }
+      return ctx.provision.pushArtifact('form', formId);
     };
     const level = async (i) => {
       if (i === adds.length) return updates.length || ids.size ? writeAndPush() : undefined;
       const op = adds[i];
       const ran = await ctx.creates.run({ kind: op.kind, key: op.key, identity: { formId, intentSha256: op.intentSha256 }, childKeys: ['cell', 'control'] },
-        async ({ id, childIds }) => {
+        ({ id, childIds }) => {
           ids.set(op, { uniqueId: id, cellId: childIds.cell, controlId: childIds.control });
-          try {
-            return await level(i + 1);
-          } catch (error) {
-            throw sent.pushed ? error : notSent(error);
-          }
+          return level(i + 1);
         });
-      // A maker's adoption names the rows an earlier unanswered create made; nothing is sent for it. The plan did not find them on the form,
-      // so the embed is not reported applied — the next build reads the form again (and sends under the adopted ids if they are not there).
-      if (ran && ran.outcome === 'adopted') { adopted.push(op); return level(i + 1); }
       return ran ? ran.result : undefined;
     };
-    let pushed;
-    try {
-      pushed = await level(0);
-    } catch (error) {
-      throw (error && error[NOT_SENT]) || error;
-    }
-    for (const op of adopted) result.unknown.push({ key: op.key, kind: op.kind, reason: 'create-adopted-not-on-form' });
+    const pushed = await level(0);
     if (!sent.pushed) continue;
     const { requireSuccessfulPush } = require('./entity-provision.js');
     requireSuccessfulPush(pushed, `form ${ops[0].target.formKey} page embeds`, ctx.warn);
@@ -415,7 +379,7 @@ async function applyFormPageEmbeds(plan, ctx) {
       result.managedBindings.push(bindingOf(op, op, op.origin || 'adopted'));
     }
     for (const op of adds) {
-      if (!ids.has(op) || adopted.includes(op)) continue;
+      if (!ids.has(op)) continue;
       const got = ids.get(op);
       result.saved.push({ key: op.key, kind: op.kind, action: op.action, id: got.controlId });
       result.managedBindings.push(bindingOf(op, got, 'created'));
@@ -449,7 +413,7 @@ function pageIdFrom(keyToId, ref) {
 
 const hasFormPageEmbeds = (spec) => !!(spec && Array.isArray(spec.forms) && spec.forms.some((f) => f && Array.isArray(f.genPages) && f.genPages.length));
 
-// The build's whole step, so the wiring is one call: plan (fresh form reads), apply (through the create port), then report what was saved and
+// The build's whole step, so the wiring is one call: plan (fresh form reads), apply (adds through the create port), then report what was saved and
 // halt on anything requested that was not applied. ctx = planFormPageEmbeds' and applyFormPageEmbeds' ctx, with `keyToId` (the build's page
 // ids) instead of `pageIdOf`, and `report(result)` — called with the result before any halt, so a partial save is reported and its bindings
 // recorded. A spec with no form embed reads and writes nothing, and the step answers null.
