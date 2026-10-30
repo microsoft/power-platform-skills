@@ -863,3 +863,15 @@ test('option-value grading ties each number to its label, not only to its presen
   assert.strictEqual(grade2210(11, (s) => { const o = priority(s).options; [o[0].label, o[1].label] = [o[1].label, o[0].label]; }), 'fail', 'Low and High swapped keep 1 and 5');
   assert.strictEqual(grade2210(11, (s) => { priority(s).options[0].label['1036'] = 'Faible'; }), 'pass', 'a translation the prompt does not state is not graded');
 });
+
+test('field-security grading checks each profile\'s grants and named principals', () => {
+  const hr = (s) => s.fieldSecurityProfiles.find((p) => p.key === 'hr');
+  const payroll = (s) => s.fieldSecurityProfiles.find((p) => p.key === 'payroll');
+  assert.strictEqual(grade2210(13), 'pass');
+  assert.strictEqual(grade2210(13, (s) => { for (const x of hr(s).permissions) { x.read = false; x.create = false; x.update = false; } }), 'fail', 'HR granted nothing');
+  assert.strictEqual(grade2210(13, (s) => { hr(s).assignTo = { users: ['22222222-2222-4222-8222-222222222222'] }; }), 'fail', 'HR team replaced by an unrelated user');
+  assert.strictEqual(grade2210(13, (s) => { hr(s).assignTo = { teams: ['22222222-2222-4222-8222-222222222222'] }; }), 'fail', 'HR assigned to a different team');
+  assert.strictEqual(grade2210(13, (s) => { payroll(s).permissions[0].update = true; }), 'fail', 'Payroll given update');
+  assert.strictEqual(grade2210(13, (s) => { hr(s).assignTo.teams = hr(s).assignTo.teams.map((t) => t.toUpperCase()); }), 'pass', 'a GUID compares case-insensitively');
+  assert.strictEqual(grade2210(13, (s) => { payroll(s).permissions[0].update = false; }), 'pass', 'an explicit false is no grant');
+});

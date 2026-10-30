@@ -869,16 +869,21 @@ ASSERTIONS.set('author: calendar days use DateOnly, a same-clock time uses TimeZ
   return PASS;
 });
 
-// expect.fieldSecurity = { secured: ["<table>.<column>"], assigned: [profile keys], unassigned: [profile keys] }.
-// The secured set must match exactly, every secured column needs a profile permission, and only
-// the profiles the prompt names someone for may carry an assignment.
+// expect.fieldSecurity = { secured: ["<table>.<column>"], assigned: [profile keys], unassigned: [profile keys],
+//   grants: { <profile key>: { "<table>.<column>": [rights] } }, principals: { <profile key>: { teams: [ids], users: [ids] } } }.
+// The secured set must match exactly, every secured column needs a profile permission that grants
+// something, and only the profiles the prompt names someone for may carry an assignment. The profile
+// set and each profile's granted rights (every permission key set to true, so an unasked-for right
+// fails too) must match `grants` exactly, and each assigned profile's teams and users must be the
+// ones in `principals` (GUIDs compare case-insensitively; an absent kind means none).
 ASSERTIONS.set('author: confidential columns are isSecured with explicit profiles; assignees are named, never inferred, and an unassigned profile says so', ({ spec, eval: ev }) => {
   const expected = ev.expect && ev.expect.fieldSecurity;
   if (!expected) return fail('no independent field security expectations');
   const secured = (spec.entities || []).flatMap((e) => (e.columns || []).filter((c) => c.isSecured === true).map((c) => `${e.schemaName}.${c.schemaName}`));
   if (!eq(sorted(secured), sorted(expected.secured))) return fail(`secured columns [${sorted(secured).join(', ')}], expected [${sorted(expected.secured).join(', ')}]`);
   const profiles = spec.fieldSecurityProfiles || [];
-  const covered = new Set(profiles.flatMap((p) => (p.permissions || []).map((x) => `${x.table}.${x.column}`)));
+  const rights = (x) => Object.keys(x || {}).filter((k) => k !== 'table' && k !== 'column' && x[k] === true).sort();
+  const covered = new Set(profiles.flatMap((p) => (p.permissions || []).filter((x) => rights(x).length).map((x) => `${x.table}.${x.column}`)));
   const uncovered = secured.filter((c) => !covered.has(c));
   if (uncovered.length) return fail(`secured column(s) with no profile permission: ${uncovered.join(', ')}`);
   const hasAssignee = (p) => !!(p.assignTo && ['teams', 'users'].some((k) => Array.isArray(p.assignTo[k]) && p.assignTo[k].length));
@@ -886,6 +891,23 @@ ASSERTIONS.set('author: confidential columns are isSecured with explicit profile
   const unassigned = profiles.filter((p) => !hasAssignee(p)).map((p) => p.key);
   if (!eq(sorted(assigned), sorted(expected.assigned))) return fail(`assigned profiles [${sorted(assigned).join(', ')}], expected [${sorted(expected.assigned).join(', ')}]`);
   if (!eq(sorted(unassigned), sorted(expected.unassigned))) return fail(`unassigned profiles [${sorted(unassigned).join(', ')}], expected [${sorted(expected.unassigned).join(', ')}]`);
+  const grants = expected.grants || {};
+  if (!eq(sorted(profiles.map((p) => p.key)), sorted(Object.keys(grants)))) return fail(`profiles [${sorted(profiles.map((p) => p.key)).join(', ')}], expected [${sorted(Object.keys(grants)).join(', ')}]`);
+  for (const p of profiles) {
+    const got = {};
+    for (const x of p.permissions || []) {
+      const r = rights(x);
+      if (r.length) got[`${x.table}.${x.column}`] = sorted([...new Set([...(got[`${x.table}.${x.column}`] || []), ...r])]);
+    }
+    const want = Object.fromEntries(Object.entries(grants[p.key]).map(([c, r]) => [c, sorted(r)]));
+    const norm = (o) => JSON.stringify(Object.keys(o).sort().map((k) => [k, o[k]]));
+    if (norm(got) !== norm(want)) return fail(`${p.key}: grants ${norm(got)}, expected ${norm(want)}`);
+    const named = (expected.principals || {})[p.key] || {};
+    for (const kind of ['teams', 'users']) {
+      const have = sortedLc((p.assignTo || {})[kind]);
+      if (!eq(have, sortedLc(named[kind]))) return fail(`${p.key}: ${kind} [${have.join(', ')}], expected [${sortedLc(named[kind]).join(', ')}]`);
+    }
+  }
   return PASS;
 });
 
