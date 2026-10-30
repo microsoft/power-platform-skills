@@ -2759,14 +2759,21 @@ before.
 - **`build-model-app.js --preview-push`** (dry run only; refused with `--apply` or `--no-live-plan`):
   for a complex change to an existing app, it asks the platform what a push of each planned change it
   can name would do — create, update or nothing, and what would stop it — through a read-only client
-  (`lib/push-preview.js`, one artifact at a time). A change it cannot name by a live id (a view or form
-  the build would create, a command bar) is listed as not evaluated, never as ready. "ready" is not an
-  approval or a lock, and a "noChange" artifact is still written by an apply.
+  (`lib/push-preview.js`, one artifact at a time). An existing view is previewed with the build's own
+  reconcile edits (`viewReconcileEdits`, applied over the freshly fetched copy through the helper's
+  `liveEdits` hook) and a chart the build would create by its definition. Every other change (an
+  existing form, chart or the app, whose edits the build works out only while it runs; a view or form
+  the build would create; a command bar) is listed as not evaluated, never previewed as an unedited copy
+  and never as ready. "ready" is not an approval or a lock, and a "noChange" artifact is still written by
+  an apply. Plan keys are made unique by `lib/unique-keys.js`, which never hands a repeat a key another
+  item carries.
 - **`verify-model-app.js --inspect-components`**: checks each declared command control on the surface
   its `location` deploys to (`lib/feature-verify.js` over the SDK's command inspection; GETs only). A
-  missing, misplaced, hidden, disabled or ambiguous control fails. The build does not yet record a
-  control's row id, so a control found by its caption alone is reported unverified and fails the run:
-  read the lines for what is wrong, not the verdict. The dashboard witness is not wired: the build
+  missing, misplaced or ambiguous control fails. The build does not yet record a control's row id, so a
+  control found by its caption alone is reported unverified and fails the run — and because identity
+  is checked first, a hidden or disabled control found by caption is reported unverified too, not
+  hidden: no `FAIL` line does not establish that a control is visible or enabled. Keys are the table and
+  caption, made unique over the spec by `lib/unique-keys.js`. The dashboard witness is not wired: the build
   records no pushed dashboard to compare with.
 - **`data-fix.js plan|apply|resume|revert`** (`lib/data-fix-runner.js`): a reviewed repair of values in
   existing rows. Stdout carries counts, codes, digests and file paths only; the before/after values are

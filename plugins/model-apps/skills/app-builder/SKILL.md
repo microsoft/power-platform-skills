@@ -466,13 +466,15 @@ chat reply** (tool output is collapsed — see the CRITICAL note above), and get
 before applying.)
 
 **Push preview (`--preview-push`, dry run only).** For a complex change to an existing app (managed or
-destructive features, many forms or views), run the dry run with `--preview-push` to see, per artifact,
-whether a push would create, update or change nothing, and what would stop it (refused, stale, unknown),
-with its solution layers and publication scope. It reads only. "ready" is not approval or a lock, and a
-"noChange" artifact is still written by an apply. A change it cannot name by a live id (a view or form
-the build would create, a command bar) is listed as not evaluated: say so, never report the preview as
-complete. A preview that fails prints its code and the dry run stands. Do not use it on every apply; it
-is refused with `--apply` and with `--no-live-plan`.
+destructive features, many views), run the dry run with `--preview-push` to see, per artifact, whether a
+push would create, update or change nothing, and what would stop it (refused, stale, unknown), with its
+solution layers and publication scope. It reads only. "ready" is not approval or a lock, and a
+"noChange" artifact is still written by an apply. It previews an existing view with the column and
+description changes the build would make, and a chart the build would create. Everything else (an
+existing form, chart or the app, a view or form the build would create, a command bar) is listed as not
+evaluated, because the build works those changes out only while it runs: say so, never report the
+preview as complete. A preview that fails prints its code and the dry run stands. Do not use it on every
+apply; it is refused with `--apply` and with `--no-live-plan`.
 
 **Stage selector (`--stage <data|ui|app|publish>`)** maps to its phase range. On `--apply`, ONLY
 `--stage data` is accepted (solution + data-model, no rows in run 1; run 2 is a full build). All
@@ -621,9 +623,10 @@ the surface you declared (a `MainTab` button on the form, `HomeTab` on the main 
 a subgrid). Caption-only matches, hidden or disabled controls, and controls on another surface or app do
 not pass. It checks the stored definition, not what a browser renders. Today the build records no row
 id for a control, so every control it finds is reported `UNVERIFIED … found by caption only` and the
-run fails: tell the user which lines say `FAIL` (missing, misplaced, hidden, disabled, several matches)
-— those are the real problems — and that the caption-only lines only mean the button could not be
-proved to be the app's own.
+run fails: tell the user which lines say `FAIL` (missing, on another surface, several matches) — those
+are real problems — and that a caption-only line means the button could not be proved to be the app's
+own, and may also hide a problem with it: a hidden or disabled control found by caption is reported
+caption-only, not `FAIL`. No `FAIL` line does not prove a button is visible or enabled.
 
 Then open the app in the browser. Refine `app-spec.json` and re-run Phase 2 to iterate.
 
