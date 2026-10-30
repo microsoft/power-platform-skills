@@ -761,15 +761,15 @@ const xamlStages = (row) => [...row.xaml.matchAll(/DisplayName="StageStep\d+: ([
 const xamlStageIds = (row) => [...row.xaml.matchAll(/x:Key="StageId">([^<]+)</g)].map((m) => m[1]);
 const xamlSteps = (row) => [...row.xaml.matchAll(/DisplayName="StepStep\d+: ([^"]*)"/g)].map((m) => m[1]);
 
-// REAL BUNDLES: a flow the PREVIOUS release's SDK created, whose copy (stamped with its older projection) is still in the workspace —
+// REAL BUNDLES: a flow the PREVIOUS release's SDK created, whose copy (stamped by it, and — in the second case — one projection version older) is still in the workspace —
 // the build's own app folder workspace — edited by this release's SDK on that SAME workspace, the first thing it does there. The stage
 // plan fetches the flow with `overwrite: true`, so the old copy is replaced by a current one and pushed: the edit goes over the wire and
 // lands exactly as it does for a flow this release created.
 const { skipWithoutPrevious, requirePrevious } = require('./helpers/previous-bundle.js');
-test('REAL BUNDLES: a flow the previous release created, its old copy still in the workspace, is edited by this release as one it created', { skip: skipWithoutPrevious() }, async () => {
+for (const [staleProjection, copy] of [[false, 'its copy'], [true, 'its copy stamped one projection version older']]) test(`REAL BUNDLES: a flow the previous release created, ${copy} still in the workspace, is edited by this release as one it created`, { skip: skipWithoutPrevious() }, async () => {
   const d = DEPLOYED();
   const want = flowOf([{ ...d.stages[0], name: 'Intake' }, stage('Resolve', 'Notes:new_notes', 'Confirmed with customer:new_owner', 'Region:new_region'), d.stages[2], stage('Archive', 'Notes:new_notes')]);
-  const run = async (creatorBundle) => {
+  const run = async (creatorBundle, stale) => {
     const fake = fakeWorkflows();
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bpf-upgrade-'));
     tempDirs.push(dir);
@@ -783,18 +783,22 @@ test('REAL BUNDLES: a flow the previous release created, its old copy still in t
     await creator.pushArtifact('bpf', art.id);
     const metaFile = fs.readdirSync(path.join(dir, '.metadata'), { recursive: true }).find((f) => path.basename(String(f)) === `${art.id}.meta.json`);
     assert.ok(metaFile, 'the SDK keeps the flow\'s metadata in the workspace');
-    const meta = JSON.parse(fs.readFileSync(path.join(dir, '.metadata', String(metaFile)), 'utf8'));
+    const metaPath = path.join(dir, '.metadata', String(metaFile));
+    const meta = JSON.parse(fs.readFileSync(metaPath, 'utf8'));
+    // The stale case does not depend on the previous release having projected at an older version than this one.
+    if (stale) fs.writeFileSync(metaPath, JSON.stringify({ ...meta, projectionVersion: meta.projectionVersion - 1 }), 'utf8');
     fake.log.length = 0;
     const sdk = await open(require(BUNDLE));
     const inspected = await inspectBpfStages(sdk, want, art.id);
     assert.strictEqual(inspected.kind, 'edit', JSON.stringify(inspected));
     const pushed = await applyBpfStages(sdk, want, art.id, inspected.plan, {});
     const row = fake.rows.get(art.id);
-    return { projection: meta.projectionVersion, pushed, wire: fake.log.map((l) => `${l.verb} ${l.keys.join(',')} ${l.ifMatch ? 'If-Match' : ''}`), stages: xamlStages(row), steps: xamlSteps(row), statecode: row.statecode };
+    return { projection: meta.projectionVersion - (stale ? 1 : 0), pushed, wire: fake.log.map((l) => `${l.verb} ${l.keys.join(',')} ${l.ifMatch ? 'If-Match' : ''}`), stages: xamlStages(row), steps: xamlSteps(row), statecode: row.statecode };
   };
-  const upgrade = await run(requirePrevious());
-  const control = await run(require(BUNDLE));
-  assert.ok(upgrade.projection < control.projection, `the previous release's copy is an old one (${upgrade.projection} < ${control.projection})`);
+  const upgrade = await run(requirePrevious(), staleProjection);
+  const control = await run(require(BUNDLE), false);
+  if (staleProjection) assert.strictEqual(upgrade.projection, control.projection - 1, 'the copy is stamped older than this release\'s projection');
+  else assert.ok(upgrade.projection <= control.projection, `the previous release's copy is stamped no newer than this release's (${upgrade.projection} <= ${control.projection})`);
   assert.strictEqual(upgrade.pushed.saved, true);
   assert.deepStrictEqual(upgrade.stages, ['Intake', 'Resolve', 'Close', 'Archive']);
   assert.strictEqual(upgrade.statecode, 1, 'the flow is still Active');

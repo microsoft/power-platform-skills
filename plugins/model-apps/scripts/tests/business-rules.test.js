@@ -203,7 +203,7 @@ test('REAL BUNDLE: the mapped rule reaches the wire as WfomJson naming the autho
   assert.match(wfom, /new_ticket/, 'the rule is bound to the authored table');
 });
 
-// REAL BUNDLES: a rule the PREVIOUS release's SDK created leaves its copy, stamped with its older projection, in the workspace. A rule
+// REAL BUNDLES: a rule the PREVIOUS release's SDK created leaves its copy, stamped with its projection, in the workspace. A rule
 // that exists is never fetched or pushed again by a build (sdk-build.js: it is reused, and only its state is set, by a record update),
 // so that copy is never refused; what this release's SDK does on that same workspace is create the next rule — and it does so exactly
 // as on a workspace it wrote, sending nothing for the old rule.

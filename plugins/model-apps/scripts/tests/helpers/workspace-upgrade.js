@@ -28,6 +28,21 @@ function projections(workspaceDir) {
 }
 const versions = (byKind) => [...new Set(Object.values(byKind).flat())].sort((a, b) => a - b);
 
+// Every copy's stamp set one projection version lower: the state of a workspace a release with older parsers wrote, whatever the
+// previous release's own projection is (it can equal this bundle's, so a previous release alone does not make a copy stale).
+function stampOlderProjection(workspaceDir) {
+  const root = path.join(workspaceDir, '.metadata');
+  for (const kind of fs.readdirSync(root)) {
+    const dir = path.join(root, kind);
+    if (!fs.statSync(dir).isDirectory()) continue;
+    for (const file of fs.readdirSync(dir).filter((f) => f.endsWith('.meta.json'))) {
+      const metaFile = path.join(dir, file);
+      const meta = JSON.parse(fs.readFileSync(metaFile, 'utf8'));
+      if (Number.isInteger(meta.projectionVersion)) fs.writeFileSync(metaFile, JSON.stringify({ ...meta, projectionVersion: meta.projectionVersion - 1 }), 'utf8');
+    }
+  }
+}
+
 // A view filter a maker can save in the designer and the typed view model does not hold: a Quick Find marker on a filter BELOW the
 // top level, and a multi-value condition (`<value>` children) inside it. The bundled SDK keeps such a filter verbatim (it used to be
 // rebuilt from the typed filters by an edit, losing the marker and the values) — the change that raised the projection version.
@@ -73,9 +88,10 @@ const SDKS = {
 };
 
 // The state the first SDK leaves: the kitchen sink built by it (and, with `residualFilter`, the maker's residual filter added in
-// Maker and the app rebuilt by the same SDK, so ITS copy of the view holds the filter). Then `next` — this release's harness on the
-// same environment and app folder — is the first thing done with this release.
-async function startFrom(which, { residualFilter = false } = {}) {
+// Maker and the app rebuilt by the same SDK, so ITS copy of the view holds the filter). With `staleProjection`, every copy is then
+// stamped one projection version lower, so it is an old copy whatever the first SDK's own projection is. Then `next` — this release's
+// harness on the same environment and app folder — is the first thing done with this release.
+async function startFrom(which, { residualFilter = false, staleProjection = false } = {}) {
   const org = createLifecycleOrg();
   await seedForeignWork(org);
   const root = makeTempDir(`workspace-upgrade-${which}-`);
@@ -86,6 +102,7 @@ async function startFrom(which, { residualFilter = false } = {}) {
     await makerAddsResidualFilter(org);
     out.reread = await first.measure(() => first.build(kitchenSinkSpec()));
   }
+  if (staleProjection) stampOlderProjection(first.workspaceDir);
   out.firstProjections = projections(first.workspaceDir);
   out.afterBuild = org.inventory();
   out.next = createLifecycleHarness(org, root);
@@ -103,4 +120,4 @@ function stage(record, name) {
 // A spec or a report as text, with every GUID (the fake mints them at random, so two environments never share one) made one placeholder.
 const withoutIds = (value) => JSON.stringify(value).replace(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi, '<id>');
 
-module.exports = { projections, versions, editedSpec, residualView, RESIDUAL_FILTER, RESIDUAL_VIEW, startFrom, stage, withoutIds, appUniqueName, kitchenSinkSpec };
+module.exports = { projections, versions, stampOlderProjection, editedSpec, residualView, RESIDUAL_FILTER, RESIDUAL_VIEW, startFrom, stage, withoutIds, appUniqueName, kitchenSinkSpec };
