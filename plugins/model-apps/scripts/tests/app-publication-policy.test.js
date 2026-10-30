@@ -309,14 +309,14 @@ test('noteAppPublication: an app publish the build made itself is judged by its 
   const port = createAppPublication({ appWrite, client });
   port.recordExact(APP, exactPush('notRead'), { name: 'Membership', mainFormsByTable: { contoso_item: [FORM_A] } });
   port.queue({ kind: 'app', id: APP, reason: 'pages' });
-  assert.deepEqual(await port.noteAppPublication(APP, { answer: { type: 'app', id: APP, shipped: true, publish: { kind: 'verified' } } }), { published: true });
+  assert.deepEqual(await port.noteAppPublication(APP, { answer: { type: 'app', id: APP, shipped: true, publish: { kind: 'verified' } } }), { accepted: true });
   assert.deepEqual(port.owed(), [], 'the build\'s publish paid the queued work');
   assert.deepEqual(port.unsettled(), []);
 
   for (const code of ['APP_MAIN_FORM_PUBLISH_WITHHELD', 'APP_MAIN_FORM_PUBLISH_CONFLICT']) {
     port.queue({ kind: 'app', id: APP, reason: 'pages' });
     state.members = [FORM_A, FORM_B];
-    assert.deepEqual(await port.noteAppPublication(APP, { answer: { publish: { kind: 'failed', error: { code } } } }), { published: false, code });
+    assert.deepEqual(await port.noteAppPublication(APP, { answer: { publish: { kind: 'failed', error: { code } } } }), { accepted: false, code });
     assert.deepEqual(port.unsettled(), [], `${code}: nothing was published`);
     assert.equal(port.owed().length, 1, 'still owed');
     state.members = [FORM_A];
@@ -333,7 +333,7 @@ test('noteAppPublication: an app publish the build made itself is judged by its 
     await port.noteAppPublication(APP, { answer: { publish: { kind: 'submitted' } } });
     assert.deepEqual(port.unsettled(), []);
     port.queue({ kind: 'app', id: APP, reason: 'pages' });
-    assert.deepEqual(await port.noteAppPublication(APP, outcome), { published: false, code });
+    assert.deepEqual(await port.noteAppPublication(APP, outcome), { accepted: false, code });
     assert.equal(port.unsettled().length, 1, code);
     assert.match(port.unsettled()[0].reason, reason);
     assert.ok(!port.unsettled()[0].reason.includes('raw text'), 'named by code');
@@ -344,9 +344,9 @@ test('noteAppPublication: an app publish the build made itself is judged by its 
 
   const plain = createAppPublication({ appWrite: writer() });
   plain.queue({ kind: 'app', id: OTHER });
-  assert.deepEqual(await plain.noteAppPublication(OTHER, { answer: undefined }), { published: false, code: 'PUBLICATION_UNCONFIRMED' });
+  assert.deepEqual(await plain.noteAppPublication(OTHER, { answer: undefined }), { accepted: false, code: 'PUBLICATION_UNCONFIRMED' });
   assert.equal(plain.owed().length, 1);
-  assert.deepEqual(await plain.noteAppPublication(`{${OTHER.toUpperCase()}}`, { answer: { publish: { kind: 'unverifiable' } } }), { published: true });
+  assert.deepEqual(await plain.noteAppPublication(`{${OTHER.toUpperCase()}}`, { answer: { publish: { kind: 'unverifiable' } } }), { accepted: true });
   assert.deepEqual(plain.owed(), []);
   assert.deepEqual(plain.unsettled(), []);
 });

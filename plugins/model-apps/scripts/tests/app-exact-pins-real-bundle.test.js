@@ -319,7 +319,7 @@ test('REAL BUNDLE: the publish phase\'s own app publish, its answer lost after t
   assert.ok(state.requests.slice(mark).some((line) => line.includes('/PublishXml')), 'the publish phase sent the publish');
   assert.equal(phase.appPublished, false);
   assert.equal(appAnswer.publish.kind, 'failed');
-  assert.deepEqual(await port.noteAppPublication(APP, { answer: appAnswer }), { published: false, code: 'CONNECTION_ERROR' });
+  assert.deepEqual(await port.noteAppPublication(APP, { answer: appAnswer }), { accepted: false, code: 'CONNECTION_ERROR' });
   assert.equal((await publishedMainFormsProof(sdk.dataverse, APP, MAIN)).published, 'differs');
   assert.equal(port.unsettled().length, 1);
   assert.match(port.unsettled()[0].reason, /failed \(CONNECTION_ERROR\)/);

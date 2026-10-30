@@ -98,7 +98,9 @@ function createAppPublication({ appWrite, client, scopes = {} } = {}) {
   }
 
   // What one app publish answered, whichever path made it (see the file header). outcome: { error } for a throw, else
-  // { answer } — the SDK's PublishResult, or undefined. Answers { published: true } or { published: false, code }.
+  // { answer } — the SDK's PublishResult, or undefined. Answers { accepted: true } or { accepted: false, code }: whether the
+  // answer confirms the publish, not what the server holds (`published: false` is also the app definition's draft flag, which
+  // tests/sdk-opt-ins.test.js allows in apps.js only).
   // Published pays what was owed for the app and proves an exact obligation again; anything else leaves both as they
   // are, except that a publish which may have reached the server un-proves the app.
   async function noteAppPublication(appId, outcome = {}) {
@@ -107,7 +109,7 @@ function createAppPublication({ appWrite, client, scopes = {} } = {}) {
     const kind = publish && publish.kind;
     if (PUBLISHED.has(kind)) {
       await notePublished(appId);
-      return { published: true };
+      return { accepted: true };
     }
     let code;
     let why;
@@ -116,7 +118,7 @@ function createAppPublication({ appWrite, client, scopes = {} } = {}) {
       why = `its publish was not answered (${code})`;
     } else if (kind === 'failed') {
       code = (publish.error && publish.error.code) || 'APP_PUBLISH_FAILED';
-      if (WITHHELD.has(code)) return { published: false, code };
+      if (WITHHELD.has(code)) return { accepted: false, code };
       why = `its publish failed (${code}) and may have reached the server`;
     } else {
       code = 'PUBLICATION_UNCONFIRMED';
@@ -127,7 +129,7 @@ function createAppPublication({ appWrite, client, scopes = {} } = {}) {
       entry.done = false;
       entry.reason = `app '${entry.name}': ${why}, so its published Main forms are unproven; re-run`;
     }
-    return { published: false, code };
+    return { accepted: false, code };
   }
 
   // One app publish through the build's app writer, noted. A throw is noted, then propagates.
@@ -223,7 +225,7 @@ function createAppPublication({ appWrite, client, scopes = {} } = {}) {
           let code;
           try {
             const { noted } = await attemptApp(entry.id);
-            if (!noted.published) code = noted.code;
+            if (!noted.accepted) code = noted.code;
           } catch (error) {
             code = (error && error.code) || 'APP_PUBLISH_FAILED';
           }
