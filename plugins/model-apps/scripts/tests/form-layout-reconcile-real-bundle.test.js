@@ -369,3 +369,15 @@ test('a bound form is the only form its layout key edits: another form id is ref
   const same = await reconcile(h, spec, { managed }, { formId: String(h.formId).toUpperCase() });
   assert.deepEqual([same.plan.action, same.result.refused], ['noChange', []]);
 });
+test('a new declared form built as an empty shell gets every declared field from the pack, with cell and control ids reserved through the creation port', async () => {
+  const h = await deployed([section('sec_main', 2, [])]);
+  const creates = fakeCreates();
+  const spec = formSpec(['new_name', 'new_code', 'new_area']);
+  const made = await reconcile(h, spec, { creates }, { created: true });
+  assert.deepEqual([made.result.refused, made.result.unknown, made.result.saved.length], [[], [], 1]);
+  assert.deepEqual((await layoutOf(h, 'sec_main')).rows, [['new_name', 'new_code'], ['new_area']]);
+  assert.equal(made.result.managedBindings[0].origin, 'created');
+  assert.deepEqual(creates.calls.map((c) => c.op.childKeys), [['cell:new_name', 'control:new_name', 'cell:new_code', 'control:new_code', 'cell:new_area', 'control:new_area']]);
+  const again = await reconcile(h, spec, { managed: (() => { const m = fakeManaged(); m.persist(made.result.managedBindings); return m; })() });
+  assert.deepEqual([again.plan.action, again.writes.length], ['noChange', 0]);
+});
