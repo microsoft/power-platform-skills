@@ -203,6 +203,9 @@ function createAppPublication({ appWrite, client, scopes = {} } = {}) {
         throw policyError('APP_PUBLISH_BYPASS_REFUSED', `app '${appId}' holds an exact Main-form obligation, so it is published only through the build's SDK writer`);
       }
     },
+    // Whether the app holds an exact Main-form obligation (recordExact ran for it): a writer that publishes the app with
+    // its own SDK hands that publish to publishApp instead, so the SDK's guard decides it before any PublishXml is sent.
+    holdsExact: (appId) => exact.has(guidKey(appId)),
     publishApp,
     // For an app publish the build made outside publishApp (its publish phase's own target list): every attempt is
     // reported here, a throw as { error } and an answer — whatever it was, or undefined — as { answer }, so a publish

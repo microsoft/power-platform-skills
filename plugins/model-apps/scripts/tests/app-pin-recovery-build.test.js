@@ -165,10 +165,11 @@ test('build: an "exact" publish withheld every time is tried once more, then sto
 
 // The pages phase pins the default view of each table a page it wrote reads (sdk-build.js, appWriters.placeViews). When it pins one it pushes and
 // publishes the app through the page backend's own SDK — the real backend here, over the same fake Dataverse — and that publish ships whatever
-// Main forms the app holds by then. `drift` puts the other Main form back into the app just before the placement, as another maker could.
+// Main forms the app holds by then. `drift` puts the other Main form back into the app just before the placement, as another maker could; `held` puts it back
+// just before the app step's publish, so the build's SDK withholds that publish and still withholds the app's publication when the placement comes.
 const PAGE_ID = '99999999-0000-4000-8000-000000000022';
 const PAGE_VIEW = '66666666-0000-4000-8000-000000000022';
-async function placementBuild(t, { exact = false, drift = false } = {}) {
+async function placementBuild(t, { exact = false, drift = false, held = false } = {}) {
   const appDir = makeTempDir('placement-app-');
   fs.writeFileSync(path.join(appDir, 'overview.tsx'), 'export default function Overview(){return null;}');
   const server = appPinServer(t);
@@ -190,6 +191,16 @@ async function placementBuild(t, { exact = false, drift = false } = {}) {
   server.sdk.createWebResource = async () => ({ id: '88888888-0000-4000-8000-000000000022' });
   server.sdk.updateWebResource = async () => ({});
   server.sdk.dataverse.get = withPageType(server.sdk.dataverse.get.bind(server.sdk.dataverse));
+  const ownerPublishes = [];
+  if (held) {
+    const publishArtifact = server.sdk.publishArtifact.bind(server.sdk);
+    server.sdk.publishArtifact = async (type, id, options) => {
+      if (type === 'app' && !ownerPublishes.length) server.state.members.add(`60:${FORM_B}`);
+      const answer = await publishArtifact(type, id, options);
+      if (type === 'app') ownerPublishes.push(answer.publish.kind === 'failed' ? answer.publish.error.code : answer.publish.kind);
+      return answer;
+    };
+  }
   const spec = membershipSpec({ hidden: false });
   spec.schemaVersion = 2;
   if (exact) spec.app.mainFormsOnUpdate = 'exact';
@@ -220,7 +231,7 @@ async function placementBuild(t, { exact = false, drift = false } = {}) {
     error = thrown;
   }
   const afterPlacement = placedAt === undefined ? [] : server.state.requests.slice(placedAt);
-  return { result, error, placed, afterPlacement };
+  return { result, error, placed, afterPlacement, ownerPublishes };
 }
 const appPublishOf = (lines) => lines.filter((line) => line.startsWith('POST ') && line.includes('/PublishXml') && line.includes('<appmodule>'));
 const publishedLayerReads = (lines) => lines.filter((line) => line.startsWith('GET ') && line.includes('$select=appmoduleidunique'));
@@ -247,4 +258,14 @@ test('build: the default-view placement of an app with no exact list reads nothi
   assert.equal(result.incomplete, undefined);
   assert.equal(appPublishOf(afterPlacement).length, 1);
   assert.deepEqual(publishedLayerReads(afterPlacement), []);
+});
+
+test('build: an "exact" app whose publication the build SDK still withholds is not published by the default-view placement either', async (t) => {
+  const { result, error, afterPlacement, ownerPublishes } = await placementBuild(t, { exact: true, held: true });
+  assert.equal(ownerPublishes[0], 'APP_MAIN_FORM_PUBLISH_WITHHELD', 'the app step\'s publish was withheld');
+  assert.ok(afterPlacement.length > 0, 'the placement ran');
+  assert.deepEqual(appPublishOf(afterPlacement), [], 'no PublishXml of the app after the withheld one');
+  assert.ok(ownerPublishes.length >= 2 && ownerPublishes.every((kind) => kind === 'APP_MAIN_FORM_PUBLISH_WITHHELD'), 'the placement asked the build SDK, which withheld it again');
+  assert.equal(result, undefined);
+  assert.ok(error && ['APP_MAIN_FORM_PUBLISH_WITHHELD', 'APP_MAIN_FORMS_NOT_EXACT'].includes(error.code), error && error.stack);
 });

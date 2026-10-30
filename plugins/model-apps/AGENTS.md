@@ -1373,6 +1373,9 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   settled only by a read of the published layer after an accepted publish
   (`lib/app-publication-policy.js`, created once per build in `runSdkBuild` as `appPublication`; all
   four app publishes go through `appPublication.publishApp`, phase 8 reports its own app publish with
+  `noteAppPublication`, the pages' default-view placement (`appWriters.placeViews`) hands the publish of
+  an app that holds an exact obligation to `publishApp` (`placeInApp`'s `publishApp` option, so nothing
+  is sent while the build's SDK withholds it) and reports any other app's publish with
   `noteAppPublication`, and `flush()` / `unsettled()` at the end of the build turn whatever is still
   owed or unproven into one `RETRY.NEVER` `BuildHalt` with `error.incomplete`). If phase 8 fails while
   publishing a table before it attempts the app, the build conservatively marks exact Main-form

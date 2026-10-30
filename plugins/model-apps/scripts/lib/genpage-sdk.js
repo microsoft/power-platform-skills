@@ -894,9 +894,10 @@ function makeGenpageSdk(env, deps = {}) {
   //   'unverifiable'  the publish was submitted but the published projection does not show the page yet (PublishXml is asynchronous)
   //   'failed'        the publish was refused
   // The answer carries the failure itself as a non-enumerable `cause` (withCause, retry-policy.js) when there was one — the SDK's reported `publish.error`, or what the call threw.
-  async function publish(sdk, type, id, options) {
+  // `through`, when given, makes the publish instead of this SDK and answers as `publishArtifact` does (placeInApp's `publishApp`).
+  async function publish(sdk, type, id, options, through) {
     try {
-      const outcome = await sdk.publishArtifact(type, id, options);
+      const outcome = await (through ? through() : sdk.publishArtifact(type, id, options));
       const state = (outcome && outcome.publish) || {};
       return withCause({ kind: state.kind || 'unknown', detail: state.reason || (state.error && messageOf(state.error)) || '' }, state.error);
     } catch (error) {
@@ -1339,7 +1340,9 @@ function makeGenpageSdk(env, deps = {}) {
     // charts; but on the transport of an SDK this backend made, the push's AddAppComponents is cut down to the views this edit pins (`appScope`, `pushApp`), so it adds no Main form and
     // `entityTables` is empty. Only through a lent SDK, whose transport is its owner's, does the push add them all: then `entityTables` is the tables of those Entity entries (`entityTablesOfSiteMap`).
     // Returns { added: [pageId…], alreadyPlaced: [pageId…], pinnedViews: [viewId…], warnings: [...], appEdited, provedPublished? } — `pinnedViews` the views it asked for that the app is read back holding; once it has
-    // published the app, the answer and any failure it throws carry what that publish answered as a non-enumerable `appPublish` ({ kind, detail }, see `publish`). It throws, with
+    // published the app, the answer and any failure it throws carry what that publish answered as a non-enumerable `appPublish` ({ kind, detail }, see `publish`).
+    // `publishApp` is an async function a caller that owns the app's publication hands over to make the app's publish in place of this backend's SDK; it answers as `publishArtifact` does
+    // ({ publish: { kind, error } }), and a refusal it answers (an SDK withholding the publish) sends nothing and fails the placement as any refused publish does. It throws, with
     // the page unplaced, when the app cannot be read, the edit is refused, `beforeAppWrite` throws, or the app's publish fails — and with `finish`, when the published
     // navigation does not show the page after the app was published.
     async placeInApp(appId, options = {}) {
@@ -1427,7 +1430,7 @@ function makeGenpageSdk(env, deps = {}) {
             : `${views} could not be confirmed in app ${appId}: its components could not be read back — treat ${absent.length === 1 ? 'it' : 'them'} as added only once seen to be`);
         }
       }
-      const published = await publish(sdk, 'app', appId, undefined);
+      const published = await publish(sdk, 'app', appId, undefined, typeof options.publishApp === 'function' ? options.publishApp : undefined);
       // What the app's publish answered ({ kind, detail }, its failure as `cause`) rides every answer and failure from here on as `appPublish`, not enumerable so that
       // no printed or compared result changes: a caller that keeps its own account of the app's publication (the build's, lib/app-publication-policy.js) judges this one too.
       const carry = (target) => Object.defineProperty(target, 'appPublish', { value: published, enumerable: false, configurable: true, writable: true });
