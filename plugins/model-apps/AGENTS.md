@@ -1364,7 +1364,9 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   and never removes old ones — unless `app.mainFormsOnUpdate` is `"exact"` (2.21.0): then every app
   push of the build asks the SDK to take the table's other Main forms out of the app (no form is
   deleted). On an app that already exists that is a removal: `lib/op-diff.js` lists one
-  `app-main-forms-removal` op per listed table, the CLI refuses it without `--allow-destructive`
+  `app-main-forms-removal` op per listed table (the dry run lists the same ops as plan items with
+  `op`/`destructive`/`description`/`publication`, so the removal shows before `--apply`; on an app the live plan
+  finds new it is listed as removing nothing), the CLI refuses it without `--allow-destructive`
   (it is not written to the approval record — the flag authorizes it for the run), and
   `appWriters.push` refuses it too (`APP_MAIN_FORMS_EXACT_UNAUTHORIZED`) for a caller that skipped the
   preflight. An exact app is published only through the SDK's guarded publish, and the obligation is

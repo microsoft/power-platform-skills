@@ -1711,6 +1711,21 @@ test('destructive gate: "exact" Main forms on an existing app halts without --al
   assert.strictEqual(engineOpts && engineOpts.allowDestructive, true, 'the engine is told the removal is authorized');
 });
 
+test('dry run summary: an exact Main-form removal is counted as one, never as a step that was not probed', async () => {
+  const removal = { phase: 'app-shell', label: "app Main forms of new_ticket (exact): removes other Main forms of new_ticket from the app's membership; no form is deleted — needs --allow-destructive",
+    op: 'app-main-forms-removal', destructive: true, description: "removes other Main forms of new_ticket from the app's membership; no form is deleted", publication: { kind: 'app', app: 'new_supportdesk' } };
+  const summaryOf = async (livePlan, planItems) => {
+    const logs = [];
+    await buildModelApp(desk, { apply: false, env: 'https://x', profile: 'structural' }, { log: (m) => logs.push(m), runBuild: async () => ({ ok: true, dryRun: true, livePlan, plan: [], planItems }) });
+    return logs.find((l) => /dry run —/.test(l));
+  };
+  const app = { phase: 'app-shell', label: 'app module "Support Desk" + sitemap', state: 'reuse' };
+  assert.match(await summaryOf(true, [app, removal]), /0 to create, 1 already present, 1 would take Main forms out of the app \(--allow-destructive\) \(2 steps\)/);
+  assert.match(await summaryOf(false, [{ ...app, state: undefined }, removal]), /2 steps, spec-only \(no live probe; --no-live-plan\), 1 would take Main forms out of the app \(--allow-destructive\)\./);
+  // A new app loses nothing: listed, but not counted as a removal.
+  assert.match(await summaryOf(true, [{ ...app, state: 'create' }, { ...removal, destructive: false }]), /1 to create, 0 already present \(2 steps\)/);
+});
+
 test('safety gate is FAIL-CLOSED: a discovery error halts the build (no unauthorized write)', async () => {
   // The core fail-closed invariant (design §11): if preflight discovery throws (transient 429/timeout/
   // auth), we cannot verify the apply is non-destructive, so the build must REFUSE to write rather than

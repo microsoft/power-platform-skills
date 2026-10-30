@@ -4,7 +4,7 @@ const { test } = require('node:test');
 const assert = require('node:assert');
 const path = require('node:path');
 const fs = require('node:fs');
-const { classifyOps, sitemapTargets, formRemovals } = require(path.join(__dirname, '..', 'lib', 'op-diff.js'));
+const { classifyOps, sitemapTargets, formRemovals, exactMainFormsRemovals } = require(path.join(__dirname, '..', 'lib', 'op-diff.js'));
 
 const desk = JSON.parse(fs.readFileSync(path.join(__dirname, '..', '..', 'samples', 'app-spec.support-desk.json'), 'utf8'));
 
@@ -125,6 +125,14 @@ test('classifyOps: "exact" Main forms on an EXISTING app is one membership remov
     assert.deepStrictEqual(classifyOps({ app: other }, existing).destructive.map((o) => o.kind), ['app-collision']);
   }
   assert.deepStrictEqual(classifyOps({ app }, { collision: { appExists: false, solutionExists: true } }), { destructive: [], hasDestructive: false });
+});
+
+test('exactMainFormsRemovals: the dry run gets the same ops whether or not the app exists, and none without exact', () => {
+  const app = { name: 'Support Desk', mainForms: { New_Ticket: ['Ticket'] }, mainFormsOnUpdate: 'exact' };
+  assert.deepStrictEqual(exactMainFormsRemovals({ app }), classifyOps({ app }, { collision: { appExists: true } }).destructive.filter((o) => o.kind === 'app-main-forms-removal'));
+  assert.deepStrictEqual(exactMainFormsRemovals({ app: { ...app, mainFormsOnUpdate: 'addOnly' } }), []);
+  assert.deepStrictEqual(exactMainFormsRemovals({ app: { name: 'x', mainFormsOnUpdate: 'exact' } }), []);
+  assert.deepStrictEqual(exactMainFormsRemovals({}), []);
 });
 
 test('classifyOps: teardown mode maps every planTeardown step to a destructive op', () => {

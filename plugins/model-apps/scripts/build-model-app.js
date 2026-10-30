@@ -791,19 +791,23 @@ async function buildModelAppHeld(spec, opts, deps, v, buildLease) {
   // label that names no option) is a verdict too, so it is not counted as unreadable.
   if (r && r.dryRun && Array.isArray(r.planItems)) {
     const n = (s) => r.planItems.filter((p) => p.state === s).length;
-    const unprobed = r.planItems.filter((p) => !p.state).length;
+    const unprobed = r.planItems.filter((p) => !p.state && !p.op).length;
     const wouldHalt = r.planItems.filter((p) => p.state === 'unknown' && p.wouldHalt).length;
+    // An exact Main-form list's removal (`op`, sdk-build.js) is not an artifact the live plan probes: it is counted on its own, never as "not probed".
+    const removals = r.planItems.filter((p) => p.op && p.destructive).length;
+    const removing = removals ? `${removals} would take Main forms out of the app (--allow-destructive)` : '';
     const unreadable = n('unknown') - wouldHalt;
     const parts = [`${n('create')} to create`, `${n('reuse')} already present`];
     if (unreadable) parts.push(`${unreadable} could not be read`);
     if (wouldHalt) parts.push(`${wouldHalt} would stop the build`);
     if (unprobed) parts.push(`${unprobed} not probed`);
+    if (removing) parts.push(removing);
     // A dry run that says a step would stop the build must not then tell the maker to run it. The spec-only summary counts those steps too: with no live
     // probe the navigation check can still refuse a spec on its own, and it marks the app step the same way.
     const closing = wouldHalt ? 'Fix the steps marked ? above, then re-run with --apply to execute.' : 'Re-run with --apply to execute.';
     log(r.livePlan
       ? `\n▢ dry run — ${parts.join(', ')} (${r.planItems.length} steps). ${closing}`
-      : `\n▢ dry run — ${r.planItems.length} steps, spec-only (no live probe; --no-live-plan)${wouldHalt ? `, ${wouldHalt} would stop the build` : ''}. ${closing}`);
+      : `\n▢ dry run — ${r.planItems.length} steps, spec-only (no live probe; --no-live-plan)${wouldHalt ? `, ${wouldHalt} would stop the build` : ''}${removing ? `, ${removing}` : ''}. ${closing}`);
   }
   if (opts.apply && r && r.ok && !r.dryRun) {
     log(`\n✓ build complete — ${counts.ok} created, ${counts.skip} skipped, ${counts.error} failed (${counts.ok + counts.skip + counts.error} steps)`);

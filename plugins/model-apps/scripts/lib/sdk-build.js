@@ -3259,13 +3259,33 @@ async function runSdkBuildPhases(spec, opts, owed) {
         if (typeof opts.warn === 'function') opts.warn(`could not check the bindings of the pages against this environment (${(err && err.message) || err})`);
       }
     }
+    // "exact" takes the other Main forms of each listed table out of an app that exists (op-diff.js 'app-main-forms-removal'), which an apply
+    // refuses without --allow-destructive; the dry run lists it per table first, with the app publication that makes it live. Whether the app
+    // exists is what the live plan read for the app step: an app it found absent is new and loses nothing; one it found, or did not probe, is listed as a removal.
+    if (has('app-shell')) {
+      const appItem = plan.find((p) => p.key && p.key.kind === 'app');
+      const appIsNew = !!appItem && appItem.state === 'create';
+      for (const op of require('./op-diff.js').exactMainFormsRemovals(spec)) {
+        plan.push({
+          phase: 'app-shell',
+          label: appIsNew
+            ? `${op.label} (exact): the app is new, so no Main form is taken out`
+            : `${op.label} (exact): ${op.detail}${appItem && appItem.state === 'reuse' ? '' : ', if the app exists'} — needs --allow-destructive`,
+          op: op.kind,
+          destructive: !appIsNew,
+          description: op.detail,
+          publication: { kind: 'app', app: appUniqueName(spec) },
+        });
+      }
+    }
     plan.forEach((p, i) => emit({ phase: p.phase, status: p.state === 'reuse' ? 'skip' : 'skip', label: p.label, state: p.state, stateWhy: p.stateWhy, n: i + 1, total: plan.length }));
     return {
       ok: true,
       dryRun: true,
       livePlan: canProbe,
       plan: plan.map((p) => (p.state ? `${p.label} [${p.state}]` : p.label)),
-      planItems: plan.map((p) => ({ phase: p.phase, label: p.label, ...(p.state ? { state: p.state } : {}), ...(p.stateWhy ? { stateWhy: p.stateWhy } : {}), ...(p.wouldHalt ? { wouldHalt: true } : {}) })),
+      planItems: plan.map((p) => ({ phase: p.phase, label: p.label, ...(p.state ? { state: p.state } : {}), ...(p.stateWhy ? { stateWhy: p.stateWhy } : {}), ...(p.wouldHalt ? { wouldHalt: true } : {}),
+        ...(p.op ? { op: p.op, destructive: p.destructive, description: p.description, publication: p.publication } : {}) })),
     };
   }
 

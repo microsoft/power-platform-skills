@@ -188,7 +188,7 @@ sample data (incl. multi-parent junction links + status reasons), and publish.
   **Pin the artifacts the spec declares.** `"pinDeclaredArtifacts": true` adds the spec's own forms, views, charts and
   dashboards to the app explicitly — use it for a chart or view of a table that is not in the navigation. It only adds.
   `"exact"` needs `app.mainForms` with at least one table and form (an empty list would mean "every
-  form"). On an app that already exists it is listed as a destructive operation, one per table, and
+  form"). On an app that already exists it is listed as a destructive operation, one per table (the dry run lists it too), and
   refused without `--allow-destructive`; on a new app it removes nothing. `--verify` reads an exact
   list strictly and fails a form outside it. `pinDeclaredArtifacts` pins the spec's declared forms
   (except a Main form the `app.mainForms` list leaves out), views, charts and dashboards; it never removes. Neither

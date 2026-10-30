@@ -105,20 +105,25 @@ function classifyOps(spec, discovered = {}, opts = {}) {
 
   // A NEW app holds nothing to take out, so "exact" removes nothing there; on an existing app it is a removal from
   // its membership, gated like the other removals.
-  const app = spec && spec.app;
-  if (col && col.appExists && app && app.mainFormsOnUpdate === 'exact' && app.mainForms && typeof app.mainForms === 'object') {
-    for (const table of Object.keys(app.mainForms)) {
-      const logical = table.toLowerCase();
-      destructive.push({
-        kind: 'app-main-forms-removal',
-        key: `app.mainForms.${logical}`,
-        label: `app Main forms of ${logical}`,
-        detail: `removes other Main forms of ${logical} from the app's membership; no form is deleted`,
-      });
-    }
-  }
+  if (col && col.appExists) destructive.push(...exactMainFormsRemovals(spec));
 
   return { destructive, hasDestructive: destructive.length > 0 };
 }
 
-module.exports = { classifyOps, sitemapTargets, formRemovals };
+// The 'app-main-forms-removal' ops of app.mainFormsOnUpdate "exact", one per table listed in app.mainForms, whether or
+// not the app exists: the caller knows that (classifyOps from its collision probe, the build's dry run from its live plan).
+function exactMainFormsRemovals(spec) {
+  const app = spec && spec.app;
+  if (!app || app.mainFormsOnUpdate !== 'exact' || !app.mainForms || typeof app.mainForms !== 'object') return [];
+  return Object.keys(app.mainForms).map((table) => {
+    const logical = table.toLowerCase();
+    return {
+      kind: 'app-main-forms-removal',
+      key: `app.mainForms.${logical}`,
+      label: `app Main forms of ${logical}`,
+      detail: `removes other Main forms of ${logical} from the app's membership; no form is deleted`,
+    };
+  });
+}
+
+module.exports = { classifyOps, sitemapTargets, formRemovals, exactMainFormsRemovals };
