@@ -8,7 +8,8 @@
 //   - updateColumn sends `IsSecured` only when asked; `isSecured: false` first reads which profiles hold a permission on the column
 //     and refuses (ArtifactInUseError) when any other than System Administrator does — unsecuring deletes them all.
 //   - a field security profile is an artifact: findArtifact('fieldSecurityProfile', { name }) (the name is NOT unique, so an
-//     ambiguous one is refused), getArtifact to read it with its permissions, createArtifact + pushArtifact to create it.
+//     ambiguous one is refused), createArtifact + pushArtifact to create it. What a found or created profile holds is read from the
+//     server (readProfile), never from the workspace copy getArtifact answers.
 //   - who holds a profile is not part of it: associateRecords over systemuserprofiles_association / teamprofiles_association.
 // See: https://learn.microsoft.com/power-platform/admin/field-level-security
 //
@@ -142,8 +143,80 @@ function profileDifferences(desired, actual) {
 
 const isSystemAdministrator = (p) => lower(p && p.name) === lower(SYSTEM_ADMIN_PROFILE_NAME) || lower(p && p.id) === SYSTEM_ADMIN_PROFILE_ID;
 
+// The platform's values for a permission (fieldpermission): canread / cancreate / canupdate are 0 (not allowed) or 4 (allowed), and
+// canreadunmasked is 0 (none), 1 (one record) or 3 (all records). Anything else — an absent or null value included — is not a value
+// this module can compare, so the read is incomplete rather than coerced (the SDK's own read refuses it the same way).
+// See: https://learn.microsoft.com/power-apps/developer/data-platform/reference/entities/fieldpermission
+const ACCESS_BY_VALUE = new Map([[0, false], [4, true]]);
+const UNMASKED_BY_VALUE = new Map([[0, 'none'], [1, 'oneRecord'], [3, 'allRecords']]);
+const PERMISSION_SELECT = 'fieldpermissionid,entityname,attributelogicalname,canread,cancreate,canupdate,canreadunmasked';
+const isGuid = (v) => typeof v === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(v);
+
+// The profile as the ENVIRONMENT holds it, read from the server and never from the SDK's local workspace: getArtifact answers the
+// workspace's copy, which a fresh workspace does not have (it throws) and which, after a local create, is what this build sent —
+// not what the platform holds. Two reads, the same two the SDK's own fetch makes:
+//   GET /fieldsecurityprofiles(<id>)?$select=name,description
+//     { "name": "HR Salary", "description": null }
+//   GET /fieldpermissions?$select=fieldpermissionid,entityname,...,canreadunmasked&$filter=_fieldsecurityprofileid_value eq <id>&$orderby=fieldpermissionid
+//     { "value": [ { "fieldpermissionid": "…", "entityname": "new_employee", "attributelogicalname": "new_salary",
+//                    "canread": 4, "cancreate": 0, "canupdate": 4, "canreadunmasked": 0 } ],
+//       "@odata.nextLink": "https://<org>/api/data/v9.2/fieldpermissions?$skiptoken=…" }   (only when there are more pages)
+// The permissions are a direct collection, not an expansion of the profile: an expanded collection can be cut short with a link
+// the platform does not let a client follow. A later page is followed only through the client's same-origin absolute read
+// (getAbsolute); a repeated or unusable link, a failed page, a malformed row or a column named twice leaves the read incomplete,
+// and an incomplete read is reported, never compared.
+async function readProfile(reader, profileId) {
+  const raw = reader && reader.dataverse;
+  if (!raw || typeof raw.get !== 'function') return { complete: false, reason: 'no reader is available' };
+  if (!isGuid(profileId)) return { complete: false, reason: 'the profile id is not a GUID' };
+  const id = lower(profileId);
+  const answer = async (fn) => {
+    try {
+      const res = await fn();
+      if (!res || !(res.status >= 200 && res.status < 300) || !res.body || typeof res.body !== 'object') return { ok: false, reason: `HTTP ${res && res.status}` };
+      return { ok: true, body: res.body };
+    } catch (e) {
+      return { ok: false, reason: `the read failed${e && e.statusCode ? ` (HTTP ${e.statusCode})` : ''}` };
+    }
+  };
+  const head = await answer(() => raw.get(`/fieldsecurityprofiles(${id})?$select=name,description`));
+  if (!head.ok) return { complete: false, reason: `the profile could not be read (${head.reason})` };
+  const permissions = [];
+  const seen = new Set();
+  const links = new Set();
+  let page = await answer(() => raw.get(`/fieldpermissions?$select=${PERMISSION_SELECT}&$filter=_fieldsecurityprofileid_value eq ${id}&$orderby=fieldpermissionid`));
+  for (;;) {
+    if (!page.ok) return { complete: false, reason: `its permissions could not be read (${page.reason})` };
+    if (!Array.isArray(page.body.value)) return { complete: false, reason: 'its permissions are not a list' };
+    for (const row of page.body.value) {
+      const read = row && ACCESS_BY_VALUE.get(row.canread);
+      const create = row && ACCESS_BY_VALUE.get(row.cancreate);
+      const update = row && ACCESS_BY_VALUE.get(row.canupdate);
+      const unmasked = row && UNMASKED_BY_VALUE.get(row.canreadunmasked);
+      if (!row || typeof row.entityname !== 'string' || typeof row.attributelogicalname !== 'string'
+        || read === undefined || create === undefined || update === undefined || unmasked === undefined) {
+        return { complete: false, reason: 'a permission has a value this build cannot read' };
+      }
+      const name = `${lower(row.entityname)}.${lower(row.attributelogicalname)}`;
+      if (seen.has(name)) return { complete: false, reason: `two permissions name ${name}` };
+      seen.add(name);
+      permissions.push({ table: lower(row.entityname), column: lower(row.attributelogicalname), read, create, update, ...(unmasked !== 'none' ? { readUnmasked: unmasked } : {}) });
+    }
+    const next = page.body['@odata.nextLink'];
+    if (next === undefined) break;
+    if (typeof next !== 'string' || !next || links.has(next) || typeof raw.getAbsolute !== 'function') return { complete: false, reason: 'its permissions continue on a page this build cannot follow' };
+    links.add(next);
+    page = await answer(() => raw.getAbsolute(next));
+  }
+  return {
+    complete: true,
+    profile: { id, name: typeof head.body.name === 'string' ? head.body.name : '', description: typeof head.body.description === 'string' ? head.body.description : null, permissions },
+  };
+}
+
 // For each declared profile: find it by name, and either plan its create, find it already as declared (unchanged — the binding is
-// offered as `adopted`: an exact match may be managed, never owned), or refuse it. One lookup per profile, and one read of a found one.
+// offered as `adopted`: an exact match may be managed, never owned), or refuse it. One lookup per profile, and one server read of a
+// found one (readProfile); a found profile that cannot be read whole is reported unknown, never compared and never adopted.
 async function planFieldSecurity(spec, ctx) {
   const operations = [];
   const unknown = [];
@@ -174,8 +247,12 @@ async function planFieldSecurity(spec, ctx) {
       refused.push({ key, kind: KIND, target: p.key, code: 'FIELD_SECURITY_PROFILE_SYSTEM', reason: 'the name finds the System Administrator profile' });
       continue;
     }
-    const actual = await ctx.sdk.getArtifact(KIND, id);
-    const differences = profileDifferences(desired, actual);
+    const read = await readProfile(ctx.provision || ctx.sdk, id);
+    if (!read.complete) {
+      unknown.push({ key, kind: KIND, target: p.key, code: 'FIELD_SECURITY_PROFILE_UNREAD', reason: `a profile with this name exists but ${read.reason}` });
+      continue;
+    }
+    const differences = profileDifferences(desired, read.profile);
     if (differences.length) {
       refused.push({ key, kind: KIND, target: p.key, code: 'FIELD_SECURITY_PROFILE_DIFFERS', reason: `a profile with this name exists and ${differences.join('; ')} — the build does not change a profile it did not create as declared; change it in Power Apps or rename the spec's profile` });
       continue;
@@ -188,6 +265,11 @@ async function planFieldSecurity(spec, ctx) {
 // Create each planned profile through the create port (ctx.creates.run): the port reserves the profile's id and one id per
 // permission (`childKeys`, `<table>.<column>`) before anything is sent, and refuses a create whose earlier attempt is still unknown.
 // The port's answer is `{ outcome: 'created' | 'unknown', id, childIds }`; anything but `created` is reported unknown, never saved.
+// `created` says the profile exists, not that it holds what was declared: the SDK's push resolves `saved` with a warning when the
+// create's answer did not echo every permission exactly, and a create the port resolved from an earlier attempt ran no push here at
+// all. Only a push of this run with no warning is taken as proof; otherwise the profile is read back from the server (readProfile)
+// and compared — unreadable is unknown, different is refused. Either way it stays bound as `created` (the build made it and owns
+// it), but it is not reported saved, and the create is never sent again.
 // A permission on a column that is not secured is refused by the platform (0x8004f508) — the build secures declared columns in the
 // data-model phase first, so meeting it means the column is not declared `isSecured: true`.
 async function applyFieldSecurity(plan, ctx) {
@@ -202,6 +284,7 @@ async function applyFieldSecurity(plan, ctx) {
     const { desired } = op;
     const childKeys = desired.permissions.map((x) => `${x.table}.${x.column}`);
     let outcome;
+    let pushed;
     try {
       outcome = await ctx.creates.run({ kind: KIND, key: desired.key, identity: { name: desired.name }, childKeys }, async ({ id, childIds }) => {
         await ctx.sdk.createArtifact(KIND, {
@@ -210,14 +293,15 @@ async function applyFieldSecurity(plan, ctx) {
           description: desired.description === undefined ? null : desired.description,
           permissions: desired.permissions.map((x) => ({ ...x, ...(childIds && childIds[`${x.table}.${x.column}`] ? { id: childIds[`${x.table}.${x.column}`] } : {}) })),
         });
-        const pushed = await ctx.sdk.pushArtifact(KIND, id);
+        const answer = await ctx.sdk.pushArtifact(KIND, id);
         // Lazily: entity-provision requires this module, and pushFailed is the one rule for a push that failed by value.
-        if (require('./entity-provision.js').pushFailed(pushed)) {
+        if (require('./entity-provision.js').pushFailed(answer)) {
           const err = new Error(`the profile '${desired.name}' was not saved`);
           err.code = 'FIELD_SECURITY_PROFILE_NOT_SAVED';
           throw err;
         }
-        return pushed;
+        pushed = answer || {};
+        return answer;
       });
     } catch (e) {
       const code = (e && e.code) || '';
@@ -227,12 +311,26 @@ async function applyFieldSecurity(plan, ctx) {
       }
       throw e;
     }
-    if (outcome && outcome.outcome === 'created' && outcome.id) {
-      result.saved.push(op.key);
-      result.managedBindings.push({ kind: KIND, key: op.target, id: lower(outcome.id), origin: 'created' });
-    } else {
+    if (!(outcome && outcome.outcome === 'created' && outcome.id)) {
       result.unknown.push({ key: op.key, kind: KIND, target: op.target, code: 'FIELD_SECURITY_PROFILE_UNKNOWN', reason: 'the create did not confirm; a later run resolves it through its reserved id' });
+      continue;
     }
+    const id = lower(outcome.id);
+    result.managedBindings.push({ kind: KIND, key: op.target, id, origin: 'created' });
+    const echoed = pushed !== undefined && !(Array.isArray(pushed.warnings) && pushed.warnings.length);
+    if (!echoed) {
+      const read = await readProfile(ctx.provision || ctx.sdk, id);
+      if (!read.complete) {
+        result.unknown.push({ key: op.key, kind: KIND, target: op.target, code: 'FIELD_SECURITY_PROFILE_UNREAD', reason: `the profile was created but ${read.reason}, so what it holds is not proven` });
+        continue;
+      }
+      const differences = profileDifferences(desired, read.profile);
+      if (differences.length) {
+        result.refused.push({ key: op.key, kind: KIND, target: op.target, code: 'FIELD_SECURITY_PROFILE_DIFFERS', reason: `the profile was created but ${differences.join('; ')} — change it in Power Apps to match the spec` });
+        continue;
+      }
+    }
+    result.saved.push(op.key);
   }
   return result;
 }
@@ -312,9 +410,12 @@ async function verifyFieldSecurity(spec, ctx) {
     try {
       id = await ctx.sdk.findArtifact(KIND, { name: p.name });
       if (!id) { status = 'fail'; detail = 'not found'; } else {
-        const differences = profileDifferences(desiredProfile(p), await ctx.sdk.getArtifact(KIND, id));
-        status = differences.length ? 'fail' : 'pass';
-        detail = differences.length ? differences.join('; ') : 'as declared';
+        const read = await readProfile(ctx.provision || ctx.sdk, id);
+        if (!read.complete) { detail = read.reason; } else {
+          const differences = profileDifferences(desiredProfile(p), read.profile);
+          status = differences.length ? 'fail' : 'pass';
+          detail = differences.length ? differences.join('; ') : 'as declared';
+        }
       }
     } catch (_) { id = null; }
     checks.push({ key, kind: KIND, target: p.key, status, detail });
@@ -336,6 +437,7 @@ module.exports = {
   applyColumnSecurity,
   desiredProfile,
   profileDifferences,
+  readProfile,
   planFieldSecurity,
   applyFieldSecurity,
   assignFieldSecurity,
