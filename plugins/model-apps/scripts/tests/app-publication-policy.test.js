@@ -154,14 +154,19 @@ test('a queued non-app publication is bridged to its scope: deferred to the buil
   const deferred = [];
   const published = [];
   const scopes = {
-    table: { owe: (target) => { deferred.push(target.id); return target.id === 'contoso_item'; }, publish: async (target) => { published.push(target.id); } },
+    table: {
+      owe: (target) => { deferred.push(target.id); return target.id === 'contoso_item'; },
+      publish: async (target) => { published.push(target.id); return { type: 'table', id: target.id, shipped: true, publish: { kind: 'submitted' } }; },
+    },
   };
   const port = createAppPublication({ appWrite: writer(), scopes });
   port.queue({ kind: 'table', id: 'contoso_item', artifact: { type: 'view', id: VIEW_ID }, reason: 'quickFind' });
   port.queue({ kind: 'table', id: 'contoso_other', artifact: { type: 'view', id: VIEW_ID }, reason: 'quickFind' });
   port.queue({ kind: 'webResource', id: VIEW_ID, reason: 'logo' });
   assert.deepEqual(deferred, ['contoso_item', 'contoso_other']);
-  assert.deepEqual(port.owed().map((entry) => `${entry.kind}:${entry.id}`), ['table:contoso_other', `webResource:${VIEW_ID}`], 'the deferred table is the build\'s to pay');
+  assert.deepEqual(port.deferred('table'), ['contoso_item'], 'the build\'s own table publication will publish it');
+  assert.deepEqual(port.owed().map((entry) => `${entry.kind}:${entry.id}${entry.deferred ? ':deferred' : ''}`), ['table:contoso_item:deferred', 'table:contoso_other', `webResource:${VIEW_ID}`], 'a deferral is still owed');
+  port.noteScopePublished('table', 'CONTOSO_ITEM');
   const out = await port.flush();
   assert.deepEqual(published, ['contoso_other']);
   assert.deepEqual(out.failed, []);
@@ -170,8 +175,102 @@ test('a queued non-app publication is bridged to its scope: deferred to the buil
 
   const broken = createAppPublication({ appWrite: writer(), scopes: { table: { owe: () => false, publish: async () => { throw Object.assign(new Error('x'), { code: 'PUBLISH_FAILED' }); } } } });
   broken.queue({ kind: 'table', id: 'contoso_item', artifact: { type: 'view', id: VIEW_ID } });
-  assert.deepEqual((await broken.flush()).failed, [{ kind: 'table', id: 'contoso_item', code: 'PUBLISH_FAILED' }]);
+  assert.deepEqual((await broken.flush()).failed, [{ kind: 'table', id: 'contoso_item', code: 'PUBLISH_FAILED', reasons: [] }]);
   assert.equal(broken.owed().length, 1, 'still owed');
+});
+
+test('a table publish is paid only by an accepted PublishXml: a failed-by-value or unconfirmed answer stays owed and is reported failed', async () => {
+  const answers = {
+    contoso_refused: { type: 'table', id: 'contoso_refused', shipped: false, publish: { kind: 'failed', error: { code: 'CONNECTION_ERROR', statusCode: 403 } } },
+    contoso_silent: undefined,
+    contoso_unread: { type: 'table', id: 'contoso_unread', shipped: true, publish: { kind: 'unverifiable' } },
+    contoso_verified: { type: 'table', id: 'contoso_verified', shipped: true, publish: { kind: 'verified' } },
+  };
+  const calls = [];
+  const port = createAppPublication({ appWrite: writer(), scopes: { table: { owe: () => false, publish: async (target) => { calls.push(target.id); return answers[target.id]; } } } });
+  for (const id of Object.keys(answers)) port.queue({ kind: 'table', id, artifact: { type: 'view', id: VIEW_ID }, reason: 'quickFind' });
+  const out = await port.flush();
+  assert.deepEqual(out.published, ['contoso_unread', 'contoso_verified']);
+  assert.deepEqual(out.failed, [
+    { kind: 'table', id: 'contoso_refused', code: 'CONNECTION_ERROR', reasons: ['quickFind'] },
+    { kind: 'table', id: 'contoso_silent', code: 'PUBLICATION_UNCONFIRMED', reasons: ['quickFind'] },
+  ]);
+  assert.deepEqual(port.owed().map((entry) => entry.id), ['contoso_refused', 'contoso_silent'], 'a requested publication that did not happen is still owed');
+  assert.ok(!JSON.stringify(out).includes('403'), 'reported by code');
+  const again = await port.flush();
+  assert.deepEqual(again.failed.map((row) => row.id), ['contoso_refused', 'contoso_silent']);
+  assert.deepEqual(calls, Object.keys(answers), 'a refused target is not published again by the same build');
+});
+
+test('a table deferred to the build stays owed until the build reports its publication: published pays, refused fails, unreported is published at flush', async () => {
+  const calls = [];
+  const scopes = { table: { owe: () => true, publish: async (target) => { calls.push(target.id); return { type: 'table', id: target.id, shipped: true, publish: { kind: 'submitted' } }; } } };
+  const port = createAppPublication({ appWrite: writer(), scopes });
+  for (const id of ['contoso_paid', 'contoso_refused', 'contoso_unreported']) port.queue({ kind: 'table', id, reason: 'quickFind' });
+  assert.deepEqual(port.deferred('table'), ['contoso_paid', 'contoso_refused', 'contoso_unreported']);
+  port.noteScopePublished('table', 'contoso_paid');
+  port.noteScopePublished('table', 'contoso_refused', { error: { code: 'CONNECTION_ERROR', statusCode: 403, message: 'raw text' } });
+  port.noteScopePublished('table', 'contoso_never_queued');
+  assert.deepEqual(port.deferred('table'), ['contoso_unreported']);
+  const out = await port.flush();
+  assert.deepEqual(out.published, ['contoso_unreported']);
+  assert.deepEqual(out.failed, [{ kind: 'table', id: 'contoso_refused', code: 'CONNECTION_ERROR', reasons: ['quickFind'] }]);
+  assert.deepEqual(calls, ['contoso_unreported'], 'the refused table is not published again: the build already made its attempt');
+  assert.deepEqual(port.owed().map((entry) => entry.id), ['contoso_refused']);
+  assert.ok(!JSON.stringify(out).includes('raw text'));
+
+  port.queue({ kind: 'table', id: 'contoso_refused', reason: 'form' });
+  assert.deepEqual(port.deferred('table'), ['contoso_refused'], 'queued again, it is the next publication\'s to attempt');
+});
+
+test('an exact app is proven by every publish: a later differing or unreadable read, or a lost publish answer, un-proves it; a refused publish keeps the proof', async () => {
+  const FORM_A = '33333333-0000-4000-8000-000000000001';
+  const FORM_B = '33333333-0000-4000-8000-000000000002';
+  const state = { members: [FORM_A], status: 200 };
+  const client = {
+    get: async (path) => {
+      if (state.status !== 200) return { status: state.status, body: null };
+      if (path.startsWith(`/appmodules(${APP})`)) return { status: 200, body: { appmoduleidunique: '11111111-0000-4000-8000-000000000002' } };
+      if (path.startsWith('/appmodulecomponents')) return { status: 200, body: { value: state.members.map((objectid) => ({ objectid, componenttype: 60 })) } };
+      if (path.startsWith('/systemforms')) {
+        return { status: 200, body: { value: state.members.filter((id) => path.includes(id)).map((formid) => ({ formid, type: 2, objecttypecode: 'contoso_item', name: formid })) } };
+      }
+      return { status: 404, body: null };
+    },
+  };
+  const answers = {};
+  const appWrite = writer(answers);
+  const port = createAppPublication({ appWrite, client });
+  port.recordExact(APP, exactPush('notRead'), { name: 'Membership', mainFormsByTable: { contoso_item: [FORM_A] } });
+  await port.publishApp(APP);
+  assert.deepEqual(port.unsettled(), []);
+  await port.publishApp(APP);
+  assert.deepEqual(port.unsettled(), [], 'a second matching publish stays proven');
+
+  state.members = [FORM_A, FORM_B];
+  await port.publishApp(APP);
+  assert.equal(port.unsettled().length, 1, 'a later publish that shipped another membership is not exact');
+  assert.match(port.unsettled()[0].reason, /differs/);
+
+  state.members = [FORM_A];
+  await port.publishApp(APP);
+  assert.deepEqual(port.unsettled(), []);
+  state.status = 500;
+  await port.publishApp(APP);
+  assert.match(port.unsettled()[0].reason, /unreadable/, 'a later publish that cannot be read back is unproven');
+
+  state.status = 200;
+  await port.publishApp(APP);
+  assert.deepEqual(port.unsettled(), []);
+  answers[APP] = { type: 'app', id: APP, shipped: false, publish: { kind: 'failed', error: { code: 'CONNECTION_ERROR' } } };
+  state.members = [FORM_A, FORM_B];
+  await port.publishApp(APP);
+  assert.deepEqual(port.unsettled(), [], 'a refused publish shipped nothing, so the proof stands');
+
+  answers[APP] = Object.assign(new Error('lost'), { code: 'ECONNRESET' });
+  await assert.rejects(port.publishApp(APP), { code: 'ECONNRESET' });
+  assert.equal(port.unsettled().length, 1, 'a lost answer may have shipped anything');
+  assert.match(port.unsettled()[0].reason, /not answered \(ECONNRESET\)/);
 });
 
 test('the published-layer proof reads strictly: a component row it cannot place makes the proof unreadable, never a match', async () => {

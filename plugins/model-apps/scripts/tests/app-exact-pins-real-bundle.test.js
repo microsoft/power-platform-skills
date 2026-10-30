@@ -246,3 +246,37 @@ test('REAL BUNDLE: an exact publish whose published layer reads back differently
     assert.match(unsettled[0].reason, new RegExp(proof));
   }
 });
+
+test('REAL BUNDLE: every later publish of an exact app proves it again: a membership changed between two publishes is not exact', async (t) => {
+  const { sdk, state, pushed, appWrite } = await exactUpdate(t);
+  const port = createAppPublication({ appWrite, client: sdk.dataverse });
+  port.recordExact(APP, pushed, { name: 'Membership', mainFormsByTable: MAIN });
+  await port.publishApp(APP);
+  assert.deepEqual(port.unsettled(), []);
+  await port.publishApp(APP);
+  assert.deepEqual(port.unsettled(), [], 'an unchanged second publish stays proven');
+  // Another writer puts FORM_B back between this build's two publishes; the SDK's guard has seen the list published, so
+  // its next publish ships the app as it now is.
+  state.members.add(`60:${FORM_B}`);
+  state.version += 1;
+  const answer = await port.publishApp(APP);
+  assert.notEqual(answer.publish.kind, 'failed', JSON.stringify(answer.publish));
+  assert.equal(port.unsettled().length, 1);
+  assert.equal(port.unsettled()[0].code, 'APP_MAIN_FORMS_NOT_EXACT');
+  assert.match(port.unsettled()[0].reason, /differs/);
+});
+
+test('REAL BUNDLE: a table publish the server refuses (403 PublishXml) stays owed and is reported failed, not paid', async (t) => {
+  const server = appPinServer(t);
+  await server.sdk.initWorkspace();
+  await server.sdk.createArtifact('view', { id: VIEW, name: 'Probe view', entityLogicalName: 'contoso_item', columns: [{ name: 'contoso_name' }] });
+  server.httpClient.post = async () => ({ status: 403, headers: {}, body: { error: { code: '0x80040220', message: 'Publish privilege missing' } } });
+  const port = createAppPublication({ scopes: { table: { owe: () => false, publish: (target) => server.sdk.publishArtifact(target.artifact.type, target.artifact.id) } } });
+  port.queue({ kind: 'table', id: 'contoso_item', artifact: { type: 'view', id: VIEW }, reason: 'quickFind' });
+  const out = await port.flush();
+  assert.deepEqual(out.published, []);
+  assert.equal(out.failed.length, 1, JSON.stringify(out));
+  assert.deepEqual({ ...out.failed[0], code: typeof out.failed[0].code }, { kind: 'table', id: 'contoso_item', code: 'string', reasons: ['quickFind'] });
+  assert.ok(!JSON.stringify(out).includes('Publish privilege missing'), 'reported by code');
+  assert.equal(port.owed().length, 1, 'still owed');
+});

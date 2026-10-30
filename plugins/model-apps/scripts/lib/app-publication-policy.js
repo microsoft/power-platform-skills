@@ -12,17 +12,41 @@
 // publish through that instance is subject to it. A raw PublishXml (appWriters.publishPinned) or a second SDK client
 // would not be, so once an app holds an exact obligation they are refused here.
 //
-// An exact obligation is settled by proof, never by a publish having happened: after every app publish that did not
-// fail, the port reads the app's PUBLISHED layer back (publishedMainFormsProof) and settles only on 'matches'.
+// An exact obligation is settled by proof, never by a publish having happened: after EVERY app publish that did not
+// fail, the port reads the app's PUBLISHED layer back (publishedMainFormsProof) and settles only on 'matches'. A proof
+// holds for one publish only: a publish ships whatever the app's unpublished layer holds at that moment, and another
+// writer can change the membership between two publishes of one build (the SDK releases its own exact guard once it has
+// seen the list published, so its later publish is a plain PublishXml). So each later publish proves again, and an
+// earlier match does not survive a later 'differs' or 'unreadable'. A publish whose answer was lost may have shipped
+// anything, so it un-proves the app until a later publish proves it; a publish refused by value (kind 'failed')
+// shipped nothing, so the published layer, and what was proven about it, stand.
 //
 // A queued non-app target (a table whose view or form changed) is handed to its scope, in `scopes[kind]`:
-//   owe(target)     -> true when the build's own publication of that scope takes the debt (it is no longer the port's);
-//   publish(target) -> publishes it, at flush.
+//   owe(target)     -> true when the build's own publication of that scope will publish it (phase 8, for a table). The
+//                      debt stays HERE, marked deferred, until the build reports that publication's outcome
+//                      (noteScopePublished); a deferred target the build never reported on is published by the flush.
+//   publish(target) -> publishes it, at flush, and answers the SDK's PublishResult
+//                      ({ type, id, shipped, publish: { kind, error? } }); a throw is a failure too.
+// The answer is typed: a debt is paid only by publish.kind 'submitted' | 'verified' | 'unverifiable' (PublishXml was
+// accepted; 'unverifiable' only means its read-back was not possible, as publishTargets in sdk-build.js reads it).
+// 'failed' — which the SDK answers BY VALUE, never as a throw; a 403 PublishXml comes back as
+//   { publish: { kind: 'failed', error: { code: 'CONNECTION_ERROR', statusCode: 403 } } }
+// — and any other answer keep the target owed and report it in flush().failed, so a requested feature's publication
+// never reads as done when it was not.
 // A kind with no scope is never silently dropped: it stays owed and `unsettled` reports it (PUBLICATION_SCOPE_UNBRIDGED).
 
 const { exactMembershipOutcome, publishedMainFormsProof } = require('./app-components.js');
 
 const WITHHELD = new Set(['APP_MAIN_FORM_PUBLISH_WITHHELD', 'APP_MAIN_FORM_PUBLISH_CONFLICT']);
+const PUBLISHED = new Set(['submitted', 'verified', 'unverifiable']);
+
+// Why a scope's publish answer does not pay its debt; undefined when it does (the answer shape: see the file header).
+function scopeFailure(answer) {
+  const kind = answer && answer.publish && answer.publish.kind;
+  if (PUBLISHED.has(kind)) return undefined;
+  if (kind === 'failed') return { code: (answer.publish.error && answer.publish.error.code) || 'PUBLISH_FAILED' };
+  return { code: 'PUBLICATION_UNCONFIRMED' };
+}
 const guidKey = (id) => String(id || '').replace(/^\{|\}$/g, '').toLowerCase();
 
 function policyError(code, message) {
@@ -43,7 +67,11 @@ function createAppPublication({ appWrite, client, scopes = {} } = {}) {
     const key = guidKey(appId);
     owed.delete(`app:${key}`);
     const entry = exact.get(key);
-    if (!entry || entry.done) return entry ? { done: true } : null;
+    if (!entry) return null;
+    // This publish is proven on its own (see the file header): an earlier match does not carry over, and if the read
+    // below cannot be made the app stays unproven.
+    entry.done = false;
+    entry.reason = `app '${entry.name}': exact Main forms were published, but the published layer was not read back`;
     if (!client || typeof client.get !== 'function' || !entry.mainFormsByTable) {
       entry.reason = `app '${entry.name}': exact Main forms were published, but this build cannot read the published layer back to prove them; re-run to verify`;
       return { done: false, reason: entry.reason };
@@ -65,7 +93,18 @@ function createAppPublication({ appWrite, client, scopes = {} } = {}) {
     // The SDK's PublishResult: { type, id, shipped, publish: { kind: 'submitted'|'verified'|'unverifiable'|'failed', error? } }.
     // It is handed back unchanged, so the caller's own reading of it (the build's partial-push report) still works. A
     // withheld exact publish comes back as kind 'failed' with the SdkError, not as a throw; a throw propagates.
-    const answer = await appWrite.publish(appId);
+    const entry = exact.get(guidKey(appId));
+    let answer;
+    try {
+      answer = await appWrite.publish(appId);
+    } catch (error) {
+      // A lost answer may have published the app's whole unpublished layer: what was proven before no longer holds.
+      if (entry) {
+        entry.done = false;
+        entry.reason = `app '${entry.name}': its publish was not answered (${(error && error.code) || 'APP_PUBLISH_FAILED'}), so its published Main forms are unproven; re-run`;
+      }
+      throw error;
+    }
     if (!(answer && answer.publish && answer.publish.kind === 'failed')) await notePublished(appId);
     return answer;
   }
@@ -76,14 +115,30 @@ function createAppPublication({ appWrite, client, scopes = {} } = {}) {
     queue(target) {
       if (!target || !target.kind || !target.id) throw policyError('PUBLICATION_TARGET_INVALID', 'a queued publication needs a kind and an id');
       const scope = target.kind === 'app' ? null : scopeOf(target.kind);
-      if (scope && typeof scope.owe === 'function' && scope.owe(target) === true) return;
       const key = `${target.kind}:${guidKey(target.id)}`;
       const entry = owed.get(key) || { kind: target.kind, id: target.id, reasons: [] };
       if (target.reason && !entry.reasons.includes(target.reason)) entry.reasons.push(target.reason);
       if (target.artifact && !entry.artifact) entry.artifact = target.artifact;
+      // Handed to the build's own publication of the scope, but still owed here until that publication's outcome is
+      // reported: a deferral is a promise to publish, not a publish. Queued again after a refusal, it is attempted again.
+      delete entry.failure;
+      if (!entry.deferred && scope && typeof scope.owe === 'function' && scope.owe(target) === true) entry.deferred = true;
       owed.set(key, entry);
     },
     owed: () => [...owed.values()].map((entry) => ({ ...entry, reasons: [...entry.reasons] })),
+    // The ids of `kind` deferred to the build's own publication (scope.owe answered true) and not yet reported on.
+    deferred: (kind) => [...owed.values()].filter((entry) => entry.kind === kind && entry.deferred).map((entry) => entry.id),
+    // The build's own publication of a deferred target ran: `error` is its refusal (sdk-build.js publishTargets'
+    // failed[].error), absent when it was published. Published pays the debt; a refusal keeps it owed, and the flush
+    // reports it as failed without publishing it again (the build's publication already made its attempt and retry).
+    noteScopePublished(kind, id, { error } = {}) {
+      const key = `${kind}:${guidKey(id)}`;
+      const entry = owed.get(key);
+      if (!entry || !entry.deferred) return;
+      entry.deferred = false;
+      if (error === undefined) owed.delete(key);
+      else entry.failure = { code: (error && error.code) || 'PUBLISH_FAILED' };
+    },
     // Record what an exact-mode push proved (PushResult.appMainForms). Called for EVERY push of an app that asked for
     // exact membership; the last answer stands. A push that published the proven layer settles the app's publication.
     // The third argument is the app's name, or { name, mainFormsByTable } — the list the published-layer proof compares
@@ -134,12 +189,19 @@ function createAppPublication({ appWrite, client, scopes = {} } = {}) {
         }
         const scope = scopeOf(entry.kind);
         if (!scope || typeof scope.publish !== 'function') continue;
+        const reasons = [...entry.reasons];
+        if (entry.failure) { out.failed.push({ kind: entry.kind, id: entry.id, code: entry.failure.code, reasons }); continue; }
+        // A deferred target reaches this point only when the build never reported its own publication of it.
+        let failed;
         try {
-          await scope.publish({ kind: entry.kind, id: entry.id, artifact: entry.artifact, reasons: [...entry.reasons] });
-          owed.delete(key);
+          failed = scopeFailure(await scope.publish({ kind: entry.kind, id: entry.id, artifact: entry.artifact, reasons }));
         } catch (error) {
-          out.failed.push({ kind: entry.kind, id: entry.id, code: (error && error.code) || 'PUBLISH_FAILED' });
+          failed = { code: (error && error.code) || 'PUBLISH_FAILED' };
         }
+        entry.deferred = false;
+        if (!failed) { owed.delete(key); out.published.push(entry.id); continue; }
+        entry.failure = failed;
+        out.failed.push({ kind: entry.kind, id: entry.id, code: failed.code, reasons });
       }
       return out;
     },
