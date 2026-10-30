@@ -50,6 +50,7 @@ const {
   refusal,
   isAuthorized,
   lookupBinding,
+  boundIdentity,
   bindingRecord,
   partsDriftVerdict,
   projectionBaseline,
@@ -334,10 +335,28 @@ async function planDeclaredFormLayout({ form, formId, intentTabs, sdk, created =
     plan.refused.push(refusal(key, 'form-layout-duplicate-field', `a field is placed more than once on this form: ${[...new Set(declared.duplicates)].join(', ')}`));
     return plan;
   }
+  // The bound form is the authority, decided before anything is read: the form the build resolved must
+  // be that form (a same-name form made since is not adopted silently), and a bound form the build no
+  // longer finds is never recreated under the bound key.
+  const binding = await lookupBinding(ctx, KIND, key);
+  const bound = boundIdentity(binding, { resolvedId: formId, code: 'form-layout-binding-mismatch', key });
+  if (bound.refusal) {
+    plan.refused.push(bound.refusal);
+    return plan;
+  }
+  if (binding && !formId) {
+    plan.refused.push(refusal(key, 'form-layout-bound-row-missing', 'the form this layout key is bound to was not found; repair the binding explicitly before it can be recreated'));
+    return plan;
+  }
+  if (!formId) {
+    plan.refused.push(refusal(key, 'form-layout-spec-invalid', 'the form was not resolved to a row'));
+    return plan;
+  }
+  plan.formId = bound.id;
   let live;
   try {
-    await sdk.fetchArtifact(ARTIFACT, formId);
-    live = await sdk.getArtifact(ARTIFACT, formId);
+    await sdk.fetchArtifact(ARTIFACT, plan.formId);
+    live = await sdk.getArtifact(ARTIFACT, plan.formId);
   } catch (_) {
     plan.unknown.push(refusal(key, 'form-unreadable', 'the form could not be read'));
     return plan;
@@ -401,7 +420,6 @@ async function planDeclaredFormLayout({ form, formId, intentTabs, sdk, created =
   plan.baseline = projectionBaseline(desiredParts);
   plan.desiredSha = plan.baseline.intentSha256;
 
-  const binding = await lookupBinding(ctx, KIND, key);
   if (binding) plan.origin = binding.origin === 'created' ? 'created' : 'adopted';
   const verdict = partsDriftVerdict(binding, liveParts, desiredParts);
   const unapproved = verdict === 'unbound' && !created && !isAuthorized(ctx.authorizedAdoption, key);
@@ -424,7 +442,7 @@ async function planDeclaredFormLayout({ form, formId, intentTabs, sdk, created =
   // its rows: one /tabs mutation writes all of it, so a failure cannot leave the field in both sections or
   // in neither, or rows packed for a width the section does not have.
   if (plan.sections.length > 1 || widthChanged) plan.tabs = desiredTabs;
-  plan.operations.push(operation({ key, kind: KIND, target: formId, action: 'update', publicationScopes: [{ type: ARTIFACT, id: formId, table: plan.table }] }));
+  plan.operations.push(operation({ key, kind: KIND, target: plan.formId, action: 'update', publicationScopes: [{ type: ARTIFACT, id: plan.formId, table: plan.table }] }));
   return plan;
 }
 

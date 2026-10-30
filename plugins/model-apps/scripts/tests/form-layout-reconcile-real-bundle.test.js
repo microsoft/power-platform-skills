@@ -349,3 +349,23 @@ test('a new declared form compiles a row-spanning field in the middle of a secti
     assert.deepEqual(compileFormIntent(a, a.forms[0]).tabs, compileFormIntent(b, b.forms[0]).tabs, JSON.stringify(list));
   }
 });
+test('a bound form is the only form its layout key edits: another form id is refused, and a bound form that is gone is not recreated, both before any read', async () => {
+  const h = await deployed([section('sec_main', 2, [{ cells: [cell(1, 'new_name'), cell(2, 'new_code')] }])]);
+  const spec = formSpec(['new_code', 'new_name']);
+  const managed = fakeManaged();
+  const first = await reconcile(h, spec, { authorizedAdoption: true, managed });
+  managed.persist(first.result.managedBindings);
+  assert.equal(first.result.managedBindings[0].id, h.formId);
+
+  const readsBefore = h.reads.length;
+  const other = await reconcile(h, spec, { managed, authorizedAdoption: true, authorizedOverwrite: true }, { formId: guid(990) });
+  assert.deepEqual([other.result.refused.map((r) => r.code), other.result.unknown, other.writes.length],
+    [['form-layout-binding-mismatch'], [], 0]);
+  const gone = await reconcile(h, spec, { managed, authorizedAdoption: true }, { formId: null });
+  assert.deepEqual([gone.result.refused.map((r) => r.code), gone.result.unknown, gone.writes.length],
+    [['form-layout-bound-row-missing'], [], 0]);
+  assert.equal(h.reads.length, readsBefore);
+  // The bound id itself, in another GUID case, is still the same form.
+  const same = await reconcile(h, spec, { managed }, { formId: String(h.formId).toUpperCase() });
+  assert.deepEqual([same.plan.action, same.result.refused], ['noChange', []]);
+});
