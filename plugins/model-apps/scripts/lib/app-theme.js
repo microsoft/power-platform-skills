@@ -19,10 +19,13 @@
 // here: the SDK reports it (`superseded`) and leaves it.
 //
 // Every set goes through the build's create port (`ctx.creates.run`): it may create two records whose ids the server
-// assigns (the version web resource and the setting row). Without the port nothing is written.
+// assigns (the version web resource and the setting row). Without the port nothing is written. The port's receipt
+// names exactly the records the set created (see themeCreate); the setting row's id is read back for it, two GETs,
+// only when the set created the row.
 
 const { THEME_PALETTE_SLOTS } = require('./maker-sdk.js');
 const { sha256 } = require('./hash.js');
+const { collectionRows } = require('./app-components.js');
 
 const COLOR = /^#[0-9A-Fa-f]{6}$/;
 const HEADER_FIELDS = ['background', 'foreground', 'backgroundHover', 'foregroundHover', 'backgroundPressed', 'foregroundPressed', 'backgroundSelected', 'foregroundSelected'];
@@ -140,6 +143,41 @@ async function planAppTheme(spec, ctx) {
 // it (a version web resource, the setting row), so it is `unknown` and the build re-reads rather than claims either.
 const PREWRITE = new Set(['APP_THEME_LOGO_INVALID', 'APP_THEME_UNAVAILABLE', 'APP_THEME_PUBLISH_BLOCKED', 'APP_THEME_NAME_TAKEN', 'VALIDATION_ERROR']);
 const codeOf = (error) => (error && (error.code || (error.name === 'ValidationError' ? 'VALIDATION_ERROR' : undefined))) || 'APP_THEME_FAILED';
+const THEME_SETTING = 'CustomThemeDefinition';
+const GUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function receiptError(message) {
+  const error = new Error(`app.theme: the theme was saved, but ${message}; re-run to read it back`);
+  error.code = 'APP_THEME_RECEIPT_UNREADABLE';
+  return error;
+}
+
+// The id of the theme setting row a set has just CREATED. SetAppThemeResult names the version web resource it used
+// (`webResource: { id, name, created }`) but not the row, so the row is read back the way the SDK reads it — its
+// definition by unique name, then the app's row of that definition, draft layer included:
+//   GET /settingdefinitions?$select=settingdefinitionid,uniquename&$filter=uniquename eq 'CustomThemeDefinition'
+//     { "value": [ { "settingdefinitionid": "<def>", "uniquename": "CustomThemeDefinition" } ] }
+//   GET /appsettings/Microsoft.Dynamics.CRM.RetrieveUnpublishedMultiple()?$select=appsettingid,value,componentstate
+//       &$filter=_parentappmoduleid_value eq <app> and _settingdefinitionid_value eq <def>
+//     { "value": [ { "appsettingid": "<row>", "value": "contoso_/apptheme/0123456789abcdef.xml", "componentstate": 1 } ] }
+// Dataverse keeps one row per app and setting definition, and the row's value is the version's name, so the read
+// names this set's row only when it finds exactly one row holding exactly that name. Anything else (a failed read, no
+// row, another value: a writer replaced the row in between) is not guessed: the create is unknown and the re-run reads.
+// https://learn.microsoft.com/en-us/power-apps/developer/data-platform/reference/entities/appsetting
+async function createdSettingId(client, appId, versionName) {
+  if (!client || typeof client.get !== 'function') throw receiptError('this build cannot read its setting row back');
+  if (!GUID.test(String(appId)) || !versionName) throw receiptError('the setting row it created cannot be named');
+  const options = { code: 'APP_THEME_RECEIPT_UNREADABLE' };
+  const definitions = await collectionRows(client, `/settingdefinitions?$select=settingdefinitionid,uniquename&$filter=uniquename eq '${THEME_SETTING}'`, 'the theme setting definition', options);
+  const definition = definitions.filter((row) => row && row.uniquename === THEME_SETTING && GUID.test(String(row.settingdefinitionid)));
+  if (definition.length !== 1) throw receiptError(`the ${THEME_SETTING} setting definition read back ${definition.length} times`);
+  const rows = await collectionRows(client,
+    `/appsettings/Microsoft.Dynamics.CRM.RetrieveUnpublishedMultiple()?$select=appsettingid,value,componentstate&$filter=_parentappmoduleid_value eq ${appId} and _settingdefinitionid_value eq ${definition[0].settingdefinitionid}`,
+    'the app\'s theme setting row', options);
+  const ids = [...new Set(rows.filter((row) => row && GUID.test(String(row.appsettingid))).map((row) => String(row.appsettingid).toLowerCase()))];
+  if (ids.length !== 1 || !rows.every((row) => row && row.value === versionName)) throw receiptError('its setting row did not read back as the one it wrote');
+  return ids[0];
+}
 
 async function applyAppTheme(plan, ctx) {
   const result = { saved: [], unchanged: [], pendingPublish: [], refused: [], unknown: [], managedBindings: [] };
@@ -155,7 +193,15 @@ async function applyAppTheme(plan, ctx) {
   }
   const theme = op.action === 'remove' ? null : plan.theme;
   // publish:false always: the app's publication belongs to the build's publication port (see the file header).
-  const execute = () => ctx.sdk.setAppTheme(op.target, theme, { publish: false });
+  const setter = () => ctx.sdk.setAppTheme(op.target, theme, { publish: false });
+  // A set's answer, completed with the setting row it created (the setter's outcome 'created' is the ROW's outcome),
+  // so the create port's receipt can name every record this call created. A row it only updated is not named.
+  const execute = async () => {
+    const written = await setter();
+    if (!written || written.outcome !== 'created') return written;
+    const versionName = written.webResource ? written.webResource.name : undefined;
+    return { ...written, appSetting: { id: await createdSettingId(ctx.sdk.dataverse, op.target, versionName), created: true } };
+  };
   const port = ctx.creates && typeof ctx.creates.run === 'function' ? ctx.creates : null;
   // A removal creates nothing (it deletes the row, or leaves it removal-pending until the app publish), so only a set
   // needs the create port; a set without it is refused before any write.
@@ -166,7 +212,7 @@ async function applyAppTheme(plan, ctx) {
   let written;
   try {
     if (theme === null) {
-      written = await execute();
+      written = await setter();
     } else {
       const answer = await port.run(themeCreate(op.target, theme), execute);
       // The port answers { outcome: 'created'|'adopted'|'refused'|'unknown', result, code? }, `result` being the
@@ -200,6 +246,9 @@ async function applyAppTheme(plan, ctx) {
   if (written && written.webResource && written.webResource.created) {
     result.managedBindings.push({ kind: 'webResource', key: KEY, id: written.webResource.id, origin: 'created' });
   }
+  if (written && written.appSetting && written.appSetting.created) {
+    result.managedBindings.push({ kind: 'appSetting', key: KEY, id: written.appSetting.id, origin: 'created' });
+  }
   if (written && written.pendingPublish) {
     result.pendingPublish.push(KEY);
     ctx.publication.queue({ kind: 'app', id: op.target, reason: KEY });
@@ -214,18 +263,32 @@ async function applyAppTheme(plan, ctx) {
 // theme — and reads the ids the setter reports back through `receipt`. Running the setter again is safe: an existing
 // version of equal bytes is reused (a different one under that name is refused), and the row is written only when the
 // setter's own pre-write read still sees the snapshot it started from.
+//
+// The receipt names ONLY what this call created, as ownership: `childIds` holds the version when the setter created it
+// (webResource.created) and the row when the setter created it (its outcome 'created', id read back by execute), and
+// `id`, the root, is the row, else the version, else null — nothing created, nothing owned. A version that already
+// existed (an earlier run's, or anyone's with the same bytes) is listed under `reused`, never as ownership: deleting it
+// could break whatever else names it.
 function themeCreate(appId, theme) {
   return {
     kind: 'appTheme',
     key: KEY,
-    identity: { appId, setting: 'CustomThemeDefinition', sha256: sha256(JSON.stringify(canonicalTheme(theme))) },
+    identity: { appId, setting: THEME_SETTING, sha256: sha256(JSON.stringify(canonicalTheme(theme))) },
     childKeys: ['webResource', 'appSetting'],
     serverAssigned: true,
-    receipt: (written) => ({
-      id: written && written.webResource ? written.webResource.id : null,
-      childIds: { webResource: written && written.webResource ? written.webResource.id : null },
-      versionName: written && written.webResource ? written.webResource.name : null,
-    }),
+    receipt: (written) => {
+      const version = written && written.webResource && written.webResource.id ? written.webResource : null;
+      const row = written && written.appSetting && written.appSetting.created === true && written.appSetting.id ? written.appSetting : null;
+      const childIds = {};
+      if (version && version.created === true) childIds.webResource = version.id;
+      if (row) childIds.appSetting = row.id;
+      return {
+        id: childIds.appSetting || childIds.webResource || null,
+        childIds,
+        reused: version && version.created !== true ? { webResource: version.id } : {},
+        versionName: version ? version.name || null : null,
+      };
+    },
   };
 }
 // Verify: the stored and resolved state after publication. `ok` only when the app will show the declared theme AND

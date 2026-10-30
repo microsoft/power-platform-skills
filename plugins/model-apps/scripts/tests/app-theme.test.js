@@ -250,5 +250,10 @@ test('the create port\'s answer: unknown and refused write nothing more and queu
   assert.equal(descriptor.serverAssigned, true);
   assert.equal(descriptor.identity.setting, 'CustomThemeDefinition');
   assert.deepEqual(descriptor.receipt({ webResource: { id: 'aaaaaaaa-0000-4000-8000-000000000001', name: 'contoso_/apptheme/0123456789abcdef.xml' } }),
-    { id: 'aaaaaaaa-0000-4000-8000-000000000001', childIds: { webResource: 'aaaaaaaa-0000-4000-8000-000000000001' }, versionName: 'contoso_/apptheme/0123456789abcdef.xml' });
+    { id: null, childIds: {}, reused: { webResource: 'aaaaaaaa-0000-4000-8000-000000000001' }, versionName: 'contoso_/apptheme/0123456789abcdef.xml' },
+    'a version the setter did not create is never ownership');
+  assert.deepEqual(descriptor.receipt({ outcome: 'created', webResource: { id: 'aaaaaaaa-0000-4000-8000-000000000001', name: 'v', created: true }, appSetting: { id: 'bbbbbbbb-0000-4000-8000-000000000002', created: true } }),
+    { id: 'bbbbbbbb-0000-4000-8000-000000000002', childIds: { webResource: 'aaaaaaaa-0000-4000-8000-000000000001', appSetting: 'bbbbbbbb-0000-4000-8000-000000000002' }, reused: {}, versionName: 'v' });
+  assert.deepEqual(descriptor.receipt({ outcome: 'updated', webResource: { id: 'aaaaaaaa-0000-4000-8000-000000000001', name: 'v', created: true } }),
+    { id: 'aaaaaaaa-0000-4000-8000-000000000001', childIds: { webResource: 'aaaaaaaa-0000-4000-8000-000000000001' }, reused: {}, versionName: 'v' }, 'an updated row is not a create');
 });

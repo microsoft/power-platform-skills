@@ -39,6 +39,45 @@ function createsPort() {
   return port;
 }
 
+// A create port with B1's DURABLE shape, for the theme's composite create: the intent is written to a journal BEFORE the
+// setter runs and the receipt after it answers. The journal is plain JSON text, so a restart is a new port over the same
+// text (and a receipt that does not survive JSON is caught). An intent whose answer was never recorded stays pending and
+// is admitted again only as unknown — or, with `recover` (B1 resolved it as made), as adopted — and its setter never runs
+// twice. A throw from the setter is an unknown outcome: the write may have landed.
+function durableCreatesPort(journal, { recover = false } = {}) {
+  const load = () => JSON.parse(journal.text || '[]');
+  const save = (rows) => { journal.text = JSON.stringify(rows); };
+  const keyOf = (descriptor) => JSON.stringify([descriptor.kind, descriptor.identity]);
+  const port = {
+    executed: 0,
+    entries: load,
+    async run(descriptor, execute) {
+      const key = keyOf(descriptor);
+      const rows = load();
+      const pending = rows.find((row) => row.key === key && row.state === 'pending');
+      if (pending) {
+        if (!recover) return { outcome: 'unknown', code: 'CREATE_PENDING_UNKNOWN', result: undefined };
+        pending.state = 'adopted';
+        save(rows);
+        return { outcome: 'adopted', result: undefined };
+      }
+      save([...rows, { key, state: 'pending', serverAssigned: descriptor.serverAssigned === true, childKeys: descriptor.childKeys }]);
+      port.executed += 1;
+      let written;
+      try {
+        written = await execute();
+      } catch {
+        return { outcome: 'unknown', code: 'CREATE_OUTCOME_UNKNOWN', result: undefined };
+      }
+      const after = load();
+      Object.assign(after.find((row) => row.key === key && row.state === 'pending'), { state: 'created', receipt: descriptor.receipt(written) });
+      save(after);
+      return { outcome: 'created', result: written };
+    },
+  };
+  return port;
+}
+
 async function build(t, options = {}) {
   const server = appThemeServer(t, options);
   await server.sdk.initWorkspace();
@@ -56,7 +95,11 @@ test('REAL BUNDLE: a first set publishes its new version web resource only; the 
   const result = await server.run(THEME);
   assert.deepEqual(result.saved, ['app.theme']);
   assert.deepEqual(result.pendingPublish, ['app.theme']);
-  assert.equal(result.managedBindings.length, 1);
+  const version = server.theme.webResources.find((resource) => /\/apptheme\//.test(resource.name));
+  assert.deepEqual(result.managedBindings, [
+    { kind: 'webResource', key: 'app.theme', id: version.id, origin: 'created' },
+    { kind: 'appSetting', key: 'app.theme', id: server.themeRow().id, origin: 'created' },
+  ], 'both records the set created, by their real ids');
   assert.equal(server.creates.runs.length, 1, 'the set went through the create port');
   const written = server.writes();
   assert.match(written[0], /^POST \/webresourceset \{"name":"contoso_\/apptheme\/[0-9a-f]{16}\.xml"/);
@@ -128,7 +171,7 @@ test('REAL BUNDLE: a set that fails after its version was created is unknown and
   const mark = server.writes().length;
   const rerun = await server.run(THEME);
   assert.deepEqual(rerun.saved, ['app.theme']);
-  assert.deepEqual(rerun.managedBindings, [], 'the reused version is not a new create');
+  assert.deepEqual(rerun.managedBindings, [{ kind: 'appSetting', key: 'app.theme', id: server.themeRow().id, origin: 'created' }], 'the reused version is not a new create; the row is');
   const sent = server.writes().slice(mark);
   assert.ok(!sent.some((line) => line.startsWith('POST /webresourceset') || line.startsWith('POST /PublishXml')), sent.join('\n'));
   assert.ok(sent.some((line) => line.startsWith('POST /appsettings ')));
@@ -164,4 +207,107 @@ test('REAL BUNDLE: a theme cannot publish an app whose exact Main-form membershi
   assert.deepEqual(appPublishes(server), [], 'no app publish request was sent');
   assert.equal(server.publication.owed().length, 1, 'the theme stays owed');
   assert.equal(server.publication.unsettled()[0].code, 'APP_MAIN_FORMS_NOT_EXACT');
+});
+
+const versionOf = (server) => server.theme.webResources.find((resource) => /\/apptheme\//.test(resource.name));
+const durable = (server, journal, options) => { server.ctx.creates = durableCreatesPort(journal, options); return server.ctx.creates; };
+
+test('REAL BUNDLE (durable create port): a first set\'s receipt names the setting row and the version it created, by their real ids', async (t) => {
+  const server = await build(t);
+  const journal = { text: '' };
+  const port = durable(server, journal);
+  const result = await server.run(THEME);
+  assert.deepEqual(result.saved, ['app.theme']);
+  const row = server.themeRow().id;
+  const version = versionOf(server);
+  assert.notEqual(row, version.id);
+  assert.deepEqual(port.entries().map(({ state, receipt }) => ({ state, receipt })), [{
+    state: 'created',
+    receipt: { id: row, childIds: { webResource: version.id, appSetting: row }, reused: {}, versionName: version.name },
+  }]);
+  const reads = server.theme.requests.filter((line) => line.startsWith('GET /settingdefinitions?$select=settingdefinitionid,uniquename&') || line.startsWith('GET /appsettings/Microsoft.Dynamics.CRM.RetrieveUnpublishedMultiple()?$select=appsettingid,value,componentstate&'));
+  assert.equal(reads.length, 2, 'the row id is read back once: its definition, then the row');
+});
+
+test('REAL BUNDLE (durable create port): a set that reuses an existing version owns only the row it created; the version is listed as reused', async (t) => {
+  const server = await build(t);
+  // The version exists already (an earlier theme of the same bytes) and the app has no row: set, then remove the draft.
+  await server.sdk.setAppTheme(APP, THEME, { publish: false });
+  await server.sdk.setAppTheme(APP, null, { publish: false });
+  assert.equal(server.themeRow(), undefined);
+  const version = versionOf(server);
+  const port = durable(server, { text: '' });
+  const mark = server.writes().length;
+  const result = await server.run(THEME);
+  assert.deepEqual(result.saved, ['app.theme']);
+  assert.ok(!server.writes().slice(mark).some((line) => line.startsWith('POST /webresourceset')), 'the version is reused');
+  const row = server.themeRow().id;
+  assert.deepEqual(port.entries()[0].receipt, { id: row, childIds: { appSetting: row }, reused: { webResource: version.id }, versionName: version.name });
+  assert.deepEqual(result.managedBindings, [{ kind: 'appSetting', key: 'app.theme', id: row, origin: 'created' }]);
+});
+
+test('REAL BUNDLE (durable create port): a set that fails after creating its version stays pending; a restart answers unknown or, recovered, not saved; the next set owns only its row', async (t) => {
+  const server = await build(t);
+  const journal = { text: '' };
+  durable(server, journal);
+  server.failNext('POST /appsettings', 500);
+  const failed = await server.run(THEME);
+  assert.deepEqual(failed.unknown, [{ key: 'app.theme', code: 'CREATE_OUTCOME_UNKNOWN' }]);
+  assert.deepEqual(JSON.parse(journal.text).map((row) => row.state), ['pending']);
+  const version = versionOf(server);
+  assert.ok(version, 'the version was created before the row write failed');
+
+  const mark = server.writes().length;
+  const restarted = durable(server, journal);
+  assert.deepEqual((await server.run(THEME)).unknown, [{ key: 'app.theme', code: 'CREATE_PENDING_UNKNOWN' }]);
+  const recovered = durable(server, journal, { recover: true });
+  const notSaved = await server.run(THEME);
+  assert.deepEqual(notSaved.unknown, [{ key: 'app.theme', code: 'APP_THEME_NOT_SAVED' }], 'adopted, but the app will not show the theme');
+  assert.equal(restarted.executed + recovered.executed, 0, 'the setter never ran again for the pending intent');
+  assert.deepEqual(server.writes().slice(mark), [], 'zero writes after the restart');
+  assert.deepEqual(server.publication.owed(), []);
+
+  const next = durable(server, journal);
+  const saved = await server.run(THEME);
+  assert.deepEqual(saved.saved, ['app.theme']);
+  const row = server.themeRow().id;
+  assert.deepEqual(next.entries().at(-1).receipt, { id: row, childIds: { appSetting: row }, reused: { webResource: version.id }, versionName: version.name });
+});
+
+test('REAL BUNDLE (durable create port): a lost answer to the row write stays pending; the restart finds the saved draft, re-sends nothing and only queues its publication', async (t) => {
+  const server = await build(t);
+  const journal = { text: '' };
+  durable(server, journal);
+  server.failNext('POST /appsettings', 'afterCommit');
+  assert.deepEqual((await server.run(THEME)).unknown, [{ key: 'app.theme', code: 'CREATE_OUTCOME_UNKNOWN' }]);
+  assert.ok(server.themeRow(), 'the row write landed');
+  assert.deepEqual(server.publication.owed(), []);
+  const mark = server.writes().length;
+  const restarted = durable(server, journal);
+  const again = await server.run(THEME);
+  assert.deepEqual(again.unchanged, ['app.theme']);
+  assert.deepEqual(again.unknown, []);
+  assert.deepEqual(again.managedBindings, [], 'nothing is receipted for a create this run did not make');
+  assert.deepEqual(server.publication.owed().map((entry) => entry.id), [APP]);
+  assert.equal(restarted.executed, 0, 'the setter did not run again');
+  assert.deepEqual(JSON.parse(journal.text).map((row) => row.state), ['pending'], 'the intent is left for the port\'s own recovery');
+  assert.deepEqual(server.writes().slice(mark), [], 'nothing is re-sent');
+});
+
+test('REAL BUNDLE: a set whose created row cannot be read back as its own is unknown, never a receipt naming another record', async (t) => {
+  for (const mode of ['unreadable', 'replaced']) {
+    const server = await build(t);
+    const setAppTheme = server.sdk.setAppTheme.bind(server.sdk);
+    server.sdk.setAppTheme = async (...args) => {
+      const written = await setAppTheme(...args);
+      if (mode === 'unreadable') server.failNext('GET /settingdefinitions', 503);
+      else server.themeRow().draft = 'contoso_/apptheme/ffffffffffffffff.xml';
+      return written;
+    };
+    const result = await server.run(THEME);
+    assert.deepEqual(result.unknown, [{ key: 'app.theme', code: 'APP_THEME_RECEIPT_UNREADABLE' }], mode);
+    assert.deepEqual(result.saved, [], mode);
+    assert.deepEqual(result.managedBindings, [], mode);
+    assert.deepEqual(server.publication.owed(), [], mode);
+  }
 });
