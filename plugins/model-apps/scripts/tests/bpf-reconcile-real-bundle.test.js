@@ -161,6 +161,7 @@ test('a flow without the opt-in is not read, an invalid declaration is refused b
   const env = await deployed();
   const reads = [];
   const sdk = await env.open();
+  // sdk-async-ok: the spy returns the SDK's promise to the helper, which awaits it.
   const spy = { getArtifact: (...a) => { reads.push(a); return sdk.getArtifact(...a); }, fetchArtifact: (...a) => { reads.push(a); return sdk.fetchArtifact(...a); } };
   assert.equal((await planBpfMetadata({ flow: DEPLOYED(), flowId: env.id, sdk: spy })).action, null);
   const bad = await planBpfMetadata({ flow: declared(DEPLOYED(), { order: -1, description: 'x'.repeat(2001) }), flowId: env.id, sdk: spy });
