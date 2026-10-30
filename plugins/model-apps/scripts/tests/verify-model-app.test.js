@@ -2263,6 +2263,26 @@ test('componentTargetsFor: each control on the surface its location deploys to, 
   assert.deepStrictEqual(componentTargetsFor({}), []);
 });
 
+test('componentTargetsFor: a repeated caption never takes the key of a control the maker captioned "Go#2" or "Tools > Run", in any order', () => {
+  const { validateCommandTargets } = require('../lib/feature-verify.js');
+  const keysOf = (commands) => {
+    const targets = componentTargetsFor({ commands });
+    assert.deepStrictEqual(validateCommandTargets(targets), [], 'the inspection accepts its own input');
+    return targets.flatMap((t) => t.controls.map((c) => `${c.key}|${c.label}`));
+  };
+  const go = { entity: 'contoso_ticket', label: 'Go' };
+  const goHome = { entity: 'contoso_ticket', label: 'Go', location: 'HomeTab' };
+  const go2 = { entity: 'contoso_ticket', label: 'Go#2' };
+  assert.deepStrictEqual(keysOf([go, goHome, go2]), ['contoso_ticket:Go|Go', 'contoso_ticket:Go#3|Go', 'contoso_ticket:Go#2|Go#2']);
+  assert.deepStrictEqual(keysOf([go2, go, goHome]), ['contoso_ticket:Go#2|Go#2', 'contoso_ticket:Go|Go', 'contoso_ticket:Go#3|Go']);
+  // A caption written like a menu path, beside the menu child it reads like.
+  const tools = { entity: 'contoso_ticket', label: 'Tools', type: 'FlyoutAnchor', children: [{ label: 'Run' }] };
+  const literal = { entity: 'contoso_ticket', label: 'Tools > Run' };
+  assert.deepStrictEqual(keysOf([tools, literal]), ['contoso_ticket:Tools|Tools', 'contoso_ticket:Tools > Run|Run', 'contoso_ticket:Tools > Run#2|Tools > Run']);
+  // The same caption on two tables is two keys already: nothing is renamed.
+  assert.deepStrictEqual(keysOf([go, { entity: 'contoso_case', label: 'Go' }]), ['contoso_ticket:Go|Go', 'contoso_case:Go|Go']);
+});
+
 test('verify CLI --inspect-components on a spec with no commands inspects nothing and leaves the verdict alone', async () => {
   const harness = loadVerifyCli({
     parseResult: { positional: [], flags: { env: 'https://org.example', spec: '@app-spec.json', 'inspect-components': true } },

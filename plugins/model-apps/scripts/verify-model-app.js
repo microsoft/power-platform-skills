@@ -70,6 +70,7 @@ const { sameFormXmlAcrossLayers } = require('./lib/formxml-layers.js');
 // The app's id and the ids of the roles associated with it live in lib/app-roles.js: the design document reads the same relationship. Still exported from here.
 const { appIdFor, appRoleIdsFor } = require('./lib/app-roles.js');
 const { makeWritesBlocking } = require('./lib/output-redaction.js');
+const { uniqueKeys } = require('./lib/unique-keys.js');
 
 // An SDK on a THROWAWAY workspace — a temporary folder `dispose()` removes — and never on the app folder's own.
 //
@@ -618,32 +619,32 @@ function readerFor(sdk, appUnique, opts) {
 // and never a pass — a caption cannot tell the build's row from another solution's. That is deliberate, not a gap to
 // paper over: a control becomes verifiable only once its row id is recorded, and until then the flag answers what it can
 // and fails the run rather than pass on a caption. No `appModuleId` either: the build binds a command bar to its table,
-// not to an app. A key is the table and caption (`#2` for a repeat), so a line names the button the maker declared.
+// not to an app. A key is the table and caption, made unique over the whole spec (lib/unique-keys.js: `#2`, `#3`, … on a
+// repeat, never a key another control already carries), so a line names the button the maker declared.
 const INSPECT_SURFACE = { MainTab: 'form', HomeTab: 'homeGrid', ContextualTab: 'subGrid' };
 const INSPECT_KIND = { Button: 'button', FlyoutAnchor: 'flyout', SplitButton: 'split' };
 
 function componentTargetsFor(spec) {
-  const byEntity = new Map();
-  const used = new Map();
-  const keyOf = (base) => {
-    const n = (used.get(base) || 0) + 1;
-    used.set(base, n);
-    return n === 1 ? base : `${base}#${n}`;
-  };
+  const all = [];
   for (const c of (spec && spec.commands) || []) {
     if (!c || !c.entity || !c.label) continue;
     const entity = String(c.entity).toLowerCase();
-    if (!byEntity.has(entity)) byEntity.set(entity, []);
-    const controls = byEntity.get(entity);
     const surface = INSPECT_SURFACE[c.location || 'MainTab'];
     const type = c.type || 'Button';
-    controls.push({ key: keyOf(`${entity}:${c.label}`), surface, label: c.label, kind: INSPECT_KIND[type] || 'button' });
+    all.push({ entity, control: { key: `${entity}:${c.label}`, surface, label: c.label, kind: INSPECT_KIND[type] || 'button' } });
     if ((type === 'FlyoutAnchor' || type === 'SplitButton') && Array.isArray(c.children)) {
       for (const ch of c.children) {
-        if (ch && ch.label) controls.push({ key: keyOf(`${entity}:${c.label} > ${ch.label}`), surface, label: ch.label, menuPath: [c.label], kind: INSPECT_KIND[ch.type || 'Button'] || 'button' });
+        if (ch && ch.label) all.push({ entity, control: { key: `${entity}:${c.label} > ${ch.label}`, surface, label: ch.label, menuPath: [c.label], kind: INSPECT_KIND[ch.type || 'Button'] || 'button' } });
       }
     }
   }
+  // Keys are allocated once every control is known, so a repeat cannot take a key a later control declares itself.
+  const keyed = uniqueKeys(all.map((a) => a.control));
+  const byEntity = new Map();
+  all.forEach((a, i) => {
+    if (!byEntity.has(a.entity)) byEntity.set(a.entity, []);
+    byEntity.get(a.entity).push(keyed[i]);
+  });
   return [...byEntity].map(([entity, controls]) => ({ entity, controls }));
 }
 
