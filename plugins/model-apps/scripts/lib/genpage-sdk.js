@@ -297,6 +297,51 @@ function turnOf(args, name) {
   return { prompt, ...(reply ? { agentMessage: reply } : {}) };
 }
 
+// A turn identity the CALLER holds (`turnId`): one per complete intended edit, kept by the caller before it sends and given again when the same request is retried, so a send a
+// later run repeats addresses the same two message rows as the first (the SDK derives their ids from it) and the conversation holds the turn once. The SDK takes a GUID in any
+// letter case, with or without braces, and keeps it normalized (GenPageAdapter `normalizeGuid`); it is checked and normalized here too, BEFORE anything is read or written, so a
+// bad one is refused with nothing changed and a result names the form the SDK was given. An empty string is refused rather than read as "none": a caller that meant to pass an
+// identity and lost it would otherwise get a fresh one without being told.
+const TURN_GUID = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}';
+const TURN_ID_RE = new RegExp(`^(?:\\{(${TURN_GUID})\\}|(${TURN_GUID}))$`, 'i');
+function turnIdOf(value) {
+  if (value === undefined || value === null) return undefined;
+  const m = typeof value === 'string' ? TURN_ID_RE.exec(value.trim()) : null;
+  if (!m) {
+    throw genpageError(`${JSON.stringify(value)} is not a turn id: give a GUID (for example 6f1c2a4e-9b3d-47a1-b85c-0e2f7d914a63), or leave it out and a new one is made. Nothing was changed.`, { code: 'GENPAGE_TURN_ID_INVALID', outcome: 'nothing' });
+  }
+  return (m[1] || m[2]).toLowerCase();
+}
+
+// What a turn identity is FOR: the page, the content the request asks it to hold (contentFingerprint: source, name, data sources, model, bindings) and the turn's two messages,
+// as the caller gave them. A caller keeps it next to the `turnId` (a result's `turn.intent`) and gives both again on a retry; an identity reused for a request that asks for anything
+// else is refused before anything is written (`GENPAGE_TURN_ID_REUSED`). The SDK refuses a reused identity only when the MESSAGES differ from the ones it recorded under it
+// (GENPAGE_TURN_CONFLICT, at the push); the content the turn carries is only this check's. The approval of a change and the page's version tokens are not part of it: they are
+// the caller's and the SDK's, and a retry that is otherwise the same request is the same intent.
+function turnIntentOf(pageId, fields, args) {
+  const message = (value) => (value === undefined || value === null ? null : String(value));
+  return sha256(`genpage-turn-intent/1\n${JSON.stringify({ pageId: pageId ? String(pageId).toLowerCase() : null, content: contentFingerprint(fields), prompt: message(args.prompt), agentMessage: message(args.agentMessage) })}`);
+}
+function assertTurnIntent(args, turnId, intent) {
+  if (args.turnIntent === undefined || args.turnIntent === null) return;
+  if (turnId === undefined) throw genpageError('a turn intent was given without the turn id it was kept with. Nothing was changed.', { code: 'GENPAGE_TURN_ID_INVALID', outcome: 'nothing' });
+  if (String(args.turnIntent).toLowerCase() !== intent) {
+    throw genpageError(`turn ${turnId} was kept for another request — another page, other content or other messages — and an identity is used for one intended edit only. Nothing was changed; make a new turn id for this request.`, { code: 'GENPAGE_TURN_ID_REUSED', outcome: 'nothing', turnId });
+  }
+}
+
+// A DRAFT (`publish: false`; default true): the page or the app's navigation is saved and NOT published — no PublishXml is sent — so a maker can review it before it goes live. Only
+// `true`, `false` or nothing is taken: anything else is refused before anything is read, so a string "false" never publishes by accident. A draft's `publish` is `skipped` with
+// `reason: 'draft'`, which is not proof of an earlier publish either way, and a draft's content hash is `draftFingerprint`, never `fingerprint` — a caller that keeps the
+// hash of what it saw published (`publishedFingerprint`) must not advance it from a draft.
+function draftOf(options) {
+  const value = options && options.publish;
+  if (value === undefined || value === true) return false;
+  if (value === false) return true;
+  throw genpageError(`publish must be true or false (got ${JSON.stringify(value)}). Nothing was changed.`, { code: 'GENPAGE_ARGUMENT_INVALID', outcome: 'nothing' });
+}
+const draftPublish = () => ({ kind: 'skipped', reason: 'draft', detail: 'saved as a draft and not published, as asked — this says nothing about whether an earlier content was published' });
+
 // The fields of a page that an update compares and a settle checks. An absent key and an `undefined` one are the same here, which
 // isDeepStrictEqual does not say.
 function projectionOf(page) {
@@ -1023,9 +1068,14 @@ function makeGenpageSdk(env, deps = {}) {
       const dataSources = dataSourcesOf(args.dataSources) || [];
       const connectorBindings = bindingOf(args.connectorBindings, 'connectorBindings');
       const actionBindings = bindingOf(args.actionBindings, 'actionBindings');
-      const turn = turnOf(args, name);
+      const draft = draftOf(args);
+      const turnId = turnIdOf(args.turnId);
+      const turn = { ...turnOf(args, name), ...(turnId ? { id: turnId } : {}) };
       const given = args.pageId === undefined || args.pageId === null ? undefined : String(args.pageId);
       if (given !== undefined && !GUID_RE.test(given)) throw genpageError(`'${given}' is not a page id`, { code: 'GENPAGE_ID_INVALID', outcome: 'nothing' });
+      const intent = turnIntentOf(given, { source, name, dataSources, model: args.model ? String(args.model) : undefined, connectorBindings, actionBindings }, args);
+      assertTurnIntent(args, turnId, intent);
+      const turnOut = turnId ? { turn: { id: turnId, intent } } : {};
       const sdk = await getSdk();
       const id = (given === undefined ? String(newId()) : given).toLowerCase();
       const who = JSON.stringify(name);
@@ -1108,13 +1158,13 @@ function makeGenpageSdk(env, deps = {}) {
             const differing = edits.map((e) => e.key);
             let updated;
             try {
-              updated = await api.update(id, { name, source, dataSources, model, connectorBindings, actionBindings, prompt: args.prompt, agentMessage: args.agentMessage, caller: args.caller, appId: args.appId, sourceFile: args.sourceFile, runtimeEvidence: args.runtimeEvidence, throttle: budget });
+              updated = await api.update(id, { name, source, dataSources, model, connectorBindings, actionBindings, prompt: args.prompt, agentMessage: args.agentMessage, caller: args.caller, appId: args.appId, sourceFile: args.sourceFile, runtimeEvidence: args.runtimeEvidence, throttle: budget, ...(draft ? { publish: false } : {}), ...(turnId ? { turnId } : {}) });
             } catch (error) {
               // The page exists and is not what this create asks for: whatever the update's own outcome was, this create is not "nothing" — the page is there.
               throw genpageError(`generative page ${who} (${id}) was written by a create under this id, but it holds the ${differing.join(', ')} of an earlier one, and bringing it to what this create asks for failed: ${messageOf(error)}. It was not published as it is.`, { code: error && error.code, cause: error, outcome: 'unknown', pageId: id });
             }
             return {
-              pageId: id, name, publish: updated.publish, fingerprint, ...(updated.runtimeSha256 ? { runtimeSha256: updated.runtimeSha256 } : {}),
+              pageId: id, name, publish: updated.publish, ...(draft ? { saved: true, pendingPublish: true, draftFingerprint: fingerprint } : { fingerprint }), ...(updated.runtimeSha256 ? { runtimeSha256: updated.runtimeSha256 } : {}), ...turnOut,
               warnings: [...warnings, `the answer to creating page ${who} was lost (${said}), but reading the id it was created under (${id}) showed a page that an earlier create under this id had written, differing from this create in ${differing.join(', ')} — so it was not sent again, and was updated to what this create asks for instead of being published as it was`, ...(updated.warnings || [])],
             };
           }
@@ -1139,9 +1189,12 @@ function makeGenpageSdk(env, deps = {}) {
         pushed = await pushOnce(sdk, id);
       }
 
+      if (draft) {
+        return { pageId: id, name, publish: draftPublish(), saved: true, pendingPublish: true, draftFingerprint: fingerprint, ...turnOut, warnings: [...warnings, ...warningsOf(pushed, draftPublish(), `page ${label(name, id)}`)] };
+      }
       const runtimeSha256 = await runtimeEvidenceOf(sdk, id, args);
       const published = await publish(sdk, 'genPage', id, { verify: true });
-      return { pageId: id, name, publish: published, fingerprint, ...(runtimeSha256 ? { runtimeSha256 } : {}), warnings: [...warnings, ...warningsOf(pushed, published, `page ${label(name, id)}`)] };
+      return { pageId: id, name, publish: published, fingerprint, ...turnOut, ...(runtimeSha256 ? { runtimeSha256 } : {}), warnings: [...warnings, ...warningsOf(pushed, published, `page ${label(name, id)}`)] };
     },
 
     // UPDATE: read the page, write only what differs from it, record the turn, publish, and prove the published copy.
@@ -1174,6 +1227,11 @@ function makeGenpageSdk(env, deps = {}) {
       if (!GUID_RE.test(String(pageId || ''))) throw genpageError(`'${pageId}' is not a page id`, { code: 'GENPAGE_ID_INVALID' });
       const id = String(pageId).toLowerCase();
       const fields = contentFieldsOf(args);
+      const draft = draftOf(args);
+      const turnId = turnIdOf(args.turnId);
+      const intent = turnIntentOf(id, fields, args);
+      assertTurnIntent(args, turnId, intent);
+      const turnOut = turnId ? { turn: { id: turnId, intent } } : {};
       const sdk = await getSdk();
       const declinedBefore = declinedCount(args);
       const found = await readServer(sdk, id);
@@ -1197,7 +1255,7 @@ function makeGenpageSdk(env, deps = {}) {
       // with the server's (`fetchArtifact` with `overwrite`): the resend would then be a new turn, and both would land.
       // `newTurn.id` is documented as the SDK's to mint ("do not author it"); what the SDK checks, in the vendored GenPageAdapter's
       // `validate` and `normalize`, is only that it is a GUID — it keeps one it is given, and derives the message ids from its digits.
-      const turn = { ...turnOf({ prompt: args.prompt, agentMessage: args.agentMessage }, fields.name || baseline.name), id: String(newTurnId()).toLowerCase() };
+      const turn = { ...turnOf({ prompt: args.prompt, agentMessage: args.agentMessage }, fields.name || baseline.name), id: turnId || String(newTurnId()).toLowerCase() };
       const warnings = [];
       // The lists a caller gives as an App Spec's (see planEdits) are read against the page's entries; every other caller's replace them.
       const specBindings = args.specBindings === true;
@@ -1219,6 +1277,8 @@ function makeGenpageSdk(env, deps = {}) {
           && await publishedCopyHolds(sdk, id, fields, { specBindings })) {
           return { pageId: id, unchanged: true, publish: { kind: 'skipped', detail: 'the page already holds this content, the caller recorded that this content was published before its binding lists were stated, and the published copy holds them' }, fingerprint, receiptUpgraded: true, warnings: [] };
         }
+        // A draft of a page that already holds the content saves nothing, and whether the content is live is not known here (see above): not published, and not said to be pending either.
+        if (draft) return { pageId: id, unchanged: true, publish: draftPublish(), saved: false, pendingPublish: null, draftFingerprint: fingerprint, warnings: [] };
         const runtimeSha256 = await runtimeEvidenceOf(sdk, id, args);
         const published = await publish(sdk, 'genPage', id, { verify: true });
         return { pageId: id, unchanged: true, publish: published, fingerprint, ...(runtimeSha256 ? { runtimeSha256 } : {}), warnings: warningsOf(null, published, `page ${who()}`) };
@@ -1304,9 +1364,12 @@ function makeGenpageSdk(env, deps = {}) {
         pushed = await pushOnce(sdk, id);
       }
 
+      if (draft) {
+        return { pageId: id, publish: draftPublish(), saved: true, pendingPublish: true, draftFingerprint: fingerprint, ...turnOut, warnings: [...warnings, ...warningsOf(pushed, draftPublish(), `page ${who()}`)] };
+      }
       const runtimeSha256 = await runtimeEvidenceOf(sdk, id, args);
       const published = await publish(sdk, 'genPage', id, { verify: true });
-      return { pageId: id, publish: published, fingerprint, ...(runtimeSha256 ? { runtimeSha256 } : {}), warnings: [...warnings, ...warningsOf(pushed, published, `page ${who()}`)] };
+      return { pageId: id, publish: published, fingerprint, ...turnOut, ...(runtimeSha256 ? { runtimeSha256 } : {}), warnings: [...warnings, ...warningsOf(pushed, published, `page ${who()}`)] };
     },
 
     // Place pages into an app that exists, as the app designer does: each page becomes a sub-area of the app's navigation (the shape
@@ -1348,6 +1411,11 @@ function makeGenpageSdk(env, deps = {}) {
     // navigation does not show the page after the app was published.
     async placeInApp(appId, options = {}) {
       if (!GUID_RE.test(String(appId || ''))) throw genpageError(`'${appId}' is not an app id`, { code: 'GENPAGE_ID_INVALID' });
+      const draft = draftOf(options);
+      // `finish` and `finishIfUnpublished` are for publishing a placement, and the build's `beforeAppWrite` publishes tables before the app's publish: none of them is a draft.
+      if (draft && (options.finish === true || options.finishIfUnpublished === true || typeof options.beforeAppWrite === 'function')) {
+        throw genpageError(`a draft placement saves app ${appId}'s navigation and publishes nothing, so it cannot also finish a placement or publish before the app's write. Nothing was changed.`, { code: 'GENPAGE_DRAFT_UNSUPPORTED', outcome: 'nothing', appId });
+      }
       const sdk = await getSdk(options.languageCode || deps.languageCode);
       const warnings = [];
       let app;
@@ -1404,7 +1472,9 @@ function makeGenpageSdk(env, deps = {}) {
           finishing = wantedPages.some((p) => !showing.has(String(p.pageId).toLowerCase()));
         }
       }
-      if (!edited && !finishing) return { added: [], alreadyPlaced, pinnedViews: [], warnings, appEdited: false };
+      // A draft's state is said apart from the publish: `pendingPublish` is true for what it saved, and not known (null) when it saved nothing — an earlier save may be unpublished.
+      const draftState = (saved) => (draft ? { published: false, pendingPublish: saved ? true : null, placementState: saved ? 'saved' : 'unchanged' } : {});
+      if (!edited && !finishing) return { added: [], alreadyPlaced, pinnedViews: [], warnings, appEdited: false, ...draftState(false) };
 
       // The first thing sent to the app is below: the caller's word comes before it (see `beforeAppWrite`, above), and it is told what the write is.
       if (typeof options.beforeAppWrite === 'function') {
@@ -1430,6 +1500,10 @@ function makeGenpageSdk(env, deps = {}) {
             ? `${views} ${absent.length === 1 ? 'was' : 'were'} not added to app ${appId} — the maker's "/" picker may not list ${absent.length === 1 ? 'its table' : 'their tables'}; run the same command again to add ${absent.length === 1 ? 'it' : 'them'}`
             : `${views} could not be confirmed in app ${appId}: its components could not be read back — treat ${absent.length === 1 ? 'it' : 'them'} as added only once seen to be`);
         }
+      }
+      if (draft) {
+        warnings.push(`app ${appId} was saved and not published, as asked: ${added.length ? 'the pages show in the app once it is published' : "the default views take effect once it is published"}`);
+        return { added: added.map((p) => String(p.pageId)), alreadyPlaced, pinnedViews, warnings, appEdited: edited, ...draftState(true) };
       }
       const published = await publish(sdk, 'app', appId, undefined, typeof options.publishApp === 'function' ? options.publishApp : undefined);
       // What the app's publish answered ({ kind, detail }, its failure as `cause`) rides every answer and failure from here on as `appPublish`, not enumerable so that
@@ -1491,6 +1565,7 @@ function makeGenpageSdk(env, deps = {}) {
     async removeFromApp(appId, pageId, options = {}) {
       const app = guidOf(appId, 'app');
       const page = guidOf(pageId, 'page');
+      const draft = draftOf(options);
       const sdk = await getSdk(options.languageCode || deps.languageCode);
       const warnings = [];
       let current;
@@ -1532,6 +1607,14 @@ function makeGenpageSdk(env, deps = {}) {
       }
       if (left === 0 && options.allowEmpty !== true) {
         throw genpageError(`taking page ${page} out of app ${app} would leave its navigation with no entry: the platform accepts that on an app that exists, but the app would open on nothing. Nothing was changed. Add the entry that should replace it first, or — if an app with an empty navigation is what is meant — ask for it explicitly (genpage.js remove-from-app --allow-empty-navigation)`, { code: 'GENPAGE_NAVIGATION_WOULD_BE_EMPTY', outcome: 'nothing', appId: app, pageId: page });
+      }
+      // A DRAFT removal saves the navigation without the page and publishes nothing: the app that runs still shows the page until the app is published, and — because the platform keeps an app's
+      // reference to a page until a sitemap without it is published — the page cannot be deleted before then (`delete` reads the published navigation and refuses). The page itself is never touched here.
+      if (draft) {
+        for (const { a, g, kept } of edits) await sdk.updateElement('app', app, `/siteMap/areas/${a}/groups/${g}/subAreas`, kept);
+        if (edits.length) await pushApp(sdk, app, warnings, appScope, { views: [] });
+        warnings.push(`page ${page} is ${edits.length ? 'taken out of' : 'already out of'} the saved navigation of app ${app}, and the app was not published, as asked: it still shows in the app that runs until the app is published, and the page cannot be deleted before then`);
+        return { ...answer(wasInNavigation, false), published: false, pendingPublish: true, placementState: 'saved' };
       }
       // Whether the app has ever been published, asked BEFORE the publish (afterwards every app has): it is only for the note below, so a read that fails does not stop the removal.
       let neverPublished = false;
@@ -1988,5 +2071,5 @@ async function appsNaming(sdk, pageId) {
 module.exports = {
   makeGenpageSdk, unescapePacName, suppliedButBlank, sourceText, dataSourcesOf, promptTranscript, configJson, pageFolderFiles,
   genPagesOfSiteMap, entityTablesOfSiteMap, writeOutcome, PRE_WRITE_REFUSALS, genpageError, holdsWhatWasSent, describeDivergence, contentFingerprint, watchThrottles, GUID_RE,
-  missingTableOf,
+  missingTableOf, turnIdOf, turnIntentOf, draftOf,
 };
