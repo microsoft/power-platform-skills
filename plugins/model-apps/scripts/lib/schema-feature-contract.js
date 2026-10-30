@@ -78,15 +78,19 @@ function isChoiceOptionObject(entry) {
 // Every option entry as `{ value, label, explicit }`, in the author's order. `label` is what the author wrote (a string or a map);
 // `value` is the explicit value, or the build's positional default. Malformed entries are passed through as best it can — the
 // validator below is what rejects them, so a consumer that runs after validation never sees one.
+//
+// A list that is not an array at all throws the TypeError of `.map` on it, exactly as the build's own option mapping always did:
+// the build relies on that to fail the one column in its own step (and to abandon a change set holding it) rather than create a
+// choice column with no options. Missing (`undefined`/`null`) is an empty list.
 function normalizeChoiceOptions(options) {
-  return (Array.isArray(options) ? options : []).map((entry, i) => {
+  return (options || []).map((entry, i) => {
     if (isChoiceOptionObject(entry)) return { value: entry.value, label: entry.label, explicit: true };
     return { value: CHOICE_VALUE_BASE + i, label: entry, explicit: false };
   });
 }
 
 function choiceOptionLabels(options) {
-  return normalizeChoiceOptions(options).map((o) => o.label);
+  return Array.isArray(options) ? normalizeChoiceOptions(options).map((o) => o.label) : [];
 }
 
 // The options as the SDK takes them (`{ value, label }`). For a spec that uses only strings and maps this is exactly what the
@@ -110,6 +114,7 @@ function labelAliasesOf(label) {
 // record or view filter that uses it must use the number instead, never the first match.
 function choiceLabelIndex(options) {
   const index = new Map();
+  if (!Array.isArray(options)) return index;
   for (const o of normalizeChoiceOptions(options)) {
     for (const alias of labelAliasesOf(o.label)) {
       const key = alias.trim().toLowerCase();

@@ -51,6 +51,9 @@ const { RETRY, retryPolicyFor, refusal, serviceFailure, serviceCodeOf } = requir
 // What the run's throttle budget says when it refuses a wait (the words of the build's own halt for it), for the step guard in makeRunner.
 const { waitDoesNotFit } = require('./throttle-budget.js');
 const { readStatusOptions, alternateKeyMatches, alternateKeyOverColumns, sameKeyColumnSet } = require('./table-schema-metadata.js');
+// Choice options may be written `{ value, label }` as well as a plain or localized label; one normalizer turns every form into what
+// the SDK takes, and keeps the positional `100000000 + index` numbering for the forms that do not state a value.
+const { choiceOptionsForSdk, choiceOptionLabels } = require('./schema-feature-contract.js');
 
 // App Spec column type -> SDK ColumnType. Lookup is omitted (side effect of a OneToMany
 // relationship); Customer is handled specially (createCustomerColumn).
@@ -125,14 +128,14 @@ function localizedLabelLcidsInSpec(spec) {
     note(e && e.primaryAttribute && e.primaryAttribute.displayName, `${at} primaryAttribute.displayName`);
     for (const c of (e && e.columns) || []) {
       note(c && c.displayName, `${at} column ${c && c.schemaName} displayName`);
-      for (const o of (c && c.options) || []) note(o, `${at} column ${c && c.schemaName} option`);
+      for (const o of choiceOptionLabels(c && c.options)) note(o, `${at} column ${c && c.schemaName} option`);
     }
     for (const k of (e && e.alternateKeys) || []) note(k && k.displayName, `${at} alternate key ${k && k.schemaName}`);
   }
   for (const r of (spec && spec.relationships) || []) note(r && r.lookup && r.lookup.displayName, `relationship lookup ${r && r.lookup && r.lookup.schemaName}`);
   for (const g of (spec && spec.globalChoices) || []) {
     note(g && g.displayName, `globalChoice ${g && g.name} displayName`);
-    for (const o of (g && g.options) || []) note(o, `globalChoice ${g && g.name} option`);
+    for (const o of choiceOptionLabels(g && g.options)) note(o, `globalChoice ${g && g.name} option`);
   }
   return [...byLcid.entries()].sort(([a], [b]) => a - b).map(([lcid, where]) => ({ lcid, where }));
 }
@@ -316,7 +319,7 @@ function columnOptions(c, globalChoiceIds, globalChoices, languageCode) {
 }
 
 function choiceOptions(col) {
-  return (col.options || []).map((label, i) => ({ value: 100000000 + i, label }));
+  return choiceOptionsForSdk(col.options);
 }
 
 // What the table's create asks for as its primary name column's length when the spec gives none: 100 — what the previous release
@@ -2618,7 +2621,7 @@ async function provisionDataModelSteps({ sdk, provision, runner, spec, apply, la
   // runner.run instead of being silently swallowed.
   for (const gc of spec.globalChoices || []) {
     await runner.run('data-model', `global choice ${gc.name}`, async () => {
-      const r = await sdk.createGlobalOptionSet({ name: gc.name, displayName: gc.displayName || gc.name, languageCode: resolvedLanguageCode, ...(gc.description ? { description: gc.description } : {}), options: (gc.options || []).map((label, i) => ({ value: 100000000 + i, label })) });
+      const r = await sdk.createGlobalOptionSet({ name: gc.name, displayName: gc.displayName || gc.name, languageCode: resolvedLanguageCode, ...(gc.description ? { description: gc.description } : {}), options: choiceOptionsForSdk(gc.options) });
       globalChoiceIds[gc.name] = r.metadataId;
     });
   }

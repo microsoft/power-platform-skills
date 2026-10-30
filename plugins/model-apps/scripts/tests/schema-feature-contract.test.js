@@ -41,6 +41,13 @@ test('an LCID map is never mistaken for the explicit form, and a partial wrapper
   assert.equal(c.isChoiceOptionObject({ value: 3 }), true);
 });
 
+test('a list that is not an array throws as the build\'s option mapping always did; labels of one are empty', () => {
+  assert.throws(() => c.choiceOptionsForSdk('not a list'), /is not a function/);
+  assert.deepEqual(c.choiceOptionsForSdk(undefined), []);
+  assert.deepEqual(c.choiceOptionLabels('not a list'), []);
+  assert.deepEqual([...c.choiceLabelIndex('not a list')], []);
+});
+
 test('choiceOptionErrors rejects partial wrappers, extra keys, out-of-range values and colliding resolved values', () => {
   assert.deepEqual(c.choiceOptionErrors(['A', { 1033: 'B' }, { value: 0, label: 'C' }], 'o'), []);
   assert.match(c.choiceOptionErrors([{ label: 'A' }], 'o')[0], /o\[0\] must have exactly 'value' and 'label' \(missing value\)/);
