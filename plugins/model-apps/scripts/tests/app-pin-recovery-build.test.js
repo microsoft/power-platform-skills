@@ -6,12 +6,18 @@
 // the app's components and either finds every intended one (no second push), makes exactly one repair push, or stops
 // incomplete — never a third change set and never a warning only (lib/app-pin-recovery.js, sdk-build.js appWriters.push).
 // The same harness drives "mainFormsOnUpdate": "exact" on the existing app: refused without the removal's authority,
-// and with it the other Main form leaves the app and the publish is proven from the published layer.
+// and with it the other Main form leaves the app and the publish is proven from the published layer — including the
+// publish the pages phase's default-view placement makes with the page backend's own SDK.
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
 const { inOwnFolder } = require('./helpers/own-app-folder.js');
+const { makeTempDir } = require('./helpers/temp-dirs.js');
+const { withPageType } = require('./helpers/page-component-type.js');
 const { runSdkBuild: runSdkBuildInPlace } = require('../lib/sdk-build.js');
+const { makeGenpageSdk } = require('../lib/genpage-sdk.js');
 const { membershipSpec, FORM_A, FORM_B, META } = require('./helpers/app-membership-sdk.js');
 const { appPinServer, VIEW, CHART } = require('./helpers/app-pin-server.js');
 const { pinIntentOf } = require('../lib/app-pin-recovery.js');
@@ -155,4 +161,90 @@ test('build: an "exact" publish withheld every time is tried once more, then sto
   const codes = (error.incomplete || []).map((entry) => entry.code);
   assert.ok(codes.includes('APP_MAIN_FORM_PUBLISH_WITHHELD'), JSON.stringify(error.incomplete));
   assert.ok(codes.includes('APP_MAIN_FORMS_NOT_EXACT'), JSON.stringify(error.incomplete));
+});
+
+// The pages phase pins the default view of each table a page it wrote reads (sdk-build.js, appWriters.placeViews). When it pins one it pushes and
+// publishes the app through the page backend's own SDK — the real backend here, over the same fake Dataverse — and that publish ships whatever
+// Main forms the app holds by then. `drift` puts the other Main form back into the app just before the placement, as another maker could.
+const PAGE_ID = '99999999-0000-4000-8000-000000000022';
+const PAGE_VIEW = '66666666-0000-4000-8000-000000000022';
+async function placementBuild(t, { exact = false, drift = false } = {}) {
+  const appDir = makeTempDir('placement-app-');
+  fs.writeFileSync(path.join(appDir, 'overview.tsx'), 'export default function Overview(){return null;}');
+  const server = appPinServer(t);
+  const get = server.httpClient.get;
+  server.httpClient.get = async (url) => {
+    const decoded = decodeURIComponent(url);
+    const answer = (body) => { server.state.requests.push(`GET ${url}`); return { status: 200, headers: {}, body }; };
+    const definition = /EntityDefinitions\(LogicalName='([a-z]+)'\)/.exec(url);
+    if (definition && definition[1] === 'savedquery') return answer({ LogicalName: 'savedquery', EntitySetName: 'savedqueries' });
+    if (definition && SETS[definition[1]]) return answer({ EntitySetName: SETS[definition[1]], LogicalName: definition[1] });
+    if (url.includes('/webresourceset')) return answer({ value: [{ webresourceid: ICON, name: 'contoso_membership_icon' }] });
+    if (url.includes('/solutions?')) return answer({ value: [{ solutionid: SOLUTION }] });
+    if (decoded.includes('/savedqueries') && decoded.includes('isdefault eq true')) return answer({ value: [{ savedqueryid: PAGE_VIEW }] });
+    return get(url);
+  };
+  await server.sdk.initWorkspace();
+  const query = server.sdk.queryRecords.bind(server.sdk);
+  server.sdk.queryRecords = async (type, options = {}) => (type === 'webresource' && /_pagemanifest/.test(options.filter || '') ? [] : query(type, options));
+  server.sdk.createWebResource = async () => ({ id: '88888888-0000-4000-8000-000000000022' });
+  server.sdk.updateWebResource = async () => ({});
+  server.sdk.dataverse.get = withPageType(server.sdk.dataverse.get.bind(server.sdk.dataverse));
+  const spec = membershipSpec({ hidden: false });
+  spec.schemaVersion = 2;
+  if (exact) spec.app.mainFormsOnUpdate = 'exact';
+  spec.pages = [{ key: 'overview', name: 'Overview', dataSources: ['contoso_other'], source: { kind: 'tsx', codeFile: 'overview.tsx' } }];
+  const backend = makeGenpageSdk('https://contoso.crm.dynamics.com', { httpClient: server.httpClient });
+  t.after(() => backend.dispose());
+  const live = [];
+  const pageAnswer = (options) => ({ pageId: PAGE_ID, name: options.name, publish: { kind: 'verified' }, warnings: [] });
+  let placedAt;
+  let placed;
+  const genpage = {
+    enumerateEnv: async () => ({ ok: true, ids: live.map((row) => row.pageId), pages: live }),
+    create: async (options) => { live.push({ pageId: PAGE_ID, name: options.name }); return pageAnswer(options); },
+    update: async (_id, options) => pageAnswer(options),
+    placeInApp: async (id, options) => {
+      if (drift) server.state.members.add(`60:${FORM_B}`);
+      placedAt = server.state.requests.length;
+      placed = await backend.placeInApp(id, options);
+      return placed;
+    },
+  };
+  let result;
+  let error;
+  try {
+    result = await runSdkBuild(spec, { sdk: server.sdk, apply: true, phases: ['app-shell', 'pages'], appDir, env: 'https://contoso.crm.dynamics.com', genpage,
+      allowDestructive: exact, publish: false, warn: () => {}, log: () => {} });
+  } catch (thrown) {
+    error = thrown;
+  }
+  const afterPlacement = placedAt === undefined ? [] : server.state.requests.slice(placedAt);
+  return { result, error, placed, afterPlacement };
+}
+const appPublishOf = (lines) => lines.filter((line) => line.startsWith('POST ') && line.includes('/PublishXml') && line.includes('<appmodule>'));
+const publishedLayerReads = (lines) => lines.filter((line) => line.startsWith('GET ') && line.includes('$select=appmoduleidunique'));
+
+test('build: the default-view placement publishes an "exact" app with a Main form put back since — the build does not succeed', async (t) => {
+  const { result, error, placed, afterPlacement } = await placementBuild(t, { exact: true, drift: true });
+  assert.ok(placed && placed.pinnedViews.includes(PAGE_VIEW), 'the placement pinned the view and published the app');
+  assert.equal(appPublishOf(afterPlacement).length, 1);
+  assert.equal(result, undefined, 'a build whose last publish shipped a Main form outside the exact list is not a success');
+  assert.equal(error && error.code, 'APP_MAIN_FORMS_NOT_EXACT', error && error.stack);
+});
+
+test('build: the default-view placement of an "exact" app is proven again from the published layer, and the build succeeds', async (t) => {
+  const { result, error, afterPlacement } = await placementBuild(t, { exact: true });
+  assert.equal(error, undefined, error && error.stack);
+  assert.equal(result.incomplete, undefined);
+  assert.equal(appPublishOf(afterPlacement).length, 1);
+  assert.ok(publishedLayerReads(afterPlacement).length > 0, 'the placement publish is followed by a read of the published layer');
+});
+
+test('build: the default-view placement of an app with no exact list reads nothing more after its publish', async (t) => {
+  const { result, error, afterPlacement } = await placementBuild(t);
+  assert.equal(error, undefined, error && error.stack);
+  assert.equal(result.incomplete, undefined);
+  assert.equal(appPublishOf(afterPlacement).length, 1);
+  assert.deepEqual(publishedLayerReads(afterPlacement), []);
 });

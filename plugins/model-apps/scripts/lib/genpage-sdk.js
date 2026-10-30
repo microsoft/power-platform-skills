@@ -1338,7 +1338,8 @@ function makeGenpageSdk(env, deps = {}) {
     // navigation it pushes — the one the server holds: this call fetches the app, adds the page entries and the views it was asked for, and pushes that — into their active Main forms, public views and
     // charts; but on the transport of an SDK this backend made, the push's AddAppComponents is cut down to the views this edit pins (`appScope`, `pushApp`), so it adds no Main form and
     // `entityTables` is empty. Only through a lent SDK, whose transport is its owner's, does the push add them all: then `entityTables` is the tables of those Entity entries (`entityTablesOfSiteMap`).
-    // Returns { added: [pageId…], alreadyPlaced: [pageId…], pinnedViews: [viewId…], warnings: [...], appEdited, provedPublished? } — `pinnedViews` the views it asked for that the app is read back holding. It throws, with
+    // Returns { added: [pageId…], alreadyPlaced: [pageId…], pinnedViews: [viewId…], warnings: [...], appEdited, provedPublished? } — `pinnedViews` the views it asked for that the app is read back holding; once it has
+    // published the app, the answer and any failure it throws carry what that publish answered as a non-enumerable `appPublish` ({ kind, detail }, see `publish`). It throws, with
     // the page unplaced, when the app cannot be read, the edit is refused, `beforeAppWrite` throws, or the app's publish fails — and with `finish`, when the published
     // navigation does not show the page after the app was published.
     async placeInApp(appId, options = {}) {
@@ -1427,6 +1428,9 @@ function makeGenpageSdk(env, deps = {}) {
         }
       }
       const published = await publish(sdk, 'app', appId, undefined);
+      // What the app's publish answered ({ kind, detail }, its failure as `cause`) rides every answer and failure from here on as `appPublish`, not enumerable so that
+      // no printed or compared result changes: a caller that keeps its own account of the app's publication (the build's, lib/app-publication-policy.js) judges this one too.
+      const carry = (target) => Object.defineProperty(target, 'appPublish', { value: published, enumerable: false, configurable: true, writable: true });
       // The failures below name the app and the page(s) the caller asked for, as `removeFromApp`'s do, so a caller that prints one can go on from it.
       const asked = wantedPages.map((p) => String(p.pageId));
       const who = { appId, ...(asked.length === 1 ? { pageId: asked[0] } : asked.length > 1 ? { pageIds: asked } : {}) };
@@ -1437,10 +1441,10 @@ function makeGenpageSdk(env, deps = {}) {
         const saved = navigation && pin.length > 0 ? `the navigation of app ${appId} and the default views of the tables the pages read were saved`
           : navigation ? `the navigation of app ${appId} was saved`
             : `the default views of the tables the pages read were saved in app ${appId}`;
-        throw genpageError(`${saved}, but publishing the app failed (${published.detail}) — ${navigation ? "the pages are in the app's saved navigation and show once it is published" : 'they take effect once the app is published'}`, { code: 'GENPAGE_APP_PUBLISH_FAILED', saved: true, ...who });
+        throw carry(genpageError(`${saved}, but publishing the app failed (${published.detail}) — ${navigation ? "the pages are in the app's saved navigation and show once it is published" : 'they take effect once the app is published'}`, { code: 'GENPAGE_APP_PUBLISH_FAILED', saved: true, ...who }));
       }
       const result = { added: added.map((p) => String(p.pageId)), alreadyPlaced, pinnedViews, warnings, appEdited: edited };
-      if (!finishing) return result;
+      if (!finishing) return carry(result);
 
       // The publish was accepted (a refused one threw above); what runs is the app's published navigation, so that is what confirms it. PublishXml is asynchronous
       // (the SDK reports an unconfirmed publish as unverifiable, never as failed), so a page that is not listed yet is not a failed publish — but it is not a finished
@@ -1449,14 +1453,14 @@ function makeGenpageSdk(env, deps = {}) {
       const shown = await publishedPagesOf(sdk, appId);
       if (!shown.ok) {
         warnings.push(`app ${appId} was published again, but its published navigation could not be read back to confirm that ${wantedPages.length === 1 ? 'the page shows' : 'the pages show'} (${shown.error}) — treat ${wantedPages.length === 1 ? 'it' : 'them'} as live only once seen to be`);
-        return { ...result, provedPublished: false };
+        return carry({ ...result, provedPublished: false });
       }
       const showing = new Set(shown.pages.map((p) => String(p.pageId).toLowerCase()));
       const missing = wantedPages.map((p) => String(p.pageId)).filter((id) => !showing.has(id.toLowerCase()));
       if (missing.length) {
-        throw genpageError(`app ${appId} was published, but its published navigation does not show ${missing.length === 1 ? 'page' : 'pages'} ${missing.join(', ')} yet (it is not listed) — the placement is saved in the app's navigation, and shows once the app's publish has taken effect. Run the same command again to check, or publish the app in Maker`, { code: 'GENPAGE_APP_PUBLISH_UNPROVEN', saved: true, ...who });
+        throw carry(genpageError(`app ${appId} was published, but its published navigation does not show ${missing.length === 1 ? 'page' : 'pages'} ${missing.join(', ')} yet (it is not listed) — the placement is saved in the app's navigation, and shows once the app's publish has taken effect. Run the same command again to check, or publish the app in Maker`, { code: 'GENPAGE_APP_PUBLISH_UNPROVEN', saved: true, ...who }));
       }
-      return { ...result, provedPublished: true };
+      return carry({ ...result, provedPublished: true });
     },
 
     // Take a page out of an app's navigation: every GenPage sub-area that names it goes, whichever area and group it sits in (the SDK refuses a second sub-area for one target in a sitemap it validates, so

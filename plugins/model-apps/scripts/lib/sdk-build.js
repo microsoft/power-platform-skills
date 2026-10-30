@@ -3557,11 +3557,25 @@ async function runSdkBuildPhases(spec, opts, owed) {
     // right before its first write, and a placement that finds nothing to pin sends nothing and asks for nothing. It pushes the app as the server holds it, not the spec's navigation,
     // so it tells the request what it sends (`write`: whether it pushes, the tables whose Main forms that push adds and the Main-form list it carries), and a backend that
     // tells nothing is taken to add no form. The page backend's own push is limited to the views it pins (lib/app-component-scope.js), so it adds no Main form and names no table.
-    placeViews(genpage, appId, options) {
-      return genpage.placeInApp(appId, {
-        ...options,
-        beforeAppWrite: async (write) => publishTablesBeforeApp(appId, { addedTables: () => (write && write.pushes ? appPushTables(write.entityTables, write.mainFormsByTable) : []) }),
-      });
+    // The backend publishes the app with its own SDK, outside publishApp, so what that publish answered (`appPublish`, on its answer or its failure) is reported to the app's
+    // publication like any other app publish: an accepted one must prove an exact Main-form list again, and a failed one leaves it unproven. A placement that sent no publish
+    // reports nothing, and an app with no exact list has nothing the report changes.
+    async placeViews(genpage, appId, options) {
+      const report = async (published) => {
+        if (published) await appPublication.noteAppPublication(appId, { answer: { publish: { kind: published.kind, error: published.cause } } });
+      };
+      let placed;
+      try {
+        placed = await genpage.placeInApp(appId, {
+          ...options,
+          beforeAppWrite: async (write) => publishTablesBeforeApp(appId, { addedTables: () => (write && write.pushes ? appPushTables(write.entityTables, write.mainFormsByTable) : []) }),
+        });
+      } catch (error) {
+        await report(error && error.appPublish);
+        throw error;
+      }
+      await report(placed && placed.appPublish);
+      return placed;
     },
   };
   // The apps this run made (appWriters.create): "exact" on an app this run created removes nothing it did not just add, so it needs no authority.

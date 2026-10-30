@@ -139,6 +139,9 @@ test('placeInApp: a page becomes a sub-area of the shape the build writes — in
   const sdk = placing(appArtifact());
   const out = await backend(sdk).placeInApp(APP, { pages: [{ pageId: P1, title: 'Overview' }] });
   assert.deepStrictEqual(out, { added: [P1], alreadyPlaced: [], pinnedViews: [], warnings: [], appEdited: true });
+  // What the app's publish answered rides the answer for a caller that accounts for app publications, without changing what is printed or compared.
+  assert.strictEqual(out.appPublish.kind, 'verified');
+  assert.ok(!Object.keys(out).includes('appPublish'));
   assert.deepStrictEqual(sdk.of('updateElement').map((c) => c.args), [['app', APP, '/siteMap/areas/0/groups/0/subAreas', [
     { id: 'sub_1', type: 'Entity', entity: 'account', title: 'Accounts' },
     { id: `genpage_${P1.replace(/-/g, '')}`, title: 'Overview', type: 'GenPage', genPageId: P1 },
@@ -182,6 +185,7 @@ test('placeInApp: a page the navigation already names (any case) is left alone �
   const sdk = placing(app);
   const out = await backend(sdk).placeInApp(APP, { pages: [{ pageId: P1.toUpperCase(), title: 'Overview' }] });
   assert.deepStrictEqual(out, { added: [], alreadyPlaced: [P1.toUpperCase()], pinnedViews: [], warnings: [], appEdited: false });
+  assert.strictEqual(out.appPublish, undefined, 'nothing was published, so there is no publish answer to report');
   assert.strictEqual(sdk.count('updateElement') + sdk.count('addElement') + sdk.count('pushArtifact') + sdk.count('publishArtifact'), 0);
 });
 
@@ -209,6 +213,7 @@ test('placeInApp: an app that cannot be read, a push that is not saved, and a pu
     assert.strictEqual(e.saved, true);
     assert.deepStrictEqual([e.appId, e.pageId, e.pageIds], [APP, P1, undefined], 'the failure says which app and which page — a caller that prints it can go on from it');
     assert.match(e.message, /saved, but publishing the app failed \(PublishXml refused\)/);
+    assert.deepStrictEqual([e.appPublish.kind, e.appPublish.cause.message], ['failed', 'PublishXml refused'], 'the failure carries what the publish answered');
     return true;
   });
   const several = placing(appArtifact()).script('publish', { publish: { kind: 'failed', error: new Error('PublishXml refused') } });
