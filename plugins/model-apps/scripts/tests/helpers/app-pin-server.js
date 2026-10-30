@@ -64,8 +64,9 @@ function changeSetParts(text) {
 
 // `rows` replaces the enumeration answer of one collection, by its entity set name ('systemforms', 'savedqueries',
 // 'savedqueryvisualizations'), to model an answer the reader must not trust (a row with no id, a non-GUID id); a test may
-// also set `state.rows` after the first push, so only the later reads see it.
-function appPinServer(t, { lose = [], members, rows: answerRows = {} } = {}) {
+// also set `state.rows` after the first push, so only the later reads see it. `wrapHttp(httpClient)` lets another fake answer the
+// requests it models first (helpers/app-theme-server.js) and hand the rest to this one; `sdkOptions` are passed to the SDK.
+function appPinServer(t, { lose = [], members, rows: answerRows = {}, wrapHttp, sdkOptions = {} } = {}) {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'pin-server-'));
   t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
   const state = {
@@ -151,7 +152,7 @@ function appPinServer(t, { lose = [], members, rows: answerRows = {} } = {}) {
       return { status: 200, headers: {}, body: lines.join('\r\n') };
     },
   };
-  const sdk = createMakerSdk({ workspaceStorage: createNodeWorkspaceStorage(directory), instanceUrl: 'https://contoso.crm.dynamics.com', httpClient });
+  const sdk = createMakerSdk({ workspaceStorage: createNodeWorkspaceStorage(directory), instanceUrl: 'https://contoso.crm.dynamics.com', ...sdkOptions, httpClient: wrapHttp ? wrapHttp(httpClient) : httpClient });
   return { sdk, state, httpClient, landLateOriginal: () => { const parts = state.late; state.late = null; return parts ? applySet(parts) : null; } };
 }
 
