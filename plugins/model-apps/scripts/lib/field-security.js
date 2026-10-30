@@ -286,8 +286,10 @@ async function planFieldSecurity(spec, ctx) {
   return { operations, unknown, refused, unchanged };
 }
 
-// Create each planned profile through the create port (ctx.creates.run): the port reserves the profile's id and one id per
-// permission (`childKeys`, `<table>.<column>`) before anything is sent, and refuses a create whose earlier attempt is still unknown.
+// Create each planned profile through the create port (ctx.creates.run): the port mints the profile's id and one id per
+// permission (`childKeys`, `<table>.<column>`) before anything is sent. The build's port (creates-passthrough.js) is a plain
+// pass-through with no fence: it runs the create once and lets any failure through; a durable port could also refuse a create whose
+// earlier attempt is still unknown, behind the same call.
 // The port's answer is `{ outcome: 'created' | 'unknown', id, childIds }`; anything but `created` is reported unknown, never saved.
 // `created` says the profile exists, not that it holds what was declared: the SDK's push resolves `saved` with a warning when the
 // create's answer did not echo every permission exactly, and a create the port resolved from an earlier attempt ran no push here at
