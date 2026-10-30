@@ -9972,25 +9972,40 @@ async function withPushPreviewStub(runPushPreview, fn) {
   try { return await fn(); } finally { mod.exports = real; }
 }
 const PREVIEW_FORM_ID = '7a1c0de0-0000-4000-8000-0000000000f1';
-// A live environment where the table new_customer and its main form "Customer" exist; the form read answers `formid`.
-function previewEnvironment(formid = PREVIEW_FORM_ID.toUpperCase()) {
-  const { sdk } = mockSdk({ existingTables: { new_customer: { entitySetName: 'new_customers', columns: ['new_name', 'new_tier'] } } });
+const PREVIEW_VIEW_ID = '7a1c0de0-0000-4000-8000-0000000000f2';
+// A live environment where both tables, the main form "Customer" and the view "Active Tickets" exist; the form read
+// answers `formid`, the view lookup its id.
+function previewEnvironment(formid = PREVIEW_FORM_ID.toUpperCase(), savedqueryid = PREVIEW_VIEW_ID.toUpperCase()) {
+  const { sdk } = mockSdk({ existingTables: {
+    new_customer: { entitySetName: 'new_customers', columns: ['new_name', 'new_tier'] },
+    new_ticket: { entitySetName: 'new_tickets', columns: ['new_subject', 'new_priority', 'new_customerid'] },
+  } });
   const query = sdk.queryRecords;
   sdk.queryRecords = async (e, o) => (e === 'systemform' ? [{ formid, objecttypecode: 'new_customer', type: 2, name: 'Customer' }] : query(e, o));
+  // A view's probe is the build's own lookup (findArtifact), which answers the view's id.
+  const find = sdk.findArtifact;
+  sdk.findArtifact = async (type, q) => (type === 'view' && q && q.name === 'Active Tickets' ? savedqueryid : (find ? find(type, q) : null));
   return sdk;
 }
 const PREVIEW_OPTS = { apply: false, emit: () => {}, previewPush: true, env: 'https://contoso.crm.dynamics.com', httpClient: { get: async () => ({}) } };
 
-test('--preview-push: a dry run previews a reused form by the id its live probe read, and lists what it cannot name as not evaluated', async () => {
+test('--preview-push: a dry run previews a reused view by the id its live probe read WITH the build\'s reconcile, and lists a reused form as not evaluated', async () => {
   const sdk = previewEnvironment();
   const seen = [];
   const answer = { ok: true, previews: [], notPrepared: [], requiresSchema: [], notEvaluated: [], allEvaluated: true, summary: {}, writeAttempts: 0, disclaimer: 'x' };
   const r = await withPushPreviewStub(async (o) => { seen.push(o); return answer; }, () => runSdkBuild(makeSpec(), { sdk, ...PREVIEW_OPTS }));
   assert.strictEqual(seen.length, 1, 'the preview ran once');
-  const form = seen[0].items.find((i) => i.type === 'form');
-  assert.ok(form, JSON.stringify(seen[0].items));
-  assert.strictEqual(form.id, PREVIEW_FORM_ID, 'the id the probe read, in lower case');
-  assert.match(form.key, /^form:/);
+  const view = seen[0].items.find((i) => i.type === 'view');
+  assert.ok(view, JSON.stringify(seen[0].items));
+  assert.strictEqual(view.id, PREVIEW_VIEW_ID, 'the id the probe read, in lower case');
+  assert.strictEqual(view.key, 'view:new_ticket:Active Tickets');
+  assert.deepStrictEqual(view.liveEdits({ columns: [{ name: 'new_subject', width: 150, order: 0 }] }),
+    [{ op: 'update', pointer: '/columns', value: [{ name: 'new_subject', width: 150, order: 0 }, { name: 'new_priority', width: 100, order: 1 }] }],
+    'the column the build would add, over the fetched copy');
+  // An existing form is reconciled only while the build runs, so it has no typed change: never its unedited live copy.
+  const form = seen[0].items.find((i) => /^form:/.test(i.key));
+  assert.deepStrictEqual(form, { key: form.key, notEvaluated: 'noTypedTarget' });
+  assert.ok(!seen[0].items.some((i) => i.type === 'form' || i.type === 'app'), JSON.stringify(seen[0].items));
   assert.strictEqual(seen[0].env, PREVIEW_OPTS.env);
   assert.strictEqual(seen[0].httpClient, PREVIEW_OPTS.httpClient, 'the client the CLI hands over (wrapped read-only there and again in the helper)');
   assert.strictEqual(seen[0].solutionUniqueName, 'ContosoSD');
@@ -10003,11 +10018,11 @@ test('--preview-push: a dry run previews a reused form by the id its live probe 
   assert.ok(r.planItems.every((p) => !('liveId' in p)), 'the plan items keep the fields they had');
 });
 
-test('--preview-push: a probe answer that is not a GUID names nothing — the reused form is not evaluated', async () => {
+test('--preview-push: a probe answer that is not a GUID names nothing — the reused view is not evaluated', async () => {
   const seen = [];
-  await withPushPreviewStub(async (o) => { seen.push(o); return { ok: true }; }, () => runSdkBuild(makeSpec(), { sdk: previewEnvironment('form-existing'), ...PREVIEW_OPTS }));
-  const form = seen[0].items.find((i) => /^form:/.test(i.key));
-  assert.deepStrictEqual(form, { key: form.key, notEvaluated: 'noTypedTarget' });
+  await withPushPreviewStub(async (o) => { seen.push(o); return { ok: true }; }, () => runSdkBuild(makeSpec(), { sdk: previewEnvironment(undefined, 'view-existing'), ...PREVIEW_OPTS }));
+  const view = seen[0].items.find((i) => /^view:/.test(i.key));
+  assert.deepStrictEqual(view, { key: view.key, notEvaluated: 'noTypedTarget' });
 });
 
 test('--preview-push: a preview that fails is reported by its code and HTTP status, and the dry run stands', async () => {
@@ -10034,28 +10049,58 @@ test('--preview-push: without the flag, or on a plan with no live probe, the pre
   }
 });
 
-test('--preview-push: the target of each plan item — a reused artifact by its live id (a command bar by its table), a created chart by its definition, nothing else', () => {
-  const { previewTargetOf, previewItemsForPlan } = require('../lib/sdk-build.js');
-  const { previewItemsFromPlan } = require('../lib/push-preview.js');
+test('--preview-push: the target of each plan item — a reused view with the build\'s reconcile edits, a created chart by its definition, nothing else', () => {
+  const { previewTargetOf } = require('../lib/sdk-build.js');
   const spec = makeSpec();
   const id = PREVIEW_FORM_ID;
-  assert.deepStrictEqual(previewTargetOf({ key: { kind: 'command', entity: 'contoso_ticket' }, state: 'reuse' }, spec), { type: 'command', id: 'contoso_ticket' });
-  assert.deepStrictEqual(previewTargetOf({ key: { kind: 'command', entity: 'Contoso_Ticket' }, state: 'reuse' }, spec), { type: 'command', id: 'contoso_ticket' });
-  assert.strictEqual(previewTargetOf({ key: { kind: 'command', entity: 'not a table' }, state: 'reuse' }, spec), null);
-  for (const kind of ['form', 'view', 'chart', 'app']) {
-    assert.deepStrictEqual(previewTargetOf({ key: { kind, entity: 'new_ticket', name: 'x' }, state: 'reuse', liveId: id }, spec), { type: kind, id });
-    assert.strictEqual(previewTargetOf({ key: { kind, entity: 'new_ticket', name: 'x' }, state: 'reuse' }, spec), null, `${kind}: no live id, no target`);
+  const viewKey = { kind: 'view', entity: 'new_ticket', name: 'Active Tickets' };
+  const view = previewTargetOf({ key: viewKey, state: 'reuse', liveId: id }, spec);
+  assert.deepStrictEqual(Object.keys(view).sort(), ['id', 'liveEdits', 'type']);
+  assert.strictEqual(view.type, 'view');
+  assert.strictEqual(view.id, id);
+  // The same edits the apply makes (reconcileView): the fetched columns verbatim plus the spec's missing ones; the
+  // description only when the spec sets one and it differs from the live text.
+  const live = { columns: [{ name: 'new_subject', width: 120, order: 0 }, { name: 'new_priority', width: 80, order: 1 }], description: 'Theirs' };
+  assert.deepStrictEqual(view.liveEdits(live), [{ op: 'update', pointer: '/columns', value: live.columns }], 'nothing to add: the copy stays equal to its snapshot');
+  const described = makeSpec();
+  described.views[0].description = 'Open work';
+  described.views[0].columns.push('New_CustomerId');
+  assert.deepStrictEqual(previewTargetOf({ key: viewKey, state: 'reuse', liveId: id }, described).liveEdits(live), [
+    { op: 'update', pointer: '/columns', value: [...live.columns, { name: 'new_customerid', width: 100, order: 2 }] },
+    { op: 'update', pointer: '/description', value: 'Open work' },
+  ]);
+  assert.deepStrictEqual(previewTargetOf({ key: viewKey, state: 'reuse', liveId: id }, described).liveEdits({ ...live, description: 'Open work' }).map((e) => e.pointer), ['/columns']);
+  // An existing form, chart, app or command bar: the build makes its change only while it runs (or, for a chart, never
+  // pushes it), so there is no typed target — never its live copy alone, which would preview as an unedited noChange.
+  for (const kind of ['form', 'chart', 'app', 'command', 'dashboard', 'businessRule', 'bpf', 'fieldSecurityProfile']) {
+    assert.strictEqual(previewTargetOf({ key: { kind, entity: 'new_ticket', name: 'By Priority' }, state: 'reuse', liveId: id }, spec), null, kind);
   }
+  assert.strictEqual(previewTargetOf({ key: viewKey, state: 'reuse' }, spec), null, 'view: no live id, no target');
+  assert.strictEqual(previewTargetOf({ key: { ...viewKey, name: 'Not in the spec' }, state: 'reuse', liveId: id }, spec), null, 'no spec view, no edits to state');
   assert.deepStrictEqual(previewTargetOf({ key: { kind: 'chart', entity: 'new_ticket', name: 'By Priority' }, state: 'create' }, spec),
     { type: 'chart', create: chartDef(spec, spec.charts[0]) });
   for (const item of [
-    { key: { kind: 'view', entity: 'new_ticket', name: 'Active Tickets' }, state: 'create' },
+    { key: viewKey, state: 'create' },
     { key: { kind: 'form', entity: 'new_customer', name: 'Customer' }, state: 'create' },
-    { key: { kind: 'form', entity: 'new_customer', name: 'Customer' }, state: 'unknown', liveId: id },
+    { key: viewKey, state: 'unknown', liveId: id },
     { key: { kind: 'environmentVariable', name: 'x' }, state: 'reuse', liveId: id },
     { key: { kind: 'table', entity: 'new_ticket' }, state: 'reuse', liveId: id },
   ]) assert.strictEqual(previewTargetOf(item, spec), null, JSON.stringify(item));
-  // Two plan steps of one kind, table and name keep apart: the preview refuses a repeated key for the whole run.
-  const twice = { key: { kind: 'form', entity: 'new_customer', name: 'Customer' }, state: 'reuse', liveId: id };
-  assert.deepStrictEqual(previewItemsForPlan([twice, twice], spec, previewItemsFromPlan).map((i) => i.key), ['form:new_customer:Customer', 'form:new_customer:Customer#2']);
+});
+
+test('--preview-push: repeated plan keys are made unique without taking a key another plan step carries, in either order', () => {
+  const { previewItemsForPlan } = require('../lib/sdk-build.js');
+  const { previewItemsFromPlan, validatePreviewItems } = require('../lib/push-preview.js');
+  const spec = makeSpec();
+  const form = (name) => ({ key: { kind: 'form', entity: 'new_customer', name }, state: 'reuse', liveId: PREVIEW_FORM_ID });
+  for (const [names, keys] of [
+    [['Customer', 'Customer'], ['Customer', 'Customer#2']],
+    [['Customer', 'Customer', 'Customer#2'], ['Customer', 'Customer#3', 'Customer#2']],
+    [['Customer#2', 'Customer', 'Customer'], ['Customer#2', 'Customer', 'Customer#3']],
+    [['Customer', 'Customer#2', 'Customer', 'Customer'], ['Customer', 'Customer#2', 'Customer#3', 'Customer#4']],
+  ]) {
+    const items = previewItemsForPlan(names.map(form), spec, previewItemsFromPlan);
+    assert.deepStrictEqual(items.map((i) => i.key), keys.map((k) => `form:new_customer:${k}`), names.join(', '));
+    assert.deepStrictEqual(validatePreviewItems(items).errors, [], 'the preview accepts the input');
+  }
 });

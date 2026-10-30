@@ -7,7 +7,8 @@
 // so previewing there would either preview edits nobody asked about (its dirty list is shared) or leave edits behind
 // that a later push would send. So this module makes a throwaway workspace (lib/throwaway-sdk.js), fetches each named
 // artifact FRESH into it, applies the prepared typed edits locally (`updateElement`/`addElement`/`removeElement`/
-// `moveElement`, or `createArtifact` for one the build would create), and previews exactly that set. Nothing is
+// `moveElement`, or `createArtifact` for one the build would create; `liveEdits` computes them over the fetched copy,
+// for a change that depends on what is live), and previews exactly that set. Nothing is
 // persisted beyond the throwaway folder, which is removed whichever way the run ends.
 //
 // What it does NOT do:
@@ -45,7 +46,7 @@ const PREVIEW_TYPES = Object.freeze([
   'form', 'view', 'businessRule', 'app', 'command', 'chart', 'dashboard', 'bpf',
   'environmentVariable', 'connectionReference', 'fieldSecurityProfile', 'customApi', 'duplicateRule',
 ]);
-const ITEM_KEYS = ['key', 'type', 'id', 'create', 'edits', 'requiresSchema', 'notEvaluated'];
+const ITEM_KEYS = ['key', 'type', 'id', 'create', 'edits', 'liveEdits', 'requiresSchema', 'notEvaluated'];
 // Why a plan item is carried as not evaluated instead of previewed: the caller had no typed artifact to name for it
 // (`noTypedTarget`), or the dry run could not read its live state (`livePlanUnknown`). It is reported, never dropped:
 // a preview that silently left an item out would read as covering it. (A result's `notEvaluated` may also say
@@ -82,12 +83,12 @@ function validatePreviewItems(items) {
     if (item.notEvaluated !== undefined) {
       // A key and a reason only: nothing about the item is read or previewed, so nothing else may be given.
       if (!NOT_EVALUATED_REASONS.includes(item.notEvaluated)) errors.push(`${where}.notEvaluated must be one of: ${NOT_EVALUATED_REASONS.join(', ')}`);
-      for (const k of ['type', 'id', 'create', 'edits', 'requiresSchema']) if (item[k] !== undefined) errors.push(`${where}.${k} cannot be combined with notEvaluated`);
+      for (const k of ['type', 'id', 'create', 'edits', 'liveEdits', 'requiresSchema']) if (item[k] !== undefined) errors.push(`${where}.${k} cannot be combined with notEvaluated`);
       return;
     }
     if (item.requiresSchema === true) {
       // A schema step keeps its dry-run answer; nothing else about it is previewed, so nothing else may be given.
-      for (const k of ['id', 'create', 'edits']) if (item[k] !== undefined) errors.push(`${where}.${k} cannot be combined with requiresSchema`);
+      for (const k of ['id', 'create', 'edits', 'liveEdits']) if (item[k] !== undefined) errors.push(`${where}.${k} cannot be combined with requiresSchema`);
       return;
     }
     if (item.requiresSchema !== undefined && item.requiresSchema !== false) errors.push(`${where}.requiresSchema must be a boolean`);
@@ -104,6 +105,13 @@ function validatePreviewItems(items) {
       else item.edits.forEach((edit, j) => validateEdit(edit, `${where}.edits[${j}]`, errors));
     }
     if (hasCreate && Array.isArray(item.edits) && item.edits.length) warnings.push(`${where}: edits are applied after the local create`);
+    if (item.liveEdits !== undefined) {
+      // Edits that depend on the live copy (the build's reconcile of an existing artifact): computed after the fresh
+      // fetch, so only for an existing artifact, and not mixed with fixed edits, whose order against them is undefined.
+      if (typeof item.liveEdits !== 'function') errors.push(`${where}.liveEdits must be a function of the fetched copy`);
+      if (!hasId) errors.push(`${where}.liveEdits needs id (an existing artifact)`);
+      if (item.edits !== undefined) errors.push(`${where}.liveEdits cannot be combined with edits`);
+    }
   });
   return { errors, warnings };
 }
@@ -187,6 +195,17 @@ async function preparePushPreview({ env, httpClient, items, solutionUniqueName, 
           if (!id) throw publicError('PREVIEW_CREATE_NO_ID', 'the local create returned no id');
         }
         for (const edit of item.edits || []) await applyEdit(handle.sdk, item.type, id, edit);
+        if (item.liveEdits) {
+          // The caller's change computed over the copy just fetched (lib/sdk-build.js previewTargetOf: the build's own
+          // reconcile of an existing view), so the preview is of the push the build would send, not of the live row as
+          // it stands. Checked as fixed edits are; one that cannot be computed or applied leaves this item not prepared.
+          const edits = await item.liveEdits(await handle.sdk.getArtifact(item.type, id));
+          const errors = [];
+          if (!Array.isArray(edits)) errors.push(`${item.key}.liveEdits must return an array`);
+          else edits.forEach((edit, j) => validateEdit(edit, `${item.key}.liveEdits[${j}]`, errors));
+          if (errors.length) throw publicError('PREVIEW_ITEMS_INVALID', `push preview: ${errors.join('; ')}`);
+          for (const edit of edits) await applyEdit(handle.sdk, item.type, id, edit);
+        }
         handle.prepared.push({ key: item.key, type: item.type, id: String(id), create: !item.id });
       } catch (err) {
         // A fetch that fails (a deleted row, no read right) or an edit the SDK refuses is a finding about THIS item —
@@ -352,7 +371,8 @@ async function runPushPreview(options) {
 /**
  * Maps dry-run plan items (lib/sdk-build.js annotateLivePlan output: `{ key: { kind, ... }, state }`) to preview items.
  * `resolve(item)` is the caller's — the build knows the artifact ids and the definitions it would send — and returns
- * `{ type, id, edits }`, `{ type, create }`, or null when it has no typed artifact to name. Every item whose live
+ * `{ type, id, edits }`, `{ type, id, liveEdits }`, `{ type, create }`, or null when it has no typed artifact to name
+ * WITH the change it would make (never an unedited live artifact for one it may edit). Every item whose live
  * state the dry run could not read (or did not read) — a schema item included — becomes
  * `{ key, notEvaluated: 'livePlanUnknown' }` and is not resolved. Of the rest, schema kinds become `requiresSchema` on
  * a create without asking `resolve` (a KNOWN schema reuse has nothing to preview: the one item left out), and one

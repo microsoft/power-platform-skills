@@ -146,6 +146,7 @@ const { pinIntentOf, pinWarningOf, reconcileUnconfirmedPin } = require('./app-pi
 const { createAppPublication } = require('./app-publication-policy.js');
 const { appWriteTables, appPushTables, preAppTables, publishTablesXml, readSavedNotPublished, describeSavedNotPublished, readAppFormChartTables, describePreAppRefusal, describeUnreadAppComponents } = require('./table-publish.js');
 const { hasUnsyncedEdits } = require('./unsynced-edits.js');
+const { uniqueKeys } = require('./unique-keys.js');
 const { createSolutionMembership, ensureSolutionComponent } = require('./solution-membership.js');
 const { readPageComponentType, pageComponent } = require('./page-solution.js');
 const { openUnconfirmedWebResources } = require('./web-resource-records.js');
@@ -948,6 +949,33 @@ function viewDef(spec, v, resolution) {
   return { name: v.name, description: String(v.description || '').trim(), entityLogicalName: entityLogical, queryType: 0, isDefault: false, columns: cols,
     filters: { type: 'and', conditions, groups },
     sort: (v.sort || []).map((s) => ({ attribute: String(s.attr).toLowerCase(), descending: s.dir === 'desc' })) };
+}
+
+// The edits the build makes to a view that already exists (reconcileView), as typed pointer edits over the copy it
+// fetched: the fetched columns verbatim plus every spec column they lack, and the description. One function for the
+// apply and for `--preview-push` (previewTargetOf), so the preview shows the change the apply would send, not the live
+// view as it stands. Only columns and the description converge; an existing view's filters and sort are not reapplied.
+//
+// The description has two guards, both load-bearing (#496):
+//   * only when the spec EXPLICITLY sets one (`viewDef` emits `description: v.description || ''`, so an unset
+//     description is `''` — writing that would blank text a maker typed in the UI);
+//   * only when it DIFFERS, so an ordinary rebuild issues no extra write.
+// The `/columns` edit is always made; when it adds nothing, the copy still equals its snapshot (the SDK's diff is
+// structural — lib/unsynced-edits.js), so the build pushes nothing and the preview says noChange.
+function viewReconcileEdits(current, def) {
+  const cur = current || {};
+  const have = new Set((cur.columns || []).map((c) => String(c.name).toLowerCase()));
+  const merged = (cur.columns || []).slice();
+  for (const col of def.columns || []) {
+    const n = String(col.name).toLowerCase();
+    if (have.has(n)) continue;
+    have.add(n);
+    merged.push({ name: n, width: col.width || 100, order: merged.length });
+  }
+  const edits = [{ op: 'update', pointer: '/columns', value: merged }];
+  const wantDescription = typeof def.description === 'string' ? def.description.trim() : '';
+  if (wantDescription && wantDescription !== String(cur.description || '')) edits.push({ op: 'update', pointer: '/description', value: wantDescription });
+  return edits;
 }
 
 // The raw-client readers every view-label check shares. `read` is null with no client to ask (a test double), and
@@ -2596,54 +2624,43 @@ function keepLiveId(item, present) {
   if (FORM_GUID_RE.test(id)) item.liveId = id.toLowerCase();
 }
 
-// Plan kinds the SDK's push preview can name as an artifact (lib/push-preview.js PREVIEW_TYPES). Only
-// form, view, chart and app are keyed by planFor today; the others are here so a key added later maps
-// without a second edit. Configuration kinds (environment variables, connection references, custom
-// APIs, duplicate rules) are left out: this build has no plan step for them.
-const PREVIEW_KIND_TYPES = Object.freeze({
-  form: 'form', view: 'view', chart: 'chart', app: 'app', command: 'command', dashboard: 'dashboard',
-  businessRule: 'businessRule', bpf: 'bpf', fieldSecurityProfile: 'fieldSecurityProfile',
-});
-
-// The SDK artifact a plan item's push would touch, or null when the build has no typed target for it
-// without running (the preview then lists it as `noTypedTarget` — never a placeholder that would read
-// as "no change"):
-//   - a REUSED artifact: its live id (a command bar is named by its table's logical name — the SDK
-//     assembles a bar from the table's appaction rows). Previewed as it stands live: the reconcile
-//     edits an apply would make are computed only by running it, so they are not part of the preview;
+// The SDK artifact a plan item's push would touch, WITH the change the build would make to it, or null
+// when the build cannot state that change without running (the preview then lists the item as
+// `noTypedTarget`). Never the live artifact alone for an item the build may edit: an unedited fetch
+// previews as noChange/ready, which would answer for a different push from the one the apply sends.
+//   - a REUSED view: its live id and the build's own reconcile edits (viewReconcileEdits — the spec
+//     columns it lacks and the description), computed over the copy the preview fetches. Its columns
+//     and description come from the spec alone; the live label resolution `viewDef` takes is for
+//     filters, which an existing view does not reapply;
 //   - a chart the build would CREATE: chartDef is the definition the build sends, built from the spec
-//     alone. A view's definition needs the live label resolution, and a form is created through its
-//     shell, so neither has a definition here.
+//     alone.
+// Null for the rest: an existing form or app is reconciled through reads and edits made only while the
+// build runs (form intent, header, sitemap, components); an existing chart is never pushed by the build
+// (its description is a direct column write); a command bar's edits are made only while it runs; a
+// view the build would create needs the live label resolution, and a form is created through its shell.
 function previewTargetOf(item, spec) {
   const k = item && item.key;
-  const type = k && PREVIEW_KIND_TYPES[k.kind];
-  if (!type) return null;
-  if (item.state === 'reuse') {
-    if (type === 'command') {
-      const table = String(k.entity || '').toLowerCase();
-      return /^[a-z][a-z0-9_]{0,127}$/.test(table) ? { type, id: table } : null;
-    }
-    return item.liveId ? { type, id: item.liveId } : null;
+  if (!k) return null;
+  if (item.state === 'reuse' && k.kind === 'view' && item.liveId) {
+    const entity = String(k.entity || '').toLowerCase();
+    const view = k.declared || ((spec && spec.views) || []).find((v) => v && v.name === k.name && String(v.entity || '').toLowerCase() === entity);
+    if (!view) return null;
+    const def = viewDef(spec, view);
+    return { type: 'view', id: item.liveId, liveEdits: (current) => viewReconcileEdits(current, def) };
   }
-  if (item.state === 'create' && type === 'chart') {
+  if (item.state === 'create' && k.kind === 'chart') {
     const entity = String(k.entity || '').toLowerCase();
     const chart = ((spec && spec.charts) || []).find((c) => c && c.name === k.name && String(c.entity || '').toLowerCase() === entity);
-    return chart ? { type, create: chartDef(spec, chart) } : null;
+    return chart ? { type: 'chart', create: chartDef(spec, chart) } : null;
   }
   return null;
 }
 
-// The preview items of a plan. Keys are made unique (`#2`, `#3`, … on a repeat): two plan steps can share
-// a kind, table and name (a main and a quick-create form of one name), and the preview refuses a repeated
-// key for the whole run.
+// The preview items of a plan, with unique keys (lib/unique-keys.js): two plan steps can share a kind,
+// table and name (a main and a quick-create form of one name), and the preview refuses a repeated key for
+// the whole run.
 function previewItemsForPlan(plan, spec, previewItemsFromPlan) {
-  const items = previewItemsFromPlan(plan, (item) => previewTargetOf(item, spec));
-  const seen = new Map();
-  return items.map((it) => {
-    const n = (seen.get(it.key) || 0) + 1;
-    seen.set(it.key, n);
-    return n === 1 ? it : { ...it, key: `${it.key}#${n}` };
-  });
+  return uniqueKeys(previewItemsFromPlan(plan, (item) => previewTargetOf(item, spec)));
 }
 
 // Decide, against the LIVE environment, whether each planned item would be created or reused. #559.
@@ -5607,30 +5624,13 @@ async function runSdkBuildPhases(spec, opts, owed) {
   const reconcileView = async (viewId, def, authoredQuery) => {
     await provision.fetchArtifact('view', viewId);
     const current = await provision.getArtifact('view', viewId) || {};
-    const have = new Set((current.columns || []).map((c) => String(c.name).toLowerCase()));
-    const merged = (current.columns || []).slice();
-    for (const col of def.columns || []) {
-      const n = String(col.name).toLowerCase();
-      if (have.has(n)) continue;
-      have.add(n);
-      merged.push({ name: n, width: col.width || 100, order: merged.length });
-    }
-    await provision.updateElement('view', viewId, '/columns', merged);
-    // Reconcile the maker-facing description too (#496). Without this, a view's description reached
+    // The columns, then the maker-facing description (#496: without it, a view's description reached
     // Dataverse only on CREATE — and the most-read view on a table is the platform's auto-generated
     // "Active <Plural>", which already exists, so the build reconciles onto it and the authored
-    // description was never written.
-    //
-    // Two guards, both load-bearing:
-    //   * only when the spec EXPLICITLY sets one (`viewDef` emits `description: v.description || ''`,
-    //     so an unset description is `''` — writing that would blank text a maker typed in the UI);
-    //   * only when it DIFFERS, so an ordinary rebuild issues no extra write.
-    // This rides the push below rather than a separate PATCH: the push rewrites `description` from
-    // the artifact, so a standalone PATCH would be immediately overwritten by the stale fetched value.
-    const wantDescription = typeof def.description === 'string' ? def.description.trim() : '';
-    if (wantDescription && wantDescription !== String(current.description || '')) {
-      await provision.updateElement('view', viewId, '/description', wantDescription);
-    }
+    // description was never written). viewReconcileEdits holds both rules and their guards.
+    // The description rides the push below rather than a separate PATCH: the push rewrites `description`
+    // from the artifact, so a standalone PATCH would be immediately overwritten by the stale fetched value.
+    for (const edit of viewReconcileEdits(current, def)) await provision.updateElement('view', viewId, edit.pointer, edit.value);
     // An EXISTING view's FetchXML (filters + sort) is not reapplied here — only columns and the
     // description converge. Silence made an authored filter edit look applied when it was not, so
     // the no-op is reported instead. It is a warning rather than a failure because the common way to

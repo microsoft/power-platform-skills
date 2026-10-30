@@ -384,3 +384,48 @@ test('real transport: a failed fetch and an SDK finding reach the result as code
   assert.deepEqual(stub.previews[0].warnings, [{ code: 'NOTE' }]);
   assert.doesNotMatch(JSON.stringify(stub), /SENTINEL|SECRET_VALUE/);
 });
+
+// --- the dry run's own preview (lib/sdk-build.js previewTargetOf): what the BUILD would push, not the live row as it stands ---
+
+async function dryRunPreview(e, s) {
+  const { createMakerSdk, createNodeWorkspaceStorage } = require('../lib/maker-sdk.js');
+  const { runSdkBuild } = require('../lib/sdk-build.js');
+  const dir = makeTempDir('push-preview-build-');
+  const sdk = createMakerSdk({ workspaceStorage: createNodeWorkspaceStorage(path.join(dir, 'sdk')), instanceUrl: e.org.origin, httpClient: e.client, solutionUniqueName: s.solution.uniqueName, languageCode: 1033 });
+  await sdk.initWorkspace();
+  const mark = e.org.requests.length;
+  const r = await runSdkBuild(s, { sdk, provisionSdk: sdk, apply: false, emit: () => {}, previewPush: true, env: e.org.origin, httpClient: e.client, preResolvedLanguageCode: 1033, appDir: path.join(dir, 'app') });
+  assert.equal(r.ok, true, JSON.stringify(r));
+  return { r, writes: nonGets(e.org, mark) };
+}
+
+test('real bundle: a dry run previews an existing view the spec leaves as it is as noChange/ready, GETs only', async () => {
+  const e = await env();
+  const { r, writes } = await dryRunPreview(e, spec);
+  assert.deepEqual(writes, [], 'no request other than GET reached the environment');
+  const p = r.pushPreview.previews.find((x) => x.key === 'view:contoso_ticket:Open tickets');
+  assert.ok(p, JSON.stringify(r.pushPreview));
+  assert.equal(p.action, 'noChange');
+  assert.equal(p.outcome, 'ready');
+  assert.deepEqual(p.localChanges, []);
+  assert.equal(r.pushPreview.writeAttempts, 0);
+});
+
+test('real bundle: a dry run previews an existing view WITH the column the spec adds (an update), and lists what it cannot prepare as not evaluated', async () => {
+  const e = await env();
+  const changed = structuredClone(spec);
+  changed.views[0].columns.push('contoso_note');
+  const before = JSON.stringify(e.org.find('savedqueries', (v) => v.savedqueryid === e.view.savedqueryid)[0]);
+  const { r, writes } = await dryRunPreview(e, changed);
+  assert.deepEqual(writes, [], 'no request other than GET reached the environment');
+  assert.equal(JSON.stringify(e.org.find('savedqueries', (v) => v.savedqueryid === e.view.savedqueryid)[0]), before, 'the server row is unchanged');
+  const p = r.pushPreview.previews.find((x) => x.key === 'view:contoso_ticket:Open tickets');
+  assert.ok(p, JSON.stringify(r.pushPreview));
+  assert.equal(p.action, 'update', 'the column the build would add is part of the preview, not left out as an unedited live view');
+  assert.ok(p.localChanges.length > 0 && p.localChanges.every((c) => c.pointer.startsWith('/columns')), JSON.stringify(p.localChanges));
+  // The existing app is reconciled by the build only while it runs (header, sitemap, components), so it has no
+  // typed change here: it is listed as not evaluated, never previewed as the unedited live app.
+  assert.ok(!r.pushPreview.previews.some((x) => x.type === 'app'), JSON.stringify(r.pushPreview.previews.map((x) => x.key)));
+  assert.ok(r.pushPreview.notEvaluated.some((n) => /^app:/.test(n.key) && n.reason === 'noTypedTarget'), JSON.stringify(r.pushPreview.notEvaluated));
+  assert.equal(r.pushPreview.allEvaluated, false);
+});
