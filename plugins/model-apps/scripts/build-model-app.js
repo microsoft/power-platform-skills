@@ -82,7 +82,7 @@ function assertWorkspaceDir(workspaceDir, { create }) {
 //                  which environment it belongs to, and the answer comes back as `folderNote` so the
 //                  preview can warn that an --apply would stop. Construction is offline (no token
 //                  until first call).
-async function makeSdk(env, spec, workspaceDir, languageCode, { persistent = true, throttle } = {}) {
+async function makeSdk(env, spec, workspaceDir, languageCode, { persistent = true, throttle, previewPush = false } = {}) {
   // A link at the workspace root would make the provision SDK's storage follow it. Refuse
   // before either constructor: the first SDK does not use this directory, but once the
   // directory has been refused the factory must not run at all.
@@ -175,7 +175,11 @@ async function makeSdk(env, spec, workspaceDir, languageCode, { persistent = tru
   // caller, it created a client of its own, and a second `az account get-access-token`, for every build's
   // dashboard verify. Each read still gets its own throwaway workspace and SDK (verify-model-app.js).
   const isolatedReader = isolatedReaderFor(env, { httpClient });
-  return { sdk, provisionSdk, cleanup, isolatedReader, folderNote };
+  // `--preview-push` hands the SDK's push preview a client to read with (lib/push-preview.js), and only then. It
+  // is the same client wrapped read-only, so it can be given out without the bypass above: a write through it is
+  // refused before it is sent. Undefined otherwise, so a run without the flag gets nothing it did not get before.
+  const previewHttpClient = previewPush ? require('./lib/readonly-operations.js').readOnlyHttpClient(httpClient).client : undefined;
+  return { sdk, provisionSdk, cleanup, isolatedReader, folderNote, previewHttpClient };
 }
 
 // Turn engine progress events into a phase-grouped, status-marked build log:
@@ -728,6 +732,9 @@ async function buildModelAppHeld(spec, opts, deps, v, buildLease) {
         // The budget of waiting the page backend spends from, one for every attempt of this run.
         throttle,
         emit,
+        // --preview-push (a dry run with the live plan only): the read-only client the preview reads through. Spread
+        // in only when asked, so a run without the flag hands the engine exactly the options it did before.
+        ...(opts.previewPush === true && !opts.apply ? { previewPush: true, httpClient: deps.previewHttpClient } : {}),
       });
       break;
     } catch (err) {
@@ -808,6 +815,7 @@ async function buildModelAppHeld(spec, opts, deps, v, buildLease) {
     log(r.livePlan
       ? `\n▢ dry run — ${parts.join(', ')} (${r.planItems.length} steps). ${closing}`
       : `\n▢ dry run — ${r.planItems.length} steps, spec-only (no live probe; --no-live-plan)${wouldHalt ? `, ${wouldHalt} would stop the build` : ''}${removing ? `, ${removing}` : ''}. ${closing}`);
+    if (r.pushPreview) printPushPreview(r.pushPreview, log);
   }
   if (opts.apply && r && r.ok && !r.dryRun) {
     log(`\n✓ build complete — ${counts.ok} created, ${counts.skip} skipped, ${counts.error} failed (${counts.ok + counts.skip + counts.error} steps)`);
@@ -936,6 +944,39 @@ async function buildModelAppHeld(spec, opts, deps, v, buildLease) {
   // (they were already narrated via `log` above). Never overrides an error result's shape.
   if (r && typeof r === 'object' && (v.warnings || []).length) r.warnings = v.warnings;
   return r;
+}
+
+// What `--preview-push` found (lib/push-preview.js runPushPreview's result), printed under the dry-run summary.
+// Codes, keys, counts and the helper's own fixed words only: a refusal or a warning carries no SDK message in the
+// result (it can quote a record value), and a failure's `error` is already reduced to its code, HTTP status and
+// fixed words (readonly-operations.js findingOf). Every item the preview did not answer is printed, by its reason,
+// and a preview that did not answer them all says so — it must never read as covering the plan when it does not.
+const PREVIEW_REASON_WORDS = Object.freeze({
+  noTypedTarget: 'the build has no typed change for it to preview',
+  livePlanUnknown: 'its live state could not be read',
+  notInBatch: 'the batch preview did not answer it (no local edit), so it was not previewed',
+});
+function printPushPreview(p, log) {
+  const codes = (list) => (list || []).map((f) => (f && f.code) || '?').join(', ');
+  const s = p.summary;
+  log(s
+    ? `\n▢ push preview — ${s.ready || 0} ready, ${s.refused || 0} refused, ${s.unknown || 0} unknown, ${s.requiresSchema || 0} schema step(s), ${s.notPrepared || 0} not prepared, ${s.notEvaluated || 0} not evaluated`
+    : '\n▢ push preview');
+  for (const pv of p.previews || []) {
+    if (pv.outcome === 'ready') continue;
+    const found = [codes(pv.refusals) && `refused: ${codes(pv.refusals)}`, codes(pv.warnings) && `warnings: ${codes(pv.warnings)}`].filter(Boolean).join('; ');
+    log(`  ? ${pv.key} — ${pv.outcome}${found ? ` (${found})` : ''}`);
+  }
+  for (const np of p.notPrepared || []) {
+    log(`  ? ${np.key} — not prepared: ${np.code || 'PREVIEW_FAILED'}${np.statusCode ? ` (HTTP ${np.statusCode})` : ''}${np.message ? ` — ${np.message}` : ''}`);
+  }
+  for (const ne of p.notEvaluated || []) {
+    log(`  ? ${ne.key} — not evaluated: ${ne.reason}${PREVIEW_REASON_WORDS[ne.reason] ? ` (${PREVIEW_REASON_WORDS[ne.reason]})` : ''}`);
+  }
+  if (p.error) log(`  ✗ push preview failed: ${p.error.code || 'PREVIEW_FAILED'}${p.error.statusCode ? ` (HTTP ${p.error.statusCode})` : ''}${p.error.message ? ` — ${p.error.message}` : ''}`);
+  if (p.writeAttempts > 0) log(`  ✗ ${p.writeAttempts} write request(s) were attempted and refused before sending: this preview is not trustworthy`);
+  if (p.allEvaluated !== true) log('  the preview did not evaluate every planned change; see the items above');
+  if (p.disclaimer) log(`  ${p.disclaimer}`);
 }
 
 // A failure is transient (safe to auto-retry, since the build is idempotent) when the SERVICE said so, by the
@@ -1111,7 +1152,7 @@ async function main() {
   const argv = process.argv.slice(2);
   const { positional, flags } = parseArgs(argv);
   const USAGE =
-    'Usage: node scripts/build-model-app.js --env <url> --spec @<app-folder>/app-spec.json [--apply] [--sample-data] [--publish] [--verify] [--changed-only] [--no-live-plan] [--stage <data|ui|app|publish>] [--only|--skip <phases>] [--from|--to <phase>] [--language-code|--languageCode <lcid>] [--non-interactive] [--allow-destructive] [--authorize <key>]... [--workspace <dir>]';
+    'Usage: node scripts/build-model-app.js --env <url> --spec @<app-folder>/app-spec.json [--apply] [--sample-data] [--publish] [--verify] [--changed-only] [--no-live-plan] [--preview-push] [--stage <data|ui|app|publish>] [--only|--skip <phases>] [--from|--to <phase>] [--language-code|--languageCode <lcid>] [--non-interactive] [--allow-destructive] [--authorize <key>]... [--workspace <dir>]';
   // The declared flag contract, enforced before anything else runs.
   //
   // `needValue` lists every flag whose MISSING value would be read as a default rather than an
@@ -1124,7 +1165,7 @@ async function main() {
   // but the one-letter typo `--stagee ui` planned all 9 and still exited 0 — a caller who believed
   // they had scoped an apply to the UI phases got a full data-model apply with no diagnostic.
   const flagError = validateFlags(argv, {
-    known: ['env', 'spec', 'apply', 'sample-data', 'publish', 'verify', 'changed-only', 'no-live-plan',
+    known: ['env', 'spec', 'apply', 'sample-data', 'publish', 'verify', 'changed-only', 'no-live-plan', 'preview-push',
       'stage', 'only', 'skip', 'from', 'to', 'language-code', 'languageCode', 'non-interactive',
       'allow-destructive', 'authorize', 'workspace'],
     needValue: ['env', 'spec', 'stage', 'only', 'skip', 'from', 'to', 'language-code', 'languageCode', 'authorize', 'workspace'],
@@ -1148,6 +1189,13 @@ async function main() {
   const changedOnly = flags['changed-only'] === true;
   if (changedOnly && (flags.stage || flags.only || flags.skip || flags.from || flags.to)) {
     process.stderr.write('✗ --changed-only cannot be combined with --stage/--only/--skip/--from/--to — it selects its own phases.\n');
+    process.exit(1);
+  }
+  // --preview-push previews against the live environment, so it needs the live plan it builds on (a dry run
+  // with the live plan only), and an apply has nothing to preview. Refused like every other flag conflict here.
+  if (flags['preview-push'] === true && (flags.apply === true || flags['no-live-plan'] === true)) {
+    makeWritesBlocking(process.stdout, process.stderr);
+    process.stderr.write(`✗ --preview-push runs on a dry run with the live plan; drop --apply / --no-live-plan\n${USAGE}\n`);
     process.exit(1);
   }
   const specPath = path.resolve(specArg.startsWith('@') ? specArg.slice(1) : specArg);
@@ -1219,6 +1267,8 @@ async function main() {
     appDir: path.dirname(specPath),
     env,
     workspaceDir,
+    // --preview-push: only when given, so the options of a run without it are what they were.
+    ...(flags['preview-push'] === true ? { previewPush: true } : {}),
   };
   // An APPLY runs under the app's build lease from here to its result (lib/app-operation-lease.js): taken after the arguments, the spec and the
   // paths have been checked, and BEFORE the auth check, the language read, the SDK's workspace, the journal, the baseline and the snapshot — so a
@@ -1337,7 +1387,7 @@ async function runBuildCommand({ env, spec, languageCode, changedOnly, workspace
   // The run's budget for waiting out a throttled service (lib/throttle-budget.js), made before anything that sends so that every layer draws from the one: the HTTP client the SDK is made over, the page backend (through the engine's
   // `throttle`) and the build's own retry loop (`deps.throttle`). A wait of more than a few seconds is announced on stderr — stdout carries the JSON result.
   const throttle = makeThrottleBudget({ warn: (m) => process.stderr.write(`⚠ ${m}\n`) });
-  const { sdk, provisionSdk, cleanup, isolatedReader, folderNote } = await makeSdk(env, spec, workspaceDir, authoringLanguageCode, { persistent: opts.apply, throttle });
+  const { sdk, provisionSdk, cleanup, isolatedReader, folderNote, previewHttpClient } = await makeSdk(env, spec, workspaceDir, authoringLanguageCode, { persistent: opts.apply, throttle, previewPush: opts.previewPush === true && !opts.apply });
   if (folderNote) process.stderr.write(`⚠ ${folderNote}\n`);
   // Durable build journal (apply runs only): a per-run record of steps + where a run halted,
   // written to <workspace>/build-log.jsonl. Resume = re-run the same command (idempotent).
@@ -1393,6 +1443,7 @@ async function runBuildCommand({ env, spec, languageCode, changedOnly, workspace
       log: (m) => process.stderr.write(m + '\n'),
       warn: (m) => process.stderr.write(`⚠ ${m}\n`),
       sdk, provisionSdk, journal, throttle, stepTally,
+      ...(previewHttpClient ? { previewHttpClient } : {}),
       // The role-privileges check must actually RUN here. verify-spec skips it unless BOTH
       // `rolePrivileges` and `entityPrivileges` readers are present, and `entityPrivileges` used to
       // need the raw client plus the org URL — omitting them degraded silently, so `--apply --verify`

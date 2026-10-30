@@ -2585,6 +2585,67 @@ async function resolveRoleGrantTarget(provision, grant, buCache) {
 }
 
 
+// --- push preview (build-model-app.js --preview-push) ---------------------------------------
+//
+// The id a dry run's probe found for a REUSED artifact, kept on the plan item as `liveId` so the push
+// preview can name it. Only a canonical GUID, and only on `reuse`: an unknown or a create has no live
+// row to name, and a hand-made reader's row may carry no id at all. Costs no read.
+function keepLiveId(item, present) {
+  if (item.state !== 'reuse' || !present || typeof present !== 'object') return;
+  const id = present.id == null ? '' : String(present.id);
+  if (FORM_GUID_RE.test(id)) item.liveId = id.toLowerCase();
+}
+
+// Plan kinds the SDK's push preview can name as an artifact (lib/push-preview.js PREVIEW_TYPES). Only
+// form, view, chart and app are keyed by planFor today; the others are here so a key added later maps
+// without a second edit. Configuration kinds (environment variables, connection references, custom
+// APIs, duplicate rules) are left out: this build has no plan step for them.
+const PREVIEW_KIND_TYPES = Object.freeze({
+  form: 'form', view: 'view', chart: 'chart', app: 'app', command: 'command', dashboard: 'dashboard',
+  businessRule: 'businessRule', bpf: 'bpf', fieldSecurityProfile: 'fieldSecurityProfile',
+});
+
+// The SDK artifact a plan item's push would touch, or null when the build has no typed target for it
+// without running (the preview then lists it as `noTypedTarget` — never a placeholder that would read
+// as "no change"):
+//   - a REUSED artifact: its live id (a command bar is named by its table's logical name — the SDK
+//     assembles a bar from the table's appaction rows). Previewed as it stands live: the reconcile
+//     edits an apply would make are computed only by running it, so they are not part of the preview;
+//   - a chart the build would CREATE: chartDef is the definition the build sends, built from the spec
+//     alone. A view's definition needs the live label resolution, and a form is created through its
+//     shell, so neither has a definition here.
+function previewTargetOf(item, spec) {
+  const k = item && item.key;
+  const type = k && PREVIEW_KIND_TYPES[k.kind];
+  if (!type) return null;
+  if (item.state === 'reuse') {
+    if (type === 'command') {
+      const table = String(k.entity || '').toLowerCase();
+      return /^[a-z][a-z0-9_]{0,127}$/.test(table) ? { type, id: table } : null;
+    }
+    return item.liveId ? { type, id: item.liveId } : null;
+  }
+  if (item.state === 'create' && type === 'chart') {
+    const entity = String(k.entity || '').toLowerCase();
+    const chart = ((spec && spec.charts) || []).find((c) => c && c.name === k.name && String(c.entity || '').toLowerCase() === entity);
+    return chart ? { type, create: chartDef(spec, chart) } : null;
+  }
+  return null;
+}
+
+// The preview items of a plan. Keys are made unique (`#2`, `#3`, … on a repeat): two plan steps can share
+// a kind, table and name (a main and a quick-create form of one name), and the preview refuses a repeated
+// key for the whole run.
+function previewItemsForPlan(plan, spec, previewItemsFromPlan) {
+  const items = previewItemsFromPlan(plan, (item) => previewTargetOf(item, spec));
+  const seen = new Map();
+  return items.map((it) => {
+    const n = (seen.get(it.key) || 0) + 1;
+    seen.set(it.key, n);
+    return n === 1 ? it : { ...it, key: `${it.key}#${n}` };
+  });
+}
+
 // Decide, against the LIVE environment, whether each planned item would be created or reused. #559.
 //
 // The dry run used to print `planFor`'s static, spec-derived listing and exit before any discovery,
@@ -2723,15 +2784,24 @@ async function annotateLivePlan(plan, { spec, provision, warn } = {}) {
   //   - views/charts go through `provision.findArtifact`, which raises on an ambiguous identity;
   //   - the app is keyed by its deterministic unique name.
   // Anything thrown becomes `unknown` with the resolver's own message, which is the actionable one.
+  //
+  // Answers `{ id }` when present (the id the probe already read: a form's formid, a view's or chart's
+  // id, the app's appmoduleid — absent from a hand-made reader's row), `false` when absent, and `null`
+  // when the kind has no identity query. The id is kept as the item's `liveId` (keepLiveId) for
+  // `--preview-push`, at no extra read.
   const artifactPresent = async (kind, def) => {
-    if (kind === 'form') return !!(await resolveExistingFormId(provision, def));
+    if (kind === 'form') {
+      const id = await resolveExistingFormId(provision, def);
+      return id ? { id } : false;
+    }
     if ((kind === 'view' || kind === 'chart') && typeof provision.findArtifact === 'function') {
-      return !!(await provision.findArtifact(kind, { name: def.name, entity: def.entityLogicalName }));
+      const id = await provision.findArtifact(kind, { name: def.name, entity: def.entityLogicalName });
+      return id ? { id } : false;
     }
     const q = artifactIdentityQuery(kind, def);
     if (!q) return null;
     const rows = await provision.queryRecords(q.set, { select: [q.idField], filter: q.filter, top: 1 });
-    return !!(rows && rows.length);
+    return rows && rows.length ? { id: rows[0] && rows[0][q.idField] } : false;
   };
 
   for (const item of plan) {
@@ -2811,6 +2881,7 @@ async function annotateLivePlan(plan, { spec, provision, warn } = {}) {
       } else if (k.kind === 'app') {
         const present = await artifactPresent('app', { uniqueName: k.uniqueName });
         item.state = present ? 'reuse' : 'create';
+        keepLiveId(item, present);
       } else if (k.kind === 'view' || k.kind === 'chart' || k.kind === 'form') {
         // A form/view/chart on a table that does not exist yet cannot exist either, and the filter
         // would 400 on the metadata cache — so answer from the table, as the build's own lookup does.
@@ -2827,6 +2898,7 @@ async function annotateLivePlan(plan, { spec, provision, warn } = {}) {
         const present = await artifactPresent(k.kind, { name: k.name, entityLogicalName: String(k.entity).toLowerCase(), formType: k.formType, formId: k.formId, uniqueName: k.uniqueName });
         item.state = present === null ? 'unknown' : (present ? 'reuse' : 'create');
         await judgeViewLabels(item, k);
+        keepLiveId(item, present);
       }
     } catch (err) {
       item.state = 'unknown';
@@ -3289,6 +3361,23 @@ async function runSdkBuildPhases(spec, opts, owed) {
       }
     }
     plan.forEach((p, i) => emit({ phase: p.phase, status: p.state === 'reuse' ? 'skip' : 'skip', label: p.label, state: p.state, stateWhy: p.stateWhy, n: i + 1, total: plan.length }));
+    // --preview-push: what a push of each planned artifact would do, read-only (lib/push-preview.js). Only on a
+    // live plan — it names the artifacts the probe found — and only when asked: a dry run without it loads
+    // neither module and sends nothing more.
+    let preview;
+    if (opts.previewPush === true && canProbe) {
+      const { runPushPreview, previewItemsFromPlan } = require('./push-preview.js');
+      const { findingOf } = require('./readonly-operations.js');
+      // A preview failure never fails the dry run: it is reported, and the plan stands. It is reported by its code,
+      // HTTP status and fixed words only — a service's or the SDK's own text can quote a record value.
+      try {
+        const items = previewItemsForPlan(plan, spec, previewItemsFromPlan);
+        preview = await runPushPreview({ env: opts.env, httpClient: opts.httpClient, items,
+          solutionUniqueName: spec.solution && spec.solution.uniqueName, languageCode: opts.preResolvedLanguageCode || opts.languageCode });
+      } catch (err) {
+        preview = { ok: false, allEvaluated: false, error: findingOf(err, 'PREVIEW_FAILED') };
+      }
+    }
     return {
       ok: true,
       dryRun: true,
@@ -3296,6 +3385,7 @@ async function runSdkBuildPhases(spec, opts, owed) {
       plan: plan.map((p) => (p.state ? `${p.label} [${p.state}]` : p.label)),
       planItems: plan.map((p) => ({ phase: p.phase, label: p.label, ...(p.state ? { state: p.state } : {}), ...(p.stateWhy ? { stateWhy: p.stateWhy } : {}), ...(p.wouldHalt ? { wouldHalt: true } : {}),
         ...(p.op ? { op: p.op, destructive: p.destructive, description: p.description, publication: p.publication } : {}) })),
+      ...(preview ? { pushPreview: preview } : {}),
     };
   }
 
@@ -8768,4 +8858,4 @@ async function runSdkBuildPhases(spec, opts, owed) {
   return result;
 }
 
-module.exports = { runSdkBuild, publishTargets, partialEnrichment, settleOwedPublishes, collectOwedPublishes, settleOwedLengths, normalizeFormId, planFor, annotateLivePlan, resolvePhases, PHASES, BuildHalt, SDK_COLUMN_TYPE, viewDef, defaultViewColumns, subgridLabel, enrichesDefaultViews, dashboardsInSolution, findDashboardsByName, findPinnedDashboard, artifactIdentityQuery, resolveExistingFormId, FORM_TYPE_CODE, chartDef, dashboardTileOpts, dashboardComponent, compileFormIntent, formFieldLogicals, appDef, appUniqueName, applyAppAiDescription, haltOnUnpublishedAppHeader, pushAppHeader, commandsByEntity, commandDef, businessRuleDef, businessRuleFilter, bpfDef, bpfFilter, webResourceOpts, webResourceContentState, WEB_RESOURCE_KINDS, FORM_EVENTS, acquireAppPagesLease, personaRoleSpecFor, resolveRoleBusinessUnit, roleBuClause, roleGrantLabel, resolveRoleGrantTarget, existingAppSitemapIsWritten, pagesFirstRule, applyAppHeader, applyAppHeaderText, warnAppIconNotApplied, inspectBpfStages, applyBpfStages, refuseUnpushedAppCopy, assertAuthorizedSitemapRewrite, reconciledPublishHalt };
+module.exports = { runSdkBuild, publishTargets, partialEnrichment, settleOwedPublishes, collectOwedPublishes, settleOwedLengths, normalizeFormId, planFor, annotateLivePlan, previewTargetOf, previewItemsForPlan, resolvePhases, PHASES, BuildHalt, SDK_COLUMN_TYPE, viewDef, defaultViewColumns, subgridLabel, enrichesDefaultViews, dashboardsInSolution, findDashboardsByName, findPinnedDashboard, artifactIdentityQuery, resolveExistingFormId, FORM_TYPE_CODE, chartDef, dashboardTileOpts, dashboardComponent, compileFormIntent, formFieldLogicals, appDef, appUniqueName, applyAppAiDescription, haltOnUnpublishedAppHeader, pushAppHeader, commandsByEntity, commandDef, businessRuleDef, businessRuleFilter, bpfDef, bpfFilter, webResourceOpts, webResourceContentState, WEB_RESOURCE_KINDS, FORM_EVENTS, acquireAppPagesLease, personaRoleSpecFor, resolveRoleBusinessUnit, roleBuClause, roleGrantLabel, resolveRoleGrantTarget, existingAppSitemapIsWritten, pagesFirstRule, applyAppHeader, applyAppHeaderText, warnAppIconNotApplied, inspectBpfStages, applyBpfStages, refuseUnpushedAppCopy, assertAuthorizedSitemapRewrite, reconciledPublishHalt };

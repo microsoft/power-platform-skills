@@ -3117,3 +3117,69 @@ test('main changed-only full-fast-noop cycle uses the real flow', async () => {
   }
   assert.strictEqual(fs.existsSync(appDir), false, 'the test removes its durable temporary state too');
 });
+
+// --- --preview-push: what the dry run prints of the push preview (lib/push-preview.js), and what the engine is handed ---
+const previewDryRun = async (pushPreview, { opts = {}, deps = {} } = {}) => {
+  const logs = [];
+  const handed = [];
+  const r = await buildModelApp(desk, { apply: false, env: 'https://x', previewPush: true, ...opts }, {
+    log: (m) => logs.push(String(m)), warn: (m) => logs.push(String(m)),
+    runBuild: async (s, o) => { handed.push(o); return { ok: true, dryRun: true, livePlan: true, planItems: [{ phase: 'forms', label: 'form', state: 'reuse' }], plan: ['form [reuse]'], ...(pushPreview ? { pushPreview } : {}) }; },
+    ...deps,
+  });
+  return { r, out: logs.join('\n'), handed };
+};
+
+test('--preview-push: an item the build has no typed change for, and one a batch did not answer, are printed by their reasons — never as ready', async () => {
+  const { out } = await previewDryRun({
+    ok: true, previews: [], notPrepared: [], requiresSchema: [],
+    notEvaluated: [{ key: 'item:0', reason: 'noTypedTarget' }, { key: 'form:new_ticket:Ticket', reason: 'notInBatch' }, { key: 'view:new_ticket:Open', reason: 'somethingNew' }],
+    allEvaluated: false, summary: { ready: 0, refused: 0, unknown: 0, requiresSchema: 0, notPrepared: 0, notEvaluated: 3 }, writeAttempts: 0,
+    disclaimer: 'A preview reads only.',
+  });
+  assert.match(out, /push preview — 0 ready, 0 refused, 0 unknown, 0 schema step\(s\), 0 not prepared, 3 not evaluated/);
+  assert.match(out, /item:0 — not evaluated: noTypedTarget \(the build has no typed change for it to preview\)/);
+  assert.match(out, /form:new_ticket:Ticket — not evaluated: notInBatch \(the batch preview did not answer it \(no local edit\), so it was not previewed\)/);
+  assert.match(out, /view:new_ticket:Open — not evaluated: somethingNew/, 'a reason it does not know is printed by its code');
+  assert.match(out, /the preview did not evaluate every planned change; see the items above/);
+  assert.match(out, /A preview reads only\./, 'the disclaimer is always printed');
+  assert.doesNotMatch(out, /item:0 — (ready|noChange)/);
+});
+
+test('--preview-push: refusals, warnings, an item not prepared and a write that was refused are printed by their codes', async () => {
+  const { out } = await previewDryRun({
+    ok: false,
+    previews: [
+      { key: 'form:new_ticket:Ticket', type: 'form', outcome: 'ready', action: 'update', refusals: [], warnings: [] },
+      { key: 'view:new_ticket:Open', type: 'view', outcome: 'refused', action: 'update', refusals: [{ code: 'MANAGED_LAYER' }], warnings: [{ code: 'STALE' }] },
+    ],
+    notPrepared: [{ key: 'app::0', type: 'app', code: 'NOT_FOUND', statusCode: 404, message: 'the artifact could not be read' }],
+    requiresSchema: [], notEvaluated: [], allEvaluated: false,
+    summary: { ready: 1, refused: 1, unknown: 0, requiresSchema: 0, notPrepared: 1, notEvaluated: 0 }, writeAttempts: 1, disclaimer: 'd',
+  });
+  assert.match(out, /view:new_ticket:Open — refused \(refused: MANAGED_LAYER; warnings: STALE\)/);
+  assert.doesNotMatch(out, /form:new_ticket:Ticket/, 'a ready preview is counted, not listed');
+  assert.match(out, /app::0 — not prepared: NOT_FOUND \(HTTP 404\) — the artifact could not be read/);
+  assert.match(out, /1 write request\(s\) were attempted and refused before sending: this preview is not trustworthy/);
+});
+
+test('--preview-push: a preview that failed with a 403 prints its code and HTTP status, and none of the service\'s words', async () => {
+  const { findingOf } = require('../lib/readonly-operations.js');
+  const SENTINEL = 'SENTINEL-record-value-41c9';
+  const error = findingOf(Object.assign(new Error(`HTTP 403 from https://contoso.crm.dynamics.com/api/data/v9.2/systemforms: ${SENTINEL}`), { statusCode: 403 }), 'PREVIEW_FAILED');
+  const { out } = await previewDryRun({ ok: false, allEvaluated: false, error });
+  assert.match(out, /push preview failed: \S+ \(HTTP 403\)/);
+  assert.match(out, /the preview did not evaluate every planned change/);
+  assert.ok(!out.includes(SENTINEL), out);
+});
+
+test('--preview-push: the engine is handed the flag and the read-only client only on a dry run that asked; otherwise its options are what they were', async () => {
+  const client = { get: async () => ({}) };
+  const asked = await previewDryRun(null, { deps: { previewHttpClient: client } });
+  assert.strictEqual(asked.handed[0].previewPush, true);
+  assert.strictEqual(asked.handed[0].httpClient, client);
+  assert.doesNotMatch(asked.out, /push preview/, 'no preview in the result, nothing printed');
+  const plain = await previewDryRun(null, { opts: { previewPush: undefined }, deps: { previewHttpClient: client } });
+  assert.ok(!('previewPush' in plain.handed[0]) && !('httpClient' in plain.handed[0]), Object.keys(plain.handed[0]).join(','));
+  assert.deepStrictEqual(Object.keys(plain.handed[0]), Object.keys(asked.handed[0]).filter((k) => k !== 'previewPush' && k !== 'httpClient'));
+});
