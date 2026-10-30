@@ -5,8 +5,9 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { createRowTableServer } = require('./helpers/row-table-server.js');
-const { fakeManaged, fakePublication, fakeCreates } = require('./helpers/feature-ports.js');
+const { fakeManaged, fakePublication, fakeCreates, passThroughCreates, buildPublicationQueues } = require('./helpers/feature-ports.js');
 const { compileChartIntent, planChartReconcile, applyChartReconcile } = require('../lib/chart-reconcile.js');
+const { settledPublications } = require('../lib/reconcile-common.js');
 
 const CID = '44444444-0000-4000-8000-000000000001';
 const data = (groupBy = 'cr_priority', measures = '<attribute alias="aggregate_column" name="cr_caseid" aggregate="count" />') => '<datadefinition><fetchcollection><fetch mapping="logical" aggregate="true"><entity name="cr_case">'
@@ -156,7 +157,7 @@ test('two charts with the declared name: nothing is chosen and nothing is writte
 const chartArtifact = (over = {}) => ({ name: 'Cases by priority', description: '', entityLogicalName: 'cr_case', chartType: 'Bar', isDefault: false,
   series: [{ attribute: 'cr_caseid', aggregate: 'count' }], categories: [{ attribute: 'cr_status' }], presentation: { showLegend: true, title: 'Cases by priority' }, ...over });
 
-test('a missing chart is created through the creation port under the reserved id, with a full baseline; a rerun sends nothing', async () => {
+test('a missing chart is created through the creation port under the id it allocated, with a full baseline; a rerun sends nothing', async () => {
   const srv = createRowTableServer({ tables: { savedqueryvisualizations: 'savedqueryvisualizationid' } });
   const managed = fakeManaged();
   const creates = fakeCreates();
@@ -167,7 +168,7 @@ test('a missing chart is created through the creation port under the reserved id
   assert.equal(creates.calls[0].executed, true);
   const id = creates.calls[0].ids.id;
   assert.deepEqual(result.saved.map((s) => [s.id, s.created]), [[id, true]]);
-  assert.ok(srv.rowOf('savedqueryvisualizations', id), 'the chart row carries the id the port reserved');
+  assert.ok(srv.rowOf('savedqueryvisualizations', id), 'the chart row carries the id the port allocated');
   assert.deepEqual(publication.queued, [{ type: 'chart', id, table: 'cr_case' }]);
   const b = result.managedBindings[0];
   assert.equal(b.origin, 'created');
@@ -293,4 +294,61 @@ test('a new chart with a declared title reports the title not stored instead of 
   assert.deepEqual(again.result.refused.map((r) => r.code), ['chart-title-not-stored']);
   assert.equal(srv.writes.length, 0);
   assert.equal(creates.calls.length, 1);
+});
+
+// Publication follows settlement: a declared chart whose result carries a refusal or an unknown leaves
+// nothing in the build's publication queues, even when its row was created or another part was saved.
+// The queues are drained through the real bundle's publishArtifact, so the count is PublishXml requests
+// on the wire.
+const publishXmlCount = (srv) => srv.writes.filter((w) => /PublishXml/.test(w.url)).length;
+const failingReadBack = (sdk) => new Proxy(sdk, { get(t, p) {
+  if (p === 'fetchArtifact') return async () => { throw new Error('read failed'); };
+  return typeof t[p] === 'function' ? t[p].bind(t) : t[p];
+} });
+
+async function createWithQueues(spec) {
+  const srv = createRowTableServer({ tables: { savedqueryvisualizations: 'savedqueryvisualizationid' } });
+  const queues = buildPublicationQueues();
+  const creates = passThroughCreates();
+  const sdk = await srv.newSdk();
+  const ctx = { managed: fakeManaged(), creates, publication: queues };
+  const plan = await planChartReconcile({ chart: spec, sdk, chartArtifact: chartArtifact() }, ctx);
+  const result = await applyChartReconcile(plan, { sdk }, ctx);
+  await queues.drain(sdk);
+  return { srv, result, id: creates.calls[0].ids.id };
+}
+
+test('a new chart whose declared title is not stored schedules no publish; the created row is still reported', async () => {
+  const { srv, result, id } = await createWithQueues(declared({ title: 'By status' }));
+  assert.deepEqual(result.refused.map((r) => r.code), ['chart-title-not-stored']);
+  assert.deepEqual(result.saved.map((s) => [s.id, s.created]), [[id, true]], 'the created row is reported for the solution and undo bookkeeping');
+  assert.equal(publishXmlCount(srv), 0, 'expected PublishXml requests 0');
+  const scope = { type: 'chart', id, table: 'cr_case' };
+  assert.deepEqual(result.pendingPublish, [{ key: 'cr_case/Cases by priority', scope, withheld: true }], 'kept as evidence, not scheduled');
+  assert.deepEqual(settledPublications(result), []);
+});
+
+test('neighbour: a new chart that settles cleanly is published exactly once', async () => {
+  const { srv, result, id } = await createWithQueues(declared());
+  assert.deepEqual(result.refused, []);
+  assert.deepEqual(result.unknown, []);
+  assert.equal(publishXmlCount(srv), 1);
+  const scope = { type: 'chart', id, table: 'cr_case' };
+  assert.deepEqual(result.pendingPublish, [{ key: 'cr_case/Cases by priority', scope }]);
+  assert.deepEqual(settledPublications(result), [scope]);
+});
+
+test('a title update whose read-back fails schedules no publish, not even for the description saved with it', async () => {
+  const srv = server();
+  const queues = buildPublicationQueues();
+  const sdk = await srv.newSdk();
+  const ctx = { managed: fakeManaged(), authorizedAdoption: true, publication: queues };
+  const plan = await planChartReconcile({ chart: declared({ chartType: 'Column', groupBy: 'cr_priority', description: 'Open cases', title: 'By status' }), sdk }, ctx);
+  assert.deepEqual([...plan.changed].sort(), ['description', 'title']);
+  const result = await applyChartReconcile(plan, { sdk: failingReadBack(sdk) }, ctx);
+  assert.deepEqual(result.unknown.map((u) => u.code), ['chart-title-unverified']);
+  assert.deepEqual(result.saved.map((s) => s.parts), [['description']]);
+  await queues.drain(sdk);
+  assert.equal(publishXmlCount(srv), 0, 'expected PublishXml requests 0');
+  assert.deepEqual(result.pendingPublish.map((p) => p.withheld), [true]);
 });

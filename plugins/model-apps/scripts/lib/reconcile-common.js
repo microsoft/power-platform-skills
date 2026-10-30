@@ -177,9 +177,11 @@ function boundIdentity(binding, { pinnedId, resolvedId, code, key }) {
 }
 
 /**
- * Run one create through the creation-identity port (`ctx.creates.run`) and classify the outcome.
- * Every new root AND child goes through here: the port records the ids it hands out BEFORE anything
- * is sent, so a run interrupted after the send can be recovered instead of creating a duplicate.
+ * Run one create through the creation port (`ctx.creates.run`) and classify the outcome. Every new
+ * root AND child goes through here. In this release the port is a plain pass-through: it allocates
+ * the ids the request asks for and calls execute once; it keeps no record of them. After an
+ * interrupted run or an unknown outcome a later run can create a duplicate. The 'adopted' and
+ * pending-unknown answers below exist for a durable port that may later plug in behind the same call.
  *
  * `execute({id, childIds})` must perform the local edits and the push, and answer with the
  * pushChecked shape ({ outcome: 'saved'|'refused'|'unknown', code }). A throw from a LOCAL edit
@@ -313,6 +315,31 @@ function queuePublication(ctx, scope) {
   return false;
 }
 
+/**
+ * The publication scopes a FeatureResult may schedule: its `pendingPublish` scopes when the result
+ * carries no refusal and no unknown, otherwise none. A publish of a table ships every saved change in
+ * it, so a create or edit whose outcome is refused or unknown must not be put live by one — even when
+ * its row was created (that row is still reported in `saved`, for solution and undo bookkeeping, which
+ * is not an authorization to publish).
+ */
+function settledPublications(result) {
+  if (!result || (result.refused || []).length || (result.unknown || []).length) return [];
+  return (result.pendingPublish || []).map((p) => p.scope);
+}
+
+/**
+ * Settle one helper's publications: the helpers only record what an apply would publish in
+ * `pendingPublish`; this queues those scopes through `ctx.publication` once the whole apply has
+ * finished, and only when it settled cleanly (see settledPublications). Otherwise each entry stays as
+ * evidence, marked `withheld: true`, and nothing is queued. Returns the result.
+ */
+function commitPublication(ctx, result) {
+  const scopes = settledPublications(result);
+  if (scopes.length) for (const scope of scopes) queuePublication(ctx, scope);
+  else for (const p of result.pendingPublish || []) p.withheld = true;
+  return result;
+}
+
 /** Lowercased, brace-less GUID text, or '' when the value is not a GUID. */
 function normalizeGuid(value) {
   const s = String(value == null ? '' : value).trim().replace(/^\{|\}$/g, '').toLowerCase();
@@ -338,6 +365,8 @@ module.exports = {
   pushChecked,
   pushIfChanged,
   queuePublication,
+  settledPublications,
+  commitPublication,
   normalizeGuid,
   rulesOf,
   PRE_WRITE_CODES,

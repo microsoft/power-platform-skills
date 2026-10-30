@@ -38,8 +38,8 @@
 //     refused too (COMMAND_CHILD_LOCATION_MISMATCH). This module refuses both itself, earlier, so
 //     the outcome is a per-control refusal and not a failed push.
 //   * a new control's `id` becomes its `appactionid`. New ids come from the build's creation port
-//     (`ctx.creates.run`), which records them BEFORE the push so an interrupted run can be resumed
-//     against the same rows rather than create a second copy.
+//     (`ctx.creates.run`). In this release the port is a plain pass-through that keeps no record of
+//     them, so after an interrupted run or an unknown outcome a later run can create a second copy.
 
 const {
   canonicalJson, intentSha256, emptyResult, operation, refusal, isAuthorized,
@@ -285,7 +285,7 @@ async function resolveManagedCommands(entity, nodes, liveIndex, ctx, defaultPara
       origin = binding.origin === 'adopted' ? 'adopted' : 'created';
       if (!live) {
         // The bound row is gone. Creating a new one would mint a new identity the maker has not
-        // chosen, so this needs an explicit repair decision (the creation port's resolution route).
+        // chosen, so this needs an explicit repair decision.
         return block(node, null, origin, binding, 'command-bound-row-missing', 'the row this command is bound to is not on the bar; repair the binding explicitly before it can be recreated');
       }
     } else if (node.rowId) {
@@ -448,7 +448,7 @@ async function applyCommandReconcile(plan, { sdk }, ctx = {}) {
     return result;
   }
   if (creates.length && (!ctx.creates || typeof ctx.creates.run !== 'function')) {
-    for (const o of creates) result.refused.push(refusal(o.key, 'creation-port-unavailable', 'a new keyed control needs the creation-identity port, which this build does not provide'));
+    for (const o of creates) result.refused.push(refusal(o.key, 'creation-port-unavailable', 'a new keyed control needs the creation port, which this build does not provide'));
     return result;
   }
 
@@ -491,15 +491,15 @@ async function applyCommandReconcile(plan, { sdk }, ctx = {}) {
   let pushed;
   let ids = null;
   if (creates.length) {
-    // One create operation per table: the new controls are its child slots, keyed by key path, so a
-    // re-run after a lost answer sends the same rows again under the same ids.
+    // One create operation per table: the new controls are its child slots, keyed by key path, and
+    // the port allocates one id per slot for this send.
     const created = await createThroughPort(ctx, { kind: KIND, key: plan.entity, identity: [plan.entity], childKeys: creates.map((o) => o.target.keyPath) }, async (minted) => {
       ids = minted.childIds;
       return write(minted.childIds);
     });
     if (created.status === 'adopted') return recordAdopted(plan, sdk, ctx, created.childIds, result);
     if (created.status === 'refused') {
-      if (/^creation-/.test(created.code)) result.refused.push(refusal(plan.entity, created.code, 'the creation-identity port did not allow creating controls on this bar now; nothing was written'));
+      if (/^creation-/.test(created.code)) result.refused.push(refusal(plan.entity, created.code, 'the creation port did not allow creating controls on this bar now; nothing was written'));
       else for (const o of [...creates, ...updates]) result.refused.push(refusal(o.key, created.code || 'PUSH_NOT_SAVED', 'the command bar push was refused; nothing was written'));
       return result;
     }
@@ -535,7 +535,8 @@ async function applyCommandReconcile(plan, { sdk }, ctx = {}) {
 
 /**
  * The maker resolved an earlier create of this bar whose answer was lost by naming the rows it made
- * (the port's `adopt` resolution). Nothing is written now: the bar is re-read, every named row that
+ * (an answer only a durable creation port gives; the pass-through port in this release never
+ * answers 'adopted'). Nothing is written now: the bar is re-read, every named row that
  * is really there is bound to the spec's key (with the baseline of what it holds now), and the run
  * reports `creation-adopted-rerun` so a second run reconciles those rows like any bound control.
  */

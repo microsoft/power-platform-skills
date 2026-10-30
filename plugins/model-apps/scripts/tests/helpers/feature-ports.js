@@ -1,19 +1,24 @@
 'use strict';
 // Test doubles for the ports the declared-reconciliation helpers are given by the build:
-//   ctx.creates — the creation-identity port (lib/creates-port.js of the creation stream):
-//                 `run({kind, key, identity, childKeys}, execute)`;
+//   ctx.creates — the creation port: `run({kind, key, identity, childKeys}, execute)`;
 //   ctx.managed — the managed-binding port: `lookup(kind, key)` answers the stored binding.
-// Both are coordinator-owned modules that do not exist on this branch, so the helpers are proven
-// against these doubles and the contract records the exact signatures they rely on.
+// The build supplies both; the helpers are proven against these doubles.
 //
-// fakeCreates mirrors the real port's observable contract, not just its happy path:
+// passThroughCreates is the creation port as this release wires it: a plain pass-through that
+// allocates the ids a request asks for, calls execute once and keeps nothing between calls (no
+// journal, no adoption, no re-send). After an interrupted or unknown create, a later run can create
+// a duplicate.
+//
+// fakeCreates is a stricter double: it models a durable implementation that may later plug in
+// behind the same call shape, so the helpers' handling of its extra outcomes (pending, adopted,
+// recovery needed) stays exercised. Its observable contract:
 //   - a request is validated (kind /^[A-Za-z][A-Za-z0-9_.-]{0,63}$/, a non-empty key, distinct non-empty
 //     child keys, a function) and a bad one throws CREATE_PORT_INVALID;
 //   - ids are allocated and recorded per (kind, key) BEFORE execute; `execute({id, childIds})` (the root
 //     id is `id`, not `rootId`); a later run of the same key sends under the SAME ids, a new child slot
 //     gets a new id and a slot no longer asked for is kept;
-//   - the verdict: a throw or a result is classified as acknowledged / refused / unknown exactly as
-//     the real verdictOfFailure / verdictOfResult do; `{outcome: 'created'|'refused'|'unknown'}` is
+//   - the verdict: a throw or a result is classified as acknowledged / refused / unknown by
+//     verdictOfFailure / verdictOfResult below; `{outcome: 'created'|'refused'|'unknown'}` is
 //     returned (with `id`, `childIds`, `ids`, `entryKey`, `result`); a failure is rethrown after it is
 //     recorded; an unknown poisons the port, after which every run throws `create-outcome-unknown`;
 //   - a key whose earlier send is pending (unknown) throws CREATION_PENDING_UNKNOWN, unless a maker
@@ -34,7 +39,7 @@ function portError(code, message, extra = {}) {
   return err;
 }
 
-// Copies of the real port's classification (creates-port.js verdictOfFailure / verdictOfResult).
+// How a durable port would classify a send: a throw (verdictOfFailure) or an answer (verdictOfResult).
 function verdictOfFailure(err) {
   const chain = [];
   for (let e = err, i = 0; e && typeof e === 'object' && i < 8; e = e.cause, i++) chain.push(e);
@@ -134,6 +139,29 @@ function fakeCreates(opts = {}) {
 
   return { calls, run, records, isPoisoned: () => poisoned };
 }
+
+/**
+ * The creation port as this release wires it (see the header): fresh ids for every call, execute
+ * called exactly once, the checked answer ({ outcome: 'saved'|'refused'|'unknown' }) mapped to
+ * created / refused / unknown.
+ */
+function passThroughCreates() {
+  const calls = [];
+  let n = 0;
+  const mint = () => {
+    n += 1;
+    return `d0d0d0d0-0000-4000-8000-${n.toString(16).padStart(12, '0')}`;
+  };
+  async function run(request, execute) {
+    const ids = { id: mint(), childIds: Object.fromEntries((request.childKeys || []).map((k) => [k, mint()])) };
+    const result = await execute({ id: ids.id, childIds: { ...ids.childIds } });
+    calls.push({ op: request, ids, result });
+    const outcome = result && result.outcome === 'saved' ? 'created' : result && result.outcome === 'refused' ? 'refused' : 'unknown';
+    return { outcome, ...ids, result };
+  }
+  return { calls, run };
+}
+
 /** A managed-binding store: `lookup` answers what `seed`/`persist` put in. */
 function fakeManaged(seed = []) {
   const byKey = new Map();
@@ -152,4 +180,27 @@ function fakePublication() {
   return { queued, queue: (scope) => { queued.push(scope); } };
 }
 
-module.exports = { fakeCreates, fakeManaged, fakePublication };
+/**
+ * The build's own publication queues, as the integration maps a queued scope onto them: a chart
+ * scope becomes `chartsToPublish.set(table, id)` (one chart per table, published at the end), a view
+ * scope one publish of that view. `drain(sdk)` publishes what is queued through the real bundle's
+ * publishArtifact, so a test counts the PublishXml requests that actually reach the service.
+ */
+function buildPublicationQueues() {
+  const chartsToPublish = new Map();
+  const views = [];
+  return {
+    chartsToPublish,
+    views,
+    queue(scope) {
+      if (scope.type === 'chart') chartsToPublish.set(scope.table, scope.id);
+      else if (scope.type === 'view') views.push(scope.id);
+    },
+    async drain(sdk) {
+      for (const id of chartsToPublish.values()) await sdk.publishArtifact('chart', id);
+      for (const id of views) await sdk.publishArtifact('view', id);
+    },
+  };
+}
+
+module.exports = { fakeCreates, passThroughCreates, fakeManaged, fakePublication, buildPublicationQueues };

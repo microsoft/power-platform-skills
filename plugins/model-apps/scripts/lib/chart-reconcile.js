@@ -28,13 +28,16 @@
 // and title, whatever the spec declares today), so starting or stopping to declare a description or
 // title is an edit, never drift; drift is judged on the parts this run writes.
 //
-// A missing chart is created here, through the creation-identity port (ctx.creates.run), from the
-// artifact the build compiles for it (chartDef), under the id the port reserved.
+// A missing chart is created here, through the creation port (ctx.creates.run), from the artifact
+// the build compiles for it (chartDef), under the id the port allocated for this create.
 //
 // A declared title is stored only where the SDK can write one: into a <Title> element the stored
 // presentation already has. An existing chart without one is refused (chart-title-not-stored) before
 // anything is written; a new chart is created from the SDK's scratch presentation, which has none, so
 // its title is reported not stored rather than saved. A title is never claimed without a read-back.
+//
+// The apply records the publish it needs in `pendingPublish`; the publish is queued only once the
+// whole result has settled with no refusal and no unknown (commitPublication).
 
 const {
   canonicalJson,
@@ -47,7 +50,7 @@ const {
   bindsUnchanged,
   pushIfChanged,
   pushChecked,
-  queuePublication,
+  commitPublication,
   normalizeGuid,
   rulesOf,
   projectionBaseline,
@@ -256,7 +259,7 @@ async function readObserved(sdk, id) {
 // with the binding taken from what was read back so the next run is not false drift.
 const TITLE_NOT_STORED = 'the chart was written, but it has no title element the SDK can write, so the declared title was not stored; remove the title from the spec or add a title to the chart in the chart designer';
 
-/** Create a missing declared chart through the creation-identity port (see the header). */
+/** Create a missing declared chart through the creation port (see the header). */
 async function applyChartCreate(plan, sdk, ctx, result) {
   if (!plan.createArtifact) {
     result.refused.push(refusal(plan.key, 'chart-create-artifact-missing', 'the build did not pass the chart definition to create; nothing was written'));
@@ -264,7 +267,8 @@ async function applyChartCreate(plan, sdk, ctx, result) {
   }
   const created = await createThroughPort(ctx, { kind: 'chart', key: plan.key, identity: [plan.intent.entity, plan.intent.name], childKeys: [] }, async ({ id }) => {
     const art = await sdk.createArtifact('chart', { ...plan.createArtifact, id });
-    // The port recorded `id` before this send; a chart stored under another id could not be recovered.
+    // The chart must be stored under the id this create was given: the result, the binding and the
+    // solution bookkeeping all name that id, so a create that does not keep it is refused.
     if (normalizeGuid(art && art.id) !== normalizeGuid(id)) return { outcome: 'refused', code: 'CREATE_ID_NOT_KEPT' };
     return pushChecked(sdk, 'chart', id);
   });
@@ -275,7 +279,6 @@ async function applyChartCreate(plan, sdk, ctx, result) {
     // The title is claimed only when the spec declares one and the read-back shows it stored.
     const titleStored = plan.intent.title !== undefined && !!observed && observed.title === plan.intent.title;
     result.saved.push({ key: plan.key, kind: 'chart', id, created: true, parts: PARTS.filter((p) => p !== 'title' || titleStored) });
-    queuePublication(ctx, scope);
     result.pendingPublish.push({ key: plan.key, scope });
     if (observed) result.managedBindings.push(bindingRecord(ctx, { kind: 'chart', key: plan.key, id, origin: 'created', ...projectionBaseline(observed) }));
     else result.unknown.push(refusal(plan.key, 'chart-created-unreadable', 'the chart was created but could not be read back to record its baseline'));
@@ -296,8 +299,15 @@ async function applyChartCreate(plan, sdk, ctx, result) {
   return result;
 }
 
-/** Apply a chart plan. A plan with a refusal or an unknown writes nothing. */
+/**
+ * Apply a chart plan. A plan with a refusal or an unknown writes nothing. The publish the apply needs
+ * is queued only when the whole result settles cleanly (commitPublication).
+ */
 async function applyChartReconcile(plan, { sdk }, ctx = {}) {
+  return commitPublication(ctx, await applyChartPlan(plan, sdk, ctx));
+}
+
+async function applyChartPlan(plan, sdk, ctx) {
   const result = emptyResult();
   result.refused.push(...plan.refused);
   result.unknown.push(...plan.unknown);
@@ -339,9 +349,7 @@ async function applyChartReconcile(plan, { sdk }, ctx = {}) {
       const parts = plan.changed.filter((p) => p !== 'title');
       if (pushed.outcome === 'saved' && parts.length) {
         result.saved.push({ key: plan.key, kind: 'chart', id, parts });
-        const scope = { type: 'chart', id, table: plan.intent.entity };
-        queuePublication(ctx, scope);
-        result.pendingPublish.push({ key: plan.key, scope });
+        result.pendingPublish.push({ key: plan.key, scope: { type: 'chart', id, table: plan.intent.entity } });
       }
       if (observed) {
         result.refused.push(refusal(plan.key, 'chart-title-not-stored', TITLE_NOT_STORED));
@@ -358,9 +366,7 @@ async function applyChartReconcile(plan, { sdk }, ctx = {}) {
     result.managedBindings.push(record());
   } else if (pushed.outcome === 'saved') {
     result.saved.push({ key: plan.key, kind: 'chart', id, parts: plan.changed.slice() });
-    const scope = { type: 'chart', id, table: plan.intent.entity };
-    queuePublication(ctx, scope);
-    result.pendingPublish.push({ key: plan.key, scope });
+    result.pendingPublish.push({ key: plan.key, scope: { type: 'chart', id, table: plan.intent.entity } });
     result.managedBindings.push(record());
   } else if (pushed.outcome === 'refused') {
     result.refused.push(rejected(pushed.rules || []));

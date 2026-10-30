@@ -5,7 +5,8 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { createRowTableServer } = require('./helpers/row-table-server.js');
-const { fakeManaged, fakePublication, fakeCreates } = require('./helpers/feature-ports.js');
+const { fakeManaged, fakePublication, fakeCreates, passThroughCreates, buildPublicationQueues } = require('./helpers/feature-ports.js');
+const { settledPublications } = require('../lib/reconcile-common.js');
 const {
   isDeclaredView,
   compileViewIntent,
@@ -277,7 +278,7 @@ test('a joined-table filter resolves its choice label on the joined table', () =
   assert.deepEqual(out.intent.filters.conditions, [{ attribute: 'statecode', operator: 'eq', value: '100', entityname: 'person' }]);
 });
 
-test('a new declared view is created through the creation port under the reserved id, with a baseline its first edit accepts', async () => {
+test('a new declared view is created through the creation port under the id it allocated, with a baseline its first edit accepts', async () => {
   const srv = createRowTableServer({ tables: { savedqueries: 'savedqueryid' } });
   const managed = fakeManaged();
   const creates = fakeCreates();
@@ -287,7 +288,7 @@ test('a new declared view is created through the creation port under the reserve
   assert.equal(creates.calls.length, 1);
   assert.deepEqual(creates.calls[0].op, { kind: 'view', key: 'account/New view', identity: ['account', 'New view'], childKeys: [] });
   const id = creates.calls[0].ids.id;
-  assert.ok(srv.rowOf('savedqueries', id), 'the row is stored under the id the port reserved');
+  assert.ok(srv.rowOf('savedqueries', id), 'the row is stored under the id the port allocated');
   assert.deepEqual(first.result.saved.map((s) => [s.id, s.created]), [[id, true]]);
   const [binding] = first.result.managedBindings;
   assert.equal(binding.id, id);
@@ -337,4 +338,44 @@ test('a created view that cannot be read back stays unknown and records no guess
   // the maker's adoption decision, which the earlier unknown outcome asked for.
   assert.deepEqual(again.result.unchanged.map((u) => u.id), [id]);
   assert.deepEqual(again.result.managedBindings, []);
+});
+
+// Publication follows settlement: a created view whose result carries an unknown leaves nothing in the
+// build's publication queues. The queues are drained through the real bundle's publishArtifact, so the
+// count is PublishXml requests on the wire.
+async function createViewWithQueues(readBackFails) {
+  const srv = createRowTableServer({ tables: { savedqueries: 'savedqueryid' } });
+  const queues = buildPublicationQueues();
+  const creates = passThroughCreates();
+  const sdk = await srv.newSdk();
+  const ctx = { managed: fakeManaged(), creates, publication: queues };
+  const view = { entity: 'account', name: 'New view', reconcile: 'declared', activeOnly: false, columns: ['name'] };
+  const plan = await planViewReconcile({ view, sdk }, ctx);
+  const applySdk = readBackFails ? new Proxy(sdk, { get(t, p) {
+    if (p === 'fetchArtifact') return async () => { throw new Error('read failed'); };
+    return typeof t[p] === 'function' ? t[p].bind(t) : t[p];
+  } }) : sdk;
+  const result = await applyViewReconcile(plan, { sdk: applySdk }, ctx);
+  await queues.drain(sdk);
+  return { srv, result, id: creates.calls[0].ids.id, publishes: srv.writes.filter((w) => /PublishXml/.test(w.url)).length };
+}
+
+test('a created view that cannot be read back schedules no publish; the created row is still reported', async () => {
+  const { srv, result, id, publishes } = await createViewWithQueues(true);
+  assert.deepEqual(result.unknown.map((u) => u.code), ['view-created-unreadable']);
+  assert.ok(srv.rowOf('savedqueries', id), 'the view was created');
+  assert.deepEqual(result.saved.map((s) => [s.id, s.created]), [[id, true]], 'the created row is reported for the solution and undo bookkeeping');
+  assert.equal(publishes, 0, 'expected PublishXml requests 0');
+  assert.deepEqual(result.pendingPublish, [{ key: 'account/New view', scope: { type: 'view', id, table: 'account' }, withheld: true }]);
+  assert.deepEqual(settledPublications(result), []);
+});
+
+test('neighbour: a created view that settles cleanly is published exactly once', async () => {
+  const { result, id, publishes } = await createViewWithQueues(false);
+  assert.deepEqual(result.unknown, []);
+  assert.deepEqual(result.refused, []);
+  assert.equal(publishes, 1);
+  const scope = { type: 'view', id, table: 'account' };
+  assert.deepEqual(result.pendingPublish, [{ key: 'account/New view', scope }]);
+  assert.deepEqual(settledPublications(result), [scope]);
 });

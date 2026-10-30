@@ -46,8 +46,8 @@ test('a new keyed bar is created with ids from the creation port and explicit fa
   assert.strictEqual(ports.creates.calls.length, 1, 'one creation operation for the table');
   const minted = ports.creates.calls[0].ids.childIds;
   assert.deepStrictEqual(Object.keys(minted).sort(), ['approve', 'more', 'more/export']);
-  // The rows POSTed carry exactly the ids the port recorded before the push.
-  for (const id of Object.values(minted)) assert.ok(srv.rows.has(id), `row ${id} was created with the recorded id`);
+  // The rows POSTed carry exactly the ids the port allocated for this push.
+  for (const id of Object.values(minted)) assert.ok(srv.rows.has(id), `row ${id} was created with the allocated id`);
   const approve = srv.writes.find((w) => w.verb === 'post' && w.body.appactionid === minted.approve).body;
   assert.strictEqual(approve.hidden, false, 'explicit hidden:false reaches the wire');
   assert.strictEqual(approve.isdisabled, false, 'explicit disabled:false reaches the wire');

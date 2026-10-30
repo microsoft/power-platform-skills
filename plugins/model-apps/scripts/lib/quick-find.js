@@ -29,7 +29,7 @@ const {
   refusal,
   isAuthorized,
   pushIfChanged,
-  queuePublication,
+  commitPublication,
 } = require('./reconcile-common.js');
 
 const NAME_RE = /^[a-z_][a-z0-9_]{0,127}$/i;
@@ -181,8 +181,15 @@ async function planQuickFind({ entity, quickFind, sdk }, ctx = {}) {
   return plan;
 }
 
-/** Apply a Quick Find plan: write the list, push only on a real change, queue the table publish. */
+/**
+ * Apply a Quick Find plan: write the list, push only on a real change; the table publish is queued
+ * only when the result settles cleanly (commitPublication).
+ */
 async function applyQuickFind(plan, { sdk }, ctx = {}) {
+  return commitPublication(ctx, await applyQuickFindPlan(plan, sdk));
+}
+
+async function applyQuickFindPlan(plan, sdk) {
   const result = emptyResult();
   result.refused.push(...plan.refused);
   result.unknown.push(...plan.unknown);
@@ -204,9 +211,7 @@ async function applyQuickFind(plan, { sdk }, ctx = {}) {
     result.unchanged.push({ key: plan.key, kind: 'quickFind', id: plan.viewId });
   } else if (pushed.outcome === 'saved') {
     result.saved.push({ key: plan.key, kind: 'quickFind', id: plan.viewId });
-    const scope = { type: 'entity', table: plan.entity };
-    queuePublication(ctx, scope);
-    result.pendingPublish.push({ key: plan.key, scope });
+    result.pendingPublish.push({ key: plan.key, scope: { type: 'entity', table: plan.entity } });
   } else if (pushed.outcome === 'refused') {
     // e.g. view-find-column-type-unsupported (a NEW decimal/identifier column has no search
     // template) or view-find-column-unresolved (no such column): nothing was sent.

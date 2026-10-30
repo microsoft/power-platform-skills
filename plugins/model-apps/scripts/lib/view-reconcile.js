@@ -35,8 +35,11 @@
 // declare a join or a description is an edit, never drift. Drift is judged on the parts this run
 // writes (reconcile-common partsDriftVerdict).
 //
-// A new declared view is created here, through the creation-identity port (ctx.creates.run), under
-// the id the port reserved, and its binding records the baseline of what was created.
+// A new declared view is created here, through the creation port (ctx.creates.run), under the id the
+// port allocated for this create, and its binding records the baseline of what was created.
+//
+// The apply records the publish it needs in `pendingPublish`; the publish is queued only once the
+// whole result has settled with no refusal and no unknown (commitPublication).
 
 const {
   emptyResult,
@@ -48,7 +51,7 @@ const {
   bindsUnchanged,
   canonicalJson,
   pushIfChanged,
-  queuePublication,
+  commitPublication,
   normalizeGuid,
   rulesOf,
   projectionBaseline,
@@ -414,12 +417,13 @@ async function readBaseline(sdk, id) {
   }
 }
 
-/** Create a new declared view through the creation-identity port (see the header). */
+/** Create a new declared view through the creation port (see the header). */
 async function applyViewCreate(plan, sdk, ctx, result) {
   const created = await createThroughPort(ctx, { kind: 'view', key: plan.key, identity: [plan.intent.entity, plan.intent.name], childKeys: [] }, async ({ id }) => {
     const art = await sdk.createArtifact('view', { ...plan.createArtifact, id });
-    // The port recorded `id` before this send: a view stored under any other id could never be
-    // recovered, so a create that does not keep it is refused before anything is pushed.
+    // The view must be stored under the id this create was given: the result, the binding and the
+    // solution bookkeeping all name that id, so a create that does not keep it is refused before
+    // anything is pushed.
     if (normalizeGuid(art && art.id) !== normalizeGuid(id)) return { outcome: 'refused', code: 'CREATE_ID_NOT_KEPT' };
     return pushChecked(sdk, 'view', id);
   });
@@ -427,11 +431,9 @@ async function applyViewCreate(plan, sdk, ctx, result) {
   if (created.status === 'created') {
     const scope = { type: 'view', id, table: plan.intent.entity };
     result.saved.push({ key: plan.key, kind: 'view', id, created: true, parts: PARTS.slice() });
-    queuePublication(ctx, scope);
     result.pendingPublish.push({ key: plan.key, scope });
     // The baseline is what the server is SEEN to hold. A create that cannot be read back records no
-    // binding (the intent is not a substitute for the stored view) and stays unknown; the creation
-    // port still holds its id, so the view is not created twice.
+    // binding (the intent is not a substitute for the stored view) and stays unknown.
     const baseline = await readBaseline(sdk, id);
     if (baseline) result.managedBindings.push(bindingRecord(ctx, { kind: 'view', key: plan.key, id, origin: 'created', ...baseline }));
     else result.unknown.push(refusal(plan.key, 'view-created-unreadable', 'the view was created but could not be read back to record its baseline'));
@@ -453,8 +455,15 @@ async function applyViewCreate(plan, sdk, ctx, result) {
   return result;
 }
 
-/** Apply a view plan. A plan with a refusal or unknown writes nothing. */
+/**
+ * Apply a view plan. A plan with a refusal or unknown writes nothing. The publish the apply needs is
+ * queued only when the whole result settles cleanly (commitPublication).
+ */
 async function applyViewReconcile(plan, { sdk }, ctx = {}) {
+  return commitPublication(ctx, await applyViewPlan(plan, sdk, ctx));
+}
+
+async function applyViewPlan(plan, sdk, ctx) {
   const result = emptyResult();
   result.refused.push(...plan.refused);
   result.unknown.push(...plan.unknown);
@@ -498,9 +507,7 @@ async function applyViewReconcile(plan, { sdk }, ctx = {}) {
     result.managedBindings.push(record());
   } else if (pushed.outcome === 'saved') {
     result.saved.push({ key: plan.key, kind: 'view', id, parts: plan.changed.slice() });
-    const scope = { type: 'view', id, table: plan.intent.entity };
-    queuePublication(ctx, scope);
-    result.pendingPublish.push({ key: plan.key, scope });
+    result.pendingPublish.push({ key: plan.key, scope: { type: 'view', id, table: plan.intent.entity } });
     result.managedBindings.push(record());
   } else if (pushed.outcome === 'refused') {
     result.refused.push({ ...refusal(plan.key, 'view-rejected', 'the SDK refused the view edit before anything was sent'), rules: pushed.rules || [] });
