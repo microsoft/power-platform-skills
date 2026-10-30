@@ -5,9 +5,10 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { applyAppMainForms, pinDeclaredArtifacts, declaredAppPins, appComponentsFor, exactMembershipOutcome } = require('../lib/app-components.js');
+const { applyAppMainForms, pinDeclaredArtifacts, declaredAppPins, appComponentsFor, exactMembershipOutcome, publishedMainFormsProof } = require('../lib/app-components.js');
 const { APP, FORM_A, FORM_B, META } = require('./helpers/app-membership-sdk.js');
 const { createAppPublication } = require('../lib/app-publication-policy.js');
+const { publishTargets } = require('../lib/sdk-build.js');
 const { appPinServer, SITEMAP, VIEW, CHART, OFFNAV_CHART, FORM_QUICK, OFFNAV_FORM_A, OFFNAV_FORM_B } = require('./helpers/app-pin-server.js');
 
 const MAIN = { contoso_item: [FORM_A] };
@@ -264,6 +265,65 @@ test('REAL BUNDLE: every later publish of an exact app proves it again: a member
   assert.equal(port.unsettled().length, 1);
   assert.equal(port.unsettled()[0].code, 'APP_MAIN_FORMS_NOT_EXACT');
   assert.match(port.unsettled()[0].reason, /differs/);
+});
+
+// The server runs the next PublishXml, then the connection drops before its answer arrives. The SDK returns that BY VALUE,
+// as { publish: { kind: 'failed', error: { code: 'CONNECTION_ERROR' } } }, so "failed" alone does not mean nothing shipped.
+function loseNextPublishAnswer(httpClient) {
+  const post = httpClient.post;
+  let armed = true;
+  httpClient.post = async (url, ...rest) => {
+    const answer = await post(url, ...rest);
+    if (armed && /\/PublishXml(\?|$)/.test(url)) {
+      armed = false;
+      throw Object.assign(new Error('socket hang up'), { code: 'ECONNRESET' });
+    }
+    return answer;
+  };
+}
+
+// Proven once, then another writer puts FORM_B back; the SDK's guard has seen the list published, so the next publish is a
+// plain PublishXml that ships the app as it now is.
+async function provenThenChanged(t) {
+  const server = await exactUpdate(t);
+  const port = createAppPublication({ appWrite: server.appWrite, client: server.sdk.dataverse });
+  port.recordExact(APP, server.pushed, { name: 'Membership', mainFormsByTable: MAIN });
+  await port.publishApp(APP);
+  assert.deepEqual(port.unsettled(), []);
+  server.state.members.add(`60:${FORM_B}`);
+  server.state.version += 1;
+  loseNextPublishAnswer(server.httpClient);
+  return { ...server, port };
+}
+
+test('REAL BUNDLE: a later app publish whose answer is lost after the server ran it un-proves the exact app', async (t) => {
+  const { sdk, port } = await provenThenChanged(t);
+  const answer = await port.publishApp(APP);
+  assert.equal(answer.publish.kind, 'failed', JSON.stringify(answer.publish));
+  assert.equal(answer.publish.error.code, 'CONNECTION_ERROR');
+  assert.equal((await publishedMainFormsProof(sdk.dataverse, APP, MAIN)).published, 'differs', 'the publish reached the server');
+  assert.equal(port.unsettled().length, 1);
+  assert.equal(port.unsettled()[0].code, 'APP_MAIN_FORMS_NOT_EXACT');
+  assert.match(port.unsettled()[0].reason, /failed \(CONNECTION_ERROR\)/);
+});
+
+test('REAL BUNDLE: the publish phase\'s own app publish, its answer lost after the server ran it, un-proves the exact app through the port', async (t) => {
+  const { sdk, state, port } = await provenThenChanged(t);
+  // The publish phase (sdk-build.js publishTargets) publishes the app itself; what it answered is handed to the port.
+  let appAnswer;
+  const provision = { publishArtifact: async (type, id) => { const answer = await sdk.publishArtifact(type, id); if (type === 'app') appAnswer = answer; return answer; } };
+  const runner = { mapLimit: async (items, _limit, execute) => Promise.all(items.map(execute)) };
+  const warnings = [];
+  const mark = state.requests.length;
+  const phase = await publishTargets(provision, runner, 1, [], ['app', APP, 'app Membership'], (line) => warnings.push(line));
+  assert.ok(state.requests.slice(mark).some((line) => line.includes('/PublishXml')), 'the publish phase sent the publish');
+  assert.equal(phase.appPublished, false);
+  assert.equal(appAnswer.publish.kind, 'failed');
+  assert.deepEqual(await port.noteAppPublication(APP, { answer: appAnswer }), { published: false, code: 'CONNECTION_ERROR' });
+  assert.equal((await publishedMainFormsProof(sdk.dataverse, APP, MAIN)).published, 'differs');
+  assert.equal(port.unsettled().length, 1);
+  assert.match(port.unsettled()[0].reason, /failed \(CONNECTION_ERROR\)/);
+  assert.deepEqual(port.owed(), [], 'noting the answer owes nothing new: the publish phase reported its failure');
 });
 
 test('REAL BUNDLE: a table publish the server refuses (403 PublishXml) stays owed and is reported failed, not paid', async (t) => {

@@ -68,6 +68,11 @@ test('a withheld exact publish (thrown or answered as failed) stays owed and is 
   const unavailable = createAppPublication({});
   unavailable.queue({ kind: 'app', id: APP });
   assert.deepEqual((await unavailable.flush()).failed, [{ id: APP, code: 'APP_PUBLICATION_UNAVAILABLE' }]);
+  // An app publish that answers nothing is not a publish, as for any other scope.
+  const silent = createAppPublication({ appWrite: { publish: async () => undefined } });
+  silent.queue({ kind: 'app', id: APP });
+  assert.deepEqual(await silent.flush(), { published: [], withheld: [], failed: [{ id: APP, code: 'PUBLICATION_UNCONFIRMED' }] });
+  assert.equal(silent.owed().length, 1, 'still owed');
 });
 
 test('exact obligation: raw publish refused once recorded, unsettled until a push proves it published, and a proven push settles the owed app', () => {
@@ -112,7 +117,7 @@ test('publishApp: a publish answered failed keeps the app owed; a throw propagat
   await assert.rejects(createAppPublication({}).publishApp(APP), { code: 'APP_PUBLICATION_UNAVAILABLE' });
 });
 
-test('notePublished settles an exact obligation only on a published-layer proof that matches; no reader or no list keeps it pending', async () => {
+test('an app publish settles an exact obligation only on a published-layer proof that matches; no reader or no list keeps it pending', async () => {
   const proofClient = (members) => ({
     get: async (path) => {
       if (path.startsWith(`/appmodules(${APP})`)) return { status: 200, body: { appmoduleidunique: '11111111-0000-4000-8000-000000000002' } };
@@ -223,7 +228,7 @@ test('a table deferred to the build stays owed until the build reports its publi
   assert.deepEqual(port.deferred('table'), ['contoso_refused'], 'queued again, it is the next publication\'s to attempt');
 });
 
-test('an exact app is proven by every publish: a later differing or unreadable read, or a lost publish answer, un-proves it; a refused publish keeps the proof', async () => {
+test('an exact app is proven by every publish: a later differing or unreadable read, a publish failed by value or a lost answer un-proves it; only a publish the SDK refused before sending keeps the proof', async () => {
   const FORM_A = '33333333-0000-4000-8000-000000000001';
   const FORM_B = '33333333-0000-4000-8000-000000000002';
   const state = { members: [FORM_A], status: 200 };
@@ -262,15 +267,88 @@ test('an exact app is proven by every publish: a later differing or unreadable r
   state.status = 200;
   await port.publishApp(APP);
   assert.deepEqual(port.unsettled(), []);
+  // The SDK answers a PublishXml whose answer was lost BY VALUE; the server may have run it.
   answers[APP] = { type: 'app', id: APP, shipped: false, publish: { kind: 'failed', error: { code: 'CONNECTION_ERROR' } } };
   state.members = [FORM_A, FORM_B];
   await port.publishApp(APP);
-  assert.deepEqual(port.unsettled(), [], 'a refused publish shipped nothing, so the proof stands');
+  assert.equal(port.unsettled().length, 1, 'a publish failed by value may have shipped another membership');
+  assert.match(port.unsettled()[0].reason, /failed \(CONNECTION_ERROR\) and may have reached the server/);
+
+  for (const code of ['APP_MAIN_FORM_PUBLISH_WITHHELD', 'APP_MAIN_FORM_PUBLISH_CONFLICT']) {
+    delete answers[APP];
+    state.members = [FORM_A];
+    await port.publishApp(APP);
+    assert.deepEqual(port.unsettled(), []);
+    answers[APP] = { type: 'app', id: APP, shipped: false, publish: { kind: 'failed', error: { code } } };
+    state.members = [FORM_A, FORM_B];
+    await port.publishApp(APP);
+    assert.deepEqual(port.unsettled(), [], `${code}: nothing was published, so the proof stands`);
+  }
 
   answers[APP] = Object.assign(new Error('lost'), { code: 'ECONNRESET' });
   await assert.rejects(port.publishApp(APP), { code: 'ECONNRESET' });
   assert.equal(port.unsettled().length, 1, 'a lost answer may have shipped anything');
   assert.match(port.unsettled()[0].reason, /not answered \(ECONNRESET\)/);
+});
+
+test('noteAppPublication: an app publish the build made itself is judged by its answer: published pays and proves, a refusal before sending keeps the proof, anything else un-proves', async () => {
+  const FORM_A = '33333333-0000-4000-8000-000000000001';
+  const FORM_B = '33333333-0000-4000-8000-000000000002';
+  const state = { members: [FORM_A] };
+  const client = {
+    get: async (path) => {
+      if (path.startsWith(`/appmodules(${APP})`)) return { status: 200, body: { appmoduleidunique: '11111111-0000-4000-8000-000000000002' } };
+      if (path.startsWith('/appmodulecomponents')) return { status: 200, body: { value: state.members.map((objectid) => ({ objectid, componenttype: 60 })) } };
+      if (path.startsWith('/systemforms')) {
+        return { status: 200, body: { value: state.members.filter((id) => path.includes(id)).map((formid) => ({ formid, type: 2, objecttypecode: 'contoso_item', name: formid })) } };
+      }
+      return { status: 404, body: null };
+    },
+  };
+  const appWrite = writer();
+  const port = createAppPublication({ appWrite, client });
+  port.recordExact(APP, exactPush('notRead'), { name: 'Membership', mainFormsByTable: { contoso_item: [FORM_A] } });
+  port.queue({ kind: 'app', id: APP, reason: 'pages' });
+  assert.deepEqual(await port.noteAppPublication(APP, { answer: { type: 'app', id: APP, shipped: true, publish: { kind: 'verified' } } }), { published: true });
+  assert.deepEqual(port.owed(), [], 'the build\'s publish paid the queued work');
+  assert.deepEqual(port.unsettled(), []);
+
+  for (const code of ['APP_MAIN_FORM_PUBLISH_WITHHELD', 'APP_MAIN_FORM_PUBLISH_CONFLICT']) {
+    port.queue({ kind: 'app', id: APP, reason: 'pages' });
+    state.members = [FORM_A, FORM_B];
+    assert.deepEqual(await port.noteAppPublication(APP, { answer: { publish: { kind: 'failed', error: { code } } } }), { published: false, code });
+    assert.deepEqual(port.unsettled(), [], `${code}: nothing was published`);
+    assert.equal(port.owed().length, 1, 'still owed');
+    state.members = [FORM_A];
+  }
+
+  const lost = Object.assign(new Error('lost'), { code: 'ECONNRESET' });
+  for (const [outcome, code, reason] of [
+    [{ answer: { publish: { kind: 'failed', error: { code: 'CONNECTION_ERROR', statusCode: 504, message: 'raw text' } } } }, 'CONNECTION_ERROR', /failed \(CONNECTION_ERROR\) and may have reached the server/],
+    [{ answer: { publish: { kind: 'failed' } } }, 'APP_PUBLISH_FAILED', /failed \(APP_PUBLISH_FAILED\)/],
+    [{ answer: undefined }, 'PUBLICATION_UNCONFIRMED', /not confirmed/],
+    [{ answer: { publish: { kind: 'notRequested' } } }, 'PUBLICATION_UNCONFIRMED', /not confirmed/],
+    [{ error: lost }, 'ECONNRESET', /not answered \(ECONNRESET\)/],
+  ]) {
+    await port.noteAppPublication(APP, { answer: { publish: { kind: 'submitted' } } });
+    assert.deepEqual(port.unsettled(), []);
+    port.queue({ kind: 'app', id: APP, reason: 'pages' });
+    assert.deepEqual(await port.noteAppPublication(APP, outcome), { published: false, code });
+    assert.equal(port.unsettled().length, 1, code);
+    assert.match(port.unsettled()[0].reason, reason);
+    assert.ok(!port.unsettled()[0].reason.includes('raw text'), 'named by code');
+    assert.equal(port.owed().length, 1, 'still owed');
+  }
+  assert.deepEqual(appWrite.calls, [], 'noting a publish publishes nothing');
+  assert.equal(port.notePublished, undefined, 'no way to note an app published without its answer');
+
+  const plain = createAppPublication({ appWrite: writer() });
+  plain.queue({ kind: 'app', id: OTHER });
+  assert.deepEqual(await plain.noteAppPublication(OTHER, { answer: undefined }), { published: false, code: 'PUBLICATION_UNCONFIRMED' });
+  assert.equal(plain.owed().length, 1);
+  assert.deepEqual(await plain.noteAppPublication(`{${OTHER.toUpperCase()}}`, { answer: { publish: { kind: 'unverifiable' } } }), { published: true });
+  assert.deepEqual(plain.owed(), []);
+  assert.deepEqual(plain.unsettled(), []);
 });
 
 test('the published-layer proof reads strictly: a component row it cannot place makes the proof unreadable, never a match', async () => {

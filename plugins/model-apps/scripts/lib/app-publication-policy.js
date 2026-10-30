@@ -3,8 +3,9 @@
 // The build's ONE way to owe and to make an app publication — the port features use (`ctx.publication`).
 //
 // Features never publish the app themselves. They `queue` what they leave owed (a page placed as a draft, a view's
-// table). Every app publish of the build — its own existing ones and the final flush — goes
-// through `publishApp`, which calls `appWrite.publish`: the build's own app writers (sdk-build.js appWriters), which
+// table). Every app publish of the build — its own existing ones and the final flush — goes through `publishApp`
+// (the publish phase, which publishes the app itself, reports its answer instead: see noteAppPublication below),
+// which calls `appWrite.publish`: the build's own app writers (sdk-build.js appWriters), which
 // publish through the SAME SDK instance as every other write of the app. So one publish pays everything queued for the
 // app before it, and the flush publishes only what no publish has paid yet. Going through that instance is also what
 // keeps an exact Main-form obligation binding: the SDK withholds (APP_MAIN_FORM_PUBLISH_WITHHELD) or refuses
@@ -12,14 +13,24 @@
 // publish through that instance is subject to it. A raw PublishXml (appWriters.publishPinned) or a second SDK client
 // would not be, so once an app holds an exact obligation they are refused here.
 //
-// An exact obligation is settled by proof, never by a publish having happened: after EVERY app publish that did not
-// fail, the port reads the app's PUBLISHED layer back (publishedMainFormsProof) and settles only on 'matches'. A proof
+// An exact obligation is settled by proof, never by a publish having happened: after EVERY app publish that was accepted,
+// the port reads the app's PUBLISHED layer back (publishedMainFormsProof) and settles only on 'matches'. A proof
 // holds for one publish only: a publish ships whatever the app's unpublished layer holds at that moment, and another
 // writer can change the membership between two publishes of one build (the SDK releases its own exact guard once it has
 // seen the list published, so its later publish is a plain PublishXml). So each later publish proves again, and an
-// earlier match does not survive a later 'differs' or 'unreadable'. A publish whose answer was lost may have shipped
-// anything, so it un-proves the app until a later publish proves it; a publish refused by value (kind 'failed')
-// shipped nothing, so the published layer, and what was proven about it, stand.
+// earlier match does not survive a later 'differs' or 'unreadable'.
+//
+// A publish that was NOT accepted proves nothing about what the server now publishes, and may still have published:
+//   - a throw (its answer was lost);
+//   - kind 'failed' BY VALUE: the SDK catches every PublishXml error and answers it this way, so a connection dropped
+//     after the server ran the publish arrives as { publish: { kind: 'failed', error: { code: 'CONNECTION_ERROR' } } };
+//   - no answer, or any other kind.
+// Each of these un-proves the app until a later accepted publish proves it again. The earlier proof is NOT re-read
+// instead: a PublishXml the client gave up on can still be running on the server, so a read now could match and the
+// publish land after it. Only the SDK's two refusals that send nothing keep the proof: APP_MAIN_FORM_PUBLISH_WITHHELD
+// (no publish request was sent) and APP_MAIN_FORM_PUBLISH_CONFLICT (the guarded change set was refused with 412, so its
+// PublishXml never ran). Every app publish of the build is judged this way, through `noteAppPublication`: publishApp
+// and the flush call it, and the build's publish phase, which publishes the app itself, hands it the answer it got.
 //
 // A queued non-app target (a table whose view or form changed) is handed to its scope, in `scopes[kind]`:
 //   owe(target)     -> true when the build's own publication of that scope will publish it (phase 8, for a table). The
@@ -86,27 +97,59 @@ function createAppPublication({ appWrite, client, scopes = {} } = {}) {
     return { done: false, reason: entry.reason };
   }
 
-  async function publishApp(appId) {
+  // What one app publish answered, whichever path made it (see the file header). outcome: { error } for a throw, else
+  // { answer } — the SDK's PublishResult, or undefined. Answers { published: true } or { published: false, code }.
+  // Published pays what was owed for the app and proves an exact obligation again; anything else leaves both as they
+  // are, except that a publish which may have reached the server un-proves the app.
+  async function noteAppPublication(appId, outcome = {}) {
+    const thrown = Object.prototype.hasOwnProperty.call(outcome, 'error');
+    const publish = !thrown && outcome.answer && outcome.answer.publish;
+    const kind = publish && publish.kind;
+    if (PUBLISHED.has(kind)) {
+      await notePublished(appId);
+      return { published: true };
+    }
+    let code;
+    let why;
+    if (thrown) {
+      code = (outcome.error && outcome.error.code) || 'APP_PUBLISH_FAILED';
+      why = `its publish was not answered (${code})`;
+    } else if (kind === 'failed') {
+      code = (publish.error && publish.error.code) || 'APP_PUBLISH_FAILED';
+      if (WITHHELD.has(code)) return { published: false, code };
+      why = `its publish failed (${code}) and may have reached the server`;
+    } else {
+      code = 'PUBLICATION_UNCONFIRMED';
+      why = 'its publish was not confirmed';
+    }
+    const entry = exact.get(guidKey(appId));
+    if (entry) {
+      entry.done = false;
+      entry.reason = `app '${entry.name}': ${why}, so its published Main forms are unproven; re-run`;
+    }
+    return { published: false, code };
+  }
+
+  // One app publish through the build's app writer, noted. A throw is noted, then propagates.
+  async function attemptApp(appId) {
     if (!appWrite || typeof appWrite.publish !== 'function') {
       throw policyError('APP_PUBLICATION_UNAVAILABLE', `app '${appId}' cannot be published: the build has no app writer`);
     }
-    // The SDK's PublishResult: { type, id, shipped, publish: { kind: 'submitted'|'verified'|'unverifiable'|'failed', error? } }.
-    // It is handed back unchanged, so the caller's own reading of it (the build's partial-push report) still works. A
-    // withheld exact publish comes back as kind 'failed' with the SdkError, not as a throw; a throw propagates.
-    const entry = exact.get(guidKey(appId));
     let answer;
     try {
       answer = await appWrite.publish(appId);
     } catch (error) {
-      // A lost answer may have published the app's whole unpublished layer: what was proven before no longer holds.
-      if (entry) {
-        entry.done = false;
-        entry.reason = `app '${entry.name}': its publish was not answered (${(error && error.code) || 'APP_PUBLISH_FAILED'}), so its published Main forms are unproven; re-run`;
-      }
+      await noteAppPublication(appId, { error });
       throw error;
     }
-    if (!(answer && answer.publish && answer.publish.kind === 'failed')) await notePublished(appId);
-    return answer;
+    return { answer, noted: await noteAppPublication(appId, { answer }) };
+  }
+
+  // The SDK's PublishResult: { type, id, shipped, publish: { kind: 'submitted'|'verified'|'unverifiable'|'failed', error? } }.
+  // It is handed back unchanged, so the caller's own reading of it (the build's partial-push report) still works. A
+  // withheld exact publish comes back as kind 'failed' with the SdkError, not as a throw; a throw propagates.
+  async function publishApp(appId) {
+    return (await attemptApp(appId)).answer;
   }
 
   const port = {
@@ -159,31 +202,32 @@ function createAppPublication({ appWrite, client, scopes = {} } = {}) {
       }
     },
     publishApp,
-    // For an app publish the build made outside publishApp (its publish phase's own target list): clears what was owed
-    // for the app and proves any exact obligation from the published layer.
-    notePublished,
+    // For an app publish the build made outside publishApp (its publish phase's own target list): every attempt is
+    // reported here, a throw as { error } and an answer — whatever it was, or undefined — as { answer }, so a publish
+    // made elsewhere is judged by the same rule. There is deliberately no way to note an app published without its answer.
+    noteAppPublication,
     // What makes the build nonzero: exact obligations not yet proven published, and owed targets nothing can publish.
     unsettled: () => [
       ...[...exact.entries()].filter(([, entry]) => !entry.done).map(([appId, entry]) => ({ appId, code: 'APP_MAIN_FORMS_NOT_EXACT', reason: entry.reason })),
       ...[...owed.values()].filter((entry) => entry.kind !== 'app' && !(scopeOf(entry.kind) && typeof scopeOf(entry.kind).publish === 'function'))
         .map((entry) => ({ kind: entry.kind, id: entry.id, code: 'PUBLICATION_SCOPE_UNBRIDGED', reason: `a ${entry.kind} publication of '${entry.id}' was queued, but this build has no way to publish it` })),
     ],
-    // Publish every owed target once: apps through publishApp, bridged kinds through their scope. Answers
-    // { published, withheld, failed }: a withheld app publish stays owed (the saved change is on the app's pending layer)
-    // and is reported by code, never retried here. An unbridged kind is not attempted (see unsettled).
+    // Publish every owed target once: apps through the build's app writer, bridged kinds through their scope. Answers
+    // { published, withheld, failed }: an app is published only by an accepted answer (as a scope is: a failed answer
+    // reports its code, no answer PUBLICATION_UNCONFIRMED); a withheld app publish stays owed (the saved change is on the
+    // app's pending layer) and is reported by code, never retried here. An unbridged kind is not attempted (see unsettled).
     async flush() {
       const out = { published: [], withheld: [], failed: [] };
       for (const [key, entry] of [...owed.entries()]) {
-        let failure;
         if (entry.kind === 'app') {
+          let code;
           try {
-            const answer = await publishApp(entry.id);
-            if (answer && answer.publish && answer.publish.kind === 'failed') failure = answer.publish.error || { code: 'APP_PUBLISH_FAILED' };
+            const { noted } = await attemptApp(entry.id);
+            if (!noted.published) code = noted.code;
           } catch (error) {
-            failure = error || { code: 'APP_PUBLISH_FAILED' };
+            code = (error && error.code) || 'APP_PUBLISH_FAILED';
           }
-          if (!failure) { out.published.push(entry.id); continue; }
-          const code = failure.code || 'APP_PUBLISH_FAILED';
+          if (!code) { out.published.push(entry.id); continue; }
           (WITHHELD.has(code) ? out.withheld : out.failed).push({ id: entry.id, code });
           continue;
         }
