@@ -248,7 +248,7 @@ test('REAL BUNDLE: a create whose answer was lost is resumed by a retry with the
   });
 });
 
-test('the file store of turn records keeps the FIRST record of an id, refuses a record it cannot read, and stays exclusive without hard links', () => {
+test('the file store of turn records keeps the FIRST record of an id, refuses a record it cannot read, and refuses a file system without hard links', () => {
   const dir = path.join(makeTempDir('genpage-turn-store-'), 'turns');
   const store = makeTurnBindingStore(dir);
   assert.strictEqual(store.get(TURN), null);
@@ -263,8 +263,9 @@ test('the file store of turn records keeps the FIRST record of an id, refuses a 
 
   const noLinks = makeTurnBindingStore(dir, { fs: { ...fs, linkSync: () => { throw Object.assign(new Error('no hard links here'), { code: 'EPERM' }); } } });
   const third = '11111111-2222-4333-8444-555555555555';
-  assert.strictEqual(noLinks.bind(third, { pageId: OTHER, intent: 'd'.repeat(64) }).intent, 'd'.repeat(64));
-  assert.strictEqual(noLinks.bind(third, { pageId: OTHER, intent: 'e'.repeat(64) }).intent, 'd'.repeat(64));
+  assert.throws(() => noLinks.bind(third, { pageId: OTHER, intent: 'd'.repeat(64) }), (error) => error.reason === 'no-hard-links', 'a file system that cannot keep the first record is refused, never written around');
+  assert.strictEqual(store.get(third), null, 'and no record of that id is left');
+  assert.deepStrictEqual(fs.readdirSync(dir).sort(), [`${other}.json`, `${TURN}.json`].sort(), 'nor any temp file');
 });
 
 // ── A draft never says more about the app that runs than was read ──

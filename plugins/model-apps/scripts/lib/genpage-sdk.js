@@ -56,6 +56,7 @@ const { readTargetSolution, readPageComponentType, pageComponent } = require('./
 const { asPageNestingRefusal, guardPageNesting } = require('./page-nesting.js');
 const { resolveTypescriptProvider } = require('./typescript-provider.js');
 const { assertPageDeletionSafe } = require('./page-reference-guard.js');
+const { writeFileSafe } = require('./safe-fs.js');
 
 const GUID_RE = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
 
@@ -318,9 +319,10 @@ async function bindTurn(store, turnId, pageId, intent) {
 
 // The file store of turn records: one `<turnId>.json` per id under `folder`, each made exclusively, so two processes binding one id at once both end up holding the FIRST record:
 //   {"formatVersion":1,"turnId":"6f1c2a4e-9b3d-47a1-b85c-0e2f7d914a63","pageId":"1a2b3c4d-…","intent":"<sha-256 hex>"}
-// The record is written to a private temp file and hard-linked to its name — a link to a name that exists fails with EEXIST — so a reader never sees half a record. A file system without
-// hard links (some network shares and FAT volumes answer EPERM, ENOTSUP, EXDEV or ENOSYS) gets an exclusive create of the name instead: a crash between that create and its write leaves an
-// empty file, which reads as a record that cannot be read and is refused — never as a free id.
+// The record goes through the plugin's guarded writer (safe-fs `writeFileSafe`, `exclusive`): written whole to a private sibling and hard-linked to its name — a link to a name that
+// exists fails with EEXIST (`reason: 'exists'`) — so a reader never sees half a record, and the text is cleaned of tokens like every other file this token-holding process writes. A file
+// system without hard links (some network shares and FAT volumes) cannot keep the "first record wins" promise, so the writer refuses (`reason: 'no-hard-links'`) and the bind fails —
+// which the caller reports as GENPAGE_TURN_STATE_UNAVAILABLE and changes nothing — rather than fall back to a create that a crash could leave half written.
 const TURN_RECORD_FORMAT = 1;
 function makeTurnBindingStore(folder, deps = {}) {
   const fsx = deps.fs || fs;
@@ -344,21 +346,10 @@ function makeTurnBindingStore(folder, deps = {}) {
     bind(turnId, { pageId, intent }) {
       const text = `${JSON.stringify({ formatVersion: TURN_RECORD_FORMAT, turnId, pageId, intent })}\n`;
       fsx.mkdirSync(folder, { recursive: true });
-      const tmp = path.join(folder, `.${turnId}.${process.pid}.${crypto.randomUUID()}.tmp`);
-      fsx.writeFileSync(tmp, text, { flag: 'wx' });
       try {
-        fsx.linkSync(tmp, fileOf(turnId));
+        writeFileSafe(fileOf(turnId), text, { exclusive: true, fs: fsx });
       } catch (error) {
-        if (error && error.code === 'EEXIST') return read(turnId);
-        if (!error || !['EPERM', 'ENOTSUP', 'EXDEV', 'ENOSYS'].includes(error.code)) throw error;
-        try {
-          fsx.writeFileSync(fileOf(turnId), text, { flag: 'wx' });
-        } catch (created) {
-          if (created && created.code === 'EEXIST') return read(turnId);
-          throw created;
-        }
-      } finally {
-        try { fsx.unlinkSync(tmp); } catch { /* best-effort cleanup of the private temp file */ }
+        if (!(error && error.reason === 'exists')) throw error;
       }
       return read(turnId);
     },
