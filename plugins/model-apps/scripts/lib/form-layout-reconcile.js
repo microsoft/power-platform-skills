@@ -13,10 +13,7 @@
 //   - a free slot that a later cell must skip is held by a spacer cell (`control: null`, the SDK's own
 //     shape for one), because a FormXML row cannot otherwise express "leave this column empty";
 //   - a declared field found in another section moves here; its old section keeps every other cell where
-//     it was, the same way.
-// Positions come from the column-slot model (form-occupancy.js slotGrid), not the width-only rowOccupancy
-// the additive path uses: keeping a maker's cell in column 1 beside a row-spanning cell needs positions.
-//
+//     it was, the same way;
 //   - a row this pack empties is kept (empty) while a maker's cell sits below it: dropping it would move
 //     every later row up, and with it controls the spec does not own.
 // Positions come from the column-slot model (form-occupancy.js slotGrid), not the width-only rowOccupancy
