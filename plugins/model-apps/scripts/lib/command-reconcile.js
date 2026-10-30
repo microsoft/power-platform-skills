@@ -43,7 +43,7 @@
 
 const {
   canonicalJson, intentSha256, emptyResult, operation, refusal, isAuthorized,
-  lookupBinding, bindingRecord, driftVerdict, pushIfChanged, normalizeGuid, createThroughPort,
+  lookupBinding, bindingRecord, driftVerdict, pushIfChanged, normalizeGuid, createThroughPort, boundIdentity,
 } = require('./reconcile-common.js');
 
 const KIND = 'command';
@@ -276,6 +276,11 @@ async function resolveManagedCommands(entity, nodes, liveIndex, ctx, defaultPara
     let origin = 'created';
     const binding = await lookupBinding(ctx, KIND, node.bindingKey);
     if (binding) {
+      // The binding names the row; an explicit rowId naming ANOTHER row contradicts it. Editing the
+      // bound row would ignore what the maker wrote, and following the pin would orphan the bound
+      // row, so the contradiction is refused before anything is resolved or written.
+      const { refusal: conflict } = boundIdentity(binding, { pinnedId: node.rowId, code: 'command-binding-mismatch', key: node.bindingKey });
+      if (conflict) return block(node, null, 'adopted', binding, conflict.code, conflict.message);
       live = liveIndex.get(normalizeGuid(binding.id) || String(binding.id).toLowerCase()) || null;
       origin = binding.origin === 'adopted' ? 'adopted' : 'created';
       if (!live) {
@@ -572,13 +577,30 @@ async function recordAdopted(plan, sdk, ctx, childIds, result) {
  *           or every ancestor declares `hidden: false`; else undefined.
  * A control with no binding yet is not verifiable by id and is left out (caption discovery is not
  * verification).
+ *
+ * `menuPath` is the captions of the control's flyout/split ancestors, which the SDK compares exactly
+ * (an omitted menuPath means "top level"). An ancestor whose caption the spec omits keeps whatever
+ * caption its row holds, so the spec cannot predict it: the caption is then read from `live` (the
+ * fetched command bar) on the row BOUND to that ancestor — the identity, never a caption search. When
+ * it cannot be read that way (no `live`, the ancestor not bound or not on the bar), the descendant is
+ * returned with `query: null` and `unverifiable: 'command-ancestor-caption-undeclared'` rather than
+ * queried under an invented "" caption, which would call a correctly placed control misplaced.
  * @param {string} entity
  * @param {object[]} commands  the spec's commands for this table
  * @param {(key: string) => (object|null)} bindingOf  managed binding by key
+ * @param {object} [live]  the table's fetched command bar (sdk.getArtifact('command', entity))
  */
-function expectedCommandQueries(entity, commands, bindingOf) {
+function expectedCommandQueries(entity, commands, bindingOf, live) {
   const ent = String(entity).toLowerCase();
   const out = [];
+  const liveIndex = live ? indexLive(live) : null;
+  // The caption an ancestor contributes to its descendants' menuPath, or null when it cannot be known.
+  const captionOf = (c, b) => {
+    if (c.label !== undefined && c.label !== null) return String(c.label);
+    if (!liveIndex || !b || !b.id) return null;
+    const row = liveIndex.get(normalizeGuid(b.id) || String(b.id).toLowerCase());
+    return row ? String(row.control.label || '') : null;
+  };
   // Tri-state folds: true wins; false only when every member is a declared false; else unknown.
   const anyOf = (a, b) => (a === true || b === true ? true : a === false && b === false ? false : undefined);
   const walk = (list, parentPath, bar, menuPath, ancestorDisabled, ancestorHidden) => {
@@ -591,7 +613,9 @@ function expectedCommandQueries(entity, commands, bindingOf) {
       const disabled = typeof c.disabled === 'boolean' ? c.disabled : undefined;
       const hidden = typeof c.hidden === 'boolean' ? c.hidden : undefined;
       const disabledHere = anyOf(disabled, ancestorDisabled);
-      if (b && b.id) {
+      if (b && b.id && menuPath.includes(null)) {
+        out.push({ key, table: ent, query: null, unverifiable: 'command-ancestor-caption-undeclared' });
+      } else if (b && b.id) {
         out.push({
           key,
           table: ent,
@@ -605,7 +629,7 @@ function expectedCommandQueries(entity, commands, bindingOf) {
           expect: { served: disabledHere === undefined ? undefined : !disabledHere, hidden, ancestorHidden },
         });
       }
-      if (Array.isArray(c.children)) walk(c.children, keyPath, here, [...menuPath, String(c.label || '')], disabledHere, anyOf(ancestorHidden, hidden));
+      if (Array.isArray(c.children)) walk(c.children, keyPath, here, [...menuPath, captionOf(c, b)], disabledHere, anyOf(ancestorHidden, hidden));
     }
   };
   walk(commands, '', '', [], false, false);

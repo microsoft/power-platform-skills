@@ -347,7 +347,7 @@ test('verification does not invent false for an omitted flag: a preserved disabl
   assert.strictEqual(q.expect.hidden, undefined, 'hidden is not invented either');
   assert.strictEqual(q.expect.ancestorHidden, false, 'a top-level control has no hidden ancestor');
   // An ancestor that states nothing leaves its children's ancestorHidden unconstrained too.
-  const nested = expectedCommandQueries('account', [{ key: 'm', type: 'FlyoutAnchor', children: [{ key: 'c', hidden: false, disabled: false }] }], () => ({ id }));
+  const nested = expectedCommandQueries('account', [{ key: 'm', type: 'FlyoutAnchor', label: 'M', children: [{ key: 'c', hidden: false, disabled: false }] }], () => ({ id }));
   assert.deepStrictEqual(nested[1].expect, { served: undefined, hidden: false, ancestorHidden: undefined });
 });
 
@@ -368,4 +368,60 @@ test('a lost create resolved by adoption binds the named rows, writes nothing, a
   assert.deepStrictEqual(result.refused, []);
   assert.strictEqual(srv.rows.get(id).buttonlabeltext, 'Approve now', 'the bound row is edited, not duplicated');
   assert.ok(!nonGet(srv).includes('post'));
+});
+test('an explicit rowId that contradicts the stored binding is refused with zero writes; the same id in another form is not a conflict', async () => {
+  const A = 'a4a4a4a4-0000-4000-8000-000000000001';
+  const B = 'a4a4a4a4-0000-4000-8000-000000000002';
+  const srv = createCommandBarServer();
+  srv.seed({ appactionid: A, buttonlabeltext: 'First', location: 0, sequence: 0 });
+  srv.seed({ appactionid: B, buttonlabeltext: 'Second', location: 0, sequence: 1 });
+  const ports = { managed: fakeManaged(), creates: fakeCreates() };
+  await reconcile(srv, [{ entity: 'account', key: 'one', rowId: A, label: 'First' }], ports);
+  assert.strictEqual(ports.managed.lookup('command', 'account/one').id, A);
+  srv.clearLog();
+  let { result } = await reconcile(srv, [{ entity: 'account', key: 'one', rowId: B, label: 'Changed' }], ports);
+  assert.deepStrictEqual(result.refused.map((r) => [r.key, r.code]), [['account/one', 'command-binding-mismatch']]);
+  assert.deepStrictEqual(nonGet(srv), [], 'nothing is written for a contradictory pin');
+  assert.strictEqual(srv.rows.get(A).buttonlabeltext, 'First', 'the bound row is not edited');
+  assert.strictEqual(srv.rows.get(B).buttonlabeltext, 'Second', 'the pinned row is not edited');
+  assert.deepStrictEqual(result.managedBindings, []);
+  // Neighbours: the bound id pinned in braces/upper case is the same row, and no pin at all follows the binding.
+  ({ result } = await reconcile(srv, [{ entity: 'account', key: 'one', rowId: `{${A.toUpperCase()}}`, label: 'Changed' }], ports));
+  assert.deepStrictEqual(result.refused, []);
+  assert.strictEqual(srv.rows.get(A).buttonlabeltext, 'Changed');
+  ({ result } = await reconcile(srv, [{ entity: 'account', key: 'one', label: 'Changed again' }], ports));
+  assert.deepStrictEqual(result.refused, []);
+  assert.strictEqual(srv.rows.get(A).buttonlabeltext, 'Changed again');
+  assert.strictEqual(srv.rows.get(B).buttonlabeltext, 'Second');
+});
+
+test('verification does not invent an ancestor caption the spec omits: it reads the bound ancestor row, or leaves the child unverifiable', async () => {
+  const srv = createCommandBarServer();
+  const ports = { managed: fakeManaged(), creates: fakeCreates() };
+  const cmds = [{ entity: 'account', key: 'menu', type: 'FlyoutAnchor', label: 'Actions', children: [{ key: 'run', label: 'Run' }] }];
+  const { sdk } = await reconcile(srv, cmds, ports);
+  const bindingOf = (k) => ports.managed.lookup('command', k);
+  // Neighbour: a declared ancestor caption stays the constraint.
+  const declared = expectedCommandQueries('account', cmds, bindingOf);
+  assert.deepStrictEqual(declared[1].query.menuPath, ['Actions']);
+  delete cmds[0].label;
+  // Without the fetched bar the caption cannot be derived: the child is reported unverifiable, never queried under "".
+  const blind = expectedCommandQueries('account', cmds, bindingOf);
+  assert.deepStrictEqual(blind.map((q) => [q.key, q.query && q.query.menuPath, q.unverifiable]), [
+    ['account/menu', [], undefined],
+    ['account/menu/run', null, 'command-ancestor-caption-undeclared'],
+  ]);
+  // With the fetched bar, the caption the bound ancestor row holds is the constraint.
+  await sdk.fetchArtifact('command', 'account');
+  const live = await sdk.getArtifact('command', 'account');
+  const queries = expectedCommandQueries('account', cmds, bindingOf, live);
+  assert.deepStrictEqual(queries[1].query.menuPath, ['Actions']);
+  const fresh = await srv.newSdk();
+  const inspected = await fresh.inspectArtifact('command', 'account', { find: queries.map((q) => q.query) });
+  assert.deepStrictEqual(inspected.found.map((f) => f.verdict), ['present', 'present'], 'the preserved child is not misplaced');
+  // An explicit caption that is wrong is still caught.
+  cmds[0].label = 'Other';
+  const wrong = expectedCommandQueries('account', cmds, bindingOf, live);
+  const again = await fresh.inspectArtifact('command', 'account', { find: wrong.map((q) => q.query) });
+  assert.notStrictEqual(again.found[1].verdict, 'present');
 });
