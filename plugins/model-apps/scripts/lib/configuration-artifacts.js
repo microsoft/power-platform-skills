@@ -641,11 +641,24 @@ const ref = (v) => (typeof v === 'string' ? lower(v) : v === undefined ? null : 
 // App Spec key, which is an identity of its own and is kept byte for byte.
 const portKeyOf = (kind, key) => (kind === 'duplicateRule' ? String(key) : lower(key));
 
-// A stop the resolver step raises itself, shaped like the port's own typed stops.
-function identityStop(code) {
+// A stop the resolver step raises itself, shaped like the port's own typed stops. `id` is the identity's id when the
+// stop names one (see stoppedId); it is all of the failure that is kept: the resolver's message can quote a header.
+function identityStop(code, id) {
   const error = new Error(`create identity: ${code}`);
   error.code = code;
+  if (id) error.id = id;
   return error;
+}
+
+// The id a typed stop is about, when it names one, so a maker can inspect the row the next run could not read. The
+// common resolver's stops carry the create they stop (lib/creates-read.js resolveProtectedTarget), e.g.
+//   { code: 'create-identity-unverified', message: '... could not be read (HTTP 503: ...)', create: { kind, key, id } }
+// and a stop raised here carries `id`. Only a GUID is kept: never the message, a cause or any other field.
+function stoppedId(error) {
+  if (!error || typeof error !== 'object') return null;
+  const candidates = [error.create && error.create.id, error.id];
+  const id = candidates.find((v) => typeof v === 'string' && GUID.test(v.replace(/^\{|\}$/g, '')));
+  return id ? lower(id.replace(/^\{|\}$/g, '')) : null;
 }
 
 // Locate the remote artifact for one declaration, in this order:
@@ -676,9 +689,10 @@ async function locate(ctx, kind, key, identity) {
     let resolved;
     try {
       resolved = await creates.resolve({ kind, key: portKeyOf(kind, key), identity });
-    } catch {
-      // A read of the identity's id that failed proves nothing either way: never absence.
-      throw identityStop('create-identity-unverified');
+    } catch (error) {
+      // A read of the identity's id that failed proves nothing either way: never absence. A typed stop of the
+      // resolver keeps its code (a conflict is refused, the rest stay unknown) and the id it names.
+      throw identityStop(portCode(error) || 'create-identity-unverified', stoppedId(error));
     }
     if (resolved && resolved.state === 'present' && typeof resolved.id === 'string' && resolved.id) {
       return { id: resolved.id, remote: await ctx.sdk.fetchArtifact(kind, resolved.id, { overwrite: true }), origin: 'resolved' };
@@ -717,7 +731,11 @@ async function planOne(ctx, kindPlan, entry, plan) {
   } catch (error) {
     const code = portCode(error);
     if (code && !UNKNOWN_PORT_CODES.has(code)) return refuse(code);
-    plan.unknown.push({ kind, key, code: code || codeOf(error) });
+    // The id the stop names, and the safe handle a maker inspects it by (the same shape a lost create reports).
+    const id = code ? stoppedId(error) : null;
+    const line = { kind, key, code: code || codeOf(error), ...(id ? { id } : {}) };
+    if (id) Object.defineProperty(line, 'handle', { value: identityHandle(kind, key, kindPlan.identity(entry), { id }), enumerable: false });
+    plan.unknown.push(line);
     return null;
   }
   if (!found) {
@@ -1675,8 +1693,11 @@ const DEFAULT_PORT = Symbol('configuration-artifacts.default-port');
 const portFor = (ctx) => portOf(ctx) || defaultCreates(ctx);
 
 // The safe handle of a create or write: what a maker inspects an unknown outcome by. Never a value.
+function identityHandle(kind, key, identity, ids) {
+  return { formatVersion: 1, kind, key: portKeyOf(kind, key), identity: { ...identity }, ...(ids ? { ids } : {}) };
+}
 function handleOf(op, ids) {
-  return { formatVersion: 1, kind: op.kind, key: portKeyOf(op.kind, op.key), identity: { ...(op.detail.identity || op.target) }, ...(ids ? { ids } : {}) };
+  return identityHandle(op.kind, op.key, op.detail.identity || op.target, ids);
 }
 
 // A port success is `created` (this run's acknowledged create) or `matched` (the platform answered with the row
@@ -1960,7 +1981,7 @@ async function applyConfiguration(plan, ctx) {
   const result = emptyResult();
   if (!plan) return result;
   for (const finding of plan.unknown || []) {
-    pushFinding(result, 'unknown', { ...finding });
+    pushFinding(result, 'unknown', { ...finding }, finding.handle);
     observationsOf(result).push({ kind: finding.kind, key: finding.key, source: 'plan-read', definition: 'unknown' });
   }
   const known = new Map();

@@ -280,6 +280,26 @@ test('a create that landed behind a lost answer is found at its own id; a namesa
   assert.deepEqual(unreadable.writes, []);
 });
 
+test('a resolver stop that names the id it could not read keeps that id and a safe handle; the next run sends nothing', async () => {
+  const h = await harness({ lose: ({ method, path }) => method === 'POST' && path.startsWith('/connectionreferences') });
+  const s = referenceOnly();
+  const first = await h.run(s);
+  const id = first.result.unknown[0].id;
+  assert.ok(id);
+  // The common resolver's typed stop: its code, and the create it is about (kind, key, the id it read) — plus text that is not for output.
+  const stop = Object.assign(new Error('the row at that id could not be read: Authorization: Bearer abc.def'), { code: 'create-identity-unverified', create: { kind: 'connectionReference', key: 'contoso_sp', id } });
+  const next = await h.run(s, { creates: { ...h.creates, resolve: async () => { throw stop; } } });
+  assert.deepEqual(next.result.unknown, [{ kind: 'connectionReference', key: 'contoso_sp', id, code: 'create-identity-unverified' }]);
+  assert.deepEqual(next.result.unknown[0].handle, { formatVersion: 1, kind: 'connectionReference', key: 'contoso_sp', identity: { uniqueName: 'contoso_sp' }, ids: { id } });
+  assert.deepEqual(next.plan.unknown, [{ kind: 'connectionReference', key: 'contoso_sp', id, code: 'create-identity-unverified' }]);
+  assert.doesNotMatch(JSON.stringify([next.result, next.plan, next.result.unknown[0].handle]), /Bearer|Authorization/);
+  assert.deepEqual(next.writes, []);
+  // A stop the resolver raises for a conflict keeps its own code (refused, nothing sent); an id that is not a GUID is dropped.
+  const conflict = Object.assign(new Error('x'), { code: 'create-identity-conflict', create: { kind: 'connectionReference', key: 'contoso_sp', id: 'not a guid' } });
+  const refused = await h.run(s, { creates: { ...h.creates, resolve: async () => { throw conflict; } } });
+  assert.deepEqual([refused.result.refused, refused.result.unknown, refused.writes], [[{ kind: 'connectionReference', key: 'contoso_sp', code: 'create-identity-conflict' }], [], []]);
+});
+
 test('without a create port of its own the build still creates every kind and every added child (ordinary creation is never disabled)', async () => {
   const h = await harness();
   const s = spec();

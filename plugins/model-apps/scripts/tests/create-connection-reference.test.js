@@ -191,6 +191,23 @@ test('a lookup that cannot be read sends nothing, and says an earlier write may 
   assert.match(emit.payload.message, /^Create connection reference new_sp failed: it could not be read \([A-Z_]+\), so this run sent nothing\. A write an earlier run made may still have been saved/);
 });
 
+test('a lookup stopped at an id it could not read names that id, and sends nothing', async () => {
+  const { createConnectionReference } = require('../create-connection-reference.js');
+  const { createAzHttpClient } = require('../lib/sdk-http-client.js');
+  const { configurationSendOnce } = require('../lib/configuration-transport.js');
+  const { createPassthroughCreates } = require('../lib/creates-passthrough.js');
+  const org = createConfigOrg();
+  const client = createAzHttpClient(org.origin, { getToken: () => 'test-token-0123456789abcdef', request: org.request, sleep: async () => {}, sendOnce: configurationSendOnce });
+  const id = 'aaaaaaaa-1111-4222-8333-444444444444';
+  const stop = Object.assign(new Error('unreadable'), { code: 'create-identity-unverified', create: { kind: 'connectionReference', key: 'new_sp', id } });
+  const creates = { ...createPassthroughCreates(), resolve: async () => { throw stop; } };
+  const mark = org.requests.length;
+  const out = await createConnectionReference({ env: org.origin, logicalName: 'new_sp', connectorId: SP }, client, { creates });
+  assert.ok(out instanceof Error);
+  assert.equal(out.message, `Create connection reference new_sp failed: it could not be read (create-identity-unverified), so this run sent nothing. A write an earlier run made may still have been saved as connectionreferences(${id}): check the environment for connection reference new_sp before running this again.`);
+  assert.deepEqual(org.writes(mark), []);
+});
+
 // --- The bytes a caller sees ------------------------------------------------------------------------------------------
 
 function spawnCli(scenario, ...argv) {

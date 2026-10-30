@@ -103,9 +103,9 @@ function noting(client, seen) {
 function settle(plan, result, logicalName, seen) {
   const what = `Create connection reference ${logicalName}`;
   // A failed lookup comes back in the plan, before any write: this run sent nothing, which says nothing about an
-  // earlier run whose answer was lost.
+  // earlier run whose answer was lost. A create port's resolver that stopped at the identity's own id names it.
   const unread = plan.unknown[0];
-  if (unread) return new Error(`${what} failed: it could not be read (${unread.code}), so this run sent nothing. A write an earlier run made may still have been saved: check the environment for connection reference ${logicalName} before running this again.`);
+  if (unread) return new Error(`${what} failed: it could not be read (${unread.code}), so this run sent nothing. A write an earlier run made may still have been saved${unread.id ? ` as connectionreferences(${unread.id})` : ''}: check the environment for connection reference ${logicalName} before running this again.`);
   const unknown = result.unknown[0];
   if (unknown) {
     const id = (unknown.handle && unknown.handle.ids && unknown.handle.ids.id) || unknown.id;
@@ -130,9 +130,10 @@ function settle(plan, result, logicalName, seen) {
  * Creates or keeps the connection reference through the SDK.
  * @param {object} request - { env, logicalName, connectorId, connectionId?, displayName?, solution?, authorized? (Set) }
  * @param {object} [httpClient] - the SDK's HttpClient; the az-token one for `env` when omitted (a test seam)
+ * @param {object} [deps] - { creates }: the create port; the plain pass-through (lib/creates-passthrough.js) when omitted
  * @returns {Promise<object|Error>} the success payload, or the Error to report
  */
-async function createConnectionReference({ env, logicalName, connectorId, connectionId, displayName, solution, authorized }, httpClient) {
+async function createConnectionReference({ env, logicalName, connectorId, connectionId, displayName, solution, authorized }, httpClient, deps = {}) {
   const entry = { logicalName, connectorId, ...(displayName ? { name: displayName } : {}) };
   const spec = { connectionReferences: [entry] };
   const bindings = readDeploymentBindings(connectionId ? { ConnectionReferences: [{ LogicalName: logicalName, ConnectionId: connectionId }] } : undefined, spec);
@@ -143,8 +144,9 @@ async function createConnectionReference({ env, logicalName, connectorId, connec
     const sdk = make(solution ? { solutionUniqueName: solution } : {});
     // The SDK writes an artifact to its workspace before pushing it, so the throwaway workspace is initialised first.
     await sdk.initWorkspace();
-    // No create port is passed: the helper creates through the plain pass-through (lib/creates-passthrough.js).
-    const ctx = configurationContext({ sdk, bindings, solutionUniqueName: solution, authorizedDestructive: authorized });
+    // Without a create port the helper creates through the plain pass-through (lib/creates-passthrough.js): the logical
+    // name is the identity. A port with a resolver (`deps.creates`) makes the create's id stable across runs.
+    const ctx = configurationContext({ sdk, creates: deps.creates, bindings, solutionUniqueName: solution, authorizedDestructive: authorized });
     const plan = await planConfiguration(spec, ctx);
     if (plan.unknown.length) return settle(plan, { saved: [], unchanged: [], refused: [], unknown: [] }, logicalName, seen);
     return settle(plan, await applyConfiguration(plan, ctx), logicalName, seen);
