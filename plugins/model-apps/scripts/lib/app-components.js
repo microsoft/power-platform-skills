@@ -13,6 +13,7 @@ const { compareText } = require('./compare-text.js');
 
 const guidKey = (id) => String(id || '').replace(/^\{|\}$/g, '').toLowerCase();
 const reasonOf = (error) => String((error && error.message) || error || 'read failed');
+const listOf = (value) => (Array.isArray(value) ? value : []);
 const APP_COMPONENT_ENTITY_SOURCES = [
   { componentType: 26, set: 'savedquery', collection: 'savedqueries', idField: 'savedqueryid', entityField: 'returnedtypecode' },
   { componentType: 59, set: 'savedqueryvisualization', collection: 'savedqueryvisualizations', idField: 'savedqueryvisualizationid', entityField: 'primaryentitytypecode' },
@@ -278,25 +279,97 @@ function appComponentsFor(created, mainFormsByTable) {
   };
 }
 
-async function applyAppMainForms(provision, appId, mainFormsByTable) {
+// The explicit form pins `forms` without the Main forms a Main-form list leaves out: a list names the only Main forms of
+// its table the app may hold, so an explicit pin of another would make the SDK refuse the push (APP_MAIN_FORM conflict).
+async function withoutExcludedMainForms(client, forms, mainFormsByTable) {
+  if (!mainFormsByTable || !Object.keys(mainFormsByTable).length) return forms;
+  const allowed = new Set(Object.values(mainFormsByTable).flat().map(guidKey));
+  const candidates = forms.filter((id) => !allowed.has(guidKey(id)));
+  if (!candidates.length) return forms;
+  const classified = await classifyFormIds(client, candidates);
+  if (classified.unclassified.length) {
+    throw componentError('APP_MAIN_FORMS_UNVERIFIED', `cannot classify explicit form pin(s) ${classified.unclassified.join(', ')} before applying the Main-form list`);
+  }
+  const excluded = new Set(classified.rows.filter((row) => row.type === 2
+    && mainFormsByTable[row.objecttypecode.toLowerCase()] && !allowed.has(guidKey(row.formid))).map((row) => guidKey(row.formid)));
+  return forms.filter((id) => !excluded.has(guidKey(id)));
+}
+
+// What an update does with the Main forms OUTSIDE the list (app.mainFormsOnUpdate). Only 'exact' reaches the SDK
+// (components.mainFormsOnUpdate): it removes the other Main forms of each LISTED table from the app in one guarded change
+// set and publishes only on proof. Omitted or 'addOnly' sets nothing, so an existing spec sends exactly what it did.
+async function applyAppMainForms(provision, appId, mainFormsByTable, { mainFormsOnUpdate } = {}) {
+  const exact = mainFormsOnUpdate === 'exact';
+  if (exact && (!mainFormsByTable || !Object.values(mainFormsByTable).some((ids) => Array.isArray(ids) && ids.length))) {
+    // An empty list cannot mean "no Main forms": zero Main-form members lets the app offer every form of the table.
+    throw componentError('APP_MAIN_FORMS_EXACT_INVALID', `app '${appId}': mainFormsOnUpdate "exact" needs a non-empty Main-form list for at least one table`);
+  }
   if (mainFormsByTable === undefined) return;
   const artifact = await provision.getArtifact('app', appId) || {};
-  const components = { ...(artifact.components || {}), mainFormsByTable };
-  const allowed = new Set(Object.values(mainFormsByTable).flat().map(guidKey));
-  const candidates = (components.forms || []).filter((id) => !allowed.has(guidKey(id)));
-  if (candidates.length && Object.keys(mainFormsByTable).length) {
-    const classified = await classifyFormIds(provision.dataverse, candidates);
-    if (classified.unclassified.length) {
-      throw componentError('APP_MAIN_FORMS_UNVERIFIED', `cannot classify explicit form pin(s) ${classified.unclassified.join(', ')} before applying the Main-form list`);
-    }
-    const excluded = new Set(classified.rows.filter((row) => row.type === 2
-      && mainFormsByTable[row.objecttypecode.toLowerCase()] && !allowed.has(guidKey(row.formid))).map((row) => guidKey(row.formid)));
-    components.forms = components.forms.filter((id) => !excluded.has(guidKey(id)));
-  }
+  const components = { ...(artifact.components || {}), mainFormsByTable, ...(exact ? { mainFormsOnUpdate: 'exact' } : {}) };
+  if (components.forms) components.forms = await withoutExcludedMainForms(provision.dataverse, components.forms, mainFormsByTable);
   // A fetch never reconstructs this directive. Add a missing top-level components object through
   // the SDK's root addElement; otherwise a later push would silently re-add every active Main form.
   if (artifact.components === undefined) await provision.addElement('app', appId, '', { components });
   else await provision.updateElement('app', appId, '/components', components);
+}
+
+// The ids the spec's declared forms, views, charts and dashboards resolved to (created or reused this run), for
+// app.pinDeclaredArtifacts. `created` is the build's result.created: { forms: { <table>: id }, views: { <key>: id }, … }.
+function declaredAppPins(created) {
+  const values = (map) => Object.values(map || {}).filter(Boolean);
+  return { forms: values(created && created.forms), views: values(created && created.views), charts: values(created && created.charts), dashboards: values(created && created.dashboards) };
+}
+
+// app.pinDeclaredArtifacts: add the declared ids to the app copy's explicit pins before a push. A fetch carries no
+// explicit pins, so without this an update pins only what the navigation's tables derive — a chart of a table the
+// navigation does not name never joins the app. Union only: what the copy already lists stays, and a Main form the
+// Main-form list leaves out is not pinned. AddAppComponents only adds, so no existing member is removed.
+async function pinDeclaredArtifacts(provision, appId, declared) {
+  const kinds = ['forms', 'views', 'charts', 'dashboards'];
+  if (!declared || !kinds.some((kind) => Array.isArray(declared[kind]) && declared[kind].length)) return { added: 0 };
+  const artifact = await provision.getArtifact('app', appId) || {};
+  const before = artifact.components || {};
+  const components = { ...before };
+  let added = 0;
+  for (const kind of kinds) {
+    const list = [...(before[kind] || [])];
+    const have = new Set(list.map(guidKey));
+    for (const id of declared[kind] || []) {
+      if (!id || have.has(guidKey(id))) continue;
+      have.add(guidKey(id));
+      list.push(id);
+    }
+    components[kind] = list;
+  }
+  components.forms = await withoutExcludedMainForms(provision.dataverse, components.forms, before.mainFormsByTable);
+  for (const kind of kinds) added += components[kind].length - (before[kind] || []).length;
+  if (!added) return { added: 0 };
+  if (artifact.components === undefined) await provision.addElement('app', appId, '', { components });
+  else await provision.updateElement('app', appId, '/components', components);
+  return { added };
+}
+
+// What an exact-mode push proved, from PushResult.appMainForms:
+//   { mode: 'exact', tables: [{ table, membership: 'exact'|'notExact'|'inconclusive', removed, retained, missing, reason }],
+//     published: 'matches'|'differs'|'unreadable'|'notRead' }
+// Only every table 'exact' AND the published layer read back as 'matches' is done; anything else stays owed and makes
+// the build nonzero — never a quiet fall back to addOnly.
+function exactMembershipOutcome(pushed, appName) {
+  const result = pushed && pushed.appMainForms;
+  if (!result || result.mode !== 'exact') {
+    return { done: false, reason: `app '${appName}': the push reported no exact Main-form result` };
+  }
+  // No table rows proves nothing: an exact push always names at least one listed table.
+  if (!listOf(result.tables).length) return { done: false, reason: `app '${appName}': the exact Main-form result names no table` };
+  const notExact = listOf(result.tables).filter((row) => !row || row.membership !== 'exact');
+  if (notExact.length) {
+    return { done: false, reason: `app '${appName}': Main forms are not exact for ${notExact.map((row) => `'${row && row.table}' (${(row && (row.reason || row.membership)) || 'unknown'})`).join(', ')}` };
+  }
+  if (result.published !== 'matches') {
+    return { done: false, reason: `app '${appName}': exact Main forms are saved but not proven published (${result.published || 'notRead'}); publish the app and re-run` };
+  }
+  return { done: true };
 }
 
 async function explainAppPushWarnings(client, pushed, appName) {
@@ -697,7 +770,7 @@ async function appEntityComponentsFor(sdk, appUnique, wanted) {
 
 module.exports = {
   currentAppLayer, currentLayerRows, currentLayerRow, savedPageRows, publishedAppLayer, appComponentRows, collectionRows, tableRefs, tableComponentIds, pinAppTables,
-  publishAppComponents, appComponentsFor, applyAppMainForms, explainAppPushWarnings,
+  publishAppComponents, appComponentsFor, applyAppMainForms, explainAppPushWarnings, declaredAppPins, pinDeclaredArtifacts, exactMembershipOutcome,
   resolveMainForms, readMainFormMembership, appMainFormsFor, appEntityComponentsFor,
   APP_COMPONENT_ENTITY_SOURCES, TABLE_NAME, readAppComponentInventory, appComponentEntities, downloadAppMainForms, setAppMembershipFloor,
 };
