@@ -2014,6 +2014,9 @@ function compareVersions(a, b) {
 }
 
 const APP_MEMBERSHIP_MIN_VERSION = '2.13.0';
+// app.mainFormsOnUpdate and app.pinDeclaredArtifacts: a plugin older than this ignores both, so an "exact" list would
+// only ADD forms there and a declared chart off the navigation would stay out of the app.
+const APP_MEMBERSHIP_UPDATE_MIN_VERSION = '2.21.0';
 const isPluginVersion = (value) => typeof value === 'string' && /^\d+(?:\.\d+)*(?:[-+][0-9A-Za-z.-]+)?$/.test(value);
 
 function sitemapEntityTables(spec) {
@@ -2030,8 +2033,28 @@ function sitemapEntityTables(spec) {
   return [...tables];
 }
 
+// Closed values. "exact" with no Main form listed would mean "every form" (an app with no Main form offers them all), so
+// it needs at least one table with a non-empty list; the build refuses the same before any read
+// (APP_MAIN_FORMS_EXACT_INVALID, lib/app-components.js). pinDeclaredArtifacts only adds, so true is its one value.
+function validateAppMembershipUpdate(app, errors) {
+  if (app.mainFormsOnUpdate !== undefined) {
+    if (app.mainFormsOnUpdate !== 'addOnly' && app.mainFormsOnUpdate !== 'exact') {
+      errors.push('app.mainFormsOnUpdate must be "addOnly" or "exact"');
+    } else if (app.mainFormsOnUpdate === 'exact') {
+      const lists = app.mainForms && typeof app.mainForms === 'object' && !Array.isArray(app.mainForms) ? Object.values(app.mainForms) : [];
+      if (!lists.some((names) => Array.isArray(names) && names.length > 0)) {
+        errors.push('app.mainFormsOnUpdate "exact" needs app.mainForms with at least one table and form');
+      }
+    }
+  }
+  if (app.pinDeclaredArtifacts !== undefined && app.pinDeclaredArtifacts !== true) {
+    errors.push('app.pinDeclaredArtifacts must be true or omitted');
+  }
+}
+
 function validateAppMembership(spec, errors) {
   const app = spec.app || {};
+  validateAppMembershipUpdate(app, errors);
   if (app.tables !== undefined) {
     if (!Array.isArray(app.tables) || app.tables.some((name) => typeof name !== 'string' || !name.trim())) {
       errors.push('app.tables must be an array of non-empty table logical names');
@@ -2081,8 +2104,12 @@ function validateAppMembership(spec, errors) {
 function appMembershipWarnings(spec) {
   const warnings = [];
   const app = spec.app || {};
-  if (app.tables === undefined && app.mainForms === undefined) return warnings;
   const floor = spec.minimumPluginVersion;
+  if ((app.mainFormsOnUpdate !== undefined || app.pinDeclaredArtifacts !== undefined)
+    && (!isPluginVersion(floor) || compareVersions(floor, APP_MEMBERSHIP_UPDATE_MIN_VERSION) < 0)) {
+    warnings.push(`set minimumPluginVersion to '${APP_MEMBERSHIP_UPDATE_MIN_VERSION}' or newer when using app.mainFormsOnUpdate or app.pinDeclaredArtifacts — older plugins ignore these fields`);
+  }
+  if (app.tables === undefined && app.mainForms === undefined) return warnings;
   if (!isPluginVersion(floor) || compareVersions(floor, APP_MEMBERSHIP_MIN_VERSION) < 0) {
     warnings.push(`set minimumPluginVersion to '${APP_MEMBERSHIP_MIN_VERSION}' or newer when using app.tables or app.mainForms — older plugins ignore these fields`);
   }
@@ -4608,6 +4635,7 @@ module.exports = {
   dashboardNameKey,
   compareVersions,
   APP_MEMBERSHIP_MIN_VERSION,
+  APP_MEMBERSHIP_UPDATE_MIN_VERSION,
   isPluginVersion,
   sitemapEntityTables,
   appMembershipWarnings,
