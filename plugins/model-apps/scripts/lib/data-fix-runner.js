@@ -36,7 +36,7 @@ const { createPrivateFile } = require('./private-folder.js');
 const { withAppBuildLease, applyWorkspaceOf } = require('./app-operation-lease.js');
 const { acquireLease, releaseLease } = require('./apply-snapshot-store.js');
 const { sha256 } = require('./hash.js');
-const { GUID_RE, readOnlyHttpClient, isNonEmptyString } = require('./readonly-operations.js');
+const { GUID_RE, readOnlyHttpClient, isNonEmptyString, findingOf } = require('./readonly-operations.js');
 
 const MAX_ROWS = 50000;
 const OPERATIONS_DIR = '.data-fix';
@@ -271,8 +271,12 @@ async function sendJournaled({ dir, journal, phase, sdk, plan, options, binding 
     result = await sdk.applyDataFix(plan, options);
   } catch (err) {
     if (!refusedBeforeWrite(err)) throw err;
-    writePrivateJson(dir, `journal-${pad(seq + 1)}-${phase}-result.json`, { seq: seq + 1, phase, refusedBeforeWrite: { code: err.code || err.name }, at: new Date().toISOString() });
-    throw new DataFixRunnerError(err.code || 'DATA_FIX_REFUSED', `The SDK refused the ${phase} before writing anything: ${err.code || err.name}.`, { refusedBeforeWrite: true });
+    // The refusal is printed, so only a real code (findingOf's check) or the SDK's error class name is named in it —
+    // never free text standing where a code should be.
+    const { code } = findingOf(err, 'DATA_FIX_REFUSED');
+    const label = code !== 'DATA_FIX_REFUSED' || !/^[A-Za-z]+Error$/.test(String(err.name)) ? code : err.name;
+    writePrivateJson(dir, `journal-${pad(seq + 1)}-${phase}-result.json`, { seq: seq + 1, phase, refusedBeforeWrite: { code: label }, at: new Date().toISOString() });
+    throw new DataFixRunnerError(code, `The SDK refused the ${phase} before writing anything: ${label}.`, { refusedBeforeWrite: true });
   }
   const resultFile = writePrivateJson(dir, `result-${pad(seq + 1)}-${phase}.json`, result);
   writePrivateJson(dir, `journal-${pad(seq + 1)}-${phase}-result.json`, { seq: seq + 1, phase, result: path.basename(resultFile), summary: resultSummary(result), at: new Date().toISOString() });

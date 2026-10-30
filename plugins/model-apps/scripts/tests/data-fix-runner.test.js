@@ -292,6 +292,17 @@ test('a revert refused before its first write (nothing sent) can be continued, o
   assert.equal(nonGets(org).length, 2, 'the apply and the one revert that was sent');
 });
 
+test('an SDK refusal is reported by its code only when it is a code: free text in its place never reaches the message', async () => {
+  const { base } = setup({ rows: 1 });
+  const planned = await runner.planDataFix({ ...base, request: filterFix });
+  const refusing = () => ({ applyDataFix: async () => { throw Object.assign(new Error('refused'), { code: 'DATA_FIX_ROW SENTINEL-value' }); } });
+  await assert.rejects(runner.applyApprovedPlan({ ...base, makeSdk: refusing, planId: planned.planId, approve: planned.planDigest }), (e) => {
+    assert.equal(e.code, 'DATA_FIX_REFUSED');
+    assert.doesNotMatch(`${e.message} ${e.publicMessage}`, /SENTINEL/);
+    return true;
+  });
+});
+
 // --- the command line, end to end ---------------------------------------------------------------------------------
 
 // The real scripts/data-fix.js in a child process over the fake (helpers/data-fix-org-preload.js); `mutate` changes the
