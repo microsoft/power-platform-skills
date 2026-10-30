@@ -346,7 +346,8 @@ const VIRTUAL_KINDS = new Set(['File', 'Image', 'MultiChoice']);
 //   { "LogicalName": "new_amount", "AttributeType": "Decimal", "AttributeTypeName": { "Value": "DecimalType" } }
 //   { "LogicalName": "new_photo",  "AttributeType": "Virtual", "AttributeTypeName": { "Value": "ImageType" } }
 //   { logicalName: 'new_amount', schemaName: 'new_Amount', displayName: 'Amount', attributeType: 'Money', isCustom: true }
-// findColumns writes 'Unknown' when the row carries no AttributeType; that, or no type at all, is `unknown`, never a match.
+// findColumns writes 'Unknown' when the server's row carries no AttributeType; that is `unknown`, never a match. A row with no type
+// field at all comes from a reader that returns names only (as a string row does), so it is not compared and nothing is said of it.
 function columnTypeMismatches(entity, deployed) {
   const byName = new Map((Array.isArray(deployed) ? deployed : []).map((r) => [lower(r && (r.LogicalName || r.logicalName)), r]));
   const mismatches = [];
@@ -355,6 +356,7 @@ function columnTypeMismatches(entity, deployed) {
     if (!c || !c.schemaName) continue;
     const row = byName.get(lower(c.schemaName));
     if (!row) continue; // absent is the existence check's finding, not a type mismatch
+    if (typeof row !== 'object' || !('AttributeTypeName' in row || 'AttributeType' in row || 'attributeType' in row)) continue;
     const declared = c.type || 'Text';
     const want = DEPLOYED_TYPE_NAME[declared];
     if (!want) continue;

@@ -194,6 +194,8 @@ test('columnTypeChecks judges the findColumns rows verification already read: a 
     unverified: ['column-type:new_Case.new_odd (declared Integer; the deployed type was not stated by the read)'],
   });
   // A table whose columns all match its spec adds nothing — the report is what it was.
+  // A reader that returns names only (a string, or a row with no type field) is not compared: nothing fails and nothing is unverified.
+  assert.deepEqual(c.columnTypeChecks(entity, ['new_amount', { logicalName: 'new_odd' }, { LogicalName: 'new_code' }]), { failed: [], unverified: [] });
   assert.deepEqual(c.columnTypeChecks({ schemaName: 'new_Ok', columns: [{ schemaName: 'new_a', type: 'Money' }, { schemaName: 'new_b', type: 'MultiChoice' }] },
     [SUMMARY('new_a', 'Money'), SUMMARY('new_b', 'Virtual')]), { failed: [], unverified: [] });
 });
