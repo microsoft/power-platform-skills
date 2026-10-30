@@ -507,7 +507,8 @@ function formEmbedsOfPage(spec, page) {
 // (isRecognizedEmbed, classifyBinding): a control in a cell of the form body, unbound (no `datafieldname`), of the page-control class (`classid`
 // trimmed, outer braces dropped, upper-cased), whose `uniqueid` names — as a GUID: trimmed, lower-cased, braces only as a pair — the first
 // description in the form's own `controlDescriptions`; and every `MscrmControls.UxAgentControl` entry of that description (the name as written)
-// has, in its first `parameters`, a static RefId naming one GUID and, if it has a PageInput, a static one, all entries alike. RefId and
+// has, in its first `parameters`, a static RefId naming one GUID and, if it has a PageInput, a static one, all entries alike. The form is read
+// as the SDK's parser reads it, line ends first (sdkLineEnds); RefId and
 // PageInput are read as their text nodes: character references decoded, CDATA sections taken as written, comments and child elements left
 // out. (The SDK also requires a Main form; the spec gate allows genPages on a Main form only.) A description for no control on the form (an
 // orphan) shows nothing. Then the place — tab, section, and with `after` the row below that field with no other field's row between, the rule
@@ -530,8 +531,14 @@ const classOf = (control) => String(control.attrs.classid || '').trim().replace(
 // The text nodes an element holds directly, as a parser hands them over. The span's inner XML is split into CDATA sections, comments,
 // processing instructions and tags (a quoted attribute value may hold '>'), e.g. `&#48;<!-- id --><![CDATA[1111…]]>` → '0' + '1111…'.
 const MARKUP = /(<!\[CDATA\[[\s\S]*?\]\]>|<!--[\s\S]*?-->|<\?[\s\S]*?\?>|<(?:"[^"]*"|'[^']*'|[^'">])*>)/;
+// The line ends the SDK's parser (xmldom's normalizeLineEndings) turns into LF before it reads the document — text, CDATA and attribute values
+// alike: CR LF, CR NEL, and a lone CR, NEL or LS. https://www.w3.org/TR/xml/#sec-line-ends (XML 1.0 has the CRs; xmldom adds the XML 1.1 NEL
+// and LS, https://www.w3.org/TR/xml11/#sec-line-ends). Done on the written document, so a line end written as a character reference (`&#13;`)
+// is decoded later and kept, as the parser keeps it. E.g. `{\r\n"data":…}` and `{\n"data":…}` are one PageInput to the SDK.
+const sdkLineEnds = (xml) => xml.replace(/\r[\n\u0085]/g, '\n').replace(/[\r\u0085\u2028]/g, '\n');
 
-function verifyFormPageEmbed(formxml, embed, pageId) {
+function verifyFormPageEmbed(written, embed, pageId) {
+  const formxml = typeof written === 'string' ? sdkLineEnds(written) : written;
   // Lazy for the same reason as appSpec(): page-reference-guard.js and sitemap-pages.js reach app-spec.js, which requires this file.
   const { readXmlElements } = require('./strict-xml.js');
   const { elementText } = require('./page-reference-guard.js');

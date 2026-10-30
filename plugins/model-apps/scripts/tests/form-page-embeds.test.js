@@ -637,3 +637,55 @@ test('REAL BUNDLE: the verifier sees a page on a form exactly where the SDK\'s t
     h.cleanup();
   }
 });
+
+// The corpus varies what a parser hands over differently from how it is written: line ends written literally (which an XML parser turns into
+// LF before it reads anything, https://www.w3.org/TR/xml/#sec-line-ends; the SDK's parser also takes NEL and LS for one) against the same
+// characters written as references (which it keeps), white space, CDATA, in RefId, PageInput and the attributes that tie the control to its
+// description. The SDK's answer is not written down here: for every form the verifier must answer what the real bundle projects.
+test('REAL BUNDLE: on a corpus of line ends, white space, CDATA and character references in RefId, PageInput and the control\'s attributes, the verifier answers what the SDK projects', async () => {
+  const CLASS = 'F9A8A302-114E-466A-B582-6771B2AE0D92';
+  const ENDS = ['', ' ', '\t', '\n', '\r\n', '\r', '\u0085', '\r\u0085', '\u2028', '\u2029', '&#13;', '&#10;', '&#13;&#10;', '&#x85;', '&#x2028;', '&#9;'];
+  const DATA = { mode: 'compact' };
+  const asInput = (end, cdata) => (cdata ? `<![CDATA[{${end}"data":{"mode":"compact"}}]]>` : `{${end}"data":{"mode":"compact"}}`);
+  // The first form factor's PageInput is `first`, the other two `rest`: the SDK requires every factor to hand over the same text.
+  const factors = (first, rest) => { let n = 0; return embedXml({ pageInput: '@@IN@@', factors: ['2', '0', '1'] }).replace(/@@IN@@/g, () => (n++ === 0 ? first : rest)); };
+  const cases = [];
+  for (const end of ENDS) {
+    for (const [cdataFirst, cdataRest] of [[false, false], [true, true], [true, false]]) {
+      cases.push([`PageInput ${JSON.stringify(end)} first, "\\n" after (${cdataFirst}/${cdataRest})`, factors(asInput(end, cdataFirst), asInput('\n', cdataRest))]);
+      cases.push([`PageInput ${JSON.stringify(end)} in every factor (${cdataFirst}/${cdataRest})`, factors(asInput(end, cdataFirst), asInput(end, cdataRest))]);
+    }
+    const ref = embedXml({ ref: `${end}${PAGE}${end}`, pageInput: '{"data":{"mode":"compact"}}' });
+    cases.push([`RefId around ${JSON.stringify(end)}`, ref]);
+    cases.push([`RefId in CDATA around ${JSON.stringify(end)}`, embedXml({ ref: `<![CDATA[${end}${PAGE}${end}]]>`, pageInput: '{"data":{"mode":"compact"}}' })]);
+    cases.push([`uniqueid around ${JSON.stringify(end)}`, embedXml({ body: `${end}{${PANEL}}${end}` })]);
+    cases.push([`forControl around ${JSON.stringify(end)}`, embedXml({ forControl: `${end}{${PANEL}}${end}` })]);
+    cases.push([`classid around ${JSON.stringify(end)}`, embedXml().replace(`classid="{${CLASS}}"`, `classid="${end}{${CLASS}}${end}"`)]);
+    cases.push([`column binding of ${JSON.stringify(end)}`, embedXml().replace(`id="${guid(802)}"`, `id="${guid(802)}" datafieldname="${end}"`)]);
+  }
+  const h = createHarness({ formId: FORM });
+  try {
+    const diverged = [];
+    let shown = 0;
+    for (const [what, xml] of cases) {
+      h.store.row.formxml = xml;
+      let genPage;
+      try {
+        const rows = rowsOf(await (await h.freshSdk()).sdk.fetchArtifact('form', FORM));
+        genPage = rows[1] && rows[1].cells[0] && rows[1].cells[0].control.genPage;
+      } catch (e) {
+        genPage = undefined;
+      }
+      const projected = Boolean(genPage && genPage.pageId === PAGE);
+      if (projected) shown += 1;
+      // Declared as the SDK hands it over when it shows the page, so only the reading of the form can differ; otherwise as the form means it.
+      const declared = { ...EMBED, ...(projected ? (genPage.inputData === undefined ? {} : { inputData: genPage.inputData }) : xml.includes('"data"') ? { inputData: DATA } : {}) };
+      const verified = verifyFormPageEmbed(xml, declared, PAGE);
+      if (verified.ok !== projected) diverged.push(`${what}: SDK ${projected}, verifier ${verified.ok ? true : verified.reason}`);
+    }
+    assert.ok(shown > 0 && shown < cases.length, `the corpus holds forms on both sides of the SDK's rule (${shown} of ${cases.length} show the page)`);
+    assert.deepStrictEqual(diverged, [], 'the verifier answers what the SDK projects, for every form of the corpus');
+  } finally {
+    h.cleanup();
+  }
+});
