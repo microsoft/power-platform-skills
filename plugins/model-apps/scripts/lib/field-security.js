@@ -338,7 +338,7 @@ async function applyFieldSecurity(plan, ctx) {
       throw e;
     }
     if (!(outcome && outcome.outcome === 'created' && outcome.id)) {
-      result.unknown.push({ key: op.key, kind: KIND, target: op.target, code: 'FIELD_SECURITY_PROFILE_UNKNOWN', reason: 'the create did not confirm; a later run resolves it through its reserved id' });
+      result.unknown.push({ key: op.key, kind: KIND, target: op.target, code: 'FIELD_SECURITY_PROFILE_UNKNOWN', reason: 'the create port did not confirm the create, so whether the profile exists is not proven' });
       continue;
     }
     const id = lower(outcome.id);
