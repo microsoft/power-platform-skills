@@ -13,12 +13,14 @@
 //   validateFormPageEmbeds(spec)      -> { errors, warnings }               pure, no service
 //   planFormPageEmbeds(spec, ctx)     -> { operations, unknown }            reads the forms, writes nothing
 //   applyFormPageEmbeds(plan, ctx)    -> { saved, unchanged, pendingPublish, refused, unknown, managedBindings }
+//   requireEmbedsApplied(result)      -> throws a BuildHalt when a requested embed was refused or its outcome is unknown
 // The plan runs after the pages phase has created the pages, because an embed names a page by its id. Ownership of the PAGE stays with
 // the page's own create receipt; an embed is a reference to it, which is why deleting an embedded page is refused (page-reference-guard.js).
 // A result names keys, ids and codes only — never a value, a token or a raw error.
 const { sha256 } = require('./hash.js');
 const { stableStringify } = require('./phase-diff.js');
 const { isPlainJson } = require('./page-content.js');
+const { rowOccupancy, fitsGrid } = require('./form-occupancy.js');
 
 const EMBED_KEYS = ['key', 'page', 'tab', 'section', 'after', 'inputData'];
 const PLACEMENTS = ['sitemap', 'form'];
@@ -154,28 +156,86 @@ function liveSections(artifact, tab, section) {
 const genPageOf = (cell) => (cell && cell.control && isObject(cell.control.genPage) ? cell.control.genPage : null);
 const samePage = (a, b) => isText(a) && isText(b) && lower(a) === lower(b);
 const inputHash = (v) => stableStringify(v === undefined ? null : v);
+const cellsIn = (row) => (row && Array.isArray(row.cells) ? row.cells : []);
+const fieldOf = (c) => (c && c.control && isText(c.control.fieldName) ? lower(c.control.fieldName) : null);
+const controlIdOf = (c) => (c && c.control && isText(c.control.id) ? lower(c.control.id) : null);
+
+// The row span the SDK gives a page cell when none is authored (adapters/formGenPageEmbed.ts GENPAGE_EMBED_ROWSPAN): the cell's own row and
+// a reserved slot in each of the next five. A page is therefore added as a BLOCK — its row and five empty rows under it — so the span covers
+// rows that hold nothing and every row that was below the insert point keeps the occupancy it had. Inserted as one row after the first of
+// two fields in a one-column section, the span would sit on top of the second field and make a valid section overfull (form-occupancy.js).
+const PAGE_ROWSPAN = 6;
+const PAGE_BLOCK_ROWS = PAGE_ROWSPAN;
+
+// Codes the SDK raises from a form push BEFORE it writes anything (api/FormApi.ts assertEmbeddedPagesExist / bindingsOf): the push read the
+// form, found a page the form would embed missing (or the bindings unreadable), and refused. Nothing was sent, so the create port must see a
+// refusal, not an unknown — a thrown error without a status is otherwise an unknown outcome to it (verdictOfFailure).
+const PUSH_REFUSED_BEFORE_WRITE = new Set(['FORM_GENPAGE_TARGET_NOT_FOUND', 'FORM_GENPAGE_TARGET_UNVERIFIABLE']);
+const NOT_SENT = Symbol('form-page-embeds.notSent');
 
 // What the embed means, hashed: the form, the page, where it sits and what it is given. A change of any of them is a new intent.
 function intentOf(f, e) {
   return sha256(`form-page-embed/1\n${stableStringify({ form: appSpec().formIdentityKey(f), key: e.key, page: e.page, tab: lower(e.tab), section: lower(e.section), after: e.after === undefined ? null : lower(e.after), inputData: e.inputData === undefined ? null : e.inputData })}`);
 }
 
-// ctx: { formIdOf(formSpec) -> id|null, pageIdOf(pageRef) -> id|null, provision: { fetchArtifact } }. A form or a page this build has
-// not (yet) got an id for is UNKNOWN, not refused: nothing can be said about an embed whose ends are not there.
+// The section rows after the planned adds are made, in the order the apply makes them (see orderAdds): each add is a page row and
+// PAGE_BLOCK_ROWS - 1 empty rows at its planned index.
+function rowsAfterAdds(rows, adds) {
+  const out = rows.slice();
+  for (const op of orderAdds(adds)) out.splice(op.index, 0, ...blockOf({ cellId: 'planned', controlId: 'planned', uniqueId: 'planned' }, op));
+  return out;
+}
+
+// Indexes were planned against the form as read: adds go last-index-first, and at one index in reverse spec order — so no add moves a row
+// a later add was planned at, and embeds that share a place end up in the order the spec lists them.
+function orderAdds(adds) {
+  return adds.map((op, at) => ({ op, at }))
+    .sort((a, b) => (a.op.pointer === b.op.pointer ? (b.op.index - a.op.index) || (b.at - a.at) : (a.op.pointer < b.op.pointer ? -1 : 1)))
+    .map((x) => x.op);
+}
+
+// The rows one add writes. The three ids are the ones the create port reserved for this embed BEFORE the push (DESIGN §2.0): the control's
+// `uniqueid` (the key the SDK files the page binding under), the cell's id and the control's id. The SDK keeps ids it is given and mints only
+// missing ones (mintEmbedIdentity); the `uniqueid` goes in the control's bag the way the SDK itself writes it, braced (setUniqueId).
+function blockOf(ids, op) {
+  const page = { cells: [{ id: ids.cellId, colspan: 1, rowspan: PAGE_ROWSPAN,
+    control: { id: ids.controlId, bag: { a: [['uniqueid', `{${ids.uniqueId}}`]], c: [] }, genPage: { ...op.genPage } } }] };
+  return [page, ...Array.from({ length: PAGE_BLOCK_ROWS - 1 }, () => ({ cells: [] }))];
+}
+
+// ctx: { formIdOf(formSpec) -> id|null, pageIdOf(pageRef) -> id|null, provision: { fetchArtifact }, managed: { lookup(kind, key) } }.
+// A form or a page this build has not (yet) got an id for is UNKNOWN, not refused: nothing can be said about an embed whose ends are not there.
+// `managed.lookup` is the build's managed-binding port (DESIGN §2.0, managed-artifacts.js): the embed an earlier build made for a key is found
+// by the control id its binding records, BEFORE anything is matched by page — so a key whose page changed is retargeted in place, not added
+// a second time. Without that port no embed can be told apart from another key's, so the plan says unknown (fail closed) and reads nothing.
 async function planFormPageEmbeds(spec, ctx) {
   const operations = [];
   const unknown = [];
   const forms = (spec && Array.isArray(spec.forms)) ? spec.forms : [];
+  const managed = ctx && ctx.managed && typeof ctx.managed.lookup === 'function' ? ctx.managed : null;
   for (const f of forms) {
     if (!f || !Array.isArray(f.genPages) || !f.genPages.length) continue;
     const formKey = appSpec().formIdentityKey(f);
     const formId = await ctx.formIdOf(f);
-    if (!formId) {
-      for (const e of f.genPages) unknown.push({ key: `${formKey}#${e.key}`, kind: OPERATION_KIND, reason: 'form-not-built' });
+    if (!formId || !managed) {
+      for (const e of f.genPages) unknown.push({ key: `${formKey}#${e.key}`, kind: OPERATION_KIND, reason: formId ? 'managed-bindings-unavailable' : 'form-not-built' });
       continue;
+    }
+    // Every binding of this form's embeds, first: a cell one key's binding names is not another key's to adopt by its page.
+    const bindings = new Map();
+    const claimedBy = new Map();
+    for (const e of f.genPages) {
+      const key = `${formKey}#${e.key}`;
+      const found = await managed.lookup(OPERATION_KIND, key);
+      if (found && typeof found === 'object' && isText(found.id)) {
+        bindings.set(key, found);
+        claimedBy.set(lower(found.id), key);
+      }
     }
     // A fresh read: placement and the "already embedded?" answer must be about the form as it is now, not a workspace copy.
     const artifact = await ctx.provision.fetchArtifact('form', formId);
+    const cells = [...cellsOf(artifact)];
+    const adds = [];
     for (const e of f.genPages) {
       const key = `${formKey}#${e.key}`;
       const pageId = await ctx.pageIdOf(e.page);
@@ -186,48 +246,100 @@ async function planFormPageEmbeds(spec, ctx) {
       const sections = liveSections(artifact, e.tab, e.section);
       if (sections.length !== 1) { refuse(sections.length ? 'section-ambiguous' : 'section-not-found'); continue; }
       const [target] = sections;
-      // Every cell already bound to this page, anywhere on the form. Foreign controls are only ever read here.
-      const existing = [...cellsOf(artifact)].filter((x) => samePage(genPageOf(x.cell) && genPageOf(x.cell).pageId, pageId));
-      if (existing.length > 1) { refuse('page-embedded-more-than-once'); continue; }
-      if (existing.length === 1) {
-        const [hit] = existing;
+      const rows = Array.isArray(target.section.rows) ? target.section.rows : [];
+      const afterRow = e.after === undefined ? null : rows.findIndex((r) => cellsIn(r).some((c) => fieldOf(c) === lower(e.after)));
+      if (afterRow !== null && afterRow < 0) { refuse('after-field-not-found'); continue; }
+
+      const bound = bindings.get(key);
+      let hit = null;
+      let origin = 'adopted';
+      if (bound) {
+        hit = cells.find((x) => controlIdOf(x.cell) === lower(bound.id)) || null;
+        // The control the binding names is still there but holds no page: someone made it something else. It is not this feature's to overwrite.
+        if (hit && !genPageOf(hit.cell)) { refuse('bound-control-not-a-page'); continue; }
+        if (hit) origin = bound.origin === 'created' ? 'created' : 'adopted';
+      }
+      const onPage = cells.filter((x) => x !== hit && samePage(genPageOf(x.cell) && genPageOf(x.cell).pageId, pageId));
+      if (hit) {
+        // Retargeting this key's cell to a page another cell of the form already shows would show it twice.
+        if (onPage.length) { refuse('page-embedded-elsewhere'); continue; }
+      } else {
+        if (onPage.length > 1) { refuse('page-embedded-more-than-once'); continue; }
+        if (onPage.length === 1) {
+          const owner = claimedBy.get(controlIdOf(onPage[0].cell));
+          if (owner && owner !== key) { refuse('cell-bound-to-another-embed'); continue; }
+          [hit] = onPage;
+        }
+      }
+
+      if (hit) {
         // Moving a cell someone placed elsewhere is a layout change this feature does not own; say so instead of relocating it.
         if (hit.sectionPointer !== target.pointer) { refuse('page-embedded-elsewhere'); continue; }
+        // A requested place is checked, not assumed: the cell must sit below the `after` field with no other field's row between them.
+        // A cell elsewhere in the section is refused rather than moved or reported unchanged — its intent (which names the place) is
+        // then not recorded as applied. Without `after` the position is the maker's.
+        if (afterRow !== null && (hit.rowIndex <= afterRow || rows.slice(afterRow + 1, hit.rowIndex).some((r) => cellsIn(r).some((c) => fieldOf(c) !== null)))) {
+          refuse('placement-differs');
+          continue;
+        }
         const current = genPageOf(hit.cell);
         const ids = { cellId: hit.cell.id || null, controlId: (hit.cell.control && hit.cell.control.id) || null };
-        if (inputHash(current.inputData) === inputHash(e.inputData)) { operations.push({ ...base, action: 'none', ...ids }); continue; }
-        // The typed binding is edited in place — the page id the form holds, with the new input — so the cell, its ids and its bag stay.
-        operations.push({ ...base, action: 'update', ...ids, pointer: `${hit.pointer}/control/genPage`,
-          value: { pageId: current.pageId, ...(e.inputData !== undefined ? { inputData: e.inputData } : {}) } });
+        const retarget = !samePage(current.pageId, pageId);
+        if (!retarget && inputHash(current.inputData) === inputHash(e.inputData)) { operations.push({ ...base, action: 'none', origin, ...ids }); continue; }
+        // The typed binding is edited in place — a new page id for a key whose page changed, else the one the form holds, with the input — so
+        // the cell, its ids and its bag stay.
+        operations.push({ ...base, action: 'update', origin, ...ids, pointer: `${hit.pointer}/control/genPage`,
+          value: { pageId: retarget ? pageId : current.pageId, ...(e.inputData !== undefined ? { inputData: e.inputData } : {}) } });
         continue;
       }
-      const rows = Array.isArray(target.section.rows) ? target.section.rows : [];
-      let index = rows.length;
-      if (e.after !== undefined) {
-        const row = rows.findIndex((r) => (Array.isArray(r && r.cells) ? r.cells : []).some((c) => c && c.control && isText(c.control.fieldName) && lower(c.control.fieldName) === lower(e.after)));
-        if (row < 0) { refuse('after-field-not-found'); continue; }
-        index = row + 1;
+
+      const columns = Number(target.section.columns);
+      if (!Number.isInteger(columns) || columns < 1) { refuse('section-geometry-unknown'); continue; }
+      const index = afterRow === null ? rows.length : afterRow + 1;
+      // A row-spanning cell above the insert point that still reserves a slot there would come to span the new rows instead of the ones it
+      // spans now — a different layout. Refused before anything is written.
+      const at = rowOccupancy([...rows.slice(0, index), { cells: [] }]).pop();
+      if (at.reserved > 0) { refuse('placement-inside-row-span'); continue; }
+      const op = { ...base, action: 'add', pointer: `${target.pointer}/rows`, index, columns,
+        genPage: { pageId, ...(e.inputData !== undefined ? { inputData: e.inputData } : {}) } };
+      adds.push({ op, rows });
+    }
+    // The section as it would be after every add planned for it must still fit its grid; a section that would not is refused as a whole.
+    const byPointer = new Map();
+    for (const a of adds) {
+      if (!byPointer.has(a.op.pointer)) byPointer.set(a.op.pointer, { rows: a.rows, ops: [] });
+      byPointer.get(a.op.pointer).ops.push(a.op);
+    }
+    for (const { rows, ops } of byPointer.values()) {
+      if (fitsGrid(rows, ops[0].columns) && !fitsGrid(rowsAfterAdds(rows, ops), ops[0].columns)) {
+        for (const op of ops) operations.push({ ...op, action: 'refuse', reason: 'placement-overfills-section' });
+      } else {
+        operations.push(...ops);
       }
-      operations.push({ ...base, action: 'add', pointer: `${target.pointer}/rows`, index,
-        element: { cells: [{ control: { genPage: { pageId, ...(e.inputData !== undefined ? { inputData: e.inputData } : {}) } } }] } });
     }
   }
   return { operations, unknown };
 }
 
-// The cell and control ids the SDK allocated for the row added at `pointer`[index] — read back from the workspace copy so the binding
-// records the ids the push will persist (a later rebuild finds the cell by them, not by position).
-async function allocatedIds(ctx, formId, pointer, index) {
-  const art = await ctx.provision.getArtifact('form', formId);
-  const rows = pointer.split('/').slice(1).reduce((node, part) => (node == null ? node : node[part]), art);
-  const cell = Array.isArray(rows) && rows[index] && Array.isArray(rows[index].cells) ? rows[index].cells[0] : null;
-  return { cellId: (cell && cell.id) || null, controlId: (cell && cell.control && cell.control.id) || null };
+// An error the create port must read as "nothing was sent" (outcome 'not-sent'): a failure before the form push began. The failure itself is
+// kept apart from the port's `cause` walk on purpose — an error the SDK raised locally can carry words the port would read as unknown.
+function notSent(error) {
+  if (error && error[NOT_SENT]) return error;
+  const wrapped = new Error(`not sent: ${(error && error.message) || String(error)}`);
+  wrapped.code = error && error.code;
+  wrapped.outcome = 'not-sent';
+  wrapped.transient = false;
+  wrapped[NOT_SENT] = error;
+  return wrapped;
 }
 
-// ctx: { provision: { addElement, updateElement, getArtifact, pushArtifact }, creates: { run }, publication: { queue }, warn }.
-// An add goes through ctx.creates.run (the build's create journal), so this feature keeps no journal of its own. One push per changed form;
-// a push that fails by value halts the build the way every other form push does (requireSuccessfulPush), and a thrown SDK refusal —
-// FORM_GENPAGE_TARGET_NOT_FOUND when the page went away between plan and push — propagates unchanged.
+// ctx: { provision: { addElement, updateElement, pushArtifact }, creates: { run }, publication: { queue }, warn }.
+// Every add goes through ctx.creates.run (the build's create port, B1), so this feature keeps no journal of its own, and the port's record
+// covers the SEND: the runs of a form's adds are nested, and the innermost one makes the local edits under the ids every run reserved and
+// pushes the form — one push per changed form, made inside each add's execute, so the port records intent before the PATCH and judges the
+// push's own answer. A push that fails by value halts the build the way every other form push does (requireSuccessfulPush); a pending
+// unknown create of an earlier run is the port's refusal (CREATION_PENDING_UNKNOWN), and a page that went away between plan and push is the
+// SDK's (FORM_GENPAGE_TARGET_NOT_FOUND), both propagated unchanged.
 async function applyFormPageEmbeds(plan, ctx) {
   const result = { saved: [], unchanged: [], pendingPublish: [], refused: [], unknown: [...((plan && plan.unknown) || [])], managedBindings: [] };
   const byForm = new Map();
@@ -235,55 +347,99 @@ async function applyFormPageEmbeds(plan, ctx) {
     if (op.action === 'refuse') { result.refused.push({ key: op.key, kind: op.kind, reason: op.reason }); continue; }
     if (op.action === 'none') {
       result.unchanged.push({ key: op.key, kind: op.kind, id: op.controlId });
-      result.managedBindings.push(bindingOf(op, op, 'adopted'));
+      result.managedBindings.push(bindingOf(op, op, op.origin || 'adopted'));
       continue;
     }
     if (!byForm.has(op.target.formId)) byForm.set(op.target.formId, []);
     byForm.get(op.target.formId).push(op);
   }
+  const hasPort = ctx.creates && typeof ctx.creates.run === 'function';
   for (const [formId, ops] of byForm) {
-    const done = [];
-    // Row indexes were planned against the form as read. Updates go first (an add would shift the row an update points at), then adds
-    // last-index-first, and at one index in reverse spec order — so no add moves a row a later write was planned at, and embeds that share
-    // a place end up in the order the spec lists them.
+    // Updates go first (an add would shift the row an update points at), then the adds (orderAdds).
     const updates = ops.filter((op) => op.action === 'update');
-    const adds = ops.map((op, at) => ({ op, at })).filter((x) => x.op.action === 'add')
-      .sort((a, b) => (a.op.pointer === b.op.pointer ? (b.op.index - a.op.index) || (b.at - a.at) : (a.op.pointer < b.op.pointer ? -1 : 1)))
-      .map((x) => x.op);
-    const ordered = [...updates, ...adds];
-    for (const op of ordered) {
-      if (op.action === 'update') {
-        await ctx.provision.updateElement('form', formId, op.pointer, op.value);
-        done.push({ op, ids: { cellId: op.cellId, controlId: op.controlId }, origin: 'adopted' });
-        continue;
-      }
-      if (!ctx.creates || typeof ctx.creates.run !== 'function') {
-        // Fail closed: an add without the build's create journal would be a write nobody recorded the intent of.
-        result.refused.push({ key: op.key, kind: op.kind, reason: 'create-journal-unavailable' });
-        continue;
-      }
-      const ids = await ctx.creates.run({ kind: op.kind, key: op.key, identity: { formId, pageId: op.target.pageId, embedKey: op.target.embedKey }, childKeys: ['cell', 'control'] }, async () => {
-        await ctx.provision.addElement('form', formId, op.pointer, op.element, { position: { index: op.index } });
-        return allocatedIds(ctx, formId, op.pointer, op.index);
-      });
-      done.push({ op, ids: ids || {}, origin: 'created' });
+    let adds = orderAdds(ops.filter((op) => op.action === 'add'));
+    if (adds.length && !hasPort) {
+      // Fail closed: an add without the build's create port would be a write nobody recorded the intent of.
+      for (const op of adds) result.refused.push({ key: op.key, kind: op.kind, reason: 'create-journal-unavailable' });
+      adds = [];
     }
-    if (!done.length) continue;
+    if (!updates.length && !adds.length) continue;
+    const ids = new Map();
+    const adopted = [];
+    const sent = { pushed: false };
+    const writeAndPush = async () => {
+      for (const op of updates) await ctx.provision.updateElement('form', formId, op.pointer, op.value);
+      for (const op of adds) {
+        if (!ids.has(op)) continue;
+        const block = blockOf(ids.get(op), op);
+        for (let r = 0; r < block.length; r++) await ctx.provision.addElement('form', formId, op.pointer, block[r], { position: { index: op.index + r } });
+      }
+      sent.pushed = true;
+      try {
+        return await ctx.provision.pushArtifact('form', formId);
+      } catch (error) {
+        throw PUSH_REFUSED_BEFORE_WRITE.has(error && error.code) ? notSent(error) : error;
+      }
+    };
+    const level = async (i) => {
+      if (i === adds.length) return updates.length || ids.size ? writeAndPush() : undefined;
+      const op = adds[i];
+      const ran = await ctx.creates.run({ kind: op.kind, key: op.key, identity: { formId, intentSha256: op.intentSha256 }, childKeys: ['cell', 'control'] },
+        async ({ id, childIds }) => {
+          ids.set(op, { uniqueId: id, cellId: childIds.cell, controlId: childIds.control });
+          try {
+            return await level(i + 1);
+          } catch (error) {
+            throw sent.pushed ? error : notSent(error);
+          }
+        });
+      // A maker's adoption names the rows an earlier unanswered create made; nothing is sent for it. The plan did not find them on the form,
+      // so the embed is not reported applied — the next build reads the form again (and sends under the adopted ids if they are not there).
+      if (ran && ran.outcome === 'adopted') { adopted.push(op); return level(i + 1); }
+      return ran ? ran.result : undefined;
+    };
+    let pushed;
+    try {
+      pushed = await level(0);
+    } catch (error) {
+      throw (error && error[NOT_SENT]) || error;
+    }
+    for (const op of adopted) result.unknown.push({ key: op.key, kind: op.kind, reason: 'create-adopted-not-on-form' });
+    if (!sent.pushed) continue;
     const { requireSuccessfulPush } = require('./entity-provision.js');
-    requireSuccessfulPush(await ctx.provision.pushArtifact('form', formId), `form ${done[0].op.target.formKey} page embeds`, ctx.warn);
+    requireSuccessfulPush(pushed, `form ${ops[0].target.formKey} page embeds`, ctx.warn);
     if (ctx.publication && typeof ctx.publication.queue === 'function') ctx.publication.queue({ kind: 'form', id: formId });
     result.pendingPublish.push({ kind: 'form', id: formId });
-    for (const { op, ids, origin } of done) {
-      result.saved.push({ key: op.key, kind: op.kind, action: op.action, id: ids.controlId || null });
-      result.managedBindings.push(bindingOf(op, ids, origin));
+    for (const op of updates) {
+      result.saved.push({ key: op.key, kind: op.kind, action: op.action, id: op.controlId || null });
+      result.managedBindings.push(bindingOf(op, op, op.origin || 'adopted'));
+    }
+    for (const op of adds) {
+      if (!ids.has(op) || adopted.includes(op)) continue;
+      const got = ids.get(op);
+      result.saved.push({ key: op.key, kind: op.kind, action: op.action, id: got.controlId });
+      result.managedBindings.push(bindingOf(op, got, 'created'));
     }
   }
   return result;
 }
 
+// A requested embed that was refused or whose outcome is unknown leaves the build incomplete (DESIGN §2.0): the maker asked for it. The
+// halt names keys and reasons only; what WAS saved stays reported in `result` (the caller reports it before it stops).
+function requireEmbedsApplied(result, phase = 'pages') {
+  const missing = [...((result && result.refused) || []).map((r) => ({ ...r, outcome: 'refused' })), ...((result && result.unknown) || []).map((u) => ({ ...u, outcome: 'unknown' }))];
+  if (!missing.length) return result;
+  const { BuildHalt } = require('./entity-provision.js');
+  const { RETRY } = require('./retry-policy.js');
+  const words = missing.map((m) => `${m.key} (${m.outcome}: ${m.reason})`).join(', ');
+  const halt = new BuildHalt(`the generative pages requested on forms were not all embedded: ${words}`, { phase, code: 'form-page-embeds-incomplete', recoverable: false, retry: RETRY.NEVER });
+  halt.notApplied = missing.map(({ key, kind, reason, outcome }) => ({ key, kind, reason, outcome }));
+  throw halt;
+}
+
 function bindingOf(op, ids, origin) {
-  return { kind: op.kind, key: op.key, id: ids.controlId || null, cellId: ids.cellId || null, parentKey: op.target.formKey,
+  return { kind: op.kind, key: op.key, id: ids.controlId || null, cellId: ids.cellId || null, ...(ids.uniqueId ? { uniqueId: ids.uniqueId } : {}), parentKey: op.target.formKey,
     formId: op.target.formId, pageKey: op.target.pageKey, pageId: op.target.pageId, intentSha256: op.intentSha256, origin };
 }
 
-module.exports = { validateFormPageEmbeds, planFormPageEmbeds, applyFormPageEmbeds, sitemapPageRefs, EMBED_KEYS, PLACEMENTS };
+module.exports = { validateFormPageEmbeds, planFormPageEmbeds, applyFormPageEmbeds, requireEmbedsApplied, sitemapPageRefs, EMBED_KEYS, PLACEMENTS, PAGE_ROWSPAN };
