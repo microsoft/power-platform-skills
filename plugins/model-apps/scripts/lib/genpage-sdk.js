@@ -296,6 +296,26 @@ function bundledCompilerIdentity() {
   return bundledIdentity;
 }
 
+// This attempt changed nothing, but an earlier one under the same id may be a create whose page only the turn's record names: run without the id, or under a new one, the
+// request could make that page a second time. So the way on is the record (made reachable again) or the earlier attempt (resolved) — never dropping the id to get past this.
+const turnUnavailable = (turnId, message, cause) => genpageError(`${message}. Nothing was changed by this attempt, but an earlier attempt under turn ${turnId} may still be unresolved — a create whose page only the turn's record names. Do not run it without its turn id or under a new one: that could make the page a second time. Make the same turn record reachable again (the same app folder and its turn store, the same compiler) and run the same request again, or first look for the page an earlier attempt may have made and resolve it; a new, separately approved edit gets a new turn id.`, { code: 'GENPAGE_TURN_STATE_UNAVAILABLE', outcome: 'nothing', turnId, ...(cause ? { cause } : {}) });
+// A turn's record, read by a caller that must know it before it decides what its run is — an upload retried with the page id its unfinished create returned is still that
+// create, and only the record says so (genpage-upload.js). Answers the record, or null when the turn has none; a record that cannot establish the request is refused as the
+// store refuses it (GENPAGE_TURN_STATE_INCOMPLETE), and a store that cannot be read with the same words as a write would be (GENPAGE_TURN_STATE_UNAVAILABLE).
+async function readTurnRecord(store, turnId) {
+  const id = normalizeTurnId(turnId);
+  if (id === undefined) throw genpageError('a turn record was asked for without a turn id. Nothing was changed.', { code: 'GENPAGE_TURN_ID_INVALID', outcome: 'nothing' });
+  if (!store || typeof store.get !== 'function') throw turnUnavailable(id, `turn ${id} cannot be read here: no turn record store was given`);
+  let read;
+  try {
+    read = await store.get(id);
+  } catch (error) {
+    if (error && error.code === 'GENPAGE_TURN_STATE_INCOMPLETE') throw error;
+    throw turnUnavailable(id, `the record of turn ${id} could not be read (${messageOf(error)})`, error);
+  }
+  return read === null ? null : validateTurnRecord(read, id);
+}
+
 // The fields of a page that an update compares and a settle checks. An absent key and an `undefined` one are the same here, which
 // isDeepStrictEqual does not say.
 function projectionOf(page) {
@@ -692,7 +712,6 @@ function makeGenpageSdk(env, deps = {}) {
   }
 
   // ── Binding a caller's turn id (see turnRequested above) ──
-  const turnUnavailable = (turnId, message, cause) => genpageError(`${message}. Nothing was changed; run the same request again once the turn record can be ${cause ? 'reached' : 'kept'}, or leave the turn id out.`, { code: 'GENPAGE_TURN_STATE_UNAVAILABLE', outcome: 'nothing', turnId, ...(cause ? { cause } : {}) });
   // The compiler a turn binds. A backend lent an SDK or a compiler (`deps.sdk`, `deps.createSdk`, `deps.typescript`) cannot see which compiler that is, so its owner names it
   // (`deps.turnCompilerIdentity`, text); without a name, a turn id is refused rather than bound to a compiler nobody named.
   function turnCompilerOf(turnId) {
@@ -736,7 +755,8 @@ function makeGenpageSdk(env, deps = {}) {
       throw turnUnavailable(turnId, `turn ${turnId} cannot be held to one request here: no turn record store was given, and a turn id that is not recorded before the send could later carry another edit`);
     }
     const read = await turnStoreCall(turnId, 'read', () => store.get(turnId));
-    const held = read === null || read === undefined ? null : validateTurnRecord(read, turnId);
+    // Only null is "no record" (the store contract, lib/page-turn-store.js); anything else — undefined included — is a record, and is held to be a complete one.
+    const held = read === null ? null : validateTurnRecord(read, turnId);
     const wanted = operation === 'update' ? pageId : request.explicitPageId && request.explicitPageId.toLowerCase();
     if (held) {
       const why = held.operation !== request.operation ? `it was bound to a page ${held.operation}, and this is a page ${request.operation}`
@@ -853,6 +873,14 @@ function makeGenpageSdk(env, deps = {}) {
       if (error && error.code === 'CONNECTION_ERROR' && error.statusCode === 404) return { kind: 'absent' };
       return { kind: 'unreadable', error };
     }
+  }
+
+  // A workspace's own copy of a page — its file and the version it was read at — dropped, so that a page staged next under the id is sent as a new page and not as a change to
+  // the copy. Local only: nothing is sent. A lent SDK that cannot list or drop its copies has none this backend made.
+  async function dropLocalCopy(sdk, id) {
+    if (typeof sdk.listArtifacts !== 'function' || typeof sdk.deleteArtifact !== 'function') return;
+    const local = await sdk.listArtifacts('genPage');
+    if ((local || []).some((a) => a && String(a.id).toLowerCase() === id)) await sdk.deleteArtifact('genPage', id);
   }
 
   // `readServer`'s answer as the page or the typed error a caller reads, for the operations that cannot go on without it: `GENPAGE_NOT_FOUND` / `GENPAGE_UNREADABLE`.
@@ -1140,6 +1168,71 @@ function makeGenpageSdk(env, deps = {}) {
       const notSent = (error) => (given === undefined
         ? genpageError(`generative page ${who} was not created (nothing was written): ${messageOf(error)}`, { code: error && error.code, cause: error, outcome: 'nothing' })
         : genpageError(`generative page ${who} was not sent this time (${messageOf(error)}), but a create an earlier build sent under id ${id} was never accounted for and can still land, so whether page ${id} exists is not known. Look for page ${id} before creating it again.`, { code: error && error.code, cause: error, outcome: 'unknown', pageId: id }));
+      // A page found under the id, after a send (the loop below) or, under a turn, before anything was staged (below). Answers the result when the page was brought to this create
+      // by an update, and nothing when the page holds what this create asks for and goes on to be published as it is. `said`: what the open sends said, for a warning.
+      const takeOver = async (page, said, warnings, budget) => {
+        // A send landed — this create's, or one an earlier build made under the same id — and only its answer was lost. Whose page this is, and whether it holds all of
+        // what this create asks for, are decided here, never assumed: an atomic create cannot be partial, so a page that holds neither a name nor a source anyone sent under
+        // the id was changed after it was made, or is somebody else's page that came to hold an id nobody else knew.
+        if (!holdsWhatWasSent(sent, page)) {
+          throw genpageError(`generative page ${who} (${id}) exists, but it is not a page any create under this id sent: ${describeDivergence(sent, page)}. It was not adopted, not sent again and not published; read the page before going on.`, { code: 'GENPAGE_CREATE_DIVERGED', outcome: 'unknown', pageId: id });
+        }
+        // A turn binds whether the binding lists are merged into the page's entries or replace them, and that holds here too: an App Spec's lists (spec-merge) are read
+        // against the page's entries, so an entry keeps what the spec could not state. Without a turn id, a create plans as it always did.
+        const edits = turnReq ? planEdits(fields, page, { specBindings: turnReq.request.specBindings }) : planEdits(fields, page);
+        if (edits.length) {
+          // Ours, but it holds what an earlier create under the id sent (another model, other data sources or bindings, or a name this one does not): brought to what this
+          // create asks for by the ordinary update, which reads it again, writes only what differs, records this create's turn, publishes it and proves the publish. Publishing
+          // it as it is would put the earlier content live under this create's name.
+          // The update is one more write of this run, so it spends THIS create's budget — the run's, or the one this create made for itself when it was given none — and not a new one: a
+          // budget the update made would give it five more minutes, and what the run (or this create's own pause before its read) already spent would not be there to refuse a wait that does not fit.
+          const differing = edits.map((e) => e.key);
+          let updated;
+          try {
+            updated = await api.update(id, { name, source, dataSources, model, connectorBindings, actionBindings, prompt: args.prompt, agentMessage: args.agentMessage, caller: args.caller, appId: args.appId, sourceFile: args.sourceFile, runtimeEvidence: args.runtimeEvidence, throttle: budget, ...(draft ? { publish: false } : {}), ...(turnReq ? continuedTurnArgs(turnReq, id, turnOut.turn) : {}) });
+          } catch (error) {
+            // The page exists and is not what this create asks for: whatever the update's own outcome was, this create is not "nothing" — the page is there.
+            throw genpageError(`generative page ${who} (${id}) was written by a create under this id, but it holds the ${differing.join(', ')} of an earlier one, and bringing it to what this create asks for failed: ${messageOf(error)}. It was not published as it is.`, { code: error && error.code, cause: error, outcome: 'unknown', pageId: id });
+          }
+          return {
+            pageId: id, name, publish: updated.publish, ...(draft ? { saved: true, pendingPublish: true, draftFingerprint: fingerprint } : { fingerprint }), ...(updated.runtimeSha256 ? { runtimeSha256: updated.runtimeSha256 } : {}), ...turnOut,
+            warnings: [...warnings, `the answer to creating page ${who} was lost (${said}), but reading the id it was created under (${id}) showed a page that an earlier create under this id had written, differing from this create in ${differing.join(', ')} — so it was not sent again, and was updated to what this create asks for instead of being published as it was`, ...(updated.warnings || [])],
+          };
+        }
+        warnings.push(`the answer to creating page ${who} was lost (${said}), but reading the id it was created under (${id}) showed that it had been written — so it was not sent again`);
+        const firstPrompt = firstUserMessage(page);
+        if (firstPrompt !== undefined && firstPrompt !== turn.prompt) {
+          warnings.push(`page ${who} holds what this create asks for, but its first recorded prompt is that of an earlier create under this id: an update records a prompt only when it changes the page, so this create's prompt is not recorded`);
+        }
+        return null;
+      };
+      // The end of a create whose page is written: a draft is left unpublished; any other is published and the publish proven. `pushed`: the send that wrote it, when this call made one.
+      const finish = async (pushed, warnings) => {
+        if (draft) {
+          return { pageId: id, name, publish: draftPublish(), saved: true, pendingPublish: true, draftFingerprint: fingerprint, ...turnOut, warnings: [...warnings, ...warningsOf(pushed, draftPublish(), `page ${label(name, id)}`)] };
+        }
+        const runtimeSha256 = await runtimeEvidenceOf(sdk, id, args);
+        const published = await publish(sdk, 'genPage', id, { verify: true });
+        return { pageId: id, name, publish: published, fingerprint, ...turnOut, ...(runtimeSha256 ? { runtimeSha256 } : {}), warnings: [...warnings, ...warningsOf(pushed, published, `page ${label(name, id)}`)] };
+      };
+      // Under a turn, a page already under the id is read BEFORE anything is staged. A workspace that knows the page (this backend wrote or read it before) sends a staged create
+      // as a change to that page, which succeeds — so nothing would read the page, and the binding lists would replace its entries whatever mode the turn bound. Read first, a
+      // page that is there goes on as one found after a lost answer (takeOver: planned in the turn's binding mode, and brought to this create by the update the turn continues
+      // in); one that cannot be read is not sent to; one that is not there is staged as new, from a workspace that holds no copy of it (dropLocalCopy). Without a turn id, a
+      // create stages and sends as it always did.
+      if (turnReq && given !== undefined) {
+        const warnings = [];
+        const found = await readServer(sdk, id);
+        if (found.kind === 'unreadable') {
+          throw genpageError(`generative page ${who} was not sent: page ${id} could not be read first (${messageOf(found.error)}), and a create an earlier build sent under that id was never accounted for, so whether page ${id} exists is not known. Look for page ${id} before creating it again.`, { code: 'GENPAGE_UNREADABLE', cause: found.error, outcome: 'unknown', pageId: id });
+        }
+        if (found.kind === 'present') return (await takeOver(found.page, messageOf(open[0]), warnings, budgetOf(args))) || finish(undefined, warnings);
+        try {
+          await dropLocalCopy(sdk, id);
+        } catch (error) {
+          throw notSent(error);
+        }
+      }
       try {
         await sdk.createArtifact('genPage', {
           id, name, source, dataSources,
@@ -1188,40 +1281,8 @@ function makeGenpageSdk(env, deps = {}) {
           throw genpageError(`generative page ${who}: the outcome of creating it is unknown (${said}), and reading the page it would have (id ${id}) failed too (${messageOf(found.error)}). It was not sent again. Look for page ${id} before creating it again.`, { code, cause: open[0] || pushed.error, outcome: 'unknown', pageId: id });
         }
         if (found.kind === 'present') {
-          // A send landed — this create's, or one an earlier build made under the same id — and only its answer was lost. Whose page this is, and whether it holds all of
-          // what this create asks for, are decided here, never assumed: an atomic create cannot be partial, so a page that holds neither a name nor a source anyone sent under
-          // the id was changed after it was made, or is somebody else's page that came to hold an id nobody else knew.
-          const page = found.page;
-          if (!holdsWhatWasSent(sent, page)) {
-            throw genpageError(`generative page ${who} (${id}) exists, but it is not a page any create under this id sent: ${describeDivergence(sent, page)}. It was not adopted, not sent again and not published; read the page before going on.`, { code: 'GENPAGE_CREATE_DIVERGED', outcome: 'unknown', pageId: id });
-          }
-          // A turn binds whether the binding lists are merged into the page's entries or replace them, and that holds here too: an App Spec's lists (spec-merge) are read
-          // against the page's entries, so an entry keeps what the spec could not state. Without a turn id, a create plans as it always did.
-          const edits = turnReq ? planEdits(fields, page, { specBindings: turnReq.request.specBindings }) : planEdits(fields, page);
-          if (edits.length) {
-            // Ours, but it holds what an earlier create under the id sent (another model, other data sources or bindings, or a name this one does not): brought to what this
-            // create asks for by the ordinary update, which reads it again, writes only what differs, records this create's turn, publishes it and proves the publish. Publishing
-            // it as it is would put the earlier content live under this create's name.
-            // The update is one more write of this run, so it spends THIS create's budget — the run's, or the one this create made for itself when it was given none — and not a new one: a
-            // budget the update made would give it five more minutes, and what the run (or this create's own pause before its read) already spent would not be there to refuse a wait that does not fit.
-            const differing = edits.map((e) => e.key);
-            let updated;
-            try {
-              updated = await api.update(id, { name, source, dataSources, model, connectorBindings, actionBindings, prompt: args.prompt, agentMessage: args.agentMessage, caller: args.caller, appId: args.appId, sourceFile: args.sourceFile, runtimeEvidence: args.runtimeEvidence, throttle: budget, ...(draft ? { publish: false } : {}), ...(turnReq ? continuedTurnArgs(turnReq, id, turnOut.turn) : {}) });
-            } catch (error) {
-              // The page exists and is not what this create asks for: whatever the update's own outcome was, this create is not "nothing" — the page is there.
-              throw genpageError(`generative page ${who} (${id}) was written by a create under this id, but it holds the ${differing.join(', ')} of an earlier one, and bringing it to what this create asks for failed: ${messageOf(error)}. It was not published as it is.`, { code: error && error.code, cause: error, outcome: 'unknown', pageId: id });
-            }
-            return {
-              pageId: id, name, publish: updated.publish, ...(draft ? { saved: true, pendingPublish: true, draftFingerprint: fingerprint } : { fingerprint }), ...(updated.runtimeSha256 ? { runtimeSha256: updated.runtimeSha256 } : {}), ...turnOut,
-              warnings: [...warnings, `the answer to creating page ${who} was lost (${said}), but reading the id it was created under (${id}) showed a page that an earlier create under this id had written, differing from this create in ${differing.join(', ')} — so it was not sent again, and was updated to what this create asks for instead of being published as it was`, ...(updated.warnings || [])],
-            };
-          }
-          warnings.push(`the answer to creating page ${who} was lost (${said}), but reading the id it was created under (${id}) showed that it had been written — so it was not sent again`);
-          const firstPrompt = firstUserMessage(page);
-          if (firstPrompt !== undefined && firstPrompt !== turn.prompt) {
-            warnings.push(`page ${who} holds what this create asks for, but its first recorded prompt is that of an earlier create under this id: an update records a prompt only when it changes the page, so this create's prompt is not recorded`);
-          }
+          const done = await takeOver(found.page, said, warnings, budget);
+          if (done) return done;
           break;
         }
         // Absent: nothing has been written yet. A second send is safe under the same id; a third is not offered, and nothing is "known"
@@ -1238,12 +1299,7 @@ function makeGenpageSdk(env, deps = {}) {
         pushed = await pushOnce(sdk, id);
       }
 
-      if (draft) {
-        return { pageId: id, name, publish: draftPublish(), saved: true, pendingPublish: true, draftFingerprint: fingerprint, ...turnOut, warnings: [...warnings, ...warningsOf(pushed, draftPublish(), `page ${label(name, id)}`)] };
-      }
-      const runtimeSha256 = await runtimeEvidenceOf(sdk, id, args);
-      const published = await publish(sdk, 'genPage', id, { verify: true });
-      return { pageId: id, name, publish: published, fingerprint, ...turnOut, ...(runtimeSha256 ? { runtimeSha256 } : {}), warnings: [...warnings, ...warningsOf(pushed, published, `page ${label(name, id)}`)] };
+      return finish(pushed, warnings);
     },
 
     // UPDATE: read the page, write only what differs from it, record the turn, publish, and prove the published copy.
@@ -2157,5 +2213,5 @@ async function appsNaming(sdk, pageId) {
 module.exports = {
   makeGenpageSdk, unescapePacName, suppliedButBlank, sourceText, dataSourcesOf, promptTranscript, configJson, pageFolderFiles,
   genPagesOfSiteMap, entityTablesOfSiteMap, writeOutcome, PRE_WRITE_REFUSALS, genpageError, holdsWhatWasSent, describeDivergence, contentFingerprint, watchThrottles, GUID_RE,
-  missingTableOf, draftOf, makeTurnBindingStore, normalizeTurnId,
+  missingTableOf, draftOf, makeTurnBindingStore, normalizeTurnId, readTurnRecord,
 };

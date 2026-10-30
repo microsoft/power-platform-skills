@@ -13,7 +13,7 @@ const { test } = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');
 const path = require('node:path');
-const { makeGenpageSdk, makeTurnBindingStore } = require('../lib/genpage-sdk.js');
+const { makeGenpageSdk, makeTurnBindingStore, readTurnRecord } = require('../lib/genpage-sdk.js');
 const { sha256 } = require('../lib/hash.js');
 const { makeTempDir } = require('./helpers/temp-dirs.js');
 const { FakeGenPageServer, INSTANCE, ACCOUNT_TABLE, appTransport, APP_EXISTING_PAGE_ID } = require('./helpers/fake-genpage-server.js');
@@ -262,6 +262,137 @@ test('REAL BUNDLE: a create that finds its page holding an earlier create\'s bin
   });
 });
 
+// ── Every backend that can write under a turn bound to a spec-merge ──
+// The binding mode is a part of the request on every path that can write under the turn: the backend that wrote the page before (its workspace still knows the page, so a
+// create there would be sent as a change to it), a backend of a later run, a create resumed under the id its record names, an update after the create, and the update a create
+// hands a page it found to. Each keeps the mode it bound, and each refuses another mode with nothing written.
+
+const PINNED = '12121212-3434-4565-8787-909090909090';
+const HELD = { logicalName: 'contoso_service', connectorId: CONNECTOR, dataset: 'before', connectionId: CONNECTION };
+const STATED = { logicalName: 'contoso_service', connectorId: CONNECTOR, dataset: 'after' };
+const MERGED = [{ ...HELD, dataset: 'after' }];
+const pinnedCreate = (extra) => ({ pageId: PINNED, name: 'Bound', source: SOURCE, dataSources: ['account'], connectorBindings: [STATED], prompt: 'again', ...extra });
+
+test('REAL BUNDLE: a create under a spec-merge turn, from the backend that wrote the page before, merges the spec\'s lists — and every backend refuses that turn in another mode, nothing written', async () => {
+  await inWorld(async ({ server, genpage, open }) => {
+    // An earlier create under this id, from THIS backend: its workspace still holds the page.
+    await genpage.create({ pageId: PINNED, name: 'Bound', source: SOURCE, dataSources: ['account'], connectorBindings: [HELD] });
+    const created = await genpage.create(pinnedCreate({ specBindings: true, turnId: TURN }));
+    assert.strictEqual(created.turn.id, TURN);
+    assert.strictEqual(created.publish.kind, 'verified');
+    assert.deepStrictEqual((await open().read(PINNED)).connectorBindings, MERGED, 'the spec\'s list was merged into the page\'s, not put in its place: the connection is kept');
+    assert.deepStrictEqual((await open().publishedDiffers(PINNED, { name: 'Bound', source: SOURCE, dataSources: ['account'], connectorBindings: MERGED })).differing, [], 'and that is what was published');
+    assert.strictEqual(server.messagesOf(PINNED).filter((m) => m.message === 'again').length, 1);
+
+    const at = mark(server);
+    const messages = server.messagesOf(PINNED).length;
+    for (const backend of [genpage, open()]) {
+      for (const flip of [{ specBindings: false }, {}]) {
+        await assert.rejects(backend.create(pinnedCreate({ ...flip, turnId: TURN })), reused, `create ${JSON.stringify(flip)}`);
+        await assert.rejects(backend.create(pinnedCreate({ ...flip, pageId: undefined, turnId: TURN })), reused, `create without the page id ${JSON.stringify(flip)}`);
+        await assert.rejects(backend.update(PINNED, pinnedCreate({ ...flip, pageId: undefined, turnId: TURN })), reused, `update ${JSON.stringify(flip)}`);
+      }
+    }
+    assertNothingWritten(server, at);
+    assert.strictEqual(server.messagesOf(PINNED).length, messages);
+    assert.deepStrictEqual((await open().read(PINNED)).connectorBindings, MERGED, 'the connection is still there');
+
+    // The same request again, from either backend, with or without the page id, is the same turn: nothing sent twice, the connection kept.
+    for (const backend of [genpage, open()]) {
+      for (const extra of [{}, { pageId: undefined }]) {
+        const again = await backend.create(pinnedCreate({ specBindings: true, turnId: TURN, ...extra }));
+        assert.deepStrictEqual([again.pageId, again.turn.intent], [PINNED, created.turn.intent]);
+      }
+    }
+    assert.strictEqual(server.messagesOf(PINNED).length, messages, 'one turn in the history');
+    assert.deepStrictEqual((await open().read(PINNED)).connectorBindings, MERGED);
+  });
+});
+
+test('REAL BUNDLE: a create under a replacement turn, from the backend that wrote the page before, replaces the lists as it bound — the mode is the turn\'s, not a default', async () => {
+  await inWorld(async ({ server, genpage, open }) => {
+    await genpage.create({ pageId: PINNED, name: 'Bound', source: SOURCE, dataSources: ['account'], connectorBindings: [HELD] });
+    await genpage.create(pinnedCreate({ turnId: TURN }));
+    assert.deepStrictEqual((await open().read(PINNED)).connectorBindings, [STATED], 'the list given is the page\'s list');
+    const at = mark(server);
+    await assert.rejects(genpage.create(pinnedCreate({ specBindings: true, turnId: TURN })), reused);
+    assertNothingWritten(server, at);
+  });
+});
+
+test('REAL BUNDLE: a spec-merge create whose answer was lost, retried from the same backend and from another, leaves one turn and keeps the connection', async () => {
+  await inWorld(async ({ server, genpage, open }) => {
+    await genpage.create({ pageId: PINNED, name: 'Bound', source: SOURCE, dataSources: ['account'], connectorBindings: [HELD] });
+    loseTheAnswer(server);
+    const args = pinnedCreate({ specBindings: true, turnId: TURN });
+    await assert.rejects(genpage.create(args), (e) => e.outcome === 'unknown' && e.pageId === PINNED);
+    heal(server);
+    assert.deepStrictEqual((await open().read(PINNED)).connectorBindings, MERGED, 'the send that landed merged');
+    const again = await genpage.create(args);
+    assert.strictEqual(again.turn.id, TURN);
+    await open().create({ ...args, pageId: undefined });
+    assert.strictEqual(server.messagesOf(PINNED).filter((m) => m.message === 'again').length, 1, 'one turn');
+    assert.deepStrictEqual((await open().read(PINNED)).connectorBindings, MERGED);
+  });
+});
+
+test('REAL BUNDLE: a spec-merge create whose page an earlier create lands on just before its own send merges into what landed, from the backend that staged the page', async () => {
+  await inWorld(async ({ server, genpage, open }) => {
+    const earlier = open();
+    // The page is not there when the create looks, so it stages it — and an earlier create under the id lands before the staged page is sent.
+    const created = await genpage.create(pinnedCreate({
+      specBindings: true, turnId: TURN, sentBefore: [{ name: 'Bound', sourceSha256: sha256(SOURCE) }],
+      beforeSend: async () => { await earlier.create({ pageId: PINNED, name: 'Bound', source: SOURCE, dataSources: ['account'], connectorBindings: [HELD] }); },
+    }));
+    assert.strictEqual(created.turn.id, TURN);
+    assert.deepStrictEqual((await open().read(PINNED)).connectorBindings, MERGED, 'merged into what landed: the connection is kept');
+    assert.deepStrictEqual((await open().publishedDiffers(PINNED, { name: 'Bound', source: SOURCE, dataSources: ['account'], connectorBindings: MERGED })).differing, []);
+    assert.strictEqual(server.messagesOf(PINNED).filter((m) => m.message === 'again').length, 1);
+  });
+});
+test('REAL BUNDLE: a create under a turn, from a backend that holds a copy of a page since deleted under the id, makes the page new — it is not sent as a change to the copy', async () => {
+  await inWorld(async ({ server, genpage, open }) => {
+    await genpage.create({ pageId: PINNED, name: 'Bound', source: SOURCE, dataSources: ['account'], connectorBindings: [HELD] });
+    await open().delete(PINNED, { allowDestructive: true });
+    assert.ok(!server.state.projects.has(PINNED));
+    const created = await genpage.create(pinnedCreate({ specBindings: true, turnId: TURN }));
+    assert.deepStrictEqual([created.pageId, created.turn.id, created.publish.kind], [PINNED, TURN, 'verified']);
+    const page = await open().read(PINNED);
+    assert.deepStrictEqual([page.name, page.connectorBindings], ['Bound', [STATED]], 'a new page holds the list as given: there is nothing to merge into');
+    assert.strictEqual(server.messagesOf(PINNED).filter((m) => m.message === 'again').length, 1);
+  });
+});
+test('REAL BUNDLE: a create under a turn whose page cannot be read first sends nothing — from the backend that knows the page, too — and says the page may exist', async () => {
+  await inWorld(async ({ server, genpage }) => {
+    await genpage.create({ pageId: PINNED, name: 'Bound', source: SOURCE, dataSources: ['account'], connectorBindings: [HELD] });
+    const at = mark(server);
+    server.failOn = (method) => (method === 'GET' ? 403 : undefined);
+    await assert.rejects(genpage.create(pinnedCreate({ specBindings: true, turnId: TURN })), (e) => e.code === 'GENPAGE_UNREADABLE' && e.outcome === 'unknown' && e.pageId === PINNED);
+    heal(server);
+    assertNothingWritten(server, at);
+    assert.deepStrictEqual((await genpage.read(PINNED)).connectorBindings, [HELD]);
+  });
+});
+test('REAL BUNDLE: an upload create retried with the page id its unfinished first attempt returned is the same create — one page, one turn — and the same turn as an upload update is refused', async () => {
+  await inWorld(async ({ server, open }) => {
+    const context = { operation: 'upload-create', appId: null, solution: null, overwriteDeployed: false, navigation: null };
+    const args = { name: 'Upload', source: SOURCE, prompt: 'make', turnId: TURN, turnContext: context };
+    const pages = server.state.projects.size;
+    loseTheAnswer(server);
+    let returned;
+    await assert.rejects(open().create(args), (e) => { returned = e.pageId; return e.outcome === 'unknown'; });
+    heal(server);
+    const at = mark(server);
+    // The caller dispatches by the turn's record: a create stays a create, under the id it returned.
+    await assert.rejects(open().update(returned, { ...args, turnContext: { ...context, operation: 'upload-update' } }), (e) => reused(e) && /bound to a page upload-create, and this is a page upload-update/.test(e.message));
+    await assert.rejects(open().update(returned, args), (e) => e.code === 'GENPAGE_ARGUMENT_INVALID' && e.outcome === 'nothing', 'an update cannot carry a create\'s context');
+    assertNothingWritten(server, at);
+    const resumed = await open({ newId: () => { throw new Error('a resumed create makes no new page id'); } }).create({ ...args, pageId: returned });
+    assert.deepStrictEqual([resumed.pageId, resumed.turn.id], [returned, TURN]);
+    assert.strictEqual(server.state.projects.size, pages + 1, 'one page');
+    assert.strictEqual(server.messagesOf(returned).filter((m) => m.message === 'make').length, 1, 'one turn');
+  });
+});
 // ── Refusals before anything is written ──
 
 test('a turn id is checked before anything is read — only a GUID (braces and capitals taken) — and a turn intent or context without one is refused', async () => {
@@ -325,6 +456,65 @@ test('a turn id with no store, a store that cannot be reached, or one that canno
   });
 });
 
+test('a store that answers a read with nothing at all (undefined) is a malformed answer, not "no record": refused before a bind, nothing written — only null is "no record"', async () => {
+  await inWorld(async ({ server, open }) => {
+    let binds = 0;
+    const counting = (get) => ({ get, bind: (id, record) => { binds += 1; return record; } });
+    await assert.rejects(open({ turnBindings: counting(() => undefined) }).update(OTHER, { source: SOURCE, turnId: TURN }), (e) => e.code === 'GENPAGE_TURN_STATE_INCOMPLETE' && e.outcome === 'nothing');
+    await assert.rejects(open({ turnBindings: counting(async () => undefined) }).create({ name: 'X', source: SOURCE, turnId: TURN }), (e) => e.code === 'GENPAGE_TURN_STATE_INCOMPLETE' && e.outcome === 'nothing');
+    assert.deepStrictEqual([binds, server.writes()], [0, []], 'nothing bound, nothing written');
+    // null is "no record": the first use binds the id and writes.
+    const first = await open({ turnBindings: counting(() => null) }).update(OTHER, { source: SOURCE, turnId: TURN });
+    assert.deepStrictEqual([binds, first.turn.id], [1, TURN]);
+  });
+});
+
+test('a turn record that cannot be reached, after a create whose outcome is unknown, is advised to be made reachable again or resolved — never to be retried without its id or under a new one', async () => {
+  await inWorld(async ({ server, open, turnsDir }) => {
+    const args = { name: 'Lost result', source: SOURCE, turnId: TURN };
+    loseTheAnswer(server);
+    await assert.rejects(open().create(args), (e) => e.outcome === 'unknown');
+    heal(server);
+    const unreachable = [
+      { turnBindings: { get: () => { throw Object.assign(new Error('disk unavailable'), { code: 'EIO' }); }, bind: () => null } },
+      { turnBindings: { get: () => null, bind: () => { throw new Error('disk full'); } } },
+      { turnBindings: undefined },
+      // A store with no record of the turn (another folder) that cannot keep a first one either.
+      { turnBindings: makeTurnBindingStore(path.join(path.dirname(turnsDir), 'elsewhere'), { fs: { ...fs, linkSync: () => { throw Object.assign(new Error('no hard links here'), { code: 'EPERM' }); } } }) },
+      { createSdk: async () => { throw new Error('never made'); } },
+    ];
+    for (const extra of unreachable) {
+      await assert.rejects(open(extra).create(args), (e) => {
+        assert.strictEqual(e.code, 'GENPAGE_TURN_STATE_UNAVAILABLE');
+        assert.doesNotMatch(e.message, /leave the turn id out/i);
+        assert.match(e.message, /Nothing was changed by this attempt/);
+        assert.match(e.message, /may still be unresolved/);
+        assert.match(e.message, /Do not run it without its turn id or under a new one/);
+        return true;
+      }, Object.keys(extra).join());
+    }
+  });
+});
+test('readTurnRecord — for a caller that decides what its run is by the turn — answers the record or null, and refuses what a write under the turn would refuse, in the same words', async () => {
+  await inWorld(async ({ genpage, turnsDir }) => {
+    const store = makeTurnBindingStore(turnsDir);
+    assert.strictEqual(await readTurnRecord(store, TURN), null);
+    const context = { operation: 'upload-create', appId: null, solution: null, overwriteDeployed: false, navigation: null };
+    const created = await genpage.create({ name: 'Read', source: SOURCE, turnId: TURN, turnContext: context });
+    const record = await readTurnRecord(store, `{${TURN.toUpperCase()}}`);
+    assert.deepStrictEqual([record.operation, record.pageId, record.intentSha256], ['upload-create', created.pageId, created.turn.intent]);
+    const refusals = [
+      [{ get: () => { throw Object.assign(new Error('disk unavailable'), { code: 'EIO' }); } }, 'GENPAGE_TURN_STATE_UNAVAILABLE'],
+      [undefined, 'GENPAGE_TURN_STATE_UNAVAILABLE'],
+      [{ get: () => undefined }, 'GENPAGE_TURN_STATE_INCOMPLETE'],
+      [{ get: () => ({ formatVersion: 1, turnId: TURN }) }, 'GENPAGE_TURN_STATE_INCOMPLETE'],
+    ];
+    for (const [given, code] of refusals) {
+      await assert.rejects(readTurnRecord(given, TURN), (e) => e.code === code && e.outcome === 'nothing' && !/leave the turn id out/i.test(e.message), code);
+    }
+    await assert.rejects(readTurnRecord(store, 'not-a-guid'), (e) => e.code === 'GENPAGE_TURN_ID_INVALID');
+  });
+});
 // ── Without a turn id, nothing changes ──
 
 test('REAL BUNDLE: without a turn id no store is needed, no turn is answered, and an update mints its own turn identity as before', async () => {
