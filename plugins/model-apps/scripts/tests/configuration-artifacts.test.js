@@ -630,19 +630,26 @@ test('management records: only what this run created or a maker adopted, with ch
   const spec = (description) => base({
     environmentVariables: [{ schemaName: 'contoso_S', type: 'string', description }],
     connectionReferences: [{ logicalName: 'contoso_sp', connectorId: SP }],
-    customApis: [{ uniqueName: 'contoso_Calc', requestParameters: [{ uniqueName: 'A', type: 'integer' }] }],
+    customApis: [
+      { uniqueName: 'contoso_Calc', requestParameters: [{ uniqueName: 'A', type: 'integer' }] },
+      { uniqueName: 'contoso_Old', requestParameters: [{ uniqueName: 'B', type: 'integer' }] },
+    ],
   });
+  // A binding's childIds are only the children this run created and read back, so each child is recorded as created,
+  // even under a root that was adopted or found (a parameter added to an API an earlier build made).
   const result = { managedBindings: [
     { kind: 'environmentVariable', key: 'contoso_S', id: 'ev-1', origin: 'created', childIds: { value: 'v-1' } },
     { kind: 'connectionReference', key: 'contoso_sp', id: 'cr-1', origin: 'found' },
     { kind: 'customApi', key: 'contoso_Calc', id: 'api-1', origin: 'adopted', childIds: { 'request:a': 'p-a' } },
+    { kind: 'customApi', key: 'contoso_Old', id: 'api-2', origin: 'resolved', childIds: { 'request:b': 'p-b' } },
   ] };
   const records = C.configurationManagedRecords(result, spec('one'));
   assert.deepEqual(records.map((r) => [r.kind, r.key, r.id, r.parentKey, r.origin]), [
     ['environmentVariable', 'contoso_s', 'ev-1', undefined, 'created'],
     ['environmentVariableValue', 'contoso_s|value', 'v-1', 'contoso_s', 'created'],
     ['customApi', 'contoso_calc', 'api-1', undefined, 'adopted'],
-    ['customApiRequestParameter', 'contoso_calc|request:a', 'p-a', 'contoso_calc', 'adopted'],
+    ['customApiRequestParameter', 'contoso_calc|request:a', 'p-a', 'contoso_calc', 'created'],
+    ['customApiRequestParameter', 'contoso_old|request:b', 'p-b', 'contoso_old', 'created'],
   ]);
   for (const r of records) assert.match(r.intentSha256, /^[0-9a-f]{64}$/);
   const again = C.configurationManagedRecords(result, spec('two'));

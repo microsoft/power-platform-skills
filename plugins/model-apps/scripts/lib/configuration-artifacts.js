@@ -670,6 +670,20 @@ function stoppedId(error) {
 //    anything else, or a throw, stops the item (create-identity-unverified): a failed read never proves absence;
 // 3. otherwise (the plain pass-through port, no resolve) the unique name is the identity, as for every other kind
 //    the plugin builds, and a row found by name is reused.
+// A row found in step 2 or 3 has no management record (step 1 did not find one), so the common adoption policy
+// (`ctx.managed.planAdoption`) decides it. A build that records what it manages but has no policy to ask cannot
+// confirm the row's management: it is marked `unrecorded` and the run reports CONFIGURATION_RECORD_UNCONFIRMED,
+// never a quiet success (an earlier run's record that failed would otherwise be lost for good).
+async function adoptionOf(managed, kind, key, id, remote, origin) {
+  if (managed && typeof managed.planAdoption === 'function') {
+    const decision = await managed.planAdoption({ kind, key, id });
+    if (!decision || decision.allowed !== true) return { id, remote, origin: 'adopted', refusal: (decision && CODE_SHAPE.test(String(decision.code)) && decision.code) || 'ADOPTION_REFUSED' };
+    return { id, remote, origin: 'adopted' };
+  }
+  if (managed && typeof managed.recordApplied === 'function') return { id, remote, origin, unrecorded: true };
+  return { id, remote, origin };
+}
+
 async function locate(ctx, kind, key, identity) {
   const managed = ctx.managed;
   if (managed && typeof managed.lookup === 'function') {
@@ -695,7 +709,7 @@ async function locate(ctx, kind, key, identity) {
       throw identityStop(portCode(error) || 'create-identity-unverified', stoppedId(error));
     }
     if (resolved && resolved.state === 'present' && typeof resolved.id === 'string' && resolved.id) {
-      return { id: resolved.id, remote: await ctx.sdk.fetchArtifact(kind, resolved.id, { overwrite: true }), origin: 'resolved' };
+      return adoptionOf(managed, kind, key, resolved.id, await ctx.sdk.fetchArtifact(kind, resolved.id, { overwrite: true }), 'resolved');
     }
     if (!resolved || resolved.state !== 'absent') throw identityStop('create-identity-unverified');
     derived = typeof resolved.id === 'string' && resolved.id ? resolved.id : null;
@@ -705,13 +719,7 @@ async function locate(ctx, kind, key, identity) {
   if (creates && typeof creates.resolve === 'function' && ref(id) !== ref(derived)) {
     return { id, origin: 'foreign', refusal: 'create-identity-conflict' };
   }
-  const remote = await ctx.sdk.fetchArtifact(kind, id, { overwrite: true });
-  if (managed && typeof managed.planAdoption === 'function') {
-    const decision = await managed.planAdoption({ kind, key, id });
-    if (!decision || decision.allowed !== true) return { id, remote, origin: 'adopted', refusal: (decision && CODE_SHAPE.test(String(decision.code)) && decision.code) || 'ADOPTION_REFUSED' };
-    return { id, remote, origin: 'adopted' };
-  }
-  return { id, remote, origin: 'existing' };
+  return adoptionOf(managed, kind, key, id, await ctx.sdk.fetchArtifact(kind, id, { overwrite: true }), 'existing');
 }
 
 // Plan one declaration: locate, compare, and record either the create, the field changes, unchanged, or
@@ -764,7 +772,7 @@ async function planOne(ctx, kindPlan, entry, plan) {
     destructive: compared.destructive === true,
     ...(compared.authorize && compared.authorize.length ? { authorize: compared.authorize } : {}),
   });
-  op.detail = { entry, identity: kindPlan.identity(entry), remote: found.remote, childIds: found.childIds, changes: compared.changes, singleWrite: compared.singleWrite === true };
+  op.detail = { entry, identity: kindPlan.identity(entry), remote: found.remote, childIds: found.childIds, changes: compared.changes, singleWrite: compared.singleWrite === true, unrecorded: found.unrecorded === true };
   if (kindPlan.bound) op.detail.bound = kindPlan.bound(entry, found.remote);
   plan.operations.push(op);
   return op;
@@ -2083,6 +2091,13 @@ async function applyConfiguration(plan, ctx) {
   for (const item of await membership.prove(roots)) {
     pushFinding(result, 'unknown', { kind: item.kind, key: item.key, id: item.id, code: 'SOLUTION_MEMBERSHIP_UNKNOWN', unit: 'membership' });
   }
+  // A row the content step left complete whose management a recording build could not confirm (see adoptionOf).
+  for (const op of plan.operations || []) {
+    if (!op.detail || !op.detail.unrecorded) continue;
+    const done = roots.some((line) => line.kind === op.kind && line.key === op.key);
+    const open = result.unknown.some((line) => line.kind === op.kind && line.key === op.key);
+    if (done && !open) pushFinding(result, 'unknown', { kind: op.kind, key: portKeyOf(op.kind, op.key), id: op.id, code: 'CONFIGURATION_RECORD_UNCONFIRMED', unit: 'management' });
+  }
   return result;
 }
 
@@ -2373,19 +2388,22 @@ function portableIntent(kind, entry) {
 }
 
 // The management records a build keeps for what THIS run confirmed: each root it created (or a maker adopted) and
-// each child its read-back showed. A row merely found or matched is not recorded as created.
+// each child its read-back showed. A row merely found or matched is not recorded as created. A binding's childIds
+// are only ever the children this run created and read back at their own ids (settle), so each is recorded as
+// 'created' whatever its root's origin: a parameter added to an API an earlier build made is this run's create.
 // `{kind, key, id, parentKey?, intentSha256, origin}`; the shared recorder adds format, app and environment scope.
 function configurationManagedRecords(result, spec) {
   const records = [];
   for (const binding of (result && result.managedBindings) || []) {
-    if (binding.origin !== 'created' && binding.origin !== 'adopted') continue;
+    const rootRecorded = binding.origin === 'created' || binding.origin === 'adopted';
+    if (!rootRecorded && !Object.keys(binding.childIds || {}).length) continue;
     const entry = configurationIntentOf(spec, binding.kind, binding.key);
     const rootKey = portKeyOf(binding.kind, binding.key);
-    records.push({ kind: binding.kind, key: rootKey, id: binding.id, intentSha256: intentSha256({ kind: binding.kind, intent: portableIntent(binding.kind, entry) }), origin: binding.origin });
+    if (rootRecorded) records.push({ kind: binding.kind, key: rootKey, id: binding.id, intentSha256: intentSha256({ kind: binding.kind, intent: portableIntent(binding.kind, entry) }), origin: binding.origin });
     for (const [slot, id] of Object.entries(binding.childIds || {})) {
       const childKind = CHILD_KINDS[binding.kind] ? CHILD_KINDS[binding.kind](slot) : null;
       if (!childKind || !id) continue;
-      records.push({ kind: childKind, key: `${rootKey}|${slot}`, id, parentKey: rootKey, intentSha256: intentSha256({ kind: childKind, intent: childIntent(binding.kind, binding.key, slot, entry) }), origin: binding.origin });
+      records.push({ kind: childKind, key: `${rootKey}|${slot}`, id, parentKey: rootKey, intentSha256: intentSha256({ kind: childKind, intent: childIntent(binding.kind, binding.key, slot, entry) }), origin: 'created' });
     }
   }
   return records;

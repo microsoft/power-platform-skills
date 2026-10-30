@@ -794,9 +794,50 @@ test('build runtime: what a step confirmed is recorded before it halts, a record
   assert.deepEqual(first.outcome.unknown.map((u) => [u.kind, u.key, u.code, u.unit]), [['environmentVariable', 'contoso_mode', 'CONFIGURATION_RECORD_UNCONFIRMED', 'management']]);
   assert.deepEqual(first.halt.items, [{ kind: 'environmentVariable', key: 'contoso_mode', code: 'CONFIGURATION_RECORD_UNCONFIRMED' }]);
   assert.equal(first.halt.retry, 'never');
+  // The next build finds the row at its id and creates nothing twice; with no record of it and no adoption policy
+  // to decide on it, its management is still not confirmed.
   const again = await createConfigurationRuntime({ spec: one, sdk: k.sdk, opts: { creates: k.creates, managed: failing } }).apply('data-model');
-  assert.equal(again.halt, null);
+  assert.deepEqual(again.halt && again.halt.items, [{ kind: 'environmentVariable', key: 'contoso_mode', code: 'CONFIGURATION_RECORD_UNCONFIRMED' }]);
+  assert.deepEqual(again.outcome.unchanged.map((x) => x.key), ['contoso_Mode']);
   assert.equal(k.org.rows('environmentvariabledefinitions').length, 1, 'the next build finds it at its id; nothing is created twice');
+  // The common adoption policy decides a found row with no record: allowed, it is recorded as adopted and the step completes.
+  const kept = [];
+  const adopting = { lookup: async () => null, planAdoption: async () => ({ allowed: true }), recordApplied: async (rec) => { kept.push(rec); } };
+  const adopted = await createConfigurationRuntime({ spec: one, sdk: k.sdk, opts: { creates: k.creates, managed: adopting } }).apply('data-model');
+  assert.equal(adopted.halt, null);
+  assert.deepEqual(kept.map((r) => [r.kind, r.key, r.id, r.origin]), [['environmentVariable', 'contoso_mode', k.creates.idOf('environmentVariable', 'contoso_mode'), 'adopted']]);
+  const refusing = { lookup: async () => null, planAdoption: async () => ({ allowed: false, code: 'ADOPTION_NOT_OWNED' }), recordApplied: async () => {} };
+  const refused = await createConfigurationRuntime({ spec: one, sdk: k.sdk, opts: { creates: k.creates, managed: refusing } }).apply('data-model');
+  assert.deepEqual(refused.halt && refused.halt.items, [{ kind: 'environmentVariable', key: 'contoso_Mode', code: 'ADOPTION_NOT_OWNED' }]);
+});
+
+test('build runtime: a child is recorded when it is created, under a root this run created or one it found, and a child record that fails is incomplete', async () => {
+  const s = (params) => ({ minimumPluginVersion: '2.21.0', solution: { uniqueName: 'ContosoSol', publisherPrefix: 'contoso' }, customApis: [{ uniqueName: 'contoso_Api', requestParameters: params }] });
+  // A recorder that keeps roots and refuses children.
+  const h = await harness();
+  const kept = [];
+  const childless = { recordApplied: async (rec) => { if (rec.parentKey) throw new Error('store unavailable'); kept.push(rec); } };
+  const first = await createConfigurationRuntime({ spec: s([{ uniqueName: 'a', type: 'string' }]), sdk: h.sdk, opts: { creates: h.creates, managed: childless } }).apply('data-model');
+  assert.deepEqual(kept.map((r) => [r.kind, r.key]), [['customApi', 'contoso_api']]);
+  assert.deepEqual(first.outcome.unknown.map((u) => [u.kind, u.key, u.id, u.code, u.unit]), [
+    ['customApiRequestParameter', 'contoso_api|request:a', h.creates.childIdOf('contoso_api', 'request:a'), 'CONFIGURATION_RECORD_UNCONFIRMED', 'management'],
+  ]);
+  assert.deepEqual(first.halt && first.halt.items, [{ kind: 'customApiRequestParameter', key: 'contoso_api|request:a', code: 'CONFIGURATION_RECORD_UNCONFIRMED' }]);
+  // A parameter added to the API a later build finds (its root record is there): the new child is recorded as created.
+  const recorded = [];
+  const k = await harness();
+  const store = new Map();
+  const managed = {
+    lookup: async (kind, key) => store.get(`${kind}:${String(key).toLowerCase()}`) || null,
+    recordApplied: async (rec) => { recorded.push(rec); if (!rec.parentKey) store.set(`${rec.kind}:${rec.key}`, { id: rec.id }); },
+  };
+  await createConfigurationRuntime({ spec: s([{ uniqueName: 'a', type: 'string' }]), sdk: k.sdk, opts: { creates: k.creates, managed } }).apply('data-model');
+  recorded.length = 0;
+  const added = await createConfigurationRuntime({ spec: s([{ uniqueName: 'a', type: 'string' }, { uniqueName: 'b', type: 'string' }]), sdk: k.sdk, opts: { creates: k.creates, managed } }).apply('data-model');
+  assert.equal(added.halt, null);
+  assert.equal(k.org.rows('customapirequestparameters').length, 2);
+  const b = k.org.rows('customapirequestparameters').find((r) => r.uniquename === 'b').customapirequestparameterid;
+  assert.deepEqual(recorded.map((r) => [r.kind, r.key, r.id, r.parentKey, r.origin]), [['customApiRequestParameter', 'contoso_api|request:b', b, 'contoso_api', 'created']]);
 });
 
 test('build runtime: two declarations of one item stop the build before anything is read or written', async () => {

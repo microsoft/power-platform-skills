@@ -104,7 +104,7 @@ function createConfigurationRuntime({ spec, sdk, provision, opts = {}, appUnique
       try {
         await opts.managed.recordApplied({ ...rec, appUniqueName });
       } catch {
-        if (rec.parentKey) continue;
+        // A child's record is as required as its root's: a child nobody recorded is one no later build can account for.
         outcome.unknown.push({ kind: rec.kind, key: rec.key, id: rec.id, code: 'CONFIGURATION_RECORD_UNCONFIRMED', unit: 'management' });
       }
     }
