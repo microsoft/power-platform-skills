@@ -24,7 +24,8 @@ const declared = (content, over = {}) => ({ name: NAME, type: 'js', content, rec
 async function run(srv, wr, ctx = {}, extra = {}) {
   const sdk = await srv.newSdk();
   const row = srv.rowOf('webresourceset', WID);
-  const plan = await planWebResourceUpdate({ webResource: wr, existingId: WID, deployed: row && row.content, options: webResourceOpts(wr, '.'), ...extra }, ctx);
+  // The build's dependency read, answering "nothing else uses it" unless a test says otherwise.
+  const plan = await planWebResourceUpdate({ webResource: wr, existingId: WID, deployed: row && row.content, options: webResourceOpts(wr, '.'), readDependents: async () => [], ...extra }, ctx);
   const result = await applyWebResourceUpdate(plan, { sdk }, ctx);
   return { plan, result };
 }
@@ -123,4 +124,31 @@ test('a created web resource binds to the bytes the build wrote, so the next bui
   const { plan } = await run(srv, declared('var v = 7;'), { managed });
   assert.equal(plan.action, 'noChange');
   assert.equal(plan.origin, 'created');
+});
+
+test('first adoption needs the dependents read: a missing reader, a throw or a non-list answer is unknown and writes nothing', async () => {
+  for (const readDependents of [undefined, async () => { throw new Error('incomplete dependency read'); }, async () => null, async () => ({ value: [] })]) {
+    const srv = server();
+    const { plan, result } = await run(srv, declared('var v = 2;'), { authorizedAdoption: true, managed: fakeManaged() }, { readDependents });
+    assert.deepEqual(result.unknown.map((u) => u.code), ['web-resource-dependents-unreadable']);
+    assert.deepEqual(result.refused, []);
+    assert.equal(plan.dependents, null);
+    assert.equal(srv.writes.length, 0);
+  }
+  // A bound row needs no disclosure: the reader is not consulted.
+  const srv = server();
+  const managed = fakeManaged([createdWebResourceBinding(declared('var v = 1;'), WID, webResourceOpts(declared('var v = 1;'), '.'))]);
+  const bound = await run(srv, declared('var v = 2;'), { managed }, { readDependents: undefined });
+  assert.deepEqual(bound.result.saved.map((s) => s.id), [WID]);
+});
+
+test('a bound web resource is written by its bound id only: another row found by name is refused, a missing bound row is never recreated', async () => {
+  const OTHER = '88888888-0000-4000-8000-000000000002';
+  const srv = server('original');
+  const managed = fakeManaged([createdWebResourceBinding(declared('original'), OTHER, webResourceOpts(declared('original'), '.'))]);
+  const { result } = await run(srv, declared('desired'), { managed });
+  assert.deepEqual(result.refused.map((r) => r.code), ['web-resource-binding-mismatch']);
+  assert.equal(srv.writes.length, 0);
+  const missing = await planWebResourceUpdate({ webResource: declared('desired'), existingId: undefined, deployed: undefined, options: webResourceOpts(declared('desired'), '.') }, { managed });
+  assert.deepEqual(missing.refused.map((r) => r.code), ['web-resource-bound-row-missing']);
 });

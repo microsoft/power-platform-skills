@@ -18,7 +18,13 @@
 // An `external` web resource is shared and never the spec's to write, so declared mode is refused
 // for it outright. A shared row the spec has not managed before needs adoption approval; the plan
 // carries the row's dependent components (type and count only, from `readDependents`) so the
-// approval can say what else uses it.
+// approval can say what else uses it. When that list cannot be read (no reader, a throw, an answer
+// that is not a list), nothing is written and the outcome is unknown: an empty list would claim
+// nothing else uses the row, which nobody checked.
+//
+// Identity: an existing managed binding is the authority. The row the build found by name must be
+// the bound row (web-resource-binding-mismatch otherwise), and a bound row the build no longer
+// finds is refused (web-resource-bound-row-missing) — never recreated under the bound key.
 
 const {
   sha256,
@@ -30,6 +36,7 @@ const {
   isAuthorized,
   lookupBinding,
   bindingRecord,
+  boundIdentity,
   driftVerdict,
   bindsUnchanged,
   normalizeGuid,
@@ -66,6 +73,16 @@ async function planWebResourceUpdate({ webResource, existingId, deployed, option
     plan.refused.push(refusal(key, 'web-resource-external', 'an external web resource is shared and is never written by a build'));
     return plan;
   }
+  const binding = await lookupBinding(ctx, KIND, key);
+  const ident = boundIdentity(binding, { resolvedId: existingId, code: 'web-resource-binding-mismatch', key });
+  if (ident.refusal) {
+    plan.refused.push(ident.refusal);
+    return plan;
+  }
+  if (binding && !plan.id) {
+    plan.refused.push(refusal(key, 'web-resource-bound-row-missing', 'the web resource this key is bound to was not found; repair the binding explicitly before it can be recreated'));
+    return plan;
+  }
   if (!plan.id) {
     plan.refused.push(refusal(key, 'web-resource-spec-invalid', 'the web resource was not resolved to a row'));
     return plan;
@@ -82,7 +99,6 @@ async function planWebResourceUpdate({ webResource, existingId, deployed, option
   const live = Buffer.from(deployed, 'base64');
   plan.options = options;
   plan.desiredSha = bytesSha(wanted);
-  const binding = await lookupBinding(ctx, KIND, key);
   plan.origin = binding ? binding.origin : 'adopted';
   if (live.equals(wanted)) {
     plan.action = 'noChange';
@@ -96,16 +112,22 @@ async function planWebResourceUpdate({ webResource, existingId, deployed, option
     return plan;
   }
   if (verdict === 'unbound') {
+    let deps = null;
     if (typeof readDependents === 'function') {
       try {
-        const deps = await readDependents(plan.id);
-        const byType = {};
-        for (const d of deps || []) byType[d.componentType] = (byType[d.componentType] || 0) + 1;
-        plan.dependents = { count: (deps || []).length, byComponentType: byType };
+        deps = await readDependents(plan.id);
       } catch {
-        plan.dependents = null;
+        deps = null;
       }
     }
+    if (!Array.isArray(deps)) {
+      plan.dependents = null;
+      plan.unknown.push(refusal(key, 'web-resource-dependents-unreadable', 'what else uses this web resource could not be read, so adopting it cannot be approved; nothing was written'));
+      return plan;
+    }
+    const byType = {};
+    for (const d of deps) byType[d && d.componentType] = (byType[d && d.componentType] || 0) + 1;
+    plan.dependents = { count: deps.length, byComponentType: byType };
     if (!isAuthorized(ctx.authorizedAdoption, key)) {
       plan.refused.push(refusal(key, 'web-resource-adoption-not-authorized', 'the web resource exists and is not yet managed by this spec; approve adopting it (see its dependents) first'));
       return plan;
