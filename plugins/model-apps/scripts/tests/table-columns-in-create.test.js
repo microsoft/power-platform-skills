@@ -235,6 +235,14 @@ function fakeDataverse({
         const t = tables.get(m[1]);
         return t ? reply(200, { value: [...t.columns.values()].map((c) => ({ LogicalName: c.row.LogicalName, RequiredLevel: c.body.RequiredLevel })) }) : reply(404, { error: { message: 'no such table' } });
       }
+      // The build's one read of the Date and Time behaviours of a table it did not create, before it adds a column to it (entity-provision,
+      // guardExistingTableDates): the table's DateTime columns with the behaviour each was created with (UserLocal when the create named none).
+      if ((m = /^\/EntityDefinitions\(LogicalName='([^']+)'\)\/Attributes\/Microsoft\.Dynamics\.CRM\.DateTimeAttributeMetadata\?\$select=LogicalName,DateTimeBehavior,CanChangeDateTimeBehavior$/.exec(p))) {
+        const t = tables.get(m[1]);
+        if (!t) return reply(404, { error: { message: 'no such table' } });
+        const dates = [...t.columns.values()].filter((c) => /DateTimeAttributeMetadata$/.test(String(c.body['@odata.type'] || '')));
+        return reply(200, { value: dates.map((c) => ({ LogicalName: c.row.LogicalName, DateTimeBehavior: clone(c.body.DateTimeBehavior || { Value: 'UserLocal' }), CanChangeDateTimeBehavior: { Value: true } })) });
+      }
       // The read of a text column's length: one typed request that selects MaxLength and nothing else. The table and the column are
       // addressed by logical name (the alternate key) or by MetadataId (the primary key) — a debt an earlier attempt carried is paid by ids.
       if ((m = new RegExp(`^/EntityDefinitions\\(${TABLE_KEY}\\)/Attributes\\(${COLUMN_KEY}\\)/Microsoft\\.Dynamics\\.CRM\\.StringAttributeMetadata\\?\\$select=MaxLength$`).exec(p))) {

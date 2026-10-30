@@ -152,6 +152,7 @@ const { isAppTextMap, appTextKind, localizedAppText } = require('./app-header-te
 // The build's retry policy (retry-policy.js): every halt below is raised with what a run again may do — RETRY.NEVER, or a policy decided from the failure it wraps — and every failure the engine
 // raises itself is made by refusal() (deterministic) or serviceFailure() (the plugin's words around a failure of the service), because the build's retry reads a failure's STRUCTURE and the
 // service's words, never a message that quotes what the maker named. tests/halt-retry-policy.test.js enumerates the halts in this file and holds each to a table.
+const { securedBeforeSeed } = require('./field-security.js');
 const { RETRY, isTransientStatus, judgeFailure, retryPolicyFor, retryFrom, refusal, serviceFailure, withCause } = require('./retry-policy.js');
 const { HTTP_SEND_HISTORY } = require('./sdk-http-client.js');
 
@@ -772,6 +773,7 @@ function planFor(spec, opts) {
     }
   }
   if (has('sample-data') && opts.sampleData) {
+    if (!has('data-model') && seededSecuredTables(spec).size) items.push({ phase: 'sample-data', label: SEED_SECURITY_STEP });
     for (const e of spec.entities) { const n = sampleRecordsFor(spec, e).length; if (n) items.push({ phase: 'sample-data', label: `${n} sample record(s) -> ${e.schemaName}` }); }
   }
   if (has('web-resources')) for (const wr of spec.webResources || []) items.push({ phase: 'web-resources', label: `web resource ${wr.name} (${wr.type || 'js'})` });
@@ -3073,6 +3075,34 @@ async function runSdkBuildAttempt(spec, opts = {}) {
   }
 }
 
+// A run with sample data and without the data-model phase (`--phases sample-data`) never secures a column: the data-model phase does that,
+// before any row is written. So before such a run seeds a table with a column the spec declares `isSecured: true`, it reads, once per
+// seeded table, whether that column is secured now, and stops before the first row when it is not, or when the read cannot say. Without
+// that check a value would be written into a column every user can read. Nothing is read for a spec that secures no column.
+const SEED_SECURITY_STEP = 'secured columns before sample data';
+function seededSecuredTables(spec) {
+  const tables = new Set();
+  for (const e of spec.entities || []) {
+    if (!(e.columns || []).some((c) => c && c.isSecured === true && c.type !== 'Customer')) continue;
+    if (sampleRecordsFor(spec, e).length) tables.add(e.schemaName.toLowerCase());
+  }
+  return tables;
+}
+async function refuseSeedIntoUnsecuredColumns({ runner, spec, provision }) {
+  const tables = seededSecuredTables(spec);
+  if (!tables.size) return;
+  await runner.run('sample-data', SEED_SECURITY_STEP, async () => {
+    const check = await securedBeforeSeed(spec, provision, { tables });
+    const listed = (xs) => xs.map((x) => x.target).join(', ');
+    if (check.unsecured.length) {
+      throw refusal(`${listed(check.unsecured)} ${check.unsecured.length === 1 ? 'is' : 'are'} declared isSecured: true but not secured in the environment, so no sample record was written. Run the data-model phase first, which secures ${check.unsecured.length === 1 ? 'it' : 'them'}.`, { code: 'COLUMN_NOT_SECURED' });
+    }
+    if (check.unknown.length) {
+      throw refusal(`could not read whether ${listed(check.unknown)} ${check.unknown.length === 1 ? 'is' : 'are'} secured (${check.unknown[0].reason}), so no sample record was written.`, { code: 'COLUMN_SECURITY_UNREAD' });
+    }
+  });
+}
+
 async function runSdkBuildPhases(spec, opts, owed) {
   const { sdk, apply = false, sampleData = false, publish = false } = opts;
   const emit = opts.emit || (() => undefined);
@@ -3414,7 +3444,7 @@ async function runSdkBuildPhases(spec, opts, owed) {
   //    entity (fresh -> createTable result, existing -> findTables hit).
   let dataModel = { entities: {}, globalChoiceIds: {}, statusReasonValues: {}, columns: {}, relationships: [], lookupLabels: {} };
   if (has('data-model')) {
-    dataModel = await provisionDataModel({ sdk, provision, runner, spec, apply, languageCode: opts.languageCode, warn: opts.warn, provisionedLanguages: opts.provisionedLanguages, preResolvedLanguageCode: opts.preResolvedLanguageCode, reconcileLookupLabels: true, owedLengths: owed.lengths });
+    dataModel = await provisionDataModel({ sdk, provision, runner, spec, apply, languageCode: opts.languageCode, warn: opts.warn, provisionedLanguages: opts.provisionedLanguages, preResolvedLanguageCode: opts.preResolvedLanguageCode, reconcileLookupLabels: true, owedLengths: owed.lengths, dateBehaviorPreflight: true, authorizedDestructive: opts.authorizedDestructive });
     Object.assign(result.created.entities, dataModel.entities);
   }
 
@@ -3423,6 +3453,7 @@ async function runSdkBuildPhases(spec, opts, owed) {
 
   // 3. Sample data (opt-in): topological, $parent -> @odata.bind on the lookup nav prop.
   if (has('sample-data') && sampleData) {
+    if (!has('data-model')) await refuseSeedIntoUnsecuredColumns({ runner, spec, provision });
     const sd = await provisionSampleData({ sdk, provision, runner, spec, dataModel });
     Object.assign(result.created.records, sd.records);
   }

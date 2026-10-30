@@ -675,9 +675,51 @@ test('idempotent: an existing table is reused — no createTable, and only missi
 });
 
 test('idempotent: an existing relationship is skipped', async () => {
-  const { sdk, calls } = mockSdk({ existingTables: { new_customer: { entitySetName: 'new_customers', columns: [], relationships: [{ schemaName: 'new_customer_new_ticket', type: 'OneToMany', relatedEntity: 'new_ticket', relatedAttribute: 'new_customerid' }] } } });
+  // The table already has the spec's columns: a table that took a new column would first have its Date and Time behaviours read, which this double cannot answer.
+  const { sdk, calls } = mockSdk({ existingTables: { new_customer: { entitySetName: 'new_customers', columns: ['new_name', 'new_tier'], relationships: [{ schemaName: 'new_customer_new_ticket', type: 'OneToMany', relatedEntity: 'new_ticket', relatedAttribute: 'new_customerid' }] } } });
   await runSdkBuild(makeSpec(), { sdk, apply: true });
   assert.strictEqual(find(calls, 'createRelationship').length, 0, 'existing relationship not re-created');
+});
+
+// A run that seeds without the data-model phase never secured the spec's columns, so it reads, before the first row, whether each column
+// the spec declares isSecured: true on a seeded table is secured now — and writes no row when one is not, or when the read cannot say.
+function seedOnlySecured(answer) {
+  const base = makeSpec();
+  const spec = makeSpec({
+    entities: [{ ...base.entities[0], columns: [...base.entities[0].columns, { schemaName: 'new_secret', displayName: 'Secret', type: 'Text', isSecured: true }] }, base.entities[1]],
+    sampleData: { ...base.sampleData, new_customer: [{ new_name: 'Acme', new_tier: 'Pro', new_secret: 'x' }] },
+  });
+  const { sdk, calls } = mockSdk({ existingTables: { new_customer: { entitySetName: 'new_customers', columns: ['new_name', 'new_tier', 'new_secret'], relationships: [] } } });
+  const reads = [];
+  sdk.dataverse = { get: async (url) => { reads.push(url); return answer(url); } };
+  return { spec, sdk, calls, reads };
+}
+const IS_SECURED = /\/EntityDefinitions\(LogicalName='new_customer'\)\/Attributes\?\$select=LogicalName,IsSecured$/;
+
+test('seed only: a declared secured column that is not secured stops the run before any sample record is written', async () => {
+  const run = seedOnlySecured(() => ({ status: 200, body: { value: [{ LogicalName: 'new_name', IsSecured: false }, { LogicalName: 'new_secret', IsSecured: false }] } }));
+  await assert.rejects(runSdkBuild(run.spec, { sdk: run.sdk, apply: true, sampleData: true, phases: ['sample-data'] }),
+    (e) => e.code === 'COLUMN_NOT_SECURED' && /new_customer\.new_secret/.test(e.message) && e.phase === 'sample-data');
+  assert.strictEqual(find(run.calls, 'seedRecordGraph').length, 0, 'no record written');
+  assert.strictEqual(run.reads.filter((u) => IS_SECURED.test(u)).length, 1, 'one read of the seeded table');
+});
+
+test('seed only: an unreadable security state stops the run before any sample record is written', async () => {
+  const run = seedOnlySecured(() => ({ status: 503, body: {} }));
+  await assert.rejects(runSdkBuild(run.spec, { sdk: run.sdk, apply: true, sampleData: true, phases: ['sample-data'] }), (e) => e.code === 'COLUMN_SECURITY_UNREAD');
+  assert.strictEqual(find(run.calls, 'seedRecordGraph').length, 0);
+});
+
+test('seed only: a secured column seeds as before; a spec that secures no column reads nothing new', async () => {
+  const secured = seedOnlySecured(() => ({ status: 200, body: { value: [{ LogicalName: 'new_secret', IsSecured: true }] } }));
+  await runSdkBuild(secured.spec, { sdk: secured.sdk, apply: true, sampleData: true, phases: ['sample-data'] });
+  assert.ok(find(secured.calls, 'seedRecordGraph').length > 0, 'records seeded');
+  const { sdk, calls } = mockSdk({ existingTables: { new_customer: { entitySetName: 'new_customers', columns: ['new_name', 'new_tier'], relationships: [] } } });
+  const reads = [];
+  sdk.dataverse = { get: async (url) => { reads.push(url); return { status: 404, body: {} }; } };
+  await runSdkBuild(makeSpec(), { sdk, apply: true, sampleData: true, phases: ['sample-data'] });
+  assert.ok(find(calls, 'seedRecordGraph').length > 0);
+  assert.deepStrictEqual(reads.filter((u) => /IsSecured/.test(u)), []);
 });
 
 test('existing-table entity-set name comes from findTables (sample-data binding works)', async () => {
