@@ -372,6 +372,57 @@ test('the build step reads page ids from the build\'s Map, reports what it saved
   assert.deepStrictEqual(ok.saved.map((s) => s.key), [KEY]);
 });
 
+// Two forms, each embedding the same page; the second form's provision and publication can be made to fail. A saved form stays saved.
+function twoForms({ secondPush, queue } = {}) {
+  const SECOND = guid(2);
+  const first = fakeProvision(formArtifact([general(FIELD_ROWS())]));
+  const second = fakeProvision({ ...formArtifact([general(FIELD_ROWS())]), id: SECOND }, { onPush: secondPush });
+  const provision = Object.fromEntries(['fetchArtifact', 'addElement', 'updateElement', 'pushArtifact'].map((name) => [name, (...args) => (args[1] === SECOND ? second : first)[name](...args)]));
+  const spec = specWith({ genPages: [EMBED] });
+  spec.forms.push({ ...clone(spec.forms[0]), name: 'Second' });
+  const reports = [];
+  const ctx = { ...ctxFor(provision), formIdOf: async (f) => (f.name === 'Main' ? FORM : SECOND), report: (r) => reports.push(r) };
+  if (queue) ctx.publication = { queue };
+  return { first, second, spec, ctx, reports, SECOND_KEY: 'new_ticket|Main|Second#summary' };
+}
+
+test('a later form whose push fails does not lose an earlier form\'s acknowledged save: it is reported with its binding, and the failure propagates as it came', async () => {
+  const failures = [
+    ['a lost answer', () => { throw Object.assign(new Error('socket hang up'), { code: 'ECONNRESET' }); }, (e) => e.code === 'ECONNRESET'],
+    ['a refusal by value', () => ({ type: 'form', saved: false, error: { code: 'VERSION_CONFLICT', message: '412', statusCode: 412 } }), (e) => e.code === 'version-conflict'],
+  ];
+  for (const [what, secondPush, isFailure] of failures) {
+    const { first, spec, ctx, reports, SECOND_KEY } = twoForms({ secondPush });
+    let error;
+    await assert.rejects(runFormPageEmbeds(spec, ctx), (e) => { error = e; return isFailure(e); }, what);
+    assert.strictEqual(first.calls.filter((c) => c[0] === 'push').length, 1, `${what}: the first form was pushed`);
+    assert.strictEqual(reports.length, 1, `${what}: what was saved is reported before the failure propagates`);
+    const [report] = reports;
+    assert.strictEqual(error.embeds, report, `${what}: the failure carries the same result`);
+    assert.deepStrictEqual(report.saved.map((s) => [s.key, s.action]), [[KEY, 'add']], `${what}: the first form's save`);
+    assert.deepStrictEqual(report.managedBindings.map((b) => [b.key, b.formId, b.origin]), [[KEY, FORM, 'created']], `${what}: and its binding`);
+    assert.deepStrictEqual(report.pendingPublish, [{ kind: 'form', id: FORM }]);
+    assert.deepStrictEqual(report.unknown.map((u) => [u.key, u.reason]), [[SECOND_KEY, 'form-push-failed']], `${what}: the failed form's embed is not claimed saved`);
+    assert.deepStrictEqual(ctx.queued.map((q) => q.id), [FORM], `${what}: only the saved form owes a publish`);
+  }
+});
+
+test('a publication queue that fails after an acknowledged push keeps the save: it is reported with its binding, and the failure propagates', async () => {
+  const boom = Object.assign(new Error('queue unavailable'), { code: 'QUEUE_DOWN' });
+  const { spec, ctx, reports } = twoForms({ queue: () => { throw boom; } });
+  await assert.rejects(runFormPageEmbeds(spec, ctx), (e) => e === boom && e.embeds !== undefined && e.embeds === reports[0], 'the queue failure propagates, carrying what was saved');
+  assert.deepStrictEqual([reports.length, reports[0].saved.map((s) => s.key), reports[0].managedBindings.map((b) => b.key), reports[0].pendingPublish], [1, [KEY], [KEY], [{ kind: 'form', id: FORM }]]);
+});
+
+test('every form saved: one report, the same result shape as before, and no failure fields', async () => {
+  const { spec, ctx, reports, SECOND_KEY } = twoForms();
+  const result = await runFormPageEmbeds(spec, ctx);
+  assert.strictEqual(reports.length, 1);
+  assert.strictEqual(reports[0], result);
+  assert.deepStrictEqual(Object.keys(result), ['saved', 'unchanged', 'pendingPublish', 'refused', 'unknown', 'managedBindings']);
+  assert.deepStrictEqual([result.saved.map((s) => s.key), result.unknown, result.refused, result.pendingPublish.length, ctx.queued.length], [[KEY, SECOND_KEY], [], [], 2, 2]);
+});
+
 test('REAL BUNDLE: the embed round-trips through the SDK — the port\'s ids persisted, spacer rows kept, retarget in place, missing page refused before any write', async () => {
   const pagesInEnv = new Set([PAGE]);
   const pageChecks = [];

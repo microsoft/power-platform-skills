@@ -368,11 +368,18 @@ async function applyFormPageEmbeds(plan, ctx) {
         });
       return ran ? ran.result : undefined;
     };
-    const pushed = await level(0);
-    if (!sent.pushed) continue;
-    const { requireSuccessfulPush } = require('./entity-provision.js');
-    requireSuccessfulPush(pushed, `form ${ops[0].target.formKey} page embeds`, ctx.warn);
-    if (ctx.publication && typeof ctx.publication.queue === 'function') await ctx.publication.queue({ kind: 'form', id: formId, table: ops[0].target.table, label: `form ${ops[0].target.formKey} page embeds` });
+    // A form whose push failed (thrown, or refused by value) is not saved, and the forms before it were: the failure carries the result so far,
+    // with this form's embeds as unknown, so the caller reports the earlier saves and records their bindings before it stops.
+    try {
+      const pushed = await level(0);
+      if (!sent.pushed) continue;
+      const { requireSuccessfulPush } = require('./entity-provision.js');
+      requireSuccessfulPush(pushed, `form ${ops[0].target.formKey} page embeds`, ctx.warn);
+    } catch (error) {
+      for (const op of [...updates, ...adds]) result.unknown.push({ key: op.key, kind: op.kind, reason: 'form-push-failed' });
+      throw withEmbeds(error, result);
+    }
+    // Saved: recorded before the publish is queued, so a queue that fails cannot take back a save the push acknowledged.
     result.pendingPublish.push({ kind: 'form', id: formId });
     for (const op of updates) {
       result.saved.push({ key: op.key, kind: op.kind, action: op.action, id: op.controlId || null });
@@ -384,8 +391,22 @@ async function applyFormPageEmbeds(plan, ctx) {
       result.saved.push({ key: op.key, kind: op.kind, action: op.action, id: got.controlId });
       result.managedBindings.push(bindingOf(op, got, 'created'));
     }
+    if (ctx.publication && typeof ctx.publication.queue === 'function') {
+      try {
+        await ctx.publication.queue({ kind: 'form', id: formId, table: ops[0].target.table, label: `form ${ops[0].target.formKey} page embeds` });
+      } catch (error) {
+        throw withEmbeds(error, result);
+      }
+    }
   }
   return result;
+}
+
+// The step's result so far, on the failure that stopped it (`embeds`, as requireEmbedsApplied's halt carries it). A failure that already
+// carries one, or cannot carry one (not an object, frozen), is left as it is: it propagates either way.
+function withEmbeds(error, result) {
+  if (error && typeof error === 'object' && error.embeds === undefined && Object.isExtensible(error)) error.embeds = result;
+  return error;
 }
 
 // A requested embed that was refused or whose outcome is unknown leaves the build incomplete: the maker asked for it. The
@@ -421,7 +442,14 @@ async function runFormPageEmbeds(spec, ctx = {}) {
   if (!hasFormPageEmbeds(spec)) return null;
   const pageIdOf = typeof ctx.pageIdOf === 'function' ? ctx.pageIdOf : (ref) => pageIdFrom(ctx.keyToId, ref);
   const plan = await planFormPageEmbeds(spec, { ...ctx, pageIdOf });
-  const result = await applyFormPageEmbeds(plan, ctx);
+  let result;
+  try {
+    result = await applyFormPageEmbeds(plan, ctx);
+  } catch (error) {
+    // A form that failed after another was saved: the earlier save is reported (and its bindings recorded) before the failure propagates.
+    if (error && error.embeds && typeof ctx.report === 'function') await ctx.report(error.embeds);
+    throw error;
+  }
   if (typeof ctx.report === 'function') await ctx.report(result);
   return requireEmbedsApplied(result, ctx.phase || 'pages');
 }
