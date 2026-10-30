@@ -290,6 +290,39 @@
       "expectations": [
         "author: artifact-name warnings use per-table and form-type scope"
       ]
+    },
+    {
+      "id": 11,
+      "tier": "full",
+      "spec": "app-spec.json",
+      "prompt": "Shipments carry a Region from a shared choice whose numbers an integration depends on (North 1, South 2, Export 10), a bilingual Priority whose numbers must not change between environments (Low 1, High 5), and a Stage whose Held option must stay 100000005. The High Priority view filters on Priority 5.",
+      "expect": { "tables": ["cnt_shipment"], "relationships": [], "views": ["High Priority"], "charts": [], "pages": [],
+        "optionValues": { "cnt_region": [1, 2, 10], "cnt_shipment.cnt_priority": [1, 5], "cnt_shipment.cnt_stage": [100000005] } },
+      "expectations": [
+        "author: option values the maker depends on are written as { value, label } and the spec asks for 2.21.0"
+      ]
+    },
+    {
+      "id": 12,
+      "tier": "full",
+      "spec": "app-spec.json",
+      "prompt": "Contracts have a renewal date and a signed-on date that are calendar days, a site kickoff time that must read the same clock everywhere, a last-contact time shown in each user's own time zone, and a reviewed timestamp.",
+      "expect": { "tables": ["cnt_contract"], "relationships": [], "views": ["Renewals"], "charts": [], "pages": [],
+        "dateTimeBehavior": { "cnt_contract.cnt_renewaldate": "DateOnly", "cnt_contract.cnt_signedon": "DateOnly", "cnt_contract.cnt_kickoff": "TimeZoneIndependent", "cnt_contract.cnt_lastcontact": "UserLocal", "cnt_contract.cnt_reviewed": "UserLocal" } },
+      "expectations": [
+        "author: calendar days use DateOnly, a same-clock time uses TimeZoneIndependent, a per-user time is UserLocal or omitted"
+      ]
+    },
+    {
+      "id": 13,
+      "tier": "full",
+      "spec": "app-spec.json",
+      "prompt": "Employee salary and medical notes are confidential: the HR team may read and update them; Payroll may read salary but nobody is named for it yet.",
+      "expect": { "tables": ["cnt_employee"], "relationships": [], "views": ["Directory"], "charts": [], "pages": [],
+        "fieldSecurity": { "secured": ["cnt_employee.cnt_salary", "cnt_employee.cnt_medicalnotes"], "assigned": ["hr"], "unassigned": ["payroll"] } },
+      "expectations": [
+        "author: confidential columns are isSecured with explicit profiles; assignees are named, never inferred, and an unassigned profile says so"
+      ]
     }
   ]
 }

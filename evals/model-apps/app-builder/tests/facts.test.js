@@ -827,3 +827,24 @@ test('the app-builder fixture roster and required assertion texts match the regi
   typo.evals.find((e) => e.id === 7).expectations.push('verify: an unregistered required assertion');
   assert.throws(() => check(fixtures, typo), /unregistered assertion/);
 });
+
+test('2.21.0 authoring expectations pass on their fixtures and fail when the spec drifts from the prompt', () => {
+  const fixtures = loadFixtures(path.join(__dirname, '..', 'fixtures'));
+  const grade = (id, mutate) => {
+    const ev = evalsManifest.evals.find((e) => e.id === id);
+    const spec = structuredClone(fixtures.find((f) => f.id === id).spec);
+    if (mutate) mutate(spec);
+    return ASSERTIONS.get(ev.expectations[0])({ spec, eval: ev, facts: {} }).status;
+  };
+  for (const id of [11, 12, 13]) assert.strictEqual(grade(id), 'pass', `eval ${id}`);
+  const col = (spec, name) => spec.entities[0].columns.find((c) => c.schemaName === name);
+  assert.strictEqual(grade(11, (s) => { s.minimumPluginVersion = '2.20.6'; }), 'fail');
+  assert.strictEqual(grade(11, (s) => { s.globalChoices[0].options[2] = 'Export'; }), 'fail');
+  assert.strictEqual(grade(11, (s) => { col(s, 'cnt_stage').options[1] = 'Held'; }), 'fail');
+  assert.strictEqual(grade(12, (s) => { col(s, 'cnt_renewaldate').dateTimeBehavior = 'UserLocal'; }), 'fail');
+  assert.strictEqual(grade(12, (s) => { col(s, 'cnt_kickoff').dateTimeBehavior = 'DateOnly'; }), 'fail');
+  assert.strictEqual(grade(12, (s) => { delete col(s, 'cnt_lastcontact').dateTimeBehavior; }), 'pass');
+  assert.strictEqual(grade(13, (s) => { delete col(s, 'cnt_medicalnotes').isSecured; }), 'fail');
+  assert.strictEqual(grade(13, (s) => { s.fieldSecurityProfiles[1].assignTo = { teams: ['22222222-2222-4222-8222-222222222222'] }; }), 'fail');
+  assert.strictEqual(grade(13, (s) => { s.fieldSecurityProfiles[0].permissions.pop(); }), 'fail');
+});

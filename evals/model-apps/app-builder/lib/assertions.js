@@ -78,7 +78,9 @@ ASSERTIONS.set('plan: every planned item targets a known engine phase', ({ facts
 
 ASSERTIONS.set('security: the plan authors exactly one role per declared persona', ({ facts, spec }) => {
   const declared = (spec.personas || []).length;
-  const planned = (facts.plan.byPhase && facts.plan.byPhase.security) || 0;
+  // Count role items only: the security phase also plans field security profiles (and role grants),
+  // which are not persona roles. Plan labels look like `security\tsecurity role "Support Agent" (2 jobs)`.
+  const planned = (facts.plan.labels || []).filter((l) => l.startsWith('security\tsecurity role "')).length;
   return declared === planned ? PASS : fail(`declared ${declared} persona(s) but planned ${planned} security role item(s)`);
 });
 
@@ -804,6 +806,79 @@ ASSERTIONS.set('round-trip: a download recovers no column the spec never authore
     const system = r.systemAttributes.filter((c) => r.recoveredColumns.includes(c));
     if (system.length) return fail(`${r.entity}: download recovered stock attribute(s) ${system.join(', ')}`);
   }
+  return PASS;
+});
+
+// per-eval expectations (evals 11-13)  2.21.0 schema authoring, graded against independent
+// `expect` blocks so a fixture that drifts from its prompt fails rather than grading itself.
+
+// Plugin versions compare numerically per part ("2.21.0" > "2.9.9").
+const versionAtLeast = (v, min) => {
+  const a = String(v || '0').split('.').map(Number); const b = min.split('.').map(Number);
+  for (let i = 0; i < b.length; i++) { if ((a[i] || 0) !== b[i]) return (a[i] || 0) > b[i]; }
+  return true;
+};
+
+// expect.optionValues keys are a global choice name ("cnt_region") or "<table>.<column>" for an
+// inline choice; each listed value must be written as an explicit { value, label } option.
+ASSERTIONS.set('author: option values the maker depends on are written as { value, label } and the spec asks for 2.21.0', ({ spec, eval: ev }) => {
+  const expected = ev.expect && ev.expect.optionValues;
+  if (!expected || !Object.keys(expected).length) return fail('no independent option-value expectations');
+  if (!versionAtLeast(spec.minimumPluginVersion, '2.21.0')) return fail(`minimumPluginVersion ${spec.minimumPluginVersion || '(none)'} is below 2.21.0`);
+  for (const [key, values] of Object.entries(expected)) {
+    let options;
+    if (key.includes('.')) {
+      const [table, column] = key.split('.');
+      const ent = (spec.entities || []).find((e) => e.schemaName === table);
+      const col = ent && (ent.columns || []).find((c) => c.schemaName === column);
+      options = col && col.options;
+    } else {
+      const gc = (spec.globalChoices || []).find((g) => g.name === key);
+      options = gc && gc.options;
+    }
+    if (!Array.isArray(options)) return fail(`${key}: no options declared`);
+    const written = options.filter((o) => o && typeof o === 'object' && Number.isInteger(o.value) && o.label).map((o) => o.value);
+    const missing = values.filter((v) => !written.includes(v));
+    if (missing.length) return fail(`${key}: value(s) ${missing.join(', ')} not written as { value, label }`);
+  }
+  return PASS;
+});
+
+// expect.dateTimeBehavior maps "<table>.<column>" to the behaviour the prompt implies; "UserLocal"
+// also accepts an omitted behaviour, because UserLocal is the platform default.
+ASSERTIONS.set('author: calendar days use DateOnly, a same-clock time uses TimeZoneIndependent, a per-user time is UserLocal or omitted', ({ spec, eval: ev }) => {
+  const expected = ev.expect && ev.expect.dateTimeBehavior;
+  if (!expected || !Object.keys(expected).length) return fail('no independent date behaviour expectations');
+  for (const [key, want] of Object.entries(expected)) {
+    const [table, column] = key.split('.');
+    const ent = (spec.entities || []).find((e) => e.schemaName === table);
+    const col = ent && (ent.columns || []).find((c) => c.schemaName === column);
+    if (!col) return fail(`${key}: column not declared`);
+    if (col.type !== 'DateTime') return fail(`${key}: type ${col.type}, expected DateTime`);
+    const got = col.dateTimeBehavior;
+    const ok = want === 'UserLocal' ? (got === undefined || got === 'UserLocal') : got === want;
+    if (!ok) return fail(`${key}: dateTimeBehavior ${got === undefined ? '(omitted)' : got}, expected ${want}`);
+  }
+  return PASS;
+});
+
+// expect.fieldSecurity = { secured: ["<table>.<column>"], assigned: [profile keys], unassigned: [profile keys] }.
+// The secured set must match exactly, every secured column needs a profile permission, and only
+// the profiles the prompt names someone for may carry an assignment.
+ASSERTIONS.set('author: confidential columns are isSecured with explicit profiles; assignees are named, never inferred, and an unassigned profile says so', ({ spec, eval: ev }) => {
+  const expected = ev.expect && ev.expect.fieldSecurity;
+  if (!expected) return fail('no independent field security expectations');
+  const secured = (spec.entities || []).flatMap((e) => (e.columns || []).filter((c) => c.isSecured === true).map((c) => `${e.schemaName}.${c.schemaName}`));
+  if (!eq(sorted(secured), sorted(expected.secured))) return fail(`secured columns [${sorted(secured).join(', ')}], expected [${sorted(expected.secured).join(', ')}]`);
+  const profiles = spec.fieldSecurityProfiles || [];
+  const covered = new Set(profiles.flatMap((p) => (p.permissions || []).map((x) => `${x.table}.${x.column}`)));
+  const uncovered = secured.filter((c) => !covered.has(c));
+  if (uncovered.length) return fail(`secured column(s) with no profile permission: ${uncovered.join(', ')}`);
+  const hasAssignee = (p) => !!(p.assignTo && ['teams', 'users'].some((k) => Array.isArray(p.assignTo[k]) && p.assignTo[k].length));
+  const assigned = profiles.filter(hasAssignee).map((p) => p.key);
+  const unassigned = profiles.filter((p) => !hasAssignee(p)).map((p) => p.key);
+  if (!eq(sorted(assigned), sorted(expected.assigned))) return fail(`assigned profiles [${sorted(assigned).join(', ')}], expected [${sorted(expected.assigned).join(', ')}]`);
+  if (!eq(sorted(unassigned), sorted(expected.unassigned))) return fail(`unassigned profiles [${sorted(unassigned).join(', ')}], expected [${sorted(expected.unassigned).join(', ')}]`);
   return PASS;
 });
 

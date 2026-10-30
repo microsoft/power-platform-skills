@@ -57,6 +57,9 @@ confined to the fixture directory, including when the fixtures root is a junctio
 | 8 | `8-page-roundtrip` | PAC-stored escaped own name differs from navigation title; actual downloaded files preserve a valid model, keep an absent model absent, and omit an invalid one with loss diagnostics. |
 | 9 | `9-changed-only` | Baseline and edited `.tsx` bytes: only `overview` is a page-content fast change; adding a column is full with a data-model reason; identical spec and bytes are noop. Real hash, snapshot and classifier helpers run offline. |
 | 10 | `10-name-scope` | The same form/view/chart names on two tables do not collide. A straight double quote warns without a rename; apostrophe and typographic-quote controls do not. Same-table duplicates and missing/spurious warnings are negative unit probes, not red corpus fixtures. |
+| 11 | `11-portable-options-labels` | Option values a maker depends on: a global choice with values 1, 2, 10, sparse and mixed inline options, sample data by label and a view filtered by number. The spec asks for 2.21.0. |
+| 12 | `12-date-behavior` | Date and Time behaviours: DateOnly with and without a date format, TimeZoneIndependent, explicit UserLocal and an omitted behaviour. |
+| 13 | `13-secured-profile-principals` | Secured Money and Memo columns with explicit field security profiles: one assigned to a named team, one with no assignment, plus sample data. |
 
 > **Fixture 2 note:** `appShell.subAreas[].page` references use the page's **key** (e.g. `"overview"`), not its display name (`"Overview"`). The v2 validator requires keys, and the linter accepts valid key references; `key === name` is neither required nor used by this fixture.
 
@@ -65,7 +68,7 @@ confined to the fixture directory, including when the fixtures root is a junctio
 - `skill_name` — identifies this suite.
 - `eval_instructions` — description used by eval runners.
 - `common_stage_assertions` — run for every fixture; registered in `lib/assertions.js`.
-- `evals[].expect` — independent per-eval counts/names plus form-edit, rejected-model, changed-only and name-scope contracts.
+- `evals[].expect` — independent per-eval counts/names plus form-edit, rejected-model, changed-only, name-scope, option-value, date-behaviour and field-security contracts.
 - `evals[].expectations` — additional per-eval assertion texts (can be empty).
 - `evals[].tier` — `smoke` (fast subset) or `full`.
 
