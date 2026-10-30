@@ -72,6 +72,8 @@ const SKILL_SDK_SURFACE = [
   // package by staging it (`getDeploymentSettingsTemplate`); `import` applies the settings file in the import (`importSolution`).
   'exportSolution',
   'fetchArtifact',
+  // Quick Find resolves the table's one default Quick Find view from the SDK's own list (lib/quick-find.js).
+  'fetchArtifactList',
   'fetchEntityMetadata',
   // `scripts/solutions.js inspect --include-artifacts` lists what the SDK can read of a solution (lib/solution-inventory.js).
   'fetchSolution',
