@@ -38,7 +38,6 @@
 // only when every send it made is accounted for (see `open` in create and the loop in update).
 const crypto = require('node:crypto');
 const fs = require('node:fs');
-const path = require('node:path');
 const { isDeepStrictEqual } = require('node:util');
 const { genPageSubArea, genPageSubAreaId } = require('./genpage-subarea.js');
 const { guardWorkspaceStorage } = require('./workspace-storage-guard.js');
@@ -56,7 +55,6 @@ const { readTargetSolution, readPageComponentType, pageComponent } = require('./
 const { asPageNestingRefusal, guardPageNesting } = require('./page-nesting.js');
 const { resolveTypescriptProvider } = require('./typescript-provider.js');
 const { assertPageDeletionSafe } = require('./page-reference-guard.js');
-const { writeFileSafe } = require('./safe-fs.js');
 
 const GUID_RE = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
 
@@ -245,118 +243,6 @@ function turnOf(args, name) {
   const reply = args.agentMessage === undefined || args.agentMessage === null ? DEFAULT_AGENT_MESSAGE : String(args.agentMessage);
   return { prompt, ...(reply ? { agentMessage: reply } : {}) };
 }
-
-// A turn identity the CALLER holds (`turnId`): one per complete intended edit, kept by the caller before it sends and given again when the same request is retried, so a send a
-// later run repeats addresses the same two message rows as the first (the SDK derives their ids from it) and the conversation holds the turn once. The SDK takes a GUID in any
-// letter case, with or without braces, and keeps it normalized (GenPageAdapter `normalizeGuid`); it is checked and normalized here too, BEFORE anything is read or written, so a
-// bad one is refused with nothing changed and a result names the form the SDK was given. An empty string is refused rather than read as "none": a caller that meant to pass an
-// identity and lost it would otherwise get a fresh one without being told.
-const TURN_GUID = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}';
-const TURN_ID_RE = new RegExp(`^(?:\\{(${TURN_GUID})\\}|(${TURN_GUID}))$`, 'i');
-function turnIdOf(value) {
-  if (value === undefined || value === null) return undefined;
-  const m = typeof value === 'string' ? TURN_ID_RE.exec(value.trim()) : null;
-  if (!m) {
-    throw genpageError(`${JSON.stringify(value)} is not a turn id: give a GUID (for example 6f1c2a4e-9b3d-47a1-b85c-0e2f7d914a63), or leave it out and a new one is made. Nothing was changed.`, { code: 'GENPAGE_TURN_ID_INVALID', outcome: 'nothing' });
-  }
-  return (m[1] || m[2]).toLowerCase();
-}
-
-// What a turn identity is FOR: the page, the content the request asks it to hold (contentFingerprint: source, name, data sources, model, bindings) and the turn's two messages,
-// as the caller gave them. A caller keeps it next to the `turnId` (a result's `turn.intent`) and gives both again on a retry; an identity reused for a request that asks for anything
-// else is refused before anything is written (`GENPAGE_TURN_ID_REUSED`). The SDK refuses a reused identity only when the MESSAGES differ from the ones it recorded under it
-// (GENPAGE_TURN_CONFLICT, at the push); the content the turn carries is only this check's. The approval of a change and the page's version tokens are not part of it: they are
-// the caller's and the SDK's, and a retry that is otherwise the same request is the same intent.
-function turnIntentOf(pageId, fields, args) {
-  const message = (value) => (value === undefined || value === null ? null : String(value));
-  return sha256(`genpage-turn-intent/1\n${JSON.stringify({ pageId: pageId ? String(pageId).toLowerCase() : null, content: contentFingerprint(fields), prompt: message(args.prompt), agentMessage: message(args.agentMessage) })}`);
-}
-function assertTurnIntent(args, turnId, intent) {
-  if (args.turnIntent === undefined || args.turnIntent === null) return;
-  if (turnId === undefined) throw genpageError('a turn intent was given without the turn id it was kept with. Nothing was changed.', { code: 'GENPAGE_TURN_ID_INVALID', outcome: 'nothing' });
-  if (String(args.turnIntent).toLowerCase() !== intent) {
-    throw genpageError(`turn ${turnId} was kept for another request — another page, other content or other messages — and an identity is used for one intended edit only. Nothing was changed; make a new turn id for this request.`, { code: 'GENPAGE_TURN_ID_REUSED', outcome: 'nothing', turnId });
-  }
-}
-
-// A caller's turn id is BOUND to the one request it was made for, before anything is sent under it (recorded before the send; the same id with another intent is refused). The check above
-// only compares the intent a caller hands back with the one this request has, so a caller that leaves `turnIntent` out — or hands back another request's — is not held to anything by it,
-// and the SDK's own check covers the turn's MESSAGES only: the same id with the same prompt and other source would be written and published. So the id is recorded with its page and intent
-// in a durable store the caller owns (`deps.turnBindings`), and every later use of it — by this backend, another process, or a run after a crash — is held to that record whatever the
-// caller passes. The record is not a lock or a compare-and-set on the page (the SDK takes the id as correlation only, and the platform has no turn CAS); it only stops one id from carrying
-// two edits. The store's contract:
-//   get(turnId)          -> the record the id is bound to, or null when it is free
-//   bind(turnId, { pageId, intent }) -> the record the id is bound to afterwards: the one given when the id was free, the EARLIER one when it was not (never overwritten)
-// With no store, a caller's turn id is refused before anything is read: an id that cannot be recorded cannot be held to one request. Without a turn id nothing changes — the
-// default identity, a fresh one per update made here, needs no store.
-function turnStoreOf(store, turnId) {
-  if (turnId === undefined) return null;
-  if (!store || typeof store.get !== 'function' || typeof store.bind !== 'function') {
-    throw genpageError(`turn ${turnId} cannot be held to one request here: no turn record store was given, and a turn id that is not recorded before the send could later carry another edit. Nothing was changed; leave the turn id out for a new identity, or give the store.`, { code: 'GENPAGE_TURN_STATE_UNAVAILABLE', outcome: 'nothing', turnId });
-  }
-  return store;
-}
-const turnStateError = (turnId, what, error) => genpageError(`the record of turn ${turnId} could not be ${what} (${messageOf(error)}). Nothing was changed; run the same request again once the record can be ${what}.`, { code: 'GENPAGE_TURN_STATE_UNAVAILABLE', cause: error, outcome: 'nothing', turnId });
-async function heldTurnOf(store, turnId) {
-  try {
-    return (await store.get(turnId)) || null;
-  } catch (error) {
-    throw turnStateError(turnId, 'read', error);
-  }
-}
-async function bindTurn(store, turnId, pageId, intent) {
-  let held;
-  try {
-    held = await store.bind(turnId, { pageId, intent });
-  } catch (error) {
-    throw turnStateError(turnId, 'written', error);
-  }
-  const heldPage = held && String(held.pageId).toLowerCase();
-  if (!held || heldPage !== pageId || String(held.intent).toLowerCase() !== intent) {
-    throw genpageError(`turn ${turnId} is recorded for another request — ${held && heldPage !== pageId ? `page ${heldPage}` : 'other content or other messages'} — and an identity is used for one intended edit only. Nothing was changed; make a new turn id for this request.`, { code: 'GENPAGE_TURN_ID_REUSED', outcome: 'nothing', turnId });
-  }
-}
-
-// The file store of turn records: one `<turnId>.json` per id under `folder`, each made exclusively, so two processes binding one id at once both end up holding the FIRST record:
-//   {"formatVersion":1,"turnId":"6f1c2a4e-9b3d-47a1-b85c-0e2f7d914a63","pageId":"1a2b3c4d-…","intent":"<sha-256 hex>"}
-// The record goes through the plugin's guarded writer (safe-fs `writeFileSafe`, `exclusive`): written whole to a private sibling and hard-linked to its name — a link to a name that
-// exists fails with EEXIST (`reason: 'exists'`) — so a reader never sees half a record, and the text is cleaned of tokens like every other file this token-holding process writes. A file
-// system without hard links (some network shares and FAT volumes) cannot keep the "first record wins" promise, so the writer refuses (`reason: 'no-hard-links'`) and the bind fails —
-// which the caller reports as GENPAGE_TURN_STATE_UNAVAILABLE and changes nothing — rather than fall back to a create that a crash could leave half written.
-const TURN_RECORD_FORMAT = 1;
-function makeTurnBindingStore(folder, deps = {}) {
-  const fsx = deps.fs || fs;
-  const fileOf = (turnId) => path.join(folder, `${turnId}.json`);
-  const read = (turnId) => {
-    let text;
-    try {
-      text = fsx.readFileSync(fileOf(turnId), 'utf8');
-    } catch (error) {
-      if (error && error.code === 'ENOENT') return null;
-      throw error;
-    }
-    const record = JSON.parse(text);
-    if (!record || record.formatVersion !== TURN_RECORD_FORMAT || record.turnId !== turnId || typeof record.pageId !== 'string' || typeof record.intent !== 'string') {
-      throw new Error(`${fileOf(turnId)} is not a turn record this tool wrote`);
-    }
-    return record;
-  };
-  return {
-    get: read,
-    bind(turnId, { pageId, intent }) {
-      const text = `${JSON.stringify({ formatVersion: TURN_RECORD_FORMAT, turnId, pageId, intent })}\n`;
-      fsx.mkdirSync(folder, { recursive: true });
-      try {
-        writeFileSafe(fileOf(turnId), text, { exclusive: true, fs: fsx });
-      } catch (error) {
-        if (!(error && error.reason === 'exists')) throw error;
-      }
-      return read(turnId);
-    },
-  };
-}
-// An update that a create makes under its own turn (the create found its page holding an earlier create's content) is the SAME request, already bound by the create: it is not bound again.
-const TURN_BOUND = Symbol('turn already bound');
 
 // A DRAFT (`publish: false`; default true): the page or the app's navigation is saved and NOT published — no PublishXml is sent — so a maker can review it before it goes live. Only
 // `true`, `false` or nothing is taken: anything else is refused before anything is read, so a string "false" never publishes by accident. A draft's `publish` is `skipped` with
@@ -721,8 +607,6 @@ function makeGenpageSdk(env, deps = {}) {
   const newId = deps.newId || (() => crypto.randomUUID());
   // The identity of an update's turn (see update): minted once per update, and kept across the settling reads of that update.
   const newTurnId = deps.newTurnId || (() => crypto.randomUUID());
-  // Where a caller's turn ids are recorded before a send (see turnStoreOf); needed only when a caller gives one.
-  const turnBindings = deps.turnBindings;
   // The workspace folders made here, each with the guard its SDK works through (workspace-storage-guard.js), removed by release().
   const made = [];
   const byLanguage = new Map();
@@ -1079,27 +963,11 @@ function makeGenpageSdk(env, deps = {}) {
       const connectorBindings = bindingOf(args.connectorBindings, 'connectorBindings');
       const actionBindings = bindingOf(args.actionBindings, 'actionBindings');
       const draft = draftOf(args);
-      const turnId = turnIdOf(args.turnId);
-      const turns = turnStoreOf(turnBindings, turnId);
-      const turn = { ...turnOf(args, name), ...(turnId ? { id: turnId } : {}) };
-      let given = args.pageId === undefined || args.pageId === null ? undefined : String(args.pageId);
+      const turn = turnOf(args, name);
+      const given = args.pageId === undefined || args.pageId === null ? undefined : String(args.pageId);
       if (given !== undefined && !GUID_RE.test(given)) throw genpageError(`'${given}' is not a page id`, { code: 'GENPAGE_ID_INVALID', outcome: 'nothing' });
-      // A turn id already recorded names the page its create was sent under: a retry that lost the first answer — and with it the id this backend made — resumes THAT create (it reads
-      // the page before sending again) instead of making a second page under a new id.
-      if (turns && given === undefined) {
-        const held = await heldTurnOf(turns, turnId);
-        if (held) {
-          if (!GUID_RE.test(String(held.pageId))) throw turnStateError(turnId, 'read', new Error(`it names '${held.pageId}', which is not a page id`));
-          given = String(held.pageId);
-        }
-      }
-      const id = (given === undefined ? String(newId()) : given).toLowerCase();
-      // The intent names the page id the create is SENT under — the one made here when the caller gave none — so a retry that gives back the id and intent a result named is the same intent.
-      const intent = turnIntentOf(id, { source, name, dataSources, model: args.model ? String(args.model) : undefined, connectorBindings, actionBindings }, args);
-      assertTurnIntent(args, turnId, intent);
-      if (turns) await bindTurn(turns, turnId, id, intent);
-      const turnOut = turnId ? { turn: { id: turnId, intent } } : {};
       const sdk = await getSdk();
+      const id = (given === undefined ? String(newId()) : given).toLowerCase();
       const who = JSON.stringify(name);
       const model = args.model ? String(args.model) : undefined;
       // What is sent under the id, by which a page found there is recognised (holdsWhatWasSent): this create's, and those of the creates an earlier call sent under it.
@@ -1180,13 +1048,13 @@ function makeGenpageSdk(env, deps = {}) {
             const differing = edits.map((e) => e.key);
             let updated;
             try {
-              updated = await api.update(id, { name, source, dataSources, model, connectorBindings, actionBindings, prompt: args.prompt, agentMessage: args.agentMessage, caller: args.caller, appId: args.appId, sourceFile: args.sourceFile, runtimeEvidence: args.runtimeEvidence, throttle: budget, ...(draft ? { publish: false } : {}), ...(turnId ? { turnId, [TURN_BOUND]: true } : {}) });
+              updated = await api.update(id, { name, source, dataSources, model, connectorBindings, actionBindings, prompt: args.prompt, agentMessage: args.agentMessage, caller: args.caller, appId: args.appId, sourceFile: args.sourceFile, runtimeEvidence: args.runtimeEvidence, throttle: budget, ...(draft ? { publish: false } : {}) });
             } catch (error) {
               // The page exists and is not what this create asks for: whatever the update's own outcome was, this create is not "nothing" — the page is there.
               throw genpageError(`generative page ${who} (${id}) was written by a create under this id, but it holds the ${differing.join(', ')} of an earlier one, and bringing it to what this create asks for failed: ${messageOf(error)}. It was not published as it is.`, { code: error && error.code, cause: error, outcome: 'unknown', pageId: id });
             }
             return {
-              pageId: id, name, publish: updated.publish, ...(draft ? { saved: true, pendingPublish: true, draftFingerprint: fingerprint } : { fingerprint }), ...(updated.runtimeSha256 ? { runtimeSha256: updated.runtimeSha256 } : {}), ...turnOut,
+              pageId: id, name, publish: updated.publish, ...(draft ? { saved: true, pendingPublish: true, draftFingerprint: fingerprint } : { fingerprint }), ...(updated.runtimeSha256 ? { runtimeSha256: updated.runtimeSha256 } : {}),
               warnings: [...warnings, `the answer to creating page ${who} was lost (${said}), but reading the id it was created under (${id}) showed a page that an earlier create under this id had written, differing from this create in ${differing.join(', ')} — so it was not sent again, and was updated to what this create asks for instead of being published as it was`, ...(updated.warnings || [])],
             };
           }
@@ -1212,11 +1080,11 @@ function makeGenpageSdk(env, deps = {}) {
       }
 
       if (draft) {
-        return { pageId: id, name, publish: draftPublish(), saved: true, pendingPublish: true, draftFingerprint: fingerprint, ...turnOut, warnings: [...warnings, ...warningsOf(pushed, draftPublish(), `page ${label(name, id)}`)] };
+        return { pageId: id, name, publish: draftPublish(), saved: true, pendingPublish: true, draftFingerprint: fingerprint, warnings: [...warnings, ...warningsOf(pushed, draftPublish(), `page ${label(name, id)}`)] };
       }
       const runtimeSha256 = await runtimeEvidenceOf(sdk, id, args);
       const published = await publish(sdk, 'genPage', id, { verify: true });
-      return { pageId: id, name, publish: published, fingerprint, ...turnOut, ...(runtimeSha256 ? { runtimeSha256 } : {}), warnings: [...warnings, ...warningsOf(pushed, published, `page ${label(name, id)}`)] };
+      return { pageId: id, name, publish: published, fingerprint, ...(runtimeSha256 ? { runtimeSha256 } : {}), warnings: [...warnings, ...warningsOf(pushed, published, `page ${label(name, id)}`)] };
     },
 
     // UPDATE: read the page, write only what differs from it, record the turn, publish, and prove the published copy.
@@ -1250,11 +1118,6 @@ function makeGenpageSdk(env, deps = {}) {
       const id = String(pageId).toLowerCase();
       const fields = contentFieldsOf(args);
       const draft = draftOf(args);
-      const turnId = turnIdOf(args.turnId);
-      const intent = turnIntentOf(id, fields, args);
-      assertTurnIntent(args, turnId, intent);
-      if (turnId !== undefined && args[TURN_BOUND] !== true) await bindTurn(turnStoreOf(turnBindings, turnId), turnId, id, intent);
-      const turnOut = turnId ? { turn: { id: turnId, intent } } : {};
       const sdk = await getSdk();
       const declinedBefore = declinedCount(args);
       const found = await readServer(sdk, id);
@@ -1278,7 +1141,7 @@ function makeGenpageSdk(env, deps = {}) {
       // with the server's (`fetchArtifact` with `overwrite`): the resend would then be a new turn, and both would land.
       // `newTurn.id` is documented as the SDK's to mint ("do not author it"); what the SDK checks, in the vendored GenPageAdapter's
       // `validate` and `normalize`, is only that it is a GUID — it keeps one it is given, and derives the message ids from its digits.
-      const turn = { ...turnOf({ prompt: args.prompt, agentMessage: args.agentMessage }, fields.name || baseline.name), id: turnId || String(newTurnId()).toLowerCase() };
+      const turn = { ...turnOf({ prompt: args.prompt, agentMessage: args.agentMessage }, fields.name || baseline.name), id: String(newTurnId()).toLowerCase() };
       const warnings = [];
       // The lists a caller gives as an App Spec's (see planEdits) are read against the page's entries; every other caller's replace them.
       const specBindings = args.specBindings === true;
@@ -1289,7 +1152,7 @@ function makeGenpageSdk(env, deps = {}) {
         // A draft of a page that already holds the content saves nothing, and whether the content is live is not known here (see above): not published, and not said to be pending either.
         // It answers as a draft even when the caller also handed in a receipt of a publish — the receipt only ever stops a publish, a draft sends none, and a `fingerprint` in a draft's
         // answer would read as proof of a publish this call never saw.
-        if (draft) return { pageId: id, unchanged: true, publish: draftPublish(), saved: false, pendingPublish: null, draftFingerprint: fingerprint, ...turnOut, warnings: [] };
+        if (draft) return { pageId: id, unchanged: true, publish: draftPublish(), saved: false, pendingPublish: null, draftFingerprint: fingerprint, warnings: [] };
         // Already published, by the caller's own record: nothing was written, so there is nothing to publish, and the page is not asked to publish again. A hash from another content,
         // or none, is the answer "not known", and the page is published (see above).
         if (typeof args.publishedFingerprint === 'string' && args.publishedFingerprint === fingerprint) {
@@ -1390,11 +1253,11 @@ function makeGenpageSdk(env, deps = {}) {
       }
 
       if (draft) {
-        return { pageId: id, publish: draftPublish(), saved: true, pendingPublish: true, draftFingerprint: fingerprint, ...turnOut, warnings: [...warnings, ...warningsOf(pushed, draftPublish(), `page ${who()}`)] };
+        return { pageId: id, publish: draftPublish(), saved: true, pendingPublish: true, draftFingerprint: fingerprint, warnings: [...warnings, ...warningsOf(pushed, draftPublish(), `page ${who()}`)] };
       }
       const runtimeSha256 = await runtimeEvidenceOf(sdk, id, args);
       const published = await publish(sdk, 'genPage', id, { verify: true });
-      return { pageId: id, publish: published, fingerprint, ...turnOut, ...(runtimeSha256 ? { runtimeSha256 } : {}), warnings: [...warnings, ...warningsOf(pushed, published, `page ${who()}`)] };
+      return { pageId: id, publish: published, fingerprint, ...(runtimeSha256 ? { runtimeSha256 } : {}), warnings: [...warnings, ...warningsOf(pushed, published, `page ${who()}`)] };
     },
 
     // Place pages into an app that exists, as the app designer does: each page becomes a sub-area of the app's navigation (the shape
@@ -2128,5 +1991,5 @@ async function appsNaming(sdk, pageId) {
 module.exports = {
   makeGenpageSdk, unescapePacName, suppliedButBlank, sourceText, dataSourcesOf, promptTranscript, configJson, pageFolderFiles,
   genPagesOfSiteMap, entityTablesOfSiteMap, writeOutcome, PRE_WRITE_REFUSALS, genpageError, holdsWhatWasSent, describeDivergence, contentFingerprint, watchThrottles, GUID_RE,
-  missingTableOf, turnIdOf, turnIntentOf, draftOf, makeTurnBindingStore,
+  missingTableOf, draftOf,
 };
