@@ -20,6 +20,8 @@ class PromotionPlanInputError extends Error {
     super(message);
     this.name = 'PromotionPlanInputError';
     this.code = 'PROMOTION_PLAN_INPUT_INVALID';
+    // Every message here is the plugin's own words about the maker's input, so it may be printed (findingOf).
+    this.publicMessage = message;
   }
 }
 

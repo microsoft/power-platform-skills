@@ -12,8 +12,10 @@
 // a solution, not an app, and only the kinds above.
 //
 // Cost: every request is a GET, counted in `cost.gets` (five metadata reads for org-assigned component type codes, the
-// component pages, one read or more per component). The SDK's transport is wrapped by readOnlyHttpClient, so a write
-// would be refused before it is sent and counted in `cost.refusedWrites`; there is none to expect.
+// component pages, one read or more per component). `cost.gets` counts the GET calls the SDK made: a GET its transport
+// retried counts once, so it is the number of reads asked for, not of HTTP round trips. The SDK's transport is wrapped
+// by readOnlyHttpClient, so a write would be refused before it is sent and counted in `cost.refusedWrites`; there is
+// none to expect. A read error is reported as its code, HTTP status and fixed words (findingOf), never the service's text.
 //
 // fetchSolution() copies every artifact it reads into the SDK workspace. The caller passes a throwaway workspace
 // (lib/throwaway-sdk.js), removed when the run ends, so no copy outlives it. The result carries ids, names and kinds
@@ -40,11 +42,10 @@ const LIMITS = Object.freeze([
   'This is not a list of everything the solution owns, and not a set of artifacts that can be moved on their own.',
 ]);
 
+// A component's read error, as its code, its HTTP status and fixed words: never the service's text, which can quote a
+// row's name or a value (findingOf).
 function errorOf(error) {
-  if (!error) return undefined;
-  const { code, message } = findingOf(error, 'COMPONENT_READ_FAILED');
-  const statusCode = Number.isInteger(error.statusCode) ? error.statusCode : undefined;
-  return { code, ...(statusCode ? { statusCode } : {}), message };
+  return error ? findingOf(error, 'COMPONENT_READ_FAILED') : undefined;
 }
 
 function describeSolution(info) {

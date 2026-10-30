@@ -33,7 +33,7 @@
 //
 // Foreign controls (rows the build did not declare) are tolerated: only declared controls are asked about.
 
-const { GUID_RE, findingOf, checkClosedObject, isNonEmptyString } = require('./readonly-operations.js');
+const { GUID_RE, findingOf, publicError, checkClosedObject, isNonEmptyString } = require('./readonly-operations.js');
 
 const COMMAND_SURFACES = Object.freeze(['form', 'homeGrid', 'subGrid', 'associatedGrid']);
 const CONTROL_KINDS = Object.freeze(['button', 'flyout', 'split']);
@@ -166,6 +166,10 @@ function misplacedReason(elsewhere) {
   return 'MISPLACED';
 }
 
+function statusOf(finding) {
+  return finding.statusCode !== undefined ? { statusCode: finding.statusCode } : {};
+}
+
 /**
  * Inspects one table's command bar for the declared controls. Never throws for a read: an unreadable bar makes every
  * control of the table `unverified` (INSPECTION_UNREADABLE), which fails the requested check.
@@ -185,7 +189,9 @@ async function inspectCommandControls(sdk, target) {
     return {
       entity: target.entity,
       read: 'unreadable',
-      checks: controls.map((c) => ({ key: c.key, kind: 'command', status: 'unverified', reason: finding.code, detail: finding.message })),
+      // The reason stays INSPECTION_UNREADABLE whatever the SDK called the failure, so a caller can branch on it; the
+      // HTTP status and fixed words (findingOf: never the service's own text) say why.
+      checks: controls.map((c) => ({ key: c.key, kind: 'command', status: 'unverified', reason: 'INSPECTION_UNREADABLE', ...statusOf(finding), detail: finding.message })),
     };
   }
   const rowsById = new Map((inspection.rows || []).map((r) => [r.rowId, r]));
@@ -213,7 +219,7 @@ async function witnessDashboard(sdk, target) {
     // INVALID_ARGUMENT (a malformed expected artifact, refused before any request) or a transport failure the SDK did
     // not answer in-band: either way nothing was established.
     const f = findingOf(err, 'INSPECTION_FAILED');
-    return { ...base, status: 'unverified', reason: f.code, detail: f.message };
+    return { ...base, status: 'unverified', reason: f.code, ...statusOf(f), detail: f.message };
   }
   const out = { ...base, observation: w.observation, ...(w.reasonCode ? { reasonCode: w.reasonCode } : {}), observedAt: w.observedAt };
   switch (w.observation) {
@@ -234,8 +240,8 @@ async function witnessDashboard(sdk, target) {
 async function verifyFeatures(sdk, { commands = [], dashboards = [] } = {}) {
   const errors = [...validateCommandTargets(commands), ...validateDashboardTargets(dashboards)];
   if (errors.length) {
-    const err = new Error(`feature verify: ${errors.join('; ')}`);
-    err.code = 'FEATURE_VERIFY_INVALID';
+    // The errors name positions, fields and allowed values of the maker's own request, so they may be printed (findingOf).
+    const err = publicError('FEATURE_VERIFY_INVALID', `feature verify: ${errors.join('; ')}`);
     err.errors = errors;
     throw err;
   }

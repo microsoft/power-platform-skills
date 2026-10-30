@@ -131,3 +131,19 @@ test('the CLI has no apply: an extra argument or an unknown flag is refused', ()
     assert.equal(r.status, 1, args.join(' '));
   }
 });
+
+test('CLI: a malformed environment URL and an unreadable package are refused in the plugin\'s own words', () => {
+  const script = path.join(__dirname, '..', 'plan-app-promotion.js');
+  const env = { ...process.env };
+  delete env.NODE_TEST_CONTEXT;
+  const bad = spawnSync(process.execPath, [script, '--source-env', 'https://contoso.crm.dynamics.com/x', '--target-env', TARGET, '--package', 'x.zip', '--app', 'a'], { env, encoding: 'utf8' });
+  assert.equal(bad.status, 1);
+  assert.match(bad.stderr, /--source-env: .*is not a Dataverse environment URL/);
+  const missing = path.join(__dirname, 'no-such-dir-SENTINEL', 'missing.zip');
+  const r = spawnSync(process.execPath, [script, '--source-env', SOURCE, '--target-env', TARGET, '--package', missing, '--app', 'a'], { env, encoding: 'utf8' });
+  assert.equal(r.status, 1);
+  const out = JSON.parse(r.stdout);
+  assert.equal(out.code, 'PROMOTION_PLAN_INPUT_INVALID');
+  assert.equal(out.error, '--package must name a readable file.');
+  assert.doesNotMatch(r.stdout + r.stderr, /SENTINEL|ENOENT/);
+});

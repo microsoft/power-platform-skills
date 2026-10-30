@@ -16,7 +16,8 @@ const ORIGIN = 'https://contoso.crm.dynamics.com';
 const SOLUTION_ID = '44444444-4444-4444-4444-444444444444';
 const ID = (n) => `aaaaaaaa-0000-0000-0000-00000000000${n}`;
 
-function fakeOrg({ solutionFound = true } = {}) {
+// `failWith` replaces the default 404 a component read gets; `solutionFailWith` makes the solution read itself fail.
+function fakeOrg({ solutionFound = true, failWith = null, solutionFailWith = null } = {}) {
   const requests = [];
   const json = (statusCode, body) => ({ statusCode, headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
   const typeCodes = { uxagentproject: 10100, connectionreference: 10101, customapi: 10102, customapirequestparameter: 10103, customapiresponseproperty: 10104 };
@@ -25,6 +26,7 @@ function fakeOrg({ solutionFound = true } = {}) {
     requests.push(`${method} ${u}`);
     if (method !== 'GET') return json(500, { error: { code: 'unexpected', message: 'not a GET' } });
     if (u.startsWith('/api/data/v9.0/solutions?')) {
+      if (solutionFailWith) return json(solutionFailWith.statusCode, { error: { code: solutionFailWith.code, message: solutionFailWith.message } });
       return json(200, { value: solutionFound ? [{
         solutionid: SOLUTION_ID, uniquename: 'ContosoTickets', friendlyname: 'Contoso Tickets', version: '1.2.0.0', ismanaged: false,
         publisherid: { publisherid: '55555555-5555-5555-5555-555555555555', uniquename: 'contoso', customizationprefix: 'contoso', customizationoptionvalueprefix: 10000 },
@@ -43,6 +45,7 @@ function fakeOrg({ solutionFound = true } = {}) {
     if (u.startsWith(`/api/data/v9.0/environmentvariabledefinitions(${ID(3)})`)) {
       return json(200, { environmentvariabledefinitionid: ID(3), schemaname: 'contoso_ApiBase', displayname: 'API base', type: 100000000, defaultvalue: 'SENTINEL-value', environmentvariabledefinition_environmentvariablevalue: [{ environmentvariablevalueid: ID(5), value: 'SENTINEL-current' }] });
     }
+    if (failWith) return json(failWith.statusCode, { error: { code: failWith.code, message: failWith.message } });
     return json(404, { error: { code: '0x80040217', message: 'Does not exist' } });
   };
   const client = createAzHttpClient(ORIGIN, { getToken: () => 'x'.repeat(48), request, sleep: async () => {} });
@@ -104,4 +107,26 @@ test('the CLI has one read-only verb and refuses anything else', () => {
     const r = spawnSync(process.execPath, [script, ...args], { env, encoding: 'utf8' });
     assert.equal(r.status, 1, args.join(' '));
   }
+});
+
+test('CLI: a malformed --env is refused in the plugin\'s own words before anything is read', () => {
+  const script = path.join(__dirname, '..', 'solutions.js');
+  const env = { ...process.env };
+  delete env.NODE_TEST_CONTEXT;
+  const r = spawnSync(process.execPath, [script, 'inspect', '--env', 'https://contoso.crm.dynamics.com/main.aspx', '--solution', 'S'], { env, encoding: 'utf8' });
+  assert.equal(r.status, 1);
+  assert.match(r.stderr, /--env: .*is not a Dataverse environment URL/);
+});
+
+test('a failed read reaches the result as its code and HTTP status only: the service\'s own words (which can quote a value) do not', async () => {
+  const leak = { statusCode: 403, code: '0x80040220', message: 'Principal lacks read access to SENTINEL-row-name SECRET_VALUE_42' };
+  const component = await inspectFromFlags({ env: ORIGIN, solution: 'ContosoTickets', 'include-artifacts': true }, fakeOrg({ failWith: leak }).client);
+  assert.equal(component.inventory.skipped[0].error.statusCode, 403);
+  assert.match(component.inventory.skipped[0].error.message, /HTTP 403/);
+  assert.doesNotMatch(JSON.stringify(component), /SENTINEL|SECRET_VALUE/);
+  const solution = await inspectFromFlags({ env: ORIGIN, solution: 'ContosoTickets', 'include-artifacts': true }, fakeOrg({ solutionFailWith: leak }).client);
+  assert.equal(solution.ok, false);
+  assert.equal(solution.error.statusCode, 403);
+  assert.match(solution.error.message, /HTTP 403/);
+  assert.doesNotMatch(JSON.stringify(solution), /SENTINEL|SECRET_VALUE/);
 });

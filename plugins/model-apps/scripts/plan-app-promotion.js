@@ -9,7 +9,7 @@ const { parseArgs, validateFlags, emitResult, requireDataverseOrigin } = require
 const { withThrowawaySdk } = require('./lib/throwaway-sdk.js');
 const { createAzHttpClient } = require('./lib/sdk-http-client.js');
 const { makeWritesBlocking } = require('./lib/output-redaction.js');
-const { safeMessage } = require('./lib/readonly-operations.js');
+const { findingOf, publicError } = require('./lib/readonly-operations.js');
 const { planAppPromotion } = require('./lib/promotion-plan.js');
 
 const USAGE = 'Usage: node scripts/plan-app-promotion.js --source-env <envUrl> --target-env <envUrl> --package <solution.zip> --app <appUniqueName>\n'
@@ -28,7 +28,15 @@ function readJsonFile(file, what) {
   try {
     return JSON.parse(fs.readFileSync(file, 'utf8').replace(/^\uFEFF/, ''));
   } catch {
-    throw new Error(`${what} must name a readable JSON file.`);
+    throw publicError('PROMOTION_PLAN_INPUT_INVALID', `${what} must name a readable JSON file.`);
+  }
+}
+
+function readPackage(file) {
+  try {
+    return fs.readFileSync(file);
+  } catch {
+    throw publicError('PROMOTION_PLAN_INPUT_INVALID', '--package must name a readable file.');
   }
 }
 
@@ -37,7 +45,7 @@ async function planFromFlags(flags, clients = {}) {
   const sourceEnv = requireDataverseOrigin(flags['source-env']);
   const targetEnv = requireDataverseOrigin(flags['target-env']);
   const input = {
-    packageBytes: fs.readFileSync(flags.package),
+    packageBytes: readPackage(flags.package),
     appUniqueName: flags.app,
     mode: flags.mode,
     settings: flags.settings ? readJsonFile(flags.settings, '--settings') : undefined,
@@ -62,12 +70,22 @@ async function main() {
   if (positional && positional.length) usageExit(`unexpected argument '${positional[0]}': this command only plans`);
   for (const name of ['source-env', 'target-env', 'package', 'app']) if (!flags[name]) usageExit(`--${name} is required`);
   for (const name of SWITCHES) if (flags[name] !== undefined && flags[name] !== true) usageExit(`--${name} takes no value`);
+  // The environment URLs are the maker's own input: refuse a bad one here, in its own words, before the catch below
+  // replaces every message it cannot vouch for with fixed words.
+  for (const name of ['source-env', 'target-env']) {
+    try {
+      requireDataverseOrigin(flags[name]);
+    } catch (err) {
+      usageExit(`--${name}: ${err.message}`);
+    }
+  }
   let result;
   try {
     result = await planFromFlags(flags);
   } catch (err) {
-    const code = err && typeof err.code === 'string' ? err.code : undefined;
-    emitResult(false, { ok: false, error: safeMessage(err), ...(code ? { code } : {}) }, { ascii: true });
+    // A service's error text can quote a record value; print the code, the HTTP status and fixed words only.
+    const { code, statusCode, message } = findingOf(err, 'PROMOTION_PLAN_FAILED');
+    emitResult(false, { ok: false, error: message, code, ...(statusCode !== undefined ? { statusCode } : {}) }, { ascii: true });
     return;
   }
   emitResult(result.ok, result, { ascii: true });
@@ -78,7 +96,8 @@ module.exports = { planFromFlags };
 if (require.main === module) {
   main().catch((err) => {
     makeWritesBlocking(process.stdout, process.stderr);
-    process.stderr.write(`Error: ${safeMessage(err)}\n`);
+    const { code, message } = findingOf(err, 'PROMOTION_PLAN_FAILED');
+    process.stderr.write(`Error (${code}): ${message}\n`);
     process.exit(1);
   });
 }
