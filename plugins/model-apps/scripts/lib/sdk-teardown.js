@@ -63,6 +63,7 @@
 // the identical phase-grouped, status-marked log.
 
 const { topoOrderEntities } = require('./_graph.js');
+const { serviceCodeOf, answeredErrorOf } = require('./retry-policy.js');
 const { appUniqueName, commandsByEntity, defaultViewColumns, enrichesDefaultViews, dashboardsInSolution, findDashboardsByName, findPinnedDashboard, resolveExistingFormId, resolveRoleBusinessUnit, roleBuClause, bpfFilter, partialEnrichment } = require('./sdk-build.js');
 const { manifestResourceName, parseManifestBase64 } = require('./page-manifest.js');
 const { relationshipSchemaName, manyToManySchemaName, lookupColumnsFor, SDK_ROLE_MARKER, canonicalPersonaName, FORM_GUID_RE } = require('./app-spec.js');
@@ -127,6 +128,41 @@ function isUndeletable(err) {
   const msg = String((err && err.message) || '').toLowerCase();
   if (/referenced by/.test(msg)) return false; // dependency block — a real failure, not a system artifact
   return /system-defined|system managed|system-managed/.test(msg);
+}
+
+// The answer a business process flow's delete is sent again for: HTTP 500 "There is no active transaction", the platform saying that the delete's own transaction was already
+// gone when it tried to carry on — "usually caused by custom plug-ins that ignore errors from service calls and continue processing". Seen live once, in a teardown whose
+// flow delete answered it (after 3 s) and which then stopped, with the flow's table, the global choice and the solution kept; running the same teardown again deleted everything.
+// The body is the platform's usual OData error, whose code is the documented TransactionNotStarted (the table lists that code with the words "Transaction not started."; the words
+// above are what the platform sends for it):
+//   {"error":{"code":"0x80040251","message":"There is no active transaction. This error is usually caused by custom plug-ins that ignore errors from service calls and continue processing."}}
+// https://learn.microsoft.com/power-apps/developer/data-platform/reference/web-service-error-codes
+// The live log kept only the message, so the pairing of code and message is not itself captured: the answer is matched by its CODE when its body carries one (any other code is
+// another failure, whatever its words), and by its words only when the body carries no code. Only a 500 counts, and only this step re-sends it; the HTTP client sends a record delete once on a 500
+// (its concurrent-delete guard), so the re-send is the teardown's.
+const LOST_TRANSACTION_CODE = '0x80040251';
+const LOST_TRANSACTION_WORDS = /^\s*There is no active transaction\b/i;
+// At most this many re-sends, 1 s / 2 s / 4 s apart (the schedule the HTTP client uses for a deadlock victim).
+const LOST_TRANSACTION_RESENDS = 3;
+function isLostTransactionAnswer(err) {
+  if (httpStatus(err) !== 500) return false;
+  const answered = answeredErrorOf(err);
+  if (!answered) return false;
+  const code = serviceCodeOf(err);
+  if (code !== null) return code === LOST_TRANSACTION_CODE;
+  return typeof answered.message === 'string' && LOST_TRANSACTION_WORDS.test(answered.message);
+}
+// A re-sent delete is safe here: the platform ANSWERED, so the first delete is not still running to race the second (the hazard the client's no-re-send rule is for), and one that did
+// commit before the answer is answered 404 by the re-send, which deleteStep reads as a flow already gone (tolerateNotFound).
+async function deleteFlowResendingLostTransaction(sdk, item) {
+  for (let resend = 0; ; resend++) {
+    try {
+      return await sdk.deleteRecord('workflow', item.id);
+    } catch (e) {
+      if (resend >= LOST_TRANSACTION_RESENDS || !isLostTransactionAnswer(e)) throw e;
+      await new Promise((r) => setTimeout(r, 1000 * 2 ** resend));
+    }
+  }
 }
 
 // Marks an error FAIL-CLOSED: what the step could not prove is itself the failure, so deleteStep passes it on before any of its shortcuts. Those read
@@ -866,7 +902,7 @@ const KIND_HANDLERS = {
         try { await sdk.updateRecord('workflow', item.id, { statecode: 0, statuscode: 1 }); } catch { /* fall through: the delete below reports the real failure */ }
       }
       try {
-        return await sdk.deleteRecord('workflow', item.id);
+        return await deleteFlowResendingLostTransaction(sdk, item);
       } catch (e) {
         // Because the delete cascades a TABLE drop, it is slow — MEASURED live at longer than the
         // client's 60s HTTP timeout on two of three runs. The server keeps working after the client
