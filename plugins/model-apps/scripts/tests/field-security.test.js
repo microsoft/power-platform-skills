@@ -310,6 +310,26 @@ test('verify reports pass, fail and unknown, and an unreadable check is never a 
   assert.deepEqual([failed[0].status, failed[0].detail], ['fail', 'it also holds a permission on new_employee.new_ssn']);
 });
 
+test('before a seed-only run, every declared secured column must be read as secured; a spec with none reads nothing', async () => {
+  const spec = { entities: [
+    { schemaName: 'new_employee', columns: [{ schemaName: 'new_salary', isSecured: true }, { schemaName: 'new_bonus', isSecured: true }, { schemaName: 'new_note' }] },
+    { schemaName: 'new_ticket', columns: [{ schemaName: 'new_name' }, { schemaName: 'new_flag', isSecured: false }] },
+  ] };
+  const gets = [];
+  const reader = (answer) => ({ dataverse: { get: async (p) => { gets.push(p); return answer; } } });
+  const both = { status: 200, body: { value: [{ LogicalName: 'new_salary', IsSecured: true }, { LogicalName: 'new_bonus', IsSecured: true }] } };
+  assert.deepEqual(await fls.securedBeforeSeed(spec, reader(both)), { ready: true, unsecured: [], unknown: [] });
+  assert.deepEqual(gets, [fls.columnSecurityPath('new_employee')]);
+  const one = { status: 200, body: { value: [{ LogicalName: 'new_salary', IsSecured: false }] } };
+  assert.deepEqual(await fls.securedBeforeSeed(spec, reader(one)), { ready: false, unsecured: [{ target: 'new_employee.new_salary' }], unknown: [{ target: 'new_employee.new_bonus', reason: 'the column was not found' }] });
+  const unread = await fls.securedBeforeSeed(spec, reader({ status: 503, body: {} }));
+  assert.deepEqual([unread.ready, unread.unknown.map((u) => u.target)], [false, ['new_employee.new_salary', 'new_employee.new_bonus']]);
+  gets.length = 0;
+  assert.equal((await fls.securedBeforeSeed(spec, reader(one), { tables: new Set(['new_ticket']) })).ready, true);
+  assert.equal((await fls.securedBeforeSeed({ entities: [{ schemaName: 'new_x', columns: [{ schemaName: 'new_a' }] }] }, reader(one))).ready, true);
+  assert.deepEqual(gets, []);
+});
+
 // ---------------------------------------------------------------- real bundle (measured wire evidence)
 
 const BUNDLE = path.resolve(__dirname, '..', 'vendor', 'cds-maker-sdk.cjs');

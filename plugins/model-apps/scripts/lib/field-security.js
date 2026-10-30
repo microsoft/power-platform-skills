@@ -112,6 +112,30 @@ async function applyColumnSecurity(plan, ctx) {
   return result;
 }
 
+// Whether every column the spec declares `isSecured: true` on is secured on the server, for a run that writes sample rows without
+// running the data-model phase (which would secure them first). A column still unsecured would show the sample values to every user
+// who can read the row. `tables` limits the check to the tables the run seeds (lowercased
+// logical names); omitted means every table. One columnSecurityPath read per table that declares a secured column and is seeded,
+// none otherwise — a spec that declares no secured column reads nothing. A column the read does not list is unknown, not secured.
+async function securedBeforeSeed(spec, provision, { tables } = {}) {
+  const unsecured = [];
+  const unknown = [];
+  for (const e of (spec && spec.entities) || []) {
+    const table = lower(e && e.schemaName);
+    if (!table || (tables && !tables.has(table))) continue;
+    const declared = ((e && e.columns) || []).filter((c) => c && c.isSecured === true && c.type !== 'Customer' && c.schemaName).map((c) => lower(c.schemaName));
+    if (!declared.length) continue;
+    const read = await readColumnSecurity(provision, table);
+    for (const column of declared) {
+      const target = `${table}.${column}`;
+      if (!read.complete) unknown.push({ target, reason: read.reason });
+      else if (!read.columns.has(column)) unknown.push({ target, reason: 'the column was not found' });
+      else if (read.columns.get(column) !== true) unsecured.push({ target });
+    }
+  }
+  return { ready: !unsecured.length && !unknown.length, unsecured, unknown };
+}
+
 // ------------------------------------------------------------------------------------------------------------------ profiles
 
 // The profile as the spec declares it, in the shape the SDK's artifact has: permissions sorted by table, then column (the order the
@@ -435,6 +459,7 @@ module.exports = {
   readColumnSecurity,
   planColumnSecurity,
   applyColumnSecurity,
+  securedBeforeSeed,
   desiredProfile,
   profileDifferences,
   readProfile,
