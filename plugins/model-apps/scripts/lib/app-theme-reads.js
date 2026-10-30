@@ -62,6 +62,8 @@ const defaultError = (code, message) => Object.assign(new Error(message), { code
 //   publisher    /publishers?$select=publisherid&$filter=customizationprefix eq '<prefix>'
 //   setting      /RetrieveSetting(SettingName='CustomThemeDefinition'[,AppUniqueName='<app unique name>'])
 //   type         /solutioncomponentdefinitions?$select=solutioncomponenttype,primaryentityname&$filter=primaryentityname eq 'appsetting'
+//   solution     /solutions?$select=solutionid,uniquename,friendlyname,version,ismanaged&$expand=publisherid(…)&$filter=uniquename eq '<name>'
+//                (the SDK's getSolution; it takes the first row of the first page, so the policy places every row of every page)
 //   members      /solutioncomponents?$select=objectid,componenttype&$filter=_solutionid_value eq <solution> and (objectid eq <id> or …)
 const UNPUBLISHED = '/microsoft.dynamics.crm.retrieveunpublishedmultiple()';
 function shapeOf(path, select) {
@@ -75,12 +77,14 @@ function shapeOf(path, select) {
   if (/^\/retrievesetting\(/.test(p)) return 'setting';
   if (p === '/solutioncomponentdefinitions' && select === 'solutioncomponenttype,primaryentityname') return 'type';
   if (p === '/solutioncomponents' && select === 'objectid,componenttype') return 'members';
+  if (p === '/solutions' && select === 'solutionid,uniquename,friendlyname,version,ismanaged') return 'solution';
   return null;
 }
 
 const OPERATION = {
   app: 'app lookup', definitions: 'theme setting definition', plain: 'published theme setting', unpublished: 'unpublished theme setting',
   resource: 'web resource lookup', publisher: 'publisher lookup', setting: 'resolved setting', type: 'setting component type', members: 'solution membership',
+  solution: 'solution lookup',
 };
 
 function incomplete(guard, scope, shape, reason) {
@@ -186,7 +190,9 @@ function judgeRows(shape, rows, parts, scope) {
     //   both, one id, state 1      a published row with a draft over it
     // Anything else (an unpublished row in state 0 with no published layer, two ids, a state-0 pair of two values) is a
     // shape this build cannot place, so it is unknown, never read as one of the above.
-    // https://learn.microsoft.com/power-apps/developer/data-platform/reference/entities/appsetting
+    // (The one-row-per-layer rule is the appsetting alternate key checked by assertThemeIdentityConstraint, over
+    // componentstate + overwritetime + parentappmoduleid + settingdefinitionid, read from the table's key metadata;
+    // https://learn.microsoft.com/power-apps/developer/data-platform/define-alternate-keys-entity)
     const pairKey = `${app[0]}|${[...defs].sort().join(',')}`;
     if (shape === 'plain') { scope.plain.set(pairKey, byDef); return null; }
     const plain = scope.plain.get(pairKey);
@@ -226,6 +232,20 @@ function judgeRows(shape, rows, parts, scope) {
     if (!Number.isInteger(type) || type <= 0 || rows[0].primaryentityname !== 'appsetting') return 'answered a component type it cannot place';
     return null;
   }
+  if (shape === 'solution') {
+    // Asked by unique name (compared ignoring case, as Dataverse compares it) or by id; either way one solution at most,
+    // and every row must be that one: an id-less row, or one of another name, is never "the first row".
+    const names = quoted(/uniquename eq '((?:[^']|'')*)'/g, filter);
+    const ids = guids(/solutionid eq \{?([0-9a-f-]{36})\}?/gi, filter);
+    if (names.length + ids.length !== 1) return 'asked for no single solution';
+    for (const row of rows) {
+      if (!isGuid(row.solutionid)) return 'answered a solution with no id';
+      if (names.length && (typeof row.uniquename !== 'string' || lower(row.uniquename) !== lower(names[0]))) return 'answered a solution it did not ask for';
+      if (ids.length && lower(row.solutionid) !== ids[0]) return 'answered a solution it did not ask for';
+    }
+    if (rows.length > 1) return 'answered more than one solution';
+    return null;
+  }
   if (shape === 'members') {
     const wanted = new Set(guids(/objectid eq \{?([0-9a-f-]{36})\}?/gi, filter));
     if (!wanted.size || guids(/_solutionid_value eq \{?([0-9a-f-]{36})\}?/gi, filter).length !== 1) return 'asked for no single solution and members';
@@ -238,13 +258,26 @@ function judgeRows(shape, rows, parts, scope) {
   return null;
 }
 
-// RetrieveSetting answers one object, not a collection:
+// RetrieveSetting answers one object, not a collection, for the setting named in its path:
+//   GET /RetrieveSetting(SettingName='CustomThemeDefinition',AppUniqueName='contoso_app')
 //   { "SettingDetail": { "Name": "CustomThemeDefinition", "Value": "\"\"", "DataType": 1 } }
+// SettingDetail is { DataType: Edm.Int32, Name: Edm.String, Value: Edm.String }. The setting data types are Number 0,
+// String 1 and Boolean 2 (the SDK itself reads 2 as Boolean); both theme settings hold text, so for them only String is
+// placed. A detail of ANOTHER setting proves nothing about the one asked for; a Name left out is accepted (the value is
+// still the answer to this path), a different one is not. The SDK reads only Value, so this is judged here.
 // https://learn.microsoft.com/power-apps/developer/data-platform/webapi/reference/retrievesetting
-function judgeSetting(body) {
+// https://learn.microsoft.com/power-apps/developer/data-platform/webapi/reference/settingdetail
+const SETTING_TYPES = new Set([0, 1, 2]);
+const TEXT_SETTINGS = new Set([THEME_SETTING, HEADER_SETTING]);
+function judgeSetting(body, path) {
   if (!isObject(body) || !isObject(body.SettingDetail)) return 'answered no setting detail';
-  if (typeof body.SettingDetail.Value !== 'string') return 'answered a setting value that is not text';
-  if (!Number.isInteger(body.SettingDetail.DataType)) return 'answered a setting with no data type';
+  const detail = body.SettingDetail;
+  const asked = quoted(/settingname='((?:[^']|'')*)'/gi, path);
+  if (asked.length !== 1) return 'asked for no single setting';
+  if (detail.Name !== undefined && (typeof detail.Name !== 'string' || lower(detail.Name) !== lower(asked[0]))) return 'answered another setting than the one it asked for';
+  if (typeof detail.Value !== 'string') return 'answered a setting value that is not text';
+  if (!Number.isInteger(detail.DataType) || !SETTING_TYPES.has(detail.DataType)) return 'answered a setting with no valid data type';
+  if (TEXT_SETTINGS.has(asked[0]) && detail.DataType !== 1) return 'answered a theme setting that does not hold text';
   return null;
 }
 
@@ -270,7 +303,7 @@ function guardAppThemeReads(httpClient, makeError = defaultError) {
     if (!shape || !response || !(response.status >= 200 && response.status < 300)) return response;
     scope.reads += 1;
     if (shape === 'setting') {
-      const reason = judgeSetting(response.body);
+      const reason = judgeSetting(response.body, parts.path);
       if (reason) throw incomplete(guard, scope, shape, reason);
       return response;
     }

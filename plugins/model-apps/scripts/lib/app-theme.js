@@ -226,33 +226,45 @@ async function membersOf(client, solutionId, wanted) {
   return wanted.filter((member) => !present.has(`${member.type}:${member.id}`));
 }
 
-const provenMembers = new WeakMap();
 /**
- * The theme's two records in the build's solution: the version web resource the app's row names (type 61) and the row
- * itself (the environment's appsetting type). The SDK made header-less adds neither, so after a changed set they are
- * added here (`add: true`), and then proven present by a fresh read. Without `add` it is a read-only proof, answering
- * the members that are missing. Both ids are read where they are NOW (an observation, never a record of creation):
- *   the version by its name, strictly; the row by app + CustomThemeDefinition (readThemeSettingIdentity).
+ * The stored theme is complete: the version web resource the app's row names exists now as a theme version (type 4),
+ * and the app's CustomThemeDefinition row exists and names it. Both are read where they are NOW (an observation, never
+ * a record of creation): the version by its name, strictly; the row by app + CustomThemeDefinition
+ * (readThemeSettingIdentity). This is the theme's completion, so it is proven after every set, with or without a
+ * solution; only the solution's member reads and adds depend on one (ensureAppThemeMembership).
  * A version or row that is gone after a set is `create-completion-required`; a row that holds another value is unknown.
  */
-async function ensureAppThemeMembership(ctx, appId, versionName, { add = false } = {}) {
-  const sdk = ctx.sdk;
-  const client = sdk.dataverse;
-  const solution = solutionNameOf(ctx.solution);
-  if (!solution) throw themeError('APP_THEME_PREREQUISITE_UNRESOLVED', 'app.theme: no solution to prove the theme\'s membership in.');
+async function proveStoredTheme(client, appId, versionName) {
   const version = await webResourceByName(client, versionName);
   if (!version) throw completionRequired('webResource');
   if (version.type !== XML_WEB_RESOURCE) throw themeError('APP_THEME_NOT_SAVED', 'app.theme: the app\'s theme names a web resource that is not a theme version.');
   const identity = await readThemeSettingIdentity(client, appId, versionName, themeError);
   if (!identity.settingId) throw completionRequired('appSetting');
   if (!identity.matches) throw themeError('APP_THEME_NOT_SAVED', 'app.theme: the app\'s theme setting holds another theme than the one just written.');
-  const cacheKey = `${lower(solution)}|${version.id}|${identity.settingId}`;
+  return { version, settingId: identity.settingId };
+}
+
+const provenMembers = new WeakMap();
+/**
+ * The theme's two records in the build's solution: the version web resource the app's row names (type 61) and the row
+ * itself (the environment's appsetting type). The SDK made header-less adds neither, so after a changed set they are
+ * added here (`add: true`), and then proven present by a fresh read. Without `add` it is a read-only proof, answering
+ * the members that are missing. The ids come from the stored proof (proveStoredTheme): `stored` when the caller has
+ * just made it, else it is made here.
+ */
+async function ensureAppThemeMembership(ctx, appId, versionName, { add = false, stored } = {}) {
+  const sdk = ctx.sdk;
+  const client = sdk.dataverse;
+  const solution = solutionNameOf(ctx.solution);
+  if (!solution) throw themeError('APP_THEME_PREREQUISITE_UNRESOLVED', 'app.theme: no solution to prove the theme\'s membership in.');
+  const { version, settingId } = stored || await proveStoredTheme(client, appId, versionName);
+  const cacheKey = `${lower(solution)}|${version.id}|${settingId}`;
   if (!provenMembers.has(sdk)) provenMembers.set(sdk, new Set());
   if (provenMembers.get(sdk).has(cacheKey)) return { proven: true, missing: [], added: 0 };
   const solutionInfo = await sdk.getSolution(solution);
   const solutionId = solutionInfo && solutionInfo.solutionId;
   if (!isGuid(solutionId)) throw themeError(READ_INCOMPLETE, 'app.theme: the solution did not read back with an id; nothing is concluded.');
-  const wanted = [{ id: version.id, type: WEB_RESOURCE_COMPONENT, part: 'webResource' }, { id: identity.settingId, type: await appSettingType(sdk), part: 'appSetting' }];
+  const wanted = [{ id: version.id, type: WEB_RESOURCE_COMPONENT, part: 'webResource' }, { id: settingId, type: await appSettingType(sdk), part: 'appSetting' }];
   const missing = await membersOf(client, solutionId, wanted);
   if (missing.length && !add) return { proven: false, missing: missing.map((member) => member.part), added: 0 };
   for (const member of missing) {
@@ -336,6 +348,8 @@ async function planAppTheme(spec, ctx = {}) {
 // resolved, rowState, pendingPublish, pendingReasons, superseded, solutionComponentsAdded, warnings }.
 const SET_OUTCOMES = new Set(['created', 'updated', 'unchanged']);
 const usableSet = (written) => isObject(written) && SET_OUTCOMES.has(written.outcome);
+// Post-set proof failures that leave what the app's row holds unknown (see applyAppTheme).
+const POST_SET_UNCERTAIN = new Set([READ_INCOMPLETE, IDENTITY_UNPROVEN, 'APP_THEME_NOT_SAVED']);
 const usableRemove = (written) => isObject(written) && (written.outcome === 'removed' || written.outcome === 'unchanged');
 
 async function applyAppTheme(plan, ctx = {}) {
@@ -415,15 +429,24 @@ async function applyAppTheme(plan, ctx = {}) {
       stop.appTheme = result;
       throw stop;
     }
-    if (scope.incomplete) unknownAfter(READ_INCOMPLETE);
     if (written.pendingPublish) owe();
-    if (set && solutionNameOf(ctx.solution)) {
+    // A read the setter made that could not be placed leaves what the row holds unknown: nothing more is done to this
+    // app's theme by this SDK (unknownAfter marks it), not even its membership.
+    if (scope.incomplete) { unknownAfter(READ_INCOMPLETE); return result; }
+    if (set) {
       try {
-        await ensureAppThemeMembership(ctx, appId, written.webResource.name, { add: true });
+        const stored = await proveStoredTheme(sdk.dataverse, appId, written.webResource.name);
+        if (solutionNameOf(ctx.solution)) await ensureAppThemeMembership(ctx, appId, written.webResource.name, { add: true, stored });
       } catch (error) {
-        if (isCreateStop(error)) { error.appTheme = result; result.unknown.push({ key: KEY, code: error.code }); throw error; }
-        // The theme stays saved; only its membership is not proven.
-        result.unknown.push({ key: KEY, code: scope.incomplete ? READ_INCOMPLETE : codeOf(error), afterWrite: true });
+        if (isCreateStop(error)) { markUnknown(sdk, appId); error.appTheme = result; result.unknown.push({ key: KEY, code: error.code }); throw error; }
+        // The theme stays saved. When what its row holds NOW could not be placed (a read left incomplete, an unproven
+        // key, a row that holds another theme), the set's outcome is unknown, so it is sticky like an unknown set: a
+        // later null or changed theme on this SDK must not remove or replace a row nobody can name. A failed add of
+        // known content (the row and version were proven, only the member add or its read-back failed) is not: its
+        // explicit repair path (an equal theme refuses APP_THEME_MEMBERSHIP_MISSING) stays open.
+        const code = scope.incomplete ? READ_INCOMPLETE : codeOf(error);
+        result.unknown.push({ key: KEY, code, afterWrite: true });
+        if (scope.incomplete || POST_SET_UNCERTAIN.has(code)) markUnknown(sdk, appId);
       }
     }
     return result;
@@ -512,8 +535,53 @@ async function downloadAppTheme(ctx = {}) {
       return { status: 'refused', code: scope.incomplete ? READ_INCOMPLETE : codeOf(error) };
     }
     if (scope.incomplete) return { status: 'refused', code: READ_INCOMPLETE };
-    return captureAppTheme(info);
+    const captured = captureAppTheme(info);
+    const name = captured.status === 'captured' && captured.theme && captured.theme.logo && captured.theme.logo.webResourceName;
+    if (!name) return captured;
+    // The header logo is part of what the theme shows: a theme captured without its image is not portable (a build from
+    // it would refuse the missing logo, or show another image of that name). The SDK reports a missing logo only as a
+    // warning, so it is looked up here, strictly, and named for the download to export as an external binary.
+    let found;
+    try {
+      found = await webResourceByName(ctx.sdk.dataverse, name);
+    } catch (error) {
+      return { status: 'refused', code: scope.incomplete ? READ_INCOMPLETE : codeOf(error) };
+    }
+    if (scope.incomplete) return { status: 'refused', code: READ_INCOMPLETE };
+    if (!found) return { status: 'refused', code: 'APP_THEME_LOGO_UNAVAILABLE' };
+    if (!IMAGE_TYPES.has(found.type)) return { status: 'refused', code: 'APP_THEME_LOGO_INVALID' };
+    return { ...captured, logo: { webResourceName: found.name, webResourceType: found.type } };
   });
+}
+
+/**
+ * What a download does with downloadAppTheme's answer. Decided BEFORE anything is written, so a strict download that
+ * cannot capture the theme exactly writes nothing (the same contract as the download's other lossy gates):
+ *   captured           { write: true, theme, pendingPublish, logo? }  logo: the image to export as an EXTERNAL binary
+ *                                                                     (named, never owned: a build does not delete it)
+ *   omitted            { write: false }                               no theme of the app's own; nothing to say
+ *   refused, strict    { write: false, error }                        the caller stops before output (exit 1)
+ *   refused, lossy     { write: false, warning }                      --allow-lossy-download: the field is left out,
+ *                                                                     and the loss is named
+ * A spec without `app.theme` leaves the app's theme as it is when built, so an omission never removes a theme.
+ */
+const DOWNLOAD_REASONS = {
+  APP_THEME_UNREPRESENTABLE: 'the app\'s theme row holds a value app.theme cannot state (the "no theme" sentinel, or attributes outside the schema)',
+  APP_THEME_LOGO_UNAVAILABLE: 'the theme\'s header logo web resource no longer exists',
+  APP_THEME_LOGO_INVALID: 'the theme\'s header logo is not an image web resource',
+  [READ_INCOMPLETE]: 'the app\'s theme could not be read exactly',
+};
+function appThemeDownloadOutcome(result, { allowLossy = false } = {}) {
+  if (isObject(result) && result.status === 'omitted') return { write: false };
+  if (isObject(result) && result.status === 'captured' && result.theme !== undefined) {
+    const outcome = { write: true, theme: result.theme, pendingPublish: Boolean(result.pendingPublish) };
+    if (isObject(result.logo)) outcome.logo = { webResourceName: result.logo.webResourceName, webResourceType: result.logo.webResourceType, external: true };
+    return outcome;
+  }
+  const code = isObject(result) && typeof result.code === 'string' && SAFE_CODE.test(result.code) ? result.code : 'APP_THEME_FAILED';
+  const why = DOWNLOAD_REASONS[code] || 'the app\'s theme could not be read';
+  if (!allowLossy) return { write: false, code, error: `app.theme: ${why} (${code}) — refusing to write a spec that would silently drop it. Pass --allow-lossy-download to write the spec without app.theme.` };
+  return { write: false, code, warning: `app.theme was LEFT OUT (${code}): ${why}. A build from this spec leaves the app's theme as it is.` };
 }
 
 /**
@@ -546,7 +614,9 @@ module.exports = {
   applyDeclaredAppTheme,
   captureAppTheme,
   downloadAppTheme,
+  appThemeDownloadOutcome,
   ensureAppThemeMembership,
+  proveStoredTheme,
   appThemeIncomplete,
   isComplete,
   canonicalTheme,

@@ -24,7 +24,8 @@
 //   solution         a record joins the solution only through the MSCRM.SolutionUniqueName header (an SDK made with
 //                    `solutionHeader: true`) or AddSolutionComponent. The default SDK is header-less, as the build's is.
 // The SDK is made over the strict theme read policy (lib/app-theme-reads.js), as maker-sdk.js makes it with themeReads.
-// https://learn.microsoft.com/en-us/power-apps/developer/data-platform/reference/entities/appsetting
+// The one-row-per-layer rule is the appsetting alternate key (see `keys`):
+// https://learn.microsoft.com/power-apps/developer/data-platform/define-alternate-keys-entity
 // https://learn.microsoft.com/en-us/power-apps/maker/model-driven-apps/modern-theme-overrides
 
 const fs = require('node:fs');
@@ -64,6 +65,8 @@ function appThemeServer(t, { environmentTheme, row, pin = {}, solutionHeader = f
   const theme = {
     rows: [], webResources: [], resolved: new Map(), environment: new Map([[THEME_DEF, SENTINEL], [HEADER_DEF, SENTINEL]]),
     publishers: new Set(['contoso']), members: new Set(), solutionId: randomUUID(), requests: [], fail: [], after: [], inject: [], pages: new Map(),
+    // What RetrieveSetting answers as its SettingDetail; a test replaces it to serve a detail the policy must not place.
+    settingDetail: (detail) => detail,
   };
   const addWebResource = (name, type, text, published = true) => {
     const content = Buffer.from(text, 'utf8').toString('base64');
@@ -180,7 +183,7 @@ function appThemeServer(t, { environmentTheme, row, pin = {}, solutionHeader = f
       if (!def) return odataError(404, '0x80040217', 'no such setting');
       const forApp = /AppUniqueName='([^']+)'/.exec(route);
       const value = forApp && forApp[1] === APP_UNIQUE ? resolvedFor(def) : theme.environment.get(def) || SENTINEL;
-      return reply(200, { SettingDetail: { Name: name, Value: value, DataType: 1 } });
+      return reply(200, { SettingDetail: theme.settingDetail({ Name: name, Value: value, DataType: 1 }) });
     }
     if (method === 'GET' && route.startsWith('/publishers')) {
       const prefix = (/customizationprefix eq '([^']+)'/.exec(route) || [])[1];

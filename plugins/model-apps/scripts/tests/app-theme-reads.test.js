@@ -195,6 +195,50 @@ test('the resolved setting answer must carry a text value and a data type', asyn
   assert.equal((await inScope(() => guard.get(SETTING))).status, 200);
 });
 
+test('the resolved setting answer must be the setting asked for, and a theme setting must hold text (DataType 1)', async () => {
+  const answer = (at, detail) => guarded(routes([[at, { status: 200, headers: {}, body: { SettingDetail: detail } }]]));
+  const cases = [
+    [{ Name: 'OtherSetting', Value: '""', DataType: 1 }, /another setting/],
+    [{ Name: 7, Value: '""', DataType: 1 }, /another setting/],
+    [{ Name: 'CustomThemeDefinition', Value: '""', DataType: -999 }, /no valid data type/],
+    [{ Name: 'CustomThemeDefinition', Value: 'true', DataType: 2 }, /does not hold text/],
+    [{ Name: 'CustomThemeDefinition', Value: '0', DataType: 0 }, /does not hold text/],
+  ];
+  for (const [detail, words] of cases) {
+    const { guard, inScope } = answer(SETTING, detail);
+    await refused(inScope(() => guard.get(SETTING)), words);
+  }
+  // Neighbours: a Name left out, or one in another case, is still the answer to this path.
+  for (const Name of [undefined, 'customthemedefinition']) {
+    const { guard, inScope } = answer(SETTING, { Name, Value: '""', DataType: 1 });
+    assert.equal((await inScope(() => guard.get(SETTING))).status, 200, String(Name));
+  }
+  const header = `${ROOT}/RetrieveSetting(SettingName='OverrideAppHeaderColor',AppUniqueName='contoso_app')`;
+  await refused((() => { const { guard, inScope } = answer(header, { Name: 'OverrideAppHeaderColor', Value: 'true', DataType: 2 }); return inScope(() => guard.get(header)); })(), /does not hold text/);
+});
+
+test('a solution lookup is placed only as one row, with an id, of the solution asked for', async () => {
+  const at = (filter) => url('/solutions', [['$select', 'solutionid,uniquename,friendlyname,version,ismanaged'], ['$expand', 'publisherid($select=publisherid,uniquename,customizationprefix,customizationoptionvalueprefix)'], ['$filter', filter]]);
+  const BY_NAME = at("uniquename eq 'ContosoCore'");
+  const row = (extra) => ({ solutionid: SOLUTION, uniquename: 'ContosoCore', friendlyname: 'Contoso', version: '1.0.0.0', ismanaged: false, ...extra });
+  const cases = [
+    [BY_NAME, [row({ solutionid: null })], /solution with no id/],
+    [BY_NAME, [row({ uniquename: 'OtherSolution' })], /did not ask for/],
+    [BY_NAME, [row({ uniquename: undefined })], /did not ask for/],
+    [BY_NAME, [row(), row({ solutionid: OTHER })], /more than one solution/],
+    [at(`solutionid eq ${SOLUTION}`), [row({ solutionid: OTHER })], /did not ask for/],
+  ];
+  for (const [path, rows, words] of cases) {
+    const { guard, inScope } = guarded(routes([[path, ok(rows)]]));
+    await refused(inScope(() => guard.get(path)), words);
+  }
+  // Neighbours: the name matches ignoring case; no row is an answer (the SDK reports a missing solution itself).
+  for (const rows of [[row({ uniquename: 'contosocore' })], []]) {
+    const { guard, inScope } = guarded(routes([[BY_NAME, ok(rows)]]));
+    assert.equal((await inScope(() => guard.get(BY_NAME))).body.value.length, rows.length);
+  }
+});
+
 test('writes are counted only inside a scope, once, and a nested scope is the same scope', async () => {
   const { guard, sdk, inScope } = guarded(routes([]));
   await guard.post(`${ROOT}/x`);

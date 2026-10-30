@@ -6,7 +6,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const {
-  validateAppTheme, canonicalTheme, planAppTheme, applyAppTheme, captureAppTheme, appThemeIncomplete, isComplete, KEY,
+  validateAppTheme, canonicalTheme, planAppTheme, applyAppTheme, captureAppTheme, appThemeDownloadOutcome, appThemeIncomplete, isComplete, KEY,
 } = require('../lib/app-theme.js');
 const { guardAppThemeReads, markThemeReadGuarded } = require('../lib/app-theme-reads.js');
 const { RETRY } = require('../lib/retry-policy.js');
@@ -16,11 +16,24 @@ const DEF = '22222222-2222-4222-8222-222222222222';
 const THEME = { basePaletteColor: '#0f6cbd', appHeader: { background: '#112233' }, logo: { webResourceName: 'contoso_/images/logo.svg', tooltip: 'Contoso' } };
 const VERSION = 'contoso_/apptheme/0123456789abcdef.xml';
 
+// After every set the stored theme is read back (proveStoredTheme): the version by name, then the app's setting row. This
+// answers those reads with the version VERSION and one row holding it; any other read is a 404.
+const ROW = '33333333-3333-4333-8333-333333333333';
+function storedAnswer(path) {
+  const url = decodeURIComponent(path);
+  const rows = (value) => ({ status: 200, headers: {}, body: { value } });
+  if (url.startsWith('/webresourceset?')) return rows([{ webresourceid: '44444444-4444-4444-8444-444444444444', name: VERSION, webresourcetype: 4 }]);
+  if (url.startsWith('/settingdefinitions?')) return rows([{ settingdefinitionid: DEF, uniquename: 'CustomThemeDefinition', displayname: 'Custom theme definition' }]);
+  if (url.startsWith('/appsettings/Microsoft.Dynamics.CRM.RetrieveUnpublishedMultiple()?')) return rows([{ appsettingid: ROW, value: VERSION, componentstate: 1, _settingdefinitionid_value: DEF }]);
+  if (url.startsWith('/appsettings?')) return rows([{ appsettingid: ROW, value: VERSION, _settingdefinitionid_value: DEF }]);
+  return { status: 404, headers: {}, body: {} };
+}
+
 // An SDK double made over a guarded client, as a themeReads SDK is. `methods(client)` gives its theme methods; a write
 // sent through `client` is counted by the policy like one the real SDK sends.
 function guardedSdk(methods = () => ({})) {
   const client = {
-    async get() { return { status: 404, headers: {}, body: {} }; },
+    async get(path) { return storedAnswer(path); },
     async post() { return { status: 204, headers: {}, body: null }; },
   };
   const guard = guardAppThemeReads(client);
@@ -171,6 +184,27 @@ test('capture: the app\'s own exact theme is captured; absence, inherited, senti
   assert.deepEqual(captureAppTheme({ row: row('published'), afterPublish: { ...own, theme: { basePaletteColor: '#0f6cbd', additionalAttributes: {} } } }), { status: 'refused', code: 'APP_THEME_UNREPRESENTABLE' });
   assert.deepEqual(captureAppTheme({ row: row('published'), afterPublish: { source: 'unknown' } }), { status: 'refused', code: 'APP_THEME_READ_INCOMPLETE' });
   assert.deepEqual(captureAppTheme(null), { status: 'refused', code: 'APP_THEME_READ_INCOMPLETE' });
+});
+
+test('download outcome: a strict download refuses before output; --allow-lossy-download leaves the field out and names the loss', () => {
+  const theme = { basePaletteColor: '#0F6CBD', logo: { webResourceName: 'contoso_/images/logo.svg' } };
+  const logo = { webResourceName: 'contoso_/images/logo.svg', webResourceType: 11 };
+  assert.deepEqual(appThemeDownloadOutcome({ status: 'captured', theme, pendingPublish: false, logo }),
+    { write: true, theme, pendingPublish: false, logo: { ...logo, external: true } }, 'the logo is exported as an external binary, never owned');
+  assert.deepEqual(appThemeDownloadOutcome({ status: 'captured', theme: null, pendingPublish: true }), { write: true, theme: null, pendingPublish: true });
+  for (const allowLossy of [false, true]) assert.deepEqual(appThemeDownloadOutcome({ status: 'omitted' }, { allowLossy }), { write: false });
+  for (const code of ['APP_THEME_UNREPRESENTABLE', 'APP_THEME_LOGO_UNAVAILABLE', 'APP_THEME_LOGO_INVALID', 'APP_THEME_READ_INCOMPLETE']) {
+    const strict = appThemeDownloadOutcome({ status: 'refused', code });
+    assert.equal(strict.write, false);
+    assert.equal(strict.warning, undefined);
+    assert.match(strict.error, new RegExp(`${code}.*--allow-lossy-download`));
+    const lossy = appThemeDownloadOutcome({ status: 'refused', code }, { allowLossy: true });
+    assert.equal(lossy.write, false);
+    assert.equal(lossy.error, undefined);
+    assert.match(lossy.warning, new RegExp(`LEFT OUT \\(${code}\\)`));
+  }
+  // A code that could carry words is never echoed.
+  assert.match(appThemeDownloadOutcome({ status: 'refused', code: 'https://x y' }).error, /APP_THEME_FAILED/);
 });
 
 test('the build-level failure carries the result and is never retried', () => {

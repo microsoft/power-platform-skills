@@ -205,6 +205,13 @@ for (const page2 of [false, true]) {
     assert.deepEqual(result.saved, ['app.theme'], JSON.stringify(result));
     assert.deepEqual(result.managedBindings, [], 'no receipt');
     assert.deepEqual(result.unknown, [{ key: 'app.theme', code: 'APP_THEME_READ_INCOMPLETE', afterWrite: true }]);
+    // What the app's row holds is not known, so the same SDK does nothing more to that app's theme: neither a removal nor
+    // another set reads or writes anything (a later run reads it back first).
+    const mark = server.theme.requests.length;
+    for (const next of [null, OTHER]) {
+      assert.deepEqual((await server.run(next)).unknown, [{ key: 'app.theme', code: 'create-outcome-unknown' }], `then ${JSON.stringify(next)}`);
+    }
+    assert.deepEqual(server.theme.requests.slice(mark), [], 'no request for that app\'s theme after an unknown set');
   });
 }
 
@@ -333,4 +340,74 @@ test('REAL BUNDLE: download captures the app\'s own exact theme, omits an inheri
   assert.equal((await downloadAppTheme(inherited.ctx)).pendingPublish, false);
   await inherited.run(null);
   assert.deepEqual(await downloadAppTheme(inherited.ctx), { status: 'captured', theme: null, pendingPublish: true });
+});
+
+// The solution the membership is proven in is read through the SDK's getSolution, which takes the first row of the first
+// page. Every row of every page must be the solution asked for, or nothing is added to it.
+for (const [label, rows, page2] of [
+  ['an id-less row of the solution\'s name on page 2', [{ solutionid: null, uniquename: SOLUTION }], true],
+  ['a row of another solution beside it', [{ solutionid: '99999999-0000-4000-8000-0000000000aa', uniquename: 'OtherSolution' }], false],
+]) {
+  test(`REAL BUNDLE: a solution lookup answering ${label} adds no member and leaves the set unknown; the saved theme is kept`, async (t) => {
+    const server = await build(t);
+    server.injectRows('GET /solutions?', rows, { page2 });
+    const result = await server.run(THEME);
+    assert.deepEqual(result.saved, ['app.theme']);
+    assert.deepEqual(result.unknown, [{ key: 'app.theme', code: 'APP_THEME_READ_INCOMPLETE', afterWrite: true }], JSON.stringify(result));
+    assert.equal(server.theme.requests.some((line) => line.startsWith('GET /solutions?$skiptoken')), page2, 'every page was read');
+    assert.deepEqual(server.writes().filter((line) => line.startsWith('POST /AddSolutionComponent')), [], 'nothing is added to an unplaced solution');
+  });
+}
+
+// RetrieveSetting answers one SettingDetail. A detail of another setting, or of a type the theme setting cannot have
+// (it is text: SettingDataType String, 1), proves nothing about what the app resolves.
+for (const [label, change] of [
+  ['another setting', (detail) => ({ ...detail, Name: 'OtherSetting' })],
+  ['an invalid data type', (detail) => ({ ...detail, DataType: -999 })],
+  ['a boolean data type', (detail) => ({ ...detail, DataType: 2 })],
+  ['no data type', ({ DataType, ...detail }) => detail],
+]) {
+  test(`REAL BUNDLE: a resolved setting answering ${label} is unknown, never live`, async (t) => {
+    const server = await build(t);
+    await server.run(THEME);
+    await server.publication.flush();
+    assert.deepEqual(await verifyAppTheme(spec(THEME), server.ctx), [{ key: 'app.theme', ok: true, state: 'live' }], 'live before the change');
+    server.theme.settingDetail = change;
+    assert.deepEqual(await verifyAppTheme(spec(THEME), server.ctx), [{ key: 'app.theme', ok: false, state: 'unknown', code: 'APP_THEME_READ_INCOMPLETE' }]);
+  });
+}
+
+// The set's own completion (the version it names exists, and the app's row holds it) is required whether or not the build
+// has a solution; only the membership reads and adds depend on one.
+test('REAL BUNDLE: with no solution, a version gone after the set still stops as create-completion-required', async (t) => {
+  const server = await build(t, { noSolution: true });
+  server.afterNext('POST /appsettings', (theme) => { theme.webResources.splice(theme.webResources.findIndex((resource) => /\/apptheme\//.test(resource.name)), 1); });
+  await assert.rejects(server.run(THEME), (error) => {
+    assert.equal(error.code, 'create-completion-required');
+    assert.deepEqual(error.detail, { missing: 'webResource' });
+    assert.deepEqual(error.appTheme.saved, ['app.theme']);
+    return true;
+  });
+  assert.deepEqual(server.writes().filter((line) => /solution/i.test(line)), [], 'no solution read or add without a solution');
+});
+
+test('REAL BUNDLE: with no solution, a complete set reads its completion back and touches no solution', async (t) => {
+  const server = await build(t, { noSolution: true });
+  const result = await server.run(THEME);
+  assert.deepEqual([result.saved, result.unknown, result.refused], [['app.theme'], [], []]);
+  assert.deepEqual(server.theme.requests.filter((line) => /solution/i.test(line)), [], 'no solution read or add');
+  assert.ok(server.theme.requests.some((line) => line.startsWith('GET /webresourceset?') && line.includes('/apptheme/') && !line.includes('content')), 'the version is looked up by name after the set');
+});
+
+// Download: the header logo a theme names is part of what a spec needs to rebuild it. One that is gone, or is no image,
+// is a portability loss the download must say, never an exact capture.
+test('REAL BUNDLE: download refuses a theme whose header logo is gone, and names the logo of a theme whose logo exists', async (t) => {
+  const server = await build(t, { images: [LOGO] });
+  await server.run({ ...THEME, logo: { webResourceName: LOGO, tooltip: 'Contoso' } });
+  const captured = await downloadAppTheme(server.ctx);
+  assert.equal(captured.status, 'captured');
+  assert.deepEqual(captured.logo, { webResourceName: LOGO, webResourceType: 11 });
+  server.theme.webResources.splice(server.theme.webResources.findIndex((resource) => resource.name === LOGO), 1);
+  assert.deepEqual(await downloadAppTheme(server.ctx), { status: 'refused', code: 'APP_THEME_LOGO_UNAVAILABLE' });
+  assert.deepEqual(server.writes().filter((line) => line.includes(LOGO)), [], 'download writes nothing');
 });
