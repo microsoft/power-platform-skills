@@ -569,6 +569,21 @@ function downloadedTableFlags(flags) {
   return out;
 }
 
+// The plugin version a downloaded spec asks for when it carries any 2.21.0 field (usesSchemaFeatures): a build older than that ignores
+// or refuses them, so a valued option set would be renumbered and a secured column made open. It never lowers a floor the spec, or the
+// spec on disk it replaces (`priorFloor`), already asks for, and a spec that uses none of the fields is left as it was. The version
+// shape is checked here rather than through lib/app-spec.js, which requires this module.
+function setSchemaFeaturesFloor(spec, priorFloor) {
+  if (!isPlainObject(spec) || !usesSchemaFeatures(spec)) return spec;
+  const isVersion = (v) => typeof v === 'string' && /^\d+\.\d+\.\d+(?:[-+].*)?$/.test(v.trim());
+  let floor = SCHEMA_FEATURES_MIN_VERSION;
+  for (const candidate of [spec.minimumPluginVersion, priorFloor]) {
+    if (isVersion(candidate) && compareVersions(candidate, floor) > 0) floor = candidate.trim();
+  }
+  spec.minimumPluginVersion = floor;
+  return spec;
+}
+
 module.exports = {
   SCHEMA_FEATURES_MIN_VERSION,
   COLUMN_FEATURE_KEYS,
@@ -605,4 +620,5 @@ module.exports = {
   downloadedChoiceOptions,
   downloadedColumnFeatures,
   downloadedTableFlags,
+  setSchemaFeaturesFloor,
 };

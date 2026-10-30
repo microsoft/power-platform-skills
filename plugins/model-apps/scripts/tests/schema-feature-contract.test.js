@@ -310,3 +310,19 @@ test('download: only facts that were read, and only non-default values, become c
   assert.deepEqual(downloadedTableFlags({ searchEnabled: false, changeTrackingEnabled: undefined, duplicateDetectionEnabled: false }), {});
   assert.deepEqual(downloadedTableFlags(null), {});
 });
+
+// ------------------------------------------------------------------------------------------------ the downloaded spec's floor
+
+test('setSchemaFeaturesFloor asks for 2.21.0 when a spec carries a 2.21.0 field, keeps a higher floor, and leaves other specs alone', () => {
+  const valued = () => ({ entities: [{ schemaName: 'new_t', columns: [{ schemaName: 'new_c', type: 'Choice', options: [{ value: 7, label: 'A' }] }] }] });
+  assert.equal(c.setSchemaFeaturesFloor(valued()).minimumPluginVersion, '2.21.0');
+  assert.equal(c.setSchemaFeaturesFloor(Object.assign(valued(), { minimumPluginVersion: '2.19.0' })).minimumPluginVersion, '2.21.0');
+  assert.equal(c.setSchemaFeaturesFloor(Object.assign(valued(), { minimumPluginVersion: '2.22.1' })).minimumPluginVersion, '2.22.1');
+  assert.equal(c.setSchemaFeaturesFloor(valued(), '2.23.0').minimumPluginVersion, '2.23.0', 'the floor of the spec on disk is kept');
+  assert.equal(c.setSchemaFeaturesFloor(valued(), 'latest').minimumPluginVersion, '2.21.0');
+  const secured = { entities: [{ schemaName: 'new_t', columns: [{ schemaName: 'new_s', isSecured: true }] }] };
+  assert.equal(c.setSchemaFeaturesFloor(secured).minimumPluginVersion, '2.21.0');
+  const legacy = { entities: [{ schemaName: 'new_t', columns: [{ schemaName: 'new_c', type: 'Choice', options: ['A', 'B'] }] }] };
+  assert.deepEqual(c.setSchemaFeaturesFloor(legacy), { entities: [{ schemaName: 'new_t', columns: [{ schemaName: 'new_c', type: 'Choice', options: ['A', 'B'] }] }] });
+  assert.equal(c.setSchemaFeaturesFloor(Object.assign(legacy, { minimumPluginVersion: '2.10.0' })).minimumPluginVersion, '2.10.0');
+});
