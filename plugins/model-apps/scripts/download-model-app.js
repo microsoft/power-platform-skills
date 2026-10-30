@@ -48,6 +48,7 @@ const { labelsByLcid, pickLabel, sameLabel } = require('./lib/lookup-labels.js')
 const { odataGuid } = require('./lib/ai-app-settings.js');
 const { APP_COMPONENT_ENTITY_SOURCES, appComponentEntities, appComponentRows, currentAppLayer, readAppComponentInventory, downloadAppMainForms, setAppMembershipFloor } = require('./lib/app-components.js');
 const { mapLimit, DEFAULT_MAX_SIZE_KB } = require('./lib/entity-provision.js');
+const { downloadedChoiceOptions, downloadedColumnFeatures } = require('./lib/schema-feature-contract.js');
 const { compareText } = require('./lib/compare-text.js');
 const { hostsCustomControl } = require('./lib/dashboard-tiles.js');
 const { readColumnOptions, columnOptionFields, primaryColumnOptionFields } = require('./lib/download-column-options.js');
@@ -1660,7 +1661,9 @@ function optionSetFromRow(row) {
   // falls through to the untyped warning that already exists for exactly this case.
   if (labels.some((l) => descriptionFromDataverse(l) === undefined)) return null;
   const displayName = descriptionFromDataverse(os.DisplayName);
-  return { ...(name ? { name } : {}), ...(displayName !== undefined ? { displayName } : {}), isGlobal: os.IsGlobal === true, options: labels };
+  // `values` keeps each option's number beside its label (downloadedChoiceOptions): a set numbered other than 100000000 + index
+  // is written as explicit `{ value, label }` options, so a rebuild keeps the numbers its data and filters use.
+  return { ...(name ? { name } : {}), ...(displayName !== undefined ? { displayName } : {}), isGlobal: os.IsGlobal === true, options: labels, values: os.Options.map((o) => o && o.Value) };
 }
 
 // Inline Choice options and alternate-key display names can preserve LCID maps, unlike a
@@ -1728,7 +1731,8 @@ function collectGlobalChoices(meta, into) {
     into.set(key, {
       name: os.name,
       ...(os.displayName !== undefined ? { displayName: os.displayName } : {}),
-      options: os.options.map((l) => descriptionFromDataverse(l)), existing: true,
+      // A set whose numbers cannot be read (downloadedChoiceOptions null) keeps the plain labels it was always written with.
+      options: downloadedChoiceOptions(os.options.map((l) => descriptionFromDataverse(l)), os.values) || os.options.map((l) => descriptionFromDataverse(l)), existing: true,
     });
   }
   return into;
@@ -2181,12 +2185,17 @@ function entityFromMetadata(meta, logical, { unexpressible, incomplete, schemaOm
       }
     }
     const inlineIsAmbiguous = inlineOptions ? hiddenCollision(inlineOptions) : false;
-    const usableOptionSet = inlineIsAmbiguous ? null : optionSet;
+    // The options as the spec writes them: plain labels when every number is its place's default, else `{ value, label }`. A set whose
+    // numbers were read but cannot be written (null) is left untyped, as an ambiguous one is, rather than renumbered by a rebuild. A set\r
+    // given with no numbers (an option set attached by a caller) keeps its plain labels, as before.
+    const valuedOptions = inlineOptions && !inlineIsAmbiguous
+      ? (Array.isArray(optionSet.values) ? downloadedChoiceOptions(inlineOptions, optionSet.values) : inlineOptions) : null;
+    const usableOptionSet = inlineIsAmbiguous || (inlineOptions && !valuedOptions) ? null : optionSet;
     const specType = TYPES_NEEDING_COMPANION_DATA.has(mapped) && !usableOptionSet ? undefined : mapped;
     const choice = !usableOptionSet ? {}
       : (usableOptionSet.isGlobal && usableOptionSet.name
         ? { globalChoice: usableOptionSet.name }
-        : { options: inlineOptions });
+        : { options: valuedOptions });
     if (schemaName && Array.isArray(languageLost)) for (const l of lostLanguages) languageLost.push({ table: logical, column: schemaName, ...l });
     if (inlineIsAmbiguous && schemaName && Array.isArray(labelClashes)) {
       labelClashes.push({ table: logical, column: schemaName, clashes: ambiguousChoiceAliases(inlineOptions).filter((c) => c.hidden).map(({ alias, first, second }) => ({ alias, first, second })) });
@@ -2215,6 +2224,9 @@ function entityFromMetadata(meta, logical, { unexpressible, incomplete, schemaOm
       ...(specType ? { type: specType } : {}),
       ...choice,
       ...columnOptionFields(a, specType),
+      // isSecured: true where the column is secured (the attribute row's IsSecured); a Customer column cannot declare it. The date
+      // behaviour needs the typed per-table read, so it is not written here (dateEvidence null).
+      ...(specType && specType !== 'Customer' ? downloadedColumnFeatures(a, null) : {}),
       // The size (and, for an image, the primary-image flag) the column was made with, where a rebuild needs it (mediaColumnFields).
       ...(specType === 'File' || specType === 'Image' ? mediaColumnFields(a, specType) : {}),
     }, a && (a.description !== undefined ? a.description : a.Description));

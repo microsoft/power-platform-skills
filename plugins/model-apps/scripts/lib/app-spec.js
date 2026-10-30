@@ -52,6 +52,7 @@ const PAGE_MODEL_RE = /^[A-Za-z0-9][A-Za-z0-9._:/@+-]{0,99}$/;
 // Keep these in lockstep with the SDK; vendor-sdk-smoke asserts the vendored bundle still exposes them.
 const ACCESS_LEVELS = new Set(['read', 'create', 'write', 'delete', 'append', 'appendTo', 'assign', 'share']);
 const { AI_FEATURE_KEYS, AI_FEATURE_MAX_VALUE, AI_SETTING_CODEC } = require('./ai-app-settings.js');
+const { normalizeChoiceOptions, isChoiceOptionObject, validateSchemaFeatures } = require('./schema-feature-contract.js');
 const PRIVILEGE_SCOPES = new Set(['user', 'businessUnit', 'parentChild', 'organization']);
 
 // The exact ownership marker the vendored SDK (cds-maker-sdk SecurityApi) stamps on the `description`
@@ -175,11 +176,12 @@ function choiceValueMap(entity, spec) {
   // validated clean and produced `{"new_state": {}}`.
   const indexOptions = (options) => {
     const byLabel = Object.create(null);
-    (options || []).forEach((label, i) => {
+    // The value an option is written with: its explicit `value`, else 100000000 + its place (normalizeChoiceOptions).
+    for (const { value, label } of normalizeChoiceOptions(Array.isArray(options) ? options : [])) {
       for (const alias of labelAliases(label)) {
-        if (!Object.prototype.hasOwnProperty.call(byLabel, alias)) byLabel[alias] = 100000000 + i;
+        if (!Object.prototype.hasOwnProperty.call(byLabel, alias)) byLabel[alias] = value;
       }
-    });
+    }
     return byLabel;
   };
   const globalByName = Object.create(null);
@@ -846,6 +848,7 @@ const ENTITY_KEYS = new Set([
   'hasNotes', 'quickCreate', 'existing', 'enrichDefaultViews',
   'vectorIcon', 'iconDescription', 'icon',
   'statusReasons', 'alternateKeys', 'mainFormOrder',
+  'searchEnabled', 'changeTrackingEnabled', 'duplicateDetectionEnabled',
 ]);
 
 // What to write INSTEAD, for the keys an author is most likely to reach for. A bare "unknown key"
@@ -1380,14 +1383,17 @@ function rejectLocalizedGlobalChoice(gc, label, errors) {
     errors.push(`${label}: displayName cannot be localized. ${WHY}`);
   }
   (Array.isArray(gc.options) ? gc.options : []).forEach((o, i) => {
-    if (isLocalizedLabelMap(o)) errors.push(`${label}: options[${i}] cannot be localized. ${WHY}`);
+    if (isLocalizedLabelMap(isChoiceOptionObject(o) ? o.label : o)) errors.push(`${label}: options[${i}] cannot be localized. ${WHY}`);
   });
 }
 
 function validateChoiceOptionLabels(options, label, errors, opts = {}) {
   if (!Array.isArray(options)) return;
-  options.forEach((o, i) => validateLabel(o, `${label}: options[${i}]`, errors, opts));
-  for (const c of ambiguousChoiceAliases(options)) {
+  // An explicit `{ value, label }` option's label is checked as a plain one is; its shape and value are schema-feature-contract's
+  // (choiceOptionErrors). The aliases are judged on the labels, in the author's order.
+  const labels = options.map((o) => (isChoiceOptionObject(o) ? o.label : o));
+  labels.forEach((o, i) => validateLabel(o, `${label}: options[${i}]`, errors, opts));
+  for (const c of ambiguousChoiceAliases(labels)) {
     const msg = `${label}: the label '${c.alias}' names BOTH options[${c.first}] and options[${c.second}] — one string cannot select two values, so a sample record or view filter using it resolves to options[${c.first}].`;
     if (c.hidden) {
       // At least one side is localized, so the collision is INVISIBLE on the page: the author reads
@@ -2627,6 +2633,12 @@ function validateAppSpec(spec, opts = {}) {
     validateLabel(gc && gc.displayName, `${gcLabel}: displayName`, errors, { warnings, baseLanguageCode: spec.languageCode });
     validateChoiceOptionLabels(gc && gc.options, gcLabel, errors, { warnings, baseLanguageCode: spec.languageCode });
     rejectLocalizedGlobalChoice(gc, gcLabel, errors);
+  }
+  // 2.21.0 schema fields: explicit option values, dateTimeBehavior, isSecured, the table flags and fieldSecurityProfiles.
+  {
+    const features = validateSchemaFeatures(spec);
+    errors.push(...features.errors);
+    warnings.push(...features.warnings);
   }
   // The modern ("new look") shell is an opt-in per-app SETTING, not an appmodule column —
   // `navigationtype` only selects Single/Multi session and is unrelated. Boolean-only: a string

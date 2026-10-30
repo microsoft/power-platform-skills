@@ -30,6 +30,7 @@
 
 const { choiceValueMap, labelText, labelAliases, lookupColumnsFor } = require('./app-spec.js');
 const { odataLit } = require('./odata.js');
+const { isChoiceOptionObject } = require('./schema-feature-contract.js');
 const { labelsByLcid, readMetadata } = require('./lookup-labels.js');
 
 // A value that is already an option VALUE (or any other number) is not a label, so an integer string — or a
@@ -68,7 +69,7 @@ function declaredLabels(spec, column) {
   const shared = !inline && column && column.globalChoice
     ? (((spec.globalChoices || []).find((g) => g && lc(g.name) === lc(column.globalChoice)) || {}).options || [])
     : [];
-  return (inline || shared).map((o) => labelText(o, spec && spec.languageCode)).filter(Boolean);
+  return (inline || shared).map((o) => labelText(isChoiceOptionObject(o) ? o.label : o, spec && spec.languageCode)).filter(Boolean);
 }
 
 // What the spec says about an attribute of the view's table: a declared column (its App Spec type), the

@@ -477,7 +477,7 @@ test('#564 GlobalOptionSet being present does NOT make a local set global (live-
   // set that does not exist, and the rebuild would bind the column to nothing.
   const sdk = sdkWithOptionSets({
     attributes: CHOICE_ATTRS,
-    picklist: [picklistRow('new_status', { name: 'new_ticket_new_status', isGlobal: false, options: [[1, 'Open']], globalEcho: true })],
+    picklist: [picklistRow('new_status', { name: 'new_ticket_new_status', isGlobal: false, options: [[100000000, 'Open']], globalEcho: true })],
   });
   const e = entityFromMetadata(await readEntityWithDescriptions(sdk, 'new_ticket'), 'new_ticket');
   const status = e.columns.find((c) => c.schemaName === 'new_status');
@@ -501,13 +501,14 @@ test('#564 a GLOBAL-bound picklist emits a globalChoice reference instead of inl
   // app created (#587 item 6).
   const decls = new Map();
   collectGlobalChoices(meta, decls);
-  assert.deepStrictEqual([...decls.values()], [{ name: 'shared_stage', options: ['Draft', 'Final'], existing: true }]);
+  // Numbered 1 and 2, not 100000000 + index: the declaration keeps the numbers, so a rebuild into a fresh environment numbers them alike.
+  assert.deepStrictEqual([...decls.values()], [{ name: 'shared_stage', options: [{ value: 1, label: 'Draft' }, { value: 2, label: 'Final' }], existing: true }]);
 });
 
 test('#564 a MultiSelect picklist downloads as MultiChoice', async () => {
   const sdk = sdkWithOptionSets({
     attributes: [{ logicalName: 'new_tags', displayName: 'Tags', attributeType: 'MultiSelectPicklist', isCustomAttribute: true }],
-    multiSelect: [picklistRow('new_tags', { name: 'new_ticket_new_tags', isGlobal: false, options: [[1, 'Urgent'], [2, 'Billable']] })],
+    multiSelect: [picklistRow('new_tags', { name: 'new_ticket_new_tags', isGlobal: false, options: [[100000000, 'Urgent'], [100000001, 'Billable']] })],
   });
   const e = entityFromMetadata(await readEntityWithDescriptions(sdk, 'new_ticket'), 'new_ticket');
   const tags = e.columns.find((c) => c.schemaName === 'new_tags');
@@ -526,8 +527,8 @@ test('#564 inline options keep their localizations, but a global declaration is 
       { logicalName: 'new_stage', displayName: 'Stage', attributeType: 'Picklist', isCustomAttribute: true },
     ],
     picklist: [
-      picklistRow('new_status', { name: 'new_ticket_new_status', isGlobal: false, options: [[1, localized]] }),
-      picklistRow('new_stage', { name: 'shared_stage', isGlobal: true, options: [[1, localized]] }),
+      picklistRow('new_status', { name: 'new_ticket_new_status', isGlobal: false, options: [[100000000, localized]] }),
+      picklistRow('new_stage', { name: 'shared_stage', isGlobal: true, options: [[100000000, localized]] }),
     ],
   });
   const meta = await readEntityWithDescriptions(sdk, 'new_ticket');
@@ -2826,7 +2827,9 @@ test('#564 option ORDER is Dataverse display order, not Value order', async () =
     picklist: [picklistRow('new_status', { name: 'new_ticket_new_status', isGlobal: false, options: [[9, 'Last'], [3, 'Middle'], [1, 'First']] })],
   });
   const e = entityFromMetadata(await readEntityWithDescriptions(sdk, 'new_ticket'), 'new_ticket');
-  assert.deepStrictEqual(e.columns.find((c) => c.schemaName === 'new_status').options, ['Last', 'Middle', 'First']);
+  // Each option keeps its number too: 9, 3, 1 are not 100000000 + index, so the options are written as `{ value, label }` and a
+  // rebuild neither renumbers them nor reorders the picker.
+  assert.deepStrictEqual(e.columns.find((c) => c.schemaName === 'new_status').options, [{ value: 9, label: 'Last' }, { value: 3, label: 'Middle' }, { value: 1, label: 'First' }]);
 });
 test('#564 a MultiChoice column is NOT dropped even though Dataverse types it as "Virtual"', async () => {
   // LIVE-MEASURED on a real table. A MultiSelectPicklist attribute reports:
@@ -2845,7 +2848,7 @@ test('#564 a MultiChoice column is NOT dropped even though Dataverse types it as
       { logicalName: 'pp_tagsname', displayName: 'Tags Name', attributeType: 'Virtual', isCustomAttribute: true },
       { logicalName: 'pp_stagename', displayName: 'Stage Name', attributeType: 'Virtual', isCustomAttribute: true },
     ],
-    multiSelect: [picklistRow('pp_tags', { name: 'pp_item_pp_tags', isGlobal: false, options: [[1, 'Urgent'], [2, 'Billable']] })],
+    multiSelect: [picklistRow('pp_tags', { name: 'pp_item_pp_tags', isGlobal: false, options: [[100000000, 'Urgent'], [100000001, 'Billable']] })],
   });
   const e = entityFromMetadata(await readEntityWithDescriptions(sdk, 'pp_item'), 'pp_item');
   const tags = e.columns.find((c) => c.schemaName === 'pp_tags');
@@ -2855,6 +2858,20 @@ test('#564 a MultiChoice column is NOT dropped even though Dataverse types it as
   // The synthetic shadows must STILL be filtered out: emitting them would feed defaultViewColumns
   // and rewrite the table's default views with junk.
   assert.deepStrictEqual(e.columns.map((c) => c.schemaName), ['pp_tags']);
+});
+
+test('2.21.0: a secured column downloads with isSecured: true; an unsecured one carries no isSecured', async () => {
+  // IsSecured comes with the attribute row the SDK already reads, so it costs no read. false is the create default and is left out:
+  // written out, it would ask a rebuild to unsecure the column.
+  const sdk = sdkWithOptionSets({
+    attributes: [
+      { logicalName: 'new_salary', displayName: 'Salary', attributeType: 'String', isCustomAttribute: true, isSecured: true },
+      { logicalName: 'new_notes', displayName: 'Notes', attributeType: 'String', isCustomAttribute: true, isSecured: false },
+    ],
+  });
+  const e = entityFromMetadata(await readEntityWithDescriptions(sdk, 'new_ticket'), 'new_ticket');
+  assert.strictEqual(e.columns.find((c) => c.schemaName === 'new_salary').isSecured, true);
+  assert.ok(!('isSecured' in e.columns.find((c) => c.schemaName === 'new_notes')));
 });
 
 test('#564 a Virtual attribute with NO option set is still filtered out', async () => {

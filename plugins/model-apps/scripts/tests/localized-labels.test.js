@@ -854,3 +854,31 @@ test('an INCONCLUSIVE existence probe HALTS a localized table rather than fallin
   await provisionDataModel(args('Table'));
   assert.strictEqual(findTablesCalled, 1, 'a plain-label entity still falls back rather than halting');
 });
+
+test('2.21.0: an explicit { value, label } option resolves to its own number, in any language, and is validated like a plain label', () => {
+  const spec = {
+    schemaVersion: 2, languageCode: 1033,
+    solution: { uniqueName: 'S', publisherPrefix: 'new' }, app: { name: 'A' },
+    globalChoices: [{ name: 'new_tier', displayName: 'Tier', options: [{ value: 7, label: 'Gold' }, 'Silver'] }],
+    entities: [{
+      schemaName: 'new_T', displayName: 'T', pluralName: 'Ts', primaryAttribute: { schemaName: 'new_Name', displayName: 'Name' },
+      columns: [
+        { schemaName: 'new_State', displayName: 'State', type: 'Choice', options: [{ value: 5, label: { 1033: 'Open', 3082: 'Abierto' } }, 'Closed'] },
+        { schemaName: 'new_Tier', displayName: 'Tier', type: 'Choice', globalChoice: 'new_tier' },
+      ],
+    }],
+  };
+  const map = choiceValueMap(spec.entities[0], spec);
+  // An unnumbered option keeps its place's number (100000000 + index), beside a numbered one.
+  assert.deepStrictEqual({ ...map.new_state }, { Open: 5, Abierto: 5, Closed: 100000001 });
+  assert.deepStrictEqual({ ...map.new_tier }, { Gold: 7, Silver: 100000001 });
+  assert.deepStrictEqual(validateAppSpec(spec).errors, []);
+  // The label of an explicit option is still a label: two options named alike across languages are refused as for plain ones,
+  // and a global choice's explicit option cannot be localized.
+  const clash = JSON.parse(JSON.stringify(spec));
+  clash.entities[0].columns[0].options = [{ value: 5, label: { 1033: 'Open', 3082: 'Abierto' } }, { value: 6, label: { 1033: 'Abierto', 3082: 'Cerrado' } }];
+  clash.globalChoices[0].options = [{ value: 7, label: { 1033: 'Gold', 3082: 'Oro' } }];
+  const errors = validateAppSpec(clash).errors.join('\n');
+  assert.match(errors, /Abierto/);
+  assert.match(errors, /globalChoice 'new_tier': options\[0\] cannot be localized/);
+});
