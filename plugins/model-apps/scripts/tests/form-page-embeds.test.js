@@ -441,7 +441,7 @@ test('every form saved: one report, the same result shape as before, and no fail
 const PANEL = guid(800);
 function embedXml({ ref = PAGE, body = `{${PANEL}}`, forControl = `{${PANEL}}`, tab = 'tab_general', section = 'section_general', pageInput, refStatic = 'true', extraRows = '', twice = false, factors = ['2'] } = {}) {
   const panel = body === null ? '' : `<row><cell id="{${guid(801)}}"><control id="${guid(802)}" uniqueid="${body}" classid="{F9A8A302-114E-466A-B582-6771B2AE0D92}"/></cell></row>`;
-  const again = twice ? `<row><cell><control id="${guid(803)}" uniqueid="{${guid(804)}}"/></cell></row>` : '';
+  const again = twice ? `<row><cell><control id="${guid(803)}" uniqueid="{${guid(804)}}" classid="{F9A8A302-114E-466A-B582-6771B2AE0D92}"/></cell></row>` : '';
   const entry = (factor) => `<customControl name="MscrmControls.UxAgentControl" formFactor="${factor}"><parameters><RefId type="SingleLine.Text" static="${refStatic}">${ref}</RefId>${pageInput === undefined ? '' : `<PageInput type="SingleLine.Text" static="true">${pageInput}</PageInput>`}</parameters></customControl>`;
   const description = (id) => `<controlDescription forControl="${id}">${factors.map(entry).join('')}</controlDescription>`;
   return `<form><tabs><tab name="${tab}"><columns><column width="100%"><sections><section name="${section}" columns="1"><rows>`
@@ -465,7 +465,7 @@ test('a form-placed page is verified by its embed on the form: the page, the pla
   assert.strictEqual(reason(embedXml({ refStatic: 'false' })), 'not-embedded', 'a page taken from a column is no declared page');
   assert.strictEqual(reason(embedXml({ factors: [] })), 'not-embedded', 'a description with no page control');
   assert.strictEqual(reason(embedXml({ twice: true, forControl: `{${PANEL}}` })), 'embedded-more-than-once');
-  assert.strictEqual(reason(`<form><controlDescriptions><controlDescription forControl="{${PANEL}}"><customControl name="MscrmControls.UxAgentControl"><parameters><RefId static="true">${PAGE}</RefId></parameters></customControl><customControl name="MscrmControls.UxAgentControl"><parameters><RefId static="true">${OTHER_PAGE}</RefId></parameters></customControl></controlDescription></controlDescriptions><tabs><tab name="tab_general"><columns><column><sections><section name="section_general"><rows><row><cell><control uniqueid="{${PANEL}}"/></cell></row></rows></section></sections></column></columns></tab></tabs></form>`, EMBED), 'binding-unsupported', 'form factors that disagree name no one page');
+  assert.strictEqual(reason(`<form><controlDescriptions><controlDescription forControl="{${PANEL}}"><customControl name="MscrmControls.UxAgentControl"><parameters><RefId static="true">${PAGE}</RefId></parameters></customControl><customControl name="MscrmControls.UxAgentControl"><parameters><RefId static="true">${OTHER_PAGE}</RefId></parameters></customControl></controlDescription></controlDescriptions><tabs><tab name="tab_general"><columns><column><sections><section name="section_general"><rows><row><cell><control uniqueid="{${PANEL}}" classid="{F9A8A302-114E-466A-B582-6771B2AE0D92}"/></cell></row></rows></section></sections></column></columns></tab></tabs></form>`, EMBED), 'binding-unsupported', 'form factors that disagree name no one page');
   assert.strictEqual(reason(embedXml({ tab: 'tab_other' })), 'placement-differs', 'another tab');
   assert.strictEqual(reason(embedXml({ section: 'section_other' })), 'placement-differs', 'another section');
   assert.strictEqual(reason(embedXml(), { ...EMBED, after: 'new_code' }), 'placement-differs', 'above the field it should follow');
@@ -595,6 +595,36 @@ test('REAL BUNDLE: the build step embeds through the SDK with the build\'s page-
     assert.deepStrictEqual(shape(rows), ['new_name', `P:${PAGE_ROWSPAN}`, '-', '-', '-', '-', '-', 'new_code']);
     assert.deepStrictEqual(reports[0].managedBindings.map((b) => [b.key, b.id]), [[KEY, rows[1].cells[0].control.id]]);
     assert.deepStrictEqual(ctx.queued.map((q) => [q.kind, q.id, q.table]), [['form', FORM, 'new_ticket']]);
+  } finally {
+    h.cleanup();
+  }
+});
+
+test('REAL BUNDLE: the verifier sees a page on a form exactly where the SDK\'s typed projection does — an unbound page-control class, its RefId read as decoded text', async () => {
+  const CLASS = 'F9A8A302-114E-466A-B582-6771B2AE0D92';
+  const cases = [
+    // [what, formxml, shows the page]
+    ['an ordinary text control class', embedXml().replace(CLASS, '4273EDBD-AC1D-40d3-9FB2-095C621B552D'), false],
+    ['a page-control class bound to a column', embedXml().replace(`id="${guid(802)}"`, `id="${guid(802)}" datafieldname="new_name"`), false],
+    ['a control with no class', embedXml().replace(` classid="{${CLASS}}"`, ''), false],
+    ['a description entry whose control name is cased otherwise', embedXml().replace('MscrmControls.UxAgentControl', 'mscrmcontrols.uxagentcontrol'), false],
+    ['a RefId with one brace', embedXml({ ref: `{${PAGE}` }), false],
+    ['a RefId in a CDATA section', embedXml({ ref: `<![CDATA[${PAGE}]]>` }), true],
+    ['a RefId with a character reference', embedXml({ ref: `&#48;${PAGE.slice(1)}` }), true],
+    ['a RefId with a hex character reference and a comment', embedXml({ ref: `&#x30;<!-- id -->${PAGE.slice(1)}` }), true],
+    ['the class in lower case, an empty column binding', embedXml().replace(`{${CLASS}}`, CLASS.toLowerCase()).replace(`id="${guid(802)}"`, `id="${guid(802)}" datafieldname=""`), true],
+    ['the page control as the SDK writes it', embedXml(), true],
+  ];
+  const h = createHarness({ formId: FORM });
+  try {
+    const seen = [];
+    for (const [what, xml] of cases) {
+      h.store.row.formxml = xml;
+      const control = rowsOf(await (await h.freshSdk()).sdk.fetchArtifact('form', FORM))[1].cells[0].control;
+      seen.push([what, Boolean(control.genPage && control.genPage.pageId === PAGE), verifyFormPageEmbed(xml, EMBED, PAGE).ok]);
+    }
+    assert.deepStrictEqual(seen.map(([what, projected]) => [what, projected]), cases.map(([what, , shows]) => [what, shows]), 'what the SDK projects');
+    assert.deepStrictEqual(seen.map(([what, , verified]) => [what, verified]), cases.map(([what, , shows]) => [what, shows]), 'the verifier agrees with it');
   } finally {
     h.cleanup();
   }

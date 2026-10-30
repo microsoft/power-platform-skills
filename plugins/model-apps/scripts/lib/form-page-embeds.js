@@ -495,18 +495,33 @@ function formEmbedsOfPage(spec, page) {
 //     <customControl name="MscrmControls.UxAgentControl" formFactor="2"><parameters>
 //       <RefId type="SingleLine.Text" static="true">11111111-0000-4000-8000-000000000001</RefId>
 //       <PageInput type="SingleLine.Text" static="true">{"data":{"mode":"compact"}}</PageInput></parameters></customControl> … (one per form factor)
-// The page is shown only by a control in a section of the form body whose `uniqueid` a UxAgentControl description names: a description for
-// no control on the form (an orphan) shows nothing. Every UxAgentControl entry of that description must name the same static page id and input,
-// as the SDK requires to read one (classifyBinding), else nothing can be said about it. Then the place — tab, section, and with `after` the row
-// below that field with no other field's row between, the rule the plan holds an existing cell to — and the input (PageInput's `data`, read as
-// the SDK reads it: inputDataFrom) must be the declared ones.
+// A control shows a page exactly when the SDK's typed projection of the form gives it a `genPage` (projectGenPageEmbeds), by the same rule
+// (isRecognizedEmbed, classifyBinding): a control in a cell of the form body, unbound (no `datafieldname`), of the page-control class (`classid`
+// trimmed, outer braces dropped, upper-cased), whose `uniqueid` names — as a GUID: trimmed, lower-cased, braces only as a pair — the first
+// description in the form's own `controlDescriptions`; and every `MscrmControls.UxAgentControl` entry of that description (the name as written)
+// has, in its first `parameters`, a static RefId naming one GUID and, if it has a PageInput, a static one, all entries alike. RefId and
+// PageInput are read as their text nodes: character references decoded, CDATA sections taken as written, comments and child elements left
+// out. (The SDK also requires a Main form; the spec gate allows genPages on a Main form only.) A description for no control on the form (an
+// orphan) shows nothing. Then the place — tab, section, and with `after` the row below that field with no other field's row between, the rule
+// the plan holds an existing cell to — and the input (PageInput's `data`, read as the SDK reads it: inputDataFrom) must be the declared ones.
+// The SDK does not export the parser behind the projection, so the rule is followed here, and a test holds the two to the same answers.
 // Answers { ok: true } or { ok: false, reason } with reason form-xml-unreadable | not-embedded | embedded-more-than-once | binding-unsupported |
 // placement-differs | input-differs. Pure: the caller reads the form.
-const UX_AGENT_CONTROL = 'mscrmcontrols.uxagentcontrol';
-const PLAIN_ID = /^[ \t\r\n]*\{?([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})\}?[ \t\r\n]*$/;
-const EMBED_XML = new Set(['tab', 'section', 'row', 'control', 'controlDescription', 'customControl', 'RefId', 'PageInput']);
+const UX_AGENT_CONTROL = 'MscrmControls.UxAgentControl';
+const PAGE_CONTROL_CLASS = 'F9A8A302-114E-466A-B582-6771B2AE0D92';
+const GUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+const EMBED_XML = new Set(['tab', 'section', 'row', 'control', 'controlDescriptions', 'controlDescription', 'customControl', 'parameters', 'RefId', 'PageInput']);
 const BODY_CELL = /(?:^|\/)tabs\/tab\/columns\/column\/sections\/section\/rows\/row\/cell$/;
-const idIn = (text) => { const m = PLAIN_ID.exec(String(text === undefined || text === null ? '' : text)); return m ? m[1].toLowerCase() : ''; };
+// The SDK's normGuid: '' for anything that is not one GUID.
+const idIn = (text) => {
+  let t = typeof text === 'string' ? text.trim().toLowerCase() : '';
+  if (t.startsWith('{') && t.endsWith('}')) t = t.slice(1, -1);
+  return GUID.test(t) ? t : '';
+};
+const classOf = (control) => String(control.attrs.classid || '').trim().replace(/^\{|\}$/g, '').toUpperCase();
+// The text nodes an element holds directly, as a parser hands them over. The span's inner XML is split into CDATA sections, comments,
+// processing instructions and tags (a quoted attribute value may hold '>'), e.g. `&#48;<!-- id --><![CDATA[1111…]]>` → '0' + '1111…'.
+const MARKUP = /(<!\[CDATA\[[\s\S]*?\]\]>|<!--[\s\S]*?-->|<\?[\s\S]*?\?>|<(?:"[^"]*"|'[^']*'|[^'">])*>)/;
 
 function verifyFormPageEmbed(formxml, embed, pageId) {
   // Lazy for the same reason as appSpec(): page-reference-guard.js and sitemap-pages.js reach app-spec.js, which requires this file.
@@ -518,26 +533,36 @@ function verifyFormPageEmbed(formxml, embed, pageId) {
   if (!want || !read.ok) return { ok: false, reason: 'form-xml-unreadable' };
   const els = read.elements;
   const within = (outer, e) => e.start > outer.start && e.end <= outer.end;
-  const textOf = (e) => elementText(formxml, e.start, e.end);
-  // A static parameter's value as text: character references decoded, a CDATA section taken as written.
-  const valueOf = (e) => textOf(e).split(/(<!\[CDATA\[[\s\S]*?\]\]>)/).map((part) => (part.startsWith('<![CDATA[') ? part.slice(9, -3) : decodeXmlEntities(part))).join('');
+  const valueOf = (e) => {
+    let depth = 0;
+    let text = '';
+    for (const part of elementText(formxml, e.start, e.end).split(MARKUP)) {
+      if (part.startsWith('<![CDATA[')) { if (!depth) text += part.slice(9, -3); } else if (part.startsWith('<!--') || part.startsWith('<?')) continue;
+      else if (part.startsWith('</')) depth -= 1;
+      else if (part.startsWith('<')) { if (!part.endsWith('/>')) depth += 1; } else if (!depth) text += decodeXmlEntities(part);
+    }
+    return text;
+  };
+  const childOf = (parent, name) => els.find((e) => e.name === name && within(parent, e) && e.path === `${parent.path}/${parent.name}`);
 
-  // uniqueid -> what each UxAgentControl entry of its description names: the static page id ('' when none) and the PageInput text.
+  // uniqueid -> what each UxAgentControl entry of its description names: the static page id ('' when none) and the PageInput text. Only the
+  // first `controlDescriptions` under the form's root element is read, and in it the first description for each uniqueid, as the SDK does.
   const bindings = new Map();
-  for (const d of els.filter((e) => e.name === 'controlDescription' && /(?:^|\/)controlDescriptions$/.test(e.path))) {
+  const region = els.find((e) => e.name === 'controlDescriptions' && !e.path.includes('/'));
+  for (const d of region ? els.filter((e) => e.name === 'controlDescription' && within(region, e) && e.path === `${region.path}/controlDescriptions`) : []) {
     const uid = idIn(d.attrs.forControl);
-    if (!uid) continue;
-    if (!bindings.has(uid)) bindings.set(uid, []);
-    for (const control of els.filter((e) => e.name === 'customControl' && within(d, e) && lower(e.attrs.name || '') === UX_AGENT_CONTROL)) {
-      const params = els.filter((e) => within(control, e) && /(?:^|\/)customControl\/parameters$/.test(e.path));
-      const ref = params.find((e) => e.name === 'RefId');
-      const input = params.find((e) => e.name === 'PageInput');
-      const page = ref && ref.attrs.static === 'true' && (!input || input.attrs.static === 'true') ? idIn(textOf(ref)) : '';
+    if (!uid || bindings.has(uid)) continue;
+    bindings.set(uid, []);
+    for (const control of els.filter((e) => e.name === 'customControl' && within(d, e) && e.path === `${d.path}/controlDescription` && e.attrs.name === UX_AGENT_CONTROL)) {
+      const params = childOf(control, 'parameters');
+      const ref = params && childOf(params, 'RefId');
+      const input = params && childOf(params, 'PageInput');
+      const page = ref && ref.attrs.static === 'true' && (!input || input.attrs.static === 'true') ? idIn(valueOf(ref)) : '';
       bindings.get(uid).push({ page, input: input ? valueOf(input) : undefined });
     }
   }
   const hits = [];
-  for (const control of els.filter((e) => e.name === 'control' && BODY_CELL.test(e.path))) {
+  for (const control of els.filter((e) => e.name === 'control' && BODY_CELL.test(e.path) && !e.attrs.datafieldname && classOf(e) === PAGE_CONTROL_CLASS)) {
     const entries = bindings.get(idIn(control.attrs.uniqueid)) || [];
     if (!entries.some((x) => x.page === want)) continue;
     if (!entries.every((x) => x.page === want && x.input === entries[0].input)) return { ok: false, reason: 'binding-unsupported' };
