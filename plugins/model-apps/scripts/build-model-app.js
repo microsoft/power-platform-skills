@@ -711,6 +711,8 @@ async function buildModelAppHeld(spec, opts, deps, v, buildLease) {
         authorizedFormRemovals,
         authorizedSitemapRemovals,
         allowDestructive: opts.allowDestructive, // pages phase gates destructive page removals
+        // The `--authorize` keys: consent to exactly the destructive schema changes they name, and to nothing else (authorizationKeys).
+        authorizedDestructive: opts.authorizedDestructive,
         changedOnly: opts.changedOnly, // #changed-only: pages-only fast-apply seams (resolvedAppId + skipSitemapFinalize)
         // AB#6726727: the spec last applied to, or downloaded from, this environment — lets the sitemap
         // rewrite keep a nav change made in the designer since then instead of reverting it.
@@ -982,6 +984,45 @@ function list(v) {
 // preferring one.
 const readLanguageFlag = (flags) => readAliasedFlag(flags, 'language-code', 'languageCode');
 
+// `--authorize <key>`, repeatable, consents to ONE destructive schema change the spec declares, and to nothing else:
+//   dateTimeBehavior:<table>.<column>   a one-way Date and Time behaviour change of a column the table already has
+//   isSecured:<table>.<column>          unsecuring a secured column, which deletes every permission any profile holds on it
+//   tableFlags:<table>                  turning duplicate detection off, which unpublishes the table's duplicate rules
+// It is deliberately not implied by --allow-destructive: that flag approves the form and sitemap removals the build lists, and a
+// consent to delete security or to convert stored dates must name the column it is for. The build's refusal of such a change names
+// the exact key, so the maker reads what will happen, then runs the build again with it. A key is refused unless the spec declares
+// the change it consents to, so a stale or mistyped key cannot authorize something else later. Table and column names are matched
+// case-insensitively, as the build matches them. parseArgs keeps only the last value of a repeated flag, so the keys are read from argv.
+function authorizationKeys(argv, spec) {
+  const raw = [];
+  for (let i = 0; i < argv.length; i += 1) {
+    const a = argv[i];
+    if (a === '--authorize') { raw.push(argv[i + 1]); i += 1; } else if (typeof a === 'string' && a.startsWith('--authorize=')) raw.push(a.slice('--authorize='.length));
+  }
+  const lower = (s) => String(s || '').toLowerCase();
+  const keys = new Set();
+  const problems = [];
+  for (const key of raw) {
+    // dateTimeBehavior:new_ticket.new_due | isSecured:new_ticket.new_salary | tableFlags:new_ticket
+    const m = /^(dateTimeBehavior|isSecured):([A-Za-z0-9_]+)\.([A-Za-z0-9_]+)$|^(tableFlags):([A-Za-z0-9_]+)$/.exec(String(key));
+    if (!m) { problems.push(`'${key}' is not dateTimeBehavior:<table>.<column>, isSecured:<table>.<column> or tableFlags:<table>`); continue; }
+    const kind = m[1] || m[4];
+    const table = lower(m[2] || m[5]);
+    const entity = ((spec && spec.entities) || []).find((e) => lower(e && e.schemaName) === table);
+    const column = m[3] ? (((entity && entity.columns) || []).find((c) => lower(c && c.schemaName) === lower(m[3]))) : null;
+    const declares = kind === 'tableFlags' ? !!entity && entity.duplicateDetectionEnabled === false
+      : kind === 'isSecured' ? !!column && column.isSecured === false
+        : !!column && column.type === 'DateTime' && column.dateTimeBehavior !== undefined;
+    if (!declares) {
+      const what = kind === 'tableFlags' ? `duplicateDetectionEnabled: false on table ${table}` : kind === 'isSecured' ? `isSecured: false on column ${table}.${lower(m[3])}` : `a dateTimeBehavior on the DateTime column ${table}.${lower(m[3])}`;
+      problems.push(`'${key}' consents to a change the spec does not declare (it would need ${what})`);
+      continue;
+    }
+    keys.add(kind === 'tableFlags' ? `tableFlags:${table}` : `${kind}:${table}.${lower(m[3])}`);
+  }
+  return { keys, error: problems.length ? `--authorize: ${problems.join('; ')}` : null };
+}
+
 function parseLanguageCode(value) {
   if (value === undefined) return undefined;
   // Shares app-spec's normalizer so the CLI flag, the App Spec field and the resolver can never
@@ -1058,7 +1099,7 @@ async function main() {
   const argv = process.argv.slice(2);
   const { positional, flags } = parseArgs(argv);
   const USAGE =
-    'Usage: node scripts/build-model-app.js --env <url> --spec @<app-folder>/app-spec.json [--apply] [--sample-data] [--publish] [--verify] [--changed-only] [--no-live-plan] [--stage <data|ui|app|publish>] [--only|--skip <phases>] [--from|--to <phase>] [--language-code|--languageCode <lcid>] [--non-interactive] [--allow-destructive] [--workspace <dir>]';
+    'Usage: node scripts/build-model-app.js --env <url> --spec @<app-folder>/app-spec.json [--apply] [--sample-data] [--publish] [--verify] [--changed-only] [--no-live-plan] [--stage <data|ui|app|publish>] [--only|--skip <phases>] [--from|--to <phase>] [--language-code|--languageCode <lcid>] [--non-interactive] [--allow-destructive] [--authorize <key>]... [--workspace <dir>]';
   // The declared flag contract, enforced before anything else runs.
   //
   // `needValue` lists every flag whose MISSING value would be read as a default rather than an
@@ -1073,8 +1114,8 @@ async function main() {
   const flagError = validateFlags(argv, {
     known: ['env', 'spec', 'apply', 'sample-data', 'publish', 'verify', 'changed-only', 'no-live-plan',
       'stage', 'only', 'skip', 'from', 'to', 'language-code', 'languageCode', 'non-interactive',
-      'allow-destructive', 'workspace'],
-    needValue: ['env', 'spec', 'stage', 'only', 'skip', 'from', 'to', 'language-code', 'languageCode', 'workspace'],
+      'allow-destructive', 'authorize', 'workspace'],
+    needValue: ['env', 'spec', 'stage', 'only', 'skip', 'from', 'to', 'language-code', 'languageCode', 'authorize', 'workspace'],
   });
   if (flagError) {
     makeWritesBlocking(process.stdout, process.stderr);
@@ -1100,6 +1141,12 @@ async function main() {
   const specPath = path.resolve(specArg.startsWith('@') ? specArg.slice(1) : specArg);
   const spec = migrateAppSpec(readJsonArg('@' + specPath));
   const workspaceDir = flags.workspace || path.join(path.dirname(specPath), '.maker-workspace');
+  const authorization = authorizationKeys(argv, spec);
+  if (authorization.error) {
+    makeWritesBlocking(process.stdout, process.stderr);
+    process.stderr.write(`✗ ${authorization.error}\n${USAGE}\n`);
+    process.exit(1);
+  }
   // Before auth, language resolution, and SDK construction. A link planted as the workspace
   // root is refused here so the factory below is never called; a real directory is allowed.
   // Only an --apply creates it: a dry run never opens this workspace (see makeSdk).
@@ -1154,6 +1201,7 @@ async function main() {
     phases,
     profile: (flags.apply === true && flags.stage !== 'data') ? 'deploy' : 'plan',
     allowDestructive: flags['allow-destructive'] === true,
+    authorizedDestructive: authorization.keys,
     nonInteractive: flags['non-interactive'] === true || envTruthy(process.env.POWER_PLATFORM_SKILLS_NONINTERACTIVE),
     languageCode,
     appDir: path.dirname(specPath),
@@ -1407,4 +1455,4 @@ if (require.main === module) {
     emitResult(false, err);
   });
 }
-module.exports = { buildModelApp, planFor, isTransientHalt, checkCollisions, discoverOpDiffState, envTruthy, parseLanguageCode, assertSnapshotInvalidated, persistAppliedBaseline, completionFor, reportCompletion };
+module.exports = { buildModelApp, authorizationKeys, planFor, isTransientHalt, checkCollisions, discoverOpDiffState, envTruthy, parseLanguageCode, assertSnapshotInvalidated, persistAppliedBaseline, completionFor, reportCompletion };

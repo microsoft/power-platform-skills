@@ -1093,6 +1093,62 @@ test('destructive gate: build halts on a form-field removal without --allow-dest
   assert.ok(!calls.some((c) => c[0] === 'createSolution'), 'halted before any write');
 });
 
+// --authorize: consent to one destructive schema change the spec declares, by its key, and to nothing else.
+const consentSpec = {
+  entities: [{ schemaName: 'new_Ticket', duplicateDetectionEnabled: false, columns: [
+    { schemaName: 'new_Salary', type: 'Money', isSecured: false },
+    { schemaName: 'new_due', type: 'DateTime', dateTimeBehavior: 'DateOnly' },
+    { schemaName: 'new_open', type: 'DateTime' },
+  ] }],
+};
+
+test('--authorize: each repeated key is read, matched case-insensitively, and kept only for a change the spec declares', () => {
+  const { authorizationKeys } = require(path.join(__dirname, '..', 'build-model-app.js'));
+  const ok = authorizationKeys(['--env', 'https://x', '--authorize', 'isSecured:new_ticket.new_salary', '--apply', '--authorize=dateTimeBehavior:NEW_TICKET.new_due', '--authorize', 'tableFlags:new_ticket'], consentSpec);
+  assert.strictEqual(ok.error, null);
+  assert.deepStrictEqual([...ok.keys].sort(), ['dateTimeBehavior:new_ticket.new_due', 'isSecured:new_ticket.new_salary', 'tableFlags:new_ticket']);
+  assert.deepStrictEqual([...authorizationKeys(['--env', 'https://x', '--allow-destructive'], consentSpec).keys], [], '--allow-destructive alone consents to none of them');
+  for (const [key, why] of [
+    ['isSecured:new_ticket', /is not dateTimeBehavior:<table>\.<column>, isSecured:<table>\.<column> or tableFlags:<table>/],
+    ['isSecured:new_other.new_salary', /does not declare \(it would need isSecured: false on column new_other\.new_salary\)/],
+    ['dateTimeBehavior:new_ticket.new_open', /a dateTimeBehavior on the DateTime column new_ticket\.new_open/],
+    ['tableFlags:account', /duplicateDetectionEnabled: false on table account/],
+  ]) {
+    const r = authorizationKeys(['--authorize', key], consentSpec);
+    assert.match(r.error, why, key);
+    assert.strictEqual(r.keys.size, 0, key);
+  }
+});
+
+test('--authorize: a key the spec does not declare is refused before anything runs', async () => {
+  const { loadCli } = require('./helpers/cli-harness.js');
+  const dir = fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'authorize-'));
+  try {
+    const specPath = path.join(dir, 'app-spec.json');
+    fs.writeFileSync(specPath, JSON.stringify(desk), 'utf8');
+    const reached = [];
+    const cli = loadCli(path.join(__dirname, '..', 'build-model-app.js'), {
+      argv: ['--env', 'https://contoso.crm.dynamics.com', '--spec', `@${specPath}`, '--apply', '--authorize', 'isSecured:new_ticket.new_priority'],
+      env: { PATH: path.dirname(process.execPath), POWER_PLATFORM_SKILLS_TELEMETRY_MODEL_APPS_OPTOUT: '1' },
+      requires: { './lib/maker-sdk.js': { createMakerSdk: () => { reached.push('sdk'); return {}; }, createNodeWorkspaceStorage: () => { reached.push('workspace'); return {}; } } },
+    });
+    await assert.rejects(cli.main(), (e) => e.exitCode === 1);
+    assert.match(cli.stderrText(), /--authorize: 'isSecured:new_ticket\.new_priority' consents to a change the spec does not declare/);
+    assert.deepStrictEqual(reached, []);
+    assert.strictEqual(fs.existsSync(path.join(dir, '.maker-workspace')), false, 'refused before the workspace is made');
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('--authorize: the consented keys reach the engine, and a build without them hands it none', async () => {
+  const { sdk } = mockSdk();
+  const runOpts = [];
+  const keys = new Set(['isSecured:new_ticket.new_salary']);
+  await buildModelApp(desk, { apply: true, env: 'https://x', retryDelayMs: 0, allowDestructive: true, authorizedDestructive: keys }, { sdk, provisionSdk: sdk, discoverOpDiffState: async () => quietState, runBuild: successfulRunBuild(runOpts) });
+  assert.strictEqual(runOpts[0].authorizedDestructive, keys);
+  await buildModelApp(desk, { apply: true, env: 'https://x', retryDelayMs: 0, allowDestructive: true }, { sdk, provisionSdk: sdk, discoverOpDiffState: async () => quietState, runBuild: successfulRunBuild(runOpts) });
+  assert.strictEqual(runOpts[1].authorizedDestructive, undefined, '--allow-destructive is not consent to a schema change');
+});
+
 test('destructive gate: prune:false form removal is not refused and reaches runBuild', async () => {
   const { sdk } = mockSdk();
   const def = Object.assign(formOf(['new_name']), { __explicitLayout: true, __prune: false, __primaryField: 'new_name' });
