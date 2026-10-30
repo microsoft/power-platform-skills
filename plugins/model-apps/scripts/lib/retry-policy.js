@@ -105,7 +105,10 @@ const MAX_CHAIN = 8;
 // that is the re-send the SDK refuses to make, so these are NEVER, as an explicit `transient: false` is (rule 1). Typed by the bundled SDK:
 //   UPSERT_OUTCOME_UNKNOWN       upsertRecord: "the row MAY have been written; never re-read or re-sent"
 //   APP_UPDATE_OUTCOME_UNKNOWN   an app update whose change set's answer proves nothing
-const OUTCOME_UNKNOWN_CODES = Object.freeze(new Set(['UPSERT_OUTCOME_UNKNOWN', 'APP_UPDATE_OUTCOME_UNKNOWN']));
+//   BPF_CREATE_ROLLBACK_OUTCOME_UNKNOWN / BPF_DEACTIVATE_OUTCOME_UNKNOWN / BPF_REACTIVATE_OUTCOME_UNKNOWN
+//                                a process step whose effect could not be confirmed; inspect it, do not replay it
+const OUTCOME_UNKNOWN_CODES = Object.freeze(new Set(['UPSERT_OUTCOME_UNKNOWN', 'APP_UPDATE_OUTCOME_UNKNOWN',
+  'BPF_CREATE_ROLLBACK_OUTCOME_UNKNOWN', 'BPF_DEACTIVATE_OUTCOME_UNKNOWN', 'BPF_REACTIVATE_OUTCOME_UNKNOWN']));
 
 // An error that says a run again cannot change it. `refusal` makes one; `neverRetry` marks one that exists. The message is the maker's to read and nobody's to judge.
 function refusal(message, props = {}) {

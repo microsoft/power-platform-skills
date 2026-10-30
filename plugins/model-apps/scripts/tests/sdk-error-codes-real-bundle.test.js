@@ -29,13 +29,10 @@
 //
 // THE FIXTURE (fixtures/sdk-error-codes.json) names every code the scan finds, with what the skills do with it:
 //   connection                   CONNECTION_ERROR: the HTTP status it carries decides (429/502/503/504 run again; any other is final)
-//   outcome-unknown              a write that may have committed; NEVER run again, whatever failure it carries (OUTCOME_UNKNOWN_CODES)
-//   outcome-unknown-unresolved   OPEN DECISION, not a contract: a code whose words say an outcome is unknown that the retry policy today
-//                                runs again when the failure it carries is a transient TRANSPORT failure (a business process flow's
-//                                create rollback, deactivate and reactivate; a deactivate the gateway answers with a 5xx carries the
-//                                SDK's own typed error as its cause instead, which is final). Whether a run again is safe is undecided: finding the flow by name is not proof it is
-//                                this build's. Pinned as it is today so that the decision, either way, is a deliberate move of these
-//                                codes — to `outcome-unknown` (and OUTCOME_UNKNOWN_CODES) or to `typed`.
+//   outcome-unknown              a write that may have committed; NEVER run again, whatever failure it carries (OUTCOME_UNKNOWN_CODES).
+//                                Includes a business process flow's create rollback, deactivate and reactivate whose effect the SDK
+//                                could not confirm: finding the flow by name on a run again is no proof it is this build's, so the
+//                                step is inspected, not replayed.
 //   wraps-failure                judged by the failure it wraps (WRAPPED_SERVICE_CODES, CAUSE_WRAPPER_CODES)
 //   page-pre-write               a page push refused before it sent a write: writeOutcome says it wrote 'nothing' (PRE_WRITE_REFUSALS)
 //   typed                        a refusal: final over a clean failure, run again over a transient one (the default)
@@ -58,7 +55,7 @@ const { SdkError, ConnectionError } = require('../lib/maker-sdk.js');
 const SCRIPTS = path.resolve(__dirname, '..');
 const BUNDLE = path.join(SCRIPTS, 'vendor', 'cds-maker-sdk.cjs');
 const FIXTURE = path.join(__dirname, 'fixtures', 'sdk-error-codes.json');
-const CATEGORIES = ['connection', 'outcome-unknown', 'outcome-unknown-unresolved', 'wraps-failure', 'page-pre-write', 'typed', 'diagnostic'];
+const CATEGORIES = ['connection', 'outcome-unknown', 'wraps-failure', 'page-pre-write', 'typed', 'diagnostic'];
 
 const LITERAL = /["'`]([A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+)["'`]/g;
 // The two OCCURRENCES of a code-shaped literal that are provably not a code, read from what stands right before it:
@@ -153,7 +150,6 @@ test('SDK codes: each category holds in the plugin\'s retry policy and page outc
         for (const cause of [unavailable(), reset()]) expect(code, `over ${cause.message}, never run again`, judgeFailure(over(make(), cause)).never, true);
         expect(code, 'alone, never run again', judgeFailure(make()).never, true);
         break;
-      case 'outcome-unknown-unresolved':
       case 'typed':
       case 'page-pre-write':
         expect(code, 'alone, never run again', judgeFailure(make()).never, true);
