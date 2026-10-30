@@ -14,7 +14,6 @@ const {
   planDashboardReconcile,
   applyDashboardReconcile,
   expectedDashboardProjection,
-  createdDashboardBindings,
 } = require('../lib/dashboard-reconcile.js');
 
 const DID = '55555555-0000-4000-8000-000000000001';
@@ -37,9 +36,10 @@ function server() {
 const declared = (tiles, over = {}) => ({ name: 'Ops', reconcile: 'declared', tiles, ...over });
 const listTile = (over = {}) => ({ key: 'open', type: 'list', view: 'Open cases', componentId: LIST_CTRL, ...over });
 
-async function run(srv, dashboard, ctx = {}) {
+async function run(srv, dashboard, ctx = {}, opts = {}) {
   const sdk = await srv.newSdk();
-  const plan = await planDashboardReconcile({ dashboard, dashboardId: DID, sdk, resolveTile, toComponent: dashboardComponent }, ctx);
+  const dashboardId = 'dashboardId' in opts ? opts.dashboardId : DID;
+  const plan = await planDashboardReconcile({ dashboard, dashboardId, sdk, resolveTile, toComponent: dashboardComponent }, ctx);
   const result = await applyDashboardReconcile(plan, { sdk }, ctx);
   return { plan, result, sdk };
 }
@@ -178,14 +178,115 @@ test('declared tiles must be keyed and unique', () => {
   assert.match(errors[2], /tiles\[3\]: componentId must be a GUID/);
 });
 
-test('the bindings of a dashboard the build creates pair tile i with component i of the expected projection', async () => {
-  const srv = createRowTableServer({ tables: { systemforms: 'formid' } });
-  const sdk = await srv.newSdk();
-  const dash = declared([{ key: 'a', type: 'list', view: 'Open cases' }, { key: 'b', type: 'list', view: 'My cases' }]);
-  const art = await sdk.createArtifact('dashboard', { name: 'Ops' });
-  for (let i = 0; i < dash.tiles.length; i++) await sdk.addElement('dashboard', art.id, '/components', dashboardComponent(resolveTile(dash.tiles[i]), i));
-  const expected = await expectedDashboardProjection(sdk, art.id);
-  const bindings = createdDashboardBindings({ dashboard: dash, artifact: expected, resolveTile, toComponent: dashboardComponent });
-  assert.deepEqual(bindings.map((b) => [b.key, b.id]), [['ops/a', expected.components[0].id.replace(/[{}]/g, '').toLowerCase()], ['ops/b', expected.components[1].id.replace(/[{}]/g, '').toLowerCase()], ['ops', art.id.toLowerCase()]]);
+const OTHER = '55555555-0000-4000-8000-000000000002';
+
+test('a dashboard description changed outside the spec is refused before it is overwritten; approval writes it', async () => {
+  const srv = server();
+  srv.rowOf('systemforms', DID).description = 'Original';
+  const managed = fakeManaged();
+  const first = await run(srv, declared([listTile()], { description: 'Original' }), { managed, authorizedAdoption: true });
+  managed.persist(first.result.managedBindings);
+  srv.rowOf('systemforms', DID).description = 'Changed by another maker';
+  srv.clearLog();
+  const refused = await run(srv, declared([listTile()], { description: 'Requested edit' }), { managed });
+  assert.deepEqual(refused.result.refused.map((r) => r.code), ['dashboard-drift']);
   assert.equal(srv.writes.length, 0);
+  assert.equal(srv.rowOf('systemforms', DID).description, 'Changed by another maker');
+  // Not declaring the description keeps the maker's text and is no conflict for a tile edit.
+  const tileEdit = await run(srv, declared([listTile({ name: 'Renamed' })]), { managed });
+  assert.deepEqual(tileEdit.result.refused, []);
+  assert.equal(srv.rowOf('systemforms', DID).description, 'Changed by another maker');
+  managed.persist(tileEdit.result.managedBindings);
+  srv.clearLog();
+  const approved = await run(srv, declared([listTile({ name: 'Renamed' })], { description: 'Requested edit' }), { managed, authorizedOverwrite: ['ops'] });
+  assert.deepEqual(approved.result.refused, []);
+  assert.equal(srv.rowOf('systemforms', DID).description, 'Requested edit');
+});
+
+test('one control belongs to one key: duplicate pins fail validation, a pin on a bound control is refused; nothing is written', async () => {
+  const errors = validateDeclaredDashboard(declared([listTile({ name: 'First' }), listTile({ key: 'second', name: 'Second' })]));
+  assert.match(errors.join(), /tiles\[1\]: componentId '.*' is already pinned by tiles\[0\]/);
+  const srv = server();
+  const dup = await run(srv, declared([listTile({ name: 'First' }), listTile({ key: 'second', name: 'Second' })]), { managed: fakeManaged(), authorizedAdoption: true });
+  assert.deepEqual(dup.result.refused.map((r) => r.code), ['dashboard-spec-invalid']);
+  assert.equal(srv.writes.length, 0);
+
+  const managed = fakeManaged();
+  const first = await run(srv, declared([listTile()]), { managed, authorizedAdoption: true });
+  managed.persist(first.result.managedBindings);
+  srv.clearLog();
+  const claim = await run(srv, declared([listTile({ componentId: undefined, name: 'Mine' }), listTile({ key: 'second', name: 'Second' })]), { managed });
+  assert.deepEqual(claim.result.refused.map((r) => r.code), ['dashboard-tile-claimed-twice']);
+  assert.equal(srv.writes.length, 0);
+});
+
+test('a bound dashboard is edited by its bound id only: another resolved id is refused, a gone row is never recreated', async () => {
+  const srv = server();
+  const managed = fakeManaged();
+  const creates = fakeCreates();
+  const first = await run(srv, declared([listTile()]), { managed, authorizedAdoption: true });
+  managed.persist(first.result.managedBindings);
+  srv.clearLog();
+  const mismatch = await run(srv, declared([listTile({ name: 'Renamed' })]), { managed, creates }, { dashboardId: OTHER });
+  assert.deepEqual(mismatch.result.refused.map((r) => r.code), ['dashboard-binding-mismatch']);
+  // The build found nothing by name (renamed in Maker): the bound id is still the one edited.
+  const byBinding = await run(srv, declared([listTile({ name: 'Renamed' })]), { managed, creates }, { dashboardId: undefined });
+  assert.deepEqual(byBinding.result.saved.map((s) => s.id), [DID]);
+  srv.store.get('systemforms').delete(DID);
+  srv.clearLog();
+  const gone = await run(srv, declared([listTile({ name: 'Renamed' })]), { managed, creates }, { dashboardId: undefined });
+  assert.deepEqual(gone.result.refused.map((r) => r.code), ['dashboard-bound-row-missing']);
+  assert.equal(srv.writes.length, 0);
+  assert.equal(creates.calls.length, 0);
+});
+
+test('a missing declared dashboard is created through the creation port: its id and every tile control id are reserved first', async () => {
+  const srv = createRowTableServer({ tables: { systemforms: 'formid' } });
+  const managed = fakeManaged();
+  const creates = fakeCreates();
+  const publication = fakePublication();
+  const witnessed = [];
+  const dash = declared([{ key: 'a', type: 'list', view: 'Open cases' }, { key: 'b', type: 'list', view: 'My cases', name: 'Mine' }], { description: 'Ops overview' });
+  const { plan, result } = await run(srv, dash, { managed, creates, publication, witness: (w) => witnessed.push(w) }, { dashboardId: undefined });
+  assert.equal(plan.action, 'create');
+  assert.equal(creates.calls.length, 1);
+  const { id, childIds } = creates.calls[0].ids;
+  assert.deepEqual(Object.keys(childIds), ['ops/a', 'ops/b']);
+  assert.deepEqual(result.saved.map((s) => [s.id, s.created]), [[id, true]]);
+  assert.equal(srv.rowOf('systemforms', id).description, 'Ops overview');
+  assert.deepEqual(witnessed[0].expected.components.map((c) => c.id.replace(/[{}]/g, '').toLowerCase()), [childIds['ops/a'], childIds['ops/b']]);
+  assert.deepEqual(result.managedBindings.map((b) => [b.kind, b.key, b.id, b.origin]), [
+    ['dashboard-tile', 'ops/a', childIds['ops/a'], 'created'], ['dashboard-tile', 'ops/b', childIds['ops/b'], 'created'], ['dashboard', 'ops', id, 'created']]);
+  assert.deepEqual(publication.queued, [{ type: 'dashboard', id }]);
+  managed.persist(result.managedBindings);
+  srv.clearLog();
+  const again = await run(srv, dash, { managed, creates }, { dashboardId: undefined });
+  assert.equal(again.plan.action, 'noChange');
+  assert.equal(srv.writes.length, 0);
+  assert.equal(creates.calls.length, 1);
+});
+
+test('a dashboard create is refused without the port and while an earlier create is pending; a resolved one is bound, not written', async () => {
+  const empty = () => createRowTableServer({ tables: { systemforms: 'formid' } });
+  const dash = declared([{ key: 'open', type: 'list', view: 'Open cases' }]);
+  let srv = empty();
+  let out = await run(srv, dash, {}, { dashboardId: undefined });
+  assert.deepEqual(out.result.refused.map((r) => r.code), ['creation-port-unavailable']);
+  assert.equal(srv.writes.length, 0);
+  srv = empty();
+  out = await run(srv, dash, { creates: fakeCreates({ pendingUnknown: ['ops'] }) }, { dashboardId: undefined });
+  assert.deepEqual(out.result.refused.map((r) => r.code), ['creation-pending-unknown']);
+  assert.equal(srv.writes.length, 0);
+  // The maker resolved the lost create by naming the dashboard and the control it made.
+  srv = server();
+  const managed = fakeManaged();
+  const creates = fakeCreates({ pendingUnknown: ['ops'], adopt: { ops: { id: DID, childIds: { 'ops/open': LIST_CTRL.replace(/[{}]/g, '') } } } });
+  out = await run(srv, dash, { managed, creates }, { dashboardId: undefined });
+  assert.deepEqual(out.result.refused.map((r) => r.code), ['creation-adopted-rerun']);
+  assert.equal(srv.writes.length, 0);
+  assert.deepEqual(out.result.managedBindings.map((b) => [b.key, b.id]), [['ops/open', LIST_CTRL.replace(/[{}]/g, '')], ['ops', DID]]);
+  managed.persist(out.result.managedBindings);
+  const next = await run(srv, declared([{ key: 'open', type: 'list', view: 'Open cases', name: 'Open' }]), { managed, creates }, { dashboardId: undefined });
+  assert.deepEqual(next.result.refused, []);
+  assert.equal(srv.writes.length, 1, 'the next run edits the bound dashboard');
 });
