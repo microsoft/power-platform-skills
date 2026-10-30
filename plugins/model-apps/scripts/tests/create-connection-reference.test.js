@@ -214,6 +214,28 @@ test('a refusal prints nothing on stdout, one line on stderr, and exits 1', () =
   assert.equal(res.stderr, 'Create connection reference new_sp failed: HTTP 400 — Invalid connector id\n');
 });
 
+// Dataverse can echo a request header, a URL or a value back in error.message, and stderr ends up in build logs: a message
+// shaped like a credential or an address, or holding a line break, is replaced by fixed text. The plain message above is kept.
+test('a refusal whose server message could quote a credential or an address prints fixed text instead', () => {
+  const secret = 'notarealtoken0123456789abcdef0123456789';
+  const fixed = 'Create connection reference new_sp failed: HTTP 400 — the server refused the request; its message is not shown because it may quote a credential or an address\n';
+  for (const message of [
+    `Invalid connector; Authorization: Bearer ${secret}`,
+    'Invalid connector; Authorization: Bearer abc.def',
+    'See https://contoso.crm.dynamics.com/api/data/v9.2/connectionreferences for details',
+    'Invalid connector for maker@contoso.onmicrosoft.com',
+    'Invalid connector; sig=abc',
+    `Invalid connector ${secret}`,
+    'Invalid connector\r\nInjected: second line',
+    `Invalid connector ${'x'.repeat(600)}`,
+  ]) {
+    const res = spawnCli({ refuse: { status: 400, message } }, 'new_sp', SP);
+    assert.equal(res.status, 1, message);
+    assert.equal(res.stdout, '', message);
+    assert.equal(res.stderr, fixed, message);
+  }
+});
+
 test('a reused reference prints its existing id', () => {
   const id = '11111111-2222-3333-4444-555555555555';
   const res = spawnCli({ seed: [{ connectionreferenceid: id, connectionreferencelogicalname: 'new_sp', connectionreferencedisplayname: 'new_sp', connectorid: SP }] }, 'new_sp', SP);

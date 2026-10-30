@@ -47,6 +47,7 @@ const {
 } = require('./lib/configuration-artifacts.js');
 const { configurationSendOnce } = require('./lib/configuration-transport.js');
 const { makeWritesBlocking } = require('./lib/output-redaction.js');
+const { tokenLike } = require('./lib/page-bindings.js');
 
 const USAGE = 'Usage: node create-connection-reference.js <envUrl> <logicalName> <connectorId> [--connection-id <id>] [--display-name <name>] [--solution <uniqueName>] [--authorize <token>]';
 
@@ -60,13 +61,29 @@ const MESSAGES = {
 // Only `body.error.message` is kept: the SDK's own error text around it can quote the request URL. ensureOk formats the
 // line exactly as the raw POST this script used to send did, the 401 identity advice included.
 function refusalLine(logicalName, answer) {
-  const message = answer && answer.body && answer.body.error && typeof answer.body.error.message === 'string' ? answer.body.error.message : null;
+  const message = safeServerMessage(answer && answer.body && answer.body.error ? answer.body.error.message : null);
   try {
     ensureOk({ status: answer.status, data: message ? { error: { message } } : null }, `Create connection reference ${logicalName}`);
   } catch (err) {
     return err.message;
   }
   return `Create connection reference ${logicalName} failed: HTTP ${answer.status}`;
+}
+
+// The server's own message is quoted only when it reads as a plain sentence. Dataverse can echo a request header, a URL
+// or a submitted value back in error.message, e.g.
+//   { error: { code: '0x80048d19', message: 'Invalid header: Authorization: Bearer <token>' } }
+// and stderr is captured into build logs and transcripts. So a message shaped like a credential (lib/page-bindings.js
+// tokenLike: a known token prefix, an authorization scheme with a value, a long run of letters and digits), an address
+// (`://`, `www.`, an `@`), a `name=value` pair, or one holding a control character (a second, forged line) or longer than
+// a sentence is replaced by fixed text. A plain message (`Invalid connector id`) is kept byte for byte.
+const UNSAFE_SERVER_MESSAGE = 'the server refused the request; its message is not shown because it may quote a credential or an address';
+function safeServerMessage(message) {
+  if (typeof message !== 'string' || !message) return null;
+  if (message.length > 300 || /[\u0000-\u001f\u007f-\u009f\u2028\u2029]/.test(message) || /:\/\/|www\.|@|[A-Za-z0-9_]=\S/i.test(message) || tokenLike(message)) {
+    return UNSAFE_SERVER_MESSAGE;
+  }
+  return message;
 }
 
 // The HTTP client the SDK writes through, noting the last non-2xx answer to a write (a GET is a read, not a refusal).
