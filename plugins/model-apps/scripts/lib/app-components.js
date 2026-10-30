@@ -499,9 +499,11 @@ async function classifyFormIds(client, ids) {
   return { rows: classified, formNames, unclassified: unique.filter((id) => !found.has(id)) };
 }
 
-async function readMainFormMembership(client, appModuleIdUnique, tables) {
+// `strict` refuses a component list holding a row it cannot place (unplaceableRows) instead of leaving the row out: a
+// proof that the list holds no form outside an allow-list cannot rest on a list it read only in part.
+async function readMainFormMembership(client, appModuleIdUnique, tables, { strict = false } = {}) {
   try {
-    const components = await appComponentRows(client, appModuleIdUnique, 60);
+    const components = await appComponentRows(client, appModuleIdUnique, 60, { strict });
     const classified = await classifyFormIds(client, components.map((row) => row.objectid));
     if (classified.unclassified.length) return { kind: 'inconclusive', reason: `form component(s) ${classified.unclassified.join(', ')} could not be classified` };
     const mains = classified.rows.filter((row) => row.type === 2);
@@ -517,6 +519,35 @@ async function readMainFormMembership(client, appModuleIdUnique, tables) {
     };
   } catch (error) {
     return { kind: 'inconclusive', reason: reasonOf(error) };
+  }
+}
+
+// Whether an app's PUBLISHED layer offers exactly the listed Main forms of each listed table, read after a publish the
+// push did not prove itself (its PushResult.appMainForms.published is 'notRead' whenever the build publishes later, as
+// it always does). The published layer is the one a plain retrieve answers; the pending layer has a key of its own
+// (currentAppLayer), so the two are never mixed:
+//   GET /appmodules(<appId>)?$select=appmoduleidunique   ->   { "appmoduleidunique": "<published layer key>" }
+// This is the same read the SDK's own published-layer check makes. Answers { published: 'matches' } only when every
+// listed table has no extra and no missing Main form; 'differs' names the tables that do not; any read that fails or
+// cannot be placed is 'unreadable' — never a match.
+async function publishedMainFormsProof(client, appId, mainFormsByTable) {
+  try {
+    const tables = mainFormsByTable && typeof mainFormsByTable === 'object' ? mainFormsByTable : {};
+    if (!Object.keys(tables).length) return { published: 'unreadable', reason: 'no Main-form list to compare with' };
+    const response = await client.get(`/appmodules(${requireGuid(appId, 'app id')})?$select=appmoduleidunique`);
+    const status = response && response.status;
+    if (typeof status === 'number' && (status < 200 || status > 299)) return { published: 'unreadable', reason: `the published app could not be read (HTTP ${status})` };
+    const unique = response && response.body && response.body.appmoduleidunique;
+    if (typeof unique !== 'string' || !FORM_GUID_RE.test(guidKey(unique))) return { published: 'unreadable', reason: 'the published app named no layer' };
+    const read = await readMainFormMembership(client, guidKey(unique), tables, { strict: true });
+    if (read.kind !== 'read') return { published: 'unreadable', reason: read.reason };
+    const off = read.tables.filter((row) => row.extras.length || row.missing.length);
+    if (off.length) {
+      return { published: 'differs', reason: off.map((row) => `'${row.table}' (${row.extras.length} extra, ${row.missing.length} missing)`).join(', ') };
+    }
+    return { published: 'matches' };
+  } catch (error) {
+    return { published: 'unreadable', reason: reasonOf(error) };
   }
 }
 
@@ -801,6 +832,6 @@ async function appEntityComponentsFor(sdk, appUnique, wanted) {
 module.exports = {
   currentAppLayer, currentLayerRows, currentLayerRow, savedPageRows, publishedAppLayer, appComponentRows, collectionRows, tableRefs, tableComponentIds, pinAppTables,
   publishAppComponents, appComponentsFor, applyAppMainForms, explainAppPushWarnings, declaredAppPins, pinDeclaredArtifacts, exactMembershipOutcome,
-  resolveMainForms, readMainFormMembership, appMainFormsFor, appEntityComponentsFor,
+  resolveMainForms, readMainFormMembership, publishedMainFormsProof, appMainFormsFor, appEntityComponentsFor,
   APP_COMPONENT_ENTITY_SOURCES, TABLE_NAME, readAppComponentInventory, appComponentEntities, downloadAppMainForms, setAppMembershipFloor,
 };

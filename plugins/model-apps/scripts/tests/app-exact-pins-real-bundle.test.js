@@ -7,6 +7,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { applyAppMainForms, pinDeclaredArtifacts, declaredAppPins, appComponentsFor, exactMembershipOutcome } = require('../lib/app-components.js');
 const { APP, FORM_A, FORM_B, META } = require('./helpers/app-membership-sdk.js');
+const { createAppPublication } = require('../lib/app-publication-policy.js');
 const { appPinServer, SITEMAP, VIEW, CHART, OFFNAV_CHART, FORM_QUICK, OFFNAV_FORM_A, OFFNAV_FORM_B } = require('./helpers/app-pin-server.js');
 
 const MAIN = { contoso_item: [FORM_A] };
@@ -187,4 +188,61 @@ test('appComponentsFor: the declared projection of a new app lists every declare
   assert.deepEqual(declared.dashboards, [CHART]);
   assert.deepEqual(declared.mainFormsByTable, MAIN);
   assert.deepEqual(appComponentsFor(DECLARED, undefined, { declared: true }).forms, [FORM_B, OFFNAV_FORM_B, FORM_A, FORM_QUICK, OFFNAV_FORM_A]);
+});
+
+// The build's exact update as the wiring makes it: the push records its result (published `notRead` — nothing published
+// it yet), then the build's ordinary app publish goes through the port, which reads the PUBLISHED layer back and settles
+// the obligation only on a match.
+async function exactUpdate(t) {
+  const server = await fetched(t, { members: [`1:${META.contoso_item}`, `62:${SITEMAP}`, `60:${FORM_B}`, `26:${VIEW}`, `59:${CHART}`] });
+  await applyAppMainForms(server.sdk, APP, MAIN, { mainFormsOnUpdate: 'exact' });
+  const pushed = await server.sdk.pushArtifact('app', APP);
+  assert.equal(pushed.saved, true, JSON.stringify(pushed.error && pushed.error.message));
+  const appWrite = { calls: 0, publish: async (id) => { appWrite.calls += 1; return server.sdk.publishArtifact('app', id); } };
+  return { ...server, pushed, appWrite };
+}
+
+test('REAL BUNDLE: an exact update published through the port is settled by the published-layer proof, with one guarded publish', async (t) => {
+  const { sdk, state, pushed, appWrite } = await exactUpdate(t);
+  const port = createAppPublication({ appWrite, client: sdk.dataverse });
+  assert.equal(port.recordExact(APP, pushed, { name: 'Membership', mainFormsByTable: MAIN }).done, false, 'the push alone proves nothing published');
+  port.queue({ kind: 'app', id: APP, reason: 'app.theme' });
+  const mark = state.requests.length;
+  const answer = await port.publishApp(APP);
+  assert.notEqual(answer.publish.kind, 'failed', JSON.stringify(answer.publish));
+  assert.deepEqual(port.unsettled(), []);
+  assert.deepEqual(port.owed(), [], 'the publish paid the queued work');
+  const published = writes(state).slice(0).filter((line) => line.includes('/PublishXml'));
+  assert.equal(published.length, 1, writes(state).join('\n'));
+  assert.match(published[0], /^BATCH PATCH \/appmodules\(11111111-0000-4000-8000-000000000001\) \{\} \| POST \/PublishXml /, 'the SDK\'s guarded publish');
+  const before = state.requests.length;
+  assert.deepEqual(await port.flush(), { published: [], withheld: [], failed: [] });
+  assert.equal(state.requests.length, before, 'nothing is published twice');
+  assert.equal(appWrite.calls, 1);
+  assert.ok(state.requests.slice(mark).some((line) => line.startsWith(`GET https://contoso.crm.dynamics.com/api/data/v9.2/appmodules(${APP})?$select=appmoduleidunique`) || line.includes(`appmodules(${APP})?$select=appmoduleidunique`)), 'the published layer was read');
+});
+
+test('REAL BUNDLE: an exact publish whose published layer reads back differently, or not at all, stays unsettled', async (t) => {
+  for (const proof of ['differs', 'unreadable']) {
+    const { sdk, pushed, appWrite } = await exactUpdate(t);
+    // The proof's reads go through this client: one read is answered as a foreign edit (FORM_B back in the published layer)
+    // or as a failure; every other read is the server's.
+    const client = {
+      get: async (path, ...rest) => {
+        if (proof === 'unreadable' && path.includes('$select=appmoduleidunique') && !path.includes('RetrieveUnpublished')) return { status: 503, headers: {}, body: null };
+        const answer = await sdk.dataverse.get(path, ...rest);
+        if (proof === 'differs' && path.startsWith('/appmodulecomponents') && answer && answer.body && Array.isArray(answer.body.value)) {
+          return { ...answer, body: { value: [...answer.body.value, { objectid: FORM_B, componenttype: 60 }] } };
+        }
+        return answer;
+      },
+    };
+    const port = createAppPublication({ appWrite, client });
+    port.recordExact(APP, pushed, { name: 'Membership', mainFormsByTable: MAIN });
+    await port.publishApp(APP);
+    const unsettled = port.unsettled();
+    assert.equal(unsettled.length, 1, proof);
+    assert.equal(unsettled[0].code, 'APP_MAIN_FORMS_NOT_EXACT');
+    assert.match(unsettled[0].reason, new RegExp(proof));
+  }
 });
