@@ -117,6 +117,31 @@ test('drift on an authored tile part is refused until the overwrite is approved'
   assert.match(formXml(srv), /<label description="Open" /);
 });
 
+test('a spec that starts declaring a tile name or size is an edit, not drift; stopping again is not drift either', async () => {
+  const srv = server();
+  const managed = fakeManaged();
+  const first = await run(srv, declared([listTile()]), { authorizedAdoption: true, managed });
+  managed.persist(first.result.managedBindings);
+  srv.clearLog();
+  const second = await run(srv, declared([listTile({ name: 'Renamed', rowspan: 10 })]), { managed });
+  assert.deepEqual(second.result.refused, [], 'the binding was recorded before the spec owned the name and size');
+  assert.deepEqual(second.plan.tiles[0].changed, ['name', 'rowspan']);
+  assert.match(formXml(srv), /rowspan="10"[^>]*><labels><label description="Renamed" /);
+  managed.persist(second.result.managedBindings);
+  srv.clearLog();
+  // Recorded with the name and rowspan owned; now the colspan joins them.
+  const wider = await run(srv, declared([listTile({ name: 'Renamed', rowspan: 10, colspan: 4 })]), { managed });
+  assert.deepEqual(wider.result.refused, [], 'a binding recorded under a partial ownership still matches');
+  assert.deepEqual(wider.plan.tiles[0].changed, ['colspan']);
+  assert.match(formXml(srv), /<cell colspan="4" rowspan="10"/);
+  managed.persist(wider.result.managedBindings);
+  srv.clearLog();
+  const third = await run(srv, declared([listTile()]), { managed });
+  assert.deepEqual(third.result.refused, []);
+  assert.equal(third.plan.action, 'noChange');
+  assert.equal(srv.writes.length, 0);
+});
+
 test('a tile omitted from the spec is never removed', async () => {
   const srv = server();
   await run(srv, declared([listTile({ name: 'Only this' })]), { authorizedAdoption: true });

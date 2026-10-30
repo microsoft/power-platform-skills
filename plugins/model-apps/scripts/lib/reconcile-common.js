@@ -111,6 +111,24 @@ function driftVerdict(binding, liveSha, desiredSha) {
 }
 
 /**
+ * driftVerdict for a projection whose SHAPE follows the spec: an optional part (a description, a title,
+ * a tile's name) is owned only while the spec declares it. A spec that starts or stops declaring one
+ * changes its own projection, so a binding recorded under the earlier ownership would never match
+ * today's and every such spec edit would read as drift. `variants` are the live projections under each
+ * ownership the binding may have been recorded with; one that matches the binding means the server
+ * still holds what was last applied.
+ */
+function ownershipDriftVerdict(binding, variants, liveSha, desiredSha) {
+  if (binding && variants.some((v) => intentSha256(v) === binding.intentSha256)) return 'none';
+  return driftVerdict(binding, liveSha, desiredSha);
+}
+
+/** Every subset of `keys`, as objects with the chosen keys set to true: the ownerships to try. */
+function ownershipSubsets(keys) {
+  return keys.reduce((acc, k) => acc.flatMap((s) => [s, { ...s, [k]: true }]), [{}]);
+}
+
+/**
  * Pre-write refusal codes the SDK raises BEFORE it sends anything — a thrown error with one of
  * these codes is a known not-applied outcome. Any other throw from a push is an UNKNOWN outcome: a
  * push that failed part-way may have written some rows, so it must never be reported as refused
@@ -196,6 +214,8 @@ module.exports = {
   lookupBinding,
   bindingRecord,
   driftVerdict,
+  ownershipDriftVerdict,
+  ownershipSubsets,
   pushChecked,
   pushIfChanged,
   queuePublication,

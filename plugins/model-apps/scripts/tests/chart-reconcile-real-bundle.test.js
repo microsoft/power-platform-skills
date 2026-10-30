@@ -94,6 +94,25 @@ test('drift on an owned field is refused until the overwrite is approved; conver
   assert.match(srv.rowOf('savedqueryvisualizations', CID).presentationdescription, /ChartType="Bar"/);
 });
 
+test('a spec that starts declaring a description or title is an edit, not drift', async () => {
+  const srv = server({ description: 'Maker text' });
+  const managed = fakeManaged();
+  const first = await run(srv, declared(), { authorizedAdoption: true, managed });
+  managed.persist(first.result.managedBindings);
+  srv.clearLog();
+  const second = await run(srv, declared({ description: 'Open cases by status', title: 'By status' }), { managed });
+  assert.deepEqual(second.result.refused, [], 'the binding was recorded before the spec owned these fields');
+  assert.deepEqual(second.plan.changed, ['description', 'title']);
+  assert.equal(srv.rowOf('savedqueryvisualizations', CID).description, 'Open cases by status');
+  managed.persist(second.result.managedBindings);
+  srv.clearLog();
+  // And stopping again leaves the text alone without reading as drift.
+  const third = await run(srv, declared(), { managed });
+  assert.deepEqual(third.result.refused, []);
+  assert.equal(third.plan.action, 'noChange');
+  assert.equal(srv.writes.length, 0);
+});
+
 test('a chart outside the supported shape (two measures) is refused, not reduced', async () => {
   const srv = server({ datadescription: data('cr_priority', '<attribute alias="aggregate_column" name="cr_caseid" aggregate="count" /><attribute alias="aggregate_column2" name="cr_amount" aggregate="sum" />') });
   const { result } = await run(srv, declared(), { authorizedAdoption: true });

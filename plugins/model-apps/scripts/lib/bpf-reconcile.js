@@ -21,7 +21,7 @@
 //     between would move the row's version under the SDK's conditional push, a 412). It is the same
 //     column the SDK's own header PATCH writes on an Active flow, so it needs no deactivation.
 
-const { emptyResult, refusal, isAuthorized, lookupBinding, bindingRecord, driftVerdict, pushIfChanged, intentSha256, canonicalJson, PRE_WRITE_CODES } = require('./reconcile-common.js');
+const { emptyResult, refusal, isAuthorized, lookupBinding, bindingRecord, ownershipDriftVerdict, ownershipSubsets, pushIfChanged, intentSha256, canonicalJson, PRE_WRITE_CODES } = require('./reconcile-common.js');
 
 const KIND = 'business-process-flow';
 const ARTIFACT = 'bpf';
@@ -101,12 +101,9 @@ async function planBpfMetadata({ flow, flowId, sdk, fetched = false, created = f
 
   const binding = await lookupBinding(ctx, KIND, key);
   if (binding) plan.origin = binding.origin === 'created' ? 'created' : 'adopted';
-  // The binding was recorded under whatever the spec owned THEN: a spec that has since started (or
-  // stopped) declaring its description or order must not read as drift, so the live flow is matched under
-  // each ownership the binding may have been recorded with.
-  const recordedUnder = binding && [false, true].flatMap((d) => [false, true].map((o) => intentSha256(projectBpfForVerify(live, { description: d, order: o }))))
-    .find((sha) => sha === binding.intentSha256);
-  const verdict = driftVerdict(binding, recordedUnder || intentSha256(liveView), plan.desiredSha);
+  // The binding was recorded under whatever the spec owned THEN (see ownershipDriftVerdict).
+  const variants = ownershipSubsets(['description', 'order']).map((o) => projectBpfForVerify(live, o));
+  const verdict = ownershipDriftVerdict(binding, variants, intentSha256(liveView), plan.desiredSha);
   if (verdict === 'unbound' && !created && !isAuthorized(ctx.authorizedAdoption, key)) {
     plan.refused.push(refusal(key, 'bpf-adoption-not-authorized', 'this business process flow exists and the spec has not managed it before; approve adopting it first'));
     return plan;

@@ -29,7 +29,8 @@ const {
   isAuthorized,
   lookupBinding,
   bindingRecord,
-  driftVerdict,
+  ownershipDriftVerdict,
+  ownershipSubsets,
   pushIfChanged,
   queuePublication,
   normalizeGuid,
@@ -158,7 +159,8 @@ async function planChartReconcile({ chart, sdk }, ctx = {}) {
     plan.operations.push(operation({ key, kind: 'chart', target: id, action: 'noChange' }));
     return plan;
   }
-  const verdict = driftVerdict(binding, intentSha256(live), plan.desiredSha);
+  const variants = ownershipSubsets(['description', 'title']).map((o) => liveOwned(current, { ...intent, description: o.description ? '' : undefined, title: o.title ? '' : undefined }));
+  const verdict = ownershipDriftVerdict(binding, variants, intentSha256(live), plan.desiredSha);
   if (verdict === 'drift' && !isAuthorized(ctx.authorizedOverwrite, key)) {
     plan.refused.push(refusal(key, 'chart-drift', 'an owned part of the chart was changed outside the spec; refresh the spec or approve the overwrite'));
     return plan;

@@ -34,7 +34,8 @@ const {
   isAuthorized,
   lookupBinding,
   bindingRecord,
-  driftVerdict,
+  ownershipDriftVerdict,
+  ownershipSubsets,
   pushIfChanged,
   normalizeGuid,
   queuePublication,
@@ -179,7 +180,8 @@ async function planDashboardReconcile({ dashboard, dashboardId, sdk, resolveTile
         if (sameOwned(liveOwned, desired)) {
           entry.action = 'noChange';
         } else {
-          const verdict = driftVerdict(binding, intentSha256(liveOwned), desiredSha);
+          const variants = ownershipSubsets(['name', 'colspan', 'rowspan']).map((o) => liveTile(hit.c, { parameters: desired.parameters, name: o.name, colspan: o.colspan, rowspan: o.rowspan }));
+          const verdict = ownershipDriftVerdict(binding, variants, intentSha256(liveOwned), desiredSha);
           if (verdict === 'drift' && !isAuthorized(ctx.authorizedOverwrite, tileKey)) {
             plan.refused.push(refusal(tileKey, 'dashboard-tile-drift', 'an authored part of the tile was changed outside the spec; refresh the spec or approve the overwrite'));
             continue;
