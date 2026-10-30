@@ -29,7 +29,18 @@ async function withStandalonePagesLease(opts, fn) {
   if (!unique) {
     throw genpageError(`app ${appId} was not found, so the lease that keeps a build from editing it at the same time cannot be taken — nothing was changed`, { code: GENPAGE_APP_LEASE_UNRESOLVED, outcome: 'nothing', appId });
   }
-  const lease = acquire(applyWorkspaceOf({ workspaceDir: opts.workspaceDir, appDir: opts.appDir }), unique, { warn });
+  let lease;
+  try {
+    lease = acquire(applyWorkspaceOf({ workspaceDir: opts.workspaceDir, appDir: opts.appDir }), unique, { warn });
+  } catch (error) {
+    // The lease is taken before anything is read for the edit or written, so a refusal (`pages-locked`: a build or another edit holds it) changed
+    // nothing; say so, and name the app, as every other refusal of a page edit does.
+    if (error && typeof error === 'object') {
+      if (error.outcome === undefined) error.outcome = 'nothing';
+      if (error.appId === undefined) error.appId = appId;
+    }
+    throw error;
+  }
   try {
     return await fn();
   } finally {

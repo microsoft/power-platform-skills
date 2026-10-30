@@ -47,7 +47,7 @@ test('REAL BUNDLE: an edit outside a build is refused while a build of the same 
     let ran = 0;
     try {
       await assert.rejects(withStandalonePagesLease({ genpage, appId: APP_ID, appDir }, async () => { ran += 1; return genpage.placeInApp(APP_ID, { pages: [{ pageId: PAGE, title: 'Overview' }], dataSources: ['account'], languageCode: 1033 }); }),
-        (e) => e.code === 'pages-locked');
+        (e) => e.code === 'pages-locked' && e.outcome === 'nothing' && e.appId === APP_ID);
     } finally {
       held.release();
     }
