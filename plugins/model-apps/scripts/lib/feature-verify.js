@@ -1,6 +1,6 @@
 'use strict';
 // Component-level verification of the controls a build manages on a table's command bar, and a creation witness for
-// the dashboards it declares — the verification side of DESIGN C07. Both answers come from the bundled SDK's
+// the dashboards it declares. Both answers come from the bundled SDK's
 // `inspectArtifact` (GETs only, no workspace needed); this module turns them into verify checks.
 //
 // Why a separate check and not the existing one. verify-model-app.js's `commandBar(entity)` asks only whether the
@@ -29,7 +29,7 @@
 // layer and still be unpublished.
 //
 // Every `unverified` check FAILS the requested verification. An incomplete read is never a success
-// (DESIGN C05: incomplete reads and ambiguous identities remain unverified).
+// (incomplete reads and ambiguous identities remain unverified).
 //
 // Foreign controls (rows the build did not declare) are tolerated: only declared controls are asked about.
 

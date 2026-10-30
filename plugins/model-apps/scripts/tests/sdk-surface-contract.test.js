@@ -35,6 +35,9 @@ const SKILL_SDK_SURFACE = [
   'addElement',
   'addEntityPrivilegesToRole',
   'addSolutionComponent',
+  // `scripts/data-fix.js` plans a row repair by reads only and applies it through the SDK's conditional row writer
+  // (lib/data-fix-runner.js).
+  'applyDataFix',
   'associateRecords',
   'configureRowSummary',
   'createAlternateKey',
@@ -70,6 +73,8 @@ const SKILL_SDK_SURFACE = [
   'exportSolution',
   'fetchArtifact',
   'fetchEntityMetadata',
+  // `scripts/solutions.js inspect --include-artifacts` lists what the SDK can read of a solution (lib/solution-inventory.js).
+  'fetchSolution',
   'findArtifact',
   'findColumns',
   'findTables',
@@ -83,6 +88,9 @@ const SKILL_SDK_SURFACE = [
   // connectivity reads, which need the factory's `connectivity` option); `scripts/list-connections.js` lists the connections.
   'getConnectorOperationSchema',
   'getDeploymentSettingsTemplate',
+  // The push preview (lib/push-preview.js) previews exactly the set it prepared in its throwaway workspace, and these
+  // name that set; `previewPush` answers per artifact.
+  'getDirtyArtifacts',
   'getEntityPrivileges',
   // `scripts/list-languages.js` reads the environment's languages (the planner's language detection, in place of
   // `pac model list-languages`): LCIDs only — three GETs, no workspace — and maps them to culture codes itself.
@@ -97,12 +105,16 @@ const SKILL_SDK_SURFACE = [
   'importSolution',
   'initWorkspace',
   'insertStatusValue',
+  // Verify's command-control inspection and dashboard witness (lib/feature-verify.js), by reads only.
+  'inspectArtifact',
   // The deferred routing-description push reads the app copy's dirty flag, so it never replays an earlier
   // run's unpushed edits (sdk-build.js).
   'listArtifacts',
   'listConnections',
   'listConnectorOperations',
   'moveElement',
+  'previewPush',
+  'previewPushAll',
   'publishArtifact',
   // Step 8 publishes the app and every table whose default-view enrichment was saved but not yet
   // published in ONE PublishXml envelope (one customization lock, one publish job) instead of one

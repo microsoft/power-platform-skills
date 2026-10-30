@@ -11,7 +11,7 @@
 // persisted beyond the throwaway folder, which is removed whichever way the run ends.
 //
 // What it does NOT do:
-//   - run the build to prepare (DESIGN C06: "Do not run full build for preparation");
+//   - run the build to prepare: preparing an artifact must not cost a build;
 //   - preview a schema create (a table, column or relationship): the artifact preview cannot represent one, so such an
 //     item is reported `requiresSchema` and keeps the dry run's own create/reuse answer;
 //   - promise anything. `ready` means the push's own pre-write checks passed NOW; the platform's validation of the
@@ -174,10 +174,10 @@ async function preparePushPreview({ env, httpClient, items, solutionUniqueName, 
 
 async function applyEdit(sdk, type, id, edit) {
   switch (edit.op) {
-    case 'update': return sdk.updateElement(type, id, edit.pointer, edit.value);
-    case 'add': return sdk.addElement(type, id, edit.pointer, edit.element, edit.options);
-    case 'remove': return sdk.removeElement(type, id, edit.pointer);
-    case 'move': return sdk.moveElement(type, id, edit.from, edit.to, edit.options);
+    case 'update': return await sdk.updateElement(type, id, edit.pointer, edit.value);
+    case 'add': return await sdk.addElement(type, id, edit.pointer, edit.element, edit.options);
+    case 'remove': return await sdk.removeElement(type, id, edit.pointer);
+    case 'move': return await sdk.moveElement(type, id, edit.from, edit.to, edit.options);
     default: throw Object.assign(new Error(`unknown edit op ${edit.op}`), { code: 'PREVIEW_ITEMS_INVALID' });
   }
 }
@@ -186,7 +186,7 @@ async function applyEdit(sdk, type, id, edit) {
  * Previews the prepared set. `mode: 'each'` (default) previews every prepared artifact, `noChange` ones included;
  * `mode: 'batch'` runs `previewPushAll` — only the dirty ones, with the batch's page-dependency judgment — and is
  * refused when the isolated workspace's dirty list holds anything this module did not prepare (it never may: that
- * would be the shared-workspace preview DESIGN C06 forbids).
+ * would be a preview of the shared workspace, which this module never makes).
  * @param {object} handle - from preparePushPreview
  * @param {{ layers?: boolean, mode?: 'each'|'batch' }} [options]
  */

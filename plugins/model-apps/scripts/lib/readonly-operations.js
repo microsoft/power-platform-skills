@@ -11,7 +11,7 @@
 // show that zero writes were attempted, not merely that none succeeded.
 //
 // Results carry codes and short, scrubbed messages only — never a response body, a header, a token, a URL or a
-// record value (DESIGN rule: structured errors name the operation, type, key and code).
+// record value (a structured error names the operation, type, key and code, never a value).
 
 const GUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
