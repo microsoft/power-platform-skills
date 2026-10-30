@@ -279,3 +279,46 @@ test('a spec that starts declaring the description or action labels is an edit, 
   assert.equal(result.saved.length, 1, JSON.stringify(result));
   assert.equal((await liveRoot(srv)).trueBranch[0].displayName, 'Step hide-fax');
 });
+test('the bound rule is the authority: a different rule found by name is refused, a bound rule no longer found is never recreated, and nothing is read or written', async () => {
+  const srv = ruleServer();
+  const rule = allShapes();
+  await seed(srv, rule);
+  const managed = fakeManaged(createdRuleBindings(rule, '99999999-9999-9999-9999-999999999999'));
+  const edited = allShapes();
+  edited.actions[0].visible = true;
+  const other = await reconcile(srv, edited, { managed, authorizedOverwrite: true, authorizedAdoption: true });
+  assert.deepEqual([other.plan.action, other.result.refused.map((r) => r.code), other.result.managedBindings, srv.log], [null, ['rule-binding-mismatch'], [], []]);
+  const sdk = await srv.fresh();
+  const gone = await planRuleReconcile({ rule: edited, ruleId: null, sdk }, { managed });
+  assert.deepEqual([gone.action, gone.needsCreate, gone.refused.map((r) => r.code), srv.log], [null, undefined, ['rule-bound-row-missing'], []]);
+  const fresh = await planRuleReconcile({ rule: edited, ruleId: null, sdk }, {});
+  assert.deepEqual([fresh.action, fresh.needsCreate, fresh.refused, srv.log], [null, true, [], []]);
+});
+
+test('declaring the label of one more action is an edit, not drift; a label changed outside the spec on an action it writes is drift', async () => {
+  const srv = ruleServer();
+  const rule = allShapes();
+  rule.actions[0].label = 'Hide the fax';
+  await seed(srv, rule);
+  const managed = fakeManaged(createdRuleBindings(rule, RID));
+  const more = allShapes();
+  more.actions[0].label = 'Hide the fax';
+  more.actions[1].label = 'Lock the site';
+  const { result } = await reconcile(srv, more, { managed });
+  assert.deepEqual([result.refused, result.saved.length], [[], 1], JSON.stringify(result));
+  assert.deepEqual((await liveRoot(srv)).trueBranch.slice(0, 2).map((a) => a.displayName), ['Hide the fax', 'Lock the site']);
+  managed.persist(result.managedBindings);
+  const again = await reconcile(srv, more, { managed });
+  assert.equal(again.plan.action, 'noChange');
+
+  const maker = await srv.fresh();
+  await maker.fetchArtifact('businessRule', RID);
+  await maker.updateElement('businessRule', RID, '/rootCondition/trueBranch/1/displayName', 'Their label');
+  await maker.pushArtifact('businessRule', RID);
+  srv.log.length = 0;
+  const relabel = allShapes();
+  relabel.actions[0].label = 'Hide the fax';
+  relabel.actions[1].label = 'Lock the website';
+  const drift = await reconcile(srv, relabel, { managed });
+  assert.deepEqual([drift.result.refused.map((r) => r.code), drift.writes], [['rule-drift'], []]);
+});

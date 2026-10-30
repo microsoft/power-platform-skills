@@ -182,3 +182,23 @@ test('a spec that starts declaring a description or an order is an edit, not dri
   const after = await env.read();
   assert.deepEqual([after.description, after.order], ['Now described', 6]);
 });
+test('the bound flow is the authority: a different flow found by name is refused, a bound flow no longer found is never recreated, and nothing is read or written', async () => {
+  const flow = declared(DEPLOYED(), { order: 3 });
+  const env = await deployed(flow);
+  const managed = fakeManaged([createdBpfBinding(flow, '99999999-9999-9999-9999-999999999999')]);
+  const want = declared(DEPLOYED(), { order: 5 });
+  const sdk = await env.open();
+  const reads = [];
+  const spy = new Proxy(sdk, { get: (t, p) => (typeof t[p] === 'function' ? (...a) => { reads.push(p); return t[p](...a); } : t[p]) });
+  const other = await planBpfMetadata({ flow: want, flowId: env.id, sdk: spy }, { managed, authorizedOverwrite: true, authorizedAdoption: true });
+  assert.deepEqual([other.action, other.refused.map((r) => r.code), reads], [null, ['bpf-binding-mismatch'], []]);
+  const result = await applyBpfMetadata(other, { sdk }, { managed });
+  assert.deepEqual([result.saved, result.managedBindings, env.log], [[], [], []]);
+  const gone = await planBpfMetadata({ flow: want, flowId: null, sdk: spy }, { managed });
+  assert.deepEqual([gone.action, gone.needsCreate, gone.refused.map((r) => r.code), reads], [null, undefined, ['bpf-bound-row-missing'], []]);
+  const fresh = await planBpfMetadata({ flow: want, flowId: null, sdk: spy }, {});
+  assert.deepEqual([fresh.action, fresh.needsCreate, fresh.refused, reads], [null, true, [], []]);
+  // The same flow under a differently cased id is still the bound flow.
+  const same = await planBpfMetadata({ flow: want, flowId: env.id.toUpperCase(), sdk }, { managed: fakeManaged([createdBpfBinding(flow, env.id)]) });
+  assert.deepEqual([same.action, same.refused], ['update', []]);
+});

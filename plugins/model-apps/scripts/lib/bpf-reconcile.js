@@ -21,7 +21,7 @@
 //     between would move the row's version under the SDK's conditional push, a 412). It is the same
 //     column the SDK's own header PATCH writes on an Active flow, so it needs no deactivation.
 
-const { emptyResult, refusal, isAuthorized, lookupBinding, bindingRecord, ownershipDriftVerdict, ownershipSubsets, pushIfChanged, intentSha256, canonicalJson, PRE_WRITE_CODES } = require('./reconcile-common.js');
+const { emptyResult, refusal, isAuthorized, lookupBinding, bindingRecord, boundIdentity, ownershipDriftVerdict, ownershipSubsets, pushIfChanged, intentSha256, canonicalJson, PRE_WRITE_CODES } = require('./reconcile-common.js');
 
 const KIND = 'business-process-flow';
 const ARTIFACT = 'bpf';
@@ -69,9 +69,13 @@ function desiredProjection(flow) {
 }
 
 /**
- * Plan the declared metadata of an EXISTING flow. Call it after inspectBpfStages, which fetched the
+ * Plan the declared metadata of an EXISTING flow (`flowId`: the flow the build found by name, or null).
+ * Call it after inspectBpfStages, which fetched the
  * deployed flow into the workspace (`fetched: true`); otherwise it fetches the deployed flow itself.
- *   plan: { key, flowId, action: null|'noChange'|'update', order?, description?, descriptionViaRecord,
+ * A binding for the key is authoritative: a different `flowId` is bpf-binding-mismatch and a null one
+ * bpf-bound-row-missing, both before anything is read. With no binding and no flow, `needsCreate`
+ * tells the build to create it.
+ *   plan: { key, flowId, action: null|'noChange'|'update', needsCreate?, order?, description?, descriptionViaRecord,
  *           stagesDiffer, desiredSha, refused, unknown, origin }
  * A refused or unknown plan means the build must not apply the flow's stage edits either.
  */
@@ -82,6 +86,23 @@ async function planBpfMetadata({ flow, flowId, sdk, fetched = false, created = f
   const problems = validateDeclaredBpf(flow);
   if (problems.length) {
     plan.refused.push(refusal(key, 'bpf-spec-invalid', problems.join('; ')));
+    return plan;
+  }
+  // The bound flow is the authority: the flow the build found by name must be that flow, and a bound
+  // flow the build no longer finds is never recreated under the bound key.
+  const binding = await lookupBinding(ctx, KIND, key);
+  const bound = boundIdentity(binding, { resolvedId: flowId, code: 'bpf-binding-mismatch', key });
+  if (bound.refusal) {
+    plan.refused.push(bound.refusal);
+    return plan;
+  }
+  if (binding && !flowId) {
+    plan.refused.push(refusal(key, 'bpf-bound-row-missing', 'the business process flow this key is bound to was not found; repair the binding explicitly before it can be recreated'));
+    return plan;
+  }
+  if (!flowId) {
+    // Nothing to edit: the build creates the flow (through the creation port) and records createdBpfBinding.
+    plan.needsCreate = true;
     return plan;
   }
   let live;
@@ -99,7 +120,6 @@ async function planBpfMetadata({ flow, flowId, sdk, fetched = false, created = f
   const desired = desiredProjection(flow);
   plan.desiredSha = intentSha256(desired);
 
-  const binding = await lookupBinding(ctx, KIND, key);
   if (binding) plan.origin = binding.origin === 'created' ? 'created' : 'adopted';
   // The binding was recorded under whatever the spec owned THEN (see ownershipDriftVerdict).
   const variants = ownershipSubsets(['description', 'order']).map((o) => projectBpfForVerify(live, o));

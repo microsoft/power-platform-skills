@@ -36,7 +36,9 @@ const {
   isAuthorized,
   lookupBinding,
   bindingRecord,
-  driftVerdict,
+  partsDriftVerdict,
+  projectionBaseline,
+  boundIdentity,
   pushIfChanged,
   intentSha256,
   canonicalJson,
@@ -189,25 +191,35 @@ function treeProjection(root, description, labelsOwned) {
 const nonLiteral = (node) => node && node.valueType && node.valueType !== 'Value' && node.valueType !== 'Clear';
 const isActionNode = (node) => node && typeof node.type === 'string' && !Array.isArray(node.clauses);
 
-// The binding was recorded under what the spec owned THEN. A spec that has since started (or stopped)
-// declaring the description, or the labels of its actions, must not read as drift, so the live rule is
-// also matched with the description owned or not and with every label owned or none. A partial label
-// change still falls back to the plain comparison: a drift refusal, never an overwrite.
-function recordedUnder(binding, root, liveDescription, liveLabels) {
-  if (!binding) return undefined;
-  for (const description of [undefined, String(liveDescription || '')]) {
-    for (const labels of [liveLabels, liveLabels.map(() => false), liveLabels.map(() => true)]) {
-      const sha = intentSha256(treeProjection(root, description, labels));
-      if (sha === binding.intentSha256) return sha;
-    }
-  }
-  return undefined;
+// The baseline is the FULL projection, whatever the spec declares today: the tree (logic, clauses and
+// actions without their labels), the description and the label of every keyed action, each recorded
+// as its own part. Starting or stopping to declare a description or any subset of labels then changes
+// only what this run writes, never what "last applied" means, so it is an edit and not drift.
+// Recommendation labels are not parts: the SDK replaces them with the title.
+function ruleParts(root, description, labelsByKey) {
+  const parts = { tree: treeProjection(root, undefined, []), description: String(description || '') };
+  for (const [k, label] of Object.entries(labelsByKey)) parts[`label:${k}`] = label === null ? null : String(label || '');
+  return parts;
+}
+const labelPartKeys = (rule) => (rule.actions || []).filter((a) => a.type !== 'Recommendation').map((a) => a.key);
+
+// The tree carries the node positions the bindings hold, so it is drift-checked as a whole whenever
+// anything is written: a node moved or edited outside the spec must be seen before a position is
+// trusted. The label and description parts follow partsDriftVerdict (only a part this run writes
+// can be in conflict).
+function ruleDriftVerdict(binding, liveParts, desiredParts) {
+  const verdict = partsDriftVerdict(binding, liveParts, desiredParts);
+  if (verdict !== 'none' || binding.intentSha256 === projectionBaseline(liveParts).intentSha256) return verdict;
+  const recorded = binding.partsSha256 || {};
+  return recorded.tree === intentSha256(liveParts.tree) ? 'none' : 'drift';
 }
 
 /**
- * Plan the declared edit of an EXISTING rule (the build found `ruleId` by name).
- *   plan: { key, ruleId, action: null|'noChange'|'update', root, description?, nodeIndex: {nodeKey: 'clauses/i'|'trueBranch/i'},
- *           desiredSha, destructive, operations, refused, unknown, origin }
+ * Plan the declared edit of an EXISTING rule (`ruleId`: the rule the build found by name, or null).
+ * A binding for the key is authoritative: a different `ruleId` is rule-binding-mismatch and a null one
+ * rule-bound-row-missing. With no binding and no rule, `needsCreate` tells the build to create it.
+ *   plan: { key, ruleId, action: null|'noChange'|'update', needsCreate?, root, description?, nodeIndex: {nodeKey: 'clauses/i'|'trueBranch/i'},
+ *           desiredSha, baseline: {intentSha256, partsSha256}, destructive, operations, refused, unknown, origin }
  */
 async function planRuleReconcile({ rule, ruleId, sdk, created = false }, ctx = {}) {
   const key = ruleKey(rule);
@@ -216,6 +228,23 @@ async function planRuleReconcile({ rule, ruleId, sdk, created = false }, ctx = {
   const problems = validateDeclaredRule(rule);
   if (problems.length) {
     plan.refused.push(refusal(key, 'rule-spec-invalid', problems.join('; ')));
+    return plan;
+  }
+  // The bound rule is the authority: the rule the build found by name must be that rule, and a bound
+  // rule the build no longer finds is never recreated under the bound key.
+  const binding = await lookupBinding(ctx, KIND, key);
+  const bound = boundIdentity(binding, { resolvedId: ruleId, code: 'rule-binding-mismatch', key });
+  if (bound.refusal) {
+    plan.refused.push(bound.refusal);
+    return plan;
+  }
+  if (binding && !ruleId) {
+    plan.refused.push(refusal(key, 'rule-bound-row-missing', 'the business rule this key is bound to was not found; repair the binding explicitly before it can be recreated'));
+    return plan;
+  }
+  if (!ruleId) {
+    // Nothing to edit: the build creates the rule (through the creation port) and records createdRuleBindings.
+    plan.needsCreate = true;
     return plan;
   }
   let live;
@@ -306,15 +335,26 @@ async function planRuleReconcile({ rule, ruleId, sdk, created = false }, ctx = {
   });
   const newRoot = { ...(root || { id: 'r1', displayName: rule.name, falseBranch: [] }), logic: rule.conditionLogic || 'AND', clauses, trueBranch, falseBranch: [] };
   const labelsOwned = (rule.actions || []).map((a) => a.label !== undefined);
-  const liveLabels = liveActions.map((_, i) => { const j = actionAt.indexOf(i); return j >= 0 && labelsOwned[j]; });
-  const liveSha = intentSha256(treeProjection(root, rule.description !== undefined ? live.description : undefined, liveLabels));
-  plan.desiredSha = intentSha256(treeProjection(newRoot, rule.description, labelsOwned));
+  // Each keyed action's label, live (null for a node not there yet) and desired (the spec's where it
+  // states one, otherwise the live label kept, or the default a new node is written with).
+  const liveLabelsByKey = {};
+  const desiredLabelsByKey = {};
+  for (const [i, a] of (rule.actions || []).entries()) {
+    if (a.type === 'Recommendation') continue;
+    const liveNode = actionAt[i] >= 0 ? liveActions[actionAt[i]] : null;
+    liveLabelsByKey[a.key] = liveNode ? String(liveNode.displayName || '') : null;
+    desiredLabelsByKey[a.key] = String(trueBranch[i].displayName || '');
+  }
+  const liveParts = ruleParts(root, live.description, liveLabelsByKey);
+  const desiredParts = ruleParts(newRoot, rule.description !== undefined ? rule.description : live.description, desiredLabelsByKey);
+  plan.baseline = projectionBaseline(desiredParts);
+  plan.desiredSha = plan.baseline.intentSha256;
 
-  const binding = await lookupBinding(ctx, KIND, key);
   if (binding) plan.origin = binding.origin === 'created' ? 'created' : 'adopted';
-  const verdict = driftVerdict(binding, recordedUnder(binding, root, live.description, liveLabels) || liveSha, plan.desiredSha);
+  const verdict = ruleDriftVerdict(binding, liveParts, desiredParts);
   const descriptionChange = rule.description !== undefined && String(live.description || '') !== String(rule.description) ? String(rule.description) : undefined;
-  const sameTree = canonicalJson(treeProjection(root, undefined, liveLabels)) === canonicalJson(treeProjection(newRoot, undefined, labelsOwned)) && !plan.destructive;
+  const sameTree = canonicalJson(treeProjection(root, undefined, labelsOwned.map(() => false))) === canonicalJson(treeProjection(newRoot, undefined, labelsOwned.map(() => false)))
+    && labelPartKeys(rule).every((k) => liveLabelsByKey[k] === desiredLabelsByKey[k]) && !plan.destructive;
   const unapproved = verdict === 'unbound' && !created && !isAuthorized(ctx.authorizedAdoption, key);
   if (sameTree && descriptionChange === undefined) {
     // Nothing to write: not a refusal, but no binding either unless adoption was approved (bindsUnchanged).
@@ -353,7 +393,7 @@ async function applyRuleReconcile(plan, { sdk }, ctx = {}) {
   result.unknown.push(...plan.unknown);
   if (plan.refused.length || plan.unknown.length || !plan.action) return result;
   const records = () => [
-    bindingRecord(ctx, { kind: KIND, key: plan.key, id: plan.ruleId, intentSha256: plan.desiredSha, origin: plan.origin }),
+    bindingRecord(ctx, { kind: KIND, key: plan.key, id: plan.ruleId, intentSha256: plan.desiredSha, partsSha256: plan.baseline && plan.baseline.partsSha256, origin: plan.origin }),
     ...Object.entries(plan.nodeIndex).map(([nodeKey, at]) => bindingRecord(ctx, { kind: NODE_KIND, key: `${plan.key}/${nodeKey}`, id: at, parentKey: plan.key, intentSha256: plan.desiredSha, origin: plan.origin })),
   ];
   if (plan.action === 'noChange') {
@@ -385,13 +425,19 @@ async function applyRuleReconcile(plan, { sdk }, ctx = {}) {
   return result;
 }
 
-/** The bindings for a rule this build has just created from ruleRootCondition, so the next build edits it. */
+/**
+ * The bindings for a rule this build has just created from ruleRootCondition (through the creation
+ * port), so the next build edits it. The baseline is the full projection the create wrote.
+ */
 function createdRuleBindings(rule, ruleId, ctx = {}) {
   const key = ruleKey(rule);
-  const labelsOwned = (rule.actions || []).map((a) => a.label !== undefined);
-  const sha = intentSha256(treeProjection(ruleRootCondition(rule), rule.description, labelsOwned));
+  const root = ruleRootCondition(rule);
+  const labels = {};
+  for (const [i, a] of (rule.actions || []).entries()) if (a.type !== 'Recommendation') labels[a.key] = String(root.trueBranch[i].displayName || '');
+  const baseline = projectionBaseline(ruleParts(root, rule.description, labels));
+  const sha = baseline.intentSha256;
   return [
-    bindingRecord(ctx, { kind: KIND, key, id: ruleId, intentSha256: sha, origin: 'created' }),
+    bindingRecord(ctx, { kind: KIND, key, id: ruleId, intentSha256: sha, partsSha256: baseline.partsSha256, origin: 'created' }),
     ...(rule.conditions || []).map((c, i) => bindingRecord(ctx, { kind: NODE_KIND, key: `${key}/${c.key}`, id: `clauses/${i}`, parentKey: key, intentSha256: sha, origin: 'created' })),
     ...(rule.actions || []).map((a, i) => bindingRecord(ctx, { kind: NODE_KIND, key: `${key}/${a.key}`, id: `trueBranch/${i}`, parentKey: key, intentSha256: sha, origin: 'created' })),
   ];
