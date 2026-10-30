@@ -317,7 +317,7 @@ function validateSchemaFeatures(spec) {
   return { errors, warnings };
 }
 
-// ---------------------------------------------------------------------------------------------------------------- column types (L25)
+// ---------------------------------------------------------------------------------------------------------------- column types
 
 // The spec type -> the deployed `AttributeTypeName.Value` it creates. `AttributeType` alone cannot tell File, Image and
 // MultiChoice apart (all three are 'Virtual'), so the type NAME is compared when the read carries it.

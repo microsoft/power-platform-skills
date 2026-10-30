@@ -1,5 +1,5 @@
 'use strict';
-// Field security profiles (C03): plan, create through the create port, assign to users and teams, verify — against SDK doubles that
+// Field security profiles: plan, create through the create port, assign to users and teams, verify — against SDK doubles that
 // record every call, and once against the real vendored bundle so its wire shape for a profile create is pinned.
 const test = require('node:test');
 const assert = require('node:assert/strict');
@@ -42,7 +42,7 @@ function sdkDouble({ found = null, actual = actualOf(), findError, createError, 
   };
 }
 
-// The create port double: reserves the ids up front (as the B1 port does) and answers `created` when the create resolves.
+// The create port double: reserves the ids up front (as the real create port does) and answers `created` when the create resolves.
 function createsDouble(outcome = 'created') {
   const runs = [];
   return {

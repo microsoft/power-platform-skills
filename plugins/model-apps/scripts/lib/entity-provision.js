@@ -2989,7 +2989,7 @@ async function provisionDataModelSteps({ sdk, provision, runner, spec, apply, la
           `could not update column capabilities for ${logical}.${columnLogical} — the rest of the build continues`
         );
       });
-      // An explicit `isSecured` on a column the table already has (C03). One scalar read, only when the spec declares it on such a
+      // An explicit `isSecured` on a column the table already has. One scalar read, only when the spec declares it on such a
       // column; a secured column is secured in this phase, before any sample row is written. Never on a Customer column (validation
       // refuses it: updateColumn refuses every change to one), and the required and capability updates above never carry it.
       if (buildable.some((c) => c.type !== 'Customer' && typeof c.isSecured === 'boolean' && existingCols.has(c.schemaName.toLowerCase()))) {

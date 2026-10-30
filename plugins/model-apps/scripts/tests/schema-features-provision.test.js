@@ -44,7 +44,7 @@ async function run(m, spec, opts = {}) {
   return provisionDataModel(Object.assign({ sdk: m.sdk, provision: m.provision, runner, spec, apply: true, preResolvedLanguageCode: 1033, warn: () => {}, inlineColumns: false }, opts));
 }
 
-// ------------------------------------------------------------------------------------------------ explicit option values (L01)
+// ------------------------------------------------------------------------------------------------ explicit option values
 
 test('an explicit { value, label } option reaches createColumn as that value and label', async () => {
   const m = mockSdk();
@@ -74,7 +74,7 @@ test('the language check sees the languages an explicit option\'s localized labe
   assert.match(lcids[1].where, /column new_p option/);
 });
 
-// ------------------------------------------------------------------------------------------------ Date and Time behaviour (C11, B7d)
+// ------------------------------------------------------------------------------------------------ Date and Time behaviour
 
 // A metadata reader that answers the reads the data-model phase makes against a table that exists with `columns`, and the typed Date and
 // Time reads with `dates` (the collection body, or a function of the path), and the per-column read-back with `readBack`.
@@ -255,7 +255,7 @@ test('a one-way change is made when it is authorized for that column', async () 
   await run(m, specOf([{ schemaName: 'new_due', type: 'DateTime', dateTimeBehavior: 'DateOnly' }]), { authorizedDestructive: ['dateTimeBehavior:new_ticket.new_due'] });
   assert.deepEqual(m.calls.find((c) => c[0] === 'updateColumn').slice(1), ['new_ticket', 'new_due', { dateTimeBehavior: 'DateOnly' }]);
 });
-// ------------------------------------------------------------------------------------------------ column security (C03)
+// ------------------------------------------------------------------------------------------------ column security
 
 const SECURE_TABLE = { tables: { new_ticket: ['new_ticketid', 'new_name', 'new_salary'] } };
 const securedRows = (salary) => ({ value: [{ LogicalName: 'new_name', IsSecured: false }, { LogicalName: 'new_salary', IsSecured: salary }] });
@@ -394,7 +394,7 @@ test('a secured column of a new table goes in the post-table change set with isS
   assert.deepEqual(together.map((set) => set.map((c) => [c.schemaName, c.isSecured])), [[['new_salary', true]]]);
 });
 
-// ------------------------------------------------------------------------------------------------ Customer columns (L30)
+// ------------------------------------------------------------------------------------------------ Customer columns
 
 test('a Customer column the table already has is never updated, even when it declares isSecured or a capability', async () => {
   const m = mockSdk({ dataverseGet: metadataServer({ tables: { new_ticket: ['new_ticketid', 'new_name', 'new_customer'] }, secured: () => assert.fail('read') }) });

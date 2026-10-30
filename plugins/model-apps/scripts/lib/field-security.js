@@ -185,7 +185,7 @@ async function planFieldSecurity(spec, ctx) {
   return { operations, unknown, refused, unchanged };
 }
 
-// Create each planned profile through the B1 create port (ctx.creates.run): the port reserves the profile's id and one id per
+// Create each planned profile through the create port (ctx.creates.run): the port reserves the profile's id and one id per
 // permission (`childKeys`, `<table>.<column>`) before anything is sent, and refuses a create whose earlier attempt is still unknown.
 // The port's answer is `{ outcome: 'created' | 'unknown', id, childIds }`; anything but `created` is reported unknown, never saved.
 // A permission on a column that is not secured is refused by the platform (0x8004f508) — the build secures declared columns in the

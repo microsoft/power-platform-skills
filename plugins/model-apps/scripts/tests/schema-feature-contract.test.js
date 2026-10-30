@@ -152,7 +152,7 @@ test('a spec using any new field is told to raise minimumPluginVersion; one that
   assert.equal(c.usesSchemaFeatures(opts), true);
 });
 
-// ------------------------------------------------------------------------------------------------ column types (L25)
+// ------------------------------------------------------------------------------------------------ column types
 
 test('columnTypeMismatches reports a declared type the deployed column does not have, by type NAME', () => {
   const entity = { schemaName: 'new_Case', columns: [
@@ -257,7 +257,7 @@ test('verifyTableFlags: pass, fail and unknown are distinct', () => {
   assert.deepEqual(checks.map((x) => x.status), ['pass', 'unknown', 'fail']);
 });
 
-// ------------------------------------------------------------------------------------------------ download helpers (L01, L03, L28)
+// ------------------------------------------------------------------------------------------------ download helpers
 
 const { downloadedChoiceOptions, downloadedColumnFeatures, downloadedTableFlags, normalizeChoiceOptions, choiceOptionsForSdk } = c;
 
