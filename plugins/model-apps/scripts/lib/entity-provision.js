@@ -53,8 +53,9 @@ const { waitDoesNotFit } = require('./throttle-budget.js');
 const { readStatusOptions, alternateKeyMatches, alternateKeyOverColumns, sameKeyColumnSet } = require('./table-schema-metadata.js');
 // Choice options may be written `{ value, label }` as well as a plain or localized label; one normalizer turns every form into what
 // the SDK takes, and keeps the positional `100000000 + index` numbering for the forms that do not state a value.
-const { choiceOptionsForSdk, choiceOptionLabels } = require('./schema-feature-contract.js');
+const { choiceOptionsForSdk, choiceOptionLabels, declaredTableFlags, readTableFlags, planTableFlags, applyTableFlags } = require('./schema-feature-contract.js');
 const { readExistingDateBehaviors, planDateBehaviorRepairs, applyDateBehaviorRepairs, assertSchemaWriteReady } = require('./date-behavior.js');
+const { readColumnSecurity, planColumnSecurity, applyColumnSecurity } = require('./field-security.js');
 
 // App Spec column type -> SDK ColumnType. Lookup is omitted (side effect of a OneToMany
 // relationship); Customer is handled specially (createCustomerColumn).
@@ -258,6 +259,9 @@ function columnOptions(c, globalChoiceIds, globalChoices, languageCode) {
   // skip and easy to forget — so the only reliable moment is the one where the column is authored.
   // Omitted when absent, so an existing column's description is never blanked by a rebuild.
   if (c.description) o.description = String(c.description);
+  // Only `true` is sent: `false` is the platform default, and an omitted value must never be read as a request to unsecure. A secured
+  // column is never put in a table's own create (the SDK refuses it there); this build adds columns after the table, so it is not.
+  if (c.isSecured === true) o.isSecured = true;
   // Which columns carry a `maxLength`, and what, is the ONE rule maxLengthSent (lib/app-spec.js) states: the build counts a key over a column at the
   // length this creates the column with (keyBytesAtLeast), so the two must not disagree.
   const maxLength = maxLengthSent(c);
@@ -2985,6 +2989,25 @@ async function provisionDataModelSteps({ sdk, provision, runner, spec, apply, la
           `could not update column capabilities for ${logical}.${columnLogical} — the rest of the build continues`
         );
       });
+      // An explicit `isSecured` on a column the table already has (C03). One scalar read, only when the spec declares it on such a
+      // column; a secured column is secured in this phase, before any sample row is written. Never on a Customer column (validation
+      // refuses it: updateColumn refuses every change to one), and the required and capability updates above never carry it.
+      if (buildable.some((c) => c.type !== 'Customer' && typeof c.isSecured === 'boolean' && existingCols.has(c.schemaName.toLowerCase()))) {
+        const evidence = await readColumnSecurity(provision, logical);
+        const plan = planColumnSecurity({ schemaName: logical, columns: buildable.filter((c) => c.type !== 'Customer') }, existingCols, evidence, { authorizedDestructive });
+        for (const u of plan.unknown) if (typeof warn === 'function') warn(`could not read whether ${u.target} is secured (${u.reason}) — it was left as it is`);
+        if (plan.refused.length) {
+          await runner.run('data-model', `column security ${e.schemaName}`, async () => {
+            throw refusal(`the declared column security cannot be applied — ${plan.refused.map((r) => `${r.target}: ${r.reason} (authorize '${r.key}' to make it)`).join('; ')}. Nothing was changed.`, { code: plan.refused[0].code });
+          });
+        }
+        for (const op of plan.operations) {
+          await runner.run('data-model', `column security ${e.schemaName}.${op.column} -> ${op.isSecured ? 'secured' : 'not secured'}`, async () => {
+            const applied = await applyColumnSecurity({ operations: [op] }, { sdk });
+            if (applied.refused.length) throw refusal(`${op.target}: ${applied.refused[0].reason}. Nothing was changed.`, { code: applied.refused[0].code });
+          });
+        }
+      }
     }
     for (const c of requiredDeclared) {
       if (existingTable && existingCols.has(c.schemaName.toLowerCase())) continue;
@@ -3251,6 +3274,23 @@ async function provisionDataModelSteps({ sdk, provision, runner, spec, apply, la
   // build budgets the steps this emits — see planFor).
   if (reconcileLookupLabels) {
     await reconcileLookupLabelsPass({ spec, sdk, provision, runner, warn, languageCode: resolvedLanguageCode, createdLookups, readParentLabel, reusedTables, result });
+  }
+
+  // 2d. Table flags (search, change tracking, duplicate detection), after schema and relationships, only for a table that declares
+  // one. One scalar read per such table, one updateTable when something differs; a refused flag halts, as a refused column does.
+  for (const e of spec.entities) {
+    if (!Object.keys(declaredTableFlags(e)).length) continue;
+    const logical = e.schemaName.toLowerCase();
+    const plan = planTableFlags(e, await readTableFlags(provision, logical), { authorizedDestructive });
+    for (const u of plan.unknown) if (typeof warn === 'function') warn(`could not read the current table flags of ${logical} — ${u.reason}`);
+    if (!plan.refused.length && !plan.operations.length) { runner.skip('data-model', `table flags ${e.schemaName} (already as declared)`); continue; }
+    await runner.run('data-model', `table flags ${e.schemaName}`, async () => {
+      const refusedOf = (list) => refusal(`the declared table flags of ${logical} cannot be applied — ${list.map((r) => `${r.reason}${r.code === 'DESTRUCTIVE_NOT_AUTHORIZED' ? ` (authorize '${r.key}' to make it)` : ''}`).join('; ')}`, { code: list[0].code });
+      // A refused flag stops the table before any of its flags is written, so a table is never left half as declared by this step.
+      if (plan.refused.length) throw refusedOf(plan.refused);
+      const applied = await applyTableFlags(plan, { sdk, provision, publication });
+      if (applied.refused.length) throw refusedOf(applied.refused);
+    });
   }
 
   // A changed column or table definition reaches model-driven apps only once its table is published (see publishRelabelledTables, which

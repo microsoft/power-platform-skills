@@ -78,10 +78,12 @@ test('the language check sees the languages an explicit option\'s localized labe
 
 // A metadata reader that answers the reads the data-model phase makes against a table that exists with `columns`, and the typed Date and
 // Time reads with `dates` (the collection body, or a function of the path), and the per-column read-back with `readBack`.
-function metadataServer({ tables = {}, dates, readBack } = {}) {
+function metadataServer({ tables = {}, dates, readBack, secured, flags } = {}) {
   return (p) => {
     const probe = /^\/EntityDefinitions\(LogicalName='([^']+)'\)\?\$select=LogicalName,EntitySetName/.exec(p);
     if (probe) return tables[probe[1]] ? { status: 200, body: { LogicalName: probe[1], EntitySetName: `${probe[1]}s` } } : { status: 404, body: {} };
+    if (/\/Attributes\?\$select=LogicalName,IsSecured$/.test(p)) return typeof secured === 'function' ? secured(p) : { status: 200, body: secured };
+    if (/\?\$select=IsDuplicateDetectionEnabled,/.test(p)) return typeof flags === 'function' ? flags(p) : { status: 200, body: flags };
     if (/\/Attributes\?\$select=LogicalName,RequiredLevel$/.test(p)) {
       const t = /LogicalName='([^']+)'/.exec(p)[1];
       return { status: 200, body: { value: (tables[t] || []).map((n) => ({ LogicalName: n, RequiredLevel: { Value: 'None' } })) } };
@@ -252,4 +254,126 @@ test('a one-way change is made when it is authorized for that column', async () 
   const m = mockSdk({ dataverseGet: metadataServer({ tables: NULL_TABLE.tables, dates: { value: [dateRow('new_due', 'UserLocal')] }, readBack: dateRow('new_due', 'DateOnly') }) });
   await run(m, specOf([{ schemaName: 'new_due', type: 'DateTime', dateTimeBehavior: 'DateOnly' }]), { authorizedDestructive: ['dateTimeBehavior:new_ticket.new_due'] });
   assert.deepEqual(m.calls.find((c) => c[0] === 'updateColumn').slice(1), ['new_ticket', 'new_due', { dateTimeBehavior: 'DateOnly' }]);
+});
+// ------------------------------------------------------------------------------------------------ column security (C03)
+
+const SECURE_TABLE = { tables: { new_ticket: ['new_ticketid', 'new_name', 'new_salary'] } };
+const securedRows = (salary) => ({ value: [{ LogicalName: 'new_name', IsSecured: false }, { LogicalName: 'new_salary', IsSecured: salary }] });
+const securityGets = (m) => m.gets.filter((p) => /\$select=LogicalName,IsSecured$/.test(p));
+const updates = (m) => m.calls.filter((c) => c[0] === 'updateColumn');
+
+test('createColumn is given isSecured only for an explicit true', async () => {
+  const m = mockSdk();
+  await run(m, specOf([{ schemaName: 'new_salary', type: 'Money', isSecured: true }, { schemaName: 'new_bonus', type: 'Money', isSecured: false }, { schemaName: 'new_note', type: 'Text' }]));
+  const sent = (n) => m.calls.find((c) => c[0] === 'createColumn' && c[2].schemaName === n)[2];
+  assert.equal(sent('new_salary').isSecured, true);
+  assert.equal('isSecured' in sent('new_bonus'), false);
+  assert.equal('isSecured' in sent('new_note'), false);
+});
+
+test('an existing column declared secured is secured with one read and one update; an already secured one is left alone', async () => {
+  const m = mockSdk({ dataverseGet: metadataServer({ ...SECURE_TABLE, secured: securedRows(false) }) });
+  await run(m, specOf([{ schemaName: 'new_salary', type: 'Money', isSecured: true }]));
+  assert.deepEqual(updates(m).map((c) => c.slice(1)), [['new_ticket', 'new_salary', { isSecured: true }]]);
+  assert.deepEqual(securityGets(m), ["/EntityDefinitions(LogicalName='new_ticket')/Attributes?$select=LogicalName,IsSecured"]);
+
+  const same = mockSdk({ dataverseGet: metadataServer({ ...SECURE_TABLE, secured: securedRows(true) }) });
+  await run(same, specOf([{ schemaName: 'new_salary', type: 'Money', isSecured: true }]));
+  assert.deepEqual(updates(same), []);
+});
+
+test('no security read when no column the table already has declares isSecured', async () => {
+  const m = mockSdk({ dataverseGet: metadataServer({ ...SECURE_TABLE, secured: () => assert.fail('read') }) });
+  await run(m, specOf([{ schemaName: 'new_salary', type: 'Money' }, { schemaName: 'new_tax', type: 'Money', isSecured: true }]));
+  assert.equal(securityGets(m).length, 0);
+  assert.equal(m.calls.find((c) => c[0] === 'createColumn' && c[2].schemaName === 'new_tax')[2].isSecured, true);
+});
+
+test('unsecuring a secured column halts without consent, and is made with consent for that column', async () => {
+  const m = mockSdk({ dataverseGet: metadataServer({ ...SECURE_TABLE, secured: securedRows(true) }) });
+  const err = await halted(run(m, specOf([{ schemaName: 'new_salary', type: 'Money', isSecured: false }])));
+  assert.equal(err.code, 'DESTRUCTIVE_NOT_AUTHORIZED');
+  assert.match(err.message, /isSecured:new_ticket\.new_salary/);
+  assert.deepEqual(updates(m), []);
+
+  const ok = mockSdk({ dataverseGet: metadataServer({ ...SECURE_TABLE, secured: securedRows(true) }) });
+  await run(ok, specOf([{ schemaName: 'new_salary', type: 'Money', isSecured: false }]), { authorizedDestructive: new Set(['isSecured:new_ticket.new_salary']) });
+  assert.deepEqual(updates(ok).map((c) => c.slice(1)), [['new_ticket', 'new_salary', { isSecured: false }]]);
+});
+
+test('an explicit false on a column that is not secured writes nothing', async () => {
+  const m = mockSdk({ dataverseGet: metadataServer({ ...SECURE_TABLE, secured: securedRows(false) }) });
+  await run(m, specOf([{ schemaName: 'new_salary', type: 'Money', isSecured: false }]));
+  assert.deepEqual(updates(m), []);
+});
+
+test('a profile that still holds a permission on the column halts the unsecure as in use', async () => {
+  const m = mockSdk({ dataverseGet: metadataServer({ ...SECURE_TABLE, secured: securedRows(true) }) });
+  m.sdk.updateColumn = async () => { const e = new Error('in use'); e.name = 'ArtifactInUseError'; e.code = 'ARTIFACT_IN_USE'; throw e; };
+  const err = await halted(run(m, specOf([{ schemaName: 'new_salary', type: 'Money', isSecured: false }]), { authorizedDestructive: true }));
+  assert.equal(err.code, 'FIELD_SECURITY_COLUMN_IN_USE');
+});
+
+test('the required update of an existing column never carries isSecured', async () => {
+  const m = mockSdk({ dataverseGet: metadataServer({ ...SECURE_TABLE, secured: securedRows(true) }) });
+  await run(m, specOf([{ schemaName: 'new_salary', type: 'Money', required: true, isSecured: true }]));
+  const sent = updates(m).map((c) => c[3]);
+  assert.ok(sent.some((o) => o.required === 'ApplicationRequired'), 'the required update ran');
+  assert.ok(sent.every((o) => !('isSecured' in o)), JSON.stringify(sent));
+});
+
+// ------------------------------------------------------------------------------------------------ table flags
+
+const flagRow = ({ dup = false, ct = false, search = false, canSearch = true } = {}) => ({ IsDuplicateDetectionEnabled: { Value: dup, CanBeChanged: true }, ChangeTrackingEnabled: ct, SyncToExternalSearchIndex: search, CanEnableSyncToExternalSearchIndex: { Value: canSearch } });
+const flagSpec = (flags) => specOf([], { entities: [Object.assign({ schemaName: 'new_ticket', displayName: 'Ticket', primaryAttribute: { schemaName: 'new_name' }, columns: [] }, flags)] });
+const flagGets = (m) => m.gets.filter((p) => /IsDuplicateDetectionEnabled/.test(p));
+const tableUpdates = (m) => m.calls.filter((c) => c[0] === 'updateTable');
+
+test('search on an untracked table is written with change tracking, in one updateTable after one read', async () => {
+  const m = mockSdk({ dataverseGet: metadataServer({ flags: flagRow() }) });
+  await run(m, flagSpec({ searchEnabled: true, changeTrackingEnabled: true }));
+  assert.deepEqual(tableUpdates(m).map((c) => c.slice(1)), [['new_ticket', { searchEnabled: true, changeTrackingEnabled: true }]]);
+  assert.equal(flagGets(m).length, 1);
+});
+
+test('flags already as declared write nothing; a table that declares none is not read', async () => {
+  const same = mockSdk({ dataverseGet: metadataServer({ flags: flagRow({ ct: true, search: true }) }) });
+  await run(same, flagSpec({ searchEnabled: true, changeTrackingEnabled: true }));
+  assert.deepEqual(tableUpdates(same), []);
+  const none = mockSdk({ dataverseGet: metadataServer({ flags: () => assert.fail('read') }) });
+  await run(none, flagSpec({}));
+  assert.equal(flagGets(none).length, 0);
+});
+
+test('duplicate detection on is written and its table published once at the end of the phase', async () => {
+  const m = mockSdk({ dataverseGet: metadataServer({ flags: flagRow() }) });
+  m.provision.dataverse.post = async (p, body) => { m.calls.push(['post', p, body]); return { status: 204, body: {} }; };
+  await run(m, flagSpec({ duplicateDetectionEnabled: true }));
+  assert.deepEqual(tableUpdates(m).map((c) => c[2]), [{ duplicateDetectionEnabled: true }]);
+  const publishes = m.calls.filter((c) => c[0] === 'post' && /PublishXml/.test(c[1]));
+  assert.equal(publishes.length, 1);
+  assert.match(JSON.stringify(publishes[0][2]), /<entity>new_ticket<\/entity>/);
+});
+
+test('duplicate detection off halts without consent; search the table forbids halts; neither writes', async () => {
+  for (const [row, flags, code] of [
+    [flagRow({ dup: true }), { duplicateDetectionEnabled: false }, 'DESTRUCTIVE_NOT_AUTHORIZED'],
+    [flagRow({ canSearch: false }), { searchEnabled: true, changeTrackingEnabled: true }, 'TABLE_SEARCH_NOT_ALLOWED'],
+  ]) {
+    const m = mockSdk({ dataverseGet: metadataServer({ flags: row }) });
+    const err = await halted(run(m, flagSpec(flags)));
+    assert.equal(err.code, code);
+    assert.deepEqual(tableUpdates(m), []);
+  }
+  const ok = mockSdk({ dataverseGet: metadataServer({ flags: flagRow({ dup: true }) }) });
+  await run(ok, flagSpec({ duplicateDetectionEnabled: false }), { authorizedDestructive: ['tableFlags:new_ticket'] });
+  assert.deepEqual(tableUpdates(ok).map((c) => c[2]), [{ duplicateDetectionEnabled: false }]);
+});
+
+test('unreadable flags are written as declared, with a warning', async () => {
+  const warnings = [];
+  const m = mockSdk({ dataverseGet: metadataServer({ flags: () => ({ status: 500, body: {} }) }) });
+  await run(m, flagSpec({ changeTrackingEnabled: true }), { warn: (w) => warnings.push(w) });
+  assert.deepEqual(tableUpdates(m).map((c) => c[2]), [{ changeTrackingEnabled: true }]);
+  assert.ok(warnings.some((w) => /could not read the current table flags of new_ticket/.test(w)));
 });
