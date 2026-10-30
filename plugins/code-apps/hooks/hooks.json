@@ -1,0 +1,16 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash|bash|sh|powershell|PowerShell|pwsh",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node -e \"try { const path=require('node:path'); const root=process.env.PLUGIN_ROOT||process.env.CLAUDE_PLUGIN_ROOT; if(!root) throw new Error('Plugin root is not set'); require(path.resolve(root,'hooks','set-cli-origin.js')); } catch(error) { console.error('[code-apps] CLI attribution was not applied: '+error.message); }\"",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
+}
