@@ -4,7 +4,7 @@
 // systemform row, so the typed genPage binding, the ids the SDK allocates and its own missing-page refusal are the bundle's, not a fake's.
 const test = require('node:test');
 const assert = require('node:assert');
-const { validateFormPageEmbeds, planFormPageEmbeds, applyFormPageEmbeds, requireEmbedsApplied, runFormPageEmbeds, PAGE_ROWSPAN } = require('../lib/form-page-embeds.js');
+const { validateFormPageEmbeds, planFormPageEmbeds, applyFormPageEmbeds, requireEmbedsApplied, runFormPageEmbeds, requirePagesPhaseForEmbeds, PAGE_ROWSPAN } = require('../lib/form-page-embeds.js');
 const { createCreatesPortDouble } = require('./helpers/creates-port-double.js');
 const { createMakerSdk } = require('../vendor/cds-maker-sdk.cjs');
 const { createHarness, seedForm, guid, clone } = require('./helpers/form-store-harness.js');
@@ -370,6 +370,19 @@ test('the build step reads page ids from the build\'s Map, reports what it saved
   assert.deepStrictEqual(idle.calls, []);
   const ok = await runFormPageEmbeds(specWith({ genPages: [EMBED] }), stepCtx(fakeProvision(formArtifact([general(FIELD_ROWS())]))));
   assert.deepStrictEqual(ok.saved.map((s) => s.key), [KEY]);
+});
+
+test('a run that builds the forms but not the pages refuses a spec with form embeds before anything is written; every other phase set is let through', () => {
+  const PHASES = ['solution', 'data-model', 'sample-data', 'forms', 'app-shell', 'pages', 'publish'];
+  const embedded = specWith({ genPages: [EMBED, { key: 'notes', page: 'case-notes', tab: 'tab_general', section: 'section_general' }] });
+  assert.throws(() => requirePagesPhaseForEmbeds(embedded, ['solution', 'data-model', 'forms', 'app-shell']), (e) => e.name === 'BuildHalt'
+    && e.code === 'form-page-embeds-incomplete' && e.phase === 'preflight' && e.transient === false && /before writing anything/.test(e.message)
+    && JSON.stringify(e.notApplied) === JSON.stringify([
+      { key: KEY, kind: 'formPageEmbed', reason: 'pages-phase-not-selected', outcome: 'unknown' },
+      { key: NOTES_KEY, kind: 'formPageEmbed', reason: 'pages-phase-not-selected', outcome: 'unknown' }]));
+  // Let through: every phase; pages with forms; pages without forms (the embed step then says form-not-built); no forms at all; a spec with no embed.
+  for (const phases of [PHASES, ['forms', 'pages'], ['pages'], ['solution', 'data-model', 'sample-data']]) assert.strictEqual(requirePagesPhaseForEmbeds(embedded, phases), undefined, phases.join(','));
+  assert.strictEqual(requirePagesPhaseForEmbeds(specWith({}), ['solution', 'data-model', 'forms', 'app-shell']), undefined, 'no embed: a forms-only run is as before');
 });
 
 // Two forms, each embedding the same page; the second form's provision and publication can be made to fail. A saved form stays saved.
