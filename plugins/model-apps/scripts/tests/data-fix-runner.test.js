@@ -17,7 +17,7 @@ const { createAzHttpClient } = require('../lib/sdk-http-client.js');
 const { createMakerSdk, createNodeWorkspaceStorage } = require('../lib/maker-sdk.js');
 const runner = require('../lib/data-fix-runner.js');
 const { withAppBuildLease, applyWorkspaceOf } = require('../lib/app-operation-lease.js');
-const { ORIGIN, SENTINEL, USER, ORG, createDataFixOrg } = require('./helpers/data-fix-org.js');
+const { ORIGIN, SENTINEL, USER, ORG, json, createDataFixOrg } = require('./helpers/data-fix-org.js');
 
 const TOKEN = 'x'.repeat(48);
 
@@ -363,6 +363,45 @@ test('a revert that restores only the revertible rows says which writes it could
   assert.equal(org.tickets.get(ids[1]).contoso_note, `${SENTINEL}-1`, 'the revertible row is restored');
   assert.equal(org.tickets.get(ids[0]).contoso_note, 'fixed', 'the row with no inverse is left as it is');
 });
+
+// A synchronous service rule can put the original value back while the repair is processed. The echo is then complete and
+// carries the token our write produced, so the SDK knows the row holds its before-image (revertible:false): nothing is
+// left to undo. That is not the acknowledged-without-its-token case above, and it must not be reported as one.
+for (const mixed of [false, true]) {
+  test(`a verified echo of the original values leaves nothing to undo, and is not an unrevertible write (${mixed ? 'with a normally repaired row beside it' : 'on its own'})`, async () => {
+    const { org, appDir, base, ids } = setup({ rows: mixed ? 2 : 1 });
+    const original = org.tickets.get(ids[0]).contoso_note;
+    const planned = await runner.planDataFix({ ...base, request: filterFix });
+    org.onPatch = ({ id }) => {
+      if (id !== ids[0]) return null;
+      org.touch(id, original);
+      const etag = org.tickets.get(id).etag;
+      return json(200, { contoso_ticketid: id, contoso_note: original, '@odata.etag': etag }, { ETag: etag });
+    };
+    const applied = await runner.applyApprovedPlan({ ...base, planId: planned.planId, approve: planned.planDigest });
+    assert.equal(applied.operation.status, 'unverified', 'the repair itself did not make its planned change');
+    const outcome = JSON.parse(fs.readFileSync(applied.resultFile, 'utf8')).outcomes.find((o) => o.id === ids[0]);
+    assert.deepEqual([outcome.status, outcome.verification, outcome.revertible, Boolean(outcome.etag)], ['applied', 'notAsPlanned', false, true]);
+    org.onPatch = null;
+    const stateFile = path.join(makeTempDir('data-fix-cli-org-'), 'org.json');
+    fs.writeFileSync(stateFile, JSON.stringify(org.snapshot()));
+    const env = { ...process.env, FAKE_DATA_FIX_ORG: stateFile };
+    delete env.NODE_TEST_CONTEXT;
+    const revert = (extra = []) => {
+      const r = spawnSync(process.execPath, ['--require', path.join(__dirname, 'helpers', 'data-fix-org-preload.js'), path.join(__dirname, '..', 'data-fix.js'), 'revert', '--env', ORIGIN, '--app-dir', appDir, '--plan-id', planned.planId, ...extra], { env, encoding: 'utf8' });
+      return { status: r.status, out: JSON.parse(r.stdout), text: r.stdout + r.stderr };
+    };
+    const review = revert();
+    assert.equal(review.status, 0, review.text);
+    assert.deepEqual(review.out.unrevertible, { rows: 0, unknown: 0, noInverse: 0 });
+    if (mixed) assert.equal(fs.readFileSync(review.out.review, 'utf8').includes('cannot be undone by this revert'), false, 'the review does not claim a missing token');
+    const done = mixed ? revert(['--approve', review.out.revertDigest]) : review;
+    assert.equal(done.out.operation.status, mixed ? 'reverted' : 'nothingToRevert', done.text);
+    assert.equal(done.out.ok, true);
+    assert.equal(done.status, 0, done.text);
+    if (mixed) assert.equal(createDataFixOrg({ seed: JSON.parse(fs.readFileSync(stateFile, 'utf8')) }).tickets.get(ids[1]).contoso_note, `${SENTINEL}-1`, 'the other row is restored');
+  });
+}
 
 test('an SDK refusal is reported by its code only when it is a code: free text in its place never reaches the message', async () => {
   const { base } = setup({ rows: 1 });

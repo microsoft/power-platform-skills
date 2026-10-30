@@ -349,6 +349,16 @@ function operationStatus(kind, counts, verification) {
   return kind === 'revert' ? 'reverted' : 'repaired';
 }
 
+// A row the SDK proved already holds its before-image: the write was acknowledged with a complete, trustworthy echo (the
+// row's identity, its stored values and the post-write version token) and no stored value differs from the original — for
+// example a synchronous service rule put the old value back while the update was processed. The SDK then reports
+// verification "notAsPlanned" with revertible:false and omits the row from the revert plan, because nothing is left to
+// undo. An acknowledgement WITHOUT that echo is "unverified", has no token or stored values, and is not this.
+function isVerifiedUnchanged(outcome) {
+  return outcome.status === 'applied' && outcome.verification === 'notAsPlanned' && outcome.revertible === false
+    && typeof outcome.etag === 'string' && outcome.etag !== '' && Boolean(outcome.stored) && typeof outcome.stored === 'object';
+}
+
 // Folds per-row outcomes across an operation's results, in order. Every planned row starts notAttempted; a result's
 // outcome replaces only a row still notAttempted, so a later run never overwrites an earlier unknown, conflict or
 // failure (the SDK's remaining plans hold only notAttempted rows, so a well-formed journal never asks it to).
@@ -358,7 +368,7 @@ function foldRows(planRows, results) {
     for (const o of result.outcomes || []) {
       const id = String(o.id).toLowerCase();
       const prior = rows.get(id);
-      if (!prior || prior.status === 'notAttempted') rows.set(id, { status: o.status, verification: o.verification });
+      if (!prior || prior.status === 'notAttempted') rows.set(id, { status: o.status, verification: o.verification, verifiedUnchanged: isVerifiedUnchanged(o) });
     }
   }
   return rows;
@@ -387,6 +397,9 @@ function forwardResults(dir, journal) {
 // The absence of an inverse is therefore NOT proof that nothing was written: these rows are counted so a revert is
 // never reported as `reverted` or `nothingToRevert` while one remains. Nothing is ever sent for them — an inverse
 // cannot be invented, and an unknown row is never re-sent. Ids go only to the private review file.
+// The one exception is a row the SDK verified to hold its before-image already (isVerifiedUnchanged): it has no inverse
+// because there is no change to undo, so it is not counted — the SDK's own evidence is used, not the mere absence of an
+// inverse.
 function unrevertibleOf(planRows, forward, plans) {
   const inverse = new Set(plans.flatMap((p) => p.rows.map((r) => String(r.id).toLowerCase())));
   const counts = { rows: 0, unknown: 0, noInverse: 0 };
@@ -394,7 +407,7 @@ function unrevertibleOf(planRows, forward, plans) {
   for (const [id, row] of foldRows(planRows, forward)) {
     let reason = null;
     if (row.status === 'unknown') reason = 'unknown';
-    else if (row.status === 'applied' && !inverse.has(id)) reason = 'noInverse';
+    else if (row.status === 'applied' && !inverse.has(id) && !row.verifiedUnchanged) reason = 'noInverse';
     if (!reason) continue;
     counts.rows += 1;
     counts[reason] += 1;
