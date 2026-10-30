@@ -1,6 +1,6 @@
 /* Dev-only bundler: @maker-studio/cds-maker-sdk -> self-contained CJS the plugin vendors.
- * Run: node plugins/model-apps/scripts/_vendor-build/build.js --sdk <path-to-ppux>
- *      or set POWER_PLATFORM_UX_SDK_ROOT=<path-to-ppux>
+ * Run: node plugins/model-apps/scripts/_vendor-build/build.js --sdk <path-to-sdk-repo>
+ *      or set POWER_PLATFORM_UX_SDK_ROOT=<path-to-sdk-repo>
  * Not shipped. Re-run only when the SDK source changes.
  *
  * After rebuilding, run the vendored-SDK contract tests against the new bundle:
@@ -27,8 +27,8 @@ const argSdk = (() => {
   return process.env.POWER_PLATFORM_UX_SDK_ROOT;
 })();
 if (!argSdk) {
-  console.error('Usage: node plugins/model-apps/scripts/_vendor-build/build.js --sdk <path-to-ppux>');
-  console.error('   or: set POWER_PLATFORM_UX_SDK_ROOT=<path-to-ppux>');
+  console.error('Usage: node plugins/model-apps/scripts/_vendor-build/build.js --sdk <path-to-sdk-repo>');
+  console.error('   or: set POWER_PLATFORM_UX_SDK_ROOT=<path-to-sdk-repo>');
   process.exit(2);
 }
 const SDK_ENTRY = path.join(argSdk, 'packages/cds-maker-sdk/lib/index.js');

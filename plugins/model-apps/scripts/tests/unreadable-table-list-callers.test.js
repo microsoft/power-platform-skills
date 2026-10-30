@@ -56,14 +56,16 @@ const definition = ({ logicalName, custom = true }) => ({
 });
 
 // `tables` are the tables the environment holds; `list` answers the table list instead of them (a raw answer); `narrow` answers the one-table definition read instead of the truth;
-// `refuseDelete` answers a table delete instead of the platform's 204. `org.requests` is every request, in order, as `METHOD /path` below the API root.
-function createOrg({ tables = [], list, narrow, deleteAnswer } = {}) {
-  const org = { tables: new Map(tables.map((table) => [table.logicalName, table])), list, narrow, deleteAnswer, requests: [], unexpected: [] };
+// `refuseDelete` answers a table delete instead of the platform's 204; `nextPage` answers the read of a continuation link of the table list (`…$skiptoken=…`).
+// `org.requests` is every request, in order, as `METHOD /path` below the API root.
+function createOrg({ tables = [], list, narrow, deleteAnswer, nextPage } = {}) {
+  const org = { tables: new Map(tables.map((table) => [table.logicalName, table])), list, narrow, deleteAnswer, nextPage, requests: [], unexpected: [] };
   org.request = async ({ url, method }) => {
     const parsed = new URL(url);
     const apiPath = decodeURIComponent(parsed.pathname + parsed.search).replace(/^\/api\/data\/v9\.\d/, '');
     org.requests.push(`${method} ${apiPath}`);
     const one = /^\/EntityDefinitions\(LogicalName='([^']+)'\)/.exec(apiPath);
+    if (method === 'GET' && /^\/EntityDefinitions\?.*\$skiptoken=/.test(apiPath) && org.nextPage) return org.nextPage;
     if (method === 'GET' && /^\/EntityDefinitions\?/.test(apiPath)) return org.list || json(200, { value: [...org.tables.values()].map(definition) });
     if (method === 'GET' && one && /\/Attributes/.test(apiPath)) return json(200, { value: [] });
     if (method === 'GET' && one) {
@@ -110,7 +112,7 @@ test('TEARDOWN: a custom table is deleted — one read of the table list, then t
   assert.deepStrictEqual(result, unguarded);
 });
 
-test('TEARDOWN: a system table is left alone, and `{ "value": [] }` and a refused read keep the handling they always had — the delete goes on', async (t) => {
+test('TEARDOWN: a system table is left alone, `{ "value": [] }` goes on to the delete, and a refused read fails the step with nothing deleted', async (t) => {
   const system = createOrg({ tables: [{ logicalName: 'new_widget', custom: false }] });
   const left = await tearDown(t, system);
   assert.deepStrictEqual([left.ok, left.deleted, system.requests], [true, {}, [TABLE_LIST]]);
@@ -119,11 +121,41 @@ test('TEARDOWN: a system table is left alone, and `{ "value": [] }` and a refuse
   const empty = createOrg({ list: json(200, { value: [] }) });
   const goneAlready = await tearDown(t, empty);
   assert.deepStrictEqual([goneAlready.ok, empty.requests], [true, [TABLE_LIST, DELETE_TABLE('new_widget')]]);
-  // A refusal of the read is a failure of the read — as before, the step goes on to the delete.
+  // A refusal of the read says nothing about the table — not that it is gone, not that it is not a system table — so the step fails
+  // with the reason and no delete is sent; a re-run once the read answers finishes it.
   const refused = createOrg({ tables: [WIDGET], list: json(403, { error: { message: 'The user is not a member of the organization.' } }) });
   const afterRefusal = await tearDown(t, refused);
-  assert.deepStrictEqual([afterRefusal.ok, refused.requests], [true, [TABLE_LIST, DELETE_TABLE('new_widget')]]);
+  assert.deepStrictEqual([afterRefusal.ok, afterRefusal.deleted, refused.writes()], [false, {}, []]);
+  assert.match(afterRefusal.errors[0].message, /^table 'new_widget' was not deleted: the environment's tables could not be read, so whether it is there, and whether it is a system table, is unknown \(HTTP 403 .*The user is not a member of the organization\./);
+  assert.ok(refused.tables.has('new_widget'));
 });
+
+// The bundled SDK refuses a table list that says it holds more rows than it gave (`@Microsoft.Dynamics.CRM.morerecords` with no link to
+// them), and one whose next page could not be read: neither is the whole list, so the table the step is about — here a SYSTEM table,
+// listed on the page that was read — is unknown. The step fails closed: no DELETE is sent from half an answer.
+const SYSTEM_WIDGET = { ...definition({ logicalName: 'new_widget', custom: false }) };
+const INCOMPLETE = {
+  'a page that says more rows exist and gives no link to them': { list: json(200, { value: [SYSTEM_WIDGET], '@Microsoft.Dynamics.CRM.morerecords': true }), reason: /more rows exist/ },
+  'a page whose next page answers 503': {
+    list: json(200, { value: [SYSTEM_WIDGET], '@odata.nextLink': `${ORIGIN}/api/data/v9.0/EntityDefinitions?$select=LogicalName&$skiptoken=2` }),
+    nextPage: json(503, { error: { code: '0x80000001', message: 'Service Unavailable' } }),
+    reason: /HTTP 503/,
+  },
+};
+for (const [shape, { list, nextPage, reason }] of Object.entries(INCOMPLETE)) {
+  test(`TEARDOWN: a table list that is ${shape} fails the step — no DELETE is sent from half an answer`, async (t) => {
+    const org = createOrg({ tables: [{ logicalName: 'new_widget', custom: false }], list, nextPage });
+    const result = await tearDown(t, org);
+    assert.deepStrictEqual([result.ok, result.deleted, org.writes()], [false, {}, []]);
+    assert.strictEqual(result.errors[0].step, 'table new_widget');
+    assert.match(result.errors[0].message, /^table 'new_widget' was not deleted: the environment's tables could not be read, so whether it is there, and whether it is a system table, is unknown \(/);
+    assert.match(result.errors[0].message, reason);
+    // The same list read whole lists the table as a system table, which the step leaves alone.
+    const whole = createOrg({ tables: [{ logicalName: 'new_widget', custom: false }], list: json(200, { value: [SYSTEM_WIDGET] }) });
+    const left = await tearDown(t, whole);
+    assert.deepStrictEqual([left.ok, whole.writes()], [true, []]);
+  });
+}
 
 for (const [shape, answer] of Object.entries(NOT_A_LIST)) {
   test(`TEARDOWN: a table list that is ${shape} is a failed step — nothing is deleted, and nothing is reported deleted`, async (t) => {

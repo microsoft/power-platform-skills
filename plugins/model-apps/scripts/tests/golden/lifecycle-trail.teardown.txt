@@ -1,0 +1,89 @@
+# 129 requests, 1 publishes
+## up to publish 1: importexportxml(entities(entity=contoso_project entity=contoso_task))
+  4x DELETE /agentconversationmessages(<id>) -> 204
+  4x DELETE /appactions(<id>) -> 204
+  1x DELETE /roles(<id>) -> 204
+  3x DELETE /savedqueries(<id>) -> 204
+  1x DELETE /savedqueryvisualizations(<id>) -> 204
+  5x DELETE /systemforms(<id>) -> 204
+  1x DELETE /uxagentprojects(<id>) -> 204
+  1x GET /EntityDefinitions(LogicalName='appaction')?$select=EntitySetName -> 200
+  1x GET /EntityDefinitions(LogicalName='appmodule')?$select=EntitySetName -> 200
+  1x GET /EntityDefinitions(LogicalName='appmodulecomponent')?$select=EntitySetName -> 200
+  1x GET /EntityDefinitions(LogicalName='businessunit')?$select=EntitySetName -> 200
+  1x GET /EntityDefinitions(LogicalName='contoso_project')?$select=MetadataId -> 200
+  1x GET /EntityDefinitions(LogicalName='role')?$select=EntitySetName -> 200
+  1x GET /EntityDefinitions(LogicalName='savedquery')?$select=EntitySetName -> 200
+  1x GET /EntityDefinitions(LogicalName='savedqueryvisualization')?$select=EntitySetName -> 200
+  1x GET /EntityDefinitions(LogicalName='sitemap')?$select=EntitySetName -> 200
+  1x GET /EntityDefinitions(LogicalName='solution')?$select=EntitySetName -> 200
+  1x GET /EntityDefinitions(LogicalName='solutioncomponent')?$select=EntitySetName -> 200
+  1x GET /EntityDefinitions(LogicalName='systemform')?$select=EntitySetName -> 200
+  1x GET /EntityDefinitions(LogicalName='webresource')?$select=EntitySetName -> 200
+  2x GET /agentconversationmessages?$select=agentconversationmessageid,message,messagesender,createdon&$filter=_regardingobjectid_value eq <id>&$orderby=createdon asc,versionnumber asc -> 200
+  1x GET /appactions?$select=appactionid&$filter=_contextentity_value eq <id> -> 200
+  1x GET /appactions?$select=appactionid,_parentappactionid_value&$filter=contextvalue eq 'contoso_project'&$top=200 -> 200
+  1x GET /appactions?$select=appactionid,buttonlabeltext&$filter=contextvalue eq 'contoso_project'&$top=1 -> 200
+  1x GET /appmodulecomponents?$select=_appmoduleidunique_value&$filter=componenttype eq 62 and objectid eq <id> -> 200
+  2x GET /appmodulecomponents?$select=objectid&$filter=_appmoduleidunique_value eq <id> and componenttype eq 62 -> 200
+  1x GET /appmodulecomponents?$select=objectid,componenttype&$filter=_appmoduleidunique_value eq <id> and componenttype eq 62&$top=1 -> 200
+  1x GET /appmodules(<id>)?$select=appmoduleid,name,uniquename,description,aiappdescription -> 200
+  1x GET /appmodules/Microsoft.Dynamics.CRM.RetrieveUnpublishedMultiple()?$select=appmoduleid&$filter=appmoduleidunique eq <id> -> 200
+  2x GET /appmodules/Microsoft.Dynamics.CRM.RetrieveUnpublishedMultiple()?$select=appmoduleid,appmoduleidunique,componentstate&$filter=appmoduleid eq <id> -> 200
+  1x GET /appmodules/Microsoft.Dynamics.CRM.RetrieveUnpublishedMultiple()?$select=appmoduleid,name,appmoduleidunique&$filter=uniquename eq 'contoso_kitchensink'&$top=1 -> 200
+  1x GET /appmodules?$select=appmoduleid&$filter=appmoduleroles_association/any(x:x/roleid eq <id>)&$top=1 -> 200
+  1x GET /appmodules?$select=appmoduleid,appmoduleidunique&$filter=uniquename eq 'contoso_kitchensink'&$top=1 -> 200
+  1x GET /businessunits?$select=businessunitid&$filter=_parentbusinessunitid_value eq null&$top=1 -> 200
+  1x GET /roles?$select=roleid,name,description,ismanaged&$filter=name eq 'Kitchen Planner' and _businessunitid_value eq <id>&$top=50 -> 200
+  8x GET /savedqueries(<id>)/Microsoft.Dynamics.CRM.RetrieveUnpublished()?$select=savedqueryid,name,description,fetchxml,layoutxml,querytype,returnedtypecode,isdefault -> 200
+  8x GET /savedqueries(<id>)?$select=savedqueryid -> 200
+  1x GET /savedqueries?$select=savedqueryid,name&$filter=name eq 'My Open Tasks' and returnedtypecode eq 'contoso_task'&$top=10 -> 200
+  1x GET /savedqueries?$select=savedqueryid,name&$filter=name eq 'Open Projects' and returnedtypecode eq 'contoso_project'&$top=10 -> 200
+  1x GET /savedqueries?$select=savedqueryid,name&$filter=name eq 'Open Tasks' and returnedtypecode eq 'contoso_task'&$top=10 -> 200
+  1x GET /savedqueries?$select=savedqueryid,name,canbedeleted,fetchxml,createdon&$filter=returnedtypecode eq 'contoso_project' and querytype eq 0 -> 200
+  1x GET /savedqueries?$select=savedqueryid,name,canbedeleted,fetchxml,createdon&$filter=returnedtypecode eq 'contoso_task' and querytype eq 0 -> 200
+  1x GET /savedqueryvisualizations?$select=savedqueryvisualizationid,name&$filter=name eq 'Projects by Priority' and primaryentitytypecode eq 'contoso_project'&$top=10 -> 200
+  1x GET /sitemaps(<id>)?$select=sitemapid -> 200
+  1x GET /sitemaps/Microsoft.Dynamics.CRM.RetrieveUnpublishedMultiple()?$select=sitemapid,sitemapnameunique,sitemapxml&$filter=sitemapid eq <id>&$top=1 -> 200
+  1x GET /sitemaps?$select=sitemapxml&$filter=sitemapid eq <id>&$top=1 -> 200
+  1x GET /solutioncomponents?$select=objectid&$filter=_solutionid_value eq <id> and componenttype eq 60 and (objectid eq <id>)&$top=50 -> 200
+  1x GET /solutions?$select=solutionid&$filter=uniquename eq 'ContosoKitchen'&$top=1 -> 200
+  5x GET /systemforms(<id>)/Microsoft.Dynamics.CRM.RetrieveUnpublished()?$select=type -> 200
+  1x GET /systemforms?$select=formid&$filter=objecttypecode eq 'contoso_project' and name eq 'Project Card' and type eq 6&$top=2 -> 200
+  1x GET /systemforms?$select=formid&$filter=objecttypecode eq 'contoso_project' and name eq 'Project' and type eq 2&$top=2 -> 200
+  1x GET /systemforms?$select=formid&$filter=objecttypecode eq 'contoso_task' and name eq 'Task Quick Create' and type eq 7&$top=2 -> 200
+  1x GET /systemforms?$select=formid&$filter=objecttypecode eq 'contoso_task' and name eq 'Task' and type eq 2&$top=2 -> 200
+  1x GET /systemforms?$select=formid,formactivationstate,isdefault&$filter=objecttypecode eq 'contoso_project' and type eq 2&$top=50 -> 200
+  1x GET /systemforms?$select=formid,formactivationstate,isdefault&$filter=objecttypecode eq 'contoso_task' and type eq 2&$top=50 -> 200
+  1x GET /systemforms?$select=formid,name&$filter=name eq 'Kitchen Overview' and type eq 0&$top=10 -> 200
+  1x GET /uxagentprojects/Microsoft.Dynamics.CRM.RetrieveUnpublishedMultiple()?$select=uxagentprojectid,name,componentstate&$filter=uxagentprojectid eq <id> -> 200
+  1x GET /webresourceset?$select=content&$filter=name eq 'contoso_kitchensink_pagemanifest'&$top=1 -> 200
+  4x PATCH /savedqueries(<id>)?$select=savedqueryid #97e1522c -> 200
+  2x PATCH /systemforms(<id>) #9bb0a025 -> 204
+  1x POST /$batch -> 200
+      > DELETE /appmodules(<id>)
+      > DELETE /sitemaps(<id>)
+  1x POST /PublishXml #1b71745d -> 204
+## after the last publish
+  1x DELETE /EntityDefinitions(LogicalName='contoso_project') -> 204
+  1x DELETE /EntityDefinitions(LogicalName='contoso_tag') -> 204
+  1x DELETE /EntityDefinitions(LogicalName='contoso_task') -> 204
+  1x DELETE /GlobalOptionSetDefinitions(Name='contoso_stage') -> 204
+  2x DELETE /RelationshipDefinitions(<id>) -> 204
+  1x DELETE /solutions(<id>) -> 204
+  4x DELETE /webresourceset(<id>) -> 204
+  3x GET /EntityDefinitions?$select=LogicalName,SchemaName,EntitySetName,DisplayName,IsCustomEntity -> 200
+  1x GET /RelationshipDefinitions?$filter=SchemaName eq 'contoso_project_contoso_project'&$select=MetadataId -> 200
+  1x GET /RelationshipDefinitions?$filter=SchemaName eq 'contoso_project_contoso_task'&$select=MetadataId -> 200
+  1x GET /RelationshipDefinitions?$filter=SchemaName eq 'contoso_tag_contoso_task'&$select=MetadataId -> 200
+  4x GET /savedqueries(<id>)/Microsoft.Dynamics.CRM.RetrieveUnpublished()?$select=savedqueryid,name,description,fetchxml,layoutxml,querytype,returnedtypecode,isdefault -> 200
+  4x GET /savedqueries(<id>)?$select=savedqueryid -> 200
+  1x GET /solutions?$select=solutionid,uniquename&$filter=uniquename eq 'ContosoKitchen'&$top=1 -> 200
+  1x GET /webresourceset?$select=webresourceid,name&$filter=name eq 'contoso_kitchensink_icon'&$top=1 -> 200
+  1x GET /webresourceset?$select=webresourceid,name&$filter=name eq 'contoso_kitchensink_pagemanifest'&$top=1 -> 200
+  1x GET /webresourceset?$select=webresourceid,name&$filter=name eq 'contoso_project.js'&$top=1 -> 200
+  1x GET /webresourceset?$select=webresourceid,name&$filter=name eq 'contoso_projecticon.svg'&$top=1 -> 200
+# shapes
+#1b71745d {ParameterXml:string}
+#97e1522c {description:string,fetchxml:string,layoutxml:string,name:string,returnedtypecode:string}
+#9bb0a025 {isdefault:boolean}

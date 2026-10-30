@@ -2266,13 +2266,26 @@ test('A/B with the previous release: the table request and every column body a s
     ...columnPosts(run).map((r) => [r.body.SchemaName, JSON.stringify(r.body)]),
     ...batchColumns(run).map((body) => [body.SchemaName, JSON.stringify(body)]),
   ]);
+  // The one field the bundled SDK adds since the previous release: every Date and Time column it creates states its behaviour,
+  // `UserLocal` unless asked otherwise. The previous release sent none, and the platform stores `UserLocal` for a column created by
+  // its own request or in a change set (only a column inlined in the table's create was stored with none, which then refused every
+  // later column of the table) — so a column ends up as it did, Format DateOnly included. Taken out of this build's bodies, after
+  // checking it is exactly that, the rest of each body is compared byte for byte.
+  const DATE_TIME_BEHAVIOR = JSON.stringify({ Value: 'UserLocal' });
+  const withoutStatedBehavior = (bodies) => new Map([...bodies].map(([name, text]) => {
+    const body = JSON.parse(text);
+    if (body.AttributeType !== 'DateTime') return [name, text];
+    assert.strictEqual(JSON.stringify(body.DateTimeBehavior), DATE_TIME_BEHAVIOR, `${name}: a Date and Time column states the behaviour the platform gave it before`);
+    delete body.DateTimeBehavior;
+    return [name, JSON.stringify(body)];
+  }));
   for (const [what, spec] of specs) {
     for (const [model, dataverse] of [['honouring', HONOURING], ['overriding', OVERRIDING]]) {
       const old = await releasedRun(spec, dataverse);
       const now = await provisionOver(clone(spec), { dataverse });
       const label = `${what}, ${model}`;
       assert.deepStrictEqual(tablePosts(now).map((r) => JSON.stringify(r.body)), tablePosts(old).map((r) => JSON.stringify(r.body)), `${label}: the table requests are the same bytes`);
-      assert.deepStrictEqual([...bodiesBySchemaName(now)].sort(), [...bodiesBySchemaName(old)].sort(), `${label}: every column is the same body, whether the released code posted it by itself or this build put it in the change set`);
+      assert.deepStrictEqual([...withoutStatedBehavior(bodiesBySchemaName(now))].sort(), [...bodiesBySchemaName(old)].sort(), `${label}: every column is the same body, whether the released code posted it by itself or this build put it in the change set`);
       assert.deepStrictEqual(posts(now).filter((r) => r.path === '/CreateCustomerRelationships').map((r) => JSON.stringify(r.body)), posts(old).filter((r) => r.path === '/CreateCustomerRelationships').map((r) => JSON.stringify(r.body)), `${label}: the Customer actions`);
       // `lookupLabels` is the one field of the result that is new since the previous release: the label each lookup column carries once the data model is done, which a later phase repairs forms from.
       const { lookupLabels, ...nowResult } = now.result;
@@ -2284,6 +2297,7 @@ test('A/B with the previous release: the table request and every column body a s
         assert.strictEqual(now.dv.tables.get(name).primaryLength, table.primaryLength, `${label}: ${name}'s name column ends up the length the released code gave it`);
         assert.deepStrictEqual([...now.dv.tables.get(name).columns.keys()].sort(), [...table.columns.keys()].sort(), `${label}: ${name} has the same columns`);
       }
+      assert.ok([...bodiesBySchemaName(old).values()].every((text) => JSON.parse(text).DateTimeBehavior === undefined), `${label}: the previous release stated no behaviour`);
       if (!spec.entities[0].columns.length) assert.deepStrictEqual(now.dv.log, old.dv.log, `${label}: for a table with no columns, every request is the released code's`);
     }
   }

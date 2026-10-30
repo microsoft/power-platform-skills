@@ -367,19 +367,21 @@ After plan-mode approval (before the full build):
    that starts with `--`, `&`, `:` or `@` is read); Fluent's `...shorthands.*(…)` and
    `...typographyStyles.*` may be spread as they are.
 
-   Review every generated page for iteration that compiles to nothing as well:
+   Review every generated page for iteration that another page compiler can lose as well:
 
-   The page compiler targets ES5 without iterator downleveling or full type checking. Spreading,
-   looping over, or array-destructuring a Map, Set or iterator reads length and indices instead of
-   the iterator: values can disappear, defaults can replace them, or rest destructuring can throw.
-   This includes `[...new Set(xs)]`, `[...m.values()]`, `[...seen.values()]`,
-   `for (const [k, v] of m)`, `new Set([...prev, id])`, `[...selected]` and
-   `[...text.matchAll(re)]`. Convert with `Array.from(...)` before spreading, looping or
-   destructuring; copy a Set with `new Set(prev)` then `.add(id)`. Ordinary array spreads and loops
-   remain valid. `Object.keys`, `Object.values` and `Object.entries` return arrays. Spreads of
-   `arguments` and ordinary indexed array-likes work; rest destructuring of an array-like without
-   `slice` does not. String spread throws, and an ES5 string loop visits UTF-16 code units rather
-   than Unicode code points. See **Common Errors > 5. Iteration that compiles to nothing** in
+   Pages this plugin uploads are compiled with iterator support (ES5 with `downlevelIteration`), so a
+   spread, a `for...of` loop or an array destructure of a Map, Set, iterator, generator or string
+   reads it as modern JavaScript does. A tool that compiles the page again without that support — an
+   older maker portal, or `pac` — reads length and indices instead: values disappear, defaults replace
+   them, and rest destructuring or a string spread throws, all with a clean compile. Keep the page
+   correct under every compiler: convert with `Array.from(...)` before spreading, looping or
+   destructuring, for example `[...new Set(xs)]`, `[...m.values()]`, `[...seen.values()]`, `for (const
+   [k, v] of m)`, `new Set([...prev, id])`, `[...selected]` and `[...text.matchAll(re)]`; copy a Set
+   with `new Set(prev)` then `.add(id)`. Ordinary array spreads and loops remain valid. `Object.keys`,
+   `Object.values` and `Object.entries` return arrays. Rest destructuring of a non-iterable array-like without
+   `slice` throws under every compiler. A destructuring default must not write to the array being
+   destructured: `const [a = (values[1] = 3), b] = values` leaves `b` at its old value here, unlike
+   modern JavaScript. See **Common Errors > 5. Iteration that another page compiler can lose** in
    `references/rules.md` for the pairs.
 
    Then validate and commit the transition — never flip `source` by hand, and never
@@ -799,9 +801,10 @@ Then:
    key it already has only draws a warning — and so does a page you changed in a workspace that holds no record of it (a new or moved one, or
    another environment), where the build cannot tell what was sent: run the checker on that page yourself.
    A page you edit by hand also follows the iteration rule of Phase 1.5, step 5 (**Common Errors > 5.
-   Iteration that compiles to nothing** in `references/rules.md`): convert a Map, Set or iterator with
-   `Array.from` before spreading, looping over or destructuring it. Converting a form the page already
-   had can make previously absent values appear, so do it only when the requested change needs it.
+   Iteration that another page compiler can lose** in `references/rules.md`): convert a Map, Set or
+   iterator with `Array.from` before spreading, looping over or destructuring it. An upload compiles the
+   changed page again with iterator support, so a form it already had now reads its values where an
+   earlier release lost them, converted or not; convert such a form only when the requested change needs it.
 3. **If the edit ADDS a page** (or resets a page's `source` back to `intent` to regenerate it),
    **re-run Phase 1.5 before Phase 2** — a downloaded spec contains only `kind: "tsx"` pages, so an
    added `intent` page has no code and Phase 2's `deploy` profile rejects it. Phase 1.5 is safe to
@@ -829,7 +832,7 @@ laid out, explicit `tabs` honored; sub-grids, quick-views, and form JS (`events[
 canonical control cells / the `/bag/c` events region via the SDK's generic `addElement` surface)
 → **business rules** (`businessRules[]` — authored as the workflow object model through the bound
 `CreateProcessWithWfomJson` member and activated; **skipped with a warning** on an environment that
-does not declare that member) →
+does not declare that member or has it switched off — HTTP 400 `0x80040216`, common on production environments) →
 **business process flows** (`businessProcessFlows[]`; a category-4 process compiled from the
 authored stages and activated — this goes through the SDK's generic artifact surface, a plain
 `workflows` row, so it is NOT subject to the bound-member gate above) →
@@ -913,8 +916,10 @@ child view id. Each step emits `[n/total]`.
     upstream because it covered 4 of the 7 action types and a single clause, so it silently narrowed
     a rule into something that did not say what the author wrote. Environments that do not declare
     the member therefore **cannot host business rules at all** — and that is the common case, not an
-    edge case. The build **skips** the rules, warns once naming the
-    member, and builds everything else normally, so an app is never left half-created. If rules are
+    edge case. **Production environments are the other common case**: they declare the member but
+    answer the first rule with HTTP 400 `0x80040216` ("An unexpected error occurred."), a platform
+    limit, and nothing is created. The build **skips** the rules in both cases, warns once naming the
+    member or the code, and builds everything else normally, so an app is never left half-created. If rules are
     essential, verify the environment first.
     **Business process flows are NOT affected by this gate** — a BPF is written as an ordinary
     `workflows` row through the SDK's generic artifact surface, with no bound member involved.

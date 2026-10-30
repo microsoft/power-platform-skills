@@ -1169,10 +1169,17 @@ test('the table read says whether the table was there before its delete: seen, l
   assert.deepStrictEqual(await resolveWith(async () => [{ logicalName: 'new_x', isCustom: true }]), [{ id: 'new_x', logical: 'new_x', seen: true }]);
   assert.deepStrictEqual(await resolveWith(async () => [{ logicalName: 'new_xy', isCustom: true }]), [{ id: 'new_x', logical: 'new_x', seen: false }]);
   assert.deepStrictEqual(await resolveWith(async () => []), [{ id: 'new_x', logical: 'new_x', seen: false }]);
-  // A read that failed, or a list cut at the 50 matches it asks for, does not say the table is absent.
-  assert.deepStrictEqual(await resolveWith(async () => { throw new Error('HTTP 503'); }), [{ id: 'new_x', logical: 'new_x' }]);
+  // A list cut at the 50 matches it asks for does not say the table is absent.
   const fifty = Array.from({ length: 50 }, (_, i) => ({ logicalName: `new_x${i}`, isCustom: true }));
   assert.deepStrictEqual(await resolveWith(async () => fifty), [{ id: 'new_x', logical: 'new_x' }]);
+  // A read that failed says nothing about the table, so nothing is deleted on it: the step fails closed, with the reason and the error kept.
+  const failed = new Error('HTTP 503 from https://contoso.crm.dynamics.com/api/data/v9.0/EntityDefinitions?$skiptoken=2: Service Unavailable');
+  await assert.rejects(resolveWith(async () => { throw failed; }), (err) => {
+    assert.strictEqual(err.failClosed, true);
+    assert.strictEqual(err.cause, failed);
+    assert.match(err.message, /^table 'new_x' was not deleted: the environment's tables could not be read, so whether it is there, and whether it is a system table, is unknown \(HTTP 503 from /);
+    return true;
+  });
 });
 
 test('a default-view reset that finds no default view says not found; one that finds views, or fails after finding them, reads as before', async () => {

@@ -165,8 +165,10 @@ test('REAL BUNDLE: a pin the service refuses is a warning, as it was — the pag
     try {
       const placed = await genpage.placeInApp(APP_ID, { pages: [{ pageId: OTHER, title: 'Other' }], dataSources: ['account'], finishIfUnpublished: true });
       assert.deepStrictEqual([placed.added, placed.provedPublished], [[OTHER], true]);
-      assert.strictEqual(placed.warnings.length, 1);
+      assert.strictEqual(placed.warnings.length, 2, JSON.stringify(placed.warnings));
       assert.match(placed.warnings[0], /one or more components were not pinned \(.*HTTP 400.*The savedquery does not exist\./);
+      assert.deepStrictEqual(placed.pinnedViews, [], 'a view the service refused is not reported as pinned');
+      assert.match(placed.warnings[1], new RegExp(`^the default view ${APP_VIEW_ID} of the tables the pages read was not added to app ${APP_ID}`));
       assert.ok(namesPage(app.state.publishedXml, OTHER));
       assertMembership(world, { views: [] });
     } finally {
@@ -557,3 +559,67 @@ for (const [label, sentAs] of SENT_AS) {
     }, { defaultViewPinned: false });
   });
 }
+
+// The bundled SDK's guarded pin (lib/app-component-scope.js, THE SDK'S GUARDED PIN). On the strict fake of a whole environment, an app the build made — app and sitemap with tokens of their own, so the
+// SDK's gate after the sitemap write finds the app token it holds — whose maker then took the table's forms and views out of it. The page backend pins the table's default view: the SDK then sends its
+// pin as a change set (guard, action, echo), which the page's transport does not send; the bundle sends its plain action instead, limited to that view, as every earlier release did.
+async function inBuiltApp(fn) {
+  const { createLifecycleOrg } = require('./helpers/fake-lifecycle-org.js');
+  const { createLifecycleHarness } = require('./helpers/lifecycle-harness.js');
+  const org = createLifecycleOrg();
+  const harness = createLifecycleHarness(org, tmp());
+  const spec = {
+    schemaVersion: 2,
+    solution: { uniqueName: 'ContosoPin', displayName: 'Contoso Pin', publisherPrefix: 'contoso' },
+    app: { name: 'Pin' },
+    entities: [{ schemaName: 'contoso_project', displayName: 'Project', pluralName: 'Projects', primaryAttribute: { schemaName: 'contoso_name', displayName: 'Name' }, columns: [] }],
+    pages: [{ key: 'overview', name: 'Overview', purpose: 'A page.', dataSources: ['contoso_project'], source: { kind: 'tsx', codeFile: 'KitchenPage.tsx' } }],
+    appShell: { areas: [{ label: 'Work', groups: [{ label: 'Records', subAreas: [{ entity: 'contoso_project', title: 'Projects' }, { page: 'overview', title: 'Overview' }] }] }] },
+  };
+  const made = await harness.build(spec);
+  assert.strictEqual(made.result.ok, true, JSON.stringify(made.result));
+  const appId = made.result.created.app;
+  const members = org.rowsOf('appmodulecomponents');
+  const removedForms = [...members.values()].filter((row) => row.data.componenttype === 60).map((row) => row.data.objectid);
+  for (const [id, row] of [...members]) if ([26, 60].includes(row.data.componenttype)) members.delete(id);
+  return fn({ org, harness, appId, removedForms });
+}
+const inApp = (org, type) => org.find('appmodulecomponents', (row) => row.componenttype === type).map((row) => String(row.objectid).toLowerCase());
+
+test('REAL BUNDLE: the default view a page edit pins is added when the SDK would send its pin as a guarded change set — only that view, by the plain action, the app published once, the forms the maker took out left out', async () => {
+  await inBuiltApp(async ({ org, harness, appId, removedForms }) => {
+    assert.ok(removedForms.length > 0, 'the app had a Main form the maker took out');
+    const genpage = makeGenpageSdk(org.origin, { httpClient: harness.client });
+    try {
+      const [wanted] = (await genpage.defaultViews(['contoso_project'])).views.map((view) => view.viewId);
+      const mark = org.mark();
+      const placed = await genpage.placeInApp(appId, { pages: [], dataSources: ['contoso_project'] });
+      assert.deepStrictEqual(org.unexpected, []);
+      assert.deepStrictEqual(inApp(org, 26), [wanted], 'the view is in the app');
+      assert.deepStrictEqual(inApp(org, 60), [], 'no Main form the maker took out came back');
+      assert.deepStrictEqual(org.writeCounts(mark), { 'PATCH sitemaps': 1, 'POST AddAppComponents': 1, 'POST PublishXml': 1 }, 'the sitemap, the one limited action and one publish — as before 2.20.6: no app-row write, no change set');
+      const posted = org.writes(mark).filter((write) => /AddAppComponents/.test(write.path));
+      assert.deepStrictEqual(posted.map((write) => [write.batched === true, write.body && write.body.Components]), [[false, [{ '@odata.type': 'Microsoft.Dynamics.CRM.savedquery', savedqueryid: wanted }]]]);
+      assert.deepStrictEqual([placed.pinnedViews, placed.warnings, placed.appEdited], [[wanted], [], true]);
+    } finally {
+      await genpage.dispose();
+    }
+  });
+});
+
+test('REAL BUNDLE: the same state reaches the SDK\'s guarded pin — through a transport no page edit limits, the bundle sends guard, action and echo in one change set', async () => {
+  await inBuiltApp(async ({ org, harness, appId }) => {
+    // A lent SDK keeps its lender's transport, so the edit through it is not limited (lib/genpage-sdk.js `deps.sdk`).
+    const sdk = createMakerSdk({ workspaceStorage: createNodeWorkspaceStorage(tmp()), instanceUrl: org.origin, httpClient: harness.client });
+    await sdk.initWorkspace();
+    const genpage = makeGenpageSdk(org.origin, { sdk });
+    try {
+      const mark = org.mark();
+      await genpage.placeInApp(appId, { pages: [], dataSources: ['contoso_project'] });
+      const batched = org.writes(mark).filter((write) => write.batched).map((write) => `${write.method} ${write.path.split('?')[0].replace(/\(.*\)/, '()')}`);
+      assert.deepStrictEqual(batched, ['PATCH /appmodules()', 'POST /AddAppComponents', 'PATCH /appmodules()'], 'the guarded change set the page edit above does not send');
+    } finally {
+      await genpage.dispose();
+    }
+  });
+});

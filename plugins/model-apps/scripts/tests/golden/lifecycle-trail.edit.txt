@@ -1,0 +1,280 @@
+# 406 requests, 5 publishes
+## up to publish 1: importexportxml(entities(entity=contoso_project))
+  1x GET /EntityDefinitions(LogicalName='appmodule')?$select=EntitySetName -> 200
+  1x GET /EntityDefinitions(LogicalName='contoso_project') -> 200
+  1x GET /EntityDefinitions(LogicalName='contoso_project')/Attributes/Microsoft.Dynamics.CRM.MultiSelectPicklistAttributeMetadata?$select=LogicalName&$expand=OptionSet($select=Options) -> 200
+  1x GET /EntityDefinitions(LogicalName='contoso_project')/Attributes/Microsoft.Dynamics.CRM.PicklistAttributeMetadata?$select=LogicalName&$expand=OptionSet($select=Options) -> 200
+  1x GET /EntityDefinitions(LogicalName='contoso_project')/Attributes/Microsoft.Dynamics.CRM.StateAttributeMetadata?$select=LogicalName&$expand=OptionSet($select=Options) -> 200
+  2x GET /EntityDefinitions(LogicalName='contoso_project')/Attributes/Microsoft.Dynamics.CRM.StatusAttributeMetadata?$select=LogicalName&$expand=OptionSet($select=Options) -> 200
+  1x GET /EntityDefinitions(LogicalName='contoso_project')/Attributes?$select=LogicalName,RequiredLevel -> 200
+  2x GET /EntityDefinitions(LogicalName='contoso_project')/OneToManyRelationships?$select=SchemaName,ReferencingEntity,ReferencingAttribute -> 200
+  1x GET /EntityDefinitions(LogicalName='contoso_project')?$select=EntitySetName -> 200
+  1x GET /EntityDefinitions(LogicalName='contoso_project')?$select=LogicalName,EntitySetName&$expand=Keys($select=SchemaName,KeyAttributes) -> 200
+  1x GET /EntityDefinitions(LogicalName='contoso_tag')/Attributes?$select=LogicalName,RequiredLevel -> 200
+  1x GET /EntityDefinitions(LogicalName='contoso_tag')?$select=LogicalName,EntitySetName -> 200
+  1x GET /EntityDefinitions(LogicalName='contoso_task') -> 200
+  1x GET /EntityDefinitions(LogicalName='contoso_task')/Attributes?$select=LogicalName,RequiredLevel -> 200
+  1x GET /EntityDefinitions(LogicalName='contoso_task')/ManyToManyRelationships?$select=SchemaName,Entity1LogicalName,Entity2LogicalName,IntersectEntityName,Entity1IntersectAttribute,Entity2IntersectAttribute -> 200
+  1x GET /EntityDefinitions(LogicalName='contoso_task')?$select=EntitySetName -> 200
+  1x GET /EntityDefinitions(LogicalName='contoso_task')?$select=LogicalName,EntitySetName -> 200
+  1x GET /EntityDefinitions(LogicalName='solution')?$select=EntitySetName -> 200
+  1x GET /EntityDefinitions(LogicalName='webresource')?$select=EntitySetName -> 200
+  1x GET /GlobalOptionSetDefinitions(Name='contoso_stage')?$select=MetadataId -> 200
+  2x GET /appmodulecomponents?$select=objectid&$filter=_appmoduleidunique_value eq <id> and componenttype eq 62 -> 200
+  1x GET /appmodules(<id>)?$select=appmoduleid -> 200
+  2x GET /appmodules/Microsoft.Dynamics.CRM.RetrieveUnpublishedMultiple()?$select=appmoduleid,appmoduleidunique,componentstate&$filter=appmoduleid eq <id> -> 200
+  1x GET /appmodules/Microsoft.Dynamics.CRM.RetrieveUnpublishedMultiple()?$select=appmoduleid,name,uniquename,description,aiappdescription&$filter=appmoduleid eq <id>&$top=1 -> 200
+  2x GET /appmodules?$select=appmoduleid&$filter=uniquename eq 'contoso_kitchensink'&$top=1 -> 200
+  1x GET /contoso_projects?$select=contoso_name,contoso_projectid&$filter=contoso_name eq 'Apollo'&$top=5000 -> 200
+  1x GET /contoso_tasks?$select=contoso_title,contoso_taskid&$filter=contoso_title eq 'Kickoff'&$top=5000 -> 200
+  1x GET /sitemaps(<id>)?$select=sitemapid -> 200
+  1x GET /sitemaps/Microsoft.Dynamics.CRM.RetrieveUnpublishedMultiple()?$select=sitemapid,sitemapname,sitemapnameunique,sitemapxml&$filter=sitemapid eq <id>&$top=1 -> 200
+  2x GET /solutions?$select=solutionid&$filter=uniquename eq 'ContosoKitchen'&$top=1 -> 200
+  1x GET /webresourceset?$select=webresourceid,content&$filter=name eq 'contoso_project.js'&$top=1 -> 200
+  1x GET /webresourceset?$select=webresourceid,content&$filter=name eq 'contoso_projecticon.svg'&$top=1 -> 200
+  1x POST /EntityDefinitions(LogicalName='contoso_tag')/Attributes #17143fc8 -> 204
+  1x POST /EntityDefinitions(LogicalName='contoso_task')/Attributes #4940b353 -> 204
+  1x POST /PublishXml #1b71745d -> 204
+  1x PUT /EntityDefinitions(<id>) #2b71ae7d -> 204
+  1x PUT /EntityDefinitions(<id>) #d6b4b26e -> 204
+## up to publish 2: importexportxml(entities(entity=contoso_project entity=contoso_tag entity=contoso_task))
+  1x GET /EntityDefinitions(LogicalName='appaction')?$select=EntitySetName -> 200
+  1x GET /EntityDefinitions(LogicalName='appmodulecomponent')?$select=EntitySetName -> 200
+  1x GET /EntityDefinitions(LogicalName='contact')?$select=MetadataId,EntitySetName -> 200
+  1x GET /EntityDefinitions(LogicalName='contoso_project')?$select=MetadataId,EntitySetName -> 200
+  2x GET /EntityDefinitions(LogicalName='contoso_task')/Attributes?$select=LogicalName,AttributeType,DisplayName&$filter=LogicalName eq 'contoso_start' -> 200
+  1x GET /EntityDefinitions(LogicalName='contoso_task')?$select=MetadataId,EntitySetName -> 200
+  3x GET /EntityDefinitions(LogicalName='savedquery')?$select=EntitySetName -> 200
+  1x GET /EntityDefinitions(LogicalName='savedqueryvisualization')?$select=EntitySetName -> 200
+  1x GET /EntityDefinitions(LogicalName='solutioncomponent')?$select=EntitySetName -> 200
+  4x GET /EntityDefinitions(LogicalName='systemform')?$select=EntitySetName -> 200
+  1x GET /appactions?$select=appactionid,buttonlabeltext&$filter=contextvalue eq 'contoso_project'&$top=1 -> 200
+  1x GET /appmodulecomponents?$select=objectid,componenttype&$filter=_appmoduleidunique_value eq <id> and componenttype eq 59 -> 200
+  1x GET /appmodulecomponents?$select=objectid,componenttype&$filter=_appmoduleidunique_value eq <id> and componenttype eq 60 -> 200
+  1x GET /appmodules/Microsoft.Dynamics.CRM.RetrieveUnpublishedMultiple()?$select=appmoduleid,appmoduleidunique,componentstate&$filter=appmoduleid eq <id> -> 200
+  1x GET /appmodules?$select=appmoduleid&$filter=uniquename eq 'contoso_kitchensink'&$top=1 -> 200
+  9x GET /savedqueries(<id>)/Microsoft.Dynamics.CRM.RetrieveUnpublished()?$select=savedqueryid,name,description,fetchxml,layoutxml,querytype,returnedtypecode,isdefault -> 200
+  9x GET /savedqueries(<id>)?$select=savedqueryid -> 200
+  1x GET /savedqueries?$select=savedqueryid&$filter=returnedtypecode eq 'contoso_project' and name eq 'Open Projects'&$top=2 -> 200
+  1x GET /savedqueries?$select=savedqueryid&$filter=returnedtypecode eq 'contoso_task' and name eq 'My Open Tasks'&$top=2 -> 200
+  1x GET /savedqueries?$select=savedqueryid&$filter=returnedtypecode eq 'contoso_task' and name eq 'Open Tasks'&$top=2 -> 200
+  1x GET /savedqueries?$select=savedqueryid,name,canbedeleted,fetchxml,createdon&$filter=returnedtypecode eq 'contoso_project' and querytype eq 0 -> 200
+  1x GET /savedqueries?$select=savedqueryid,name,canbedeleted,fetchxml,createdon&$filter=returnedtypecode eq 'contoso_tag' and querytype eq 0 -> 200
+  1x GET /savedqueries?$select=savedqueryid,name,canbedeleted,fetchxml,createdon&$filter=returnedtypecode eq 'contoso_task' and querytype eq 0 -> 200
+  1x GET /savedqueryvisualizations(<id>)/Microsoft.Dynamics.CRM.RetrieveUnpublished()?$select=savedqueryvisualizationid,name,description,primaryentitytypecode,datadescription,presentationdescription,charttype,type,isdefault -> 200
+  1x GET /savedqueryvisualizations(<id>)?$select=savedqueryvisualizationid -> 200
+  1x GET /savedqueryvisualizations/Microsoft.Dynamics.CRM.RetrieveUnpublishedMultiple()?$select=savedqueryvisualizationid,primaryentitytypecode&$filter=savedqueryvisualizationid eq <id> -> 200
+  1x GET /savedqueryvisualizations?$select=savedqueryvisualizationid&$filter=primaryentitytypecode eq 'contoso_project' and name eq 'Projects by Priority'&$top=2 -> 200
+  1x GET /solutioncomponents?$select=objectid&$filter=_solutionid_value eq <id> and componenttype eq 60 and (objectid eq <id>)&$top=50 -> 200
+  1x GET /solutioncomponents?$select=objectid,componenttype,rootcomponentbehavior&$filter=_solutionid_value eq <id> and (componenttype eq 26 or componenttype eq 59 or componenttype eq 60 or componenttype eq 61 or componenttype eq 62 or componenttype eq 80 or componenttype eq 20 or componenttype eq 29 or componenttype eq 1) -> 200
+  2x GET /solutions?$select=solutionid&$filter=uniquename eq 'ContosoKitchen'&$top=1 -> 200
+  8x GET /systemforms(<id>)/Microsoft.Dynamics.CRM.RetrieveUnpublished()?$select=formid,formxml,name,type,objecttypecode,formpresentation,formactivationstate,uniquename,description,versionnumber -> 200
+  2x GET /systemforms(<id>)/Microsoft.Dynamics.CRM.RetrieveUnpublished()?$select=formid,formxml,type -> 200
+  2x GET /systemforms(<id>)/Microsoft.Dynamics.CRM.RetrieveUnpublished()?$select=formid,type -> 200
+  2x GET /systemforms(<id>)?$select=formid -> 200
+  1x GET /systemforms/Microsoft.Dynamics.CRM.RetrieveUnpublishedMultiple()?$select=formid,objecttypecode&$filter=formid eq <id> or formid eq <id> or formid eq <id> or formid eq <id> or formid eq <id> or formid eq <id> -> 200
+  1x GET /systemforms?$select=formid&$filter=objecttypecode eq 'contoso_project' and name eq 'Project Card' and type eq 6&$top=2 -> 200
+  1x GET /systemforms?$select=formid&$filter=objecttypecode eq 'contoso_project' and name eq 'Project' and type eq 2&$top=2 -> 200
+  1x GET /systemforms?$select=formid&$filter=objecttypecode eq 'contoso_task' and name eq 'Task Quick Create' and type eq 7&$top=2 -> 200
+  1x GET /systemforms?$select=formid&$filter=objecttypecode eq 'contoso_task' and name eq 'Task' and type eq 2&$top=2 -> 200
+  1x GET /systemforms?$select=formid,name&$filter=name eq 'Kitchen Overview' and type eq 0&$top=10 -> 200
+  1x GET /systemforms?$select=formid,name&$filter=objecttypecode eq 'contoso_task' and type eq 2 and formactivationstate eq 1&$top=250 -> 200
+  1x GET /webresourceset?$select=webresourceid&$filter=name eq 'contoso_kitchensink_icon'&$top=1 -> 200
+  8x PATCH /savedqueries(<id>)?$select=savedqueryid #97e1522c -> 200
+  2x PATCH /systemforms(<id>) #9bb0a025 -> 204
+  2x PATCH /systemforms(<id>)?$select=formid #e0abe8e4 -> 200
+  1x POST /PublishXml #1b71745d -> 204
+## up to publish 3: importexportxml(uxagentprojects(uxagentproject=#id))
+  1x GET /EntityDefinitions(LogicalName='contoso_project')/Attributes/Microsoft.Dynamics.CRM.BooleanAttributeMetadata?$select=LogicalName&$expand=OptionSet($select=TrueOption,FalseOption) -> 200
+  1x GET /EntityDefinitions(LogicalName='contoso_project')/Attributes/Microsoft.Dynamics.CRM.LookupAttributeMetadata?$select=LogicalName,Targets -> 200
+  1x GET /EntityDefinitions(LogicalName='contoso_project')/Attributes/Microsoft.Dynamics.CRM.MultiSelectPicklistAttributeMetadata?$select=LogicalName&$expand=OptionSet($select=Options) -> 200
+  1x GET /EntityDefinitions(LogicalName='contoso_project')/Attributes/Microsoft.Dynamics.CRM.PicklistAttributeMetadata?$select=LogicalName&$expand=OptionSet($select=Options) -> 200
+  1x GET /EntityDefinitions(LogicalName='contoso_project')/Attributes/Microsoft.Dynamics.CRM.StateAttributeMetadata?$select=LogicalName&$expand=OptionSet($select=Options) -> 200
+  1x GET /EntityDefinitions(LogicalName='contoso_project')/Attributes/Microsoft.Dynamics.CRM.StatusAttributeMetadata?$select=LogicalName&$expand=OptionSet($select=Options) -> 200
+  1x GET /EntityDefinitions(LogicalName='contoso_project')/Attributes/Microsoft.Dynamics.CRM.StringAttributeMetadata?$select=LogicalName,MaxLength -> 200
+  1x GET /EntityDefinitions(LogicalName='contoso_project')/ManyToManyRelationships?$select=SchemaName,Entity1LogicalName,Entity2LogicalName -> 200
+  1x GET /EntityDefinitions(LogicalName='contoso_project')/ManyToOneRelationships?$select=SchemaName,ReferencedEntity,ReferencedAttribute -> 200
+  1x GET /EntityDefinitions(LogicalName='contoso_project')/OneToManyRelationships?$select=SchemaName,ReferencingEntity,ReferencingAttribute -> 200
+  1x GET /EntityDefinitions(LogicalName='contoso_project')?$select=LogicalName,SchemaName,DisplayName,Description,EntitySetName,IsCustomEntity,PrimaryNameAttribute,PrimaryIdAttribute,PrimaryImageAttribute&$expand=Attributes($select=LogicalName,DisplayName,Description,AttributeType,AttributeTypeName,IsCustomAttribute,IsValidForUpdate,IsValidForRead,AttributeOf) -> 200
+  1x GET /EntityDefinitions(LogicalName='sitemap')?$select=EntitySetName -> 200
+  1x GET /EntityDefinitions(LogicalName='uxagentproject')?$select=EntitySetName -> 200
+  1x GET /EntityDefinitions(LogicalName='uxagentproject')?$select=ObjectTypeCode -> 200
+  1x GET /EntityDefinitions(LogicalName='uxagentprojectfile')?$select=EntitySetName -> 200
+  1x GET /agentconversationmessages?$select=agentconversationmessageid,message,messagesender,_regardingobjectid_value&$filter=agentconversationmessageid eq <id> or agentconversationmessageid eq <id> -> 200
+  1x GET /agentconversationmessages?$select=agentconversationmessageid,message,messagesender,createdon&$filter=_regardingobjectid_value eq <id>&$orderby=createdon asc,versionnumber asc -> 200
+  2x GET /appmodulecomponents?$select=objectid&$filter=_appmoduleidunique_value eq <id> and componenttype eq 62 -> 200
+  1x GET /appmodulecomponents?$select=objectid,componenttype&$filter=_appmoduleidunique_value eq <id> and componenttype eq 1 -> 200
+  3x GET /appmodulecomponents?$select=objectid,componenttype&$filter=_appmoduleidunique_value eq <id> and componenttype eq 62&$top=1 -> 200
+  1x GET /appmodules(<id>)?$select=appmoduleid -> 200
+  3x GET /appmodules/Microsoft.Dynamics.CRM.RetrieveUnpublishedMultiple()?$select=appmoduleid,appmoduleidunique,componentstate&$filter=appmoduleid eq <id> -> 200
+  2x GET /appmodules/Microsoft.Dynamics.CRM.RetrieveUnpublishedMultiple()?$select=appmoduleid,appmoduleidunique,uniquename,componentstate -> 200
+  1x GET /appmodules/Microsoft.Dynamics.CRM.RetrieveUnpublishedMultiple()?$select=appmoduleid,name,uniquename,description,aiappdescription&$filter=appmoduleid eq <id>&$top=1 -> 200
+  1x GET /appmodules?$select=appmoduleid,appmoduleidunique&$filter=uniquename eq 'contoso_kitchensink'&$top=1 -> 200
+  2x GET /appmodules?$select=appmoduleid,appmoduleidunique&$filter=uniquename eq 'fabrikam_widgets'&$top=1 -> 200
+  2x GET /appmodules?$select=appmoduleid,appmoduleidunique,uniquename -> 200
+  1x GET /sitemaps(<id>)?$select=sitemapid -> 200
+  1x GET /sitemaps/Microsoft.Dynamics.CRM.RetrieveUnpublishedMultiple()?$select=sitemapid,sitemapname,sitemapnameunique,sitemapxml&$filter=sitemapid eq <id>&$top=1 -> 200
+  2x GET /sitemaps/Microsoft.Dynamics.CRM.RetrieveUnpublishedMultiple()?$select=sitemapid,sitemapxml,componentstate,sitemapnameunique -> 200
+  1x GET /sitemaps?$select=sitemapid&$filter=sitemapnameunique eq 'contoso_kitchensink'&$top=1 -> 200
+  3x GET /sitemaps?$select=sitemapxml&$filter=sitemapid eq <id>&$top=1 -> 200
+  7x GET /uxagentprojectfiles(<id>)/filecontent/$value -> 200
+  5x GET /uxagentprojectfiles?$select=uxagentprojectfileid,filename,filetype&$filter=_uxagentprojectid_value eq <id> -> 200
+  1x GET /uxagentprojectfiles?$select=uxagentprojectfileid,versionnumber,_uxagentprojectid_value&$filter=_uxagentprojectid_value eq <id> -> 200
+  4x GET /uxagentprojects(<id>)?$select=uxagentprojectid,name -> 200
+  1x GET /uxagentprojects?$select=uxagentprojectid,name -> 200
+  1x GET /uxagentprojects?$select=uxagentprojectid,versionnumber&$filter=uxagentprojectid eq <id> -> 200
+  1x GET /webresourceset?$select=webresourceid,content&$filter=name eq 'contoso_kitchensink_pagemanifest'&$top=1 -> 200
+  1x POST /$batch -> 200
+      > PATCH /uxagentprojectfiles(<id>)/filecontent #473287f8
+      > PATCH /uxagentprojectfiles(<id>)/filecontent #473287f8
+      > PATCH /uxagentprojects(<id>) #8e40ff9d
+      > POST /agentconversationmessages #43dbd5f4
+      > POST /agentconversationmessages #43dbd5f4
+  1x POST /PublishXml #1b71745d -> 204
+## up to publish 4: importexportxml(appmodules(appmodule=#id))
+  1x GET /EntityDefinitions(LogicalName='contoso_project')?$select=MetadataId,EntitySetName -> 200
+  1x GET /EntityDefinitions(LogicalName='contoso_tag')?$select=MetadataId,EntitySetName -> 200
+  1x GET /EntityDefinitions(LogicalName='contoso_task')?$select=MetadataId,EntitySetName -> 200
+  7x GET /appmodulecomponents?$select=objectid&$filter=_appmoduleidunique_value eq <id> and componenttype eq 62 -> 200
+  1x GET /appmodulecomponents?$select=objectid,componenttype&$filter=_appmoduleidunique_value eq <id> -> 200
+  1x GET /appmodulecomponents?$select=objectid,componenttype&$filter=_appmoduleidunique_value eq <id> and componenttype eq 1 -> 200
+  1x GET /appmodulecomponents?$select=objectid,componenttype&$filter=_appmoduleidunique_value eq <id> and componenttype eq 62&$top=1 -> 200
+  4x GET /appmodules(<id>)?$select=appmoduleid -> 200
+  9x GET /appmodules/Microsoft.Dynamics.CRM.RetrieveUnpublishedMultiple()?$select=appmoduleid,appmoduleidunique,componentstate&$filter=appmoduleid eq <id> -> 200
+  1x GET /appmodules/Microsoft.Dynamics.CRM.RetrieveUnpublishedMultiple()?$select=appmoduleid,appmoduleidunique,uniquename,componentstate -> 200
+  4x GET /appmodules/Microsoft.Dynamics.CRM.RetrieveUnpublishedMultiple()?$select=appmoduleid,name,uniquename,description,aiappdescription&$filter=appmoduleid eq <id>&$top=1 -> 200
+  1x GET /appmodules?$select=appmoduleid,appmoduleidunique&$filter=uniquename eq 'fabrikam_widgets'&$top=1 -> 200
+  1x GET /appmodules?$select=appmoduleid,appmoduleidunique,uniquename -> 200
+  1x GET /savedqueries?$select=savedqueryid&$filter=returnedtypecode eq 'contoso_project' and querytype eq 0 and statecode eq 0 -> 200
+  1x GET /savedqueries?$select=savedqueryid&$filter=returnedtypecode eq 'contoso_tag' and querytype eq 0 and statecode eq 0 -> 200
+  1x GET /savedqueries?$select=savedqueryid&$filter=returnedtypecode eq 'contoso_task' and querytype eq 0 and statecode eq 0 -> 200
+  1x GET /savedqueryvisualizations?$select=savedqueryvisualizationid&$filter=primaryentitytypecode eq 'contoso_project' -> 200
+  1x GET /savedqueryvisualizations?$select=savedqueryvisualizationid&$filter=primaryentitytypecode eq 'contoso_tag' -> 200
+  1x GET /savedqueryvisualizations?$select=savedqueryvisualizationid&$filter=primaryentitytypecode eq 'contoso_task' -> 200
+  3x GET /sitemaps(<id>)?$select=sitemapid -> 200
+  3x GET /sitemaps/Microsoft.Dynamics.CRM.RetrieveUnpublishedMultiple()?$select=sitemapid,sitemapname,sitemapnameunique,sitemapxml&$filter=sitemapid eq <id>&$top=1 -> 200
+  1x GET /sitemaps/Microsoft.Dynamics.CRM.RetrieveUnpublishedMultiple()?$select=sitemapid,sitemapxml,componentstate,sitemapnameunique -> 200
+  1x GET /sitemaps?$select=sitemapxml&$filter=sitemapid eq <id>&$top=1 -> 200
+  1x GET /solutioncomponents?$select=objectid,componenttype,rootcomponentbehavior&$filter=_solutionid_value eq <id> and (componenttype eq 10200) -> 200
+  1x GET /solutions?$select=solutionid&$filter=uniquename eq 'ContosoKitchen'&$top=1 -> 200
+  1x GET /systemforms?$select=formid&$filter=objecttypecode eq 'contoso_project' and type eq 2 and formactivationstate eq 1 -> 200
+  1x GET /systemforms?$select=formid&$filter=objecttypecode eq 'contoso_tag' and type eq 2 and formactivationstate eq 1 -> 200
+  1x GET /systemforms?$select=formid&$filter=objecttypecode eq 'contoso_task' and type eq 2 and formactivationstate eq 1 -> 200
+ 11x GET /uxagentprojectfiles(<id>)/filecontent/$value -> 200
+  4x GET /uxagentprojectfiles?$select=uxagentprojectfileid,filename,filetype&$filter=_uxagentprojectid_value eq <id> -> 200
+  2x GET /uxagentprojectfiles?$select=uxagentprojectfileid,versionnumber,_uxagentprojectid_value&$filter=_uxagentprojectid_value eq <id> -> 200
+  4x GET /uxagentprojects(<id>)?$select=uxagentprojectid,name -> 200
+  1x GET /uxagentprojects/Microsoft.Dynamics.CRM.RetrieveUnpublishedMultiple()?$select=uxagentprojectid&$filter=uxagentprojectid eq <id> -> 200
+  2x GET /uxagentprojects?$select=uxagentprojectid,versionnumber&$filter=uxagentprojectid eq <id> -> 200
+  1x PATCH /appmodules(<id>)?$select=appmoduleid #5c895103 -> 200
+  1x PATCH /sitemaps(<id>)?$select=sitemapid #a48e6542 -> 200
+  1x POST /AddAppComponents #55bd8832 -> 204
+  1x POST /PublishXml #1b71745d -> 204
+## up to publish 5: importexportxml(appmodules(appmodule=#id) entities(entity=contoso_project entity=contoso_tag entity=contoso_task))
+  1x GET /EntityDefinitions(LogicalName='appmodule')?$select=LogicalName,Privileges -> 200
+  1x GET /EntityDefinitions(LogicalName='appmodulecomponent')?$select=EntitySetName -> 200
+  1x GET /EntityDefinitions(LogicalName='businessunit')?$select=EntitySetName -> 200
+  1x GET /EntityDefinitions(LogicalName='contoso_project')?$select=LogicalName,Privileges -> 200
+  1x GET /EntityDefinitions(LogicalName='contoso_tag')?$select=LogicalName,Privileges -> 200
+  1x GET /EntityDefinitions(LogicalName='contoso_task')?$select=LogicalName,Privileges -> 200
+  1x GET /EntityDefinitions(LogicalName='role')?$select=EntitySetName -> 200
+  1x GET /EntityDefinitions(LogicalName='savedquery')?$select=EntitySetName -> 200
+  4x GET /appmodulecomponents?$select=objectid&$filter=_appmoduleidunique_value eq <id> and componenttype eq 62 -> 200
+  1x GET /appmodulecomponents?$select=objectid,componenttype&$filter=_appmoduleidunique_value eq <id> and componenttype eq 26 -> 200
+  2x GET /appmodules(<id>)?$select=appmoduleid -> 200
+  5x GET /appmodules/Microsoft.Dynamics.CRM.RetrieveUnpublishedMultiple()?$select=appmoduleid,appmoduleidunique,componentstate&$filter=appmoduleid eq <id> -> 200
+  2x GET /appmodules/Microsoft.Dynamics.CRM.RetrieveUnpublishedMultiple()?$select=appmoduleid,name,uniquename,description,aiappdescription&$filter=appmoduleid eq <id>&$top=1 -> 200
+  1x GET /appsettings/Microsoft.Dynamics.CRM.RetrieveUnpublishedMultiple()?$select=appsettingid,value&$filter=_parentappmoduleid_value eq <id> and _settingdefinitionid_value eq <id> -> 200
+  2x GET /businessunits?$select=businessunitid&$filter=_parentbusinessunitid_value eq null&$top=1 -> 200
+  1x GET /roles?$select=roleid,description,ismanaged&$filter=name eq 'Kitchen Planner' and _businessunitid_value eq <id> -> 200
+  1x GET /roles?$select=roleid,name,ismanaged&$filter=name eq 'Basic User' and _businessunitid_value eq <id>&$top=5 -> 200
+  9x GET /savedqueries(<id>)/Microsoft.Dynamics.CRM.RetrieveUnpublished()?$select=savedqueryid,name,description,fetchxml,layoutxml,querytype,returnedtypecode,isdefault -> 200
+  9x GET /savedqueries(<id>)?$select=savedqueryid -> 200
+  1x GET /savedqueries?$select=savedqueryid&$filter=returnedtypecode eq 'contoso_project' and querytype eq 0 and isdefault eq true&$top=1 -> 200
+  1x GET /savedqueryvisualizations(<id>)/Microsoft.Dynamics.CRM.RetrieveUnpublished()?$select=savedqueryvisualizationid,name,description,primaryentitytypecode,datadescription,presentationdescription,charttype,type,isdefault -> 200
+  1x GET /savedqueryvisualizations(<id>)?$select=savedqueryvisualizationid -> 200
+  1x GET /settingdefinitions?$select=settingdefinitionid,uniquename,displayname&$filter=uniquename eq 'HeaderAndNavigationRefresh' -> 200
+  2x GET /sitemaps(<id>)?$select=sitemapid -> 200
+  2x GET /sitemaps/Microsoft.Dynamics.CRM.RetrieveUnpublishedMultiple()?$select=sitemapid,sitemapname,sitemapnameunique,sitemapxml&$filter=sitemapid eq <id>&$top=1 -> 200
+  4x GET /systemforms(<id>)/Microsoft.Dynamics.CRM.RetrieveUnpublished()?$select=formid,formxml,name,type,objecttypecode,formpresentation,formactivationstate,uniquename,description,versionnumber -> 200
+  2x GET /systemforms(<id>)/Microsoft.Dynamics.CRM.RetrieveUnpublished()?$select=formid,formxml,type -> 200
+  1x GET /systemforms(<id>)?$select=formid -> 200
+  1x PATCH /systemforms(<id>) #e39def73 -> 204
+  1x POST /PublishXml #1b71745d -> 204
+  1x POST /SaveSettingValue #9bbb6c67 -> 204
+  1x POST /appmodules(<id>)/appmoduleroles_association/$ref #f07e5c5f -> 400
+  1x POST /roles(<id>)/Microsoft.Dynamics.CRM.AddPrivilegesRole #497ea01a -> 204
+  1x POST /roles(<id>)/Microsoft.Dynamics.CRM.ReplacePrivilegesRole #20224ada -> 204
+## after the last publish
+  1x GET /EntityDefinitions(LogicalName='contact')?$select=MetadataId -> 200
+  1x GET /EntityDefinitions(LogicalName='contoso_project')/Attributes/Microsoft.Dynamics.CRM.MultiSelectPicklistAttributeMetadata?$select=LogicalName&$expand=OptionSet($select=Options) -> 200
+  1x GET /EntityDefinitions(LogicalName='contoso_project')/Attributes/Microsoft.Dynamics.CRM.PicklistAttributeMetadata?$select=LogicalName&$expand=OptionSet($select=Options) -> 200
+  1x GET /EntityDefinitions(LogicalName='contoso_project')/Attributes/Microsoft.Dynamics.CRM.StateAttributeMetadata?$select=LogicalName&$expand=OptionSet($select=Options) -> 200
+  2x GET /EntityDefinitions(LogicalName='contoso_project')/Attributes/Microsoft.Dynamics.CRM.StatusAttributeMetadata?$select=LogicalName&$expand=OptionSet($select=Options) -> 200
+  1x GET /EntityDefinitions(LogicalName='contoso_project')/Attributes?$select=LogicalName,SchemaName,DisplayName,AttributeType,IsCustomAttribute -> 200
+  1x GET /EntityDefinitions(LogicalName='contoso_project')/Keys?$select=LogicalName,SchemaName,KeyAttributes -> 200
+  1x GET /EntityDefinitions(LogicalName='contoso_project')/ManyToManyRelationships?$select=SchemaName,Entity1LogicalName,Entity2LogicalName,IntersectEntityName,Entity1IntersectAttribute,Entity2IntersectAttribute -> 200
+  1x GET /EntityDefinitions(LogicalName='contoso_project')/ManyToOneRelationships?$select=SchemaName,ReferencedEntity,ReferencingAttribute -> 200
+  1x GET /EntityDefinitions(LogicalName='contoso_project')?$select=MetadataId -> 200
+  1x GET /EntityDefinitions(LogicalName='contoso_tag')/Attributes?$select=LogicalName,SchemaName,DisplayName,AttributeType,IsCustomAttribute -> 200
+  1x GET /EntityDefinitions(LogicalName='contoso_tag')?$select=MetadataId -> 200
+  1x GET /EntityDefinitions(LogicalName='contoso_task')/Attributes?$select=LogicalName,SchemaName,DisplayName,AttributeType,IsCustomAttribute -> 200
+  1x GET /EntityDefinitions(LogicalName='contoso_task')/ManyToManyRelationships?$select=SchemaName,Entity1LogicalName,Entity2LogicalName,IntersectEntityName,Entity1IntersectAttribute,Entity2IntersectAttribute -> 200
+  1x GET /EntityDefinitions(LogicalName='contoso_task')/ManyToOneRelationships?$select=SchemaName,ReferencedEntity,ReferencingAttribute -> 200
+  1x GET /EntityDefinitions(LogicalName='contoso_task')?$select=MetadataId -> 200
+  1x GET /EntityDefinitions(LogicalName='entity')?$select=MetadataId -> 404
+  1x GET /EntityDefinitions(LogicalName='roleprivileges')?$select=EntitySetName -> 200
+  1x GET /EntityDefinitions?$select=LogicalName,SchemaName,EntitySetName,DisplayName,IsCustomEntity -> 200
+  1x GET /WhoAmI -> 200
+  1x GET /appactions?$select=appactionid,buttonlabeltext&$filter=contextvalue eq 'contoso_project'&$top=1 -> 200
+  1x GET /appmodulecomponents?$select=objectid,componenttype&$filter=_appmoduleidunique_value eq <id> and componenttype eq 1 -> 200
+  1x GET /appmodulecomponents?$select=objectid,componenttype&$filter=_appmoduleidunique_value eq <id> and componenttype eq 62&$top=1 -> 200
+  1x GET /appmodules(<id>)/appmoduleroles_association?$select=roleid -> 200
+  1x GET /appmodules?$select=appmoduleid&$filter=uniquename eq 'contoso_kitchensink'&$top=1 -> 200
+  2x GET /appmodules?$select=appmoduleid,appmoduleidunique&$filter=uniquename eq 'contoso_kitchensink'&$top=1 -> 200
+  1x GET /businessunits?$select=businessunitid&$filter=_parentbusinessunitid_value eq null&$top=1 -> 200
+  2x GET /roleprivilegescollection?$select=privilegeid,privilegedepthmask&$filter=roleid eq <id> -> 200
+  1x GET /roles?$select=roleid,description,ismanaged&$filter=name eq 'Kitchen Planner' and _businessunitid_value eq <id>&$top=5 -> 200
+  1x GET /roles?$select=roleid,name&$filter=name eq 'Basic User' and _businessunitid_value eq <id>&$top=5 -> 200
+  1x GET /savedqueries?$select=returnedtypecode&$filter=savedqueryid eq <id>&$top=1 -> 200
+  1x GET /savedqueries?$select=savedqueryid,layoutxml,fetchxml&$filter=returnedtypecode eq 'contoso_project' and name eq 'Open Projects'&$top=1 -> 200
+  1x GET /savedqueries?$select=savedqueryid,layoutxml,fetchxml&$filter=returnedtypecode eq 'contoso_task' and name eq 'My Open Tasks'&$top=1 -> 200
+  1x GET /savedqueries?$select=savedqueryid,layoutxml,fetchxml&$filter=returnedtypecode eq 'contoso_task' and name eq 'Open Tasks'&$top=1 -> 200
+  1x GET /savedqueryvisualizations?$select=primaryentitytypecode&$filter=savedqueryvisualizationid eq <id>&$top=1 -> 200
+  1x GET /savedqueryvisualizations?$select=savedqueryvisualizationid&$filter=primaryentitytypecode eq 'contoso_project' and name eq 'Projects by Priority'&$top=1 -> 200
+  1x GET /sitemaps?$select=sitemapxml&$filter=sitemapid eq <id>&$top=1 -> 200
+  1x GET /systemforms(<id>)/Microsoft.Dynamics.CRM.RetrieveUnpublished()?$select=formid,name,description,formxml,type,objecttypecode,istabletenabled,iscustomizable,componentstate,versionnumber -> 200
+  2x GET /systemforms(<id>)/Microsoft.Dynamics.CRM.RetrieveUnpublished()?$select=formxml -> 200
+  1x GET /systemforms/Microsoft.Dynamics.CRM.RetrieveFilteredForms(EntityLogicalName=@e,FormType=@t,User=@u)?@e='contoso_task'&@t=2&@u={'@odata.id':'systemusers(<id>)'} -> 200
+  2x GET /systemforms?$select=formid&$filter=objecttypecode eq 'contoso_project' and name eq 'Project Card' and type eq 6&$top=2 -> 200
+  2x GET /systemforms?$select=formid&$filter=objecttypecode eq 'contoso_project' and name eq 'Project' and type eq 2&$top=2 -> 200
+  2x GET /systemforms?$select=formid&$filter=objecttypecode eq 'contoso_task' and name eq 'Task Quick Create' and type eq 7&$top=2 -> 200
+  2x GET /systemforms?$select=formid&$filter=objecttypecode eq 'contoso_task' and name eq 'Task' and type eq 2&$top=2 -> 200
+  2x GET /systemforms?$select=formid,formxml&$filter=formid eq <id>&$top=1 -> 200
+  4x GET /systemforms?$select=formid,isdefault,formxml&$filter=formid eq <id>&$top=1 -> 200
+  1x GET /systemforms?$select=formid,name&$filter=objecttypecode eq 'contoso_task' and type eq 2&$top=250 -> 200
+  1x GET /systemforms?$select=formid,name&$filter=type eq 0 and name eq 'Kitchen Overview' -> 200
+  1x GET /uxagentprojects?$select=uxagentprojectid,name -> 200
+  1x GET /webresourceset?$select=content&$filter=name eq 'contoso_kitchensink_pagemanifest'&$top=1 -> 200
+  1x GET /webresourceset?$select=webresourceid,content&$filter=name eq 'contoso_project.js'&$top=1 -> 200
+  1x GET /webresourceset?$select=webresourceid,content&$filter=name eq 'contoso_projecticon.svg'&$top=1 -> 200
+# shapes
+#17143fc8 {@odata.type:string,AttributeType:string,AttributeTypeName:{Value:string},DisplayName:{@odata.type:string,LocalizedLabels:[1x{@odata.type:string,Label:string,LanguageCode:number}]},FormatName:{Value:string},MaxLength:number,RequiredLevel:{CanBeChanged:boolean,ManagedPropertyLogicalName:string,Value:string},SchemaName:string}
+#1b71745d {ParameterXml:string}
+#20224ada {Privileges:[5x{Depth:string,PrivilegeId:string}]}
+#2b71ae7d {@odata.type:string,ChangeTrackingEnabled:boolean,CollectionSchemaName:string,Description:{LocalizedLabels:[1x{HasChanged:null,IsManaged:boolean,Label:string,LanguageCode:number,MetadataId:string}],UserLocalizedLabel:{HasChanged:null,IsManaged:boolean,Label:string,LanguageCode:number,MetadataId:string}},DisplayCollectionName:{LocalizedLabels:[1x{HasChanged:null,IsManaged:boolean,Label:string,LanguageCode:number,MetadataId:string}],UserLocalizedLabel:{HasChanged:null,IsManaged:boolean,Label:string,LanguageCode:number,MetadataId:string}},DisplayName:{LocalizedLabels:[1x{HasChanged:null,IsManaged:boolean,Label:string,LanguageCode:number,MetadataId:string}],UserLocalizedLabel:{HasChanged:null,IsManaged:boolean,Label:string,LanguageCode:number,MetadataId:string}},EntitySetName:string,HasActivities:boolean,HasNotes:boolean,IconLargeName:null,IconMediumName:null,IconSmallName:null,IconVectorName:null,IsActivity:boolean,IsCustomEntity:boolean,IsIntersect:boolean,IsManaged:boolean,IsQuickCreateEnabled:boolean,LogicalCollectionName:string,LogicalName:string,MetadataId:string,ObjectTypeCode:number,OwnershipType:string,PrimaryIdAttribute:string,PrimaryImageAttribute:null,PrimaryNameAttribute:string,Privileges:[8x{CanBeBasic:boolean,CanBeDeep:boolean,CanBeEntityReference:boolean,CanBeGlobal:boolean,CanBeLocal:boolean,CanBeParentEntityReference:boolean,Name:string,PrivilegeId:string,PrivilegeType:string}],SchemaName:string,TableType:string}
+#43dbd5f4 {RegardingObjectId_uxagentproject@odata.bind:string,agentconversationmessageid:string,message:string,messagecontext:string,messagesender:number}
+#473287f8 string
+#4940b353 {@odata.type:string,AttributeType:string,AttributeTypeName:{Value:string},DateTimeBehavior:{Value:string},DisplayName:{@odata.type:string,LocalizedLabels:[1x{@odata.type:string,Label:string,LanguageCode:number}]},Format:string,RequiredLevel:{CanBeChanged:boolean,ManagedPropertyLogicalName:string,Value:string},SchemaName:string}
+#497ea01a {Privileges:[1x{Depth:string,PrivilegeId:string}]}
+#55bd8832 {AppId:string,Components:[3x{@odata.id:string}|6x{@odata.type:string,formid:string}|9x{@odata.type:string,savedqueryid:string}|1x{@odata.type:string,savedqueryvisualizationid:string}]}
+#5c895103 {description:string}
+#8e40ff9d {name:string}
+#97e1522c {description:string,fetchxml:string,layoutxml:string,name:string,returnedtypecode:string}
+#9bb0a025 {isdefault:boolean}
+#9bbb6c67 {AppUniqueName:string,SettingName:string,SolutionUniqueName:string,Value:string}
+#a48e6542 {sitemapname:string,sitemapxml:string}
+#d6b4b26e {@odata.type:string,ChangeTrackingEnabled:boolean,CollectionSchemaName:string,Description:{LocalizedLabels:[1x{HasChanged:null,IsManaged:boolean,Label:string,LanguageCode:number,MetadataId:string}],UserLocalizedLabel:{HasChanged:null,IsManaged:boolean,Label:string,LanguageCode:number,MetadataId:string}},DisplayCollectionName:{LocalizedLabels:[1x{HasChanged:null,IsManaged:boolean,Label:string,LanguageCode:number,MetadataId:string}],UserLocalizedLabel:{HasChanged:null,IsManaged:boolean,Label:string,LanguageCode:number,MetadataId:string}},DisplayName:{LocalizedLabels:[1x{HasChanged:null,IsManaged:boolean,Label:string,LanguageCode:number,MetadataId:string}],UserLocalizedLabel:{HasChanged:null,IsManaged:boolean,Label:string,LanguageCode:number,MetadataId:string}},EntitySetName:string,HasActivities:boolean,HasNotes:boolean,IconLargeName:null,IconMediumName:null,IconSmallName:null,IconVectorName:string,IsActivity:boolean,IsCustomEntity:boolean,IsIntersect:boolean,IsManaged:boolean,IsQuickCreateEnabled:boolean,LogicalCollectionName:string,LogicalName:string,MetadataId:string,ObjectTypeCode:number,OwnershipType:string,PrimaryIdAttribute:string,PrimaryImageAttribute:string,PrimaryNameAttribute:string,Privileges:[8x{CanBeBasic:boolean,CanBeDeep:boolean,CanBeEntityReference:boolean,CanBeGlobal:boolean,CanBeLocal:boolean,CanBeParentEntityReference:boolean,Name:string,PrivilegeId:string,PrivilegeType:string}],SchemaName:string,TableType:string}
+#e0abe8e4 {formxml:string,name:string,objecttypecode:string,type:number}
+#e39def73 {formxml:string}
+#f07e5c5f {@odata.id:string}
