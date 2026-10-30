@@ -80,7 +80,7 @@ const TABLE_PROPS = ['MetadataId', 'LogicalName', 'SchemaName', 'EntitySetName',
 // See: https://learn.microsoft.com/en-us/power-apps/developer/data-platform/webapi/reference/attributemetadata
 const ATTRIBUTE_BASE = ['MetadataId', 'LogicalName', 'SchemaName', 'EntityLogicalName', 'AttributeType', 'AttributeTypeName', 'DisplayName',
   'Description', 'RequiredLevel', 'IsCustomAttribute', 'IsCustomizable', 'IsManaged', 'IsPrimaryId', 'IsPrimaryName', 'IsLogical',
-  'IsValidForCreate', 'IsValidForRead', 'IsValidForUpdate', 'AttributeOf', 'SourceType'];
+  'IsValidForCreate', 'IsValidForRead', 'IsValidForUpdate', 'AttributeOf', 'SourceType', 'IsSecured'];
 // What each derived column type adds; the enum-valued ones (a choice, a Boolean, a state or status) also navigate to their option set.
 const ATTRIBUTE_PROPS = {
   AttributeMetadata: [],
@@ -254,6 +254,10 @@ function createMetadataStore({ baseLanguage = 1033, userLanguage = baseLanguage,
       IsValidForCreate: sent.IsValidForCreate !== undefined ? sent.IsValidForCreate : true,
       IsValidForRead: sent.IsValidForRead !== undefined ? sent.IsValidForRead : true,
       IsValidForUpdate: sent.IsValidForUpdate !== undefined ? sent.IsValidForUpdate : true,
+      // Column security is a plain Boolean on every column — false unless a create or an update secured it. An update that omits it
+      // keeps the stored value (updateColumn merges), as the platform does.
+      // See: https://learn.microsoft.com/en-us/power-apps/developer/data-platform/webapi/reference/attributemetadata
+      IsSecured: sent.IsSecured === true,
       AttributeOf: null,
       SourceType: sent.SourceType !== undefined ? sent.SourceType : 0,
       ...extra,
@@ -304,7 +308,7 @@ function createMetadataStore({ baseLanguage = 1033, userLanguage = baseLanguage,
   function companionsOf(attribute) {
     const name = attribute.LogicalName;
     const cls = classOf(attribute);
-    const virtual = (logical, type = 'Virtual', typeName = 'VirtualType', of = name) => ({ '@odata.type': '#Microsoft.Dynamics.CRM.AttributeMetadata', MetadataId: randomUUID(), LogicalName: logical, SchemaName: logical, EntityLogicalName: attribute.EntityLogicalName, AttributeType: type, AttributeTypeName: { Value: typeName }, AttributeOf: of, IsCustomAttribute: attribute.IsCustomAttribute, IsLogical: true, IsPrimaryId: false, IsPrimaryName: false, IsValidForCreate: false, IsValidForRead: true, IsValidForUpdate: false, DisplayName: label(null), Description: label(null), RequiredLevel: { Value: 'None', CanBeChanged: false, ManagedPropertyLogicalName: 'canmodifyrequirementlevelsettings' }, SourceType: 0 });
+    const virtual = (logical, type = 'Virtual', typeName = 'VirtualType', of = name) => ({ '@odata.type': '#Microsoft.Dynamics.CRM.AttributeMetadata', MetadataId: randomUUID(), LogicalName: logical, SchemaName: logical, EntityLogicalName: attribute.EntityLogicalName, AttributeType: type, AttributeTypeName: { Value: typeName }, AttributeOf: of, IsCustomAttribute: attribute.IsCustomAttribute, IsLogical: true, IsPrimaryId: false, IsPrimaryName: false, IsValidForCreate: false, IsValidForRead: true, IsValidForUpdate: false, IsSecured: false, DisplayName: label(null), Description: label(null), RequiredLevel: { Value: 'None', CanBeChanged: false, ManagedPropertyLogicalName: 'canmodifyrequirementlevelsettings' }, SourceType: 0 });
     if (['PicklistAttributeMetadata', 'MultiSelectPicklistAttributeMetadata', 'BooleanAttributeMetadata', 'StateAttributeMetadata', 'StatusAttributeMetadata'].includes(cls)) return [virtual(`${name}name`)];
     // A Money column's base-currency twin is a PHYSICAL column, not a shadow: it carries no AttributeOf, is not logical and reports
     // IsCustomAttribute like the column it converts — only `IsBaseCurrency: true` tells it apart (measured on stock
