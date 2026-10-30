@@ -6,11 +6,20 @@
 //   null       remove the app's own theme, so the app follows the environment's again
 //   { ... }    set the app's theme to exactly these fields (AppTheme in the SDK; see THEME_FIELDS below)
 //
-// The SDK stores the theme as a content-named web resource version plus the app's AppTheme setting, and can publish it
-// itself. The build never lets it: setAppTheme is always called with publish:false and the app's publication is queued on
-// the build's publication port (lib/app-publication-policy.js), which publishes through the same SDK writer as every other
-// app publish — so an exact Main-form obligation of the app can withhold it, and nothing here can go around that.
-// A superseded theme version is never deleted here: the SDK reports it (`superseded`) and leaves it.
+// The SDK stores the theme as a content-named web resource version plus the app's theme setting row (appsetting), and
+// can publish the app itself. The build never lets it publish the APP: setAppTheme is always called with publish:false,
+// and the app's publication is queued on the build's publication port (lib/app-publication-policy.js), which publishes
+// through the same SDK writer as every other app publish — so an exact Main-form obligation of the app can withhold it,
+// and nothing here can go around that. publish:false does not stop the SDK publishing the new VERSION web resource
+// itself: a version is immutable and must be readable before any app names it, so a first set sends, in order,
+//   POST /webresourceset                      the version, named `<prefix>_/apptheme/<16 hex>.xml` from its content
+//   POST /PublishXml  <webresources>…</webresources>   that one resource, never an app
+//   POST /appsettings | PATCH /appsettings(<id>) (If-Match) | DELETE /appsettings(<id>)   the app's row, as a draft
+// An equal theme sends nothing; a removal sends only the row's DELETE. A superseded theme version is never deleted
+// here: the SDK reports it (`superseded`) and leaves it.
+//
+// Every set goes through the build's create port (`ctx.creates.run`): it may create two records whose ids the server
+// assigns (the version web resource and the setting row). Without the port nothing is written.
 
 const { THEME_PALETTE_SLOTS } = require('./maker-sdk.js');
 const { sha256 } = require('./hash.js');
@@ -91,9 +100,14 @@ const sameTheme = (a, b) => JSON.stringify(canonicalTheme(a)) === JSON.stringify
 // `exact: false` means the stored version could not be read back field for field, so it is never "equal".
 function matchesDeclared(binding, declared) {
   if (!binding || binding.source === 'unknown') return false;
-  if (declared === null) return binding.source !== 'app';
   return binding.source === 'app' && binding.exact !== false && sameTheme(binding.theme, declared);
 }
+
+// null means "the app has no theme row of its own", so it is decided from the ROW (AppThemeInfo.row.state:
+// 'absent'|'draft'|'published'|'publishedWithDraft'|'removalPending'), never from what the app resolves: a row holding
+// the "no theme" sentinel `""` resolves to source 'none', yet it is still the app's own override and keeps the
+// environment's theme from applying. Only an absent row, or one whose removal is pending its app publish, is removed.
+const rowRemoved = (info) => Boolean(info && info.row && (info.row.state === 'absent' || info.row.state === 'removalPending'));
 
 const themeOf = (spec) => (spec && spec.app ? spec.app.theme : undefined);
 
@@ -111,7 +125,9 @@ async function planAppTheme(spec, ctx) {
   } catch (error) {
     return { operations: [], unknown: [{ key: KEY, code: (error && error.code) || 'APP_THEME_UNREADABLE' }] };
   }
-  const action = matchesDeclared(current && current.afterPublish, declared) ? 'noChange' : declared === null ? 'remove' : 'set';
+  const action = declared === null
+    ? (rowRemoved(current) ? 'noChange' : 'remove')
+    : (matchesDeclared(current && current.afterPublish, declared) ? 'noChange' : 'set');
   return {
     operations: [{ key: KEY, kind: 'appTheme', target: ctx.appId, action, destructive: action === 'remove', publicationScopes: ['app'], preconditions: [] }],
     unknown: [],
@@ -140,12 +156,40 @@ async function applyAppTheme(plan, ctx) {
   const theme = op.action === 'remove' ? null : plan.theme;
   // publish:false always: the app's publication belongs to the build's publication port (see the file header).
   const execute = () => ctx.sdk.setAppTheme(op.target, theme, { publish: false });
+  const port = ctx.creates && typeof ctx.creates.run === 'function' ? ctx.creates : null;
+  // A removal creates nothing (it deletes the row, or leaves it removal-pending until the app publish), so only a set
+  // needs the create port; a set without it is refused before any write.
+  if (theme !== null && !port) {
+    result.refused.push({ key: KEY, code: 'APP_THEME_CREATE_PORT_UNAVAILABLE' });
+    return result;
+  }
   let written;
   try {
-    written = ctx.creates && typeof ctx.creates.run === 'function'
-      // The theme version web resource is named by the SDK from its content, so its identity is the content hash.
-      ? await ctx.creates.run({ kind: 'appTheme', key: KEY, identity: { appId: op.target, sha256: sha256(JSON.stringify(canonicalTheme(theme))) }, childKeys: [] }, execute)
-      : await execute();
+    if (theme === null) {
+      written = await execute();
+    } else {
+      const answer = await port.run(themeCreate(op.target, theme), execute);
+      // The port answers { outcome: 'created'|'adopted'|'refused'|'unknown', result, code? }, `result` being the
+      // setter's own answer; a port that hands the setter's answer back as it came is read as 'created'. The setter's
+      // answer has an `outcome` too ('created'|'updated'|'unchanged'|'removed') but never a `result`.
+      const fromPort = answer && typeof answer === 'object' && Object.prototype.hasOwnProperty.call(answer, 'result');
+      const outcome = fromPort ? answer.outcome : 'created';
+      if (outcome === 'unknown' || outcome === 'refused') {
+        (outcome === 'unknown' ? result.unknown : result.refused).push({ key: KEY, code: answer.code || (outcome === 'unknown' ? 'APP_THEME_CREATE_UNKNOWN' : 'APP_THEME_CREATE_REFUSED') });
+        return result;
+      }
+      written = fromPort ? answer.result : answer;
+      // An earlier run's create the port resolved as made ('adopted') carries no setter answer: what it left is read
+      // back, and counts only when the app will show exactly the declared theme.
+      if (!written) {
+        const info = await ctx.sdk.getAppTheme(op.target);
+        if (!matchesDeclared(info && info.afterPublish, theme)) {
+          result.unknown.push({ key: KEY, code: 'APP_THEME_NOT_SAVED' });
+          return result;
+        }
+        written = { outcome: 'unchanged', pendingPublish: Boolean(info.pendingPublish) };
+      }
+    }
   } catch (error) {
     const code = codeOf(error);
     (PREWRITE.has(code) ? result.refused : result.unknown).push({ key: KEY, code });
@@ -163,6 +207,27 @@ async function applyAppTheme(plan, ctx) {
   return result;
 }
 
+// The create port's description of one theme set. setAppTheme may create two records, and the SERVER assigns both ids:
+//   webResource  the version, `<prefix>_/apptheme/<16 hex>.xml`, named by the SDK from the theme's serialized bytes
+//   appSetting   the app's one CustomThemeDefinition row (Dataverse allows one row per app and setting definition)
+// so the port reserves no id. It records the create under `identity` — the app, the setting, and a hash of the declared
+// theme — and reads the ids the setter reports back through `receipt`. Running the setter again is safe: an existing
+// version of equal bytes is reused (a different one under that name is refused), and the row is written only when the
+// setter's own pre-write read still sees the snapshot it started from.
+function themeCreate(appId, theme) {
+  return {
+    kind: 'appTheme',
+    key: KEY,
+    identity: { appId, setting: 'CustomThemeDefinition', sha256: sha256(JSON.stringify(canonicalTheme(theme))) },
+    childKeys: ['webResource', 'appSetting'],
+    serverAssigned: true,
+    receipt: (written) => ({
+      id: written && written.webResource ? written.webResource.id : null,
+      childIds: { webResource: written && written.webResource ? written.webResource.id : null },
+      versionName: written && written.webResource ? written.webResource.name : null,
+    }),
+  };
+}
 // Verify: the stored and resolved state after publication. `ok` only when the app will show the declared theme AND
 // nothing about it is pending publication. This is not proof of what a browser paints.
 async function verifyAppTheme(spec, ctx) {
@@ -173,6 +238,18 @@ async function verifyAppTheme(spec, ctx) {
     info = await ctx.sdk.getAppTheme(ctx.appId);
   } catch (error) {
     return [{ key: KEY, ok: false, state: 'unknown', code: (error && error.code) || 'APP_THEME_UNREADABLE' }];
+  }
+  if (declared === null) {
+    // Removed only once no row of the app's own is left (see rowRemoved) AND nothing is pending its app publish; the
+    // app then resolves the environment's theme, or none.
+    if (!(info && info.row && info.row.state === 'absent')) {
+      return [info && info.row && info.row.state === 'removalPending'
+        ? { key: KEY, ok: false, state: 'pendingPublish', reasons: info.pendingReasons || [] }
+        : { key: KEY, ok: false, state: 'differs' }];
+    }
+    if (info.pendingPublish) return [{ key: KEY, ok: false, state: 'pendingPublish', reasons: info.pendingReasons || [] }];
+    const live = Boolean(info.resolved) && info.resolved.source !== 'app' && info.resolved.source !== 'unknown';
+    return [{ key: KEY, ok: live, state: live ? 'live' : 'differs' }];
   }
   if (!matchesDeclared(info.afterPublish, declared)) return [{ key: KEY, ok: false, state: 'differs' }];
   if (info.pendingPublish) return [{ key: KEY, ok: false, state: 'pendingPublish', reasons: info.pendingReasons || [] }];
