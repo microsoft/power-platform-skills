@@ -12,7 +12,7 @@
 // app publish — so an exact Main-form obligation of the app can withhold it, and nothing here can go around that.
 // A superseded theme version is never deleted here: the SDK reports it (`superseded`) and leaves it.
 
-const { THEME_PALETTE_SLOTS } = require('../vendor/cds-maker-sdk.cjs');
+const { THEME_PALETTE_SLOTS } = require('./maker-sdk.js');
 const { sha256 } = require('./hash.js');
 
 const COLOR = /^#[0-9A-Fa-f]{6}$/;
