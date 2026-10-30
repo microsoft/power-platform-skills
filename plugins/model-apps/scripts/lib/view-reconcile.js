@@ -429,8 +429,12 @@ async function applyViewCreate(plan, sdk, ctx, result) {
     result.saved.push({ key: plan.key, kind: 'view', id, created: true, parts: PARTS.slice() });
     queuePublication(ctx, scope);
     result.pendingPublish.push({ key: plan.key, scope });
-    const baseline = (await readBaseline(sdk, id)) || projectionBaseline(liveFull({ ...plan.createArtifact, id }));
-    result.managedBindings.push(bindingRecord(ctx, { kind: 'view', key: plan.key, id, origin: 'created', ...baseline }));
+    // The baseline is what the server is SEEN to hold. A create that cannot be read back records no
+    // binding (the intent is not a substitute for the stored view) and stays unknown; the creation
+    // port still holds its id, so the view is not created twice.
+    const baseline = await readBaseline(sdk, id);
+    if (baseline) result.managedBindings.push(bindingRecord(ctx, { kind: 'view', key: plan.key, id, origin: 'created', ...baseline }));
+    else result.unknown.push(refusal(plan.key, 'view-created-unreadable', 'the view was created but could not be read back to record its baseline'));
   } else if (created.status === 'adopted') {
     // The maker resolved a lost create by naming the view it made: bind it to what it holds now and
     // write nothing; the next run reconciles it like any bound view.

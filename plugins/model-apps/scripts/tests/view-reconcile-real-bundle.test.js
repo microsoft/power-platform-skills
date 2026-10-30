@@ -310,3 +310,31 @@ test('a view create is refused without the port and while an earlier create is p
     assert.deepEqual(result.saved, []);
   }
 });
+test('a created view that cannot be read back stays unknown and records no guessed baseline; the next run does not create it again', async () => {
+  const srv = createRowTableServer({ tables: { savedqueries: 'savedqueryid' } });
+  const managed = fakeManaged();
+  const creates = fakeCreates();
+  const view = { entity: 'account', name: 'New view', reconcile: 'declared', activeOnly: false, columns: ['name'] };
+  const sdk = await srv.newSdk();
+  const ctx = { managed, creates };
+  const plan = await planViewReconcile({ view, sdk }, ctx);
+  // Only the read-back after the create fails: the create and its push go through.
+  const failingRead = new Proxy(sdk, { get(t, p) {
+    if (p === 'fetchArtifact') return async () => { throw new Error('read failed'); };
+    return typeof t[p] === 'function' ? t[p].bind(t) : t[p];
+  } });
+  const result = await applyViewReconcile(plan, { sdk: failingRead }, ctx);
+  const id = creates.calls[0].ids.id;
+  assert.ok(srv.rowOf('savedqueries', id), 'the view was created');
+  assert.deepEqual(result.unknown.map((u) => [u.key, u.code]), [['account/New view', 'view-created-unreadable']]);
+  assert.deepEqual(result.managedBindings, [], 'no baseline is recorded from the intent');
+  managed.persist(result.managedBindings);
+  srv.clearLog();
+  const again = await run(srv, view, ctx);
+  assert.equal(creates.calls.length, 1, 'the created view is not created a second time');
+  assert.ok(!srv.writes.some((w) => w.verb === 'post'), 'no second row is posted');
+  // It already matches the spec, so it is reported unchanged, but it is still not bound: binding it needs
+  // the maker's adoption decision, which the earlier unknown outcome asked for.
+  assert.deepEqual(again.result.unchanged.map((u) => u.id), [id]);
+  assert.deepEqual(again.result.managedBindings, []);
+});
