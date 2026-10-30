@@ -2196,9 +2196,15 @@ async function runConfigurationStep(spec, ctx, phase) {
   const outcome = await applyConfiguration(plan, ctx);
   const problems = [...outcome.refused, ...outcome.unknown, ...outcome.pendingPublish].map(({ kind, key, code }) => ({ kind, key, code }));
   const blocking = phase === 'solution' ? [] : configurationReadiness(outcome);
-  // A required variable with no value leaves the build incomplete even with no page that reads it.
+  // A required variable with no value leaves the build incomplete even with no page that reads it, and so does a
+  // connection the settings asked for that the read-back does not prove bound (unbound, of another connector, or
+  // unverifiable). A reference the settings do not bind is a scaffold, and an authorized unbind (ConnectionId null)
+  // is what was asked for: those are readiness only, for the pages that use them.
+  const asked = bindingsOf(ctx).connectionReferences;
+  const requested = (b) => b.kind === 'connectionReference' && (b.code === 'CONNECTION_REFERENCE_UNBOUND' || b.code === 'CONNECTION_REFERENCE_BINDING_UNVERIFIED')
+    && !!asked && typeof asked.get === 'function' && !!asked.get(lower(b.key)) && asked.get(lower(b.key)).connectionId != null;
   for (const b of blocking) {
-    if (b.code === 'ENVIRONMENT_VARIABLE_VALUE_MISSING' && !problems.some((p) => p.kind === b.kind && lower(p.key) === lower(b.key))) problems.push({ kind: b.kind, key: b.key, code: b.code });
+    if ((b.code === 'ENVIRONMENT_VARIABLE_VALUE_MISSING' || requested(b)) && !problems.some((p) => p.kind === b.kind && lower(p.key) === lower(b.key))) problems.push({ kind: b.kind, key: b.key, code: b.code });
   }
   const halt = problems.length
     ? {

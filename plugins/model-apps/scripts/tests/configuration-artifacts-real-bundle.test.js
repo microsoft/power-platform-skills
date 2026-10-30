@@ -814,6 +814,31 @@ test('build runtime: a connection of another connector is not a binding, so the 
   assert.deepEqual(h.org.unexpected, []);
 });
 
+test('build runtime: a connection the settings ask for that is not proven bound stops the build, with or without a page that uses it', async () => {
+  const h = await harness();
+  const ask = (connectionId) => C.readDeploymentBindings({ ConnectionReferences: [{ LogicalName: 'contoso_sp', ConnectionId: connectionId }] }, referenceOnly());
+  const step = (opts) => createConfigurationRuntime({ spec: referenceOnly(), sdk: h.sdk, opts: { creates: h.creates, ...opts } }).apply('data-model');
+  const inaccessible = await step({ configurationBindings: ask('inaccessible'), connections: async () => [] });
+  assert.deepEqual(inaccessible.outcome.saved.map((x) => x.key), ['contoso_sp']);
+  assert.deepEqual(inaccessible.halt && inaccessible.halt.items, [{ kind: 'connectionReference', key: 'contoso_sp', code: 'CONNECTION_REFERENCE_UNBOUND' }]);
+  assert.equal(inaccessible.halt.retry, 'never');
+  // No inventory to prove it against: the binding asked for is not proven either.
+  const unproven = await step({ configurationBindings: ask('inaccessible') });
+  assert.deepEqual(unproven.halt && unproven.halt.items, [{ kind: 'connectionReference', key: 'contoso_sp', code: 'CONNECTION_REFERENCE_BINDING_UNVERIFIED' }]);
+  // Proven bound: complete.
+  const proven = await step({ configurationBindings: ask('inaccessible'), connections: async () => [{ connectionId: 'inaccessible', connectorId: SP }] });
+  assert.equal(proven.halt, null);
+  // What the settings do not ask to bind is a scaffold, and an authorized unbind is what was asked for: neither stops the build.
+  const k = await harness();
+  const scaffold = await createConfigurationRuntime({ spec: referenceOnly(), sdk: k.sdk, opts: { creates: k.creates, connections: async () => [] } }).apply('data-model');
+  assert.equal(scaffold.halt, null);
+  assert.deepEqual(scaffold.blocking.map((b) => [b.key, b.code]), [['contoso_sp', 'CONNECTION_REFERENCE_UNBOUND']]);
+  const unbind = await step({ configurationBindings: ask(null), authorizedDestructive: allow('connectionReference:contoso_sp:connectionId'), connections: async () => [] });
+  assert.deepEqual(unbind.outcome.saved.map((x) => [x.key, x.action]), [['contoso_sp', 'update']]);
+  assert.equal(unbind.halt, null);
+  assert.deepEqual(h.org.unexpected, []);
+});
+
 test('build runtime: a Custom API without an implementation blocks the page that calls it; a definition no page calls is a scaffold, not a failure', async () => {
   const h = await harness();
   const s = { minimumPluginVersion: '2.21.0', solution: { uniqueName: 'ContosoSol', publisherPrefix: 'contoso' }, customApis: [{ uniqueName: 'contoso_Calc' }] };
