@@ -15,7 +15,8 @@ const { createLifecycleOrg } = require('./helpers/fake-lifecycle-org.js');
 const { createLifecycleHarness } = require('./helpers/lifecycle-harness.js');
 const { createAzHttpClient } = require('../lib/sdk-http-client.js');
 const pp = require('../lib/push-preview.js');
-const { readOnlyHttpClient, READ_ONLY_WRITE_REFUSED, safeMessage } = require('../lib/readonly-operations.js');
+const { readOnlyHttpClient, READ_ONLY_WRITE_REFUSED, findingOf, publicError } = require('../lib/readonly-operations.js');
+const bar = require('./helpers/command-bar-org.js');
 
 const TOKEN = 'x'.repeat(48);
 const spec = {
@@ -109,10 +110,21 @@ test('the read-only client forwards GETs and refuses every write method before i
   assert.deepEqual(stats.refused.map((r) => r.method), ['POST', 'PATCH', 'DELETE', 'POST']);
 });
 
-test('safeMessage takes URLs and bearer material out of a caught error', () => {
-  const m = safeMessage(new Error('HTTP 401 from https://contoso.crm.dynamics.com/api/data/v9.2/x?$filter=a: Bearer abc.def-ghi rejected eyJabcdefghij.klmnopqrstu.vwx'));
-  assert.doesNotMatch(m, /contoso\.crm|abc\.def|eyJabc/);
-  assert.match(m, /<url>/);
+test('findingOf projects a caught error to its code, its HTTP status and fixed words: none of the error\'s own text', () => {
+  const leak = 'SENTINEL-value-from-the-service https://contoso.crm.dynamics.com/api/data/v9.2/x?$filter=a eyJabcdefghij.klmnopqrstu.vwx';
+  const wrapped = Object.assign(new Error(`the read failed: ${leak}`), { code: 'CONNECTION_ERROR', cause: Object.assign(new Error(leak), { statusCode: 403 }) });
+  const f = findingOf(wrapped, 'FALLBACK');
+  assert.deepEqual(Object.keys(f).sort(), ['code', 'message', 'statusCode']);
+  assert.equal(f.code, 'CONNECTION_ERROR');
+  assert.equal(f.statusCode, 403, 'the status is found on the cause the SDK wrapped');
+  assert.match(f.message, /HTTP 403/);
+  assert.doesNotMatch(JSON.stringify(f), /SENTINEL|contoso|eyJ|the read failed/);
+  // A code that is not a code (free text) is not passed on; a plain error has no status.
+  assert.equal(findingOf(Object.assign(new Error(leak), { code: `no such row ${leak}` }), 'FALLBACK').code, 'FALLBACK');
+  assert.equal(findingOf(new Error(leak)).statusCode, undefined);
+  assert.doesNotMatch(findingOf(new Error(leak)).message, /SENTINEL/);
+  // The plugin's own refusals keep their words: they are written here, from the maker's input, never from a service.
+  assert.equal(findingOf(publicError('PREVIEW_ITEMS_INVALID', 'items[0].key must be a non-empty string')).message, 'items[0].key must be a non-empty string');
 });
 
 test('a write the SDK attempts during a preview is refused before sending and the result is not ok', async () => {
@@ -157,6 +169,8 @@ test('real bundle: an unedited existing view previews as noChange/ready with a n
   assert.equal(p.publication.byPush, false);
   assert.equal(p.publication.scope.envelope, 'entity');
   assert.match(res.disclaimer, /does not approve, lock or guarantee/);
+  assert.equal(res.allEvaluated, true);
+  assert.deepEqual(res.notEvaluated, []);
   assert.ok(res.gets > 0 && res.gets === e.org.requests.length - mark, 'every request is counted');
 });
 
@@ -209,10 +223,12 @@ test('real bundle: a create previews as create/absent; a failed fetch is that it
   assert.deepEqual(res.previews.map((p) => [p.key, p.action, p.outcome, p.concurrency.verdict]), [['view:new', 'create', 'ready', 'absent']]);
   assert.equal(res.notPrepared.length, 1);
   assert.equal(res.notPrepared[0].key, 'view:gone');
-  assert.match(res.notPrepared[0].message, /404/);
+  assert.equal(res.notPrepared[0].statusCode, 404);
+  assert.match(res.notPrepared[0].message, /HTTP 404/);
   assert.doesNotMatch(res.notPrepared[0].message, /contoso\.crm\.dynamics\.com/, 'no URL in a finding');
   assert.deepEqual(res.requiresSchema.map((r) => r.key), ['column:contoso_ticket:contoso_extra']);
-  assert.deepEqual(res.summary, { ready: 1, refused: 0, unknown: 0, requiresSchema: 1, notPrepared: 1 });
+  assert.deepEqual(res.summary, { ready: 1, refused: 0, unknown: 0, requiresSchema: 1, notPrepared: 1, notEvaluated: 0 });
+  assert.equal(res.allEvaluated, false, 'an item that could not be prepared was not evaluated');
   assert.equal(e.org.find('savedqueries', (v) => v.name === 'New view').length, 0, 'nothing was created');
 });
 
@@ -245,7 +261,7 @@ test('real bundle: batch mode previews exactly the prepared dirty set, and the b
   assert.deepEqual(snapshot(e.root), before, 'the build\u2019s app folder and workspace are byte-for-byte as they were');
 });
 
-test('previewItemsFromPlan: schema creates become requiresSchema, unknown states are skipped, the caller resolves artifacts', () => {
+test('previewItemsFromPlan: schema creates become requiresSchema; an item with no typed target or an unknown live state is kept as not evaluated, never dropped', () => {
   const plan = [
     { key: { kind: 'table', entity: 'contoso_ticket' }, state: 'create' },
     { key: { kind: 'column', entity: 'contoso_ticket', name: 'contoso_note' }, state: 'reuse' },
@@ -257,6 +273,72 @@ test('previewItemsFromPlan: schema creates become requiresSchema, unknown states
   assert.deepEqual(items, [
     { key: 'table:contoso_ticket:0', requiresSchema: true },
     { key: 'view:contoso_ticket:Open', type: 'view', id: '11111111-2222-3333-4444-555555555555' },
+    { key: 'view:contoso_ticket:Lost', notEvaluated: 'livePlanUnknown' },
+    { key: 'form:contoso_ticket:Main', notEvaluated: 'noTypedTarget' },
   ]);
   assert.deepEqual(pp.validatePreviewItems(items).errors, []);
+  assert.match(pp.validatePreviewItems([{ key: 'x', notEvaluated: 'noTypedTarget', type: 'view' }]).errors.join(), /items\[0\]\.type cannot be combined with notEvaluated/);
+  assert.match(pp.validatePreviewItems([{ key: 'x', notEvaluated: 'because' }]).errors.join(), /items\[0\]\.notEvaluated must be one of/);
+});
+
+test('a preview reports the items it did not evaluate, with why, and is never all-evaluated while one remains', async () => {
+  const items = pp.previewItemsFromPlan([{ key: { kind: 'form', entity: 'contoso_ticket', name: 'Main' }, state: 'reuse' }], () => null);
+  const deps = { makerSdk: { createNodeWorkspaceStorage: () => ({}), createMakerSdk: () => ({ initWorkspace: async () => {} }) } };
+  const res = await pp.runPushPreview({ env: 'https://contoso.crm.dynamics.com', httpClient: { get: async () => ({ status: 200, body: {} }) }, items, deps });
+  assert.deepEqual(res.notEvaluated, [{ key: 'form:contoso_ticket:Main', reason: 'noTypedTarget' }]);
+  assert.equal(res.summary.notEvaluated, 1);
+  assert.equal(res.allEvaluated, false);
+  assert.equal(res.ok, true, 'ok still means only that nothing was written');
+});
+
+// --- the command bar: named by its table ---------------------------------------------------------------------
+
+test('real bundle: an existing command bar is named by its table logical name, as the SDK names it, and previews with GETs only', async () => {
+  const client = bar.barClient(bar.BAR);
+  const item = { key: 'command:contoso_ticket', type: 'command', id: 'contoso_ticket' };
+  assert.deepEqual(pp.validatePreviewItems([item]).errors, []);
+  const res = await pp.runPushPreview({ env: bar.ORIGIN, httpClient: client, items: [item] });
+  assert.equal(res.writeAttempts, 0);
+  assert.deepEqual(res.notPrepared, []);
+  assert.deepEqual(res.previews.map((p) => [p.key, p.type, p.id]), [['command:contoso_ticket', 'command', 'contoso_ticket']]);
+  assert.deepEqual(client.requests.filter((r) => !r.startsWith('GET ')), []);
+  // Every other kind is still a row GUID, and a command bar is never a row GUID or a display name.
+  const bad = pp.validatePreviewItems([
+    { key: 'a', type: 'command', id: '11111111-2222-3333-4444-555555555555' },
+    { key: 'b', type: 'command', id: 'Contoso Ticket' },
+    { key: 'c', type: 'form', id: 'contoso_ticket' },
+  ]).errors.join('\n');
+  assert.match(bad, /items\[0\]\.id must be the table logical name of a command bar/);
+  assert.match(bad, /items\[1\]\.id must be the table logical name of a command bar/);
+  assert.match(bad, /items\[2\]\.id must be a canonical GUID/);
+});
+
+// --- privacy of failures ------------------------------------------------------------------------------------
+
+test('real transport: a failed fetch and an SDK finding reach the result as codes and statuses only — no service-supplied words', async () => {
+  const leak = 'SENTINEL-business-value SECRET_VALUE_6ce33d';
+  const refusing = createAzHttpClient('https://contoso.crm.dynamics.com', {
+    getToken: () => TOKEN,
+    sleep: async () => {},
+    request: async () => ({ statusCode: 403, headers: { 'content-type': 'application/json' }, body: JSON.stringify({ error: { code: '0x80040220', message: `Access denied for ${leak}` } }) }),
+  });
+  const res = await pp.runPushPreview({ env: 'https://contoso.crm.dynamics.com', httpClient: refusing, items: [{ key: 'v', type: 'view', id: '11111111-2222-3333-4444-555555555555' }] });
+  assert.equal(res.notPrepared.length, 1);
+  assert.equal(res.notPrepared[0].statusCode, 403);
+  assert.doesNotMatch(JSON.stringify(res), /SENTINEL|SECRET_VALUE/);
+  // An SDK refusal or warning is projected to its code: its message is not assumed to be free of values.
+  const deps = {
+    makerSdk: {
+      createNodeWorkspaceStorage: () => ({}),
+      createMakerSdk: () => ({
+        initWorkspace: async () => {},
+        fetchArtifact: async () => ({}),
+        previewPush: async (type, id) => ({ type, id, action: 'update', outcome: 'refused', refusals: [{ code: 'VALIDATION_FAILED', message: `bad value ${leak}`, issues: [{}] }], warnings: [{ code: 'NOTE', message: leak }], notEvaluated: [], localChanges: [], concurrency: { verdict: 'current', observations: [] }, components: [], publish: { byPush: false }, requests: 1 }),
+      }),
+    },
+  };
+  const stub = await pp.runPushPreview({ env: 'https://contoso.crm.dynamics.com', httpClient: { get: async () => ({ status: 200, body: {} }) }, items: [{ key: 'v', type: 'view', id: '11111111-2222-3333-4444-555555555555' }], deps });
+  assert.deepEqual(stub.previews[0].refusals, [{ code: 'VALIDATION_FAILED', issues: 1 }]);
+  assert.deepEqual(stub.previews[0].warnings, [{ code: 'NOTE' }]);
+  assert.doesNotMatch(JSON.stringify(stub), /SENTINEL|SECRET_VALUE/);
 });

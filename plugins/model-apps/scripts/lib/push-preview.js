@@ -23,11 +23,18 @@
 // a defect of the SDK or of this module — is refused before it is sent and shows up as `writeAttempts > 0`.
 //
 // Cost: GETs proportional to the prepared artifacts, their dependencies and (with `layers`) one layer read per written
-// component. A build without `--preview-push` makes none of them.
+// component. A build without `--preview-push` makes none of them. `gets` counts the GET calls the SDK made through the
+// read-only client: a GET the transport retried (a throttle or a transient failure) counts once, so it is the number of
+// reads asked for, not the number of HTTP round trips.
+//
+// Coverage: a plan item with no typed artifact to name, or whose live state the dry run could not read, is reported in
+// `notEvaluated` with its reason — never dropped — and `allEvaluated` is false while one remains. Failures are reported
+// as codes, HTTP statuses and fixed words only (lib/readonly-operations.js findingOf): a service's or the SDK's own
+// message can quote a record value.
 
 const fs = require('node:fs');
 const { makeTempWorkspace } = require('./temp-workspace.js');
-const { GUID_RE, READ_ONLY_WRITE_REFUSED, readOnlyHttpClient, findingOf, checkClosedObject, isNonEmptyString } = require('./readonly-operations.js');
+const { GUID_RE, READ_ONLY_WRITE_REFUSED, readOnlyHttpClient, findingOf, publicError, checkClosedObject, isNonEmptyString } = require('./readonly-operations.js');
 
 // The artifact types the SDK's push (and therefore its preview) covers. `genPage` is left out on purpose: a page's
 // local copy is made by the page backend (lib/genpage-sdk.js), not by pointer edits, so a prepared page edit here
@@ -36,7 +43,15 @@ const PREVIEW_TYPES = Object.freeze([
   'form', 'view', 'businessRule', 'app', 'command', 'chart', 'dashboard', 'bpf',
   'environmentVariable', 'connectionReference', 'fieldSecurityProfile', 'customApi', 'duplicateRule',
 ]);
-const ITEM_KEYS = ['key', 'type', 'id', 'create', 'edits', 'requiresSchema'];
+const ITEM_KEYS = ['key', 'type', 'id', 'create', 'edits', 'requiresSchema', 'notEvaluated'];
+// Why a plan item is carried as not evaluated instead of previewed: the caller had no typed artifact to name for it
+// (`noTypedTarget`), or the dry run could not read its live state (`livePlanUnknown`). It is reported, never dropped:
+// a preview that silently left an item out would read as covering it.
+const NOT_EVALUATED_REASONS = Object.freeze(['noTypedTarget', 'livePlanUnknown']);
+// The SDK names a command bar by its table's logical name (`fetchArtifact('command', 'account')`), not by a row GUID:
+// the bar is assembled from the table's appaction rows. A Dataverse logical name is lower case, starts with a letter
+// and holds letters, digits and underscores (https://learn.microsoft.com/en-us/power-apps/developer/data-platform/entity-metadata).
+const COMMAND_ID_RE = /^[a-z][a-z0-9_]{0,127}$/;
 const EDIT_OPS = Object.freeze({
   update: ['op', 'pointer', 'value'],
   add: ['op', 'pointer', 'element', 'options'],
@@ -61,6 +76,12 @@ function validatePreviewItems(items) {
     if (!isNonEmptyString(item.key)) errors.push(`${where}.key must be a non-empty string`);
     else if (seen.has(item.key)) errors.push(`${where}.key "${item.key}" is used twice`);
     else seen.add(item.key);
+    if (item.notEvaluated !== undefined) {
+      // A key and a reason only: nothing about the item is read or previewed, so nothing else may be given.
+      if (!NOT_EVALUATED_REASONS.includes(item.notEvaluated)) errors.push(`${where}.notEvaluated must be one of: ${NOT_EVALUATED_REASONS.join(', ')}`);
+      for (const k of ['type', 'id', 'create', 'edits', 'requiresSchema']) if (item[k] !== undefined) errors.push(`${where}.${k} cannot be combined with notEvaluated`);
+      return;
+    }
     if (item.requiresSchema === true) {
       // A schema step keeps its dry-run answer; nothing else about it is previewed, so nothing else may be given.
       for (const k of ['id', 'create', 'edits']) if (item[k] !== undefined) errors.push(`${where}.${k} cannot be combined with requiresSchema`);
@@ -71,7 +92,9 @@ function validatePreviewItems(items) {
     const hasId = item.id !== undefined;
     const hasCreate = item.create !== undefined;
     if (hasId === hasCreate) errors.push(`${where} needs exactly one of id (an existing artifact) or create (a definition the build would create)`);
-    if (hasId && !(typeof item.id === 'string' && GUID_RE.test(item.id))) errors.push(`${where}.id must be a canonical GUID`);
+    if (hasId && item.type === 'command') {
+      if (!(typeof item.id === 'string' && COMMAND_ID_RE.test(item.id))) errors.push(`${where}.id must be the table logical name of a command bar`);
+    } else if (hasId && !(typeof item.id === 'string' && GUID_RE.test(item.id))) errors.push(`${where}.id must be a canonical GUID`);
     if (hasCreate && (!item.create || typeof item.create !== 'object' || Array.isArray(item.create))) errors.push(`${where}.create must be an object`);
     if (item.edits !== undefined) {
       if (!Array.isArray(item.edits)) errors.push(`${where}.edits must be an array`);
@@ -112,10 +135,8 @@ function validateEdit(edit, where, errors) {
 async function preparePushPreview({ env, httpClient, items, solutionUniqueName, languageCode, deps = {} }) {
   const { errors } = validatePreviewItems(items);
   if (errors.length) {
-    const err = new Error(`push preview: ${errors.join('; ')}`);
-    err.code = 'PREVIEW_ITEMS_INVALID';
-    err.errors = errors;
-    throw err;
+    // The errors name item positions, fields and the allowed values — the maker's own input — so they may be printed.
+    throw Object.assign(publicError('PREVIEW_ITEMS_INVALID', `push preview: ${errors.join('; ')}`), { errors });
   }
   const ro = readOnlyHttpClient(httpClient);
   const workspaceDir = makeTempWorkspace('push-preview-');
@@ -123,6 +144,7 @@ async function preparePushPreview({ env, httpClient, items, solutionUniqueName, 
     prepared: [],
     notPrepared: [],
     requiresSchema: [],
+    notEvaluated: [],
     stats: ro.stats,
     sdk: null,
     disposed: false,
@@ -144,6 +166,10 @@ async function preparePushPreview({ env, httpClient, items, solutionUniqueName, 
     // A fresh workspace must be initialised before a fetch lands in it. It reads nothing remote that writes.
     await handle.sdk.initWorkspace();
     for (const item of items) {
+      if (item.notEvaluated !== undefined) {
+        handle.notEvaluated.push({ key: item.key, reason: item.notEvaluated });
+        continue;
+      }
       if (item.requiresSchema === true) {
         handle.requiresSchema.push({ key: item.key });
         continue;
@@ -155,7 +181,7 @@ async function preparePushPreview({ env, httpClient, items, solutionUniqueName, 
         } else {
           const created = await handle.sdk.createArtifact(item.type, item.create);
           id = created && created.id;
-          if (!id) throw Object.assign(new Error('the local create returned no id'), { code: 'PREVIEW_CREATE_NO_ID' });
+          if (!id) throw publicError('PREVIEW_CREATE_NO_ID', 'the local create returned no id');
         }
         for (const edit of item.edits || []) await applyEdit(handle.sdk, item.type, id, edit);
         handle.prepared.push({ key: item.key, type: item.type, id: String(id), create: !item.id });
@@ -178,7 +204,7 @@ async function applyEdit(sdk, type, id, edit) {
     case 'add': return await sdk.addElement(type, id, edit.pointer, edit.element, edit.options);
     case 'remove': return await sdk.removeElement(type, id, edit.pointer);
     case 'move': return await sdk.moveElement(type, id, edit.from, edit.to, edit.options);
-    default: throw Object.assign(new Error(`unknown edit op ${edit.op}`), { code: 'PREVIEW_ITEMS_INVALID' });
+    default: throw publicError('PREVIEW_ITEMS_INVALID', 'unknown edit op');
   }
 }
 
@@ -191,14 +217,14 @@ async function applyEdit(sdk, type, id, edit) {
  * @param {{ layers?: boolean, mode?: 'each'|'batch' }} [options]
  */
 async function previewPreparedArtifacts(handle, { layers = true, mode = 'each' } = {}) {
-  if (!handle || !handle.sdk || handle.disposed) throw Object.assign(new Error('push preview: the prepared workspace is gone'), { code: 'PREVIEW_NOT_PREPARED' });
+  if (!handle || !handle.sdk || handle.disposed) throw publicError('PREVIEW_NOT_PREPARED', 'push preview: the prepared workspace is gone');
   const byKey = new Map(handle.prepared.map((p) => [`${p.type}|${String(p.id).toLowerCase()}`, p]));
   const previews = [];
   let sharedRequests = 0;
   if (mode === 'batch') {
     const dirty = await handle.sdk.getDirtyArtifacts();
     const foreign = dirty.filter((d) => !byKey.has(`${d.type}|${String(d.id).toLowerCase()}`));
-    if (foreign.length) throw Object.assign(new Error(`push preview: the isolated workspace holds ${foreign.length} artifact(s) this preview did not prepare`), { code: 'PREVIEW_WORKSPACE_NOT_ISOLATED' });
+    if (foreign.length) throw publicError('PREVIEW_WORKSPACE_NOT_ISOLATED', `push preview: the isolated workspace holds ${foreign.length} artifact(s) this preview did not prepare`);
     const all = await handle.sdk.previewPushAll({ layers });
     sharedRequests = all.sharedRequests || 0;
     for (const p of all.previews) previews.push(projectPreview(byKey.get(`${p.type}|${String(p.id).toLowerCase()}`), p));
@@ -217,7 +243,9 @@ async function previewPreparedArtifacts(handle, { layers = true, mode = 'each' }
 }
 
 // The SDK's PushPreview, projected to what a maker reads: no local-change VALUES (a pointer and its kind only — a
-// filter value or a script body is the maker's data), no tokens (concurrency is its verdict and the guards it compared).
+// filter value or a script body is the maker's data), no tokens (concurrency is its verdict and the guards it compared),
+// and a refusal or warning as its code only: the SDK's message can quote the service's text or a value it refused, and
+// no scrubbing of free text can be trusted to take every value out (the same rule as findingOf).
 function projectPreview(prepared, p) {
   const out = {
     key: prepared ? prepared.key : undefined,
@@ -225,8 +253,8 @@ function projectPreview(prepared, p) {
     id: p.id,
     action: p.action,
     outcome: p.outcome,
-    refusals: (p.refusals || []).map((f) => ({ code: f.code, message: f.message, ...(Array.isArray(f.issues) ? { issues: f.issues.length } : {}) })),
-    warnings: (p.warnings || []).map((f) => ({ code: f.code, message: f.message })),
+    refusals: (p.refusals || []).map((f) => ({ code: f.code, ...(Array.isArray(f.issues) ? { issues: f.issues.length } : {}) })),
+    warnings: (p.warnings || []).map((f) => ({ code: f.code })),
     notEvaluated: [...(p.notEvaluated || [])],
     localChanges: (p.localChanges || []).map((c) => ({ pointer: c.pointer, type: c.type })),
     concurrency: {
@@ -265,8 +293,8 @@ function layersOf(layers) {
 }
 
 /** Counts by outcome, plus the items that were not previewed and why. */
-function summarizePreview({ previews, notPrepared, requiresSchema }) {
-  const counts = { ready: 0, refused: 0, unknown: 0, requiresSchema: requiresSchema.length, notPrepared: notPrepared.length };
+function summarizePreview({ previews, notPrepared, requiresSchema, notEvaluated = [] }) {
+  const counts = { ready: 0, refused: 0, unknown: 0, requiresSchema: requiresSchema.length, notPrepared: notPrepared.length, notEvaluated: notEvaluated.length };
   for (const p of previews) counts[p.outcome] = (counts[p.outcome] || 0) + 1;
   return counts;
 }
@@ -274,6 +302,9 @@ function summarizePreview({ previews, notPrepared, requiresSchema }) {
 /**
  * Prepare, preview and dispose in one call. `ok` is false when any write was attempted (a defect: the result must not
  * be read as a preview) — never because an item was refused or unknown, which are the answers a preview exists to give.
+ * `allEvaluated` is true only when every item was answered: none is `notEvaluated` (no typed target, or a live state
+ * the dry run could not read), none `notPrepared`, no preview `unknown`, and nothing was written. A schema step keeps
+ * the dry run's answer and does not make it false.
  */
 async function runPushPreview(options) {
   const handle = await preparePushPreview(options);
@@ -285,7 +316,9 @@ async function runPushPreview(options) {
       previews,
       notPrepared: handle.notPrepared,
       requiresSchema: handle.requiresSchema.map((r) => ({ ...r, note: 'a schema step: the artifact preview cannot represent it; the dry run\'s create/reuse answer stands' })),
-      summary: summarizePreview({ previews, notPrepared: handle.notPrepared, requiresSchema: handle.requiresSchema }),
+      notEvaluated: handle.notEvaluated,
+      allEvaluated: writeAttempts === 0 && handle.notEvaluated.length === 0 && handle.notPrepared.length === 0 && previews.every((p) => p.outcome !== 'unknown'),
+      summary: summarizePreview({ previews, notPrepared: handle.notPrepared, requiresSchema: handle.requiresSchema, notEvaluated: handle.notEvaluated }),
       gets: handle.stats.gets,
       sharedRequests,
       writeAttempts,
@@ -301,8 +334,11 @@ async function runPushPreview(options) {
 /**
  * Maps dry-run plan items (lib/sdk-build.js annotateLivePlan output: `{ key: { kind, ... }, state }`) to preview items.
  * `resolve(item)` is the caller's — the build knows the artifact ids and the definitions it would send — and returns
- * `{ type, id, edits }`, `{ type, create }`, or null to skip. Schema kinds become `requiresSchema` without asking it.
- * Unknown-state items are skipped: the dry run already says it could not read them.
+ * `{ type, id, edits }`, `{ type, create }`, or null when it has no typed artifact to name. Schema kinds become
+ * `requiresSchema` on a create (a schema reuse has nothing to preview) without asking it. Every other item is kept:
+ * one whose live state the dry run could not read becomes `{ key, notEvaluated: 'livePlanUnknown' }` (it is not
+ * resolved), and one `resolve` returns null for becomes `{ key, notEvaluated: 'noTypedTarget' }` — so the preview
+ * reports it as not evaluated instead of reading as if it covered it. A command bar's `id` is its table's logical name.
  */
 function previewItemsFromPlan(planItems, resolve) {
   const SCHEMA_KINDS = new Set(['table', 'column', 'relationship', 'choice', 'globalChoice', 'key']);
@@ -315,10 +351,17 @@ function previewItemsFromPlan(planItems, resolve) {
       if (item.state === 'create') out.push({ key: `${k.kind}:${k.entity || ''}:${k.name || n++}`, requiresSchema: true });
       continue;
     }
-    if (item.state !== 'create' && item.state !== 'reuse') continue;
+    const key = `${k.kind}:${k.entity || ''}:${k.name || n++}`;
+    if (item.state !== 'create' && item.state !== 'reuse') {
+      out.push({ key, notEvaluated: 'livePlanUnknown' });
+      continue;
+    }
     const resolved = typeof resolve === 'function' ? resolve(item) : null;
-    if (!resolved) continue;
-    out.push({ ...resolved, key: resolved.key || `${k.kind}:${k.entity || ''}:${k.name || n++}` });
+    if (!resolved) {
+      out.push({ key, notEvaluated: 'noTypedTarget' });
+      continue;
+    }
+    out.push({ ...resolved, key: resolved.key || key });
   }
   return out;
 }
