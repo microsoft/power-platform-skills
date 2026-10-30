@@ -1693,6 +1693,15 @@ function settle(op, ctx, result, { id, back, action, fields, childIds, origin, u
     return false;
   }
   const confirmed = confirmedChildIds(op, back.remote, childIds);
+  // Content can match a child by its name while the child this run created, at the id it was given, is gone (a row
+  // replaced between the write and the read). Every child created now must be read at its own id; one that is not
+  // leaves the create incomplete. The root and the children that are confirmed stay this build's.
+  const unconfirmed = Object.keys(childIds || {}).filter((slot) => childIds[slot] && !confirmed[slot] && !(slot === 'value' && (unsettled || back.value)));
+  if (unconfirmed.length) {
+    pushFinding(result, 'unknown', { kind, key, id, code: 'create-completion-required', unit: 'content', missing: unconfirmed }, handle);
+    if (origin) result.managedBindings.push({ kind, key, id, ...(Object.keys(confirmed).length ? { childIds: confirmed } : {}), origin });
+    return false;
+  }
   if (unsettled || back.value) {
     // The definition is proven and the value is not: two lines, never one whole-variable saved.
     if (wroteDefinition) pushFinding(result, 'saved', { kind, key, id, action, unit: 'definition', fields: fields && fields.filter((f) => f !== '/currentValue') });

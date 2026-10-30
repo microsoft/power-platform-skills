@@ -371,6 +371,38 @@ test('a child create whose answer was lost leaves the item unknown and stops the
   assert.deepEqual(again.result.saved.map((x) => x.kind), ['duplicateRule']);
 });
 
+test('a read-back that shows a child at another id than the one created is not a saved Custom API: the create is not complete', async () => {
+  const foreign = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+  let org = null;
+  let swap = true;
+  // Between the create and its read-back the request parameter is replaced by a row with the same content at another id.
+  const h = await harness({ intercept: ({ method, path }) => {
+    if (!swap || !org || method !== 'GET' || !path.startsWith('/customapis(') || !org.rows('customapirequestparameters').length) return undefined;
+    const set = org.sets.get('customapirequestparameters');
+    const row = [...set.values()][0];
+    set.delete(row.customapirequestparameterid);
+    row.customapirequestparameterid = foreign;
+    set.set(foreign, row);
+    swap = false;
+    return undefined;
+  } });
+  org = h.org;
+  const s = { minimumPluginVersion: '2.21.0', solution: { uniqueName: 'ContosoSol', publisherPrefix: 'contoso' }, customApis: [{ uniqueName: 'contoso_Api', requestParameters: [{ uniqueName: 'a', type: 'string' }] }] };
+  const { result } = await h.run(s);
+  assert.equal(swap, false);
+  const id = h.creates.idOf('customApi', 'contoso_api');
+  assert.deepEqual(result.saved, []);
+  assert.deepEqual(result.unknown.map((u) => [u.key, u.id, u.code, u.missing]), [['contoso_Api', id, 'create-completion-required', ['request:a']]]);
+  // The root is this build's, and only the children the read shows at their own ids are claimed with it.
+  assert.deepEqual(result.managedBindings, [{ kind: 'customApi', key: 'contoso_Api', id, origin: 'created' }]);
+  // Without the swap the same create is saved with its child.
+  const k = await harness();
+  const plain = await k.run(s);
+  assert.deepEqual(plain.result.unknown, []);
+  assert.deepEqual(plain.result.saved.map((x) => x.key), ['contoso_Api']);
+  assert.deepEqual(plain.result.managedBindings, [{ kind: 'customApi', key: 'contoso_Api', id, childIds: { 'request:a': k.creates.childIdOf('contoso_api', 'request:a') }, origin: 'created' }]);
+});
+
 test('an omitted field or child list is not managed; explicit values manage, each destructive one with its own token', async () => {
   const h = await harness();
   const full = {
