@@ -5,7 +5,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const { performance } = require('node:perf_hooks');
-const { scanSource, featureCoherence, gateSources } = require('../lib/pcf-code-gate.js');
+const { scanSource, featureCoherence, gateSources, countLineWork } = require('../lib/pcf-code-gate.js');
 
 const FILE = 'src/pages-control.ts';
 
@@ -889,24 +889,6 @@ function scanBoth(text, feature, hosts) {
   return [...scanSource(FILE, text), ...findingsFor(text, feature, hosts)];
 }
 
-// Wall-clock timing, kept only by the line-location test (see its comment): a bound on elapsed
-// time is sensitive to machine load, unlike the work counts and growth ratios used elsewhere.
-// A wall-clock limit on ONE cold run is noise-bound, not a test of the scanner: the first run pays the JIT's warm-up, and a
-// shared CI runner adds GC and scheduler pauses on top (observed: 501 ms against the 500 ms limit on a Windows runner, while
-// local single runs vary 125–253 ms for the same input). So the scan runs once untimed to warm up, then three times, and the
-// FASTEST run is compared: noise only ever adds time, while the regression these limits exist for — a quadratic rescan —
-// slows every run alike, by seconds, and still fails.
-function timedScan(text) {
-  let findings = [...scanSource(FILE, text), ...findingsFor(text)];
-  let elapsed = Infinity;
-  for (let i = 0; i < 3; i += 1) {
-    const started = performance.now();
-    findings = [...scanSource(FILE, text), ...findingsFor(text)];
-    elapsed = Math.min(elapsed, performance.now() - started);
-  }
-  return { elapsed, findings };
-}
-
 // A second copy of the gate whose lexer calls are counted. The gate reads its lexer through a
 // destructured import, so the counting wrapper must be in place when the module loads; the shared
 // exports and the first copy (the one every other test uses) are restored straight after.
@@ -1415,18 +1397,66 @@ test('Fixed-id detection keeps later JSX after unmatched braces and inside templ
   }
 });
 
-// Pathological but finite input should stay bounded; CI runners can be much slower
-// than the local median target, so this catches rescans without enforcing machine speed.
-const PATHOLOGICAL_SCAN_LIMIT_MS = 1500;
+// Counts what one scan does to place its findings on lines, with no clock. Two counters:
+//  - the gate's own (countLineWork): line-start tables built, characters indexed, lookups and binary-search probes;
+//  - the characters the scan reads through the string methods a rescan would use. A line found by
+//    re-splitting text.slice(0, offset) reads the whole prefix for every finding, so it shows up here even if it
+//    bypasses the line-start table (and the table's counter) altogether. Slices are counted by the length they
+//    return (the scanner's own slices are a few characters long), split and matchAll by the text they read.
+// The methods are replaced only while the scan runs, and restored whatever happens.
+function lineLocationWork(text) {
+  const work = { tables: 0, indexed: 0, lookups: 0, probes: 0 };
+  const read = { chars: 0 };
+  const proto = String.prototype;
+  const originals = { slice: proto.slice, substring: proto.substring, split: proto.split, matchAll: proto.matchAll };
+  proto.slice = function slice(...args) {
+    const piece = originals.slice.apply(this, args);
+    read.chars += piece.length;
+    return piece;
+  };
+  proto.substring = function substring(...args) {
+    const piece = originals.substring.apply(this, args);
+    read.chars += piece.length;
+    return piece;
+  };
+  proto.split = function split(...args) {
+    read.chars += this.length;
+    return originals.split.apply(this, args);
+  };
+  proto.matchAll = function matchAll(...args) {
+    read.chars += this.length;
+    return originals.matchAll.apply(this, args);
+  };
+  countLineWork(work);
+  let findings;
+  try {
+    findings = [...scanSource(FILE, text), ...findingsFor(text)];
+  } finally {
+    countLineWork(undefined);
+    Object.assign(proto, originals);
+  }
+  return { work, read: read.chars, findings };
+}
 
-test('Pages diagnostics index line locations instead of rescanning per call', (t) => {
+// Measured on a 4000-line file: 1 table, one pass over the text, 4000 lookups of at most 13 probes, and about
+// 7 characters read per source character (the lexer's split and the scanner's few-character slices).
+// A per-finding rescan builds 4000 tables or indexes the text 4000 times; a split of the prefix reads about 2000
+// characters per source character. 20 leaves room for another pass without letting either through.
+const MAX_TEXT_READS = 20;
+
+test('Pages diagnostics index line locations instead of rescanning per call', () => {
   const count = 4000;
   const text = `${CALL};\n`.repeat(count);
-  const { elapsed, findings } = timedScan(text);
-  t.diagnostic(`line-location timing: ${elapsed.toFixed(3)} ms; ${count} calls`);
-  assert.ok(elapsed < PATHOLOGICAL_SCAN_LIMIT_MS, `${elapsed.toFixed(3)} ms exceeds ${PATHOLOGICAL_SCAN_LIMIT_MS} ms`);
+  const { work, read, findings } = lineLocationWork(text);
   assert.equal(findings.length, count);
   assert.ok(findings.every((finding, i) => finding.code === 'PCF_PAGES_API' && finding.line === i + 1));
+  // Every finding is placed through the counted lookup, so a pass below is not a counter that never ran.
+  assert.equal(work.lookups, count, 'each finding is located once through the line-start index');
+  assert.equal(work.tables, 1, `the line-start table is built once for the file, not per finding (built ${work.tables} times)`);
+  assert.ok(work.indexed <= text.length, `the text is indexed once (${work.indexed} characters indexed for ${text.length})`);
+  const probesPerLookup = Math.ceil(Math.log2(count + 1)) + 1;
+  assert.ok(work.probes <= work.lookups * probesPerLookup, `a lookup is a binary search (${work.probes} probes for ${work.lookups} lookups; limit ${probesPerLookup} each)`);
+  assert.ok(read <= MAX_TEXT_READS * text.length, `the scan read ${read} characters through slice, substring, split and matchAll for a ${text.length}-character file (limit ${MAX_TEXT_READS}x)`);
 });
 
 // The tests below scale their fixture and bound the growth (see assertLinearGrowth), so a slow
