@@ -189,6 +189,21 @@ function treeProjection(root, description, labelsOwned) {
 const nonLiteral = (node) => node && node.valueType && node.valueType !== 'Value' && node.valueType !== 'Clear';
 const isActionNode = (node) => node && typeof node.type === 'string' && !Array.isArray(node.clauses);
 
+// The binding was recorded under what the spec owned THEN. A spec that has since started (or stopped)
+// declaring the description, or the labels of its actions, must not read as drift, so the live rule is
+// also matched with the description owned or not and with every label owned or none. A partial label
+// change still falls back to the plain comparison: a drift refusal, never an overwrite.
+function recordedUnder(binding, root, liveDescription, liveLabels) {
+  if (!binding) return undefined;
+  for (const description of [undefined, String(liveDescription || '')]) {
+    for (const labels of [liveLabels, liveLabels.map(() => false), liveLabels.map(() => true)]) {
+      const sha = intentSha256(treeProjection(root, description, labels));
+      if (sha === binding.intentSha256) return sha;
+    }
+  }
+  return undefined;
+}
+
 /**
  * Plan the declared edit of an EXISTING rule (the build found `ruleId` by name).
  *   plan: { key, ruleId, action: null|'noChange'|'update', root, description?, nodeIndex: {nodeKey: 'clauses/i'|'trueBranch/i'},
@@ -297,7 +312,7 @@ async function planRuleReconcile({ rule, ruleId, sdk, created = false }, ctx = {
 
   const binding = await lookupBinding(ctx, KIND, key);
   if (binding) plan.origin = binding.origin === 'created' ? 'created' : 'adopted';
-  const verdict = driftVerdict(binding, liveSha, plan.desiredSha);
+  const verdict = driftVerdict(binding, recordedUnder(binding, root, live.description, liveLabels) || liveSha, plan.desiredSha);
   if (verdict === 'unbound' && !created && !isAuthorized(ctx.authorizedAdoption, key)) {
     plan.refused.push(refusal(key, 'rule-adoption-not-authorized', 'this rule exists and the spec has not managed it before; approve adopting it first'));
     return plan;

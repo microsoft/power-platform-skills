@@ -264,3 +264,15 @@ test('an unreadable rule and a write that does not report its outcome are unknow
   assert.deepEqual(lost.result.unknown.map((r) => r.code), ['rule-write-unknown'], JSON.stringify(lost.result));
   assert.deepEqual([lost.result.saved, lost.result.managedBindings], [[], []]);
 });
+test('a spec that starts declaring the description or action labels is an edit, not drift', async () => {
+  const srv = ruleServer();
+  const rule = allShapes();
+  await seed(srv, rule);
+  const managed = fakeManaged(createdRuleBindings(rule, RID));
+  const described = allShapes();
+  described.description = 'Checks for large accounts';
+  described.actions.forEach((a) => { if (a.type !== 'Recommendation') a.label = `Step ${a.key}`; });
+  const { result } = await reconcile(srv, described, { managed });
+  assert.equal(result.saved.length, 1, JSON.stringify(result));
+  assert.equal((await liveRoot(srv)).trueBranch[0].displayName, 'Step hide-fax');
+});
