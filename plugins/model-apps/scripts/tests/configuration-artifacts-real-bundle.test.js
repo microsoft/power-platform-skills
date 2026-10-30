@@ -534,6 +534,34 @@ test('readiness is read from the rows: a required variable without a value, an u
   assert.deepEqual(h.org.unexpected, []);
 });
 
+test('an authorized clear of a required value is applied and read back; the missing value then stops the build', async () => {
+  const h = await harness();
+  const s = { minimumPluginVersion: '2.21.0', solution: { uniqueName: 'ContosoSol', publisherPrefix: 'contoso' }, environmentVariables: [{ schemaName: 'contoso_V', type: 'string', isRequired: true }] };
+  const present = await h.run(s, { bindings: C.readDeploymentBindings({ EnvironmentVariables: [{ SchemaName: 'contoso_V', Value: 'present' }] }, s) });
+  assert.deepEqual(present.result.refused, []);
+  assert.equal(h.org.rows('environmentvariablevalues').length, 1);
+  const cleared = C.readDeploymentBindings({ EnvironmentVariables: [{ SchemaName: 'contoso_V', Value: null }] }, s);
+  // Without its exact token the clear is refused before any write, and the value stays.
+  const unauthorized = await h.run(s, { bindings: cleared, authorizedDestructive: allow('environmentVariable:contoso_v:defaultValue') });
+  assert.deepEqual(unauthorized.writes, []);
+  assert.deepEqual(unauthorized.result.refused.map((r) => [r.key, r.code]), [['contoso_V', 'ENVIRONMENT_VARIABLE_VALUE_MISSING']]);
+  assert.equal(h.org.rows('environmentvariablevalues').length, 1);
+  // With it the clear is what the maker asked for: it is sent, read back, and the build then stops on the missing value.
+  const step = await C.runConfigurationStep(s, { sdk: h.sdk, creates: h.creates, bindings: cleared, authorizedDestructive: allow('environmentVariableValue:contoso_v:value') }, 'data-model');
+  assert.deepEqual(step.outcome.refused, []);
+  assert.deepEqual(step.outcome.unknown, []);
+  assert.deepEqual(step.outcome.saved.map((x) => [x.key, x.action, x.fields]), [['contoso_V', 'update', ['/currentValue']]]);
+  assert.deepEqual(h.org.rows('environmentvariablevalues'), []);
+  assert.deepEqual(step.blocking.map((b) => [b.key, b.code]), [['contoso_V', 'ENVIRONMENT_VARIABLE_VALUE_MISSING']]);
+  assert.deepEqual(step.halt && step.halt.items, [{ kind: 'environmentVariable', key: 'contoso_V', code: 'ENVIRONMENT_VARIABLE_VALUE_MISSING' }]);
+  // A first create of a required variable with no value is still refused before its first write.
+  const fresh = { ...s, environmentVariables: [{ schemaName: 'contoso_W', type: 'string', isRequired: true }] };
+  const first = await h.run(fresh, { bindings: C.readDeploymentBindings({ EnvironmentVariables: [{ SchemaName: 'contoso_W', Value: null }] }, fresh), authorizedDestructive: allow('environmentVariableValue:contoso_w:value') });
+  assert.deepEqual(first.writes, []);
+  assert.deepEqual(first.result.refused.map((r) => [r.key, r.code]), [['contoso_W', 'ENVIRONMENT_VARIABLE_VALUE_MISSING']]);
+  assert.deepEqual(h.org.unexpected, []);
+});
+
 test('a create committed behind a lost answer is never reported as nothing written, whatever answers a later send', async () => {
   const once = await harness({ lose: ({ method, path }) => method === 'POST' && path.startsWith('/connectionreferences') });
   const s = referenceOnly();

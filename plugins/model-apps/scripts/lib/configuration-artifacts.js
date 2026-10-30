@@ -753,7 +753,9 @@ async function planOne(ctx, kindPlan, entry, plan) {
   const compared = kindPlan.compare(entry, found.remote, ctx, found.childIds);
   if (compared.refusal) return refuse(compared.refusal, found.id);
   const missing = kindPlan.requirement && kindPlan.requirement(entry, found.remote);
-  if (missing) return refuse(missing, found.id);
+  // A clear the maker asked for, with its exact token, is applied: the requirement is then a readiness result of
+  // the row read back (ENVIRONMENT_VARIABLE_VALUE_MISSING stops the build), not a reason to keep the old value.
+  if (missing && !(kindPlan.consentedClear && kindPlan.consentedClear(entry, compared, ctx))) return refuse(missing, found.id);
   const action = compared.changes.length ? 'update' : 'unchanged';
   const op = operation(kind, key, target, action, {
     id: found.id,
@@ -839,6 +841,13 @@ function variablePlan(bindings, parents) {
       const binding = bindingOf(entry);
       const value = binding ? binding.value : remote && remote.currentValue ? remote.currentValue.value : null;
       return value != null && value !== '' ? null : 'ENVIRONMENT_VARIABLE_VALUE_MISSING';
+    },
+    // The change deletes the value that is there (a settings Value of null) and the maker passed that delete's own
+    // token. Only an existing row's value can be cleared: a first create without a value is still refused.
+    consentedClear(entry, compared, ctx) {
+      const clears = compared.changes.some((c) => c.pointer === '/currentValue' && c.value === null);
+      const granted = ctx && ctx.authorizedDestructive;
+      return clears && granted instanceof Set && granted.has(tokenOf('environmentVariableValue', entry.schemaName, 'value'));
     },
     compare(entry, remote) {
       // Dataverse refuses a type change on an existing definition; refusing here keeps the run from
