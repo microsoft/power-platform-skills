@@ -21,6 +21,7 @@ const { makeGenpageSdk } = require('../lib/genpage-sdk.js');
 const { membershipSpec, FORM_A, FORM_B, META } = require('./helpers/app-membership-sdk.js');
 const { appPinServer, VIEW, CHART } = require('./helpers/app-pin-server.js');
 const { pinIntentOf } = require('../lib/app-pin-recovery.js');
+const { buildModelApp, isTransientHalt } = require('../build-model-app.js');
 
 const runSdkBuild = inOwnFolder(runSdkBuildInPlace);
 const ICON = '88888888-0000-4000-8000-000000000001';
@@ -33,8 +34,8 @@ const ALL = [`1:${META.contoso_item}`, `60:${FORM_A}`, `26:${VIEW}`, `59:${CHART
 // The pin server models the app and its components; the app step also reads the solution and the app's icon, which
 // this answers: both already exist, so the build creates neither.
 // watchCopy: record what the workspace copy asks the server to hold just before and just after each app push.
-// withhold: how many app publishes the SDK refuses before it sends one (APP_MAIN_FORM_PUBLISH_WITHHELD: nothing was published).
-async function build(t, lose, { watchCopy = false, members, exact = false, allowDestructive, withhold = 0 } = {}) {
+// withhold: how many app publishes the SDK refuses before it sends one (APP_MAIN_FORM_PUBLISH_WITHHELD: nothing was published), with the words withheldMessage.
+async function build(t, lose, { watchCopy = false, members, exact = false, allowDestructive, withhold = 0, withheldMessage = 'read-back unavailable; no publish sent', appName } = {}) {
   const server = appPinServer(t, { lose, members });
   const get = server.httpClient.get;
   server.httpClient.get = async (url) => {
@@ -52,7 +53,7 @@ async function build(t, lose, { watchCopy = false, members, exact = false, allow
     if (kind !== 'app') return publish(kind, id, options);
     if (appPublishes.length < withhold) {
       appPublishes.push('withheld');
-      return { type: kind, id, shipped: false, publish: { kind: 'failed', error: { code: 'APP_MAIN_FORM_PUBLISH_WITHHELD', message: 'read-back unavailable; no publish sent' } } };
+      return { type: kind, id, shipped: false, publish: { kind: 'failed', error: { code: 'APP_MAIN_FORM_PUBLISH_WITHHELD', message: withheldMessage } } };
     }
     appPublishes.push('sent');
     return publish(kind, id, options);
@@ -73,6 +74,7 @@ async function build(t, lose, { watchCopy = false, members, exact = false, allow
   try {
     const spec = membershipSpec({ hidden: false });
     if (exact) spec.app.mainFormsOnUpdate = 'exact';
+    if (appName) spec.app.name = appName;
     result = await runSdkBuild(spec, { sdk: server.sdk, apply: true, allowDestructive, phases: ['app-shell'], warn: (message) => warnings.push(message), log: () => {} });
   } catch (thrown) {
     error = thrown;
@@ -130,6 +132,7 @@ test('build: "exact" Main forms on an existing app is refused without --allow-de
   const { state, error, changeSets } = await build(t, [], { members: WITH_FORM_B, exact: true });
   assert.ok(error, 'the removal needs authority');
   assert.equal(error.code, 'APP_MAIN_FORMS_EXACT_UNAUTHORIZED', error.stack);
+  assert.equal(error.transient, false, 'a run again has no more authority: it is never run again');
   assert.match(error.message, /takes the other Main forms of contoso_item out of the existing app's membership \(no form is deleted\)/);
   assert.deepEqual(changeSets, [], 'no change set was sent');
   assert.ok(state.members.has(`60:${FORM_B}`), 'the other Main form is still in the app');
@@ -163,6 +166,26 @@ test('build: an "exact" publish withheld every time is tried once more, then sto
   assert.ok(codes.includes('APP_MAIN_FORMS_NOT_EXACT'), JSON.stringify(error.incomplete));
 });
 
+// The end of a build that left an exact app's publication owed (sdk-build.js, the incomplete halt): the change is saved, so running every phase
+// again would push it again and cannot settle what the SDK withholds. Its words read as a transient failure here, and the build is still run once.
+test('build: the incomplete halt of a withheld "exact" publish is never run again, even when its words read as transient', async (t) => {
+  const LABEL = 'SQL Timeout 503 try again later';
+  const { error } = await build(t, [], { members: WITH_FORM_B, exact: true, allowDestructive: true, withhold: 2, withheldMessage: LABEL, appName: LABEL });
+  assert.ok(error && Array.isArray(error.incomplete), error && error.stack);
+  assert.ok(error.message.includes(LABEL), 'the halt quotes the words the maker named: ' + error.message);
+  assert.equal(error.transient, false);
+  assert.equal(isTransientHalt(error, { spec: membershipSpec({ hidden: false }) }), false);
+  let attempts = 0;
+  const lines = [];
+  const appDir = makeTempDir('incomplete-halt-app');
+  await assert.rejects(buildModelApp(membershipSpec({ hidden: false }), { apply: true, env: 'https://contoso.crm.dynamics.com', retryDelayMs: 0, appDir }, {
+    sdk: {}, provisionSdk: {}, sleep: async () => {}, log: (m) => lines.push(String(m)), warn: () => {}, verify: async () => ({ ok: true }),
+    discoverOpDiffState: async () => ({ collision: { appExists: false, solutionExists: false }, forms: [], sitemap: null }),
+    runBuild: async () => { attempts += 1; throw error; },
+  }), (thrown) => thrown === error);
+  assert.equal(attempts, 1, 'the whole build is sent once');
+  assert.equal(lines.filter((l) => /retrying/.test(l)).length, 0, lines.join('\n'));
+});
 // The pages phase pins the default view of each table a page it wrote reads (sdk-build.js, appWriters.placeViews). When it pins one it pushes and
 // publishes the app through the page backend's own SDK — the real backend here, over the same fake Dataverse — and that publish ships whatever
 // Main forms the app holds by then. `drift` puts the other Main form back into the app just before the placement, as another maker could; `held` puts it back

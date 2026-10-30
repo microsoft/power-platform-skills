@@ -108,12 +108,16 @@ const POLICY = {
   // The build's own loop stops with it when the next wait a throttle costs does not fit the run's budget (build-model-app.js), and the engine's runner when a step would start after the budget refused a wait (entity-provision.js,
   // makeRunner; throttle-engine-stop.test.js): held beside the loop's doubles.
   'throttle-budget-exhausted': { kinds: ['by-failure'], via: 'build-model-app.test.js' },
+  // "exact" Main forms on an app that existed before the run, without --allow-destructive (sdk-build.js appWriters.push): a removal from the app's membership that needs
+  // the maker's authority. Raised before the push writes anything, and a run again has no more authority than this one, so it is never run again. Held with the real app SDK.
+  'APP_MAIN_FORMS_EXACT_UNAUTHORIZED': { kinds: ['never'], via: 'app-pin-recovery-build.test.js' },
 };
 // The sites whose code is an expression, on purpose: the code is decided at run time, so the policy cannot be read off a literal.
 const DYNAMIC = [
   { file: 'lib/entity-provision.js', expr: "(err && err.code) || 'sdk-error'", kind: 'by-failure', what: 'the runner wraps every failed step with the code of what failed' },
   { file: 'lib/entity-provision.js', expr: 'sdkCode', kind: 'by-failure', what: 'a push the SDK refused by value, with the code the SDK gave' },
   { file: 'lib/sdk-build.js', expr: 'verdict.code', kind: 'never', what: 'the navigation verdict (app-navigation-empty): a re-run reads the same spec' },
+  { file: 'lib/sdk-build.js', expr: 'incomplete[0].code', kind: 'never', what: 'the end of a build that ran every phase and saved its changes, but left a publication owed or an exact Main-form list unproven (error.incomplete): running the phases again would push the saved change again and cannot settle what is withheld or unknown; the maker re-runs once the cause is cleared' },
 ];
 // Object literals that carry `phase`, `code` and `recoverable` and are not halts.
 const NOT_HALTS = [{ file: 'build-model-app.js', what: 'the journal record of a halt, written after the retry decision' }];
