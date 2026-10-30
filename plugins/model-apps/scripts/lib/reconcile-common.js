@@ -120,13 +120,28 @@ const PRE_WRITE_CODES = new Set([
   'COMMAND_IMMUTABLE_COLUMN_CHANGED',
   'COMMAND_CHILD_LOCATION_MISMATCH',
   'COMMAND_CONTEXT_ENTITY_UNRESOLVED',
-  'VALIDATION_FAILED',
+  // The SDK's ValidationError (errors/index.ts): its issues are checked before any request is built.
+  'VALIDATION_ERROR',
   'INVALID_ARGUMENT',
 ]);
 
 function codeOf(err) {
   const code = err && typeof err.code === 'string' ? err.code : '';
   return /^[A-Z][A-Z0-9_]{2,63}$/.test(code) ? code : '';
+}
+
+/**
+ * The rule ids of an SDK ValidationError — rr.issues[].rule, e.g. 'view-find-column-duplicate'.
+ * Only the kebab-case rule ids are kept; an issue's message can quote the value it refused.
+ */
+function rulesOf(err) {
+  const issues = err && Array.isArray(err.issues) ? err.issues : [];
+  const out = [];
+  for (const i of issues) {
+    const rule = i && typeof i.rule === 'string' ? i.rule : '';
+    if (/^[a-z][a-z0-9-]{1,63}$/.test(rule) && !out.includes(rule)) out.push(rule);
+  }
+  return out;
 }
 
 /**
@@ -141,7 +156,7 @@ async function pushChecked(sdk, type, id) {
     return { outcome: 'refused', code: 'PUSH_NOT_SAVED' };
   } catch (err) {
     const code = codeOf(err);
-    if (PRE_WRITE_CODES.has(code)) return { outcome: 'refused', code };
+    if (PRE_WRITE_CODES.has(code)) return { outcome: 'refused', code, rules: rulesOf(err) };
     return { outcome: 'unknown', code: code || 'WRITE_OUTCOME_UNKNOWN' };
   }
 }
@@ -185,5 +200,6 @@ module.exports = {
   pushIfChanged,
   queuePublication,
   normalizeGuid,
+  rulesOf,
   PRE_WRITE_CODES,
 };
