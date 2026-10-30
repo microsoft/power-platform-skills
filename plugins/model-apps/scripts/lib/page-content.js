@@ -86,4 +86,19 @@ function contentFieldsOf(args) {
   };
 }
 
-module.exports = { genpageError, sourceText, dataSourcesOf, bindingOf, contentFingerprint, contentFieldsOf };
+// A value a hash can name exactly (a prepared page's declarations, a form embed's inputData): JSON's own values, nested no deeper than any declaration a page has. A function, a symbol, a bigint, a non-finite number
+// or a cycle has no JSON text, so it would hash as something it is not (stableStringify writes `null` for each).
+const MAX_JSON_DEPTH = 64;
+
+function isPlainJson(value, depth = 0) {
+  if (depth > MAX_JSON_DEPTH) return false;
+  if (value === null || typeof value === 'string' || typeof value === 'boolean') return true;
+  if (typeof value === 'number') return Number.isFinite(value);
+  if (Array.isArray(value)) return value.every((item) => isPlainJson(item, depth + 1));
+  if (typeof value !== 'object') return false;
+  const proto = Object.getPrototypeOf(value);
+  if (proto !== Object.prototype && proto !== null) return false;
+  return Object.values(value).every((item) => isPlainJson(item, depth + 1));
+}
+
+module.exports = { genpageError, sourceText, dataSourcesOf, bindingOf, contentFingerprint, contentFieldsOf, isPlainJson };

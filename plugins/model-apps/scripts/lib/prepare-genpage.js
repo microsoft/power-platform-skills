@@ -19,7 +19,7 @@
 // not exist yet. A page that names tables without supplied types is prepared with a warning that its use of them was not checked here (the write reads them).
 // The compiled output is not produced: the SDK compiles with its own options at write time, so a compiled hash from here would be a second definition of it.
 const { sha256 } = require('./hash.js');
-const { genpageError, contentFieldsOf, contentFingerprint } = require('./page-content.js');
+const { genpageError, contentFieldsOf, contentFingerprint, isPlainJson } = require('./page-content.js');
 const { pageStructure } = require('./page-structure.js');
 const { PAGE_NESTING_TOO_DEEP, PAGE_NESTING_MESSAGE, isStackOverflow } = require('./page-nesting.js');
 const { resolveTypescriptProvider } = require('./typescript-provider.js');
@@ -30,21 +30,6 @@ const PREPARE_VERSION = 'genpage-prepare/1';
 const CONFIG_KEYS = ['dataSources', 'model'];
 const BINDING_KEYS = ['connectorBindings', 'actionBindings'];
 const INPUT_KEYS = new Set(['source', 'name', 'config', 'bindings', 'navigation', 'runtimeTypes']);
-// A value an answer's hash can name exactly: JSON's own values, nested no deeper than any declaration a page has. A function, a symbol, a bigint, a non-finite number
-// or a cycle has no JSON text, so it would hash as something it is not (stableStringify writes `null` for each).
-const MAX_JSON_DEPTH = 64;
-
-function isPlainJson(value, depth = 0) {
-  if (depth > MAX_JSON_DEPTH) return false;
-  if (value === null || typeof value === 'string' || typeof value === 'boolean') return true;
-  if (typeof value === 'number') return Number.isFinite(value);
-  if (Array.isArray(value)) return value.every((item) => isPlainJson(item, depth + 1));
-  if (typeof value !== 'object') return false;
-  const proto = Object.getPrototypeOf(value);
-  if (proto !== Object.prototype && proto !== null) return false;
-  return Object.values(value).every((item) => isPlainJson(item, depth + 1));
-}
-
 const hashOf = (label, value) => sha256(`${label}\n${stableStringify(value)}`);
 
 function deepFreeze(value) {
