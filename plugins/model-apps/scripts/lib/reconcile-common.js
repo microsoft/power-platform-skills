@@ -78,8 +78,13 @@ async function lookupBinding(ctx, kind, key) {
   return found && typeof found === 'object' ? found : null;
 }
 
-/** A managed binding record in the coordinator's format (formatVersion 1). */
-function bindingRecord(ctx, { kind, key, id, parentKey, intentSha256: sha, origin }) {
+/**
+ * A managed binding record in the coordinator's format (formatVersion 1). `partsSha256` is optional:
+ * a { part: sha256 } map of the same projection `intentSha256` covers, which lets a later run tell
+ * WHICH owned part moved (see partsDriftVerdict). A store that drops it loses nothing but precision:
+ * the verdict then falls back to the whole-projection comparison.
+ */
+function bindingRecord(ctx, { kind, key, id, parentKey, intentSha256: sha, origin, partsSha256 }) {
   const rec = {
     formatVersion: 1,
     appUniqueName: (ctx && ctx.appUniqueName) || '',
@@ -91,7 +96,128 @@ function bindingRecord(ctx, { kind, key, id, parentKey, intentSha256: sha, origi
     origin: origin === 'adopted' ? 'adopted' : 'created',
   };
   if (parentKey) rec.parentKey = parentKey;
+  if (partsSha256 && typeof partsSha256 === 'object') rec.partsSha256 = { ...partsSha256 };
   return rec;
+}
+
+/**
+ * The baseline of a FULL ownable projection — `{ part: value }` over every part this helper can ever
+ * own on the artifact, whatever the spec declares today. Recording the whole projection (and not only
+ * the parts the spec declares) keeps the baseline stable when the spec starts or stops declaring a
+ * part: ownership changes the WRITE set, never what "last applied" means.
+ * @returns {{ intentSha256: string, partsSha256: Object<string,string> }}
+ */
+function projectionBaseline(parts) {
+  const partsSha256 = {};
+  for (const k of Object.keys(parts).sort()) partsSha256[k] = intentSha256(parts[k] === undefined ? null : parts[k]);
+  return { intentSha256: intentSha256(normalizedParts(parts)), partsSha256 };
+}
+
+function normalizedParts(parts) {
+  const out = {};
+  for (const k of Object.keys(parts)) out[k] = parts[k] === undefined ? null : parts[k];
+  return out;
+}
+
+/**
+ * Drift over a full projection (see projectionBaseline), judged only on the parts this run WRITES:
+ *   'unbound'   — no binding;
+ *   'none'      — the live projection is what was last applied, or every part about to be written still
+ *                 holds its recorded value (a part someone else changed but this run leaves alone is
+ *                 theirs to keep and is not overwritten, so it is not a conflict);
+ *   'converged' — nothing is to be written (the live parts already equal the desired ones);
+ *   'drift'     — a part about to be written was changed outside the spec since it was last applied,
+ *                 or the binding cannot say which parts moved (no partsSha256) and live ≠ desired.
+ * @param {object|null} binding
+ * @param {object} liveParts     the full live projection
+ * @param {object} desiredParts  the full projection after this run (live parts with the declared ones laid over)
+ */
+function partsDriftVerdict(binding, liveParts, desiredParts) {
+  if (!binding) return 'unbound';
+  const live = projectionBaseline(liveParts);
+  if (binding.intentSha256 === live.intentSha256) return 'none';
+  const desired = projectionBaseline(desiredParts);
+  const changed = Object.keys(desired.partsSha256).filter((k) => desired.partsSha256[k] !== live.partsSha256[k]);
+  if (!changed.length) return 'converged';
+  const recorded = binding.partsSha256 && typeof binding.partsSha256 === 'object' ? binding.partsSha256 : null;
+  if (!recorded) return 'drift';
+  for (const k of changed) {
+    // A part with no recorded value was never applied by this spec: writing it over a value someone
+    // else put there would lose their edit, so only an absent (null) live value is safe to fill.
+    if (recorded[k] === undefined) {
+      if (liveParts[k] !== undefined && liveParts[k] !== null) return 'drift';
+      continue;
+    }
+    if (recorded[k] !== live.partsSha256[k]) return 'drift';
+  }
+  return 'none';
+}
+
+/**
+ * The id a managed artifact must be edited by. An existing binding is the authority: once (kind, key)
+ * is bound, its id — and only its id — names the artifact. A pin or a caller's name resolution that
+ * points elsewhere is a conflict the maker must repair (rebinding silently would edit an artifact the
+ * spec never managed and orphan the bound one), so it refuses instead of choosing.
+ * @param {object|null} binding
+ * @param {{ pinnedId?: string, resolvedId?: string, code: string, key: string }} opts
+ * @returns {{ id: string|null, refusal: object|null }}
+ */
+function boundIdentity(binding, { pinnedId, resolvedId, code, key }) {
+  const norm = (v) => normalizeGuid(v) || String(v == null ? '' : v).trim().toLowerCase();
+  if (binding) {
+    const bound = norm(binding.id);
+    for (const other of [pinnedId, resolvedId]) {
+      if (other !== undefined && other !== null && other !== '' && norm(other) !== bound) {
+        return { id: null, refusal: refusal(key, code, 'the spec names a different artifact than the one this key is bound to; repair the binding explicitly before it can be managed') };
+      }
+    }
+    return { id: String(binding.id), refusal: null };
+  }
+  const id = pinnedId || resolvedId || null;
+  return { id: id ? String(id) : null, refusal: null };
+}
+
+/**
+ * Run one create through the creation-identity port (`ctx.creates.run`) and classify the outcome.
+ * Every new root AND child goes through here: the port records the ids it hands out BEFORE anything
+ * is sent, so a run interrupted after the send can be recovered instead of creating a duplicate.
+ *
+ * `execute({id, childIds})` must perform the local edits and the push, and answer with the
+ * pushChecked shape ({ outcome: 'saved'|'refused'|'unknown', code }). A throw from a LOCAL edit
+ * (before the push) is caught here and answered as refused: nothing was sent.
+ *
+ * @returns {Promise<{ status: 'created'|'adopted'|'refused'|'unknown', id?: string, childIds?: object, code: string, rules?: string[] }>}
+ *   'adopted' means the maker resolved an earlier unknown create by naming the rows it made: execute
+ *   was NOT called and the caller must re-read before it records anything.
+ */
+async function createThroughPort(ctx, request, execute) {
+  if (!ctx || !ctx.creates || typeof ctx.creates.run !== 'function') return { status: 'refused', code: 'creation-port-unavailable' };
+  let pushed = null;
+  let out;
+  try {
+    out = await ctx.creates.run(request, async (ids) => {
+      try {
+        pushed = await execute(ids);
+      } catch (err) {
+        // A local workspace edit threw before any push: nothing reached the service.
+        pushed = { outcome: 'refused', code: codeOf(err) || 'LOCAL_EDIT_FAILED' };
+      }
+      return pushed;
+    });
+  } catch (err) {
+    const raw = err && typeof err.code === 'string' ? err.code : '';
+    if (raw === 'CREATION_PENDING_UNKNOWN') return { status: 'refused', code: 'creation-pending-unknown' };
+    if (raw === 'create-recovery-needed') return { status: 'refused', code: 'creation-recovery-needed' };
+    if (raw === 'CREATE_PORT_INVALID') return { status: 'refused', code: 'creation-request-invalid' };
+    // An earlier create in this run lost its answer: the port sends nothing more until it is resolved.
+    if (raw === 'create-outcome-unknown' && err.outcome === 'not-sent') return { status: 'refused', code: 'creation-blocked-by-unknown' };
+    return { status: 'unknown', code: codeOf(err) || 'WRITE_OUTCOME_UNKNOWN' };
+  }
+  const base = { id: out && out.id, childIds: (out && out.childIds) || {} };
+  if (out && out.outcome === 'adopted') return { status: 'adopted', ...base, code: 'creation-adopted' };
+  if (out && out.outcome === 'created') return { status: 'created', ...base, code: '' };
+  if (out && out.outcome === 'refused') return { status: 'refused', ...base, code: (pushed && pushed.code) || 'PUSH_NOT_SAVED', rules: pushed && pushed.rules };
+  return { status: 'unknown', ...base, code: (pushed && pushed.code) || 'WRITE_OUTCOME_UNKNOWN' };
 }
 
 /**
@@ -222,6 +348,10 @@ module.exports = {
   isAuthorized,
   lookupBinding,
   bindingRecord,
+  projectionBaseline,
+  partsDriftVerdict,
+  boundIdentity,
+  createThroughPort,
   driftVerdict,
   ownershipDriftVerdict,
   ownershipSubsets,

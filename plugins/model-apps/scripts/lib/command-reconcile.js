@@ -12,8 +12,10 @@
 //     through the managed binding the build persists. A caption is NEVER identity — two buttons may
 //     share one, and a rename must keep the row;
 //   * an existing control is adopted only by an explicit `rowId`, or by exactly one proven context
-//     match (same parent, bar, type and JavaScript action) when the maker approved adoption. Several
-//     candidates refuse rather than guess;
+//     match (same parent, bar, type and JavaScript action — library, function AND the parameters the
+//     control would be created with) when the maker approved adoption. Several candidates refuse
+//     rather than guess. One handler commonly dispatches on its parameters, so a row that calls the
+//     same function with other parameters is another command, not this one;
 //   * the full bar is fetched and edited in place, so foreign rows, flyout group rows and every
 //     row's residual columns (the SDK's `bag`) are kept;
 //   * a declared label/icon/action/parameters/hidden/disabled is applied, explicit `false` included;
@@ -41,7 +43,7 @@
 
 const {
   canonicalJson, intentSha256, emptyResult, operation, refusal, isAuthorized,
-  lookupBinding, bindingRecord, driftVerdict, pushIfChanged, normalizeGuid,
+  lookupBinding, bindingRecord, driftVerdict, pushIfChanged, normalizeGuid, createThroughPort,
 } = require('./reconcile-common.js');
 
 const KIND = 'command';
@@ -204,6 +206,14 @@ function actionSig(action) {
   return `${normalizeGuid(action.webResourceId)}|${action.functionName}`;
 }
 
+/** The parameters a node's control runs with: the stated ones, else the bar default a new control gets. */
+function effectiveParameters(node, defaultParameters) {
+  if (!node.action) return undefined;
+  if (node.action.parameters !== undefined) return node.action.parameters;
+  const defaults = defaultParameters || {};
+  return defaults[node.bar] !== undefined ? defaults[node.bar] : defaults.MainTab;
+}
+
 /** The owned fields of a control — what a binding's intentSha256 covers. */
 function ownedProjection(control) {
   const a = control && control.action;
@@ -247,9 +257,10 @@ function editsFor(node, live) {
 
 /**
  * Resolve every desired node to a live row (or to "new"), without writing anything.
+ * @param {object} [defaultParameters]  bar -> default parameters text (what a new control would run with)
  * @returns {Promise<{ resolved: Map<string, object>, refused: object[] }>}
  */
-async function resolveManagedCommands(entity, nodes, liveIndex, ctx) {
+async function resolveManagedCommands(entity, nodes, liveIndex, ctx, defaultParameters) {
   const resolved = new Map(); // keyPath -> { node, live|null, origin, binding }
   const refused = [];
   const claimed = new Set();
@@ -277,15 +288,18 @@ async function resolveManagedCommands(entity, nodes, liveIndex, ctx) {
       origin = 'adopted';
       if (!live) return block(node, null, origin, null, 'command-row-not-found', 'no control with the stated rowId is on this table\'s bar');
     } else if (!parentIsNew && node.action) {
-      // Context adoption: same parent, same bar, same type, same JavaScript library + function.
+      // Context adoption: same parent, same bar, same type, same JavaScript library + function +
+      // parameters (the stated ones, else the bar default this control would be created with).
       // A caption is deliberately not part of it. A control without an action has no context
       // strong enough to prove it is "the same" control, so it is never adopted this way.
       const want = actionSig(node.action);
+      const wantParams = paramsCanon(effectiveParameters(node, defaultParameters));
       const candidates = [...liveIndex.values()].filter((e) => !claimed.has(e.rowId)
         && e.parentRowId === parentRowId
         && (parentRowId !== null || e.bar === node.bar)
         && e.control.type === node.type
-        && actionSig(e.control.action) === want);
+        && actionSig(e.control.action) === want
+        && paramsCanon(e.control.action && e.control.action.parameters) === wantParams);
       if (candidates.length > 1) {
         return block(node, null, 'adopted', null, 'command-adoption-ambiguous', 'several existing controls match this command; name the one to manage with rowId');
       }
@@ -344,7 +358,7 @@ async function planCommandReconcile({ entity, commands, sdk, webResources, defau
     return plan;
   }
   const liveIndex = indexLive(plan.live);
-  const { resolved, refused } = await resolveManagedCommands(ent, plan.nodes, liveIndex, ctx);
+  const { resolved, refused } = await resolveManagedCommands(ent, plan.nodes, liveIndex, ctx, plan.defaultParameters);
   plan.resolved = resolved;
   plan.refused.push(...refused);
 
@@ -387,7 +401,7 @@ function newControl(node, id, defaultParameters) {
       type: 'javascript',
       webResourceId: node.action.webResourceId,
       functionName: node.action.functionName,
-      parameters: node.action.parameters !== undefined ? node.action.parameters : (defaultParameters[node.bar] || defaultParameters.MainTab),
+      parameters: effectiveParameters(node, defaultParameters),
     };
   }
   // Explicit booleans are written as given — `false` included — so the row's stored state is the
@@ -471,33 +485,40 @@ async function applyCommandReconcile(plan, { sdk }, ctx = {}) {
 
   let pushed;
   let ids = null;
-  try {
-    if (creates.length) {
-      const run = await ctx.creates.run({ kind: KIND, key: plan.entity, identity: [plan.entity], childKeys: creates.map((o) => o.target.keyPath) }, async (minted) => {
-        ids = minted.childIds;
-        return write(minted.childIds);
-      });
-      pushed = run && run.result;
-      ids = ids || (run && run.ids && run.ids.childIds);
-    } else {
+  if (creates.length) {
+    // One create operation per table: the new controls are its child slots, keyed by key path, so a
+    // re-run after a lost answer sends the same rows again under the same ids.
+    const created = await createThroughPort(ctx, { kind: KIND, key: plan.entity, identity: [plan.entity], childKeys: creates.map((o) => o.target.keyPath) }, async (minted) => {
+      ids = minted.childIds;
+      return write(minted.childIds);
+    });
+    if (created.status === 'adopted') return recordAdopted(plan, sdk, ctx, created.childIds, result);
+    if (created.status === 'refused') {
+      if (/^creation-/.test(created.code)) result.refused.push(refusal(plan.entity, created.code, 'the creation-identity port did not allow creating controls on this bar now; nothing was written'));
+      else for (const o of [...creates, ...updates]) result.refused.push(refusal(o.key, created.code || 'PUSH_NOT_SAVED', 'the command bar push was refused; nothing was written'));
+      return result;
+    }
+    if (created.status === 'unknown') {
+      for (const o of [...creates, ...updates]) result.unknown.push({ key: o.key, code: created.code || 'WRITE_OUTCOME_UNKNOWN' });
+      return result;
+    }
+    ids = ids || created.childIds;
+  } else {
+    try {
       pushed = await write({});
+    } catch (err) {
+      const code = err && typeof err.code === 'string' && /^[A-Z][A-Z0-9_]+$/.test(err.code) ? err.code : 'WRITE_OUTCOME_UNKNOWN';
+      for (const o of updates) result.unknown.push({ key: o.key, code });
+      return result;
     }
-  } catch (err) {
-    const code = err && typeof err.code === 'string' && /^[A-Z][A-Z0-9_]+$/.test(err.code) ? err.code : 'WRITE_OUTCOME_UNKNOWN';
-    if (code === 'CREATION_PENDING_UNKNOWN') {
-      result.refused.push(refusal(plan.entity, 'creation-pending-unknown', 'an earlier attempt to create controls on this bar has an unknown outcome; resolve it before writing again'));
-    } else {
-      for (const o of [...creates, ...updates]) result.unknown.push({ key: o.key, code });
+    if (!pushed || pushed.outcome === 'unknown') {
+      for (const o of updates) result.unknown.push({ key: o.key, code: (pushed && pushed.code) || 'WRITE_OUTCOME_UNKNOWN' });
+      return result;
     }
-    return result;
-  }
-  if (!pushed || pushed.outcome === 'unknown') {
-    for (const o of [...creates, ...updates]) result.unknown.push({ key: o.key, code: (pushed && pushed.code) || 'WRITE_OUTCOME_UNKNOWN' });
-    return result;
-  }
-  if (pushed.outcome === 'refused') {
-    for (const o of [...creates, ...updates]) result.refused.push(refusal(o.key, pushed.code || 'PUSH_NOT_SAVED', 'the command bar push was refused; nothing was written'));
-    return result;
+    if (pushed.outcome === 'refused') {
+      for (const o of updates) result.refused.push(refusal(o.key, pushed.code || 'PUSH_NOT_SAVED', 'the command bar push was refused; nothing was written'));
+      return result;
+    }
   }
   for (const o of plan.operations) {
     const id = o.target.rowId || (ids && ids[o.target.keyPath]) || null;
@@ -508,12 +529,47 @@ async function applyCommandReconcile(plan, { sdk }, ctx = {}) {
 }
 
 /**
+ * The maker resolved an earlier create of this bar whose answer was lost by naming the rows it made
+ * (the port's `adopt` resolution). Nothing is written now: the bar is re-read, every named row that
+ * is really there is bound to the spec's key (with the baseline of what it holds now), and the run
+ * reports `creation-adopted-rerun` so a second run reconciles those rows like any bound control.
+ */
+async function recordAdopted(plan, sdk, ctx, childIds, result) {
+  let index;
+  try {
+    await sdk.fetchArtifact(KIND, plan.entity);
+    index = indexLive((await sdk.getArtifact(KIND, plan.entity)) || { commandBars: [] });
+  } catch {
+    result.unknown.push({ key: plan.entity, code: 'command-bar-unreadable' });
+    return result;
+  }
+  let missing = false;
+  for (const { node, live } of plan.resolved.values()) {
+    if (live) continue;
+    const id = normalizeGuid(childIds && childIds[node.keyPath]);
+    const row = id && index.get(id);
+    if (!row) { missing = true; continue; }
+    const parentKey = node.isChild ? `${plan.entity}/${node.keyPath.split('/').slice(0, -1).join('/')}` : undefined;
+    result.managedBindings.push(bindingRecord(ctx, { kind: KIND, key: node.bindingKey, id, parentKey, intentSha256: intentSha256(ownedProjection(row.control)), origin: 'created' }));
+  }
+  result.refused.push(missing
+    ? refusal(plan.entity, 'creation-adopted-row-missing', 'a control the resolved create named is not on the bar; repair the binding explicitly before it can be created')
+    : refusal(plan.entity, 'creation-adopted-rerun', 'the controls an earlier create made were bound; run again to apply the spec to them'));
+  return result;
+}
+
+/**
  * The inspection queries that VERIFY managed controls: one per bound control, by row id
  * (the identity), with the caption only as the cross-check the SDK compares exactly. `expect`
- * says what the stored state should make the inspection answer:
- *   served: false when the control or an ancestor is stored disabled — the runtime serves an
+ * says what the stored state should make the inspection answer. Each flag is TRI-STATE: an omitted
+ * spec flag leaves whatever the row holds, so the spec cannot predict it and the expectation is
+ * `undefined` — "not constrained", never a guessed `false`:
+ *   served: false when the control or an ancestor is declared disabled — the runtime serves an
  *           `isdisabled` row on no surface (SDK inspection docs), so its verdict is not `present`;
- *   hidden / ancestorHidden: the hidden flags the single match should report.
+ *           true only when the control and every ancestor declare `disabled: false`; else undefined;
+ *   hidden: the declared hidden flag, else undefined;
+ *   ancestorHidden: true when an ancestor declares `hidden: true`; false when there is no ancestor
+ *           or every ancestor declares `hidden: false`; else undefined.
  * A control with no binding yet is not verifiable by id and is left out (caption discovery is not
  * verification).
  * @param {string} entity
@@ -523,6 +579,8 @@ async function applyCommandReconcile(plan, { sdk }, ctx = {}) {
 function expectedCommandQueries(entity, commands, bindingOf) {
   const ent = String(entity).toLowerCase();
   const out = [];
+  // Tri-state folds: true wins; false only when every member is a declared false; else unknown.
+  const anyOf = (a, b) => (a === true || b === true ? true : a === false && b === false ? false : undefined);
   const walk = (list, parentPath, bar, menuPath, ancestorDisabled, ancestorHidden) => {
     for (const c of list || []) {
       if (!c || typeof c.key !== 'string') continue;
@@ -530,8 +588,9 @@ function expectedCommandQueries(entity, commands, bindingOf) {
       const key = `${ent}/${keyPath}`;
       const here = bar || c.location || 'MainTab';
       const b = bindingOf(key);
-      const disabled = c.disabled === true;
-      const hidden = c.hidden === true;
+      const disabled = typeof c.disabled === 'boolean' ? c.disabled : undefined;
+      const hidden = typeof c.hidden === 'boolean' ? c.hidden : undefined;
+      const disabledHere = anyOf(disabled, ancestorDisabled);
       if (b && b.id) {
         out.push({
           key,
@@ -543,10 +602,10 @@ function expectedCommandQueries(entity, commands, bindingOf) {
             menuPath,
             kind: KIND_OF_TYPE[c.type || 'Button'],
           },
-          expect: { served: !(disabled || ancestorDisabled), hidden, ancestorHidden },
+          expect: { served: disabledHere === undefined ? undefined : !disabledHere, hidden, ancestorHidden },
         });
       }
-      if (Array.isArray(c.children)) walk(c.children, keyPath, here, [...menuPath, String(c.label || '')], ancestorDisabled || disabled, ancestorHidden || hidden);
+      if (Array.isArray(c.children)) walk(c.children, keyPath, here, [...menuPath, String(c.label || '')], disabledHere, anyOf(ancestorHidden, hidden));
     }
   };
   walk(commands, '', '', [], false, false);

@@ -205,7 +205,8 @@ test('adoption: a single context match needs approval, rowId adopts, several mat
   const seedTwo = (srv, n) => {
     for (let i = 1; i <= n; i += 1) {
       srv.seed({ appactionid: `a0a0a0a0-0000-4000-8000-00000000000${i}`, buttonlabeltext: `Old ${i}`, location: 0, sequence: i,
-        onclickeventtype: 2, onclickeventjavascriptfunctionname: 'Contoso.approve', _onclickeventjavascriptwebresourceid_value: WR });
+        onclickeventtype: 2, onclickeventjavascriptfunctionname: 'Contoso.approve', _onclickeventjavascriptwebresourceid_value: WR,
+        onclickeventjavascriptparameters: DEFAULTS.MainTab });
     }
   };
   const cmd = [{ entity: 'account', key: 'approve', label: 'Approve', library: 'cr_lib', function: 'Contoso.approve' }];
@@ -289,9 +290,10 @@ test('the expected inspection queries verify managed controls by row id, and the
   cmds[1].children[0].disabled = true;
   const { sdk } = await reconcile(srv, cmds, ports);
   const queries = expectedCommandQueries('account', cmds, (k) => ports.managed.lookup('command', k));
+  // `more` states no disabled flag, so the spec cannot say whether it is served: unconstrained.
   assert.deepStrictEqual(queries.map((q) => [q.key, q.query.surface, q.query.menuPath, q.query.kind, q.expect.served]), [
     ['account/approve', 'form', [], 'button', true],
-    ['account/more', 'form', [], 'flyout', true],
+    ['account/more', 'form', [], 'flyout', undefined],
     ['account/more/export', 'form', ['More'], 'button', false],
   ]);
   const inspection = await sdk.inspectArtifact('command', 'account', { find: queries.map((q) => q.query) });
@@ -301,4 +303,69 @@ test('the expected inspection queries verify managed controls by row id, and the
   assert.notStrictEqual(verdicts[2][1], 'present', 'a control stored disabled is not served, so it does not verify as present');
   assert.ok(inspection.found[2].elsewhere.includes(queries[2].query.rowId), 'the disabled row is proved elsewhere, not missing');
   assert.deepStrictEqual(queries.filter((q) => q.key === 'account/none'), []);
+});
+
+test('context adoption matches the action parameters: a row calling the same handler with other parameters is not adopted', async () => {
+  const foreign = 'a1a1a1a1-0000-4000-8000-000000000001';
+  const previous = '[{"type":1,"value":"FOREIGN_ACTION"}]';
+  const desired = '[{"type":1,"value":"OWN_ACTION"}]';
+  const seed = (srv, params) => srv.seed({ appactionid: foreign, buttonlabeltext: 'Foreign', location: 0, sequence: 0, onclickeventtype: 2,
+    _onclickeventjavascriptwebresourceid_value: WR, onclickeventjavascriptfunctionname: 'Contoso.dispatch', onclickeventjavascriptparameters: params });
+  const cmd = [{ entity: 'account', key: 'own', label: 'Owned', library: 'cr_lib', function: 'Contoso.dispatch', parameters: desired }];
+
+  let srv = createCommandBarServer();
+  seed(srv, previous);
+  let ports = { managed: fakeManaged(), creates: fakeCreates() };
+  let { result } = await reconcile(srv, cmd, ports, { authorizedAdoption: true });
+  assert.deepStrictEqual(result.refused, []);
+  assert.strictEqual(srv.rows.get(foreign).onclickeventjavascriptparameters, previous, 'the foreign row keeps its parameters');
+  assert.strictEqual(srv.rows.get(foreign).buttonlabeltext, 'Foreign', 'the foreign row keeps its caption');
+  assert.notStrictEqual(ports.managed.lookup('command', 'account/own').id, foreign, 'the spec key is not bound to the foreign row');
+  assert.strictEqual(ports.creates.calls.length, 1, 'a new control is created instead');
+
+  // Neighbour: the same parameters ARE the same context, so an approved adoption still adopts it.
+  srv = createCommandBarServer();
+  seed(srv, desired);
+  ports = { managed: fakeManaged(), creates: fakeCreates() };
+  ({ result } = await reconcile(srv, cmd, ports, { authorizedAdoption: true }));
+  assert.deepStrictEqual(result.refused, []);
+  assert.strictEqual(ports.managed.lookup('command', 'account/own').id, foreign);
+  assert.strictEqual(ports.creates.calls.length, 0);
+});
+
+test('verification does not invent false for an omitted flag: a preserved disabled/hidden row is not required to be served', async () => {
+  const id = 'a2a2a2a2-0000-4000-8000-000000000001';
+  const srv = createCommandBarServer();
+  srv.seed({ appactionid: id, buttonlabeltext: 'Existing', location: 0, sequence: 0, hidden: true, isdisabled: true });
+  const ports = { managed: fakeManaged(), creates: fakeCreates() };
+  const cmds = [{ entity: 'account', key: 'existing', rowId: id, label: 'Existing' }];
+  await reconcile(srv, cmds, ports);
+  assert.strictEqual(srv.rows.get(id).isdisabled, true, 'the omitted flag kept the stored value');
+  const [q] = expectedCommandQueries('account', cmds, (k) => ports.managed.lookup('command', k));
+  assert.notStrictEqual(q.expect.served, true, 'served is not invented from an omitted disabled flag');
+  assert.strictEqual(q.expect.served, undefined);
+  assert.strictEqual(q.expect.hidden, undefined, 'hidden is not invented either');
+  assert.strictEqual(q.expect.ancestorHidden, false, 'a top-level control has no hidden ancestor');
+  // An ancestor that states nothing leaves its children's ancestorHidden unconstrained too.
+  const nested = expectedCommandQueries('account', [{ key: 'm', type: 'FlyoutAnchor', children: [{ key: 'c', hidden: false, disabled: false }] }], () => ({ id }));
+  assert.deepStrictEqual(nested[1].expect, { served: undefined, hidden: false, ancestorHidden: undefined });
+});
+
+test('a lost create resolved by adoption binds the named rows, writes nothing, and the next run reconciles them', async () => {
+  const id = 'a3a3a3a3-0000-4000-8000-000000000001';
+  const srv = createCommandBarServer();
+  // The row the lost send made (it reached the service before its answer was lost).
+  srv.seed({ appactionid: id, buttonlabeltext: 'Approve', location: 0, sequence: 0 });
+  const cmds = [{ entity: 'account', key: 'approve', label: 'Approve', library: 'cr_lib', function: 'Contoso.approve' }];
+  const managed = fakeManaged();
+  const creates = fakeCreates({ pendingUnknown: ['account'], adopt: { account: { id: 'ignored', childIds: { approve: id } } } });
+  let { result } = await reconcile(srv, cmds, { managed, creates });
+  assert.deepStrictEqual(nonGet(srv), [], 'an adopt resolution writes nothing');
+  assert.deepStrictEqual(result.refused.map((r) => r.code), ['creation-adopted-rerun']);
+  assert.deepStrictEqual(result.managedBindings.map((b) => [b.key, b.id]), [['account/approve', id]]);
+  srv.clearLog();
+  ({ result } = await reconcile(srv, [{ ...cmds[0], label: 'Approve now' }], { managed, creates: fakeCreates() }));
+  assert.deepStrictEqual(result.refused, []);
+  assert.strictEqual(srv.rows.get(id).buttonlabeltext, 'Approve now', 'the bound row is edited, not duplicated');
+  assert.ok(!nonGet(srv).includes('post'));
 });
