@@ -4,7 +4,7 @@
 // systemform row, so the typed genPage binding, the ids the SDK allocates and its own missing-page refusal are the bundle's, not a fake's.
 const test = require('node:test');
 const assert = require('node:assert');
-const { validateFormPageEmbeds, planFormPageEmbeds, applyFormPageEmbeds, requireEmbedsApplied, PAGE_ROWSPAN } = require('../lib/form-page-embeds.js');
+const { validateFormPageEmbeds, planFormPageEmbeds, applyFormPageEmbeds, requireEmbedsApplied, runFormPageEmbeds, PAGE_ROWSPAN } = require('../lib/form-page-embeds.js');
 const { createCreatesPortDouble } = require('./helpers/creates-port-double.js');
 const { createMakerSdk } = require('../vendor/cds-maker-sdk.cjs');
 const { createHarness, seedForm, guid, clone } = require('./helpers/form-store-harness.js');
@@ -241,7 +241,7 @@ test('an add is sent under the ids the create port reserved, from inside the por
     assert.deepStrictEqual([binding.id, binding.cellId, binding.uniqueId, binding.origin], [reserved.childIds.control, reserved.childIds.cell, reserved.id, 'created']);
   }
   assert.deepStrictEqual(provision.calls.filter((c) => c[0] === 'push').length, 1, 'one push for the form');
-  assert.deepStrictEqual(ctx.queued, [{ kind: 'form', id: FORM }]);
+  assert.deepStrictEqual(ctx.queued, [{ kind: 'form', id: FORM, table: 'new_ticket', label: 'form new_ticket|Main|Main page embeds' }], 'the table is named, so the build can owe its publish');
   assert.doesNotMatch(JSON.stringify(result), /value-not-for-results/, 'a result carries no input value');
 });
 
@@ -377,6 +377,47 @@ test('a push that fails by value halts like every other form push, before public
   assert.strictEqual(creates.stateOf('formPageEmbed', KEY), 'refused', 'a 412 is a complete answer that wrote nothing');
 });
 
+test('the build step reads page ids from the build\'s Map, reports what it saved, then halts on each requested embed it could not apply', async () => {
+  const stepCtx = (provision, extra = {}) => {
+    const ctx = ctxFor(provision);
+    delete ctx.pageIdOf;
+    const reports = [];
+    return { ...ctx, keyToId: new Map([['case-summary', PAGE]]), report: (r) => reports.push(r), reports, ...extra };
+  };
+  const notesEmbed = { key: 'notes', page: 'case-notes', tab: 'tab_general', section: 'section_general', after: 'new_code' };
+  const halted = (e, expected) => e.name === 'BuildHalt' && e.code === 'form-page-embeds-incomplete'
+    && JSON.stringify(e.notApplied.map((m) => [m.key, m.outcome, m.reason])) === JSON.stringify(expected);
+
+  // A page the build has not got an id for (its stage did not run, or failed): what could be applied is saved and reported, and the build halts.
+  const provision = fakeProvision(formArtifact([general(FIELD_ROWS())]));
+  const ctx = stepCtx(provision);
+  await assert.rejects(runFormPageEmbeds(specWith({ genPages: [{ ...EMBED, after: 'new_name' }, notesEmbed] }), ctx), (e) => halted(e, [[NOTES_KEY, 'unknown', 'page-not-built']])
+    && e.embeds === ctx.reports[0]);
+  assert.strictEqual(ctx.reports.length, 1, 'reported before the halt');
+  assert.deepStrictEqual(ctx.reports[0].saved.map((s) => s.key), [KEY], 'the page the Map names was embedded');
+  assert.deepStrictEqual(ctx.reports[0].managedBindings.map((b) => b.key), [KEY], 'no binding is claimed for the page that was not built');
+  assert.deepStrictEqual(ctx.queued, [{ kind: 'form', id: FORM, table: 'new_ticket', label: 'form new_ticket|Main|Main page embeds' }]);
+
+  // No create journal: nothing is written, and the build halts.
+  const noJournal = fakeProvision(formArtifact([general(FIELD_ROWS())]));
+  const ctx2 = stepCtx(noJournal, { creates: undefined });
+  await assert.rejects(runFormPageEmbeds(specWith({ genPages: [EMBED] }), ctx2), (e) => halted(e, [[KEY, 'refused', 'create-journal-unavailable']]));
+  assert.deepStrictEqual([noJournal.calls.map((c) => c[0]), ctx2.reports[0].managedBindings], [['fetch'], []]);
+
+  // Two live sections answer to the requested name: nothing is guessed, nothing written.
+  const twice = fakeProvision(formArtifact([general(FIELD_ROWS()), general(FIELD_ROWS())]));
+  const ctx3 = stepCtx(twice);
+  await assert.rejects(runFormPageEmbeds(specWith({ genPages: [EMBED] }), ctx3), (e) => halted(e, [[KEY, 'refused', 'section-ambiguous']]));
+  assert.deepStrictEqual([twice.calls.map((c) => c[0]), ctx3.reports[0].managedBindings, ctx3.creates.events], [['fetch'], [], []]);
+
+  // A spec with no form embed reads nothing and answers null; one whose embeds all apply answers the result.
+  const idle = fakeProvision(formArtifact([general(FIELD_ROWS())]));
+  assert.strictEqual(await runFormPageEmbeds(specWith({}), stepCtx(idle)), null);
+  assert.deepStrictEqual(idle.calls, []);
+  const ok = await runFormPageEmbeds(specWith({ genPages: [EMBED] }), stepCtx(fakeProvision(formArtifact([general(FIELD_ROWS())]))));
+  assert.deepStrictEqual(ok.saved.map((s) => s.key), [KEY]);
+});
+
 test('REAL BUNDLE: the embed round-trips through the SDK — reserved ids persisted, spacer rows kept, retarget in place, missing page refused before any write', async () => {
   const pagesInEnv = new Set([PAGE]);
   const pageChecks = [];
@@ -452,6 +493,36 @@ test('REAL BUNDLE: the embed round-trips through the SDK — reserved ids persis
     losePatchAnswer = true;
     await assert.rejects(run([{ ...EMBED, page: 'case-notes', after: 'new_name', inputData: { mode: 'full' } }, { key: 'third', page: 'case-third', tab: 'tab_general', section: 'section_general' }], { 'case-notes': OTHER_PAGE, 'case-third': guid(44) }));
     assert.strictEqual(creates.stateOf('formPageEmbed', 'new_ticket|Main|Main#third'), 'unknown');
+  } finally {
+    h.cleanup();
+  }
+});
+
+test('REAL BUNDLE: the build step embeds through the SDK with the build\'s page-id Map, and a page it has no id for halts it after the save is reported', async () => {
+  const createSdk = (options) => createMakerSdk({ ...options, httpClient: { ...options.httpClient,
+    get: async (url) => {
+      if (!/uxagentprojects/.test(url)) return options.httpClient.get(url);
+      const id = (decodeURIComponent(url).match(/uxagentprojectid eq ([0-9a-f-]{36})/i) || [])[1];
+      return { status: 200, headers: {}, body: { value: id && id.toLowerCase() === PAGE ? [{ uxagentprojectid: id }] : [] } };
+    },
+  } });
+  const h = createHarness({ formId: FORM, createSdk });
+  try {
+    await seedForm(h, [{ name: 'tab_general', label: 'General', columns: [{ sections: [{ name: 'section_general', label: 'General',
+      rows: [{ cells: [{ control: { fieldName: 'new_name' } }] }, { cells: [{ control: { fieldName: 'new_code' } }] }] }] }] }]);
+    const { sdk } = await h.freshSdk();
+    const ctx = ctxFor(sdk);
+    delete ctx.pageIdOf;
+    const reports = [];
+    const writes = h.writes.length;
+    await assert.rejects(runFormPageEmbeds(specWith({ genPages: [{ ...EMBED, after: 'new_name' }, { key: 'notes', page: 'case-notes', tab: 'tab_general', section: 'section_general' }] }),
+      { ...ctx, keyToId: new Map([['case-summary', PAGE]]), report: (r) => reports.push(r) }),
+    (e) => e.code === 'form-page-embeds-incomplete' && e.notApplied.length === 1 && e.notApplied[0].key === NOTES_KEY && e.notApplied[0].reason === 'page-not-built');
+    assert.deepStrictEqual(h.writes.slice(writes).map((w) => w.method), ['patch'], 'one form write, for the page that was built');
+    const rows = (await (await h.freshSdk()).sdk.fetchArtifact('form', FORM)).tabs[0].columns[0].sections[0].rows;
+    assert.deepStrictEqual(shape(rows), ['new_name', `P:${PAGE_ROWSPAN}`, '-', '-', '-', '-', '-', 'new_code']);
+    assert.deepStrictEqual(reports[0].managedBindings.map((b) => [b.key, b.id]), [[KEY, rows[1].cells[0].control.id]]);
+    assert.deepStrictEqual(ctx.queued.map((q) => [q.kind, q.id, q.table]), [['form', FORM, 'new_ticket']]);
   } finally {
     h.cleanup();
   }

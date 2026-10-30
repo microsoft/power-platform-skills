@@ -31,4 +31,17 @@ function resolveTypescriptProvider(provider) {
   return ts;
 }
 
-module.exports = { resolveTypescriptProvider, TYPESCRIPT_PROVIDER_INVALID };
+// The options one caller's compiler is handed on with, in the two shapes its consumers take — so an orchestration resolves it ONCE and cannot mix
+// them up:
+//   parse    the page parsers (lib/page-structure.js pageStructure / pageStructureProblems, lib/typescript-views.js) read the NAMESPACE, as `ts`;
+//            a function handed there is not a compiler, and the parse would fall back to the lexer's guess and report a valid page as cut off.
+//   backend  makeGenpageSdk(env, deps) reads the provider as `typescript` (either shape: it resolves it lazily, when the SDK first compiles);
+//            a `ts` key there is ignored, and the page would be compiled by the vendored compiler instead.
+// No provider: both are empty objects, so a call that spreads them sends exactly what it sent before, and nothing is resolved or loaded.
+function typescriptProviderOptions(provider) {
+  const ts = resolveTypescriptProvider(provider);
+  if (!ts) return { parse: {}, backend: {} };
+  return { parse: { ts }, backend: { typescript: provider } };
+}
+
+module.exports = { resolveTypescriptProvider, typescriptProviderOptions, TYPESCRIPT_PROVIDER_INVALID };

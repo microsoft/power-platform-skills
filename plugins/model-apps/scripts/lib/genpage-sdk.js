@@ -1804,6 +1804,19 @@ function makeGenpageSdk(env, deps = {}) {
       return (await (await getSdk()).getEnvironmentLanguages()).baseLanguage;
     },
 
+    // The unique name of an app, read from its SAVED layer (RetrieveUnpublishedMultiple), so an app that was never published is found too: what names the
+    // app's pages lease (lib/app-operation-lease.js) for a page edit made outside a build (lib/standalone-page-lease.js). null when no app has that id.
+    //   GET /appmodules/Microsoft.Dynamics.CRM.RetrieveUnpublishedMultiple()?$select=appmoduleid,uniquename&$filter=appmoduleid eq <id>
+    //   -> { value: [{ appmoduleid: '<id>', uniquename: 'contoso_sales' }] }
+    // Only the row whose id is the one asked for is read, so an answer that ignored the filter cannot name another app's lease.
+    async appUniqueName(appId) {
+      const id = guidOf(appId, 'app');
+      const { collectionRows } = require('./app-components.js');
+      const rows = await collectionRows((await getSdk()).dataverse, `/appmodules/Microsoft.Dynamics.CRM.RetrieveUnpublishedMultiple()?$select=appmoduleid,uniquename&$filter=appmoduleid eq ${id}`, `app ${id}`);
+      const row = (rows || []).find((r) => r && String(r.appmoduleid || '').replace(/[{}]/g, '').toLowerCase() === id && r.uniquename);
+      return row ? String(row.uniquename) : null;
+    },
+
     // The solution a page is to join (`genpage-upload.js --solution`), read BEFORE the page is written, so a name that is no unmanaged solution — or a page table whose
     // component type the environment cannot say — refuses the upload with nothing made (lib/page-solution.js: why a page is added explicitly, and how).
     //   -> { uniqueName, systemSolution: true }                    a system solution (Default, Active, Basic): it holds every component already, so nothing is read and nothing will be added

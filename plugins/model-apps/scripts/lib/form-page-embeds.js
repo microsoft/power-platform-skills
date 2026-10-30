@@ -241,7 +241,7 @@ async function planFormPageEmbeds(spec, ctx) {
       const pageId = await ctx.pageIdOf(e.page);
       if (!pageId) { unknown.push({ key, kind: OPERATION_KIND, reason: 'page-not-built' }); continue; }
       const base = { key, kind: OPERATION_KIND, destructive: false, publicationScopes: [`form:${formId}`],
-        target: { formId, formKey, embedKey: e.key, pageKey: e.page, pageId }, intentSha256: intentOf(f, e), preconditions: { pageExists: pageId } };
+        target: { formId, formKey, table: lower(f.entity || ''), embedKey: e.key, pageKey: e.page, pageId }, intentSha256: intentOf(f, e), preconditions: { pageExists: pageId } };
       const refuse = (reason) => operations.push({ ...base, action: 'refuse', reason });
       const sections = liveSections(artifact, e.tab, e.section);
       if (sections.length !== 1) { refuse(sections.length ? 'section-ambiguous' : 'section-not-found'); continue; }
@@ -408,7 +408,7 @@ async function applyFormPageEmbeds(plan, ctx) {
     if (!sent.pushed) continue;
     const { requireSuccessfulPush } = require('./entity-provision.js');
     requireSuccessfulPush(pushed, `form ${ops[0].target.formKey} page embeds`, ctx.warn);
-    if (ctx.publication && typeof ctx.publication.queue === 'function') ctx.publication.queue({ kind: 'form', id: formId });
+    if (ctx.publication && typeof ctx.publication.queue === 'function') await ctx.publication.queue({ kind: 'form', id: formId, table: ops[0].target.table, label: `form ${ops[0].target.formKey} page embeds` });
     result.pendingPublish.push({ kind: 'form', id: formId });
     for (const op of updates) {
       result.saved.push({ key: op.key, kind: op.kind, action: op.action, id: op.controlId || null });
@@ -434,7 +434,32 @@ function requireEmbedsApplied(result, phase = 'pages') {
   const words = missing.map((m) => `${m.key} (${m.outcome}: ${m.reason})`).join(', ');
   const halt = new BuildHalt(`the generative pages requested on forms were not all embedded: ${words}`, { phase, code: 'form-page-embeds-incomplete', recoverable: false, retry: RETRY.NEVER });
   halt.notApplied = missing.map(({ key, kind, reason, outcome }) => ({ key, kind, reason, outcome }));
+  // What this step DID save stays with the halt, so the build reports it (and records its bindings) before it stops: a partial save is said, not lost.
+  halt.embeds = result;
   throw halt;
+}
+
+// The page id a build holds for a page reference. The build keeps them in a Map (sdk-build.js reconcilePageIds -> keyToId); a plain object is
+// read by own property only, so a key such as 'constructor' is not an id.
+function pageIdFrom(keyToId, ref) {
+  if (keyToId instanceof Map) return keyToId.get(ref) || null;
+  if (keyToId && typeof keyToId === 'object' && Object.prototype.hasOwnProperty.call(keyToId, ref)) return keyToId[ref] || null;
+  return null;
+}
+
+const hasFormPageEmbeds = (spec) => !!(spec && Array.isArray(spec.forms) && spec.forms.some((f) => f && Array.isArray(f.genPages) && f.genPages.length));
+
+// The build's whole step, so the wiring is one call: plan (fresh form reads), apply (through the create port), then report what was saved and
+// halt on anything requested that was not applied. ctx = planFormPageEmbeds' and applyFormPageEmbeds' ctx, with `keyToId` (the build's page
+// ids) instead of `pageIdOf`, and `report(result)` — called with the result before any halt, so a partial save is reported and its bindings
+// recorded. A spec with no form embed reads and writes nothing, and the step answers null.
+async function runFormPageEmbeds(spec, ctx = {}) {
+  if (!hasFormPageEmbeds(spec)) return null;
+  const pageIdOf = typeof ctx.pageIdOf === 'function' ? ctx.pageIdOf : (ref) => pageIdFrom(ctx.keyToId, ref);
+  const plan = await planFormPageEmbeds(spec, { ...ctx, pageIdOf });
+  const result = await applyFormPageEmbeds(plan, ctx);
+  if (typeof ctx.report === 'function') await ctx.report(result);
+  return requireEmbedsApplied(result, ctx.phase || 'pages');
 }
 
 function bindingOf(op, ids, origin) {
@@ -442,4 +467,4 @@ function bindingOf(op, ids, origin) {
     formId: op.target.formId, pageKey: op.target.pageKey, pageId: op.target.pageId, intentSha256: op.intentSha256, origin };
 }
 
-module.exports = { validateFormPageEmbeds, planFormPageEmbeds, applyFormPageEmbeds, requireEmbedsApplied, sitemapPageRefs, EMBED_KEYS, PLACEMENTS, PAGE_ROWSPAN };
+module.exports = { validateFormPageEmbeds, planFormPageEmbeds, applyFormPageEmbeds, requireEmbedsApplied, runFormPageEmbeds, hasFormPageEmbeds, sitemapPageRefs, EMBED_KEYS, PLACEMENTS, PAGE_ROWSPAN };
