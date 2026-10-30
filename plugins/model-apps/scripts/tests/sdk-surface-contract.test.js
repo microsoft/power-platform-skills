@@ -149,6 +149,9 @@ const SKILL_SDK_SURFACE = [
   // optional (an SDK without it has no cache to forget), which is why a bundle that drops it must be noticed HERE: nothing else would fail.
   'schemaWrite',
   'setEntityIcon',
+  // App Spec `solution.version` (lib/configuration-artifacts.js): the SDK writes the solution row's version, so a bundle
+  // that drops it would turn a declared version into a silent no-op.
+  'setSolutionVersion',
   // Wave 2 header/navigation refresh (`app.headerNavigationRefresh`). Used instead of a raw setting
   // write because the value is a Number TRI-STATE where ON is '2', not '1' — writing '1' is accepted
   // by the API and silently fails to enable the feature. The SDK owns that encoding.
