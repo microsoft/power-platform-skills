@@ -38,7 +38,7 @@ skills/
   deploy/
     SKILL.md                      <- Build and deploy an existing code app
   list-connections/
-    SKILL.md                      <- List Power Platform connections to get connection IDs
+    SKILL.md                      <- List connections (connection IDs; optional on CLI 1.3.0+)
   add-datasource/
     SKILL.md                      <- Router: asks what you need and picks the right add-* skill
   add-connector/
@@ -69,7 +69,7 @@ skills/
 |-------|-------------|
 | `/create-code-app` | Scaffold, configure, and deploy a new Power Apps code app |
 | `/deploy` | Build and deploy an existing code app |
-| `/list-connections` | List Power Platform connections to find connection IDs |
+| `/list-connections` | List Power Platform connections and their IDs (required before adding a connector only on CLIs older than 1.3.0) |
 | `/add-datasource` | Add a data source (routes to the appropriate add-* skill) |
 | `/add-dataverse` | Add Dataverse tables with generated TypeScript models and services |
 | `/add-sharepoint` | Add SharePoint Online connector |
@@ -87,6 +87,10 @@ skills/
 
 Power Apps code apps run in a sandbox — direct HTTP calls (`fetch`, `axios`, Graph API, etc.) do not work at runtime. **All external data access must go through Power Platform connectors.**
 
+### Connections
+
+Every non-Dataverse data source is bound to a connection. With Power Apps CLI 1.3.0+ (which `/create-code-app` installs), `pa app add data-source` finds the connector's connection or creates one, so connector skills omit `-c`. Older CLIs need `-c <connection-id>`. [shared/connector-reference.md](./shared/connector-reference.md) defines both flows and when to ask the user first.
+
 ### Generated Services
 
 `pa app add data-source` generates typed TypeScript services in `src/generated/`:
@@ -97,7 +101,7 @@ Always use generated services for data access.
 
 ### CLI
 
-The Power Apps CLI (`@microsoft/power-apps-cli`) is installed locally via `npm install` as part of the app template. It ships two binaries — grouped **`pa`** (preferred) and flat **`power-apps`** (fallback). **Resolve which one the project has via [shared/cli-binary.md](./shared/cli-binary.md) first**, then invoke it with `npx --no-install <pa|power-apps>` from the project directory — runs natively in bash on all platforms, no PowerShell wrapper needed. Commands below use the canonical grouped `pa` form:
+The Power Apps CLI (`@microsoft/power-apps-cli`) is installed into each project as a dev dependency; the Vite template doesn't include it, so `/create-code-app` adds it. It has shipped two binaries — grouped **`pa`** (preferred) and flat **`power-apps`** (fallback). **Resolve which one the project has via [shared/cli-binary.md](./shared/cli-binary.md) first**, then invoke it with `npx --no-install <pa|power-apps>` from the project directory — runs natively in bash on all platforms, no PowerShell wrapper needed. Commands below use the canonical grouped `pa` form:
 
 ```bash
 pa app push                   # Deploy app
@@ -111,6 +115,9 @@ Always use `npx degit` to create new projects — never `git clone` or manual fi
 
 ```bash
 npx degit microsoft/PowerAppsCodeApps/templates/vite {folder} --force
+cd {folder}
+npm install
+npm install --save-dev "@microsoft/power-apps-cli@^1.3.0"   # the template doesn't include the CLI
 ```
 
 ## Testing Changes
