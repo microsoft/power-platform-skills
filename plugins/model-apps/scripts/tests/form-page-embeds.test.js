@@ -4,7 +4,7 @@
 // systemform row, so the typed genPage binding, the ids the SDK allocates and its own missing-page refusal are the bundle's, not a fake's.
 const test = require('node:test');
 const assert = require('node:assert');
-const { validateFormPageEmbeds, planFormPageEmbeds, applyFormPageEmbeds, requireEmbedsApplied, runFormPageEmbeds, requirePagesPhaseForEmbeds, verifyFormPageEmbed, formEmbedsOfPage, PAGE_ROWSPAN } = require('../lib/form-page-embeds.js');
+const { validateFormPageEmbeds, planFormPageEmbeds, applyFormPageEmbeds, requireEmbedsApplied, runFormPageEmbeds, pagesPhaseMissingForEmbeds, requirePagesPhaseForEmbeds, verifyFormPageEmbed, formEmbedsOfPage, PAGE_ROWSPAN } = require('../lib/form-page-embeds.js');
 const { createCreatesPortDouble } = require('./helpers/creates-port-double.js');
 const { createMakerSdk } = require('../vendor/cds-maker-sdk.cjs');
 const { createHarness, seedForm, guid, clone } = require('./helpers/form-store-harness.js');
@@ -383,6 +383,14 @@ test('a run that builds the forms but not the pages refuses a spec with form emb
   // Let through: every phase; pages with forms; pages without forms (the embed step then says form-not-built); no forms at all; a spec with no embed.
   for (const phases of [PHASES, ['forms', 'pages'], ['pages'], ['solution', 'data-model', 'sample-data']]) assert.strictEqual(requirePagesPhaseForEmbeds(embedded, phases), undefined, phases.join(','));
   assert.strictEqual(requirePagesPhaseForEmbeds(specWith({}), ['solution', 'data-model', 'forms', 'app-shell']), undefined, 'no embed: a forms-only run is as before');
+  // The rule a dry run reads to mark its plan: the same keys, and the halt's message is its reason with what the apply did.
+  const why = `the generative pages requested on forms are embedded by the pages phase, which this run does not include: ${KEY}, ${NOTES_KEY}`;
+  const missing = pagesPhaseMissingForEmbeds(embedded, ['solution', 'data-model', 'forms', 'app-shell']);
+  assert.deepStrictEqual(missing, { notApplied: missing.notApplied, why });
+  assert.deepStrictEqual(missing.notApplied.map((m) => m.key), [KEY, NOTES_KEY]);
+  assert.throws(() => requirePagesPhaseForEmbeds(embedded, ['forms']), (e) => e.message === `${why}. The build stopped before writing anything; run it with the pages phase (a full build).`);
+  for (const phases of [PHASES, ['forms', 'pages'], ['pages'], ['solution', 'data-model', 'sample-data']]) assert.strictEqual(pagesPhaseMissingForEmbeds(embedded, phases), undefined, phases.join(','));
+  assert.strictEqual(pagesPhaseMissingForEmbeds(specWith({}), ['forms']), undefined);
 });
 
 // Two forms, each embedding the same page; the second form's provision and publication can be made to fail. A saved form stays saved.

@@ -439,7 +439,9 @@ const hasFormPageEmbeds = (spec) => !!(spec && Array.isArray(spec.forms) && spec
 // form the spec names and end without one embed it asks for, and nothing would say so. Refused before anything is written (phase
 // 'preflight', never retried: a run again selects the same phases); the halt names each embed key. Every other phase set is let through:
 // a run with the pages phase embeds (or says form-not-built when it has no forms), and one with neither builds no form to embed on.
-function requirePagesPhaseForEmbeds(spec, phases) {
+// The rule itself is pagesPhaseMissingForEmbeds — { notApplied, why } for a phase set it refuses, else undefined — which a dry run reads
+// too, to mark the plan with the halt an apply would meet.
+function pagesPhaseMissingForEmbeds(spec, phases) {
   if (!hasFormPageEmbeds(spec) || !Array.isArray(phases) || !phases.includes('forms') || phases.includes('pages')) return undefined;
   const notApplied = [];
   for (const f of spec.forms) {
@@ -447,11 +449,17 @@ function requirePagesPhaseForEmbeds(spec, phases) {
     const formKey = appSpec().formIdentityKey(f);
     for (const e of f.genPages) notApplied.push({ key: `${formKey}#${e && e.key}`, kind: OPERATION_KIND, reason: 'pages-phase-not-selected', outcome: 'unknown' });
   }
+  return { notApplied, why: `the generative pages requested on forms are embedded by the pages phase, which this run does not include: ${notApplied.map((m) => m.key).join(', ')}` };
+}
+
+function requirePagesPhaseForEmbeds(spec, phases) {
+  const missing = pagesPhaseMissingForEmbeds(spec, phases);
+  if (!missing) return undefined;
   const { BuildHalt } = require('./entity-provision.js');
   const { RETRY } = require('./retry-policy.js');
-  const halt = new BuildHalt(`the generative pages requested on forms are embedded by the pages phase, which this run does not include: ${notApplied.map((m) => m.key).join(', ')}. `
-    + 'The build stopped before writing anything; run it with the pages phase (a full build).', { phase: 'preflight', code: 'form-page-embeds-incomplete', recoverable: false, retry: RETRY.NEVER });
-  halt.notApplied = notApplied;
+  const halt = new BuildHalt(`${missing.why}. The build stopped before writing anything; run it with the pages phase (a full build).`,
+    { phase: 'preflight', code: 'form-page-embeds-incomplete', recoverable: false, retry: RETRY.NEVER });
+  halt.notApplied = missing.notApplied;
   throw halt;
 }
 
@@ -594,4 +602,4 @@ function bindingOf(op, ids, origin) {
     formId: op.target.formId, pageKey: op.target.pageKey, pageId: op.target.pageId, intentSha256: op.intentSha256, origin };
 }
 
-module.exports = { validateFormPageEmbeds, planFormPageEmbeds, applyFormPageEmbeds, requireEmbedsApplied, runFormPageEmbeds, hasFormPageEmbeds, requirePagesPhaseForEmbeds, verifyFormPageEmbed, formEmbedsOfPage, sitemapPageRefs, EMBED_KEYS, PLACEMENTS, PAGE_ROWSPAN };
+module.exports = { validateFormPageEmbeds, planFormPageEmbeds, applyFormPageEmbeds, requireEmbedsApplied, runFormPageEmbeds, hasFormPageEmbeds, pagesPhaseMissingForEmbeds, requirePagesPhaseForEmbeds, verifyFormPageEmbed, formEmbedsOfPage, sitemapPageRefs, EMBED_KEYS, PLACEMENTS, PAGE_ROWSPAN };
