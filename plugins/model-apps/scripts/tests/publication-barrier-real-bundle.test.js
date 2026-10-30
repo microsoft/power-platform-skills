@@ -30,11 +30,11 @@ const lostWrite = (sdk) => new Proxy(sdk, { get(t, p) {
 } });
 const envelopes = (srv, table, from = 0) => srv.writes.slice(from).filter((w) => /PublishXml/.test(w.url) && JSON.stringify(w.body).includes(`<entity>${table}</entity>`)).length;
 
-async function setup(publish, barrier = createPublicationBarrier()) {
+async function setup(publish, barrier = createPublicationBarrier(), { recordBinding } = {}) {
   const srv = createRowTableServer({ tables: { savedqueries: 'savedqueryid', savedqueryvisualizations: 'savedqueryvisualizationid' } });
   const sdk = await srv.newSdk();
   const ctx = { managed: fakeManaged(), creates: passThroughCreates() };
-  const paths = buildPublishPaths({ sdk, client: srv.httpClient, publish, barrier });
+  const paths = buildPublishPaths({ sdk, client: srv.httpClient, publish, barrier, recordBinding });
   const apply = async (kind, wanted, { readFails = false, lost = false } = {}) => {
     const writer = lost ? lostWrite(sdk) : readFails ? failingReadBack(sdk) : sdk;
     if (kind === 'view') {
@@ -164,6 +164,73 @@ for (const publish of [false, true]) {
     assert.ok(withBarrier.some(([, url]) => /PublishXml/.test(url)), 'the clean run does publish');
     assert.equal(barrier.active, false);
     assert.deepEqual(barrier.withheld(), []);
+  });
+
+  // The managed-artifacts store's write of a binding fails (a local disk error) after a clean save: the row is
+  // saved but its settlement did not finish, so its table must not be published — not even by an obligation a
+  // clean sibling created earlier — and the binding is never treated as recorded.
+  const bindingStore = () => {
+    const store = { fail: false, recorded: [] };
+    store.recordBinding = (b) => {
+      if (store.fail) throw Object.assign(new Error('binding persistence EIO'), { code: 'EIO' });
+      store.recorded.push(b.key);
+    };
+    return store;
+  };
+  for (const drain of ['the settle of a halted build', 'every publication path']) {
+    test(`binding (${phase}): a binding not recorded after a clean save withholds its table from ${drain}, owed obligations included`, async () => {
+      const store = bindingStore();
+      const s = await setup(publish, createPublicationBarrier(), { recordBinding: store.recordBinding });
+      assert.equal((await s.paths.settle('view account/Earlier view', await s.apply('view', view({ name: 'Earlier view' })))).ok, true);
+      assert.equal(s.paths.owed.size, publish ? 1 : 0, 'with the publish phase the earlier view owes the table a publish');
+      const mark = s.srv.writes.length;
+      const unsettled = await s.apply('view', view({ name: 'Saved but unsettled' }));
+      assert.equal(unsettled.refused.length + unsettled.unknown.length, 0);
+      assert.equal(unsettled.managedBindings.length, 1);
+      assert.equal(unsettled.pendingPublish.length, 1);
+      store.fail = true;
+      await assert.rejects(s.paths.settle('view account/Saved but unsettled', unsettled), /binding persistence EIO/);
+      store.fail = false;
+      assert.equal((await s.paths.settle('view account/Sibling view', await s.apply('view', view({ name: 'Sibling view' })))).ok, true);
+      if (drain === 'every publication path') await drainAll(s);
+      else await s.paths.halt();
+      assert.equal(envelopes(s.srv, 'account', mark), 0, 'a table envelope would also ship the row whose binding was not recorded');
+      assert.deepEqual(s.barrier.withheld().map((w) => [w.table, w.blockedBy]), [['account', ['view account/Saved but unsettled (its managed binding was not recorded)']]]);
+      assert.deepEqual(unsettled.pendingPublish.map((p) => p.withheld), [true]);
+      assert.equal(store.recorded.length, 2, 'the earlier and the sibling view are recorded');
+      assert.equal(store.recorded.includes(unsettled.managedBindings[0].key), false, 'the failed binding is not treated as recorded');
+      assert.equal(unsettled.saved.length, 1, 'the created row is still reported for the solution and undo bookkeeping');
+    });
+  }
+
+  test(`binding (${phase}): another table is still published once after a binding failure on account`, async () => {
+    const store = bindingStore();
+    const s = await setup(publish, createPublicationBarrier(), { recordBinding: store.recordBinding });
+    store.fail = true;
+    await assert.rejects(s.paths.settle('view account/Saved but unsettled', await s.apply('view', view({ name: 'Saved but unsettled' }))), /EIO/);
+    store.fail = false;
+    assert.equal((await s.paths.settle('view contact/Contacts', await s.apply('view', view({ entity: 'contact', name: 'Contacts' })))).ok, true);
+    await drainAll(s, { app: false });
+    assert.equal(envelopes(s.srv, 'contact'), 1);
+    assert.equal(envelopes(s.srv, 'account'), 0);
+    assert.deepEqual(s.barrier.blockedTables(), ['account']);
+  });
+
+  test(`binding (${phase}): a run whose bindings are all recorded sends exactly the requests it sends with no store`, async () => {
+    const trail = async (store) => {
+      const s = await setup(publish, createPublicationBarrier(), { recordBinding: store && store.recordBinding });
+      const v = await s.apply('view', view());
+      assert.deepEqual(await s.paths.settle('view', v), { ok: true });
+      assert.deepEqual(await s.paths.settle('chart', await s.apply('chart', chart())), { ok: true });
+      await drainAll(s, { held: ['account'] });
+      assert.equal(s.barrier.active, false);
+      return s.srv.writes.map((w) => [w.verb, w.url.replace(/[0-9a-f]{8}-[0-9a-f-]{27}/g, '<id>'), /PublishXml/.test(w.url) ? JSON.stringify(w.body) : '']);
+    };
+    const store = bindingStore();
+    const recorded = await trail(store);
+    assert.deepEqual(recorded, await trail(null));
+    assert.equal(store.recorded.length, 2, 'one binding recorded for the view and one for the chart');
+    assert.ok(recorded.some(([, url]) => /PublishXml/.test(url)), 'the clean run does publish');
   });
 }
 
@@ -399,4 +466,49 @@ test('settlement blocks the table before it reports, so a reporting failure cann
   assert.match(remedyFor('view-columns-removal-not-authorized'), /destructive approval/);
   assert.match(remedyFor('quick-find-empty-not-authorized'), /destructive approval/);
   assert.equal(remedyFor('view-write-unknown'), 'repair and rerun');
+});
+
+test('settlement withholds every pending table of a result whose binding is not recorded, and keeps the failure', () => {
+  const barrier = createPublicationBarrier();
+  const settled = [];
+  const lines = [];
+  const recorded = [];
+  let fail = true;
+  const settle = createFeatureSettlement({
+    barrier,
+    settled,
+    markIncomplete: (phase, line) => lines.push(line),
+    recordBinding: (b) => {
+      if (fail) throw Object.assign(new Error('binding persistence EIO'), { code: 'EIO' });
+      recorded.push(b.key);
+    },
+  });
+  const scope = (table, id) => ({ key: `${table}/${id}`, scope: { type: 'view', id, table } });
+  const clean = { saved: [{}, {}], managedBindings: [{ kind: 'view', key: 'account/a' }], refused: [], unknown: [], pendingPublish: [scope('account', '1'), scope('Contact', '2')] };
+  assert.throws(() => settle('views', 'view account/a', clean), (err) => err.code === 'EIO');
+  assert.deepEqual(barrier.blockedTables(), ['account', 'contact']);
+  assert.deepEqual(clean.pendingPublish.map((p) => p.withheld), [true, true]);
+  assert.deepEqual(settled, [], 'nothing is scheduled for publication');
+  assert.deepEqual(recorded, []);
+
+  // A result that wrote nothing (an unchanged view) has nothing to withhold: the failure still escapes.
+  const unchanged = { saved: [], managedBindings: [{ kind: 'view', key: 'lead/u' }], refused: [], unknown: [], pendingPublish: [] };
+  assert.throws(() => settle('views', 'view lead/u', unchanged), /binding persistence EIO/);
+  assert.deepEqual(barrier.blockedTables(), ['account', 'contact']);
+
+  // A failed result whose binding is not recorded either: blocked and reported once, the binding failure escapes.
+  const failed = { saved: [{}], managedBindings: [{ kind: 'chart', key: 'opportunity/c' }], refused: [{ code: 'chart-title-not-stored', message: 'title' }], unknown: [],
+    pendingPublish: [{ key: 'opportunity/c', scope: { type: 'chart', id: '3', table: 'opportunity' }, withheld: true }] };
+  assert.throws(() => settle('charts', 'chart opportunity/c', failed), /binding persistence EIO/);
+  assert.deepEqual(barrier.withheld().find((w) => w.table === 'opportunity').blockedBy, ['chart opportunity/c (chart-title-not-stored)', 'chart opportunity/c (its managed binding was not recorded)']);
+  assert.deepEqual(lines, ['chart opportunity/c: chart-title-not-stored — title']);
+
+  // Recorded bindings: the result settles exactly as without a store, and unrelated tables stay publishable.
+  fail = false;
+  const other = { saved: [{}], managedBindings: [{ kind: 'view', key: 'incident/o' }], refused: [], unknown: [], pendingPublish: [scope('incident', '4')] };
+  assert.deepEqual(settle('views', 'view incident/o', other), { ok: true });
+  assert.deepEqual(settled, [{ scope: other.pendingPublish[0].scope, label: 'view incident/o' }]);
+  assert.equal(other.pendingPublish[0].withheld, undefined);
+  assert.deepEqual(recorded, ['incident/o']);
+  assert.equal(barrier.blocks('incident'), false);
 });

@@ -364,13 +364,30 @@ function remedyFor(code) {
  *   2. each refusal and unknown is reported as required work not done (`markIncomplete(phase, line,
  *      detail)`), with its code and remedy — a later artifact still runs, but the run ends incomplete;
  *   3. the result's managed bindings are recorded (`recordBinding`; skipped when the build has no store),
- *      even when reporting threw;
+ *      even when reporting threw. A binding the store cannot record (a local write error) leaves a saved row
+ *      whose settlement did not finish, so before that error escapes, the table of every scope the result
+ *      still carries is blocked on the barrier — an obligation an earlier, clean artifact left on the same
+ *      table must not publish the row either — and those scopes are marked `withheld`. The error is kept
+ *      and rethrown: the binding is never treated as recorded, and nothing is scheduled;
  *   4. a clean result's publication scopes are scheduled on `settled` ([{ scope, label }]) for the phase
  *      to commit onto the build's own queues; a result that is not clean schedules none.
  */
 function createFeatureSettlement({ barrier, markIncomplete, settled, recordBinding } = {}) {
   if (typeof markIncomplete !== 'function') throw new TypeError('createFeatureSettlement: markIncomplete must be a function');
   if (!Array.isArray(settled)) throw new TypeError('createFeatureSettlement: settled must be an array');
+  const recordBindings = (artifactLabel, r) => {
+    if (typeof recordBinding !== 'function') return;
+    try {
+      for (const b of (r && r.managedBindings) || []) recordBinding(b);
+    } catch (err) {
+      // The barrier's own tableKey ignores a scope without a table (nothing of a table to withhold).
+      for (const p of (r && r.pendingPublish) || []) {
+        if (barrier && p && p.scope) barrier.block(p.scope.table, `${artifactLabel} (its managed binding was not recorded)`);
+        if (p) p.withheld = true;
+      }
+      throw err;
+    }
+  };
   return function settleFeatureResult(phase, artifactLabel, r) {
     const refused = (r && r.refused) || [];
     const unknown = (r && r.unknown) || [];
@@ -380,7 +397,7 @@ function createFeatureSettlement({ barrier, markIncomplete, settled, recordBindi
       for (const x of refused) markIncomplete(phase, `${artifactLabel}: ${x.code} — ${x.message}`, { code: x.code, remedy: remedyFor(x.code) });
       for (const x of unknown) markIncomplete(phase, `${artifactLabel}: ${x.code} — ${x.message}`, { code: x.code, unknownOutcome: true, remedy: remedyFor(x.code) });
     } finally {
-      if (typeof recordBinding === 'function') for (const b of (r && r.managedBindings) || []) recordBinding(b);
+      recordBindings(artifactLabel, r);
     }
     if (ok) for (const scope of settledPublications(r)) settled.push({ scope, label: artifactLabel });
     return { ok };

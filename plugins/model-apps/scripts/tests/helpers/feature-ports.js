@@ -209,7 +209,7 @@ function buildPublicationQueues() {
  * guards it. Everything is published through the real bundle (`sdk`) or the raw client (`client`), so a
  * test counts the PublishXml requests on the wire. `publish` is the publish phase in the run
  * (`has('publish') && publish`). `barrier: null` is the build as it was before the barrier, for
- * comparing request trails.
+ * comparing request trails. `recordBinding` is the managed-artifacts store's write, when the run has one.
  *   settle(label, result)  settlement + drain: a result that is not clean notes the barrier; a clean
  *                          one's scopes go to the chart map (charts) or the view publisher (views)
  *   publishReconciled      the reconcile publisher: immediate without the publish phase, else owed
@@ -221,7 +221,7 @@ function buildPublicationQueues() {
  *   publishPhase()         the publish phase: one target per table from created views, charts, owed
  *   halt(warn)             the settle of a halted build over what is still owed (settleOwedPublishes)
  */
-function buildPublishPaths({ sdk, client, publish, barrier = null }) {
+function buildPublishPaths({ sdk, client, publish, barrier = null, recordBinding }) {
   const { preAppTables, publishTablesXml } = require('../../lib/table-publish.js');
   const { settleOwedPublishes } = require('../../lib/sdk-build.js');
   const { createFeatureSettlement } = require('../../lib/reconcile-common.js');
@@ -236,6 +236,7 @@ function buildPublishPaths({ sdk, client, publish, barrier = null }) {
     barrier,
     settled,
     markIncomplete: (phase, line, detail) => incomplete.push({ phase, line, ...detail }),
+    recordBinding,
   });
   const owed = new Map();
   const reconciled = new Set();
