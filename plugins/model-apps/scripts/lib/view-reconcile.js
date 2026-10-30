@@ -1,0 +1,422 @@
+'use strict';
+// Declared view reconciliation — `views[].reconcile: "declared"`.
+//
+// The legacy path (sdk-build reconcileView) only UNIONS new columns into an existing view and
+// warns that authored filters and sort are not reapplied. A declared view instead converges the
+// authored parts of the view to the spec:
+//   * columns, in the declared order (a column may come from a joined table);
+//   * the base filter (with `activeOnly`, as viewDef builds it) and filters on joined tables;
+//   * sort, including sort on a joined table;
+//   * joins — `linkEntities: [{ name, from, to, alias?, linkType?, filters? }]`;
+//   * the description, when the spec sets one.
+// Everything else round-trips through the SDK's lossless bags (types/view.ts `fetchBag`/
+// `layoutBag`): per-cell attributes, link-entity options, the Quick Find filter, undeclared joins.
+//
+// Two things the typed layer cannot carry are REFUSED rather than written over:
+//   * a base filter the typed tree cannot represent (multi-<value> `in` conditions, a link-entity
+//     inside a filter). MEASURED on the bundle: such a view reads back with an EMPTY typed filter,
+//     and writing a typed filter then emits a SECOND <filter> beside the untouched original — the
+//     view would AND both instead of replacing the old one, so the edit is refused;
+//   * a live joined-table column the bundle reads back without its join (a layout cell
+//     `acct.name` whose <attribute> carries no alias). MEASURED: any columns write re-emits such
+//     a cell as `<attribute name="acct.name" />` on the BASE table — an attribute that does not
+//     exist — so a declared columns change on that view is refused.
+//
+// Identity: an optional `viewId` (environment-bound edit pin), else the exact name on the table
+// (the build's existing view identity). A view no binding owns is shown as an adoption and needs
+// approval before its first write; a bound view whose owned parts were changed elsewhere (drift)
+// is refused until the spec is refreshed or the overwrite is approved. A no-op sends nothing.
+
+const {
+  emptyResult,
+  operation,
+  refusal,
+  isAuthorized,
+  lookupBinding,
+  bindingRecord,
+  driftVerdict,
+  intentSha256,
+  canonicalJson,
+  pushIfChanged,
+  queuePublication,
+  normalizeGuid,
+  rulesOf,
+} = require('./reconcile-common.js');
+
+const NAME_RE = /^[a-z_][a-z0-9_]{0,127}$/i;
+const LINK_TYPES = new Set(['inner', 'outer']);
+
+/** True when a view spec opted into declared reconciliation; anything else keeps the legacy union path. */
+function isDeclaredView(v) {
+  return !!v && v.reconcile === 'declared';
+}
+
+const lc = (s) => String(s).toLowerCase();
+const refNameOf = (link) => lc(link.alias || link.name);
+
+function compileConditions(list, { at, entity, refs, resolveValue, errors }) {
+  const conditions = [];
+  const groups = [];
+  (list || []).forEach((f, i) => {
+    if (!f || typeof f !== 'object' || typeof f.attr !== 'string' || !NAME_RE.test(f.attr)) {
+      errors.push({ path: `${at}[${i}]`, message: 'a filter needs attr (a column logical name)' });
+      return;
+    }
+    const scope = f.relatedEntity === undefined ? undefined : lc(f.relatedEntity);
+    if (scope !== undefined && refs && !refs.has(scope)) {
+      errors.push({ path: `${at}[${i}].relatedEntity`, message: `'${f.relatedEntity}' is not the alias or name of a declared join` });
+      return;
+    }
+    const attr = lc(f.attr);
+    const op = f.op || 'eq';
+    const scoped = (c) => (scope ? { ...c, entityname: scope } : c);
+    if (op === 'in' || op === 'not-in') {
+      if (!Array.isArray(f.values) || f.values.length === 0) {
+        errors.push({ path: `${at}[${i}].values`, message: `'${op}' needs a non-empty values list` });
+        return;
+      }
+      // As viewDef builds it: the SDK's typed condition is single-valued, so in/not-in become a
+      // nested or/and group of eq/ne conditions.
+      const subOp = op === 'in' ? 'eq' : 'ne';
+      groups.push({ type: op === 'in' ? 'or' : 'and', conditions: f.values.map((x) => scoped({ attribute: attr, operator: subOp, value: String(resolveValue(entity, attr, x)) })), groups: [] });
+      return;
+    }
+    const cond = { attribute: attr, operator: op };
+    if (f.value !== undefined) cond.value = String(resolveValue(entity, attr, f.value));
+    conditions.push(scoped(cond));
+  });
+  return { conditions, groups };
+}
+
+/**
+ * Compile a declared view spec into the typed parts it owns. Pure.
+ * @param {object} v  the App Spec view
+ * @param {object} [o] { primaryName, resolveValue(entity, attr, value) } — resolveValue maps an option
+ *                     label to its value as viewDef's resolveFilterValue does; default is String.
+ * @returns {{ errors: Array<{path,message}>, intent: object|null }}
+ */
+function compileViewIntent(v, o = {}) {
+  const errors = [];
+  const at = 'views[]';
+  const resolveValue = typeof o.resolveValue === 'function' ? o.resolveValue : (_e, _a, x) => x;
+  if (!v || typeof v.entity !== 'string' || typeof v.name !== 'string') {
+    return { errors: [{ path: at, message: 'a view needs entity and name' }], intent: null };
+  }
+  const entity = lc(v.entity);
+  if (v.viewId !== undefined && !normalizeGuid(v.viewId)) errors.push({ path: `${at}.viewId`, message: 'viewId must be a GUID' });
+
+  const links = [];
+  const refs = new Set();
+  (v.linkEntities || []).forEach((l, i) => {
+    const p = `${at}.linkEntities[${i}]`;
+    if (!l || typeof l !== 'object') { errors.push({ path: p, message: 'a join must be an object' }); return; }
+    for (const k of ['name', 'from', 'to']) {
+      if (typeof l[k] !== 'string' || !NAME_RE.test(l[k])) errors.push({ path: `${p}.${k}`, message: `${k} must be a logical name` });
+    }
+    if (l.alias !== undefined && (typeof l.alias !== 'string' || !NAME_RE.test(l.alias))) errors.push({ path: `${p}.alias`, message: 'alias must be a simple name' });
+    if (l.linkType !== undefined && !LINK_TYPES.has(l.linkType)) errors.push({ path: `${p}.linkType`, message: 'linkType must be inner or outer' });
+    if (typeof l.name !== 'string') return;
+    const ref = refNameOf(l);
+    if (refs.has(ref)) errors.push({ path: `${p}.alias`, message: `two joins are both called '${ref}'; give each its own alias` });
+    refs.add(ref);
+    const link = { name: lc(l.name), from: lc(l.from || ''), to: lc(l.to || '') };
+    if (l.alias) link.alias = lc(l.alias);
+    if (l.linkType) link.linkType = l.linkType;
+    if (l.filters !== undefined) {
+      const c = compileConditions(l.filters, { at: `${p}.filters`, entity: link.name, refs: null, resolveValue, errors });
+      link.filters = { type: 'and', conditions: c.conditions, groups: c.groups };
+    }
+    links.push(link);
+  });
+
+  const columns = [];
+  const seenCols = new Set();
+  const declaredCols = v.columns && v.columns.length ? v.columns : (o.primaryName ? [o.primaryName] : []);
+  declaredCols.forEach((c, i) => {
+    const p = `${at}.columns[${i}]`;
+    const col = typeof c === 'string' ? { name: c } : c;
+    if (!col || typeof col.name !== 'string' || !/^[a-z_][a-z0-9_.]{0,255}$/i.test(col.name)) {
+      errors.push({ path: p, message: 'a column needs a logical name' });
+      return;
+    }
+    const out = {};
+    if (col.relatedEntity !== undefined) {
+      const scope = lc(col.relatedEntity);
+      if (!refs.has(scope)) { errors.push({ path: `${p}.relatedEntity`, message: `'${col.relatedEntity}' is not the alias or name of a declared join` }); return; }
+      const source = lc(col.sourceAttribute || col.name.split('.').pop());
+      out.name = col.name.includes('.') ? lc(col.name) : `${scope}.${source}`;
+      out.relatedEntity = scope;
+      out.sourceAttribute = source;
+    } else {
+      if (col.name.includes('.')) { errors.push({ path: `${p}.relatedEntity`, message: 'a joined-table column must name its join in relatedEntity' }); return; }
+      out.name = lc(col.name);
+    }
+    if (col.width !== undefined) {
+      if (!Number.isInteger(col.width) || col.width < 0) { errors.push({ path: `${p}.width`, message: 'width must be a whole number of pixels' }); return; }
+      out.width = col.width;
+    }
+    if (seenCols.has(out.name)) { errors.push({ path: p, message: `column '${out.name}' is listed twice` }); return; }
+    seenCols.add(out.name);
+    columns.push(out);
+  });
+
+  const base = compileConditions(v.filters, { at: `${at}.filters`, entity, refs, resolveValue, errors });
+  if (v.activeOnly !== false) base.conditions.unshift({ attribute: 'statecode', operator: 'eq', value: '0' });
+  const sort = [];
+  (v.sort || []).forEach((s, i) => {
+    if (!s || typeof s.attr !== 'string' || !NAME_RE.test(s.attr)) { errors.push({ path: `${at}.sort[${i}]`, message: 'a sort needs attr' }); return; }
+    const scope = s.relatedEntity === undefined ? '' : lc(s.relatedEntity);
+    if (scope && !refs.has(scope)) { errors.push({ path: `${at}.sort[${i}].relatedEntity`, message: `'${s.relatedEntity}' is not the alias or name of a declared join` }); return; }
+    // '' is EXPLICITLY the view's own table (types/view.ts SortExpression.entityname): a declared
+    // sort without a join must not inherit the scope an old <order> had.
+    sort.push({ attribute: lc(s.attr), descending: s.dir === 'desc', entityname: scope });
+  });
+
+  const intent = {
+    key: typeof v.key === 'string' && v.key ? v.key : `${entity}/${v.name}`,
+    entity,
+    name: v.name,
+    viewId: v.viewId !== undefined ? normalizeGuid(v.viewId) : '',
+    columns,
+    filters: { type: 'and', conditions: base.conditions, groups: base.groups },
+    sort,
+    linkEntities: links,
+    description: typeof v.description === 'string' && v.description.trim() ? v.description.trim() : undefined,
+  };
+  return { errors, intent: errors.length ? null : intent };
+}
+
+/** The ViewArtifact (without id) a NEW declared view is created from — viewDef plus joins. */
+function viewCreateArtifact(intent) {
+  return {
+    name: intent.name,
+    description: intent.description || '',
+    entityLogicalName: intent.entity,
+    queryType: 0,
+    isDefault: false,
+    columns: intent.columns.map((c, i) => ({ ...c, width: c.width === undefined ? 100 : c.width, order: i })),
+    filters: intent.filters,
+    sort: intent.sort,
+    linkEntities: intent.linkEntities,
+  };
+}
+
+// --- the live side ---------------------------------------------------------------------------
+
+/** Count the <condition> nodes under a HybridBag node, recursively. Bag nodes are { n, a, c }. */
+function countConditions(node) {
+  if (!node || typeof node !== 'object') return 0;
+  const kids = Array.isArray(node.c) ? node.c : [];
+  return (node.n === 'condition' ? 1 : 0) + kids.reduce((s, k) => s + countConditions(k && k.node ? k.node : k), 0);
+}
+function hasNode(node, test) {
+  if (!node || typeof node !== 'object') return false;
+  if (test(node)) return true;
+  return (Array.isArray(node.c) ? node.c : []).some((k) => hasNode(k && k.node ? k.node : k, test));
+}
+const attrOf = (node, name) => ((Array.isArray(node.a) ? node.a : []).find((p) => p[0] === name) || [])[1];
+const typedConditionCount = (g) => (g ? (g.conditions || []).length + (g.groups || []).reduce((s, x) => s + typedConditionCount(x), 0) : 0);
+
+/**
+ * True when the view's BASE filter holds something the typed tree does not show. The fetch bag is
+ * lossless: { a, c: [{ i, node: { n: 'entity', a, c: [ {n:'attribute'}, {n:'filter', c:[...]}, ... ] } }] }.
+ * The entity-level <filter> nodes (except the Quick Find one, `isquickfindfields="1"`, which the
+ * typed layer models separately as findColumns) must hold exactly the conditions the typed filter
+ * shows, with no multi-<value> condition and no link-entity inside.
+ */
+function hasUnrepresentableFilter(view) {
+  const bag = view && view.fetchBag;
+  if (!bag || !Array.isArray(bag.c)) return false;
+  const entityNode = (bag.c.map((k) => (k && k.node ? k.node : k)).find((n) => n && n.n === 'entity'));
+  if (!entityNode) return false;
+  const filters = (entityNode.c || []).filter((n) => n && n.n === 'filter' && attrOf(n, 'isquickfindfields') !== '1');
+  const inBag = filters.reduce((s, f) => s + countConditions(f), 0);
+  if (inBag !== typedConditionCount(view.filters)) return true;
+  return filters.some((f) => hasNode(f, (n) => n.n === 'link-entity' || (n.n === 'condition' && (n.c || []).some((k) => k && k.n === 'value'))));
+}
+
+/** A live joined-table cell the bundle read back without its join (see the header). */
+function hasUnboundRelatedColumn(view) {
+  return (view.columns || []).some((c) => String(c.name).includes('.') && !c.relatedEntity);
+}
+
+function liveOwned(view, intent) {
+  const live = (view.linkEntities || []);
+  const declaredRefs = new Set(intent.linkEntities.map(refNameOf));
+  return {
+    columns: (view.columns || []).slice().sort((a, b) => a.order - b.order).map((c) => {
+      const o = { name: lc(c.name) };
+      if (c.relatedEntity) { o.relatedEntity = lc(c.relatedEntity); o.sourceAttribute = lc(c.sourceAttribute || ''); }
+      o.width = c.width;
+      return o;
+    }),
+    filters: view.filters || { type: 'and', conditions: [], groups: [] },
+    sort: (view.sort || []).map((s) => ({ attribute: lc(s.attribute), descending: !!s.descending, entityname: lc(s.entityname || '') })),
+    linkEntities: live.filter((l) => declaredRefs.has(refNameOf(l))).map(normLink),
+    description: intent.description === undefined ? undefined : String(view.description || ''),
+  };
+}
+function normLink(l) {
+  const o = { name: lc(l.name), from: lc(l.from), to: lc(l.to) };
+  if (l.alias) o.alias = lc(l.alias);
+  if (l.linkType) o.linkType = l.linkType;
+  if (l.filters && ((l.filters.conditions || []).length || (l.filters.groups || []).length)) o.filters = l.filters;
+  return o;
+}
+
+/** The desired owned parts, with widths the spec left out taken from the live column. */
+function desiredOwned(intent, live) {
+  const liveWidth = new Map(live.columns.map((c) => [c.name, c.width]));
+  return {
+    columns: intent.columns.map((c) => ({ ...c, width: c.width !== undefined ? c.width : (liveWidth.has(c.name) ? liveWidth.get(c.name) : 100) })),
+    filters: intent.filters,
+    sort: intent.sort,
+    linkEntities: intent.linkEntities.map(normLink),
+    description: intent.description,
+  };
+}
+
+const PARTS = ['columns', 'filters', 'sort', 'linkEntities', 'description'];
+
+/**
+ * Plan one declared view. GET only.
+ * @returns {{ key, intent, viewId, action, changed, createArtifact?, desired?, desiredSha?, origin?, operations, refused, unknown }}
+ */
+async function planViewReconcile({ view, sdk, resolveValue, primaryName }, ctx = {}) {
+  const { errors, intent } = compileViewIntent(view, { resolveValue, primaryName });
+  const key = intent ? intent.key : `${lc((view && view.entity) || '')}/${(view && view.name) || ''}`;
+  const plan = { key, intent, viewId: null, action: null, changed: [], operations: [], refused: [], unknown: [] };
+  if (errors.length) {
+    plan.refused.push(refusal(key, 'view-spec-invalid', 'the declared view does not compile (see validation)'));
+    plan.errors = errors;
+    return plan;
+  }
+  let id = intent.viewId;
+  try {
+    if (!id) id = normalizeGuid(await sdk.findArtifact('view', { name: intent.name, entity: intent.entity }));
+  } catch {
+    plan.unknown.push(refusal(key, 'view-lookup-unreadable', 'whether the view exists could not be read'));
+    return plan;
+  }
+  if (!id) {
+    plan.action = 'create';
+    plan.createArtifact = viewCreateArtifact(intent);
+    plan.operations.push(operation({ key, kind: 'view', target: null, action: 'create', publicationScopes: [{ type: 'view', table: intent.entity }] }));
+    return plan;
+  }
+  plan.viewId = id;
+  let current;
+  try {
+    await sdk.fetchArtifact('view', id);
+    current = await sdk.getArtifact('view', id);
+  } catch {
+    if (intent.viewId) plan.refused.push(refusal(key, 'view-pinned-not-found', 'the pinned viewId could not be read in this environment'));
+    else plan.unknown.push(refusal(key, 'view-unreadable', 'the view could not be read'));
+    return plan;
+  }
+  if (!current || lc(current.entityLogicalName || '') !== intent.entity) {
+    plan.refused.push(refusal(key, 'view-pinned-wrong-table', 'the pinned view belongs to another table'));
+    return plan;
+  }
+  const live = liveOwned(current, intent);
+  const desired = desiredOwned(intent, live);
+  plan.changed = PARTS.filter((p) => desired[p] !== undefined && canonicalJson(desired[p]) !== canonicalJson(live[p]));
+  plan.desired = desired;
+  plan.desiredSha = intentSha256(desired);
+
+  const binding = await lookupBinding(ctx, 'view', key);
+  const verdict = driftVerdict(binding, intentSha256(live), plan.desiredSha);
+  plan.origin = binding ? binding.origin : 'adopted';
+  const publicationScopes = [{ type: 'view', id, table: intent.entity }];
+  if (plan.changed.length === 0) {
+    plan.action = 'noChange';
+    plan.operations.push(operation({ key, kind: 'view', target: id, action: 'noChange' }));
+    return plan;
+  }
+  if (verdict === 'drift' && !isAuthorized(ctx.authorizedOverwrite, key)) {
+    plan.refused.push(refusal(key, 'view-drift', 'an owned part of the view was changed outside the spec; refresh the spec or approve the overwrite'));
+    return plan;
+  }
+  if (verdict === 'unbound' && !intent.viewId && !isAuthorized(ctx.authorizedAdoption, key)) {
+    plan.refused.push(refusal(key, 'view-adoption-not-authorized', 'the view exists and is not yet managed by this spec; approve adopting it first'));
+    return plan;
+  }
+  if (plan.changed.includes('filters') && hasUnrepresentableFilter(current)) {
+    plan.refused.push(refusal(key, 'view-filter-unrepresentable', 'the view\'s current filter cannot be represented, so it cannot be replaced; it was left as it is'));
+    return plan;
+  }
+  if (plan.changed.includes('columns') && hasUnboundRelatedColumn(current)) {
+    plan.refused.push(refusal(key, 'view-related-column-unrepresentable', 'a joined-table column on the view cannot be rewritten faithfully; the columns were left as they are'));
+    return plan;
+  }
+  const removedColumns = live.columns.filter((c) => !desired.columns.some((d) => d.name === c.name));
+  const destructive = removedColumns.length > 0 || (plan.changed.includes('filters') && typedConditionCount(live.filters) > 0);
+  if (removedColumns.length > 0 && !isAuthorized(ctx.authorizedDestructive, key)) {
+    plan.refused.push(refusal(key, 'view-columns-removal-not-authorized', 'the declared columns remove columns the view shows; that needs approval'));
+    return plan;
+  }
+  plan.action = 'update';
+  plan.operations.push(operation({ key, kind: 'view', target: id, action: 'update', destructive, publicationScopes }));
+  return plan;
+}
+
+/** Apply a view plan. A plan with a refusal or unknown writes nothing. `create` is the build's (see contract). */
+async function applyViewReconcile(plan, { sdk }, ctx = {}) {
+  const result = emptyResult();
+  result.refused.push(...plan.refused);
+  result.unknown.push(...plan.unknown);
+  if (plan.refused.length || plan.unknown.length || !plan.action || plan.action === 'create') return result;
+  const id = plan.viewId;
+  const record = () => bindingRecord(ctx, { kind: 'view', key: plan.key, id, intentSha256: plan.desiredSha, origin: plan.origin });
+  if (plan.action === 'noChange') {
+    result.unchanged.push({ key: plan.key, kind: 'view', id });
+    result.managedBindings.push(record());
+    return result;
+  }
+  const d = plan.desired;
+  try {
+    for (const part of plan.changed) {
+      if (part === 'columns') {
+        await sdk.updateElement('view', id, '/columns', d.columns.map((c, i) => ({ ...c, order: i })));
+      } else if (part === 'linkEntities') {
+        // Declared joins replace the live join with the same alias/name; undeclared live joins are kept.
+        const current = await sdk.getArtifact('view', id);
+        const declared = new Map(d.linkEntities.map((l) => [refNameOf(l), l]));
+        const kept = (current.linkEntities || []).map((l) => declared.get(refNameOf(l)) || l);
+        const keptRefs = new Set(kept.map(refNameOf));
+        await sdk.updateElement('view', id, '/linkEntities', [...kept, ...d.linkEntities.filter((l) => !keptRefs.has(refNameOf(l)))]);
+      } else {
+        await sdk.updateElement('view', id, `/${part}`, d[part]);
+      }
+    }
+  } catch (err) {
+    result.refused.push({ ...refusal(plan.key, 'view-rejected', 'the SDK refused the view edit before anything was sent'), rules: rulesOf(err) });
+    return result;
+  }
+  const pushed = await pushIfChanged(sdk, 'view', id);
+  if (pushed.outcome === 'unchanged') {
+    result.unchanged.push({ key: plan.key, kind: 'view', id });
+    result.managedBindings.push(record());
+  } else if (pushed.outcome === 'saved') {
+    result.saved.push({ key: plan.key, kind: 'view', id, parts: plan.changed.slice() });
+    const scope = { type: 'view', id, table: plan.intent.entity };
+    queuePublication(ctx, scope);
+    result.pendingPublish.push({ key: plan.key, scope });
+    result.managedBindings.push(record());
+  } else if (pushed.outcome === 'refused') {
+    result.refused.push({ ...refusal(plan.key, 'view-rejected', 'the SDK refused the view edit before anything was sent'), rules: pushed.rules || [] });
+  } else {
+    result.unknown.push(refusal(plan.key, 'view-write-unknown', 'the view write did not report its outcome; check the view'));
+  }
+  return result;
+}
+
+module.exports = {
+  isDeclaredView,
+  compileViewIntent,
+  viewCreateArtifact,
+  planViewReconcile,
+  applyViewReconcile,
+  hasUnrepresentableFilter,
+  hasUnboundRelatedColumn,
+};

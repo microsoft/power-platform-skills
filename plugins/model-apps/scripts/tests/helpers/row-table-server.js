@@ -19,6 +19,8 @@ const { makeTempDir } = require('./temp-dirs.js');
 const BUNDLE = path.resolve(__dirname, '..', '..', 'vendor', 'cds-maker-sdk.cjs');
 const ENTITY_METADATA_ID = 'eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee';
 const API = 'https://contoso.crm.dynamics.com/api/data/v9.0';
+// The bundle resolves a row table's entity set by reading EntityDefinitions(LogicalName=...).EntitySetName.
+const ENTITY_SETS = { savedquery: 'savedqueries', savedqueryvisualization: 'savedqueryvisualizations', systemform: 'systemforms', webresource: 'webresourceset', workflow: 'workflows' };
 
 function parseFilter(url) {
   const m = /[?&]\$filter=([^&]*)/.exec(url);
@@ -83,7 +85,7 @@ function createRowTableServer({ tables, attributes = {} }) {
       }
       if (/EntityDefinitions/.test(u)) {
         const name = (/LogicalName='([^']+)'/.exec(u) || [])[1] || '';
-        return { status: 200, headers: {}, body: { MetadataId: ENTITY_METADATA_ID, LogicalName: name, ObjectTypeCode: 1, value: [] } };
+        return { status: 200, headers: {}, body: { MetadataId: ENTITY_METADATA_ID, LogicalName: name, EntitySetName: ENTITY_SETS[name] || `s`, ObjectTypeCode: 1, value: [] } };
       }
       const t = target(u);
       if (!t) return { status: 200, headers: {}, body: { value: [] } };
