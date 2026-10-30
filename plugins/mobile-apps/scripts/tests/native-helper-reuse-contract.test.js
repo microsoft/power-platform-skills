@@ -39,9 +39,9 @@ const helpers = [
   })),
   {
     name: 'add-geolocation',
-    reconcile: '## 2a. Reconcile requested artifacts',
-    writes: ['## 3. Write `src/native/geolocation.ts`'],
-    verify: '## 5. Type-check and summary',
+    reconcile: '## 4a. Reconcile requested tracking artifacts',
+    writes: ['## 5. Write the tracking wrapper from installed docs/types'],
+    verify: '## 6. Validate and summarize',
     files: ['geolocation.ts'],
   },
 ];
@@ -78,7 +78,7 @@ function assertHelperContract(raw, helper) {
   for (const heading of helper.writes) {
     assert.ok(text.indexOf(helper.reconcile) < text.indexOf(heading), 'Reconcile before each write');
     const write = prose(section(text, heading));
-    assert.match(write, /Apply Step 2a's (?:independent )?decision/);
+    assert.match(write, /Apply Step (?:2a|4a)'s (?:independent )?decision/);
     assert.match(write, /reuse unchanged only if compatible/);
     assert.match(write, /approved scoped\s+update/);
   }
@@ -279,7 +279,7 @@ test('PDF generation does not mistake generate-only output or package presence f
   }
   assert.match(pdf, /Package presence alone does not authorize adding sharing/);
   const report = skill('add-pdf-report');
-  assert.match(section(report, '### 2. Verify packages are already present'),
+  assert.match(section(report, "### 2. Verify the app's release and packages"),
     /requirement specifically includes sharing, STOP/);
   assert.match(section(report, helpers[1].reconcile), /Generate-only\s+compatibility does not satisfy a share\/upload request/);
   assert.match(section(report, helpers[1].writes[0]), /Do not\s+remove compatible existing share exports/);
@@ -294,10 +294,11 @@ test('PDF viewer compares URI behavior and installed version, not just an export
     assert.ok(viewer.includes(input), input);
   }
   assert.match(viewer, /HTTPS-only old wrapper is incompatible with a local PDF request/);
-  const versionGate = section(skill('add-pdf-viewer'), '### 2. Verify package is already present');
-  assert.match(versionGate, /node_modules/);
-  assert.match(versionGate, /UNSUPPORTED_VERSION/);
-  assert.match(versionGate, /If the check fails, STOP/);
+  const versionGate = section(skill('add-pdf-viewer'), '### 2. Verify the app-matched release and import path');
+  assert.match(versionGate, /resolve-mobile-release\.js/);
+  assert.match(versionGate, /file URI support requires the PDF 0\.2\.9\+ contract/);
+  assert.match(versionGate, /If resolution fails,\s+STOP/);
+  assert.match(versionGate, /exact leaf\/version is included/);
 });
 
 test('pen capture-only reuse cannot conceal required Image/File normalization', () => {
@@ -321,11 +322,12 @@ test('geolocation rejects one-shot or unverified storage substitutes', () => {
   assert.match(geo, /MSAL-only/);
   assert.match(geo, /one-shot `expo-location` wrapper is not equivalent/);
   assert.match(geo, /msdyn_locationrecords.*every default `msdyn_\*` mapped column/);
-  const verification = section(skill('add-geolocation'), '## 2. Verify the Dataverse target table first');
-  assert.match(verification, /Empty `value: \[\]`: stop.*BLOCKED/);
-  assert.match(verification, /Auth\/environment error: stop.*UNVERIFIED/);
-  assert.match(verification, /If any active `fieldMap` column is missing, stop/);
-  assert.match(verification, /Do not create the table, do not route to `\/add-dataverse`/);
+  const verification = section(skill('add-geolocation'), '## 4. Verify the tracking Dataverse target');
+  assert.match(verification, /Empty `value: \[\]`: `BLOCKED/);
+  assert.match(verification, /Auth\/environment failure: `UNVERIFIED.*Stop/);
+  assert.match(verification, /Missing active columns block tracking/);
+  assert.match(verification, /Do not invent a custom table, create the table, or route missing-table\s+provisioning through `\/add-dataverse`/);
+  assert.match(verification, /tracking-only.*never a prerequisite for a one-shot read/);
 });
 
 test('storage comparison protects generated outputs and does not implement owner-side screens', () => {

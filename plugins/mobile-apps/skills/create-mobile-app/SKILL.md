@@ -39,13 +39,33 @@ and summary.
 
 ## Fresh-template working-directory mode
 
-This skill assumes the user already has a **fresh** `microsoft/power-platform-skills/plugins/mobile-apps/template#main` template materialized with `degit` in the target working directory and has already run `npm install` there. The skill turns that fresh template into an app; it does not clone, degit, or copy a template itself.
+Only after confirming new-app intent through the state routing below, read [mobile-release-lifecycle.md](../../shared/references/mobile-release-lifecycle.md). Discover published template versions through npm, select an exact stable version, and inspect it with `resolve-mobile-release.js --template-version "<exact-template-version>"`. Missing or incompatible published package metadata means `BLOCKED` before scaffolding or data-platform mutations. The helper checks the immutable template against its published host contract; there is no plugin-owned release list. npm channel names, the plugin's bundled snapshot, and a mutable Git branch are not compatibility evidence. Report Player availability separately; if its native runtime differs, offer an explicitly selected compatible template for the new app rather than promising the latest package can run in that Player.
 
 **Fresh template required for creation.** If the working directory is not a fresh
 template, STOP creation and follow the state-specific routing below. Do not send
 an existing-app edit request to a new folder. Missing generated markers alone do
 not prove freshness: if the template is customized or its state is unclear, ask
 before proceeding. Only a request for a new app requires a fresh template folder.
+
+Only when the user explicitly supplies `--diagnostic-artifacts '<manifest.json>'`
+for a local test, follow the lifecycle's separate artifact inspection/acquisition
+path in place of published selection. Keep new/empty destination checks,
+acquisition/install approvals, customer instructions and telemetry checkpoints.
+Limit artifact validation to the selected Android APK; preserve verified offline
+capability without claiming an offline sync test. Do not claim the normal dual-platform
+creation target is verified, offer offline setup, initialize/deploy a tenant app,
+or promote the test selection to the default. Carry the option into project
+resolution and package validation. No automatic local-artifact fallback exists.
+End this local creation path after approved scaffold installation and validation;
+do not continue the tenant initialization/data-mutation phases below. Report a
+diagnostic scaffold, not a completed deployed dual-platform app.
+If the selected package is `upgrade-inspection-only`, stop before acquisition:
+it supports existing-app diagnostic upgrade inspection, not creation. Never
+reconstruct a template or copy its reference staging source/lock to bypass this.
+
+For a new/empty target, offer **Acquire reviewed template** or **Cancel**. After explicit approval, run `mobile-template-lifecycle.js acquire --template-version "<exact-template-version>" --destination '<working_dir>'`. It verifies the immutable package and metadata before using the package's creation CLI. Separately approve dependency installation with the shipped lockfile (`npm ci`); use existing registry authentication, never print/provision credentials here. Do not fall back to `degit` or copy a bundled template on failure.
+
+An existing **fresh installed** template may be used only after `resolve-mobile-release.js --project-root '<working_dir>' --template-version "<exact-template-version>"` succeeds. Preserve its shipped instructions and all compatibility metadata. Never run acquisition over a non-empty directory or adopt an already-created app through this gate.
 
 Resolve the original request before classifying project state. Apply this
 state-routing table once in Step 0, in the order below; file markers are
@@ -55,9 +75,10 @@ supporting evidence, not user intent or approval.
 |---|---|---|
 | Creation continuation | Explicit creation-continuation intent or a valid current create handoff for this app, not a request to edit an existing app | Use Step 0's continuation path. Require matching unfinished creation progress and confirm the next phase before continuing; missing or conflicting progress requires clarification, not fresh scaffolding. |
 | Already-created app | Existing-app intent or confirmed app customizations/materialized state, even when generated markers are missing. `memory-bank.md`, `.datamodel-manifest.json`, and `src/generated/services/*.ts` can corroborate state, but do not select creation resume | STOP creation: never re-scaffold it. If the request changes this app, preserve the original request and execute the shared existing-app entry routing; invoke `/edit-app` only after **Full app integration**. If the user wants a separate new app, ask for a fresh template folder. |
-| Fresh template | Confirmed new-app intent and a confirmed uncustomized starter; `package.json`, `app.config.js`, `auth.config.json`, and `tamagui.config.ts` exist; `node_modules/expo` exists; no materialized app bindings, `memory-bank.md`, `.datamodel-manifest.json`, or generated Dataverse services. An approved creation plan and its planning artifacts are allowed | Proceed to Step 1 only when every condition is satisfied. Missing generated markers alone do not establish freshness. |
-| Template not installed | Confirmed new-app intent and a confirmed uncustomized starter with the required template files, but `node_modules/expo` is absent | STOP: ask user to run `npm install` in the template folder, then rerun. Do not provision ADO npm tokens here. |
-| Not template | Confirmed new-app intent in a new/unsupported directory, after excluding existing-app work and creation continuation | STOP: ask user to materialize `microsoft/power-platform-skills/plugins/mobile-apps/template#main` into a new or empty folder with `degit` and run `npm install`; never overwrite existing work. |
+| Fresh template | Confirmed new-app intent and a confirmed uncustomized starter; `package.json`, `app.config.js`, `auth.config.json`, and `tamagui.config.ts` exist; `node_modules/expo` exists; no materialized app bindings, `memory-bank.md`, `.datamodel-manifest.json`, or generated Dataverse services. An approved creation plan and its planning artifacts are allowed | Proceed to Step 1 only when every condition is satisfied and the selected published package contract resolves. Missing generated markers alone do not establish freshness. |
+| Template not installed | Confirmed new-app intent and a confirmed uncustomized starter with the required template files, but `node_modules/expo` is absent | Offer the separately approved `npm ci` install from its shipped lock, then resolve the package contract. Stop for a missing/mismatched lock; do not provision registry credentials or regenerate native pins here. |
+| New/empty directory | Confirmed new-app intent after excluding existing-app work and creation continuation, with no existing customer files | Offer the immutable acquisition described above, then separately approve the shipped-lock installation. |
+| Not template | Confirmed new-app intent in a non-empty unsupported directory, after excluding existing-app work and creation continuation | STOP: preserve every file and select a separate empty target. Never re-scaffold existing work or copy a mutable bundled template. |
 | Unclear state or intent | New-app versus edit intent, customization, or creation progress cannot be established | Ask before selecting a workflow. Preserve the directory, plan, and history; do not default to fresh creation or resume. |
 
 An approved `native-app-plan.md` alone is not a created-app marker. Creation
@@ -223,8 +244,20 @@ itself, so it is written on every creation path after Step 0's routing decision.
 
 **Telemetry checkpoint: `validate_fresh_template`**
 
-Before project reads or commands, bind the absolute `working_dir` through
-[app-working-directory.md](../../shared/references/app-working-directory.md).
+For confirmed new-app intent with a proposed new directory, first bind its
+existing parent without creating the target. From the selected existing parent,
+run `mobile-template-lifecycle.js destination --destination '<proposed_working_dir>'`
+using the installed plugin's absolute script path. This read-only check returns
+the canonical parent/destination and rejects a nonempty or invalid target.
+Keep those returned paths as the scoped creation context. Only after acquisition
+approval may the package CLI create the destination. Then bind the resulting
+app root through
+[app-working-directory.md](../../shared/references/app-working-directory.md)
+before installation, preparation or app/data operations. This exception does
+not apply to an existing app or a creation continuation: those must bind the
+existing absolute `working_dir` through the same reference before project reads
+or commands, and a missing root remains `BLOCKED`.
+
 Apply the state-routing table above once. Classify the original request before
 considering a creation resume or testing freshness; do not derive the requested
 operation from the presence or absence of `memory-bank.md`.
@@ -292,7 +325,9 @@ Use only a validated phase ID from the recorded creation state. Resolve the CLI
 below before entering the verified phase; do not skip unresolved approval or
 validation gates merely because an older plan exists.
 
-**Do not silently copy a bundled template over the user's folder.** A fresh `plugins/mobile-apps/template` template may contain placeholder `power.config.json` with an empty `environmentId`; Step 5 removes that placeholder immediately before Step 6 runs `pa app init`.
+Before continuing or resuming native work, resolve the app against its published host/template contract. Pass its sanitized compatibility context to every planner/builder; do not use the plugin template's current dependencies as the app's inventory.
+
+**Do not silently copy a bundled template over the user's folder.** A fresh template may contain an empty placeholder `power.config.json`; Step 5 removes only that empty placeholder immediately before Step 6 runs `pa app init`. Preserve populated settings even when `environmentId` is empty.
 
 **Resolve the Power Apps CLI** (fresh run or resume) before any CLI command — see [cli-binary.md](${PLUGIN_ROOT}/shared/cli-binary.md). Run every command as `$PA …` (`npx --no-install pa …`), never a bare `pa`; on `power-apps`-only projects, translate per its mapping tables. If `PA_KIND=none`, STOP and ask the user to run `npm install` in the template folder. Record the result in the memory bank's `CLI Binary` row once the bank exists (Step 6.7).
 
@@ -1521,6 +1556,7 @@ node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir '<working_dir>' step --i
 ```
 
 This step is template-only and foreground-only. Do not clone/copy templates, do not run background scaffold jobs, and do not use any legacy fallback path.
+Acquisition and release resolution must already have passed Step 0.
 
 **Print before starting:**
 > "→ [Step 5/13] Preparing existing Expo standalone template in <working_dir> …"
@@ -1534,13 +1570,13 @@ test -d node_modules/expo
 ```
 
 If any required template file is missing, STOP:
-> "This folder is not a fresh `expo-app-standalone` template. Materialize a fresh template with `degit` into a new folder, run `npm install`, then rerun `/create-mobile-app --working-dir <fresh-template-dir>`."
+> "This folder is not a supported fresh template. Return to Step 0 to acquire a reviewed immutable release in a new empty directory."
 
 If `node_modules/expo` is missing, STOP:
-> "Dependencies are not installed. Run `npm install` in the template folder, then rerun `/create-mobile-app --working-dir <fresh-template-dir>`."
+> "Dependencies are not installed. Return to Step 0 for an approved lockfile installation and release validation."
 
 If already-created markers appear (`memory-bank.md`, `.datamodel-manifest.json`, or `src/generated/services/*.ts`) and Step 0 did not enter the resume path, STOP. `native-app-plan.md` is expected here because Step 3 writes the approved plan before template preparation:
-> "This folder already looks like a created app. For a new app, materialize a fresh `expo-app-standalone` template with `degit` into a new folder and rerun this skill there."
+> "This folder already looks like a created app. Use the approved resume path or `/edit-app`; acquire a separate empty directory for a new app."
 
 Run the deterministic preparation script once:
 
@@ -1572,7 +1608,10 @@ only recognized legacy example hooks/query-client files, copies shared helpers
 only when missing, verifies that TypeScript inherits the host configuration,
 and structurally verifies the root provider/theme/safe-area contract. It
 preserves custom navigation, existing helper bytes, `offlineProfile`, provider
-props, and the template's `@ts-ignore` generation boundaries.
+props, and the template's `@ts-ignore` generation boundaries. It must preserve
+`app.json` byte-for-byte, including protected `powerappsNative` fields and
+app-owned extras, plus `AGENTS.md`, `CLAUDE.md`, and `.github/copilot-instructions.md`.
+Do not replace runtime IDs with installed package versions.
 
 Preparation also copies missing app-local guidance from `template/AGENTS.md`,
 `template/CLAUDE.md`, and `template/.github/copilot-instructions.md`. Existing
@@ -1701,13 +1740,15 @@ Key points:
 
 The current template extends
 `@microsoft/power-apps-native-host/config/tsconfig`. That host configuration
-owns the runtime package paths and the six shared-code aliases:
+owns the runtime package paths. Preserve the selected template's explicit
+project-rooted aliases when present (including newer templates); do not replace
+its entire `compilerOptions`. Older templates inherit the six shared-code aliases:
 `@/components`, `@/hooks`, `@/utils`, `@/tokens`, `@/generated`, and
-`@/native`. The preparation script verifies this inheritance and does not
-create a second template-local alias map. Expo Metro consumes the resulting
+`@/native`. The preparation script verifies inheritance without deleting
+template-local aliases. Expo Metro consumes the resulting
 effective TypeScript paths, so no Babel alias plug-in is required.
 
-`<Gradient>` (used by `components/index.tsx`) requires `expo-linear-gradient`. **Assume the upstream template ships it** — do NOT edit `package.json` to add it. If `npm install` (Step 6.5) later reveals the dep is missing, STOP and ask the user to wait for the next template release; do not work around by adding the dep here (same lockdown rule as `/add-native`).
+`<Gradient>` (used by `components/index.tsx`) requires `expo-linear-gradient`. Verify it in the resolved release; do NOT install a missing native module to repair an older binary. Missing support blocks this capability and requires another verified release.
 
 Do not run `npm install` inside Step 5 — in template-only mode dependencies must already be installed before the skill starts.
 

@@ -30,6 +30,8 @@ the approved artifact set below must already ship in the template/native build;
 if a required module is missing, STOP. Do not require unrelated capture packages
 for a scanner-only or upload-only request.
 
+Required modules/configuration must match the app's [published compatibility context](../../../shared/references/mobile-release-lifecycle.md), not the newest plugin template. Missing contract/native support blocks only the requested native mutation.
+
 Why: customer binaries are built from a pre-built rewrap base, not from the customer's `package.json`. Adding a native module here would compile against modules the binary doesn't actually contain, causing runtime crashes after rewrap. See [`/add-native`](../SKILL.md) for the same hard rules.
 
 Required modules depend on the approved artifact set (all must already be in
@@ -51,7 +53,7 @@ capture/scanner package.
 
 ## Workflow
 
-1. Verify project → 2. Verify modules are template-shipped → 2a. Reconcile requested artifacts → 3. Apply camera decision → 3b. Apply scanner decision → 4. Confirm storage decision → 5. Apply upload decision → 6. Verify → 7. Summary
+1. Verify project → 2. Verify resolved native inventory and requested modules → 2a. Reconcile requested artifacts → 3. Apply camera decision → 3b. Apply scanner decision → 4. Confirm storage decision → 5. Apply upload decision → 6. Verify → 7. Summary
 
 ---
 
@@ -64,7 +66,7 @@ test -f app.config.js && test -f power.config.json && test -f package.json || { 
 
 If any file is missing, report and STOP — this skill requires an initialized Power Apps mobile app.
 
-### Step 2 — Verify modules are template-shipped
+### Step 2 — Verify resolved native inventory
 
 Resolve the approved artifact keys before this check. Missing/ambiguous intent
 returns to the owner (ask standalone); do not assume all artifacts. Substitute
@@ -83,6 +85,15 @@ For combined approved capabilities use the union. Add `upload` only for an
 explicitly approved custom Dataverse Image-upload helper, not automatically for
 capture or scanning. The checker accepts artifact-key JSON, not raw `$ARGUMENTS`
 or a public capability string. Missing/ambiguous intent still returns to the owner.
+
+Resolve the app's package contract before module checks or wrapper edits:
+
+```bash
+cd -- '<working_dir>' || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
+node "${PLUGIN_ROOT}/scripts/resolve-mobile-release.js" --project-root '<working_dir>'
+```
+
+Then check only the approved artifact keys:
 
 ```bash
 cd -- '<working_dir>' || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
@@ -110,6 +121,12 @@ NODE
 ```
 
 If the check fails, STOP. Print the error verbatim. Do not run `npx expo install`. Do not edit `app.config.js`. Tell the user which requested modules the template lacks; they need template support, not an app-local native-package install.
+
+If the parent explicitly selected local diagnostic artifacts, append the same
+`--diagnostic-artifacts '<manifest.json>'` to resolution and package validation.
+Keep the lifecycle reference's Android-artifact/no-deployment limits and preserve offline configuration.
+
+Each requested module must match the resolved native inventory and installed docs/types. Do not require unrelated capture packages for scanner-only or upload-only work. Package inclusion does not establish OS declarations or device grants. Barcode/QR uses expo-camera; there is no controls barcode subpath.
 
 ### Step 2a — Reconcile requested artifacts
 
@@ -583,12 +600,14 @@ unresolved, and no full-feature claim for implementation-only work.
 Requested native artifacts ready
 ---
 Capabilities               : <fulfilled requested capabilities only>
-Modules (template-shipped) : <required modules for those capabilities only>
+Modules (release-matched) : <required modules for those capabilities only>
+
+Release context            : <resolved published package contract>
 package.json               : unchanged ✓
 app.config.js              : unchanged ✓
 Artifacts                  : <one row per requested path: created / updated / reused>
 
-Type-check                 : <actual result>
+Type-check                 : <actual result; not native device validation>
 UI integration             : <returned to owner / intentionally not performed>
 ---
 ```

@@ -46,6 +46,14 @@ Planning grants no mutation approval. Write only
 
 ## Hard Rules
 
+- **Preserve the app-matched release context.** Read
+  [release lifecycle](../shared/references/mobile-release-lifecycle.md) and
+  carry the orchestrator's sanitized resolved context or explicit unresolved
+  status. The newest bundled template is not proof of native offline support.
+  Profile scope planning remains read-only and may continue when native
+  compatibility is unverified; do not claim the installed player/base has
+  passed native validation. Missing release evidence blocks native mutations
+  and deployment, not a read-only schema/profile proposal.
 - **Read-only.** You MUST NOT POST to `/mobileofflineprofiles`, PUT EntityMetadata, or call `pa app add data-source`. Mutation happens later in `/setup-offline-profile` after user approval through 3 gates.
 - **Reuse existing profiles.** Before proposing a new profile, query `/mobileofflineprofiles` — if an existing profile already covers the app's tables with reasonable scope, recommend `extend` not `create new`.
 - **Return a section, not a separate doc.** Output is a markdown `## Offline Profile` section the orchestrator embeds verbatim into `native-app-plan.md`.
