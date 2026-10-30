@@ -2752,6 +2752,42 @@ existing table, the build reads that table's Date and Time behaviours once and h
 is unsound; a table found only after its create was answered "already exists" is treated the same way,
 and a table the build provably created costs no read.
 
+**Push preview, command inspection, row repair, solution inventory and promotion planning.** Five
+capabilities the agent uses only when the maker's ask calls for them; none runs from the App Spec, and
+a build, verify, download or teardown that does not ask for them sends exactly the requests it did
+before.
+- **`build-model-app.js --preview-push`** (dry run only; refused with `--apply` or `--no-live-plan`):
+  for a complex change to an existing app, it asks the platform what a push of each planned change it
+  can name would do — create, update or nothing, and what would stop it — through a read-only client
+  (`lib/push-preview.js`, one artifact at a time). A change it cannot name by a live id (a view or form
+  the build would create, a command bar) is listed as not evaluated, never as ready. "ready" is not an
+  approval or a lock, and a "noChange" artifact is still written by an apply.
+- **`verify-model-app.js --inspect-components`**: checks each declared command control on the surface
+  its `location` deploys to (`lib/feature-verify.js` over the SDK's command inspection; GETs only). A
+  missing, misplaced, hidden, disabled or ambiguous control fails. The build does not yet record a
+  control's row id, so a control found by its caption alone is reported unverified and fails the run:
+  read the lines for what is wrong, not the verdict. The dashboard witness is not wired: the build
+  records no pushed dashboard to compare with.
+- **`data-fix.js plan|apply|resume|revert`** (`lib/data-fix-runner.js`): a reviewed repair of values in
+  existing rows. Stdout carries counts, codes, digests and file paths only; the before/after values are
+  in the private review file the plan names. `--app` takes the app build's lock (`DATA_FIX_BUSY` while a
+  build holds it). Non-zero unless every change was made; a row whose outcome is unknown is never
+  re-sent. **Known limit:** when every applied row is one a revert cannot undo, the revert writes no
+  review file — it exits non-zero with the counts; read the plan's forward journal
+  (`<app-dir>/.data-fix/<planId>/journal-*`) to see which rows were written.
+- **`solutions.js inspect`** (`lib/solution-inventory.js`): what the SDK can read of a solution, by kind,
+  with the tables it did not expand and the components it skipped or could not read. Not everything the
+  solution owns, and not a portable set of components.
+- **`plan-app-promotion.js`** (`lib/promotion-plan.js`): reads both environments and the package and
+  lists what cannot be promoted and what the target needs. There is no apply step and it never falls
+  back to an import. **Known limit:** no committed test plans a valid package end to end; the tests
+  cover refusals, malformed input and error reporting.
+
+A failure in any of them is reported by its code, HTTP status and fixed words (`findingOf` in
+`lib/readonly-operations.js`), never the service's own text, which can quote a record value. Batch
+mode of the push preview (`mode: 'batch'`) is not wired; a caller that adds it must refuse two items
+naming the same artifact, which that mode would answer once.
+
 The end-to-end flow (Phase 0 working dir → Phase 1 author **in the main loop** per
 `references/authoring-flow.md` → Phase 2 narrated SDK build → Phase 3 verify & iterate; **edit** an
 existing app via the same path — `download-model-app.js` pulls it back into a spec, then re-run Phase 2
@@ -2833,10 +2869,13 @@ scripts/
   provision-solution.js        ← Creates a Dataverse solution via the SDK
   write-page-plan.js           ← app-builder Phase 1.5: projects an App Spec into the genpage-plan.md read by page-builder workers
   promote-intent-pages.js      ← app-builder Phase 1.5: validates every generated page, then atomically flips source: intent → tsx
-  build-model-app.js           ← app-builder: narrated, idempotent SDK build (dry-run default; --stage data|ui|app|publish; --changed-only; --language-code)
+  build-model-app.js           ← app-builder: narrated, idempotent SDK build (dry-run default; --stage data|ui|app|publish; --changed-only; --language-code; --preview-push on a dry run)
   download-model-app.js        ← app-builder: pull a deployed app into an editable spec (edit flow; takes the build's --language-code: the language the navigation titles are read in, when the spec on disk pins none and the base language cannot be read)
   teardown-model-app.js        ← app-builder: classifier-safe reverse-of-build teardown
-  verify-model-app.js          ← app-builder: reconcile the spec against the deployed app (takes the build's --language-code: the language its form labels were written in; its result JSON is pure ASCII and lists every `WARNING:` line it printed in an optional `warnings` array)
+  verify-model-app.js          ← app-builder: reconcile the spec against the deployed app (takes the build's --language-code: the language its form labels were written in; its result JSON is pure ASCII and lists every `WARNING:` line it printed in an optional `warnings` array; `--inspect-components` adds the command-control inspection, `components` in the result)
+  data-fix.js                  ← plan/apply/resume/revert a reviewed repair of values in existing rows; shares the app build's lock (`--app`); non-zero unless every change was made
+  solutions.js                 ← `inspect`: what the SDK can read of one solution, by kind, with what it skipped or could not read (read-only)
+  plan-app-promotion.js        ← read-only plan of moving an app's package to another environment: what cannot be promoted and what the target needs; no apply step
   preview-form.js              ← app-builder: ASCII form wireframe for authoring review
   preview-app.js               ← app-builder: ASCII whole-app design preview (data model + sitemap + forms + page-intents + design)
   write-app-spec-doc.js        ← app-builder: renders the readable model-app-plan.md design doc from app-spec.json (`--env` also reads, read-only, the roles the app has associated with it; a read that fails is reported in the document, never fatal)
@@ -2855,6 +2894,12 @@ scripts/
   lib/
     entity-provision.js        ← Shared entity-provisioning core (solution + data-model + sample-data): a new table is created with only its primary name attribute and its ordinary columns follow in one atomic change set (`createColumns`), falling back to one request per column (unless the run's throttle budget refused to wait for the change set: the phase then stops, `stop`); a column create or status-reason insert for a table this attempt just created that is refused with that table's lag (HTTP 400 `0x80040216`/`0x80090457`) is read, and sent again only when a read proves it absent, within the table's budget (`createInLagWindow`, `recoverRefusedBatch`, `drainLagStatuses`; a spent check is the original refusal, its halt saying the build may be run again); the primary name column's length is always sent (100 unless the spec gives one), its required level is asked in the create when the spec states one (and said applied only when the SDK confirms it) and, where the platform did not keep a length the spec gave, set last in the phase — a length a failed attempt left unset is owed to the build's retry (`owedLengths`, paid only to the table that attempt created: proved by its MetadataId, and then written by requests addressed with the ids, which a table made again cannot answer to), and an alternate key over that column is made after it; `makeRunner`, whose runner stops the phase at the next step once the run's throttle budget has refused a wait (`stopIfRefused`: `run` and each item of its `mapLimit`; a step that pays the name column length a table the run created is owed is let through; a step taken up again later in its phase — a status reason its table's lag deferred — keeps its number and names the outcome it replaces, so every step stays within the plan's total and the summary counts it once); and `mapLimit`, the bounded fan-out every parallel path reuses
     creates-passthrough.js     ← the build's create port `ctx.creates.run(request, execute)` as a plain pass-through: mints the client ids asked for, calls `execute` once, never retries or swallows an error, keeps no record (see "Known limit — a lost answer to a field security profile create")
+    push-preview.js            ← `--preview-push`: prepares the planned changes it can name by a live id and asks the SDK's push preview of each, one artifact at a time, over a read-only client; what it cannot name is `notEvaluated` with its reason
+    feature-verify.js          ← `--inspect-components`: declared command controls checked through the SDK's command inspection (`present` by row id passes; caption-only is unverified; missing, misplaced, hidden, disabled and ambiguous fail) and the dashboard creation witness (not wired: the build records no pushed dashboard)
+    data-fix-runner.js         ← `data-fix.js`: the reviewed row-repair plan, its journal written on both sides of each send, its lease on the app build's lock and its revert
+    solution-inventory.js      ← `solutions.js inspect`: the solution's components the SDK can read, by kind, with skipped and unreadable ones
+    promotion-plan.js          ← `plan-app-promotion.js`: the read-only promotion plan of a package between two environments
+    readonly-operations.js     ← shared by the five above: `findingOf` (a failure as its code, HTTP status and fixed words — never the service's text), closed-key checks, the read-only HTTP client wrapper
     retry-policy.js            ← when the build runs a failed phase again, decided from what the SERVICE said and never from what the maker named: `RETRY` (`NEVER` — a refusal of the spec, an identity or ownership conflict, an approval, a prerequisite, a file on the maker's machine; `SERVICE` — what the failure it wraps says), `judgeFailure(error, { declares })` (an explicit `transient: false` anywhere along the causes wins; then the HTTP status 429, 502, 503, 504; then a condition the service names by the `error.code` of its answer — `TRANSIENT_SERVICE_CODES`, a SQL deadlock victim (the generic SQL error code `0x80044150` AND the platform's `Sql Number: 1205` — the last SQL number the answer gives — in the service's own answer, `isDeadlockVictimAnswer`), and the lag of a column the spec creates (`declares`) — on any status; then a timeout or reset of the transport (by Node's own code when the error carries one, by its words only when it has none); then **any other HTTP status is final** whatever the answer's words say; then the SDK's or plugin's own type — a refusal, whatever it quotes (bar the SDK's wrapper of a failed publish, read by the status of the answer it embeds); then, only for a failure that carries no status at all, the service's own words, never a halt's message), `throttleAskOf` (what a throttled failure asks of the next send: `retryAfterMs` and `retryNotBefore`), `retryPolicyFor` / `retryFrom` (the policy a halt is raised with), `refusal` / `serviceFailure` (the errors the engine itself makes; `serviceFailure`'s `answered` records the OData error of an answer the engine read with a request of its own — its `code` and `message`, nothing else — and the rule reads that code as it reads the SDK's) and `withCause` (the failure a by-value result carries); `BuildHalt` takes `retry`, `retryText` and `statusCode`; build-model-app.js `isTransientHalt` is its one reader, and `tests/halt-retry-policy.test.js` holds every halt in the sources to a row of its table; an error that WRAPS the failure it carries as its `cause` (`CAUSE_WRAPPER_CODES`: `WEB_RESOURCE_UNVERIFIED`) is judged by that cause, read whether or not it is enumerable, and never by its own code or words — and one that carries no cause is run again
     throttle-budget.js         ← the budget a run allows itself for the waiting it does when a service throttles — five minutes, shared by the HTTP client's waits before it sends a throttled read, publish, delete or column create again (`deps.throttle` of `lib/sdk-http-client.js`), the page backend's waits between the sends of a page write (a `$batch` the HTTP client never re-sends) and the build's own waits before it runs a phase again (the upload script makes one for its run) (`makeThrottleBudget({ totalMs, warn })`: `fits(ms, at)` and `spend(ms, at)`, which answers what the wait added — a wait the client PLACES on the clock (`at`) adds only what runs past the waits placed before it, because requests sent together are throttled together and wake together, while the backend's and the build's, which wait one at a time, place nothing and add whole; `announce` for a wait longer than five seconds, on the `warn` seam the build wires to stderr; `decline` / `declined`, where the client says that a wait did not fit — in the words of `refusedWait`: what the service asked and that the request was not sent again, with no advice on what to run, because a refused request can follow a write that committed — and the build's retry loop and the engine's runner read it (the loop to stop with the halt, the runner so that no step starts after it), since the answer the client hands back carries nothing of what the service asked; `note`; `waitDoesNotFit`, the sentence of the `throttle-budget-exhausted` halt: what the service asked, how much is spent, that a later run of the same command continues); it only counts, each layer waits with its own seam. What is not drawn from it is a wait that is not for a throttle — a 5xx, a reset connection, a deadlock victim's re-send — and the waits of a client given no budget
     provision-input.js         ← Input validation for entity provisioning (the entry gate of `/genpage` and `/app-builder`; it applies `app-spec.js`'s own `primaryNameLengthProblem`, `autoNumberFormatProblem` and `requiredValueProblem`, so a name-column length, an AutoNumber column with no format and a `required` that is not `true`, `false` or `"recommended"` are refused here exactly as in `validateAppSpec`)

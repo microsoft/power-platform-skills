@@ -465,6 +465,15 @@ re-run — do a **dry-run first** (drop `--apply`), **paste the phase-grouped pl
 chat reply** (tool output is collapsed — see the CRITICAL note above), and get a go-ahead
 before applying.)
 
+**Push preview (`--preview-push`, dry run only).** For a complex change to an existing app (managed or
+destructive features, many forms or views), run the dry run with `--preview-push` to see, per artifact,
+whether a push would create, update or change nothing, and what would stop it (refused, stale, unknown),
+with its solution layers and publication scope. It reads only. "ready" is not approval or a lock, and a
+"noChange" artifact is still written by an apply. A change it cannot name by a live id (a view or form
+the build would create, a command bar) is listed as not evaluated: say so, never report the preview as
+complete. A preview that fails prints its code and the dry run stands. Do not use it on every apply; it
+is refused with `--apply` and with `--no-live-plan`.
+
 **Stage selector (`--stage <data|ui|app|publish>`)** maps to its phase range. On `--apply`, ONLY
 `--stage data` is accepted (solution + data-model, no rows in run 1; run 2 is a full build). All
 other stages and the legacy `--from/--to/--only/--skip` selectors are dry-run inspection only —
@@ -605,6 +614,16 @@ none — is advice, not a verdict: a spec an earlier release accepted that the b
 or relationship and the fix for the next build), or a page workspace the run could not remove (it names the folder to
 delete by hand). It changes neither `ok` nor the exit status, so a run that passes can still carry one: pass each on to
 the user. A run that stops on an unexpected error prints that error and no JSON.
+
+**Command buttons (`--inspect-components`).** When a command button misbehaves, or after changing
+commands, run verify with `--inspect-components`. It checks each declared control by its recorded row on
+the surface you declared (a `MainTab` button on the form, `HomeTab` on the main grid, `ContextualTab` on
+a subgrid). Caption-only matches, hidden or disabled controls, and controls on another surface or app do
+not pass. It checks the stored definition, not what a browser renders. Today the build records no row
+id for a control, so every control it finds is reported `UNVERIFIED … found by caption only` and the
+run fails: tell the user which lines say `FAIL` (missing, misplaced, hidden, disabled, several matches)
+— those are the real problems — and that the caption-only lines only mean the button could not be
+proved to be the app's own.
 
 Then open the app in the browser. Refine `app-spec.json` and re-run Phase 2 to iterate.
 
@@ -851,6 +870,63 @@ Then:
 > **Prefer generative pages over classic dashboards** per the genpage-first policy. Classic dashboards
 > do round-trip (id-passthrough tiles), but the views and charts their tiles point at do not, so they
 > can only be edited in Maker.
+
+## Fixing rows, listing a solution, moving an app
+
+Three explicit tools for asks that are not a build. None runs from the App Spec; use each only when the
+maker asks for what it does.
+
+**Fix values in existing rows** ("fix the status on these 30 rows", "set the missing region on old
+records"). Plan the change:
+
+```bash
+node "${PLUGIN_ROOT}/scripts/data-fix.js" plan --env <envUrl> --app-dir <dir> --table <name> --filter <odata> --set <json> --max-rows <n>
+```
+
+The plan prints only counts, a plan id and a digest: OPEN the review file it names and show the maker
+the before/after values it lists, and the row count. Apply only after the maker approves those values:
+
+```bash
+node "${PLUGIN_ROOT}/scripts/data-fix.js" apply --env <envUrl> --app-dir <dir> --plan-id <id> --approve <planDigest> --app <appUniqueName>
+```
+
+Add `--workspace <dir>` if the app's build uses one, and pass the same `--app`/`--workspace` to `resume`
+and `revert`.
+- It waits for no build: if the app's build is running, it refuses (`DATA_FIX_BUSY`); try again after it.
+- A non-zero exit means not every change was made. Rows another maker changed after the plan are
+  reported as conflicts, never overwritten.
+- A partial run continues with `resume`, which retries only rows not attempted. Rows whose outcome is
+  unknown are never resent automatically and keep the run non-zero.
+- `revert` writes its own review file and asks for fresh approval of it. If it stops before writing, run
+  `revert` again for a fresh review of what is left.
+- A row whose outcome was unknown, or one written without what a revert needs, cannot be undone: the
+  revert review lists it, the revert leaves it as it is and exits non-zero. Check those rows by hand.
+  When NO applied row can be undone, the revert writes no review file and exits non-zero with only the
+  counts: the plan's journal (`<app-dir>/.data-fix/<planId>/`) records which rows were written.
+- It is not atomic.
+
+**See what is in a solution** ("what is in solution X"):
+
+```bash
+node "${PLUGIN_ROOT}/scripts/solutions.js" inspect --env <envUrl> --solution <name>
+```
+
+It lists supported artifacts by kind, tables whose subcomponents it did not expand, and components it
+skipped or could not read, with its request count. It is not everything the solution owns, and it is
+not a portable set of components. A component it could not read carries a code and HTTP status, not
+the service's message: there is none to pass on.
+
+**Check whether an app can move to another environment** ("can I move this app to prod"):
+
+```bash
+node "${PLUGIN_ROOT}/scripts/plan-app-promotion.js" --source-env <envUrl> --target-env <envUrl> --package <solution.zip> --app <name>
+```
+
+It only reads. It lists the components it cannot promote (most schema, forms, views, flows and similar
+components today) and what the target needs.
+- There is no apply step. It never falls back to an import.
+- Pass `--acknowledge-non-atomic-import` only when the maker accepts that an import can partly succeed.
+- The existing solution export/import remains a separate path with its own limits.
 
 ## What the builder does (in order)
 
