@@ -38,6 +38,7 @@
 // only when every send it made is accounted for (see `open` in create and the loop in update).
 const crypto = require('node:crypto');
 const fs = require('node:fs');
+const path = require('node:path');
 const { isDeepStrictEqual } = require('node:util');
 const { genPageSubArea, genPageSubAreaId } = require('./genpage-subarea.js');
 const { guardWorkspaceStorage } = require('./workspace-storage-guard.js');
@@ -276,6 +277,95 @@ function assertTurnIntent(args, turnId, intent) {
     throw genpageError(`turn ${turnId} was kept for another request — another page, other content or other messages — and an identity is used for one intended edit only. Nothing was changed; make a new turn id for this request.`, { code: 'GENPAGE_TURN_ID_REUSED', outcome: 'nothing', turnId });
   }
 }
+
+// A caller's turn id is BOUND to the one request it was made for, before anything is sent under it (DESIGN C15: persist before send; refuse the same id with another intent). The check above
+// only compares the intent a caller hands back with the one this request has, so a caller that leaves `turnIntent` out — or hands back another request's — is not held to anything by it,
+// and the SDK's own check covers the turn's MESSAGES only: the same id with the same prompt and other source would be written and published. So the id is recorded with its page and intent
+// in a durable store the caller owns (`deps.turnBindings`), and every later use of it — by this backend, another process, or a run after a crash — is held to that record whatever the
+// caller passes. The record is not a lock or a compare-and-set on the page (the SDK takes the id as correlation only, and the platform has no turn CAS); it only stops one id from carrying
+// two edits. The store's contract:
+//   get(turnId)          -> the record the id is bound to, or null when it is free
+//   bind(turnId, { pageId, intent }) -> the record the id is bound to afterwards: the one given when the id was free, the EARLIER one when it was not (never overwritten)
+// With no store, a caller's turn id is refused before anything is read: an id that cannot be recorded cannot be held to one request. Without a turn id nothing changes — the
+// default identity, a fresh one per update made here, needs no store.
+function turnStoreOf(store, turnId) {
+  if (turnId === undefined) return null;
+  if (!store || typeof store.get !== 'function' || typeof store.bind !== 'function') {
+    throw genpageError(`turn ${turnId} cannot be held to one request here: no turn record store was given, and a turn id that is not recorded before the send could later carry another edit. Nothing was changed; leave the turn id out for a new identity, or give the store.`, { code: 'GENPAGE_TURN_STATE_UNAVAILABLE', outcome: 'nothing', turnId });
+  }
+  return store;
+}
+const turnStateError = (turnId, what, error) => genpageError(`the record of turn ${turnId} could not be ${what} (${messageOf(error)}). Nothing was changed; run the same request again once the record can be ${what}.`, { code: 'GENPAGE_TURN_STATE_UNAVAILABLE', cause: error, outcome: 'nothing', turnId });
+async function heldTurnOf(store, turnId) {
+  try {
+    return (await store.get(turnId)) || null;
+  } catch (error) {
+    throw turnStateError(turnId, 'read', error);
+  }
+}
+async function bindTurn(store, turnId, pageId, intent) {
+  let held;
+  try {
+    held = await store.bind(turnId, { pageId, intent });
+  } catch (error) {
+    throw turnStateError(turnId, 'written', error);
+  }
+  const heldPage = held && String(held.pageId).toLowerCase();
+  if (!held || heldPage !== pageId || String(held.intent).toLowerCase() !== intent) {
+    throw genpageError(`turn ${turnId} is recorded for another request — ${held && heldPage !== pageId ? `page ${heldPage}` : 'other content or other messages'} — and an identity is used for one intended edit only. Nothing was changed; make a new turn id for this request.`, { code: 'GENPAGE_TURN_ID_REUSED', outcome: 'nothing', turnId });
+  }
+}
+
+// The file store of turn records: one `<turnId>.json` per id under `folder`, each made exclusively, so two processes binding one id at once both end up holding the FIRST record:
+//   {"formatVersion":1,"turnId":"6f1c2a4e-9b3d-47a1-b85c-0e2f7d914a63","pageId":"1a2b3c4d-…","intent":"<sha-256 hex>"}
+// The record is written to a private temp file and hard-linked to its name — a link to a name that exists fails with EEXIST — so a reader never sees half a record. A file system without
+// hard links (some network shares and FAT volumes answer EPERM, ENOTSUP, EXDEV or ENOSYS) gets an exclusive create of the name instead: a crash between that create and its write leaves an
+// empty file, which reads as a record that cannot be read and is refused — never as a free id.
+const TURN_RECORD_FORMAT = 1;
+function makeTurnBindingStore(folder, deps = {}) {
+  const fsx = deps.fs || fs;
+  const fileOf = (turnId) => path.join(folder, `${turnId}.json`);
+  const read = (turnId) => {
+    let text;
+    try {
+      text = fsx.readFileSync(fileOf(turnId), 'utf8');
+    } catch (error) {
+      if (error && error.code === 'ENOENT') return null;
+      throw error;
+    }
+    const record = JSON.parse(text);
+    if (!record || record.formatVersion !== TURN_RECORD_FORMAT || record.turnId !== turnId || typeof record.pageId !== 'string' || typeof record.intent !== 'string') {
+      throw new Error(`${fileOf(turnId)} is not a turn record this tool wrote`);
+    }
+    return record;
+  };
+  return {
+    get: read,
+    bind(turnId, { pageId, intent }) {
+      const text = `${JSON.stringify({ formatVersion: TURN_RECORD_FORMAT, turnId, pageId, intent })}\n`;
+      fsx.mkdirSync(folder, { recursive: true });
+      const tmp = path.join(folder, `.${turnId}.${process.pid}.${crypto.randomUUID()}.tmp`);
+      fsx.writeFileSync(tmp, text, { flag: 'wx' });
+      try {
+        fsx.linkSync(tmp, fileOf(turnId));
+      } catch (error) {
+        if (error && error.code === 'EEXIST') return read(turnId);
+        if (!error || !['EPERM', 'ENOTSUP', 'EXDEV', 'ENOSYS'].includes(error.code)) throw error;
+        try {
+          fsx.writeFileSync(fileOf(turnId), text, { flag: 'wx' });
+        } catch (created) {
+          if (created && created.code === 'EEXIST') return read(turnId);
+          throw created;
+        }
+      } finally {
+        try { fsx.unlinkSync(tmp); } catch { /* best-effort cleanup of the private temp file */ }
+      }
+      return read(turnId);
+    },
+  };
+}
+// An update that a create makes under its own turn (the create found its page holding an earlier create's content) is the SAME request, already bound by the create: it is not bound again.
+const TURN_BOUND = Symbol('turn already bound');
 
 // A DRAFT (`publish: false`; default true): the page or the app's navigation is saved and NOT published — no PublishXml is sent — so a maker can review it before it goes live. Only
 // `true`, `false` or nothing is taken: anything else is refused before anything is read, so a string "false" never publishes by accident. A draft's `publish` is `skipped` with
@@ -640,6 +730,8 @@ function makeGenpageSdk(env, deps = {}) {
   const newId = deps.newId || (() => crypto.randomUUID());
   // The identity of an update's turn (see update): minted once per update, and kept across the settling reads of that update.
   const newTurnId = deps.newTurnId || (() => crypto.randomUUID());
+  // Where a caller's turn ids are recorded before a send (see turnStoreOf); needed only when a caller gives one.
+  const turnBindings = deps.turnBindings;
   // The workspace folders made here, each with the guard its SDK works through (workspace-storage-guard.js), removed by release().
   const made = [];
   const byLanguage = new Map();
@@ -997,14 +1089,26 @@ function makeGenpageSdk(env, deps = {}) {
       const actionBindings = bindingOf(args.actionBindings, 'actionBindings');
       const draft = draftOf(args);
       const turnId = turnIdOf(args.turnId);
+      const turns = turnStoreOf(turnBindings, turnId);
       const turn = { ...turnOf(args, name), ...(turnId ? { id: turnId } : {}) };
-      const given = args.pageId === undefined || args.pageId === null ? undefined : String(args.pageId);
+      let given = args.pageId === undefined || args.pageId === null ? undefined : String(args.pageId);
       if (given !== undefined && !GUID_RE.test(given)) throw genpageError(`'${given}' is not a page id`, { code: 'GENPAGE_ID_INVALID', outcome: 'nothing' });
-      const intent = turnIntentOf(given, { source, name, dataSources, model: args.model ? String(args.model) : undefined, connectorBindings, actionBindings }, args);
+      // A turn id already recorded names the page its create was sent under: a retry that lost the first answer — and with it the id this backend made — resumes THAT create (it reads
+      // the page before sending again) instead of making a second page under a new id.
+      if (turns && given === undefined) {
+        const held = await heldTurnOf(turns, turnId);
+        if (held) {
+          if (!GUID_RE.test(String(held.pageId))) throw turnStateError(turnId, 'read', new Error(`it names '${held.pageId}', which is not a page id`));
+          given = String(held.pageId);
+        }
+      }
+      const id = (given === undefined ? String(newId()) : given).toLowerCase();
+      // The intent names the page id the create is SENT under — the one made here when the caller gave none — so a retry that gives back the id and intent a result named is the same intent.
+      const intent = turnIntentOf(id, { source, name, dataSources, model: args.model ? String(args.model) : undefined, connectorBindings, actionBindings }, args);
       assertTurnIntent(args, turnId, intent);
+      if (turns) await bindTurn(turns, turnId, id, intent);
       const turnOut = turnId ? { turn: { id: turnId, intent } } : {};
       const sdk = await getSdk();
-      const id = (given === undefined ? String(newId()) : given).toLowerCase();
       const who = JSON.stringify(name);
       const model = args.model ? String(args.model) : undefined;
       // What is sent under the id, by which a page found there is recognised (holdsWhatWasSent): this create's, and those of the creates an earlier call sent under it.
@@ -1085,7 +1189,7 @@ function makeGenpageSdk(env, deps = {}) {
             const differing = edits.map((e) => e.key);
             let updated;
             try {
-              updated = await api.update(id, { name, source, dataSources, model, connectorBindings, actionBindings, prompt: args.prompt, agentMessage: args.agentMessage, caller: args.caller, appId: args.appId, sourceFile: args.sourceFile, runtimeEvidence: args.runtimeEvidence, throttle: budget, ...(draft ? { publish: false } : {}), ...(turnId ? { turnId } : {}) });
+              updated = await api.update(id, { name, source, dataSources, model, connectorBindings, actionBindings, prompt: args.prompt, agentMessage: args.agentMessage, caller: args.caller, appId: args.appId, sourceFile: args.sourceFile, runtimeEvidence: args.runtimeEvidence, throttle: budget, ...(draft ? { publish: false } : {}), ...(turnId ? { turnId, [TURN_BOUND]: true } : {}) });
             } catch (error) {
               // The page exists and is not what this create asks for: whatever the update's own outcome was, this create is not "nothing" — the page is there.
               throw genpageError(`generative page ${who} (${id}) was written by a create under this id, but it holds the ${differing.join(', ')} of an earlier one, and bringing it to what this create asks for failed: ${messageOf(error)}. It was not published as it is.`, { code: error && error.code, cause: error, outcome: 'unknown', pageId: id });
@@ -1158,6 +1262,7 @@ function makeGenpageSdk(env, deps = {}) {
       const turnId = turnIdOf(args.turnId);
       const intent = turnIntentOf(id, fields, args);
       assertTurnIntent(args, turnId, intent);
+      if (turnId !== undefined && args[TURN_BOUND] !== true) await bindTurn(turnStoreOf(turnBindings, turnId), turnId, id, intent);
       const turnOut = turnId ? { turn: { id: turnId, intent } } : {};
       const sdk = await getSdk();
       const declinedBefore = declinedCount(args);
@@ -1190,6 +1295,10 @@ function makeGenpageSdk(env, deps = {}) {
       const fingerprint = contentFingerprint(fields);
       let edits = planFor(baseline);
       if (!edits.length) {
+        // A draft of a page that already holds the content saves nothing, and whether the content is live is not known here (see above): not published, and not said to be pending either.
+        // It answers as a draft even when the caller also handed in a receipt of a publish — the receipt only ever stops a publish, a draft sends none, and a `fingerprint` in a draft's
+        // answer would read as proof of a publish this call never saw.
+        if (draft) return { pageId: id, unchanged: true, publish: draftPublish(), saved: false, pendingPublish: null, draftFingerprint: fingerprint, ...turnOut, warnings: [] };
         // Already published, by the caller's own record: nothing was written, so there is nothing to publish, and the page is not asked to publish again. A hash from another content,
         // or none, is the answer "not known", and the page is published (see above).
         if (typeof args.publishedFingerprint === 'string' && args.publishedFingerprint === fingerprint) {
@@ -1204,8 +1313,6 @@ function makeGenpageSdk(env, deps = {}) {
           && await publishedCopyHolds(sdk, id, fields, { specBindings })) {
           return { pageId: id, unchanged: true, publish: { kind: 'skipped', detail: 'the page already holds this content, the caller recorded that this content was published before its binding lists were stated, and the published copy holds them' }, fingerprint, receiptUpgraded: true, warnings: [] };
         }
-        // A draft of a page that already holds the content saves nothing, and whether the content is live is not known here (see above): not published, and not said to be pending either.
-        if (draft) return { pageId: id, unchanged: true, publish: draftPublish(), saved: false, pendingPublish: null, draftFingerprint: fingerprint, warnings: [] };
         const runtimeSha256 = await runtimeEvidenceOf(sdk, id, args);
         const published = await publish(sdk, 'genPage', id, { verify: true });
         return { pageId: id, unchanged: true, publish: published, fingerprint, ...(runtimeSha256 ? { runtimeSha256 } : {}), warnings: warningsOf(null, published, `page ${who()}`) };
@@ -1516,11 +1623,16 @@ function makeGenpageSdk(env, deps = {}) {
       const answer = (wasInNavigation, published) => ({ removed, wasInNavigation, appEdited: edits.length > 0, published, entriesLeft: left, warnings });
       let wasInNavigation = true;
       let unreadableBefore = null;
+      // The published navigation as read for a page the saved one does not name; a draft removal reuses it rather than reading it twice.
+      let shownBefore = null;
 
       if (!edits.length) {
         const shown = await publishedPagesOf(sdk, app);
+        shownBefore = shown;
         // Neither layer names the page, and that is known: the published navigation was read and does not, or the app has none because it was never published (nothing runs from it).
-        if (shown.ok ? !shown.pages.some((p) => String(p.pageId).toLowerCase() === page) : shown.neverPublished === true) return answer(false, false);
+        if (shown.ok ? !shown.pages.some((p) => String(p.pageId).toLowerCase() === page) : shown.neverPublished === true) {
+          return draft ? { ...answer(false, false), pendingPublish: false, placementState: 'unchanged', liveState: shown.ok ? 'not-shown' : 'never-published' } : answer(false, false);
+        }
         if (!shown.ok) {
           // The SDK failed before it could tell whether the app has a published form at all: publishing on that would make a draft app live, and "not in the navigation" would be a guess, so nothing is done.
           if (shown.lookupFailed) {
@@ -1536,13 +1648,26 @@ function makeGenpageSdk(env, deps = {}) {
       if (left === 0 && options.allowEmpty !== true) {
         throw genpageError(`taking page ${page} out of app ${app} would leave its navigation with no entry: the platform accepts that on an app that exists, but the app would open on nothing. Nothing was changed. Add the entry that should replace it first, or — if an app with an empty navigation is what is meant — ask for it explicitly (genpage.js remove-from-app --allow-empty-navigation)`, { code: 'GENPAGE_NAVIGATION_WOULD_BE_EMPTY', outcome: 'nothing', appId: app, pageId: page });
       }
-      // A DRAFT removal saves the navigation without the page and publishes nothing: the app that runs still shows the page until the app is published, and — because the platform keeps an app's
-      // reference to a page until a sitemap without it is published — the page cannot be deleted before then (`delete` reads the published navigation and refuses). The page itself is never touched here.
+      // A DRAFT removal saves the navigation without the page and publishes nothing. What the app that runs shows is READ from its published navigation, never assumed: a page that was only
+      // ever placed as a draft never showed in it, and "it still shows until the app is published" would be false. When the published navigation names the page it keeps showing until the
+      // app is published, and — because the platform keeps an app's reference to a page until a sitemap without it is published — the page cannot be deleted before then (`delete` reads the
+      // published navigation and refuses). A navigation that cannot be read is said to be not known. The page itself is never touched here.
+      //   liveState: 'shown' | 'not-shown' | 'never-published' | 'unknown' — what the published navigation says of the page, as read by this call
       if (draft) {
         for (const { a, g, kept } of edits) await sdk.updateElement('app', app, `/siteMap/areas/${a}/groups/${g}/subAreas`, kept);
         if (edits.length) await pushApp(sdk, app, warnings, appScope, { views: [] });
-        warnings.push(`page ${page} is ${edits.length ? 'taken out of' : 'already out of'} the saved navigation of app ${app}, and the app was not published, as asked: it still shows in the app that runs until the app is published, and the page cannot be deleted before then`);
-        return { ...answer(wasInNavigation, false), published: !draft, pendingPublish: true, placementState: 'saved' };
+        const shown = shownBefore || await publishedPagesOf(sdk, app);
+        const shows = shown.ok ? shown.pages.some((p) => String(p.pageId).toLowerCase() === page) : shown.neverPublished === true ? false : null;
+        const liveState = shown.ok ? (shows ? 'shown' : 'not-shown') : shown.neverPublished === true ? 'never-published' : 'unknown';
+        const live = shows === true
+          ? 'it still shows in the app that runs until the app is published, and the page cannot be deleted before then'
+          : shows === false
+            ? (liveState === 'never-published' ? 'the app has never been published, so nothing that runs shows the page' : 'the app that runs does not show it either')
+            : `whether the app that runs still shows it is not known (${shown.reason || shown.error || 'its published navigation could not be read'}): if it does, it keeps showing until the app is published, and the page cannot be deleted before then`;
+        warnings.push(`page ${page} is ${edits.length ? 'taken out of' : 'already out of'} the saved navigation of app ${app}, and the app was not published, as asked: ${live}`);
+        // A publish is pending when this call saved the removal, or when the app that runs still shows a page the saved navigation already left; when neither layer can be read it is not known.
+        const pendingPublish = edits.length > 0 || shows === true ? true : null;
+        return { ...answer(wasInNavigation, false), published: !draft, pendingPublish, placementState: edits.length ? 'saved' : 'unchanged', liveState };
       }
       // Whether the app has ever been published, asked BEFORE the publish (afterwards every app has): it is only for the note below, so a read that fails does not stop the removal.
       let neverPublished = false;
@@ -1999,5 +2124,5 @@ async function appsNaming(sdk, pageId) {
 module.exports = {
   makeGenpageSdk, unescapePacName, suppliedButBlank, sourceText, dataSourcesOf, promptTranscript, configJson, pageFolderFiles,
   genPagesOfSiteMap, entityTablesOfSiteMap, writeOutcome, PRE_WRITE_REFUSALS, genpageError, holdsWhatWasSent, describeDivergence, contentFingerprint, watchThrottles, GUID_RE,
-  missingTableOf, turnIdOf, turnIntentOf, draftOf,
+  missingTableOf, turnIdOf, turnIntentOf, draftOf, makeTurnBindingStore,
 };

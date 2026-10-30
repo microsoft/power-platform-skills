@@ -8,7 +8,9 @@
 const { test } = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');
-const { makeGenpageSdk, turnIntentOf, sourceText } = require('../lib/genpage-sdk.js');
+const path = require('node:path');
+const { makeGenpageSdk, makeTurnBindingStore, turnIntentOf, sourceText } = require('../lib/genpage-sdk.js');
+const { makeTempDir } = require('./helpers/temp-dirs.js');
 const { FakeGenPageServer, INSTANCE, ACCOUNT_TABLE, appTransport, APP_ID, APP_EXISTING_PAGE_ID } = require('./helpers/fake-genpage-server.js');
 
 const OTHER = '77777777-7777-4777-8777-777777777777';
@@ -23,14 +25,18 @@ async function inWorld(fn) {
   server.seedPage(OTHER, { name: 'Other', config: { dataSources: ['account'], model: '' }, prompt: 'Make it' });
   const app = appTransport(server);
   const made = [];
-  const backend = () => makeGenpageSdk(INSTANCE, {
+  // Every backend of one world records turn ids in the same folder, through a store object of its own: what one backend (or process) bound, another is held to.
+  const turnsDir = path.join(makeTempDir('genpage-turns-'), 'turns');
+  const backend = (extra = {}) => makeGenpageSdk(INSTANCE, {
     httpClient: app.http,
+    turnBindings: makeTurnBindingStore(turnsDir),
+    ...extra,
     mkdtempSync: (prefix) => { const dir = fs.mkdtempSync(prefix); made.push(dir); return dir; },
   });
   const opened = [];
-  const open = () => { const genpage = backend(); opened.push(genpage); return genpage; };
+  const open = (extra) => { const genpage = backend(extra); opened.push(genpage); return genpage; };
   try {
-    return await fn({ server, app, genpage: open(), open });
+    return await fn({ server, app, genpage: open(), open, turnsDir });
   } finally {
     for (const genpage of opened) await genpage.dispose();
     for (const dir of made) assert.ok(!fs.existsSync(dir), `the throwaway workspace ${dir} is removed by dispose()`);
@@ -161,9 +167,135 @@ test('REAL BUNDLE: a turn id kept for one request is refused for another before 
     await assert.rejects(genpage.update(OTHER, { source: SOURCE_2, prompt: 'change', turnId: TURN, turnIntent: first.turn.intent }), (e) => e.code === 'GENPAGE_TURN_ID_REUSED' && e.outcome === 'nothing' && e.turnId === TURN);
     assert.strictEqual(server.writes().length, writes, 'the other request was not sent');
 
-    // Without the kept intent the SDK still refuses a recorded turn whose message is different, and writes nothing.
-    await assert.rejects(genpage.update(OTHER, { source: SOURCE_2, prompt: 'another', turnId: TURN }), (e) => /TURN_CONFLICT/.test(String(e.code)) || /already recorded/.test(e.message));
+    // Without the kept intent the turn's record still refuses it — before the SDK is asked — and nothing is written.
+    await assert.rejects(genpage.update(OTHER, { source: SOURCE_2, prompt: 'another', turnId: TURN }), (e) => e.code === 'GENPAGE_TURN_ID_REUSED' && e.outcome === 'nothing');
     assert.strictEqual(server.messagesOf(OTHER).length, messages);
     assert.strictEqual(server.fileText(server.filesOf(OTHER).find((f) => /page\.tsx$/.test(f.filename)).id), SOURCE, 'the page still holds the first request\'s source');
+  });
+});
+
+// ── A turn id is bound to its one request in a durable record, whatever the caller hands back ──
+
+test('REAL BUNDLE: the same turn id with the same prompt and other source is refused before anything is written, even with no intent handed back — and from another backend', async () => {
+  await inWorld(async ({ server, app, genpage, open }) => {
+    await genpage.update(OTHER, { source: SOURCE, prompt: 'change', turnId: TURN });
+    const writes = server.writes().length;
+    const published = server.published.length;
+    for (const [backend, extra] of [[genpage, {}], [open(), {}], [open(), { turnIntent: 'f'.repeat(64) }]]) {
+      await assert.rejects(backend.update(OTHER, { source: SOURCE_2, prompt: 'change', turnId: TURN, ...extra }), (e) => e.code === 'GENPAGE_TURN_ID_REUSED' && e.outcome === 'nothing' && e.turnId === TURN);
+    }
+    // Other content that is not the source — the data sources, the bindings — is another request too; so is another page.
+    await assert.rejects(genpage.update(OTHER, { source: SOURCE, prompt: 'change', dataSources: [], turnId: TURN }), (e) => e.code === 'GENPAGE_TURN_ID_REUSED');
+    await assert.rejects(genpage.update(OTHER, { source: SOURCE, prompt: 'change', connectorBindings: [], turnId: TURN }), (e) => e.code === 'GENPAGE_TURN_ID_REUSED');
+    await assert.rejects(genpage.update(APP_EXISTING_PAGE_ID, { source: SOURCE, prompt: 'change', turnId: TURN }), (e) => e.code === 'GENPAGE_TURN_ID_REUSED' && e.message.includes(`page ${OTHER}`));
+    assert.deepStrictEqual([server.writes().length, server.published.length], [writes, published], 'nothing written, nothing published');
+    assert.strictEqual(server.fileText(server.filesOf(OTHER).find((f) => /page\.tsx$/.test(f.filename)).id), SOURCE, 'the page still holds the first request\'s source');
+    assert.strictEqual(app.state.publishAttempts, 0);
+
+    // The SAME request again is the same intent, from any backend: read, found there, nothing sent twice.
+    const again = await open().update(OTHER, { source: SOURCE, prompt: 'change', turnId: TURN });
+    assert.strictEqual(again.unchanged, true);
+  });
+});
+
+test('a caller turn id with no record store, or a store that cannot be read, is refused before anything is read; without a turn id no store is needed', async () => {
+  await inWorld(async ({ server, open }) => {
+    const bare = open({ turnBindings: undefined });
+    await assert.rejects(bare.update(OTHER, { source: SOURCE, turnId: TURN }), (e) => e.code === 'GENPAGE_TURN_STATE_UNAVAILABLE' && e.outcome === 'nothing');
+    await assert.rejects(bare.create({ name: 'X', source: SOURCE, turnId: TURN }), (e) => e.code === 'GENPAGE_TURN_STATE_UNAVAILABLE' && e.outcome === 'nothing');
+    const broken = open({ turnBindings: { get: () => { throw new Error('disk gone'); }, bind: () => { throw new Error('disk gone'); } } });
+    await assert.rejects(broken.update(OTHER, { source: SOURCE, turnId: TURN }), (e) => e.code === 'GENPAGE_TURN_STATE_UNAVAILABLE' && /disk gone/.test(e.message));
+    await assert.rejects(broken.create({ name: 'X', source: SOURCE, turnId: TURN }), (e) => e.code === 'GENPAGE_TURN_STATE_UNAVAILABLE' && /disk gone/.test(e.message));
+    assert.deepStrictEqual([server.requests.length, server.writes()], [0, []], 'not one request');
+
+    const plain = await bare.update(OTHER, { source: SOURCE, prompt: 'change' });
+    assert.strictEqual(plain.turn, undefined, 'the default identity is made here and needs no record');
+  });
+});
+
+test('REAL BUNDLE: a create without a page id binds the id it made — a retry with the returned id and intent is the same request, not a reused turn', async () => {
+  await inWorld(async ({ server, genpage, open }) => {
+    const args = { name: 'Turned', source: SOURCE, dataSources: ['account'], prompt: 'make it', turnId: TURN };
+    const created = await genpage.create(args);
+    assert.strictEqual(created.turn.intent, turnIntentOf(created.pageId, { source: sourceText(SOURCE), name: 'Turned', dataSources: ['account'], model: undefined, connectorBindings: undefined, actionBindings: undefined }, args), 'the intent names the page id the create was sent under');
+    const pages = server.state.projects.size;
+    const messages = server.messagesOf(created.pageId).length;
+    const retried = await open().create({ ...args, pageId: created.pageId, turnIntent: created.turn.intent });
+    assert.strictEqual(retried.pageId, created.pageId);
+    assert.deepStrictEqual([server.state.projects.size, server.messagesOf(created.pageId).length], [pages, messages], 'no second page, no second turn');
+  });
+});
+
+test('REAL BUNDLE: a create whose answer was lost is resumed by a retry with the same turn id under the id it was sent under — never a second page under a new id', async () => {
+  await inWorld(async ({ server, open }) => {
+    const pages = server.state.projects.size;
+    server.afterCommit = () => {
+      server.failOn = (method) => (method === 'GET' ? 403 : undefined);
+      lostResponse();
+    };
+    const args = { name: 'Lost', source: SOURCE, dataSources: ['account'], prompt: 'make it', turnId: TURN };
+    let sentUnder;
+    await assert.rejects(open().create(args), (e) => { sentUnder = e.pageId; return e.outcome === 'unknown'; });
+    server.afterCommit = undefined;
+    server.failOn = undefined;
+    assert.strictEqual(server.state.projects.size, pages + 1, 'the first send landed');
+
+    // A later run that never saw the id: the turn's record names it.
+    const retried = await open().create(args);
+    assert.strictEqual(retried.pageId, sentUnder);
+    assert.strictEqual(server.state.projects.size, pages + 1, 'one page, not two');
+    assert.strictEqual(server.messagesOf(sentUnder).filter((m) => m.message === 'make it').length, 1, 'one turn in the history');
+  });
+});
+
+test('the file store of turn records keeps the FIRST record of an id, refuses a record it cannot read, and stays exclusive without hard links', () => {
+  const dir = path.join(makeTempDir('genpage-turn-store-'), 'turns');
+  const store = makeTurnBindingStore(dir);
+  assert.strictEqual(store.get(TURN), null);
+  assert.deepStrictEqual(store.bind(TURN, { pageId: OTHER, intent: 'a'.repeat(64) }), { formatVersion: 1, turnId: TURN, pageId: OTHER, intent: 'a'.repeat(64) });
+  assert.strictEqual(makeTurnBindingStore(dir).bind(TURN, { pageId: OTHER, intent: 'b'.repeat(64) }).intent, 'a'.repeat(64), 'another store on the folder is held to the first record');
+  assert.deepStrictEqual(fs.readdirSync(dir), [`${TURN}.json`], 'no temp file is left behind');
+
+  const other = '0d3c1b2a-4e5f-4a6b-8c7d-9e0f1a2b3c4d';
+  fs.writeFileSync(path.join(dir, `${other}.json`), '');
+  assert.throws(() => store.get(other));
+  assert.throws(() => store.bind(other, { pageId: OTHER, intent: 'c'.repeat(64) }), 'a half-written record is never taken for a free id');
+
+  const noLinks = makeTurnBindingStore(dir, { fs: { ...fs, linkSync: () => { throw Object.assign(new Error('no hard links here'), { code: 'EPERM' }); } } });
+  const third = '11111111-2222-4333-8444-555555555555';
+  assert.strictEqual(noLinks.bind(third, { pageId: OTHER, intent: 'd'.repeat(64) }).intent, 'd'.repeat(64));
+  assert.strictEqual(noLinks.bind(third, { pageId: OTHER, intent: 'e'.repeat(64) }).intent, 'd'.repeat(64));
+});
+
+// ── A draft never says more about the app that runs than was read ──
+
+test('REAL BUNDLE: a draft of content the page already holds answers as a draft even when a publish receipt matches — no fingerprint, the draft reason', async () => {
+  await inWorld(async ({ server, genpage }) => {
+    const published = await genpage.update(OTHER, { source: SOURCE_2 });
+    const attempts = server.published.length;
+    const draft = await genpage.update(OTHER, { source: SOURCE_2, publish: false, publishedFingerprint: published.fingerprint });
+    assert.deepStrictEqual([draft.unchanged, draft.publish.kind, draft.publish.reason, draft.saved, draft.pendingPublish, draft.fingerprint, draft.draftFingerprint], [true, 'skipped', 'draft', false, null, undefined, published.fingerprint]);
+    assert.strictEqual(server.published.length, attempts);
+  });
+});
+
+test('REAL BUNDLE: a draft removal of a page the app that runs never showed does not say that it still shows there — what it says is read from the published navigation', async () => {
+  await inWorld(async ({ server, app, genpage }) => {
+    await genpage.placeInApp(APP_ID, { pages: [{ pageId: OTHER, title: 'Other' }], publish: false });
+    assert.ok(!namesPage(app.state.publishedXml, OTHER));
+    const removed = await genpage.removeFromApp(APP_ID, OTHER, { publish: false });
+    assert.deepStrictEqual([removed.appEdited, removed.published, removed.pendingPublish, removed.placementState, removed.liveState], [true, false, true, 'saved', 'not-shown']);
+    assert.ok(!removed.warnings.some((w) => /still shows in the app that runs|cannot be deleted before then/.test(w)), removed.warnings.join(' | '));
+    assert.ok(removed.warnings.some((w) => /the app that runs does not show it either/.test(w)));
+    assert.strictEqual(app.state.publishAttempts, 0);
+
+    // Published, then taken out as a draft: now the app that runs does show it, and the answer says so.
+    await genpage.placeInApp(APP_ID, { pages: [{ pageId: OTHER, title: 'Other' }], finishIfUnpublished: true });
+    const shown = await genpage.removeFromApp(APP_ID, OTHER, { publish: false });
+    assert.strictEqual(shown.liveState, 'shown');
+    assert.ok(shown.warnings.some((w) => /still shows in the app that runs until the app is published/.test(w)));
+    const nothingToSave = await genpage.removeFromApp(APP_ID, OTHER, { publish: false });
+    assert.deepStrictEqual([nothingToSave.placementState, nothingToSave.liveState, nothingToSave.pendingPublish], ['unchanged', 'shown', true]);
+    assert.ok(server.state.projects.has(OTHER));
   });
 });
