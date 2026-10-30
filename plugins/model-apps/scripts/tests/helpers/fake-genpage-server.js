@@ -429,6 +429,12 @@ class FakeGenPageServer {
         const wanted = new Set((path.match(/agentconversationmessageid eq ([0-9a-fA-F-]{36})/g) || []).map((m) => m.slice(-36).toLowerCase()));
         return json(200, { value: [...state.messages.values()].filter((x) => wanted.has(x.id)).map((x) => ({ agentconversationmessageid: x.id, message: x.message, messagesender: x.sender, _regardingobjectid_value: x.regarding })) });
       }
+      // Every form of every table, in the published layer (a plain read) or the saved one (RetrieveUnpublishedMultiple) — what a page delete reads first, to find a form that
+      // embeds the page (lib/page-reference-guard.js). `this.forms` is [{ formid, objecttypecode, name, type, formxml, layer?: 'published' | 'saved' }]; a form with no layer is in both.
+      if (/^\/systemforms(?:\/Microsoft\.Dynamics\.CRM\.RetrieveUnpublishedMultiple\(\))?\?/.test(path)) {
+        const layer = path.startsWith('/systemforms/') ? 'saved' : 'published';
+        return json(200, { value: (this.forms || []).filter((f) => !f.layer || f.layer === layer).map(({ layer: _, ...row }) => row) });
+      }
       return json(404, { error: { message: `no route for GET ${path}` } });
     }
 

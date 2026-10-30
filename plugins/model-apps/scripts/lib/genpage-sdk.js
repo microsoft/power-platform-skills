@@ -50,6 +50,7 @@ const { mergeBindings } = require('./page-bindings.js');
 const { isRestrictedSolution } = require('./system-solutions.js');
 const { readTargetSolution, readPageComponentType, pageComponent } = require('./page-solution.js');
 const { asPageNestingRefusal } = require('./page-nesting.js');
+const { assertPageDeletionSafe } = require('./page-reference-guard.js');
 
 const GUID_RE = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
 
@@ -1580,6 +1581,9 @@ function makeGenpageSdk(env, deps = {}) {
     //      and an app's saved navigation counts as much as its published one, as sdk-teardown.js measured — so the apps are looked up here with the scan the build uses for shared pages (every app's published AND saved navigation,
     //      apps that were never published included) and named, so the caller can take the page out of each with `removeFromApp` first (`GENPAGE_IN_APP`, nothing deleted). The scan fails closed:
     //      an app whose navigation cannot be read could be the one that holds the page (`GENPAGE_APPS_UNREADABLE`, nothing deleted).
+    //   2b. No form may embed it (lib/page-reference-guard.js): every form of every table, saved and published, is read and parsed, and a form that embeds the page — or holds a binding that could name
+    //      any page, or cannot be read — refuses the delete (`GENPAGE_EMBEDDED_IN_FORM`, `GENPAGE_FORM_REFERENCES_UNREADABLE`, nothing deleted). A form left embedding a deleted page shows an error where the page was,
+    //      and Dataverse does not refuse that delete. These reads are made only here, on the way to a delete; there is no flag that skips them.
     //   3. Nothing is deleted unless the caller says it means it: `options.allowDestructive` must be exactly `true` (the plugin's word for a destructive run, as in the build and teardown), or the answer is
     //      `GENPAGE_DELETE_NOT_CONFIRMED`, which says what a confirmed run would remove — the page, its file rows, its conversation messages. It comes AFTER 1 and 2, the reads that decide the delete, so it is only
     //      said of a delete that would otherwise have gone ahead, and the SDK (which deletes the moment it is asked) is not asked before.
@@ -1597,6 +1601,11 @@ function makeGenpageSdk(env, deps = {}) {
       if (apps.length) {
         const text = apps.map((a) => `${a.name ? `${JSON.stringify(a.name)} (${a.uniqueName}${a.appId ? `, id ${a.appId}` : ''})` : a.uniqueName}${a.savedOnly ? ' [saved, not published]' : ''}`).join(', ');
         throw genpageError(`page ${who} was not deleted: ${apps.length === 1 ? 'the navigation of this app names it' : `the navigation of these ${apps.length} apps names it`} — ${text}. Dataverse refuses to delete a page an app still names, and an app left pointing at a deleted page shows an error where the page was. Take the page out of ${apps.length === 1 ? 'that app' : 'each of them'} first (genpage.js remove-from-app), then delete it.`, { code: 'GENPAGE_IN_APP', outcome: 'nothing', pageId: id, apps });
+      }
+      try {
+        await assertPageDeletionSafe(sdk.dataverse, [id]);
+      } catch (error) {
+        throw genpageError(`page ${who} was not deleted: ${messageOf(error)}`, { code: error && error.code, cause: error, outcome: 'nothing', pageId: id, references: error && error.references, unknown: error && error.unknown });
       }
       if (!(options && options.allowDestructive === true)) {
         const rows = `${page.fileRows} file ${page.fileRows === 1 ? 'row' : 'rows'}`;
