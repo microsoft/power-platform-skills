@@ -257,6 +257,7 @@ test('real bundle: batch mode previews exactly the prepared dirty set, and the b
   ] });
   assert.equal(res.ok, true);
   assert.deepEqual(res.previews.map((p) => p.key).sort(), ['edited', 'new']);
+  assert.deepEqual(res.notEvaluated, [], 'every prepared artifact was dirty, so the batch answered each one');
   assert.ok(res.sharedRequests >= 0);
   assert.deepEqual(snapshot(e.root), before, 'the build\u2019s app folder and workspace are byte-for-byte as they were');
 });
@@ -289,6 +290,47 @@ test('a preview reports the items it did not evaluate, with why, and is never al
   assert.equal(res.summary.notEvaluated, 1);
   assert.equal(res.allEvaluated, false);
   assert.equal(res.ok, true, 'ok still means only that nothing was written');
+});
+
+test('a schema item whose live state the dry run could not read (or did not read) is not evaluated; only a known schema reuse is left out', async () => {
+  // The real dry-run annotation: a schema read that fails leaves the item `unknown`, never create or reuse.
+  const { annotateLivePlan } = require('../lib/sdk-build.js');
+  const plan = [{ key: { kind: 'relationship', entity: 'contoso_ticket', name: 'contoso_parent_ticket', relType: 'OneToMany' } }];
+  await annotateLivePlan(plan, { spec: {}, provision: { dataverse: { get: async () => { throw Object.assign(new Error('unreadable'), { statusCode: 403 }); } } } });
+  assert.equal(plan[0].state, 'unknown');
+  plan.push(
+    { key: { kind: 'column', entity: 'contoso_ticket', name: 'contoso_note' } },
+    { key: { kind: 'column', entity: 'contoso_ticket', name: 'contoso_kept' }, state: 'reuse' },
+    { key: { kind: 'table', entity: 'contoso_new' }, state: 'create' },
+  );
+  const items = pp.previewItemsFromPlan(plan, () => { throw new Error('a schema item is never resolved'); });
+  assert.deepEqual(items, [
+    { key: 'relationship:contoso_ticket:contoso_parent_ticket', notEvaluated: 'livePlanUnknown' },
+    { key: 'column:contoso_ticket:contoso_note', notEvaluated: 'livePlanUnknown' },
+    { key: 'table:contoso_new:0', requiresSchema: true },
+  ]);
+  const deps = { makerSdk: { createNodeWorkspaceStorage: () => ({}), createMakerSdk: () => ({ initWorkspace: async () => {} }) } };
+  const res = await pp.runPushPreview({ env: 'https://contoso.crm.dynamics.com', httpClient: { get: async () => { throw new Error('unexpected GET'); } }, items, deps });
+  assert.equal(res.summary.notEvaluated, 2, 'the unreadable relationship and the unread column must not disappear');
+  assert.equal(res.allEvaluated, false);
+});
+
+test('real bundle: batch mode reports a prepared artifact the batch did not preview (no local edit) as not evaluated, never as covered', async () => {
+  const e = await env();
+  const mark = e.org.requests.length;
+  const clean = await pp.runPushPreview({ ...e.options, mode: 'batch', items: [{ key: 'unchanged', type: 'view', id: e.view.savedqueryid }] });
+  assert.deepEqual(clean.previews, [], 'the batch previews only dirty artifacts');
+  assert.deepEqual(clean.notEvaluated, [{ key: 'unchanged', reason: 'notInBatch' }]);
+  assert.equal(clean.summary.notEvaluated, 1);
+  assert.equal(clean.allEvaluated, false, 'no preview evaluated this prepared view');
+  const mixed = await pp.runPushPreview({ ...e.options, mode: 'batch', items: [
+    { key: 'unchanged', type: 'view', id: e.view.savedqueryid },
+    { key: 'new', type: 'view', create: { name: 'Mixed batch view', entityLogicalName: 'contoso_ticket', columns: [{ name: 'contoso_name', width: 100 }] } },
+  ] });
+  assert.deepEqual(mixed.previews.map((p) => p.key), ['new']);
+  assert.deepEqual(mixed.notEvaluated, [{ key: 'unchanged', reason: 'notInBatch' }]);
+  assert.equal(mixed.allEvaluated, false);
+  assert.deepEqual(nonGets(e.org, mark), [], 'GETs only');
 });
 
 // --- the command bar: named by its table ---------------------------------------------------------------------
