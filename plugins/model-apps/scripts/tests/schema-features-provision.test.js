@@ -377,3 +377,28 @@ test('unreadable flags are written as declared, with a warning', async () => {
   assert.deepEqual(tableUpdates(m).map((c) => c[2]), [{ changeTrackingEnabled: true }]);
   assert.ok(warnings.some((w) => /could not read the current table flags of new_ticket/.test(w)));
 });
+test('a secured column of a new table goes in the post-table change set with isSecured, never in the table create', async () => {
+  const created = [];
+  const together = [];
+  const sdk = {
+    createTable: async (o) => { created.push(o); return { logicalName: 'new_ticket', entitySetName: 'new_tickets', metadataId: '66666666-6666-6666-6666-666666666666' }; },
+    createColumns: async (l, options) => { together.push(options); },
+    createColumn: async (l, o) => ({ logicalName: o.schemaName.toLowerCase(), metadataId: '77777777-7777-7777-7777-777777777777' }),
+  };
+  const provision = { findTables: async () => [], findColumns: async () => [], dataverse: { get: async (url) => {
+    if (/Attributes\?\$select=MetadataId,LogicalName$/.test(url)) return { status: 200, body: { value: [{ LogicalName: 'new_salary', MetadataId: '88888888-8888-8888-8888-888888888888' }] } };
+    return { status: 404, body: null };
+  } } };
+  await provisionDataModel({ sdk, provision, runner: makeRunner({ emit: () => {}, total: 50 }), spec: specOf([{ schemaName: 'new_salary', type: 'Money', isSecured: true }]), apply: true, preResolvedLanguageCode: 1033, sleep: async () => {} });
+  assert.ok(!('columns' in created[0]));
+  assert.deepEqual(together.map((set) => set.map((c) => [c.schemaName, c.isSecured])), [[['new_salary', true]]]);
+});
+
+// ------------------------------------------------------------------------------------------------ Customer columns (L30)
+
+test('a Customer column the table already has is never updated, even when it declares isSecured or a capability', async () => {
+  const m = mockSdk({ dataverseGet: metadataServer({ tables: { new_ticket: ['new_ticketid', 'new_name', 'new_customer'] }, secured: () => assert.fail('read') }) });
+  await run(m, specOf([{ schemaName: 'new_customer', type: 'Customer', isSecured: true, isValidForUpdate: false }]));
+  assert.deepEqual(updates(m), []);
+  assert.equal(securityGets(m).length, 0);
+});

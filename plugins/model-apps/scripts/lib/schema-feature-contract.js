@@ -494,6 +494,50 @@ function verifyTableFlags(entity, current) {
   });
 }
 
+// ------------------------------------------------------------------------------------------------- download (spec from metadata)
+
+// The spec form of a set's options, from the labels the download resolved (in display order) and the values Dataverse returned
+// beside them in the same OptionSet read, e.g.
+//   "Options": [ { "Value": 1, "Label": { ... } }, { "Value": 100000001, "Label": { ... } } ]
+// When every value is its position's default (100000000 + index) the plain labels come back unchanged — the spec a download has
+// always written, which a rebuild numbers the same way. Otherwise every option is written `{ value, label }`, so a rebuild keeps
+// each value instead of renumbering the set. null when a value cannot be authored (missing, not an integer, outside 0..2147483647):
+// dropping it would renumber the options after it, so the caller leaves the column untyped and reports it, as it does for an
+// unreadable label.
+function downloadedChoiceOptions(labels, values) {
+  if (!Array.isArray(labels) || !Array.isArray(values) || labels.length !== values.length) return null;
+  if (values.some((v) => !Number.isInteger(v) || v < 0 || v > CHOICE_VALUE_MAX)) return null;
+  if (values.every((v, i) => v === CHOICE_VALUE_BASE + i)) return labels.slice();
+  return labels.map((label, i) => ({ value: values[i], label }));
+}
+
+// The 2.21.0 column fields a downloaded column carries, only from facts that were read:
+//   isSecured: true    from the attribute row's IsSecured (the SDK's fetchEntityMetadata selects it). false is left out: it is the
+//                      create default, and an explicit false on a rebuild would ask to unsecure.
+//   dateTimeBehavior   DateOnly or TimeZoneIndependent, from the typed Date and Time read (date-behavior.js parseDateBehaviors:
+//                      `{ behavior, canChange }`). UserLocal is the create default and is left out, so a rebuild into the same
+//                      environment makes no extra read for it; a null behaviour is unknown, never written.
+function downloadedColumnFeatures(attr, dateEvidence) {
+  const out = {};
+  const secured = attr && (attr.isSecured !== undefined ? attr.isSecured : attr.IsSecured);
+  if (secured === true) out.isSecured = true;
+  const behavior = dateEvidence && dateEvidence.behavior;
+  if (behavior === 'DateOnly' || behavior === 'TimeZoneIndependent') out.dateTimeBehavior = behavior;
+  return out;
+}
+
+// The table flags a downloaded table carries (from readTableFlags): only those read as on. An off flag is left out, because turning
+// one off on a rebuild is a change the build makes only with consent (duplicate detection) and none is asked for here; unread is
+// unknown and left out too. Search on carries change tracking on, which validation requires beside it.
+function downloadedTableFlags(flags) {
+  const out = {};
+  if (!flags) return out;
+  if (flags.searchEnabled === true) { out.searchEnabled = true; out.changeTrackingEnabled = true; }
+  if (flags.changeTrackingEnabled === true) out.changeTrackingEnabled = true;
+  if (flags.duplicateDetectionEnabled === true) out.duplicateDetectionEnabled = true;
+  return out;
+}
+
 module.exports = {
   SCHEMA_FEATURES_MIN_VERSION,
   COLUMN_FEATURE_KEYS,
@@ -526,4 +570,7 @@ module.exports = {
   verifyTableFlags,
   isAuthorized,
   emptyFeatureResult,
+  downloadedChoiceOptions,
+  downloadedColumnFeatures,
+  downloadedTableFlags,
 };

@@ -256,3 +256,30 @@ test('verifyTableFlags: pass, fail and unknown are distinct', () => {
     { searchEnabled: true, changeTrackingEnabled: undefined, duplicateDetectionEnabled: true });
   assert.deepEqual(checks.map((x) => x.status), ['pass', 'unknown', 'fail']);
 });
+
+// ------------------------------------------------------------------------------------------------ download helpers (L01, L03, L28)
+
+const { downloadedChoiceOptions, downloadedColumnFeatures, downloadedTableFlags, normalizeChoiceOptions, choiceOptionsForSdk } = c;
+
+test('download: positional values keep the plain labels; any other value writes every option with its value, and round-trips', () => {
+  assert.deepEqual(downloadedChoiceOptions(['A', 'B'], [100000000, 100000001]), ['A', 'B']);
+  const sparse = downloadedChoiceOptions(['Low', { 3082: 'Media' }, 'High'], [1, 100000001, 9]);
+  assert.deepEqual(sparse, [{ value: 1, label: 'Low' }, { value: 100000001, label: { 3082: 'Media' } }, { value: 9, label: 'High' }]);
+  assert.deepEqual(normalizeChoiceOptions(sparse).map((o) => o.value), [1, 100000001, 9]);
+  assert.deepEqual(choiceOptionsForSdk(sparse)[1], { value: 100000001, label: { 3082: 'Media' } }, 'a one-language foreign label keeps its LCID');
+});
+
+test('download: a value that cannot be authored makes the set unrepresentable rather than renumbered', () => {
+  for (const values of [[1, null], [1, 1.5], [-1, 2], [1, 2147483648], [1]]) assert.equal(downloadedChoiceOptions(['A', 'B'], values), null, JSON.stringify(values));
+});
+
+test('download: only facts that were read, and only non-default values, become column fields and table flags', () => {
+  assert.deepEqual(downloadedColumnFeatures({ isSecured: true }, { behavior: 'DateOnly' }), { isSecured: true, dateTimeBehavior: 'DateOnly' });
+  assert.deepEqual(downloadedColumnFeatures({ IsSecured: true }, { behavior: 'TimeZoneIndependent' }), { isSecured: true, dateTimeBehavior: 'TimeZoneIndependent' });
+  for (const [attr, ev] of [[{ isSecured: false }, { behavior: 'UserLocal' }], [{}, { behavior: null }], [{ isSecured: 'true' }, undefined]]) {
+    assert.deepEqual(downloadedColumnFeatures(attr, ev), {});
+  }
+  assert.deepEqual(downloadedTableFlags({ searchEnabled: true, changeTrackingEnabled: false, duplicateDetectionEnabled: true }), { searchEnabled: true, changeTrackingEnabled: true, duplicateDetectionEnabled: true });
+  assert.deepEqual(downloadedTableFlags({ searchEnabled: false, changeTrackingEnabled: undefined, duplicateDetectionEnabled: false }), {});
+  assert.deepEqual(downloadedTableFlags(null), {});
+});
