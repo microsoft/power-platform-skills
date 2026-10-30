@@ -3608,3 +3608,53 @@ test('verify tells a maker what the flag is for when a string caption is compare
   assert.strictEqual(spanish.chk.present, true, spanish.chk.detail);
   assert.strictEqual(spanish.res.unverified, undefined);
 });
+
+// Column types: a declared column that exists is also held to its declared type, from the very rows the existence check reads through the
+// real SDK bundle — so the check costs no request, and a legacy spec's verification sends exactly what it sent before.
+test('REAL BUNDLE: verify fails a column deployed with another type, says so by both types, and sends only the reads it always sent', async () => {
+  const fsx = require('node:fs');
+  const os = require('node:os');
+  const path = require('node:path');
+  const { readerFor } = require('../verify-model-app.js');
+  const B = require(path.resolve(__dirname, '..', 'vendor', 'cds-maker-sdk.cjs'));
+  const label = (l) => ({ UserLocalizedLabel: { Label: l, LanguageCode: 1033 }, LocalizedLabels: [{ Label: l, LanguageCode: 1033 }] });
+  const run = async (spec) => {
+    const dir = fsx.mkdtempSync(path.join(os.tmpdir(), 'verify-types-'));
+    const requests = [];
+    const get = async (url) => {
+      const u = new URL(url);
+      const p = decodeURIComponent(u.pathname + u.search).replace(/^\/api\/data\/v9\.\d+/, '');
+      requests.push(p.replace(/\?.*$/, ''));
+      if (/^\/EntityDefinitions\?/.test(p)) {
+        return { status: 200, headers: {}, body: { value: [{ LogicalName: 'new_ticket', SchemaName: 'new_Ticket', EntitySetName: 'new_tickets', MetadataId: '66666666-6666-6666-6666-666666666666', DisplayName: label('Ticket'), DisplayCollectionName: label('Tickets'), IsCustomEntity: true, PrimaryNameAttribute: 'new_name', PrimaryIdAttribute: 'new_ticketid', ObjectTypeCode: 10001 }] } };
+      }
+      if (/^\/EntityDefinitions\(LogicalName='new_ticket'\)\/Attributes\?/.test(p)) {
+        return { status: 200, headers: {}, body: { value: [
+          { LogicalName: 'new_name', SchemaName: 'new_Name', DisplayName: label('Name'), AttributeType: 'String', IsCustomAttribute: true },
+          { LogicalName: 'new_amount', SchemaName: 'new_Amount', DisplayName: label('Amount'), AttributeType: 'Money', IsCustomAttribute: true },
+          { LogicalName: 'new_due', SchemaName: 'new_Due', DisplayName: label('Due'), AttributeType: 'DateTime', IsCustomAttribute: true },
+        ] } };
+      }
+      return { status: 404, headers: {}, body: { error: { code: '0x80060888', message: 'Not found' } } };
+    };
+    const sdk = B.createMakerSdk({ workspaceStorage: B.createNodeWorkspaceStorage(dir), instanceUrl: 'https://contoso.crm.dynamics.com', httpClient: { get, post: get, put: get, patch: get, delete: get } });
+    try {
+      await sdk.initWorkspace();
+      requests.length = 0;
+      return { result: await verifySpec(spec, readerFor(sdk, 'new_app', {})), requests };
+    } finally { fsx.rmSync(dir, { recursive: true, force: true }); }
+  };
+  const wrong = await run({ entities: [{ schemaName: 'new_Ticket', columns: [{ schemaName: 'new_Amount', type: 'Decimal' }, { schemaName: 'new_Due', type: 'DateTime' }] }] });
+  assert.deepStrictEqual(wrong.result.checks.filter((c) => !c.present).map((c) => [c.kind, c.name, c.detail]), [
+    ['column-type', 'new_Ticket.new_Amount', 'declared Decimal, deployed Money: a column\'s type cannot be changed in place'],
+  ]);
+  assert.strictEqual(wrong.result.ok, false);
+  assert.strictEqual(wrong.result.unverified, undefined);
+  // A legacy spec that matches (and an untyped column, which is Text) passes as before, with the same reads — no further request.
+  const legacy = await run({ entities: [{ schemaName: 'new_Ticket', columns: [{ schemaName: 'new_Name' }, { schemaName: 'new_Due', type: 'DateTime' }] }] });
+  assert.strictEqual(legacy.result.ok, true);
+  assert.strictEqual(legacy.result.unverified, undefined);
+  assert.deepStrictEqual(legacy.result.checks.map((c) => c.kind), ['entity', 'column', 'column']);
+  assert.deepStrictEqual(legacy.requests, ['/EntityDefinitions', "/EntityDefinitions(LogicalName='appmodule')", "/EntityDefinitions(LogicalName='new_ticket')/Attributes"]);
+  assert.deepStrictEqual(wrong.requests, legacy.requests);
+});

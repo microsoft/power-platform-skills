@@ -35,6 +35,7 @@ const { isMainForm, selectDefaultForm, plannedMainFormSequence, displayCondition
 const { hasLabelUses, resolveViewFilterLabels, memoizeChoiceReader, describeProblem } = require('./view-filter-labels.js');
 const { hostsCustomControl } = require('./dashboard-tiles.js');
 const { answerOf, statusReasonChecks, alternateKeyChecks } = require('./status-reasons-keys.js');
+const { columnTypeChecks } = require('./schema-feature-contract.js');
 
 // How many verification reads may be in flight at once. A verify pass is nothing but reads, but each is a
 // Dataverse request that already retries on its own 429s (lib/sdk-http-client.js), so the bound is small:
@@ -215,14 +216,21 @@ async function verifySpec(spec, read, opts = {}) {
   }
 
   // Entities + their declared columns.
-  plan.each(spec.entities || [], async ({ add }, entities) => {
+  plan.each(spec.entities || [], async ({ add, unverified }, entities) => {
   for (const e of entities) {
     const logical = e.schemaName.toLowerCase();
     const tbl = await read.findTable(logical);
     add('entity', e.schemaName, tbl);
     if (tbl) {
-      const cols = new Set(((await read.findColumns(logical)) || []).map((c) => String(c.logicalName || c).toLowerCase()));
+      const rows = (await read.findColumns(logical)) || [];
+      const cols = new Set(rows.map((c) => String(c.logicalName || c).toLowerCase()));
       for (const c of e.columns || []) add('column', `${e.schemaName}.${c.schemaName}`, cols.has(String(c.schemaName).toLowerCase()));
+      // A present column is also held to its declared type, from the rows just read for its existence — no further request. A type
+      // cannot be changed in place, so a mismatch is a failed check that names both types; a row that does not state its type is
+      // `unverified`, never a pass. A row that is only a name (some readers return strings) is not compared at all.
+      const types = columnTypeChecks(e, rows);
+      for (const m of types.failed) add('column-type', m.name, false, m.detail);
+      unverified.push(...types.unverified);
       // Grid data visualization (preview). Reconciled by VALUE, not existence: the build writes a
       // specific renderer, so "a config row exists" would pass even if the deployed renderer were a
       // star rating where the spec asked for a radial dial.
