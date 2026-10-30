@@ -333,14 +333,20 @@ const DEPLOYED_TYPE = Object.freeze({
   MoneyType: 'Money', DateTimeType: 'DateTime', BooleanType: 'Boolean', PicklistType: 'Picklist', CustomerType: 'Customer', LookupType: 'Lookup',
 });
 
+// The declared kinds the platform stores as AttributeType 'Virtual'. Without the type NAME a read cannot tell them apart, so a
+// Virtual column declared as one of them is consistent as far as that read can say — not a mismatch, and not reported.
+const VIRTUAL_KINDS = new Set(['File', 'Image', 'MultiChoice']);
+
 // A declared column whose deployed type differs from the spec's. Column types are immutable on the platform (changing one means
 // a new column and a data migration), so a rebuild never "reapplies" a type: this only lets verification SAY the spec and the
 // environment disagree, instead of passing because a column of that name exists.
 //
-// `deployed` rows are attribute metadata, e.g.
+// `deployed` rows are attribute metadata in either of two shapes — the raw Web API row, or the SDK's findColumns summary (which
+// verification already reads for the existence check, so the comparison costs no request):
 //   { "LogicalName": "new_amount", "AttributeType": "Decimal", "AttributeTypeName": { "Value": "DecimalType" } }
 //   { "LogicalName": "new_photo",  "AttributeType": "Virtual", "AttributeTypeName": { "Value": "ImageType" } }
-// A row without a readable type is `unknown`, never a match: 'Virtual' with no type name could be any of three types.
+//   { logicalName: 'new_amount', schemaName: 'new_Amount', displayName: 'Amount', attributeType: 'Money', isCustom: true }
+// findColumns writes 'Unknown' when the row carries no AttributeType; that, or no type at all, is `unknown`, never a match.
 function columnTypeMismatches(entity, deployed) {
   const byName = new Map((Array.isArray(deployed) ? deployed : []).map((r) => [lower(r && (r.LogicalName || r.logicalName)), r]));
   const mismatches = [];
@@ -349,20 +355,40 @@ function columnTypeMismatches(entity, deployed) {
     if (!c || !c.schemaName) continue;
     const row = byName.get(lower(c.schemaName));
     if (!row) continue; // absent is the existence check's finding, not a type mismatch
-    const want = DEPLOYED_TYPE_NAME[c.type || 'Text'];
+    const declared = c.type || 'Text';
+    const want = DEPLOYED_TYPE_NAME[declared];
     if (!want) continue;
     const typeName = row.AttributeTypeName && typeof row.AttributeTypeName.Value === 'string' ? row.AttributeTypeName.Value : undefined;
-    const type = typeof row.AttributeType === 'string' ? row.AttributeType : undefined;
-    const target = { table: lower(entity.schemaName), column: lower(c.schemaName), declared: c.type || 'Text' };
+    const rawType = typeof row.AttributeType === 'string' ? row.AttributeType : (typeof row.attributeType === 'string' ? row.attributeType : undefined);
+    const type = rawType && rawType !== 'Unknown' ? rawType : undefined;
+    const target = { table: lower(entity.schemaName), column: lower(c.schemaName), declared };
     if (typeName) {
       if (typeName !== want) mismatches.push(Object.assign(target, { deployed: typeName }));
-    } else if (type && type !== 'Virtual' && DEPLOYED_TYPE[want]) {
-      if (type !== DEPLOYED_TYPE[want]) mismatches.push(Object.assign(target, { deployed: type }));
+    } else if (type === 'Virtual') {
+      if (!VIRTUAL_KINDS.has(declared)) mismatches.push(Object.assign(target, { deployed: type }));
+    } else if (type) {
+      if (VIRTUAL_KINDS.has(declared) || type !== DEPLOYED_TYPE[want]) mismatches.push(Object.assign(target, { deployed: type }));
     } else {
       unknown.push(target);
     }
   }
   return { mismatches, unknown };
+}
+
+// The column-type checks verification adds for one table, from the rows it already read: a failed check per mismatch, named as the
+// column existence check names it (`<Table>.<column>` in the spec's spelling), and an `unverified` entry per column whose deployed
+// type the read did not state. A column whose type matches adds nothing, so a spec that agrees with its environment reports what it
+// always did.
+function columnTypeChecks(entity, deployed) {
+  const { mismatches, unknown } = columnTypeMismatches(entity, deployed);
+  const nameOf = (x) => {
+    const c = ((entity && entity.columns) || []).find((col) => col && lower(col.schemaName) === x.column);
+    return `${entity.schemaName}.${c ? c.schemaName : x.column}`;
+  };
+  return {
+    failed: mismatches.map((m) => ({ name: nameOf(m), detail: `declared ${m.declared}, deployed ${m.deployed}: a column's type cannot be changed in place` })),
+    unverified: unknown.map((u) => `column-type:${nameOf(u)} (declared ${u.declared}; the deployed type was not stated by the read)`),
+  };
 }
 
 // ---------------------------------------------------------------------------------------------------------------- table flags
@@ -416,6 +442,9 @@ function isAuthorized(authorizedDestructive, key) {
 //   searchEnabled true on an untracked table                              the write carries changeTrackingEnabled: true, the
 //                                                                         explicit consent the SDK needs (validation already
 //                                                                         required it in the spec).
+//   searchEnabled false on a table that has it on                         written as declared, with no consent: it removes the
+//                                                                         table from Dataverse search, which turning it on again
+//                                                                         restores once the table is indexed again. No data or rule is lost.
 function planTableFlags(entity, current, { authorizedDestructive } = {}) {
   const operations = [];
   const unknown = [];
@@ -563,6 +592,7 @@ module.exports = {
   usesSchemaFeatures,
   validateSchemaFeatures,
   columnTypeMismatches,
+  columnTypeChecks,
   declaredTableFlags,
   readTableFlags,
   planTableFlags,

@@ -83,3 +83,31 @@ test('REAL BUNDLE: a declared secured column whose columns read failed and whose
     }
   }
 });
+
+// ------------------------------------------------------------------------------------------------ column types from the existing read
+
+test('REAL BUNDLE: the findColumns rows verification already reads carry the type the column-type check needs, with no other request', async () => {
+  const { columnTypeChecks } = require('../lib/schema-feature-contract.js');
+  const r = realSdk((verb, p) => {
+    if (verb === 'GET' && /\/Attributes\?\$select=LogicalName,SchemaName,DisplayName,AttributeType,IsCustomAttribute$/.test(p)) {
+      return ok({ value: [
+        { LogicalName: 'new_amount', SchemaName: 'new_Amount', DisplayName: { UserLocalizedLabel: { Label: 'Amount' } }, AttributeType: 'Money', IsCustomAttribute: true },
+        { LogicalName: 'new_photo', SchemaName: 'new_Photo', DisplayName: { UserLocalizedLabel: { Label: 'Photo' } }, AttributeType: 'Virtual', IsCustomAttribute: true },
+        { LogicalName: 'new_odd', SchemaName: 'new_Odd', DisplayName: { UserLocalizedLabel: { Label: 'Odd' } }, IsCustomAttribute: true },
+      ] });
+    }
+    return undefined;
+  });
+  try {
+    await r.sdk.initWorkspace();
+    const rows = await r.sdk.findColumns('new_ticket');
+    const entity = { schemaName: 'new_ticket', columns: [{ schemaName: 'new_amount', type: 'Decimal' }, { schemaName: 'new_photo', type: 'Image' }, { schemaName: 'new_odd', type: 'Integer' }] };
+    assert.deepEqual(columnTypeChecks(entity, rows), {
+      failed: [{ name: 'new_ticket.new_amount', detail: 'declared Decimal, deployed Money: a column\'s type cannot be changed in place' }],
+      unverified: ['column-type:new_ticket.new_odd (declared Integer; the deployed type was not stated by the read)'],
+    });
+    assert.deepEqual(r.requests.map((x) => x[0]), ['GET']);
+  } finally {
+    r.cleanup();
+  }
+});

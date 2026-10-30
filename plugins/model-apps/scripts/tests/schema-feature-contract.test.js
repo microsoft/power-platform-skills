@@ -170,7 +170,32 @@ test('columnTypeMismatches reports a declared type the deployed column does not 
     { table: 'new_case', column: 'new_amount', declared: 'Decimal', deployed: 'MoneyType' },
     { table: 'new_case', column: 'new_note', declared: 'Text', deployed: 'Memo' },
   ]);
-  assert.deepEqual(r.unknown, [{ table: 'new_case', column: 'new_tags', declared: 'MultiChoice' }]);
+  // A Virtual column with no type name is consistent with any of the three Virtual kinds; nothing is said about it.
+  assert.deepEqual(r.unknown, []);
+});
+
+// The rows verification already has: the SDK's findColumns summary (camelCase, 'Unknown' when the row had no AttributeType).
+const SUMMARY = (logicalName, attributeType) => ({ logicalName, schemaName: logicalName, displayName: logicalName, attributeType, isCustom: true });
+
+test('columnTypeChecks judges the findColumns rows verification already read: a wrong type fails, an unstated one is unverified', () => {
+  const entity = { schemaName: 'new_Case', columns: [
+    { schemaName: 'new_Amount', type: 'Decimal' }, { schemaName: 'new_photo', type: 'Image' }, { schemaName: 'new_flag', type: 'Image' },
+    { schemaName: 'new_note' }, { schemaName: 'new_code', type: 'AutoNumber' }, { schemaName: 'new_odd', type: 'Integer' }, { schemaName: 'new_gone', type: 'Text' },
+  ] };
+  const rows = [
+    SUMMARY('new_amount', 'Money'), SUMMARY('new_photo', 'Virtual'), SUMMARY('new_flag', 'Boolean'),
+    SUMMARY('new_note', 'String'), SUMMARY('new_code', 'String'), SUMMARY('new_odd', 'Unknown'),
+  ];
+  assert.deepEqual(c.columnTypeChecks(entity, rows), {
+    failed: [
+      { name: 'new_Case.new_Amount', detail: 'declared Decimal, deployed Money: a column\'s type cannot be changed in place' },
+      { name: 'new_Case.new_flag', detail: 'declared Image, deployed Boolean: a column\'s type cannot be changed in place' },
+    ],
+    unverified: ['column-type:new_Case.new_odd (declared Integer; the deployed type was not stated by the read)'],
+  });
+  // A table whose columns all match its spec adds nothing — the report is what it was.
+  assert.deepEqual(c.columnTypeChecks({ schemaName: 'new_Ok', columns: [{ schemaName: 'new_a', type: 'Money' }, { schemaName: 'new_b', type: 'MultiChoice' }] },
+    [SUMMARY('new_a', 'Money'), SUMMARY('new_b', 'Virtual')]), { failed: [], unverified: [] });
 });
 
 // ------------------------------------------------------------------------------------------------ table flags
