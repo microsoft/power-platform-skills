@@ -231,6 +231,20 @@ test('resolveRoleGrantTarget: no match and an ambiguous match are both errors', 
   );
 });
 
+test('resolveRoleGrantTarget: a role the server repeats is still one role, and an answer that says more exist refuses', async () => {
+  const bu = { businessunit: () => [{ businessunitid: '44444444-4444-4444-4444-444444444444' }] };
+  // A paginating server can hand back the same row twice: that is one role, not two that share a name.
+  const t = await resolveRoleGrantTarget(fakeProvision({ ...bu, role: () => [roleRow(), roleRow()] }), grant(), {});
+  assert.strictEqual(t.roleId, '33333333-3333-3333-3333-333333333333');
+  // The SDK marks a page that is not every match with a non-enumerable `hasMore`: one row of an incomplete answer
+  // does not prove "exactly one".
+  const partial = [roleRow()];
+  Object.defineProperty(partial, 'hasMore', { value: true, enumerable: false });
+  await assert.rejects(
+    () => resolveRoleGrantTarget(fakeProvision({ ...bu, role: () => partial }), grant(), {}),
+    /the role lookup was incomplete/,
+  );
+});
 test('resolveRoleGrantTarget: a stale pinned roleId is an error, never a create trigger', async () => {
   const p = fakeProvision({ role: () => [] });
   await assert.rejects(

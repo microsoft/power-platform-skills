@@ -55,6 +55,20 @@ test('resolveAppId fails closed when a display name matches more than one app', 
   assert.match(r.error, /new_sales, contoso_sales/);
 });
 
+// A display name read twice by a paginating server is still one app; an answer that says more apps carry the name
+// than it returned does not prove the name unique, so it is refused like an ambiguous one.
+test('resolveAppId counts distinct apps, and refuses a display-name answer cut short', async () => {
+  const row = { appmoduleid: 'app-9', uniquename: 'new_smokeapp', name: 'Smoke App' };
+  const repeated = { queryRecords: async (_l, o) => (/uniquename eq/.test(o.filter) ? [] : [row, { ...row }]) };
+  assert.deepStrictEqual(await resolveAppId(repeated, 'Smoke App'), { appId: 'app-9', matchedBy: 'displayName', uniqueName: 'new_smokeapp' });
+  const partial = [row];
+  Object.defineProperty(partial, 'hasMore', { value: true, enumerable: false });
+  const cut = { queryRecords: async (_l, o) => (/uniquename eq/.test(o.filter) ? [] : partial) };
+  const r = await resolveAppId(cut, 'Smoke App');
+  assert.strictEqual(r.appId, undefined, 'one row of a cut-short answer is not "exactly one"');
+  assert.match(r.error, /could not prove unique/);
+  assert.match(r.error, /new_smokeapp/);
+});
 // A GUID is authoritative: resolving it must not cost a query, and must never reach the
 // display-name fallback (an app DISPLAY-named like a GUID could otherwise shadow a real id).
 test('resolveAppId issues no query for a GUID', async () => {

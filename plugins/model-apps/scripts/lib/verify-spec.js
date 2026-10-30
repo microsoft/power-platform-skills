@@ -6,6 +6,7 @@
 // (neither a pass nor a failure), `unverified: ["<kind>:<name> (<reason>)"]`.
 
 const { odataLit } = require('./odata.js');
+const { distinctRows } = require('./query-completeness.js');
 const { matchContainer, isEngineOwnedSection, isEngineHostSection, claimedByAuthoredName } = require('./form-container-match.js');
 const { authoredSectionNames, authoredTabNames } = require('./app-spec.js');
 const { sitemapEntityTables } = require('./app-spec.js');
@@ -1332,7 +1333,7 @@ async function verifySpec(spec, read, opts = {}) {
   //   existence   — the rule never built at all
   //   cardinality — more than one row for the same (entity, name) fires the logic repeatedly
   //   state       — deployed Draft when the spec asked for Active (or the reverse)
-  plan.each(spec.businessRules || [], async ({ add, environmentSkipped, phaseSkipped }, rules) => {
+  plan.each(spec.businessRules || [], async ({ add, environmentSkipped, phaseSkipped, unverified }, rules) => {
   for (const rule of rules) {
     const entityLogical = String(rule.entity).toLowerCase();
     const name = `${entityLogical}.${rule.name}`;
@@ -1381,7 +1382,14 @@ async function verifySpec(spec, read, opts = {}) {
       add('business-rule', name, false, `could not be read: ${e && e.message}`);
       continue;
     }
-    const list = rows || [];
+    // Two or more distinct definitions prove a duplicate even when the read was cut short; a read cut short with
+    // fewer proves nothing, so it is unverified rather than "deployed once" or "not deployed".
+    const { list, more } = workflowRowsOf(rows);
+    if (list.length > 1) {
+      add('business-rule', name, false, `${list.length} rules share this name on ${entityLogical} — duplicates fire the same logic more than once (see issue #482)`);
+      continue;
+    }
+    if (more) { unverified.push(`business-rule:${name} (${incompleteDuplicateRead(list.length)})`); continue; }
     if (!list.length) {
       // Name the most likely cause instead of the bare fact. The SDK writes rules ONLY through the
       // bound `CreateProcessWithWfomJson` member and no longer compiles a workflow-XAML fallback, so
@@ -1396,10 +1404,6 @@ async function verifySpec(spec, read, opts = {}) {
         'not deployed — if the build reported "business rules were NOT created", this environment does not expose the CreateProcessWithWfomJson member and cannot host them');
       continue;
     }
-    if (list.length > 1) {
-      add('business-rule', name, false, `${list.length} rules share this name on ${entityLogical} — duplicates fire the same logic more than once (see issue #482)`);
-      continue;
-    }
     const wantActive = (rule.status || 'Active') === 'Active';
     const isActive = list[0].statecode === 1;
     add('business-rule', name, wantActive === isActive,
@@ -1411,7 +1415,7 @@ async function verifySpec(spec, read, opts = {}) {
   // the same three silent ways: it never built, it built twice (users are offered the same process
   // more than once), or it is deployed Draft and therefore invisible on the form. Activation is
   // best-effort in the build, so verify is what makes the outcome loud.
-  plan.each(spec.businessProcessFlows || [], async ({ add }, flows) => {
+  plan.each(spec.businessProcessFlows || [], async ({ add, unverified }, flows) => {
   for (const flow of flows) {
     const entityLogical = String(flow.entity).toLowerCase();
     const name = `${entityLogical}.${flow.name}`;
@@ -1430,12 +1434,13 @@ async function verifySpec(spec, read, opts = {}) {
       add('business-process-flow', name, false, `could not be read: ${e && e.message}`);
       continue;
     }
-    const list = rows || [];
-    if (!list.length) { add('business-process-flow', name, false, 'not deployed'); continue; }
+    const { list, more } = workflowRowsOf(rows);
     if (list.length > 1) {
       add('business-process-flow', name, false, `${list.length} process flows share this name on ${entityLogical} — users are offered the same process more than once`);
       continue;
     }
+    if (more) { unverified.push(`business-process-flow:${name} (${incompleteDuplicateRead(list.length)})`); continue; }
+    if (!list.length) { add('business-process-flow', name, false, 'not deployed'); continue; }
     const wantActive = (flow.status || 'Active') === 'Active';
     const isActive = list[0].statecode === 1;
     add('business-process-flow', name, wantActive === isActive,
@@ -2236,6 +2241,19 @@ async function verifySpec(spec, read, opts = {}) {
     ...(phaseSkipped.length ? { phaseSkipped } : {}),
     ...(unverified.length ? { unverified } : {}),
   };
+}
+
+// The definition rows of a `top: 50` duplicate read, counted by DISTINCT `workflowid` (a paginating server can
+// repeat a row, which is still one rule), and whether the read said more rows exist than it carries
+// (lib/query-completeness.js; `hasMore` is read from the SDK's own array, before any copy). A row without its id —
+// only a hand-made reader returns one — cannot be told apart from another, so then the rows count as they come.
+function workflowRowsOf(rows) {
+  const d = distinctRows(rows || [], 'workflowid');
+  return { list: d.withoutId ? Array.from(rows || []) : d.rows, more: d.hasMore === true };
+}
+
+function incompleteDuplicateRead(n) {
+  return `the read answered ${n} definition row(s) and said more exist, so neither "deployed once" nor "not deployed" is proven`;
 }
 
 function escapeRe(s) {

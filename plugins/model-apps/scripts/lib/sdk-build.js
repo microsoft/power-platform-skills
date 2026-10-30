@@ -138,6 +138,7 @@ const { AI_APP_SETTING, resolveAiFlags, encodeAiFlags, rebucketNonEnablingSkips,
 const { DASHBOARD_LAUNCHER_URL, adoptLiveSitemap, chromeByTargetKey, describeSitemapNotes } = require('./sitemap-merge.js');
 const { buildPromptSpec } = require('./ai-prompt.js');
 const { odataLit } = require('./odata.js');
+const { exactOne, distinctRows } = require('./query-completeness.js');
 const { isRestrictedSolution } = require('./system-solutions.js');
 const { tableRefs, pinAppTables, publishAppComponents, resolveMainForms, appComponentsFor, applyAppMainForms, explainAppPushWarnings, savedPageRows,
   declaredAppPins, pinDeclaredArtifacts } = require('./app-components.js');
@@ -2457,6 +2458,10 @@ function isBenignAssociationError(err, mode) {
   }
   // dissociate: a link that is already gone is a 404 / "does not exist" — the desired end state.
   if (status === 404) return true;
+  // Only a 400 or a status-less SDK error may be read by its words (Dataverse answers some missing-link
+  // dissociates with a 400 carrying 0x80040217): a refusal (401/403), a conflict or throttle (409/412/429)
+  // or a server failure (5xx) is never "already gone", whatever it says.
+  if (status != null && status !== 400) return false;
   return /does not exist|not found|cannot be found/.test(msg) || /0x80040217/.test(dvCode);
 }
 
@@ -2568,7 +2573,12 @@ async function resolveRoleGrantTarget(provision, grant, buCache) {
     filter: `name eq '${String(name).replace(/'/g, "''")}'${roleBuClause(bu)}`,
     top: 5,
   });
-  const matches = (rows || []).filter((r) => r && r.roleid);
+  // Count DISTINCT role ids (a paginating server can repeat a row, which is still one role), and refuse a
+  // lookup the server said is incomplete — "exactly one" is not proven by a page that says more exist.
+  // `rows` is read before any copy: the SDK's `hasMore` is non-enumerable (lib/query-completeness.js).
+  const judged = exactOne(rows || [], 'roleid');
+  if (judged.outcome === 'incomplete') throw refusal(`roleGrant "${name}": the role lookup was incomplete — pin the role with 'roleId'`);
+  const matches = judged.outcome === 'none' ? [] : distinctRows(rows, 'roleid').rows;
   if (!matches.length) throw refusal(`roleGrant "${name}": no security role with that name exists in business unit ${bu} — check the spelling (the name must match EXACTLY), or pin the role with 'roleId'`);
   if (matches.length > 1) throw refusal(`roleGrant "${name}": ${matches.length} roles share that name in business unit ${bu} — pin the one you mean with 'roleId'`);
   return { roleId: String(matches[0].roleid), name: matches[0].name || name, managed: matches[0].ismanaged === true };

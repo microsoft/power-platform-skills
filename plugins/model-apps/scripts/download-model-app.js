@@ -62,6 +62,7 @@ const { readStatusOptions, statusReasonsFromOptions, alternateKeysFromMetadata }
 const { appUniqueName } = require('./lib/sdk-build.js');
 const { makeTempWorkspace } = require('./lib/temp-workspace.js');
 const { makeWritesBlocking } = require('./lib/output-redaction.js');
+const { exactOne, distinctRows } = require('./lib/query-completeness.js');
 
 // webresourcetype (int) -> app-spec web-resource type.
 const WR_TYPE = { 1: 'html', 2: 'css', 3: 'js', 4: 'xml', 5: 'png', 6: 'jpg', 7: 'gif', 8: 'xap', 9: 'xsl', 10: 'ico', 11: 'svg', 12: 'resx' };
@@ -675,11 +676,16 @@ async function resolveAppId(sdk, appArg) {
   if (byUnique && byUnique[0] && byUnique[0].appmoduleid) return { appId: byUnique[0].appmoduleid, matchedBy: 'uniqueName' };
 
   const byName = await sdk.queryRecords('appmodule', { select: ['appmoduleid', 'uniquename', 'name'], filter: `name eq '${esc}'`, top: 50 });
-  const matches = (byName || []).filter((r) => r && r.appmoduleid);
-  if (matches.length === 1) return { appId: matches[0].appmoduleid, matchedBy: 'displayName', uniqueName: matches[0].uniquename };
-  if (matches.length > 1) {
+  // Count DISTINCT apps (a paginating server can repeat a row), and refuse an answer the server said is
+  // incomplete exactly like an ambiguous one: one row of a cut-short answer does not prove the name is unique.
+  // `byName` is judged before any copy — the SDK's `hasMore` is non-enumerable (lib/query-completeness.js).
+  const judged = exactOne(byName || [], 'appmoduleid');
+  if (judged.outcome === 'one') return { appId: judged.row.appmoduleid, matchedBy: 'displayName', uniqueName: judged.row.uniquename };
+  if (judged.outcome === 'ambiguous' || judged.outcome === 'incomplete') {
+    const matches = distinctRows(byName, 'appmoduleid').rows;
     const names = matches.map((m) => m.uniquename).filter(Boolean).join(', ');
-    return { error: `'${appArg}' is a DISPLAY name shared by ${matches.length} apps — display names are not unique, so re-run --app with one of these unique names: ${names}` };
+    const shared = judged.outcome === 'ambiguous' ? `shared by ${matches.length} apps` : `the lookup could not prove unique (the answer said more apps carry it than it returned)`;
+    return { error: `'${appArg}' is a DISPLAY name ${shared} — display names are not unique, so re-run --app with ${names ? `one of these unique names: ${names}` : `the app's unique name`}` };
   }
   return { error: `app '${appArg}' not found — --app takes the app's id (GUID), its unique name (e.g. new_myapp), or an unambiguous display name` };
 }

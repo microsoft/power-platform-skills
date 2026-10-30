@@ -496,6 +496,16 @@ test('verify FAILS duplicates — the #482 residue the build cannot always remov
   assert.match(c.detail, /2 rules share this name/);
 });
 
+test('verify counts a rule the server repeats once, and never reads a read cut short as "deployed once"', async () => {
+  const same = { workflowid: 'w1', statecode: 1 };
+  assert.strictEqual(ruleCheck(await verifySpec(ruleSpec(), baseReader([same, { ...same }]))).present, true, 'one rule read twice is one rule');
+  // The SDK marks an answer that is not every row with a non-enumerable `hasMore`.
+  const partial = [same];
+  Object.defineProperty(partial, 'hasMore', { value: true, enumerable: false });
+  const r = await verifySpec(ruleSpec(), baseReader(partial));
+  assert.strictEqual(ruleCheck(r), undefined, 'neither a pass nor a failure');
+  assert.match((r.unverified || []).join('\n'), /^business-rule:new_ticket\..* \(the read answered 1 definition row\(s\) and said more exist/m);
+});
 test('verify FAILS an ACTIVE rule the spec asks to be Draft', async () => {
   const c = ruleCheck(await verifySpec(ruleSpec('Draft'), baseReader([{ workflowid: 'w1', statecode: 1 }])));
   assert.strictEqual(c.present, false);
