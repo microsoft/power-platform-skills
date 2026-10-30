@@ -294,6 +294,9 @@ async function applyChartCreate(plan, sdk, ctx, result) {
   } else if (created.status === 'refused') {
     result.refused.push({ ...refusal(plan.key, /^creation-/.test(created.code) ? created.code : 'chart-create-refused', 'the chart was not created; nothing was written'), rules: created.rules || [] });
   } else {
+    // The create may have been stored: its table's publication is recorded (withheld) so the build's
+    // publication barrier keeps the table unpublished (publication-barrier.js).
+    result.pendingPublish.push({ key: plan.key, scope: { type: 'chart', id, table: plan.intent.entity } });
     result.unknown.push(refusal(plan.key, 'chart-write-unknown', 'the chart create did not report its outcome; check the table\'s charts'));
   }
   return result;
@@ -347,8 +350,10 @@ async function applyChartPlan(plan, sdk, ctx) {
     const observed = await readObserved(sdk, id);
     if (!observed || observed.title !== plan.intent.title) {
       const parts = plan.changed.filter((p) => p !== 'title');
-      if (pushed.outcome === 'saved' && parts.length) {
-        result.saved.push({ key: plan.key, kind: 'chart', id, parts });
+      if (pushed.outcome === 'saved') {
+        // Only the parts other than the title are claimed saved, but the push stored the row either way,
+        // so its publication is recorded (withheld with the refusal or unknown below).
+        if (parts.length) result.saved.push({ key: plan.key, kind: 'chart', id, parts });
         result.pendingPublish.push({ key: plan.key, scope: { type: 'chart', id, table: plan.intent.entity } });
       }
       if (observed) {
@@ -371,6 +376,8 @@ async function applyChartPlan(plan, sdk, ctx) {
   } else if (pushed.outcome === 'refused') {
     result.refused.push(rejected(pushed.rules || []));
   } else {
+    // The write may have been stored: recorded (withheld) for the publication barrier.
+    result.pendingPublish.push({ key: plan.key, scope: { type: 'chart', id, table: plan.intent.entity } });
     result.unknown.push(refusal(plan.key, 'chart-write-unknown', 'the chart write did not report its outcome; check the chart'));
   }
   return result;

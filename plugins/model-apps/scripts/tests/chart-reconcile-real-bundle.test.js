@@ -352,3 +352,59 @@ test('a title update whose read-back fails schedules no publish, not even for th
   assert.equal(publishXmlCount(srv), 0, 'expected PublishXml requests 0');
   assert.deepEqual(result.pendingPublish.map((p) => p.withheld), [true]);
 });
+
+// Declared and legacy charts publish the same way: a chart's table goes to the publish phase's chart map
+// (and to the tables published before an app); no chart is published at once. Without the publish phase
+// no chart is published, whichever path wrote it. The legacy chart runs through the real build over a
+// stateful fake Dataverse; the declared chart through the build's publication paths as wired.
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+const { buildPublishPaths } = require('./helpers/feature-ports.js');
+const { inOwnFolder } = require('./helpers/own-app-folder.js');
+const { createFakeDataverse } = require('./helpers/fake-dataverse.js');
+const { createMakerSdk, createNodeWorkspaceStorage } = require('../vendor/cds-maker-sdk.cjs');
+const runSdkBuild = inOwnFolder(require('../lib/sdk-build.js').runSdkBuild);
+
+const legacyChartSpec = () => ({
+  $schemaVersion: '1.0',
+  solution: { uniqueName: 'ContosoSD', displayName: 'Contoso SD', publisherPrefix: 'new' },
+  app: { name: 'Support Desk', uniqueName: 'new_supportdesk' },
+  entities: [{ schemaName: 'new_ticket', displayName: 'Ticket', pluralName: 'Tickets', existing: true, primaryAttribute: { schemaName: 'new_name', displayName: 'Name' }, columns: [{ schemaName: 'new_area', displayName: 'Area', type: 'Text' }] }],
+  charts: [{ entity: 'new_ticket', name: 'By Area', chartType: 'Pie', groupBy: 'new_area', measure: 'count' }],
+});
+
+for (const [phases, publish, expected] of [[['charts', 'publish'], true, 1], [['charts', 'publish'], false, 0], [['charts'], true, 0]]) {
+  const label = `phases ${phases.join('+')}, publish ${publish}`;
+
+  test(`chart parity (${label}): a legacy chart is published ${expected} time(s)`, async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'chart-parity-'));
+    try {
+      const fake = createFakeDataverse({ entities: { new_ticket: { attributes: { new_name: 'String', new_area: 'String' } } } });
+      const sdk = createMakerSdk({ workspaceStorage: createNodeWorkspaceStorage(dir), instanceUrl: 'https://contoso.crm.dynamics.com', httpClient: fake.httpClient });
+      await sdk.initWorkspace();
+      const mark = fake.mark();
+      await runSdkBuild(legacyChartSpec(), { sdk, apply: true, publish, phases, warn: () => {} });
+      const writes = fake.writeCounts(mark);
+      assert.equal(writes['POST savedqueryvisualizations'], 1, JSON.stringify(writes));
+      assert.equal(writes['POST PublishXml'] || 0, expected, JSON.stringify(writes));
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test(`chart parity (${label}): a declared chart is published ${expected} time(s), never at once`, async () => {
+    const srv = createRowTableServer({ tables: { savedqueryvisualizations: 'savedqueryvisualizationid' } });
+    const sdk = await srv.newSdk();
+    const ctx = { managed: fakeManaged(), creates: passThroughCreates() };
+    const paths = buildPublishPaths({ sdk, client: srv.httpClient, publish: phases.includes('publish') && publish });
+    const plan = await planChartReconcile({ chart: declared(), sdk, chartArtifact: chartArtifact() }, ctx);
+    const result = await applyChartReconcile(plan, { sdk }, ctx);
+    assert.equal((await paths.settle('chart cr_case/Cases by priority', result)).ok, true);
+    assert.equal(publishXmlCount(srv), 0, 'the settlement only queues the chart');
+    assert.deepEqual([...paths.charts], [['cr_case', ctx.creates.calls[0].ids.id]]);
+    await paths.publishPhase();
+    assert.equal(publishXmlCount(srv), expected);
+  });
+}
+const creates = (ctx) => ctx.creates;

@@ -203,4 +203,106 @@ function buildPublicationQueues() {
   };
 }
 
-module.exports = { fakeCreates, passThroughCreates, fakeManaged, fakePublication, buildPublicationQueues };
+/**
+ * The build's publication paths a declared view, chart or Quick Find list can reach, each guarded by
+ * the run-wide publication barrier (lib/publication-barrier.js) at the same point the integration
+ * guards it. Everything is published through the real bundle (`sdk`) or the raw client (`client`), so a
+ * test counts the PublishXml requests on the wire. `publish` is the publish phase in the run
+ * (`has('publish') && publish`). `barrier: null` is the build as it was before the barrier, for
+ * comparing request trails.
+ *   settle(label, result)  settlement + drain: a result that is not clean notes the barrier; a clean
+ *                          one's scopes go to the chart map (charts) or the view publisher (views)
+ *   publishReconciled      the reconcile publisher: immediate without the publish phase, else owed
+ *   oweTablePublish        a table publish owed to the publish phase (the default-view enrichment's)
+ *   createdView            a view the views phase created (result.created.views)
+ *   beforeApp(held)        the tables published before the app: one envelope with --publish, else the
+ *                          owed reconciled tables through the SDK
+ *   publishPhase()         the publish phase: one target per table from created views, charts, owed
+ *   halt(warn)             the settle of a halted build over what is still owed (settleOwedPublishes)
+ */
+function buildPublishPaths({ sdk, client, publish, barrier = null }) {
+  const { preAppTables, publishTablesXml } = require('../../lib/table-publish.js');
+  const { settleOwedPublishes } = require('../../lib/sdk-build.js');
+  const { settledPublications } = require('../../lib/reconcile-common.js');
+  const allow = (table, path) => !barrier || barrier.allow(table, path);
+  const owed = new Map();
+  const reconciled = new Set();
+  const charts = new Map();
+  const createdViews = [];
+  const oweTablePublish = (table, type, id, name) => {
+    if (!allow(table, name)) return;
+    if (barrier) barrier.noteTarget(table, [type, id]);
+    const target = owed.get(table);
+    if (!target) owed.set(table, [type, id, [name]]);
+    else if (!target[2].includes(name)) target[2].push(name);
+  };
+  const publishReconciled = async (type, id, entity, label) => {
+    const table = String(entity || '').toLowerCase();
+    if (table && !allow(table, label)) return;
+    if (publish && table) {
+      oweTablePublish(table, type, id, label);
+      reconciled.add(table);
+      return;
+    }
+    await sdk.publishArtifact(type, id);
+  };
+  const publishReconciledTables = async () => {
+    const targets = [...reconciled].filter((t) => allow(t, 'tables published before the app')).map((t) => owed.get(t)).filter(Boolean);
+    reconciled.clear();
+    for (const [type, id] of targets) await sdk.publishArtifact(type, id);
+  };
+  return {
+    owed,
+    reconciled,
+    charts,
+    createdViews,
+    oweTablePublish,
+    publishReconciled,
+    createdView(table, id) {
+      createdViews.push([String(table).toLowerCase(), id]);
+    },
+    async settle(label, result) {
+      const ok = !result.refused.length && !result.unknown.length;
+      if (!ok) {
+        if (barrier) barrier.noteResult(result, label);
+        return { ok };
+      }
+      for (const scope of settledPublications(result)) {
+        const table = String(scope.table || '').toLowerCase();
+        if (!allow(table, label)) continue;
+        if (scope.type === 'chart') charts.set(table, scope.id);
+        else if (scope.type === 'view') await publishReconciled('view', scope.id, table, label);
+      }
+      return { ok };
+    },
+    async beforeApp(held = []) {
+      if (!publish) return publishReconciledTables();
+      const wanted = preAppTables({ reconciled, charted: [...charts.keys()], added: [], held: new Set(held) });
+      await publishTablesXml(client, barrier ? barrier.allowTables(wanted, 'tables published before the app') : wanted);
+      reconciled.clear();
+      return undefined;
+    },
+    async publishPhase() {
+      if (!publish) return;
+      const seen = new Set(barrier ? barrier.blockedTables() : []);
+      const perTable = [];
+      const take = (table, target) => {
+        if (!seen.has(table)) {
+          seen.add(table);
+          perTable.push(target);
+        }
+      };
+      for (const [table, id] of createdViews) take(table, ['view', id]);
+      for (const [table, id] of charts) take(table, ['chart', id]);
+      for (const [table, target] of owed) take(table, target);
+      for (const [type, id] of perTable) await sdk.publishArtifact(type, id);
+      owed.clear();
+    },
+    async halt(warn = () => {}) {
+      const targets = [...owed].filter(([table]) => allow(table, 'settle after a halt')).map(([, target]) => target);
+      await settleOwedPublishes(sdk, targets, warn);
+    },
+  };
+}
+
+module.exports = { fakeCreates, passThroughCreates, fakeManaged, fakePublication, buildPublicationQueues, buildPublishPaths };

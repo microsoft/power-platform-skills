@@ -450,6 +450,9 @@ async function applyViewCreate(plan, sdk, ctx, result) {
   } else if (created.status === 'refused') {
     result.refused.push({ ...refusal(plan.key, /^creation-/.test(created.code) ? created.code : 'view-create-refused', 'the view was not created; nothing was written'), rules: created.rules || [] });
   } else {
+    // The create may have been stored: its table's publication is recorded (withheld) so the build's
+    // publication barrier keeps the table unpublished (publication-barrier.js).
+    result.pendingPublish.push({ key: plan.key, scope: { type: 'view', id, table: plan.intent.entity } });
     result.unknown.push(refusal(plan.key, 'view-write-unknown', 'the view create did not report its outcome; check the table\'s views'));
   }
   return result;
@@ -512,6 +515,8 @@ async function applyViewPlan(plan, sdk, ctx) {
   } else if (pushed.outcome === 'refused') {
     result.refused.push({ ...refusal(plan.key, 'view-rejected', 'the SDK refused the view edit before anything was sent'), rules: pushed.rules || [] });
   } else {
+    // The write may have been stored: recorded (withheld) for the publication barrier.
+    result.pendingPublish.push({ key: plan.key, scope: { type: 'view', id, table: plan.intent.entity } });
     result.unknown.push(refusal(plan.key, 'view-write-unknown', 'the view write did not report its outcome; check the view'));
   }
   return result;

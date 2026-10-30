@@ -48,7 +48,7 @@ async function run(srv, findColumns, ctx = {}) {
   return { plan, result };
 }
 
-test('the declared list is written to the one default Quick Find view, its template condition kept, and the table publish queued', async () => {
+test('the declared list is written to the one default Quick Find view, its template condition kept, and the view publish queued', async () => {
   const srv = server([activeRow, quickFindRow()]);
   const publication = fakePublication();
   const { plan, result } = await run(srv, ['name', 'emailaddress1'], { publication });
@@ -59,8 +59,8 @@ test('the declared list is written to the one default Quick Find view, its templ
   const xml = srv.rowOf('savedqueries', QF_ID).fetchxml;
   assert.match(xml, /<condition attribute="statecode" operator="eq" value="0" \/>/, 'the template condition survives');
   assert.match(xml, /isquickfindfields="1"><condition attribute="name" operator="like" value="\{0\}" \/><condition attribute="emailaddress1" operator="like" value="\{0\}" \/>/);
-  assert.deepEqual(publication.queued, [{ type: 'entity', table: 'account' }]);
-  assert.deepEqual(result.pendingPublish, [{ key: 'account/quickFind', scope: { type: 'entity', table: 'account' } }]);
+  assert.deepEqual(publication.queued, [{ type: 'view', id: QF_ID, table: 'account' }]);
+  assert.deepEqual(result.pendingPublish, [{ key: 'account/quickFind', scope: { type: 'view', id: QF_ID, table: 'account' } }]);
   assert.equal(srv.rowOf('savedqueries', ACTIVE_ID).fetchxml.includes('isquickfindfields'), false, 'the ordinary view is untouched');
 
   // A second build with the same declaration (any letter case) sends nothing and publishes nothing.
@@ -156,4 +156,48 @@ test('search on an untracked table needs changeTrackingEnabled:true stated; trac
   assert.deepEqual(expectedQuickFindProjection('account', { quickFind: { findColumns: ['Name'] }, searchEnabled: true, changeTrackingEnabled: true }), {
     table: 'account', findColumns: ['name'], searchEnabled: true, changeTrackingEnabled: true,
   });
+});
+
+// Quick Find alone — a table the build does not create, so the default-view enrichment never publishes
+// it — still makes its saved list live: the scope is the Quick Find view itself, which the build's view
+// publisher publishes at once without the publish phase, or owes to that phase with it.
+const { buildPublishPaths } = require('./helpers/feature-ports.js');
+const { createPublicationBarrier } = require('../lib/publication-barrier.js');
+const { enrichesDefaultViews } = require('../lib/sdk-build.js');
+const tablePublishes = (srv, table) => srv.writes.filter((w) => /PublishXml/.test(w.url) && JSON.stringify(w.body).includes(`<entity>${table}</entity>`)).length;
+
+for (const publish of [false, true]) {
+  test(`Quick Find alone on an existing table is published exactly once (publish phase ${publish ? 'in' : 'not in'} the run)`, async () => {
+    const declaredTable = { schemaName: 'account', existing: true, quickFind: { findColumns: ['name', 'emailaddress1'] } };
+    assert.equal(enrichesDefaultViews({}, declaredTable), false, 'no enrichment publish covers this table');
+    const srv = server([activeRow, quickFindRow()]);
+    const sdk = await srv.newSdk();
+    const paths = buildPublishPaths({ sdk, client: srv.httpClient, publish, barrier: createPublicationBarrier() });
+    const plan = await planQuickFind({ entity: 'account', quickFind: declaredTable.quickFind, sdk }, {});
+    const result = await applyQuickFind(plan, { sdk }, {});
+    assert.equal((await paths.settle('Quick Find on account', result)).ok, true);
+    assert.equal(tablePublishes(srv, 'account'), publish ? 0 : 1, 'without the publish phase the view is published at once');
+    assert.deepEqual([...paths.owed.keys()], publish ? ['account'] : [], 'with it, the table is owed to that phase');
+    await paths.publishPhase();
+    assert.equal(tablePublishes(srv, 'account'), 1);
+  });
+}
+
+test('a Quick Find write whose outcome is unknown keeps its table unpublished for the rest of the run', async () => {
+  const srv = server([activeRow, quickFindRow()]);
+  const sdk = await srv.newSdk();
+  const lost = new Proxy(sdk, { get(t, p) {
+    if (p === 'pushArtifact') return async () => { throw Object.assign(new Error('connection reset'), { code: 'ECONNRESET' }); };
+    return typeof t[p] === 'function' ? t[p].bind(t) : t[p];
+  } });
+  const barrier = createPublicationBarrier();
+  const paths = buildPublishPaths({ sdk, client: srv.httpClient, publish: false, barrier });
+  const plan = await planQuickFind({ entity: 'account', quickFind: { findColumns: ['name', 'emailaddress1'] }, sdk }, {});
+  const result = await applyQuickFind(plan, { sdk: lost }, {});
+  assert.deepEqual(result.unknown.map((u) => u.code), ['quick-find-write-unknown']);
+  assert.deepEqual(result.pendingPublish, [{ key: 'account/quickFind', scope: { type: 'view', id: QF_ID, table: 'account' }, withheld: true }]);
+  assert.equal((await paths.settle('Quick Find on account', result)).ok, false);
+  await paths.publishReconciled('view', ACTIVE_ID, 'account', 'view Active Accounts');
+  assert.equal(tablePublishes(srv, 'account'), 0);
+  assert.deepEqual(barrier.withheld().map((w) => [w.table, w.skipped]), [['account', ['view Active Accounts']]]);
 });

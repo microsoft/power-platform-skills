@@ -14,7 +14,8 @@
 //      one default; zero or several is ambiguous, and nothing is guessed);
 //   2. fetches it, and writes `findColumns` only when the declared list differs from the stored
 //      one, so an ordinary rebuild sends nothing;
-//   3. queues the table's publication (Quick Find uses the list once the view is published).
+//   3. records the Quick Find view's publication (Quick Find uses the list once the view is published;
+//      the view's publish publishes its table).
 // The rest of the view — its template conditions (`statecode eq 0`), columns, sort and the find
 // filter's own attributes — round-trips through the SDK's bags untouched.
 //
@@ -211,12 +212,16 @@ async function applyQuickFindPlan(plan, sdk) {
     result.unchanged.push({ key: plan.key, kind: 'quickFind', id: plan.viewId });
   } else if (pushed.outcome === 'saved') {
     result.saved.push({ key: plan.key, kind: 'quickFind', id: plan.viewId });
-    result.pendingPublish.push({ key: plan.key, scope: { type: 'entity', table: plan.entity } });
+    // A view scope: the build's view publisher publishes the Quick Find view (and with it the table),
+    // or owes the table to the publish phase, exactly as for any reconciled view.
+    result.pendingPublish.push({ key: plan.key, scope: { type: 'view', id: plan.viewId, table: plan.entity } });
   } else if (pushed.outcome === 'refused') {
     // e.g. view-find-column-type-unsupported (a NEW decimal/identifier column has no search
     // template) or view-find-column-unresolved (no such column): nothing was sent.
     result.refused.push({ ...refusal(plan.key, 'quick-find-rejected', 'the SDK refused the find list before anything was sent'), rules: pushed.rules || [] });
   } else {
+    // The write may have been stored: recorded (withheld) for the publication barrier.
+    result.pendingPublish.push({ key: plan.key, scope: { type: 'view', id: plan.viewId, table: plan.entity } });
     result.unknown.push(refusal(plan.key, 'quick-find-write-unknown', 'the Quick Find write did not report its outcome; check the view'));
   }
   return result;
