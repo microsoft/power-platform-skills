@@ -26,7 +26,7 @@ const declared = (over = {}) => ({ entity: 'cr_case', name: 'Cases by priority',
 
 async function run(srv, chart, ctx = {}, createArtifact) {
   const sdk = await srv.newSdk();
-  const plan = await planChartReconcile({ chart, sdk, createArtifact }, ctx);
+  const plan = await planChartReconcile({ chart, sdk, chartArtifact: createArtifact }, ctx);
   const result = await applyChartReconcile(plan, { sdk }, ctx);
   return { plan, result };
 }

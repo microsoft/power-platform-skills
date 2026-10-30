@@ -136,11 +136,13 @@ const isNotFound = (err) => !!err && (err.statusCode === 404 || err.status === 4
  * @param {object} args
  * @param {object} args.chart              the spec chart
  * @param {object} args.sdk
- * @param {object} [args.createArtifact]   the ChartArtifact (without id) the build compiles for it
- *                                         (sdk-build chartDef); needed only when the chart is missing
+ * @param {object} [args.chartArtifact]    the ChartArtifact (without id) the build compiles for it
+ *                                         (sdk-build chartDef); needed only when the chart is missing. Not named
+ *                                         createArtifact: a destructured binding named like an SDK method is
+ *                                         checked as an SDK call by the async-surface guard.
  * @returns {{ key, intent, chartId, action, changed, baseline?, origin?, operations, refused, unknown }}
  */
-async function planChartReconcile({ chart, sdk, createArtifact }, ctx = {}) {
+async function planChartReconcile({ chart, sdk, chartArtifact }, ctx = {}) {
   const { errors, intent } = compileChartIntent(chart);
   const key = intent ? intent.key : `${lc(chart && chart.entity)}/${(chart && chart.name) || ''}`;
   const plan = { key, intent, chartId: null, action: null, changed: [], operations: [], refused: [], unknown: [] };
@@ -165,7 +167,7 @@ async function planChartReconcile({ chart, sdk, createArtifact }, ctx = {}) {
   }
   if (!id) {
     plan.action = 'create';
-    plan.createArtifact = createArtifact || null;
+    plan.createArtifact = chartArtifact || null;
     plan.operations.push(operation({ key, kind: 'chart', target: null, action: 'create', publicationScopes: [{ type: 'chart', table: intent.entity }] }));
     return plan;
   }
