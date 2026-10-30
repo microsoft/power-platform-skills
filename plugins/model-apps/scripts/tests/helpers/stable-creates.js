@@ -7,6 +7,11 @@
 // - opts.failAfterExecute: execute runs (and may save), then the port itself throws (an EIO settling its answer) —
 //   the case where a callback's success must not be taken as the port's.
 // - opts.malformedMatched: answer 'matched' without the exact-match evidence.
+// - opts.underParent: derive child ids under the operation's ROOT id, as the recomputable-identity port does
+//   (stableChildIdV1(rootOrBoundId, ...)): the root is `identity.parentId` (lowercased) when the request names the row
+//   it adds children to, else the stable root id; each child is stableId(namespace, 'child', root, childKey). So the
+//   same child key gets the same id whether it is created with its root or added under that root on a later run.
+//   Without it (the default) ids are exactly as before.
 // It keeps no journal and adopts nothing without execute.
 const crypto = require('node:crypto');
 
@@ -21,8 +26,9 @@ function stableCreates(opts = {}) {
   async function run(request, execute) {
     const { kind, key, childKeys = [] } = request || {};
     const label = typeof key === 'string' ? key : JSON.stringify(key);
-    const id = stableId(namespace, kind, label);
-    const childIds = Object.fromEntries(childKeys.map((k) => [k, stableId(namespace, kind, label, k)]));
+    const parentId = opts.underParent && request && request.identity && request.identity.parentId;
+    const id = parentId ? String(parentId).toLowerCase() : stableId(namespace, kind, label);
+    const childIds = Object.fromEntries(childKeys.map((k) => [k, opts.underParent ? stableId(namespace, 'child', id, k) : stableId(namespace, kind, label, k)]));
     const ids = { id, childIds };
     const record = { op: request, ids, executed: false };
     calls.push(record);

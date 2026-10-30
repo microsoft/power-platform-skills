@@ -13,10 +13,24 @@
 //     with the stage edits — never a second write after the push;
 //   - every new stage and step is given its id BEFORE anything is changed, from the creation port, and is added with that
 //     id: the push writes the ids into the flow's XAML, and the platform materializes its processstage rows from it, so
-//     a retry after a lost answer writes the same ids instead of a second copy (no child row is ever POSTed directly);
+//     a retry after a lost answer writes the same ids instead of a second copy (no child row is ever POSTed directly).
+//     Later children are asked for in the flow's OWN creation family (kind 'business-process-flow', the flow's key)
+//     with the flow's actual id as `identity.parentId`, so a recomputable-identity port derives a stage added later
+//     under the same root as one created with the flow — and under the imported flow's id for a flow it did not create;
+//   - nothing is bound from what was SENT: after the push the flow is read again by id (fetch with overwrite) and must
+//     be the declared table's flow, hold every new child id, and project to exactly the intended parts — otherwise
+//     the result is create-completion-required (a new child is missing) or unknown, with no binding;
+//   - a flow an id names (a binding, a lookup row) is checked to be that id AND the declared table's flow before any
+//     edit is planned, so a stale binding or a lookup that matched another table never edits a stranger;
 //   - a supplied stage list the stage plan refuses (a removal, a move, another table) refuses the WHOLE request, the
 //     metadata and status included; one that cannot be compared is an unknown outcome. Nothing is written for either.
 // BPF activation is not PublishXml: this records no publication scope.
+//
+// buildDeclaredBpf is the whole declared path for one flow, which the build runs instead of its own find/create/edit
+// code: resolve the row (binding first, then by name), create a new flow through the creation port (the port's root
+// id becomes the workflow id and its child ids the stage and step ids; the bundled SDK keeps a caller-supplied root
+// id, so there is no random-id fallback), or reconcile an existing one; then settle the result exactly once and give
+// the build the flow id and backing table it records for later phases (security-role grants, the app's components).
 //
 // SDK facts this rests on (pinned in bpf-reconcile-real-bundle.test.js):
 //   - fetchArtifact('bpf') answers { id, name, entityLogicalName, status: 'Active'|'Draft', order: 100, stages: [ { id,
@@ -27,12 +41,11 @@
 
 const {
   emptyResult, refusal, isAuthorized, lookupBinding, bindingRecord, boundIdentity, partsDriftVerdict, projectionBaseline,
-  pushChecked, canonicalJson, PRE_WRITE_CODES,
+  pushChecked, canonicalJson, normalizeGuid, PRE_WRITE_CODES,
 } = require('./reconcile-common.js');
 const { runManagedCreate } = require('./managed-create.js');
 
 const KIND = 'business-process-flow';
-const CHILD_KIND = 'business-process-flow-children';
 const ARTIFACT = 'bpf';
 const MAX_DESCRIPTION = 2000;
 const DEFAULT_ORDER = 100;
@@ -45,6 +58,14 @@ const isDeclaredBpf = (flow) => !!flow && flow.reconcile === 'declared';
 const bpfKey = (flow) => `${lc(flow.entity)}/${String(flow.name)}`;
 const stageKey = (stage) => `stage:${stage}`;
 const stepKey = (stage, step) => `step:${stage}/${step}`;
+// The SDK's error codes are UPPER_SNAKE; anything else (a message, a number) is not reported as a code.
+const sdkCode = (v) => (typeof v === 'string' && /^[A-Z][A-Z0-9_]{2,63}$/.test(v) ? v : '');
+
+/** Whether an SDK BpfArtifact is the flow `flowId` names, on the declared table. */
+function isFlowOf(artifact, flow, flowId) {
+  return !!artifact && !!normalizeGuid(flowId) && normalizeGuid(artifact.id) === normalizeGuid(flowId)
+    && lc(artifact.entityLogicalName) === lc(flow.entity);
+}
 
 function validateDeclaredBpf(flow) {
   const errors = [];
@@ -146,17 +167,10 @@ async function planBpfMetadata({ flow, flowId, sdk, stageCheck }, ctx = {}) {
     else plan.needsCreate = true;
     return plan;
   }
-  if (suppliesStages) {
-    const kind = stageCheck && stageCheck.kind;
-    if (kind === 'refused') {
-      plan.refused.push({ ...refusal(key, 'bpf-stage-edit-refused', 'the flow\'s stages cannot be made to match the spec without removing or moving one; nothing was written, the description, order and status included'), refusals: (stageCheck.plan && stageCheck.plan.refusals) || [] });
-      return plan;
-    }
-    if (kind !== 'same' && kind !== 'edit') {
-      plan.unknown.push(refusal(key, 'bpf-unreadable', 'the flow\'s stages could not be compared with the spec, so nothing was written'));
-      return plan;
-    }
-    if (kind === 'edit') plan.stagePlan = stageCheck.plan;
+  const stageKind = stageCheck && stageCheck.kind;
+  if (suppliesStages && stageKind !== 'same' && stageKind !== 'edit' && stageKind !== 'refused') {
+    plan.unknown.push(refusal(key, 'bpf-unreadable', 'the flow\'s stages could not be compared with the spec, so nothing was written'));
+    return plan;
   }
   let live;
   try {
@@ -168,6 +182,17 @@ async function planBpfMetadata({ flow, flowId, sdk, stageCheck }, ctx = {}) {
     plan.unknown.push(refusal(key, 'bpf-unreadable', 'the business process flow could not be read'));
     return plan;
   }
+  // The row an id resolved to must be that id and the declared table's flow — checked before the stage verdict, so a
+  // binding or lookup that points at another table's flow is reported as what it is, and nothing is planned on it.
+  if (!isFlowOf(live, flow, flowId)) {
+    plan.refused.push(refusal(key, 'bpf-identity-mismatch', `the flow ${normalizeGuid(flowId) || 'found'} is not the declared ${lc(flow.entity)} flow; nothing was written`));
+    return plan;
+  }
+  if (suppliesStages && stageKind === 'refused') {
+    plan.refused.push({ ...refusal(key, 'bpf-stage-edit-refused', 'the flow\'s stages cannot be made to match the spec without removing or moving one; nothing was written, the description, order and status included'), refusals: (stageCheck.plan && stageCheck.plan.refusals) || [] });
+    return plan;
+  }
+  if (suppliesStages && stageKind === 'edit') plan.stagePlan = stageCheck.plan;
   plan.liveDescriptionPresent = typeof live.description === 'string';
   const liveParts = projectBpfParts(live);
   const desiredParts = { ...liveParts };
@@ -298,8 +323,12 @@ async function applyBpfMetadata(plan, { sdk }, ctx = {}) {
   let childIds = {};
   let pushed;
   if (plan.childKeys.length) {
-    const out = await runManagedCreate(ctx, { kind: CHILD_KIND, key: plan.key, identity: { flowId: plan.flowId }, childKeys: plan.childKeys }, async (ids) => edit(ids.childIds));
-    const complete = out.status === 'created' && plan.childKeys.every((k) => /^[0-9a-f-]{36}$/i.test(String((out.childIds || {})[k] || '')));
+    // The flow's own creation family and key, with the flow's actual id as the parent: the ids a port derives for these
+    // keys are the ones it would have given them had the flow been created with them. The port's root id is not used —
+    // the flow already has its id (a pass-through port answers a fresh one).
+    const identity = { table: lc(plan.flow.entity), name: String(plan.flow.name), parentId: normalizeGuid(plan.flowId) };
+    const out = await runManagedCreate(ctx, { kind: KIND, key: plan.key, identity, childKeys: plan.childKeys }, async (ids) => edit(ids.childIds));
+    const complete = out.status === 'created' && plan.childKeys.every((k) => normalizeGuid((out.childIds || {})[k]));
     if (complete) {
       childIds = out.childIds;
       pushed = { outcome: 'saved' };
@@ -326,20 +355,221 @@ async function applyBpfMetadata(plan, { sdk }, ctx = {}) {
     result.unknown.push(refusal(plan.key, 'bpf-write-unknown', 'the flow write did not report its outcome; check the flow'));
     return result;
   }
-  const parts = { ...plan.desiredParts, stages: withChildIds(plan.desiredParts.stages, childIds) };
+  const intended = { ...plan.desiredParts, stages: withChildIds(plan.desiredParts.stages, childIds) };
+  const newIds = plan.childKeys.map((k) => normalizeGuid(childIds[k]));
+  const proof = await proveStoredBpf(sdk, plan.flow, plan.flowId, intended, newIds);
+  if (!proof.ok) {
+    (proof.outcome === 'refused' ? result.refused : result.unknown).push(proof.reason);
+    return result;
+  }
   result.saved.push({ key: plan.key, kind: KIND, id: plan.flowId, ...(plan.childKeys.length ? { childIds } : {}) });
-  result.managedBindings.push(bpfBinding(ctx, plan.key, plan.flowId, parts, plan.origin));
+  result.managedBindings.push(bpfBinding(ctx, plan.key, plan.flowId, proof.parts, plan.origin));
   return result;
 }
 
-/** The binding for a declared flow this build has just created: the full projection of the flow as the SDK holds it. */
+/**
+ * Read a flow back after a push the SDK acknowledged, and say whether it is what was intended. A saved answer proves the
+ * service took the request, not what it stored: a stage the service dropped, or a value it kept from elsewhere, must not
+ * become the baseline the next build trusts. Returns { ok: true, parts, artifact } — the OBSERVED parts, which equal the
+ * intended ones — or { ok: false, outcome, reason } with:
+ *   unknown bpf-stored-unreadable       — the flow could not be read back;
+ *   unknown bpf-identity-mismatch       — the id reads back as another flow, or on another table;
+ *   refused create-completion-required  — a stage or step id this write was to create is not in the flow: nothing of it
+ *                                         is bound, and the next build asks the port for the same ids again;
+ *   unknown bpf-stored-mismatch         — the flow holds something other than what was sent.
+ */
+async function proveStoredBpf(sdk, flow, flowId, intended, newChildIds = []) {
+  const key = bpfKey(flow);
+  const fail = (outcome, code, message) => ({ ok: false, outcome, reason: refusal(key, code, message) });
+  let fresh;
+  try {
+    fresh = await sdk.fetchArtifact(ARTIFACT, flowId, { overwrite: true });
+  } catch (_) {
+    fresh = null;
+  }
+  if (!fresh || !Array.isArray(fresh.stages)) return fail('unknown', 'bpf-stored-unreadable', 'the flow was saved but could not be read back to confirm what it holds; check the flow');
+  if (!isFlowOf(fresh, flow, flowId)) return fail('unknown', 'bpf-identity-mismatch', 'the flow read back after the write is not the declared table\'s flow; check the flow');
+  const parts = projectBpfParts(fresh);
+  const held = new Set(parts.stages.flatMap((s) => [s.id, ...s.steps.map((t) => t.id)]).filter(Boolean));
+  const missing = newChildIds.filter((id) => !id || !held.has(id));
+  if (missing.length) {
+    return fail('refused', 'create-completion-required', `the flow was saved without ${missing.length} of the stages or steps this write adds; run the build again to complete it with the same ids`);
+  }
+  if (canonicalJson(parts) !== canonicalJson(intended)) return fail('unknown', 'bpf-stored-mismatch', 'the flow read back after the write differs from what was sent; check the flow');
+  return { ok: true, parts, artifact: fresh };
+}
+
+/**
+ * Create a new declared flow through the creation port (kind 'business-process-flow', the flow's key, every stage and
+ * step key as a child key). The port's root id becomes the workflow id and its child ids the stage and step ids, and the
+ * push writes them all in one request; then the flow is proven by a fresh read before anything is bound.
+ * A root or child id that is not a GUID is refused before anything is sent: the bundled SDK keeps a caller-supplied
+ * root id, so a flow is never created under an id the port did not give (a retry would otherwise make a second one).
+ */
+async function applyBpfCreate(flow, { sdk }, ctx = {}) {
+  const key = bpfKey(flow);
+  const result = emptyResult();
+  const def = bpfDefOf(flow);
+  const childKeys = def.stages.flatMap((s) => [stageKey(s.name), ...s.steps.map((t) => stepKey(s.name, t.name))]);
+  if (new Set(childKeys).size !== childKeys.length) {
+    result.refused.push(refusal(key, 'bpf-spec-invalid', 'two stages, or two steps of one stage, have the same name'));
+    return result;
+  }
+  let intended = null;
+  let sentRoot = '';
+  let sentIds = {};
+  const out = await runManagedCreate(ctx, { kind: KIND, key, identity: { table: lc(flow.entity), name: String(flow.name) }, childKeys }, async (ids) => {
+    const root = normalizeGuid(ids && ids.id);
+    if (!root) return { outcome: 'refused', code: 'CREATE_ROOT_ID_MISSING' };
+    const given = {};
+    for (const k of childKeys) {
+      given[k] = normalizeGuid(ids.childIds && ids.childIds[k]);
+      if (!given[k]) return { outcome: 'refused', code: 'CREATE_CHILD_ID_MISSING' };
+    }
+    const withIds = {
+      ...def,
+      id: root,
+      stages: def.stages.map((s) => ({ ...s, id: given[stageKey(s.name)], steps: s.steps.map((t) => ({ ...t, id: given[stepKey(s.name, t.name)] })) })),
+    };
+    // A throw here is a local workspace edit: createThroughPort answers it as refused (nothing was sent).
+    const art = await sdk.createArtifact(ARTIFACT, withIds);
+    if (normalizeGuid(art && art.id) !== root) return { outcome: 'refused', code: 'CREATE_ROOT_ID_REPLACED' };
+    intended = projectBpfParts(withIds);
+    sentRoot = root;
+    sentIds = given;
+    // Pushed directly rather than through pushChecked, which reports every unsaved answer as PUSH_NOT_SAVED: a create
+    // the SDK refuses because the row already exists answers { saved: false, error: { code: 'ARTIFACT_ALREADY_EXISTS' } },
+    // and that code is what tells the maker the flow is someone else's.
+    try {
+      const pushed = await sdk.pushArtifact(ARTIFACT, root);
+      if (pushed && pushed.saved === true) return { outcome: 'saved', code: '' };
+      return { outcome: 'refused', code: sdkCode(pushed && pushed.error && pushed.error.code) || 'PUSH_NOT_SAVED' };
+    } catch (err) {
+      const code = sdkCode(err && err.code);
+      if (PRE_WRITE_CODES.has(code)) return { outcome: 'refused', code };
+      return { outcome: 'unknown', code: code || 'WRITE_OUTCOME_UNKNOWN' };
+    }
+  });
+  if (out.status === 'refused') {
+    const code = out.code === 'ARTIFACT_ALREADY_EXISTS' ? 'bpf-create-collision' : 'bpf-rejected';
+    result.refused.push(refusal(key, code, `the flow was not created (${out.code || 'refused'})`));
+    return result;
+  }
+  if (out.status !== 'created' || !intended) {
+    result.unknown.push(refusal(key, 'bpf-write-unknown', `the flow create did not report its outcome (${out.code || out.status}); check for a flow named ${String(flow.name)}`));
+    return result;
+  }
+  // The port must settle on the root it gave execute; a created answer naming another id is not this flow's receipt.
+  if (normalizeGuid(out.id) !== sentRoot) {
+    result.unknown.push(refusal(key, 'creation-settlement-disagreed', 'the creation port answered another id than the flow was created with; check the flow'));
+    return result;
+  }
+  const proof = await proveStoredBpf(sdk, flow, sentRoot, intended, childKeys.map((k) => sentIds[k]));
+  if (!proof.ok) {
+    (proof.outcome === 'refused' ? result.refused : result.unknown).push(proof.reason);
+    return result;
+  }
+  const uniqueName = lc(proof.artifact.uniqueName) || null;
+  result.saved.push({ key, kind: KIND, id: sentRoot, created: true, childIds: { ...sentIds }, uniqueName });
+  result.managedBindings.push(bpfBinding(ctx, key, sentRoot, proof.parts, 'created'));
+  return result;
+}
+
+/**
+ * The binding for a declared flow created outside applyBpfCreate (a test's deployed flow): the full projection of the
+ * flow as the SDK holds it — or null when the artifact is not `flowId`'s flow on the declared table.
+ */
 function createdBpfBinding(flow, flowId, artifact, ctx = {}) {
-  return bpfBinding(ctx, bpfKey(flow), flowId, projectBpfParts(artifact), 'created');
+  if (!isFlowOf(artifact, flow, flowId)) return null;
+  return bpfBinding(ctx, bpfKey(flow), normalizeGuid(flowId), projectBpfParts(artifact), 'created');
+}
+
+// A workflow row as the build's queryRecords answers it: { workflowid: '<guid>', uniquename: 'new_tickethandling', ... }.
+const rowId = (row) => normalizeGuid(row && row.workflowid);
+
+/**
+ * Find, then create or reconcile, one declared flow. `input`:
+ *   flow, sdk;
+ *   findById(id)  -> rows   the workflow rows with that id (the build's queryRecords on workflowid), used when the
+ *                           flow's key is bound: a bound flow is read by its id, never re-found by name;
+ *   findByName()  -> rows   the flows of the spec's name on its table (the build's bpfFilter), used when it is not;
+ *   beforeCreate()          awaited just before a create — the build's unique-name clash check; a throw propagates;
+ *   inspectStages(sdk, flow, id)  the stage check (default sdk-build's inspectBpfStages), when the spec supplies stages.
+ * Returns the FeatureResult with { flowId, uniqueName, action: 'created'|'existing'|null }. A lookup that throws or answers
+ * something other than a list is unknown, and two flows of the name with no binding to choose are refused: nothing is
+ * written for either.
+ */
+async function reconcileDeclaredBpf(input, ctx = {}) {
+  const { flow, sdk } = input;
+  const key = bpfKey(flow);
+  const binding = await lookupBinding(ctx, KIND, key);
+  const boundId = binding ? normalizeGuid(binding.id) : '';
+  const done = (result, flowId = null, uniqueName = null, action = null) => ({ ...result, flowId, uniqueName, action });
+  let rows;
+  try {
+    rows = boundId && typeof input.findById === 'function' ? await input.findById(boundId) : await input.findByName();
+  } catch (_) {
+    rows = null;
+  }
+  if (!Array.isArray(rows) || rows.some((r) => !rowId(r))) {
+    const result = emptyResult();
+    result.unknown.push(refusal(key, 'bpf-lookup-unreadable', 'the business process flows could not be listed, so nothing was written'));
+    return done(result);
+  }
+  let row = null;
+  if (boundId) row = rows.find((r) => rowId(r) === boundId) || (rows.length === 1 ? rows[0] : null);
+  else if (rows.length > 1) {
+    const result = emptyResult();
+    result.refused.push(refusal(key, 'bpf-name-ambiguous', `${rows.length} flows named ${String(flow.name)} exist on ${lc(flow.entity)}; bind the spec to one of them by id`));
+    return done(result);
+  } else row = rows[0] || null;
+
+  const flowId = row ? rowId(row) : null;
+  if (!flowId) {
+    const plan = await planBpfMetadata({ flow, flowId: null, sdk }, ctx);
+    if (!plan.needsCreate) return done(await applyBpfMetadata(plan, { sdk }, ctx));
+    if (typeof input.beforeCreate === 'function') await input.beforeCreate();
+    const created = await applyBpfCreate(flow, { sdk }, ctx);
+    const saved = created.saved[0];
+    return done(created, saved ? saved.id : null, saved ? saved.uniqueName : null, saved ? 'created' : null);
+  }
+  const suppliesStages = Array.isArray(flow.stages) && flow.stages.length > 0;
+  const inspect = typeof input.inspectStages === 'function' ? input.inspectStages : require('./sdk-build.js').inspectBpfStages;
+  const stageCheck = suppliesStages ? await inspect(sdk, flow, flowId) : undefined;
+  const plan = await planBpfMetadata({ flow, flowId, sdk, stageCheck }, ctx);
+  const result = await applyBpfMetadata(plan, { sdk }, ctx);
+  return done(result, flowId, lc(row.uniquename) || null, 'existing');
+}
+
+/**
+ * The build's whole declared-flow step. `hooks`:
+ *   onCreated(id)   add a flow this build created to the app's solution — before settlement; a throw is refused
+ *                   'bpf-solution-membership-failed' while the binding is kept (the row is proven and this spec's, so
+ *                   the next build finds it by its binding and adds it then);
+ *   settleFeatureResult(phase, label, result) -> { ok }   the build's settlement (S2 createFeatureSettlement), called
+ *                   exactly once with phase 'business-process-flows';
+ *   onExisting(id)  an existing flow's solution membership, after a clean settlement;
+ *   label           the label settlement reports under (default the flow's name).
+ * Returns { flowId, backingTable } for the build's output maps, or null when the flow did not settle cleanly.
+ */
+async function buildDeclaredBpf(input, ctx = {}, hooks = {}) {
+  const r = await reconcileDeclaredBpf(input, ctx);
+  if (r.action === 'created' && typeof hooks.onCreated === 'function') {
+    try {
+      await hooks.onCreated(r.flowId);
+    } catch (err) {
+      r.refused.push(refusal(bpfKey(input.flow), 'bpf-solution-membership-failed', `the flow was created but could not be added to the solution${sdkCode(err && err.code) ? ` (${err.code})` : ''}; the next build adds it`));
+    }
+  }
+  const { flowId, uniqueName, action, ...result } = r;
+  const settled = hooks.settleFeatureResult('business-process-flows', hooks.label || String(input.flow.name), result);
+  if (!settled || !settled.ok || !flowId) return null;
+  if (action !== 'created' && typeof hooks.onExisting === 'function') await hooks.onExisting(flowId);
+  return { flowId, backingTable: uniqueName || null };
 }
 
 module.exports = {
   KIND,
-  CHILD_KIND,
   isDeclaredBpf,
   bpfKey,
   stageKey,
@@ -350,6 +580,10 @@ module.exports = {
   planBpfMetadata,
   applyStageElementEdits,
   applyBpfMetadata,
+  applyBpfCreate,
+  proveStoredBpf,
+  reconcileDeclaredBpf,
+  buildDeclaredBpf,
   createdBpfBinding,
   BPF_NOT_WRITTEN,
 };
