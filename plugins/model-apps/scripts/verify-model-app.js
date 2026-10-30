@@ -608,6 +608,63 @@ function readerFor(sdk, appUnique, opts) {
   return base;
 }
 
+// `--inspect-components`: the spec's command controls as lib/feature-verify.js targets, one per table. Each control is asked
+// about on the surface its `location` deploys to — the SDK's own mapping (its command adapter: MainTab → Form, HomeTab →
+// HomePageGrid, ContextualTab → SubGridStandard) — and a flyout's or split button's children under its caption (the
+// inspection walks through the group the adapter puts between them).
+//
+// Identity. The build records no row id for a control, so every target here is DISCOVERY by caption: the inspection still
+// tells a missing, misplaced, hidden, disabled or duplicated control apart, but one it finds is `unverified` (CAPTION_ONLY)
+// and never a pass — a caption cannot tell the build's row from another solution's. That is deliberate, not a gap to
+// paper over: a control becomes verifiable only once its row id is recorded, and until then the flag answers what it can
+// and fails the run rather than pass on a caption. No `appModuleId` either: the build binds a command bar to its table,
+// not to an app. A key is the table and caption (`#2` for a repeat), so a line names the button the maker declared.
+const INSPECT_SURFACE = { MainTab: 'form', HomeTab: 'homeGrid', ContextualTab: 'subGrid' };
+const INSPECT_KIND = { Button: 'button', FlyoutAnchor: 'flyout', SplitButton: 'split' };
+
+function componentTargetsFor(spec) {
+  const byEntity = new Map();
+  const used = new Map();
+  const keyOf = (base) => {
+    const n = (used.get(base) || 0) + 1;
+    used.set(base, n);
+    return n === 1 ? base : `${base}#${n}`;
+  };
+  for (const c of (spec && spec.commands) || []) {
+    if (!c || !c.entity || !c.label) continue;
+    const entity = String(c.entity).toLowerCase();
+    if (!byEntity.has(entity)) byEntity.set(entity, []);
+    const controls = byEntity.get(entity);
+    const surface = INSPECT_SURFACE[c.location || 'MainTab'];
+    const type = c.type || 'Button';
+    controls.push({ key: keyOf(`${entity}:${c.label}`), surface, label: c.label, kind: INSPECT_KIND[type] || 'button' });
+    if ((type === 'FlyoutAnchor' || type === 'SplitButton') && Array.isArray(c.children)) {
+      for (const ch of c.children) {
+        if (ch && ch.label) controls.push({ key: keyOf(`${entity}:${c.label} > ${ch.label}`), surface, label: ch.label, menuPath: [c.label], kind: INSPECT_KIND[ch.type || 'Button'] || 'button' });
+      }
+    }
+  }
+  return [...byEntity].map(([entity, controls]) => ({ entity, controls }));
+}
+
+// Runs the inspection with the run's SDK (GETs of the tables' `appaction` rows only) and answers what verify prints: `ok`,
+// the counts and one line per control that did not pass. It never throws: an inspection that cannot run is a failed
+// requested check, reported by its code and HTTP status (findingOf — never the service's words). The helper is loaded only
+// here, so a verify without the flag reads nothing it did not read before.
+async function inspectComponents(sdk, spec) {
+  const commands = componentTargetsFor(spec);
+  if (!commands.length) return { ok: true, summary: { pass: 0, fail: 0, unverified: 0 }, problems: [], note: 'the spec declares no command controls, so there was nothing to inspect' };
+  const { verifyFeatures, describeFeatureCheck } = require('./lib/feature-verify.js');
+  try {
+    const fv = await verifyFeatures(sdk, { commands, dashboards: [] });
+    return { ok: fv.ok, summary: fv.summary, problems: fv.checks.filter((c) => c.status !== 'pass').map(describeFeatureCheck) };
+  } catch (err) {
+    const { findingOf } = require('./lib/readonly-operations.js');
+    const f = findingOf(err, 'INSPECTION_FAILED');
+    return { ok: false, summary: null, problems: [`UNVERIFIED component inspection could not run: ${f.code}${f.statusCode !== undefined ? ` (HTTP ${f.statusCode})` : ''}: ${f.message}`] };
+  }
+}
+
 // An agent reads the result off a console, and Windows PowerShell 5.1 decodes a child's stdout with the OEM code page: the UTF-8 bytes of an em dash in a warning reach it as three other
 // characters, and a Spanish label or a Japanese form name in a message as others still. `ascii` writes every character above U+007E as a `\uXXXX` escape instead — the same JSON to any
 // parser, and nothing a code page can garble (asciiJson in lib/dataverse-auth.js). It is for the result only: stderr is for people and is written as it is.
@@ -616,12 +673,12 @@ const RESULT_AS_ASCII = { ascii: true };
 async function main() {
   const argv = process.argv.slice(2);
   const { positional, flags } = parseArgs(argv);
-  const USAGE = 'Usage: node verify-model-app.js --env <url> --spec @<app-folder>/app-spec.json [--language-code|--languageCode <lcid>] [--workspace <dir>]';
+  const USAGE = 'Usage: node verify-model-app.js --env <url> --spec @<app-folder>/app-spec.json [--language-code|--languageCode <lcid>] [--workspace <dir>] [--inspect-components]';
   // Reject an unknown or value-less flag before any network work: an unrecognised flag is dropped
   // by parseArgs AND swallows the token after it, so `--workspce x` would silently verify against
   // the default workspace and report drift the caller cannot explain.
   const flagError = validateFlags(argv, {
-    known: ['env', 'spec', 'workspace', 'language-code', 'languageCode'],
+    known: ['env', 'spec', 'workspace', 'language-code', 'languageCode', 'inspect-components'],
     needValue: ['env', 'spec', 'workspace', 'language-code', 'languageCode'],
   });
   if (flagError) {
@@ -694,6 +751,7 @@ async function main() {
   // must run against any environment the app is deployed to, whichever one that folder was built against.
   const session = await throwawaySdk(env, httpClient, 'verify-');
   let r;
+  let components;
   let genpage;
   try {
     // The page backend works in a throwaway workspace of its own, made when the first page is read (an app with no pages makes none) — not
@@ -707,6 +765,8 @@ async function main() {
     const baselineSpec = readBaseline(workspaceDir, { environment: dataverseOrigin(env), appUniqueName: appUniqueName(spec) }) || undefined;
     // `appDir`: a web resource's `contentPath` is read relative to the spec's folder, as the build reads it, to compare its content.
     r = await verifySpec(spec, readerFor(session.sdk, appUniqueName(spec), { genpage, workspaceDir, isolatedReader: isolatedReaderFor(env, { httpClient }) }), { baselineSpec, languageCode, appDir: path.dirname(specPath) });
+    // Only when asked, and before the SDK's workspace is disposed below.
+    if (flags['inspect-components'] === true) components = await inspectComponents(session.sdk, spec);
   } finally {
     // Before the result is printed: emitResult ends the process, so a cleanup placed after it never ran.
     // The backend first, and awaited: a page read the pass gave up on can still be running, and its workspace is closed and removed once the storage
@@ -727,7 +787,15 @@ async function main() {
   // The run's last writes: these lines, then the result and the exit, with no turn of the event loop between them — made blocking (lib/output-redaction.js).
   makeWritesBlocking(process.stdout, process.stderr);
   for (const c of r.checks) process.stderr.write(`  ${c.present ? '✓' : '✗'} ${c.kind}: ${c.name}${!c.present && c.detail ? ` — ${c.detail}` : ''}\n`);
-  process.stderr.write(`\n${r.ok ? '✓ verify PASS' : `✗ verify FAIL — ${r.missing.length} missing`} (${r.checks.length - r.missing.length}/${r.checks.length} present)\n`);
+  // `--inspect-components` adds its own requested checks: one that did not pass fails the run like a missing artifact. Without the flag
+  // `components` is undefined and every line and field below is what it was.
+  const ok = r.ok && (!components || components.ok);
+  if (components) {
+    process.stderr.write(`\n${components.ok ? '✓' : '✗'} component inspection (--inspect-components)${components.summary ? `: ${components.summary.pass} passed, ${components.summary.fail} failed, ${components.summary.unverified} unverified` : ''}${components.note ? ` — ${components.note}` : ''}\n`);
+    for (const p of components.problems) process.stderr.write(`  ✗ ${p}\n`);
+  }
+  const componentFailure = components && !components.ok ? `, ${components.problems.length} component check${components.problems.length === 1 ? '' : 's'} not passed` : '';
+  process.stderr.write(`\n${ok ? '✓ verify PASS' : `✗ verify FAIL — ${r.missing.length} missing${componentFailure}`} (${r.checks.length - r.missing.length}/${r.checks.length} present)\n`);
   // What verify could not DECIDE is neither a pass nor a failure: listed beside the verdict, with its reason, so a green run never reads as
   // "everything the spec declares is deployed" while a label was not compared. It changes neither `ok` nor the exit status.
   const unverified = r.unverified || [];
@@ -739,11 +807,13 @@ async function main() {
   const missing = r.missing.map((m) => `${m.kind}:${m.name}${m.detail ? ` (${m.detail})` : ''}`);
   // `warnings` repeats the `WARNING:` lines printed above for a caller that reads only this JSON. Like `unverified` it is left out when there is none, and it changes
   // neither `ok` nor the exit status.
-  emitResult(r.ok, { ok: r.ok, present: r.checks.length - r.missing.length, total: r.checks.length, missing, errors: missing, ...(unverified.length ? { unverified } : {}), ...(warnings.length ? { warnings } : {}) }, RESULT_AS_ASCII);
+  // `components` (only with --inspect-components) carries the inspection's counts and lines, and its lines join `errors` so the failure note counts them.
+  const componentProblems = components ? components.problems : [];
+  emitResult(ok, { ok, present: r.checks.length - r.missing.length, total: r.checks.length, missing, errors: components ? [...missing, ...componentProblems] : missing, ...(unverified.length ? { unverified } : {}), ...(components ? { components: { ok: components.ok, summary: components.summary, problems: componentProblems, ...(components.note ? { note: components.note } : {}) } } : {}), ...(warnings.length ? { warnings } : {}) }, RESULT_AS_ASCII);
 }
 
 if (require.main === module) {
   main().catch((err) => emitResult(false, err));
 }
 
-module.exports = { sitemapXmlFor, readerFor, appIdFor, appRoleIdsFor, isolatedReaderFor };
+module.exports = { sitemapXmlFor, readerFor, appIdFor, appRoleIdsFor, isolatedReaderFor, componentTargetsFor, inspectComponents };
