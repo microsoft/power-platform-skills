@@ -1204,6 +1204,82 @@ test('--authorize: the web resource approvals reach the engine in their own sets
   assert.ok(!('authorizedWebResourceAdoption' in runOpts[1]) && !('authorizedWebResourceOverwrite' in runOpts[1]));
 });
 
+// A spec that declares configuration items (environment variables, connection references) next to a table with a consent field.
+const configurationConsentSpec = {
+  ...consentSpec,
+  environmentVariables: [{ schemaName: 'contoso_ApiBase', type: 'string' }],
+  connectionReferences: [{ logicalName: 'contoso_sp', connectorId: '/providers/Microsoft.PowerApps/apis/shared_sharepointonline' }],
+};
+
+test('--authorize: configuration tokens <kind>:<declared key>:<field> are claimed first; other tokens are read as before in a mixed list', () => {
+  const { authorizationKeys } = require(path.join(__dirname, '..', 'build-model-app.js'));
+  const ok = authorizationKeys(['--authorize', 'connectionReference:contoso_sp:connectionId', '--authorize=environmentVariableValue:contoso_ApiBase:value', '--authorize', 'isSecured:new_ticket.new_salary'], configurationConsentSpec);
+  assert.strictEqual(ok.error, null);
+  assert.deepStrictEqual([...ok.keys].sort(), ['connectionReference:contoso_sp:connectionId', 'environmentVariableValue:contoso_apibase:value', 'isSecured:new_ticket.new_salary']);
+  assert.strictEqual(ok.adopt.size + ok.overwrite.size, 0);
+  for (const [key, why] of [
+    ['connectionReference:contoso_nope:connectionId', /'connectionReference:contoso_nope:connectionId' names a configuration item the spec does not declare/],
+    ['environmentVariableValue:contoso_ApiBase:bogus', /'environmentVariableValue:contoso_ApiBase:bogus' is not <kind>:<declared key>:<field> for a field a configuration change can consent to/],
+  ]) {
+    const r = authorizationKeys(['--authorize', key, '--authorize', 'tableFlags:new_ticket'], configurationConsentSpec);
+    assert.match(r.error, why, key);
+    assert.deepStrictEqual([...r.keys], ['tableFlags:new_ticket'], `${key}: the other token is still read`);
+  }
+  // A spec that declares no configuration item: an old token reads exactly as before, and a configuration token names nothing.
+  assert.deepStrictEqual([...authorizationKeys(['--authorize', 'tableFlags:new_ticket'], consentSpec).keys], ['tableFlags:new_ticket']);
+  assert.match(authorizationKeys(['--authorize', 'connectionReference:contoso_sp:connectionId'], consentSpec).error, /names a configuration item the spec does not declare/);
+});
+
+test('--deployment-settings: an unreadable file, bad JSON or a bad entry stops the build before anything runs, and nothing from the file is printed', async () => {
+  const { loadCli } = require('./helpers/cli-harness.js');
+  const dir = fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'deployment-settings-'));
+  const SECRET = 'S3cr3t-Planted-In-The-File-77';
+  try {
+    const specPath = path.join(dir, 'app-spec.json');
+    fs.writeFileSync(specPath, JSON.stringify({
+      ...desk,
+      environmentVariables: [{ schemaName: 'contoso_ApiBase', type: 'string' }],
+      connectionReferences: [{ logicalName: 'contoso_sp', connectorId: '/providers/Microsoft.PowerApps/apis/shared_sharepointonline' }],
+    }), 'utf8');
+    fs.writeFileSync(path.join(dir, 'badjson.json'), `{ "EnvironmentVariables": [ { "SchemaName": "contoso_ApiBase", "Value": "${SECRET}" ,, ] }`, 'utf8');
+    fs.writeFileSync(path.join(dir, 'badentry.json'), JSON.stringify({ ConnectionReferences: [{ LogicalName: 'contoso_sp', ConnectionId: SECRET, ConnectorId: '/providers/Microsoft.PowerApps/apis/shared_office365' }] }), 'utf8');
+    for (const [file, why] of [
+      ['nope.json', /✗ --deployment-settings: cannot read .*nope\.json \(ENOENT\)/],
+      ['badjson.json', /✗ --deployment-settings: .*badjson\.json is not valid JSON/],
+      ['badentry.json', /✗ --deployment-settings: .*\(contoso_sp\) ConnectorId does not match/],
+    ]) {
+      const reached = [];
+      const cli = loadCli(path.join(__dirname, '..', 'build-model-app.js'), {
+        argv: ['--env', 'https://contoso.crm.dynamics.com', '--spec', `@${specPath}`, '--apply', '--deployment-settings', path.join(dir, file)],
+        env: { PATH: path.dirname(process.execPath), POWER_PLATFORM_SKILLS_TELEMETRY_MODEL_APPS_OPTOUT: '1' },
+        requires: { './lib/maker-sdk.js': { createMakerSdk: () => { reached.push('sdk'); return {}; }, createNodeWorkspaceStorage: () => { reached.push('workspace'); return {}; } } },
+      });
+      await assert.rejects(cli.main(), (e) => e.exitCode === 1, file);
+      assert.match(cli.stderrText(), why, file);
+      assert.ok(!`${cli.stdoutText()}${cli.stderrText()}`.includes(SECRET), `${file}: nothing from the file is printed`);
+      assert.deepStrictEqual(reached, [], file);
+    }
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('--deployment-settings without a value is refused by the flag contract before anything runs', async () => {
+  const { loadCli } = require('./helpers/cli-harness.js');
+  const dir = fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'deployment-settings-'));
+  try {
+    const specPath = path.join(dir, 'app-spec.json');
+    fs.writeFileSync(specPath, JSON.stringify(desk), 'utf8');
+    const reached = [];
+    const cli = loadCli(path.join(__dirname, '..', 'build-model-app.js'), {
+      argv: ['--env', 'https://contoso.crm.dynamics.com', '--spec', `@${specPath}`, '--apply', '--deployment-settings'],
+      env: { PATH: path.dirname(process.execPath), POWER_PLATFORM_SKILLS_TELEMETRY_MODEL_APPS_OPTOUT: '1' },
+      requires: { './lib/maker-sdk.js': { createMakerSdk: () => { reached.push('sdk'); return {}; }, createNodeWorkspaceStorage: () => { reached.push('workspace'); return {}; } } },
+    });
+    await assert.rejects(cli.main(), (e) => e.exitCode === 1);
+    assert.match(cli.stderrText(), /deployment-settings/);
+    assert.deepStrictEqual(reached, []);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
 test('--authorize: a key the spec does not declare is refused before anything runs', async () => {
   const { loadCli } = require('./helpers/cli-harness.js');
   const dir = fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'authorize-'));
@@ -2097,7 +2173,7 @@ test('makeSdk\u2019s return shape and main\u2019s destructure stay in agreement'
 test('the build verifies dashboards through makeSdk\u2019s isolated reader, sharing the build\u2019s client', () => {
   const src = fs.readFileSync(path.join(__dirname, '..', 'build-model-app.js'), 'utf8');
   const body = src.slice(src.indexOf('async function makeSdk'), src.indexOf('return { sdk, provisionSdk'));
-  assert.match(body, /const httpClient = createAzHttpClient\(env, \{ throttle, sendOnce: isTranslationExport, \.\.\.\(publicationBarrier \? \{ request: publicationBarrier\.gateRequest\(\) \} : \{\}\) \}\);/, 'one client, made with the run\u2019s throttle budget, that sends a translation export once and checks every publish at the publication barrier\u2019s send gate');
+  assert.match(body, /const httpClient = createAzHttpClient\(env, \{ throttle, sendOnce: \(method, url\) => isTranslationExport\(method, url\) \|\| configurationSendOnce\(method, url\), \.\.\.\(publicationBarrier \? \{ request: publicationBarrier\.gateRequest\(\) \} : \{\}\) \}\);/, 'one client, made with the run\u2019s throttle budget, that sends a translation export, and a configuration write, once and checks every publish at the publication barrier\u2019s send gate');
   assert.match(body, /isolatedReaderFor\(env, \{ httpClient \}\)/, 'the reader is made around the build\u2019s own client');
   const wiring = src.slice(src.indexOf('verify: async (s, verifyOpts) =>'));
   assert.match(wiring.split(/\r?\n/).find((l) => /verifySpec\(/.test(l)), /isolatedReader \}/, 'verify takes the reader makeSdk returned');
@@ -2703,7 +2779,7 @@ test('the verify options carry the ACTUAL phase list, not a constant', () => {
   // Asserted on the SOURCE because the value has to be the caller's own `opts.phases`: a test that
   // merely passes a phase list through would still accept `phases: PHASES`.
   const src = fs.readFileSync(path.join(__dirname, '..', 'build-model-app.js'), 'utf8');
-  assert.match(src, /deps\.verify\(spec, \{ environmentSkipped: r\.skipped, phases: opts\.phases(, baselineSpec: opts\.baselineSpec)?(, languageCode: opts\.languageCode, preResolvedLanguageCode: opts\.preResolvedLanguageCode)?(, appDir: opts\.appDir)? \}\)/,
+  assert.match(src, /deps\.verify\(spec, \{ environmentSkipped: r\.skipped, phases: opts\.phases(, baselineSpec: opts\.baselineSpec)?(, languageCode: opts\.languageCode, preResolvedLanguageCode: opts\.preResolvedLanguageCode)?(, appDir: opts\.appDir)?(, configurationBindings: opts\.configurationBindings)? \}\)/,
     'verify must receive the invocation\'s OWN phases — a constant re-breaks the --changed-only fast path');
 });
 
@@ -2773,7 +2849,7 @@ test('the build hands verify the language it wrote its labels in', async () => {
   assert.strictEqual(received.preResolvedLanguageCode, 1031);
   // The rest of the options are exactly what they were, and the app folder, from which verify reads a web resource's contentPath to
   // compare its deployed content.
-  assert.deepStrictEqual(Object.keys(received).sort(), ['appDir', 'baselineSpec', 'environmentSkipped', 'languageCode', 'phases', 'preResolvedLanguageCode']);
+  assert.deepStrictEqual(Object.keys(received).sort(), ['appDir', 'baselineSpec', 'configurationBindings', 'environmentSkipped', 'languageCode', 'phases', 'preResolvedLanguageCode']);
   await buildModelApp(desk, { apply: true, env: 'https://x', verify: true, appDir: path.join(__dirname, '..', '..', 'samples') }, { sdk, verify });
   assert.strictEqual(received.appDir, path.join(__dirname, '..', '..', 'samples'), 'the folder the build read the spec\'s sources from');
 });

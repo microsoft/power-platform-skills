@@ -3734,3 +3734,56 @@ test('REAL BUNDLE: verify holds declared date behaviours, table flags and field 
     'tableFlag:new_ticket.duplicateDetectionEnabled (duplicateDetectionEnabled declared true, deployed unreadable)',
   ]);
 });
+
+// The configuration kinds: verify asks the reader's configuration(spec, bindings) getter for one answer per declared item and aspect,
+// reports a pass as present, a drift with its code and fields, and an unproven Custom API implementation as unverified (the API is
+// deployed; whether it runs is not something a read can prove). A reader without the getter is said so; a spec without the fields reads nothing.
+const CONFIG_SPEC = {
+  minimumPluginVersion: '2.21.0', schemaVersion: 2,
+  solution: { uniqueName: 'ContosoSol', displayName: 'Contoso Sol', publisherPrefix: 'contoso' },
+  app: { name: 'Config App', uniqueName: 'contoso_configapp' }, entities: [],
+  environmentVariables: [{ schemaName: 'contoso_ApiBase', type: 'string' }],
+  customApis: [{ uniqueName: 'contoso_Calc' }],
+};
+// Every read other than the configuration getter answers null, so only the configuration section decides these results.
+const otherReadsNull = (own) => new Proxy(own, {
+  get: (o, k) => (k in o ? o[k] : (typeof k === 'string' && k !== 'then' && k !== 'configuration' ? async () => null : undefined)),
+  has: (o, k) => k in o || (typeof k === 'string' && k !== 'then' && k !== 'configuration'),
+});
+const configChecks = (r) => r.checks.filter((c) => c.kind === 'configuration');
+
+test('verifySpec: configuration items pass, drift with code and fields, and an unproven Custom API implementation is unverified', async () => {
+  let seen;
+  const bindings = { environmentVariables: new Map(), connectionReferences: new Map() };
+  const read = otherReadsNull({ configuration: async (s, b) => { seen = { s, b }; return [
+    { kind: 'environmentVariable', key: 'contoso_ApiBase', name: 'definition', ok: true },
+    { kind: 'environmentVariable', key: 'contoso_ApiBase', name: 'value', ok: false, code: 'ENVIRONMENT_VARIABLE_VALUE_DRIFT', fields: ['value'] },
+    { kind: 'customApi', key: 'contoso_Calc', name: 'implementation', ok: false, code: 'CUSTOM_API_IMPLEMENTATION_UNPROVEN' },
+  ]; } });
+  const r = await verifySpec(CONFIG_SPEC, read, { configurationBindings: bindings });
+  assert.strictEqual(seen.s, CONFIG_SPEC);
+  assert.strictEqual(seen.b, bindings, 'the bindings the build recorded are handed to the getter');
+  assert.deepStrictEqual(configChecks(r), [
+    { kind: 'configuration', name: 'environmentVariable contoso_ApiBase: definition', present: true, detail: '' },
+    { kind: 'configuration', name: 'environmentVariable contoso_ApiBase: value', present: false, detail: 'ENVIRONMENT_VARIABLE_VALUE_DRIFT (value)' },
+  ]);
+  assert.deepStrictEqual(r.unverified.filter((u) => /configuration/.test(u)), ['configuration:customApi contoso_Calc: implementation (CUSTOM_API_IMPLEMENTATION_UNPROVEN)']);
+  assert.strictEqual(r.ok, false, 'a drift fails the verify');
+});
+
+test('verifySpec: a reader without the configuration getter reports the configuration items as unverified, not as passing', async () => {
+  const r = await verifySpec(CONFIG_SPEC, otherReadsNull({}), {});
+  assert.deepStrictEqual(configChecks(r), []);
+  assert.deepStrictEqual(r.unverified.filter((u) => /configuration/.test(u)), ['configuration (this reader cannot read configuration items)']);
+});
+
+test('verifySpec: a spec without configuration fields adds no configuration section and never calls the getter', async () => {
+  const plain = { ...CONFIG_SPEC };
+  delete plain.environmentVariables;
+  delete plain.customApis;
+  let called = false;
+  const r = await verifySpec(plain, otherReadsNull({ configuration: async () => { called = true; return []; } }), {});
+  assert.strictEqual(called, false);
+  assert.deepStrictEqual(configChecks(r), []);
+  assert.ok(!(r.unverified || []).some((u) => /configuration/.test(u)), 'nothing configuration-related is unverified');
+});

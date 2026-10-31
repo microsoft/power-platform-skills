@@ -2685,6 +2685,14 @@ function validateAppSpec(spec, opts = {}) {
     errors.push(...features.errors);
     warnings.push(...features.warnings);
   }
+  // 2.21.0 configuration kinds: environmentVariables, connectionReferences, customApis, duplicateDetectionRules and solution.version
+  // (lib/configuration-artifacts.js). The App Spec is the portable file, so a secret default is refused outright. The structural profile
+  // (teardown, preview) reads a spec only for what it names, so there its findings are warnings, as for the column rules above.
+  {
+    const configuration = require('./configuration-artifacts.js').validateConfiguration(spec, { profile: 'portable' });
+    (profile === 'structural' ? warnings : errors).push(...configuration.errors);
+    warnings.push(...configuration.warnings);
+  }
   // The modern ("new look") shell is an opt-in per-app SETTING, not an appmodule column —
   // `navigationtype` only selects Single/Multi session and is unrelated. Boolean-only: a string
   // "false" is truthy in JS and would silently turn the new look ON for an author who meant to

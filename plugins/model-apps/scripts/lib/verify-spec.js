@@ -2227,6 +2227,24 @@ async function verifySpec(spec, read, opts = {}) {
     });
   }
 
+  // The configuration kinds: one check per declared item and aspect (definition, binding, value, implementation, publication, version),
+  // in declaration order. A Custom API whose implementation is not proven (no plug-in type: a scaffold) is reported as unverified, not as
+  // missing — the API is deployed; whether it runs is not something a read can prove. A reader without the getter says so.
+  if (require('./configuration-artifacts.js').usesConfiguration(spec)) {
+    plan.section(async ({ add, unverified }) => {
+      if (!read || typeof read.configuration !== 'function') {
+        unverified.push('configuration (this reader cannot read configuration items)');
+        return;
+      }
+      for (const c of await read.configuration(spec, opts.configurationBindings)) {
+        const name = `${c.kind} ${c.key}: ${c.name}`;
+        if (c.ok) add('configuration', name, true);
+        else if (c.code === 'CUSTOM_API_IMPLEMENTATION_UNPROVEN') unverified.push(`configuration:${name} (${c.code})`);
+        else add('configuration', name, false, `${c.code}${Array.isArray(c.fields) && c.fields.length ? ` (${c.fields.join(', ')})` : ''}`);
+      }
+    });
+  }
+
   // Every check above is registered and none has run yet: run them. The reads overlap (at most
   // `concurrency` at a time); the report below does not depend on which answered first.
   //

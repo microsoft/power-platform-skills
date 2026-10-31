@@ -51,6 +51,13 @@ const { makeGenpageSdk } = require('./lib/genpage-sdk.js');
 const { leftOnDiskWarning } = require('./lib/left-on-disk.js');
 const { makeTempWorkspace } = require('./lib/temp-workspace.js');
 const { createPassthroughCreates } = require('./lib/creates-passthrough.js');
+// The configuration kinds (lib/configuration-artifacts.js): the --authorize tokens they claim, the --deployment-settings bindings, the
+// send-once scope of their writes (lib/configuration-transport.js), and the connection inventory a reference's binding is proven
+// against, read as list-connections.js reads it (the SDK first, pac when the SDK's route is refused).
+const { configurationAuthorizationKeys, readDeploymentBindings } = require('./lib/configuration-artifacts.js');
+const { configurationSendOnce } = require('./lib/configuration-transport.js');
+const { sdkFirst, connectivity } = require('./lib/sdk-first.js');
+const { connectionRowFromSdk, listConnectionsWithPac } = require('./list-connections.js');
 const { isDeclaredView, compileViewIntent } = require('./lib/view-reconcile.js');
 const { isDeclaredChart, compileChartIntent } = require('./lib/chart-reconcile.js');
 const { isDeclaredWebResource } = require('./lib/web-resource-reconcile.js');
@@ -96,7 +103,9 @@ async function makeSdk(env, spec, workspaceDir, languageCode, { persistent = tru
   // The build's own `--verify` reads a form's captions in a language the form read does not carry from a translation export (verify-model-app.js readerFor), through this client:
   // that request is sent once whatever answers it (isTranslationExport), as in the standalone verify — a long action, which a re-send would run a second time.
   // The publication barrier checks every publish request when it is dispatched (publicationBarrier.gateRequest).
-  const httpClient = createAzHttpClient(env, { throttle, sendOnce: isTranslationExport, ...(publicationBarrier ? { request: publicationBarrier.gateRequest() } : {}) });
+  // A configuration write (lib/configuration-transport.js) is sent once too: a re-sent create can make a second row, and a re-sent PATCH or
+  // DELETE can hide that the first send's outcome was never seen. Outside that scope the predicate answers false, so nothing else changes.
+  const httpClient = createAzHttpClient(env, { throttle, sendOnce: (method, url) => isTranslationExport(method, url) || configurationSendOnce(method, url), ...(publicationBarrier ? { request: publicationBarrier.gateRequest() } : {}) });
   const sdkTempDir = makeTempWorkspace('model-app-');
   const cleanup = () => {
     fs.rmSync(sdkTempDir, { recursive: true, force: true });
@@ -682,6 +691,16 @@ async function buildModelAppHeld(spec, opts, deps, v, buildLease) {
   // The create port feature creates go through (a field security profile today). A plain pass-through: it gives no fence, so a
   // whole-build retry after a lost answer to a create can create a second row of the same name, as for every other create.
   const creates = deps.creates || createPassthroughCreates();
+  // The connections a declared connection reference may be bound to, read as list-connections.js reads them. A function, called by the
+  // configuration step only when a binding or a page's readiness needs proof (once per pass), so a spec without references never reads them.
+  // Without an environment (a test double) there is no reader, and a bound reference stays unproven rather than assumed bound.
+  const connections = deps.connections || (opts.env
+    ? async () => (await sdkFirst(opts.env, {
+      ...connectivity,
+      fromSdk: async (sdk) => (await sdk.listConnections()).map(connectionRowFromSdk),
+      fromPac: async (refusal) => listConnectionsWithPac(opts.env, refusal),
+    })).value
+    : undefined);
   // What failed attempts still owe for the views and forms they saved and deferred (sdk-build.js: the default-view
   // enrichment 4b, the reconcile of existing views and forms), by target. Every attempt re-runs every phase, but a
   // later one can halt before the step an earlier one owed from, so each debt is kept until a publish phase pays it
@@ -741,6 +760,11 @@ async function buildModelAppHeld(spec, opts, deps, v, buildLease) {
         ...(opts.authorizedWebResourceOverwrite ? { authorizedWebResourceOverwrite: opts.authorizedWebResourceOverwrite } : {}),
         creates,
         changedOnly: opts.changedOnly, // #changed-only: pages-only fast-apply seams (resolvedAppId + skipSitemapFinalize)
+        // The configuration kinds: the --deployment-settings bindings, the managed-artifact recorder a caller may supply (none at this base, so
+        // no management record is written), and the connection inventory (B5).
+        configurationBindings: opts.configurationBindings,
+        managed: deps.managed,
+        connections,
         // AB#6726727: the spec last applied to, or downloaded from, this environment — lets the sitemap
         // rewrite keep a nav change made in the designer since then instead of reverting it.
         baselineSpec: opts.baselineSpec,
@@ -877,7 +901,7 @@ async function buildModelAppHeld(spec, opts, deps, v, buildLease) {
           // `--language-code` in an organization whose base language is another one publishes its captions in the flag's language, and a
           // verify that does not know it holds them to the organization's and reports the captions it was just given as missing. And the app
           // folder, from which a web resource's `contentPath` is read to compare its deployed content (verify-spec.js, the web-resource check).
-          const vr = await deps.verify(spec, { environmentSkipped: r.skipped, phases: opts.phases, baselineSpec: opts.baselineSpec, languageCode: opts.languageCode, preResolvedLanguageCode: opts.preResolvedLanguageCode, appDir: opts.appDir });
+          const vr = await deps.verify(spec, { environmentSkipped: r.skipped, phases: opts.phases, baselineSpec: opts.baselineSpec, languageCode: opts.languageCode, preResolvedLanguageCode: opts.preResolvedLanguageCode, appDir: opts.appDir, configurationBindings: opts.configurationBindings });
           const present = vr.checks.length - vr.missing.length;
           log(`\n${vr.ok ? '✓ verify PASS' : `✗ verify FAIL — ${vr.missing.length} missing`} (${present}/${vr.checks.length} present)`);
           // Named explicitly rather than folded into the pass, so a green verify never reads as
@@ -1083,10 +1107,15 @@ function authorizationKeys(argv, spec) {
     if (a === '--authorize') { raw.push(argv[i + 1]); i += 1; } else if (typeof a === 'string' && a.startsWith('--authorize=')) raw.push(a.slice('--authorize='.length));
   }
   const lower = (s) => String(s || '').toLowerCase();
-  const keys = new Set();
+  // The configuration kinds' tokens, <kind>:<declared key>:<field> (e.g. connectionReference:contoso_sp:connectionId, environmentVariableValue:contoso_ApiKey:value),
+  // are claimed first and checked against the spec by their own grammar (lib/configuration-artifacts.js); every other token is read below exactly as before.
+  const configuration = configurationAuthorizationKeys(raw, spec);
+  const keys = new Set(configuration.keys);
   const adopt = new Set();
   const overwrite = new Set();
-  const problems = [];
+  const problems = configuration.problems.map(({ token, code }) => (code === 'CONFIGURATION_AUTHORIZATION_UNKNOWN_ITEM'
+    ? `'${token}' names a configuration item the spec does not declare`
+    : `'${token}' is not <kind>:<declared key>:<field> for a field a configuration change can consent to`));
   // The keys of the declared views and charts, as the reconcile computes them (its intent key: `<table>/<name>`, the table in
   // lower case). A spec whose declared artifact does not compile fails validation before any key is used.
   const declaredKeys = new Set();
@@ -1114,7 +1143,7 @@ function authorizationKeys(argv, spec) {
   // An untyped key that spells a declared web resource's name is not that resource's approval. Its own branch below refuses it or
   // keeps it for the view or chart it names; when it is refused, the refusal also says which typed key the maker meant.
   const webResourceHints = [];
-  for (const key of raw) {
+  for (const key of configuration.unclaimed) {
     // adopt:webresource:new_/scripts/case.js | overwrite:webresource:new_casebanner — a declared web resource, by its whole name (any case).
     const resource = /^(adopt|overwrite):webresource:(.+)$/.exec(String(key));
     if (resource) {
@@ -1242,7 +1271,7 @@ async function main() {
   const argv = process.argv.slice(2);
   const { positional, flags } = parseArgs(argv);
   const USAGE =
-    'Usage: node scripts/build-model-app.js --env <url> --spec @<app-folder>/app-spec.json [--apply] [--sample-data] [--publish] [--verify] [--changed-only] [--no-live-plan] [--preview-push] [--stage <data|ui|app|publish>] [--only|--skip <phases>] [--from|--to <phase>] [--language-code|--languageCode <lcid>] [--non-interactive] [--allow-destructive] [--authorize <key>]... [--workspace <dir>]';
+    'Usage: node scripts/build-model-app.js --env <url> --spec @<app-folder>/app-spec.json [--apply] [--sample-data] [--publish] [--verify] [--changed-only] [--no-live-plan] [--preview-push] [--stage <data|ui|app|publish>] [--only|--skip <phases>] [--from|--to <phase>] [--language-code|--languageCode <lcid>] [--non-interactive] [--allow-destructive] [--authorize <key>]... [--deployment-settings <file>] [--workspace <dir>]';
   // The declared flag contract, enforced before anything else runs.
   //
   // `needValue` lists every flag whose MISSING value would be read as a default rather than an
@@ -1257,8 +1286,8 @@ async function main() {
   const flagError = validateFlags(argv, {
     known: ['env', 'spec', 'apply', 'sample-data', 'publish', 'verify', 'changed-only', 'no-live-plan', 'preview-push',
       'stage', 'only', 'skip', 'from', 'to', 'language-code', 'languageCode', 'non-interactive',
-      'allow-destructive', 'authorize', 'workspace'],
-    needValue: ['env', 'spec', 'stage', 'only', 'skip', 'from', 'to', 'language-code', 'languageCode', 'authorize', 'workspace'],
+      'allow-destructive', 'authorize', 'deployment-settings', 'workspace'],
+    needValue: ['env', 'spec', 'stage', 'only', 'skip', 'from', 'to', 'language-code', 'languageCode', 'authorize', 'deployment-settings', 'workspace'],
   });
   if (flagError) {
     makeWritesBlocking(process.stdout, process.stderr);
@@ -1296,6 +1325,37 @@ async function main() {
     makeWritesBlocking(process.stdout, process.stderr);
     process.stderr.write(`✗ ${authorization.error}\n${USAGE}\n`);
     process.exit(1);
+  }
+  // --deployment-settings <file>: per-environment environment variable values and connection reference connections, in the shape
+  // `pac solution create-settings` writes: { "EnvironmentVariables": [{ "SchemaName", "Value" }], "ConnectionReferences": [{ "LogicalName", "ConnectionId", "ConnectorId" }] }.
+  // The file can hold secrets, so nothing printed quotes its content: a JSON error names the file only (V8's message quotes the text near the
+  // error), and readDeploymentBindings' errors name entries, never values. A UTF-8 BOM (Windows editors write one) is dropped before parsing.
+  let configurationBindings;
+  if (typeof flags['deployment-settings'] === 'string') {
+    const settingsPath = path.resolve(flags['deployment-settings']);
+    let settingsText;
+    try {
+      settingsText = fs.readFileSync(settingsPath, 'utf8');
+    } catch (err) {
+      makeWritesBlocking(process.stdout, process.stderr);
+      process.stderr.write(`✗ --deployment-settings: cannot read ${settingsPath} (${(err && err.code) || 'error'})\n`);
+      process.exit(1);
+    }
+    let settings;
+    try {
+      settings = JSON.parse(settingsText.replace(/^\uFEFF/, ''));
+    } catch {
+      makeWritesBlocking(process.stdout, process.stderr);
+      process.stderr.write(`✗ --deployment-settings: ${settingsPath} is not valid JSON\n`);
+      process.exit(1);
+    }
+    const bindings = readDeploymentBindings(settings, spec);
+    if (bindings.errors.length) {
+      makeWritesBlocking(process.stdout, process.stderr);
+      process.stderr.write(`✗ --deployment-settings: ${bindings.errors.join('; ')}\n`);
+      process.exit(1);
+    }
+    configurationBindings = bindings;
   }
   // Before auth, language resolution, and SDK construction. A link planted as the workspace
   // root is refused here so the factory below is never called; a real directory is allowed.
@@ -1352,6 +1412,7 @@ async function main() {
     profile: (flags.apply === true && flags.stage !== 'data') ? 'deploy' : 'plan',
     allowDestructive: flags['allow-destructive'] === true,
     authorizedDestructive: authorization.keys,
+    configurationBindings,
     // Spread in only when given, so a run without them hands the engine exactly the options it did before.
     ...(authorization.adopt.size ? { authorizedAdoption: authorization.adopt } : {}),
     ...(authorization.overwrite.size ? { authorizedOverwrite: authorization.overwrite } : {}),

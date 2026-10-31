@@ -1314,3 +1314,94 @@ test('a dry run whose read of the references fails says so, and halts nothing', 
   assert.strictEqual(bindingWords(warnings).length, 1);
   assert.match(bindingWords(warnings)[0], /^could not read this environment's connection references \(HTTP 403\)/);
 });
+
+// ── Declared connection references and the page gate ─────────────────────────────────────────────────────────────────────────────
+// A spec that declares a connection reference makes it in the configuration step, before any page is written. A page that names a
+// declared reference is written only when the reference was made AND bound to a proven connection; until then the build stops before
+// the pages, instead of writing a page that cannot reach its data. The base steps run on this file's mock environment; the configuration
+// step's requests go to the real maker-SDK bundle over the strict configuration org (tests/helpers/fake-config-org.js).
+const configurationRouted = (() => {
+  const { createConfigOrg } = require('./helpers/fake-config-org.js');
+  const { createMakerSdk, createNodeWorkspaceStorage } = require('../lib/maker-sdk.js');
+  const { configurationSendOnce } = require('../lib/configuration-transport.js');
+  const { createPassthroughCreates } = require('../lib/creates-passthrough.js');
+  const CONFIG_KIND = /^(environmentVariable|connectionReference|customApi|duplicateRule)/;
+  const CONFIG_PATH = /^\/(duplicaterules|EntityDefinitions\(LogicalName='(connectionreference|customapi|duplicaterule)'\))/;
+  return async function routed(mock, spec) {
+    const org = createConfigOrg({ tables: [{ logicalName: 'contoso_item', attributes: ['contoso_name'] }], solution: { uniqueName: spec.solution.uniqueName, version: '1.0.0.0', prefix: spec.solution.publisherPrefix } });
+    const httpClient = createAzHttpClient(org.origin, { getToken: () => 'test-token-0123456789abcdef', request: (r) => org.request(r), sleep: async () => {}, sendOnce: configurationSendOnce });
+    const real = createMakerSdk({ workspaceStorage: createNodeWorkspaceStorage(tmp('config-sdk-')), instanceUrl: org.origin, httpClient, solutionUniqueName: spec.solution.uniqueName });
+    await real.initWorkspace();
+    const ids = new Set();
+    const sdk = Object.create(mock);
+    for (const m of ['createArtifact', 'findArtifact', 'fetchArtifact', 'pushArtifact', 'updateElement']) {
+      sdk[m] = (kind, ...rest) => {
+        if (!CONFIG_KIND.test(String(kind))) return mock[m](kind, ...rest);
+        if (typeof rest[0] === 'string') ids.add(rest[0].toLowerCase());
+        if (rest[0] && typeof rest[0] === 'object' && typeof rest[0].id === 'string') ids.add(rest[0].id.toLowerCase());
+        return real[m](kind, ...rest);
+      };
+    }
+    sdk.dataverse = { ...mock.dataverse, get: (p, ...rest) => (CONFIG_PATH.test(String(p)) ? real.dataverse.get(p, ...rest) : mock.dataverse.get(p, ...rest)) };
+    sdk.addSolutionComponent = (o) => (ids.has(String(o && o.componentId).toLowerCase()) ? real.addSolutionComponent(o) : mock.addSolutionComponent(o));
+    sdk.queryRecords = (entity, options) => ((entity === 'solutioncomponent' || (entity === 'solution' && options && options.top === 1 && String(options.select) === 'solutionid')) ? real.queryRecords(entity, options) : mock.queryRecords(entity, options));
+    return { sdk, org, creates: createPassthroughCreates() };
+  };
+})();
+
+const { readDeploymentBindings } = require('../lib/configuration-artifacts.js');
+
+const declareReferences = (spec) => {
+  spec.minimumPluginVersion = '2.21.0';
+  spec.connectionReferences = [
+    { logicalName: 'contoso_msnweather', connectorId: apiId('shared_msnweather') },
+    { logicalName: 'contoso_sharepoint', connectorId: apiId('shared_sharepointonline') },
+  ];
+  return spec;
+};
+
+test('a page naming a declared connection reference left unbound is not written: the build stops before the pages and never retries', async () => {
+  const { spec, outDir } = await portableCopy();
+  declareReferences(spec);
+  const env = targetEnvironment({ references: [], apis: BOTH_APIS });
+  const w = await configurationRouted(env.sdk, spec);
+  const genpage = fakeGenpage();
+  const halt = await runSdkBuild(spec, { sdk: w.sdk, genpage, appDir: outDir, env: FABRIKAM, apply: true, phases: PHASES, creates: w.creates, warn: () => {}, connections: async () => [] }).then(() => null, (e) => e);
+  assert.ok(halt instanceof BuildHalt, String(halt && halt.stack));
+  assert.strictEqual(halt.code, 'configuration-prerequisite-not-applied', halt.message);
+  assert.strictEqual(halt.retry, 'never');
+  assert.strictEqual(genpage.of('create').length + genpage.of('update').length, 0, 'no page written');
+  assert.strictEqual(w.org.rows('connectionreferences').length, 2, 'the configuration step made both references');
+  assert.deepStrictEqual(w.org.unexpected, []);
+});
+
+test('declared references bound to proven connections let the pages be written, without a "create the reference" warning; an undeclared missing Custom API is still warned about', async () => {
+  const { spec, outDir } = await portableCopy();
+  declareReferences(spec);
+  const env = targetEnvironment({ references: [], apis: [BOTH_APIS[1]] });
+  const w = await configurationRouted(env.sdk, spec);
+  const bindings = readDeploymentBindings({ ConnectionReferences: [{ LogicalName: 'contoso_msnweather', ConnectionId: 'conn-w' }, { LogicalName: 'contoso_sharepoint', ConnectionId: 'conn-s' }] }, spec);
+  assert.deepStrictEqual(bindings.errors, []);
+  const genpage = fakeGenpage();
+  const warnings = [];
+  const rebuilt = await runSdkBuild(spec, { sdk: w.sdk, genpage, appDir: outDir, env: FABRIKAM, apply: true, phases: PHASES, creates: w.creates, configurationBindings: bindings, connections: async () => [{ connectionId: 'conn-w', connectorId: apiId('shared_msnweather') }, { connectionId: 'conn-s', connectorId: apiId('shared_sharepointonline') }], warn: (m) => warnings.push(m) });
+  assert.ok(rebuilt.ok, JSON.stringify(rebuilt.errors));
+  assert.strictEqual(genpage.of('create').length, 2, 'both pages written');
+  const bound = bindingWords(warnings);
+  assert.ok(!bound.some((m) => /connection reference contoso_(msnweather|sharepoint) is not in this environment/.test(m)), `no reference warning: ${JSON.stringify(bound)}`);
+  assert.ok(bound.some((m) => /Custom API contoso_ApproveOrder is not in this environment/.test(m)), 'an undeclared missing Custom API is still warned about');
+  assert.deepStrictEqual(w.org.rows('connectionreferences').map((r) => r.connectionid).sort(), ['conn-s', 'conn-w']);
+  assert.deepStrictEqual(w.org.unexpected, []);
+});
+
+test('a reference already bound to another connector still refuses before anything is written, declared or not', async () => {
+  const { spec, outDir } = await portableCopy();
+  declareReferences(spec);
+  const env = targetEnvironment({ references: [referenceRow('contoso_msnweather', 'shared_office365users'), BOTH_REFERENCES[1]], apis: BOTH_APIS });
+  const w = await configurationRouted(env.sdk, spec);
+  const halt = await runSdkBuild(spec, { sdk: w.sdk, genpage: fakeGenpage(), appDir: outDir, env: FABRIKAM, apply: true, phases: PHASES, creates: w.creates, warn: () => {}, connections: async () => [] }).then(() => null, (e) => e);
+  assert.ok(halt instanceof BuildHalt, String(halt && halt.stack));
+  assert.strictEqual(halt.code, 'pages-binding-reference-conflict');
+  assert.deepStrictEqual(env.writes, [], 'nothing written by the base steps');
+  assert.deepStrictEqual(w.org.writes(0), [], 'nothing written by the configuration step');
+});

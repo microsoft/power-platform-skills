@@ -385,6 +385,7 @@ function loadTeardownCli({
         },
       };
     }
+    if (id === './lib/configuration-artifacts.js') return require('../lib/configuration-artifacts.js');
     if (id === './lib/sdk-teardown.js') {
       return {
         runTeardown: async (spec, opts, deps) => {
@@ -953,4 +954,36 @@ test('overlapping teardowns keep the fence until the last one finishes, whicheve
       }
     } finally { fs.rmSync(parent, { recursive: true, force: true }); }
   }
+});
+
+// A teardown never deletes a configuration item (nothing proves this app owns one), so it names each declared item as kept —
+// names only, never a value — and says when a Custom API bound to a table the spec makes will block that table's delete.
+test('a spec with configuration items: each is named as kept, without its value, before anything is deleted', async () => {
+  const spec = JSON.parse(JSON.stringify(desk));
+  const table = spec.entities.find((e) => e.existing !== true).schemaName;
+  spec.environmentVariables = [{ schemaName: 'contoso_ApiBase', displayName: 'API base', type: 'string', defaultValue: 'https://api.contoso.com/v1' }];
+  spec.connectionReferences = [{ logicalName: 'contoso_sharepoint', displayName: 'SharePoint', connectorId: '/providers/Microsoft.PowerApps/apis/shared_sharepointonline' }];
+  spec.customApis = [{ uniqueName: 'contoso_Escalate', boundEntityLogicalName: table }];
+  spec.duplicateDetectionRules = [{ key: 'same-email', name: 'Same email', entity: 'contact' }];
+  const sdk = presentSdk();
+  const warnings = [];
+  const r = await teardownModelApp(spec, { apply: false }, { sdk, warn: (m) => { warnings.push({ m, calls: sdk.calls.length }); } });
+  assert.strictEqual(r.ok, true);
+  const kept = warnings.filter((w) => / kept: /.test(w.m));
+  assert.deepStrictEqual(kept.map((w) => w.m.split(' kept:')[0]), [
+    'environment variable contoso_ApiBase',
+    'connection reference contoso_sharepoint',
+    'Custom API contoso_Escalate',
+    'duplicate detection rule same-email',
+  ]);
+  assert.ok(kept.every((w) => w.calls === 0), 'named before any SDK call');
+  assert.match(kept[2].m, new RegExp(`bound to ${table.toLowerCase()}, so delete the Custom API first`));
+  assert.ok(!warnings.some((w) => /api\.contoso\.com/.test(w.m)), 'no value is echoed');
+});
+
+test('a spec without configuration items has no kept-item warning', async () => {
+  const warnings = [];
+  const r = await teardownModelApp(desk, { apply: false }, { sdk: presentSdk(), warn: (m) => warnings.push(m) });
+  assert.strictEqual(r.ok, true);
+  assert.ok(!warnings.some((m) => / kept: a teardown does not delete configuration items/.test(m)));
 });

@@ -171,6 +171,11 @@ const { isDeclaredChart, planChartReconcile, applyChartReconcile } = require('./
 const { isManagedEntity, planCommandReconcile, applyCommandReconcile } = require('./command-reconcile.js');
 const { planQuickFind, applyQuickFind } = require('./quick-find.js');
 const { HTTP_SEND_HISTORY } = require('./sdk-http-client.js');
+// The configuration kinds (environment variables, connection references, Custom APIs, duplicate rules) and the solution's version:
+// the helper plans, applies and reads them back; the runtime closes over what only the build has (its create port, BuildHalt and
+// retry policy, the --authorize keys) so this file calls three methods and keeps no configuration state of its own.
+const { usesConfiguration, hasConfigurationDefinitions, configurationPlanItems } = require('./configuration-artifacts.js');
+const { createConfigurationRuntime } = require('./configuration-build.js');
 
 // Re-export from entity-provision so the export surface stays unchanged
 const BuildHalt = _BuildHalt;
@@ -702,6 +707,8 @@ function planFor(spec, opts) {
   const items = [];
   const sol = spec.solution;
   if (has('solution')) items.push({ phase: 'solution', label: `solution ${sol.uniqueName} (publisher ${sol.publisherPrefix})` });
+  // ONE item for the solution's version when the spec states one; its label is the step's (runSdkBuildPhases, the version step).
+  if (has('solution')) items.push(...configurationPlanItems(spec).filter((item) => item.phase === 'solution'));
   if (has('data-model')) {
     // The relationship probe identity must match the one the APPLY path uses, or an existing
     // relationship reads as `create`. `provisionDataModel` queries the REFERENCED (parent) entity's
@@ -793,6 +800,8 @@ function planFor(spec, opts) {
     for (const e of spec.entities) if (Object.keys(declaredTableFlags(e)).length) items.push({ phase: 'data-model', label: `table flags ${e.schemaName}` });
     for (const p of spec.fieldSecurityProfiles || []) items.push({ phase: 'data-model', label: fieldSecurityProfileLabel(p) });
     if (!has('security')) for (const p of profilesWithAssignments(spec)) items.push({ phase: 'data-model', label: deferredAssignmentsLabel(p) });
+    // ONE item for every configuration declaration together, whatever their number: the step runs them as one unit, in dependency order.
+    items.push(...configurationPlanItems(spec).filter((item) => item.phase === 'data-model'));
   }
   if (has('sample-data') && opts.sampleData) {
     if (!has('data-model') && seededSecuredTables(spec).size) items.push({ phase: 'sample-data', label: SEED_SECURITY_STEP });
@@ -1702,8 +1711,23 @@ async function judgePageBindings(provision, pages, seen) {
   return judgeBindingTargets(pages, await readBindingTargets(provision, pages, seen));
 }
 
+// The page-binding findings a run's own configuration step answers for: a DECLARED connection reference or Custom API that is absent,
+// or a declared reference with no connection, BEFORE the data-model phase writes it. Warning "create it" about an item the same run is
+// about to create misleads, so such a finding is not said; the pages gate (configurationRun.beforePages) then decides on what the run
+// observed after its step. Only when the run has the data-model phase and the spec declares items; a finding that also names an
+// undeclared item is still said; a connector conflict (a refusal) is never deferred.
+function scheduledByConfiguration(spec, phases) {
+  if (!phases.includes('data-model') || !hasConfigurationDefinitions(spec)) return () => false;
+  const declared = (list, field) => new Set((Array.isArray(list) ? list : []).filter((e) => e && typeof e[field] === 'string').map((e) => e[field].trim().toLowerCase()));
+  const references = declared(spec.connectionReferences, 'logicalName');
+  const apis = declared(spec.customApis, 'uniqueName');
+  const allIn = (finding, names) => Array.isArray(finding.names) && finding.names.length > 0 && finding.names.every((name) => names.has(String(name).trim().toLowerCase()));
+  return (finding) => ((finding.kind === 'reference-missing' || finding.kind === 'connection-missing') && allIn(finding, references))
+    || (finding.kind === 'api-missing' && allIn(finding, apis));
+}
+
 // The apply's answer to a verdict: a conflict stops the build, and all else is said.
-function haltOnPageBindingConflicts(verdict, warn) {
+function haltOnPageBindingConflicts(verdict, warn, deferred = () => false) {
   if (!verdict) return;
   const refused = verdict.findings.filter((finding) => finding.severity === 'refuse');
   if (refused.length) {
@@ -1715,11 +1739,11 @@ function haltOnPageBindingConflicts(verdict, warn) {
       { phase: 'preflight', code: 'pages-binding-reference-conflict', recoverable: false, retry: RETRY.NEVER },
     );
   }
-  if (typeof warn === 'function') for (const text of [...verdict.unchecked.map((u) => u.text), ...verdict.findings.map((finding) => finding.text)]) warn(text);
+  if (typeof warn === 'function') for (const text of [...verdict.unchecked.map((u) => u.text), ...verdict.findings.filter((finding) => !deferred(finding)).map((finding) => finding.text)]) warn(text);
 }
 
 async function checkPageBindingsBeforeWriting(spec, { provision, phases, changedOnly, warn, seen }) {
-  haltOnPageBindingConflicts(await readPageBindingVerdict(spec, { provision, phases, changedOnly, seen }), warn);
+  haltOnPageBindingConflicts(await readPageBindingVerdict(spec, { provision, phases, changedOnly, seen }), warn, scheduledByConfiguration(spec, phases));
 }
 
 // A dry run has no pages phase, which is what finds a navigation target absent (reconcilePageIds: the spec's page id, or the manifest's, that the environment still lists). So for each target a
@@ -3573,6 +3597,9 @@ async function runSdkBuildPhases(spec, opts, owed) {
   // creates/updates it exactly as before — this branch is a no-op (byte-identical) on the normal path.
   if (opts.changedOnly && opts.changedOnly.resolvedAppId) result.created.app = opts.changedOnly.resolvedAppId;
   const sol = spec.solution;
+  // The configuration kinds' runtime (lib/configuration-build.js), or null for a spec that uses none of them: then no step below runs and
+  // nothing is read for them. Built before the first write so a spec that declares an item twice stops here, having written nothing.
+  const configurationRun = usesConfiguration(spec) ? createConfigurationRuntime({ spec, sdk, provision, opts, appUniqueName: appUniqueName(spec) }) : null;
   // The web resources an earlier run of this build wrote and could not confirm were published (lib/web-resource-records.js), read at first use: the
   // spec's web resources and the generated app icon are written again by id when they are in it, and the page manifest is written again by its id where
   // its published copy is not what the run wants (kept where it is: persistPageManifest). One per run of the phases, so the
@@ -4018,6 +4045,14 @@ async function runSdkBuildPhases(spec, opts, owed) {
 
   // 1. Solution (idempotent; header-less provisioning client).
   if (has('solution')) await provisionSolution({ sdk, provision, runner, solution: sol });
+  // The solution's version (solution.version), set after the solution exists and only when it differs: an equal version is one read.
+  if (configurationRun && has('solution') && sol && sol.version !== undefined) {
+    await runner.run('solution', `solution version ${sol.uniqueName}`, async () => {
+      const step = await configurationRun.apply('solution');
+      result.configurationVersion = step.outcome;
+      configurationRun.throwIfIncomplete(step);
+    });
+  }
 
   // 2. Data model — idempotent. Discover existing tables/columns/relationships via the SDK
   //    (find*/fetch*), then create only what's missing. Captures entitySetName for every
@@ -4031,6 +4066,28 @@ async function runSdkBuildPhases(spec, opts, owed) {
   // that declares none takes no step and sends nothing.
   const fieldSecurityIds = new Map();
   if (has('data-model')) await provisionFieldSecurityProfiles({ runner, spec, provision, creates: opts.creates, result, ids: fieldSecurityIds, deferAssignments: !has('security') });
+  // The configuration kinds, after the tables they name exist: environment variable definitions then values (parents first), connection
+  // references, Custom APIs, duplicate rules. What the step confirmed is recorded BEFORE it can halt; an unknown outcome stops it, never retried.
+  if (configurationRun && has('data-model') && hasConfigurationDefinitions(spec)) {
+    await runner.run('data-model', 'configuration', async () => {
+      const step = await configurationRun.apply('data-model');
+      result.created.configuration = step.outcome;
+      result.configurationBlocking = step.blocking;
+      configurationRun.throwIfIncomplete(step);
+    });
+    // The binding check before writing (checkPageBindingsBeforeWriting) read the declared references and Custom APIs as they were BEFORE this
+    // step made or changed them, and kept the answers for the attempt (bindingReadsOfAttempt, keyed by lower-cased name). Forget them, so a
+    // navigation target the pages phase judges later reads them as they are now and a just-made reference is not "missing".
+    const forgetDeclared = (answers, list, field) => {
+      for (const entry of Array.isArray(list) ? list : []) {
+        if (!entry || typeof entry[field] !== 'string') continue;
+        answers.delete(entry[field].toLowerCase());
+        answers.delete(entry[field].trim().toLowerCase());
+      }
+    };
+    forgetDeclared(bindingReadsOfAttempt.references, spec.connectionReferences, 'logicalName');
+    forgetDeclared(bindingReadsOfAttempt.apis, spec.customApis, 'uniqueName');
+  }
 
   // entity-set resolver: fresh tables cached above; existing ones via fetchEntityMetadata.
   const entitySetFor = makeEntitySetResolver({ spec, entities: dataModel.entities, provision });
@@ -7985,9 +8042,14 @@ async function runSdkBuildPhases(spec, opts, owed) {
       // refused throttle wait stops the run here, as it does after that check. A run that was told nothing has none: every target was checked before it wrote anything.
       const madeUnchecked = pagesMadeUnchecked(spec, { changedOnly: bindingCheckScope(phases, opts.changedOnly), made: new Set(implemented.filter((p) => navTargets.has(keyOf(p)) && !keyToId.has(keyOf(p))).map(keyOf)) });
       if (madeUnchecked.length) {
-        haltOnPageBindingConflicts(await judgePageBindings(provision, madeUnchecked, bindingReadsOfAttempt), opts.warn);
+        haltOnPageBindingConflicts(await judgePageBindings(provision, madeUnchecked, bindingReadsOfAttempt), opts.warn, scheduledByConfiguration(spec, phases));
         runner.stopIfRefused('preflight');
       }
+      // The configuration gate (lib/configuration-build.js beforePages): a page that names a DECLARED connection reference or Custom API is written
+      // only when this run observed the item usable (a reference with a proven connection, a Custom API with an implementation). What the data-model
+      // step read back decides; an item it did not read is read now (GET only). The same pages the binding check judges, plus the targets this phase
+      // makes (madeUnchecked). Nothing has been written in this phase yet. A page naming only undeclared items is untouched (warned about as before).
+      if (configurationRun) await configurationRun.beforePages([...pagesStatingBindings(spec, { changedOnly: bindingCheckScope(phases, opts.changedOnly) }), ...madeUnchecked]);
       // After the whole scan, so a build that halts on a later page says only why it halted. Nothing has been written yet, and the pages that are warned about are sent as they are.
       if (typeof opts.warn === 'function') for (const warning of griffelWarnings) opts.warn(warning);
 

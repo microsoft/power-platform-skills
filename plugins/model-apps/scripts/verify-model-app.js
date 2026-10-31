@@ -232,6 +232,13 @@ function readerFor(sdk, appUnique, opts) {
     // unfiltered read serves every findTable in this verify run. Caching a filtered page would
     // hide a later table whose name does not contain the first query.
     beginVerificationPass,
+    // The configuration kinds (lib/configuration-artifacts.js verifyConfiguration), read through this reader's SDK: each declared item's
+    // definition, its binding when the build was given one (--deployment-settings), a required variable's value, a Custom API's
+    // implementation, a rule's publication and the solution's version. Reads only.
+    configuration: async (spec, bindings) => {
+      const C = require('./lib/configuration-artifacts.js');
+      return C.verifyConfiguration(spec, C.configurationContext({ sdk, bindings, solutionUniqueName: spec && spec.solution && spec.solution.uniqueName }));
+    },
     findTable: async (logical) => {
       const l = String(logical).toLowerCase();
       const tables = await catalog();

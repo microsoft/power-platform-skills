@@ -120,6 +120,11 @@ async function teardownModelApp(spec, opts, deps) {
   // A workspace with NO snapshot gets a fresh tombstone too (a first changed-only build has none until it
   // finishes — see tombstoneSnapshot), creating the folder if it has to; `createdDir` is what to remove
   // again once the teardown is clean, so a folder that never had a workspace is left without one.
+  // The configuration kinds are never deleted by a teardown: nothing proves this app owns an environment variable, a connection reference,
+  // a Custom API or a duplicate rule (configurationTeardownNotes). Each declared item is named as kept — names only, never a value — and a
+  // Custom API bound to a table the spec makes is called out, because Dataverse refuses that table's delete while the API exists. Named
+  // before the fence below is taken, so nothing here can leave the fence or its heartbeat behind.
+  for (const note of require('./lib/configuration-artifacts.js').configurationTeardownNotes(spec)) warn(note);
   let createdWorkspaceDir = null;
   let teardownId = null;
   let heartbeat = null;

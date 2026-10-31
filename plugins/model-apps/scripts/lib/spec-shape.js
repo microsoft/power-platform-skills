@@ -63,7 +63,17 @@ const COLLECTIONS = {
   // A page's connector and Custom API bindings are lists of objects, carried onto its config.json as they are written.
   pages: { children: { navigatesTo: {}, dataSources: { scalar: true }, connectorBindings: {}, actionBindings: {} } },
   personas: { children: { jobs: { children: { privileges: {} } }, additionalPrivileges: {} } },
+  // The configuration kinds (2.21.0). A non-array (null, an object) is an error naming the field, never quietly an empty list.
+  environmentVariables: {},
+  connectionReferences: {},
+  customApis: { children: { requestParameters: {}, responseProperties: {} } },
+  duplicateDetectionRules: { children: { conditions: {} } },
 };
+
+// Root collections that stay ABSENT when the spec does not declare them. An authored list — even an empty one — is what says the spec
+// uses the feature (configuration-artifacts.js hasConfigurationFields: the version-floor warning), so materializing `[]` for every
+// spec would warn about a feature it never mentioned. A malformed value is still reported and replaced by [] (normalizeCollections).
+const OPTIONAL_ROOT_COLLECTIONS = new Set(['environmentVariables', 'connectionReferences', 'customApis', 'duplicateDetectionRules']);
 
 // appShell is an OBJECT at the root (not a collection), so its areas→groups→subAreas chain is walked
 // separately. It is reshaped constantly while navigation is being designed, which makes a non-array
@@ -128,6 +138,7 @@ function normalizeSpecShape(spec) {
   const normalized = normalizeCollections(spec, COLLECTIONS, '', errors);
   const out = normalized === spec ? { ...spec } : normalized;
   for (const key of Object.keys(COLLECTIONS)) {
+    if (OPTIONAL_ROOT_COLLECTIONS.has(key) && out[key] === undefined) continue;
     if (!Array.isArray(out[key])) out[key] = [];
   }
 
