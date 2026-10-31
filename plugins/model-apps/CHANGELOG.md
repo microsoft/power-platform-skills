@@ -5,6 +5,38 @@ All notable changes to the **model-apps** plugin.
 Entries are deliberately short: what changed and why it matters to you. The reasoning,
 evidence and trade-offs behind a change live in its PR, in `docs/`, or in the linked issue.
 
+## [2.21.0]
+
+The bundled SDK is updated (commit 0eef55f8c2d0).
+
+### Added
+
+- **Portable schema fields**: Choice `value`s, `dateTimeBehavior`, `isSecured`, `fieldSecurityProfiles`, table flags
+  ([schema](references/app-spec-schema-advanced.md)); one-way changes need `--authorize <key>`.
+- **Declared views, charts and `quickFind` follow the spec on rebuild** (`reconcile: "declared"`); changing an existing one
+  needs `--authorize adopt:<table>/<name>`.
+- **`app.mainFormsOnUpdate: "exact"` and `app.pinDeclaredArtifacts`** keep an updated app's forms and components as the spec
+  says; a lost component-add answer is finished in-run.
+- **`--preview-push` and `--inspect-components`** preview a push and check command buttons, read-only.
+- **`genpage.js` takes `--draft`**, a pages lease, and `prepare-compiler-refresh` ([skill](skills/genpage/SKILL.md)).
+- **`data-fix.js`, `solutions.js inspect` and `plan-app-promotion.js`** repair rows, list a solution, plan a move.
+
+### Changed
+
+- **Builds read slightly more**: column reads include `IsSecured`, name lookups read every match, a table gaining a column
+  first reads its Date and Time behaviours, and teardown reads forms that may embed a page.
+- **Teardown keeps a page a form still embeds** and stops, naming the form.
+
+### Fixed
+
+- **A flow delete answered "no active transaction" is sent again**; a step with an unknown outcome is not re-run.
+- **A refused app-access unlink is reported**, not read as removed.
+
+### Known limitations
+
+- Declared view and chart edits need `adopt:` again each time; keyed command bars are refused.
+- `forms[].genPages` stops with `form-page-embeds-incomplete`; use a navigation page.
+
 ## [2.20.6]
 
 The bundled SDK is updated (commit 59ae2d72e2a8).
