@@ -1268,6 +1268,8 @@ Log the marker, the check result (`code`, `lines`, `deployedCopy`) and that `Cho
 - **`pages-locked`** (exit 1, nothing written) from `add-to-app`, `remove-from-app` or `genpage-upload.js --app-id`: a build or
   another edit of the same app is running from that folder. Wait for it and run again; pass `--app-dir '<folder>'` when the
   command is not run from the app's build folder. The lock covers one machine and one folder only.
+  `GENPAGE_APP_LEASE_UNRESOLVED` (exit 1, nothing written) from the same commands: the app's unique name, which names the
+  lock, could not be read — the app id is wrong, or the read failed (the message says which). Check the id and run again.
 - **Compiler refresh** — only when the user names a page whose loops over a Map, a Set or a string misbehave after an older
   build. Download the page, then run `node "${PLUGIN_ROOT}/scripts/genpage.js" prepare-compiler-refresh --env '<org-url>'
   --page-id '<page-id>' --file '<working-dir>/<file>.tsx' --output-file '<working-dir>/<file>.refresh.tsx'`. It writes nothing

@@ -725,8 +725,12 @@ node "${PLUGIN_ROOT}/scripts/teardown-model-app.js" \
     writing the longhands makes the style start to render. The same halt reports a `makeStyles` call the check cannot read
     for certain as that — not as CSS Griffel drops — and says what to change in the code.
   - `pages-locked` — another build of this app, or a `genpage.js add-to-app` / `remove-from-app` / `genpage-upload.js --app-id`
-    edit run from this folder, holds the app's pages lease. Nothing was written: wait for it to finish and run again. It is a
-    single-machine lock in this folder's `.maker-workspace`, not a guard against an edit from another machine.
+    edit run from this folder, holds the app's pages lease. No page was written. A build takes that lease only when it
+    reaches its pages phase, so its earlier phases (solution, tables, forms, app shell) may already have saved their
+    changes: tell the user so, never that nothing changed. Wait for the other build or edit to finish and run the build
+    again; that run reconciles what was already saved. (A standalone `genpage.js` / `genpage-upload.js` edit that gets this
+    refusal takes the lease first, so it did write nothing.) It is a single-machine lock in this folder's
+    `.maker-workspace`, not a guard against an edit from another machine.
   - `form-page-embeds-incomplete` — a page the spec embeds in a form (`forms[].genPages`) was not embedded. The message names
     each key and why (`halt.notApplied`); tell the user both and never report the build as done. **In this release the CLI
     build cannot embed a page in a form** (it has no record of the embeds it made, so it fails closed with
