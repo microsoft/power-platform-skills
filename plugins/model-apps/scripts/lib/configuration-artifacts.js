@@ -1674,32 +1674,37 @@ async function readBack(op, ctx, known, id, childIds) {
   return { state: 'read', remote, definition, value, missing, status: compared.changes.some(isStatus) };
 }
 
+// The rows a read of a root shows in ONE child slot, never the union of the root's children: a request parameter's
+// slot holds only the request parameter of that name, a condition's only the rows its keyed declaration describes,
+// a variable's 'value' only its value row.
+function slotRows(kind, entry, remote, slot) {
+  if (!remote) return [];
+  if (kind === 'environmentVariable') return slot === 'value' && remote.currentValue ? [remote.currentValue] : [];
+  if (kind === 'customApi') {
+    // 'request:<lower unique name>' or 'response:<lower unique name>' (a unique name may itself hold a ':').
+    const at = slot.indexOf(':');
+    const direction = slot.slice(0, at);
+    const name = slot.slice(at + 1);
+    const list = direction === 'request' ? remote.requestParameters : direction === 'response' ? remote.responseProperties : null;
+    return (list || []).filter((row) => row && lower(row.uniqueName) === name);
+  }
+  if (kind === 'duplicateRule') {
+    const declared = ((entry && entry.conditions) || []).find((c) => isObject(c) && c.key === slot);
+    return declared ? (remote.conditions || []).filter((row) => row && describes(declared, row)) : [];
+  }
+  return [];
+}
+
 // The ids of the children a confirmed read shows, by slot: only these are recorded (a child the read does not
-// show is not this build's to claim). Each id is checked in its OWN slot, never in the union of the root's children:
-// a request parameter's id must be read on the request parameter of that name, a condition's on a row its keyed
-// declaration describes. An id read under another child (two rows that exchanged ids, a row replaced by a namesake)
-// is not confirmed, so a binding can never pair a slot with another child's id. The parent is the root the read was
-// made at, so a child read here is under it.
+// show is not this build's to claim). Each id is checked in its OWN slot (slotRows): an id read under another
+// child (two rows that exchanged ids, a row replaced by a namesake) is not confirmed, so a binding can never pair a
+// slot with another child's id. The parent is the root the read was made at, so a child read here is under it.
 function confirmedChildIds(op, remote, childIds) {
   const out = {};
   if (!remote || !childIds) return out;
   const entry = (op.detail && op.detail.entry) || {};
   for (const [slot, childId] of Object.entries(childIds)) {
-    if (!childId) continue;
-    let rows = [];
-    if (op.kind === 'environmentVariable' && slot === 'value') rows = remote.currentValue ? [remote.currentValue] : [];
-    else if (op.kind === 'customApi') {
-      // 'request:<lower unique name>' or 'response:<lower unique name>' (a unique name may itself hold a ':').
-      const at = slot.indexOf(':');
-      const direction = slot.slice(0, at);
-      const name = slot.slice(at + 1);
-      const list = direction === 'request' ? remote.requestParameters : direction === 'response' ? remote.responseProperties : null;
-      rows = (list || []).filter((row) => row && lower(row.uniqueName) === name);
-    } else if (op.kind === 'duplicateRule') {
-      const declared = (entry.conditions || []).find((c) => isObject(c) && c.key === slot);
-      rows = declared ? (remote.conditions || []).filter((row) => row && describes(declared, row)) : [];
-    }
-    if (rows.some((row) => ref(row.id) === ref(childId))) out[slot] = childId;
+    if (childId && slotRows(op.kind, entry, remote, slot).some((row) => ref(row.id) === ref(childId))) out[slot] = childId;
   }
   return out;
 }
@@ -2175,7 +2180,78 @@ async function applyConfiguration(plan, ctx) {
     const open = result.unknown.some((line) => line.kind === op.kind && line.key === op.key);
     if (done && !open) pushFinding(result, 'unknown', { kind: op.kind, key: portKeyOf(op.kind, op.key), id: op.id, code: 'CONFIGURATION_RECORD_UNCONFIRMED', unit: 'management' });
   }
+  await reconcileChildRecords(plan, ctx, result);
   return result;
+}
+
+// The declared child slots of a root: the slots its create, or a later add, gives its children (the create port's
+// childKeys). A variable's value is a child only when the deployment settings write one.
+function declaredSlots(kind, entry, ctx) {
+  if (!isObject(entry)) return [];
+  if (kind === 'environmentVariable') return variablePlan(bindingsOf(ctx), new Map()).childKeys(entry);
+  if (kind === 'customApi') return customApiPlan.childKeys(entry);
+  if (kind === 'duplicateRule') return duplicateRulePlan.childKeys(entry);
+  return [];
+}
+
+// A root's record does not vouch for its children: each child is a record of its own, and an earlier run whose child
+// record failed (CONFIGURATION_RECORD_UNCONFIRMED) left a child no later build would otherwise account for. So for a
+// root this run found complete (saved or unchanged, not created now, its own management confirmed), each declared
+// child the read shows in its slot is checked against its record (`ctx.managed.lookup(childKind, childKey)` at the
+// same id). A child with no such record is decided by the common adoption policy, as a found root is: allowed, it is
+// recorded as adopted (never as created: a read does not prove who made it); refused, it is refused. With no policy
+// to ask, the child's management stays unconfirmed, reported on every run until a record or a policy settles it.
+// Children this run created are recorded with their create (settle) and are not asked again.
+async function reconcileChildRecords(plan, ctx, result) {
+  const managed = ctx.managed;
+  if (!managed || typeof managed.recordApplied !== 'function') return;
+  const sameItem = (op) => (line) => line.kind === op.kind && line.key === op.key;
+  for (const op of plan.operations || []) {
+    if (!op.detail || !CHILD_KINDS[op.kind] || (op.action !== 'update' && op.action !== 'unchanged')) continue;
+    // A root whose own management is unconfirmed is reported as such already; its children wait for it.
+    if (op.detail.unrecorded) continue;
+    if (![...result.saved, ...result.unchanged].some(sameItem(op))) continue;
+    if (result.unknown.some(sameItem(op)) || result.refused.some(sameItem(op))) continue;
+    const read = rowsReadOf(result).get(`${op.kind}:${op.key}`) || { remote: op.detail.remote, childIds: op.detail.childIds };
+    const bindings = result.managedBindings.filter(sameItem(op));
+    const createdNow = new Set(bindings.flatMap((b) => Object.keys(b.childIds || {})));
+    const rootKey = portKeyOf(op.kind, op.key);
+    const adopted = {};
+    for (const slot of declaredSlots(op.kind, op.detail.entry, ctx)) {
+      if (createdNow.has(slot)) continue;
+      const rows = slotRows(op.kind, op.detail.entry, read.remote, slot).filter((row) => nonEmptyString(row.id));
+      if (!rows.length) continue;
+      // Two rows in one slot are told apart only by the id a record pins (the content step refuses the ambiguity otherwise).
+      const pinned = read.childIds && read.childIds[slot];
+      const row = rows.length === 1 ? rows[0] : rows.find((r) => pinned && ref(r.id) === ref(pinned));
+      const childKind = CHILD_KINDS[op.kind](slot);
+      const childKey = `${rootKey}|${slot}`;
+      const id = row ? lower(row.id) : undefined;
+      const unconfirmed = () => pushFinding(result, 'unknown', { kind: childKind, key: childKey, ...(id ? { id } : {}), code: 'CONFIGURATION_RECORD_UNCONFIRMED', unit: 'management' });
+      if (!id) { unconfirmed(); continue; }
+      let decision;
+      try {
+        if (typeof managed.lookup === 'function') {
+          const record = await managed.lookup(childKind, childKey);
+          if (record && ref(record.id) === ref(id)) continue;
+        }
+        if (typeof managed.planAdoption !== 'function') { unconfirmed(); continue; }
+        decision = await managed.planAdoption({ kind: childKind, key: childKey, id });
+      } catch {
+        // A store that cannot answer proves nothing: the child's management is not confirmed.
+        unconfirmed();
+        continue;
+      }
+      if (decision && decision.allowed === true) adopted[slot] = id;
+      else pushFinding(result, 'refused', { kind: childKind, key: childKey, id, code: (decision && CODE_SHAPE.test(String(decision.code)) && decision.code) || 'ADOPTION_REFUSED' });
+    }
+    if (!Object.keys(adopted).length) continue;
+    // Kept on the root's binding of this run when there is one (its own origin is recorded once), else on a binding
+    // that records the children alone (origin 'found': the root is recorded already).
+    const binding = bindings[0];
+    if (binding) binding.adoptedChildIds = { ...(binding.adoptedChildIds || {}), ...adopted };
+    else result.managedBindings.push({ kind: op.kind, key: op.key, id: op.id, origin: 'found', adoptedChildIds: adopted });
+  }
 }
 
 // What still stands between this configuration and the pages that use it, from OBSERVED state only (a fresh read
@@ -2473,14 +2549,20 @@ function configurationManagedRecords(result, spec) {
   const records = [];
   for (const binding of (result && result.managedBindings) || []) {
     const rootRecorded = binding.origin === 'created' || binding.origin === 'adopted';
-    if (!rootRecorded && !Object.keys(binding.childIds || {}).length) continue;
+    if (!rootRecorded && !Object.keys(binding.childIds || {}).length && !Object.keys(binding.adoptedChildIds || {}).length) continue;
     const entry = configurationIntentOf(spec, binding.kind, binding.key);
     const rootKey = portKeyOf(binding.kind, binding.key);
     if (rootRecorded) records.push({ kind: binding.kind, key: rootKey, id: binding.id, intentSha256: intentSha256({ kind: binding.kind, intent: portableIntent(binding.kind, entry) }), origin: binding.origin });
-    for (const [slot, id] of Object.entries(binding.childIds || {})) {
+    // A child the adoption policy allowed for a found root (reconcileChildRecords) is recorded as adopted: a read
+    // never proves who created it.
+    const children = [
+      ...Object.entries(binding.childIds || {}).map(([slot, id]) => [slot, id, 'created']),
+      ...Object.entries(binding.adoptedChildIds || {}).map(([slot, id]) => [slot, id, 'adopted']),
+    ];
+    for (const [slot, id, origin] of children) {
       const childKind = CHILD_KINDS[binding.kind] ? CHILD_KINDS[binding.kind](slot) : null;
       if (!childKind || !id) continue;
-      records.push({ kind: childKind, key: `${rootKey}|${slot}`, id, parentKey: rootKey, intentSha256: intentSha256({ kind: childKind, intent: childIntent(binding.kind, binding.key, slot, entry) }), origin: 'created' });
+      records.push({ kind: childKind, key: `${rootKey}|${slot}`, id, parentKey: rootKey, intentSha256: intentSha256({ kind: childKind, intent: childIntent(binding.kind, binding.key, slot, entry) }), origin });
     }
   }
   return records;

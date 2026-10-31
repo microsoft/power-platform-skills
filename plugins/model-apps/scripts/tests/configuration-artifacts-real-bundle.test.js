@@ -925,7 +925,7 @@ test('build runtime: a child is recorded when it is created, under a root this r
   const store = new Map();
   const managed = {
     lookup: async (kind, key) => store.get(`${kind}:${String(key).toLowerCase()}`) || null,
-    recordApplied: async (rec) => { recorded.push(rec); if (!rec.parentKey) store.set(`${rec.kind}:${rec.key}`, { id: rec.id }); },
+    recordApplied: async (rec) => { recorded.push(rec); store.set(`${rec.kind}:${rec.key}`, { id: rec.id }); },
   };
   await createConfigurationRuntime({ spec: s([{ uniqueName: 'a', type: 'string' }]), sdk: k.sdk, opts: { creates: k.creates, managed } }).apply('data-model');
   recorded.length = 0;
@@ -934,6 +934,46 @@ test('build runtime: a child is recorded when it is created, under a root this r
   assert.equal(k.org.rows('customapirequestparameters').length, 2);
   const b = k.org.rows('customapirequestparameters').find((r) => r.uniquename === 'b').customapirequestparameterid;
   assert.deepEqual(recorded.map((r) => [r.kind, r.key, r.id, r.parentKey, r.origin]), [['customApiRequestParameter', 'contoso_api|request:b', b, 'contoso_api', 'created']]);
+});
+
+test('build runtime: a child whose record failed is not certified by its root\'s record: it stays unconfirmed until a record or the adoption policy settles it', async () => {
+  const s = { minimumPluginVersion: '2.21.0', solution: { uniqueName: 'ContosoSol', publisherPrefix: 'contoso' }, customApis: [{ uniqueName: 'contoso_Api', requestParameters: [{ uniqueName: 'a', type: 'string' }] }] };
+  const h = await harness();
+  const store = new Map();
+  const lookup = async (kind, key) => store.get(`${kind}:${String(key).toLowerCase()}`) || null;
+  const keep = (rec) => store.set(`${rec.kind}:${rec.key}`, { id: rec.id });
+  const attempts = [];
+  // The store keeps the API's record and cannot keep its parameter's.
+  const childless = { lookup, recordApplied: async (rec) => { attempts.push(rec.key); if (rec.parentKey) throw new Error('store unavailable'); keep(rec); } };
+  const step = (managed) => createConfigurationRuntime({ spec: s, sdk: h.sdk, opts: { creates: h.creates, managed } }).apply('data-model');
+  const param = h.creates.childIdOf('contoso_api', 'request:a');
+  const unconfirmed = [{ kind: 'customApiRequestParameter', key: 'contoso_api|request:a', code: 'CONFIGURATION_RECORD_UNCONFIRMED' }];
+  const first = await step(childless);
+  assert.deepEqual(first.halt && first.halt.items, unconfirmed);
+  // The next build finds the API through its record and the parameter unchanged: the parameter still has no record,
+  // and the root's record does not vouch for it.
+  const again = await step(childless);
+  assert.deepEqual(again.outcome.unchanged.map((x) => x.key), ['contoso_Api']);
+  assert.deepEqual(again.halt && again.halt.items, unconfirmed);
+  assert.deepEqual(again.outcome.unknown.map((u) => [u.key, u.id, u.unit]), [['contoso_api|request:a', param, 'management']]);
+  assert.equal(h.org.rows('customapirequestparameters').length, 1, 'nothing is created twice');
+  // The adoption policy refuses it: refused, and nothing is recorded.
+  const refusing = { lookup, planAdoption: async () => ({ allowed: false, code: 'ADOPTION_NOT_OWNED' }), recordApplied: async (rec) => { attempts.push(rec.key); keep(rec); } };
+  attempts.length = 0;
+  const refused = await step(refusing);
+  assert.deepEqual(refused.halt && refused.halt.items, [{ kind: 'customApiRequestParameter', key: 'contoso_api|request:a', code: 'ADOPTION_NOT_OWNED' }]);
+  assert.deepEqual(attempts, []);
+  // The policy allows it: recorded as adopted (a read never proves who created it), and the step completes.
+  const kept = [];
+  const adopting = { lookup, planAdoption: async () => ({ allowed: true }), recordApplied: async (rec) => { kept.push(rec); keep(rec); } };
+  const adopted = await step(adopting);
+  assert.equal(adopted.halt, null);
+  assert.deepEqual(kept.map((r) => [r.kind, r.key, r.id, r.parentKey, r.origin]), [['customApiRequestParameter', 'contoso_api|request:a', param, 'contoso_api', 'adopted']]);
+  // Its record is there now: the next build records nothing and completes, with or without a policy.
+  kept.length = 0;
+  assert.equal((await step(adopting)).halt, null);
+  assert.equal((await step({ lookup, recordApplied: async (rec) => { kept.push(rec); } })).halt, null);
+  assert.deepEqual(kept, []);
 });
 
 test('build runtime: two declarations of one item stop the build before anything is read or written', async () => {
