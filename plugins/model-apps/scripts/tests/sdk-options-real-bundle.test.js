@@ -10,7 +10,7 @@
 //      SKILL_FACTORY_OPTIONS — is READ by the bundle's own createMakerSdk (an options object that records the keys read of it). The
 //      bundle reads each option by name at construction (measured: it never spreads or enumerates the object, so an option it does not
 //      know is never read — the meta test proves an unknown key is not reported as read). lib/maker-sdk.js adds two (the compiler, the
-//      Power Apps service client) and keeps one of the plugin's own (`connectivity`) from reaching the SDK.
+//      Power Apps service client) and keeps the plugin's own (`connectivity`, `themeReads`) from reaching the SDK.
 //   2. Per-call options with no trace on a fault-free request: `overwrite` (fetchArtifact discards a dirty local copy), `publish:false` and
 //      `excludeViewIds` (enrichDefaultViews defers its publish and leaves the author's views alone), and the read options of queryRecords
 //      and findTables. Each is called on the stateful fake environment with an options object that records what is read, and the effect
@@ -60,8 +60,11 @@ const FACTORY_ADDED_OPTIONS = {
   powerAppsServiceClient: 'connectivity-real-bundle.test.js — the client of the connection and connector reads, for a caller that asks for `connectivity`',
   typescript: 'genpage-sdk-real-bundle.test.js — every page create the backend makes is compiled through it',
 };
-// The plugin's own request to lib/maker-sdk.js; it must never reach the SDK.
-const PLUGIN_ONLY_OPTIONS = ['connectivity'];
+// The plugin's own requests to lib/maker-sdk.js, and where what each asks for is pinned; they must never reach the SDK.
+const PLUGIN_ONLY_OPTIONS = {
+  connectivity: 'connectivity-real-bundle.test.js — the Power Apps service client the connection and connector reads use',
+  themeReads: 'app-theme-wiring.test.js — the strict theme read policy wraps the client innermost, only when asked; app-theme-real-bundle.test.js — what it judges',
+};
 
 // The keys of the object literal that opens at `open` (a `{`): `key: value`, a shorthand `key`, and the keys of each object literal inside a
 // spread (`...(languageCode ? { languageCode } : {})`). Strings and template literals are skipped; nested objects in a VALUE are not keys.
@@ -144,7 +147,7 @@ function everyFactoryOption(dir) {
 
 test('SDK options: every option a script passes to createMakerSdk is in SKILL_FACTORY_OPTIONS (or is the plugin\'s own)', () => {
   const passed = factoryOptionsPassed();
-  const known = new Set([...Object.keys(SKILL_FACTORY_OPTIONS), ...Object.keys(FACTORY_ADDED_OPTIONS), ...PLUGIN_ONLY_OPTIONS]);
+  const known = new Set([...Object.keys(SKILL_FACTORY_OPTIONS), ...Object.keys(FACTORY_ADDED_OPTIONS), ...Object.keys(PLUGIN_ONLY_OPTIONS)]);
   const unlisted = [...passed].filter(([key]) => !known.has(key)).map(([key, files]) => `${key} (${[...files].join(', ')})`);
   assert.deepEqual(unlisted, [], `Add these createMakerSdk options to SKILL_FACTORY_OPTIONS, with the test that pins their effect: ${unlisted.join('; ')}`);
   for (const key of ['workspaceStorage', 'instanceUrl', 'httpClient', 'solutionUniqueName', 'languageCode', 'createRecovery', 'readConcurrency']) {
@@ -159,13 +162,15 @@ test('SDK options: the bundled SDK\'s createMakerSdk reads every option the skil
   assert.deepEqual(ignored, [], `The bundled SDK no longer reads these options, so what each asked for is silently lost: ${ignored.map((k) => `${k} (${SKILL_FACTORY_OPTIONS[k] || FACTORY_ADDED_OPTIONS[k]})`).join('; ')}`);
 });
 
-test('SDK options: lib/maker-sdk.js gives the SDK its compiler and keeps the plugin\'s own `connectivity` from reaching it', () => {
+test('SDK options: lib/maker-sdk.js gives the SDK its compiler and keeps the plugin\'s own options (`connectivity`, `themeReads`) from reaching it', () => {
   let given;
   const create = makerSdk.withVendoredCompiler((options) => { given = options; return {}; });
-  create({ instanceUrl: 'https://contoso.crm.dynamics.com', connectivity: true, powerAppsServiceClient: NOOP_CLIENT });
+  // Every plugin-only option is passed, with a transport, so each one's own handling runs (themeReads wraps the client).
+  const pluginOwn = Object.fromEntries(Object.keys(PLUGIN_ONLY_OPTIONS).map((key) => [key, true]));
+  create({ instanceUrl: 'https://contoso.crm.dynamics.com', httpClient: NOOP_CLIENT, ...pluginOwn, powerAppsServiceClient: NOOP_CLIENT });
   assert.equal(typeof given.typescript, 'function', 'the vendored compiler, loaded when a page is first compiled');
   assert.equal(given.powerAppsServiceClient, NOOP_CLIENT, 'a client the caller names wins');
-  for (const key of PLUGIN_ONLY_OPTIONS) assert.equal(Object.prototype.hasOwnProperty.call(given, key), false, `${key} is the plugin's own`);
+  for (const key of Object.keys(PLUGIN_ONLY_OPTIONS)) assert.equal(Object.prototype.hasOwnProperty.call(given, key), false, `${key} is the plugin's own`);
 });
 
 // The per-call options, on the stateful fake environment with another maker's work in it (a table with its generated default views, an app).
