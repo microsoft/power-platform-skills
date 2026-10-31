@@ -483,8 +483,9 @@ before applying.)
 **Push preview (`--preview-push`, dry run only).** For a complex change to an existing app (managed or
 destructive features, many views), run the dry run with `--preview-push` to see, per artifact, whether a
 push would create, update or change nothing, and what would stop it (refused, stale, unknown), with its
-solution layers and publication scope. It reads only. "ready" is not approval or a lock, and a
-"noChange" artifact is still written by an apply. It previews an existing view with the column and
+solution layers and publication scope. It reads only. "ready" is not approval or a lock, and while a
+direct SDK push can still write a "noChange" artifact, this build skips the push of an existing view it
+would not change. It previews an existing view with the column and
 description changes the build would make, and a chart the build would create. Everything else (an
 existing form, chart or the app, a view or form the build would create, a command bar) is listed as not
 evaluated, because the build works those changes out only while it runs: say so, never report the
@@ -640,8 +641,9 @@ not pass. It checks the stored definition, not what a browser renders. Today the
 id for a control, so every control it finds is reported `UNVERIFIED … found by caption only` and the
 run fails: tell the user which lines say `FAIL` (missing, on another surface, several matches) — those
 are real problems — and that a caption-only line means the button could not be proved to be the app's
-own, and may also hide a problem with it: a hidden or disabled control found by caption is reported
-caption-only, not `FAIL`. No `FAIL` line does not prove a button is visible or enabled.
+own, and may also hide a problem with it: a hidden control (or one under a hidden parent) found by
+caption is reported caption-only, not `FAIL`, while a disabled one still fails (`stored disabled`). No
+`FAIL` line does not prove a button is visible.
 
 Then open the app in the browser. Refine `app-spec.json` and re-run Phase 2 to iterate.
 

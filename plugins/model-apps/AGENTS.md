@@ -2764,15 +2764,17 @@ before.
   `liveEdits` hook) and a chart the build would create by its definition. Every other change (an
   existing form, chart or the app, whose edits the build works out only while it runs; a view or form
   the build would create; a command bar) is listed as not evaluated, never previewed as an unedited copy
-  and never as ready. "ready" is not an approval or a lock, and a "noChange" artifact is still written by
-  an apply. Plan keys are made unique by `lib/unique-keys.js`, which never hands a repeat a key another
+  and never as ready. "ready" is not an approval or a lock; a direct SDK push can still write a "noChange"
+  artifact, while this build skips the push of an existing view it would not change (`reconcileView`). Plan
+  keys are made unique by `lib/unique-keys.js`, which never hands a repeat a key another
   item carries.
 - **`verify-model-app.js --inspect-components`**: checks each declared command control on the surface
   its `location` deploys to (`lib/feature-verify.js` over the SDK's command inspection; GETs only). A
   missing, misplaced or ambiguous control fails. The build does not yet record a control's row id, so a
   control found by its caption alone is reported unverified and fails the run — and because identity
-  is checked first, a hidden or disabled control found by caption is reported unverified too, not
-  hidden: no `FAIL` line does not establish that a control is visible or enabled. Keys are the table and
+  is checked first, a hidden control found by caption is reported unverified too, not hidden, while a
+  disabled control still fails (`stored disabled`: the SDK reports it misplaced). No `FAIL` line does not
+  establish that a control is visible. Keys are the table and
   caption, made unique over the spec by `lib/unique-keys.js`. The dashboard witness is not wired: the build
   records no pushed dashboard to compare with.
 - **`data-fix.js plan|apply|resume|revert`** (`lib/data-fix-runner.js`): a reviewed repair of values in
