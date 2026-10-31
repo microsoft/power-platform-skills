@@ -458,6 +458,7 @@ const CONTRACT = {
       'add-to-app': ['env', 'app-id', 'page-id', 'title', 'draft', 'app-dir'],
       'remove-from-app': ['env', 'app-id', 'page-id', 'allow-empty-navigation', 'draft', 'app-dir'],
       delete: ['env', 'page-id', 'allow-destructive'],
+      'prepare-compiler-refresh': ['env', 'page-id', 'file', 'expected-base-sha256', 'output-file'],
     },
   },
 };

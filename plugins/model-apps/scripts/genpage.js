@@ -15,6 +15,7 @@
 //   add-to-app       --app-id <guid> --page-id <guid> [--title <text>] [--draft] [--app-dir <folder>]
 //   remove-from-app  --app-id <guid> --page-id <guid> [--allow-empty-navigation] [--draft] [--app-dir <folder>]
 //   delete           --page-id <guid> [--allow-destructive]
+//   prepare-compiler-refresh --page-id <guid> --file <page.tsx> [--expected-base-sha256 <hex>] [--output-file <file>]
 //   --env  the environment's https origin, e.g. https://contoso.crm.dynamics.com
 // Every id is checked (a GUID) and so is the origin before the first request; a flag may be given once, because `parseArgs` keeps only the last of a repeat and the
 // others would vanish unseen.
@@ -25,6 +26,7 @@
 //   pac model genpage generate-types --data-sources … --output-file           types
 //   pac model genpage add --app-id --page-id … --publish                       add-to-app
 //   (taking a page out of an app, and deleting a page, were done in Maker)     remove-from-app, delete
+//   (no pac command had the SDK compile an unchanged page again)               prepare-compiler-refresh
 //
 // Output (stdout, one JSON line of pure ASCII — every character beyond ASCII is a \uXXXX escape any JSON parser reads back), exit 0:
 //   list    { "ok": true, "scope": "environment", "count": 2, "pages": [ { "pageId": "<guid>", "name": "Overview" }, … ] }
@@ -56,9 +58,14 @@
 //             Exactly what was deleted: the page, the rows of its folder and the messages of its conversation, counted before the delete. `verified` says the page was read back as gone;
 //             `historyRemoved` is false when some conversation messages could not be deleted (a warning says which and why): the page is gone either way. Without `--allow-destructive` nothing is deleted:
 //             the answer is the failure below, `GENPAGE_DELETE_NOT_CONFIRMED`, with the same counts.
+//   prepare-compiler-refresh
+//             { "ok": true, "pageId": "<guid>", "action": "refresh", "marker": "// model-apps compiler refresh: iterator-v1", "baseSha256": "<hex>", "proposedSha256": "<hex>",
+//               "diff": "<text>", "proposedSource": "<text>", "writes": 0, "outputFile": "<abs>" }
+//             The reviewed change to make, and nothing else: `writes` is 0 because nothing was written to the environment; `outputFile` is there when --output-file was given and the
+//             proposed source was written to it.
 //   a failure { "ok": false, "error": "<message>", "code": "<SDK or script error code>", … }, with `pageId`, `appId`, `outcome` ("nothing" or "unknown" — what a failed write can have done),
 //             `apps` (the apps a delete was refused for), `saved` (a placement or removal that was saved and not published), `fileRows` and `conversationMessages` (what a delete that was not confirmed
-//             would remove) and `table` (the table `types` found the environment does not have) when they are known; the message is also on stderr. Warnings are on stderr too, and so
+//             would remove), `table` (the table `types` found the environment does not have), `baseSha256` (the source a compiler refresh found deployed) and `parseErrors` when they are known; the message is also on stderr. Warnings are on stderr too, and so
 //             is one that names a throwaway workspace that could not be removed (a page's source may still be in the temp directory): it is a warning of any result, success or failure.
 // Exit codes: 0 done; 1 usage error (stderr names the flag and the usage, stdout stays empty), a refusal or a failure.
 //
@@ -126,6 +133,17 @@
 // `GENPAGE_DELETE_NOT_CONFIRMED` (exit 1, one line, `fileRows` and `conversationMessages` in it) that says what a confirmed run would remove: the page's name, its file rows, its conversation messages. A
 // refusal, not a usage error: the command line was a good one. The skill that runs this asks the user between the two runs, and suppressing that question never authorizes a delete.
 //
+// prepare-compiler-refresh. lib/compiler-refresh.js `prepareCompilerRefresh`: the EXPLICIT refresh of one page the maker named, for a page compiled by an older SDK whose loops over
+// a Map, a Set or a string misbehave. The SDK keeps a page's compiled output while its source is unchanged, so an ordinary update of the same source compiles nothing; the refresh is a
+// source change a person reviews — one comment line, `// model-apps compiler refresh: iterator-v1`, appended to the local source — which the ordinary upload then writes, so the SDK
+// compiles the page again with its current settings. This command PREPARES it and writes nothing to the environment: it reads the page once, checks that --file holds the source the page
+// holds (and, with --expected-base-sha256, that the page still holds the source the review was made against), checks that the source parses before and after the line, and prints the
+// diff, the proposed source and both hashes. --output-file writes the proposed source to that file (lib/safe-fs.js, its name checked before the environment is asked), never to the page
+// and never over --file. Nothing picks pages for a refresh: no output proves which compiler made it, so it is run only for a page the maker names, never in bulk. Its refusals, each with
+// `outcome: "nothing"` (exit 1, one line): `COMPILER_REFRESH_SOURCE_UNREADABLE` (--file or the page cannot be read, or the page is held as raw files), `COMPILER_REFRESH_BASE_MISMATCH`
+// (download the page and review again), `COMPILER_REFRESH_PARSE_FAILED` and `COMPILER_REFRESH_MARKER_UNPROVEN` (the source already carries the line and nothing here proves its output
+// was compiled from it: make a new reviewed source revision instead of the same line again).
+//
 // Like every script here it emits no telemetry of its own (the plugin's hooks do), and it never prints a token.
 
 const fs = require('node:fs');
@@ -136,6 +154,7 @@ const { leftOnDiskWarning } = require('./lib/left-on-disk.js');
 const { assertSafeOutputDir, assertPlainFileTarget, writeFileSafe, removeFileSafe } = require('./lib/safe-fs.js');
 const { makeWritesBlocking } = require('./lib/output-redaction.js');
 const { withStandalonePagesLease } = require('./lib/standalone-page-lease.js');
+const { prepareCompilerRefresh } = require('./lib/compiler-refresh.js');
 
 // How long the backend's cleanup is waited for before the process ends: a storage call that never settles must not keep the script alive.
 const DISPOSE_WAIT_MS = 10000;
@@ -185,6 +204,12 @@ const VERBS = {
     needValue: ['env', 'page-id'],
     switches: ['allow-destructive'],
     required: ['env', 'page-id'],
+  },
+  'prepare-compiler-refresh': {
+    usage: 'prepare-compiler-refresh --env <envUrl> --page-id <guid> --file <page.tsx> [--expected-base-sha256 <hex>] [--output-file <file>]',
+    known: ['env', 'page-id', 'file', 'expected-base-sha256', 'output-file'],
+    needValue: ['env', 'page-id', 'file', 'expected-base-sha256', 'output-file'],
+    required: ['env', 'page-id', 'file'],
   },
 };
 const COMMANDS = Object.keys(VERBS);
@@ -282,6 +307,19 @@ function parseCommand(argv) {
       if (flags['app-dir'] !== undefined) args.appDir = path.resolve(String(flags['app-dir']));
     }
     if (verb === 'delete') args.allowDestructive = flags['allow-destructive'] === true;
+    if (verb === 'prepare-compiler-refresh') {
+      args.file = flags.file;
+      if (flags['expected-base-sha256'] !== undefined) {
+        const hash = String(flags['expected-base-sha256']).trim();
+        if (!/^[0-9a-f]{64}$/i.test(hash)) fail(`--expected-base-sha256 '${flags['expected-base-sha256']}' is not a SHA-256 hash: expected 64 hexadecimal characters, as the baseSha256 of an earlier run prints`);
+        args.expectedBaseSha256 = hash.toLowerCase();
+      }
+      if (flags['output-file'] !== undefined) {
+        // The local source is the reviewed base: a proposal written over it would be a change nobody approved yet, and the next run would compare against it.
+        if (path.resolve(String(flags['output-file'])) === path.resolve(String(flags.file))) fail('--output-file names the --file itself: write the proposal beside the reviewed source, never over it');
+        args.outputFile = flags['output-file'];
+      }
+    }
     return { verb, env, args };
   } catch (error) {
     if (error instanceof UsageError && error.verb === undefined) error.verb = verb;
@@ -467,13 +505,38 @@ async function deletePage(genpage, { pageId, allowDestructive }) {
   return { ok: true, deleted: { pageId: id, name: shownName(name), fileRows, conversationMessages }, historyRemoved, verified, ...(warnings && warnings.length ? { warnings } : {}) };
 }
 
-const RUN = { list, download, types, 'add-to-app': addToApp, 'remove-from-app': removeFromApp, delete: deletePage };
+async function prepareRefresh(genpage, { pageId, file, expectedBaseSha256, outputFile }) {
+  let target = null;
+  // The output name is checked before the environment is asked, as `types` checks its own: a link, a folder or a linked folder is refused whatever the proposal would have been.
+  if (outputFile !== undefined) {
+    target = path.resolve(outputFile);
+    assertPlainFileTarget(target);
+    if (isThere(path.dirname(target))) assertSafeOutputDir(path.dirname(target));
+  }
+  let localSource;
+  try {
+    // utf8 keeps a byte order mark as U+FEFF: the page holds its text exactly (download writes it so), so a BOM the page has is compared, not dropped.
+    localSource = fs.readFileSync(path.resolve(file), 'utf8');
+  } catch (error) {
+    throw scriptError('COMPILER_REFRESH_SOURCE_UNREADABLE', `--file ${path.resolve(file)} could not be read (${error.code || error.message}): download the page first. Nothing was changed.`, { pageId, outcome: 'nothing' });
+  }
+  // The vendored compiler parses the source: the CLI takes no compiler of its own, and only syntax is checked (lib/compiler-refresh.js).
+  const prepared = await prepareCompilerRefresh({ pageId, localSource, ...(expectedBaseSha256 !== undefined ? { expectedBaseSha256 } : {}) }, { genpage });
+  const answer = { ok: true, ...prepared };
+  if (prepared.action === 'refresh' && target) {
+    assertSafeOutputDir(path.dirname(target), { create: true });
+    answer.outputFile = writeFileSafe(target, prepared.proposedSource, { encoding: 'utf8' });
+  }
+  return answer;
+}
+
+const RUN = { list, download, types, 'add-to-app': addToApp, 'remove-from-app': removeFromApp, delete: deletePage, 'prepare-compiler-refresh': prepareRefresh };
 // The verbs that write an app's navigation: each runs under the app's pages lease (see "The lease" above).
 const LEASED = new Set(['add-to-app', 'remove-from-app']);
 
 // What a failure prints besides its message and code: whatever the backend or the verb knows about what it did, so a caller can go on from it (the page's id to look for, whether anything was
 // written, the apps a delete was refused for, what a delete that was not confirmed would have removed).
-const FAILURE_FIELDS = ['pageId', 'appId', 'outcome', 'apps', 'unreadableApps', 'saved', 'pageIds', 'failed', 'fileRows', 'conversationMessages', 'table'];
+const FAILURE_FIELDS = ['pageId', 'appId', 'outcome', 'apps', 'unreadableApps', 'saved', 'pageIds', 'failed', 'fileRows', 'conversationMessages', 'table', 'baseSha256', 'parseErrors'];
 
 function failureOf(error) {
   const code = error && typeof error.code === 'string' && error.code ? error.code : undefined;

@@ -48,8 +48,8 @@ const pageOf = (id, over = {}) => ({ pageId: id, name: 'Overview', source: SOURC
 
 // ── the command line ───────────────────────────────────────────────────────────────────────────────────────────────
 
-test('the six commands are the verbs this script has — and nothing else', () => {
-  assert.deepStrictEqual(Object.keys(VERBS), ['list', 'download', 'types', 'add-to-app', 'remove-from-app', 'delete']);
+test('the seven commands are the verbs this script has — and nothing else', () => {
+  assert.deepStrictEqual(Object.keys(VERBS), ['list', 'download', 'types', 'add-to-app', 'remove-from-app', 'delete', 'prepare-compiler-refresh']);
   for (const [name, spec] of Object.entries(VERBS)) {
     assert.ok(spec.usage.startsWith(`${name} --env <envUrl>`), `${name}: usage names the command and --env`);
     for (const flag of spec.needValue) assert.ok(spec.known.includes(flag), `${name}: --${flag} is a known flag`);
@@ -59,8 +59,8 @@ test('the six commands are the verbs this script has — and nothing else', () =
 });
 
 const BAD_COMMAND_LINES = [
-  [[], /a command is required: list, download, types, add-to-app, remove-from-app or delete/, undefined],
-  [['frob', '--env', ENV], /unknown command 'frob': list, download, types, add-to-app, remove-from-app or delete/, undefined],
+  [[], /a command is required: list, download, types, add-to-app, remove-from-app, delete or prepare-compiler-refresh/, undefined],
+  [['frob', '--env', ENV], /unknown command 'frob': list, download, types, add-to-app, remove-from-app, delete or prepare-compiler-refresh/, undefined],
   [['list'], /--env is required/, 'list'],
   [['list', '--env'], /--env requires a value/, 'list'],
   [['list', '--env', '  '], /--env requires a value/, 'list'],
