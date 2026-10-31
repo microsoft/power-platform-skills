@@ -129,7 +129,10 @@ prod-ready** app; don't under-build (a bare table list) or over-build (surfaces 
   existing table, only when the maker names what search should match. A change to a view or chart that
   already exists stops the build with nothing written and names its approval
   (`--authorize adopt:<table>/<name>`, `overwrite:` for changes made elsewhere, `--allow-destructive`
-  to remove columns): explain it and let the maker choose; never edit the spec to avoid it. Never write
+  to remove columns): explain it and let the maker choose; never edit the spec to avoid it. A local copy
+  that differs from the server's stops it the same way (`workspace-copy-unsent-edits`) and is kept: ask
+  whether to put that change into the spec and refresh the local copy, or approve its `overwrite:` key
+  (`<table>/quickFind` for search columns). Never write
   `reconcile` on forms, dashboards, web resources, business rules or flows, and never write a command
   `key` (keyed command bars are refused in this version). Leave a downloaded or older spec without
   these fields as it is — see the advanced reference.

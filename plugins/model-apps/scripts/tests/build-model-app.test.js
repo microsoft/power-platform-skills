@@ -1139,6 +1139,20 @@ test('--authorize adopt:/overwrite: approve exactly the declared view or chart t
   }
 });
 
+test('--authorize overwrite:<table>/quickFind approves replacing the local copy of a declared Quick Find view, and nothing else', () => {
+  const { authorizationKeys } = require(path.join(__dirname, '..', 'build-model-app.js'));
+  const spec = { entities: [{ schemaName: 'new_Ticket', quickFind: { findColumns: ['new_name'] } }, { schemaName: 'new_Other' }] };
+  const ok = authorizationKeys(['--authorize', 'overwrite:NEW_TICKET/quickFind'], spec);
+  assert.strictEqual(ok.error, null);
+  assert.deepStrictEqual([...ok.overwrite], ['new_ticket/quickFind']);
+  assert.strictEqual(ok.adopt.size, 0);
+  for (const key of ['adopt:new_ticket/quickFind', 'overwrite:new_other/quickFind', 'overwrite:new_ticket/quickfind']) {
+    const r = authorizationKeys(['--authorize', key], spec);
+    assert.match(r.error, /approves an artifact the spec does not declare/, key);
+    assert.strictEqual(r.adopt.size + r.overwrite.size, 0, key);
+  }
+});
+
 test('--authorize: a key the spec does not declare is refused before anything runs', async () => {
   const { loadCli } = require('./helpers/cli-harness.js');
   const dir = fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'authorize-'));

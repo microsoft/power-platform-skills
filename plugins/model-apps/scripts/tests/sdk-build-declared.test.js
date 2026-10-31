@@ -249,7 +249,12 @@ async function resetSdk({ org, dir }, failResets) {
   return { sdk, resets };
 }
 
-test('a refused Quick Find list whose copy reset failed is refused again on the next run, never read as already stored', async () => {
+// The workspace copy of a declared view, chart or Quick Find view that differs from the SDK's snapshot of the server's is never planned
+// over and never reset by the build: a diff says that something changed, not who changed it. The item is refused before any write, the
+// copy is kept as it is, and the refusal names the two ways on (refresh the copy, or approve replacing it).
+const UNSENT = 'workspace-copy-unsent-edits';
+
+test('a refused Quick Find list whose copy reset failed is refused on the next run for its local copy, never read as already stored', async () => {
   const env = newOrg();
   await seedQuickFind(env.org, ['contoso_name']);
   answerAttributes(env.org, ['contoso_name']);
@@ -257,24 +262,73 @@ test('a refused Quick Find list whose copy reset failed is refused again on the 
   const failing = await resetSdk(env, true);
   const first = await build(env, spec, { phases: ['views'], sdk: failing.sdk });
   assert.equal(first.err && first.err.code, 'quick-find-rejected');
-  assert.equal(failing.resets.count, 1, 'the apply tried to reset the copy');
+  assert.equal(failing.resets.count, 1, 'the apply tried to reset the copy of its own unsent edit');
 
-  // The next run finds the earlier run's unsent edit in the copy, resets it once and is refused for the list again.
+  // The next run finds a copy that differs from the server's: refused before any write, and the copy is not reset.
   const working = await resetSdk(env, false);
   const again = await build(env, spec, { phases: ['views'], sdk: working.sdk });
-  assert.equal(again.err && again.err.code, 'quick-find-rejected', 'a reset that failed cannot certify a list the server never stored');
+  assert.equal(again.err && again.err.code, UNSENT, 'a reset that failed cannot certify a list the server never stored');
+  assert.match(again.err.message, /Quick Find on contoso_item: workspace-copy-unsent-edits — the local copy of the Quick Find view .* differs from the server's/);
+  assert.match(again.err.message, /--authorize overwrite:contoso_item\/quickFind/);
   assert.deepEqual(again.writes, []);
-  assert.equal(working.resets.count, 2, 'one reset before planning, one after the refused apply');
+  assert.equal(working.resets.count, 0, 'the local copy is never reset without the approval');
+  assert.equal(again.named('contoso_item'), 0);
+  assert.notEqual((await working.sdk.diffArtifact('view', viewRows(env.org).find((v) => v.querytype === 4).savedqueryid)).changes.length, 0, 'the copy is kept');
 
-  // Where that reset fails as well, the item is not applied and the run says why.
+  // With the approval the copy is replaced by the server's and the list planned over it: refused for the list again, nothing written.
+  const approved = await resetSdk(env, false);
+  const replaced = await build(env, spec, { phases: ['views'], sdk: approved.sdk, authorizedOverwrite: new Set(['contoso_item/quickFind']) });
+  assert.equal(replaced.err && replaced.err.code, 'quick-find-rejected');
+  assert.deepEqual(replaced.writes, []);
+  assert.equal(approved.resets.count, 2, 'the approved replacement, then the reset of this run\'s own refused edit');
+
+  // An approved replacement whose read fails is not applied either, and says so.
   await build(env, spec, { phases: ['views'], sdk: (await resetSdk(env, true)).sdk });
-  const blocked = await build(env, spec, { phases: ['views'], sdk: (await resetSdk(env, true)).sdk });
-  assert.equal(blocked.err && blocked.err.code, 'workspace-copy-unsent-edits');
+  const blocked = await build(env, spec, { phases: ['views'], sdk: (await resetSdk(env, true)).sdk, authorizedOverwrite: new Set(['contoso_item/quickFind']) });
+  assert.equal(blocked.err && blocked.err.code, UNSENT);
   assert.deepEqual(blocked.writes, []);
   assert.equal(blocked.named('contoso_item'), 0);
 });
 
-test('a declared view whose copy holds an earlier run\'s unsent edit is planned over the server\'s copy and written', async () => {
+test('a copy whose comparison with the server\'s cannot be made is refused, never trusted: a diff that throws, or an SDK without one', async () => {
+  const env = newOrg();
+  await seedQuickFind(env.org, ['contoso_name']);
+  answerAttributes(env.org, ['contoso_name']);
+  const spec = quickFindSpec(['contoso_name', 'contoso_code']);
+  const first = await build(env, spec, { phases: ['views'], sdk: (await resetSdk(env, true)).sdk });
+  assert.equal(first.err && first.err.code, 'quick-find-rejected');
+  const stored = () => viewRows(env.org).find((v) => v.querytype === 4).fetchxml;
+  const before = stored();
+  for (const [name, diffArtifact] of [
+    ['a diff read that fails', async () => { throw Object.assign(new Error('workspace diff read EIO'), { code: 'EIO' }); }],
+    ['no diff', undefined],
+    ['a diff with no list of changes', async () => ({})],
+  ]) {
+    const { sdk, resets } = await resetSdk(env, false);
+    sdk.diffArtifact = diffArtifact;
+    const r = await build(env, spec, { phases: ['views'], sdk });
+    assert.equal(r.err && r.err.code, UNSENT, name);
+    assert.match(r.err.message, /could not be compared with the server's/, name);
+    assert.deepEqual(r.writes, [], name);
+    assert.equal(resets.count, 0, name);
+  }
+  assert.equal(stored(), before);
+
+  // The same holds over a clean copy: no proof of a clean copy is no clean copy. The control: the real diff lets it through.
+  const clean = newOrg();
+  await seedQuickFind(clean.org, ['contoso_name']);
+  answerAttributes(clean.org, ['contoso_name', 'contoso_code']);
+  const { sdk } = await resetSdk(clean, false);
+  sdk.diffArtifact = async () => { throw new Error('EIO'); };
+  const unproven = await build(clean, spec, { phases: ['views'], sdk });
+  assert.equal(unproven.err && unproven.err.code, UNSENT);
+  assert.deepEqual(unproven.writes, []);
+  const proven = await build(clean, spec, { phases: ['views'] });
+  assert.equal(proven.err, undefined, proven.err && proven.err.message);
+  assert.equal(proven.writes.filter((c) => c.method === 'PATCH' && /^\/savedqueries\(/.test(c.path)).length, 1);
+});
+
+test('a declared view whose copy holds an unsent edit is refused and kept; with the overwrite approval it is planned over the server\'s copy and written', async () => {
   const env = newOrg();
   const first = await build(env, makeSpec({ views: [declaredView({ columns: ['contoso_name'] })] }), { phases: ['views'] });
   assert.equal(first.err, undefined, first.err && first.err.message);
@@ -289,11 +343,21 @@ test('a declared view whose copy holds an earlier run\'s unsent edit is planned 
   assert.doesNotMatch(stored(), /contoso_code/);
 
   const adopt = new Set(['contoso_item/Declared Items']);
+  const refused = await resetSdk(env, false);
+  const r = await build(env, makeSpec({ views: [declaredView()] }), { phases: ['views'], authorizedAdoption: adopt, sdk: refused.sdk });
+  assert.equal(r.err && r.err.code, UNSENT);
+  assert.match(r.err.message, /view contoso_item\/Declared Items: workspace-copy-unsent-edits/);
+  assert.match(r.err.message, /--authorize overwrite:contoso_item\/Declared Items/);
+  assert.equal(refused.resets.count, 0);
+  assert.deepEqual(r.writes, []);
+  assert.ok((await refused.sdk.getArtifact('view', id)).columns.some((c) => c.name === 'contoso_code'), 'the local edit is kept');
+  assert.doesNotMatch(stored(), /contoso_code/);
+
   const working = await resetSdk(env, false);
-  const r = await build(env, makeSpec({ views: [declaredView()] }), { phases: ['views'], authorizedAdoption: adopt, sdk: working.sdk });
-  assert.equal(r.err, undefined, r.err && r.err.message);
+  const approved = await build(env, makeSpec({ views: [declaredView()] }), { phases: ['views'], authorizedAdoption: adopt, authorizedOverwrite: adopt, sdk: working.sdk });
+  assert.equal(approved.err, undefined, approved.err && approved.err.message);
   assert.equal(working.resets.count, 1);
-  assert.equal(r.writes.filter((c) => c.method === 'PATCH' && /^\/savedqueries\(/.test(c.path)).length, 1, 'the column is sent, not taken as already there');
+  assert.equal(approved.writes.filter((c) => c.method === 'PATCH' && /^\/savedqueries\(/.test(c.path)).length, 1, 'the column is sent, not taken as already there');
   assert.match(stored(), /contoso_code/);
 
   // A clean copy is planned as before: no reset read, and nothing written.
@@ -302,6 +366,49 @@ test('a declared view whose copy holds an earlier run\'s unsent edit is planned 
   assert.equal(again.err, undefined, again.err && again.err.message);
   assert.equal(clean.resets.count, 0);
   assert.deepEqual(again.writes, []);
+});
+
+test('a maker\'s local edit the spec does not declare is never discarded: an unchanged declared rebuild refuses, and only the approval replaces it', async () => {
+  const env = newOrg();
+  const spec = makeSpec({ views: [declaredView({ columns: ['contoso_name'] })] });
+  const first = await build(env, spec, { phases: ['views'] });
+  assert.equal(first.err, undefined, first.err && first.err.message);
+  const id = first.out.created.views['contoso_item|Declared Items'];
+  const { sdk, resets } = await resetSdk(env, false);
+  await sdk.fetchArtifact('view', id);
+  await sdk.updateElement('view', id, '/description', 'Unsaved maker description outside the declared spec');
+
+  const r = await build(env, spec, { phases: ['views'], sdk });
+  assert.equal(r.err && r.err.code, UNSENT);
+  assert.deepEqual(r.writes, []);
+  assert.equal(resets.count, 0);
+  assert.equal((await sdk.getArtifact('view', id)).description, 'Unsaved maker description outside the declared spec');
+  assert.deepEqual((await sdk.diffArtifact('view', id)).changes.map((c) => c.pointer), ['/description']);
+
+  // The maker approves replacing the local copy: the server's description comes back, and nothing is written.
+  const approved = await build(env, spec, { phases: ['views'], sdk, authorizedOverwrite: new Set(['contoso_item/Declared Items']) });
+  assert.equal(approved.err, undefined, approved.err && approved.err.message);
+  assert.deepEqual(approved.writes, []);
+  assert.equal(resets.count, 1);
+  assert.doesNotMatch(String((await sdk.getArtifact('view', id)).description || ''), /Unsaved maker/);
+});
+
+test('a declared chart whose copy holds a local edit is refused before any write and kept', async () => {
+  const env = newOrg();
+  const spec = makeSpec({ charts: [declaredChart()] });
+  const first = await build(env, spec, { phases: ['charts'] });
+  assert.equal(first.err, undefined, first.err && first.err.message);
+  const id = first.out.created.charts['contoso_item|By Kind'];
+  assert.ok(id, JSON.stringify(first.out.created.charts));
+  const { sdk, resets } = await resetSdk(env, false);
+  await sdk.fetchArtifact('chart', id);
+  await sdk.updateElement('chart', id, '/description', 'Unsaved maker note');
+  const r = await build(env, spec, { phases: ['charts'], sdk });
+  assert.equal(r.err && r.err.code, UNSENT);
+  assert.match(r.err.message, /chart contoso_item\/By Kind: workspace-copy-unsent-edits/);
+  assert.deepEqual(r.writes, []);
+  assert.equal(resets.count, 0);
+  assert.equal((await sdk.getArtifact('chart', id)).description, 'Unsaved maker note');
 });
 
 test('push preview: a declared view edit is not evaluated rather than previewed as unchanged; the apply writes it', async () => {
@@ -430,6 +537,78 @@ test('verify: a Quick Find view that is missing, ambiguous, unreadable or not a 
   // The control: the same view with the declared list passes, its find filter self-closed or not.
   assert.equal((await verifySpec(qfSpec(['contoso_name']), quickFindReader([qf(list)]))).ok, true);
   assert.equal((await verifySpec(qfSpec([]), quickFindReader([qf('<filter type="or" isquickfindfields="1"/>')]))).ok, true);
+});
+
+// The shapes the bundled SDK will not model as a find-column list (it refuses the write, quick-find-filter-unsupported) never verify
+// as one; the shapes it models, retained templates included, do.
+test('verify: the find filter is read with the SDK\'s own constraints — marker place and count, plain conditions, a search placeholder', async () => {
+  const qf = (conds) => ({ savedqueryid: randomUUID(), returnedtypecode: 'contoso_item', querytype: 4, isdefault: true, fetchxml: `<fetch><entity name="contoso_item"><attribute name="contoso_name"/>${conds}</entity></fetch>` });
+  const find = (conds, attrs = 'type="or" isquickfindfields="1"') => `<filter ${attrs}>${conds}</filter>`;
+  const cond = (attr, value = '{0}', operator = 'like') => `<condition attribute="${attr}" operator="${operator}" value="${value}"/>`;
+  const fails = [
+    ['the marked filter nested in another filter', `<filter type="and">${find(cond('contoso_name'))}</filter>`, /not a direct child of the view's table/],
+    ['a condition without a placeholder', find('<condition attribute="contoso_name" operator="not-null"/>'), /not a find column/],
+    ['a literal value', find(cond('contoso_name', 'x', 'eq')), /not a find column/],
+    ['a placeholder the SDK does not use', find(cond('contoso_name', '{5}')), /not a find column/],
+    ['an extra attribute', find('<condition attribute="contoso_name" operator="like" value="{0}" uiname="x"/>'), /not a find column/],
+    ['a dotted column', find(cond('o.contoso_name')), /not a find column/],
+    ['a column twice', find(cond('contoso_name') + cond('CONTOSO_NAME')), /names a column twice/],
+    ['a comment in the find filter', find(`<!-- c -->${cond('contoso_name')}`), /more than conditions/],
+    ['text in a condition', find('<condition attribute="contoso_name" operator="like" value="{0}">x</condition>'), /more than conditions/],
+    ['the marker on a condition', `<filter type="or"><condition attribute="contoso_name" operator="like" value="{0}" isquickfindfields="1"/></filter>`, /marks a <condition>/],
+    ['the marker not "1"', find(cond('contoso_name'), 'type="or" isquickfindfields="true"'), /isquickfindfields="true"/],
+    ['a second marker in a join', `${find(cond('contoso_name'))}<link-entity name="contoso_other" from="a" to="b">${find(cond('contoso_name'))}</link-entity>`, /more than one find filter/],
+    ['unreadable FetchXML', `${find(cond('contoso_name'))}<filter>`, /could not be read as XML/],
+  ];
+  for (const [name, conds, detail] of fails) {
+    const r = await verifySpec(qfSpec(['contoso_name']), quickFindReader([qf(conds)]));
+    assert.equal(r.ok, false, name);
+    assert.match(qfCheck(r).detail, detail, name);
+  }
+  for (const [name, conds, declared] of [
+    ['a retained wildcard template', find(cond('contoso_name', '{0}%') + cond('contoso_code')), ['contoso_name', 'contoso_code']],
+    ['a number and a date placeholder', find(cond('contoso_name') + cond('contoso_code', '{1}', 'eq') + cond('createdon', '{3}', 'on')), ['contoso_name', 'contoso_code', 'createdon']],
+    ['white space and attribute order', find(`\n  <condition value="{0}" operator="like" attribute="contoso_name" />\n`), ['contoso_name']],
+    ['another filter beside it', `<filter type="and"><condition attribute="statecode" operator="eq" value="0"/></filter>${find(cond('contoso_name'))}`, ['contoso_name']],
+  ]) {
+    const r = await verifySpec(qfSpec(declared), quickFindReader([qf(conds)]));
+    assert.equal(r.ok, true, `${name}: ${JSON.stringify(qfCheck(r))}`);
+  }
+});
+
+// Replaces the seeded Quick Find view's FetchXML on the fake environment, as a maker's edit in the designer would.
+async function setFindFilter(org, filter) {
+  const row = viewRows(org).find((r) => r.querytype === 4);
+  await org.fake.httpClient.patch(`${org.origin}/api/data/v9.0/savedqueries(${row.savedqueryid})`, { fetchxml: `<fetch version="1.0" mapping="logical"><entity name="contoso_item"><attribute name="contoso_name"/>${filter}</entity></fetch>` });
+}
+
+test('verify after a real build: a retained wildcard template verifies; a find filter the SDK refuses never does', async () => {
+  const env = newOrg();
+  await seedQuickFind(env.org, ['contoso_name']);
+  answerAttributes(env.org, ['contoso_name', 'contoso_code']);
+  await setFindFilter(env.org, '<filter type="or" isquickfindfields="1"><condition attribute="contoso_name" operator="like" value="{0}%"/></filter>');
+  const spec = quickFindSpec(['contoso_name', 'contoso_code']);
+  const built = await build(env, spec, { phases: ['views'] });
+  assert.equal(built.err, undefined, built.err && built.err.message);
+  assert.equal(built.writes.filter((c) => c.method === 'PATCH' && /^\/savedqueries\(/.test(c.path)).length, 1);
+  assert.match(viewRows(env.org).find((r) => r.querytype === 4).fetchxml, /value="\{0\}%"/, 'the SDK keeps the existing template');
+  const read = quickFindReader(() => viewRows(env.org));
+  const verified = await verifySpec(qfSpec(['contoso_name', 'contoso_code']), read);
+  assert.equal(verified.ok, true, JSON.stringify(qfCheck(verified)));
+
+  for (const [name, filter] of [
+    ['nested marker', '<filter type="and"><filter type="or" isquickfindfields="1"><condition attribute="contoso_name" operator="like" value="{0}"/></filter></filter>'],
+    ['no placeholder', '<filter type="or" isquickfindfields="1"><condition attribute="contoso_name" operator="not-null"/></filter>'],
+  ]) {
+    const e = newOrg();
+    await seedQuickFind(e.org, ['contoso_name']);
+    await setFindFilter(e.org, filter);
+    const r = await build(e, quickFindSpec(['contoso_name']), { phases: ['views'] });
+    assert.equal(r.err && r.err.code, 'quick-find-filter-unsupported', name);
+    const v = await verifySpec(qfSpec(['contoso_name']), quickFindReader(() => viewRows(e.org)));
+    assert.equal(v.ok, false, `${name}: the verifier must not certify a list the SDK refuses to model`);
+    assert.equal(qfCheck(v).present, false, name);
+  }
 });
 
 test('a keyed command bar is refused without the managed-binding store, and nothing is written', async () => {

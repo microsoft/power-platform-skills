@@ -615,14 +615,19 @@ spec's new columns.
 - **`entities[].quickFind: { "findColumns": [...] }`** — the columns the table's search box matches on
   (its default Quick Find view). Distinct logical names; an empty list needs `--allow-destructive`. It
   does not need `searchEnabled` or change tracking. `--verify` checks that the view stores exactly this
-  list, in order (`quick-find <table>`).
+  list, in order (`quick-find <table>`); a stored search template such as `{0}%` is kept and verifies.
 
 **Approvals.** A view or chart that already exists and that this spec has not created in this run is
 shown as an adoption: the build leaves it unchanged, builds the rest, and then stops naming the key —
 `--authorize adopt:<table>/<name>` (the table in lower case, the name exactly as in the spec).
 `--authorize overwrite:<table>/<name>` approves replacing changes made elsewhere, and
 `--allow-destructive` approves removing columns. A key that names no declared view or chart stops the
-build. **Publishing.** A table is published only when every declared change on it succeeded: when one
+build. **Local copy.** A declared view, chart or Quick Find view whose local copy differs from the
+server's (an edit an earlier run did not send, or one made by hand), or cannot be compared with it, is
+refused before anything is written (`workspace-copy-unsent-edits`); the copy is kept. Put any change
+to keep into the spec and refresh the local copy, or approve replacing it with the server's:
+`--authorize overwrite:<table>/<name>`, or `--authorize overwrite:<table>/quickFind` for a table's
+Quick Find. **Publishing.** A table is published only when every declared change on it succeeded: when one
 fails, the build reports the table as withheld, publishes the other tables, and exits non-zero.
 
 `reconcile` on a form, dashboard, web resource, business rule or flow is a validation error, and a

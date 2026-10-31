@@ -163,7 +163,7 @@ const { securedBeforeSeed, planFieldSecurity, applyFieldSecurity, assignFieldSec
 const { declaredTableFlags } = require('./schema-feature-contract.js');
 const { RETRY, isTransientStatus, judgeFailure, retryPolicyFor, retryFrom, refusal, serviceFailure, withCause } = require('./retry-policy.js');
 const { createPublicationBarrier, describeWithheld, describeWithheldApp } = require('./publication-barrier.js');
-const { createFeatureSettlement, refusal: featureRefusal } = require('./reconcile-common.js');
+const { createFeatureSettlement, refusal: featureRefusal, isAuthorized } = require('./reconcile-common.js');
 const { createPassthroughCreates } = require('./creates-passthrough.js');
 const { isDeclaredView, planViewReconcile, applyViewReconcile } = require('./view-reconcile.js');
 const { isDeclaredChart, planChartReconcile, applyChartReconcile } = require('./chart-reconcile.js');
@@ -3512,11 +3512,11 @@ async function runSdkBuildPhases(spec, opts, owed) {
   // Blocks the barrier first, then reports, then records bindings even if reporting threw, then schedules a clean
   // result's publication (createFeatureSettlement, lib/reconcile-common.js).
   // A declared edit the apply step made but could not settle (a push the SDK refused, or one whose outcome is unknown) stays in the
-  // workspace copy, and the CLI's workspace is durable: a plain fetch keeps local edits while the server has not moved, so the next
-  // run would read its own unsent edit as the stored state and report "no change" with nothing written. Reset that copy to the
-  // server's (as discardUnrecordedEdits does for the app) so a re-run plans against what the environment holds. Only when the apply
-  // step added the failure — a refusal at plan time made no edit — and best-effort: a reset that fails leaves the copy as it was, and
-  // the next run's planOverServerCopy (below) finds the unsent edit and resets it before planning.
+  // workspace copy, and the CLI's workspace is durable. Reset that copy to the server's (as discardUnrecordedEdits does for the app) so
+  // the next run does not find it there. This discards nothing but this run's own edit: the apply step ran only because
+  // refuseUnsentCopy (below) proved the copy equal to the server's just before it, or the maker approved replacing it. Only when the
+  // apply step added the failure — a refusal at plan time made no edit — and best-effort: a reset that fails leaves the edit in the
+  // copy, and the next run's refuseUnsentCopy refuses the item for it rather than plan over it.
   const resetUnsettledCopy = async (kind, id, plan, r) => {
     if (!id || typeof provision.fetchArtifact !== 'function') return;
     const planned = (plan.refused || []).length + (plan.unknown || []).length;
@@ -3525,30 +3525,42 @@ async function runSdkBuildPhases(spec, opts, owed) {
       await provision.fetchArtifact(kind, id, { overwrite: true });
     } catch { /* see above */ }
   };
-  // The reset above is best-effort, so a run can still find an earlier run's unsent edit in the copy: the reset failed (a
-  // dropped connection), or the run stopped before it. The plan's own fetch keeps that edit while the server has not moved,
-  // so the plan would compare the spec with itself — a refused Quick Find list read as already stored, "no change" and
-  // success with nothing written. The SDK's snapshot is the durable record of what the server holds: before this run edits
-  // anything, a copy that differs from it can only hold an earlier run's edits. So such a plan is made again over a fresh
-  // copy of the server's, and when that copy cannot be fetched the item is not applied (an unknown, never a pass).
-  // Only the declared view, chart or Quick Find view the plan resolved is reset; a clean copy costs one local diff and no
-  // request, and an SDK without diffArtifact plans exactly as before.
-  const planOverServerCopy = async (kind, id, plan, replan) => {
-    if (!id || typeof provision.diffArtifact !== 'function' || typeof provision.fetchArtifact !== 'function') return plan;
-    let diff;
-    try {
-      diff = await provision.diffArtifact(kind, id);
-    } catch {
-      return plan;
+  // A declared view, chart or Quick Find view is planned over the SDK's workspace copy, and a plain fetch keeps a local edit while the
+  // server has not moved (lib/unsynced-edits.js). A copy that differs from the SDK's snapshot of the server's would therefore be
+  // planned as if the server held it: an earlier run's unsent Quick Find list reads as "already stored", "no change", success with
+  // nothing written. And the build cannot tell whose the difference is — an earlier run's edit that was never sent, or a maker's own
+  // (a description the spec does not declare): a diff says that something changed, never who changed it. So the build does not repair
+  // it. It refuses the item before any write, keeps the copy exactly as it is, and names the two ways on: put what should stay into
+  // the spec and refresh the copy, or approve replacing the local copy with the server's (--authorize overwrite:<key>, the same
+  // approval that lets the spec replace a change made on the server). A comparison that cannot be made — an SDK without diffArtifact,
+  // a diff that throws, an answer with no list of changes — is no proof of a clean copy, so it is refused the same way. A clean copy
+  // proceeds exactly as before, at the cost of one local diff and no request.
+  // The refusal goes first among the plan's reasons: a plan made over a copy that is not the server's may refuse for what the copy holds.
+  // what names the artifact in the refusal: 'view', 'chart' or 'Quick Find view'.
+  const refuseUnsentCopy = async (kind, what, id, plan, replan) => {
+    if (!id) return plan;
+    let state = 'unproven';
+    if (typeof provision.diffArtifact === 'function') {
+      try {
+        const diff = await provision.diffArtifact(kind, id);
+        if (diff && Array.isArray(diff.changes)) state = diff.changes.length === 0 ? 'clean' : 'changed';
+      } catch { /* unproven: see above */ }
     }
-    if (!(diff && Array.isArray(diff.changes) && diff.changes.length > 0)) return plan;
-    try {
-      await provision.fetchArtifact(kind, id, { overwrite: true });
-    } catch {
-      plan.unknown.push(featureRefusal(plan.key, 'workspace-copy-unsent-edits', `the workspace copy of the ${kind} holds edits an earlier run did not send, and the server's copy could not be read to replace it; nothing was written. Re-run; if it persists, ${RESET_WORKSPACE}`));
-      return plan;
+    if (state === 'clean') return plan;
+    if (isAuthorized(featureCtx.authorizedOverwrite, plan.key)) {
+      try {
+        await provision.fetchArtifact(kind, id, { overwrite: true });
+      } catch {
+        plan.unknown.unshift(featureRefusal(plan.key, 'workspace-copy-unsent-edits', `the local copy of the ${what} ${id} could not be replaced with the server's as approved, because the server's copy could not be read; the local copy was kept and nothing was written. Re-run`));
+        return plan;
+      }
+      return replan();
     }
-    return replan();
+    const found = state === 'changed'
+      ? `the local copy of the ${what} ${id} in the workspace differs from the server's (an edit an earlier run did not send, or one made by hand)`
+      : `the local copy of the ${what} ${id} in the workspace could not be compared with the server's`;
+    plan.refused.unshift(featureRefusal(plan.key, 'workspace-copy-unsent-edits', `${found}, so it was not planned over and nothing was written; the local copy was kept. Put any change you want to keep into the spec, then refresh the local copy: ${RESET_WORKSPACE}. Or approve replacing the local copy with the server's (this also lets the spec replace any change made on the server): --authorize overwrite:${plan.key}`));
+    return plan;
   };
   const settleFeatureResult = createFeatureSettlement({ barrier: owed.barrier, markIncomplete: featureIncomplete, settled: settledPublishes, recordBinding: managedArtifacts ? (b) => managedArtifacts.recordApplied(b) : undefined });
   // #changed-only (pages-only fast apply): seed the LIVE app id (discovered by unique name upstream) so the
@@ -6095,7 +6107,7 @@ async function runSdkBuildPhases(spec, opts, owed) {
         // edited by its helper; it never falls through to the create below, which would bypass the port.
         const planArgs = { view: meta.specView, sdk: provision, resolveValue: meta.resolveValue, primaryName: meta.primaryName };
         const firstPlan = await planViewReconcile(planArgs, featureCtx);
-        const plan = await planOverServerCopy('view', firstPlan.viewId, firstPlan, () => planViewReconcile(planArgs, featureCtx));
+        const plan = await refuseUnsentCopy('view', 'view', firstPlan.viewId, firstPlan, () => planViewReconcile(planArgs, featureCtx));
         const r = await applyViewReconcile(plan, { sdk: provision }, featureCtx);
         const { ok } = settleFeatureResult('views', `view ${plan.key}`, r);
         await resetUnsettledCopy('view', plan.viewId, plan, r);
@@ -6154,7 +6166,7 @@ async function runSdkBuildPhases(spec, opts, owed) {
       await runner.run('views', `Quick Find for ${name}`, async () => {
         const planArgs = { entity: name, quickFind: e.quickFind, sdk: provision };
         const firstPlan = await planQuickFind(planArgs, featureCtx);
-        const plan = await planOverServerCopy('view', firstPlan.viewId, firstPlan, () => planQuickFind(planArgs, featureCtx));
+        const plan = await refuseUnsentCopy('view', 'Quick Find view', firstPlan.viewId, firstPlan, () => planQuickFind(planArgs, featureCtx));
         const r = await applyQuickFind(plan, { sdk: provision }, featureCtx);
         settleFeatureResult('views', `Quick Find on ${name}`, r);
         await resetUnsettledCopy('view', plan.viewId, plan, r);
@@ -6242,7 +6254,7 @@ async function runSdkBuildPhases(spec, opts, owed) {
         return runner.run('charts', `chart "${def.name}"`, async () => {
           const planArgs = { chart: c, sdk: provision, chartArtifact: def };
           const firstPlan = await planChartReconcile(planArgs, featureCtx);
-          const plan = await planOverServerCopy('chart', firstPlan.chartId, firstPlan, () => planChartReconcile(planArgs, featureCtx));
+          const plan = await refuseUnsentCopy('chart', 'chart', firstPlan.chartId, firstPlan, () => planChartReconcile(planArgs, featureCtx));
           const r = await applyChartReconcile(plan, { sdk: provision }, featureCtx);
           const { ok } = settleFeatureResult('charts', `chart ${plan.key}`, r);
           await resetUnsettledCopy('chart', plan.chartId, plan, r);

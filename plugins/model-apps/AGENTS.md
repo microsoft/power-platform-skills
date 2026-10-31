@@ -2828,21 +2828,32 @@ an unknown outcome blocks the tables it saved or may have saved on the run-wide 
 (`lib/publication-barrier.js`), is reported with its remedy, and the run ends with one halt (non-zero)
 after the last phase. A blocked table is published by no later request in the run; the other tables
 still are. New views and charts are created through the creation port (`opts.creates`, by default
-`lib/creates-passthrough.js`). When an apply's write was refused or its outcome is unknown, the
-workspace copy of that view or chart is reset to the server's, so a re-run plans against what the
-environment holds. That reset is best-effort, so before a declared view, chart or Quick Find view is
-applied, a copy that still holds edits the server has not seen (an earlier run's, whose reset failed or
-never ran: the SDK's `diffArtifact` against its snapshot) is reset and planned again; when the server's
-copy cannot be fetched, the item is not applied (`workspace-copy-unsent-edits`, an unknown).
+`lib/creates-passthrough.js`). A declared view, chart or Quick Find view is planned over the SDK's
+workspace copy, so before one that exists is planned, its copy is compared with the SDK's snapshot of the
+server's (`diffArtifact`, a local read). A copy that differs (an earlier run's edit that was never sent,
+or a maker's own edit, which a diff cannot tell apart), or one that cannot be compared (no
+`diffArtifact`, a diff that throws or answers without a list of changes), is refused before any write
+(`workspace-copy-unsent-edits`): nothing is written and the copy is kept as it is — the build never
+resets or discards local content on its own. The refusal names the item and the two ways on: put what
+should stay into the spec and refresh the local copy (reset the workspace), or approve replacing the
+local copy with the server's with `--authorize overwrite:<key>` (`<table>/<name>` for a view or chart,
+which also approves replacing changes made on the server; `<table>/quickFind` for a Quick Find view).
+A clean copy is planned exactly as before. When an apply's write in this run was refused or its outcome
+is unknown, the build resets that copy to the server's (it held only this run's own edit, as the copy
+was proven clean or approved for replacement just before); a reset that fails leaves the next run to
+refuse the item.
 
 `--preview-push` lists a declared view or chart as not evaluated (`noTypedTarget`): its reconciler's
 filter, sort, width and title edits are made only while the build runs.
 
 `--verify` checks a declared view's object and joined-table columns by the names the build gives them
 in the layout, and a table's `quickFind` as `quick-find <table>`: the table's one default Quick Find view
-must store exactly the declared find columns, in order. No such view, several, a read that fails or a
-find filter that is not a plain list (a nested filter, a joined-table or literal condition) fails the
-check with the reason. A reader that returns the view without its content is reported as not verified.
+must store exactly the declared find columns, in order. The find filter is read with the bundled SDK's
+own constraints: exactly one marked `<filter isquickfindfields="1">`, a direct child of the view's
+table, holding only conditions that carry exactly `attribute`, `operator` and `value`, each on a column
+of the table named once, with a search placeholder `{0}`..`{4}` in the value (a retained template such
+as `{0}%` counts). No such view, several, a read that fails or a find filter the SDK would refuse (a
+nested or joined marker, a condition with a literal value or none) fails the check with the reason. A reader that returns the view without its content is reported as not verified.
 One savedquery read per table that declares `quickFind`; none otherwise.
 
 Refusal codes and remedies (`remedyFor`; the build adds the CLI flag that gives the approval):

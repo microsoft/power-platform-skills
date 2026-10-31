@@ -1054,7 +1054,10 @@ const readLanguageFlag = (flags) => readAliasedFlag(flags, 'language-code', 'lan
 //   tableFlags:<table>                  turning duplicate detection off, which unpublishes the table's duplicate rules
 // and to ONE approval a declared view or chart (reconcile: "declared", lib/view-reconcile.js, lib/chart-reconcile.js) asks for:
 //   adopt:<table>/<name>                taking over an existing view or chart of that name the spec has not managed before
-//   overwrite:<table>/<name>            replacing the changes made on the server since the build last wrote it
+//   overwrite:<table>/<name>            replacing the changes made on the server since the build last wrote it, or a local
+//                                       copy that differs from the server's (sdk-build.js, refuseUnsentCopy)
+//   overwrite:<table>/quickFind         replacing a local copy of a declared Quick Find view (entities[].quickFind) that
+//                                       differs from the server's
 // <table>/<name> is the artifact's key as its refusal prints it; the two approvals are separate Sets (opts.authorizedAdoption,
 // opts.authorizedOverwrite), so consent to one is never consent to the other or to a destructive schema change.
 // It is deliberately not implied by --allow-destructive: that flag approves the form and sitemap removals the build lists, and a
@@ -1082,14 +1085,25 @@ function authorizationKeys(argv, spec) {
   for (const ch of (spec && Array.isArray(spec.charts) ? spec.charts : [])) {
     if (isDeclaredChart(ch)) { const { intent } = compileChartIntent(ch); if (intent) declaredKeys.add(intent.key); }
   }
+  // A table's Quick Find (entities[].quickFind, lib/quick-find.js) is keyed `<table>/quickFind`. It has no adoption and no server drift,
+  // so it takes only the overwrite approval: replacing a local copy of its Quick Find view that differs from the server's (sdk-build.js,
+  // refuseUnsentCopy).
+  const quickFindKeys = new Set();
+  for (const e of (spec && Array.isArray(spec.entities) ? spec.entities : [])) {
+    if (e && e.quickFind && typeof e.schemaName === 'string') quickFindKeys.add(`${lower(e.schemaName)}/quickFind`);
+  }
   for (const key of raw) {
     // adopt:account/My Accounts | overwrite:new_ticket/Open Tickets — the name may hold spaces and '/', so only the first '/'
     // splits; the table is matched case-insensitively and the name exactly, as the reconcile keys them.
     const approval = /^(adopt|overwrite):([A-Za-z0-9_]+)\/(.+)$/.exec(String(key));
     if (approval) {
       const artifactKey = `${lower(approval[2])}/${approval[3]}`;
+      if (approval[1] === 'overwrite' && quickFindKeys.has(artifactKey)) {
+        overwrite.add(artifactKey);
+        continue;
+      }
       if (!declaredKeys.has(artifactKey)) {
-        problems.push(`'${key}' approves an artifact the spec does not declare (it would need a view or chart with reconcile: "declared" keyed ${artifactKey})`);
+        problems.push(`'${key}' approves an artifact the spec does not declare (it would need a view or chart with reconcile: "declared" keyed ${artifactKey}, or for overwrite:<table>/quickFind a table that declares quickFind)`);
         continue;
       }
       (approval[1] === 'adopt' ? adopt : overwrite).add(artifactKey);

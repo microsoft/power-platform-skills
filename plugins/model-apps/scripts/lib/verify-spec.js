@@ -41,6 +41,7 @@ const { columnTypeChecks, declaredTableFlags, verifyTableFlags } = require('./sc
 const { verifyDateBehaviors } = require('./date-behavior.js');
 const { isDeclaredView, compileViewIntent } = require('./view-reconcile.js');
 const { expectedQuickFindProjection } = require('./quick-find.js');
+const { readXmlElements, XML_PREDEFINED } = require('./strict-xml.js');
 
 // How many verification reads may be in flight at once. A verify pass is nothing but reads, but each is a
 // Dataverse request that already retries on its own 429s (lib/sdk-http-client.js), so the bound is small:
@@ -2968,40 +2969,82 @@ function specViewColumnNames(v) {
 }
 
 // The find columns a Quick Find view's FetchXML stores, in order, or `{ problem }` when it holds no list the spec could
-// have declared. The list is the root entity's one find filter, e.g.:
+// have declared. The list is the view's one find filter, a direct child of the root's table, e.g.:
 //   <fetch><entity name="contoso_item">
 //     <filter type="and"><condition attribute="statecode" operator="eq" value="0"/></filter>
 //     <filter type="or" isquickfindfields="1">
-//       <condition attribute="contoso_name" operator="like" value="{0}"/>
+//       <condition attribute="contoso_name" operator="like" value="{0}%"/>
 //       <condition attribute="contoso_code" operator="like" value="{0}"/>
 //     </filter>
 //   </entity></fetch>
-// The value is the search text's placeholder ({0}; another number for a number or date column). A nested filter, a
-// condition on a joined table (`entityname`), a literal value, or several find filters are what the SDK will not model as a
-// list either (it refuses the write, quick-find-filter-unsupported), so they are reported, never read as a list.
-function quickFindColumnsOf(fetchxml) {
-  const base = baseEntityFetchXml(fetchxml);
-  const starts = [...base.matchAll(/<filter\b([^>]*)>/gi)].filter((m) => /^(?:1|true)$/i.test(tagAttrs(m[1]).isquickfindfields || ''));
-  if (starts.length === 0) return { problem: 'the view has no find filter' };
-  if (starts.length > 1) return { problem: 'the view has more than one find filter' };
-  const open = starts[0];
-  if (/\/\s*$/.test(open[1])) return { columns: [] };
-  const from = open.index + open[0].length;
-  const end = base.indexOf('</filter>', from);
-  if (end < 0) return { problem: 'the find filter is not closed' };
-  const body = base.slice(from, end);
-  const columns = [];
-  const re = /<condition\b([^>]*?)\s*(?:\/>|>\s*<\/condition>)/gi;
-  let last = 0;
-  let m;
-  while ((m = re.exec(body)) !== null) {
-    if (body.slice(last, m.index).trim()) return { problem: 'the find filter holds more than conditions' };
-    last = re.lastIndex;
-    const a = tagAttrs(m[1]);
-    if (!a.attribute || a.entityname || (a.value !== undefined && !/^\{\d+\}$/.test(a.value))) return { problem: 'the find filter has a condition that is not a find column' };
-    columns.push(a.attribute.toLowerCase());
+// It is read with the constraints the bundled SDK reads it with (its classifyFindFilter), so the check passes exactly the
+// lists the build could have written and fails every filter the build refuses (quick-find-filter-unsupported):
+//   - exactly one element below the root carries `isquickfindfields`; it is a <filter>, the value is "1", and its parent
+//     is the root's first <entity> — a marked filter nested in another filter or in a <link-entity> is not the list;
+//   - the filter holds conditions and white space only (no text, comment, CDATA or processing instruction), and each
+//     condition holds nothing and carries exactly `attribute`, `operator` and `value`;
+//   - `attribute` is a column of the table itself (non-empty, no "."), named once (case-insensitively);
+//   - `value` holds a search placeholder {0}..{4} anywhere, so a retained template such as "{0}%" is a find column, and a
+//     condition with a literal value or none at all ("not-null") is a constraint, not a find column.
+// A self-closed <filter .../> is an empty list.
+const FIND_PLACEHOLDER = /\{[0-4]\}/;
+const FIND_CONDITION_ATTRS = ['attribute', 'operator', 'value'];
+
+// The text directly inside `el` (its start and end tags and its child elements cut out), references decoded — what an XML
+// parser would hand over as its text, comment, CDATA and processing-instruction nodes, the markup of the last three kept.
+function ownContent(xml, el, children) {
+  let p = el.start;
+  for (let quote = 0; p < el.end; p += 1) {
+    const c = xml.charCodeAt(p);
+    if (quote) { if (c === quote) quote = 0; } else if (c === 0x22 || c === 0x27) quote = c; else if (c === 0x3e) break;
   }
-  if (body.slice(last).trim()) return { problem: 'the find filter holds more than conditions' };
+  if (xml.charCodeAt(p - 1) === 0x2f) return '';
+  const close = xml.lastIndexOf('</', el.end - 1);
+  let text = '';
+  let from = p + 1;
+  for (const child of children) {
+    text += xml.slice(from, child.start);
+    from = child.end;
+  }
+  text += xml.slice(from, close);
+  return text.replace(/&#x([0-9a-fA-F]+);|&#([0-9]+);|&(lt|gt|amp|apos|quot);/g, (m, hex, dec, name) => (name ? XML_PREDEFINED[name] : String.fromCodePoint(parseInt(hex || dec, hex ? 16 : 10))));
+}
+
+function quickFindColumnsOf(fetchxml) {
+  const read = readXmlElements(fetchxml, () => true, { spans: true });
+  if (!read.ok) return { problem: "the view's FetchXML could not be read as XML" };
+  const elements = read.elements.slice().sort((a, b) => a.start - b.start);
+  const childrenOf = (el) => {
+    const path = el.path === '' ? el.name : `${el.path}/${el.name}`;
+    return elements.filter((c) => c.path === path && c.start > el.start && c.end <= el.end);
+  };
+  const root = elements.find((e) => e.path === '');
+  const marked = elements.filter((e) => e.path !== '' && Object.prototype.hasOwnProperty.call(e.attrs, 'isquickfindfields'));
+  if (marked.length === 0) return { problem: 'the view has no find filter' };
+  if (marked.length > 1) return { problem: 'the view has more than one find filter' };
+  const filter = marked[0];
+  if (filter.name !== 'filter') return { problem: `the view marks a <${filter.name}> as its find filter` };
+  if (filter.attrs.isquickfindfields !== '1') return { problem: `the view's find filter is marked isquickfindfields="${filter.attrs.isquickfindfields}", not "1"` };
+  const table = childrenOf(root).find((e) => e.name === 'entity');
+  if (!table || !childrenOf(table).includes(filter)) return { problem: "the view has no find filter on its table: the marked filter is not a direct child of the view's table" };
+  const conditions = childrenOf(filter);
+  if (ownContent(fetchxml, filter, conditions).trim() !== '') return { problem: 'the find filter holds more than conditions' };
+  const columns = [];
+  const seen = new Set();
+  for (const c of conditions) {
+    const inner = childrenOf(c);
+    if (c.name !== 'condition' || inner.length > 0 || ownContent(fetchxml, c, inner).trim() !== '') return { problem: 'the find filter holds more than conditions' };
+    const names = Object.keys(c.attrs);
+    const attribute = c.attrs.attribute || '';
+    if (names.length !== FIND_CONDITION_ATTRS.length || !FIND_CONDITION_ATTRS.every((n) => names.includes(n))
+      || attribute === '' || attribute.includes('.') || !FIND_PLACEHOLDER.test(c.attrs.value)) {
+      return { problem: 'the find filter has a condition that is not a find column' };
+    }
+    const column = attribute.toLowerCase();
+    if (seen.has(column)) return { problem: `the find filter names a column twice (${column})` };
+    seen.add(column);
+    columns.push(column);
+  }
   return { columns };
 }
 
