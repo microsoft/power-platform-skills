@@ -61,7 +61,10 @@ const header = (options, name) => {
 //   solutionHeader    make the SDK with solutionUniqueName (it then sends the solution header and adds members itself)
 //   keys              'active' (default) | 'absent' | 'inactive' — the appsetting key the metadata read answers
 //   images            names of image (SVG) web resources to seed, e.g. a header logo
-function appThemeServer(t, { environmentTheme, row, pin = {}, solutionHeader = false, keys = 'active', images = [] } = {}) {
+//   engine            also answer the entity-set lookups the build engine (lib/sdk-build.js) makes for the tables it
+//                     touches, e.g. GET /EntityDefinitions(LogicalName='appmodule') -> { "EntitySetName": "appmodules" },
+//                     so a whole runSdkBuild can run over this server
+function appThemeServer(t, { environmentTheme, row, pin = {}, solutionHeader = false, keys = 'active', images = [], engine = false } = {}) {
   const theme = {
     rows: [], webResources: [], resolved: new Map(), environment: new Map([[THEME_DEF, SENTINEL], [HEADER_DEF, SENTINEL]]),
     publishers: new Set(['contoso']), members: new Set(), solutionId: randomUUID(), requests: [], fail: [], after: [], inject: [], pages: new Map(),
@@ -291,12 +294,20 @@ function appThemeServer(t, { environmentTheme, row, pin = {}, solutionHeader = f
     };
   };
 
+  const ENTITY_SETS = { appmodule: 'appmodules', appmodulecomponent: 'appmodulecomponents', sitemap: 'sitemaps', webresource: 'webresourceset',
+    solution: 'solutions', solutioncomponent: 'solutioncomponents', systemform: 'systemforms' };
+  const withEntitySets = (base) => ({ ...base, get: async (url, options) => {
+    const match = /EntityDefinitions\(LogicalName='([^']+)'\)(?!\/)/.exec(String(url));
+    if (match && ENTITY_SETS[match[1]]) return reply(200, { EntitySetName: ENTITY_SETS[match[1]], LogicalName: match[1] });
+    return base.get(url, options);
+  } });
+
   // The theme read policy sits on the client the SDK is given, as maker-sdk.js puts it there with themeReads.
   let guard;
   let wrapped;
   const server = appPinServer(t, {
     ...pin,
-    wrapHttp: (base) => { wrapped = wrap(base); guard = guardAppThemeReads(wrapped, (code, message) => new SdkError(code, message)); return guard; },
+    wrapHttp: (base) => { wrapped = wrap(engine ? withEntitySets(base) : base); guard = guardAppThemeReads(wrapped, (code, message) => new SdkError(code, message)); return guard; },
     sdkOptions: solutionHeader ? { solutionUniqueName: SOLUTION } : {},
   });
   markThemeReadGuarded(server.sdk, guard);

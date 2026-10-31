@@ -831,7 +831,8 @@ test('an existing app with an appShell that has no areas is refused by the navig
 });
 
 // app.theme (Preview) on the two app-step shapes only this harness builds. lib/app-theme.js applyDeclaredAppTheme is
-// replaced by a recorder that queues the app's publication as the real one does; app-theme-wiring.test.js has the rest.
+// replaced by a recorder that queues the app's publication as the real one does, and verifyAppTheme (the build's read-back
+// after the paying publication) by one that records the call and answers live; app-theme-wiring.test.js has the rest.
 const appTheme = require('../lib/app-theme.js');
 function recordTheme(t, calls) {
   t.mock.method(appTheme, 'applyDeclaredAppTheme', async (spec, ctx) => {
@@ -839,8 +840,19 @@ function recordTheme(t, calls) {
     ctx.publication.queue({ kind: 'app', id: ctx.appId, reason: 'app.theme' });
     return { saved: ['app.theme'], unchanged: [], pendingPublish: ['app.theme'], refused: [], unknown: [] };
   });
+  t.mock.method(appTheme, 'verifyAppTheme', async (spec, ctx) => {
+    calls.push(['verifyTheme', ctx.appId]);
+    return [{ key: 'app.theme', ok: true, state: 'live' }];
+  });
 }
 const appPublishAfter = (calls, from) => calls.findIndex((c, i) => i > from && c[0] === 'publishArtifact' && c[1] === 'app');
+// The theme is read back once, after the last app publication of the run.
+function assertProvenAfterPublication(calls) {
+  const proofs = calls.map((c, i) => (c[0] === 'verifyTheme' ? i : -1)).filter((i) => i >= 0);
+  const lastPublish = calls.map((c, i) => (c[0] === 'publishArtifact' && c[1] === 'app' ? i : -1)).filter((i) => i >= 0).pop();
+  assert.strictEqual(proofs.length, 1, JSON.stringify(calls.map((c) => c[0])));
+  assert.ok(lastPublish < proofs[0], JSON.stringify(calls.map((c) => c[0])));
+}
 
 test('app.theme, new app of pages only: applied once the pages-first create has made the app, and paid by a later app publication', async (t) => {
   const shape = shapeNamed('a navigation of pages only');
@@ -858,6 +870,7 @@ test('app.theme, new app of pages only: applied once the pages-first create has 
     assert.ok(create >= 0 && create < themes[0], 'never before the app exists');
     assert.strictEqual(env.calls[themes[0]][1], result.created.app);
     assert.ok(appPublishAfter(env.calls, themes[0]) > themes[0], 'the create\'s own publication came before the theme, so a later one pays it');
+    assertProvenAfterPublication(env.calls);
   } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
 });
 
@@ -873,5 +886,6 @@ test('app.theme, existing app in a changed-only re-upload (no sitemap finalize):
     const themes = env.calls.map((c, i) => (c[0] === 'theme' ? i : -1)).filter((i) => i >= 0);
     assert.strictEqual(themes.length, 1);
     assert.ok(appPublishAfter(env.calls, themes[0]) > themes[0], JSON.stringify(env.calls.map((c) => c[0])));
+    assertProvenAfterPublication(env.calls);
   } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
 });

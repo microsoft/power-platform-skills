@@ -4034,6 +4034,7 @@ async function runSdkBuildPhases(spec, opts, owed) {
   // (APP_THEME_INCOMPLETE, never retried: lib/app-theme.js appThemeIncomplete); what was saved is kept in result.created.appTheme.
   const declaresTheme = Boolean(spec.app) && spec.app.theme !== undefined && has('app-shell');
   let themeDone = false;
+  let themeAppId = null;
   const ensureThemeApplied = async (appId) => {
     if (!declaresTheme || themeDone || !appId) return;
     await runner.run('app-shell', 'app theme (Preview)', async () => {
@@ -4047,6 +4048,7 @@ async function runSdkBuildPhases(spec, opts, owed) {
       return applied;
     });
     themeDone = true;
+    themeAppId = appId;
   };
 
   // The names of what this run CREATED on each table (`view Open Tickets`, `form Ticket`, `chart By Area`), and of a
@@ -9340,6 +9342,26 @@ async function runSdkBuildPhases(spec, opts, owed) {
   const flushed = await appPublication.flush();
   // An app row is { id, code }; a scope row (a table) is { kind, id, code, reasons }.
   for (const { kind = 'app', id, code } of [...flushed.withheld, ...flushed.failed]) if (!(kind === 'table' && code === 'publication-withheld')) markIncomplete({ phase: 'publish', code, message: `${kind} ${id}: its publication is owed (${code}); the change is saved, re-run once the cause is cleared` });
+  // A theme applied this run is read back once, with the theme's own SDK, after the app publication that paid it was
+  // accepted: an accepted publish is not proof that the app resolves the theme. An unresolved, unreadable or mismatching
+  // theme leaves the build incomplete (APP_THEME_UNVERIFIED), and the publish is never sent again. While the app's
+  // publication is still owed (withheld, failed or unconfirmed: reported above) nothing is read. A dry run applied nothing
+  // (no result.created.appTheme), and a spec without a theme never gets here, so neither makes a read.
+  if (themeAppId && result.created.appTheme && !appPublication.owed().some((entry) => entry.kind === 'app' && String(entry.id).toLowerCase() === String(themeAppId).toLowerCase())) {
+    const { verifyAppTheme } = require('./app-theme.js');
+    let proof;
+    try {
+      [proof] = await verifyAppTheme(spec, {
+        sdk: provision, appId: themeAppId, publisherPrefix: spec.solution && spec.solution.publisherPrefix, solution: spec.solution && spec.solution.uniqueName,
+      });
+    } catch (error) {
+      proof = { key: 'app.theme', ok: false, state: 'unknown', code: (error && error.code) || 'APP_THEME_FAILED' };
+    }
+    if (!proof || !proof.ok) {
+      const state = proof ? `${proof.state}${proof.code ? ` (${proof.code})` : ''}${proof.reasons && proof.reasons.length ? ` [${proof.reasons.join(', ')}]` : ''}` : 'no answer';
+      markIncomplete({ phase: 'app-shell', code: 'APP_THEME_UNVERIFIED', message: `app.theme: the theme was saved and the app was published, but the app did not read back with the declared theme (${state}); what was saved is kept — check it with --verify, and re-run the build if it still differs` });
+    }
+  }
   // Exact obligations not proven from the published layer (APP_MAIN_FORMS_NOT_EXACT) and queued scopes nothing can
   // publish (PUBLICATION_SCOPE_UNBRIDGED).
   for (const entry of appPublication.unsettled()) markIncomplete({ phase: 'publish', code: entry.code, message: entry.reason });

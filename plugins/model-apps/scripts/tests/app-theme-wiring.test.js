@@ -26,10 +26,17 @@ const LOGO = 'contoso_/images/logo.svg';
 const done = () => ({ saved: ['app.theme'], unchanged: [], pendingPublish: ['app.theme'], refused: [], unknown: [] });
 const themed = (options) => { const spec = membershipSpec(options); spec.app.theme = THEME; return spec; };
 
+const live = () => [{ key: 'app.theme', ok: true, state: 'live' }];
+
 // Replaces applyDeclaredAppTheme with one that queues the app's publication as the real one does (applyAppTheme `owe`),
-// and records the call among the fake SDK's own events, so its place in the run is visible.
-function recordTheme(t, fake, answer = done) {
+// and records the call among the fake SDK's own events, so its place in the run is visible. verifyAppTheme (the build's
+// read-back after the paying publication) answers `proof` and is recorded the same way, as 'verify'.
+function recordTheme(t, fake, answer = done, proof = live) {
   const calls = [];
+  t.mock.method(theme, 'verifyAppTheme', async (spec, ctx) => {
+    fake.events.push(['verify', ctx.appId]);
+    return proof();
+  });
   t.mock.method(theme, 'applyDeclaredAppTheme', async (spec, ctx) => {
     calls.push(ctx);
     fake.events.push(['theme', ctx.appId]);
@@ -99,6 +106,54 @@ test('a refused or unknown theme ends the build as APP_THEME_INCOMPLETE, never r
   }
 });
 
+test('the theme is read back once, after the app publication that paid it, with the theme\'s SDK', async (t) => {
+  for (const existing of [true, false]) {
+    const fake = membershipSdk({ existing });
+    t.mock.restoreAll();
+    recordTheme(t, fake);
+    const result = await runSdkBuild(themed({ hidden: false, mainForms: false }), { sdk: fake.sdk, apply: true, phases: ['app-shell'] });
+    const events = fake.events.map(([e]) => e);
+    assert.equal(count(fake.events, 'verify'), 1, JSON.stringify(events));
+    assert.ok(events.lastIndexOf('publish') < events.indexOf('verify'), `the read-back follows the last app publication: ${JSON.stringify(events)}`);
+    assert.deepEqual(result.incomplete || [], []);
+  }
+});
+
+test('a theme that does not read back live after its publication ends the build incomplete (APP_THEME_UNVERIFIED), never retried', async (t) => {
+  for (const proof of [
+    () => [{ key: 'app.theme', ok: false, state: 'pendingPublish', reasons: ['resolvedDiffers'] }],
+    () => [{ key: 'app.theme', ok: false, state: 'mismatch' }],
+    () => [{ key: 'app.theme', ok: false, state: 'unknown', code: 'APP_THEME_READ_INCOMPLETE' }],
+    () => { throw Object.assign(new Error('lost'), { code: 'CONNECTION_ERROR' }); },
+  ]) {
+    const fake = membershipSdk({ existing: true });
+    t.mock.restoreAll();
+    recordTheme(t, fake, done, proof);
+    await assert.rejects(runSdkBuild(themed({ hidden: false, mainForms: false }), { sdk: fake.sdk, apply: true, phases: ['app-shell'] }), (error) => {
+      assert.deepEqual(error.incomplete.map((entry) => entry.code), ['APP_THEME_UNVERIFIED']);
+      assert.match(error.incomplete[0].message, /what was saved is kept .*--verify/);
+      assert.equal(error.retry, 'never');
+      return true;
+    });
+    assert.equal(count(fake.events, 'publish'), 1, 'the app publication is not sent again');
+    assert.equal(count(fake.events, 'verify'), 1);
+  }
+});
+
+test('a theme whose app publication is still owed is not read back: the owed publication is what the build reports', async (t) => {
+  const fake = membershipSdk({ existing: true });
+  recordTheme(t, fake);
+  fake.sdk.publishArtifact = async (kind, id) => {
+    fake.events.push(['publish', kind]);
+    return { type: kind, id, shipped: true, publish: { kind: 'failed', error: { code: 'CONNECTION_ERROR' } } };
+  };
+  await assert.rejects(runSdkBuild(themed({ hidden: false, mainForms: false }), { sdk: fake.sdk, apply: true, phases: ['app-shell'] }), (error) => {
+    assert.deepEqual((error.incomplete || []).map((entry) => entry.code), ['CONNECTION_ERROR'], 'the build ran to its end and reports the owed publication, not the theme');
+    return true;
+  });
+  assert.equal(count(fake.events, 'verify'), 0, JSON.stringify(fake.events.map(([e]) => e)));
+});
+
 test('a build that does not reach the app step does not apply, and does not claim, the theme', async (t) => {
   const fake = membershipSdk({ existing: true });
   const calls = recordTheme(t, fake);
@@ -110,6 +165,7 @@ test('a dry run lists the theme as one app step and applies nothing', async (t) 
   const fake = membershipSdk({ existing: true });
   const calls = recordTheme(t, fake);
   const result = await runSdkBuild(themed({ hidden: false, mainForms: false }), { sdk: fake.sdk, apply: false, phases: ['app-shell'] });
+  assert.equal(count(fake.events, 'verify'), 0, 'a dry run reads nothing back');
   assert.deepEqual(result.planItems.filter((item) => /theme/.test(item.label)), [{ phase: 'app-shell', label: 'app theme (Preview)' }]);
   const bare = await runSdkBuild(membershipSpec({ hidden: false, mainForms: false }), { sdk: fake.sdk, apply: false, phases: ['app-shell'] });
   assert.deepEqual(bare.planItems.filter((item) => /theme/.test(item.label)), []);

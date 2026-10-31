@@ -440,3 +440,62 @@ test('REAL BUNDLE: download refuses a theme whose header logo is gone, and names
   assert.deepEqual(await downloadAppTheme(server.ctx), { status: 'refused', code: 'APP_THEME_LOGO_UNAVAILABLE' });
   assert.deepEqual(server.writes().filter((line) => line.includes(LOGO)), [], 'download writes nothing');
 });
+
+// The build engine (lib/sdk-build.js) over the same server and SDK: a themed build reads the theme back once, after the
+// app publication that paid it, before it calls itself complete. An accepted publish is not proof that the app resolves
+// the theme; a build with no theme makes no theme read at all.
+const { inOwnFolder } = require('./helpers/own-app-folder.js');
+const { runSdkBuild: runSdkBuildInPlace } = require('../lib/sdk-build.js');
+const { membershipSpec } = require('./helpers/app-membership-sdk.js');
+const runSdkBuild = inOwnFolder(runSdkBuildInPlace);
+const THEME_READS = /^GET \/(appsettings|RetrieveSetting|settingdefinitions)/;
+
+async function engineBuild(t, theme, arrange = () => {}) {
+  const server = appThemeServer(t, { engine: true });
+  await server.sdk.initWorkspace();
+  await server.sdk.fetchArtifact('app', APP);
+  arrange(server);
+  const built = membershipSpec({ hidden: false, mainForms: false });
+  if (theme !== undefined) built.app.theme = theme;
+  let result;
+  let error;
+  try {
+    result = await runSdkBuild(built, { sdk: server.sdk, provisionSdk: server.sdk, apply: true, phases: ['app-shell'], creates: createPassthroughCreates(), warn: () => {} });
+  } catch (thrown) {
+    error = thrown;
+  }
+  const lastAppPublish = server.theme.requests.findLastIndex((line) => /<appmodule>/.test(line));
+  return {
+    server, result, error,
+    appPublishes: server.writes().filter((line) => /<appmodule>/.test(line)).length,
+    readsAfterPublish: lastAppPublish < 0 ? [] : server.theme.requests.slice(lastAppPublish + 1).filter((line) => THEME_READS.test(line)),
+  };
+}
+
+test('REAL BUNDLE ENGINE: a themed build reads the theme back after the app publication that paid it, and completes when the app resolves it', async (t) => {
+  const { server, result, error, appPublishes, readsAfterPublish } = await engineBuild(t, THEME);
+  assert.equal(error, undefined, error && error.message);
+  assert.ok(server.themeRow(), 'the real setter ran');
+  assert.ok(appPublishes >= 1, 'the app was published');
+  assert.ok(readsAfterPublish.length > 0, 'the theme is read back after the app publication');
+  assert.deepEqual(result.incomplete || [], []);
+});
+
+test('REAL BUNDLE ENGINE: a theme the app does not resolve after its accepted publication leaves the build incomplete (APP_THEME_UNVERIFIED), with no publish again', async (t) => {
+  const live = await engineBuild(t, THEME);
+  const { server, error, appPublishes } = await engineBuild(t, THEME, (fake) => {
+    fake.afterNext('POST /appsettings', () => fake.afterNext('POST /PublishXml', (state) => state.resolved.set(THEME_DEF, SENTINEL)));
+  });
+  assert.ok(server.themeRow(), 'the real setter ran');
+  assert.ok(error, 'an unresolved theme cannot complete the build');
+  assert.deepEqual((error.incomplete || []).map((entry) => entry.code), ['APP_THEME_UNVERIFIED'], error.message);
+  assert.match(error.incomplete[0].message, /--verify/);
+  assert.equal(error.retry, 'never');
+  assert.equal(appPublishes, live.appPublishes, 'the app publication is not retried');
+});
+
+test('REAL BUNDLE ENGINE: a build whose spec declares no theme makes no theme read', async (t) => {
+  const { server, error } = await engineBuild(t, undefined);
+  assert.equal(error, undefined, error && error.message);
+  assert.deepEqual(server.theme.requests.filter((line) => THEME_READS.test(line)), []);
+});
