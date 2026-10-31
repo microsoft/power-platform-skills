@@ -943,14 +943,14 @@ test('declared reconciliation expectations pass on their fixture and fail when t
 
 test('configuration expectations pass on their fixture, fail when the spec drifts, and the fixture settings bind every declared item', () => {
   const fixtures = loadFixtures(path.join(__dirname, '..', 'fixtures'));
-  const ev19 = evalsManifest.evals.find((e) => e.id === 19);
-  const fixtureSpec = fixtures.find((f) => f.id === 19).spec;
+  const ev18 = evalsManifest.evals.find((e) => e.id === 18);
+  const fixtureSpec = fixtures.find((f) => f.id === 18).spec;
   const grade = (mutate, evMutate) => {
-    const ev = structuredClone(ev19);
+    const ev = structuredClone(ev18);
     const spec = structuredClone(fixtureSpec);
     if (mutate) mutate(spec);
     if (evMutate) evMutate(ev);
-    return ASSERTIONS.get(ev19.expectations[0])({ spec, eval: ev, facts: {} }).status;
+    return ASSERTIONS.get(ev18.expectations[0])({ spec, eval: ev, facts: {} }).status;
   };
   const secret = (s) => s.environmentVariables.find((v) => v.type === 'secret');
   assert.strictEqual(grade(), 'pass');
@@ -969,7 +969,7 @@ test('configuration expectations pass on their fixture, fail when the spec drift
   // The runner grades the spec alone, so the per-environment half of the fixture is checked here: its
   // deployment-settings file binds every declared reference and gives every secret its value, with no error.
   const { readDeploymentBindings } = require('../../../../plugins/model-apps/scripts/lib/configuration-artifacts.js');
-  const settings = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'fixtures', '19-configuration-items', 'deployment-settings.json'), 'utf8'));
+  const settings = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'fixtures', '18-configuration-items', 'deployment-settings.json'), 'utf8'));
   const bindings = readDeploymentBindings(settings, fixtureSpec);
   assert.deepStrictEqual(bindings.errors, []);
   for (const r of fixtureSpec.connectionReferences) assert.ok(bindings.connectionReferences.has(r.logicalName.toLowerCase()), r.logicalName);

@@ -410,7 +410,7 @@
       ]
     },
     {
-      "id": 19,
+      "id": 18,
       "tier": "full",
       "spec": "app-spec.json",
       "prompt": "A Field Requests app, shipped as version 1.2.0.0: requests with a title, a requester email and a priority. It calls our dispatch service, whose base URL and API key differ per environment (the key is a secret), sends field notices through SharePoint, offers an Escalate action on a request that takes a reason and answers whether it was accepted, and flags requests that have the same requester email.",
