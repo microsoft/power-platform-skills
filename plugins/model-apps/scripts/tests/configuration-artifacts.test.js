@@ -12,6 +12,9 @@ const C = require('../lib/configuration-artifacts.js');
 const SP = '/providers/Microsoft.PowerApps/apis/shared_sharepointonline';
 const VAULT_REF = '/subscriptions/00000000-0000-0000-0000-000000000001/resourceGroups/rg1/providers/Microsoft.KeyVault/vaults/contosovault/secrets/apikey';
 
+// Every ctx below names `fence: null`: these tests drive the helper over stub SDKs that do not answer the shared
+// stable-id reader, so they ask for the plain pass-through explicitly instead of whatever loadStableCreates() finds in
+// the plugin. The helper's own stable port is exercised through the real SDK bundle in the real-bundle file.
 const base = (extra = {}) => ({
   minimumPluginVersion: '2.21.0',
   solution: { uniqueName: 'ContosoSol', publisherPrefix: 'contoso' },
@@ -96,11 +99,11 @@ test('a spec without configuration fields validates, plans, applies and verifies
   assert.equal(C.usesConfiguration(spec), false);
   assert.deepEqual(C.validateConfiguration(spec), { errors: [], warnings: [] });
   const sdk = stubSdk();
-  const plan = await C.planConfiguration(spec, { sdk });
-  await C.planSolutionVersion(spec, { sdk }, plan);
+  const plan = await C.planConfiguration(spec, { fence: null, sdk });
+  await C.planSolutionVersion(spec, { fence: null, sdk }, plan);
   assert.deepEqual(plan, { operations: [], unknown: [] });
-  assert.deepEqual(await C.applyConfiguration(plan, { sdk }), { saved: [], unchanged: [], pendingPublish: [], refused: [], unknown: [], managedBindings: [] });
-  assert.deepEqual(await C.verifyConfiguration(spec, { sdk }), []);
+  assert.deepEqual(await C.applyConfiguration(plan, { fence: null, sdk }), { saved: [], unchanged: [], pendingPublish: [], refused: [], unknown: [], managedBindings: [] });
+  assert.deepEqual(await C.verifyConfiguration(spec, { fence: null, sdk }), []);
   assert.deepEqual(sdk.calls, []);
 });
 
@@ -295,21 +298,21 @@ test('an unchanged artifact is read, never written; a plan never serializes a va
   const spec = base({ environmentVariables: [{ schemaName: 'contoso_S', type: 'string' }], connectionReferences: [{ logicalName: 'contoso_sp', connectorId: SP }] });
   const sdk = stubSdk({ remotes: { 'environmentVariable:contoso_s': evRemote({ currentValue: { id: 'v-1', value: 'same' } }), 'connectionReference:contoso_sp': crRemote({ connectionId: 'conn-1' }) } });
   const bindings = C.readDeploymentBindings({ EnvironmentVariables: [{ SchemaName: 'contoso_S', Value: 'same' }], ConnectionReferences: [{ LogicalName: 'contoso_sp', ConnectionId: 'conn-1' }] }, spec);
-  const plan = await C.planConfiguration(spec, { sdk, bindings });
+  const plan = await C.planConfiguration(spec, { fence: null, sdk, bindings });
   assert.deepEqual(plan.operations.map((op) => op.action), ['unchanged', 'unchanged']);
-  const result = await C.applyConfiguration(plan, { sdk, bindings });
+  const result = await C.applyConfiguration(plan, { fence: null, sdk, bindings });
   assert.deepEqual(result.unchanged, [{ kind: 'environmentVariable', key: 'contoso_S', id: 'ev-1' }, { kind: 'connectionReference', key: 'contoso_sp', id: 'cr-1' }]);
   assert.deepEqual(sdk.calls.map((c) => c[0]).filter((n) => !['findArtifact', 'fetchArtifact'].includes(n)), []);
 
   const changed = C.readDeploymentBindings({ EnvironmentVariables: [{ SchemaName: 'contoso_S', Value: 'new-secret-ish' }], ConnectionReferences: [{ LogicalName: 'contoso_sp', ConnectionId: 'conn-2' }] }, spec);
-  const plan2 = await C.planConfiguration(spec, { sdk, bindings: changed });
+  const plan2 = await C.planConfiguration(spec, { fence: null, sdk, bindings: changed });
   assert.deepEqual(plan2.operations.map((op) => [op.action, op.fields]), [['update', ['/currentValue']], ['update', ['/connectionId']]]);
   const text = JSON.stringify(plan2);
   assert.ok(!text.includes('new-secret-ish') && !text.includes('conn-2'), text);
-  const refused2 = await C.applyConfiguration(plan2, { sdk, bindings: changed });
+  const refused2 = await C.applyConfiguration(plan2, { fence: null, sdk, bindings: changed });
   assert.deepEqual(refused2.refused.map((r) => r.authorize), [['environmentVariableValue:contoso_s:value'], ['connectionReference:contoso_sp:connectionId']]);
   assert.ok(!sdk.calls.some((c) => c[0] === 'updateElement'));
-  const result2 = await C.applyConfiguration(plan2, { sdk, bindings: changed, authorizedDestructive: new Set(['environmentVariableValue:contoso_s:value', 'connectionReference:contoso_sp:connectionId']) });
+  const result2 = await C.applyConfiguration(plan2, { fence: null, sdk, bindings: changed, authorizedDestructive: new Set(['environmentVariableValue:contoso_s:value', 'connectionReference:contoso_sp:connectionId']) });
   assert.ok(!JSON.stringify(result2).includes('new-secret-ish'));
   // The value edit keeps the value row's id so the SDK patches it instead of adding a second row.
   assert.deepEqual(sdk.calls.find((c) => c[0] === 'updateElement' && c[3] === '/currentValue')[4], { id: 'v-1', value: 'new-secret-ish' });
@@ -318,8 +321,8 @@ test('an unchanged artifact is read, never written; a plan never serializes a va
 test('a variable type change and a reference connector change are refused before any write', async () => {
   const spec = base({ environmentVariables: [{ schemaName: 'contoso_S', type: 'json' }], connectionReferences: [{ logicalName: 'contoso_sp', connectorId: SP }] });
   const sdk = stubSdk({ remotes: { 'environmentVariable:contoso_s': evRemote(), 'connectionReference:contoso_sp': crRemote({ connectorId: '/providers/Microsoft.PowerApps/apis/shared_sql' }) } });
-  const plan = await C.planConfiguration(spec, { sdk });
-  const result = await C.applyConfiguration(plan, { sdk, creates: passPort() });
+  const plan = await C.planConfiguration(spec, { fence: null, sdk });
+  const result = await C.applyConfiguration(plan, { fence: null, sdk, creates: passPort() });
   assert.deepEqual(result.refused, [
     { kind: 'environmentVariable', key: 'contoso_S', id: 'ev-1', code: 'ENVIRONMENT_VARIABLE_TYPE_IMMUTABLE' },
     { kind: 'connectionReference', key: 'contoso_sp', id: 'cr-1', code: 'CONNECTION_REFERENCE_CONNECTOR_MISMATCH' },
@@ -334,9 +337,9 @@ test('variables are planned parent first, and a new child is created with its ne
   ] });
   const sdk = stubSdk();
   const creates = passPort();
-  const plan = await C.planConfiguration(spec, { sdk });
+  const plan = await C.planConfiguration(spec, { fence: null, sdk });
   assert.deepEqual(plan.operations.map((op) => [op.key, op.action]), [['contoso_Site', 'create'], ['contoso_List', 'create']]);
-  const result = await C.applyConfiguration(plan, { sdk, creates });
+  const result = await C.applyConfiguration(plan, { fence: null, sdk, creates });
   const [site, list] = result.saved;
   assert.equal(site.key, 'contoso_Site');
   const childArtifact = sdk.calls.find((c) => c[0] === 'createArtifact' && c[2].schemaName === 'contoso_List')[2];
@@ -351,19 +354,19 @@ test('managed identity: a bound id is fetched directly; a name match needs the a
   const spec = base({ connectionReferences: [{ logicalName: 'contoso_sp', connectorId: SP, description: 'SharePoint' }] });
   const sdk = stubSdk({ remotes: { 'connectionReference:contoso_sp': crRemote() } });
   const bound = { lookup: async () => ({ id: 'cr-1' }) };
-  const p1 = await C.planConfiguration(spec, { sdk, managed: bound });
+  const p1 = await C.planConfiguration(spec, { fence: null, sdk, managed: bound });
   assert.equal(p1.operations[0].origin, 'managed');
   assert.ok(!sdk.calls.some((c) => c[0] === 'findArtifact'));
 
   const refusing = { lookup: async () => null, planAdoption: async () => ({ allowed: false, code: 'ADOPTION_NOT_OWNED' }) };
-  const p2 = await C.planConfiguration(spec, { sdk, managed: refusing });
+  const p2 = await C.planConfiguration(spec, { fence: null, sdk, managed: refusing });
   assert.deepEqual([p2.operations[0].action, p2.operations[0].code, p2.operations[0].origin], ['refuse', 'ADOPTION_NOT_OWNED', 'adopted']);
   const silent = { lookup: async () => null, planAdoption: async () => undefined };
-  assert.equal((await C.planConfiguration(spec, { sdk, managed: silent })).operations[0].code, 'ADOPTION_REFUSED');
+  assert.equal((await C.planConfiguration(spec, { fence: null, sdk, managed: silent })).operations[0].code, 'ADOPTION_REFUSED');
 
   const allowing = { lookup: async () => ({ id: 'deleted-elsewhere' }), planAdoption: async () => ({ allowed: true }) };
-  const p3 = await C.planConfiguration(spec, { sdk, managed: allowing });
-  const result = await C.applyConfiguration(p3, { sdk, managed: allowing });
+  const p3 = await C.planConfiguration(spec, { fence: null, sdk, managed: allowing });
+  const result = await C.applyConfiguration(p3, { fence: null, sdk, managed: allowing });
   assert.deepEqual(result.saved, [{ kind: 'connectionReference', key: 'contoso_sp', id: 'cr-1', action: 'update', fields: ['/description'] }]);
   assert.deepEqual(result.managedBindings, [{ kind: 'connectionReference', key: 'contoso_sp', id: 'cr-1', origin: 'adopted' }]);
 });
@@ -371,9 +374,9 @@ test('managed identity: a bound id is fetched directly; a name match needs the a
 test('a failed read is unknown in the plan and in the result, and nothing is written', async () => {
   const spec = base({ connectionReferences: [{ logicalName: 'contoso_sp', connectorId: SP }] });
   const sdk = stubSdk({ fail: { findArtifact: Object.assign(new Error('socket hang up at https://contoso.crm.dynamics.com'), { code: 'CONNECTION_ERROR' }) } });
-  const plan = await C.planConfiguration(spec, { sdk });
+  const plan = await C.planConfiguration(spec, { fence: null, sdk });
   assert.deepEqual(plan, { operations: [], unknown: [{ kind: 'connectionReference', key: 'contoso_sp', code: 'CONNECTION_ERROR' }] });
-  const result = await C.applyConfiguration(plan, { sdk, creates: passPort() });
+  const result = await C.applyConfiguration(plan, { fence: null, sdk, creates: passPort() });
   assert.deepEqual(result.unknown, [{ kind: 'connectionReference', key: 'contoso_sp', code: 'CONNECTION_ERROR' }]);
   assert.ok(!JSON.stringify(result).includes('contoso.crm'));
 });
@@ -390,24 +393,24 @@ const apiRemote = (extra = {}) => ({
 test('custom API: immutable fields refuse, a removed parameter is destructive and needs authorization', async () => {
   const declared = (extra = {}) => base({ customApis: [{ uniqueName: 'contoso_Calc', requestParameters: [{ uniqueName: 'A', type: 'integer' }, { uniqueName: 'B', type: 'integer' }], ...extra }] });
   const sdk = stubSdk({ remotes: { 'customApi:contoso_calc': apiRemote() } });
-  assert.equal((await C.planConfiguration(declared({ isFunction: true, responseProperties: [{ uniqueName: 'R', type: 'string' }] }), { sdk })).operations[0].code, 'CUSTOM_API_IMMUTABLE');
-  assert.equal((await C.planConfiguration(declared({ requestParameters: [{ uniqueName: 'A', type: 'string' }, { uniqueName: 'B', type: 'integer' }] }), { sdk })).operations[0].code, 'CUSTOM_API_PARAMETER_IMMUTABLE');
-  assert.equal((await C.planConfiguration(declared({ requestParameters: [{ uniqueName: 'A', type: 'integer', isOptional: true }, { uniqueName: 'B', type: 'integer' }] }), { sdk })).operations[0].code, 'CUSTOM_API_PARAMETER_IMMUTABLE');
+  assert.equal((await C.planConfiguration(declared({ isFunction: true, responseProperties: [{ uniqueName: 'R', type: 'string' }] }), { fence: null, sdk })).operations[0].code, 'CUSTOM_API_IMMUTABLE');
+  assert.equal((await C.planConfiguration(declared({ requestParameters: [{ uniqueName: 'A', type: 'string' }, { uniqueName: 'B', type: 'integer' }] }), { fence: null, sdk })).operations[0].code, 'CUSTOM_API_PARAMETER_IMMUTABLE');
+  assert.equal((await C.planConfiguration(declared({ requestParameters: [{ uniqueName: 'A', type: 'integer', isOptional: true }, { uniqueName: 'B', type: 'integer' }] }), { fence: null, sdk })).operations[0].code, 'CUSTOM_API_PARAMETER_IMMUTABLE');
   // Unauthored labels never turn into a write; the definition alone is not proof the API works.
-  const same = await C.planConfiguration(declared(), { sdk });
+  const same = await C.planConfiguration(declared(), { fence: null, sdk });
   assert.equal(same.operations[0].action, 'unchanged');
   assert.deepEqual(same.operations[0].preconditions, [{ kind: 'customApiImplementation', verified: false }]);
 
   const removing = declared({ requestParameters: [{ uniqueName: 'A', type: 'integer', displayName: 'Alpha' }, { uniqueName: 'C', type: 'string' }] });
-  const plan = await C.planConfiguration(removing, { sdk });
+  const plan = await C.planConfiguration(removing, { fence: null, sdk });
   assert.deepEqual([plan.operations[0].action, plan.operations[0].destructive, plan.operations[0].fields], ['update', true, ['/requestParameters']]);
   // A boolean, a list, a function, a parent token or another child's token authorizes nothing: only the exact Set entry does.
   for (const authorizedDestructive of [undefined, true, ['customApi:contoso_calc:request:b'], (op) => op.key === 'contoso_Calc', new Set(['customApi:contoso_calc']), new Set(['customApi:contoso_calc:request:a'])]) {
-    const refused = await C.applyConfiguration(plan, { sdk, authorizedDestructive });
+    const refused = await C.applyConfiguration(plan, { fence: null, sdk, authorizedDestructive });
     assert.deepEqual(refused.refused, [{ kind: 'customApi', key: 'contoso_Calc', id: 'api-1', code: 'DESTRUCTIVE_CHANGE_UNAUTHORIZED', authorize: ['customApi:contoso_calc:request:b'] }]);
     assert.ok(!sdk.calls.some((c) => c[0] === 'updateElement'));
   }
-  const result = await C.applyConfiguration(plan, { sdk, authorizedDestructive: new Set(['customApi:contoso_calc:request:b']), creates: passPort() });
+  const result = await C.applyConfiguration(plan, { fence: null, sdk, authorizedDestructive: new Set(['customApi:contoso_calc:request:b']), creates: passPort() });
   assert.equal(result.saved.length, 1);
   // The merged list keeps A's row id, drops B, and gives the new C the id its create-port record holds.
   const merged = sdk.calls.find((c) => c[0] === 'updateElement')[4];
@@ -424,12 +427,12 @@ test('creates go through the create port, with one id per child and a composite 
   const sdk = stubSdk();
   // Without a port of its own the build creates through the plain pass-through: ordinary creation is never disabled.
   const plain = stubSdk();
-  const unported = await C.applyConfiguration(await C.planConfiguration(spec, { sdk: plain }), { sdk: plain });
+  const unported = await C.applyConfiguration(await C.planConfiguration(spec, { fence: null, sdk: plain }), { fence: null, sdk: plain });
   assert.deepEqual([unported.refused, unported.unknown], [[], []]);
   assert.deepEqual(unported.saved.map((x) => [x.kind, x.action]), [['environmentVariable', 'create'], ['connectionReference', 'create'], ['customApi', 'create']]);
 
   const creates = passPort();
-  const result = await C.applyConfiguration(await C.planConfiguration(spec, { sdk }), { sdk, creates });
+  const result = await C.applyConfiguration(await C.planConfiguration(spec, { fence: null, sdk }), { fence: null, sdk, creates });
   // Keys are folded to lower case: Dataverse matches these names case-insensitively, the port does not.
   assert.deepEqual(creates.calls.map((c) => [c.kind, c.key, c.childKeys]), [
     ['environmentVariable', 'contoso_s', []], ['connectionReference', 'contoso_sp', []], ['customApi', 'contoso_calc', ['request:a', 'response:r']],
@@ -443,23 +446,23 @@ test('creates go through the create port, with one id per child and a composite 
   const http400 = answered(400, { sends: 1, earlierAmbiguous: false });
   const failing = stubSdk({ fail: { pushArtifact: http400 } });
   const withValue = C.readDeploymentBindings({ EnvironmentVariables: [{ SchemaName: 'contoso_S', Value: 'v' }] }, spec);
-  const r400 = await C.applyConfiguration(await C.planConfiguration(spec, { sdk: failing, bindings: withValue }), { sdk: failing, creates: passPort(), bindings: withValue });
+  const r400 = await C.applyConfiguration(await C.planConfiguration(spec, { fence: null, sdk: failing, bindings: withValue }), { fence: null, sdk: failing, creates: passPort(), bindings: withValue });
   assert.deepEqual(r400.unknown.map((u) => [u.kind, u.code, u.cause]), [['environmentVariable', 'create-outcome-unknown', 'CONNECTION_ERROR']]);
   // An unknown outcome stops the writes after it: what it left is not known.
   assert.deepEqual(r400.refused.map((r) => [r.kind, r.code]), [['connectionReference', 'CONFIGURATION_STOPPED_AFTER_UNKNOWN'], ['customApi', 'CONFIGURATION_STOPPED_AFTER_UNKNOWN']]);
   assert.deepEqual(r400.saved, []);
   const singles = base({ connectionReferences: spec.connectionReferences, customApis: spec.customApis });
-  const r400single = await C.applyConfiguration(await C.planConfiguration(singles, { sdk: failing }), { sdk: failing, creates: passPort() });
+  const r400single = await C.applyConfiguration(await C.planConfiguration(singles, { fence: null, sdk: failing }), { fence: null, sdk: failing, creates: passPort() });
   assert.deepEqual(r400single.refused.map((r) => [r.kind, r.code]), [['connectionReference', 'CONNECTION_ERROR'], ['customApi', 'CONNECTION_ERROR']]);
   assert.deepEqual(r400single.unknown, []);
 
   // The port refusing on its own (an earlier create with an unknown outcome) sends nothing.
   const fenced = { async run() { throw Object.assign(new Error('fenced'), { code: 'CREATE_OUTCOME_UNKNOWN' }); } };
-  const rf = await C.applyConfiguration(await C.planConfiguration(base({ connectionReferences: spec.connectionReferences }), { sdk }), { sdk, creates: fenced });
+  const rf = await C.applyConfiguration(await C.planConfiguration(base({ connectionReferences: spec.connectionReferences }), { fence: null, sdk }), { fence: null, sdk, creates: fenced });
   assert.deepEqual(rf.refused, [{ kind: 'connectionReference', key: 'contoso_sp', code: 'CREATE_OUTCOME_UNKNOWN' }]);
   // The port's own typed stops pass through by name; one raised before anything was sent sends nothing.
   const conflict = { async run() { throw Object.assign(new Error('conflict'), { code: 'create-identity-conflict' }); } };
-  const rc = await C.applyConfiguration(await C.planConfiguration(base({ connectionReferences: spec.connectionReferences }), { sdk }), { sdk, creates: conflict });
+  const rc = await C.applyConfiguration(await C.planConfiguration(base({ connectionReferences: spec.connectionReferences }), { fence: null, sdk }), { fence: null, sdk, creates: conflict });
   assert.deepEqual(rc.refused, [{ kind: 'connectionReference', key: 'contoso_sp', code: 'create-identity-conflict' }]);
 });
 
@@ -477,41 +480,41 @@ const COUNT = '/duplicaterules?$select=duplicateruleid&$filter=';
 
 test('duplicate rules: an unchanged rule costs no switch or slot reads; a name on another table is not this rule', async () => {
   const sdk = stubSdk({ remotes: { 'duplicateRule:same email': ruleRemote() } });
-  const plan = await C.planConfiguration(ruleSpec(), { sdk });
+  const plan = await C.planConfiguration(ruleSpec(), { fence: null, sdk });
   assert.equal(plan.operations[0].action, 'unchanged');
   assert.ok(!sdk.calls.some((c) => c[0] === 'get'));
   const other = stubSdk({ remotes: { 'duplicateRule:same email': ruleRemote({ entityLogicalName: 'account', matchingEntityLogicalName: 'account' }) } });
-  assert.equal((await C.planConfiguration(ruleSpec(), { sdk: other })).operations[0].code, 'DUPLICATE_RULE_NAME_CONFLICT');
+  assert.equal((await C.planConfiguration(ruleSpec(), { fence: null, sdk: other })).operations[0].code, 'DUPLICATE_RULE_NAME_CONFLICT');
   const cross = stubSdk({ remotes: { 'duplicateRule:same email': ruleRemote({ matchingEntityLogicalName: 'lead' }) } });
   // An omitted matchingEntity keeps the row's; an authored one that differs is an immutable change.
-  assert.equal((await C.planConfiguration(ruleSpec(), { sdk: cross })).operations[0].action, 'unchanged');
-  assert.equal((await C.planConfiguration(ruleSpec({ matchingEntity: 'contact' }), { sdk: cross })).operations[0].code, 'DUPLICATE_RULE_TABLE_IMMUTABLE');
+  assert.equal((await C.planConfiguration(ruleSpec(), { fence: null, sdk: cross })).operations[0].action, 'unchanged');
+  assert.equal((await C.planConfiguration(ruleSpec({ matchingEntity: 'contact' }), { fence: null, sdk: cross })).operations[0].code, 'DUPLICATE_RULE_TABLE_IMMUTABLE');
 });
 
 test('duplicate rules: the table switch is never turned on implicitly, and the five-rule limit is checked before writing', async () => {
   const off = { [FLAG]: { IsDuplicateDetectionEnabled: { Value: false } }, [COUNT]: { value: [] } };
   const sdk = stubSdk({ get: off });
-  const refused = await C.planConfiguration(ruleSpec({ description: 'x' }), { sdk });
+  const refused = await C.planConfiguration(ruleSpec({ description: 'x' }), { fence: null, sdk });
   assert.deepEqual([refused.operations[0].action, refused.operations[0].code], ['refuse', 'DUPLICATE_DETECTION_DISABLED']);
   assert.ok(sdk.calls.some((c) => c[0] === 'get' && c[1].includes(encodeURIComponent("baseentityname eq 'contact' and statecode eq 1"))));
 
   // The spec turns the switch on explicitly: the plan carries a precondition the apply checks again.
-  const declared = await C.planConfiguration(ruleSpec({}, [{ schemaName: 'contact', duplicateDetectionEnabled: true }]), { sdk });
+  const declared = await C.planConfiguration(ruleSpec({}, [{ schemaName: 'contact', duplicateDetectionEnabled: true }]), { fence: null, sdk });
   assert.deepEqual(declared.operations[0].preconditions, [{ kind: 'tableDuplicateDetection', table: 'contact' }]);
-  const still = await C.applyConfiguration(declared, { sdk, creates: passPort() });
+  const still = await C.applyConfiguration(declared, { fence: null, sdk, creates: passPort() });
   assert.deepEqual(still.refused, [{ kind: 'duplicateRule', key: 'email', code: 'DUPLICATE_DETECTION_DISABLED' }]);
   const on = stubSdk({ get: { [FLAG]: { IsDuplicateDetectionEnabled: { Value: true } } } });
-  const passed = await C.applyConfiguration(declared, { sdk: on, creates: passPort() });
+  const passed = await C.applyConfiguration(declared, { fence: null, sdk: on, creates: passPort() });
   assert.equal(passed.saved.length, 1);
 
   const five = { [FLAG]: { IsDuplicateDetectionEnabled: { Value: true } }, [COUNT]: { value: ['a', 'b', 'c', 'd', 'e'].map((x) => ({ duplicateruleid: x })) } };
-  const full = await C.planConfiguration(ruleSpec(), { sdk: stubSdk({ get: five }) });
+  const full = await C.planConfiguration(ruleSpec(), { fence: null, sdk: stubSdk({ get: five }) });
   assert.equal(full.operations[0].code, 'DUPLICATE_RULE_LIMIT');
   // A rule that is already one of the five published ones can still be edited.
   const mine = stubSdk({ remotes: { 'duplicateRule:same email': ruleRemote() }, get: { ...five, [COUNT]: { value: ['a', 'b', 'c', 'd', 'r-1'].map((x) => ({ duplicateruleid: x })) } } });
-  assert.equal((await C.planConfiguration(ruleSpec({ description: 'edited' }), { sdk: mine })).operations[0].action, 'update');
+  assert.equal((await C.planConfiguration(ruleSpec({ description: 'edited' }), { fence: null, sdk: mine })).operations[0].action, 'update');
 
-  const unreadable = await C.planConfiguration(ruleSpec(), { sdk: stubSdk({ get: { [FLAG]: { IsDuplicateDetectionEnabled: {} } } }) });
+  const unreadable = await C.planConfiguration(ruleSpec(), { fence: null, sdk: stubSdk({ get: { [FLAG]: { IsDuplicateDetectionEnabled: {} } } }) });
   assert.deepEqual(unreadable, { operations: [], unknown: [{ kind: 'duplicateRule', key: 'email', code: 'DUPLICATE_DETECTION_UNREADABLE' }] });
 });
 
@@ -520,11 +523,11 @@ test('duplicate rules: an edit keeps condition ids, and a rule saved but not pub
   const spec = ruleSpec({ conditions: [{ key: 'e', column: 'emailaddress1', match: 'exact', ignoreBlankValues: true }, { key: 'l', column: 'lastname', match: 'firstCharacters', characters: 3 }] });
   // Unbound, an authored ignoreBlankValues that differs does not describe the row: guessing it is the same criterion
   // could rewrite the wrong one, so the row is a removal (named by its id) and the declaration an addition.
-  const unbound = await C.planConfiguration(spec, { sdk });
+  const unbound = await C.planConfiguration(spec, { fence: null, sdk });
   assert.deepEqual(unbound.operations[0].authorize, ['duplicateRule:email:condition:c-1']);
   // A recorded binding pins the key to its row: the same declaration is an edit of that row, under the key's token.
   const managed = { lookup: async (kind, key) => (kind === 'duplicateRule' && key === 'email' ? { id: 'r-1', childIds: { e: 'c-1' } } : null) };
-  const plan = await C.planConfiguration(spec, { sdk, managed });
+  const plan = await C.planConfiguration(spec, { fence: null, sdk, managed });
   assert.deepEqual(plan.operations[0].fields, ['/conditions']);
   assert.deepEqual(plan.operations[0].authorize, ['duplicateRule:email:condition:e'], 'a changed criterion needs its own token');
   // The save lands and leaves the rule unpublished (Dataverse unpublishes a rule whose criteria change); the
@@ -536,7 +539,7 @@ test('duplicate rules: an edit keeps condition ids, and a rule saved but not pub
     sdk.calls.pop();
   };
   sdk.pushArtifact = async () => ({ publish: { kind: 'failed', error: { code: 'DUPLICATE_RULE_PUBLISH_FAILED' } } });
-  const result = await C.applyConfiguration(plan, { sdk, creates: passPort(), managed, authorizedDestructive: new Set(['duplicateRule:email:condition:e']) });
+  const result = await C.applyConfiguration(plan, { fence: null, sdk, creates: passPort(), managed, authorizedDestructive: new Set(['duplicateRule:email:condition:e']) });
   const merged = sdk.calls.find((c) => c[0] === 'updateElement')[4];
   // The kept condition keeps its row id; the new one gets the id its create-port record holds.
   assert.deepEqual(merged.map((c) => c.id), ['c-1', '00000000-0000-0000-0000-000000000001']);
@@ -547,20 +550,20 @@ test('duplicate rules: an edit keeps condition ids, and a rule saved but not pub
 test('solution version: equal is unchanged, different is one write, missing or managed is refused, omitted costs nothing', async () => {
   const spec = (version) => base({ solution: { uniqueName: 'ContosoSol', publisherPrefix: 'contoso', ...(version ? { version } : {}) } });
   const sdk = stubSdk({ solution: { solutionId: 'sol-1', version: '1.0.0.0', isManaged: false } });
-  assert.deepEqual(await C.planSolutionVersion(spec(), { sdk }), { operations: [], unknown: [] });
+  assert.deepEqual(await C.planSolutionVersion(spec(), { fence: null, sdk }), { operations: [], unknown: [] });
   assert.deepEqual(sdk.calls, []);
-  assert.equal((await C.planSolutionVersion(spec('1.0.0.0'), { sdk })).operations[0].action, 'unchanged');
-  const plan = await C.planSolutionVersion(spec('1.2.0.0'), { sdk });
-  const result = await C.applyConfiguration(plan, { sdk });
+  assert.equal((await C.planSolutionVersion(spec('1.0.0.0'), { fence: null, sdk })).operations[0].action, 'unchanged');
+  const plan = await C.planSolutionVersion(spec('1.2.0.0'), { fence: null, sdk });
+  const result = await C.applyConfiguration(plan, { fence: null, sdk });
   assert.deepEqual(result.saved, [{ kind: 'solutionVersion', key: 'ContosoSol', id: 'sol-1', action: 'update', fields: ['/version'] }]);
   assert.deepEqual(sdk.calls.filter((c) => c[0] === 'setSolutionVersion'), [['setSolutionVersion', 'sol-1', '1.2.0.0']]);
   const managed = stubSdk({ solution: { solutionId: 'sol-1', version: '1.0.0.0', isManaged: true } });
-  assert.equal((await C.planSolutionVersion(spec('1.2.0.0'), { sdk: managed })).operations[0].code, 'SOLUTION_MANAGED');
+  assert.equal((await C.planSolutionVersion(spec('1.2.0.0'), { fence: null, sdk: managed })).operations[0].code, 'SOLUTION_MANAGED');
   const absent = stubSdk({ fail: { getSolution: Object.assign(new Error("No solution found for 'ContosoSol'."), { code: 'INVALID_ARGUMENT' }) } });
-  assert.equal((await C.planSolutionVersion(spec('1.2.0.0'), { sdk: absent })).operations[0].code, 'SOLUTION_NOT_FOUND');
-  assert.deepEqual(await C.verifySolutionVersion(spec('1.2.0.0'), { sdk: absent }), [{ kind: 'solutionVersion', key: 'ContosoSol', name: 'version', ok: false, code: 'SOLUTION_NOT_FOUND' }]);
+  assert.equal((await C.planSolutionVersion(spec('1.2.0.0'), { fence: null, sdk: absent })).operations[0].code, 'SOLUTION_NOT_FOUND');
+  assert.deepEqual(await C.verifySolutionVersion(spec('1.2.0.0'), { fence: null, sdk: absent }), [{ kind: 'solutionVersion', key: 'ContosoSol', name: 'version', ok: false, code: 'SOLUTION_NOT_FOUND' }]);
   const down = stubSdk({ fail: { getSolution: Object.assign(new Error('x'), { code: 'CONNECTION_ERROR' }) } });
-  assert.deepEqual((await C.planSolutionVersion(spec('1.2.0.0'), { sdk: down })).unknown, [{ kind: 'solutionVersion', key: 'ContosoSol', code: 'CONNECTION_ERROR' }]);
+  assert.deepEqual((await C.planSolutionVersion(spec('1.2.0.0'), { fence: null, sdk: down })).unknown, [{ kind: 'solutionVersion', key: 'ContosoSol', code: 'CONNECTION_ERROR' }]);
 });
 
 test('verify reports drift by pointer, binding drift, a missing required value and an unproven Custom API, never a value', async () => {
@@ -576,7 +579,7 @@ test('verify reports drift by pointer, binding drift, a missing required value a
     'customApi:contoso_calc': apiRemote({ pluginTypeId: 'plugin-1' }),
   } });
   const bindings = C.readDeploymentBindings({ ConnectionReferences: [{ LogicalName: 'contoso_sp', ConnectionId: 'conn-new' }] }, spec);
-  const checks = await C.verifyConfiguration(spec, { sdk, bindings });
+  const checks = await C.verifyConfiguration(spec, { fence: null, sdk, bindings });
   assert.deepEqual(checks, [
     { kind: 'environmentVariable', key: 'contoso_S', name: 'definition', ok: false, code: 'DRIFT', fields: ['/description'] },
     { kind: 'environmentVariable', key: 'contoso_S', name: 'value', ok: false, code: 'ENVIRONMENT_VARIABLE_VALUE_MISSING' },
@@ -609,8 +612,8 @@ test('--authorize tokens of these kinds are normalized as a plan writes them; an
   ]);
   assert.deepEqual(answer.unclaimed, ['table:contoso_x:delete', 42]);
   // The ctx keeps only a Set: anything else authorizes nothing.
-  assert.equal(C.configurationContext({ sdk: {}, authorizedDestructive: true }).authorizedDestructive.size, 0);
-  assert.equal(C.configurationContext({ sdk: {}, authorizedDestructive: ['customApi:contoso_calc:request:b'] }).authorizedDestructive.size, 0);
+  assert.equal(C.configurationContext({ fence: null, sdk: {}, authorizedDestructive: true }).authorizedDestructive.size, 0);
+  assert.equal(C.configurationContext({ fence: null, sdk: {}, authorizedDestructive: ['customApi:contoso_calc:request:b'] }).authorizedDestructive.size, 0);
 });
 
 test('an intent is exactly one declaration, and its canonical JSON is stable, complete and refuses what JSON would change', () => {
