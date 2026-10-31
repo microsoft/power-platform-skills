@@ -1272,6 +1272,13 @@ Log the marker, the check result (`code`, `lines`, `deployedCopy`) and that `Cho
   not live yet (to review it, or to publish several edits at once). Tell them it is saved, not published: the app that runs is
   unchanged until a build, the app designer or the same command without `--draft` publishes it. On a removal, `liveState`
   says what the published navigation showed; only `shown` means the page cannot be deleted until the app is published.
+- **`--turn-id '<guid>' --app-dir '<folder>'`** on `genpage-upload.js`: do NOT pass it for an ordinary create or edit. It is
+  only for a host or script that retries one complete edit after losing its answer, and the id must be minted and kept BEFORE
+  the first send — never added after an answer was lost. Retry with the same files, flags, `--app-dir` and receipt; the record
+  is kept in `<folder>/.maker-workspace/turns`. A reuse asking for anything else is refused with nothing written
+  (`GENPAGE_TURN_ID_REUSED`); a changed edit needs a new id once the old one's outcome is known. `GENPAGE_APP_PUBLISH_UNPROVEN`
+  under a turn means the placement is not finished: run the same command again with the same turn id. Never delete the marker
+  or the turn record, or drop the turn id, to get past an error. A retry from another folder or machine is not supported.
 - **`pages-locked`** (exit 1, nothing written) from `add-to-app`, `remove-from-app` or `genpage-upload.js --app-id`: a build or
   another edit of the same app is running from that folder. Wait for it and run again; pass `--app-dir '<folder>'` when the
   command is not run from the app's build folder. The lock covers one machine and one folder only.
