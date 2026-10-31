@@ -150,7 +150,9 @@ async function createConnectionReference({ env, logicalName, connectorId, connec
     // --solution or, without it, to the Default Solution the create lands in, so a create whose answer was lost is found
     // again at its own id by the next run, never sent again under another. Without the shared modules it is the plain
     // pass-through (lib/creates-passthrough.js), where the logical name is the identity.
-    const ctx = configurationContext({ sdk, creates: deps.creates, fence: deps.fence, bindings, solutionUniqueName: solution, authorizedDestructive: authorized });
+    // This script keeps no record of the references it made, so its logical name stays the reference: one found by name
+    // at another id (made by hand, by an earlier version, or under another --solution) is reused, never refused.
+    const ctx = configurationContext({ sdk, creates: deps.creates, fence: deps.fence, bindings, solutionUniqueName: solution, authorizedDestructive: authorized, reuseNamesakes: true });
     const plan = await planConfiguration(spec, ctx);
     if (plan.unknown.length) return settle(plan, { saved: [], unchanged: [], refused: [], unknown: [] }, logicalName, seen);
     return settle(plan, await applyConfiguration(plan, ctx), logicalName, seen);

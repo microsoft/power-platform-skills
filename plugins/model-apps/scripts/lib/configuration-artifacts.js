@@ -720,7 +720,7 @@ async function locate(ctx, kind, key, identity) {
   }
   const id = await ctx.sdk.findArtifact(kind, identity);
   if (!id) return null;
-  if (creates && ref(id) !== ref(derived)) {
+  if (creates && ref(id) !== ref(derived) && ctx.reuseNamesakes !== true) {
     return { id, origin: 'foreign', refusal: 'create-identity-conflict' };
   }
   return adoptionOf(managed, kind, key, id, await ctx.sdk.fetchArtifact(kind, id, { overwrite: true }), 'existing');
@@ -2362,7 +2362,11 @@ function configurationPageBlockers(blocking, pages) {
 // was passed. `connections` is the optional inventory reader the readiness gate proves a binding against.
 // `fence` injects the shared stable-id functions (see loadStableCreates; null forces the pass-through), and
 // `boundIdOf(kind, portKey)` answers, synchronously, the id the managed-artifacts manifest records for an item.
-function configurationContext({ sdk, creates, managed, bindings, solutionUniqueName, authorizedDestructive, connections, fence, boundIdOf } = {}) {
+// `reuseNamesakes` is for a caller that keeps no record of the rows it made (create-connection-reference.js): there
+// the declared name IS the item, so a row found by name at another id than the planned one is reused, as it was
+// before ids were planned, instead of refused as another's (CONFIGURATION_IDENTITY_FOREIGN). The planned id still
+// makes that caller's own create safe to repeat. The build keeps a manifest and never sets it.
+function configurationContext({ sdk, creates, managed, bindings, solutionUniqueName, authorizedDestructive, connections, fence, boundIdOf, reuseNamesakes } = {}) {
   return {
     sdk,
     ...(creates ? { creates } : {}),
@@ -2372,6 +2376,7 @@ function configurationContext({ sdk, creates, managed, bindings, solutionUniqueN
     ...(typeof connections === 'function' ? { connections } : {}),
     ...(fence !== undefined ? { fence } : {}),
     ...(typeof boundIdOf === 'function' ? { boundIdOf } : {}),
+    ...(reuseNamesakes === true ? { reuseNamesakes: true } : {}),
     authorizedDestructive: authorizedDestructive instanceof Set ? new Set(authorizedDestructive) : new Set(),
   };
 }
@@ -2823,9 +2828,9 @@ const CONFIGURATION_CREATE_KINDS = Object.freeze(['environmentVariable', 'connec
 // created without a solution header lands in the environment's Default Solution, whose unique name is "Default": the
 // platform reserves it, so no maker solution has that name and the scope cannot collide with one. A run that names a
 // solution has that solution's scope, so the same reference made with and without --solution is two identities: the
-// second run finds the first one's row by name at another id and refuses it (CONFIGURATION_IDENTITY_FOREIGN), never
-// reusing or re-creating it.
-// See: https://learn.microsoft.com/en-us/power-apps/maker/data-platform/solutions-overview#default-solution
+// second run finds the first one's row by name at another id. The CLI, which keeps no record of its rows, reuses it
+// (configurationContext reuseNamesakes); a build would refuse it (CONFIGURATION_IDENTITY_FOREIGN). Neither re-creates it.
+// See: https://learn.microsoft.com/en-us/power-apps/maker/data-platform/solutions-overview#default-solutions
 const STANDALONE_SOLUTION = 'Default';
 
 // The shared stable-id functions this module builds its port from:

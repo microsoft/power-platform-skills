@@ -275,6 +275,32 @@ test('with the shared fence, the id depends on the solution the command names, a
   assert.notEqual(ids[0], ids[1]);
 });
 
+test('with the shared fence, a reference another tool made under its logical name is reused as before; another connector is still refused', async () => {
+  const org = createConfigOrg({ solution: { uniqueName: 'ContosoSol', version: '1.0.0.0', prefix: 'contoso' } });
+  // Made without the fence (a plain run, the maker portal, an earlier version): a fresh id, not the planned one.
+  const { createConnectionReference } = require('../create-connection-reference.js');
+  const { createAzHttpClient } = require('../lib/sdk-http-client.js');
+  const { configurationSendOnce } = require('../lib/configuration-transport.js');
+  const plainClient = createAzHttpClient(org.origin, { getToken: () => 'test-token-0123456789abcdef', request: org.request, sleep: async () => {}, sendOnce: configurationSendOnce });
+  const made = await createConnectionReference({ env: org.origin, logicalName: 'new_sp', connectorId: SP }, plainClient, { fence: null });
+  const existing = org.rows('connectionreferences')[0].connectionreferenceid;
+  assert.equal(made.connectionReferenceId, existing);
+  const run = fenceRun(org);
+  const again = await run({});
+  assert.equal(again.out instanceof Error, false, again.out && again.out.message);
+  assert.equal(again.out.connectionReferenceId, existing, 'the CLI keeps no record of its own rows: its logical name is the reference');
+  assert.deepEqual(again.writes, []);
+  // Under --solution, the reused row is added to it, as without the fence.
+  const added = await run({ solution: 'ContosoSol' });
+  assert.equal(added.out.connectionReferenceId, existing);
+  assert.deepEqual(added.writes, ['POST /AddSolutionComponent']);
+  // The connector is still compared: a namesake of another connector is refused, nothing written.
+  const other = await run({ connectorId: SQL });
+  assert.ok(other.out instanceof Error);
+  assert.match(other.out.message, /already exists for a different connector/);
+  assert.deepEqual(other.writes, []);
+});
+
 // --- The bytes a caller sees ------------------------------------------------------------------------------------------
 
 function spawnCli(scenario, ...argv) {
