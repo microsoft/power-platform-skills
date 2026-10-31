@@ -699,7 +699,8 @@ async function locate(ctx, kind, key, identity) {
   }
   // The stable path runs only for a kind the port protects: an unprotected kind keeps the plain name lookup, so
   // a port that protects some kinds (a stable-v1 spec that ships only some of them) never refuses the others.
-  const port = portOf(ctx);
+  // The caller's port, else the one this plan built (planDefaultPort): the default stable port resolves too.
+  const port = portOf(ctx) || ctx[DEFAULT_PORT] || null;
   const creates = port && typeof port.resolve === 'function' && (typeof port.protects !== 'function' || port.protects(kind)) ? port : null;
   let derived = null;
   if (creates) {
@@ -930,6 +931,7 @@ function bindingsOf(ctx) {
 
 async function planEnvironmentVariables(spec, ctx, plan) {
   plan = newPlan(plan);
+  planDefaultPort(spec, ctx);
   if (!Array.isArray(spec.environmentVariables) || !spec.environmentVariables.length) return plan;
   const parents = new Map();
   const kindPlan = variablePlan(bindingsOf(ctx), parents);
@@ -989,6 +991,7 @@ function referencePlan(bindings) {
 
 async function planConnectionReferences(spec, ctx, plan) {
   plan = newPlan(plan);
+  planDefaultPort(spec, ctx);
   if (!Array.isArray(spec.connectionReferences)) return plan;
   const kindPlan = referencePlan(bindingsOf(ctx));
   for (const entry of spec.connectionReferences) await planOne(ctx, kindPlan, entry, plan);
@@ -1129,6 +1132,7 @@ const customApiPlan = {
 
 async function planCustomApis(spec, ctx, plan) {
   plan = newPlan(plan);
+  planDefaultPort(spec, ctx);
   if (!Array.isArray(spec.customApis)) return plan;
   for (const entry of spec.customApis) {
     const op = await planOne(ctx, customApiPlan, entry, plan);
@@ -1328,6 +1332,7 @@ function refuseOp(op, code) {
 
 async function planDuplicateRules(spec, ctx, plan) {
   plan = newPlan(plan);
+  planDefaultPort(spec, ctx);
   if (!Array.isArray(spec.duplicateDetectionRules)) return plan;
   const ops = [];
   for (const entry of spec.duplicateDetectionRules) {
@@ -1764,10 +1769,17 @@ function settle(op, ctx, result, { id, back, action, fields, childIds, origin, u
 
 const INVENTORY = Symbol('configuration-artifacts.inventory');
 
-// The create port a caller without one gets: the plain pass-through (lib/creates-passthrough.js), so ordinary
-// creation always works. It allocates a fresh id per create; the stable-id port plugs in behind the same call.
+// The create port a caller without one gets. With the shared stable-id modules loaded (loadStableCreates, or the
+// `fence` a caller injects), the configuration kinds' own stable port, built when the configuration is planned
+// (configurationDefaultPort): the same declaration is the same id on every run, so a create whose answer was lost is
+// found again at its id instead of being sent again under another. Without them, the plain pass-through
+// (lib/creates-passthrough.js): it allocates a fresh id per create, and the name is the identity. Ordinary creation
+// always works either way.
 function defaultCreates(ctx) {
   if (!ctx[DEFAULT_PORT]) {
+    // A stable port is built from the spec's intents, so it exists only after a plan: an apply that reaches here
+    // with the shared modules loaded and no plan is refused rather than quietly sent under random ids.
+    if (fenceOf(ctx)) throw new TypeError('configuration: the create port is built when the configuration is planned (planConfiguration)');
     const { createPassthroughCreates } = require('./creates-passthrough.js');
     Object.defineProperty(ctx, DEFAULT_PORT, { value: createPassthroughCreates(), enumerable: false });
   }
@@ -2348,7 +2360,9 @@ function configurationPageBlockers(blocking, pages) {
 // The build's ctx for this helper, from what the build holds. Destructive authority is exactly the normalized
 // Set of tokens the maker passed (configurationAuthorizationKeys(...).keys): never "everything" because a flag
 // was passed. `connections` is the optional inventory reader the readiness gate proves a binding against.
-function configurationContext({ sdk, creates, managed, bindings, solutionUniqueName, authorizedDestructive, connections } = {}) {
+// `fence` injects the shared stable-id functions (see loadStableCreates; null forces the pass-through), and
+// `boundIdOf(kind, portKey)` answers, synchronously, the id the managed-artifacts manifest records for an item.
+function configurationContext({ sdk, creates, managed, bindings, solutionUniqueName, authorizedDestructive, connections, fence, boundIdOf } = {}) {
   return {
     sdk,
     ...(creates ? { creates } : {}),
@@ -2356,6 +2370,8 @@ function configurationContext({ sdk, creates, managed, bindings, solutionUniqueN
     ...(bindings ? { bindings } : {}),
     ...(solutionUniqueName ? { solutionUniqueName } : {}),
     ...(typeof connections === 'function' ? { connections } : {}),
+    ...(fence !== undefined ? { fence } : {}),
+    ...(typeof boundIdOf === 'function' ? { boundIdOf } : {}),
     authorizedDestructive: authorizedDestructive instanceof Set ? new Set(authorizedDestructive) : new Set(),
   };
 }
@@ -2708,9 +2724,9 @@ function configurationTeardownNotes(spec) {
 }
 
 // ---- The stable-id create port (lib/creates-port.js), as this module needs it ----
-// The build owns the port; these two pure adapters are all it takes from here. Both are injected with the shared
-// functions (creates-capabilities.js intentFor, creates-read.js resolveProtectedTarget) so this module loads none of
-// them and a build without the stable port is byte-for-byte what it was.
+// Two pure adapters, each injected with the shared functions (creates-capabilities.js intentFor, creates-read.js
+// resolveProtectedTarget), so this module loads none of them itself; configurationStableCreates (below) composes
+// them into the configuration kinds' own port.
 //
 // The child slot of every intent is the string the helper sends as a childKey and as a later child's identity.slot:
 //   environmentVariable 'contoso_apibase' -> 'value' (only when the deployment settings write a value with it)
@@ -2726,9 +2742,10 @@ const CHILD_KIND_OF_SLOT = Object.freeze({
 
 // One intent per declared artifact, under the port key the helper sends (portKeyOf). `boundIdOf(kind, portKey)` answers
 // the id a recorded binding holds (or undefined): a bound artifact keeps that id, and its children derive from it.
-function configurationCreateIntents(spec, { intentFor, bindings, boundIdOf } = {}) {
+// `solution` is the scope's solution when the caller names one (configurationStableCreates); else the spec's.
+function configurationCreateIntents(spec, { intentFor, bindings, boundIdOf, solution: scopeSolution } = {}) {
   if (typeof intentFor !== 'function') throw new TypeError('configurationCreateIntents: intentFor must be a function');
-  const solution = spec && spec.solution && spec.solution.uniqueName;
+  const solution = nonEmptyString(scopeSolution) ? scopeSolution : spec && spec.solution && spec.solution.uniqueName;
   if (!nonEmptyString(solution)) throw new TypeError('configurationCreateIntents: the spec names no solution');
   const scope = { kind: 'solution', solution };
   const intents = [];
@@ -2790,7 +2807,76 @@ function configurationCreates(port, { resolveProtectedTarget, provision, spec, b
   };
 }
 
+// ---- The configuration kinds' own stable port ----
+// The configuration step builds its own port rather than taking the build's: the build's catalog keys its kinds (views,
+// forms, charts, ...) like their call sites, and these kinds are keyed here (portKeyOf, the value slot that only the
+// deployment settings decide), so only this module can say what each create is. A build port that already protects
+// every configuration kind AND resolves (configurationAcceptsPort) is used as is; any other is set aside, never half
+// used, and this module builds its own from the same shared functions, so the ids are the same either way.
+//
+// Every configuration kind is protected as a NEW feature declaration (the shared port's `featureKinds`), with or
+// without the spec's `createIdentity` option: `shippedKinds` would leave them unprotected for a spec without the
+// option, and those specs are exactly the ones a standalone run or an existing App Spec carries.
+const CONFIGURATION_CREATE_KINDS = Object.freeze(['environmentVariable', 'connectionReference', 'customApi', 'duplicateRule']);
+
+// The scope of an item a run makes without naming a solution (the standalone CLI without --solution). A component
+// created without a solution header lands in the environment's Default Solution, whose unique name is "Default": the
+// platform reserves it, so no maker solution has that name and the scope cannot collide with one. A run that names a
+// solution has that solution's scope, so the same reference made with and without --solution is two identities: the
+// second run finds the first one's row by name at another id and refuses it (CONFIGURATION_IDENTITY_FOREIGN), never
+// reusing or re-creating it.
+// See: https://learn.microsoft.com/en-us/power-apps/maker/data-platform/solutions-overview#default-solution
+const STANDALONE_SOLUTION = 'Default';
+
+// The shared stable-id functions this module builds its port from:
+//   { createCreatesPortForSpec (lib/creates-port.js), intentFor (lib/creates-capabilities.js),
+//     resolveProtectedTarget (lib/creates-read.js) }
+// or null while those modules are not part of the plugin, which keeps every create on the plain pass-through. The
+// integration that adds them replaces this body with their three requires (the wiring contract's literal block).
+function loadStableCreates() {
+  return null;
+}
+
+// The shared functions for one context: the ones a caller injects (`ctx.fence`; null forces the pass-through), else
+// the plugin's own.
+const fenceOf = (ctx) => (ctx.fence !== undefined ? ctx.fence : loadStableCreates());
+
+// Whether a port the build hands over can stand in for this module's own: it protects every configuration kind and
+// reads an identity's own id before any name (`resolve`). The plain pass-through and a port of the build's own kinds
+// cannot.
+function configurationAcceptsPort(port) {
+  return !!(port && typeof port.run === 'function' && typeof port.resolve === 'function' && typeof port.protects === 'function'
+    && CONFIGURATION_CREATE_KINDS.every((kind) => port.protects(kind)));
+}
+
+// The stable port for one spec: an intent per declaration (configurationCreateIntents) in the scope of the spec's
+// solution, else the solution the run names, else the Default Solution; protected as featureKinds; wrapped with the
+// resolver (configurationCreates). A spec that declares nothing of these kinds gets the shared pass-through.
+function configurationStableCreates(spec, { fence, sdk, bindings, solutionUniqueName, boundIdOf } = {}) {
+  if (!fence || typeof fence.createCreatesPortForSpec !== 'function' || typeof fence.intentFor !== 'function' || typeof fence.resolveProtectedTarget !== 'function') {
+    throw new TypeError('configurationStableCreates: fence must hold createCreatesPortForSpec, intentFor and resolveProtectedTarget');
+  }
+  const own = spec && spec.solution && spec.solution.uniqueName;
+  const solution = nonEmptyString(own) ? own : nonEmptyString(solutionUniqueName) ? solutionUniqueName : STANDALONE_SOLUTION;
+  const intents = configurationCreateIntents(spec, { intentFor: fence.intentFor, bindings, boundIdOf, solution });
+  const port = fence.createCreatesPortForSpec(spec, { intents, featureKinds: [...CONFIGURATION_CREATE_KINDS] });
+  return configurationCreates(port, { resolveProtectedTarget: fence.resolveProtectedTarget, provision: sdk, spec, boundIdOf });
+}
+
+// Build this context's default port the first time a plan needs one (a caller's own port wins): the stable port when
+// the shared functions are there, else the plain pass-through.
+function planDefaultPort(spec, ctx) {
+  if (portOf(ctx) || ctx[DEFAULT_PORT]) return;
+  const fence = fenceOf(ctx);
+  if (!fence) { defaultCreates(ctx); return; }
+  const port = configurationStableCreates(spec || {}, { fence, sdk: ctx.sdk, bindings: bindingsOf(ctx), solutionUniqueName: ctx.solutionUniqueName, boundIdOf: ctx.boundIdOf });
+  Object.defineProperty(ctx, DEFAULT_PORT, { value: port, enumerable: false });
+}
+
 module.exports = {
+  CONFIGURATION_CREATE_KINDS,
+  configurationAcceptsPort,
+  configurationStableCreates,
   configurationCreateIntents,
   configurationCreates,
   configurationTeardownNotes,

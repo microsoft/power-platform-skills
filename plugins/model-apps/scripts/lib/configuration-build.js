@@ -59,7 +59,7 @@ function namedByPages(pages) {
  * @param {object} parts.spec           the App Spec (normalized, validated)
  * @param {object} parts.sdk            the build's solution-scoped maker SDK (header-ful, workspace initialised)
  * @param {object} [parts.provision]    the header-less client; reads only (unused for writes: the creates must join the solution)
- * @param {object} parts.opts           the build's opts: creates, managed, configurationBindings, authorizedDestructive (Set), connections
+ * @param {object} parts.opts           the build's opts: creates, managed, managedIdOf, configurationBindings, authorizedDestructive (Set), connections
  * @param {string} parts.appUniqueName  the app's unique name (sdk-build appUniqueName(spec)), for the management records
  */
 function createConfigurationRuntime({ spec, sdk, provision, opts = {}, appUniqueName } = {}) {
@@ -67,14 +67,19 @@ function createConfigurationRuntime({ spec, sdk, provision, opts = {}, appUnique
   precomputeIntents(spec);
   const ctx = C.configurationContext({
     sdk,
-    // The build's create port when it has one; otherwise the helper uses the plain pass-through
-    // (lib/creates-passthrough.js). Ordinary creation never depends on a port being supplied.
-    creates: opts.creates,
+    // The build's create port only when it can stand in for the configuration kinds' own (it protects every one of
+    // them and resolves: C.configurationAcceptsPort). The build's port protects the kinds of its own catalog (views,
+    // forms, ...) or none (the plain pass-through), and half using it would send these creates under random ids;
+    // otherwise the helper builds its own stable port from the same shared functions, or, without them, the plain
+    // pass-through (lib/creates-passthrough.js). Ordinary creation never depends on a port being supplied.
+    creates: C.configurationAcceptsPort(opts.creates) ? opts.creates : undefined,
     managed: opts.managed,
     bindings: opts.configurationBindings,
     solutionUniqueName: spec.solution && spec.solution.uniqueName,
     authorizedDestructive: opts.authorizedDestructive,
     connections: opts.connections,
+    // The id the managed-artifacts manifest records for an item (synchronous), so a bound item keeps its id.
+    boundIdOf: opts.managedIdOf,
   });
   // What this run last observed of each item a page can name, `<kind>:<lower key>` -> blocker | null. Filled by
   // apply('data-model') from its own reads and by beforePages from fresh reads; an apply replaces what it covers.

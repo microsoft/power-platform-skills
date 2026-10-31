@@ -130,7 +130,9 @@ function settle(plan, result, logicalName, seen) {
  * Creates or keeps the connection reference through the SDK.
  * @param {object} request - { env, logicalName, connectorId, connectionId?, displayName?, solution?, authorized? (Set) }
  * @param {object} [httpClient] - the SDK's HttpClient; the az-token one for `env` when omitted (a test seam)
- * @param {object} [deps] - { creates }: the create port; the plain pass-through (lib/creates-passthrough.js) when omitted
+ * @param {object} [deps] - { creates, fence }: a create port of the caller's own; or the shared stable-id functions the helper
+ *   builds its own port from (configurationContext's fence). Omitted, the helper's default port: the stable one when the shared
+ *   modules are part of the plugin, else the plain pass-through (lib/creates-passthrough.js)
  * @returns {Promise<object|Error>} the success payload, or the Error to report
  */
 async function createConnectionReference({ env, logicalName, connectorId, connectionId, displayName, solution, authorized }, httpClient, deps = {}) {
@@ -144,9 +146,11 @@ async function createConnectionReference({ env, logicalName, connectorId, connec
     const sdk = make(solution ? { solutionUniqueName: solution } : {});
     // The SDK writes an artifact to its workspace before pushing it, so the throwaway workspace is initialised first.
     await sdk.initWorkspace();
-    // Without a create port the helper creates through the plain pass-through (lib/creates-passthrough.js): the logical
-    // name is the identity. A port with a resolver (`deps.creates`) makes the create's id stable across runs.
-    const ctx = configurationContext({ sdk, creates: deps.creates, bindings, solutionUniqueName: solution, authorizedDestructive: authorized });
+    // Without a port of the caller's own, the helper builds its default when it plans: the stable port, scoped to
+    // --solution or, without it, to the Default Solution the create lands in, so a create whose answer was lost is found
+    // again at its own id by the next run, never sent again under another. Without the shared modules it is the plain
+    // pass-through (lib/creates-passthrough.js), where the logical name is the identity.
+    const ctx = configurationContext({ sdk, creates: deps.creates, fence: deps.fence, bindings, solutionUniqueName: solution, authorizedDestructive: authorized });
     const plan = await planConfiguration(spec, ctx);
     if (plan.unknown.length) return settle(plan, { saved: [], unchanged: [], refused: [], unknown: [] }, logicalName, seen);
     return settle(plan, await applyConfiguration(plan, ctx), logicalName, seen);

@@ -208,6 +208,73 @@ test('a lookup stopped at an id it could not read names that id, and sends nothi
   assert.deepEqual(org.writes(mark), []);
 });
 
+// --- The stable port the CLI builds for itself from the shared fence -----------------------------------------------
+// `deps.fence` is the three shared functions (a double here, the real modules in the release); with it the CLI plans the
+// reference's id before it writes, so a rerun of the same command lands on the same row.
+function fenceRun(org) {
+  const { createConnectionReference } = require('../create-connection-reference.js');
+  const { createAzHttpClient } = require('../lib/sdk-http-client.js');
+  const { configurationSendOnce } = require('../lib/configuration-transport.js');
+  const { createFakeFence, readFromOrg } = require('./helpers/stable-create-port.js');
+  return async (args, request = org.request) => {
+    const client = createAzHttpClient(org.origin, { getToken: () => 'test-token-0123456789abcdef', request, sleep: async () => {}, sendOnce: configurationSendOnce });
+    const mark = org.requests.length;
+    const out = await createConnectionReference({ env: org.origin, logicalName: 'new_sp', connectorId: SP, ...args }, client, { fence: createFakeFence({ read: readFromOrg(org) }) });
+    return { out, requests: org.requests.slice(mark), writes: org.writes(mark) };
+  };
+}
+const postedId = (requests) => posts(requests).map((r) => r.body.connectionreferenceid);
+
+test('with the shared fence, a create the server never saved is sent again under the same planned id', async () => {
+  const org = createConfigOrg({ solution: { uniqueName: 'ContosoSol', version: '1.0.0.0', prefix: 'contoso' } });
+  const run = fenceRun(org);
+  // The first create is answered 503 and never reaches the org; its body is kept to compare the id it carried.
+  const refusedIds = [];
+  const refuse = (req) => {
+    if (String(req.method).toUpperCase() !== 'POST' || !/\/connectionreferences$/.test(new URL(req.url).pathname)) return org.request(req);
+    refusedIds.push(JSON.parse(String(req.body)).connectionreferenceid);
+    return { statusCode: 503, headers: { 'content-type': 'application/json' }, body: JSON.stringify({ error: { message: 'Service unavailable' } }) };
+  };
+  const first = await run({ solution: 'ContosoSol' }, refuse);
+  assert.ok(first.out instanceof Error);
+  assert.equal(org.rows('connectionreferences').length, 0);
+  const second = await run({ solution: 'ContosoSol' });
+  assert.equal(second.out instanceof Error, false, second.out && second.out.message);
+  const [a] = refusedIds;
+  assert.match(String(a), /^[0-9a-f-]{36}$/, 'the first create already carried its planned id');
+  assert.deepEqual(postedId(second.requests), [a], 'the rerun sends the same id, so it cannot make a second row');
+  assert.equal(org.rows('connectionreferences')[0].connectionreferenceid, a);
+});
+
+test('with the shared fence, a create saved but answered lost is found at its id on the rerun: nothing is sent', async () => {
+  const org = createConfigOrg({ solution: { uniqueName: 'ContosoSol', version: '1.0.0.0', prefix: 'contoso' } });
+  const run = fenceRun(org);
+  const lose = async (req) => {
+    const answer = await org.request(req);
+    return String(req.method).toUpperCase() === 'POST' && /\/connectionreferences$/.test(new URL(req.url).pathname) ? { statusCode: 504, headers: {}, body: '' } : answer;
+  };
+  await run({ solution: 'ContosoSol' }, lose);
+  const [row] = org.rows('connectionreferences');
+  assert.ok(row, 'the server kept the first create');
+  const again = await run({ solution: 'ContosoSol' });
+  assert.equal(again.out instanceof Error, false, again.out && again.out.message);
+  assert.deepEqual(again.writes, []);
+  assert.equal(org.rows('connectionreferences').length, 1);
+  assert.equal(again.out.connectionReferenceId, row.connectionreferenceid);
+});
+
+test('with the shared fence, the id depends on the solution the command names, and a run without one still plans its id', async () => {
+  const ids = [];
+  for (const solution of ['ContosoSol', undefined]) {
+    const org = createConfigOrg({ solution: { uniqueName: 'ContosoSol', version: '1.0.0.0', prefix: 'contoso' } });
+    const { out, requests } = await fenceRun(org)(solution ? { solution } : {});
+    assert.equal(out instanceof Error, false, out && out.message);
+    ids.push(postedId(requests)[0]);
+  }
+  assert.ok(ids.every((id) => /^[0-9a-f-]{36}$/.test(String(id))), JSON.stringify(ids));
+  assert.notEqual(ids[0], ids[1]);
+});
+
 // --- The bytes a caller sees ------------------------------------------------------------------------------------------
 
 function spawnCli(scenario, ...argv) {

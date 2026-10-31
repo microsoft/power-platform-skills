@@ -782,3 +782,35 @@ test('the stable create port asks a rule at its id for the matching table only w
   await C.configurationCreates(stable, { resolveProtectedTarget, spec: base({ duplicateDetectionRules: [rule({ matchingEntity: 'account' })] }) }).resolve({ kind: 'duplicateRule', key: 'Email' });
   assert.deepEqual(asked, [{ baseEntity: 'contact' }, { baseEntity: 'contact', matchingEntity: 'account' }]);
 });
+
+test('the configuration kinds\' own stable port: every kind protected as a feature declaration, scoped to the spec\'s solution, the named one, or the Default Solution', async () => {
+  const { createFakeFence } = require('./helpers/stable-create-port.js');
+  const fence = createFakeFence();
+  const sdk = { marker: 'sdk' };
+  const ref = { logicalName: 'contoso_SP', connectorId: SP };
+  const scopeOf = () => fence.calls[fence.calls.length - 1].intents.map((i) => i.scope);
+  const port = C.configurationStableCreates(base({ connectionReferences: [ref], environmentVariables: [{ schemaName: 'contoso_Mode', type: 'string' }] }), { fence, sdk });
+  // featureKinds, never shippedKinds: a spec without createIdentity (every standalone run) is protected all the same.
+  assert.deepEqual(fence.calls[0].featureKinds, ['environmentVariable', 'connectionReference', 'customApi', 'duplicateRule']);
+  assert.deepEqual(fence.calls[0].shippedKinds, []);
+  assert.deepEqual(scopeOf(), [{ kind: 'solution', solution: 'ContosoSol' }, { kind: 'solution', solution: 'ContosoSol' }]);
+  assert.equal(port.mode, 'stable');
+  assert.equal(typeof port.resolve, 'function', 'it reads the planned id before any name');
+  assert.equal(C.configurationAcceptsPort(port), false, 'a port of two kinds cannot stand in for every configuration kind');
+  // The spec names no solution: the one the run names, else the Default Solution a create without a header lands in.
+  const standalone = { connectionReferences: [ref] };
+  C.configurationStableCreates(standalone, { fence, sdk, solutionUniqueName: 'OtherSol' });
+  assert.deepEqual(scopeOf(), [{ kind: 'solution', solution: 'OtherSol' }]);
+  const plain = C.configurationStableCreates(standalone, { fence, sdk });
+  assert.deepEqual(scopeOf(), [{ kind: 'solution', solution: 'Default' }]);
+  assert.notEqual(plain.identityFor('connectionReference', 'contoso_sp').id, port.identityFor('connectionReference', 'contoso_sp').id, 'another scope is another id');
+  // Nothing of these kinds declared: the shared pass-through, unchanged.
+  assert.equal(C.configurationStableCreates(base({}), { fence, sdk }).mode, 'passthrough');
+  assert.throws(() => C.configurationStableCreates(standalone, {}), /fence/);
+  // A build port that protects every configuration kind and resolves stands in; the pass-through does not.
+  const every = C.configurationStableCreates(base({ connectionReferences: [ref], environmentVariables: [{ schemaName: 'contoso_Mode', type: 'string' }],
+    customApis: [{ uniqueName: 'contoso_Calc' }], duplicateDetectionRules: [{ key: 'Email', name: 'Same email', entity: 'contact', conditions: [{ key: 'e', column: 'emailaddress1', match: 'exact' }] }] }), { fence, sdk });
+  assert.equal(C.configurationAcceptsPort(every), true);
+  assert.equal(C.configurationAcceptsPort({ run: async () => ({}), protects: () => true }), false, 'no resolve');
+  assert.equal(C.configurationAcceptsPort(null), false);
+});

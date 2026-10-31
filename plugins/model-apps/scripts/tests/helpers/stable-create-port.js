@@ -129,4 +129,37 @@ function createStableCreatePort({ seed = 'stable', read = null, answer = null, b
   };
 }
 
-module.exports = { createStableCreatePort, readFromOrg };
+// A double of the three shared functions the configuration helper builds its own stable port from (its `fence`:
+// lib/creates-port.js createCreatesPortForSpec, lib/creates-capabilities.js intentFor, lib/creates-read.js
+// resolveProtectedTarget), with the rules the helper relies on:
+//   - intentFor(kind, args) -> {kind, ...args} (the scope is kept, so a test can see it);
+//   - createCreatesPortForSpec(spec, {intents, shippedKinds, featureKinds}) protects the featureKinds that have an
+//     intent and only them (a spec without createIdentity protects no shippedKinds); none -> a pass-through port
+//     (mode 'passthrough', protects nothing). A protected root's id is derived from its kind, key AND the scope's
+//     solution, so one declaration under two scopes is two ids;
+//   - resolveProtectedTarget({kind, id}) reads that id through `read(kind, id)`: present or absent.
+// Test-only surface: `calls` (each createCreatesPortForSpec argument) and `port` (the last stable port built).
+function createFakeFence({ read = null } = {}) {
+  const fence = {
+    calls: [],
+    port: null,
+    intentFor: (kind, args) => ({ kind, ...args }),
+    createCreatesPortForSpec(spec, { intents = [], shippedKinds = [], featureKinds = [] } = {}) {
+      fence.calls.push({ intents, shippedKinds, featureKinds });
+      const kinds = featureKinds.filter((k) => intents.some((i) => i.kind === k));
+      if (!kinds.length) {
+        const { createPassthroughCreates } = require('../../lib/creates-passthrough.js');
+        return { ...createPassthroughCreates(), mode: 'passthrough', protects: () => false, identityFor: () => null };
+      }
+      const scopes = [...new Set(intents.map((i) => String(i.scope && i.scope.solution).toLowerCase()))].sort();
+      fence.port = createStableCreatePort({ seed: `fence|${scopes.join(',')}`, read, protectedKinds: kinds });
+      return fence.port;
+    },
+    async resolveProtectedTarget({ kind, id }) {
+      return read && (await read(kind, id)) ? { state: 'present', id } : { state: 'absent', id };
+    },
+  };
+  return fence;
+}
+
+module.exports = { createStableCreatePort, readFromOrg, createFakeFence };

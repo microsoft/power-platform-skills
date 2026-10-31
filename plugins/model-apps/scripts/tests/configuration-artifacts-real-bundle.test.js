@@ -976,6 +976,31 @@ test('build runtime: a child whose record failed is not certified by its root\'s
   assert.deepEqual(kept, []);
 });
 
+test('build runtime: the build\'s create port is used for configuration only when it protects every configuration kind and resolves', async () => {
+  const s = { minimumPluginVersion: '2.21.0', solution: { uniqueName: 'ContosoSol', publisherPrefix: 'contoso' }, environmentVariables: [{ schemaName: 'contoso_Mode', type: 'string' }] };
+  // A port of the build's own catalog (views, forms...) that protects none of these kinds: never handed a configuration write.
+  const h = await harness();
+  let ran = 0;
+  const foreign = { ...h.creates, protects: () => false, run: async (...a) => { ran += 1; return h.creates.run(...a); } };
+  const step = await createConfigurationRuntime({ spec: s, sdk: h.sdk, opts: { creates: foreign } }).apply('data-model');
+  assert.equal(step.halt, null, JSON.stringify(step.halt));
+  assert.equal(ran, 0, 'a port that protects none of these kinds is not this step\'s port');
+  assert.equal(h.org.rows('environmentvariabledefinitions').length, 1);
+  // One that protects some of them only is set aside too: a kind it leaves out would be created under a plain name.
+  const p = await harness();
+  let partial = 0;
+  const some = { ...p.creates, protects: (kind) => kind === 'environmentVariable', run: async (...a) => { partial += 1; return p.creates.run(...a); } };
+  await createConfigurationRuntime({ spec: s, sdk: p.sdk, opts: { creates: some } }).apply('data-model');
+  assert.equal(partial, 0);
+  // Every kind protected, with a resolver: it is this step's port, and the row is at its planned id.
+  const k = await harness();
+  let used = 0;
+  const full = { ...k.creates, run: async (...a) => { used += 1; return k.creates.run(...a); } };
+  await createConfigurationRuntime({ spec: s, sdk: k.sdk, opts: { creates: full } }).apply('data-model');
+  assert.equal(used, 1);
+  assert.equal(k.org.rows('environmentvariabledefinitions')[0].environmentvariabledefinitionid, k.creates.idOf('environmentVariable', 'contoso_mode'));
+});
+
 test('build runtime: two declarations of one item stop the build before anything is read or written', async () => {
   const h = await harness();
   const mark = h.org.requests.length;
