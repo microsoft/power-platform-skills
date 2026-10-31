@@ -55,6 +55,7 @@ const { AI_FEATURE_KEYS, AI_FEATURE_MAX_VALUE, AI_SETTING_CODEC } = require('./a
 const { normalizeChoiceOptions, isChoiceOptionObject, validateSchemaFeatures } = require('./schema-feature-contract.js');
 const { isDeclaredView, compileViewIntent } = require('./view-reconcile.js');
 const { isDeclaredChart, compileChartIntent } = require('./chart-reconcile.js');
+const { approvalKey } = require('./reconcile-common.js');
 const { validateManagedCommands } = require('./command-reconcile.js');
 const { validateQuickFindSpec } = require('./quick-find.js');
 const PRIVILEGE_SCOPES = new Set(['user', 'businessUnit', 'parentChild', 'organization']);
@@ -3284,6 +3285,25 @@ function validateAppSpec(spec, opts = {}) {
       warnings.push(`${vlabel}: viewId and linkEntities are read only on a view with reconcile: "declared"; this view ignores them`);
     }
   }
+  // Two declared views (or two declared charts) on one table whose reconcile keys are equal would share one approval. The key is
+  // `<table>/<name>` (lib/view-reconcile.js, lib/chart-reconcile.js), and `--authorize adopt:view:<key>` / `overwrite:view:<key>`
+  // (build-model-app.js authorizationKeys) names that key, not a row: one approval would adopt or replace the workspace copies of
+  // both, discarding each one's unsent edits. A view's viewId pin picks the row it reconciles but is not part of the key, so it
+  // cannot tell the two approvals apart. Refused here, before any build work: each declared artifact of a family needs its own name.
+  const sameKey = (family, list, isDeclared, compile, compilable) => {
+    const first = new Map();
+    (Array.isArray(list) ? list : []).forEach((item, i) => {
+      if (!isDeclared(item) || !compilable(item)) return;
+      const { intent } = compile(item);
+      if (!intent) return;
+      const label = `${family}s[${i}] '${item.name}'`;
+      const key = approvalKey(family, intent.key);
+      if (first.has(intent.key)) errors.push(`${first.get(intent.key)} and ${label} are declared ${family}s with the same key (${key}): one --authorize adopt:${key} or overwrite:${key} would approve both, so give each its own name on the table`);
+      else first.set(intent.key, label);
+    });
+  };
+  sameKey('view', spec.views, isDeclaredView, compileViewIntent, (v) => ['columns', 'sort', 'filters', 'linkEntities'].every((k) => v[k] === undefined || Array.isArray(v[k])));
+  sameKey('chart', spec.charts, isDeclaredChart, compileChartIntent, () => true);
   // Commands (modern command-bar buttons). A functional button needs a JS library + function;
   // the library must be a declared web resource (the on-click binds to it).
   const COMMAND_LOCATIONS = new Set(['MainTab', 'HomeTab', 'ContextualTab']);

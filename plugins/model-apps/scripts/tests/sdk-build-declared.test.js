@@ -512,6 +512,75 @@ test('a declared view and a declared chart with the same table and name: each ty
   assert.equal((await sdk.getArtifact('view', viewId)).description, 'Keep my view note');
 });
 
+// An approval names a family and a key, `<table>/<name>`, never a row. Two declared artifacts of one family with one key would share
+// one approval, so validation refuses them before any build work; a view's viewId pin picks a row but does not change its key.
+test('two declared views pinned to different rows cannot share a name: validation refuses them, so one approval never replaces both copies', async () => {
+  const env = newOrg();
+  const first = await build(env, makeSpec({ views: ['First', 'Second'].map((name) => declaredView({ name, columns: ['contoso_name'] })) }), { phases: ['views'] });
+  assert.equal(first.err, undefined, first.err && first.err.message);
+  const ids = ['First', 'Second'].map((name) => first.out.created.views[`contoso_item|${name}`]);
+  assert.notEqual(ids[0], ids[1]);
+  // Distinct saved views may share a display name; the spec pins their ids to tell them apart.
+  for (const id of ids) {
+    const renamed = await env.org.httpClient.patch(`${env.org.origin}/api/data/v9.2/savedqueries(${id})`, { name: 'Shared alias' });
+    assert.ok(renamed.status >= 200 && renamed.status < 300);
+  }
+  const sdk = createMakerSdk({ workspaceStorage: createNodeWorkspaceStorage(env.dir), instanceUrl: env.org.origin, httpClient: env.org.httpClient });
+  await sdk.initWorkspace();
+  for (const [i, id] of ids.entries()) {
+    await sdk.fetchArtifact('view', id);
+    await sdk.updateElement('view', id, '/description', `Unsent maker note ${i}`);
+  }
+  const spec = makeSpec({ minimumPluginVersion: '2.21.0', views: ids.map((viewId) => declaredView({ name: 'Shared alias', viewId, columns: ['contoso_name'] })) });
+  assert.deepEqual(validateAppSpec(spec).errors, [
+    "views[0] 'Shared alias' and views[1] 'Shared alias' are declared views with the same key (view:contoso_item/Shared alias): "
+      + 'one --authorize adopt:view:contoso_item/Shared alias or overwrite:view:contoso_item/Shared alias would approve both, so give each its own name on the table',
+  ]);
+  for (const [i, id] of ids.entries()) assert.equal((await sdk.getArtifact('view', id)).description, `Unsent maker note ${i}`);
+});
+
+test('one key per declared view and per declared chart: pinned or not, a repeated key is refused; other names, tables and families are not', () => {
+  const kind = { schemaName: 'contoso_kind', displayName: 'Kind', type: 'Choice', options: ['Low', 'High'] };
+  const entities = [table('contoso_item', { columns: [{ schemaName: 'contoso_code', displayName: 'Code', type: 'Text' }, kind] }), table('contoso_other')];
+  const errorsOf = (extra) => validateAppSpec(makeSpec({ minimumPluginVersion: '2.21.0', entities, ...extra })).errors;
+  assert.deepEqual(errorsOf({ views: [declaredView(), declaredView({ columns: ['contoso_name'] })] }), [
+    "views[0] 'Declared Items' and views[1] 'Declared Items' are declared views with the same key (view:contoso_item/Declared Items): "
+      + 'one --authorize adopt:view:contoso_item/Declared Items or overwrite:view:contoso_item/Declared Items would approve both, so give each its own name on the table',
+  ]);
+  // The table is matched in any case, as the reconcile keys it; a chart's name is trimmed, as the chart reconcile reads it.
+  assert.deepEqual(errorsOf({ charts: [declaredChart(), declaredChart({ entity: 'CONTOSO_ITEM', name: ' By Kind ', chartType: 'Bar' })] }), [
+    "charts[0] 'By Kind' and charts[1] ' By Kind ' are declared charts with the same key (chart:contoso_item/By Kind): "
+      + 'one --authorize adopt:chart:contoso_item/By Kind or overwrite:chart:contoso_item/By Kind would approve both, so give each its own name on the table',
+  ]);
+  // Unchanged: names of their own, the same name on two tables, a view and a chart sharing a name, and views without reconcile.
+  assert.deepEqual(errorsOf({ views: [declaredView({ name: 'First' }), declaredView({ name: 'Second' })] }), []);
+  assert.deepEqual(errorsOf({ views: [declaredView(), declaredView({ entity: 'contoso_other', columns: ['contoso_name'] })] }), []);
+  assert.deepEqual(errorsOf({ views: [declaredView({ name: 'By Kind' })], charts: [declaredChart()] }), []);
+  assert.deepEqual(errorsOf({ views: [declaredView(), { entity: 'contoso_item', name: 'Declared Items', columns: ['contoso_name'] }] }), []);
+  assert.deepEqual(errorsOf({ views: [{ entity: 'contoso_item', name: 'Twin', columns: ['contoso_name'] }, { entity: 'contoso_item', name: 'Twin', columns: ['contoso_code'] }] }), []);
+});
+
+test('two pinned views with names of their own: each overwrite approval replaces only its own local copy', async () => {
+  const env = newOrg();
+  const names = ['First', 'Second'];
+  const first = await build(env, makeSpec({ views: names.map((name) => declaredView({ name, columns: ['contoso_name'] })) }), { phases: ['views'] });
+  assert.equal(first.err, undefined, first.err && first.err.message);
+  const ids = names.map((name) => first.out.created.views[`contoso_item|${name}`]);
+  const sdk = createMakerSdk({ workspaceStorage: createNodeWorkspaceStorage(env.dir), instanceUrl: env.org.origin, httpClient: env.org.httpClient });
+  await sdk.initWorkspace();
+  for (const [i, id] of ids.entries()) {
+    await sdk.fetchArtifact('view', id);
+    await sdk.updateElement('view', id, '/description', `Unsent maker note ${i}`);
+  }
+  const spec = makeSpec({ minimumPluginVersion: '2.21.0', views: ids.map((viewId, i) => declaredView({ name: names[i], viewId, columns: ['contoso_name'] })) });
+  assert.deepEqual(validateAppSpec(spec).errors, []);
+  const resets = recordResets(sdk);
+  const r = await build(env, spec, { phases: ['views'], sdk, authorizedOverwrite: approvals(spec, 'overwrite:view:contoso_item/First').overwrite });
+  assert.equal(r.err && r.err.code, UNSENT, 'the second view stays refused');
+  assert.deepEqual(resets, [`view ${ids[0]}`]);
+  assert.equal((await sdk.getArtifact('view', ids[1])).description, 'Unsent maker note 1');
+});
+
 test('push preview: a declared view edit is not evaluated rather than previewed as unchanged; the apply writes it', async () => {
   const env = newOrg();
   const view = declaredView({ activeOnly: false });
