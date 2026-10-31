@@ -724,6 +724,15 @@ node "${PLUGIN_ROOT}/scripts/teardown-model-app.js" \
     again as it is, with a warning (it renders without the key today). Deleting a key keeps the page looking as it does;
     writing the longhands makes the style start to render. The same halt reports a `makeStyles` call the check cannot read
     for certain as that — not as CSS Griffel drops — and says what to change in the code.
+  - `pages-locked` — another build of this app, or a `genpage.js add-to-app` / `remove-from-app` / `genpage-upload.js --app-id`
+    edit run from this folder, holds the app's pages lease. Nothing was written: wait for it to finish and run again. It is a
+    single-machine lock in this folder's `.maker-workspace`, not a guard against an edit from another machine.
+  - `form-page-embeds-incomplete` — a page the spec embeds in a form (`forms[].genPages`) was not embedded. The message names
+    each key and why (`halt.notApplied`); tell the user both and never report the build as done. **In this release the CLI
+    build cannot embed a page in a form** (it has no record of the embeds it made, so it fails closed with
+    `managed-bindings-unavailable` after building everything else): when a user asks for a page on a form, say so and offer
+    the page in the app's navigation instead (`placement` left as `sitemap`). The same code at preflight means the run had the
+    forms phase but not the pages phase — run both.
 - **`--non-interactive`** — suppress interactive prompts (for automation / CI). A non-interactive
   build that encounters an existing app **fails** instead of warning-and-proceeding, unless
   `--allow-destructive` is also set. Does **not** grant destructive authority on its own — only

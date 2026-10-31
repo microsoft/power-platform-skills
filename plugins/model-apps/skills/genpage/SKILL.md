@@ -1259,6 +1259,23 @@ Log the marker, the check result (`code`, `lines`, `deployedCopy`) and that `Cho
 - **A create with `"outcome": "unknown"`** is an *uncertain* create: its message says to look for the page by its `pageId` before creating it again, and it is never run again until that is done — a second run mints a second page. List the environment's pages: `node "${PLUGIN_ROOT}/scripts/genpage.js" list --env '<org-url>'` prints every page of the environment, drafts included, as `{ "pageId", "name" }`, and a failed read (exit 1, `"ok": false`) is never "the page is not there". If it is there, add it to the app's navigation with `node "${PLUGIN_ROOT}/scripts/genpage.js" add-to-app --env '<org-url>' --app-id '<app-id>' --page-id '<page-id>'` (it publishes the app and proves the page shows in the published navigation), run `genpage-base.js record --app-id '<app-id>' --page-id '<page-id>' --file '<working-dir>/<file>.tsx'` (the file is what was uploaded), then run the update with `--page-id`. Or delete the page and re-run the create: `node "${PLUGIN_ROOT}/scripts/genpage.js" delete --env '<org-url>' --page-id '<page-id>'` first says what it would remove — the page, its file rows and its conversation messages — and deletes nothing; ask the user, and only if they agree run it again with `--allow-destructive`, which removes them for good — an unattended run stops at that refusal instead, since suppressing a prompt never authorizes a delete — and it is refused while an app's navigation names the page (the refusal names the apps; `genpage.js remove-from-app` takes the page out of each). If no page of yours appears after a few minutes, the create is re-run. An update of a page that is not in the app's navigation is refused, and a second create makes a duplicate — so neither is the way on while the page is unaccounted for. The first page of a new app has no app yet to be added to: once it is found, run `genpage-base.js record --page-id '<page-id>' --file '<working-dir>/<file>.tsx'` with no `--app-id` (no app holds the page yet, so the marker records the page alone, and the first update that names the new app records the app) and go on with step 2 of "A new app" below (`apps.js create --page-id`).
 - **A create that wrote the page but did not publish or place it** is not an unknown outcome: its result carries the `pageId`, and the way on is "A create that did not finish" above.
 
+#### Navigation drafts, the pages lease, and a compiler refresh
+
+- **`--draft`** on `genpage.js add-to-app` / `remove-from-app`: use it only when the user wants the navigation change saved but
+  not live yet (to review it, or to publish several edits at once). Tell them it is saved, not published: the app that runs is
+  unchanged until a build, the app designer or the same command without `--draft` publishes it. On a removal, `liveState`
+  says what the published navigation showed; only `shown` means the page cannot be deleted until the app is published.
+- **`pages-locked`** (exit 1, nothing written) from `add-to-app`, `remove-from-app` or `genpage-upload.js --app-id`: a build or
+  another edit of the same app is running from that folder. Wait for it and run again; pass `--app-dir '<folder>'` when the
+  command is not run from the app's build folder. The lock covers one machine and one folder only.
+- **Compiler refresh** — only when the user names a page whose loops over a Map, a Set or a string misbehave after an older
+  build. Download the page, then run `node "${PLUGIN_ROOT}/scripts/genpage.js" prepare-compiler-refresh --env '<org-url>'
+  --page-id '<page-id>' --file '<working-dir>/<file>.tsx' --output-file '<working-dir>/<file>.refresh.tsx'`. It writes nothing
+  to the environment; it adds one comment line so the SDK compiles the page again. Show the user the one-line `diff`, get
+  approval, then upload the proposed file as an ordinary update (above). Never refresh pages in bulk: nothing proves which
+  compiler built a page. `COMPILER_REFRESH_MARKER_UNPROVEN` means the source already has the line — make a reviewed source change
+  instead; `COMPILER_REFRESH_BASE_MISMATCH` means download the page and review again.
+
 #### A new app: the first page, then the app, then the rest
 
 Phase 3 created nothing, because the platform refuses an app whose navigation is empty and `apps.js create` takes the pages the app opens on. When the plan says `create new`, deploy in this order:

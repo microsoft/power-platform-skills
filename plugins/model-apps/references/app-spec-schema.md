@@ -1850,6 +1850,23 @@ custom control), but the spec validator emits a warning.
     applied it), writing the longhands makes the style start to render. A page that already exists and is sent again as recorded —
     or has no record in this workspace — is sent as it is and the build **warns** with the same detail instead: it ships nothing
     new. A call the check cannot read is reported as that (with what to change in the code), not as CSS Griffel drops.
+- **Generative pages on forms — `placement` and `forms[].genPages`.** A page that only makes sense next to one record (a case
+  summary on the Case form) can be embedded in a **Main** form instead of the navigation:
+  ```jsonc
+  "pages": [{ "key": "case-summary", "placement": "form", ... }],          // "sitemap" (the default) | "form"
+  "forms": [{ "entity": "incident", "name": "Case", "genPages": [
+    { "key": "summary", "page": "case-summary", "tab": "general", "section": "details",
+      "after": "title", "inputData": { "mode": "compact" } } ] }]
+  ```
+  Each entry: `key` (unique in the form), `page` (a declared page key, once per form), `tab` and `section` (both required; each
+  must name exactly one place on the form), optional `after` (a column logical name) and optional `inputData` (a JSON object
+  handed to the page). Any other key is an error. A `placement: "form"` page is exempt from the sitemap membership rule
+  above, but some form must embed it and the sitemap must not link it. The page is placed as a block (its row plus five
+  reserved empty rows), verified through the form that embeds it, and teardown refuses to delete a page a form still embeds.
+  **Limits in this release:** the CLI build cannot apply an embed yet — it builds everything else and then halts
+  `form-page-embeds-incomplete` (`managed-bindings-unavailable`), so put the page in the navigation instead; a run with the
+  forms phase but not the pages phase is refused at preflight; and a download does not read `genPages` or
+  `placement: "form"` back, so they must be re-authored.
 - **Offline evaluation.** The app-builder eval harness (`evals/model-apps/app-builder/`) grades
   page-stage structural facts from the spec offline (navigation graph resolution, intent-vs-tsx
   completeness). See [`evals/model-apps/app-builder/EVAL_GUIDE.md`](../../../evals/model-apps/app-builder/EVAL_GUIDE.md).
