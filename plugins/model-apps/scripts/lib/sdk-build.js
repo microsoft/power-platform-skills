@@ -3464,13 +3464,15 @@ async function runSdkBuildPhases(spec, opts, owed) {
   // The settlement reports a refusal as `${artifactLabel}: ${code} — ${message}`, and the declared view and chart call sites below
   // label their artifact `view <key>` / `chart <key>`. The remedy names the approval in general; the CLI flag that gives it is
   // named too, so the maker can act on the line as printed: --authorize adopt:/overwrite:<key> for an adoption or a drift
+  // (adopt:/overwrite:webresource:<name> for a declared web resource, labelled `web resource <name>`: its approvals are typed)
   // (build-model-app.js authorizationKeys), and --allow-destructive (featureCtx.authorizedDestructive) for a removal.
   const cliApproval = (label, code) => {
     if (/-(?:removal|empty)-not-authorized$/.test(code)) return '--allow-destructive';
     const verb = /-adoption-not-authorized$/.test(code) ? 'adopt' : /-drift$/.test(code) ? 'overwrite' : '';
     const at = verb ? label.indexOf(`: ${code} — `) : -1;
     const m = at > 0 ? /^(?:view|chart|web resource) (.+)$/.exec(label.slice(0, at)) : null;
-    return m ? `--authorize ${verb}:${m[1]}` : '';
+    if (!m) return '';
+    return /^web resource /.test(label) ? `--authorize ${verb}:webresource:${m[1]}` : `--authorize ${verb}:${m[1]}`;
   };
   const featureIncomplete = (phase, label, detail = {}) => {
     const flag = cliApproval(label, String(detail.code || ''));
@@ -4051,11 +4053,13 @@ async function runSdkBuildPhases(spec, opts, owed) {
   if (has('web-resources')) {
     for (const wr of spec.webResources || []) {
       if (isDeclaredWebResource(wr)) {
-        // `web resource <name>` is the label cliApproval reads to print the approval flag (--authorize adopt:<name>).
+        // `web resource <name>` is the label cliApproval reads to print the approval flag (--authorize adopt:webresource:<name>).
         const wrLabel = `web resource ${wr.name}`;
         await runner.run('web-resources', `${wrLabel} (${wr.type || 'js'}) (declared)`, async () => {
-          // The receipt store rides on a copy: featureCtx itself carries no `unconfirmed`.
-          const wrCtx = { ...featureCtx, unconfirmed: unconfirmedWebResources };
+          // The receipt store rides on a copy: featureCtx itself carries no `unconfirmed`. So do the web resource's own approvals
+          // (--authorize adopt:/overwrite:webresource:<name>), in place of the view and chart ones: a view keyed contoso_case/script
+          // and a web resource named contoso_case/script are different artifacts, and the approval of one must never write the other.
+          const wrCtx = { ...featureCtx, unconfirmed: unconfirmedWebResources, authorizedAdoption: opts.authorizedWebResourceAdoption, authorizedOverwrite: opts.authorizedWebResourceOverwrite };
           // webResourceOpts throws when the spec's content cannot be read (a contentPath that is not there); the helper
           // answers a null options as unknown 'web-resource-source-unreadable' and writes nothing.
           let options = null;

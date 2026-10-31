@@ -106,7 +106,8 @@ async function run({ webResources = declared(), exists = false, live = 'var a = 
   };
 }
 
-const approve = { authorizedAdoption: new Set([KEY]) };
+// The web resource's own approval (--authorize adopt:webresource:<name>), as build-model-app.js main() hands it to the engine.
+const approve = { authorizedWebResourceAdoption: new Set([KEY]) };
 
 // Every halt of a declared web resource that did not settle: the phase's BuildHalt, never retried, and its own first code.
 function assertNeverHalt(r, code) {
@@ -243,4 +244,108 @@ test('verify: a declared web resource whose deployed content differs says to bui
   const u = (await verifySpec({ webResources: [wr()] }, reader(rows))).checks.find((c) => c.kind === 'web-resource');
   assert.equal(u.present, false);
   assert.match(u.detail, /a rebuild does not write the content of a web resource that exists/);
+});
+// ---- the approvals, through the CLI and over the real vendored SDK
+
+// What build-model-app.js's main() hands the engine for these `--authorize` keys (authorizationKeys): a view's or chart's
+// approval and a web resource's are kept apart, so one family's flag can never write the other's artifact.
+function approvals(spec, ...keys) {
+  const { authorizationKeys } = require('../build-model-app.js');
+  const a = authorizationKeys(keys.flatMap((k) => ['--authorize', k]), spec);
+  assert.equal(a.error, null);
+  return {
+    ...(a.adopt.size ? { authorizedAdoption: a.adopt } : {}),
+    ...(a.overwrite.size ? { authorizedOverwrite: a.overwrite } : {}),
+    ...(a.webResourceAdopt && a.webResourceAdopt.size ? { authorizedWebResourceAdoption: a.webResourceAdopt } : {}),
+    ...(a.webResourceOverwrite && a.webResourceOverwrite.size ? { authorizedWebResourceOverwrite: a.webResourceOverwrite } : {}),
+  };
+}
+
+test('the CLI hands the engine a web resource\'s approvals in their own sets, never as a view\'s or chart\'s', async () => {
+  const { loadCli } = require('./helpers/cli-harness.js');
+  const scriptsDir = path.join(__dirname, '..');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wr-declared-cli-'));
+  dirs.push(dir);
+  const spec = JSON.parse(fs.readFileSync(path.join(scriptsDir, '..', 'samples', 'app-spec.support-desk.json'), 'utf8'));
+  spec.webResources = [{ name: 'new_/scripts/Case.js', type: 'js', content: 'var a = 1;', reconcile: 'declared' }];
+  fs.writeFileSync(path.join(dir, 'app-spec.json'), JSON.stringify(spec));
+  const engines = [];
+  const cli = loadCli(path.join(scriptsDir, 'build-model-app.js'), {
+    argv: ['--env', ENV, '--spec', `@${path.join(dir, 'app-spec.json')}`, '--no-live-plan', '--authorize', 'adopt:webresource:new_/scripts/case.js', '--authorize=overwrite:webresource:NEW_/scripts/Case.js'],
+    env: { PATH: path.dirname(process.execPath), POWER_PLATFORM_SKILLS_TELEMETRY_MODEL_APPS_OPTOUT: '1' },
+    requires: {
+      './lib/dataverse-auth.js': loadCli(path.join(scriptsDir, 'lib', 'dataverse-auth.js')).exports,
+      './lib/sdk-http-client.js': { createAzHttpClient: () => ({}), SQL_DEADLOCK_VICTIM: /Sql Number: 1205/ },
+      './lib/maker-sdk.js': { createNodeWorkspaceStorage: (d) => ({ dir: d }), createMakerSdk: () => ({ initWorkspace: async () => {} }) },
+      './lib/sdk-build.js': { ...require('../lib/sdk-build.js'), runSdkBuild: async (s, options) => { engines.push(options); return { ok: true, dryRun: true, planItems: [] }; } },
+    },
+  });
+  await assert.rejects(cli.main(), (err) => err && err.exitCode === 0);
+  assert.equal(engines.length, 1);
+  assert.deepEqual([...(engines[0].authorizedWebResourceAdoption || [])], ['new_/scripts/case.js']);
+  assert.deepEqual([...(engines[0].authorizedWebResourceOverwrite || [])], ['new_/scripts/case.js']);
+  assert.equal(engines[0].authorizedAdoption, undefined, 'no view or chart is approved');
+  assert.equal(engines[0].authorizedOverwrite, undefined);
+});
+
+// A declared view `script` of contoso_case and a declared web resource named contoso_case/script, built by the real vendored
+// SDK against the stateful fake environment (helpers/fake-app-build-org.js), so what is asserted is what reached the wire.
+function realBundle() {
+  const { createMakerSdk, createNodeWorkspaceStorage } = require('../vendor/cds-maker-sdk.cjs');
+  const { createFakeBuildOrg } = require('./helpers/fake-app-build-org.js');
+  const org = createFakeBuildOrg({ entities: { contoso_case: { attributes: { contoso_name: 'String', contoso_code: 'String' } } }, solution: { uniqueName: 'Contoso' } });
+  // The fake has no route for a web resource's dependents or for reading one row by id; add them (writes and publication stay the fake's).
+  org.intercept((c) => c.method === 'GET' && c.path.startsWith('/RetrieveDependentComponents'), () => ({ status: 200, body: { value: [] } }));
+  org.intercept((c) => c.method === 'GET' && /^\/webresourceset\([^)]+\)/.test(c.path), (c) => {
+    const row = org.resources.get(/^\/webresourceset\(([^)]+)\)/.exec(c.path)[1]);
+    if (!row) return { status: 404, body: { error: { code: '0x80040217' } } };
+    return { status: 200, body: { ...row, content: c.path.includes('RetrieveUnpublished') ? row.content : row.publishedContent } };
+  });
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wr-declared-real-'));
+  dirs.push(dir);
+  const spec = {
+    schemaVersion: 2, minimumPluginVersion: '2.21.0',
+    solution: { uniqueName: 'Contoso', publisherPrefix: 'contoso', displayName: 'Contoso' },
+    app: { name: 'Cases', uniqueName: 'contoso_cases' },
+    entities: [{ schemaName: 'contoso_case', existing: true, displayName: 'Case', primaryAttribute: { schemaName: 'contoso_name', displayName: 'Name' }, columns: [{ schemaName: 'contoso_code', displayName: 'Code', type: 'Text' }] }],
+    views: [{ entity: 'contoso_case', name: 'script', columns: ['contoso_name'], reconcile: 'declared' }],
+    webResources: [{ name: 'contoso_case/script', type: 'js', content: 'var initial = 1;', reconcile: 'declared' }],
+    appShell: { areas: [{ label: 'Main', groups: [{ label: 'Cases', subAreas: [{ entity: 'contoso_case', title: 'Cases' }] }] }] },
+  };
+  const build = async (s, opts = {}) => {
+    const sdk = createMakerSdk({ workspaceStorage: createNodeWorkspaceStorage(dir), instanceUrl: org.origin, httpClient: org.httpClient });
+    await sdk.initWorkspace();
+    const mark = org.calls.length;
+    let err;
+    try {
+      await runSdkBuild(s, { sdk, apply: true, publish: false, workspaceDir: dir, appDir: dir, env: org.origin, phases: ['web-resources', 'views'], warn: () => {}, ...opts });
+    } catch (e) { err = e; }
+    const patches = org.calls.slice(mark).filter((c) => c.method === 'PATCH');
+    return { err, wrPatches: patches.filter((c) => c.path.startsWith('/webresourceset(')), viewPatches: patches.filter((c) => c.path.startsWith('/savedqueries(')) };
+  };
+  return { spec, build };
+}
+
+test('real SDK: a view\'s approval never writes the web resource of the same name, and a web resource\'s never writes the view', async () => {
+  const { spec, build } = realBundle();
+  assert.equal((await build(spec)).err, undefined);
+  const changed = structuredClone(spec);
+  changed.views[0].columns.push('contoso_code');
+  changed.webResources[0].content = 'var changed = 1;';
+
+  const viewOnly = await build(changed, approvals(changed, 'adopt:contoso_case/script'));
+  assert.equal(viewOnly.err && viewOnly.err.code, 'web-resource-adoption-not-authorized', 'the web resource still waits for its own approval');
+  assert.ok(viewOnly.err.message.includes('--authorize adopt:webresource:contoso_case/script'), viewOnly.err.message);
+  assert.deepEqual([viewOnly.wrPatches.length, viewOnly.viewPatches.length], [0, 0]);
+
+  const wrOnly = await build(changed, approvals(changed, 'adopt:webresource:contoso_case/script'));
+  assert.equal(wrOnly.err && wrOnly.err.code, 'view-adoption-not-authorized', 'the view still waits for its own approval');
+  assert.ok(wrOnly.err.message.includes('--authorize adopt:contoso_case/script'), wrOnly.err.message);
+  assert.ok(!wrOnly.err.message.includes('adopt:webresource:'), wrOnly.err.message);
+  assert.deepEqual([wrOnly.wrPatches.length, wrOnly.viewPatches.length], [1, 0]);
+  assert.equal(Buffer.from(wrOnly.wrPatches[0].body.content, 'base64').toString('utf8'), 'var changed = 1;');
+
+  const both = await build(changed, approvals(changed, 'adopt:contoso_case/script', 'adopt:webresource:contoso_case/script'));
+  assert.equal(both.err, undefined, both.err && both.err.message);
+  assert.deepEqual([both.wrPatches.length, both.viewPatches.length], [0, 1], 'the web resource already holds the spec\'s content');
 });

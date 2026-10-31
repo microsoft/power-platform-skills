@@ -71,7 +71,7 @@ prod-ready** app; don't under-build (a bare table list) or over-build (surfaces 
   resource `reconcile: "declared"` instead (`minimumPluginVersion: "2.21.0"`) — only when asked, one
   resource at a time, never a shared (`external`) one, and never every resource of a downloaded or
   older spec. A rebuild that would change one that exists stops before writing and names its approval
-  (`--authorize adopt:<web resource name>`) with the components that depend on it: show them to the
+  (`--authorize adopt:webresource:<web resource name>`) with the components that depend on it: show them to the
   maker and let them choose.
 - **Form logic without code** — `businessRules[]`: show/hide, lock/unlock, set-required and
   set-value, driven by a condition on the record. **Reach for a business rule before form JS** when

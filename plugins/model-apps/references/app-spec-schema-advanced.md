@@ -50,9 +50,10 @@ Reference from a column via `"globalChoice": "new_priority"` (built before the c
   web resource's content in step with the spec: a rebuild compares the published content with the
   spec's and, when they differ, writes the spec's content to the same row, publishes it and reads it
   back. When the row already exists and its content differs, the build stops at it before writing and
-  names the approval `--authorize adopt:<web resource name>`, with the row's id and the components the
+  names the approval `--authorize adopt:webresource:<web resource name>`, with the row's id and the components the
   platform reports as depending on it (a script loaded by a computed or relative path is not listed);
-  run the build again with that key to write it. A row whose content already matches needs no
+  run the build again with that key to write it. The key is typed: a view's or chart's
+  `adopt:<table>/<name>` never approves a web resource, even one whose name is the same text. A row whose content already matches needs no
   approval. A declared web resource that is refused, whose write is not confirmed, or that cannot join
   the app's solution stops the build at once; it is not retried automatically. Not allowed with
   `external: true`. Verify fails a declared web resource whose deployed content differs and says to

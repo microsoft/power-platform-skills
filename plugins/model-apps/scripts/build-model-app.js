@@ -732,9 +732,13 @@ async function buildModelAppHeld(spec, opts, deps, v, buildLease) {
         allowDestructive: opts.allowDestructive, // pages phase gates destructive page removals
         // The `--authorize` keys: consent to exactly the destructive schema changes they name, and to nothing else (authorizationKeys).
         authorizedDestructive: opts.authorizedDestructive,
-        // The adopt:/overwrite: keys: approvals for exactly the declared views, charts and web resources they name (authorizationKeys).
+        // The adopt:/overwrite: keys: approvals for exactly the declared views and charts they name (authorizationKeys).
         ...(opts.authorizedAdoption ? { authorizedAdoption: opts.authorizedAdoption } : {}),
         ...(opts.authorizedOverwrite ? { authorizedOverwrite: opts.authorizedOverwrite } : {}),
+        // The adopt:webresource:/overwrite:webresource: keys: approvals for exactly the declared web resources they name, kept apart from
+        // the view and chart approvals above (authorizationKeys).
+        ...(opts.authorizedWebResourceAdoption ? { authorizedWebResourceAdoption: opts.authorizedWebResourceAdoption } : {}),
+        ...(opts.authorizedWebResourceOverwrite ? { authorizedWebResourceOverwrite: opts.authorizedWebResourceOverwrite } : {}),
         creates,
         changedOnly: opts.changedOnly, // #changed-only: pages-only fast-apply seams (resolvedAppId + skipSitemapFinalize)
         // AB#6726727: the spec last applied to, or downloaded from, this environment — lets the sitemap
@@ -1059,12 +1063,14 @@ const readLanguageFlag = (flags) => readAliasedFlag(flags, 'language-code', 'lan
 //                                       copy that differs from the server's (sdk-build.js, refuseUnsentCopy)
 //   overwrite:<table>/quickFind         replacing a local copy of a declared Quick Find view (entities[].quickFind) that
 //                                       differs from the server's
-// and to ONE approval a declared web resource (reconcile: "declared", lib/web-resource-reconcile.js) asks for, by its whole
-// name — which may hold '/', so it is matched before the <table>/<name> form:
-//   adopt:<web resource name>           writing the spec's content to an existing web resource the spec has not managed before
-//   overwrite:<web resource name>       replacing content changed on the server since the build last wrote it
+// and to ONE approval a declared web resource (reconcile: "declared", lib/web-resource-reconcile.js) asks for, by its whole name:
+//   adopt:webresource:<name>            writing the spec's content to an existing web resource the spec has not managed before
+//   overwrite:webresource:<name>        replacing content changed on the server since the build last wrote it
 // <table>/<name> is the artifact's key as its refusal prints it; the two approvals are separate Sets (opts.authorizedAdoption,
-// opts.authorizedOverwrite), so consent to one is never consent to the other or to a destructive schema change.
+// opts.authorizedOverwrite), so consent to one is never consent to the other or to a destructive schema change. A web resource's
+// approvals are typed and kept in Sets of their own (opts.authorizedWebResourceAdoption, opts.authorizedWebResourceOverwrite): its
+// name may hold '/', so `contoso_case/script` can be both a view's key and a web resource's name, and an untyped key must never
+// approve the other family's artifact.
 // It is deliberately not implied by --allow-destructive: that flag approves the form and sitemap removals the build lists, and a
 // consent to delete security or to convert stored dates must name the column it is for. The build's refusal of such a change names
 // the exact key, so the maker reads what will happen, then runs the build again with it. A key is refused unless the spec declares
@@ -1097,18 +1103,29 @@ function authorizationKeys(argv, spec) {
   for (const e of (spec && Array.isArray(spec.entities) ? spec.entities : [])) {
     if (e && e.quickFind && typeof e.schemaName === 'string') quickFindKeys.add(`${lower(e.schemaName)}/quickFind`);
   }
-  // A declared web resource's key is its name, lower-cased, as lib/web-resource-reconcile.js keys it.
-  const declaredWebResources = new Set();
+  // A declared web resource's key is its name, lower-cased, as lib/web-resource-reconcile.js keys it. Validation does not refuse two
+  // web resources whose names differ only in case, so each key counts the declared resources it would name.
+  const webResourceAdopt = new Set();
+  const webResourceOverwrite = new Set();
+  const declaredWebResources = new Map();
   for (const wr of (spec && Array.isArray(spec.webResources) ? spec.webResources : [])) {
-    if (isDeclaredWebResource(wr) && typeof wr.name === 'string') declaredWebResources.add(lower(wr.name));
+    if (isDeclaredWebResource(wr) && typeof wr.name === 'string') declaredWebResources.set(lower(wr.name), (declaredWebResources.get(lower(wr.name)) || 0) + 1);
   }
+  // An untyped key that spells a declared web resource's name is not that resource's approval. Its own branch below refuses it or
+  // keeps it for the view or chart it names; when it is refused, the refusal also says which typed key the maker meant.
+  const webResourceHints = [];
   for (const key of raw) {
-    // adopt:new_/scripts/case.js | overwrite:new_casebanner — a declared web resource, by its whole name (any case).
-    const resource = /^(adopt|overwrite):(.+)$/.exec(String(key));
-    if (resource && declaredWebResources.has(lower(resource[2]))) {
-      (resource[1] === 'adopt' ? adopt : overwrite).add(lower(resource[2]));
+    // adopt:webresource:new_/scripts/case.js | overwrite:webresource:new_casebanner — a declared web resource, by its whole name (any case).
+    const resource = /^(adopt|overwrite):webresource:(.+)$/.exec(String(key));
+    if (resource) {
+      const named = declaredWebResources.get(lower(resource[2])) || 0;
+      if (named === 1) (resource[1] === 'adopt' ? webResourceAdopt : webResourceOverwrite).add(lower(resource[2]));
+      else if (named > 1) problems.push(`'${key}' names ${named} declared web resources that differ only in case, so it cannot say which one it approves (rename one of them)`);
+      else problems.push(`'${key}' approves a web resource the spec does not declare with reconcile: "declared" (${lower(resource[2])})`);
       continue;
     }
+    const untyped = /^(adopt|overwrite):(.+)$/.exec(String(key));
+    if (untyped && declaredWebResources.has(lower(untyped[2]))) webResourceHints.push({ key: String(key), hint: `use ${untyped[1]}:webresource:${untyped[2]} for the declared web resource of that name` });
     // adopt:account/My Accounts | overwrite:new_ticket/Open Tickets — the name may hold spaces and '/', so only the first '/'
     // splits; the table is matched case-insensitively and the name exactly, as the reconcile keys them.
     const approval = /^(adopt|overwrite):([A-Za-z0-9_]+)\/(.+)$/.exec(String(key));
@@ -1119,7 +1136,7 @@ function authorizationKeys(argv, spec) {
         continue;
       }
       if (!declaredKeys.has(artifactKey)) {
-        problems.push(`'${key}' approves an artifact the spec does not declare (it would need a view or chart with reconcile: "declared" keyed ${artifactKey}, or for overwrite:<table>/quickFind a table that declares quickFind, or a web resource with reconcile: "declared" named ${approval[2]}/${approval[3]})`);
+        problems.push(`'${key}' approves an artifact the spec does not declare (it would need a view or chart with reconcile: "declared" keyed ${artifactKey}, or for overwrite:<table>/quickFind a table that declares quickFind)`);
         continue;
       }
       (approval[1] === 'adopt' ? adopt : overwrite).add(artifactKey);
@@ -1127,7 +1144,7 @@ function authorizationKeys(argv, spec) {
     }
     // dateTimeBehavior:new_ticket.new_due | isSecured:new_ticket.new_salary | tableFlags:new_ticket
     const m = /^(dateTimeBehavior|isSecured):([A-Za-z0-9_]+)\.([A-Za-z0-9_]+)$|^(tableFlags):([A-Za-z0-9_]+)$/.exec(String(key));
-    if (!m) { problems.push(`'${key}' is not dateTimeBehavior:<table>.<column>, isSecured:<table>.<column> or tableFlags:<table> (nor adopt:/overwrite: with a declared view's or chart's <table>/<name>, or a declared web resource's name)`); continue; }
+    if (!m) { problems.push(`'${key}' is not dateTimeBehavior:<table>.<column>, isSecured:<table>.<column> or tableFlags:<table> (nor adopt:<table>/<name>, overwrite:<table>/<name>, adopt:webresource:<name> or overwrite:webresource:<name>)`); continue; }
     const kind = m[1] || m[4];
     const table = lower(m[2] || m[5]);
     const entity = ((spec && spec.entities) || []).find((e) => lower(e && e.schemaName) === table);
@@ -1142,7 +1159,11 @@ function authorizationKeys(argv, spec) {
     }
     keys.add(kind === 'tableFlags' ? `tableFlags:${table}` : `${kind}:${table}.${lower(m[3])}`);
   }
-  return { keys, adopt, overwrite, error: problems.length ? `--authorize: ${problems.join('; ')}` : null };
+  for (const { key, hint } of webResourceHints) {
+    const i = problems.findIndex((p) => p.startsWith(`'${key}' `));
+    if (i >= 0) problems[i] += ` — ${hint}`;
+  }
+  return { keys, adopt, overwrite, webResourceAdopt, webResourceOverwrite, error: problems.length ? `--authorize: ${problems.join('; ')}` : null };
 }
 
 function parseLanguageCode(value) {
@@ -1334,6 +1355,8 @@ async function main() {
     // Spread in only when given, so a run without them hands the engine exactly the options it did before.
     ...(authorization.adopt.size ? { authorizedAdoption: authorization.adopt } : {}),
     ...(authorization.overwrite.size ? { authorizedOverwrite: authorization.overwrite } : {}),
+    ...(authorization.webResourceAdopt.size ? { authorizedWebResourceAdoption: authorization.webResourceAdopt } : {}),
+    ...(authorization.webResourceOverwrite.size ? { authorizedWebResourceOverwrite: authorization.webResourceOverwrite } : {}),
     nonInteractive: flags['non-interactive'] === true || envTruthy(process.env.POWER_PLATFORM_SKILLS_NONINTERACTIVE),
     languageCode,
     appDir: path.dirname(specPath),

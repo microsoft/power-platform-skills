@@ -1153,6 +1153,57 @@ test('--authorize overwrite:<table>/quickFind approves replacing the local copy 
   }
 });
 
+test('--authorize adopt:webresource:/overwrite:webresource: approve exactly the declared web resource they name, apart from views and charts', () => {
+  const { authorizationKeys } = require(path.join(__dirname, '..', 'build-model-app.js'));
+  const wrs = (r) => [[...(r.webResourceAdopt || [])], [...(r.webResourceOverwrite || [])]];
+  // A view keyed contoso_case/Script and a web resource named contoso_case/script: the same text, two different artifacts.
+  const spec = {
+    entities: [{ schemaName: 'contoso_case', columns: [] }],
+    views: [{ entity: 'contoso_case', name: 'Script', reconcile: 'declared', columns: ['contoso_name'] }],
+    webResources: [
+      { name: 'contoso_case/script', type: 'js', content: 'x', reconcile: 'declared' },
+      { name: 'contoso_/scripts/Form.js', type: 'js', content: 'x', reconcile: 'declared' },
+      { name: 'contoso_banner', type: 'html', content: 'x', reconcile: 'declared' },
+      { name: 'contoso_/Legacy.js', type: 'js', content: 'x' },
+      { name: 'contoso_/dup.js', type: 'js', content: 'x', reconcile: 'declared' },
+      { name: 'contoso_/DUP.js', type: 'js', content: 'x', reconcile: 'declared' },
+    ],
+  };
+  const ok = authorizationKeys(['--authorize', 'adopt:webresource:CONTOSO_/scripts/form.js', '--authorize=overwrite:webresource:contoso_banner', '--authorize', 'adopt:contoso_case/Script'], spec);
+  assert.strictEqual(ok.error, null);
+  assert.deepStrictEqual(wrs(ok), [['contoso_/scripts/form.js'], ['contoso_banner']], 'a web resource is named in any case and kept lower-cased');
+  assert.deepStrictEqual([...ok.adopt], ['contoso_case/Script'], 'the view key stays the view\'s, even though a web resource has that name in another case');
+  assert.strictEqual(ok.overwrite.size, 0);
+  const view = authorizationKeys(['--authorize', 'adopt:contoso_case/script'], spec);
+  assert.match(view.error, /approves an artifact the spec does not declare.*use adopt:webresource:contoso_case\/script for the declared web resource of that name/, 'an untyped key never approves a web resource');
+  assert.deepStrictEqual(wrs(view), [[], []]);
+  for (const [key, why] of [
+    ['overwrite:contoso_/scripts/Form.js', /use overwrite:webresource:contoso_\/scripts\/Form\.js for the declared web resource of that name/],
+    ['adopt:contoso_banner', /use adopt:webresource:contoso_banner for the declared web resource of that name/],
+    ['adopt:webresource:contoso_/Legacy.js', /approves a web resource the spec does not declare with reconcile: "declared" \(contoso_\/legacy\.js\)/],
+    ['adopt:webresource:contoso_/missing.js', /approves a web resource the spec does not declare/],
+    ['overwrite:webresource:contoso_/Dup.js', /names 2 declared web resources that differ only in case/],
+  ]) {
+    const r = authorizationKeys(['--authorize', key], spec);
+    assert.match(r.error, why, key);
+    assert.strictEqual(r.adopt.size + r.overwrite.size, 0, key);
+    assert.deepStrictEqual(wrs(r), [[], []], key);
+  }
+});
+
+test('--authorize: the web resource approvals reach the engine in their own sets, and a build without them hands it none', async () => {
+  const { sdk } = mockSdk();
+  const runOpts = [];
+  const adopt = new Set(['contoso_/scripts/form.js']);
+  const overwrite = new Set(['contoso_banner']);
+  await buildModelApp(desk, { apply: true, env: 'https://x', retryDelayMs: 0, authorizedWebResourceAdoption: adopt, authorizedWebResourceOverwrite: overwrite }, { sdk, provisionSdk: sdk, discoverOpDiffState: async () => quietState, runBuild: successfulRunBuild(runOpts) });
+  assert.strictEqual(runOpts[0].authorizedWebResourceAdoption, adopt);
+  assert.strictEqual(runOpts[0].authorizedWebResourceOverwrite, overwrite);
+  assert.strictEqual(runOpts[0].authorizedAdoption, undefined);
+  await buildModelApp(desk, { apply: true, env: 'https://x', retryDelayMs: 0 }, { sdk, provisionSdk: sdk, discoverOpDiffState: async () => quietState, runBuild: successfulRunBuild(runOpts) });
+  assert.ok(!('authorizedWebResourceAdoption' in runOpts[1]) && !('authorizedWebResourceOverwrite' in runOpts[1]));
+});
+
 test('--authorize: a key the spec does not declare is refused before anything runs', async () => {
   const { loadCli } = require('./helpers/cli-harness.js');
   const dir = fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'authorize-'));

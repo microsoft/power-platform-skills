@@ -669,7 +669,7 @@ when the maker wants a rebuild to keep one web resource's content in step with t
 resource at a time, at the maker's request, never an `external` one, and never every resource of a
 downloaded or older spec. A declared web resource sets `minimumPluginVersion` to `"2.21.0"` or newer
 (validation warns otherwise). When a rebuild would change one that already exists, the build stops
-before writing and names `--authorize adopt:<web resource name>` with the components that depend on
+before writing and names `--authorize adopt:webresource:<web resource name>` with the components that depend on
 it: show them and get a yes. Declared process flows, dashboards, business rules and form layouts are
 not reconciled in this release — never write `reconcile` on them; the build keeps its existing
 behaviour for each.
