@@ -25,7 +25,15 @@ async function withStandalonePagesLease(opts, fn) {
   if (!genpage || typeof genpage.appUniqueName !== 'function') {
     throw genpageError(`the page backend cannot name app ${appId}, so the lease that keeps a build from editing it at the same time cannot be taken — nothing was changed`, { code: GENPAGE_APP_LEASE_UNRESOLVED, outcome: 'nothing', appId });
   }
-  const unique = await genpage.appUniqueName(appId);
+  // A name that cannot be read — the service failed the read, or answered with no readable rows — is the same refusal as an app that is not there:
+  // nothing has been read for the edit or written yet, and the edit must not run unleased. The read's own failure is kept in the message and as `cause`.
+  let unique;
+  try {
+    unique = await genpage.appUniqueName(appId);
+  } catch (error) {
+    const why = String((error && error.message) || error);
+    throw genpageError(`the unique name of app ${appId} could not be read (${why}), so the lease that keeps a build from editing it at the same time cannot be taken — nothing was changed; run the command again once the app can be read`, { code: GENPAGE_APP_LEASE_UNRESOLVED, outcome: 'nothing', appId, cause: error, transient: !!(error && error.transient) });
+  }
   if (!unique) {
     throw genpageError(`app ${appId} was not found, so the lease that keeps a build from editing it at the same time cannot be taken — nothing was changed`, { code: GENPAGE_APP_LEASE_UNRESOLVED, outcome: 'nothing', appId });
   }

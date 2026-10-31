@@ -440,8 +440,12 @@ async function main(argv = process.argv.slice(2), deps = {}) {
   try {
     outcome = appId ? await withStandalonePagesLease({ genpage, appId, appDir: flags['app-dir'] || deps.appDir, warn }, run) : await run();
   } catch (e) {
-    if (!entered && e && (e.code === 'pages-locked' || e.code === 'GENPAGE_APP_LEASE_UNRESOLVED')) {
-      outcome = { ok: false, payload: { ok: false, appId, code: e.code, outcome: 'nothing', error: String(e.message || e) } };
+    // Before the deploy is entered nothing has been read for it or written: the lease was refused (`pages-locked`), or the app it is keyed by could not be
+    // named (GENPAGE_APP_LEASE_UNRESOLVED, which a failed read of that name is too). Any such failure is a refusal with one JSON result, never a throw with
+    // nothing on stdout. A failure inside the deploy keeps its own handling: it may have written, so it is never relabelled "nothing".
+    if (!entered && appId) {
+      const code = e && typeof e.code === 'string' && e.code ? e.code : 'GENPAGE_APP_LEASE_UNRESOLVED';
+      outcome = { ok: false, payload: { ok: false, appId, code, outcome: 'nothing', error: String((e && e.message) || e) } };
     } else {
       await reportUpload(report, flags, startedAt, { error: e });
       throw e;

@@ -26,8 +26,8 @@ const folders = [];
 test.after(() => { for (const folder of folders) fs.rmSync(folder, { recursive: true, force: true }); });
 const tmp = () => { const folder = fs.mkdtempSync(path.join(os.tmpdir(), 'gp-draft-lease-')); folders.push(folder); return folder; };
 
-// `wrap` sees the backend each run makes (to watch what a verb asks of it).
-async function inWorld(fn, { wrap = (backend) => backend } = {}) {
+// `wrap` sees the backend each run makes (to watch what a verb asks of it); `wrapHttp` the transport it is made over (to fail one read).
+async function inWorld(fn, { wrap = (backend) => backend, wrapHttp = (http) => http } = {}) {
   const server = new FakeGenPageServer();
   server.serveTable(ACCOUNT_TABLE);
   server.seedPage(APP_EXISTING_PAGE_ID, { name: 'Existing', config: { dataSources: ['account'], model: '' } });
@@ -38,8 +38,9 @@ async function inWorld(fn, { wrap = (backend) => backend } = {}) {
       forms: [{ id: FORM_KEPT, inApp: true }], views: [{ id: APP_VIEW_ID, inApp: true, isDefault: true }], charts: [] }],
   });
   const made = [];
+  const http = wrapHttp(world.http);
   const makeBackend = () => wrap(makeGenpageSdk(INSTANCE, {
-    httpClient: world.http,
+    httpClient: http,
     mkdtempSync: (prefix) => { const dir = fs.mkdtempSync(prefix); made.push(dir); return dir; },
   }));
   const appDir = tmp();
@@ -129,4 +130,83 @@ test('REAL BUNDLE: while a build of the same app holds its pages lease, add-to-a
     const after = await verbs(['add-to-app', '--env', INSTANCE, '--app-id', APP_ID, '--page-id', OTHER]);
     assert.strictEqual(after.ok, true, JSON.stringify(after));
   });
+});
+
+// The app's unique name names its lease, and is read before the edit (lib/standalone-page-lease.js). A read that fails — the service unavailable, or an answer that is
+// not the collection asked for — leaves the lease unresolvable: each command is refused with one JSON result, GENPAGE_APP_LEASE_UNRESOLVED and outcome "nothing", the
+// read's own failure in its message, nothing written, and the backend's throwaway workspace removed (inWorld). The command is never left to throw with nothing on stdout.
+const NAME_READ = /RetrieveUnpublishedMultiple\(\)\?\$select=appmoduleid,uniquename&/;
+for (const [label, answer] of [['the service is unavailable', { status: 503, body: { error: { code: '0x80040216', message: 'Service unavailable' } } }], ['the answer is not a collection', { status: 200, body: { value: 'not rows' } }]]) {
+  test(`REAL BUNDLE: when the app's unique name cannot be read (${label}), add-to-app, remove-from-app and an upload that names the app are each refused as a result, writing nothing`, async () => {
+    let reads = 0;
+    const wrapHttp = (http) => ({ ...http, get: async (url, opts) => {
+      if (NAME_READ.test(decodeURIComponent(String(url)))) { reads += 1; return answer; }
+      return http.get(url, opts);
+    } });
+    await inWorld(async ({ server, app, verbs, upload }) => {
+      const xmlBefore = app.state.xml;
+      const publishedBefore = app.state.publishedXml;
+      const pagesBefore = JSON.stringify([...server.state.projects.keys()].sort());
+      const refusedAs = async (run, what) => {
+        let out;
+        await assert.doesNotReject(async () => { out = await run(); }, `${what}: the refusal is a result, not a throw`);
+        assert.strictEqual(out.ok, false, `${what}: ${JSON.stringify(out)}`);
+        assert.strictEqual(out.code, 'GENPAGE_APP_LEASE_UNRESOLVED', `${what}: ${JSON.stringify(out)}`);
+        assert.strictEqual(out.outcome, 'nothing', `${what}: nothing was written`);
+        assert.strictEqual(out.appId, APP_ID);
+        assert.match(out.error, /could not be read/, `${what}: the read's failure is said`);
+      };
+      await refusedAs(() => verbs(['add-to-app', '--env', INSTANCE, '--app-id', APP_ID, '--page-id', OTHER]), 'add-to-app');
+      await refusedAs(() => verbs(['remove-from-app', '--env', INSTANCE, '--app-id', APP_ID, '--page-id', APP_EXISTING_PAGE_ID, '--draft']), 'remove-from-app --draft');
+      const file = path.join(tmp(), 'page.tsx');
+      fs.writeFileSync(file, SOURCE);
+      let emitted = 0;
+      const counted = (argv) => upload(argv).then((out) => { emitted += 1; return out; });
+      await refusedAs(() => counted(['--env', INSTANCE, '--app-id', APP_ID, '--code-file', file, '--name', 'Fresh page', '--data-sources', 'account', '--prompt', 'p', '--agent-message', 'm']), 'upload --app-id');
+      assert.strictEqual(emitted, 1, 'the upload emits exactly one result');
+      assert.ok(reads >= 3, `the name was asked for by each command (${reads})`);
+      assert.strictEqual(app.state.xml, xmlBefore, 'the saved navigation is untouched');
+      assert.strictEqual(app.state.publishedXml, publishedBefore, 'the published navigation is untouched');
+      assert.strictEqual(app.state.publishAttempts, 0, 'nothing was published');
+      assert.strictEqual(JSON.stringify([...server.state.projects.keys()].sort()), pagesBefore, 'no page was created');
+    }, { wrapHttp });
+  });
+}
+
+// Any failure to take the lease — here its workspace cannot be made, because --app-dir names a file — comes before the upload reads or writes anything for the page,
+// so it is a refusal with one JSON result and outcome "nothing" (its own code kept), as `genpage.js` reports it. A failure inside the deploy is not (see above).
+test('REAL BUNDLE: an upload whose lease cannot be taken for any reason is refused as a result, writing nothing; add-to-app says the same', async () => {
+  await inWorld(async ({ server, app, verbs, upload }) => {
+    const dir = tmp();
+    const notAFolder = path.join(dir, 'app-folder.txt');
+    fs.writeFileSync(notAFolder, 'a file, not a folder\n');
+    const file = path.join(dir, 'page.tsx');
+    fs.writeFileSync(file, SOURCE);
+    const pagesBefore = JSON.stringify([...server.state.projects.keys()].sort());
+    let out;
+    await assert.doesNotReject(async () => { out = await upload(['--env', INSTANCE, '--app-id', APP_ID, '--app-dir', notAFolder, '--code-file', file, '--name', 'Fresh page', '--data-sources', 'account', '--prompt', 'p', '--agent-message', 'm']); }, 'the refusal is a result, not a throw');
+    assert.strictEqual(out.ok, false, JSON.stringify(out));
+    assert.strictEqual(out.code, 'UNSAFE_OUTPUT', JSON.stringify(out));
+    assert.deepStrictEqual([out.outcome, out.appId], ['nothing', APP_ID]);
+    const verb = await verbs(['add-to-app', '--env', INSTANCE, '--app-id', APP_ID, '--page-id', OTHER, '--app-dir', notAFolder]);
+    assert.deepStrictEqual([verb.ok, verb.code, verb.outcome, verb.appId], [false, 'UNSAFE_OUTPUT', 'nothing', APP_ID], JSON.stringify(verb));
+    assert.strictEqual(app.state.publishAttempts, 0, 'nothing was published');
+    assert.strictEqual(JSON.stringify([...server.state.projects.keys()].sort()), pagesBefore, 'no page was created');
+  });
+});
+
+// The neighbour that must not change: a failure once the deploy is entered keeps its own handling — it is never relabelled a lease refusal that wrote nothing.
+test('REAL BUNDLE: a failure inside an upload that holds the lease keeps its own result — it is not relabelled a refusal that wrote nothing', async () => {
+  const wrap = (backend) => {
+    backend.create = async () => { throw Object.assign(new Error('the page could not be written'), { code: 'GENPAGE_TEST_WRITE_FAILED' }); };
+    return backend;
+  };
+  await inWorld(async ({ upload }) => {
+    const file = path.join(tmp(), 'page.tsx');
+    fs.writeFileSync(file, SOURCE);
+    const out = await upload(['--env', INSTANCE, '--app-id', APP_ID, '--code-file', file, '--name', 'Fresh page', '--data-sources', 'account', '--prompt', 'p', '--agent-message', 'm']);
+    assert.strictEqual(out.ok, false, JSON.stringify(out));
+    assert.strictEqual(out.code, 'GENPAGE_TEST_WRITE_FAILED', JSON.stringify(out));
+    assert.notStrictEqual(out.outcome, 'nothing', 'a failure inside the deploy is not said to have written nothing');
+  }, { wrap });
 });
