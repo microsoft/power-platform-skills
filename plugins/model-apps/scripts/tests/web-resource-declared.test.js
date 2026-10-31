@@ -228,6 +228,20 @@ test('validation: reconcile on a web resource is "declared" or absent, never wit
   assert.ok(ext.errors.some((e) => e.includes('cannot also be declared')), JSON.stringify(ext.errors));
 });
 
+test('validation: a declared web resource needs a name no other web resource shares, letter case aside', () => {
+  const sameRow = (v) => v.errors.filter((e) => e.includes('name one web resource'));
+  const two = validate(gateSpec({ minimumPluginVersion: '2.21.0', webResources: [wr({ name: 'contoso_/scripts/form.js', reconcile: 'declared' }), wr({ reconcile: 'declared', content: 'var b = 2;' })] }));
+  assert.equal(sameRow(two).length, 1, JSON.stringify(two.errors));
+  assert.ok(sameRow(two)[0].includes("'contoso_/scripts/form.js'") && sameRow(two)[0].includes("'contoso_/scripts/Form.js'"), sameRow(two)[0]);
+  const withUndeclared = validate(gateSpec({ minimumPluginVersion: '2.21.0', webResources: [wr({ reconcile: 'declared' }), wr({ name: 'CONTOSO_/SCRIPTS/FORM.JS' })] }));
+  assert.equal(sameRow(withUndeclared).length, 1, 'a declared entry may not share its row with an undeclared one either');
+  const exact = validate(gateSpec({ minimumPluginVersion: '2.21.0', webResources: [wr({ reconcile: 'declared' }), wr({ reconcile: 'declared' })] }));
+  assert.equal(sameRow(exact).length, 1, 'the same name twice is one row too');
+  // Neighbours that must not change: undeclared duplicates keep the acceptance earlier releases gave them, and distinct names pass.
+  assert.deepEqual(sameRow(validate(gateSpec({ webResources: [wr(), wr({ name: 'CONTOSO_/scripts/form.js' })] }))), []);
+  assert.deepEqual(sameRow(validate(gateSpec({ minimumPluginVersion: '2.21.0', webResources: [wr({ reconcile: 'declared' }), wr({ name: 'contoso_/scripts/Other.js', reconcile: 'declared' })] }))), []);
+});
+
 test('validation: reconcile on a form, dashboard or business rule is still an error, and names the kinds that take it', () => {
   const v = validate(gateSpec({ minimumPluginVersion: '2.21.0', dashboards: [{ name: 'D', reconcile: 'declared' }], forms: [{ name: 'F', entity: 'account', reconcile: 'declared' }], businessRules: [{ name: 'R', reconcile: 'declared' }] }));
   for (const kind of ['dashboards', 'forms', 'businessRules']) {

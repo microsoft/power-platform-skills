@@ -2946,6 +2946,22 @@ function validateAppSpec(spec, opts = {}) {
       errors.push(`webResource ${wr.name}: contentPath must be an app-folder-confined relative path (no parent escape, rooted or drive path, or alternate stream)`);
     }
   }
+  // Dataverse matches web resource names without regard to letter case, so entries whose names differ only in case are one
+  // row. A declared web resource (reconcile: "declared") must own its row: on a shared row a rebuild would ask to adopt one
+  // entry's content over the other's, and no approval could name either alone (authorizationKeys in build-model-app.js refuses
+  // that key as ambiguous). Refuse it here, before anything is created. Undeclared duplicates keep the acceptance earlier
+  // releases gave them.
+  const webResourcesByFoldedName = new Map();
+  for (const wr of spec.webResources || []) {
+    if (!wr || typeof wr.name !== 'string' || !wr.name) continue;
+    const folded = wr.name.toLowerCase();
+    if (!webResourcesByFoldedName.has(folded)) webResourcesByFoldedName.set(folded, []);
+    webResourcesByFoldedName.get(folded).push(wr);
+  }
+  for (const group of webResourcesByFoldedName.values()) {
+    if (group.length < 2 || !group.some((wr) => wr.reconcile === 'declared')) continue;
+    errors.push(`webResources: ${group.map((wr) => `'${wr.name}'`).join(' and ')} name one web resource (Dataverse matches web resource names without regard to letter case), so a declared web resource (reconcile: "declared") needs a name no other entry shares`);
+  }
   // AB#6686426: `isDefault` picks which Main form a table opens with. Explicit beats the fallback
   // (first Main form in spec order), and both are order-independent — which is the property the old
   // behaviour lacked, when every Main form promoted itself from inside a concurrent loop and the last

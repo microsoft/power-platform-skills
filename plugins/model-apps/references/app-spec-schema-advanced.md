@@ -57,7 +57,9 @@ Reference from a column via `"globalChoice": "new_priority"` (built before the c
   empties the content of a web resource that has content also needs `--allow-destructive`, which the
   adoption approval does not imply; the halt names it. A row whose content already matches needs no
   approval. A declared web resource that is refused, whose write is not confirmed, or that cannot join
-  the app's solution stops the build at once; it is not retried automatically. Not allowed with
+  the app's solution stops the build at once; it is not retried automatically. Its name must be its own:
+  validation refuses a declared web resource when another entry's name differs from it only in letter case
+  (Dataverse matches web resource names without regard to case, so both would be one row). Not allowed with
   `external: true`. Verify fails a declared web resource whose deployed content differs and says to
   run the build again.
 - **An unconfirmed first write is different from an ordinary content edit.** A
