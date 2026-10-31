@@ -2385,6 +2385,18 @@ function configurationContext({ sdk, creates, managed, bindings, solutionUniqueN
 // Every authorization token the plan needs: what a refusal run lists for the maker to pass.
 const configurationDestructive = (plan) => [...new Set(((plan && plan.operations) || []).filter((op) => op.destructive).flatMap((op) => op.authorize || []))];
 
+// A halt item: kind, key and fixed code, plus the tokens a refusal needs consent for (DESTRUCTIVE_CHANGE_UNAUTHORIZED's `authorize`).
+const haltItem = ({ kind, key, code, authorize }) => ({ kind, key, code, ...(Array.isArray(authorize) && authorize.length ? { authorize: authorize.slice() } : {}) });
+
+// The configuration halt's text. A refusal that needs consent ends with the exact flags that give it, e.g.
+//   environmentVariable contoso_Mode (DESTRUCTIVE_CHANGE_UNAUTHORIZED) (approve with --authorize environmentVariable:contoso_mode:defaultValue)
+// so the maker can resume without reading the plan. A token is <kind>:<key>:<field> (tokenOf): keys and field names only, never a
+// setting value or an SDK message, so it may be printed wherever the key already is.
+function configurationHaltMessage(items) {
+  const line = (p) => `${p.kind} ${p.key} (${p.code})${p.authorize && p.authorize.length ? ` (approve with ${p.authorize.map((t) => `--authorize ${t}`).join(' ')})` : ''}`;
+  return `${items.length} configuration item${items.length === 1 ? '' : 's'} not completed: ${items.map(line).join(', ')}`;
+}
+
 // One configuration step of the build: plan (GET only), apply, then decide. `phase` is 'solution' (the solution
 // version) or 'data-model' (everything else). `halt` is null when every requested item is done; otherwise it is
 // what the build stops with — refused, unknown, or saved but not published — naming kinds, keys and fixed codes
@@ -2393,7 +2405,7 @@ const configurationDestructive = (plan) => [...new Set(((plan && plan.operations
 async function runConfigurationStep(spec, ctx, phase) {
   const plan = phase === 'solution' ? await planSolutionVersion(spec, ctx) : await planConfiguration(spec, ctx);
   const outcome = await applyConfiguration(plan, ctx);
-  const problems = [...outcome.refused, ...outcome.unknown, ...outcome.pendingPublish].map(({ kind, key, code }) => ({ kind, key, code }));
+  const problems = [...outcome.refused, ...outcome.unknown, ...outcome.pendingPublish].map(haltItem);
   const blocking = phase === 'solution' ? [] : configurationReadiness(outcome);
   // A required variable with no value leaves the build incomplete even with no page that reads it, and so does a
   // connection the settings asked for that the read-back does not prove bound (unbound, of another connector, or
@@ -2410,7 +2422,7 @@ async function runConfigurationStep(spec, ctx, phase) {
       phase,
       code: 'configuration-incomplete',
       retry: 'never',
-      message: `${problems.length} configuration item${problems.length === 1 ? '' : 's'} not completed: ${problems.map((p) => `${p.kind} ${p.key} (${p.code})`).join(', ')}`,
+      message: configurationHaltMessage(problems),
       items: problems,
     }
     : null;
@@ -2906,6 +2918,7 @@ module.exports = {
   configurationPageBlockers,
   configurationContext,
   configurationDestructive,
+  configurationHaltMessage,
   configurationAuthorizationKeys,
   runConfigurationStep,
   configurationBlocking,

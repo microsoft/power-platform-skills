@@ -793,8 +793,8 @@ test('build wiring: one step per phase; authority is the normalized token Set; a
   const refused = await C.runConfigurationStep(edited, wire(['customApi:contoso_Calc:request:A']), 'data-model');
   assert.deepEqual(refused.halt, {
     phase: 'data-model', code: 'configuration-incomplete', retry: 'never',
-    message: '1 configuration item not completed: customApi contoso_Calc (DESTRUCTIVE_CHANGE_UNAUTHORIZED)',
-    items: [{ kind: 'customApi', key: 'contoso_Calc', code: 'DESTRUCTIVE_CHANGE_UNAUTHORIZED' }],
+    message: '1 configuration item not completed: customApi contoso_Calc (DESTRUCTIVE_CHANGE_UNAUTHORIZED) (approve with --authorize customApi:contoso_calc:request:b)',
+    items: [{ kind: 'customApi', key: 'contoso_Calc', code: 'DESTRUCTIVE_CHANGE_UNAUTHORIZED', authorize: ['customApi:contoso_calc:request:b'] }],
   });
   assert.deepEqual(h.org.writes(mark), []);
   assert.deepEqual(C.configurationDestructive(refused.plan), ['customApi:contoso_calc:request:b']);

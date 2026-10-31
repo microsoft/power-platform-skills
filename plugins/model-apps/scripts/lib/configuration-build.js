@@ -126,10 +126,7 @@ function createConfigurationRuntime({ spec, sdk, provision, opts = {}, appUnique
       let halt = step.halt;
       if (step.outcome.unknown.length > before) {
         const items = [...(halt ? halt.items : []), ...step.outcome.unknown.slice(before).map(({ kind, key, code }) => ({ kind, key, code }))];
-        halt = {
-          phase, code: 'configuration-incomplete', retry: 'never', items,
-          message: `${items.length} configuration item${items.length === 1 ? '' : 's'} not completed: ${items.map((p) => `${p.kind} ${p.key} (${p.code})`).join(', ')}`,
-        };
+        halt = { phase, code: 'configuration-incomplete', retry: 'never', items, message: C.configurationHaltMessage(items) };
       }
       if (phase === 'data-model') {
         applied = true;

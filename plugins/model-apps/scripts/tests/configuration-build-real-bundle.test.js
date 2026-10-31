@@ -17,7 +17,7 @@ const { createConfigOrg } = require('./helpers/fake-config-org.js');
 const { withoutStableCreateModules } = require('./helpers/no-stable-create-modules.js');
 const { configurationSendOnce } = require('../lib/configuration-transport.js');
 const { readDeploymentBindings } = require('../lib/configuration-artifacts.js');
-const { buildModelApp, isTransientHalt } = require('../build-model-app.js');
+const { buildModelApp, isTransientHalt, authorizationKeys } = require('../build-model-app.js');
 const { runSdkBuild } = require('../lib/sdk-build.js');
 const { STAGES } = require('../lib/stages.js');
 const { RETRY } = require('../lib/retry-policy.js');
@@ -171,6 +171,35 @@ test('a connection the settings name must be proven by the connection list: none
     assert.match(out.thrown.message, /1 configuration item not completed: connectionReference contoso_sp \(CONNECTION_REFERENCE_UNBOUND\)$/);
     assert.ok(!out.thrown.message.includes(SECRET));
   }
+});
+
+// A refusal that needs consent prints the exact flag the CLI accepts, and passing that flag settles it. The halt names the key and
+// field only: never the value being cleared.
+test('a configuration change that needs consent halts with its exact --authorize flag, and that flag lets the next build apply it', async () => {
+  const h = await harness();
+  const spec = makeSpec({ configuration: false });
+  spec.environmentVariables = [{ schemaName: 'contoso_Mode', type: 'string', defaultValue: 'enabled' }];
+  const first = await build(h, spec);
+  if (first.thrown) throw first.thrown;
+  assert.equal(first.r.ok, true, JSON.stringify(first.r.errors));
+
+  const cleared = structuredClone(spec);
+  cleared.environmentVariables[0].defaultValue = null;
+  const refused = await build(h, cleared);
+  assert.equal(refused.thrown && refused.thrown.code, 'configuration-incomplete');
+  assert.deepEqual(refused.writes, []);
+  assert.match(refused.thrown.message, /1 configuration item not completed: environmentVariable contoso_Mode \(DESTRUCTIVE_CHANGE_UNAUTHORIZED\) \(approve with --authorize environmentVariable:contoso_mode:defaultValue\)$/);
+  assert.ok(!/enabled/.test([refused.thrown.message, ...refused.logs, ...refused.warns].join('\n')), 'the halt never prints the value');
+
+  const printed = /--authorize (\S+)\)$/.exec(refused.thrown.message)[1];
+  const parsed = authorizationKeys(['--authorize', printed], cleared);
+  assert.equal(parsed.error, null);
+  const approved = await build(h, cleared, { opts: { authorizedDestructive: parsed.keys } });
+  if (approved.thrown) throw approved.thrown;
+  assert.equal(approved.r.ok, true, JSON.stringify(approved.r.errors));
+  assert.equal(approved.writes.length, 1, JSON.stringify(approved.writes));
+  assert.match(approved.writes[0], /^PATCH \/environmentvariabledefinitions\(/);
+  assert.deepEqual(h.org.unexpected, []);
 });
 
 test('a configuration row the build cannot record as managed, and a child the solution add does not prove, stop the step as unknown', async () => {
