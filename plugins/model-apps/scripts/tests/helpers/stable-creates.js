@@ -12,6 +12,9 @@
 //   it adds children to, else the stable root id; each child is stableId(namespace, 'child', root, childKey). So the
 //   same child key gets the same id whether it is created with its root or added under that root on a later run.
 //   Without it (the default) ids are exactly as before.
+// - opts.identity: true (or a list of kinds): the double also answers the recomputable-identity port's two questions,
+//   `protects(kind)` and `identityFor(kind, key)` -> { id, childIds: {} }, with the root id it would give that key, so a
+//   consumer can read the row at that id before it creates. Without it the double has no such methods, as before.
 // It keeps no journal and adopts nothing without execute.
 const crypto = require('node:crypto');
 
@@ -49,7 +52,10 @@ function stableCreates(opts = {}) {
     }
     return { outcome: answer && answer.outcome === 'refused' ? 'refused' : 'unknown', id, childIds, ids, result: answer };
   }
-  return { calls, run };
+  if (!opts.identity) return { calls, run };
+  const protects = (kind) => opts.identity === true || (Array.isArray(opts.identity) && opts.identity.includes(kind));
+  const identityFor = (kind, key) => (protects(kind) ? { id: stableId(namespace, kind, typeof key === 'string' ? key : JSON.stringify(key)), childIds: {} } : null);
+  return { calls, run, protects, identityFor };
 }
 
 module.exports = { stableCreates, stableId };
