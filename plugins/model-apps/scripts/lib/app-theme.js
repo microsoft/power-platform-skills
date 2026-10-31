@@ -348,7 +348,8 @@ async function planAppTheme(spec, ctx = {}) {
 // resolved, rowState, pendingPublish, pendingReasons, superseded, solutionComponentsAdded, warnings }.
 const SET_OUTCOMES = new Set(['created', 'updated', 'unchanged']);
 const usableSet = (written) => isObject(written) && SET_OUTCOMES.has(written.outcome);
-// Post-set proof failures that leave what the app's row holds unknown (see applyAppTheme).
+// After a proven set, the membership failures that still leave what is stored unknown (see applyAppTheme); every failure of
+// the set's own proof is unknown whatever its code.
 const POST_SET_UNCERTAIN = new Set([READ_INCOMPLETE, IDENTITY_UNPROVEN, 'APP_THEME_NOT_SAVED']);
 const usableRemove = (written) => isObject(written) && (written.outcome === 'removed' || written.outcome === 'unchanged');
 
@@ -434,19 +435,32 @@ async function applyAppTheme(plan, ctx = {}) {
     // app's theme by this SDK (unknownAfter marks it), not even its membership.
     if (scope.incomplete) { unknownAfter(READ_INCOMPLETE); return result; }
     if (set) {
+      const stopped = (error) => { markUnknown(sdk, appId); error.appTheme = result; result.unknown.push({ key: KEY, code: error.code }); return error; };
+      // The set's own completion: the version it names and the app's row, read back. Until that proof is made, what the
+      // row holds NOW is unknown, whatever stopped it (a read left incomplete, an unproven key, a row that holds another
+      // theme, or a transport failure with no answer at all), so every failure here is sticky like an unknown set: a later
+      // null or changed theme on this SDK must not remove or replace a row nobody can name.
+      let stored;
       try {
-        const stored = await proveStoredTheme(sdk.dataverse, appId, written.webResource.name);
-        if (solutionNameOf(ctx.solution)) await ensureAppThemeMembership(ctx, appId, written.webResource.name, { add: true, stored });
+        stored = await proveStoredTheme(sdk.dataverse, appId, written.webResource.name);
       } catch (error) {
-        if (isCreateStop(error)) { markUnknown(sdk, appId); error.appTheme = result; result.unknown.push({ key: KEY, code: error.code }); throw error; }
-        // The theme stays saved. When what its row holds NOW could not be placed (a read left incomplete, an unproven
-        // key, a row that holds another theme), the set's outcome is unknown, so it is sticky like an unknown set: a
-        // later null or changed theme on this SDK must not remove or replace a row nobody can name. A failed add of
-        // known content (the row and version were proven, only the member add or its read-back failed) is not: its
-        // explicit repair path (an equal theme refuses APP_THEME_MEMBERSHIP_MISSING) stays open.
-        const code = scope.incomplete ? READ_INCOMPLETE : codeOf(error);
-        result.unknown.push({ key: KEY, code, afterWrite: true });
-        if (scope.incomplete || POST_SET_UNCERTAIN.has(code)) markUnknown(sdk, appId);
+        if (isCreateStop(error)) throw stopped(error);
+        result.unknown.push({ key: KEY, code: scope.incomplete ? READ_INCOMPLETE : codeOf(error), afterWrite: true });
+        markUnknown(sdk, appId);
+        return result;
+      }
+      if (solutionNameOf(ctx.solution)) {
+        try {
+          await ensureAppThemeMembership(ctx, appId, written.webResource.name, { add: true, stored });
+        } catch (error) {
+          if (isCreateStop(error)) throw stopped(error);
+          // The theme stays saved and its content is proven. A failed add of that known content (the member add or its
+          // read-back) is not sticky: its explicit repair path (an equal theme refuses APP_THEME_MEMBERSHIP_MISSING) stays
+          // open. A membership read that could not be placed still is.
+          const code = scope.incomplete ? READ_INCOMPLETE : codeOf(error);
+          result.unknown.push({ key: KEY, code, afterWrite: true });
+          if (scope.incomplete || POST_SET_UNCERTAIN.has(code)) markUnknown(sdk, appId);
+        }
       }
     }
     return result;

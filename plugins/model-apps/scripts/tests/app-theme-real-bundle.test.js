@@ -215,6 +215,35 @@ for (const page2 of [false, true]) {
   });
 }
 
+// A transport loss while the set's own completion is being read back (the version and the app's row, after the row write)
+// leaves what the row holds as unknown as a malformed answer does: the same SDK must not remove or replace it.
+for (const next of [null, OTHER]) {
+  test(`REAL BUNDLE (regression): a transport loss reading the row back after the set is sticky; a later ${JSON.stringify(next)} reads and writes nothing`, async (t) => {
+    const server = await build(t);
+    const plan = await server.plan(THEME);
+    // Armed after the setter's last read (the environment's resolved setting), so the lost read is the proof's own.
+    server.afterNext(ENVIRONMENT_SETTING, () => server.failNext('GET /appsettings?', 'beforeCommit'));
+    const first = await applyAppTheme(plan, server.ctx);
+    assert.deepEqual(first.saved, ['app.theme'], JSON.stringify(first));
+    assert.deepEqual(first.unknown, [{ key: 'app.theme', code: 'CONNECTION_ERROR', afterWrite: true }]);
+    const mark = server.theme.requests.length;
+    assert.deepEqual((await server.run(next)).unknown, [{ key: 'app.theme', code: 'create-outcome-unknown' }]);
+    assert.deepEqual(server.theme.requests.slice(mark), [], 'no request for that app\'s theme after an unproven set');
+  });
+}
+
+// The neighbour that must stay repairable: once the set's completion is proven, a transport loss on the membership add is
+// known content with a missing member, so a later equal theme reads and names the explicit repair instead of stopping.
+test('REAL BUNDLE: a transport loss on the membership add of a proven set is not sticky; an equal retry names the repair', async (t) => {
+  const server = await build(t);
+  server.failNext('POST /AddSolutionComponent', 'beforeCommit');
+  const first = await server.run(THEME);
+  assert.deepEqual(first.saved, ['app.theme']);
+  assert.deepEqual(first.unknown, [{ key: 'app.theme', code: 'CONNECTION_ERROR', afterWrite: true }]);
+  const retry = await server.plan(THEME);
+  assert.equal(retry.refused && retry.refused[0].code, 'APP_THEME_MEMBERSHIP_MISSING', JSON.stringify(retry));
+});
+
 test('REAL BUNDLE: a no-id row in a read before any write leaves the set unknown with zero writes', async (t) => {
   for (const page2 of [false, true]) {
     const server = await build(t);
