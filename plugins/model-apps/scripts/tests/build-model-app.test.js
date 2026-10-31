@@ -1120,35 +1120,82 @@ test('--authorize: each repeated key is read, matched case-insensitively, and ke
   }
 });
 
-test('--authorize adopt:/overwrite: approve exactly the declared view or chart they name, in separate sets', () => {
+test('--authorize adopt:/overwrite: approve exactly the declared view or chart they name, in separate sets, under its family', () => {
   const { authorizationKeys } = require(path.join(__dirname, '..', 'build-model-app.js'));
   const spec = {
     entities: [{ schemaName: 'new_Ticket', columns: [{ schemaName: 'new_Kind', type: 'Choice', options: ['A', 'B'] }] }],
     views: [{ entity: 'new_Ticket', name: 'Open / Mine', reconcile: 'declared', columns: ['new_name'] }, { entity: 'new_ticket', name: 'Legacy', columns: ['new_name'] }],
     charts: [{ entity: 'new_ticket', name: 'By Kind', chartType: 'Pie', groupBy: 'new_kind', reconcile: 'declared' }],
   };
+  // The untyped form still names a single declared view or chart.
   const ok = authorizationKeys(['--authorize', 'adopt:NEW_TICKET/Open / Mine', '--authorize=overwrite:new_ticket/By Kind'], spec);
   assert.strictEqual(ok.error, null);
-  assert.deepStrictEqual([...ok.adopt], ['new_ticket/Open / Mine']);
-  assert.deepStrictEqual([...ok.overwrite], ['new_ticket/By Kind']);
+  assert.deepStrictEqual([...ok.adopt], ['view:new_ticket/Open / Mine']);
+  assert.deepStrictEqual([...ok.overwrite], ['chart:new_ticket/By Kind']);
   assert.deepStrictEqual([...ok.keys], [], 'an artifact approval is not a schema consent');
-  for (const key of ['adopt:new_ticket/Legacy', 'overwrite:new_ticket/by kind', 'adopt:new_ticket/Missing']) {
+  const typed = authorizationKeys(['--authorize', 'overwrite:view:NEW_TICKET/Open / Mine', '--authorize', 'adopt:chart:new_ticket/By Kind'], spec);
+  assert.strictEqual(typed.error, null);
+  assert.deepStrictEqual([...typed.overwrite], ['view:new_ticket/Open / Mine']);
+  assert.deepStrictEqual([...typed.adopt], ['chart:new_ticket/By Kind']);
+  for (const key of ['adopt:new_ticket/Legacy', 'overwrite:new_ticket/by kind', 'adopt:new_ticket/Missing', 'adopt:chart:new_ticket/Open / Mine', 'overwrite:view:new_ticket/By Kind', 'adopt:view:new_ticket/open / mine']) {
     const r = authorizationKeys(['--authorize', key], spec);
     assert.match(r.error, /approves an artifact the spec does not declare/, key);
     assert.strictEqual(r.adopt.size + r.overwrite.size, 0, key);
   }
 });
 
-test('--authorize overwrite:<table>/quickFind approves replacing the local copy of a declared Quick Find view, and nothing else', () => {
+test('--authorize: an untyped key that could name a view and a chart, or two names differing in case, is refused with the typed keys', () => {
   const { authorizationKeys } = require(path.join(__dirname, '..', 'build-model-app.js'));
-  const spec = { entities: [{ schemaName: 'new_Ticket', quickFind: { findColumns: ['new_name'] } }, { schemaName: 'new_Other' }] };
-  const ok = authorizationKeys(['--authorize', 'overwrite:NEW_TICKET/quickFind'], spec);
-  assert.strictEqual(ok.error, null);
-  assert.deepStrictEqual([...ok.overwrite], ['new_ticket/quickFind']);
-  assert.strictEqual(ok.adopt.size, 0);
-  for (const key of ['adopt:new_ticket/quickFind', 'overwrite:new_other/quickFind', 'overwrite:new_ticket/quickfind']) {
+  const spec = {
+    entities: [{ schemaName: 'new_Ticket', columns: [{ schemaName: 'new_Kind', type: 'Choice', options: ['A', 'B'] }] }],
+    views: [{ entity: 'new_ticket', name: 'By Kind', reconcile: 'declared', columns: ['new_name'] }, { entity: 'new_ticket', name: 'Mine', reconcile: 'declared', columns: ['new_name'] }, { entity: 'new_ticket', name: 'MINE', reconcile: 'declared', columns: ['new_name'] }],
+    charts: [{ entity: 'new_ticket', name: 'By Kind', chartType: 'Pie', groupBy: 'new_kind', reconcile: 'declared' }],
+  };
+  for (const [key, typedKeys] of [
+    ['adopt:new_ticket/By Kind', ['adopt:view:new_ticket/By Kind', 'adopt:chart:new_ticket/By Kind']],
+    ['overwrite:new_ticket/By Kind', ['overwrite:view:new_ticket/By Kind', 'overwrite:chart:new_ticket/By Kind']],
+    ['overwrite:new_ticket/Mine', ['overwrite:view:new_ticket/Mine', 'overwrite:view:new_ticket/MINE']],
+  ]) {
     const r = authorizationKeys(['--authorize', key], spec);
-    assert.match(r.error, /approves an artifact the spec does not declare/, key);
+    assert.match(r.error, /could approve more than one declared artifact/, key);
+    for (const t of typedKeys) assert.ok(r.error.includes(t), `${key} names ${t}: ${r.error}`);
+    assert.strictEqual(r.adopt.size + r.overwrite.size, 0, key);
+  }
+  const view = authorizationKeys(['--authorize', 'adopt:view:new_ticket/By Kind', '--authorize', 'overwrite:view:new_ticket/Mine'], spec);
+  assert.strictEqual(view.error, null);
+  assert.deepStrictEqual([...view.adopt], ['view:new_ticket/By Kind']);
+  assert.deepStrictEqual([...view.overwrite], ['view:new_ticket/Mine']);
+  const chart = authorizationKeys(['--authorize', 'overwrite:chart:new_ticket/By Kind'], spec);
+  assert.strictEqual(chart.error, null);
+  assert.deepStrictEqual([...chart.overwrite], ['chart:new_ticket/By Kind']);
+});
+
+test('--authorize overwrite:quickfind:<table> approves replacing the local copy of a declared Quick Find view, and nothing else', () => {
+  const { authorizationKeys } = require(path.join(__dirname, '..', 'build-model-app.js'));
+  const spec = {
+    entities: [{ schemaName: 'new_Ticket', quickFind: { findColumns: ['new_name'] } }, { schemaName: 'new_Other' }, { schemaName: 'new_Third', quickFind: { findColumns: ['new_name'] } }],
+    views: [{ entity: 'new_ticket', name: 'quickFind', reconcile: 'declared', columns: ['new_name'] }],
+  };
+  const ok = authorizationKeys(['--authorize', 'overwrite:quickfind:NEW_TICKET'], spec);
+  assert.strictEqual(ok.error, null);
+  assert.deepStrictEqual([...ok.overwrite], ['quickfind:new_ticket'], 'never the view named quickFind');
+  assert.strictEqual(ok.adopt.size, 0);
+  // A view named "quickFind" on a table that declares quickFind: the untyped key could mean either.
+  const ambiguous = authorizationKeys(['--authorize', 'overwrite:new_ticket/quickFind'], spec);
+  assert.match(ambiguous.error, /could approve more than one declared artifact.*overwrite:view:new_ticket\/quickFind or overwrite:quickfind:new_ticket/);
+  assert.strictEqual(ambiguous.overwrite.size, 0);
+  // Adoption never applies to a Quick Find view, so it names only the declared view.
+  const adopt = authorizationKeys(['--authorize', 'adopt:new_ticket/quickFind'], spec);
+  assert.strictEqual(adopt.error, null);
+  assert.deepStrictEqual([...adopt.adopt], ['view:new_ticket/quickFind']);
+  // Where nothing else could be meant, the untyped overwrite:<table>/quickFind still names the Quick Find view, under its family.
+  const untypedQuickFind = authorizationKeys(['--authorize', 'overwrite:NEW_THIRD/quickFind'], spec);
+  assert.strictEqual(untypedQuickFind.error, null);
+  assert.deepStrictEqual([...untypedQuickFind.overwrite], ['quickfind:new_third']);
+  assert.match(authorizationKeys(['--authorize', 'overwrite:new_third/quickfind'], spec).error, /use overwrite:quickfind:new_third/);
+  for (const [key, why] of [['adopt:quickfind:new_ticket', /takes only overwrite:quickfind:<id>/], ['overwrite:quickfind:new_other', /does not declare/], ['overwrite:quickfind:new_ticket/quickFind', /does not declare/], ['overwrite:new_other/quickFind', /does not declare/]]) {
+    const r = authorizationKeys(['--authorize', key], spec);
+    assert.match(r.error, why, key);
     assert.strictEqual(r.adopt.size + r.overwrite.size, 0, key);
   }
 });
@@ -1172,7 +1219,7 @@ test('--authorize adopt:webresource:/overwrite:webresource: approve exactly the 
   const ok = authorizationKeys(['--authorize', 'adopt:webresource:CONTOSO_/scripts/form.js', '--authorize=overwrite:webresource:contoso_banner', '--authorize', 'adopt:contoso_case/Script'], spec);
   assert.strictEqual(ok.error, null);
   assert.deepStrictEqual(wrs(ok), [['contoso_/scripts/form.js'], ['contoso_banner']], 'a web resource is named in any case and kept lower-cased');
-  assert.deepStrictEqual([...ok.adopt], ['contoso_case/Script'], 'the view key stays the view\'s, even though a web resource has that name in another case');
+  assert.deepStrictEqual([...ok.adopt], ['view:contoso_case/Script'], 'the view key stays the view\'s, even though a web resource has that name in another case');
   assert.strictEqual(ok.overwrite.size, 0);
   const view = authorizationKeys(['--authorize', 'adopt:contoso_case/script'], spec);
   assert.match(view.error, /approves an artifact the spec does not declare.*use adopt:webresource:contoso_case\/script for the declared web resource of that name/, 'an untyped key never approves a web resource');

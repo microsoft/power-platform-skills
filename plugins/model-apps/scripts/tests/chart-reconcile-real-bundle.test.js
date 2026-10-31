@@ -90,7 +90,7 @@ test('drift on an owned field is refused until the overwrite is approved; conver
   assert.deepEqual(refused.result.refused.map((r) => r.code), ['chart-drift']);
   assert.equal(srv.writes.length, 0);
 
-  const approved = await run(srv, declared(), { managed, authorizedOverwrite: ['cr_case/Cases by priority'] });
+  const approved = await run(srv, declared(), { managed, authorizedOverwrite: ['chart:cr_case/Cases by priority'] });
   assert.deepEqual(approved.result.saved.map((s) => s.parts), [['chartType']]);
   assert.match(srv.rowOf('savedqueryvisualizations', CID).presentationdescription, /ChartType="Bar"/);
 });

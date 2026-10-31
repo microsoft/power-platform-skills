@@ -66,6 +66,22 @@ function isAuthorized(flag, key) {
   return false;
 }
 
+// An adopt: or overwrite: approval (`--authorize`, build-model-app.js authorizationKeys) is stored under its artifact's
+// family-typed key, `<family>:<id>`, the same text the CLI flag carries after its verb:
+//   view:<table>/<name>    a declared view          (adopt, overwrite)
+//   chart:<table>/<name>   a declared chart         (adopt, overwrite)
+//   quickfind:<table>      a table's Quick Find view (overwrite)
+// A view, a chart and a table's Quick Find view can share one `<table>/<name>` (a view may be named "quickFind"), so an
+// untyped key would approve all of them at once. A guard asks only for its own family's key, so an approval given for one
+// artifact can never reach an artifact of another family.
+function approvalKey(family, id) {
+  return `${family}:${id}`;
+}
+
+function isApproved(flag, family, id) {
+  return isAuthorized(flag, approvalKey(family, id));
+}
+
 /**
  * The managed binding for (kind, key), or null. `ctx.managed.lookup` is the coordinator's
  * managed-artifacts port; it may be sync or async. A missing port answers null — the caller then
@@ -242,8 +258,8 @@ function driftVerdict(binding, liveSha, desiredSha) {
  * approved for management: binding it silently would let the next, real edit skip the adoption
  * question. So an unbound artifact is bound only when the maker approved adopting it or pinned it by id.
  */
-function bindsUnchanged(binding, ctx, key, pinned = false) {
-  return !!binding || pinned === true || isAuthorized(ctx && ctx.authorizedAdoption, key);
+function bindsUnchanged(binding, ctx, approval, pinned = false) {
+  return !!binding || pinned === true || isAuthorized(ctx && ctx.authorizedAdoption, approval);
 }
 
 /**
@@ -419,6 +435,8 @@ module.exports = {
   operation,
   refusal,
   isAuthorized,
+  approvalKey,
+  isApproved,
   lookupBinding,
   bindingRecord,
   projectionBaseline,

@@ -46,6 +46,8 @@ const {
   operation,
   refusal,
   isAuthorized,
+  approvalKey,
+  isApproved,
   lookupBinding,
   bindingRecord,
   bindsUnchanged,
@@ -375,15 +377,15 @@ async function planViewReconcile({ view, sdk, resolveValue, primaryName }, ctx =
   const publicationScopes = [{ type: 'view', id, table: intent.entity }];
   if (plan.changed.length === 0) {
     plan.action = 'noChange';
-    plan.bindUnchanged = bindsUnchanged(binding, ctx, key, !!intent.viewId);
+    plan.bindUnchanged = bindsUnchanged(binding, ctx, approvalKey('view', key), !!intent.viewId);
     plan.operations.push(operation({ key, kind: 'view', target: id, action: 'noChange' }));
     return plan;
   }
-  if (verdict === 'drift' && !isAuthorized(ctx.authorizedOverwrite, key)) {
+  if (verdict === 'drift' && !isApproved(ctx.authorizedOverwrite, 'view', key)) {
     plan.refused.push(refusal(key, 'view-drift', 'an owned part of the view was changed outside the spec; refresh the spec or approve the overwrite'));
     return plan;
   }
-  if (verdict === 'unbound' && !intent.viewId && !isAuthorized(ctx.authorizedAdoption, key)) {
+  if (verdict === 'unbound' && !intent.viewId && !isApproved(ctx.authorizedAdoption, 'view', key)) {
     plan.refused.push(refusal(key, 'view-adoption-not-authorized', 'the view exists and is not yet managed by this spec; approve adopting it first'));
     return plan;
   }

@@ -636,15 +636,17 @@ spec's new columns.
 
 **Approvals.** A view or chart that already exists and that this spec has not created in this run is
 shown as an adoption: the build leaves it unchanged, builds the rest, and then stops naming the key —
-`--authorize adopt:<table>/<name>` (the table in lower case, the name exactly as in the spec).
-`--authorize overwrite:<table>/<name>` approves replacing changes made elsewhere, and
-`--allow-destructive` approves removing columns. A key that names no declared view or chart stops the
-build. **Local copy.** A declared view, chart or Quick Find view whose local copy differs from the
+`--authorize adopt:view:<table>/<name>` or `--authorize adopt:chart:<table>/<name>` (the table in lower
+case, the name exactly as in the spec). `--authorize overwrite:view:<table>/<name>` (or `chart:`)
+approves replacing changes made elsewhere, and `--allow-destructive` approves removing columns. Each key
+approves only the artifact of its family, so a view and a chart with the same name are approved
+separately. The older `adopt:<table>/<name>` form still works when it names exactly one declared view or
+chart; a key that could name several, or that names no declared view or chart, stops the build. **Local copy.** A declared view, chart or Quick Find view whose local copy differs from the
 server's (an edit an earlier run did not send, or one made by hand), or cannot be compared with it, is
 refused before anything is written (`workspace-copy-unsent-edits`); the copy is kept. Put any change
 to keep into the spec and refresh the local copy, or approve replacing it with the server's:
-`--authorize overwrite:<table>/<name>`, or `--authorize overwrite:<table>/quickFind` for a table's
-Quick Find. **Publishing.** A table is published only when every declared change on it succeeded: when one
+the `overwrite:` key the refusal prints (`--authorize overwrite:view:<table>/<name>`,
+`overwrite:chart:<table>/<name>`, or `overwrite:quickfind:<table>` for a table's Quick Find). **Publishing.** A table is published only when every declared change on it succeeded: when one
 fails, the build reports the table as withheld, publishes the other tables, and exits non-zero.
 
 Declared upkeep of web resources is described with `webResources[]` above. Declared process flows,

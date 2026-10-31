@@ -44,7 +44,8 @@ const {
   emptyResult,
   operation,
   refusal,
-  isAuthorized,
+  approvalKey,
+  isApproved,
   lookupBinding,
   bindingRecord,
   bindsUnchanged,
@@ -219,16 +220,16 @@ async function planChartReconcile({ chart, sdk, chartArtifact }, ctx = {}) {
   plan.origin = binding ? binding.origin : 'adopted';
   if (plan.changed.length === 0) {
     plan.action = 'noChange';
-    plan.bindUnchanged = bindsUnchanged(binding, ctx, key);
+    plan.bindUnchanged = bindsUnchanged(binding, ctx, approvalKey('chart', key));
     plan.operations.push(operation({ key, kind: 'chart', target: id, action: 'noChange' }));
     return plan;
   }
   const verdict = partsDriftVerdict(binding, live, desired);
-  if (verdict === 'drift' && !isAuthorized(ctx.authorizedOverwrite, key)) {
+  if (verdict === 'drift' && !isApproved(ctx.authorizedOverwrite, 'chart', key)) {
     plan.refused.push(refusal(key, 'chart-drift', 'an owned part of the chart was changed outside the spec; refresh the spec or approve the overwrite'));
     return plan;
   }
-  if (verdict === 'unbound' && !isAuthorized(ctx.authorizedAdoption, key)) {
+  if (verdict === 'unbound' && !isApproved(ctx.authorizedAdoption, 'chart', key)) {
     plan.refused.push(refusal(key, 'chart-adoption-not-authorized', 'the chart exists and is not yet managed by this spec; approve adopting it first'));
     return plan;
   }

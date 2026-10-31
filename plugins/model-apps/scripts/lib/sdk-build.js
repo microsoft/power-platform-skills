@@ -164,7 +164,7 @@ const { securedBeforeSeed, planFieldSecurity, applyFieldSecurity, assignFieldSec
 const { declaredTableFlags } = require('./schema-feature-contract.js');
 const { RETRY, isTransientStatus, judgeFailure, retryPolicyFor, retryFrom, refusal, serviceFailure, withCause } = require('./retry-policy.js');
 const { createPublicationBarrier, describeWithheld, describeWithheldApp } = require('./publication-barrier.js');
-const { createFeatureSettlement, refusal: featureRefusal, isAuthorized } = require('./reconcile-common.js');
+const { createFeatureSettlement, refusal: featureRefusal, isAuthorized, approvalKey } = require('./reconcile-common.js');
 const { createPassthroughCreates } = require('./creates-passthrough.js');
 const { isDeclaredView, planViewReconcile, applyViewReconcile } = require('./view-reconcile.js');
 const { isDeclaredChart, planChartReconcile, applyChartReconcile } = require('./chart-reconcile.js');
@@ -3487,17 +3487,17 @@ async function runSdkBuildPhases(spec, opts, owed) {
   // what unlocks it, so every later artifact and phase still runs and the run then ends with the one halt that list makes.
   // The settlement reports a refusal as `${artifactLabel}: ${code} — ${message}`, and the declared view and chart call sites below
   // label their artifact `view <key>` / `chart <key>`. The remedy names the approval in general; the CLI flag that gives it is
-  // named too, so the maker can act on the line as printed: --authorize adopt:/overwrite:<key> for an adoption or a drift
-  // (adopt:/overwrite:webresource:<name> for a declared web resource, labelled `web resource <name>`: its approvals are typed)
-  // (build-model-app.js authorizationKeys), and --allow-destructive (featureCtx.authorizedDestructive) for a removal, an emptied
-  // Quick Find or an emptied web resource.
+  // named too, so the maker can act on the line as printed: --authorize adopt:/overwrite:view:<key> (or chart:<key>) for an adoption
+  // or a drift — typed by family, because a view and a chart may share a <key> (build-model-app.js authorizationKeys,
+  // reconcile-common.js approvalKey); adopt:/overwrite:webresource:<name> for a declared web resource, labelled `web resource <name>`;
+  // and --allow-destructive (featureCtx.authorizedDestructive) for a removal, an emptied Quick Find or an emptied web resource.
   const cliApproval = (label, code) => {
     if (/-(?:removal|empty|clear)-not-authorized$/.test(code)) return '--allow-destructive';
     const verb = /-adoption-not-authorized$/.test(code) ? 'adopt' : /-drift$/.test(code) ? 'overwrite' : '';
     const at = verb ? label.indexOf(`: ${code} — `) : -1;
-    const m = at > 0 ? /^(?:view|chart|web resource) (.+)$/.exec(label.slice(0, at)) : null;
+    const m = at > 0 ? /^(view|chart|web resource) (.+)$/.exec(label.slice(0, at)) : null;
     if (!m) return '';
-    return /^web resource /.test(label) ? `--authorize ${verb}:webresource:${m[1]}` : `--authorize ${verb}:${m[1]}`;
+    return m[1] === 'web resource' ? `--authorize ${verb}:webresource:${m[2]}` : `--authorize ${verb}:${approvalKey(m[1], m[2])}`;
   };
   const featureIncomplete = (phase, label, detail = {}) => {
     const flag = cliApproval(label, String(detail.code || ''));
@@ -3559,13 +3559,15 @@ async function runSdkBuildPhases(spec, opts, owed) {
   // nothing written. And the build cannot tell whose the difference is — an earlier run's edit that was never sent, or a maker's own
   // (a description the spec does not declare): a diff says that something changed, never who changed it. So the build does not repair
   // it. It refuses the item before any write, keeps the copy exactly as it is, and names the two ways on: put what should stay into
-  // the spec and refresh the copy, or approve replacing the local copy with the server's (--authorize overwrite:<key>, the same
+  // the spec and refresh the copy, or approve replacing the local copy with the server's (--authorize overwrite:<approval>, the same
   // approval that lets the spec replace a change made on the server). A comparison that cannot be made — an SDK without diffArtifact,
   // a diff that throws, an answer with no list of changes — is no proof of a clean copy, so it is refused the same way. A clean copy
   // proceeds exactly as before, at the cost of one local diff and no request.
   // The refusal goes first among the plan's reasons: a plan made over a copy that is not the server's may refuse for what the copy holds.
-  // what names the artifact in the refusal: 'view', 'chart' or 'Quick Find view'.
-  const refuseUnsentCopy = async (kind, what, id, plan, replan) => {
+  // what names the artifact in the refusal: 'view', 'chart' or 'Quick Find view'. approval is the artifact's own family-typed key
+  // (reconcile-common.js approvalKey: view:<table>/<name>, chart:<table>/<name>, quickfind:<table>), the only overwrite approval
+  // that may replace this copy: a view named "quickFind" and its table's Quick Find view share a plan key, never an approval.
+  const refuseUnsentCopy = async (kind, what, approval, id, plan, replan) => {
     if (!id) return plan;
     let state = 'unproven';
     if (typeof provision.diffArtifact === 'function') {
@@ -3575,7 +3577,7 @@ async function runSdkBuildPhases(spec, opts, owed) {
       } catch { /* unproven: see above */ }
     }
     if (state === 'clean') return plan;
-    if (isAuthorized(featureCtx.authorizedOverwrite, plan.key)) {
+    if (isAuthorized(featureCtx.authorizedOverwrite, approval)) {
       try {
         await provision.fetchArtifact(kind, id, { overwrite: true });
       } catch {
@@ -3587,7 +3589,7 @@ async function runSdkBuildPhases(spec, opts, owed) {
     const found = state === 'changed'
       ? `the local copy of the ${what} ${id} in the workspace differs from the server's (an edit an earlier run did not send, or one made by hand)`
       : `the local copy of the ${what} ${id} in the workspace could not be compared with the server's`;
-    plan.refused.unshift(featureRefusal(plan.key, 'workspace-copy-unsent-edits', `${found}, so it was not planned over and nothing was written; the local copy was kept. Put any change you want to keep into the spec, then refresh the local copy: ${RESET_WORKSPACE}. Or approve replacing the local copy with the server's (this also lets the spec replace any change made on the server): --authorize overwrite:${plan.key}`));
+    plan.refused.unshift(featureRefusal(plan.key, 'workspace-copy-unsent-edits', `${found}, so it was not planned over and nothing was written; the local copy was kept. Put any change you want to keep into the spec, then refresh the local copy: ${RESET_WORKSPACE}. Or approve replacing the local copy with the server's (this also lets the spec replace any change made on the server): --authorize overwrite:${approval}`));
     return plan;
   };
   const settleFeatureResult = createFeatureSettlement({ barrier: owed.barrier, markIncomplete: featureIncomplete, settled: settledPublishes, recordBinding: managedArtifacts ? (b) => managedArtifacts.recordApplied(b) : undefined });
@@ -6259,7 +6261,7 @@ async function runSdkBuildPhases(spec, opts, owed) {
         // edited by its helper; it never falls through to the create below, which would bypass the port.
         const planArgs = { view: meta.specView, sdk: provision, resolveValue: meta.resolveValue, primaryName: meta.primaryName };
         const firstPlan = await planViewReconcile(planArgs, featureCtx);
-        const plan = await refuseUnsentCopy('view', 'view', firstPlan.viewId, firstPlan, () => planViewReconcile(planArgs, featureCtx));
+        const plan = await refuseUnsentCopy('view', 'view', approvalKey('view', firstPlan.key), firstPlan.viewId, firstPlan, () => planViewReconcile(planArgs, featureCtx));
         const r = await applyViewReconcile(plan, { sdk: provision }, featureCtx);
         const { ok } = settleFeatureResult('views', `view ${plan.key}`, r);
         await resetUnsettledCopy('view', plan.viewId, plan, r);
@@ -6318,7 +6320,7 @@ async function runSdkBuildPhases(spec, opts, owed) {
       await runner.run('views', `Quick Find for ${name}`, async () => {
         const planArgs = { entity: name, quickFind: e.quickFind, sdk: provision };
         const firstPlan = await planQuickFind(planArgs, featureCtx);
-        const plan = await refuseUnsentCopy('view', 'Quick Find view', firstPlan.viewId, firstPlan, () => planQuickFind(planArgs, featureCtx));
+        const plan = await refuseUnsentCopy('view', 'Quick Find view', approvalKey('quickfind', name), firstPlan.viewId, firstPlan, () => planQuickFind(planArgs, featureCtx));
         const r = await applyQuickFind(plan, { sdk: provision }, featureCtx);
         settleFeatureResult('views', `Quick Find on ${name}`, r);
         await resetUnsettledCopy('view', plan.viewId, plan, r);
@@ -6406,7 +6408,7 @@ async function runSdkBuildPhases(spec, opts, owed) {
         return runner.run('charts', `chart "${def.name}"`, async () => {
           const planArgs = { chart: c, sdk: provision, chartArtifact: def };
           const firstPlan = await planChartReconcile(planArgs, featureCtx);
-          const plan = await refuseUnsentCopy('chart', 'chart', firstPlan.chartId, firstPlan, () => planChartReconcile(planArgs, featureCtx));
+          const plan = await refuseUnsentCopy('chart', 'chart', approvalKey('chart', firstPlan.key), firstPlan.chartId, firstPlan, () => planChartReconcile(planArgs, featureCtx));
           const r = await applyChartReconcile(plan, { sdk: provision }, featureCtx);
           const { ok } = settleFeatureResult('charts', `chart ${plan.key}`, r);
           await resetUnsettledCopy('chart', plan.chartId, plan, r);

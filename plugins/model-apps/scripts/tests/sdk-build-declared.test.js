@@ -15,6 +15,7 @@ const { runSdkBuild, previewTargetOf } = require('../lib/sdk-build.js');
 const { verifySpec } = require('../lib/verify-spec.js');
 const { validateAppSpec } = require('../lib/app-spec.js');
 const { createPassthroughCreates } = require('../lib/creates-passthrough.js');
+const { authorizationKeys } = require('../build-model-app.js');
 const { createFakeBuildOrg } = require('./helpers/fake-app-build-org.js');
 
 const dirs = [];
@@ -125,17 +126,17 @@ test('a declared view rebuilt unchanged writes nothing; a changed one over an un
   const refused = await build(env, changed, { phases: ['views'] });
   assert.ok(refused.err, 'the refused view halts the run');
   assert.equal(refused.err.code, 'view-adoption-not-authorized');
-  assert.match(refused.err.message, /--authorize adopt:contoso_item\/Declared Items/);
+  assert.match(refused.err.message, /--authorize adopt:view:contoso_item\/Declared Items/);
   assert.deepEqual(refused.err.incomplete.map((x) => x.code), ['view-adoption-not-authorized']);
   assert.deepEqual(refused.writes, []);
 
-  const adopted = await build(env, changed, { phases: ['views'], authorizedAdoption: new Set(['contoso_item/Declared Items']) });
+  const adopted = await build(env, changed, { phases: ['views'], authorizedAdoption: approvals(changed, 'adopt:view:contoso_item/Declared Items').adopt });
   assert.equal(adopted.err, undefined, adopted.err && adopted.err.message);
   assert.equal(adopted.writes.filter((c) => c.method === 'PATCH' && /^\/savedqueries\(/.test(c.path)).length, 1);
   assert.equal(adopted.named('contoso_item'), 1);
 
   // Removing a column the view shows is destructive: the halt names the flag that approves it, and nothing is written.
-  const narrowed = await build(env, makeSpec({ views: [declaredView({ columns: ['contoso_name'] })] }), { phases: ['views'], authorizedAdoption: new Set(['contoso_item/Declared Items']) });
+  const narrowed = await build(env, makeSpec({ views: [declaredView({ columns: ['contoso_name'] })] }), { phases: ['views'], authorizedAdoption: new Set(['view:contoso_item/Declared Items']) });
   assert.equal(narrowed.err && narrowed.err.code, 'view-columns-removal-not-authorized');
   assert.match(narrowed.err.message, /--allow-destructive/);
   assert.deepEqual(narrowed.writes, []);
@@ -254,6 +255,13 @@ async function resetSdk({ org, dir }, failResets) {
 // copy is kept as it is, and the refusal names the two ways on (refresh the copy, or approve replacing it).
 const UNSENT = 'workspace-copy-unsent-edits';
 
+// The approvals a maker gets by passing the given --authorize keys to the CLI.
+function approvals(spec, ...keys) {
+  const r = authorizationKeys(keys.flatMap((k) => ['--authorize', k]), spec);
+  assert.equal(r.error, null);
+  return r;
+}
+
 test('a refused Quick Find list whose copy reset failed is refused on the next run for its local copy, never read as already stored', async () => {
   const env = newOrg();
   await seedQuickFind(env.org, ['contoso_name']);
@@ -269,7 +277,7 @@ test('a refused Quick Find list whose copy reset failed is refused on the next r
   const again = await build(env, spec, { phases: ['views'], sdk: working.sdk });
   assert.equal(again.err && again.err.code, UNSENT, 'a reset that failed cannot certify a list the server never stored');
   assert.match(again.err.message, /Quick Find on contoso_item: workspace-copy-unsent-edits — the local copy of the Quick Find view .* differs from the server's/);
-  assert.match(again.err.message, /--authorize overwrite:contoso_item\/quickFind/);
+  assert.match(again.err.message, /--authorize overwrite:quickfind:contoso_item(?![\w/])/);
   assert.deepEqual(again.writes, []);
   assert.equal(working.resets.count, 0, 'the local copy is never reset without the approval');
   assert.equal(again.named('contoso_item'), 0);
@@ -277,14 +285,14 @@ test('a refused Quick Find list whose copy reset failed is refused on the next r
 
   // With the approval the copy is replaced by the server's and the list planned over it: refused for the list again, nothing written.
   const approved = await resetSdk(env, false);
-  const replaced = await build(env, spec, { phases: ['views'], sdk: approved.sdk, authorizedOverwrite: new Set(['contoso_item/quickFind']) });
+  const replaced = await build(env, spec, { phases: ['views'], sdk: approved.sdk, authorizedOverwrite: approvals(spec, 'overwrite:quickfind:contoso_item').overwrite });
   assert.equal(replaced.err && replaced.err.code, 'quick-find-rejected');
   assert.deepEqual(replaced.writes, []);
   assert.equal(approved.resets.count, 2, 'the approved replacement, then the reset of this run\'s own refused edit');
 
   // An approved replacement whose read fails is not applied either, and says so.
   await build(env, spec, { phases: ['views'], sdk: (await resetSdk(env, true)).sdk });
-  const blocked = await build(env, spec, { phases: ['views'], sdk: (await resetSdk(env, true)).sdk, authorizedOverwrite: new Set(['contoso_item/quickFind']) });
+  const blocked = await build(env, spec, { phases: ['views'], sdk: (await resetSdk(env, true)).sdk, authorizedOverwrite: approvals(spec, 'overwrite:quickfind:contoso_item').overwrite });
   assert.equal(blocked.err && blocked.err.code, UNSENT);
   assert.deepEqual(blocked.writes, []);
   assert.equal(blocked.named('contoso_item'), 0);
@@ -342,12 +350,12 @@ test('a declared view whose copy holds an unsent edit is refused and kept; with 
   const stored = () => viewRows(env.org).find((v) => v.savedqueryid === id).layoutxml;
   assert.doesNotMatch(stored(), /contoso_code/);
 
-  const adopt = new Set(['contoso_item/Declared Items']);
+  const adopt = new Set(['view:contoso_item/Declared Items']);
   const refused = await resetSdk(env, false);
   const r = await build(env, makeSpec({ views: [declaredView()] }), { phases: ['views'], authorizedAdoption: adopt, sdk: refused.sdk });
   assert.equal(r.err && r.err.code, UNSENT);
   assert.match(r.err.message, /view contoso_item\/Declared Items: workspace-copy-unsent-edits/);
-  assert.match(r.err.message, /--authorize overwrite:contoso_item\/Declared Items/);
+  assert.match(r.err.message, /--authorize overwrite:view:contoso_item\/Declared Items/);
   assert.equal(refused.resets.count, 0);
   assert.deepEqual(r.writes, []);
   assert.ok((await refused.sdk.getArtifact('view', id)).columns.some((c) => c.name === 'contoso_code'), 'the local edit is kept');
@@ -386,7 +394,7 @@ test('a maker\'s local edit the spec does not declare is never discarded: an unc
   assert.deepEqual((await sdk.diffArtifact('view', id)).changes.map((c) => c.pointer), ['/description']);
 
   // The maker approves replacing the local copy: the server's description comes back, and nothing is written.
-  const approved = await build(env, spec, { phases: ['views'], sdk, authorizedOverwrite: new Set(['contoso_item/Declared Items']) });
+  const approved = await build(env, spec, { phases: ['views'], sdk, authorizedOverwrite: approvals(spec, 'overwrite:view:contoso_item/Declared Items').overwrite });
   assert.equal(approved.err, undefined, approved.err && approved.err.message);
   assert.deepEqual(approved.writes, []);
   assert.equal(resets.count, 1);
@@ -406,9 +414,102 @@ test('a declared chart whose copy holds a local edit is refused before any write
   const r = await build(env, spec, { phases: ['charts'], sdk });
   assert.equal(r.err && r.err.code, UNSENT);
   assert.match(r.err.message, /chart contoso_item\/By Kind: workspace-copy-unsent-edits/);
+  assert.match(r.err.message, /--authorize overwrite:chart:contoso_item\/By Kind/);
   assert.deepEqual(r.writes, []);
   assert.equal(resets.count, 0);
   assert.equal((await sdk.getArtifact('chart', id)).description, 'Unsaved maker note');
+
+  // Following the printed key replaces the local copy with the server's.
+  const approved = await build(env, spec, { phases: ['charts'], sdk, authorizedOverwrite: approvals(spec, 'overwrite:chart:contoso_item/By Kind').overwrite });
+  assert.equal(approved.err, undefined, approved.err && approved.err.message);
+  assert.deepEqual(approved.writes, []);
+  assert.equal(resets.count, 1);
+  assert.doesNotMatch(String((await sdk.getArtifact('chart', id)).description || ''), /Unsaved maker/);
+});
+
+// Approvals are typed by family (view:, chart:, quickfind:): a view, a chart and a table's Quick Find view can share one
+// <table>/<name>, and an approval given for one of them must never replace or adopt another.
+function recordResets(sdk) {
+  const ids = [];
+  const fetch = sdk.fetchArtifact;
+  sdk.fetchArtifact = async (kind, id, options) => {
+    if (options && options.overwrite) ids.push(`${kind} ${id}`);
+    return fetch.call(sdk, kind, id, options);
+  };
+  return ids;
+}
+
+test('the Quick Find overwrite approval replaces only the Quick Find view\'s copy, never a declared view named quickFind on the same table', async () => {
+  const env = newOrg();
+  await seedQuickFind(env.org, ['contoso_name']);
+  const spec = quickFindSpec(['contoso_name']);
+  spec.views = [declaredView({ name: 'quickFind', columns: ['contoso_name'], activeOnly: false })];
+  assert.deepEqual(validateAppSpec(spec).errors, []);
+  const first = await build(env, spec, { phases: ['views'] });
+  assert.equal(first.err, undefined, first.err && first.err.message);
+  const ordinaryId = first.out.created.views['contoso_item|quickFind'];
+  const quickFindId = viewRows(env.org).find((v) => v.querytype === 4).savedqueryid;
+  assert.ok(ordinaryId && ordinaryId !== quickFindId);
+  const sdk = createMakerSdk({ workspaceStorage: createNodeWorkspaceStorage(env.dir), instanceUrl: env.org.origin, httpClient: env.org.httpClient });
+  await sdk.initWorkspace();
+  for (const [id, note] of [[ordinaryId, 'Keep my ordinary view note'], [quickFindId, 'Replace my Quick Find note']]) {
+    await sdk.fetchArtifact('view', id);
+    await sdk.updateElement('view', id, '/description', note);
+  }
+  const refused = await build(env, spec, { phases: ['views'], sdk });
+  assert.equal(refused.err && refused.err.code, UNSENT);
+  assert.match(refused.err.message, /view contoso_item\/quickFind: workspace-copy-unsent-edits.*--authorize overwrite:view:contoso_item\/quickFind/);
+  assert.match(refused.err.message, /Quick Find on contoso_item: workspace-copy-unsent-edits.*--authorize overwrite:quickfind:contoso_item/);
+
+  const resets = recordResets(sdk);
+  const r = await build(env, spec, { phases: ['views'], sdk, authorizedOverwrite: approvals(spec, 'overwrite:quickfind:contoso_item').overwrite });
+  assert.equal(r.err && r.err.code, UNSENT, 'the ordinary view stays refused');
+  assert.deepEqual(r.err.incomplete.map((x) => x.code), [UNSENT]);
+  assert.deepEqual(resets, [`view ${quickFindId}`], 'only the Quick Find view\'s copy is replaced');
+  assert.deepEqual(r.writes, []);
+  assert.equal((await sdk.getArtifact('view', ordinaryId)).description, 'Keep my ordinary view note');
+  assert.doesNotMatch(String((await sdk.getArtifact('view', quickFindId)).description || ''), /Replace my Quick Find note/);
+});
+
+test('a declared view and a declared chart with the same table and name: each typed approval reaches only its own artifact', async () => {
+  const env = newOrg();
+  const spec = makeSpec({ views: [declaredView({ name: 'By Kind', columns: ['contoso_name'] })], charts: [declaredChart()] });
+  const first = await build(env, spec, { phases: ['views', 'charts'] });
+  assert.equal(first.err, undefined, first.err && first.err.message);
+  const viewId = first.out.created.views['contoso_item|By Kind'];
+  const chartId = first.out.created.charts['contoso_item|By Kind'];
+  assert.ok(viewId && chartId);
+  const untyped = authorizationKeys(['--authorize', 'overwrite:contoso_item/By Kind'], spec);
+  assert.match(untyped.error, /could approve more than one declared artifact.*overwrite:view:contoso_item\/By Kind or overwrite:chart:contoso_item\/By Kind/);
+
+  // Unbound and changed, both ask for adoption, each with its own key; adopting the chart adopts only the chart.
+  const changed = makeSpec({ views: [declaredView({ name: 'By Kind' })], charts: [declaredChart({ description: 'Items by kind' })] });
+  const refused = await build(env, changed, { phases: ['views', 'charts'] });
+  assert.deepEqual(refused.err.incomplete.map((x) => x.code).sort(), ['chart-adoption-not-authorized', 'view-adoption-not-authorized']);
+  assert.match(refused.err.message, /--authorize adopt:view:contoso_item\/By Kind/);
+  assert.match(refused.err.message, /--authorize adopt:chart:contoso_item\/By Kind/);
+  assert.deepEqual(refused.writes, []);
+  const chartOnly = await build(env, changed, { phases: ['views', 'charts'], authorizedAdoption: approvals(changed, 'adopt:chart:contoso_item/By Kind').adopt });
+  assert.deepEqual(chartOnly.err.incomplete.map((x) => x.code), ['view-adoption-not-authorized']);
+  assert.equal(chartOnly.writes.filter((c) => /^\/savedqueries\(/.test(c.path)).length, 0, 'the view is not written');
+  assert.equal(chartOnly.writes.filter((c) => c.method === 'PATCH' && /^\/savedqueryvisualizations\(/.test(c.path)).length, 1, 'the chart is');
+
+  // Both local copies edited and never sent: the chart's overwrite approval replaces the chart's copy only.
+  const sdk = createMakerSdk({ workspaceStorage: createNodeWorkspaceStorage(env.dir), instanceUrl: env.org.origin, httpClient: env.org.httpClient });
+  await sdk.initWorkspace();
+  await sdk.fetchArtifact('view', viewId);
+  await sdk.updateElement('view', viewId, '/description', 'Keep my view note');
+  await sdk.fetchArtifact('chart', chartId);
+  await sdk.updateElement('chart', chartId, '/description', 'Replace my chart note');
+  const resets = recordResets(sdk);
+  const r = await build(env, changed, { phases: ['views', 'charts'], sdk, authorizedOverwrite: approvals(changed, 'overwrite:chart:contoso_item/By Kind').overwrite });
+  assert.deepEqual(resets, [`chart ${chartId}`]);
+  // The view, still unbound and changed, is refused for its local copy (and its adoption); the chart is not refused at all.
+  assert.deepEqual(r.err.incomplete.map((x) => x.code), [UNSENT, 'view-adoption-not-authorized']);
+  assert.match(r.err.message, /view contoso_item\/By Kind: workspace-copy-unsent-edits/);
+  assert.doesNotMatch(r.err.message, /chart contoso_item\/By Kind:/);
+  assert.equal(r.writes.filter((c) => /^\/savedqueries\(/.test(c.path)).length, 0);
+  assert.equal((await sdk.getArtifact('view', viewId)).description, 'Keep my view note');
 });
 
 test('push preview: a declared view edit is not evaluated rather than previewed as unchanged; the apply writes it', async () => {
@@ -417,7 +518,7 @@ test('push preview: a declared view edit is not evaluated rather than previewed 
   const first = await build(env, makeSpec({ views: [view] }), { phases: ['views'] });
   assert.equal(first.err, undefined, first.err && first.err.message);
   const spec = makeSpec({ views: [{ ...view, filters: [{ attr: 'contoso_code', op: 'eq', value: 'TARGET' }] }] });
-  const authorizedAdoption = new Set(['contoso_item/Declared Items']);
+  const authorizedAdoption = new Set(['view:contoso_item/Declared Items']);
   const preview = await build(env, spec, { phases: ['views'], apply: false, previewPush: true, authorizedAdoption, httpClient: env.org.httpClient });
   assert.equal(preview.err, undefined, preview.err && preview.err.message);
   assert.deepEqual(preview.writes, []);

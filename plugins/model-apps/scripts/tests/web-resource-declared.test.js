@@ -354,7 +354,7 @@ test('real SDK: a view\'s approval never writes the web resource of the same nam
 
   const wrOnly = await build(changed, approvals(changed, 'adopt:webresource:contoso_case/script'));
   assert.equal(wrOnly.err && wrOnly.err.code, 'view-adoption-not-authorized', 'the view still waits for its own approval');
-  assert.ok(wrOnly.err.message.includes('--authorize adopt:contoso_case/script'), wrOnly.err.message);
+  assert.ok(wrOnly.err.message.includes('--authorize adopt:view:contoso_case/script'), wrOnly.err.message);
   assert.ok(!wrOnly.err.message.includes('adopt:webresource:'), wrOnly.err.message);
   assert.deepEqual([wrOnly.wrPatches.length, wrOnly.viewPatches.length], [1, 0]);
   assert.equal(Buffer.from(wrOnly.wrPatches[0].body.content, 'base64').toString('utf8'), 'var changed = 1;');

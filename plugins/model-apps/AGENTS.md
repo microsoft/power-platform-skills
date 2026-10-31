@@ -2846,12 +2846,24 @@ or a maker's own edit, which a diff cannot tell apart), or one that cannot be co
 (`workspace-copy-unsent-edits`): nothing is written and the copy is kept as it is — the build never
 resets or discards local content on its own. The refusal names the item and the two ways on: put what
 should stay into the spec and refresh the local copy (reset the workspace), or approve replacing the
-local copy with the server's with `--authorize overwrite:<key>` (`<table>/<name>` for a view or chart,
-which also approves replacing changes made on the server; `<table>/quickFind` for a Quick Find view).
+local copy with the server's with the item's own typed key: `--authorize overwrite:view:<table>/<name>`
+or `overwrite:chart:<table>/<name>` (which also approves replacing changes made on the server), or
+`overwrite:quickfind:<table>` for a Quick Find view.
 A clean copy is planned exactly as before. When an apply's write in this run was refused or its outcome
 is unknown, the build resets that copy to the server's (it held only this run's own edit, as the copy
 was proven clean or approved for replacement just before); a reset that fails leaves the next run to
 refuse the item.
+
+Approval keys are typed by family, `<verb>:<family>:<id>` (`build-model-app.js` `authorizationKeys`,
+`reconcile-common.js` `approvalKey`), because ids collide across families: a view and a chart may share
+`<table>/<name>`, and a view may be named `quickFind`. Each approval is stored under its typed key and
+each guard (adoption, overwrite, `refuseUnsentCopy`) asks only for its own family's key, so an approval
+never reaches another artifact. Every refusal prints its item's typed key. The untyped
+`adopt:<table>/<name>` / `overwrite:<table>/<name>` is still read when it names exactly one declared view
+or chart, or (as `overwrite:<table>/quickFind`) a Quick Find view; candidates are matched case-folded and
+acceptance still needs the exact name. One that could name several — a view and a chart, two names
+differing only in case, or a view named `quickFind` on a table that declares `quickFind` — is refused
+before anything runs, naming the typed keys.
 
 `--preview-push` lists a declared view or chart as not evaluated (`noTypedTarget`): its reconciler's
 filter, sort, width and title edits are made only while the build runs.
@@ -2870,8 +2882,8 @@ Refusal codes and remedies (`remedyFor`; the build adds the CLI flag that gives 
 
 | Remedy | Codes |
 | --- | --- |
-| Adoption approval: `--authorize adopt:<table>/<name>`; a web resource's is typed, `adopt:webresource:<name>` | `view-adoption-not-authorized`, `chart-adoption-not-authorized`, `web-resource-adoption-not-authorized` |
-| Overwrite approval: `--authorize overwrite:<table>/<name>`; a web resource's is typed, `overwrite:webresource:<name>` | `view-drift`, `chart-drift`, `command-drift`, `web-resource-drift` |
+| Adoption approval: `--authorize adopt:view:<table>/<name>` or `adopt:chart:<table>/<name>`; a web resource's is `adopt:webresource:<name>` | `view-adoption-not-authorized`, `chart-adoption-not-authorized`, `web-resource-adoption-not-authorized` |
+| Overwrite approval: `--authorize overwrite:view:<table>/<name>` or `overwrite:chart:<table>/<name>`; a web resource's is `overwrite:webresource:<name>` | `view-drift`, `chart-drift`, `command-drift`, `web-resource-drift` |
 | Destructive approval: `--allow-destructive` | `view-columns-removal-not-authorized`, `quick-find-empty-not-authorized`, `web-resource-clear-not-authorized` |
 | Repair and rerun | every other code: `*-spec-invalid`, `*-lookup-unreadable`, `*-unreadable`, `*-name-ambiguous`, `*-bound-row-missing`, `*-binding-mismatch`, `*-rejected`, `*-write-unknown`, `*-created-unreadable`, `view-pinned-not-found`, `view-pinned-wrong-table`, `view-filter-unrepresentable`, `view-related-column-unrepresentable`, `chart-shape-unsupported`, `chart-create-artifact-missing`, `chart-title-not-stored`, `chart-title-unverified`, `quick-find-list-incomplete`, `quick-find-view-not-found`, `quick-find-view-ambiguous`, `quick-find-filter-unsupported`, `quick-find-views-unreadable`, `workspace-copy-unsent-edits`, `command-immutable-location`, `command-immutable-type`, `command-web-resource-missing`, `creation-port-unavailable`, `creation-adopted-rerun`, `creation-adopted-row-missing`, `managed-binding-port-unavailable` |
 

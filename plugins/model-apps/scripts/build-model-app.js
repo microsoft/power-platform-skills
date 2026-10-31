@@ -59,6 +59,7 @@ const { configurationSendOnce } = require('./lib/configuration-transport.js');
 const { sdkFirst, connectivity } = require('./lib/sdk-first.js');
 const { connectionRowFromSdk, listConnectionsWithPac } = require('./list-connections.js');
 const { isDeclaredView, compileViewIntent } = require('./lib/view-reconcile.js');
+const { approvalKey } = require('./lib/reconcile-common.js');
 const { isDeclaredChart, compileChartIntent } = require('./lib/chart-reconcile.js');
 const { isDeclaredWebResource } = require('./lib/web-resource-reconcile.js');
 const { makeWritesBlocking } = require('./lib/output-redaction.js');
@@ -751,7 +752,8 @@ async function buildModelAppHeld(spec, opts, deps, v, buildLease) {
         allowDestructive: opts.allowDestructive, // pages phase gates destructive page removals
         // The `--authorize` keys: consent to exactly the destructive schema changes they name, and to nothing else (authorizationKeys).
         authorizedDestructive: opts.authorizedDestructive,
-        // The adopt:/overwrite: keys: approvals for exactly the declared views and charts they name (authorizationKeys).
+        // The adopt:/overwrite: keys: approvals for exactly the declared views, charts and Quick Find views they name, stored under
+        // their family-typed keys (authorizationKeys).
         ...(opts.authorizedAdoption ? { authorizedAdoption: opts.authorizedAdoption } : {}),
         ...(opts.authorizedOverwrite ? { authorizedOverwrite: opts.authorizedOverwrite } : {}),
         // The adopt:webresource:/overwrite:webresource: keys: approvals for exactly the declared web resources they name, kept apart from
@@ -1081,25 +1083,33 @@ const readLanguageFlag = (flags) => readAliasedFlag(flags, 'language-code', 'lan
 //   dateTimeBehavior:<table>.<column>   a one-way Date and Time behaviour change of a column the table already has
 //   isSecured:<table>.<column>          unsecuring a secured column, which deletes every permission any profile holds on it
 //   tableFlags:<table>                  turning duplicate detection off, which unpublishes the table's duplicate rules
-// and to ONE approval a declared view or chart (reconcile: "declared", lib/view-reconcile.js, lib/chart-reconcile.js) asks for:
-//   adopt:<table>/<name>                taking over an existing view or chart of that name the spec has not managed before
-//   overwrite:<table>/<name>            replacing the changes made on the server since the build last wrote it, or a local
-//                                       copy that differs from the server's (sdk-build.js, refuseUnsentCopy)
-//   overwrite:<table>/quickFind         replacing a local copy of a declared Quick Find view (entities[].quickFind) that
-//                                       differs from the server's
+// and to ONE approval a declared view, chart or Quick Find view asks for, named by the artifact's family and id:
+//   adopt:view:<table>/<name>           taking over an existing view of that name the spec (reconcile: "declared") has not managed
+//   adopt:chart:<table>/<name>          the same for a declared chart (lib/view-reconcile.js, lib/chart-reconcile.js)
+//   overwrite:view:<table>/<name>       replacing the changes made on the server since the build last wrote it, or a local copy
+//   overwrite:chart:<table>/<name>      that differs from the server's (sdk-build.js, refuseUnsentCopy)
+//   overwrite:quickfind:<table>         replacing a local copy of a table's Quick Find view (entities[].quickFind) that differs
+//                                       from the server's; a Quick Find view is never adopted and has no server drift
+// The family is part of the key because ids collide across families: a view and a chart may share <table>/<name>, and a view
+// may be named "quickFind". Each approval is stored under its family-typed id (reconcile-common.js approvalKey, the flag minus
+// its verb) and each guard asks only for its own family, so consent to one artifact never reaches another. The untyped form
+// adopt:<table>/<name> / overwrite:<table>/<name> is still read when it names exactly one declared artifact — a view, a chart, or
+// (overwrite:<table>/quickFind) a table's Quick Find view; one that could mean several, such as a view and a chart of one name or a
+// view named "quickFind" on a table that declares quickFind, is refused, before any write, with the typed keys it could mean. Every refusal prints its artifact's typed key.
+// The two approvals are separate Sets (opts.authorizedAdoption, opts.authorizedOverwrite), so consent to one is never consent to the
+// other or to a destructive schema change.
 // and to ONE approval a declared web resource (reconcile: "declared", lib/web-resource-reconcile.js) asks for, by its whole name:
 //   adopt:webresource:<name>            writing the spec's content to an existing web resource the spec has not managed before
 //   overwrite:webresource:<name>        replacing content changed on the server since the build last wrote it
-// <table>/<name> is the artifact's key as its refusal prints it; the two approvals are separate Sets (opts.authorizedAdoption,
-// opts.authorizedOverwrite), so consent to one is never consent to the other or to a destructive schema change. A web resource's
-// approvals are typed and kept in Sets of their own (opts.authorizedWebResourceAdoption, opts.authorizedWebResourceOverwrite): its
-// name may hold '/', so `contoso_case/script` can be both a view's key and a web resource's name, and an untyped key must never
-// approve the other family's artifact.
+// A web resource's approvals are typed too and kept in Sets of their own (opts.authorizedWebResourceAdoption,
+// opts.authorizedWebResourceOverwrite): its name may hold '/', so `contoso_case/script` can be both a view's id and a web resource's
+// name, and no view, chart or untyped key ever approves a web resource.
 // It is deliberately not implied by --allow-destructive: that flag approves the form and sitemap removals the build lists, and a
 // consent to delete security or to convert stored dates must name the column it is for. The build's refusal of such a change names
 // the exact key, so the maker reads what will happen, then runs the build again with it. A key is refused unless the spec declares
 // the change it consents to, so a stale or mistyped key cannot authorize something else later. Table and column names are matched
-// case-insensitively, as the build matches them. parseArgs keeps only the last value of a repeated flag, so the keys are read from argv.
+// case-insensitively, as the build matches them; a view or chart name is matched exactly, as the reconcile keys it.
+// parseArgs keeps only the last value of a repeated flag, so the keys are read from argv.
 function authorizationKeys(argv, spec) {
   const raw = [];
   for (let i = 0; i < argv.length; i += 1) {
@@ -1116,24 +1126,22 @@ function authorizationKeys(argv, spec) {
   const problems = configuration.problems.map(({ token, code }) => (code === 'CONFIGURATION_AUTHORIZATION_UNKNOWN_ITEM'
     ? `'${token}' names a configuration item the spec does not declare`
     : `'${token}' is not <kind>:<declared key>:<field> for a field a configuration change can consent to`));
-  // The keys of the declared views and charts, as the reconcile computes them (its intent key: `<table>/<name>`, the table in
-  // lower case). A spec whose declared artifact does not compile fails validation before any key is used.
-  const declaredKeys = new Set();
+  // The ids each approval family's artifacts carry in this spec. A view's or chart's is the reconcile's intent key, `<table>/<name>`
+  // with the table in lower case (a spec whose declared artifact does not compile fails validation before any key is used); a Quick
+  // Find view's (entities[].quickFind, lib/quick-find.js) is its table, in lower case.
+  const declared = { view: new Set(), chart: new Set(), quickfind: new Set() };
   for (const v of (spec && Array.isArray(spec.views) ? spec.views : [])) {
-    if (isDeclaredView(v)) { const { intent } = compileViewIntent(v); if (intent) declaredKeys.add(intent.key); }
+    if (isDeclaredView(v)) { const { intent } = compileViewIntent(v); if (intent) declared.view.add(intent.key); }
   }
   for (const ch of (spec && Array.isArray(spec.charts) ? spec.charts : [])) {
-    if (isDeclaredChart(ch)) { const { intent } = compileChartIntent(ch); if (intent) declaredKeys.add(intent.key); }
+    if (isDeclaredChart(ch)) { const { intent } = compileChartIntent(ch); if (intent) declared.chart.add(intent.key); }
   }
-  // A table's Quick Find (entities[].quickFind, lib/quick-find.js) is keyed `<table>/quickFind`. It has no adoption and no server drift,
-  // so it takes only the overwrite approval: replacing a local copy of its Quick Find view that differs from the server's (sdk-build.js,
-  // refuseUnsentCopy).
-  const quickFindKeys = new Set();
   for (const e of (spec && Array.isArray(spec.entities) ? spec.entities : [])) {
-    if (e && e.quickFind && typeof e.schemaName === 'string') quickFindKeys.add(`${lower(e.schemaName)}/quickFind`);
+    if (e && e.quickFind && typeof e.schemaName === 'string') declared.quickfind.add(lower(e.schemaName));
   }
-  // A declared web resource's key is its name, lower-cased, as lib/web-resource-reconcile.js keys it. Validation does not refuse two
-  // web resources whose names differ only in case, so each key counts the declared resources it would name.
+  // A declared web resource's key is its name, lower-cased, as lib/web-resource-reconcile.js keys it. Validation refuses a declared
+  // web resource whose name another entry shares, letter case aside (app-spec.js); each key still counts the declared resources it
+  // would name, so this parser is safe on its own.
   const webResourceAdopt = new Set();
   const webResourceOverwrite = new Set();
   const declaredWebResources = new Map();
@@ -1143,6 +1151,17 @@ function authorizationKeys(argv, spec) {
   // An untyped key that spells a declared web resource's name is not that resource's approval. Its own branch below refuses it or
   // keeps it for the view or chart it names; when it is refused, the refusal also says which typed key the maker meant.
   const webResourceHints = [];
+  // One entry per approval family: the verbs it takes, how its id is read from the key (null: not an id of this family), and what
+  // the spec must declare for the key to approve anything. A new family is one more entry (a web resource's approvals are read in the
+  // loop first, into Sets of their own).
+  // <table>/<name>: the name may hold spaces, ':' and '/', so only the first '/' splits.
+  const tableAndName = (text) => { const m = /^([A-Za-z0-9_]+)\/(.+)$/.exec(text); return m ? `${lower(m[1])}/${m[2]}` : null; };
+  const families = {
+    view: { verbs: ['adopt', 'overwrite'], id: tableAndName, needs: 'a view with reconcile: "declared"' },
+    chart: { verbs: ['adopt', 'overwrite'], id: tableAndName, needs: 'a chart with reconcile: "declared"' },
+    quickfind: { verbs: ['overwrite'], id: (text) => (/^[A-Za-z0-9_]+$/.test(text) ? lower(text) : null), needs: 'a table that declares quickFind' },
+  };
+  const approve = (verb, family, id) => (verb === 'adopt' ? adopt : overwrite).add(approvalKey(family, id));
   for (const key of configuration.unclaimed) {
     // adopt:webresource:new_/scripts/case.js | overwrite:webresource:new_casebanner — a declared web resource, by its whole name (any case).
     const resource = /^(adopt|overwrite):webresource:(.+)$/.exec(String(key));
@@ -1153,27 +1172,53 @@ function authorizationKeys(argv, spec) {
       else problems.push(`'${key}' approves a web resource the spec does not declare with reconcile: "declared" (${lower(resource[2])})`);
       continue;
     }
-    const untyped = /^(adopt|overwrite):(.+)$/.exec(String(key));
-    if (untyped && declaredWebResources.has(lower(untyped[2]))) webResourceHints.push({ key: String(key), hint: `use ${untyped[1]}:webresource:${untyped[2]} for the declared web resource of that name` });
-    // adopt:account/My Accounts | overwrite:new_ticket/Open Tickets — the name may hold spaces and '/', so only the first '/'
-    // splits; the table is matched case-insensitively and the name exactly, as the reconcile keys them.
-    const approval = /^(adopt|overwrite):([A-Za-z0-9_]+)\/(.+)$/.exec(String(key));
-    if (approval) {
-      const artifactKey = `${lower(approval[2])}/${approval[3]}`;
-      if (approval[1] === 'overwrite' && quickFindKeys.has(artifactKey)) {
-        overwrite.add(artifactKey);
-        continue;
+    const spelled = /^(adopt|overwrite):(.+)$/.exec(String(key));
+    if (spelled && declaredWebResources.has(lower(spelled[2]))) webResourceHints.push({ key: String(key), hint: `use ${spelled[1]}:webresource:${spelled[2]} for the declared web resource of that name` });
+    const text = String(key);
+    // overwrite:quickfind:contoso_item | adopt:view:account/My Accounts | overwrite:chart:new_ticket/By Status
+    const typed = /^(adopt|overwrite):([a-z]+):(.*)$/.exec(text);
+    if (typed && Object.prototype.hasOwnProperty.call(families, typed[2])) {
+      const [, verb, family, idText] = typed;
+      const fam = families[family];
+      const id = fam.id(idText);
+      if (!fam.verbs.includes(verb)) problems.push(`'${key}' is not an approval a ${family} takes (it takes only ${fam.verbs.map((v) => `${v}:${family}:<id>`).join(' or ')})`);
+      else if (id === null || !declared[family].has(id)) problems.push(`'${key}' approves an artifact the spec does not declare (it would need ${fam.needs}${id === null ? '' : ` with the id ${id}`})`);
+      else approve(verb, family, id);
+      continue;
+    }
+    // The untyped form, adopt:account/My Accounts | overwrite:new_ticket/Open Tickets: whichever single declared view or chart it
+    // names. Candidates are found case-folded on both table and name, so two artifacts whose names differ only in case are both
+    // candidates and the key is refused as ambiguous; a single candidate is still approved only on an exact name match, as before.
+    const untyped = /^(adopt|overwrite):([A-Za-z0-9_]+)\/(.+)$/.exec(text);
+    if (untyped) {
+      const verb = untyped[1];
+      const wanted = `${lower(untyped[2])}/${untyped[3]}`;
+      const candidates = [];
+      for (const family of ['view', 'chart']) {
+        for (const id of declared[family]) if (lower(id) === lower(wanted)) candidates.push({ family, id });
       }
-      if (!declaredKeys.has(artifactKey)) {
-        problems.push(`'${key}' approves an artifact the spec does not declare (it would need a view or chart with reconcile: "declared" keyed ${artifactKey}, or for overwrite:<table>/quickFind a table that declares quickFind)`);
-        continue;
+      // A table's Quick Find view is a view too, and takes an overwrite: an overwrite whose name is "quickFind" on a table that
+      // declares quickFind might mean it. It is one more candidate: alone, overwrite:<table>/quickFind (that exact name) means it.
+      const table = lower(untyped[2]);
+      const quickFindToo = verb === 'overwrite' && lower(untyped[3]) === 'quickfind' && declared.quickfind.has(table);
+      if (candidates.length + (quickFindToo ? 1 : 0) > 1) {
+        const typedKeys = candidates.map((c) => `${verb}:${approvalKey(c.family, c.id)}`);
+        if (quickFindToo) typedKeys.push(`overwrite:${approvalKey('quickfind', table)}`);
+        problems.push(`'${key}' could approve more than one declared artifact; name the one you mean with its typed key: ${typedKeys.join(' or ')}`);
+      } else if (candidates.length === 1 && candidates[0].id === wanted) {
+        approve(verb, candidates[0].family, wanted);
+      } else if (quickFindToo && candidates.length === 0 && untyped[3] === 'quickFind') {
+        approve(verb, 'quickfind', table);
+      } else if (quickFindToo) {
+        problems.push(`'${key}' does not name a declared view or chart; to replace the local copy of ${table}'s Quick Find view use overwrite:${approvalKey('quickfind', table)}`);
+      } else {
+        problems.push(`'${key}' approves an artifact the spec does not declare (it would need a view or chart with reconcile: "declared" keyed ${wanted})`);
       }
-      (approval[1] === 'adopt' ? adopt : overwrite).add(artifactKey);
       continue;
     }
     // dateTimeBehavior:new_ticket.new_due | isSecured:new_ticket.new_salary | tableFlags:new_ticket
     const m = /^(dateTimeBehavior|isSecured):([A-Za-z0-9_]+)\.([A-Za-z0-9_]+)$|^(tableFlags):([A-Za-z0-9_]+)$/.exec(String(key));
-    if (!m) { problems.push(`'${key}' is not dateTimeBehavior:<table>.<column>, isSecured:<table>.<column> or tableFlags:<table> (nor adopt:<table>/<name>, overwrite:<table>/<name>, adopt:webresource:<name> or overwrite:webresource:<name>)`); continue; }
+    if (!m) { problems.push(`'${key}' is not dateTimeBehavior:<table>.<column>, isSecured:<table>.<column> or tableFlags:<table> (nor adopt:view:<table>/<name>, overwrite:view:<table>/<name>, the same for chart:, overwrite:quickfind:<table>, adopt:webresource:<name> or overwrite:webresource:<name>)`); continue; }
     const kind = m[1] || m[4];
     const table = lower(m[2] || m[5]);
     const entity = ((spec && spec.entities) || []).find((e) => lower(e && e.schemaName) === table);
