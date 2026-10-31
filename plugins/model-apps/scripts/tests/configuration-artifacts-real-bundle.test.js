@@ -404,6 +404,64 @@ test('a read-back that shows a child at another id than the one created is not a
   assert.deepEqual(plain.result.managedBindings, [{ kind: 'customApi', key: 'contoso_Api', id, childIds: { 'request:a': k.creates.childIdOf('contoso_api', 'request:a') }, origin: 'created' }]);
 });
 
+test('a read-back that shows each created child id under another child is not a saved item: every id is checked in its own slot', async () => {
+  // Between the create and its read-back two children of one root exchange their ids, each keeping its content: a
+  // Custom API's request parameters a and b, or a duplicate rule's conditions e and n.
+  const exchange = (table, idField, root) => {
+    let org = null;
+    let pending = true;
+    const intercept = ({ method, path }) => {
+      if (!pending || !org || method !== 'GET' || !path.startsWith(`/${root}(`) || org.rows(table).length < 2) return undefined;
+      const set = org.sets.get(table);
+      const [one, two] = [...set.values()];
+      const [first, second] = [one[idField], two[idField]];
+      set.delete(first); set.delete(second);
+      one[idField] = second; two[idField] = first;
+      set.set(second, one); set.set(first, two);
+      pending = false;
+      return undefined;
+    };
+    return { intercept, attach: (o) => { org = o; }, done: () => !pending };
+  };
+  const api = { minimumPluginVersion: '2.21.0', solution: { uniqueName: 'ContosoSol', publisherPrefix: 'contoso' },
+    customApis: [{ uniqueName: 'contoso_Api', requestParameters: [{ uniqueName: 'a', type: 'string' }, { uniqueName: 'b', type: 'integer' }] }] };
+  const swapApi = exchange('customapirequestparameters', 'customapirequestparameterid', 'customapis');
+  const h = await harness({ intercept: swapApi.intercept });
+  swapApi.attach(h.org);
+  const { result } = await h.run(api);
+  assert.equal(swapApi.done(), true);
+  const apiId = h.creates.idOf('customApi', 'contoso_api');
+  assert.deepEqual(result.saved, []);
+  assert.deepEqual(result.unknown.map((u) => [u.key, u.id, u.code, u.missing]), [['contoso_Api', apiId, 'create-completion-required', ['request:a', 'request:b']]]);
+  // Neither id is claimed for a child it is not under: the root alone is this build's.
+  assert.deepEqual(result.managedBindings, [{ kind: 'customApi', key: 'contoso_Api', id: apiId, origin: 'created' }]);
+
+  const rule = { minimumPluginVersion: '2.21.0', solution: { uniqueName: 'ContosoSol', publisherPrefix: 'contoso' },
+    duplicateDetectionRules: [{ key: 'people', name: 'Same person', entity: 'contact', conditions: [{ key: 'e', column: 'emailaddress1', match: 'exact' }, { key: 'n', column: 'lastname', match: 'exact' }] }] };
+  const swapRule = exchange('duplicateruleconditions', 'duplicateruleconditionid', 'duplicaterules');
+  const r = await harness({ intercept: swapRule.intercept });
+  swapRule.attach(r.org);
+  const ruled = await r.run(rule);
+  assert.equal(swapRule.done(), true);
+  const ruleId = r.creates.idOf('duplicateRule', 'people');
+  // A condition's id pins its row, so the exchanged criteria read as a changed rule: not saved, and no slot is bound.
+  assert.deepEqual(ruled.result.saved, []);
+  assert.deepEqual(ruled.result.unknown.map((u) => [u.key, u.code]), [['people', 'CONFIGURATION_READBACK_MISMATCH']]);
+  assert.equal(ruled.result.managedBindings.some((b) => b.childIds), false);
+
+  // Without the exchange both creates are saved and each child id is bound in its own slot.
+  const k = await harness();
+  const plain = await k.run(api);
+  assert.deepEqual(plain.result.unknown, []);
+  assert.deepEqual(plain.result.managedBindings, [{ kind: 'customApi', key: 'contoso_Api', id: apiId, origin: 'created',
+    childIds: { 'request:a': k.creates.childIdOf('contoso_api', 'request:a'), 'request:b': k.creates.childIdOf('contoso_api', 'request:b') } }]);
+  const q = await harness();
+  const plainRule = await q.run(rule);
+  assert.deepEqual(plainRule.result.unknown, []);
+  assert.deepEqual(plainRule.result.managedBindings, [{ kind: 'duplicateRule', key: 'people', id: ruleId, origin: 'created',
+    childIds: { e: q.creates.childIdOf('people', 'e'), n: q.creates.childIdOf('people', 'n') } }]);
+});
+
 test('an omitted field or child list is not managed; explicit values manage, each destructive one with its own token', async () => {
   const h = await harness();
   const full = {

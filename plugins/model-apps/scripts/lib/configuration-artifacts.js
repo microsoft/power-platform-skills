@@ -1675,17 +1675,31 @@ async function readBack(op, ctx, known, id, childIds) {
 }
 
 // The ids of the children a confirmed read shows, by slot: only these are recorded (a child the read does not
-// show is not this build's to claim).
+// show is not this build's to claim). Each id is checked in its OWN slot, never in the union of the root's children:
+// a request parameter's id must be read on the request parameter of that name, a condition's on a row its keyed
+// declaration describes. An id read under another child (two rows that exchanged ids, a row replaced by a namesake)
+// is not confirmed, so a binding can never pair a slot with another child's id. The parent is the root the read was
+// made at, so a child read here is under it.
 function confirmedChildIds(op, remote, childIds) {
   const out = {};
   if (!remote || !childIds) return out;
+  const entry = (op.detail && op.detail.entry) || {};
   for (const [slot, childId] of Object.entries(childIds)) {
     if (!childId) continue;
     let rows = [];
     if (op.kind === 'environmentVariable' && slot === 'value') rows = remote.currentValue ? [remote.currentValue] : [];
-    else if (op.kind === 'customApi') rows = [...(remote.requestParameters || []), ...(remote.responseProperties || [])];
-    else if (op.kind === 'duplicateRule') rows = remote.conditions || [];
-    if (rows.some((row) => row && ref(row.id) === ref(childId))) out[slot] = childId;
+    else if (op.kind === 'customApi') {
+      // 'request:<lower unique name>' or 'response:<lower unique name>' (a unique name may itself hold a ':').
+      const at = slot.indexOf(':');
+      const direction = slot.slice(0, at);
+      const name = slot.slice(at + 1);
+      const list = direction === 'request' ? remote.requestParameters : direction === 'response' ? remote.responseProperties : null;
+      rows = (list || []).filter((row) => row && lower(row.uniqueName) === name);
+    } else if (op.kind === 'duplicateRule') {
+      const declared = (entry.conditions || []).find((c) => isObject(c) && c.key === slot);
+      rows = declared ? (remote.conditions || []).filter((row) => row && describes(declared, row)) : [];
+    }
+    if (rows.some((row) => ref(row.id) === ref(childId))) out[slot] = childId;
   }
   return out;
 }
