@@ -53,7 +53,9 @@ Reference from a column via `"globalChoice": "new_priority"` (built before the c
   names the approval `--authorize adopt:webresource:<web resource name>`, with the row's id and the components the
   platform reports as depending on it (a script loaded by a computed or relative path is not listed);
   run the build again with that key to write it. The key is typed: a view's or chart's
-  `adopt:<table>/<name>` never approves a web resource, even one whose name is the same text. A row whose content already matches needs no
+  `adopt:<table>/<name>` never approves a web resource, even one whose name is the same text. A spec that
+  empties the content of a web resource that has content also needs `--allow-destructive`, which the
+  adoption approval does not imply; the halt names it. A row whose content already matches needs no
   approval. A declared web resource that is refused, whose write is not confirmed, or that cannot join
   the app's solution stops the build at once; it is not retried automatically. Not allowed with
   `external: true`. Verify fails a declared web resource whose deployed content differs and says to

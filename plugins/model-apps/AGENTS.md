@@ -2824,7 +2824,8 @@ charts phases. A spec that uses none of them takes the legacy paths unchanged. W
   dependents before anything is written, and is written only with the adoption approval
   (`--authorize adopt:webresource:<name>`, typed and kept in its own set, so a view's or chart's `adopt:<table>/<name>`
   never approves a web resource whose name is the same text; the CLI keeps no binding store in this release, so every content change of an
-  existing row asks for it). Unlike the kinds above, a declared web resource that does not settle stops the
+  existing row asks for it). Emptying the content of one that has content also needs `--allow-destructive`
+  (`web-resource-clear-not-authorized`); the adoption approval is not consent to it. Unlike the kinds above, a declared web resource that does not settle stops the
   build at once (`managedStop`, never retried); its solution membership is added before its binding is
   recorded. Declared process flows, dashboards, business rules and form layouts are not reconciled in this
   release; the build keeps its existing behaviour for each.
@@ -2871,7 +2872,7 @@ Refusal codes and remedies (`remedyFor`; the build adds the CLI flag that gives 
 | --- | --- |
 | Adoption approval: `--authorize adopt:<table>/<name>`; a web resource's is typed, `adopt:webresource:<name>` | `view-adoption-not-authorized`, `chart-adoption-not-authorized`, `web-resource-adoption-not-authorized` |
 | Overwrite approval: `--authorize overwrite:<table>/<name>`; a web resource's is typed, `overwrite:webresource:<name>` | `view-drift`, `chart-drift`, `command-drift`, `web-resource-drift` |
-| Destructive approval: `--allow-destructive` | `view-columns-removal-not-authorized`, `quick-find-empty-not-authorized` |
+| Destructive approval: `--allow-destructive` | `view-columns-removal-not-authorized`, `quick-find-empty-not-authorized`, `web-resource-clear-not-authorized` |
 | Repair and rerun | every other code: `*-spec-invalid`, `*-lookup-unreadable`, `*-unreadable`, `*-name-ambiguous`, `*-bound-row-missing`, `*-binding-mismatch`, `*-rejected`, `*-write-unknown`, `*-created-unreadable`, `view-pinned-not-found`, `view-pinned-wrong-table`, `view-filter-unrepresentable`, `view-related-column-unrepresentable`, `chart-shape-unsupported`, `chart-create-artifact-missing`, `chart-title-not-stored`, `chart-title-unverified`, `quick-find-list-incomplete`, `quick-find-view-not-found`, `quick-find-view-ambiguous`, `quick-find-filter-unsupported`, `quick-find-views-unreadable`, `workspace-copy-unsent-edits`, `command-immutable-location`, `command-immutable-type`, `command-web-resource-missing`, `creation-port-unavailable`, `creation-adopted-rerun`, `creation-adopted-row-missing`, `managed-binding-port-unavailable` |
 
 **Known limits.** Without the managed-binding store no binding is recorded, so every later change to a

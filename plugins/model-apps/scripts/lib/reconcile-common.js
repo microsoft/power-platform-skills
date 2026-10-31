@@ -344,14 +344,15 @@ function commitPublication(ctx, result) {
  * What a maker does about one refusal or unknown, by its code: the approval that unlocks it, or a repair.
  *   *-adoption-not-authorized                       an existing row of the same name: the adoption approval
  *   *-drift                                         the row was changed on the server: the overwrite approval
- *   *-removal-not-authorized, *-empty-not-authorized the change removes something: the destructive approval
+ *   *-removal-not-authorized, *-empty-not-authorized, *-clear-not-authorized
+ *                                                   the change removes something: the destructive approval
  *   anything else (an unknown outcome, an unreadable row, a refused write)            repair and rerun
  */
 function remedyFor(code) {
   const c = String(code || '');
   if (/-adoption-not-authorized$/.test(c)) return 'approve adopting the existing artifact (adoption approval) and rerun';
   if (/-drift$/.test(c)) return 'approve overwriting the changes made on the server (overwrite approval) and rerun';
-  if (/-(?:removal|empty)-not-authorized$/.test(c)) return 'approve the destructive change (destructive approval) and rerun';
+  if (/-(?:removal|empty|clear)-not-authorized$/.test(c)) return 'approve the destructive change (destructive approval) and rerun';
   return 'repair and rerun';
 }
 

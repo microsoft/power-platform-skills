@@ -72,7 +72,7 @@ prod-ready** app; don't under-build (a bare table list) or over-build (surfaces 
   resource at a time, never a shared (`external`) one, and never every resource of a downloaded or
   older spec. A rebuild that would change one that exists stops before writing and names its approval
   (`--authorize adopt:webresource:<web resource name>`) with the components that depend on it: show them to the
-  maker and let them choose.
+  maker and let them choose. Emptying its content also needs `--allow-destructive`; the halt says so.
 - **Form logic without code** — `businessRules[]`: show/hide, lock/unlock, set-required and
   set-value, driven by a condition on the record. **Reach for a business rule before form JS** when
   the requirement is field-level and declarative — it is visible in the maker, survives solution

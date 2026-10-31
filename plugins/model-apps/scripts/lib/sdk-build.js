@@ -3465,9 +3465,10 @@ async function runSdkBuildPhases(spec, opts, owed) {
   // label their artifact `view <key>` / `chart <key>`. The remedy names the approval in general; the CLI flag that gives it is
   // named too, so the maker can act on the line as printed: --authorize adopt:/overwrite:<key> for an adoption or a drift
   // (adopt:/overwrite:webresource:<name> for a declared web resource, labelled `web resource <name>`: its approvals are typed)
-  // (build-model-app.js authorizationKeys), and --allow-destructive (featureCtx.authorizedDestructive) for a removal.
+  // (build-model-app.js authorizationKeys), and --allow-destructive (featureCtx.authorizedDestructive) for a removal, an emptied
+  // Quick Find or an emptied web resource.
   const cliApproval = (label, code) => {
-    if (/-(?:removal|empty)-not-authorized$/.test(code)) return '--allow-destructive';
+    if (/-(?:removal|empty|clear)-not-authorized$/.test(code)) return '--allow-destructive';
     const verb = /-adoption-not-authorized$/.test(code) ? 'adopt' : /-drift$/.test(code) ? 'overwrite' : '';
     const at = verb ? label.indexOf(`: ${code} — `) : -1;
     const m = at > 0 ? /^(?:view|chart|web resource) (.+)$/.exec(label.slice(0, at)) : null;

@@ -349,3 +349,19 @@ test('real SDK: a view\'s approval never writes the web resource of the same nam
   assert.equal(both.err, undefined, both.err && both.err.message);
   assert.deepEqual([both.wrPatches.length, both.viewPatches.length], [0, 1], 'the web resource already holds the spec\'s content');
 });
+test('real SDK: emptying a declared web resource halts naming --allow-destructive, and following that halt writes it empty', async () => {
+  const { remedyFor } = require('../lib/reconcile-common.js');
+  assert.match(remedyFor('web-resource-clear-not-authorized'), /destructive approval/);
+  const { spec, build } = realBundle();
+  assert.equal((await build(spec)).err, undefined);
+  const cleared = structuredClone(spec);
+  cleared.webResources[0].content = '';
+  const adopt = approvals(cleared, 'adopt:webresource:contoso_case/script');
+  const refused = await build(cleared, adopt);
+  assert.equal(refused.err && refused.err.code, 'web-resource-clear-not-authorized', 'the adoption approval is not consent to empty it');
+  assert.ok(refused.err.message.includes('(approve with --allow-destructive)'), refused.err.message);
+  assert.equal(refused.wrPatches.length, 0);
+  const approved = await build(cleared, { ...adopt, allowDestructive: true });
+  assert.equal(approved.err, undefined, approved.err && approved.err.message);
+  assert.deepEqual(approved.wrPatches.map((c) => c.body.content), ['']);
+});
