@@ -2819,6 +2819,14 @@ charts phases. A spec that uses none of them takes the legacy paths unchanged. W
 - **Chart**: chart type, category, series and description; the title only where the stored layout
   already has a title element.
 - **Quick Find**: the find columns of the table's one default Quick Find view (`queryType` 4).
+- **Web resource** (`webResources[].reconcile: "declared"`, `lib/web-resource-reconcile.js`, created through
+  `lib/managed-create.js`): the content. An unbound existing row is read with its platform-reported
+  dependents before anything is written, and is written only with the adoption approval
+  (`--authorize adopt:<name>`; the CLI keeps no binding store in this release, so every content change of an
+  existing row asks for it). Unlike the kinds above, a declared web resource that does not settle stops the
+  build at once (`managedStop`, never retried); its solution membership is added before its binding is
+  recorded. Declared process flows, dashboards, business rules and form layouts are not reconciled in this
+  release; the build keeps its existing behaviour for each.
 - **Command bar** (`commands[].key`, `lib/command-reconcile.js`): needs the managed-binding store, which
   the build does not provide yet, so a keyed bar is refused (`managed-binding-port-unavailable`) before
   anything is written.

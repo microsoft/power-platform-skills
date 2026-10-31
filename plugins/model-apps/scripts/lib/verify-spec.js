@@ -1333,7 +1333,7 @@ async function verifySpec(spec, read, opts = {}) {
       if (wr.external === true) { add('web-resource', wr.name, true); continue; }
       const compared = webResourceContentState(wr, opts.appDir, row.content);
       if (compared.state === 'unknown') { unverified.push(`web-resource:${wr.name} (its content was not compared: ${compared.reason})`); continue; }
-      add('web-resource', wr.name, compared.state === 'same', compared.state === 'same' ? '' : "its deployed content differs from the spec's — a rebuild does not write the content of a web resource that exists; delete it (or tear the app down) and build again to deploy it");
+      add('web-resource', wr.name, compared.state === 'same', compared.state === 'same' ? '' : (wr.reconcile === 'declared' ? "its deployed content differs from the spec's — run the build again (with the approval it names if it stops at this web resource)" : "its deployed content differs from the spec's — a rebuild does not write the content of a web resource that exists; delete it (or tear the app down) and build again to deploy it"));
     }
     });
   }

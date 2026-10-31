@@ -662,6 +662,18 @@ Mention, but do **not** author or build: quick-create forms and standard system
 views (All Records, Lookup, etc.) are sensible future additions but are out of
 scope for this authoring phase.
 
+#### Declared web resources (maker's choice)
+
+By default a rebuild reuses an existing web resource as it is. Offer `reconcile: "declared"` only
+when the maker wants a rebuild to keep one web resource's content in step with the spec: declare one
+resource at a time, at the maker's request, never an `external` one, and never every resource of a
+downloaded or older spec. A declared web resource sets `minimumPluginVersion` to `"2.21.0"` or newer
+(validation warns otherwise). When a rebuild would change one that already exists, the build stops
+before writing and names `--authorize adopt:<web resource name>` with the components that depend on
+it: show them and get a yes. Declared process flows, dashboards, business rules and form layouts are
+not reconciled in this release — never write `reconcile` on them; the build keeps its existing
+behaviour for each.
+
 #### Confirm Level (b)
 
 Only now — with forms, views, charts, sample data, **pages** and the app shell all

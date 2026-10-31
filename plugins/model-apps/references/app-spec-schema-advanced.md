@@ -46,6 +46,17 @@ Reference from a column via `"globalChoice": "new_priority"` (built before the c
   and a warning names the web resource; verify fails its `web-resource` check for the same reason (an
   `external` entry is checked only for existence). Delete the web resource (or tear down) and rebuild to change it —
   note it cannot be deleted while a command or form handler still references it.
+- **`reconcile: "declared"`** *(optional; needs `minimumPluginVersion: "2.21.0"`)* — the build keeps this
+  web resource's content in step with the spec: a rebuild compares the published content with the
+  spec's and, when they differ, writes the spec's content to the same row, publishes it and reads it
+  back. When the row already exists and its content differs, the build stops at it before writing and
+  names the approval `--authorize adopt:<web resource name>`, with the row's id and the components the
+  platform reports as depending on it (a script loaded by a computed or relative path is not listed);
+  run the build again with that key to write it. A row whose content already matches needs no
+  approval. A declared web resource that is refused, whose write is not confirmed, or that cannot join
+  the app's solution stops the build at once; it is not retried automatically. Not allowed with
+  `external: true`. Verify fails a declared web resource whose deployed content differs and says to
+  run the build again.
 - **An unconfirmed first write is different from an ordinary content edit.** A
   `WEB_RESOURCE_UNVERIFIED` halt names the existing row; it does not mean the resource was lost.
   Keep the same writable build workspace and run the full build again after resolving the cause:
@@ -630,5 +641,7 @@ to keep into the spec and refresh the local copy, or approve replacing it with t
 Quick Find. **Publishing.** A table is published only when every declared change on it succeeded: when one
 fails, the build reports the table as withheld, publishes the other tables, and exits non-zero.
 
-`reconcile` on a form, dashboard, web resource, business rule or flow is a validation error, and a
-command bar with `commands[].key` is refused (`managed-binding-port-unavailable`) in this version.
+Declared upkeep of web resources is described with `webResources[]` above. Declared process flows,
+dashboards, business rules and form layouts are not reconciled in this release: `reconcile` on a form,
+dashboard, business rule or flow is a validation error, and the build's existing behaviour for each is
+unchanged. A command bar with `commands[].key` is refused (`managed-binding-port-unavailable`) in this version.

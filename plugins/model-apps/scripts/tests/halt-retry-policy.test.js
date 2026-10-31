@@ -118,6 +118,7 @@ const POLICY = {
 };
 // The sites whose code is an expression, on purpose: the code is decided at run time, so the policy cannot be read off a literal.
 const DYNAMIC = [
+  { file: 'lib/sdk-build.js', expr: 'stopCode', kind: 'never', what: 'a declared artifact that did not settle (managedStop): the code of its own first finding; never retried' },
   { file: 'lib/entity-provision.js', expr: "(err && err.code) || 'sdk-error'", kind: 'by-failure', what: 'the runner wraps every failed step with the code of what failed' },
   { file: 'lib/entity-provision.js', expr: 'sdkCode', kind: 'by-failure', what: 'a push the SDK refused by value, with the code the SDK gave' },
   { file: 'lib/sdk-build.js', expr: 'verdict.code', kind: 'never', what: 'the navigation verdict (app-navigation-empty): a re-run reads the same spec' },

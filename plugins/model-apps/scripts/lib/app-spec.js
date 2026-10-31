@@ -2023,7 +2023,7 @@ const APP_MEMBERSHIP_MIN_VERSION = '2.13.0';
 // only ADD forms there and a declared chart off the navigation would stay out of the app.
 const APP_MEMBERSHIP_UPDATE_MIN_VERSION = '2.21.0';
 const isPluginVersion = (value) => typeof value === 'string' && /^\d+(?:\.\d+)*(?:[-+][0-9A-Za-z.-]+)?$/.test(value);
-// Declared reconciliation (views and charts with reconcile: "declared", a view's viewId pin and joins, a chart title, command
+// Declared reconciliation (views, charts and web resources with reconcile: "declared", a view's viewId pin and joins, a chart title, command
 // keys and row pins, a table's quickFind): an older plugin ignores these fields (or, for quickFind, refuses the table), so a
 // spec that uses one names the release that reads it.
 const DECLARED_RECONCILE_MIN_VERSION = '2.21.0';
@@ -2032,6 +2032,7 @@ function usesDeclaredReconcile(spec) {
   const keyed = (c) => c.key !== undefined || c.rowId !== undefined || any(c.children, keyed);
   return any(spec.views, (v) => v.reconcile !== undefined || v.viewId !== undefined || v.linkEntities !== undefined)
     || any(spec.charts, (ch) => ch.reconcile !== undefined || ch.title !== undefined)
+    || any(spec.webResources, (wr) => wr.reconcile !== undefined)
     || any(spec.commands, keyed)
     || any(spec.entities, (e) => e.quickFind !== undefined);
 }
@@ -2923,6 +2924,8 @@ function validateAppSpec(spec, opts = {}) {
   for (const wr of spec.webResources || []) {
     if (!wr || !wr.name) { errors.push('a webResource is missing a name'); continue; }
     validateDescription(wr.description, `webResource '${wr.name}'`, errors);
+    if (wr.reconcile !== undefined && wr.reconcile !== 'declared') errors.push(`webResource ${wr.name}: reconcile must be "declared" when it is given`);
+    if (wr.reconcile === 'declared' && wr.external === true) errors.push(`webResource ${wr.name}: an external web resource is shared and never written by a build, so it cannot also be declared for reconciliation`);
     webResourceNames.add(wr.name.toLowerCase());
     const wrType = String(wr.type || '').toLowerCase();
     if (IMAGE_WR_TYPES.has(wrType)) imageWebResourceNames.add(wr.name.toLowerCase());
@@ -3304,10 +3307,10 @@ function validateAppSpec(spec, opts = {}) {
       for (const f of validateQuickFindSpec({ quickFind: e.quickFind }, `entities[${i}] (${e.schemaName})`)) errors.push(`${f.path}: ${f.message}`);
     });
     // Business process flows are left out: their key allow-list already refuses `reconcile`.
-    for (const kind of ['dashboards', 'webResources', 'forms', 'businessRules']) {
+    for (const kind of ['dashboards', 'forms', 'businessRules']) {
       for (const x of spec[kind] || []) {
         if (x && typeof x === 'object' && x.reconcile !== undefined) {
-          errors.push(`${kind}: '${x.name || x.entity || '(unnamed)'}' — reconcile is supported only on views and charts; leave it out (this artifact keeps the existing build behaviour)`);
+          errors.push(`${kind}: '${x.name || x.entity || '(unnamed)'}' — reconcile is supported only on views, charts and web resources; leave it out (this artifact keeps the existing build behaviour)`);
         }
       }
     }

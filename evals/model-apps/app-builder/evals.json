@@ -388,6 +388,26 @@
         "author: each new table searches on its primary name plus the identifiers the prompt names",
         "author: a column from a related table joins that table on the view that shows it, and only there"
       ]
+    },
+    {
+      "id": 17,
+      "tier": "full",
+      "spec": "app-spec.json",
+      "prompt": "Declared web resource: the process-logic case app, where the maker asked the build to keep one HTML web resource's content in step with the spec on every rebuild — exercises reconcile: \"declared\" on webResources[].",
+      "expect": {
+        "tables": ["new_customer", "new_case"],
+        "relationships": ["new_customer_new_case"],
+        "views": ["Open Cases"],
+        "charts": [],
+        "declaredWebResources": ["new_casebanner"]
+      },
+      "expectations": [
+        "the BPF stage order is Intake, Investigate, Resolve and every step binds a declared column",
+        "the BPF binds the relationship lookup new_accountref, not just the case table’s own columns",
+        "a rule with two conditions compiles both, ANDed, and neither is dropped",
+        "every business rule and the process flow each get exactly one teardown step",
+        "author: a web resource the maker asked to keep in step is declared, never shared, and is the only kind besides views and charts that carries reconcile"
+      ]
     }
   ]
 }

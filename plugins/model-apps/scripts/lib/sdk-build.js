@@ -152,6 +152,7 @@ const { uniqueKeys } = require('./unique-keys.js');
 const { createSolutionMembership, ensureSolutionComponent } = require('./solution-membership.js');
 const { readPageComponentType, pageComponent } = require('./page-solution.js');
 const { openUnconfirmedWebResources } = require('./web-resource-records.js');
+const { isDeclaredWebResource, webResourceReads, readWebResourceDependents, planWebResourceUpdate, applyWebResourceUpdate, settleWebResourceReceipt } = require('./web-resource-reconcile.js');
 const { openDashboardCreations } = require('./dashboard-creation-records.js');
 const { ownValue } = require('./own-keys.js');
 const { navigationEntryKind, navigationHolds, navigationIsPagesOnly, navigationVerdict } = require('./app-navigation.js');
@@ -3468,7 +3469,7 @@ async function runSdkBuildPhases(spec, opts, owed) {
     if (/-(?:removal|empty)-not-authorized$/.test(code)) return '--allow-destructive';
     const verb = /-adoption-not-authorized$/.test(code) ? 'adopt' : /-drift$/.test(code) ? 'overwrite' : '';
     const at = verb ? label.indexOf(`: ${code} — `) : -1;
-    const m = at > 0 ? /^(?:view|chart) (.+)$/.exec(label.slice(0, at)) : null;
+    const m = at > 0 ? /^(?:view|chart|web resource) (.+)$/.exec(label.slice(0, at)) : null;
     return m ? `--authorize ${verb}:${m[1]}` : '';
   };
   const featureIncomplete = (phase, label, detail = {}) => {
@@ -3604,6 +3605,59 @@ async function runSdkBuildPhases(spec, opts, owed) {
   const resolveTableId = async (logical) => (await tableRefs(provision.dataverse, [logical])).get(String(logical).toLowerCase()).metadataId;
   const solutionMembers = createSolutionMembership({ read: provision, solutionUniqueName: sol && sol.uniqueName, componentTypes: Object.values(COMPONENT_TYPE), resolveTableId });
   const ensureInSolution = (componentId, componentType, table) => ensureSolutionComponent(provision, solutionMembers, { componentId, componentType, solutionUniqueName: sol.uniqueName }, { table });
+  // A declared artifact that did not settle stops the build. Its result's own findings decide — never the SDK error
+  // behind them: rethrown, a 5xx answer would make the runner judge an unsettled create as transient and retry it, and a
+  // create that may have stored a row must be inspected first. RETRY.NEVER marks the halt `transient: false`, which
+  // retryPolicyFor reads through the runner's wrapping halt. The halt says each finding and, for one an approval
+  // settles, the exact flag (cliApproval), so the maker reads what to do from the halt itself.
+  const managedStop = (phase, label, stopCode, { cause, findings = [] } = {}) => {
+    const said = findings.filter((x) => x && x.code).map((x) => {
+      const flag = cliApproval(`${label}: ${x.code} — `, x.code);
+      return `${x.code} — ${x.message}${flag ? ` (approve with ${flag})` : ''}`;
+    });
+    const err = new BuildHalt(`${label}: ${said.length ? said.join('; ') : stopCode} — this declared artifact did not settle, and nothing more was written for it. Fix the cause (or give the approval named above) and run the build again; it is not retried automatically.`, { phase, code: stopCode, recoverable: false, retry: RETRY.NEVER, cause });
+    Object.defineProperty(err, 'findings', { value: findings, enumerable: false, configurable: true });
+    return err;
+  };
+  // Settle one declared artifact's result, in order:
+  //   1. every publication target it carries is noted on the barrier (a web resource carries none);
+  //   2. a clean result's rows join the app's solution: `memberIds` when the caller names them (a declared web resource
+  //      claims every row its result holds, adopted rows included), else the rows THIS key created (saved `created`,
+  //      unchanged `continued`). A failed add is an unknown (`managed-membership-failed`): the row is saved and possibly
+  //      outside the solution, so its bindings are NOT recorded and the next run treats it as unbound;
+  //   3. settleFeatureResult: blocks a failed result's scopes, reports each finding, records bindings;
+  //   4. a result that is not ok halts (managedStop), as does a binding that could not be recorded.
+  // Nothing that depends on the artifact (its output map, a later phase) runs unless this returns.
+  const settleManagedResult = async (phase, label, r, { componentType, memberIds } = {}) => {
+    for (const p of r.pendingPublish || []) {
+      if (p && p.scope && p.scope.id) owed.barrier.noteTarget(p.scope.table, [p.scope.type, p.scope.id]);
+    }
+    let membershipError;
+    if (!r.refused.length && !r.unknown.length) {
+      const ids = Array.isArray(memberIds) ? memberIds : [...r.saved.filter((s) => s.created), ...r.unchanged.filter((s) => s.continued)].map((s) => s.id);
+      for (const id of new Set(ids.filter(Boolean))) {
+        try {
+          await ensureInSolution(id, componentType);
+        } catch (err) {
+          membershipError = err;
+          r.unknown.push({ key: label, code: 'managed-membership-failed', message: `${id} is saved but could not be added to solution '${sol.uniqueName}' (${String((err && err.message) || err).replace(/\s+/g, ' ').slice(0, 200)})` });
+          r.managedBindings = [];
+          break;
+        }
+      }
+    }
+    let settled;
+    try {
+      settled = settleFeatureResult(phase, label, r);
+    } catch (err) {
+      throw managedStop(phase, label, 'managed-binding-write-failed', { cause: err, findings: [...r.refused, ...r.unknown] });
+    }
+    if (!settled.ok) {
+      const findings = [...r.refused, ...r.unknown];
+      throw managedStop(phase, label, (findings[0] && findings[0].code) || 'managed-not-settled', { cause: membershipError, findings });
+    }
+    return settled;
+  };
 
   // With --publish, phase 8 publishes the table of every view and form the reconcile paths touch (an entity
   // PublishXml ships every pending customization on that table), so a reconcile's own publish would only
@@ -3996,6 +4050,42 @@ async function runSdkBuildPhases(spec, opts, owed) {
   //     An `external` web resource is a shared one the build reuses as it finds it, so its content is not the spec's to compare.
   if (has('web-resources')) {
     for (const wr of spec.webResources || []) {
+      if (isDeclaredWebResource(wr)) {
+        // `web resource <name>` is the label cliApproval reads to print the approval flag (--authorize adopt:<name>).
+        const wrLabel = `web resource ${wr.name}`;
+        await runner.run('web-resources', `${wrLabel} (${wr.type || 'js'}) (declared)`, async () => {
+          // The receipt store rides on a copy: featureCtx itself carries no `unconfirmed`.
+          const wrCtx = { ...featureCtx, unconfirmed: unconfirmedWebResources };
+          // webResourceOpts throws when the spec's content cannot be read (a contentPath that is not there); the helper
+          // answers a null options as unknown 'web-resource-source-unreadable' and writes nothing.
+          let options = null;
+          try { options = webResourceOpts(wr, opts.appDir); } catch { options = null; }
+          const plan = await planWebResourceUpdate({
+            webResource: wr,
+            options,
+            reads: webResourceReads(provision.dataverse),
+            readDependents: readWebResourceDependents(provision.dataverse),
+            recordedId: unconfirmedWebResources.idOf(wr.name),
+          }, wrCtx);
+          const r = await applyWebResourceUpdate(plan, { sdk: provision }, wrCtx);
+          // An adoption is asked with what it would take over: the row's id and the components the platform reports as
+          // depending on it (plan.approvalFacts). Only direct, platform-tracked dependents exist there; the note says so.
+          const facts = plan.approvalFacts;
+          if (facts && facts.dependents) {
+            const types = Object.entries(facts.dependents.byComponentType).map(([t, n]) => `${n} of component type ${t}`).join(', ');
+            const said = `row ${facts.id}; ${facts.dependents.count} dependent component(s)${types ? ` (${types})` : ''}; ${facts.dependents.note}`;
+            r.refused = r.refused.map((x) => (x.code === 'web-resource-adoption-not-authorized' ? { ...x, message: `${x.message} [${said}]` } : x));
+          }
+          // Membership, then the binding, then the halt (settleManagedResult): every row the result holds joins the solution before
+          // anything is recorded; a failed add records nothing, and a result that is not clean stops the build.
+          const memberIds = r.saved.concat(r.unchanged).map((s) => s.id).filter(Boolean);
+          await settleManagedResult('web-resources', wrLabel, r, { componentType: COMPONENT_TYPE.webResource, memberIds });
+          // Only after a clean settlement: the receipt of an unconfirmed publication is cleared, and the id is handed on.
+          settleWebResourceReceipt(wrCtx, plan, r);
+          for (const s of r.saved.concat(r.unchanged)) if (s.id) result.created.webResources[wr.name] = s.id;
+        });
+        continue;
+      }
       const recordedId = unconfirmedWebResources.idOf(wr.name);
       if (recordedId) {
         await runner.run('web-resources', `web resource ${wr.name} (${wr.type || 'js'}) (written again: its publication was not confirmed)`, async () => {

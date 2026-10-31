@@ -1029,4 +1029,24 @@ ASSERTIONS.set('author: a column from a related table joins that table on the vi
   return want.size ? fail(`no view ${[...want.keys()].join(', ')}`) : PASS;
 });
 
+// per-eval expectations (eval 17 "declared web resource") — reconcile: "declared" on webResources[] (2.21.0). Graded
+// against the eval's own expect.declaredWebResources, so a fixture that declares another resource fails.
+ASSERTIONS.set('author: a web resource the maker asked to keep in step is declared, never shared, and is the only kind besides views and charts that carries reconcile', ({ facts, spec, eval: ev }) => {
+  const want = (ev.expect && ev.expect.declaredWebResources) || [];
+  if (!want.length) return fail('no independent declared-web-resource expectations');
+  const declared = (spec.webResources || []).filter((w) => w && w.reconcile === 'declared');
+  const names = declared.map((w) => String(w.name).toLowerCase()).sort();
+  if (JSON.stringify(names) !== JSON.stringify(want.map((n) => n.toLowerCase()).sort())) return fail(`declared web resources [${names}], expected [${want}]`);
+  if (declared.some((w) => w.external === true)) return fail('a declared web resource is external');
+  if (!versionAtLeast(spec.minimumPluginVersion, '2.21.0')) return fail(`minimumPluginVersion ${spec.minimumPluginVersion || '(none)'} is below 2.21.0`);
+  // The product's own gate (validateAppSpec): a spec that declares one without the floor is warned.
+  const gate = (facts.author.validate.warnings || []).filter((w) => w.includes('minimumPluginVersion'));
+  if (gate.length) return fail(gate.join('; '));
+  for (const [kind, list] of Object.entries(spec)) {
+    if (['views', 'charts', 'webResources'].includes(kind) || !Array.isArray(list)) continue;
+    for (const item of list) if (item && typeof item === 'object' && item.reconcile !== undefined) return fail(`${kind} '${item.name || item.entity || '?'}' carries reconcile, which this release does not apply`);
+  }
+  return PASS;
+});
+
 module.exports = { ASSERTIONS };

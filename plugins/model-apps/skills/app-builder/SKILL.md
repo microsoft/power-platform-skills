@@ -67,6 +67,12 @@ prod-ready** app; don't under-build (a bare table list) or over-build (surfaces 
   script means deleting it first (the build warns, and verify fails, when a web resource's deployed
   content differs from the spec's). This does not apply to recovery of the build's own
   `WEB_RESOURCE_UNVERIFIED` row: keep that row and the same build workspace, then follow its halt.
+  When the maker wants a rebuild to keep a web resource's content in step with the spec, mark that
+  resource `reconcile: "declared"` instead (`minimumPluginVersion: "2.21.0"`) — only when asked, one
+  resource at a time, never a shared (`external`) one, and never every resource of a downloaded or
+  older spec. A rebuild that would change one that exists stops before writing and names its approval
+  (`--authorize adopt:<web resource name>`) with the components that depend on it: show them to the
+  maker and let them choose.
 - **Form logic without code** — `businessRules[]`: show/hide, lock/unlock, set-required and
   set-value, driven by a condition on the record. **Reach for a business rule before form JS** when
   the requirement is field-level and declarative — it is visible in the maker, survives solution
@@ -133,7 +139,9 @@ prod-ready** app; don't under-build (a bare table list) or over-build (surfaces 
   that differs from the server's stops it the same way (`workspace-copy-unsent-edits`) and is kept: ask
   whether to put that change into the spec and refresh the local copy, or approve its `overwrite:` key
   (`<table>/quickFind` for search columns). Never write
-  `reconcile` on forms, dashboards, web resources, business rules or flows, and never write a command
+  `reconcile` on forms, dashboards, business rules or flows (declared process flows, dashboards,
+  business rules and form layouts are not reconciled in this release; the build keeps its existing
+  behaviour for each), on a web resource only as the web-resource bullet above says, and never write a command
   `key` (keyed command bars are refused in this version). Leave a downloaded or older spec without
   these fields as it is — see the advanced reference.
 - **AI-first features** (admin-gated) — form-fill assist, natural-language grid/view search, NL chart

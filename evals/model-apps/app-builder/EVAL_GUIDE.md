@@ -63,6 +63,7 @@ confined to the fixture directory, including when the fixtures root is a junctio
 | 14 | `14-app-exact-main-forms` | "Only the Summary form": `app.mainForms` lists it with `mainFormsOnUpdate: "exact"`; an "add the Summary form" ask must not get `exact` (negative unit probe). Verify must read an exact list strictly. The spec asks for 2.21.0. |
 | 15 | `15-app-pin-offnav-chart` | A new app with a chart of a table outside its navigation sets `app.pinDeclaredArtifacts: true`. |
 | 16 | `16-declared-search-join` | A new app declares every view and chart (`reconcile: "declared"`, none named like a stock view, no chart `title`), gives each new table search columns (`quickFind`: the primary name plus the identifiers the prompt names), and joins a related table only on the view that shows its column. No form or command carries `reconcile` or a command `key`. |
+| 17 | `17-declared-web-resource` | Fixture 5 with one HTML web resource marked `reconcile: "declared"` (the maker asked a rebuild to keep its content in step); the spec sets `minimumPluginVersion` `2.21.0`, which validation asks for, and no other kind but views, charts and web resources carries `reconcile` (declared process flows, dashboards, business rules and form layouts are not reconciled in this release). |
 
 > **Fixture 2 note:** `appShell.subAreas[].page` references use the page's **key** (e.g. `"overview"`), not its display name (`"Overview"`). The v2 validator requires keys, and the linter accepts valid key references; `key === name` is neither required nor used by this fixture.
 
