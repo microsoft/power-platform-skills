@@ -7,42 +7,35 @@ evidence and trade-offs behind a change live in its PR, in `docs/`, or in the li
 
 ## [2.21.0]
 
-The bundled SDK is updated (commit 0eef55f8c2d0).
+Bundled SDK: commit 0eef55f8c2d0.
 
 ### Added
 
-- **Portable schema fields**: Choice `value`s, `dateTimeBehavior`, `isSecured`, `fieldSecurityProfiles`, table flags
-  ([schema](references/app-spec-schema-advanced.md)); one-way changes need `--authorize <key>`.
-- **Configuration items**: environment variables (secrets included), connection references, Custom APIs, duplicate-detection
-  rules, `solution.version` ([schema](references/app-spec-schema.md)); per-environment values come from `--deployment-settings`, not the spec.
-- **Declared views and charts follow the spec on rebuild** (`reconcile: "declared"`); changing one needs
-  `--authorize adopt:view:<table>/<name>` (or `chart:`); untyped keys work if unambiguous.
-- **Declared web resources follow the spec** (`reconcile: "declared"`); changing one needs `--authorize adopt:webresource:<name>`,
-  emptying it also `--allow-destructive`; case-only name twins are refused.
-- **`app.mainFormsOnUpdate: "exact"` and `app.pinDeclaredArtifacts`** keep an updated app's forms and components as the spec
-  says; a lost component-add answer is finished in-run.
-- **`--preview-push`, `--inspect-components`, `solutions.js inspect` and `plan-app-promotion.js`** inspect read-only;
-  `data-fix.js` repairs rows.
-- **`genpage.js` takes `--draft`**, a pages lease, and `prepare-compiler-refresh` ([skill](skills/genpage/SKILL.md)).
+- **Portable schema**: Choice `value`s, `dateTimeBehavior`, `isSecured`, `fieldSecurityProfiles`, table flags ([schema](references/app-spec-schema-advanced.md)); `--include-capabilities` downloads behaviours/flags; destructive edits need `--authorize <key>`.
+- **Configuration**: environment variables (including secrets), connection references, Custom APIs, duplicate-detection rules and `solution.version` ([schema](references/app-spec-schema.md)). Per-environment values use `--deployment-settings`.
+- **Declared views, charts and web resources** follow the spec on rebuild (`reconcile: "declared"`). Existing-item changes need `--authorize adopt:view:<table>/<name>`, `adopt:chart:<table>/<name>` or `adopt:webresource:<name>`; untyped view/chart keys work only unambiguously. Web-resource case-only name duplicates are refused.
+- **`entities[].quickFind.findColumns`** sets search columns; `--verify` checks them.
+- **`app.mainFormsOnUpdate: "exact"`** restricts listed tables' Main-form membership (`--allow-destructive` on existing apps); **`app.pinDeclaredArtifacts`** adds declared forms/views/charts/dashboards. Lost component-add answers are checked, repaired once if possible, otherwise reported incomplete.
+- **Read-only tools**: build `--dry-run --preview-push`, verify `--inspect-components`, `solutions.js inspect`, `plan-app-promotion.js`. **`data-fix.js`** repairs rows.
+- **Page drafts**: `genpage-upload.js --draft`, `genpage.js` navigation `--draft`; pages leases and `prepare-compiler-refresh` ([skill](skills/genpage/SKILL.md)).
 
 ### Changed
 
-- **Builds read slightly more**: column reads include `IsSecured`, name lookups read every match, a table gaining a column
-  first reads its Date and Time behaviours, and teardown reads forms that may embed a page.
-- **Teardown keeps** a page a form still embeds and configuration items, naming them.
-- **Pages calling a declared connection reference or Custom API wait until it is usable.**
+- **Reads** add `IsSecured`, enumerate name matches, count distinct IDs, leave incomplete lookups unproven, check Date and Time behaviours once per existing table gaining columns, and scan published/unpublished forms before page teardown.
+- **Teardown** keeps form-embedded pages and named configuration items; downloads omit configuration.
+- **Pages calling unusable declared connection references or Custom APIs halt before writing**; fix prerequisites and rerun.
 
 ### Fixed
 
-- **A flow delete answered "no active transaction" is sent again**; an unknown-outcome step is not re-run.
+- Business-process-flow deletes retry "no active transaction"; unknown-outcome process steps never retry. Refused app-access unlinks now fail.
 
 ### Known limitations
 
-- Each later change to a declared view, chart or web resource needs `adopt:` again; keyed command bars are refused.
-- A local view, chart or Quick Find copy that differs from the server's is refused (`workspace-copy-unsent-edits`);
-  `overwrite:quickfind:<table>` replaces a Quick Find copy.
-- A whole-build retry after a lost create answer can create a second configuration row.
-- `forms[].genPages` stops with `form-page-embeds-incomplete`; use a navigation page.
+- Each later declared edit needs adoption; keyed commands are refused. Differing local view/chart/Quick-Find copies are refused; printed `--authorize overwrite:` keys discard local edits.
+- Emptying web resources or Quick Find or removing view columns needs `--allow-destructive`.
+- Component inspection fails for caption-only controls.
+- Lost configuration-create answers can cause duplicates on whole-build retry; after duplicate-table recovery, declared Date and Time repairs may need another run.
+- `forms[].genPages` halts `form-page-embeds-incomplete`; use navigation.
 
 ## [2.20.6]
 
