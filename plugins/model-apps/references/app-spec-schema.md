@@ -1786,8 +1786,9 @@ custom control), but the spec validator emits a warning.
   so each must already exist in the environment you rebuild into: the **connection reference** each connector
   binding goes through, and the connection behind it, which holds a user's sign-in (create the reference with
   `create-connection-reference.js`, or move it in a solution with `add-page-to-solution.js --connection-refs` and
-  `solution-settings.js`); the **Custom API** each action binding names, a solution component and not an App Spec
-  item; and, for a connector binding that names a `dataset` or `tables` (a SharePoint site and its list ids),
+  `solution-settings.js`, or declare it in `connectionReferences[]` — see *Configuration items* below — and the build
+  makes it before the pages); the **Custom API** each action binding names, a solution component unless the spec
+  declares it in `customApis[]`; and, for a connector binding that names a `dataset` or `tables` (a SharePoint site and its list ids),
   the same resources. A download names what it found, on stderr and as `pageBindings` in its JSON result.
   **A rebuild checks them before it writes anything** (a build, and a dry run in its plan): it reads the
   environment's connection references and Custom APIs for the names the pages it writes state, and
@@ -1870,6 +1871,62 @@ custom control), but the spec validator emits a warning.
 - **Offline evaluation.** The app-builder eval harness (`evals/model-apps/app-builder/`) grades
   page-stage structural facts from the spec offline (navigation graph resolution, intent-vs-tsx
   completeness). See [`evals/model-apps/app-builder/EVAL_GUIDE.md`](../../../evals/model-apps/app-builder/EVAL_GUIDE.md).
+
+## Configuration items (optional) — `environmentVariables[]`, `connectionReferences[]`, `customApis[]`, `duplicateDetectionRules[]`, `solution.version`  [2.21.0]
+```jsonc
+{
+  "minimumPluginVersion": "2.21.0",
+  "solution": { "uniqueName": "ContosoDesk", "publisherPrefix": "contoso", "version": "1.2.0.0" },
+  "environmentVariables": [
+    { "schemaName": "contoso_ApiBase", "type": "string", "name": "API base", "defaultValue": "https://api.contoso.com" },
+    { "schemaName": "contoso_ApiKey", "type": "secret", "name": "API key" }                       // value: deployment settings only
+  ],
+  "connectionReferences": [
+    { "logicalName": "contoso_sharepoint", "connectorId": "/providers/Microsoft.PowerApps/apis/shared_sharepointonline" }
+  ],
+  "customApis": [
+    { "uniqueName": "contoso_Escalate", "binding": "entity", "boundEntityLogicalName": "contoso_ticket", "isFunction": false,
+      "requestParameters": [ { "uniqueName": "Reason", "type": "string" } ],
+      "responseProperties": [ { "uniqueName": "Accepted", "type": "boolean" } ] }
+  ],
+  "duplicateDetectionRules": [
+    { "key": "same-email", "name": "Contacts with the same email", "entity": "contact",
+      "conditions": [ { "key": "email", "column": "emailaddress1", "match": "exact" } ] }
+  ]
+}
+```
+- **What the build does.** A build makes each declared item in the build solution (and proves it, and each
+  Custom API parameter, response property and rule condition, a member of it), compares an item that is already
+  there and writes only the fields that differ, and sets `solution.version` (`major.minor.build.revision`). An
+  unchanged spec built again sends no write. **An omitted field is not managed:** declaring an item that exists
+  without a field, or without a child list, never clears the field or removes the children. Lint warns without
+  `minimumPluginVersion: "2.21.0"` — an older plugin ignores these fields. A spec without them builds exactly as before.
+- **Values that differ per environment never live in the spec.** An environment variable's current value and a
+  connection reference's connection come from `--deployment-settings <file>`, the solution deployment-settings
+  shape (`EnvironmentVariables[]` with `SchemaName` / `Value`, `ConnectionReferences[]` with `LogicalName` /
+  `ConnectionId`). Nothing from the file is printed. A `secret` variable takes no `defaultValue` (an error when
+  the spec is built, a warning when it is only read); give it a Key Vault reference through the settings file. A
+  connection the file names must be listed in the environment's connections for the reference's connector, or the
+  configuration step stops (a connection of another connector is not proof).
+- **Consent to a destructive change.** Clearing a value, unbinding a reference, removing a Custom API parameter or
+  property, or removing a rule condition is refused until it is authorized, one change at a time:
+  `--authorize <kind>:<key>:<field>` (for example `--authorize environmentVariableValue:contoso_apibase:value`,
+  `--authorize connectionReference:contoso_sharepoint:connectionId`). The key is the declared name, lower-cased (a
+  rule's own `key` as written); a refused change (`DESTRUCTIVE_CHANGE_UNAUTHORIZED`) names the exact token it lacks. A token for an item the spec does
+  not declare is refused before anything runs.
+- **Pages wait for what they call.** A page whose bindings name a declared connection reference or Custom API is not
+  written until the item is usable — the reference made and bound to a proven connection, the Custom API made with an
+  implementation (a plug-in type) the build can see: the build stops before the pages with
+  `configuration-prerequisite-not-applied` instead of warning and writing a page that cannot reach its data. A
+  declared Custom API without an implementation is still built (a scaffold); only the pages that call it wait. A
+  reference already there for another connector still stops the build (`pages-binding-reference-conflict`).
+- **Lost answers.** A configuration write is sent once in a build: when its answer is lost the step stops as
+  unknown (`configuration-incomplete`) and the build is not retried. Configuration rows are created through the
+  plain create path, so a whole-build retry after a lost answer can create a second one — check the environment
+  before you run the build again.
+- **Not carried by teardown or download.** A teardown never deletes a configuration item (nothing proves this app
+  owns it); it names each one as kept, by name only, and says when a Custom API bound to a table the spec makes will
+  block that table's delete. A download does not bring these items back into the spec yet.
 
 ## appShell
 ```jsonc

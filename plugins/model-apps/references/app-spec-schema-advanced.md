@@ -588,7 +588,8 @@ Set a flag only when the maker asks for what it does; omitted leaves the table a
 ### Consent — `--authorize <key>`
 
 Repeatable, one key per change: `dateTimeBehavior:<table>.<column>`, `isSecured:<table>.<column>`,
-`tableFlags:<table>`. A key consents to exactly the change the spec declares for it and to nothing
+`tableFlags:<table>`, and `<kind>:<key>:<field>` for a configuration item (`references/app-spec-schema.md` →
+*Configuration items*). A key consents to exactly the change the spec declares for it and to nothing
 else; a key for a change the spec does not declare stops the build. `--allow-destructive` does not
 imply it. A refused change names the key to use, so read what the change does, then run the build
 again with it.
