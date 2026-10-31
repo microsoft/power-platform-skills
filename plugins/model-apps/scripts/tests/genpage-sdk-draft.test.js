@@ -122,13 +122,13 @@ function callsIn(code, name) {
   return calls;
 }
 
-test('the build never asks for a draft placement: only scripts/genpage.js spells `publish: false` into placeInApp, and the build\'s one placement always hands over beforeAppWrite — which a draft is refused with', () => {
+test('the build never asks for a draft placement: only the page CLI (scripts/genpage.js, and the uploader\'s --draft) spells `publish: false` into placeInApp, and the build\'s one placement always hands over beforeAppWrite — which a draft is refused with', () => {
   const drafting = [];
   for (const file of productionScripts()) {
     const code = withoutComments(fs.readFileSync(file, 'utf8'));
     for (const call of callsIn(code, 'placeInApp')) if (/\bpublish\s*:\s*false\b|\bdraft\b/i.test(call)) drafting.push(scriptLabel(file));
   }
-  assert.deepStrictEqual(drafting, ['genpage.js'], 'add-to-app --draft is the one placement that asks for a draft');
+  assert.deepStrictEqual(drafting.sort(), ['genpage-upload.js', 'genpage.js'].sort(), 'add-to-app --draft and upload --draft are the placements that ask for a draft');
 
   const build = withoutComments(fs.readFileSync(path.join(SCRIPTS_DIR, 'lib', 'sdk-build.js'), 'utf8'));
   const placements = callsIn(build, 'placeInApp');

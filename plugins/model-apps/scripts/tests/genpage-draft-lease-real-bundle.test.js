@@ -14,6 +14,7 @@ const { makeGenpageSdk } = require('../lib/genpage-sdk.js');
 const { acquireAppPagesLease, applyWorkspaceOf } = require('../lib/app-operation-lease.js');
 const genpageMain = require('../genpage.js').main;
 const uploadMain = require('../genpage-upload.js').main;
+const genpageBase = require('../lib/genpage-base.js');
 const { FakeGenPageServer, INSTANCE, ACCOUNT_TABLE, appTransport, APP_ID, APP_EXISTING_PAGE_ID, APP_VIEW_ID } = require('./helpers/fake-genpage-server.js');
 const { withAppComponents } = require('./helpers/fake-app-components.js');
 
@@ -209,4 +210,96 @@ test('REAL BUNDLE: a failure inside an upload that holds the lease keeps its own
     assert.strictEqual(out.code, 'GENPAGE_TEST_WRITE_FAILED', JSON.stringify(out));
     assert.notStrictEqual(out.outcome, 'nothing', 'a failure inside the deploy is not said to have written nothing');
   }, { wrap });
+});
+// Page-content drafts through the uploader (`--draft`): the page is saved and NOT published, and with `--add-to-sitemap` its placement is a draft too — the app is
+// neither published nor asked to publish anything before its write. The answer is the backend's draft answer: `saved`, `pendingPublish`, `draftFingerprint` (never
+// `fingerprint`), and `publish` skipped as a draft. The lease is the same as any upload's that names an app.
+const SOURCE_2 = "import * as React from 'react';\nexport default function Page() { return <div>Hello again</div>; }\n";
+const publishesOf = (server, id) => server.published.filter((p) => String(p).toLowerCase() === String(id).toLowerCase()).length;
+const placementsAsked = [];
+const watchPlacements = (backend) => {
+  const placeInApp = backend.placeInApp.bind(backend);
+  backend.placeInApp = (appId, options) => { placementsAsked.push(options); return placeInApp(appId, options); };
+  return backend;
+};
+const assertDraftPlacements = (what) => {
+  assert.ok(placementsAsked.length >= 1, `${what}: the app was placed into`);
+  for (const options of placementsAsked) {
+    assert.strictEqual(options.publish, false, `${what}: the placement is a draft — ${JSON.stringify(options)}`);
+    for (const key of ['publishApp', 'finish', 'finishIfUnpublished', 'beforeAppWrite']) assert.strictEqual(options[key], undefined, `${what}: a draft placement hands over no ${key}`);
+  }
+  placementsAsked.length = 0;
+};
+const assertDraftAnswer = (out, what) => {
+  assert.strictEqual(out.ok, true, `${what}: ${JSON.stringify(out)}`);
+  assert.strictEqual(out.draft, true, `${what}: the answer says it is a draft`);
+  assert.deepStrictEqual([out.publish && out.publish.kind, out.publish && out.publish.reason], ['skipped', 'draft'], `${what}: ${JSON.stringify(out)}`);
+  assert.strictEqual(typeof out.draftFingerprint, 'string', `${what}: the draft's hash is draftFingerprint`);
+  assert.strictEqual(out.fingerprint, undefined, `${what}: a draft never carries a published fingerprint`);
+};
+
+test('REAL BUNDLE: an upload --draft saves the page and publishes nothing — a create placed with --add-to-sitemap, an update, and an update with nothing new each answer as a draft', async () => {
+  placementsAsked.length = 0;
+  await inWorld(async ({ server, app, upload }) => {
+    const publishedNavigation = app.state.publishedXml;
+    const folder = tmp();
+    const file = path.join(folder, 'page.tsx');
+    fs.writeFileSync(file, SOURCE);
+    const created = await upload(['--env', INSTANCE, '--app-id', APP_ID, '--code-file', file, '--name', 'Draft page', '--data-sources', 'account', '--prompt', 'p', '--agent-message', 'm', '--add-to-sitemap', '--draft']);
+    assertDraftAnswer(created, 'create --draft');
+    assert.deepStrictEqual([created.saved, created.pendingPublish, created.placementState, created.addedToSitemap], [true, true, 'saved', true], JSON.stringify(created));
+    assert.strictEqual(publishesOf(server, created.pageId), 0, 'the page was not published');
+    assert.ok(namesPage(app.state.xml, created.pageId), 'the saved navigation names the page');
+    assert.strictEqual(app.state.publishedXml, publishedNavigation, 'what runs is untouched');
+    assert.strictEqual(app.state.publishAttempts, 0, 'the app was not published');
+    assertDraftPlacements('create --draft --add-to-sitemap');
+    const marker = genpageBase.readMarker(file);
+    assert.strictEqual(marker.pageId, created.pageId, 'the base marker records the page, as for any upload');
+    assert.ok(!marker.unfinished, 'a draft saved as asked is not an unfinished upload that a later run would publish');
+
+    const existing = path.join(folder, 'existing.tsx');
+    fs.writeFileSync(existing, SOURCE_2);
+    const before = publishesOf(server, APP_EXISTING_PAGE_ID);
+    const updated = await upload(['--env', INSTANCE, '--app-id', APP_ID, '--page-id', APP_EXISTING_PAGE_ID, '--code-file', existing, '--data-sources', 'account', '--prompt', 'p', '--agent-message', 'm', '--overwrite-deployed', '--draft']);
+    assertDraftAnswer(updated, 'update --draft');
+    assert.deepStrictEqual([updated.saved, updated.pendingPublish, updated.updated], [true, true, true], JSON.stringify(updated));
+    assert.strictEqual(publishesOf(server, APP_EXISTING_PAGE_ID), before, 'the update was not published');
+    assert.strictEqual(app.state.publishAttempts, 0, 'pinning the page\'s views did not publish the app');
+    assertDraftPlacements('update --draft (views pinned)');
+
+    const again = await upload(['--env', INSTANCE, '--app-id', APP_ID, '--page-id', APP_EXISTING_PAGE_ID, '--code-file', existing, '--prompt', 'p', '--agent-message', 'm', '--draft']);
+    assertDraftAnswer(again, 'unchanged update --draft');
+    assert.deepStrictEqual([again.unchanged, again.saved, again.pendingPublish], [true, false, null], `nothing new was saved, and whether it is live is not known: ${JSON.stringify(again)}`);
+    assert.strictEqual(publishesOf(server, APP_EXISTING_PAGE_ID), before, 'still not published');
+
+    // The neighbour: the same update without --draft publishes the page, as every upload always has, and says nothing of a draft.
+    const published = await upload(['--env', INSTANCE, '--app-id', APP_ID, '--page-id', APP_EXISTING_PAGE_ID, '--code-file', existing, '--prompt', 'p', '--agent-message', 'm']);
+    assert.strictEqual(published.ok, true, JSON.stringify(published));
+    assert.strictEqual(publishesOf(server, APP_EXISTING_PAGE_ID), before + 1, 'an ordinary upload publishes');
+    for (const key of ['draft', 'saved', 'pendingPublish', 'draftFingerprint', 'placementState', 'publish']) assert.strictEqual(published[key], undefined, `an ordinary upload's answer is as it was: no ${key}`);
+  }, { wrap: watchPlacements });
+});
+
+test('REAL BUNDLE: upload --draft is refused before anything is read when its value is not a yes or no, or when the page it names is one this tool must still publish to finish', async () => {
+  await inWorld(async ({ server, app, upload }) => {
+    const folder = tmp();
+    const file = path.join(folder, 'page.tsx');
+    fs.writeFileSync(file, SOURCE);
+    const pagesBefore = JSON.stringify([...server.state.projects.keys()].sort());
+    const odd = await upload(['--env', INSTANCE, '--app-id', APP_ID, '--code-file', file, '--prompt', 'p', '--agent-message', 'm', '--draft=maybe']);
+    assert.strictEqual(odd.ok, false, JSON.stringify(odd));
+    assert.match(odd.error, /--draft takes no value/);
+    // A page an earlier upload created and could not publish is completed by PUBLISHING it; a draft publishes nothing, so it would leave the page unpublished and its marker cleared.
+    fs.writeFileSync(genpageBase.markerPath(file), JSON.stringify({ version: 1, pageId: OTHER, appId: APP_ID, deployedSha256: 'a'.repeat(64), localSha256: 'a'.repeat(64), source: 'upload', unfinished: 'publish' }));
+    const completing = await upload(['--env', INSTANCE, '--app-id', APP_ID, '--page-id', OTHER, '--code-file', file, '--prompt', 'p', '--agent-message', 'm', '--draft']);
+    assert.strictEqual(completing.ok, false, JSON.stringify(completing));
+    assert.match(completing.error, /not finished.*drop --draft/s);
+    assert.strictEqual(JSON.stringify([...server.state.projects.keys()].sort()), pagesBefore, 'no page was created');
+    assert.strictEqual(app.state.publishAttempts, 0, 'nothing was published');
+    // `--draft=false` is an ordinary upload.
+    const plain = await upload(['--env', INSTANCE, '--code-file', path.join(folder, 'page.tsx'), '--prompt', 'p', '--agent-message', 'm', '--draft=false']);
+    assert.strictEqual(plain.ok, true, JSON.stringify(plain));
+    assert.strictEqual(publishesOf(server, plain.pageId), 1, 'published, as an upload with no --draft is');
+    assert.strictEqual(plain.draft, undefined);
+  });
 });
