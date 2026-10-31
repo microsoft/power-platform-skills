@@ -93,6 +93,16 @@ prod-ready** app; don't under-build (a bare table list) or over-build (surfaces 
   tenant without the setting still gets a working app. `app.headerNavigationRefresh` controls the
   **Wave 2 header/navigation refresh** — a *separate, independent* setting whose platform default is
   **ON**, so set it to `false` only when the user explicitly wants the classic header.
+- **App theme and header logo (Preview, 2.21.0)** — `app.theme`. Add it **only when the maker explicitly asks
+  for branding** (brand colours, a header colour, a logo); an ordinary app gets **no** `app.theme`, and you never
+  invent a palette, a font or a logo. Offer the choices: a `basePaletteColor` (or explicit `palette` slots), the
+  `appHeader` colours, a `font` only if they name one, and a `logo` that is an **existing image web resource**
+  (or one you also declare in `webResources[]`), never a URL. Say before the build that the theme is published
+  with the **app**, and that an app publication publishes **every** pending change of the app, not only the theme.
+  The theme does not change the `newLook` / header choices above — do not switch them to fit a theme. Omit the key
+  to leave the app's theme alone; `null` removes the app's override (the environment theme applies again). Theme
+  versions are never deleted, and a logo the theme only references is never touched by teardown. `--verify` reports the theme's **API state** (saved,
+  pending publish, live) — tell the maker to check the header in the app itself.
 - **App membership** — which forms, views and charts the app offers (`app.mainForms`, `app.tables`).
   **Only these forms on an existing app.** `app.mainForms` adds the forms you list. To also take the table's other Main
   forms **out of the app** on an update, set `"mainFormsOnUpdate": "exact"` — ask the maker first, it is a removal from the

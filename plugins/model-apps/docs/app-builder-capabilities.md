@@ -167,6 +167,42 @@ apart deliberately.
 - Modern command-bar buttons — functional **JS on-click** + static hidden/disabled, incl. **flyout / split-button menus**.
 - Web resources (JS / HTML / CSS) shipped + added to the solution; idempotent (reuse by name). One whose publication the SDK could not confirm (`WEB_RESOURCE_UNVERIFIED` — its publish refused under the customization lock, say) is still added to the solution, recorded in the build workspace, and written again by id on the next run, never created twice (`lib/web-resource-records.js`; `web-resource-unconfirmed.test.js`).
 
+### App theme and header logo (Preview) — 🧪 tested
+- `app.theme` sets the app's **modern theme** — a base palette colour (or explicit palette slots), header
+  colours, an optional font — and a **header logo** (an existing image web resource and its tooltip).
+  Declared only on an explicit branding request; see [the App Spec contract](../references/app-spec-schema.md)
+  for the fields. Floor `minimumPluginVersion: "2.21.0"`.
+- **Omitted vs `null`.** An omitted theme is never read or written: existing specs build exactly as before.
+  `null` removes the app's own override, and the app inherits the environment's theme again.
+- **What the build writes.** Through the SDK (`setAppTheme`, never with its own app publish): a content-named
+  version web resource `<prefix>_/apptheme/<hash>.xml` (published on its own, because the app reads it) and
+  the app's `CustomThemeDefinition` setting row as a draft. Both join the solution (component type 61 for the
+  web resource, plus the app setting). An equal theme writes nothing. Every theme read runs under a strict
+  read policy: a row the build cannot place, or a write whose outcome is unknown, ends the theme step as
+  `APP_THEME_INCOMPLETE`, which is never re-sent automatically, and a later run on the same SDK refuses to
+  touch that app's theme rather than guess.
+- **App-wide publication.** The theme is published with the **app**, by the build's single app publication
+  (no extra publish). An app publication publishes every pending change of the app, not only the theme, and a
+  withheld app publication (an exact Main-form list not yet proven) leaves the theme saved but owed.
+- **Proof after publication.** After the app publication that paid the theme is accepted, the build reads the
+  theme back once. An unresolved, unreadable or mismatching theme leaves the build incomplete
+  (`APP_THEME_UNVERIFIED`); what was saved is kept and the publish is not sent again — check it with
+  `--verify`, then re-run. `--verify` passes only a live theme, and says that this is **API state, not render
+  proof**: what a browser paints is checked in the app.
+- **Membership repair.** An unchanged theme whose records are missing from the solution is not repaired
+  silently: the build stops with `APP_THEME_MEMBERSHIP_MISSING` and names the repair (add the type 61 web
+  resource and the app setting to the solution, then run again).
+- **Retention.** Theme version web resources are never deleted (a version is shared by every app whose theme
+  has the same bytes). The logo is only referenced: a downloaded logo is `external: true` and teardown keeps
+  it, a logo that is only referenced is never touched, and a logo that is also declared in `webResources[]`
+  without `external` follows the normal `webResources` teardown rules.
+- **Download (opt-in, strict).** Only `--include-capabilities` reads the theme. A theme the spec cannot state
+  (the platform's "no theme" value, raw attributes, a logo that is gone or not an image, or this publisher's
+  own logo that cannot be exported) refuses the download **before anything is written**;
+  `--allow-lossy-download` writes the spec without `app.theme` and names the loss. This publisher's own logo
+  is exported as an `external: true` web resource; another publisher's or a managed logo stays a reference
+  that must exist where the spec is built. A theme saved but not yet published is downloaded with a note.
+
 ### Generative-page management — three-authority, id-based — 🧪 tested
 - **Three-authority page identity.** IDENTITY = durable `<app>_pagemanifest` (key→pageId map), outranked by the spec's own `pages[].pageId` for a downloaded (edit-snapshot) spec. EXISTENCE = the environment's page list through the SDK — decides create-vs-reuse for crash-safe convergence (`enumerateEnv`, no `--app-id`). MEMBERSHIP = the app's sitemap `GenPageId` set, read fail-closed via `fetchSitemap` (`scripts/lib/sitemap-pages.js`) — drives placement, download enumeration, and verify. All page matching is by id, never by display name.
 - **Edit-snapshot `pageId`.** Download keeps each page's deployed `GenPageId` as `pages[].pageId` in the emitted spec. On rebuild, this highest-authority id is confirmed against EXISTENCE and reused — so a downloaded app (including Maker-added pages) rebuilds without creating duplicates.

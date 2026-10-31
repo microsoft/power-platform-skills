@@ -1415,6 +1415,24 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   eval unable to contradict the very code it exists to check. Assertions are therefore fixed by
   contract, the offline fixture is rendered from `appDef`, and `vendor-sdk-smoke.test.js` checks the
   bytes the real vendored SDK serializes.
+- **`app.theme` — app theme and header logo (Preview, 2.21.0)** (`lib/app-theme.js`). Optional and
+  explicit-ask only: omitted means no theme read or write at all (the request trail of a spec without it
+  is unchanged), `null` removes the app's override. `validateAppTheme` is the single field gate (the spec
+  validator, the theme plan and the download capture all call it). The build writes through the SDK's `setAppTheme`
+  (`ensureThemeApplied` in `sdk-build.js` → `lib/app-theme.js`, always with `publish: false`): a content-named version
+  web resource `<prefix>_/apptheme/<16 hex>.xml` (published on its own) plus the app's
+  `CustomThemeDefinition` setting as a draft, both added to the solution. The theme's app publish is
+  queued on the build's `appPublication` port, so it costs no extra publish and is app-wide. Every read
+  runs under a strict policy; a refused or unknown write (`APP_THEME_INCOMPLETE`, `RETRY.NEVER`) is
+  sticky for that app on that SDK. After `appPublication.flush()`, a theme that was written and whose app
+  is no longer owed is read back once with `verifyAppTheme`; anything but `live` marks the build
+  incomplete with `APP_THEME_UNVERIFIED` (no re-publish). `--verify` uses the same check and says it is
+  API state, not render proof. Theme versions are never deleted and the logo is a reference. Download
+  captures the theme only with `--include-capabilities`; strict refusals (unrepresentable theme, missing or
+  non-image logo, an own logo that cannot be exported) happen before any file is written, and an own
+  logo is exported as an `external: true` web resource. `themeReads` is a plugin-only option and is
+  never forwarded to the SDK. Tests: `app-theme*.test.js` (`app-theme-real-bundle.test.js` runs a full
+  build over the real SDK with `tests/helpers/app-theme-server.js`).
 - **`scripts/teardown-model-app.js` → `scripts/lib/sdk-teardown.js`** — the first-class, **classifier-safe**
   teardown (reverse of the build), for cleaning up live-verification probes or a failed build. Deletes
   exactly the artifacts a given App Spec declares, in dependency-safe order (**app module → proven generative pages → security

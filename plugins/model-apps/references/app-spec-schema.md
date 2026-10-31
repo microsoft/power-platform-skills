@@ -123,6 +123,48 @@ sample data (incl. multi-parent junction links + status reasons), and publish.
   app, with a warning and `created.headerNavigationRefresh: "unknown"` — never a silent success, and
   never a claim about a value that was not written. On success
   `created.headerNavigationRefreshOutcome` records `created` / `updated` / `unchanged`.
+- **`app.theme`** *(optional, **Preview**, `minimumPluginVersion: "2.21.0"`)* — the app's **modern theme
+  and header logo**. Declare it **only when the maker asks for branding** (colours, a header colour, a
+  logo); never add one on your own, and never pair it with fonts or New look the maker did not ask for.
+  ```json
+  {
+    "minimumPluginVersion": "2.21.0",
+    "app": {
+      "name": "Field Service",
+      "theme": {
+        "basePaletteColor": "#0F6CBD",
+        "appHeader": { "background": "#0F3D6E", "foreground": "#FFFFFF" },
+        "logo": { "webResourceName": "contoso_/images/logo.svg", "tooltip": "Contoso Field Service" }
+      }
+    }
+  }
+  ```
+  | Field | Value |
+  |---|---|
+  | `basePaletteColor` | a colour `#RRGGBB` the palette is derived from |
+  | `lockPrimary` | `true` / `false` — keep `basePaletteColor` as the exact primary colour |
+  | `vibrancy`, `hueTorsion` | whole numbers from -100 to 100 that tune the derived palette |
+  | `font` | a font name (only when the maker names one) |
+  | `palette` | explicit palette slots, each `#RRGGBB`: `darker70`…`darker10`, `primary`, `lighter10`…`lighter80` |
+  | `appHeader` | header colours `#RRGGBB`: `background` (required), `foreground`, and the `…Hover`, `…Pressed`, `…Selected` pairs of both |
+  | `logo` | `{ webResourceName?, tooltip? }` — `webResourceName` is an existing **image** web resource (PNG, JPG, GIF, ICO, SVG) of the environment, never a URL |
+
+  At least one field is required; any other key (raw theme attributes included) is refused.
+  **Omitted** leaves the app's theme exactly as it is — nothing is read or written. **`null`** removes the
+  app's own theme override, so the app follows the environment's theme again. The theme is stored as a
+  content-named version web resource (`<prefix>_/apptheme/<hash>.xml`) plus the app's theme setting, both
+  added to the solution when the theme is set. An unchanged theme whose records are missing from the solution
+  is not repaired silently: the build stops (`APP_THEME_MEMBERSHIP_MISSING`) and names the repair — add the
+  version web resource (component type 61) and the app's theme setting to the solution, then run again. The theme is published with the
+  **app**, and an app publication publishes **every** pending app change, not only the theme. After that
+  publication the build reads the theme back once and finishes incomplete (`APP_THEME_UNVERIFIED`) when the
+  app does not resolve it; a refused or unknown write stops as `APP_THEME_INCOMPLETE` and is never sent
+  again automatically. `--verify` checks the saved and the resolved theme: that is **API state, not proof
+  of what a browser paints** — check the header in the app itself.
+  **The logo is referenced, not owned:** declare it in `webResources[]` to create it (with `external: true`
+  to keep it on teardown); theme versions are never deleted. Download emits `app.theme` only with
+  `--include-capabilities`; see [the capabilities doc](../docs/app-builder-capabilities.md) (App theme and
+  header logo) for what it refuses.
 - **`app.uniqueName`** *(optional, download-emitted)* — the app module's **real, immutable** Dataverse
   uniquename (e.g. `crba3_supportdesk`). A **downloaded** spec carries it so a rebuild resolves the
   **existing** app by identity — even after you **rename** the display `app.name` — instead of creating a
