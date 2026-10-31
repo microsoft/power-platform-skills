@@ -122,6 +122,69 @@ test('prepare-compiler-refresh: an output name that is a folder is refused befor
   assert.deepStrictEqual(callsOf(seen.genpage).filter((name) => name !== 'dispose'), [], JSON.stringify(payload));
 });
 
+// Another name of the reviewed source. A lexical compare of the two paths misses every one of these: a different case on a case-insensitive volume, a Windows 8.3 short name,
+// a folder link (a junction on Windows, a symbolic link elsewhere) to the source's folder, a hard link, and a --file that is itself a link to the output. Each is refused
+// before the environment is asked, and the reviewed source keeps its bytes. A name the platform cannot make here (a case-sensitive volume, short names turned off, no right to
+// make a link) skips that one case, saying why.
+function aliasOf(kind, file) {
+  const dir = path.dirname(file);
+  if (kind === 'case') {
+    const upper = path.join(dir, path.basename(file).toUpperCase());
+    return fs.existsSync(upper) ? { output: upper } : { skip: 'this volume is case-sensitive' };
+  }
+  if (kind === 'short') {
+    if (process.platform !== 'win32') return { skip: '8.3 short names are a Windows file name' };
+    const short = path.join(dir, 'REVIEW~1.TSX');
+    const same = fs.existsSync(short) && fs.statSync(short, { bigint: true }).ino === fs.statSync(file, { bigint: true }).ino;
+    return same ? { output: short } : { skip: 'this volume makes no 8.3 short names' };
+  }
+  if (kind === 'folder-link') {
+    const link = path.join(scratch('link'), 'linked');
+    try { fs.symlinkSync(dir, link, process.platform === 'win32' ? 'junction' : 'dir'); } catch (error) { return { skip: `no folder link could be made (${error.code})` }; }
+    return { output: path.join(link, path.basename(file)) };
+  }
+  if (kind === 'hard-link') {
+    const other = path.join(scratch('hard'), 'proposed.tsx');
+    try { fs.linkSync(file, other); } catch (error) { return { skip: `no hard link could be made (${error.code})` }; }
+    return { output: other };
+  }
+  // 'input-link': --file is a symbolic link whose target is the output name.
+  const link = path.join(scratch('inlink'), 'reviewed-link.tsx');
+  try { fs.symlinkSync(file, link, 'file'); } catch (error) { return { skip: `no file link could be made (${error.code})` }; }
+  return { input: link, output: file };
+}
+
+for (const kind of ['case', 'short', 'folder-link', 'hard-link', 'input-link']) {
+  test(`prepare-compiler-refresh: an --output-file that is another name of the reviewed --file (${kind}) is refused before the environment is asked, and the source keeps its bytes`, async (t) => {
+    const file = localFile(SOURCE, scratch('alias'));
+    const renamed = path.join(path.dirname(file), 'reviewedsource.tsx');
+    fs.renameSync(file, renamed);
+    const alias = aliasOf(kind, renamed);
+    if (alias.skip) { t.skip(alias.skip); return; }
+    const seen = await run([VERB, '--env', ENV, '--page-id', P1, '--file', alias.input || renamed, '--output-file', alias.output]);
+    // A write through a short name can replace the long name too, so a source that is gone is the same failure as one overwritten.
+    assert.strictEqual(fs.existsSync(renamed) ? fs.readFileSync(renamed, 'utf8') : '<gone>', SOURCE, 'the reviewed source must not be overwritten through another of its names');
+    const { ok, payload } = only(seen);
+    assert.strictEqual(ok, false, JSON.stringify(payload));
+    assert.strictEqual(payload.code, 'UNSAFE_OUTPUT', payload.error);
+    assert.match(payload.error, /same file as --file/);
+    assert.strictEqual(payload.outcome, 'nothing');
+    assert.strictEqual(payload.pageId, P1);
+    assert.deepStrictEqual(callsOf(seen.genpage).filter((name) => name !== 'dispose'), [], 'the environment is not asked');
+  });
+}
+
+test('prepare-compiler-refresh: a distinct output beside the reviewed source — even one already there from an earlier run — is written, and the source keeps its bytes', async () => {
+  const file = localFile(SOURCE, scratch('beside'));
+  const out = path.join(path.dirname(file), 'page.proposed.tsx');
+  fs.writeFileSync(out, 'an earlier proposal\n', 'utf8');
+  const seen = await run([VERB, '--env', ENV, '--page-id', P1, '--file', file, '--output-file', out]);
+  const { ok, payload } = only(seen);
+  assert.strictEqual(ok, true, JSON.stringify(payload));
+  assert.strictEqual(fs.readFileSync(out, 'utf8'), `${SOURCE}${COMPILER_REFRESH_MARKER}\n`);
+  assert.strictEqual(fs.readFileSync(file, 'utf8'), SOURCE);
+});
+
 // One refusal per code family: each is exit 1 (ok false), its code, `outcome: "nothing"`, and no file written.
 const REFUSALS = [
   ['a local file that cannot be read', { local: null }, 'COMPILER_REFRESH_SOURCE_UNREADABLE', []],

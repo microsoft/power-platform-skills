@@ -151,7 +151,7 @@ const path = require('node:path');
 const { parseArgs, validateFlags, emitResult, requireDataverseOrigin } = require('./lib/dataverse-auth.js');
 const { makeGenpageSdk, pageFolderFiles, dataSourcesOf, GUID_RE, unescapePacName } = require('./lib/genpage-sdk.js');
 const { leftOnDiskWarning } = require('./lib/left-on-disk.js');
-const { assertSafeOutputDir, assertPlainFileTarget, writeFileSafe, removeFileSafe } = require('./lib/safe-fs.js');
+const { assertSafeOutputDir, assertPlainFileTarget, writeFileSafe, removeFileSafe, sameFile } = require('./lib/safe-fs.js');
 const { makeWritesBlocking } = require('./lib/output-redaction.js');
 const { withStandalonePagesLease } = require('./lib/standalone-page-lease.js');
 const { prepareCompilerRefresh } = require('./lib/compiler-refresh.js');
@@ -507,24 +507,41 @@ async function deletePage(genpage, { pageId, allowDestructive }) {
 
 async function prepareRefresh(genpage, { pageId, file, expectedBaseSha256, outputFile }) {
   let target = null;
+  const source = path.resolve(file);
+  // The reviewed source is the base of the change, so the proposal is never written over it — under ANY of its names (lib/safe-fs.js sameFile: a case alias, a short name,
+  // a linked folder, a hard link, or a --file that links to the output). parseCommand already refused the same spelling; this asks the file system. Asked before the
+  // environment is, and again just before the write, when the output may have been made since.
+  const refuseIfSource = () => {
+    let same;
+    try {
+      same = sameFile(target, source);
+    } catch (error) {
+      throw Object.assign(error, { pageId, outcome: 'nothing' });
+    }
+    if (same) {
+      throw scriptError('UNSAFE_OUTPUT', `--output-file ${target} is the same file as --file ${source} (another name of it: a different case, a short name, a link or a linked folder): write the proposal beside the reviewed source, never over it. Nothing was changed.`, { pageId, outcome: 'nothing' });
+    }
+  };
   // The output name is checked before the environment is asked, as `types` checks its own: a link, a folder or a linked folder is refused whatever the proposal would have been.
   if (outputFile !== undefined) {
     target = path.resolve(outputFile);
+    refuseIfSource();
     assertPlainFileTarget(target);
     if (isThere(path.dirname(target))) assertSafeOutputDir(path.dirname(target));
   }
   let localSource;
   try {
     // utf8 keeps a byte order mark as U+FEFF: the page holds its text exactly (download writes it so), so a BOM the page has is compared, not dropped.
-    localSource = fs.readFileSync(path.resolve(file), 'utf8');
+    localSource = fs.readFileSync(source, 'utf8');
   } catch (error) {
-    throw scriptError('COMPILER_REFRESH_SOURCE_UNREADABLE', `--file ${path.resolve(file)} could not be read (${error.code || error.message}): download the page first. Nothing was changed.`, { pageId, outcome: 'nothing' });
+    throw scriptError('COMPILER_REFRESH_SOURCE_UNREADABLE', `--file ${source} could not be read (${error.code || error.message}): download the page first. Nothing was changed.`, { pageId, outcome: 'nothing' });
   }
   // The vendored compiler parses the source: the CLI takes no compiler of its own, and only syntax is checked (lib/compiler-refresh.js).
   const prepared = await prepareCompilerRefresh({ pageId, localSource, ...(expectedBaseSha256 !== undefined ? { expectedBaseSha256 } : {}) }, { genpage });
   const answer = { ok: true, ...prepared };
   if (prepared.action === 'refresh' && target) {
     assertSafeOutputDir(path.dirname(target), { create: true });
+    refuseIfSource();
     answer.outputFile = writeFileSafe(target, prepared.proposedSource, { encoding: 'utf8' });
   }
   return answer;
