@@ -74,6 +74,7 @@ const { isRestrictedSolution } = require('./system-solutions.js');
 const { unreadableAnswer } = require('./collection-answers.js');
 const { fetchSitemap, navigationProof } = require('./sitemap-pages.js');
 const { unescapePacName } = require('./genpage-sdk.js');
+const { assertPageDeletionSafe, pageDeletionReferences, formText } = require('./page-reference-guard.js');
 const { readPageOwnership, readPendingCreations, recordPageTeardown, completePageDeletions, completePendingCreations } = require('./page-ownership-records.js');
 const { danglingSitemapOf, deleteAppWithoutSitemap } = require('./app-sitemap-dangling.js');
 
@@ -433,14 +434,15 @@ const KIND_HANDLERS = {
   // removed AND published, or when the app+sitemap are deleted outright (which is what the step
   // before this one just did).
   //
-  // KNOWN GAP, measured rather than assumed: that graph covers SITEMAP references only. A page
-  // embedded in a FORM through the `MscrmControls.UxAgentControl` PCF is NOT tracked — a form was
-  // built with a page in its `RefId`, saved and published, and the page still reported ZERO
-  // dependents and deleted with a 204. The form's own required-components list names the PCF
-  // (component type 66) and never the page, because `RefId` is an opaque
-  // `static="true" type="SingleLine.Text"` value the platform cannot know is a reference.
-  // A formxml scan would be needed to detect those references; this step keeps the ownership
-  // gate independent of whether the platform reports dependencies.
+  // That graph covers SITEMAP references only. A page embedded in a FORM through the
+  // `MscrmControls.UxAgentControl` PCF is NOT tracked — a form was built with a page in its `RefId`,
+  // saved and published, and the page still reported ZERO dependents and deleted with a 204. The form's
+  // own required-components list names the PCF (component type 66) and never the page, because `RefId`
+  // is an opaque `static="true" type="SingleLine.Text"` value the platform cannot know is a reference.
+  // So before the app is deleted, runTeardown scans every form of every table in both layers
+  // (page-reference-guard.js, assertPageDeletionSafe) and stops when a form embeds one of the pages or
+  // cannot be read: nothing is deleted, and the app, the pages, the manifest and the solution are kept.
+  // A dry run runs the same scan on the pages it would delete and names each form that stops it (dryRunFormBlockers).
   genpage: {
     // A page another app still references is a SKIP, not a failure — see isDependencyBlocked.
     tolerateDependencyBlock: true,
@@ -1698,6 +1700,46 @@ async function deleteStep(sdk, handler, items, ctx) {
   return { deletedIds, absentIds, skippedIds: skipped.map((s) => s.id), skipped };
 }
 
+// The dry run names what would stop the apply: the pages a dry run would delete are run through the same shared form scan the apply runs
+// (assertPageDeletionSafe in the apply's pre-loop below), so a page a form embeds is said to be kept, with the form named, instead of
+// "would delete" for a page the apply then keeps. It reads only when a page step has a page it would delete — the same +2 GETs as the
+// apply (one per form layer, plus one per continuation page), none on a plan with no such page. A preview only: the apply scans again
+// before it deletes anything, because a maker may change a form between the two runs.
+// Returns Map<step, { message, verdictOf(pageId) }> for each page step the apply would refuse; a step that would go ahead is absent.
+async function dryRunFormBlockers(sdk, plan, pageResolutions) {
+  const blockers = new Map();
+  for (const step of plan.filter((p) => p.kind === 'genpage')) {
+    const prepared = pageResolutions.get(step);
+    const resolved = prepared && !prepared.error && prepared.resolved;
+    if (!resolved || resolved.readError) continue;
+    const ids = (Array.isArray(resolved) ? resolved : resolved.items || []).map((item) => item.id);
+    if (!ids.length) continue;
+    let refs;
+    try {
+      refs = await pageDeletionReferences(sdk.dataverse, ids);
+    } catch (error) {
+      // A form the scan cannot read leaves it unknown whether one embeds a page: the apply refuses that too, so every page is kept.
+      const detail = errMsg(error);
+      blockers.set(step, { message: `the forms could not all be read, so the pages would be kept: ${detail}`, verdictOf: () => `kept — the forms could not all be read: ${detail}` });
+      continue;
+    }
+    if (refs.safe) continue;
+    const embeddedIn = (id) => refs.references.get(String(id).toLowerCase()) || refs.references.get(id) || [];
+    const embedded = ids.filter((id) => embeddedIn(id).length);
+    const unknown = refs.unknown.slice(0, 5).map((u) => `${formText(u)}: ${u.detail}`).join('; ') + (refs.unknown.length > 5 ? `; and ${refs.unknown.length - 5} more` : '');
+    const message = embedded.length
+      ? `${embedded.map((id) => `page ${id} is embedded in ${embeddedIn(id).map(formText).join(', ')}`).join('; ')} — the apply would keep every page, and the app`
+      : `it is not known whether a form embeds a page (${unknown}) — the apply would keep every page, and the app`;
+    blockers.set(step, {
+      message,
+      verdictOf: (id) => (embeddedIn(id).length
+        ? `kept — embedded in ${embeddedIn(id).map(formText).join(', ')}`
+        : embedded.length ? 'kept — another page of this app is embedded in a form' : `kept — it is not known whether a form embeds it: ${unknown}`),
+    });
+  }
+  return blockers;
+}
+
 // Execute a teardown. Dry-run discovers page candidates when an SDK reader is supplied, without writes.
 // Apply resolves each step's live id(s) and deletes them, emitting per-step status. Best-effort:
 // a failed step is recorded and teardown CONTINUES (halting mid-way would strand orphans), then
@@ -1747,14 +1789,17 @@ async function runTeardownSteps(spec, opts, deps, deferredResetPublishes) {
   if (!apply) {
     const labels = [];
     const errors = [];
+    const formBlockers = await dryRunFormBlockers(sdk, plan, pageResolutions);
     plan.forEach((p, i) => {
       const prepared = pageResolutions.get(p);
       const resolved = prepared && prepared.resolved;
       const candidates = (resolved && resolved.candidates) || (prepared && prepared.error && prepared.error.candidates) || [];
       const readError = prepared && (prepared.error ? errMsg(prepared.error) : resolved && resolved.readError);
       if (readError) errors.push({ step: p.label, message: readError });
+      const blocked = formBlockers.get(p);
+      if (blocked) errors.push({ step: p.label, message: blocked.message });
       const lines = candidates.length
-        ? candidates.map((item) => `${p.label}: ${item.id} ${JSON.stringify(item.name)} (${readError ? `kept — page proof unreadable: ${readError}` : item.absent ? 'not found — manifest name only' : item.reason ? `kept — ${item.reason}` : 'would delete'})`)
+        ? candidates.map((item) => `${p.label}: ${item.id} ${JSON.stringify(item.name)} (${readError ? `kept — page proof unreadable: ${readError}` : item.absent ? 'not found — manifest name only' : item.reason ? `kept — ${item.reason}` : blocked ? blocked.verdictOf(item.id) : 'would delete'})`)
         : [readError ? `${p.label} (page discovery failed: ${readError})` : p.label];
       for (const label of lines) {
         labels.push(label);
@@ -1780,13 +1825,17 @@ async function runTeardownSteps(spec, opts, deps, deferredResetPublishes) {
         throw new Error(`${resolved.readError}; ${candidates}`);
       }
       const items = Array.isArray(resolved) ? resolved : (resolved && resolved.items) || [];
+      // A page a form still embeds is refused here, before the app (and with it the navigation proof) is deleted and before any
+      // record is written: one shared scan of every form in both layers (see the genpage handler). A refusal keeps everything.
+      if (items.length) await assertPageDeletionSafe(sdk.dataverse, items.map((item) => item.id));
       if (items.length) recordPageTeardown(opts.workspaceDir, step.target.appUnique, items, opts.env);
     } catch (e) {
       result.ok = false;
       result.errors.push({ step: step.label, message: errMsg(e) });
       emit({ phase: step.phase, status: 'error', label: step.label, n: plan.indexOf(step) + 1, total, detail: errMsg(e) });
+      const formBlocked = e && (e.code === 'GENPAGE_EMBEDDED_IN_FORM' || e.code === 'GENPAGE_FORM_REFERENCES_UNREADABLE');
       for (const p of plan) {
-        const label = `${p.label} (not attempted - page ownership could not be preserved before app deletion)`;
+        const label = `${p.label} (not attempted - ${formBlocked ? 'a form embeds a page of this app, or the forms could not all be read' : 'page ownership could not be preserved before app deletion'})`;
         result.skipped.push(label);
         emit({ phase: p.phase, status: 'skip', skip: 'not-attempted', label, n: plan.indexOf(p) + 1, total });
       }

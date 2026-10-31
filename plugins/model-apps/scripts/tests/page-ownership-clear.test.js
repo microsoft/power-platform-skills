@@ -9,6 +9,7 @@ const snapshots = require('../lib/apply-snapshot-store.js');
 const { loadCli } = require('./helpers/cli-harness.js');
 const { fakeGenpage } = require('./helpers/fake-genpage.js');
 const { withPageType } = require('./helpers/page-component-type.js');
+const { isFormScan, noFormRows } = require('./helpers/form-scan.js');
 
 const ENV = 'https://contoso.crm.dynamics.com';
 const OTHER_ENV = 'https://fabrikam.crm.dynamics.com';
@@ -112,6 +113,7 @@ for (const outcome of ['deleted', 'confirmed absent']) {
       // The page table's component type is answered in front: the build's pages join the spec's solution (lib/page-solution.js).
       dataverse: {
         get: withPageType(async (url) => {
+          if (isFormScan(url)) return noFormRows();
           if (!url.startsWith('/uxagentprojects/Microsoft.Dynamics.CRM.RetrieveUnpublishedMultiple()')) throw new Error(`not modelled: ${url}`);
           return { status: 200, body: { value: state.page ? [{ uxagentprojectid: ID, name: 'Overview', componentstate: 0 }] : [] } };
         }),

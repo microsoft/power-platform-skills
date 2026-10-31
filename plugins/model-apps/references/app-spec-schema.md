@@ -1702,10 +1702,11 @@ custom control), but the spec validator emits a warning.
   An unreadable proof or failed record write leaves the app intact. A retry uses those records even
   when `pages[]` is empty and the app has already gone. Proven pages still undeleted keep their records,
   manifest and solution and prevent a successful result. Only completed deletion or confirmed absence
-  consumes the records. **Known limit:** a page a **form** still embeds (the `MscrmControls.UxAgentControl`
-  control, whose `RefId` holds the page id) is deleted anyway — the platform records no dependency for it, and
-  teardown reads no form — and the form is left pointing at a page that is gone. Take the page off such forms (or
-  delete them) before tearing the app down; the dry run lists every page it would delete.
+  consumes the records. A page a **form** still embeds (the `MscrmControls.UxAgentControl`
+  control, whose `RefId` holds the page id) is not deleted: teardown reads every form in both layers before it
+  deletes anything and stops, keeping the app, the page, its manifest and the solution, with an error that names
+  the form. Take the page off that form and run teardown again. The dry run names each form that would stop the
+  apply and reports itself as failed.
 - **Workspace clearing preserves ownership.** `--clear-workspace` refuses while any unconsumed local
   ownership record remains, including other apps/environments. The refusal names each record file.
   Teardown consumes a record when it deletes or confirms the page's absence; a record whose page

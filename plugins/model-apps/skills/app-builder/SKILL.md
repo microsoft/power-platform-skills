@@ -671,11 +671,10 @@ columns bind, which the platform refuses to delete while the table exists, and i
 business rule on it could not be deleted (the rule's activated copy can never be deleted once its table is gone), so
 a re-run deletes the rule first, then the table and what was kept with it. It never deletes the solution's
 **publisher** (the build reuses one by prefix, and other solutions may share it); its closing summary says so in one line,
-so tell the user the publisher stays and can be removed in Maker once nothing uses it. **Known limit — generative pages on
-forms:** teardown deletes the app's generative pages even when a form still embeds one (the `MscrmControls.UxAgentControl`
-control); the platform records no dependency for that and teardown reads no form, so the form is left pointing at a deleted
-page. When the app has pages, tell the user before `--apply` and have them take each page off any form that shows it (or delete
-that form) first. **Dry-run by default**; add `--apply
+so tell the user the publisher stays and can be removed in Maker once nothing uses it. **Generative pages on forms:** teardown keeps a page a
+form still embeds (the `MscrmControls.UxAgentControl` control) and stops with an error that names the form, before it deletes
+anything; the dry run names the same form and reports itself as failed. Tell the user, have them take the page off that form
+(or delete the form, if it is theirs), then run teardown again. **Dry-run by default**; add `--apply
 --allow-destructive` to actually delete (`--clear-workspace` also prunes `.maker-workspace/`).
 **`--allow-destructive` is required for `teardown --apply`** — without it teardown refuses and
 touches nothing.

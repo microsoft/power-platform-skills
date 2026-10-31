@@ -10,6 +10,7 @@ const { planTeardown, runTeardown: engineTeardown, deleteStep, odataStr, KIND_HA
 const runTeardown = (spec, opts, deps) => engineTeardown(spec, { env: 'https://contoso.crm.dynamics.com', ...opts }, deps);
 const { appUniqueName } = require(path.join(__dirname, '..', 'lib', 'sdk-build.js'));
 const { SDK_ROLE_MARKER } = require(path.join(__dirname, '..', 'lib', 'app-spec.js'));
+const { isFormScan, noFormRows } = require('./helpers/form-scan.js');
 const pageWorkspaces = [];
 function pageWorkspace() {
   const dir = fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'contoso-page-teardown-'));
@@ -2543,6 +2544,7 @@ function genpageSdk({ manifestPages = [], livePages = [], files = {} } = {}) {
     // The saved layer of the page table: { value: [{ uxagentprojectid, name, componentstate }] }. Any other read is refused, as it is when no Dataverse client is there.
     dataverse: {
       async get(url) {
+        if (isFormScan(url)) return noFormRows();
         if (!url.startsWith('/uxagentprojects/Microsoft.Dynamics.CRM.RetrieveUnpublishedMultiple()')) throw new Error(`unexpected read ${url}`);
         queried.push('uxagentproject (saved layer)');
         const asked = (url.match(/uxagentprojectid eq [0-9a-f-]{36}/gi) || []).map((clause) => clause.slice('uxagentprojectid eq '.length).toLowerCase());
@@ -2764,6 +2766,7 @@ function pageTeardownRun({ pageDelete, manifestRead, liveQuery, declareManifest 
     // The pages in their saved layer, which is where teardown looks for them.
     dataverse: {
       get: async (url) => {
+        if (isFormScan(url)) return noFormRows();
         if (!url.startsWith('/uxagentprojects/Microsoft.Dynamics.CRM.RetrieveUnpublishedMultiple()')) throw new Error(`unexpected read ${url}`);
         if (liveQuery) liveQuery();
         return { status: 200, body: { value: [...state.pages].map((id) => ({ uxagentprojectid: id, name: 'Overview', componentstate: 0 })) } };

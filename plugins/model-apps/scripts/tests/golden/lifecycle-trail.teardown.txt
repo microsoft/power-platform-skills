@@ -1,4 +1,4 @@
-# 129 requests, 1 publishes
+# 131 requests, 1 publishes
 ## up to publish 1: importexportxml(entities(entity=contoso_project entity=contoso_task))
   4x DELETE /agentconversationmessages(<id>) -> 204
   4x DELETE /appactions(<id>) -> 204
@@ -49,6 +49,7 @@
   1x GET /solutioncomponents?$select=objectid&$filter=_solutionid_value eq <id> and componenttype eq 60 and (objectid eq <id>)&$top=50 -> 200
   1x GET /solutions?$select=solutionid&$filter=uniquename eq 'ContosoKitchen'&$top=1 -> 200
   5x GET /systemforms(<id>)/Microsoft.Dynamics.CRM.RetrieveUnpublished()?$select=type -> 200
+  1x GET /systemforms/Microsoft.Dynamics.CRM.RetrieveUnpublishedMultiple()?$select=formid,objecttypecode,name,type,formxml -> 200
   1x GET /systemforms?$select=formid&$filter=objecttypecode eq 'contoso_project' and name eq 'Project Card' and type eq 6&$top=2 -> 200
   1x GET /systemforms?$select=formid&$filter=objecttypecode eq 'contoso_project' and name eq 'Project' and type eq 2&$top=2 -> 200
   1x GET /systemforms?$select=formid&$filter=objecttypecode eq 'contoso_task' and name eq 'Task Quick Create' and type eq 7&$top=2 -> 200
@@ -56,6 +57,7 @@
   1x GET /systemforms?$select=formid,formactivationstate,isdefault&$filter=objecttypecode eq 'contoso_project' and type eq 2&$top=50 -> 200
   1x GET /systemforms?$select=formid,formactivationstate,isdefault&$filter=objecttypecode eq 'contoso_task' and type eq 2&$top=50 -> 200
   1x GET /systemforms?$select=formid,name&$filter=name eq 'Kitchen Overview' and type eq 0 -> 200
+  1x GET /systemforms?$select=formid,objecttypecode,name,type,formxml -> 200
   1x GET /uxagentprojects/Microsoft.Dynamics.CRM.RetrieveUnpublishedMultiple()?$select=uxagentprojectid,name,componentstate&$filter=uxagentprojectid eq <id> -> 200
   1x GET /webresourceset?$select=content&$filter=name eq 'contoso_kitchensink_pagemanifest'&$top=1 -> 200
   4x PATCH /savedqueries(<id>)?$select=savedqueryid #97e1522c -> 200
