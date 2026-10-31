@@ -126,7 +126,7 @@ async function download(t, options = {}, priorFloor) {
   t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
   if (priorFloor) fs.writeFileSync(path.join(directory, 'app-spec.json'), JSON.stringify({ minimumPluginVersion: priorFloor }));
   const fake = downloadSdk(options);
-  if (options.wrapSdk) fake.sdk = options.wrapSdk(fake.sdk);
+  if (options.wrapSdk) fake.sdk = options.wrapSdk(fake.sdk, directory);
   const warnings = [];
   const original = process.stderr.write;
   process.stderr.write = (text) => { warnings.push(String(text)); return true; };
@@ -610,6 +610,26 @@ test('app.theme: a logo of this publisher that cannot be exported refuses a stri
   assert.equal(lossy.result.spec.app.theme, undefined);
   assert.ok(!(lossy.result.spec.webResources || []).some((wr) => wr.name === OWN_LOGO));
   assert.ok(lossy.warnings.some((w) => /APP_THEME_LOGO_UNEXPORTABLE/.test(w)));
+});
+
+test('app.theme: a strict download whose logo of this publisher cannot be exported refuses before any page is written', async (t) => {
+  themeAnswer(t, captured({ logo: { webResourceName: OWN_LOGO } }, OWN_LOGO));
+  const { result, directory } = await download(t, { captureTheme: true, page: true, expectRefusal: true, wrapSdk: withLogoRow(OWN_LOGO, null) });
+  assert.equal(result.code, 'APP_THEME_LOGO_UNEXPORTABLE');
+  assert.deepEqual(filesIn(directory), [], 'no page, no spec, nothing');
+});
+
+test('app.theme: the logo is read once, before the pages, and that read is what is exported', async (t) => {
+  themeAnswer(t, captured({ logo: { webResourceName: OWN_LOGO } }, OWN_LOGO));
+  const reads = [];
+  const row = { name: OWN_LOGO, webresourcetype: 11, content: 'PHN2Zz4=', ismanaged: false };
+  const wrapSdk = (sdk, directory) => {
+    const inner = withLogoRow(OWN_LOGO, row)(sdk);
+    return { ...inner, queryRecords: async (set, opts = {}) => { if (set === 'webresource' && String(opts.filter || '').includes(OWN_LOGO)) reads.push(filesIn(directory).length); return inner.queryRecords(set, opts); } };
+  };
+  const { result } = await download(t, { captureTheme: true, page: true, wrapSdk });
+  assert.deepEqual(reads, [0], 'one logo read, made while the output folder was still empty');
+  assert.equal(result.spec.webResources.find((wr) => wr.name === OWN_LOGO).contentBase64, 'PHN2Zz4=');
 });
 
 test('app.theme: another publisher\'s logo stays a bare reference that must exist where the spec is built', async (t) => {

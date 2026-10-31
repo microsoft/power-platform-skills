@@ -2866,6 +2866,25 @@ async function recoverAppSolution(sdk, appId) {
   return out;
 }
 
+// The publisher prefix a download may trust, from recoverAppSolution's answer and the app's real uniquename. Pure: the
+// warnings that name each case stay in runDownload, which explains the precedence. Shared by runDownload's solution
+// block and the app theme's logo preflight, which must judge "this publisher's own logo" exactly as the export does.
+//   solutionPrefix   the recovered solution's owning publisher (authoritative)
+//   appDerivedPrefix the leading segment of a '<prefix>_<name>' uniquename (fallback only)
+//   prefixUnknown    several solutions, an unread membership or an unread publisher, and no solution prefix
+//   trustedPrefix    solutionPrefix, else appDerivedPrefix unless the prefix is unknown, else null
+function downloadPublisherPrefix(recovered, appUnique) {
+  const appPrefixMatch = /^([a-z][a-z0-9]{1,7})_.+$/.exec(String(appUnique || '').toLowerCase());
+  const appDerivedPrefix = appPrefixMatch ? appPrefixMatch[1] : null;
+  const solutionCandidates = recovered && Array.isArray(recovered.ambiguous) ? recovered.ambiguous : null;
+  const solutionUnreadable = recovered && recovered.unreadable ? recovered.unreadable : null;
+  const solutionPrefix = (recovered && recovered.publisherPrefix) || null;
+  const publisherUnreadable = (recovered && recovered.publisherUnreadable) || null;
+  const prefixUnknown = !solutionPrefix && !!(solutionCandidates || solutionUnreadable || publisherUnreadable);
+  const trustedPrefix = solutionPrefix || (prefixUnknown ? null : appDerivedPrefix);
+  return { appDerivedPrefix, solutionCandidates, solutionUnreadable, solutionPrefix, publisherUnreadable, prefixUnknown, trustedPrefix };
+}
+
 // Injectable download helper: all live-Dataverse work happens here so tests can inject mock deps.
 // `sdk`        — the MakerSDK (fetchArtifact, queryRecords, fetchEntityMetadata)
 // `genpage`    — the page backend (lib/genpage-sdk.js: enumerateEnv, read)
@@ -2991,7 +3010,36 @@ async function runDownload({ sdk, genpage, outDir, appId, appUnique, allowLossy 
     if (appTheme.error) return { ok: false, code: appTheme.code, error: appTheme.error };
     if (appTheme.warning) process.stderr.write(`WARNING: ${appTheme.warning}\n`);
   }
-  const themeLogo = appTheme && appTheme.write && appTheme.logo ? appTheme.logo.webResourceName : null;
+  let themeLogo = appTheme && appTheme.write && appTheme.logo ? appTheme.logo.webResourceName : null;
+  // The theme's header logo is preflighted here as well, before anything is written: whether it can be exported decides
+  // whether a strict download refuses (APP_THEME_LOGO_UNEXPORTABLE), and that refusal must leave the output folder as it
+  // was. It is exported as an icon referenced by path is — re-declared `external: true` (a build creates it when missing,
+  // and teardown never deletes it) only when it is this publisher's own unmanaged image with content — so it needs the
+  // publisher prefix: the app's solution is read here, once, and both answers are reused below (no second read). Only a
+  // captured theme that names a logo does this; every other download keeps its order of reads.
+  let themePreflight = null;
+  if (themeLogo) {
+    const recovered = await recoverAppSolution(sdk, appId);
+    const { trustedPrefix } = downloadPublisherPrefix(recovered, appUnique);
+    const logoExport = await iconWebResources(sdk, [], [themeLogo], trustedPrefix || 'new', !!trustedPrefix, [], []);
+    themePreflight = { recovered, logoExport };
+    const key = themeLogo.toLowerCase();
+    if (!logoExport.webResources.some((wr) => wr.name.toLowerCase() === key)) {
+      if (logoExport.unresolved.some((name) => String(name).toLowerCase() === key)) {
+        // This publisher's own logo (or one whose publisher could not be verified) that could not be exported: a rebuild into a
+        // fresh environment would refuse the theme for its missing logo, so the theme is not portable as written.
+        const why = `app.theme: its header logo '${themeLogo}' could not be exported (unread, or its publisher could not be verified)`;
+        if (!allowLossy) return { ok: false, code: 'APP_THEME_LOGO_UNEXPORTABLE', error: `${why} — refusing to write a spec whose theme names an image it does not carry. Pass --allow-lossy-download to write the spec without app.theme.` };
+        process.stderr.write(`WARNING: app.theme was LEFT OUT (APP_THEME_LOGO_UNEXPORTABLE): ${why.replace(/^app\.theme: /, '')}. A build from this spec leaves the app's theme as it is.\n`);
+        appTheme = { write: false };
+        themeLogo = null;
+      } else {
+        // Another publisher's, or managed: left as a bare reference, as such a navigation icon is (re-declaring it would make a
+        // build create a resource under a prefix it does not own). The image must exist where the spec is built.
+        process.stderr.write(`NOTE: app.theme's header logo '${themeLogo}' is another publisher's or managed, so it is referenced, not exported — it must exist in the environment you build into.\n`);
+      }
+    }
+  }
   const { entities: entityLogicals, icons, customRefs, navRefs } = collectSitemap(app);
   // [{ pageId, title? }] — deduped by id; membership-only (title is the XML-decoded subarea label,
   // NOT the page's real name — the real name comes from the env-wide list below).
@@ -3378,20 +3426,18 @@ async function runDownload({ sdk, genpage, outDir, appId, appUnique, allowLossy 
   //
   // This app-derived value is only a fallback: the app's name does not reliably encode the publisher of
   // the solution that owns it (ADO 6603390). The authoritative prefix is the recovered solution's owning
-  // publisher, read below.
-  const appPrefixMatch = /^([a-z][a-z0-9]{1,7})_.+$/.exec(String(appUnique || '').toLowerCase());
-  const appDerivedPrefix = appPrefixMatch ? appPrefixMatch[1] : null;
+  // publisher, read below (downloadPublisherPrefix parses both).
 
   // Solution container (best-effort): the real unmanaged solution the appmodule belongs to, for a clean
   // teardown, plus its owning publisher's customization prefix. Falls back to the restricted 'Default'
   // when recovery finds nothing — that fallback cannot be torn down, but teardown skips it safely (see
   // system-solutions.js) rather than erroring.
-  const recovered = await recoverAppSolution(sdk, appId);
+  // The theme's logo preflight (above) already read it, before anything was written: that answer is reused.
+  const recovered = themePreflight ? themePreflight.recovered : await recoverAppSolution(sdk, appId);
+  const { solutionCandidates, solutionUnreadable, publisherUnreadable, prefixUnknown, trustedPrefix } = downloadPublisherPrefix(recovered, appUnique);
   // Several real solutions (#587 item 9), or a membership that could not be read: the spec keeps
   // 'Default' rather than a guess — the one solution a teardown never deletes — and says so. The
   // candidates are returned as well as printed, so the JSON result carries them.
-  const solutionCandidates = recovered && Array.isArray(recovered.ambiguous) ? recovered.ambiguous : null;
-  const solutionUnreadable = recovered && recovered.unreadable ? recovered.unreadable : null;
   if (solutionCandidates) {
     process.stderr.write(`WARNING: this app belongs to ${solutionCandidates.length} unmanaged solutions (${solutionCandidates.join(', ')}) and a download cannot tell which one you manage it in, so the spec's solution is left as 'Default', which a teardown never deletes. Set solution.uniqueName in app-spec.json to that solution before a rebuild or teardown.\n`);
   }
@@ -3403,15 +3449,12 @@ async function runDownload({ sdk, genpage, outDir, appId, appUnique, allowLossy 
   // `prefixResolved` means "this prefix is trustworthy", which gates the icon own-vs-foreign
   // classification below; it must be true for BOTH trusted sources, or a genuine own-publisher custom
   // nav icon stops round-tripping. It stays false only for the unverified 'new' default.
-  const solutionPrefix = (recovered && recovered.publisherPrefix) || null;
-  const publisherUnreadable = (recovered && recovered.publisherUnreadable) || null;
   // Several candidate solutions whose publishers do not share one prefix, none that could be read, or a
   // publisher whose read FAILED — the one solution's included: the prefix is UNKNOWN. The app-name guess is
   // exactly the heuristic that ambiguity refuses to use (see recoverAppSolution), and a wrong prefix renames
   // every relationship not carrying it, so a same-environment rebuild creates each a second time. So it is
   // not used: the prefix stays the unverified default, and relationships keep their deployed names. (A failed
   // read of the one solution's publisher used to read as "no prefix", which fell back to the guess.)
-  const prefixUnknown = !solutionPrefix && !!(solutionCandidates || solutionUnreadable || publisherUnreadable);
   if (prefixUnknown) {
     let why = solutionCandidates ? 'the publishers of those solutions do not share one customization prefix' : 'with the solutions unread, the publisher is unknown';
     if (publisherUnreadable) {
@@ -3421,7 +3464,6 @@ async function runDownload({ sdk, genpage, outDir, appId, appUnique, allowLossy 
     }
     process.stderr.write(`WARNING: ${why}, so solution.publisherPrefix is left as the unverified 'new' and every relationship keeps its deployed name. Set solution.publisherPrefix in app-spec.json to your solution publisher's prefix before a rebuild.\n`);
   }
-  const trustedPrefix = solutionPrefix || (prefixUnknown ? null : appDerivedPrefix);
   const solution = { uniqueName: 'Default', publisherPrefix: trustedPrefix || 'new', prefixResolved: !!trustedPrefix };
   if (recovered && recovered.uniqueName) solution.uniqueName = recovered.uniqueName;
   if (recovered && recovered.displayName) solution.displayName = recovered.displayName;
@@ -3441,32 +3483,21 @@ async function runDownload({ sdk, genpage, outDir, appId, appUnique, allowLossy 
   // A table icon is shared metadata, not proof this app created the resource. Reuse the
   // own-prefix/unmanaged gates of path-referenced navigation icons and their teardown protection.
   const tableIconNames = entities.map((e) => tableVectorIcons.get(e.schemaName.toLowerCase())).filter(Boolean);
-  // The theme's header logo is exported as an icon referenced by path is: re-declared, `external: true` (a build creates it when
-  // missing, and teardown never deletes it), only when it is this publisher's own unmanaged image with content.
-  const { webResources, unresolved: unresolvedIcons } = await iconWebResources(sdk, icons, themeLogo ? [...customRefs, themeLogo] : customRefs, solution.publisherPrefix, solution.prefixResolved, navRefs, tableIconNames);
+  const { webResources, unresolved: unresolvedIcons } = await iconWebResources(sdk, icons, customRefs, solution.publisherPrefix, solution.prefixResolved, navRefs, tableIconNames);
+  // The theme's header logo, as its preflight exported it (unless the navigation already carries the same resource).
+  if (themeLogo && themePreflight) {
+    for (const wr of themePreflight.logoExport.webResources) {
+      if (!webResources.some((own) => own.name.toLowerCase() === wr.name.toLowerCase())) webResources.push(wr);
+    }
+  }
   const svgByName = new Map(webResources.filter((wr) => wr.type === 'svg').map((wr) => [wr.name.toLowerCase(), wr.name]));
   for (const entity of entities) {
     const name = tableVectorIcons.get(entity.schemaName.toLowerCase());
     if (name && svgByName.has(name.toLowerCase())) entity.vectorIcon = svgByName.get(name.toLowerCase());
   }
   const navigationRefs = new Set([...icons, ...customRefs, ...navRefs].map((name) => String(name).toLowerCase()));
-  const themeLogoKey = themeLogo ? themeLogo.toLowerCase() : null;
-  if (themeLogoKey && !webResources.some((wr) => wr.name.toLowerCase() === themeLogoKey)) {
-    if (unresolvedIcons.some((name) => String(name).toLowerCase() === themeLogoKey)) {
-      // This publisher's own logo (or one whose publisher could not be verified) that could not be exported: a rebuild into a
-      // fresh environment would refuse the theme for its missing logo, so the theme is not portable as written.
-      const why = `app.theme: its header logo '${themeLogo}' could not be exported (unread, or its publisher could not be verified)`;
-      if (!allowLossy) return { ok: false, code: 'APP_THEME_LOGO_UNEXPORTABLE', error: `${why} — refusing to write a spec whose theme names an image it does not carry. Pass --allow-lossy-download to write the spec without app.theme.` };
-      process.stderr.write(`WARNING: app.theme was LEFT OUT (APP_THEME_LOGO_UNEXPORTABLE): ${why.replace(/^app\.theme: /, '')}. A build from this spec leaves the app's theme as it is.\n`);
-      appTheme = { write: false };
-    } else {
-      // Another publisher's, or managed: left as a bare reference, as such a navigation icon is (re-declaring it would make a
-      // build create a resource under a prefix it does not own). The image must exist where the spec is built.
-      process.stderr.write(`NOTE: app.theme's header logo '${themeLogo}' is another publisher's or managed, so it is referenced, not exported — it must exist in the environment you build into.\n`);
-    }
-  }
   const unresolvedNavIcons = unresolvedIcons.filter((name) => navigationRefs.has(String(name).toLowerCase()));
-  const unresolvedTableIcons = unresolvedIcons.filter((name) => !navigationRefs.has(String(name).toLowerCase()) && String(name).toLowerCase() !== themeLogoKey);
+  const unresolvedTableIcons = unresolvedIcons.filter((name) => !navigationRefs.has(String(name).toLowerCase()));
   if (unresolvedNavIcons.length) {
     // A custom nav icon we couldn't safely round-trip: either an own-prefix WR that's absent on the source
     // env / failed to read, OR (when the publisher prefix couldn't be verified) any custom image icon we
