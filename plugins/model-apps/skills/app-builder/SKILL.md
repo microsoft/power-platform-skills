@@ -144,6 +144,19 @@ prod-ready** app; don't under-build (a bare table list) or over-build (surfaces 
   behaviour for each), on a web resource only as the web-resource bullet above says, and never write a command
   `key` (keyed command bars are refused in this version). Leave a downloaded or older spec without
   these fields as it is — see the advanced reference.
+- **Configuration items** (`minimumPluginVersion: "2.21.0"`) — `environmentVariables[]`,
+  `connectionReferences[]`, `customApis[]`, `duplicateDetectionRules[]` and `solution.version`. Declare one
+  only when the maker asks for it or a page of this app needs it (a page calling a connector needs its
+  connection reference; an action a page calls needs its Custom API). Never write a value that differs per
+  environment into the spec — a current value, a connection id, a secret: those go in a `--deployment-settings`
+  file (the solution deployment-settings shape), which the maker supplies, and a `secret` variable takes no
+  `defaultValue`. Tell the maker: a page that calls a declared reference or Custom API is not written until the
+  reference is bound to a connection and the Custom API has an implementation (a plug-in type) — a declared
+  Custom API alone is a scaffold; clearing a value, unbinding a reference or removing a parameter or condition
+  needs `--authorize <kind>:<key>:<field>` (the refusal names it); a teardown keeps these items and names them;
+  a download does not bring them back into the spec yet; and a whole-build retry after a lost answer can create
+  a second row, so check the environment before running a failed build again. See
+  [`references/app-spec-schema.md`](../../references/app-spec-schema.md) → *Configuration items*.
 - **AI-first features** (admin-gated) — form-fill assist, natural-language grid/view search, NL chart
   / AI data visualization, M365 Copilot (opt-in); per-table Copilot row summaries (Insight Cards)
   with tailored prompts, auto-selected for good-candidate tables
