@@ -719,3 +719,53 @@ test('teardown: every declared configuration item is kept and named, never a val
   assert.match(bound[0], /contoso_Approve/);
   assert.match(bound[0], /contoso_order/);
 });
+test('the stable create port\'s intents: one per declared artifact, under the port key, with the child slots the helper sends', () => {
+  const spec = base({
+    environmentVariables: [{ schemaName: 'contoso_ApiBase', type: 'string' }, { schemaName: 'contoso_Mode', type: 'string' }],
+    connectionReferences: [{ logicalName: 'contoso_SP', connectorId: SP }],
+    customApis: [{ uniqueName: 'contoso_Calc', requestParameters: [{ uniqueName: 'A', type: 'integer' }], responseProperties: [{ uniqueName: 'R', type: 'string' }] }],
+    duplicateDetectionRules: [{ key: 'Email', name: 'Same email', entity: 'contact', conditions: [{ key: 'e', column: 'emailaddress1', match: 'exact' }] }],
+  });
+  const bindings = C.readDeploymentBindings({ EnvironmentVariables: [{ SchemaName: 'contoso_ApiBase', Value: 'https://v1.contoso.com' }] }, spec);
+  const seen = [];
+  const intentFor = (kind, args) => { seen.push([kind, args]); return { kind, key: args.key }; };
+  const bound = 'dddddddd-dddd-4ddd-8ddd-dddddddddddd';
+  const intents = C.configurationCreateIntents(spec, { intentFor, bindings, boundIdOf: (kind, key) => (kind === 'customApi' && key === 'contoso_calc' ? bound : undefined) });
+  const scope = { kind: 'solution', solution: 'ContosoSol' };
+  assert.deepEqual(seen, [
+    ['environmentVariable', { key: 'contoso_apibase', scope, declaration: { schemaName: 'contoso_ApiBase' }, children: [{ locator: 'value', childKind: 'environmentVariableValue', declaration: {} }] }],
+    ['environmentVariable', { key: 'contoso_mode', scope, declaration: { schemaName: 'contoso_Mode' }, children: [] }],
+    ['connectionReference', { key: 'contoso_sp', scope, declaration: { logicalName: 'contoso_SP' }, children: [] }],
+    ['customApi', { key: 'contoso_calc', scope, declaration: { uniqueName: 'contoso_Calc' }, boundId: bound, children: [
+      { locator: 'request:a', childKind: 'customApiRequestParameter', declaration: { uniqueName: 'A' } },
+      { locator: 'response:r', childKind: 'customApiResponseProperty', declaration: { uniqueName: 'R' } }] }],
+    ['duplicateRule', { key: 'Email', scope, declaration: { key: 'Email' }, children: [{ locator: 'e', childKind: 'duplicateRuleCondition', declaration: { key: 'e' } }] }],
+  ]);
+  assert.equal(intents.length, 5);
+  assert.throws(() => C.configurationCreateIntents(spec, {}), /intentFor/);
+});
+
+test('the stable create port as the helper takes it: a pass-through port unchanged; a stable one reads its planned id first', async () => {
+  const passthrough = { mode: 'passthrough', run: async () => ({}), protects: () => false, identityFor: () => null };
+  assert.equal(C.configurationCreates(passthrough, {}), passthrough, 'no resolve: the plain name lookup, as before');
+  const spec = base({ duplicateDetectionRules: [{ key: 'Email', name: 'Same email', entity: 'contact', conditions: [{ key: 'e', column: 'emailaddress1', match: 'exact' }] }],
+    customApis: [{ uniqueName: 'contoso_Calc' }] });
+  const planned = 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee';
+  const stable = { mode: 'stable', run: async () => ({}), protects: (k) => k !== 'connectionReference', identityFor: (kind, key) => (key === 'nope' ? null : { id: planned, childIds: {} }) };
+  const asked = [];
+  const provision = { dataverse: { get: async () => ({}) } };
+  const resolveProtectedTarget = async (args) => { asked.push(args); if (args.key === 'boom') throw Object.assign(new Error('x'), { code: 'create-identity-conflict', create: { id: planned } }); return { state: 'present', id: planned, row: { secret: 1 } }; };
+  const port = C.configurationCreates(stable, { resolveProtectedTarget, provision, spec, boundIdOf: (kind) => (kind === 'customApi' ? planned : undefined) });
+  assert.equal(port.run, stable.run);
+  assert.equal(port.protects('connectionReference'), false);
+  assert.deepEqual(await port.resolve({ kind: 'duplicateRule', key: 'Email' }), { state: 'present', id: planned }, 'only the state and the id');
+  await port.resolve({ kind: 'customApi', key: 'contoso_calc' });
+  assert.deepEqual(asked.map(({ readByName, ...rest }) => rest), [
+    { provision, kind: 'duplicateRule', key: 'Email', id: planned, expected: { baseEntity: 'contact', matchingEntity: 'contact' } },
+    { provision, kind: 'customApi', key: 'contoso_calc', id: planned, boundId: planned, expected: { uniqueName: 'contoso_Calc' } },
+  ]);
+  assert.deepEqual(await asked[0].readByName(), [], 'the helper runs its own name lookup after an absent');
+  await assert.rejects(port.resolve({ kind: 'duplicateRule', key: 'boom' }), (e) => e.code === 'create-identity-conflict');
+  await assert.rejects(port.resolve({ kind: 'duplicateRule', key: 'nope' }), (e) => e.code === 'create-identity-invalid');
+  assert.throws(() => C.configurationCreates(stable, {}), /resolveProtectedTarget/);
+});

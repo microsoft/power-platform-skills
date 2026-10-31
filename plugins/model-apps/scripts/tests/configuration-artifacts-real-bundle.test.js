@@ -22,7 +22,8 @@ const SQL = '/providers/Microsoft.PowerApps/apis/shared_sql';
 // `lose(request)` -> true commits the request in the org and then answers it 503, as a gateway that dropped the answer does.
 // `unversioned(request)` -> true commits the request and answers it without any version (no ETag header, no `@odata.etag`).
 // `retrying: true` builds the client without the configuration send-once rule (the generic six-attempt loop).
-async function harness({ lose, unversioned, retrying = false, ...orgOptions } = {}) {
+// `port` adds options to the stable create port double (tests/helpers/stable-create-port.js): `bound`, `protectedKinds`.
+async function harness({ lose, unversioned, retrying = false, port = {}, ...orgOptions } = {}) {
   const org = createConfigOrg({
     tables: [{ logicalName: 'contact', attributes: ['emailaddress1', 'lastname'] }],
     solution: { uniqueName: 'ContosoSol', version: '1.0.0.0', prefix: 'contoso' },
@@ -45,7 +46,7 @@ async function harness({ lose, unversioned, retrying = false, ...orgOptions } = 
   const httpClient = createAzHttpClient(org.origin, { getToken: () => 'test-token-0123456789abcdef', request, sleep: async () => {}, ...(retrying ? {} : { sendOnce: configurationSendOnce }) });
   const sdk = createMakerSdk({ workspaceStorage: createNodeWorkspaceStorage(makeTempDir('config-artifacts-')), instanceUrl: org.origin, httpClient, solutionUniqueName: 'ContosoSol' });
   await sdk.initWorkspace();
-  const creates = createStableCreatePort({ read: readFromOrg(org) });
+  const creates = createStableCreatePort({ read: readFromOrg(org), ...port });
   // One build step (a new invocation of the build): plan everything, apply it, and return the result plus the writes it sent.
   const run = async (spec, extra = {}) => {
     const ctx = { sdk, creates, ...extra };
@@ -961,4 +962,72 @@ test('build runtime: a Custom API without an implementation blocks the page that
   assert.equal(h.org.requests.length, mark, 'the step\'s own read is used: nothing is read again');
   assert.deepEqual((await runtime.beforePages([pageUsing('home', {})])).blockers, []);
   await assert.rejects(runtime.apply('pages'), TypeError);
+});
+
+test('a child is one id whichever way it is made, by its root\'s create or added by a later run; under another parent it is another id', async () => {
+  const full = () => ({ minimumPluginVersion: '2.21.0', solution: { uniqueName: 'ContosoSol', publisherPrefix: 'contoso' },
+    customApis: [{ uniqueName: 'contoso_Api', requestParameters: [{ uniqueName: 'A', type: 'string' }, { uniqueName: 'B', type: 'string' }] }],
+    duplicateDetectionRules: [{ key: 'email', name: 'Contacts with same email', entity: 'contact', conditions: [{ key: 'e', column: 'emailaddress1', match: 'exact' }, { key: 'l', column: 'lastname', match: 'exact' }] }] });
+  const bare = () => { const s = full(); s.customApis[0].requestParameters.pop(); s.duplicateDetectionRules[0].conditions.pop(); return s; };
+  const idsOf = (org) => ({
+    api: org.rows('customapis')[0].customapiid,
+    b: org.rows('customapirequestparameters').find((p) => p.uniquename === 'B').customapirequestparameterid,
+    l: org.rows('duplicateruleconditions').find((c) => c.baseattributename === 'lastname').duplicateruleconditionid,
+  });
+  // B and l made by the creates of their roots.
+  const h = await harness();
+  assert.deepEqual((await h.run(full())).result.unknown, []);
+  const composite = idsOf(h.org);
+  // The same B and l added by a later run to roots a first run created without them.
+  const k = await harness();
+  await k.run(bare());
+  const later = await k.run(full());
+  assert.deepEqual([later.result.refused, later.result.unknown], [[], []]);
+  assert.ok(k.creates.calls.some((c) => c.op === 'run' && c.kind === 'customApiRequestParameter' && c.identity.parentId === composite.api), 'B was its own create, under its parent');
+  assert.deepEqual(idsOf(k.org), composite);
+  assert.equal(composite.b, h.creates.idOf('customApiRequestParameter', 'contoso_api|request:b'));
+  assert.equal(composite.b, h.creates.childIdUnder(composite.api, 'customApiRequestParameter', 'request:b'));
+  // A root bound to another id: every child of it derives from that id.
+  const other = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc';
+  const b = await harness({ port: { bound: { 'customApi|contoso_api': other } } });
+  await b.run(full());
+  const under = idsOf(b.org);
+  assert.equal(under.api, other);
+  assert.notEqual(under.b, composite.b);
+  assert.equal(under.b, b.creates.childIdUnder(other, 'customApiRequestParameter', 'request:b'));
+  assert.equal(under.l, composite.l, 'the rule is not bound, so its children keep their ids');
+});
+
+test('a child added under a parent at another id than its planned one is refused by the stable port, and nothing is sent', async () => {
+  const s = () => ({ minimumPluginVersion: '2.21.0', solution: { uniqueName: 'ContosoSol', publisherPrefix: 'contoso' },
+    customApis: [{ uniqueName: 'contoso_Api', requestParameters: [{ uniqueName: 'A', type: 'string' }] }] });
+  const h = await harness();
+  // The API was made by a build without the stable port: a fresh id, not the one the port plans.
+  await h.run(s(), { creates: undefined });
+  const foreign = h.org.rows('customapis')[0].customapiid;
+  assert.notEqual(foreign, h.creates.idOf('customApi', 'contoso_api'));
+  const managed = { lookup: async (kind) => (kind === 'customApi' ? { id: foreign } : null) };
+  const edited = s();
+  edited.customApis[0].requestParameters.push({ uniqueName: 'B', type: 'string' });
+  const run = await h.run(edited, { managed });
+  assert.deepEqual(h.creates.calls.filter((c) => c.op === 'refuse').map((c) => [c.kind, c.key]), [['customApiRequestParameter', 'contoso_api|request:b']]);
+  assert.deepEqual(run.writes.filter((w) => w.includes('customapirequestparameters')), []);
+  assert.deepEqual(run.result.saved, []);
+  assert.deepEqual([...run.result.refused, ...run.result.unknown].map((x) => [x.kind, x.key, x.code]), [['customApi', 'contoso_Api', 'create-identity-conflict']]);
+});
+
+test('a kind the create port does not protect keeps the plain name lookup: a row made without the port is the same artifact, not a conflict', async () => {
+  const s = { minimumPluginVersion: '2.21.0', solution: { uniqueName: 'ContosoSol', publisherPrefix: 'contoso' }, connectionReferences: [{ logicalName: 'contoso_sp', connectorId: SP }] };
+  const open = await harness({ port: { protectedKinds: ['environmentVariable', 'customApi', 'duplicateRule'] } });
+  await open.run(s, { creates: undefined });
+  const again = await open.run(s);
+  assert.deepEqual([again.result.refused, again.result.unknown, again.writes], [[], [], []]);
+  assert.deepEqual(again.result.unchanged.map((x) => [x.kind, x.key]), [['connectionReference', 'contoso_sp']]);
+  assert.ok(!open.creates.calls.some((c) => c.op === 'resolve'), 'no stable read for an unprotected kind');
+  // Protected, the same row at another id than the planned one is refused, as before.
+  const shut = await harness();
+  await shut.run(s, { creates: undefined });
+  const refused = await shut.run(s);
+  assert.deepEqual(refused.result.refused.map((r) => [r.kind, r.code]), [['connectionReference', 'create-identity-conflict']]);
+  assert.deepEqual(refused.writes, []);
 });

@@ -697,9 +697,12 @@ async function locate(ctx, kind, key, identity) {
       }
     }
   }
-  const creates = portOf(ctx);
+  // The stable path runs only for a kind the port protects: an unprotected kind keeps the plain name lookup, so
+  // a port that protects some kinds (a stable-v1 spec that ships only some of them) never refuses the others.
+  const port = portOf(ctx);
+  const creates = port && typeof port.resolve === 'function' && (typeof port.protects !== 'function' || port.protects(kind)) ? port : null;
   let derived = null;
-  if (creates && typeof creates.resolve === 'function') {
+  if (creates) {
     let resolved;
     try {
       resolved = await creates.resolve({ kind, key: portKeyOf(kind, key), identity });
@@ -716,7 +719,7 @@ async function locate(ctx, kind, key, identity) {
   }
   const id = await ctx.sdk.findArtifact(kind, identity);
   if (!id) return null;
-  if (creates && typeof creates.resolve === 'function' && ref(id) !== ref(derived)) {
+  if (creates && ref(id) !== ref(derived)) {
     return { id, origin: 'foreign', refusal: 'create-identity-conflict' };
   }
   return adoptionOf(managed, kind, key, id, await ctx.sdk.fetchArtifact(kind, id, { overwrite: true }), 'existing');
@@ -2608,7 +2611,88 @@ function configurationTeardownNotes(spec) {
   return notes;
 }
 
+// ---- The stable-id create port (lib/creates-port.js), as this module needs it ----
+// The build owns the port; these two pure adapters are all it takes from here. Both are injected with the shared
+// functions (creates-capabilities.js intentFor, creates-read.js resolveProtectedTarget) so this module loads none of
+// them and a build without the stable port is byte-for-byte what it was.
+//
+// The child slot of every intent is the string the helper sends as a childKey and as a later child's identity.slot:
+//   environmentVariable 'contoso_apibase' -> 'value' (only when the deployment settings write a value with it)
+//   customApi 'contoso_calc' -> 'request:<lower unique name>', 'response:<lower unique name>'
+//   duplicateRule 'email' -> '<condition key>' (byte for byte)
+// so a child the create of its root makes and the same child a later run adds are one id: the shared derivation
+// keys a child on its parent's id, its kind and its own key parts (creates-identity.js stableChildIdV1).
+const CHILD_KIND_OF_SLOT = Object.freeze({
+  environmentVariable: () => 'environmentVariableValue',
+  customApi: (slot) => (slot.startsWith('request:') ? 'customApiRequestParameter' : 'customApiResponseProperty'),
+  duplicateRule: () => 'duplicateRuleCondition',
+});
+
+// One intent per declared artifact, under the port key the helper sends (portKeyOf). `boundIdOf(kind, portKey)` answers
+// the id a recorded binding holds (or undefined): a bound artifact keeps that id, and its children derive from it.
+function configurationCreateIntents(spec, { intentFor, bindings, boundIdOf } = {}) {
+  if (typeof intentFor !== 'function') throw new TypeError('configurationCreateIntents: intentFor must be a function');
+  const solution = spec && spec.solution && spec.solution.uniqueName;
+  if (!nonEmptyString(solution)) throw new TypeError('configurationCreateIntents: the spec names no solution');
+  const scope = { kind: 'solution', solution };
+  const intents = [];
+  const add = (kindPlan, list, declarationOf, childDeclarationOf) => {
+    for (const entry of Array.isArray(list) ? list : []) {
+      const kind = kindPlan.kind;
+      const key = portKeyOf(kind, kindPlan.key(entry));
+      const slots = kindPlan.childKeys ? kindPlan.childKeys(entry) : [];
+      const children = slots.map((slot) => ({ locator: slot, childKind: CHILD_KIND_OF_SLOT[kind](slot), declaration: childDeclarationOf(entry, slot) }));
+      const boundId = typeof boundIdOf === 'function' ? boundIdOf(kind, key) : undefined;
+      intents.push(intentFor(kind, { key, scope, declaration: declarationOf(entry), children, ...(boundId ? { boundId } : {}) }));
+    }
+  };
+  const named = (list, slot) => (list || []).find((c) => lower(c.uniqueName) === slot.slice(slot.indexOf(':') + 1));
+  add(variablePlan(bindings || { environmentVariables: new Map(), connectionReferences: new Map() }, new Map()), spec.environmentVariables, (e) => ({ schemaName: e.schemaName }), () => ({}));
+  add(referencePlan(bindings || { environmentVariables: new Map(), connectionReferences: new Map() }), spec.connectionReferences, (e) => ({ logicalName: e.logicalName }), () => ({}));
+  add(customApiPlan, spec.customApis, (e) => ({ uniqueName: e.uniqueName }), (e, slot) => ({ uniqueName: (named(slot.startsWith('request:') ? e.requestParameters : e.responseProperties, slot) || {}).uniqueName }));
+  add(duplicateRulePlan, spec.duplicateDetectionRules, (e) => ({ key: e.key }), (e, slot) => ({ key: slot }));
+  return intents;
+}
+
+// The context a row at the derived id must show to be this artifact (creates-read.js checkContext members).
+function expectedContextOf(spec, kind, key) {
+  const find = (list, of) => (Array.isArray(list) ? list : []).find((e) => portKeyOf(kind, of(e)) === key);
+  if (kind === 'environmentVariable') { const e = find(spec.environmentVariables, (x) => x.schemaName); return e ? { schemaName: e.schemaName } : {}; }
+  if (kind === 'connectionReference') { const e = find(spec.connectionReferences, (x) => x.logicalName); return e ? { logicalName: e.logicalName } : {}; }
+  if (kind === 'customApi') { const e = find(spec.customApis, (x) => x.uniqueName); return e ? { uniqueName: e.uniqueName } : {}; }
+  if (kind === 'duplicateRule') {
+    const e = find(spec.duplicateDetectionRules, (x) => x.key);
+    return e ? { baseEntity: e.entity, matchingEntity: e.matchingEntity || e.entity } : {};
+  }
+  return {};
+}
+
+// The port the helper is handed. A pass-through port is returned unchanged (no `resolve`: the helper's plain name
+// lookup, exactly as before). A stable port gains `resolve`, which reads the derived (or bound) id before any name
+// lookup. `readByName` answers no match on purpose: the helper runs its own name lookup right after an 'absent'
+// and refuses a namesake at another id (create-identity-conflict), so the shared one would only read it twice.
+// Every typed stop of the resolver (unverified, conflict, completion-required) reaches the helper unchanged.
+function configurationCreates(port, { resolveProtectedTarget, provision, spec, boundIdOf } = {}) {
+  if (!port || port.mode !== 'stable') return port;
+  if (typeof resolveProtectedTarget !== 'function') throw new TypeError('configurationCreates: resolveProtectedTarget must be a function');
+  return {
+    mode: port.mode,
+    run: port.run,
+    protects: port.protects,
+    identityFor: port.identityFor,
+    async resolve({ kind, key } = {}) {
+      const planned = port.identityFor(kind, key);
+      if (!planned) throw identityStop('create-identity-invalid');
+      const boundId = typeof boundIdOf === 'function' ? boundIdOf(kind, key) : undefined;
+      const answer = await resolveProtectedTarget({ provision, kind, key, id: planned.id, ...(boundId ? { boundId } : {}), expected: expectedContextOf(spec || {}, kind, key), readByName: async () => [] });
+      return { state: answer.state, id: answer.id };
+    },
+  };
+}
+
 module.exports = {
+  configurationCreateIntents,
+  configurationCreates,
   configurationTeardownNotes,
   CONFIGURATION_MIN_VERSION,
   MAX_PUBLISHED_RULES_PER_TABLE,
