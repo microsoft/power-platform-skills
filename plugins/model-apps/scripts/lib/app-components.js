@@ -7,7 +7,7 @@
 // https://learn.microsoft.com/en-us/power-apps/developer/data-platform/reference/entities/appmodulecomponent
 const { odataLit } = require('./odata.js');
 const { postPublishXml } = require('./publish-xml.js');
-const { dashboardNameKey, FORM_GUID_RE, formIdentityKey, compareVersions, isPluginVersion, APP_MEMBERSHIP_MIN_VERSION } = require('./app-spec.js');
+const { dashboardNameKey, FORM_GUID_RE, formIdentityKey, compareVersions, isPluginVersion, APP_MEMBERSHIP_MIN_VERSION, APP_THEME_MIN_VERSION } = require('./app-spec.js');
 const { isMainForm } = require('./form-order.js');
 const { compareText } = require('./compare-text.js');
 
@@ -804,6 +804,18 @@ function setAppMembershipFloor(spec, priorFloor) {
   return spec;
 }
 
+// A downloaded app.theme (Preview) asks for the plugin that ships it, keeping a higher floor the spec or the author's earlier
+// spec already named (the same rule as setAppMembershipFloor).
+function setAppThemeFloor(spec, priorFloor) {
+  if (!spec || !spec.app || spec.app.theme === undefined) return spec;
+  let floor = APP_THEME_MIN_VERSION;
+  for (const candidate of [spec.minimumPluginVersion, priorFloor]) {
+    if (isPluginVersion(candidate) && compareVersions(candidate, floor) > 0) floor = candidate;
+  }
+  spec.minimumPluginVersion = floor;
+  return spec;
+}
+
 // Resolve only the SPEC's wanted names, so a foreign/deleted component cannot make verification
 // unbounded or turn an unrelated opaque id into a whole-answer failure. A 404 is absence, not unreadable.
 async function appEntityComponentsFor(sdk, appUnique, wanted) {
@@ -834,5 +846,5 @@ module.exports = {
   currentAppLayer, currentLayerRows, currentLayerRow, savedPageRows, publishedAppLayer, appComponentRows, collectionRows, tableRefs, tableComponentIds, pinAppTables,
   publishAppComponents, appComponentsFor, applyAppMainForms, explainAppPushWarnings, declaredAppPins, pinDeclaredArtifacts, exactMembershipOutcome,
   resolveMainForms, readMainFormMembership, publishedMainFormsProof, appMainFormsFor, appEntityComponentsFor,
-  APP_COMPONENT_ENTITY_SOURCES, TABLE_NAME, readAppComponentInventory, appComponentEntities, downloadAppMainForms, setAppMembershipFloor,
+  APP_COMPONENT_ENTITY_SOURCES, TABLE_NAME, readAppComponentInventory, appComponentEntities, downloadAppMainForms, setAppMembershipFloor, setAppThemeFloor,
 };

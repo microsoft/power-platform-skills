@@ -85,11 +85,11 @@ const { uniqueKeys } = require('./lib/unique-keys.js');
 // what got verified, and a forced refresh there could discard a concurrent writer's edit. A fresh workspace has no
 // local copy to read, discard or race with, and a fresh SDK no cached read to hand back. One per read, not per run:
 // a second read of the same dashboard must not come from the first one's cache.
-async function throwawaySdk(env, httpClient, prefix) {
+async function throwawaySdk(env, httpClient, prefix, sdkOptions) {
   const dir = makeTempWorkspace(prefix);
   const dispose = () => { try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* best-effort */ } };
   try {
-    return { sdk: await makeProvision(env, dir, httpClient), dispose };
+    return { sdk: await makeProvision(env, dir, httpClient, sdkOptions), dispose };
   } catch (e) {
     dispose();
     throw e;
@@ -102,16 +102,18 @@ async function throwawaySdk(env, httpClient, prefix) {
 function isolatedReaderFor(env, opts = {}) {
   let client = opts.httpClient || null;
   const makeClient = opts.makeClient || createAzHttpClient;
-  return async () => throwawaySdk(env, client || (client = makeClient(env)), 'verify-dashboard-');
+  // sdkOptions.themeReads: the app theme's read (readerFor's appTheme) asks for an SDK made with the strict theme read policy
+  // (lib/app-theme-reads.js); every other read gets the SDK it always got.
+  return async (sdkOptions) => throwawaySdk(env, client || (client = makeClient(env)), sdkOptions && sdkOptions.themeReads ? 'verify-theme-' : 'verify-dashboard-', sdkOptions);
 }
 
-async function makeProvision(env, workspaceDir, httpClient = createAzHttpClient(env)) {
+async function makeProvision(env, workspaceDir, httpClient = createAzHttpClient(env), sdkOptions = {}) {
   // A link at the workspace root would make the SDK storage follow it. Refuse before the
   // factory runs. An explicit real directory is created if missing, then re-checked.
   // The module's own fs, not a second copy: a caller that replaced fs must see the same create.
   assertSafeOutputDir(workspaceDir, { create: true, fs });
   const { createMakerSdk, createNodeWorkspaceStorage } = require('./lib/maker-sdk.js');
-  const sdk = createMakerSdk({ workspaceStorage: createNodeWorkspaceStorage(workspaceDir), instanceUrl: env, httpClient });
+  const sdk = createMakerSdk({ workspaceStorage: createNodeWorkspaceStorage(workspaceDir), instanceUrl: env, httpClient, ...(sdkOptions && sdkOptions.themeReads ? { themeReads: true } : {}) });
   await sdk.initWorkspace();
   // Only the SDK is returned. The raw `httpClient` used to come back with it because the role
   // privilege check had no SDK surface to read `EntityDefinitions(...)?$select=Privileges`; the
@@ -441,6 +443,22 @@ function readerFor(sdk, appUnique, opts) {
     // like one with no FormXML.
     // See: https://learn.microsoft.com/en-us/power-apps/developer/data-platform/webapi/reference/retrieveunpublished
     // and https://learn.microsoft.com/en-us/power-apps/developer/data-platform/webapi/perform-conditional-operations-using-web-api
+    // appTheme(spec): app.theme (Preview) as lib/app-theme.js verifyAppTheme reads it — [{ key, ok, state, code?, reasons? }].
+    // Read on a throwaway SDK made with the strict theme read policy (opts.isolatedReader({ themeReads: true })): the
+    // policy belongs to the SDK's client, and the run's own SDK was not made with it. Asked only for a spec that declares a
+    // theme (lib/verify-spec.js), so a spec without one loads nothing and reads nothing more.
+    appTheme: async (spec) => {
+      if (!opts.isolatedReader) throw new Error('the app theme reader needs an isolated reader');
+      const appId = await appIdFor(sdk, appUnique);
+      if (!appId) throw new Error(`app ${appUnique} was not found`);
+      const reader = await opts.isolatedReader({ themeReads: true });
+      try {
+        const { verifyAppTheme } = require('./lib/app-theme.js');
+        return await verifyAppTheme(spec, { sdk: reader.sdk, appId, solution: spec.solution && spec.solution.uniqueName });
+      } finally {
+        reader.dispose();
+      }
+    },
     dashboardComponents: async (dashboardId) => {
       const publishedDashboard = async () => {
         const [row] = (await sdk.queryRecords('systemform', { select: ['formid', 'formxml'], filter: `formid eq ${dashboardId}`, top: 1 })) || [];

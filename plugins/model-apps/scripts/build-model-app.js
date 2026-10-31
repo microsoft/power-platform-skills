@@ -159,6 +159,9 @@ async function makeSdk(env, spec, workspaceDir, languageCode, { persistent = tru
       // header-less, so no solution membership is demanded of the row — a form joins its solution after its
       // push. An adoption reports `saved: false`; pushFailed knows that is not a failure.
       createRecovery: 'adoptExact',
+      // app.theme (Preview) runs on THIS instance (lib/sdk-build.js ensureThemeApplied): its reads go through the strict
+      // theme read policy only when the spec declares a theme, so a spec without one makes exactly the requests it made before.
+      ...(spec.app && spec.app.theme !== undefined ? { themeReads: true } : {}),
     });
     if (!persistent) fs.mkdirSync(provisionDir);
     try {

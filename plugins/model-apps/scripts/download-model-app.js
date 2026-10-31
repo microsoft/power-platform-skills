@@ -51,7 +51,7 @@ const { PAGE_BINDINGS, pageBindingsProblem, statableBindings, bindingProblemText
 const { getReviewedDataverseOperation } = require('./lib/dataverse-operations.js');
 const { labelsByLcid, pickLabel, sameLabel } = require('./lib/lookup-labels.js');
 const { odataGuid } = require('./lib/ai-app-settings.js');
-const { APP_COMPONENT_ENTITY_SOURCES, appComponentEntities, appComponentRows, currentAppLayer, readAppComponentInventory, downloadAppMainForms, setAppMembershipFloor } = require('./lib/app-components.js');
+const { APP_COMPONENT_ENTITY_SOURCES, appComponentEntities, appComponentRows, currentAppLayer, readAppComponentInventory, downloadAppMainForms, setAppMembershipFloor, setAppThemeFloor } = require('./lib/app-components.js');
 const { mapLimit, DEFAULT_MAX_SIZE_KB } = require('./lib/entity-provision.js');
 const { downloadedChoiceOptions, downloadedColumnFeatures, downloadedTableFlags, readTableFlags, setSchemaFeaturesFloor } = require('./lib/schema-feature-contract.js');
 const { readExistingDateBehaviors } = require('./lib/date-behavior.js');
@@ -642,6 +642,8 @@ async function makeDownloadSdk(env, deps = {}) {
       httpClient,
       // The App, Form and Dashboard adapters bake the language in at construction, as the build gives its own SDK (build-model-app.js).
       ...(language.languageCode ? { languageCode: language.languageCode } : {}),
+      // --include-capabilities reads the app's theme (Preview), which needs the strict theme read policy (lib/app-theme-reads.js).
+      ...(deps.themeReads ? { themeReads: true } : {}),
     });
     await sdk.initWorkspace();
     return {
@@ -2935,7 +2937,7 @@ async function readSitemapPages(genpage, ids, concurrency) {
   return { ok: true, pages: results.map(({ id, page }) => ({ pageId: String(id).toLowerCase(), files: pageFolderFiles(page) })) };
 }
 
-async function runDownload({ sdk, genpage, outDir, appId, appUnique, allowLossy = false, resetPageKeys = false, concurrency, languageCode, includeCapabilities = false }) {
+async function runDownload({ sdk, genpage, outDir, appId, appUnique, allowLossy = false, resetPageKeys = false, concurrency, languageCode, includeCapabilities = false, captureTheme = includeCapabilities }) {
   concurrency = validatedDownloadConcurrency(concurrency);
   // The caller named this directory. A link at its final component would make every page and
   // the spec land outside it. Ancestors are the caller's choice and are not inspected.
@@ -2978,6 +2980,18 @@ async function runDownload({ sdk, genpage, outDir, appId, appUnique, allowLossy 
   if (!appNavigationMatchesSitemap(app, smResult.xml)) {
     return { ok: false, error: "the app's sitemap has an unpublished change the SDK could not read consistently — publish the app, then download again" };
   }
+  // app.theme (Preview), read with the other capabilities (--include-capabilities; `captureTheme` defaults to it). Read here,
+  // before the pages or anything else is written, so a strict download that cannot state the theme exactly — the "no theme"
+  // sentinel, attributes outside the schema, an unreadable row, a missing or non-image logo — refuses with nothing written
+  // (lib/app-theme.js appThemeDownloadOutcome). --allow-lossy-download leaves the field out instead, and says so.
+  let appTheme = null;
+  if (captureTheme) {
+    const { downloadAppTheme, appThemeDownloadOutcome } = require('./lib/app-theme.js');
+    appTheme = appThemeDownloadOutcome(await downloadAppTheme({ sdk, appId }), { allowLossy });
+    if (appTheme.error) return { ok: false, code: appTheme.code, error: appTheme.error };
+    if (appTheme.warning) process.stderr.write(`WARNING: ${appTheme.warning}\n`);
+  }
+  const themeLogo = appTheme && appTheme.write && appTheme.logo ? appTheme.logo.webResourceName : null;
   const { entities: entityLogicals, icons, customRefs, navRefs } = collectSitemap(app);
   // [{ pageId, title? }] — deduped by id; membership-only (title is the XML-decoded subarea label,
   // NOT the page's real name — the real name comes from the env-wide list below).
@@ -3427,15 +3441,32 @@ async function runDownload({ sdk, genpage, outDir, appId, appUnique, allowLossy 
   // A table icon is shared metadata, not proof this app created the resource. Reuse the
   // own-prefix/unmanaged gates of path-referenced navigation icons and their teardown protection.
   const tableIconNames = entities.map((e) => tableVectorIcons.get(e.schemaName.toLowerCase())).filter(Boolean);
-  const { webResources, unresolved: unresolvedIcons } = await iconWebResources(sdk, icons, customRefs, solution.publisherPrefix, solution.prefixResolved, navRefs, tableIconNames);
+  // The theme's header logo is exported as an icon referenced by path is: re-declared, `external: true` (a build creates it when
+  // missing, and teardown never deletes it), only when it is this publisher's own unmanaged image with content.
+  const { webResources, unresolved: unresolvedIcons } = await iconWebResources(sdk, icons, themeLogo ? [...customRefs, themeLogo] : customRefs, solution.publisherPrefix, solution.prefixResolved, navRefs, tableIconNames);
   const svgByName = new Map(webResources.filter((wr) => wr.type === 'svg').map((wr) => [wr.name.toLowerCase(), wr.name]));
   for (const entity of entities) {
     const name = tableVectorIcons.get(entity.schemaName.toLowerCase());
     if (name && svgByName.has(name.toLowerCase())) entity.vectorIcon = svgByName.get(name.toLowerCase());
   }
   const navigationRefs = new Set([...icons, ...customRefs, ...navRefs].map((name) => String(name).toLowerCase()));
+  const themeLogoKey = themeLogo ? themeLogo.toLowerCase() : null;
+  if (themeLogoKey && !webResources.some((wr) => wr.name.toLowerCase() === themeLogoKey)) {
+    if (unresolvedIcons.some((name) => String(name).toLowerCase() === themeLogoKey)) {
+      // This publisher's own logo (or one whose publisher could not be verified) that could not be exported: a rebuild into a
+      // fresh environment would refuse the theme for its missing logo, so the theme is not portable as written.
+      const why = `app.theme: its header logo '${themeLogo}' could not be exported (unread, or its publisher could not be verified)`;
+      if (!allowLossy) return { ok: false, code: 'APP_THEME_LOGO_UNEXPORTABLE', error: `${why} — refusing to write a spec whose theme names an image it does not carry. Pass --allow-lossy-download to write the spec without app.theme.` };
+      process.stderr.write(`WARNING: app.theme was LEFT OUT (APP_THEME_LOGO_UNEXPORTABLE): ${why.replace(/^app\.theme: /, '')}. A build from this spec leaves the app's theme as it is.\n`);
+      appTheme = { write: false };
+    } else {
+      // Another publisher's, or managed: left as a bare reference, as such a navigation icon is (re-declaring it would make a
+      // build create a resource under a prefix it does not own). The image must exist where the spec is built.
+      process.stderr.write(`NOTE: app.theme's header logo '${themeLogo}' is another publisher's or managed, so it is referenced, not exported — it must exist in the environment you build into.\n`);
+    }
+  }
   const unresolvedNavIcons = unresolvedIcons.filter((name) => navigationRefs.has(String(name).toLowerCase()));
-  const unresolvedTableIcons = unresolvedIcons.filter((name) => !navigationRefs.has(String(name).toLowerCase()));
+  const unresolvedTableIcons = unresolvedIcons.filter((name) => !navigationRefs.has(String(name).toLowerCase()) && String(name).toLowerCase() !== themeLogoKey);
   if (unresolvedNavIcons.length) {
     // A custom nav icon we couldn't safely round-trip: either an own-prefix WR that's absent on the source
     // env / failed to read, OR (when the publisher prefix couldn't be verified) any custom image icon we
@@ -3533,10 +3564,15 @@ async function runDownload({ sdk, genpage, outDir, appId, appUnique, allowLossy 
     : { mainForms: {}, notes: [] };
   if (Object.keys(mainFormMembership.mainForms).length) spec.app.mainForms = mainFormMembership.mainForms;
   setAppMembershipFloor(spec);
+  if (appTheme && appTheme.write) {
+    spec.app.theme = appTheme.theme;
+    setAppThemeFloor(spec);
+    if (appTheme.pendingPublish) process.stderr.write(`NOTE: app.theme was read from the app's SAVED theme, which is not published yet: ${appTheme.theme === null ? 'the removal of its own theme' : 'a theme'} the app does not show until it is published.\n`);
+  }
   // A spec that carries a 2.21.0 schema field (a valued option, a secured column, a date behaviour, a table flag) asks for 2.21.0:
   // an older build would renumber the options or leave the column open.
   setSchemaFeaturesFloor(spec);
-  if (spec.app.tables !== undefined || spec.app.mainForms !== undefined) {
+  if (spec.app.tables !== undefined || spec.app.mainForms !== undefined || spec.app.theme !== undefined) {
     preserveAuthoredLanguageCode(spec, path.join(outDir, 'app-spec.json'));
   }
 
@@ -3665,7 +3701,7 @@ async function main(deps = {}) {
   let outcome = null;
   const finish = (ok, payload) => { outcome = [ok, payload]; };
   try {
-    session = await io.makeDownloadSdk(env, { ...deps, languageCode: languageFlag, authoredLanguageCode: pinnedLanguage });
+    session = await io.makeDownloadSdk(env, { ...deps, languageCode: languageFlag, authoredLanguageCode: pinnedLanguage, themeReads: includeCapabilities });
     // No language known — the flag, the spec on disk and the environment all gave none — means nothing has been read with a guess yet, and nothing is: the refusal is the result, before the app is
     // resolved, and the spec and baseline on disk are as they were (navigationLanguageRefusal says how to go on).
     if (typeof session.languageUnresolved === 'string') {
@@ -3793,7 +3829,7 @@ function preserveAuthoredLanguageCode(spec, specPath, deps = {}) {
   const readFileSync = deps.readFileSync || fs.readFileSync;
   const existsSync = deps.existsSync || fs.existsSync;
   if (!spec) return spec;
-  const membership = spec.app && (spec.app.tables !== undefined || spec.app.mainForms !== undefined);
+  const membership = spec.app && (spec.app.tables !== undefined || spec.app.mainForms !== undefined || spec.app.theme !== undefined);
   if (spec.languageCode !== undefined && !membership) return spec;
   try {
     if (!existsSync(specPath)) return spec;
@@ -3806,7 +3842,10 @@ function preserveAuthoredLanguageCode(spec, specPath, deps = {}) {
     if (spec.languageCode === undefined && lcid !== null) spec.languageCode = lcid;
     // Retain the established API name, but read both authored options once. A lower generated floor
     // must not weaken a newer capability requirement the author already wrote.
-    if (membership) setAppMembershipFloor(spec, prior && prior.minimumPluginVersion);
+    if (membership) {
+      setAppMembershipFloor(spec, prior && prior.minimumPluginVersion);
+      setAppThemeFloor(spec, prior && prior.minimumPluginVersion);
+    }
   } catch (error) {
     if (membership && error.code !== 'ENOENT') {
       const warn = deps.warn || ((message) => process.stderr.write(`WARNING: ${message}\n`));

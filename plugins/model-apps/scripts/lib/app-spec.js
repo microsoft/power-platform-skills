@@ -2023,6 +2023,8 @@ const APP_MEMBERSHIP_MIN_VERSION = '2.13.0';
 // app.mainFormsOnUpdate and app.pinDeclaredArtifacts: a plugin older than this ignores both, so an "exact" list would
 // only ADD forms there and a declared chart off the navigation would stay out of the app.
 const APP_MEMBERSHIP_UPDATE_MIN_VERSION = '2.21.0';
+// app.theme (Preview) ships in 2.21.0: an older plugin ignores the field, so a spec that uses it asks for 2.21.0 or newer.
+const APP_THEME_MIN_VERSION = '2.21.0';
 const isPluginVersion = (value) => typeof value === 'string' && /^\d+(?:\.\d+)*(?:[-+][0-9A-Za-z.-]+)?$/.test(value);
 // Declared reconciliation (views, charts and web resources with reconcile: "declared", a view's viewId pin and joins, a chart title, command
 // keys and row pins, a table's quickFind): an older plugin ignores these fields (or, for quickFind, refuses the table), so a
@@ -2127,6 +2129,9 @@ function appMembershipWarnings(spec) {
   if ((app.mainFormsOnUpdate !== undefined || app.pinDeclaredArtifacts !== undefined)
     && (!isPluginVersion(floor) || compareVersions(floor, APP_MEMBERSHIP_UPDATE_MIN_VERSION) < 0)) {
     warnings.push(`set minimumPluginVersion to '${APP_MEMBERSHIP_UPDATE_MIN_VERSION}' or newer when using app.mainFormsOnUpdate or app.pinDeclaredArtifacts — older plugins ignore these fields`);
+  }
+  if (app.theme !== undefined && (!isPluginVersion(floor) || compareVersions(floor, APP_THEME_MIN_VERSION) < 0)) {
+    warnings.push(`set minimumPluginVersion to '${APP_THEME_MIN_VERSION}' or newer when using app.theme — older plugins ignore it`);
   }
   if (app.tables === undefined && app.mainForms === undefined) return warnings;
   if (!isPluginVersion(floor) || compareVersions(floor, APP_MEMBERSHIP_MIN_VERSION) < 0) {
@@ -2707,6 +2712,9 @@ function validateAppSpec(spec, opts = {}) {
   if (spec.app && spec.app.headerNavigationRefresh !== undefined && typeof spec.app.headerNavigationRefresh !== 'boolean') {
     errors.push('app.headerNavigationRefresh must be a boolean');
   }
+  // app.theme (Preview): validated by lib/app-theme.js, which is loaded only for a spec that declares one, so a spec without
+  // a theme loads none of it. The build's own plan refuses an invalid theme too, before it reads or writes anything.
+  if (spec.app && spec.app.theme !== undefined) errors.push(...require('./app-theme.js').validateAppTheme(spec.app.theme).errors);
   validateAiDescription(spec.app && spec.app.aiDescription, errors);
   if (profile !== 'structural') validateAppMembership(spec, errors);
   if (spec.languageCode !== undefined && normalizeLanguageCode(spec.languageCode) === null) {
@@ -4759,6 +4767,7 @@ module.exports = {
   compareVersions,
   APP_MEMBERSHIP_MIN_VERSION,
   APP_MEMBERSHIP_UPDATE_MIN_VERSION,
+  APP_THEME_MIN_VERSION,
   isPluginVersion,
   sitemapEntityTables,
   appMembershipWarnings,

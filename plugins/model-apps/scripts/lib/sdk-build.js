@@ -850,6 +850,8 @@ function planFor(spec, opts) {
   if (has('dashboards')) for (const d of spec.dashboards || []) items.push({ phase: 'dashboards', label: `dashboard "${d.name}" (${(d.tiles || []).length} tile(s))` });
   if (has('app-shell')) items.push({ phase: 'app-shell', label: `app module "${spec.app.name}" + sitemap`, key: { kind: 'app', uniqueName: appUniqueName(spec) } });
   if (has('app-shell') && !(spec.app && spec.app.icon)) items.push({ phase: 'app-shell', label: `app icon (generated) ${appUniqueName(spec)}_icon` });
+  // app.theme (Preview): one step, only when the spec declares a theme (ensureThemeApplied in runSdkBuildPhases).
+  if (has('app-shell') && spec.app && spec.app.theme !== undefined) items.push({ phase: 'app-shell', label: 'app theme (Preview)' });
   if (has('pages')) for (const p of spec.pages || []) items.push({ phase: 'pages', label: `page "${p.name}"` });
   if (has('pages') && (spec.pages || []).length && appHasCrossPageNav(spec)) items.push({ phase: 'pages', label: 'resolve cross-page navigation' });
   if (has('pages') && (spec.pages || []).length) items.push({ phase: 'pages', label: `page manifest ${appUniqueName(spec)}_pagemanifest` });
@@ -4019,6 +4021,33 @@ async function runSdkBuildPhases(spec, opts, owed) {
   // the maker re-runs once the cause is cleared.
   const incomplete = [];
   const markIncomplete = (entry) => { incomplete.push(entry); };
+
+  // app.theme (Preview): the app's theme, set once per build on the header-less `provision` SDK (made with `themeReads` by
+  // build-model-app.js), through lib/app-theme.js — required only here, so a spec without a theme never loads it. The theme's
+  // app publication is QUEUED on appPublication, never made here, so it must run BEFORE the app publication that is to pay it:
+  //   existing app       in the app step, before either of its publishes and before the pages finalizer's;
+  //   new app            after its create, whose own publication came first and cannot pay a later edit: the theme is paid by
+  //                      the next app publication (the pages finalizer, phase 8's) or, failing those, by the flush at the end;
+  //   pages-first app    inside createAppWithPages, once the app exists (the same payers as a new app);
+  //   pages finalizer    before its publish, as a fallback that finds the theme already applied.
+  // Done once (`themeDone`), and only after a real app id and a finished operation. A refused or unknown theme ends the build
+  // (APP_THEME_INCOMPLETE, never retried: lib/app-theme.js appThemeIncomplete); what was saved is kept in result.created.appTheme.
+  const declaresTheme = Boolean(spec.app) && spec.app.theme !== undefined && has('app-shell');
+  let themeDone = false;
+  const ensureThemeApplied = async (appId) => {
+    if (!declaresTheme || themeDone || !appId) return;
+    await runner.run('app-shell', 'app theme (Preview)', async () => {
+      const { applyDeclaredAppTheme, isComplete, appThemeIncomplete } = require('./app-theme.js');
+      const applied = await applyDeclaredAppTheme(spec, {
+        sdk: provision, appId, publication: appPublication, creates: opts.creates,
+        publisherPrefix: spec.solution && spec.solution.publisherPrefix, solution: spec.solution && spec.solution.uniqueName,
+      });
+      result.created.appTheme = applied;
+      if (!isComplete(applied)) throw appThemeIncomplete(applied);
+      return applied;
+    });
+    themeDone = true;
+  };
 
   // The names of what this run CREATED on each table (`view Open Tickets`, `form Ticket`, `chart By Area`), and of a
   // chart whose description it wrote — labels only. A created artifact is as unpublished as a reconciled one, but a
@@ -7444,6 +7473,8 @@ async function runSdkBuildPhases(spec, opts, owed) {
         // Existing-app app-shell often makes NO SDK push: its sitemap commit is in the pages finalizer.
         // Pin now, independently, and let that normal publish make the proven current layer live.
         await pinTables(existingId, false);
+        // app.theme: before every publication of the app that follows (this step's, the pages finalizer's), so the first pays it.
+        await ensureThemeApplied(existingId);
         // #583: the routing description rides an app push this run ALREADY makes — never a second push from
         // the same fetch (the push is If-Match). With the pages phase in the run — every CLI apply, since
         // --apply refuses a partial range that includes app-shell — the finalizer is the sole existing-app
@@ -7522,12 +7553,15 @@ async function runSdkBuildPhases(spec, opts, owed) {
         // (it writes pages and the manifest, no table, view or form).
         createAppWithPages = async () => {
           result.created.app = await createApp(appDef(spec, result.created, { iconWebResourceId, mainFormsByTable }));
+          await ensureThemeApplied(result.created.app);
           return result.created.app;
         };
         throw createdAfterItsPages;
       }
       return createApp(def);
     }, { skipIf: (err) => err === createdAfterItsPages && 'created after its pages: its navigation holds only page entries' });
+    // A NEW app created by the step above (an existing one had its theme applied inside it; a pages-first one has no id yet).
+    if (result.created.app) await ensureThemeApplied(result.created.app);
   }
 
   // 7b. Pages (generative pages). The app now exists — or, for a NEW app whose navigation holds only page entries, it is created at the
@@ -8399,6 +8433,7 @@ async function runSdkBuildPhases(spec, opts, owed) {
           const header = await applyAppHeader(provision, spec, result.created.app, { text: appWasExisting, warn: opts.warn });
           const appName = (spec.app && spec.app.name) || result.created.app;
           requireSuccessfulPush(await appWriters.push(result.created.app, appName, header), 'app sitemap finalize', opts.warn);
+          await ensureThemeApplied(result.created.app);
           reportPartialPush(await appPublication.publishApp(result.created.app), `app ${appName}`, opts.warn);
           return result.created.app;
         });
@@ -9294,6 +9329,12 @@ async function runSdkBuildPhases(spec, opts, owed) {
     for (const [label, info] of byLabel) runner.skip('ai-features', `${label}: ${info.names.join(', ')} \u2014 ${info.why}`);
   }
 
+  // A declared theme the run never reached (no app id this run: the app step did not make or find the app) is not done: the
+  // plan's step is taken up as a skip, and the build ends incomplete rather than reading as if the theme were applied.
+  if (declaresTheme && !themeDone) {
+    runner.skip('app-shell', 'app theme (Preview) (no app in this run)');
+    markIncomplete({ phase: 'app-shell', code: 'APP_THEME_PREREQUISITE_UNRESOLVED', message: 'app.theme: the app was not built in this run, so its theme was not applied; run a build that includes the app step' });
+  }
   // Everything still owed (an exact app's publish that was withheld, a table whose phase-8 publication had already run)
   // is published once. A withheld/conflicting exact publish stays owed; the change is saved; the build is incomplete.
   const flushed = await appPublication.flush();

@@ -1640,6 +1640,31 @@ async function verifySpec(spec, read, opts = {}) {
   }
   });
 
+  // app.theme (Preview): checked only when the spec declares it (an omitted theme is not managed, so nothing is read). `live`
+  // is the saved and resolved API state with nothing pending publication — not proof of what a browser paints.
+  if (spec.app && spec.app.theme !== undefined) {
+    plan.section(async ({ add }) => {
+      let states;
+      try {
+        if (typeof read.appTheme !== 'function') throw new Error('the app theme reader is unavailable');
+        states = await read.appTheme(spec);
+        if (!Array.isArray(states) || !states.length) throw new Error('the app theme reader returned no result');
+      } catch (error) {
+        add('app-theme', 'app.theme', false, `could not be read: ${(error && error.message) || error} — unverified, not proven correct`);
+        return;
+      }
+      for (const entry of states) {
+        const state = entry && entry.state;
+        let detail;
+        if (state === 'live') detail = 'saved and resolved (API state, not render proof)';
+        else if (state === 'pendingPublish') detail = `saved but not published yet${entry.reasons && entry.reasons.length ? ` (${entry.reasons.join(', ')})` : ''} — publish the app, then verify`;
+        else if (state === 'mismatch') detail = `the app's theme differs from the spec${entry.code ? ` (${entry.code})` : ''} — re-run the build`;
+        else detail = `unknown${entry && entry.code ? ` (${entry.code})` : ''} — unverified, not proven correct`;
+        add('app-theme', (entry && entry.key) || 'app.theme', Boolean(entry && entry.ok === true && state === 'live'), detail);
+      }
+    });
+  }
+
   // Pages (design §13.1). Match BY ID against three authorities — IDENTITY (manifest), EXISTENCE
   // (env-wide id set), MEMBERSHIP (app sitemap ids). Reader must supply sitemapPageIds(),
   // existenceIds(), manifest(), and pageCode(id) when any page has nav. Fail-closed:

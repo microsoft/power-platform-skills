@@ -126,18 +126,22 @@ async function download(t, options = {}, priorFloor) {
   t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
   if (priorFloor) fs.writeFileSync(path.join(directory, 'app-spec.json'), JSON.stringify({ minimumPluginVersion: priorFloor }));
   const fake = downloadSdk(options);
+  if (options.wrapSdk) fake.sdk = options.wrapSdk(fake.sdk);
   const warnings = [];
   const original = process.stderr.write;
   process.stderr.write = (text) => { warnings.push(String(text)); return true; };
   let result;
   try {
     result = await runDownload({
-      sdk: fake.sdk, appId: APP, appUnique: options.unpublishedOnly ? undefined : 'contoso_membership', outDir: directory, includeCapabilities: options.includeCapabilities,
+      sdk: fake.sdk, appId: APP, appUnique: options.unpublishedOnly ? undefined : 'contoso_membership', outDir: directory, includeCapabilities: options.includeCapabilities, allowLossy: options.allowLossy,
+      // This fake serves no theme reads, so the theme capture that --include-capabilities also does is off unless a test
+      // asks for it (the app.theme tests below; `captureTheme: undefined` leaves runDownload's own default).
+      ...('captureTheme' in options ? (options.captureTheme === undefined ? {} : { captureTheme: options.captureTheme }) : { captureTheme: false }),
       genpage: fakeGenpage({ pages: options.page ? [{ pageId: PAGE, name: 'Draft Overview', source: 'export default function Page() { return null; }', dataSources: [] }] : [] }),
     });
   } finally { process.stderr.write = original; }
   assert.equal(result.ok, options.expectRefusal ? false : true, JSON.stringify(result));
-  return { ...fake, result, warnings };
+  return { ...fake, result, warnings, directory };
 }
 
 test('nine type-1 members round-trip seven hidden stock references without adopting their schema', async (t) => {
@@ -537,4 +541,88 @@ test('a downloaded secured column asks for 2.21.0 without the flag, and a higher
   assert.equal(result.spec.minimumPluginVersion, '2.21.0');
   const kept = await download(t, { attributes: secured }, '2.24.0');
   assert.equal(kept.result.spec.minimumPluginVersion, '2.24.0');
+});
+
+// app.theme (Preview). lib/app-theme.js downloadAppTheme (its reads are pinned in app-theme*.test.js) is replaced by an
+// answer; what is pinned is where runDownload asks for it, and what it writes, refuses or exports with that answer.
+const appTheme = require('../lib/app-theme.js');
+const OWN_LOGO = 'contoso_/images/logo.svg';
+const themeAnswer = (t, answer) => {
+  const asked = [];
+  t.mock.method(appTheme, 'downloadAppTheme', async (ctx) => { asked.push(ctx); return answer; });
+  return asked;
+};
+const captured = (theme, logo) => ({ status: 'captured', theme, pendingPublish: false, ...(logo ? { logo: { webResourceName: logo, webResourceType: 11 } } : {}) });
+const withLogoRow = (name, row) => (sdk) => ({ ...sdk, queryRecords: async (set, opts = {}) => (set === 'webresource' && String(opts.filter || '').includes(name) ? (row ? [row] : []) : sdk.queryRecords(set, opts)) });
+const filesIn = (directory) => fs.readdirSync(directory, { recursive: true });
+
+test('app.theme: no --include-capabilities, no theme read and no field; the flag reads it once and writes it with the 2.21.0 floor', async (t) => {
+  const asked = themeAnswer(t, captured({ basePaletteColor: '#0f6cbd' }));
+  const plain = await download(t, { captureTheme: undefined });
+  assert.equal(asked.length, 0);
+  assert.equal(plain.result.spec.app.theme, undefined);
+  assert.equal(plain.result.spec.minimumPluginVersion, '2.13.0');
+  const flagged = await download(t, { captureTheme: undefined, includeCapabilities: true, capabilityReads: capabilityReads(() => dateRows([]), () => flagsBody(false, false, false)) });
+  assert.equal(asked.length, 1);
+  assert.equal(asked[0].appId, APP);
+  assert.deepEqual(flagged.result.spec.app.theme, { basePaletteColor: '#0f6cbd' });
+  assert.equal(flagged.result.spec.minimumPluginVersion, '2.21.0');
+});
+
+test('app.theme: a theme that cannot be stated exactly refuses a strict download before anything is written', async (t) => {
+  themeAnswer(t, { status: 'refused', code: 'APP_THEME_UNREPRESENTABLE' });
+  const { result, directory } = await download(t, { captureTheme: true, page: true, expectRefusal: true });
+  assert.equal(result.code, 'APP_THEME_UNREPRESENTABLE');
+  assert.match(result.error, /--allow-lossy-download/);
+  assert.deepEqual(filesIn(directory), [], 'no page, no spec, nothing');
+});
+
+test('app.theme: --allow-lossy-download leaves the field out, names the loss, and the rest of the spec is written', async (t) => {
+  themeAnswer(t, { status: 'refused', code: 'APP_THEME_READ_INCOMPLETE' });
+  const { result, warnings } = await download(t, { captureTheme: true, allowLossy: true });
+  assert.equal(result.spec.app.theme, undefined);
+  assert.ok(warnings.some((w) => /app\.theme was LEFT OUT \(APP_THEME_READ_INCOMPLETE\)/.test(w)), warnings.join(''));
+  assert.equal(result.spec.minimumPluginVersion, '2.13.0', 'no theme, no theme floor');
+});
+
+test('app.theme: a removal pending its publish is written as null and said to be unpublished', async (t) => {
+  themeAnswer(t, { status: 'captured', theme: null, pendingPublish: true });
+  const { result, warnings } = await download(t, { captureTheme: true });
+  assert.equal(result.spec.app.theme, null);
+  assert.ok(warnings.some((w) => /SAVED theme, which is not published yet: the removal/.test(w)));
+});
+
+test('app.theme: this publisher\'s logo is exported as an external image, which a teardown keeps', async (t) => {
+  themeAnswer(t, captured({ logo: { webResourceName: OWN_LOGO } }, OWN_LOGO));
+  const { result } = await download(t, { captureTheme: true, wrapSdk: withLogoRow(OWN_LOGO, { name: OWN_LOGO, webresourcetype: 11, content: 'PHN2Zz4=', ismanaged: false }) });
+  assert.deepEqual(result.spec.app.theme, { logo: { webResourceName: OWN_LOGO } });
+  const logo = (result.spec.webResources || []).find((wr) => wr.name === OWN_LOGO);
+  assert.equal(logo && logo.external, true, JSON.stringify(result.spec.webResources));
+  assert.equal(logo.contentBase64, 'PHN2Zz4=');
+});
+
+test('app.theme: a logo of this publisher that cannot be exported refuses a strict download, and is left out with the theme when lossy', async (t) => {
+  themeAnswer(t, captured({ logo: { webResourceName: OWN_LOGO } }, OWN_LOGO));
+  const strict = await download(t, { captureTheme: true, expectRefusal: true, wrapSdk: withLogoRow(OWN_LOGO, null) });
+  assert.equal(strict.result.code, 'APP_THEME_LOGO_UNEXPORTABLE');
+  assert.equal(fs.existsSync(path.join(strict.directory, 'app-spec.json')), false);
+  const lossy = await download(t, { captureTheme: true, allowLossy: true, wrapSdk: withLogoRow(OWN_LOGO, null) });
+  assert.equal(lossy.result.spec.app.theme, undefined);
+  assert.ok(!(lossy.result.spec.webResources || []).some((wr) => wr.name === OWN_LOGO));
+  assert.ok(lossy.warnings.some((w) => /APP_THEME_LOGO_UNEXPORTABLE/.test(w)));
+});
+
+test('app.theme: another publisher\'s logo stays a bare reference that must exist where the spec is built', async (t) => {
+  const foreign = 'msdyn_/images/logo.svg';
+  themeAnswer(t, captured({ logo: { webResourceName: foreign } }, foreign));
+  const { result, warnings } = await download(t, { captureTheme: true });
+  assert.deepEqual(result.spec.app.theme, { logo: { webResourceName: foreign } });
+  assert.ok(!(result.spec.webResources || []).some((wr) => wr.name === foreign));
+  assert.ok(warnings.some((w) => /referenced, not exported/.test(w)));
+});
+
+test('app.theme: a spec that keeps app.theme on re-download keeps a higher floor its author set', async (t) => {
+  themeAnswer(t, captured({ basePaletteColor: '#0f6cbd' }));
+  const { result } = await download(t, { captureTheme: true }, '2.30.0');
+  assert.equal(result.spec.minimumPluginVersion, '2.30.0');
 });
