@@ -161,7 +161,7 @@ const { securedBeforeSeed, planFieldSecurity, applyFieldSecurity, assignFieldSec
 const { declaredTableFlags } = require('./schema-feature-contract.js');
 const { RETRY, isTransientStatus, judgeFailure, retryPolicyFor, retryFrom, refusal, serviceFailure, withCause } = require('./retry-policy.js');
 const { createPublicationBarrier, describeWithheld, describeWithheldApp } = require('./publication-barrier.js');
-const { createFeatureSettlement } = require('./reconcile-common.js');
+const { createFeatureSettlement, refusal: featureRefusal } = require('./reconcile-common.js');
 const { createPassthroughCreates } = require('./creates-passthrough.js');
 const { isDeclaredView, planViewReconcile, applyViewReconcile } = require('./view-reconcile.js');
 const { isDeclaredChart, planChartReconcile, applyChartReconcile } = require('./chart-reconcile.js');
@@ -2646,20 +2646,24 @@ function keepLiveId(item, present) {
 // build runs (form intent, header, sitemap, components); an existing chart is never pushed by the build
 // (its description is a direct column write); a command bar's edits are made only while it runs; a
 // view the build would create needs the live label resolution, and a form is created through its shell.
+// A DECLARED view or chart (`reconcile: "declared"`) is null too, reused or new: the build plans it with its
+// own reconciler (lib/view-reconcile.js, lib/chart-reconcile.js), which replaces the filter and sort, sets
+// the column widths and the title, and may refuse it. viewReconcileEdits and chartDef state none of that, so
+// a declared filter edit would preview as noChange while the apply writes it.
 function previewTargetOf(item, spec) {
   const k = item && item.key;
   if (!k) return null;
   if (item.state === 'reuse' && k.kind === 'view' && item.liveId) {
     const entity = String(k.entity || '').toLowerCase();
     const view = k.declared || ((spec && spec.views) || []).find((v) => v && v.name === k.name && String(v.entity || '').toLowerCase() === entity);
-    if (!view) return null;
+    if (!view || isDeclaredView(view)) return null;
     const def = viewDef(spec, view);
     return { type: 'view', id: item.liveId, liveEdits: (current) => viewReconcileEdits(current, def) };
   }
   if (item.state === 'create' && k.kind === 'chart') {
     const entity = String(k.entity || '').toLowerCase();
     const chart = ((spec && spec.charts) || []).find((c) => c && c.name === k.name && String(c.entity || '').toLowerCase() === entity);
-    return chart ? { type: 'chart', create: chartDef(spec, chart) } : null;
+    return chart && !isDeclaredChart(chart) ? { type: 'chart', create: chartDef(spec, chart) } : null;
   }
   return null;
 }
@@ -3491,7 +3495,8 @@ async function runSdkBuildPhases(spec, opts, owed) {
   // workspace copy, and the CLI's workspace is durable: a plain fetch keeps local edits while the server has not moved, so the next
   // run would read its own unsent edit as the stored state and report "no change" with nothing written. Reset that copy to the
   // server's (as discardUnrecordedEdits does for the app) so a re-run plans against what the environment holds. Only when the apply
-  // step added the failure — a refusal at plan time made no edit — and best-effort: a reset that fails leaves the copy as it was.
+  // step added the failure — a refusal at plan time made no edit — and best-effort: a reset that fails leaves the copy as it was, and
+  // the next run's planOverServerCopy (below) finds the unsent edit and resets it before planning.
   const resetUnsettledCopy = async (kind, id, plan, r) => {
     if (!id || typeof provision.fetchArtifact !== 'function') return;
     const planned = (plan.refused || []).length + (plan.unknown || []).length;
@@ -3499,6 +3504,31 @@ async function runSdkBuildPhases(spec, opts, owed) {
     try {
       await provision.fetchArtifact(kind, id, { overwrite: true });
     } catch { /* see above */ }
+  };
+  // The reset above is best-effort, so a run can still find an earlier run's unsent edit in the copy: the reset failed (a
+  // dropped connection), or the run stopped before it. The plan's own fetch keeps that edit while the server has not moved,
+  // so the plan would compare the spec with itself — a refused Quick Find list read as already stored, "no change" and
+  // success with nothing written. The SDK's snapshot is the durable record of what the server holds: before this run edits
+  // anything, a copy that differs from it can only hold an earlier run's edits. So such a plan is made again over a fresh
+  // copy of the server's, and when that copy cannot be fetched the item is not applied (an unknown, never a pass).
+  // Only the declared view, chart or Quick Find view the plan resolved is reset; a clean copy costs one local diff and no
+  // request, and an SDK without diffArtifact plans exactly as before.
+  const planOverServerCopy = async (kind, id, plan, replan) => {
+    if (!id || typeof provision.diffArtifact !== 'function' || typeof provision.fetchArtifact !== 'function') return plan;
+    let diff;
+    try {
+      diff = await provision.diffArtifact(kind, id);
+    } catch {
+      return plan;
+    }
+    if (!(diff && Array.isArray(diff.changes) && diff.changes.length > 0)) return plan;
+    try {
+      await provision.fetchArtifact(kind, id, { overwrite: true });
+    } catch {
+      plan.unknown.push(featureRefusal(plan.key, 'workspace-copy-unsent-edits', `the workspace copy of the ${kind} holds edits an earlier run did not send, and the server's copy could not be read to replace it; nothing was written. Re-run; if it persists, ${RESET_WORKSPACE}`));
+      return plan;
+    }
+    return replan();
   };
   const settleFeatureResult = createFeatureSettlement({ barrier: owed.barrier, markIncomplete: featureIncomplete, settled: settledPublishes, recordBinding: managedArtifacts ? (b) => managedArtifacts.recordApplied(b) : undefined });
   // #changed-only (pages-only fast apply): seed the LIVE app id (discovered by unique name upstream) so the
@@ -6043,7 +6073,9 @@ async function runSdkBuildPhases(spec, opts, owed) {
       if (meta && meta.declared) {
         // A declared view (views[].reconcile "declared", lib/view-reconcile.js) is resolved, created through the creation port and
         // edited by its helper; it never falls through to the create below, which would bypass the port.
-        const plan = await planViewReconcile({ view: meta.specView, sdk: provision, resolveValue: meta.resolveValue, primaryName: meta.primaryName }, featureCtx);
+        const planArgs = { view: meta.specView, sdk: provision, resolveValue: meta.resolveValue, primaryName: meta.primaryName };
+        const firstPlan = await planViewReconcile(planArgs, featureCtx);
+        const plan = await planOverServerCopy('view', firstPlan.viewId, firstPlan, () => planViewReconcile(planArgs, featureCtx));
         const r = await applyViewReconcile(plan, { sdk: provision }, featureCtx);
         const { ok } = settleFeatureResult('views', `view ${plan.key}`, r);
         await resetUnsettledCopy('view', plan.viewId, plan, r);
@@ -6100,7 +6132,9 @@ async function runSdkBuildPhases(spec, opts, owed) {
       if (!e || !e.quickFind) continue;
       const name = e.schemaName.toLowerCase();
       await runner.run('views', `Quick Find for ${name}`, async () => {
-        const plan = await planQuickFind({ entity: name, quickFind: e.quickFind, sdk: provision }, featureCtx);
+        const planArgs = { entity: name, quickFind: e.quickFind, sdk: provision };
+        const firstPlan = await planQuickFind(planArgs, featureCtx);
+        const plan = await planOverServerCopy('view', firstPlan.viewId, firstPlan, () => planQuickFind(planArgs, featureCtx));
         const r = await applyQuickFind(plan, { sdk: provision }, featureCtx);
         settleFeatureResult('views', `Quick Find on ${name}`, r);
         await resetUnsettledCopy('view', plan.viewId, plan, r);
@@ -6186,7 +6220,9 @@ async function runSdkBuildPhases(spec, opts, owed) {
       const def = chartDef(spec, c);
       if (isDeclaredChart(c)) {
         return runner.run('charts', `chart "${def.name}"`, async () => {
-          const plan = await planChartReconcile({ chart: c, sdk: provision, chartArtifact: def }, featureCtx);
+          const planArgs = { chart: c, sdk: provision, chartArtifact: def };
+          const firstPlan = await planChartReconcile(planArgs, featureCtx);
+          const plan = await planOverServerCopy('chart', firstPlan.chartId, firstPlan, () => planChartReconcile(planArgs, featureCtx));
           const r = await applyChartReconcile(plan, { sdk: provision }, featureCtx);
           const { ok } = settleFeatureResult('charts', `chart ${plan.key}`, r);
           await resetUnsettledCopy('chart', plan.chartId, plan, r);

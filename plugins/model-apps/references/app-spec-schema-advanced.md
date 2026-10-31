@@ -614,7 +614,8 @@ spec's new columns.
   store one, so a declared `title` on a new chart is refused (`chart-title-not-stored`).
 - **`entities[].quickFind: { "findColumns": [...] }`** — the columns the table's search box matches on
   (its default Quick Find view). Distinct logical names; an empty list needs `--allow-destructive`. It
-  does not need `searchEnabled` or change tracking.
+  does not need `searchEnabled` or change tracking. `--verify` checks that the view stores exactly this
+  list, in order (`quick-find <table>`).
 
 **Approvals.** A view or chart that already exists and that this spec has not created in this run is
 shown as an adoption: the build leaves it unchanged, builds the rest, and then stops naming the key —

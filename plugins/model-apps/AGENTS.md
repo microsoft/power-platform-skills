@@ -2826,7 +2826,20 @@ after the last phase. A blocked table is published by no later request in the ru
 still are. New views and charts are created through the creation port (`opts.creates`, by default
 `lib/creates-passthrough.js`). When an apply's write was refused or its outcome is unknown, the
 workspace copy of that view or chart is reset to the server's, so a re-run plans against what the
-environment holds.
+environment holds. That reset is best-effort, so before a declared view, chart or Quick Find view is
+applied, a copy that still holds edits the server has not seen (an earlier run's, whose reset failed or
+never ran: the SDK's `diffArtifact` against its snapshot) is reset and planned again; when the server's
+copy cannot be fetched, the item is not applied (`workspace-copy-unsent-edits`, an unknown).
+
+`--preview-push` lists a declared view or chart as not evaluated (`noTypedTarget`): its reconciler's
+filter, sort, width and title edits are made only while the build runs.
+
+`--verify` checks a declared view's object and joined-table columns by the names the build gives them
+in the layout, and a table's `quickFind` as `quick-find <table>`: the table's one default Quick Find view
+must store exactly the declared find columns, in order. No such view, several, a read that fails or a
+find filter that is not a plain list (a nested filter, a joined-table or literal condition) fails the
+check with the reason. A reader that returns the view without its content is reported as not verified.
+One savedquery read per table that declares `quickFind`; none otherwise.
 
 Refusal codes and remedies (`remedyFor`; the build adds the CLI flag that gives the approval):
 
@@ -2835,7 +2848,7 @@ Refusal codes and remedies (`remedyFor`; the build adds the CLI flag that gives 
 | Adoption approval: `--authorize adopt:<table>/<name>` | `view-adoption-not-authorized`, `chart-adoption-not-authorized` |
 | Overwrite approval: `--authorize overwrite:<table>/<name>` | `view-drift`, `chart-drift`, `command-drift` |
 | Destructive approval: `--allow-destructive` | `view-columns-removal-not-authorized`, `quick-find-empty-not-authorized` |
-| Repair and rerun | every other code: `*-spec-invalid`, `*-lookup-unreadable`, `*-unreadable`, `*-name-ambiguous`, `*-bound-row-missing`, `*-binding-mismatch`, `*-rejected`, `*-write-unknown`, `*-created-unreadable`, `view-pinned-not-found`, `view-pinned-wrong-table`, `view-filter-unrepresentable`, `view-related-column-unrepresentable`, `chart-shape-unsupported`, `chart-create-artifact-missing`, `chart-title-not-stored`, `chart-title-unverified`, `quick-find-list-incomplete`, `quick-find-view-not-found`, `quick-find-view-ambiguous`, `quick-find-filter-unsupported`, `quick-find-views-unreadable`, `command-immutable-location`, `command-immutable-type`, `command-web-resource-missing`, `creation-port-unavailable`, `creation-adopted-rerun`, `creation-adopted-row-missing`, `managed-binding-port-unavailable` |
+| Repair and rerun | every other code: `*-spec-invalid`, `*-lookup-unreadable`, `*-unreadable`, `*-name-ambiguous`, `*-bound-row-missing`, `*-binding-mismatch`, `*-rejected`, `*-write-unknown`, `*-created-unreadable`, `view-pinned-not-found`, `view-pinned-wrong-table`, `view-filter-unrepresentable`, `view-related-column-unrepresentable`, `chart-shape-unsupported`, `chart-create-artifact-missing`, `chart-title-not-stored`, `chart-title-unverified`, `quick-find-list-incomplete`, `quick-find-view-not-found`, `quick-find-view-ambiguous`, `quick-find-filter-unsupported`, `quick-find-views-unreadable`, `workspace-copy-unsent-edits`, `command-immutable-location`, `command-immutable-type`, `command-web-resource-missing`, `creation-port-unavailable`, `creation-adopted-rerun`, `creation-adopted-row-missing`, `managed-binding-port-unavailable` |
 
 **Known limits.** Without the managed-binding store no binding is recorded, so every later change to a
 declared view or chart is an adoption (it needs `adopt:` again) and drift is not detected. The stock

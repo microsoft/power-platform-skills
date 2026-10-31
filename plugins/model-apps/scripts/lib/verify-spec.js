@@ -38,6 +38,8 @@ const { hostsCustomControl } = require('./dashboard-tiles.js');
 const { answerOf, statusReasonChecks, alternateKeyChecks } = require('./status-reasons-keys.js');
 const { columnTypeChecks, declaredTableFlags, verifyTableFlags } = require('./schema-feature-contract.js');
 const { verifyDateBehaviors } = require('./date-behavior.js');
+const { isDeclaredView, compileViewIntent } = require('./view-reconcile.js');
+const { expectedQuickFindProjection } = require('./quick-find.js');
 
 // How many verification reads may be in flight at once. A verify pass is nothing but reads, but each is a
 // Dataverse request that already retries on its own 429s (lib/sdk-http-client.js), so the bound is small:
@@ -281,6 +283,17 @@ async function verifySpec(spec, read, opts = {}) {
       if (Object.keys(declaredTableFlags(e)).length && typeof read.tableFlags === 'function') {
         reportFeatureChecks(verifyTableFlags(e, await readOrNull(() => read.tableFlags(logical))), add, unverified);
       }
+      // Quick Find: the declared find list, held to the table's Quick Find view (quickFindCheck). Only for a table that declares
+      // one, so a spec without quickFind sends no request for it.
+      if (e.quickFind && Array.isArray(e.quickFind.findColumns)) {
+        if (typeof read.queryRecords === 'function') {
+          const qf = await quickFindCheck(read, logical, e);
+          if (qf.unverified) unverified.push(`quick-find:${e.schemaName} (${qf.unverified})`);
+          else add('quick-find', e.schemaName, qf.present, qf.detail);
+        } else {
+          unverified.push(`quick-find:${e.schemaName} (the reader cannot read views)`);
+        }
+      }
     }
   }
   });
@@ -320,7 +333,7 @@ async function verifySpec(spec, read, opts = {}) {
     }
     const row = rows && rows[0];
     add('view', viewName, row, readError ? String(readError.message || readError) : '');
-    const specCols = (v.columns || []).map((c) => String(c).toLowerCase());
+    const specCols = specViewColumnNames(v);
     if (row && row.layoutxml && specCols.length) {
       // Deployed column set from the saved view's layoutxml (<cell name="…"/> per column). We require
       // spec columns ⊆ deployed columns (NOT set-equality): a deployed EXTRA column (default-view
@@ -2904,6 +2917,85 @@ function layoutColumnNames(xml) {
   let m;
   while ((m = re.exec(String(xml || ''))) !== null) out.push(String(m[1] != null ? m[1] : m[2]).toLowerCase());
   return out;
+}
+
+// The column names a spec view's layout must carry, lower-cased as layoutColumnNames returns them. A legacy view lists
+// names; a declared view (lib/view-reconcile.js) may list `{ name, width }` objects and joined-table columns, whose cell is
+// named `<join alias or table>.<column>`, so its names come from the build's own compile of the view rather than from
+// String(c), which made every object column "[object object]" and failed a correctly built view. A declared view that
+// does not compile keeps each entry's own name: validation reports it, and this check only says what is missing.
+function specViewColumnNames(v) {
+  const listed = v.columns || [];
+  if (isDeclaredView(v) && listed.length) {
+    const { errors, intent } = compileViewIntent(v);
+    if (!errors.length && intent) return intent.columns.map((c) => c.name);
+  }
+  return listed.map((c) => (typeof c === 'string' ? c : c && c.name)).filter((n) => typeof n === 'string' && n).map((n) => n.toLowerCase());
+}
+
+// The find columns a Quick Find view's FetchXML stores, in order, or `{ problem }` when it holds no list the spec could
+// have declared. The list is the root entity's one find filter, e.g.:
+//   <fetch><entity name="contoso_item">
+//     <filter type="and"><condition attribute="statecode" operator="eq" value="0"/></filter>
+//     <filter type="or" isquickfindfields="1">
+//       <condition attribute="contoso_name" operator="like" value="{0}"/>
+//       <condition attribute="contoso_code" operator="like" value="{0}"/>
+//     </filter>
+//   </entity></fetch>
+// The value is the search text's placeholder ({0}; another number for a number or date column). A nested filter, a
+// condition on a joined table (`entityname`), a literal value, or several find filters are what the SDK will not model as a
+// list either (it refuses the write, quick-find-filter-unsupported), so they are reported, never read as a list.
+function quickFindColumnsOf(fetchxml) {
+  const base = baseEntityFetchXml(fetchxml);
+  const starts = [...base.matchAll(/<filter\b([^>]*)>/gi)].filter((m) => /^(?:1|true)$/i.test(tagAttrs(m[1]).isquickfindfields || ''));
+  if (starts.length === 0) return { problem: 'the view has no find filter' };
+  if (starts.length > 1) return { problem: 'the view has more than one find filter' };
+  const open = starts[0];
+  if (/\/\s*$/.test(open[1])) return { columns: [] };
+  const from = open.index + open[0].length;
+  const end = base.indexOf('</filter>', from);
+  if (end < 0) return { problem: 'the find filter is not closed' };
+  const body = base.slice(from, end);
+  const columns = [];
+  const re = /<condition\b([^>]*?)\s*(?:\/>|>\s*<\/condition>)/gi;
+  let last = 0;
+  let m;
+  while ((m = re.exec(body)) !== null) {
+    if (body.slice(last, m.index).trim()) return { problem: 'the find filter holds more than conditions' };
+    last = re.lastIndex;
+    const a = tagAttrs(m[1]);
+    if (!a.attribute || a.entityname || (a.value !== undefined && !/^\{\d+\}$/.test(a.value))) return { problem: 'the find filter has a condition that is not a find column' };
+    columns.push(a.attribute.toLowerCase());
+  }
+  if (body.slice(last).trim()) return { problem: 'the find filter holds more than conditions' };
+  return { columns };
+}
+
+// The Quick Find check of one table that declares `quickFind` (lib/quick-find.js): the table's ONE default Quick Find view
+// (querytype 4, isdefault — the build's exact-one rule) must store exactly the declared list, in order. No view, several, a
+// read that fails or a find filter that is not a list all fail the check with the reason: the build would not have written
+// the list there either. The rows are also filtered here, as a reader may answer the whole set.
+// querytype 4 = Quick Find: https://learn.microsoft.com/en-us/power-apps/developer/data-platform/reference/entities/savedquery
+async function quickFindCheck(read, logical, entity) {
+  const expected = expectedQuickFindProjection(logical, entity).findColumns;
+  let rows;
+  try {
+    rows = (await read.queryRecords('savedquery', { select: ['savedqueryid', 'fetchxml', 'querytype', 'isdefault', 'returnedtypecode'], filter: `returnedtypecode eq '${odataLit(logical)}' and querytype eq 4 and isdefault eq true` })) || [];
+  } catch (error) {
+    return { present: false, detail: `the Quick Find view could not be read: ${String((error && error.message) || error)}` };
+  }
+  // A reader that answers with rows carrying none of the selected fields, e.g. [{ savedqueryid: 'x' }], has not read the
+  // view's content, so the list is reported as not verified rather than passed or failed — as the view column check does
+  // for a row without layoutxml.
+  const fields = ['fetchxml', 'querytype', 'isdefault', 'returnedtypecode'];
+  if (rows.length && rows.every((r) => r && fields.every((f) => r[f] === undefined))) return { unverified: 'the reader returned the view without its content' };
+  const views = rows.filter((r) => r && Number(r.querytype) === 4 && r.isdefault === true && String(r.returnedtypecode || '').toLowerCase() === logical);
+  if (views.length === 0) return { present: false, detail: 'the table has no default Quick Find view' };
+  if (views.length > 1) return { present: false, detail: `the table has ${views.length} default Quick Find views, so which one searches is ambiguous` };
+  const stored = quickFindColumnsOf(views[0].fetchxml);
+  if (stored.problem) return { present: false, detail: `${stored.problem}, so its find columns cannot be compared` };
+  const same = stored.columns.length === expected.length && stored.columns.every((c, i) => c === expected[i]);
+  return { present: same, detail: same ? '' : `expected find columns [${expected.join(', ')}], stored [${stored.columns.join(', ')}]` };
 }
 
 // True when the sitemap XML contains a `<tag ...>` start-tag whose attributes include every
