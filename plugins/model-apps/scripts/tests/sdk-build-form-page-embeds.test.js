@@ -286,6 +286,39 @@ test('verify: a form-placed page that is also in the app\'s navigation is a miss
   assert.deepStrictEqual(pages(await verifySpec(legacy, deployedReader({ sitemapIds: [OVERVIEW_ID, PANEL_ID] }))), [['page', 'Overview', true, ''], ['page-extra', PANEL_ID, false, 'a sitemap page not declared in the spec']]);
   assert.deepStrictEqual(pages(await verifySpec(legacy, deployedReader({ sitemapIds: [] }))), [['page', 'Overview', false, '']]);
 });
+// A page may be both in the navigation and on a form (placement 'sitemap' with a forms[].genPages entry naming it): each declared embed is held to the form whatever the
+// page's placement, and the navigation entry is still required. A spec that declares no embed reads no form for its pages.
+test('verify: a sitemap page a form also embeds needs both its navigation entry and the form\'s control; a spec with no embed reads no form for it', async () => {
+  const { verifySpec } = require('../lib/verify-spec.js');
+  const dual = specWith();
+  dual.pages[1].placement = 'sitemap';
+  dual.appShell.areas[0].groups[0].subAreas.push({ page: 'panel', title: 'Panel' });
+  assert.deepStrictEqual(validateAppSpec(dual).errors, []);
+  const both = [OVERVIEW_ID, PANEL_ID];
+  const pages = (result) => result.checks.filter((c) => c.kind === 'page').map((c) => [c.name, c.present, c.detail]);
+  const counted = (options) => { const reader = deployedReader(options); const topology = reader.formTopology; reader.reads = 0; reader.formTopology = async (...a) => { reader.reads += 1; return topology(...a); }; return reader; };
+
+  const noControl = await verifySpec(dual, deployedReader({ panel: '', sitemapIds: both }));
+  assert.deepStrictEqual(pages(noControl), [['Overview', true, ''], ['Panel', false, "form 'Item' does not show it as declared (not-embedded)"]], 'a declared Main-form embed that is absent must be reported missing');
+  assert.strictEqual(noControl.ok, false);
+  assert.deepStrictEqual(noControl.missing.filter((c) => c.kind === 'page').map((c) => c.name), ['Panel']);
+
+  const placed = await verifySpec(dual, deployedReader({ sitemapIds: both }));
+  assert.deepStrictEqual(placed.missing, [], JSON.stringify(placed.missing));
+  assert.deepStrictEqual(pages(placed), [['Overview', true, ''], ['Panel', true, '']]);
+  assert.ok(placed.checks.some((c) => c.kind === 'page-subarea' && c.name === 'Panel' && c.present), 'its navigation entry is still checked');
+  // Out of the navigation it is a miss as any sitemap page is, whatever the form shows.
+  assert.deepStrictEqual(pages(await verifySpec(dual, deployedReader({ sitemapIds: [OVERVIEW_ID] })))[1], ['Panel', false, '']);
+
+  // The same sitemap page with no embed declared, and a spec with no form page at all, make the same form reads; the declared embed adds exactly one.
+  const plain = JSON.parse(JSON.stringify(dual));
+  delete plain.forms[0].genPages;
+  const legacy = specWith({ embeds: false });
+  const readsOf = async (spec, options) => { const reader = counted(options); await verifySpec(spec, reader); return reader.reads; };
+  const legacyReads = await readsOf(legacy, {});
+  assert.strictEqual(await readsOf(plain, { sitemapIds: both }), legacyReads, 'a spec with no embed reads no form for its pages');
+  assert.strictEqual(await readsOf(dual, { sitemapIds: both }), legacyReads + 1, 'the declared embed is read once');
+});
 // The build makes its own page backend when none is handed to it: the caller's provider reaches it as `typescript`, in the form given.
 test('build: the caller\'s TypeScript provider reaches the page backend the build makes, as `typescript`', async () => {
   const sdkBuildPath = require.resolve('../lib/sdk-build.js');

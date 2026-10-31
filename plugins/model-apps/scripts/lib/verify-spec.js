@@ -1766,11 +1766,18 @@ async function verifySpec(spec, read, opts = {}) {
           // A page placed on a form (placement 'form') has no sitemap entry: the form that embeds it places it, so it is present when it
           // exists, the app's navigation does not hold it, and every form the spec embeds it on shows it as declared (formEmbedProblem). A form
           // page found in the navigation is a miss that names the placement; it stays among the ids the spec declares, so it is not also an
-          // extra page. Every other page is judged as before.
-          const inSitemap = sitemapIds.has(String(id).toLowerCase());
-          const problem = p.placement === 'form' && existenceIds.has(String(id).toLowerCase())
-            ? (inSitemap ? 'it is in the app\'s navigation, but the spec places it on a form only' : await formEmbedProblem(p, id)) : '';
-          const present = existenceIds.has(String(id).toLowerCase()) && (p.placement === 'form' ? !problem : sitemapIds.has(String(id).toLowerCase()));
+          // extra page. Every other page is judged as before — and when a form also declares an embed of it (a page both in the navigation and
+          // on a form), that form is held to the embed too, once the sitemap entry is there. A page no form declares reads no form.
+          const lid = String(id).toLowerCase();
+          const exists = existenceIds.has(lid);
+          const inSitemap = sitemapIds.has(lid);
+          let problem = '';
+          if (p.placement === 'form') {
+            if (exists) problem = inSitemap ? 'it is in the app\'s navigation, but the spec places it on a form only' : await formEmbedProblem(p, id);
+          } else if (exists && inSitemap && formEmbedsOfPage(spec, p).length) {
+            problem = await formEmbedProblem(p, id);
+          }
+          const present = exists && (p.placement === 'form' || inSitemap) && !problem;
           add('page', p.name, present, problem);
           if (!present) continue;
           // page-subarea: verify the sitemap XML specifically carries a GenPageId="<id>" binding.
