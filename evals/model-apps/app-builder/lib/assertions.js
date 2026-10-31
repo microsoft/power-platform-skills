@@ -1081,4 +1081,38 @@ ASSERTIONS.set('author: each configuration item the prompt needs is declared, an
   return PASS;
 });
 
+// expect.appTheme (eval 19) states the branding the prompt asks for: the base colour, the header colours, a font only when
+// the prompt names one, and whether it asks for a logo. A theme is Preview and only for an explicit branding ask, so a prompt
+// with no expect.appTheme expects no app.theme at all. The logo must be an image web resource the spec declares, never a URL.
+const IMAGE_WEB_RESOURCE_TYPES = new Set(['png', 'jpg', 'gif', 'svg', 'ico']);
+const sameColour = (a, b) => typeof a === 'string' && typeof b === 'string' && a.toLowerCase() === b.toLowerCase();
+ASSERTIONS.set('author: a theme is declared only on an explicit branding ask, with the asked colours, no unasked font, and a declared image web resource as the logo, never a URL', ({ spec, eval: ev }) => {
+  const expected = ev.expect && ev.expect.appTheme;
+  const theme = spec.app && spec.app.theme;
+  if (!expected) return theme === undefined ? PASS : fail('app.theme is declared, but the prompt asks for no branding');
+  if (!theme || typeof theme !== 'object') return fail('the prompt asks for branding, but app.theme is not declared');
+  if (!versionAtLeast(spec.minimumPluginVersion, '2.21.0')) return fail(`minimumPluginVersion ${spec.minimumPluginVersion || '(none)'} is below 2.21.0`);
+  if (expected.basePaletteColor && !sameColour(theme.basePaletteColor, expected.basePaletteColor)) return fail(`basePaletteColor ${theme.basePaletteColor || '(omitted)'}, expected ${expected.basePaletteColor}`);
+  for (const [slot, colour] of Object.entries(expected.appHeader || {})) {
+    const have = theme.appHeader && theme.appHeader[slot];
+    if (!sameColour(have, colour)) return fail(`appHeader.${slot} ${have || '(omitted)'}, expected ${colour}`);
+  }
+  if (theme.font !== undefined && !expected.font) return fail(`font '${theme.font}' is declared, but the prompt names none`);
+  const logo = theme.logo && theme.logo.webResourceName;
+  if (!expected.logo) return logo === undefined ? PASS : fail('a logo is declared, but the prompt asks for none');
+  if (typeof logo !== 'string' || !logo) return fail('the prompt asks for a logo, but app.theme.logo names no web resource');
+  if (/^[a-z][a-z0-9+.-]*:|^\/\//i.test(logo)) return fail(`the logo '${logo}' is a URL, not a web resource`);
+  const declared = (spec.webResources || []).find((wr) => wr && String(wr.name).toLowerCase() === logo.toLowerCase());
+  if (!declared) return fail(`the logo '${logo}' is not a declared web resource`);
+  return IMAGE_WEB_RESOURCE_TYPES.has(String(declared.type || '').toLowerCase()) ? PASS : fail(`the logo '${logo}' is a ${declared.type || 'js'} web resource, not an image`);
+});
+
+// verify reads a declared theme once, as API state (verify-spec.js says so in the check's detail), and passes only a live one.
+ASSERTIONS.set('verify: a declared app theme is read back once, as API state, and passes only when live', ({ facts }) => {
+  const checks = ((facts.verify && facts.verify.checks) || []).filter((c) => c.kind === 'app-theme');
+  if (checks.length !== 1) return fail(`${checks.length} app-theme checks, expected 1`);
+  if (checks[0].present !== true) return fail(`app.theme did not verify: ${checks[0].detail}`);
+  return /API state, not render proof/.test(checks[0].detail) ? PASS : fail(`the theme check does not say it is API state: ${checks[0].detail}`);
+});
+
 module.exports = { ASSERTIONS };

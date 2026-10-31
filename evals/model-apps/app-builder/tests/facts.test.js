@@ -904,6 +904,46 @@ test('app membership expectations pass on their fixtures and fail when the spec 
   assert.deepStrictEqual((await reader.appMainForms('x', spec.app.mainForms, { strict: true })).tables, [{ table: 'contoso_item', extras: [], missing: [] }]);
 });
 
+test('the branding expectations pass on their fixture, and an ordinary app ask must not get a theme', async () => {
+  const fixture = fixtureFor(19);
+  const ev19 = evalsManifest.evals.find((e) => e.id === 19);
+  const [authorText, verifyText] = ev19.expectations;
+  const grade = (mutate, evMutate) => {
+    const ev = structuredClone(ev19);
+    const spec = structuredClone(fixture.spec);
+    if (mutate) mutate(spec);
+    if (evMutate) evMutate(ev);
+    return ASSERTIONS.get(authorText)({ spec, eval: ev, facts: {} }).status;
+  };
+  assert.strictEqual(grade(), 'pass');
+  assert.strictEqual(grade((s) => { delete s.app.theme; }), 'fail', 'a branding ask with no theme');
+  assert.strictEqual(grade((s) => { s.minimumPluginVersion = '2.20.6'; }), 'fail');
+  assert.strictEqual(grade((s) => { s.app.theme.basePaletteColor = '#C50F1F'; }), 'fail', 'a colour the prompt did not ask for');
+  assert.strictEqual(grade((s) => { s.app.theme.basePaletteColor = '#0f6cbd'; }), 'pass', 'a colour compares case-insensitively');
+  assert.strictEqual(grade((s) => { delete s.app.theme.appHeader.foreground; }), 'fail');
+  assert.strictEqual(grade((s) => { s.app.theme.font = 'Segoe UI'; }), 'fail', 'a font the prompt does not name');
+  assert.strictEqual(grade((s) => { s.app.theme.logo.webResourceName = 'https://contoso.example/logo.svg'; }), 'fail', 'a URL logo');
+  assert.strictEqual(grade((s) => { s.webResources = []; }), 'fail', 'a logo that is not declared');
+  assert.strictEqual(grade((s) => { s.webResources[0].type = 'js'; }), 'fail', 'a logo that is not an image');
+  // The negative: an ordinary app prompt states no branding, so any theme on it is invented.
+  const ordinary = (ev) => { ev.prompt = 'A new Field Visits app for site visits.'; delete ev.expect.appTheme; };
+  assert.strictEqual(grade(null, ordinary), 'fail');
+  assert.strictEqual(grade((s) => { delete s.app.theme; }, ordinary), 'pass');
+
+  // verify reads the theme as API state and passes only a live one; any other state, or no reader, fails.
+  const verifyWith = async (states) => {
+    const reader = makeAllPresentReader(fixture.spec);
+    if (states === null) delete reader.appTheme;
+    else if (states) reader.appTheme = async () => states;
+    const facts = await stageFacts(fixture.spec, { fixture, verifyReader: reader });
+    return ASSERTIONS.get(verifyText)({ facts, spec: fixture.spec, eval: ev19 }).status;
+  };
+  assert.strictEqual(await verifyWith(), 'pass');
+  assert.strictEqual(await verifyWith([{ key: 'app.theme', ok: false, state: 'pendingPublish', reasons: [] }]), 'fail');
+  assert.strictEqual(await verifyWith([{ key: 'app.theme', ok: false, state: 'mismatch' }]), 'fail');
+  assert.strictEqual(await verifyWith(null), 'fail', 'no theme reader is unverified, not proven');
+});
+
 test('declared reconciliation expectations pass on their fixture and fail when the spec drifts from the prompt', () => {
   const fixtures = loadFixtures(path.join(__dirname, '..', 'fixtures'));
   const ev16 = evalsManifest.evals.find((e) => e.id === 16);

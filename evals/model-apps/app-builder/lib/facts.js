@@ -620,6 +620,11 @@ function makeAllPresentReader(spec, formEvidence = null) {
     appMainForms: async (_appUnique, mainForms, opts) => (spec.app && spec.app.mainFormsOnUpdate === 'exact' && !(opts && opts.strict)
       ? { kind: 'inconclusive', reason: 'an exact Main-form list was read without strict' }
       : { kind: 'read', tables: Object.keys(mainForms || {}).map((table) => ({ table: lc(table), extras: [], missing: [] })), formNames: {} }),
+    // app.theme (Preview): verify asks for the theme only when the spec declares one, and the real reader answers with
+    // lib/app-theme.js verifyAppTheme's shape, [{ key, ok, state: 'live'|'pendingPublish'|'mismatch'|'unknown' }]. The
+    // environment matches the spec by this reader's premise, so the declared theme is live. Without it a themed spec failed
+    // verify offline on a gap in this fixture ("the app theme reader is unavailable"), not on a finding about the spec.
+    appTheme: async () => [{ key: 'app.theme', ok: true, state: 'live' }],
   };
 }
 

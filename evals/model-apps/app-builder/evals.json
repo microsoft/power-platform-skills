@@ -447,6 +447,35 @@
       "expectations": [
         "author: each configuration item the prompt needs is declared, and no value that differs per environment is in the spec"
       ]
+    },
+    {
+      "id": 19,
+      "tier": "full",
+      "spec": "app-spec.json",
+      "prompt": "A new Field Visits app for site visits, branded: Contoso blue (#0F6CBD), a dark blue header with white text, and our Contoso logo in the header.",
+      "expect": {
+        "tables": [
+          "cnt_visit"
+        ],
+        "relationships": [],
+        "views": [
+          "Upcoming Visits"
+        ],
+        "charts": [],
+        "pages": [],
+        "appTheme": {
+          "basePaletteColor": "#0F6CBD",
+          "appHeader": {
+            "background": "#0F3D6E",
+            "foreground": "#FFFFFF"
+          },
+          "logo": true
+        }
+      },
+      "expectations": [
+        "author: a theme is declared only on an explicit branding ask, with the asked colours, no unasked font, and a declared image web resource as the logo, never a URL",
+        "verify: a declared app theme is read back once, as API state, and passes only when live"
+      ]
     }
   ]
 }
