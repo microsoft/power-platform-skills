@@ -55,6 +55,9 @@ const SKILL_SDK_SURFACE = [
   'createTable',
   'createWebResource',
   'deleteAppCascade',
+  // A page create resumed under a caller-held turn id drops the workspace's stale local copy of a page the server no longer holds
+  // (genpage-sdk.js dropLocalCopy), so the page is staged as new. Local only: nothing is sent.
+  'deleteArtifact',
   'deleteGlobalOptionSet',
   'deleteRecord',
   'deleteRelationship',
