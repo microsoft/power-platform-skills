@@ -28,6 +28,12 @@
 //   later (by the app that is built around it, or by a later `--add-to-sitemap` upload of another).
 //   An UPDATE (`--page-id`) needs it: the page must be proven to be in that app's navigation.
 //
+//   With `--app-id` the upload takes the app's pages lease (lib/standalone-page-lease.js) for the whole write and placement, in the app folder's
+//   .maker-workspace — `--app-dir <folder>`, default the current folder, as a build of the spec in that folder uses — so a build of the app, or another
+//   edit of it from that folder, refuses with `pages-locked` (exit 1, `outcome: "nothing"`) instead of interleaving its writes. It costs one read (the
+//   app's unique name, which names the lock); an app whose name cannot be read is `GENPAGE_APP_LEASE_UNRESOLVED`, nothing written. A single-machine
+//   advisory lock in that folder, not a compare-and-swap on the service. A create with no `--app-id` touches no app and takes no lease.
+//
 //   One update is different: `--page-id` for a page THIS TOOL created and did not finish — its publish failed, or the
 //   `--add-to-sitemap` placement it was asked for did — completes it. The base marker beside the code file records that
 //   (`unfinished`), the page is published and, with `--add-to-sitemap`, placed, and the proof of the page's place in the app's
@@ -58,6 +64,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { parseArgs, validateFlags, emitResult } = require('./lib/dataverse-auth.js');
 const { makeGenpageSdk, suppliedButBlank, sourceText, dataSourcesOf } = require('./lib/genpage-sdk.js');
+const { withStandalonePagesLease } = require('./lib/standalone-page-lease.js');
 const { makeThrottleBudget } = require('./lib/throttle-budget.js');
 const { leftOnDiskWarning } = require('./lib/left-on-disk.js');
 const { griffelStyleProblems, griffelProblemsNotIn, describeGriffelRefusal, describeGriffelWarning } = require('./lib/griffel-styles.js');
@@ -69,7 +76,7 @@ const { emitSkillCompleted } = require('./lib/telemetry/skill-completed.js');
 
 const KNOWN = ['env', 'app-id', 'code-file', 'compiled-code-file', 'page-id', 'name', 'name-file',
   'data-sources', 'clear-data-sources', 'prompt', 'prompt-file', 'agent-message', 'agent-message-file',
-  'model', 'connectors', 'actions', 'add-to-sitemap', 'overwrite-deployed', 'solution'];
+  'model', 'connectors', 'actions', 'add-to-sitemap', 'overwrite-deployed', 'solution', 'app-dir'];
 // Bare switches; every other flag carries a value.
 const SWITCHES = ['add-to-sitemap', 'clear-data-sources', 'overwrite-deployed'];
 const NEED_VALUE = KNOWN.filter((f) => !SWITCHES.includes(f));
@@ -77,7 +84,7 @@ const NEED_VALUE = KNOWN.filter((f) => !SWITCHES.includes(f));
 const USAGE = 'Usage: node scripts/genpage-upload.js --env <orgUrl> --code-file <path> '
   + '--prompt-file <path> --agent-message-file <path> [--app-id <guid>] [--page-id <guid>] [--name-file <path> | --name <text>] '
   + '[--data-sources <csv>] [--clear-data-sources] [--model <id>] '
-  + '[--connectors <path>] [--actions <path>] [--add-to-sitemap] [--overwrite-deployed] [--solution <unique name>]'
+  + '[--connectors <path>] [--actions <path>] [--add-to-sitemap] [--overwrite-deployed] [--solution <unique name>] [--app-dir <folder>]'
   + ' (--app-id is required with --page-id and with --add-to-sitemap; --page-id alone finishes a page this tool created and did not finish)';
 
 // The skill writes these inputs — the prompt, agent-message and page-name files, connectors.json, actions.json —
@@ -419,14 +426,26 @@ async function main(argv = process.argv.slice(2), deps = {}) {
   let leftOnDisk = null;
   // skill_completed telemetry covers an upload that was ATTEMPTED — from here on — not a refusal of the command line or its files above.
   const report = deps.reportCompletion || emitSkillCompleted;
-  try {
-    outcome = await deploy({
+  // An upload that names an app writes in it (its navigation, or the views of the page's tables), so the whole deploy runs under the app's pages lease.
+  // A refusal of the lease comes before the deploy reads or writes anything, and is a result like any other refusal (`entered` tells it from a deploy's throw).
+  let entered = false;
+  const appId = typeof flags['app-id'] === 'string' && flags['app-id'] ? flags['app-id'] : null;
+  const run = () => {
+    entered = true;
+    return deploy({
       flags, genpage, base, completing, checkedText, styleProblems, griffelWords, stylesRefusal,
       prompt, agentMessage, pageName, bindings, clearDataSources, overwriteDeployed, addToSitemap,
     });
+  };
+  try {
+    outcome = appId ? await withStandalonePagesLease({ genpage, appId, appDir: flags['app-dir'] || deps.appDir, warn }, run) : await run();
   } catch (e) {
-    await reportUpload(report, flags, startedAt, { error: e });
-    throw e;
+    if (!entered && e && (e.code === 'pages-locked' || e.code === 'GENPAGE_APP_LEASE_UNRESOLVED')) {
+      outcome = { ok: false, payload: { ok: false, appId, code: e.code, outcome: 'nothing', error: String(e.message || e) } };
+    } else {
+      await reportUpload(report, flags, startedAt, { error: e });
+      throw e;
+    }
   } finally {
     try { leftOnDisk = leftOnDiskWarning(await genpage.dispose()); } catch { /* the backend's own folder; nothing to say when it cannot even answer */ }
     // A deploy that threw has no result to carry it: that failure reaches the caller as it is, so the warning goes to stderr beside it.

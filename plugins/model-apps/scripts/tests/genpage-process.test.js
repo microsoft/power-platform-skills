@@ -35,6 +35,8 @@ function run(argv, world = {}, { preload = true, env = {} } = {}) {
   const logDir = scratch('log');
   const log = path.join(logDir, 'log.json');
   const result = spawnSync(process.execPath, [...(preload ? ['--require', PRELOAD] : []), SCRIPT, ...argv], {
+    // add-to-app and remove-from-app take the app's pages lease in the current folder's .maker-workspace: a folder of the run's own.
+    cwd: scratch('cwd'),
     env: { ...process.env, POWER_PLATFORM_SKILLS_TELEMETRY_MODEL_APPS_OPTOUT: '1', FAKE_GENPAGE: JSON.stringify(world), FAKE_GENPAGE_LOG: log, ...env },
     encoding: 'utf8',
     timeout: 120000,

@@ -3982,11 +3982,22 @@ function validateAppSpec(spec, opts = {}) {
       for (const g of a.groups || [])
         for (const sa of g.subAreas || []) if (sa && sa.page) sitemappedPageKeys.add(sa.page);
     for (const p of spec.pages || []) {
+      // A page declared `placement: "form"` is shown inside a form (forms[].genPages), not in the navigation: its membership is the
+      // form that embeds it, which validateFormPageEmbeds below requires — a form-only page that no form embeds is still an error, there.
+      if (p && p.placement === 'form') continue;
       const key = p.key || p.name;
       if (!sitemappedPageKeys.has(key)) {
         errors.push(`page '${key}' is not placed in the sitemap — every page must be an appShell subarea (a page reached only by navigation is not owned by the app; add a subarea for it)`);
       }
     }
+  }
+  // Generative pages on forms (pages[].placement, forms[].genPages): the rules are lib/form-page-embeds.js's, the one place the build's step
+  // reads them from too. Required lazily: that module reads this one's form-layout helper. Shape-only (`structural`) validation reports them
+  // as warnings, as it does the membership rule above, so a spec mid-edit can still be torn down or evaluated.
+  if (spec.pages !== undefined || spec.forms !== undefined) {
+    const embeds = require('./form-page-embeds.js').validateFormPageEmbeds(spec);
+    if (profile === 'structural') warnings.push(...embeds.errors, ...embeds.warnings);
+    else { errors.push(...embeds.errors); warnings.push(...embeds.warnings); }
   }
   // Table (entity) icons — these set the table's OWN icon (what the modern app designer and app
   // nav render for the table). Unlike a sitemap subarea's `vectorIcon` (a free-form Fluent token),

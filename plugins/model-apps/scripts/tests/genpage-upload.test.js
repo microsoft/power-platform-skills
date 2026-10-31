@@ -36,6 +36,9 @@ function tmp() {
   return d;
 }
 
+// The folder whose .maker-workspace holds the pages lease an upload with --app-id takes: one of this file's own, never the folder the tests run in.
+const LEASE_DIR = tmp();
+
 const ENV = 'https://contoso.crm.dynamics.com';
 const PAGE = '9f1b2c3d-4e5f-4a6b-8c9d-0e1f2a3b4c5d'; // the page the environment already holds, placed in APP
 const APP = 'aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa';
@@ -89,6 +92,7 @@ function run(argv, backend, extra = {}) {
     uploadMod.main(argv, {
       makeGenpageSdk: (env, deps) => { made = make(env, deps); return made; },
       emit: (ok, payload) => resolve({ ok, payload, disposedAtEmit: made && made.disposed }),
+      appDir: LEASE_DIR,
       ...extra,
     }).catch(reject);
   });
@@ -1268,6 +1272,10 @@ function appWithPublishedLayer({ publishTakesEffect = true } = {}) {
       appmodulecomponent: () => [{ objectid: 'dddddddd-4444-4444-8444-dddddddddddd', componenttype: 62 }],
       sitemap: () => [{ sitemapxml: published.xml }],
     },
+    // The app's unique name, which names the pages lease the upload takes (lib/standalone-page-lease.js), read from the saved layer.
+    onGet: async (url) => (url.startsWith('/appmodules/Microsoft.Dynamics.CRM.RetrieveUnpublishedMultiple()')
+      ? { status: 200, body: { value: [{ appmoduleid: APP, uniquename: 'contoso_review' }] } }
+      : { status: 404, body: null }),
   }).seedApp({ id: APP, name: 'Review app', siteMap: { areas: [{ id: 'a', title: 'Main', groups: [{ id: 'g', title: 'Pages', subAreas: [] }] }] } });
   let failNext = true;
   const publishArtifact = sdk.publishArtifact.bind(sdk);
@@ -2023,6 +2031,8 @@ function realBackend(server, { navigation = {}, made = [], deps = {} } = {}) {
     const genpage = makeGenpageSdk(env, { httpClient: server.http(), mkdtempSync: (prefix) => { const dir = fs.mkdtempSync(prefix); made.push(dir); return dir; }, ...deps, ...fromScript });
     genpage.enumeratePages = async (appId) => { const pages = navigation[appId] || []; return { ok: true, pages, empty: pages.length === 0 }; };
     genpage.placeInApp = async () => ({ added: [], alreadyPlaced: [], pinnedViews: [], warnings: [], appEdited: false });
+    // The name of the app's pages lease an upload with --app-id takes (lib/standalone-page-lease.js): one more app read.
+    genpage.appUniqueName = async () => 'contoso_review';
     return genpage;
   };
 }

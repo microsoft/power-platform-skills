@@ -12,8 +12,8 @@
 //   list             [--app-id <guid>] [--include-unpublished]
 //   download         --page-id <guid>[,<guid>...] --output-directory <dir> [--app-id <guid>]
 //   types            --data-sources <table>[,<table>...] --output-file <file> [--detail none|colors|descriptions]
-//   add-to-app       --app-id <guid> --page-id <guid> [--title <text>]
-//   remove-from-app  --app-id <guid> --page-id <guid> [--allow-empty-navigation]
+//   add-to-app       --app-id <guid> --page-id <guid> [--title <text>] [--draft] [--app-dir <folder>]
+//   remove-from-app  --app-id <guid> --page-id <guid> [--allow-empty-navigation] [--draft] [--app-dir <folder>]
 //   delete           --page-id <guid> [--allow-destructive]
 //   --env  the environment's https origin, e.g. https://contoso.crm.dynamics.com
 // Every id is checked (a GUID) and so is the origin before the first request; a flag may be given once, because `parseArgs` keeps only the last of a repeat and the
@@ -45,11 +45,13 @@
 //               "pinnedViews": ["<view guid>"], "dataSources": ["account"], "languageCode": 1033, "warnings": [ … ] }
 //             `added` is true when this run put the page in the navigation, `alreadyPlaced` when it was there; `title` is the new entry's. `published` says the app was published by this
 //             run, and the page is then proven to show in the published navigation (a failed or unproven publish is a failure, below). `warnings` is left out when empty.
+//             With --draft: "published": false, "pendingPublish": true | null, "placementState": "saved" | "unchanged" (see --draft below).
 //   remove-from-app
 //             { "ok": true, "appId": "<guid>", "pageId": "<guid>", "wasInNavigation": true, "removed": [ { "area": "Main", "group": "Pages", "count": 1 } ],
 //               "appEdited": true, "published": true, "provedPublished": true, "entriesLeft": 2, "warnings": [ … ] }
 //             `wasInNavigation` is true when a layer of the app's navigation named the page, false when neither did, and null when the saved navigation does not name it and the published one could not be
 //             read (see remove-from-app below). `published` says this run published the app; `provedPublished` that the page was then seen gone from the published navigation (false: it could not be read back).
+//             With --draft: "published": false, "pendingPublish": true | false | null, "placementState": "saved" | "unchanged", "liveState": "shown" | "not-shown" | "never-published" | "unknown".
 //   delete    { "ok": true, "deleted": { "pageId": "<guid>", "name": "Overview", "fileRows": 4, "conversationMessages": 2 }, "historyRemoved": true, "verified": true, "warnings": [ … ] }
 //             Exactly what was deleted: the page, the rows of its folder and the messages of its conversation, counted before the delete. `verified` says the page was read back as gone;
 //             `historyRemoved` is false when some conversation messages could not be deleted (a warning says which and why): the page is gone either way. Without `--allow-destructive` nothing is deleted:
@@ -103,6 +105,20 @@
 // app already exists (it refuses one only when a sitemap is created), so nothing in the platform stops an app being left to open on nothing; this refuses it (`GENPAGE_NAVIGATION_WOULD_BE_EMPTY`, nothing
 // written) unless --allow-empty-navigation says it is meant, in the way the build asks for --allow-destructive before it empties a navigation.
 //
+// --draft (add-to-app, remove-from-app). The app's navigation is SAVED with the change and nothing is published: the app that runs is unchanged until the app is published (by a
+// build, the app designer, or this command without --draft). The answer keeps what was saved apart from what runs: `published` is false; `pendingPublish` is true when the saved
+// navigation now differs from what runs, false when it is known not to, null when that is not known (an earlier save may be unpublished); `placementState` is "saved" or
+// "unchanged"; and a removal's `liveState` is what the PUBLISHED navigation was read to say of the page — "shown", "not-shown", "never-published" (the app was never published) or
+// "unknown" (it could not be read). Nothing is said of the app that runs that was not read. A draft placement does not finish a placement saved earlier and never published (that is a
+// publish), and it publishes nothing before its write. While the published navigation still shows a page whose removal is a draft, the platform keeps the app's reference to it, so the
+// page cannot be deleted until the app is published.
+//
+// The lease. add-to-app and remove-from-app write an app's navigation as a build's pages phase does, so they take the same pages lease for the app (lib/standalone-page-lease.js)
+// for the whole edit, in the app folder's .maker-workspace — `--app-dir <folder>`, default the current folder, as a build of the spec in that folder uses. A build of the app, or another
+// edit of it from that folder, then refuses with `pages-locked` (exit 1, `outcome: "nothing"`) instead of interleaving its writes. It costs one read, the app's unique name, which the lock
+// is named by; an app whose name cannot be read is `GENPAGE_APP_LEASE_UNRESOLVED`, nothing written. It is a single-machine advisory lock in that folder, not a compare-and-swap on the
+// service: an edit run from another folder or machine is not serialised with it, and a host without a shared folder must keep to one writer per app itself.
+//
 // delete. Deletes the page and its conversation history (the SDK deletes the project row, whose file rows go with it, and then the messages that point at it). It is refused while any app's navigation names
 // the page — published or saved, every app of the environment, apps never published included — and the refusal names those apps (`GENPAGE_IN_APP`, with `apps`), so the page is taken out of each first; Dataverse
 // would refuse the delete anyway, without saying which app. An app whose navigation cannot be read could hold the page, so that is a refusal too (`GENPAGE_APPS_UNREADABLE`). Nothing is deleted unless
@@ -119,6 +135,7 @@ const { makeGenpageSdk, pageFolderFiles, dataSourcesOf, GUID_RE, unescapePacName
 const { leftOnDiskWarning } = require('./lib/left-on-disk.js');
 const { assertSafeOutputDir, assertPlainFileTarget, writeFileSafe, removeFileSafe } = require('./lib/safe-fs.js');
 const { makeWritesBlocking } = require('./lib/output-redaction.js');
+const { withStandalonePagesLease } = require('./lib/standalone-page-lease.js');
 
 // How long the backend's cleanup is waited for before the process ends: a storage call that never settles must not keep the script alive.
 const DISPOSE_WAIT_MS = 10000;
@@ -149,16 +166,17 @@ const VERBS = {
     required: ['env', 'data-sources', 'output-file'],
   },
   'add-to-app': {
-    usage: 'add-to-app --env <envUrl> --app-id <guid> --page-id <guid> [--title <text>]',
-    known: ['env', 'app-id', 'page-id', 'title'],
-    needValue: ['env', 'app-id', 'page-id', 'title'],
+    usage: 'add-to-app --env <envUrl> --app-id <guid> --page-id <guid> [--title <text>] [--draft] [--app-dir <folder>]',
+    known: ['env', 'app-id', 'page-id', 'title', 'draft', 'app-dir'],
+    needValue: ['env', 'app-id', 'page-id', 'title', 'app-dir'],
+    switches: ['draft'],
     required: ['env', 'app-id', 'page-id'],
   },
   'remove-from-app': {
-    usage: 'remove-from-app --env <envUrl> --app-id <guid> --page-id <guid> [--allow-empty-navigation]',
-    known: ['env', 'app-id', 'page-id', 'allow-empty-navigation'],
-    needValue: ['env', 'app-id', 'page-id'],
-    switches: ['allow-empty-navigation'],
+    usage: 'remove-from-app --env <envUrl> --app-id <guid> --page-id <guid> [--allow-empty-navigation] [--draft] [--app-dir <folder>]',
+    known: ['env', 'app-id', 'page-id', 'allow-empty-navigation', 'draft', 'app-dir'],
+    needValue: ['env', 'app-id', 'page-id', 'app-dir'],
+    switches: ['allow-empty-navigation', 'draft'],
     required: ['env', 'app-id', 'page-id'],
   },
   delete: {
@@ -259,6 +277,10 @@ function parseCommand(argv) {
     }
     if (verb === 'add-to-app' && flags.title !== undefined) args.title = flags.title;
     if (verb === 'remove-from-app') args.allowEmpty = flags['allow-empty-navigation'] === true;
+    if (verb === 'add-to-app' || verb === 'remove-from-app') {
+      if (flags.draft === true) args.publish = false;
+      if (flags['app-dir'] !== undefined) args.appDir = path.resolve(String(flags['app-dir']));
+    }
     if (verb === 'delete') args.allowDestructive = flags['allow-destructive'] === true;
     return { verb, env, args };
   } catch (error) {
@@ -391,7 +413,8 @@ async function types(genpage, { dataSources, outputFile, detail }) {
   return { ok: true, outputFile: written, dataSources, detail, bytes: Buffer.byteLength(text, 'utf8') };
 }
 
-async function addToApp(genpage, { appId, pageId, title }) {
+async function addToApp(genpage, { appId, pageId, title, publish }) {
+  const draft = publish === false;
   // The page first: one that is not there is refused before anything about the app is read.
   const page = await genpage.describe(pageId);
   const languageCode = await genpage.baseLanguage();
@@ -401,7 +424,9 @@ async function addToApp(genpage, { appId, pageId, title }) {
     pages: [{ pageId, title: entryTitle }],
     dataSources: page.dataSources || [],
     languageCode,
-    finishIfUnpublished: true,
+    // A draft saves and publishes nothing, so it cannot finish a placement an earlier run saved and never published (that IS a publish): the backend
+    // refuses the two together, and a draft asks only for the save.
+    ...(draft ? { publish: false } : { finishIfUnpublished: true }),
   });
   const warnings = [...(placed.warnings || [])];
   // A page the SDK holds as raw files has no configuration to read its tables from: nothing is said to be pinned for it, and the gap is said.
@@ -416,7 +441,12 @@ async function addToApp(genpage, { appId, pageId, title }) {
     alreadyPlaced: placed.alreadyPlaced.length > 0,
     ...(added ? { title: entryTitle } : {}),
     appEdited: placed.appEdited === true,
-    published: placed.appEdited === true || placed.provedPublished !== undefined,
+    // A published placement is proven or it fails (a publish that failed is a failure, above), so an edit or a proof means published. A draft published
+    // nothing: what it saved and what runs are said apart, as the backend observed them — never inferred from `appEdited`. (`published` is the negated switch, not a
+    // literal: a literal false there is how a script that creates a draft APP reads to sdk-opt-ins.test.js, and this creates none.)
+    ...(draft
+      ? { published: !draft, pendingPublish: placed.pendingPublish === undefined ? null : placed.pendingPublish, placementState: placed.placementState }
+      : { published: placed.appEdited === true || placed.provedPublished !== undefined }),
     pinnedViews: placed.pinnedViews,
     dataSources: page.dataSources || [],
     languageCode,
@@ -424,8 +454,9 @@ async function addToApp(genpage, { appId, pageId, title }) {
   };
 }
 
-async function removeFromApp(genpage, { appId, pageId, allowEmpty }) {
-  const removal = await genpage.removeFromApp(appId, pageId, { allowEmpty });
+async function removeFromApp(genpage, { appId, pageId, allowEmpty, publish }) {
+  // A draft's answer carries `published` (false), `pendingPublish`, `placementState` and `liveState` (what the published navigation was read to say), and goes out as it is.
+  const removal = await genpage.removeFromApp(appId, pageId, { allowEmpty, ...(publish === false ? { publish: false } : {}) });
   const { warnings, ...rest } = removal;
   return { ok: true, appId, pageId, ...rest, ...(warnings && warnings.length ? { warnings } : {}) };
 }
@@ -437,6 +468,8 @@ async function deletePage(genpage, { pageId, allowDestructive }) {
 }
 
 const RUN = { list, download, types, 'add-to-app': addToApp, 'remove-from-app': removeFromApp, delete: deletePage };
+// The verbs that write an app's navigation: each runs under the app's pages lease (see "The lease" above).
+const LEASED = new Set(['add-to-app', 'remove-from-app']);
 
 // What a failure prints besides its message and code: whatever the backend or the verb knows about what it did, so a caller can go on from it (the page's id to look for, whether anything was
 // written, the apps a delete was refused for, what a delete that was not confirmed would have removed).
@@ -450,7 +483,8 @@ function failureOf(error) {
 }
 
 /**
- * Runs one command line and reports its outcome. `deps` is a test seam: `makeGenpageSdk(env)` (the page backend), `emit(ok, payload)`, `usageError(message, verb)` and `stderr(text)`.
+ * Runs one command line and reports its outcome. `deps` is a test seam: `makeGenpageSdk(env)` (the page backend), `emit(ok, payload)`, `usageError(message, verb)`, `stderr(text)`
+ * and `appDir` (the folder whose .maker-workspace holds the lease when --app-dir is not given; default the current folder).
  */
 async function main(argv = process.argv.slice(2), deps = {}) {
   const emit = deps.emit || ((ok, payload) => emitResult(ok, payload, { ascii: true }));
@@ -467,13 +501,19 @@ async function main(argv = process.argv.slice(2), deps = {}) {
   // could not remove (a handle a scanner holds); that goes out with the result, as a warning, so a success that left a page's source in the temp directory says so.
   let outcome;
   let leftOnDisk = null;
+  const leaseWarnings = [];
   try {
-    outcome = { ok: true, payload: await RUN[command.verb](genpage, command.args) };
+    const run = () => RUN[command.verb](genpage, command.args);
+    const payload = LEASED.has(command.verb)
+      ? await withStandalonePagesLease({ genpage, appId: command.args.appId, appDir: command.args.appDir || deps.appDir, warn: (w) => leaseWarnings.push(w) }, run)
+      : await run();
+    outcome = { ok: true, payload };
   } catch (error) {
     outcome = { ok: false, payload: failureOf(error) };
   } finally {
     try { leftOnDisk = leftOnDiskWarning(await genpage.dispose({ waitMs: DISPOSE_WAIT_MS })); } catch { /* the backend's own throwaway folder; nothing to say when it cannot even answer */ }
   }
+  if (leaseWarnings.length) outcome.payload = { ...outcome.payload, warnings: [...leaseWarnings, ...(outcome.payload.warnings || [])] };
   if (leftOnDisk) outcome.payload = { ...outcome.payload, warnings: [...(outcome.payload.warnings || []), leftOnDisk] };
   const stderr = deps.stderr || ((text) => process.stderr.write(text));
   for (const warning of outcome.payload.warnings || []) stderr(`⚠ ${warning}\n`);

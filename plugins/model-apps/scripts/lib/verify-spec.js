@@ -35,6 +35,7 @@ const { placementOf, resolvePlacement, columnSequence, neighbourOf, tokenLabel, 
 const { isMainForm, selectDefaultForm, plannedMainFormSequence, displayConditionsOrder, compareServedOrder } = require('./form-order.js');
 const { hasLabelUses, resolveViewFilterLabels, memoizeChoiceReader, describeProblem } = require('./view-filter-labels.js');
 const { hostsCustomControl } = require('./dashboard-tiles.js');
+const { formEmbedsOfPage, verifyFormPageEmbed } = require('./form-page-embeds.js');
 const { answerOf, statusReasonChecks, alternateKeyChecks } = require('./status-reasons-keys.js');
 const { columnTypeChecks, declaredTableFlags, verifyTableFlags } = require('./schema-feature-contract.js');
 const { verifyDateBehaviors } = require('./date-behavior.js');
@@ -1698,6 +1699,25 @@ async function verifySpec(spec, read, opts = {}) {
       return { error };
     }
   });
+  // Why a page placed on a form is not shown as the spec declares it ('' when every form that embeds it shows it): each form is resolved by the
+  // identity the build uses and read as deployed, then held to its embed (form-page-embeds.js verifyFormPageEmbed). Fail closed: a page no
+  // form embeds, a form that cannot be resolved or read, or an embed that is not as declared is a miss.
+  const formEmbedProblem = async (p, id) => {
+    const embeds = formEmbedsOfPage(spec, p);
+    if (!embeds.length) return 'no form embeds it';
+    for (const { form, embed } of embeds) {
+      const name = form.name || `${form.entity} form`;
+      const entity = String(form.entity || '').toLowerCase();
+      let formId = null;
+      try { formId = await resolveExistingFormId(read, { entityLogicalName: entity, name, formType: form.formType, formId: form.formId }); } catch { formId = null; }
+      if (!formId) return `form '${name}' is not found`;
+      let xml = null;
+      try { xml = await readFormXml(entity, formId); } catch { xml = null; }
+      const verdict = verifyFormPageEmbed(xml, embed, id);
+      if (!verdict.ok) return `form '${name}' does not show it as declared (${verdict.reason})`;
+    }
+    return '';
+  };
   const pagesCheck = plan.section(async ({ add }) => {
   const xml = await sitemapXml();
   if (implementedPages.length) {
@@ -1743,8 +1763,15 @@ async function verifySpec(spec, read, opts = {}) {
           specIds.add(String(id).toLowerCase());
           // page present ⟺ id ∈ existenceIds (deployed env-wide) AND id ∈ sitemapIds (placed in this app).
           // Both conditions required: existence alone doesn't mean the page belongs to this app.
-          const present = existenceIds.has(String(id).toLowerCase()) && sitemapIds.has(String(id).toLowerCase());
-          add('page', p.name, present);
+          // A page placed on a form (placement 'form') has no sitemap entry: the form that embeds it places it, so it is present when it
+          // exists, the app's navigation does not hold it, and every form the spec embeds it on shows it as declared (formEmbedProblem). A form
+          // page found in the navigation is a miss that names the placement; it stays among the ids the spec declares, so it is not also an
+          // extra page. Every other page is judged as before.
+          const inSitemap = sitemapIds.has(String(id).toLowerCase());
+          const problem = p.placement === 'form' && existenceIds.has(String(id).toLowerCase())
+            ? (inSitemap ? 'it is in the app\'s navigation, but the spec places it on a form only' : await formEmbedProblem(p, id)) : '';
+          const present = existenceIds.has(String(id).toLowerCase()) && (p.placement === 'form' ? !problem : sitemapIds.has(String(id).toLowerCase()));
+          add('page', p.name, present, problem);
           if (!present) continue;
           // page-subarea: verify the sitemap XML specifically carries a GenPageId="<id>" binding.
           // Only emitted when the appShell references this page key (headless pages have no subarea to verify).

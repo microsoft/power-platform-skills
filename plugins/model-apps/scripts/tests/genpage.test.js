@@ -24,6 +24,8 @@ function scratch(label) {
   return dir;
 }
 after(() => { for (const dir of roots) fs.rmSync(dir, { recursive: true, force: true }); });
+// The folder whose .maker-workspace holds the pages lease add-to-app and remove-from-app take: one of this file's own, never the folder the tests run in.
+const LEASE_DIR = scratch('lease');
 
 // One command line through `main`, with the backend and the three ways out replaced: what was emitted (with how often the backend had been disposed at that moment), what went to stderr, and
 // the usage errors.
@@ -34,6 +36,7 @@ async function run(argv, genpage = fakeGenpage()) {
     emit: (ok, payload) => { seen.emitted.push({ ok, payload, disposedWhenEmitted: genpage.disposed }); },
     usageError: (message, verb) => { seen.usage.push({ message, verb }); },
     stderr: (text) => { seen.stderr.push(text); },
+    appDir: LEASE_DIR,
   });
   seen.genpage = genpage;
   seen.result = seen.emitted[0];

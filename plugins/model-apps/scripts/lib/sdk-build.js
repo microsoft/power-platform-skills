@@ -118,6 +118,8 @@ const {
   rowsFromCells,
 } = require('./artifact-intent.js');
 const { makeGenpageSdk, suppliedButBlank, unescapePacName, sourceText, holdsWhatWasSent, describeDivergence, entityTablesOfSiteMap } = require('./genpage-sdk.js');
+const { runFormPageEmbeds, hasFormPageEmbeds, pagesPhaseMissingForEmbeds, requirePagesPhaseForEmbeds } = require('./form-page-embeds.js');
+const { typescriptProviderOptions } = require('./typescript-provider.js');
 const { genPageSubArea } = require('./genpage-subarea.js');
 const { matchContainer, isEngineOwnedSection, isEngineHostSection, holdsControlOf, claimedByAuthoredName, planOrderMoves } = require('./form-container-match.js');
 const { rowOccupancy, fitsGrid, strandedRows } = require('./form-occupancy.js');
@@ -849,6 +851,8 @@ function planFor(spec, opts) {
   // stay in step is to budget the step and have the runtime emit an explicit `skip` when it does not
   // fire — the same shape as the existing-column "applied on create" skips.
   if (has('pages')) items.push({ phase: 'pages', label: 'finalize sitemap (genpage subareas)' });
+  // Budgeted only for a spec that embeds a page on a form; the runtime then runs it, or emits an explicit skip (a content-only re-upload).
+  if (has('pages') && hasFormPageEmbeds(spec)) items.push({ phase: 'pages', label: 'embed generative pages on forms' });
   if (has('ai-features') && specOptsIntoAi(spec)) {
     items.push({ phase: 'ai-features', label: 'enable app AI features' });
     // Do NOT short-circuit on `summaries.default === 'off'`. `selectSummaryTables` already implements
@@ -1624,6 +1628,16 @@ function checkNavigationInPlan(plan, spec, { phases, changedOnly, warn }) {
   } else if ((verdict.outcome === 'unknown' || verdict.outcome === 'warn') && typeof warn === 'function') {
     warn(`app "${spec.app.name}": ${verdict.message}`);
   }
+}
+
+// The dry run's share of the pages-phase rule for form embeds (form-page-embeds.js pagesPhaseMissingForEmbeds): a line after the last forms line,
+// `? unknown` with the reason and `wouldHalt`, for a phase set the apply refuses. Any other plan is left as it is.
+function checkEmbedsPhaseInPlan(plan, spec, phases) {
+  const missing = pagesPhaseMissingForEmbeds(spec, phases);
+  if (!missing) return;
+  const at = plan.map((p) => p.phase).lastIndexOf('forms') + 1;
+  plan.splice(at, 0, { phase: 'forms', label: 'embed generative pages on forms', state: 'unknown', wouldHalt: true,
+    stateWhy: `the build would stop before writing anything: ${missing.why}; run it with the pages phase (a full build)` });
 }
 
 // The apply's share: before the first write, refuse a navigation Dataverse will refuse. Left to the app step it stopped the
@@ -3362,6 +3376,9 @@ async function runSdkBuildPhases(spec, opts, owed) {
       }
     }
     if (has('app-shell')) checkNavigationInPlan(plan, spec, { phases, changedOnly: opts.changedOnly, warn: opts.warn });
+    // A spec that embeds pages on forms, run with the forms phase but not the pages phase, is refused by the apply before anything is written
+    // (requirePagesPhaseForEmbeds). The dry run says so on a line of its own after the forms, marked as checkNavigationInPlan marks a refused app.
+    checkEmbedsPhaseInPlan(plan, spec, phases);
     // What the environment has for the names the pages' bindings state (checkPageBindingsInPlan): it reads, so it is a part of the live plan and is left out of one that is asked not to read the environment.
     if (canProbe && has('pages')) {
       try {
@@ -3422,6 +3439,9 @@ async function runSdkBuildPhases(spec, opts, owed) {
   const runner = makeRunner({ emit, total: plan.length, throttle: opts.throttle });
   // A navigation Dataverse will refuse stops the build here, before anything is written, rather than at the app step
   // after the solution, tables, columns, views and forms have been (app-navigation.js). Only a run that has the app step.
+  // A spec that embeds pages on forms, run with the forms phase but not the pages phase, would save every form and end without one embed it asks for
+  // (the embed step runs in the pages phase): refused here, before anything is written (form-page-embeds.js requirePagesPhaseForEmbeds).
+  requirePagesPhaseForEmbeds(spec, phases);
   if (has('app-shell')) await checkNavigationBeforeWriting(spec, { provision, phases, changedOnly: opts.changedOnly, warn: opts.warn });
   // A binding whose connection reference is another connector's stops the build here too, before anything is written, for the same reason (checkPageBindingsBeforeWriting). What it reads is kept for
   // the attempt (bindingReads): the pages phase judges a navigation target it finds it has to make by the same reads, and reads only a name this check did not.
@@ -7360,7 +7380,9 @@ async function runSdkBuildPhases(spec, opts, owed) {
     // page would be stale the moment anyone saved it). `opts.genpage` is a seam for the tests, and is the caller's to dispose. The run's throttle budget
     // (`opts.throttle`) is handed to it, so the HTTP client it makes draws its waits for a throttled read or publish from the same five minutes as the page writes do.
     const ownGenpage = !opts.genpage;
-    const genpage = opts.genpage || makeGenpageSdk(opts.env, { throttle: opts.throttle });
+    // `opts.typescript` is the caller's TypeScript provider (lib/typescript-provider.js): the backend takes it as `typescript` — the namespace or the SDK's
+    // provider function, as given — and compiles every page with it. Absent, the backend loads the vendored compiler lazily, as before.
+    const genpage = opts.genpage || makeGenpageSdk(opts.env, { throttle: opts.throttle, ...typescriptProviderOptions(opts.typescript).backend });
     const appUnique = appUniqueName(spec);
     // Recovery guard: the app id is only populated by app-shell (this run). If pages runs without it
     // (e.g. --from pages), there is nothing to upload against — HALT and require a FULL rerun. An app the app step left to this
@@ -8213,6 +8235,40 @@ async function runSdkBuildPhases(spec, opts, owed) {
         // planFor budgets this step for every pages-phase run, so consume the slot even when there is
         // nothing to write — otherwise the remaining steps renumber past the advertised total.
         runner.skip('pages', `finalize sitemap (genpage subareas) (${skipSitemapFinalize ? 'content-only re-upload — sitemap unchanged' : 'no sitemap change'})`);
+      }
+
+      // Generative pages on forms (forms[].genPages): once the pages exist (their ids are keyToId's) and inside this phase's lease. One call does the
+      // whole step (lib/form-page-embeds.js runFormPageEmbeds): it reads each form fresh, adds or updates only the cells the spec names (by their stable
+      // key), sends each add through the build's create port, and owes the form's publish to the run's publication — a
+      // form is published with the table it belongs to (publishReconciled), never on its own ahead of it. What it saved is kept in
+      // `result.formPageEmbeds` before anything stops. A requested embed that was refused or whose outcome is unknown halts the phase
+      // (`form-page-embeds-incomplete`): the maker asked for it, so a build without it is not a success.
+      // A content-only re-upload (changed-only fast apply) runs only when every change is a page's content — a form or an embed that changed makes it
+      // a full build — so the embeds there are the ones the last full build applied, and the step is skipped, said as such.
+      if (hasFormPageEmbeds(spec)) {
+        if (skipSitemapFinalize) {
+          runner.skip('pages', 'embed generative pages on forms (content-only re-upload — forms unchanged)');
+        } else {
+          await runner.run('pages', 'embed generative pages on forms', () => runFormPageEmbeds(spec, {
+            provision,
+            formIdOf: (f) => result.created.formIds[formIdentityKey(f)] || null,
+            keyToId,
+            // The build's create port (it allocates each add's ids and runs the write once) and the managed-artifacts store the declared views,
+            // charts and command bars use (`opts.managedArtifacts`, featureCtx.managed): an embed is found again by its key's binding. Without a
+            // create port every add is refused (`create-port-unavailable`); without a store every embed is unknown (`managed-bindings-unavailable`,
+            // nothing read or written) — the CLI build has no store in this release — and either halts the phase.
+            creates: opts.creates,
+            managed: featureCtx.managed,
+            publication: { queue: ({ id, table, label }) => publishReconciled('form', id, table, label) },
+            // Called before any halt or rethrown failure too, so a partial save's bindings are recorded with the store before the build stops.
+            report: (embeds) => {
+              result.formPageEmbeds = embeds;
+              if (managedArtifacts) for (const b of (embeds && embeds.managedBindings) || []) managedArtifacts.recordApplied(b);
+            },
+            warn: opts.warn,
+            phase: 'pages',
+          }));
+        }
       }
 
       // Pin the default public view of each table the pages written in this run read. The maker's "/" picker lists a page's tables from the app's components,

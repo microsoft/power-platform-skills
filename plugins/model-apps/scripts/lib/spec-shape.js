@@ -44,7 +44,10 @@ const COLLECTIONS = {
   // `linkEntities` (and each join's `filters`) are read by a declared view (lib/view-reconcile.js).
   views: { children: { filters: {}, columns: { scalar: true }, linkEntities: { children: { filters: {} } } } },
   charts: {},
-  forms: { children: { subgrids: {}, events: {}, quickViews: {}, tabs: { children: { sections: {} } } } },
+  // A form's generative-page embeds (forms[].genPages) are a list of objects. Each entry's own keys are not listed: an entry's `inputData` is a
+  // free JSON OBJECT handed to the page, and a child listed here would be normalized as a collection — an object there reported as "must be an
+  // array" and replaced by []. Unlisted keys pass through as they are; lib/form-page-embeds.js validateFormPageEmbeds checks them.
+  forms: { children: { subgrids: {}, events: {}, quickViews: {}, tabs: { children: { sections: {} } }, genPages: {} } },
   commands: { children: { buttons: { children: { children: {} } } } },
   // Business rules and their nested collections. Omitted when `businessRules[]` was introduced, so
   // an object-valued `businessRules`, `conditions` or `actions` reached a raw `for...of` and threw a

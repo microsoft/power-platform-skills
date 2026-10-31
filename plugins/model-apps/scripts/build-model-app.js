@@ -722,6 +722,7 @@ async function buildModelAppHeld(spec, opts, deps, v, buildLease) {
         provisionedLanguages: deps.provisionedLanguages,
         warn: deps.warn,
         genpage: deps.genpage, // injectable seam for tests (lib/genpage-sdk.js's shape); else made from env
+        typescript: deps.typescript, // the caller's TypeScript provider (lib/typescript-provider.js); absent → the vendored compiler, loaded lazily
         workspaceDir: opts.workspaceDir, // lease/staging live under the real workspace dir
         // The build lease this apply holds (or borrowed from its caller): every attempt borrows it, so none of them takes a second one.
         buildLease,

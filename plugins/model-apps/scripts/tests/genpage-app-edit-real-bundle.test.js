@@ -17,8 +17,11 @@ const { createMakerSdk, createNodeWorkspaceStorage } = require('../lib/maker-sdk
 const { makeAppComponentScope } = require('../lib/app-component-scope.js');
 const { createAzHttpClient } = require('../lib/sdk-http-client.js');
 const { runSdkBuild, appUniqueName } = require('../lib/sdk-build.js');
-const { main: genpageVerbs } = require('../genpage.js');
-const { main: upload } = require('../genpage-upload.js');
+const genpageMain = require('../genpage.js').main;
+const uploadMain = require('../genpage-upload.js').main;
+// Both commands take the app's pages lease in a folder's .maker-workspace: this file's own folder, never the one the tests run in.
+const genpageVerbs = (argv, deps) => genpageMain(argv, { appDir: leaseDir(), ...deps });
+const upload = (argv, deps) => uploadMain(argv, { appDir: leaseDir(), ...deps });
 const { FakeGenPageServer, INSTANCE, ACCOUNT_TABLE, appTransport, APP_ID, APP_EXISTING_PAGE_ID, APP_VIEW_ID } = require('./helpers/fake-genpage-server.js');
 const { withAppComponents } = require('./helpers/fake-app-components.js');
 const { effectiveContentLength } = require('./helpers/wire-framing.js');
@@ -35,6 +38,8 @@ const SOURCE = "import * as React from 'react';\nexport default function Page() 
 const folders = [];
 test.after(() => { for (const folder of folders) fs.rmSync(folder, { recursive: true, force: true }); });
 const tmp = () => { const folder = fs.mkdtempSync(path.join(os.tmpdir(), 'gp-edit-')); folders.push(folder); return folder; };
+let leaseFolder = null;
+const leaseDir = () => leaseFolder || (leaseFolder = tmp());
 
 // An app whose navigation opens `account` (and names a generative page), in which the maker took out one Main form, one public view and the chart of that table:
 //   forms   FORM_KEPT is the app's, FORM_EXCLUDED is active and was taken out
