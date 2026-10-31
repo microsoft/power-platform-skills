@@ -870,6 +870,18 @@ async function deploy(context) {
           ...(provingPlacement ? { finishIfUnpublished: true } : {}),
         });
         for (const w of placement.warnings || []) warnings.push(w);
+        // A resumed create's placement is finished only on proof that the app that RUNS shows the page. `placeInApp` publishes the app and then reads its published
+        // navigation; when that read fails it does not throw — it answers `provedPublished: false` with a warning (the publish was accepted and may yet take effect),
+        // which is enough for an ordinary completion but not for a turn, whose retry trusts that a finished answer is final. So under a resumed create that answer is an
+        // unfinished placement: coded, the marker this run wrote left at `unfinished: 'place'`, and the same command again reads the published navigation once more.
+        // An answer with no `provedPublished` at all is the backend's no-write return: it READ the published navigation and found the page there, which is the proof.
+        if (resumesCreate && (finishingPlacement || provingPlacement) && placement.provedPublished === false) {
+          return done(false, {
+            ...failed(`page ${pageId} was ${writtenAs}, and it is placed in app ${flags['app-id']}'s saved navigation, and the app was published, but its published navigation could not be read back to prove that the page shows in it, so the placement is not reported finished. To finish it, run the same command again with the same turn id and nothing else changed: the app's published navigation is read again, and the app is published again and checked unless it already shows the page.`),
+            code: 'GENPAGE_APP_PUBLISH_UNPROVEN',
+            ...(warnings.length ? { warnings } : {}),
+          });
+        }
       } catch (e) {
         if (addToSitemap) {
           // Under a turn the failure carries the backend's code (`GENPAGE_APP_PUBLISH_FAILED`, `GENPAGE_APP_PUBLISH_UNPROVEN`, …), so a host that retries the turn can tell an
