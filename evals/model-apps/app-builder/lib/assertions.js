@@ -948,4 +948,85 @@ ASSERTIONS.set('author: a new app with a chart or view of a table outside its na
     : fail(`app.pinDeclaredArtifacts ${app.pinDeclaredArtifacts === undefined ? '(omitted)' : app.pinDeclaredArtifacts}, expected ${expected.pinDeclaredArtifacts === true}`);
 });
 
+// Declared reconciliation (2.21.0, references/app-spec-schema-advanced.md). A new app authors every view and chart it
+// declares, so each one is reconcile: "declared"; nothing else may carry reconcile, and a command `key` is refused in this
+// version. A declared chart on a new table cannot store a title, and a declared view named like the table's stock
+// "Active/Inactive <plural>" view would be an adoption on the very first build.
+function declaredProblems(spec) {
+  const problems = [];
+  for (const v of spec.views || []) {
+    if (v.reconcile !== 'declared') problems.push(`view '${v.name}' is not reconcile: "declared"`);
+    const ent = (spec.entities || []).find((e) => String(e.schemaName).toLowerCase() === String(v.entity).toLowerCase());
+    const plural = ent && typeof ent.pluralName === 'string' ? ent.pluralName.toLowerCase() : null;
+    if (plural && [`active ${plural}`, `inactive ${plural}`].includes(String(v.name).toLowerCase())) problems.push(`view '${v.name}' is the stock default view's name`);
+  }
+  for (const ch of spec.charts || []) {
+    if (ch.reconcile !== 'declared') problems.push(`chart '${ch.name}' is not reconcile: "declared"`);
+    if (ch.title !== undefined) problems.push(`chart '${ch.name}' sets a title a new chart cannot store`);
+  }
+  for (const [kind, list] of Object.entries(spec)) {
+    if (kind === 'views' || kind === 'charts' || !Array.isArray(list)) continue;
+    for (const item of list) if (item && typeof item === 'object' && item.reconcile !== undefined) problems.push(`${kind} '${item.name || item.entity || '?'}' carries reconcile`);
+  }
+  const walk = (node, parentKey) => {
+    if (Array.isArray(node)) { for (const x of node) { if (parentKey === 'commands' && x && typeof x === 'object' && x.key !== undefined) problems.push(`command '${x.label || x.name || x.key}' carries a key`); walk(x, null); } return; }
+    if (node && typeof node === 'object') for (const [k, v] of Object.entries(node)) walk(v, k);
+  };
+  walk(spec, null);
+  return problems;
+}
+ASSERTIONS.set('author: every view and chart of a new app is declared, and no other kind carries reconcile or a command key', ({ spec }) => {
+  if (!(spec.views || []).length && !(spec.charts || []).length) return fail('the spec declares no view or chart');
+  if (!versionAtLeast(spec.minimumPluginVersion, '2.21.0')) return fail(`minimumPluginVersion ${spec.minimumPluginVersion || '(none)'} is below 2.21.0`);
+  const problems = declaredProblems(spec);
+  return problems.length ? fail(problems.join('; ')) : PASS;
+});
+
+// expect.quickFind maps each new table to the identifiers the prompt says users search by. Every table the spec creates
+// gets reviewed search columns: its primary name first among equals, plus those identifiers. Change tracking is not part
+// of search, so it stays off unless the eval asks for it.
+ASSERTIONS.set('author: each new table searches on its primary name plus the identifiers the prompt names', ({ spec, eval: ev }) => {
+  const expected = ev.expect && ev.expect.quickFind;
+  if (!expected || typeof expected !== 'object' || !Object.keys(expected).length) return fail('no independent search-column expectations');
+  for (const e of spec.entities || []) {
+    const table = String(e.schemaName).toLowerCase();
+    const cols = e.quickFind && Array.isArray(e.quickFind.findColumns) ? e.quickFind.findColumns.map((c) => String(c).toLowerCase()) : null;
+    if (!cols) return fail(`${table} declares no quickFind.findColumns`);
+    if (new Set(cols).size !== cols.length) return fail(`${table} lists a search column twice`);
+    const primary = e.primaryAttribute && String(e.primaryAttribute.schemaName || '').toLowerCase();
+    if (primary && !cols.includes(primary)) return fail(`${table} does not search its primary name ${primary}`);
+    for (const want of expected[table] || []) if (!cols.includes(want.toLowerCase())) return fail(`${table} does not search ${want}`);
+    if (e.changeTrackingEnabled === true && ev.expect.changeTracking !== true) return fail(`${table} turns change tracking on unasked`);
+  }
+  for (const table of Object.keys(expected)) {
+    if (!(spec.entities || []).some((e) => String(e.schemaName).toLowerCase() === table.toLowerCase())) return fail(`${table} is not a table the spec creates`);
+  }
+  return PASS;
+});
+
+// expect.linkEntities maps "<table>/<view name>" to the related tables the prompt asks that view to show. Exactly those
+// views join, each one is declared (only a declared view applies its joins), and every related column names a join of its view.
+ASSERTIONS.set('author: a column from a related table joins that table on the view that shows it, and only there', ({ spec, eval: ev }) => {
+  const expected = ev.expect && ev.expect.linkEntities;
+  if (!expected || typeof expected !== 'object' || !Object.keys(expected).length) return fail('no independent join expectations');
+  const want = new Map(Object.entries(expected).map(([k, v]) => [k.toLowerCase(), v.map((t) => t.toLowerCase()).sort()]));
+  for (const v of spec.views || []) {
+    const id = `${String(v.entity).toLowerCase()}/${String(v.name).toLowerCase()}`;
+    const links = Array.isArray(v.linkEntities) ? v.linkEntities : [];
+    const related = (v.columns || []).filter((c) => c && typeof c === 'object' && c.relatedEntity !== undefined);
+    if (!want.has(id)) {
+      if (links.length || related.length) return fail(`view '${v.name}' joins a related table the prompt did not ask it to show`);
+      continue;
+    }
+    if (v.reconcile !== 'declared') return fail(`view '${v.name}' joins but is not reconcile: "declared"`);
+    const joined = links.map((l) => String(l.name).toLowerCase()).sort();
+    if (JSON.stringify(joined) !== JSON.stringify(want.get(id))) return fail(`view '${v.name}' joins [${joined}], expected [${want.get(id)}]`);
+    const handles = new Set(links.map((l) => String(l.alias || l.name).toLowerCase()));
+    if (!related.length) return fail(`view '${v.name}' shows no column of the joined table`);
+    for (const c of related) if (!handles.has(String(c.relatedEntity).toLowerCase())) return fail(`view '${v.name}' column ${c.name} names no join of the view (${c.relatedEntity})`);
+    want.delete(id);
+  }
+  return want.size ? fail(`no view ${[...want.keys()].join(', ')}`) : PASS;
+});
+
 module.exports = { ASSERTIONS };

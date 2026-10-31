@@ -41,7 +41,8 @@ const COLLECTIONS = {
   relationships: {},
   globalChoices: {},
   webResources: {},
-  views: { children: { filters: {}, columns: { scalar: true } } },
+  // `linkEntities` (and each join's `filters`) are read by a declared view (lib/view-reconcile.js).
+  views: { children: { filters: {}, columns: { scalar: true }, linkEntities: { children: { filters: {} } } } },
   charts: {},
   forms: { children: { subgrids: {}, events: {}, quickViews: {}, tabs: { children: { sections: {} } } } },
   commands: { children: { buttons: { children: { children: {} } } } },

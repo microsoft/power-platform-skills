@@ -94,7 +94,7 @@ const {
 } = require('./entity-provision.js');
 const { repairLookupCellLabels } = require('./lookup-cell-labels.js');
 const { diffBpfStages, deployedBpfStages, desiredBpfStages, describeBpfEdit, describeBpfRefusals } = require('./bpf-stages.js');
-const { hasLabelUses, makeChoiceReader, makeGlobalChoiceReader, resolveViewFilterLabels, checkViewFilterLabelsBeforeBuild, describeProblem, describeProblems } = require('./view-filter-labels.js');
+const { hasLabelUses, viewsForLabels, makeChoiceReader, makeGlobalChoiceReader, resolveViewFilterLabels, checkViewFilterLabelsBeforeBuild, describeProblem, describeProblems } = require('./view-filter-labels.js');
 // Pure App Spec -> canonical SDK intent compiler (new form topology + generic-surface intents).
 const {
   compileFormIntent,
@@ -160,6 +160,13 @@ const { isAppTextMap, appTextKind, localizedAppText } = require('./app-header-te
 const { securedBeforeSeed, planFieldSecurity, applyFieldSecurity, assignFieldSecurity } = require('./field-security.js');
 const { declaredTableFlags } = require('./schema-feature-contract.js');
 const { RETRY, isTransientStatus, judgeFailure, retryPolicyFor, retryFrom, refusal, serviceFailure, withCause } = require('./retry-policy.js');
+const { createPublicationBarrier, describeWithheld, describeWithheldApp } = require('./publication-barrier.js');
+const { createFeatureSettlement } = require('./reconcile-common.js');
+const { createPassthroughCreates } = require('./creates-passthrough.js');
+const { isDeclaredView, planViewReconcile, applyViewReconcile } = require('./view-reconcile.js');
+const { isDeclaredChart, planChartReconcile, applyChartReconcile } = require('./chart-reconcile.js');
+const { isManagedEntity, planCommandReconcile, applyCommandReconcile } = require('./command-reconcile.js');
+const { planQuickFind, applyQuickFind } = require('./quick-find.js');
 const { HTTP_SEND_HISTORY } = require('./sdk-http-client.js');
 
 // Re-export from entity-provision so the export surface stays unchanged
@@ -792,6 +799,7 @@ function planFor(spec, opts) {
   if (has('web-resources')) for (const e of spec.entities || []) if (e.icon || e.vectorIcon) items.push({ phase: 'web-resources', label: `table icon for ${e.schemaName.toLowerCase()}` });
   if (has('views')) for (const v of spec.views || []) items.push({ phase: 'views', label: `view "${v.name}" for ${v.entity}`, key: { kind: 'view', entity: v.entity, name: v.name, declared: v } });
   if (has('views')) for (const e of spec.entities || []) if (enrichesDefaultViews(spec, e)) items.push({ phase: 'views', label: `enrich default views for ${e.schemaName.toLowerCase()}` });
+  if (has('views')) for (const e of spec.entities || []) if (e && e.quickFind) items.push({ phase: 'views', label: `Quick Find for ${e.schemaName.toLowerCase()}` });
   if (has('charts')) for (const c of spec.charts || []) items.push({ phase: 'charts', label: `chart "${c.name}" (${c.chartType}) for ${c.entity}`, key: { kind: 'chart', entity: c.entity, name: c.name } });
   if (has('forms')) for (const f of spec.forms || []) {
     const ft = f.formType || 'Main';
@@ -1060,7 +1068,7 @@ function viewLabelHalt(blocking, { beforeAnyWrite }) {
 // it is still before any view is written; what is lost is only the guarantee that NOTHING was written yet.
 // The dry run is unaffected: it creates nothing, so no create follows its reads.
 async function preflightViewLabels(spec, provision, say) {
-  const labelViews = (spec.views || []).filter((v) => hasLabelUses(spec, v));
+  const labelViews = viewsForLabels(spec).filter((v) => hasLabelUses(spec, v));
   if (!labelViews.length) return undefined;
   if (localizedLabelLcidsInSpec(spec).length) return undefined;
   const { problems, resolved } = await checkViewFilterLabelsBeforeBuild(spec, labelViews, viewLabelReaders(spec, provision));
@@ -1082,7 +1090,7 @@ async function preflightViewLabels(spec, provision, say) {
 //
 // Returns what `viewDef` resolves values with, or null when no view names a label (nothing was read).
 async function resolveViewLabelsOrHalt(spec, provision, say, prior) {
-  const labelViews = (spec.views || []).filter((v) => hasLabelUses(spec, v));
+  const labelViews = viewsForLabels(spec).filter((v) => hasLabelUses(spec, v));
   if (!labelViews.length) return null;
   const { read, readGlobalChoice } = viewLabelReaders(spec, provision);
   const resolution = await resolveViewFilterLabels(spec, labelViews, { read, prior, readGlobalChoice });
@@ -3199,7 +3207,7 @@ async function runSdkBuildAttempt(spec, opts = {}) {
   // what is deferred onto that table: its reconciled views and forms, and its enriched default views
   // (oweTablePublish). lengths: table logical -> { table, column, asked, tried, tableId, columnId? } of a name column whose
   // length is owed.
-  const owed = { tables: new Map(), paid: false, lengths: new Map() };
+  const owed = { tables: new Map(), paid: false, lengths: new Map(), barrier: opts.publicationBarrier || createPublicationBarrier() };
   // A record this attempt was handed is a debt it has not tried to pay yet, whatever an earlier attempt did with it.
   let carriedIn = 0;
   for (const debt of Array.isArray(opts.owedLengths) ? opts.owedLengths : []) {
@@ -3213,7 +3221,7 @@ async function runSdkBuildAttempt(spec, opts = {}) {
     if ((owed.tables.size > 0 || owed.paid) && err && typeof err === 'object') {
       try {
         // Not enumerable: they ride along for the caller, never into a serialized error or the journal.
-        Object.defineProperty(err, 'owedPublishes', { value: [...owed.tables.values()], enumerable: false, configurable: true, writable: true });
+        Object.defineProperty(err, 'owedPublishes', { value: [...owed.tables].filter(([logical]) => owed.barrier.allow(logical, 'settle after a halt')).map(([, target]) => target), enumerable: false, configurable: true, writable: true });
         Object.defineProperty(err, 'owedPaid', { value: owed.paid, enumerable: false, configurable: true, writable: true });
       } catch { /* a frozen error carries nothing; the re-run saves the views again and owes their publish */ }
     }
@@ -3425,6 +3433,74 @@ async function runSdkBuildPhases(spec, opts, owed) {
   // are keyed by Dataverse logical names (a table's, a web resource's: the publisher prefix and `_`, or a system component's), by GUIDs or by
   // `entity|name` pairs, none of which can be such a member.
   const result = { ok: true, created: { entities: {}, relationships: {}, records: {}, webResources: {}, views: {}, charts: {}, forms: {}, formIds: {}, businessRules: {}, businessProcessFlows: {}, bpfBackingTables: {}, commands: {}, dashboards: Object.create(null), pages: Object.create(null), pageDeployedShas: Object.create(null), pageSourceShas: Object.create(null), ai: { appFeatures: null, summaries: {} }, roles: Object.create(null), roleGrants: {}, bpfRoleGrants: Object.create(null), app: null }, skipped: { businessRules: [], aiSummaries: [], layout: [], unauthorizedRemovals: [] } };
+  // A declared view, chart, command bar or Quick Find that ended refused or unknown is required work this run did not finish. It joins
+  // the run's incomplete list (markIncomplete, below: called only once the phases run, after it is initialised) with its code and
+  // what unlocks it, so every later artifact and phase still runs and the run then ends with the one halt that list makes.
+  // The settlement reports a refusal as `${artifactLabel}: ${code} — ${message}`, and the declared view and chart call sites below
+  // label their artifact `view <key>` / `chart <key>`. The remedy names the approval in general; the CLI flag that gives it is
+  // named too, so the maker can act on the line as printed: --authorize adopt:/overwrite:<key> for an adoption or a drift
+  // (build-model-app.js authorizationKeys), and --allow-destructive (featureCtx.authorizedDestructive) for a removal.
+  const cliApproval = (label, code) => {
+    if (/-(?:removal|empty)-not-authorized$/.test(code)) return '--allow-destructive';
+    const verb = /-adoption-not-authorized$/.test(code) ? 'adopt' : /-drift$/.test(code) ? 'overwrite' : '';
+    const at = verb ? label.indexOf(`: ${code} — `) : -1;
+    const m = at > 0 ? /^(?:view|chart) (.+)$/.exec(label.slice(0, at)) : null;
+    return m ? `--authorize ${verb}:${m[1]}` : '';
+  };
+  const featureIncomplete = (phase, label, detail = {}) => {
+    const flag = cliApproval(label, String(detail.code || ''));
+    const remedy = detail.remedy && flag ? `${detail.remedy}: ${flag}` : detail.remedy;
+    markIncomplete({ ...detail, phase, code: detail.code || 'feature-incomplete', message: remedy ? `${label} (${remedy})` : label });
+    runner.emit({ phase, status: 'error', label, n: 0, total: runner.total, detail: detail.remedy || (detail.unknownOutcome ? 'outcome unknown' : '') });
+  };
+  // What settlement scheduled for publication, drained by commitSettledPublishes.
+  const settledPublishes = [];
+  // The managed-artifacts store (bindings of declared artifacts), when the build has one.
+  const managedArtifacts = opts.managedArtifacts || null;
+  // The creation port: the build's own create port (opts.creates; the plain pass-through of lib/creates-passthrough.js when the
+  // caller brings none): fresh ids for this call, execute exactly once, nothing kept between calls. That port answers 'created'
+  // whenever execute returned, but a declared artifact's execute answers the checked push ({ outcome: 'saved'|'refused'|'unknown',
+  // code }, pushChecked), so a 'created' is read through that answer: only a saved push made the row.
+  const basePort = opts.creates || createPassthroughCreates();
+  const createPort = {
+    async run(request, execute) {
+      let checked;
+      const out = await basePort.run(request, async (ids) => {
+        checked = await execute(ids);
+        return checked;
+      });
+      if (!out || out.outcome !== 'created') return out;
+      const outcome = checked && checked.outcome === 'saved' ? 'created' : checked && checked.outcome === 'refused' ? 'refused' : 'unknown';
+      return { ...out, outcome };
+    },
+  };
+  const featureCtx = {
+    sdk: provision,
+    appUniqueName: appUniqueName(spec),
+    environmentFingerprint: opts.environmentFingerprint,
+    managed: managedArtifacts ? { lookup: (kind, key) => managedArtifacts.lookup(kind, key) } : undefined,
+    creates: createPort,
+    authorizedAdoption: opts.authorizedAdoption,
+    authorizedOverwrite: opts.authorizedOverwrite,
+    authorizedDestructive: opts.allowDestructive === true,
+    warn: opts.warn,
+  };
+  // Blocks the barrier first, then reports, then records bindings even if reporting threw, then schedules a clean
+  // result's publication (createFeatureSettlement, lib/reconcile-common.js).
+  // A declared edit the apply step made but could not settle (a push the SDK refused, or one whose outcome is unknown) stays in the
+  // workspace copy, and the CLI's workspace is durable: a plain fetch keeps local edits while the server has not moved, so the next
+  // run would read its own unsent edit as the stored state and report "no change" with nothing written. Reset that copy to the
+  // server's (as discardUnrecordedEdits does for the app) so a re-run plans against what the environment holds. Only when the apply
+  // step added the failure — a refusal at plan time made no edit — and best-effort: a reset that fails leaves the copy as it was.
+  const resetUnsettledCopy = async (kind, id, plan, r) => {
+    if (!id || typeof provision.fetchArtifact !== 'function') return;
+    const planned = (plan.refused || []).length + (plan.unknown || []).length;
+    if ((r.refused || []).length + (r.unknown || []).length <= planned) return;
+    try {
+      await provision.fetchArtifact(kind, id, { overwrite: true });
+    } catch { /* see above */ }
+  };
+  const settleFeatureResult = createFeatureSettlement({ barrier: owed.barrier, markIncomplete: featureIncomplete, settled: settledPublishes, recordBinding: managedArtifacts ? (b) => managedArtifacts.recordApplied(b) : undefined });
   // #changed-only (pages-only fast apply): seed the LIVE app id (discovered by unique name upstream) so the
   // pages phase's `pages-requires-app` guard passes WITHOUT running the app-shell phase in this invocation.
   // The full-build path never sets opts.changedOnly, so result.created.app stays null and app-shell
@@ -3487,6 +3563,8 @@ async function runSdkBuildPhases(spec, opts, owed) {
   // published (hasUnsyncedEdits).
   const publishInPhase8 = has('publish') && publish;
   const oweTablePublish = (logical, type, id, name) => {
+    if (!owed.barrier.allow(logical, name)) return;
+    owed.barrier.noteTarget(logical, [type, id]);
     const target = owed.tables.get(logical);
     if (!target) owed.tables.set(logical, [type, id, [name]]);
     else if (!(target[2] || []).includes(name)) target[2] = [...(target[2] || []), name];
@@ -3495,6 +3573,7 @@ async function runSdkBuildPhases(spec, opts, owed) {
   const reconciledTables = new Set();
   const publishReconciled = async (type, id, entityLogical, label) => {
     const logical = String(entityLogical || '').toLowerCase();
+    if (logical && !owed.barrier.allow(logical, label)) return;
     if (publishInPhase8 && logical) {
       oweTablePublish(logical, type, id, label);
       reconciledTables.add(logical);
@@ -3502,6 +3581,16 @@ async function runSdkBuildPhases(spec, opts, owed) {
     }
     reportPartialPush(await provision.publishArtifact(type, id), label, opts.warn);
   };
+  // Drain what settlement scheduled onto the build's own queues. `charts` is the charts phase's chartsToPublish;
+  // the views phase passes nothing (a chart scope cannot be settled there).
+  async function commitSettledPublishes({ charts } = {}) {
+    for (const { scope, label } of settledPublishes.splice(0)) {
+      const table = String(scope.table || '').toLowerCase();
+      if (!owed.barrier.allow(table, label)) continue;
+      if (scope.type === 'chart') charts.set(table, scope.id);
+      else if (scope.type === 'view') await publishReconciled('view', scope.id, table, label);
+    }
+  }
 
   // ...but not past the app's own publish. Live-measured: when a table's EXISTING form is saved, a PublishXml that
   // names only the app (`<appmodules>`), sent before the table's own publish, leaves the form's LABEL changes
@@ -3525,7 +3614,7 @@ async function runSdkBuildPhases(spec, opts, owed) {
   // This is the SDK's publish of the reconciled tables: publishTablesBeforeApp sends them by name, with the other tables it publishes before the
   // app, when it can, and comes here when that request is refused and when there is no raw client.
   const publishReconciledTables = async () => {
-    const targets = [...reconciledTables].map((logical) => owed.tables.get(logical)).filter(Boolean);
+    const targets = [...reconciledTables].filter((l) => owed.barrier.allow(l, 'tables published before the app')).map((logical) => owed.tables.get(logical)).filter(Boolean);
     reconciledTables.clear();
     if (!targets.length) return;
     const { failed } = await publishTargets(provision, runner, concurrency, targets, null, opts.warn);
@@ -3587,21 +3676,42 @@ async function runSdkBuildPhases(spec, opts, owed) {
   const namedBeforeApp = new Set();
   let appHolds; // what the app holds, read by the first writer that finds the app on the server: { tables, forms }, or {} when it could not be read or there was nothing to read
   let beforeApp = Promise.resolve();
+  // The tables whose Main forms this run's writes of the app added: the app holds them from then on.
+  const appAdded = new Set();
   const publishTablesBeforeApp = (existingAppId, { addedTables } = {}) => {
     const run = beforeApp.then(async () => {
       const reconciled = new Set(reconciledTables);
       const client = provision.dataverse;
-      if (!publish || !client || typeof client.post !== 'function') return publishReconciledTables();
-      const added = (typeof addedTables === 'function' && await addedTables()) || [];
-      if (!appHolds) {
-        appHolds = {};
-        if (existingAppId) {
-          const read = await readAppFormChartTables(provision, existingAppId);
-          if (read.ok) appHolds = { tables: read.tables, forms: read.forms };
-          else if (typeof opts.warn === 'function') opts.warn(describeUnreadAppComponents({ reason: read.reason, added }));
+      let added;
+      const readHoldings = async () => {
+        if (added === undefined) added = (typeof addedTables === 'function' && await addedTables()) || [];
+        if (!appHolds) {
+          appHolds = {};
+          if (existingAppId) {
+            const read = await readAppFormChartTables(provision, existingAppId);
+            if (read.ok) appHolds = { tables: read.tables, forms: read.forms };
+            else {
+              appHolds = { unread: true };
+              if (typeof opts.warn === 'function') opts.warn(describeUnreadAppComponents({ reason: read.reason, added }));
+            }
+          }
         }
+      };
+      // An app write or publish puts live the saved forms the app holds, ahead of their table's publish — which, for a
+      // table whose publish is withheld in this run (owed.barrier), would leave the forms' saved labels unpublished for
+      // good. So while a table is withheld, an app that holds, or whose write adds, a form of it is not written.
+      if (owed.barrier.active) {
+        await readHoldings();
+        const verdict = owed.barrier.checkAppWrite({ added, held: appHolds.unread ? undefined : [...(appHolds.tables || []), ...appAdded], existingApp: !!existingAppId });
+        if (!verdict.ok) throw new BuildHalt(describeWithheldApp(verdict), { phase: 'app-shell', code: 'publication-withheld', recoverable: true, retry: RETRY.NEVER });
       }
-      const wanted = preAppTables({ reconciled, charted: [...chartsToPublish.keys()], added, held: appHolds.tables });
+      if (!publish || !client || typeof client.post !== 'function') {
+        for (const logical of added || []) appAdded.add(logical);
+        return publishReconciledTables();
+      }
+      await readHoldings();
+      for (const logical of added) appAdded.add(logical);
+      const wanted = owed.barrier.allowTables(preAppTables({ reconciled, charted: [...chartsToPublish.keys()], added, held: appHolds.tables }), 'tables published before the app');
       const tables = wanted.filter((logical) => !namedBeforeApp.has(logical));
       const outcome = await publishTablesXml(client, tables);
       for (const logical of tables) namedBeforeApp.add(logical);
@@ -3738,12 +3848,19 @@ async function runSdkBuildPhases(spec, opts, owed) {
     scopes: {
       table: {
         owe: (target) => {
-          if (!publishInPhase8 || owed.paid) return false;
+          if (!publishInPhase8 || owed.paid || owed.barrier.blocks(target.id)) return false;
           oweTablePublish(String(target.id).toLowerCase(), target.artifact.type, target.artifact.id, target.reason);
           reconciledTables.add(String(target.id).toLowerCase());
           return true;
         },
-        publish: async (target) => reportPartialPush(await provision.publishArtifact(target.artifact.type, target.artifact.id), target.reasons.join(', ') || `table ${target.id}`, opts.warn),
+        publish: async (target) => {
+          const label = target.reasons.join(', ') || `table ${target.id}`;
+          // Withheld (owed.barrier): answered as a failed publish, which keeps it owed; the run reports the table once (below).
+          if (!owed.barrier.allow(String(target.id).toLowerCase(), label)) {
+            return { type: target.artifact.type, id: target.artifact.id, shipped: false, publish: { kind: 'failed', error: { code: 'publication-withheld', message: `the publish of table ${target.id} is withheld in this run` } } };
+          }
+          return reportPartialPush(await provision.publishArtifact(target.artifact.type, target.artifact.id), label, opts.warn);
+        },
       },
     },
   });
@@ -3788,7 +3905,7 @@ async function runSdkBuildPhases(spec, opts, owed) {
   //    entity (fresh -> createTable result, existing -> findTables hit).
   let dataModel = { entities: {}, globalChoiceIds: {}, statusReasonValues: {}, columns: {}, relationships: [], lookupLabels: {} };
   if (has('data-model')) {
-    dataModel = await provisionDataModel({ sdk, provision, runner, spec, apply, languageCode: opts.languageCode, warn: opts.warn, provisionedLanguages: opts.provisionedLanguages, preResolvedLanguageCode: opts.preResolvedLanguageCode, reconcileLookupLabels: true, owedLengths: owed.lengths, dateBehaviorPreflight: true, authorizedDestructive: opts.authorizedDestructive });
+    dataModel = await provisionDataModel({ sdk, provision, runner, spec, apply, languageCode: opts.languageCode, warn: opts.warn, provisionedLanguages: opts.provisionedLanguages, preResolvedLanguageCode: opts.preResolvedLanguageCode, reconcileLookupLabels: true, owedLengths: owed.lengths, dateBehaviorPreflight: true, authorizedDestructive: opts.authorizedDestructive, publicationBarrier: owed.barrier });
     Object.assign(result.created.entities, dataModel.entities);
   }
   // The field security profiles, after the columns are secured and before any sample data (provisionFieldSecurityProfiles). A spec
@@ -5923,6 +6040,22 @@ async function runSdkBuildPhases(spec, opts, owed) {
       const existingId = await resolveExistingFormId(provision, def);
       if (existingId) return await reconcileForm(existingId, def);
     } else if (type === 'view') {
+      if (meta && meta.declared) {
+        // A declared view (views[].reconcile "declared", lib/view-reconcile.js) is resolved, created through the creation port and
+        // edited by its helper; it never falls through to the create below, which would bypass the port.
+        const plan = await planViewReconcile({ view: meta.specView, sdk: provision, resolveValue: meta.resolveValue, primaryName: meta.primaryName }, featureCtx);
+        const r = await applyViewReconcile(plan, { sdk: provision }, featureCtx);
+        const { ok } = settleFeatureResult('views', `view ${plan.key}`, r);
+        await resetUnsettledCopy('view', plan.viewId, plan, r);
+        const created = r.saved.find((s) => s.created);
+        // Before the !ok check: a created row exists even when its read-back failed, so it joins the solution. That is not a
+        // publication: only a clean settlement schedules one.
+        if (created) await provision.addSolutionComponent({ componentId: created.id, componentType: COMPONENT_TYPE.view, solutionUniqueName: sol.uniqueName });
+        if (!ok) return null;
+        if (created) noteSaved(def.entityLogicalName, `view ${def.name}`);
+        await commitSettledPublishes();
+        return created ? created.id : plan.viewId;
+      }
       const existingId = await provision.findArtifact('view', { name: def.name, entity: def.entityLogicalName });
       if (existingId) return await reconcileView(existingId, def, !!(meta && meta.authoredQuery));
     }
@@ -5949,11 +6082,31 @@ async function runSdkBuildPhases(spec, opts, owed) {
   // 4. Views (independent -> parallel).
   if (has('views')) {
     const labelResolution = await resolveViewLabelsOrHalt(spec, provision, sayViewLabel, preflightResolved);
-    const ids = await runner.mapLimit(spec.views || [], concurrency, (v) => buildArtifact('view', viewDef(spec, v, labelResolution), { authoredQuery: !!((v.filters || []).length || (v.sort || []).length) }));
+    // A declared view's filter values resolve through the same labels (a joined filter's on its joined table).
+    const resolveValue = (table, attr, value) => resolveFilterValue(spec, table, attr, value, labelResolution);
+    const ids = await runner.mapLimit(spec.views || [], concurrency, (v) => buildArtifact('view', viewDef(spec, v, labelResolution), isDeclaredView(v)
+      ? { declared: true, specView: v, resolveValue, primaryName: primaryNameOf(spec, String(v.entity).toLowerCase()) }
+      : { authoredQuery: !!((v.filters || []).length || (v.sort || []).length) }));
     // Key by `entity|name` (matching identityOf.view + the snapshot canonical id). View names are unique
     // only PER ENTITY, so a name-only key lets a same-named view on another entity OVERWRITE this id and
     // cross-wire dashboards / sub-grids / AI-summaries to the wrong entity's view.
     (spec.views || []).forEach((v, i) => { result.created.views[`${v.entity.toLowerCase()}|${v.name}`] = ids[i]; });
+  }
+
+  // 4a. Quick Find (entities[].quickFind, lib/quick-find.js): the columns the search box matches on are the table's Quick Find
+  // view's find columns. A spec without quickFind sends nothing here.
+  if (has('views')) {
+    for (const e of spec.entities || []) {
+      if (!e || !e.quickFind) continue;
+      const name = e.schemaName.toLowerCase();
+      await runner.run('views', `Quick Find for ${name}`, async () => {
+        const plan = await planQuickFind({ entity: name, quickFind: e.quickFind, sdk: provision }, featureCtx);
+        const r = await applyQuickFind(plan, { sdk: provision }, featureCtx);
+        settleFeatureResult('views', `Quick Find on ${name}`, r);
+        await resetUnsettledCopy('view', plan.viewId, plan, r);
+        await commitSettledPublishes();
+      });
+    }
   }
 
   // 4b. Enrich the auto-generated default "Active/Inactive <Entity>" system views (Dataverse ships
@@ -5989,7 +6142,8 @@ async function runSdkBuildPhases(spec, opts, owed) {
       const cols = defaultViewColumns(spec, e);
       await runner.run('views', `enrich default views for ${logical}`, async () => {
         if (!deferDefaultViewPublish) {
-          const { updated } = await provision.enrichDefaultViews(logical, cols, { excludeViewIds: authorViewIds });
+          const held = !owed.barrier.allow(logical, `default views of ${logical}`);
+          const { updated } = await provision.enrichDefaultViews(logical, cols, held ? { excludeViewIds: authorViewIds, publish: false } : { excludeViewIds: authorViewIds });
           return updated;
         }
         try {
@@ -6030,6 +6184,21 @@ async function runSdkBuildPhases(spec, opts, owed) {
     const charts = spec.charts || [];
     const ids = await runner.mapLimit(charts, concurrency, async (c) => {
       const def = chartDef(spec, c);
+      if (isDeclaredChart(c)) {
+        return runner.run('charts', `chart "${def.name}"`, async () => {
+          const plan = await planChartReconcile({ chart: c, sdk: provision, chartArtifact: def }, featureCtx);
+          const r = await applyChartReconcile(plan, { sdk: provision }, featureCtx);
+          const { ok } = settleFeatureResult('charts', `chart ${plan.key}`, r);
+          await resetUnsettledCopy('chart', plan.chartId, plan, r);
+          const created = r.saved.find((s) => s.created);
+          // As for a declared view: a created row joins the solution even when the result is not clean.
+          if (created) await provision.addSolutionComponent({ componentId: created.id, componentType: COMPONENT_TYPE.chart, solutionUniqueName: sol.uniqueName });
+          if (!ok) return null;
+          if (created) noteSaved(def.entityLogicalName, `chart ${def.name}`);
+          await commitSettledPublishes({ charts: chartsToPublish });
+          return created ? created.id : plan.chartId;
+        });
+      }
       const existingId = await provision.findArtifact('chart', { name: def.name, entity: def.entityLogicalName });
       if (existingId) {
         // The chart DEFINITION is still not reconciled — but its description is (#496), because a
@@ -6757,6 +6926,16 @@ async function runSdkBuildPhases(spec, opts, owed) {
 
   if (has('commands')) {
     for (const [entityLogical, cmds] of Object.entries(commandsByEntity(spec))) {
+      if (isManagedEntity(cmds)) {
+        // A keyed command bar (commands[].key, lib/command-reconcile.js): one fetch, a push only when something changed.
+        await runner.run('commands', `managed command bar for ${entityLogical}`, async () => {
+          const plan = await planCommandReconcile({ entity: entityLogical, commands: cmds, sdk: provision, webResources: result.created.webResources, defaultParameters: COMMAND_DEFAULT_PARAMETERS }, featureCtx);
+          const r = await applyCommandReconcile(plan, { sdk: provision }, featureCtx);
+          const { ok } = settleFeatureResult('commands', `command bar ${entityLogical}`, r);
+          if (ok && plan.live) result.created.commands[entityLogical] = plan.live.id;
+        });
+        continue;
+      }
       // Additive discover-reconcile (design §14): one command artifact per entity (identity = entity).
       // Re-pushing the appaction on every rebuild risks a duplicate command bar on the entity, so
       // discover-then-skip like charts/dashboards. Discovery is `resolveArtifact('command', { entity })`
@@ -8638,7 +8817,7 @@ async function runSdkBuildPhases(spec, opts, owed) {
   //    publish deferred to this phase (`publishInPhase8`) names its table in `owed.tables`, read below.
   if (publishInPhase8) {
     await runner.run('publish', 'publish customizations', async () => {
-      const seen = new Set();
+      const seen = new Set(owed.barrier.blockedTables());
       const perEntity = []; // [type, id, names?] — first artifact found per entity
       // The table's target carries the names of what its one publish ships: what was deferred onto it (its reconciled views
       // and forms, its enriched default views — oweTablePublish), then what this run created or wrote there (savedOnTable,
@@ -8677,11 +8856,22 @@ async function runSdkBuildPhases(spec, opts, owed) {
       const appTarget = result.created.app ? ['app', result.created.app, `app ${(spec.app && spec.app.name) || result.created.app}`] : null;
       // The app is published in the same envelope as the tables the build has artifacts of, so it is not ahead of them. It also ships the forms of tables the build did not touch, which the
       // request before the app publishes — and a run can reach this phase without the app step having made it (a run that does not write the app but publishes it): a publish alone adds no form.
-      if (appTarget) await publishTablesBeforeApp(result.created.app);
+      // An app that holds, or whose write adds, a form of a table whose publish is withheld (owed.barrier) is not published: it is
+      // reported as incomplete and the phase publishes the rest without it.
+      let appWithheld = false;
+      if (appTarget) {
+        try {
+          await publishTablesBeforeApp(result.created.app);
+        } catch (err) {
+          if (!(err && err.code === 'publication-withheld')) throw err;
+          appWithheld = true;
+          markIncomplete({ phase: 'publish', code: err.code, message: err.message });
+        }
+      }
       // A throw may come after the app's PublishXml reached the server (a lost answer): the app's exact proof is void.
       // A throw from a table publish before the app's was sent un-proves it too — conservative: the re-run proves it again.
-      const publishedTargets = await publishTargets(provision, runner, concurrency, perEntity, appTarget, opts.warn).catch(async (error) => {
-        if (appTarget) await appPublication.noteAppPublication(result.created.app, { error });
+      const publishedTargets = await publishTargets(provision, runner, concurrency, perEntity, appWithheld ? null : appTarget, opts.warn).catch(async (error) => {
+        if (appTarget && !appWithheld) await appPublication.noteAppPublication(result.created.app, { error });
         throw error;
       });
       appPublishedByPublishPhase = publishedTargets.appPublished;
@@ -8690,11 +8880,13 @@ async function runSdkBuildPhases(spec, opts, owed) {
       // (oweTablePublish put it in owed.tables), so a deferred table not in `failed` was published.
       const refusedTables = new Map(publishedTargets.failed.map(({ target, error }) => [tableOfTarget.get(target), error]));
       for (const logical of appPublication.deferred('table')) {
-        appPublication.noteScopePublished('table', logical, refusedTables.has(logical) ? { error: refusedTables.get(logical) } : {});
+        // A table whose publish is withheld (owed.barrier) was left out of perEntity: it was not published.
+        const withheld = owed.barrier.blocks(logical) ? { code: 'publication-withheld', message: `the publish of table ${logical} is withheld in this run` } : null;
+        appPublication.noteScopePublished('table', logical, withheld ? { error: withheld } : refusedTables.has(logical) ? { error: refusedTables.get(logical) } : {});
       }
       // Every answer, not only a confirmed one: a failed-by-value publish (e.g. CONNECTION_ERROR after the server ran it)
       // un-proves an exact app; only a WITHHELD / CONFLICT refusal keeps its proof (lib/app-publication-policy.js).
-      if (appTarget) await appPublication.noteAppPublication(result.created.app, { answer: publishedTargets.appResult });
+      if (appTarget && !appWithheld) await appPublication.noteAppPublication(result.created.app, { answer: publishedTargets.appResult });
     });
     // Paid. A target that failed to publish was reported above, and the build is idempotent, so its
     // re-run publishes it; a halt from here on owes nothing more, nor does an earlier attempt's.
@@ -8843,10 +9035,12 @@ async function runSdkBuildPhases(spec, opts, owed) {
   // is published once. A withheld/conflicting exact publish stays owed; the change is saved; the build is incomplete.
   const flushed = await appPublication.flush();
   // An app row is { id, code }; a scope row (a table) is { kind, id, code, reasons }.
-  for (const { kind = 'app', id, code } of [...flushed.withheld, ...flushed.failed]) markIncomplete({ phase: 'publish', code, message: `${kind} ${id}: its publication is owed (${code}); the change is saved, re-run once the cause is cleared` });
+  for (const { kind = 'app', id, code } of [...flushed.withheld, ...flushed.failed]) if (!(kind === 'table' && code === 'publication-withheld')) markIncomplete({ phase: 'publish', code, message: `${kind} ${id}: its publication is owed (${code}); the change is saved, re-run once the cause is cleared` });
   // Exact obligations not proven from the published layer (APP_MAIN_FORMS_NOT_EXACT) and queued scopes nothing can
   // publish (PUBLICATION_SCOPE_UNBRIDGED).
   for (const entry of appPublication.unsettled()) markIncomplete({ phase: 'publish', code: entry.code, message: entry.reason });
+  // Tables whose publication was withheld (owed.barrier), each named once with what blocked it.
+  for (const w of owed.barrier.withheld()) markIncomplete({ phase: 'publish', code: 'publication-withheld', message: describeWithheld(w), table: w.table, blockedBy: w.blockedBy, skipped: w.skipped });
   if (incomplete.length) {
     result.incomplete = incomplete;
     const halt = new BuildHalt(`the build ran every phase but did not finish what the spec asks for: ${incomplete.map((entry) => entry.message).join('; ')}`,
@@ -8858,4 +9052,4 @@ async function runSdkBuildPhases(spec, opts, owed) {
   return result;
 }
 
-module.exports = { runSdkBuild, publishTargets, partialEnrichment, settleOwedPublishes, collectOwedPublishes, settleOwedLengths, normalizeFormId, planFor, annotateLivePlan, previewTargetOf, previewItemsForPlan, resolvePhases, PHASES, BuildHalt, SDK_COLUMN_TYPE, viewDef, defaultViewColumns, subgridLabel, enrichesDefaultViews, dashboardsInSolution, findDashboardsByName, findPinnedDashboard, artifactIdentityQuery, resolveExistingFormId, FORM_TYPE_CODE, chartDef, dashboardTileOpts, dashboardComponent, compileFormIntent, formFieldLogicals, appDef, appUniqueName, applyAppAiDescription, haltOnUnpublishedAppHeader, pushAppHeader, commandsByEntity, commandDef, businessRuleDef, businessRuleFilter, bpfDef, bpfFilter, webResourceOpts, webResourceContentState, WEB_RESOURCE_KINDS, FORM_EVENTS, acquireAppPagesLease, personaRoleSpecFor, resolveRoleBusinessUnit, roleBuClause, roleGrantLabel, resolveRoleGrantTarget, existingAppSitemapIsWritten, pagesFirstRule, applyAppHeader, applyAppHeaderText, warnAppIconNotApplied, inspectBpfStages, applyBpfStages, refuseUnpushedAppCopy, assertAuthorizedSitemapRewrite, reconciledPublishHalt };
+module.exports = { runSdkBuild, publishTargets, partialEnrichment, settleOwedPublishes, collectOwedPublishes, settleOwedLengths, normalizeFormId, planFor, annotateLivePlan, previewTargetOf, previewItemsForPlan, resolvePhases, PHASES, BuildHalt, SDK_COLUMN_TYPE, viewDef, defaultViewColumns, subgridLabel, enrichesDefaultViews, dashboardsInSolution, findDashboardsByName, findPinnedDashboard, artifactIdentityQuery, resolveExistingFormId, FORM_TYPE_CODE, chartDef, dashboardTileOpts, dashboardComponent, compileFormIntent, formFieldLogicals, appDef, appUniqueName, applyAppAiDescription, haltOnUnpublishedAppHeader, pushAppHeader, commandsByEntity, commandDef, businessRuleDef, businessRuleFilter, bpfDef, bpfFilter, webResourceOpts, webResourceContentState, WEB_RESOURCE_KINDS, FORM_EVENTS, acquireAppPagesLease, personaRoleSpecFor, resolveRoleBusinessUnit, roleBuClause, roleGrantLabel, resolveRoleGrantTarget, existingAppSitemapIsWritten, pagesFirstRule, applyAppHeader, applyAppHeaderText, warnAppIconNotApplied, inspectBpfStages, applyBpfStages, refuseUnpushedAppCopy, assertAuthorizedSitemapRewrite, reconciledPublishHalt, COMMAND_DEFAULT_PARAMETERS };

@@ -89,9 +89,9 @@ function validateProvisionInput(input) {
     // rule alone. This input is documented as "App Spec format", so entities copied out of an
     // app-spec.json must keep validating.
     //
-    // That means the 5 keys this narrower path does not consume — vectorIcon, iconDescription, icon,
-    // existing, enrichDefaultViews — are ACCEPTED and ignored here (it provisions the data model
-    // only; it writes no icons and enriches no views). That is a known subset boundary, not the
+    // That means the 6 keys this narrower path does not consume — vectorIcon, iconDescription, icon,
+    // existing, enrichDefaultViews, quickFind — are ACCEPTED and ignored here (it provisions the data
+    // model only; it writes no icons, enriches no views and sets no Quick Find view). That is a known subset boundary, not the
     // unknown-key hole #537 is about, and rejecting them would break the copy-paste compatibility
     // the format promises.
     // Enumeration is guarded for the same reason as validateAppSpec's: the object comes from the

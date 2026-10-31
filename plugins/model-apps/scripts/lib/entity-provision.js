@@ -2679,7 +2679,7 @@ async function settleOwedLengths({ sdk, provision, spec, owed, warn, sleep } = {
 // `owed` is the Map provisionDataModel keeps (see there): this attempt's tables whose length is to be set, and those an earlier attempt
 // left unset. `carriedIn` is the set of the second kind as the phase found them; `waitingKeys` collects the alternate keys that wait for
 // a length step, for createWaitingKeys to make once the steps have run.
-async function provisionDataModelSteps({ sdk, provision, runner, spec, apply, languageCode, warn, provisionedLanguages, preResolvedLanguageCode, sleep, reconcileLookupLabels = false, inlineColumns = true, dateBehaviorPreflight = false, authorizedDestructive }, { owed, carriedIn, waitingKeys, waitingStatuses, lag }) {
+async function provisionDataModelSteps({ sdk, provision, runner, spec, apply, languageCode, warn, provisionedLanguages, preResolvedLanguageCode, sleep, reconcileLookupLabels = false, inlineColumns = true, dateBehaviorPreflight = false, authorizedDestructive, publicationBarrier }, { owed, carriedIn, waitingKeys, waitingStatuses, lag }) {
   // `lookupLabels` records the label each spec lookup column carries once this phase is done
   // (`<referencing>|<lookup logical>` -> { label }), so a later phase that repairs something derived
   // from it — an existing form's cell label — repairs it to what the column now says.
@@ -3316,7 +3316,7 @@ async function provisionDataModelSteps({ sdk, provision, runner, spec, apply, la
   // A rebuild repairs a lookup column an older build labelled with its old default (opt-in: only the app
   // build budgets the steps this emits — see planFor).
   if (reconcileLookupLabels) {
-    await reconcileLookupLabelsPass({ spec, sdk, provision, runner, warn, languageCode: resolvedLanguageCode, createdLookups, readParentLabel, reusedTables, result });
+    await reconcileLookupLabelsPass({ spec, sdk, provision, runner, warn, languageCode: resolvedLanguageCode, createdLookups, readParentLabel, reusedTables, result, publicationBarrier });
   }
 
   // 2d. Table flags (search, change tracking, duplicate detection), after schema and relationships, only for a table that declares
@@ -3338,7 +3338,8 @@ async function provisionDataModelSteps({ sdk, provision, runner, spec, apply, la
 
   // A changed column or table definition reaches model-driven apps only once its table is published (see publishRelabelledTables, which
   // this follows: one envelope, best-effort, a warning that says how to show the change). Only tables a schema-feature change altered.
-  if (changedDefinitions.size) await publishChangedDefinitions(provision && provision.dataverse, [...changedDefinitions], warn);
+  const defs = publicationBarrier ? publicationBarrier.allowTables([...changedDefinitions], 'definition change') : [...changedDefinitions];
+  if (defs.length) await publishChangedDefinitions(provision && provision.dataverse, defs, warn);
 
   return result;
 }
@@ -3394,7 +3395,7 @@ function relationshipsInCreateOrder(spec) {
 // Exactly one event per lookup the build owns, so the [n/total] the plan promised holds: planFor budgets
 // the same predicate (lookupsWithDefaultLabel). The labels are read once per CHILD TABLE, not once per
 // lookup, and only for the lookups this run did not just create.
-async function reconcileLookupLabelsPass({ spec, sdk, provision, runner, warn, languageCode, createdLookups, readParentLabel, reusedTables, result }) {
+async function reconcileLookupLabelsPass({ spec, sdk, provision, runner, warn, languageCode, createdLookups, readParentLabel, reusedTables, result, publicationBarrier }) {
   const client = provision && provision.dataverse;
   const owned = lookupsWithDefaultLabel(spec);
   // child -> the lookup columns of it that need reading, so one request answers for all of them.
@@ -3467,7 +3468,8 @@ async function reconcileLookupLabelsPass({ spec, sdk, provision, runner, warn, l
       relabelled.add(child);
     }, warn, `could not relabel lookup '${child}.${lookupLogical}' from its old default "${current}" to "${next}" — the rest of the build continues`);
   }
-  if (relabelled.size) await publishRelabelledTables(client, [...relabelled], warn);
+  const tables = publicationBarrier ? publicationBarrier.allowTables([...relabelled], 'lookup label repair') : [...relabelled];
+  if (tables.length) await publishRelabelledTables(client, tables, warn);
 }
 
 // A column's label is part of its table's definition, and a table or column definition change reaches model-driven apps

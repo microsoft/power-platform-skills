@@ -8,7 +8,7 @@ const { normalizeSpecShape } = require('./spec-shape.js');
 const { resolveSurfaces, unresolvedSurfaceMessage } = require('./surface-resolver.js');
 const { nearestName } = require('./nearest-name.js');
 const { isAppSourcePath } = require('./app-source-path.js');
-const { labelLintWarnings } = require('./view-filter-labels.js');
+const { labelLintWarnings, viewsForLabels } = require('./view-filter-labels.js');
 const { navigationVerdict } = require('./app-navigation.js');
 const { noPersonasWarning, uncoveredTables, uncoveredTablesWarning } = require('./app-access.js');
 
@@ -473,12 +473,17 @@ function lintAppSpec(spec) {
     if (ve && v.name) {
       const plural = labelText(ve.pluralName, spec && spec.languageCode) || derivedPluralName(ve, spec && spec.languageCode);
       if (lc(v.name) === `active ${lc(plural)}` || lc(v.name) === `inactive ${lc(plural)}`) {
-        W(`View '${v.name}' has the same name as ${ve.schemaName}'s stock default view — it will MERGE onto that default (columns are unioned and the stock "Created On" is kept, but its filters/sort are ignored). Use a distinct name to author a separate view.`);
+        // A declared view (reconcile: "declared") is not merged: it replaces the stock view's columns, filters and sort. But the
+        // stock view exists on every table, new ones included, and this spec did not create it, so every edit is an adoption
+        // the build refuses until the maker names it (lib/view-reconcile.js, view-adoption-not-authorized).
+        if (v.reconcile === 'declared') W(`View '${v.name}' has the same name as ${ve.schemaName}'s stock default view, which exists on every table, new ones included — as a declared view, a build changes it only with --authorize adopt:${lc(v.entity)}/${v.name}. Use a distinct name to author a separate view.`);
+        else W(`View '${v.name}' has the same name as ${ve.schemaName}'s stock default view — it will MERGE onto that default (columns are unioned and the stock "Created On" is kept, but its filters/sort are ignored). Use a distinct name to author a separate view.`);
       }
     }
     // ADO 6691114: offline, a label can only be checked against what the spec declares. Say when one will
     // be checked against the environment at build time instead, so the author is not surprised by the halt.
-    for (const w of labelLintWarnings(spec, v)) W(w);
+    // A declared view's joined filters are options of the JOINED table, so they are checked there, as the build reads them.
+    for (const lv of viewsForLabels({ views: [v] })) for (const w of labelLintWarnings(spec, lv)) W(w);
     for (const f of v.filters || []) {
       if (!f.attr) { E(`View '${v.name}' has a filter without an attr`); continue; }
       const op = f.op || 'eq';

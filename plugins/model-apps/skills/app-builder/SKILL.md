@@ -118,6 +118,21 @@ prod-ready** app; don't under-build (a bare table list) or over-build (surfaces 
   change an existing column's date behaviour or turn duplicate detection off unasked: both need
   `--authorize`. All need `minimumPluginVersion: "2.21.0"` — see
   [`references/app-spec-schema-advanced.md`](../../references/app-spec-schema-advanced.md).
+- **Declared views, charts and search columns** (`minimumPluginVersion: "2.21.0"`) — write
+  `reconcile: "declared"` on each view or chart you author for a **new** app, and, when editing, on the
+  one existing view or chart the maker asks to change: a rebuild then applies its columns, filters, sort
+  and joins (`linkEntities`) instead of only adding columns. Never set `title` on a new declared chart,
+  and give a declared view its own name — not the stock `Active <plural>` or `Inactive <plural>`, which
+  every table already has, so changing one is an adoption.
+  For a new table you create, propose `entities[].quickFind.findColumns` (the primary name plus what a
+  user types in the search box: a number, an email, a code) and confirm it with the maker; on an
+  existing table, only when the maker names what search should match. A change to a view or chart that
+  already exists stops the build with nothing written and names its approval
+  (`--authorize adopt:<table>/<name>`, `overwrite:` for changes made elsewhere, `--allow-destructive`
+  to remove columns): explain it and let the maker choose; never edit the spec to avoid it. Never write
+  `reconcile` on forms, dashboards, web resources, business rules or flows, and never write a command
+  `key` (keyed command bars are refused in this version). Leave a downloaded or older spec without
+  these fields as it is — see the advanced reference.
 - **AI-first features** (admin-gated) — form-fill assist, natural-language grid/view search, NL chart
   / AI data visualization, M365 Copilot (opt-in); per-table Copilot row summaries (Insight Cards)
   with tailored prompts, auto-selected for good-candidate tables

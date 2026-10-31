@@ -588,3 +588,41 @@ it, a download makes the reads it always made. A spec that carries any of these 
 reports what it could not read as unverified, never as a pass.
 
 **Not yet supported** (tracked follow-up): access teams / hierarchy security.
+
+## views[].reconcile · charts[].reconcile · entities[].quickFind (optional — declared views and charts, Quick Find)
+
+Requires `minimumPluginVersion: "2.21.0"`. A spec without these fields builds exactly as before: a view
+or chart without `reconcile` is created when missing and, on a rebuild, an existing view only gains the
+spec's new columns.
+
+```jsonc
+{ "entity": "new_ticket", "name": "Open Tickets", "reconcile": "declared",
+  "columns": ["new_name", { "name": "name", "relatedEntity": "acct", "width": 150 }],
+  "linkEntities": [{ "name": "account", "from": "accountid", "to": "new_accountid", "alias": "acct", "linkType": "outer" }],
+  "sort": [{ "attr": "new_name", "dir": "asc" }] }
+```
+
+- **`views[].reconcile: "declared"`** — the build makes the view match the spec: the columns in the
+  declared order (an object column names its join in `relatedEntity`), the base filter, sort, joins
+  (`linkEntities[]`: `name`, `from`, `to`, optional `alias`, `linkType` `inner`/`outer` and `filters`)
+  and the description when set. What the spec does not declare (cell options, the Quick Find filter,
+  other joins) is kept. `viewId` pins the view to edit in one environment. A new declared view is
+  created and published like any other view. The stock `Active <plural>` and `Inactive <plural>` views
+  exist on every table, new ones included, so declaring one of them is an adoption (see Approvals).
+- **`charts[].reconcile: "declared"`** — the chart type, category, series and description follow the
+  spec. `title` is written only to a chart whose stored layout already has a title; a new chart cannot
+  store one, so a declared `title` on a new chart is refused (`chart-title-not-stored`).
+- **`entities[].quickFind: { "findColumns": [...] }`** — the columns the table's search box matches on
+  (its default Quick Find view). Distinct logical names; an empty list needs `--allow-destructive`. It
+  does not need `searchEnabled` or change tracking.
+
+**Approvals.** A view or chart that already exists and that this spec has not created in this run is
+shown as an adoption: the build leaves it unchanged, builds the rest, and then stops naming the key —
+`--authorize adopt:<table>/<name>` (the table in lower case, the name exactly as in the spec).
+`--authorize overwrite:<table>/<name>` approves replacing changes made elsewhere, and
+`--allow-destructive` approves removing columns. A key that names no declared view or chart stops the
+build. **Publishing.** A table is published only when every declared change on it succeeded: when one
+fails, the build reports the table as withheld, publishes the other tables, and exits non-zero.
+
+`reconcile` on a form, dashboard, web resource, business rule or flow is a validation error, and a
+command bar with `commands[].key` is refused (`managed-binding-port-unavailable`) in this version.

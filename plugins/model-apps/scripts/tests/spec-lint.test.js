@@ -273,6 +273,18 @@ test('a view named like the stock default ("Active <Plural>") WARNS about the me
   );
 });
 
+test('a DECLARED view named like the stock default warns that editing it is an adoption, not a merge', () => {
+  const s = base();
+  s.minimumPluginVersion = '2.21.0';
+  s.views = [{ entity: 'new_ticket', name: 'Active Tickets', reconcile: 'declared', columns: ['new_name', 'new_priority'], activeOnly: true }];
+  const r = lintAppSpec(s);
+  assert.strictEqual(r.ok, true, JSON.stringify(r.errors));
+  const hits = r.warnings.filter((w) => /Active Tickets/.test(w) && /stock default view/.test(w));
+  assert.strictEqual(hits.length, 1, JSON.stringify(r.warnings));
+  assert.match(hits[0], /--authorize adopt:new_ticket\/Active Tickets/);
+  assert.doesNotMatch(hits[0], /filters\/sort are ignored/);
+});
+
 test('a view with a DISTINCT name does NOT warn about a stock-default collision', () => {
   const s = base();
   s.views = [{ entity: 'new_ticket', name: 'Open Tickets', columns: ['new_name', 'new_priority'], activeOnly: true }];

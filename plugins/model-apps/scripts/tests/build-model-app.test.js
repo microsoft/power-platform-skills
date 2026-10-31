@@ -1120,6 +1120,25 @@ test('--authorize: each repeated key is read, matched case-insensitively, and ke
   }
 });
 
+test('--authorize adopt:/overwrite: approve exactly the declared view or chart they name, in separate sets', () => {
+  const { authorizationKeys } = require(path.join(__dirname, '..', 'build-model-app.js'));
+  const spec = {
+    entities: [{ schemaName: 'new_Ticket', columns: [{ schemaName: 'new_Kind', type: 'Choice', options: ['A', 'B'] }] }],
+    views: [{ entity: 'new_Ticket', name: 'Open / Mine', reconcile: 'declared', columns: ['new_name'] }, { entity: 'new_ticket', name: 'Legacy', columns: ['new_name'] }],
+    charts: [{ entity: 'new_ticket', name: 'By Kind', chartType: 'Pie', groupBy: 'new_kind', reconcile: 'declared' }],
+  };
+  const ok = authorizationKeys(['--authorize', 'adopt:NEW_TICKET/Open / Mine', '--authorize=overwrite:new_ticket/By Kind'], spec);
+  assert.strictEqual(ok.error, null);
+  assert.deepStrictEqual([...ok.adopt], ['new_ticket/Open / Mine']);
+  assert.deepStrictEqual([...ok.overwrite], ['new_ticket/By Kind']);
+  assert.deepStrictEqual([...ok.keys], [], 'an artifact approval is not a schema consent');
+  for (const key of ['adopt:new_ticket/Legacy', 'overwrite:new_ticket/by kind', 'adopt:new_ticket/Missing']) {
+    const r = authorizationKeys(['--authorize', key], spec);
+    assert.match(r.error, /approves an artifact the spec does not declare/, key);
+    assert.strictEqual(r.adopt.size + r.overwrite.size, 0, key);
+  }
+});
+
 test('--authorize: a key the spec does not declare is refused before anything runs', async () => {
   const { loadCli } = require('./helpers/cli-harness.js');
   const dir = fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'authorize-'));
@@ -2013,7 +2032,7 @@ test('makeSdk\u2019s return shape and main\u2019s destructure stay in agreement'
 test('the build verifies dashboards through makeSdk\u2019s isolated reader, sharing the build\u2019s client', () => {
   const src = fs.readFileSync(path.join(__dirname, '..', 'build-model-app.js'), 'utf8');
   const body = src.slice(src.indexOf('async function makeSdk'), src.indexOf('return { sdk, provisionSdk'));
-  assert.match(body, /const httpClient = createAzHttpClient\(env, \{ throttle, sendOnce: isTranslationExport \}\);/, 'one client, made with the run\u2019s throttle budget, that sends a translation export once');
+  assert.match(body, /const httpClient = createAzHttpClient\(env, \{ throttle, sendOnce: isTranslationExport, \.\.\.\(publicationBarrier \? \{ request: publicationBarrier\.gateRequest\(\) \} : \{\}\) \}\);/, 'one client, made with the run\u2019s throttle budget, that sends a translation export once and checks every publish at the publication barrier\u2019s send gate');
   assert.match(body, /isolatedReaderFor\(env, \{ httpClient \}\)/, 'the reader is made around the build\u2019s own client');
   const wiring = src.slice(src.indexOf('verify: async (s, verifyOpts) =>'));
   assert.match(wiring.split(/\r?\n/).find((l) => /verifySpec\(/.test(l)), /isolatedReader \}/, 'verify takes the reader makeSdk returned');

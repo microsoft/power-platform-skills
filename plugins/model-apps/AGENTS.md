@@ -2803,6 +2803,48 @@ build pipeline*. **Upcoming:** shippable-defaults provisioning (security role / 
 quick-create table flag now ships via `entities[].quickCreate` / an authored `QuickCreate` form —
 auto-generating the Quick Create form's field layout is the remaining follow-up).
 
+### Declared reconciliation
+
+`views[].reconcile: "declared"`, `charts[].reconcile: "declared"` and `entities[].quickFind` (field
+reference: `references/app-spec-schema-advanced.md`) are planned and applied by `lib/view-reconcile.js`,
+`lib/chart-reconcile.js` and `lib/quick-find.js`; `lib/sdk-build.js` calls them from the views and
+charts phases. A spec that uses none of them takes the legacy paths unchanged. What each owns:
+
+- **View**: the columns (joined-table columns included), base filter, sort, joins and description.
+  The rest round-trips through the SDK's lossless bags.
+- **Chart**: chart type, category, series and description; the title only where the stored layout
+  already has a title element.
+- **Quick Find**: the find columns of the table's one default Quick Find view (`queryType` 4).
+- **Command bar** (`commands[].key`, `lib/command-reconcile.js`): needs the managed-binding store, which
+  the build does not provide yet, so a keyed bar is refused (`managed-binding-port-unavailable`) before
+  anything is written.
+
+Every result is settled the same way (`createFeatureSettlement`, `lib/reconcile-common.js`): a refusal or
+an unknown outcome blocks the tables it saved or may have saved on the run-wide publication barrier
+(`lib/publication-barrier.js`), is reported with its remedy, and the run ends with one halt (non-zero)
+after the last phase. A blocked table is published by no later request in the run; the other tables
+still are. New views and charts are created through the creation port (`opts.creates`, by default
+`lib/creates-passthrough.js`). When an apply's write was refused or its outcome is unknown, the
+workspace copy of that view or chart is reset to the server's, so a re-run plans against what the
+environment holds.
+
+Refusal codes and remedies (`remedyFor`; the build adds the CLI flag that gives the approval):
+
+| Remedy | Codes |
+| --- | --- |
+| Adoption approval: `--authorize adopt:<table>/<name>` | `view-adoption-not-authorized`, `chart-adoption-not-authorized` |
+| Overwrite approval: `--authorize overwrite:<table>/<name>` | `view-drift`, `chart-drift`, `command-drift` |
+| Destructive approval: `--allow-destructive` | `view-columns-removal-not-authorized`, `quick-find-empty-not-authorized` |
+| Repair and rerun | every other code: `*-spec-invalid`, `*-lookup-unreadable`, `*-unreadable`, `*-name-ambiguous`, `*-bound-row-missing`, `*-binding-mismatch`, `*-rejected`, `*-write-unknown`, `*-created-unreadable`, `view-pinned-not-found`, `view-pinned-wrong-table`, `view-filter-unrepresentable`, `view-related-column-unrepresentable`, `chart-shape-unsupported`, `chart-create-artifact-missing`, `chart-title-not-stored`, `chart-title-unverified`, `quick-find-list-incomplete`, `quick-find-view-not-found`, `quick-find-view-ambiguous`, `quick-find-filter-unsupported`, `quick-find-views-unreadable`, `command-immutable-location`, `command-immutable-type`, `command-web-resource-missing`, `creation-port-unavailable`, `creation-adopted-rerun`, `creation-adopted-row-missing`, `managed-binding-port-unavailable` |
+
+**Known limits.** Without the managed-binding store no binding is recorded, so every later change to a
+declared view or chart is an adoption (it needs `adopt:` again) and drift is not detected. The stock
+`Active <plural>` / `Inactive <plural>` views exist on every table, so declaring one is an adoption even on a
+new table (`lib/spec-lint.js` warns). The bundled
+SDK reads some joined-table columns back without their join; a declared column change on such a view is
+refused (`view-related-column-unrepresentable`). A chart title can be written only to a chart that
+already has one.
+
 ## Local Development
 
 Test this plugin locally:

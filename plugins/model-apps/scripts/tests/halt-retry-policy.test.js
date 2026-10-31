@@ -70,6 +70,7 @@ const POLICY = {
   'app-copy-unpushed-edits': { kinds: ['never'] },
   'sitemap-removal-unapproved': { kinds: ['never'] },
   'reconciled-publish-failed': { kinds: ['by-failure'] },
+  'publication-withheld': { kinds: ['never'], via: 'publication-barrier-real-bundle.test.js' },
   'bpf-unique-name-conflict': { kinds: ['never'] },
   'pages-sitemap-read-failed': { kinds: ['by-failure'], via: 'sdk-build.test.js' },
   'pages-removed': { kinds: ['never'], via: 'sdk-build.test.js' },

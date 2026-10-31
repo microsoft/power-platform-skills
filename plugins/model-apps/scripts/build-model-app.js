@@ -22,6 +22,7 @@ const { stagePhasesOrResolve, PHASES, STAGES } = require('./lib/stages.js');
 // bakes it into the App/Form/Dashboard adapters.
 const { resolveAuthoringLanguage, BuildHalt } = require('./lib/entity-provision.js');
 const { createAzHttpClient, SQL_DEADLOCK_VICTIM } = require('./lib/sdk-http-client.js');
+const { createPublicationBarrier, describeWithheld } = require('./lib/publication-barrier.js');
 const { judgeFailure, retryPolicyFor, throttleAskOf } = require('./lib/retry-policy.js');
 const { makeThrottleBudget, waitDoesNotFit } = require('./lib/throttle-budget.js');
 const { workspaceBindingError, workspaceBindingNote } = require('./lib/workspace-binding.js');
@@ -50,6 +51,8 @@ const { makeGenpageSdk } = require('./lib/genpage-sdk.js');
 const { leftOnDiskWarning } = require('./lib/left-on-disk.js');
 const { makeTempWorkspace } = require('./lib/temp-workspace.js');
 const { createPassthroughCreates } = require('./lib/creates-passthrough.js');
+const { isDeclaredView, compileViewIntent } = require('./lib/view-reconcile.js');
+const { isDeclaredChart, compileChartIntent } = require('./lib/chart-reconcile.js');
 const { makeWritesBlocking } = require('./lib/output-redaction.js');
 // The lease one apply of an app holds for the whole of its work in the workspace (lib/app-operation-lease.js).
 const { withAppBuildLease, applyWorkspaceOf } = require('./lib/app-operation-lease.js');
@@ -82,7 +85,7 @@ function assertWorkspaceDir(workspaceDir, { create }) {
 //                  which environment it belongs to, and the answer comes back as `folderNote` so the
 //                  preview can warn that an --apply would stop. Construction is offline (no token
 //                  until first call).
-async function makeSdk(env, spec, workspaceDir, languageCode, { persistent = true, throttle, previewPush = false } = {}) {
+async function makeSdk(env, spec, workspaceDir, languageCode, { persistent = true, throttle, previewPush = false, publicationBarrier } = {}) {
   // A link at the workspace root would make the provision SDK's storage follow it. Refuse
   // before either constructor: the first SDK does not use this directory, but once the
   // directory has been refused the factory must not run at all.
@@ -91,7 +94,8 @@ async function makeSdk(env, spec, workspaceDir, languageCode, { persistent = tru
   // The one client of both SDK instances and of verify's isolated reader draws its waits for a throttled answer from the run's budget (`throttle`, made by main()).
   // The build's own `--verify` reads a form's captions in a language the form read does not carry from a translation export (verify-model-app.js readerFor), through this client:
   // that request is sent once whatever answers it (isTranslationExport), as in the standalone verify — a long action, which a re-send would run a second time.
-  const httpClient = createAzHttpClient(env, { throttle, sendOnce: isTranslationExport });
+  // The publication barrier checks every publish request when it is dispatched (publicationBarrier.gateRequest).
+  const httpClient = createAzHttpClient(env, { throttle, sendOnce: isTranslationExport, ...(publicationBarrier ? { request: publicationBarrier.gateRequest() } : {}) });
   const sdkTempDir = makeTempWorkspace('model-app-');
   const cleanup = () => {
     fs.rmSync(sdkTempDir, { recursive: true, force: true });
@@ -682,6 +686,7 @@ async function buildModelAppHeld(spec, opts, deps, v, buildLease) {
   // later one can halt before the step an earlier one owed from, so each debt is kept until a publish phase pays it
   // (`owedPaid`), and the final halt settles the rest.
   const owedAcrossAttempts = new Map();
+  const publicationBarrier = deps.publicationBarrier || createPublicationBarrier();
   // What failed attempts still owe for the primary name column of a table they created and did not finish setting the length of
   // (sdk-build.js: `owedLengths` on the halt, the records the data-model phase keeps). Handed to every attempt, which pays what it can
   // at the end of its own data-model phase; what a halt carries replaces it, being everything that is still owed. A halt that carries
@@ -696,6 +701,7 @@ async function buildModelAppHeld(spec, opts, deps, v, buildLease) {
     const declinedBefore = declinedCount();
     try {
       r = await runBuild(spec, {
+        publicationBarrier,
         sdk: deps.sdk,
         provisionSdk: deps.provisionSdk,
         owedLengths,
@@ -724,6 +730,9 @@ async function buildModelAppHeld(spec, opts, deps, v, buildLease) {
         allowDestructive: opts.allowDestructive, // pages phase gates destructive page removals
         // The `--authorize` keys: consent to exactly the destructive schema changes they name, and to nothing else (authorizationKeys).
         authorizedDestructive: opts.authorizedDestructive,
+        // The adopt:/overwrite: keys: approvals for exactly the declared views and charts they name (authorizationKeys).
+        ...(opts.authorizedAdoption ? { authorizedAdoption: opts.authorizedAdoption } : {}),
+        ...(opts.authorizedOverwrite ? { authorizedOverwrite: opts.authorizedOverwrite } : {}),
         creates,
         changedOnly: opts.changedOnly, // #changed-only: pages-only fast-apply seams (resolvedAppId + skipSitemapFinalize)
         // AB#6726727: the spec last applied to, or downloaded from, this environment — lets the sitemap
@@ -784,7 +793,8 @@ async function buildModelAppHeld(spec, opts, deps, v, buildLease) {
       // (`owedPaid`: the halt of a step that runs after it, the AI features' re-confirmation, say). What the phase
       // published is live, and a line that says the build stopped before it would be false.
       const hadPublishPhase = opts.apply && opts.publish && (opts.phases || PHASES).includes('publish') && !(err && err.phase === 'preflight') && !(err && err.owedPaid);
-      await settleOwedPublishes(deps.provisionSdk || deps.sdk, [...owedAcrossAttempts.values()], deps.warn, hadPublishPhase ? { tables: specTables(spec) } : undefined);
+      await settleOwedPublishes(deps.provisionSdk || deps.sdk, [...owedAcrossAttempts.values()].filter((t) => publicationBarrier.allowTarget(t, 'settle after a halt')), deps.warn, hadPublishPhase ? { tables: specTables(spec) } : undefined);
+      if (typeof deps.warn === 'function') for (const w of publicationBarrier.withheld()) deps.warn(describeWithheld(w));
       // And set the name column length of a table whose debt no attempt got as far as paying (the last one halted before its data-model phase).
       await settleOwedLengths({ sdk: deps.sdk, provision: deps.provisionSdk || deps.sdk, spec, owed: owedLengths, warn: deps.warn, sleep });
       if (journal) journal.close({ status: 'halt', phase: halted && halted.phase, code: halted && halted.code, recoverable: !!(halted && halted.recoverable), message: String((halted && halted.message) || halted), ...counts });
@@ -1041,6 +1051,11 @@ const readLanguageFlag = (flags) => readAliasedFlag(flags, 'language-code', 'lan
 //   dateTimeBehavior:<table>.<column>   a one-way Date and Time behaviour change of a column the table already has
 //   isSecured:<table>.<column>          unsecuring a secured column, which deletes every permission any profile holds on it
 //   tableFlags:<table>                  turning duplicate detection off, which unpublishes the table's duplicate rules
+// and to ONE approval a declared view or chart (reconcile: "declared", lib/view-reconcile.js, lib/chart-reconcile.js) asks for:
+//   adopt:<table>/<name>                taking over an existing view or chart of that name the spec has not managed before
+//   overwrite:<table>/<name>            replacing the changes made on the server since the build last wrote it
+// <table>/<name> is the artifact's key as its refusal prints it; the two approvals are separate Sets (opts.authorizedAdoption,
+// opts.authorizedOverwrite), so consent to one is never consent to the other or to a destructive schema change.
 // It is deliberately not implied by --allow-destructive: that flag approves the form and sitemap removals the build lists, and a
 // consent to delete security or to convert stored dates must name the column it is for. The build's refusal of such a change names
 // the exact key, so the maker reads what will happen, then runs the build again with it. A key is refused unless the spec declares
@@ -1054,11 +1069,34 @@ function authorizationKeys(argv, spec) {
   }
   const lower = (s) => String(s || '').toLowerCase();
   const keys = new Set();
+  const adopt = new Set();
+  const overwrite = new Set();
   const problems = [];
+  // The keys of the declared views and charts, as the reconcile computes them (its intent key: `<table>/<name>`, the table in
+  // lower case). A spec whose declared artifact does not compile fails validation before any key is used.
+  const declaredKeys = new Set();
+  for (const v of (spec && Array.isArray(spec.views) ? spec.views : [])) {
+    if (isDeclaredView(v)) { const { intent } = compileViewIntent(v); if (intent) declaredKeys.add(intent.key); }
+  }
+  for (const ch of (spec && Array.isArray(spec.charts) ? spec.charts : [])) {
+    if (isDeclaredChart(ch)) { const { intent } = compileChartIntent(ch); if (intent) declaredKeys.add(intent.key); }
+  }
   for (const key of raw) {
+    // adopt:account/My Accounts | overwrite:new_ticket/Open Tickets — the name may hold spaces and '/', so only the first '/'
+    // splits; the table is matched case-insensitively and the name exactly, as the reconcile keys them.
+    const approval = /^(adopt|overwrite):([A-Za-z0-9_]+)\/(.+)$/.exec(String(key));
+    if (approval) {
+      const artifactKey = `${lower(approval[2])}/${approval[3]}`;
+      if (!declaredKeys.has(artifactKey)) {
+        problems.push(`'${key}' approves an artifact the spec does not declare (it would need a view or chart with reconcile: "declared" keyed ${artifactKey})`);
+        continue;
+      }
+      (approval[1] === 'adopt' ? adopt : overwrite).add(artifactKey);
+      continue;
+    }
     // dateTimeBehavior:new_ticket.new_due | isSecured:new_ticket.new_salary | tableFlags:new_ticket
     const m = /^(dateTimeBehavior|isSecured):([A-Za-z0-9_]+)\.([A-Za-z0-9_]+)$|^(tableFlags):([A-Za-z0-9_]+)$/.exec(String(key));
-    if (!m) { problems.push(`'${key}' is not dateTimeBehavior:<table>.<column>, isSecured:<table>.<column> or tableFlags:<table>`); continue; }
+    if (!m) { problems.push(`'${key}' is not dateTimeBehavior:<table>.<column>, isSecured:<table>.<column> or tableFlags:<table> (nor adopt:<table>/<name> or overwrite:<table>/<name>)`); continue; }
     const kind = m[1] || m[4];
     const table = lower(m[2] || m[5]);
     const entity = ((spec && spec.entities) || []).find((e) => lower(e && e.schemaName) === table);
@@ -1073,7 +1111,7 @@ function authorizationKeys(argv, spec) {
     }
     keys.add(kind === 'tableFlags' ? `tableFlags:${table}` : `${kind}:${table}.${lower(m[3])}`);
   }
-  return { keys, error: problems.length ? `--authorize: ${problems.join('; ')}` : null };
+  return { keys, adopt, overwrite, error: problems.length ? `--authorize: ${problems.join('; ')}` : null };
 }
 
 function parseLanguageCode(value) {
@@ -1262,6 +1300,9 @@ async function main() {
     profile: (flags.apply === true && flags.stage !== 'data') ? 'deploy' : 'plan',
     allowDestructive: flags['allow-destructive'] === true,
     authorizedDestructive: authorization.keys,
+    // Spread in only when given, so a run without them hands the engine exactly the options it did before.
+    ...(authorization.adopt.size ? { authorizedAdoption: authorization.adopt } : {}),
+    ...(authorization.overwrite.size ? { authorizedOverwrite: authorization.overwrite } : {}),
     nonInteractive: flags['non-interactive'] === true || envTruthy(process.env.POWER_PLATFORM_SKILLS_NONINTERACTIVE),
     languageCode,
     appDir: path.dirname(specPath),
@@ -1387,7 +1428,8 @@ async function runBuildCommand({ env, spec, languageCode, changedOnly, workspace
   // The run's budget for waiting out a throttled service (lib/throttle-budget.js), made before anything that sends so that every layer draws from the one: the HTTP client the SDK is made over, the page backend (through the engine's
   // `throttle`) and the build's own retry loop (`deps.throttle`). A wait of more than a few seconds is announced on stderr — stdout carries the JSON result.
   const throttle = makeThrottleBudget({ warn: (m) => process.stderr.write(`⚠ ${m}\n`) });
-  const { sdk, provisionSdk, cleanup, isolatedReader, folderNote, previewHttpClient } = await makeSdk(env, spec, workspaceDir, authoringLanguageCode, { persistent: opts.apply, throttle, previewPush: opts.previewPush === true && !opts.apply });
+  const publicationBarrier = createPublicationBarrier();
+  const { sdk, provisionSdk, cleanup, isolatedReader, folderNote, previewHttpClient } = await makeSdk(env, spec, workspaceDir, authoringLanguageCode, { persistent: opts.apply, throttle, previewPush: opts.previewPush === true && !opts.apply, publicationBarrier });
   if (folderNote) process.stderr.write(`⚠ ${folderNote}\n`);
   // Durable build journal (apply runs only): a per-run record of steps + where a run halted,
   // written to <workspace>/build-log.jsonl. Resume = re-run the same command (idempotent).
@@ -1442,7 +1484,7 @@ async function runBuildCommand({ env, spec, languageCode, changedOnly, workspace
     const deps = {
       log: (m) => process.stderr.write(m + '\n'),
       warn: (m) => process.stderr.write(`⚠ ${m}\n`),
-      sdk, provisionSdk, journal, throttle, stepTally,
+      sdk, provisionSdk, journal, throttle, stepTally, publicationBarrier,
       ...(previewHttpClient ? { previewHttpClient } : {}),
       // The role-privileges check must actually RUN here. verify-spec skips it unless BOTH
       // `rolePrivileges` and `entityPrivileges` readers are present, and `entityPrivileges` used to

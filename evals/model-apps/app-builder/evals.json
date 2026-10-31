@@ -347,6 +347,47 @@
       "expectations": [
         "author: a new app with a chart or view of a table outside its navigation pins the declared artifacts"
       ]
+    },
+    {
+      "id": 16,
+      "tier": "full",
+      "spec": "app-spec.json",
+      "prompt": "A new Help Desk app: tickets that users find by ticket number, customers they find by email, a list of open tickets that shows each ticket's customer name, and a chart of tickets by priority.",
+      "expect": {
+        "tables": [
+          "cnt_customer",
+          "cnt_ticket"
+        ],
+        "relationships": [
+          "cnt_customer_cnt_ticket"
+        ],
+        "views": [
+          "Open Tickets",
+          "Customer Directory"
+        ],
+        "charts": [
+          "Tickets by Priority"
+        ],
+        "pages": [],
+        "quickFind": {
+          "cnt_ticket": [
+            "cnt_ticketnumber"
+          ],
+          "cnt_customer": [
+            "cnt_email"
+          ]
+        },
+        "linkEntities": {
+          "cnt_ticket/Open Tickets": [
+            "cnt_customer"
+          ]
+        }
+      },
+      "expectations": [
+        "author: every view and chart of a new app is declared, and no other kind carries reconcile or a command key",
+        "author: each new table searches on its primary name plus the identifiers the prompt names",
+        "author: a column from a related table joins that table on the view that shows it, and only there"
+      ]
     }
   ]
 }

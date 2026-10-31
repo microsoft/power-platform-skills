@@ -903,3 +903,40 @@ test('app membership expectations pass on their fixtures and fail when the spec 
   assert.strictEqual((await reader.appMainForms('x', spec.app.mainForms)).kind, 'inconclusive');
   assert.deepStrictEqual((await reader.appMainForms('x', spec.app.mainForms, { strict: true })).tables, [{ table: 'contoso_item', extras: [], missing: [] }]);
 });
+
+test('declared reconciliation expectations pass on their fixture and fail when the spec drifts from the prompt', () => {
+  const fixtures = loadFixtures(path.join(__dirname, '..', 'fixtures'));
+  const ev16 = evalsManifest.evals.find((e) => e.id === 16);
+  const grade = (text, mutate, evMutate) => {
+    const ev = structuredClone(ev16);
+    const spec = structuredClone(fixtures.find((f) => f.id === 16).spec);
+    if (mutate) mutate(spec);
+    if (evMutate) evMutate(ev);
+    return ASSERTIONS.get(text)({ spec, eval: ev, facts: {} }).status;
+  };
+  const [declared, search, joins] = ev16.expectations;
+  for (const text of ev16.expectations) assert.strictEqual(grade(text), 'pass', text);
+  const view = (s, name) => s.views.find((v) => v.name === name);
+  const ticket = (s) => s.entities.find((e) => e.schemaName === 'cnt_ticket');
+
+  assert.strictEqual(grade(declared, (s) => { delete view(s, 'Customer Directory').reconcile; }), 'fail', 'a view left undeclared');
+  assert.strictEqual(grade(declared, (s) => { delete s.charts[0].reconcile; }), 'fail', 'a chart left undeclared');
+  assert.strictEqual(grade(declared, (s) => { s.forms[0].reconcile = 'declared'; }), 'fail', 'reconcile on a form');
+  assert.strictEqual(grade(declared, (s) => { s.charts[0].title = 'Tickets'; }), 'fail', 'a title on a new chart');
+  assert.strictEqual(grade(declared, (s) => { view(s, 'Customer Directory').name = 'Active Customers'; }), 'fail', 'the stock default view name');
+  assert.strictEqual(grade(declared, (s) => { s.commandBars = [{ entity: 'cnt_ticket', commands: [{ key: 'close', label: 'Close' }] }]; }), 'fail', 'a command key');
+  assert.strictEqual(grade(declared, (s) => { s.minimumPluginVersion = '2.20.6'; }), 'fail');
+
+  assert.strictEqual(grade(search, (s) => { delete ticket(s).quickFind; }), 'fail', 'a new table without search columns');
+  assert.strictEqual(grade(search, (s) => { ticket(s).quickFind.findColumns = ['cnt_name']; }), 'fail', 'the ticket number the prompt names');
+  assert.strictEqual(grade(search, (s) => { ticket(s).quickFind.findColumns = ['cnt_ticketnumber']; }), 'fail', 'the primary name');
+  assert.strictEqual(grade(search, (s) => { ticket(s).changeTrackingEnabled = true; }), 'fail', 'change tracking unasked');
+  assert.strictEqual(grade(search, (s) => { ticket(s).changeTrackingEnabled = true; }, (ev) => { ev.expect.changeTracking = true; }), 'pass', 'change tracking asked for');
+  assert.strictEqual(grade(search, null, (ev) => { delete ev.expect.quickFind; }), 'fail', 'no independent expectation');
+
+  assert.strictEqual(grade(joins, (s) => { delete view(s, 'Open Tickets').linkEntities; }), 'fail', 'the join removed');
+  assert.strictEqual(grade(joins, (s) => { view(s, 'Open Tickets').columns = view(s, 'Open Tickets').columns.filter((c) => typeof c === 'string'); }), 'fail', 'no joined column shown');
+  assert.strictEqual(grade(joins, (s) => { view(s, 'Open Tickets').columns[2].relatedEntity = 'acct'; }), 'fail', 'a column naming no join');
+  assert.strictEqual(grade(joins, (s) => { delete view(s, 'Open Tickets').reconcile; }), 'fail', 'a join on an undeclared view');
+  assert.strictEqual(grade(joins, (s) => { view(s, 'Customer Directory').linkEntities = structuredClone(view(s, 'Open Tickets').linkEntities); }), 'fail', 'a join the prompt did not ask for');
+});

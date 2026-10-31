@@ -795,6 +795,7 @@ list with "reach for it when…" guidance.
 | `roleGrants[]` | extend a role you did NOT author |
 | `businessProcessFlows[].securityRoles` | who may run a flow |
 | `fieldSecurityProfiles[]` | confidential columns (`columns[].isSecured`) and who may read or change them |
+| `views[].reconcile` | declared views and charts (`reconcile: "declared"` on a view or chart: the rebuild applies the spec's columns, filters, sort and joins) and a table's Quick Find columns (`entities[].quickFind`) |
 | `columns[].dateTimeBehavior` | portable schema: calendar-day dates, fixed option values (`{ "value", "label" }`), table search and duplicate detection (`searchEnabled` / `changeTrackingEnabled` / `duplicateDetectionEnabled`) |
 
 ## relationships[]

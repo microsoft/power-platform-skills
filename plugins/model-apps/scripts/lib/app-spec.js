@@ -53,6 +53,10 @@ const PAGE_MODEL_RE = /^[A-Za-z0-9][A-Za-z0-9._:/@+-]{0,99}$/;
 const ACCESS_LEVELS = new Set(['read', 'create', 'write', 'delete', 'append', 'appendTo', 'assign', 'share']);
 const { AI_FEATURE_KEYS, AI_FEATURE_MAX_VALUE, AI_SETTING_CODEC } = require('./ai-app-settings.js');
 const { normalizeChoiceOptions, isChoiceOptionObject, validateSchemaFeatures } = require('./schema-feature-contract.js');
+const { isDeclaredView, compileViewIntent } = require('./view-reconcile.js');
+const { isDeclaredChart, compileChartIntent } = require('./chart-reconcile.js');
+const { validateManagedCommands } = require('./command-reconcile.js');
+const { validateQuickFindSpec } = require('./quick-find.js');
 const PRIVILEGE_SCOPES = new Set(['user', 'businessUnit', 'parentChild', 'organization']);
 
 // The exact ownership marker the vendored SDK (cds-maker-sdk SecurityApi) stamps on the `description`
@@ -849,6 +853,7 @@ const ENTITY_KEYS = new Set([
   'vectorIcon', 'iconDescription', 'icon',
   'statusReasons', 'alternateKeys', 'mainFormOrder',
   'searchEnabled', 'changeTrackingEnabled', 'duplicateDetectionEnabled',
+  'quickFind',
 ]);
 
 // What to write INSTEAD, for the keys an author is most likely to reach for. A bare "unknown key"
@@ -2018,6 +2023,18 @@ const APP_MEMBERSHIP_MIN_VERSION = '2.13.0';
 // only ADD forms there and a declared chart off the navigation would stay out of the app.
 const APP_MEMBERSHIP_UPDATE_MIN_VERSION = '2.21.0';
 const isPluginVersion = (value) => typeof value === 'string' && /^\d+(?:\.\d+)*(?:[-+][0-9A-Za-z.-]+)?$/.test(value);
+// Declared reconciliation (views and charts with reconcile: "declared", a view's viewId pin and joins, a chart title, command
+// keys and row pins, a table's quickFind): an older plugin ignores these fields (or, for quickFind, refuses the table), so a
+// spec that uses one names the release that reads it.
+const DECLARED_RECONCILE_MIN_VERSION = '2.21.0';
+function usesDeclaredReconcile(spec) {
+  const any = (list, f) => (Array.isArray(list) ? list : []).some((x) => !!x && typeof x === 'object' && f(x));
+  const keyed = (c) => c.key !== undefined || c.rowId !== undefined || any(c.children, keyed);
+  return any(spec.views, (v) => v.reconcile !== undefined || v.viewId !== undefined || v.linkEntities !== undefined)
+    || any(spec.charts, (ch) => ch.reconcile !== undefined || ch.title !== undefined)
+    || any(spec.commands, keyed)
+    || any(spec.entities, (e) => e.quickFind !== undefined);
+}
 
 function sitemapEntityTables(spec) {
   const tables = new Set();
@@ -3162,6 +3179,14 @@ function validateAppSpec(spec, opts = {}) {
   }
   for (const ch of spec.charts || []) {
     validateDescription(ch && ch.description, `chart '${(ch && (ch.name || ch.entity)) || '(unnamed)'}'`, errors);
+    if (ch && ch.reconcile !== undefined && ch.reconcile !== 'declared') errors.push(`chart '${ch.name || ch.entity}': reconcile must be "declared" (or left out)`);
+    if (ch && ch.title !== undefined) {
+      if (typeof ch.title !== 'string') errors.push(`chart '${ch.name || ch.entity}': title must be a string`);
+      else if (!isDeclaredChart(ch)) warnings.push(`chart '${ch.name || ch.entity}': title is written only on a chart with reconcile: "declared"; this chart ignores it`);
+    }
+    // The checks below are the legacy chart's; a declared chart also owns its measure, which must be one the reconcile
+    // can compare (lib/chart-reconcile.js). Its other intent errors repeat the checks below, so only that one is added.
+    if (isDeclaredChart(ch)) for (const m of compileChartIntent(ch).errors) if (/^measure /.test(m)) errors.push(`chart '${ch.name || ch.entity}': ${m}`);
     if (!ch || badEntityRef(ch.entity, `chart '${(ch && (ch.name || ch.entity)) || '(unnamed)'}'`)) continue;
     if (!ch.entity || !entityByLower.has(String(ch.entity).toLowerCase())) {
       errors.push(`chart references unknown entity '${ch && ch.entity}'`);
@@ -3210,7 +3235,8 @@ function validateAppSpec(spec, opts = {}) {
     };
     if (v && v.columns !== undefined) {
       if (!Array.isArray(v.columns)) errors.push(`${vlabel}: columns must be an array of column names`);
-      else v.columns.forEach((c, i) => attrRef(c, `columns[${i}]`));
+      // A declared view's column may also be an object ({ name, relatedEntity, width }); compileViewIntent checks it below.
+      else v.columns.forEach((c, i) => { if (!(isDeclaredView(v) && c && typeof c === 'object' && !Array.isArray(c))) attrRef(c, `columns[${i}]`); });
     }
     if (v && v.sort !== undefined) {
       if (!Array.isArray(v.sort)) errors.push(`${vlabel}: sort must be an array`);
@@ -3219,6 +3245,16 @@ function validateAppSpec(spec, opts = {}) {
     if (v && v.filters !== undefined) {
       if (!Array.isArray(v.filters)) errors.push(`${vlabel}: filters must be an array`);
       else v.filters.forEach((f, i) => attrRef(f && f.attr, `filters[${i}].attr`));
+    }
+    if (v && v.reconcile !== undefined && v.reconcile !== 'declared') errors.push(`${vlabel}: reconcile must be "declared" (or left out)`);
+    if (isDeclaredView(v)) {
+      // compileViewIntent walks columns, sort, filters and joins as lists; a non-list one is already reported above (or by
+      // the shape normalization), so it is not walked again into a TypeError.
+      if (['columns', 'sort', 'filters', 'linkEntities'].every((k) => v[k] === undefined || Array.isArray(v[k]))) {
+        for (const f of compileViewIntent(v).errors) errors.push(`${vlabel}: ${f.path}: ${f.message}`);
+      }
+    } else if (v && (v.viewId !== undefined || v.linkEntities !== undefined)) {
+      warnings.push(`${vlabel}: viewId and linkEntities are read only on a view with reconcile: "declared"; this view ignores them`);
     }
   }
   // Commands (modern command-bar buttons). A functional button needs a JS library + function;
@@ -3253,6 +3289,30 @@ function validateAppSpec(spec, opts = {}) {
       }
     } else {
       checkCmdAction(`command '${c.label}' on ${c.entity}`, c.library, c.function);
+    }
+  }
+  // Declared reconciliation (2.21.0). Command keys and row pins, a table's Quick Find columns, and the kinds that do NOT take
+  // `reconcile` in this release. Every field is optional; a spec that uses none of them gets no finding from this block.
+  {
+    const managed = validateManagedCommands(spec);
+    errors.push(...managed.errors);
+    warnings.push(...managed.warnings);
+    (spec.entities || []).forEach((e, i) => {
+      // Only quickFind is checked here: the search and tracking flags validateQuickFindSpec also reads are the schema
+      // features' (validateSchemaFeatures), and checking them twice would report every mistake twice.
+      if (!e || typeof e !== 'object' || e.quickFind === undefined) return;
+      for (const f of validateQuickFindSpec({ quickFind: e.quickFind }, `entities[${i}] (${e.schemaName})`)) errors.push(`${f.path}: ${f.message}`);
+    });
+    // Business process flows are left out: their key allow-list already refuses `reconcile`.
+    for (const kind of ['dashboards', 'webResources', 'forms', 'businessRules']) {
+      for (const x of spec[kind] || []) {
+        if (x && typeof x === 'object' && x.reconcile !== undefined) {
+          errors.push(`${kind}: '${x.name || x.entity || '(unnamed)'}' — reconcile is supported only on views and charts; leave it out (this artifact keeps the existing build behaviour)`);
+        }
+      }
+    }
+    if (usesDeclaredReconcile(spec) && compareVersions(spec.minimumPluginVersion, DECLARED_RECONCILE_MIN_VERSION) < 0) {
+      warnings.push(`set minimumPluginVersion to '${DECLARED_RECONCILE_MIN_VERSION}' or newer when using reconcile: "declared", a view's viewId or linkEntities, a chart title, command keys or rowId, or quickFind — older plugins ignore or reject these fields`);
     }
   }
   // Business rules. Every reference is checked against the spec's own columns, because a rule that
