@@ -121,6 +121,9 @@ class Unmodelled extends Error {}
  * @param {{uniqueName:string, version?:string, prefix?:string, managed?:boolean}} [options.solution]
  * @param {(req:{method:string,path:string,body:any}) => ({statusCode:number, body?:any}|undefined)} [options.intercept]
  *   answers a request before the store does (used to provoke a refusal or a lost answer)
+ * @param {boolean} [options.childrenJoin] a create sent with a solution header puts the children it carries (or a child
+ *   created on its own) into that solution too. Off by default: a compound create's children are then left out, the
+ *   behaviour the platform's own duplicate-rule code works around, so a caller must prove (and add) each child itself.
  */
 function createConfigOrg(options = {}) {
   const origin = options.origin || 'https://contoso.crm.dynamics.com';
@@ -137,6 +140,7 @@ function createConfigOrg(options = {}) {
   // caller reads it from metadata rather than hard-coding it).
   // `solution` and `solutioncomponent` are here for their EntitySetName, which the SDK's queryRecords reads first.
   for (const [logicalName, objectTypeCode, entitySetName] of [['connectionreference', 10132, 'connectionreferences'], ['customapi', 10133, 'customapis'],
+    ['customapirequestparameter', 10134, 'customapirequestparameters'], ['customapiresponseproperty', 10135, 'customapiresponseproperties'],
     ['solution', 7100, 'solutions'], ['solutioncomponent', 7103, 'solutioncomponents']]) {
     if (!tables.has(logicalName)) tables.set(logicalName, { logicalName, duplicateDetectionEnabled: false, attributes: [], objectTypeCode, entitySetName });
   }
@@ -375,6 +379,13 @@ function createConfigOrg(options = {}) {
     // A duplicate rule is a solution component of its own type (44); its conditions (45) ride with it.
     duplicaterules: () => 44,
   };
+  // A child row's type: a Custom API parameter or property is a table row (its table's ObjectTypeCode); a rule
+  // condition has a type of its own (45). An environment variable VALUE is deliberately absent: it is never a member.
+  const CHILD_COMPONENT_TYPES = {
+    customapirequestparameters: () => tables.get('customapirequestparameter').objectTypeCode,
+    customapiresponseproperties: () => tables.get('customapiresponseproperty').objectTypeCode,
+    duplicateruleconditions: () => 45,
+  };
   const solutionByName = (name) => [...sets.get('solutions').values()].find((s) => lc(s.uniquename) === lc(name));
   function addMember(solution, objectId, componentType) {
     const members = sets.get('solutioncomponents');
@@ -387,9 +398,17 @@ function createConfigOrg(options = {}) {
   // A create sent with MSCRM.SolutionUniqueName lands in that solution as well.
   // See: https://learn.microsoft.com/en-us/power-apps/developer/data-platform/webapi/create-entity-web-api#create-a-record-in-a-solution
   function joinSolution(set, row, solutionName) {
-    const typeOf = ROOT_COMPONENT_TYPES[set];
+    const typeOf = ROOT_COMPONENT_TYPES[set] || (options.childrenJoin ? CHILD_COMPONENT_TYPES[set] : null);
     const solution = solutionName && typeOf ? solutionByName(solutionName) : null;
-    if (solution) addMember(solution, row[SETS[set].pk], typeOf());
+    if (!solution) return;
+    const id = row[SETS[set].pk];
+    addMember(solution, id, typeOf());
+    if (!options.childrenJoin) return;
+    for (const nav of Object.values(SETS[set].navs)) {
+      const childType = CHILD_COMPONENT_TYPES[nav.set];
+      if (!childType) continue;
+      for (const child of sets.get(nav.set).values()) if (child[nav.fk] === id) addMember(solution, child[SETS[nav.set].pk], childType());
+    }
   }
   // `AddSolutionComponent`: { ComponentId, ComponentType, SolutionUniqueName, AddRequiredComponents } -> { id }. A component already in
   // the solution is answered as success, as the platform does.

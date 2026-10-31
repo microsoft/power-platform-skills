@@ -1537,6 +1537,14 @@ function pushFinding(result, bucket, fields, handle) {
 
 // The private record of what a fresh read showed (never a value): what the readiness gate decides from. Kept on
 // the result non-enumerable, beside the public lines.
+// The latest read of each root this run settled (`kind:key` -> {remote, childIds}), kept non-enumerable: the
+// membership proof takes a root's children from it.
+const ROWS_READ = Symbol('configuration-artifacts.rows-read');
+function rowsReadOf(result) {
+  if (!Object.prototype.hasOwnProperty.call(result, ROWS_READ)) Object.defineProperty(result, ROWS_READ, { value: new Map(), enumerable: false });
+  return result[ROWS_READ];
+}
+
 function observationsOf(result) {
   if (!result) return [];
   if (!Object.prototype.hasOwnProperty.call(result, 'observations')) Object.defineProperty(result, 'observations', { value: [], enumerable: false });
@@ -1691,6 +1699,7 @@ function settle(op, ctx, result, { id, back, action, fields, childIds, origin, u
     return false;
   }
   observations.push(observe(kind, key, id, op.detail.entry, back.remote, 'post-write-read', result[INVENTORY]));
+  rowsReadOf(result).set(`${kind}:${key}`, { remote: back.remote, childIds: { ...(op.detail.childIds || {}), ...(childIds || {}) } });
   if (back.missing.length) {
     // The root is there and an expected child is not: the create is not complete, and nothing re-sends it here.
     pushFinding(result, 'unknown', { kind, key, id, code: 'create-completion-required', unit: 'content', missing: [...back.missing] }, handle);
@@ -1953,6 +1962,38 @@ async function applyUpdate(op, ctx, result, known) {
 // export this environment's value.
 // See: https://learn.microsoft.com/power-apps/developer/data-platform/reference/entities/solutioncomponent#componenttype-choicesoptions
 const MEMBERSHIP_TABLES = Object.freeze({ environmentVariable: 380, connectionReference: 'connectionreference', customApi: 'customapi', duplicateRule: 44 });
+// A root exports whole only with its children, and a child's membership is never inferred from its root's (nor from a
+// table's subcomponents): each child is its own solution component and is proven as one. A Custom API parameter or
+// response property is a table row (its table's ObjectTypeCode); a duplicate rule condition has its own type, 45.
+// The platform's own duplicate-rule code creates conditions solution-scoped because a compound create's children
+// can be left out of the solution, so a create header on the root proves nothing about them.
+// An environment variable value is deliberately absent (see above).
+const CHILD_MEMBERSHIP_TABLES = Object.freeze({ customApiRequestParameter: 'customapirequestparameter', customApiResponseProperty: 'customapiresponseproperty', duplicateRuleCondition: 45 });
+
+// The child rows a read of a root shows, as membership items {kind, key, id}. A child's key is its slot under the
+// root, as the create port and the management records name it: `<api>|request:<name>`, `<rule>|<condition key>`.
+// A condition row is named by the declaration it is pinned to (childIds) or, failing that, the one declaration that
+// describes it; a row no declaration names keeps its id.
+function childMembershipItems(kind, key, entry, remote, childIds) {
+  if (!remote || typeof remote !== 'object') return [];
+  const root = portKeyOf(kind, key);
+  if (kind === 'customApi') {
+    const rows = [...(remote.requestParameters || []).map((c) => ['request', c]), ...(remote.responseProperties || []).map((c) => ['response', c])];
+    return rows.filter(([, c]) => c && nonEmptyString(c.id) && nonEmptyString(c.uniqueName)).map(([direction, c]) => ({
+      kind: direction === 'request' ? 'customApiRequestParameter' : 'customApiResponseProperty', key: `${root}|${direction}:${lower(c.uniqueName)}`, id: c.id,
+    }));
+  }
+  if (kind === 'duplicateRule') {
+    const declared = (entry && entry.conditions) || [];
+    return (remote.conditions || []).filter((c) => c && nonEmptyString(c.id)).map((c) => {
+      const pinned = childIds ? Object.keys(childIds).find((slot) => childIds[slot] && ref(childIds[slot]) === ref(c.id)) : null;
+      const describing = declared.filter((d) => describes(d, c));
+      const slot = pinned || (describing.length === 1 ? describing[0].key : lower(c.id));
+      return { kind: 'duplicateRuleCondition', key: `${root}|${slot}`, id: c.id };
+    });
+  }
+  return [];
+}
 
 // Put a reused item into the build's solution, and prove at the end that every item is in it. A create carries
 // the solution header, so its row should be in the solution already; an item the build found (made earlier, by
@@ -1965,7 +2006,7 @@ function membershipOf(ctx) {
   const memberships = new Map();
   const types = new Map();
   const typeOf = async (kind) => {
-    const table = MEMBERSHIP_TABLES[kind];
+    const table = has(MEMBERSHIP_TABLES, kind) ? MEMBERSHIP_TABLES[kind] : CHILD_MEMBERSHIP_TABLES[kind];
     if (typeof table === 'number') return table;
     if (!types.has(kind)) {
       types.set(kind, (async () => {
@@ -1981,7 +2022,7 @@ function membershipOf(ctx) {
     }
     return types.get(kind);
   };
-  const applies = (op) => active && has(MEMBERSHIP_TABLES, op.kind) && !!op.id;
+  const applies = (op) => active && (has(MEMBERSHIP_TABLES, op.kind) || has(CHILD_MEMBERSHIP_TABLES, op.kind)) && !!op.id;
   return {
     async ensure(op) {
       if (!applies(op)) return null;
@@ -2086,9 +2127,28 @@ async function applyConfiguration(plan, ctx) {
     else if (op.action === 'update') await applyUpdate(op, ctx, result, known);
     if (result.unknown.length > unknownBefore) stopped = true;
   }
-  // Membership proof: one fresh read of the solution for every root this run saved or found unchanged.
+  // Membership proof: one fresh read of the solution for every root this run saved or found unchanged, and for each
+  // child those rows hold. A child not proven a member is added first (after every write of the run, so only when no
+  // outcome is unknown); an add that fails is that child's line, and the fresh read decides the rest.
   const roots = [...result.saved, ...result.unchanged].filter((line, i, all) => all.findIndex((o) => o.kind === line.kind && o.key === line.key) === i);
-  for (const item of await membership.prove(roots)) {
+  const opOf = new Map((plan.operations || []).map((op) => [`${op.kind}:${op.key}`, op]));
+  const children = [];
+  for (const line of roots) {
+    const op = opOf.get(`${line.kind}:${line.key}`);
+    if (!op || !op.detail) continue;
+    const read = rowsReadOf(result).get(`${line.kind}:${line.key}`) || { remote: op.detail.remote, childIds: op.detail.childIds };
+    children.push(...childMembershipItems(line.kind, line.key, op.detail.entry, read.remote, read.childIds));
+  }
+  const answered = new Set();
+  for (const child of children) {
+    if (stopped) break;
+    const joined = await membership.ensure(child);
+    if (!joined) continue;
+    answered.add(child);
+    pushFinding(result, joined.bucket, { kind: child.kind, key: child.key, id: child.id, code: joined.code, unit: 'membership' });
+    if (joined.bucket === 'unknown') stopped = true;
+  }
+  for (const item of await membership.prove([...roots, ...children.filter((child) => !answered.has(child))])) {
     pushFinding(result, 'unknown', { kind: item.kind, key: item.key, id: item.id, code: 'SOLUTION_MEMBERSHIP_UNKNOWN', unit: 'membership' });
   }
   // A row the content step left complete whose management a recording build could not confirm (see adoptionOf).
@@ -2586,4 +2646,5 @@ module.exports = {
   configurationManagedRecords,
   readConfigurationForDownload,
   MEMBERSHIP_TABLES,
+  CHILD_MEMBERSHIP_TABLES,
 };
