@@ -940,3 +940,38 @@ test('declared reconciliation expectations pass on their fixture and fail when t
   assert.strictEqual(grade(joins, (s) => { delete view(s, 'Open Tickets').reconcile; }), 'fail', 'a join on an undeclared view');
   assert.strictEqual(grade(joins, (s) => { view(s, 'Customer Directory').linkEntities = structuredClone(view(s, 'Open Tickets').linkEntities); }), 'fail', 'a join the prompt did not ask for');
 });
+
+test('configuration expectations pass on their fixture, fail when the spec drifts, and the fixture settings bind every declared item', () => {
+  const fixtures = loadFixtures(path.join(__dirname, '..', 'fixtures'));
+  const ev19 = evalsManifest.evals.find((e) => e.id === 19);
+  const fixtureSpec = fixtures.find((f) => f.id === 19).spec;
+  const grade = (mutate, evMutate) => {
+    const ev = structuredClone(ev19);
+    const spec = structuredClone(fixtureSpec);
+    if (mutate) mutate(spec);
+    if (evMutate) evMutate(ev);
+    return ASSERTIONS.get(ev19.expectations[0])({ spec, eval: ev, facts: {} }).status;
+  };
+  const secret = (s) => s.environmentVariables.find((v) => v.type === 'secret');
+  assert.strictEqual(grade(), 'pass');
+  assert.strictEqual(grade((s) => { s.minimumPluginVersion = '2.20.6'; }), 'fail', 'below the release that reads configuration');
+  assert.strictEqual(grade((s) => { secret(s).defaultValue = 'k'; }), 'fail', 'a secret value in the spec');
+  assert.strictEqual(grade((s) => { secret(s).type = 'string'; }), 'fail', 'the API key not declared secret');
+  assert.strictEqual(grade((s) => { s.environmentVariables[0].currentValue = 'https://x'; }), 'fail', 'a current value in the spec');
+  assert.strictEqual(grade((s) => { s.connectionReferences[0].connectionId = '0'; }), 'fail', 'a connection id in the spec');
+  assert.strictEqual(grade((s) => { delete s.customApis; }), 'fail', 'the Escalate action missing');
+  assert.strictEqual(grade((s) => { s.duplicateDetectionRules = []; }), 'fail', 'the duplicate rule missing');
+  assert.strictEqual(grade((s) => { s.connectionReferences.push({ logicalName: 'contoso_extra', connectorId: '/providers/Microsoft.PowerApps/apis/shared_office365' }); }), 'fail', 'a reference the prompt did not ask for');
+  assert.strictEqual(grade((s) => { delete s.solution.version; }), 'fail', 'the version the prompt names');
+  assert.strictEqual(grade((s) => { s.solution.version = '1.0.0.0'; }), 'fail', 'a different version');
+  assert.strictEqual(grade(null, (ev) => { delete ev.expect.configuration; }), 'fail', 'no independent expectation');
+
+  // The runner grades the spec alone, so the per-environment half of the fixture is checked here: its
+  // deployment-settings file binds every declared reference and gives every secret its value, with no error.
+  const { readDeploymentBindings } = require('../../../../plugins/model-apps/scripts/lib/configuration-artifacts.js');
+  const settings = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'fixtures', '19-configuration-items', 'deployment-settings.json'), 'utf8'));
+  const bindings = readDeploymentBindings(settings, fixtureSpec);
+  assert.deepStrictEqual(bindings.errors, []);
+  for (const r of fixtureSpec.connectionReferences) assert.ok(bindings.connectionReferences.has(r.logicalName.toLowerCase()), r.logicalName);
+  for (const v of fixtureSpec.environmentVariables.filter((e) => e.type === 'secret')) assert.ok(bindings.environmentVariables.has(v.schemaName.toLowerCase()), v.schemaName);
+});

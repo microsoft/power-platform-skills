@@ -408,6 +408,45 @@
         "every business rule and the process flow each get exactly one teardown step",
         "author: a web resource the maker asked to keep in step is declared, never shared, and is the only kind besides views and charts that carries reconcile"
       ]
+    },
+    {
+      "id": 19,
+      "tier": "full",
+      "spec": "app-spec.json",
+      "prompt": "A Field Requests app, shipped as version 1.2.0.0: requests with a title, a requester email and a priority. It calls our dispatch service, whose base URL and API key differ per environment (the key is a secret), sends field notices through SharePoint, offers an Escalate action on a request that takes a reason and answers whether it was accepted, and flags requests that have the same requester email.",
+      "expect": {
+        "tables": [
+          "contoso_request"
+        ],
+        "relationships": [],
+        "views": [
+          "Open Requests"
+        ],
+        "charts": [],
+        "pages": [],
+        "configuration": {
+          "solutionVersion": "1.2.0.0",
+          "environmentVariables": [
+            "contoso_DispatchApiBase",
+            "contoso_DispatchApiKey"
+          ],
+          "secrets": [
+            "contoso_DispatchApiKey"
+          ],
+          "connectionReferences": [
+            "contoso_sharepoint"
+          ],
+          "customApis": [
+            "contoso_EscalateRequest"
+          ],
+          "duplicateDetectionRules": [
+            "contoso_request"
+          ]
+        }
+      },
+      "expectations": [
+        "author: each configuration item the prompt needs is declared, and no value that differs per environment is in the spec"
+      ]
     }
   ]
 }

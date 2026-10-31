@@ -1049,4 +1049,36 @@ ASSERTIONS.set('author: a web resource the maker asked to keep in step is declar
   return PASS;
 });
 
+// Configuration items (2.21.0, references/app-spec-schema.md → Configuration items). expect.configuration names, from
+// the prompt alone, the items an app needs: its environment variables (and which are secrets), connection references,
+// Custom APIs, the tables its duplicate rules are on, and the solution version. The spec declares exactly those, and
+// carries no value that differs per environment: no current value, no connection id, and no defaultValue on a secret —
+// those belong in the deployment-settings file the build reads, which is never part of the shared spec.
+ASSERTIONS.set('author: each configuration item the prompt needs is declared, and no value that differs per environment is in the spec', ({ spec, eval: ev }) => {
+  const want = ev.expect && ev.expect.configuration;
+  if (!want || typeof want !== 'object') return fail('no independent configuration expectations');
+  if (!versionAtLeast(spec.minimumPluginVersion, '2.21.0')) return fail(`minimumPluginVersion ${spec.minimumPluginVersion || '(none)'} is below 2.21.0`);
+  const version = spec.solution && spec.solution.version;
+  if ((want.solutionVersion || undefined) !== version) return fail(`solution.version ${version === undefined ? '(omitted)' : version}, expected ${want.solutionVersion || '(omitted)'}`);
+  const list = (field) => (Array.isArray(spec[field]) ? spec[field] : []);
+  const kinds = [
+    ['environmentVariables', (e) => e.schemaName],
+    ['connectionReferences', (e) => e.logicalName],
+    ['customApis', (e) => e.uniqueName],
+    ['duplicateDetectionRules', (e) => e.entity],
+  ];
+  for (const [field, keyOf] of kinds) {
+    const got = sortedLc(list(field).map(keyOf));
+    if (!eq(got, sortedLc(want[field]))) return fail(`${field} [${got}], expected [${sortedLc(want[field])}]`);
+  }
+  const secrets = sortedLc(list('environmentVariables').filter((v) => v.type === 'secret').map((v) => v.schemaName));
+  if (!eq(secrets, sortedLc(want.secrets))) return fail(`secret variables [${secrets}], expected [${sortedLc(want.secrets)}]`);
+  for (const v of list('environmentVariables')) {
+    for (const key of ['value', 'currentValue']) if (v[key] !== undefined) return fail(`environment variable ${v.schemaName} states its ${key} in the spec`);
+    if (v.type === 'secret' && v.defaultValue !== undefined) return fail(`secret variable ${v.schemaName} states a defaultValue in the spec`);
+  }
+  for (const r of list('connectionReferences')) if (r.connectionId !== undefined) return fail(`connection reference ${r.logicalName} states a connectionId in the spec`);
+  return PASS;
+});
+
 module.exports = { ASSERTIONS };
