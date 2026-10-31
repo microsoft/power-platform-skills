@@ -13,28 +13,35 @@ The bundled SDK is updated (commit 0eef55f8c2d0).
 
 - **Portable schema fields**: Choice `value`s, `dateTimeBehavior`, `isSecured`, `fieldSecurityProfiles`, table flags
   ([schema](references/app-spec-schema-advanced.md)); one-way changes need `--authorize <key>`.
-- **Declared views, charts and `quickFind` follow the spec on rebuild** (`reconcile: "declared"`); changing an existing one
-  needs `--authorize adopt:<table>/<name>`.
+- **Configuration items**: environment variables (secrets included), connection references, Custom APIs, duplicate-detection
+  rules, `solution.version` ([schema](references/app-spec-schema.md)); per-environment values come from `--deployment-settings`, not the spec.
+- **Declared views and charts follow the spec on rebuild** (`reconcile: "declared"`); changing one needs
+  `--authorize adopt:view:<table>/<name>` (or `chart:`); untyped keys work if unambiguous.
+- **Declared web resources follow the spec** (`reconcile: "declared"`); changing one needs `--authorize adopt:webresource:<name>`,
+  emptying it also `--allow-destructive`; case-only name twins are refused.
 - **`app.mainFormsOnUpdate: "exact"` and `app.pinDeclaredArtifacts`** keep an updated app's forms and components as the spec
   says; a lost component-add answer is finished in-run.
-- **`--preview-push` and `--inspect-components`** preview a push and check command buttons, read-only.
+- **`--preview-push`, `--inspect-components`, `solutions.js inspect` and `plan-app-promotion.js`** inspect read-only;
+  `data-fix.js` repairs rows.
 - **`genpage.js` takes `--draft`**, a pages lease, and `prepare-compiler-refresh` ([skill](skills/genpage/SKILL.md)).
-- **`data-fix.js`, `solutions.js inspect` and `plan-app-promotion.js`** repair rows, list a solution, plan a move.
 
 ### Changed
 
 - **Builds read slightly more**: column reads include `IsSecured`, name lookups read every match, a table gaining a column
   first reads its Date and Time behaviours, and teardown reads forms that may embed a page.
-- **Teardown keeps a page a form still embeds** and stops, naming the form.
+- **Teardown keeps** a page a form still embeds and configuration items, naming them.
+- **Pages calling a declared connection reference or Custom API wait until it is usable.**
 
 ### Fixed
 
-- **A flow delete answered "no active transaction" is sent again**; a step with an unknown outcome is not re-run.
-- **A refused app-access unlink is reported**, not read as removed.
+- **A flow delete answered "no active transaction" is sent again**; an unknown-outcome step is not re-run.
 
 ### Known limitations
 
-- Declared view and chart edits need `adopt:` again each time; keyed command bars are refused.
+- Each later change to a declared view, chart or web resource needs `adopt:` again; keyed command bars are refused.
+- A local view, chart or Quick Find copy that differs from the server's is refused (`workspace-copy-unsent-edits`);
+  `overwrite:quickfind:<table>` replaces a Quick Find copy.
+- A whole-build retry after a lost create answer can create a second configuration row.
 - `forms[].genPages` stops with `form-page-embeds-incomplete`; use a navigation page.
 
 ## [2.20.6]
