@@ -1,14 +1,15 @@
 'use strict';
 
-// A test double of the build's create port (lib/creates-port.js, mode 'stable') with the same id rules, so a test
-// that passes against it says something about the port the build ships:
+// A test-local double of a stable create port (mode 'stable'): the call shape the configuration helper consumes from
+// any port that plans each create's id. The plugin ships no such port in this release (its default is the plain
+// pass-through, lib/creates-passthrough.js); this double proves the helper's consuming side on its own:
 //
 //   run({kind, key, identity, childKeys}, execute)
 //     -> {outcome: 'created', id, childIds, ids, result, evidence}
 //   - a root id is the bound id (`bound['<kind>|<key>']`) or uuid(seed|kind|key);
-//   - a child id is uuid(seed|<its parent's id>|childKind|slot): keyed on the PARENT'S ID, as the shared derivation is
-//     (creates-identity.js stableChildIdV1), so a child the root's create makes and the same child a later run adds
-//     are one id, and the same child under another parent is another id;
+//   - a child id is uuid(seed|<its parent's id>|childKind|slot): keyed on the PARENT'S ID, so a child the root's
+//     create makes and the same child a later run adds are one id, and the same child under another parent is
+//     another id;
 //   - a child sent as its own run names its parent (identity {parentKind, parentKey, slot, parentId?}); a parentId
 //     other than the planned parent's id is the port's typed stop create-identity-conflict, sent nothing;
 //   - execute is called exactly once with {id, childIds}; whatever it throws reaches the caller unchanged;
@@ -129,9 +130,9 @@ function createStableCreatePort({ seed = 'stable', read = null, answer = null, b
   };
 }
 
-// A double of the three shared functions the configuration helper builds its own stable port from (its `fence`:
-// lib/creates-port.js createCreatesPortForSpec, lib/creates-capabilities.js intentFor, lib/creates-read.js
-// resolveProtectedTarget), with the rules the helper relies on:
+// A test-local double of the three stable-id functions a caller may inject into the configuration helper (its
+// `fence`: createCreatesPortForSpec, intentFor, resolveProtectedTarget; no plugin module provides them), with the
+// rules the helper relies on:
 //   - intentFor(kind, args) -> {kind, ...args} (the scope is kept, so a test can see it);
 //   - createCreatesPortForSpec(spec, {intents, shippedKinds, featureKinds}) protects the featureKinds that have an
 //     intent and only them (a spec without createIdentity protects no shippedKinds); none -> a pass-through port

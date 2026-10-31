@@ -1001,6 +1001,36 @@ test('build runtime: the build\'s create port is used for configuration only whe
   assert.equal(k.org.rows('environmentvariabledefinitions')[0].environmentvariabledefinitionid, k.creates.idOf('environmentVariable', 'contoso_mode'));
 });
 
+test('build runtime: with no port, or the build\'s plain pass-through, configuration loads no stable-id module; every kind is created and a rerun writes nothing', async () => {
+  const { withoutStableCreateModules } = require('./helpers/no-stable-create-modules.js');
+  const { createPassthroughCreates } = require('../lib/creates-passthrough.js');
+  for (const creates of [undefined, createPassthroughCreates()]) {
+    const label = creates ? 'pass-through' : 'no port';
+    const h = await harness();
+    const s = spec();
+    delete s.solution.version;
+    // A connection is left unbound: proving one needs the connection inventory, which is not what this test is about.
+    const configurationBindings = C.readDeploymentBindings(settings('https://v1.contoso.com', undefined), s);
+    const step = () => createConfigurationRuntime({ spec: s, sdk: h.sdk, opts: { ...(creates ? { creates } : {}), configurationBindings } }).apply('data-model');
+    const { result, requested } = await withoutStableCreateModules(async () => {
+      const first = await step();
+      const mark = h.org.requests.length;
+      const again = await step();
+      return { first, again, rerunWrites: h.org.writes(mark) };
+    });
+    assert.deepEqual(requested, [], `${label}: no stable-id module is asked for`);
+    assert.equal(result.first.halt, null, `${label}: ${JSON.stringify(result.first.halt)}`);
+    assert.equal(result.again.halt, null, `${label}: ${JSON.stringify(result.again.halt)}`);
+    assert.deepEqual(result.rerunWrites, [], label);
+    const counts = ['environmentvariabledefinitions', 'environmentvariablevalues', 'connectionreferences', 'customapis', 'customapirequestparameters', 'customapiresponseproperties', 'duplicaterules', 'duplicateruleconditions']
+      .map((set) => h.org.rows(set).length);
+    assert.deepEqual(counts, [3, 1, 1, 1, 2, 1, 1, 1], label);
+    // Fresh ids, not planned ones: the plain path never derives an id from the declaration.
+    assert.notEqual(h.org.rows('customapis')[0].customapiid, h.creates.idOf('customApi', 'contoso_calc'), label);
+    assert.deepEqual(h.org.unexpected, [], label);
+  }
+});
+
 test('build runtime: two declarations of one item stop the build before anything is read or written', async () => {
   const h = await harness();
   const mark = h.org.requests.length;

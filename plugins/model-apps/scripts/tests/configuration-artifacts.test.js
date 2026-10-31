@@ -12,9 +12,9 @@ const C = require('../lib/configuration-artifacts.js');
 const SP = '/providers/Microsoft.PowerApps/apis/shared_sharepointonline';
 const VAULT_REF = '/subscriptions/00000000-0000-0000-0000-000000000001/resourceGroups/rg1/providers/Microsoft.KeyVault/vaults/contosovault/secrets/apikey';
 
-// Every ctx below names `fence: null`: these tests drive the helper over stub SDKs that do not answer the shared
-// stable-id reader, so they ask for the plain pass-through explicitly instead of whatever loadStableCreates() finds in
-// the plugin. The helper's own stable port is exercised through the real SDK bundle in the real-bundle file.
+// Every ctx below names `fence: null`: these tests drive the helper over stub SDKs, on the plain pass-through, which is
+// also what a ctx without `fence` gets (the plugin loads no stable-id module). The helper's consuming side of a stable
+// port is exercised with test-local doubles (tests/helpers/stable-create-port.js) in the real-bundle file.
 const base = (extra = {}) => ({
   minimumPluginVersion: '2.21.0',
   solution: { uniqueName: 'ContosoSol', publisherPrefix: 'contoso' },

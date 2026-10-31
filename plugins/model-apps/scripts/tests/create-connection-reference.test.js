@@ -208,9 +208,10 @@ test('a lookup stopped at an id it could not read names that id, and sends nothi
   assert.deepEqual(org.writes(mark), []);
 });
 
-// --- The stable port the CLI builds for itself from the shared fence -----------------------------------------------
-// `deps.fence` is the three shared functions (a double here, the real modules in the release); with it the CLI plans the
-// reference's id before it writes, so a rerun of the same command lands on the same row.
+// --- The stable port the CLI builds from injected stable-id functions ------------------------------------------------
+// `deps.fence` is three stable-id functions a caller injects (a test-local double: the plugin ships none, and the CLI's
+// own default is the plain pass-through); with it the CLI plans the reference's id before it writes, so a rerun of the
+// same command lands on the same row. These tests pin the consuming side only.
 function fenceRun(org) {
   const { createConnectionReference } = require('../create-connection-reference.js');
   const { createAzHttpClient } = require('../lib/sdk-http-client.js');
@@ -225,7 +226,7 @@ function fenceRun(org) {
 }
 const postedId = (requests) => posts(requests).map((r) => r.body.connectionreferenceid);
 
-test('with the shared fence, a create the server never saved is sent again under the same planned id', async () => {
+test('with injected stable-id functions, a create the server never saved is sent again under the same planned id', async () => {
   const org = createConfigOrg({ solution: { uniqueName: 'ContosoSol', version: '1.0.0.0', prefix: 'contoso' } });
   const run = fenceRun(org);
   // The first create is answered 503 and never reaches the org; its body is kept to compare the id it carried.
@@ -246,7 +247,7 @@ test('with the shared fence, a create the server never saved is sent again under
   assert.equal(org.rows('connectionreferences')[0].connectionreferenceid, a);
 });
 
-test('with the shared fence, a create saved but answered lost is found at its id on the rerun: nothing is sent', async () => {
+test('with injected stable-id functions, a create saved but answered lost is found at its id on the rerun: nothing is sent', async () => {
   const org = createConfigOrg({ solution: { uniqueName: 'ContosoSol', version: '1.0.0.0', prefix: 'contoso' } });
   const run = fenceRun(org);
   const lose = async (req) => {
@@ -263,7 +264,7 @@ test('with the shared fence, a create saved but answered lost is found at its id
   assert.equal(again.out.connectionReferenceId, row.connectionreferenceid);
 });
 
-test('with the shared fence, the id depends on the solution the command names, and a run without one still plans its id', async () => {
+test('with injected stable-id functions, the id depends on the solution the command names, and a run without one still plans its id', async () => {
   const ids = [];
   for (const solution of ['ContosoSol', undefined]) {
     const org = createConfigOrg({ solution: { uniqueName: 'ContosoSol', version: '1.0.0.0', prefix: 'contoso' } });
@@ -275,9 +276,9 @@ test('with the shared fence, the id depends on the solution the command names, a
   assert.notEqual(ids[0], ids[1]);
 });
 
-test('with the shared fence, a reference another tool made under its logical name is reused as before; another connector is still refused', async () => {
+test('with injected stable-id functions, a reference another tool made under its logical name is reused as before; another connector is still refused', async () => {
   const org = createConfigOrg({ solution: { uniqueName: 'ContosoSol', version: '1.0.0.0', prefix: 'contoso' } });
-  // Made without the fence (a plain run, the maker portal, an earlier version): a fresh id, not the planned one.
+  // Made on the plain path (the CLI's default, the maker portal, an earlier version): a fresh id, not the planned one.
   const { createConnectionReference } = require('../create-connection-reference.js');
   const { createAzHttpClient } = require('../lib/sdk-http-client.js');
   const { configurationSendOnce } = require('../lib/configuration-transport.js');
@@ -290,7 +291,7 @@ test('with the shared fence, a reference another tool made under its logical nam
   assert.equal(again.out instanceof Error, false, again.out && again.out.message);
   assert.equal(again.out.connectionReferenceId, existing, 'the CLI keeps no record of its own rows: its logical name is the reference');
   assert.deepEqual(again.writes, []);
-  // Under --solution, the reused row is added to it, as without the fence.
+  // Under --solution, the reused row is added to it, as on the plain path.
   const added = await run({ solution: 'ContosoSol' });
   assert.equal(added.out.connectionReferenceId, existing);
   assert.deepEqual(added.writes, ['POST /AddSolutionComponent']);
@@ -299,6 +300,53 @@ test('with the shared fence, a reference another tool made under its logical nam
   assert.ok(other.out instanceof Error);
   assert.match(other.out.message, /already exists for a different connector/);
   assert.deepEqual(other.writes, []);
+});
+
+// --- The CLI's default: the plain create path ------------------------------------------------------------------------
+// No stable-id module is part of the plugin, and the CLI must not need one: its default port is the plain pass-through,
+// where the logical name is the reference.
+
+test('the CLI loads no stable-id module: a create, then the same command again, with and without --solution, writes nothing more', async () => {
+  const { withoutStableCreateModules } = require('./helpers/no-stable-create-modules.js');
+  for (const extra of [[], ['--solution', 'ContosoSol']]) {
+    const { org, run } = harness();
+    const { result, requested } = await withoutStableCreateModules(async () => ({ first: await run('new_sp', SP, ...extra), again: await run('new_sp', SP, ...extra) }));
+    assert.deepEqual(requested, [], extra.join(' '));
+    assert.equal(result.first.emit.ok, true, extra.join(' '));
+    assert.equal(result.again.emit.ok, true, extra.join(' '));
+    assert.deepEqual(result.again.writes, [], extra.join(' '));
+    assert.equal(org.rows('connectionreferences').length, 1);
+    assert.equal(result.again.emit.payload.connectionReferenceId, result.first.emit.payload.connectionReferenceId);
+    assert.deepEqual(org.unexpected, []);
+  }
+});
+
+test('on the plain create path a create the server never saved is sent again under a new id: the rerun still makes one row', async () => {
+  const { createConnectionReference } = require('../create-connection-reference.js');
+  const { createAzHttpClient } = require('../lib/sdk-http-client.js');
+  const { configurationSendOnce } = require('../lib/configuration-transport.js');
+  const org = createConfigOrg({ solution: { uniqueName: 'ContosoSol', version: '1.0.0.0', prefix: 'contoso' } });
+  // The first create is answered 503 and never reaches the org; every create body is kept to compare the ids.
+  const sentIds = [];
+  let refuse = true;
+  const request = (req) => {
+    if (String(req.method).toUpperCase() !== 'POST' || !/\/connectionreferences$/.test(new URL(req.url).pathname)) return org.request(req);
+    sentIds.push(JSON.parse(String(req.body)).connectionreferenceid);
+    if (!refuse) return org.request(req);
+    return { statusCode: 503, headers: { 'content-type': 'application/json' }, body: JSON.stringify({ error: { message: 'Service unavailable' } }) };
+  };
+  const client = createAzHttpClient(org.origin, { getToken: () => 'test-token-0123456789abcdef', request, sleep: async () => {}, sendOnce: configurationSendOnce });
+  const first = await createConnectionReference({ env: org.origin, logicalName: 'new_sp', connectorId: SP }, client);
+  assert.ok(first instanceof Error);
+  assert.equal(org.rows('connectionreferences').length, 0);
+  refuse = false;
+  const second = await createConnectionReference({ env: org.origin, logicalName: 'new_sp', connectorId: SP }, client);
+  assert.equal(second instanceof Error, false, second && second.message);
+  assert.equal(sentIds.length, 2);
+  assert.notEqual(sentIds[0], sentIds[1], 'the plain path allocates a fresh id per create');
+  assert.equal(org.rows('connectionreferences').length, 1);
+  assert.equal(org.rows('connectionreferences')[0].connectionreferenceid, sentIds[1]);
+  assert.equal(second.connectionReferenceId, sentIds[1]);
 });
 
 // --- The bytes a caller sees ------------------------------------------------------------------------------------------

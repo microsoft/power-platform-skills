@@ -130,9 +130,9 @@ function settle(plan, result, logicalName, seen) {
  * Creates or keeps the connection reference through the SDK.
  * @param {object} request - { env, logicalName, connectorId, connectionId?, displayName?, solution?, authorized? (Set) }
  * @param {object} [httpClient] - the SDK's HttpClient; the az-token one for `env` when omitted (a test seam)
- * @param {object} [deps] - { creates, fence }: a create port of the caller's own; or the shared stable-id functions the helper
- *   builds its own port from (configurationContext's fence). Omitted, the helper's default port: the stable one when the shared
- *   modules are part of the plugin, else the plain pass-through (lib/creates-passthrough.js)
+ * @param {object} [deps] - { creates, fence }: a create port of the caller's own; or injected stable-id functions the helper
+ *   builds its own port from (configurationContext's fence). Omitted, the helper's default port: the plain pass-through
+ *   (lib/creates-passthrough.js)
  * @returns {Promise<object|Error>} the success payload, or the Error to report
  */
 async function createConnectionReference({ env, logicalName, connectorId, connectionId, displayName, solution, authorized }, httpClient, deps = {}) {
@@ -146,10 +146,8 @@ async function createConnectionReference({ env, logicalName, connectorId, connec
     const sdk = make(solution ? { solutionUniqueName: solution } : {});
     // The SDK writes an artifact to its workspace before pushing it, so the throwaway workspace is initialised first.
     await sdk.initWorkspace();
-    // Without a port of the caller's own, the helper builds its default when it plans: the stable port, scoped to
-    // --solution or, without it, to the Default Solution the create lands in, so a create whose answer was lost is found
-    // again at its own id by the next run, never sent again under another. Without the shared modules it is the plain
-    // pass-through (lib/creates-passthrough.js), where the logical name is the identity.
+    // Without a port of the caller's own, the helper uses its default: the plain pass-through (lib/creates-passthrough.js),
+    // where the logical name is the identity, so a rerun finds the reference it made by that name and writes nothing.
     // This script keeps no record of the references it made, so its logical name stays the reference: one found by name
     // at another id (made by hand, by an earlier version, or under another --solution) is reused, never refused.
     const ctx = configurationContext({ sdk, creates: deps.creates, fence: deps.fence, bindings, solutionUniqueName: solution, authorizedDestructive: authorized, reuseNamesakes: true });
