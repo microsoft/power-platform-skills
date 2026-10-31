@@ -7,8 +7,10 @@
 const { test } = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');
+const path = require('node:path');
 const { makeGenpageSdk } = require('../lib/genpage-sdk.js');
 const { FakeGenPageServer, INSTANCE, ACCOUNT_TABLE, appTransport, APP_ID, APP_EXISTING_PAGE_ID } = require('./helpers/fake-genpage-server.js');
+const { SCRIPTS_DIR, productionScripts, scriptLabel, withoutComments } = require('./helpers/production-scripts.js');
 
 const OTHER = '77777777-7777-4777-8777-777777777777';
 const SOURCE = "import * as React from 'react';\nexport default function Page() { return <div>Draft</div>; }\n";
@@ -98,6 +100,55 @@ test('a draft is asked for with false only, and a draft placement cannot also fi
     }
     assert.strictEqual(server.requests.length, before, 'nothing was read');
     assert.deepStrictEqual([app.state.writes, server.writes()], [[], []]);
+  });
+});
+
+// ── Drafts come only from the page CLI: the build's guarded publish and a draft never meet ──
+
+// The text of every `.<name>(…)` call in `code` (comments already blanked), to its matching parenthesis.
+function callsIn(code, name) {
+  const calls = [];
+  const re = new RegExp(`\\.${name}\\(`, 'g');
+  let match;
+  while ((match = re.exec(code))) {
+    let depth = 0;
+    let at = match.index + match[0].length - 1;
+    for (; at < code.length; at += 1) {
+      if (code[at] === '(') depth += 1;
+      else if (code[at] === ')' && (depth -= 1) === 0) break;
+    }
+    calls.push(code.slice(match.index, at + 1));
+  }
+  return calls;
+}
+
+test('the build never asks for a draft placement: only scripts/genpage.js spells `publish: false` into placeInApp, and the build\'s one placement always hands over beforeAppWrite — which a draft is refused with', () => {
+  const drafting = [];
+  for (const file of productionScripts()) {
+    const code = withoutComments(fs.readFileSync(file, 'utf8'));
+    for (const call of callsIn(code, 'placeInApp')) if (/\bpublish\s*:\s*false\b|\bdraft\b/i.test(call)) drafting.push(scriptLabel(file));
+  }
+  assert.deepStrictEqual(drafting, ['genpage.js'], 'add-to-app --draft is the one placement that asks for a draft');
+
+  const build = withoutComments(fs.readFileSync(path.join(SCRIPTS_DIR, 'lib', 'sdk-build.js'), 'utf8'));
+  const placements = callsIn(build, 'placeInApp');
+  assert.strictEqual(placements.length, 1, 'the build places through one call (appWriters.placeViews)');
+  assert.match(placements[0], /\bbeforeAppWrite\s*:/, 'the build always hands over beforeAppWrite');
+  const asks = callsIn(build, 'placeViews');
+  assert.ok(asks.length >= 1, 'the build asks for a placement');
+  for (const call of asks) assert.doesNotMatch(call, /\bpublish\s*:|\bdraft\b/i, `the build's placement asks for no draft: ${call}`);
+});
+
+test('REAL BUNDLE: a draft placement never calls the caller\'s publishApp — the guarded publish is only for a placement that publishes — and no publish rides its answer', async () => {
+  await inWorld(async ({ server, app, genpage }) => {
+    let asked = 0;
+    const publishApp = async () => { asked += 1; return { publish: { kind: 'verified' } }; };
+    const placed = await genpage.placeInApp(APP_ID, { pages: [{ pageId: OTHER, title: 'Other' }], publish: false, publishApp });
+    assert.deepStrictEqual([placed.added, placed.appEdited, placed.published, placed.pendingPublish, placed.placementState], [[OTHER], true, false, true, 'saved']);
+    assert.strictEqual(asked, 0, 'publishApp was never called');
+    assert.strictEqual(placed.appPublish, undefined, 'the answer carries no appPublish');
+    assert.strictEqual(publishes(server, app), 0, 'nothing was published');
+    assert.ok(namesPage(app.state.xml, OTHER) && !namesPage(app.state.publishedXml, OTHER), 'saved, not published');
   });
 });
 

@@ -26,7 +26,8 @@ const folders = [];
 test.after(() => { for (const folder of folders) fs.rmSync(folder, { recursive: true, force: true }); });
 const tmp = () => { const folder = fs.mkdtempSync(path.join(os.tmpdir(), 'gp-draft-lease-')); folders.push(folder); return folder; };
 
-async function inWorld(fn) {
+// `wrap` sees the backend each run makes (to watch what a verb asks of it).
+async function inWorld(fn, { wrap = (backend) => backend } = {}) {
   const server = new FakeGenPageServer();
   server.serveTable(ACCOUNT_TABLE);
   server.seedPage(APP_EXISTING_PAGE_ID, { name: 'Existing', config: { dataSources: ['account'], model: '' } });
@@ -37,10 +38,10 @@ async function inWorld(fn) {
       forms: [{ id: FORM_KEPT, inApp: true }], views: [{ id: APP_VIEW_ID, inApp: true, isDefault: true }], charts: [] }],
   });
   const made = [];
-  const makeBackend = () => makeGenpageSdk(INSTANCE, {
+  const makeBackend = () => wrap(makeGenpageSdk(INSTANCE, {
     httpClient: world.http,
     mkdtempSync: (prefix) => { const dir = fs.mkdtempSync(prefix); made.push(dir); return dir; },
-  });
+  }));
   const appDir = tmp();
   const deps = { appDir, makeGenpageSdk: makeBackend, emit: (ok, payload) => ({ ok, ...payload }), stderr: () => {},
     // A usage error is thrown, not an exit: a flag a command does not know fails the test that used it, not the whole file.
@@ -65,6 +66,26 @@ test('REAL BUNDLE: add-to-app --draft saves the entry and publishes nothing — 
     assert.ok(!namesPage(app.state.publishedXml, OTHER), 'what runs does not');
     assert.strictEqual(app.state.publishedXml, publishedBefore, 'the published navigation is untouched');
   });
+});
+
+test('REAL BUNDLE: the add-to-app --draft answer is the draft\'s and nothing else — the placement is asked for a save only, never with a publish of the caller\'s, and no publish rides the answer', async () => {
+  const asked = [];
+  const wrap = (backend) => {
+    const placeInApp = backend.placeInApp.bind(backend);
+    backend.placeInApp = (appId, options) => { asked.push(options); return placeInApp(appId, options); };
+    return backend;
+  };
+  await inWorld(async ({ app, verbs }) => {
+    const out = await verbs(['add-to-app', '--env', INSTANCE, '--app-id', APP_ID, '--page-id', OTHER, '--draft']);
+    assert.strictEqual(out.ok, true, JSON.stringify(out));
+    assert.deepStrictEqual(Object.keys(out).filter((key) => key !== 'warnings').sort(),
+      ['added', 'alreadyPlaced', 'appEdited', 'appId', 'dataSources', 'languageCode', 'ok', 'pageId', 'pendingPublish', 'pinnedViews', 'placementState', 'published', 'title'].sort());
+    assert.deepStrictEqual([out.published, out.pendingPublish, out.placementState], [false, true, 'saved']);
+    assert.strictEqual(asked.length, 1);
+    assert.strictEqual(asked[0].publish, false, 'a draft is asked for');
+    for (const key of ['publishApp', 'finish', 'finishIfUnpublished', 'beforeAppWrite']) assert.strictEqual(asked[0][key], undefined, `the page CLI's draft hands over no ${key}`);
+    assert.strictEqual(app.state.publishAttempts, 0, 'nothing was published');
+  }, { wrap });
 });
 
 test('REAL BUNDLE: remove-from-app --draft takes the entry out of the saved navigation only — the page is said to still show in what runs', async () => {
