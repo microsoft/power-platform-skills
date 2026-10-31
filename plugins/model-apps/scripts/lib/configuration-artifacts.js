@@ -2662,7 +2662,11 @@ function expectedContextOf(spec, kind, key) {
   if (kind === 'customApi') { const e = find(spec.customApis, (x) => x.uniqueName); return e ? { uniqueName: e.uniqueName } : {}; }
   if (kind === 'duplicateRule') {
     const e = find(spec.duplicateDetectionRules, (x) => x.key);
-    return e ? { baseEntity: e.entity, matchingEntity: e.matchingEntity || e.entity } : {};
+    // The matching table is compared only when the declaration names it. Omitted, it means "keep the rule's own" on
+    // an update (the planner never changes it), so the base table, which is only the default of a NEW rule, must not
+    // be asked of a rule that already exists at its id.
+    if (!e) return {};
+    return { baseEntity: e.entity, ...(nonEmptyString(e.matchingEntity) ? { matchingEntity: e.matchingEntity } : {}) };
   }
   return {};
 }

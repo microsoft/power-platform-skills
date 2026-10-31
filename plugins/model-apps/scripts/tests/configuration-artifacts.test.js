@@ -761,11 +761,24 @@ test('the stable create port as the helper takes it: a pass-through port unchang
   assert.deepEqual(await port.resolve({ kind: 'duplicateRule', key: 'Email' }), { state: 'present', id: planned }, 'only the state and the id');
   await port.resolve({ kind: 'customApi', key: 'contoso_calc' });
   assert.deepEqual(asked.map(({ readByName, ...rest }) => rest), [
-    { provision, kind: 'duplicateRule', key: 'Email', id: planned, expected: { baseEntity: 'contact', matchingEntity: 'contact' } },
+    { provision, kind: 'duplicateRule', key: 'Email', id: planned, expected: { baseEntity: 'contact' } },
     { provision, kind: 'customApi', key: 'contoso_calc', id: planned, boundId: planned, expected: { uniqueName: 'contoso_Calc' } },
   ]);
   assert.deepEqual(await asked[0].readByName(), [], 'the helper runs its own name lookup after an absent');
   await assert.rejects(port.resolve({ kind: 'duplicateRule', key: 'boom' }), (e) => e.code === 'create-identity-conflict');
   await assert.rejects(port.resolve({ kind: 'duplicateRule', key: 'nope' }), (e) => e.code === 'create-identity-invalid');
   assert.throws(() => C.configurationCreates(stable, {}), /resolveProtectedTarget/);
+});
+
+test('the stable create port asks a rule at its id for the matching table only when the declaration names one', async () => {
+  const planned = 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee';
+  const stable = { mode: 'stable', run: async () => ({}), protects: () => true, identityFor: () => ({ id: planned, childIds: {} }) };
+  const rule = (extra) => ({ key: 'Email', name: 'Same email', entity: 'contact', conditions: [{ key: 'e', column: 'emailaddress1', match: 'exact' }], ...extra });
+  const asked = [];
+  const resolveProtectedTarget = async (args) => { asked.push(args.expected); return { state: 'present', id: planned }; };
+  // An existing contact-to-account rule rerun with the matching table left out keeps its own: the base table, the
+  // default of a NEW rule only, is not asked of it (an undefined member is not compared by the shared reader).
+  await C.configurationCreates(stable, { resolveProtectedTarget, spec: base({ duplicateDetectionRules: [rule({})] }) }).resolve({ kind: 'duplicateRule', key: 'Email' });
+  await C.configurationCreates(stable, { resolveProtectedTarget, spec: base({ duplicateDetectionRules: [rule({ matchingEntity: 'account' })] }) }).resolve({ kind: 'duplicateRule', key: 'Email' });
+  assert.deepEqual(asked, [{ baseEntity: 'contact' }, { baseEntity: 'contact', matchingEntity: 'account' }]);
 });
