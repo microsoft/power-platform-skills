@@ -139,8 +139,8 @@ function createConfigurationRuntime({ spec, sdk, provision, opts = {}, appUnique
     // outcome is inspected by its handle, never replayed by a whole-build retry, and a refusal will refuse again.
     throwIfIncomplete(step) {
       if (!step || !step.halt) return;
-      const { phase, code, message } = step.halt;
-      throw new BuildHalt(message, { phase, code, recoverable: false, retry: RETRY.NEVER });
+      const { phase, code: haltCode, message } = step.halt;
+      throw new BuildHalt(message, { phase, code: haltCode, recoverable: false, retry: RETRY.NEVER });
     },
 
     // Gate the pages that name a reference or a Custom API on what was OBSERVED (never on the settings): items this
