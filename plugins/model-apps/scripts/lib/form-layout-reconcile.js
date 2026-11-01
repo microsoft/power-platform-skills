@@ -1895,6 +1895,10 @@ async function reconcileDeclaredForm(input, ctx = {}) {
     } else {
       publication = { scope, state: 'not-needed', desiredSha256: null, dispatchToken: null };
     }
+    // This run's own write answer, or in a recovery what this same attempt durably recorded of its own answer; never a
+    // later read. An edit answers for an uncommitted root only when the planner had the form's typed adoption approval
+    // (an unbound form is planned under nothing else), so it never stands in for that consent; the root's origin stays
+    // `adopted` (its id is not the catalog's), while the cells this edit added are recorded as created by it.
     const acknowledged = recovering
       ? !!(pending && pending.token === token && (pending.acknowledgedRoot || (pending.savedObservation && pending.savedObservation.acknowledgedRoot)))
       : !!(applied && applied.acknowledged);
