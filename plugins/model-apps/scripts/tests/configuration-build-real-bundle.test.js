@@ -291,6 +291,39 @@ test('a new duplicate rule whose own component type the build cannot read stops 
   assert.equal(unreadable.org.rows('duplicaterules').length, 0);
 });
 
+test('a duplicate rule saved but not published says how to finish it; a rebuild without status keeps it unpublished, one with status publishes it', async () => {
+  // The publish job fails after its request was accepted, as one does on an environment whose async host has not yet seen a
+  // table created moments earlier: PublishDuplicateRule answers 200 and its asyncoperation ends Failed (statecode 3, statuscode 31).
+  const JOB = '00000000-0000-4000-8000-0000000000f1';
+  let failPublish = true;
+  const h = await harness({ intercept: ({ method, path: p }) => (failPublish && method === 'POST' && /\/Microsoft\.Dynamics\.CRM\.PublishDuplicateRule$/.test(p)
+    ? { statusCode: 200, body: { asyncoperationid: JOB } } : undefined) });
+  h.org.sets.get('asyncoperations').set(JOB, { asyncoperationid: JOB, statecode: 3, statuscode: 31, operationtype: 7, name: 'Publish duplicate rule',
+    message: 'The entity was not found in the MetadataCache.' });
+  const HINT = '(saved, but its publication did not complete: publish the rule in the environment\'s duplicate detection rules settings, '
+    + 'or set "status": "published" on it in the App Spec and build again; a build without "status" keeps it unpublished)';
+  const first = await build(h, RULE_ONLY());
+  assert.ok(first.thrown, 'the build halted');
+  assert.equal(first.thrown.code, 'configuration-incomplete');
+  assert.equal(first.thrown.message, `data-model failed: 1 configuration item not completed: duplicateRule email (DUPLICATE_RULE_PUBLISH_FAILED) ${HINT}`);
+  assert.equal(h.org.rows('duplicaterules')[0].statecode, 0, 'the rule is saved and unpublished');
+
+  // The documented rule holds: a rule whose spec omits status keeps the status it has, so a rebuild reports it unchanged.
+  const again = await build(h, RULE_ONLY());
+  if (again.thrown) throw again.thrown;
+  assert.deepEqual(again.writes, []);
+  assert.equal(h.org.rows('duplicaterules')[0].statecode, 0);
+
+  // The hint's second way: status "published" on the rule publishes it on the next build.
+  failPublish = false;
+  const published = { ...RULE_ONLY(), duplicateDetectionRules: CONFIGURATION_FIELDS.duplicateDetectionRules.map((r) => ({ ...r, status: 'published' })) };
+  const fixed = await build(h, published);
+  if (fixed.thrown) throw fixed.thrown;
+  assert.equal(fixed.r.ok, true, JSON.stringify(fixed.r.errors));
+  assert.equal(h.org.rows('duplicaterules')[0].statecode, 1);
+  assert.deepEqual(h.org.unexpected, []);
+});
+
 test('the other configuration kinds keep their component types and read no duplicate-rule metadata', async () => {
   const h = await harness();
   const spec = makeSpec();

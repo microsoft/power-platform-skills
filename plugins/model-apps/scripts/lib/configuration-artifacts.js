@@ -2455,8 +2455,20 @@ function authorizeFlags(tokens) {
   const notes = spelled.map((s) => s.note).filter(Boolean);
   return `${spelled.map((s) => `--authorize ${s.arg}`).join(' ')}${notes.length ? ` — ${notes.join(' ')}` : ''}`;
 }
+// A duplicate rule that is saved and not published (pendingPublish: the publish job failed, or the read-back shows it
+// unpublished) is not finished by a plain rebuild: an omitted `status` keeps the remote status (ruleStatus), so that a
+// build never republishes a rule a maker unpublished, and the rebuild reports the rule unchanged. That rule stays, so
+// the line itself says how to finish:
+//   duplicateRule email (DUPLICATE_RULE_PUBLISH_FAILED) (saved, but its publication did not complete: publish the rule in ...)
+// The marker is non-enumerable so the halt items (and their JSON) stay {kind, key, code}; the step's runtime reuses
+// these objects when it rebuilds the message (configuration-build.js), so the hint survives that too.
+const SAVED_UNPUBLISHED = Symbol('savedUnpublished');
+const UNPUBLISHED_RULE_HINT = 'saved, but its publication did not complete: publish the rule in the environment\'s duplicate detection rules settings, '
+  + 'or set "status": "published" on it in the App Spec and build again; a build without "status" keeps it unpublished';
+const markSavedUnpublished = (item) => Object.defineProperty(item, SAVED_UNPUBLISHED, { value: true, enumerable: false });
 function configurationHaltMessage(items) {
-  const line = (p) => `${p.kind} ${p.key} (${p.code})${p.authorize && p.authorize.length ? ` (approve with ${authorizeFlags(p.authorize)})` : ''}`;
+  const hint = (p) => (p[SAVED_UNPUBLISHED] && p.kind === 'duplicateRule' ? ` (${UNPUBLISHED_RULE_HINT})` : '');
+  const line = (p) => `${p.kind} ${p.key} (${p.code})${p.authorize && p.authorize.length ? ` (approve with ${authorizeFlags(p.authorize)})` : ''}${hint(p)}`;
   return `${items.length} configuration item${items.length === 1 ? '' : 's'} not completed: ${items.map(line).join(', ')}`;
 }
 
@@ -2468,7 +2480,7 @@ function configurationHaltMessage(items) {
 async function runConfigurationStep(spec, ctx, phase) {
   const plan = phase === 'solution' ? await planSolutionVersion(spec, ctx) : await planConfiguration(spec, ctx);
   const outcome = await applyConfiguration(plan, ctx);
-  const problems = [...outcome.refused, ...outcome.unknown, ...outcome.pendingPublish].map(haltItem);
+  const problems = [...outcome.refused.map(haltItem), ...outcome.unknown.map(haltItem), ...outcome.pendingPublish.map((p) => markSavedUnpublished(haltItem(p)))];
   const blocking = phase === 'solution' ? [] : configurationReadiness(outcome);
   // A required variable with no value leaves the build incomplete even with no page that reads it, and so does a
   // connection the settings asked for that the read-back does not prove bound (unbound, of another connector, or
