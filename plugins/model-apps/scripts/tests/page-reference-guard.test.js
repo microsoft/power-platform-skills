@@ -148,11 +148,69 @@ test('every continuation page is read; a refused read, a malformed second page a
 
 test('the default budget: at most MAX_FORMS_PER_LAYER forms in a layer, in at most MAX_READS_PER_LAYER reads — a layer that keeps answering full pages is refused, never cut short', async () => {
   assert.deepStrictEqual([MAX_FORMS_PER_LAYER, MAX_READS_PER_LAYER], [20000, 201]);
-  const row = { formid: 'cccccccc-0000-4000-8000-000000000000', objecttypecode: 'account', name: 'Information', type: 2, formxml: plainXml };
+  const row = (n) => ({ formid: `cccccccc-0000-4000-8000-${String(n).padStart(12, '0')}`, objecttypecode: 'account', name: 'Information', type: 2, formxml: plainXml });
   let reads = 0;
-  const full = { get: async (url) => { reads += 1; return { status: 200, body: { value: Array(100).fill(row), '@odata.nextLink': `${url.replace(/&n=\d+$/, '')}&n=${reads}` } }; } };
+  // Full pages of forms never answered before: what is refused is the size of the layer, not a page that repeats another.
+  const full = { get: async (url) => { const first = reads * 100; reads += 1; return { status: 200, body: { value: Array.from({ length: 100 }, (_, i) => row(first + i)), '@odata.nextLink': `${url.replace(/&n=\d+$/, '')}&n=${reads}` } }; } };
   await assert.rejects(assertPageDeletionSafe(full, [P1]), (e) => e.code === 'GENPAGE_FORM_REFERENCES_UNREADABLE' && e.budgetExhausted === true && /published layer .* more than 20000 forms/.test(e.message));
   assert.strictEqual(reads, MAX_READS_PER_LAYER, 'the answer that took the layer past 20000 forms is the last read');
+});
+
+// An answer of `rows` (form ids), with `extra` annotations and a continuation to the next answer of `pages`.
+function pagedClient(layers) {
+  return {
+    get: async (url) => {
+      const layer = url.startsWith('/systemforms/Microsoft.Dynamics.CRM.RetrieveUnpublishedMultiple()') ? 'saved' : 'published';
+      const at = Number((/&n=(\d+)$/.exec(url) || [])[1] || 0);
+      const pages = layers[layer] || [{ rows: [] }];
+      const { rows, extra = {} } = pages[at];
+      const body = { value: rows.map((formid) => ({ formid, objecttypecode: 'account', name: 'Information', type: 2, formxml: plainXml })), ...extra };
+      if (at + 1 < pages.length) body['@odata.nextLink'] = `${url.replace(/&n=\d+$/, '')}&n=${at + 1}`;
+      return { status: 200, body };
+    },
+  };
+}
+const F = (n) => `dddddddd-0000-4000-8000-${String(n).padStart(12, '0')}`;
+
+test('the pages of a layer are one list: a form twice — in any letter case or braces, on one page or two — or a form with no id is refused, never deduplicated', async () => {
+  for (const [saved, why] of [
+    [[{ rows: [F(1), F(2)] }, { rows: [F(2), F(3)] }], `form ${F(2)} came back twice`],
+    [[{ rows: [F(1), `{${F(1).toUpperCase()}}`] }], `form ${F(1)} came back twice`],
+    [[{ rows: [F(1)] }, { rows: [''] }], 'a form came back with no form id'],
+  ]) {
+    await assert.rejects(assertPageDeletionSafe(pagedClient({ published: [{ rows: [F(1)] }], saved }), [P1]), (e) => {
+      assert.strictEqual(e.code, 'GENPAGE_FORM_REFERENCES_UNREADABLE');
+      assert.strictEqual(e.incompleteScan, true);
+      assert.ok(e.message.includes(`saved layer could not all be read: ${why}`), e.message);
+      return true;
+    });
+  }
+  // The layers are two lists: the same form in both — or in only one — is what they hold as a rule.
+  assert.deepStrictEqual(await assertPageDeletionSafe(pagedClient({ published: [{ rows: [F(1), F(2)] }], saved: [{ rows: [F(2)] }, { rows: [F(1), F(3)] }] }), [P1]), { reads: 3, formsScanned: 5 });
+});
+
+test('a count an answer declares is a lower bound (it stops at 5000): fewer forms than it is refused; as many or more — or no count, or -1 — is not', async () => {
+  const count = (n, more = {}) => ({ '@odata.count': n, ...more });
+  const refusals = [
+    [[{ rows: [F(1), F(2)], extra: count(3) }], 'the answer counts 3 forms but its pages held 2'],
+    // A later answer that counts more is believed: the count is never lowered by an answer that counts fewer.
+    [[{ rows: [F(1)], extra: count(2) }, { rows: [F(2)], extra: count(4) }, { rows: [F(3)], extra: count(1) }], 'the answer counts 4 forms but its pages held 3'],
+    [[{ rows: [F(1)], extra: { '@Microsoft.Dynamics.CRM.totalrecordcount': 2 } }], 'the answer counts 2 forms but its pages held 1'],
+  ];
+  for (const [saved, why] of refusals) {
+    await assert.rejects(assertPageDeletionSafe(pagedClient({ saved }), [P1]), (e) => e.code === 'GENPAGE_FORM_REFERENCES_UNREADABLE' && e.incompleteScan === true && e.message.includes(why));
+  }
+  const passes = [
+    [{ rows: [F(1), F(2)], extra: count(2) }],
+    // "5000 or more": the platform's cap, so more forms than it counts is no contradiction.
+    [{ rows: Array.from({ length: 60 }, (_, i) => F(i)), extra: count(50, { '@Microsoft.Dynamics.CRM.totalrecordcount': 50, '@Microsoft.Dynamics.CRM.totalrecordcountlimitexceeded': true }) }],
+    [{ rows: [F(1)], extra: { '@Microsoft.Dynamics.CRM.totalrecordcount': -1, '@Microsoft.Dynamics.CRM.totalrecordcountlimitexceeded': false } }],
+    [{ rows: [F(1)], extra: { '@odata.count': 'many' } }],
+  ];
+  for (const saved of passes) {
+    const out = await assertPageDeletionSafe(pagedClient({ saved }), [P1]);
+    assert.strictEqual(out.formsScanned, saved.reduce((n, p) => n + p.rows.length, 0));
+  }
 });
 
 test('readAllFormLayers keeps each row\'s layer and table', async () => {

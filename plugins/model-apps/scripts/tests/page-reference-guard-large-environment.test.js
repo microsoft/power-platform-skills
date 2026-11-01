@@ -69,7 +69,7 @@ test(`the modelled environment ends an UNPAGED saved-layer read of ${FORMS} form
 
 // ── the standalone delete ─────────────────────────────────────────────────────────────────────────────────────────────
 
-async function deleteWorld(t, forms) {
+async function deleteWorld(t, forms, alter = null) {
   // One app (an environment always has some), whose navigation names no page: the navigation check the delete makes first passes.
   const org = createFakeAppsOrg({
     apps: [{ appmoduleid: APP, appmoduleidunique: LAYER, name: 'Contoso Probe', uniquename: APP_NAME, componentstate: 0, '@odata.etag': 'W/"1001"' }],
@@ -81,7 +81,7 @@ async function deleteWorld(t, forms) {
       return linked === undefined ? null : json(200, { value: linked });
     },
   });
-  const env = largeFormEnvironment({ forms, origin: ORIGIN });
+  const env = largeFormEnvironment({ forms, origin: ORIGIN, alter });
   const client = createAzHttpClient(ORIGIN, { getToken: () => 'test-token', request: env.wrap(org.request), sleep: async () => {} });
   const tmp = tempDirs(t);
   const genpage = makeGenpageSdk(ORIGIN, { httpClient: client, mkdtempSync: () => tmp('genpage') });
@@ -113,7 +113,7 @@ test(`REAL BUNDLE: on the same environment a form that embeds the page — in th
 
 // A published app whose navigation names the page, the page manifest that lists it, and the environment's forms. What the fake org does not model — the app's
 // sitemap component, the manifest and the web resource and solution deletes — is answered here, as in teardown-navigation-proof-real-bundle.test.js.
-async function teardownWorld(t, forms) {
+async function teardownWorld(t, forms, alter = null) {
   const tmp = tempDirs(t);
   const manifest = Buffer.from(JSON.stringify({ schemaVersion: 1, pages: [{ key: 'overview', name: 'Overview', pageId: PAGE }] })).toString('base64');
   const org = createFakeAppsOrg({
@@ -134,7 +134,7 @@ async function teardownWorld(t, forms) {
       return null;
     },
   });
-  const env = largeFormEnvironment({ forms, origin: ORIGIN });
+  const env = largeFormEnvironment({ forms, origin: ORIGIN, alter });
   const client = createAzHttpClient(ORIGIN, { getToken: () => 'test-token', request: env.wrap(org.request), sleep: async () => {} });
   const sdk = createMakerSdk({ workspaceStorage: createNodeWorkspaceStorage(tmp('sdk')), instanceUrl: ORIGIN, httpClient: client });
   await sdk.initWorkspace();
@@ -160,4 +160,60 @@ test('REAL BUNDLE: the same teardown, the page embedded in a saved form, deletes
   assert.match(JSON.stringify(result.errors), /embedded in/);
   assert.ok(env.log.every((e) => e.outcome === 200));
   assert.deepStrictEqual(org.writes().filter((w) => w.method === 'DELETE'), [], 'not the app, not the page, not the solution');
+});
+
+// ── pages that are not one complete list ──────────────────────────────────────────────────────────────────────────────
+
+// 250 forms in both layers and, in the SAVED layer only, a form at position 120 that embeds the page (a card form: no form type is skipped). Read 100 at a time,
+// the embedding form is on the saved layer's second page — the page each case below spoils.
+function spoiledForms() {
+  const forms = plainForms(250);
+  forms.splice(120, 0, { formid: 'eeeeeeee-0000-4000-8000-000000000001', objecttypecode: 'new_ticket', name: 'Ticket', type: 11, formxml: EMBEDDING, layer: 'saved' });
+  return forms;
+}
+const SPOILED = {
+  // The second saved page answers the FIRST page's forms again, with a continuation that goes on to the third: every URL is new, but the forms 100 to 199 —
+  // the embedding one among them — are never answered.
+  'a page that repeats another': {
+    alter: ({ layer, at, body, all }) => { if (layer === 'saved' && at === 100) body.value = all.slice(0, 100); },
+    refusal: /form f0000000-0000-4000-8000-000000000000 came back twice/,
+  },
+  // Every saved answer counts the layer's 251 forms, and the second leaves out one: the embedding form.
+  'a page short of the count its answer declares': {
+    alter: ({ layer, at, body, all }) => {
+      if (layer !== 'saved') return;
+      body['@odata.count'] = all.length;
+      if (at === 100) body.value = body.value.filter((f) => f.type !== 11);
+    },
+    refusal: /the answer counts 251 forms but its pages held 250/,
+  },
+};
+
+for (const [what, { alter, refusal }] of Object.entries(SPOILED)) {
+  test(`REAL BUNDLE: a page delete whose saved-layer scan has ${what} is refused — nothing deleted`, async (t) => {
+    const { org, genpage } = await deleteWorld(t, spoiledForms(), alter);
+    await assert.rejects(genpage.delete(PAGE, { allowDestructive: true }), (e) => {
+      assert.strictEqual(e.code, 'GENPAGE_FORM_REFERENCES_UNREADABLE', e.message);
+      assert.match(e.message, /saved layer could not all be read/);
+      assert.match(e.message, refusal);
+      return true;
+    });
+    assert.deepStrictEqual(org.writes(), [], 'no write at all');
+    assert.deepStrictEqual(org.unexpected, []);
+  });
+
+  test(`REAL BUNDLE: a teardown whose saved-layer scan has ${what} deletes nothing`, async (t) => {
+    const { org, teardown } = await teardownWorld(t, spoiledForms(), alter);
+    const result = await teardown();
+    assert.strictEqual(result.ok, false);
+    assert.match(JSON.stringify(result.errors), refusal);
+    assert.deepStrictEqual(org.writes().filter((w) => w.method === 'DELETE'), [], 'not the app, not the page, not the solution');
+    assert.deepStrictEqual(org.unexpected, []);
+  });
+}
+
+test('REAL BUNDLE: a count every saved answer declares, with every form on its pages, is no refusal — the embedding form is found', async (t) => {
+  const { org, genpage } = await deleteWorld(t, spoiledForms(), ({ layer, body, all }) => { if (layer === 'saved') body['@odata.count'] = all.length; });
+  await assert.rejects(genpage.delete(PAGE, { allowDestructive: true }), (e) => e.code === 'GENPAGE_EMBEDDED_IN_FORM');
+  assert.deepStrictEqual(org.writes(), []);
 });

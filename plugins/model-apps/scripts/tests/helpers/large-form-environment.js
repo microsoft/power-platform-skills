@@ -17,7 +17,8 @@
 //   const env = largeFormEnvironment({ forms, origin });
 //   const client = createAzHttpClient(origin, { getToken, request: env.wrap(org.request), sleep: async () => {} });
 // `forms` are rows { formid, objecttypecode, name, type, formxml, layer? } (a row with no `layer` is in both). `env.log` records each form read:
-// { layer, prefer, rows, ms, outcome: 200 | 'ECONNRESET' }, the `ms` being what the measured costs make of it.
+// { layer, prefer, rows, ms, outcome: 200 | 'ECONNRESET' }, the `ms` being what the measured costs make of it. `alter({ layer, at, body, all })`, when given,
+// may change an answer before it is sent (`at`: the answer's first row in `all`, the layer's forms) — a page that repeats another, a declared count.
 const API_ROOT = /^\/api\/data\/v9\.\d/;
 const FORM_SCAN = /^\/systemforms(\/Microsoft\.Dynamics\.CRM\.RetrieveUnpublishedMultiple\(\))?\?\$select=formid,objecttypecode,name,type,formxml(?:&\$skiptoken=(\d+))?$/;
 const MS_PER_FORM = Object.freeze({ saved: 80103 / 3700, published: 11768 / 3700 });
@@ -28,7 +29,7 @@ function plainForms(count, formxml = '<form><tabs><tab name="general"/></tabs></
   return Array.from({ length: count }, (_, i) => ({ formid: `f0000000-0000-4000-8000-${String(i).padStart(12, '0')}`, objecttypecode: 'account', name: `Form ${i}`, type: 2, formxml }));
 }
 
-function largeFormEnvironment({ forms, origin = 'https://contoso.crm.dynamics.com', msPerForm = MS_PER_FORM } = {}) {
+function largeFormEnvironment({ forms, origin = 'https://contoso.crm.dynamics.com', msPerForm = MS_PER_FORM, alter = null } = {}) {
   const log = [];
   function answer({ url, method, headers, timeout }) {
     if (method !== 'GET') return null;
@@ -54,6 +55,7 @@ function largeFormEnvironment({ forms, origin = 'https://contoso.crm.dynamics.co
     entry.outcome = 200;
     const base = `${origin}/api/data/v9.0${where.replace(/&\$skiptoken=\d+$/, '')}`;
     const body = { value, ...(at + size < all.length ? { '@odata.nextLink': `${base}&$skiptoken=${at + size}` } : {}) };
+    if (alter) alter({ layer, at, body, all });
     return { statusCode: 200, headers: { 'content-type': 'application/json', ...(size === asked ? { 'preference-applied': `odata.maxpagesize=${size}` } : {}) }, body: JSON.stringify(body) };
   }
   return {

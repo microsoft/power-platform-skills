@@ -1518,10 +1518,13 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   form (or delete the form, if it is the maker's) and run teardown again. The reads are not atomic against a maker editing forms at the
   same moment; run teardown in a quiet window. `genpage.js delete` runs the same check, and a teardown dry run runs it on the pages it
   would delete, names each form that would stop the apply and reports the dry run as failed. The scan asks for 100 forms a read
-  (`Prefer: odata.maxpagesize=100`, on every continuation page too) and reads every page, so no read comes near the 60 s read timeout
-  (one unpaged saved-layer answer of 3700 forms took 80 s): two GETs where each layer holds at most 100 forms, one per 100 forms in each
-  layer otherwise (74 reads for 3700 forms), and none on a teardown or dry run with no page to delete. A layer of more than 20000 forms
-  (201 reads) is refused, never cut short. Pinned by `teardown-form-embedded-page.test.js`, `page-reference-guard.test.js` and
+  (`Prefer: odata.maxpagesize=100`, on every continuation page too) and reads every page. That avoids the oversized answer that timed
+  out: one unpaged saved-layer answer of 3700 forms took 80 s against the 60 s read timeout, while pages of 100 were measured at
+  2–4 s (saved) and up to about 8 s for a cold first published page — a measurement, not a bound: a read that is slower still, or
+  fails, refuses the delete. Two GETs where each layer holds at most 100 forms, one per 100 forms in each layer otherwise (74 reads
+  for 3700 forms), and none on a teardown or dry run with no page to delete. A layer of more than 20000 forms (201 reads) is refused,
+  never cut short; so are pages that are not one complete list of a layer (a form twice, a form with no id, or fewer forms than an
+  answer's `@odata.count` declares). Pinned by `teardown-form-embedded-page.test.js`, `page-reference-guard.test.js` and
   `page-reference-guard-large-environment.test.js`.
   **An app is TWO rows** — an `appmodule` AND a `sitemaps`
   row, with no server-side cascade. The sitemap is linked by a type-62 `appmodulecomponent` on the app's **current**
