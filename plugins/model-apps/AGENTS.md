@@ -1517,9 +1517,12 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   the pages, the page manifest, the solution and the ownership records are kept, and the error names the form. Take the page off that
   form (or delete the form, if it is the maker's) and run teardown again. The reads are not atomic against a maker editing forms at the
   same moment; run teardown in a quiet window. `genpage.js delete` runs the same check, and a teardown dry run runs it on the pages it
-  would delete, names each form that would stop the apply and reports the dry run as failed. The scan costs two GETs (plus one per
-  continuation page, at most 40 reads per page) on a teardown or dry run that has a page to delete, and none otherwise. Pinned by
-  `teardown-form-embedded-page.test.js` and `page-reference-guard.test.js`.
+  would delete, names each form that would stop the apply and reports the dry run as failed. The scan asks for 100 forms a read
+  (`Prefer: odata.maxpagesize=100`, on every continuation page too) and reads every page, so no read comes near the 60 s read timeout
+  (one unpaged saved-layer answer of 3700 forms took 80 s): two GETs where each layer holds at most 100 forms, one per 100 forms in each
+  layer otherwise (74 reads for 3700 forms), and none on a teardown or dry run with no page to delete. A layer of more than 20000 forms
+  (201 reads) is refused, never cut short. Pinned by `teardown-form-embedded-page.test.js`, `page-reference-guard.test.js` and
+  `page-reference-guard-large-environment.test.js`.
   **An app is TWO rows** — an `appmodule` AND a `sitemaps`
   row, with no server-side cascade. The sitemap is linked by a type-62 `appmodulecomponent` on the app's **current**
   `appmoduleidunique` layer, not necessarily by equal unique names (first-party and renamed sitemaps may have different names).

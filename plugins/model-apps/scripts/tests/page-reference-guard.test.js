@@ -4,7 +4,7 @@
 // (genpage-sdk.js `delete`) is held to it here through the SDK stand-in; the reads it costs are pinned, and so is that nothing else reads a form.
 const { test } = require('node:test');
 const assert = require('node:assert');
-const { embeddedPageReferences, pageDeletionReferences, assertPageDeletionSafe, readAllFormLayers } = require('../lib/page-reference-guard.js');
+const { embeddedPageReferences, pageDeletionReferences, assertPageDeletionSafe, readAllFormLayers, MAX_FORMS_PER_LAYER, MAX_READS_PER_LAYER } = require('../lib/page-reference-guard.js');
 const { makeGenpageSdk } = require('../lib/genpage-sdk.js');
 const { FakeSdk } = require('./helpers/fake-genpage-sdk.js');
 
@@ -25,6 +25,7 @@ const plainXml = '<form><tabs><tab name="general"/></tabs></form>';
 
 function formsClient({ published = [], saved = [], fail = null, pages = 1, savedPages = 1 } = {}) {
   const reads = [];
+  const prefer = [];
   const rowsOf = (forms) => forms.map((f, i) => ({ formid: f.formid || `cccccccc-0000-4000-8000-00000000000${i}`, objecttypecode: f.table || 'account', name: f.name || 'Information', type: 2, formxml: f.formxml }));
   const answer = (rows, url, pages) => {
     // `pages` answers split the rows over that many continuation pages, to hold the scan to reading each one.
@@ -37,9 +38,11 @@ function formsClient({ published = [], saved = [], fail = null, pages = 1, saved
   };
   return {
     reads,
+    prefer,
     client: {
-      get: async (url) => {
+      get: async (url, options) => {
         reads.push(url);
+        prefer.push(options && options.headers ? options.headers.Prefer : undefined);
         if (fail && fail(url)) return { status: 403, body: { error: { message: 'Principal user is missing prvReadSystemForm privilege' } } };
         if (url.startsWith('/systemforms/Microsoft.Dynamics.CRM.RetrieveUnpublishedMultiple()')) return answer(rowsOf(saved), url, savedPages);
         if (url.startsWith('/systemforms?')) return answer(rowsOf(published), url, pages);
@@ -90,10 +93,11 @@ test('no page to delete reads no form', async () => {
   assert.deepStrictEqual([out.safe, out.reads, reads], [true, 0, []]);
 });
 
-test('one delete reads every form of every table in both layers — two reads, no table filter — and finds no reference where none is', async () => {
-  const { client, reads } = formsClient({ published: [{ formxml: plainXml }, { formxml: embedXml(P2), table: 'contact' }], saved: [{ formxml: plainXml }] });
+test('one delete reads every form of every table in both layers — two reads, no table filter, 100 forms a read asked for — and finds no reference where none is', async () => {
+  const { client, reads, prefer } = formsClient({ published: [{ formxml: plainXml }, { formxml: embedXml(P2), table: 'contact' }], saved: [{ formxml: plainXml }] });
   assert.deepStrictEqual(await assertPageDeletionSafe(client, [P1.toUpperCase()]), { reads: 2, formsScanned: 3 });
   assert.deepStrictEqual(reads, [PUBLISHED, SAVED]);
+  assert.deepStrictEqual(prefer, ['odata.maxpagesize=100', 'odata.maxpagesize=100']);
 });
 
 test('a reference only in the published layer, and one only in the saved layer, each block the delete and name the form', async () => {
@@ -121,6 +125,7 @@ test('every continuation page is read; a refused read, a malformed second page a
   const paged = formsClient({ published: [{ formxml: plainXml }, { formxml: plainXml }, { formxml: embedXml(P1) }], pages: 3 });
   await assert.rejects(assertPageDeletionSafe(paged.client, [P1]), (e) => e.code === 'GENPAGE_EMBEDDED_IN_FORM');
   assert.strictEqual(paged.reads.length, 4, 'the published layer read to its third page (where the reference is), then the saved one');
+  assert.deepStrictEqual(paged.prefer, Array(4).fill('odata.maxpagesize=100'), 'a continuation read asks for the same page size as the first');
 
   const refused = formsClient({ fail: (url) => url === SAVED });
   await assert.rejects(assertPageDeletionSafe(refused.client, [P1]), (e) => e.code === 'GENPAGE_FORM_REFERENCES_UNREADABLE' && /saved layer could not be read/.test(e.message) && /prvReadSystemForm/.test(e.message));
@@ -129,11 +134,25 @@ test('every continuation page is read; a refused read, a malformed second page a
   await assert.rejects(assertPageDeletionSafe(broken, [P1]), (e) => e.code === 'GENPAGE_FORM_REFERENCES_UNREADABLE' && /malformed @odata.nextLink/.test(e.message));
 
   const endless = formsClient({ published: Array.from({ length: 10 }, () => ({ formxml: plainXml })), pages: 10 });
-  await assert.rejects(assertPageDeletionSafe(endless.client, [P1], { maxReadsPerPage: 4 }), (e) => e.code === 'GENPAGE_FORM_REFERENCES_UNREADABLE' && e.budgetExhausted === true);
+  await assert.rejects(assertPageDeletionSafe(endless.client, [P1], { maxReads: 4 }), (e) => e.code === 'GENPAGE_FORM_REFERENCES_UNREADABLE' && e.budgetExhausted === true && /published layer could not all be read within 4 reads/.test(e.message));
   assert.strictEqual(endless.reads.length, 4, 'the read past the budget is never sent');
-  // The budget is per page guarded, and the scan is shared: two pages may read twice as many continuation pages, in ONE scan.
+  // The budget is per layer and the scan is shared: two pages cost what one does — the reads follow the forms, not the pages deleted.
   const two = formsClient({ published: Array.from({ length: 6 }, () => ({ formxml: plainXml })), pages: 6 });
-  assert.deepStrictEqual(await assertPageDeletionSafe(two.client, [P1, P2], { maxReadsPerPage: 4 }), { reads: 7, formsScanned: 6 });
+  assert.deepStrictEqual(await assertPageDeletionSafe(two.client, [P1, P2], { maxReads: 6 }), { reads: 7, formsScanned: 6 });
+  // A layer with more forms than the cap is refused once an answer takes it past the cap, and nothing after that is read.
+  const many = formsClient({ saved: Array.from({ length: 6 }, () => ({ formxml: plainXml })), savedPages: 3 });
+  await assert.rejects(assertPageDeletionSafe(many.client, [P1], { maxForms: 3, maxReads: 10 }), (e) => e.code === 'GENPAGE_FORM_REFERENCES_UNREADABLE' && e.budgetExhausted === true && /saved layer .* more than 3 forms/.test(e.message));
+  assert.deepStrictEqual(many.reads.length, 3, 'the published layer, then the saved one to the answer that went past the cap');
+  assert.deepStrictEqual(await assertPageDeletionSafe(formsClient({ saved: Array.from({ length: 6 }, () => ({ formxml: plainXml })), savedPages: 3 }).client, [P1], { maxForms: 6, maxReads: 10 }), { reads: 4, formsScanned: 6 }, 'a layer AT the cap is read');
+});
+
+test('the default budget: at most MAX_FORMS_PER_LAYER forms in a layer, in at most MAX_READS_PER_LAYER reads — a layer that keeps answering full pages is refused, never cut short', async () => {
+  assert.deepStrictEqual([MAX_FORMS_PER_LAYER, MAX_READS_PER_LAYER], [20000, 201]);
+  const row = { formid: 'cccccccc-0000-4000-8000-000000000000', objecttypecode: 'account', name: 'Information', type: 2, formxml: plainXml };
+  let reads = 0;
+  const full = { get: async (url) => { reads += 1; return { status: 200, body: { value: Array(100).fill(row), '@odata.nextLink': `${url.replace(/&n=\d+$/, '')}&n=${reads}` } }; } };
+  await assert.rejects(assertPageDeletionSafe(full, [P1]), (e) => e.code === 'GENPAGE_FORM_REFERENCES_UNREADABLE' && e.budgetExhausted === true && /published layer .* more than 20000 forms/.test(e.message));
+  assert.strictEqual(reads, MAX_READS_PER_LAYER, 'the answer that took the layer past 20000 forms is the last read');
 });
 
 test('readAllFormLayers keeps each row\'s layer and table', async () => {

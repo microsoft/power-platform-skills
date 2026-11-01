@@ -9,11 +9,27 @@
 // WHAT IS READ. Every system form of every table, in BOTH layers, followed to the last page of each answer:
 //   GET /systemforms?$select=formid,objecttypecode,name,type,formxml                                                     the PUBLISHED layer
 //   GET /systemforms/Microsoft.Dynamics.CRM.RetrieveUnpublishedMultiple()?$select=formid,objecttypecode,name,type,formxml  the SAVED layer
-//   { "value": [ { "formid": "…", "objecttypecode": "account", "name": "Account", "type": 2, "formxml": "<form>…</form>" } ], "@odata.nextLink": "…" }
+//   Prefer: odata.maxpagesize=100                                                            on both, and on every continuation read
+//   { "value": [ … up to 100 rows: { "formid": "…", "objecttypecode": "account", "name": "Account", "type": 2, "formxml": "<form>…</form>" } … ],
+//     "@odata.nextLink": "https://contoso.crm.dynamics.com/api/data/v9.0/systemforms/Microsoft.Dynamics.CRM.RetrieveUnpublishedMultiple()?$select=…&$skiptoken=…" }
+//   (with the header `Preference-Applied: odata.maxpagesize=100`; the last page has no `@odata.nextLink`)
 // See https://learn.microsoft.com/power-apps/developer/data-platform/webapi/reference/retrieveunpublishedmultiple. A reference saved and not published is as
 // real as a published one (the next publish of that form shows it), and one published but since removed from the saved copy is what users see until then, so
 // either blocks. No table filter is applied: a page can be embedded in a form of a table the deleting app never named, and a narrow scan that finds nothing
 // proves nothing. The reads are made only when there is a page to delete — none on any other path — and they are shared by every page of one delete.
+//
+// WHY 100 FORMS AT A TIME. With no page size Dataverse answers up to 5000 rows at once, and the saved layer costs about 22 ms per form with its formxml
+// (measured on an environment of 3700 forms: one unpaged saved-layer answer took 80 s, above the 60 s read timeout of lib/sdk-http-client.js, so it was cut
+// off with ECONNRESET on every attempt and the guard could never finish). `Prefer: odata.maxpagesize` asks for smaller pages, and Dataverse follows it on both
+// layers (measured: `Preference-Applied` in each answer, an `@odata.nextLink` on each page, no form twice, the same first page when it is read again). A page
+// of 100 took 2.2 to 3.8 s in the saved layer and under 0.3 s in the published one once warm. The paging rule says to send the same preference on every
+// continuation read and to follow the link as it is: https://learn.microsoft.com/power-apps/developer/data-platform/webapi/query/page-results
+// The guard reads EVERY page: a filter on the form XML (`contains(formxml, …)`) cannot see a control name written with a character reference, so it never
+// replaces the full read.
+//
+// THE BUDGET. The reads grow with the forms (one read per 100 forms in each layer), under an absolute cap of MAX_FORMS_PER_LAYER forms in each layer and the
+// reads those take (MAX_READS_PER_LAYER). A layer that answers more forms than that, or needs one more read, is refused before that read is sent — never cut
+// short, which would answer "no reference" about forms that were never looked at.
 //
 // HOW A REFERENCE IS RECOGNISED. Each form is read as ONE complete XML document by the strict reader (strict-xml.js), so a comment, a CDATA section or a GUID
 // that only appears in some text is never taken for an element. A reference is
@@ -23,7 +39,7 @@
 // column (no `static="true"`), a value written with a character reference or a CDATA section, an empty value, no RefId at all — could name ANY page, so it is
 // UNKNOWN, and an unknown blocks every delete as a reference would: the guard never answers "safe" about a form it could not read to the end.
 //
-// FAIL CLOSED. A read that fails, an answer that is no list, a form whose XML the strict reader refuses, or a scan that would go past its read budget is a
+// FAIL CLOSED. A read that fails, an answer that is no list, a form whose XML the strict reader refuses, or a layer that would go past the budget (above) is a
 // refusal (GENPAGE_FORM_REFERENCES_UNREADABLE), never an empty result. There is no flag that skips the guard: the maker takes the page out of the form (or deletes
 // the form, if it is theirs) and runs the delete again. The reads are not atomic against a maker editing forms at the same moment, so a delete should still run
 // in a quiet window; a dependency-aware delete in the platform would close that gap.
@@ -38,9 +54,15 @@ const LAYERS = Object.freeze([
   { layer: 'published', path: `/systemforms?$select=${SELECT}` },
   { layer: 'saved', path: `/systemforms/Microsoft.Dynamics.CRM.RetrieveUnpublishedMultiple()?$select=${SELECT}` },
 ]);
-// The most reads the scan may make for each page it guards (both layers, every continuation page): a Dataverse answer holds up to 5000 rows, so this is far
-// more than an environment's forms need, and a scan that would need more is refused rather than cut short.
-const DEFAULT_READS_PER_PAGE = 40;
+// How many forms one read asks for (`Prefer: odata.maxpagesize`), and so how long one read takes: about 22 ms a form in the saved layer, so a page of 100 is
+// about 2 to 4 s, well inside the 60 s a read may take even where each form costs several times more.
+const FORMS_PER_READ = 100;
+const PAGED = Object.freeze({ headers: Object.freeze({ Prefer: `odata.maxpagesize=${FORMS_PER_READ}` }) });
+// The most forms the scan reads in one layer: more than five times the largest environment measured (3700 forms). A layer with more is refused rather than
+// cut short. At the measured cost that is about ten minutes of saved-layer reads, so the cap bounds how long a delete can spend here.
+const MAX_FORMS_PER_LAYER = 20000;
+// The reads those forms take, plus one for a last page the platform may answer empty.
+const MAX_READS_PER_LAYER = Math.ceil(MAX_FORMS_PER_LAYER / FORMS_PER_READ) + 1;
 
 function guardError(message, props) {
   return Object.assign(new Error(message), { transient: false, outcome: 'nothing' }, props);
@@ -52,39 +74,50 @@ function pageIdOf(value) {
   return match[1].toLowerCase();
 }
 
-// The client as the scan uses it: every read counted, and the read that would go past `maxReads` refused before it is sent.
-function budgeted(client, maxReads, counter) {
+// The client as the scan of ONE layer uses it: every read asks for FORMS_PER_READ forms (the first and every continuation — the paging rule above), every read
+// and every form is counted, and the read past `maxReads` — or any read once more than `maxForms` forms have come back — is refused before it is sent.
+function budgeted(client, { layer, maxReads, maxForms }, counter) {
+  const refuse = (why) => guardError(`the forms in the ${layer} layer could not all be read ${why}, so it is not known whether one embeds the page. Nothing was deleted.`, { code: 'GENPAGE_FORM_REFERENCES_UNREADABLE', budgetExhausted: true });
   const spend = () => {
-    if (counter.reads >= maxReads) {
-      throw guardError(`the forms could not all be read within ${maxReads} reads, so it is not known whether one embeds the page`, { code: 'GENPAGE_FORM_REFERENCES_UNREADABLE', budgetExhausted: true });
-    }
+    if (counter.reads >= maxReads) throw refuse(`within ${maxReads} reads`);
     counter.reads += 1;
   };
-  const wrapped = { get: async (path, ...rest) => { spend(); return client.get(path, ...rest); } };
-  if (typeof client.getAbsolute === 'function') wrapped.getAbsolute = async (url, ...rest) => { spend(); return client.getAbsolute(url, ...rest); };
+  const tally = (response) => {
+    const value = response && response.body && response.body.value;
+    if (Array.isArray(value)) counter.forms += value.length;
+    if (counter.forms > maxForms) throw refuse(`— the layer holds more than ${maxForms} forms, the most this check reads`);
+    return response;
+  };
+  const paged = () => ({ headers: { ...PAGED.headers } });
+  const wrapped = { get: async (path) => { spend(); return tally(await client.get(path, paged())); } };
+  if (typeof client.getAbsolute === 'function') wrapped.getAbsolute = async (url) => { spend(); return tally(await client.getAbsolute(url, paged())); };
   if (typeof client.apiUrl === 'function') wrapped.apiUrl = (path) => client.apiUrl(path);
   return wrapped;
 }
 
 /**
- * Every system form of every table, in the published and the saved layer, each read to its last page.
+ * Every system form of every table, in the published and the saved layer, each read to its last page, FORMS_PER_READ forms a read.
  * @param {{ get: Function, getAbsolute?: Function }} client the SDK's Dataverse client (`sdk.dataverse`)
- * @param {{ maxReads?: number }} [options] the most reads the scan may make (default DEFAULT_READS_PER_PAGE)
+ * @param {{ maxForms?: number, maxReads?: number }} [options] the most forms, and reads, the scan may take in EACH layer (default MAX_FORMS_PER_LAYER, and the
+ *   reads those need); a test lowers them
  * @returns {Promise<{ forms: Array<{ formid: string, table: string, name: string, type: *, layer: 'published'|'saved', formxml: * }>, reads: number }>}
- * @throws GENPAGE_FORM_REFERENCES_UNREADABLE when a read fails, answers no list, or the budget runs out
+ * @throws GENPAGE_FORM_REFERENCES_UNREADABLE when a read fails, answers no list, or a layer goes past the budget (`budgetExhausted`)
  */
-async function readAllFormLayers(client, { maxReads = DEFAULT_READS_PER_PAGE } = {}) {
+async function readAllFormLayers(client, { maxForms = MAX_FORMS_PER_LAYER, maxReads = Math.ceil(maxForms / FORMS_PER_READ) + 1 } = {}) {
   if (!client || typeof client.get !== 'function') throw guardError('the forms cannot be read: no Dataverse client', { code: 'GENPAGE_FORM_REFERENCES_UNREADABLE' });
-  const counter = { reads: 0 };
-  const reader = budgeted(client, maxReads, counter);
+  let reads = 0;
   const forms = [];
   for (const { layer, path } of LAYERS) {
+    const counter = { reads: 0, forms: 0 };
+    const reader = budgeted(client, { layer, maxReads, maxForms }, counter);
     let rows;
     try {
       rows = await collectionRows(reader, path, `the forms in the ${layer} layer`, { code: 'GENPAGE_FORM_REFERENCES_UNREADABLE' });
     } catch (error) {
       if (error && error.code === 'GENPAGE_FORM_REFERENCES_UNREADABLE' && error.budgetExhausted) throw error;
       throw guardError(`the forms in the ${layer} layer could not be read (${String((error && error.message) || error)}), so it is not known whether one embeds the page`, { code: 'GENPAGE_FORM_REFERENCES_UNREADABLE', cause: error });
+    } finally {
+      reads += counter.reads;
     }
     for (const row of rows) {
       forms.push({
@@ -97,7 +130,7 @@ async function readAllFormLayers(client, { maxReads = DEFAULT_READS_PER_PAGE } =
       });
     }
   }
-  return { forms, reads: counter.reads };
+  return { forms, reads };
 }
 
 // The text an element holds, given its span in `xml` (strict-xml.js, `spans`): what is between the end of its start tag and the start of its end tag, or '' for
@@ -142,15 +175,16 @@ function embeddedPageReferences(formxml) {
 
 /**
  * What stands in the way of deleting `pageIds`: the forms that embed each, and the forms that cannot be read or hold a binding that could name any page.
- * Reads nothing when `pageIds` is empty.
+ * Reads nothing when `pageIds` is empty. `budget` is readAllFormLayers' options ({ maxForms, maxReads }), for a test.
  * @returns {Promise<{ safe: boolean, references: Map<string, object[]>, unknown: object[], reads: number, formsScanned: number }>}
  * @throws GENPAGE_FORM_REFERENCES_UNREADABLE when the forms cannot all be read (see readAllFormLayers)
  */
-async function pageDeletionReferences(client, pageIds, { maxReadsPerPage = DEFAULT_READS_PER_PAGE } = {}) {
+async function pageDeletionReferences(client, pageIds, budget = {}) {
   const ids = [...new Set((pageIds || []).map(pageIdOf))];
   const references = new Map(ids.map((id) => [id, []]));
   if (!ids.length) return { safe: true, references, unknown: [], reads: 0, formsScanned: 0 };
-  const { forms, reads } = await readAllFormLayers(client, { maxReads: maxReadsPerPage * ids.length });
+  // ONE scan for every page of the delete: what it costs depends on the forms the environment holds, not on how many pages are deleted.
+  const { forms, reads } = await readAllFormLayers(client, budget);
   const unknown = [];
   for (const form of forms) {
     const where = { formid: form.formid, table: form.table, name: form.name, layer: form.layer };
@@ -184,4 +218,4 @@ async function assertPageDeletionSafe(client, pageIds, options) {
   return { reads: result.reads, formsScanned: result.formsScanned };
 }
 
-module.exports = { readAllFormLayers, embeddedPageReferences, pageDeletionReferences, assertPageDeletionSafe, formText, elementText, DEFAULT_READS_PER_PAGE };
+module.exports = { readAllFormLayers, embeddedPageReferences, pageDeletionReferences, assertPageDeletionSafe, formText, elementText, FORMS_PER_READ, MAX_FORMS_PER_LAYER, MAX_READS_PER_LAYER };
