@@ -71,6 +71,9 @@ const SKILL_SDK_SURFACE = [
   'diffArtifact',
   'disassociateRecords',
   'enrichDefaultViews',
+  // Declared business rules and business process flows (lib/rule-settlement.js, lib/bpf-settlement.js) stage the workflow row's
+  // write first, save its id and body before anything is sent, then send exactly that staged write under the artifact lock.
+  'executePrepared',
   // `scripts/solution-settings.js template --solution` exports the solution it makes the deployment settings of (unmanaged), then reads the
   // package by staging it (`getDeploymentSettingsTemplate`); `import` applies the settings file in the import (`importSolution`).
   'exportSolution',
@@ -120,6 +123,8 @@ const SKILL_SDK_SURFACE = [
   'listConnections',
   'listConnectorOperations',
   'moveElement',
+  // The staging half of the declared-workflow write above: it builds the request without sending it.
+  'prepareArtifactUnlocked',
   'previewPush',
   'previewPushAll',
   'publishArtifact',
@@ -168,6 +173,8 @@ const SKILL_SDK_SURFACE = [
   'updateRecord',
   'updateTable',
   'updateWebResource',
+  // Holds the workspace lock around the declared-workflow staging and send, so no other write to the same artifact interleaves.
+  'withArtifactLock',
   // ⚠ `validateBusinessRule` was REMOVED from this list deliberately. The SDK no longer exposes it:
   // the designer's completeness validator now runs INTERNALLY on every business-rule save, so an
   // incomplete rule is refused by `pushArtifact` rather than by an opt-in call. Re-adding it here
