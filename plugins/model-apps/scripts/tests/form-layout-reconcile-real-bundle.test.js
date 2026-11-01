@@ -1083,6 +1083,57 @@ test('a form left pending on the table holds the publish of a settled sibling: n
   assert.doesNotMatch(wire.published.get(A).formxml, /new_code/, 'A\'s saved layer is not put live');
 });
 
+test('a change over a publish of the form that may have been sent first confirms it read-only through the build\'s client; one that did not land stops the change before anything is sent', async () => {
+  const spec = wireSpec('Main');
+  const form = spec.forms[0];
+  const A = guid(4100);
+  const changed = wireSpec('Main');
+  changed.forms[0].tabs[0].sections[0].fields = ['new_name', 'new_code', 'new_extra'];
+  // A settled form owes its publish; the publish's answer is lost (503), so whether it put the layer live is unknown.
+  const strand = async (unapplied) => {
+    const wire = createManagedWire();
+    const w = etagged(wire);
+    await onWire(wire, A, 'Main', 0);
+    const ctx = ports({ authorizedAdoption: true });
+    const first = await wireRun(w, ctx, spec, A);
+    assert.deepEqual([codes(first.result), first.result.action], [[], 'update'], JSON.stringify(first.result));
+    wire.script((e) => /PublishXml/.test(e.path), { statusCode: 503, body: { error: { code: '0x80040216' } }, unapplied });
+    assert.equal((await publishTable(ctx, first.sdk)).code, 'managed-publication-unconfirmed');
+    const old = groupOf(ctx, form).committed;
+    assert.ok(['dispatching', 'unconfirmed'].includes(old.publication.state), old.publication.state);
+    return { wire, w, ctx, old };
+  };
+
+  // The publish landed: the next change confirms it by a fresh read, then makes its edit, which owes its own publish.
+  const s = await strand(false);
+  const next = await wireRun(s.w, s.ctx, changed, A);
+  assert.deepEqual([codes(next.result), next.result.action], [[], 'update'], JSON.stringify(next.result));
+  const now = groupOf(s.ctx, form).committed;
+  assert.notEqual(now.generation, s.old.generation);
+  assert.equal(now.publication.state, 'owed', 'the new generation keeps its own debt');
+  assert.match(s.wire.saved.get(A).formxml, /new_extra/);
+  assert.doesNotMatch(s.wire.published.get(A).formxml, /new_extra/, 'the old publish confirms only what it published');
+  // The run opened with that publish uncertain, so its scope stays blocked for this run (openManagedContext); the next
+  // invocation, which finds it confirmed, pays the new debt.
+  const publishes = s.wire.publishes().length;
+  const blocked = await publishTable(s.ctx, next.sdk);
+  assert.deepEqual([blocked.sent, blocked.withheld], [false, true], JSON.stringify(blocked));
+  const later = await wireRun(s.w, s.ctx, changed, A);
+  assert.equal(later.result.action, 'noop');
+  assert.equal((await publishTable(s.ctx, later.sdk)).sent, true);
+  assert.equal(s.wire.publishes().length, publishes + 1);
+  assert.match(s.wire.published.get(A).formxml, /new_extra/);
+
+  // The publish did not land: the fresh read cannot confirm it, so the change stops before anything is prepared or sent.
+  const u = await strand(true);
+  const patches = u.wire.log.filter(isFormPatch).length;
+  const stopped = await wireRun(u.w, u.ctx, changed, A);
+  assert.deepEqual(codes(stopped.result), ['managed-publication-unconfirmed'], JSON.stringify(stopped.result));
+  assert.equal(u.wire.log.filter(isFormPatch).length, patches, 'nothing sent');
+  assert.deepEqual(groupOf(u.ctx, form), { committed: u.old, pending: null, effects: [] }, 'nothing prepared or committed');
+  assert.doesNotMatch(u.wire.saved.get(A).formxml, /new_extra/);
+});
+
 // ---- Safety gates every path settles through: a dirty local copy, the required ports, the adoption approval. ----
 
 // One build invocation over a GIVEN SDK (its workspace kept across calls), with the context's ports and `override`.
@@ -1263,15 +1314,22 @@ test('a declared handler whose options changed is refused before anything is wri
 // One build invocation over the wire whose transport carries the build's send observer (createAttemptSendObserver,
 // inside the barrier's gate, as build-model-app.js installs it), over a workspace folder kept across runs as the
 // CLI keeps its own. `observe: false` is a build without the observer.
-// It answers which tokens the run sent under (markSending) and how many attempts it prepared: a continuation or a
-// resumption sends under the stranded attempt's own token and prepares none.
+// It answers which tokens the run sent under (markSending), the send window epoch each claim answered, and how many
+// attempts it prepared: a continuation or a resumption sends under the stranded attempt's own token, in a new epoch,
+// and prepares none. Every invocation is a fresh store, SDK and observer: a stopped run's are retired, as a build's are.
 async function observedRun(w, ctx, spec, id, { workspace, beforePush, observe = true, override = {} } = {}) {
   Object.assign(ctx, openRun(ctx.dir));
   const sendTokens = [];
+  const sendEpochs = [];
   const savedAcks = [];
   let prepared = 0;
   const { markSending, prepareAttempt, noteSaved } = ctx.store;
-  ctx.store.markSending = (token, ...a) => { sendTokens.push(token); return markSending.call(ctx.store, token, ...a); };
+  ctx.store.markSending = (token, ...a) => {
+    sendTokens.push(token);
+    const marked = markSending.call(ctx.store, token, ...a);
+    sendEpochs.push(marked ? marked.epoch : marked);
+    return marked;
+  };
   ctx.store.prepareAttempt = (...a) => { prepared += 1; return prepareAttempt.apply(ctx.store, a); };
   ctx.store.noteSaved = (token, o, ...a) => { savedAcks.push(o && o.acknowledgedRoot); return noteSaved.call(ctx.store, token, o, ...a); };
   const observer = observe ? createAttemptSendObserver() : null;
@@ -1285,7 +1343,7 @@ async function observedRun(w, ctx, spec, id, { workspace, beforePush, observe = 
   } catch (err) {
     result = { action: null, code: err.code || 'thrown', error: err };
   }
-  return { result, sdk, sendTokens, prepared, savedAcks };
+  return { result, sdk, sendTokens, sendEpochs, prepared, savedAcks };
 }
 const isFormPatch = (e) => e.method === 'PATCH' && /^systemforms\(/i.test(e.path);
 const isFormCreate = (e) => e.method === 'POST' && /^systemforms$/i.test(e.path);
@@ -1318,13 +1376,13 @@ test('an edit the service refused unapplied is continued by the next observed ru
   const first = await observedRun(w, ctx, spec, A, { workspace });
   assert.ok(first.result.code, JSON.stringify(first.result));
   const stranded = nothingSettled(ctx, form);
-  assert.deepEqual([stranded.phase, stranded.sendWindow], ['sending', { possible: 0, notStarted: 1 }]);
+  assert.deepEqual([stranded.phase, stranded.sendWindow, first.sendEpochs], ['sending', { possible: 0, notStarted: 1, epoch: 1 }, [1]]);
   assert.deepEqual((await first.sdk.diffArtifact('form', A)).changes, [], 'the refused edit was taken back out of the local copy');
   assert.doesNotMatch(wire.saved.get(A).formxml, /new_code/);
   assert.notDeepEqual(openRun(ctx.dir).debt.map((d) => d.kind), ['eligible'], 'the unsettled attempt holds its scope');
   const again = await observedRun(w, ctx, spec, A, { workspace });
   assert.deepEqual([codes(again.result), again.result.action, again.result.continued], [[], 'recovered', true], JSON.stringify(again.result));
-  assert.deepEqual([again.sendTokens, again.prepared], [[stranded.token], 0], 'sent again under the stranded attempt\'s own token; no new attempt');
+  assert.deepEqual([again.sendTokens, again.sendEpochs, again.prepared], [[stranded.token], [2], 0], 'sent again under the stranded attempt\'s own token, claimed in a new epoch; no new attempt');
   assert.equal(wire.log.filter(isFormPatch).length, 2, 'the refused edit and its one continuation');
   assert.match(wire.saved.get(A).formxml, /new_code/);
   assert.deepEqual(makerBytes(wire.saved.get(A).formxml), maker, 'no maker byte was lost');
@@ -1385,7 +1443,7 @@ test('a create whose local edits failed before any request is continued under it
     assert.deepEqual(codes(first.result), ['LOCAL_EDIT_FAILED']);
     assert.deepEqual(wire.writes(), [], 'nothing reached the service');
     const pending = nothingSettled(ctx, form);
-    assert.deepEqual([pending.phase, pending.sendWindow, pending.root.id], ['sending', { possible: 0, notStarted: 0 }, id]);
+    assert.deepEqual([pending.phase, pending.sendWindow, pending.root.id, first.sendEpochs], ['sending', { possible: 0, notStarted: 0, epoch: 1 }, id, [1]]);
     assert.deepEqual((await first.sdk.diffArtifact('form', id)).changes, [], 'the never-sent copy was removed');
     return { wire, ctx, workspace, token: pending.token };
   };
@@ -1397,14 +1455,14 @@ test('a create whose local edits failed before any request is continued under it
   assert.deepEqual([...s.wire.saved.keys()], [id]);
   assert.equal(recordOf(s.ctx, form).origin, 'created', 'this run\'s own create answer acknowledged it: no adoption approval needed');
   assert.deepEqual(s.ctx.members, [id]);
-  assert.deepEqual([again.sendTokens, again.prepared, again.savedAcks], [[s.token], 0, [true]], 'sent under the stranded attempt\'s own token; no new attempt; its own create answer acknowledged the root');
+  assert.deepEqual([again.sendTokens, again.sendEpochs, again.prepared, again.savedAcks], [[s.token], [2], 0, [true]], 'sent under the stranded attempt\'s own token, claimed in a new epoch; no new attempt; its own create answer acknowledged the root');
   assert.equal(groupOf(s.ctx, form).pending, null);
 
   // A build without the observer cannot prove from the window that nothing left; the root reads absent in both
   // layers, so the same create is resumed under the same token instead.
   const r = await strand();
   const resumed = await observedRun(r.wire, r.ctx, spec, undefined, { workspace: r.workspace, observe: false });
-  assert.deepEqual([codes(resumed.result), resumed.result.action, resumed.result.resumed, resumed.sendTokens, resumed.prepared], [[], 'recovered', true, [r.token], 0], JSON.stringify(resumed.result));
+  assert.deepEqual([codes(resumed.result), resumed.result.action, resumed.result.resumed, resumed.sendTokens, resumed.sendEpochs, resumed.prepared], [[], 'recovered', true, [r.token], [2], 0], JSON.stringify(resumed.result));
   assert.deepEqual([r.wire.log.filter(isFormCreate).length, [...r.wire.saved.keys()]], [1, [id]], 'one create, one root');
   assert.equal(recordOf(r.ctx, form).origin, 'created');
   // The spec changed since: the plan is not the one the attempt recorded, so nothing is sent and the attempt is kept.
@@ -1443,7 +1501,7 @@ test('a create whose answer never came is sent again under its id when its row r
   assert.equal(absent.wire.saved.size, 0);
   const resumed = await observedRun(absent.wire, absent.ctx, spec, undefined, { workspace: absent.workspace, observe: false });
   assert.deepEqual([codes(resumed.result), resumed.result.action, resumed.result.resumed], [[], 'recovered', true], JSON.stringify(resumed.result));
-  assert.deepEqual([resumed.sendTokens, resumed.prepared, resumed.savedAcks], [[absent.token], 0, [true]], 'resumed under the attempt\'s own token; its own create answer acknowledged the root');
+  assert.deepEqual([resumed.sendTokens, resumed.sendEpochs, resumed.prepared, resumed.savedAcks], [[absent.token], [2], 0, [true]], 'resumed under the attempt\'s own token; its own create answer acknowledged the root');
   assert.equal(absent.wire.log.filter(isFormCreate).length, absent.creates + 1, 'the same create, sent once more');
   assert.deepEqual([...absent.wire.saved.keys()], [id]);
   assert.equal(recordOf(absent.ctx, form).origin, 'created');

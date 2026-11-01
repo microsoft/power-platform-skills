@@ -1952,6 +1952,11 @@ async function reconcileDeclaredForm(input, ctx = {}) {
     // The build's send observer (createAttemptSendObserver), installed on the transport sdk.dataverse sends through:
     // with it, an attempt whose window proves nothing it sent was carried out is continued under its own token.
     ...(ctx.sendObserver ? { sendObserver: ctx.sendObserver } : {}),
+    // A committed form whose earlier publish may have been sent and is not proved live (its answer was lost) is never
+    // changed over it: with the client, the wrapper first confirms that publish read-only by the shared form layer
+    // reader, so the new generation owes its own publish. Without one, or when the read cannot confirm it, the run stops
+    // (managed-publication-unconfirmed) before anything is prepared or sent.
+    client: sdk && sdk.dataverse,
     // A create no answer acknowledged: is its row there, in either layer, under the id it was sent with? A read that
     // fails is managed-publication-unverified, left to the wrapper to quarantine.
     resumeCreate: async ({ pending }) => ({ root: await readSystemFormRootPresence(sdk && sdk.dataverse, pending.root.id) }),
