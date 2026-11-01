@@ -15,12 +15,9 @@ const { createPublicationBarrier } = require('../lib/publication-barrier.js');
 const { createIntentCatalog } = require('../lib/creates-catalog.js');
 const { environmentFingerprint } = require('../lib/page-ownership-records.js');
 const { dashboardTileOpts, dashboardComponent } = require('../lib/sdk-build.js');
-const { settleDeclaredDashboard, publishDeclaredDashboard, dashboardKey, projectDashboard, committedProjectionInput } = require('../lib/dashboard-reconcile.js');
+const { settleDeclaredDashboard, publishDeclaredDashboard, dashboardKey, projectDashboard, committedProjectionInput, committedDeclaration, canonicalDeclaration, validateDeclaredDashboard } = require('../lib/dashboard-reconcile.js');
 const { createAttemptSendObserver } = require('../lib/managed-feature-contract.js');
 const { systemFormLayerSha256 } = require('../lib/systemform-published.js');
-const { canonicalJson } = require('../lib/reconcile-common.js');
-// A free-text field of the committed declaration is kept as its sha256 (dashboard-reconcile.js HASHED_FIELDS).
-const textSha = (s) => require('node:crypto').createHash('sha256').update(canonicalJson(String(s))).digest('hex');
 
 const ENV = 'https://contoso.crm.dynamics.com';
 const APP = 'contoso_app';
@@ -590,21 +587,63 @@ test('the committed declaration is the canonical one: authoring a field the live
   const writes = contentWrites(w.wire).length;
   assert.equal((await settle(next, authored)).result.committed, true, 'the authorship change is recorded');
   assert.equal(contentWrites(w.wire).length, writes, 'no content write');
-  assert.deepEqual(next.store.readGroup('dashboard', 'ops').committed.consumerState.declaration.tiles[0].name, { sha256: textSha('Open cases') });
+  assert.deepEqual(next.store.readGroup('dashboard', 'ops').committed.consumerState.declaration.tiles[0].name, 'Open cases', 'kept as authored');
   assert.deepEqual((await settle(await rerun(w), authored)).result, { noop: true });
 });
 
-test('a recovery under a spec changed since the send records the declaration unknown, and the next run applies the new spec', async () => {
-  const { w } = await crashedAfterSave();
+test('a recovery under a spec changed since the send commits the ORIGINAL declaration, and the next run applies the new spec', async () => {
+  const { w, d } = await crashedAfterSave();
   const later = declared([{ key: 'open', type: 'list', view: 'Open cases', componentId: C_OPEN, name: 'Open later' }], { dashboardId: DID });
   const next = await rerun(w);
   assert.deepEqual((await settle(next, later)).result, { committed: true, recovered: true });
-  assert.equal(next.store.readGroup('dashboard', 'ops').committed.consumerState.declaration, null, 'not today\'s spec');
+  assert.deepEqual(committedDeclaration(next.store.readGroup('dashboard', 'ops').committed), canonicalDeclaration(d), 'the declaration it was sent with, not today\'s spec and not unknown');
   assert.match(w.wire.saved.get(DID).formxml, /Open now/, 'the recovery sent nothing');
   const after = await rerun(w);
   assert.equal((await settle(after, later)).result.committed, true);
   assert.match(w.wire.saved.get(DID).formxml, /Open later/);
-  assert.deepEqual(after.store.readGroup('dashboard', 'ops').committed.consumerState.declaration.tiles[0].name, { sha256: textSha('Open later') });
+  assert.deepEqual(after.store.readGroup('dashboard', 'ops').committed.consumerState.declaration.tiles[0].name, 'Open later');
+});
+
+test('the committed declaration keeps authored free text as written: it reads back as a spec entry the shape validator accepts, absent fields still absent', async () => {
+  const w = await world();
+  const d = declared([{ key: 'frame', type: 'iframe', url: 'https://contoso.example/report?mode=summary&title=<Q1 & Q2>', name: 'Report «Q1»' }], { description: 'Maker-authored description <b>bold</b>' });
+  assert.equal((await settle(w, d)).result.committed, true);
+  const group = w.store.readGroup('dashboard', 'ops').committed;
+  const declaration = committedDeclaration(group);
+  assert.deepEqual(declaration, { reconcile: 'declared', name: 'Ops', description: d.description, tiles: [{ key: 'frame', type: 'iframe', name: 'Report «Q1»', url: d.tiles[0].url }] }, 'authored values, nothing added');
+  assert.deepEqual(validateDeclaredDashboard(declaration), [], 'it is a valid declared dashboard');
+  assert.equal(declaration.tiles[0].url, d.tiles[0].url);
+  assert.equal(declaration.description, d.description);
+  assert.equal('dashboardId' in declaration || 'colspan' in declaration.tiles[0], false, 'an absent field stays absent');
+  declaration.tiles[0].url = 'changed';
+  assert.equal(committedDeclaration(w.store.readGroup('dashboard', 'ops').committed).tiles[0].url, d.tiles[0].url, 'the read-back is a copy');
+  assert.deepEqual((await settle(await rerun(w), d)).result, { noop: true }, 'the stored declaration equals the spec');
+});
+
+test('a recovery under a changed spec reads the ORIGINAL declaration from the attempt and commits it, never null', async () => {
+  const { w, d } = await crashedAfterSave();
+  assert.deepEqual(w.store.readGroup('dashboard', 'ops').pending.declaration, canonicalDeclaration(d), 'the attempt recorded the declaration before the send');
+  const changed = declared([{ key: 'open', type: 'list', view: 'Open cases', componentId: C_OPEN, name: 'Open now' }], { dashboardId: DID, description: 'New declaration, not the interrupted one' });
+  const next = await rerun(w);
+  assert.deepEqual((await settle(next, changed)).result, { committed: true, recovered: true });
+  const kept = committedDeclaration(next.store.readGroup('dashboard', 'ops').committed);
+  assert.notEqual(kept, null);
+  assert.deepEqual(kept, canonicalDeclaration(d), 'the original declaration');
+  assert.equal(kept.description, undefined, 'the original authored no description');
+  const after = await rerun(w);
+  assert.equal((await settle(after, changed)).result.committed, true, 'the next run applies the new spec');
+  assert.equal(w.wire.saved.get(DID).description, 'New declaration, not the interrupted one');
+  assert.deepEqual(committedDeclaration(after.store.readGroup('dashboard', 'ops').committed), canonicalDeclaration(changed));
+});
+
+test('a declared dashboard whose free text carries a credential is refused before anything is written or sent', async () => {
+  const w = await world();
+  const d = declared([{ key: 'frame', type: 'iframe', url: 'https://contoso.example/report?access_token=abc123def456', name: 'Report' }]);
+  assert.equal(await codeOf(settle(w, d)), 'managed-declaration-refused');
+  assert.equal(w.wire.writes().length, 0, 'nothing sent');
+  const g = w.store.readGroup('dashboard', 'ops');
+  assert.equal(g.committed, null);
+  assert.equal(g.pending, null, 'no attempt recorded');
 });
 
 test('a publish whose confirmation write failed after the send: the next run confirms it from the layers and sends no second PublishXml', async () => {
