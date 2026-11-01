@@ -22,7 +22,8 @@ const { pathKey, isGuid, artifactText, artifactJson, commandInfo, scriptRuns, gr
 const UPLOAD = 'genpage-upload.js';
 // The flags whose value is a file the upload sends. A retry repeats the same paths, and the bytes it sent are recorded in the event's
 // `inputs` (path → SHA-256), so a file saved again between the lost send and its retry is a different edit, not the same one.
-const FILE_FLAGS = ['code-file', 'name-file', 'prompt-file', 'agent-message-file', 'connectors', 'actions', 'data-sources'];
+// `--data-sources` is not here: its value is a CSV of table names (genpage-upload.js usage), so the command-flags comparison covers it.
+const FILE_FLAGS = ['code-file', 'name-file', 'prompt-file', 'agent-message-file', 'connectors', 'actions'];
 
 const sha256 = (text) => crypto.createHash('sha256').update(text, 'utf8').digest('hex');
 const sorted = (flags) => JSON.stringify(Object.keys(flags).sort().map((name) => [name, flags[name]]));

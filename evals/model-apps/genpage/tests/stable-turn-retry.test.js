@@ -82,6 +82,17 @@ test('a retry that is another command, other bytes, the same process or another 
   fails(contract.sameRetryProblems(changedInstead), /edit-binding-mode-change is not the same command as edit/, 'a changed request in place of the retry');
 });
 
+test('--data-sources is a list of table names, not a file: an identical retry may use it, a changed list fails', () => {
+  const same = copy();
+  for (const id of ['create', 'create-retry']) event(same, id).command += ' --data-sources account,contact';
+  assert.deepEqual(contract.gradeTurnRetry(same, { corpus: CORPUS }).filter((row) => row.result.status !== 'pass'), [], 'a table-name list needs no recorded digest');
+
+  const changed = copy();
+  event(changed, 'create').command += ' --data-sources account';
+  event(changed, 'create-retry').command += ' --data-sources account,contact';
+  fails(contract.sameRetryProblems(changed), /create-retry is not the same command as create/, 'the list changed');
+});
+
 test('a retried turn that leaves a second page or a second history turn fails', () => {
   const twoPages = copy();
   twoPages.artifacts['create/pages-after.json'] = JSON.stringify([
