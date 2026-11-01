@@ -81,7 +81,7 @@ const { parseArgs, validateFlags, emitResult } = require('./lib/dataverse-auth.j
 const { makeGenpageSdk, suppliedButBlank, sourceText, dataSourcesOf, normalizeTurnId, readTurnRecord } = require('./lib/genpage-sdk.js');
 const { appTurnStore } = require('./lib/page-turn-store.js');
 const { withStandalonePagesLease } = require('./lib/standalone-page-lease.js');
-const { openStandaloneManagedFence, assertStandaloneAppWrite } = require('./lib/managed-standalone-fence.js');
+const { openStandaloneAppWriteFence } = require('./lib/managed-standalone-fence.js');
 const { makeThrottleBudget } = require('./lib/throttle-budget.js');
 const { leftOnDiskWarning } = require('./lib/left-on-disk.js');
 const { griffelStyleProblems, griffelProblemsNotIn, describeGriffelRefusal, describeGriffelWarning } = require('./lib/griffel-styles.js');
@@ -513,19 +513,19 @@ async function main(argv = process.argv.slice(2), deps = {}) {
   // than a few seconds is announced on stderr — stdout carries the JSON result — so that a command that is silent for minutes is not mistaken for a hung one.
   const warn = (message) => process.stderr.write(`WARNING: ${message}\n`);
   // An upload that names an app writes in it and publishes it, which puts live the saved forms the app holds. So the managed debt of the app's workspace
-  // (lib/managed-standalone-fence.js) is read first, as a build reads it: while a build's managed change is unproved, or may have been sent and is not
-  // confirmed, the upload is refused with nothing written, and otherwise the backend's transport is gated by the same barrier. No store changes nothing.
+  // (lib/managed-standalone-fence.js) is read as a build reads it: while a build's managed change is unproved, or may have been sent and is not
+  // confirmed, the upload is refused with nothing written. It is read now, so an upload that cannot run builds no backend, and again under the app's
+  // leases before the deploy reads or writes anything (`underLease`, in `run` below) — the read that decides, and the one that fills the barrier the
+  // backend's transport is gated by. No store changes nothing.
   let fence = null;
   if (typeof flags['app-id'] === 'string' && flags['app-id']) {
     try {
-      fence = openStandaloneManagedFence({ environment: flags.env, appDir: flags['app-dir'] || deps.appDir });
-      assertStandaloneAppWrite(fence, { appId: flags['app-id'] });
+      fence = openStandaloneAppWriteFence({ environment: flags.env, appDir: flags['app-dir'] || deps.appDir, appId: flags['app-id'] });
     } catch (e) {
       return emit(false, { ok: false, appId: flags['app-id'], code: (e && e.code) || 'managed-binding-store-unreadable', outcome: 'nothing', error: String((e && e.message) || e) });
     }
-    if (fence.absent) fence = null;
   }
-  const genpage = makeBackend(flags.env, { warn, throttle: makeThrottleBudget({ warn }), ...(turnId ? { turnBindings: appTurnStore(flags['app-dir']) } : {}), ...(fence ? { publicationBarrier: fence.barrier } : {}) });
+  const genpage = makeBackend(flags.env, { warn, throttle: makeThrottleBudget({ warn }), ...(turnId ? { turnBindings: appTurnStore(flags['app-dir']) } : {}), ...(fence && fence.barrier ? { publicationBarrier: fence.barrier } : {}) });
   // The backend's workspace is removed BEFORE anything is reported: emitResult calls process.exit, so a cleanup placed after an emit never
   // runs, and that workspace holds the page's source. dispose() answers when the storage calls the backend had under way have settled and the
   // folder is gone — or says, in `{ left }`, which folder is not (a handle a scanner holds), and that is reported with the result: a success that left
@@ -538,7 +538,10 @@ async function main(argv = process.argv.slice(2), deps = {}) {
   // A refusal of the lease comes before the deploy reads or writes anything, and is a result like any other refusal (`entered` tells it from a deploy's throw).
   let entered = false;
   const appId = typeof flags['app-id'] === 'string' && flags['app-id'] ? flags['app-id'] : null;
-  const run = async () => {
+  const run = async ({ appUniqueName } = {}) => {
+    // Under the leases, before anything is read for the deploy or written: the managed fence that decides (see above). Its refusal comes before
+    // `entered`, so it is reported like the lease's own, with nothing done.
+    if (fence) fence.underLease({ appUniqueName });
     entered = true;
     // Under the lease, a run under a turn reads what it IS again (classifyRun), and takes its obligations — finishing a placement an earlier run saved, proving the
     // page live in the app that runs — from what is held NOW. What was read above was read before the lease, and another run of the same turn may have bound it in
@@ -565,8 +568,9 @@ async function main(argv = process.argv.slice(2), deps = {}) {
   try {
     outcome = appId ? await withStandalonePagesLease({ genpage, appId, appDir: flags['app-dir'] || deps.appDir, warn }, run) : await run();
   } catch (e) {
-    // Before the deploy is entered nothing has been read for it or written: the lease was refused (`pages-locked`), or the app it is keyed by could not be
-    // named (GENPAGE_APP_LEASE_UNRESOLVED, which a failed read of that name is too). Any such failure is a refusal with one JSON result, never a throw with
+    // Before the deploy is entered nothing has been read for it or written: the lease was refused (`build-locked`, `pages-locked`), the app it is keyed by
+    // could not be named (GENPAGE_APP_LEASE_UNRESOLVED, which a failed read of that name is too), or the managed fence under the leases refused
+    // (`publication-withheld`, `managed-binding-store-unreadable`). Any such failure is a refusal with one JSON result, never a throw with
     // nothing on stdout. A failure inside the deploy keeps its own handling: it may have written, so it is never relabelled "nothing".
     if (!entered && appId) {
       const code = e && typeof e.code === 'string' && e.code ? e.code : 'GENPAGE_APP_LEASE_UNRESOLVED';

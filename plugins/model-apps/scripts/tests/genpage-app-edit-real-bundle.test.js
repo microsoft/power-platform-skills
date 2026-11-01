@@ -678,3 +678,98 @@ test('managed fence: an upload that names an app is refused with nothing written
     assert.deepStrictEqual(world.additions(), []);
   }, { defaultViewPinned: false });
 });
+// The fence that decides is read under the app's leases, not before them. Between the early read and the lease there is a window — the entry
+// reads the app's unique name to key the lease by — in which a build of the same workspace can run and leave debt; the build then lets its
+// lease go, and the entry takes it. Here that build runs inside the name read, under the real build lease, against a store that is absent at
+// the start and against one that is present and clean. The edit must see the debt it left and refuse with nothing written.
+const { withAppBuildLease } = require('../lib/app-operation-lease.js');
+const { openManagedBindings } = require('../lib/managed-bindings.js');
+const { openStandaloneManagedFence } = require('../lib/managed-standalone-fence.js');
+
+// A store file with no debt in it: an attempt that never started, retired through the store's own operation.
+function cleanStore(args) {
+  const store = openManagedBindings(args);
+  const id = '11111111-2222-4333-8444-666666666666';
+  const token = store.prepareAttempt({ family: 'view', key: 'account/clean', root: { kind: 'view', key: 'account/clean', id }, baseGeneration: null, expected: null, knownScopes: [{ type: 'table', table: 'account' }], declarationSha256: 'b'.repeat(64) });
+  store.retireUnsentAttempt({ token, baseGeneration: null });
+}
+
+// The app folder of the app the world serves, named as the backend names it, and a backend factory whose name read lets a build in first.
+async function interleavingApp(genpage, makeBackend, { storeAtStart }) {
+  const unique = await genpage.appUniqueName(APP_ID);
+  const appDir = tmp();
+  fs.writeFileSync(path.join(appDir, 'app-spec.json'), JSON.stringify({ app: { uniqueName: unique }, solution: { uniqueName: 'ContosoEdits' } }));
+  const workspaceDir = applyWorkspaceOf({ appDir });
+  fs.mkdirSync(workspaceDir, { recursive: true });
+  const args = { workspaceDir, environment: INSTANCE, appUniqueName: unique, solutionUniqueName: 'ContosoEdits' };
+  if (storeAtStart) cleanStore(args);
+  assert.strictEqual(openStandaloneManagedFence({ environment: INSTANCE, appDir }).absent, !storeAtStart);
+  let interleaved = 0;
+  const factory = (...a) => {
+    const backend = makeBackend(...a);
+    const read = backend.appUniqueName.bind(backend);
+    backend.appUniqueName = async (...x) => {
+      const found = await read(...x);
+      if (!interleaved++) await withAppBuildLease({ workspaceDir, appUniqueName: unique }, async () => { seedManagedDebt(args, { table: 'account' }); });
+      return found;
+    };
+    return backend;
+  };
+  return { appDir, workspaceDir, unique, factory, interleaved: () => interleaved };
+}
+
+for (const storeAtStart of [false, true]) {
+  const start = storeAtStart ? 'a clean store present at the start' : 'no store at the start';
+  test(`managed fence under the lease: \`genpage.js add-to-app\` and \`remove-from-app\` refuse the debt a build left while the edit read the app's name (${start})`, async () => {
+    for (const argv of [['add-to-app', '--env', INSTANCE, '--app-id', APP_ID, '--page-id', OTHER], ['remove-from-app', '--env', INSTANCE, '--app-id', APP_ID, '--page-id', APP_EXISTING_PAGE_ID]]) {
+      await inWorld(async ({ app, world, genpage, makeBackend }) => {
+        const w = await interleavingApp(genpage, makeBackend, { storeAtStart });
+        const xml = app.state.xml;
+        const out = await genpageMain(argv, { appDir: w.appDir, makeGenpageSdk: w.factory, emit: (ok, payload) => ({ ok, ...payload }), stderr: () => {} });
+        assert.strictEqual(w.interleaved(), 1, 'the build ran inside the name read');
+        assert.deepStrictEqual([out.ok, out.code, out.outcome], [false, 'publication-withheld', 'nothing'], JSON.stringify(out));
+        assert.strictEqual(app.state.publishAttempts, 0, 'no publish of the app');
+        assert.strictEqual(app.state.xml, xml, 'the navigation is as it was');
+        assert.deepStrictEqual(world.additions(), [], 'no AddAppComponents');
+      }, { defaultViewPinned: false });
+    }
+  });
+
+  test(`managed fence under the lease: an upload that names an app refuses the debt a build left while the upload read the app's name (${start})`, async () => {
+    await inWorld(async ({ server, app, world, genpage, makeBackend }) => {
+      const w = await interleavingApp(genpage, makeBackend, { storeAtStart });
+      const dir = tmp();
+      const file = path.join(dir, 'page.tsx');
+      fs.writeFileSync(file, SOURCE);
+      const pages = server.state.projects.size;
+      const xml = app.state.xml;
+      const out = await uploadMain(['--env', INSTANCE, '--app-id', APP_ID, '--app-dir', w.appDir, '--code-file', file, '--name', 'Fresh page', '--data-sources', 'account', '--prompt', 'p', '--agent-message', 'm', '--add-to-sitemap'], {
+        appDir: w.appDir, makeGenpageSdk: w.factory, emit: (ok, payload) => ({ ok, ...payload }),
+      });
+      assert.strictEqual(w.interleaved(), 1, 'the build ran inside the name read');
+      assert.deepStrictEqual([out.ok, out.code, out.outcome], [false, 'publication-withheld', 'nothing'], JSON.stringify(out));
+      assert.strictEqual(server.state.projects.size, pages, 'no page was created');
+      assert.strictEqual(app.state.publishAttempts, 0, 'no publish of the app');
+      assert.strictEqual(app.state.xml, xml, 'the navigation is as it was');
+      assert.deepStrictEqual(world.additions(), []);
+    }, { defaultViewPinned: false });
+  });
+}
+
+// The build lease is held for the whole edit, with the pages lease: a build's views and charts phases — which leave managed debt — run outside its
+// pages lease, so the pages lease alone would not keep them out while the edit writes. A build of the app in the same workspace refuses the edit.
+test('managed fence under the lease: a page edit is refused with nothing written while a build of the app holds its build lease', async () => {
+  await inWorld(async ({ app, world, genpage, makeBackend }) => {
+    const w = await interleavingApp(genpage, makeBackend, { storeAtStart: false });
+    const xml = app.state.xml;
+    const out = await withAppBuildLease({ workspaceDir: w.workspaceDir, appUniqueName: w.unique }, () => genpageMain(['add-to-app', '--env', INSTANCE, '--app-id', APP_ID, '--page-id', OTHER], {
+      appDir: w.appDir, makeGenpageSdk: makeBackend, emit: (ok, payload) => ({ ok, ...payload }), stderr: () => {},
+    }));
+    assert.deepStrictEqual([out.ok, out.code, out.outcome, out.appId], [false, 'build-locked', 'nothing', APP_ID], JSON.stringify(out));
+    assert.strictEqual(app.state.publishAttempts, 0, 'no publish of the app');
+    assert.strictEqual(app.state.xml, xml, 'the navigation is as it was');
+    assert.deepStrictEqual(world.additions(), [], 'no AddAppComponents');
+    const after = await genpageMain(['add-to-app', '--env', INSTANCE, '--app-id', APP_ID, '--page-id', OTHER], { appDir: w.appDir, makeGenpageSdk: makeBackend, emit: (ok, payload) => ({ ok, ...payload }), stderr: () => {} });
+    assert.strictEqual(after.ok, true, `once the build is done the edit runs: ${JSON.stringify(after)}`);
+  }, { defaultViewPinned: false });
+});

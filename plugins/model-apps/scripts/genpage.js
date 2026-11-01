@@ -154,7 +154,7 @@ const { leftOnDiskWarning } = require('./lib/left-on-disk.js');
 const { assertSafeOutputDir, assertPlainFileTarget, writeFileSafe, removeFileSafe, sameFile } = require('./lib/safe-fs.js');
 const { makeWritesBlocking } = require('./lib/output-redaction.js');
 const { withStandalonePagesLease } = require('./lib/standalone-page-lease.js');
-const { openStandaloneManagedFence, assertStandaloneAppWrite } = require('./lib/managed-standalone-fence.js');
+const { openStandaloneAppWriteFence } = require('./lib/managed-standalone-fence.js');
 const { prepareCompilerRefresh } = require('./lib/compiler-refresh.js');
 
 // How long the backend's cleanup is waited for before the process ends: a storage call that never settles must not keep the script alive.
@@ -576,20 +576,20 @@ async function main(argv = process.argv.slice(2), deps = {}) {
     if (!(error instanceof UsageError)) throw error;
     return (deps.usageError || exitWithUsage)(error.message, error.verb);
   }
-  // The managed debt of the app's workspace (lib/managed-standalone-fence.js), read before the backend exists so its transport is gated by it: a
-  // navigation edit writes and publishes the app, which puts live the saved forms the app holds, so while a build's managed change is unproved or
-  // may have been sent unconfirmed, the edit is refused before anything is written. No store in the workspace changes nothing.
+  // The managed debt of the app's workspace (lib/managed-standalone-fence.js): a navigation edit writes and publishes the app, which puts live the
+  // saved forms the app holds, so while a build's managed change is unproved or may have been sent unconfirmed, the edit is refused before anything
+  // is written. It is read twice: now, so an edit that cannot run builds no backend, and again under the app's leases before the edit's first read
+  // or write (`underLease`) — that second read is the one that decides, and it fills the barrier the backend's transport is gated by. No store in
+  // the workspace changes nothing.
   let fence = null;
   if (LEASED.has(command.verb)) {
     try {
-      fence = openStandaloneManagedFence({ environment: command.env, appDir: command.args.appDir || deps.appDir });
-      assertStandaloneAppWrite(fence, { appId: command.args.appId });
+      fence = openStandaloneAppWriteFence({ environment: command.env, appDir: command.args.appDir || deps.appDir, appId: command.args.appId });
     } catch (error) {
       return emit(false, failureOf(error));
     }
-    if (fence.absent) fence = null;
   }
-  const genpage = fence ? (deps.makeGenpageSdk || makeGenpageSdk)(command.env, { publicationBarrier: fence.barrier }) : (deps.makeGenpageSdk || makeGenpageSdk)(command.env);
+  const genpage = fence && fence.barrier ? (deps.makeGenpageSdk || makeGenpageSdk)(command.env, { publicationBarrier: fence.barrier }) : (deps.makeGenpageSdk || makeGenpageSdk)(command.env);
   // The backend's workspace is removed BEFORE anything is reported: emitResult ends the process, so a cleanup placed after it never runs, and that workspace holds the page's source. The
   // outcome is settled first and emitted outside the try, for the same reason: an exit inside it would be caught as a failure of the verb. dispose() says, in `{ left }`, which folder it
   // could not remove (a handle a scanner holds); that goes out with the result, as a warning, so a success that left a page's source in the temp directory says so.
@@ -598,8 +598,12 @@ async function main(argv = process.argv.slice(2), deps = {}) {
   const leaseWarnings = [];
   try {
     const run = () => RUN[command.verb](genpage, command.args);
+    const leased = ({ appUniqueName } = {}) => {
+      fence.underLease({ appUniqueName });
+      return run();
+    };
     const payload = LEASED.has(command.verb)
-      ? await withStandalonePagesLease({ genpage, appId: command.args.appId, appDir: command.args.appDir || deps.appDir, warn: (w) => leaseWarnings.push(w) }, run)
+      ? await withStandalonePagesLease({ genpage, appId: command.args.appId, appDir: command.args.appDir || deps.appDir, warn: (w) => leaseWarnings.push(w) }, leased)
       : await run();
     outcome = { ok: true, payload };
   } catch (error) {

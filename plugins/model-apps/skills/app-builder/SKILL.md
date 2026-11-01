@@ -772,7 +772,9 @@ node "${PLUGIN_ROOT}/scripts/teardown-model-app.js" \
     reaches its pages phase, so its earlier phases (solution, tables, forms, app shell) may already have saved their
     changes: tell the user so, never that nothing changed. Wait for the other build or edit to finish and run the build
     again; that run reconciles what was already saved. (A standalone `genpage.js` / `genpage-upload.js` edit that gets this
-    refusal takes the lease first, so it did write nothing.) It is a single-machine lock in this folder's
+    refusal takes the lease first, so it did write nothing. Such an edit holds the app's build lease too, so a build started
+    while it runs is refused at once with `build-locked`, having written nothing: run the build again once the edit ends.)
+    It is a single-machine lock in this folder's
     `.maker-workspace`, not a guard against an edit from another machine.
   - `form-page-embeds-incomplete` — a page the spec embeds in a form (`forms[].genPages`) was not embedded. The message names
     each key and why (`halt.notApplied`); tell the user both and never report the build as done. **In this release the CLI
