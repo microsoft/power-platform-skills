@@ -450,6 +450,9 @@ async function applyViewCreate(plan, sdk, ctx, result) {
     // solution bookkeeping all name that id, so a create that does not keep it is refused before
     // anything is pushed.
     if (normalizeGuid(art && art.id) !== normalizeGuid(id)) return { outcome: 'refused', code: 'CREATE_ID_NOT_KEPT' };
+    // The stable port records the exact draft it made (creates-stable-build.js), so a local discard after a lost answer can
+    // remove only that draft, never a maker's edit made while the create was outstanding.
+    if (ctx.creates && typeof ctx.creates.materialised === 'function') await ctx.creates.materialised({ kind: 'view', id, artifact: art });
     return pushChecked(sdk, 'view', id);
   });
   const id = created.id ? normalizeGuid(created.id) || String(created.id) : null;

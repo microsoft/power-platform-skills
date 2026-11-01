@@ -2893,7 +2893,11 @@ acknowledged, is refused before any read-back, reapply or send (`create-completi
 draft: a diff cannot tell it from one a maker edited since (a name or description outside the
 reconciled projection included). Instead the run whose create was refused or lost its answer removes
 its own local draft in the same run (`discardOwnDraft` in `lib/creates-stable-build.js`, the SDK's local
-`deleteArtifact`), so the next build proves the row from the server. A store file that cannot be trusted
+`deleteArtifact`), so the next build proves the row from the server, but only while the draft is still
+exactly the one the run recorded making (its canonical hash, taken between `createArtifact` and the push
+through the stable port's `materialised`); being the same run proves nothing, since a maker can edit the
+draft while the create is outstanding. A draft that differs, or that cannot be read or removed, is kept
+and the build stops with `create-local-draft-kept`. A store file that cannot be trusted
 halts the build before any write (`managed-binding-store-unreadable`, never retried); the message tells
 the maker to keep the file as it is and never to move, delete or reset it, nor to put back an older copy
 (a backup, the build's own included, can miss an attempt or a publish sent after it was made); only a

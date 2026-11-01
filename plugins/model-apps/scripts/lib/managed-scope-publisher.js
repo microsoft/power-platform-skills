@@ -21,6 +21,9 @@
 // Every publish is sent with `carry`: a covered group that owes nothing but is already live at its desired hash is journaled
 // under the send too (carried), so a publish whose answer is lost fences its table across runs even when it paid no debt — the
 // next build sends neither a change of a managed group on that table nor another publish of it until the store settles it.
+// Only a group that qualifies is carried: a publish of a table with no debt and no such group leaves no record, so a failed
+// send of it blocks the table only for the rest of this run. That is not shown harmless (a table publish can put a saved
+// managed layer live); it is a limit of the store's journal, not something this publisher decides.
 
 const { publishManagedScope } = require('./managed-feature-contract.js');
 const { classifyPersisted } = require('./managed-bindings.js');

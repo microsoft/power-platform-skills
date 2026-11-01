@@ -704,7 +704,10 @@ downloaded spec. The only value is `"stable-v1"`; any other value is a validatio
   (`create-completion-required`); the copy is kept byte for byte, and running again stops again. There is
   no `overwrite:` approval for this stop: put the change into the spec, then refresh the local copy. A
   build whose own create was refused or lost its answer removes the local draft it made in the same run,
-  so the next build finds the row on the server instead; a draft it could not remove stops as above.
+  but only while that draft is still exactly what the build made, so the next build finds the row on the
+  server instead. A draft edited meanwhile (even while the create request was outstanding), or one it
+  could not remove, is kept as it is: the build stops with `create-local-draft-kept`, and the next build
+  stops as above.
 - **Publishing.** A create whose answer was lost holds its table's publish until a later build has
   found and bound the row; another table still publishes. While a change is not yet proved, page edits
   that publish the app (`genpage.js` add-to-app and remove-from-app, `genpage-upload.js --app-id`) are

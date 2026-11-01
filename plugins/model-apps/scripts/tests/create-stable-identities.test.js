@@ -789,6 +789,8 @@ test('the documented recovery keeps the store: no advice to move, delete or rese
 
 // --- the build's own unacknowledged local create ---------------------------------------------------------------------------------
 const { readLocalCreateState } = require('../lib/creates-local.js');
+const { withAppBuildLease } = require('../lib/app-operation-lease.js');
+const { appUniqueName } = require('../lib/app-unique-name.js');
 
 // Every file under `dir`, by relative path, to compare a workspace byte for byte.
 function filesOf(dir) {
@@ -849,6 +851,82 @@ for (const kind of ['view', 'chart']) {
       assert.ok(storeOf(org, dir).readGroup(kind, key).pending, 'the attempt is kept');
     });
   }
+
+  // A maker edits the local draft (here through a second SDK over the same workspace) while the build's create request is
+  // outstanding, then the answer is lost. Being the same run, and the copy being a pending create, does not make the draft the
+  // build's to remove: it now holds the maker's edit, so it is kept byte for byte and the build says so.
+  test(`a ${kind} draft edited while its create answer is outstanding is kept with the edit, and the build says why`, async () => {
+    const org = createFakeBuildOrg({ entities: ENTITIES });
+    const dir = newDir();
+    const id = derived(stableSpec())[kind];
+    const edit = 'Maker edit during the outstanding create';
+    const barrier = createPublicationBarrier();
+    const observer = createAttemptSendObserver();
+    const sdk = createMakerSdk({ workspaceStorage: createNodeWorkspaceStorage(dir), instanceUrl: org.origin, httpClient: gatedClient(org, barrier, observer) });
+    await sdk.initWorkspace();
+    const post = org.httpClient.post.bind(org.httpClient);
+    let edited = false;
+    let buildLeaseHeld = false;
+    org.httpClient.post = async (url, ...args) => {
+      const response = await post(url, ...args);
+      if (!edited && new RegExp(`/${collection}(?:\\?|$)`).test(url)) {
+        edited = true;
+        // The edit is local authoring, not a second build: the build's lease is held throughout and refuses one.
+        await assert.rejects(withAppBuildLease({ workspaceDir: dir, appUniqueName: appUniqueName(only()) }, () => assert.fail('another build must not enter')), { code: 'build-locked' });
+        buildLeaseHeld = true;
+        const editor = createMakerSdk({ workspaceStorage: createNodeWorkspaceStorage(dir), instanceUrl: org.origin, httpClient: org.httpClient });
+        await editor.initWorkspace();
+        await editor.updateElement(kind, id, '/name', edit);
+        const during = await readLocalCreateState(editor, kind, id);
+        assert.equal(during.state, 'pending');
+        assert.equal(during.draft.name, edit);
+        throw Object.assign(new Error('response lost after the local edit was saved'), { code: 'ECONNRESET' });
+      }
+      return response;
+    };
+    const first = await build(org, dir, only(), { sdk, publicationBarrier: barrier, sendObserver: observer });
+    org.httpClient.post = post;
+    assert.equal(edited, true);
+    assert.equal(buildLeaseHeld, true);
+    const local = await readLocalCreateState(sdk, kind, id);
+    assert.equal(local.state, 'pending', 'same-run membership does not prove the draft still holds only what the build made');
+    assert.equal(local.draft.name, edit);
+    assert.match(String(first.err && first.err.message), /create-local-draft-kept/);
+    assert.deepEqual(first.writes.filter((c) => c.method === 'DELETE'), []);
+    assert.ok(storeOf(org, dir).readGroup(kind, key).pending, 'the attempt is kept');
+    const before = filesOf(dir);
+    const next = await build(org, dir, only(), { authorizedAdoption: new Set([`${kind}:${key}`]) });
+    assert.match(String(next.err && next.err.message), /create-completion-required/);
+    assert.deepEqual(next.writes, []);
+    assert.deepEqual(filesOf(dir), before, 'the next build keeps every file as it was');
+  });
+
+  // An edit that lands between the SDK writing the draft and the push: the workspace no longer holds the draft the build made, so
+  // the create is not sent at all, and the draft is kept with the edit.
+  test(`a ${kind} draft edited before its push is not sent and is kept with the edit`, async () => {
+    const org = createFakeBuildOrg({ entities: ENTITIES });
+    const dir = newDir();
+    const id = derived(stableSpec())[kind];
+    const edit = 'Maker edit before the push';
+    const barrier = createPublicationBarrier();
+    const sdk = createMakerSdk({ workspaceStorage: createNodeWorkspaceStorage(dir), instanceUrl: org.origin, httpClient: gatedClient(org, barrier) });
+    await sdk.initWorkspace();
+    const createArtifact = sdk.createArtifact.bind(sdk);
+    sdk.createArtifact = async (...args) => {
+      const art = await createArtifact(...args);
+      const editor = createMakerSdk({ workspaceStorage: createNodeWorkspaceStorage(dir), instanceUrl: org.origin, httpClient: org.httpClient });
+      await editor.initWorkspace();
+      await editor.updateElement(kind, id, '/name', edit);
+      return art;
+    };
+    const first = await build(org, dir, only(), { sdk, publicationBarrier: barrier });
+    assert.ok(first.err, 'the build stops');
+    assert.equal(creates(first, collection).length, 0, 'a draft the build cannot show is its own is never sent');
+    assert.match(String(first.err.message), /create-local-draft-kept/);
+    const local = await readLocalCreateState(sdk, kind, id);
+    assert.equal(local.state, 'pending');
+    assert.equal(local.draft.name, edit);
+  });
 }
 
 // --- standalone discovery of a build whose spec leaves the app's unique name to be derived --------------------------------------
