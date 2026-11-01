@@ -15,24 +15,43 @@
 // A missing dashboard is created under its catalog id with its seed tab and section ids from the catalog too.
 //
 // The dashboard and its tiles are ONE managed group (family `dashboard`): the root record and one `dashboard-tile`
-// record per declared tile commit together, or not at all. A root-only binding is never written. Before any write the
-// whole dashboard is checked, and any of these stops it with its code (the build's halt; nothing is sent):
+// record per declared tile commit together, or not at all. A root-only binding is never written.
+//
+// The wrapper's `preflight` runs on EVERY path — an ordinary run and every recovery of an earlier attempt — before
+// anything is read into the workspace, proved or sent, and stops the dashboard (quarantined, the attempt kept) when:
 //   * the creation record of this dashboard is not settled (`dashboard-creation-record-unsettled`): its ids are held
 //     for the run, so no dashboard publish and no app publish ships them;
+//   * a workspace copy of any id this dashboard may be holds edits the server has not seen (`create-completion-required`,
+//     category `workspace-copy-unsent-edits`; no overwrite bypass: such a copy is a maker's unsent work, or another
+//     path's, and the fetch with overwrite every read here makes would drop it).
+// Then, before any write, the whole dashboard is checked, and any of these stops it with its code (nothing is sent):
 //   * a table-scoped or non-Standard row, two tiles pinned to one control, one control on two live cells, a bound or
 //     pinned tile whose control is gone (never re-added), a type change, an unresolved target, drift without approval;
-//   * a published layer that cannot be read, or a workspace copy holding edits the server has not seen (no overwrite
-//     bypass: such a copy is a maker's unsent work, or another path's, and a fetch with overwrite would drop it).
+//   * a published layer that cannot be read; a write to a dashboard this spec does not manage yet without its typed
+//     adoption approval (`dashboard:<key>`; a pin names the row, it is not the maker's consent to manage it).
 //
 // Proof (proofSchema `dashboard-v1`): the expected proof persisted before the send names every managed tile's control
 // id with the association of its type, cell, section and tab, and the sha256 of the INTENDED projection: the root's
 // type, scope and description, and each managed tile's key, id, type, containers and full ownable parts. A fresh read
-// must reproduce it exactly. Preservation is proven over the FOREIGN tiles (every control the declaration does not
-// own), whole, so a run that stopped after the service accepted its change cannot bind or publish what someone changed
-// on the dashboard since: recovery recomputes both hashes from a fresh read and the expected proof alone.
+// must reproduce it exactly. Preservation is proven over everything the declaration does NOT own: the whole layout
+// (every foreign cell and control, the tabs, sections and rows and their order) with each managed cell standing as a
+// placeholder of its control id, and every managed tile's non-authored parameters (RecordsPerPage, ...). So a run that
+// stopped after the service accepted its change cannot bind or publish what someone changed on the dashboard since:
+// recovery recomputes both hashes from a fresh read and the expected proof alone.
+//
+// Publication debt has a provenance: it is owed only for this attempt's own proved content write (the attempt's
+// planned publication), or carried over from the committed group's unsent debt. A read that finds the saved layer
+// ahead of the published one — someone's draft — never makes a debt, so it is never published by this build.
+//
+// The committed consumer state keeps the canonical declaration (consumerState.declaration): every field the spec
+// authors and only those, an absent field absent. A change of authorship alone rebinds without a content write. A
+// recovered attempt keeps the declaration it was sent with: when today's spec is another one, the declaration is
+// recorded unknown (null) rather than today's, and the next run reconciles today's spec.
 //
 // Publication goes through ONE adapter (publishDeclaredDashboard) over publishManagedScope: one permit, one scope, the
-// dashboard's own id in a `<dashboard>` envelope. A layer read that fails there is a hold for the run, never a retry.
+// dashboard's own id in a `<dashboard>` envelope. Its layers are read by the shared `dashboard` reader of
+// lib/managed-layer-readers.js, so the publication debt records the hash that reader answers (systemFormLayerSha256).
+// A layer read that fails there is a hold for the run, never a retry.
 //
 // Tile options are resolved by the build's own dashboardTileOpts and turned into a component by its dashboardComponent
 // (sdk-build.js), injected as `resolveTile` / `toComponent` so that mapping exists once.
@@ -50,11 +69,8 @@ const {
 } = require('./reconcile-common.js');
 const { hasUnsyncedEdits } = require('./unsynced-edits.js');
 const contract = require('./managed-feature-contract.js');
-const { runManagedFeature, publishManagedScope, CREATION_RECORD_UNSETTLED, PUBLICATION_UNVERIFIED } = contract;
-// The send boundary's refusal of a request that names other publish targets than its permit's one scope. Older
-// contracts never answer it; the literal keeps this adapter working on both.
-const PUBLICATION_REFUSED = contract.PUBLICATION_REFUSED || 'managed-publication-refused';
-const { readSystemFormPublication } = require('./systemform-published.js');
+const { runManagedFeature, publishManagedScope, CREATION_RECORD_UNSETTLED, PUBLICATION_UNVERIFIED, PUBLICATION_REFUSED } = contract;
+const { readSystemFormPublication, readSystemFormRootPresence, systemFormLayerSha256 } = require('./systemform-published.js');
 
 const KIND = 'dashboard';
 const TILE_KIND = 'dashboard-tile';
@@ -262,22 +278,90 @@ function projectionSha256(root, tiles) {
   return sha({ root, tiles: sorted });
 }
 
-/**
- * The hash of everything the declaration does NOT own: each foreign component whole — its id, type, name, spans,
- * every parameter and its cell bag — in id order. A component's `position` is left out: it is an index the SDK
- * assigns on read, and an append after the occupied layout moves no foreign cell.
- */
-function preservationSha256(components, managedIds) {
-  const foreign = (components || [])
-    .filter((c) => !managedIds.has(bareId(c.id)))
-    .map((c) => ({ id: bareId(c.id), type: c.type, name: c.name === undefined ? null : c.name, colspan: c.colspan === undefined ? null : c.colspan, rowspan: c.rowspan === undefined ? null : c.rowspan, parameters: c.parameters || {}, bag: c.bag || null }))
-    .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
-  return sha(foreign);
+/** A managed tile's parameters the spec does NOT author (RecordsPerPage, ChartGridMode, ...), as the platform keeps them. */
+function unownedParams(type, parameters) {
+  const owned = new Set(OWNED_PARAMS[type] || []);
+  const out = {};
+  for (const [k, v] of Object.entries(parameters || {})) if (!owned.has(k)) out[k] = v === undefined || v === null ? '' : String(v);
+  return out;
 }
 
-/** The hash a publication debt is kept in: name, description and formxml of one systemform layer. */
-function layerSha256(row) {
-  return sha({ name: row.name, description: row.description, formxml: row.formxml });
+/**
+ * The layout a declaration does not own: the whole bag (tabs, columns, sections, rows, every foreign cell and its
+ * control, the root's other parts) with each MANAGED cell — a cell holding a managed control — replaced by a placeholder
+ * of that control's id, so the authored parts written into it (label, spans, owned parameters) are not compared here
+ * (the semantic projection compares them) while where it sits among the foreign cells and rows still is.
+ *
+ * Managed placeholders are trimmed from the END of each `rows` in reading order — the last cells of the last row, then
+ * that row when it held cells and none is left, then the row before, until a foreign cell or a row with no cell: that
+ * is where an append puts its new cells (into the free columns of the last occupied row, then new rows after it), and
+ * a fresh read after the append must reproduce the layout the plan saw. So the one order this does not prove is that
+ * of the trailing managed tiles; their cells, sections and tabs are still proved by each child's association.
+ * null for a dashboard this attempt creates: nothing on it existed to preserve.
+ */
+function preservedLayout(bag, managedIds) {
+  if (!bag) return null;
+  const managedControl = (cell) => {
+    const hit = childrenNamed(cell, 'control').map((c) => bareId(attrOf(c, 'id'))).find((id) => managedIds.has(id));
+    return hit || null;
+  };
+  const isPlaceholder = (el) => !!el && el.n === 'cell' && !!el.managed;
+  const hasCell = (row) => (row.c || []).some((c) => c && c.n === 'cell');
+  // Rows and cells are plain elements in the SDK's bag; a wrapped `{ i, node }` row is left untrimmed (fail closed).
+  const trimAppended = (rows) => {
+    while (rows.length) {
+      const last = rows[rows.length - 1];
+      if (!last || last.n !== 'row' || !hasCell(last)) return;
+      const cells = [...last.c];
+      while (cells.length && isPlaceholder(cells[cells.length - 1])) cells.pop();
+      if (cells.length) { rows[rows.length - 1] = { ...last, c: cells }; return; }
+      rows.pop();
+    }
+  };
+  const walk = (el) => {
+    if (!el || typeof el !== 'object') return el;
+    if (el.n === 'cell') {
+      const id = managedControl(el);
+      if (id) return { n: 'cell', managed: id };
+    }
+    const children = (el.c || []).map((child) => (child && child.node ? { i: child.i, node: walk(child.node) } : walk(child)));
+    if (el.n === 'rows') trimAppended(children);
+    return { ...el, c: children };
+  };
+  return walk(bag);
+}
+
+/**
+ * The hash of everything the declaration does NOT own: the preserved layout above, and each managed tile's
+ * non-authored parameters by control id. A component's `position` is not hashed: it is an index the SDK assigns on
+ * read; the layout tree carries the order it is derived from.
+ */
+function preservationSha256(bag, managedParams) {
+  const managed = Object.keys(managedParams).sort().map((id) => ({ id, parameters: managedParams[id] }));
+  return sha({ layout: preservedLayout(bag, new Set(Object.keys(managedParams))), managed });
+}
+
+// The fields a declared dashboard and its tiles may author. The canonical declaration keeps exactly the ones the spec
+// sets: an absent field stays absent, so "not authored" and "authored as the live value" stay different.
+const DECLARED_FIELDS = ['name', 'description', 'dashboardId'];
+const DECLARED_TILE_FIELDS = ['key', 'type', 'name', 'view', 'chart', 'entity', 'viewId', 'visualizationId', 'url', 'webResource', 'componentId', 'colspan', 'rowspan'];
+// Free text the binding store must not hold verbatim: it refuses a consumer value that looks like markup, a token or
+// an environment URL (managed-bindings.js validateConsumerValue), and a commit refused after the send would strand the
+// attempt; a name, a description, a view or chart display name, or an iframe url may be any of those. They are kept as
+// their sha256: whether a field is authored, and what it says, stays comparable. Ids, logical names and spans are kept.
+const HASHED_FIELDS = new Set(['name', 'description', 'url', 'view', 'chart']);
+
+/** The canonical declaration of a declared dashboard (consumerState.declaration); `declarationSha256` hashes it. */
+function canonicalDeclaration(key, dashboard) {
+  const pick = (from, fields) => {
+    const out = {};
+    for (const f of fields) {
+      if (from[f] === undefined) continue;
+      out[f] = HASHED_FIELDS.has(f) ? { sha256: sha(String(from[f])) } : from[f];
+    }
+    return out;
+  };
+  return { key, ...pick(dashboard, DECLARED_FIELDS), tiles: (dashboard.tiles || []).map((t) => pick(t, DECLARED_TILE_FIELDS)) };
 }
 
 const rootProjection = (description) => ({ dashboardType: 'Standard', global: true, description: String(description == null ? '' : description) });
@@ -317,15 +401,35 @@ function resolveComponent(tile, index, resolveTile, toComponent) {
 }
 
 /**
- * Read and preflight one declared dashboard: GET only, and every refusal is a coded throw before any write.
- * Answers the resolution plan() turns into the expected proof.
+ * The wrapper's preflight (runManagedFeature `preflight`), run on every path before anything is read into the
+ * workspace, proved or sent; it reads nothing from the service and writes nothing. Refuses by throwing:
+ *   - a retained creation record of this dashboard (`dashboard-creation-record-unsettled`): runManagedFeature
+ *     quarantines every id it knows by then — the retained ids, the pin, the name lookup, the catalog id and the
+ *     committed and pending roots — so neither a dashboard publish nor an app publish ships any of them;
+ *   - a workspace copy with edits the server has not seen, of ANY id this dashboard may be read under: the committed
+ *     root, the pending root, the pin, the name lookup and the catalog id. Every read here fetches with overwrite, so
+ *     such a copy is checked before the first one. `create-completion-required`, category `workspace-copy-unsent-edits`
+ *     (design §3.4): the maker saves the edit into the spec or discards the copy; an identical rerun stops the same way.
+ *     A copy the SDK cannot diff reads as edited (hasUnsyncedEdits fails open), so a doubtful copy is never dropped.
+ */
+async function preflightDashboard(s, { committed, pending }) {
+  const { key, sdk, dashboard, catalog } = s;
+  if (s.retainedCreationIds.length) throw stop(CREATION_RECORD_UNSETTLED, `the creation record of dashboard "${key}" is not settled; it is not written or published in this run`);
+  const ids = [committed && committed.root.id, pending && pending.root && pending.root.id, dashboard && dashboard.dashboardId, s.resolvedId];
+  try { ids.push(catalog.identityFor(KIND, key).derivedId); } catch { /* not in the catalog: resolve stops it */ }
+  for (const id of [...new Set(ids.map(normalizeGuid).filter(Boolean))]) {
+    if (await hasUnsyncedEdits(sdk, KIND, id)) {
+      throw stop('create-completion-required', `the workspace copy of dashboard "${key}" holds edits that were never sent; save them into the spec or discard the copy before the build reconciles it`, { category: 'workspace-copy-unsent-edits', id });
+    }
+  }
+}
+
+/**
+ * Read and check one declared dashboard: GET only, and every refusal is a coded throw before any write.
+ * Answers the resolution plan() turns into the expected proof. The preflight above has already run.
  */
 async function resolveDashboard(s, committed, pending) {
   const { dashboard, key, sdk, catalog, approvals } = s;
-  // The creation guard runs first, inside the managed run (after registerKnown): a retained creation record names a
-  // dashboard id this build may have created and not settled, and runManagedFeature quarantines every known id of a
-  // stop with this code, so neither a dashboard publish nor an app publish ships it.
-  if (s.retainedCreationIds.length) throw stop(CREATION_RECORD_UNSETTLED, `the creation record of dashboard "${key}" is not settled; it is not written or published in this run`);
   const errors = validateDeclaredDashboard(dashboard);
   if (errors.length) throw stop('dashboard-spec-invalid', `declared dashboard "${key}" does not compile: ${errors.join('; ')}`, { errors });
 
@@ -340,9 +444,6 @@ async function resolveDashboard(s, committed, pending) {
   const derived = catalog.identityFor(KIND, key).derivedId;
   const id = boundId || pin || named || derived;
   const source = boundId ? 'bound' : pin ? 'pinned' : named ? 'named' : 'derived';
-
-  // A copy holding edits the server has not seen is someone's unsent work: the overwrite fetch below would drop it.
-  if (await hasUnsyncedEdits(sdk, KIND, id)) throw stop('workspace-copy-unsent-edits', `the workspace copy of dashboard "${key}" holds edits that were never sent; push or discard them before the build reconciles it`);
 
   let live = null;
   try {
@@ -463,8 +564,11 @@ async function resolveDashboard(s, committed, pending) {
       writes += 1;
     }
   }
-  const adoptable = !!committed || source === 'pinned' || isApproved(approvals.adopt, KIND, key);
-  if (!refusals.length && writes && !adoptable) refuse(key, 'dashboard-adoption-not-authorized', 'the dashboard exists and is not yet managed by this spec; approve adopting it first');
+  // A dashboard this spec does not manage yet is written only with its typed adoption approval. A pin names the row;
+  // it is not the maker's consent to manage it, and the wrapper and the store refuse to bind an existing root without
+  // that approval anyway — refusing here keeps the content unwritten rather than written and then left unbound.
+  const adoptable = !!committed || s.adoptApproved;
+  if (!refusals.length && writes && !adoptable) refuse(key, 'dashboard-adoption-not-authorized', `the dashboard exists and is not yet managed by this spec; approve adopting it first (dashboard:${key})`);
   if (refusals.length) throw stop(refusals[0].code, `declared dashboard "${key}": ${refusals.map((r) => `${r.key}: ${r.message}`).join('; ')}`, { refusals });
 
   return { create: false, id, source, live, pub, layout, entries, additions, description, desiredRoot, writes, adoptable, pending: !!pending };
@@ -494,37 +598,50 @@ function resolveCreate(s, id, pending) {
   return { create: true, id, source: 'derived', seed, entries, additions: entries, description, desiredRoot: { description }, writes: 1 + entries.length, adoptable: true, pending: !!pending };
 }
 
-/** The expected proof of a resolution, persisted before the send; null when nothing is to be sent or bound. */
+/**
+ * The expected proof of a resolution, persisted before the send; { noop: true } when nothing is to be sent or bound.
+ * Rebuilt from the same declaration and the same service state it answers the same plan, which is what a continued or
+ * resumed attempt (runManagedFeature `continuing` / `resuming`) must reproduce: the root id is the bound, pinned,
+ * name-found or catalog id, the child ids are catalog ids, and every hash is of the declaration and the read.
+ */
 function planDashboard(s, resolution, committed) {
   const r = resolution;
-  const managedIds = new Set(r.entries.map((e) => e.controlId));
-  const savedSha = r.create ? null : layerSha256(r.pub.saved);
+  const savedSha = r.create ? null : systemFormLayerSha256(r.pub.saved);
+  const declaration = canonicalDeclaration(s.key, s.dashboard);
   if (!r.create && r.writes === 0) {
     if (!r.adoptable) return { noop: true };
     const recorded = committed && r.entries.every((e) => e.record && e.record.intentSha256 === projectionBaseline(e.liveParts).intentSha256);
     const rootRec = committed && committed.records.find((x) => x.kind === KIND && x.key === s.key);
     const rootSame = !!rootRec && rootRec.intentSha256 === projectionBaseline({ description: r.desiredRoot.description }).intentSha256;
-    const owes = committed && committed.publication && committed.publication.state === 'owed';
-    // A true no-op: the committed group already says what is there, and nothing new must be published. Otherwise the
-    // group is (re)bound without a content write, its publication owed when the saved layer is not live.
-    if (!r.pending && recorded && rootSame && committed.proof.savedSha256 === savedSha && (r.pub.state === 'equal' || owes)) return { noop: true };
+    const declared = committed && canonicalJson(committed.consumerState && committed.consumerState.declaration) === canonicalJson(declaration);
+    // A true no-op: the committed group already says what is there and what the spec declares. Whether the published
+    // layer is behind the saved one does not matter here: only debt the group already owes is published (below), and
+    // a read never makes a debt. Otherwise the group is (re)bound without a content write.
+    if (!r.pending && recorded && rootSame && declared && committed.proof.savedSha256 === savedSha) return { noop: true };
   }
   const tiles = r.entries.map((e) => ({ key: e.tileKey, id: e.controlId, type: e.component.type, cell: e.place.cell, section: e.place.section, tab: e.place.tab, parts: e.desired }));
   const children = r.entries.map((e) => ({ kind: TILE_KIND, key: e.tileKey, namespaceParentId: r.id, id: e.controlId, associationSha256: associationOf(e.tileKey, e.component.type, e.place) }));
+  // The non-authored parameters each managed tile keeps: a bound tile's as read, a new tile's as this run adds it.
+  const live = new Map((r.create ? [] : r.live.components || []).map((c) => [bareId(c.id), c]));
+  const managedParams = Object.fromEntries(r.entries.map((e) => {
+    const was = live.get(e.controlId);
+    return [e.controlId, unownedParams(e.component.type, was ? was.parameters : e.component.parameters)];
+  }));
   const expected = {
     proofVersion: 1,
     proofSchema: PROOF_SCHEMA,
     rootId: r.id,
     baseProofSha256: committed ? committed.proof.semanticSha256 : null,
     sentProjectionSha256: projectionSha256(rootProjection(r.desiredRoot.description), tiles),
-    preservationSha256: preservationSha256(r.create ? [] : r.live.components, managedIds),
+    preservationSha256: preservationSha256(r.create ? null : r.live.bag, managedParams),
     baseObservation: r.create ? null : { rowVersion: null, savedSha256: savedSha },
     children,
   };
   return {
     root: { kind: KIND, key: s.key, id: r.id },
     expected,
-    declarationSha256: sha({ name: s.dashboard.name, description: s.dashboard.description === undefined ? null : s.dashboard.description, tiles: s.dashboard.tiles }),
+    declarationSha256: sha(declaration),
+    // The debt this attempt may create: only for its own content write. A rebind without one owes nothing new.
     publication: r.writes ? { scope: scopeOf(r.id), state: 'owed' } : null,
   };
 }
@@ -565,9 +682,10 @@ async function applyDashboard(s, r) {
 /**
  * The all-or-error proof of the stored dashboard against `expected` alone (a recovery has no plan): every expected
  * control once, in its expected cell, section and tab with its type; for a create, the catalog seed tab and section
- * in their roles; the managed projection exactly the one sent; the foreign tiles exactly as before.
+ * in their roles; the managed projection exactly the one sent; everything the declaration does not own exactly as
+ * before.
  */
-async function proveDashboard(s, expected, applied) {
+async function proveDashboard(s, expected, applied, { token = null, recovering = false } = {}) {
   const { sdk, key, store } = s;
   const id = expected.rootId;
   let art;
@@ -608,46 +726,73 @@ async function proveDashboard(s, expected, applied) {
   if (missing.length) throw stop('create-completion-required', `a part of dashboard "${key}" is not on the stored dashboard (${missing.join(', ')}); complete or remove it in Maker, then run again`);
   if (mismatch.length) throw stop('dashboard-stored-mismatch', `the stored dashboard "${key}" does not hold what was written (${mismatch.join(', ')}); check the dashboard`);
   const semantic = projectionSha256(rootProjection(art.description), tiles);
-  const preserved = preservationSha256(components, new Set(expected.children.map((c) => c.id)));
-  // What is stored now is not what was sent, or a tile the spec does not own changed: binding or publishing it would
+  const byId = new Map(components.map((c) => [bareId(c.id), c]));
+  const managedParams = Object.fromEntries(found.map(({ child, type }) => [child.id, unownedParams(type, byId.get(child.id).parameters)]));
+  const preserved = preservationSha256(created ? null : art.bag, managedParams);
+  // What is stored now is not what was sent, or a part the spec does not own changed: binding or publishing it would
   // claim content this build never wrote — after a crash, someone's edit made since.
   if (semantic !== expected.sentProjectionSha256 || preserved !== expected.preservationSha256) {
     throw stop('create-completion-required', `the stored dashboard "${key}" is not the one this build sent; it was not bound or published`);
   }
 
-  const { committed } = store.readGroup(KIND, key);
+  const { committed, pending } = store.readGroup(KIND, key);
+  const attempt = recovering ? (pending && (!token || pending.token === token) ? pending : null) : null;
+  // The root create is acknowledged only by this run's own answer to its create (S0: never from a read). A recovered
+  // attempt counts it only when the attempt itself durably recorded that acknowledgement before the run stopped.
+  const rootCreateAcknowledged = recovering
+    ? created && !!attempt && (attempt.acknowledgedRoot === true || !!(attempt.savedObservation && attempt.savedObservation.acknowledgedRoot === true))
+    : !!(applied && applied.createdRoot);
   const prior = (kind, k) => (committed ? committed.records.find((x) => x.kind === kind && x.key === k) : null);
-  // A record this group does not hold yet claims `created` only on this run's acknowledged write; a recovered one
-  // (a lost answer) is adopted, as the store requires.
+  // A record this group does not hold yet claims `created` only when this attempt's root create is acknowledged (the
+  // store allows `created` on nothing else): tiles appended to a dashboard that already existed are `adopted`, the
+  // dashboard being someone else's row this build now manages. A recovered one (a lost answer) is adopted too.
   const originOf = (kind, k, createdNow) => {
     const old = prior(kind, k);
     if (old) return old.origin;
-    return applied && createdNow ? 'created' : 'adopted';
+    return rootCreateAcknowledged && createdNow ? 'created' : 'adopted';
   };
   const record = (kind, k, rid, parts, extra) => ({
     formatVersion: 1, appUniqueName: s.ctx.appUniqueName, environmentFingerprint: s.ctx.environmentFingerprint,
     kind, key: k, id: rid, ...projectionBaseline(parts), ...extra,
   });
-  const createdTiles = new Set((applied && applied.createdTiles) || []);
+  // On a recovered create every expected child was created with the root; otherwise only this run's own additions.
+  const createdTiles = new Set(recovering ? (created ? expected.children.map((c) => c.key) : []) : ((applied && applied.createdTiles) || []));
   const records = [
     ...found.map(({ child, parts }) => record(TILE_KIND, child.key, child.id, parts, { origin: originOf(TILE_KIND, child.key, createdTiles.has(child.key)), parentKey: key })),
-    record(KIND, key, id, { description: String(art.description == null ? '' : art.description) }, { origin: originOf(KIND, key, !!(applied && applied.createdRoot)) }),
+    record(KIND, key, id, { description: String(art.description == null ? '' : art.description) }, { origin: originOf(KIND, key, created) }),
   ];
-  const savedSha = layerSha256(pub.saved);
+  // The debt's desired hash is the one the shared `dashboard` layer reader answers, so publishManagedScope compares like with like.
+  const savedSha = systemFormLayerSha256(pub.saved);
   const scope = scopeOf(id);
+  const notNeeded = { scope, state: 'not-needed', desiredSha256: null, dispatchToken: null };
+  // Publication provenance: a debt is owed only for THIS attempt's proved content write (its planned publication — the
+  // attempt record's when recovering, this run's plan otherwise), or carried over unchanged from the committed group's
+  // own unsent debt. A saved layer read ahead of the published one is someone's draft (a Maker save, another tool's
+  // write) and never becomes this build's debt: publishing it would put live what the build did not write.
+  const plannedPub = recovering ? (attempt ? attempt.publication : null) : (s.lastPlan ? s.lastPlan.publication : null);
+  let publication = notNeeded;
+  if (plannedPub && plannedPub.state === 'owed') {
+    publication = pub.state === 'equal' ? notNeeded : { scope, state: 'owed', desiredSha256: savedSha, dispatchToken: null };
+  } else if (committed && committed.publication && committed.publication.state === 'owed' && pub.state !== 'equal') {
+    publication = { ...committed.publication };
+  }
+  // The canonical declaration this attempt was sent with. A recovery under a different spec cannot name the one it
+  // was sent with (the attempt holds only its hash), so it records it unknown rather than today's; the next run then
+  // differs from it and reconciles today's spec.
+  const canonical = canonicalDeclaration(key, s.dashboard);
+  const sentDeclarationSha = recovering ? (attempt ? attempt.declarationSha256 : null) : sha(canonical);
   return {
     savedProof: { savedSha256: savedSha },
-    acknowledgedRoot: true,
+    // S0 point 7: only from this run's own create answer — never on a recovery, never from a read.
+    acknowledgedRoot: !recovering && !!(applied && applied.createdRoot),
     records,
     proof: { savedSha256: savedSha, semanticSha256: semantic, preservationSha256: preserved, expectedChildrenSha256: expected.children.length ? sha(expected.children) : null },
     consumerState: {
-      declaration: { key, scopeType: 'Standard', tiles: expected.children.map((c) => c.key) },
+      declaration: sha(canonical) === sentDeclarationSha ? canonical : null,
       tiles: Object.fromEntries(found.map(({ child, place, type }) => [child.key, { id: child.id, type, cell: place.cell, section: place.section, tab: place.tab }])),
       seedIds,
     },
-    publication: pub.state === 'equal'
-      ? { scope, state: 'not-needed', desiredSha256: null, dispatchToken: null }
-      : { scope, state: 'owed', desiredSha256: savedSha, dispatchToken: null },
+    publication,
     proofSchema: PROOF_SCHEMA,
   };
 }
@@ -664,8 +809,11 @@ async function proveDashboard(s, expected, applied) {
  *                        dashboard: any of them stops it with `dashboard-creation-record-unsettled`;
  *   resolvedId           the id the build found by name for an unbound dashboard, or none;
  *   approvals            { adopt, overwrite, destructive }: the --authorize sets, keyed `dashboard:<key>` (and
- *                        `dashboard:<key>/<tile>` for a tile's overwrite);
+ *                        `dashboard:<key>/<tile>` for a tile's overwrite). `adopt` holding `dashboard:<key>` is the
+ *                        ONLY consent to manage a dashboard this build did not create (a pin is not);
  *   ensureMembership     solution membership of the root ({ root, records, recovering });
+ *   sendObserver         the build-wide send observer (managed-feature-contract.js createAttemptSendObserver, installed
+ *                        on the client every send goes through), or none: with it, an attempt proven unsent continues;
  *   ctx                  { appUniqueName, environmentFingerprint } the records are written for.
  * Answers runManagedFeature's { result, committedGroup } plus { key, id }. Every failure throws the build's halt, and
  * every id this dashboard is known by stays quarantined for the run (no dashboard publish, no app publish of it).
@@ -681,7 +829,9 @@ async function settleDeclaredDashboard(args) {
     resolvedId: args.resolvedId || null,
     approvals: args.approvals || {},
     ctx: args.ctx || {},
+    lastPlan: null,
   };
+  s.adoptApproved = isApproved(s.approvals.adopt, KIND, key) === true;
   const label = `declared dashboard "${key}"`;
   // Every row id this dashboard may be: the retained creation ids, the pin, the name lookup and the catalog id. The
   // wrapper registers them first and adds the committed and pending roots itself.
@@ -694,15 +844,24 @@ async function settleDeclaredDashboard(args) {
   try {
     run = await runManagedFeature({
       phase: 'dashboards', family: KIND, key, label, knownScopes: [], knownIds, store, barrier, halt,
+      ...(args.sendObserver ? { sendObserver: args.sendObserver } : {}),
+      adoptionApproved: s.adoptApproved,
+      preflight: async ({ committed, pending }) => preflightDashboard(s, { committed, pending }),
+      // A create names its root id (the catalog id), so an attempt whose create no answer acknowledged is resumed when
+      // both layers of that row read absent; a read that fails is the wrapper's hold (never caught here).
+      resumeCreate: async ({ pending }) => ({ root: await readSystemFormRootPresence(sdk.dataverse, pending.root.id) }),
       resolve: async ({ committed, pending }) => {
         if (!catalog || typeof catalog.identityFor !== 'function') throw stop('dashboard-spec-invalid', `${label} has no create catalog`);
         resolution = await resolveDashboard(s, committed, pending);
         id = resolution.id;
         return resolution;
       },
-      plan: async ({ resolution: r, committed }) => planDashboard(s, r, committed),
+      plan: async ({ resolution: r, committed }) => {
+        s.lastPlan = planDashboard(s, r, committed);
+        return s.lastPlan;
+      },
       apply: async ({ resolution: r }) => applyDashboard(s, r),
-      prove: async ({ expected, applied }) => { id = expected.rootId; return proveDashboard(s, expected, applied); },
+      prove: async ({ token, expected, applied, recovering }) => { id = expected.rootId; return proveDashboard(s, expected, applied, { token, recovering }); },
       ensureMembership,
     });
   } catch (err) {
@@ -727,35 +886,23 @@ async function settleDeclaredDashboard(args) {
 }
 
 /**
- * The layer reader of the `dashboard` family, and of no other: `(group) => { savedSha256, publishedSha256 }` from a fresh
- * read of both layers of the group's root row, hashed as its `publication.desiredSha256` was (layerSha256; a row never
- * published reads as sha256(null)). publishManagedScope asks it for every committed group the scope covers. A group of
- * another family is not read here: the throw makes the publish `managed-publication-unverified`, so the scope is
- * fenced, never published past a group nothing proved. Readers for other families belong to their own features.
- */
-function dashboardLayerReader(sdk) {
-  return async (group) => {
-    if (!group || group.family !== KIND) {
-      throw Object.assign(new Error(`no dashboard layer reader for managed ${group && group.family} "${group && group.key}"`), { code: PUBLICATION_UNVERIFIED });
-    }
-    const read = await readSystemFormPublication(sdk.dataverse, group.root.id);
-    return { savedSha256: layerSha256(read.saved), publishedSha256: read.published ? layerSha256(read.published) : sha(null) };
-  };
-}
-
-/**
  * THE one path a declared dashboard's publication takes: publishManagedScope with exactly one scope — this
  * dashboard's own id — and one group, published by the SDK's `<dashboard>` envelope:
  *   POST PublishXml {"ParameterXml":"<importexportxml><dashboards><dashboard>ID</dashboard></dashboards></importexportxml>"}
- * The pre-send check covers this group whatever its state; no sibling is filtered or skipped here. Outcomes:
+ * The pre-send check reads every committed group on the scope with its family's shared reader
+ * (lib/managed-layer-readers.js; a dashboard is a systemform row, read by readSystemFormLayers) over the SDK's
+ * Dataverse client; no group is filtered or skipped here, and this adapter brings no reader of its own. A publication
+ * left uncertain by an earlier run (sent, its confirmation not written) is confirmed by that read first, not resent.
+ * Outcomes:
  *   - `managed-publication-unverified` (a layer read failed before the send) is a HOLD: the scope is blocked for the
  *     rest of the run and the answer says `held`; it is never retried in the run;
  *   - `managed-publication-refused` (the request named other targets than this dashboard) is a REFUSAL: nothing was
  *     sent, the scope is blocked for the run, and the error is rethrown so the build stops on it;
  *   - `{ sent: false, withheld: true }` (the barrier withholds the scope, or a pending attempt covers it) is returned
  *     as it is, the debt still owed;
- *   - every other error (pending, unconfirmed, create-completion-required on a drifted saved layer) is rethrown, the
- *     scope blocked for the run.
+ *   - every other error (pending, unconfirmed, create-completion-required on a drifted saved layer, and
+ *     `managed-publication-reader-missing` — a covered family with no shared reader, a defect no rerun in the run heals)
+ *     is rethrown, the scope blocked for the run.
  * Every managed dashboard publish goes through here, so a change of the publication contract touches one place.
  * Answers { sent, withheld, held, confirmed, code? }.
  */
@@ -765,7 +912,7 @@ async function publishDeclaredDashboard({ store, barrier, sdk, key, id, newToken
   try {
     const out = await publishManagedScope({
       store, barrier: gate, scope, groups: [{ family: KIND, key }], path: `declared dashboard "${key}"`, newToken,
-      readLayers: dashboardLayerReader(sdk),
+      client: sdk.dataverse,
       publish: async () => {
         await sdk.fetchArtifact(KIND, scope.id);
         await sdk.publishArtifact(KIND, scope.id);
@@ -797,7 +944,6 @@ module.exports = {
   liveTile,
   layoutOf,
   seedInPlace,
-  layerSha256,
   settleDeclaredDashboard,
   publishDeclaredDashboard,
 };

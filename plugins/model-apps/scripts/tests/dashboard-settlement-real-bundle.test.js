@@ -15,6 +15,11 @@ const { createIntentCatalog } = require('../lib/creates-catalog.js');
 const { environmentFingerprint } = require('../lib/page-ownership-records.js');
 const { dashboardTileOpts, dashboardComponent } = require('../lib/sdk-build.js');
 const { settleDeclaredDashboard, publishDeclaredDashboard, dashboardKey } = require('../lib/dashboard-reconcile.js');
+const { createAttemptSendObserver } = require('../lib/managed-feature-contract.js');
+const { systemFormLayerSha256 } = require('../lib/systemform-published.js');
+const { canonicalJson } = require('../lib/reconcile-common.js');
+// A free-text field of the committed declaration is kept as its sha256 (dashboard-reconcile.js HASHED_FIELDS).
+const textSha = (s) => require('node:crypto').createHash('sha256').update(canonicalJson(String(s))).digest('hex');
 
 const ENV = 'https://contoso.crm.dynamics.com';
 const APP = 'contoso_app';
@@ -48,26 +53,33 @@ function failNextStoreWrite() {
 const catalogFor = (d) => createIntentCatalog([{ catalogKind: 'dashboard', key: dashboardKey(d), scope: { kind: 'solution', solution: SOL }, declaration: { scopeType: 'Standard', name: d.name } }]);
 const declared = (tiles, extra = {}) => ({ name: 'Ops', reconcile: 'declared', tiles, ...extra });
 
-async function world() {
+// The build-wide send observer is installed on the client every send goes through (the wiring stream installs it in
+// build-model-app.js); `observer: false` is a run without it.
+async function world({ observer = true } = {}) {
   const wire = createManagedWire();
   const barrier = createPublicationBarrier();
-  const { sdk } = await sdkOver(wire, { barrier });
+  const obs = observer ? createAttemptSendObserver() : null;
+  const { sdk } = await sdkOver(wire, { barrier, observer: obs });
   const dir = makeTempDir('dash-settle-');
   const { store } = openManagedContext({ workspaceDir: dir, environment: ENV, appUniqueName: APP, solutionUniqueName: SOL, barrier });
-  return { wire, barrier, sdk, dir, store };
+  return { wire, barrier, sdk, dir, store, observer: obs };
 }
 
-// A new run over the same workspace and wire: a fresh barrier, SDK and store handle, as the next build opens them.
-async function rerun(w) {
+// A new run over the same workspace and wire: a fresh barrier, observer, SDK and store handle, as the next build opens them.
+async function rerun(w, { observer = true } = {}) {
   const barrier = createPublicationBarrier();
-  const { sdk } = await sdkOver(w.wire, { barrier });
+  const obs = observer ? createAttemptSendObserver() : null;
+  const { sdk } = await sdkOver(w.wire, { barrier, observer: obs });
   const { store } = openManagedContext({ workspaceDir: w.dir, environment: ENV, appUniqueName: APP, solutionUniqueName: SOL, barrier });
-  return { ...w, barrier, sdk, store };
+  return { ...w, barrier, sdk, store, observer: obs };
 }
 
+// The maker's typed adoption approval of `dashboard:ops` is given unless a test passes its own `approvals`.
+const ADOPT = { adopt: new Set(['dashboard:ops']) };
 const settle = (w, dashboard, extra = {}) => settleDeclaredDashboard({
   dashboard, catalog: catalogFor(dashboard), sdk: w.sdk, store: w.store, barrier: w.barrier, halt, resolveTile, toComponent: dashboardComponent,
-  ensureMembership: async () => undefined, ctx: { appUniqueName: APP, environmentFingerprint: FP }, ...extra,
+  ensureMembership: async () => undefined, ctx: { appUniqueName: APP, environmentFingerprint: FP }, approvals: ADOPT,
+  ...(w.observer ? { sendObserver: w.observer } : {}), ...extra,
 });
 const publish = (w, key, id) => publishDeclaredDashboard({ store: w.store, barrier: w.barrier, sdk: w.sdk, key, id });
 
@@ -97,6 +109,7 @@ test('a missing declared dashboard is created under its catalog id with catalog 
   ]);
   assert.deepEqual(group.consumerState.seedIds, [ids.t, ids.s]);
   assert.equal(group.publication.state, 'owed');
+  assert.equal(group.publication.desiredSha256, systemFormLayerSha256(w.wire.saved.get(id)), 'the debt records the hash the shared dashboard layer reader answers');
 
   const pub = await publish(w, 'ops', id);
   assert.equal(pub.sent, true);
@@ -128,8 +141,10 @@ test('an adopted dashboard: the pinned keyed tile is edited in place, a new tile
   assert.match(xml, /<RecordsPerPage>8<\/RecordsPerPage>/, 'a per-tile default the spec never authored is kept');
   assert.equal(contentWrites(w.wire).length, 1, 'one content write');
   const group = w.store.readGroup('dashboard', 'ops').committed;
+  // A tile appended to a dashboard this build did not create is `adopted`: `created` is kept for a root create this
+  // run's own answer acknowledged (the store refuses it otherwise).
   assert.deepEqual(group.records.map((r) => `${r.kind}:${r.key}:${r.id}:${r.origin}`).sort(), [
-    `dashboard-tile:ops/mine:${added.c}:created`, `dashboard-tile:ops/open:${C_OPEN}:adopted`, `dashboard:ops:${DID}:adopted`,
+    `dashboard-tile:ops/mine:${added.c}:adopted`, `dashboard-tile:ops/open:${C_OPEN}:adopted`, `dashboard:ops:${DID}:adopted`,
   ]);
   assert.equal((await publish(w, 'ops', DID)).sent, true);
   assert.equal(w.wire.publishes(DID).length, 1);
@@ -142,24 +157,42 @@ test('an adopted dashboard: the pinned keyed tile is edited in place, a new tile
   assert.equal((await publish(next, 'ops', DID)).sent, false);
   assert.equal(w.wire.writes().length, writes);
 
-  // A tile the spec stops declaring is not deleted.
+  // A tile the spec stops declaring is not deleted. The declaration changed, so the group is rebound to it with no write.
   const fewer = await rerun(w);
   const omitted = declared([{ key: 'open', type: 'list', view: 'Open cases', componentId: C_OPEN, name: 'Open now' }], { dashboardId: DID });
-  assert.deepEqual((await settle(fewer, omitted)).result, { noop: true });
+  const contentBefore = contentWrites(w.wire).length;
+  assert.deepEqual((await settle(fewer, omitted)).result, { committed: true, recovered: false });
+  assert.equal(contentWrites(w.wire).length, contentBefore, 'no content write');
   assert.ok(w.wire.saved.get(DID).formxml.toLowerCase().includes(added.c), 'the omitted tile is still on the dashboard');
+  assert.equal((await publish(fewer, 'ops', DID)).sent, false, 'nothing new to publish');
 });
 
-test('saved equals the declaration and the published layer is stale: one scoped publish and no content write', async () => {
+test('a settled dashboard whose published layer is stale for reasons not its own: a no-op, and nothing is published', async () => {
   const w = await world();
   putExisting(w.wire);
   const d = declared([{ key: 'open', type: 'list', view: 'Open cases', componentId: C_OPEN }], { dashboardId: DID });
   await settle(w, d);
+  assert.equal(w.store.readGroup('dashboard', 'ops').committed.publication.state, 'not-needed', 'a rebind with no content write owes nothing');
   w.wire.published.set(DID, { ...w.wire.published.get(DID), formxml: '<form old="1"/>' });
   const next = await rerun(w);
   const writes = contentWrites(w.wire).length;
-  assert.equal((await settle(next, d)).result.committed, true, 'rebound without a write, its publication owed');
+  assert.deepEqual((await settle(next, d)).result, { noop: true });
   assert.equal(contentWrites(w.wire).length, writes, 'no content write');
+  assert.equal((await publish(next, 'ops', DID)).sent, false);
+  assert.equal(w.wire.publishes(DID).length, 0, 'a stale published layer is not this build\'s debt');
+});
+
+test('an owed publication the group already holds: the rerun is a no-op, then one scoped publish and no content write', async () => {
+  const w = await world();
+  putExisting(w.wire);
+  const d = declared([{ key: 'open', type: 'list', view: 'Open cases', componentId: C_OPEN, name: 'Open now' }], { dashboardId: DID });
+  await settle(w, d);
+  assert.equal(w.store.readGroup('dashboard', 'ops').committed.publication.state, 'owed');
+  const next = await rerun(w);
+  const writes = contentWrites(w.wire).length;
+  assert.deepEqual((await settle(next, d)).result, { noop: true });
   assert.equal((await publish(next, 'ops', DID)).sent, true);
+  assert.equal(contentWrites(w.wire).length, writes, 'no content write');
   assert.equal(w.wire.publishes(DID).length, 1);
 });
 
@@ -175,7 +208,7 @@ const refusals = [
     putExisting(w.wire);
     w.wire.script((e) => e.method === 'GET' && /^systemforms\([^)]+\)$/i.test(e.path) && /name,description,formxml/.test(decodeURIComponent(e.url)), { statusCode: 403, body: { error: { code: '0x80040220', message: 'denied' } } });
   }, {}],
-  ['a dirty workspace copy', 'workspace-copy-unsent-edits', async (w) => {
+  ['a dirty workspace copy', 'create-completion-required', async (w) => {
     putExisting(w.wire);
     await w.sdk.fetchArtifact('dashboard', DID, { overwrite: true });
     await w.sdk.updateElement('dashboard', DID, '/description', 'unsent');
@@ -226,7 +259,7 @@ test('a dashboard found by name is adopted only with the adopt approval; without
   const w = await world();
   putExisting(w.wire);
   const d = declared([{ key: 'open', type: 'list', view: 'Open cases', componentId: C_OPEN, name: 'Open now' }]);
-  assert.equal(await codeOf(settle(w, d, { resolvedId: DID })), 'dashboard-adoption-not-authorized');
+  assert.equal(await codeOf(settle(w, d, { resolvedId: DID, approvals: {} })), 'dashboard-adoption-not-authorized');
   assert.equal(contentWrites(w.wire).length, 0);
   const next = await rerun(w);
   const out = await settle(next, d, { resolvedId: DID, approvals: { adopt: new Set(['dashboard:ops']) } });
@@ -271,6 +304,9 @@ const changedSince = [
   ['the keyed tile relabelled', 'create-completion-required', (xml) => xml.replace('description="Open now"', 'description="Someone else"')],
   ['the keyed tile moved to another cell', 'dashboard-stored-mismatch', (xml) => xml.replace('{aaaaaaaa-0000-4000-8000-000000000001}', '{aaaaaaaa-0000-4000-8000-0000000000ee}')],
   ['the foreign tile edited', 'create-completion-required', (xml) => xml.replace('<Mode>compact</Mode>', '<Mode>full</Mode>')],
+  // Parts the spec does not author on a MANAGED tile, and the foreign layout, are preserved too.
+  ['the managed list\'s RecordsPerPage changed', 'create-completion-required', (xml) => xml.replace('<RecordsPerPage>8</RecordsPerPage>', '<RecordsPerPage>42</RecordsPerPage>')],
+  ['the two rows reversed', 'create-completion-required', (xml) => { const rows = xml.match(/<row>.*?<\/row>/g); return xml.replace(rows.join(''), [...rows].reverse().join('')); }],
 ];
 for (const [what, code, change] of changedSince) test(`a commit lost after the save, then ${what}: ${code}, nothing bound, nothing published`, async () => {
   const { w, d } = await crashedAfterSave();
@@ -359,10 +395,7 @@ test('a maker edit saved after the settle and before the publish: the publish is
   assert.equal(w.store.readGroup('dashboard', 'ops').committed.publication.state, 'owed', 'the debt stays owed');
 });
 
-// Runs once the send boundary refuses an off-scope request (managed-feature-contract.js PUBLICATION_REFUSED); before
-// that, a permit lets a wide request through.
-const refusesOffScope = !!require('../lib/managed-feature-contract.js').PUBLICATION_REFUSED;
-test('a publish that names other targets than the dashboard is not sent, and the dashboard is withheld for the rest of the run', { skip: !refusesOffScope && 'the send boundary does not refuse off-scope requests yet' }, async () => {
+test('a publish that names other targets than the dashboard is not sent, and the dashboard is withheld for the rest of the run', async () => {
   const w = await world();
   putExisting(w.wire);
   const d = declared([{ key: 'open', type: 'list', view: 'Open cases', componentId: C_OPEN, name: 'Open now' }], { dashboardId: DID });
@@ -410,4 +443,181 @@ test('a change that cannot be prepared sends nothing and still withholds the das
   await next.sdk.publishArtifact('dashboard', DID).catch(() => undefined);
   assert.equal(w.wire.publishes(DID).length, 0, 'the earlier owed publish does not ship in this run');
   assert.equal(next.barrier.checkAppWrite({ held: new Set(), existingApp: true, heldDashboards: [DID] }).ok, false);
+});
+
+// --- Recovery and provenance (the S0 recovery seams: preflight on every path, resumeCreate, the send observer, typed
+// adoption consent, an acknowledged root create only from this run's own answer).
+
+const refusedCreate = { statusCode: 400, body: { error: { code: '0x80040203', message: 'refused' } }, unapplied: true };
+const isCreate = (e) => e.method === 'POST' && /^systemforms$/i.test(e.path);
+
+for (const observed of [false, true]) {
+  test(`a create the service refused is ${observed ? 'continued (its send window proves it unsent)' : 'resumed (its root reads absent)'} by the next run under the same catalog id: one root`, async () => {
+    const w = await world({ observer: observed });
+    const d = declared([{ key: 'open', type: 'list', view: 'Open cases' }]);
+    const id = catalogFor(d).identityFor('dashboard', 'ops').derivedId;
+    w.wire.script(isCreate, refusedCreate);
+    assert.ok(await codeOf(settle(w, d)), 'the refused create stops the run');
+    assert.equal(w.wire.saved.has(id), false, 'nothing was created');
+    assert.equal(w.store.readGroup('dashboard', 'ops').pending.phase, 'sending');
+    const next = await rerun(w, { observer: observed });
+    const out = await settle(next, d);
+    assert.deepEqual(out.result, { committed: true, recovered: true, [observed ? 'continued' : 'resumed']: true });
+    assert.equal(out.id, id);
+    assert.equal(w.wire.log.filter(isCreate).length, 2, 'the same create, sent again once');
+    assert.ok(w.wire.saved.has(id), 'the one root, under its catalog id');
+    const group = next.store.readGroup('dashboard', 'ops').committed;
+    assert.deepEqual(group.records.map((r) => r.origin), ['created', 'created'], 'this run\'s own create answer acknowledged it');
+  });
+}
+
+test('a create whose answer was lost: the next run binds it only with the typed adoption approval, and never sends it again', async () => {
+  const w = await world();
+  const d = declared([{ key: 'open', type: 'list', view: 'Open cases' }]);
+  const id = catalogFor(d).identityFor('dashboard', 'ops').derivedId;
+  w.wire.script(isCreate, { error: 'socket hang up' });
+  assert.ok(await codeOf(settle(w, d)), 'the lost answer stops the run');
+  assert.ok(w.wire.saved.has(id), 'the create did land');
+  // The client may send the create again after the lost answer; the wire answers that one with the duplicate-key 412.
+  const creates = w.wire.log.filter(isCreate).length;
+  const next = await rerun(w);
+  assert.equal(await codeOf(settle(next, d, { approvals: {} })), 'managed-adoption-required');
+  assert.equal(next.store.readGroup('dashboard', 'ops').committed, null, 'nothing bound');
+  const approved = await rerun(w);
+  assert.deepEqual((await settle(approved, d)).result, { committed: true, recovered: true });
+  assert.equal(w.wire.log.filter(isCreate).length, creates, 'no later run sends a create');
+  assert.deepEqual(approved.store.readGroup('dashboard', 'ops').committed.records.map((r) => r.origin), ['adopted', 'adopted']);
+});
+
+test('a pinned dashboard is not the maker\'s consent to manage it: a write to it needs the typed adoption approval', async () => {
+  const w = await world();
+  putExisting(w.wire);
+  const d = declared([{ key: 'open', type: 'list', view: 'Open cases', componentId: C_OPEN, name: 'Open now' }], { dashboardId: DID });
+  assert.equal(await codeOf(settle(w, d, { approvals: {} })), 'dashboard-adoption-not-authorized');
+  assert.equal(contentWrites(w.wire).length, 0);
+  assert.equal(w.store.readGroup('dashboard', 'ops').committed, null);
+});
+
+test('a pinned dashboard with no history whose published layer is stale: bound with nothing owed, nothing published', async () => {
+  const w = await world();
+  putExisting(w.wire);
+  w.wire.published.set(DID, { ...w.wire.published.get(DID), formxml: '<form old="1"/>' });
+  const d = declared([{ key: 'open', type: 'list', view: 'Open cases', componentId: C_OPEN }], { dashboardId: DID });
+  assert.equal((await settle(w, d)).result.committed, true);
+  assert.equal(contentWrites(w.wire).length, 0);
+  assert.equal(w.store.readGroup('dashboard', 'ops').committed.publication.state, 'not-needed');
+  assert.equal((await publish(w, 'ops', DID)).sent, false);
+  assert.equal(w.wire.publishes(DID).length, 0, 'someone else\'s draft is not put live');
+});
+
+test('a foreign edit saved after the settle and publish: the rerun rebinds it and publishes nothing', async () => {
+  const w = await world();
+  putExisting(w.wire);
+  const d = declared([{ key: 'open', type: 'list', view: 'Open cases', componentId: C_OPEN, name: 'Open now' }], { dashboardId: DID });
+  await settle(w, d);
+  assert.equal((await publish(w, 'ops', DID)).sent, true);
+  const row = w.wire.saved.get(DID);
+  row.formxml = row.formxml.replace('<Mode>compact</Mode>', '<Mode>full</Mode>');
+  const next = await rerun(w);
+  const writes = contentWrites(w.wire).length;
+  await settle(next, d);
+  assert.equal(contentWrites(w.wire).length, writes, 'no content write');
+  const out = await publish(next, 'ops', DID).catch((e) => ({ sent: false, code: e.code }));
+  assert.equal(out.sent, false);
+  assert.equal(w.wire.publishes(DID).length, 1, 'the foreign draft is not published');
+});
+
+test('an attempt with no content write recovered while the published layer is stale: nothing is owed or published', async () => {
+  const { failing, deps } = failNextStoreWrite();
+  const w = await world();
+  w.store = openManagedContext({ workspaceDir: w.dir, environment: ENV, appUniqueName: APP, solutionUniqueName: SOL, barrier: w.barrier, deps }).store;
+  putExisting(w.wire);
+  w.wire.published.set(DID, { ...w.wire.published.get(DID), formxml: '<form old="1"/>' });
+  const d = declared([{ key: 'open', type: 'list', view: 'Open cases', componentId: C_OPEN }], { dashboardId: DID });
+  assert.ok(await codeOf(settle(w, d, { ensureMembership: async () => { failing.armed = true; } })), 'the commit failed');
+  const next = await rerun(w);
+  assert.equal((await settle(next, d)).result.recovered, true);
+  assert.equal(next.store.readGroup('dashboard', 'ops').committed.publication.state, 'not-needed');
+  assert.equal((await publish(next, 'ops', DID)).sent, false);
+  assert.equal(w.wire.publishes(DID).length, 0);
+});
+
+test('a commit lost after the save, then a creation record that retains two ids: the recovery stops, nothing is bound, neither id is published', async () => {
+  const { w, d } = await crashedAfterSave();
+  const RETAINED = '55555555-0000-4000-8000-000000000007';
+  w.wire.putForm({ formid: RETAINED, name: 'Ops 2', type: 0, objecttypecode: 'none', formxml: '<form r="1"/>' });
+  const next = await rerun(w);
+  assert.equal(await codeOf(settle(next, d, { retainedCreationIds: [DID, RETAINED] })), 'dashboard-creation-record-unsettled');
+  assert.equal(next.store.readGroup('dashboard', 'ops').committed, null, 'nothing bound');
+  for (const id of [DID, RETAINED]) {
+    await next.sdk.fetchArtifact('dashboard', id).catch(() => undefined);
+    await next.sdk.publishArtifact('dashboard', id).catch(() => undefined);
+    assert.equal(w.wire.publishes(id).length, 0, `no path publishes ${id}`);
+  }
+  assert.equal(next.barrier.checkAppWrite({ held: new Set(), existingApp: true, heldDashboards: [RETAINED] }).ok, false, 'no app write that holds it');
+});
+
+test('a commit lost after the save, then unsent edits in the next run\'s workspace copy: the recovery stops and the copy keeps them', async () => {
+  const { w, d } = await crashedAfterSave();
+  const next = await rerun(w);
+  await next.sdk.fetchArtifact('dashboard', DID, { overwrite: true });
+  await next.sdk.updateElement('dashboard', DID, '/description', 'UNSENT MAKER TEXT');
+  let err = null;
+  try { await settle(next, d); } catch (e) { err = e; }
+  assert.equal(err && err.code, 'create-completion-required');
+  assert.equal(err.cause && err.cause.category, 'workspace-copy-unsent-edits');
+  assert.equal((await next.sdk.getArtifact('dashboard', DID)).description, 'UNSENT MAKER TEXT', 'the unsent text is still in the copy');
+  assert.equal(next.store.readGroup('dashboard', 'ops').committed, null);
+  // The identical rerun stops the same way: the copy is the maker's to save or discard.
+  assert.equal(await codeOf(settle(next, d)), 'create-completion-required');
+  assert.equal((await next.sdk.getArtifact('dashboard', DID)).description, 'UNSENT MAKER TEXT');
+});
+
+test('the committed declaration is the canonical one: authoring a field the live row already has rebinds without a content write', async () => {
+  const w = await world();
+  putExisting(w.wire);
+  const omitted = declared([{ key: 'open', type: 'list', view: 'Open cases', componentId: C_OPEN }], { dashboardId: DID });
+  await settle(w, omitted);
+  const first = w.store.readGroup('dashboard', 'ops').committed.consumerState.declaration;
+  assert.equal(first.tiles[0].name, undefined, 'an omitted field stays absent');
+  const authored = declared([{ key: 'open', type: 'list', view: 'Open cases', componentId: C_OPEN, name: 'Open cases' }], { dashboardId: DID });
+  const next = await rerun(w);
+  const writes = contentWrites(w.wire).length;
+  assert.equal((await settle(next, authored)).result.committed, true, 'the authorship change is recorded');
+  assert.equal(contentWrites(w.wire).length, writes, 'no content write');
+  assert.deepEqual(next.store.readGroup('dashboard', 'ops').committed.consumerState.declaration.tiles[0].name, { sha256: textSha('Open cases') });
+  assert.deepEqual((await settle(await rerun(w), authored)).result, { noop: true });
+});
+
+test('a recovery under a spec changed since the send records the declaration unknown, and the next run applies the new spec', async () => {
+  const { w } = await crashedAfterSave();
+  const later = declared([{ key: 'open', type: 'list', view: 'Open cases', componentId: C_OPEN, name: 'Open later' }], { dashboardId: DID });
+  const next = await rerun(w);
+  assert.deepEqual((await settle(next, later)).result, { committed: true, recovered: true });
+  assert.equal(next.store.readGroup('dashboard', 'ops').committed.consumerState.declaration, null, 'not today\'s spec');
+  assert.match(w.wire.saved.get(DID).formxml, /Open now/, 'the recovery sent nothing');
+  const after = await rerun(w);
+  assert.equal((await settle(after, later)).result.committed, true);
+  assert.match(w.wire.saved.get(DID).formxml, /Open later/);
+  assert.deepEqual(after.store.readGroup('dashboard', 'ops').committed.consumerState.declaration.tiles[0].name, { sha256: textSha('Open later') });
+});
+
+test('a publish whose confirmation write failed after the send: the next run confirms it from the layers and sends no second PublishXml', async () => {
+  const { failing, deps } = failNextStoreWrite();
+  const w = await world();
+  w.store = openManagedContext({ workspaceDir: w.dir, environment: ENV, appUniqueName: APP, solutionUniqueName: SOL, barrier: w.barrier, deps }).store;
+  putExisting(w.wire);
+  const d = declared([{ key: 'open', type: 'list', view: 'Open cases', componentId: C_OPEN, name: 'Open now' }], { dashboardId: DID });
+  await settle(w, d);
+  const sdk = Object.create(w.sdk);
+  sdk.publishArtifact = async (...a) => { const r = await w.sdk.publishArtifact(...a); failing.armed = true; return r; };
+  assert.ok(await codeOf(publishDeclaredDashboard({ store: w.store, barrier: w.barrier, sdk, key: 'ops', id: DID })), 'the confirmation write failed');
+  assert.equal(w.wire.publishes(DID).length, 1);
+  const next = await rerun(w);
+  assert.deepEqual((await settle(next, d)).result, { noop: true });
+  const out = await publish(next, 'ops', DID);
+  assert.equal(out.sent, false);
+  assert.deepEqual(out.confirmed, [{ family: 'dashboard', key: 'ops' }]);
+  assert.equal(w.wire.publishes(DID).length, 1, 'no second PublishXml');
+  assert.equal(next.store.readGroup('dashboard', 'ops').committed.publication.state, 'confirmed');
 });
