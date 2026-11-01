@@ -185,7 +185,7 @@ const SPOILED = {
       body['@odata.count'] = all.length;
       if (at === 100) body.value = body.value.filter((f) => f.type !== 11);
     },
-    refusal: /the answer counts 251 forms but its pages held 250/,
+    refusal: /the answers declare at least 251 forms but the pages held 250/,
   },
 };
 
@@ -217,3 +217,58 @@ test('REAL BUNDLE: a count every saved answer declares, with every form on its p
   await assert.rejects(genpage.delete(PAGE, { allowDestructive: true }), (e) => e.code === 'GENPAGE_EMBEDDED_IN_FORM');
   assert.deepStrictEqual(org.writes(), []);
 });
+
+// ── a declared count at the platform's cap ────────────────────────────────────────────────────────────────────────────
+
+// A count stops at 5000; `totalrecordcountlimitexceeded: true` says there are MORE (https://learn.microsoft.com/power-apps/developer/data-platform/webapi/query/count-rows):
+//   { "@odata.count": 5000, "@Microsoft.Dynamics.CRM.totalrecordcount": 5000, "@Microsoft.Dynamics.CRM.totalrecordcountlimitexceeded": true, "value": [ … ] }
+// so a saved-layer scan that ends at exactly 5000 forms under that flag missed some, while one that reads them all — or ends at 5000 under no such flag — did not.
+const CAP = 5000;
+const capCount = (exceeded) => (body) => {
+  body['@odata.count'] = CAP;
+  body['@Microsoft.Dynamics.CRM.totalrecordcount'] = CAP;
+  if (exceeded !== undefined) body['@Microsoft.Dynamics.CRM.totalrecordcountlimitexceeded'] = exceeded;
+};
+const savedOnly = (alter) => (answer) => { if (answer.layer === 'saved') alter(answer.body, answer); };
+// 5000 forms in both layers and one more in the saved layer: the 5001st — the one that embeds the page, or a plain one.
+const pastTheCap = (formxml) => [...plainForms(CAP), { formid: 'eeeeeeee-0000-4000-8000-000000000001', objecttypecode: 'new_ticket', name: 'Ticket', type: 11, formxml, layer: 'saved' }];
+const ENTRY_POINTS = {
+  'a page delete': {
+    run: async (t, forms, alter) => {
+      const { org, genpage } = await deleteWorld(t, forms, alter);
+      try { return { org, out: await genpage.delete(PAGE, { allowDestructive: true }) }; } catch (error) { return { org, error }; }
+    },
+    refused: ({ error }) => (assert.ok(error, 'refused'), assert.strictEqual(error.code, 'GENPAGE_FORM_REFERENCES_UNREADABLE', error.message), error.message),
+    done: ({ out, error }) => { assert.ifError(error); assert.strictEqual(out.deleted, true); },
+  },
+  'a teardown': {
+    run: async (t, forms, alter) => {
+      const { org, teardown } = await teardownWorld(t, forms, alter);
+      return { org, out: await teardown() };
+    },
+    refused: ({ out }) => (assert.strictEqual(out.ok, false), JSON.stringify(out.errors)),
+    done: ({ out }) => { assert.strictEqual(out.ok, true, JSON.stringify(out.errors)); assert.deepStrictEqual(out.deleted.genpage, [PAGE]); },
+  },
+};
+
+for (const [entry, { run, refused, done }] of Object.entries(ENTRY_POINTS)) {
+  test(`REAL BUNDLE: ${entry} whose saved scan ends at exactly ${CAP} forms under a count that says MORE than ${CAP} is refused — no write at all`, async (t) => {
+    // The page at 4900 ends the scan (no continuation), so the 5001st form — the one that embeds the page — is never answered.
+    const result = await run(t, pastTheCap(EMBEDDING), savedOnly((body, { at }) => { capCount(true)(body); if (at === CAP - 100) delete body['@odata.nextLink']; }));
+    assert.match(refused(result), /saved layer could not all be read: the answers declare at least 5001 forms but the pages held 5000/);
+    assert.deepStrictEqual(result.org.writes(), [], 'no write at all');
+    assert.deepStrictEqual(result.org.unexpected, []);
+  });
+
+  test(`REAL BUNDLE: ${entry} whose saved scan reads all ${CAP + 1} forms under a count that says MORE than ${CAP} goes ahead`, async (t) => {
+    const result = await run(t, pastTheCap('<form><tabs><tab name="general"/></tabs></form>'), savedOnly(capCount(true)));
+    done(result);
+  });
+
+  for (const exceeded of [false, undefined]) {
+    test(`REAL BUNDLE: ${entry} whose saved scan reads exactly ${CAP} forms under a count of ${CAP} with the exceeded flag ${exceeded === undefined ? 'absent' : exceeded} goes ahead`, async (t) => {
+      const result = await run(t, plainForms(CAP), savedOnly(capCount(exceeded)));
+      done(result);
+    });
+  }
+}

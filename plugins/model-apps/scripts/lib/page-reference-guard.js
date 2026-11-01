@@ -75,17 +75,22 @@ function pageIdOf(value) {
   return match[1].toLowerCase();
 }
 
-// The count an answer declares of the rows its query matches, or undefined when it declares none. Dataverse sends it only to a query that asks ($count=true,
+// The fewest forms an answer declares its query matches, or undefined when it declares none. Dataverse sends a count only to a query that asks ($count=true,
 // which this scan does not), so a count is evidence the scan uses when an answer carries one, never something it requires:
-//   { "@odata.count": 251, "value": [ … ] }
+//   { "@odata.count": 251, "value": [ … ] }                                                                   (251 forms: at least 251)
 //   { "@odata.count": 5000, "@Microsoft.Dynamics.CRM.totalrecordcount": 5000, "@Microsoft.Dynamics.CRM.totalrecordcountlimitexceeded": true, … }
+//                                                                                                            (more than 5000: at least 5001)
+//   { "@odata.count": 5000, "@Microsoft.Dynamics.CRM.totalrecordcountlimitexceeded": false, … }               (exactly 5000: at least 5000)
 //   { "@Microsoft.Dynamics.CRM.totalrecordcount": -1, … }                                                    (-1: not counted)
-// The count stops at 5000 (500 for an elastic table) and then says "5000 or more", so it is only ever a LOWER bound on the forms there are: fewer forms read
-// than it says is a scan that missed some; more is not a contradiction.
+// The count stops at 5000 (500 for an elastic table). With no `totalrecordcountlimitexceeded` it is "that many, or more", so a LOWER bound: fewer forms read
+// than it says is a scan that missed some; more is not a contradiction. `totalrecordcountlimitexceeded: true` says the forms are MORE than the count, so the
+// bound is one more than it — a scan that stops at exactly the cap missed some. Only the boolean `true` raises the bound; `false`, or any other value, leaves
+// the count as it is (never lowers it, and never reads a count where there is none).
 // See https://learn.microsoft.com/power-apps/developer/data-platform/webapi/query/count-rows
 function declaredCount(body) {
+  const exceeded = body['@Microsoft.Dynamics.CRM.totalrecordcountlimitexceeded'] === true ? 1 : 0;
   const counts = [body['@odata.count'], body['@Microsoft.Dynamics.CRM.totalrecordcount']].filter((n) => Number.isSafeInteger(n) && n >= 0);
-  return counts.length ? Math.max(...counts) : undefined;
+  return counts.length ? Math.max(...counts) + exceeded : undefined;
 }
 
 // A form id as one key whatever its letter case or braces ("{CCCC…}" and "cccc…" are one form), or '' when the row holds none.
@@ -161,7 +166,7 @@ async function readAllFormLayers(client, { maxForms = MAX_FORMS_PER_LAYER, maxRe
     }
     // Checked once the last page is in: a count an answer declared is a lower bound on the forms (declaredCount), so a scan that ends with fewer missed some.
     if (counter.ids.size < counter.declared) {
-      throw guardError(`the forms in the ${layer} layer could not all be read: the answer counts ${counter.declared} forms but its pages held ${counter.ids.size}, so the pages are not one complete list of the forms and it is not known whether one embeds the page. Nothing was deleted.`, { code: 'GENPAGE_FORM_REFERENCES_UNREADABLE', incompleteScan: true });
+      throw guardError(`the forms in the ${layer} layer could not all be read: the answers declare at least ${counter.declared} forms but the pages held ${counter.ids.size}, so the pages are not one complete list of the forms and it is not known whether one embeds the page. Nothing was deleted.`, { code: 'GENPAGE_FORM_REFERENCES_UNREADABLE', incompleteScan: true });
     }
     for (const row of rows) {
       forms.push({

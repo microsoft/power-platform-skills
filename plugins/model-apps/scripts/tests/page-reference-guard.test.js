@@ -189,13 +189,16 @@ test('the pages of a layer are one list: a form twice — in any letter case or 
   assert.deepStrictEqual(await assertPageDeletionSafe(pagedClient({ published: [{ rows: [F(1), F(2)] }], saved: [{ rows: [F(2)] }, { rows: [F(1), F(3)] }] }), [P1]), { reads: 3, formsScanned: 5 });
 });
 
-test('a count an answer declares is a lower bound (it stops at 5000): fewer forms than it is refused; as many or more — or no count, or -1 — is not', async () => {
+test('a count an answer declares is a lower bound (it stops at 5000; one more when it says the limit was exceeded): fewer forms than it is refused; as many or more — or no count, or -1 — is not', async () => {
   const count = (n, more = {}) => ({ '@odata.count': n, ...more });
   const refusals = [
-    [[{ rows: [F(1), F(2)], extra: count(3) }], 'the answer counts 3 forms but its pages held 2'],
+    [[{ rows: [F(1), F(2)], extra: count(3) }], 'the answers declare at least 3 forms but the pages held 2'],
     // A later answer that counts more is believed: the count is never lowered by an answer that counts fewer.
-    [[{ rows: [F(1)], extra: count(2) }, { rows: [F(2)], extra: count(4) }, { rows: [F(3)], extra: count(1) }], 'the answer counts 4 forms but its pages held 3'],
-    [[{ rows: [F(1)], extra: { '@Microsoft.Dynamics.CRM.totalrecordcount': 2 } }], 'the answer counts 2 forms but its pages held 1'],
+    [[{ rows: [F(1)], extra: count(2) }, { rows: [F(2)], extra: count(4) }, { rows: [F(3)], extra: count(1) }], 'the answers declare at least 4 forms but the pages held 3'],
+    [[{ rows: [F(1)], extra: { '@Microsoft.Dynamics.CRM.totalrecordcount': 2 } }], 'the answers declare at least 2 forms but the pages held 1'],
+    // `totalrecordcountlimitexceeded: true` says MORE than the count: as many forms as it is, and no more, missed some — on any page of the scan.
+    [[{ rows: [F(1), F(2)], extra: count(2, { '@Microsoft.Dynamics.CRM.totalrecordcountlimitexceeded': true }) }], 'the answers declare at least 3 forms but the pages held 2'],
+    [[{ rows: [F(1)], extra: count(2, { '@Microsoft.Dynamics.CRM.totalrecordcountlimitexceeded': true }) }, { rows: [F(2)], extra: count(2) }], 'the answers declare at least 3 forms but the pages held 2'],
   ];
   for (const [saved, why] of refusals) {
     await assert.rejects(assertPageDeletionSafe(pagedClient({ saved }), [P1]), (e) => e.code === 'GENPAGE_FORM_REFERENCES_UNREADABLE' && e.incompleteScan === true && e.message.includes(why));
@@ -206,6 +209,11 @@ test('a count an answer declares is a lower bound (it stops at 5000): fewer form
     [{ rows: Array.from({ length: 60 }, (_, i) => F(i)), extra: count(50, { '@Microsoft.Dynamics.CRM.totalrecordcount': 50, '@Microsoft.Dynamics.CRM.totalrecordcountlimitexceeded': true }) }],
     [{ rows: [F(1)], extra: { '@Microsoft.Dynamics.CRM.totalrecordcount': -1, '@Microsoft.Dynamics.CRM.totalrecordcountlimitexceeded': false } }],
     [{ rows: [F(1)], extra: { '@odata.count': 'many' } }],
+    // Only the boolean `true` says "more": `false`, or a flag written as text, leaves the count as it is.
+    [{ rows: [F(1), F(2)], extra: count(2, { '@Microsoft.Dynamics.CRM.totalrecordcountlimitexceeded': false }) }],
+    [{ rows: [F(1), F(2)], extra: count(2, { '@Microsoft.Dynamics.CRM.totalrecordcountlimitexceeded': 'true' }) }],
+    // A flag with no count is no bound.
+    [{ rows: [F(1)], extra: { '@Microsoft.Dynamics.CRM.totalrecordcountlimitexceeded': true } }],
   ];
   for (const saved of passes) {
     const out = await assertPageDeletionSafe(pagedClient({ saved }), [P1]);
