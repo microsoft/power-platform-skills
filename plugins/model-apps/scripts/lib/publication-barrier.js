@@ -348,7 +348,7 @@ function screenPinnedWrite(pin, method, path, text, inBatch) {
 }
 
 // Why a $batch is refused under `pin`, or null when it is shown not to touch the pinned row: every part is read the way the
-// service reads it (lib/batch-request.js: the boundary the Content-Type declares, change sets opened, each part one request
+// service reads it (lib/batch-request.js: the boundary the Content-Type's boundary parameter declares, read quote-aware at the batch and at each change set, change sets opened, each part one request
 // with its body text) and screened as a write of its own. A body that cannot be read as a batch is refused: what it would
 // write cannot be shown. A part addressed to an earlier part's row by its Content-ID (`$1/…`) touches the row that part
 // creates, and every create part is screened itself (one that names the pinned row, or no id, is refused), so such a

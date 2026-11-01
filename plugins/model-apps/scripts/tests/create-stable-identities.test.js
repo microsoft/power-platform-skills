@@ -1238,6 +1238,41 @@ test('a pinned create passes only the body it was pinned to; anything else that 
   assert.throws(() => barrier.pinCreate({ collection: 'savedqueries', idField: 'savedqueryid', id: '', matches: () => true }), TypeError);
 });
 
+// The pin reads a batch by the boundary its Content-Type's boundary PARAMETER declares, at the batch and at each change set: a
+// `boundary=` inside another parameter's quoted value cannot point the reading at a decoy multipart in the preamble while the
+// parts the service runs write the pinned row. Ordinary quoted boundaries and other rows' batches still pass.
+test('a pinned row cannot be hidden from the pin by a boundary quoted inside another Content-Type parameter', async () => {
+  const id = 'a1d1e2a3-8ac8-5f10-8300-6ddd477124af';
+  const other = '0b0b0b0b-0000-0000-0000-000000000002';
+  const part = (method, target, body = '{}') => ['Content-Type: application/http', 'Content-Transfer-Encoding: binary', 'Content-ID: 1', '', `${method} ${target} HTTP/1.1`, 'Content-Type: application/json', '', body].join('\r\n');
+  const multipart = (boundary, parts) => parts.map((p) => `--${boundary}\r\n${p}\r\n`).join('') + `--${boundary}--\r\n`;
+  const misleading = 'multipart/mixed; note="; boundary=decoy"; boundary=actual';
+  const hidden = multipart('decoy', [part('PATCH', `savedqueries(${other})`)]) + multipart('actual', [part('PATCH', `savedqueries(${id})`, '{"name":"Changed"}')]);
+  const screen = async (contentType, body) => {
+    const barrier = createPublicationBarrier();
+    const sent = [];
+    const gate = barrier.gateRequest(async (req) => { sent.push(req); return { statusCode: 204, headers: {}, body: '' }; });
+    const pin = barrier.pinCreate({ collection: 'savedqueries', idField: 'savedqueryid', id, matches: () => false });
+    const answer = await gate({ method: 'POST', url: 'https://contoso.crm.dynamics.com/api/data/v9.2/$batch', headers: { 'content-type': contentType }, body });
+    pin.release();
+    return { answer, sent: sent.length, refused: pin.refused };
+  };
+  const refusedUnsent = (r, label) => {
+    assert.equal(r.answer.statusCode, 409, label);
+    assert.equal(JSON.parse(r.answer.body).error.code, 'create-local-draft-changed', label);
+    assert.equal(r.sent, 0, label);
+    assert.equal(r.refused, true, label);
+  };
+  refusedUnsent(await screen(misleading, hidden), 'the batch Content-Type');
+  refusedUnsent(await screen('multipart/mixed; boundary=outer', multipart('outer', [`Content-Type: ${misleading}\r\n\r\n${hidden}`])), 'a change set Content-Type');
+  refusedUnsent(await screen('multipart/mixed; boundary=a; boundary=b', multipart('a', [part('PATCH', `savedqueries(${other})`)])), 'two boundaries');
+  // Controls: the same quoted parameter with only another row in the parts the service runs, and an ordinary quoted change set.
+  const otherOnly = multipart('decoy', [part('PATCH', `savedqueries(${id})`)]) + multipart('actual', [part('PATCH', `savedqueries(${other})`)]);
+  assert.equal((await screen(misleading, otherOnly)).sent, 1, 'a decoy in the preamble is not run, so naming the row there writes nothing');
+  const changeSet = `Content-Type: multipart/mixed; boundary="changeset_q"\r\n\r\n${multipart('changeset_q', [part('PATCH', `savedqueries(${other})`)])}`;
+  assert.equal((await screen('multipart/mixed; boundary="batch_q"', multipart('batch_q', [changeSet]))).sent, 1);
+});
+
 // Production runs creates in parallel (the engine's concurrency; charts through mapLimit). Each create holds its own pin until
 // its push ends, so one create finishing never releases another's pin while that one is still to push: a second local process
 // that edits the second chart then is refused at the dispatch.
