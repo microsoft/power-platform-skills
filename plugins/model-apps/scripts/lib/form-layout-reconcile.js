@@ -3,22 +3,21 @@
 // declares them, while every control the spec does not declare keeps exactly where it is.
 //
 // Without the opt-in the build keeps its additive behaviour (sdk-build's field/topology passes). With it:
-//   - EXISTING form (planDeclaredFormLayout + applyDeclaredFormLayout): for each declared section the
-//     cells of declared fields are packed again in the declared reading order, each at the first free
-//     slot at or after the previous one. Every other cell — a maker's field, a sub-grid, a quick view, a
-//     timeline, a spacer this build did not write, a row's own payload — is a FIXED OBSTACLE that keeps
-//     its row, column and spans as they are at the section's OLD width. A declared field found in another
-//     section moves here in the same write, keeping its ids and metadata. A free slot a later cell must
-//     skip is held by a spacer cell (`control: null`, the SDK's shape for one); only spacers this build
-//     recorded as its own may be recycled. A row this pack empties is kept while a maker's cell sits at
-//     or below it, or while the row carries a payload of its own, so nothing the spec does not own moves
-//     up or is dropped. A section is never moved and a section the spec places in a form column the tab
-//     lacks refuses; an existing sub-grid / quick view must already show what is requested (a different
-//     target, or any stated placement, refuses rather than being silently kept).
-//   - NEW form (applyDeclaredFormCreate): the complete composite — packed fields, the timeline, sub-grids,
-//     quick views and event handlers — is built locally with every id supplied (root through the
-//     creation port, tabs / sections / cells / controls as its child ids) and sent in ONE push; then a
-//     fresh read-back proves it before anything is bound or published.
+//   - EXISTING form (planDeclaredFormLayout): for each declared section the cells of declared fields are
+//     packed again in the declared reading order, each at the first free slot at or after the previous one.
+//     Every other cell — a maker's field, a sub-grid, a quick view, a timeline, a spacer this build did not
+//     write, a row's own payload — is a FIXED OBSTACLE that keeps its row, column and spans as they are at
+//     the section's OLD width. A declared field found in another section moves here in the same write,
+//     keeping its ids and metadata. A free slot a later cell must skip is held by a spacer cell (`control:
+//     null`, the SDK's shape for one); only spacers this build recorded as its own, still where it put them,
+//     may be recycled. A row this pack empties is kept while a maker's cell sits at or below it, or while the
+//     row carries a payload of its own, so nothing the spec does not own moves up or is dropped. A section is
+//     never moved and a section the spec places in a form column the tab lacks refuses; an existing sub-grid
+//     / quick view must already show what is requested (a different target, or any stated placement,
+//     refuses rather than being silently kept).
+//   - NEW form (planCreate): the complete composite — packed fields, the timeline, sub-grids, quick views
+//     and event handlers — is built locally with every id supplied (the form's and each child's from the
+//     creation catalog) and sent in ONE push.
 // Positions come from the column-slot model (form-occupancy.js slotGrid), not the width-only
 // rowOccupancy the additive path uses: a maker's cell in column 1 beside a row-spanning cell needs one.
 //
@@ -28,33 +27,26 @@
 // that is missing. Labels, isRequired, PCF parameters and events of existing cells are never inferred
 // from compiler defaults.
 //
-// Identities. The form's binding (kind 'form-layout') baselines the FULL layout projection
-// (formProjection: every field placement and each section's width) with a hash per part, so a part
-// someone else changed since the last build refuses as drift while a newly declared part is an edit.
-// Every tab, section, cell and control the build relies on is recorded as an ordinary child binding
-// (kind 'form-layout-child', `parentKey` = the form's key); a container is found by its recorded id,
-// else by a unique name in its exact parent, and a helper-owned spacer is recognised only by its
-// recorded id at its recorded slot. A recorded field cell / control or host is authoritative: when the
-// form now holds another cell for that field, the build refuses (create-completion-required) instead of
-// following the field name. The stored row must also be the form type and table the key names. Every
-// child — in the first create and on any later run — takes its id from ONE creation family: the form's
-// kind and key under the actual form id as parent, so a re-run after an unsettled add finds that id.
+// Settlement. A declared form is one managed group (managed-bindings.js, family 'form'): the form as root
+// and every tab, section, cell, control and helper spacer the build relies on as a child, keyed by what it
+// is (see childOf). reconcileDeclaredForm runs it through managed-feature-contract.js runManagedFeature:
+// the attempt and the complete expected proof are persisted BEFORE the one push, the stored form is proved
+// from a fresh read against that expected proof, and the whole group is committed in one store write. A
+// pending attempt found later is proved the same way and never sent again. The root record baselines the
+// FULL layout projection (formProjection) with a hash per part, so a part someone else changed since the
+// last build refuses as drift while a newly declared part is an edit. A recorded child is authoritative:
+// a recorded tab, section, field cell or host that is gone or was replaced refuses
+// (create-completion-required) instead of being re-found by name.
 //
-// Proof. After a write a fresh read must hold every id written, the owned projection, a rendering
-// timeline, each requested host target and handler, and — compared with the form as it was read before
-// the write — every container, row payload and cell the spec does not own; anything else is unknown.
-// An authoritative native match from the creation port is never a creation: it is taken only as an
-// approved adoption with the same proof, and saved as `matched`.
+// Proof (projectFormComposite / proveFormComposite). One composite proof serves the write, recovery,
+// verify, publication and download: each child's ASSOCIATION (what it is and where it stands — its parent,
+// name or field, slot and spans, class and host target), the SEMANTIC projection of the form (layout, every
+// handler, host targets, the rendering timeline) and the PRESERVATION of everything the spec does not own.
+// Ids alone prove nothing: two sub-grids whose targets were swapped under unchanged ids hold the same ids.
 //
-// Entry points for the coordinator: reconcileDeclaredForm (binding first, then the coordinator's resolution
-// — the creation port's continuation, else the name — then plan/apply or create; it never settles: the
-// coordinator settles its result through the shared createFeatureSettlement), declaredHostsOf and
-// verifyDeclaredForm.
-//
-// Publication. Helpers never publish: a write that was sent records its scope in `pendingPublish`, and
-// the coordinator's settlement (reconcile-common commitPublication, publication-barrier.js) queues it
-// only when the whole result settled cleanly. A refused or unknown write keeps the entry, marked
-// withheld, so the table stays unpublished for the rest of the run.
+// Publication. The committed group records the publication it owes; publishDeclaredFormTable pays it per
+// table through managed-feature-contract.js publishManagedScope — the only way this helper publishes —
+// once the table's forms have settled, a no-op included.
 
 const { slotGrid } = require('./form-occupancy.js');
 const { placementOf } = require('./form-subgrid-placement.js');
@@ -78,29 +70,25 @@ const {
   timelineRefusal,
   controlIdTaken,
 } = require('./form-timeline.js');
-const { runManagedCreate } = require('./managed-create.js');
+const { runManagedFeature, publishManagedScope } = require('./managed-feature-contract.js');
+const { readSystemFormPublication } = require('./systemform-published.js');
+const { publishTablesXml } = require('./table-publish.js');
+const { hasUnsyncedEdits } = require('./unsynced-edits.js');
 const {
-  emptyResult,
   refusal,
   isAuthorized,
-  lookupBinding,
-  boundIdentity,
-  bindingRecord,
   partsDriftVerdict,
   projectionBaseline,
   pushChecked,
   canonicalJson,
   normalizeGuid,
+  intentSha256,
 } = require('./reconcile-common.js');
 
-const KIND = 'form-layout';
-// Binding records of the tabs, sections, cells, controls and spacers a declared form relies on.
-const CHILD_KIND = 'form-layout-child';
-// New children of an EXISTING form are reserved under the SAME creation request family as the form's own
-// create — kind 'form-layout', the form's key, its child key — with the actual form id as `parentId`. A
-// stable creation port derives a child's id from (kind, key, child key), so a cell added on a later run
-// gets the id it would have had if the form had been created with it, and a re-run after an unsettled
-// add finds that very id on the form.
+// The managed binding family of a declared form (managed-bindings.js), and the schema of its composite proof.
+const FAMILY = 'form';
+const PROOF_SCHEMA = 'form-composite-v1';
+// The SDK artifact type of a form.
 const ARTIFACT = 'form';
 // Stable platform control class ids (the SDK's ControlClassIds), the same constants sdk-build uses.
 const SUBGRID_CLASS_ID = 'E7A81278-8635-4D9E-8D4D-59480B391C5B';
@@ -505,61 +493,36 @@ function freshKeys(tabs) {
   return keys;
 }
 
-// Every id the tree carries — tabs, sections, cells and controls — lowercased, with the duplicates.
-function treeIds(tabs) {
-  const all = [];
-  const take = (o) => { if (o && o.id !== undefined && o.id !== null && o.id !== '') all.push(idText(o.id)); };
-  for (const tab of tabs || []) take(tab);
-  eachSection(tabs, (section) => take(section));
-  eachCell(tabs, (cell) => { take(cell); take(cell.control); });
-  const seen = new Set();
-  const duplicates = new Set();
-  for (const id of all) { if (seen.has(id)) duplicates.add(id); seen.add(id); }
-  return { ids: seen, duplicates: [...duplicates] };
-}
-
 /**
- * The planned tree with ids set: each `__fresh` object takes its id from the creation port, markers are
- * stripped. Answers { tabs, ids } where `ids` maps every recorded child key to its id — fresh children,
- * tracked existing ones, and each helper spacer under `spacer:<section key>:<row>:<column>` at the slot it
- * lands in (the slot is part of the key: a spacer is the build's only where the build put it).
- * `ownedSpacers` are the lowercased ids of the helper spacers the plan recycled.
+ * The planned tree with ids set: each `__fresh` object takes its id from `childIds` (the creation catalog's
+ * reservation), markers are stripped. Answers { tabs, ids, freshIds, fresh } where `ids` maps every child locator
+ * the write relies on — fresh objects and tracked existing ones (`__track`) — to its id, and `fresh` is the set of
+ * locators this write adds.
  */
-function materialize(planned, childIds = {}, ownedSpacers = []) {
+function materialize(planned, childIds = {}) {
   const tabs = clone(planned);
   const ids = {};
   const freshIds = [];
-  const helperSpacers = new Set(ownedSpacers.map(idText));
+  const fresh = new Set();
   const settle = (o) => {
     if (!o || typeof o !== 'object') return;
     if (o.__fresh) {
       const id = childIds[o.__fresh];
-      if (id) { o.id = id; freshIds.push(id); }
-      if (/^spacer:/.test(o.__fresh)) { if (id) helperSpacers.add(idText(id)); } else if (id) ids[o.__fresh] = id;
+      if (id) { o.id = id; freshIds.push(id); ids[o.__fresh] = id; fresh.add(o.__fresh); }
     } else if (o.__track && o.id) {
       ids[o.__track] = o.id;
     }
   };
-  const spacerSections = [];
   for (const tab of tabs) settle(tab);
   eachSection(tabs, (section) => {
     settle(section);
-    if (section.__skey) spacerSections.push(section);
     for (const row of section.rows || []) for (const cell of row.cells || []) { settle(cell); if (cell) settle(cell.control); }
   });
-  for (const section of spacerSections) {
-    const rows = section.rows || [];
-    for (const p of slotGrid(rows, section.columns).placed) {
-      const cell = rows[p.row].cells[p.cell];
-      if (isSpacer(cell) && cell.id && helperSpacers.has(idText(cell.id))) ids[`spacer:${section.__skey}:${p.r}:${p.c}`] = cell.id;
-    }
-  }
   stripMarkers(tabs);
-  return { tabs, ids, freshIds, helperSpacers: [...helperSpacers] };
+  return { tabs, ids, freshIds, fresh };
 }
 
-const childBindingKey = (key, childKey) => `${key}#${childKey}`;
-const codeError = (code) => Object.assign(new Error(code), { code });
+const codeError = (code, message) => Object.assign(new Error(message || code), { code });
 
 // Re-read the form from the server into the workspace (overwrite: a stale local copy must never pass for
 // the stored one) and answer it, { missing: true } when the row is gone, or null when it cannot be read.
@@ -654,41 +617,6 @@ function foreignInventory(tabs, { owned = new Set(), fresh = new Set() } = {}) {
   return out;
 }
 
-// Where every object with an id stands, typed: a tab (with its name), a section in its tab and form column,
-// a cell in its section at its slot with the field it shows, a control in its cell with the field it binds
-// and its class. Answers { '<lowercased id>': '<canonical placement>' }; an id held twice answers both
-// placements joined by a newline (canonical JSON holds none), so it can never equal a single one. Ids alone prove nothing about association: two
-// field controls whose ids were swapped hold the same id set, and only this map tells them apart.
-// `classOf(id)` says whether a control's class counts: the store fills in the default class of a field
-// control the write sent without one, so the readback is compared on class only where the write named it.
-function structureOf(tabs, classOf = () => true) {
-  const out = {};
-  const put = (id, value) => {
-    const k = idText(id);
-    if (!k) return;
-    const v = canonicalJson(value);
-    out[k] = out[k] === undefined ? v : `${out[k]}\n${v}`;
-  };
-  (tabs || []).forEach((tab, ti) => {
-    const tabRef = idText(tab && tab.id) || `#${ti}`;
-    put(tab && tab.id, { type: 'tab', name: lc(tab && tab.name) });
-    ((tab && tab.columns) || []).forEach((column, ci) => ((column && column.sections) || []).forEach((section, si) => {
-      const sectionRef = idText(section && section.id) || sectionPath(tab, ti, ci, section, si);
-      put(section && section.id, { type: 'section', parent: `${tabRef}|${ci}` });
-      const rows = (section && section.rows) || [];
-      for (const p of slotGrid(rows, section.columns).placed) {
-        const cell = rows[p.row].cells[p.cell];
-        if (!cell) continue;
-        put(cell.id, { type: 'cell', parent: sectionRef, r: p.r, c: p.c, field: fieldOf(cell) || null });
-        if (cell.control) {
-          put(cell.control.id, { type: 'control', parent: idText(cell.id) || `${sectionRef}|${p.r},${p.c}`, field: lc(cell.control.fieldName) || null, classId: classOf(idText(cell.control.id)) ? idText(cell.control.classId) || null : null });
-        }
-      }
-    }));
-  });
-  return out;
-}
-
 // The requested sub-grid and quick view targets every one of which the stored form must show.
 const hostTargetsOf = (hosts) => [
   ...((hosts && hosts.subgrids) || []).map(requestedSubgridTarget),
@@ -705,12 +633,20 @@ function placementsOf(tabs, names) {
   return out;
 }
 
-// The ids this build recorded for `childKeys` of the form `key`: { childKey: id } (unrecorded keys absent).
-async function recordedChildren(ctx, key, childKeys) {
+// The ids the form's committed managed group holds for `childKeys`: { childKey: id } (unrecorded keys absent).
+// `recorded` is that group's { childKey: id } (recordedLocators); a form with no committed group has none.
+function recordedChildren(recorded, childKeys) {
   const out = {};
-  for (const childKey of new Set(childKeys)) {
-    const rec = await lookupBinding(ctx, CHILD_KIND, childBindingKey(key, childKey));
-    if (rec && rec.id) out[childKey] = rec.id;
+  for (const childKey of new Set(childKeys)) if (recorded[childKey]) out[childKey] = recorded[childKey];
+  return out;
+}
+
+// The { childKey: id } of the committed group of the form `key`: every child record is keyed `<form key>#<child key>`
+// under the form's root record (see childRecords).
+function recordedLocators(committed, key) {
+  const out = {};
+  for (const rec of (committed && committed.records) || []) {
+    if (rec.parentKey === key && String(rec.key).startsWith(`${key}#`)) out[String(rec.key).slice(key.length + 1)] = String(rec.id);
   }
   return out;
 }
@@ -724,15 +660,18 @@ function parentOf(tabs, section) {
   return null;
 }
 
-// The lowercased ids of the spacers of `section` this build recorded at the slot they stand in now.
-async function recordedSpacers(ctx, key, sectionKey, section) {
-  const owned = new Set();
+// The spacers of `section` this build recorded at the slot they stand in now ({ lowercased id: locator }): a helper
+// spacer is known by its slot (`spacer:<section key>:<row>:<column>`), and is the build's only while its last proof
+// still holds — `holds(id, locator)` — so a stale record of a spacer an earlier write dropped steers nothing.
+function recordedSpacers(recorded, sectionKey, section, holds = () => true) {
+  const owned = new Map();
   const rows = (section && section.rows) || [];
   for (const p of slotGrid(rows, section.columns).placed) {
     const cell = rows[p.row].cells[p.cell];
     if (!isSpacer(cell) || !cell.id) continue;
-    const rec = await lookupBinding(ctx, CHILD_KIND, childBindingKey(key, `spacer:${sectionKey}:${p.r}:${p.c}`));
-    if (rec && sameId(rec.id, cell.id)) owned.add(idText(cell.id));
+    const locator = `spacer:${sectionKey}:${p.r}:${p.c}`;
+    const id = recorded[locator];
+    if (id && sameId(id, cell.id) && holds(idText(cell.id), locator)) owned.set(idText(cell.id), locator);
   }
   return owned;
 }
@@ -740,10 +679,10 @@ async function recordedSpacers(ctx, key, sectionKey, section) {
 // A container the build relies on: by its recorded id first (a rename by the maker keeps it the same
 // tab or section), else by a unique name among `candidates` (its exact parent). Answers
 // { found } | { missing: true } (recorded but gone) | { ambiguous: true } | {} (nothing there yet).
-async function resolveContainer(ctx, key, childKey, candidates, everywhere, name) {
-  const rec = await lookupBinding(ctx, CHILD_KIND, childBindingKey(key, childKey));
-  if (rec) {
-    const found = everywhere.find((o) => sameId(o.id, rec.id));
+function resolveContainer(recorded, childKey, candidates, everywhere, name) {
+  const id = recorded[childKey];
+  if (id) {
+    const found = everywhere.find((o) => sameId(o.id, id));
     return found ? { found } : { missing: true };
   }
   const named = candidates.filter((o) => lc(o && o.name) === lc(name));
@@ -979,45 +918,40 @@ function validateDesired(liveTabs, planned, { formType, declaredHome = {}, mobil
  *               (declaredHostsOf builds it from the spec form and the compiled def)
  *   events      the form's requested handlers ([{ event, library, function, attribute? }]); the ones the
  *               form lacks are added in the same push as the layout
- * Answers { key, action: null|'noChange'|'update'|'create', refused, unknown, ... }: 'create' when the form
- * does not exist and nothing is bound (the caller then runs applyDeclaredFormCreate).
+ *   live        the stored form as just read ({ formType, entityLogicalName, tabs, bag })
+ *   ctx         { baseline (the committed root record, or null), recorded ({ locator: id } of the committed
+ *               group's records), children (the last proof's { locator: { id, kind, associationSha256 } }),
+ *               authorizedAdoption, authorizedOverwrite }
+ * Answers { key, action: null|'noChange'|'update', refused, unknown, planned, freshKeys, mobileIds, repairedIds,
+ * addHandlers, ... }. A form that does not exist yet is not planned here: reconcileDeclaredForm builds it whole
+ * with planCreate.
  *
  * What this build recorded is authoritative: a form of another type or table under the resolved id, or a
  * recorded tab, section, field cell or control, timeline or host that is gone or was replaced by another
  * object, refuses before anything is written — it is never re-found by name and silently re-bound.
  */
-async function planDeclaredFormLayout({ form, spec, formId, intentTabs, sdk, hosts, events, continuation = false }, ctx = {}) {
+function planDeclaredFormLayout({ form, spec, formId, live, intentTabs, hosts, events }, ctx = {}) {
   const key = formLayoutKey(form);
-  const plan = { key, formId: formId || null, table: tableOf(form), formType: formTypeOf(form), name: lc(form && form.name), action: null, refused: [], unknown: [], origin: 'adopted' };
+  const plan = { key, formId: formId || null, table: tableOf(form), formType: formTypeOf(form), name: lc(form && form.name), action: null, refused: [], unknown: [] };
   if (!isDeclaredForm(form)) return plan;
   const refuse = (code, message) => { plan.refused.push(refusal(key, code, message)); return plan; };
   const layout = declaredLayoutOf(form, intentTabs);
   if (layout.duplicates.length) return refuse('form-layout-duplicate-field', `the spec places ${[...new Set(layout.duplicates)].join(', ')} more than once; a declared field has one place`);
-  const binding = await lookupBinding(ctx, KIND, key);
-  const bound = boundIdentity(binding, { resolvedId: formId, code: 'form-layout-binding-mismatch', key });
-  if (bound.refusal) { plan.refused.push(bound.refusal); return plan; }
-  if (binding) plan.origin = binding.origin === 'created' ? 'created' : 'adopted';
-  // A continuation is the row at the id the creation port derived for this key, unbound: this key's own
-  // earlier create whose settlement did not finish (for example its solution membership failed, so its
-  // bindings were not recorded). It is the build's, not an adoption.
-  plan.continued = !binding && continuation === true && !!bound.id;
-  if (plan.continued) plan.origin = 'created';
-  // Child records count only under the form's root binding: bindAll records the root last, so child
-  // records without one are what is left of a group whose recording stopped part way.
-  const records = binding ? ctx : {};
-  if (!bound.id) { plan.action = 'create'; return plan; }
-  plan.formId = bound.id;
-  const live = await readForm(sdk, bound.id);
-  if (live && live.missing) {
-    if (binding) return refuse('form-layout-bound-row-missing', 'the form this key is bound to was not found; repair the binding explicitly before it can be recreated');
-    plan.unknown.push(refusal(key, 'form-unreadable', 'the form could not be read'));
-    return plan;
-  }
-  if (!live) { plan.unknown.push(refusal(key, 'form-unreadable', 'the form could not be read')); return plan; }
+  // The committed group's root record (the full layout baseline) and its { childKey: id }. Child records
+  // exist only inside a committed group, which the store writes whole, so no partial group can steer this.
+  const binding = ctx.baseline || null;
+  const records = ctx.recorded || {};
+  if (!live || !Array.isArray(live.tabs)) { plan.unknown.push(refusal(key, 'form-unreadable', 'the form could not be read')); return plan; }
+  // An id the form holds twice makes every association ambiguous: nothing can be proved about it, so nothing is written.
+  const liveComposite = compositeOf(live.tabs);
+  if (liveComposite.duplicates.length) return refuse('form-layout-duplicate-id', `the form holds ${liveComposite.duplicates.length} id(s) more than once; fix the form in the form designer first`);
+  const lastChildren = ctx.children || {};
+  const holds = (id, locator) => !!lastChildren[locator] && sameId(lastChildren[locator].id, id)
+    && variantHashes(liveComposite.at.get(id)).includes(lastChildren[locator].associationSha256);
   // The row must be the form the key names: a Main row under a Quick View key (or another table's form) is
   // a different form, whatever its layout looks like.
   if ((live.formType && formTypeCode(live.formType) !== formTypeCode(plan.formType)) || (live.entityLogicalName && plan.table && lc(live.entityLogicalName) !== plan.table)) {
-    return refuse('form-layout-identity-mismatch', `form ${bound.id} is a ${live.formType || '?'} form of '${live.entityLogicalName || '?'}', not the ${plan.formType} form of '${plan.table}' this spec declares; nothing was written`);
+    return refuse('form-layout-identity-mismatch', `form ${plan.formId} is a ${live.formType || '?'} form of '${live.entityLogicalName || '?'}', not the ${plan.formType} form of '${plan.table}' this spec declares; nothing was written`);
   }
   const formType = live.formType || formTypeOf(form);
   const liveTabs = clone(live.tabs);
@@ -1029,7 +963,7 @@ async function planDeclaredFormLayout({ form, spec, formId, intentTabs, sdk, hos
   const carried = {};
   for (const n of Object.keys(placements)) carried[n] = placements[n][0].cell;
   const wantsTimelineToo = wantsTimeline(spec, form);
-  const recorded = await recordedChildren(records, key, [
+  const recorded = recordedChildren(records, [
     ...[...names].flatMap((n) => [`cell:${n}`, `control:${n}`]),
     ...(wantsTimelineToo ? ['cell:timeline'] : []),
     ...((hosts && hosts.subgrids) || []).flatMap((sg) => [`cell:subgrid:${lc(sg.relationshipName)}`, `control:subgrid:${lc(sg.relationshipName)}`]),
@@ -1062,7 +996,7 @@ async function planDeclaredFormLayout({ form, spec, formId, intentTabs, sdk, hos
     const allSections = () => { const out = []; eachSection(tabs, (s) => out.push(s)); return out; };
     for (const entry of layout.sections) {
       const tKey = `tab:${lc(entry.tab)}`;
-      const t = await resolveContainer(records, key, tKey, allTabs(), allTabs(), entry.tab);
+      const t = resolveContainer(records, tKey, allTabs(), allTabs(), entry.tab);
       if (t.missing) return refuse('create-completion-required', `the tab '${entry.tab}' this form was built with is gone; run a full build after restoring it, or repair the binding`);
       if (t.ambiguous) return refuse('form-layout-container-ambiguous', `the form has more than one tab named '${entry.tab}'`);
       let tab = t.found;
@@ -1075,7 +1009,7 @@ async function planDeclaredFormLayout({ form, spec, formId, intentTabs, sdk, hos
       const sKey = `section:${lc(entry.tab)}/${lc(entry.section)}`;
       const inTab = [];
       eachSection([tab], (s) => inTab.push(s));
-      const s = await resolveContainer(records, key, sKey, inTab, allSections(), entry.section);
+      const s = resolveContainer(records, sKey, inTab, allSections(), entry.section);
       if (s.missing) return refuse('create-completion-required', `the section '${entry.section}' this form was built with is gone; run a full build after restoring it, or repair the binding`);
       if (s.ambiguous) return refuse('form-layout-container-ambiguous', `the tab '${entry.tab}' has more than one section named '${entry.section}'`);
       let section = s.found;
@@ -1130,8 +1064,11 @@ async function planDeclaredFormLayout({ form, spec, formId, intentTabs, sdk, hos
     qvSection = home;
   }
   for (const p of packs.values()) {
-    const ownedSpacers = p.section.__fresh ? new Set() : await recordedSpacers(records, key, p.sectionKey, p.section);
+    const spacerLocators = p.section.__fresh ? new Map() : recordedSpacers(records, p.sectionKey, p.section, holds);
+    const ownedSpacers = new Set(spacerLocators.keys());
     for (const id of ownedSpacers) mobileIds.add(id);
+    // A recycled spacer stays where it stands, so it keeps its locator; one the pack drops is simply not in the tree.
+    for (const row of p.section.rows || []) for (const cell of row.cells || []) if (cell && spacerLocators.has(idText(cell.id))) cell.__track = spacerLocators.get(idText(cell.id));
     const width = p.width !== undefined ? p.width : (p.section.columns || 1);
     const packed = packDeclaredLayout({
       rows: p.section.rows || [], width, oldWidth: p.oldWidth !== undefined ? p.oldWidth : width, fields: p.fields,
@@ -1168,12 +1105,19 @@ async function planDeclaredFormLayout({ form, spec, formId, intentTabs, sdk, hos
     'form-prerequisite-missing': 'a requested sub-grid or quick view names a view, relationship or quick view form that was not found',
     'create-completion-required': 'a sub-grid or quick view this form was built with is gone or was replaced; restore it, or repair the binding, before the layout is written again',
   }[hostCode] || 'the form has no section to add the requested controls to');
+  // A host section (the timeline's or a sub-grid's) an earlier run of this form added stays the build's: it is tracked
+  // under its recorded locator wherever its recorded id still stands, so every later proof keeps checking it (and an
+  // unchanged form stays a no-op rather than a re-baseline that drops it from the proof).
+  eachSection(tabs, (s) => {
+    if (!s || !s.id || s.__fresh || s.__track) return;
+    const locator = Object.keys(records).find((l) => /^section:(timeline$|subgrid:)/.test(l) && sameId(records[l], s.id));
+    if (locator) s.__track = locator;
+  });
   const problem = validateDesired(liveTabs, tabs, { formType, declaredHome, mobileIds, repairedIds });
   if (problem) return refuse(problem, 'the planned layout would move a control the spec does not own or leave a declared field out of place; nothing was written');
   const desired = stripMarkers(clone(tabs));
   plan.planned = tabs;
   plan.freshKeys = freshKeys(tabs);
-  plan.ownedSpacers = [...mobileIds];
   plan.liveParts = formProjection(liveTabs);
   plan.desiredParts = formProjection(desired);
   plan.wantsTimeline = wantsTimelineToo;
@@ -1187,182 +1131,280 @@ async function planDeclaredFormLayout({ form, spec, formId, intentTabs, sdk, hos
   const tabsUnchanged = canonicalJson(desired) === canonicalJson(liveTabs);
   if (tabsUnchanged && !plan.addHandlers.length) {
     plan.action = 'noChange';
-    plan.bindUnchanged = !!binding || plan.continued || isAuthorized(ctx.authorizedAdoption, key);
+    plan.bindUnchanged = !!binding || isAuthorized(ctx.authorizedAdoption, key);
     return plan;
   }
   const verdict = tabsUnchanged ? (binding ? 'none' : 'unbound') : partsDriftVerdict(binding, plan.liveParts, plan.desiredParts);
   if (verdict === 'drift' && !isAuthorized(ctx.authorizedOverwrite, key)) {
     return refuse('form-layout-drift', 'the layout of a declared field was changed outside the spec since the last build; refresh the spec or approve the overwrite');
   }
-  if (verdict === 'unbound' && !plan.continued && !isAuthorized(ctx.authorizedAdoption, key)) {
+  if (verdict === 'unbound' && !isAuthorized(ctx.authorizedAdoption, key)) {
     return refuse('form-layout-adoption-not-authorized', 'this form exists and the spec has not managed its layout before; approve adopting it first');
   }
   plan.action = 'update';
   return plan;
 }
 
-const scopeOf = (key, formId, table) => ({ key, scope: { type: ARTIFACT, id: String(formId), table } });
+// ---------------------------------------------------------------------------------------------------------
+// Child identities. Every tab, section, cell, control and helper spacer the build relies on is a child of the
+// form's managed group, named by a LOCATOR that says what it is — never by where it happens to stand:
+//   tab:<tab>                        formTab           [tab]
+//   section:<tab>/<section>          formSection       [tab, section]
+//   section:timeline                 formHostSection   ['timeline', 'timeline']
+//   section:subgrid:<relationship>   formHostSection   ['subgrid', relationship]
+//   cell:timeline                    formHostCell      ['timeline', 'timeline']   (its control keeps `notescontrol`)
+//   cell|control:subgrid:<rel>       formHostCell / formHostControl  ['subgrid', rel]
+//   cell|control:quickview:<lookup>  formHostCell / formHostControl  ['quickView', lookup]
+//   cell|control:<field>             formCell / formControl          [form key, field]
+//   spacer:<section key>:<row>:<col> formSpacer        [<section key>:<row>:<col>] (the slot it was created at)
+// A new child takes its id from the creation catalog (creates-catalog.js reserveChildren) under the ACTUAL form
+// id, so the id a re-run derives for an unsettled add is the one already on the form. A locator the catalog has
+// no slot for is refused before anything is written.
+// ---------------------------------------------------------------------------------------------------------
+const CONTAINER_KINDS = new Set(['formTab', 'formSection', 'formHostSection']);
 
-// The child records first, the root binding LAST: the shared settlement records a result's bindings one by
-// one and stops at the first that fails, and a later run trusts child records only under a root binding
-// (planDeclaredFormLayout), so a group whose recording stopped part way steers nothing. The root holds the
-// full layout projection as stored; each child record (tab, section, cell, control, helper spacer) only
-// says "this object is the build's", its intent being its id.
-function bindAll(result, ctx, { key, formId, tabs, ids, origin, freshKeys: fresh = [] }) {
-  const base = projectionBaseline(formProjection(tabs));
-  const created = new Set(fresh);
-  for (const childKey of Object.keys(ids).sort()) {
-    const id = ids[childKey];
-    result.managedBindings.push(bindingRecord(ctx, {
-      kind: CHILD_KIND, key: childBindingKey(key, childKey), id, parentKey: key,
-      intentSha256: projectionBaseline({ [childKey]: idText(id) }).intentSha256, origin: created.has(childKey) ? 'created' : origin,
+function childOf(formKey, locator) {
+  const m = /^(tab|section|cell|control|spacer):(.+)$/.exec(String(locator || ''));
+  if (!m) return null;
+  const [, head, rest] = m;
+  if (head === 'tab') return { childKind: 'formTab', keyParts: [rest] };
+  if (head === 'spacer') return { childKind: 'formSpacer', keyParts: [rest] };
+  if (head === 'section') {
+    if (rest === 'timeline') return { childKind: 'formHostSection', keyParts: ['timeline', 'timeline'] };
+    const sg = /^subgrid:(.+)$/.exec(rest);
+    if (sg) return { childKind: 'formHostSection', keyParts: ['subgrid', sg[1]] };
+    const slash = rest.indexOf('/');
+    if (slash <= 0 || slash === rest.length - 1) return null;
+    return { childKind: 'formSection', keyParts: [rest.slice(0, slash), rest.slice(slash + 1)] };
+  }
+  if (rest === 'timeline') return head === 'cell' ? { childKind: 'formHostCell', keyParts: ['timeline', 'timeline'] } : null;
+  const host = /^(subgrid|quickview):(.+)$/.exec(rest);
+  if (host) return { childKind: head === 'cell' ? 'formHostCell' : 'formHostControl', keyParts: [host[1] === 'quickview' ? 'quickView' : 'subgrid', host[2]] };
+  if (rest.includes(':')) return null;
+  return { childKind: head === 'cell' ? 'formCell' : 'formControl', keyParts: [formKey, rest] };
+}
+
+// The catalog intent of a declared form: what the coordinator registers with createIntentCatalog so the form's
+// id (and every child id) is derived from its key.
+function formCatalogIntent(form, { solution } = {}) {
+  return {
+    catalogKind: FAMILY,
+    key: formLayoutKey(form),
+    scope: { kind: 'table', solution, table: tableOf(form) },
+    declaration: { formType: formTypeOf(form), name: lc(form && form.name) },
+  };
+}
+
+// Reserve ids for `locators` (new children) under the actual form id. Answers { locator: id }.
+function reserveChildIds(catalog, key, formId, locators) {
+  if (!locators.length) return {};
+  if (new Set(locators).size !== locators.length) throw codeError('form-layout-container-ambiguous', 'the planned form names one child twice');
+  const children = locators.map((locator) => {
+    const c = childOf(key, locator);
+    if (!c) throw codeError('create-identity-unsupported', `the form child "${locator}" has no stable identity`);
+    return { locator, ...c };
+  });
+  const { childIds } = catalog.reserveChildren(FAMILY, key, { actualRootId: formId, children });
+  return childIds || {};
+}
+
+// ---------------------------------------------------------------------------------------------------------
+// The composite proof (projectFormComposite / proveFormComposite). One projection of a stored form serves the
+// write's proof, recovery, verify, the publication decision and hydrate:
+//   association  what each child IS, by id: a tab (name), a section (its tab and form column, and name), a cell
+//                (its section, slot, spans and field), a control (its cell, field, class and host target — the
+//                relationship, table and view of a sub-grid; the lookup, table and form of a quick view). Ids
+//                alone prove nothing: two sub-grids whose targets were swapped under unchanged ids hold the same
+//                id set and differ only here;
+//   semantic     what the form shows: type, table, the full field layout projection, every handler node
+//                (event, attribute, library, function, enabled, parameters, execution context), the multiset of
+//                host targets and the number of timelines that render;
+//   preservation what a declared write must leave as it was: every cell, row payload, tab and section the build
+//                does not own (foreignInventory) and — on an existing form — the root bag outside its events
+//                region (header, footer, navigation, libraries...).
+// ---------------------------------------------------------------------------------------------------------
+const omitKeys = (o, keys) => { const c = { ...(o || {}) }; for (const k of keys) delete c[k]; return c; };
+
+// Every id the tree holds, with the association variants it may prove: containers answer a 'fresh' variant (a
+// container this build added: its name and parent only, because the store fills in its own defaults) and a
+// 'kept' one (a container that was already there: every property it had, which must survive); a control answers
+// a variant with its class and one without (a field control sent without a class gets the store's default).
+// Answers { at: Map(id -> [variant]), duplicates: [id] }.
+function compositeOf(tabs) {
+  const at = new Map();
+  const duplicates = new Set();
+  const put = (id, variants) => {
+    const k = idText(id);
+    if (!k) return;
+    if (at.has(k)) { if (k !== TIMELINE_CONTROL_ID) duplicates.add(k); return; }
+    at.set(k, variants);
+  };
+  (tabs || []).forEach((tab, ti) => {
+    const tabRef = idText(tab && tab.id) || `#${ti}`;
+    const name = lc(tab && tab.name);
+    put(tab && tab.id, [
+      { type: 'tab', v: 'fresh', name },
+      { type: 'tab', v: 'kept', name, own: omitKeys(tab, ['columns', ...MARKERS]), columns: ((tab && tab.columns) || []).map((c) => omitKeys(c, ['sections'])) },
+    ]);
+    ((tab && tab.columns) || []).forEach((column, ci) => ((column && column.sections) || []).forEach((section, si) => {
+      const sectionRef = idText(section && section.id) || sectionPath(tab, ti, ci, section, si);
+      const parent = `${tabRef}|${ci}`;
+      const own = omitKeys(section, ['rows', 'columns', ...MARKERS]);
+      if (own.bag && Array.isArray(own.bag.a)) own.bag = { ...own.bag, a: own.bag.a.filter((a) => !(Array.isArray(a) && lc(a[0]) === 'columns')) };
+      put(section && section.id, [
+        { type: 'section', v: 'fresh', parent, name: lc(section && section.name) },
+        { type: 'section', v: 'kept', parent, name: lc(section && section.name), own },
+      ]);
+      const rows = (section && section.rows) || [];
+      for (const p of slotGrid(rows, section.columns).placed) {
+        const cell = rows[p.row].cells[p.cell];
+        if (!cell) continue;
+        put(cell.id, [{ type: 'cell', parent: sectionRef, r: p.r, c: p.c, colspan: p.colspan, rowspan: p.rowspan, field: fieldOf(cell) || null }]);
+        if (cell.control) {
+          const base = { type: 'control', parent: idText(cell.id) || `${sectionRef}|${p.r},${p.c}`, field: lc(cell.control.fieldName) || null, target: hostTarget(cell.control) || null };
+          put(cell.control.id, [{ ...base, classId: idText(cell.control.classId) || null }, { ...base, classId: null }]);
+        }
+      }
     }));
-  }
-  result.managedBindings.push(bindingRecord(ctx, { kind: KIND, key, id: formId, intentSha256: base.intentSha256, partsSha256: base.partsSha256, origin }));
+  });
+  return { at, duplicates: [...duplicates] };
 }
 
-// Prove a write by a fresh read. The stored form must be the form the key names (type and table); every
-// id the write carried must be on it; every declared field placement and section width must be what was
-// sent; a requested timeline must render, every requested sub-grid / quick view target and handler must
-// be there; and — on an existing form — everything the build does not own (foreignInventory of the form as
-// it was read before the write) must be exactly as it was. Answers { tabs } or { refused | unknown: [code,
-// message] }.
-//   expect  { formType, table, wantsTimeline, hostTargets, handlers, liveTabs?, mobileIds?, repairedIds? }
-async function proveStored(sdk, formId, written, expect = {}) {
-  const back = await readForm(sdk, formId);
-  if (!back || back.missing) return { unknown: ['form-layout-unverified', 'the form could not be read back after the write; check it before the table is published'] };
-  if ((back.formType && expect.formType && formTypeCode(back.formType) !== formTypeCode(expect.formType))
-    || (back.entityLogicalName && expect.table && lc(back.entityLogicalName) !== expect.table)) {
-    return { unknown: ['form-layout-identity-mismatch', 'the stored form is not of the type and table the spec declares; check it before the table is published'] };
+const variantHashes = (variants) => (variants || []).map((v) => intentSha256(v));
+
+// Every handler node of the root bag's <events> region, canonical and sorted (a multiset): the per-handler
+// `handlerUniqueId` the store mints is left out and attributes are compared as a set. Shape, as the SDK holds it:
+//   { n: 'event', a: [['name','onload'], ['application','false'], ['active','false']], c: [ { n: 'Handlers',
+//     c: [ { n: 'Handler', a: [['functionName','app.onLoad'], ['libraryName','new_/app.js'], ['handlerUniqueId','{…}'],
+//     ['enabled','true'], ['passExecutionContext','true'], ['parameters','']] } ] } ] }
+function handlerNodesOf(bag) {
+  const norm = (node) => {
+    if (!node || typeof node !== 'object') return node;
+    const a = ((node.a || []).filter((x) => Array.isArray(x) && lc(x[0]) !== 'handleruniqueid')).map((x) => [x[0], x[1]]);
+    a.sort((x, y) => (String(x[0]) < String(y[0]) ? -1 : String(x[0]) > String(y[0]) ? 1 : 0));
+    return { n: node.n, a, c: (node.c || []).map(norm) };
+  };
+  const out = [];
+  for (const entry of (bag && bag.c) || []) {
+    if (!entry || !entry.node || entry.node.n !== 'events') continue;
+    for (const ev of entry.node.c || []) out.push(canonicalJson(norm(ev)));
   }
-  const stored = treeIds(back.tabs).ids;
-  const lost = Object.keys(written.ids).filter((k) => !stored.has(idText(written.ids[k])));
-  if (lost.length) return { refused: ['create-completion-required', `the stored form lacks ${lost.length} of the tabs, sections or cells this build wrote; run a full build again`] };
-  // Every object the write carried must stand where it was sent and be what it was sent as: the same type,
-  // parent, slot and field. Present ids are not enough (see structureOf).
-  const sentAt = structureOf(written.tabs);
-  const keptAt = structureOf(back.tabs, (id) => sentAt[id] === undefined || !sentAt[id].includes('"classId":null'));
-  const moved = Object.keys(sentAt).filter((id) => keptAt[id] !== sentAt[id]);
-  if (moved.length) {
-    return { unknown: ['form-layout-not-stored', `the stored form holds ${moved.length} of the tabs, sections, cells or controls this build wrote in another place or bound to another field; check it before the table is published`] };
-  }
-  if (canonicalJson(formProjection(back.tabs)) !== canonicalJson(formProjection(written.tabs))) {
-    return { unknown: ['form-layout-not-stored', 'the stored form does not hold the layout this build wrote; check it before the table is published'] };
-  }
-  if (expect.wantsTimeline && !timelinesOf(back.tabs).some((t) => !timelineProblem(t, { host: false }))) {
-    return { unknown: ['form-timeline-unverified', 'the stored form does not carry a timeline that renders; check it before the table is published'] };
-  }
-  const shown = new Set();
-  eachCell(back.tabs, (cell) => { const t = hostTarget(cell.control); if (t) shown.add(t); });
-  const haveHandlers = handlerKeysOf(back);
-  if ((expect.hostTargets || []).some((t) => !shown.has(t)) || (expect.handlers || []).some((ev) => !haveHandlers.has(handlerKey(ev)))) {
-    return { unknown: ['form-layout-not-stored', 'the stored form lacks a requested sub-grid, quick view or event handler; check it before the table is published'] };
-  }
-  if (expect.liveTabs) {
-    const owned = new Set([...Object.values(written.ids), ...(written.helperSpacers || []), ...(expect.mobileIds || []), ...(expect.repairedIds || [])].map(idText));
-    const fresh = new Set((written.freshIds || []).map(idText));
-    const before = foreignInventory(expect.liveTabs, { owned, fresh });
-    const after = foreignInventory(back.tabs, { owned, fresh });
-    if (canonicalJson(before) !== canonicalJson(after)) {
-      return { unknown: ['form-layout-not-stored', 'the stored form does not hold a control, row or container the spec does not own as it was before the write; check it before the table is published'] };
-    }
-  }
-  return { tabs: back.tabs, back, ids: observedIds(written.ids, keptAt, sentAt) };
+  return out.sort();
 }
 
-// The child ids to bind, taken from the stored form: each recorded child key with the id the stored form
-// holds at the placement the write sent it to (proveStored has just required every one to match).
-function observedIds(ids, keptAt, sentAt) {
-  const out = {};
-  for (const k of Object.keys(ids)) if (keptAt[idText(ids[k])] !== undefined && keptAt[idText(ids[k])] === sentAt[idText(ids[k])]) out[k] = ids[k];
+// The root bag a write must not change: its attributes and every entry but the <events> region (whose handlers
+// the semantic projection covers node by node).
+const rootBagOf = (bag) => ({
+  a: (bag && bag.a) || [],
+  c: ((bag && bag.c) || []).filter((e) => !(e && e.node && e.node.n === 'events')),
+});
+
+function hostTargetsShown(tabs) {
+  const out = [];
+  eachCell(tabs, (cell) => { const t = hostTarget(cell.control); if (t) out.push(t); });
+  return out.sort();
+}
+
+/** The semantic projection of a form ({ formType, entityLogicalName, tabs, bag }). */
+function projectFormComposite(form) {
+  const tabs = (form && form.tabs) || [];
+  return {
+    formType: formTypeCode(form && form.formType),
+    table: lc(form && form.entityLogicalName),
+    layout: formProjection(tabs),
+    handlers: handlerNodesOf(form && form.bag),
+    hosts: hostTargetsShown(tabs),
+    timelines: timelinesOf(tabs).filter((t) => !timelineProblem(t, { host: false })).length,
+  };
+}
+
+// What a write must preserve, given the children it owns: owned cells and controls are left out of the
+// inventory, owned containers are proven by their association instead.
+function preservationOf(form, children, { update }) {
+  const owned = new Set();
+  const containers = new Set();
+  for (const c of children || []) (CONTAINER_KINDS.has(c.kind) ? containers : owned).add(idText(c.id));
+  return {
+    tree: foreignInventory((form && form.tabs) || [], { owned, fresh: containers }),
+    root: update ? rootBagOf(form && form.bag) : null,
+  };
+}
+
+const savedShaOf = (form) => intentSha256({ formType: form.formType, entityLogicalName: form.entityLogicalName, tabs: form.tabs, bag: form.bag || null });
+// The publication hash of one systemform layer — the same fields readSystemFormPublication compares.
+const layerHash = (row) => intentSha256({ name: row.name, description: row.description, formxml: row.formxml });
+const NEVER_PUBLISHED = '0'.repeat(64);
+
+/**
+ * Prove a stored form against an expected proof (the one persisted before the send). Answers { comp } or throws
+ * a coded error: a child that is gone `create-completion-required`; anything else that differs
+ * `form-layout-unproved`. Used by the write's proof, recovery, verify and hydrate.
+ */
+function proveFormComposite(form, expected) {
+  if (!form || !Array.isArray(form.tabs)) throw codeError('create-completion-required', 'the form was not found');
+  const comp = compositeOf(form.tabs);
+  if (comp.duplicates.length) throw codeError('form-layout-duplicate-id', `the form holds ${comp.duplicates.length} id(s) more than once`);
+  for (const child of expected.children || []) {
+    const variants = comp.at.get(idText(child.id));
+    if (!variants) throw codeError('create-completion-required', `the ${child.key.split('#').pop()} this build placed is not on the form`);
+    if (!variantHashes(variants).includes(child.associationSha256)) throw codeError('form-layout-unproved', `the ${child.key.split('#').pop()} this build placed is now something else or stands somewhere else`);
+  }
+  if (intentSha256(projectFormComposite(form)) !== expected.sentProjectionSha256) {
+    throw codeError('form-layout-unproved', 'the stored form does not show the layout, handlers, hosts or timeline that were sent');
+  }
+  if (intentSha256(preservationOf(form, expected.children, { update: expected.baseObservation !== null })) !== expected.preservationSha256) {
+    throw codeError('form-layout-unproved', 'the stored form does not hold something the spec does not own as it was before the write');
+  }
+  return { comp };
+}
+
+// The bag after `handlers` are added the way addHandlers adds them: a new <events> region when there is none,
+// else appended to it.
+function withHandlers(bag, handlers) {
+  const out = clone(bag || { a: [], c: [] });
+  if (!handlers.length) return out;
+  if (!Array.isArray(out.c)) out.c = [];
+  const regionIdx = out.c.findIndex((e) => e && e.node && e.node.n === 'events');
+  if (regionIdx < 0) {
+    const nextI = out.c.reduce((max, e) => Math.max(max, Number(e && e.i)), -1) + 1;
+    out.c.push({ i: nextI, node: formEventsRegionIntent(handlers) });
+  } else {
+    const region = out.c[regionIdx].node;
+    region.c = [...(region.c || []), ...handlers.map((ev) => formEventsRegionIntent([ev]).c[0])];
+  }
   return out;
 }
 
-// Classify a runManagedCreate answer for a form write. `sent` says whether a push was attempted that may
-// have reached the service (a refused push did not).
-function settleWrite(result, key, out, { complete, sent, pending }) {
-  if (out.status === 'created' && complete) return true;
-  if (sent) result.pendingPublish.push(pending);
-  if (out.status === 'adopted') {
-    result.refused.push(refusal(key, 'creation-adopted-rerun', 'an earlier create of this form was resolved; run the build again so it re-reads the form before writing'));
-  } else if (out.status === 'refused') {
-    result.refused.push({ ...refusal(key, 'form-layout-rejected', `the form was not saved (${out.code || 'refused'})`), ...(out.rules && out.rules.length ? { rules: out.rules } : {}) });
-  } else {
-    // 'unknown', a 'created' answer without every child id, and — on an update — an SDK-native 'matched'
-    // answer (an update adopts no row, so a match there is not an outcome this write can prove).
-    result.unknown.push(refusal(key, out.status === 'matched' ? 'form-layout-create-matched' : 'form-layout-write-unknown', 'the form write did not settle; check the form — the next run re-reads it before writing'));
-  }
-  return false;
+// The raw spec keys of a declared form the managed group keeps so verify and an explicit download can restore it:
+// what the spec declared, never the stored form's content. `fieldOptions` is kept as written, so an explicit false
+// stays distinct from an absent flag.
+const DECLARATION_KEYS = ['entity', 'table', 'name', 'formType', 'reconcile', 'layout', 'notes', 'tabs', 'fieldOptions', 'subgrids', 'quickViews', 'events'];
+function declarationOf(form) {
+  const out = {};
+  for (const k of DECLARATION_KEYS) if (form && form[k] !== undefined) out[k] = clone(form[k]);
+  return out;
 }
 
-/**
- * Apply a plan from planDeclaredFormLayout: ONE '/tabs' update (plus the missing event handlers) and ONE
- * push. New children take their ids from the creation port under the SAME request family as the form's own
- * create (kind 'form-layout', the form's key, the child key; `parentId` the actual form id); then a fresh
- * read proves the write — owned parts and everything the build does not own — before the form and its
- * children are bound. Never publishes: a write that may have been sent records its scope in
- * `pendingPublish` for the coordinator's settlement.
- */
-async function applyDeclaredFormLayout(plan, { sdk }, ctx = {}) {
-  const result = emptyResult();
-  result.refused.push(...plan.refused);
-  result.unknown.push(...plan.unknown);
-  if (plan.refused.length || plan.unknown.length || !plan.action || plan.action === 'create') return result;
-  if (plan.action === 'noChange') {
-    result.unchanged.push({ key: plan.key, kind: KIND, id: plan.formId, managed: plan.bindUnchanged === true, ...(plan.continued ? { continued: true } : {}) });
-    if (plan.bindUnchanged) {
-      const m = materialize(plan.planned, {}, plan.ownedSpacers);
-      bindAll(result, ctx, { key: plan.key, formId: plan.formId, tabs: m.tabs, ids: m.ids, origin: plan.origin });
-    }
-    return result;
-  }
-  let written = null;
-  let pushed = null;
-  const edit = async (childIds) => {
-    const m = materialize(plan.planned, childIds || {}, plan.ownedSpacers);
-    if (treeIds(m.tabs).duplicates.length) throw codeError('FORM_LAYOUT_DUPLICATE_ID');
-    written = m;
-    await sdk.updateElement(ARTIFACT, plan.formId, '/tabs', m.tabs);
-    await addHandlers(sdk, plan.formId, plan.addHandlers || []);
-    pushed = await pushChecked(sdk, ARTIFACT, plan.formId);
-    return pushed;
-  };
-  let out;
-  if (plan.freshKeys.length) {
-    out = await runManagedCreate(ctx, {
-      kind: KIND, key: plan.key,
-      identity: { table: plan.table, formType: plan.formType, name: plan.name, parentId: String(plan.formId) },
-      childKeys: plan.freshKeys,
-    }, async (ids) => edit(ids.childIds));
-  } else {
-    try {
-      const answer = await edit(null);
-      out = { status: answer.outcome === 'saved' ? 'created' : answer.outcome, code: answer.code, rules: answer.rules, childIds: {} };
-    } catch (err) {
-      // A local element edit threw: nothing was sent (the next run fetches with overwrite).
-      out = { status: 'refused', code: (err && err.code) || 'LOCAL_EDIT_FAILED' };
-    }
-  }
-  const complete = !!written && (!plan.freshKeys.length || plan.freshKeys.every((k) => normalizeGuid((out.childIds || {})[k])));
-  const pending = scopeOf(plan.key, plan.formId, plan.table);
-  const sent = !!pushed && pushed.outcome !== 'refused';
-  if (!settleWrite(result, plan.key, out, { complete, sent, pending })) return result;
-  result.pendingPublish.push(pending);
-  const proof = await proveStored(sdk, plan.formId, written, {
-    formType: plan.formType, table: plan.table, wantsTimeline: plan.wantsTimeline, hostTargets: plan.hostTargets, handlers: plan.handlers,
-    liveTabs: plan.liveTabs, mobileIds: plan.mobileIds, repairedIds: plan.repairedIds,
+// The expected children of a materialized tree: one per recorded locator, with its association hash ('fresh'
+// variant for a container this write adds, 'kept' for one that was there).
+function expectedChildrenOf(key, formId, m) {
+  const comp = compositeOf(m.tabs);
+  if (comp.duplicates.length) throw codeError('form-layout-duplicate-id', 'the planned form holds an id twice');
+  return Object.keys(m.ids).sort().map((locator) => {
+    const c = childOf(key, locator);
+    if (!c) throw codeError('create-identity-unsupported', `the form child "${locator}" has no stable identity`);
+    const id = idText(m.ids[locator]);
+    const variants = comp.at.get(id) || [];
+    const pick = CONTAINER_KINDS.has(c.childKind) && !m.fresh.has(locator) ? variants[1] : variants[0];
+    if (!pick) throw codeError('create-identity-unsupported', `the form child "${locator}" is not in the planned form`);
+    return { kind: c.childKind, key: `${key}#${locator}`, namespaceParentId: idText(formId), id, associationSha256: intentSha256(pick) };
   });
-  if (proof.refused) { result.refused.push(refusal(plan.key, ...proof.refused)); return result; }
-  if (proof.unknown) { result.unknown.push(refusal(plan.key, ...proof.unknown)); return result; }
-  result.saved.push({ key: plan.key, kind: KIND, id: plan.formId, ...(plan.continued ? { continued: true } : {}), ...(plan.freshKeys.length ? { childIds: out.childIds } : {}) });
-  bindAll(result, ctx, { key: plan.key, formId: plan.formId, tabs: proof.tabs, ids: proof.ids, origin: plan.origin, freshKeys: plan.freshKeys });
-  return result;
 }
 
-// The complete tree of a NEW declared form, every object marked with the child key its id is reserved
-// under. Sections of field cells only are packed again by slot (the compiler's width-only rows let a
-// cell after a middle row-spanning one run past the grid); any other section keeps its compiled rows.
-// Answers { tabs } or { refused: code }.
+// The complete tree of a NEW declared form, every object marked with its locator. Sections of field cells only
+// are packed again by slot (the compiler's width-only rows let a cell after a middle row-spanning one run past the
+// grid); any other section keeps its compiled rows, its cells named by what they hold. Answers { tabs } or
+// { refused: code }.
 function plannedCreateTabs(intentTabs) {
   const tabs = stripMarkers(clone(intentTabs || []));
   const keys = new Set();
@@ -1399,11 +1441,20 @@ function plannedCreateTabs(intentTabs) {
         }
         (section.rows || []).forEach((row, ri) => ((row && row.cells) || []).forEach((cell, ci) => {
           if (!cell) return;
-          const field = fieldOf(cell);
-          const at = field || `${sk}:${ri}:${ci}`;
           if (hostsTimeline && cell.control && cell.control.id === TIMELINE_CONTROL_ID) { mark(cell, 'cell:timeline'); return; }
+          const field = fieldOf(cell);
+          // A cell is named by what it holds; one that holds nothing is a spacer of its section at the slot it
+          // was created at. Any other control (a compiled host the declared path does not add itself) has no
+          // stable name and refuses.
+          let at = '';
+          if (field) at = field;
+          else if (!cell.control) { mark(cell, `spacer:${sk}:${ri}:${ci}`); return; }
+          else if (sameId(cell.control.classId, SUBGRID_CLASS_ID)) at = `subgrid:${lc(cell.control.parameters && cell.control.parameters.RelationshipName)}`;
+          else if (sameId(cell.control.classId, QUICK_VIEW_CLASS_ID)) at = `quickview:${lc(cell.control.fieldName)}`;
+          if (!at || /:$/.test(at)) { refused = 'create-identity-unsupported'; return; }
           mark(cell, `cell:${at}`);
-          if (cell.control) { delete cell.control.id; cell.control.__fresh = `control:${at}`; }
+          delete cell.control.id;
+          cell.control.__fresh = `control:${at}`;
         }));
       });
     }
@@ -1413,104 +1464,36 @@ function plannedCreateTabs(intentTabs) {
 }
 
 /**
- * Create a NEW declared form whole: the packed field layout, the timeline, the requested sub-grids and quick
- * views and the event handlers are built locally with every id supplied — the form's through the creation
- * port (kind 'form-layout'), each tab, section, cell and control as one of its child ids — and sent in ONE
- * push. A fresh read then proves the stored form before anything is bound; the scope is left in
- * `pendingPublish` for the coordinator's settlement.
- *   def     compileFormIntent(...) for the form (name, entityLogicalName, formType, status, description, tabs)
- *   events  the form's handlers ({ event, library, function }); default: the raw form's `events`
- *   beforePush(id)  optional: the coordinator's local edits of the new row that travel in the same push
- * An authoritative SDK-native match (port status 'matched', evidence 'sdk-adopted-exact') is never a
- * creation: with approved adoption and a full stored proof it is saved as `matched` and bound 'adopted';
- * without approval it refuses (the scope stays withheld).
+ * The planned tree of a NEW declared form: the packed field layout, the timeline, the requested sub-grids and
+ * quick views, every object marked with its locator. Pure. Answers { tabs, formType, handlers } or throws a coded
+ * refusal.
  */
-async function applyDeclaredFormCreate({ form, spec, def, sdk, hosts, events, beforePush }, ctx = {}) {
-  const result = emptyResult();
-  if (!isDeclaredForm(form)) return result;
-  const key = formLayoutKey(form);
-  const refuse = (code, message) => { result.refused.push(refusal(key, code, message)); return result; };
+function planCreate({ form, spec, def, hosts, events }) {
   const layout = declaredLayoutOf(form, def && def.tabs);
-  if (layout.duplicates.length) return refuse('form-layout-duplicate-field', `the spec places ${[...new Set(layout.duplicates)].join(', ')} more than once; a declared field has one place`);
-  if (await lookupBinding(ctx, KIND, key)) return refuse('form-layout-bound-row-missing', 'the form this key is bound to was not found; repair the binding explicitly before it can be recreated');
+  if (layout.duplicates.length) throw codeError('form-layout-duplicate-field', `the spec places ${[...new Set(layout.duplicates)].join(', ')} more than once; a declared field has one place`);
   const built = plannedCreateTabs(def && def.tabs);
-  if (built.refused) return refuse(built.refused, 'the declared layout does not fit its sections; nothing was created');
+  if (built.refused) throw codeError(built.refused, 'the declared layout of the new form cannot be built with a stable identity for every object; nothing was created');
   const tabs = built.tabs;
-  const wanted = wantsTimeline(spec, form);
-  if (wanted) {
+  if (wantsTimeline(spec, form)) {
     const code = ensureTimeline(tabs, null);
-    if (code || !timelinesOf(tabs).some((t) => !timelineProblem(t, { host: true }))) return refuse('form-timeline-unsupported-host', 'the new form\'s timeline would not render; nothing was created');
+    if (code || !timelinesOf(tabs).some((t) => !timelineProblem(t, { host: true }))) throw codeError('form-timeline-unsupported-host', 'the new form\'s timeline would not render; nothing was created');
   }
   let firstFields = null;
   eachSection(tabs, (s) => { if (!firstFields && s.__skey) firstFields = s; });
   const hostCode = addHosts(tabs, hosts, firstFields);
-  if (hostCode) return refuse(hostCode, 'a requested sub-grid or quick view cannot be added to the new form; nothing was created');
+  if (hostCode) throw codeError(hostCode, 'a requested sub-grid or quick view cannot be added to the new form; nothing was created');
   const formType = (def && def.formType) || formTypeOf(form);
   let geometry = '';
   eachSection(tabs, (s) => {
     const width = Number(s.columns) || 1;
     if (width > sectionGridWidth({ columns: 4 }, formType) || slotGrid(s.rows || [], width).overflow.length) geometry = 'form-layout-invalid';
   });
-  if (geometry) return refuse(geometry, 'a section of the new form does not fit its grid; nothing was created');
-  const handlers = requestedHandlers(events || (form && form.events));
-  const childKeys = freshKeys(tabs);
-  const table = tableOf(form) || lc(def && def.entityLogicalName);
-  let written = null;
-  let pushed = null;
-  const out = await runManagedCreate(ctx, { kind: KIND, key, identity: { table, formType, name: lc(def && def.name) }, childKeys }, async ({ id, childIds }) => {
-    const m = materialize(tabs, childIds || {});
-    if (treeIds(m.tabs).duplicates.length) throw codeError('FORM_LAYOUT_DUPLICATE_ID');
-    const art = await sdk.createArtifact(ARTIFACT, {
-      id, name: def.name, entityLogicalName: def.entityLogicalName, formType, status: def.status,
-      ...(def.description ? { description: def.description } : {}),
-    });
-    // The id is the form's identity for every later run; a store that minted its own would orphan it.
-    if (!art || !sameId(art.id, id)) throw codeError('CREATE_ID_NOT_KEPT');
-    const seed = (((await sdk.getArtifact(ARTIFACT, id)) || {}).tabs || []).length;
-    // In order: addElement appends, and tab order is the on-form order. The adapter's seed tab(s) go
-    // after, only once the declared tabs are in, so the form is never tab-less.
-    for (const tab of m.tabs) await sdk.addElement(ARTIFACT, id, '/tabs', tab);
-    if (m.tabs.length) for (let i = 0; i < seed; i += 1) await sdk.removeElement(ARTIFACT, id, '/tabs/0');
-    await addHandlers(sdk, id, handlers);
-    // The coordinator's own local edits of the new row that must travel in this push (e.g. the form's
-    // display order); it must not push or publish.
-    if (typeof beforePush === 'function') await beforePush(id);
-    written = m;
-    pushed = await pushChecked(sdk, ARTIFACT, id);
-    return pushed;
-  });
-  const formId = normalizeGuid(out.id) ? String(out.id) : '';
-  const complete = !!written && !!formId && childKeys.every((k) => normalizeGuid((out.childIds || {})[k]));
-  const pending = scopeOf(key, formId || out.id || '', table);
-  const sent = !!pushed && pushed.outcome !== 'refused';
-  const expect = { formType, table, wantsTimeline: wanted, hostTargets: hostTargetsOf(hosts), handlers };
-  if (out.status === 'matched' && complete) {
-    // The SDK answered an authoritative exact match for the row it was asked to create: the row is not this
-    // build's creation, so it is taken only as an approved adoption, and only once a fresh read proves it
-    // holds everything this create asked for. It is never counted as created.
-    result.pendingPublish.push(pending);
-    if (!isAuthorized(ctx.authorizedAdoption, key)) {
-      return refuse('form-layout-adoption-not-authorized', 'the service already held this form; approve adopting it, then run the build again');
-    }
-    const proof = await proveStored(sdk, formId, written, expect);
-    if (proof.refused) { result.refused.push(refusal(key, ...proof.refused)); return result; }
-    if (proof.unknown) { result.unknown.push(refusal(key, ...proof.unknown)); return result; }
-    result.saved.push({ key, kind: KIND, id: formId, matched: true, evidence: out.evidence, childIds: out.childIds });
-    bindAll(result, ctx, { key, formId, tabs: proof.tabs, ids: proof.ids, origin: 'adopted' });
-    return result;
-  }
-  if (!settleWrite(result, key, out, { complete, sent, pending })) return result;
-  result.pendingPublish.push(pending);
-  const proof = await proveStored(sdk, formId, written, expect);
-  if (proof.refused) { result.refused.push(refusal(key, ...proof.refused)); return result; }
-  if (proof.unknown) { result.unknown.push(refusal(key, ...proof.unknown)); return result; }
-  result.saved.push({ key, kind: KIND, id: formId, created: true, childIds: out.childIds });
-  bindAll(result, ctx, { key, formId, tabs: proof.tabs, ids: proof.ids, origin: 'created', freshKeys: childKeys });
-  return result;
+  if (geometry) throw codeError(geometry, 'a section of the new form does not fit its grid; nothing was created');
+  return { tabs, formType, handlers: requestedHandlers(events || (form && form.events)) };
 }
 
 /**
- * The requested hosts of a declared form, as planDeclaredFormLayout / applyDeclaredFormCreate take them.
+ * The requested hosts of a declared form, as reconcileDeclaredForm and planDeclaredFormLayout take them.
  *   specForm  the RAW spec form
  *   def       its compiled intent after sdk-build's forms phase set `def.__subgrids` (entries
  *             { targetEntity, relationshipName, viewId, label, placement?: { raw, resolved } })
@@ -1549,50 +1532,333 @@ function declaredHostsOf(specForm, def, { quickViewFormIdOf } = {}) {
   return { subgrids, quickViews };
 }
 
+// The build's halt factory when the caller passes none: a coded, never-retry error (what managedStop answers).
+const defaultHalt = (phase, label, code, { cause } = {}) => Object.assign(new Error(`${label} did not settle (${code})`), { code, phase, cause, retry: 'never' });
+
+const childrenStateOf = (children) => {
+  const out = {};
+  for (const c of children) out[c.key.slice(c.key.indexOf('#') + 1)] = { id: c.id, kind: c.kind, associationSha256: c.associationSha256 };
+  return out;
+};
+
+// Whether the last proof's children are exactly the children this plan relies on, each still standing where that
+// proof saw it. The association is compared against every variant the stored object may prove (a container the
+// build added is proved by its name and parent, a control sent without a class by its default one), so a form
+// created by the build and read back unchanged is a no-op rather than a re-baseline.
+function stillProven(children, lastChildren, tabs) {
+  if (children.length !== Object.keys(lastChildren).length) return false;
+  const comp = compositeOf(tabs);
+  return children.every((c) => {
+    const was = lastChildren[c.key.slice(c.key.indexOf('#') + 1)];
+    return !!was && was.kind === c.kind && sameId(was.id, c.id) && variantHashes(comp.at.get(idText(c.id))).includes(was.associationSha256);
+  });
+}
+
 /**
- * Reconcile ONE declared form end to end, in the order the design requires: the form's binding first,
- * then (only when nothing is bound) the coordinator's resolution, then plan and apply — or the whole
- * create. Never publishes and never settles.
- *   input  { form, spec, def, sdk, hosts, events, beforePush, resolveExisting }
- *          resolveExisting()  the coordinator's resolution of an unbound form, answering
- *            { id, continuation: true }  the row at the id the creation port derived for this key (its
- *                                        own earlier create, continued without an adoption; no
- *                                        2.21.0 port protects forms, so sdk-build never answers it), or
- *            '<id>' | { id }             the one form of this table, type and name (sdk-build
- *                                        resolveExistingFormId: edited only with the adoption approval), or
- *            undefined                   nothing there: the form is created.
- *          A throw (an ambiguous name) becomes the refusal form-layout-resolve-refused.
- * Answers the FeatureResult plus { formId, action }.
+ * Reconcile ONE declared form through the managed settlement (managed-feature-contract.js runManagedFeature):
+ * resolve, plan, persist the attempt and its expected proof, ONE push, a fresh read proved against that expected
+ * proof, solution membership, and one atomic commit of the whole group. A pending attempt found on disk is proved
+ * by its stored expected proof and committed, never sent again. Never publishes: the committed group records the
+ * publication it owes, and the caller pays it per table with publishDeclaredFormTable — after a no-op too.
+ *   input  { form (RAW spec form), spec, def (compileFormIntent's), sdk, hosts (declaredHostsOf), events,
+ *            beforePush(id) (optional local edits of a new row that travel in its push),
+ *            resolveExisting() (only for a form the store does not hold: '<id>' | { id } of the one form of this
+ *            table, type and name, else undefined; a throw is form-layout-resolve-refused) }
+ *   ctx    { store, barrier?, halt?, catalog (creates-catalog.js, with formCatalogIntent registered),
+ *            ensureMembership?({ root, records, recovering }), authorizedAdoption, authorizedOverwrite, phase? }
+ * Answers { key, formId, action: 'noop'|'noChange'|'update'|'create'|'recovered', group }. Every refusal, unknown
+ * outcome or failed proof throws the error the halt factory makes (the build stops; the form's table is withheld).
  */
 async function reconcileDeclaredForm(input, ctx = {}) {
   const { form, spec, def, sdk, hosts, events, beforePush, resolveExisting } = input || {};
   const key = formLayoutKey(form);
-  const binding = await lookupBinding(ctx, KIND, key);
-  let formId = binding && binding.id ? String(binding.id) : undefined;
-  let continuation = false;
-  if (!formId && typeof resolveExisting === 'function') {
-    try {
-      const found = await resolveExisting();
-      if (found && typeof found === 'object') {
-        formId = found.id ? String(found.id) : undefined;
-        continuation = !!formId && found.continuation === true;
-      } else {
-        formId = found ? String(found) : undefined;
+  const table = tableOf(form) || lc(def && def.entityLogicalName);
+  const scope = { type: 'table', table };
+  const halt = typeof ctx.halt === 'function' ? ctx.halt : defaultHalt;
+  const phase = ctx.phase || 'forms';
+  const label = `declared form "${key}"`;
+  if (!isDeclaredForm(form)) return { key, formId: null, action: null, group: null };
+  const { store, catalog } = ctx;
+  if (!store || typeof store.readGroup !== 'function') {
+    throw halt(phase, label, 'managed-binding-port-unavailable', { cause: codeError('managed-binding-port-unavailable', 'a declared form settles only through the managed binding store') });
+  }
+  const envelope = store.snapshot().envelope;
+  const recordOf = (fields) => ({ formatVersion: 1, appUniqueName: envelope.appUniqueName, environmentFingerprint: envelope.environmentFingerprint, ...fields });
+  const declaration = declarationOf(form);
+  const declarationSha256 = intentSha256(declaration);
+  const ensureMembership = typeof ctx.ensureMembership === 'function' ? ctx.ensureMembership : async () => undefined;
+  const state = { formId: null, action: null };
+  const { committed: knownCommitted, pending: knownPending } = store.readGroup(FAMILY, key);
+  const knownId = idText((knownCommitted && knownCommitted.root.id) || (knownPending && knownPending.root.id));
+
+  const resolve = async ({ committed, pending }) => {
+    if (form.prune === true) throw codeError('form-layout-prune-unsupported', 'a declared form does not delete what the spec omits; remove "prune"');
+    if (Array.isArray(form.genPages) && form.genPages.length) throw codeError('form-page-embeds-incomplete', 'generative pages embedded in a declared form are not supported yet; remove "genPages" or the declared mode');
+    const layout = declaredLayoutOf(form, def && def.tabs);
+    if (layout.duplicates.length) throw codeError('form-layout-duplicate-field', `the spec places ${[...new Set(layout.duplicates)].join(', ')} more than once; a declared field has one place`);
+    let formId = idText((committed && committed.root.id) || (pending && pending.root.id));
+    let create = false;
+    if (!formId && typeof resolveExisting === 'function') {
+      let found;
+      try { found = await resolveExisting(); } catch (err) {
+        throw codeError('form-layout-resolve-refused', (err && err.message) || String(err));
       }
-    } catch (err) {
-      const result = emptyResult();
-      result.refused.push(refusal(key, 'form-layout-resolve-refused', (err && err.message) || String(err)));
-      return { ...result, formId: null, action: null };
+      formId = idText(found && typeof found === 'object' ? found.id : found);
     }
+    if (!formId) {
+      if (!catalog || typeof catalog.identityFor !== 'function') throw codeError('create-identity-unsupported', 'a new declared form takes its id from the creation catalog, and none was given');
+      formId = idText(catalog.identityFor(FAMILY, key).id);
+      create = true;
+    }
+    state.formId = formId;
+    if (pending && !pending.expected && !committed) {
+      // A prepared attempt that was never sent: whether its row exists is read, never assumed.
+      const probe = await readForm(sdk, formId);
+      if (!probe) throw codeError('form-unreadable', 'the form could not be read');
+      create = !!probe.missing;
+    }
+    if (create) return { formId, create: true };
+    if (await hasUnsyncedEdits(sdk, ARTIFACT, formId)) {
+      throw codeError('create-completion-required', 'the local copy of this form holds edits the service has not seen; refresh it before the layout is written');
+    }
+    const live = await readForm(sdk, formId);
+    if (live && live.missing) {
+      throw codeError(committed ? 'form-layout-bound-row-missing' : 'form-unreadable', committed
+        ? 'the form this key is bound to was not found; repair the binding explicitly before it can be recreated'
+        : 'the form could not be read');
+    }
+    if (!live) throw codeError('form-unreadable', 'the form could not be read');
+    // Both layers must be readable before anything is written: a publication this write will owe can be judged
+    // only against a published layer that can be read (a failed read is managed-publication-unverified).
+    await readSystemFormPublication(sdk.dataverse, formId);
+    return { formId, create: false, live };
+  };
+
+  const plan = async ({ resolution, committed }) => {
+    const { formId } = resolution;
+    const root = { kind: FAMILY, key, id: formId };
+    const baseProofSha256 = committed ? intentSha256(committed.proof) : null;
+    const publication = { scope, state: 'owed' };
+    if (resolution.create) {
+      const pc = planCreate({ form, spec, def, hosts, events });
+      const keys = freshKeys(pc.tabs);
+      const childIds = reserveChildIds(catalog, key, formId, keys);
+      const m = materialize(pc.tabs, childIds);
+      if (keys.some((k) => !m.ids[k])) throw codeError('create-identity-unsupported', 'the creation catalog did not name every object of the new form');
+      const children = expectedChildrenOf(key, formId, m);
+      const planned = { formType: pc.formType, entityLogicalName: (def && def.entityLogicalName) || table, tabs: m.tabs, bag: withHandlers({ a: [], c: [] }, pc.handlers) };
+      state.action = 'create';
+      return {
+        root, declarationSha256, publication, create: true, m, handlers: pc.handlers, formType: pc.formType,
+        expected: {
+          proofVersion: 1, proofSchema: PROOF_SCHEMA, rootId: formId, baseProofSha256,
+          sentProjectionSha256: intentSha256(projectFormComposite(planned)),
+          preservationSha256: intentSha256(preservationOf(planned, children, { update: false })),
+          baseObservation: null, children,
+        },
+      };
+    }
+    const { live } = resolution;
+    const recorded = recordedLocators(committed, key);
+    const baseline = committed ? (committed.records.find((r) => r.kind === FAMILY && r.key === key) || null) : null;
+    const p = planDeclaredFormLayout({ form, spec, formId, live, intentTabs: def && def.tabs, hosts, events }, {
+      baseline, recorded, children: (committed && committed.consumerState && committed.consumerState.children) || {},
+      authorizedAdoption: ctx.authorizedAdoption, authorizedOverwrite: ctx.authorizedOverwrite,
+    });
+    const stopOn = p.refused[0] || p.unknown[0];
+    if (stopOn) throw codeError(stopOn.code, stopOn.message);
+    if (p.action === 'noChange' && !committed && !p.bindUnchanged) { state.action = 'noop'; return { noop: true }; }
+    const fresh = p.freshKeys || [];
+    const m = materialize(p.planned, reserveChildIds(catalog, key, formId, fresh));
+    if (fresh.some((k) => !m.ids[k])) throw codeError('create-identity-unsupported', 'the creation catalog did not name every object this write adds');
+    const children = expectedChildrenOf(key, formId, m);
+    const planned = { formType: live.formType, entityLogicalName: live.entityLogicalName, tabs: m.tabs, bag: withHandlers(live.bag, p.addHandlers || []) };
+    // Nothing the spec does not own may change: the planned tree must keep every foreign cell, row payload, tab,
+    // section and root bag entry exactly as the live form holds them (the declared fields this plan moves, the
+    // helper spacers it recycles or drops, and a timeline host it repairs are the build's).
+    const movable = [...children, ...[...p.mobileIds, ...p.repairedIds].map((id) => ({ kind: 'formCell', id }))];
+    if (intentSha256(preservationOf(live, movable, { update: true })) !== intentSha256(preservationOf(planned, movable, { update: true }))) {
+      throw codeError('form-layout-obstacle-moved', 'the planned layout would change a control, row or container the spec does not own; nothing was written');
+    }
+    const savedSha256 = savedShaOf(live);
+    if (p.action === 'noChange' && committed && committed.proof && committed.proof.savedSha256 === savedSha256
+      && stillProven(children, (committed.consumerState && committed.consumerState.children) || {}, live.tabs)
+      && intentSha256(committed.consumerState ? committed.consumerState.declaration : null) === declarationSha256) {
+      state.action = 'noop';
+      return { noop: true };
+    }
+    state.action = p.action;
+    return {
+      root, declarationSha256, publication: p.action === 'update' ? publication : null, update: p.action === 'update', m, addHandlers: p.addHandlers || [],
+      expected: {
+        proofVersion: 1, proofSchema: PROOF_SCHEMA, rootId: formId, baseProofSha256,
+        sentProjectionSha256: intentSha256(projectFormComposite(planned)),
+        preservationSha256: intentSha256(preservationOf(planned, children, { update: true })),
+        baseObservation: { rowVersion: null, savedSha256 }, children,
+      },
+    };
+  };
+
+  const apply = async ({ plan: p }) => {
+    const formId = p.root.id;
+    let pushed;
+    if (p.create) {
+      const art = await sdk.createArtifact(ARTIFACT, {
+        id: formId, name: def.name, entityLogicalName: def.entityLogicalName, formType: p.formType, status: def.status,
+        ...(def.description ? { description: def.description } : {}),
+      });
+      // The id is the form's identity for every later run; a store that minted its own would orphan it.
+      if (!art || !sameId(art.id, formId)) throw codeError('form-layout-write-unknown', 'the new form did not keep the id it was created with');
+      const seed = (((await sdk.getArtifact(ARTIFACT, formId)) || {}).tabs || []).length;
+      // In order: addElement appends, and tab order is the on-form order. The adapter's seed tab(s) go after, only
+      // once the declared tabs are in, so the form is never tab-less.
+      for (const tab of p.m.tabs) await sdk.addElement(ARTIFACT, formId, '/tabs', tab);
+      if (p.m.tabs.length) for (let i = 0; i < seed; i += 1) await sdk.removeElement(ARTIFACT, formId, '/tabs/0');
+      await addHandlers(sdk, formId, p.handlers);
+      if (typeof beforePush === 'function') await beforePush(formId);
+      pushed = await pushChecked(sdk, ARTIFACT, formId);
+    } else if (p.update) {
+      await sdk.updateElement(ARTIFACT, formId, '/tabs', p.m.tabs);
+      await addHandlers(sdk, formId, p.addHandlers);
+      pushed = await pushChecked(sdk, ARTIFACT, formId);
+    } else {
+      // A bind-only attempt (an unchanged form whose group is recorded or re-baselined): nothing is sent.
+      return { sent: false, acknowledged: false };
+    }
+    if (pushed.outcome === 'refused') throw codeError('form-layout-rejected', `the form was not saved (${pushed.code || 'refused'})`);
+    if (pushed.outcome !== 'saved') throw codeError('form-layout-write-unknown', 'the form write did not settle; the next run proves it from a fresh read before anything else');
+    return { sent: true, acknowledged: true };
+  };
+
+  const prove = async ({ token, expected, applied, recovering }) => {
+    const formId = expected.rootId;
+    const back = await readForm(sdk, formId);
+    if (!back || back.missing) throw codeError(back && back.missing ? 'create-completion-required' : 'form-layout-unverified', 'the form could not be read back after the write');
+    if ((back.formType && formTypeCode(back.formType) !== formTypeCode(formTypeOf(form))) || (back.entityLogicalName && table && lc(back.entityLogicalName) !== table)) {
+      throw codeError('form-layout-identity-mismatch', 'the stored form is not of the type and table the spec declares');
+    }
+    proveFormComposite(back, expected);
+    const layers = await readSystemFormPublication(sdk.dataverse, formId);
+    const { committed, pending } = store.readGroup(FAMILY, key);
+    const differs = layers.state !== 'equal';
+    let publication;
+    if (differs && ((applied && applied.sent) || recovering)) {
+      publication = { scope, state: 'owed', desiredSha256: layerHash(layers.saved), dispatchToken: null };
+    } else if (differs && committed && committed.publication && committed.publication.state === 'owed') {
+      // Debt this group already owed stays owed for exactly what it owed: if the saved layer has moved on since,
+      // the publish refuses it (the saved layer is not ours to put live).
+      publication = { ...committed.publication, dispatchToken: null };
+    } else {
+      publication = { scope, state: 'not-needed', desiredSha256: null, dispatchToken: null };
+    }
+    const acknowledged = recovering
+      ? !!(pending && pending.token === token && (pending.acknowledgedRoot || (pending.savedObservation && pending.savedObservation.acknowledgedRoot)))
+      : !!(applied && applied.acknowledged);
+    const derived = (() => {
+      if (!catalog || typeof catalog.reserveChildren !== 'function') return { rootId: '', ids: {} };
+      try {
+        const rootId = idText(catalog.identityFor(FAMILY, key).id);
+        const locators = expected.children.map((c) => c.key.slice(key.length + 1));
+        return { rootId, ids: reserveChildIds(catalog, key, formId, locators) };
+      } catch {
+        return { rootId: '', ids: {} };
+      }
+    })();
+    const old = new Map(((committed && committed.records) || []).map((r) => [`${r.kind}\u0000${r.key}`, r]));
+    const originOf = (kind, recKey, id, derivedId) => {
+      const was = old.get(`${kind}\u0000${recKey}`);
+      if (was) return was.origin;
+      return acknowledged && derivedId && sameId(derivedId, id) ? 'created' : 'adopted';
+    };
+    const base = projectionBaseline(formProjection(back.tabs));
+    const partsSha256 = { ...base.partsSha256, 'spec:fieldOptions': intentSha256(form.fieldOptions === undefined ? null : form.fieldOptions) };
+    const records = [
+      recordOf({ kind: FAMILY, key, id: formId, intentSha256: base.intentSha256, partsSha256, origin: originOf(FAMILY, key, formId, derived.rootId) }),
+      ...expected.children.map((c) => recordOf({
+        kind: c.kind, key: c.key, id: c.id, intentSha256: c.associationSha256, parentKey: key,
+        origin: originOf(c.kind, c.key, c.id, derived.ids[c.key.slice(key.length + 1)]),
+      })),
+    ];
+    const attemptDeclaration = pending && pending.token === token ? pending.declarationSha256 : declarationSha256;
+    const proof = {
+      savedSha256: savedShaOf(back),
+      semanticSha256: intentSha256(projectFormComposite(back)),
+      preservationSha256: expected.preservationSha256,
+      expectedChildrenSha256: expected.children.length ? intentSha256(expected.children) : null,
+    };
+    return {
+      savedProof: proof, acknowledgedRoot: acknowledged, records, proof, proofSchema: PROOF_SCHEMA, publication,
+      consumerState: {
+        // The declaration is recorded only when it is the one this attempt was planned from: a recovery under a spec
+        // that has changed since keeps no declaration, so verify and download never restore one that was not proved.
+        declaration: attemptDeclaration === declarationSha256 ? declaration : null,
+        children: childrenStateOf(expected.children),
+        proofSchema: PROOF_SCHEMA,
+      },
+    };
+  };
+
+  const { result, committedGroup } = await runManagedFeature({
+    phase, family: FAMILY, key, label, knownScopes: [scope], knownIds: knownId ? [knownId] : [],
+    store, barrier: ctx.barrier, halt, resolve, plan, apply, prove, ensureMembership,
+  });
+  const formId = state.formId || (committedGroup && committedGroup.root.id) || null;
+  const action = result.recovered ? 'recovered' : (state.action || (result.noop ? 'noop' : null));
+  return { key, formId, action, group: committedGroup || null };
+}
+
+/**
+ * The saved and published layers of a committed FORM group, hashed the way its publication debt is
+ * ({ name, description, formxml } of each systemform layer). The one layer reader this helper owns: it is asked only
+ * for the form family, and a group of any other family throws, so a scope that holds one fails closed until that
+ * family's own reader is supplied.
+ */
+function formLayersReader(sdk) {
+  return async (group) => {
+    if (!group || group.family !== FAMILY) throw codeError(PUBLICATION_UNVERIFIED_CODE, `no layer reader for managed ${group && group.family} "${group && group.key}"`);
+    const r = await readSystemFormPublication(sdk.dataverse, group.root.id);
+    return { savedSha256: layerHash(r.saved), publishedSha256: r.published ? layerHash(r.published) : NEVER_PUBLISHED };
+  };
+}
+
+const PUBLICATION_UNVERIFIED_CODE = 'managed-publication-unverified';
+
+/**
+ * Pay the publication the committed declared forms of ONE table owe, at most once, through the shared managed
+ * publication (managed-feature-contract.js publishManagedScope) — the only way this helper publishes. Call it once
+ * per table after its forms settled, a no-op included (a retry that changes nothing still owes what an earlier run
+ * saved and did not publish).
+ *   { store, barrier, sdk, table, keys }  keys: the form keys this run settled on the table; every committed form
+ *   group whose debt names the table is covered with them (a table publish ships all of them at once).
+ * The request is one plain PublishXml naming only the table. Answers { sent, withheld, confirmed }. A withheld scope
+ * answers { sent: false, withheld: true }. Any other outcome is a hold: the scope is blocked for the run and the error
+ * is rethrown with `hold: true` (and `refusal: true` when the send boundary refused the request unsent).
+ */
+async function publishDeclaredFormTable({ store, barrier, sdk, table, keys = [] } = {}) {
+  const t = lc(table);
+  const scope = { type: 'table', table: t };
+  const gate = barrier || store;
+  const groups = [];
+  const seen = new Set();
+  const add = (key) => { if (!seen.has(key)) { seen.add(key); groups.push({ family: FAMILY, key }); } };
+  for (const key of keys) add(key);
+  for (const unit of store.snapshot().units()) {
+    const pub = unit.family === FAMILY && unit.group && unit.group.publication;
+    if (pub && pub.scope && pub.scope.type === 'table' && lc(pub.scope.table) === t) add(unit.key);
   }
-  const plan = await planDeclaredFormLayout({ form, spec, formId, intentTabs: def && def.tabs, sdk, hosts, events, continuation }, ctx);
-  if (plan.action === 'create' && !plan.refused.length && !plan.unknown.length) {
-    const r = await applyDeclaredFormCreate({ form, spec, def, sdk, hosts, events, beforePush }, ctx);
-    const made = r.saved.find((s) => s.key === key);
-    return { ...r, formId: made ? made.id : null, action: 'create' };
+  try {
+    return await publishManagedScope({
+      store, barrier, scope, groups, path: `declared forms of ${t}`, readLayers: formLayersReader(sdk),
+      publish: async () => {
+        const r = await publishTablesXml(sdk.dataverse, [t]);
+        if (!r.ok) throw codeError('form-publish-failed', r.reason || `the table ${t} was not published`);
+      },
+    });
+  } catch (err) {
+    const code = (err && err.code) || 'managed-not-settled';
+    try { if (gate && typeof gate.blockScope === 'function') gate.blockScope(scope, `declared forms of ${t} (${code})`); } catch { /* the rethrow below still stops */ }
+    throw Object.assign(err instanceof Error ? err : new Error(String(err)), { code, hold: true, ...(code === 'managed-publication-refused' ? { refusal: true } : {}) });
   }
-  const r = await applyDeclaredFormLayout(plan, { sdk }, ctx);
-  return { ...r, formId: plan.formId, action: plan.action };
 }
 
 /**
@@ -1602,15 +1868,15 @@ async function reconcileDeclaredForm(input, ctx = {}) {
  * section, in the declared reading order, with its stated spans and explicit flags; a requested timeline
  * that renders; each requested sub-grid / quick view target; each requested handler. Anything the spec
  * omits is unconstrained. Answers [{ code, message }] (empty when the form is as declared).
- *   input  { form, spec, intentTabs, hosts, events, liveForm, manifest }
- *          manifest  optional: this form's formManifestEntry from the last settled build. With it the
- *                    stored form must also be that id (form-identity), keep every bound child as the
- *                    kind and field it was bound as (form-managed-child), and hold the entry's host
- *                    targets and handlers. Without it nothing beyond the spec is asked.
+ *   input  { form, spec, intentTabs, hosts, events, liveForm, group }
+ *          group  optional: this form's committed managed group (store.readGroup('form', key).committed, or the
+ *                 `group` of a snapshot unit). With it the stored form must also be that id (form-identity) and
+ *                 hold every child of the group's last proof as what and where it was proved — a sub-grid or
+ *                 quick view still showing its target, a field cell in its section and slot (form-managed-child).
  * A sub-grid host whose viewId is '' (verify cannot resolve the build's created views) matches any
  * stored sub-grid of the same relationship and child table.
  */
-function verifyDeclaredForm({ form, spec, intentTabs, hosts, events, liveForm, manifest } = {}) {
+function verifyDeclaredForm({ form, spec, intentTabs, hosts, events, liveForm, group } = {}) {
   const issues = [];
   const issue = (code, message) => issues.push({ code, message });
   if (!isDeclaredForm(form)) return issues;
@@ -1620,8 +1886,8 @@ function verifyDeclaredForm({ form, spec, intentTabs, hosts, events, liveForm, m
     issue('form-identity', `the form is a ${liveForm.formType} form of '${liveForm.entityLogicalName}', not the declared ${formTypeOf(form)} form of '${tableOf(form)}'`);
     return issues;
   }
-  if (manifest && liveForm.id && !sameId(liveForm.id, manifest.id)) {
-    issue('form-identity', `the form read is ${liveForm.id}, not ${manifest.id}, the form this build bound`);
+  if (group && liveForm.id && !sameId(liveForm.id, group.root && group.root.id)) {
+    issue('form-identity', `the form read is ${liveForm.id}, not ${group.root && group.root.id}, the form this build bound`);
     return issues;
   }
   const tabs = liveForm.tabs;
@@ -1668,124 +1934,76 @@ function verifyDeclaredForm({ form, spec, intentTabs, hosts, events, liveForm, m
     }
   }
   if (wantsTimeline(spec, form) && !timelinesOf(tabs).some((t) => !timelineProblem(t, { host: false }))) issue('form-timeline', 'the form has no timeline that renders');
-  const shown = new Set();
-  eachCell(tabs, (cell) => { const t = hostTarget(cell.control); if (t) shown.add(t); });
-  // A sub-grid whose view the reader could not resolve (viewId '') is matched on its relationship and target;
-  // the manifest's targets (the ones this build stored) are matched exactly.
+  const shown = new Set(hostTargetsShown(tabs));
+  // A sub-grid whose view the reader could not resolve (viewId '') is matched on its relationship and target.
   const isShown = (t) => shown.has(t) || (/^subgrid\|[^|]*\|[^|]*\|$/.test(t) && [...shown].some((s) => s.startsWith(t)));
-  const wantedTargets = [...new Set([...hostTargetsOf(hosts), ...((manifest && manifest.hosts) || [])])];
-  for (const t of wantedTargets) if (!isShown(t)) issue('form-host', `the form does not show ${t.replace(/\|+$/, '').replace(/\|/g, ' ')}`);
+  for (const t of hostTargetsOf(hosts)) if (!isShown(t)) issue('form-host', `the form does not show ${t.replace(/\|+$/, '').replace(/\|/g, ' ')}`);
   const have = handlerKeysOf(liveForm);
-  const wantedHandlers = requestedHandlers(events || form.events);
-  for (const ev of wantedHandlers) if (!have.has(handlerKey(ev))) issue('form-event', `the ${ev.event} handler ${ev.function} (${ev.library})${ev.event === 'onchange' && ev.attribute ? ` for ${ev.attribute}` : ''} is missing`);
-  const asked = new Set(wantedHandlers.map(handlerKey));
-  for (const k of (manifest && manifest.handlers) || []) if (!asked.has(k) && !have.has(k)) issue('form-event', `the handler ${k.split('|').filter(Boolean).join(' ')} this build stored is missing`);
-  if (manifest) for (const problem of managedChildProblems(manifest.children, liveForm.tabs)) issue('form-managed-child', problem);
+  for (const ev of requestedHandlers(events || form.events)) if (!have.has(handlerKey(ev))) issue('form-event', `the ${ev.event} handler ${ev.function} (${ev.library})${ev.event === 'onchange' && ev.attribute ? ` for ${ev.attribute}` : ''} is missing`);
+  if (group) for (const problem of managedChildProblems(group, liveForm.tabs)) issue('form-managed-child', problem);
   return issues;
 }
 
-// What each managed child key says its object is: `tab:<name>` a tab, `section:<tab>/<section>` a section,
-// `cell:<field>` / `control:<field>` the cell / control of that field, `spacer:...` a spacer cell, and the
-// host and timeline keys (`cell:subgrid:<rel>`, `control:quickview:<lookup>`, `cell:timeline`) a cell or
-// control whose field is not the key's.
-function childKind(childKey) {
-  const [head, ...rest] = String(childKey).split(':');
-  const type = head === 'spacer' ? 'cell' : head;
-  const field = (head === 'cell' || head === 'control') && rest.length === 1 && rest[0] !== 'timeline' ? lc(rest[0]) : undefined;
-  return { type, field, spacer: head === 'spacer' };
-}
-
-// The managed children (manifest `children`, { childKey: id }) the stored form does not hold as what their
-// key says: gone, held twice, or now another kind of object or bound to another field.
-function managedChildProblems(children, tabs) {
-  const at = structureOf(tabs);
+// The children of a committed group's last proof the stored form does not hold as what and where they were proved:
+// gone, or now associated otherwise (another field, section, slot, target or class). `group.consumerState.children`
+// lists exactly the children of that proof ({ locator: { id, kind, associationSha256 } }); a record the group keeps
+// from an older proof (a helper spacer a later pack dropped) is not one of them.
+function managedChildProblems(group, tabs) {
+  const children = group && group.consumerState && group.consumerState.children;
+  if (!children || typeof children !== 'object') return ['the managed group carries no child state to check'];
+  const comp = compositeOf(tabs);
   const out = [];
-  for (const childKey of Object.keys(children || {}).sort()) {
-    const id = idText(children[childKey]);
-    const placed = at[id];
-    if (placed === undefined) { out.push(`the ${childKey} this build bound (${children[childKey]}) is not on the form`); continue; }
-    if (placed.includes('\n')) { out.push(`the ${childKey} this build bound (${children[childKey]}) is on the form more than once`); continue; }
-    const got = JSON.parse(placed);
-    const want = childKind(childKey);
-    if (got.type !== want.type || (want.field !== undefined && got.field !== want.field) || (want.spacer && got.field !== null)) {
-      out.push(`the ${childKey} this build bound (${children[childKey]}) is now a ${got.type}${got.field ? ` of '${got.field}'` : ''}`);
-    }
+  for (const locator of Object.keys(children).sort()) {
+    const c = children[locator];
+    const variants = comp.at.get(idText(c.id));
+    if (comp.duplicates.includes(idText(c.id))) out.push(`the ${locator} this build bound (${c.id}) is on the form more than once`);
+    else if (!variants) out.push(`the ${locator} this build bound (${c.id}) is not on the form`);
+    else if (!variantHashes(variants).includes(c.associationSha256)) out.push(`the ${locator} this build bound (${c.id}) is now another object or stands somewhere else`);
   }
   return out;
 }
 
-// The raw spec keys of a declared form the manifest keeps so an explicit download can restore it: what the
-// spec declared, never the stored form's content (no bags, maker controls or labels the spec omits).
-const DECLARED_FORM_KEYS = ['entity', 'name', 'formType', 'reconcile', 'layout', 'prune', 'notes', 'tabs', 'subgrids', 'quickViews', 'events'];
-const declaredSpecOf = (form) => {
-  const out = {};
-  for (const k of DECLARED_FORM_KEYS) if (form && form[k] !== undefined) out[k] = clone(form[k]);
-  return out;
-};
-
 /**
- * The shared artifact manifest's entry for ONE declared form whose result settled cleanly (design §9.3:
- * canonical declarations, ids and hashes only). null for anything that did not settle or was not bound
- * (an unmanaged no-change), so failed work contributes no applied declaration.
- *   input  { form (RAW spec form), result (reconcileDeclaredForm's), hosts, events }
- * Answers { kind, key, id, formType, table, intentSha256, partsSha256, children: { childKey: id },
- *           hosts: [target], handlers: [handler key], declared: { raw spec keys } }.
+ * Explicit download (hydrate-spec): the declared form a committed managed group restores for the downloaded form,
+ * only when the group is this form's (same id, type and table), every child of its last proof is still what and where
+ * it was proved, and the form still shows exactly what that proof saw — its layout, every handler, every sub-grid and
+ * quick view target and its timeline (the semantic hash). Answers { form } (the declared raw form to put in the spec,
+ * `fieldOptions` included as written) or { stale: reason } (hydrate the form as today and report it unverified).
+ *   group  store.readGroup('form', key).committed, or the `group` of a snapshot unit
  */
-function formManifestEntry({ form, result, hosts, events } = {}) {
-  if (!isDeclaredForm(form) || !result || (result.refused || []).length || (result.unknown || []).length) return null;
-  const key = formLayoutKey(form);
-  const bindings = result.managedBindings || [];
-  const root = bindings.find((b) => b && b.kind === KIND && b.key === key);
-  if (!root || !root.id) return null;
-  const children = {};
-  for (const b of bindings) if (b && b.kind === CHILD_KIND && String(b.key).startsWith(`${key}#`)) children[String(b.key).slice(key.length + 1)] = String(b.id);
-  return {
-    kind: KIND, key, id: String(root.id), formType: formTypeOf(form), table: tableOf(form),
-    intentSha256: root.intentSha256, partsSha256: root.partsSha256, children,
-    hosts: hostTargetsOf(hosts).sort(),
-    handlers: [...new Set(requestedHandlers(events || (form && form.events)).map(handlerKey))].sort(),
-    declared: declaredSpecOf(form),
-  };
-}
-
-/**
- * Explicit download (hydrate-spec): the declared form a manifest entry restores for the downloaded form, only
- * when the entry is this form's (same id, type and table), every managed child is still what it was bound
- * as, and the stored layout projection is the one the build recorded. Answers { form } (the declared raw
- * form to put in the spec) or { stale: reason } (hydrate the form as today and report it unverified).
- *   input  entry (formManifestEntry's), { formId, liveForm (the SDK form: formType, entityLogicalName, tabs) }
- */
-function hydrateDeclaredForm(entry, { formId, liveForm } = {}) {
-  if (!entry || entry.kind !== KIND || !entry.id || !entry.partsSha256 || !entry.declared || !isDeclaredForm(entry.declared)) return { stale: 'the manifest entry is not a declared form entry' };
-  if (!sameId(entry.id, formId)) return { stale: `the manifest names form ${entry.id}, not ${formId}` };
+function hydrateDeclaredForm(group, { formId, liveForm } = {}) {
+  const declared = group && group.consumerState && group.consumerState.declaration;
+  if (!group || group.family !== FAMILY || !group.root || !group.proof || !declared || !isDeclaredForm(declared)) return { stale: 'the managed group holds no proved declared form' };
+  if (!sameId(group.root.id, formId)) return { stale: `the managed group names form ${group.root.id}, not ${formId}` };
   if (!liveForm || !Array.isArray(liveForm.tabs)) return { stale: 'the form could not be read' };
-  if ((liveForm.formType && formTypeCode(liveForm.formType) !== formTypeCode(entry.formType)) || (liveForm.entityLogicalName && lc(liveForm.entityLogicalName) !== lc(entry.table))) {
-    return { stale: `the form is a ${liveForm.formType} form of '${liveForm.entityLogicalName}', not the ${entry.formType} form of '${entry.table}' the manifest names` };
+  if ((liveForm.formType && formTypeCode(liveForm.formType) !== formTypeCode(formTypeOf(declared))) || (liveForm.entityLogicalName && lc(liveForm.entityLogicalName) !== tableOf(declared))) {
+    return { stale: `the form is a ${liveForm.formType} form of '${liveForm.entityLogicalName}', not the ${formTypeOf(declared)} form of '${tableOf(declared)}' the managed group names` };
   }
-  const moved = managedChildProblems(entry.children, liveForm.tabs);
+  const moved = managedChildProblems(group, liveForm.tabs);
   if (moved.length) return { stale: moved[0] };
-  if (canonicalJson(projectionBaseline(formProjection(liveForm.tabs)).partsSha256) !== canonicalJson(entry.partsSha256)) {
-    return { stale: 'the form\'s layout changed after the build that wrote the manifest' };
+  if (intentSha256(projectFormComposite(liveForm)) !== group.proof.semanticSha256) {
+    return { stale: 'the form\'s layout, handlers, sub-grids, quick views or timeline changed after the build that proved it' };
   }
-  return { form: clone(entry.declared) };
+  return { form: clone(declared) };
 }
 
 module.exports = {
-  KIND,
-  CHILD_KIND,
+  FAMILY,
+  PROOF_SCHEMA,
   isDeclaredForm,
   formLayoutKey,
+  formCatalogIntent,
   declaredOptions,
   declaredLayoutOf,
   packDeclaredLayout,
   declaredSlotRows,
   formProjection,
+  projectFormComposite,
+  proveFormComposite,
   planDeclaredFormLayout,
-  applyDeclaredFormLayout,
-  applyDeclaredFormCreate,
   declaredHostsOf,
   reconcileDeclaredForm,
+  publishDeclaredFormTable,
   verifyDeclaredForm,
-  formManifestEntry,
   hydrateDeclaredForm,
 };
