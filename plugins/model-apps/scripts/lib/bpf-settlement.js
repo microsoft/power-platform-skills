@@ -777,7 +777,7 @@ async function settleDeclaredBpf(input) {
         throw coded(CODES.adoptionRequired, `${label}: the workflow ${id} carries what this build sent, but no answer acknowledged its create, so it is not known `
           + `to be this build's; it is neither activated nor bound without the adoption approval adopt:bpf:${key}. The attempt is kept`);
       }
-      await driveState(token, id, ACTIVE, null, { conditional: false });
+      await driveState(token, id, ACTIVE, null, { conditional: false, observed: live.view.status });
     }
     return { acknowledged };
   }
@@ -786,7 +786,7 @@ async function settleDeclaredBpf(input) {
   async function driveEdit(token, id, planned) {
     const base = planned.live;
     const baseSemantic = intentSha256(base.view.projection);
-    if (base.view.status === ACTIVE) await driveState(token, id, DRAFT, base.version, { conditional: true });
+    if (base.view.status === ACTIVE) await driveState(token, id, DRAFT, base.version, { conditional: true, observed: base.view.status });
     // Read again whatever the state: the copy staged while planning is replaced by the row as it is now, so no local
     // edit is ever applied twice, and the body write carries the version of THIS read.
     const live = await readLive(id);
@@ -813,7 +813,7 @@ async function settleDeclaredBpf(input) {
       throw coded(failure ? CODES.pending : 'create-completion-required', `${label}: the edit is not proved by a fresh read; it is not sent again`, { cause: failure });
     }
     store.confirmEffect(body.token, { observedSha256: body.desiredSha256 });
-    if (staged.desiredStatus === ACTIVE && after.view.status !== ACTIVE) await driveState(token, id, ACTIVE, after.version, { conditional: true });
+    if (staged.desiredStatus === ACTIVE && after.view.status !== ACTIVE) await driveState(token, id, ACTIVE, after.version, { conditional: true, observed: after.view.status });
   }
 
   async function finalProof(id, expected, map, origin, acknowledged) {
@@ -953,7 +953,7 @@ async function settleDeclaredBpf(input) {
     if (planned.mode === 'adopt') return { mode: 'adopt', acknowledged: false, map: planned.map };
     if (planned.mode === 'create') return { mode: 'create', ...(await driveCreate(token, planned.root.id, planned.staged)), map: planned.map };
     if (planned.mode === 'state') {
-      await driveState(token, planned.root.id, planned.target, planned.live.version, { conditional: true });
+      await driveState(token, planned.root.id, planned.target, planned.live.version, { conditional: true, observed: planned.live.view.status });
       return { mode: 'state', acknowledged: false, map: planned.map };
     }
     await driveEdit(token, planned.root.id, { live: planned.live, map: planned.map, expected: planned.expected });
@@ -1023,7 +1023,7 @@ async function settleDeclaredBpf(input) {
       }
       // Sent (once, against the version of this read) only when its record says it never left; one that may have left
       // is proved by reading, never sent again.
-      await driveState(token, id, target, live.version, { conditional: true });
+      await driveState(token, id, target, live.version, { conditional: true, observed: live.view.status });
     }
     // A Draft state effect the row has since left (the edit's own Active) is proved by the later Active write.
     for (const e of attemptOf(token).effects) {

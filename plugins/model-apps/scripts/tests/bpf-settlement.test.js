@@ -639,3 +639,41 @@ test('a create that failed on this side before any request is sent again under i
     assert.deepEqual([group.committed.root.id, group.committed.records[0].origin], [pending.root.id, 'created'], `${observed}: the same id, bound as created`);
   }
 });
+// The shared edit gate exempts the attempt's own activation only on a fresh read that found its row Draft
+// (editSwitchRequired `observedState`): every new effect says what the read before it observed.
+test('the default activation of its own create carries the Draft its fresh read observed; no other effect claims a read', async (t) => {
+  const contract = require('../lib/managed-feature-contract.js');
+  const real = contract.withWorkflowEffect;
+  const seen = [];
+  contract.withWorkflowEffect = (args, fn) => { seen.push([args.effect.effect, args.effect.desiredState || null, args.observedState]); return real(args, fn); };
+  t.after(() => { contract.withWorkflowEffect = real; });
+  await created();
+  assert.deepEqual(seen, [['create', null, undefined], ['state', 'Active', 'Draft']]);
+});
+
+// A refusal of the shared gate is thrown before its effect is recorded: no effect exists to look up, so the driver
+// must not answer it as a write failure (that path reads the effect it expects to have been recorded).
+test('a refusal of the shared edit gate is the coded refusal of the run: nothing recorded or sent after it, and the attempt finishes later', async (t) => {
+  const contract = require('../lib/managed-feature-contract.js');
+  const real = contract.withWorkflowEffect;
+  const reached = [];
+  // The read the activation was planned on is withheld from the shared gate only, so the gate itself refuses.
+  contract.withWorkflowEffect = (args, fn) => { reached.push(args.effect.effect); return real(args.effect.effect === 'state' ? { ...args, observedState: undefined } : args, fn); };
+  const wire = createWorkflowWire();
+  const dir = makeTempDir('bpf-settle-');
+  let out;
+  try { out = await settle(wire, dir, FLOW); } finally { contract.withWorkflowEffect = real; }
+  assert.deepEqual(reached, ['create', 'state'], 'the activation reached the shared gate');
+  assert.ok(out.error, 'the run stops');
+  assert.equal(out.error.code, 'workflow-edit-refused', `the gate's code, not a TypeError: ${out.error.message}`);
+  assert.ok(!/TypeError|Cannot read/.test(String(out.error.message)), out.error.message);
+  assert.deepEqual(writesSince(wire, out.from).map((e) => e.method), ['POST'], 'only the create left');
+  const { pending, effects } = out.p.store.readGroup('bpf', KEY);
+  assert.ok(pending, 'the attempt is kept');
+  assert.deepEqual(effects.map((e) => [e.effect, e.state]), [['create', 'confirmed']], 'no state effect was recorded');
+
+  const again = await settle(wire, dir, FLOW);
+  assert.ifError(again.error);
+  assert.deepEqual(writesSince(wire, again.from).map((e) => e.method), ['PATCH'], 'a later run sends only the activation, once');
+});
+

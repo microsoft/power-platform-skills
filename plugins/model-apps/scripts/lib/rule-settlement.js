@@ -766,7 +766,7 @@ async function settleDeclaredRule(input) {
         throw coded(CODES.adoptionRequired, `${label}: the workflow ${id} carries what this build sent, but no answer acknowledged its create, so it is not known `
           + `to be this build's; it is neither activated nor bound without the adoption approval adopt:rule:${approvalIdOf(rule)}. The attempt is kept`);
       }
-      await driveState(token, id, ACTIVE, null, { conditional: false });
+      await driveState(token, id, ACTIVE, null, { conditional: false, observed: live.view.status });
     }
     return { acknowledged };
   }
@@ -777,7 +777,7 @@ async function settleDeclaredRule(input) {
     const baseSemantic = intentSha256(base.view.projection);
     let live = base;
     if (live.view.status === ACTIVE) {
-      await driveState(token, id, DRAFT, live.version, { conditional: true });
+      await driveState(token, id, DRAFT, live.version, { conditional: true, observed: live.view.status });
       live = await readLive(id);
       if (live.missing || intentSha256(live.view.projection) !== baseSemantic) throw coded('rule-drift', `${label}: the rule changed on the server while it was being edited; nothing more is sent`);
     }
@@ -796,7 +796,7 @@ async function settleDeclaredRule(input) {
       throw coded(failure ? CODES.pending : 'rule-drift', `${label}: the edit is not proved by a fresh read; it is not sent again`, { cause: failure });
     }
     store.confirmEffect(body.token, { observedSha256: body.desiredSha256 });
-    if (staged.desiredStatus === ACTIVE && live.view.status !== ACTIVE) await driveState(token, id, ACTIVE, live.version, { conditional: true });
+    if (staged.desiredStatus === ACTIVE && live.view.status !== ACTIVE) await driveState(token, id, ACTIVE, live.version, { conditional: true, observed: live.view.status });
   }
 
   // A refused create wrote nothing only when a fresh, complete read finds neither its row nor any rule of its name
@@ -936,7 +936,7 @@ async function settleDeclaredRule(input) {
     if (planned.mode === 'adopt') return { mode: 'adopt', acknowledged: false };
     if (planned.mode === 'create') return { mode: 'create', ...(await driveCreate(token, planned.root.id, planned.staged)), slots: planned.slots };
     if (planned.mode === 'state') {
-      await driveState(token, planned.root.id, planned.target, planned.live.version, { conditional: true });
+      await driveState(token, planned.root.id, planned.target, planned.live.version, { conditional: true, observed: planned.live.view.status });
       return { mode: 'state', acknowledged: false, slots: planned.slots };
     }
     await driveEdit(token, planned.root.id, { live: planned.live, root: planned.root2, expected: planned.expected });
@@ -1004,7 +1004,7 @@ async function settleDeclaredRule(input) {
       }
       // Sent (once, against the version of this read) only when its record says it never left; one that may have left
       // is proved by reading, never sent again.
-      await driveState(token, id, target, live.version, { conditional: true });
+      await driveState(token, id, target, live.version, { conditional: true, observed: live.view.status });
     }
     // A Draft state effect the row has since left (the edit's own Active) is proved by the later Active write.
     for (const e of attemptOf(token).effects) {
