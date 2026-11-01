@@ -762,7 +762,8 @@ for (const recovery of [false, true]) {
       if (change === 'none' || change === 'activate') {
         assert.ifError(out.error);
         assert.equal(row.statecode, 1);
-        // Activated by this write, or already Active with exactly the proved body: then it is moot and nothing is written.
+        // Activated by this write, or already Active with exactly the proved body: then it is met without this write (kept as a
+        // fulfilled fact until the commit) and nothing is written.
         assert.equal(row.version, change === 'none' ? seen.after + 1 : seen.after);
         assert.equal(g.pending, null);
         assert.deepEqual(g.effects, []);
@@ -902,4 +903,122 @@ test('an activation the service keeps refusing at the proved version is not appl
   const final = await settle(wire, dir, FLOW);
   assert.ifError(final.error);
   assert.deepEqual(writeLines(wire, final.from), []);
+});
+
+// ----- An activation this attempt found made (a maker activated the row first) is a durable fact: it is kept through a
+// failure before the commit and a process exit, so a later run never proposes it again — after a maker's deactivation
+// that would undo the maker's change. `found-at-activation`: the maker activates as the conditional activation arrives
+// (412; the fresh read finds the proved body Active). `already-active`: the row is Active when the run reads it, so no
+// activation is recorded until the fact is. `sent`: this run's own activation, the control.
+const failingMembership = async () => { throw new Error('solution membership unavailable'); };
+const firstRow = (wire) => [...wire.rows.values()][0];
+for (const mode of ['found-at-activation', 'already-active', 'sent']) {
+  test(`an activation met before a failed commit is never sent again: after a maker's deactivation a separate process sends nothing and refuses (${mode})`, async () => {
+    const wire = createWorkflowWire();
+    const dir = makeTempDir('bpf-met-');
+    if (mode === 'found-at-activation') {
+      wire.script((e) => {
+        if (e.method === 'PATCH' && e.body && e.body.statecode === 1 && firstRow(wire).statecode === 0) makerChange(firstRow(wire), 'activate');
+        return false;
+      }, { statusCode: 500 });
+    }
+    if (mode === 'already-active') {
+      const real = wire.request;
+      wire.request = async (req) => {
+        const answer = await real(req);
+        if (req.method === 'POST' && /CreateProcessWithWfomJson|\/workflows$/.test(req.url)) makerChange(firstRow(wire), 'activate');
+        return answer;
+      };
+    }
+    const first = await settle(wire, dir, FLOW, { ensureMembership: failingMembership });
+    assert.ok(first.error);
+    assert.equal(firstRow(wire).statecode, 1);
+    assert.deepEqual(writeLines(wire, first.from), mode === 'already-active' ? ['POST workflows'] : ['POST workflows', 'PATCH workflows(<id>)']);
+    const g = first.p.store.readGroup('bpf', KEY);
+    assert.deepEqual(g.effects.map((e) => [e.effect, e.state]), [['create', 'confirmed'], ['state', mode === 'sent' ? 'confirmed' : 'fulfilled']]);
+    // The maker deactivates the row, outside the plugin; a separate OS process then settles the same declaration.
+    makerChange(firstRow(wire), 'deactivate');
+    const version = firstRow(wire).version;
+    const input = path.join(dir, 'child-input.json');
+    const output = path.join(dir, 'child-output.json');
+    fs.writeFileSync(input, JSON.stringify({ family: 'bpf', declaration: FLOW, dir, when: 'none', rows: [...wire.rows], output, app: APP, solution: SOL }));
+    const env = { ...process.env };
+    delete env.NODE_TEST_CONTEXT;
+    const child = spawnSync(process.execPath, [path.join(__dirname, 'helpers', 'workflow-resume-child.js'), input], { env, encoding: 'utf8', timeout: 60000 });
+    assert.equal(child.status, 0, child.stderr);
+    const r = JSON.parse(fs.readFileSync(output, 'utf8'));
+    assert.notEqual(r.pid, process.pid);
+    assert.equal(r.code, 'create-completion-required');
+    assert.deepEqual(r.writes, [], 'nothing is sent: the maker\'s deactivation is never undone');
+    assert.equal(r.finalState, 0);
+    assert.equal(r.finalVersion, version);
+    assert.equal(r.token, g.pending.token, 'the same attempt, kept');
+    // The maker's way out: activate the row as declared, then rerun; it is proved by reading and bound with no write.
+    makerChange(firstRow(wire), 'activate');
+    const settled = await settle(wire, dir, FLOW);
+    assert.ifError(settled.error);
+    assert.deepEqual(writeLines(wire, settled.from), []);
+    const done = settled.p.store.readGroup('bpf', KEY);
+    assert.equal(done.pending, null);
+    assert.deepEqual(done.effects, []);
+    assert.ok(done.committed);
+  });
+}
+
+test('an activation another process found made while this one was about to record it is met: nothing is sent, and the attempt commits', async () => {
+  const wire = createWorkflowWire();
+  const dir = makeTempDir('bpf-met-race-');
+  const contract = require('../lib/managed-feature-contract.js');
+  const real = contract.withWorkflowEffect;
+  // Between this run's read and its record of the activation, the maker activates the row and another process of the
+  // same attempt records that fact.
+  contract.withWorkflowEffect = (args, fn) => {
+    if (args.effect.effect === 'state') {
+      const row = wire.row(args.effect.rowId);
+      makerChange(row, 'activate');
+      args.store.recordFulfilledEffect({ ...args.effect }, { observedState: 'Active', observedVersion: `W/"${row.version}"` });
+    }
+    return real(args, fn);
+  };
+  let out;
+  try { out = await settle(wire, dir, FLOW); } finally { contract.withWorkflowEffect = real; }
+  assert.ifError(out.error);
+  assert.deepEqual(writeLines(wire, out.from), ['POST workflows']);
+  const g = out.p.store.readGroup('bpf', KEY);
+  assert.equal(g.pending, null);
+  assert.ok(g.committed);
+  assert.equal(firstRow(wire).statecode, 1);
+});
+
+// The store file of the binding store under `dir` (managed-bindings storeFileName: `<prefix><sha256 hex>.json`), outside
+// the SDK workspace.
+function storeFile(dir) {
+  const found = [];
+  const walk = (d) => {
+    for (const e of fs.readdirSync(d, { withFileTypes: true })) {
+      const p = path.join(d, e.name);
+      if (e.isDirectory()) { if (e.name !== 'sdk') walk(p); } else if (/[0-9a-f]{64}\.json$/.test(e.name)) found.push(p);
+    }
+  };
+  walk(dir);
+  assert.equal(found.length, 1, 'one binding store');
+  return found[0];
+}
+
+test('the plan reserves the whole completion of the largest supported flow: the reservation covers what its commit adds to the store', async () => {
+  const decl = largestFlow(FLOW.name);
+  const wire = createWorkflowWire();
+  const dir = makeTempDir('bpf-reserve-');
+  let reserve = null;
+  // Read the attempt's reservation as the store file holds it, after the send and before the commit.
+  const ensureMembership = async () => {
+    const file = JSON.parse(fs.readFileSync(storeFile(dir), 'utf8'));
+    const attempts = JSON.stringify(file).match(/"completionReserve":\{"bytes":(\d+)/);
+    reserve = attempts ? Number(attempts[1]) : null;
+  };
+  const out = await settle(wire, dir, decl, { ensureMembership });
+  assert.ifError(out.error);
+  assert.ok(reserve, 'the attempt holds a reservation');
+  const grown = fs.statSync(storeFile(dir)).size;
+  assert.ok(reserve >= grown, `the reservation (${reserve} bytes) covers the committed group (${grown} bytes in the store file)`);
 });

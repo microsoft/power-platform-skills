@@ -48,7 +48,7 @@ const { requestBodySha256 } = require('./workflow-effect-context.js');
 const { identityFor, reserveChildren } = require('./creates-catalog.js');
 const { uuidV5 } = require('./creates-identity.js');
 const { CODES, rootCreateAcknowledged } = require('./managed-bindings.js');
-const { createWorkflowDriver, createCopyGuard, answeredRefusal, coded, ACTIVE, DRAFT } = require('./workflow-drive.js');
+const { createWorkflowDriver, createCopyGuard, answeredRefusal, coded, completionBytesFor, HASH_BOUND, NAME_BOUND, ACTIVE, DRAFT } = require('./workflow-drive.js');
 
 // sdk-build is required lazily: it is the module that will call this one, so a top-level require would be a cycle.
 const sdkBuild = () => require('./sdk-build.js');
@@ -933,7 +933,26 @@ async function settleDeclaredBpf(input) {
     const planned = await planChange(input);
     if (!planned || planned.noop === true) return planned;
     const recorded = (input.continuing || input.resuming) && run.pending ? run.pending.declaration : undefined;
-    return { ...planned, declaration: recorded !== undefined ? recorded : clone(flow) };
+    const declaration = recorded !== undefined ? recorded : clone(flow);
+    return { ...planned, declaration, completionBytes: completionBytesOf(planned, declaration) };
+  }
+
+  // The bytes this attempt's completion may add to the store (runManagedFeature `completionBytes`; see
+  // workflow-drive completionBytesFor): the parts its commit adds as finalProof builds them — the root, stage and step
+  // records, the proof (twice: the saved proof is noted on the attempt as well), the consumer state — plus the original
+  // declaration and the expected proof. The consumer state keeps the flow, what was applied, the backing table name
+  // and the stage map; what was applied is a projection of the proved row, which the final proof requires to be the one
+  // this plan sends or keeps (`proved`, by hash), so that projection and the map's keys bound it.
+  function completionBytesOf(planned, declaration) {
+    const { map } = planned;
+    const records = [record(ROOT_KIND, key, planned.root.id, 'adopted')];
+    for (const s of map) {
+      records.push(record('bpfStage', stageLocator(s.key), s.id, 'adopted', key));
+      for (const p of s.steps) records.push(record('bpfStep', stepLocator(s.key, p.key), p.id, 'adopted', stageLocator(s.key)));
+    }
+    const proof = { savedSha256: HASH_BOUND, semanticSha256: HASH_BOUND, preservationSha256: HASH_BOUND, expectedChildrenSha256: HASH_BOUND };
+    const consumerState = { declaration: { flow, applied: { projection: planned.proved, keys: map }, backing: NAME_BOUND }, stages: map };
+    return completionBytesFor([records, proof, proof, consumerState, declaration, planned.expected]);
   }
 
   async function planChange({ resolution }) {
@@ -943,7 +962,7 @@ async function settleDeclaredBpf(input) {
       const { id, live } = resolution;
       const map = positionalMap(flow, live.view.projection);
       const expected = expectedOf({ id, sent: live.view, desiredStatus: live.view.status, map, live });
-      return { root: root(id), expected, declarationSha256, publication: null, mode: 'adopt', map };
+      return { root: root(id), expected, declarationSha256, publication: null, mode: 'adopt', map, proved: live.view.projection };
     }
     if (resolution.mode === 'create') {
       const { id, map } = createMap();
@@ -951,21 +970,21 @@ async function settleDeclaredBpf(input) {
       const staged = await stageCreate(id, map);
       checkStaged(staged.sent, map);
       const expected = expectedOf({ id, sent: staged.sent, desiredStatus: staged.desiredStatus, map, live: null });
-      return { root: root(id), expected, declarationSha256, publication: null, mode: 'create', staged, map };
+      return { root: root(id), expected, declarationSha256, publication: null, mode: 'create', staged, map, proved: staged.sent.projection };
     }
     if (resolution.mode === 'state') {
       // The live flow is what stays; only the status moves. The held map still names the live stages and steps (the
       // row equals the committed proof, checked in resolveManaged).
       const { id, live, held, target } = resolution;
       const expected = expectedOf({ id, sent: live.view, desiredStatus: target, map: held, live });
-      return { root: root(id), expected, declarationSha256, publication: null, mode: 'state', live, target, map: held };
+      return { root: root(id), expected, declarationSha256, publication: null, mode: 'state', live, target, map: held, proved: live.view.projection };
     }
     const { id, live, held } = resolution;
     const map = editedMap(id, held);
     const staged = await stageEdit(id, live.view, map);
     checkStaged(staged.sent, map);
     const expected = expectedOf({ id, sent: staged.sent, desiredStatus: staged.desiredStatus, map, live });
-    return { root: root(id), expected, declarationSha256, publication: null, mode: 'edit', live, map };
+    return { root: root(id), expected, declarationSha256, publication: null, mode: 'edit', live, map, proved: staged.sent.projection };
   }
 
   async function apply({ token, plan: planned }) {

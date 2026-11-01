@@ -23,9 +23,9 @@
 
 const { normalizeGuid } = require('./reconcile-common.js');
 const contract = require('./managed-feature-contract.js');
-const { editSwitchRequired, existingRowDispatches } = contract;
+const { editSwitchRequired, existingRowDispatches, WORKFLOW_EFFECT_FULFILLED } = contract;
 const { runWithWorkflowEffect } = require('./workflow-effect-context.js');
-const { CODES } = require('./managed-bindings.js');
+const { CODES, COMPLETION_MAX_BYTES } = require('./managed-bindings.js');
 const { hasUnsyncedEdits } = require('./unsynced-edits.js');
 
 const ACTIVE = 'Active';
@@ -37,6 +37,33 @@ const STATE_BODY = { Draft: { statecode: 0, statuscode: 1 }, Active: { statecode
 function coded(code, message, extra = {}) {
   return Object.assign(new Error(message), extra, { code });
 }
+
+// The completion reservation of one attempt (runManagedFeature `plan` -> `completionBytes`, managed-bindings
+// prepareAttempt). After the send, the attempt's own writes — its expected proof, its workflow effects, the saved
+// observation, then the commit that adds the group's records, proof, consumer state and original declaration — may
+// grow the store only by its reservation; past it, a completion can be refused AFTER its send
+// (`managed-binding-store-full`). The store's default covers one copy of the declaration, but a group of these
+// families keeps the declaration twice (its consumer state and its originalDeclaration) beside a projection of the
+// proved row, so the plan asks for a bound of its own: every part it passes, counted as the store's file holds it —
+// JSON indented two spaces a level, each line COMPLETION_DEPTH levels down (as deep as the store counts a consumer
+// copy, deeper than these parts sit: env -> groups -> [i] -> consumerState -> declaration -> flow -> ...) — plus a
+// fixed margin for the effect records and hashes the plan cannot list, and a tenth on top. Capped where the store
+// caps a reservation; the largest supported declarations need well under that (pinned by the tests).
+const COMPLETION_DEPTH = 8;
+const COMPLETION_MARGIN_BYTES = 64 * 1024;
+function completionBytesFor(parts) {
+  let bytes = COMPLETION_MARGIN_BYTES;
+  for (const part of parts) {
+    const text = JSON.stringify(part, null, 2);
+    if (text === undefined) continue;
+    bytes += Buffer.byteLength(text, 'utf8') + text.split('\n').length * 2 * COMPLETION_DEPTH;
+  }
+  return Math.min(COMPLETION_MAX_BYTES, Math.ceil(bytes * 1.1));
+}
+// Stand-ins of the right size for what the plan cannot know yet: a SHA-256 hex digest, and the backing table name the
+// service gives a new process flow (a Dataverse logical name, far shorter than this).
+const HASH_BOUND = 'f'.repeat(64);
+const NAME_BOUND = 'n'.repeat(256);
 
 // The SDK throws a service answer as
 //   Error 'HTTP 400 from <url>: …' { code: 'CONNECTION_ERROR', statusCode: 400, url, cause: <the response body> }
@@ -218,6 +245,10 @@ function createWorkflowDriver({ store, sdk, httpClient = null, instanceUrl = nul
       if (res && Number.isInteger(res.status) && (res.status < 200 || res.status >= 300)) return Object.assign(new Error(`HTTP ${res.status}`), { statusCode: res.status, cause: res.body });
       return null;
     } catch (err) {
+      // The attempt already found this change made without sending it (a fulfilled record, made by another process
+      // since this one read the effects): it is met, so nothing is sent and there is no failure to answer. The caller
+      // reads the effect again and finds it fulfilled.
+      if (!started && err && err.code === WORKFLOW_EFFECT_FULFILLED) return null;
       // A throw before the write ran is not an answer of the write: the shared gate refused it (workflow-edit-refused)
       // or the store refused to record it, so there is no effect to look up or prove. It is the run's refusal, thrown
       // as coded, and nothing after it handles an effect. Only a failure of the write itself is answered to the caller.
@@ -260,7 +291,9 @@ function createWorkflowDriver({ store, sdk, httpClient = null, instanceUrl = nul
       // a fresh read what the row now is. Nothing is sent again here.
       if (effect.state === 'definitely-unsent' && onConflict) return onConflict(effect, failure);
     }
-    if (effect.state === 'confirmed') return;
+    // Confirmed (sent and proved), or fulfilled (found made without this attempt sending it): either way it is met and
+    // is never sent again from this attempt; the final proof reads what the row is now.
+    if (effect.state === 'confirmed' || effect.state === 'fulfilled') return;
     const row = await readVersion(id);
     if (row && row.state === state) { store.confirmEffect(effect.token, { observedState: state }); return; }
     if (effect.state === 'definitely-unsent') {
@@ -284,21 +317,35 @@ function createWorkflowDriver({ store, sdk, httpClient = null, instanceUrl = nul
    * The activation carries If-Match with the version of that read, so a maker's activation, deactivation or edit that
    * lands after it makes the service refuse the write (412) instead of activating a body nobody proved, or undoing the
    * maker's own change. After that refusal a fresh read decides, and nothing more is sent:
-   *   Active, carrying exactly the proved body   the activation is moot: its record is dropped and the row settles as is;
+   *   Active, carrying exactly the proved body   the activation is met without this write: its record becomes the
+   *                                              durable fact that it was fulfilled (store fulfillEffect), and the row
+   *                                              settles as is;
    *   anything else (Draft at a newer version, a changed body, the maker's deactivation)
    *                                              `create-completion-required`, the attempt kept;
    *   Draft at the very version that was read     the activation was not applied (the service refused its precondition):
    *                                              its record waits for a later run; if it keeps being refused, the maker
    *                                              activates the verified row and reruns.
-   * A row the caller's read already found Active settles the same way, with no write. A recorded activation that was
-   * held to another version than this read (or to none: an unconditional record) is never sent: the row changed since,
-   * or the record cannot say what it was proved against.
+   * A row the caller's read already found Active settles the same way, with no write (with no record yet, the fact is
+   * recorded fulfilled in one write: store recordFulfilledEffect). A recorded activation that was held to another
+   * version than this read (or to none: an unconditional record) is never sent: the row changed since, or the record
+   * cannot say what it was proved against.
+   *
+   * A fulfilled (or confirmed) activation is never proposed or sent again by this attempt, through any failure or
+   * restart before its commit: if the row is no longer Active when a later run reads it (a maker deactivated it after it
+   * was found or made Active), that is the maker's change, and it is never undone — the run stops
+   * `create-completion-required`, nothing sent, the attempt kept. The maker's way out: activate the row again if it is
+   * as declared, then rerun (the run proves it by reading and binds it without a write).
    * See: https://learn.microsoft.com/en-us/power-apps/developer/data-platform/webapi/perform-conditional-operations-using-web-api
    */
   async function activateOwnCreate(token, id, live, { reread, provedActive }) {
     const own = effectOf(token, (e) => e.effect === 'state' && e.desiredState === ACTIVE);
-    if (own && own.state === 'confirmed') return;
-    if (live.view.status === ACTIVE) { settleReached(own); return; }
+    if (own && (own.state === 'confirmed' || own.state === 'fulfilled')) {
+      if (live.view.status === ACTIVE) return;
+      throw coded('create-completion-required', `${label}: the ${noun} ${id} was already ${own.state === 'confirmed' ? 'activated by this build' : 'found Active'} `
+        + `for this attempt and is ${live.view.status} now; a change made since (a maker's deactivation) is never undone, so nothing is sent and the `
+        + `attempt is kept. Activate the ${noun} yourself if it is as declared, then rerun: the run proves it by reading and binds it without a write`);
+    }
+    if (live.view.status === ACTIVE) { settleReached(token, id, own, live); return; }
     if (!live.version) throw coded(driftCode, `${label}: no row version was read, so the activation of the ${noun} ${id} cannot be held to the body it proved; nothing is sent`);
     if (own && own.state === 'definitely-unsent' && own.expectedVersion !== live.version) {
       throw coded('create-completion-required', `${label}: the activation of the ${noun} ${id} waiting to be sent was recorded `
@@ -321,18 +368,32 @@ function createWorkflowDriver({ store, sdk, httpClient = null, instanceUrl = nul
             + `activate the ${noun} yourself if it is as declared, then rerun: the run proves it by reading and binds it without a write`, { cause: failure });
         }
         const why = now.missing ? 'it could not be read back' : now.view.status !== ACTIVE ? `it is ${now.view.status} at another version` : provedActive(now.view);
-        if (!why) { store.retireMootEffect(effect.token, { observedState: ACTIVE }); return; }
+        if (!why) { settleReached(token, id, effect, now); return; }
         throw coded('create-completion-required', `${label}: the ${noun} ${id} changed on the server after the read its activation was held to (${why}), `
           + `so it was not activated; nothing more is sent, and the attempt is kept. A maker's change is never undone, and a changed body is never activated`, { cause: failure });
       },
     });
   }
-  // The row is Active and the caller proved its body: an activation this attempt may have sent is proved by that read;
-  // one it never sent is moot.
-  function settleReached(own) {
-    if (!own) return;
-    if (own.state === 'definitely-unsent') store.retireMootEffect(own.token, { observedState: ACTIVE });
-    else store.confirmEffect(own.token, { observedState: ACTIVE });
+  /**
+   * The row is Active and the caller proved its body (`live`, the read that found it so). An activation this attempt
+   * may have sent (dispatching, unconfirmed) is proved by that read. One it never sent, or never proposed, was met
+   * without this write: that is kept as a durable `fulfilled` fact with the state and row version the read answered,
+   * never deleted, so no later run of the attempt proposes it again — whatever the row has become since. Recording
+   * none (the effect deleted, or never written) would let a later run, after a failure before the commit and a maker's
+   * deactivation, read a Draft with no activation on record and activate it again, undoing the maker's change.
+   */
+  function settleReached(token, id, own, live) {
+    if (own && own.state !== 'definitely-unsent') { store.confirmEffect(own.token, { observedState: ACTIVE }); return; }
+    if (!live.version) {
+      throw coded(CODES.pending, `${label}: the ${noun} ${id} was read Active without its row version, so that it is met cannot be recorded; nothing is `
+        + 'sent, and a later run reads the row again');
+    }
+    const observed = { observedState: ACTIVE, observedVersion: live.version };
+    if (own) { store.fulfillEffect(own.token, observed); return; }
+    store.recordFulfilledEffect({
+      attemptToken: token, baseGeneration: attemptOf(token).attempt.baseGeneration, family, key, rowId: id, effect: 'state',
+      request: { method: 'PATCH', shape: 'workflow-patch' }, desiredSha256: null, desiredState: ACTIVE, expectedVersion: live.version,
+    }, observed);
   }
 
   return { readVersion, attemptOf, effectOf, sendOnce, noteNoStart, driveState, activateOwnCreate, refuseRecordedEdits };
@@ -340,6 +401,9 @@ function createWorkflowDriver({ store, sdk, httpClient = null, instanceUrl = nul
 
 module.exports = {
   createWorkflowDriver,
+  completionBytesFor,
+  HASH_BOUND,
+  NAME_BOUND,
   createCopyGuard,
   answeredRefusal,
   causeChain,

@@ -47,7 +47,7 @@ const { requestBodySha256 } = require('./workflow-effect-context.js');
 const { identityFor } = require('./creates-catalog.js');
 const { CODES, rootCreateAcknowledged } = require('./managed-bindings.js');
 const { HTTP_SEND_HISTORY } = require('./sdk-http-client.js');
-const { createWorkflowDriver, createCopyGuard, answeredRefusal, causeChain, leavesOutcomeOpen, coded, ACTIVE, DRAFT } = require('./workflow-drive.js');
+const { createWorkflowDriver, createCopyGuard, answeredRefusal, causeChain, leavesOutcomeOpen, coded, completionBytesFor, HASH_BOUND, ACTIVE, DRAFT } = require('./workflow-drive.js');
 
 // sdk-build is required lazily: it is the module that will call this one, so a top-level require would be a cycle.
 const sdkBuild = () => require('./sdk-build.js');
@@ -917,7 +917,19 @@ async function settleDeclaredRule(input) {
     const planned = await planChange(input);
     if (!planned || planned.noop === true) return planned;
     const recorded = (input.continuing || input.resuming) && run.pending ? run.pending.declaration : undefined;
-    return { ...planned, declaration: recorded !== undefined ? recorded : clone(rule) };
+    const declaration = recorded !== undefined ? recorded : clone(rule);
+    return { ...planned, declaration, completionBytes: completionBytesOf(planned, declaration) };
+  }
+
+  // The bytes this attempt's completion may add to the store (runManagedFeature `completionBytes`; see
+  // workflow-drive completionBytesFor): the parts its commit adds as finalProof builds them — the root record, the
+  // proof (twice: the saved proof is noted on the attempt as well), the consumer state (the rule and its node
+  // declarations, with the slots this plan laid out) — plus the original declaration and the expected proof.
+  function completionBytesOf(planned, declaration) {
+    const prev = run.committed && run.committed.consumerState ? run.committed.consumerState.declaration : null;
+    const proof = { savedSha256: HASH_BOUND, semanticSha256: HASH_BOUND, preservationSha256: HASH_BOUND, expectedChildrenSha256: HASH_BOUND };
+    const consumerState = { declaration: declarationState(prev, rule), slots: planned.slots };
+    return completionBytesFor([[recordOf(planned.root.id, 'adopted')], proof, proof, consumerState, declaration, planned.expected]);
   }
 
   async function planChange({ resolution }) {

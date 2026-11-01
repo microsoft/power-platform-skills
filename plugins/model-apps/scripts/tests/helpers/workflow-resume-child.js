@@ -3,7 +3,7 @@
 // process left with a pending attempt, over a wire rebuilt from that process's rows, and settles the same declaration
 // again, so a recovery is proved across a real process boundary rather than by a fresh handle in the same process.
 // A maker changes the row's body either before this process reads it (`before-read`) or when its activation PATCH
-// arrives (`at-activation`); the outcome is written as JSON to `output`.
+// arrives (`at-activation`), or not at all (`none`); the outcome is written as JSON to `output`.
 //   node workflow-resume-child.js <input.json>
 //   input: { family: 'rule' | 'bpf', declaration, dir, when, rows: [[id, row], …], output, app, solution }
 const fs = require('node:fs');
@@ -42,7 +42,7 @@ function edit(family, row) {
   const change = () => { changed = true; edit(family, row); versionAfterMaker = row.version; };
   if (when === 'before-read') change();
   wire.script((e) => {
-    if (changed || e.method !== 'PATCH' || !e.body || e.body.statecode !== 1) return false;
+    if (when !== 'at-activation' || changed || e.method !== 'PATCH' || !e.body || e.body.statecode !== 1) return false;
     ifMatch = e.headers['If-Match'] || e.headers['if-match'] || null;
     change();
     return false;
