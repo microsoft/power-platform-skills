@@ -507,7 +507,8 @@ function wholeBodyErrors(flow, view) {
  *   halt              the build's halt factory (managedStop)
  *   ensureMembership  ({ root, records, recovering }) => solution membership of the workflow
  *   phase, label, barrier
- *   httpClient, instanceUrl  needed only by the edit path, for a state change that carries If-Match
+ *   httpClient, instanceUrl  needed for every state change, which carries If-Match: the default activation of the
+ *                     attempt's own create as well as the edit path. Without them no activation is sent
  *   sendObserver      the build's createAttemptSendObserver, installed on the transport sdk and httpClient send through
  *                     (runManagedFeature): an attempt whose window shows nothing sent is continued under its own token
  * @returns {{ committed?: true, recovered?: boolean, noop?: true, id: string, uniqueName: string|null }} where
@@ -531,7 +532,7 @@ async function settleDeclaredBpf(input) {
     kind, key: k, id, intentSha256: declarationSha256, origin, ...(parentKey ? { parentKey } : {}),
   });
   const run = { token: null, committed: null };
-  const { readVersion, attemptOf, effectOf, sendOnce, driveState, refuseRecordedEdits } = createWorkflowDriver({
+  const { readVersion, attemptOf, effectOf, sendOnce, driveState, activateOwnCreate, refuseRecordedEdits } = createWorkflowDriver({
     store, sdk, httpClient, instanceUrl, family: FAMILY, key, label, noun: 'process flow', driftCode: 'bpf-drift',
     conditionalEdits: switchOn, editRefusedRemedy: EDIT_REFUSED_REMEDY,
   });
@@ -744,9 +745,10 @@ async function settleDeclaredBpf(input) {
 
   /**
    * Prove this attempt's own create by reading (never by sending it again), then complete its own activation. The
-   * activation needs no edit switch — the row is the one this exact attempt created — but a create no answer
-   * acknowledged is not known to be this build's: it is neither activated nor bound without the flow's typed adoption
-   * approval (`managed-adoption-required`, the attempt kept).
+   * activation needs no edit switch — the row is the one this exact attempt created — and is held to the version of the
+   * read that proved it (activateOwnCreate: If-Match; a maker's change in between is never undone or activated). A
+   * create no answer acknowledged is not known to be this build's: it is neither activated nor bound without the flow's
+   * typed adoption approval (`managed-adoption-required`, the attempt kept).
    */
   async function finishCreate(token, id, failure) {
     const create = effectOf(token, (e) => e.effect === 'create');
@@ -774,12 +776,15 @@ async function settleDeclaredBpf(input) {
     if (live.missing) throw coded(CODES.pending, `${label}: the workflow ${id} could not be read back`);
     const why = notTheSentFlow(expected, live.view);
     if (why) throw coded('create-completion-required', `${label}: ${why}`);
-    if (statusFor(expected, live.view.projection) === ACTIVE && live.view.status !== ACTIVE) {
-      if (!acknowledged && !approved) {
+    if (statusFor(expected, live.view.projection) === ACTIVE) {
+      if (live.view.status !== ACTIVE && !acknowledged && !approved) {
         throw coded(CODES.adoptionRequired, `${label}: the workflow ${id} carries what this build sent, but no answer acknowledged its create, so it is not known `
           + `to be this build's; it is neither activated nor bound without the adoption approval adopt:bpf:${key}. The attempt is kept`);
       }
-      await driveState(token, id, ACTIVE, null, { conditional: false, observed: live.view.status });
+      await activateOwnCreate(token, id, live, {
+        reread: () => readLive(id),
+        provedActive: (view) => notTheSentFlow(expected, view) || (statusFor(expected, view.projection) === ACTIVE ? null : 'the flow read back was not sent to be Active'),
+      });
     }
     return { acknowledged };
   }

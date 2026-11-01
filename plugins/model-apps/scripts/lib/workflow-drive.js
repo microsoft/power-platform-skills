@@ -115,7 +115,7 @@ function createCopyGuard({ sdk, artifact, label, noun }) {
  * The write driver of one declared workflow (`family`/`key` in the store).
  * @param {object} o
  *   store, sdk           the managed binding handle and the gated maker SDK
- *   httpClient, instanceUrl  the plugin's client, for a state change that carries If-Match (switch path only)
+ *   httpClient, instanceUrl  the plugin's client, for every state change, which carries If-Match (the own activation too)
  *   family, key, label   the store group and the text errors name it by
  *   noun                 what the row is called in messages ('rule', 'process flow')
  *   driftCode            the family's drift code ('rule-drift', 'bpf-drift')
@@ -239,15 +239,20 @@ function createWorkflowDriver({ store, sdk, httpClient = null, instanceUrl = nul
    * caller's read of the row answered, made in this run after the attempt's create and before this call; with the
    * switch off, only an activation of the attempt's own row observed 'Draft' there may be sent.
    */
-  async function driveState(token, id, state, version, { conditional, observed }) {
+  async function driveState(token, id, state, version, { conditional, observed, onConflict = null }) {
     let effect = effectOf(token, (e) => e.effect === 'state' && e.desiredState === state);
     let failure = null;
     if (!effect || effect.state === 'definitely-unsent') {
       if (conditional && !version) throw coded(driftCode, `${label}: no row version was read, so a conditional state change cannot be sent`);
+      // Only the plugin's client carries If-Match (sendState); without it a conditional write would go out unconditional.
+      if (version && !httpClient) throw coded('workflow-state-path-unavailable', `${label}: no client that carries the row version was given, so setting the ${noun} ${state} is not sent`);
       failure = await sendOnce(token, effect, {
         rowId: id, effect: 'state', request: { method: 'PATCH', shape: 'workflow-patch' }, desiredSha256: null, desiredState: state, expectedVersion: version || null,
       }, sendState(id, state, version), { observedState: observed });
       effect = effectOf(token, (e) => e.effect === 'state' && e.desiredState === state);
+      // The service refused the precondition (412 to If-Match): the write was not applied, and the caller decides from
+      // a fresh read what the row now is. Nothing is sent again here.
+      if (effect.state === 'definitely-unsent' && onConflict) return onConflict(effect, failure);
     }
     if (effect.state === 'confirmed') return;
     const row = await readVersion(id);
@@ -264,7 +269,61 @@ function createWorkflowDriver({ store, sdk, httpClient = null, instanceUrl = nul
     throw coded(CODES.pending, `${label}: setting the ${noun} ${state} is not proved yet and is not sent again; a later run reads the row again to prove it`, { cause: failure });
   }
 
-  return { readVersion, attemptOf, effectOf, sendOnce, noteNoStart, driveState, refuseRecordedEdits };
+  /**
+   * The default activation of this attempt's own new Draft (finishCreate), held to the read that proved it. `live` is
+   * that read (readLive: the version first, then the body, so a write between the two leaves the version stale), and
+   * `provedActive(view)` answers null when a view carries exactly the body this attempt proved, sent to be Active, or
+   * why not. `reread()` is the family's readLive of the row.
+   *
+   * The activation carries If-Match with the version of that read, so a maker's activation, deactivation or edit that
+   * lands after it makes the service refuse the write (412) instead of activating a body nobody proved, or undoing the
+   * maker's own change. After that refusal a fresh read decides, and nothing more is sent:
+   *   Active, carrying exactly the proved body   the activation is moot: its record is dropped and the row settles as is;
+   *   anything else (Draft at a newer version, a changed body, the maker's deactivation)
+   *                                              `create-completion-required`, the attempt kept;
+   *   Draft at the very version that was read     the write never reached the service: its record waits for a later run.
+   * A row the caller's read already found Active settles the same way, with no write. A recorded activation that was
+   * held to another version than this read (or to none: an unconditional record) is never sent: the row changed since,
+   * or the record cannot say what it was proved against.
+   * See: https://learn.microsoft.com/en-us/power-apps/developer/data-platform/webapi/perform-conditional-operations-using-web-api
+   */
+  async function activateOwnCreate(token, id, live, { reread, provedActive }) {
+    const own = effectOf(token, (e) => e.effect === 'state' && e.desiredState === ACTIVE);
+    if (own && own.state === 'confirmed') return;
+    if (live.view.status === ACTIVE) { settleReached(own); return; }
+    if (!live.version) throw coded(driftCode, `${label}: no row version was read, so the activation of the ${noun} ${id} cannot be held to the body it proved; nothing is sent`);
+    if (own && own.state === 'definitely-unsent' && own.expectedVersion !== live.version) {
+      throw coded('create-completion-required', `${label}: the activation of the ${noun} ${id} waiting to be sent was recorded `
+        + `${own.expectedVersion ? 'against an earlier version of the row, which has changed since' : 'without the row version it was proved against'}, `
+        + `so it is not sent; the attempt is kept. Activate the ${noun} yourself if it is as declared (a later run proves it by reading and binds it)`);
+    }
+    await driveState(token, id, ACTIVE, live.version, {
+      conditional: true,
+      observed: live.view.status,
+      onConflict: async (effect, failure) => {
+        const now = await reread();
+        if (!now.missing && now.version === live.version && now.view.status !== ACTIVE) {
+          // The row is as the proof read it: the write never reached the service (a local failure before the request,
+          // or the gate refusing it), so its record waits, unsent, for a later run to send at this same version.
+          throw coded(CODES.pending, `${label}: the activation of the ${noun} ${id} was not sent${failure ? ` (${failure.message})` : ''}; the row is `
+            + 'unchanged, and a later run sends it against the same version', { cause: failure });
+        }
+        const why = now.missing ? 'it could not be read back' : now.view.status !== ACTIVE ? `it is ${now.view.status} at another version` : provedActive(now.view);
+        if (!why) { store.retireMootEffect(effect.token, { observedState: ACTIVE }); return; }
+        throw coded('create-completion-required', `${label}: the ${noun} ${id} changed on the server after the read its activation was held to (${why}), `
+          + `so it was not activated; nothing more is sent, and the attempt is kept. A maker's change is never undone, and a changed body is never activated`, { cause: failure });
+      },
+    });
+  }
+  // The row is Active and the caller proved its body: an activation this attempt may have sent is proved by that read;
+  // one it never sent is moot.
+  function settleReached(own) {
+    if (!own) return;
+    if (own.state === 'definitely-unsent') store.retireMootEffect(own.token, { observedState: ACTIVE });
+    else store.confirmEffect(own.token, { observedState: ACTIVE });
+  }
+
+  return { readVersion, attemptOf, effectOf, sendOnce, noteNoStart, driveState, activateOwnCreate, refuseRecordedEdits };
 }
 
 module.exports = {

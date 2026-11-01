@@ -9,6 +9,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
+const { spawnSync } = require('node:child_process');
 const { makeTempDir } = require('./helpers/temp-dirs.js');
 const { createWorkflowWire, ORIGIN } = require('./helpers/workflow-wire.js');
 const { createMakerSdk, createNodeWorkspaceStorage } = require('../vendor/cds-maker-sdk.cjs');
@@ -137,7 +138,7 @@ test('a new declared flow is created Draft with every reserved id, proved by a r
   assert.equal(create.body.workflowid, rootId);
   assert.equal(create.body.statecode, undefined, 'created Draft: the create carries no state');
   assert.deepEqual(activate.body, { statecode: 1, statuscode: 2 });
-  assert.equal(ifMatchOf(activate), null, 'its own new Draft is activated unconditionally');
+  assert.equal(ifMatchOf(activate), `W/"${wire.row(rootId).version - 1}"`, 'its own new Draft is activated against the version of the read that proved it');
   for (const childId of Object.values(childIds)) assert.ok(xamlIds(wire, rootId).includes(childId), `the XAML keeps ${childId}`);
   const group = committedOf(out.p);
   assert.deepEqual(idsOf(group), { [KEY]: rootId, ...childIds });
@@ -704,3 +705,143 @@ test('the authored flow is recorded with the attempt and committed apart from th
     assert.deepEqual(again.p.store.readGroup('bpf', KEY).committed.originalDeclaration, authored, `${observed}: committed`);
   }
 });
+
+// ----- The default activation of the attempt's own create, against a maker's change after the read that proved it.
+// The first process can be stopped inside that activation: its effect is recorded and the write's callback throws before
+// any request leaves, so a later process finds the create confirmed and the activation definitely unsent.
+async function heldAtActivation(wire, dir, decl = FLOW) {
+  const contract = require('../lib/managed-feature-contract.js');
+  const real = contract.withWorkflowEffect;
+  contract.withWorkflowEffect = (args, fn) => real(args, args.effect.effect === 'state'
+    ? async () => { throw Object.assign(new Error('stopped before the activation left'), { code: 'LOCAL_STOP' }); } : fn);
+  try { return await settle(wire, dir, decl); } finally { contract.withWorkflowEffect = real; }
+}
+// A maker's change of the row on the service side: `activate`; `deactivate` (activated, then back to Draft: the same
+// state at a newer version); `edit` (the body, still Draft).
+function makerChange(row, change) {
+  if (change === 'activate') Object.assign(row, { statecode: 1, statuscode: 2, version: row.version + 1 });
+  if (change === 'deactivate') Object.assign(row, { statecode: 0, statuscode: 1, version: row.version + 2 });
+  if (change === 'edit') {
+    const next = row.xaml.replace(/(<mcwb:Control.DataFieldName><InArgument[^>]*><Literal[^>]*Value=")name(")/, '$1fax$2');
+    assert.notEqual(next, row.xaml);
+    row.xaml = next;
+    row.version += 1;
+  }
+}
+
+for (const recovery of [false, true]) {
+  for (const change of ['none', 'activate', 'deactivate', 'edit']) {
+    test(`the own activation ${recovery ? 'resumed by a later process' : 'of a first create'} is held to the version of the read that proved it (maker: ${change})`, async () => {
+      const wire = createWorkflowWire();
+      const dir = makeTempDir('bpf-settle-');
+      let token = null;
+      if (recovery) {
+        const first = await heldAtActivation(wire, dir);
+        assert.ok(first.error);
+        const g = first.p.store.readGroup('bpf', KEY);
+        token = g.pending.token;
+        assert.deepEqual(g.effects.map((e) => [e.effect, e.state]), [['create', 'confirmed'], ['state', 'definitely-unsent']]);
+      }
+      let seen = null;
+      wire.script((e) => {
+        if (seen || e.method !== 'PATCH' || !e.body || e.body.statecode !== 1) return false;
+        const row = [...wire.rows.values()][0];
+        seen = { ifMatch: ifMatchOf(e), read: row.version };
+        makerChange(row, change);
+        seen.after = row.version;
+        return false;
+      }, { statusCode: 500 });
+      const out = await settle(wire, dir, FLOW);
+      const row = [...wire.rows.values()][0];
+      assert.ok(seen, 'the activation reached the service');
+      assert.equal(seen.ifMatch, `W/"${seen.read}"`, 'it carries the version of the read that proved the body');
+      assert.equal(writesSince(wire, out.from).filter((e) => e.method === 'PATCH').length, 1, 'one activation, never sent again');
+      const g = out.p.store.readGroup('bpf', KEY);
+      if (change === 'none' || change === 'activate') {
+        assert.ifError(out.error);
+        assert.equal(row.statecode, 1);
+        // Activated by this write, or already Active with exactly the proved body: then it is moot and nothing is written.
+        assert.equal(row.version, change === 'none' ? seen.after + 1 : seen.after);
+        assert.equal(g.pending, null);
+        assert.deepEqual(g.effects, []);
+        assert.deepEqual(g.committed.records.map((r) => r.origin), g.committed.records.map(() => 'created'));
+        const next = await settle(wire, dir, FLOW);
+        assert.equal(next.result.noop, true);
+        assert.deepEqual(writesSince(wire, next.from), []);
+        return;
+      }
+      // A Draft at a newer version or a changed body: refused, the maker's change kept, the attempt kept.
+      assert.equal(out.error.code, 'create-completion-required');
+      assert.equal(row.version, seen.after, 'no write of this build was applied');
+      assert.equal(row.statecode, 0, 'never activated, and the maker\'s deactivation is never undone');
+      assert.equal(g.committed, null);
+      if (recovery) assert.equal(g.pending.token, token, 'the same attempt, kept');
+      const next = await settle(wire, dir, FLOW);
+      assert.equal(next.error.code, 'create-completion-required', 'a later run refuses the same way');
+      assert.deepEqual(writesSince(wire, next.from), [], 'and sends nothing');
+      assert.equal(next.p.store.readGroup('bpf', KEY).pending.token, g.pending.token);
+    });
+  }
+}
+
+test('an activation recorded without a row version is never sent; once the maker activates the proved row it settles with no write', async () => {
+  const wire = createWorkflowWire();
+  const dir = makeTempDir('bpf-settle-');
+  const contract = require('../lib/managed-feature-contract.js');
+  const real = contract.withWorkflowEffect;
+  // Stop before the activation is recorded, then record it as an unconditional activation was recorded before.
+  contract.withWorkflowEffect = (args, fn) => (args.effect.effect === 'state'
+    ? Promise.reject(Object.assign(new Error('stopped before the activation was recorded'), { code: 'LOCAL_STOP' })) : real(args, fn));
+  let first;
+  try { first = await settle(wire, dir, FLOW); } finally { contract.withWorkflowEffect = real; }
+  assert.ok(first.error);
+  const { pending, effects } = first.p.store.readGroup('bpf', KEY);
+  assert.deepEqual(effects.map((e) => [e.effect, e.state]), [['create', 'confirmed']]);
+  first.p.store.recordWorkflowEffect({
+    attemptToken: pending.token, baseGeneration: null, family: 'bpf', key: KEY, rowId: pending.root.id, effect: 'state',
+    request: { method: 'PATCH', shape: 'workflow-patch' }, desiredSha256: null, desiredState: 'Active', expectedVersion: null,
+  });
+  const again = await settle(wire, dir, FLOW);
+  assert.equal(again.error.code, 'create-completion-required');
+  assert.match(again.error.cause.message, /without the row version/);
+  assert.deepEqual(writesSince(wire, again.from), []);
+  assert.equal(wire.row(pending.root.id).statecode, 0);
+  assert.equal(again.p.store.readGroup('bpf', KEY).pending.token, pending.token);
+  // The maker activates the row as declared: a fresh read proves it, and the record settles with nothing sent.
+  makerChange(wire.row(pending.root.id), 'activate');
+  const settled = await settle(wire, dir, FLOW);
+  assert.ifError(settled.error);
+  assert.deepEqual(writesSince(wire, settled.from), []);
+  const g = settled.p.store.readGroup('bpf', KEY);
+  assert.equal(g.pending, null);
+  assert.ok(g.committed);
+  assert.equal(settled.result.id, pending.root.id);
+});
+
+for (const when of ['before-read', 'at-activation']) {
+  test(`a separate OS process resuming the activation never activates a Draft the maker changed ${when}`, async () => {
+    const wire = createWorkflowWire();
+    const dir = makeTempDir('bpf-settle-');
+    const first = await heldAtActivation(wire, dir);
+    const token = first.p.store.readGroup('bpf', KEY).pending.token;
+    const input = path.join(dir, 'child-input.json');
+    const output = path.join(dir, 'child-output.json');
+    fs.writeFileSync(input, JSON.stringify({ family: 'bpf', declaration: FLOW, dir, when, rows: [...wire.rows], output, app: APP, solution: SOL }));
+    const env = { ...process.env };
+    delete env.NODE_TEST_CONTEXT;
+    const child = spawnSync(process.execPath, [path.join(__dirname, 'helpers', 'workflow-resume-child.js'), input], { env, encoding: 'utf8', timeout: 60000 });
+    assert.equal(child.status, 0, child.stderr);
+    const r = JSON.parse(fs.readFileSync(output, 'utf8'));
+    assert.notEqual(r.pid, process.pid);
+    assert.equal(r.changed, true);
+    assert.equal(r.code, 'create-completion-required');
+    assert.equal(r.token, token, 'the same attempt, kept');
+    assert.equal(r.finalVersion, r.versionAfterMaker, 'no write of the second process was applied');
+    assert.equal(r.finalState, 0);
+    if (when === 'before-read') assert.deepEqual(r.writes, []);
+    else {
+      assert.deepEqual(r.writes, ['PATCH workflows(<id>)']);
+      assert.equal(r.ifMatch, `W/"${r.versionAfterMaker - 1}"`);
+    }
+  });
+}

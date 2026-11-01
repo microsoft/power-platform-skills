@@ -610,7 +610,8 @@ function isAvailabilityRefusal(err) {
  *   halt              the build's halt factory (managedStop)
  *   ensureMembership  ({ root, records, recovering }) => solution membership of the workflow
  *   phase, label, barrier
- *   httpClient, instanceUrl  needed only by the edit path, for a state change that carries If-Match
+ *   httpClient, instanceUrl  needed for every state change, which carries If-Match: the default activation of the
+ *                     attempt's own create as well as the edit path. Without them no activation is sent
  *   sendObserver      the build's createAttemptSendObserver, installed on the transport sdk and httpClient send through
  *                     (runManagedFeature): an attempt whose window shows nothing sent is continued under its own token
  * @returns {{ committed?: true, recovered?: boolean, noop?: true, skipped?: 'unavailable', id?: string, cause?: Error }}
@@ -635,7 +636,7 @@ async function settleDeclaredRule(input) {
 
   // ----- reads and writes (lib/workflow-drive.js): the version is read before the body, every write is sent once inside
   // its persisted effect, and an unproved write is proved by reading, never sent again.
-  const { readVersion, attemptOf, effectOf, sendOnce, noteNoStart, driveState, refuseRecordedEdits } = createWorkflowDriver({
+  const { readVersion, attemptOf, effectOf, sendOnce, noteNoStart, driveState, activateOwnCreate, refuseRecordedEdits } = createWorkflowDriver({
     store, sdk, httpClient, instanceUrl, family: FAMILY, key, label, noun: 'rule', driftCode: 'rule-drift',
     conditionalEdits: switchOn, editRefusedRemedy: EDIT_REFUSED_REMEDY,
   });
@@ -734,9 +735,10 @@ async function settleDeclaredRule(input) {
 
   /**
    * Prove this attempt's own create by reading (never by sending it again), then complete its own activation. The
-   * activation needs no edit switch — the row is the one this exact attempt created — but a create no answer
-   * acknowledged is not known to be this build's: it is neither activated nor bound without the rule's typed adoption
-   * approval (`managed-adoption-required`, the attempt kept).
+   * activation needs no edit switch — the row is the one this exact attempt created — and is held to the version of the
+   * read that proved it (activateOwnCreate: If-Match; a maker's change in between is never undone or activated). A
+   * create no answer acknowledged is not known to be this build's: it is neither activated nor bound without the rule's
+   * typed adoption approval (`managed-adoption-required`, the attempt kept).
    */
   async function finishCreate(token, id, failure) {
     const create = effectOf(token, (e) => e.effect === 'create');
@@ -763,12 +765,15 @@ async function settleDeclaredRule(input) {
     if (live.missing) throw coded(CODES.pending, `${label}: the workflow ${id} could not be read back`);
     const desired = statusFor(attempt.expected, live.view.projection);
     if (desired === null) throw coded('create-completion-required', `${label}: the workflow ${id} is not the rule this build sent`);
-    if (desired === ACTIVE && live.view.status !== ACTIVE) {
-      if (!acknowledged && !approved) {
+    if (desired === ACTIVE) {
+      if (live.view.status !== ACTIVE && !acknowledged && !approved) {
         throw coded(CODES.adoptionRequired, `${label}: the workflow ${id} carries what this build sent, but no answer acknowledged its create, so it is not known `
           + `to be this build's; it is neither activated nor bound without the adoption approval adopt:rule:${approvalIdOf(rule)}. The attempt is kept`);
       }
-      await driveState(token, id, ACTIVE, null, { conditional: false, observed: live.view.status });
+      await activateOwnCreate(token, id, live, {
+        reread: () => readLive(id),
+        provedActive: (view) => (statusFor(attempt.expected, view.projection) === ACTIVE ? null : 'the rule read back is not the rule this build sent'),
+      });
     }
     return { acknowledged };
   }
