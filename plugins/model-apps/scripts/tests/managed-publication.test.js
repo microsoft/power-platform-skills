@@ -11,7 +11,7 @@ const crypto = require('node:crypto');
 const fs = require('node:fs');
 const { makeTempDir } = require('./helpers/temp-dirs.js');
 const { createManagedWire, sdkOver } = require('./helpers/managed-wire.js');
-const { openManagedContext, openManagedBindings, CODES, publicationRiskApproval, publicationRemedy } = require('../lib/managed-bindings.js');
+const { openManagedContext, openManagedBindings, CODES, COMPLETION_BASE_BYTES, publicationRiskApproval, publicationRemedy } = require('../lib/managed-bindings.js');
 const { runManagedFeature, publishManagedScope, confirmUncertainPublication, createAttemptSendObserver, notStartedAnswer, existingRowDispatches, rowsCreatedByAttempt, withWorkflowEffect, editSwitchRequired, WORKFLOW_EFFECT_FULFILLED, PUBLICATION_UNCONFIRMED, PUBLICATION_UNVERIFIED, CREATION_RECORD_UNSETTLED, LAYER_READER_MISSING } = require('../lib/managed-feature-contract.js');
 const { createPublicationBarrier } = require('../lib/publication-barrier.js');
 const { readSystemFormPublication, readSystemFormLayers, readSystemFormRootPresence, systemFormLayerSha256 } = require('../lib/systemform-published.js');
@@ -664,6 +664,20 @@ test('a successful create and a successful recovery of a pending attempt each se
   await publishForms(sdk, recovered.store, b, [{ family: 'form', key: 'account/main' }]);
   assert.equal(s.wire.publishes('account').length, 2, 'exactly one more publish, for the recovered change');
   assert.equal(s.wire.published.get(MAIN).formxml, '<form v="2"/>');
+});
+
+test('a plan\'s completionBytes reaches the attempt\'s completion reservation; without one the store\'s default is held', async () => {
+  const s = await setup();
+  const crash = Object.assign(new Error('the process ended'), { code: 'crash' });
+  const sized = ports(s.wire, s.sdk, { key: 'account/main', id: MAIN, formxml: '<form v="1"/>', fail: { apply: crash } });
+  const plan = sized.plan;
+  sized.plan = async (...a) => ({ ...(await plan(...a)), completionBytes: 3 * (1 << 20) });
+  assert.equal(await codeOf(runManagedFeature({ ...sized, store: s.store, barrier: s.barrier })), 'crash');
+  assert.equal(s.store.readGroup('form', 'account/main').pending.completionReserve.bytes, 3 * (1 << 20));
+
+  const plain = ports(s.wire, s.sdk, { key: 'account/quick', id: QUICK, formxml: '<form v="1"/>', fail: { apply: crash } });
+  assert.equal(await codeOf(runManagedFeature({ ...plain, store: s.store, barrier: s.barrier })), 'crash');
+  assert.equal(s.store.readGroup('form', 'account/quick').pending.completionReserve.bytes, COMPLETION_BASE_BYTES);
 });
 
 test('two forms on one table, one fails its proof: the other\'s success does not release the table', async () => {

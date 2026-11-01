@@ -112,7 +112,9 @@ const REQUIRED_STEPS = new Set(['preflight', 'resolve', 'plan', 'prove', 'member
  *                                        node history stay the feature's own). A prepared attempt whose recorded
  *                                        root, declaration hash, declaration or publication differ from the plan is
  *                                        replaced in one store write (prepareAttempt `replaces`); a continued or
- *                                        resumed attempt that recorded a declaration is sent only for that one);
+ *                                        resumed attempt that recorded a declaration is sent only for that one;
+ *                                        completionBytes?: the bytes this attempt's completion may add to the store
+ *                                        (prepareAttempt `completionBytes`), when more than the store's default);
  *   apply({ token, plan, resolution, resuming?, continuing? })  send the approved change once; answers what it sent.
  *                               With a sendObserver, every mutation it makes must go through the observed transport;
  *   prove({ token, expected, applied, recovering, declaration })  a fresh read against `expected`; answers { savedProof,
@@ -264,6 +266,7 @@ async function runManagedFeature(args) {
         family, key, baseGeneration, root: intent.root, expected: null, knownScopes, declarationSha256: intent.declarationSha256,
         ...(intent.declaration !== undefined ? { declaration: intent.declaration } : {}),
         publication: intent.publication || null,
+        ...(intent.completionBytes !== undefined ? { completionBytes: intent.completionBytes } : {}),
         ...(pending ? { replaces: { token: pending.token, baseGeneration: pending.baseGeneration } } : {}),
       });
       // The store ended the old hold after its write when it has the barrier; a barrier passed apart is released here.
