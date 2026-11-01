@@ -99,6 +99,22 @@ test('a new declared flow is created Draft with every reserved id, proved by a r
   assert.ifError(out.error);
   const { rootId, childIds } = reservedFor();
   assert.equal(out.result.id, rootId);
+  // The complete request list, reads included.
+  assert.deepEqual(wire.lines(out.from), [
+    'GET EntityDefinitions(LogicalName=\'workflow\')?$select',
+    'GET workflows?$select',
+    'GET workflows?$select',
+    'GET organizations?$select',
+    'POST workflows',
+    'GET workflows?$select',
+    'GET workflows(<id>)?$select',
+    'GET workflows?$select',
+    'GET workflows(<id>)?$select',
+    'PATCH workflows(<id>)',
+    'GET workflows?$select',
+    'GET workflows?$select',
+    'GET workflows(<id>)?$select',
+  ]);
   assert.deepEqual(writeLines(wire, out.from), ['POST workflows', 'PATCH workflows(<id>)']);
   const [create, activate] = writesSince(wire, out.from);
   assert.equal(create.body.workflowid, rootId);
@@ -120,6 +136,12 @@ test('a new declared flow is created Draft with every reserved id, proved by a r
   const next = await settle(wire, dir, FLOW);
   assert.ifError(next.error);
   assert.equal(next.result.noop, true);
+  // The complete request list, reads included.
+  assert.deepEqual(wire.lines(next.from), [
+    'GET EntityDefinitions(LogicalName=\'workflow\')?$select',
+    'GET workflows?$select',
+    'GET workflows(<id>)?$select',
+  ]);
   assert.deepEqual(writesSince(wire, next.from), []);
   assert.equal(next.result.uniqueName, out.result.uniqueName);
 });
@@ -209,6 +231,25 @@ test('with the switch on, an additive edit of an Active flow goes Draft, writes 
   const out = await settle(wire, dir, GROWN, { opts: SWITCH });
   assert.ifError(out.error);
   const writes = writesSince(wire, out.from);
+  // The complete request list, reads included.
+  assert.deepEqual(wire.lines(out.from), [
+    'GET EntityDefinitions(LogicalName=\'workflow\')?$select',
+    'GET workflows?$select',
+    'GET workflows(<id>)?$select',
+    'GET organizations?$select',
+    'PATCH workflows(<id>)',
+    'GET workflows?$select',
+    'GET workflows?$select',
+    'GET workflows(<id>)?$select',
+    'GET workflows(<id>)?$select',
+    'PATCH workflows(<id>)',
+    'GET workflows?$select',
+    'GET workflows(<id>)?$select',
+    'PATCH workflows(<id>)',
+    'GET workflows?$select',
+    'GET workflows?$select',
+    'GET workflows(<id>)?$select',
+  ]);
   assert.deepEqual(writeLines(wire, out.from), ['PATCH workflows(<id>)', 'PATCH workflows(<id>)', 'PATCH workflows(<id>)']);
   assert.deepEqual(writes[0].body, { statecode: 0, statuscode: 1 });
   assert.ok(writes[1].body.xaml, 'the body write carries the XAML');
@@ -459,6 +500,16 @@ test('a state-only change is one conditional state write with no body, and is re
   const before = wire.row(id).xaml;
   const out = await settle(wire, dir, active, { opts: SWITCH });
   assert.ifError(out.error);
+  // The complete request list, reads included.
+  assert.deepEqual(wire.lines(out.from), [
+    'GET EntityDefinitions(LogicalName=\'workflow\')?$select',
+    'GET workflows?$select',
+    'GET workflows(<id>)?$select',
+    'PATCH workflows(<id>)',
+    'GET workflows?$select',
+    'GET workflows?$select',
+    'GET workflows(<id>)?$select',
+  ]);
   assert.deepEqual(writeLines(wire, out.from), ['PATCH workflows(<id>)']);
   const [write] = writesSince(wire, out.from);
   assert.deepEqual(write.body, { statecode: 1, statuscode: 2 });

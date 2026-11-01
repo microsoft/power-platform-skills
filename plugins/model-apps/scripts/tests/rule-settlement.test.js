@@ -103,6 +103,25 @@ test('a new declared rule is created Draft, proved by a read, then activated by 
   const out = await settle(wire, dir, RULE);
   assert.ifError(out.error);
   assert.equal(out.result.committed, true);
+  // The complete request list, reads included.
+  assert.deepEqual(wire.lines(out.from), [
+    'GET EntityDefinitions(LogicalName=\'workflow\')?$select',
+    'GET workflows?$select',
+    'GET workflows?$select',
+    'GET EntityDefinitions(LogicalName=\'account\')/Attributes?$select',
+    'POST workflows(00000000-0000-0000-0000-000000000000)/Microsoft.Dynamics.CRM.CreateProcessWithWfomJson',
+    'GET workflows?$select',
+    'GET workflows(<id>)?$select',
+    'GET workflows(<id>)/Microsoft.Dynamics.CRM.RetrieveProcessWithWfomJson',
+    'GET workflows?$select',
+    'GET workflows(<id>)?$select',
+    'GET workflows(<id>)/Microsoft.Dynamics.CRM.RetrieveProcessWithWfomJson',
+    'PATCH workflows(<id>)',
+    'GET workflows?$select',
+    'GET workflows?$select',
+    'GET workflows(<id>)?$select',
+    'GET workflows(<id>)/Microsoft.Dynamics.CRM.RetrieveProcessWithWfomJson',
+  ]);
   assert.deepEqual(writeLines(wire, out.from), [
     'POST workflows(00000000-0000-0000-0000-000000000000)/Microsoft.Dynamics.CRM.CreateProcessWithWfomJson',
     'PATCH workflows(<id>)',
@@ -119,6 +138,13 @@ test('a new declared rule is created Draft, proved by a read, then activated by 
   // The same declaration again is a no-op that sends nothing.
   const again = await settle(wire, dir, RULE);
   assert.equal(again.result.noop, true);
+  // The complete request list, reads included.
+  assert.deepEqual(wire.lines(again.from), [
+    'GET EntityDefinitions(LogicalName=\'workflow\')?$select',
+    'GET workflows?$select',
+    'GET workflows(<id>)?$select',
+    'GET workflows(<id>)/Microsoft.Dynamics.CRM.RetrieveProcessWithWfomJson',
+  ]);
   assert.deepEqual(writesSince(wire, again.from), []);
 });
 
@@ -218,6 +244,30 @@ test('with the switch, an Active rule is edited as Draft, body, Active: three wr
   const { wire, dir, id } = await created();
   const out = await settle(wire, dir, withCondition(RULE, 'C'), { opts: SWITCH });
   assert.ifError(out.error);
+  // The complete request list, reads included.
+  assert.deepEqual(wire.lines(out.from), [
+    'GET EntityDefinitions(LogicalName=\'workflow\')?$select',
+    'GET workflows?$select',
+    'GET workflows(<id>)?$select',
+    'GET workflows(<id>)/Microsoft.Dynamics.CRM.RetrieveProcessWithWfomJson',
+    'GET EntityDefinitions(LogicalName=\'account\')/Attributes?$select',
+    'PATCH workflows(<id>)',
+    'GET workflows?$select',
+    'GET workflows?$select',
+    'GET workflows(<id>)?$select',
+    'GET workflows(<id>)/Microsoft.Dynamics.CRM.RetrieveProcessWithWfomJson',
+    'GET EntityDefinitions(LogicalName=\'account\')/Attributes?$select',
+    'GET workflows(<id>)?$select',
+    'POST workflows(00000000-0000-0000-0000-000000000000)/Microsoft.Dynamics.CRM.UpdateProcessWithWfomJson',
+    'GET workflows?$select',
+    'GET workflows(<id>)?$select',
+    'GET workflows(<id>)/Microsoft.Dynamics.CRM.RetrieveProcessWithWfomJson',
+    'PATCH workflows(<id>)',
+    'GET workflows?$select',
+    'GET workflows?$select',
+    'GET workflows(<id>)?$select',
+    'GET workflows(<id>)/Microsoft.Dynamics.CRM.RetrieveProcessWithWfomJson',
+  ]);
   assert.deepEqual(writeLines(wire, out.from), [
     'PATCH workflows(<id>)',
     'POST workflows(00000000-0000-0000-0000-000000000000)/Microsoft.Dynamics.CRM.UpdateProcessWithWfomJson',
@@ -544,6 +594,18 @@ test('a state-only change is one conditional state write with no body, and is re
   const before = wire.row(id).wfom;
   const out = await settle(wire, dir, RULE, { opts: SWITCH });
   assert.ifError(out.error);
+  // The complete request list, reads included.
+  assert.deepEqual(wire.lines(out.from), [
+    'GET EntityDefinitions(LogicalName=\'workflow\')?$select',
+    'GET workflows?$select',
+    'GET workflows(<id>)?$select',
+    'GET workflows(<id>)/Microsoft.Dynamics.CRM.RetrieveProcessWithWfomJson',
+    'PATCH workflows(<id>)',
+    'GET workflows?$select',
+    'GET workflows?$select',
+    'GET workflows(<id>)?$select',
+    'GET workflows(<id>)/Microsoft.Dynamics.CRM.RetrieveProcessWithWfomJson',
+  ]);
   assert.deepEqual(writeLines(wire, out.from), ['PATCH workflows(<id>)']);
   const [write] = writesSince(wire, out.from);
   assert.deepEqual(write.body, { statecode: 1, statuscode: 2 });
