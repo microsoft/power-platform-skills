@@ -145,11 +145,22 @@ function validateDeclaredBpf(flow) {
  *       x:Null|x:String x:Key=RelationshipName, AttributeName      x:Boolean x:Key=IsClosedLoop
  *   StageComposite > Properties: Variables (empty), Activities > StepComposite*, StepLabels > mcwo:StepLabel*,
  *                                StageId, StageCategory, NextStageId
- *   StepComposite  > Properties: Variables (empty), Activities > Sequence DisplayName="ControlStep…" > mcwb:Control*,
+ *   StepComposite  > Properties: Variables (empty), Activities > Sequence > mcwb:Control*,
  *                                StepLabels > mcwo:StepLabel*, ProcessStepId, IsProcessRequired
  *   mcwb:Control   > mcwb:Control.<property> > InArgument > Literal | x:Null
  * Anything else — another activity in any Activities collection, a stage action, a condition, a Variables entry, an
  * unknown property — is a shape this module does not manage. The check is an allowlist: what it does not name refuses.
+ *
+ * A control step is recognised by its structure (a `Sequence` whose only children are `mcwb:Control` activities), not
+ * by its DisplayName: the SDK and the designer write "ControlStep4", but the name is presentation only and a maker may
+ * rename or drop it.
+ *
+ * Character content is checked as well as elements, because XAML carries meaning in text too: an argument written
+ *   <InArgument x:TypeArguments="x:String">[System.DateTime.UtcNow.ToString()]</InArgument>
+ * is a Visual Basic expression the SDK neither models nor reports, and a metadata-only edit would push it back
+ * unchanged. Whitespace between elements is benign (an indented XAML has it everywhere). Other text is allowed only
+ * where it is a plain value: an `x:String` leaf, an `x:Boolean` leaf of True/False, and the fixed placeholder sentence
+ * the designer writes into `mva:VisualBasic.Settings`. A control argument is one of the forms in `controlArgError`.
  */
 const WF_ACTIVITY = 'Microsoft.Crm.Workflow.Activities.';
 const LEAF_TAGS = ['x:Null', 'x:String', 'x:Boolean'];
@@ -161,6 +172,82 @@ const COMPOSITE_PROPS = {
 const xNode = (c) => (c && c.node) || c;
 const xElements = (n) => ((n && n.c) || []).map(xNode).filter((c) => c && typeof c.n === 'string' && !c.n.startsWith('#'));
 const xAttr = (n, k) => { const hit = ((n && n.a) || []).find((p) => Array.isArray(p) && p[0] === k); return hit ? String(hit[1]) : null; };
+// The attributes that carry a value. `#…` keys are the SDK's own bookkeeping (e.g. `#empty` on a self-closing element)
+// and `xmlns…` keys declare namespaces; neither is a value of the flow.
+const xValueAttrs = (n) => ((n && n.a) || []).filter((p) => Array.isArray(p) && !String(p[0]).startsWith('#') && !/^xmlns(:|$)/.test(String(p[0])));
+// The concatenated text directly inside an element. A text node is `{ n: '#text', a: [['#text', value]] }`.
+const xText = (n) => ((n && n.c) || []).map(xNode).filter((c) => c && c.n === '#text').map((c) => xAttr(c, '#text') || '').join('');
+const VB_SETTINGS_TEXT = 'Assembly references and imported namespaces for internal implementation';
+
+/** Why some node of a retained XAML tree holds content this module does not manage; null when none does. */
+function contentError(el) {
+  for (const c of ((el && el.c) || []).map(xNode)) {
+    if (!c || typeof c.n !== 'string') return 'its XAML holds a node this module cannot read';
+    if (c.n === '#text') continue;
+    // The SDK's tree keeps elements and text only today; a comment or CDATA node reaching it is refused, not skipped.
+    if (c.n.startsWith('#')) return `its XAML holds a ${c.n.slice(1)} node, which this module does not manage`;
+    const why = contentError(c);
+    if (why) return why;
+  }
+  const text = xText(el).trim();
+  if (!text) return null;
+  if (el.n === 'x:String') return null;
+  if (el.n === 'x:Boolean' && /^(true|false)$/i.test(text)) return null;
+  if (el.n === 'mva:VisualBasic.Settings' && text === VB_SETTINGS_TEXT) return null;
+  return `its XAML holds text in <${el.n || 'the document'}> (an expression or a value this module does not manage)`;
+}
+
+// A control's own attributes: its identity and flags, and the four arguments the designer may also write inline.
+const CONTROL_FLAGS = new Set(['ControlId', 'IsSystemControl', 'IsUnbound', 'SystemStepType']);
+const CONTROL_ARGS = new Set(['ClassId', 'ControlDisplayName', 'DataFieldName', 'Parameters']);
+// In attribute form a XAML argument value is a literal unless it opens an expression (`[…]`, Visual Basic) or a markup
+// extension (`{…}`, including the `{}` escape); `{x:Null}` is the one extension that is a plain null.
+const isPlainArgText = (v) => v === '{x:Null}' || !/^\s*[[{]/.test(v);
+
+/**
+ * Why a control's argument is not a supported form; null when it is. The supported forms are:
+ *   <mcwb:Control.P />                                                       no value
+ *   <mcwb:Control.P><InArgument x:TypeArguments="T" /></mcwb:Control.P>      an empty argument
+ *   <mcwb:Control.P><InArgument x:TypeArguments="T"><Literal x:TypeArguments="T" Value="…" /></InArgument></…>
+ *   <mcwb:Control.P><InArgument x:TypeArguments="T"><x:Null /></InArgument></mcwb:Control.P>
+ * Text in the argument (an expression), any other value activity, a second value or argument, or an attribute outside
+ * these is not a form this module manages.
+ */
+function controlArgError(cp) {
+  if (!cp.n.startsWith('mcwb:Control.') || xValueAttrs(cp).length || xText(cp).trim()) return 'a control step carries a value this module does not manage';
+  const args = xElements(cp);
+  if (args.length > 1) return 'a control step carries a value this module does not manage';
+  for (const arg of args) {
+    if (arg.n !== 'InArgument' || xValueAttrs(arg).some(([k]) => k !== 'x:TypeArguments')) return 'a control step carries a value this module does not manage';
+    if (xText(arg).trim()) return 'a control step carries an expression, which this module does not manage';
+    const values = xElements(arg);
+    if (values.length > 1) return 'a control step carries a value this module does not manage';
+    for (const v of values) {
+      const literal = v.n === 'Literal' && xValueAttrs(v).every(([k, val]) => k === 'x:TypeArguments' || (k === 'Value' && !/^\s*\{/.test(String(val))));
+      const nil = v.n === 'x:Null' && !xValueAttrs(v).length;
+      if (!(literal || nil) || xElements(v).length || xText(v).trim()) return 'a control step carries a value this module does not manage';
+    }
+  }
+  return null;
+}
+
+/** Why one entry of a step's Activities collection is not a control step; null when it is. */
+function controlStepError(seq) {
+  if (seq.n !== 'Sequence') return `a step holds <${seq.n}>, which this module does not manage (only a control step is)`;
+  if (xValueAttrs(seq).some(([k]) => k !== 'DisplayName')) return 'a control step carries settings this module does not manage';
+  for (const ctl of xElements(seq)) {
+    if (ctl.n !== 'mcwb:Control') return `a control step holds <${ctl.n}>, which this module does not manage`;
+    for (const [k, v] of xValueAttrs(ctl)) {
+      if (CONTROL_FLAGS.has(k)) continue;
+      if (!CONTROL_ARGS.has(k) || !isPlainArgText(String(v))) return 'a control step carries a value this module does not manage';
+    }
+    for (const cp of xElements(ctl)) {
+      const why = controlArgError(cp);
+      if (why) return why;
+    }
+  }
+  return null;
+}
 
 /** Every `ControlId` a retained XAML tree holds, lower-cased. */
 function controlIdsOf(tree) {
@@ -193,6 +280,8 @@ function settleControlIds(rec, id, held) {
 /** Why a retained XAML tree is not a linear flow of stages and control steps; null when it is. */
 function xamlShapeError(xaml) {
   if (!xaml || typeof xaml !== 'object' || !Array.isArray(xaml.c)) return 'its XAML could not be read as a linear flow';
+  const content = contentError(xaml);
+  if (content) return content;
   const workflows = [];
   for (const el of xElements(xaml)) {
     if (el.n === 'x:Members') {
@@ -239,15 +328,8 @@ function compositeError(el, kind) {
       if (items.some((x) => x.n !== 'mcwo:StepLabel' || xElements(x).length)) return `a ${kind} carries labels this module does not manage`;
     } else if (rule === 'ControlStep') {
       for (const seq of items) {
-        if (seq.n !== 'Sequence' || !/^ControlStep/.test(xAttr(seq, 'DisplayName') || '')) return `a step holds <${seq.n}>, which this module does not manage (only a control step is)`;
-        for (const ctl of xElements(seq)) {
-          if (ctl.n !== 'mcwb:Control') return `a control step holds <${ctl.n}>, which this module does not manage`;
-          for (const cp of xElements(ctl)) {
-            const ok = cp.n.startsWith('mcwb:Control.') && xElements(cp).every((arg) => arg.n === 'InArgument'
-              && xElements(arg).every((v) => (v.n === 'Literal' || v.n === 'x:Null') && !xElements(v).length));
-            if (!ok) return 'a control step carries a value this module does not manage';
-          }
-        }
+        const why = controlStepError(seq);
+        if (why) return why;
       }
     } else {
       for (const child of items) {

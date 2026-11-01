@@ -537,12 +537,24 @@ test('a state-only change is one conditional state write with no body, and is re
   assert.equal((await settle(wire, dir, active)).result.noop, true);
 });
 
-test('a live flow whose XAML holds an activity this module does not model is refused on every path, unsent', async () => {
+test('a live flow whose XAML holds an activity or an expression this module does not model is refused on every path, unsent', async () => {
+  const EXPR = '[System.String.Concat(&quot;foreign&quot;, System.DateTime.UtcNow.ToString())]';
   const foreign = [
     // An opaque activity in a stage's own Activities collection (a stage action).
     ['stage', (xaml) => { let n = 0; return xaml.replace(/<sco:Collection x:TypeArguments="Activity" x:Key="Activities">/g, (tag) => (++n === 2 ? `${tag}<Sequence DisplayName="Foreign stage activity"><WriteLine Text="foreign" /></Sequence>` : tag)); }],
     // Another activity inside a control step.
     ['step', (xaml) => xaml.replace(/(<Sequence DisplayName="ControlStep[^"]*">)/, '$1<WriteLine Text="foreign" />')],
+    // A control argument written as a Visual Basic expression (text) instead of a Literal: the SDK's stages and steps
+    // read the same, so only the XAML shows it.
+    ['expression argument', (xaml) => xaml.replace(/(<mcwb:Control\.Parameters><InArgument[^>]*>)<Literal[^>]*\/>/, `$1${EXPR}`)],
+    // An expression beside a Literal in the same argument.
+    ['expression beside a literal', (xaml) => xaml.replace(/(<mcwb:Control\.Parameters><InArgument[^>]*><Literal[^>]*\/>)/, `$1${EXPR}`)],
+    // An expression in an argument's attribute form.
+    ['inline expression', (xaml) => xaml.replace(/<mcwb:Control /, `<mcwb:Control ControlDisplayName="${EXPR}" `)],
+    // An expression activity as the argument's value.
+    ['value activity', (xaml) => xaml.replace(/(<mcwb:Control\.Parameters><InArgument[^>]*>)<Literal[^>]*\/>/, '$1<mva:VisualBasicValue x:TypeArguments="x:String" ExpressionText="&quot;foreign&quot;" />')],
+    // Text directly inside a control step, between its activities.
+    ['text in a control step', (xaml) => xaml.replace(/(<Sequence DisplayName="ControlStep[^"]*">)/, '$1foreign')],
   ];
   for (const [where, mutate] of foreign) {
     const { wire, dir, id } = await created();
@@ -560,6 +572,31 @@ test('a live flow whose XAML holds an activity this module does not model is ref
     assert.equal(adopted.error && adopted.error.code, 'bpf-shape-unsupported', `${where}: adoption`);
     assert.deepEqual(writesSince(wire, adopted.from), []);
     assert.match(wire.row(id).xaml, /foreign/, `${where}: the activity survives`);
+  }
+});
+
+test('a linear flow whose control steps are renamed, unnamed or indented is still managed: a no-op reads only, an edit is not refused', async () => {
+  const variants = [
+    // A control step is known by its structure, not its DisplayName ("ControlStep4" when the SDK writes it).
+    ['renamed', (xaml) => xaml.replace(/(<Sequence\b[^>]*?)\sDisplayName="ControlStep[^"]*"/g, '$1 DisplayName="Contact details"')],
+    ['unnamed', (xaml) => xaml.replace(/(<Sequence\b[^>]*?)\sDisplayName="ControlStep[^"]*"/g, '$1')],
+    // Whitespace between elements is not content.
+    ['indented', (xaml) => xaml.replace(/></g, '>\n    <')],
+  ];
+  for (const [how, mutate] of variants) {
+    const { wire, dir, id } = await created();
+    const row = wire.row(id);
+    const next = mutate(row.xaml);
+    assert.notEqual(next, row.xaml, how);
+    row.xaml = next;
+    row.version += 1;
+    const noop = await settle(wire, dir, FLOW);
+    assert.ifError(noop.error);
+    assert.equal(noop.result.noop, true, `${how}: a no-op`);
+    assert.deepEqual(writesSince(wire, noop.from), [], `${how}: nothing is sent`);
+    const edit = await settle(wire, dir, { ...FLOW, order: 124 }, { opts: SWITCH });
+    assert.ifError(edit.error);
+    assert.ok(writesSince(wire, edit.from).length, `${how}: the edit is sent`);
   }
 });
 
