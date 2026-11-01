@@ -54,7 +54,7 @@ const { createPassthroughCreates } = require('./lib/creates-passthrough.js');
 // The configuration kinds (lib/configuration-artifacts.js): the --authorize tokens they claim, the --deployment-settings bindings, the
 // send-once scope of their writes (lib/configuration-transport.js), and the connection inventory a reference's binding is proven
 // against, read as list-connections.js reads it (the SDK first, pac when the SDK's route is refused).
-const { configurationAuthorizationKeys, readDeploymentBindings } = require('./lib/configuration-artifacts.js');
+const { configurationAuthorizationKeys, readDeploymentBindings, usesConfiguration } = require('./lib/configuration-artifacts.js');
 const { configurationSendOnce } = require('./lib/configuration-transport.js');
 const { sdkFirst, connectivity } = require('./lib/sdk-first.js');
 const { connectionRowFromSdk, listConnectionsWithPac } = require('./list-connections.js');
@@ -81,7 +81,9 @@ function assertWorkspaceDir(workspaceDir, { create }) {
 
 // Construct the SDK against the vendored bundle + an az-token HttpClient. Two clients:
 //   sdk          — carries solutionUniqueName (metadata + record writes auto-join the
-//                  solution via the MSCRM.SolutionUniqueName header); does no workspace I/O.
+//                  solution via the MSCRM.SolutionUniqueName header). Its workspace is a throwaway, prepared
+//                  only for a spec with configuration items: they are the one thing written through it as
+//                  an artifact (see below); for every other spec it does no workspace I/O.
 //   provisionSdk — header-less; owns a workspace. In an APPLY (`persistent`) that is the app
 //                  folder's PERSISTENT one: every discovery read (findTables/findColumns/
 //                  fetchEntityMetadata) and every artifact (views/charts/forms/app) lands there, so
@@ -130,7 +132,8 @@ async function makeSdk(env, spec, workspaceDir, languageCode, { persistent = tru
   let folderNote = null;
   try {
     sdk = createMakerSdk({
-      workspaceStorage: createNodeWorkspaceStorage(sdkTempDir), // unused (no workspace ops)
+      // A throwaway workspace: only the configuration items work in it (prepared below), and each of them re-reads the server's copy.
+      workspaceStorage: createNodeWorkspaceStorage(sdkTempDir),
       instanceUrl: env,
       httpClient,
       solutionUniqueName: spec.solution && spec.solution.uniqueName,
@@ -167,6 +170,14 @@ async function makeSdk(env, spec, workspaceDir, languageCode, { persistent = tru
       // forward are (lib/workspace-binding.js). Only an apply can meet it: a preview's workspace is brand new.
       throw workspaceBindingError(err, { env, workspaceDir }) || err;
     }
+    // The configuration items (environment variables, connection references, Custom APIs, duplicate-detection rules) are written through
+    // `sdk`, because their creates must join the solution, and the SDK writes each one as an artifact: it creates it in the workspace, pushes
+    // it, and reads the server's copy back with `fetchArtifact(…, { overwrite: true })`. Every one of those refuses a workspace that was never
+    // prepared (WORKSPACE_NOT_INITIALIZED), so without this a spec that declared one halted at the data model, every time.
+    // Prepared only for a spec that uses them (lib/configuration-artifacts.js usesConfiguration, the test the engine makes before building
+    // their runtime), so every other spec keeps the client it had. Preparing sends no request: it reads and writes this throwaway folder only
+    // (manifest.json and the kind folders), which is removed with the rest of the run's temporary files.
+    if (usesConfiguration(spec)) await sdk.initWorkspace();
     if (!persistent) {
       // The preview did not open the app folder's workspace, so it cannot be refused by it — but an --apply
       // would be, and the operator is better told now than after the plan has been read and approved.

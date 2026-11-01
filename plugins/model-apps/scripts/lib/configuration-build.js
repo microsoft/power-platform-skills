@@ -57,7 +57,9 @@ function namedByPages(pages) {
 /**
  * @param {object} parts
  * @param {object} parts.spec           the App Spec (normalized, validated)
- * @param {object} parts.sdk            the build's solution-scoped maker SDK (header-ful, workspace initialised)
+ * @param {object} parts.sdk            the build's solution-scoped maker SDK (header-ful). Its workspace MUST be initialised: every item is
+ *                                      written and read back as an artifact. The build command prepares a throwaway one for a spec
+ *                                      that uses these kinds (build-model-app.js makeSdk); an SDK made elsewhere must call initWorkspace()
  * @param {object} [parts.provision]    the header-less client; reads only (unused for writes: the creates must join the solution)
  * @param {object} parts.opts           the build's opts: creates, managed, managedIdOf, configurationBindings, authorizedDestructive (Set), connections
  * @param {string} parts.appUniqueName  the app's unique name (sdk-build appUniqueName(spec)), for the management records

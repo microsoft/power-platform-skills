@@ -235,3 +235,120 @@ test('a spec without the configuration fields sends no configuration request and
   assert.ok(!('configurationVersion' in result));
   assert.deepEqual(h.org.unexpected, []);
 });
+
+// The build COMMAND (build-model-app.js main), with the SDK it makes itself (makeSdk over the real bundle): the tests above hand the
+// engine an SDK they prepared, so they never meet the solution-scoped instance the command builds. Only what reaches outside the process
+// is a double: the transport (the strict org above, behind the plugin's own az-token client), the identity check, the language read, the
+// page backend and telemetry. Each SDK the command makes is watched for `initWorkspace`, which reads and writes local files only.
+const commandOrg = () => createConfigOrg({
+  tables: [{ logicalName: 'contact', attributes: ['emailaddress1', 'lastname'] }],
+  solution: { uniqueName: 'ContosoSol', version: '1.0.0.0', prefix: 'contoso' },
+});
+
+// `--allow-destructive` skips the read-only collision check, whose reads (app modules, forms) this org does not model; nothing here deletes.
+function runCommand(spec, { org = commandOrg(), apply = true, appDir = path.join(makeTempDir('config-command-'), 'app'), argv = ['--stage', 'data', '--allow-destructive'] } = {}) {
+  const { loadCli } = require('./helpers/cli-harness.js');
+  const fs = require('node:fs');
+  const realHttp = require('../lib/sdk-http-client.js');
+  const realMakerSdk = require('../lib/maker-sdk.js');
+  fs.mkdirSync(appDir, { recursive: true });
+  const specPath = path.join(appDir, 'app-spec.json');
+  fs.writeFileSync(specPath, JSON.stringify(spec));
+  const sdks = [];
+  const scripts = path.join(__dirname, '..');
+  const authCli = loadCli(path.join(scripts, 'lib', 'dataverse-auth.js'));
+  const cli = loadCli(path.join(scripts, 'build-model-app.js'), {
+    argv: ['--env', org.origin, '--spec', `@${specPath}`, ...(apply ? ['--apply'] : []), '--non-interactive', ...argv],
+    env: { PATH: path.dirname(process.execPath), POWER_PLATFORM_SKILLS_TELEMETRY_MODEL_APPS_OPTOUT: '1' },
+    requires: {
+      './lib/dataverse-auth.js': { ...authCli.exports, preflightAuth: async () => ({ ok: true }) },
+      './lib/entity-provision.js': { ...require('../lib/entity-provision.js'), resolveAuthoringLanguage: async () => 1033 },
+      './lib/sdk-http-client.js': {
+        ...realHttp,
+        createAzHttpClient: (env, o = {}) => realHttp.createAzHttpClient(env, { ...o, getToken: () => 'test-token-0123456789abcdef', request: (req) => org.request(req), sleep: async () => {} }),
+      },
+      './lib/maker-sdk.js': {
+        ...realMakerSdk,
+        createMakerSdk: (o) => {
+          const sdk = realMakerSdk.createMakerSdk(o);
+          const seen = { scoped: !!o.solutionUniqueName, inits: 0, requestsAtInit: [] };
+          const init = sdk.initWorkspace.bind(sdk);
+          sdk.initWorkspace = async () => {
+            seen.inits += 1;
+            const before = org.requests.length;
+            await init();
+            seen.requestsAtInit.push(org.requests.length - before);
+          };
+          sdks.push(seen);
+          return sdk;
+        },
+      },
+      './lib/genpage-sdk.js': { ...require('../lib/genpage-sdk.js'), makeGenpageSdk: () => ({ dispose: async () => ({ left: [] }) }) },
+      './lib/telemetry/skill-completed.js': { ...require('../lib/telemetry/skill-completed.js'), emitSkillCompleted: async () => {} },
+    },
+  });
+  return (async () => {
+    let exitCode;
+    let thrown;
+    try {
+      await cli.main();
+    } catch (e) {
+      if (e && e.exitCode !== undefined) exitCode = e.exitCode;
+      else thrown = e;
+    }
+    let payload;
+    try { payload = JSON.parse(authCli.stdoutText()); } catch { payload = undefined; }
+    return { org, appDir, sdks, exitCode, thrown, payload, stderr: [...cli.stderr, ...authCli.stderr].join('') };
+  })();
+}
+
+test('the build command creates a declared environment variable through the SDK it makes itself, and prepares that SDK\u2019s workspace without a request', async () => {
+  const spec = makeSpec();
+  // A connection reference's binding is proven through the Power Apps service, which this command reaches outside the process.
+  delete spec.connectionReferences;
+  delete spec.duplicateDetectionRules;
+  const { result: out, requested } = await withoutStableCreateModules(() => runCommand(spec));
+  assert.deepEqual(requested, [], 'no stable-id create module is loaded');
+  assert.equal(out.thrown && out.thrown.message, undefined, 'the build did not halt');
+  assert.ok(!/WORKSPACE_NOT_INITIALIZED/.test(`${out.stderr} ${JSON.stringify(out.payload)}`), `no workspace halt: ${out.stderr.slice(-600)}`);
+  assert.equal(out.exitCode, 0, out.stderr.slice(-600));
+  assert.deepEqual(out.org.rows('environmentvariabledefinitions').map((r) => r.schemaname).sort(), ['contoso_ApiBase', 'contoso_ApiKey']);
+  assert.equal(out.org.rows('customapis').length, 1);
+  const scoped = out.sdks.filter((s) => s.scoped);
+  assert.equal(scoped.length, 1, 'one solution-scoped SDK');
+  assert.equal(scoped[0].inits, 1, 'its workspace is prepared once');
+  assert.deepEqual(scoped[0].requestsAtInit, [0], 'preparing it sends nothing');
+  assert.deepEqual(out.org.unexpected, []);
+
+  // The same command again, in the same app folder: the throwaway workspace is new, and each item is read back from the server.
+  const mark = out.org.requests.length;
+  const again = (await withoutStableCreateModules(() => runCommand(spec, { org: out.org, appDir: out.appDir }))).result;
+  assert.equal(again.thrown && again.thrown.message, undefined, 'the rerun did not halt');
+  assert.equal(again.exitCode, 0, again.stderr.slice(-600));
+  assert.deepEqual(out.org.writes(mark), [], 'an unchanged rerun writes nothing');
+  assert.deepEqual(out.org.unexpected, []);
+});
+
+test('the build command\u2019s dry run of a spec with configuration items plans them without a workspace halt', async () => {
+  const spec = makeSpec();
+  delete spec.connectionReferences;
+  delete spec.duplicateDetectionRules;
+  const { result: out } = await withoutStableCreateModules(() => runCommand(spec, { apply: false, argv: ['--stage', 'data'] }));
+  assert.equal(out.thrown && out.thrown.message, undefined, 'the dry run did not halt');
+  assert.ok(!/WORKSPACE_NOT_INITIALIZED/.test(`${out.stderr} ${JSON.stringify(out.payload)}`), out.stderr.slice(-600));
+  assert.equal(out.exitCode, 0, out.stderr.slice(-600));
+  assert.deepEqual(out.org.writes(0), [], 'a dry run writes nothing');
+  assert.deepEqual(out.org.unexpected, []);
+});
+
+test('the build command leaves the solution-scoped SDK\u2019s workspace unprepared for a spec without configuration items', async () => {
+  const { result: out, requested } = await withoutStableCreateModules(() => runCommand(makeSpec({ configuration: false })));
+  assert.deepEqual(requested, []);
+  if (out.thrown) throw out.thrown;
+  assert.equal(out.exitCode, 0, out.stderr.slice(-600));
+  const scoped = out.sdks.filter((s) => s.scoped);
+  assert.equal(scoped.length, 1);
+  assert.equal(scoped[0].inits, 0, 'nothing is prepared that the spec does not use');
+  assert.deepEqual(out.org.requests.filter((r) => CONFIGURATION_PATH.test(String(r.path))).map((r) => `${r.method} ${r.path}`), []);
+  assert.deepEqual(out.org.unexpected, []);
+});
