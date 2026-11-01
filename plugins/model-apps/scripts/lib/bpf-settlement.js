@@ -46,6 +46,7 @@ const { intentSha256, normalizeGuid, isApproved } = require('./reconcile-common.
 const { runManagedFeature } = require('./managed-feature-contract.js');
 const { requestBodySha256 } = require('./workflow-effect-context.js');
 const { identityFor, reserveChildren } = require('./creates-catalog.js');
+const { uuidV5 } = require('./creates-identity.js');
 const { CODES } = require('./managed-bindings.js');
 const { createWorkflowDriver, createCopyGuard, answeredRefusal, coded, ACTIVE, DRAFT } = require('./workflow-drive.js');
 
@@ -160,6 +161,34 @@ const COMPOSITE_PROPS = {
 const xNode = (c) => (c && c.node) || c;
 const xElements = (n) => ((n && n.c) || []).map(xNode).filter((c) => c && typeof c.n === 'string' && !c.n.startsWith('#'));
 const xAttr = (n, k) => { const hit = ((n && n.a) || []).find((p) => Array.isArray(p) && p[0] === k); return hit ? String(hit[1]) : null; };
+
+/** Every `ControlId` a retained XAML tree holds, lower-cased. */
+function controlIdsOf(tree) {
+  const out = new Set();
+  const walk = (n) => { for (const el of xElements(n)) { const v = xAttr(el, 'ControlId'); if (v) out.add(v.toLowerCase()); walk(el); } };
+  if (tree && typeof tree === 'object') walk(tree);
+  return out;
+}
+/*
+ * The SDK mints a random `ControlId` for each control step it writes into new XAML (a fresh GUID per prepare), so staging
+ * the same declaration twice gives two different bodies:
+ *   <mcwb:Control ControlId="a6e5bd68-…" IsSystemControl="False" …>   then, from another process,   ControlId="11dcf977-…"
+ * A create or edit that a later run sends again under its recorded token must be byte-identical to the body whose
+ * sha256 the effect recorded (the send gate refuses anything else), so every ControlId the base row did not already
+ * hold is replaced, in document order, by one derived from the flow's id, its ordinal and the held set. Held ids are
+ * never touched: they are the live row's own. Each id appears once in the XAML, as that attribute value only.
+ */
+function settleControlIds(rec, id, held) {
+  if (typeof rec.xaml !== 'string') return;
+  const base = [...held].sort();
+  let n = 0;
+  rec.xaml = rec.xaml.replace(/ControlId="([0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12})"/g, (whole, v) => {
+    if (held.has(v.toLowerCase())) return whole;
+    const fixed = uuidV5(normalizeGuid(id), JSON.stringify(['bpf-control', 1, n, ...base]));
+    n += 1;
+    return `ControlId="${fixed}"`;
+  });
+}
 
 /** Why a retained XAML tree is not a linear flow of stages and control steps; null when it is. */
 function xamlShapeError(xaml) {
@@ -506,6 +535,7 @@ async function settleDeclaredBpf(input) {
   // stages again, and the edit must still end Active.
   async function stageEdit(id, view, map, baseStatus = view.status) {
     guard.noteStaged(id);
+    const held = controlIdsOf((((await sdk.getArtifact(ARTIFACT, id)) || {}).bag || {}).xaml);
     const stagesNow = async () => ((await sdk.getArtifact(ARTIFACT, id)) || {}).stages || [];
     if (flow.stages !== undefined) {
       for (let i = 0; i < flow.stages.length; i += 1) {
@@ -542,12 +572,13 @@ async function settleDeclaredBpf(input) {
       else await sdk.updateElement(ARTIFACT, id, '/description', flow.description);
     }
     if (flow.order !== undefined && flow.order !== live.order) await sdk.updateElement(ARTIFACT, id, '/order', flow.order);
-    return prepared(id, flow.status || baseStatus, 'edit');
+    return prepared(id, flow.status || baseStatus, 'edit', held);
   }
-  async function prepared(id, desiredStatus, mode) {
+  async function prepared(id, desiredStatus, mode, held = new Set()) {
     const prep = await sdk.withArtifactLock(ARTIFACT, id, () => sdk.prepareArtifactUnlocked(ARTIFACT, id, undefined));
     const rec = prep.payload && prep.payload.record;
     if (!rec || typeof rec !== 'object') throw coded(CODES.notSettled, `${label}: the SDK prepared no workflow record`);
+    settleControlIds(rec, id, held);
     // The SDK's own parser over the exact record it will send: the projection a fresh read must give back.
     const sent = projectBpf(prep.reg.adapter.fromApiResponse(clone({ ...rec, statecode: 0 })));
     if (sent.unsupported) throw coded('bpf-shape-unsupported', `${label}: ${sent.unsupported}`);
