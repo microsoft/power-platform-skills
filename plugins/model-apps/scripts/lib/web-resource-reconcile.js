@@ -17,9 +17,11 @@
 //     The id is noted in the build's receipt store (web-resource-records.js) at once, and the next run writes the content
 //     again BY THAT ID (never a fresh-name create, never a publish-only shortcut). A receipt wins over byte equality: one
 //     published read that matches does not prove the write it stands for was published.
-//     Before that receipt is noted, the build reads the row's published layer itself: when it holds exactly the bytes the
-//     write just sent, the write is confirmed (publishedHolds). This is what ends an EMPTYING write: the platform answers
-//     an emptied row with `content: null`, which the SDK's read-back does not accept and this module reads as zero bytes.
+//     Before that receipt is noted, when the SDK's own publish COMPLETED and only its read-back could not confirm the bytes
+//     (publicationCompleted: the error carries no failure), the build reads the row's published layer itself: when it holds
+//     exactly the bytes the write just sent, the write is confirmed (publishedHolds). This is what ends an EMPTYING write:
+//     the platform answers an emptied row with `content: null`, which the SDK's read-back does not accept and this module
+//     reads as zero bytes. A refused or failed publish is never confirmed this way: it keeps the receipt.
 // An `external` resource is shared and never the spec's to write, so declared mode refuses it outright.
 //
 // Inline publication is the one exception to "publish only after settlement": the SDK publishes inside the write, so a
@@ -309,14 +311,32 @@ function unconfirmedOutcome(result, ctx, plan, id) {
 }
 
 /**
- * After the SDK's WEB_RESOURCE_UNVERIFIED, whether this build's OWN published read shows exactly the bytes the write sent.
- * The SDK throws that code for four causes — the publish failed, its read-back failed, its read-back "carried no content",
- * or the bytes differ — and the third is how every successful EMPTYING ends: the platform answers the emptied row with
- * `content: null`, and the SDK accepts only a string. webResourceReads().published reads null as zero bytes, so one more
- * read settles that case; it settles the others too when the platform did apply the write. The write has just put these
- * bytes in the saved layer, so a published layer that holds them too leaves nothing pending: the write is confirmed.
- * Anything else — absent, unreadable, other bytes, no reader — is false, and the caller keeps the unconfirmed outcome and
- * its receipt exactly as before. A reader that throws is false too: confirmation never turns a write into a failure.
+ * Whether the SDK's WEB_RESOURCE_UNVERIFIED says its publish COMPLETED. The SDK throws that code for four causes, and only
+ * two carry the failure they met as a (non-enumerable) `cause` (the bundled SDK's attachCause):
+ *   - the publish failed (a lock refusal 429 `0x80071151`, a 500, ...): cause = that failure;
+ *   - the read-back of the published content failed: cause = that failure;
+ *   - the read-back answered 200 but "carried no content" (`{ content: null }`): no cause;
+ *   - the read-back answered 200 with other bytes: no cause.
+ * The last two are reached only after the SDK's own publish answered success, so no cause is the positive evidence that the
+ * publication completed (lib/retry-policy.js reads the same distinction). A refused publish proves nothing about the saved
+ * layer — the SDK documents a 204 content PATCH whose write was lost when the publish after it was refused under the lock —
+ * so it is never confirmed here, however the published layer reads: an unchanged published copy that happens to equal the
+ * spec would hide an older saved layer a later publish exposes. Anything that carries a cause, or is not that code, is false.
+ */
+function publicationCompleted(err) {
+  if (!err || typeof err !== 'object' || err.code !== 'WEB_RESOURCE_UNVERIFIED') return false;
+  return !Object.prototype.hasOwnProperty.call(err, 'cause') && err.cause == null;
+}
+
+/**
+ * After the SDK's WEB_RESOURCE_UNVERIFIED with a completed publication (publicationCompleted), whether this build's OWN
+ * published read shows exactly the bytes the write sent. The "carried no content" cause is how every successful EMPTYING
+ * ends: the platform answers the emptied row with `content: null`, and the SDK accepts only a string.
+ * webResourceReads().published reads null as zero bytes, so one more read settles that case. A publish that completed after
+ * this write published whatever the saved layer held, so a published layer that holds exactly the sent bytes leaves nothing
+ * pending: the write is confirmed. Anything else — absent, unreadable, other bytes, no reader — is false, and the caller
+ * keeps the unconfirmed outcome and its receipt exactly as before. A reader that throws is false too: confirmation never
+ * turns a write into a failure.
  */
 async function publishedHolds(reads, id, wanted) {
   const guid = normalizeGuid(id);
@@ -355,7 +375,7 @@ async function applyWebResourceUpdate(plan, { sdk, reads }, ctx = {}) {
     // The confirming read is of the row this plan wrote: an error naming another id is never confirmed by this row's bytes.
     const errId = err && err.id;
     const sameRow = !errId || normalizeGuid(errId) === normalizeGuid(plan.id);
-    const confirmed = code === 'WEB_RESOURCE_UNVERIFIED' && sameRow && await publishedHolds(reads, plan.id, wantedBytes(plan.options));
+    const confirmed = publicationCompleted(err) && sameRow && await publishedHolds(reads, plan.id, wantedBytes(plan.options));
     if (!confirmed) {
       if (code === 'WEB_RESOURCE_UNVERIFIED') unconfirmedOutcome(result, ctx, plan, errId || plan.id);
       else result.unknown.push({ ...refusal(plan.key, 'web-resource-write-unknown', 'the web resource write did not report its outcome; check it'), id: plan.id, possiblyPublished: true, ...(code ? { sdkCode: code } : {}) });
@@ -383,9 +403,10 @@ async function applyCreate(plan, sdk, reads, ctx, result, record) {
       const code = err && typeof err.code === 'string' ? err.code : '';
       if (code === 'WEB_RESOURCE_UNVERIFIED') {
         // The row exists under err.id. When the build's own published read holds the bytes the create sent (a new EMPTY
-        // resource reads back as `content: null`, which the SDK cannot accept), it is a confirmed create of that id.
+        // resource reads back as `content: null`, which the SDK cannot accept), it is a confirmed create of that id — only
+        // after a publish that completed (publicationCompleted); a refused publish keeps the create unconfirmed.
         const id = normalizeGuid(err.id);
-        if (id && await publishedHolds(reads, id, wantedBytes(plan.options))) {
+        if (id && publicationCompleted(err) && await publishedHolds(reads, id, wantedBytes(plan.options))) {
           serverId = id;
           return { outcome: 'saved', code: '', sdkResult: { id, name: plan.options.name } };
         }

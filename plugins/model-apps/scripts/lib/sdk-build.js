@@ -4163,7 +4163,7 @@ async function runSdkBuildPhases(spec, opts, owed) {
             readDependents: readWebResourceDependents(provision.dataverse),
             recordedId: unconfirmedWebResources.idOf(wr.name),
           }, wrCtx);
-          // The same reads confirm a write the SDK could not (an emptied row reads back as `content: null`).
+          // The same reads confirm a write the SDK could not, once its publish completed (an emptied row reads back as `content: null`).
           const r = await applyWebResourceUpdate(plan, { sdk: provision, reads }, wrCtx);
           // An adoption is asked with what it would take over: the row's id and the components the platform reports as
           // depending on it (plan.approvalFacts). Only direct, platform-tracked dependents exist there; the note says so.

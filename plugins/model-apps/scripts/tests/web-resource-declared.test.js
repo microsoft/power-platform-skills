@@ -412,3 +412,67 @@ test('real SDK: a new declared web resource with empty content that reads back a
   assert.deepEqual([again.wrPatches.length, again.wrPublishes.length], [0, 0]);
   assert.equal(org.calls.filter((c) => c.method === 'POST' && c.path.startsWith('/webresourceset')).length, 1, 'one create, never a second');
 });
+// The platform fault the SDK documents: a content PATCH answers 204, but the publish after it is refused under the
+// customization lock (429 0x80071151) and the PATCH's write is lost. `intercept` routes run before the fake's own.
+function refusePublishOf(org, id, { losePatch = false } = {}) {
+  const state = { on: true };
+  if (losePatch) org.intercept((c) => state.on && c.method === 'PATCH' && c.path === `/webresourceset(${id()})`, () => ({ status: 204, headers: {}, body: null }));
+  org.intercept((c) => state.on && c.method === 'POST' && c.path === '/PublishXml' && String(c.body && c.body.ParameterXml).includes(`<webresource>${id()}</webresource>`),
+    () => ({ status: 429, headers: {}, body: { error: { code: '0x80071151', message: 'Another customization operation holds the lock.' } } }));
+  return state;
+}
+
+test('real SDK: a refused publish whose receipt rewrite was lost is not confirmed by an unchanged published copy that matches the spec; the receipt stays', async () => {
+  const { spec, build, dir, org } = realBundle();
+  assert.equal((await build(spec)).err, undefined);
+  const wr = spec.webResources[0];
+  const row = [...org.resources.values()].find((r) => r.name === wr.name);
+  const wanted = b64(wr.content);
+  // An earlier unconfirmed write left other bytes in the saved layer; the published layer still matches today's spec.
+  const pending = b64('var olderPending = 9;');
+  row.content = pending;
+  assert.equal(row.publishedContent, wanted);
+  writeUnconfirmedWebResources(dir, org.origin, new Map([[wr.name, { name: wr.name, id: row.webresourceid }]]));
+  const fault = refusePublishOf(org, () => row.webresourceid, { losePatch: true });
+  const result = await build(spec, approvals(spec, `adopt:webresource:${wr.name}`));
+  assert.deepEqual(result.wrPatches.map((c) => c.body.content), [wanted], 'the receipt is written again by id');
+  assert.equal(result.wrPublishes.length, 1);
+  assert.equal(result.err && result.err.code, 'web-resource-publication-unconfirmed', 'a refused publish never settles as written');
+  assert.equal(readUnconfirmedWebResources(dir, org.origin).size, 1, 'the only recovery receipt is kept');
+  // What the receipt protects: the saved layer still holds the older bytes, which a later ordinary publish exposes.
+  fault.on = false;
+  await org.httpClient.post(`${org.origin}/api/data/v9.0/PublishXml`, { ParameterXml: `<importexportxml><webresources><webresource>${row.webresourceid}</webresource></webresources></importexportxml>` });
+  assert.equal(row.publishedContent, pending);
+});
+
+test('real SDK: a refused publish of a write whose published layer still holds other bytes stays unconfirmed and keeps its receipt', async () => {
+  const { spec, build, dir, org } = realBundle();
+  assert.equal((await build(spec)).err, undefined);
+  const row = [...org.resources.values()].find((r) => r.name === spec.webResources[0].name);
+  const initial = row.publishedContent;
+  const changed = structuredClone(spec);
+  changed.webResources[0].content = 'var changed = 2;';
+  refusePublishOf(org, () => row.webresourceid);
+  const result = await build(changed, approvals(changed, `adopt:webresource:${row.name}`));
+  assert.equal(result.err && result.err.code, 'web-resource-publication-unconfirmed');
+  assert.equal(readUnconfirmedWebResources(dir, org.origin).size, 1);
+  assert.equal(row.publishedContent, initial);
+  assert.equal(row.content, b64('var changed = 2;'));
+});
+
+test('real SDK: a new empty declared web resource whose publish is refused is not a confirmed create, even when its row already reads back empty', async () => {
+  const { spec, build, dir, org } = realBundle({ emptyAsNull: true });
+  const empty = structuredClone(spec);
+  empty.webResources[0].content = '';
+  const created = () => { const r = [...org.resources.values()].find((x) => x.name === empty.webResources[0].name); return r ? r.webresourceid : '<none>'; };
+  // The publish is refused, yet the row's plain read answers its saved bytes (`content: null`), as a never-published row
+  // may: equal bytes, but nothing proves what a later publish shows.
+  org.intercept((c) => c.method === 'POST' && c.path === '/PublishXml' && String(c.body && c.body.ParameterXml).includes(`<webresource>${created()}</webresource>`), () => {
+    const row = org.resources.get(created());
+    row.publishedContent = row.content;
+    return { status: 429, headers: {}, body: { error: { code: '0x80071151', message: 'Another customization operation holds the lock.' } } };
+  });
+  const result = await build(empty);
+  assert.equal(result.err && result.err.code, 'web-resource-publication-unconfirmed');
+  assert.equal(readUnconfirmedWebResources(dir, org.origin).size, 1, 'the create keeps its receipt');
+});

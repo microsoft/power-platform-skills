@@ -361,16 +361,25 @@ test('real SDK: a new empty declared web resource that reads back as content nul
   assert.deepEqual(result.managedBindings.map((b) => [b.id, b.origin]), [[created.webresourceid, 'created']]);
 });
 
-test('an unconfirmed write is confirmed only by the row it wrote holding exactly the bytes it sent', async () => {
-  const unverified = (id) => Object.assign(new Error('was written, but publishing it failed'), { code: 'WEB_RESOURCE_UNVERIFIED', id });
-  // [what, the id the SDK names, whether the write reaches the row, whether the build's published read fails, confirmed]
+test('an unconfirmed write is confirmed only after a publish that completed, by the row it wrote holding exactly the bytes it sent', async () => {
+  // The SDK's error after its publish answered success and its read-back carried no content has NO cause; a refused
+  // publish or a failed read-back carries that failure as a non-enumerable cause (the SDK's attachCause).
+  const unverified = (id, cause) => {
+    const e = Object.assign(new Error('was written and published, but the read-back carried no content'), { code: 'WEB_RESOURCE_UNVERIFIED', id });
+    if (cause) Object.defineProperty(e, 'cause', { value: cause, enumerable: false, writable: true, configurable: true });
+    return e;
+  };
+  const lock = Object.assign(new Error('Another customization operation holds the lock.'), { code: 'CONNECTION_ERROR', statusCode: 429 });
+  // [what, the id the SDK names, its cause, whether the write reaches the row, whether the build's published read fails, confirmed]
   const cases = [
-    ['the row written, its bytes published', WID, true, false, true],
-    ['another row named by the SDK', OTHER, true, false, false],
-    ['other published bytes', WID, false, false, false],
-    ['a published read that fails', WID, true, true, false],
+    ['the row written, its bytes published', WID, null, true, false, true],
+    ['another row named by the SDK', OTHER, null, true, false, false],
+    ['other published bytes', WID, null, false, false, false],
+    ['a published read that fails', WID, null, true, true, false],
+    ['a refused publish, though the row holds the bytes', WID, lock, true, false, false],
+    ['a cause that is no error object, though the row holds the bytes', WID, 'refused', true, false, false],
   ];
-  for (const [what, errId, writes, readFails, confirmed] of cases) {
+  for (const [what, errId, cause, writes, readFails, confirmed] of cases) {
     const srv = server('var v = 1;');
     let written = false;
     const get = srv.httpClient.get;
@@ -379,7 +388,7 @@ test('an unconfirmed write is confirmed only by the row it wrote holding exactly
       updateWebResource: async (id, c) => {
         if (writes) await srv.httpClient.patch(`${API}/webresourceset(${id})`, { content: b64(c.content) });
         written = true;
-        throw unverified(errId);
+        throw unverified(errId, cause);
       },
     };
     const noted = [];
