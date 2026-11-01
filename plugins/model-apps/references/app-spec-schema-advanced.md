@@ -636,6 +636,8 @@ spec's new columns.
   (its default Quick Find view). Distinct logical names; an empty list needs `--allow-destructive`. It
   does not need `searchEnabled` or change tracking. `--verify` checks that the view stores exactly this
   list, in order (`quick-find <table>`); a stored search template such as `{0}%` is kept and verifies.
+  A changed list is written without any `--authorize` key: `overwrite:quickfind:<table>` approves only
+  replacing a local copy that differs from the server's (see Local copy below).
 
 **Approvals.** A view or chart that already exists and that this spec has not created in this run is
 shown as an adoption: the build leaves it unchanged, builds the rest, and then stops naming the key —
