@@ -2177,8 +2177,10 @@ async function applyConfiguration(plan, ctx) {
     // will need are read before it, through the same memo (so the later ensure and proof read nothing again), and a type
     // that cannot be read stops the step with nothing written for the rule:
     //   - a create reads the rule's type and, when it declares conditions, theirs (before the create);
-    //   - an update whose edit creates conditions reads theirs (below, after its preconditions and before the write: the
-    //     rule's own type is read by ensure, which an update goes through first).
+    //   - an update whose edit creates conditions reads theirs before ensure, which can itself write (it adds a found
+    //     rule that is not yet in the solution), and so before the update too. It is read only once the update's
+    //     preconditions hold: their answer is cached, and ensure still runs before a refusal, so a refused edit sends
+    //     the same requests as before and reads no type. The rule's own type is read by ensure, before its add.
     // A found rule whose edit adds no condition keeps its requests: ensure reads the rule's type before any write of it.
     const typesUnreadable = async (kinds, conditionKeys) => {
       const failed = await membership.unreadable(kinds);
@@ -2198,6 +2200,15 @@ async function applyConfiguration(plan, ctx) {
       const slots = declaredSlots(kind, op.detail && op.detail.entry, ctx);
       if (await typesUnreadable(slots.length ? ['duplicateRule', 'duplicateRuleCondition'] : ['duplicateRule'], slots.map((slot) => `${portKeyOf(kind, key)}|${slot}`))) continue;
     }
+    // `undefined` until read; null when every precondition holds, else the refusal code.
+    let blocked;
+    if (op.action === 'update' && kind === 'duplicateRule') {
+      const added = (op.detail.changes || []).flatMap((change) => change.created || []).filter((child) => child.kind === 'duplicateRuleCondition');
+      if (added.length) {
+        blocked = await preconditionsHold(op, ctx, preconditionCache);
+        if (!blocked && await typesUnreadable(['duplicateRuleCondition'], added.map((child) => child.key))) continue;
+      }
+    }
     if (op.action === 'update' || (op.action === 'unchanged' && !stopped)) {
       const joined = await membership.ensure(op);
       if (joined) {
@@ -2213,12 +2224,8 @@ async function applyConfiguration(plan, ctx) {
       if (kind !== 'solutionVersion') observationsOf(result).push(observe(kind, key, op.id, op.detail.entry, op.detail.remote, 'plan-read', result[INVENTORY]));
       continue;
     }
-    const blocked = await preconditionsHold(op, ctx, preconditionCache);
+    if (blocked === undefined) blocked = await preconditionsHold(op, ctx, preconditionCache);
     if (blocked) { pushFinding(result, 'refused', { kind, key, id: op.id, code: blocked }); continue; }
-    if (op.action === 'update' && kind === 'duplicateRule') {
-      const added = (op.detail.changes || []).flatMap((change) => change.created || []).filter((child) => child.kind === 'duplicateRuleCondition');
-      if (added.length && await typesUnreadable(['duplicateRuleCondition'], added.map((child) => child.key))) continue;
-    }
     if (op.action === 'create') await applyCreate(op, ctx, result, known);
     else if (op.action === 'update') await applyUpdate(op, ctx, result, known);
     if (result.unknown.length > unknownBefore) stopped = true;

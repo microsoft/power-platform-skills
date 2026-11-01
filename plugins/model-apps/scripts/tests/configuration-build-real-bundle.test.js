@@ -293,8 +293,10 @@ test('a new duplicate rule whose own component type the build cannot read stops 
 
 // A reused rule the edit adds a condition to: the update creates the condition in the same push, so the condition's type is read
 // before that push, whatever the rule's status. Unreadable, it stops the step with no write: the rule keeps its one condition.
-for (const status of ['unpublished', 'published']) {
-  test(`a duplicate rule (${status}) an edit adds a condition to reads the condition type before the update: unreadable, nothing is written`, async () => {
+// A rule that exists but is not yet in the build solution (reused or adopted from elsewhere) would be added to it before the update,
+// so the type is read before that add too: the solution is not changed either.
+for (const status of ['unpublished', 'published']) for (const unjoined of [false, true]) {
+  test(`a duplicate rule (${status}${unjoined ? ', not yet in the build solution' : ''}) an edit adds a condition to reads the condition type before the update: unreadable, nothing is written`, async () => {
     let fail = false;
     const h = await harness({ intercept: ({ method, path: p }) => (fail && method === 'GET' && p.startsWith("/EntityDefinitions(LogicalName='duplicaterulecondition')")
       ? { statusCode: 500, body: { error: { code: '0x80040216', message: 'unavailable' } } } : undefined) });
@@ -302,12 +304,15 @@ for (const status of ['unpublished', 'published']) {
     const first = await build(h, spec);
     if (first.thrown) throw first.thrown;
     assert.equal(h.org.rows('duplicaterules')[0].statecode, status === 'published' ? 1 : 0);
+    if (unjoined) h.org.sets.get('solutioncomponents').clear();
+    const members = h.org.rows('solutioncomponents').length;
     fail = true;
     const edited = { ...spec, duplicateDetectionRules: spec.duplicateDetectionRules.map((r) => ({ ...r, conditions: [...r.conditions, { key: 'l', column: 'lastname', match: 'exact' }] })) };
     const out = await build(h, edited);
     assert.ok(out.thrown, 'the build halted');
     assert.equal(out.thrown.code, 'configuration-incomplete');
     assert.deepEqual(out.writes, [], 'nothing is written before the new condition\u2019s type is known');
+    assert.equal(h.org.rows('solutioncomponents').length, members, 'the solution is not changed');
     assert.equal(h.org.rows('duplicateruleconditions').length, 1, 'the rule keeps its one condition');
     assert.match(out.thrown.message, /duplicateRuleCondition email\|l \(SOLUTION_COMPONENT_TYPE_UNREADABLE\)/);
     assert.ok(!/SOLUTION_MEMBERSHIP_UNKNOWN/.test(out.thrown.message), out.thrown.message);

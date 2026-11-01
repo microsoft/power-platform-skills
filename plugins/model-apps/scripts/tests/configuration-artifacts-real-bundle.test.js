@@ -229,6 +229,26 @@ test('a duplicate rule edit is saved and published again; a table with detection
   assert.deepEqual(off.org.unexpected, []);
 });
 
+// A rule edit that adds a condition reads the condition's component type before the rule is joined to the solution, but only once
+// its preconditions hold: an edit the table's duplicate-detection switch refuses reads no component type and writes nothing.
+test('a condition-adding duplicate rule edit the table detection switch refuses reads no condition component type', async () => {
+  const h = await harness();
+  const ruleOnly = () => ({ minimumPluginVersion: '2.21.0', solution: { uniqueName: 'ContosoSol', publisherPrefix: 'contoso' },
+    entities: [{ schemaName: 'contact', duplicateDetectionEnabled: true }], duplicateDetectionRules: spec().duplicateDetectionRules });
+  const first = await h.run(ruleOnly(), { solutionUniqueName: 'ContosoSol' });
+  assert.deepEqual(first.result.saved.map((x) => [x.kind, x.action]), [['duplicateRule', 'create']]);
+  const rule = h.org.rows('duplicaterules')[0].duplicateruleid;
+  h.org.table('contact').duplicateDetectionEnabled = false;
+  const edited = ruleOnly();
+  edited.duplicateDetectionRules[0].conditions.push({ key: 'l', column: 'lastname', match: 'exact' });
+  const refused = await h.run(edited, { solutionUniqueName: 'ContosoSol' });
+  assert.deepEqual(refused.result.refused, [{ kind: 'duplicateRule', key: 'email', id: rule, code: 'DUPLICATE_DETECTION_DISABLED' }]);
+  assert.deepEqual(refused.writes, []);
+  assert.deepEqual(refused.requests.filter((r) => r.path.startsWith("/EntityDefinitions(LogicalName='duplicaterulecondition')")), []);
+  assert.equal(h.org.rows('duplicateruleconditions').length, 1);
+  assert.deepEqual(h.org.unexpected, []);
+});
+
 const referenceOnly = () => ({ minimumPluginVersion: '2.21.0', solution: { uniqueName: 'ContosoSol', publisherPrefix: 'contoso' }, connectionReferences: [{ logicalName: 'contoso_sp', connectorId: SP }] });
 
 test('a create whose answer was lost is the typed unknown with its cause and safe handle; it is sent once', async () => {
