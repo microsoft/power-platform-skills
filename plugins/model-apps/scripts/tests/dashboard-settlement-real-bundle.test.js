@@ -1244,7 +1244,17 @@ test('carry: a lost answer to a scope publish that only carried the dashboard st
   assert.equal(carried, 'managed-publication-unconfirmed');
   const next = await rerun(w);
   const writes = w.wire.writes().length;
-  assert.equal(await codeOf(settle(next, { ...d, description: 'Not over the carried send' })), 'managed-publication-unconfirmed');
+  const refused = await failureOf(settle(next, { ...d, description: 'Not over the carried send' }));
+  assert.equal(refused && refused.code, 'managed-publication-unconfirmed');
+  assert.equal(w.wire.writes().length, writes, 'nothing sent');
+  // What the wiring shows the maker comes from these fields, never from the message: on the settle's halt they are on
+  // its cause; the publication adapter's own refusal carries them itself.
+  const approval = `publication-risk:dashboard:${DID}`;
+  assert.equal(refused.cause.approval, approval);
+  assert.ok(refused.cause.dispatchToken && refused.cause.remedy);
+  const direct = await failureOf(publish(await rerun(w), 'ops', DID));
+  assert.equal(direct && direct.code, 'managed-publication-unconfirmed');
+  assert.deepEqual([direct.approval, direct.dispatchToken, direct.remedy], [approval, refused.cause.dispatchToken, refused.cause.remedy]);
   assert.equal(w.wire.writes().length, writes, 'nothing sent');
 });
 
@@ -1298,4 +1308,46 @@ test('a failed SDK answer returned to the scope publication is refused there as 
   assert.equal(code, 'managed-publication-unconfirmed');
   assert.equal(w.store.readGroup('dashboard', 'ops').committed.publication.state, 'unconfirmed');
   assert.equal(admitted(w), false);
+});
+
+test('an SDK answer the adapter does not know is handed to the scope publication unchanged, which keeps it unconfirmed', async () => {
+  const first = await world();
+  putExisting(first.wire);
+  await settle(first, existingOps());
+  const w = await rerun(first);
+  let answer;
+  const sdk = Object.create(w.sdk);
+  sdk.publishArtifact = async (...a) => {
+    const real = await w.sdk.publishArtifact(...a);
+    answer = { ...real, publish: { kind: 'deferred' } };
+    return answer;
+  };
+  const err = await failureOf(publishDeclaredDashboard({ store: w.store, barrier: w.barrier, sdk, key: 'ops', id: DID }));
+  assert.equal(err && err.code, 'managed-publication-unconfirmed');
+  assert.ok(causes(err).some((c) => c.answer === answer), 'the scope publication judged the SDK answer itself');
+  assert.equal(w.store.readGroup('dashboard', 'ops').committed.publication.state, 'unconfirmed');
+  assert.equal(admitted(w), false);
+  assert.equal(w.wire.publishes(DID).length, 1);
+});
+
+// The store reserves room for an attempt's completion before its send, and a completion that outgrows the reservation
+// can be refused after the change is saved. A large dashboard (about 1.2 KiB per tile) outgrows the store's default,
+// so the plan must ask for enough: every store write from the send to the commit has to fit in what was reserved.
+test('a dashboard with hundreds of tiles reserves, before its send, every byte its completion adds to the binding store', async () => {
+  const writes = [];
+  const deps = { writeFileAtomic: (p, text) => { writes.push(text); return writeFileAtomic(p, text); } };
+  const w = await world();
+  w.store = openManagedContext({ workspaceDir: w.dir, environment: ENV, appUniqueName: APP, solutionUniqueName: SOL, barrier: w.barrier, deps }).store;
+  const tiles = Array.from({ length: 300 }, (_, i) => ({ key: `tile_${i}`, type: 'iframe', url: `https://contoso.example/report/${i}`, name: `Report ${i}` }));
+  const out = await settle(w, declared(tiles));
+  assert.equal(out.result.committed, true);
+  const attemptOf = (text) => (JSON.parse(text).attempts || []).find((a) => a.family === 'dashboard');
+  const sending = writes.findIndex((text) => { const a = attemptOf(text); return a && a.phase === 'sending'; });
+  assert.ok(sending > 0, 'the attempt was prepared, then marked sending');
+  const before = Buffer.byteLength(writes[sending - 1], 'utf8');
+  const growth = Math.max(...writes.slice(sending).map((text) => Buffer.byteLength(text, 'utf8'))) - before;
+  const reserved = attemptOf(writes[sending]).completionReserve.bytes;
+  assert.ok(growth > 300 * 1024, `the completion is large enough to matter (${growth} bytes)`);
+  assert.ok(reserved >= growth, `reserved ${reserved} bytes for a completion that adds ${growth}`);
+  assert.equal(attemptOf(writes[writes.length - 1]), undefined, 'committed: no attempt left');
 });

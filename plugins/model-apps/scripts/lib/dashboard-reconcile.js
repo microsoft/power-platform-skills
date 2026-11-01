@@ -1009,7 +1009,30 @@ function planDashboard(s, resolution, committed) {
     declaration,
     // The debt this attempt may create: only for its own content write. A rebind without one owes nothing new.
     publication: r.writes ? { scope: scopeOf(r.id), state: 'owed' } : null,
+    completionBytes: completionBound(s, r.entries, declaration),
   };
+}
+
+// What one declared dashboard's completion may add to the binding store, from its send to its commit: the expected
+// children and receipts the attempt records, then the committed group (one record and one consumer-state entry per
+// tile, the root record, proof, publication and seed ids). The store's default reservation (256 KiB plus one copy of
+// the declaration) stops covering that at about 250 tiles — each tile adds about 1.2 KiB, nearly all of it fixed-width
+// (GUIDs, sha256 hex, small enums) — and a completion beyond its reservation can be refused AFTER its send, leaving a
+// saved change that cannot commit. So the plan answers a bound with margin: per tile a fixed 2 KiB (a chart, the tile
+// with the most owned parameters, needs about 1.4 KiB), plus four copies of the strings a tile's entries repeat (its
+// `<dashboard>/<tile>` key and the app's unique name), and a fixed 64 KiB for the root, proof and publication, plus one
+// indented copy of the declaration as the store counts it. Names, URLs and descriptions are kept only in the
+// declaration. A bound over the store's COMPLETION_MAX_BYTES is refused by prepareAttempt before anything is written
+// or sent; the declaration's own size cap keeps a dashboard below it.
+const COMPLETION_TILE_BYTES = 2048;
+const COMPLETION_FIXED_BYTES = 64 * 1024;
+const COMPLETION_COPY_DEPTH = 8;
+function completionBound(s, entries, declaration) {
+  const app = Buffer.byteLength(String((s.ctx && s.ctx.appUniqueName) || ''), 'utf8');
+  let bytes = COMPLETION_FIXED_BYTES;
+  for (const e of entries) bytes += COMPLETION_TILE_BYTES + 4 * (Buffer.byteLength(`${s.key}/${e.tileKey}`, 'utf8') + app);
+  const text = JSON.stringify(declaration, null, 2);
+  return bytes + Buffer.byteLength(text, 'utf8') + text.split('\n').length * 2 * COMPLETION_COPY_DEPTH;
 }
 
 /** Send the planned change once: a create, or the edits and appends of an existing dashboard, in one push. */
@@ -1277,36 +1300,28 @@ async function settleDeclaredDashboard(args) {
 // The SDK's publishArtifact answers by VALUE, never by a throw. Its PublishResult, as this path receives it:
 //   { type: 'dashboard', id, shipped: false, publish: { kind: 'submitted' }, publishScope: { envelope, targetIds } }
 //       PublishXml was accepted. `shipped` is true only after the SDK's own optional read-back ('verified'), which
-//       this path does not request: publishManagedScope reads the layers back itself.
+//       this path does not request: publishManagedScope reads the layers back itself, and judges a returned answer
+//       by its `publish.kind`, not by `shipped`.
 //   { type: 'dashboard', id, shipped: false, publish: { kind: 'failed', error } }
 //       refused, or no usable answer. A 503 can arrive after the service applied the publish, so this is NOT a
 //       request known not to have started.
-// The kinds that mean "accepted" are the ones the app publication policy pays a debt with
-// (lib/app-publication-policy.js).
-const PUBLISH_ACCEPTED = new Set(['submitted', 'verified', 'unverifiable']);
 
 /**
- * Turns the SDK's answer into what publishManagedScope expects of its callback: a throw on any failure, the answer
- * on success. A failed or unknown answer is thrown with the SDK's error as its `cause`, and never with
+ * Turns the SDK's answer into what publishManagedScope expects of its callback: a throw on a failure the SDK reports,
+ * the answer itself otherwise. A `failed` answer is thrown with the SDK's error as its `cause`, and never with
  * `definiteNoStart`: whether the request started is unknown, so the helper keeps the debt unconfirmed and the scope
- * blocked, and a later read of a changed layer can confirm it without a resend. Returning (or awaiting) the answer
- * without this check would let a failed publish read as a sent one, and the helper would confirm layers that were
- * already live.
- * An accepted answer is returned. Its `shipped: false` is dropped first, because the helper refuses a returned
- * `shipped: false` as a failure; here the flag only says that the SDK's own read-back was not requested, and the
- * helper's read-back is the proof.
+ * blocked, and a later read of a changed layer can confirm it without a resend. Thrown rather than returned so the
+ * SDK's own error stays in the cause chain the caller sees.
+ * Every other answer is returned unchanged: the helper judges it by `publish.kind` (an unknown kind is unconfirmed
+ * there), so no flag of it is rewritten or dropped here.
  */
 function publishOutcome(answer, id) {
   const kind = answer && answer.publish && answer.publish.kind;
-  if (!PUBLISH_ACCEPTED.has(kind)) {
-    const error = kind === 'failed' ? answer.publish.error : undefined;
-    const detail = kind === 'failed' ? `failed: ${(error && error.message) || 'no detail'}` : `answered ${kind ? `'${kind}'` : 'no outcome'}`;
-    throw stop('dashboard-publish-failed', `the publish of dashboard ${id} ${detail}`, error ? { cause: error } : {});
+  if (kind === 'failed') {
+    const error = answer.publish.error;
+    throw stop('dashboard-publish-failed', `the publish of dashboard ${id} failed: ${(error && error.message) || 'no detail'}`, error ? { cause: error } : {});
   }
-  if (answer.shipped !== false) return answer;
-  const accepted = { ...answer };
-  delete accepted.shipped;
-  return accepted;
+  return answer;
 }
 
 /**
