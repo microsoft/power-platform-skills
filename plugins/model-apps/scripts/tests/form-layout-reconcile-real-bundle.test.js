@@ -1722,11 +1722,22 @@ test('a large declared form reserves, when its attempt is prepared, room for eve
   spec.entities[0].columns.push(...columns);
   const form = spec.forms[0];
   const ctx = ports({ authorizedAdoption: true });
-  // The reservation as the store holds it on the attempt, read just before its commit (membership comes after the proof).
+  // The reservation as the store holds it on the attempt, read just before its commit (membership comes after the proof),
+  // and the store file's size then and after the commit.
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const storeFile = () => {
+    const found = fs.readdirSync(ctx.dir, { recursive: true }).map((f) => path.join(ctx.dir, String(f)))
+      .filter((f) => f.endsWith('.json') && fs.statSync(f).isFile())
+      .filter((f) => { try { const d = JSON.parse(fs.readFileSync(f, 'utf8')); return Array.isArray(d.groups) && Array.isArray(d.attempts); } catch { return false; } });
+    assert.equal(found.length, 1, 'one store file');
+    return found[0];
+  };
   let reserve = null;
+  let beforeCommit = 0;
   ctx.ensureMembership = async () => {
     const { pending } = ctx.store.readGroup(flr.FAMILY, flr.formLayoutKey(form));
-    if (pending) reserve = { ...pending.completionReserve };
+    if (pending) { reserve = { ...pending.completionReserve }; beforeCommit = fs.statSync(storeFile()).size; }
   };
   const run = await reconcile(h, spec, ctx);
   assert.deepEqual([codes(run.result), run.result.action], [[], 'update'], JSON.stringify(run.result));
@@ -1741,6 +1752,10 @@ test('a large declared form reserves, when its attempt is prepared, room for eve
   assert.ok(reserve.bytes >= completion, `reserved ${reserve.bytes} bytes for a completion of ${completion}`);
   assert.ok(reserve.bytes < COMPLETION_MAX_BYTES, `sized to the form, not the cap (${reserve.bytes})`);
   assert.ok(reserve.used < reserve.bytes, `the writes after the send stayed within it (${reserve.used} of ${reserve.bytes})`);
+  // What the store charges the attempt from its send to its commit: its writes after the send (noteSaved's proof and
+  // child-create receipt), then the commit's own growth, which the reservation held free until that moment.
+  const charged = reserve.used + Math.max(0, fs.statSync(storeFile()).size - beforeCommit);
+  assert.ok(charged <= reserve.bytes, `charged ${charged} of ${reserve.bytes}`);
 });
 
 test('a declared form whose completion could outgrow the most one attempt may reserve is refused before anything is prepared or sent', async () => {
