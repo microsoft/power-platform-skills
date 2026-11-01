@@ -426,12 +426,14 @@ function wholeBodyErrors(flow, view) {
  *   ensureMembership  ({ root, records, recovering }) => solution membership of the workflow
  *   phase, label, barrier
  *   httpClient, instanceUrl  needed only by the edit path, for a state change that carries If-Match
+ *   sendObserver      the build's createAttemptSendObserver, installed on the transport sdk and httpClient send through
+ *                     (runManagedFeature): an attempt whose window shows nothing sent is continued under its own token
  * @returns {{ committed?: true, recovered?: boolean, noop?: true, id: string, uniqueName: string|null }} where
  *   `uniqueName` is the backing table the platform STORED for the flow (read back, never recomputed from its name):
  *   what security-role grants and the app's components must use.
  */
 async function settleDeclaredBpf(input) {
-  const { flow, sdk, store, catalog, approvals = null, opts = {}, halt, phase = 'business-process-flows', barrier, httpClient = null, instanceUrl = null } = input || {};
+  const { flow, sdk, store, catalog, approvals = null, opts = {}, halt, phase = 'business-process-flows', barrier, httpClient = null, instanceUrl = null, sendObserver = null } = input || {};
   const ensureMembership = (input && input.ensureMembership) || (async () => {});
   if (!isDeclaredBpf(flow)) throw coded(CODES.notSettled, 'settleDeclaredBpf takes a flow with reconcile: "declared"');
   if (!store || typeof store.snapshot !== 'function') throw coded(CODES.notSettled, 'settleDeclaredBpf needs the managed binding store');
@@ -447,7 +449,7 @@ async function settleDeclaredBpf(input) {
     kind, key: k, id, intentSha256: declarationSha256, origin, ...(parentKey ? { parentKey } : {}),
   });
   const run = { token: null, committed: null };
-  const { readVersion, attemptOf, effectOf, sendOnce, driveState } = createWorkflowDriver({
+  const { readVersion, attemptOf, effectOf, sendOnce, driveState, refuseRecordedEdits } = createWorkflowDriver({
     store, sdk, httpClient, instanceUrl, family: FAMILY, key, label, noun: 'process flow', driftCode: 'bpf-drift',
     conditionalEdits: switchOn, editRefusedRemedy: EDIT_REFUSED_REMEDY,
   });
@@ -981,7 +983,9 @@ async function settleDeclaredBpf(input) {
 
   // The feature's own checks on every path (runManagedFeature `preflight`), before anything is read into the
   // workspace or sent: the local copy of every row this attempt may touch holds no unsent edit. No request is made.
-  async function preflight({ committed, pending }) {
+  async function preflight({ committed, pending, effects }) {
+    // With the edit switch off, an attempt that still has to send a write to an existing row stops here, before any read.
+    refuseRecordedEdits({ pending, effects });
     const ids = [committed && committed.root && committed.root.id, pending && pending.root && pending.root.id, pending && pending.expected && pending.expected.rootId];
     if (!committed) {
       try { ids.push(identityFor('bpf', key, { catalog }).id); } catch { /* resolve reports a catalog without this flow */ }
@@ -1000,6 +1004,7 @@ async function settleDeclaredBpf(input) {
     out = await runManagedFeature({
       phase, family: FAMILY, key, label, knownScopes: [], knownIds: [], store, barrier, halt,
       preflight, resolve, plan, apply, prove, ensureMembership, resumeCreate, adoptionApproved: approved,
+      ...(sendObserver ? { sendObserver } : {}),
     });
   } finally {
     await guard.restoreStaged();

@@ -22,7 +22,7 @@
 //     See: https://learn.microsoft.com/en-us/power-apps/developer/data-platform/webapi/perform-conditional-operations-using-web-api
 
 const { normalizeGuid } = require('./reconcile-common.js');
-const { withWorkflowEffect } = require('./managed-feature-contract.js');
+const { withWorkflowEffect, editSwitchRequired, existingRowDispatches } = require('./managed-feature-contract.js');
 const { runWithWorkflowEffect } = require('./workflow-effect-context.js');
 const { CODES } = require('./managed-bindings.js');
 const { hasUnsyncedEdits } = require('./unsynced-edits.js');
@@ -119,7 +119,7 @@ function createCopyGuard({ sdk, artifact, label, noun }) {
  *   noun                 what the row is called in messages ('rule', 'process flow')
  *   driftCode            the family's drift code ('rule-drift', 'bpf-drift')
  *   conditionalEdits     the edit switch (opts.workflowConditionalEdits === true); off, the dispatch gate allows a row
- *                        no write but the activation of this attempt's own Draft
+ *                        no write but its create and the activation of this attempt's own Draft (needsSwitch)
  *   editRefusedRemedy    the family's remedy text for workflow-edit-refused
  */
 function createWorkflowDriver({ store, sdk, httpClient = null, instanceUrl = null, family, key, label, noun, driftCode, conditionalEdits = false, editRefusedRemedy = '' }) {
@@ -147,35 +147,48 @@ function createWorkflowDriver({ store, sdk, httpClient = null, instanceUrl = nul
     return attemptOf(token).effects.filter(pick).pop() || null;
   }
   /**
-   * The rows THIS attempt's own create made, by positive evidence only: the attempt is a create (no committed group, no
-   * base generation, no base observation, no base proof — what a create records and an adoption or edit never does),
-   * and its own `create` effect for the row is confirmed (a fresh read found the row carrying what that create sent).
-   * A row that is merely present, absent, uncommitted or unrecorded is not in the set. Shaped after the shared
-   * rowsCreatedByAttempt({ pending, effects }) so the two can be swapped.
+   * Does `proposed` (a workflow effect of the attempt `proposed.attemptToken`) need the conditional-edit switch? The
+   * shared rule (managed-feature-contract.js editSwitchRequired: a create never; a body write always; a state write
+   * unless its row is one the attempt has positive evidence of having created — a confirmed own create effect, or an
+   * answer that acknowledged the create), narrowed here to the design's one default-path write: the ACTIVATION of the
+   * attempt's own Draft. These families never send their own new row back to Draft, so any other state write needs it.
    */
-  function rowsCreatedByAttempt(token) {
-    const { committed } = store.readGroup(family, key);
-    const { attempt, effects } = attemptOf(token);
-    const expected = attempt.expected || {};
-    const created = new Set();
-    if (committed || attempt.baseGeneration !== null || expected.baseObservation !== null || expected.baseProofSha256 !== null) return created;
-    for (const e of effects) if (e.effect === 'create' && e.state === 'confirmed' && e.rowId) created.add(normalizeGuid(e.rowId));
-    return created;
+  function needsSwitch(group, proposed) {
+    if (editSwitchRequired(group, proposed)) return true;
+    return proposed.effect === 'state' && proposed.desiredState !== ACTIVE;
+  }
+
+  function editRefused(effect, when) {
+    const id = normalizeGuid(effect.rowId);
+    return coded('workflow-edit-refused', `${label}: ${effect.effect === 'state' ? `setting the ${noun} ${effect.desiredState}` : `writing the ${noun}'s body`} `
+      + `would change the workflow ${id}, which this attempt's own create is not proved to have made; ${when}. ${editRefusedRemedy}`);
   }
 
   /**
    * The existing-workflow edit gate at the point of dispatch, for every body and state write on every path (a first
-   * send, a continued attempt, a recovery), before its effect is recorded or sent. A preflight sees only effects that
-   * were already persisted, so a path that records a NEW effect late (inside recovery, after a read) must be stopped
-   * here. With the conditional-edit switch off, the one write a row may receive after its create is the activation of
-   * this attempt's own Draft; anything else to a row is `workflow-edit-refused`, nothing recorded and nothing sent.
+   * send, a continued or resumed attempt, a recovery), before its effect is recorded or sent. A preflight sees only
+   * effects that were already persisted, so a path that records a NEW effect late (inside recovery, after a read) is
+   * stopped here. With the switch off, anything but a create or the activation of the attempt's own Draft is
+   * `workflow-edit-refused`, nothing recorded and nothing sent.
    */
   function assertDispatchAllowed(token, effect) {
-    if (effect.effect === 'create' || conditionalEdits) return;
-    const id = normalizeGuid(effect.rowId);
-    if (effect.effect === 'state' && effect.desiredState === ACTIVE && rowsCreatedByAttempt(token).has(id)) return;
-    throw coded('workflow-edit-refused', `${label}: ${effect.effect === 'state' ? `setting the ${noun} ${effect.desiredState}` : `writing the ${noun}'s body`} `
-      + `would change the workflow ${id}, which this attempt's own create is not proved to have made; nothing was recorded or sent. ${editRefusedRemedy}`);
+    if (conditionalEdits) return;
+    if (needsSwitch(store.readGroup(family, key), { attemptToken: token, ...effect })) throw editRefused(effect, 'nothing was recorded or sent');
+  }
+
+  /**
+   * The same rule as an early refusal, for the feature's `preflight` (runManagedFeature: before resolve, prove,
+   * continue or resume, so before any read): an attempt on disk that still has to send a write the switch is needed for
+   * (the shared existingRowDispatches, plus a state write other than an activation of the attempt's own Draft) stops
+   * the run with no request at all. It is not a substitute for assertDispatchAllowed: an effect first proposed later is
+   * not on disk yet. A write that may already have been dispatched is not listed: it is proved by reading, never sent.
+   */
+  function refuseRecordedEdits({ pending, effects }) {
+    if (conditionalEdits || !pending) return;
+    const group = { pending, effects: effects || [] };
+    const listed = [...existingRowDispatches(group), ...group.effects.filter((e) => e.attemptToken === pending.token
+      && e.state === 'definitely-unsent' && e.dispatchToken === null && e.effect === 'state' && needsSwitch(group, e))];
+    if (listed.length) throw editRefused(listed[0], 'nothing was read or sent, and the attempt is kept');
   }
 
   // Send one write inside its effect context: a stored record (definitely-unsent) is sent under that record, else a
@@ -229,7 +242,7 @@ function createWorkflowDriver({ store, sdk, httpClient = null, instanceUrl = nul
     throw coded(CODES.pending, `${label}: setting the ${noun} ${state} is not proved yet and is not sent again; a later run reads the row again to prove it`, { cause: failure });
   }
 
-  return { readVersion, attemptOf, effectOf, sendOnce, noteNoStart, driveState };
+  return { readVersion, attemptOf, effectOf, sendOnce, noteNoStart, driveState, refuseRecordedEdits };
 }
 
 module.exports = {

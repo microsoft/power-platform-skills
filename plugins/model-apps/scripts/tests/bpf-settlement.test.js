@@ -16,6 +16,7 @@ const { createAzHttpClient } = require('../lib/sdk-http-client.js');
 const { openManagedBindings, classifyPersisted, CODES } = require('../lib/managed-bindings.js');
 const { createWorkflowEffectGate } = require('../lib/workflow-effect-context.js');
 const { createPublicationBarrier } = require('../lib/publication-barrier.js');
+const { createAttemptSendObserver } = require('../lib/managed-feature-contract.js');
 const { createIntentCatalog } = require('../lib/creates-catalog.js');
 const { BuildHalt } = require('../lib/entity-provision.js');
 const { RETRY } = require('../lib/retry-policy.js');
@@ -40,22 +41,38 @@ const GUID = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi;
 const managedStop = (phase, label, code, { cause } = {}) => new BuildHalt(`${label}: ${code}`, { phase, code, recoverable: false, retry: RETRY.NEVER, cause });
 
 // One build process: a fresh store handle, barrier, gated client and SDK over the shared wire and workspace.
-async function processOver(wire, dir) {
+// With `observed`, the build's send observer is installed inside the barrier's gate, as build-model-app.js installs it
+// (createAttemptSendObserver), and handed to the settlement as `sendObserver`.
+async function processOver(wire, dir, { observed = false } = {}) {
   const barrier = createPublicationBarrier();
   const store = openManagedBindings({ workspaceDir: dir, environment: ORIGIN, appUniqueName: APP, solutionUniqueName: SOL, barrier });
   const workflowEffectGate = createWorkflowEffectGate({ store });
-  const httpClient = createAzHttpClient(ORIGIN, { getToken, request: wire.request, sleep: async () => {}, workflowEffectGate });
+  const sendObserver = observed ? createAttemptSendObserver() : null;
+  const request = sendObserver ? barrier.gateRequest(sendObserver.wrap(wire.request)) : wire.request;
+  const httpClient = createAzHttpClient(ORIGIN, { getToken, request, sleep: async () => {}, workflowEffectGate });
   const sdk = createMakerSdk({ workspaceStorage: createNodeWorkspaceStorage(path.join(dir, 'sdk')), instanceUrl: ORIGIN, httpClient });
   await sdk.initWorkspace();
-  return { barrier, store, sdk, httpClient };
+  return { barrier, store, sdk, httpClient, ...(sendObserver ? { sendObserver } : {}) };
 }
 
 const catalogOf = (flow = FLOW) => createIntentCatalog([{ catalogKind: 'bpf', key: KEY, scope: { kind: 'table', solution: SOL, table: 'account' }, declaration: flow }]);
 
 // Run one settlement in a fresh process; answers { result | error, from, p, membership } with the wire position it
 // started at and the wire position at each solution-membership call.
-async function settle(wire, dir, flow, extra = {}) {
-  const p = await processOver(wire, dir);
+// `failLocally`: the first `executePrepared` throws on this side, after the effect is recorded and before any request
+// leaves (a local failure of the SDK's own send step), so the write stays definitely unsent.
+function failFirstSend(sdk) {
+  const real = sdk.executePrepared.bind(sdk);
+  let failed = false;
+  sdk.executePrepared = async (...args) => {
+    if (!failed) { failed = true; throw Object.assign(new Error('the prepared request could not be built'), { code: 'LOCAL_SEND_FAILED' }); }
+    return real(...args);
+  };
+}
+
+async function settle(wire, dir, flow, { observed = false, failLocally = false, ...extra } = {}) {
+  const p = await processOver(wire, dir, { observed });
+  if (failLocally) failFirstSend(p.sdk);
   const from = wire.log.length;
   const membership = [];
   const ensureMembership = async () => { membership.push(wire.log.length); };
@@ -407,6 +424,7 @@ test('an edit stopped between its body and its own activation: only a conditiona
   const refused = await settle(wire, dir, GROWN);
   assert.equal(refused.error && refused.error.code, 'workflow-edit-refused');
   assert.deepEqual(writesSince(wire, refused.from), [], 'no write without the switch');
+  assert.deepEqual(wire.log.slice(refused.from), [], 'its recorded activation is refused by the preflight, before any read');
 
   const again = await settle(wire, dir, GROWN, { opts: SWITCH });
   assert.ifError(again.error);
@@ -542,5 +560,30 @@ test('a live flow whose XAML holds an activity this module does not model is ref
     assert.equal(adopted.error && adopted.error.code, 'bpf-shape-unsupported', `${where}: adoption`);
     assert.deepEqual(writesSince(wire, adopted.from), []);
     assert.match(wire.row(id).xaml, /foreign/, `${where}: the activity survives`);
+  }
+});
+
+test('a create that failed on this side before any request is sent again under its own token: continued with the send observer, resumed without it', async () => {
+  const clean = createWorkflowWire();
+  const fresh = await settle(clean, makeTempDir('bpf-settle-'), FLOW);
+  assert.ifError(fresh.error);
+  for (const observed of [true, false]) {
+    const wire = createWorkflowWire();
+    const dir = makeTempDir('bpf-settle-');
+    const first = await settle(wire, dir, FLOW, { observed, failLocally: true });
+    assert.ok(first.error, `${observed}: it stops`);
+    assert.deepEqual(writesSince(wire, first.from), [], `${observed}: nothing reached the service`);
+    const { pending, effects } = first.p.store.readGroup('bpf', KEY);
+    assert.deepEqual([pending.phase, effects.map((e) => [e.effect, e.state])], ['sending', [['create', 'definitely-unsent']]]);
+    if (observed) assert.deepEqual(pending.sendWindow, { possible: 0, notStarted: 0, epoch: 1 }, 'the window saw nothing leave');
+
+    const again = await settle(wire, dir, FLOW, { observed });
+    assert.ifError(again.error);
+    assert.deepEqual([again.result.recovered, again.result.continued, again.result.resumed], observed ? [true, true, undefined] : [true, undefined, true],
+      `${observed}: the same attempt, ${observed ? 'continued' : 'resumed'}`);
+    assert.deepEqual(writeLines(wire, again.from), writeLines(clean, fresh.from), `${observed}: exactly the writes of a first create, once`);
+    const group = again.p.store.readGroup('bpf', KEY);
+    assert.equal(group.pending, null);
+    assert.deepEqual([group.committed.root.id, group.committed.records[0].origin], [pending.root.id, 'created'], `${observed}: the same id, bound as created`);
   }
 });

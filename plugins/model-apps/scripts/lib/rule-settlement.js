@@ -611,10 +611,12 @@ function isAvailabilityRefusal(err) {
  *   ensureMembership  ({ root, records, recovering }) => solution membership of the workflow
  *   phase, label, barrier
  *   httpClient, instanceUrl  needed only by the edit path, for a state change that carries If-Match
+ *   sendObserver      the build's createAttemptSendObserver, installed on the transport sdk and httpClient send through
+ *                     (runManagedFeature): an attempt whose window shows nothing sent is continued under its own token
  * @returns {{ committed?: true, recovered?: boolean, noop?: true, skipped?: 'unavailable', id?: string, cause?: Error }}
  */
 async function settleDeclaredRule(input) {
-  const { rule, sdk, store, catalog, approvals = null, opts = {}, halt, phase = 'business-rules', barrier, httpClient = null, instanceUrl = null } = input || {};
+  const { rule, sdk, store, catalog, approvals = null, opts = {}, halt, phase = 'business-rules', barrier, httpClient = null, instanceUrl = null, sendObserver = null } = input || {};
   const ensureMembership = (input && input.ensureMembership) || (async () => {});
   if (!isDeclaredRule(rule)) throw coded(CODES.notSettled, 'settleDeclaredRule takes a rule with reconcile: "declared"');
   if (!store || typeof store.snapshot !== 'function') throw coded(CODES.notSettled, 'settleDeclaredRule needs the managed binding store');
@@ -633,7 +635,7 @@ async function settleDeclaredRule(input) {
 
   // ----- reads and writes (lib/workflow-drive.js): the version is read before the body, every write is sent once inside
   // its persisted effect, and an unproved write is proved by reading, never sent again.
-  const { readVersion, attemptOf, effectOf, sendOnce, noteNoStart, driveState } = createWorkflowDriver({
+  const { readVersion, attemptOf, effectOf, sendOnce, noteNoStart, driveState, refuseRecordedEdits } = createWorkflowDriver({
     store, sdk, httpClient, instanceUrl, family: FAMILY, key, label, noun: 'rule', driftCode: 'rule-drift',
     conditionalEdits: switchOn, editRefusedRemedy: EDIT_REFUSED_REMEDY,
   });
@@ -1060,7 +1062,9 @@ async function settleDeclaredRule(input) {
 
   // The feature's own checks on every path (runManagedFeature `preflight`), before anything is read into the
   // workspace or sent: the local copy of every row this attempt may touch holds no unsent edit. No request is made.
-  async function preflight({ committed, pending }) {
+  async function preflight({ committed, pending, effects }) {
+    // With the edit switch off, an attempt that still has to send a write to an existing row stops here, before any read.
+    refuseRecordedEdits({ pending, effects });
     const ids = [committed && committed.root && committed.root.id, pending && pending.root && pending.root.id, pending && pending.expected && pending.expected.rootId];
     if (!committed) {
       try { ids.push(identityFor('businessRule', key, { catalog }).id); } catch { /* resolve reports a catalog without this rule */ }
@@ -1078,6 +1082,7 @@ async function settleDeclaredRule(input) {
     const out = await runManagedFeature({
       phase, family: FAMILY, key, label, knownScopes: [], knownIds: [], store, barrier, halt: haltOrSkip,
       preflight, resolve, plan, apply, prove, ensureMembership, resumeCreate, adoptionApproved: approved,
+      ...(sendObserver ? { sendObserver } : {}),
     });
     const id = out.committedGroup && out.committedGroup.root ? out.committedGroup.root.id : null;
     return { ...out.result, id };
