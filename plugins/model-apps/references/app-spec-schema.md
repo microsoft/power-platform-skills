@@ -837,7 +837,7 @@ list with "reach for it when…" guidance.
 | `roleGrants[]` | extend a role you did NOT author |
 | `businessProcessFlows[].securityRoles` | who may run a flow |
 | `fieldSecurityProfiles[]` | confidential columns (`columns[].isSecured`) and who may read or change them |
-| `views[].reconcile` | declared views and charts (`reconcile: "declared"` on a view or chart: the rebuild applies the spec's columns, filters, sort and joins), a table's Quick Find columns (`entities[].quickFind`), and a declared web resource's content (`webResources[].reconcile`) |
+| `views[].reconcile` | declared views and charts (`reconcile: "declared"` on a view or chart: the rebuild applies the spec's columns, filters, sort and joins), a table's Quick Find columns (`entities[].quickFind`), a declared web resource's content (`webResources[].reconcile`), and a declared form layout (`forms[].reconcile`) |
 | `createIdentity` | stable create ids for declared views and charts, on a new app only (`createIdentity: "stable-v1"`) |
 | `columns[].dateTimeBehavior` | portable schema: calendar-day dates, fixed option values (`{ "value", "label" }`), table search and duplicate detection (`searchEnabled` / `changeTrackingEnabled` / `duplicateDetectionEnabled`) |
 
@@ -1270,6 +1270,11 @@ why they need naming here at all.
   residual collision where a table has **two forms of the same `(entity, type, name)`** that type-scoped
   resolution can't disambiguate — the build then errors and tells you to set `formId`. The id is verified
   to belong to the form's table before anything is reconciled. Omit it for normal forms.
+- **`reconcile`** *(optional; needs `minimumPluginVersion: "2.21.0"`)* — `"declared"` makes the
+  rebuild place the spec's fields, spans, sections and field options as declared (an explicit `false`
+  clears a flag) and add a missing sub-grid, quick view or handler, while a control the spec does not
+  declare keeps its place. Without it a rebuild only adds fields. See `forms[].reconcile` in
+  [`app-spec-schema-advanced.md`](./app-spec-schema-advanced.md) for what is refused, the approvals and publishing.
 - **`events[]`** wire client-side JS: `event` is `onload`/`onsave`/`onchange` (`onchange` needs an
   `attribute`), `library` references a declared `webResources[]` name (lint-enforced), `function` is
   the JS function. Optional `enabled` (default true), `passExecutionContext` (default true),

@@ -151,11 +151,24 @@ prod-ready** app; don't under-build (a bare table list) or over-build (surfaces 
   that differs from the server's stops it the same way (`workspace-copy-unsent-edits`) and is kept: ask
   whether to put that change into the spec and refresh the local copy, or approve the `overwrite:` key
   it prints (`overwrite:quickfind:<table>` for search columns); pass a key exactly as printed. Never write
-  `reconcile` on forms, dashboards, business rules or flows (declared process flows, dashboards,
-  business rules and form layouts are not reconciled in this release; the build keeps its existing
-  behaviour for each), on a web resource only as the web-resource bullet above says, and never write a command
-  `key` (keyed command bars are refused in this version). Leave a downloaded or older spec without
-  these fields as it is — see the advanced reference.
+  `reconcile` on dashboards, business rules or flows (they are not reconciled in this release; the build
+  keeps its existing behaviour for each), on a web resource only as the web-resource bullet above says, and
+  never write a command `key` (keyed command bars are refused in this version). Leave a downloaded or
+  older spec without these fields as it is — see the advanced reference.
+- **Declared form layouts** (`minimumPluginVersion: "2.21.0"`) — write `reconcile: "declared"` on a form
+  only when the maker asked its layout to follow the spec (fields, spans, sections, field options, sub-grids,
+  handlers); not for "add a form" or "add a field" with no layout. Tell the maker: controls the spec does not
+  declare stay where they are and nothing is deleted; a layout the build cannot place safely stops before any
+  write; a table publish puts live every saved change on that table, not only this form; and Dataverse does
+  not version a form's saved layer, so the build re-checks it just before writing, but an edit made in Maker
+  at that instant cannot be detected. Never write `genPages`, `prune`, `isDefault`,
+  `deactivateOtherMainForms`, `securityRoles` or a `mainFormOrder` place on a declared form (refused).
+  An existing form is bound only with `--authorize "adopt:form:<table>/<formtype>/<name>"` (lower case;
+  `overwrite:form:` for changes made elsewhere): explain it and let the maker choose.
+- **An unconfirmed publish** — a build that stops naming `--authorize publication-risk:table:<table>` (or
+  `publication-risk:dashboard:<id>`) lost the answer to a publish that may still complete. Tell the maker to
+  check what is live on that table; pass the key exactly as printed only when they accept the risk. The run
+  stays stopped; the next build publishes after the usual checks. `--allow-destructive` never gives it.
 - **Stable create ids** (`minimumPluginVersion: "2.21.0"`) — write `createIdentity: "stable-v1"` on a
   **new** app; never add it to an existing or downloaded spec. Tell the maker: declared views and charts
   get ids the spec fixes, so a retry after a lost answer binds the same row instead of creating a second;

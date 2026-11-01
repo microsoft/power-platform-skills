@@ -7,6 +7,7 @@ const { compileFormIntent, formFieldLogicals, NON_FORM_RENDERABLE_TYPES } = requ
 const { normalizeSpecShape } = require('./spec-shape.js');
 const { resolveSurfaces, unresolvedSurfaceMessage } = require('./surface-resolver.js');
 const { nearestName } = require('./nearest-name.js');
+const { declaredFeatureOn } = require('./declared-features.js');
 const { isAppSourcePath } = require('./app-source-path.js');
 const { labelLintWarnings, viewsForLabels } = require('./view-filter-labels.js');
 const { navigationVerdict } = require('./app-navigation.js');
@@ -249,6 +250,8 @@ function lintAppSpec(spec) {
     if (!isExplicit && f.fieldOptions && typeof f.fieldOptions === 'object' && !Array.isArray(f.fieldOptions)) {
       let placed = null;
       try { placed = new Set(formFieldLogicals(compileFormIntent(spec, f))); } catch { /* a malformed form is the validator's to report */ }
+      // A declared form keeps what its spec omits and refuses `prune` (app-spec.js validateDeclaredForms), so it is not advised there.
+      const keepsRest = declaredFeatureOn('forms') && f.reconcile === 'declared' ? '' : ' (prune: false keeps the rest of the form)';
       for (const [key, opt] of Object.entries(placed ? f.fieldOptions : {})) {
         const flags = [opt && opt.readOnly === true && 'readOnly', opt && opt.hidden === true && 'hidden'].filter(Boolean);
         if (!flags.length || placed.has(lc(key))) continue;
@@ -261,9 +264,9 @@ function lintAppSpec(spec) {
         if (col && NON_FORM_RENDERABLE_TYPES.has(col.type)) {
           W(`${what} on a ${col.type} column, which has no form control, so the auto layout leaves it off the form and the build never applies it.`);
         } else if (col) {
-          W(`${what} on a ${col.type} column, a type the auto layout does not place, so the build never applies it. List '${key}' in an explicit layout to place it (prune: false keeps the rest of the form).`);
+          W(`${what} on a ${col.type} column, a type the auto layout does not place, so the build never applies it. List '${key}' in an explicit layout to place it${keepsRest}.`);
         } else {
-          W(`${what} on a field the auto layout does not place — it places the primary column, the table's declared columns and its parent lookups — so the build never applies it. Declare '${key}' as a column, or list it in an explicit layout (prune: false keeps the rest of the form).`);
+          W(`${what} on a field the auto layout does not place — it places the primary column, the table's declared columns and its parent lookups — so the build never applies it. Declare '${key}' as a column, or list it in an explicit layout${keepsRest}.`);
         }
       }
     }

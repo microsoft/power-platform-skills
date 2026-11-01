@@ -58,6 +58,7 @@ const { isDeclaredChart, compileChartIntent } = require('./chart-reconcile.js');
 const { approvalKey } = require('./reconcile-common.js');
 const { validateManagedCommands } = require('./command-reconcile.js');
 const { validateQuickFindSpec } = require('./quick-find.js');
+const { declaredFeatureOn } = require('./declared-features.js');
 const PRIVILEGE_SCOPES = new Set(['user', 'businessUnit', 'parentChild', 'organization']);
 
 // The exact ownership marker the vendored SDK (cds-maker-sdk SecurityApi) stamps on the `description`
@@ -2040,7 +2041,44 @@ function usesDeclaredReconcile(spec) {
     || any(spec.charts, (ch) => ch.reconcile !== undefined || ch.title !== undefined)
     || any(spec.webResources, (wr) => wr.reconcile !== undefined)
     || any(spec.commands, keyed)
-    || any(spec.entities, (e) => e.quickFind !== undefined);
+    || any(spec.entities, (e) => e.quickFind !== undefined)
+    || (declaredFeatureOn('forms') && any(spec.forms, (f) => f.reconcile !== undefined));
+}
+
+// A declared form (forms[].reconcile: "declared", lib/form-layout-reconcile.js) is one managed group whose saved layer the build
+// proves and publishes per table. Refused here, before any build work, is what the declared build cannot do without breaking that:
+//   - `prune` (a declared form never deletes what the spec omits) and `genPages` (embedding a generative page edits the form after
+//     its proof) — the helper refuses both too, but only once the build has started;
+//   - `isDefault`, `deactivateOtherMainForms`, a place in `entities[].mainFormOrder` and `securityRoles`: the build writes the
+//     table's default flag, deactivations, form order and role list onto the form's own row and formxml (DisplayConditions) after
+//     the forms phase, so each would change the saved layer the declared form just proved, and the next build would find it
+//     drifted. Set them in Maker, or keep the form undeclared;
+//   - two declared forms with one key (`<table>/<formType>/<name>`, any case): one `form:<key>` approval would approve both.
+// `findings` takes the same-key finding: an error for every profile that builds, a warning for teardown and verification (as for
+// views and charts, sameKeyFindings).
+function validateDeclaredForms(spec, errors, findings) {
+  // Loaded here, not at the top: lib/form-layout-reconcile.js requires this module (formColumnsOf).
+  const { isDeclaredForm, formLayoutKey } = require('./form-layout-reconcile.js');
+  const forms = Array.isArray(spec.forms) ? spec.forms : [];
+  const lc = (v) => String(v == null ? '' : v).toLowerCase();
+  const first = new Map();
+  forms.forEach((f, i) => {
+    if (!f || typeof f !== 'object' || f.reconcile === undefined) return;
+    const label = `forms[${i}] '${f.name || f.entity || '(unnamed)'}'`;
+    if (!isDeclaredForm(f)) { errors.push(`${label}: reconcile must be "declared" (or left out)`); return; }
+    if (f.prune !== undefined) errors.push(`${label}: a declared form never deletes what the spec omits; remove "prune"`);
+    if (Array.isArray(f.genPages) && f.genPages.length) errors.push(`${label}: generative pages cannot be embedded in a declared form yet; remove "genPages" or leave out reconcile`);
+    for (const field of ['isDefault', 'deactivateOtherMainForms', 'securityRoles']) {
+      if (f[field] !== undefined) errors.push(`${label}: ${field} is not supported on a declared form — the build would write it onto the form after proving its layout; set it in Maker, or leave out reconcile`);
+    }
+    const entity = (spec.entities || []).find((e) => e && lc(e.schemaName) === lc(f.entity));
+    if (entity && Array.isArray(entity.mainFormOrder) && entity.mainFormOrder.some((n) => typeof n === 'string' && f.name && n === f.name) && lc(f.formType || 'Main') === 'main') {
+      errors.push(`${label}: a declared form cannot be listed in entities[].mainFormOrder — the build would write the order onto the form after proving its layout; set the order in Maker, or leave out reconcile`);
+    }
+    const key = formLayoutKey(f);
+    if (first.has(key)) findings.push(`${first.get(key)} and ${label} are declared forms with the same key (form:${key}): one --authorize adopt:form:${key} or overwrite:form:${key} would approve both, so give each its own name, type or table`);
+    else first.set(key, label);
+  });
 }
 
 function sitemapEntityTables(spec) {
@@ -2460,6 +2498,10 @@ function validateFormFieldOptions(f, entityByLower, errors, warnings, unknownKey
     }
   }
 
+  // A declared form (forms[].reconcile "declared", while its build path is enabled) owns the flags the spec states, an explicit
+  // false included: lib/form-layout-reconcile.js clears the flag and records false apart from absent. The additive path only ever
+  // writes the enabled state, so everywhere else false stays refused.
+  const declaredFalseApplies = declaredFeatureOn('forms') && !!f && f.reconcile === 'declared';
   for (const { name, opt, where, inline } of seen) {
     // A form-level span reaches the compiler exactly as an inline one does (mergeFieldOptions), so it
     // gets the same whole-number check. Inline entries are already checked by the layout validator;
@@ -2484,7 +2526,7 @@ function validateFormFieldOptions(f, entityByLower, errors, warnings, unknownKey
       if (opt[flag] === undefined) continue;
       if (typeof opt[flag] !== 'boolean') {
         errors.push(`${label}: ${where} ${flag} must be a boolean`);
-      } else if (opt[flag] === false) {
+      } else if (opt[flag] === false && !declaredFalseApplies) {
         errors.push(`${label}: ${where} sets ${flag}: false, which the build cannot apply — it only ever writes the ENABLED state, so a maker's existing setting is never silently cleared. Omit the flag, or clear it in the form designer.`);
       }
     }
@@ -3378,14 +3420,20 @@ function validateAppSpec(spec, opts = {}) {
       if (!e || typeof e !== 'object' || e.quickFind === undefined) return;
       for (const f of validateQuickFindSpec({ quickFind: e.quickFind }, `entities[${i}] (${e.schemaName})`)) errors.push(`${f.path}: ${f.message}`);
     });
-    // Business process flows are left out: their key allow-list already refuses `reconcile`.
+    // Business process flows are left out: their key allow-list already refuses `reconcile`. A kind whose declared build is
+    // switched on (lib/declared-features.js) takes `reconcile` and is checked below instead; while it is off, the refusal and
+    // its words are exactly what they were.
+    const formsDeclarable = declaredFeatureOn('forms');
+    const reconcilable = formsDeclarable ? 'views, charts, forms and web resources' : 'views, charts and web resources';
     for (const kind of ['dashboards', 'forms', 'businessRules']) {
+      if (kind === 'forms' && formsDeclarable) continue;
       for (const x of spec[kind] || []) {
         if (x && typeof x === 'object' && x.reconcile !== undefined) {
-          errors.push(`${kind}: '${x.name || x.entity || '(unnamed)'}' — reconcile is supported only on views, charts and web resources; leave it out (this artifact keeps the existing build behaviour)`);
+          errors.push(`${kind}: '${x.name || x.entity || '(unnamed)'}' — reconcile is supported only on ${reconcilable}; leave it out (this artifact keeps the existing build behaviour)`);
         }
       }
     }
+    if (formsDeclarable) validateDeclaredForms(spec, errors, sameKeyFindings);
     if (usesDeclaredReconcile(spec) && compareVersions(spec.minimumPluginVersion, DECLARED_RECONCILE_MIN_VERSION) < 0) {
       warnings.push(`set minimumPluginVersion to '${DECLARED_RECONCILE_MIN_VERSION}' or newer when using reconcile: "declared", a view's viewId or linkEntities, a chart title, command keys or rowId, or quickFind — older plugins ignore or reject these fields`);
     }

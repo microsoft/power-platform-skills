@@ -2853,8 +2853,30 @@ charts phases. A spec that uses none of them takes the legacy paths unchanged. W
   existing row asks for it). Emptying the content of one that has content also needs `--allow-destructive`
   (`web-resource-clear-not-authorized`); the adoption approval is not consent to it. Unlike the kinds above, a declared web resource that does not settle stops the
   build at once (`managedStop`, never retried); its solution membership is added before its binding is
-  recorded. Declared process flows, dashboards, business rules and form layouts are not reconciled in this
-  release; the build keeps its existing behaviour for each.
+  recorded. Declared process flows, dashboards and business rules are not reconciled in this release; the
+  build keeps its existing behaviour for each.
+- **Form layout** (`forms[].reconcile: "declared"`, `lib/form-layout-reconcile.js`, behind
+  `DECLARED_FEATURES.forms` in `lib/declared-features.js`): the order, section and spans of declared
+  fields, the declared tabs and sections, a stated section width, stated `readOnly` / `hidden` (an
+  explicit `false` clears), and a missing timeline, sub-grid, quick view or handler. Every control the spec
+  does not declare is a fixed obstacle that keeps its place; a layout that cannot be placed around them
+  stops before a write. The forms phase settles each declared form as one managed group
+  (`reconcileDeclaredForm` through `runManagedFeature`, with the run's store, barrier, creation catalog,
+  halt factory, solution membership and `sendObserver`); QuickView forms first, the others after the
+  legacy form steps; then ONE managed publish per table through the shared table publisher (also for a
+  table that holds an unconfirmed earlier publish, which it confirms read-only first). Default-form
+  promotion and Main Form Set order skip declared forms (`formOrderSpecOf`), and validation refuses
+  `isDefault`, `deactivateOtherMainForms`, `securityRoles`, `mainFormOrder`, `prune` and `genPages`
+  on them, because each would rewrite the proved saved layer. Approvals are typed:
+  `adopt|overwrite:form:<table>/<formtype>/<name>` (lower case); an adopted form's first binding needs
+  `form:<key>`, later commits do not. **Concurrent edits:** a `systemforms` GET answers the PUBLISHED
+  row's ETag, which a saved-layer edit does not move, so `If-Match` does not protect a form's saved layer
+  (and the saved layer's own ETag is refused with 412 even when current). The real guard is the SDK's
+  content-token check: just before the PATCH it re-reads the saved layer and refuses when it changed. An
+  edit landing between that read and the write cannot be detected; do not claim otherwise. The offline
+  form wire (`tests/helpers/managed-wire.js`) answers a version that moves with the saved layer, which
+  the service does not do: a test through it proves the SDK's re-read and refusal path, and a test whose
+  double answers a version conflict proves the build's handling of that refusal, never a service guard.
 - **Command bar** (`commands[].key`, `lib/command-reconcile.js`): needs the managed-binding store, which
   the build does not provide yet, so a keyed bar is refused (`managed-binding-port-unavailable`) before
   anything is written.
@@ -2970,8 +2992,9 @@ Refusal codes and remedies (`remedyFor`; the build adds the CLI flag that gives 
 
 | Remedy | Codes |
 | --- | --- |
-| Adoption approval: `--authorize adopt:view:<table>/<name>` or `adopt:chart:<table>/<name>`; a web resource's is `adopt:webresource:<name>` | `view-adoption-not-authorized`, `chart-adoption-not-authorized`, `web-resource-adoption-not-authorized` |
-| Overwrite approval: `--authorize overwrite:view:<table>/<name>` or `overwrite:chart:<table>/<name>`; a web resource's is `overwrite:webresource:<name>` | `view-drift`, `chart-drift`, `command-drift`, `web-resource-drift` |
+| Adoption approval: `--authorize adopt:view:<table>/<name>` or `adopt:chart:<table>/<name>`; a web resource's is `adopt:webresource:<name>`; a declared form's is `adopt:form:<table>/<formtype>/<name>` | `view-adoption-not-authorized`, `chart-adoption-not-authorized`, `web-resource-adoption-not-authorized`, `form-layout-adoption-not-authorized`, `managed-adoption-required` (form) |
+| Overwrite approval: `--authorize overwrite:view:<table>/<name>` or `overwrite:chart:<table>/<name>`; a web resource's is `overwrite:webresource:<name>`; a declared form's is `overwrite:form:<table>/<formtype>/<name>` | `view-drift`, `chart-drift`, `command-drift`, `web-resource-drift`, `form-layout-drift` |
+| Risk approval: `--authorize publication-risk:table:<table>` or `publication-risk:dashboard:<id>`, only as printed; read from the refusal's data (`dispatchToken`, `approval`, `remedy`), recorded with `acceptUncertainPublication`; the run stays stopped | `managed-publication-unconfirmed` when no fresh read can settle a lost publish |
 | Destructive approval: `--allow-destructive` | `view-columns-removal-not-authorized`, `quick-find-empty-not-authorized`, `web-resource-clear-not-authorized` |
 | Repair and rerun | every other code: `*-spec-invalid`, `*-lookup-unreadable`, `*-unreadable`, `*-name-ambiguous`, `*-bound-row-missing`, `*-binding-mismatch`, `*-rejected`, `*-write-unknown`, `*-created-unreadable`, `view-pinned-not-found`, `view-pinned-wrong-table`, `view-filter-unrepresentable`, `view-related-column-unrepresentable`, `chart-shape-unsupported`, `chart-create-artifact-missing`, `chart-title-not-stored`, `chart-title-unverified`, `quick-find-list-incomplete`, `quick-find-view-not-found`, `quick-find-view-ambiguous`, `quick-find-filter-unsupported`, `quick-find-views-unreadable`, `workspace-copy-unsent-edits`, `command-immutable-location`, `command-immutable-type`, `command-web-resource-missing`, `creation-port-unavailable`, `creation-adopted-rerun`, `creation-adopted-row-missing`, `managed-binding-port-unavailable` |
 

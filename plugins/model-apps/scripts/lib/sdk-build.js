@@ -177,6 +177,19 @@ const { HTTP_SEND_HISTORY } = require('./sdk-http-client.js');
 // retry policy, the --authorize keys) so this file calls three methods and keeps no configuration state of its own.
 const { usesConfiguration, hasConfigurationDefinitions, configurationPlanItems } = require('./configuration-artifacts.js');
 const { createConfigurationRuntime } = require('./configuration-build.js');
+// Declared forms (forms[].reconcile "declared", lib/form-layout-reconcile.js) are dispatched only while their enable flag is on
+// (lib/declared-features.js). With it off, no form is declared here — validation refuses `reconcile` on a form — so every form
+// takes the build's own path and every spec sends the requests it always sent.
+const { declaredFeatureOn } = require('./declared-features.js');
+const isDeclaredFormOn = (f) => declaredFeatureOn('forms') && !!f && f.reconcile === 'declared';
+// The forms the build's default-form promotion and Main Form Set order may write. A declared form is left out: both write onto
+// the form's own row (isdefault, formxml DisplayConditions) after its layout was proved, which the next build would read as a
+// drift of the saved layer. Validation refuses the fields that would ask for either on a declared form (app-spec.js
+// validateDeclaredForms), so leaving it out drops no request.
+const formOrderForms = (spec) => (spec.forms || []).filter((f) => !isDeclaredFormOn(f));
+const formOrderSpecOf = (spec) => ((spec.forms || []).some(isDeclaredFormOn) ? { ...spec, forms: formOrderForms(spec) } : spec);
+const { reconcileDeclaredForm, declaredHostsOf, formLayoutKey, formCatalogIntent } = require('./form-layout-reconcile.js');
+const { createIntentCatalog } = require('./creates-catalog.js');
 
 // Re-export from entity-provision so the export surface stays unchanged
 const BuildHalt = _BuildHalt;
@@ -827,6 +840,8 @@ function planFor(spec, opts) {
       formKey = { kind: 'form', entity: def.entityLogicalName, name: def.name, formType: ft, formId: f.formId };
     } catch { formKey = undefined; }
     items.push({ phase: 'forms', label: `${ft === 'Main' ? 'form' : `${ft} form`} for ${f.entity}${subs ? ` (sub-grids: ${subs})` : ''}`, ...(formKey ? { key: formKey } : {}) });
+    // A declared form's handlers and quick views are part of its one managed write (lib/form-layout-reconcile.js), not steps of their own.
+    if (isDeclaredFormOn(f)) continue;
     if ((f.events || []).length) items.push({ phase: 'forms', label: `wire ${f.events.length} event handler(s) on ${f.entity}` });
     if ((f.quickViews || []).length) items.push({ phase: 'forms', label: `place ${f.quickViews.length} quick-view(s) on ${f.entity}` });
   }
@@ -835,7 +850,7 @@ function planFor(spec, opts) {
   // None where the author orders the forms by hand (`securityRoles.order`).
   if (has('forms')) {
     const orderSteps = new Set();
-    for (const f of (spec.forms || []).filter(isMainForm)) {
+    for (const f of formOrderForms(spec).filter(isMainForm)) {
       const key = String(f.entity || '').toLowerCase();
       if (!key || orderSteps.has(key)) continue;
       orderSteps.add(key);
@@ -3505,6 +3520,17 @@ async function runSdkBuildPhases(spec, opts, owed) {
   // and --allow-destructive (featureCtx.authorizedDestructive) for a removal, an emptied Quick Find or an emptied web resource.
   const cliApproval = (label, code) => {
     if (/-(?:removal|empty|clear)-not-authorized$/.test(code)) return '--allow-destructive';
+    // A declared form's halt is labelled `declared form "<table>/<type>/<name>"` (form-layout-reconcile.js), and its approvals
+    // are typed by family (form:<key>): a first binding of a form this run did not create needs the adoption one
+    // (managed-adoption-required, form-layout-adoption-not-authorized), a saved layout that drifted the overwrite one.
+    const formAt = label.indexOf(`: ${code} — `);
+    const form = formAt > 0 ? /^declared form "(.+)"$/.exec(label.slice(0, formAt)) : null;
+    if (form) {
+      const formVerb = code === 'managed-adoption-required' || /-adoption-not-authorized$/.test(code) ? 'adopt' : /-drift$/.test(code) ? 'overwrite' : '';
+      // A form name may hold spaces (`contoso_item/main/declared item`), so the printed key is quoted for the shell then.
+      const formKey = formVerb ? `${formVerb}:${approvalKey('form', form[1])}` : '';
+      return formKey ? `--authorize ${/\s/.test(formKey) ? `"${formKey}"` : formKey}` : '';
+    }
     const verb = /-adoption-not-authorized$/.test(code) ? 'adopt' : /-drift$/.test(code) ? 'overwrite' : '';
     const at = verb ? label.indexOf(`: ${code} — `) : -1;
     const m = at > 0 ? /^(view|chart|web resource) (.+)$/.exec(label.slice(0, at)) : null;
@@ -6199,6 +6225,8 @@ async function runSdkBuildPhases(spec, opts, owed) {
   //
   // Best-effort like the promotion above: a failed read or write is reported (✗ and a warning) and
   // `--verify` fails on the order it reads back, but the build goes on.
+  // The forms phase's default-form promotion and Main Form Set order read the spec without its declared forms (formOrderSpecOf).
+  const orderSpec = formOrderSpecOf(spec);
   const canOrderForms = () => typeof provision.getFormSecurityRoles === 'function'
     && typeof provision.setFormSecurityRoles === 'function' && typeof provision.queryRecords === 'function';
   const writeFormOrder = async (formId, order, stored) => {
@@ -6225,12 +6253,12 @@ async function runSdkBuildPhases(spec, opts, owed) {
     return out;
   };
   const applyMainFormOrder = async (entityLogical, idOfForm) => {
-    const mains = declaredMainForms(spec, entityLogical);
-    if (!mains.length || ordersByHand(spec, entityLogical)) return;
+    const mains = declaredMainForms(orderSpec, entityLogical);
+    if (!mains.length || ordersByHand(orderSpec, entityLogical)) return;
     const entityName = mains[0].entity;
     const q = (f) => `'${f.name || `${entityName} form`}'`;
     const warn = (m) => { if (typeof opts.warn === 'function') opts.warn(m); };
-    const planned = plannedMainFormSequence(spec, entityLogical);
+    const planned = plannedMainFormSequence(orderSpec, entityLogical);
     if (!canOrderForms()) {
       runner.skip('forms', `form order for ${entityName} (this SDK cannot read or write a form's order)`);
       return;
@@ -6241,14 +6269,14 @@ async function runSdkBuildPhases(spec, opts, owed) {
         runner.skip('forms', `form order for ${entityName} (${notBuilt.map(q).join(', ')} not built in this run)`);
         return;
       }
-      const listed = listedMainForms(spec, entityLogical);
+      const listed = listedMainForms(orderSpec, entityLogical);
       const head = listed && listed.length ? listed : planned.slice(0, 1);
       const more = mains.length - head.length;
       await runBestEffort(runner, 'forms', `form order for ${entityName}: ${head.map(q).join(' > ')}${more ? `, then ${more} more` : ''}`, async () => {
         const stored = new Map();
         for (const f of mains) stored.set(f, await provision.getFormSecurityRoles(idOfForm.get(f)));
         const current = new Map(mains.map((f) => [f, stored.get(f) ? stored.get(f).order : undefined]));
-        const sequence = plannedMainFormSequence(spec, entityLogical, current);
+        const sequence = plannedMainFormSequence(orderSpec, entityLogical, current);
         for (let i = 0; i < sequence.length; i += 1) {
           if (current.get(sequence[i]) === i) continue;
           await writeFormOrder(idOfForm.get(sequence[i]), i, stored.get(sequence[i]));
@@ -6331,9 +6359,9 @@ async function runSdkBuildPhases(spec, opts, owed) {
   const createInPlace = async (formId, specForm) => {
     if (!specForm || !isMainForm(specForm) || !canOrderForms()) return;
     const entityLogical = String(specForm.entity || '').toLowerCase();
-    if (plannedMainFormSequence(spec, entityLogical) || ordersByHand(spec, entityLogical)) return;
+    if (plannedMainFormSequence(orderSpec, entityLogical) || ordersByHand(orderSpec, entityLogical)) return;
     const snapshot = await appendSnapshotFor(entityLogical);
-    const idx = Math.max(0, declaredMainForms(spec, entityLogical).indexOf(specForm));
+    const idx = Math.max(0, declaredMainForms(orderSpec, entityLogical).indexOf(specForm));
     // Unreadable neighbours: put it past any order Maker assigns (the step says so).
     const order = snapshot.error ? APPEND_FALLBACK_ORDER + idx : snapshot.base + 1 + idx;
     // The root bag of a new form, as the SDK builds it (abridged):
@@ -6679,7 +6707,7 @@ async function runSdkBuildPhases(spec, opts, owed) {
   //    A form with `events[]` then gets its JS handlers wired: fetch the pushed form (to
   //    retain its formxml), inject onload/onsave/onchange handlers, push + publish.
   if (has('forms')) {
-    const defs = await Promise.all((spec.forms || []).map(async (f) => {
+    const allDefs = await Promise.all((spec.forms || []).map(async (f) => {
       const def = compileFormIntent(spec, f, { notesClassId: NOTES_CLASS_ID });
       const subs = [];
       // The tabs, form-columns and sections this form declares — what a sub-grid's placement is resolved against.
@@ -6722,6 +6750,66 @@ async function runSdkBuildPhases(spec, opts, owed) {
       def.__subgridLayout = layoutNames;
       return { f, def };
     }));
+    // Declared forms (forms[].reconcile "declared", flag on) are settled one at a time by the managed form helper
+    // (lib/form-layout-reconcile.js reconcileDeclaredForm): resolve, plan, one push, a fresh read proved against the
+    // expected layout, solution membership and one commit of the whole group. None of the build's own form steps runs
+    // for them — the push, the event wiring, the quick-view placement, the default-form promotion and the Main Form Set
+    // order — because each would write onto a form the helper just proved (its handlers and quick views are in the
+    // helper's layout). Their compiled defs are the same as a legacy form's. With the flag off `declaredDefs` is empty and
+    // `defs` is every form, in spec order, exactly as before.
+    const declaredDefs = allDefs.filter((d) => isDeclaredFormOn(d.f));
+    const defs = declaredDefs.length ? allDefs.filter((d) => !isDeclaredFormOn(d.f)) : allDefs;
+    const declaredIdOf = new Map(); // raw spec form -> the id its committed group binds
+    const declaredTables = []; // the tables of the declared forms that settled, in settle order
+    // `${entity}|${name}` -> id of every QuickView form this run built or settled: a quick view on a legacy host or a declared
+    // one names its form by (target table, name). The declared QuickView forms settle first, so a declared host can use them.
+    const quickViewIds = {};
+    const keyQuickView = (d, id) => { if (id && d.f.name && (d.f.formType || 'Main') === 'QuickView') quickViewIds[`${String(d.f.entity).toLowerCase()}|${d.f.name}`] = id; };
+    let formCatalog = null;
+    // The helper calls the halt factory with { cause } only; the build's halt names the finding the cause carries, so the
+    // printed line says the code, the message and the approval that settles it (cliApproval: `declared form "<key>"`).
+    const declaredFormStop = (phase, label, code, { cause } = {}) => managedStop(phase, label, code, {
+      cause,
+      findings: [{ key: label, code, message: String((cause && cause.message) || code).replace(/\s+/g, ' ') }],
+    });
+    const settleDeclaredForm = (d) => {
+      const { f, def } = d;
+      const table = String(f.entity).toLowerCase();
+      const key = formLayoutKey(f);
+      return runner.run('forms', `declared form "${key}"`, async () => {
+        // One catalog for the run's declared forms: each new form takes its id from it, so the id is the same on every plan.
+        if (!formCatalog) formCatalog = createIntentCatalog(declaredDefs.map((x) => formCatalogIntent(x.f, { solution: sol && sol.uniqueName })));
+        const out = await reconcileDeclaredForm({
+          form: f,
+          spec,
+          def,
+          sdk: provision,
+          hosts: declaredHostsOf(f, def, { quickViewFormIdOf: (target, name) => quickViewIds[`${String(target).toLowerCase()}|${name}`] || '' }),
+          events: f.events || [],
+          resolveExisting: () => resolveExistingFormId(provision, def),
+        }, {
+          store: bindingGroups && bindingGroups.store,
+          barrier: owed.barrier,
+          catalog: formCatalog,
+          halt: declaredFormStop,
+          // Solution membership of the bound form, a reused one included: read once per run (solutionMembers) and added unless proved.
+          ensureMembership: async ({ root }) => { if (root && root.id) await ensureInSolution(root.id, COMPONENT_TYPE.form, table); },
+          // The run's typed approvals; only `form:<key>` in them approves this form (isApproved(…, 'form', key)).
+          authorizedAdoption: featureCtx.authorizedAdoption,
+          authorizedOverwrite: featureCtx.authorizedOverwrite,
+          sendObserver: opts.sendObserver || null,
+          phase: 'forms',
+        });
+        // The committed group owes its table's publish; from now on only the managed publisher puts that table live
+        // (lib/managed-scope-publisher.js), and the helper does not route it itself.
+        owed.barrier.route(table, `managed form "${key}"`);
+        if (!declaredTables.includes(table)) declaredTables.push(table);
+        declaredIdOf.set(f, out.formId);
+        keyQuickView(d, out.formId);
+        return out.formId;
+      });
+    };
+    for (const d of declaredDefs) if ((d.f.formType || 'Main') === 'QuickView') await settleDeclaredForm(d);
     const ids = await runner.mapLimit(defs, concurrency, async (d) => {
       const id = await buildArtifact('form', d.def, { specForm: d.f });
       const wantedEvents = (d.f.events || []).filter((ev) => FORM_EVENTS.has(ev.event) && ev.library && ev.function);
@@ -6767,7 +6855,7 @@ async function runSdkBuildPhases(spec, opts, owed) {
       if (ids[i]) mainIdsByEntity.get(key).push(ids[i]);
     });
     for (const entityLogical of mainIdsByEntity.keys()) {
-      const chosen = selectDefaultForm(spec, entityLogical);
+      const chosen = selectDefaultForm(orderSpec, entityLogical);
       const chosenId = chosen && idOfForm.get(chosen.form);
       if (!chosenId) continue;
       mainByEntity.set(entityLogical, { id: chosenId, f: chosen.form });
@@ -6789,6 +6877,11 @@ async function runSdkBuildPhases(spec, opts, owed) {
     for (const entityLogical of mainIdsByEntity.keys()) {
       await applyMainFormOrder(entityLogical, idOfForm);
     }
+    // The declared Main and QuickCreate forms, after the legacy forms (whose QuickView ids a declared host may name).
+    for (const d of declaredDefs) if ((d.f.formType || 'Main') !== 'QuickView') await settleDeclaredForm(d);
+    // The id of every form, legacy or declared, in spec order: what the output maps below report.
+    const legacyIdOf = new Map(defs.map((d, i) => [d, ids[i]]));
+    const formIdOfDef = (d) => (declaredIdOf.has(d.f) ? declaredIdOf.get(d.f) : legacyIdOf.get(d));
 
     // overwrites the first. That is correct for what the map is for — the app shell wires one form
     // per entity — but it is invisible to a consumer reading the emitted JSON, who reasonably
@@ -6800,7 +6893,7 @@ async function runSdkBuildPhases(spec, opts, owed) {
     // name. Two such pinned forms collide in `formIds` as well, and claiming otherwise would send
     // the reader to a map that cannot answer them either.
     const mainFormSeen = new Map(); // entity -> { shownName, identityKey } for the first Main form, in spec order
-    defs.forEach((d, i) => {
+    allDefs.forEach((d) => {
       if ((d.f.formType || 'Main') !== 'Main') return;
       const key = d.f.entity.toLowerCase();
       // `name` is optional on a form and is compiled to "<entity> form"; using the raw spec value
@@ -6822,26 +6915,26 @@ async function runSdkBuildPhases(spec, opts, owed) {
             ? 'The other ids are in created.formIds, keyed "entity|formType|name" — read that map rather than re-querying systemform.'
             : 'These two share an entity, type and name, so created.formIds cannot separate them either — give them distinct names.'));
       }
-      result.created.forms[key] = ids[i];
+      result.created.forms[key] = formIdOfDef(d);
     });
     // Every form, addressable individually. `created.forms` is keyed by ENTITY and holds only the
     // Main form, which is all the app shell needs — but `forms[].securityRoles` is applied in the
     // SECURITY phase (roles do not exist until then), by which time the forms phase is long over and
     // a non-Main form would be unreachable. Keyed on the same (entity, formType, name) triple the
     // spec uses to identify a form, so the lookup cannot silently bind to a same-named sibling.
-    defs.forEach((d, i) => {
-      result.created.formIds[formIdentityKey(d.f)] = ids[i];
+    allDefs.forEach((d) => {
+      result.created.formIds[formIdentityKey(d.f)] = formIdOfDef(d);
     });
     // Quick-view placement: embed a built QuickView form onto a host form via a lookup column,
     // added as a canonical quick-view control cell (semantic identity = the lookup field, so a
     // rebuild doesn't duplicate it). Runs after ALL forms are built so a host can reference a
     // QuickView form created concurrently. Placed in the host's first FIELD section: a sub-grid placed ahead of the
     // form's own sections, or the Notes section, is a section the engine owns and holds nothing else.
-    const formIdByEntityName = {};
+    const formIdByEntityName = quickViewIds;
     // Only QuickView forms are quick-view targets. Keying ALL forms by (entity, name) let a same-named
     // Main form on the SAME entity OVERWRITE the QuickView entry (order-dependent), embedding the wrong
-    // form id — so key QuickView forms only.
-    defs.forEach((d, i) => { if (d.f.name && (d.f.formType || 'Main') === 'QuickView') formIdByEntityName[`${String(d.f.entity).toLowerCase()}|${d.f.name}`] = ids[i]; });
+    // form id — so key QuickView forms only. The declared QuickView forms are already in it (keyQuickView).
+    defs.forEach((d, i) => keyQuickView(d, ids[i]));
     for (let i = 0; i < defs.length; i++) {
       const f = defs[i].f;
       const qvs = (f.quickViews || []).filter((q) => q && q.lookup && q.targetEntity && q.form);
@@ -6867,6 +6960,29 @@ async function runSdkBuildPhases(spec, opts, owed) {
           await publishReconciled('form', hostId, f.entity, `form ${f.name || f.entity} quick-views`);
         }
       });
+    }
+    // One publish per table a declared form owes, after all of the table's form work above (a legacy form's events or
+    // quick views on the same table included), through the managed publisher: publishReconciled hands a routed table to
+    // it, now, or with phase 8 under --publish (whose ask includes every owed routed table). A table a committed form of
+    // the spec still owes from an earlier run is paid here too, a no-op re-run's included. The publisher reads every
+    // managed group on the table with its family's layer reader first and withholds the publish when one is not safe.
+    // A table that holds a publish whose answer was lost (its publication 'dispatching' or 'unconfirmed') goes to the publisher too, though
+    // nothing is owed on it: an unchanged form never reaches the settlement that would confirm it, so without this no run
+    // would. The publisher confirms it read-only first (publishManagedScope -> confirmUncertainPublication), never sends it
+    // again, and the scope stays quarantined for this run (openManagedContext's block is never cleared), so the next run
+    // is the clean one. One it cannot confirm stops here with the dispatch as data, which the CLI offers to the maker as
+    // the typed publication-risk:<scopeKey> approval (build-model-app.js offerPublicationRisk).
+    if (managedTables && declaredDefs.length) {
+      const formTables = new Set([...declaredTables, ...declaredDefs.map((d) => String(d.f.entity).toLowerCase())]);
+      const due = managedTables.owedTables().filter((t) => formTables.has(t));
+      for (const unit of bindingGroups.store.snapshot().units()) {
+        const pub = !unit.invalid && unit.group && unit.group.publication;
+        if (!pub || (pub.state !== 'dispatching' && pub.state !== 'unconfirmed') || !pub.scope || pub.scope.type !== 'table') continue;
+        const t = String(pub.scope.table || '').toLowerCase();
+        if (t && formTables.has(t) && !due.includes(t)) due.push(t);
+      }
+      // A routed table's publishReconciled never reads the id: the table stands for it.
+      for (const t of due) await publishReconciled('form', t, t, `declared forms of ${t}`);
     }
   }
 

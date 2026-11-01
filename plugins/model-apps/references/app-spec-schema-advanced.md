@@ -658,10 +658,63 @@ the `overwrite:` key the refusal prints (`--authorize overwrite:view:<table>/<na
 `overwrite:chart:<table>/<name>`, or `overwrite:quickfind:<table>` for a table's Quick Find). **Publishing.** A table is published only when every declared change on it succeeded: when one
 fails, the build reports the table as withheld, publishes the other tables, and exits non-zero.
 
-Declared upkeep of web resources is described with `webResources[]` above. Declared process flows,
-dashboards, business rules and form layouts are not reconciled in this release: `reconcile` on a form,
-dashboard, business rule or flow is a validation error, and the build's existing behaviour for each is
-unchanged. A command bar with `commands[].key` is refused (`managed-binding-port-unavailable`) in this version.
+Declared upkeep of web resources is described with `webResources[]` above, and of form layouts with
+`forms[].reconcile` below. Declared process flows, dashboards and business rules are not reconciled in
+this release: `reconcile` on a dashboard, business rule or flow is a validation error, and the build's
+existing behaviour for each is unchanged. A command bar with `commands[].key` is refused
+(`managed-binding-port-unavailable`) in this version.
+
+**An unconfirmed publish.** A table (or dashboard) publish whose answer was lost may still have run. The
+next build confirms it with a fresh read of the published layers, never by sending it again; that run
+publishes nothing more on that table, and the build after it goes on as usual. When no read can confirm
+it (the publish carried only layers that were already live), the table stays blocked in every build, and
+the build stops and prints the approval that releases it: `--authorize publication-risk:table:<table>`
+(`publication-risk:dashboard:<id>` for a dashboard). Check what is live first. Pass the key exactly as
+printed: `--allow-destructive` and any other key never give it. Accepting it is a
+decision to take the risk, not a proof: that build stays stopped, and the next one publishes the table
+again after the usual checks.
+
+## forms[].reconcile (optional — declared form layouts)
+
+Requires `minimumPluginVersion: "2.21.0"`. A form without `reconcile` builds exactly as before: fields
+are only added.
+
+```jsonc
+{ "entity": "new_ticket", "name": "Ticket Triage", "formType": "Main", "reconcile": "declared",
+  "tabs": [{ "name": "general", "label": "General", "sections": [
+    { "name": "details", "label": "Details", "columns": 2,
+      "fields": ["new_name", { "name": "new_summary", "colspan": 2 }, { "name": "new_priority", "readOnly": false }] }] }],
+  "subgrids": [{ "childEntity": "new_task", "view": "Active Tasks", "label": "Tasks" }],
+  "events": [{ "event": "onload", "library": "new_ticket.js", "function": "Ticket.onLoad" }] }
+```
+
+- **What follows the spec.** The order, section and spans of each declared field, the declared tabs and
+  sections, a section's width when stated, and `readOnly` / `hidden` when stated (an explicit
+  `false` clears the flag). A missing sub-grid, quick view, timeline or event handler is added. A new
+  form is created whole in one write, with an id that stays the same for the spec.
+- **What is kept.** A control the spec does not declare (a maker's field, a sub-grid, a web resource)
+  keeps its place, and nothing is deleted: `prune` is refused on a declared form. Labels, required
+  flags and control settings of existing cells are not changed unless the spec states them.
+- **What stops before a write.** A layout the build cannot place without moving a control it does not
+  own; an existing sub-grid or quick view that shows something else than the spec asks; a section the
+  spec puts in a column the tab lacks; a part changed elsewhere since the last build. The form is left
+  as it is and the stop names the cause.
+- **Refused fields.** `genPages`, `prune`, `isDefault`, `deactivateOtherMainForms`,
+  `securityRoles` and a place in `entities[].mainFormOrder` are refused on a declared form: set them
+  in Maker, or leave out `reconcile`. Two declared forms with one key (below) are refused.
+- **Approvals.** The key is `<table>/<formType>/<name>` in lower case, for example
+  `form:new_ticket/main/ticket triage` (quote it in the shell). A form that already exists and that
+  this build did not create is bound only with `--authorize "adopt:form:<key>"`; the first binding
+  needs it, later builds do not. `--authorize "overwrite:form:<key>"` approves replacing changes made
+  elsewhere. A local copy that differs from the server's stops the build (`workspace-copy-unsent-edits`).
+- **Publishing.** A table is published once, after all its form work, and only when every declared
+  change on it succeeded. A table publish puts live every saved change on that table, not only this
+  form's, so the build withholds it while another managed change on the table is not proved. A saved
+  form that is definitely unpublished is published without a rewrite.
+- **Concurrent edits.** Dataverse does not version a form's saved layer, so a conditional write cannot
+  reject a stale edit of it. The build re-reads the saved form just before it writes and stops when it
+  changed since the build read it. An edit made in Maker in the instant between that check and the
+  write cannot be detected: do not edit a declared form while a build runs.
 
 ## createIdentity (optional — stable create ids for declared views and charts)
 

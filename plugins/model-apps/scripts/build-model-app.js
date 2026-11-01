@@ -65,7 +65,7 @@ const { isDeclaredWebResource } = require('./lib/web-resource-reconcile.js');
 const { makeWritesBlocking } = require('./lib/output-redaction.js');
 // The lease one apply of an app holds for the whole of its work in the workspace (lib/app-operation-lease.js).
 const { withAppBuildLease, applyWorkspaceOf } = require('./lib/app-operation-lease.js');
-const { readManagedManifest } = require('./lib/managed-bindings.js');
+const { readManagedManifest, publicationRiskApproval } = require('./lib/managed-bindings.js');
 const { createAttemptSendObserver } = require('./lib/managed-feature-contract.js');
 const { emitSkillCompleted, createStepTally } = require('./lib/telemetry/skill-completed.js');
 
@@ -448,6 +448,54 @@ function findNewlyUnapprovedRemovals(current, approved) {
 function formatNewRemovalDetail(op) {
   if (op.kind === 'form-field-removal') return `removes field(s): ${op.fields.join(', ')} — not on the list the maker approved (another maker may have added them, or the spec changed since)`;
   return `drops navigation target(s): ${op.targets.join(', ')} — not on the list the maker approved (another maker may have added them, or the spec changed since)`;
+}
+
+// A managed publish whose answer was lost, and that no fresh read can settle (it carried only layers that were already live),
+// blocks its scope across runs until the maker accepts the risk (managed-bindings.js acceptUncertainPublication). Every refusal
+// over it carries the blocked dispatch as DATA (managed-bindings.js blockedPublication): { dispatchToken, approval:
+// 'publication-risk:<scopeKey>', remedy } — on the error itself when the publish protocol or the store threw it, on a cause
+// when a feature's or the table publisher's halt wraps it (err.cause, err.cause.cause, …). So the dispatch is read from those
+// properties and never parsed out of a message. Answers { scope, dispatchToken, approval, remedy } or null.
+function blockedPublicationOf(err) {
+  const seen = new Set();
+  for (let e = err, depth = 0; e && typeof e === 'object' && depth < 8 && !seen.has(e); e = e.cause, depth += 1) {
+    seen.add(e);
+    if (typeof e.dispatchToken !== 'string' || !e.dispatchToken || typeof e.remedy !== 'string' || typeof e.approval !== 'string') continue;
+    // publication-risk:table:new_ticket | publication-risk:dashboard:00000000-0000-0000-0000-000000000000
+    const m = /^publication-risk:(table|dashboard):(.+)$/.exec(e.approval);
+    if (!m) continue;
+    const scope = m[1] === 'table' ? { type: 'table', table: m[2] } : { type: 'dashboard', id: m[2] };
+    // Only a scope whose own approval spells exactly what the refusal named: the round trip is the store's spelling.
+    if (publicationRiskApproval(scope) !== e.approval) continue;
+    return { scope, dispatchToken: e.dispatchToken, approval: e.approval, remedy: e.remedy };
+  }
+  return null;
+}
+
+// What a halt over such a publish offers the maker. It prints the remedy and the typed approval the refusal names, exactly
+// as the refusal carries them. Only when this run was given that very approval (`--authorize publication-risk:<scopeKey>`,
+// authorizationKeys: never implied by --allow-destructive, an untyped key or another family's approval) does it record the
+// acceptance, with the scope and dispatch token this run's refusal displayed — never a token from an earlier run's display.
+// Acceptance is a risk decision, not a proof: nothing is sent, and this run stays stopped (its barrier's quarantine is in
+// memory); the next run finds the publication owed again and pays it after the usual layer checks. A store that cannot
+// record it says so, and the scope stays blocked. Never throws: the halt is what this run reports.
+function offerPublicationRisk(err, { accepted, store, say } = {}) {
+  const blocked = blockedPublicationOf(err);
+  if (!blocked || typeof say !== 'function') return null;
+  say(`a managed publish of ${blocked.approval.slice('publication-risk:'.length)} was sent and could not be confirmed (dispatch ${blocked.dispatchToken}): ${blocked.remedy}. Check what is live there; to accept that the lost publish may still complete, run the build again with --authorize ${blocked.approval}`);
+  if (!(accepted instanceof Set) || !accepted.has(blocked.approval)) return null;
+  if (!store || typeof store.acceptUncertainPublication !== 'function') {
+    say(`--authorize ${blocked.approval} was given, but this run has no managed binding store to record it in; nothing was accepted`);
+    return null;
+  }
+  try {
+    const out = store.acceptUncertainPublication({ scope: blocked.scope, dispatchToken: blocked.dispatchToken, approval: blocked.approval });
+    say(`accepted the risk of dispatch ${blocked.dispatchToken} (${blocked.approval}); ${(out && out.released ? out.released.length : 0)} managed group(s) owe their publish again. This run stays stopped: run the build again to publish it after the usual checks`);
+    return out;
+  } catch (e) {
+    say(`--authorize ${blocked.approval} could not be recorded (${String((e && e.message) || e).replace(/\s+/g, ' ').slice(0, 300)}); the scope stays blocked`);
+    return null;
+  }
 }
 
 async function buildModelApp(spec, opts, deps) {
@@ -855,6 +903,9 @@ async function buildModelAppHeld(spec, opts, deps, v, buildLease) {
       if (typeof deps.warn === 'function') for (const w of publicationBarrier.withheld()) deps.warn(describeWithheld(w));
       // And set the name column length of a table whose debt no attempt got as far as paying (the last one halted before its data-model phase).
       await settleOwedLengths({ sdk: deps.sdk, provision: deps.provisionSdk || deps.sdk, spec, owed: owedLengths, warn: deps.warn, sleep });
+      // A managed publish no fresh read can settle: say what the maker may decide, and record the decision only when this
+      // run was given that exact typed approval (offerPublicationRisk). The halt stands either way.
+      offerPublicationRisk(halted, { accepted: opts.publicationRisk, store: bindingGroups && bindingGroups.store, say: deps.warn || log });
       if (journal) journal.close({ status: 'halt', phase: halted && halted.phase, code: halted && halted.code, recoverable: !!(halted && halted.recoverable), message: String((halted && halted.message) || halted), ...counts });
       throw halted;
     }
@@ -1135,6 +1186,11 @@ const readLanguageFlag = (flags) => readAliasedFlag(flags, 'language-code', 'lan
 // A web resource's approvals are typed too and kept in Sets of their own (opts.authorizedWebResourceAdoption,
 // opts.authorizedWebResourceOverwrite): its name may hold '/', so `contoso_case/script` can be both a view's id and a web resource's
 // name, and no view, chart or untyped key ever approves a web resource.
+// and to the maker's acceptance of ONE managed publish whose answer was lost and that no fresh read can settle:
+//   publication-risk:table:<table>      accepting that the lost publish of the table may still complete (managed-bindings.js
+//   publication-risk:dashboard:<id>     acceptUncertainPublication); the same for a dashboard
+// It is recorded only when a refusal of the same run names exactly this approval, with that refusal's dispatch token
+// (offerPublicationRisk), and that run still stops; the next run publishes after the usual checks. No other key implies it.
 // It is deliberately not implied by --allow-destructive: that flag approves the form and sitemap removals the build lists, and a
 // consent to delete security or to convert stored dates must name the column it is for. The build's refusal of such a change names
 // the exact key, so the maker reads what will happen, then runs the build again with it. A key is refused unless the spec declares
@@ -1193,7 +1249,20 @@ function authorizationKeys(argv, spec) {
     quickfind: { verbs: ['overwrite'], id: (text) => (/^[A-Za-z0-9_]+$/.test(text) ? lower(text) : null), needs: 'a table that declares quickFind' },
   };
   const approve = (verb, family, id) => (verb === 'adopt' ? adopt : overwrite).add(approvalKey(family, id));
+  // publication-risk:table:<table> | publication-risk:dashboard:<id> — the maker accepts the risk of a managed publish whose
+  // answer was lost and that no fresh read can settle (managed-bindings.js acceptUncertainPublication). Kept in a Set of its
+  // own, in the store's spelling (publicationRiskApproval), and never implied by any other key: the build accepts only the
+  // approval a refusal of this very run names, with that refusal's scope and dispatch token (offerPublicationRisk).
+  const publicationRisk = new Set();
   for (const key of configuration.unclaimed) {
+    const risk = /^publication-risk:(table|dashboard):(.+)$/.exec(String(key));
+    if (risk) {
+      const scope = risk[1] === 'table' ? { type: 'table', table: lower(risk[2]) } : { type: 'dashboard', id: lower(risk[2]).replace(/^\{|\}$/g, '') };
+      const ok = scope.type === 'table' ? /^[a-z0-9_]+$/.test(scope.table) : /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(scope.id);
+      if (ok) publicationRisk.add(publicationRiskApproval(scope));
+      else problems.push(`'${key}' is not publication-risk:table:<table> or publication-risk:dashboard:<dashboard id>`);
+      continue;
+    }
     // adopt:webresource:new_/scripts/case.js | overwrite:webresource:new_casebanner — a declared web resource, by its whole name (any case).
     const resource = /^(adopt|overwrite):webresource:(.+)$/.exec(String(key));
     if (resource) {
@@ -1249,7 +1318,7 @@ function authorizationKeys(argv, spec) {
     }
     // dateTimeBehavior:new_ticket.new_due | isSecured:new_ticket.new_salary | tableFlags:new_ticket
     const m = /^(dateTimeBehavior|isSecured):([A-Za-z0-9_]+)\.([A-Za-z0-9_]+)$|^(tableFlags):([A-Za-z0-9_]+)$/.exec(String(key));
-    if (!m) { problems.push(`'${key}' is not dateTimeBehavior:<table>.<column>, isSecured:<table>.<column> or tableFlags:<table> (nor adopt:view:<table>/<name>, overwrite:view:<table>/<name>, the same for chart:, overwrite:quickfind:<table>, adopt:webresource:<name> or overwrite:webresource:<name>)`); continue; }
+    if (!m) { problems.push(`'${key}' is not dateTimeBehavior:<table>.<column>, isSecured:<table>.<column> or tableFlags:<table> (nor adopt:view:<table>/<name>, overwrite:view:<table>/<name>, the same for chart:, overwrite:quickfind:<table>, adopt:webresource:<name>, overwrite:webresource:<name> or publication-risk:table:<table>)`); continue; }
     const kind = m[1] || m[4];
     const table = lower(m[2] || m[5]);
     const entity = ((spec && spec.entities) || []).find((e) => lower(e && e.schemaName) === table);
@@ -1268,7 +1337,7 @@ function authorizationKeys(argv, spec) {
     const i = problems.findIndex((p) => p.startsWith(`'${key}' `));
     if (i >= 0) problems[i] += ` — ${hint}`;
   }
-  return { keys, adopt, overwrite, webResourceAdopt, webResourceOverwrite, error: problems.length ? `--authorize: ${problems.join('; ')}` : null };
+  return { keys, adopt, overwrite, webResourceAdopt, webResourceOverwrite, publicationRisk, error: problems.length ? `--authorize: ${problems.join('; ')}` : null };
 }
 
 function parseLanguageCode(value) {
@@ -1494,6 +1563,7 @@ async function main() {
     ...(authorization.overwrite.size ? { authorizedOverwrite: authorization.overwrite } : {}),
     ...(authorization.webResourceAdopt.size ? { authorizedWebResourceAdoption: authorization.webResourceAdopt } : {}),
     ...(authorization.webResourceOverwrite.size ? { authorizedWebResourceOverwrite: authorization.webResourceOverwrite } : {}),
+    ...(authorization.publicationRisk.size ? { publicationRisk: authorization.publicationRisk } : {}),
     nonInteractive: flags['non-interactive'] === true || envTruthy(process.env.POWER_PLATFORM_SKILLS_NONINTERACTIVE),
     languageCode,
     appDir: path.dirname(specPath),
