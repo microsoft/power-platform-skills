@@ -1919,7 +1919,8 @@ async function reconcileDeclaredForm(input, ctx = {}) {
     // durably recorded of its answer (noteSaved); never a later read, and never the id the row happens to have.
     //   - The ROOT only when that answer was to the root's CREATE: an edit of a row that was already there (an adopted
     //     form, even one standing at the catalog's id) made nothing, and the store refuses the flag on such an attempt.
-    //     Such a root is bound only under the form's typed adoption approval, at every commit, a recovery included.
+    //     Its first binding needs the form's typed adoption approval at that commit, a recovery before it included;
+    //     once bound, later commits follow the managed drift and overwrite rules and need no new grant.
     //   - A CHILD by the receipt: the cells, controls, sections and tabs the plan reserved as new and sent in that one
     //     push (apply's `newChildren`), so cells this build adds to an approved adopted form are recorded as created.
     // A recovery is committed from the attempt's own receipt, so it answers none of its own.
