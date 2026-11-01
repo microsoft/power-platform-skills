@@ -203,10 +203,15 @@ function boundIdentity(binding, { pinnedId, resolvedId, code, key }) {
  * pushChecked shape ({ outcome: 'saved'|'refused'|'unknown', code }). A throw from a LOCAL edit
  * (before the push) is caught here and answered as refused: nothing was sent.
  *
- * @returns {Promise<{ status: 'created'|'adopted'|'refused'|'unknown', id?: string, childIds?: object, code: string, rules?: string[] }>}
+ * @returns {Promise<{ status: 'created'|'matched'|'adopted'|'refused'|'unknown', id?: string, childIds?: object, code: string, rules?: string[] }>}
  *   'adopted' means the maker resolved an earlier unknown create by naming the rows it made: execute
  *   was NOT called and the caller must re-read before it records anything.
  */
+// Stop codes a create port raises before it calls execute (create-identity-invalid|unsupported|conflict|unverified,
+// create-completion-required, create-ownership-required, creation-record-unwritten, and the managed binding store's
+// managed-binding-* / managed-settlement-pending when the attempt could not be recorded first).
+const PRE_SEND_STOP = /^(?:create-identity-[a-z-]+|create-completion-required|create-ownership-required|creation-record-unwritten|managed-binding-[a-z-]+|managed-settlement-pending)$/;
+
 async function createThroughPort(ctx, request, execute) {
   if (!ctx || !ctx.creates || typeof ctx.creates.run !== 'function') return { status: 'refused', code: 'creation-port-unavailable' };
   let pushed = null;
@@ -228,11 +233,21 @@ async function createThroughPort(ctx, request, execute) {
     if (raw === 'CREATE_PORT_INVALID') return { status: 'refused', code: 'creation-request-invalid' };
     // An earlier create in this run lost its answer: the port sends nothing more until it is resolved.
     if (raw === 'create-outcome-unknown' && err.outcome === 'not-sent') return { status: 'refused', code: 'creation-blocked-by-unknown' };
+    // The stable port (creates-port.js composite port, creates-stable-build.js) stops BEFORE execute: an identity it cannot derive
+    // or prove, a workspace copy or an earlier attempt the build must complete first, or a create record it could not write. The
+    // execute above never throws out of the port (its own throw is caught there), so such a stop sent nothing: it is a refusal,
+    // and its lower-case code is kept for the maker.
+    if (PRE_SEND_STOP.test(raw)) return { status: 'refused', code: raw };
     return { status: 'unknown', code: codeOf(err) || 'WRITE_OUTCOME_UNKNOWN' };
   }
   const base = { id: out && out.id, childIds: (out && out.childIds) || {} };
   if (out && out.outcome === 'adopted') return { status: 'adopted', ...base, code: 'creation-adopted' };
   if (out && out.outcome === 'created') return { status: 'created', ...base, code: '' };
+  // The composite port's native match (creates-port.js interpretCompositePush, evidence 'native-match'): the row is at the reserved
+  // id, but this push is not proof that this run made it (an earlier run whose answer was lost, or the SDK adopting an exact
+  // existing row). The caller records it as adopted. Any other 'matched' answer stays unknown here, as it always was:
+  // managed-create.js validates the SDK's own exact-match envelope itself.
+  if (out && out.outcome === 'matched' && out.evidence === 'native-match' && normalizeGuid(out.id)) return { status: 'matched', ...base, code: '' };
   if (out && out.outcome === 'refused') return { status: 'refused', ...base, code: (pushed && pushed.code) || 'PUSH_NOT_SAVED', rules: pushed && pushed.rules };
   return { status: 'unknown', ...base, code: (pushed && pushed.code) || 'WRITE_OUTCOME_UNKNOWN' };
 }
@@ -300,11 +315,15 @@ function rulesOf(err) {
  * Push one artifact and classify the answer. Returns { outcome: 'saved'|'refused'|'unknown', code }.
  * A push the SDK answers without `saved: true` is refused (the SDK reports a refusal that way and
  * sends nothing for it); a throw is classified by {@link PRE_WRITE_CODES}.
+ * A saved answer also carries the id the SDK answered and its raw result (PushResult: { type, id, saved,
+ * adoptedExisting? }): the stable create port (creates-port.js interpretCompositePush) proves the row is at the id it
+ * reserved from them, and tells the SDK's exact adoption of an existing row from a create. Callers that read only
+ * `outcome` are unaffected.
  */
 async function pushChecked(sdk, type, id) {
   try {
     const pushed = await sdk.pushArtifact(type, id);
-    if (pushed && pushed.saved === true) return { outcome: 'saved', code: '' };
+    if (pushed && pushed.saved === true) return { outcome: 'saved', code: '', id: pushed.id, sdkResult: pushed };
     return { outcome: 'refused', code: 'PUSH_NOT_SAVED' };
   } catch (err) {
     const code = codeOf(err);

@@ -224,12 +224,13 @@ test('the spec decides the mode: no createIdentity and no new feature intents is
 });
 
 // --- no regression: a default build cannot reach any of this ---------------------------------------------------------------------
-// Walks the build's relative require graph from its entry points. Until a later change wires the port in (behind the spec's
-// createIdentity and new feature declarations), the default build must load none of the new modules, and must still hand the engine
-// the plain pass-through.
+// Walks the build's relative require graph from its entry points. The port is wired in at exactly one edge: the engine requires
+// creates-stable-build.js inside the branch a spec with createIdentity takes. Apart from that gated edge the default build must load
+// none of the new modules, and must still hand the engine the plain pass-through.
+const GATED_EDGE = ['sdk-build.js', 'creates-stable-build.js'];
 const SCRIPTS = path.join(__dirname, '..');
 const NEW_MODULES = ['creates-identity.js', 'creates-capabilities.js', 'creates-port.js', 'creates-catalog.js'].map((f) => path.join(SCRIPTS, 'lib', f));
-function requireGraph(entry) {
+function requireGraph(entry, { gated = false } = {}) {
   const seen = new Set();
   const stack = [entry];
   while (stack.length) {
@@ -240,6 +241,7 @@ function requireGraph(entry) {
     for (const m of src.matchAll(/require\(\s*(['"])(\.{1,2}\/[^'"]+)\1\s*\)/g)) {
       let target = path.resolve(path.dirname(file), m[2]);
       if (!fs.existsSync(target) && fs.existsSync(`${target}.js`)) target = `${target}.js`;
+      if (gated && path.basename(file) === GATED_EDGE[0] && path.basename(target) === GATED_EDGE[1]) continue;
       if (/\.js$/.test(target) && fs.existsSync(target) && !target.includes(`${path.sep}vendor${path.sep}`)) stack.push(target);
     }
   }
@@ -247,8 +249,12 @@ function requireGraph(entry) {
 }
 
 test('the default build loads none of the stable-identity modules and still wires the plain pass-through', () => {
-  const graph = requireGraph(path.join(SCRIPTS, 'build-model-app.js'));
+  const graph = requireGraph(path.join(SCRIPTS, 'build-model-app.js'), { gated: true });
   assert.ok(graph.has(path.join(SCRIPTS, 'lib', 'sdk-build.js')), 'the walk reaches the engine (control)');
+  assert.ok(requireGraph(path.join(SCRIPTS, 'build-model-app.js')).has(path.join(SCRIPTS, 'lib', 'creates-port.js')), 'the gated edge is the wiring (control)');
+  const engine = fs.readFileSync(path.join(SCRIPTS, 'lib', 'sdk-build.js'), 'utf8');
+  assert.match(engine, /if \(spec\.createIdentity !== undefined\) \{\n {4}const \{ createStableCreates \} = require\('\.\/creates-stable-build\.js'\);/);
+  assert.equal(engine.match(/require\('\.\/creates-stable-build\.js'\)/g).length, 1, 'the only edge into the stable modules is the gated one');
   assert.ok(graph.has(path.join(SCRIPTS, 'lib', 'creates-passthrough.js')));
   for (const m of NEW_MODULES) assert.ok(!graph.has(m), `${path.basename(m)} is not reachable from a default build`);
   const build = fs.readFileSync(path.join(SCRIPTS, 'build-model-app.js'), 'utf8');

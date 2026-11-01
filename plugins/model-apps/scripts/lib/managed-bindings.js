@@ -1871,6 +1871,37 @@ function managedManifestView(snapshot) {
   return view;
 }
 
+/**
+ * Whether `environment` is one a store can be kept for: an https origin without credentials (page-ownership-records.js
+ * environmentFingerprint refuses anything else). A build or verify against any other target never opens or reads one.
+ */
+function isStoreEnvironment(environment) {
+  try {
+    const url = new URL(environment);
+    return url.protocol === 'https:' && !url.username && !url.password;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * What verify reads for one workspace: managedManifestView of the store discovered there (read-only; nothing is created). No store, or
+ * a workspace with no folder, is an empty view, and so is a target no store can be kept for (isStoreEnvironment). A store verify cannot
+ * trust is not an error of the verify run — it is listed as one invalid entry, so the report says the managed bindings were not verified
+ * instead of passing them by silence.
+ */
+function readManagedManifest(args) {
+  if (!isStoreEnvironment(args && args.environment)) return managedManifestView(null);
+  try {
+    const found = discoverManagedStore(args);
+    return managedManifestView(found.absent ? null : found.loaded);
+  } catch (e) {
+    const view = managedManifestView(null);
+    view.invalid.push({ family: 'store', key: 'managed-bindings', reason: e && e.message ? e.message : String(e), code: (e && e.code) || CODES.unreadable });
+    return view;
+  }
+}
+
 module.exports = {
   PREFIX,
   MAX_BYTES,
@@ -1890,6 +1921,8 @@ module.exports = {
   managedManifestView,
   checkDeclaration,
   checkCompletionBytes,
+  readManagedManifest,
+  isStoreEnvironment,
   REQUEST_SHAPES,
   attemptProvenUnsent,
   resumableCreate,

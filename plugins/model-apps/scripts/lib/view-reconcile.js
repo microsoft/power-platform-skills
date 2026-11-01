@@ -71,6 +71,15 @@ function isDeclaredView(v) {
   return !!v && v.reconcile === 'declared';
 }
 
+/**
+ * The plan key of a declared view that compiles: its authored `key`, else `<table>/<name>`. The one rule, shared by the
+ * planner and by the stable create catalog (creates-stable-build.js), so a create is always looked up under the key it
+ * was reserved for.
+ */
+function declaredViewKey(v) {
+  return typeof v.key === 'string' && v.key ? v.key : `${String(v.entity).toLowerCase()}/${v.name}`;
+}
+
 const lc = (s) => String(s).toLowerCase();
 const refNameOf = (link) => lc(link.alias || link.name);
 
@@ -196,7 +205,7 @@ function compileViewIntent(v, o = {}) {
   });
 
   const intent = {
-    key: typeof v.key === 'string' && v.key ? v.key : `${entity}/${v.name}`,
+    key: declaredViewKey(v),
     entity,
     name: v.name,
     viewId: v.viewId !== undefined ? normalizeGuid(v.viewId) : '',
@@ -430,14 +439,17 @@ async function applyViewCreate(plan, sdk, ctx, result) {
     return pushChecked(sdk, 'view', id);
   });
   const id = created.id ? normalizeGuid(created.id) || String(created.id) : null;
-  if (created.status === 'created') {
+  if (created.status === 'created' || created.status === 'matched') {
+    // 'matched' (the stable port only): the push found the row already at the reserved id. It is handled as a create —
+    // saved, joined to the solution, published once — but bound as adopted: this push is no receipt that this run made it.
+    const origin = created.status === 'created' ? 'created' : 'adopted';
     const scope = { type: 'view', id, table: plan.intent.entity };
     result.saved.push({ key: plan.key, kind: 'view', id, created: true, parts: PARTS.slice() });
     result.pendingPublish.push({ key: plan.key, scope });
     // The baseline is what the server is SEEN to hold. A create that cannot be read back records no
     // binding (the intent is not a substitute for the stored view) and stays unknown.
     const baseline = await readBaseline(sdk, id);
-    if (baseline) result.managedBindings.push(bindingRecord(ctx, { kind: 'view', key: plan.key, id, origin: 'created', ...baseline }));
+    if (baseline) result.managedBindings.push(bindingRecord(ctx, { kind: 'view', key: plan.key, id, origin, ...baseline }));
     else result.unknown.push(refusal(plan.key, 'view-created-unreadable', 'the view was created but could not be read back to record its baseline'));
   } else if (created.status === 'adopted') {
     // The maker resolved a lost create by naming the view it made: bind it to what it holds now and
@@ -525,6 +537,7 @@ async function applyViewPlan(plan, sdk, ctx) {
 }
 module.exports = {
   isDeclaredView,
+  declaredViewKey,
   compileViewIntent,
   viewCreateArtifact,
   planViewReconcile,

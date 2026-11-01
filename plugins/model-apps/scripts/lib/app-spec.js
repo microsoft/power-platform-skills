@@ -2025,6 +2025,9 @@ const APP_MEMBERSHIP_MIN_VERSION = '2.13.0';
 const APP_MEMBERSHIP_UPDATE_MIN_VERSION = '2.21.0';
 // app.theme (Preview) ships in 2.21.0: an older plugin ignores the field, so a spec that uses it asks for 2.21.0 or newer.
 const APP_THEME_MIN_VERSION = '2.21.0';
+// createIdentity: "stable-v1" (stable create ids for declared views and charts) first shipped in 2.21.0.
+const CREATE_IDENTITY_MIN_VERSION = '2.21.0';
+const CREATE_IDENTITY_STABLE = 'stable-v1';
 const isPluginVersion = (value) => typeof value === 'string' && /^\d+(?:\.\d+)*(?:[-+][0-9A-Za-z.-]+)?$/.test(value);
 // Declared reconciliation (views, charts and web resources with reconcile: "declared", a view's viewId pin and joins, a chart title, command
 // keys and row pins, a table's quickFind): an older plugin ignores these fields (or, for quickFind, refuses the table), so a
@@ -2132,6 +2135,10 @@ function appMembershipWarnings(spec) {
   }
   if (app.theme !== undefined && (!isPluginVersion(floor) || compareVersions(floor, APP_THEME_MIN_VERSION) < 0)) {
     warnings.push(`set minimumPluginVersion to '${APP_THEME_MIN_VERSION}' or newer when using app.theme — older plugins ignore it`);
+  }
+  if (Object.prototype.hasOwnProperty.call(spec, 'createIdentity')
+    && (!isPluginVersion(floor) || compareVersions(floor, CREATE_IDENTITY_MIN_VERSION) < 0)) {
+    warnings.push(`set minimumPluginVersion to '${CREATE_IDENTITY_MIN_VERSION}' or newer when using createIdentity — older plugins ignore it and create with fresh ids`);
   }
   if (app.tables === undefined && app.mainForms === undefined) return warnings;
   if (!isPluginVersion(floor) || compareVersions(floor, APP_MEMBERSHIP_MIN_VERSION) < 0) {
@@ -2641,6 +2648,14 @@ function validateAppSpec(spec, opts = {}) {
   // What DOES protect the reported harm today is the destructive preflight: the failure mode in
   // #584 (an old compiler reducing a columns-only form to an empty field set) surfaces as a plan to
   // remove every non-primary field, which requires authorization before it can be written.
+  // createIdentity (lib/creates-identity.js readCreateIdentityMode): absent, or exactly "stable-v1" (stable create ids for the
+  // declared views and charts). Any other value is refused here and never read as absent: a typo must not fall back to fresh ids
+  // on the build that was meant to keep them.
+  if (Object.prototype.hasOwnProperty.call(spec, 'createIdentity') && spec.createIdentity !== CREATE_IDENTITY_STABLE) {
+    // Checked here rather than through creates-identity.js readCreateIdentityMode, which says the same: a default build must not load
+    // the stable-identity modules, and creates-identity.js requires this module. A test pins the two to one value.
+    errors.push(`create-identity-invalid: createIdentity must be "${CREATE_IDENTITY_STABLE}" or absent; got ${JSON.stringify(spec.createIdentity)}`);
+  }
   if (spec.minimumPluginVersion !== undefined) {
     const want = spec.minimumPluginVersion;
     // ANCHORED at BOTH ends on purpose. A prefix-only pattern accepted `2..9` on its leading `2`,
@@ -4768,6 +4783,8 @@ module.exports = {
   APP_MEMBERSHIP_MIN_VERSION,
   APP_MEMBERSHIP_UPDATE_MIN_VERSION,
   APP_THEME_MIN_VERSION,
+  CREATE_IDENTITY_MIN_VERSION,
+  CREATE_IDENTITY_STABLE,
   isPluginVersion,
   sitemapEntityTables,
   appMembershipWarnings,

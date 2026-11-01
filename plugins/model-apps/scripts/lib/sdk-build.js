@@ -166,8 +166,9 @@ const { RETRY, isTransientStatus, judgeFailure, retryPolicyFor, retryFrom, refus
 const { createPublicationBarrier, describeWithheld, describeWithheldApp } = require('./publication-barrier.js');
 const { createFeatureSettlement, refusal: featureRefusal, isAuthorized, approvalKey } = require('./reconcile-common.js');
 const { createPassthroughCreates } = require('./creates-passthrough.js');
-const { isDeclaredView, planViewReconcile, applyViewReconcile } = require('./view-reconcile.js');
-const { isDeclaredChart, planChartReconcile, applyChartReconcile } = require('./chart-reconcile.js');
+const { isDeclaredView, declaredViewKey, planViewReconcile, applyViewReconcile } = require('./view-reconcile.js');
+const { isDeclaredChart, declaredChartKey, planChartReconcile, applyChartReconcile } = require('./chart-reconcile.js');
+const { openManagedContext, isStoreEnvironment } = require('./managed-bindings.js');
 const { isManagedEntity, planCommandReconcile, applyCommandReconcile } = require('./command-reconcile.js');
 const { planQuickFind, applyQuickFind } = require('./quick-find.js');
 const { HTTP_SEND_HISTORY } = require('./sdk-http-client.js');
@@ -3227,6 +3228,24 @@ function genpageCommand(verb, { env, pageId, app, flags = '' }) {
 // everything that app has saved, so the user is asked first), or detach it in Maker, or give this app a page of its own. `commands` are the lines `genpageCommand` made, one per app that holds the page.
 const detachAdvice = (commands) => `Detach it from the other app — ask the user first, since this changes another app: ${commands.join('; ')} (each takes the page out of that app's navigation and publishes that app, which publishes everything that app has saved; the page itself stays) — or detach it in Maker, or give this app its own page.`;
 
+// The managed binding store of one apply (lib/managed-bindings.js), through its one opener, openManagedContext. The CLI calls this once
+// per invocation and hands the handle to every attempt as `opts.bindingGroups`; a direct runSdkBuild that was handed none calls it
+// itself. Opening is the read-only discovery: a workspace with no store file stays inert — nothing is created, nothing is installed
+// on the barrier and no request changes — while an existing one installs its debt on `barrier` (a pending attempt's hold; a block for
+// an uncertain or corrupt group), whatever the spec declares, so a fresh barrier never erases on-disk debt. A file the build cannot
+// trust stops it before any write: it is not an empty store and must not be published past. Only an apply against a target a store
+// can be kept for (an https origin; isStoreEnvironment), with an app and a solution to name it by, opens one; a dry run reads and
+// validates only. Answers { store, debt, absent } or null.
+function openBuildBindingGroups(spec, { apply, env, workspaceDir, appDir, barrier } = {}) {
+  const sol = spec && spec.solution;
+  if (!apply || !spec.app || !sol || !sol.uniqueName || !isStoreEnvironment(env)) return null;
+  try {
+    return openManagedContext({ workspaceDir: applyWorkspaceOf({ workspaceDir, appDir }), environment: env, appUniqueName: appUniqueName(spec), solutionUniqueName: sol.uniqueName, barrier: barrier || null });
+  } catch (err) {
+    throw new BuildHalt(`the managed binding store of this app could not be read (${String((err && err.message) || err).replace(/\s+/g, ' ').slice(0, 300)}); the build stopped before writing anything. Restore the file or move it aside and run the build again.`, { phase: 'preflight', code: 'managed-binding-store-unreadable', recoverable: false, retry: RETRY.NEVER, cause: err });
+  }
+}
+
 // The entry every caller enters by. An APPLY holds the app's build lease for the whole of it (lib/app-operation-lease.js): one taken here when the
 // caller holds none, or the caller's own (`opts.buildLease`, which buildModelApp hands to each attempt), borrowed and left to the caller to let go. A
 // second apply of the same app in the same workspace is refused before anything is read or written, so two builds cannot both find the app's icon,
@@ -3601,6 +3620,40 @@ async function runSdkBuildPhases(spec, opts, owed) {
   // creates/updates it exactly as before — this branch is a no-op (byte-identical) on the normal path.
   if (opts.changedOnly && opts.changedOnly.resolvedAppId) result.created.app = opts.changedOnly.resolvedAppId;
   const sol = spec.solution;
+  // The managed binding store: the handle the CLI opened (opts.bindingGroups) is reused, never a second writer; a direct call opens
+  // its own (openBuildBindingGroups).
+  const bindingGroups = opts.bindingGroups || openBuildBindingGroups(spec, { ...opts, barrier: owed.barrier });
+  // Stable create identities (createIdentity: "stable-v1"; lib/creates-stable-build.js), for declared views and charts only: their
+  // two call sites below are handed `stableCtx` — the composite create port, a binding lookup by id, and a settlement that records
+  // each settled view or chart in the store. A spec without the field loads none of it, and every other create keeps the build's
+  // own port. The composite port's answer is not passed through `createPort`'s reading of the checked push: it already is one
+  // (creates-port.js interpretCompositePush), and that reading would turn its 'matched' into 'unknown'.
+  let stable = null;
+  if (spec.createIdentity !== undefined) {
+    const { createStableCreates } = require('./creates-stable-build.js');
+    try {
+      stable = createStableCreates({ spec, sdk: provision, store: bindingGroups ? bindingGroups.store : null, barrier: owed.barrier, basePort: createPort, fallback: managedArtifacts });
+    } catch (err) {
+      const code = typeof (err && err.code) === 'string' && /^create-identity-[a-z-]+$/.test(err.code) ? err.code : 'create-identity-invalid';
+      throw refusal(`createIdentity: ${String((err && err.message) || err)}; the build stopped before writing anything`, { code });
+    }
+  }
+  const stableCtx = stable ? { ...featureCtx, managed: stable.managed, creates: stable.port } : featureCtx;
+  const settleStableResult = stable
+    ? createFeatureSettlement({ barrier: owed.barrier, markIncomplete: featureIncomplete, settled: settledPublishes, recordBinding: stable.recordBinding })
+    : settleFeatureResult;
+  // A stable lookup stops (create-completion-required, create-identity-*) before any read when the workspace copy at the id holds an
+  // edit the server has not seen, or an earlier attempt must be completed first (lib/creates-local.js assertCleanContinuation). That
+  // stop is the item's refusal, reported under its code like every other plan refusal: nothing was fetched over, written or sent.
+  const planStable = async (key, plan) => {
+    try {
+      return await plan();
+    } catch (err) {
+      const code = stable && err && typeof err.code === 'string' && /^(?:create-[a-z-]+|creation-record-unwritten|managed-[a-z-]+)$/.test(err.code) ? err.code : null;
+      if (!code) throw err;
+      return { key, intent: null, viewId: null, chartId: null, action: null, changed: [], operations: [], refused: [featureRefusal(key, code, String(err.message || code))], unknown: [] };
+    }
+  };
   // The configuration kinds' runtime (lib/configuration-build.js), or null for a spec that uses none of them: then no step below runs and
   // nothing is read for them. Built before the first write so a spec that declares an item twice stops here, having written nothing.
   const configurationRun = usesConfiguration(spec) ? createConfigurationRuntime({ spec, sdk, provision, opts, appUniqueName: appUniqueName(spec) }) : null;
@@ -6293,10 +6346,12 @@ async function runSdkBuildPhases(spec, opts, owed) {
         // A declared view (views[].reconcile "declared", lib/view-reconcile.js) is resolved, created through the creation port and
         // edited by its helper; it never falls through to the create below, which would bypass the port.
         const planArgs = { view: meta.specView, sdk: provision, resolveValue: meta.resolveValue, primaryName: meta.primaryName };
-        const firstPlan = await planViewReconcile(planArgs, featureCtx);
-        const plan = await refuseUnsentCopy('view', 'view', approvalKey('view', firstPlan.key), firstPlan.viewId, firstPlan, () => planViewReconcile(planArgs, featureCtx));
-        const r = await applyViewReconcile(plan, { sdk: provision }, featureCtx);
-        const { ok } = settleFeatureResult('views', `view ${plan.key}`, r);
+        const stableKey = declaredViewKey(meta.specView);
+        const planView = () => planStable(stableKey, () => planViewReconcile(planArgs, stableCtx));
+        const firstPlan = await planView();
+        const plan = await refuseUnsentCopy('view', 'view', approvalKey('view', firstPlan.key), firstPlan.viewId, firstPlan, planView);
+        const r = await applyViewReconcile(plan, { sdk: provision }, stableCtx);
+        const { ok } = settleStableResult('views', `view ${plan.key}`, r);
         await resetUnsettledCopy('view', plan.viewId, plan, r);
         const created = r.saved.find((s) => s.created);
         // Before the !ok check: a created row exists even when its read-back failed, so it joins the solution. That is not a
@@ -6440,10 +6495,12 @@ async function runSdkBuildPhases(spec, opts, owed) {
       if (isDeclaredChart(c)) {
         return runner.run('charts', `chart "${def.name}"`, async () => {
           const planArgs = { chart: c, sdk: provision, chartArtifact: def };
-          const firstPlan = await planChartReconcile(planArgs, featureCtx);
-          const plan = await refuseUnsentCopy('chart', 'chart', approvalKey('chart', firstPlan.key), firstPlan.chartId, firstPlan, () => planChartReconcile(planArgs, featureCtx));
-          const r = await applyChartReconcile(plan, { sdk: provision }, featureCtx);
-          const { ok } = settleFeatureResult('charts', `chart ${plan.key}`, r);
+          const stableKey = declaredChartKey(c);
+          const planChart = () => planStable(stableKey, () => planChartReconcile(planArgs, stableCtx));
+          const firstPlan = await planChart();
+          const plan = await refuseUnsentCopy('chart', 'chart', approvalKey('chart', firstPlan.key), firstPlan.chartId, firstPlan, planChart);
+          const r = await applyChartReconcile(plan, { sdk: provision }, stableCtx);
+          const { ok } = settleStableResult('charts', `chart ${plan.key}`, r);
           await resetUnsettledCopy('chart', plan.chartId, plan, r);
           const created = r.saved.find((s) => s.created);
           // As for a declared view: a created row joins the solution even when the result is not clean.
@@ -9380,4 +9437,4 @@ async function runSdkBuildPhases(spec, opts, owed) {
   return result;
 }
 
-module.exports = { runSdkBuild, publishTargets, partialEnrichment, settleOwedPublishes, collectOwedPublishes, settleOwedLengths, normalizeFormId, planFor, annotateLivePlan, previewTargetOf, previewItemsForPlan, resolvePhases, PHASES, BuildHalt, SDK_COLUMN_TYPE, viewDef, defaultViewColumns, subgridLabel, enrichesDefaultViews, dashboardsInSolution, findDashboardsByName, findPinnedDashboard, artifactIdentityQuery, resolveExistingFormId, FORM_TYPE_CODE, chartDef, dashboardTileOpts, dashboardComponent, compileFormIntent, formFieldLogicals, appDef, appUniqueName, applyAppAiDescription, haltOnUnpublishedAppHeader, pushAppHeader, commandsByEntity, commandDef, businessRuleDef, businessRuleFilter, bpfDef, bpfFilter, webResourceOpts, webResourceContentState, WEB_RESOURCE_KINDS, FORM_EVENTS, acquireAppPagesLease, personaRoleSpecFor, resolveRoleBusinessUnit, roleBuClause, roleGrantLabel, resolveRoleGrantTarget, existingAppSitemapIsWritten, pagesFirstRule, applyAppHeader, applyAppHeaderText, warnAppIconNotApplied, inspectBpfStages, applyBpfStages, refuseUnpushedAppCopy, assertAuthorizedSitemapRewrite, reconciledPublishHalt, COMMAND_DEFAULT_PARAMETERS };
+module.exports = { runSdkBuild, openBuildBindingGroups, publishTargets, partialEnrichment, settleOwedPublishes, collectOwedPublishes, settleOwedLengths, normalizeFormId, planFor, annotateLivePlan, previewTargetOf, previewItemsForPlan, resolvePhases, PHASES, BuildHalt, SDK_COLUMN_TYPE, viewDef, defaultViewColumns, subgridLabel, enrichesDefaultViews, dashboardsInSolution, findDashboardsByName, findPinnedDashboard, artifactIdentityQuery, resolveExistingFormId, FORM_TYPE_CODE, chartDef, dashboardTileOpts, dashboardComponent, compileFormIntent, formFieldLogicals, appDef, appUniqueName, applyAppAiDescription, haltOnUnpublishedAppHeader, pushAppHeader, commandsByEntity, commandDef, businessRuleDef, businessRuleFilter, bpfDef, bpfFilter, webResourceOpts, webResourceContentState, WEB_RESOURCE_KINDS, FORM_EVENTS, acquireAppPagesLease, personaRoleSpecFor, resolveRoleBusinessUnit, roleBuClause, roleGrantLabel, resolveRoleGrantTarget, existingAppSitemapIsWritten, pagesFirstRule, applyAppHeader, applyAppHeaderText, warnAppIconNotApplied, inspectBpfStages, applyBpfStages, refuseUnpushedAppCopy, assertAuthorizedSitemapRewrite, reconciledPublishHalt, COMMAND_DEFAULT_PARAMETERS };

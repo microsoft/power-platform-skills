@@ -15,7 +15,7 @@ const path = require('node:path');
 const { randomUUID } = require('node:crypto');
 const { sha256 } = require('./lib/hash.js');
 const { validateAppSpec, migrateAppSpec, normalizePageSource, normalizeLanguageCode, specDeclaresAttribute } = require('./lib/app-spec.js');
-const { runSdkBuild, planFor, appUniqueName, compileFormIntent, resolveExistingFormId, normalizeFormId, settleOwedPublishes, collectOwedPublishes, settleOwedLengths } = require('./lib/sdk-build.js');
+const { runSdkBuild, openBuildBindingGroups, planFor, appUniqueName, compileFormIntent, resolveExistingFormId, normalizeFormId, settleOwedPublishes, collectOwedPublishes, settleOwedLengths } = require('./lib/sdk-build.js');
 const { specTables } = require('./lib/table-publish.js');
 const { stagePhasesOrResolve, PHASES, STAGES } = require('./lib/stages.js');
 // #455: resolves the authoring LCID over the transport hatch, BEFORE constructing the SDK that
@@ -727,6 +727,11 @@ async function buildModelAppHeld(spec, opts, deps, v, buildLease) {
   // at the end of its own data-model phase; what a halt carries replaces it, being everything that is still owed. A halt that carries
   // no list (one thrown before the engine, or by a stand-in for it) leaves it as it was.
   let owedLengths = [];
+  // The managed binding store (sdk-build.js openBuildBindingGroups: the one opener, read-only discovery), opened once for the whole
+  // invocation on its first attempt and handed to every attempt as `bindingGroups`, so no attempt opens a second writer. Its debt is
+  // installed on the barrier every attempt shares. Opened inside the attempt so that a store the build cannot trust halts like any
+  // other halt (managed-binding-store-unreadable, never retried).
+  let bindingGroups = deps.bindingGroups || null;
   let r;
   // How many waits the HTTP client has been refused by the budget (lib/throttle-budget.js, `declined`): the count at the start of a run of the phases says whether one happened in it.
   const declinedCount = () => (typeof throttle.declined === 'function' ? throttle.declined().count : 0);
@@ -735,8 +740,10 @@ async function buildModelAppHeld(spec, opts, deps, v, buildLease) {
     if (stepTally) stepTally.reset();
     const declinedBefore = declinedCount();
     try {
+      if (!bindingGroups) bindingGroups = openBuildBindingGroups(spec, { apply: opts.apply, env: opts.env, workspaceDir: opts.workspaceDir, appDir: opts.appDir, barrier: publicationBarrier });
       r = await runBuild(spec, {
         publicationBarrier,
+        ...(bindingGroups ? { bindingGroups } : {}),
         sdk: deps.sdk,
         provisionSdk: deps.provisionSdk,
         owedLengths,

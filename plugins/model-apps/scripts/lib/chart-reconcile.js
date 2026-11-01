@@ -73,6 +73,14 @@ function isDeclaredChart(ch) {
 }
 
 /**
+ * The plan key of a declared chart that compiles: `<table>/<trimmed name>`. Shared by the planner and the stable create
+ * catalog (creates-stable-build.js), so a create is always looked up under the key it was reserved for.
+ */
+function declaredChartKey(ch) {
+  return `${lc(ch && ch.entity)}/${ch && typeof ch.name === 'string' ? ch.name.trim() : ''}`;
+}
+
+/**
  * The owned projection of a spec chart. Returns { errors, intent }.
  * `description` and `title` are owned only when the spec sets them to non-blank text: chartDef
  * emits `|| ''`, and owning that would blank a maker's text.
@@ -90,7 +98,7 @@ function compileChartIntent(ch) {
   if (!ID_MEASURES.includes(measure)) errors.push(`measure must be one of ${ID_MEASURES.join('|')}`);
   if (errors.length) return { errors, intent: null };
   const intent = {
-    key: `${entity}/${name}`,
+    key: declaredChartKey(ch),
     entity,
     name,
     chartType: ch.chartType,
@@ -274,14 +282,17 @@ async function applyChartCreate(plan, sdk, ctx, result) {
     return pushChecked(sdk, 'chart', id);
   });
   const id = created.id ? normalizeGuid(created.id) || String(created.id) : null;
-  if (created.status === 'created') {
+  if (created.status === 'created' || created.status === 'matched') {
+    // 'matched' (the stable port only): the row is already at the reserved id. Handled as a create, bound as adopted
+    // (see applyViewCreate).
+    const origin = created.status === 'created' ? 'created' : 'adopted';
     const scope = { type: 'chart', id, table: plan.intent.entity };
     const observed = await readObserved(sdk, id);
     // The title is claimed only when the spec declares one and the read-back shows it stored.
     const titleStored = plan.intent.title !== undefined && !!observed && observed.title === plan.intent.title;
     result.saved.push({ key: plan.key, kind: 'chart', id, created: true, parts: PARTS.filter((p) => p !== 'title' || titleStored) });
     result.pendingPublish.push({ key: plan.key, scope });
-    if (observed) result.managedBindings.push(bindingRecord(ctx, { kind: 'chart', key: plan.key, id, origin: 'created', ...projectionBaseline(observed) }));
+    if (observed) result.managedBindings.push(bindingRecord(ctx, { kind: 'chart', key: plan.key, id, origin, ...projectionBaseline(observed) }));
     else result.unknown.push(refusal(plan.key, 'chart-created-unreadable', 'the chart was created but could not be read back to record its baseline'));
     if (observed && plan.intent.title !== undefined && !titleStored) result.refused.push(refusal(plan.key, 'chart-title-not-stored', TITLE_NOT_STORED));
   } else if (created.status === 'adopted') {
@@ -385,6 +396,7 @@ async function applyChartPlan(plan, sdk, ctx) {
 }
 module.exports = {
   isDeclaredChart,
+  declaredChartKey,
   compileChartIntent,
   planChartReconcile,
   applyChartReconcile,
