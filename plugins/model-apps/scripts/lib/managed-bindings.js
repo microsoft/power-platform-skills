@@ -260,7 +260,7 @@ function validateGroup(g, header, where) {
 }
 
 function validateAttempt(a, where) {
-  closedKeys(a, ['family', 'key', 'token', 'baseGeneration', 'phase', 'root', 'knownScopes', 'declarationSha256', 'expected', 'acknowledgedRoot', 'savedObservation', 'publication'], where);
+  closedKeys(a, ['family', 'key', 'token', 'baseGeneration', 'phase', 'root', 'knownScopes', 'declarationSha256', 'expected', 'acknowledgedRoot', 'savedObservation', 'publication', 'sendWindow'], where);
   tokenField(a.token, `${where}.token`);
   tokenField(a.baseGeneration, `${where}.baseGeneration`, true);
   if (!PHASES.has(a.phase)) throw invalid(where, 'has an unknown phase');
@@ -282,6 +282,16 @@ function validateAttempt(a, where) {
     validateConsumerValue(a.savedObservation.proof, `${where}.savedObservation.proof`);
   }
   validatePublication(a.publication, a.family, `${where}.publication`, { attempt: true });
+  // The send window (markSending with an observer; lib/managed-feature-contract.js createAttemptSendObserver). Absent on
+  // an attempt sent without one — nothing then says what reached the service, and recovery only proves.
+  //   { possible: 0, notStarted: 2 }  possible: mutations that reached the transport in the attempt's windows and were not
+  //                                   answered by a not-started rejection (sent, answer pending or lost, or applied);
+  //                                   notStarted: those the service answered with one.
+  if (a.sendWindow !== undefined) {
+    closedKeys(a.sendWindow, ['possible', 'notStarted'], `${where}.sendWindow`);
+    for (const k of ['possible', 'notStarted']) if (!Number.isSafeInteger(a.sendWindow[k]) || a.sendWindow[k] < 0) throw invalid(`${where}.sendWindow.${k}`, 'is not a count');
+    if (a.phase === 'prepared') throw invalid(where, 'has a send window but was never marked sending');
+  }
 }
 
 // The frozen workflow mutation shapes (lib/workflow-effect-context.js classifies requests into them), with the method
@@ -639,15 +649,47 @@ function openManagedBindings({ workspaceDir, environment, appUniqueName, solutio
       });
       return token;
     },
-    /** Persist the complete expected proof before the push. A failure here means the push is not sent. */
-    markSending(token, expected) {
+    /**
+     * Persist the complete expected proof before the push. A failure here means the push is not sent. `observed`: the
+     * caller sends this attempt's mutations through a send observer (createAttemptSendObserver), so the same write that
+     * marks a prepared attempt sending arms its send window at zero. Only then: an attempt already sending keeps the
+     * window it has, or none — a send that was not observed is never shown unsent afterwards.
+     */
+    markSending(token, expected, { observed = false } = {}) {
       mutate((env, disk) => {
         const a = requireAttempt(env, disk, token);
         if (a.expected !== null && canonicalJson(a.expected) !== canonicalJson(expected)) {
           throw storeError(CODES.completion, 'a sent attempt keeps the expected proof it was sent with');
         }
         a.expected = expected;
-        if (a.phase === 'prepared') a.phase = 'sending';
+        if (a.phase === 'prepared') {
+          a.phase = 'sending';
+          if (observed === true) a.sendWindow = { possible: 0, notStarted: 0 };
+        }
+      });
+    },
+    /**
+     * The send observer, synchronously before a mutation leaves the transport inside the attempt's window: count it as
+     * possibly applied. A throw (the attempt is gone, the store cannot be written) leaves the request unsent. An attempt
+     * with no window (sent unobserved) is left as it is: nothing it could say would make it provable.
+     */
+    noteAttemptDispatch(token) {
+      mutate((env, disk) => {
+        const a = requireAttempt(env, disk, token);
+        if (a.sendWindow) a.sendWindow.possible += 1;
+      });
+    },
+    /**
+     * The send observer, after the service answered one counted mutation with a rejection that says it was not carried
+     * out (lib/managed-feature-contract.js notStartedAnswer): move it from possible to notStarted. Nothing else lowers
+     * `possible`, so a lost answer, a crash or a failed write here leaves the attempt possibly sent.
+     */
+    noteAttemptNotStarted(token) {
+      mutate((env, disk) => {
+        const a = requireAttempt(env, disk, token);
+        if (!a.sendWindow || a.sendWindow.possible < 1) throw storeError(CODES.notSettled, 'the managed attempt has no counted send to answer');
+        a.sendWindow.possible -= 1;
+        a.sendWindow.notStarted += 1;
       });
     },
     noteSaved(token, { proof, acknowledgedRoot = false, phase = 'saved' } = {}) {
@@ -758,13 +800,18 @@ function openManagedBindings({ workspaceDir, environment, appUniqueName, solutio
         }
       });
     },
-    /** After the send: 'definite-no-start' returns the debt to owed; 'unconfirmed' keeps it uncertain. */
+    /**
+     * After the send: 'definite-no-start' returns the debt to owed; 'unconfirmed' keeps it uncertain. A debt of the send
+     * that a fresh read already confirmed (confirmUncertainPublication, while this send's answer was outstanding) stays
+     * confirmed: an outcome that arrives later is not evidence against a read that proved the layer live.
+     */
     notePublishOutcome({ token, outcome }) {
       if (outcome !== 'definite-no-start' && outcome !== 'unconfirmed') throw storeError(CODES.notSettled, `unknown publish outcome ${outcome}`);
       mutate((env) => {
         const owned = env.groups.filter((g) => g.publication && g.publication.dispatchToken === token);
         if (!owned.length) throw storeError(CODES.notSettled, 'no publication was dispatched under this token');
         for (const g of owned) {
+          if (g.publication.state === 'confirmed') continue;
           if (outcome === 'definite-no-start') { g.publication.state = 'owed'; g.publication.dispatchToken = null; } else g.publication.state = 'unconfirmed';
         }
       });
@@ -773,7 +820,8 @@ function openManagedBindings({ workspaceDir, environment, appUniqueName, solutio
      * A fresh published read equals what was owed: end the debt without sending. `token` is the dispatch token the
      * debt carries (null for debt that was never sent, which becomes not-needed). `proof.publishedSha256` must equal
      * the debt's desired hash when it has one; a group may carry its own `publishedSha256`, which wins, so the groups
-     * of one send are confirmed in one atomic write.
+     * of one send are confirmed in one atomic write. A group may also name the `generation` its read was judged
+     * against: a group committed again since then is `managed-binding-generation-conflict`, and nothing is confirmed.
      */
     confirmPublished({ groups, token = null, proof = {} }) {
       mutate((env) => {
@@ -782,6 +830,7 @@ function openManagedBindings({ workspaceDir, environment, appUniqueName, solutio
           const published = typeof entry.publishedSha256 === 'string' ? entry.publishedSha256 : proof.publishedSha256;
           const g = env.groups.find((x) => x.family === family && x.key === key);
           if (!g || !g.publication) throw storeError(CODES.notSettled, `the managed ${family} "${key}" has no publication`);
+          if (entry.generation !== undefined && g.generation !== entry.generation) throw storeError(CODES.conflict, `the managed ${family} "${key}" was committed again since its published layer was read`);
           if (g.publication.dispatchToken !== token) throw storeError(CODES.notSettled, `the managed ${family} "${key}" publication carries another dispatch token`);
           if (g.publication.desiredSha256 && published !== g.publication.desiredSha256) throw storeError(CODES.notSettled, `the managed ${family} "${key}" published layer does not equal what was owed`);
           if (g.publication.state === 'owed') g.publication.state = 'not-needed';
@@ -789,7 +838,49 @@ function openManagedBindings({ workspaceDir, environment, appUniqueName, solutio
         }
       });
     },
-    /** Persist one workflow effect as definitely-unsent; it must belong to the pending attempt `attemptToken`. */
+    /**
+     * Retire the attempt `token` when its record proves no protected mutation started: phase `prepared`, never marked
+     * sending, no expected proof, no acknowledgement or saved observation, and every workflow effect it owns still
+     * definitely-unsent with no dispatch token. Under the record lease the file is reread, and the attempt must still be
+     * based on `baseGeneration`, which must still be the group's generation. One write removes only that attempt and
+     * the effects it owns; the committed group, its publication debt and every other attempt and effect stay. Then,
+     * and only after the write, its own hold ends — a quarantine or an uncertain-send block is never cleared.
+     * A `sending` attempt is never retired (it may have reached the service; runManagedFeature recovers or resumes it),
+     * and a later read that finds nothing is not evidence that nothing started: `managed-settlement-pending`.
+     * Answers { retired: true, effects } (the count of effect records removed with it).
+     */
+    retireUnsentAttempt({ token, baseGeneration } = {}) {
+      if (typeof token !== 'string' || !token) throw storeError(CODES.notSettled, 'retireUnsentAttempt needs the attempt token');
+      if (baseGeneration === undefined) throw storeError(CODES.notSettled, 'retireUnsentAttempt needs the generation the attempt was based on');
+      let removed = 0;
+      mutate((env, disk) => {
+        const a = requireAttempt(env, disk, token);
+        if (a.baseGeneration !== baseGeneration) throw storeError(CODES.conflict, 'the managed attempt is based on another generation');
+        const g = env.groups.find((x) => x.family === a.family && x.key === a.key);
+        if ((g ? g.generation : null) !== baseGeneration) throw storeError(CODES.conflict, `the managed ${a.family} "${a.key}" changed since the attempt was prepared`);
+        if (a.phase !== 'prepared' || a.expected !== null || a.acknowledgedRoot || a.savedObservation !== null) {
+          throw storeError(CODES.pending, `the managed ${a.family} "${a.key}" attempt may have been sent; it is recovered, never retired`);
+        }
+        const owned = env.workflowEffects.filter((e) => e.attemptToken === token);
+        if (owned.some((e) => e.state !== 'definitely-unsent' || e.dispatchToken !== null)) {
+          throw storeError(CODES.pending, `the managed ${a.family} "${a.key}" attempt has a workflow effect that may have been sent`);
+        }
+        removed = owned.length;
+        env.attempts = env.attempts.filter((x) => x !== a);
+        env.workflowEffects = env.workflowEffects.filter((e) => e.attemptToken !== token);
+      });
+      // The write is durable and read back (mutate): only now may the attempt's own hold end. A store opened without the
+      // barrier has no hold to end; the caller releases its own.
+      if (barrier) barrier.release(token);
+      return { retired: true, effects: removed };
+    },
+    /**
+     * Persist one workflow effect as definitely-unsent; it must belong to the pending attempt `attemptToken`.
+     * The same effect asked for again by the same attempt (every field that says what it is equal), while its record is
+     * still definitely-unsent with no dispatch token, answers that record instead of a second one: it never started, so
+     * a resumed create or a continued attempt (recoverManagedAttempt) sends it under its own token. Any other unsettled
+     * effect of the same kind on the row is refused.
+     */
     recordWorkflowEffect(effect) {
       const request = isObj(effect.request) ? { method: String(effect.request.method || '').toUpperCase(), shape: effect.request.shape } : effect.request;
       const rec = {
@@ -798,15 +889,20 @@ function openManagedBindings({ workspaceDir, environment, appUniqueName, solutio
         desiredSha256: effect.desiredSha256 === undefined ? null : effect.desiredSha256, desiredState: effect.desiredState === undefined ? null : effect.desiredState,
         expectedVersion: effect.expectedVersion === undefined ? null : effect.expectedVersion, state: 'definitely-unsent', dispatchToken: null,
       };
+      const same = (e) => canonicalJson([e.attemptToken, e.baseGeneration, e.family, e.key, e.rowId, e.effect, e.request, e.desiredSha256, e.desiredState, e.expectedVersion])
+        === canonicalJson([rec.attemptToken, rec.baseGeneration, rec.family, rec.key, rec.rowId, rec.effect, rec.request, rec.desiredSha256, rec.desiredState, rec.expectedVersion]);
+      let reused = null;
       mutate((env, disk) => {
         const a = requireAttempt(env, disk, rec.attemptToken);
         if (a.family !== rec.family || a.key !== rec.key) throw storeError(CODES.notSettled, 'a workflow effect must belong to its own attempt');
         if (a.baseGeneration !== rec.baseGeneration) throw storeError(CODES.conflict, 'a workflow effect must name its attempt\'s generation');
         if (rec.rowId !== a.root.id) throw storeError(CODES.notSettled, `a workflow effect changes its attempt's own row ${a.root.id}, not ${rec.rowId}`);
-        if (env.workflowEffects.some((e) => e.rowId === rec.rowId && e.effect === rec.effect && e.state !== 'confirmed')) throw storeError(CODES.pending, `the workflow row ${rec.rowId} already has an unsettled ${rec.effect} effect`);
+        const open = env.workflowEffects.filter((e) => e.rowId === rec.rowId && e.effect === rec.effect && e.state !== 'confirmed');
+        if (open.length === 1 && open[0].state === 'definitely-unsent' && open[0].dispatchToken === null && same(open[0])) { reused = clone(open[0]); return; }
+        if (open.length) throw storeError(CODES.pending, `the workflow row ${rec.rowId} already has an unsettled ${rec.effect} effect`);
         env.workflowEffects.push(rec);
       });
-      return clone(rec);
+      return reused || clone(rec);
     },
     markEffectDispatching(token, dispatchToken) {
       tokenField(dispatchToken, 'the dispatch token');

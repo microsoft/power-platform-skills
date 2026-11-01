@@ -508,3 +508,119 @@ test('a workflow effect changes its own attempt\'s root row only, when recorded 
   writeRaw(store, (d) => { d.workflowEffects[0].rowId = OTHER; });
   assert.equal(codeOf(() => open(dir)), CODES.unreadable, 'an effect on disk that names another row than its attempt\'s root');
 });
+
+// A prepared attempt — persisted before markSending, so nothing of it was sent.
+function prepareForm(store, { publication = { scope: TABLE, state: 'owed' } } = {}) {
+  const { committed } = store.readGroup('form', FORM_KEY);
+  const base = committed ? committed.generation : null;
+  const token = store.prepareAttempt({ family: 'form', key: FORM_KEY, baseGeneration: base, root: { kind: 'form', key: FORM_KEY, id: FORM }, knownScopes: [TABLE], declarationSha256: H('e'), publication });
+  return { token, base };
+}
+
+test('retireUnsentAttempt removes a prepared attempt and its unsent effects in one write, then ends only its own hold', () => {
+  const dir = makeTempDir('mb-retire-unsent-');
+  const barrier = createPublicationBarrier();
+  const store = open(dir, { barrier });
+  const committed = settleForm(store, [['name', CTRL_A]]);
+  const { token, base } = prepareForm(store);
+  barrier.hold(token, [TABLE], [FORM], 'form main');
+  barrier.quarantine([{ type: 'table', table: 'contact' }], [], 'another form');
+  const before = fileText(store);
+  assert.equal(codeOf(() => store.retireUnsentAttempt({ token, baseGeneration: 'another' })), CODES.conflict);
+  assert.equal(codeOf(() => store.retireUnsentAttempt({ token })), CODES.notSettled, 'the base is required');
+  const failing = open(dir, { barrier, deps: { writeFileAtomic: () => { throw new Error('disk full'); } } });
+  assert.equal(codeOf(() => failing.retireUnsentAttempt({ token, baseGeneration: base })), CODES.writeFailed);
+  assert.equal(fileText(store), before, 'refused and failed retires write nothing');
+  assert.equal(barrier.allowScope(TABLE, 'a sibling'), false, 'and keep the hold');
+
+  assert.deepEqual(store.retireUnsentAttempt({ token, baseGeneration: base }), { retired: true, effects: 0 });
+  const after = open(dir).readGroup('form', FORM_KEY);
+  assert.equal(after.pending, null);
+  assert.deepEqual(after.committed, committed, 'the committed group and its debt stay');
+  assert.equal(barrier.allowScope(TABLE, 'a sibling'), true, 'its own hold ended');
+  assert.equal(barrier.allowScope({ type: 'table', table: 'contact' }, 'a sibling'), false, 'a quarantine stays');
+
+  // A rule whose create effect is recorded and still unsent is retired with it.
+  const rule = store.prepareAttempt({ family: 'rule', key: 'account/hide', baseGeneration: null, root: { kind: 'business-rule', key: 'account/hide', id: RULE }, knownScopes: [], declarationSha256: H('e') });
+  store.recordWorkflowEffect({ attemptToken: rule, baseGeneration: null, family: 'rule', key: 'account/hide', rowId: RULE, effect: 'create', request: { method: 'POST', shape: 'rule-create' }, desiredSha256: H('7') });
+  assert.deepEqual(store.retireUnsentAttempt({ token: rule, baseGeneration: null }), { retired: true, effects: 1 });
+  assert.deepEqual(JSON.parse(fileText(store)).workflowEffects, []);
+});
+
+test('retireUnsentAttempt refuses an attempt that may have been sent: marked sending, or an effect that was dispatched', () => {
+  const dir = makeTempDir('mb-retire-refused-');
+  const store = open(dir);
+  const { token, base } = prepareForm(store);
+  store.markSending(token, expected(FORM), { observed: true });
+  const before = fileText(store);
+  assert.equal(codeOf(() => store.retireUnsentAttempt({ token, baseGeneration: base })), CODES.pending, 'sending, even with nothing counted');
+  assert.equal(fileText(store), before);
+
+  const rule = store.prepareAttempt({ family: 'rule', key: 'account/hide', baseGeneration: null, root: { kind: 'business-rule', key: 'account/hide', id: RULE }, knownScopes: [], declarationSha256: H('e') });
+  const e = store.recordWorkflowEffect({ attemptToken: rule, baseGeneration: null, family: 'rule', key: 'account/hide', rowId: RULE, effect: 'create', request: { method: 'POST', shape: 'rule-create' }, desiredSha256: H('7') });
+  store.markEffectDispatching(e.token, 'dispatch-create');
+  assert.equal(codeOf(() => store.retireUnsentAttempt({ token: rule, baseGeneration: null })), CODES.pending);
+  assert.equal(open(dir).readGroup('rule', 'account/hide').pending.token, rule);
+});
+
+test('the same unsent workflow effect asked for again is the same record; a different one, or one that may have started, is refused', () => {
+  const dir = makeTempDir('mb-effect-reuse-');
+  const store = open(dir);
+  const token = store.prepareAttempt({ family: 'rule', key: 'account/hide', baseGeneration: null, root: { kind: 'business-rule', key: 'account/hide', id: RULE }, knownScopes: [], declarationSha256: H('e') });
+  store.markSending(token, expected(RULE, [], 'rule-v1'));
+  const state = { attemptToken: token, baseGeneration: null, family: 'rule', key: 'account/hide', rowId: RULE, effect: 'state', request: { method: 'PATCH', shape: 'workflow-patch' }, desiredState: 'Active' };
+  const first = store.recordWorkflowEffect(state);
+  assert.equal(store.recordWorkflowEffect(state).token, first.token, 'a continued attempt sends the record it has');
+  assert.equal(codeOf(() => store.recordWorkflowEffect({ ...state, desiredState: 'Draft' })), CODES.pending);
+  store.markEffectDispatching(first.token, 'dispatch-state');
+  assert.equal(codeOf(() => store.recordWorkflowEffect(state)), CODES.pending, 'a dispatched effect is never asked for again');
+  assert.equal(JSON.parse(fileText(store)).workflowEffects.length, 1);
+});
+
+test('a send window is armed only by the write that marks a prepared attempt sending under an observer, and only counts', () => {
+  const dir = makeTempDir('mb-send-window-');
+  const store = open(dir);
+  const { token } = prepareForm(store);
+  assert.equal(codeOf(() => store.noteAttemptDispatch('no-such-attempt')), CODES.conflict);
+  store.markSending(token, expected(FORM), { observed: true });
+  assert.deepEqual(store.readGroup('form', FORM_KEY).pending.sendWindow, { possible: 0, notStarted: 0 });
+  assert.equal(codeOf(() => store.noteAttemptNotStarted(token)), CODES.notSettled, 'nothing counted to answer');
+  store.noteAttemptDispatch(token);
+  store.noteAttemptDispatch(token);
+  store.noteAttemptNotStarted(token);
+  store.markSending(token, expected(FORM), { observed: true });
+  assert.deepEqual(open(dir).readGroup('form', FORM_KEY).pending.sendWindow, { possible: 1, notStarted: 1 }, 'kept on disk; marking again changes nothing');
+
+  // An attempt sent without an observer never gets a window, so nothing can later show it unsent.
+  const other = makeTempDir('mb-send-window-plain-');
+  const plain = open(other);
+  const p = prepareForm(plain);
+  plain.markSending(p.token, expected(FORM));
+  plain.markSending(p.token, expected(FORM), { observed: true });
+  plain.noteAttemptDispatch(p.token);
+  assert.equal(plain.readGroup('form', FORM_KEY).pending.sendWindow, undefined);
+
+  const good = fileText(store);
+  for (const [label, w] of [['a negative count', { possible: -1, notStarted: 0 }], ['a fraction', { possible: 0.5, notStarted: 0 }], ['an extra key', { possible: 0, notStarted: 0, sent: 1 }]]) {
+    writeRaw(store, (d) => { d.attempts[0].sendWindow = w; });
+    assert.notEqual(codeOf(() => open(dir).readGroup('form', FORM_KEY)), null, label);
+    fs.writeFileSync(store.file, good);
+  }
+  writeRaw(store, (d) => { d.attempts[0].phase = 'prepared'; d.attempts[0].expected = null; });
+  assert.notEqual(codeOf(() => open(dir).readGroup('form', FORM_KEY)), null, 'a window on an attempt never marked sending');
+});
+
+test('a confirmation judged against an older generation confirms nothing; a late outcome never undoes a confirmation', () => {
+  const dir = makeTempDir('mb-confirm-gen-');
+  const store = open(dir);
+  const g = settleForm(store, [['name', CTRL_A]]);
+  store.markPublishDispatch({ groups: [{ family: 'form', key: FORM_KEY }], scope: TABLE, token: 'dispatch-1' });
+  const before = fileText(store);
+  assert.equal(codeOf(() => store.confirmPublished({ groups: [{ family: 'form', key: FORM_KEY, publishedSha256: H('5'), generation: 'older' }], token: 'dispatch-1' })), CODES.conflict);
+  assert.equal(fileText(store), before);
+  store.confirmPublished({ groups: [{ family: 'form', key: FORM_KEY, publishedSha256: H('5'), generation: g.generation }], token: 'dispatch-1' });
+  store.notePublishOutcome({ token: 'dispatch-1', outcome: 'unconfirmed' });
+  store.notePublishOutcome({ token: 'dispatch-1', outcome: 'definite-no-start' });
+  const pub = open(dir).readGroup('form', FORM_KEY).committed.publication;
+  assert.deepEqual([pub.state, pub.dispatchToken], ['confirmed', 'dispatch-1']);
+});
