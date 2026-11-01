@@ -10,7 +10,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { makeTempDir } = require('./helpers/temp-dirs.js');
 const {
-  openManagedBindings, openManagedContext, discoverManagedStore, classifyPersisted, CODES, MAX_BYTES,
+  openManagedBindings, openManagedContext, discoverManagedStore, classifyPersisted, managedManifestView, CODES, MAX_BYTES,
 } = require('../lib/managed-bindings.js');
 const { noteToken } = require('../lib/output-redaction.js');
 const { withRecordLease } = require('../lib/record-lease.js');
@@ -768,7 +768,7 @@ function prepareDeclared(store, declaration) {
   return { token, base };
 }
 
-test('declaration: an attempt keeps its declaration losslessly, and commits only that one', () => {
+test('declaration: an attempt keeps its declaration losslessly, and commits it beside the feature\'s own state, never into it', () => {
   const dir = makeTempDir('mb-declaration-');
   const store = open(dir);
   settleForm(store, []);
@@ -776,24 +776,29 @@ test('declaration: an attempt keeps its declaration losslessly, and commits only
   assert.deepEqual(open(dir).readGroup('form', FORM_KEY).pending.declaration, DECLARATION, 'free text, unicode and URLs survive a reopen');
   store.markSending(token, expected(FORM));
   store.noteSaved(token, { proof: { savedSha256: H('1') }, acknowledgedRoot: true });
-  const args = (declaration) => ({ token, baseGeneration: base, records: [rec('form', FORM_KEY, FORM)], proof: PROOF, consumerState: { ...formState(), declaration }, publication: owedTable() });
-  const before = fileText(store);
-  for (const [label, other] of [['null', null], ['today\'s', { ...DECLARATION, name: 'Changed' }]]) {
-    assert.equal(codeOf(() => store.commitGroup(args(other))), CODES.completion, label);
+  // What the feature derived and proved — here a declaration slot in another shape, as a flow keeps its applied state
+  // and backing there — is committed exactly as given; the original sits beside it.
+  const derived = { ...formState(), declaration: { flow: 'derived', applied: H('7'), backing: FORM } };
+  const g = store.commitGroup({ token, baseGeneration: base, records: [rec('form', FORM_KEY, FORM)], proof: PROOF, consumerState: derived, publication: owedTable() });
+  for (const [label, got] of [['answered', g], ['reopened', open(dir).readGroup('form', FORM_KEY).committed]]) {
+    assert.deepEqual(got.consumerState, derived, `${label}: the feature's state is its own`);
+    assert.deepEqual(got.originalDeclaration, DECLARATION, `${label}: the original, losslessly`);
   }
-  assert.equal(fileText(store), before, 'refused, nothing written, the attempt kept');
-  const reordered = Object.fromEntries(Object.entries(DECLARATION).reverse());
-  assert.deepEqual(store.commitGroup(args(reordered)).consumerState.declaration, DECLARATION, 'the same declaration, in any key order');
+  assert.deepEqual(managedManifestView(open(dir).snapshot()).groups[0].originalDeclaration, DECLARATION);
 
-  // A commit that gives none takes the attempt's.
+  // A null or rebuilt declaration in the feature's state replaces nothing of the original.
   const next = prepareDeclared(store, DECLARATION);
   store.markSending(next.token, expected(FORM));
   store.noteSaved(next.token, { proof: { savedSha256: H('1') }, acknowledgedRoot: true });
-  const { declaration: omitted, ...rest } = formState();
-  const g = store.commitGroup({ token: next.token, baseGeneration: next.base, records: [rec('form', FORM_KEY, FORM)], proof: PROOF, consumerState: rest, publication: owedTable() });
-  assert.notDeepEqual(omitted, DECLARATION);
-  assert.deepEqual(open(dir).readGroup('form', FORM_KEY).committed.consumerState.declaration, DECLARATION);
-  assert.equal(g.consumerState.declaration.iframe.url, DECLARATION.iframe.url);
+  const h = store.commitGroup({ token: next.token, baseGeneration: next.base, records: [rec('form', FORM_KEY, FORM)], proof: PROOF, consumerState: { ...formState(), declaration: null }, publication: owedTable() });
+  assert.deepEqual([h.consumerState.declaration, h.originalDeclaration], [null, DECLARATION]);
+
+  // A generation whose attempt recorded none keeps none: an older original never describes it.
+  const plain = prepareForm(store);
+  store.markSending(plain.token, expected(FORM));
+  store.noteSaved(plain.token, { proof: { savedSha256: H('1') }, acknowledgedRoot: true });
+  store.commitGroup({ token: plain.token, baseGeneration: plain.base, records: [rec('form', FORM_KEY, FORM)], proof: PROOF, consumerState: formState(), publication: owedTable() });
+  assert.equal(Object.hasOwn(open(dir).readGroup('form', FORM_KEY).committed, 'originalDeclaration'), false);
 });
 
 test('declaration: secrets, tokens, a markup document, non-JSON values and oversized declarations are refused before anything is written', () => {
@@ -833,6 +838,108 @@ test('declaration: secrets, tokens, a markup document, non-JSON values and overs
   assert.equal(fileText(store), before, 'nothing was written');
   // Each refusal is answered on the store as written by hand too: the reopened store refuses the group, not the file.
   writeRaw(store, (d) => { d.groups[0].consumerState.declaration = { description: `token ${jwt}` }; });
+  assert.equal(codeOf(() => open(dir).readGroup('form', FORM_KEY)), CODES.groupInvalid);
+});
+
+test('declaration: a URL is judged by what it means, not how it is spelled; accepted authored text is kept byte for byte', () => {
+  const dir = makeTempDir('mb-declaration-urls-');
+  const store = open(dir);
+  settleForm(store, []);
+  const at = '@';
+  const refused = [
+    ['a user name alone', `https://fixture-user${at}contoso.com/view`],
+    ['a user name split by a line break', `https://fixture-\nuser${at}contoso.com/view`],
+    ['a user name with no slashes', `https:user${at}contoso.com/view`],
+    ['an encoded access token name', 'https://contoso.com/x?%61ccess_token=abc'],
+    ['an encoded signature name', 'https://contoso.blob.core.windows.net/c/x?sv=2020&%73ig=abcdef'],
+    ['an encoded token in the fragment', 'https://contoso.com/cb#%61ccess_token=abc'],
+    ['a name encoded twice', 'https://contoso.com/x?%2561ccess_token=abc'],
+    ['a name that does not decode', 'https://contoso.com/x?%E0%A4%A=1'],
+    ['an upper-case name', 'https://contoso.com/x?ACCESS_TOKEN=abc'],
+    ['an encoded separator in the name', 'https://contoso.com/x?client%5Fsecret=abc'],
+  ];
+  const before = fileText(store);
+  for (const [label, url] of refused) assert.equal(codeOf(() => prepareDeclared(store, { url })), CODES.declarationRefused, label);
+  assert.equal(fileText(store), before, 'nothing was written');
+
+  const accepted = [
+    `mailto:sales${at}contoso.com`,
+    `Contact sales${at}contoso.com for access`,
+    'https://contoso.com/x?signal=1&sigma=2&design=3',
+    'https://contoso.com/search?q=access_token',
+    'https://contoso.com/a%20b?name=%E2%9C%93',
+    `https://contoso.com/${at}user/profile`,
+    '50% off, 100%25 sure',
+  ];
+  for (const text of accepted) {
+    const { token, base } = prepareDeclared(store, { text });
+    assert.equal(open(dir).readGroup('form', FORM_KEY).pending.declaration.text, text, `kept as written: ${text}`);
+    store.retireUnsentAttempt({ token, baseGeneration: base });
+  }
+});
+
+test('declaration: only plain data is kept — hidden, computed and symbol-keyed properties are refused before anything is written', () => {
+  const dir = makeTempDir('mb-declaration-data-');
+  const store = open(dir);
+  settleForm(store, []);
+  const hidden = { name: 'Main' };
+  Object.defineProperty(hidden, 'toJSON', { value: () => ({ name: 'Swapped' }), enumerable: false });
+  let reads = 0;
+  const computed = { get name() { reads += 1; return reads === 1 ? 'Main' : 'https://contoso.com/x?access_token=abc'; } };
+  const listed = ['a', 'b'];
+  listed.extra = 'hidden';
+  const before = fileText(store);
+  for (const [label, declaration] of [
+    ['a hidden toJSON', hidden],
+    ['an own toJSON', { name: 'Main', toJSON: () => ({ name: 'Swapped' }) }],
+    ['a getter', computed],
+    ['a symbol key', { name: 'Main', [Symbol('s')]: 1 }],
+    ['an array with an extra property', { order: listed }],
+    ['an array of another kind', { order: new Uint8Array(2) }],
+  ]) assert.equal(codeOf(() => prepareDeclared(store, declaration)), CODES.declarationRefused, label);
+  assert.equal(reads, 0, 'a getter is never called');
+  assert.equal(fileText(store), before, 'nothing was written');
+  // Plain data with no prototype is still plain data, and is kept as the same values.
+  const bare = Object.assign(Object.create(null), { name: 'Main', order: [1, 2] });
+  prepareDeclared(store, bare);
+  assert.deepEqual(open(dir).readGroup('form', FORM_KEY).pending.declaration, { name: 'Main', order: [1, 2] });
+});
+
+test('prepareAttempt `replaces`: a prepared attempt is replaced in the same write that prepares the new one, and only then is its hold ended', () => {
+  const dir = makeTempDir('mb-declaration-replace-');
+  const barrier = createPublicationBarrier();
+  const store = open(dir, { barrier });
+  settleForm(store, []);
+  const old = prepareDeclared(store, { name: 'Original' });
+  store.recordWorkflowEffect({ attemptToken: store.prepareAttempt({ family: 'rule', key: 'account/hide', baseGeneration: null, root: { kind: 'business-rule', key: 'account/hide', id: RULE }, knownScopes: [], declarationSha256: H('e') }), baseGeneration: null, family: 'rule', key: 'account/hide', rowId: RULE, effect: 'create', request: { method: 'POST', shape: 'rule-create' }, desiredSha256: H('7') });
+  barrier.hold(old.token, [TABLE], [FORM], 'form main');
+  const replace = (declaration, over = {}) => store.prepareAttempt({ family: 'form', key: FORM_KEY, baseGeneration: old.base, root: { kind: 'form', key: FORM_KEY, id: FORM }, knownScopes: [TABLE], declarationSha256: H('f'), declaration, publication: { scope: TABLE, state: 'owed' }, replaces: { token: old.token, baseGeneration: old.base }, ...over });
+  const before = fileText(store);
+  // Refused before anything is written: a declaration the store would not keep, a malformed `replaces`, an attempt of
+  // another group, a stale base.
+  assert.equal(codeOf(() => replace({ url: 'https://contoso.com/x?%61ccess_token=abc' })), CODES.declarationRefused);
+  assert.equal(codeOf(() => replace({ name: 'New' }, { replaces: { token: old.token } })), CODES.notSettled);
+  const rule = JSON.parse(fileText(store)).attempts.find((a) => a.family === 'rule').token;
+  assert.equal(codeOf(() => replace({ name: 'New' }, { replaces: { token: rule, baseGeneration: null } })), CODES.conflict);
+  assert.equal(codeOf(() => replace({ name: 'New' }, { replaces: { token: old.token, baseGeneration: 'another' } })), CODES.conflict);
+  assert.equal(fileText(store), before, 'nothing was written');
+  assert.equal(barrier.allowScope(TABLE, 'a sibling'), false, 'the hold is kept');
+
+  const token = replace({ name: 'New' });
+  const { pending } = open(dir).readGroup('form', FORM_KEY);
+  assert.deepEqual([pending.token, pending.declaration], [token, { name: 'New' }], 'the new attempt, alone');
+  assert.equal(JSON.parse(fileText(store)).attempts.filter((a) => a.family === 'form').length, 1);
+  assert.equal(barrier.allowScope(TABLE, 'a sibling'), true, 'the replaced attempt\'s hold ended');
+
+  // An attempt that may have been sent is never replaced.
+  store.markSending(token, expected(FORM));
+  const sent = fileText(store);
+  assert.equal(codeOf(() => store.prepareAttempt({ family: 'form', key: FORM_KEY, baseGeneration: old.base, root: { kind: 'form', key: FORM_KEY, id: FORM }, knownScopes: [TABLE], declarationSha256: H('f'), replaces: { token, baseGeneration: old.base } })), CODES.pending);
+  assert.equal(fileText(store), sent);
+
+  // The original declaration written by hand is held to the same rules on read.
+  const jwt = `eyJ${'a'.repeat(20)}.${'b'.repeat(20)}.${'c'.repeat(20)}`;
+  writeRaw(store, (d) => { d.groups[0].originalDeclaration = { description: `token ${jwt}` }; });
   assert.equal(codeOf(() => open(dir).readGroup('form', FORM_KEY)), CODES.groupInvalid);
 });
 

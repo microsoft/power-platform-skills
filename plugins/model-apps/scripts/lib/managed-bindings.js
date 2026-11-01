@@ -149,70 +149,132 @@ function validateConsumerValue(value, where) {
   throw invalid(where, 'holds a value JSON cannot keep');
 }
 
-// The ORIGINAL declaration an attempt was planned from (design §1.2: "Hashes cannot restore it, so it is stored here
-// and nowhere else"). Unlike other consumer state it is the maker's authored text — names, descriptions, labels, a web
-// resource or iframe URL, which may well name the environment's own dynamics.com host — so it is kept as written, and
-// only what can carry a credential or a copy of service content is refused:
+// The ORIGINAL declaration an attempt was planned from: the maker's authored input, which no hash can restore, so the
+// store keeps it — with the attempt before anything is sent, then as the committed group's `originalDeclaration`. It is
+// kept apart from `consumerState`, which holds what the feature derived and proved (a flow's applied state and backing
+// identity, a rule's node history): the two are never merged or substituted for each other.
+// Unlike consumer state it is authored text — names, descriptions, labels, a web resource or iframe URL, which may well
+// name the environment's own dynamics.com host — so it is kept exactly as written (nothing is ever rewritten), and only
+// what can carry a credential or a copy of service content is refused:
 //   - a JWT anywhere in a string or a key;
-//   - a URL with userinfo (`https://user:pass@host`), or a secret query/fragment parameter (`access_token`, `id_token`,
-//     `refresh_token`, `client_secret`, `password`, `passwd`, `pwd`, `sig` — an Azure SAS signature —, `api_key`,
-//     `apikey`);
-//   - a connection-string secret (`AccountKey=`, `SharedAccessKey=`, `SharedAccessSignature=`, `ClientSecret=`,
-//     `Password=` / `Pwd=` after a `;` or at the start);
+//   - a URL whose authority holds userinfo — any `@` before the host, a user name alone included. Tabs and newlines are
+//     ignored first, as a URL parser ignores them, and http(s)/ws(s)/ftp/file need no `//` (a URL parser accepts
+//     `https:user@host` too);
+//   - a query or fragment parameter whose name, percent-decoded (`+` read as a space), is `access_token`, `id_token`,
+//     `refresh_token`, `client_secret`, `password`, `passwd`, `pwd`, `sig` (an Azure SAS signature), `api_key` or
+//     `apikey`. A name that does not decode cleanly, or still holds a `%` once decoded (`%2561ccess_token`), is
+//     ambiguous and refused too;
+//   - a connection-string secret (`AccountKey=`, `SharedAccessKey=`, `SharedAccessSignature=`, `ClientSecret=`, a
+//     password or pwd key) at the start or after a `;`;
 //   - a PEM private key;
 //   - a string that is a service document (formxml, fetchxml, layoutxml, a chart's XML, WFOM or XAML): it opens with
 //     `<?xml` or one of those roots. Authored markup such as `<b>Sales</b>` is free text and is kept;
-//   - anything JSON does not keep exactly (undefined, a function, a Date or other non-plain object, a non-finite
-//     number, a sparse array); a top level that is not a plain object; nesting deeper than 32; and more than
-//     DECLARATION_MAX_BYTES (128 KiB) of canonical JSON — the whole store is refused past MAX_BYTES (4 MiB), so one
-//     declaration may not take a large share of it.
-// A token this process obtained is refused by prepareAttempt as well, whatever its shape (output-redaction.js).
+//   - anything that is not plain JSON data: undefined, a function, a symbol key, a Date or other object that is not a
+//     plain object or array, an accessor, a non-enumerable property (a hidden `toJSON` among them), extra properties
+//     on an array, a non-finite number, a sparse array; a top level that is not a plain object; nesting deeper than
+//     32; and more than DECLARATION_MAX_BYTES (128 KiB) of canonical JSON — the whole store is refused past MAX_BYTES
+//     (4 MiB), so one declaration may not take a large share of it.
+// Validation reads every value exactly once and builds a plain-data snapshot from what it read; the snapshot, never
+// the caller's object, is what is measured, compared and stored, so nothing can change between the check and the write.
+// A token this process obtained is refused as well, whatever its shape (checkDeclaration, output-redaction.js).
 const DECLARATION_MAX_BYTES = 128 * 1024;
 const DECLARATION_MAX_DEPTH = 32;
 const SERVICE_DOCUMENT = /^\s*<(?:\?xml|form|fetch|grid|savedquery|columnset|visualization|datadefinition|presentationdescription|workflow|Activity)\b/i;
-const URL_CREDENTIALS = /\b[a-z][a-z0-9+.-]*:\/\/[^\s/?#@]*:[^\s/?#@]*@/i;
-const SECRET_PARAMETER = /[?&#;](?:access_token|id_token|refresh_token|client_secret|password|passwd|pwd|sig|api_key|apikey)=/i;
+// A URL's authority: `scheme://authority` for any scheme, and also `scheme:authority` (slashes and backslashes in any
+// number) for the special schemes, which a URL parser reads the same way. It runs to the first `/`, `?`, `#` or
+// whitespace. A backslash is not a stop, so for a special scheme an `@` after one is treated as userinfo too: that
+// refuses more than a parser would, never less.
+const URL_AUTHORITY = /\b(?:(?:https?|wss?|ftp|file):[\\/]*|[a-z][a-z0-9+.-]*:[\\/]{2})([^/?#\s]*)/gi;
+// A parameter: `name=` right after `?`, `&`, `#` or `;`, wherever it stands (a URL, a hash route, plain text).
+const PARAMETER = /[?&#;]([^=&#;?\s]*)=/g;
+const SECRET_PARAMETERS = new Set(['access_token', 'id_token', 'refresh_token', 'client_secret', 'password', 'passwd', 'pwd', 'sig', 'api_key', 'apikey']);
 const CONNECTION_SECRET = /(?:^|;)\s*(?:AccountKey|SharedAccessKey|SharedAccessSignature|ClientSecret|Password|Pwd)\s*=/i;
 const PRIVATE_KEY = /-----BEGIN [A-Z ]*PRIVATE KEY-----/;
 const isPlain = (v) => isObj(v) && (Object.getPrototypeOf(v) === Object.prototype || Object.getPrototypeOf(v) === null);
 function declarationText(s, where) {
   if (JWT.test(s)) throw invalid(where, 'holds a token');
-  if (URL_CREDENTIALS.test(s)) throw invalid(where, 'holds a URL with credentials');
-  if (SECRET_PARAMETER.test(s) || CONNECTION_SECRET.test(s)) throw invalid(where, 'holds a secret');
+  // WHATWG URL parsing removes every ASCII tab and newline before it reads a URL, so they cannot hide userinfo here.
+  // See: https://url.spec.whatwg.org/#concept-basic-url-parser
+  const flat = s.replace(/[\t\n\r]/g, '');
+  for (const m of flat.matchAll(URL_AUTHORITY)) {
+    if (m[1].includes('@')) throw invalid(where, 'holds a URL with credentials');
+  }
+  for (const m of flat.matchAll(PARAMETER)) {
+    let name;
+    try {
+      name = decodeURIComponent(m[1].replace(/\+/g, ' '));
+    } catch {
+      throw invalid(where, 'holds a parameter whose name does not decode');
+    }
+    if (name.includes('%')) throw invalid(where, 'holds a parameter whose name is encoded more than once');
+    if (SECRET_PARAMETERS.has(name.trim().toLowerCase())) throw invalid(where, 'holds a secret');
+  }
+  if (CONNECTION_SECRET.test(s)) throw invalid(where, 'holds a secret');
   if (PRIVATE_KEY.test(s)) throw invalid(where, 'holds a private key');
   if (SERVICE_DOCUMENT.test(s)) throw invalid(where, 'holds a service document');
 }
-function declarationValue(v, where, depth) {
+// One own data property, read once through its descriptor: an accessor (a getter could answer differently each time),
+// a non-enumerable property (JSON.stringify would run a hidden `toJSON`, or drop the property) or a symbol key is not
+// plain data.
+function dataValue(v, key, where) {
+  if (typeof key !== 'string') throw invalid(where, 'has a symbol key');
+  const d = Object.getOwnPropertyDescriptor(v, key);
+  if (!d || !d.enumerable || !Object.prototype.hasOwnProperty.call(d, 'value')) throw invalid(where, `has "${key}", which is not plain data`);
+  return d.value;
+}
+function declarationSnapshot(v, where, depth) {
   if (depth > DECLARATION_MAX_DEPTH) throw invalid(where, `is nested deeper than ${DECLARATION_MAX_DEPTH}`);
-  if (typeof v === 'string') { declarationText(v, where); return; }
-  if (v === null || typeof v === 'boolean' || (typeof v === 'number' && Number.isFinite(v))) return;
+  if (typeof v === 'string') { declarationText(v, where); return v; }
+  if (v === null || typeof v === 'boolean' || (typeof v === 'number' && Number.isFinite(v))) return v;
   if (Array.isArray(v)) {
-    // An index loop, not forEach: a hole would be written as null and read back as something else.
-    for (let i = 0; i < v.length; i += 1) declarationValue(v[i], `${where}[${i}]`, depth + 1);
-    return;
+    if (Object.getPrototypeOf(v) !== Array.prototype) throw invalid(where, 'holds a value JSON cannot keep');
+    const length = v.length;
+    // Only its indexes and `length`: a hole has no descriptor (JSON would write null and read back something else),
+    // and any other own property would be dropped.
+    for (const k of Reflect.ownKeys(v)) {
+      if (k !== 'length' && !(typeof k === 'string' && /^(?:0|[1-9]\d*)$/.test(k) && Number(k) < length)) throw invalid(where, 'has a property that is not an item');
+    }
+    const out = [];
+    for (let i = 0; i < length; i += 1) out.push(declarationSnapshot(dataValue(v, String(i), where), `${where}[${i}]`, depth + 1));
+    return out;
   }
   if (isPlain(v)) {
-    for (const k of Object.keys(v)) {
+    const out = {};
+    for (const k of Reflect.ownKeys(v)) {
+      const value = dataValue(v, k, where);
       declarationText(k, `${where} (a key)`);
-      declarationValue(v[k], `${where}.${k}`, depth + 1);
+      // defineProperty, not assignment: a key named `__proto__` is data here, never the snapshot's prototype.
+      Object.defineProperty(out, k, { value: declarationSnapshot(value, `${where}.${k}`, depth + 1), enumerable: true, writable: true, configurable: true });
     }
-    return;
+    return out;
   }
   throw invalid(where, 'holds a value JSON cannot keep');
 }
+// The one declaration rule, for a declaration offered (checkDeclaration) and for one read back from disk: answers the
+// plain-data snapshot.
 function validateDeclaration(value, where) {
   if (!isPlain(value)) throw invalid(where, 'is not a plain object');
-  declarationValue(value, where, 0);
-  const bytes = Buffer.byteLength(canonicalJson(value), 'utf8');
+  const snapshot = declarationSnapshot(value, where, 0);
+  const bytes = Buffer.byteLength(canonicalJson(snapshot), 'utf8');
   if (bytes > DECLARATION_MAX_BYTES) throw invalid(where, `is ${bytes} bytes, more than ${DECLARATION_MAX_BYTES}`);
+  return snapshot;
 }
-// A group's consumer state: its declaration, when it is one (a plain object), by the declaration rule; anything else —
-// other keys, and a declaration a feature keeps in another shape — by the stricter consumer-value rule, as before.
-function validateConsumerState(state, family, where) {
-  closedKeys(state, CONSUMER_KEYS[family], where);
-  for (const [k, v] of Object.entries(state)) {
-    if (k === 'declaration' && isPlain(v)) validateDeclaration(v, `${where}.declaration`);
-    else validateConsumerValue(v, `${where}.${k}`);
+/**
+ * Check a declaration offered for an attempt of `family` (prepareAttempt `declaration`) and answer the plain-data
+ * snapshot that is kept: the family must keep one (form, dashboard, rule, bpf), the value must pass the declaration
+ * rule above, and it must hold no access token this process obtained (the atomic writer takes those out of every
+ * write, so the declaration would be written changed and fail its read-back). Anything else is
+ * `managed-declaration-refused`. Pure: it reads and writes nothing, so a caller may check before it changes anything.
+ */
+function checkDeclaration(family, key, declaration) {
+  try {
+    if (!CONSUMER_KEYS[family] || !CONSUMER_KEYS[family].includes('declaration')) throw invalid('the declaration', `has no place in a ${family} group`);
+    const snapshot = validateDeclaration(declaration, 'the declaration');
+    const text = JSON.stringify(snapshot);
+    if (redactOutput(text) !== text) throw invalid('the declaration', 'holds an access token this process obtained');
+    return snapshot;
+  } catch (e) {
+    throw storeError(CODES.declarationRefused, `the declaration of the managed ${family} "${key}" is refused: ${e.message}`, { cause: e });
   }
 }
 
@@ -283,12 +345,21 @@ function validatePublication(pub, family, where, { attempt = false } = {}) {
     closedKeys(pub, ['scope', 'state'], where);
     if (pub.state !== 'owed') throw invalid(where, 'is not owed');
   } else {
-    closedKeys(pub, ['scope', 'state', 'desiredSha256', 'dispatchToken'], where);
+    closedKeys(pub, ['scope', 'state', 'desiredSha256', 'dispatchToken', 'carriedFrom'], where);
     if (!PUBLICATION_STATES.has(pub.state)) throw invalid(where, 'has an unknown state');
     hashOrNull(pub.desiredSha256, `${where}.desiredSha256`);
     // A dispatch token is written only in the branch that actually sends, so it exists exactly when a send may have run.
     const sent = pub.state === 'dispatching' || pub.state === 'unconfirmed' || pub.state === 'confirmed';
     if (sent) tokenField(pub.dispatchToken, `${where}.dispatchToken`); else if (pub.dispatchToken !== null) throw invalid(where, 'carries a dispatch token it never sent');
+    // A carried dispatch (markPublishDispatch `carried`): a group that owed nothing, swept into a publish of its scope.
+    // It keeps the settled state it had, so a send that never started puts exactly that back.
+    if (pub.carriedFrom !== undefined) {
+      if (!UNCERTAIN.has(pub.state)) throw invalid(where, 'keeps a carried state outside a dispatch');
+      if (typeof pub.desiredSha256 !== 'string') throw invalid(where, 'is carried with no desired hash to confirm');
+      closedKeys(pub.carriedFrom, ['state', 'dispatchToken'], `${where}.carriedFrom`);
+      if (pub.carriedFrom.state === 'confirmed') tokenField(pub.carriedFrom.dispatchToken, `${where}.carriedFrom.dispatchToken`);
+      else if (pub.carriedFrom.state !== 'not-needed' || pub.carriedFrom.dispatchToken !== null) throw invalid(`${where}.carriedFrom`, 'is not a settled publication');
+    }
   }
   validateScope(pub.scope, `${where}.scope`);
   if (family === 'dashboard' && pub.scope.type !== 'dashboard') throw invalid(where, 'publishes a dashboard as a table');
@@ -324,7 +395,7 @@ function validateExpected(exp, where) {
 }
 
 function validateGroup(g, header, where) {
-  closedKeys(g, ['family', 'key', 'generation', 'previousGeneration', 'root', 'proofSchema', 'records', 'proof', 'consumerState', 'publication'], where);
+  closedKeys(g, ['family', 'key', 'generation', 'previousGeneration', 'root', 'proofSchema', 'records', 'proof', 'consumerState', 'originalDeclaration', 'publication'], where);
   tokenField(g.generation, `${where}.generation`);
   tokenField(g.previousGeneration, `${where}.previousGeneration`, true);
   validateRoot(g.root, g.family, g.key, `${where}.root`);
@@ -332,12 +403,19 @@ function validateGroup(g, header, where) {
   validateRecords(g.records, g.root, header, `${where}.records`);
   if (!g.records.some((r) => r.kind === g.root.kind && r.key === g.root.key)) throw invalid(where, 'holds no record of its root');
   validateProof(g.proof, `${where}.proof`);
-  validateConsumerState(g.consumerState, g.family, `${where}.consumerState`);
+  closedKeys(g.consumerState, CONSUMER_KEYS[g.family], `${where}.consumerState`);
+  validateConsumerValue(g.consumerState, `${where}.consumerState`);
+  // The original declaration of the attempt that committed this generation, when it recorded one: kept beside the
+  // feature's consumer state, never inside it (a feature's derived state is checked by the stricter rule above).
+  if (g.originalDeclaration !== undefined) {
+    if (!CONSUMER_KEYS[g.family].includes('declaration')) throw invalid(where, 'keeps a declaration its family has no place for');
+    validateDeclaration(g.originalDeclaration, `${where}.originalDeclaration`);
+  }
   validatePublication(g.publication, g.family, `${where}.publication`);
 }
 
 function validateAttempt(a, where) {
-  closedKeys(a, ['family', 'key', 'token', 'baseGeneration', 'phase', 'root', 'knownScopes', 'declarationSha256', 'declaration', 'expected', 'acknowledgedRoot', 'savedObservation', 'publication', 'sendWindow'], where);
+  closedKeys(a, ['family', 'key', 'token', 'baseGeneration', 'phase', 'root', 'knownScopes', 'declarationSha256', 'declaration', 'expected', 'acknowledgedRoot', 'acknowledgedChildCreates', 'savedObservation', 'publication', 'sendWindow'], where);
   tokenField(a.token, `${where}.token`);
   tokenField(a.baseGeneration, `${where}.baseGeneration`, true);
   if (!PHASES.has(a.phase)) throw invalid(where, 'has an unknown phase');
@@ -362,6 +440,12 @@ function validateAttempt(a, where) {
     closedKeys(a.savedObservation, ['phase', 'proof', 'acknowledgedRoot'], `${where}.savedObservation`);
     if (!PHASES.has(a.savedObservation.phase) || typeof a.savedObservation.acknowledgedRoot !== 'boolean') throw invalid(`${where}.savedObservation`, 'is incomplete');
     validateConsumerValue(a.savedObservation.proof, `${where}.savedObservation.proof`);
+  }
+  // The child-create receipt (noteSaved `acknowledgedChildCreates`): written only with a saved observation, and only for
+  // children the expected proof named under the same id, never the root.
+  if (a.acknowledgedChildCreates !== undefined) {
+    if (a.savedObservation === null || !a.expected) throw invalid(where, 'keeps a child-create receipt it never saved');
+    validateChildReceipt(a.acknowledgedChildCreates, a, `${where}.acknowledgedChildCreates`);
   }
   validatePublication(a.publication, a.family, `${where}.publication`, { attempt: true });
   // The send window (markSending with an observer; lib/managed-feature-contract.js createAttemptSendObserver). Absent on
@@ -412,6 +496,38 @@ function resumableCreate(group, a, effects) {
   if (!e || e.baseProofSha256 !== null || e.baseObservation !== null) return false;
   if (a.phase !== 'sending' || a.acknowledgedRoot || a.savedObservation !== null) return false;
   return ownedEffects(a, effects).every((x) => x.effect === 'create' && x.state === 'definitely-unsent' && x.dispatchToken === null);
+}
+
+/**
+ * Did an answer acknowledge that this attempt CREATED its root (noteSaved `acknowledgedRoot`, kept on the attempt and on
+ * its saved observation)? Only a create can. An attempt whose expected proof, persisted before the send, records a base
+ * observation (the live row it read before it changed it) edited an existing row, and no answer to that edit makes the
+ * row its creation: it was adopted, and binding it needs the adoption approval. noteSaved refuses the flag on such an
+ * attempt; this is the same rule for a record an older build wrote. A base PROOF alone is not the sign: a create that
+ * re-makes a committed group's vanished root under its stable id carries the committed proof as its base.
+ */
+function rootCreateAcknowledged(a) {
+  if (!a || !(a.acknowledgedRoot || (a.savedObservation && a.savedObservation.acknowledgedRoot))) return false;
+  return !!a.expected && a.expected.baseObservation === null;
+}
+
+// The child-create receipt of an attempt: [{ kind, key, id }], each a child its expected proof named under that same
+// id, never the root, never twice.
+function validateChildReceipt(list, a, where) {
+  if (!Array.isArray(list)) throw invalid(where, 'is not a list');
+  const seen = new Set();
+  list.forEach((c, i) => {
+    const w = `${where}[${i}]`;
+    closedKeys(c, ['kind', 'key', 'id'], w);
+    if (!nonempty(c.kind) || !nonempty(c.key) || !nonempty(c.id)) throw invalid(w, 'is incomplete');
+    const id = c.id.toLowerCase();
+    if ((c.kind === a.root.kind && c.key === a.root.key) || id === String(a.root.id).toLowerCase()) throw invalid(w, 'names the root, which only a root create acknowledges');
+    if (!a.expected.children.some((x) => x.kind === c.kind && x.key === c.key && String(x.id).toLowerCase() === id)) throw invalid(w, 'is a child the expected proof does not name under that id');
+    const k = `${c.kind}\u0000${c.key}`;
+    if (seen.has(k) || seen.has(id)) throw invalid(w, 'repeats a child');
+    seen.add(k);
+    seen.add(id);
+  });
 }
 
 // The frozen workflow mutation shapes (lib/workflow-effect-context.js classifies requests into them), with the method
@@ -733,6 +849,24 @@ function openManagedBindings({ workspaceDir, environment, appUniqueName, solutio
     usable(unitOf(disk, a.family, a.key));
     return a;
   };
+  // The retire rules, inside a lease-held change (retireUnsentAttempt, and prepareAttempt `replaces`): the attempt must
+  // still be based on `baseGeneration`, which must still be its group's generation, and must prove nothing of it
+  // started. Removes the attempt and the effects it owns from `env`; answers how many effects went with it.
+  const retireInto = (env, a, baseGeneration) => {
+    if (a.baseGeneration !== baseGeneration) throw storeError(CODES.conflict, 'the managed attempt is based on another generation');
+    const g = env.groups.find((x) => x.family === a.family && x.key === a.key);
+    if ((g ? g.generation : null) !== baseGeneration) throw storeError(CODES.conflict, `the managed ${a.family} "${a.key}" changed since the attempt was prepared`);
+    if (a.phase !== 'prepared' || a.expected !== null || a.acknowledgedRoot || a.savedObservation !== null) {
+      throw storeError(CODES.pending, `the managed ${a.family} "${a.key}" attempt may have been sent; it is recovered, never retired`);
+    }
+    const owned = env.workflowEffects.filter((e) => e.attemptToken === a.token);
+    if (owned.some((e) => e.state !== 'definitely-unsent' || e.dispatchToken !== null)) {
+      throw storeError(CODES.pending, `the managed ${a.family} "${a.key}" attempt has a workflow effect that may have been sent`);
+    }
+    env.attempts = env.attempts.filter((x) => x !== a);
+    env.workflowEffects = env.workflowEffects.filter((e) => e.attemptToken !== a.token);
+    return owned.length;
+  };
 
   const handle = {
     get file() { return ctx.full; },
@@ -762,30 +896,31 @@ function openManagedBindings({ workspaceDir, environment, appUniqueName, solutio
     /**
      * Persist an attempt's intent before anything is sent. `declaration`: optional, for the families whose group keeps
      * one (form, dashboard, rule, bpf) — the ORIGINAL declaration the attempt was planned from, as a plain JSON object.
-     * It is checked here (validateDeclaration; and a token this process obtained, which the atomic writer would
-     * redact), so an unsafe one is `managed-declaration-refused` with nothing written and nothing sent; it is kept with
-     * the attempt and becomes the group's declaration at commit (commitGroup). A group whose publish may have been sent
-     * and is not proved live (dispatching / unconfirmed), read here under the lease, is `managed-publication-unconfirmed`:
-     * an attempt is never prepared over it, whatever the caller read before.
+     * It is checked first (checkDeclaration), so an unsafe one is `managed-declaration-refused` with nothing written
+     * and nothing sent; its plain-data snapshot is kept with the attempt and becomes the group's `originalDeclaration`
+     * at commit (commitGroup). A group whose publish may have been sent and is not proved live (dispatching /
+     * unconfirmed), read here under the lease, is `managed-publication-unconfirmed`: an attempt is never prepared over
+     * it, whatever the caller read before.
+     * `replaces: { token, baseGeneration }`: the group's prepared attempt this one takes the place of. In the same
+     * lease-held write that adds the new attempt, the old one is retired by the rules of retireUnsentAttempt (it must
+     * prove nothing of it started) together with the effects it owns; any refusal — the new declaration, a conflict,
+     * an uncertain publish, an old attempt that may have been sent — writes nothing, so the old attempt, its token and
+     * its hold all stay. The old hold ends only after the write (when the store has the barrier).
      */
-    prepareAttempt({ family, key, baseGeneration = null, revision, root, expected = null, knownScopes = [], declarationSha256, declaration, publication = null }) {
-      if (declaration !== undefined) {
-        try {
-          if (!CONSUMER_KEYS[family] || !CONSUMER_KEYS[family].includes('declaration')) throw invalid('the declaration', `has no place in a ${family} group`);
-          validateDeclaration(declaration, 'the declaration');
-          // The atomic writer takes out every access token this process obtained (output-redaction.js); a declaration
-          // that holds one would be written changed and fail its read-back, so it is refused here, before the send.
-          const text = JSON.stringify(declaration);
-          if (redactOutput(text) !== text) throw invalid('the declaration', 'holds an access token this process obtained');
-        } catch (e) {
-          throw storeError(CODES.declarationRefused, `the declaration of the managed ${family} "${key}" is refused: ${e.message}`, { cause: e });
-        }
+    prepareAttempt({ family, key, baseGeneration = null, revision, root, expected = null, knownScopes = [], declarationSha256, declaration, publication = null, replaces }) {
+      const kept = declaration !== undefined ? checkDeclaration(family, key, declaration) : undefined;
+      if (replaces !== undefined && (!isObj(replaces) || typeof replaces.token !== 'string' || !replaces.token || replaces.baseGeneration === undefined)) {
+        throw storeError(CODES.notSettled, 'prepareAttempt `replaces` needs the old attempt token and the generation it was based on');
       }
       const token = newToken();
       mutate((env, disk) => {
         if (revision !== undefined && revision !== disk.envelope.revision) throw storeError(CODES.conflict, `the managed binding store changed since the plan was made (revision ${disk.envelope.revision}, plan ${revision})`);
         const unit = usable(unitOf(disk, family, key));
-        if (unit.attempt) throw storeError(CODES.pending, `the managed ${family} "${key}" already has a pending attempt`);
+        if (replaces) {
+          const old = requireAttempt(env, disk, replaces.token);
+          if (old.family !== family || old.key !== key) throw storeError(CODES.conflict, 'the attempt to replace belongs to another group');
+          retireInto(env, old, replaces.baseGeneration);
+        } else if (unit.attempt) throw storeError(CODES.pending, `the managed ${family} "${key}" already has a pending attempt`);
         if ((unit.group ? unit.group.generation : null) !== baseGeneration) throw storeError(CODES.conflict, `the managed ${family} "${key}" changed since the plan was made`);
         // Under the lease, against the file as it is now: markPublishDispatch refuses a group with an attempt, and this
         // refuses an attempt over a dispatched publish, so the two never stand together.
@@ -794,10 +929,12 @@ function openManagedBindings({ workspaceDir, environment, appUniqueName, solutio
         }
         env.attempts.push({
           family, key, token, baseGeneration, phase: expected ? 'sending' : 'prepared', root, knownScopes, declarationSha256,
-          ...(declaration !== undefined ? { declaration: clone(declaration) } : {}), expected,
+          ...(kept !== undefined ? { declaration: kept } : {}), expected,
           acknowledgedRoot: false, savedObservation: null, publication,
         });
       });
+      // Durable and read back: only now may the replaced attempt's own hold end.
+      if (replaces && barrier) barrier.release(replaces.token);
       return token;
     },
     /**
@@ -879,11 +1016,44 @@ function openManagedBindings({ workspaceDir, environment, appUniqueName, solutio
         a.sendWindow.notStarted += 1;
       });
     },
-    noteSaved(token, { proof, acknowledgedRoot = false, phase = 'saved' } = {}) {
+    /**
+     * Record what an acknowledged answer to this attempt's send proved, under its token, before anything else uses it:
+     *   proof                     the saved observation (feature-owned plain data);
+     *   acknowledgedRoot          true only when the answer acknowledged that this attempt CREATED its root. An answer
+     *                             to an EDIT never does: an attempt whose expected proof records a base observation (an
+     *                             existing row it read) is refused (`managed-not-settled`), nothing written;
+     *   acknowledgedChildCreates  [{ kind, key, id }] the child-create receipt: children this attempt reserved as NEW,
+     *                             sent, and proved after this acknowledged write. Each must be a child the expected proof
+     *                             (persisted before the send) names under that id, never the root; anything else is
+     *                             `create-completion-required`, nothing written. Receipts are kept for the attempt's
+     *                             life (a later call adds, never forgets), so a recovery reads them from the original
+     *                             attempt, never from a later run's spec. A receipt lets commitGroup record exactly those
+     *                             children `origin: 'created'`; it never acknowledges the root, never stands in for the
+     *                             root's adoption approval, never turns a child the group already holds into a creation,
+     *                             and grants no deletion.
+     */
+    noteSaved(token, { proof, acknowledgedRoot = false, acknowledgedChildCreates = [], phase = 'saved' } = {}) {
       if (phase !== 'saved' && phase !== 'state-pending' && phase !== 'membership-pending') throw storeError(CODES.notSettled, `noteSaved cannot move an attempt to ${phase}`);
+      if (!Array.isArray(acknowledgedChildCreates)) throw storeError(CODES.completion, 'a child-create receipt is a list of { kind, key, id }');
       mutate((env, disk) => {
         const a = requireAttempt(env, disk, token);
         if (!a.expected) throw storeError(CODES.notSettled, 'an attempt cannot be saved before it was sent');
+        if (acknowledgedRoot === true && a.expected.baseObservation !== null) {
+          throw storeError(CODES.notSettled, `the managed ${a.family} "${a.key}" edited an existing root; an answer to an edit never acknowledges a create`);
+        }
+        const receipt = (a.acknowledgedChildCreates || []).map((c) => ({ ...c }));
+        try {
+          for (const c of acknowledgedChildCreates) {
+            closedKeys(c, ['kind', 'key', 'id'], 'the child-create receipt entry');
+            if (!nonempty(c.kind) || !nonempty(c.key) || !nonempty(c.id)) throw invalid('the child-create receipt entry', 'is incomplete');
+            const entry = { kind: c.kind, key: c.key, id: c.id.toLowerCase() };
+            if (!receipt.some((x) => x.kind === entry.kind && x.key === entry.key && x.id === entry.id)) receipt.push(entry);
+          }
+          validateChildReceipt(receipt, a, 'the child-create receipt');
+        } catch (e) {
+          throw storeError(CODES.completion, `the managed ${a.family} "${a.key}" cannot record that receipt: ${e.message}`);
+        }
+        if (receipt.length) a.acknowledgedChildCreates = receipt;
         // An acknowledged create is never forgotten by a later observation that lost the answer.
         a.acknowledgedRoot = a.acknowledgedRoot || acknowledgedRoot === true;
         a.savedObservation = { phase, proof: proof === undefined ? null : proof, acknowledgedRoot: a.acknowledgedRoot };
@@ -895,14 +1065,18 @@ function openManagedBindings({ workspaceDir, environment, appUniqueName, solutio
      * revision — one atomic write. Records the old group held that this set omits are kept (removing a declaration
      * never forgets a row). A record whose id differs from the one the group or the expected proof holds, or an
      * expected child the set lacks, is `create-completion-required`: no substitute is bound. A group not yet committed
-     * whose root create this attempt never had acknowledged is committed only with `adoptionApproved: true` — the
+     * whose root create this attempt never had acknowledged (an answer to its own root create; noteSaved refuses the
+     * flag on an edit, and a flag an older build left on an edit is not honoured) is committed only with
+     * `adoptionApproved: true` — the
      * feature's own typed adoption approval, never inferred here — and is otherwise `managed-adoption-required`,
-     * nothing written and the attempt kept. A group whose publication may have been sent and is not proved live
+     * nothing written and the attempt kept. A NEW record may say `origin: 'created'` only for that acknowledged root
+     * create or, for a child, when the attempt's child-create receipt (noteSaved) names that (kind, key, id); a record
+     * the group already holds keeps an `adopted` origin. A group whose publication may have been sent and is not proved live
      * (dispatching / unconfirmed) is not committed again: `managed-publication-unconfirmed`, nothing written and the
      * attempt kept, until that dispatch is confirmed read-only (confirmPublished). An attempt that recorded its
-     * declaration (prepareAttempt `declaration`) commits it as `consumerState.declaration`: an omitted one is filled in,
-     * an equal one (canonical JSON) passes, and any other — `null` included — is `create-completion-required`, nothing
-     * written and the attempt kept.
+     * declaration (prepareAttempt `declaration`) commits it as the group's `originalDeclaration`, beside — never
+     * inside — `consumerState`, which is kept exactly as passed; a group committed by an attempt that recorded none has
+     * no `originalDeclaration`.
      */
     commitGroup({ token, baseGeneration, records, proof, consumerState, publication = null, proofSchema, adoptionApproved = false }) {
       // The proposal is checked whole before anything else: a list that repeats a (kind, key) or an id must be refused,
@@ -942,21 +1116,11 @@ function openManagedBindings({ workspaceDir, environment, appUniqueName, solutio
         if (old && old.publication && UNCERTAIN.has(old.publication.state)) {
           throw storeError(CODES.publicationUncertain, `the managed ${a.family} "${a.key}" has a publish that may have been sent and is not proved live; a new generation is committed only after it is confirmed`);
         }
-        const acknowledged = a.acknowledgedRoot || !!(a.savedObservation && a.savedObservation.acknowledgedRoot);
+        const acknowledged = rootCreateAcknowledged(a);
+        const receipt = a.acknowledgedChildCreates || [];
         // Strictly `true`: a truthy flag computed carelessly ('yes', 1) must not stand in for the maker's approval.
         if (!old && !acknowledged && adoptionApproved !== true) {
           throw storeError(CODES.adoptionRequired, `the managed ${a.family} "${a.key}" root was never acknowledged as created; binding it needs its adoption approval`);
-        }
-        // An attempt that recorded its original declaration commits that one and no other: a recovery that rebuilt it
-        // from today's spec, or lost it (null), would bind the proved change to a declaration it was never sent for.
-        let state = consumerState;
-        if (a.declaration !== undefined && isObj(consumerState)) {
-          if (Object.prototype.hasOwnProperty.call(consumerState, 'declaration')) {
-            if (canonicalJson(consumerState.declaration) !== canonicalJson(a.declaration)) {
-              throw storeError(CODES.completion, `the managed ${a.family} "${a.key}" is committed with the declaration its attempt recorded, not another`);
-            }
-          }
-          state = { ...consumerState, declaration: clone(a.declaration) };
         }
         const merged = [];
         const byKey = new Map();
@@ -972,11 +1136,14 @@ function openManagedBindings({ workspaceDir, environment, appUniqueName, solutio
           byKey.delete(k);
         }
         for (const rec of byKey.values()) {
-          // A new record claims `created` only on this attempt's acknowledged create; a lost answer needs adoption.
-          if (rec.origin === 'created' && !acknowledged) throw storeError(CODES.completion, `the managed ${a.family} "${a.key}" cannot record ${rec.kind} "${rec.key}" as created without an acknowledged create`);
+          // A new record claims `created` only on this attempt's acknowledged root create, or, for a child, on this
+          // attempt's child-create receipt naming that same (kind, key, id); a lost answer needs adoption. A receipt
+          // never covers the root.
+          const isRoot = rec.kind === a.root.kind && rec.key === a.root.key;
+          const receipted = !isRoot && receipt.some((c) => c.kind === rec.kind && c.key === rec.key && c.id === String(rec.id).toLowerCase());
+          if (rec.origin === 'created' && !acknowledged && !receipted) throw storeError(CODES.completion, `the managed ${a.family} "${a.key}" cannot record ${rec.kind} "${rec.key}" as created without an acknowledged create`);
           // A child the group did not hold before is bound only when the expected proof, persisted before the send,
           // named it under that id: an observation cannot add a binding the attempt never said it would make.
-          const isRoot = rec.kind === a.root.kind && rec.key === a.root.key;
           const planned = isRoot || a.expected.children.some((c) => c.kind === rec.kind && c.key === rec.key && String(c.id).toLowerCase() === String(rec.id).toLowerCase());
           if (!planned) throw storeError(CODES.completion, `the managed ${a.family} "${a.key}" would bind ${rec.kind} "${rec.key}", which its expected proof does not name`);
           merged.push(rec);
@@ -987,9 +1154,13 @@ function openManagedBindings({ workspaceDir, environment, appUniqueName, solutio
           const got = merged.find((r) => r.kind === child.kind && r.key === child.key);
           if (!got || String(got.id).toLowerCase() !== String(child.id).toLowerCase()) throw storeError(CODES.completion, `the managed ${a.family} "${a.key}" lacks the expected ${child.kind} "${child.key}"`);
         }
+        // The original declaration is the attempt's own, recorded before it sent, and nothing the caller passes here can
+        // replace it; the feature's consumer state is kept exactly as proved. A generation whose attempt recorded none
+        // keeps none: an older generation's original never describes this one.
         committed = {
           family: a.family, key: a.key, generation: newToken(), previousGeneration: old ? old.generation : null,
-          root: a.root, proofSchema: proofSchema || a.expected.proofSchema, records: merged, proof, consumerState: state, publication,
+          root: a.root, proofSchema: proofSchema || a.expected.proofSchema, records: merged, proof, consumerState,
+          ...(a.declaration !== undefined ? { originalDeclaration: clone(a.declaration) } : {}), publication,
         };
         env.groups = env.groups.filter((g) => g !== old);
         env.groups.push(committed);
@@ -998,25 +1169,52 @@ function openManagedBindings({ workspaceDir, environment, appUniqueName, solutio
       });
       return clone(committed);
     },
-    /** Mark the owed publication of `groups` dispatching under `token`, immediately before the one send. */
-    markPublishDispatch({ groups, scope, token }) {
+    /**
+     * Mark, in one write immediately before the one send of `scope` under `token`:
+     *   groups   [{ family, key }] the owed, unsent publication each of them pays: owed -> dispatching;
+     *   carried  [{ family, key, generation }] groups that owe nothing but whose saved layer the same publish puts live
+     *            again (a table publish ships every form and view of the table): a settled publication — confirmed, or
+     *            not-needed — at the generation the caller read, with a desired hash. It becomes dispatching under the
+     *            same token and keeps the state it had (`carriedFrom`), so the send is fenced like any other: a later
+     *            run quarantines the scope, no change is prepared or claimed over it, and only a read-only confirmation
+     *            that every group of the dispatch shows its desired hash live (confirmPublished) settles it.
+     * Any group that is pending, invalid, not as described, or committed again since it was read refuses the whole
+     * mark and nothing is written, so nothing is sent.
+     */
+    markPublishDispatch({ groups = [], scope, token, carried = [] }) {
       tokenField(token, 'the dispatch token');
+      if (!Array.isArray(groups) || !Array.isArray(carried) || !groups.length && !carried.length) throw storeError(CODES.notSettled, 'markPublishDispatch needs the groups the publish pays or carries');
       mutate((env, disk) => {
-        for (const { family, key } of groups) {
+        const find = (family, key) => {
           const unit = usable(unitOf(disk, family, key));
           if (unit.attempt) throw storeError(CODES.pending, `the managed ${family} "${key}" has a pending attempt`);
           const g = env.groups.find((x) => x.family === family && x.key === key);
+          if (g && g.publication && scopeKey(g.publication.scope) !== scopeKey(scope)) throw storeError(CODES.notSettled, `the managed ${family} "${key}" is published in another scope`);
+          return g;
+        };
+        for (const { family, key } of groups) {
+          const g = find(family, key);
           if (!g || !g.publication || g.publication.state !== 'owed' || g.publication.dispatchToken !== null) throw storeError(CODES.notSettled, `the managed ${family} "${key}" owes no unsent publication`);
-          if (scopeKey(g.publication.scope) !== scopeKey(scope)) throw storeError(CODES.notSettled, `the managed ${family} "${key}" is published in another scope`);
+          g.publication.state = 'dispatching';
+          g.publication.dispatchToken = token;
+        }
+        for (const { family, key, generation } of carried) {
+          const g = find(family, key);
+          if (!g || !g.publication || (g.publication.state !== 'confirmed' && g.publication.state !== 'not-needed') || typeof g.publication.desiredSha256 !== 'string') {
+            throw storeError(CODES.notSettled, `the managed ${family} "${key}" has no settled publication to carry`);
+          }
+          if (g.generation !== generation) throw storeError(CODES.conflict, `the managed ${family} "${key}" was committed again since its layers were read`);
+          g.publication.carriedFrom = { state: g.publication.state, dispatchToken: g.publication.dispatchToken };
           g.publication.state = 'dispatching';
           g.publication.dispatchToken = token;
         }
       });
     },
     /**
-     * After the send: 'definite-no-start' returns the debt to owed; 'unconfirmed' keeps it uncertain. A debt of the send
-     * that a fresh read already confirmed (confirmUncertainPublication, while this send's answer was outstanding) stays
-     * confirmed: an outcome that arrives later is not evidence against a read that proved the layer live.
+     * After the send: 'definite-no-start' returns the debt to owed, and a carried group to the settled state it had;
+     * 'unconfirmed' keeps it uncertain. A group of the send that a fresh read already confirmed (confirmUncertainPublication,
+     * while this send's answer was outstanding) stays confirmed: an outcome that arrives later is not evidence against a
+     * read that proved the layer live.
      */
     notePublishOutcome({ token, outcome }) {
       if (outcome !== 'definite-no-start' && outcome !== 'unconfirmed') throw storeError(CODES.notSettled, `unknown publish outcome ${outcome}`);
@@ -1025,7 +1223,10 @@ function openManagedBindings({ workspaceDir, environment, appUniqueName, solutio
         if (!owned.length) throw storeError(CODES.notSettled, 'no publication was dispatched under this token');
         for (const g of owned) {
           if (g.publication.state === 'confirmed') continue;
-          if (outcome === 'definite-no-start') { g.publication.state = 'owed'; g.publication.dispatchToken = null; } else g.publication.state = 'unconfirmed';
+          if (outcome !== 'definite-no-start') { g.publication.state = 'unconfirmed'; continue; }
+          const was = g.publication.carriedFrom;
+          delete g.publication.carriedFrom;
+          if (was) { g.publication.state = was.state; g.publication.dispatchToken = was.dispatchToken; } else { g.publication.state = 'owed'; g.publication.dispatchToken = null; }
         }
       });
     },
@@ -1047,7 +1248,7 @@ function openManagedBindings({ workspaceDir, environment, appUniqueName, solutio
           if (g.publication.dispatchToken !== token) throw storeError(CODES.notSettled, `the managed ${family} "${key}" publication carries another dispatch token`);
           if (g.publication.desiredSha256 && published !== g.publication.desiredSha256) throw storeError(CODES.notSettled, `the managed ${family} "${key}" published layer does not equal what was owed`);
           if (g.publication.state === 'owed') g.publication.state = 'not-needed';
-          else if (UNCERTAIN.has(g.publication.state)) g.publication.state = 'confirmed';
+          else if (UNCERTAIN.has(g.publication.state)) { g.publication.state = 'confirmed'; delete g.publication.carriedFrom; }
         }
       });
     },
@@ -1067,20 +1268,7 @@ function openManagedBindings({ workspaceDir, environment, appUniqueName, solutio
       if (baseGeneration === undefined) throw storeError(CODES.notSettled, 'retireUnsentAttempt needs the generation the attempt was based on');
       let removed = 0;
       mutate((env, disk) => {
-        const a = requireAttempt(env, disk, token);
-        if (a.baseGeneration !== baseGeneration) throw storeError(CODES.conflict, 'the managed attempt is based on another generation');
-        const g = env.groups.find((x) => x.family === a.family && x.key === a.key);
-        if ((g ? g.generation : null) !== baseGeneration) throw storeError(CODES.conflict, `the managed ${a.family} "${a.key}" changed since the attempt was prepared`);
-        if (a.phase !== 'prepared' || a.expected !== null || a.acknowledgedRoot || a.savedObservation !== null) {
-          throw storeError(CODES.pending, `the managed ${a.family} "${a.key}" attempt may have been sent; it is recovered, never retired`);
-        }
-        const owned = env.workflowEffects.filter((e) => e.attemptToken === token);
-        if (owned.some((e) => e.state !== 'definitely-unsent' || e.dispatchToken !== null)) {
-          throw storeError(CODES.pending, `the managed ${a.family} "${a.key}" attempt has a workflow effect that may have been sent`);
-        }
-        removed = owned.length;
-        env.attempts = env.attempts.filter((x) => x !== a);
-        env.workflowEffects = env.workflowEffects.filter((e) => e.attemptToken !== token);
+        removed = retireInto(env, requireAttempt(env, disk, token), baseGeneration);
       });
       // The write is durable and read back (mutate): only now may the attempt's own hold end. A store opened without the
       // barrier has no hold to end; the caller releases its own.
@@ -1186,7 +1374,9 @@ function openManagedContext({ workspaceDir, environment, appUniqueName, solution
 }
 
 /**
- * What verify and download may read: the committed, usable groups and their declarations. Pending and invalid groups
+ * What verify and download may read: the committed, usable groups, their declarations (the feature's
+ * `consumerState.declaration`) and, when the committing attempt recorded one, the original authored declaration
+ * (`originalDeclaration`). Pending and invalid groups
  * are listed apart and are not verified. Pure: it reads the snapshot it is given and never writes.
  */
 function managedManifestView(snapshot) {
@@ -1201,6 +1391,7 @@ function managedManifestView(snapshot) {
       family: g.family, key: g.key, generation: g.generation, root: clone(g.root), proofSchema: g.proofSchema,
       records: clone(g.records), proof: clone(g.proof),
       declaration: g.consumerState && g.consumerState.declaration !== undefined ? clone(g.consumerState.declaration) : undefined,
+      originalDeclaration: g.originalDeclaration !== undefined ? clone(g.originalDeclaration) : undefined,
     });
   }
   return view;
@@ -1220,7 +1411,9 @@ module.exports = {
   openManagedBindings,
   openManagedContext,
   managedManifestView,
+  checkDeclaration,
   REQUEST_SHAPES,
   attemptProvenUnsent,
   resumableCreate,
+  rootCreateAcknowledged,
 };

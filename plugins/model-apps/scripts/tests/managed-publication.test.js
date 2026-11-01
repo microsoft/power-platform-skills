@@ -1569,14 +1569,18 @@ test('not started: the operation path is read decoded, so an encoded batch is a 
 
 test('workflow preflight: an existing row the attempt never created is listed as an edit, whatever the group\'s commit state says', () => {
   const RULE = '33333333-3333-4333-8333-333333333333';
-  const pending = { token: 't1', root: { kind: 'business-rule', key: 'account/hide', id: RULE }, baseGeneration: null, acknowledgedRoot: false, savedObservation: null };
-  const effect = (over) => ({ token: `e-${over.effect}-${over.state || 'u'}`, attemptToken: 't1', rowId: RULE, state: 'definitely-unsent', dispatchToken: null, ...over });
+  const pending = { token: 't1', root: { kind: 'business-rule', key: 'account/hide', id: RULE }, baseGeneration: null, acknowledgedRoot: false, savedObservation: null, expected: { baseObservation: null } };
+  const effect = (over) => ({ token: `e-${over.effect}-${over.state || 'u'}`, attemptToken: 't1', rowId: RULE, state: 'definitely-unsent', dispatchToken: null, desiredState: over.effect === 'state' ? 'Active' : null, ...over });
   const state = effect({ effect: 'state' });
   const body = effect({ effect: 'body' });
   assert.deepEqual(existingRowDispatches({ pending, effects: [state, body] }), [state, body], 'no committed group and a null base are not evidence of a create');
   assert.deepEqual(existingRowDispatches({ pending, effects: [effect({ effect: 'create', state: 'confirmed' }), state] }), [], 'its own create, confirmed');
   assert.deepEqual(existingRowDispatches({ pending: { ...pending, acknowledgedRoot: true }, effects: [state] }), [], 'its own create, acknowledged');
+  const deactivate = { ...state, desiredState: 'Draft' };
+  assert.deepEqual(existingRowDispatches({ pending: { ...pending, acknowledgedRoot: true }, effects: [deactivate] }), [deactivate], 'a deactivation of its own row is an edit');
   assert.deepEqual(existingRowDispatches({ pending: { ...pending, savedObservation: { acknowledgedRoot: true } }, effects: [state] }), []);
+  const edited = { ...pending, acknowledgedRoot: true, expected: { baseObservation: { rowVersion: null, savedSha256: H('d') } } };
+  assert.deepEqual(existingRowDispatches({ pending: edited, effects: [state] }), [state], 'an acknowledgement on an attempt that edited an existing row is not a create');
   assert.deepEqual(existingRowDispatches({ pending, effects: [effect({ effect: 'create' }), state] }), [state], 'a create that is not confirmed proves nothing');
   assert.deepEqual(existingRowDispatches({ pending, effects: [{ ...state, state: 'dispatching', dispatchToken: 'd' }] }), [], 'a dispatched effect is proved, never sent again');
   assert.deepEqual(existingRowDispatches({ pending, effects: [{ ...state, attemptToken: 'other' }] }), [], 'another attempt\'s effect');
@@ -1668,7 +1672,8 @@ test('workflow handoff: a state effect first recorded inside recovery is refused
     const s = await setup();
     s.wire.workflows.set(MAIN, { workflowid: MAIN, statecode: 0, statuscode: 1 });
     const token = s.store.prepareAttempt({ family: 'rule', key, baseGeneration: null, root: { kind: 'business-rule', key, id: MAIN }, declarationSha256: H('e'), knownScopes: [] });
-    s.store.markSending(token, { ...expected(MAIN), proofSchema: 'rule-v1', baseProofSha256: H('d'), baseObservation: { rowVersion: null, savedSha256: H('d') } });
+    // The attempt's own create has no base observation; an attempt that read an existing row has one.
+    s.store.markSending(token, { ...expected(MAIN), proofSchema: 'rule-v1', ...(acknowledged ? { baseProofSha256: null, baseObservation: null } : { baseProofSha256: H('d'), baseObservation: { rowVersion: null, savedSha256: H('d') } }) });
     if (acknowledged) s.store.noteSaved(token, { proof: null, acknowledgedRoot: true, phase: 'state-pending' });
     const effect = { attemptToken: token, baseGeneration: null, family: 'rule', key, rowId: MAIN, effect: 'state', request: { method: 'PATCH', shape: 'workflow-patch' }, desiredState: 'Active' };
     const { sdk } = await sdkOver(s.wire, { barrier: s.barrier, workflowEffectGate: createWorkflowEffectGate({ store: s.store }) });
@@ -1695,8 +1700,17 @@ test('workflow handoff: a state effect first recorded inside recovery is refused
     if (editSwitchRequired(x.s.store.readGroup('rule', key), x.effect)) throw refusal();
     return withWorkflowEffect({ store: x.s.store, effect: x.effect }, send);
   };
-  // The same check made by withWorkflowEffect itself when the feature passes its switch.
-  const bySwitch = (x) => (send) => withWorkflowEffect({ store: x.s.store, effect: x.effect, workflowConditionalEdits: false }, send);
+  // The same check made by withWorkflowEffect itself when the feature passes its switch, and the row's state from the
+  // feature's own fresh read when it has one.
+  const bySwitch = (x, read = false) => async (send) => {
+    let observedState;
+    if (read) {
+      const got = await x.sdk.dataverse.get(`/workflows(${MAIN})?$select=statecode`);
+      const row = got && got.body !== undefined ? got.body : got && got.data !== undefined ? got.data : got;
+      observedState = row.statecode === 0 ? 'Draft' : row.statecode === 1 ? 'Active' : 'Other';
+    }
+    return withWorkflowEffect({ store: x.s.store, effect: x.effect, workflowConditionalEdits: false, observedState }, send);
+  };
   for (const [label, how] of [['the consumer rule', byRule], ['withWorkflowEffect with the switch off', bySwitch]]) {
     const x = await strand();
     const { code, seen } = await recover(x, how(x));
@@ -1707,17 +1721,35 @@ test('workflow handoff: a state effect first recorded inside recovery is refused
     const after = x.s.store.readGroup('rule', key);
     assert.deepEqual([after.pending.token, after.effects], [x.token, []], `${label}: the attempt kept, nothing recorded`);
   }
-  // The attempt's own Draft, its create acknowledged: completing it is the one write the default path allows.
+  // The attempt's own Draft, its create acknowledged, read fresh as Draft: activating it is the one write the default
+  // path allows.
   const own = await strand({ acknowledged: true });
-  assert.equal((await recover(own, bySwitch(own))).code, 'probe-complete');
+  assert.equal((await recover(own, bySwitch(own, true))).code, 'probe-complete');
   assert.equal(own.s.wire.writes().length, 1);
   assert.equal(own.s.wire.workflows.get(MAIN).statecode, 1);
   // Any body write, and a state write of another attempt or with no pending attempt, is an edit; a create is not.
   const read = own.s.store.readGroup('rule', key);
-  assert.equal(editSwitchRequired(read, { ...own.effect, effect: 'body', desiredState: null }), true, 'a body write of its own Draft is not completion');
-  assert.equal(editSwitchRequired(read, { ...own.effect, attemptToken: 'another' }), true);
-  assert.equal(editSwitchRequired({ pending: null, effects: [] }, own.effect), true);
+  assert.equal(editSwitchRequired(read, own.effect, { observedState: 'Draft' }), false, 'its own activation, read as Draft');
+  assert.equal(editSwitchRequired(read, own.effect), true, 'an activation with no fresh read is not shown to complete the attempt');
+  assert.equal(editSwitchRequired(read, own.effect, { observedState: 'Active' }), true, 'nor one of a row that is no longer Draft');
+  assert.equal(editSwitchRequired(read, { ...own.effect, desiredState: 'Draft' }, { observedState: 'Draft' }), true, 'any other transition');
+  assert.equal(editSwitchRequired(read, { ...own.effect, effect: 'body', desiredState: null }, { observedState: 'Draft' }), true, 'a body write of its own Draft is not completion');
+  assert.equal(editSwitchRequired(read, { ...own.effect, attemptToken: 'another' }, { observedState: 'Draft' }), true);
+  assert.equal(editSwitchRequired({ pending: null, effects: [] }, own.effect, { observedState: 'Draft' }), true);
   assert.equal(editSwitchRequired({ pending: null, effects: [] }, { ...own.effect, effect: 'create' }), false);
+
+  // Its own row, created and already Active: with the switch off it is never deactivated, and an activation without a
+  // fresh Draft read is refused as well — zero writes either way, the row Active.
+  for (const [label, effect, read] of [['a deactivation', { desiredState: 'Draft' }, true], ['a deactivation, no read', { desiredState: 'Draft' }, false], ['an activation without a fresh read', {}, false], ['an activation of a row read Active', {}, true]]) {
+    const active = await strand({ acknowledged: true });
+    active.s.wire.workflows.set(MAIN, { workflowid: MAIN, statecode: 1, statuscode: 2 });
+    active.effect = { ...active.effect, ...effect };
+    const { code } = await recover(active, bySwitch(active, read));
+    assert.equal(code, 'workflow-edit-refused', label);
+    assert.deepEqual(active.s.wire.writes(), [], `${label}: zero writes`);
+    assert.equal(active.s.wire.workflows.get(MAIN).statecode, 1, `${label}: Active kept`);
+    assert.deepEqual(active.s.store.readGroup('rule', key).effects, [], `${label}: nothing recorded`);
+  }
 });
 
 // A declaration with authored free text, as a maker writes it: names, a description with markup characters, a URL.
@@ -1726,14 +1758,14 @@ const DECLARED = Object.freeze({
   iframe: { name: 'News', url: 'https://contoso.crm.dynamics.com/WebResources/new_news.htm?id=1&lang=en' },
 });
 const TODAY = Object.freeze({ ...DECLARED, description: 'Changed since' });
-// The ports of a feature that records its declaration with the attempt; its proof answers today's declaration, as a helper
-// that rebuilt it from the spec would.
-function declaring(p, declaration, answered = declaration) {
+// The ports of a feature that records its declaration with the attempt; its proof answers a consumer state of its own
+// (`answered` as its declaration slot — say, what it rebuilt from today's spec), which the store keeps as answered.
+function declaring(p, declaration, answered) {
   const plan = p.plan;
   p.plan = async (a) => { const r = await plan(a); return r && r.noop !== true ? { ...r, declaration } : r; };
   const prove = p.prove;
   p.proveSaw = [];
-  p.prove = async (a) => { p.proveSaw.push(a.declaration); const r = await prove(a); return { ...r, consumerState: { ...r.consumerState, declaration: answered } }; };
+  p.prove = async (a) => { p.proveSaw.push(a.declaration); const r = await prove(a); return answered === undefined ? r : { ...r, consumerState: { ...r.consumerState, declaration: answered } }; };
   return p;
 }
 
@@ -1748,7 +1780,7 @@ test('declaration: an attempt keeps its original declaration from before the sen
   assert.deepEqual(onDisk, DECLARED, 'persisted, losslessly, before the send');
   assert.equal(s.wire.saved.get(MAIN).formxml, '<form v="2"/>');
 
-  for (const answered of [TODAY, null]) {
+  for (const answered of [{ rebuilt: 'today' }, null]) {
     const u = await setup();
     await runManagedFeature({ ...ports(u.wire, u.sdk, { key: 'account/main', id: MAIN, formxml: '<form v="1"/>' }), store: u.store, barrier: u.barrier });
     const p = declaring(ports(u.wire, u.sdk, { key: 'account/main', id: MAIN, formxml: '<form v="2"/>', fail: { membership: Object.assign(new Error('membership failed'), { code: 'membership-failed' }) } }), DECLARED);
@@ -1763,7 +1795,8 @@ test('declaration: an attempt keeps its original declaration from before the sen
     assert.deepEqual(q.proveSaw, [DECLARED], 'the recovery proof is given the recorded declaration');
     const { committed, pending } = (await nextRun(u)).store.readGroup('form', 'account/main');
     assert.equal(pending, null);
-    assert.deepEqual(committed.consumerState.declaration, DECLARED, `answered ${answered === null ? 'null' : 'today\'s'}`);
+    assert.deepEqual(committed.originalDeclaration, DECLARED, `answered ${answered === null ? 'null' : 'today\'s'}: the original, never today's, never null`);
+    assert.deepEqual(committed.consumerState.declaration, answered, 'the feature\'s own state, as it answered it');
   }
 });
 
@@ -1794,5 +1827,250 @@ test('declaration: a changed declaration is never sent under an attempt that rec
   assert.deepEqual((await runManagedFeature({ ...p, store: m.store, barrier: m.barrier })).result, { committed: true, recovered: false });
   assert.equal(tokens.length, 1);
   assert.notEqual(tokens[0], old, 'not sent under the attempt that recorded another declaration');
-  assert.deepEqual(m.store.readGroup('form', 'account/main').committed.consumerState.declaration, TODAY);
+  assert.deepEqual(m.store.readGroup('form', 'account/main').committed.originalDeclaration, TODAY);
+});
+// A workflow feature's own derived state, as the rules and process-flow helpers keep it in their declaration slot: a
+// flow's applied hash and actual backing identity, a rule's node history. Its plan is a no-op when that state shows
+// the authored input already applied; the authored input itself is recorded with the attempt.
+function workflowFeature(s, family, id, authored) {
+  const key = family === 'bpf' ? 'lead/sale' : 'account/hide';
+  const kind = family === 'bpf' ? 'bpf' : 'business-rule';
+  const f = { applies: 0 };
+  Object.assign(f, {
+    phase: 'workflows', family, key, knownScopes: [], knownIds: [id], halt, store: s.store, barrier: s.barrier, adoptionApproved: false,
+    preflight: async () => {},
+    resolve: async () => ({}),
+    plan: async ({ committed }) => {
+      const d = committed && committed.consumerState.declaration;
+      if (d && d.applied === sha(authored) && s.backing.get(id) === (d.backing || d.rule)) return { noop: true };
+      return { root: { kind, key, id }, expected: { ...expected(id), proofSchema: `${family}-v1` }, declarationSha256: sha(authored), declaration: authored };
+    },
+    apply: async () => { f.applies += 1; s.backing.set(id, `new_${family}_${f.applies}`); return { sent: true }; },
+    prove: async () => {
+      const backing = s.backing.get(id);
+      const derived = family === 'bpf'
+        ? { declaration: { flow: { name: authored.name, stages: authored.stages.map((x) => x.name) }, applied: sha(authored), backing }, stages: {} }
+        : { declaration: { rule: backing, applied: sha(authored), nodes: [{ key: 'hide-phone', id: UNRELATED }] }, slots: {} };
+      return { savedProof: null, acknowledgedRoot: true, records: [rec(kind, key, id)], proof: PROOF, consumerState: derived, publication: null, proofSchema: `${family}-v1` };
+    },
+    ensureMembership: async () => {},
+  });
+  return f;
+}
+
+test('declaration: the original is kept apart from a workflow feature\'s own state; its backing identity and node history survive, and the identical rerun is a no-op', async () => {
+  // Authored input, with free text a feature's derived state could not keep (an environment URL).
+  const FLOW = Object.freeze({ name: 'Lead to sale', help: 'See https://contoso.crm.dynamics.com/main.aspx?etn=lead&pagetype=entitylist', stages: [{ name: 'Qualify' }, { name: 'Close' }] });
+  for (const family of ['bpf', 'rule']) {
+    const s = await setup();
+    s.backing = new Map();
+    const first = workflowFeature(s, family, MAIN, FLOW);
+    assert.deepEqual((await runManagedFeature(first)).result, { committed: true, recovered: false }, family);
+    const g = context(s.dir, createPublicationBarrier()).store.readGroup(family, first.key).committed;
+    assert.equal(family === 'bpf' ? g.consumerState.declaration.backing : g.consumerState.declaration.rule, s.backing.get(MAIN), `${family}: the actual backing identity is kept`);
+    if (family === 'rule') assert.deepEqual(g.consumerState.declaration.nodes, [{ key: 'hide-phone', id: UNRELATED }], 'the node history is kept');
+    assert.deepEqual(g.originalDeclaration, FLOW, `${family}: the authored input, losslessly, beside it`);
+    const again = workflowFeature(s, family, MAIN, FLOW);
+    assert.deepEqual((await runManagedFeature(again)).result, { noop: true }, `${family}: the identical rerun`);
+    assert.equal(again.applies, 0, `${family}: nothing sent again`);
+  }
+});
+
+test('declaration: a replacement declaration the store refuses keeps the prepared attempt, its bytes, its token and its hold', async () => {
+  for (const url of ['https://contoso.com/x?access_token=abc', 'https://contoso.com/x?%61ccess_token=abc']) {
+    const s = await setup();
+    await runManagedFeature({ ...ports(s.wire, s.sdk, { key: 'account/main', id: MAIN, formxml: '<form v="1"/>' }), store: s.store, barrier: s.barrier });
+    const g = s.store.readGroup('form', 'account/main').committed;
+    const old = s.store.prepareAttempt({ family: 'form', key: 'account/main', baseGeneration: g.generation, root: { kind: 'form', key: 'account/main', id: MAIN }, knownScopes: [ACCOUNT], declarationSha256: H('e'), declaration: { name: 'Original' }, publication: { scope: ACCOUNT, state: 'owed' } });
+    const before = fs.readFileSync(s.store.file, 'utf8');
+    const m = await nextRun(s);
+    assert.equal(m.barrier.allowScope(ACCOUNT, 'a sibling'), false, 'the prepared attempt is held');
+    const p = declaring(ports(s.wire, m.sdk, { key: 'account/main', id: MAIN, formxml: '<form v="2"/>' }), { name: 'Replacement', url });
+    const calls = [];
+    const apply = p.apply;
+    p.apply = async (a) => { calls.push('apply'); return apply(a); };
+    assert.equal(await codeOf(runManagedFeature({ ...p, store: m.store, barrier: m.barrier })), CODES.declarationRefused, url);
+    assert.equal(fs.readFileSync(s.store.file, 'utf8'), before, `${url}: the bytes kept`);
+    assert.equal(m.store.readGroup('form', 'account/main').pending.token, old, `${url}: the token kept`);
+    assert.equal(m.barrier.allowScope(ACCOUNT, 'a sibling'), false, `${url}: the hold kept`);
+    assert.deepEqual([calls, s.wire.log.filter(isPatch)], [[], []], `${url}: nothing sent`);
+  }
+});
+
+// A carried publish: the build saved something unmanaged on a table and publishes it through the barrier
+// (lib/managed-scope-publisher.js routes it here with `carry: true`). The table's managed groups owe nothing, yet the
+// one request ships their saved layers too, so it is journaled on them before it leaves and confirmed with them after.
+const carryTable = (sdk, store, barrier) => publishManagedScope({
+  store, barrier, scope: ACCOUNT, groups: [], client: sdk.dataverse, path: 'table account', carry: true,
+  publish: async () => { const r = await publishTablesXml(sdk.dataverse, ['account']); if (!r.ok) throw Object.assign(new Error(r.reason), { code: 'publish-failed' }); },
+});
+
+test('carry: a table publish that owes no managed debt but answers 503 is journaled on the covered group and fences the table across runs', async () => {
+  const s = await setup();
+  await runManagedFeature({ ...ports(s.wire, s.sdk, { key: 'account/main', id: MAIN, formxml: '<form v="1"/>' }), store: s.store, barrier: s.barrier });
+  await publishForms(s.sdk, s.store, s.barrier, [MAIN_G]);
+  const settled = s.store.readGroup('form', 'account/main').committed.publication;
+  assert.equal(settled.state, 'confirmed');
+
+  // An ordinary build of the next run saves something unmanaged on account and publishes the table; the answer is lost.
+  const a = await nextRun(s);
+  assert.deepEqual(a.debt, []);
+  s.wire.script((e) => /PublishXml/.test(e.path), { statusCode: 503, body: { error: { code: '0x80040216', message: 'gateway' } }, unapplied: true });
+  assert.equal(await codeOf(carryTable(a.sdk, a.store, a.barrier)), PUBLICATION_UNCONFIRMED, 'the carried publish is sent and its outcome is not proved');
+  assert.equal(s.wire.publishes('account').length, 2, 'the ordinary publish is sent once');
+  const pub = a.store.readGroup('form', 'account/main').committed.publication;
+  assert.equal(pub.state, 'unconfirmed', 'the carried dispatch is durable on the covered group');
+  assert.notEqual(pub.dispatchToken, settled.dispatchToken);
+  assert.deepEqual(pub.carriedFrom, { state: 'confirmed', dispatchToken: settled.dispatchToken });
+
+  // The next invocation edits the managed form: the table is quarantined, so nothing is edited or published over it.
+  const b = await nextRun(s);
+  assert.deepEqual(b.debt.map((d) => d.kind), ['uncertain']);
+  const writesBefore = s.wire.writes().length;
+  const edit = (p) => runManagedFeature({ ...ports(s.wire, p.sdk, { key: 'account/main', id: MAIN, formxml: '<form v="2"/>' }), client: p.sdk.dataverse, store: p.store, barrier: p.barrier });
+  assert.equal(await codeOf(edit(b)), PUBLICATION_UNCONFIRMED, 'no change is made over the carried dispatch in this run');
+  assert.equal(s.wire.writes().length, writesBefore, 'no PATCH and no publish');
+  assert.equal(s.wire.saved.get(MAIN).formxml, '<form v="1"/>');
+  const read = b.store.readGroup('form', 'account/main').committed.publication;
+  assert.deepEqual([read.state, read.dispatchToken, 'carriedFrom' in read], ['confirmed', pub.dispatchToken, false], 'confirmed read-only under the carried token');
+  assert.equal((await carryTable(b.sdk, b.store, b.barrier)).withheld, true, 'the table stays quarantined for the run');
+  assert.equal(s.wire.publishes('account').length, 2, 'never sent a second time');
+
+  // The run after: the dispatch is settled, and the edit is made once.
+  const c = await nextRun(s);
+  assert.deepEqual(c.debt, []);
+  assert.equal((await edit(c)).result.committed, true);
+  assert.deepEqual(s.wire.writes().slice(writesBefore).map((w) => w.method), ['PATCH']);
+});
+
+test('carry: the carried dispatch settles only by a read-only confirmation; a definite no-start restores the settled state; a send that is read back confirms under its own token', async () => {
+  const s = await setup();
+  await runManagedFeature({ ...ports(s.wire, s.sdk, { key: 'account/main', id: MAIN, formxml: '<form v="1"/>' }), store: s.store, barrier: s.barrier });
+  await publishForms(s.sdk, s.store, s.barrier, [MAIN_G]);
+  const settled = s.store.readGroup('form', 'account/main').committed.publication;
+  const generation = s.store.readGroup('form', 'account/main').committed.generation;
+
+  // The store: a carried group is marked under the send's token and keeps its settled state; a send that never started
+  // puts exactly that back. A group committed again since it was read refuses the mark, and nothing is written.
+  const before = fs.readFileSync(s.store.file, 'utf8');
+  assert.equal(await codeOf(Promise.resolve().then(() => s.store.markPublishDispatch({ scope: ACCOUNT, token: 'carry-1', carried: [{ ...MAIN_G, generation: generation + 1 }] }))), CODES.conflict);
+  assert.equal(fs.readFileSync(s.store.file, 'utf8'), before);
+  s.store.markPublishDispatch({ scope: ACCOUNT, token: 'carry-1', carried: [{ ...MAIN_G, generation }] });
+  assert.deepEqual(s.store.readGroup('form', 'account/main').committed.publication, { ...settled, state: 'dispatching', dispatchToken: 'carry-1', carriedFrom: { state: 'confirmed', dispatchToken: settled.dispatchToken } });
+  s.store.notePublishOutcome({ token: 'carry-1', outcome: 'definite-no-start' });
+  assert.deepEqual(s.store.readGroup('form', 'account/main').committed.publication, settled, 'the settled publication is back, token and all');
+
+  // A carried publish that is read back confirms the covered group under its own token in the same write.
+  const ok = await carryTable(s.sdk, s.store, s.barrier);
+  assert.deepEqual(ok, { sent: true, withheld: false, confirmed: [] });
+  const after = s.store.readGroup('form', 'account/main').committed.publication;
+  assert.equal(after.state, 'confirmed');
+  assert.notEqual(after.dispatchToken, settled.dispatchToken);
+  assert.equal('carriedFrom' in after, false);
+
+  // A lost answer leaves it uncertain; the next run confirms it read-only when every group of the dispatch is live.
+  s.wire.script((e) => /PublishXml/.test(e.path), { statusCode: 503, body: { error: { code: '0x80040216', message: 'gateway' } } });
+  assert.equal(await codeOf(carryTable(s.sdk, s.store, s.barrier)), PUBLICATION_UNCONFIRMED);
+  const lost = s.store.readGroup('form', 'account/main').committed.publication;
+  assert.equal(lost.state, 'unconfirmed');
+  const sends = s.wire.publishes('account').length;
+  const n = await nextRun(s);
+  assert.deepEqual(await confirmUncertainPublication({ store: n.store, barrier: n.barrier, scope: ACCOUNT, client: n.sdk.dataverse }), { confirmed: [MAIN_G], unconfirmed: [] });
+  const done = n.store.readGroup('form', 'account/main').committed.publication;
+  assert.deepEqual([done.state, done.dispatchToken, 'carriedFrom' in done], ['confirmed', lost.dispatchToken, false]);
+  assert.equal(s.wire.publishes('account').length, sends, 'nothing was sent to confirm it');
+  assert.deepEqual((await nextRun(s)).debt, [], 'the run after installs no block');
+});
+
+// An approved, adopted existing form the build edits, adding one cell: the edit's answer acknowledges the write, never a
+// create of the form, and the receipt names the new cell. `answer` overrides what prove answers.
+const CELL = '13131313-1313-4131-8131-131313131313';
+const CELL_KEY = 'account/main/cell-1';
+const cellChild = { kind: 'form-cell', key: CELL_KEY, namespaceParentId: MAIN, id: CELL, associationSha256: H('f') };
+const cellReceipt = { kind: 'form-cell', key: CELL_KEY, id: CELL };
+function adoptedEditWithCell(s, sdk, answer = {}) {
+  const p = ports(s.wire, sdk, { key: 'account/main', id: MAIN, formxml: '<form v="2"/>' });
+  p.plan = async () => ({
+    root: { kind: 'form', key: 'account/main', id: MAIN }, declarationSha256: H('e'), publication: { scope: ACCOUNT, state: 'owed' },
+    expected: { ...expected(MAIN), baseObservation: { rowVersion: null, savedSha256: H('d') }, children: [cellChild] },
+  });
+  const prove = p.prove;
+  p.prove = async (a) => {
+    const got = await prove(a);
+    return {
+      ...got, acknowledgedRoot: false, acknowledgedChildCreates: [cellReceipt],
+      records: [{ ...rec('form', 'account/main', MAIN), origin: 'adopted' }, rec('form-cell', CELL_KEY, CELL)], ...answer,
+    };
+  };
+  return p;
+}
+async function adoptedFormSetup() {
+  const s = await setup();
+  s.wire.putForm(formRow(MAIN, '<form v="1"/>'));
+  return s;
+}
+const bound = (store) => { const g = store.readGroup('form', 'account/main'); return g.committed ? Object.fromEntries(g.committed.records.map((r) => [r.kind, r.origin])) : null; };
+
+test('child receipt: a cell an approved edit adds to an adopted existing form is bound as created; the root stays adopted', async () => {
+  const s = await adoptedFormSetup();
+  const p = adoptedEditWithCell(s, s.sdk);
+  assert.deepEqual((await runManagedFeature({ ...p, store: s.store, barrier: s.barrier, adoptionApproved: true })).result, { committed: true, recovered: false });
+  assert.deepEqual(bound(s.store), { form: 'adopted', 'form-cell': 'created' });
+});
+
+test('child receipt: an edit never acknowledges its root, a receipt names only expected children and never the root, and never stands in for the adoption approval', async () => {
+  const attempt = async (answer, { approved = true } = {}) => {
+    const s = await adoptedFormSetup();
+    const code = await codeOf(runManagedFeature({ ...adoptedEditWithCell(s, s.sdk, answer), store: s.store, barrier: s.barrier, adoptionApproved: approved }));
+    const g = s.store.readGroup('form', 'account/main');
+    return { code, committed: g.committed, pending: g.pending };
+  };
+  const ack = await attempt({ acknowledgedRoot: true });
+  assert.equal(ack.code, 'managed-not-settled', 'an answer to an edit is not a create');
+  assert.equal(ack.committed, null);
+  assert.equal(ack.pending.acknowledgedRoot, false);
+  assert.equal(ack.pending.savedObservation, null, 'nothing written');
+  const root = await attempt({ acknowledgedChildCreates: [cellReceipt, { kind: 'form', key: 'account/main', id: MAIN }] });
+  assert.equal(root.code, 'create-completion-required', 'a receipt never names the root');
+  assert.equal(root.pending.acknowledgedChildCreates, undefined, 'nothing written');
+  // Not even when the expected proof lists the root's row as a child under another kind.
+  const alias = { kind: 'form-cell', key: 'account/main/alias', namespaceParentId: MAIN, id: MAIN, associationSha256: H('f') };
+  const aliased = await (async () => {
+    const s = await adoptedFormSetup();
+    const p = adoptedEditWithCell(s, s.sdk, { acknowledgedChildCreates: [cellReceipt, { kind: 'form-cell', key: 'account/main/alias', id: MAIN }] });
+    const plan = p.plan;
+    p.plan = async (a) => { const got = await plan(a); return { ...got, expected: { ...got.expected, children: [cellChild, alias] } }; };
+    const code = await codeOf(runManagedFeature({ ...p, store: s.store, barrier: s.barrier, adoptionApproved: true }));
+    return { code, pending: s.store.readGroup('form', 'account/main').pending };
+  })();
+  assert.equal(aliased.code, 'create-completion-required');
+  assert.equal(aliased.pending.acknowledgedChildCreates, undefined, 'the root\'s row is never receipted');
+  const stranger = await attempt({ acknowledgedChildCreates: [cellReceipt, { kind: 'form-cell', key: 'account/main/cell-9', id: QUICK }] });
+  assert.equal(stranger.code, 'create-completion-required', 'a child the expected proof does not name');
+  assert.equal(stranger.pending.acknowledgedChildCreates, undefined, 'nothing written');
+  assert.equal(stranger.committed, null);
+  const otherId = await attempt({ acknowledgedChildCreates: [{ ...cellReceipt, id: QUICK }] });
+  assert.equal(otherId.code, 'create-completion-required', 'the expected child under another id');
+  const rootCreated = await attempt({ records: [rec('form', 'account/main', MAIN), rec('form-cell', CELL_KEY, CELL)] });
+  assert.equal(rootCreated.code, 'create-completion-required', 'a receipt does not let the root say created');
+  assert.equal(rootCreated.committed, null);
+  const unapproved = await attempt({}, { approved: false });
+  assert.equal(unapproved.code, 'managed-adoption-required', 'a receipt is not the adoption approval');
+  assert.equal(unapproved.committed, null);
+  assert.deepEqual(unapproved.pending.acknowledgedChildCreates, [cellReceipt], 'the receipt is kept with the attempt');
+});
+
+test('child receipt: kept under the attempt token across runs; a recovery binds the cell from the original receipt, never from today\'s answer, and only with a current approval', async () => {
+  const s = await adoptedFormSetup();
+  assert.equal(await codeOf(runManagedFeature({ ...adoptedEditWithCell(s, s.sdk), store: s.store, barrier: s.barrier })), 'managed-adoption-required');
+  const token = s.store.readGroup('form', 'account/main').pending.token;
+  const later = await nextRun(s);
+  // Today's prove answers no receipt at all: the recovery reads the original attempt's.
+  const today = { acknowledgedChildCreates: [] };
+  assert.equal(await codeOf(runManagedFeature({ ...adoptedEditWithCell(s, later.sdk, today), store: later.store, barrier: later.barrier })), 'managed-adoption-required', 'no grant today, nothing bound');
+  assert.equal(later.store.readGroup('form', 'account/main').pending.token, token);
+  const done = await runManagedFeature({ ...adoptedEditWithCell(s, later.sdk, today), store: later.store, barrier: later.barrier, adoptionApproved: true });
+  assert.deepEqual(done.result, { committed: true, recovered: true });
+  assert.deepEqual(bound(later.store), { form: 'adopted', 'form-cell': 'created' });
+  assert.equal(s.wire.log.filter(isPatch).length, 1, 'one edit, never sent again');
 });
