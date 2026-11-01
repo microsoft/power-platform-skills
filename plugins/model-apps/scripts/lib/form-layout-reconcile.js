@@ -71,7 +71,7 @@ const {
   controlIdTaken,
 } = require('./form-timeline.js');
 const { runManagedFeature, publishManagedScope } = require('./managed-feature-contract.js');
-const { readSystemFormPublication } = require('./systemform-published.js');
+const { readSystemFormPublication, systemFormLayerSha256 } = require('./systemform-published.js');
 const { publishTablesXml } = require('./table-publish.js');
 const { hasUnsyncedEdits } = require('./unsynced-edits.js');
 const {
@@ -546,24 +546,56 @@ async function readForm(sdk, formId) {
 // <Handler functionName=".." libraryName=".."> node, e.g. (as the SDK holds it)
 //   { n: 'events', c: [ { n: 'event', a: [['name','onload'], ...], c: [ { n: 'Handlers', c: [ { n: 'Handler',
 //     a: [['functionName','app.onLoad'], ['libraryName','new_/app.js'], ...] } ] } ] } ] }
-function handlerKeysOf(form) {
-  const keys = new Set();
+function handlerEntriesOf(form) {
+  const out = [];
   const attrOf = (node, name) => (((node && node.a) || []).find((a) => a[0] === name) || [])[1];
   for (const entry of ((form && form.bag && form.bag.c) || [])) {
     if (!entry || !entry.node || entry.node.n !== 'events') continue;
     for (const evNode of entry.node.c || []) {
       for (const handlers of (evNode && evNode.c) || []) {
         for (const handler of (handlers && handlers.c) || []) {
-          keys.add(keyOfHandler(attrOf(evNode, 'name'), attrOf(evNode, 'attribute'), attrOf(handler, 'functionName'), attrOf(handler, 'libraryName')));
+          out.push({
+            key: keyOfHandler(attrOf(evNode, 'name'), attrOf(evNode, 'attribute'), attrOf(handler, 'functionName'), attrOf(handler, 'libraryName')),
+            options: handlerOptionsOf(handler),
+          });
         }
       }
     }
   }
-  return keys;
+  return out;
 }
+const handlerKeysOf = (form) => new Set(handlerEntriesOf(form).map((h) => h.key));
 const keyOfHandler = (event, attribute, fn, library) => `${event}|${event === 'onchange' ? lc(attribute) : ''}|${fn}|${library}`;
 const handlerKey = (ev) => keyOfHandler(ev.event, ev.attribute, ev.function, ev.library);
 const requestedHandlers = (events) => (events || []).filter((ev) => ev && FORM_EVENTS.has(ev.event) && ev.library && ev.function);
+// The options a <Handler> node carries, as comparable text: enabled and passExecutionContext as lower-cased flags
+// ('true'/'false'), parameters exactly. An attribute the node lacks reads as '' — never as a default — so a handler
+// whose options cannot be shown equal to the declared ones is never certified as declared.
+function handlerOptionsOf(node) {
+  const at = (name) => (((node && node.a) || []).find((a) => Array.isArray(a) && a[0] === name) || [])[1];
+  const text = (v) => (v === undefined || v === null ? '' : String(v));
+  return canonicalJson({ enabled: lc(at('enabled')), parameters: text(at('parameters')), passExecutionContext: lc(at('passExecutionContext')) });
+}
+// The options a declared handler is written with (formEventsRegionIntent: enabled and passExecutionContext true unless
+// stated false, parameters '' when absent), comparable with handlerOptionsOf.
+const requestedOptionsOf = (ev) => handlerOptionsOf(formEventsRegionIntent([ev]).c[0].c[0].c[0]);
+// The declared handlers whose identity the form holds with other options — or which the spec declares twice with
+// different options. Changing the options of a handler that is already on the form is not supported (a write adds only
+// missing handlers), so these refuse before anything is written, and verify and download never pass them.
+function handlerOptionConflicts(form, events) {
+  const live = handlerEntriesOf(form);
+  const wanted = new Map();
+  const out = [];
+  for (const ev of requestedHandlers(events)) {
+    const k = handlerKey(ev);
+    const opts = requestedOptionsOf(ev);
+    if (wanted.has(k) && wanted.get(k) !== opts) { out.push(ev); continue; }
+    wanted.set(k, opts);
+    if (live.some((h) => h.key === k && h.options !== opts)) out.push(ev);
+  }
+  return out;
+}
+const handlerLabel = (ev) => `the ${ev.event} handler ${ev.function} (${ev.library})${ev.event === 'onchange' && ev.attribute ? ` for ${ev.attribute}` : ''}`;
 
 // Add `handlers` (all of them must be missing) to the form's <events> region in the local copy — a new
 // region when there is none, else appended to it — exactly as sdk-build's wireFormEvents does, so the
@@ -676,14 +708,17 @@ function recordedSpacers(recorded, sectionKey, section, holds = () => true) {
   return owned;
 }
 
-// A container the build relies on: by its recorded id first (a rename by the maker keeps it the same
-// tab or section), else by a unique name among `candidates` (its exact parent). Answers
-// { found } | { missing: true } (recorded but gone) | { ambiguous: true } | {} (nothing there yet).
+// A container the build relies on: by its recorded id first, else by a unique name among `candidates` (its exact
+// parent). One found by its recorded id must still carry the declared name: the spec maps each declared field to a
+// qualified tab/section, so a recorded tab or section the maker renamed (or two sections whose names were exchanged)
+// is not the declared one any more, and planning into it would bind the spec's fields to another container. Answers
+// { found } | { missing: true } (recorded but gone) | { renamed: <its name> } | { ambiguous: true } | {} (nothing there yet).
 function resolveContainer(recorded, childKey, candidates, everywhere, name) {
   const id = recorded[childKey];
   if (id) {
     const found = everywhere.find((o) => sameId(o.id, id));
-    return found ? { found } : { missing: true };
+    if (!found) return { missing: true };
+    return lc(found.name) === lc(name) ? { found } : { renamed: String(found.name || '') };
   }
   const named = candidates.filter((o) => lc(o && o.name) === lc(name));
   if (named.length > 1) return { ambiguous: true };
@@ -998,6 +1033,7 @@ function planDeclaredFormLayout({ form, spec, formId, live, intentTabs, hosts, e
       const tKey = `tab:${lc(entry.tab)}`;
       const t = resolveContainer(records, tKey, allTabs(), allTabs(), entry.tab);
       if (t.missing) return refuse('create-completion-required', `the tab '${entry.tab}' this form was built with is gone; run a full build after restoring it, or repair the binding`);
+      if (t.renamed !== undefined) return refuse('form-layout-container-moved', `the tab this form was built with as '${entry.tab}' is now named '${t.renamed}'; renaming a declared tab is not supported — rename it back in the form designer, or repair the binding`);
       if (t.ambiguous) return refuse('form-layout-container-ambiguous', `the form has more than one tab named '${entry.tab}'`);
       let tab = t.found;
       if (tab) { if (tab.id) tab.__track = tKey; } else { tab = freshTab(entry.compiledTab, tKey); tabs.push(tab); }
@@ -1011,6 +1047,7 @@ function planDeclaredFormLayout({ form, spec, formId, live, intentTabs, hosts, e
       eachSection([tab], (s) => inTab.push(s));
       const s = resolveContainer(records, sKey, inTab, allSections(), entry.section);
       if (s.missing) return refuse('create-completion-required', `the section '${entry.section}' this form was built with is gone; run a full build after restoring it, or repair the binding`);
+      if (s.renamed !== undefined) return refuse('form-layout-container-moved', `the section this form was built with as '${entry.section}' is now named '${s.renamed}'; renaming or exchanging declared sections is not supported — rename it back in the form designer, or repair the binding`);
       if (s.ambiguous) return refuse('form-layout-container-ambiguous', `the tab '${entry.tab}' has more than one section named '${entry.section}'`);
       let section = s.found;
       if (section) {
@@ -1126,6 +1163,8 @@ function planDeclaredFormLayout({ form, spec, formId, live, intentTabs, hosts, e
   plan.repairedIds = [...repairedIds];
   plan.hostTargets = hostTargetsOf(hosts);
   plan.handlers = requestedHandlers(events);
+  const optionConflict = handlerOptionConflicts(live, events)[0];
+  if (optionConflict) return refuse('form-handler-options-unsupported', `${handlerLabel(optionConflict)} is on the form with other options (enabled, parameters or passExecutionContext) than the spec declares, or is declared twice with different ones; changing the options of an existing handler is not supported — change them in the form designer, or declare what the form holds`);
   const haveHandlers = handlerKeysOf(live);
   plan.addHandlers = plan.handlers.filter((ev, i) => !haveHandlers.has(handlerKey(ev)) && plan.handlers.findIndex((o) => handlerKey(o) === handlerKey(ev)) === i);
   const tabsUnchanged = canonicalJson(desired) === canonicalJson(liveTabs);
@@ -1331,9 +1370,6 @@ function preservationOf(form, children, { update }) {
 }
 
 const savedShaOf = (form) => intentSha256({ formType: form.formType, entityLogicalName: form.entityLogicalName, tabs: form.tabs, bag: form.bag || null });
-// The publication hash of one systemform layer — the same fields readSystemFormPublication compares.
-const layerHash = (row) => intentSha256({ name: row.name, description: row.description, formxml: row.formxml });
-const NEVER_PUBLISHED = '0'.repeat(64);
 
 /**
  * Prove a stored form against an expected proof (the one persisted before the send). Answers { comp } or throws
@@ -1489,6 +1525,8 @@ function planCreate({ form, spec, def, hosts, events }) {
     if (width > sectionGridWidth({ columns: 4 }, formType) || slotGrid(s.rows || [], width).overflow.length) geometry = 'form-layout-invalid';
   });
   if (geometry) throw codeError(geometry, 'a section of the new form does not fit its grid; nothing was created');
+  const optionConflict = handlerOptionConflicts(null, events || (form && form.events))[0];
+  if (optionConflict) throw codeError('form-handler-options-unsupported', `${handlerLabel(optionConflict)} is declared twice with different options; nothing was created`);
   return { tabs, formType, handlers: requestedHandlers(events || (form && form.events)) };
 }
 
@@ -1532,14 +1570,47 @@ function declaredHostsOf(specForm, def, { quickViewFormIdOf } = {}) {
   return { subgrids, quickViews };
 }
 
-// The build's halt factory when the caller passes none: a coded, never-retry error (what managedStop answers).
-const defaultHalt = (phase, label, code, { cause } = {}) => Object.assign(new Error(`${label} did not settle (${code})`), { code, phase, cause, retry: 'never' });
+// The build's halt factory and solution membership are required, never defaulted: a stand-in halt would let a stop the
+// build cannot see pass for one, and a no-op membership would commit a group whose form is outside the solution. Both
+// are checked before anything is read or written (managed-not-settled).
+const requiredPort = (name) => codeError('managed-not-settled', `a declared form settles only with the build's ${name}`);
 
-const childrenStateOf = (children) => {
+// The place of a container as a read of `comp` (compositeOf) sees it: its name and, for a section, its tab and form
+// column — the 'fresh' association variant, which a maker's label or flag edit does not change.
+const placeShaOf = (comp, id) => {
+  const v = (comp.at.get(idText(id)) || []).find((x) => x && x.v === 'fresh');
+  return v ? intentSha256(v) : null;
+};
+
+// consumerState.children: each child's id, kind and proved association; a container also records the place the proof
+// saw it in (placeSha256), so a later run can refuse a container that now stands or is named otherwise even where the
+// unchanged-layout path would re-baseline without a write.
+const childrenStateOf = (children, tabs) => {
+  const comp = compositeOf(tabs || []);
   const out = {};
-  for (const c of children) out[c.key.slice(c.key.indexOf('#') + 1)] = { id: c.id, kind: c.kind, associationSha256: c.associationSha256 };
+  for (const c of children) {
+    out[c.key.slice(c.key.indexOf('#') + 1)] = {
+      id: c.id, kind: c.kind, associationSha256: c.associationSha256,
+      ...(CONTAINER_KINDS.has(c.kind) ? { placeSha256: placeShaOf(comp, c.id) } : {}),
+    };
+  }
   return out;
 };
+
+// The containers this plan relies on that the committed group recorded, now named or standing elsewhere than its last
+// proof saw them (a tracked host section included). A recorded container with no recorded place is never assumed in
+// place. Answers the first such locator, or null.
+function movedContainer(children, lastChildren, tabs) {
+  const comp = compositeOf(tabs);
+  for (const c of children) {
+    if (!CONTAINER_KINDS.has(c.kind)) continue;
+    const locator = c.key.slice(c.key.indexOf('#') + 1);
+    const was = lastChildren[locator];
+    if (!was) continue;
+    if (!was.placeSha256 || was.placeSha256 !== placeShaOf(comp, c.id)) return locator;
+  }
+  return null;
+}
 
 // Whether the last proof's children are exactly the children this plan relies on, each still standing where that
 // proof saw it. The association is compared against every variant the stored object may prove (a container the
@@ -1564,8 +1635,14 @@ function stillProven(children, lastChildren, tabs) {
  *            beforePush(id) (optional local edits of a new row that travel in its push),
  *            resolveExisting() (only for a form the store does not hold: '<id>' | { id } of the one form of this
  *            table, type and name, else undefined; a throw is form-layout-resolve-refused) }
- *   ctx    { store, barrier?, halt?, catalog (creates-catalog.js, with formCatalogIntent registered),
- *            ensureMembership?({ root, records, recovering }), authorizedAdoption, authorizedOverwrite, phase? }
+ *   ctx    { store, barrier?, halt (required: the build's halt factory, managedStop), catalog (creates-catalog.js, with
+ *            formCatalogIntent registered), ensureMembership({ root, records, recovering }) (required: the form's
+ *            solution membership), authorizedAdoption, authorizedOverwrite (the form family's own approvals: true, or a
+ *            Set or array of form keys), phase? }
+ *   A missing halt or ensureMembership is refused (managed-not-settled) before anything is read or written. A local
+ *   copy of the bound or pending form with edits the service has not seen is refused before anything is read over it
+ *   (create-completion-required, category workspace-copy-unsent-edits), a recovery included. A form whose create this
+ *   build never had acknowledged is bound only under authorizedAdoption (managed-adoption-required).
  * Answers { key, formId, action: 'noop'|'noChange'|'update'|'create'|'recovered', group }. Every refusal, unknown
  * outcome or failed proof throws the error the halt factory makes (the build stops; the form's table is withheld).
  */
@@ -1574,22 +1651,36 @@ async function reconcileDeclaredForm(input, ctx = {}) {
   const key = formLayoutKey(form);
   const table = tableOf(form) || lc(def && def.entityLogicalName);
   const scope = { type: 'table', table };
-  const halt = typeof ctx.halt === 'function' ? ctx.halt : defaultHalt;
   const phase = ctx.phase || 'forms';
   const label = `declared form "${key}"`;
   if (!isDeclaredForm(form)) return { key, formId: null, action: null, group: null };
+  if (typeof ctx.halt !== 'function') throw requiredPort('halt factory (halt)');
+  if (typeof ctx.ensureMembership !== 'function') throw requiredPort('solution membership (ensureMembership)');
+  const { halt, ensureMembership } = ctx;
   const { store, catalog } = ctx;
   if (!store || typeof store.readGroup !== 'function') {
-    throw halt(phase, label, 'managed-binding-port-unavailable', { cause: codeError('managed-binding-port-unavailable', 'a declared form settles only through the managed binding store') });
+    const stopped = halt(phase, label, 'managed-binding-port-unavailable', { cause: codeError('managed-binding-port-unavailable', 'a declared form settles only through the managed binding store') });
+    if (!(stopped instanceof Error)) throw codeError('managed-not-settled', `${label} did not settle, and the halt factory made no error to stop the build with`);
+    throw stopped;
   }
   const envelope = store.snapshot().envelope;
   const recordOf = (fields) => ({ formatVersion: 1, appUniqueName: envelope.appUniqueName, environmentFingerprint: envelope.environmentFingerprint, ...fields });
   const declaration = declarationOf(form);
   const declarationSha256 = intentSha256(declaration);
-  const ensureMembership = typeof ctx.ensureMembership === 'function' ? ctx.ensureMembership : async () => undefined;
   const state = { formId: null, action: null };
   const { committed: knownCommitted, pending: knownPending } = store.readGroup(FAMILY, key);
   const knownId = idText((knownCommitted && knownCommitted.root.id) || (knownPending && knownPending.root.id));
+
+  // On EVERY path, a recovery included, and before anything reads into the workspace: a local copy of the bound or
+  // pending form that holds edits the service has not seen (an earlier run's unsent edit, or a maker's by hand) is
+  // never planned over or replaced. Recovery and resolve re-read the form with a fetch that overwrites the copy, so the
+  // check must come first, and it only diffs (no request, no fetch). A copy the workspace does not hold reads clean.
+  const preflight = async ({ committed, pending }) => {
+    const id = idText((committed && committed.root.id) || (pending && pending.root.id));
+    if (id && await hasUnsyncedEdits(sdk, ARTIFACT, id)) {
+      throw Object.assign(codeError('create-completion-required', `the local copy of the form ${id} in the workspace differs from the server's (an edit an earlier run did not send, or one made by hand), or could not be compared; nothing was read over it or written, and the copy was kept. Put any change you want to keep into the spec, refresh the local copy from the server, then re-run`), { category: 'workspace-copy-unsent-edits' });
+    }
+  };
 
   const resolve = async ({ committed, pending }) => {
     if (form.prune === true) throw codeError('form-layout-prune-unsupported', 'a declared form does not delete what the spec omits; remove "prune"');
@@ -1618,8 +1709,9 @@ async function reconcileDeclaredForm(input, ctx = {}) {
       create = !!probe.missing;
     }
     if (create) return { formId, create: true };
+    // The preflight diffed the bound or pending form; a form found by resolveExisting is diffed here, before its read.
     if (await hasUnsyncedEdits(sdk, ARTIFACT, formId)) {
-      throw codeError('create-completion-required', 'the local copy of this form holds edits the service has not seen; refresh it before the layout is written');
+      throw Object.assign(codeError('create-completion-required', 'the local copy of this form holds edits the service has not seen; refresh it before the layout is written'), { category: 'workspace-copy-unsent-edits' });
     }
     const live = await readForm(sdk, formId);
     if (live && live.missing) {
@@ -1672,6 +1764,12 @@ async function reconcileDeclaredForm(input, ctx = {}) {
     const m = materialize(p.planned, reserveChildIds(catalog, key, formId, fresh));
     if (fresh.some((k) => !m.ids[k])) throw codeError('create-identity-unsupported', 'the creation catalog did not name every object this write adds');
     const children = expectedChildrenOf(key, formId, m);
+    // Before any write, bind-only or no-change re-baseline: every container the committed group recorded must still
+    // be named and stand where its last proof saw it. Otherwise the unchanged-layout path would re-baseline the moved
+    // association as the group's own (no override approval changes that: moving a container is not supported).
+    const lastChildren = (committed && committed.consumerState && committed.consumerState.children) || {};
+    const moved = committed ? movedContainer(children, lastChildren, live.tabs) : null;
+    if (moved) throw codeError('form-layout-container-moved', `the ${moved.startsWith('tab:') ? 'tab' : 'section'} '${moved.slice(moved.indexOf(':') + 1)}' this form was built with is now named or placed otherwise; moving or renaming it is not supported — put it back in the form designer, or repair the binding`);
     const planned = { formType: live.formType, entityLogicalName: live.entityLogicalName, tabs: m.tabs, bag: withHandlers(live.bag, p.addHandlers || []) };
     // Nothing the spec does not own may change: the planned tree must keep every foreign cell, row payload, tab,
     // section and root bag entry exactly as the live form holds them (the declared fields this plan moves, the
@@ -1743,7 +1841,8 @@ async function reconcileDeclaredForm(input, ctx = {}) {
     const differs = layers.state !== 'equal';
     let publication;
     if (differs && ((applied && applied.sent) || recovering)) {
-      publication = { scope, state: 'owed', desiredSha256: layerHash(layers.saved), dispatchToken: null };
+      // Hashed exactly as the shared form reader (LAYER_READERS.form) hashes the saved layer it will compare.
+      publication = { scope, state: 'owed', desiredSha256: systemFormLayerSha256(layers.saved), dispatchToken: null };
     } else if (differs && committed && committed.publication && committed.publication.state === 'owed') {
       // Debt this group already owed stays owed for exactly what it owed: if the saved layer has moved on since,
       // the publish refuses it (the saved layer is not ours to put live).
@@ -1792,7 +1891,7 @@ async function reconcileDeclaredForm(input, ctx = {}) {
         // The declaration is recorded only when it is the one this attempt was planned from: a recovery under a spec
         // that has changed since keeps no declaration, so verify and download never restore one that was not proved.
         declaration: attemptDeclaration === declarationSha256 ? declaration : null,
-        children: childrenStateOf(expected.children),
+        children: childrenStateOf(expected.children, back.tabs),
         proofSchema: PROOF_SCHEMA,
       },
     };
@@ -1800,7 +1899,11 @@ async function reconcileDeclaredForm(input, ctx = {}) {
 
   const { result, committedGroup } = await runManagedFeature({
     phase, family: FAMILY, key, label, knownScopes: [scope], knownIds: knownId ? [knownId] : [],
-    store, barrier: ctx.barrier, halt, resolve, plan, apply, prove, ensureMembership,
+    store, barrier: ctx.barrier, halt, preflight, resolve, plan, apply, prove, ensureMembership,
+    // A form whose create this run never had acknowledged (a lost answer, or a row found by resolveExisting) is bound
+    // only under the form family's own adoption approval for this key (ctx.authorizedAdoption: true, or a Set or array
+    // of form keys); a fresh read that proves it is no approval.
+    adoptionApproved: isAuthorized(ctx.authorizedAdoption, key) === true,
   });
   const formId = state.formId || (committedGroup && committedGroup.root.id) || null;
   const action = result.recovered ? 'recovered' : (state.action || (result.noop ? 'noop' : null));
@@ -1808,28 +1911,13 @@ async function reconcileDeclaredForm(input, ctx = {}) {
 }
 
 /**
- * The saved and published layers of a committed FORM group, hashed the way its publication debt is
- * ({ name, description, formxml } of each systemform layer). The one layer reader this helper owns: it is asked only
- * for the form family, and a group of any other family throws, so a scope that holds one fails closed until that
- * family's own reader is supplied.
- */
-function formLayersReader(sdk) {
-  return async (group) => {
-    if (!group || group.family !== FAMILY) throw codeError(PUBLICATION_UNVERIFIED_CODE, `no layer reader for managed ${group && group.family} "${group && group.key}"`);
-    const r = await readSystemFormPublication(sdk.dataverse, group.root.id);
-    return { savedSha256: layerHash(r.saved), publishedSha256: r.published ? layerHash(r.published) : NEVER_PUBLISHED };
-  };
-}
-
-const PUBLICATION_UNVERIFIED_CODE = 'managed-publication-unverified';
-
-/**
  * Pay the publication the committed declared forms of ONE table owe, at most once, through the shared managed
  * publication (managed-feature-contract.js publishManagedScope) — the only way this helper publishes. Call it once
  * per table after its forms settled, a no-op included (a retry that changes nothing still owes what an earlier run
  * saved and did not publish).
  *   { store, barrier, sdk, table, keys }  keys: the form keys this run settled on the table; every committed form
- *   group whose debt names the table is covered with them (a table publish ships all of them at once).
+ *   group whose debt names the table is covered with them (a table publish ships all of them at once). sdk.dataverse
+ *   is the client every covered group's layers are read with, each by its own family's shared reader.
  * The request is one plain PublishXml naming only the table. Answers { sent, withheld, confirmed }. A withheld scope
  * answers { sent: false, withheld: true }. Any other outcome is a hold: the scope is blocked for the run and the error
  * is rethrown with `hold: true` (and `refusal: true` when the send boundary refused the request unsent).
@@ -1848,7 +1936,9 @@ async function publishDeclaredFormTable({ store, barrier, sdk, table, keys = [] 
   }
   try {
     return await publishManagedScope({
-      store, barrier, scope, groups, path: `declared forms of ${t}`, readLayers: formLayersReader(sdk),
+      // Every committed group on the table, of any family, is read by its own family's shared reader
+      // (managed-layer-readers.js LAYER_READERS, the default); this helper supplies none and replaces none.
+      store, barrier, scope, groups, client: sdk && sdk.dataverse, path: `declared forms of ${t}`,
       publish: async () => {
         const r = await publishTablesXml(sdk.dataverse, [t]);
         if (!r.ok) throw codeError('form-publish-failed', r.reason || `the table ${t} was not published`);
@@ -1939,7 +2029,10 @@ function verifyDeclaredForm({ form, spec, intentTabs, hosts, events, liveForm, g
   const isShown = (t) => shown.has(t) || (/^subgrid\|[^|]*\|[^|]*\|$/.test(t) && [...shown].some((s) => s.startsWith(t)));
   for (const t of hostTargetsOf(hosts)) if (!isShown(t)) issue('form-host', `the form does not show ${t.replace(/\|+$/, '').replace(/\|/g, ' ')}`);
   const have = handlerKeysOf(liveForm);
-  for (const ev of requestedHandlers(events || form.events)) if (!have.has(handlerKey(ev))) issue('form-event', `the ${ev.event} handler ${ev.function} (${ev.library})${ev.event === 'onchange' && ev.attribute ? ` for ${ev.attribute}` : ''} is missing`);
+  const requested = events || form.events;
+  for (const ev of requestedHandlers(requested)) if (!have.has(handlerKey(ev))) issue('form-event', `${handlerLabel(ev)} is missing`);
+  // Present is not enough: the declared options must be the ones the form holds.
+  for (const ev of handlerOptionConflicts(liveForm, requested)) issue('form-event', `${handlerLabel(ev)} is on the form with other options (enabled, parameters or passExecutionContext) than the spec declares`);
   if (group) for (const problem of managedChildProblems(group, liveForm.tabs)) issue('form-managed-child', problem);
   return issues;
 }
@@ -1984,6 +2077,11 @@ function hydrateDeclaredForm(group, { formId, liveForm } = {}) {
   if (intentSha256(projectFormComposite(liveForm)) !== group.proof.semanticSha256) {
     return { stale: 'the form\'s layout, handlers, sub-grids, quick views or timeline changed after the build that proved it' };
   }
+  // The declaration restores only handlers the form holds as declared: a declared handler that is missing, or held
+  // with other options, was never stored, so the declaration is not certified.
+  const have = handlerKeysOf(liveForm);
+  const unstored = requestedHandlers(declared.events).find((ev) => !have.has(handlerKey(ev))) || handlerOptionConflicts(liveForm, declared.events)[0];
+  if (unstored) return { stale: `${handlerLabel(unstored)} is not on the form as the managed group declares it` };
   return { form: clone(declared) };
 }
 

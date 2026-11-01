@@ -19,6 +19,7 @@ const { openManagedContext } = require('../lib/managed-bindings.js');
 const { createPublicationBarrier } = require('../lib/publication-barrier.js');
 const { createIntentCatalog } = require('../lib/creates-catalog.js');
 const flr = require('../lib/form-layout-reconcile.js');
+const { systemFormLayerSha256 } = require('../lib/systemform-published.js');
 
 const harnesses = [];
 test.after(() => { for (const h of harnesses) h.cleanup(); });
@@ -93,9 +94,13 @@ function openRun(dir) {
   const { store, debt } = openManagedContext({ workspaceDir: dir, environment: ORIGIN, appUniqueName: 'new_formprobe', solutionUniqueName: 'FormProbe', barrier });
   return { store, barrier, debt };
 }
+// The build's halt factory as managedStop answers it (a coded, never-retry error it does not throw), and a membership
+// that records what it was asked to include: both are required ports of reconcileDeclaredForm.
+const haltFactory = (phase, label, code, { cause } = {}) => Object.assign(new Error(`${label} did not settle (${code})`), { code, phase, cause, retry: 'never' });
 function ports(extra = {}) {
   const dir = makeTempDir('form-layout-');
-  return { dir, ...openRun(dir), ...extra };
+  const members = [];
+  return { dir, ...openRun(dir), halt: haltFactory, members, ensureMembership: async ({ root }) => { if (root) members.push(root.id); }, ...extra };
 }
 const catalogOf = (form) => createIntentCatalog([flr.formCatalogIntent(form, { solution: 'FormProbe' })]);
 const derivedFormId = (form) => catalogOf(form).identityFor(flr.FAMILY, flr.formLayoutKey(form)).id;
@@ -432,7 +437,7 @@ test('a new form that asks for the timeline stores it in the shape that renders'
   assert.equal(timelines.length, 1, 'exactly one timeline is stored');
 });
 
-test('a create whose answer is lost binds nothing and holds its table; the next run proves it from the stored proof and never sends it again', async () => {
+test('a create whose answer is lost binds nothing and holds its table; the next run proves it from the stored proof, binds it only under the form adoption approval, and never sends it again', async () => {
   const spec = formSpec([{ name: 'sec_main', columns: 1, fields: ['new_name'] }]);
   const form = spec.forms[0];
   const ctx = ports();
@@ -443,11 +448,25 @@ test('a create whose answer is lost binds nothing and holds its table; the next 
   // The next build opens the store: the attempt is a hold on the table, released only by its recovery.
   const next = openRun(ctx.dir);
   assert.deepEqual(next.debt.map((d) => [d.kind, d.key]), [['hold', flr.formLayoutKey(form)]]);
+  // Its answer never came back, so the store never saw the root acknowledged: a fresh read that proves the row is not
+  // the maker's approval to manage it. Without the form adoption approval nothing is bound, nothing joins the solution,
+  // and nothing is written — not even by a later run whose spec would edit it.
+  const unapproved = await reconcile(lost.h, spec, ctx);
+  assert.deepEqual(codes(unapproved.result), ['managed-adoption-required']);
+  assert.deepEqual(unapproved.writes, []);
+  assert.deepEqual(ctx.members, [], 'membership is not asked for an unapproved root');
+  assert.equal(nothingSettled(ctx, form).token, pending.token, 'the attempt is kept under its token');
+  const edited = formSpec([{ name: 'sec_main', columns: 1, fields: ['new_name', 'new_code'] }]);
+  const later = await reconcile(lost.h, edited, ctx);
+  assert.deepEqual(codes(later.result), ['managed-adoption-required']);
+  assert.deepEqual(later.writes, [], 'no edit is sent to an unapproved root');
+  assert.equal(nothingSettled(ctx, form).token, pending.token);
+  ctx.authorizedAdoption = new Set([flr.formLayoutKey(form)]);
   const recovered = await reconcile(lost.h, spec, ctx);
   assert.deepEqual(codes(recovered.result), [], JSON.stringify(recovered.result));
   assert.equal(recovered.result.action, 'recovered');
   assert.deepEqual(recovered.writes, [], 'proved, never sent again');
-  // Its answer never came back, so the store never saw the root acknowledged: the proved row is bound, but as adopted.
+  assert.deepEqual(ctx.members, [lost.h.formId], 'membership follows the approval');
   assert.equal(recordOf(ctx, form).origin, 'adopted');
   assert.deepEqual(openRun(ctx.dir).debt, [], 'settled: nothing is held any more');
 });
@@ -1000,6 +1019,9 @@ test('the publication a settled form owes is paid once per table by one plain Pu
   const first = await wireRun(w, ctx, spec, A);
   assert.deepEqual([codes(first.result), first.result.action], [[], 'update'], JSON.stringify(first.result));
   assert.equal(groupOf(ctx, spec.forms[0]).committed.publication.state, 'owed');
+  // The debt names the saved layer exactly as the shared form reader (LAYER_READERS.form) hashes it, so the publish
+  // below, which reads every covered group with its family's shared reader, can show it safe and confirm it.
+  assert.equal(groupOf(ctx, spec.forms[0]).committed.publication.desiredSha256, systemFormLayerSha256(wire.saved.get(A)));
   assert.equal(wire.publishes().length, 0, 'reconcile never publishes');
   assert.doesNotMatch(wire.published.get(A).formxml, /new_code/);
   // The run ended before its publish. The next one changes nothing and still pays what the first owed.
@@ -1041,4 +1063,176 @@ test('a form left pending on the table holds the publish of a settled sibling: n
   assert.deepEqual([still.sent, still.withheld], [false, true], JSON.stringify(still));
   assert.equal(wire.publishes().length, 0);
   assert.doesNotMatch(wire.published.get(A).formxml, /new_code/, 'A\'s saved layer is not put live');
+});
+
+// ---- Safety gates every path settles through: a dirty local copy, the required ports, the adoption approval. ----
+
+// One build invocation over a GIVEN SDK (its workspace kept across calls), with the context's ports and `override`.
+async function reconcileOver(h, spec, ctx, local, { newForm = false, beforePush, override = {} } = {}) {
+  Object.assign(ctx, openRun(ctx.dir));
+  const form = spec.forms[0];
+  const writesBefore = h.writes.length;
+  let result;
+  try {
+    result = await flr.reconcileDeclaredForm({ form, spec, def: compileFormIntent(spec, form, INTENT), sdk: local.sdk, beforePush,
+      resolveExisting: async () => (newForm ? undefined : h.formId) }, { ...ctx, catalog: catalogOf(form), ...override });
+  } catch (err) {
+    result = { action: null, code: err.code || 'thrown', error: err };
+  }
+  return { result, writes: h.writes.slice(writesBefore) };
+}
+// sha256 of every file under a workspace folder: a local copy that was overwritten, deleted or re-fetched changes it.
+function filesOf(dir) {
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const crypto = require('node:crypto');
+  const out = {};
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    const full = path.join(dir, entry.name);
+    if (entry.isDirectory()) for (const [k, v] of Object.entries(filesOf(full))) out[`${entry.name}/${k}`] = v;
+    else out[entry.name] = crypto.createHash('sha256').update(fs.readFileSync(full)).digest('hex');
+  }
+  return out;
+}
+
+test('a pending attempt is never recovered over a local copy with unsent edits: two identical retries keep its bytes and its token', async () => {
+  const spec = formSpec([{ name: 'sec_main', columns: 1, fields: ['new_name'] }]);
+  const form = spec.forms[0];
+  const ctx = ports({ authorizedAdoption: true });
+  const h = createHarness({ formId: derivedFormId(form) });
+  harnesses.push(h);
+  const local = await h.freshSdk();
+  answerLost(local.sdk);
+  const first = await reconcileOver(h, spec, ctx, local, { newForm: true });
+  assert.deepEqual(codes(first.result), ['form-layout-write-unknown']);
+  const token = nothingSettled(ctx, form).token;
+  // An edit made in the workspace after the lost answer, never sent: recovery reads the form with a fetch that
+  // overwrites the local copy, so it must refuse before that read, on every run.
+  await local.sdk.updateElement('form', h.formId, '/tabs/0/label', 'UNSENT MAKER CAPTION');
+  const before = filesOf(local.dir);
+  for (let i = 0; i < 2; i += 1) {
+    const reopened = await h.freshSdk(local.dir);
+    const fetch = reopened.sdk.fetchArtifact.bind(reopened.sdk);
+    const fetches = [];
+    reopened.sdk.fetchArtifact = async (...a) => { fetches.push(a); return fetch(...a); };
+    const run = await reconcileOver(h, spec, ctx, reopened);
+    assert.deepEqual(codes(run.result), ['create-completion-required'], `retry ${i + 1}`);
+    assert.equal(run.result.error.cause.category, 'workspace-copy-unsent-edits');
+    assert.deepEqual(fetches, [], 'nothing was fetched over the copy');
+    assert.deepEqual(run.writes, []);
+    assert.deepEqual(filesOf(local.dir), before, 'the local copy is byte-identical');
+    assert.equal((await reopened.sdk.getArtifact('form', h.formId)).tabs[0].label, 'UNSENT MAKER CAPTION');
+    assert.equal(nothingSettled(ctx, form).token, token, 'the attempt keeps its token');
+  }
+  assert.deepEqual(ctx.members, [], 'nothing joined the solution');
+});
+
+test('an existing form whose local copy holds unsent edits refuses before anything is fetched over it or written', async () => {
+  const h = await deployed([section('sec_main', 1, [{ cells: [cell(1, 'new_name')] }], 50)]);
+  const local = await h.freshSdk();
+  await local.sdk.fetchArtifact('form', h.formId);
+  await local.sdk.updateElement('form', h.formId, '/tabs/0/label', 'UNSENT EXISTING CAPTION');
+  const before = filesOf(local.dir);
+  const run = await reconcileOver(h, formSpec([{ name: 'sec_main', columns: 1, fields: ['new_name'] }]), ports({ authorizedAdoption: true }), local);
+  assert.deepEqual(codes(run.result), ['create-completion-required']);
+  assert.deepEqual(run.writes, []);
+  assert.deepEqual(filesOf(local.dir), before);
+});
+
+test('the halt factory and solution membership are required: a missing one stops before anything is created, read or written', async () => {
+  const spec = formSpec([{ name: 'sec_main', columns: 1, fields: ['new_name'] }]);
+  const form = spec.forms[0];
+  for (const missing of ['halt', 'ensureMembership']) {
+    const ctx = ports();
+    const h = createHarness({ formId: derivedFormId(form) });
+    harnesses.push(h);
+    const local = await h.freshSdk();
+    const readsBefore = h.reads.length;
+    const run = await reconcileOver(h, spec, ctx, local, { newForm: true, override: { [missing]: undefined } });
+    assert.deepEqual(codes(run.result), ['managed-not-settled'], missing);
+    assert.match(run.result.error.message, new RegExp(missing));
+    assert.deepEqual(run.writes, [], `${missing}: nothing written`);
+    assert.equal(h.reads.length, readsBefore, `${missing}: nothing read`);
+    assert.deepEqual(local.mutations, [], `${missing}: nothing created in the workspace`);
+    assert.deepEqual([groupOf(ctx, form).committed, groupOf(ctx, form).pending], [null, null], `${missing}: nothing stored`);
+  }
+  // A halt factory that makes no error is itself a stop the build cannot see: refused as unsettled, not thrown as given.
+  const bare = createHarness({ formId: derivedFormId(form) });
+  harnesses.push(bare);
+  const run = await reconcileOver(bare, spec, ports(), { sdk: null },
+    { newForm: true, override: { store: null, halt: () => 'stop' } });
+  assert.deepEqual(codes(run.result), ['managed-not-settled']);
+});
+
+test('a declared section renamed or exchanged under its recorded id is not planned into: refused before any re-baseline, nothing written', async () => {
+  const spec = formSpec([{ name: 'sec_a', columns: 1, fields: ['new_name'] }, { name: 'sec_b', columns: 1, fields: ['new_code'] }]);
+  const form = spec.forms[0];
+  const ctx = ports();
+  const made = await create(spec, ctx);
+  assert.equal(made.result.action, 'create', JSON.stringify(made.result));
+  const generation = groupOf(ctx, form).committed.generation;
+  const original = made.h.store.row.formxml;
+  // Only the names are exchanged; every id stands where it was.
+  made.h.store.row.formxml = original.replace(/name="sec_a"/g, 'name="swap"').replace(/name="sec_b"/g, 'name="sec_a"').replace(/name="swap"/g, 'name="sec_b"');
+  const swapped = await reconcile(made.h, spec, ctx);
+  assert.deepEqual(codes(swapped.result), ['form-layout-container-moved'], JSON.stringify(swapped.result));
+  assert.deepEqual(swapped.writes, []);
+  assert.equal(groupOf(ctx, form).committed.generation, generation, 'no new baseline');
+  // An override approval does not make a moved container the declared one either.
+  ctx.authorizedOverwrite = true;
+  assert.deepEqual(codes((await reconcile(made.h, spec, ctx)).result), ['form-layout-container-moved']);
+  delete ctx.authorizedOverwrite;
+  // A label is not part of the declared mapping: a maker's label edit on the same section is still settled.
+  made.h.store.row.formxml = original;
+  await makerEdit(made.h, (tabs) => { allSections({ tabs }).find((s) => s.name === 'sec_a').label = 'Renamed by maker'; });
+  assert.notEqual(made.h.store.row.formxml, original, 'the fixture changed a section label');
+  const relabelled = await reconcile(made.h, spec, ctx);
+  assert.deepEqual(codes(relabelled.result), [], JSON.stringify(relabelled.result));
+});
+
+test('a tracked host section that now stands or is named otherwise refuses before the unchanged form is re-baselined', async () => {
+  const h = await deployed([section('sec_main', 1, [{ cells: [cell(1, 'new_name')] }], 50)]);
+  const spec = formSpec([{ name: 'sec_main', columns: 1, fields: ['new_name'] }], { notes: true });
+  const ctx = ports({ authorizedAdoption: true });
+  const added = await reconcile(h, spec, ctx);
+  assert.deepEqual(codes(added.result), [], JSON.stringify(added.result));
+  const form = spec.forms[0];
+  assert.ok(groupOf(ctx, form).committed.consumerState.children['section:timeline'], 'the timeline host section is tracked');
+  assert.equal((await reconcile(h, spec, ctx)).result.action, 'noop');
+  const generation = groupOf(ctx, form).committed.generation;
+  h.store.row.formxml = h.store.row.formxml.replace(/name="section_notes"/g, 'name="section_moved"');
+  const moved = await reconcile(h, spec, ctx);
+  assert.deepEqual(codes(moved.result), ['form-layout-container-moved'], JSON.stringify(moved.result));
+  assert.deepEqual(moved.writes, []);
+  assert.equal(groupOf(ctx, form).committed.generation, generation);
+});
+
+test('a declared handler whose options changed is refused before anything is written; verify and download never certify options that were not stored', async () => {
+  const event = { event: 'onload', library: 'new_/ticket.js', function: 'Ticket.onLoad', enabled: true, passExecutionContext: true, parameters: 'oldValue' };
+  const spec = formSpec([{ name: 'sec_main', columns: 1, fields: ['new_name'] }]);
+  spec.forms[0].events = [event];
+  const ctx = ports();
+  const made = await create(spec, ctx, { events: [event] });
+  assert.equal(made.result.action, 'create', JSON.stringify(made.result));
+  const changedEvent = { ...event, enabled: false, passExecutionContext: false, parameters: 'newValue' };
+  const next = structuredClone(spec);
+  next.forms[0].events = [changedEvent];
+  const changed = await reconcile(made.h, next, ctx, { events: [changedEvent] });
+  assert.deepEqual(codes(changed.result), ['form-handler-options-unsupported'], JSON.stringify(changed.result));
+  assert.deepEqual(changed.writes, []);
+  assert.match(made.h.store.row.formxml, /parameters="oldValue"/);
+  const live = await storedForm(made.h);
+  const group = groupOf(ctx, spec.forms[0]).committed;
+  const intentTabs = compileFormIntent(next, next.forms[0], INTENT).tabs;
+  assert.deepEqual(flr.verifyDeclaredForm({ form: next.forms[0], spec: next, intentTabs, events: [changedEvent], liveForm: live, group }).map((i) => i.code), ['form-event']);
+  assert.deepEqual(flr.verifyDeclaredForm({ form: spec.forms[0], spec, intentTabs, events: [event], liveForm: live, group }).map((i) => i.code), [], 'the stored options verify');
+  // What was stored is what download restores; a declaration naming options the form does not hold is stale.
+  assert.deepEqual(flr.hydrateDeclaredForm(group, { formId: made.h.formId, liveForm: live }).form.events, [event]);
+  const claimed = structuredClone(group);
+  claimed.consumerState.declaration.events = [changedEvent];
+  assert.match(flr.hydrateDeclaredForm(claimed, { formId: made.h.formId, liveForm: live }).stale, /Ticket\.onLoad/);
+  // The same handler declared twice with different options is refused on a new form too.
+  const twice = await create(formSpec([{ name: 'sec_main', columns: 1, fields: ['new_name'] }], { name: 'Twice' }), ports(), { events: [event, changedEvent] });
+  assert.deepEqual(codes(twice.result), ['form-handler-options-unsupported']);
+  assert.deepEqual(twice.writes, []);
 });
