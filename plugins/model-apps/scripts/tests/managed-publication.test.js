@@ -680,6 +680,62 @@ test('a plan\'s completionBytes reaches the attempt\'s completion reservation; w
   assert.equal(s.store.readGroup('form', 'account/quick').pending.completionReserve.bytes, COMPLETION_BASE_BYTES);
 });
 
+// A prepared attempt reused under its own token (samePreparedIntent) is sized by today's plan, not the one that prepared
+// it: markSending enlarges and admits the reservation before anything is sent, or refuses with the store as it was.
+async function reusedWithEstimate(fillerBytes, wanted) {
+  const s = await setup();
+  committedForm(s, { id: QUICK, key: 'account/filler', publishedXml: '<form/>', savedXml: '<form/>' });
+  const p = ports(s.wire, s.sdk, { key: 'account/main', id: MAIN, formxml: '<form v="1"/>' });
+  const intent = await p.plan({});
+  s.store.prepareAttempt({ family: p.family, key: p.key, root: intent.root, declarationSha256: intent.declarationSha256, publication: intent.publication, knownScopes: p.knownScopes });
+  const initial = s.store.readGroup(p.family, p.key).pending;
+  const filler = s.store.readGroup('form', 'account/filler').committed;
+  const fill = s.store.prepareAttempt({ family: 'form', key: filler.key, root: filler.root, baseGeneration: filler.generation, declarationSha256: H('e'), knownScopes: [ACCOUNT] });
+  s.store.markSending(fill, expected(QUICK));
+  s.store.noteSaved(fill, { proof: null, acknowledgedRoot: false });
+  s.store.commitGroup({ token: fill, baseGeneration: filler.generation, records: filler.records, proof: filler.proof, consumerState: { ...filler.consumerState, declaration: { ...filler.consumerState.declaration, description: 'z'.repeat(fillerBytes) } }, publication: filler.publication });
+  p.plan = async () => ({ ...intent, completionBytes: wanted });
+  return { s, p, initial };
+}
+
+test('capacity: a changed completion estimate on an otherwise identical prepared plan is honored before dispatch', async () => {
+  const { s, p, initial } = await reusedWithEstimate(27 * (1 << 20), 6 * (1 << 20));
+  assert.equal(initial.completionReserve.bytes, COMPLETION_BASE_BYTES);
+  const before = fs.readFileSync(s.store.file);
+  const mark = s.wire.writes().length;
+  assert.equal(await codeOf(runManagedFeature({ ...p, store: s.store, barrier: s.barrier, client: s.sdk.dataverse })), CODES.storeFull);
+  assert.equal(s.wire.writes().length - mark, 0, 'nothing is sent when the larger estimate cannot be admitted');
+  assert.ok(before.equals(fs.readFileSync(s.store.file)), 'the refused enlargement keeps the attempt, its token, its bytes and its hold');
+  const kept = s.store.readGroup(p.family, p.key).pending;
+  assert.equal(kept.token, initial.token);
+  assert.equal(kept.phase, 'prepared');
+});
+
+test('capacity: a reused prepared attempt with room takes the larger estimate before its send', async () => {
+  const { s, p, initial } = await reusedWithEstimate(1 << 20, 3 * (1 << 20));
+  const crash = Object.assign(new Error('the process ended'), { code: 'crash' });
+  let held = null;
+  p.apply = async () => { held = s.store.readGroup(p.family, p.key).pending.completionReserve.bytes; throw crash; };
+  assert.equal(await codeOf(runManagedFeature({ ...p, store: s.store, barrier: s.barrier, client: s.sdk.dataverse })), 'crash');
+  assert.equal(held, 3 * (1 << 20), 'the reservation was enlarged before the send');
+  assert.equal(s.store.readGroup(p.family, p.key).pending.token, initial.token);
+});
+
+test('capacity: a malformed completion estimate is refused on the reuse path, not skipped', async () => {
+  for (const wanted of [-1, 1.5, 'big', 64 * (1 << 20)]) {
+    const { s, p, initial } = await reusedWithEstimate(0, wanted);
+    const before = fs.readFileSync(s.store.file);
+    const mark = s.wire.writes().length;
+    let refusal = null;
+    try { await runManagedFeature({ ...p, store: s.store, barrier: s.barrier, client: s.sdk.dataverse }); } catch (e) { refusal = e; }
+    assert.equal(refusal && refusal.code, CODES.notSettled, String(wanted));
+    assert.match(refusal.cause.message, /plan `completionBytes`/, 'refused where the plan answered it, before anything is prepared or claimed');
+    assert.equal(s.wire.writes().length - mark, 0);
+    assert.ok(before.equals(fs.readFileSync(s.store.file)));
+    assert.equal(s.store.readGroup(p.family, p.key).pending.token, initial.token);
+  }
+});
+
 test('two forms on one table, one fails its proof: the other\'s success does not release the table', async () => {
   const s = await setup();
   const bad = ports(s.wire, s.sdk, { key: 'account/quick', id: QUICK, formxml: '<form q="1"/>', fail: { prove: Object.assign(new Error('read back differs'), { code: 'create-completion-required' }) } });

@@ -31,7 +31,7 @@
 // Nothing calls this module until a declared form, dashboard, rule or process flow is wired to it.
 
 const { runWithWorkflowEffect } = require('./workflow-effect-context.js');
-const { CODES, classifyPersisted, attemptProvenUnsent, resumableCreate, checkDeclaration, rootCreateAcknowledged, publicationRiskApproval, publicationRemedy, blockedPublication } = require('./managed-bindings.js');
+const { CODES, classifyPersisted, attemptProvenUnsent, resumableCreate, checkDeclaration, checkCompletionBytes, rootCreateAcknowledged, publicationRiskApproval, publicationRemedy, blockedPublication } = require('./managed-bindings.js');
 const { canonicalJson } = require('./reconcile-common.js');
 const { LAYER_READERS } = require('./managed-layer-readers.js');
 
@@ -113,8 +113,10 @@ const REQUIRED_STEPS = new Set(['preflight', 'resolve', 'plan', 'prove', 'member
  *                                        root, declaration hash, declaration or publication differ from the plan is
  *                                        replaced in one store write (prepareAttempt `replaces`); a continued or
  *                                        resumed attempt that recorded a declaration is sent only for that one;
- *                                        completionBytes?: the bytes this attempt's completion may add to the store
- *                                        (prepareAttempt `completionBytes`), when more than the store's default);
+ *                                        completionBytes?: the bytes this attempt's completion may add to the store,
+ *                                        when more than the store's default (prepareAttempt / markSending
+ *                                        `completionBytes`; checked on every plan, a reused prepared attempt and a
+ *                                        continued or resumed one included, and admitted before anything is sent);
  *   apply({ token, plan, resolution, resuming?, continuing? })  send the approved change once; answers what it sent.
  *                               With a sendObserver, every mutation it makes must go through the observed transport;
  *   prove({ token, expected, applied, recovering, declaration })  a fresh read against `expected`; answers { savedProof,
@@ -247,12 +249,17 @@ async function runManagedFeature(args) {
     await settleEarlierPublication(committed);
     step = 'prepare';
     addIds([planned.root && planned.root.id]);
+    // The plan's completion estimate is checked on every planned path, reuse included, before anything changes: a
+    // malformed one is refused, never skipped.
+    checkCompletionBytes(planned.completionBytes, `${label}: plan \`completionBytes\``);
     // The declaration is checked before anything changes — before a prepared attempt is replaced or its hold ends — and
     // only its plain-data snapshot is compared and stored from here on, so a refusal keeps the old bytes, token and hold.
     const intent = planned.declaration !== undefined ? { ...planned, declaration: checkDeclaration(family, key, planned.declaration) } : planned;
     let baseGeneration = pending ? pending.baseGeneration : committed ? committed.generation : null;
     if (pending && samePreparedIntent(intent, pending)) {
-      // A prepared attempt that was never sent is intent only: it is resumed under its own token.
+      // A prepared attempt that was never sent is intent only: it is resumed under its own token. Its reservation is
+      // made adequate for this plan's estimate at markSending (send), the write before anything is sent: enlarged and
+      // admitted there, or refused with the attempt, its token and its hold as they were.
       token = pending.token;
     } else {
       // A prepared attempt records the intent it was planned with (root, declaration and its hash, publication) and
@@ -334,6 +341,7 @@ async function runManagedFeature(args) {
     step = 'plan';
     const planned = await plan({ resolution, committed, [flag]: true });
     if (!samePlan(planned, pending)) throw codedError(CODES.completion, `${label} ${differs}`);
+    checkCompletionBytes(planned.completionBytes, `${label}: plan \`completionBytes\``);
     return send(planned, resolution, pending.baseGeneration, flag);
   }
 
@@ -346,7 +354,9 @@ async function runManagedFeature(args) {
     // The claim on the attempt's sends, made against the record the store rereads under its lease: a second run on the
     // same attempt, or one whose zero went stale while it resolved and planned, is refused here, before anything leaves.
     const claim = flag === 'continuing' ? 'continue' : flag === 'resuming' ? 'resume' : 'first';
-    const marked = store.markSending(token, planned.expected, { observed: !!observer, claim });
+    // The plan's estimate goes with the claim: an attempt whose reservation is smaller (or absent, an older build's)
+    // acquires the rest here, admitted under the lease, or the send is refused before anything leaves.
+    const marked = store.markSending(token, planned.expected, { observed: !!observer, claim, ...(planned.completionBytes !== undefined ? { completionBytes: planned.completionBytes } : {}) });
     // The declaration the attempt recorded before this send (prepareAttempt), as the store now holds it: the one prove
     // is given (the store commits it as the group's originalDeclaration). An attempt an earlier build prepared recorded
     // none; prove is then given the plan's.

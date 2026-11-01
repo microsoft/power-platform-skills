@@ -12,7 +12,7 @@ const { spawnSync } = require('node:child_process');
 const { makeTempDir } = require('./helpers/temp-dirs.js');
 const {
   openManagedBindings, openManagedContext, discoverManagedStore, classifyPersisted, managedManifestView, CODES, MAX_BYTES,
-  PREPARE_RESERVE_BYTES, DECLARATION_MAX_BYTES, checkDeclaration, publicationRiskApproval, publicationRemedy,
+  PREPARE_RESERVE_BYTES, DECLARATION_MAX_BYTES, COMPLETION_BASE_BYTES, COMPLETION_MAX_BYTES, checkDeclaration, publicationRiskApproval, publicationRemedy,
 } = require('../lib/managed-bindings.js');
 const { canonicalJson } = require('../lib/reconcile-common.js');
 const { noteToken } = require('../lib/output-redaction.js');
@@ -1404,4 +1404,125 @@ test('completion capacity: every pending attempt holds its own completion bytes;
   assert.ok(spent.used >= proofBytes && spent.used < spent.bytes, `${spent.used} of ${spent.bytes} spent`);
   d.noteSaved(own, { proof: null, acknowledgedRoot: false });
   assert.equal(d.readGroup('form', FORM_KEY).pending.phase, 'saved');
+});
+
+test('completion capacity: an attempt that holds no reservation (prepared by an older build) acquires one under admission before a new send, or is refused before it with nothing changed; every attempt sent commits', () => {
+  const flow = LARGEST.bpf();
+  const bpfKey = (i) => `account/legacy${i}`;
+  const bpfId = (i) => `45454545-4545-4545-8545-${String(i).padStart(12, '0')}`;
+  const prepareBpf = (store, i) => store.prepareAttempt({ family: 'bpf', key: bpfKey(i), root: { kind: 'bpf', key: bpfKey(i), id: bpfId(i) }, baseGeneration: null, knownScopes: [], declarationSha256: H('e'), declaration: flow });
+  const proofOf = (i) => expected(bpfId(i), [], 'bpf-v1');
+  const held = (store) => store.snapshot().envelope.attempts.reduce((n, a) => n + (a.completionReserve ? a.completionReserve.bytes - a.completionReserve.used : 0), 0);
+  const unreserved = (store) => writeRaw(store, (x) => { for (const a of x.attempts) delete a.completionReserve; });
+  const fillTo = (store, free) => {
+    const base = store.readGroup('form', FORM_KEY).committed;
+    const token = store.prepareAttempt({ family: 'form', key: FORM_KEY, root: base.root, baseGeneration: base.generation, knownScopes: [TABLE], declarationSha256: H('e') });
+    store.markSending(token, expected(FORM));
+    store.noteSaved(token, { proof: null, acknowledgedRoot: false });
+    const description = 'x'.repeat(MAX_BYTES - free - fs.statSync(store.file).size - 2048);
+    store.commitGroup({ token, baseGeneration: base.generation, records: [rec('form', FORM_KEY, FORM)], proof: PROOF, consumerState: { ...formState(), declaration: { ...formState().declaration, description } }, publication: base.publication });
+  };
+  const notNeeded = { publication: { scope: TABLE, state: 'not-needed', desiredSha256: null, dispatchToken: null } };
+
+  // Twelve prepared with no reservation, as an older build left them; then other content fills the file. Each new send
+  // must acquire its reservation as an admission (every other reservation and the shared reserve kept free): the ones
+  // that fit are sent and all commit, the rest are refused at markSending before anything is sent.
+  const a = open(makeTempDir('mb-capacity-legacy-'));
+  settleForm(a, [], notNeeded);
+  const tokens = Array.from({ length: 12 }, (_, i) => prepareBpf(a, i));
+  const each = a.snapshot().envelope.attempts[0].completionReserve.bytes;
+  unreserved(a);
+  a.refresh();
+  assert.equal(held(a), 0);
+  fillTo(a, PREPARE_RESERVE_BYTES + 5 * each);
+  const sent = [];
+  const refused = [];
+  tokens.forEach((t, i) => {
+    const before = fileText(a);
+    const code = codeOf(() => a.markSending(t, proofOf(i), { claim: 'first' }));
+    const pending = a.readGroup('bpf', bpfKey(i)).pending;
+    if (code === null) {
+      assert.equal(pending.completionReserve.bytes, each, 'the send acquired the reservation its declaration needs');
+      a.noteSaved(t, { proof: { savedSha256: H('1') }, acknowledgedRoot: true });
+      sent.push([i, t]);
+    } else {
+      assert.equal(code, CODES.storeFull);
+      assert.equal(fileText(a), before, 'refused before it was recorded');
+      assert.equal(pending.phase, 'prepared');
+      assert.equal(pending.completionReserve, undefined);
+      refused.push([i, t]);
+    }
+  });
+  assert.ok(sent.length >= 1 && sent.length < 12, `${sent.length} sent, ${refused.length} refused before their send`);
+  for (const [i, t] of sent) {
+    assert.equal(codeOf(() => a.commitGroup({ token: t, baseGeneration: null, records: [rec('bpf', bpfKey(i), bpfId(i))], proof: PROOF, consumerState: { declaration: { flow, applied: true, backing: null }, stages: {} }, publication: null })), null, `attempt ${i} was sent and commits`);
+  }
+  for (const [, t] of refused) a.retireUnsentAttempt({ token: t, baseGeneration: null });
+  assert.deepEqual(a.snapshot().envelope.attempts, []);
+
+  // A continued send (a window proved to have dispatched nothing) is a new send too: with no reservation it acquires one
+  // the same way, or is refused with the attempt, its window and the store as they were.
+  const continued = (free) => {
+    const store = open(makeTempDir('mb-capacity-legacy-continue-'));
+    settleForm(store, [], notNeeded);
+    const t = prepareBpf(store, 0);
+    assert.equal(store.markSending(t, proofOf(0), { observed: true, claim: 'first' }).epoch, 1);
+    unreserved(store);
+    store.refresh();
+    if (free !== null) fillTo(store, free);
+    const before = fileText(store);
+    return { store, t, before, code: codeOf(() => store.markSending(t, proofOf(0), { observed: true, claim: 'continue' })) };
+  };
+  const full = continued(PREPARE_RESERVE_BYTES + (each >> 1));
+  assert.equal(full.code, CODES.storeFull, 'the acquisition is an admission: the shared reserve stays free beside it');
+  assert.equal(fileText(full.store), full.before);
+  const kept = full.store.readGroup('bpf', bpfKey(0)).pending;
+  assert.equal(kept.phase, 'sending');
+  assert.deepEqual(kept.sendWindow, { possible: 0, notStarted: 0, epoch: 1 });
+  assert.equal(kept.completionReserve, undefined);
+  const roomy = continued(null);
+  assert.equal(roomy.code, null);
+  const resumed = roomy.store.readGroup('bpf', bpfKey(0)).pending;
+  assert.equal(resumed.completionReserve.bytes, each);
+  assert.equal(resumed.sendWindow.epoch, 2);
+});
+
+test('completion capacity: a reservation smaller than the send\'s estimate is enlarged under admission at markSending, or the send is refused with nothing changed', () => {
+  const store = open(makeTempDir('mb-capacity-enlarge-'));
+  settleForm(store, [], { publication: { scope: TABLE, state: 'not-needed', desiredSha256: null, dispatchToken: null } });
+  const base = store.readGroup('form', FORM_KEY).committed;
+  const t = store.prepareAttempt({ family: 'form', key: FORM_KEY, root: base.root, baseGeneration: base.generation, knownScopes: [TABLE], declarationSha256: H('e') });
+  assert.equal(store.readGroup('form', FORM_KEY).pending.completionReserve.bytes, COMPLETION_BASE_BYTES);
+  const before = fileText(store);
+  assert.equal(codeOf(() => store.markSending(t, expected(FORM), { completionBytes: MAX_BYTES })), CODES.notSettled, 'a malformed estimate is refused, not skipped');
+  assert.equal(codeOf(() => store.markSending(t, expected(FORM), { completionBytes: 'big' })), CODES.notSettled);
+  assert.equal(fileText(store), before);
+  store.markSending(t, expected(FORM), { completionBytes: 3 * (1 << 20) });
+  assert.deepEqual(store.readGroup('form', FORM_KEY).pending.completionReserve, { bytes: 3 * (1 << 20), used: 0 });
+});
+
+test('capacity: a declaration whose calculated minimum exceeds the maximum reservation is refused, not clamped', () => {
+  let value = Array(200000).fill('x');
+  for (let i = 0; i < 28; i += 1) value = [value];
+  const declaration = { nodes: value };
+  const text = JSON.stringify(declaration, null, 2);
+  assert.ok(Buffer.byteLength(JSON.stringify(declaration)) < DECLARATION_MAX_BYTES, 'within the compact declaration cap');
+  assert.ok(COMPLETION_BASE_BYTES + Buffer.byteLength(text) > COMPLETION_MAX_BYTES, 'its indented copy alone is more than the largest reservation');
+  const store = open(makeTempDir('mb-capacity-minimum-'));
+  const key = 'account/deep';
+  let refusal = null;
+  try { store.prepareAttempt({ family: 'form', key, root: { kind: 'form', key, id: FORM }, declarationSha256: H('a'), declaration }); } catch (e) { refusal = e; }
+  assert.equal(refusal && refusal.code, CODES.storeFull);
+  assert.match(refusal.message, /needs at least \d+ bytes/);
+  assert.equal(fs.existsSync(store.file), false, 'nothing was written');
+
+  // An attempt an older build prepared with such a declaration (its reservation clamped, or none) is refused at its send.
+  const older = open(makeTempDir('mb-capacity-minimum-older-'));
+  const small = older.prepareAttempt({ family: 'form', key, root: { kind: 'form', key, id: FORM }, declarationSha256: H('a'), declaration: { nodes: [] } });
+  writeRaw(older, (x) => { x.attempts[0].declaration = declaration; x.attempts[0].completionReserve = { bytes: COMPLETION_MAX_BYTES, used: 0 }; });
+  older.refresh();
+  const before = fileText(older);
+  assert.equal(codeOf(() => older.markSending(small, expected(FORM))), CODES.storeFull);
+  assert.equal(fileText(older), before);
+  assert.equal(older.readGroup('form', key).pending.phase, 'prepared');
 });

@@ -45,8 +45,8 @@ const SCHEMA_VERSION = 1;
 // process flows at the documented ceiling (30 stages of 30 steps; about 1.5 MiB for all three copies). Every open reads
 // and checks the whole file, so the bound stays well short of what would make a run slow.
 const MAX_BYTES = 32 * (1 << 20);
-// What a new obligation (prepareAttempt, markPublishDispatch; markSending for an attempt that holds no reservation) must
-// leave free beyond every pending attempt's reservation (below). All are written before anything is sent, so a refusal here
+// What a new obligation (prepareAttempt, markPublishDispatch; markSending when it acquires or enlarges a reservation)
+// must leave free beyond every pending attempt's reservation (below). All are written before anything is sent, so a refusal here
 // (`managed-binding-store-full`, nothing written) comes before the send it would have recorded. The shared part is
 // room for the writes that follow a publish (notePublishOutcome, confirmPublished) and for the rest of the store's
 // own bookkeeping, which no attempt owns.
@@ -59,25 +59,48 @@ const PREPARE_RESERVE_BYTES = 4 * (1 << 20);
 // admission (prepareAttempt, markPublishDispatch) must leave the shared reserve free beyond EVERY pending attempt's
 // unused reservation, the attempt's own writes from markSending on spend its own reservation first,
 // and no growing write may take the file into the bytes other attempts still hold. Commit and retirement release only
-// the attempt they remove. Its size: the feature's `completionBytes`, never less than COMPLETION_BASE_BYTES plus one
+// the attempt they remove. An attempt with no reservation (prepared by an older build) or one smaller than its plan now
+// asks for acquires or enlarges it at markSending, the write before any new send, as an admission like the ones above;
+// one recovered read-only (never sent again) needs none. Its size: the feature's `completionBytes`, never less than COMPLETION_BASE_BYTES plus one
 // copy of its declaration as a feature's consumer state keeps it (a process flow's `declaration.flow`, a rule's
 // `declaration.rule`).
 const COMPLETION_BASE_BYTES = 256 * (1 << 10);
-// The largest reservation one attempt may ask for: room for a consumer state as large as a declaration at the cap
-// (DECLARATION_MAX_BYTES, about 1.4 MiB indented) several times over, and never more than a quarter of the file.
+// The largest reservation one attempt may hold, a quarter of the file. The compact cap on a declaration
+// (DECLARATION_MAX_BYTES) does NOT bound its indented copy: the file is written with two spaces per level, so a deeply
+// nested declaration within the cap can take many times its compact size (800 KB of nested arrays indents to about
+// 16 MB). Each family's largest supported declaration needs well under this (the declaration budget tests); an attempt
+// whose own minimum exceeds it is refused before it is prepared or sent (completionReserveFor), never reserved short.
 const COMPLETION_MAX_BYTES = 8 * (1 << 20);
 // How deep a feature's consumer state keeps its copy of the declaration in the file (env → groups → [i] →
 // consumerState → declaration → flow → …), so the copy's indentation is counted; deeper than any family nests it.
 const CONSUMER_COPY_DEPTH = 8;
 // The reservation for an attempt: its `completionBytes`, never less than the base plus one indented copy of its
-// declaration (`kept`, the plain-data snapshot checkDeclaration answered), and never more than COMPLETION_MAX_BYTES.
-function completionReserveFor(kept, completionBytes) {
+// declaration (`kept`, the plain-data snapshot checkDeclaration answered). A minimum above COMPLETION_MAX_BYTES is
+// refused (`managed-binding-store-full`), never clamped: a reservation the store knows is too small would let the
+// attempt send and then fail its own commit. `name` labels the refusal.
+function completionReserveFor(kept, completionBytes, name) {
   let copy = 0;
   if (kept !== undefined) {
     const text = JSON.stringify(kept, null, 2);
     copy = Buffer.byteLength(text, 'utf8') + text.split('\n').length * 2 * CONSUMER_COPY_DEPTH;
   }
-  return Math.min(COMPLETION_MAX_BYTES, Math.max(COMPLETION_BASE_BYTES + copy, completionBytes || 0));
+  const minimum = COMPLETION_BASE_BYTES + copy;
+  if (minimum > COMPLETION_MAX_BYTES) {
+    throw storeError(CODES.storeFull, `${name} needs at least ${minimum} bytes kept free for its completion (${COMPLETION_BASE_BYTES} plus ${copy} for the copy of its declaration a consumer state keeps, as the store writes it, indented), more than the ${COMPLETION_MAX_BYTES} one attempt may reserve. Nothing was written, and nothing was sent for it: declare it with less nesting or fewer entries`);
+  }
+  return Math.max(minimum, completionBytes === undefined ? 0 : completionBytes);
+}
+
+// A feature's estimate of what its completion adds to the store (`completionBytes`): absent, or a whole number up to
+// COMPLETION_MAX_BYTES. A malformed one is refused, never skipped: an estimate the store ignored would leave the
+// attempt the default reservation the feature said was too small. Shared by prepareAttempt, markSending and the wrapper
+// (runManagedFeature checks every plan with it before anything is prepared, replaced or sent).
+function checkCompletionBytes(completionBytes, where = 'completionBytes') {
+  if (completionBytes === undefined) return undefined;
+  if (!Number.isSafeInteger(completionBytes) || completionBytes < 0 || completionBytes > COMPLETION_MAX_BYTES) {
+    throw storeError(CODES.notSettled, `${where} is the bytes the attempt's completion may add, a whole number up to ${COMPLETION_MAX_BYTES}`);
+  }
+  return completionBytes;
 }
 
 const CODES = Object.freeze({
@@ -99,9 +122,11 @@ const CODES = Object.freeze({
   // A declaration offered with an attempt that the store will not keep (see validateDeclaration): refused before
   // anything is written, so before anything is sent.
   declarationRefused: 'managed-declaration-refused',
-  // A write that would take the file past MAX_BYTES, a new obligation that would not leave PREPARE_RESERVE_BYTES free
-  // beyond every pending attempt's reservation, or a growing write that would take bytes another attempt still holds:
-  // nothing is written. A refused new obligation was never sent. After a send, an attempt whose writes stay within its
+  // A write that would take the file past MAX_BYTES, a new obligation (prepareAttempt, markPublishDispatch, or a
+  // markSending that acquires or enlarges a reservation) that would not leave PREPARE_RESERVE_BYTES free beyond every
+  // pending attempt's reservation, a declaration whose own minimum reservation exceeds COMPLETION_MAX_BYTES, or a
+  // growing write that would take bytes another attempt still holds: nothing is written. A refused new obligation was
+  // never sent. After a send, an attempt whose writes stay within its
   // own reservation is never refused this way; one whose completion grows past it (a consumer state larger than its
   // `completionBytes`) may be, once the unreserved bytes are gone. Remedy: keep fewer or smaller declared groups in one
   // app and solution, or settle the pending ones first.
@@ -538,7 +563,8 @@ function validateGroup(g, header, where) {
 function validateAttempt(a, where) {
   closedKeys(a, ['family', 'key', 'token', 'baseGeneration', 'phase', 'root', 'knownScopes', 'declarationSha256', 'declaration', 'expected', 'acknowledgedRoot', 'acknowledgedChildCreates', 'savedObservation', 'publication', 'sendWindow', 'completionReserve'], where);
   // The completion reservation (prepareAttempt; see COMPLETION_BASE_BYTES), e.g. { bytes: 434176, used: 1290 }. Absent
-  // on an attempt an older build prepared: it holds nothing, and its writes use only unreserved bytes.
+  // on an attempt an older build prepared: it holds nothing until a new send under it acquires one (markSending, as an
+  // admission); an attempt already sent with none (read-only recovery, a commit) uses only unreserved bytes.
   if (a.completionReserve !== undefined) {
     closedKeys(a.completionReserve, ['bytes', 'used'], `${where}.completionReserve`);
     const { bytes, used } = a.completionReserve;
@@ -1008,12 +1034,12 @@ function openManagedBindings({ workspaceDir, environment, appUniqueName, solutio
   };
 
   // One change: take the lease, reread the disk, apply `change` to a copy, write, reread and compare.
-  // `admit`: the write is a new obligation, written before its send (prepareAttempt, markPublishDispatch):
+  // `admit: true`: the write is a new obligation, written before its send (prepareAttempt, markPublishDispatch):
   // it must leave PREPARE_RESERVE_BYTES free beyond every pending attempt's unused reservation, its own included.
-  // 'unreserved' (markSending): an admission only for an attempt that holds no reservation (one an older build
-  // prepared); an attempt that holds one spends it, as its later writes do: it was admitted at its prepareAttempt.
-  // `change(next, disk, spend)`: a write made for an attempt after its send calls `spend(token)` to charge what it adds
-  // to that attempt's own reservation (see COMPLETION_BASE_BYTES).
+  // `change(next, disk, spend, admitHere)`: a write made for an attempt after its send calls `spend(token)` to charge
+  // what it adds to that attempt's own reservation (see COMPLETION_BASE_BYTES); a change that acquires or enlarges a
+  // reservation (markSending) calls `admitHere()`, and is then admitted exactly as `admit: true`: the new reservation
+  // and the shared reserve must both fit beside every other one.
   function mutate(change, { admit = false } = {}) {
     const root = workspaceRoot(workspaceDir, true);
     const full = path.join(root, ctx.file);
@@ -1024,7 +1050,8 @@ function openManagedBindings({ workspaceDir, environment, appUniqueName, solutio
       const disk = readStoreFile({ ...ctx, root, full }) || { envelope: emptyEnvelope(ctx.expect), invalidGroups: new Map() };
       const next = clone(disk.envelope);
       let spender = null;
-      const answer = change(next, disk, (token) => { spender = token; });
+      let admitNow = false;
+      const answer = change(next, disk, (token) => { spender = token; }, () => { admitNow = true; });
       if (answer && typeof answer.then === 'function') throw storeError(CODES.notSettled, 'a managed binding change must be synchronous');
       next.revision = disk.envelope.revision + 1;
       const prevBytes = typeof disk.bytes === 'number' ? disk.bytes : 0;
@@ -1032,7 +1059,7 @@ function openManagedBindings({ workspaceDir, environment, appUniqueName, solutio
       // Charge the growth to the spending attempt's reservation. Recording the charge changes the text by a few digits,
       // so it is settled again until the size is stable (two or three passes; the base reservation covers the digits).
       const own = spender ? findAttempt(next, spender) : null;
-      const admitting = admit === true || (admit === 'unreserved' && !(own && own.completionReserve));
+      const admitting = admit === true || admitNow;
       if (own && own.completionReserve && !admitting) {
         const start = own.completionReserve.used;
         for (let pass = 0; pass < 4; pass += 1) {
@@ -1048,7 +1075,7 @@ function openManagedBindings({ workspaceDir, environment, appUniqueName, solutio
       // not grow the file can take no one's bytes. A growing one must leave every pending attempt's unused reservation
       // free, so each attempt already sent can still complete; a new obligation must also leave the shared reserve.
       const bytes = Buffer.byteLength(text, 'utf8');
-      const fail = (detail) => storeError(CODES.storeFull, `the managed binding store would be ${bytes} bytes${detail}; it may hold ${MAX_BYTES}. Nothing was written${admit ? ', and nothing was sent for it' : ''}: keep fewer or smaller declared groups in this app and solution, or settle the pending ones first`);
+      const fail = (detail) => storeError(CODES.storeFull, `the managed binding store would be ${bytes} bytes${detail}; it may hold ${MAX_BYTES}. Nothing was written${admitting ? ', and nothing was sent for it' : ''}: keep fewer or smaller declared groups in this app and solution, or settle the pending ones first`);
       if (bytes > MAX_BYTES) throw fail('');
       if (admitting || bytes > prevBytes) {
         const held = next.attempts.reduce((sum, a) => sum + (a.completionReserve ? a.completionReserve.bytes - a.completionReserve.used : 0), 0);
@@ -1155,16 +1182,15 @@ function openManagedBindings({ workspaceDir, environment, appUniqueName, solutio
      * its hold all stay. The old hold ends only after the write (when the store has the barrier).
      * `completionBytes`: optional, the bytes the feature's completion may add after the send (its consumer state, saved
      * proof and workflow effects). The attempt reserves the larger of it and COMPLETION_BASE_BYTES plus one copy of its
-     * declaration (at most COMPLETION_MAX_BYTES) until its commit or retirement; the write is refused
+     * declaration until its commit or retirement; a minimum above COMPLETION_MAX_BYTES is refused, never clamped. The
+     * write is refused
      * (`managed-binding-store-full`, nothing written, nothing sent) unless it leaves PREPARE_RESERVE_BYTES free beyond
      * every pending attempt's unused reservation, this one's included.
      */
     prepareAttempt({ family, key, baseGeneration = null, revision, root, expected = null, knownScopes = [], declarationSha256, declaration, publication = null, replaces, completionBytes }) {
       const kept = declaration !== undefined ? checkDeclaration(family, key, declaration) : undefined;
-      if (completionBytes !== undefined && (!Number.isSafeInteger(completionBytes) || completionBytes < 0 || completionBytes > COMPLETION_MAX_BYTES)) {
-        throw storeError(CODES.notSettled, `prepareAttempt \`completionBytes\` is the bytes the attempt's completion may add, a whole number up to ${COMPLETION_MAX_BYTES}`);
-      }
-      const completionReserve = { bytes: completionReserveFor(kept, completionBytes), used: 0 };
+      checkCompletionBytes(completionBytes, 'prepareAttempt `completionBytes`');
+      const completionReserve = { bytes: completionReserveFor(kept, completionBytes, `the managed ${family} "${key}"`), used: 0 };
       if (replaces !== undefined && (!isObj(replaces) || typeof replaces.token !== 'string' || !replaces.token || replaces.baseGeneration === undefined)) {
         throw storeError(CODES.notSettled, 'prepareAttempt `replaces` needs the old attempt token and the generation it was based on');
       }
@@ -1210,16 +1236,21 @@ function openManagedBindings({ workspaceDir, environment, appUniqueName, solutio
      * refused unsent (noteAttemptDispatch). A claim takes over a zero window rather than waiting for an earlier claimant:
      * a run that died between its claim and its first send would otherwise strand the attempt, and the epoch already
      * stops that claimant at its next send. Answers { epoch }: the window's epoch, or null with no window.
+     * `completionBytes`: the plan's estimate, as for prepareAttempt (checkCompletionBytes). This write is the last before
+     * any new send under the attempt, on every path (a first send, a reused prepared attempt, 'continue', 'resume'), so
+     * it is where the reservation is made adequate: an attempt that holds none (prepared by an older build), or less
+     * than its declaration's minimum or the plan's estimate, acquires or enlarges it here, admitted under the lease as
+     * a new obligation (every other reservation and the shared reserve kept free). A refusal (`managed-binding-store-full`)
+     * writes nothing and comes before the send: the attempt, its phase, window, token and hold stay as they were.
      */
-    markSending(token, expected, { observed = false, claim } = {}) {
+    markSending(token, expected, { observed = false, claim, completionBytes } = {}) {
       if (claim !== undefined && claim !== 'first' && claim !== 'continue' && claim !== 'resume') throw storeError(CODES.notSettled, `markSending cannot claim an attempt to "${claim}"`);
+      checkCompletionBytes(completionBytes, 'markSending `completionBytes`');
       let epoch = null;
-      // Written before the send, with the expected proof, so a refusal here comes before the send. The attempt was
-      // admitted at its prepareAttempt and spends its own reservation, so content written since cannot strand it unsent.
-      // One with no reservation (an older build's) is admitted here instead: every reservation and the shared reserve free.
-      mutate((env, disk, spend) => {
+      // Written before the send, with the expected proof, so a refusal here comes before the send. An attempt whose
+      // reservation is already adequate spends it, so content written since its prepare cannot strand it unsent.
+      mutate((env, disk, spend, admitHere) => {
         const a = requireAttempt(env, disk, token);
-        spend(token);
         if (a.expected !== null && canonicalJson(a.expected) !== canonicalJson(expected)) {
           throw storeError(CODES.completion, 'a sent attempt keeps the expected proof it was sent with');
         }
@@ -1235,6 +1266,13 @@ function openManagedBindings({ workspaceDir, environment, appUniqueName, solutio
         if (claim === 'first' && a.phase !== 'prepared') throw storeError(CODES.pending, `${name} attempt was marked sending by another run`);
         if (claim === 'continue' && !(observed === true && attemptProvenUnsent(a, env.workflowEffects))) throw storeError(CODES.pending, `${name} attempt no longer shows that nothing it sent was carried out; it is not sent again`);
         if (claim === 'resume' && !resumableCreate(group, a, env.workflowEffects)) throw storeError(CODES.pending, `${name} attempt is no longer a create no answer acknowledged; it is not sent again`);
+        const need = completionReserveFor(a.declaration, completionBytes, name);
+        if (!a.completionReserve || a.completionReserve.bytes < need) {
+          a.completionReserve = { bytes: need, used: a.completionReserve ? a.completionReserve.used : 0 };
+          admitHere();
+        } else {
+          spend(token);
+        }
         a.expected = expected;
         if (a.phase === 'prepared') {
           a.phase = 'sending';
@@ -1243,7 +1281,7 @@ function openManagedBindings({ workspaceDir, environment, appUniqueName, solutio
           a.sendWindow.epoch += 1;
         }
         epoch = a.sendWindow ? a.sendWindow.epoch : null;
-      }, { admit: 'unreserved' });
+      });
       return { epoch };
     },
     /**
@@ -1851,6 +1889,7 @@ module.exports = {
   openManagedContext,
   managedManifestView,
   checkDeclaration,
+  checkCompletionBytes,
   REQUEST_SHAPES,
   attemptProvenUnsent,
   resumableCreate,
