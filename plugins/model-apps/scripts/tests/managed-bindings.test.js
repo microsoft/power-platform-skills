@@ -324,11 +324,19 @@ test('a state change never sent, whose state a read already finds on the row, is
   const store = open(dir);
   const { token, create, state } = settleRule(store, 'account/hide', RULE, { confirm: false });
   assert.equal(codeOf(() => store.retireMootEffect(create.token, { observedState: 'Active' })), CODES.notSettled, 'a body is never settled without its proof');
+  assert.equal(codeOf(() => store.retireMootEffect(create.token, { observedState: null })), CODES.notSettled, 'a body has no desired state that a read could match');
   assert.equal(codeOf(() => store.retireMootEffect(state.token, { observedState: 'Draft' })), CODES.notSettled, 'the row is not in the asked state');
+  const unchanged = fs.readFileSync(store.file, 'utf8');
+  for (const observed of [undefined, null, '']) assert.equal(codeOf(() => store.retireMootEffect(state.token, { observedState: observed })), CODES.notSettled, `no observed state (${observed})`);
+  assert.equal(codeOf(() => store.retireMootEffect(state.token)), CODES.notSettled, 'no read at all');
+  assert.equal(codeOf(() => store.retireMootEffect('no-such-effect', { observedState: 'Active' })), CODES.notSettled, 'an unknown effect');
+  assert.equal(fs.readFileSync(store.file, 'utf8'), unchanged, 'a refusal writes nothing');
   store.markEffectDispatching(create.token, 'dispatch-create');
   store.confirmEffect(create.token, { observedSha256: H('7') });
   store.retireMootEffect(state.token, { observedState: 'Active' });
   assert.deepEqual(store.snapshot().envelope.workflowEffects.map((e) => e.effect), ['create']);
+  // The attempt is untouched: still pending under the same token, so it settles only through its commit.
+  assert.deepEqual(store.snapshot().envelope.attempts.map((a) => a.token), [token]);
   store.noteSaved(token, { proof: null, acknowledgedRoot: true });
   store.commitGroup({ token, baseGeneration: null, records: [rec('business-rule', 'account/hide', RULE)], proof: PROOF, consumerState: { declaration: {}, slots: ['clause_a'] }, publication: null });
   assert.deepEqual(open(dir).snapshot().envelope.workflowEffects, []);
@@ -337,6 +345,15 @@ test('a state change never sent, whose state a read already finds on the row, is
   const sent = settleRule(other, 'account/hide', RULE, { confirm: false });
   other.markEffectDispatching(sent.state.token, 'dispatch-state');
   assert.equal(codeOf(() => other.retireMootEffect(sent.state.token, { observedState: 'Active' })), CODES.notSettled, 'a change that may have left is confirmed, not dropped');
+  other.noteEffectOutcome(sent.state.token, 'unconfirmed');
+  assert.equal(codeOf(() => other.retireMootEffect(sent.state.token, { observedState: 'Active' })), CODES.notSettled, 'a lost answer is confirmed, not dropped');
+  // A change a definite no-start returned to unsent never left, so it may be dropped like one never sent.
+  const third = open(makeTempDir('mb-moot-nostart-'));
+  const back = settleRule(third, 'account/hide', RULE, { confirm: false });
+  third.markEffectDispatching(back.state.token, 'dispatch-state');
+  third.noteEffectOutcome(back.state.token, 'definite-no-start');
+  third.retireMootEffect(back.state.token, { observedState: 'Active' });
+  assert.deepEqual(third.snapshot().envelope.workflowEffects.map((e) => e.effect), ['create']);
 });
 
 test('an interruption before the replace keeps the attempt and its whole effect set; after it, no retired owner is left', () => {

@@ -1563,15 +1563,22 @@ function openManagedBindings({ workspaceDir, environment, appUniqueName, solutio
      * to prove, so the record is dropped rather than confirmed (a confirmed effect claims a dispatch). Only a state
      * effect: a body is never settled this way. The caller has proved, from the same read, that the row carries exactly
      * the attempt's own body; the store cannot see the row.
+     * Every condition is checked on the record reread under the lease, so a run that claimed and dispatched the change
+     * since the caller's read (it is then dispatching, with a token) is never undone. The owning attempt must still be
+     * pending, and it stays so: its token, its other effects and the barrier hold under that token are untouched, and
+     * the attempt still settles only through commitGroup or the retire rules.
      */
     retireMootEffect(token, { observedState } = {}) {
-      mutate((env) => {
+      mutate((env, disk) => {
         const i = env.workflowEffects.findIndex((x) => x.token === token);
         const e = i < 0 ? null : env.workflowEffects[i];
         if (!e || e.effect !== 'state' || e.state !== 'definitely-unsent' || e.dispatchToken !== null) {
           throw storeError(CODES.notSettled, 'only a state change that was never sent can be settled without sending it');
         }
-        if (observedState !== e.desiredState) throw storeError(CODES.notSettled, 'the observed workflow row is not in the state the change asks for');
+        requireAttempt(env, disk, e.attemptToken);
+        if (typeof observedState !== 'string' || typeof e.desiredState !== 'string' || observedState !== e.desiredState) {
+          throw storeError(CODES.notSettled, 'the observed workflow row is not in the state the change asks for');
+        }
         env.workflowEffects.splice(i, 1);
       });
     },
