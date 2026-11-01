@@ -278,3 +278,115 @@ test('clearing a receipt leaves a newer note of the same name that another build
   assert.equal(left.size, 1, 'the newer revision survives');
   assert.ok(path.isAbsolute(workspaceDir));
 });
+
+// The platform answers an EMPTY web resource with the content property present and null (measured: a PATCH of content ""
+// and a PublishXml, then GET /webresourceset(<id>)?$select=content answers { "content": null, ... }), in the SDK's read-back
+// and in the build's own reads alike. This server stores "" for it; answer every row read of that row as the platform does.
+function emptyAsNull(srv) {
+  const get = srv.httpClient.get;
+  srv.httpClient.get = async (url) => {
+    const res = await get(url);
+    if (/\/webresourceset\([^)]+\)/.test(String(url)) && res && res.body && res.body.content === '') return { ...res, body: { ...res.body, content: null } };
+    return res;
+  };
+}
+// One plan and apply whose apply is handed the build's reads too (as sdk-build does), so a write the SDK could not confirm
+// can be confirmed by the published read.
+async function runConfirming(srv, wr, ctx = {}, extra = {}, sdkOver = null) {
+  const sdk = sdkOver || await srv.newSdk();
+  srv.clearLog();
+  const reads = webResourceReads(clientOf(srv));
+  const plan = await planWebResourceUpdate({ webResource: wr, options: webResourceOpts(wr, '.'), reads, readDependents: noDependents, ...extra }, ctx);
+  return { plan, result: await applyWebResourceUpdate(plan, { sdk, reads }, ctx) };
+}
+
+test('the published read takes a content of null as zero bytes; an answer without the content property, or of another type, stays unreadable', async () => {
+  const answer = (body) => webResourceReads({ get: async () => ({ status: 200, body }) }).published(WID);
+  assert.deepEqual(await answer({ webresourceid: WID, content: null }), { state: 'present', content: '' });
+  assert.deepEqual(await answer({ webresourceid: WID, content: '' }), { state: 'present', content: '' });
+  assert.deepEqual(await answer({ webresourceid: WID }), { state: 'unreadable' }, 'no property: nothing says what the bytes are');
+  assert.deepEqual(await answer({ webresourceid: WID, content: 0 }), { state: 'unreadable' });
+  assert.deepEqual(await answer({ webresourceid: OTHER, content: null }), { state: 'unreadable' }, 'another row\'s answer is never this row\'s');
+});
+
+test('real SDK: emptying a bound web resource that reads back as content null is confirmed by the build\'s own read, with no receipt; a rerun writes nothing', async () => {
+  const srv = server('var v = 1;');
+  emptyAsNull(srv);
+  const managed = fakeManaged();
+  const noted = [];
+  const unconfirmed = { note: (n, id) => { noted.push([n, id]); return true; }, clear: () => {} };
+  const first = await runConfirming(srv, declared(''), { managed: { ...managed, lookup: boundTo(WID).lookup }, unconfirmed, authorizedDestructive: true });
+  assert.equal(first.plan.action, 'update');
+  assert.deepEqual(patches(srv).map((w) => w.body.content), ['']);
+  assert.equal(publishes(srv).length, 1);
+  assert.deepEqual(codes(first.result.unknown), [], 'the SDK\'s WEB_RESOURCE_UNVERIFIED for a null read-back is settled by the published read');
+  assert.deepEqual(first.result.saved.map((s) => [s.id, s.published]), [[WID, true]]);
+  assert.deepEqual(noted, [], 'no receipt of an unconfirmed write');
+  managed.persist(first.result.managedBindings);
+  const again = await runConfirming(srv, declared(''), { managed, unconfirmed });
+  assert.equal(again.plan.action, 'noChange');
+  assert.equal(srv.writes.length, 0, 'an emptied resource is not written or published again');
+});
+
+test('real SDK: the receipt an earlier emptying write left (its read-back was null) is written again once, confirmed and cleared; the run after writes nothing', async () => {
+  const srv = server('');
+  emptyAsNull(srv);
+  const cleared = [];
+  const unconfirmed = { note: () => assert.fail('nothing is unconfirmed now'), clear: (n) => cleared.push(n) };
+  const managed = fakeManaged();
+  const ctx = { managed, unconfirmed, authorizedAdoption: true };
+  const first = await runConfirming(srv, declared(''), ctx, { recordedId: WID });
+  assert.equal(first.plan.action, 'rewrite', 'a receipt still wins over equal bytes: its row is written again by id');
+  assert.deepEqual(codes(first.result.unknown), []);
+  assert.deepEqual(first.result.saved.map((s) => [s.id, s.clearsReceipt]), [[WID, true]]);
+  assert.equal(patches(srv).length, 1);
+  assert.equal(settleWebResourceReceipt(ctx, first.plan, first.result), true);
+  assert.deepEqual(cleared, [NAME]);
+  managed.persist(first.result.managedBindings);
+  const again = await runConfirming(srv, declared(''), { managed, unconfirmed });
+  assert.equal(again.plan.action, 'noChange');
+  assert.equal(srv.writes.length, 0);
+});
+
+test('real SDK: a new empty declared web resource that reads back as content null is a confirmed create, bound to its id', async () => {
+  const srv = server(null);
+  emptyAsNull(srv);
+  const unconfirmed = { note: () => assert.fail('the create is confirmed'), clear: () => {} };
+  const { plan, result } = await runConfirming(srv, declared(''), { managed: fakeManaged(), creates: stableCreates(), unconfirmed });
+  assert.equal(plan.action, 'create');
+  assert.equal(posts(srv).length, 1);
+  const created = [...srv.store.get('webresourceset').values()][0];
+  assert.deepEqual(codes(result.unknown), []);
+  assert.deepEqual(result.saved.map((s) => [s.id, s.created]), [[created.webresourceid, true]]);
+  assert.deepEqual(result.managedBindings.map((b) => [b.id, b.origin]), [[created.webresourceid, 'created']]);
+});
+
+test('an unconfirmed write is confirmed only by the row it wrote holding exactly the bytes it sent', async () => {
+  const unverified = (id) => Object.assign(new Error('was written, but publishing it failed'), { code: 'WEB_RESOURCE_UNVERIFIED', id });
+  // [what, the id the SDK names, whether the write reaches the row, whether the build's published read fails, confirmed]
+  const cases = [
+    ['the row written, its bytes published', WID, true, false, true],
+    ['another row named by the SDK', OTHER, true, false, false],
+    ['other published bytes', WID, false, false, false],
+    ['a published read that fails', WID, true, true, false],
+  ];
+  for (const [what, errId, writes, readFails, confirmed] of cases) {
+    const srv = server('var v = 1;');
+    let written = false;
+    const get = srv.httpClient.get;
+    srv.httpClient.get = async (url) => (written && readFails && /\?\$select=webresourceid,content$/.test(String(url)) ? { status: 503, headers: {}, body: { error: { code: '0x80040216', message: 'busy' } } } : get(url));
+    const sdk = {
+      updateWebResource: async (id, c) => {
+        if (writes) await srv.httpClient.patch(`${API}/webresourceset(${id})`, { content: b64(c.content) });
+        written = true;
+        throw unverified(errId);
+      },
+    };
+    const noted = [];
+    const unconfirmed = { note: (n, id) => { noted.push(id); return true; }, clear: () => {} };
+    const { result } = await runConfirming(srv, declared('var v = 2;'), { managed: { lookup: boundTo(WID).lookup }, unconfirmed }, {}, sdk);
+    assert.deepEqual(codes(result.unknown), confirmed ? [] : ['web-resource-publication-unconfirmed'], what);
+    assert.deepEqual(result.saved.map((s) => s.id), confirmed ? [WID] : [], what);
+    assert.equal(noted.length, confirmed ? 0 : 1, `${what}: a receipt only for an unconfirmed write`);
+  }
+});

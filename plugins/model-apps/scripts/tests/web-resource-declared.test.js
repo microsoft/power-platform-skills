@@ -304,7 +304,7 @@ test('the CLI hands the engine a web resource\'s approvals in their own sets, ne
 
 // A declared view `script` of contoso_case and a declared web resource named contoso_case/script, built by the real vendored
 // SDK against the stateful fake environment (helpers/fake-app-build-org.js), so what is asserted is what reached the wire.
-function realBundle() {
+function realBundle({ emptyAsNull = false } = {}) {
   const { createMakerSdk, createNodeWorkspaceStorage } = require('../vendor/cds-maker-sdk.cjs');
   const { createFakeBuildOrg } = require('./helpers/fake-app-build-org.js');
   const org = createFakeBuildOrg({ entities: { contoso_case: { attributes: { contoso_name: 'String', contoso_code: 'String' } } }, solution: { uniqueName: 'Contoso' } });
@@ -313,7 +313,9 @@ function realBundle() {
   org.intercept((c) => c.method === 'GET' && /^\/webresourceset\([^)]+\)/.test(c.path), (c) => {
     const row = org.resources.get(/^\/webresourceset\(([^)]+)\)/.exec(c.path)[1]);
     if (!row) return { status: 404, body: { error: { code: '0x80040217' } } };
-    return { status: 200, body: { ...row, content: c.path.includes('RetrieveUnpublished') ? row.content : row.publishedContent } };
+    const content = c.path.includes('RetrieveUnpublished') ? row.content : row.publishedContent;
+    // `emptyAsNull`: answer an empty row as the platform does — the property present, its value null.
+    return { status: 200, body: { ...row, content: emptyAsNull && content === '' ? null : content } };
   });
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wr-declared-real-'));
   dirs.push(dir);
@@ -335,9 +337,10 @@ function realBundle() {
       await runSdkBuild(s, { sdk, apply: true, publish: false, workspaceDir: dir, appDir: dir, env: org.origin, phases: ['web-resources', 'views'], warn: () => {}, ...opts });
     } catch (e) { err = e; }
     const patches = org.calls.slice(mark).filter((c) => c.method === 'PATCH');
-    return { err, wrPatches: patches.filter((c) => c.path.startsWith('/webresourceset(')), viewPatches: patches.filter((c) => c.path.startsWith('/savedqueries(')) };
+    const wrPublishes = org.calls.slice(mark).filter((c) => c.method === 'POST' && c.path === '/PublishXml' && /<webresource>/.test(String(c.body && c.body.ParameterXml)));
+    return { err, wrPatches: patches.filter((c) => c.path.startsWith('/webresourceset(')), viewPatches: patches.filter((c) => c.path.startsWith('/savedqueries(')), wrPublishes };
   };
-  return { spec, build };
+  return { spec, build, dir, org };
 }
 
 test('real SDK: a view\'s approval never writes the web resource of the same name, and a web resource\'s never writes the view', async () => {
@@ -378,4 +381,34 @@ test('real SDK: emptying a declared web resource halts naming --allow-destructiv
   const approved = await build(cleared, { ...adopt, allowDestructive: true });
   assert.equal(approved.err, undefined, approved.err && approved.err.message);
   assert.deepEqual(approved.wrPatches.map((c) => c.body.content), ['']);
+});
+// The platform stores an emptied web resource as a null content column, and a read of the row answers the property with null
+// (measured live after `PATCH { "content": "" }` and its PublishXml): { "webresourceid": "<id>", "content": null, ... }.
+test('real SDK: emptying a declared web resource that the platform reads back as content null finishes, leaves no receipt, and a rebuild writes nothing', async () => {
+  const { spec, build, dir, org } = realBundle({ emptyAsNull: true });
+  assert.equal((await build(spec)).err, undefined);
+  const cleared = structuredClone(spec);
+  cleared.webResources[0].content = '';
+  const approve = { ...approvals(cleared, 'adopt:webresource:contoso_case/script'), allowDestructive: true };
+  const first = await build(cleared, approve);
+  assert.equal(first.err, undefined, first.err && first.err.message);
+  assert.deepEqual(first.wrPatches.map((c) => c.body.content), ['']);
+  assert.equal(first.wrPublishes.length, 1);
+  assert.equal(readUnconfirmedWebResources(dir, org.origin).size, 0, 'the write is confirmed: no receipt is kept');
+  const again = await build(cleared, approve);
+  assert.equal(again.err, undefined, again.err && again.err.message);
+  assert.deepEqual([again.wrPatches.length, again.wrPublishes.length], [0, 0], 'an emptied resource is not written or published again');
+});
+
+test('real SDK: a new declared web resource with empty content that reads back as content null is created once, and a rebuild writes nothing', async () => {
+  const { spec, build, dir, org } = realBundle({ emptyAsNull: true });
+  const empty = structuredClone(spec);
+  empty.webResources[0].content = '';
+  const first = await build(empty);
+  assert.equal(first.err, undefined, first.err && first.err.message);
+  assert.equal(readUnconfirmedWebResources(dir, org.origin).size, 0);
+  const again = await build(empty);
+  assert.equal(again.err, undefined, again.err && again.err.message);
+  assert.deepEqual([again.wrPatches.length, again.wrPublishes.length], [0, 0]);
+  assert.equal(org.calls.filter((c) => c.method === 'POST' && c.path.startsWith('/webresourceset')).length, 1, 'one create, never a second');
 });
