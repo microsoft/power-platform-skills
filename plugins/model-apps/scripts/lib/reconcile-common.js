@@ -207,10 +207,6 @@ function boundIdentity(binding, { pinnedId, resolvedId, code, key }) {
  *   'adopted' means the maker resolved an earlier unknown create by naming the rows it made: execute
  *   was NOT called and the caller must re-read before it records anything.
  */
-// Stop codes a create port raises before it calls execute (create-identity-invalid|unsupported|conflict|unverified,
-// create-completion-required, create-ownership-required, creation-record-unwritten, and the managed binding store's
-// managed-binding-* / managed-settlement-pending when the attempt could not be recorded first).
-const PRE_SEND_STOP = /^(?:create-identity-[a-z-]+|create-completion-required|create-ownership-required|creation-record-unwritten|managed-binding-[a-z-]+|managed-settlement-pending)$/;
 
 async function createThroughPort(ctx, request, execute) {
   if (!ctx || !ctx.creates || typeof ctx.creates.run !== 'function') return { status: 'refused', code: 'creation-port-unavailable' };
@@ -233,11 +229,11 @@ async function createThroughPort(ctx, request, execute) {
     if (raw === 'CREATE_PORT_INVALID') return { status: 'refused', code: 'creation-request-invalid' };
     // An earlier create in this run lost its answer: the port sends nothing more until it is resolved.
     if (raw === 'create-outcome-unknown' && err.outcome === 'not-sent') return { status: 'refused', code: 'creation-blocked-by-unknown' };
-    // The stable port (creates-port.js composite port, creates-stable-build.js) stops BEFORE execute: an identity it cannot derive
-    // or prove, a workspace copy or an earlier attempt the build must complete first, or a create record it could not write. The
-    // execute above never throws out of the port (its own throw is caught there), so such a stop sent nothing: it is a refusal,
-    // and its lower-case code is kept for the maker.
-    if (PRE_SEND_STOP.test(raw)) return { status: 'refused', code: raw };
+    // The stable port (creates-port.js composite port, creates-stable-build.js) certifies a stop it made BEFORE execute with
+    // `preSend: true`: an identity it cannot derive or prove, or an attempt the build must record or complete first. Only that
+    // certificate makes a throw a refusal (nothing was sent). The error's code alone never does: the same code can come from a
+    // step after the send (a receipt that could not be written), and that create may be on the service.
+    if (err && err.preSend === true) return { status: 'refused', code: raw || 'creation-refused' };
     return { status: 'unknown', code: codeOf(err) || 'WRITE_OUTCOME_UNKNOWN' };
   }
   const base = { id: out && out.id, childIds: (out && out.childIds) || {} };

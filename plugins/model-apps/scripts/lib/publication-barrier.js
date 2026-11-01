@@ -38,13 +38,17 @@
 //                 app that holds, or whose write adds, a form of a blocked table is not written in this run.
 //
 // Declared forms, dashboards, business rules and process flows (lib/managed-bindings.js, lib/managed-feature-contract.js) add
-// four things, all unused by a build that declares none of them, so such a build sends the same requests as before:
+// the following, all unused by a build that has no managed store, so such a build sends the same requests as before:
 //   dashboard scopes  a dashboard publishes by its own id (`<dashboard>` in the ParameterXml), never as a table: `blockScope`,
 //                     `allowScope`, `allowTarget` and `checkAppWrite` (`addedDashboards`, `heldDashboards`) withhold it apart.
 //   holds             `hold(token, …)` withholds a managed attempt's scopes until `release(token)`, after that attempt is proved
 //                     and committed. Only that token is released: a sibling's success never frees a scope another attempt holds.
 //   quarantine        a block for the rest of the run, set by a required failure; nothing releases it.
 //   registerKnown     maps a managed artifact's ids to the scopes they publish. It is not a block.
+//   routes            `route(table)` sends every PLAIN publish of a table a committed managed group publishes in to the
+//                     managed coverage protocol: the plain path is refused and remembered as wanted (routedWanted), and
+//                     lib/managed-scope-publisher.js publishes the table once its covered groups are shown safe. Not a
+//                     withhold: nothing is reported, and the app write is not stopped by it.
 //   send permits      `withSendPermit({ token, scope, onDispatch, onWithheld, onRefused }, fn)` lets the one publish request of
 //                     a managed publication through `token`'s own hold, and through nothing else: inside `fn`, a publish
 //                     request is screened as if that hold were absent (every block and every other hold still applies).
@@ -237,11 +241,18 @@ function createPublicationBarrier() {
   const knownIds = new Map();
   // `type:id` -> table, for owed publish targets ([type, id, names?]) that carry no table of their own.
   const targetTables = new Map();
+  // table -> { table, blockedBy: [label], skipped: [path], route: true, wanted }: a ROUTED table (route), one a committed
+  // managed group of the store publishes in. Not a withhold: a plain publish of it is refused here and remembered as
+  // `wanted`, and the managed publisher (lib/managed-scope-publisher.js) sends it through the coverage protocol instead.
+  const routes = new Map();
   const skip = (entry, path) => {
     if (path && !entry.skipped.includes(path)) entry.skipped.push(path);
+    if (entry.route === true) entry.wanted = true;
   };
   // The hold a permitted publish is screened past, set only while gatedRequest screens that one request; null otherwise.
+  // `exceptRoute` the same way: the permit's own table, which its one request publishes although the table is routed.
   let exceptToken = null;
+  let exceptRoute = null;
   const liveHolds = () => [...holds].filter(([t]) => t !== exceptToken).map(([, h]) => h);
   const isHeld = (kind, name) => {
     for (const h of liveHolds()) if ((kind === 'table' ? h.tables : h.dashboards).has(name)) return true;
@@ -255,9 +266,15 @@ function createPublicationBarrier() {
     return entry;
   };
   // The entry that withholds a table or dashboard now — a run-long block, else a live hold — or undefined.
-  const tableEntry = (table) => {
+  const withholdEntry = (table) => {
     const t = tableKey(table);
     return blocked.get(t) || (t && isHeld('table', t) ? heldEntry('table', t) : undefined);
+  };
+  const routedNow = () => [...routes.keys()].filter((t) => t !== exceptRoute);
+  // The entry that stops a PLAIN publish of a table now: a withhold, else a route — or undefined.
+  const tableEntry = (table) => {
+    const t = tableKey(table);
+    return withholdEntry(t) || (t && t !== exceptRoute ? routes.get(t) : undefined);
   };
   const dashboardEntry = (id) => {
     const d = dashboardKey(id);
@@ -273,8 +290,11 @@ function createPublicationBarrier() {
     for (const h of liveHolds()) for (const d of h.dashboards) if (!list.includes(d)) list.push(d);
     return list;
   };
-  // Whether anything is withheld. While nothing is, every check below answers exactly what it was given.
+  // Whether anything is withheld. While nothing is, the app check answers ok.
   const anyActive = () => blocked.size > 0 || dashboardsBlocked.size > 0 || liveHolds().some((h) => h.tables.size || h.dashboards.size);
+  // Whether a plain publish can be stopped at all: a withhold or a route. While neither is, every publish check below
+  // answers exactly what it was given — a build with no managed store and no failure sends the same requests as before.
+  const anyGated = () => anyActive() || routedNow().length > 0;
   const scopesOf = (scopes) => {
     const out = { tables: new Set(), dashboards: new Set() };
     for (const s of Array.isArray(scopes) ? scopes : [scopes]) {
@@ -320,9 +340,9 @@ function createPublicationBarrier() {
       }
       return tables;
     },
-    /** Whether `table` is blocked or held. Records nothing. */
+    /** Whether `table` is blocked or held. Records nothing. A routed table is not withheld (route). */
     blocks(table) {
-      return !!tableEntry(table);
+      return !!withholdEntry(table);
     },
     /** The blocked and held tables, in the order they were blocked. */
     blockedTables() {
@@ -338,7 +358,7 @@ function createPublicationBarrier() {
     /** The tables of `tables` that may be published by `path`, in their order; the list itself when nothing is blocked. */
     allowTables(tables, path) {
       const list = Array.isArray(tables) ? tables : [...(tables || [])];
-      if (!anyActive()) return list;
+      if (!anyGated()) return list;
       return list.filter((t) => barrier.allow(t, path));
     },
     /** Remember that the owed publish `target` ([type, id, names?]) publishes `table`. */
@@ -351,7 +371,7 @@ function createPublicationBarrier() {
      * id is blocked or held, or when its id was registered (registerKnown) for a scope that is.
      */
     allowTarget(target, path) {
-      if (!anyActive() || !Array.isArray(target)) return true;
+      if (!anyGated() || !Array.isArray(target)) return true;
       const id = String(target[1]).toLowerCase();
       if (target[0] === 'dashboard') {
         const entry = dashboardEntry(id);
@@ -371,7 +391,11 @@ function createPublicationBarrier() {
       }
       return true;
     },
-    /** May the publish of `scope` ({ type: 'table', table } or { type: 'dashboard', id }) run? Records a refusal as allow does. */
+    /**
+     * May the MANAGED publish of `scope` ({ type: 'table', table } or { type: 'dashboard', id }) run? Records a refusal as
+     * allow does. Its caller is the managed coverage protocol (publishManagedScope), so a route — which hands a plain
+     * publish to that protocol — does not stop it; every block and hold does.
+     */
     allowScope(scope, path) {
       if (scope && scope.type === 'dashboard') {
         const entry = dashboardEntry(scope.id);
@@ -379,7 +403,41 @@ function createPublicationBarrier() {
         skip(entry, path);
         return false;
       }
-      return barrier.allow(scope && scope.table, path);
+      const entry = withholdEntry(scope && scope.table);
+      if (!entry) return true;
+      skip(entry, path);
+      return false;
+    },
+    /**
+     * Route `table`: a committed managed group of the store publishes in it, so only the managed coverage protocol may
+     * put its saved layer live (lib/managed-scope-publisher.js). From now on a plain publish of the table — allow,
+     * allowTables, allowTarget, a publish request at send — is refused and remembered as wanted (routedWanted), and the
+     * managed publisher sends it. A route is not a withhold: it is not reported (withheld), is no block (blocks,
+     * blockedTables) and does not stop an app write (checkAppWrite).
+     */
+    route(table, label) {
+      const t = tableKey(table);
+      if (!t) return false;
+      let entry = routes.get(t);
+      if (!entry) {
+        entry = { table: t, blockedBy: [], skipped: [], route: true, wanted: false };
+        routes.set(t, entry);
+      }
+      if (label && !entry.blockedBy.includes(label)) entry.blockedBy.push(label);
+      return true;
+    },
+    /** The routed tables, in the order they were routed. */
+    routedTables() {
+      return [...routes.keys()];
+    },
+    /** The routed tables a plain publish asked for since they were last paid (routePaid), in route order. */
+    routedWanted() {
+      return [...routes.values()].filter((e) => e.wanted).map((e) => e.table);
+    },
+    /** The managed publisher settled `table`: what plain publishes wanted of it is paid. */
+    routePaid(table) {
+      const entry = routes.get(tableKey(table));
+      if (entry) entry.wanted = false;
     },
     /** Block one scope for the rest of the run, because `label` may have left it saved and unproved. */
     blockScope(scope, label) {
@@ -434,7 +492,7 @@ function createPublicationBarrier() {
     withheld() {
       const out = [];
       for (const t of activeTables()) {
-        const e = tableEntry(t);
+        const e = withholdEntry(t);
         out.push({ table: e.table, blockedBy: e.blockedBy.slice(), skipped: e.skipped.slice() });
       }
       for (const d of activeDashboards()) {
@@ -456,7 +514,7 @@ function createPublicationBarrier() {
       return function gatedRequest(req) {
         const permit = permits.getStore();
         if (permit && permit.barrier === barrier && isPublish(req)) return permitted(permit, req, request);
-        if (!anyActive()) return request(req);
+        if (!anyGated()) return request(req);
         const screened = screenPublish(req);
         return screened.answer ? Promise.resolve(screened.answer) : request(screened.req);
       };
@@ -493,7 +551,7 @@ function createPublicationBarrier() {
       const heldList = held instanceof Set || Array.isArray(held) ? [...held] : null;
       const tables = [];
       for (const name of [...(added || []), ...(heldList || [])]) {
-        const entry = tableEntry(name);
+        const entry = withholdEntry(name);
         if (entry && !tables.includes(entry.table)) tables.push(entry.table);
       }
       const heldDashList = heldDashboards instanceof Set || Array.isArray(heldDashboards) ? [...heldDashboards] : null;
@@ -514,7 +572,7 @@ function createPublicationBarrier() {
         skip(entry, APP_WRITE);
         for (const label of entry.blockedBy) if (!blockedBy.includes(label)) blockedBy.push(label);
       };
-      for (const t of hit) note(tableEntry(t));
+      for (const t of hit) note(withholdEntry(t));
       for (const d of hitDashboards) note(dashboardEntry(d));
       const verdict = { ok: false, tables: hit, unknownHoldings: unknownTables || unknownDashboards, blockedBy };
       if (hitDashboards.length) verdict.dashboards = hitDashboards;
@@ -548,10 +606,12 @@ function createPublicationBarrier() {
     }
     let screened;
     exceptToken = permit.token;
+    exceptRoute = permit.own;
     try {
-      screened = anyActive() ? screenPublish(req) : { req, hit: [] };
+      screened = anyGated() ? screenPublish(req) : { req, hit: [] };
     } finally {
       exceptToken = null;
+      exceptRoute = null;
     }
     if (screened.answer || (screened.hit || []).includes(permit.own)) {
       if (typeof permit.onWithheld === 'function') permit.onWithheld();
@@ -590,7 +650,7 @@ function createPublicationBarrier() {
     // Every withheld scope, recorded as skipped at send: the tables by name, the dashboards as `dashboard <id>`.
     const all = () => {
       const names = [];
-      for (const t of activeTables()) { skip(tableEntry(t), AT_SEND); names.push(t); }
+      for (const t of [...new Set([...activeTables(), ...routedNow()])]) { skip(tableEntry(t), AT_SEND); names.push(t); }
       for (const d of activeDashboards()) { skip(dashboardEntry(d), AT_SEND); names.push(`dashboard ${d}`); }
       return names;
     };

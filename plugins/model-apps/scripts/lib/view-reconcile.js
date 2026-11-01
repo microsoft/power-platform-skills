@@ -343,6 +343,17 @@ async function planViewReconcile({ view, sdk, resolveValue, primaryName }, ctx =
     return plan;
   }
   let id = who.id ? normalizeGuid(who.id) || who.id : '';
+  // A stable create identity (lib/creates-stable-build.js) is looked for at its own id before any name lookup. A row found there
+  // is only an OBSERVATION: it gives the id to read, never a binding, so the plan below treats it as unbound (adopting it needs
+  // the adoption approval, as any unbound row does).
+  if (!id && !binding && ctx.managed && typeof ctx.managed.observe === 'function') {
+    try {
+      id = normalizeGuid(await ctx.managed.observe('view', key)) || '';
+    } catch {
+      plan.unknown.push(refusal(key, 'view-lookup-unreadable', 'whether the view exists could not be read'));
+      return plan;
+    }
+  }
   if (!id) {
     try {
       id = normalizeGuid(await sdk.findArtifact('view', { name: intent.name, entity: intent.entity }));
@@ -544,4 +555,7 @@ module.exports = {
   applyViewReconcile,
   hasUnrepresentableFilter,
   hasUnboundRelatedColumn,
+  liveFull,
+  desiredFull,
+  PARTS,
 };

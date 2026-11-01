@@ -2220,7 +2220,7 @@ test('makeSdk\u2019s return shape and main\u2019s destructure stay in agreement'
 test('the build verifies dashboards through makeSdk\u2019s isolated reader, sharing the build\u2019s client', () => {
   const src = fs.readFileSync(path.join(__dirname, '..', 'build-model-app.js'), 'utf8');
   const body = src.slice(src.indexOf('async function makeSdk'), src.indexOf('return { sdk, provisionSdk'));
-  assert.match(body, /const httpClient = createAzHttpClient\(env, \{ throttle, sendOnce: \(method, url\) => isTranslationExport\(method, url\) \|\| configurationSendOnce\(method, url\), \.\.\.\(publicationBarrier \? \{ request: publicationBarrier\.gateRequest\(\) \} : \{\}\) \}\);/, 'one client, made with the run\u2019s throttle budget, that sends a translation export, and a configuration write, once and checks every publish at the publication barrier\u2019s send gate');
+  assert.match(body, /const httpClient = createAzHttpClient\(env, \{ throttle, sendOnce: \(method, url\) => isTranslationExport\(method, url\) \|\| configurationSendOnce\(method, url\), \.\.\.\(publicationBarrier \? \{ request: publicationBarrier\.gateRequest\(sendObserver \? sendObserver\.wrap\(\) : undefined\) \} : \{\}\) \}\);/, 'one client, made with the run\u2019s throttle budget, that sends a translation export, and a configuration write, once and checks every publish at the publication barrier\u2019s send gate, with the managed attempts\u2019 send observer inside the gate');
   assert.match(body, /isolatedReaderFor\(env, \{ httpClient \}\)/, 'the reader is made around the build\u2019s own client');
   const wiring = src.slice(src.indexOf('verify: async (s, verifyOpts) =>'));
   assert.match(wiring.split(/\r?\n/).find((l) => /verifySpec\(/.test(l)), /isolatedReader \}/, 'verify takes the reader makeSdk returned');
@@ -2826,7 +2826,7 @@ test('the verify options carry the ACTUAL phase list, not a constant', () => {
   // Asserted on the SOURCE because the value has to be the caller's own `opts.phases`: a test that
   // merely passes a phase list through would still accept `phases: PHASES`.
   const src = fs.readFileSync(path.join(__dirname, '..', 'build-model-app.js'), 'utf8');
-  assert.match(src, /deps\.verify\(spec, \{ environmentSkipped: r\.skipped, phases: opts\.phases(, baselineSpec: opts\.baselineSpec)?(, languageCode: opts\.languageCode, preResolvedLanguageCode: opts\.preResolvedLanguageCode)?(, appDir: opts\.appDir)?(, configurationBindings: opts\.configurationBindings)? \}\)/,
+  assert.match(src, /deps\.verify\(spec, \{ environmentSkipped: r\.skipped, phases: opts\.phases(, baselineSpec: opts\.baselineSpec)?(, languageCode: opts\.languageCode, preResolvedLanguageCode: opts\.preResolvedLanguageCode)?(, appDir: opts\.appDir)?(, configurationBindings: opts\.configurationBindings)?(, managedManifest)? \}\)/,
     'verify must receive the invocation\'s OWN phases — a constant re-breaks the --changed-only fast path');
 });
 
@@ -2895,8 +2895,8 @@ test('the build hands verify the language it wrote its labels in', async () => {
   assert.strictEqual(received.languageCode, undefined);
   assert.strictEqual(received.preResolvedLanguageCode, 1031);
   // The rest of the options are exactly what they were, and the app folder, from which verify reads a web resource's contentPath to
-  // compare its deployed content.
-  assert.deepStrictEqual(Object.keys(received).sort(), ['appDir', 'baselineSpec', 'configurationBindings', 'environmentSkipped', 'languageCode', 'phases', 'preResolvedLanguageCode']);
+  // compare its deployed content, and the workspace's managed manifest (read afresh after the build, as the standalone verify reads it).
+  assert.deepStrictEqual(Object.keys(received).sort(), ['appDir', 'baselineSpec', 'configurationBindings', 'environmentSkipped', 'languageCode', 'managedManifest', 'phases', 'preResolvedLanguageCode']);
   await buildModelApp(desk, { apply: true, env: 'https://x', verify: true, appDir: path.join(__dirname, '..', '..', 'samples') }, { sdk, verify });
   assert.strictEqual(received.appDir, path.join(__dirname, '..', '..', 'samples'), 'the folder the build read the spec\'s sources from');
 });

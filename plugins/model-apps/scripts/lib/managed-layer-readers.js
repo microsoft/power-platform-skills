@@ -23,8 +23,8 @@
 // systemFormLayerSha256). A dashboard's also covers the row's `type` and `objecttypecode`, read in the same GET
 // (systemFormRootLayerSha256): which kind of dashboard it is and whether it belongs to a table decide whether it may be
 // published as the one proved, so a change of either after the proof is drift, never published. A view or chart group
-// owes no publish of its own (its publication is the build's table publish, state `not-needed`), so its reader only has
-// to show its saved layer equal to its published one (savedquery-published.js).
+// owes its table's publish of the saved layer it proved, and its `desiredSha256` is the same reader's saved hash
+// (savedquery-published.js savedQueryLayerSha256), so one reader shows both what it owes and whether it is live.
 
 const readSystemFormLayers = (client, group) => require('./systemform-published.js').readSystemFormLayers(client, group);
 const readSystemFormRootLayers = (client, group) => require('./systemform-published.js').readSystemFormRootLayers(client, group);

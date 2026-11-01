@@ -6,34 +6,71 @@
 // What it hands the build, for the declared view and chart call sites only:
 //   port           the create port: a declared view or chart create (creates-catalog.js) is sent with its derived id through the
 //                  composite port; every other request goes to the build's own port unchanged.
-//   managed        the binding lookup the view and chart planners read (reconcile-common.js lookupBinding). For a protected key it
-//                  answers by id, never by name: the committed record's id, else a pending attempt's, else the derived id. Before any
-//                  read, the workspace's copy at that id must be fresh or clean (creates-local.js assertCleanContinuation): a copy
-//                  with an edit the server has not seen stops the item before anything fetches over it, reapplies or pushes it.
-//   recordBinding  records a settled view or chart in the managed binding store (managed-bindings.js), as one group per key.
+//   managed        what the view and chart planners read (reconcile-common.js lookupBinding):
+//                    lookup   the committed binding of a protected key, and nothing else. Before it answers, the workspace's copy
+//                             at the key's id must be fresh or clean (creates-local.js assertCleanContinuation): a copy with an edit
+//                             the server has not seen stops the item before anything fetches over it, reapplies or pushes it;
+//                    observe  for a key with no binding: the row at the key's stable id (a pending attempt's root, else the derived
+//                             id), or null when the service says it does not exist. An OBSERVATION, never a binding: the planner
+//                             reads that row as unbound, so changing it needs the adoption approval and binding an equal row needs
+//                             it too (see below).
+//   settle         with a store: one declared view or chart, through the managed settlement (managed-feature-contract.js
+//                  runManagedFeature) — see SETTLEMENT below.
+//   recoverUndeclared  with a store: the pending view and chart attempts whose declaration the spec no longer carries, recovered
+//                  against the expectation each recorded (see SETTLEMENT); the build runs it before its views.
+//   recordBinding  the settlement's binding hook (reconcile-common.js createFeatureSettlement). With a store, the binding was
+//                  committed by `settle`, so this only accepts the binding the store already holds.
 //   protects       whether (kind, key) is one of the protected creates.
 //
 // WHY THE LOOKUP IS BY ID. A create whose answer was lost made the row at the derived id. A rerun — from the same workspace or a
-// fresh one — reads that id first and finds the row, so it binds it instead of creating a second one. A row with the declared name at
-// any other id is a namesake: the planner's name lookup finds it, and the existing adoption approval decides, never a create.
+// fresh one — reads that id first and finds the row, so it never creates a second one. A row with the declared name at any other id
+// is a namesake: the planner's name lookup finds it, and the existing adoption approval decides, never a create.
 //
-// A row found at the derived id with no committed record is answered as an ADOPTED binding with no recorded hashes. That is the
-// conservative reading: nothing proves this build made the row, so a row that already equals the spec is bound with no write, and a
-// row that differs is drift that needs the overwrite approval rather than a silent rewrite.
+// WHY AN OBSERVATION IS NOT A BINDING. Nothing about a row at the derived id proves that this build made it or that the maker
+// agreed to manage it: an earlier run whose answer was lost, another workspace, or anyone who created a row with that id. So it is
+// bound only on a create this store saw acknowledged, or with the typed adoption approval (`--authorize adopt:view:<key>`,
+// `adopt:chart:<key>`), or a pinned id. An equal row with neither is left unbound and nothing is written; a row that differs is
+// refused as unbound (`view-adoption-not-authorized` / `chart-adoption-not-authorized`).
+//
+// SETTLEMENT (with a store). Each declared view or chart is one managed group, settled by runManagedFeature in this order:
+//   preflight   the workspace copy at the key's id must be fresh or clean, on every path, recoveries included;
+//   resolve     plan the view or chart as before (the planner reads; nothing is written);
+//   plan        a refusal, an unknown, or nothing to send or bind settles as before, outside the store. A create, an update or a
+//               bind becomes an attempt whose COMPLETE expectation is written before anything is sent: the full projection the
+//               row must hold afterwards (sentProjectionSha256), the hash of the parts the change keeps as they are
+//               (preservationSha256), the committed proof it was planned on, the declaration hash and the table publication;
+//   apply       sends the change once, through the store's send observer when the build installed one;
+//   prove       a fresh read must hold exactly the expected projection; the saved layer is read with the shared reader
+//               (savedquery-published.js), and the group owes its table's publish of exactly that saved layer;
+//   membership  the row joins the solution BEFORE the group is committed and the attempt removed, so a run that stops there
+//               keeps the attempt, and the next run finishes the membership at the same id;
+//   commit      one atomic write; a create no answer acknowledged is bound only with the adoption approval.
+// An attempt an earlier run left sending is recovered against the expectation it recorded, before any planning of the current
+// spec: continued when its send window proves nothing left, resent as the same create when the row is absent from both layers,
+// else proved — never re-baselined from today's declaration. A mismatch stays pending and its table withheld. Once recovered,
+// the current spec is planned and settled as usual. An attempt whose declaration was removed is recovered the same way, by its
+// recorded expectation alone (recoverUndeclared): proved and committed, or retired when it was only prepared; leaving the
+// declaration out never releases its hold.
 //
 // Without a store (no workspace folder, or a target no store can be kept for) the port and lookup still work by identity alone and
-// nothing is persisted: a rerun finds the row by its derived id the same way.
+// nothing is persisted: a rerun finds the row by its derived id the same way, and an observed row is unbound the same way.
 
-const { createCompositePortForSpec } = require('./creates-port.js');
+const { createCompositePortForSpec, markPreSend } = require('./creates-port.js');
 const { createStop } = require('./creates-identity.js');
-const { assertCleanContinuation } = require('./creates-local.js');
-const { isDeclaredView, declaredViewKey } = require('./view-reconcile.js');
-const { isDeclaredChart, declaredChartKey } = require('./chart-reconcile.js');
-const { canonicalJson, intentSha256, normalizeGuid } = require('./reconcile-common.js');
+const { assertCleanContinuation, readLocalCreateState } = require('./creates-local.js');
+const viewReconcile = require('./view-reconcile.js');
+const chartReconcile = require('./chart-reconcile.js');
+const { intentSha256, normalizeGuid, projectionBaseline, isApproved } = require('./reconcile-common.js');
 
 const SHIPPED_KINDS = Object.freeze(['view', 'chart']);
-// The proof schema a view or chart group is committed under: the read-back baseline (reconcile-common.js projectionBaseline) is the proof.
+// The proof schema a view or chart group is committed under: the read-back projection (reconcile-common.js projectionBaseline).
 const PROOF_SCHEMA = Object.freeze({ view: 'view-v1', chart: 'chart-v1' });
+// Per family: the planner module, the plan's id field, the Web API collection and id column of the row, and the live projection
+// of a row that does not exist yet (what a create's expectation is laid over: no columns, links or sort, an empty description).
+const FAMILY = Object.freeze({
+  view: { mod: viewReconcile, idOf: (p) => p.viewId, collection: 'savedqueries', idField: 'savedqueryid', emptyLive: () => viewReconcile.liveFull({}) },
+  chart: { mod: chartReconcile, idOf: (p) => p.chartId, collection: 'savedqueryvisualizations', idField: 'savedqueryvisualizationid', emptyLive: () => ({ description: '', title: '' }) },
+});
 
 const lc = (s) => String(s == null ? '' : s).toLowerCase();
 const nonempty = (s) => typeof s === 'string' && s.trim().length > 0;
@@ -46,159 +83,362 @@ function stableIntents(spec) {
   const solution = spec && spec.solution && spec.solution.uniqueName;
   const intents = [];
   for (const v of (spec && spec.views) || []) {
-    if (!isDeclaredView(v) || !nonempty(v.entity) || !nonempty(v.name)) continue;
-    const key = declaredViewKey(v);
+    if (!viewReconcile.isDeclaredView(v) || !nonempty(v.entity) || !nonempty(v.name)) continue;
+    const key = viewReconcile.declaredViewKey(v);
     const declaration = typeof v.key === 'string' && v.key ? { queryType: 0, key: v.key } : { queryType: 0, name: v.name };
     intents.push({ catalogKind: 'view', key, scope: { kind: 'table', solution, table: lc(v.entity) }, declaration });
   }
   for (const c of (spec && spec.charts) || []) {
-    if (!isDeclaredChart(c) || !nonempty(c.entity) || !nonempty(c.name)) continue;
-    intents.push({ catalogKind: 'chart', key: declaredChartKey(c), scope: { kind: 'table', solution, table: lc(c.entity) }, declaration: { name: c.name.trim() } });
+    if (!chartReconcile.isDeclaredChart(c) || !nonempty(c.entity) || !nonempty(c.name)) continue;
+    intents.push({ catalogKind: 'chart', key: chartReconcile.declaredChartKey(c), scope: { kind: 'table', solution, table: lc(c.entity) }, declaration: { name: c.name.trim() } });
   }
   return intents;
 }
 
-// What a view or chart create is expected to leave, written before the create is sent (managed-bindings.js markSending). A view's and a
-// chart's content is proved by the read-back baseline when the binding is recorded, so the expectation names the identity it was sent
-// under: the same (kind, key, id) gives the same expectation, which is what lets a rerun continue an attempt that was sent.
-function expectedFor(kind, key, id) {
-  const identity = intentSha256({ kind, key, id });
-  return {
-    proofVersion: 1,
-    proofSchema: PROOF_SCHEMA[kind],
-    rootId: id,
-    baseProofSha256: null,
-    sentProjectionSha256: identity,
-    preservationSha256: identity,
-    baseObservation: null,
-    children: [],
-  };
-}
-
 const isNotFound = (err) => !!err && (err.statusCode === 404 || err.status === 404);
+// The Dataverse "object does not exist" code in an OData error body (an object, or its JSON text); some surfaces capitalize
+// the envelope as "Error".
+const notFoundCode = (body) => {
+  let b = body;
+  if (typeof b === 'string') { try { b = JSON.parse(b); } catch { return false; } }
+  const e = b && (b.error || b.Error);
+  return !!e && typeof e.code === 'string' && e.code.toLowerCase() === '0x80040217';
+};
+const coded = (code, message, extra) => Object.assign(new Error(message), { code }, extra || {});
+const committedRecord = (committed, kind, key) => (committed ? committed.records.find((r) => r.kind === kind && r.key === key) || null : null);
 
 /**
  * @param {{ spec: object, sdk: object, store: object|null, barrier?: object|null, basePort: { run: Function }, fallback?: { lookup?: Function, recordApplied?: Function } }} args
- *   sdk       the build's provisioning SDK (listArtifacts, diffArtifact and fetchArtifact are read here);
+ *   sdk       the build's provisioning SDK (listArtifacts, diffArtifact, fetchArtifact and getArtifact are read here);
  *   store     the managed binding store handle (managed-bindings.js openManagedBindings), or null for identity alone;
- *   barrier   the run's publication barrier (publication-barrier.js), which the store's opener (openManagedContext) gave the hold of an
- *             attempt an earlier run left pending; the commit that proves that attempt releases its hold, and only that one;
+ *   barrier   the run's publication barrier (publication-barrier.js): an attempt's hold and quarantine, and the route that sends
+ *             a committed group's table publish through the managed coverage protocol;
  *   basePort  the build's own create port, which every request that is not a protected create goes to;
  *   fallback  the build's own managed-artifacts port, answered for a key that is not protected.
- * @returns {null | { port, managed: { lookup }, recordBinding, protects, identityFor }} null when the spec declares no view or chart.
+ * @returns {null | { port, managed: { lookup, observe }, settle?, recordBinding, protects, identityFor }} null when the spec
+ *   declares no view or chart; `settle` only with a store.
  */
 function createStableCreates({ spec, sdk, store = null, barrier = null, basePort, fallback = null } = {}) {
   if (!basePort || typeof basePort.run !== 'function') throw new TypeError('createStableCreates: basePort must be a create port');
   const intents = stableIntents(spec);
-  if (!intents.length) return null;
-  // An attempt names its table as the scope it may leave saved and unproved: an attempt an earlier run left pending holds that
-  // table's publish (openManagedContext) until this build proves and commits it, so a view whose create lost its answer is never
-  // published by its table's publish before the build has seen it.
-  const scopesOf = (kind, key) => { const table = tableOf(intents, kind, key); return table ? [{ type: 'table', table }] : []; };
+  // A spec that declares no view or chart any more still recovers the store's pending view and chart attempts
+  // (recoverUndeclared): dropping the last declaration must not drop the proof its earlier change owes.
+  const owesUndeclared = !!store && store.snapshot().envelope.attempts.some((a) => FAMILY[a.family]);
+  if (!intents.length && !owesUndeclared) return null;
 
+  // With a store, the attempt was prepared and marked sending (its expectation written) by runManagedFeature before `apply` ran,
+  // so the create is sent only under that attempt, at that root id. Anything else is refused before the send.
   async function onAttempt({ kind, key, id }) {
     if (!store) return;
-    const g = store.readGroup(kind, key);
-    const expected = expectedFor(kind, key, id);
-    if (g.pending) {
-      if (g.pending.root.id !== id) throw createStop('create-completion-required', `${kind} ${key}: an earlier create was sent as ${g.pending.root.id}, not ${id}; it must be completed before another is sent`, { create: { kind, key, id } });
-      store.markSending(g.pending.token, expected);
-      return;
+    const { pending } = store.readGroup(kind, key);
+    if (!pending || pending.phase !== 'sending' || normalizeGuid(pending.root.id) !== normalizeGuid(id)) {
+      throw createStop('create-completion-required', `${kind} ${key}: the create of ${id} has no attempt recorded as sending, so it is not sent`, { create: { kind, key, id } });
     }
-    if (g.committed) throw createStop('create-completion-required', `${kind} ${key}: it is already bound to ${g.committed.root.id}; a second create is not sent`, { create: { kind, key, id } });
-    store.prepareAttempt({ family: kind, key, baseGeneration: null, root: { kind, key, id }, expected, knownScopes: scopesOf(kind, key), declarationSha256: intentSha256({ kind, key }) });
   }
 
   const composite = createCompositePortForSpec(spec, { intents, shippedKinds: SHIPPED_KINDS, onAttempt });
   const protects = (kind, key) => typeof composite.protects === 'function' && composite.protects(kind, key) === true;
+  // Creates this run saw acknowledged at their stable id (the composite port's 'created'), by `${kind}\0${key}`.
+  const acknowledged = new Set();
 
   const port = {
     async run(request, execute) {
       if (!request || !protects(request.kind, request.key)) return basePort.run(request, execute);
       const out = await composite.run(request, execute);
-      // The create was acknowledged at the id it was sent with: the attempt's root may be recorded as created.
-      if (store && out && out.outcome === 'created') {
-        const g = store.readGroup(request.kind, request.key);
-        if (g.pending && g.pending.root.id === out.id) store.noteSaved(g.pending.token, { acknowledgedRoot: true });
-      }
+      if (out && out.outcome === 'created') acknowledged.add(`${request.kind}\0${request.key}`);
       return out;
     },
   };
 
+  const idOfKey = (kind, key) => {
+    const g = store ? store.readGroup(kind, key) : { committed: null, pending: null };
+    const rec = committedRecord(g.committed, kind, key);
+    return { g, rec, id: rec ? normalizeGuid(rec.id) : g.pending ? g.pending.root.id : composite.identityFor(kind, key).id };
+  };
+
+  // Whether the build may continue from the workspace copy at `id` (creates-local.js assertCleanContinuation), with one case that
+  // function cannot see: the local create a pending attempt of this store sent and never had acknowledged. That draft is the
+  // attempt's own when its projection is exactly the one the attempt recorded before the send (`expected.sentProjectionSha256`):
+  // it holds nothing a maker added, and the attempt's proof fetches the server's copy over it. A draft with anything else in it
+  // stops as before.
+  async function assertContinuable(kind, key, id) {
+    const pending = store ? store.readGroup(kind, key).pending : null;
+    if (pending && normalizeGuid(pending.root.id) === normalizeGuid(id)) {
+      let local = null;
+      try { local = await readLocalCreateState(sdk, kind, id); } catch { local = null; }
+      if (local && local.state === 'pending' && local.draft) {
+        let own = false;
+        try { own = projectionBaseline(FAMILY[kind].mod.liveFull(local.draft)).intentSha256 === pending.expected.sentProjectionSha256; } catch { own = false; }
+        if (own) return;
+      }
+    }
+    await assertCleanContinuation(sdk, kind, id);
+  }
+
+  // A stop the lookup makes is made while planning, before anything is written or sent: it is certified as such (creates-port.js
+  // markPreSend), which is what lets the build report it as the item's refusal.
   async function lookup(kind, key) {
     if (!protects(kind, key)) return fallback && typeof fallback.lookup === 'function' ? fallback.lookup(kind, key) : null;
-    const g = store ? store.readGroup(kind, key) : { committed: null, pending: null };
-    const committedRoot = g.committed ? g.committed.records.find((r) => r.kind === kind && r.key === key) : null;
-    const id = committedRoot ? normalizeGuid(committedRoot.id) : g.pending ? g.pending.root.id : composite.identityFor(kind, key).id;
-    await assertCleanContinuation(sdk, kind, id);
-    if (committedRoot) return { ...committedRoot };
+    const { rec, id } = idOfKey(kind, key);
+    try {
+      await assertContinuable(kind, key, id);
+    } catch (err) {
+      throw markPreSend(err);
+    }
+    return rec ? { ...rec } : null;
+  }
+
+  async function observe(kind, key) {
+    if (!protects(kind, key)) return null;
+    const { rec, id } = idOfKey(kind, key);
+    if (rec) return null;
     try {
       await sdk.fetchArtifact(kind, id);
     } catch (err) {
       if (isNotFound(err)) return null;
       throw err;
     }
-    const envelope = store ? store.snapshot().envelope : null;
-    return {
-      formatVersion: 1,
-      appUniqueName: envelope ? envelope.appUniqueName : '',
-      environmentFingerprint: envelope ? envelope.environmentFingerprint : '',
-      kind,
-      key,
-      id,
-      origin: 'adopted',
-    };
+    return id;
   }
 
-  // Synchronous, as the build's settlement calls it (reconcile-common.js createFeatureSettlement): every store change is one atomic write.
+  // Synchronous, as the build's settlement calls it (reconcile-common.js createFeatureSettlement).
   function recordBinding(b) {
     if (!b || !protects(b.kind, b.key)) {
       if (fallback && typeof fallback.recordApplied === 'function') fallback.recordApplied(b);
       return;
     }
     if (!store) return;
-    const { kind, key } = b;
-    const envelope = store.snapshot().envelope;
-    const id = normalizeGuid(b.id);
-    if (!id) throw createStop('create-identity-unverified', `${kind} ${key}: the bound id ${b.id} is not a GUID`, { create: { kind, key } });
-    const g = store.readGroup(kind, key);
-    const committedRoot = g.committed ? g.committed.records.find((r) => r.kind === kind && r.key === key) : null;
-    const rec = {
-      formatVersion: 1,
-      appUniqueName: envelope.appUniqueName,
-      environmentFingerprint: envelope.environmentFingerprint,
-      kind,
-      key,
-      id,
-      intentSha256: b.intentSha256,
-      // A new record claims `created` only on a create this store saw acknowledged; a row found at the derived id (a lost answer, a
-      // native match) is adopted. A record the group already holds keeps the origin it has (managed-bindings.js commitGroup).
-      origin: committedRoot ? b.origin : g.pending && g.pending.acknowledgedRoot && b.origin === 'created' ? 'created' : 'adopted',
-      ...(b.partsSha256 && typeof b.partsSha256 === 'object' ? { partsSha256: { ...b.partsSha256 } } : {}),
+    // `settle` committed the group (or left it as it was): the binding a result carries is accepted only when it is the one the
+    // store holds. Anything else would be a binding no proof, membership or adoption check stood behind.
+    const g = store.readGroup(b.kind, b.key);
+    const rec = committedRecord(g.committed, b.kind, b.key);
+    if (!g.pending && rec && normalizeGuid(rec.id) === normalizeGuid(b.id)) return;
+    throw coded('managed-not-settled', `${b.kind} ${b.key}: its binding to ${b.id} was not committed by the managed settlement, so it is not recorded`);
+  }
+
+  // The proof of one view or chart attempt: a fresh read must hold exactly the projection the attempt expected; then the saved
+  // layer is read with the shared reader, and the group owes its table's publish of exactly that layer (managed-scope-publisher.js
+  // pays it through publishManagedScope). Shared by `settle` and `recoverUndeclared`, so both prove by the one recorded expectation.
+  function proverFor({ kind, key, label, client, scope }) {
+    const { CODES } = require('./managed-bindings.js');
+    const { readSavedQueryLayers } = require('./savedquery-published.js');
+    const fam = FAMILY[kind];
+    return async ({ expected, applied: sent }) => {
+      const id = normalizeGuid(expected.rootId);
+      let fresh;
+      try {
+        await sdk.fetchArtifact(kind, id, { overwrite: true });
+        fresh = await sdk.getArtifact(kind, id);
+      } catch (err) {
+        throw coded(CODES.completion, `${label}: ${id} could not be read back to prove the change (${String((err && err.message) || err).slice(0, 200)}); it stays pending and its table is not published`, { cause: err });
+      }
+      const live = fresh ? fam.mod.liveFull(fresh) : null;
+      const baseline = live ? projectionBaseline(live) : null;
+      if (!baseline || baseline.intentSha256 !== expected.sentProjectionSha256) {
+        throw coded(CODES.completion, `${label}: the ${kind} ${id} does not hold what its recorded change expected; it stays pending and its table is not published. Run the build again with the declaration that change was made for (it is then proved and committed), or restore the ${kind} on the service to that content`);
+      }
+      const layers = await readSavedQueryLayers(kind, client, { root: { id } });
+      const g = store.readGroup(kind, key);
+      const rec = committedRecord(g.committed, kind, key);
+      const ack = (sent && sent.created === true) || !!(g.pending && g.pending.acknowledgedRoot);
+      const env = store.snapshot().envelope;
+      return {
+        acknowledgedRoot: ack,
+        records: [{ formatVersion: 1, appUniqueName: env.appUniqueName, environmentFingerprint: env.environmentFingerprint, kind, key, id, origin: rec ? rec.origin : ack ? 'created' : 'adopted', intentSha256: baseline.intentSha256, partsSha256: { ...baseline.partsSha256 } }],
+        proof: { savedSha256: baseline.intentSha256, semanticSha256: baseline.intentSha256, preservationSha256: expected.preservationSha256, expectedChildrenSha256: null },
+        consumerState: { baseline: { intentSha256: baseline.intentSha256 } },
+        publication: { scope, state: 'owed', desiredSha256: layers.savedSha256, dispatchToken: null },
+        proofSchema: PROOF_SCHEMA[kind],
+      };
     };
-    const same = (r) => !!r && normalizeGuid(r.id) === id && r.intentSha256 === rec.intentSha256 && canonicalJson(r.partsSha256 || null) === canonicalJson(rec.partsSha256 || null);
-    if (!g.pending && same(committedRoot)) return;
-    const baseGeneration = g.pending ? g.pending.baseGeneration : g.committed ? g.committed.generation : null;
-    const token = g.pending
-      ? g.pending.token
-      : store.prepareAttempt({ family: kind, key, baseGeneration, root: { kind, key, id: g.committed ? g.committed.root.id : id }, expected: expectedFor(kind, key, g.committed ? g.committed.root.id : id), knownScopes: scopesOf(kind, key), declarationSha256: intentSha256({ kind, key }) });
-    store.commitGroup({
-      token,
-      baseGeneration,
-      records: [rec],
-      proof: { savedSha256: rec.intentSha256, semanticSha256: rec.intentSha256, preservationSha256: rec.intentSha256, expectedChildrenSha256: null },
-      consumerState: { baseline: { intentSha256: rec.intentSha256 } },
-      // A view's or chart's publication is the build's own (its table's publish); the group owes none of its own.
-      publication: { scope: { type: 'table', table: tableOf(intents, kind, key) }, state: 'not-needed', desiredSha256: null, dispatchToken: null },
-      proofSchema: PROOF_SCHEMA[kind],
+  }
+
+  /**
+   * Settle one declared view or chart through runManagedFeature (see SETTLEMENT in the header). The caller hands its own steps:
+   *   planOnce()          plan the item (the planner with the workspace-copy refusal), reads only;
+   *   applyPlan(plan)     the reconcile helper's apply; answers its result;
+   *   onUnsettled(plan, r)  after an apply that did not settle cleanly (the build resets the local copy it did not push);
+   *   ensureMember(id, createdNow)  the row's solution membership (an add for a row this run created, else the checked add);
+   *   halt                the build's halt factory (managedStop);
+   *   client              the Dataverse client the layers and the resumed create are read with;
+   *   sendObserver        the build's attempt send observer, when one is installed on its transport;
+   *   authorizedAdoption  the build's adoption approvals; pinned: the declaration names the row's id.
+   * Answers { plan, r, managed }: `managed` is true when this call committed the group (the result's binding is then the store's),
+   * false when the plan settled outside the store (a refusal, an unknown, or nothing to send or bind) and `r` is that plan's result.
+   */
+  async function settle({ kind, key, phase, label, planOnce, applyPlan, onUnsettled, ensureMember, halt, client, sendObserver = null, authorizedAdoption, pinned = false }) {
+    const { runManagedFeature } = require('./managed-feature-contract.js');
+    const { CODES } = require('./managed-bindings.js');
+    const fam = FAMILY[kind];
+    const table = tableOf(intents, kind, key);
+    const scope = { type: 'table', table };
+    const adoptionApproved = isApproved(authorizedAdoption, kind, key) || pinned === true;
+    let stash = null;
+    let applied = null;
+
+    const planFor = (source, committed) => {
+      stash = null;
+      const id = fam.idOf(source);
+      const rec = committedRecord(committed, kind, key);
+      if (source.refused.length || source.unknown.length || !source.action) { stash = source; return { noop: true }; }
+      if (source.action === 'noChange') {
+        // Nothing to send: bound only on an approval or a binding (the planner's bindUnchanged), and not again when the store
+        // already holds exactly this.
+        if (!source.bindUnchanged) { stash = source; return { noop: true }; }
+        if (rec && normalizeGuid(rec.id) === normalizeGuid(id) && rec.intentSha256 === source.baseline.intentSha256) { stash = source; return { noop: true }; }
+      }
+      const create = source.action === 'create';
+      const rootId = create ? composite.identityFor(kind, key).id : normalizeGuid(id);
+      const desired = create ? fam.mod.desiredFull(source.intent, fam.emptyLive()) : source.desired;
+      const changed = create ? fam.mod.PARTS : source.changed;
+      const kept = {};
+      for (const p of fam.mod.PARTS) if (!changed.includes(p)) kept[p] = desired[p] === undefined ? null : desired[p];
+      return {
+        root: { kind, key, id: rootId },
+        expected: {
+          proofVersion: 1,
+          proofSchema: PROOF_SCHEMA[kind],
+          rootId,
+          baseProofSha256: committed && committed.proof ? committed.proof.savedSha256 : null,
+          sentProjectionSha256: projectionBaseline(desired).intentSha256,
+          preservationSha256: intentSha256(kept),
+          baseObservation: null,
+          children: [],
+        },
+        declarationSha256: intentSha256(source.intent),
+        publication: { scope, state: 'owed' },
+        source,
+      };
+    };
+
+    const prove = proverFor({ kind, key, label, client, scope });
+
+    // The pending create's root by its stable id, in both layers: 'absent' only when each answers 404 with the Dataverse
+    // "object does not exist" code, { "error": { "code": "0x80040217", … } } — a 404 an intermediary answers carries no such
+    // code and proves nothing. RetrieveUnpublished reads the saved layer; a plain retrieve the published one.
+    // See: https://learn.microsoft.com/en-us/power-apps/developer/data-platform/webapi/reference/retrieveunpublished
+    const resumeCreate = async ({ pending }) => {
+      const id = normalizeGuid(pending.root.id);
+      const select = `$select=${fam.idField}`;
+      const state = async (path) => {
+        const res = await client.get(path);
+        if (res && res.status === 404 && notFoundCode(res.body)) return 'absent';
+        if (res && res.status >= 200 && res.status < 300) return 'present';
+        throw coded(CODES.completion, `${label}: whether ${id} exists could not be read (status ${res && res.status})`);
+      };
+      const saved = await state(`/${fam.collection}(${id})/Microsoft.Dynamics.CRM.RetrieveUnpublished()?${select}`);
+      const published = await state(`/${fam.collection}(${id})?${select}`);
+      return { root: saved === 'absent' && published === 'absent' ? 'absent' : 'present' };
+    };
+
+    const once = () => runManagedFeature({
+      phase, family: kind, key, label, store, barrier: barrier || undefined, knownScopes: [scope],
+      ...(sendObserver ? { sendObserver } : {}),
+      adoptionApproved,
+      halt: (ph, lb, code, { cause } = {}) => halt(ph, lb, code, { cause, findings: (cause && cause.findings) || [] }),
+      preflight: async ({ committed, pending }) => {
+        const rec = committedRecord(committed, kind, key);
+        await assertContinuable(kind, key, rec ? normalizeGuid(rec.id) : pending ? pending.root.id : composite.identityFor(kind, key).id);
+      },
+      resolve: async () => ({ source: await planOnce() }),
+      plan: ({ resolution, committed }) => planFor(resolution.source, committed),
+      apply: async ({ token, plan: planned }) => {
+        const r = await applyPlan(planned.source);
+        const created = planned.source.action === 'create' && acknowledged.has(`${kind}\0${key}`);
+        applied = { plan: planned.source, r };
+        if (r.refused.length || r.unknown.length) {
+          // An acknowledged create is recorded as such before the stop, so the next run recovers it as this build's create.
+          if (created) { try { store.noteSaved(token, { acknowledgedRoot: true }); } catch { /* the attempt stays unacknowledged */ } }
+          if (typeof onUnsettled === 'function') await onUnsettled(planned.source, r);
+          const findings = [...r.refused, ...r.unknown];
+          throw coded((findings[0] && findings[0].code) || CODES.notSettled, findings.map((f) => `${f.code}: ${f.message}`).join('; '), { findings });
+        }
+        return { created };
+      },
+      prove,
+      ensureMembership: async ({ root, recovering }) => {
+        if (stash || !root || !root.id) return;
+        await ensureMember(normalizeGuid(root.id), !recovering && !!(applied && applied.plan.action === 'create'));
+      },
+      resumeCreate,
     });
-    // The attempt is proved and committed: its own hold (if an earlier run left it pending) ends; any other hold or block stays.
-    if (g.pending && barrier && typeof barrier.release === 'function') barrier.release(token);
+
+    let out = await once();
+    // A recovered attempt is committed; the current spec is then planned and settled over it.
+    if (out.result.recovered) {
+      stash = null;
+      applied = null;
+      out = await once();
+    }
+    if (out.result.noop) return { plan: stash, r: stash ? await applyPlan(stash) : null, managed: false };
+    // The group owes its table's publish: every plain publish of that table now goes through the managed coverage protocol.
+    if (barrier && typeof barrier.route === 'function') barrier.route(table, label);
+    return { plan: applied.plan, r: applied.r, managed: true };
+  }
+
+  /**
+   * Recover the store's pending view and chart attempts whose declaration this spec does not carry (removed, renamed, or no longer
+   * protected), against the expectation each recorded before its send — today's spec holds nothing for them, so nothing is planned,
+   * sent again or re-baselined. Leaving a declaration out never releases its hold. For each such attempt, through runManagedFeature
+   * without a send observer or a create resume (so a sent attempt goes straight to its proof):
+   *   - one still only prepared (never marked sending) sent nothing: the plan is a no-op, so it is retired and its hold ends;
+   *   - one that proves (a fresh read holds exactly its expected projection) joins the solution and is committed: a create no answer
+   *     acknowledged only with its adoption approval (`adopt:<family>:<key>`); its table's publish is then owed and routed;
+   *   - anything else (a row that differs, a read that fails, an approval not given) stays pending and its table withheld. It is
+   *     reported through `warn`, not raised: an artifact the spec no longer declares does not stop the build of the rest.
+   * Steps: client (layer and row reads), halt (the build's halt factory, for the message), warn, authorizedAdoption, phase, and
+   * ensureMember(kind, id, table) for the row's checked solution membership. Answers the tables whose group it committed.
+   */
+  async function recoverUndeclared({ phase, client, halt, warn, authorizedAdoption, ensureMember }) {
+    if (!store) return [];
+    const { runManagedFeature } = require('./managed-feature-contract.js');
+    const { CODES } = require('./managed-bindings.js');
+    const recovered = [];
+    const attempts = store.snapshot().envelope.attempts.filter((a) => FAMILY[a.family] && !protects(a.family, a.key));
+    for (const a of attempts) {
+      const kind = a.family;
+      const key = a.key;
+      const declared = (a.publication && a.publication.scope) || (a.knownScopes || []).find((s) => s && s.type === 'table') || null;
+      const table = declared && declared.type === 'table' ? String(declared.table || '') : '';
+      const scope = { type: 'table', table };
+      const label = `${kind} ${key} (no longer declared)`;
+      const stopped = Symbol('stopped');
+      try {
+        const out = await runManagedFeature({
+          phase, family: kind, key, label, store, barrier: barrier || undefined, knownScopes: table ? [scope] : [],
+          adoptionApproved: isApproved(authorizedAdoption, kind, key),
+          halt: (ph, lb, code, { cause } = {}) => {
+            const made = halt(ph, lb, code, { cause, findings: (cause && cause.findings) || [] });
+            return Object.assign(made instanceof Error ? made : new Error(`${lb}: ${code}`), { [stopped]: true, recoveryCode: code, recoveryCause: cause });
+          },
+          preflight: async ({ pending }) => { if (pending) await assertContinuable(kind, key, pending.root.id); },
+          resolve: async () => ({ source: null }),
+          // Nothing is planned for an undeclared key: a prepared attempt is retired, a sent one is proved (never resent).
+          plan: () => ({ noop: true }),
+          apply: async () => { throw coded(CODES.notSettled, `${label}: nothing is sent for an artifact the spec does not declare`); },
+          prove: proverFor({ kind, key, label, client, scope }),
+          ensureMembership: async ({ root, recovering }) => {
+            if (recovering && root && root.id) await ensureMember(kind, normalizeGuid(root.id), table);
+          },
+        });
+        if (out && out.result && out.result.committed && table) {
+          if (barrier && typeof barrier.route === 'function') barrier.route(table, label);
+          if (!recovered.includes(table)) recovered.push(table);
+        }
+      } catch (err) {
+        if (!err || !err[stopped]) throw err;
+        const cause = err.recoveryCause;
+        const why = String((cause && cause.message) || err.recoveryCode || err.message).replace(/\s+/g, ' ').slice(0, 400);
+        if (typeof warn === 'function') warn(`${label}: ${err.recoveryCode} — ${why}. Its earlier change stays pending and table ${table || '(unknown)'} stays unpublished; restore its declaration and build again (or give the adoption approval it names).`);
+      }
+    }
+    return recovered;
   }
 
   return {
     port,
-    managed: { lookup },
+    managed: { lookup, observe },
+    ...(store ? { settle, recoverUndeclared } : {}),
     recordBinding,
     protects,
     identityFor: (kind, key) => (protects(kind, key) ? composite.identityFor(kind, key) : null),
@@ -210,4 +450,4 @@ function tableOf(intents, kind, key) {
   return i ? i.scope.table : '';
 }
 
-module.exports = { createStableCreates, stableIntents, SHIPPED_KINDS };
+module.exports = { createStableCreates, stableIntents, SHIPPED_KINDS, PROOF_SCHEMA };

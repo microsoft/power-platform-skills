@@ -3803,13 +3803,16 @@ test('verifySpec: a bound view or chart is read by its bound id; a pending or un
     invalid: [{ family: 'store', key: 'managed-bindings', reason: 'not valid JSON', code: 'managed-binding-store-unreadable' }],
   };
   const filters = [];
-  const read = (bound) => ({
+  const read = (bound, { ignoreFilter = false } = {}) => ({
     findTable: async () => null,
     findColumns: async () => [],
     sitemapXml: async () => '',
     queryRecords: async (set, opts) => {
       filters.push(`${set}: ${opts.filter}`);
-      return bound.some((id) => opts.filter.endsWith(id)) ? [{ [idFor(set)]: 'row' }] : [];
+      // The row as the service answers it: its own id, a real GUID.
+      if (ignoreFilter) return bound.length ? [{ [idFor(set)]: bound[0] }] : [];
+      const hit = bound.find((id) => opts.filter.endsWith(id));
+      return hit ? [{ [idFor(set)]: hit }] : [];
     },
   });
   const spec = { entities: [], appShell: { areas: [] } };
@@ -3827,6 +3830,9 @@ test('verifySpec: a bound view or chart is read by its bound id; a pending or un
   const gone = await verifySpec(spec, read([CHART_ID]), { managedManifest });
   assert.strictEqual(gone.ok, false);
   assert.ok(gone.missing.some((m) => m.kind === 'managed-view' && m.name === `new_o/V (${VIEW_ID})`));
+  // A reader that answers another row (here the chart's id for the view's read) is not the bound row either.
+  const other = await verifySpec(spec, read([CHART_ID], { ignoreFilter: true }), { managedManifest });
+  assert.ok(other.missing.some((m) => m.kind === 'managed-view' && m.name === `new_o/V (${VIEW_ID})`));
   // Control: no manifest (or an empty one) adds no check and no read.
   filters.length = 0;
   const none = await verifySpec(spec, read([]), { managedManifest: { revision: 0, groups: [], pending: [], invalid: [] } });

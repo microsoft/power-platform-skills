@@ -329,3 +329,18 @@ test('a stable port refuses an unknown kind before anything runs; known unprotec
   // The pass-through port stays permissive: it never refuses a kind.
   assert.strictEqual((await createCreatesPort({ mode: 'passthrough' }).run({ kind: 'chrat', key: 'x' }, async ({ id }) => ({ id }))).outcome, 'created');
 });
+test('a create stop is a refusal only with the port\u2019s pre-send certificate: the same code from a step after the send is an unknown outcome', async () => {
+  const { createThroughPort } = require('../lib/reconcile-common.js');
+  const { markPreSend } = require('../lib/creates-port.js');
+  const portThrowing = (err) => ({ creates: { run: async () => { throw err; } } });
+  const request = { kind: 'view', key: 'contoso_order|active' };
+  const execute = async () => { throw new Error('execute is not reached'); };
+  // Codes a pre-send stop can carry. Each can also come from a step after the send (a receipt or record that could not be
+  // written), so the code alone must never be read as "nothing was sent".
+  for (const code of ['creation-record-unwritten', 'managed-binding-store-unwritable', 'managed-settlement-pending', 'create-completion-required', 'create-identity-conflict']) {
+    const after = await createThroughPort(portThrowing(Object.assign(new Error('after the send'), { code })), request, execute);
+    assert.equal(after.status, 'unknown', `${code} without the certificate is an unknown outcome`);
+    const before = await createThroughPort(portThrowing(markPreSend(Object.assign(new Error('before the send'), { code }))), request, execute);
+    assert.deepEqual(before, { status: 'refused', code }, `${code} with the certificate is a refusal`);
+  }
+});

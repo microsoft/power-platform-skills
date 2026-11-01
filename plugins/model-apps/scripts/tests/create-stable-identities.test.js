@@ -16,10 +16,12 @@ const { lintAppSpec } = require('../lib/spec-lint.js');
 const { ACTIVATION_VALUE } = require('../lib/creates-identity.js');
 const { createStableCreates } = require('../lib/creates-stable-build.js');
 const { createPassthroughCreates } = require('../lib/creates-passthrough.js');
-const { openManagedBindings, PREFIX } = require('../lib/managed-bindings.js');
+const { openManagedBindings, openManagedContext, readManagedManifest, PREFIX } = require('../lib/managed-bindings.js');
 const { createPublicationBarrier } = require('../lib/publication-barrier.js');
 const { buildModelApp } = require('../build-model-app.js');
 const { createFakeBuildOrg } = require('./helpers/fake-app-build-org.js');
+const { seedManagedDebt } = require('./helpers/managed-debt.js');
+const { verifySpec } = require('../lib/verify-spec.js');
 
 const dirs = [];
 test.after(() => { for (const d of dirs) fs.rmSync(d, { recursive: true, force: true }); });
@@ -61,15 +63,42 @@ function newDir() {
 const storeFiles = (dir) => (fs.existsSync(dir) ? fs.readdirSync(dir).filter((f) => f.startsWith(PREFIX)) : []);
 const storeOf = (org, dir, barrier = null) => openManagedBindings({ workspaceDir: dir, environment: org.origin, appUniqueName: APP, solutionUniqueName: SOLUTION, barrier });
 
+// The fake org's client with every request passed through the build's publication barrier, as the CLI's transport is
+// (build-model-app.js gates its client with the same barrier it hands the build): a plain publish of a routed or withheld
+// table is screened at the send, exactly as in production. The barrier's transport shape is { method, url, headers, body }
+// answering { statusCode, headers, body } (lib/dataverse-auth.js makeRequest); the fake's is (url, body, options) answering
+// { status, headers, body } with the body parsed. A request the gate rewrote (a partly withheld publish) carries new text.
+function gatedClient(org, barrier) {
+  const text = (b) => (b == null ? '' : typeof b === 'string' ? b : JSON.stringify(b));
+  const gated = barrier.gateRequest(async (req) => {
+    const m = req.method.toLowerCase();
+    let body = req.raw;
+    if (req.body !== text(req.raw)) { try { body = JSON.parse(req.body); } catch { body = req.body; } }
+    const res = m === 'get' ? await org.httpClient.get(req.url, req.options) : await org.httpClient[m](req.url, body, req.options);
+    return { statusCode: res.status, headers: res.headers || {}, body: text(res.body), res };
+  });
+  const send = async (method, url, raw, options) => {
+    const answer = await gated({ method, url, headers: (options && options.headers) || {}, body: text(raw), raw, options });
+    if (answer.res) return answer.res;
+    let body = answer.body;
+    try { body = body ? JSON.parse(body) : null; } catch { /* kept as text */ }
+    return { status: answer.statusCode, headers: answer.headers || {}, body };
+  };
+  return Object.fromEntries(['get', 'post', 'patch', 'put', 'delete'].map((m) => [m,
+    (url, ...args) => (m === 'get' ? send('GET', url, undefined, args[0]) : send(m.toUpperCase(), url, args[0], args[1])),
+  ]));
+}
+
 // One build over a fresh SDK on `dir`, as the CLI's durable workspace is reused by a re-run.
 async function build(org, dir, spec, opts = {}) {
-  const sdk = opts.sdk || createMakerSdk({ workspaceStorage: createNodeWorkspaceStorage(dir), instanceUrl: org.origin, httpClient: org.httpClient });
+  const barrier = opts.publicationBarrier || createPublicationBarrier();
+  const sdk = opts.sdk || createMakerSdk({ workspaceStorage: createNodeWorkspaceStorage(dir), instanceUrl: org.origin, httpClient: gatedClient(org, barrier) });
   if (!opts.sdk) await sdk.initWorkspace();
   const mark = org.calls.length;
   let out;
   let err;
   try {
-    out = await runSdkBuild(spec, { sdk, apply: true, publish: false, workspaceDir: dir, appDir: dir, env: org.origin, warn: () => {}, phases: ['views', 'charts'], ...opts, sdk });
+    out = await runSdkBuild(spec, { sdk, apply: true, publish: false, workspaceDir: dir, appDir: dir, env: org.origin, warn: () => {}, phases: ['views', 'charts'], publicationBarrier: barrier, ...opts, sdk });
   } catch (e) {
     err = e;
   }
@@ -132,20 +161,37 @@ test('a stable view and chart are created once at the derived ids, bound in the 
   assert.equal(fs.readFileSync(path.join(dir, storeFiles(dir)[0]), 'utf8'), bytes);
 });
 
-test('a fresh workspace on the same environment finds the rows at the derived ids and adopts them; no second create is sent', async () => {
+test('a fresh workspace on the same environment finds the rows at the derived ids: unbound and untouched without the adoption approval, adopted with it', async () => {
   const org = createFakeBuildOrg({ entities: ENTITIES });
   const spec = stableSpec();
   const ids = derived(spec);
   const first = await build(org, newDir(), spec);
   assert.equal(first.err, undefined, first.err && first.err.message);
 
+  // A row at the derived id is an observation, not a binding: nothing proves this workspace made it.
   const dir = newDir();
   const fresh = await build(org, dir, spec);
   assert.equal(fresh.err, undefined, fresh.err && fresh.err.message);
-  assert.equal(creates(fresh, 'savedqueries').length, 0, 'the view at the derived id is bound, not created again');
-  assert.equal(creates(fresh, 'savedqueryvisualizations').length, 0);
+  assert.deepEqual(fresh.writes, [], 'an equal row with no approval is left as it is');
+  let store = storeOf(org, dir);
+  assert.equal(store.readGroup('view', VIEW_KEY).committed, null, 'no binding without the adoption approval');
+  assert.equal(store.readGroup('chart', CHART_KEY).committed, null);
+  // Nor does it give authority to change the row: an edited declaration without the approval writes nothing.
+  const edited = stableSpec();
+  edited.views[0].description = 'Edited without the adoption approval';
+  edited.charts[0].description = 'Edited without the adoption approval';
+  const edit = await build(org, dir, edited);
+  assert.ok(edit.err, 'the unbound rows are refused');
+  assert.deepEqual(edit.writes, [], 'nothing is overwritten on identity alone');
+  store = storeOf(org, dir);
+  assert.equal(store.readGroup('view', VIEW_KEY).committed, null);
+
+  const adopted = await build(org, dir, spec, { authorizedAdoption: new Set([`view:${VIEW_KEY}`, `chart:${CHART_KEY}`]) });
+  assert.equal(adopted.err, undefined, adopted.err && adopted.err.message);
+  assert.equal(creates(adopted, 'savedqueries').length, 0, 'the view at the derived id is bound, not created again');
+  assert.equal(creates(adopted, 'savedqueryvisualizations').length, 0);
   assert.equal(org.fake.rows('savedqueries').filter((r) => r.data.name === 'Declared Items').length, 1);
-  const store = storeOf(org, dir);
+  store = storeOf(org, dir);
   assert.equal(store.readGroup('view', VIEW_KEY).committed.root.id, ids.view);
   assert.equal(store.readGroup('view', VIEW_KEY).committed.records[0].origin, 'adopted', 'nothing proves this workspace made the row');
   assert.equal(store.readGroup('chart', CHART_KEY).committed.records[0].origin, 'adopted');
@@ -193,41 +239,55 @@ test('a local copy with an edit the server has not seen stops the stable item be
   }
 });
 
+// A create whose answer was lost after the row was stored: the transport throws after the fake saved it.
+function loseNextCreateAnswer(org, collection) {
+  const original = org.httpClient.post;
+  let lost = false;
+  org.httpClient.post = async (url, body, ...rest) => {
+    const response = await original(url, body, ...rest);
+    if (!lost && new RegExp(`/${collection}(?:\\?|$)`, 'i').test(url)) {
+      lost = true;
+      throw Object.assign(new Error('response lost after save'), { code: 'ECONNRESET' });
+    }
+    return response;
+  };
+  return () => { org.httpClient.post = original; };
+}
+
 test('an attempt an earlier run left pending holds its table until this build proves it, then the hold ends', async () => {
   const org = createFakeBuildOrg({ entities: ENTITIES });
   const dir = newDir();
   const spec = stableSpec({ charts: [] });
   const ids = derived(stableSpec());
   // An earlier run marked the create as sending and lost the answer after the row was stored.
-  const first = await build(org, newDir(), spec);
-  assert.equal(first.err, undefined, first.err && first.err.message);
-  storeOf(org, dir).prepareAttempt({
-    family: 'view', key: VIEW_KEY, baseGeneration: null, root: { kind: 'view', key: VIEW_KEY, id: ids.view },
-    expected: { proofVersion: 1, proofSchema: 'view-v1', rootId: ids.view, baseProofSha256: null, sentProjectionSha256: 'a'.repeat(64), preservationSha256: 'a'.repeat(64), baseObservation: null, children: [] },
-    knownScopes: [{ type: 'table', table: 'contoso_item' }], declarationSha256: 'b'.repeat(64),
-  });
+  const restore = loseNextCreateAnswer(org, 'savedqueries');
+  const first = await build(org, dir, spec);
+  restore();
+  assert.ok(first.err, 'the run whose answer was lost stops');
+  const pending = storeOf(org, dir).readGroup('view', VIEW_KEY).pending;
+  assert.ok(pending, 'and leaves its attempt pending');
+  assert.equal(pending.root.id, ids.view);
+
+  // Control: the same store, opened on a barrier with no build to prove it, holds the table.
+  const held = createPublicationBarrier();
+  require('../lib/managed-bindings.js').openManagedContext({ workspaceDir: dir, environment: org.origin, appUniqueName: APP, solutionUniqueName: SOLUTION, barrier: held });
+  assert.equal(held.allow('contoso_item', 'no proof'), false);
+
+  // No answer acknowledged the create, so nothing proves this run made the row: the proof alone binds nothing.
+  const refused = await build(org, dir, spec, { publicationBarrier: createPublicationBarrier() });
+  assert.match(String(refused.err && refused.err.message), /managed-adoption-required/);
+  assert.deepEqual(refused.writes, [], 'nothing is sent again');
+  assert.ok(storeOf(org, dir).readGroup('view', VIEW_KEY).pending, 'the attempt is kept');
 
   const barrier = createPublicationBarrier();
-  const r = await build(org, dir, spec, { publicationBarrier: barrier });
+  const r = await build(org, dir, spec, { publicationBarrier: barrier, authorizedAdoption: new Set([`view:${VIEW_KEY}`]) });
   assert.equal(r.err, undefined, r.err && r.err.message);
   assert.equal(creates(r, 'savedqueries').length, 0, 'the row the lost answer made is bound, not created again');
   const g = storeOf(org, dir).readGroup('view', VIEW_KEY);
   assert.equal(g.pending, null);
   assert.equal(g.committed.root.id, ids.view);
-  assert.equal(barrier.allow('contoso_item', 'after the proof'), true, 'the proved attempt no longer holds its table');
-
-  // Control: the same pending attempt, opened on a barrier with no build to prove it, holds the table.
-  const held = createPublicationBarrier();
-  const dir2 = newDir();
-  storeOf(org, dir2).prepareAttempt({
-    family: 'view', key: VIEW_KEY, baseGeneration: null, root: { kind: 'view', key: VIEW_KEY, id: ids.view },
-    expected: { proofVersion: 1, proofSchema: 'view-v1', rootId: ids.view, baseProofSha256: null, sentProjectionSha256: 'a'.repeat(64), preservationSha256: 'a'.repeat(64), baseObservation: null, children: [] },
-    knownScopes: [{ type: 'table', table: 'contoso_item' }], declarationSha256: 'b'.repeat(64),
-  });
-  require('../lib/managed-bindings.js').openManagedContext({ workspaceDir: dir2, environment: org.origin, appUniqueName: APP, solutionUniqueName: SOLUTION, barrier: held });
-  assert.equal(held.allow('contoso_item', 'no proof'), false);
+  assert.equal(barrier.blocks('contoso_item'), false, 'the proved attempt no longer holds its table');
 });
-
 test('a store the build cannot trust halts before any write: managed-binding-store-unreadable, never retried', async () => {
   const org = createFakeBuildOrg({ entities: ENTITIES });
   const dir = newDir();
@@ -239,6 +299,9 @@ test('a store the build cannot trust halts before any write: managed-binding-sto
   const r = await build(org, dir, spec);
   assert.equal(r.err && r.err.code, 'managed-binding-store-unreadable', r.err && r.err.stack);
   assert.equal(r.err.transient, false);
+  // The file is the record of changes not yet proved: the remedy keeps it and puts the build's own copy back, never moves, deletes or resets it.
+  assert.match(r.err.message, /keep this file/i);
+  assert.doesNotMatch(r.err.message, /aside|delete|remove the file|reset/i);
   assert.deepEqual(r.writes, []);
   assert.equal(fs.readFileSync(file, 'utf8'), '{ "not": "a store"');
 
@@ -266,10 +329,12 @@ test('the CLI hands every attempt the one store it opened, and a stable view is 
   const seen = [];
   const runBuild = (s, o) => { seen.push(o.bindingGroups); return viewsAndCharts(s, o); };
   for (let run = 0; run < 2; run += 1) {
-    const sdk = createMakerSdk({ workspaceStorage: createNodeWorkspaceStorage(dir), instanceUrl: org.origin, httpClient: org.httpClient });
+    // The CLI's client is gated by the barrier it hands the build (build-model-app.js makeSdk); so is this one.
+    const publicationBarrier = createPublicationBarrier();
+    const sdk = createMakerSdk({ workspaceStorage: createNodeWorkspaceStorage(dir), instanceUrl: org.origin, httpClient: gatedClient(org, publicationBarrier) });
     await sdk.initWorkspace();
     const mark = org.calls.length;
-    const out = await buildModelApp(spec, { apply: true, env: org.origin, workspaceDir: dir, appDir: dir, retryDelayMs: 0 }, { sdk, provisionSdk: sdk, runBuild, warn: () => {}, log: () => {} });
+    const out = await buildModelApp(spec, { apply: true, env: org.origin, workspaceDir: dir, appDir: dir, retryDelayMs: 0 }, { sdk, provisionSdk: sdk, runBuild, publicationBarrier, warn: () => {}, log: () => {} });
     assert.equal(out.ok, true, JSON.stringify(out.errors));
     const posts = org.calls.slice(mark).filter((c) => c.method === 'POST' && c.path.startsWith('/savedqueries'));
     assert.equal(posts.length, run === 0 ? 1 : 0, `run ${run}`);
@@ -277,4 +342,243 @@ test('the CLI hands every attempt the one store it opened, and a stable view is 
   assert.equal(seen.length, 2);
   assert.ok(seen.every((g) => g && g.store), 'each invocation hands its attempt the store it opened');
   assert.equal(storeOf(org, dir).readGroup('view', VIEW_KEY).committed.root.id, ids.view);
+});
+
+// --- recovery, coverage and the managed settlement ------------------------------------------------------------------------------
+
+const workspaceArgs = (org, dir) => ({ workspaceDir: dir, environment: org.origin, appUniqueName: APP, solutionUniqueName: SOLUTION });
+const isViewCreate = (url) => /\/savedqueries(?:\?|$)/i.test(url);
+
+for (const acknowledged of [false, true]) test(`a pending attempt${acknowledged ? ' whose create was acknowledged' : ''} is proved by the expectation it recorded, never re-baselined from the current declaration`, async () => {
+  const org = createFakeBuildOrg({ entities: ENTITIES });
+  const spec = stableSpec({ charts: [] });
+  spec.views[0].description = 'A later declaration, not the pending expectation';
+  assert.equal((await build(org, newDir(), spec)).err, undefined);
+  // An attempt whose recorded expectation the row does not hold: the build does not adopt today's row as its proof — also
+  // when the create's answer came back and only the commit is missing, where no adoption approval is asked for.
+  const dir = newDir();
+  seedManagedDebt(workspaceArgs(org, dir), { key: VIEW_KEY, id: derived(stableSpec()).view, table: 'contoso_item', acknowledged });
+  const barrier = createPublicationBarrier();
+  const r = await build(org, dir, spec, { publicationBarrier: barrier, authorizedAdoption: new Set([`view:${VIEW_KEY}`]) });
+  assert.ok(r.err, 'the attempt does not prove');
+  const g = storeOf(org, dir).readGroup('view', VIEW_KEY);
+  assert.ok(g.pending, 'it stays pending');
+  assert.equal(g.committed, null, 'and nothing is committed over it');
+  assert.equal(barrier.allow('contoso_item', 'proof check'), false, 'its table stays withheld');
+  assert.deepEqual(r.tablePublishes, []);
+});
+
+test('a lost create keeps its recorded content expectation when the row and the declaration both change afterwards', async () => {
+  const org = createFakeBuildOrg({ entities: ENTITIES });
+  const firstDir = newDir();
+  const spec = stableSpec({ charts: [] });
+  spec.views[0].description = 'Original intended description';
+  const restore = loseNextCreateAnswer(org, 'savedqueries');
+  const first = await build(org, firstDir, spec);
+  restore();
+  const before = storeOf(org, firstDir).readGroup('view', VIEW_KEY);
+  assert.ok(before.pending, first.err && first.err.message);
+  const id = before.pending.root.id;
+  await org.httpClient.patch(`${org.origin}/api/data/v9.2/savedqueries(${id})`, { description: 'Different content after the interruption' });
+  const dir = newDir();
+  for (const file of storeFiles(firstDir)) fs.copyFileSync(path.join(firstDir, file), path.join(dir, file));
+  const changed = structuredClone(spec);
+  changed.views[0].description = 'Different content after the interruption';
+  const barrier = createPublicationBarrier();
+  const r = await build(org, dir, changed, { publicationBarrier: barrier, authorizedAdoption: new Set([`view:${VIEW_KEY}`]) });
+  const after = storeOf(org, dir).readGroup('view', VIEW_KEY);
+  assert.ok(after.pending, 'the attempt is not retired against later content and a changed declaration');
+  assert.deepEqual(after.pending.expected, before.pending.expected, 'its expectation is the one written before the send');
+  assert.equal(after.committed, null);
+  assert.deepEqual(r.writes, [], 'nothing is sent over it');
+  assert.equal(barrier.allow('contoso_item', 'after recovery'), false);
+});
+
+test('the attempt is journaled as sending, with its complete expected content, before the create leaves', async () => {
+  const org = createFakeBuildOrg({ entities: ENTITIES });
+  const dir = newDir();
+  const original = org.httpClient.post.bind(org.httpClient);
+  const seen = [];
+  org.httpClient.post = async (url, body, ...args) => {
+    if (isViewCreate(url)) seen.push(storeOf(org, dir).readGroup('view', VIEW_KEY).pending);
+    return original(url, body, ...args);
+  };
+  const r = await build(org, dir, stableSpec({ charts: [] }));
+  assert.equal(r.err, undefined, r.err && r.err.message);
+  assert.equal(seen.length, 1);
+  assert.equal(seen[0].phase, 'sending');
+  for (const field of ['sentProjectionSha256', 'preservationSha256']) assert.match(String(seen[0].expected[field]), /^[0-9a-f]{64}$/, field);
+  assert.equal(seen[0].expected.rootId, derived(stableSpec()).view);
+});
+
+test('a table publish whose outcome was not confirmed fences the table in every later build, a new sibling view included', async () => {
+  const org = createFakeBuildOrg({ entities: ENTITIES });
+  const dir = newDir();
+  const spec = stableSpec({ charts: [] });
+  org.refuseNextTablePublish(503);
+  const first = await build(org, dir, spec);
+  assert.equal(first.tablePublishes.length, 1, 'one publish was sent and answered 503');
+  assert.equal(storeOf(org, dir).readGroup('view', VIEW_KEY).committed.publication.state, 'unconfirmed');
+  const next = structuredClone(spec);
+  next.views.push({ ...next.views[0], name: 'Sibling View' });
+  const second = await build(org, dir, next);
+  assert.match(String(second.err && second.err.message), /managed-publication-unconfirmed/);
+  assert.deepEqual(second.tablePublishes, [], 'the scope is not published again past an unconfirmed send');
+});
+
+test('a build without createIdentity cannot publish a table whose managed view has a draft its store did not prove', async () => {
+  const org = createFakeBuildOrg({ entities: ENTITIES });
+  const dir = newDir();
+  const seed = await build(org, dir, stableSpec({ charts: [] }));
+  assert.equal(seed.err, undefined, seed.err && seed.err.message);
+  const id = derived(stableSpec()).view;
+  await org.httpClient.patch(`${org.origin}/api/data/v9.0/savedqueries(${id})`, { description: 'A maker draft that must not be released with a sibling' });
+  const next = makeSpec({ charts: [] });
+  next.views[0].name = 'Unprotected sibling';
+  const r = await build(org, dir, next);
+  assert.match(String(r.err && r.err.message), /create-completion-required/);
+  assert.deepEqual(r.tablePublishes, [], 'discovery routes the table through the coverage protocol whatever this spec declares');
+  assert.ok(org.fake.unpublished().some((u) => u.id === id), 'the draft stays unpublished');
+});
+
+test('a failed solution membership keeps the attempt; the next run finishes the membership at the same id, then commits', async () => {
+  const org = createFakeBuildOrg({ entities: ENTITIES });
+  const dir = newDir();
+  const spec = stableSpec({ charts: [] });
+  const id = derived(stableSpec()).view;
+  const stop = org.intercept((c) => c.method === 'POST' && /AddSolutionComponent/.test(c.path), () => ({ status: 503, headers: {}, body: { error: { message: 'membership not added' } } }));
+  const first = await build(org, dir, spec);
+  stop();
+  assert.ok(first.err, 'the membership failed after the create');
+  let g = storeOf(org, dir).readGroup('view', VIEW_KEY);
+  assert.ok(g.pending, 'the attempt is kept');
+  assert.equal(g.committed, null, 'no group is committed before the membership is proved');
+  assert.deepEqual(first.tablePublishes, []);
+  const second = await build(org, dir, spec);
+  assert.equal(second.err, undefined, second.err && second.err.message);
+  assert.equal(creates(second, 'savedqueries').length, 0, 'the row is not created again');
+  const adds = second.writes.filter((c) => /AddSolutionComponent/.test(c.path));
+  assert.equal(adds.length, 1);
+  assert.equal(adds[0].body.ComponentId, id);
+  g = storeOf(org, dir).readGroup('view', VIEW_KEY);
+  assert.equal(g.pending, null);
+  assert.equal(g.committed.root.id, id);
+});
+
+test('a receipt that cannot be written after an acknowledged create is an outcome to recover, never a refusal made before the send', async () => {
+  const org = createFakeBuildOrg({ entities: ENTITIES });
+  const dir = newDir();
+  const barrier = createPublicationBarrier();
+  const store = storeOf(org, dir, barrier);
+  const broken = new Proxy(store, {
+    get(target, key) {
+      if (key === 'noteSaved') return () => { throw Object.assign(new Error('the receipt cannot be persisted'), { code: 'creation-record-unwritten' }); };
+      return target[key];
+    },
+  });
+  const r = await build(org, dir, stableSpec({ charts: [] }), { publicationBarrier: barrier, bindingGroups: { store: broken, debt: [], absent: false } });
+  assert.equal(creates(r, 'savedqueries').length, 1);
+  assert.equal(org.fake.rows('savedqueries').filter((x) => x.data.name === 'Declared Items').length, 1);
+  assert.ok(r.err, 'the build stops');
+  assert.doesNotMatch(r.err.message, /was not created|nothing was written|view-create-refused|view-write-refused/, 'an acknowledged create is not reported as refused');
+  assert.ok(store.readGroup('view', VIEW_KEY).pending, 'the attempt is kept for the next run');
+});
+
+test("the build's inline --verify reads the bound rows by the same managed manifest as standalone verify", async () => {
+  const org = createFakeBuildOrg({ entities: ENTITIES });
+  const dir = newDir();
+  const seeded = await build(org, dir, stableSpec({ charts: [] }));
+  assert.equal(seeded.err, undefined, seeded.err && seeded.err.message);
+  const id = derived(stableSpec()).view;
+  org.intercept((c) => c.method === 'GET' && c.path.startsWith(`/savedqueries(${id})`), () => ({ status: 404, headers: {}, body: { error: { code: '0x80040217', message: 'bound row no longer exists' } } }));
+  const next = stableSpec({ views: [], charts: [] });
+  const sdk = createMakerSdk({ workspaceStorage: createNodeWorkspaceStorage(dir), instanceUrl: org.origin, httpClient: org.httpClient });
+  await sdk.initWorkspace();
+  // The bound row is gone: a read by its id finds nothing, whatever else the table holds.
+  const read = {
+    findTable: async () => ({ logicalName: 'contoso_item' }),
+    findColumns: async () => [{ logicalName: 'contoso_code' }],
+    queryRecords: async () => [],
+    sitemapXml: async () => '<SiteMap><Area><Group><SubArea Entity="contoso_item"/></Group></Area></SiteMap>',
+  };
+  let given;
+  let inline;
+  const out = await buildModelApp(next, { apply: true, verify: true, env: org.origin, workspaceDir: dir, appDir: dir, retryDelayMs: 0 }, {
+    sdk, provisionSdk: sdk, runBuild: viewsAndCharts, warn: () => {}, log: () => {},
+    verify: async (s, opts) => { given = opts; inline = await verifySpec(s, read, opts); return inline; },
+  });
+  assert.ok(out, 'the build returned');
+  assert.ok(given && given.managedManifest, 'the inline verify is handed the managed manifest');
+  const standalone = await verifySpec(next, read, { managedManifest: readManagedManifest(workspaceArgs(org, dir)) });
+  assert.equal(inline.ok, false, 'a missing bound row is not a pass');
+  assert.deepEqual(inline.missing, standalone.missing, 'both entries report the same missing bound row');
+  assert.ok(inline.missing.some((m) => m.kind === 'managed-view'));
+});
+
+test('a removed declaration keeps its pending hold; a build recovers it by its recorded expectation, with the adoption approval, never by omission', async () => {
+  const org = createFakeBuildOrg({ entities: ENTITIES });
+  const dir = newDir();
+  const declared = stableSpec({ charts: [] });
+  const restore = loseNextCreateAnswer(org, 'savedqueries');
+  const first = await build(org, dir, declared);
+  restore();
+  assert.ok(storeOf(org, dir).readGroup('view', VIEW_KEY).pending, first.err && first.err.message);
+  const removed = stableSpec({ views: [], charts: [] });
+
+  // A spec without the field: nothing recovers it, and its table stays held.
+  const plainBarrier = createPublicationBarrier();
+  const plain = await build(org, dir, makeSpec({ views: [], charts: [] }), { publicationBarrier: plainBarrier });
+  assert.deepEqual(plain.writes, []);
+  assert.equal(plainBarrier.allow('contoso_item', 'omitted'), false);
+  assert.equal(readManagedManifest(workspaceArgs(org, dir)).pending.length, 1);
+
+  // Proved by its recorded expectation, but no answer acknowledged the create: it is not bound without the approval.
+  const warnings = [];
+  const heldBarrier = createPublicationBarrier();
+  const held = await build(org, dir, removed, { publicationBarrier: heldBarrier, warn: (m) => warnings.push(String(m)) });
+  assert.deepEqual(held.writes, [], 'nothing is sent for an undeclared attempt');
+  assert.deepEqual(held.tablePublishes, []);
+  assert.equal(heldBarrier.allow('contoso_item', 'not approved'), false, 'its table stays withheld');
+  assert.ok(storeOf(org, dir).readGroup('view', VIEW_KEY).pending, 'the attempt is kept');
+  assert.ok(warnings.some((w) => /managed-adoption-required/.test(w) && /no longer declared/.test(w)), warnings.join('\n'));
+
+  // With the approval it is proved, joins the solution, is committed, and its table published once.
+  const barrier = createPublicationBarrier();
+  const r = await build(org, dir, removed, { publicationBarrier: barrier, authorizedAdoption: new Set([`view:${VIEW_KEY}`]) });
+  assert.equal(r.err, undefined, r.err && r.err.message);
+  assert.equal(creates(r, 'savedqueries').length, 0, 'never sent again');
+  assert.deepEqual(r.tablePublishes, [['contoso_item']]);
+  const g = storeOf(org, dir).readGroup('view', VIEW_KEY);
+  assert.equal(g.pending, null);
+  assert.equal(g.committed.root.id, derived(stableSpec()).view);
+  assert.equal(barrier.blocks('contoso_item'), false, 'the hold ends');
+});
+
+test('a removed declaration whose row no longer holds its recorded expectation stays pending and withheld, even with the approval', async () => {
+  const org = createFakeBuildOrg({ entities: ENTITIES });
+  const dir = newDir();
+  const restore = loseNextCreateAnswer(org, 'savedqueries');
+  await build(org, dir, stableSpec({ charts: [] }));
+  restore();
+  const id = storeOf(org, dir).readGroup('view', VIEW_KEY).pending.root.id;
+  await org.httpClient.patch(`${org.origin}/api/data/v9.2/savedqueries(${id})`, { description: 'Changed after the interruption' });
+  const warnings = [];
+  const barrier = createPublicationBarrier();
+  const r = await build(org, dir, stableSpec({ views: [], charts: [] }), { publicationBarrier: barrier, authorizedAdoption: new Set([`view:${VIEW_KEY}`]), warn: (m) => warnings.push(String(m)) });
+  assert.deepEqual(r.writes, []);
+  assert.deepEqual(r.tablePublishes, []);
+  assert.ok(storeOf(org, dir).readGroup('view', VIEW_KEY).pending);
+  assert.equal(barrier.allow('contoso_item', 'mismatch'), false);
+  assert.ok(warnings.some((w) => /does not hold what its recorded change expected/.test(w)), warnings.join('\n'));
+});
+
+test('the documented recovery keeps the store: no advice to move, delete or reset it', () => {
+  const doc = fs.readFileSync(path.join(__dirname, '..', '..', 'references', 'app-spec-schema-advanced.md'), 'utf8');
+  const start = doc.indexOf('## createIdentity');
+  assert.ok(start >= 0);
+  const next = doc.indexOf('\n## ', start + 3);
+  const section = doc.slice(start, next < 0 ? undefined : next);
+  assert.doesNotMatch(section, /\baside\b|delete (it|the (store|file))|reset (it|the store)|start (over|fresh)/i);
+  assert.match(section, /--authorize adopt:view:/);
+  assert.match(section, /declaration/);
 });

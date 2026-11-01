@@ -4,9 +4,11 @@
 // (savedqueryvisualization) row, as the layer reader of a managed view or chart group (lib/managed-layer-readers.js).
 //
 // WHY A VIEW OR CHART IS READ AT ALL. A table publish ships the saved layer of everything on the table. A managed view or
-// chart group owes no publish of its own (its publication is the build's table publish, state `not-needed`), but another
-// family's managed publish of the same table — a declared form's — would put its saved layer live too. So before that
-// publish is sent, the view's or chart's saved layer must be shown equal to its published one (publishManagedScope:
+// chart group (a declared view or chart with `createIdentity`, lib/creates-stable-build.js) owes its table's publish of
+// exactly the saved layer it proved (`publication.desiredSha256` is this reader's saved hash), and any publish of that
+// table — its own, a sibling's, or a plain publish the build routes through the managed publisher
+// (lib/managed-scope-publisher.js) — puts every covered group's saved layer live. So before that publish is sent, each
+// covered view's or chart's saved layer must be shown equal to what it owes, or to its published one (publishManagedScope:
 // "any other group a saved layer equal to its published one or to its desired hash").
 //
 // The two reads (Dataverse Web API, through a client whose `get(path)` answers { status, body } and does not throw on a

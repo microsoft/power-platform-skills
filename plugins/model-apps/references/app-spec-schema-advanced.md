@@ -680,15 +680,29 @@ downloaded spec. The only value is `"stable-v1"`; any other value is a validatio
   of creating a second one. Every other kind (configuration items, custom APIs, environment variables,
   field security, duplicate rules, pages, legacy views and charts) keeps today's ids.
 - **Where the binding is kept.** In the build workspace, one file per environment, app and solution
-  (`managed-bindings.<hash>.json`). It holds ids and hashes only: no row content, no credentials. A
-  file the build cannot trust stops the build before any write (`managed-binding-store-unreadable`);
-  restore it or move it aside. A row found at its id without a binding in this workspace is bound as
-  adopted: if it already matches the spec nothing is written, otherwise the usual approvals apply.
+  (`managed-bindings.<hash>.json`). It holds ids, hashes and the state of each change (for a change
+  not yet proved, the content it expects the row to hold); never credentials. Keep it with the build
+  workspace: it is the record of changes not yet proved. A file the build cannot trust stops the build
+  before any write (`managed-binding-store-unreadable`); put back the build's own copy of it (from a
+  backup or version control) and run the build again.
+- **Adoption.** A row found at its id that this workspace never bound — including one equal to the
+  spec, and one left by a create whose answer was lost — is bound only with
+  `--authorize adopt:view:<table>/<name>` (or `adopt:chart:<table>/<name>`). Without it nothing is
+  written and the row stays unbound.
+- **A change not yet proved** holds its table's publish. The next build proves it against the content
+  it recorded before the send, never against the current declaration: a change proved unsent is sent
+  again; a row that holds the recorded content is bound; a row that differs stays held until the
+  original declaration is built again or the row is put back. This holds for a removed declaration too:
+  the build proves it by its recorded content (with the adoption approval when the create was never
+  acknowledged), and removing a declaration never releases the hold — keep `createIdentity` set. A
+  publish whose outcome was lost is confirmed by a fresh read, never sent again.
 - **Local copy.** A local copy at the id with an edit the server has not seen, or a local create that
   was never acknowledged, stops that view or chart before anything is fetched over, reapplied or sent
   (`create-completion-required`); the copy is kept byte for byte, and running again stops again. There is
   no `overwrite:` approval for this stop: put the change into the spec, then refresh the local copy.
 - **Publishing.** A create whose answer was lost holds its table's publish until a later build has
-  found and bound the row; another table still publishes.
+  found and bound the row; another table still publishes. While a change is not yet proved, page edits
+  that publish the app (`genpage.js` add-to-app and remove-from-app, `genpage-upload.js --app-id`) are
+  refused with `publication-withheld`, and a teardown leaves that table's publish unsent, with a warning.
 - **`--verify`** reads each bound view or chart by its id. A binding whose create is not yet settled, or
   a file it cannot read, is reported as unverified, never as a pass.

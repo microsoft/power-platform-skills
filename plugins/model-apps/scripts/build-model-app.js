@@ -65,6 +65,8 @@ const { isDeclaredWebResource } = require('./lib/web-resource-reconcile.js');
 const { makeWritesBlocking } = require('./lib/output-redaction.js');
 // The lease one apply of an app holds for the whole of its work in the workspace (lib/app-operation-lease.js).
 const { withAppBuildLease, applyWorkspaceOf } = require('./lib/app-operation-lease.js');
+const { readManagedManifest } = require('./lib/managed-bindings.js');
+const { createAttemptSendObserver } = require('./lib/managed-feature-contract.js');
 const { emitSkillCompleted, createStepTally } = require('./lib/telemetry/skill-completed.js');
 
 // The folder an app's workspace lives in, checked before anything is built on it. An APPLY makes the folder if it is
@@ -96,7 +98,7 @@ function assertWorkspaceDir(workspaceDir, { create }) {
 //                  which environment it belongs to, and the answer comes back as `folderNote` so the
 //                  preview can warn that an --apply would stop. Construction is offline (no token
 //                  until first call).
-async function makeSdk(env, spec, workspaceDir, languageCode, { persistent = true, throttle, previewPush = false, publicationBarrier } = {}) {
+async function makeSdk(env, spec, workspaceDir, languageCode, { persistent = true, throttle, previewPush = false, publicationBarrier, sendObserver } = {}) {
   // A link at the workspace root would make the provision SDK's storage follow it. Refuse
   // before either constructor: the first SDK does not use this directory, but once the
   // directory has been refused the factory must not run at all.
@@ -105,10 +107,12 @@ async function makeSdk(env, spec, workspaceDir, languageCode, { persistent = tru
   // The one client of both SDK instances and of verify's isolated reader draws its waits for a throttled answer from the run's budget (`throttle`, made by main()).
   // The build's own `--verify` reads a form's captions in a language the form read does not carry from a translation export (verify-model-app.js readerFor), through this client:
   // that request is sent once whatever answers it (isTranslationExport), as in the standalone verify — a long action, which a re-send would run a second time.
-  // The publication barrier checks every publish request when it is dispatched (publicationBarrier.gateRequest).
+  // The publication barrier checks every publish request when it is dispatched (publicationBarrier.gateRequest). The send observer of managed
+  // attempts (managed-feature-contract.js createAttemptSendObserver) sits INSIDE the gate, so a request the barrier answers itself is never counted
+  // as sent; with no attempt's window open it passes every request untouched.
   // A configuration write (lib/configuration-transport.js) is sent once too: a re-sent create can make a second row, and a re-sent PATCH or
   // DELETE can hide that the first send's outcome was never seen. Outside that scope the predicate answers false, so nothing else changes.
-  const httpClient = createAzHttpClient(env, { throttle, sendOnce: (method, url) => isTranslationExport(method, url) || configurationSendOnce(method, url), ...(publicationBarrier ? { request: publicationBarrier.gateRequest() } : {}) });
+  const httpClient = createAzHttpClient(env, { throttle, sendOnce: (method, url) => isTranslationExport(method, url) || configurationSendOnce(method, url), ...(publicationBarrier ? { request: publicationBarrier.gateRequest(sendObserver ? sendObserver.wrap() : undefined) } : {}) });
   const sdkTempDir = makeTempWorkspace('model-app-');
   const cleanup = () => {
     fs.rmSync(sdkTempDir, { recursive: true, force: true });
@@ -744,6 +748,7 @@ async function buildModelAppHeld(spec, opts, deps, v, buildLease) {
       r = await runBuild(spec, {
         publicationBarrier,
         ...(bindingGroups ? { bindingGroups } : {}),
+        ...(deps.sendObserver ? { sendObserver: deps.sendObserver } : {}),
         sdk: deps.sdk,
         provisionSdk: deps.provisionSdk,
         owedLengths,
@@ -924,7 +929,12 @@ async function buildModelAppHeld(spec, opts, deps, v, buildLease) {
           // `--language-code` in an organization whose base language is another one publishes its captions in the flag's language, and a
           // verify that does not know it holds them to the organization's and reports the captions it was just given as missing. And the app
           // folder, from which a web resource's `contentPath` is read to compare its deployed content (verify-spec.js, the web-resource check).
-          const vr = await deps.verify(spec, { environmentSkipped: r.skipped, phases: opts.phases, baselineSpec: opts.baselineSpec, languageCode: opts.languageCode, preResolvedLanguageCode: opts.preResolvedLanguageCode, appDir: opts.appDir, configurationBindings: opts.configurationBindings });
+          // And the managed bindings the same workspace holds, read afresh after the build, exactly as the standalone verify reads them
+          // (verify-model-app.js): a bound view or chart is held to its bound id, and a pending or unusable group is listed as unverified.
+          const managedManifest = spec.solution && spec.solution.uniqueName
+            ? readManagedManifest({ workspaceDir: applyWorkspaceOf(opts), environment: opts.env, appUniqueName: appUniqueName(spec), solutionUniqueName: spec.solution.uniqueName })
+            : undefined;
+          const vr = await deps.verify(spec, { environmentSkipped: r.skipped, phases: opts.phases, baselineSpec: opts.baselineSpec, languageCode: opts.languageCode, preResolvedLanguageCode: opts.preResolvedLanguageCode, appDir: opts.appDir, configurationBindings: opts.configurationBindings, managedManifest });
           const present = vr.checks.length - vr.missing.length;
           log(`\n${vr.ok ? '✓ verify PASS' : `✗ verify FAIL — ${vr.missing.length} missing`} (${present}/${vr.checks.length} present)`);
           // Named explicitly rather than folded into the pass, so a green verify never reads as
@@ -1610,7 +1620,8 @@ async function runBuildCommand({ env, spec, languageCode, changedOnly, workspace
   // `throttle`) and the build's own retry loop (`deps.throttle`). A wait of more than a few seconds is announced on stderr — stdout carries the JSON result.
   const throttle = makeThrottleBudget({ warn: (m) => process.stderr.write(`⚠ ${m}\n`) });
   const publicationBarrier = createPublicationBarrier();
-  const { sdk, provisionSdk, cleanup, isolatedReader, folderNote, previewHttpClient } = await makeSdk(env, spec, workspaceDir, authoringLanguageCode, { persistent: opts.apply, throttle, previewPush: opts.previewPush === true && !opts.apply, publicationBarrier });
+  const sendObserver = createAttemptSendObserver();
+  const { sdk, provisionSdk, cleanup, isolatedReader, folderNote, previewHttpClient } = await makeSdk(env, spec, workspaceDir, authoringLanguageCode, { persistent: opts.apply, throttle, previewPush: opts.previewPush === true && !opts.apply, publicationBarrier, sendObserver });
   if (folderNote) process.stderr.write(`⚠ ${folderNote}\n`);
   // Durable build journal (apply runs only): a per-run record of steps + where a run halted,
   // written to <workspace>/build-log.jsonl. Resume = re-run the same command (idempotent).
@@ -1665,7 +1676,7 @@ async function runBuildCommand({ env, spec, languageCode, changedOnly, workspace
     const deps = {
       log: (m) => process.stderr.write(m + '\n'),
       warn: (m) => process.stderr.write(`⚠ ${m}\n`),
-      sdk, provisionSdk, journal, throttle, stepTally, publicationBarrier,
+      sdk, provisionSdk, journal, throttle, stepTally, publicationBarrier, sendObserver,
       ...(previewHttpClient ? { previewHttpClient } : {}),
       // The role-privileges check must actually RUN here. verify-spec skips it unless BOTH
       // `rolePrivileges` and `entityPrivileges` readers are present, and `entityPrivileges` used to

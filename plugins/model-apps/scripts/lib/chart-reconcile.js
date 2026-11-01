@@ -190,6 +190,15 @@ async function planChartReconcile({ chart, sdk, chartArtifact }, ctx = {}) {
   const binding = await lookupBinding(ctx, 'chart', key);
   let id = boundIdentity(binding, { code: 'chart-binding-mismatch', key }).id;
   if (id) id = normalizeGuid(id) || id;
+  // As for a view: a row at the stable create identity is an observation (an id to read), never a binding.
+  if (!id && !binding && ctx.managed && typeof ctx.managed.observe === 'function') {
+    try {
+      id = normalizeGuid(await ctx.managed.observe('chart', key)) || '';
+    } catch {
+      plan.unknown.push(refusal(key, 'chart-lookup-unreadable', 'whether the chart exists could not be read'));
+      return plan;
+    }
+  }
   if (!id) {
     try {
       id = normalizeGuid(await sdk.findArtifact('chart', { name: intent.name, entity: intent.entity }));
@@ -224,6 +233,7 @@ async function planChartReconcile({ chart, sdk, chartArtifact }, ctx = {}) {
   }
   const desired = desiredFull(intent, live);
   plan.changed = PARTS.filter((p) => canonicalJson(desired[p]) !== canonicalJson(live[p]));
+  plan.desired = desired;
   plan.baseline = projectionBaseline(desired);
   plan.origin = binding ? binding.origin : 'adopted';
   if (plan.changed.length === 0) {
@@ -402,4 +412,7 @@ module.exports = {
   applyChartReconcile,
   CHART_TYPES,
   ID_MEASURES,
+  liveFull,
+  desiredFull,
+  PARTS,
 };

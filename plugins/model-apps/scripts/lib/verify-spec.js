@@ -2291,7 +2291,12 @@ async function verifySpec(spec, read, opts = {}) {
         } catch (error) {
           readError = error;
         }
-        add(`managed-${g.family}`, `${g.key} (${g.root.id})`, rows && rows[0], readError ? String(readError.message || readError) : '');
+        // Present only when the row answered IS the bound row: a reader that answers some other row (a filter it did not apply) is not
+        // evidence the bound id exists.
+        const boundId = String(g.root.id || '').toLowerCase().replace(/^\{|\}$/g, '');
+        const row = rows && rows[0];
+        const same = !!row && String(row[t[1]] || '').toLowerCase().replace(/^\{|\}$/g, '') === boundId;
+        add(`managed-${g.family}`, `${g.key} (${g.root.id})`, same, readError ? String(readError.message || readError) : row && !same ? 'the read answered another row than the bound id' : '');
       }
     });
   }

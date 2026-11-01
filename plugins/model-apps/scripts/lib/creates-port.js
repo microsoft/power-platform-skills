@@ -332,10 +332,20 @@ function interpretCompositePush(checked, attempt) {
  *     never starts with part of its graph;
  *   - calls `onAttempt({ kind, key, id, childIds })` before execute, so the caller can record the attempt (the ids it is about to
  *     send) first; a failure there sends nothing;
+ *   - throws every stop it makes before execute (the reservation, a child it does not reserve, onAttempt) with `preSend: true`:
+ *     the one certificate that nothing was sent. A throw from execute never carries it;
  *   - calls `execute` exactly once — no retry, no read, no adoption;
  *   - answers interpretCompositePush(checked); a throw is rethrown as the same object, annotated with `createAttempt`.
  * It protects a (kind, key) only, never a whole kind: `protects(kind)` without a key is false.
  */
+function markPreSend(error) {
+  const err = error instanceof Error ? error : Object.assign(new Error(String(error)), { code: 'create-identity-invalid' });
+  try {
+    Object.defineProperty(err, 'preSend', { value: true, enumerable: false, configurable: true });
+  } catch { /* a frozen error cannot be certified, so it is reported as an unknown outcome */ }
+  return err;
+}
+
 function createCompositeCreatesPort({ catalog, newId, onAttempt } = {}) {
   if (!isIntentCatalog(catalog)) throw createStop('create-identity-invalid', 'creates: the composite port needs a catalog from creates-catalog.js createIntentCatalog');
   if (onAttempt !== undefined && typeof onAttempt !== 'function') throw new TypeError('creates port: onAttempt must be a function');
@@ -344,16 +354,26 @@ function createCompositeCreatesPort({ catalog, newId, onAttempt } = {}) {
   async function run(request, execute) {
     const { kind, key, childKeys } = validateRequest(request, execute);
     if (routeIntent({ kind, key }, { catalog }) !== 'composite') return passthrough.run(request, execute);
-    const reserved = reserveChildren(kind, key, { catalog, actualRootId: request.actualRootId, children: request.children || [] });
-    for (const k of childKeys) {
-      if (!Object.prototype.hasOwnProperty.call(reserved.childIds, k)) {
-        throw createStop('create-identity-unsupported', `creates: ${kind} '${key}' asked for the child '${k}', which its declaration does not reserve`, { create: { kind, key, id: reserved.rootId } });
+    let id;
+    let childIds;
+    let attempt;
+    try {
+      const reserved = reserveChildren(kind, key, { catalog, actualRootId: request.actualRootId, children: request.children || [] });
+      for (const k of childKeys) {
+        if (!Object.prototype.hasOwnProperty.call(reserved.childIds, k)) {
+          throw createStop('create-identity-unsupported', `creates: ${kind} '${key}' asked for the child '${k}', which its declaration does not reserve`, { create: { kind, key, id: reserved.rootId } });
+        }
       }
+      id = reserved.rootId;
+      childIds = { ...reserved.childIds };
+      attempt = Object.freeze({ kind, key, id, childIds: Object.freeze({ ...childIds }) });
+      if (onAttempt) await onAttempt(attempt);
+    } catch (error) {
+      // Certified pre-send: execute has not been called, so nothing of this create left the process. The flag, not the
+      // error's code, is what lets a caller report it as a refusal (reconcile-common.js createThroughPort): a code can be
+      // reused by a later step that runs after the send.
+      throw markPreSend(error);
     }
-    const id = reserved.rootId;
-    const childIds = { ...reserved.childIds };
-    const attempt = Object.freeze({ kind, key, id, childIds: Object.freeze({ ...childIds }) });
-    if (onAttempt) await onAttempt(attempt);
     let checked;
     try {
       checked = await execute({ id, childIds: { ...childIds } });
@@ -395,6 +415,7 @@ function createCompositePortForSpec(spec, { intents = [], shippedKinds = [], fea
 }
 
 module.exports = {
+  markPreSend,
   createCreatesPort,
   createCreatesPortForSpec,
   createIntentCatalog,

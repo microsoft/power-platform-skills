@@ -3242,7 +3242,7 @@ function openBuildBindingGroups(spec, { apply, env, workspaceDir, appDir, barrie
   try {
     return openManagedContext({ workspaceDir: applyWorkspaceOf({ workspaceDir, appDir }), environment: env, appUniqueName: appUniqueName(spec), solutionUniqueName: sol.uniqueName, barrier: barrier || null });
   } catch (err) {
-    throw new BuildHalt(`the managed binding store of this app could not be read (${String((err && err.message) || err).replace(/\s+/g, ' ').slice(0, 300)}); the build stopped before writing anything. Restore the file or move it aside and run the build again.`, { phase: 'preflight', code: 'managed-binding-store-unreadable', recoverable: false, retry: RETRY.NEVER, cause: err });
+    throw new BuildHalt(`the managed binding store of this app could not be read (${String((err && err.message) || err).replace(/\s+/g, ' ').slice(0, 300)}); the build stopped before writing anything. Keep this file: it is the record of changes not yet proved, and a build without it could publish them unproved. Put back the build's own copy of it (from a backup or version control; a link must be replaced by the file itself) and run the build again.`, { phase: 'preflight', code: 'managed-binding-store-unreadable', recoverable: false, retry: RETRY.NEVER, cause: err });
   }
 }
 
@@ -3639,6 +3639,15 @@ async function runSdkBuildPhases(spec, opts, owed) {
     }
   }
   const stableCtx = stable ? { ...featureCtx, managed: stable.managed, creates: stable.port } : featureCtx;
+  // The publishes of every table a committed managed group publishes in (lib/managed-scope-publisher.js): the store's tables
+  // are routed now, a declared view's or chart's when it commits, and each is paid through the managed coverage protocol at
+  // the points below where the build would have published it. With no store file nothing is routed, and every request is the
+  // one the build always sent. The halt factory is reached through a closure: managedStop is defined further down.
+  const managedTables = bindingGroups && bindingGroups.store && provision.dataverse
+    ? require('./managed-scope-publisher.js').createManagedTablePublisher({ store: bindingGroups.store, barrier: owed.barrier, client: provision.dataverse, halt: (...args) => managedStop(...args) })
+    : null;
+  if (managedTables) managedTables.routeStored();
+  const isRouted = (logical) => !!managedTables && managedTables.routed(logical);
   const settleStableResult = stable
     ? createFeatureSettlement({ barrier: owed.barrier, markIncomplete: featureIncomplete, settled: settledPublishes, recordBinding: stable.recordBinding })
     : settleFeatureResult;
@@ -3649,7 +3658,9 @@ async function runSdkBuildPhases(spec, opts, owed) {
     try {
       return await plan();
     } catch (err) {
-      const code = stable && err && typeof err.code === 'string' && /^(?:create-[a-z-]+|creation-record-unwritten|managed-[a-z-]+)$/.test(err.code) ? err.code : null;
+      // Only a stop certified as made before anything was written or sent (creates-port.js markPreSend) is the item's refusal;
+      // anything else propagates. Never inferred from the code: a code says what went wrong, not when.
+      const code = stable && err && err.preSend === true ? (typeof err.code === 'string' && err.code ? err.code : 'creation-refused') : null;
       if (!code) throw err;
       return { key, intent: null, viewId: null, chartId: null, action: null, changed: [], operations: [], refused: [featureRefusal(key, code, String(err.message || code))], unknown: [] };
     }
@@ -3776,6 +3787,13 @@ async function runSdkBuildPhases(spec, opts, owed) {
   const reconciledTables = new Set();
   const publishReconciled = async (type, id, entityLogical, label) => {
     const logical = String(entityLogical || '').toLowerCase();
+    // A routed table: the managed publisher pays it — now, as this publish would have been, or with phase 8 (the plain
+    // refusal below remembers it as wanted).
+    if (logical && isRouted(logical)) {
+      owed.barrier.allow(logical, label);
+      if (!publishInPhase8) await managedTables.flush([logical], { phase: 'publish', path: label });
+      return;
+    }
     if (logical && !owed.barrier.allow(logical, label)) return;
     if (publishInPhase8 && logical) {
       oweTablePublish(logical, type, id, label);
@@ -3789,7 +3807,7 @@ async function runSdkBuildPhases(spec, opts, owed) {
   async function commitSettledPublishes({ charts } = {}) {
     for (const { scope, label } of settledPublishes.splice(0)) {
       const table = String(scope.table || '').toLowerCase();
-      if (!owed.barrier.allow(table, label)) continue;
+      if (!isRouted(table) && !owed.barrier.allow(table, label)) continue;
       if (scope.type === 'chart') charts.set(table, scope.id);
       else if (scope.type === 'view') await publishReconciled('view', scope.id, table, label);
     }
@@ -3910,11 +3928,15 @@ async function runSdkBuildPhases(spec, opts, owed) {
       }
       if (!publish || !client || typeof client.post !== 'function') {
         for (const logical of added || []) appAdded.add(logical);
-        return publishReconciledTables();
+        await publishReconciledTables();
+        if (managedTables) await managedTables.flush(owed.barrier.routedWanted(), { phase: 'app-shell', path: 'tables published before the app' });
+        return undefined;
       }
       await readHoldings();
       for (const logical of added) appAdded.add(logical);
       const wanted = owed.barrier.allowTables(preAppTables({ reconciled, charted: [...chartsToPublish.keys()], added, held: appHolds.tables }), 'tables published before the app');
+      // A routed table is left out of the request above and remembered as wanted: the managed publisher sends it first.
+      if (managedTables) await managedTables.flush(owed.barrier.routedWanted(), { phase: 'app-shell', path: 'tables published before the app' });
       const tables = wanted.filter((logical) => !namedBeforeApp.has(logical));
       const outcome = await publishTablesXml(client, tables);
       for (const logical of tables) namedBeforeApp.add(logical);
@@ -4058,6 +4080,19 @@ async function runSdkBuildPhases(spec, opts, owed) {
         },
         publish: async (target) => {
           const label = target.reasons.join(', ') || `table ${target.id}`;
+          const logical = String(target.id).toLowerCase();
+          // A routed table is published by the managed publisher; its answer is typed the same way.
+          if (isRouted(logical)) {
+            owed.barrier.allow(logical, label);
+            const failed = (error) => ({ type: target.artifact.type, id: target.artifact.id, shipped: false, publish: { kind: 'failed', error } });
+            try {
+              const out = await managedTables.flush([logical], { phase: 'publish', path: label });
+              if (out.withheld.includes(logical)) return failed({ code: 'publication-withheld', message: `the publish of table ${target.id} is withheld in this run` });
+              return { type: target.artifact.type, id: target.artifact.id, shipped: true, publish: { kind: 'submitted' } };
+            } catch (err) {
+              return failed({ code: (err && err.code) || 'managed-not-settled', message: String((err && err.message) || err) });
+            }
+          }
           // Withheld (owed.barrier): answered as a failed publish, which keeps it owed; the run reports the table once (below).
           if (!owed.barrier.allow(String(target.id).toLowerCase(), label)) {
             return { type: target.artifact.type, id: target.artifact.id, shipped: false, publish: { kind: 'failed', error: { code: 'publication-withheld', message: `the publish of table ${target.id} is withheld in this run` } } };
@@ -6348,6 +6383,30 @@ async function runSdkBuildPhases(spec, opts, owed) {
         const planArgs = { view: meta.specView, sdk: provision, resolveValue: meta.resolveValue, primaryName: meta.primaryName };
         const stableKey = declaredViewKey(meta.specView);
         const planView = () => planStable(stableKey, () => planViewReconcile(planArgs, stableCtx));
+        if (stable && stable.settle && stable.protects('view', stableKey)) {
+          // With a store: settled as one managed group (lib/creates-stable-build.js settle), whose membership is made before
+          // the commit, and whose table publish is paid through the managed coverage protocol.
+          const out = await stable.settle({
+            kind: 'view', key: stableKey, phase: 'views', label: `view ${stableKey}`, halt: managedStop, client: provision.dataverse,
+            sendObserver: opts.sendObserver || null, authorizedAdoption: featureCtx.authorizedAdoption, pinned: !!(meta.specView && meta.specView.viewId),
+            planOnce: async () => {
+              const first = await planView();
+              return refuseUnsentCopy('view', 'view', approvalKey('view', first.key), first.viewId, first, planView);
+            },
+            applyPlan: (p) => applyViewReconcile(p, { sdk: provision }, stableCtx),
+            onUnsettled: (p, res) => resetUnsettledCopy('view', p.viewId, p, res),
+            ensureMember: (id, createdNow) => (createdNow
+              ? provision.addSolutionComponent({ componentId: id, componentType: COMPONENT_TYPE.view, solutionUniqueName: sol.uniqueName })
+              : ensureInSolution(id, COMPONENT_TYPE.view, def.entityLogicalName)),
+          });
+          const { ok } = settleStableResult('views', `view ${out.plan.key}`, out.r);
+          if (!out.managed) await resetUnsettledCopy('view', out.plan.viewId, out.plan, out.r);
+          if (!ok) return null;
+          const made = out.r.saved.find((s) => s.created);
+          if (made) noteSaved(def.entityLogicalName, `view ${def.name}`);
+          await commitSettledPublishes();
+          return made ? made.id : out.plan.viewId;
+        }
         const firstPlan = await planView();
         const plan = await refuseUnsentCopy('view', 'view', approvalKey('view', firstPlan.key), firstPlan.viewId, firstPlan, planView);
         const r = await applyViewReconcile(plan, { sdk: provision }, stableCtx);
@@ -6384,6 +6443,17 @@ async function runSdkBuildPhases(spec, opts, owed) {
     await provision.addSolutionComponent({ componentId: pushed.id, componentType: COMPONENT_TYPE[type], solutionUniqueName: sol.uniqueName });
     return pushed.id;
   });
+
+  // 3z. The store's view and chart attempts whose declaration this spec no longer carries (creates-stable-build.js recoverUndeclared):
+  // each is recovered against the expectation it recorded, never planned from this spec, before any view or chart of it is planned.
+  // One that proves is committed and its table's owed publish paid here; any other keeps its hold, with a warning.
+  if (stable && stable.recoverUndeclared && (has('views') || has('charts'))) {
+    const tables = await stable.recoverUndeclared({
+      phase: 'views', client: provision.dataverse, halt: managedStop, warn: opts.warn, authorizedAdoption: featureCtx.authorizedAdoption,
+      ensureMember: (kind, id, table) => ensureInSolution(id, COMPONENT_TYPE[kind], table),
+    });
+    if (tables.length && managedTables) await managedTables.flush(tables, { phase: 'views', path: 'recovered change of an undeclared view or chart' });
+  }
 
   // 4. Views (independent -> parallel).
   if (has('views')) {
@@ -6452,6 +6522,8 @@ async function runSdkBuildPhases(spec, opts, owed) {
         if (!deferDefaultViewPublish) {
           const held = !owed.barrier.allow(logical, `default views of ${logical}`);
           const { updated } = await provision.enrichDefaultViews(logical, cols, held ? { excludeViewIds: authorViewIds, publish: false } : { excludeViewIds: authorViewIds });
+          // A routed table is held above; the managed publisher publishes it in place of the SDK.
+          if (isRouted(logical)) await managedTables.flush([logical], { phase: 'views', path: `default views of ${logical}` });
           return updated;
         }
         try {
@@ -6497,6 +6569,29 @@ async function runSdkBuildPhases(spec, opts, owed) {
           const planArgs = { chart: c, sdk: provision, chartArtifact: def };
           const stableKey = declaredChartKey(c);
           const planChart = () => planStable(stableKey, () => planChartReconcile(planArgs, stableCtx));
+          if (stable && stable.settle && stable.protects('chart', stableKey)) {
+            // As for a declared view: one managed group, membership before the commit.
+            const out = await stable.settle({
+              kind: 'chart', key: stableKey, phase: 'charts', label: `chart ${stableKey}`, halt: managedStop, client: provision.dataverse,
+              sendObserver: opts.sendObserver || null, authorizedAdoption: featureCtx.authorizedAdoption,
+              planOnce: async () => {
+                const first = await planChart();
+                return refuseUnsentCopy('chart', 'chart', approvalKey('chart', first.key), first.chartId, first, planChart);
+              },
+              applyPlan: (p) => applyChartReconcile(p, { sdk: provision }, stableCtx),
+              onUnsettled: (p, res) => resetUnsettledCopy('chart', p.chartId, p, res),
+              ensureMember: (id, createdNow) => (createdNow
+                ? provision.addSolutionComponent({ componentId: id, componentType: COMPONENT_TYPE.chart, solutionUniqueName: sol.uniqueName })
+                : ensureInSolution(id, COMPONENT_TYPE.chart, def.entityLogicalName)),
+            });
+            const { ok } = settleStableResult('charts', `chart ${out.plan.key}`, out.r);
+            if (!out.managed) await resetUnsettledCopy('chart', out.plan.chartId, out.plan, out.r);
+            if (!ok) return null;
+            const made = out.r.saved.find((s) => s.created);
+            if (made) noteSaved(def.entityLogicalName, `chart ${def.name}`);
+            await commitSettledPublishes({ charts: chartsToPublish });
+            return made ? made.id : out.plan.chartId;
+          }
           const firstPlan = await planChart();
           const plan = await refuseUnsentCopy('chart', 'chart', approvalKey('chart', firstPlan.key), firstPlan.chartId, firstPlan, planChart);
           const r = await applyChartReconcile(plan, { sdk: provision }, stableCtx);
@@ -9177,6 +9272,19 @@ async function runSdkBuildPhases(spec, opts, owed) {
   if (publishInPhase8) {
     await runner.run('publish', 'publish customizations', async () => {
       const seen = new Set(owed.barrier.blockedTables());
+      // Routed tables: what the plain path asked for, and every table a committed group still owes, are published by the
+      // managed publisher before the app; none of them is in the envelope below.
+      let managedOut = { published: [], withheld: [] };
+      if (managedTables) {
+        const ask = [...owed.barrier.routedWanted(), ...managedTables.owedTables()];
+        for (const k of owed.barrier.routedTables()) {
+          if (seen.has(k)) continue;
+          seen.add(k);
+          const asked = (spec.forms || []).some((f) => f.entity.toLowerCase() === k) || (spec.views || []).some((v) => v.entity.toLowerCase() === k) || chartsToPublish.has(k) || owed.tables.has(k);
+          if (asked) ask.push(k);
+        }
+        managedOut = await managedTables.flush(ask, { phase: 'publish', path: 'publish customizations' });
+      }
       const perEntity = []; // [type, id, names?] — first artifact found per entity
       // The table's target carries the names of what its one publish ships: what was deferred onto it (its reconciled views
       // and forms, its enriched default views — oweTablePublish), then what this run created or wrote there (savedOnTable,
@@ -9240,7 +9348,7 @@ async function runSdkBuildPhases(spec, opts, owed) {
       const refusedTables = new Map(publishedTargets.failed.map(({ target, error }) => [tableOfTarget.get(target), error]));
       for (const logical of appPublication.deferred('table')) {
         // A table whose publish is withheld (owed.barrier) was left out of perEntity: it was not published.
-        const withheld = owed.barrier.blocks(logical) ? { code: 'publication-withheld', message: `the publish of table ${logical} is withheld in this run` } : null;
+        const withheld = owed.barrier.blocks(logical) || managedOut.withheld.includes(logical) ? { code: 'publication-withheld', message: `the publish of table ${logical} is withheld in this run` } : null;
         appPublication.noteScopePublished('table', logical, withheld ? { error: withheld } : refusedTables.has(logical) ? { error: refusedTables.get(logical) } : {});
       }
       // Every answer, not only a confirmed one: a failed-by-value publish (e.g. CONNECTION_ERROR after the server ran it)
@@ -9399,6 +9507,10 @@ async function runSdkBuildPhases(spec, opts, owed) {
   // Everything still owed (an exact app's publish that was withheld, a table whose phase-8 publication had already run)
   // is published once. A withheld/conflicting exact publish stays owed; the change is saved; the build is incomplete.
   const flushed = await appPublication.flush();
+  // A routed table some plain publish of this run asked for and nothing paid yet is published now, once; one that cannot be
+  // (no client to publish with) leaves the build incomplete, its debt kept in the store.
+  if (managedTables && owed.barrier.routedWanted().length) await managedTables.flush(owed.barrier.routedWanted(), { phase: 'publish', path: 'managed publication' });
+  for (const logical of owed.barrier.routedWanted()) markIncomplete({ phase: 'publish', code: 'managed-publication-owed', message: `table ${logical}: its publish is owed to the managed binding store and was not sent in this run; the change is saved, re-run the build to publish it` });
   // An app row is { id, code }; a scope row (a table) is { kind, id, code, reasons }.
   for (const { kind = 'app', id, code } of [...flushed.withheld, ...flushed.failed]) if (!(kind === 'table' && code === 'publication-withheld')) markIncomplete({ phase: 'publish', code, message: `${kind} ${id}: its publication is owed (${code}); the change is saved, re-run once the cause is cleared` });
   // A theme applied this run is read back once, with the theme's own SDK, after the app publication that paid it was
