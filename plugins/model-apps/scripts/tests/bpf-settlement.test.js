@@ -542,4 +542,4 @@ test('a live flow whose XAML holds an activity this module does not model is ref
     assert.deepEqual(writesSince(wire, adopted.from), []);
     assert.match(wire.row(id).xaml, /foreign/, `${where}: the activity survives`);
   }
-});
+});
