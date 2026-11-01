@@ -54,8 +54,8 @@ function failNextStoreWrite() {
 const catalogFor = (d) => createIntentCatalog([{ catalogKind: 'dashboard', key: dashboardKey(d), scope: { kind: 'solution', solution: SOL }, declaration: { scopeType: 'Standard', name: d.name } }]);
 const declared = (tiles, extra = {}) => ({ name: 'Ops', reconcile: 'declared', tiles, ...extra });
 
-// The build-wide send observer is installed on the client every send goes through (the wiring stream installs it in
-// build-model-app.js); `observer: false` is a run without it.
+// The build-wide send observer is installed on the client every send goes through (the build installs it once for the
+// run); `observer: false` is a run without it.
 async function world({ observer = true } = {}) {
   const wire = createManagedWire();
   const barrier = createPublicationBarrier();
@@ -308,6 +308,8 @@ const changedSince = [
   // Parts the spec does not author on a MANAGED tile, and the foreign layout, are preserved too.
   ['the managed list\'s RecordsPerPage changed', 'create-completion-required', (xml) => xml.replace('<RecordsPerPage>8</RecordsPerPage>', '<RecordsPerPage>42</RecordsPerPage>')],
   ['the two rows reversed', 'create-completion-required', (xml) => { const rows = xml.match(/<row>.*?<\/row>/g); return xml.replace(rows.join(''), [...rows].reverse().join('')); }],
+  // A managed cell's own attributes the spec does not author: proved like its parameters, not only its control's.
+  ['the managed cell\'s showlabel changed', 'create-completion-required', (xml) => xml.replace(/(<cell\b[^>]*\bid="\{aaaaaaaa-0000-4000-8000-000000000001\}"[^>]*>)/, (cell) => cell.replace('showlabel="false"', 'showlabel="true"'))],
 ];
 for (const [what, code, change] of changedSince) test(`a commit lost after the save, then ${what}: ${code}, nothing bound, nothing published`, async () => {
   const { w, d } = await crashedAfterSave();
@@ -446,8 +448,8 @@ test('a change that cannot be prepared sends nothing and still withholds the das
   assert.equal(next.barrier.checkAppWrite({ held: new Set(), existingApp: true, heldDashboards: [DID] }).ok, false);
 });
 
-// --- Recovery and provenance (the S0 recovery seams: preflight on every path, resumeCreate, the send observer, typed
-// adoption consent, an acknowledged root create only from this run's own answer).
+// --- Recovery and provenance: the preflight on every path, a create resumed or continued under its catalog id, the send
+// observer, typed adoption consent, and a root create acknowledged only by this run's own answer.
 
 const refusedCreate = { statusCode: 400, body: { error: { code: '0x80040203', message: 'refused' } }, unapplied: true };
 const isCreate = (e) => e.method === 'POST' && /^systemforms$/i.test(e.path);
@@ -625,40 +627,201 @@ test('a publish whose confirmation write failed after the send: the next run con
   assert.equal(next.store.readGroup('dashboard', 'ops').committed.publication.state, 'confirmed');
 });
 
-// The read-only projection verify and hydrate share with the proof (projectDashboard): over a fresh read of what was
-// settled it reproduces the committed proof, and it sees the non-authored and layout drift the proof refuses.
+// The read-only projection verify and hydrate share with the proof (projectDashboard), called as documented — one
+// input object: over a fresh read of what was settled it reproduces the committed proof, and it sees the non-authored
+// and layout drift the proof refuses.
+const freshRead = async (w, id) => { await w.sdk.fetchArtifact('dashboard', id, { overwrite: true }); return await w.sdk.getArtifact('dashboard', id); };
+const projectCommitted = async (w, id) => {
+  const group = w.store.readGroup('dashboard', 'ops').committed;
+  const input = committedProjectionInput(group);
+  const out = projectDashboard(await freshRead(w, id), { ...input, languageCode: w.sdk.languageCode });
+  const certified = out.invalid.length === 0 && out.missing.length === 0 && out.duplicated.length === 0 &&
+    out.semanticSha256 === group.proof.semanticSha256 && out.preservationSha256 === group.proof.preservationSha256;
+  return { group, input, out, certified };
+};
 test('the shared read-only projection reproduces the committed proof of a created and an adopted dashboard, and sees a non-authored or layout change', async () => {
-  const fresh = async (w, id) => { await w.sdk.fetchArtifact('dashboard', id, { overwrite: true }); return await w.sdk.getArtifact('dashboard', id); };
-  const project = async (w, id) => {
-    const group = w.store.readGroup('dashboard', 'ops').committed;
-    const { managed, preservesLayout } = committedProjectionInput(group);
-    return { group, preservesLayout, out: projectDashboard(await fresh(w, id), managed, { preservesLayout }) };
-  };
   const made = await world();
   const d = declared([{ key: 'open', type: 'list', view: 'Open cases' }]);
   const id = (await settle(made, d)).id;
-  const c = await project(made, id);
-  assert.equal(c.preservesLayout, false, 'the create preserved nothing');
-  assert.deepEqual([c.out.semanticSha256, c.out.preservationSha256], [c.group.proof.semanticSha256, c.group.proof.preservationSha256]);
+  const c = await projectCommitted(made, id);
+  assert.equal(c.input.seedIds.length, 2, 'the create commit keeps its catalog seed ids, so the projection checks the seed');
+  assert.equal(c.certified, true);
 
   const w = await world();
   putExisting(w.wire);
   await settle(w, declared([{ key: 'open', type: 'list', view: 'Open cases', componentId: C_OPEN, name: 'Open now' }], { dashboardId: DID }));
-  const a = await project(w, DID);
-  assert.equal(a.preservesLayout, true);
-  assert.deepEqual([a.out.semanticSha256, a.out.preservationSha256, a.out.missing, a.out.duplicated], [a.group.proof.semanticSha256, a.group.proof.preservationSha256, [], []]);
+  const a = await projectCommitted(w, DID);
+  assert.deepEqual(a.input.seedIds, []);
+  assert.equal(a.certified, true);
   const row = w.wire.saved.get(DID);
   for (const change of [
     (xml) => xml.replace('<RecordsPerPage>8</RecordsPerPage>', '<RecordsPerPage>42</RecordsPerPage>'),
     (xml) => { const rows = xml.match(/<row>.*?<\/row>/g); return xml.replace(rows.join(''), [...rows].reverse().join('')); },
+    (xml) => xml.replace(/<cell\b[^>]*\bid="\{aaaaaaaa-0000-4000-8000-000000000001\}"[^>]*>/, (cell) => cell.replace('showlabel="false"', 'showlabel="true"')),
   ]) {
     const was = row.formxml;
     row.formxml = change(was);
     assert.notEqual(row.formxml, was);
-    const b = await project(w, DID);
+    const b = await projectCommitted(w, DID);
     assert.equal(b.out.semanticSha256, a.group.proof.semanticSha256, 'the authored projection is unchanged');
     assert.notEqual(b.out.preservationSha256, a.group.proof.preservationSha256, 'the change outside the declaration is seen');
+    assert.equal(b.certified, false);
     row.formxml = was;
+  }
+});
+
+test('the shared projection refuses what the proof refuses: a table-scoped or non-Standard root, a duplicated seed', async () => {
+  for (const [change, code] of [[{ objecttypecode: 'incident' }, 'dashboard-scope-unsupported'], [{ type: 10 }, 'dashboard-interactive-unsupported']]) {
+    const w = await world();
+    putExisting(w.wire);
+    const d = declared([{ key: 'open', type: 'list', view: 'Open cases', componentId: C_OPEN, name: 'Open now' }], { dashboardId: DID });
+    await settle(w, d);
+    Object.assign(w.wire.saved.get(DID), change);
+    const p = await projectCommitted(w, DID);
+    assert.deepEqual(p.out.invalid, [code]);
+    assert.equal(p.certified, false);
+    assert.notEqual(p.out.semanticSha256, p.group.proof.semanticSha256, 'the root as read is in the hash');
+    assert.equal(await codeOf(settle(await rerun(w), d)), code);
+  }
+
+  const w = await world();
+  const d = declared([{ key: 'open', type: 'list', view: 'Open cases' }]);
+  const id = (await settle(w, d)).id;
+  const row = w.wire.saved.get(id);
+  const tab = row.formxml.match(/<tab\b[\s\S]*?<\/tab>/)[0];
+  row.formxml = row.formxml.replace('</tabs>', tab.replace(/<rows>[\s\S]*?<\/rows>/g, '<rows />') + '</tabs>');
+  const p = await projectCommitted(w, id);
+  assert.deepEqual([p.out.invalid, p.out.missing], [['dashboard-seed-not-in-place'], ['seed']]);
+  assert.equal(p.certified, false);
+});
+
+// A create acknowledged by its own answer whose commit then failed: the attempt stays pending, its root acknowledged.
+async function strandedAttempt(w, d) {
+  const { failing, deps } = failNextStoreWrite();
+  w.store = openManagedContext({ workspaceDir: w.dir, environment: ENV, appUniqueName: APP, solutionUniqueName: SOL, barrier: w.barrier, deps }).store;
+  assert.equal(await codeOf(settle(w, d, { ensureMembership: async () => { failing.armed = true; } })), 'managed-binding-write-failed');
+  const pending = w.store.readGroup('dashboard', 'ops').pending;
+  assert.ok(pending);
+  return pending;
+}
+const seedOf = (d, id) => {
+  const { childIds } = catalogFor(d).reserveChildren('dashboard', 'ops', { actualRootId: id, children: [
+    { locator: 'tab', childKind: 'dashboardSeedTab', keyParts: ['seed-tab'] }, { locator: 'section', childKind: 'dashboardSeedSection', keyParts: ['seed-section'] },
+  ] });
+  return [childIds.tab, childIds.section];
+};
+
+test('a created dashboard recovered after its commit failed: a foreign row or a duplicated seed added since stops it, nothing bound or published', async () => {
+  const d = declared([{ key: 'open', type: 'list', view: 'Open cases' }]);
+  const changes = [
+    ['', (xml) => xml],
+    ['a foreign row after the tiles', (xml) => xml.replace('</rows>', `<row>${X.otherCustomControl(`{${C_FOREIGN}}`, 'NEW FOREIGN TILE', 'dddddddd-0000-4000-8000-000000000001')}</row></rows>`)],
+    // Before the tiles, so the planned tiles are still the trailing cells: only the seed-only rule sees it.
+    ['a foreign row before the tiles', (xml) => xml.replace(/<rows>/, `<rows><row>${X.otherCustomControl(`{${C_FOREIGN}}`, 'NEW FOREIGN TILE', 'dddddddd-0000-4000-8000-000000000001')}</row>`)],
+    ['a duplicated seed tab', (xml) => xml.replace('</tabs>', xml.match(/<tab\b[\s\S]*?<\/tab>/)[0].replace(/<rows>[\s\S]*?<\/rows>/g, '<rows />') + '</tabs>')],
+  ];
+  for (const [what, change] of changes) {
+    const w = await world();
+    const pending = await strandedAttempt(w, d);
+    assert.equal(pending.acknowledgedRoot, true, 'the create was acknowledged by its own answer');
+    const id = pending.root.id;
+    const row = w.wire.saved.get(id);
+    const before = row.formxml;
+    row.formxml = change(before);
+    if (what) assert.notEqual(row.formxml, before, `the stimulus applies: ${what}`);
+    const next = await rerun(w);
+    const managed = pending.expected.children.map(({ key, id: cid }) => ({ key, id: cid }));
+    const p = projectDashboard(await freshRead(next, id), { managed, seedIds: seedOf(d, id), languageCode: next.sdk.languageCode });
+    if (!what) {
+      assert.deepEqual([p.invalid, p.missing, p.duplicated], [[], [], []]);
+      assert.deepEqual((await settle(next, d, { approvals: {} })).result, { committed: true, recovered: true }, 'the control: an untouched create is bound');
+      continue;
+    }
+    assert.equal(await codeOf(settle(next, d, { approvals: {} })), 'create-completion-required', what);
+    assert.equal(next.store.readGroup('dashboard', 'ops').committed, null, what);
+    assert.equal(await codeOf(publish(next, 'ops', id)), 'managed-settlement-pending', what);
+    assert.equal(w.wire.publishes(id).length, 0, what);
+    if (what === 'a duplicated seed tab') assert.deepEqual([p.invalid, p.missing], [['dashboard-seed-not-in-place'], ['seed']]);
+  }
+});
+
+test('a commit lost after the save, then the managed rows reordered or the appended tiles swapped: nothing bound or published', async () => {
+  // Reordering two trailing managed rows that were there before the send.
+  const OTHER_CONTROL = 'c1c1c1c1-0000-4000-8000-000000000003';
+  let w = await world();
+  w.wire.putForm({ formid: DID, name: 'Ops', description: 'Cases', type: 0, objecttypecode: 'none', formxml: X.dashboardXml([
+    [X.otherCustomControl(`{${C_FOREIGN}}`, 'Foreign', 'dddddddd-0000-4000-8000-000000000001')],
+    [X.nativeGrid(`{${C_OPEN}}`, 'Open cases', OPEN)],
+    [X.nativeGrid(`{${OTHER_CONTROL}}`, 'All cases', ALL)],
+  ]), istabletenabled: false }, { publishedToo: true });
+  let d = declared([
+    { key: 'open', type: 'list', view: 'Open cases', componentId: C_OPEN, name: 'Open now' },
+    { key: 'all', type: 'list', view: 'All cases', componentId: OTHER_CONTROL },
+  ], { dashboardId: DID });
+  await strandedAttempt(w, d);
+  let row = w.wire.saved.get(DID);
+  const rows = row.formxml.match(/<row>[\s\S]*?<\/row>/g);
+  assert.equal(rows.length, 3);
+  row.formxml = row.formxml.replace(rows.join(''), [rows[0], rows[2], rows[1]].join(''));
+  let next = await rerun(w);
+  assert.equal(await codeOf(settle(next, d)), 'create-completion-required');
+  assert.equal(w.wire.publishes(DID).length, 0);
+
+  // Two tiles appended to a maker's dashboard, then swapped: the cut of the append binds their order. The control
+  // (unswapped) is bound.
+  for (const swap of [false, true]) {
+    w = await world();
+    putExisting(w.wire);
+    d = declared([
+      { key: 'open', type: 'list', view: 'Open cases', componentId: C_OPEN },
+      { key: 'all', type: 'list', view: 'All cases' }, { key: 'mine', type: 'list', view: 'My cases' },
+    ], { dashboardId: DID });
+    const pending = await strandedAttempt(w, d);
+    const [cAll, cMine] = ['ops/all', 'ops/mine'].map((k) => pending.expected.children.find((c) => c.key === k).id);
+    row = w.wire.saved.get(DID);
+    const cells = row.formxml.match(/<cell\b[\s\S]*?<\/cell>/g);
+    const cellOf = (cid) => cells.find((x) => x.toLowerCase().includes(cid));
+    assert.ok(cellOf(cAll) && cellOf(cMine), 'both tiles were appended');
+    if (swap) row.formxml = row.formxml.replace(cellOf(cAll), '\u0000').replace(cellOf(cMine), cellOf(cAll)).replace('\u0000', cellOf(cMine));
+    next = await rerun(w);
+    if (!swap) {
+      assert.deepEqual((await settle(next, d)).result, { committed: true, recovered: true });
+      continue;
+    }
+    assert.equal(await codeOf(settle(next, d)), 'create-completion-required');
+    assert.equal(w.wire.publishes(DID).length, 0);
+  }
+});
+
+test('the proof and the publication hash are one saved snapshot: a change between the two reads stops the settle', async () => {
+  // After this run's own write: the proof's SDK read and the publication read straddle someone's edit.
+  for (const afterWrite of [true, false]) {
+    const w = await world();
+    putExisting(w.wire);
+    let ownWrite = false;
+    let injected = false;
+    w.wire.script((e) => {
+      if ((e.method === 'PATCH' || e.method === 'POST') && /^systemforms/.test(e.path)) ownWrite = true;
+      const u = new URL(e.url);
+      if ((ownWrite || !afterWrite) && !injected && e.method === 'GET' && /RetrieveUnpublished/.test(e.path) && u.searchParams.get('$select') === 'formid,name,description,formxml') {
+        const row = w.wire.saved.get(DID);
+        row.formxml = row.formxml.replace('<RecordsPerPage>8</RecordsPerPage>', '<RecordsPerPage>42</RecordsPerPage>');
+        injected = true;
+      }
+      return false;
+    }, {});
+    const d = declared([{ key: 'open', type: 'list', view: 'Open cases', componentId: C_OPEN, name: 'Open now' }], { dashboardId: DID });
+    const code = await codeOf(settle(w, d));
+    assert.equal(injected, true, 'the edit lands between the SDK read and the publication read');
+    if (afterWrite) {
+      assert.equal(code, 'create-completion-required', 'publication authority is never granted for a saved row the proof did not project');
+    } else {
+      assert.equal(code, 'dashboard-unreadable', 'the plan is never built across two snapshots');
+      assert.equal(contentWrites(w.wire).length, 0, 'nothing was sent');
+    }
+    assert.equal(w.store.readGroup('dashboard', 'ops').committed, null);
+    await w.sdk.publishArtifact('dashboard', DID).catch(() => undefined);
+    assert.equal(w.wire.publishes(DID).length, 0);
   }
 });
 

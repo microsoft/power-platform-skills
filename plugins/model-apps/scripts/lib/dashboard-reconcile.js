@@ -34,10 +34,14 @@
 // id with the association of its type, cell, section and tab, and the sha256 of the INTENDED projection: the root's
 // type, scope and description, and each managed tile's key, id, type, containers and full ownable parts. A fresh read
 // must reproduce it exactly. Preservation is proven over everything the declaration does NOT own: the whole layout
-// (every foreign cell and control, the tabs, sections and rows and their order) with each managed cell standing as a
-// placeholder of its control id, and every managed tile's non-authored parameters (RecordsPerPage, ...). So a run that
-// stopped after the service accepted its change cannot bind or publish what someone changed on the dashboard since:
-// recovery recomputes both hashes from a fresh read and the expected proof alone.
+// (every foreign cell and control, the tabs, sections and rows and their order) with each managed cell kept in place
+// with only its authored parts taken out (its spans, the label its name is read from, its owned parameters), so its
+// other attributes, labels and parameters (showlabel, RecordsPerPage, ...) are proved too. The expected proof binds the
+// cells a run appends — ids, order and non-authored parameters — so the proof cuts exactly those from the end of the
+// first section and nothing else; a create's proof requires that what remains is the catalog seed alone. Both hashes
+// are taken from the saved row whose hash the publication records. So a run that stopped after the service accepted its
+// change cannot bind or publish what someone changed on the dashboard since: recovery recomputes both hashes from a
+// fresh read and the expected proof alone.
 //
 // Publication debt has a provenance: it is owed only for this attempt's own proved content write (the attempt's
 // planned publication), or carried over from the committed group's unsent debt. A read that finds the saved layer
@@ -269,9 +273,9 @@ function placeOf(component, layout) {
 const associationOf = (tileKey, type, place) => sha({ tileKey, type, cell: place.cell, section: place.section, tab: place.tab });
 
 /**
- * The hash of a dashboard's managed projection: the root's type, scope and description, and every managed tile —
- * key, control id, type, containers and full ownable parts — in key order. Built from the INTENDED state before the
- * send, and from a fresh read in the proof; the two must be equal.
+ * The hash of a dashboard's managed projection: the root's type, scope and description, and every managed tile — key,
+ * control id, type, containers and full ownable parts — in key order. Built from the INTENDED state before the send, and
+ * from a fresh read in the proof; the two must be equal.
  */
 function projectionSha256(root, tiles) {
   const sorted = [...tiles].sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
@@ -286,108 +290,226 @@ function unownedParams(type, parameters) {
   return out;
 }
 
+// The cell attributes a declared tile authors: its spans. The semantic projection compares them.
+const AUTHORED_CELL_ATTRS = new Set(['colspan', 'rowspan']);
+// The SDK's default language (its DEFAULT_LCID): the label a tile's name is read from when the caller names no other.
+const DEFAULT_LCID = 1033;
+
+const mapChildren = (el, fn) => ({ ...el, c: (el.c || []).map((ch) => (ch && ch.node ? { ...ch, node: fn(ch.node) } : fn(ch))) });
+const withoutAttrs = (el, names) => ({ ...el, a: (el.a || []).filter((p) => !(Array.isArray(p) && names.has(p[0]))) });
+
 /**
- * The layout a declaration does not own: the whole bag (tabs, columns, sections, rows, every foreign cell and its
- * control, the root's other parts) with each MANAGED cell — a cell holding a managed control — replaced by a placeholder
- * of that control's id, so the authored parts written into it (label, spans, owned parameters) are not compared here
- * (the semantic projection compares them) while where it sits among the foreign cells and rows still is.
- *
- * Managed placeholders are trimmed from the END of each `rows` in reading order — the last cells of the last row, then
- * that row when it held cells and none is left, then the row before, until a foreign cell or a row with no cell: that
- * is where an append puts its new cells (into the free columns of the last occupied row, then new rows after it), and
- * a fresh read after the append must reproduce the layout the plan saw. So the one order this does not prove is that
- * of the trailing managed tiles; their cells, sections and tabs are still proved by each child's association.
- * null for a dashboard this attempt creates: nothing on it existed to preserve.
+ * A managed cell with exactly the parts the declaration authors taken out, so the semantic projection compares those
+ * and preservation compares everything else:
+ *   - the cell's colspan and rowspan;
+ *   - the `description` of the label the SDK reads the tile's name from: in the cell's first <labels>, the <label> whose
+ *     languagecode is the SDK's language, else the first one (the SDK's own rule for a tile's name);
+ *   - the owned <parameters> of its control (OWNED_PARAMS of its type).
+ * Everything else in the cell stays and is proved: its other attributes (showlabel, auto, ...), every other label and
+ * language, the control's attributes, its non-authored parameters (RecordsPerPage, ...) and any other child.
  */
-function preservedLayout(bag, managedIds) {
-  if (!bag) return null;
-  const managedControl = (cell) => {
-    const hit = childrenNamed(cell, 'control').map((c) => bareId(attrOf(c, 'id'))).find((id) => managedIds.has(id));
-    return hit || null;
-  };
-  const isPlaceholder = (el) => !!el && el.n === 'cell' && !!el.managed;
-  const hasCell = (row) => (row.c || []).some((c) => c && c.n === 'cell');
-  // Rows and cells are plain elements in the SDK's bag; a wrapped `{ i, node }` row is left untrimmed (fail closed).
-  const trimAppended = (rows) => {
-    while (rows.length) {
-      const last = rows[rows.length - 1];
-      if (!last || last.n !== 'row' || !hasCell(last)) return;
-      const cells = [...last.c];
-      while (cells.length && isPlaceholder(cells[cells.length - 1])) cells.pop();
-      if (cells.length) { rows[rows.length - 1] = { ...last, c: cells }; return; }
-      rows.pop();
+function strippedManagedCell(cell, type, languageCode) {
+  const owned = new Set(OWNED_PARAMS[type] || []);
+  const labels = childrenNamed(childrenNamed(cell, 'labels')[0], 'label');
+  const named = labels.find((l) => attrOf(l, 'languagecode') === String(languageCode)) || labels[0] || null;
+  const description = new Set(['description']);
+  return mapChildren(withoutAttrs(cell, AUTHORED_CELL_ATTRS), (child) => {
+    if (child && child.n === 'labels') return mapChildren(child, (l) => (l === named ? withoutAttrs(l, description) : l));
+    if (child && child.n === 'control') {
+      return mapChildren(child, (p) => (p && p.n === 'parameters' ? { ...p, c: (p.c || []).filter((x) => !owned.has(nodeOf(x) && nodeOf(x).n)) } : p));
     }
-  };
+    return child;
+  });
+}
+
+/**
+ * The layout as the declaration does NOT own it: the whole bag (tabs, columns, sections, rows and their order, every
+ * foreign cell and its control, the root's other parts), each managed cell — a cell whose one control is a managed
+ * tile's — kept in place by strippedManagedCell. `managedTypes` maps each managed control id (bare) to its tile type.
+ * null for no bag.
+ */
+function preservedLayout(bag, managedTypes, languageCode) {
+  if (!bag) return null;
   const walk = (el) => {
     if (!el || typeof el !== 'object') return el;
     if (el.n === 'cell') {
-      const id = managedControl(el);
-      if (id) return { n: 'cell', managed: id };
+      const controls = childrenNamed(el, 'control');
+      const id = controls.length === 1 ? bareId(attrOf(controls[0], 'id')) : '';
+      // A cell with several controls is never stripped: an authored change in it then fails the proof (fail closed).
+      if (id && managedTypes.has(id)) return strippedManagedCell(el, managedTypes.get(id), languageCode);
     }
-    const children = (el.c || []).map((child) => (child && child.node ? { i: child.i, node: walk(child.node) } : walk(child)));
-    if (el.n === 'rows') trimAppended(children);
-    return { ...el, c: children };
+    return mapChildren(el, walk);
   };
   return walk(bag);
 }
 
 /**
- * The hash of everything the declaration does NOT own: the preserved layout above, and each managed tile's
- * non-authored parameters by control id. A component's `position` is not hashed: it is an index the SDK assigns on
- * read; the layout tree carries the order it is derived from.
+ * The hash of everything the declaration does NOT own: the preserved layout above, and `appended` — the cells a planned
+ * append adds, in the order it adds them, as [{ id, parameters }] with each one's non-authored parameters (empty for a
+ * read of what is stored). A component's `position` is not hashed: it is an index the SDK assigns on read; the layout
+ * tree carries the order it is derived from.
  */
-function preservationSha256(bag, managedParams) {
-  const managed = Object.keys(managedParams).sort().map((id) => ({ id, parameters: managedParams[id] }));
-  return sha({ layout: preservedLayout(bag, new Set(Object.keys(managedParams))), managed });
+function preservationSha256(bag, managedTypes, languageCode, appended = []) {
+  return sha({ layout: preservedLayout(bag, managedTypes, languageCode), appended });
 }
 
 /**
- * The read-only projection of a stored dashboard: the one surface the proof, verify and hydrate share, so that no
- * later reader rebuilds a looser one. It reads and writes nothing.
- *   art              the dashboard as the SDK reads it (getArtifact after a fresh fetch)
- *   managed          the managed tiles by key and control id, [{ key, id }]
- *   preservesLayout  false only for the proof of the attempt that created the dashboard (nothing on it existed to
- *                    preserve)
- * For a committed group, committedProjectionInput(group) answers both arguments.
- * Returns { tiles, missing, duplicated, semanticSha256, preservationSha256 }. `tiles` holds each tile found exactly
- * once — { key, id, type, cell, section, tab, parts } — and a tile in `missing` or `duplicated` is a mismatch on its
- * own. The two hashes are the ones a committed group's proof keeps (proof.semanticSha256, proof.preservationSha256):
- * the managed projection, and everything the declaration does not own (the layout around the managed cells, every
- * foreign cell and control, and each managed tile's non-authored parameters).
+ * `bag` without the last `count` cells of its first section in reading order (rows flattened across their <rows>
+ * containers, as the SDK indexes them), and without each row those cells emptied. That is exactly what an append adds:
+ * the SDK fills the free columns of the last occupied row of the first section, then adds rows after it. Answers
+ * { bag, removed } — `removed` the control ids of the cut cells in reading order — or null when one of those cells does
+ * not hold exactly one control of `removable`: nothing else is ever cut. The input is not changed.
  */
-function projectDashboard(art, managed, { preservesLayout = true } = {}) {
+function withoutTrailingCells(bag, count, removable) {
+  if (!count) return { bag, removed: [] };
+  if (!bag) return null;
+  const copy = JSON.parse(JSON.stringify(bag));
+  const first = firstSection(copy);
+  if (!first) return null;
+  const slots = [];
+  for (const rowsEl of childrenNamed(first.section, 'rows')) {
+    for (const row of childrenNamed(rowsEl, 'row')) for (const cell of childrenNamed(row, 'cell')) slots.push({ rowsEl, row, cell });
+  }
+  if (slots.length < count) return null;
+  const tail = slots.slice(slots.length - count);
+  const removed = [];
+  for (const { cell } of tail) {
+    const controls = childrenNamed(cell, 'control');
+    const id = controls.length === 1 ? bareId(attrOf(controls[0], 'id')) : '';
+    if (!id || !removable.has(id)) return null;
+    removed.push(id);
+  }
+  const cut = new Set(tail.map((t) => t.cell));
+  const emptied = new Set();
+  for (const { row } of tail) {
+    row.c = (row.c || []).filter((ch) => !cut.has(nodeOf(ch)));
+    if (!childrenNamed(row, 'cell').length) emptied.add(row);
+  }
+  for (const { rowsEl } of tail) rowsEl.c = (rowsEl.c || []).filter((ch) => !emptied.has(nodeOf(ch)));
+  return { bag: copy, removed };
+}
+
+/**
+ * Whether a created dashboard, its appended tiles cut away, is the catalog seed and nothing else: exactly the seed tab,
+ * exactly the seed section in it, and no row, cell or control left. A create adds no row of its own (the SDK drops the
+ * seed's placeholder row when it appends the first tile), so anything left is someone else's content.
+ */
+function seedSkeletonOnly(bag, seed) {
+  const layout = layoutOf(bag);
+  let rows = 0;
+  let controls = 0;
+  const walk = (el) => {
+    if (!el || typeof el !== 'object') return;
+    if (el.n === 'row') rows += 1;
+    if (el.n === 'control') controls += 1;
+    for (const ch of el.c || []) walk(nodeOf(ch));
+  };
+  walk(bag);
+  return layout.tabs.length === 1 && layout.tabs[0] === bareId(seed.tab) &&
+    layout.sections.length === 1 && layout.sections[0].id === bareId(seed.section) && layout.sections[0].tab === bareId(seed.tab) &&
+    !layout.cells.length && !rows && !controls;
+}
+
+/**
+ * Whether `art` holds what the expected proof's preservation hash says was there before the send, with the planned
+ * append on top and nothing else. The hash binds the appended cells' ids, order and non-authored parameters, so only a
+ * cut of exactly those cells — and none of a pre-existing one, whose id the hash also binds — can match it:
+ *   - an edit of an existing dashboard: some count of trailing cells of the first section (0 when nothing was appended)
+ *     is cut, and the rest must hash as the layout the plan read;
+ *   - a create: every managed cell is cut, the rest must be the seed alone (seedSkeletonOnly), and the cut cells must
+ *     be the planned ones in the planned order.
+ */
+function preservedSinceSend(art, managedTypes, languageCode, expectedSha256, seed) {
+  const byId = new Map(((art && art.components) || []).map((c) => [bareId(c.id), c]));
+  const appendedOf = (removed) => removed.map((id) => ({ id, parameters: unownedParams(managedTypes.get(id), (byId.get(id) || {}).parameters) }));
+  if (seed) {
+    const cut = withoutTrailingCells(art && art.bag, managedTypes.size, new Set(managedTypes.keys()));
+    return !!cut && seedSkeletonOnly(cut.bag, seed) && sha({ layout: null, appended: appendedOf(cut.removed) }) === expectedSha256;
+  }
+  for (let count = 0; count <= managedTypes.size; count += 1) {
+    const cut = withoutTrailingCells(art && art.bag, count, new Set(managedTypes.keys()));
+    // A longer cut contains the cell that stopped this one, so it cannot succeed either.
+    if (!cut) return false;
+    if (preservationSha256(cut.bag, managedTypes, languageCode, appendedOf(cut.removed)) === expectedSha256) return true;
+  }
+  return false;
+}
+
+/**
+ * THE read-only projection of a stored dashboard: the one surface the proof, verify and hydrate share, so that no later
+ * reader rebuilds a looser one. It reads and writes nothing. Call it with ONE input object:
+ *
+ *   const artifact = await sdk.getArtifact('dashboard', id);   // after sdk.fetchArtifact('dashboard', id, { overwrite: true })
+ *   const p = projectDashboard(artifact, { ...committedProjectionInput(group), languageCode: sdk.languageCode });
+ *   const certified = p.invalid.length === 0 && p.missing.length === 0 && p.duplicated.length === 0 &&
+ *     p.semanticSha256 === group.proof.semanticSha256 && p.preservationSha256 === group.proof.preservationSha256;
+ *
+ * Every one of those five checks is needed: a tile in `missing` or `duplicated` is absent from both hashes.
+ *   art           the dashboard as the SDK reads it;
+ *   managed       the managed tiles by key and bare control id, [{ key, id }];
+ *   seedIds       [tabId, sectionId] of the catalog seed for a dashboard this build created, [] otherwise. When given,
+ *                 the seed tab and section must each be on exactly one element of their role, the section in the tab;
+ *   languageCode  the SDK's language (sdk.languageCode; 1033 when omitted): which label a tile's name is read from.
+ * Answers:
+ *   root                { dashboardType, global, description } as read. Both hashes are of the root as read, so a
+ *                       table-scoped or non-Standard root never matches a committed proof (always Standard and global);
+ *   invalid             why the root or seed is not one a declared dashboard may be: 'dashboard-interactive-unsupported'
+ *                       (not Standard), 'dashboard-scope-unsupported' (belongs to a table), 'dashboard-seed-unrecognized'
+ *                       (seedIds is neither empty nor two ids), 'dashboard-seed-not-in-place' (the seed is not where the
+ *                       create put it; also listed in `missing` as 'seed');
+ *   tiles               each managed tile found exactly once: { key, id, type, cell, section, tab, parts };
+ *   missing, duplicated the managed keys found on no tile or on several;
+ *   semanticSha256      the managed projection (a committed group's proof.semanticSha256);
+ *   preservationSha256  everything the declaration does not own: the whole layout with each managed cell's authored
+ *                       parts taken out (strippedManagedCell) — every foreign cell and control, every tab, section and
+ *                       row and their order, and each managed cell's other attributes, labels and parameters (a
+ *                       committed group's proof.preservationSha256).
+ */
+function projectDashboard(art, { managed = [], seedIds = [], languageCode = DEFAULT_LCID } = {}) {
   const components = (art && art.components) || [];
   const layout = layoutOf(art && art.bag);
+  const root = rootProjection(art && art.dashboardType, isGlobal(art), art && art.description);
+  const invalid = [];
+  if (root.dashboardType !== 'Standard') invalid.push('dashboard-interactive-unsupported');
+  if (!root.global) invalid.push('dashboard-scope-unsupported');
   const tiles = [];
-  const unowned = {};
+  const types = new Map();
   const missing = [];
   const duplicated = [];
   for (const { key, id } of managed) {
-    const hits = components.filter((c) => bareId(c.id) === id);
+    const hits = components.filter((c) => bareId(c.id) === bareId(id));
     if (hits.length !== 1) { (hits.length ? duplicated : missing).push(key); continue; }
     const c = hits[0];
-    tiles.push({ key, id, type: c.type, ...placeOf(c, layout), parts: liveTile(c, c.type) });
-    unowned[id] = unownedParams(c.type, c.parameters);
+    tiles.push({ key, id: bareId(id), type: c.type, ...placeOf(c, layout), parts: liveTile(c, c.type) });
+    types.set(bareId(id), c.type);
+  }
+  if (!Array.isArray(seedIds) || (seedIds.length !== 0 && seedIds.length !== 2)) {
+    invalid.push('dashboard-seed-unrecognized');
+  } else if (seedIds.length && !seedInPlace(layout, { tab: seedIds[0], section: seedIds[1] })) {
+    invalid.push('dashboard-seed-not-in-place');
+    missing.push('seed');
   }
   return {
+    root,
+    invalid,
     tiles,
     missing,
     duplicated,
-    semanticSha256: projectionSha256(rootProjection(art && art.description), tiles),
-    preservationSha256: preservationSha256(preservesLayout && art ? art.bag : null, unowned),
+    semanticSha256: projectionSha256(root, tiles),
+    preservationSha256: preservationSha256(art ? art.bag : null, types, languageCode),
   };
 }
 
 /**
- * projectDashboard's `managed` and `preservesLayout` for a committed dashboard group. The store keeps the catalog seed
- * ids (consumerState.seedIds) only on the commit of the attempt that created the dashboard, which is exactly the proof
- * that hashed no layout; every later commit proves the layout and records no seed ids.
+ * projectDashboard's `managed` and `seedIds` for a committed dashboard group: the managed tiles from
+ * consumerState.tiles, and the catalog seed ids the store keeps (consumerState.seedIds) only on the commit of the
+ * attempt that created the dashboard — every later commit records none, and nothing then checks the seed.
  */
 function committedProjectionInput(group) {
   const cs = (group && group.consumerState) || {};
   return {
-    managed: Object.entries(cs.tiles || {}).map(([key, t]) => ({ key, id: t.id })),
-    preservesLayout: !(Array.isArray(cs.seedIds) && cs.seedIds.length),
+    managed: Object.entries(cs.tiles || {}).map(([key, t]) => ({ key, id: bareId(t.id) })),
+    seedIds: Array.isArray(cs.seedIds) ? [...cs.seedIds] : [],
   };
 }
 
@@ -414,12 +536,42 @@ function canonicalDeclaration(key, dashboard) {
   return { key, ...pick(dashboard, DECLARED_FIELDS), tiles: (dashboard.tiles || []).map((t) => pick(t, DECLARED_TILE_FIELDS)) };
 }
 
-const rootProjection = (description) => ({ dashboardType: 'Standard', global: true, description: String(description == null ? '' : description) });
+const rootProjection = (dashboardType, global, description) => ({
+  dashboardType: dashboardType === undefined ? null : dashboardType,
+  global: !!global,
+  description: String(description == null ? '' : description),
+});
+// The root a declared dashboard is written as and proved against: global and Standard.
+const declaredRoot = (description) => rootProjection('Standard', true, description);
 
 /** Read a dashboard by exact id from the service (never the workspace copy); throws what the read threw. */
 async function readDashboard(sdk, id) {
   await sdk.fetchArtifact(KIND, id, { overwrite: true });
   return (await sdk.getArtifact(KIND, id)) || null;
+}
+
+const snapshotSha256 = (art) => sha(JSON.parse(JSON.stringify({ name: art.name, description: art.description, layoutType: art.layoutType, components: art.components, bag: art.bag })));
+
+/**
+ * The dashboard as stored in ONE saved row: `saved` is the row readSystemFormPublication answered,
+ *   { formid, name, description, formxml }
+ * (its RetrieveUnpublished layer, the row systemFormLayerSha256 hashes), turned into the SDK's artifact by the SDK's own
+ * dashboard adapter — the very function its fetch uses — so its components and bag are parsed exactly as `art`'s were.
+ * The root's type and table come from `art` (the publication read does not select them; nor does the layer hash cover
+ * them). Throws `dashboard-unreadable` when the SDK offers no such adapter or cannot parse the row: without it no proof
+ * can be bound to the hashed row.
+ */
+function savedSnapshot(sdk, art, saved, key) {
+  const reg = sdk && sdk.registrations && typeof sdk.registrations.get === 'function' ? sdk.registrations.get(KIND) : null;
+  const adapter = reg && reg.adapter;
+  if (!adapter || typeof adapter.toArtifact !== 'function') throw stop('dashboard-unreadable', `the SDK offers no reader of a dashboard row, so dashboard "${key}" cannot be proved against its saved row`);
+  let parsed;
+  try {
+    parsed = JSON.parse(JSON.stringify(adapter.toArtifact({ formid: saved.formid, name: saved.name, description: saved.description, formxml: saved.formxml })));
+  } catch (err) {
+    throw stop('dashboard-unreadable', `the saved row of dashboard "${key}" could not be read as a dashboard`, { cause: err });
+  }
+  return { ...art, name: parsed.name, description: parsed.description, layoutType: parsed.layoutType, components: parsed.components, bag: parsed.bag };
 }
 
 /** Replace the seed tab's and section's ids in the SDK's freshly generated local seed; throws on any other shape. */
@@ -458,8 +610,8 @@ function resolveComponent(tile, index, resolveTile, toComponent) {
  *     committed and pending roots — so neither a dashboard publish nor an app publish ships any of them;
  *   - a workspace copy with edits the server has not seen, of ANY id this dashboard may be read under: the committed
  *     root, the pending root, the pin, the name lookup and the catalog id. Every read here fetches with overwrite, so
- *     such a copy is checked before the first one. `create-completion-required`, category `workspace-copy-unsent-edits`
- *     (design §3.4): the maker saves the edit into the spec or discards the copy; an identical rerun stops the same way.
+ *     such a copy is checked before the first one. `create-completion-required`, category `workspace-copy-unsent-edits`:
+ *     the maker saves the edit into the spec or discards the copy; an identical rerun stops the same way.
  *     A copy the SDK cannot diff reads as edited (hasUnsyncedEdits fails open), so a doubtful copy is never dropped.
  */
 async function preflightDashboard(s, { committed, pending }) {
@@ -515,6 +667,11 @@ async function resolveDashboard(s, committed, pending) {
   }
   if (live.dashboardType !== 'Standard') throw stop('dashboard-interactive-unsupported', `dashboard "${key}" is not a standard dashboard; only a standard one is reconciled, and it was left as it is`);
   if (!isGlobal(live)) throw stop('dashboard-scope-unsupported', `dashboard "${key}" belongs to a table; only a global dashboard is reconciled, and it was left as it is`);
+  // The plan below is built from the SDK's read, and its base observation hashes the publication read's saved row: two
+  // GETs. They must be one snapshot, or the plan would describe one row and record the hash of another.
+  if (snapshotSha256(savedSnapshot(sdk, live, pub.saved, key)) !== snapshotSha256(live)) {
+    throw stop('dashboard-unreadable', `dashboard "${key}" changed while it was read; nothing was sent, run again`);
+  }
 
   const components = live.components || [];
   const occurrences = new Map();
@@ -671,19 +828,18 @@ function planDashboard(s, resolution, committed) {
   }
   const tiles = r.entries.map((e) => ({ key: e.tileKey, id: e.controlId, type: e.component.type, cell: e.place.cell, section: e.place.section, tab: e.place.tab, parts: e.desired }));
   const children = r.entries.map((e) => ({ kind: TILE_KIND, key: e.tileKey, namespaceParentId: r.id, id: e.controlId, associationSha256: associationOf(e.tileKey, e.component.type, e.place) }));
-  // The non-authored parameters each managed tile keeps: a bound tile's as read, a new tile's as this run adds it.
-  const live = new Map((r.create ? [] : r.live.components || []).map((c) => [bareId(c.id), c]));
-  const managedParams = Object.fromEntries(r.entries.map((e) => {
-    const was = live.get(e.controlId);
-    return [e.controlId, unownedParams(e.component.type, was ? was.parameters : e.component.parameters)];
-  }));
+  // What the declaration does not own, as the send leaves it: the layout read now (each bound managed cell with its
+  // authored parts taken out), plus the cells this run appends, in the order it appends them, with the non-authored
+  // parameters it gives them. A create has no layout before the send: its proof checks the rest is the seed alone.
+  const managedTypes = new Map(r.entries.map((e) => [e.controlId, e.component.type]));
+  const appended = r.additions.map((e) => ({ id: e.controlId, parameters: unownedParams(e.component.type, e.component.parameters) }));
   const expected = {
     proofVersion: 1,
     proofSchema: PROOF_SCHEMA,
     rootId: r.id,
     baseProofSha256: committed ? committed.proof.semanticSha256 : null,
-    sentProjectionSha256: projectionSha256(rootProjection(r.desiredRoot.description), tiles),
-    preservationSha256: preservationSha256(r.create ? null : r.live.bag, managedParams),
+    sentProjectionSha256: projectionSha256(declaredRoot(r.desiredRoot.description), tiles),
+    preservationSha256: r.create ? sha({ layout: null, appended }) : preservationSha256(r.live.bag, managedTypes, s.languageCode, appended),
     baseObservation: r.create ? null : { rowVersion: null, savedSha256: savedSha },
     children,
   };
@@ -751,9 +907,23 @@ async function proveDashboard(s, expected, applied, { token = null, recovering =
     throw stop('dashboard-published-unreadable', `whether the saved state of dashboard "${key}" is published could not be read`, { cause: err });
   }
   if (!art || art.dashboardType !== 'Standard' || !isGlobal(art)) throw stop('dashboard-stored-mismatch', `the stored dashboard "${key}" is not a global standard dashboard`);
+  // Everything below is proved on the saved row the publication read answered — the one whose hash becomes the
+  // committed savedSha256 and the publication's desired hash — never on the SDK's earlier read of it: a change landing
+  // between the two GETs would otherwise be published without ever having been proved.
+  const saved = savedSnapshot(sdk, art, pub.saved, key);
   const created = expected.baseObservation === null;
-  const projected = projectDashboard(art, expected.children.map((c) => ({ key: c.key, id: c.id })), { preservesLayout: !created });
-  const missing = [...projected.missing];
+  let seedIds = [];
+  let seed = null;
+  if (created) {
+    const { childIds } = s.catalog.reserveChildren(KIND, key, { actualRootId: id, children: SEED_CHILDREN });
+    seedIds = [childIds[SEED_TAB], childIds[SEED_SECTION]];
+    seed = { tab: seedIds[0], section: seedIds[1] };
+  }
+  const projected = projectDashboard(saved, { managed: expected.children.map((c) => ({ key: c.key, id: c.id })), seedIds, languageCode: s.languageCode });
+  if (projected.invalid.some((code) => code === 'dashboard-interactive-unsupported' || code === 'dashboard-scope-unsupported')) {
+    throw stop('dashboard-stored-mismatch', `the stored dashboard "${key}" is not a global standard dashboard`);
+  }
+  const missing = projected.missing.map((k) => (k === 'seed' ? key : k));
   const mismatch = [...projected.duplicated];
   const found = [];
   for (const t of projected.tiles) {
@@ -761,25 +931,22 @@ async function proveDashboard(s, expected, applied, { token = null, recovering =
     if (associationOf(t.key, t.type, t) !== child.associationSha256) { mismatch.push(t.key); continue; }
     found.push({ child, parts: t.parts, place: { cell: t.cell, section: t.section, tab: t.tab }, type: t.type });
   }
-  let seedIds = [];
-  if (created) {
-    const { childIds } = s.catalog.reserveChildren(KIND, key, { actualRootId: id, children: SEED_CHILDREN });
-    seedIds = [childIds[SEED_TAB], childIds[SEED_SECTION]];
-    if (!seedInPlace(layoutOf(art.bag), { tab: seedIds[0], section: seedIds[1] })) missing.push(key);
-  }
   if (missing.length) throw stop('create-completion-required', `a part of dashboard "${key}" is not on the stored dashboard (${missing.join(', ')}); complete or remove it in Maker, then run again`);
   if (mismatch.length) throw stop('dashboard-stored-mismatch', `the stored dashboard "${key}" does not hold what was written (${mismatch.join(', ')}); check the dashboard`);
   const semantic = projected.semanticSha256;
-  const preserved = projected.preservationSha256;
-  // What is stored now is not what was sent, or a part the spec does not own changed: binding or publishing it would
-  // claim content this build never wrote — after a crash, someone's edit made since.
-  if (semantic !== expected.sentProjectionSha256 || preserved !== expected.preservationSha256) {
+  const managedTypes = new Map(projected.tiles.map((t) => [t.id, t.type]));
+  // What is stored now is not what was sent, or a part the spec does not own changed, or content was added that the
+  // send did not add (on a create: anything but the seed and the planned tiles): binding or publishing it would claim
+  // content this build never wrote — after a crash, someone's edit made since.
+  if (semantic !== expected.sentProjectionSha256 || !preservedSinceSend(saved, managedTypes, s.languageCode, expected.preservationSha256, seed)) {
     throw stop('create-completion-required', `the stored dashboard "${key}" is not the one this build sent; it was not bound or published`);
   }
+  // The committed preservation is the plain one of the stored row, as projectDashboard answers it to verify and hydrate.
+  const preserved = projected.preservationSha256;
 
   const { committed, pending } = store.readGroup(KIND, key);
   const attempt = recovering ? (pending && (!token || pending.token === token) ? pending : null) : null;
-  // The root create is acknowledged only by this run's own answer to its create (S0: never from a read). A recovered
+  // The root create is acknowledged only by this run's own answer to its create, never by a read. A recovered
   // attempt counts it only when the attempt itself durably recorded that acknowledgement before the run stopped.
   const rootCreateAcknowledged = recovering
     ? created && !!attempt && (attempt.acknowledgedRoot === true || !!(attempt.savedObservation && attempt.savedObservation.acknowledgedRoot === true))
@@ -801,7 +968,7 @@ async function proveDashboard(s, expected, applied, { token = null, recovering =
   const createdTiles = new Set(recovering ? (created ? expected.children.map((c) => c.key) : []) : ((applied && applied.createdTiles) || []));
   const records = [
     ...found.map(({ child, parts }) => record(TILE_KIND, child.key, child.id, parts, { origin: originOf(TILE_KIND, child.key, createdTiles.has(child.key)), parentKey: key })),
-    record(KIND, key, id, { description: String(art.description == null ? '' : art.description) }, { origin: originOf(KIND, key, created) }),
+    record(KIND, key, id, { description: String(saved.description == null ? '' : saved.description) }, { origin: originOf(KIND, key, created) }),
   ];
   // The debt's desired hash is the one the shared `dashboard` layer reader answers, so publishManagedScope compares like with like.
   const savedSha = systemFormLayerSha256(pub.saved);
@@ -825,7 +992,7 @@ async function proveDashboard(s, expected, applied, { token = null, recovering =
   const sentDeclarationSha = recovering ? (attempt ? attempt.declarationSha256 : null) : sha(canonical);
   return {
     savedProof: { savedSha256: savedSha },
-    // S0 point 7: only from this run's own create answer — never on a recovery, never from a read.
+    // Acknowledged only by this run's own answer to its create: never on a recovery, never from a read.
     acknowledgedRoot: !recovering && !!(applied && applied.createdRoot),
     records,
     proof: { savedSha256: savedSha, semanticSha256: semantic, preservationSha256: preserved, expectedChildrenSha256: expected.children.length ? sha(expected.children) : null },
@@ -847,9 +1014,12 @@ async function proveDashboard(s, expected, applied, { token = null, recovering =
  *   sdk                  the maker SDK, its `dataverse` client behind the run's publication barrier;
  *   store, barrier, halt the managed binding handle, the run's publication barrier, the build's halt factory;
  *   resolveTile, toComponent   the build's dashboardTileOpts and dashboardComponent;
- *   retainedCreationIds  the ids the dashboard creation record (dashboard-creation-records.js) still retains for this
- *                        dashboard: any of them stops it with `dashboard-creation-record-unsettled`;
- *   resolvedId           the id the build found by name for an unbound dashboard, or none;
+ *   retainedCreationIds  the ids the dashboard creation record still retains for this dashboard's name: the build's
+ *                        openDashboardCreations(...).idsOf(dashboard.name) (dashboard-creation-records.js), [] when it
+ *                        answers none. Any of them stops it with `dashboard-creation-record-unsettled`;
+ *   resolvedId           for a dashboard no committed group binds, the one id the build's name lookup singled out —
+ *                        findDashboardsByName(sdk, dashboard.name) in sdk-build.js, narrowed to this app's solution when
+ *                        it answers several — or none. It is where the dashboard is looked for, never consent to manage it;
  *   approvals            { adopt, overwrite, destructive }: the --authorize sets, keyed `dashboard:<key>` (and
  *                        `dashboard:<key>/<tile>` for a tile's overwrite). `adopt` holding `dashboard:<key>` is the
  *                        ONLY consent to manage a dashboard this build did not create (a pin is not);
@@ -859,6 +1029,17 @@ async function proveDashboard(s, expected, applied, { token = null, recovering =
  *   ctx                  { appUniqueName, environmentFingerprint } the records are written for.
  * Answers runManagedFeature's { result, committedGroup } plus { key, id }. Every failure throws the build's halt, and
  * every id this dashboard is known by stays quarantined for the run (no dashboard publish, no app publish of it).
+ *
+ * What an answer means, by how this build came to hold the dashboard:
+ *   - inspection: a dashboard no group binds that already matches the spec, without `dashboard:<key>` adoption
+ *     approval, answers { result: { noop: true } } and committedGroup null. It is read, never bound, never published;
+ *   - acknowledged create: this run's own create answer acknowledged the new root; the root and its tiles commit with
+ *     origin `created`, and only their write is owed a publication;
+ *   - committed ownership: a group already binds the dashboard; a run writes only what the spec authors, proves the rest
+ *     unchanged, and owes a publication only for its own proved write;
+ *   - unacknowledged adoption: an existing dashboard, or a created root whose create answer was lost, binds only with
+ *     `dashboard:<key>` adoption approval (its records origin `adopted`); without it nothing is bound or published, and
+ *     an attempt and its proof are kept for the run that has the approval.
  */
 async function settleDeclaredDashboard(args) {
   const { dashboard, catalog, sdk, store, halt, ensureMembership } = args || {};
@@ -871,6 +1052,7 @@ async function settleDeclaredDashboard(args) {
     resolvedId: args.resolvedId || null,
     approvals: args.approvals || {},
     ctx: args.ctx || {},
+    languageCode: (sdk && sdk.languageCode) || DEFAULT_LCID,
     lastPlan: null,
   };
   s.adoptApproved = isApproved(s.approvals.adopt, KIND, key) === true;
