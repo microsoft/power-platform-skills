@@ -71,9 +71,10 @@ const {
   controlIdTaken,
 } = require('./form-timeline.js');
 const { runManagedFeature, publishManagedScope } = require('./managed-feature-contract.js');
-const { rootCreateAcknowledged } = require('./managed-bindings.js');
+const { rootCreateAcknowledged, COMPLETION_BASE_BYTES, COMPLETION_MAX_BYTES } = require('./managed-bindings.js');
 const { readSystemFormPublication, readSystemFormRootPresence, systemFormLayerSha256 } = require('./systemform-published.js');
-const { publishTablesXml } = require('./table-publish.js');
+const { tablesPublishXml } = require('./table-publish.js');
+const { postPublishXml } = require('./publish-xml.js');
 const { hasUnsyncedEdits } = require('./unsynced-edits.js');
 const {
   refusal,
@@ -1449,6 +1450,58 @@ function newChildrenOf(key, children, m, liveTabs) {
     .map((c) => ({ kind: c.kind, key: c.key, id: c.id }));
 }
 
+// How deep the store file nests what a completion writes (data → groups → [i] → consumerState → declaration → tabs →
+// [j] → sections …): every line of it carries this many two-space indents at most, beyond its own. Deeper than any
+// line of a form group, so the count is an upper bound.
+const COMPLETION_NESTING = 8;
+// A completion's bytes, as the store file holds them, are bounded from the plan, then given this much more (a quarter)
+// and the store's own base on top: field values whose length the plan cannot know exactly (a dispatch token, a
+// publication's carried state, the digits of the store's own counters) are covered by the margin, never by luck.
+const COMPLETION_MARGIN = 1.25;
+/**
+ * The bytes the completion of this attempt may add to the managed binding store (prepareAttempt `completionBytes`),
+ * as a sound upper bound, computed from the plan. The store reserves them from the attempt's prepare until its commit,
+ * and a completion that outgrows its reservation may be refused AFTER its send (managed-binding-store-full), which
+ * would leave a sent form unbound. Its default (COMPLETION_BASE_BYTES and one copy of the declaration) is too small
+ * for a large form: every field cell, section and tab is a record and a consumer-state child, and every field and
+ * section a part of the root's proof. So this builds the completion's own shapes, with every hash at its full width:
+ *   - the records: the root (its partsSha256 over the planned tree's projection, with the spec part) and one per child;
+ *   - the proof, and the saved proof noteSaved keeps on the attempt;
+ *   - the consumer state: the declaration, each child's state over the planned tree, the proof schema;
+ *   - the original declaration, and the publication;
+ *   - the child-create receipt noteSaved keeps (the new children).
+ * Nothing the commit REMOVES (the attempt itself) is subtracted. Indented as the file holds it, then given the margin
+ * and the base, and never more than COMPLETION_MAX_BYTES, the most the store reserves. The margin may be capped, the
+ * bound itself never is: a form whose completion could be larger than the cap (thousands of cells, beyond what a table
+ * can hold) is refused here, before anything is prepared or sent (managed-binding-store-full), rather than sent with
+ * a reservation that cannot cover its commit.
+ */
+function completionBytesOf({ key, formId, children, tabs, declaration, newChildren, scope, recordOf }) {
+  const H = 'f'.repeat(64);
+  const parts = { ...projectionBaseline(formProjection(tabs)).partsSha256, 'spec:fieldOptions': H };
+  const proof = { savedSha256: H, semanticSha256: H, preservationSha256: H, expectedChildrenSha256: H };
+  const childState = childrenStateOf(children, tabs);
+  for (const state of Object.values(childState)) if ('placeSha256' in state) state.placeSha256 = H;
+  const completion = {
+    records: [
+      recordOf({ kind: FAMILY, key, id: formId, intentSha256: H, partsSha256: parts, origin: 'adopted' }),
+      ...children.map((c) => recordOf({ kind: c.kind, key: c.key, id: c.id, intentSha256: H, parentKey: key, origin: 'adopted' })),
+    ],
+    proof,
+    savedObservation: { phase: 'saved', proof, acknowledgedRoot: false },
+    consumerState: { declaration, children: childState, proofSchema: PROOF_SCHEMA },
+    originalDeclaration: declaration,
+    publication: { scope, state: 'unconfirmed', desiredSha256: H, dispatchToken: H },
+    acknowledgedChildCreates: newChildren || [],
+  };
+  const text = JSON.stringify(completion, null, 2);
+  const bytes = Buffer.byteLength(text, 'utf8') + text.split('\n').length * 2 * COMPLETION_NESTING;
+  if (bytes > COMPLETION_MAX_BYTES) {
+    throw codeError('managed-binding-store-full', `the form's binding would need about ${bytes} bytes of the managed binding store when it is committed, more than one form may reserve (${COMPLETION_MAX_BYTES}); nothing was sent. Put fewer fields on the form, or split it into more forms`);
+  }
+  return Math.min(COMPLETION_MAX_BYTES, Math.ceil(bytes * COMPLETION_MARGIN) + COMPLETION_BASE_BYTES);
+}
+
 // The complete tree of a NEW declared form, every object marked with its locator. Sections of field cells only
 // are packed again by slot (the compiler's width-only rows let a cell after a middle row-spanning one run past the
 // grid); any other section keeps its compiled rows, its cells named by what they hold. Answers { tabs } or
@@ -1776,10 +1829,12 @@ async function reconcileDeclaredForm(input, ctx = {}) {
       if (keys.some((k) => !m.ids[k])) throw codeError('create-identity-unsupported', 'the creation catalog did not name every object of the new form');
       const children = expectedChildrenOf(key, formId, m);
       const planned = { formType: pc.formType, entityLogicalName: (def && def.entityLogicalName) || table, tabs: m.tabs, bag: withHandlers({ a: [], c: [] }, pc.handlers) };
+      const newChildren = newChildrenOf(key, children, m, null);
+      const completionBytes = completionBytesOf({ key, formId, children, tabs: m.tabs, declaration, newChildren, scope, recordOf });
       state.action = 'create';
       return {
         root, declarationSha256, declaration, publication, create: true, m, handlers: pc.handlers, formType: pc.formType,
-        newChildren: newChildrenOf(key, children, m, null),
+        newChildren, completionBytes,
         expected: {
           proofVersion: 1, proofSchema: PROOF_SCHEMA, rootId: formId, baseProofSha256,
           sentProjectionSha256: intentSha256(projectFormComposite(planned)),
@@ -1824,9 +1879,10 @@ async function reconcileDeclaredForm(input, ctx = {}) {
       return { noop: true };
     }
     state.action = p.action;
+    const newChildren = newChildrenOf(key, children, m, live.tabs);
     return {
       root, declarationSha256, declaration, publication: p.action === 'update' ? publication : null, update: p.action === 'update', m, addHandlers: p.addHandlers || [],
-      newChildren: newChildrenOf(key, children, m, live.tabs),
+      newChildren, completionBytes: completionBytesOf({ key, formId, children, tabs: m.tabs, declaration, newChildren, scope, recordOf }),
       expected: {
         proofVersion: 1, proofSchema: PROOF_SCHEMA, rootId: formId, baseProofSha256,
         sentProjectionSha256: intentSha256(projectFormComposite(planned)),
@@ -1996,6 +2052,37 @@ async function reconcileDeclaredForm(input, ctx = {}) {
 }
 
 /**
+ * The publish callback of a declared form table (publishManagedScope's `publish`): ONE plain PublishXml naming only
+ * `table`, through postPublishXml (lib/publish-xml.js), which re-sends only a SQL deadlock victim. The client answers
+ *   { status, headers, body }       e.g. { status: 204, headers: {}, body: undefined } for a publish that ran
+ * and throws only when the transport failed. A 2xx answer is returned UNCHANGED, for the shared publication to judge
+ * (publishAnswerFailure) and confirm by a fresh read. Anything else is a failure this callback knows of, and is thrown
+ * with the answer and the platform's or SDK's own error kept as the cause:
+ *   { status: 503, body: { error: { code: '0x80040216', message: '…' } } }        an HTTP refusal or lost run
+ *   { shipped: false, publish: { kind: 'failed', error: { code: 'CONNECTION_ERROR' } } }   the SDK's failed answer
+ *   a thrown transport error                                                         an answer that never came
+ * None of them is a definite no-start: the request passed the permit and was sent, and a refused or lost publish may
+ * still complete (publish-xml.js), so the debt stays unconfirmed and the scope held until a read proves it.
+ */
+async function publishTableOnce(dataverse, table) {
+  let answer;
+  try {
+    answer = await postPublishXml(dataverse, tablesPublishXml([table]));
+  } catch (cause) {
+    throw Object.assign(codeError('form-publish-failed', `the publish of the table ${table} got no answer (${(cause && cause.message) || String(cause)})`), { cause });
+  }
+  const status = answer && answer.status;
+  if (Number.isInteger(status) && status >= 200 && status < 300) return answer;
+  const said = answer && answer.publish && typeof answer.publish === 'object' && answer.publish.error !== undefined
+    ? answer.publish.error
+    : (answer && answer.body && answer.body.error) || undefined;
+  const detail = said && typeof said.message === 'string' && said.message ? `: ${said.message}` : '';
+  throw Object.assign(codeError('form-publish-failed', `the publish of the table ${table} answered ${status === undefined ? 'a failure' : `HTTP ${status}`}${detail}`), {
+    answer, ...(said !== undefined ? { cause: said } : {}),
+  });
+}
+
+/**
  * Pay the publication the committed declared forms of ONE table owe, at most once, through the shared managed
  * publication (managed-feature-contract.js publishManagedScope) — the only way this helper publishes. Call it once
  * per table after its forms settled, a no-op included (a retry that changes nothing still owes what an earlier run
@@ -2024,10 +2111,7 @@ async function publishDeclaredFormTable({ store, barrier, sdk, table, keys = [] 
       // Every committed group on the table, of any family, is read by its own family's shared reader
       // (managed-layer-readers.js LAYER_READERS, the default); this helper supplies none and replaces none.
       store, barrier, scope, groups, client: sdk && sdk.dataverse, path: `declared forms of ${t}`,
-      publish: async () => {
-        const r = await publishTablesXml(sdk.dataverse, [t]);
-        if (!r.ok) throw codeError('form-publish-failed', r.reason || `the table ${t} was not published`);
-      },
+      publish: () => publishTableOnce(sdk && sdk.dataverse, t),
     });
   } catch (err) {
     const code = (err && err.code) || 'managed-not-settled';

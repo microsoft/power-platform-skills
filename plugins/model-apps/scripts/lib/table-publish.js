@@ -116,6 +116,9 @@ function tableList(names, max) {
 
 const xmlText = (value) => String(value).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
+// The ParameterXml that publishes `names` (see publishTablesXml below).
+const tablesPublishXml = (names) => `<importexportxml><entities>${names.map((t) => `<entity>${xmlText(t)}</entity>`).join('')}</entities></importexportxml>`;
+
 // Publish `tables` in ONE request. Dataverse's PublishXml takes the tables as entity elements:
 //   POST /PublishXml  { ParameterXml: "<importexportxml><entities><entity>contoso_task</entity><entity>contoso_note</entity></entities></importexportxml>" }
 // https://learn.microsoft.com/power-apps/developer/data-platform/webapi/reference/publishxml
@@ -131,7 +134,7 @@ async function publishTablesXml(client, tables, { sleep } = {}) {
   if (!names.length) return { ok: true };
   if (!client || typeof client.post !== 'function') return { ok: false, reason: 'no client to publish with' };
   try {
-    const response = await postPublishXml(client, `<importexportxml><entities>${names.map((t) => `<entity>${xmlText(t)}</entity>`).join('')}</entities></importexportxml>`, { sleep });
+    const response = await postPublishXml(client, tablesPublishXml(names), { sleep });
     if (response && response.status >= 200 && response.status < 300) return { ok: true };
     const said = response && response.body && response.body.error && response.body.error.message;
     return { ok: false, reason: `PublishXml answered HTTP ${response && response.status}${typeof said === 'string' && said ? `: ${said}` : ''}` };
@@ -357,6 +360,6 @@ function describeUnreadAppComponents({ reason, added } = {}) {
 }
 
 module.exports = {
-  specTables, appWriteTables, appPushTables, preAppTables, tableList, publishTablesXml, readSavedNotPublished, describeSavedNotPublished,
+  specTables, appWriteTables, appPushTables, preAppTables, tableList, publishTablesXml, tablesPublishXml, readSavedNotPublished, describeSavedNotPublished,
   readAppFormChartTables, describePreAppRefusal, describeUnreadAppComponents,
 };

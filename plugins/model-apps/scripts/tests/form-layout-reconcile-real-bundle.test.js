@@ -17,7 +17,7 @@ const { createMakerSdk, createNodeWorkspaceStorage } = require('../vendor/cds-ma
 const { createAttemptSendObserver } = require('../lib/managed-feature-contract.js');
 const { compileFormIntent } = require('../lib/artifact-intent.js');
 const { slotGrid, rowOccupancy } = require('../lib/form-occupancy.js');
-const { openManagedContext } = require('../lib/managed-bindings.js');
+const { openManagedContext, COMPLETION_BASE_BYTES, COMPLETION_MAX_BYTES } = require('../lib/managed-bindings.js');
 const { createPublicationBarrier } = require('../lib/publication-barrier.js');
 const { createIntentCatalog } = require('../lib/creates-catalog.js');
 const flr = require('../lib/form-layout-reconcile.js');
@@ -1056,6 +1056,73 @@ test('the publication a settled form owes is paid once per table by one plain Pu
   assert.equal(wire.publishes().length, 1, 'paid once');
 });
 
+test('the publish of a declared form table answers the client\'s answer unchanged, and throws a failure it knows of with its cause kept, never as a definite no-start', async () => {
+  // A settled form owes its table's publish. The publish request reaches the wire through the barrier's permit; the
+  // client's answer to it is replaced by `answer` (a function of the real one), as an SDK answering otherwise would.
+  const owed = async (answer) => {
+    const wire = createManagedWire();
+    const w = etagged(wire);
+    const A = guid(4100);
+    await onWire(wire, A, 'Main', 0);
+    const spec = wireSpec('Main');
+    const ctx = ports({ authorizedAdoption: true });
+    const first = await wireRun(w, ctx, spec, A);
+    assert.deepEqual([codes(first.result), first.result.action], [[], 'update'], JSON.stringify(first.result));
+    // What the callback hands back to the shared publication, as the permit runs it.
+    const returned = [];
+    const permit = ctx.barrier.withSendPermit.bind(ctx.barrier);
+    ctx.barrier.withSendPermit = (o, fn) => permit(o, async (...a) => { const r = await fn(...a); returned.push(r); return r; });
+    const answers = [];
+    const dv = first.sdk.dataverse;
+    const post = dv.post.bind(dv);
+    dv.post = async (url, ...rest) => {
+      const real = await post(url, ...rest);
+      const given = /PublishXml/.test(url) ? await answer(real) : real;
+      answers.push(given);
+      return given;
+    };
+    return { wire, ctx, spec, sdk: first.sdk, returned, answers };
+  };
+
+
+  // The SDK answers the publish as failed (sent, and it may still complete): the callback throws, keeping the SDK's
+  // own error as the cause and claiming no definite no-start, so the debt is unconfirmed and the scope held.
+  const sdkError = { code: 'CONNECTION_ERROR', message: 'the connection was reset' };
+  const failed = await owed(() => ({ type: 'table', id: 'new_ticket', shipped: false, publish: { kind: 'failed', error: sdkError } }));
+  const held = await publishTable(failed.ctx, failed.sdk);
+  assert.deepEqual([held.code, held.hold], ['managed-publication-unconfirmed', true], JSON.stringify(held));
+  const thrown = held.error.cause;
+  assert.ok(thrown instanceof Error, 'the callback threw');
+  assert.equal(thrown.definiteNoStart, undefined, 'a failed publish is never a definite no-start');
+  assert.equal(thrown.cause, sdkError, 'the SDK\'s own error is kept as the cause');
+  assert.equal(thrown.answer, failed.answers.at(-1), 'and the answer with it');
+  assert.equal(failed.returned.length, 0, 'a failure is thrown, not returned');
+  assert.equal(failed.wire.publishes().length, 1, 'the one request was sent');
+  assert.ok(['dispatching', 'unconfirmed'].includes(groupOf(failed.ctx, failed.spec.forms[0]).committed.publication.state));
+  // The refusal names its dispatch, the typed approval that would accept the risk and the remedy, as data.
+  assert.ok(held.error.dispatchToken, 'a dispatch token');
+  assert.equal(held.error.dispatchToken, groupOf(failed.ctx, failed.spec.forms[0]).committed.publication.dispatchToken);
+  assert.equal(held.error.approval, 'publication-risk:table:new_ticket');
+  assert.equal(typeof held.error.remedy, 'string');
+
+  // The transport throws after the request went out (an answer that never came): the same, with that error as the cause.
+  const lost = new Error('socket hang up');
+  const dropped = await owed(() => { throw lost; });
+  const unknown = await publishTable(dropped.ctx, dropped.sdk);
+  assert.deepEqual([unknown.code, unknown.hold], ['managed-publication-unconfirmed', true], JSON.stringify(unknown));
+  assert.equal(unknown.error.cause.cause, lost);
+  assert.equal(unknown.error.cause.definiteNoStart, undefined);
+  assert.equal(dropped.returned.length, 0);
+
+  // A success: the client's answer is returned as it came, the same object, for the shared publication to judge.
+  const ok = await owed((real) => real);
+  const paid = await publishTable(ok.ctx, ok.sdk);
+  assert.equal(paid.sent, true, JSON.stringify(paid));
+  assert.equal(ok.returned.length, 1);
+  assert.equal(ok.returned[0], ok.answers.at(-1), 'the answer is returned unchanged');
+  assert.equal(groupOf(ok.ctx, ok.spec.forms[0]).committed.publication.state, 'confirmed');
+});
+
 test('a form left pending on the table holds the publish of a settled sibling: nothing goes live until the pending one is proved', async () => {
   const wire = createManagedWire();
   const w = etagged(wire);
@@ -1638,4 +1705,59 @@ test('a form commits the declaration its attempt was planned from; a recovery un
   const next = await observedRun(lw, lctx, changed, undefined, { workspace });
   assert.deepEqual([codes(next.result), next.result.action], [[], 'update'], JSON.stringify(next.result));
   assert.deepEqual(groupOf(lctx, form).committed.consumerState.declaration, (({ prune: _p, ...d }) => d)(changed.forms[0]));
+});
+// ---- The completion reservation: a large form's commit fits in what its attempt reserved. ----
+
+test('a large declared form reserves, when its attempt is prepared, room for everything its completion commits: records, proof, consumer state and original declaration', async () => {
+  const h = await deployed([section('sec_main', 1, [{ cells: [cell(1, 'new_name')] }], 50)]);
+  // 48 sections of 16 fields: 768 field cells, 816 children with their sections and tab.
+  const sections = [{ name: 'sec_main', columns: 1, fields: ['new_name'] }];
+  const columns = [];
+  for (let s = 0; s < 48; s += 1) {
+    const fields = Array.from({ length: 16 }, (_, f) => `new_field_${String(s).padStart(2, '0')}_${String(f).padStart(2, '0')}`);
+    for (const f of fields) columns.push({ schemaName: f, displayName: f, type: 'Text' });
+    sections.push({ name: `sec_${s}`, columns: 2, fields });
+  }
+  const spec = formSpec(sections);
+  spec.entities[0].columns.push(...columns);
+  const form = spec.forms[0];
+  const ctx = ports({ authorizedAdoption: true });
+  // The reservation as the store holds it on the attempt, read just before its commit (membership comes after the proof).
+  let reserve = null;
+  ctx.ensureMembership = async () => {
+    const { pending } = ctx.store.readGroup(flr.FAMILY, flr.formLayoutKey(form));
+    if (pending) reserve = { ...pending.completionReserve };
+  };
+  const run = await reconcile(h, spec, ctx);
+  assert.deepEqual([codes(run.result), run.result.action], [[], 'update'], JSON.stringify(run.result));
+  const g = groupOf(ctx, form).committed;
+  assert.ok(g && reserve, 'committed, from a reserved attempt');
+  assert.ok(g.records.length > 800, String(g.records.length));
+  // The completion as the store file holds it: indented two spaces, its fields four deeper than standalone
+  // (data → groups → [i] → field).
+  const inFile = (v) => { const text = JSON.stringify(v, null, 2); return Buffer.byteLength(text, 'utf8') + text.split('\n').length * 4; };
+  const completion = inFile({ records: g.records, proof: g.proof, consumerState: g.consumerState, originalDeclaration: g.originalDeclaration });
+  assert.ok(completion > COMPLETION_BASE_BYTES + inFile(g.originalDeclaration), `a completion beyond the store's default reservation (${completion})`);
+  assert.ok(reserve.bytes >= completion, `reserved ${reserve.bytes} bytes for a completion of ${completion}`);
+  assert.ok(reserve.bytes < COMPLETION_MAX_BYTES, `sized to the form, not the cap (${reserve.bytes})`);
+  assert.ok(reserve.used < reserve.bytes, `the writes after the send stayed within it (${reserve.used} of ${reserve.bytes})`);
+});
+
+test('a declared form whose completion could outgrow the most one attempt may reserve is refused before anything is prepared or sent', async () => {
+  const h = await deployed([section('sec_main', 1, [{ cells: [cell(1, 'new_name')] }], 50)]);
+  const sections = [{ name: 'sec_main', columns: 1, fields: ['new_name'] }];
+  const columns = [];
+  for (let s = 0; s < 64; s += 1) {
+    const fields = Array.from({ length: 64 }, (_, f) => `new_f${String(s).padStart(2, '0')}_${String(f).padStart(2, '0')}`);
+    for (const f of fields) columns.push({ schemaName: f, displayName: f, type: 'Text' });
+    sections.push({ name: `sec_${s}`, columns: 2, fields });
+  }
+  const spec = formSpec(sections);
+  spec.entities[0].columns.push(...columns);
+  const ctx = ports({ authorizedAdoption: true });
+  const run = await reconcile(h, spec, ctx);
+  assert.deepEqual(codes(run.result), ['managed-binding-store-full'], JSON.stringify(run.result && run.result.code));
+  assert.match(run.result.error.cause.message, /nothing was sent/);
+  assert.deepEqual(run.writes, [], 'nothing sent');
+  assert.deepEqual(groupOf(ctx, spec.forms[0]), { committed: null, pending: null, effects: [] }, 'nothing prepared');
 });
