@@ -1015,3 +1015,41 @@ test('configuration expectations pass on their fixture, fail when the spec drift
   for (const r of fixtureSpec.connectionReferences) assert.ok(bindings.connectionReferences.has(r.logicalName.toLowerCase()), r.logicalName);
   for (const v of fixtureSpec.environmentVariables.filter((e) => e.type === 'secret')) assert.ok(bindings.environmentVariables.has(v.schemaName.toLowerCase()), v.schemaName);
 });
+
+test('stable-identity expectations pass on their fixture, a download prompt must not gain the field, and the skill teaches the stop', () => {
+  const fixture = fixtureFor(20);
+  const ev20 = evalsManifest.evals.find((e) => e.id === 20);
+  const [optIn, explained] = ev20.expectations;
+  const grade = (mutate, evMutate) => {
+    const ev = structuredClone(ev20);
+    const spec = structuredClone(fixture.spec);
+    if (mutate) mutate(spec);
+    if (evMutate) evMutate(ev);
+    return ASSERTIONS.get(optIn)({ spec, eval: ev, facts: {} }).status;
+  };
+  assert.strictEqual(grade(), 'pass');
+  assert.strictEqual(grade((s) => { delete s.createIdentity; }), 'fail', 'a new app without stable ids');
+  assert.strictEqual(grade((s) => { s.createIdentity = 'stable-v2'; }), 'fail', 'a value the plugin does not know');
+  assert.strictEqual(grade((s) => { s.minimumPluginVersion = '2.20.6'; }), 'fail', 'below the release that reads the field');
+  assert.strictEqual(grade((s) => { for (const x of [...s.views, ...s.charts]) delete x.reconcile; }), 'fail', 'no declared view or chart to use it');
+  // The negative: a download prompt is not a new app, so the field on its spec is invented, and the plain spec passes.
+  const download = (ev) => { ev.prompt = 'Download the Equipment Loans app into a spec.'; delete ev.expect.createIdentity; };
+  assert.strictEqual(grade(null, download), 'fail');
+  assert.strictEqual(grade((s) => { delete s.createIdentity; }, download), 'pass');
+
+  // The fixture spec also passes the plugin's own validation and lint with no createIdentity finding.
+  const { validateAppSpec } = require('../../../../plugins/model-apps/scripts/lib/app-spec.js');
+  const { lintAppSpec } = require('../../../../plugins/model-apps/scripts/lib/spec-lint.js');
+  assert.deepStrictEqual(validateAppSpec(fixture.spec).errors || [], []);
+  const lint = lintAppSpec(fixture.spec);
+  const findings = [...(lint.errors || []), ...(lint.warnings || [])].map((w) => (typeof w === 'string' ? w : JSON.stringify(w)));
+  assert.deepStrictEqual(findings.filter((w) => /createIdentity|create-identity/.test(w)), []);
+
+  // The explanation is graded on the real skill, and fails when the bullet stops saying what the maker must hear.
+  const real = fs.readFileSync(path.join(__dirname, '..', '..', '..', '..', 'plugins', 'model-apps', 'skills', 'app-builder', 'SKILL.md'), 'utf8');
+  const teach = (skill) => ASSERTIONS.get(explained)({ spec: fixture.spec, eval: ev20, facts: skill === undefined ? {} : { appBuilderSkill: skill } }).status;
+  assert.strictEqual(teach(), 'pass');
+  assert.strictEqual(teach(real.replace('does not merge', 'merges')), 'fail', 'the stop described as a merge');
+  assert.strictEqual(teach(real.replace(/create-completion-required/g, 'a refusal')), 'fail', 'the stop not named');
+  assert.strictEqual(teach(real.replace(/createIdentity/g, 'stableIds')), 'fail', 'no createIdentity guidance');
+});

@@ -13,9 +13,10 @@ Bundled SDK: commit 0eef55f8c2d0.
 
 - **Portable schema**: Choice `value`s, `dateTimeBehavior`, `isSecured`, `fieldSecurityProfiles`, table flags ([schema](references/app-spec-schema-advanced.md)); `--include-capabilities` downloads behaviours/flags; destructive edits need `--authorize <key>`.
 - **Configuration**: environment variables (including secrets), connection references, Custom APIs, duplicate-detection rules and `solution.version` ([schema](references/app-spec-schema.md)). Per-environment values use `--deployment-settings`.
-- **Declared views, charts and web resources** follow the spec on rebuild (`reconcile: "declared"`). Existing-item changes need `--authorize adopt:view:<table>/<name>`, `adopt:chart:<table>/<name>` or `adopt:webresource:<name>`; untyped view/chart keys work only unambiguously. Web-resource case-only name duplicates are refused.
+- **Declared views, charts and web resources** follow the spec on rebuild (`reconcile: "declared"`). Existing-item changes need `--authorize adopt:<family>:<id>`; untyped view/chart keys work only unambiguously. Web-resource case-only name duplicates are refused.
 - **`entities[].quickFind.findColumns`** sets search columns; `--verify` checks them.
-- **`app.mainFormsOnUpdate: "exact"`** restricts listed tables' Main-form membership (`--allow-destructive` on existing apps); **`app.pinDeclaredArtifacts`** adds declared forms/views/charts/dashboards. Lost component-add answers are checked, repaired once if possible, otherwise reported incomplete.
+- **`createIdentity: "stable-v1"`** keeps declared view/chart ids across retries; unsent local edits halt builds.
+- **`app.mainFormsOnUpdate: "exact"`** restricts listed tables' Main-form membership (`--allow-destructive` on existing apps); **`app.pinDeclaredArtifacts`** adds declared forms/views/charts/dashboards. Lost component-add answers are checked and repaired once.
 - **Read-only tools**: build `--dry-run --preview-push`, verify `--inspect-components`, `solutions.js inspect`, `plan-app-promotion.js`. **`data-fix.js`** repairs rows.
 - **Page drafts**: `genpage-upload.js --draft`, `genpage.js` navigation `--draft`; pages leases and `prepare-compiler-refresh` ([skill](skills/genpage/SKILL.md)).
 
@@ -23,7 +24,7 @@ Bundled SDK: commit 0eef55f8c2d0.
 
 - **Reads** add `IsSecured`, enumerate name matches, count distinct IDs, leave incomplete lookups unproven, check Date and Time behaviours once per existing table gaining columns, and scan published/unpublished forms before page teardown.
 - **Teardown** keeps form-embedded pages and named configuration items; downloads omit configuration.
-- **Pages calling unusable declared connection references or Custom APIs halt before writing**; fix prerequisites and rerun.
+- **Pages calling unusable declared connection references or Custom APIs halt before writing.**
 
 ### Fixed
 
@@ -31,7 +32,7 @@ Bundled SDK: commit 0eef55f8c2d0.
 
 ### Known limitations
 
-- Each later declared edit needs adoption; keyed commands are refused. Differing local view/chart/Quick-Find copies are refused; printed `--authorize overwrite:` keys discard local edits.
+- Later declared edits need adoption; keyed commands are refused. Differing local view/chart/Quick-Find copies are refused; printed `overwrite:` keys discard them.
 - Emptying web resources or Quick Find or removing view columns needs `--allow-destructive`.
 - Component inspection fails for caption-only controls.
 - Lost configuration-create answers can cause duplicates on whole-build retry; after duplicate-table recovery, declared Date and Time repairs may need another run.

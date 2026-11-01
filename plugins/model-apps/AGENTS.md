@@ -2880,6 +2880,21 @@ is unknown, the build resets that copy to the server's (it held only this run's 
 was proven clean or approved for replacement just before); a reset that fails leaves the next run to
 refuse the item.
 
+**Stable create ids** (`createIdentity: "stable-v1"`, `minimumPluginVersion: "2.21.0"`; new apps only).
+The only place the engine reads the field is one gated `require` of `lib/creates-stable-build.js` in
+`lib/sdk-build.js` (pinned by `creates-port.test.js`: a spec without it loads none of the stable modules
+and sends the same requests as before). For a declared view or chart, `lib/creates-catalog.js` derives
+the id (`lib/creates-identity.js`), `lib/creates-port.js` creates or finds the row at that id, and
+`lib/managed-bindings.js` records the binding in the workspace (`managed-bindings.<hash>.json`, opened
+by `openBuildBindingGroups` for an apply with an app, a solution and an https environment). Every other
+kind keeps its current ids. A local copy at the id with an unsent edit, or a local create never
+acknowledged, is refused before any read-back, reapply or send (`create-completion-required`, via
+`lib/creates-local.js`); there is no `overwrite:` approval for it. A store file that cannot be trusted
+halts the build before any write (`managed-binding-store-unreadable`, never retried). A create whose
+answer was lost keeps its table's publish held until a later run proves and binds the row. `--verify`
+reads each bound row by its id (`readManagedManifest`, read-only) and lists unsettled bindings as
+unverified.
+
 Approval keys are typed by family, `<verb>:<family>:<id>` (`build-model-app.js` `authorizationKeys`,
 `reconcile-common.js` `approvalKey`), because ids collide across families: a view and a chart may share
 `<table>/<name>`, and a view may be named `quickFind`. Each approval is stored under its typed key and

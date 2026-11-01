@@ -662,3 +662,33 @@ Declared upkeep of web resources is described with `webResources[]` above. Decla
 dashboards, business rules and form layouts are not reconciled in this release: `reconcile` on a form,
 dashboard, business rule or flow is a validation error, and the build's existing behaviour for each is
 unchanged. A command bar with `commands[].key` is refused (`managed-binding-port-unavailable`) in this version.
+
+## createIdentity (optional — stable create ids for declared views and charts)
+
+Requires `minimumPluginVersion: "2.21.0"`. Write it on a **new** app only; never add it to an existing or
+downloaded spec. The only value is `"stable-v1"`; any other value is a validation error
+(`create-identity-invalid`), and a spec without the field builds exactly as before.
+
+```jsonc
+{ "minimumPluginVersion": "2.21.0", "createIdentity": "stable-v1",
+  "views": [{ "entity": "new_ticket", "name": "Open Tickets", "reconcile": "declared", "columns": ["new_name"] }] }
+```
+
+- **What gets a stable id.** A declared view or chart (`reconcile: "declared"`) is created with an id
+  the spec fixes (from the solution, the table and the name). A build that lost the answer to its
+  create, run again from the same or a fresh workspace, finds the row at that id and binds it instead
+  of creating a second one. Every other kind (configuration items, custom APIs, environment variables,
+  field security, duplicate rules, pages, legacy views and charts) keeps today's ids.
+- **Where the binding is kept.** In the build workspace, one file per environment, app and solution
+  (`managed-bindings.<hash>.json`). It holds ids and hashes only: no row content, no credentials. A
+  file the build cannot trust stops the build before any write (`managed-binding-store-unreadable`);
+  restore it or move it aside. A row found at its id without a binding in this workspace is bound as
+  adopted: if it already matches the spec nothing is written, otherwise the usual approvals apply.
+- **Local copy.** A local copy at the id with an edit the server has not seen, or a local create that
+  was never acknowledged, stops that view or chart before anything is fetched over, reapplied or sent
+  (`create-completion-required`); the copy is kept byte for byte, and running again stops again. There is
+  no `overwrite:` approval for this stop: put the change into the spec, then refresh the local copy.
+- **Publishing.** A create whose answer was lost holds its table's publish until a later build has
+  found and bound the row; another table still publishes.
+- **`--verify`** reads each bound view or chart by its id. A binding whose create is not yet settled, or
+  a file it cannot read, is reported as unverified, never as a pass.

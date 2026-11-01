@@ -66,6 +66,7 @@ confined to the fixture directory, including when the fixtures root is a junctio
 | 17 | `17-declared-web-resource` | Fixture 5 with one HTML web resource marked `reconcile: "declared"` (the maker asked a rebuild to keep its content in step); the spec sets `minimumPluginVersion` `2.21.0`, which validation asks for, and no other kind but views, charts and web resources carries `reconcile` (declared process flows, dashboards, business rules and form layouts are not reconciled in this release). |
 | 18 | `18-configuration-items` | An app that names per-environment settings, a connector, an action and a duplicate check declares `environmentVariables[]` (the API key as `type: "secret"`), `connectionReferences[]`, `customApis[]`, `duplicateDetectionRules[]` and `solution.version`, with no current value, secret value or connection id in the spec. The fixture's `deployment-settings.json` carries those, and a unit test proves it binds every declared reference and secret. The spec asks for 2.21.0. |
 | 19 | `19-modern-branding` | An explicit branding ask declares `app.theme` (Preview): a base colour, header colours and a logo that is a declared SVG web resource, never a URL. The spec asks for 2.21.0. An ordinary app ask must not get a theme; `--verify` reports API state, and the header is checked in a browser. |
+| 20 | `20-stable-identities` | A new-app ask writes `createIdentity: "stable-v1"` with `minimumPluginVersion` `2.21.0` and declares its view and chart, the only creates that get stable ids. A download prompt must not gain the field (negative unit probe). The `/app-builder` skill's `createIdentity` guidance must tell the maker that an unsent local edit stops the build (`create-completion-required`) and that running again does not merge it. |
 
 > **Fixture 2 note:** `appShell.subAreas[].page` references use the page's **key** (e.g. `"overview"`), not its display name (`"Overview"`). The v2 validator requires keys, and the linter accepts valid key references; `key === name` is neither required nor used by this fixture.
 
@@ -74,7 +75,7 @@ confined to the fixture directory, including when the fixtures root is a junctio
 - `skill_name` — identifies this suite.
 - `eval_instructions` — description used by eval runners.
 - `common_stage_assertions` — run for every fixture; registered in `lib/assertions.js`.
-- `evals[].expect` — independent per-eval counts/names plus form-edit, rejected-model, changed-only, name-scope, option-value, date-behaviour, field-security and app-membership contracts.
+- `evals[].expect` — independent per-eval counts/names plus form-edit, rejected-model, changed-only, name-scope, option-value, date-behaviour, field-security, app-membership and stable-identity contracts.
 - `evals[].expectations` — additional per-eval assertion texts (can be empty).
 - `evals[].tier` — `smoke` (fast subset) or `full`.
 

@@ -156,6 +156,12 @@ prod-ready** app; don't under-build (a bare table list) or over-build (surfaces 
   behaviour for each), on a web resource only as the web-resource bullet above says, and never write a command
   `key` (keyed command bars are refused in this version). Leave a downloaded or older spec without
   these fields as it is — see the advanced reference.
+- **Stable create ids** (`minimumPluginVersion: "2.21.0"`) — write `createIdentity: "stable-v1"` on a
+  **new** app; never add it to an existing or downloaded spec. Tell the maker: declared views and charts
+  get ids the spec fixes, so a retry after a lost answer binds the same row instead of creating a second;
+  configuration items, custom APIs, environment variables, field security, duplicate rules and pages keep
+  today's ids; and a local copy with an unsent edit stops the build (`create-completion-required`) —
+  running again does not merge it: put the change into the spec, then refresh the local copy.
 - **Configuration items** (`minimumPluginVersion: "2.21.0"`) — `environmentVariables[]`,
   `connectionReferences[]`, `customApis[]`, `duplicateDetectionRules[]` and `solution.version`. Declare one
   only when the maker asks for it or a page of this app needs it (a page calling a connector needs its

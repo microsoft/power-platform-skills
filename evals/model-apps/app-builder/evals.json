@@ -476,6 +476,30 @@
         "author: a theme is declared only on an explicit branding ask, with the asked colours, no unasked font, and a declared image web resource as the logo, never a URL",
         "verify: a declared app theme is read back once, as API state, and passes only when live"
       ]
+    },
+    {
+      "id": 20,
+      "tier": "full",
+      "spec": "app-spec.json",
+      "prompt": "A new Equipment Loans app: loans of equipment to staff with a status and a due date, a list of open loans and a chart of loans by status.",
+      "expect": {
+        "tables": [
+          "cnt_loan"
+        ],
+        "relationships": [],
+        "views": [
+          "Open Loans"
+        ],
+        "charts": [
+          "Loans by Status"
+        ],
+        "pages": [],
+        "createIdentity": "stable-v1"
+      },
+      "expectations": [
+        "author: a new app opts into stable create ids with the 2.21.0 floor, and a downloaded or existing spec never gains them",
+        "author: the skill tells the maker that an unsent local edit stops a stable build and running again does not merge it"
+      ]
     }
   ]
 }

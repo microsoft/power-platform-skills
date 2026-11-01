@@ -1115,4 +1115,40 @@ ASSERTIONS.set('verify: a declared app theme is read back once, as API state, an
   return /API state, not render proof/.test(checks[0].detail) ? PASS : fail(`the theme check does not say it is API state: ${checks[0].detail}`);
 });
 
+// expect.createIdentity (eval 20) is set only for a new-app prompt. Stable create ids change the ids the build creates
+// with, so a spec the maker downloaded or already builds must never gain the field: with no expect.createIdentity the
+// spec must not carry it. When set, it needs the 2.21.0 floor (an older plugin ignores the field and creates with fresh
+// ids) and at least one declared view or chart, the only creates it covers in this release.
+ASSERTIONS.set('author: a new app opts into stable create ids with the 2.21.0 floor, and a downloaded or existing spec never gains them', ({ spec, eval: ev }) => {
+  const expected = ev.expect && ev.expect.createIdentity;
+  if (!expected) return spec.createIdentity === undefined ? PASS : fail(`createIdentity ${JSON.stringify(spec.createIdentity)} is set, but the prompt is not a new app`);
+  if (spec.createIdentity !== expected) return fail(`createIdentity ${JSON.stringify(spec.createIdentity)}, expected ${JSON.stringify(expected)}`);
+  if (!versionAtLeast(spec.minimumPluginVersion, '2.21.0')) return fail(`minimumPluginVersion ${spec.minimumPluginVersion || '(none)'} is below 2.21.0`);
+  const declared = [...(spec.views || []), ...(spec.charts || [])].filter((x) => x && x.reconcile === 'declared');
+  return declared.length ? PASS : fail('createIdentity is set, but no view or chart is declared, so no create uses it');
+});
+
+// The stop on an unsent local edit is the stable-id behaviour a maker meets first, and it is stricter than a merge. The
+// runner grades the spec alone, so the explanation is graded where the agent reads it: the /app-builder skill's
+// createIdentity bullet. `facts.appBuilderSkill` lets a unit test grade a drifted copy without editing the real file.
+const APP_BUILDER_SKILL = path.join(__dirname, '..', '..', '..', '..', 'plugins', 'model-apps', 'skills', 'app-builder', 'SKILL.md');
+ASSERTIONS.set('author: the skill tells the maker that an unsent local edit stops a stable build and running again does not merge it', ({ facts }) => {
+  let skill = facts && typeof facts.appBuilderSkill === 'string' ? facts.appBuilderSkill : null;
+  if (skill === null) {
+    try { skill = require('node:fs').readFileSync(APP_BUILDER_SKILL, 'utf8'); } catch (e) { return fail(`the app-builder skill cannot be read: ${e.message}`); }
+  }
+  // Bullets in the skill start a line with "- **"; the createIdentity guidance is one such bullet.
+  const bullet = skill.replace(/\r\n/g, '\n').split(/\n(?=- \*\*)/).find((b) => b.includes('createIdentity'));
+  if (!bullet) return fail('the skill has no createIdentity guidance');
+  const needs = [
+    [/stable-v1/, 'the value to write'],
+    [/\bnew\*?\*? app/i, 'that it is for a new app'],
+    [/downloaded/i, 'that a downloaded spec never gains it'],
+    [/create-completion-required/, 'the stop it reports'],
+    [/does not merge/i, 'that running again does not merge the edit'],
+  ];
+  const missing = needs.filter(([re]) => !re.test(bullet)).map(([, what]) => what);
+  return missing.length ? fail(`the createIdentity guidance does not say ${missing.join(', ')}`) : PASS;
+});
+
 module.exports = { ASSERTIONS };
