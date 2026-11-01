@@ -29,7 +29,7 @@
 // Nothing calls this module until a declared form, dashboard, rule or process flow is wired to it.
 
 const { runWithWorkflowEffect } = require('./workflow-effect-context.js');
-const { CODES, classifyPersisted } = require('./managed-bindings.js');
+const { CODES, classifyPersisted, attemptProvenUnsent, resumableCreate } = require('./managed-bindings.js');
 const { canonicalJson } = require('./reconcile-common.js');
 const { LAYER_READERS } = require('./managed-layer-readers.js');
 
@@ -48,7 +48,7 @@ function codedError(code, message, extra) {
 }
 
 // A step whose failure means the artifact's saved state is not shown safe: its scopes stay withheld for the run.
-const REQUIRED_STEPS = new Set(['preflight', 'resolve', 'plan', 'prove', 'membership', 'resume', 'adopt']);
+const REQUIRED_STEPS = new Set(['preflight', 'resolve', 'plan', 'prove', 'membership', 'resume', 'adopt', 'publication']);
 
 /**
  * Settle one managed artifact. Arguments:
@@ -62,14 +62,22 @@ const REQUIRED_STEPS = new Set(['preflight', 'resolve', 'plan', 'prove', 'member
  *   barrier?                    the publication barrier; defaults to the store's forwarded barrier operations;
  *   halt(phase, label, code, { cause })  the build's halt FACTORY: it returns the error to throw (the build's
  *                               managedStop returns a never-retry halt and does not throw it);
- *   preflight({ committed, pending, recovering })  required: the feature's own safety checks, run on EVERY path —
- *                               an ordinary run, a prepared attempt, and every recovery (prove, continue, resume) —
- *                               before resolve, prove or any continuation, and before anything is prepared or sent.
- *                               `recovering` is true when `pending` was marked sending (its scopes are already held).
+ *   preflight({ committed, pending, recovering, effects })  required: the feature's own safety checks, run on EVERY
+ *                               path — an ordinary run, a prepared attempt, and every recovery (prove, continue,
+ *                               resume) — before resolve, prove or any continuation, and before anything is prepared or
+ *                               sent. `recovering` is true when `pending` was marked sending (its scopes are already
+ *                               held); `effects` are the workflow effects the store holds for the group (the pending
+ *                               attempt's among them: existingRowDispatches reads them).
  *                               It must not fetch into, overwrite or delete the local copy. It refuses by throwing
  *                               (its own code, e.g. `create-completion-required` with category
  *                               `workspace-copy-unsent-edits`): quarantined, the attempt and its token kept, nothing
  *                               written. A feature without one is refused (`managed-not-settled`) before anything;
+ *   client?, readers?           a Dataverse client and the layer readers (default: the shared LAYER_READERS). A committed
+ *                               group whose publication may have been sent and is not proved live is never committed
+ *                               again over it: with `client`, that dispatch is first confirmed read-only
+ *                               (confirmUncertainPublication), before anything is prepared or sent; without it, or when
+ *                               the read does not prove it, `managed-publication-unconfirmed`, quarantined, nothing
+ *                               prepared or sent and any attempt kept;
  *   adoptionApproved?           boolean, `true` only when the feature's own typed adoption approval
  *                               (`<family>:<key>`) covers this artifact; never inferred here. A group not yet committed
  *                               whose root create this attempt never had acknowledged is bound only with it; otherwise
@@ -87,9 +95,13 @@ const REQUIRED_STEPS = new Set(['preflight', 'resolve', 'plan', 'prove', 'member
  *   sendObserver?               the build's createAttemptSendObserver, already wrapped around its transport (refused
  *                               otherwise). markSending then arms the attempt's send window and `apply` runs inside it,
  *                               so an attempt whose window shows nothing carried out (a local failure before any
- *                               request, or only not-started rejections) is continued by the next run under the same
- *                               token: resolve and plan with `continuing: true`, the same plan required, then `apply`
- *                               with `continuing: true`. Without it, recovery is as before;
+ *                               request, or only not-started rejections answered while the window was open) is
+ *                               continued by the next run under the same token: resolve and plan with
+ *                               `continuing: true`, the same plan required, then a claim on the attempt's sends against
+ *                               the record reread under the store's lease (markSending `claim`, a new epoch that fences
+ *                               any older run at its next send), then `apply` with `continuing: true`. The window
+ *                               closes when `apply` settles and keeps counting (trailing) until the attempt is
+ *                               committed. Without it, recovery is as before;
  *   resumeCreate?({ token, pending, expected })  optional, for a family whose create names its root id: read the
  *                               pending root by that stable id in BOTH layers and answer { root: 'absent' } only when
  *                               each layer says the row does not exist, { root: 'present' } when either has it, and
@@ -167,8 +179,8 @@ async function runManagedFeature(args) {
     // The feature's own checks, on every path and before anything it reads into its workspace or sends: a refusal is a
     // required failure (quarantined) that keeps any attempt and its token, and nothing has been written yet.
     step = 'preflight';
-    await preflight({ committed, pending, recovering });
-    if (recovering) return await recoverManagedAttempt(committed, pending, effects);
+    await preflight({ committed, pending, recovering, effects });
+    if (recovering) return await recoverManagedAttempt(await settleEarlierPublication(committed), pending, effects);
 
     step = 'resolve';
     const resolution = await resolve({ committed, pending });
@@ -187,6 +199,7 @@ async function runManagedFeature(args) {
       return { result: { noop: true }, committedGroup: committed };
     }
 
+    await settleEarlierPublication(committed);
     step = 'prepare';
     addIds([planned.root && planned.root.id]);
     const baseGeneration = pending ? pending.baseGeneration : committed ? committed.generation : null;
@@ -213,7 +226,9 @@ async function runManagedFeature(args) {
   //      observes its sends too: resolve and plan again with `continuing: true` — the feature's preflight, the dirty-copy
   //      refusal included, runs as on any run — and the plan must be exactly what the attempt recorded (same root and ids,
   //      the same expected proof, so the same recorded base; the same declaration hash and publication). Then send it
-  //      under the same token, through a new observed window;
+  //      under the same token, through a new observed window, once the store has checked the zero again under its
+  //      lease and moved the window to a new epoch (markSending claim 'continue'): a run whose zero went stale is
+  //      refused there, and an older claimant at its next send;
   //   2. a create no answer acknowledged, whose root the feature reads absent in both layers by its stable id
   //      (resumeCreate): resolve, plan and check the same way with `resuming: true`, and send the same create again
   //      under the same token and ids — a delayed first create can then only fail on the primary key;
@@ -267,12 +282,16 @@ async function runManagedFeature(args) {
   // may have landed (recoverManagedAttempt).
   async function send(planned, resolution, baseGeneration, flag = null) {
     step = 'send';
-    store.markSending(token, planned.expected, { observed: !!observer });
-    const window = observer ? observer.open(store, token) : null;
+    // The claim on the attempt's sends, made against the record the store rereads under its lease: a second run on the
+    // same attempt, or one whose zero went stale while it resolved and planned, is refused here, before anything leaves.
+    const claim = flag === 'continuing' ? 'continue' : flag === 'resuming' ? 'resume' : 'first';
+    const marked = store.markSending(token, planned.expected, { observed: !!observer, claim });
+    const window = observer ? observer.open(store, token, marked && marked.epoch !== undefined ? marked.epoch : null) : null;
     let applied;
     try {
       applied = await apply({ token, plan: planned, resolution, ...(flag ? { [flag]: true } : {}) });
     } finally {
+      // Trailing, not ended: a request `apply` left in flight, or a re-send of one, is still counted on the attempt.
       if (window) window.close();
     }
     step = 'prove';
@@ -284,8 +303,27 @@ async function runManagedFeature(args) {
     await ensureMembership({ root: planned.root, records: proved.records, recovering: false });
     step = 'commit';
     const group = commit(store, token, baseGeneration, proved, adoptionApproved);
+    // The attempt is gone from the store: nothing of it is left to count.
+    if (window) window.end();
     barrier.release(token);
     return group;
+  }
+
+  // A committed group whose publish may have been sent and is not proved live is never committed again over it (the
+  // store refuses that too: commitGroup): a later read of the old dispatch's layer would otherwise settle the new
+  // generation's debt. With a client, the dispatch is confirmed read-only first; anything else stops before anything
+  // is prepared or sent. Answers the group as it now stands.
+  async function settleEarlierPublication(committed) {
+    const pub = committed && committed.publication;
+    if (!pub || !UNCERTAIN_PUBLICATION.has(pub.state)) return committed;
+    step = 'publication';
+    if (args.client) {
+      await confirmUncertainPublication({ store, barrier, scope: pub.scope, client: args.client, readers: args.readers || LAYER_READERS });
+      const now = store.readGroup(family, key).committed;
+      if (!now || now.generation !== committed.generation) throw codedError(CODES.conflict, `${label} was committed again while its earlier publish was being confirmed`);
+      if (!(now.publication && UNCERTAIN_PUBLICATION.has(now.publication.state))) return now;
+    }
+    throw codedError(PUBLICATION_UNCONFIRMED, `${label} has a publish that may have been sent and is not proved live; no change is made over it until a fresh read confirms it`);
   }
 
   // Adoption consent, before membership exposes the root and before the commit binds it: a group not yet committed
@@ -303,46 +341,49 @@ async function runManagedFeature(args) {
 }
 
 /**
- * May the pending attempt be resumed as a create (runManagedFeature's `resumeCreate`)? Only when its record says it was
- * a create of a new root and that no answer ever acknowledged it: no committed group and no base generation, an expected
- * proof with no base, phase `sending` with no acknowledgement or saved observation, and every workflow effect it owns a
- * create still definitely-unsent. A body or state effect, or one that may have been dispatched, is never resumed.
+ * The rows the pending attempt has positive evidence that it created itself: a create effect it owns that a fresh read
+ * confirmed, or its own root when an answer acknowledged that create (the attempt's `acknowledgedRoot`, or its saved
+ * observation's). Nothing else is that evidence: no committed group, a null base generation, an expected proof with no
+ * base, or a create effect that is unsent, dispatching or unconfirmed say only that no binding exists yet — the row may
+ * be an existing one the attempt adopted. Answers lowercased row ids.
  */
-function resumableCreate(committed, pending, effects) {
-  if (committed || pending.baseGeneration !== null) return false;
-  const e = pending.expected;
-  if (!e || e.baseProofSha256 !== null || e.baseObservation !== null) return false;
-  if (pending.phase !== 'sending' || pending.acknowledgedRoot || pending.savedObservation !== null) return false;
-  return (effects || []).filter((x) => x.attemptToken === pending.token)
-    .every((x) => x.effect === 'create' && x.state === 'definitely-unsent' && x.dispatchToken === null);
+function rowsCreatedByAttempt({ pending, effects } = {}) {
+  const out = new Set();
+  if (!pending) return out;
+  for (const e of effects || []) {
+    if (e.attemptToken === pending.token && e.effect === 'create' && e.state === 'confirmed') out.add(String(e.rowId).toLowerCase());
+  }
+  if (pending.root && (pending.acknowledgedRoot || (pending.savedObservation && pending.savedObservation.acknowledgedRoot))) out.add(String(pending.root.id).toLowerCase());
+  return out;
 }
 
 /**
- * Does the pending attempt's own record prove that nothing it sent was carried out (recoverManagedAttempt, route 1)?
- * Only with a send window, which markSending arms in the same write that marks it sending and only for an observed
- * send: no counted mutation is still possibly applied, no answer acknowledged a root or a save, and every workflow
- * effect it owns is still unsent with no dispatch token. A `sending` phase alone is no such proof, and neither is a
- * later read that finds nothing: either may sit in front of a write still on its way.
+ * The body and state effects the pending attempt still has to send (definitely-unsent, no dispatch token) to a row it
+ * has no positive evidence of having created (rowsCreatedByAttempt): each would write an EXISTING row. A workflow
+ * feature (rules, process flows) whose edit switch is off refuses in its preflight when this is not empty; a recovery
+ * then only reads. An effect that may already have been dispatched is not listed — it is proved, never sent again.
  */
-function attemptProvenUnsent(pending, effects) {
-  if (!pending || pending.phase !== 'sending' || !pending.expected) return false;
-  if (pending.acknowledgedRoot || pending.savedObservation !== null) return false;
-  const w = pending.sendWindow;
-  if (!w || w.possible !== 0) return false;
-  return (effects || []).filter((x) => x.attemptToken === pending.token).every((x) => x.state === 'definitely-unsent' && x.dispatchToken === null);
+function existingRowDispatches({ pending, effects } = {}) {
+  if (!pending) return [];
+  const created = rowsCreatedByAttempt({ pending, effects });
+  return (effects || []).filter((e) => e.attemptToken === pending.token && (e.effect === 'body' || e.effect === 'state')
+    && e.state === 'definitely-unsent' && e.dispatchToken === null && !created.has(String(e.rowId).toLowerCase()));
 }
 
 // The answers that say the service did not carry the request out, so a mutation answered with one is not counted as
 // possibly applied (createAttemptSendObserver). Narrow on purpose: everything else — a success, a 5xx or 429 (a gateway
 // or a lock may answer in front of a write that ran; the client's publish rule measured exactly that), a 408, a lost or
-// cut-off answer, any answer to a `$batch` but a 401 — leaves the mutation possibly applied.
-//   401                          the token was refused, so nothing ran (RFC 9110 §15.5.2);
+// cut-off answer, any answer to a `$batch` — leaves the mutation possibly applied. So does an answer the client itself
+// answers by sending again (lib/sdk-http-client.js: a 401 is re-sent with a fresh token, 429/500/502/503/504 on its
+// transient schedule): that answer ends nothing, because the logical operation it belongs to is still dispatching.
 //   412 to an `If-Match` request  the precondition was false, so the method was not applied (RFC 9110 §13.1.1, §15.5.13;
 //                                https://learn.microsoft.com/power-apps/developer/data-platform/webapi/perform-conditional-operations-using-web-api);
 //   400, 403, 404, 412           only with a Dataverse error in the body, `{ "error": { "code": "0x80040203", … } }`, so
 //                                the platform itself refused the one operation (an intermediary answers no Dataverse
 //                                code), and a single Dataverse operation that fails is rolled back whole
 //                                (https://learn.microsoft.com/power-apps/developer/data-platform/event-framework).
+// None of these is re-sent by the client or by the retry policy (lib/retry-policy.js: a 400, 403, 404 or 412 is a
+// verdict); a layer that sends again anyway is counted again (createAttemptSendObserver).
 const NOT_STARTED_WITH_CODE = new Set([400, 403, 404, 412]);
 const DATAVERSE_ERROR_CODE = /^0x[0-9a-f]{8}$/i;
 
@@ -363,12 +404,24 @@ function dataverseErrorCode(body) {
   return typeof code === 'string' && DATAVERSE_ERROR_CODE.test(code) ? code : null;
 }
 
+// The operation path a request names, as the service resolves it: the URL's path percent-decoded once. `/%24batch` is
+// `/$batch` there (a URL parser or proxy in front of the service may decode it), so the spelling of the URL must not decide
+// whether an answer is one operation's. Answers null — so no answer of it ends anything — for a URL that does not parse,
+// a malformed escape (`%zz`, a lone `%`), or a `%` still left after the decoding (`%2524batch`: whether another layer
+// decodes it again is not known here).
+function canonicalOperationPath(url) {
+  let raw;
+  try { raw = new URL(url).pathname; } catch { return null; }
+  let decoded;
+  try { decoded = decodeURIComponent(raw); } catch { return null; }
+  return decoded.includes('%') ? null : decoded;
+}
+
 function notStartedAnswer(req, res) {
   if (!res || res.error || res.incompleteResponse || !Number.isInteger(res.statusCode)) return false;
-  if (res.statusCode === 401) return true;
-  let path = '';
-  try { path = new URL(req.url).pathname; } catch { return false; }
-  if (/\/\$batch$/i.test(path)) return false;
+  const path = canonicalOperationPath(req && req.url);
+  // A `$batch` anywhere in the path: its answer is not one rolled-back operation's.
+  if (path === null || /\$batch/i.test(path)) return false;
   if (res.statusCode === 412 && headerOf(req.headers, 'if-match') !== undefined) return true;
   return NOT_STARTED_WITH_CODE.has(res.statusCode) && dataverseErrorCode(res.body) !== null;
 }
@@ -378,12 +431,21 @@ function notStartedAnswer(req, res) {
  * window is open is recorded on that attempt before it leaves (recoverManagedAttempt reads the record). Install it
  * INSIDE the publication barrier's gate, so a request the barrier answers itself is never counted:
  *   createAzHttpClient(env, { request: barrier.gateRequest(observer.wrap()) })     (wrap() defaults to makeRequest)
- * and give the same observer to runManagedFeature (`sendObserver`). With no window open, every request passes untouched.
- * In a window, a read (GET, HEAD) passes; any other request — a `$batch` of reads included — is counted on EVERY open
- * window (store.noteAttemptDispatch, synchronous and durable; a throw leaves it unsent) and sent once by this layer; an
- * answer that says the service did not carry it out (notStartedAnswer) is then recorded too (store.noteAttemptNotStarted)
- * before the answer is handed back, so before any error the feature makes of it. A mutation of a sibling sent during the
- * window is counted against it as well: the window may only overstate what was sent, never understate it.
+ * and give the same observer to runManagedFeature (`sendObserver`). With no window, every request passes untouched.
+ * A read (GET, HEAD) always passes; any other request — a `$batch` of reads included — is counted on EVERY window
+ * (store.noteAttemptDispatch, synchronous and durable, under the window's epoch; a throw leaves it unsent) and sent once
+ * by this layer. The window covers the whole logical operation, not just the `apply` call:
+ *   open      (open(store, token, epoch)) counts, and an answer that says the service did not carry the request out
+ *             (notStartedAnswer) — received while the window is still open — is recorded too
+ *             (store.noteAttemptNotStarted) before the answer is handed back, so before any error the feature makes of it;
+ *   trailing  (close()) still counts every mutation — a request `apply` left in flight, a client's re-send of it (a 401
+ *             refreshed, a transient answer), a layer's resend — and records no not-started answer: a request in flight
+ *             when the window closed, or sent after, stays possibly applied, because nothing here can see whether its
+ *             caller sends it again. A store that refuses the count (the attempt claimed by another run, so another
+ *             epoch; the attempt gone) leaves the request unsent;
+ *   ended     (end()) counts nothing: runManagedFeature ends the window only once the attempt is committed or retired.
+ * A window that is never ended (the run stopped) trails for the rest of the process. A mutation of a sibling sent while
+ * a window is open or trailing is counted against it as well: the record may overstate what was sent, never understate it.
  */
 function createAttemptSendObserver() {
   const windows = new Set();
@@ -397,23 +459,35 @@ function createAttemptSendObserver() {
         const method = String((req && req.method) || 'GET').toUpperCase();
         if (!windows.size || method === 'GET' || method === 'HEAD') return transport(req);
         const counted = [...windows];
-        for (const w of counted) w.store.noteAttemptDispatch(w.token);
+        for (const w of counted) w.store.noteAttemptDispatch(w.token, w.epoch);
+        // Which windows were open when the request left: only those may record its not-started answer, and only if they
+        // are still open when the answer arrives (checked below).
+        const openAtSend = counted.filter((w) => w.state === 'open');
         const res = await transport(req);
         if (notStartedAnswer(req, res)) {
-          for (const w of counted) {
+          for (const w of openAtSend) {
+            if (w.state !== 'open') continue;
             // A failed write leaves this mutation counted as possibly applied: the record may overstate, never understate.
-            try { w.store.noteAttemptNotStarted(w.token); } catch { /* stays possibly applied */ }
+            try { w.store.noteAttemptNotStarted(w.token, w.epoch); } catch { /* stays possibly applied */ }
           }
         }
         return res;
       };
     },
-    /** Open the send window of the attempt `token` in `store`; close() ends it (runManagedFeature, around `apply`). */
-    open(store, token) {
+    /**
+     * Open the send window of the attempt `token` in `store`, under the `epoch` its markSending answered (fenced: a
+     * count under an epoch the store has moved past is refused unsent). close() stops it recording not-started answers
+     * and leaves it counting (trailing); end() stops it counting.
+     */
+    open(store, token, epoch) {
       if (!store || typeof store.noteAttemptDispatch !== 'function' || typeof token !== 'string' || !token) throw new TypeError('createAttemptSendObserver: a window needs the store and the attempt token');
-      const w = { store, token };
+      if (epoch !== undefined && epoch !== null && !(Number.isSafeInteger(epoch) && epoch >= 1)) throw new TypeError('createAttemptSendObserver: a window\'s epoch is the one markSending answered');
+      const w = { store, token, epoch: epoch === null ? undefined : epoch, state: 'open' };
       windows.add(w);
-      return { close() { windows.delete(w); } };
+      return {
+        close() { if (w.state === 'open') w.state = 'trailing'; },
+        end() { w.state = 'ended'; windows.delete(w); },
+      };
     },
   };
 }
@@ -754,6 +828,8 @@ module.exports = {
   createAttemptSendObserver,
   attemptProvenUnsent,
   notStartedAnswer,
+  rowsCreatedByAttempt,
+  existingRowDispatches,
   withWorkflowEffect,
   publishManagedScope,
   confirmUncertainPublication,

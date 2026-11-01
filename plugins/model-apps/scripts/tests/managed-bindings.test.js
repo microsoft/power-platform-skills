@@ -583,13 +583,13 @@ test('a send window is armed only by the write that marks a prepared attempt sen
   const { token } = prepareForm(store);
   assert.equal(codeOf(() => store.noteAttemptDispatch('no-such-attempt')), CODES.conflict);
   store.markSending(token, expected(FORM), { observed: true });
-  assert.deepEqual(store.readGroup('form', FORM_KEY).pending.sendWindow, { possible: 0, notStarted: 0 });
+  assert.deepEqual(store.readGroup('form', FORM_KEY).pending.sendWindow, { possible: 0, notStarted: 0, epoch: 1 });
   assert.equal(codeOf(() => store.noteAttemptNotStarted(token)), CODES.notSettled, 'nothing counted to answer');
   store.noteAttemptDispatch(token);
   store.noteAttemptDispatch(token);
   store.noteAttemptNotStarted(token);
   store.markSending(token, expected(FORM), { observed: true });
-  assert.deepEqual(open(dir).readGroup('form', FORM_KEY).pending.sendWindow, { possible: 1, notStarted: 1 }, 'kept on disk; marking again changes nothing');
+  assert.deepEqual(open(dir).readGroup('form', FORM_KEY).pending.sendWindow, { possible: 1, notStarted: 1, epoch: 1 }, 'kept on disk; marking again changes nothing');
 
   // An attempt sent without an observer never gets a window, so nothing can later show it unsent.
   const other = makeTempDir('mb-send-window-plain-');
@@ -601,7 +601,7 @@ test('a send window is armed only by the write that marks a prepared attempt sen
   assert.equal(plain.readGroup('form', FORM_KEY).pending.sendWindow, undefined);
 
   const good = fileText(store);
-  for (const [label, w] of [['a negative count', { possible: -1, notStarted: 0 }], ['a fraction', { possible: 0.5, notStarted: 0 }], ['an extra key', { possible: 0, notStarted: 0, sent: 1 }]]) {
+  for (const [label, w] of [['a negative count', { possible: -1, notStarted: 0, epoch: 1 }], ['a fraction', { possible: 0.5, notStarted: 0, epoch: 1 }], ['an extra key', { possible: 0, notStarted: 0, epoch: 1, sent: 1 }], ['no epoch', { possible: 0, notStarted: 0 }], ['epoch zero', { possible: 0, notStarted: 0, epoch: 0 }], ['a fractional epoch', { possible: 0, notStarted: 0, epoch: 1.5 }]]) {
     writeRaw(store, (d) => { d.attempts[0].sendWindow = w; });
     assert.notEqual(codeOf(() => open(dir).readGroup('form', FORM_KEY)), null, label);
     fs.writeFileSync(store.file, good);
@@ -641,4 +641,59 @@ test('a new group whose root create no answer acknowledged is committed only wit
 
   const acked = makeTempDir('mb-adopt-acked-');
   assert.equal(settleForm(open(acked), []).records[0].origin, 'created');
+});
+
+test('send claim: a claim on an attempt\'s sends is checked under the lease, and a newer claim fences the older one at dispatch', () => {
+  const dir = makeTempDir('mb-claim-');
+  const store = open(dir);
+  const { token } = prepareForm(store);
+  assert.equal(codeOf(() => store.markSending(token, expected(FORM), { observed: true, claim: 'later' })), CODES.notSettled);
+  assert.deepEqual(store.markSending(token, expected(FORM), { observed: true, claim: 'first' }), { epoch: 1 });
+  const marked = fileText(store);
+  assert.equal(codeOf(() => store.markSending(token, expected(FORM), { observed: true, claim: 'first' })), CODES.pending, 'a second first send');
+  assert.equal(codeOf(() => store.markSending(token, expected(FORM), { observed: false, claim: 'continue' })), CODES.pending, 'a continuation that does not observe its sends');
+  assert.equal(fileText(store), marked, 'a refused claim writes nothing');
+  // Two runs that read the same zero: each claim moves the window to a new epoch, and the older claimant is refused unsent.
+  assert.deepEqual(store.markSending(token, expected(FORM), { observed: true, claim: 'continue' }), { epoch: 2 });
+  assert.deepEqual(store.markSending(token, expected(FORM), { observed: true, claim: 'continue' }), { epoch: 3 });
+  for (const old of [1, 2]) assert.equal(codeOf(() => store.noteAttemptDispatch(token, old)), CODES.pending, `epoch ${old}`);
+  assert.deepEqual(store.readGroup('form', FORM_KEY).pending.sendWindow, { possible: 0, notStarted: 0, epoch: 3 }, 'nothing counted for a refused dispatch');
+  store.noteAttemptDispatch(token, 3);
+  assert.equal(codeOf(() => store.noteAttemptNotStarted(token, 2)), CODES.pending, 'an answer under an older epoch ends nothing');
+  const counted = fileText(store);
+  assert.equal(codeOf(() => store.markSending(token, expected(FORM), { observed: true, claim: 'continue' })), CODES.pending, 'a counted send is never continued');
+  assert.equal(fileText(store), counted);
+  assert.deepEqual(open(dir).readGroup('form', FORM_KEY).pending.sendWindow, { possible: 1, notStarted: 0, epoch: 3 });
+
+  // A resume claim needs a create no answer acknowledged; an edit of a committed group is never one.
+  const other = makeTempDir('mb-claim-edit-');
+  const edits = open(other);
+  settleForm(edits, []);
+  const e = prepareForm(edits);
+  edits.markSending(e.token, expected(FORM), { observed: true, claim: 'first' });
+  assert.equal(codeOf(() => edits.markSending(e.token, expected(FORM), { observed: true, claim: 'resume' })), CODES.pending);
+});
+
+test('publication: a new generation is not committed over a publish that may have been sent; once confirmed, it carries its own debt', () => {
+  const dir = makeTempDir('mb-uncertain-commit-');
+  const store = open(dir);
+  const g = settleForm(store, []);
+  store.markPublishDispatch({ groups: [{ family: 'form', key: FORM_KEY }], scope: TABLE, token: 'dispatch-old' });
+  const { token } = prepareForm(store);
+  store.markSending(token, expected(FORM));
+  store.noteSaved(token, { proof: { savedSha256: H('1') }, acknowledgedRoot: true });
+  const owed = { scope: TABLE, state: 'owed', desiredSha256: H('6'), dispatchToken: null };
+  const args = { token, baseGeneration: g.generation, records: [rec('form', FORM_KEY, FORM)], proof: PROOF, consumerState: formState(), publication: owed };
+  for (const outcome of [null, 'unconfirmed']) {
+    if (outcome) store.notePublishOutcome({ token: 'dispatch-old', outcome });
+    const before = fileText(store);
+    assert.equal(codeOf(() => store.commitGroup(args)), CODES.publicationUncertain, outcome || 'dispatching');
+    assert.equal(fileText(store), before, 'nothing written');
+  }
+  assert.equal(store.readGroup('form', FORM_KEY).pending.token, token, 'the attempt stays');
+  assert.equal(store.readGroup('form', FORM_KEY).committed.generation, g.generation);
+  store.confirmPublished({ groups: [{ family: 'form', key: FORM_KEY, publishedSha256: H('5'), generation: g.generation }], token: 'dispatch-old' });
+  assert.deepEqual(store.commitGroup(args).publication, owed, 'its own debt, never the old dispatch');
+  codeOf(() => store.notePublishOutcome({ token: 'dispatch-old', outcome: 'unconfirmed' }));
+  assert.deepEqual(open(dir).readGroup('form', FORM_KEY).committed.publication, owed, 'a late outcome of the old dispatch touches nothing');
 });

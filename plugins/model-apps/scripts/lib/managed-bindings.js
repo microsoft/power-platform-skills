@@ -52,6 +52,9 @@ const CODES = Object.freeze({
   // adoption approval: a fresh read that proves the content shows what the row is, not that the maker agreed to
   // manage it.
   adoptionRequired: 'managed-adoption-required',
+  // A new generation offered over a group whose publish may have been sent and is not proved live: committing it would
+  // let a later read of the OLD dispatch's layer settle the NEW generation's debt. Confirm that dispatch first.
+  publicationUncertain: 'managed-publication-unconfirmed',
 });
 
 const FAMILIES = ['form', 'dashboard', 'rule', 'bpf', 'view', 'chart'];
@@ -288,14 +291,52 @@ function validateAttempt(a, where) {
   validatePublication(a.publication, a.family, `${where}.publication`, { attempt: true });
   // The send window (markSending with an observer; lib/managed-feature-contract.js createAttemptSendObserver). Absent on
   // an attempt sent without one — nothing then says what reached the service, and recovery only proves.
-  //   { possible: 0, notStarted: 2 }  possible: mutations that reached the transport in the attempt's windows and were not
-  //                                   answered by a not-started rejection (sent, answer pending or lost, or applied);
-  //                                   notStarted: those the service answered with one.
+  //   { possible: 0, notStarted: 2, epoch: 3 }
+  //     possible    mutations that reached the transport in the attempt's windows and were not answered by a
+  //                 not-started rejection (sent, answer pending or lost, or applied);
+  //     notStarted  those the service answered with one;
+  //     epoch       the fencing token of the run that owns the attempt's sends: 1 when it was first marked sending, one
+  //                 more at every claim to continue or resume it (markSending `claim`). A dispatch counted under any
+  //                 other epoch is refused unsent (noteAttemptDispatch), so an older run is fenced at the transport.
   if (a.sendWindow !== undefined) {
-    closedKeys(a.sendWindow, ['possible', 'notStarted'], `${where}.sendWindow`);
+    closedKeys(a.sendWindow, ['possible', 'notStarted', 'epoch'], `${where}.sendWindow`);
     for (const k of ['possible', 'notStarted']) if (!Number.isSafeInteger(a.sendWindow[k]) || a.sendWindow[k] < 0) throw invalid(`${where}.sendWindow.${k}`, 'is not a count');
+    if (!Number.isSafeInteger(a.sendWindow.epoch) || a.sendWindow.epoch < 1) throw invalid(`${where}.sendWindow.epoch`, 'is not an epoch');
     if (a.phase === 'prepared') throw invalid(where, 'has a send window but was never marked sending');
   }
+}
+
+// The workflow effects the attempt `a` owns.
+const ownedEffects = (a, effects) => (effects || []).filter((x) => x.attemptToken === a.token);
+
+/**
+ * Does the attempt's own record prove that nothing it sent was carried out (lib/managed-feature-contract.js
+ * recoverManagedAttempt, route 1)? Only with a send window, which markSending arms in the same write that marks it
+ * sending and only for an observed send: no counted mutation is still possibly applied, no answer acknowledged a root or
+ * a save, and every workflow effect it owns is still unsent with no dispatch token. A `sending` phase alone is no such
+ * proof, and neither is a later read that finds nothing: either may sit in front of a write still on its way. Pure: the
+ * store applies it again to the record it rereads under the lease when a run claims the attempt (markSending `claim`).
+ */
+function attemptProvenUnsent(a, effects) {
+  if (!a || a.phase !== 'sending' || !a.expected) return false;
+  if (a.acknowledgedRoot || a.savedObservation !== null) return false;
+  const w = a.sendWindow;
+  if (!w || w.possible !== 0) return false;
+  return ownedEffects(a, effects).every((x) => x.state === 'definitely-unsent' && x.dispatchToken === null);
+}
+
+/**
+ * May the attempt be resumed as a create (runManagedFeature's `resumeCreate`)? Only when its record says it was a create
+ * of a new root and that no answer ever acknowledged it: no committed group and no base generation, an expected proof
+ * with no base, phase `sending` with no acknowledgement or saved observation, and every workflow effect it owns a create
+ * still definitely-unsent. A body or state effect, or one that may have been dispatched, is never resumed.
+ */
+function resumableCreate(group, a, effects) {
+  if (group || !a || a.baseGeneration !== null) return false;
+  const e = a.expected;
+  if (!e || e.baseProofSha256 !== null || e.baseObservation !== null) return false;
+  if (a.phase !== 'sending' || a.acknowledgedRoot || a.savedObservation !== null) return false;
+  return ownedEffects(a, effects).every((x) => x.effect === 'create' && x.state === 'definitely-unsent' && x.dispatchToken === null);
 }
 
 // The frozen workflow mutation shapes (lib/workflow-effect-context.js classifies requests into them), with the method
@@ -656,42 +697,70 @@ function openManagedBindings({ workspaceDir, environment, appUniqueName, solutio
     /**
      * Persist the complete expected proof before the push. A failure here means the push is not sent. `observed`: the
      * caller sends this attempt's mutations through a send observer (createAttemptSendObserver), so the same write that
-     * marks a prepared attempt sending arms its send window at zero. Only then: an attempt already sending keeps the
-     * window it has, or none — a send that was not observed is never shown unsent afterwards.
+     * marks a prepared attempt sending arms its send window at zero, epoch 1. Only then: an attempt already sending keeps
+     * the window it has, or none — a send that was not observed is never shown unsent afterwards.
+     * `claim` makes this write the run's claim on the attempt's sends, checked against the record reread under the lease
+     * (never against what the run read before its awaited steps):
+     *   'first'     the attempt must still be `prepared`: a second run on the same prepared attempt is refused;
+     *   'continue'  the attempt must still prove nothing it sent was carried out (attemptProvenUnsent: a window at zero,
+     *               no acknowledgement or saved observation, its effects unsent) and the caller must observe its sends;
+     *   'resume'    the attempt must still be a create no answer acknowledged (resumableCreate);
+     * otherwise `managed-settlement-pending`, nothing written. 'continue' and 'resume' move the window to a new epoch, so
+     * a dispatch counted under the old one — a run that read the same zero earlier, or a retry of an older run — is
+     * refused unsent (noteAttemptDispatch). A claim takes over a zero window rather than waiting for an earlier claimant:
+     * a run that died between its claim and its first send would otherwise strand the attempt, and the epoch already
+     * stops that claimant at its next send. Answers { epoch }: the window's epoch, or null with no window.
      */
-    markSending(token, expected, { observed = false } = {}) {
+    markSending(token, expected, { observed = false, claim } = {}) {
+      if (claim !== undefined && claim !== 'first' && claim !== 'continue' && claim !== 'resume') throw storeError(CODES.notSettled, `markSending cannot claim an attempt to "${claim}"`);
+      let epoch = null;
       mutate((env, disk) => {
         const a = requireAttempt(env, disk, token);
         if (a.expected !== null && canonicalJson(a.expected) !== canonicalJson(expected)) {
           throw storeError(CODES.completion, 'a sent attempt keeps the expected proof it was sent with');
         }
+        const group = env.groups.find((g) => g.family === a.family && g.key === a.key) || null;
+        const name = `the managed ${a.family} "${a.key}"`;
+        if (claim === 'first' && a.phase !== 'prepared') throw storeError(CODES.pending, `${name} attempt was marked sending by another run`);
+        if (claim === 'continue' && !(observed === true && attemptProvenUnsent(a, env.workflowEffects))) throw storeError(CODES.pending, `${name} attempt no longer shows that nothing it sent was carried out; it is not sent again`);
+        if (claim === 'resume' && !resumableCreate(group, a, env.workflowEffects)) throw storeError(CODES.pending, `${name} attempt is no longer a create no answer acknowledged; it is not sent again`);
         a.expected = expected;
         if (a.phase === 'prepared') {
           a.phase = 'sending';
-          if (observed === true) a.sendWindow = { possible: 0, notStarted: 0 };
+          if (observed === true) a.sendWindow = { possible: 0, notStarted: 0, epoch: 1 };
+        } else if ((claim === 'continue' || claim === 'resume') && a.sendWindow) {
+          a.sendWindow.epoch += 1;
         }
+        epoch = a.sendWindow ? a.sendWindow.epoch : null;
       });
+      return { epoch };
     },
     /**
      * The send observer, synchronously before a mutation leaves the transport inside the attempt's window: count it as
-     * possibly applied. A throw (the attempt is gone, the store cannot be written) leaves the request unsent. An attempt
-     * with no window (sent unobserved) is left as it is: nothing it could say would make it provable.
+     * possibly applied. A throw (the attempt is gone, the store cannot be written, or `epoch` is not the window's current
+     * epoch because another run has claimed the attempt since) leaves the request unsent. An attempt with no window (sent
+     * unobserved) is left as it is: nothing it could say would make it provable. A window opened without an epoch (a
+     * direct caller; runManagedFeature always passes the one markSending answered) is counted but not fenced.
      */
-    noteAttemptDispatch(token) {
+    noteAttemptDispatch(token, epoch) {
       mutate((env, disk) => {
         const a = requireAttempt(env, disk, token);
-        if (a.sendWindow) a.sendWindow.possible += 1;
+        if (!a.sendWindow) return;
+        if (epoch !== undefined && epoch !== null && a.sendWindow.epoch !== epoch) throw storeError(CODES.pending, `the managed ${a.family} "${a.key}" attempt was claimed by another run since this send began; the request is not sent`);
+        a.sendWindow.possible += 1;
       });
     },
     /**
      * The send observer, after the service answered one counted mutation with a rejection that says it was not carried
-     * out (lib/managed-feature-contract.js notStartedAnswer): move it from possible to notStarted. Nothing else lowers
-     * `possible`, so a lost answer, a crash or a failed write here leaves the attempt possibly sent.
+     * out (lib/managed-feature-contract.js notStartedAnswer), while the window that counted it was still open: move it
+     * from possible to notStarted. Nothing else lowers `possible`, so a lost answer, a crash, an answer under another
+     * epoch or a failed write here leaves the attempt possibly sent.
      */
-    noteAttemptNotStarted(token) {
+    noteAttemptNotStarted(token, epoch) {
       mutate((env, disk) => {
         const a = requireAttempt(env, disk, token);
         if (!a.sendWindow || a.sendWindow.possible < 1) throw storeError(CODES.notSettled, 'the managed attempt has no counted send to answer');
+        if (epoch !== undefined && epoch !== null && a.sendWindow.epoch !== epoch) throw storeError(CODES.pending, 'the managed attempt was claimed by another run since this send was counted; it stays possibly applied');
         a.sendWindow.possible -= 1;
         a.sendWindow.notStarted += 1;
       });
@@ -714,7 +783,9 @@ function openManagedBindings({ workspaceDir, environment, appUniqueName, solutio
      * expected child the set lacks, is `create-completion-required`: no substitute is bound. A group not yet committed
      * whose root create this attempt never had acknowledged is committed only with `adoptionApproved: true` — the
      * feature's own typed adoption approval, never inferred here — and is otherwise `managed-adoption-required`,
-     * nothing written and the attempt kept.
+     * nothing written and the attempt kept. A group whose publication may have been sent and is not proved live
+     * (dispatching / unconfirmed) is not committed again: `managed-publication-unconfirmed`, nothing written and the
+     * attempt kept, until that dispatch is confirmed read-only (confirmPublished).
      */
     commitGroup({ token, baseGeneration, records, proof, consumerState, publication = null, proofSchema, adoptionApproved = false }) {
       // The proposal is checked whole before anything else: a list that repeats a (kind, key) or an id must be refused,
@@ -748,6 +819,12 @@ function openManagedBindings({ workspaceDir, environment, appUniqueName, solutio
         // they are, and no other attempt's effects are read or touched.
         if (effects.some((e) => e.state !== 'confirmed')) throw storeError(CODES.pending, `the managed ${a.family} "${a.key}" has a workflow effect that is not confirmed`);
         const old = env.groups.find((g) => g.family === a.family && g.key === a.key) || null;
+        // A publish of the old generation that may have been sent is settled first (a read-only confirmation, or it stays
+        // blocked). Carried over a new generation, a later read of the OLD layer would confirm the NEW group and drop
+        // the new generation's own debt; the new debt is never folded into the old dispatch either.
+        if (old && old.publication && UNCERTAIN.has(old.publication.state)) {
+          throw storeError(CODES.publicationUncertain, `the managed ${a.family} "${a.key}" has a publish that may have been sent and is not proved live; a new generation is committed only after it is confirmed`);
+        }
         const acknowledged = a.acknowledgedRoot || !!(a.savedObservation && a.savedObservation.acknowledgedRoot);
         // Strictly `true`: a truthy flag computed carelessly ('yes', 1) must not stand in for the maker's approval.
         if (!old && !acknowledged && adoptionApproved !== true) {
@@ -782,12 +859,9 @@ function openManagedBindings({ workspaceDir, environment, appUniqueName, solutio
           const got = merged.find((r) => r.kind === child.kind && r.key === child.key);
           if (!got || String(got.id).toLowerCase() !== String(child.id).toLowerCase()) throw storeError(CODES.completion, `the managed ${a.family} "${a.key}" lacks the expected ${child.kind} "${child.key}"`);
         }
-        // Uncertainty about an earlier publish survives the commit; only a fresh proof (confirmPublished) ends it.
-        let pub = publication;
-        if (old && old.publication && UNCERTAIN.has(old.publication.state)) pub = old.publication;
         committed = {
           family: a.family, key: a.key, generation: newToken(), previousGeneration: old ? old.generation : null,
-          root: a.root, proofSchema: proofSchema || a.expected.proofSchema, records: merged, proof, consumerState, publication: pub,
+          root: a.root, proofSchema: proofSchema || a.expected.proofSchema, records: merged, proof, consumerState, publication,
         };
         env.groups = env.groups.filter((g) => g !== old);
         env.groups.push(committed);
@@ -1018,4 +1092,6 @@ module.exports = {
   openManagedContext,
   managedManifestView,
   REQUEST_SHAPES,
+  attemptProvenUnsent,
+  resumableCreate,
 };

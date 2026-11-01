@@ -12,10 +12,11 @@ const fs = require('node:fs');
 const { makeTempDir } = require('./helpers/temp-dirs.js');
 const { createManagedWire, sdkOver } = require('./helpers/managed-wire.js');
 const { openManagedContext, openManagedBindings, CODES } = require('../lib/managed-bindings.js');
-const { runManagedFeature, publishManagedScope, confirmUncertainPublication, createAttemptSendObserver, notStartedAnswer, PUBLICATION_UNCONFIRMED, PUBLICATION_UNVERIFIED, CREATION_RECORD_UNSETTLED, LAYER_READER_MISSING } = require('../lib/managed-feature-contract.js');
+const { runManagedFeature, publishManagedScope, confirmUncertainPublication, createAttemptSendObserver, notStartedAnswer, existingRowDispatches, rowsCreatedByAttempt, withWorkflowEffect, PUBLICATION_UNCONFIRMED, PUBLICATION_UNVERIFIED, CREATION_RECORD_UNSETTLED, LAYER_READER_MISSING } = require('../lib/managed-feature-contract.js');
 const { createPublicationBarrier } = require('../lib/publication-barrier.js');
 const { readSystemFormPublication, readSystemFormLayers, readSystemFormRootPresence, systemFormLayerSha256 } = require('../lib/systemform-published.js');
 const { publishTablesXml } = require('../lib/table-publish.js');
+const { createWorkflowEffectGate } = require('../lib/workflow-effect-context.js');
 const { postPublishXml } = require('../lib/publish-xml.js');
 const { environmentFingerprint } = require('../lib/page-ownership-records.js');
 const { canonicalJson } = require('../lib/reconcile-common.js');
@@ -1069,7 +1070,7 @@ test('an edit that failed locally before any request is continued by the next ru
   assert.equal(await codeOf(runManagedFeature(observed(first, s))), 'form-layout-local-edit');
   assert.deepEqual(s.wire.writes(), [], 'nothing reached the service');
   const stranded = s.store.readGroup('form', 'account/main').pending;
-  assert.deepEqual([stranded.phase, stranded.sendWindow], ['sending', { possible: 0, notStarted: 0 }]);
+  assert.deepEqual([stranded.phase, stranded.sendWindow], ['sending', { possible: 0, notStarted: 0, epoch: 1 }]);
 
   const n = await observedRun(s);
   assert.deepEqual(n.debt.map((d) => d.kind), ['hold']);
@@ -1103,7 +1104,7 @@ test('an edit the service refused unapplied with a Dataverse error is continued 
   s.wire.script(isPatch, { statusCode: 400, body: { error: { code: '0x80040203', message: 'refused' } }, unapplied: true });
   const first = editPorts(s.wire, s.sdk, { formxml: '<form v="2"/>' });
   assert.equal(await codeOf(runManagedFeature(observed(first, s))), 'form-layout-rejected');
-  assert.deepEqual(s.store.readGroup('form', 'account/main').pending.sendWindow, { possible: 0, notStarted: 1 });
+  assert.deepEqual(s.store.readGroup('form', 'account/main').pending.sendWindow, { possible: 0, notStarted: 1, epoch: 1 });
 
   const n = await observedRun(s);
   const again = editPorts(s.wire, n.sdk, { formxml: '<form v="2"/>' });
@@ -1121,7 +1122,7 @@ test('an answer that does not prove the edit was not carried out leaves the atte
     // A 400 with no Dataverse error (a proxy's page): nothing says the platform refused the operation.
     s.wire.script(isPatch, { statusCode: 400, body: '<html>bad gateway</html>', unapplied });
     assert.equal(await codeOf(runManagedFeature(observed(editPorts(s.wire, s.sdk, { formxml: '<form v="2"/>' }), s))), 'form-layout-rejected');
-    assert.deepEqual(s.store.readGroup('form', 'account/main').pending.sendWindow, { possible: 1, notStarted: 0 });
+    assert.deepEqual(s.store.readGroup('form', 'account/main').pending.sendWindow, { possible: 1, notStarted: 0, epoch: 1 });
     return s;
   };
   // It landed: proved and committed, never sent again.
@@ -1186,7 +1187,7 @@ test('the send observer counts a mutation on its attempt before it leaves, only 
   const send = barrier.gateRequest(observer.wrap(inner));
   const req = (method, p = `systemforms(${MAIN})`, body = '{}', headers = {}) => send({ url: `${ENV}/api/data/v9.2/${p}`, method, headers, body });
   await req('PATCH');
-  assert.deepEqual(windowOf(), { possible: 0, notStarted: 0 }, 'no window open: not counted');
+  assert.deepEqual(windowOf(), { possible: 0, notStarted: 0, epoch: 1 }, 'no window open: not counted');
   const w = observer.open(store, token);
   await req('GET');
   await req('PATCH');
@@ -1197,26 +1198,33 @@ test('the send observer counts a mutation on its attempt before it leaves, only 
   barrier.hold(token, [ACCOUNT], [MAIN], 'form main');
   answer = { statusCode: 204, headers: {}, body: '' };
   await req('POST', 'PublishXml', JSON.stringify({ ParameterXml: '<importexportxml><entities><entity>account</entity></entities></importexportxml>' }));
+  assert.deepEqual(windowOf(), { possible: 2, notStarted: 1, epoch: 1 }, 'a lost answer stays possibly applied');
+  // A closed window trails: it still counts every mutation (a re-send, a request left in flight) and records no
+  // not-started answer, so it can only grow. Only end() stops it.
   w.close();
+  answer = { statusCode: 400, headers: {}, body: JSON.stringify({ error: { code: '0x80040203', message: 'refused' } }) };
   await req('PATCH');
-  assert.deepEqual(seen, [['PATCH', 0], ['GET', 0], ['PATCH', 1], ['POST', 2], ['DELETE', 2], ['PATCH', 2]], 'counted before it left; the withheld publish never reached the transport');
-  assert.deepEqual(windowOf(), { possible: 2, notStarted: 1 }, 'a lost answer stays possibly applied');
+  assert.deepEqual(windowOf(), { possible: 3, notStarted: 1, epoch: 1 }, 'counted after close, and its refusal ends nothing');
+  w.end();
+  answer = { statusCode: 204, headers: {}, body: '' };
+  await req('PATCH');
+  assert.deepEqual(seen, [['PATCH', 0], ['GET', 0], ['PATCH', 1], ['POST', 2], ['DELETE', 2], ['PATCH', 3], ['PATCH', 3]], 'counted before it left; the withheld publish never reached the transport');
+  assert.deepEqual(windowOf(), { possible: 3, notStarted: 1, epoch: 1 }, 'an ended window counts nothing');
 
   // A count that cannot be written stops the request before it leaves.
   const broken = { noteAttemptDispatch: () => { throw Object.assign(new Error('disk full'), { code: CODES.writeFailed }); }, noteAttemptNotStarted() {} };
   const w2 = observer.open(broken, token);
   await assert.rejects(req('PATCH'), { code: CODES.writeFailed });
-  w2.close();
-  assert.equal(seen.length, 6);
+  w2.end();
+  assert.equal(seen.length, 7);
 });
 
-test('a not-started answer is a Dataverse refusal of one operation, a refused token or a failed If-Match; nothing else', () => {
+test('a not-started answer is a Dataverse refusal of one operation or a failed If-Match; nothing else', () => {
   const at = (p, headers = {}) => ({ url: `${ENV}/api/data/v9.2/${p}`, method: 'PATCH', headers });
   const coded = (statusCode, code = '0x80040203') => ({ statusCode, headers: {}, body: JSON.stringify({ error: { code, message: 'x' } }) });
   const row = at(`systemforms(${MAIN})`);
   assert.equal(notStartedAnswer(row, coded(400)), true);
   assert.equal(notStartedAnswer(row, { ...coded(404, '0x80040217'), body: Buffer.from(coded(404, '0x80040217').body) }), true);
-  assert.equal(notStartedAnswer(row, { statusCode: 401, headers: {}, body: '' }), true);
   assert.equal(notStartedAnswer(at(`systemforms(${MAIN})`, { 'If-Match': '"7"' }), { statusCode: 412, headers: {}, body: '' }), true);
   for (const [label, req, res] of [
     ['a 412 without If-Match or a code', row, { statusCode: 412, headers: {}, body: '' }],
@@ -1225,6 +1233,8 @@ test('a not-started answer is a Dataverse refusal of one operation, a refused to
     ['a 409', row, coded(409)],
     ['a 429', row, coded(429)],
     ['a 503', row, coded(503)],
+    ['a 401: the client sends it again with a fresh token', row, { statusCode: 401, headers: {}, body: '' }],
+    ['a 401 with a code', row, coded(401)],
     ['a 500', row, coded(500)],
     ['a success', row, { statusCode: 204, headers: {}, body: '' }],
     ['a batch', at('$batch'), coded(400)],
@@ -1350,4 +1360,256 @@ test('an unacknowledged root is committed only with adoption approved: without i
   const a = await setup();
   assert.equal((await runManagedFeature({ ...createPorts(a.wire, a.sdk, { key: 'account/main', id: MAIN, formxml: '<form v="1"/>' }), store: a.store, barrier: a.barrier })).result.committed, true);
   assert.equal(a.store.readGroup('form', 'account/main').committed.records[0].origin, 'created');
+});
+
+// The send window covers the whole logical operation, the client's own re-sends included; a run's claim on an attempt's
+// sends is checked under the store's lease and fences any older claimant at dispatch; a publish that may have been sent
+// is settled before a newer generation is committed over it; the not-started rule reads the operation path as the
+// service does; and a workflow feature's preflight sees the attempt's effects.
+const latch = () => { let resolve; const promise = new Promise((r) => { resolve = r; }); return { promise, resolve }; };
+const outcome = (p) => p.then((value) => ({ value }), (error) => ({ error: error.code || error.message }));
+const refused = () => JSON.stringify({ error: { code: '0x80040203', message: 'refused' } });
+
+test('send window: a request the client re-sends after the window closed (a 401 refreshed) stays counted, and the next run only proves it', async () => {
+  const s = await observedSetup();
+  await committedEdit(s);
+  const entered = latch(), answer = latch();
+  const original = s.wire.request;
+  let first = true;
+  s.wire.script((e) => e.method === 'PATCH', { statusCode: 401, body: { error: { code: '0x80040220' } }, unapplied: true });
+  s.wire.request = async (req) => {
+    if (req.method === 'PATCH' && first) { first = false; entered.resolve(); await answer.promise; }
+    return original(req);
+  };
+  const n = await observedRun(s);
+  const p = editPorts(s.wire, n.sdk, { formxml: '<form v="2"/>' });
+  let write;
+  p.apply = async () => {
+    write = n.sdk.dataverse.patch(`/systemforms(${MAIN})`, { formxml: '<form v="2"/>' });
+    // The apply fails while its own write is still in flight; the client then refreshes the token and sends it again.
+    await Promise.all([write, (async () => { await entered.promise; throw localFailure(); })()]);
+  };
+  assert.equal(await codeOf(runManagedFeature(observed(p, n))), 'form-layout-local-edit');
+  answer.resolve();
+  assert.equal((await write).status, 204);
+  assert.equal(s.wire.writes().filter(isPatch).length, 2, 'the 401 and its re-send');
+  const after = n.store.readGroup('form', 'account/main').pending.sendWindow;
+  assert.ok(after.possible >= 1, `the re-sent edit stays possibly applied: ${JSON.stringify(after)}`);
+  assert.equal(after.notStarted, 0, 'a 401 is answered by sending again, so it ends nothing');
+  const again = await observedRun(s);
+  const q = editPorts(s.wire, again.sdk, { formxml: '<form v="2"/>' });
+  assert.deepEqual((await runManagedFeature(observed(q, again))).result, { committed: true, recovered: true }, 'proved, not continued');
+  assert.deepEqual([q.sends.length, s.wire.writes().filter(isPatch).length], [0, 2]);
+});
+
+test('send window: a refusal that arrives after the window closed ends nothing; one that arrives while it is open does', async () => {
+  const dir = makeTempDir('mp-trailing-');
+  const barrier = createPublicationBarrier();
+  const { store } = context(dir, barrier);
+  const token = store.prepareAttempt({ family: 'form', key: 'account/main', baseGeneration: null, root: { kind: 'form', key: 'account/main', id: MAIN }, knownScopes: [ACCOUNT], declarationSha256: H('e'), publication: { scope: ACCOUNT, state: 'owed' } });
+  const marked = store.markSending(token, expected(MAIN), { observed: true, claim: 'first' });
+  const epoch = marked ? marked.epoch : undefined;
+  const windowOf = () => store.readGroup('form', 'account/main').pending.sendWindow;
+  const gate = latch();
+  const observer = createAttemptSendObserver();
+  const send = observer.wrap(async () => { await gate.promise; return { statusCode: 400, headers: {}, body: refused() }; });
+  const req = { url: `${ENV}/api/data/v9.2/systemforms(${MAIN})`, method: 'PATCH', headers: {}, body: '{}' };
+  const w = observer.open(store, token, epoch);
+  const inFlight = send(req);
+  w.close();
+  gate.resolve();
+  assert.equal((await inFlight).statusCode, 400);
+  assert.deepEqual(windowOf(), { possible: 1, notStarted: 0, epoch: 1 }, 'in flight when the window closed: possibly applied');
+  w.end();
+  const w2 = observer.open(store, token, epoch);
+  await send(req);
+  w2.end();
+  assert.deepEqual(windowOf(), { possible: 1, notStarted: 1, epoch: 1 }, 'answered while open: not started');
+});
+
+test('send claim: of two runs that read the same zero, the second is refused under the lease before it sends: one edit', async () => {
+  const s = await observedSetup();
+  await committedEdit(s);
+  await codeOf(runManagedFeature(observed(editPorts(s.wire, s.sdk, { formxml: '<form v="2"/>', local: localFailure() }), s)));
+  const token = s.store.readGroup('form', 'account/main').pending.token;
+  const a = await observedRun(s);
+  const aRead = latch(), releaseA = latch(), bEntered = latch(), releaseB = latch();
+  const original = s.wire.request;
+  s.wire.request = async (req) => {
+    if (req.method === 'PATCH') { bEntered.resolve(); await releaseB.promise; }
+    return original(req);
+  };
+  const b = await observedRun(s);
+  s.wire.request = original;
+  const pa = editPorts(s.wire, a.sdk, { formxml: '<form v="2"/>' });
+  let aSaw;
+  pa.preflight = async ({ pending }) => { aSaw = pending.sendWindow; aRead.resolve(); await releaseA.promise; };
+  const pb = editPorts(s.wire, b.sdk, { formxml: '<form v="2"/>' });
+  const aDone = outcome(runManagedFeature(observed(pa, a)));
+  await aRead.promise;
+  const bDone = outcome(runManagedFeature(observed(pb, b)));
+  assert.equal(await Promise.race([bEntered.promise.then(() => true), bDone.then(() => false)]), true, 'the second run is sending');
+  releaseA.resolve();
+  const aResult = await aDone;
+  releaseB.resolve();
+  const bResult = await bDone;
+  assert.equal(aSaw.possible, 0, 'the first run read a zero window');
+  assert.equal(aResult.error, CODES.pending, 'its stale zero claims nothing');
+  assert.deepEqual(pa.sends, [], 'and it sent nothing');
+  assert.deepEqual(bResult.value.result, { committed: true, recovered: true, continued: true });
+  assert.deepEqual(pb.sends, [[token, true]]);
+  assert.equal(s.wire.writes().filter(isPatch).length, 1, 'one edit');
+});
+
+test('send claim: a run that claimed the attempt and was overtaken by a newer claim is refused at its dispatch, unsent', async () => {
+  const s = await observedSetup();
+  await committedEdit(s);
+  await codeOf(runManagedFeature(observed(editPorts(s.wire, s.sdk, { formxml: '<form v="2"/>', local: localFailure() }), s)));
+  const token = s.store.readGroup('form', 'account/main').pending.token;
+  const pause = (p) => {
+    const claimed = latch(), release = latch();
+    const apply = p.apply;
+    p.apply = async (x) => { claimed.resolve(); await release.promise; return apply(x); };
+    return { claimed, release };
+  };
+  const a = await observedRun(s);
+  const b = await observedRun(s);
+  const pa = editPorts(s.wire, a.sdk, { formxml: '<form v="2"/>' });
+  const pb = editPorts(s.wire, b.sdk, { formxml: '<form v="2"/>' });
+  const ga = pause(pa), gb = pause(pb);
+  const windowNow = () => context(s.dir, createPublicationBarrier()).store.readGroup('form', 'account/main').pending.sendWindow;
+  const aDone = outcome(runManagedFeature(observed(pa, a)));
+  await ga.claimed.promise;
+  assert.equal(windowNow().epoch, 2, 'the first claim');
+  const bDone = outcome(runManagedFeature(observed(pb, b)));
+  await gb.claimed.promise;
+  assert.equal(windowNow().epoch, 3, 'a newer claim over the same zero');
+  ga.release.resolve();
+  const aResult = await aDone;
+  // The store refuses the count under the stale epoch before the request leaves; the client reports that as a failed transport.
+  assert.equal(aResult.error, 'CONNECTION_ERROR', 'the overtaken run stops');
+  assert.deepEqual([s.wire.writes().filter(isPatch).length, windowNow().possible], [0, 0], 'its edit never left');
+  gb.release.resolve();
+  assert.deepEqual((await bDone).value.result, { committed: true, recovered: true, continued: true });
+  assert.deepEqual(pb.sends, [[token, true]]);
+  assert.equal(s.wire.writes().filter(isPatch).length, 1, 'one edit');
+  assert.equal(s.wire.saved.get(MAIN).formxml, '<form v="2"/>');
+});
+
+test('publication: a change over a publish that may have been sent stops before it prepares anything, unless a fresh read confirms that publish first', async () => {
+  const strand = async (unapplied) => {
+    const s = await setup();
+    await runManagedFeature({ ...ports(s.wire, s.sdk, { key: 'account/main', id: MAIN, formxml: '<form v="1"/>' }), store: s.store, barrier: s.barrier });
+    s.wire.script((e) => /PublishXml/.test(e.path), { statusCode: 503, body: { error: { code: '0x80040216' } }, unapplied });
+    assert.equal(await codeOf(publishForms(s.sdk, s.store, s.barrier, [{ family: 'form', key: 'account/main' }])), 'managed-publication-unconfirmed');
+    return s;
+  };
+  const refs = [{ family: 'form', key: 'account/main' }];
+  // The old publish landed, and no client is given to confirm it: the change is not made over it.
+  const s = await strand(false);
+  const old = s.store.readGroup('form', 'account/main').committed;
+  const n = await nextRun(s);
+  const changed = tracked(ports(s.wire, n.sdk, { key: 'account/main', id: MAIN, formxml: '<form v="2"/>' }));
+  const before = fileOf(n.store);
+  assert.equal(await codeOf(runManagedFeature({ ...changed, store: n.store, barrier: n.barrier })), PUBLICATION_UNCONFIRMED);
+  assert.deepEqual(changed.calls, ['resolve', 'plan'], 'nothing prepared or sent');
+  assert.equal(fileOf(n.store), before);
+  assert.deepEqual(n.store.readGroup('form', 'account/main'), { committed: old, pending: null, effects: [] });
+  assert.equal(s.wire.saved.get(MAIN).formxml, '<form v="1"/>');
+
+  // With a client, the old publish is confirmed read-only first; the new generation then owes its own publish, which a
+  // later publish sends.
+  const m = await nextRun(s);
+  const p = ports(s.wire, m.sdk, { key: 'account/main', id: MAIN, formxml: '<form v="2"/>' });
+  assert.deepEqual((await runManagedFeature({ ...p, client: m.sdk.dataverse, store: m.store, barrier: m.barrier })).result, { committed: true, recovered: false });
+  const next = m.store.readGroup('form', 'account/main').committed;
+  assert.notEqual(next.generation, old.generation);
+  assert.equal(next.publication.state, 'owed', 'the new generation keeps its own debt');
+  const publishes = s.wire.publishes().length;
+  const t = await nextRun(s);
+  assert.equal((await publishForms(t.sdk, t.store, t.barrier, refs)).sent, true);
+  assert.equal(s.wire.publishes().length, publishes + 1);
+  assert.equal(s.wire.published.get(MAIN).formxml, '<form v="2"/>');
+
+  // The old publish did not land: the fresh read cannot confirm it, so the change stops before it prepares anything.
+  const u = await strand(true);
+  const k = await nextRun(u);
+  const q = tracked(ports(u.wire, k.sdk, { key: 'account/main', id: MAIN, formxml: '<form v="2"/>' }));
+  const prior = fileOf(k.store);
+  assert.equal(await codeOf(runManagedFeature({ ...q, client: k.sdk.dataverse, store: k.store, barrier: k.barrier })), PUBLICATION_UNCONFIRMED);
+  assert.ok(!q.calls.includes('apply'));
+  assert.equal(fileOf(k.store), prior, 'nothing written');
+  assert.deepEqual(u.wire.writes().filter(isPatch), []);
+});
+
+test('not started: the operation path is read decoded, so an encoded batch is a batch and an ambiguous path ends nothing', async () => {
+  const at = (p) => ({ url: `${ENV}/api/data/v9.2/${p}`, method: 'POST', headers: {} });
+  const coded = { statusCode: 400, headers: {}, body: refused() };
+  for (const [label, p] of [['a batch', '$batch'], ['an encoded batch', '%24batch'], ['an encoded batch in lower case', '%24BATCH'], ['a double-encoded batch', '%2524batch'], ['a malformed escape', `systemforms(${MAIN})%zz`], ['a lone percent', `systemforms(${MAIN})%`], ['a batch segment', '$batch/x']]) {
+    assert.equal(notStartedAnswer(at(p), coded), false, label);
+  }
+  assert.equal(notStartedAnswer(at(`systemforms(${MAIN})`), coded), true, 'one operation');
+  assert.equal(notStartedAnswer(at(`systemforms%28${MAIN}%29`), coded), true, 'an encoded single operation is still one');
+
+  // Through the real client: an encoded `$batch` refused with a Dataverse code stays possibly applied.
+  const counts = [];
+  for (const endpoint of ['$batch', '%24batch']) {
+    const s = await observedSetup();
+    const token = s.store.prepareAttempt({ family: 'form', key: 'account/main', baseGeneration: null, root: { kind: 'form', key: 'account/main', id: MAIN }, declarationSha256: H('e'), knownScopes: [ACCOUNT] });
+    const { epoch } = s.store.markSending(token, expected(MAIN), { observed: true, claim: 'first' });
+    const w = s.observer.open(s.store, token, epoch);
+    const body = `--batch_1\r\nContent-Type: application/http\r\n\r\nPATCH /api/data/v9.0/systemforms(${MAIN}) HTTP/1.1\r\nContent-Type: application/json\r\n\r\n{"formxml":"<form/>"}\r\n--batch_1--\r\n`;
+    s.wire.script((e) => e.path === '$batch', { statusCode: 400, body: { error: { code: '0x80040203' } }, unapplied: true });
+    await s.sdk.dataverse.post(`/${endpoint}`, body, { headers: { 'Content-Type': 'multipart/mixed; boundary=batch_1' } });
+    w.end();
+    counts.push(s.store.readGroup('form', 'account/main').pending.sendWindow.possible);
+  }
+  assert.deepEqual(counts, [1, 1]);
+});
+
+test('workflow preflight: an existing row the attempt never created is listed as an edit, whatever the group\'s commit state says', () => {
+  const RULE = '33333333-3333-4333-8333-333333333333';
+  const pending = { token: 't1', root: { kind: 'business-rule', key: 'account/hide', id: RULE }, baseGeneration: null, acknowledgedRoot: false, savedObservation: null };
+  const effect = (over) => ({ token: `e-${over.effect}-${over.state || 'u'}`, attemptToken: 't1', rowId: RULE, state: 'definitely-unsent', dispatchToken: null, ...over });
+  const state = effect({ effect: 'state' });
+  const body = effect({ effect: 'body' });
+  assert.deepEqual(existingRowDispatches({ pending, effects: [state, body] }), [state, body], 'no committed group and a null base are not evidence of a create');
+  assert.deepEqual(existingRowDispatches({ pending, effects: [effect({ effect: 'create', state: 'confirmed' }), state] }), [], 'its own create, confirmed');
+  assert.deepEqual(existingRowDispatches({ pending: { ...pending, acknowledgedRoot: true }, effects: [state] }), [], 'its own create, acknowledged');
+  assert.deepEqual(existingRowDispatches({ pending: { ...pending, savedObservation: { acknowledgedRoot: true } }, effects: [state] }), []);
+  assert.deepEqual(existingRowDispatches({ pending, effects: [effect({ effect: 'create' }), state] }), [state], 'a create that is not confirmed proves nothing');
+  assert.deepEqual(existingRowDispatches({ pending, effects: [{ ...state, state: 'dispatching', dispatchToken: 'd' }] }), [], 'a dispatched effect is proved, never sent again');
+  assert.deepEqual(existingRowDispatches({ pending, effects: [{ ...state, attemptToken: 'other' }] }), [], 'another attempt\'s effect');
+  assert.deepEqual(existingRowDispatches({ pending: null, effects: [state] }), []);
+  assert.deepEqual([...rowsCreatedByAttempt({ pending: { ...pending, acknowledgedRoot: true }, effects: [] })], [RULE]);
+});
+
+test('workflow preflight: with the edit switch off, a state write to an adopted existing workflow is refused before anything is sent; preflight sees the attempt\'s effects', async () => {
+  const s = await setup();
+  const key = 'account/hide';
+  s.wire.workflows.set(MAIN, { workflowid: MAIN, statecode: 0, statuscode: 1 });
+  const token = s.store.prepareAttempt({ family: 'rule', key, baseGeneration: null, root: { kind: 'business-rule', key, id: MAIN }, declarationSha256: H('e'), knownScopes: [] });
+  s.store.markSending(token, { ...expected(MAIN), proofSchema: 'rule-v1', baseProofSha256: H('d'), baseObservation: { rowVersion: null, savedSha256: H('d') } });
+  const effect = { attemptToken: token, baseGeneration: null, family: 'rule', key, rowId: MAIN, effect: 'state', request: { method: 'PATCH', shape: 'workflow-patch' }, desiredState: 'Active' };
+  const recorded = s.store.recordWorkflowEffect(effect);
+  const { sdk } = await sdkOver(s.wire, { barrier: s.barrier, workflowEffectGate: createWorkflowEffectGate({ store: s.store }) });
+  const switchOn = false;
+  const seen = [];
+  const result = await codeOf(runManagedFeature({
+    family: 'rule', key, phase: 'rules', halt, store: s.store, barrier: s.barrier, adoptionApproved: true,
+    preflight: async (a) => {
+      seen.push(a.effects.map((e) => e.token));
+      if (!switchOn && existingRowDispatches(a).length) throw Object.assign(new Error('edits are switched off'), { code: 'workflow-edit-refused' });
+    },
+    resolve: async () => {}, plan: async () => {}, apply: async () => {}, ensureMembership: async () => {},
+    prove: async () => {
+      await withWorkflowEffect({ store: s.store, effect }, () => sdk.dataverse.patch(`/workflows(${MAIN})`, { statecode: 1, statuscode: 2 }));
+      return null;
+    },
+  }));
+  assert.equal(result, 'workflow-edit-refused');
+  assert.deepEqual(seen, [[recorded.token]]);
+  assert.deepEqual(s.wire.writes(), [], 'adoption approval does not switch edits on');
+  assert.equal(s.wire.workflows.get(MAIN).statecode, 0);
+  assert.equal(s.store.readGroup('rule', key).pending.token, token);
 });
