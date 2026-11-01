@@ -1023,7 +1023,8 @@ function planDashboard(s, resolution, committed) {
 // `<dashboard>/<tile>` key and the app's unique name), and a fixed 64 KiB for the root, proof and publication, plus one
 // indented copy of the declaration as the store counts it. Names, URLs and descriptions are kept only in the
 // declaration. A bound over the store's COMPLETION_MAX_BYTES is refused by prepareAttempt before anything is written
-// or sent; the declaration's own size cap keeps a dashboard below it.
+// or sent. The 1 MiB declaration cap does not keep every dashboard below it (thousands of tiles can exceed it), so a
+// very large dashboard is refused before its send rather than sent with a reservation too small for its completion.
 const COMPLETION_TILE_BYTES = 2048;
 const COMPLETION_FIXED_BYTES = 64 * 1024;
 const COMPLETION_COPY_DEPTH = 8;
