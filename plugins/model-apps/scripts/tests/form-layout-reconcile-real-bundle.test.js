@@ -1322,6 +1322,7 @@ async function observedRun(w, ctx, spec, id, { workspace, beforePush, observe = 
   const sendTokens = [];
   const sendEpochs = [];
   const savedAcks = [];
+  const savedReceipts = [];
   let prepared = 0;
   const { markSending, prepareAttempt, noteSaved } = ctx.store;
   ctx.store.markSending = (token, ...a) => {
@@ -1331,7 +1332,11 @@ async function observedRun(w, ctx, spec, id, { workspace, beforePush, observe = 
     return marked;
   };
   ctx.store.prepareAttempt = (...a) => { prepared += 1; return prepareAttempt.apply(ctx.store, a); };
-  ctx.store.noteSaved = (token, o, ...a) => { savedAcks.push(o && o.acknowledgedRoot); return noteSaved.call(ctx.store, token, o, ...a); };
+  ctx.store.noteSaved = (token, o, ...a) => {
+    savedAcks.push(o && o.acknowledgedRoot);
+    savedReceipts.push(((o && o.acknowledgedChildCreates) || []).map((c) => c.key.slice(c.key.indexOf('#') + 1)).sort());
+    return noteSaved.call(ctx.store, token, o, ...a);
+  };
   const observer = observe ? createAttemptSendObserver() : null;
   const sdk = createMakerSdk({ workspaceStorage: createNodeWorkspaceStorage(workspace), instanceUrl: ORIGIN, httpClient: clientOver(w, { barrier: ctx.barrier, observer }) });
   await sdk.initWorkspace();
@@ -1343,7 +1348,7 @@ async function observedRun(w, ctx, spec, id, { workspace, beforePush, observe = 
   } catch (err) {
     result = { action: null, code: err.code || 'thrown', error: err };
   }
-  return { result, sdk, sendTokens, sendEpochs, prepared, savedAcks };
+  return { result, sdk, sendTokens, sendEpochs, prepared, savedAcks, savedReceipts };
 }
 const isFormPatch = (e) => e.method === 'PATCH' && /^systemforms\(/i.test(e.path);
 const isFormCreate = (e) => e.method === 'POST' && /^systemforms$/i.test(e.path);
@@ -1536,4 +1541,101 @@ test('a new form is never created over a local copy with edits the service has n
   assert.equal(run.result.error.cause.category, 'workspace-copy-unsent-edits');
   assert.deepEqual(wire.writes(), []);
   assert.deepEqual(filesOf(workspace), before, 'the copy is kept');
+});
+
+// ---- What a write's own answer acknowledges: the root only for this run's own create; cells an edit adds by receipt. ----
+
+test('an existing form at the catalog id, edited under its adoption approval, stays adopted: an edit answer is no root create', async () => {
+  const wire = createManagedWire();
+  const w = etagged(wire);
+  const spec = wireSpec('Main');
+  const form = spec.forms[0];
+  const id = derivedFormId(form);
+  await onWireWithMaker(wire, id);
+  const ctx = ports({ authorizedAdoption: new Set([`form:${flr.formLayoutKey(form)}`]) });
+  const run = await observedRun(w, ctx, spec, id, { workspace: makeTempDir('form-observed-') });
+  assert.deepEqual([codes(run.result), run.result.action], [[], 'update'], JSON.stringify(run.result));
+  assert.equal(wire.log.filter(isFormCreate).length, 0, 'nothing was created');
+  assert.deepEqual([run.savedAcks, run.savedReceipts], [[false], [['cell:new_code', 'control:new_code']]], 'the edit answer acknowledges only the cell it added');
+  assert.equal(recordOf(ctx, form).origin, 'adopted', 'the root was there before this run: adopted, whatever its id');
+  assert.deepEqual(['cell:new_code', 'control:new_code', 'cell:new_name', 'section:tab_main/sec_main'].map((k) => recordOf(ctx, form, k).origin), ['created', 'created', 'adopted', 'adopted']);
+});
+
+test('an approved adopted form with cells added commits the root adopted and the added cells created; a later recovery needs the approval again', async () => {
+  const spec = wireSpec('Main');
+  const form = spec.forms[0];
+  const typed = () => new Set([`form:${flr.formLayoutKey(form)}`]);
+  const id = guid(4514);
+  const strand = async () => {
+    const wire = createManagedWire();
+    const w = etagged(wire);
+    await onWireWithMaker(wire, id);
+    const ctx = ports({ authorizedAdoption: typed() });
+    const workspace = makeTempDir('form-observed-');
+    const memberBlocked = async () => { throw Object.assign(new Error('membership failed'), { code: 'MEMBER_BLOCKED' }); };
+    const first = await observedRun(w, ctx, spec, id, { workspace, override: { ensureMembership: memberBlocked } });
+    assert.deepEqual(codes(first.result), ['MEMBER_BLOCKED'], JSON.stringify(first.result));
+    assert.deepEqual([first.savedAcks, first.savedReceipts], [[false], [['cell:new_code', 'control:new_code']]], 'the edit acknowledged the cell it added, never the root');
+    const stranded = nothingSettled(ctx, form);
+    assert.notEqual(stranded.acknowledgedRoot, true, 'no root create is recorded for an edit');
+    assert.deepEqual(stranded.acknowledgedChildCreates.map((c) => c.key.slice(c.key.indexOf('#') + 1)).sort(), ['cell:new_code', 'control:new_code'], 'its receipt names only the cell it added');
+    return { wire, w, ctx, workspace, token: stranded.token, patches: wire.log.filter(isFormPatch).length };
+  };
+
+  // Without the adoption approval now, the edit's answer does not bind the root: nothing is sent, nothing bound.
+  const s = await strand();
+  s.ctx.authorizedAdoption = new Set();
+  const refused = await observedRun(s.w, s.ctx, spec, id, { workspace: s.workspace });
+  assert.deepEqual(codes(refused.result), ['managed-adoption-required'], JSON.stringify(refused.result));
+  assert.deepEqual([refused.sendTokens, s.wire.log.filter(isFormPatch).length], [[], s.patches], 'nothing sent again');
+  assert.equal(nothingSettled(s.ctx, form).token, s.token, 'the attempt is kept');
+  assert.deepEqual(s.ctx.members, []);
+  // With it again, the same attempt is proved and committed from its own receipt: root adopted, added cells created.
+  s.ctx.authorizedAdoption = typed();
+  const settled = await observedRun(s.w, s.ctx, spec, id, { workspace: s.workspace });
+  assert.deepEqual([codes(settled.result), settled.result.action, settled.sendTokens], [[], 'recovered', []], JSON.stringify(settled.result));
+  assert.equal(recordOf(s.ctx, form).origin, 'adopted');
+  assert.deepEqual(['cell:new_code', 'control:new_code', 'cell:new_name'].map((k) => recordOf(s.ctx, form, k).origin), ['created', 'created', 'adopted']);
+  assert.equal(recordOf(s.ctx, form, 'cell:new_extra'), null, 'the maker\'s cell is not the build\'s');
+  assert.deepEqual(s.ctx.members, [id]);
+});
+
+// ---- The original declaration: what the attempt was planned from is what its commit records. ----
+
+test('a form commits the declaration its attempt was planned from; a recovery under a changed spec commits the original one, not today\'s', async () => {
+  const spec = wireSpec('Main');
+  const form = spec.forms[0];
+  const { prune, ...declared } = form;
+  assert.equal(prune, false);
+  const wire = createManagedWire();
+  const ctx = ports();
+  const run = await observedRun(wire, ctx, spec, undefined, { workspace: makeTempDir('form-observed-') });
+  assert.deepEqual(codes(run.result), [], JSON.stringify(run.result));
+  const made = groupOf(ctx, form).committed;
+  assert.deepEqual([made.originalDeclaration, made.consumerState.declaration], [declared, declared], 'the authored form, kept as written');
+
+  // A create whose answer never came, and whose row landed: the next run, under a spec changed since, proves it from
+  // the attempt's own expected proof, so the declaration that proof was built from is what is committed.
+  const lost = createManagedWire();
+  const lw = etagged(lost);
+  const lctx = ports();
+  const workspace = makeTempDir('form-observed-');
+  const armed = { on: true };
+  lost.script((e) => armed.on && isFormCreate(e), { error: 'ECONNRESET', unapplied: false });
+  for (let i = 0; i < 5; i += 1) lost.script((e) => armed.on && isFormCreate(e), { error: 'ECONNRESET', unapplied: true });
+  const first = await observedRun(lw, lctx, spec, undefined, { workspace });
+  armed.on = false;
+  assert.deepEqual(codes(first.result), ['form-layout-write-unknown'], JSON.stringify(first.result));
+  assert.deepEqual(nothingSettled(lctx, form).declaration, declared, 'the attempt recorded the authored declaration before anything was sent');
+  const changed = { ...spec, forms: [{ ...form, fieldOptions: { new_code: { readOnly: true } } }] };
+  lctx.authorizedAdoption = new Set([`form:${flr.formLayoutKey(form)}`]);
+  const recovered = await observedRun(lw, lctx, changed, undefined, { workspace });
+  assert.deepEqual([codes(recovered.result), recovered.result.action, recovered.sendTokens], [[], 'recovered', []], JSON.stringify(recovered.result));
+  const settled = groupOf(lctx, form).committed;
+  assert.deepEqual([settled.originalDeclaration, settled.consumerState.declaration], [declared, declared], 'the original declaration, not null and not today\'s');
+  assert.equal((await publishTable(lctx, recovered.sdk)).sent, true, 'its owed publication is paid');
+  // Today's spec differs from what was proved, so the next run plans its change rather than a no-op.
+  const next = await observedRun(lw, lctx, changed, undefined, { workspace });
+  assert.deepEqual([codes(next.result), next.result.action], [[], 'update'], JSON.stringify(next.result));
+  assert.deepEqual(groupOf(lctx, form).committed.consumerState.declaration, (({ prune: _p, ...d }) => d)(changed.forms[0]));
 });

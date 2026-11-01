@@ -71,6 +71,7 @@ const {
   controlIdTaken,
 } = require('./form-timeline.js');
 const { runManagedFeature, publishManagedScope } = require('./managed-feature-contract.js');
+const { rootCreateAcknowledged } = require('./managed-bindings.js');
 const { readSystemFormPublication, readSystemFormRootPresence, systemFormLayerSha256 } = require('./systemform-published.js');
 const { publishTablesXml } = require('./table-publish.js');
 const { hasUnsyncedEdits } = require('./unsynced-edits.js');
@@ -1438,6 +1439,16 @@ function expectedChildrenOf(key, formId, m) {
   });
 }
 
+// The child-create receipt a write's save answer stands for ({ kind, key, id }): the expected children this plan
+// reserved as NEW (`m.fresh`) and sends in its one push. A child whose id the live form already holds (`liveTabs`; null
+// for a create) was there before this write, so it is never claimed as made by it, whatever the plan marked it.
+function newChildrenOf(key, children, m, liveTabs) {
+  const there = liveTabs ? compositeOf(liveTabs).at : new Map();
+  return children
+    .filter((c) => m.fresh.has(c.key.slice(key.length + 1)) && !there.has(idText(c.id)))
+    .map((c) => ({ kind: c.kind, key: c.key, id: c.id }));
+}
+
 // The complete tree of a NEW declared form, every object marked with its locator. Sections of field cells only
 // are packed again by slot (the compiler's width-only rows let a cell after a middle row-spanning one run past the
 // grid); any other section keeps its compiled rows, its cells named by what they hold. Answers { tabs } or
@@ -1650,6 +1661,11 @@ function stillProven(children, lastChildren, tabs) {
  *   run never had acknowledged is bound only under the `form:<key>` adoption approval (managed-adoption-required).
  *   A write that fails puts the local copy back as the service holds it (a create's copy is removed), so the
  *   next run's dirty-copy refusal meets only edits this build did not make.
+ *   Only this run's own CREATE answer acknowledges the root (origin `created`); an edit's answer acknowledges only
+ *   the children the plan reserved as new and sent (the child-create receipt), so a form that was already there is
+ *   `adopted` at any id, and the cells this build adds to it are `created`. The plan answers the authored declaration
+ *   (declarationOf), which the attempt records before anything is sent; the commit keeps it as the group's
+ *   originalDeclaration and as consumerState.declaration (what verify and download restore), a recovery's included.
  * Answers { key, formId, action: 'noop'|'noChange'|'update'|'create'|'recovered', continued?, resumed?, group }. Every refusal, unknown
  * outcome or failed proof throws the error the halt factory makes (the build stops; the form's table is withheld).
  */
@@ -1762,7 +1778,8 @@ async function reconcileDeclaredForm(input, ctx = {}) {
       const planned = { formType: pc.formType, entityLogicalName: (def && def.entityLogicalName) || table, tabs: m.tabs, bag: withHandlers({ a: [], c: [] }, pc.handlers) };
       state.action = 'create';
       return {
-        root, declarationSha256, publication, create: true, m, handlers: pc.handlers, formType: pc.formType,
+        root, declarationSha256, declaration, publication, create: true, m, handlers: pc.handlers, formType: pc.formType,
+        newChildren: newChildrenOf(key, children, m, null),
         expected: {
           proofVersion: 1, proofSchema: PROOF_SCHEMA, rootId: formId, baseProofSha256,
           sentProjectionSha256: intentSha256(projectFormComposite(planned)),
@@ -1808,7 +1825,8 @@ async function reconcileDeclaredForm(input, ctx = {}) {
     }
     state.action = p.action;
     return {
-      root, declarationSha256, publication: p.action === 'update' ? publication : null, update: p.action === 'update', m, addHandlers: p.addHandlers || [],
+      root, declarationSha256, declaration, publication: p.action === 'update' ? publication : null, update: p.action === 'update', m, addHandlers: p.addHandlers || [],
+      newChildren: newChildrenOf(key, children, m, live.tabs),
       expected: {
         proofVersion: 1, proofSchema: PROOF_SCHEMA, rootId: formId, baseProofSha256,
         sentProjectionSha256: intentSha256(projectFormComposite(planned)),
@@ -1831,7 +1849,9 @@ async function reconcileDeclaredForm(input, ctx = {}) {
       await resetOwnCopy(p, formId);
       throw err;
     }
-    if (pushed.outcome === 'saved') return { sent: true, acknowledged: true };
+    // The save answer acknowledges what this request made: the root only when it was the root's CREATE, and the
+    // children the plan reserved as new and sent in it.
+    if (pushed.outcome === 'saved') return { sent: true, acknowledged: true, created: !!p.create, newChildren: p.newChildren || [] };
     await resetOwnCopy(p, formId);
     if (pushed.outcome === 'refused') throw codeError('form-layout-rejected', `the form was not saved (${pushed.code || 'refused'})`);
     throw codeError('form-layout-write-unknown', 'the form write did not settle; the next run proves it from a fresh read before anything else');
@@ -1873,7 +1893,7 @@ async function reconcileDeclaredForm(input, ctx = {}) {
     } catch { /* see above */ }
   };
 
-  const prove = async ({ token, expected, applied, recovering }) => {
+  const prove = async ({ token, expected, applied, recovering, declaration: provedDeclaration }) => {
     const formId = expected.rootId;
     const back = await readForm(sdk, formId);
     if (!back || back.missing) throw codeError(back && back.missing ? 'create-completion-required' : 'form-layout-unverified', 'the form could not be read back after the write');
@@ -1895,39 +1915,41 @@ async function reconcileDeclaredForm(input, ctx = {}) {
     } else {
       publication = { scope, state: 'not-needed', desiredSha256: null, dispatchToken: null };
     }
-    // This run's own write answer, or in a recovery what this same attempt durably recorded of its own answer; never a
-    // later read. An edit answers for an uncommitted root only when the planner had the form's typed adoption approval
-    // (an unbound form is planned under nothing else), so it never stands in for that consent; the root's origin stays
-    // `adopted` (its id is not the catalog's), while the cells this edit added are recorded as created by it.
-    const acknowledged = recovering
-      ? !!(pending && pending.token === token && (pending.acknowledgedRoot || (pending.savedObservation && pending.savedObservation.acknowledgedRoot)))
-      : !!(applied && applied.acknowledged);
-    const derived = (() => {
-      if (!catalog || typeof catalog.reserveChildren !== 'function') return { rootId: '', ids: {} };
-      try {
-        const rootId = idText(catalog.identityFor(FAMILY, key).id);
-        const locators = expected.children.map((c) => c.key.slice(key.length + 1));
-        return { rootId, ids: reserveChildIds(catalog, key, formId, locators) };
-      } catch {
-        return { rootId: '', ids: {} };
-      }
-    })();
+    // What a write's own answer acknowledged, from this run's answer or, in a recovery, from what this same attempt
+    // durably recorded of its answer (noteSaved); never a later read, and never the id the row happens to have.
+    //   - The ROOT only when that answer was to the root's CREATE: an edit of a row that was already there (an adopted
+    //     form, even one standing at the catalog's id) made nothing, and the store refuses the flag on such an attempt.
+    //     Such a root is bound only under the form's typed adoption approval, at every commit, a recovery included.
+    //   - A CHILD by the receipt: the cells, controls, sections and tabs the plan reserved as new and sent in that one
+    //     push (apply's `newChildren`), so cells this build adds to an approved adopted form are recorded as created.
+    // A recovery is committed from the attempt's own receipt, so it answers none of its own.
+    const own = pending && pending.token === token ? pending : null;
+    const rootCreated = recovering ? rootCreateAcknowledged(own) : !!(applied && applied.acknowledged && applied.created);
+    const receipt = recovering ? [] : (applied && applied.acknowledged ? applied.newChildren || [] : []);
+    const receipted = new Set((recovering ? (own && own.acknowledgedChildCreates) || [] : receipt).map((c) => `${c.kind}\u0000${c.key}\u0000${idText(c.id)}`));
     const old = new Map(((committed && committed.records) || []).map((r) => [`${r.kind}\u0000${r.key}`, r]));
-    const originOf = (kind, recKey, id, derivedId) => {
+    const originOf = (kind, recKey, id, isRoot) => {
       const was = old.get(`${kind}\u0000${recKey}`);
       if (was) return was.origin;
-      return acknowledged && derivedId && sameId(derivedId, id) ? 'created' : 'adopted';
+      if (rootCreated) return 'created';
+      return !isRoot && receipted.has(`${kind}\u0000${recKey}\u0000${idText(id)}`) ? 'created' : 'adopted';
     };
+    // The declaration this attempt was planned from: the one it recorded (the wrapper's `declaration`, on recovery
+    // always the attempt's, never today's spec). An attempt an earlier build prepared without one is recorded only
+    // when today's declaration is the one it hashed; otherwise none, so verify and download never restore one that
+    // was not proved.
+    const attemptDeclarationSha256 = own ? own.declarationSha256 : declarationSha256;
+    const proved = provedDeclaration !== undefined ? provedDeclaration : (attemptDeclarationSha256 === declarationSha256 ? declaration : null);
+    const provedFieldOptions = proved && proved.fieldOptions !== undefined ? proved.fieldOptions : null;
     const base = projectionBaseline(formProjection(back.tabs));
-    const partsSha256 = { ...base.partsSha256, 'spec:fieldOptions': intentSha256(form.fieldOptions === undefined ? null : form.fieldOptions) };
+    const partsSha256 = { ...base.partsSha256, 'spec:fieldOptions': intentSha256(provedFieldOptions) };
     const records = [
-      recordOf({ kind: FAMILY, key, id: formId, intentSha256: base.intentSha256, partsSha256, origin: originOf(FAMILY, key, formId, derived.rootId) }),
+      recordOf({ kind: FAMILY, key, id: formId, intentSha256: base.intentSha256, partsSha256, origin: originOf(FAMILY, key, formId, true) }),
       ...expected.children.map((c) => recordOf({
         kind: c.kind, key: c.key, id: c.id, intentSha256: c.associationSha256, parentKey: key,
-        origin: originOf(c.kind, c.key, c.id, derived.ids[c.key.slice(key.length + 1)]),
+        origin: originOf(c.kind, c.key, c.id, false),
       })),
     ];
-    const attemptDeclaration = pending && pending.token === token ? pending.declarationSha256 : declarationSha256;
     const proof = {
       savedSha256: savedShaOf(back),
       semanticSha256: intentSha256(projectFormComposite(back)),
@@ -1935,11 +1957,10 @@ async function reconcileDeclaredForm(input, ctx = {}) {
       expectedChildrenSha256: expected.children.length ? intentSha256(expected.children) : null,
     };
     return {
-      savedProof: proof, acknowledgedRoot: acknowledged, records, proof, proofSchema: PROOF_SCHEMA, publication,
+      savedProof: proof, acknowledgedRoot: rootCreated, acknowledgedChildCreates: receipt, records, proof, proofSchema: PROOF_SCHEMA, publication,
       consumerState: {
-        // The declaration is recorded only when it is the one this attempt was planned from: a recovery under a spec
-        // that has changed since keeps no declaration, so verify and download never restore one that was not proved.
-        declaration: attemptDeclaration === declarationSha256 ? declaration : null,
+        // What verify and an explicit download restore: the declaration this attempt's proof was built from.
+        declaration: proved,
         children: childrenStateOf(expected.children, back.tabs),
         proofSchema: PROOF_SCHEMA,
       },
