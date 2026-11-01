@@ -26,9 +26,19 @@
 // nothing is bound. Any change to a flow that already exists refuses before any workflow request with
 // `workflow-edit-refused` unless `opts.workflowConditionalEdits` is on. With the switch, an Active flow is edited as
 // three effects — Draft, body, Active — each conditioned on the version its own proof read returned (an Active
-// flow's SDK push is a `$batch` the effect gate cannot read whole, so it is never sent). A write whose answer was lost
-// is proved by reading and never sent again; a re-run finishes an edit whose body is on the row but whose own
-// activation was refused before it was sent.
+// flow's SDK push is a `$batch` the effect gate cannot read whole, so it is never sent); a state-only change is ONE
+// conditional state write with no definition push. The gate also holds on every recovery path: with the switch off a
+// re-run may prove by reading that an earlier write landed, but it sends nothing to an existing flow.
+//
+// WHAT A RE-RUN MAY DO. Only the exact unresolved create of an attempt continues as a create; an absent row is never
+// permission to create again, and a missing adopted flow stops. A write whose answer was lost, or that was answered
+// with a generic 4xx/5xx, is `unconfirmed` (an answer is not proof that nothing started): it is proved by reading and
+// never sent again. Only a 412 to a write that carried If-Match is a request-specific refusal that proves no start. A
+// create that no 2xx acknowledged is activated and bound only with the flow's typed adoption approval
+// (`managed-adoption-required`, the attempt kept). The SDK's local copy is checked first on every path, and a copy with
+// unsent edits stops everything (`create-completion-required`, category `workspace-copy-unsent-edits`). The live XAML
+// is walked against the shape this module writes before any live flow is accepted: a foreign activity, a branch or a
+// stage action anywhere refuses (`bpf-shape-unsupported`) before any mutation, metadata-only edits and adoption included.
 //
 // Nothing here publishes: activating a flow is a state change, not PublishXml.
 
@@ -37,7 +47,7 @@ const { runManagedFeature } = require('./managed-feature-contract.js');
 const { requestBodySha256 } = require('./workflow-effect-context.js');
 const { identityFor, reserveChildren } = require('./creates-catalog.js');
 const { CODES } = require('./managed-bindings.js');
-const { createWorkflowDriver, isDefiniteRefusal, coded, ACTIVE, DRAFT } = require('./workflow-drive.js');
+const { createWorkflowDriver, createCopyGuard, answeredRefusal, coded, ACTIVE, DRAFT } = require('./workflow-drive.js');
 
 // sdk-build is required lazily: it is the module that will call this one, so a top-level require would be a cycle.
 const sdkBuild = () => require('./sdk-build.js');
@@ -118,6 +128,108 @@ function validateDeclaredBpf(flow) {
 // ---------------------------------------------------------------------------------------------------------------
 // The flow as this module compares it.
 
+// ---------------------------------------------------------------------------------------------------------------
+// The flow's retained XAML.
+
+/*
+ * The vendored SDK keeps a fetched flow's XAML as a parsed tree on `art.bag.xaml`: the document element's attributes
+ * and children, `{ a: [[name, value], …], c: [child, …] }`, where a child is an element `{ n, a, c }` (or `{ i, node }`
+ * around one) and text is `{ n: '#text', … }`. A linear flow the SDK writes (and a maker's linear flow) is, with text
+ * omitted:
+ *   x:Members > x:Property*                       this:XrmWorkflow<id>.InputEntities|CreatedEntities > InArgument
+ *   mva:VisualBasic.Settings                      mxswa:Workflow > one EntityComposite:
+ *   mxswa:ActivityReference AssemblyQualifiedName="Microsoft.Crm.Workflow.Activities.EntityComposite, …"
+ *     mxswa:ActivityReference.Properties
+ *       sco:Collection x:Key=Variables (empty)    sco:Collection x:Key=Activities > StageComposite*
+ *       x:Null|x:String x:Key=RelationshipName, AttributeName      x:Boolean x:Key=IsClosedLoop
+ *   StageComposite > Properties: Variables (empty), Activities > StepComposite*, StepLabels > mcwo:StepLabel*,
+ *                                StageId, StageCategory, NextStageId
+ *   StepComposite  > Properties: Variables (empty), Activities > Sequence DisplayName="ControlStep…" > mcwb:Control*,
+ *                                StepLabels > mcwo:StepLabel*, ProcessStepId, IsProcessRequired
+ *   mcwb:Control   > mcwb:Control.<property> > InArgument > Literal | x:Null
+ * Anything else — another activity in any Activities collection, a stage action, a condition, a Variables entry, an
+ * unknown property — is a shape this module does not manage. The check is an allowlist: what it does not name refuses.
+ */
+const WF_ACTIVITY = 'Microsoft.Crm.Workflow.Activities.';
+const LEAF_TAGS = ['x:Null', 'x:String', 'x:Boolean'];
+const COMPOSITE_PROPS = {
+  EntityComposite: { Variables: 'empty', Activities: 'StageComposite', RelationshipName: 'leaf', AttributeName: 'leaf', IsClosedLoop: 'leaf' },
+  StageComposite: { Variables: 'empty', Activities: 'StepComposite', StepLabels: 'labels', StageId: 'leaf', StageCategory: 'leaf', NextStageId: 'leaf' },
+  StepComposite: { Variables: 'empty', Activities: 'ControlStep', StepLabels: 'labels', ProcessStepId: 'leaf', IsProcessRequired: 'leaf' },
+};
+const xNode = (c) => (c && c.node) || c;
+const xElements = (n) => ((n && n.c) || []).map(xNode).filter((c) => c && typeof c.n === 'string' && !c.n.startsWith('#'));
+const xAttr = (n, k) => { const hit = ((n && n.a) || []).find((p) => Array.isArray(p) && p[0] === k); return hit ? String(hit[1]) : null; };
+
+/** Why a retained XAML tree is not a linear flow of stages and control steps; null when it is. */
+function xamlShapeError(xaml) {
+  if (!xaml || typeof xaml !== 'object' || !Array.isArray(xaml.c)) return 'its XAML could not be read as a linear flow';
+  const workflows = [];
+  for (const el of xElements(xaml)) {
+    if (el.n === 'x:Members') {
+      if (xElements(el).some((p) => p.n !== 'x:Property')) return 'its XAML declares members this module does not manage';
+    } else if (/^this:XrmWorkflow[0-9A-Fa-f]*\.(InputEntities|CreatedEntities)$/.test(el.n)) {
+      if (xElements(el).some((p) => p.n !== 'InArgument' || xElements(p).length)) return 'its XAML carries workflow arguments this module does not manage';
+    } else if (el.n === 'mva:VisualBasic.Settings') {
+      if (xElements(el).length) return 'its XAML carries expression settings this module does not manage';
+    } else if (el.n === 'mxswa:Workflow') {
+      workflows.push(el);
+    } else {
+      return `its XAML carries <${el.n}>, which this module does not manage`;
+    }
+  }
+  if (workflows.length !== 1) return 'its XAML does not hold exactly one workflow';
+  const top = xElements(workflows[0]);
+  if (top.length !== 1) return 'its workflow does not hold exactly one entity step';
+  return compositeError(top[0], 'EntityComposite');
+}
+
+function compositeError(el, kind) {
+  const aqn = xAttr(el, 'AssemblyQualifiedName') || '';
+  if (el.n !== 'mxswa:ActivityReference' || !aqn.startsWith(`${WF_ACTIVITY}${kind},`)) {
+    const what = el.n === 'mxswa:ActivityReference' ? aqn.split(',')[0].replace(WF_ACTIVITY, '') || 'an activity' : `<${el.n}>`;
+    return `a ${kind === 'StageComposite' ? 'flow' : kind === 'StepComposite' ? 'stage' : 'process'} holds ${what}, which this module does not manage (only stages of control steps are)`;
+  }
+  const kids = xElements(el);
+  if (kids.length !== 1 || kids[0].n !== 'mxswa:ActivityReference.Properties') return `a ${kind} carries settings this module does not manage`;
+  const allowed = COMPOSITE_PROPS[kind];
+  const seen = new Set();
+  for (const prop of xElements(kids[0])) {
+    const k = xAttr(prop, 'x:Key');
+    const rule = k && allowed[k];
+    if (!rule || seen.has(k)) return `a ${kind} carries the property ${k || `<${prop.n}>`}, which this module does not manage`;
+    seen.add(k);
+    const items = xElements(prop);
+    if (rule === 'leaf') {
+      if (!LEAF_TAGS.includes(prop.n) || items.length) return `a ${kind} property ${k} is not a plain value`;
+    } else if (prop.n !== 'sco:Collection') {
+      return `a ${kind} property ${k} is not a collection`;
+    } else if (rule === 'empty') {
+      if (items.length) return `a ${kind} declares variables, which this module does not manage`;
+    } else if (rule === 'labels') {
+      if (items.some((x) => x.n !== 'mcwo:StepLabel' || xElements(x).length)) return `a ${kind} carries labels this module does not manage`;
+    } else if (rule === 'ControlStep') {
+      for (const seq of items) {
+        if (seq.n !== 'Sequence' || !/^ControlStep/.test(xAttr(seq, 'DisplayName') || '')) return `a step holds <${seq.n}>, which this module does not manage (only a control step is)`;
+        for (const ctl of xElements(seq)) {
+          if (ctl.n !== 'mcwb:Control') return `a control step holds <${ctl.n}>, which this module does not manage`;
+          for (const cp of xElements(ctl)) {
+            const ok = cp.n.startsWith('mcwb:Control.') && xElements(cp).every((arg) => arg.n === 'InArgument'
+              && xElements(arg).every((v) => (v.n === 'Literal' || v.n === 'x:Null') && !xElements(v).length));
+            if (!ok) return 'a control step carries a value this module does not manage';
+          }
+        }
+      }
+    } else {
+      for (const child of items) {
+        const why = compositeError(child, rule);
+        if (why) return why;
+      }
+    }
+  }
+  return null;
+}
+
 /**
  * The projection of an SDK BpfArtifact, e.g. (fetchArtifact('bpf', id) with the vendored bundle):
  *   { id, name, entityLogicalName, status: 'Active'|'Draft', order: 100, uniqueName: 'new_ticketflow', description?,
@@ -128,6 +240,12 @@ function validateDeclaredBpf(flow) {
  * SDK's parse of a request record does not carry it.
  */
 function projectBpf(art) {
+  // The SDK's stages and steps are a lossy view of the XAML: an activity it does not model (a stage action, a workflow
+  // step, an opaque Sequence) is kept in the artifact's retained XAML and pushed back unchanged. The retained tree is
+  // checked against the linear stage/step shape first, so no write — a metadata-only edit or an adoption included —
+  // can be built on a flow that carries anything else.
+  const xamlError = xamlShapeError(art && art.bag && art.bag.xaml);
+  if (xamlError) return { unsupported: xamlError };
   const entity = lc(art && art.entityLogicalName);
   const stages = [];
   const raw = (art && art.stages) || [];
@@ -300,12 +418,16 @@ async function settleDeclaredBpf(input) {
     kind, key: k, id, intentSha256: declarationSha256, origin, ...(parentKey ? { parentKey } : {}),
   });
   const run = { token: null, committed: null };
-  const { readVersion, attemptOf, effectOf, sendOnce, noteNoStart, driveState } = createWorkflowDriver({
+  const { readVersion, attemptOf, effectOf, sendOnce, driveState } = createWorkflowDriver({
     store, sdk, httpClient, instanceUrl, family: FAMILY, key, label, noun: 'process flow', driftCode: 'bpf-drift',
+    conditionalEdits: switchOn, editRefusedRemedy: EDIT_REFUSED_REMEDY,
   });
+  // The local SDK copy is checked before anything reads over it, reseeds or deletes it (an unsent edit stops the build).
+  const guard = createCopyGuard({ sdk, artifact: ARTIFACT, label, noun: 'process flow' });
 
   // ----- reads.
   async function readBody(id) {
+    await guard.assertClean(id);
     try {
       await sdk.fetchArtifact(ARTIFACT, id, { overwrite: true });
       const art = await sdk.getArtifact(ARTIFACT, id);
@@ -366,9 +488,12 @@ async function settleDeclaredBpf(input) {
     });
   }
 
-  // ----- local SDK staging (no request). The local copy is laid out from the declaration or the proved read.
+  // ----- local SDK staging (no request). The local copy is laid out from the declaration or the proved read, so a
+  // dirty earlier copy is never pushed (and never thrown away: it was refused before this, by the copy guard).
   const stepEl = (t, p) => ({ id: t.id, name: p.name, fieldName: lc(p.field), ...(p.required === true ? { required: true } : {}) });
   async function stageCreate(id, map) {
+    await guard.assertClean(id);
+    guard.noteStaged(id);
     const def = sdkBuild().bpfDef(flow);
     const stages = def.stages.map((st, i) => ({ ...st, id: map[i].id, steps: st.steps.map((p, j) => ({ ...p, id: map[i].steps[j].id })) }));
     try { await sdk.deleteArtifact(ARTIFACT, id); } catch { /* no local copy */ }
@@ -380,6 +505,7 @@ async function settleDeclaredBpf(input) {
   // `baseStatus` is the state the flow had when the edit was planned: the drive takes an Active flow to Draft before it
   // stages again, and the edit must still end Active.
   async function stageEdit(id, view, map, baseStatus = view.status) {
+    guard.noteStaged(id);
     const stagesNow = async () => ((await sdk.getArtifact(ARTIFACT, id)) || {}).stages || [];
     if (flow.stages !== undefined) {
       for (let i = 0; i < flow.stages.length; i += 1) {
@@ -482,43 +608,62 @@ async function settleDeclaredBpf(input) {
     return null;
   }
 
-  /** The Draft create of this attempt's own row, then its own activation. */
-  async function driveCreate(token, id, staged, recovering) {
+  /**
+   * Send the Draft create of this attempt's own row (from `apply` only: a first send, or the same create under the same
+   * token after resumeCreate read its id absent), then finish it (finishCreate). An answered create is durable at once
+   * (noteSaved, acknowledgedRoot): that answer is what lets this attempt call the row, and its stages and steps, its own.
+   */
+  async function driveCreate(token, id, staged) {
     let create = effectOf(token, (e) => e.effect === 'create');
-    let acknowledged = false;
     let failure = null;
     if (!create || create.state === 'definitely-unsent') {
-      if (recovering && await readVersion(id)) throw coded('create-identity-conflict', `${label}: a workflow already holds the id ${id}, and this build never sent its create`);
       const s = staged || await stageCreate(id, createMap().map);
       if (create && create.desiredSha256 !== s.desiredSha256) throw coded(CODES.pending, `${label}: the create waiting to be sent was made from another declaration; restore it to finish`);
       failure = await sendOnce(token, create, {
         rowId: id, effect: 'create', request: { method: 'POST', shape: 'bpf-create' }, desiredSha256: s.desiredSha256, desiredState: null, expectedVersion: null,
       }, () => sdk.withArtifactLock(ARTIFACT, id, () => sdk.executePrepared(s.prep)));
-      create = effectOf(token, (e) => e.effect === 'create');
-      acknowledged = !failure;
+      if (!failure) store.noteSaved(token, { proof: null, acknowledgedRoot: true, phase: 'state-pending' });
     }
+    return finishCreate(token, id, failure);
+  }
+
+  /**
+   * Prove this attempt's own create by reading (never by sending it again), then complete its own activation. The
+   * activation needs no edit switch — the row is the one this exact attempt created — but a create no answer
+   * acknowledged is not known to be this build's: it is neither activated nor bound without the flow's typed adoption
+   * approval (`managed-adoption-required`, the attempt kept).
+   */
+  async function finishCreate(token, id, failure) {
+    const create = effectOf(token, (e) => e.effect === 'create');
     const expected = attemptOf(token).attempt.expected;
     if (create.state !== 'confirmed') {
       const live = await readLive(id);
       if (live.missing) {
         if (live.stranger) throw coded('create-completion-required', `${label}: the workflow ${id} is not this table's process flow; nothing is bound to it`);
-        if (failure && isDefiniteRefusal(failure)) {
-          noteNoStart(create);
-          throw coded('create-completion-required', `${label}: the create was refused (${failure.message}); nothing was written`, { cause: failure });
+        if (failure && answeredRefusal(failure)) {
+          throw coded('create-completion-required', `${label}: the create was refused (${failure.message}) and no row is there now. That answer does not prove the `
+            + `create never started, so it is not sent again from this attempt; a later run reads ${id} again`, { cause: failure });
         }
-        throw coded(CODES.pending, `${label}: the create of ${id} has not appeared; it is not sent again. Re-run the build to prove it`, { cause: failure });
+        throw coded(CODES.pending, `${label}: the create of ${id} has not appeared; it is not sent again, and a later run reads the row again`, { cause: failure });
       }
       // Acknowledged or not, a row that is not exactly what was sent (a substituted stage or step id included) binds nothing.
       const why = notTheSentFlow(expected, live.view);
       if (why) throw coded('create-completion-required', `${label}: ${why}; nothing is bound to it`);
       store.confirmEffect(create.token, { observedSha256: create.desiredSha256 });
     }
+    const { attempt } = attemptOf(token);
+    const acknowledged = attempt.acknowledgedRoot === true || !!(attempt.savedObservation && attempt.savedObservation.acknowledgedRoot);
     const live = await readLive(id);
     if (live.missing) throw coded(CODES.pending, `${label}: the workflow ${id} could not be read back`);
     const why = notTheSentFlow(expected, live.view);
     if (why) throw coded('create-completion-required', `${label}: ${why}`);
-    // Completing this attempt's own Draft is allowed by default: the row is the one this exact attempt created.
-    if (statusFor(expected, live.view.projection) === ACTIVE && live.view.status !== ACTIVE) await driveState(token, id, ACTIVE, null, { conditional: false });
+    if (statusFor(expected, live.view.projection) === ACTIVE && live.view.status !== ACTIVE) {
+      if (!acknowledged && !approved) {
+        throw coded(CODES.adoptionRequired, `${label}: the workflow ${id} carries what this build sent, but no answer acknowledged its create, so it is not known `
+          + `to be this build's; it is neither activated nor bound without the adoption approval adopt:bpf:${key}. The attempt is kept`);
+      }
+      await driveState(token, id, ACTIVE, null, { conditional: false });
+    }
     return { acknowledged };
   }
 
@@ -544,9 +689,11 @@ async function settleDeclaredBpf(input) {
     if (body.state === 'definitely-unsent') throw coded('bpf-drift', `${label}: the flow changed on the server after it was read, so the edit was refused; it is not retried`, { cause: failure });
     const after = await readLive(id);
     if (after.missing || savedShaOf(after.view.projection, staged.desiredStatus) !== planned.expected.sentProjectionSha256) {
-      if (failure && isDefiniteRefusal(failure)) {
-        noteNoStart(body);
-        throw coded('create-completion-required', `${label}: the edit was refused (${failure.message}); the flow is kept as it is`, { cause: failure });
+      // An answered refusal does not prove the body never started (a service can answer 4xx after it applied part of a
+      // request), so it is never recorded as unsent: the attempt stays open and the body is not sent again.
+      if (failure && answeredRefusal(failure)) {
+        throw coded('create-completion-required', `${label}: the edit was refused (${failure.message}) and the row does not carry it. That answer does not `
+          + 'prove the edit never started, so it is not sent again from this attempt; the flow is kept as it is', { cause: failure });
       }
       throw coded(failure ? CODES.pending : 'create-completion-required', `${label}: the edit is not proved by a fresh read; it is not sent again`, { cause: failure });
     }
@@ -615,6 +762,10 @@ async function settleDeclaredBpf(input) {
     }
     if (!edits.length) return { mode: 'noop' };
     if (!switchOn) throw coded('workflow-edit-refused', `${label}: the declaration ${edits.join(', ')}. ${EDIT_REFUSED_REMEDY}`);
+    // A declaration that changes only the status is a pure state change: one conditional state write, no body push
+    // (the body is already proved, and regenerating its XAML would rewrite what the server holds for nothing).
+    const applied = (state.declaration && state.declaration.applied) || { stages: [] };
+    if (!editsOf(applied, { ...flow, status: applied.status }).length) return { mode: 'state', id, live, held, target: flow.status };
     return { mode: 'edit', id, live, held };
   }
 
@@ -667,6 +818,13 @@ async function settleDeclaredBpf(input) {
       const expected = expectedOf({ id, sent: staged.sent, desiredStatus: staged.desiredStatus, map, live: null });
       return { root: root(id), expected, declarationSha256, publication: null, mode: 'create', staged, map };
     }
+    if (resolution.mode === 'state') {
+      // The live flow is what stays; only the status moves. The held map still names the live stages and steps (the
+      // row equals the committed proof, checked in resolveManaged).
+      const { id, live, held, target } = resolution;
+      const expected = expectedOf({ id, sent: live.view, desiredStatus: target, map: held, live });
+      return { root: root(id), expected, declarationSha256, publication: null, mode: 'state', live, target, map: held };
+    }
     const { id, live, held } = resolution;
     const map = editedMap(id, held);
     const staged = await stageEdit(id, live.view, map);
@@ -678,7 +836,11 @@ async function settleDeclaredBpf(input) {
   async function apply({ token, plan: planned }) {
     run.token = token;
     if (planned.mode === 'adopt') return { mode: 'adopt', acknowledged: false, map: planned.map };
-    if (planned.mode === 'create') return { mode: 'create', ...(await driveCreate(token, planned.root.id, planned.staged, false)), map: planned.map };
+    if (planned.mode === 'create') return { mode: 'create', ...(await driveCreate(token, planned.root.id, planned.staged)), map: planned.map };
+    if (planned.mode === 'state') {
+      await driveState(token, planned.root.id, planned.target, planned.live.version, { conditional: true });
+      return { mode: 'state', acknowledged: false, map: planned.map };
+    }
     await driveEdit(token, planned.root.id, { live: planned.live, map: planned.map, expected: planned.expected });
     return { mode: 'edit', acknowledged: false, map: planned.map };
   }
@@ -700,23 +862,15 @@ async function settleDeclaredBpf(input) {
     if (attempt.declarationSha256 !== declarationSha256) {
       throw coded(CODES.pending, `${label}: an earlier change of this flow is not proved, and the declaration it was sent from has changed; restore that declaration to finish it`);
     }
-    if (!committed) {
-      if (effects.some((e) => e.effect === 'create') || (await readLive(id)).missing) {
-        if (createMap().id !== id) throw coded(CODES.pending, `${label}: the pending create is at another id than the catalog derives`);
-        await driveCreate(token, id, null, true);
-        return finalProof(id, expected, createMap().map, 'adopted', false);
-      }
-      const live = await readLive(id);
-      return finalProof(id, expected, positionalMap(flow, live.view.projection), 'adopted', false);
-    }
+    if (!committed) return proveUncommitted(token, id, expected, attempt, effects);
     const origin = (committed.records.find((r) => r.kind === ROOT_KIND) || {}).origin || 'adopted';
     const held = (committed.consumerState && committed.consumerState.stages) || [];
     const live = await readLive(id);
     // The status the change was meant to end in, when the row as it is now carries exactly what was sent. A row that
-    // carries the sent body but is still Draft is an edit stopped between its body and its own activation.
+    // carries the sent body in the other status is a change stopped between its body and its own state write.
     const target = live.missing ? null : statusFor(expected, live.view.projection);
-    if (target === null || (target !== live.view.status && !(target === ACTIVE && effects.length))) {
-      if (!effects.length) throw coded(CODES.pending, `${label}: an earlier change of this flow was prepared and not sent; re-run with the same declaration and the edit switch to finish it`);
+    if (target === null || (target !== live.view.status && !effects.length)) {
+      if (!effects.length) throw coded(CODES.pending, `${label}: an earlier change of this flow was prepared and is not on the row; nothing of it is sent from this attempt, which stays pending`);
       throw coded(CODES.pending, `${label}: an earlier edit of this flow is not proved by the row as it is now; it is not sent again`);
     }
     // An edit's map is derived again (held ids, catalog ids for the new children); a re-adoption's is positional.
@@ -724,10 +878,19 @@ async function settleDeclaredBpf(input) {
     const fits = mapFits(edited, live.view.projection);
     if (!fits && !Array.isArray(flow.stages)) throw coded(CODES.pending, `${label}: an earlier change of this flow cannot be matched to its stages; re-run with the declaration it was made from`);
     const map = fits ? edited : positionalMap(flow, live.view.projection);
+    if (!effects.length) {
+      // A re-adoption (no write), or a change whose first write was never recorded: the row already carries it.
+      const rebased = !(expected.baseObservation && expected.baseObservation.savedSha256 === committed.proof.savedSha256);
+      // Binding the flow's current body again (a re-adoption) is the maker's decision, on this run as on the first.
+      if (rebased && !approved) {
+        throw coded(CODES.adoptionRequired, `${label}: an earlier re-adoption of this flow is proved by reading, but binding its current body again needs the adoption approval adopt:bpf:${key}; the attempt is kept`);
+      }
+      return finalProof(id, expected, map, origin, false);
+    }
     for (const e of effects) {
       if (e.state === 'confirmed') continue;
-      // The edit's own activation is finished below (driveState sends it only when it is definitely unsent).
-      if (e.effect === 'state' && e.desiredState === ACTIVE && live.view.status !== ACTIVE) continue;
+      // The change's own final state write is settled below.
+      if (e.effect === 'state' && e.desiredState === target && live.view.status !== target) continue;
       if (e.state === 'definitely-unsent') throw coded(CODES.pending, `${label}: an earlier edit of this flow has a write that was never sent`);
       if (e.effect === 'state') {
         if (e.desiredState === live.view.status) store.confirmEffect(e.token, { observedState: e.desiredState });
@@ -736,9 +899,17 @@ async function settleDeclaredBpf(input) {
         store.confirmEffect(e.token, { observedSha256: e.desiredSha256 });
       }
     }
-    // The body is on the row and proved; only the edit's own activation is missing. It is sent (once, against the
-    // version of this read) when it never left; one that may have left is proved by reading, never sent again.
-    if (target === ACTIVE && live.view.status !== ACTIVE) await driveState(token, id, ACTIVE, live.version, { conditional: true });
+    if (target !== live.view.status) {
+      // The body is on the row and proved; only the change's own state write is missing. That is a write to a workflow
+      // that already exists, so by default it is refused before anything is sent, whatever its record says.
+      if (!switchOn) {
+        throw coded('workflow-edit-refused', `${label}: an earlier change is on the row but the flow is not ${target}; setting it ${target} is a state change of a `
+          + `workflow that already exists, so nothing is sent and the attempt stays pending. ${EDIT_REFUSED_REMEDY}`);
+      }
+      // Sent (once, against the version of this read) only when its record says it never left; one that may have left
+      // is proved by reading, never sent again.
+      await driveState(token, id, target, live.version, { conditional: true });
+    }
     // A Draft state effect the row has since left (the edit's own Active) is proved by the later Active write.
     for (const e of attemptOf(token).effects) {
       if (e.state !== 'confirmed' && e.effect === 'state' && e.desiredState === DRAFT) {
@@ -750,10 +921,58 @@ async function settleDeclaredBpf(input) {
     return finalProof(id, expected, map, origin, false);
   }
 
-  const out = await runManagedFeature({
-    phase, family: FAMILY, key, label, knownScopes: [], knownIds: [], store, barrier, halt,
-    resolve, plan, apply, prove, ensureMembership,
-  });
+  /**
+   * Recovery of an attempt with no committed group: a create, or a read-only adoption. Only the attempt's own CREATE
+   * may continue as a create, and only by proving it (resumeCreate is what sends a create again, when the row is
+   * proved absent). The discriminator is positive: no base generation, no base observation, no base proof — what
+   * expectedOf records for a create and never for an adoption. Neither "not committed" nor "the row is absent" is
+   * creation authority: an adoption whose row is gone stops, nothing created.
+   */
+  async function proveUncommitted(token, id, expected, attempt, effects) {
+    const isCreate = attempt.baseGeneration === null && expected.baseObservation === null && expected.baseProofSha256 === null;
+    if (isCreate) {
+      if (createMap().id !== id) throw coded(CODES.pending, `${label}: the pending create is at another id than the catalog derives`);
+      const create = effects.find((e) => e.effect === 'create') || null;
+      if (!create || create.state === 'definitely-unsent') {
+        if (await readVersion(id)) throw coded('create-identity-conflict', `${label}: a workflow already holds the id ${id}, and no create of this build reached the server; nothing is bound to it`);
+        throw coded(CODES.pending, `${label}: its create never left and the row is absent; it is not sent from here`);
+      }
+      const { acknowledged } = await finishCreate(token, id, null);
+      return finalProof(id, expected, createMap().map, acknowledged ? 'created' : 'adopted', acknowledged);
+    }
+    if (effects.length) throw coded('create-completion-required', `${label}: an earlier adoption of ${id} recorded a write, which an adoption never makes; nothing is sent or bound`);
+    const live = await readLive(id);
+    if (live.missing) {
+      throw coded('create-completion-required', `${label}: the flow ${id} an earlier run was adopting is gone; an adoption never becomes a create, so nothing is created or bound`);
+    }
+    return finalProof(id, expected, positionalMap(flow, live.view.projection), 'adopted', false);
+  }
+
+  // The feature's own checks on every path (runManagedFeature `preflight`), before anything is read into the
+  // workspace or sent: the local copy of every row this attempt may touch holds no unsent edit. No request is made.
+  async function preflight({ committed, pending }) {
+    const ids = [committed && committed.root && committed.root.id, pending && pending.root && pending.root.id, pending && pending.expected && pending.expected.rootId];
+    if (!committed) {
+      try { ids.push(identityFor('bpf', key, { catalog }).id); } catch { /* resolve reports a catalog without this flow */ }
+    }
+    for (const id of ids) if (id) await guard.assertClean(id);
+  }
+
+  // A create no answer acknowledged (runManagedFeature `resumeCreate`): is its row there, by the id the create names?
+  // A workflow row has one layer (no unpublished/published split), so one read answers for both; a failed read throws.
+  async function resumeCreate({ pending }) {
+    return { root: (await readVersion(pending.root.id)) ? 'present' : 'absent' };
+  }
+
+  let out;
+  try {
+    out = await runManagedFeature({
+      phase, family: FAMILY, key, label, knownScopes: [], knownIds: [], store, barrier, halt,
+      preflight, resolve, plan, apply, prove, ensureMembership, resumeCreate, adoptionApproved: approved,
+    });
+  } finally {
+    await guard.restoreStaged();
+  }
   const group = out.committedGroup || null;
   const id = group && group.root ? group.root.id : null;
   const decl = group && group.consumerState ? group.consumerState.declaration : null;

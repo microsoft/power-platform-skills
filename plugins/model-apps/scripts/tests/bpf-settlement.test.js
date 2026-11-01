@@ -134,15 +134,22 @@ const GROWN = {
   ],
 };
 
-test('a create whose answer is lost is not sent again: a read at the reserved ids proves it and the flow settles', async () => {
+test('a create whose answer is lost is not sent again: a read at the reserved ids proves it, and binding it needs the adopt approval', async () => {
   const wire = createWorkflowWire();
   const dir = makeTempDir('bpf-settle-');
   wire.script((e) => e.method === 'POST' && e.path === 'workflows', { error: 'socket hang up', code: 'ECONNRESET' });
-  const out = await settle(wire, dir, FLOW);
+  const first = await settle(wire, dir, FLOW);
+  // No answer acknowledged the create, so the row the read finds is not known to be this build's.
+  assert.equal(first.error && first.error.code, CODES.adoptionRequired);
+  assert.deepEqual(writeLines(wire, first.from), ['POST workflows'], 'one create, not activated');
+  assert.deepEqual(first.membership, []);
+  assert.ok(first.p.store.readGroup('bpf', KEY).pending, 'the attempt is kept');
+  const out = await settle(wire, dir, FLOW, { approvals: approve() });
   assert.ifError(out.error);
-  assert.deepEqual(writeLines(wire, out.from), ['POST workflows', 'PATCH workflows(<id>)'], 'one create, then the activation');
+  assert.deepEqual(writeLines(wire, out.from), ['PATCH workflows(<id>)'], 'then only the activation');
   const { rootId, childIds } = reservedFor();
   assert.deepEqual(idsOf(committedOf(out.p)), { [KEY]: rootId, ...childIds });
+  assert.deepEqual(committedOf(out.p).records.map((r) => r.origin), committedOf(out.p).records.map(() => 'adopted'));
   assert.equal(wire.row(rootId).statecode, 1);
   assert.equal(out.membership.length, 1);
 });
@@ -328,10 +335,13 @@ test('a create whose answer is lost and that has not appeared stays pending and 
   assert.equal(still.error && still.error.code, CODES.pending);
   assert.deepEqual(writesSince(wire, still.from), [], 'an unproved create is not sent again');
 
-  // The service carried the create out after all.
+  // The service carried the create out after all. No answer said so, so binding it needs the adopt approval.
   const id = String(sent.workflowid).toLowerCase();
   wire.rows.set(id, { ...sent, kind: 'bpf', workflowid: id, statecode: 0, statuscode: 1, version: 1 });
-  const out = await settle(wire, dir, FLOW);
+  const unapproved = await settle(wire, dir, FLOW);
+  assert.equal(unapproved.error && unapproved.error.code, CODES.adoptionRequired);
+  assert.deepEqual(writesSince(wire, unapproved.from), [], 'nothing is sent before the approval');
+  const out = await settle(wire, dir, FLOW, { approvals: approve() });
   assert.ifError(out.error);
   assert.equal(out.result.id, id);
   assert.deepEqual(writeLines(wire, out.from), ['PATCH workflows(<id>)'], 'only its own activation is sent');
@@ -340,9 +350,40 @@ test('a create whose answer is lost and that has not appeared stays pending and 
   assert.deepEqual(idsOf(group), { [KEY]: id, ...reservedFor().childIds });
   assert.equal(out.membership.length, 1);
 });
-test('an edit stopped between its body and its own activation is finished by a re-run: a refused activation is sent once more, a lost one is only read', async () => {
-  for (const answer of [{ statusCode: 400, body: { error: { code: '0x80040203', message: 'busy' } }, unapplied: true }, { error: 'socket hang up', code: 'ECONNRESET', unapplied: true }]) {
-    const refused = Boolean(answer.statusCode);
+test('an edit stopped between its body and its own activation: only a conditional 412 proves no start, and only the switch sends it again', async () => {
+  const { wire, dir, id } = await created();
+  let bodySeen = false;
+  wire.script((e) => {
+    if (e.method === 'PATCH' && e.body && e.body.xaml) bodySeen = true;
+    return bodySeen && e.method === 'PATCH' && e.body && e.body.statecode === 1;
+  }, { statusCode: 412, body: { error: { code: '0x80060882', message: 'precondition failed' } }, unapplied: true });
+  const first = await settle(wire, dir, GROWN, { opts: SWITCH });
+  assert.equal(first.error && first.error.code, 'bpf-drift', 'a refused precondition reads as drift');
+  assert.equal(wire.row(id).statecode, 0, 'left Draft with the new body');
+  assert.deepEqual(first.membership, []);
+
+  // Without the switch the rerun may only read: setting the existing flow Active is a state change of a live row.
+  const refused = await settle(wire, dir, GROWN);
+  assert.equal(refused.error && refused.error.code, 'workflow-edit-refused');
+  assert.deepEqual(writesSince(wire, refused.from), [], 'no write without the switch');
+
+  const again = await settle(wire, dir, GROWN, { opts: SWITCH });
+  assert.ifError(again.error);
+  assert.equal(again.result.recovered, true);
+  const writes = writesSince(wire, again.from);
+  assert.deepEqual(writes.map((e) => e.body), [{ statecode: 1, statuscode: 2 }], 'only the activation, sent once more');
+  assert.equal(ifMatchOf(writes[0]), `W/"${wire.row(id).version - 1}"`, 'against the version just read');
+  assert.equal(wire.row(id).statecode, 1);
+  assert.equal(again.membership.length, 1);
+  assert.ok(idsOf(committedOf(again.p))['stage:resolve']);
+});
+
+test('an answered refusal or a lost answer to an activation is not proof that it never started: it is never sent again', async () => {
+  const answers = [
+    ['generic-400', { statusCode: 400, body: { error: { code: '0x80040203', message: 'busy' } }, unapplied: true }, 'workflow-state-path-unavailable'],
+    ['lost', { error: 'socket hang up', code: 'ECONNRESET', unapplied: true }, CODES.pending],
+  ];
+  for (const [label, answer, firstCode] of answers) {
     const { wire, dir, id } = await created();
     let bodySeen = false;
     wire.script((e) => {
@@ -350,23 +391,104 @@ test('an edit stopped between its body and its own activation is finished by a r
       return bodySeen && e.method === 'PATCH' && e.body && e.body.statecode === 1;
     }, answer);
     const first = await settle(wire, dir, GROWN, { opts: SWITCH });
-    assert.equal(first.error && first.error.code, refused ? 'workflow-state-path-unavailable' : CODES.pending);
-    assert.equal(wire.row(id).statecode, 0, 'left Draft with the new body');
-    assert.deepEqual(first.membership, []);
-
+    assert.equal(first.error && first.error.code, firstCode, label);
+    const { effects } = first.p.store.readGroup('bpf', KEY);
+    assert.deepEqual(effects.map((e) => e.state).slice(-1), ['unconfirmed'], `${label}: the activation stays unconfirmed`);
     const again = await settle(wire, dir, GROWN, { opts: SWITCH });
-    if (refused) {
-      assert.ifError(again.error);
-      assert.equal(again.result.recovered, true);
-      const writes = writesSince(wire, again.from);
-      assert.deepEqual(writes.map((e) => e.body), [{ statecode: 1, statuscode: 2 }], 'only the activation, sent once more');
-      assert.equal(ifMatchOf(writes[0]), `W/"${wire.row(id).version - 1}"`, 'against the version just read');
-      assert.equal(wire.row(id).statecode, 1);
-      assert.equal(again.membership.length, 1);
-      assert.ok(idsOf(committedOf(again.p))['stage:resolve']);
-    } else {
-      assert.equal(again.error && again.error.code, CODES.pending, 'a lost activation is never sent again');
-      assert.deepEqual(writesSince(wire, again.from), []);
-    }
+    assert.equal(again.error && again.error.code, CODES.pending, label);
+    assert.deepEqual(writesSince(wire, again.from), [], `${label}: never sent again`);
+    assert.equal(wire.row(id).statecode, 0);
+  }
+  // The same holds for a new flow's own activation: it is never deleted and never sent again.
+  const wire = createWorkflowWire();
+  const dir = makeTempDir('bpf-settle-');
+  wire.script((e) => e.method === 'PATCH', answers[0][1]);
+  const out = await settle(wire, dir, FLOW);
+  assert.equal(out.error && out.error.code, 'workflow-state-path-unavailable');
+  const again = await settle(wire, dir, FLOW);
+  assert.equal(again.error && again.error.code, CODES.pending);
+  assert.deepEqual(writesSince(wire, again.from), []);
+  assert.deepEqual(wire.deleted, []);
+});
+
+const flowCopy = (dir, id) => [path.join(dir, 'sdk', 'business-process-flows', `${id}.json`), path.join(dir, 'sdk', '.metadata', 'business-process-flows', `${id}.meta.json`)];
+const causeCategory = (err) => { for (let e = err; e; e = e.cause) if (e.category) return e.category; return null; };
+
+test('a local copy with an edit no run sent stops every path before any request and is kept byte for byte', async () => {
+  const { wire, dir, id } = await created();
+  const p = await processOver(wire, dir);
+  await p.sdk.updateElement('bpf', id, '/stages/0/name', 'Edited by hand');
+  const [file] = flowCopy(dir, id);
+  const bytes = fs.readFileSync(file);
+  for (const [flow, extra] of [[FLOW, {}], [GROWN, { opts: SWITCH }], [{ ...FLOW, status: 'Draft' }, { opts: SWITCH }], [FLOW, {}]]) {
+    const out = await settle(wire, dir, flow, extra);
+    assert.equal(out.error && out.error.code, 'create-completion-required');
+    assert.equal(causeCategory(out.error), 'workspace-copy-unsent-edits');
+    assert.deepEqual(wire.log.slice(out.from), [], 'no request at all');
+    assert.deepEqual(fs.readFileSync(file), bytes, 'the local copy is kept');
+  }
+  for (const f of flowCopy(dir, id)) fs.rmSync(f, { force: true });
+  const next = await settle(wire, dir, FLOW);
+  assert.ifError(next.error);
+  assert.equal(next.result.noop, true);
+});
+
+test('an approved adoption whose row is gone before it is bound never recreates it', async () => {
+  const seed = await created();
+  const wire = seed.wire;
+  const dir = makeTempDir('bpf-settle-');
+  const failing = async () => { throw new Error('solution membership failed'); };
+  const first = await settle(wire, dir, FLOW, { approvals: approve(), ensureMembership: failing });
+  assert.ok(first.error);
+  assert.deepEqual(writesSince(wire, first.from), []);
+  wire.rows.delete(seed.id);
+  for (const extra of [{}, { approvals: approve() }, { approvals: approve(), opts: SWITCH }]) {
+    const out = await settle(wire, dir, FLOW, extra);
+    assert.ok(out.error, 'it stops');
+    assert.deepEqual(writesSince(wire, out.from), [], 'no POST and no PATCH');
+    assert.equal(wire.rows.size, 0, 'no row is recreated');
   }
 });
+
+test('a state-only change is one conditional state write with no body, and is refused unsent by default', async () => {
+  const { wire, dir, id } = await created({ ...FLOW, status: 'Draft' });
+  const active = { ...FLOW, status: 'Active' };
+  const refused = await settle(wire, dir, active);
+  assert.equal(refused.error && refused.error.code, 'workflow-edit-refused');
+  assert.deepEqual(wire.log.slice(refused.from), [], 'the default refusal sends no request');
+  const before = wire.row(id).xaml;
+  const out = await settle(wire, dir, active, { opts: SWITCH });
+  assert.ifError(out.error);
+  assert.deepEqual(writeLines(wire, out.from), ['PATCH workflows(<id>)']);
+  const [write] = writesSince(wire, out.from);
+  assert.deepEqual(write.body, { statecode: 1, statuscode: 2 });
+  assert.equal(ifMatchOf(write), `W/"${wire.row(id).version - 1}"`);
+  assert.equal(wire.row(id).xaml, before, 'no definition push');
+  assert.equal((await settle(wire, dir, active)).result.noop, true);
+});
+
+test('a live flow whose XAML holds an activity this module does not model is refused on every path, unsent', async () => {
+  const foreign = [
+    // An opaque activity in a stage's own Activities collection (a stage action).
+    ['stage', (xaml) => { let n = 0; return xaml.replace(/<sco:Collection x:TypeArguments="Activity" x:Key="Activities">/g, (tag) => (++n === 2 ? `${tag}<Sequence DisplayName="Foreign stage activity"><WriteLine Text="foreign" /></Sequence>` : tag)); }],
+    // Another activity inside a control step.
+    ['step', (xaml) => xaml.replace(/(<Sequence DisplayName="ControlStep[^"]*">)/, '$1<WriteLine Text="foreign" />')],
+  ];
+  for (const [where, mutate] of foreign) {
+    const { wire, dir, id } = await created();
+    const row = wire.row(id);
+    row.xaml = mutate(row.xaml);
+    assert.match(row.xaml, /foreign/, where);
+    row.version += 1;
+    for (const [flow, extra] of [[FLOW, {}], [{ ...FLOW, order: 124 }, { opts: SWITCH }]]) {
+      const out = await settle(wire, dir, flow, extra);
+      assert.equal(out.error && out.error.code, 'bpf-shape-unsupported', where);
+      assert.deepEqual(writesSince(wire, out.from), [], `${where}: nothing is sent`);
+    }
+    // Nor is it adopted by a workspace that does not manage it.
+    const adopted = await settle(wire, makeTempDir('bpf-settle-'), FLOW, { approvals: approve() });
+    assert.equal(adopted.error && adopted.error.code, 'bpf-shape-unsupported', `${where}: adoption`);
+    assert.deepEqual(writesSince(wire, adopted.from), []);
+    assert.match(wire.row(id).xaml, /foreign/, `${where}: the activity survives`);
+  }
+});
