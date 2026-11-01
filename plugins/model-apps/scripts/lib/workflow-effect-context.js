@@ -12,9 +12,12 @@
 //   - a read (GET, HEAD) always passes with its ordinary retry and spends nothing, even for a row whose earlier
 //     write is uncertain: the fresh proof that settles an uncertain write needs those reads;
 //   - inside a context, the one mutation that matches the effect (shape, row, body hash or state, `If-Match`) is sent
-//     exactly once, marked dispatching before it leaves; any other mutation is refused unsent;
+//     exactly once, marked dispatching before it leaves; any other mutation is refused unsent. The match is against
+//     the persisted record, which the context must equal and whose attempt must still own it and be rooted at its
+//     row: a context that is not the record sends nothing;
+//   - a `$batch` is read whole (parseBatch); one the gate cannot read is refused inside a context;
 //   - outside a context, a mutation passes as it always did, unless it targets a row whose persisted effect may have
-//     been sent and is not yet confirmed.
+//     been sent and is not yet confirmed (then an unreadable `$batch` is refused too, as it may target that row).
 // Nothing builds a gate or opens a context until a rule or process flow is declared, so no request changes before then.
 
 const crypto = require('node:crypto');
@@ -118,30 +121,98 @@ function classify(method, url, rawBody) {
 //   {"statecode":1,"statuscode":2}
 //   --changeset_1--
 //   --batch_1--
-// Every line that starts with `--` is a boundary of the batch or of a change set; a segment with an HTTP request
-// line is one part. Its headers run to the first blank line, and its body is the rest of the segment.
+// The body is read strictly, because a part the gate cannot read is a part it cannot account for:
+//   - the first non-blank line opens the batch (`--<boundary>`), and the batch must end with its close delimiter
+//     (`--<boundary>--`); a delimiter is a line that is exactly one of those, so a body line that merely starts with
+//     `--` is body;
+//   - each part's MIME headers run to the first blank line. A `multipart/mixed` part is a change set: its content is
+//     a nested batch with its own boundary, and nothing else. An `application/http` part's content is one request: a
+//     request line (`METHOD url HTTP/1.x`), its headers to the next blank line, and the rest is its body. A part of
+//     any other type, a request line the gate does not know, a part with no request, or a batch with no part at all is
+//     an error;
+//   - text after the outer close delimiter is ignored only when it is blank.
+// Answers { parts, error }: `error` names the first thing that could not be read, and then `parts` is not to be used.
 // See: https://learn.microsoft.com/en-us/power-apps/developer/data-platform/webapi/execute-batch-operations-using-web-api
-function batchParts(rawBody) {
+// and the multipart grammar of https://www.rfc-editor.org/rfc/rfc2046#section-5.1.1
+const REQUEST_LINE = /^(GET|HEAD|POST|PATCH|PUT|DELETE)\s+(\S+)\s+HTTP\/1\.[01]$/i;
+
+function parseBatch(rawBody, headerBoundary = null) {
   const text = Buffer.isBuffer(rawBody) ? rawBody.toString('utf8') : String(rawBody == null ? '' : rawBody);
-  const segments = text.split(/\r?\n(?=--)/).map((s) => s.replace(/^--[^\r\n]*\r?\n?/, ''));
+  const lines = text.split(/\r?\n/);
   const parts = [];
-  for (const seg of segments) {
-    const lines = seg.split(/\r?\n/);
-    const at = lines.findIndex((l) => /^(GET|HEAD|POST|PATCH|PUT|DELETE)\s+\S+\s+HTTP\/1\.[01]\s*$/i.test(l));
-    if (at < 0) continue;
-    const [, method, url] = /^(\S+)\s+(\S+)/.exec(lines[at]);
-    const headers = {};
-    let i = at + 1;
-    for (; i < lines.length && lines[i].trim() !== ''; i++) {
-      const c = lines[i].indexOf(':');
-      if (c > 0) headers[lines[i].slice(0, c).trim()] = lines[i].slice(c + 1).trim();
+  const fail = (error) => ({ parts: [], error });
+  const blank = (l) => l.trim() === '';
+
+  // Read the multipart body in lines[from, to) whose boundary is `boundary`; answers an error string or null.
+  function readMultipart(from, to, boundary, outer) {
+    let i = from;
+    while (i < to && blank(lines[i])) i += 1;
+    if (i >= to) return 'the batch has no part';
+    const open = /^--(\S+?)\s*$/.exec(lines[i]);
+    if (!open || open[1].endsWith('--')) return 'the batch does not open with a boundary line';
+    if (boundary !== null && open[1] !== boundary) return 'the batch opens with another boundary than its content type names';
+    const b = open[1];
+    const delim = `--${b}`;
+    const close = `--${b}--`;
+    let start = i + 1;
+    let closedAt = -1;
+    const segments = [];
+    for (let j = start; j < to; j += 1) {
+      const l = lines[j].replace(/\s+$/, '');
+      if (l === delim) { segments.push([start, j]); start = j + 1; } else if (l === close) { segments.push([start, j]); closedAt = j; break; }
     }
-    parts.push({ method: method.toUpperCase(), url, headers, body: lines.slice(i + 1).join('\n').trim() || null });
+    if (closedAt < 0) return 'the batch has no close delimiter';
+    for (let j = closedAt + 1; j < to; j += 1) if (!blank(lines[j])) return outer ? 'text follows the close delimiter' : 'a change set holds more than its parts';
+    for (const [s, e] of segments) {
+      const headers = {};
+      let k = s;
+      for (; k < e && !blank(lines[k]); k += 1) {
+        const c = lines[k].indexOf(':');
+        if (c <= 0) return 'a part header is not a header';
+        headers[lines[k].slice(0, c).trim().toLowerCase()] = lines[k].slice(c + 1).trim();
+      }
+      const type = (headers['content-type'] || '').toLowerCase();
+      if (/^multipart\/mixed\b/.test(type)) {
+        const nested = /boundary="?([^";]+)"?/i.exec(headers['content-type']);
+        if (!nested) return 'a change set names no boundary';
+        const err = readMultipart(k + 1, e, nested[1].trim(), false);
+        if (err) return err;
+        continue;
+      }
+      if (!/^application\/http\b/.test(type)) return `a part is ${type || 'untyped'}, not a request or a change set`;
+      let r = k + 1;
+      while (r < e && blank(lines[r])) r += 1;
+      if (r >= e) return 'a part holds no request';
+      const m = REQUEST_LINE.exec(lines[r].trim());
+      if (!m) return 'a part\'s request line is not one the gate reads';
+      const reqHeaders = {};
+      let h = r + 1;
+      for (; h < e && !blank(lines[h]); h += 1) {
+        const c = lines[h].indexOf(':');
+        if (c <= 0) return 'a request header is not a header';
+        reqHeaders[lines[h].slice(0, c).trim()] = lines[h].slice(c + 1).trim();
+      }
+      parts.push({ method: m[1].toUpperCase(), url: m[2], headers: reqHeaders, body: lines.slice(h + 1, e).join('\n').trim() || null });
+    }
+    return null;
   }
-  return parts;
+
+  const error = readMultipart(0, lines.length, headerBoundary, true);
+  if (error) return fail(error);
+  if (parts.length === 0) return fail('the batch has no request');
+  return { parts, error: null };
 }
 
+/** The request parts of a `$batch` body, or [] when it cannot be read whole (see parseBatch). */
+function batchParts(rawBody) {
+  return parseBatch(rawBody).parts;
+}
 const isRead = (method) => method === 'GET' || method === 'HEAD';
+
+// The fields that say what an effect is: everything but its progress (state, dispatchToken). An absent optional field
+// reads as null, as the store writes it.
+const DESCRIPTOR = ['token', 'attemptToken', 'baseGeneration', 'family', 'key', 'rowId', 'effect', 'request', 'desiredSha256', 'desiredState', 'expectedVersion'];
+const descriptor = (e) => Object.fromEntries(DESCRIPTOR.map((k) => [k, e[k] === undefined ? null : e[k]]));
 
 function uncertainRows(store) {
   const rows = new Set();
@@ -187,30 +258,52 @@ function createWorkflowEffectGate({ store } = {}) {
       if (isRead(m)) return null;
       const ctx = als.getStore();
       const isBatch = m === 'POST' && apiPath(url) === '$batch';
-      const parts = isBatch
-        ? batchParts(body).filter((p) => !isRead(p.method)).map((p) => ({ c: classify(p.method, p.url, p.body), ifMatch: headerValue(p.headers, 'if-match') }))
-        : [{ c: classify(m, url, body), ifMatch: headerValue(headers, 'if-match') }];
+      let parts;
+      if (isBatch) {
+        const ct = headerValue(headers, 'content-type');
+        const declared = ct ? /boundary="?([^";]+)"?/i.exec(ct) : null;
+        const parsed = parseBatch(body, declared ? declared[1].trim() : null);
+        if (parsed.error) {
+          // A batch the gate cannot read whole is refused inside a context: it could carry any write. Outside one,
+          // the legacy client keeps sending what it always sent, unless a row's earlier write is uncertain — then
+          // a batch whose rows cannot be listed may touch that row, so it is refused too.
+          const why = `a $batch was not sent: ${parsed.error}`;
+          if (ctx) throw mismatch(`${why}, so it cannot be held to the ${ctx.effect.effect} of ${ctx.effect.family} "${ctx.effect.key}"`);
+          if (uncertainRows(store).size > 0) throw mismatch(`${why}, and a workflow's earlier change may have been sent and is not yet confirmed`);
+          return null;
+        }
+        parts = parsed.parts.filter((x) => !isRead(x.method)).map((x) => ({ c: classify(x.method, x.url, x.body), ifMatch: headerValue(x.headers, 'if-match') }));
+      } else {
+        parts = [{ c: classify(m, url, body), ifMatch: headerValue(headers, 'if-match') }];
+      }
 
       if (!ctx) {
         // Legacy: unchanged, but for a row whose outcome is unknown.
-        refuseUncertain(parts.map((p) => p.c && p.c.row), `a ${m} of a workflow`);
+        refuseUncertain(parts.map((x) => x.c && x.c.row), `a ${m} of a workflow`);
         return null;
       }
       // A `$batch` of reads only is a read: it passes inside a context as a GET does.
       if (isBatch && parts.length === 0) return null;
 
-      const { effect } = ctx;
-      const what = `the ${effect.effect} of ${effect.family} "${effect.key}"`;
+      // The context is a copy; the persisted record is the authority. The context must be that record — every field
+      // that says what the effect is, who owns it and which row it changes — and the request is matched against the
+      // record, never against the copy, so a context altered after it was persisted sends nothing.
+      const what = `the ${ctx.effect.effect} of ${ctx.effect.family} "${ctx.effect.key}"`;
+      const snap = store.snapshot().envelope;
+      const effect = snap.workflowEffects.find((e) => e.token === ctx.effect.token);
+      if (!effect) throw mismatch(`${what} was not sent: no persisted effect has its token`);
+      if (canonicalJson(descriptor(ctx.effect)) !== canonicalJson(descriptor(effect))) throw mismatch(`${what} was not sent: its context is not the persisted effect`);
+      const attempt = snap.attempts.find((a) => a.token === effect.attemptToken);
+      if (!attempt || attempt.family !== effect.family || attempt.key !== effect.key || attempt.baseGeneration !== effect.baseGeneration) {
+        throw mismatch(`${what} was not sent: its attempt is no longer pending at that generation`);
+      }
+      if (!attempt.root || attempt.root.id !== effect.rowId) throw mismatch(`${what} was not sent: it changes another row than its attempt's root`);
       if (parts.length !== 1) throw mismatch(`a request inside ${what} was not sent: it carries ${parts.length} changes, and the effect is one`);
       if (ctx.sends > 0) throw mismatch(`a second change inside ${what} was not sent: the effect is sent once`);
       const why = matches(effect, parts[0].c, parts[0].ifMatch);
       if (why) throw mismatch(`a request inside ${what} was not sent: ${why}`);
       refuseUncertain([effect.rowId], `${what}`);
-      const persisted = store.snapshot().envelope.workflowEffects.find((e) => e.token === effect.token);
-      if (!persisted || persisted.state !== 'definitely-unsent') throw mismatch(`${what} was not sent: its record is not waiting to be sent`);
-      const attempt = store.snapshot().envelope.attempts.find((a) => a.token === effect.attemptToken);
-      if (!attempt || attempt.baseGeneration !== effect.baseGeneration) throw mismatch(`${what} was not sent: its attempt is no longer pending at that generation`);
-      ctx.sends += 1;
+      if (effect.state !== 'definitely-unsent') throw mismatch(`${what} was not sent: its record is not waiting to be sent`);      ctx.sends += 1;
       const conditional = parts[0].ifMatch !== null;
       return {
         dispatching() {
@@ -243,4 +336,5 @@ module.exports = {
   createWorkflowEffectGate,
   classifyWorkflowRequest: classify,
   batchParts,
+  parseBatch,
 };

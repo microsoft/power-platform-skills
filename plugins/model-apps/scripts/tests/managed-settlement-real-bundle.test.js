@@ -336,3 +336,72 @@ test('a $batch inside a context is one write when it holds exactly one matching 
   assert.equal(wire.log.length, before + 1);
   assert.equal(store.readGroup('bpf', 'account-flow').effects[0].state, 'dispatching');
 });
+
+test('a context that is not the persisted effect sends nothing; the stored effect still sends once, and a 412 re-entry cannot change it', async () => {
+  const wire = createManagedWire();
+  wire.workflows.set(RULE_A, { workflowid: RULE_A, statecode: 0, statuscode: 1 });
+  const { store, client } = await gated(wire);
+  const { runWithWorkflowEffect } = require('../lib/workflow-effect-context.js');
+  const token = ruleAttempt(store, 'account/hide', RULE_A);
+  const stored = store.recordWorkflowEffect({ attemptToken: token, baseGeneration: null, family: 'rule', key: 'account/hide', rowId: RULE_A, effect: 'state', request: { method: 'PATCH', shape: 'workflow-patch' }, desiredState: 'Draft' });
+  const before = wire.log.length;
+  const active = { statecode: 1, statuscode: 2 };
+  // The stored record asks for Draft; a copy that asks for Active is not that record.
+  assert.equal((await errOf(runWithWorkflowEffect({ ...stored, desiredState: 'Active' }, () => client.patch(`${API}/workflows(${RULE_A})`, active)))).code, MISMATCH);
+  assert.equal((await errOf(runWithWorkflowEffect({ ...stored, rowId: RULE_B }, () => client.patch(`${API}/workflows(${RULE_B})`, active)))).code, MISMATCH, 'another row');
+  assert.equal((await errOf(runWithWorkflowEffect({ ...stored, token: 'not-persisted' }, () => client.patch(`${API}/workflows(${RULE_A})`, { statecode: 0, statuscode: 1 })))).code, MISMATCH, 'no record');
+  assert.equal(wire.log.length, before, 'nothing was sent');
+  assert.equal(wire.workflows.get(RULE_A).statecode, 0);
+  assert.deepEqual(store.readGroup('rule', 'account/hide').effects[0], stored, 'the record is unchanged');
+
+  // A 412 sends the record back to definitely-unsent; a re-entry may send it again only as it was recorded.
+  wire.script((e) => e.method === 'PATCH', { statusCode: 412, body: { error: { code: '0x80060882' } }, unapplied: true });
+  const versioned = ruleAttempt(store, 'contact/lock', RULE_B);
+  wire.workflows.set(RULE_B, { workflowid: RULE_B, statecode: 0, statuscode: 1 });
+  const v = store.recordWorkflowEffect({ attemptToken: versioned, baseGeneration: null, family: 'rule', key: 'contact/lock', rowId: RULE_B, effect: 'state', request: { method: 'PATCH', shape: 'workflow-patch' }, desiredState: 'Active', expectedVersion: 'W/"3"' });
+  await errOf(runWithWorkflowEffect(v, () => client.patch(`${API}/workflows(${RULE_B})`, active, { headers: { 'If-Match': 'W/"3"' } })));
+  assert.equal(store.readGroup('rule', 'contact/lock').effects[0].state, 'definitely-unsent');
+  const sent = wire.log.length;
+  assert.equal((await errOf(runWithWorkflowEffect({ ...v, expectedVersion: 'W/"4"' }, () => client.patch(`${API}/workflows(${RULE_B})`, active, { headers: { 'If-Match': 'W/"4"' } })))).code, MISMATCH, 'a re-entry at another version');
+  assert.equal(wire.log.length, sent);
+
+  // The stored Draft record, entered as it was persisted, is sent once.
+  await runWithWorkflowEffect(stored, () => client.patch(`${API}/workflows(${RULE_A})`, { statecode: 0, statuscode: 1 }));
+  assert.equal(sends(wire, (e) => e.method === 'PATCH' && e.path === `workflows(${RULE_A})`), 1);
+  assert.equal(store.readGroup('rule', 'account/hide').effects[0].state, 'dispatching');
+});
+
+test('a $batch the gate cannot read whole is refused unsent inside a context; a whole batch of reads still passes', async () => {
+  const wire = createManagedWire();
+  wire.workflows.set(FLOW, { workflowid: FLOW, statecode: 0, statuscode: 1 });
+  const { store, client } = await gated(wire);
+  const token = store.prepareAttempt({ family: 'bpf', key: 'account-flow', baseGeneration: null, root: { kind: 'bpf', key: 'account-flow', id: FLOW }, knownScopes: [], declarationSha256: H('e') });
+  store.markSending(token, expected(FLOW, 'bpf-v1'));
+  const effect = { attemptToken: token, baseGeneration: null, family: 'bpf', key: 'account-flow', rowId: FLOW, effect: 'state', request: { method: 'PATCH', shape: 'workflow-patch' }, desiredState: 'Active' };
+  const opts = { headers: { 'Content-Type': 'multipart/mixed; boundary=batch_1' } };
+  const get = `--batch_1\r\nContent-Type: application/http\r\nContent-Transfer-Encoding: binary\r\n\r\nGET ${API}/workflows(${FLOW})?$select=statecode HTTP/1.1\r\nAccept: application/json\r\n\r\n`;
+  const patch = `--batch_1\r\nContent-Type: application/http\r\n\r\nPATCH ${API}/workflows(${FLOW}) HTTP/1.1\r\nContent-Type: application/json\r\n\r\n{"statecode":1,"statuscode":2}\r\n`;
+  const envelopes = {
+    empty: '',
+    'not a batch': 'not a parseable OData batch',
+    'no part': '--batch_1--\r\n',
+    'no close delimiter': get,
+    'an unsupported request line': `--batch_1\r\nContent-Type: application/http\r\n\r\nMERGE ${API}/workflows(${FLOW}) HTTP/1.1\r\n\r\n{"statecode":1,"statuscode":2}\r\n--batch_1--\r\n`,
+    'a read beside an untyped part': `${get}--batch_1\r\n\r\nPATCH ${API}/workflows(${FLOW}) HTTP/1.1\r\n\r\n{"statecode":1,"statuscode":2}\r\n--batch_1--\r\n`,
+    'a read beside a part with no request': `${get}--batch_1\r\nContent-Type: application/http\r\n\r\n{"statecode":1,"statuscode":2}\r\n--batch_1--\r\n`,
+    'a preamble before the first boundary': `PATCH ${API}/workflows(${FLOW}) HTTP/1.1\r\n${get}--batch_1--\r\n`,
+    'another boundary than the content type names': get.replace(/batch_1/g, 'batch_2') + '--batch_2--\r\n',
+    'a change set with trailing content': `--batch_1\r\nContent-Type: multipart/mixed; boundary=cs_1\r\n\r\n--cs_1\r\nContent-Type: application/http\r\n\r\nGET ${API}/workflows(${FLOW}) HTTP/1.1\r\n\r\n--cs_1--\r\n${patch.slice('--batch_1\r\n'.length)}--batch_1--\r\n`,
+  };
+  const before = wire.log.length;
+  await withWorkflowEffect({ store, effect }, async () => {
+    for (const [name, body] of Object.entries(envelopes)) assert.equal((await errOf(client.post(`${API}/$batch`, body, opts))).code, MISMATCH, name);
+    assert.equal(wire.log.length, before, 'nothing was sent');
+    assert.equal(store.readGroup('bpf', 'account-flow').effects[0].state, 'definitely-unsent');
+    assert.equal((await client.post(`${API}/$batch`, `${get}${get}--batch_1--\r\n`, opts)).status, 204, 'a whole batch of reads');
+  });
+  assert.equal(wire.log.length, before + 1);
+  assert.equal(store.readGroup('bpf', 'account-flow').effects[0].state, 'definitely-unsent', 'reads spend nothing');
+  // Outside a context, with no uncertain row, the legacy client sends what it always sent.
+  assert.equal((await client.post(`${API}/$batch`, 'not a parseable OData batch', opts)).status, 204);
+});
