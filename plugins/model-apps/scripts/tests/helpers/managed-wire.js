@@ -10,6 +10,11 @@
 //   POST PublishXml {"ParameterXml":"<importexportxml><entities><entity>account</entity></entities></importexportxml>"}
 //        copies the saved layer of every form of `account` to its published layer; a <dashboards><dashboard>id</dashboard>
 //        envelope does the same for one dashboard
+//   PATCH systemforms(<id>)            writes the saved layer
+// The saved layer carries a row version, as the platform's does: the GET answers it as `@odata.etag` (body and ETag
+// header) and every write of the row moves it. The vendored SDK refuses to push an artifact it holds no such token for,
+// so a test that edits a dashboard through the SDK (lib/dashboard-reconcile.js) needs it. The token is kept beside the
+// row, not in it, so `saved.get(id)` stays the row itself.
 // The same two layers for view (savedquery) and chart (savedqueryvisualization) rows, by id (`putQuery`); a table's PublishXml
 // publishes the ones whose `returnedtypecode`/`primaryentitytypecode` is the table, as it publishes its forms.
 // And workflow rows:
@@ -33,21 +38,36 @@ function createManagedWire() {
   const queries = { savedqueries: { saved: new Map(), published: new Map(), table: 'returnedtypecode' }, savedqueryvisualizations: { saved: new Map(), published: new Map(), table: 'primaryentitytypecode' } };
   const log = [];
   const scripted = [];
+  const versions = new Map();
+  let version = 0;
+  const bump = (id) => { version += 1; versions.set(id, `W/"${version}"`); };
   const json = (statusCode, body, headers = {}) => ({ statusCode, headers, body: body === undefined ? '' : JSON.stringify(body) });
   const notFound = () => json(404, { error: { code: '0x80040217', message: 'Does Not Exist' } });
 
   function apply(method, p, body) {
     let m = /^systemforms\(([^)]+)\)\/Microsoft\.Dynamics\.CRM\.RetrieveUnpublished\(\)$/i.exec(p);
-    if (m && method === 'GET') { const r = saved.get(m[1].toLowerCase()); return r ? json(200, { ...r }) : notFound(); }
+    if (m && method === 'GET') {
+      const id = m[1].toLowerCase();
+      const r = saved.get(id);
+      return r ? json(200, { ...r, '@odata.etag': versions.get(id) }, { etag: versions.get(id) }) : notFound();
+    }
     m = /^systemforms\(([^)]+)\)$/i.exec(p);
-    if (m && method === 'GET') { const r = published.get(m[1].toLowerCase()); return r ? json(200, { ...r }) : notFound(); }
-    if (m && method === 'PATCH') { const id = m[1].toLowerCase(); saved.set(id, { ...saved.get(id), ...body }); return json(204); }
+    // A row has one version whichever layer is read, so the published read carries it too (the SDK's pre-push
+    // concurrency read is this GET).
+    if (m && method === 'GET') { const id = m[1].toLowerCase(); const r = published.get(id); return r ? json(200, { ...r, '@odata.etag': versions.get(id) }, { etag: versions.get(id) }) : notFound(); }
+    if (m && method === 'PATCH') {
+      const id = m[1].toLowerCase();
+      saved.set(id, { ...saved.get(id), ...body, formid: id });
+      bump(id);
+      return json(204, undefined, { etag: versions.get(id) });
+    }
     if (/^systemforms$/i.test(p) && method === 'POST') {
       // A create names its own formid. A second create of an id that exists fails on the primary key and changes nothing.
       const id = String(body && body.formid).toLowerCase();
       if (saved.has(id) || published.has(id)) return json(412, { error: { code: '0x80040237', message: 'Cannot insert duplicate key.' } });
       saved.set(id, { description: null, ...body, formid: id });
-      return json(204, undefined, { 'odata-entityid': `${ORIGIN}/api/data/v9.0/systemforms(${id})` });
+      bump(id);
+      return json(204, undefined, { etag: versions.get(id), 'odata-entityid': `${ORIGIN}/api/data/v9.0/systemforms(${id})` });
     }
     m = /^(savedqueries|savedqueryvisualizations)\(([^)]+)\)(\/Microsoft\.Dynamics\.CRM\.RetrieveUnpublished\(\))?$/i.exec(p);
     if (m && method === 'GET') { const q = queries[m[1].toLowerCase()]; const r = (m[3] ? q.saved : q.published).get(m[2].toLowerCase()); return r ? json(200, { ...r }) : notFound(); }
@@ -118,6 +138,7 @@ function createManagedWire() {
     putForm(row, { publishedToo = false } = {}) {
       const r = { description: null, ...row, formid: row.formid.toLowerCase() };
       saved.set(r.formid, r);
+      bump(r.formid);
       if (publishedToo) published.set(r.formid, { ...r });
       return r;
     },
