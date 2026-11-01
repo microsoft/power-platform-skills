@@ -223,7 +223,7 @@ function createStableCreates({ spec, sdk, store = null, barrier = null, basePort
   // layer is read with the shared reader, and the group owes its table's publish of exactly that layer (managed-scope-publisher.js
   // pays it through publishManagedScope). Shared by `settle` and `recoverUndeclared`, so both prove by the one recorded expectation.
   function proverFor({ kind, key, label, client, scope }) {
-    const { CODES } = require('./managed-bindings.js');
+    const { CODES, rootCreateAcknowledged } = require('./managed-bindings.js');
     const { readSavedQueryLayers } = require('./savedquery-published.js');
     const fam = FAMILY[kind];
     return async ({ expected, applied: sent }) => {
@@ -243,7 +243,9 @@ function createStableCreates({ spec, sdk, store = null, barrier = null, basePort
       const layers = await readSavedQueryLayers(kind, client, { root: { id } });
       const g = store.readGroup(kind, key);
       const rec = committedRecord(g.committed, kind, key);
-      const ack = (sent && sent.created === true) || !!(g.pending && g.pending.acknowledgedRoot);
+      // Own-create evidence only: this run's acknowledged create, or the attempt's durable create acknowledgement
+      // (rootCreateAcknowledged reads the attempt and its saved observation, and never counts an edit's).
+      const ack = (sent && sent.created === true) || (!!g.pending && rootCreateAcknowledged(g.pending));
       const env = store.snapshot().envelope;
       return {
         acknowledgedRoot: ack,
@@ -305,7 +307,10 @@ function createStableCreates({ spec, sdk, store = null, barrier = null, basePort
           baseProofSha256: committed && committed.proof ? committed.proof.savedSha256 : null,
           sentProjectionSha256: projectionBaseline(desired).intentSha256,
           preservationSha256: intentSha256(kept),
-          baseObservation: null,
+          // A create of a new root records no base; anything else changes (or binds) a row this run read first, and says so,
+          // so no answer to it can be taken for a create (noteSaved refuses the flag, rootCreateAcknowledged ignores it) and
+          // it is never resumed as a create (resumableCreate).
+          baseObservation: create ? null : { rowVersion: null, savedSha256: typeof source.observedSha256 === 'string' ? source.observedSha256 : null },
           children: [],
         },
         declarationSha256: intentSha256(source.intent),
@@ -337,6 +342,10 @@ function createStableCreates({ spec, sdk, store = null, barrier = null, basePort
     const once = () => runManagedFeature({
       phase, family: kind, key, label, store, barrier: barrier || undefined, knownScopes: [scope],
       ...(sendObserver ? { sendObserver } : {}),
+      // A publish of the table that may have been sent (a lost answer, journaled with this group as debt or as a carried
+      // group) is settled by the store's read-only confirmation with this client before a change is planned over it
+      // (settleEarlierPublication); without a client a feature run has no way to confirm it and only refuses.
+      client,
       adoptionApproved,
       halt: (ph, lb, code, { cause } = {}) => halt(ph, lb, code, { cause, findings: (cause && cause.findings) || [] }),
       preflight: async ({ committed, pending }) => {
@@ -416,7 +425,7 @@ function createStableCreates({ spec, sdk, store = null, barrier = null, basePort
       const stopped = Symbol('stopped');
       try {
         const out = await runManagedFeature({
-          phase, family: kind, key, label, store, barrier: barrier || undefined, knownScopes: table ? [scope] : [],
+          phase, family: kind, key, label, store, barrier: barrier || undefined, knownScopes: table ? [scope] : [], client,
           adoptionApproved: isApproved(authorizedAdoption, kind, key),
           halt: (ph, lb, code, { cause } = {}) => {
             const made = halt(ph, lb, code, { cause, findings: (cause && cause.findings) || [] });

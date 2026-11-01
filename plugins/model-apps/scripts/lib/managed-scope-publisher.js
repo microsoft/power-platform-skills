@@ -17,6 +17,10 @@
 //
 // A refusal stops the build (the caller's halt), and leaves the table as publishManagedScope left it: a scope that is not shown
 // safe, or whose send is not confirmed, is blocked for the rest of the run, and its debt stays in the store for the next run.
+//
+// Every publish is sent with `carry`: a covered group that owes nothing but is already live at its desired hash is journaled
+// under the send too (carried), so a publish whose answer is lost fences its table across runs even when it paid no debt — the
+// next build sends neither a change of a managed group on that table nor another publish of it until the store settles it.
 
 const { publishManagedScope } = require('./managed-feature-contract.js');
 const { classifyPersisted } = require('./managed-bindings.js');
@@ -89,6 +93,9 @@ function createManagedTablePublisher({ store, barrier, client, halt } = {}) {
             groups: owedOn(table),
             carry: true,
             publish: async () => {
+              // A refused PublishXml is RETURNED (the client answers { status }, publishTablesXml { ok: false }), so it is
+              // thrown here: returning normally would let the read-back "confirm" a carried group live before the send.
+              // Never `definiteNoStart`: an answer, or the lack of one, is not proof the publish never started.
               const r = await publishTablesXml(client, [table]);
               if (!r.ok) throw Object.assign(new Error(r.reason || `the publish of table ${table} was refused`), { code: 'publish-failed' });
             },

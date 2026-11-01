@@ -391,6 +391,9 @@ async function planViewReconcile({ view, sdk, resolveValue, primaryName }, ctx =
   plan.changed = PARTS.filter((p) => canonicalJson(desired[p]) !== canonicalJson(live[p]));
   plan.desired = desired;
   plan.baseline = projectionBaseline(desired);
+  // The row as it was read before any change: an edit's base observation (lib/creates-stable-build.js), so the store never
+  // takes an answer to that edit for a create (managed-bindings.js rootCreateAcknowledged).
+  plan.observedSha256 = projectionBaseline(live).intentSha256;
 
   const verdict = partsDriftVerdict(binding, live, desired);
   plan.origin = binding ? binding.origin : 'adopted';

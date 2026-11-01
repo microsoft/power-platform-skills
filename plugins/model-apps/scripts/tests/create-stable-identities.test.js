@@ -18,6 +18,7 @@ const { createStableCreates } = require('../lib/creates-stable-build.js');
 const { createPassthroughCreates } = require('../lib/creates-passthrough.js');
 const { openManagedBindings, openManagedContext, readManagedManifest, PREFIX } = require('../lib/managed-bindings.js');
 const { createPublicationBarrier } = require('../lib/publication-barrier.js');
+const { createAttemptSendObserver } = require('../lib/managed-feature-contract.js');
 const { buildModelApp } = require('../build-model-app.js');
 const { createFakeBuildOrg } = require('./helpers/fake-app-build-org.js');
 const { seedManagedDebt } = require('./helpers/managed-debt.js');
@@ -68,15 +69,18 @@ const storeOf = (org, dir, barrier = null) => openManagedBindings({ workspaceDir
 // table is screened at the send, exactly as in production. The barrier's transport shape is { method, url, headers, body }
 // answering { statusCode, headers, body } (lib/dataverse-auth.js makeRequest); the fake's is (url, body, options) answering
 // { status, headers, body } with the body parsed. A request the gate rewrote (a partly withheld publish) carries new text.
-function gatedClient(org, barrier) {
+// With `observer` (managed-feature-contract.js createAttemptSendObserver) the attempt send observer sits INSIDE the gate,
+// as build-model-app.js nests it.
+function gatedClient(org, barrier, observer = null) {
   const text = (b) => (b == null ? '' : typeof b === 'string' ? b : JSON.stringify(b));
-  const gated = barrier.gateRequest(async (req) => {
+  const transport = async (req) => {
     const m = req.method.toLowerCase();
     let body = req.raw;
     if (req.body !== text(req.raw)) { try { body = JSON.parse(req.body); } catch { body = req.body; } }
     const res = m === 'get' ? await org.httpClient.get(req.url, req.options) : await org.httpClient[m](req.url, body, req.options);
     return { statusCode: res.status, headers: res.headers || {}, body: text(res.body), res };
-  });
+  };
+  const gated = barrier.gateRequest(observer ? observer.wrap(transport) : transport);
   const send = async (method, url, raw, options) => {
     const answer = await gated({ method, url, headers: (options && options.headers) || {}, body: text(raw), raw, options });
     if (answer.res) return answer.res;
@@ -92,7 +96,7 @@ function gatedClient(org, barrier) {
 // One build over a fresh SDK on `dir`, as the CLI's durable workspace is reused by a re-run.
 async function build(org, dir, spec, opts = {}) {
   const barrier = opts.publicationBarrier || createPublicationBarrier();
-  const sdk = opts.sdk || createMakerSdk({ workspaceStorage: createNodeWorkspaceStorage(dir), instanceUrl: org.origin, httpClient: gatedClient(org, barrier) });
+  const sdk = opts.sdk || createMakerSdk({ workspaceStorage: createNodeWorkspaceStorage(dir), instanceUrl: org.origin, httpClient: gatedClient(org, barrier, opts.sendObserver || null) });
   if (!opts.sdk) await sdk.initWorkspace();
   const mark = org.calls.length;
   let out;
@@ -427,6 +431,200 @@ test('a table publish whose outcome was not confirmed fences the table in every 
   const second = await build(org, dir, next);
   assert.match(String(second.err && second.err.message), /managed-publication-unconfirmed/);
   assert.deepEqual(second.tablePublishes, [], 'the scope is not published again past an unconfirmed send');
+});
+
+// A plain publish of a table a confirmed managed view is on owes that view nothing, but it ships the view's saved layer
+// again: its dispatch is journaled with the view carried, so a restart after a lost answer neither edits the view nor
+// publishes the table again.
+for (const observed of [false, true]) {
+  test(`a carried table publish whose answer was lost fences the next build: no managed PATCH and no publish${observed ? ' (the attempt send observer inside the barrier)' : ''}`, async () => {
+    const org = createFakeBuildOrg({ entities: ENTITIES });
+    const dir = newDir();
+    const spec = stableSpec({ charts: [] });
+    const run = (s) => build(org, dir, s, observed ? { sendObserver: createAttemptSendObserver() } : {});
+    const seed = await run(spec);
+    assert.equal(seed.err, undefined, seed.err && seed.err.message);
+    assert.equal(storeOf(org, dir).readGroup('view', VIEW_KEY).committed.publication.state, 'confirmed');
+
+    const ordinary = makeSpec({ charts: [] });
+    ordinary.views[0].name = 'Plain sibling after managed publication';
+    org.refuseNextTablePublish(503);
+    const carry = await run(ordinary);
+    assert.equal(carry.tablePublishes.length, 1, 'the carried publish was sent once and answered 503');
+    assert.match(String(carry.err && carry.err.message), /managed-publication-unconfirmed/);
+    const carried = storeOf(org, dir).readGroup('view', VIEW_KEY).committed.publication;
+    assert.equal(carried.state, 'unconfirmed', 'the carried view is journaled under the lost dispatch');
+    assert.ok(carried.carriedFrom, 'it keeps the settled state it was carried from');
+
+    const edit = structuredClone(spec);
+    edit.views[0].description = 'New content while the earlier carried publish is uncertain';
+    const next = await run(edit);
+    const patches = next.writes.filter((c) => c.method === 'PATCH' && /^\/savedqueries\(/.test(c.path));
+    assert.equal(patches.length, 0, 'an earlier uncertain carried publish fences a new managed edit before its PATCH');
+    assert.deepEqual(next.tablePublishes, [], 'a restart never replays a carried publish whose dispatch was not disproved');
+    assert.match(String(next.err && next.err.message), /managed-publication-unconfirmed/);
+  });
+}
+
+// A failed publish is RETURNED, not thrown, by both the SDK (`{ shipped: false, publish: { kind: 'failed' } }`) and the
+// Dataverse client (`{ status: 500 }`). The managed publish callback must turn that into a throw, or the read-back that follows
+// would "confirm" a carried view that was live before the send. A 500 may have run, so it is not claimed as never started.
+test('a carried publish answered as failed by a returned value, not a throw, is never confirmed', async () => {
+  const org = createFakeBuildOrg({ entities: ENTITIES });
+  const dir = newDir();
+  const spec = stableSpec({ charts: [] });
+  const seed = await build(org, dir, spec);
+  assert.equal(seed.err, undefined, seed.err && seed.err.message);
+
+  const barrier = createPublicationBarrier();
+  const sdk = createMakerSdk({ workspaceStorage: createNodeWorkspaceStorage(dir), instanceUrl: org.origin, httpClient: gatedClient(org, barrier) });
+  await sdk.initWorkspace();
+  const sdkPublishes = [];
+  const failed = (type, id) => ({ type, id, shipped: false, publish: { kind: 'failed', error: { code: 'publish-failed', message: 'refused' } } });
+  sdk.publishArtifact = async (type, id) => { sdkPublishes.push([type, id]); return failed(type, id); };
+  sdk.publishArtifacts = async (list) => { sdkPublishes.push(...list.map((x) => [x.type, x.id])); return list.map((x) => failed(x.type, x.id)); };
+  const ordinary = makeSpec({ charts: [] });
+  ordinary.views[0].name = 'Plain sibling whose table publish is answered as failed';
+  org.refuseNextTablePublish(500);
+  const r = await build(org, dir, ordinary, { sdk, publicationBarrier: barrier });
+  assert.equal(r.tablePublishes.length, 1, 'the routed publish went to PublishXml and was answered 500');
+  assert.ok(r.err, 'the build stops');
+  assert.deepEqual(sdkPublishes, [], 'a routed table is never published through the SDK, whose failure is a returned value');
+  const pub = storeOf(org, dir).readGroup('view', VIEW_KEY).committed.publication;
+  assert.equal(pub.state, 'unconfirmed', 'the returned failure is not taken for a success, nor for a request that never started');
+  assert.ok(pub.carriedFrom);
+});
+
+// An answer the transport lost after the platform applied the request.
+function loseNextAnswer(org, method, pattern) {
+  const original = org.httpClient[method];
+  let lost = false;
+  org.httpClient[method] = async (url, ...rest) => {
+    const response = await original(url, ...rest);
+    if (!lost && pattern.test(url)) {
+      lost = true;
+      throw Object.assign(new Error('response lost after save'), { code: 'ECONNRESET' });
+    }
+    return response;
+  };
+  return () => { org.httpClient[method] = original; };
+}
+
+// A publish that paid a view's debt and whose answer was lost after the platform published it: before the next build changes
+// that view, it confirms the earlier dispatch read-only with its own client (the published layer now holds the desired hash,
+// which it did not before the send), never by sending it again.
+test('a lost publish that paid a managed view its debt is confirmed read-only before the next change of that view, never sent again', async () => {
+  const org = createFakeBuildOrg({ entities: ENTITIES });
+  const dir = newDir();
+  const spec = stableSpec({ charts: [] });
+  const restore = loseNextAnswer(org, 'post', /\/PublishXml$/i);
+  const first = await build(org, dir, spec);
+  restore();
+  assert.equal(first.tablePublishes.length, 1, 'the publish reached the platform');
+  assert.ok(first.err, 'the run whose answer was lost stops');
+  assert.equal(storeOf(org, dir).readGroup('view', VIEW_KEY).committed.publication.state, 'unconfirmed');
+
+  const edit = structuredClone(spec);
+  edit.views[0].description = 'A change after the lost publish';
+  const mark = org.calls.length;
+  const original = org.httpClient.patch;
+  const atPatch = [];
+  org.httpClient.patch = async (url, ...rest) => {
+    if (/\/savedqueries\(/i.test(url)) atPatch.push({ state: storeOf(org, dir).readGroup('view', VIEW_KEY).committed.publication.state, publishes: org.tablePublishes(mark).length });
+    return original(url, ...rest);
+  };
+  try { await build(org, dir, edit); } finally { org.httpClient.patch = original; }
+  assert.equal(atPatch.length, 1, 'the change is made once the earlier dispatch is confirmed');
+  assert.deepEqual(atPatch[0], { state: 'confirmed', publishes: 0 }, 'confirmed by a read before the PATCH; the earlier publish is not sent again');
+});
+
+// An edit of a row the build read first is never a create: its attempt records the row it read as its base observation, before
+// the send, so no answer to it (nor a record that claims one) makes the row this workspace's own.
+test('an edit records its base observation before the send; a lost edit of an adopted row is bound only with the adoption approval', async () => {
+  const org = createFakeBuildOrg({ entities: ENTITIES });
+  const spec = stableSpec({ charts: [] });
+  assert.equal((await build(org, newDir(), spec)).err, undefined);
+  const dir = newDir();
+  const approval = new Set([`view:${VIEW_KEY}`]);
+  const edited = structuredClone(spec);
+  edited.views[0].description = 'An edit of a row this workspace did not make';
+  const original = org.httpClient.patch;
+  const seen = [];
+  org.httpClient.patch = async (url, ...rest) => {
+    if (/\/savedqueries\(/i.test(url)) seen.push(storeOf(org, dir).readGroup('view', VIEW_KEY).pending);
+    return original(url, ...rest);
+  };
+  const restore = loseNextAnswer(org, 'patch', /\/savedqueries\(/i);
+  const lost = await build(org, dir, edited, { authorizedAdoption: approval });
+  restore();
+  org.httpClient.patch = original;
+  assert.ok(lost.err, 'the run whose answer was lost stops');
+  assert.equal(seen.length, 1);
+  assert.equal(seen[0].phase, 'sending');
+  assert.ok(seen[0].expected.baseObservation, 'the edit records the row it read as its base');
+  assert.match(String(seen[0].expected.baseObservation.savedSha256), /^[0-9a-f]{64}$/);
+  const pending = storeOf(org, dir).readGroup('view', VIEW_KEY).pending;
+  assert.ok(pending, 'the lost edit stays pending');
+  assert.equal(pending.acknowledgedRoot, false);
+
+  const refused = await build(org, dir, edited);
+  assert.match(String(refused.err && refused.err.message), /managed-adoption-required/, 'an edit is never a create this workspace can bind without the approval');
+  const bound = await build(org, dir, edited, { authorizedAdoption: approval });
+  assert.equal(bound.err, undefined, bound.err && bound.err.message);
+  assert.deepEqual(bound.writes.filter((c) => c.method === 'PATCH' && /^\/savedqueries\(/.test(c.path)), [], 'the lost edit is proved, not sent again');
+  const g = storeOf(org, dir).readGroup('view', VIEW_KEY);
+  assert.equal(g.pending, null);
+  assert.equal(g.committed.records[0].origin, 'adopted');
+});
+
+// A record an older build wrote may claim an acknowledged create on an attempt whose base observation says it edited a row it
+// read: the prover takes the store's rule (rootCreateAcknowledged), never the raw flag, so the row is adopted, not 'created'.
+test('a pending edit whose record claims an acknowledged create is proved as an adoption, by the store rule rather than the raw flag', async () => {
+  const org = createFakeBuildOrg({ entities: ENTITIES });
+  const spec = stableSpec({ charts: [] });
+  assert.equal((await build(org, newDir(), spec)).err, undefined);
+  const dir = newDir();
+  const approval = new Set([`view:${VIEW_KEY}`]);
+  const edited = structuredClone(spec);
+  edited.views[0].description = 'An edit an older build recorded as a create';
+  const restore = loseNextAnswer(org, 'patch', /\/savedqueries\(/i);
+  const lost = await build(org, dir, edited, { authorizedAdoption: approval });
+  restore();
+  assert.ok(lost.err);
+  const file = path.join(dir, storeFiles(dir)[0]);
+  const data = JSON.parse(fs.readFileSync(file, 'utf8'));
+  const attempt = data.attempts.find((a) => a.family === 'view' && a.key === VIEW_KEY);
+  assert.ok(attempt && attempt.expected.baseObservation, 'an edit attempt with a base observation');
+  attempt.acknowledgedRoot = true;
+  fs.writeFileSync(file, JSON.stringify(data, null, 2));
+  assert.equal(storeOf(org, dir).readGroup('view', VIEW_KEY).pending.acknowledgedRoot, true, 'the store accepts the older record');
+
+  const r = await build(org, dir, edited, { authorizedAdoption: approval });
+  assert.equal(r.err, undefined, r.err && r.err.message);
+  const g = storeOf(org, dir).readGroup('view', VIEW_KEY);
+  assert.equal(g.pending, null);
+  assert.equal(g.committed.records[0].origin, 'adopted', 'an edit is never recorded as this workspace\'s create');
+});
+
+// The intents' `declaration` is the catalog's key-part input (creates-catalog.js identityFor), not a store declaration: a view
+// or chart group has no place for one (its consumer state is the baseline alone), so a plan never hands it to prepareAttempt and
+// the store commits no originalDeclaration for either. Nothing in the build reads a group's declaration back.
+test('a stable view and chart commit with their baseline alone: no declaration is handed to the store, none is committed', async () => {
+  const { checkDeclaration, CODES } = require('../lib/managed-bindings.js');
+  const org = createFakeBuildOrg({ entities: ENTITIES });
+  const dir = newDir();
+  const r = await build(org, dir, stableSpec());
+  assert.equal(r.err, undefined, r.err && r.err.message);
+  const raw = JSON.parse(fs.readFileSync(path.join(dir, storeFiles(dir)[0]), 'utf8'));
+  assert.equal(raw.groups.length, 2);
+  for (const g of raw.groups) {
+    assert.equal(g.originalDeclaration, undefined, `${g.family}: no original declaration`);
+    assert.deepEqual(Object.keys(g.consumerState), ['baseline'], `${g.family}: its consumer state is the baseline alone`);
+  }
+  // The store's rule the build relies on: a view or chart declaration would be refused, so none is ever offered.
+  for (const i of require('../lib/creates-stable-build.js').stableIntents(stableSpec())) {
+    assert.throws(() => checkDeclaration(i.catalogKind, i.key, i.declaration), (e) => e.code === CODES.declarationRefused);
+  }
 });
 
 test('a build without createIdentity cannot publish a table whose managed view has a draft its store did not prove', async () => {

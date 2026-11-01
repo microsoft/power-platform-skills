@@ -235,6 +235,8 @@ async function planChartReconcile({ chart, sdk, chartArtifact }, ctx = {}) {
   plan.changed = PARTS.filter((p) => canonicalJson(desired[p]) !== canonicalJson(live[p]));
   plan.desired = desired;
   plan.baseline = projectionBaseline(desired);
+  // The row as it was read before any change: an edit's base observation (see view-reconcile.js).
+  plan.observedSha256 = projectionBaseline(live).intentSha256;
   plan.origin = binding ? binding.origin : 'adopted';
   if (plan.changed.length === 0) {
     plan.action = 'noChange';
