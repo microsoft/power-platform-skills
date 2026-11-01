@@ -47,7 +47,7 @@ const { requestBodySha256 } = require('./workflow-effect-context.js');
 const { identityFor } = require('./creates-catalog.js');
 const { CODES, rootCreateAcknowledged } = require('./managed-bindings.js');
 const { HTTP_SEND_HISTORY } = require('./sdk-http-client.js');
-const { createWorkflowDriver, createCopyGuard, answeredRefusal, causeChain, leavesOutcomeOpen, coded, completionBytesFor, HASH_BOUND, ACTIVE, DRAFT } = require('./workflow-drive.js');
+const { createWorkflowDriver, createCopyGuard, answeredRefusal, causeChain, leavesOutcomeOpen, coded, completionBytesFor, completionWithin, HASH_BOUND, ACTIVE, DRAFT } = require('./workflow-drive.js');
 
 // sdk-build is required lazily: it is the module that will call this one, so a top-level require would be a cycle.
 const sdkBuild = () => require('./sdk-build.js');
@@ -918,7 +918,7 @@ async function settleDeclaredRule(input) {
     if (!planned || planned.noop === true) return planned;
     const recorded = (input.continuing || input.resuming) && run.pending ? run.pending.declaration : undefined;
     const declaration = recorded !== undefined ? recorded : clone(rule);
-    return { ...planned, declaration, completionBytes: completionBytesOf(planned, declaration) };
+    return { ...planned, declaration, completionBytes: completionWithin(completionBytesOf(planned, declaration), label, 'business rule', 'conditions, actions or recommendation apply-actions') };
   }
 
   // The bytes this attempt's completion may add to the store (runManagedFeature `completionBytes`; see

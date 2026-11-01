@@ -1,6 +1,8 @@
 'use strict';
-// The largest declaration each workflow family supports, with every name, label and description at its longest and in
-// three-byte UTF-8 text, as the shared store's declaration bound is sized (managed-bindings.js, DECLARATION_MAX_BYTES):
+// A wide declaration of each workflow family, with every name, label and description at its longest and in three-byte
+// UTF-8 text, as the shared store's declaration bound is sized (managed-bindings.js, DECLARATION_MAX_BYTES). These are
+// fixtures at the sizing model, not limits: no count is enforced, and a declaration whose completion the store cannot
+// reserve is refused by its plan (workflow-drive.js completionWithin), whatever its counts:
 //   - a process flow at the documented ceiling (references/app-spec-schema-advanced.md: 30 stages, 30 steps each),
 //     64-character keys and field names, 100-character names and a 2,000-character description;
 //   - a rule, which has no published ceiling, at the stated sizing model: 100 conditions and 100 actions, ten of them

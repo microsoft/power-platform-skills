@@ -1022,3 +1022,95 @@ test('the plan reserves the whole completion of the largest supported flow: the 
   const grown = fs.statSync(storeFile(dir)).size;
   assert.ok(reserve >= grown, `the reservation (${reserve} bytes) covers the committed group (${grown} bytes in the store file)`);
 });
+// A valid flow dense in stages and steps: each step is a few bytes of the declaration but is kept again in the derived
+// state, the reserved ids and the proof, so the completion grows many times faster than the declaration. No count of
+// stages or steps is enforced; the plan's completion bound is what decides.
+function denseFlow(name, stages, steps) {
+  return {
+    name, entity: 'account', reconcile: 'declared', status: 'Active',
+    stages: Array.from({ length: stages }, (_, i) => ({
+      key: `s${i}`, name: `S${i}`, steps: Array.from({ length: steps }, (_, j) => ({ key: `p${j}`, name: `P${j}`, field: 'fax' })),
+    })),
+  };
+}
+const catalogFor = (flow) => createIntentCatalog([{ catalogKind: 'bpf', key: `account/${flow.name}`, scope: { kind: 'table', solution: SOL, table: 'account' }, declaration: flow }]);
+
+test('the completion bound is never cut down: a dense flow near the limit is reserved whole, and one beyond it is refused by its plan before anything is recorded or sent', async () => {
+  const { COMPLETION_MAX_BYTES } = require('../lib/managed-bindings.js');
+  const wire = createWorkflowWire();
+  const dir = makeTempDir('bpf-dense-');
+  // Near the limit: what the commit adds to the store from the first write on stays within the attempt's reservation.
+  const near = denseFlow('Dense flow', 35, 90);
+  assert.deepEqual(validateDeclaredBpf(near), []);
+  let reserve = null;
+  let atFirstWrite = null;
+  const request = wire.request;
+  wire.request = async (req) => {
+    if (req.method !== 'GET' && atFirstWrite === null) atFirstWrite = fs.statSync(storeFile(dir)).size;
+    return request(req);
+  };
+  const ensureMembership = async () => {
+    const m = fs.readFileSync(storeFile(dir), 'utf8').match(/"completionReserve":\s*\{\s*"bytes":\s*(\d+)/);
+    reserve = m ? Number(m[1]) : null;
+  };
+  const first = await settle(wire, dir, near, { catalog: catalogFor(near), ensureMembership });
+  assert.ifError(first.error);
+  const grown = fs.statSync(storeFile(dir)).size - atFirstWrite;
+  assert.ok(reserve && reserve <= COMPLETION_MAX_BYTES, `a reservation within the limit (${reserve})`);
+  assert.ok(reserve >= grown, `the reservation (${reserve} bytes) covers what the completion added (${grown} bytes)`);
+
+  // Beyond it: a declaration well within the declaration bound whose completion needs more than one flow may reserve.
+  const far = denseFlow('Denser flow', 50, 100);
+  assert.deepEqual(validateDeclaredBpf(far), []);
+  assert.ok(Buffer.byteLength(canonicalJson(far)) < DECLARATION_MAX_BYTES);
+  const before = fs.readFileSync(storeFile(dir));
+  const out = await settle(wire, dir, far, { catalog: catalogFor(far) });
+  assert.equal(out.error && out.error.code, 'workflow-declaration-too-large');
+  const refusal = out.error.cause || out.error;
+  assert.match(refusal.message, /Reduce the process flow \(fewer stages or steps\) or split it into several process flows, then rerun/);
+  assert.ok(refusal.completionBytes > COMPLETION_MAX_BYTES && refusal.completionMaxBytes === COMPLETION_MAX_BYTES);
+  assert.deepEqual(writeLines(wire, out.from), []);
+  const g = out.p.store.readGroup('bpf', 'account/Denser flow');
+  assert.equal(g.pending, null);
+  assert.deepEqual(g.effects, []);
+  assert.ok(!g.committed);
+  assert.ok(fs.readFileSync(storeFile(dir)).equals(before), 'the store is left byte for byte');
+  assert.ok(out.p.store.readGroup('bpf', 'account/Dense flow').committed, 'the flow already settled is kept');
+});
+
+test('an activation another process records as made while this one replays it is met: nothing is sent, and the attempt commits', async () => {
+  const wire = createWorkflowWire();
+  const dir = makeTempDir('bpf-met-replay-');
+  // The first run's activation is refused (412, not applied): it stays on record, unsent, for a later run to send.
+  wire.script((e) => e.method === 'PATCH', { statusCode: 412, unapplied: true, body: { error: { message: 'Version refused' } } });
+  const first = await settle(wire, dir, FLOW);
+  assert.equal(first.error && first.error.code, CODES.pending);
+  const stored = first.p.store.readGroup('bpf', KEY).effects.find((e) => e.effect === 'state');
+  assert.equal(stored.state, 'definitely-unsent');
+  // As the replay is about to send it, the maker activates the row and another OS process of the same attempt records
+  // that fact; this run still holds the record it read as unsent.
+  const p = await processOver(wire, dir);
+  const patch = p.httpClient.patch.bind(p.httpClient);
+  p.httpClient.patch = async (...args) => {
+    const row = wire.row(stored.rowId);
+    makerChange(row, 'activate');
+    const env = { ...process.env };
+    delete env.NODE_TEST_CONTEXT;
+    const child = spawnSync(process.execPath, [path.join(__dirname, 'helpers', 'workflow-fulfil-child.js')], {
+      input: JSON.stringify({ dir, origin: ORIGIN, app: APP, solution: SOL, token: stored.token, observed: { observedState: 'Active', observedVersion: `W/"${row.version}"` } }),
+      env, encoding: 'utf8', timeout: 60000,
+    });
+    assert.equal(child.status, 0, child.stderr);
+    const r = JSON.parse(child.stdout);
+    assert.notEqual(r.pid, process.pid);
+    assert.equal(r.state, 'fulfilled');
+    return patch(...args);
+  };
+  const out = await settle(wire, dir, FLOW, p);
+  assert.ifError(out.error);
+  assert.deepEqual(writeLines(wire, out.from), []);
+  const g = p.store.readGroup('bpf', KEY);
+  assert.equal(g.pending, null);
+  assert.ok(g.committed);
+  assert.equal(firstRow(wire).statecode, 1);
+});

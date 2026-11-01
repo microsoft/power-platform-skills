@@ -48,7 +48,7 @@ const { requestBodySha256 } = require('./workflow-effect-context.js');
 const { identityFor, reserveChildren } = require('./creates-catalog.js');
 const { uuidV5 } = require('./creates-identity.js');
 const { CODES, rootCreateAcknowledged } = require('./managed-bindings.js');
-const { createWorkflowDriver, createCopyGuard, answeredRefusal, coded, completionBytesFor, HASH_BOUND, NAME_BOUND, ACTIVE, DRAFT } = require('./workflow-drive.js');
+const { createWorkflowDriver, createCopyGuard, answeredRefusal, coded, completionBytesFor, completionWithin, HASH_BOUND, NAME_BOUND, ACTIVE, DRAFT } = require('./workflow-drive.js');
 
 // sdk-build is required lazily: it is the module that will call this one, so a top-level require would be a cycle.
 const sdkBuild = () => require('./sdk-build.js');
@@ -934,7 +934,7 @@ async function settleDeclaredBpf(input) {
     if (!planned || planned.noop === true) return planned;
     const recorded = (input.continuing || input.resuming) && run.pending ? run.pending.declaration : undefined;
     const declaration = recorded !== undefined ? recorded : clone(flow);
-    return { ...planned, declaration, completionBytes: completionBytesOf(planned, declaration) };
+    return { ...planned, declaration, completionBytes: completionWithin(completionBytesOf(planned, declaration), label, 'process flow', 'stages or steps') };
   }
 
   // The bytes this attempt's completion may add to the store (runManagedFeature `completionBytes`; see

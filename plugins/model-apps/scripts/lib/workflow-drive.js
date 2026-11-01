@@ -47,8 +47,12 @@ function coded(code, message, extra = {}) {
 // proved row, so the plan asks for a bound of its own: every part it passes, counted as the store's file holds it —
 // JSON indented two spaces a level, each line COMPLETION_DEPTH levels down (as deep as the store counts a consumer
 // copy, deeper than these parts sit: env -> groups -> [i] -> consumerState -> declaration -> flow -> ...) — plus a
-// fixed margin for the effect records and hashes the plan cannot list, and a tenth on top. Capped where the store
-// caps a reservation; the largest supported declarations need well under that (pinned by the tests).
+// fixed margin for the effect records and hashes the plan cannot list, and a tenth on top.
+// The bound is never cut down to fit: a reservation smaller than the completion is the post-send refusal above. The
+// size is not a function of the declaration's bytes alone (a rule of many small recommendation apply-actions keeps
+// a slot, a node and an expected entry for each, about fourteen times its own size), and no count of conditions,
+// actions or steps is enforced, so a declaration that needs more than the store reserves for one attempt
+// (COMPLETION_MAX_BYTES) is refused by completionWithin in `plan`, before anything is recorded or sent.
 const COMPLETION_DEPTH = 8;
 const COMPLETION_MARGIN_BYTES = 64 * 1024;
 function completionBytesFor(parts) {
@@ -58,7 +62,17 @@ function completionBytesFor(parts) {
     if (text === undefined) continue;
     bytes += Buffer.byteLength(text, 'utf8') + text.split('\n').length * 2 * COMPLETION_DEPTH;
   }
-  return Math.min(COMPLETION_MAX_BYTES, Math.ceil(bytes * 1.1));
+  return Math.ceil(bytes * 1.1);
+}
+// The plan's `completionBytes`, or the coded refusal of a declaration whose completion the store cannot reserve.
+// `reduce` names what the maker can cut, e.g. 'conditions, actions or recommendation apply-actions'.
+const COMPLETION_TOO_LARGE = 'workflow-declaration-too-large';
+function completionWithin(bytes, label, noun, reduce) {
+  if (bytes <= COMPLETION_MAX_BYTES) return bytes;
+  const mib = (n) => `${(n / (1 << 20)).toFixed(1)} MiB`;
+  throw coded(COMPLETION_TOO_LARGE, `${label}: keeping this ${noun} in the managed binding store needs about ${mib(bytes)}, more than the `
+    + `${mib(COMPLETION_MAX_BYTES)} one ${noun} may reserve, so nothing is recorded or sent. Reduce the ${noun} (fewer ${reduce}) or split it `
+    + `into several ${noun}s, then rerun`, { completionBytes: bytes, completionMaxBytes: COMPLETION_MAX_BYTES });
 }
 // Stand-ins of the right size for what the plan cannot know yet: a SHA-256 hex digest, and the backing table name the
 // service gives a new process flow (a Dataverse logical name, far shorter than this).
@@ -381,19 +395,26 @@ function createWorkflowDriver({ store, sdk, httpClient = null, instanceUrl = nul
    * never deleted, so no later run of the attempt proposes it again — whatever the row has become since. Recording
    * none (the effect deleted, or never written) would let a later run, after a failure before the commit and a maker's
    * deactivation, read a Draft with no activation on record and activate it again, undoing the maker's change.
+   *
+   * `own` is the record as the caller last read it, which another process sharing the store may have settled since
+   * (it found the row Active first and recorded that, or sent and proved the activation). So the record is read again
+   * here, and a fact that is already fulfilled or confirmed is met as it is: nothing is sent or recorded, and it is
+   * never a run error. The unsent case goes through the store's recordFulfilledEffect, which decides under its lease
+   * in one write: the same target already fulfilled or confirmed is answered as is, the unsent record is fulfilled in
+   * place, and a record another process has started dispatching meanwhile is refused (pending, proved by a later read).
    */
   function settleReached(token, id, own, live) {
-    if (own && own.state !== 'definitely-unsent') { store.confirmEffect(own.token, { observedState: ACTIVE }); return; }
+    const current = own ? effectOf(token, (e) => e.token === own.token) : null;
+    if (current && (current.state === 'fulfilled' || current.state === 'confirmed')) return;
+    if (current && current.state !== 'definitely-unsent') { store.confirmEffect(current.token, { observedState: ACTIVE }); return; }
     if (!live.version) {
       throw coded(CODES.pending, `${label}: the ${noun} ${id} was read Active without its row version, so that it is met cannot be recorded; nothing is `
         + 'sent, and a later run reads the row again');
     }
-    const observed = { observedState: ACTIVE, observedVersion: live.version };
-    if (own) { store.fulfillEffect(own.token, observed); return; }
     store.recordFulfilledEffect({
       attemptToken: token, baseGeneration: attemptOf(token).attempt.baseGeneration, family, key, rowId: id, effect: 'state',
       request: { method: 'PATCH', shape: 'workflow-patch' }, desiredSha256: null, desiredState: ACTIVE, expectedVersion: live.version,
-    }, observed);
+    }, { observedState: ACTIVE, observedVersion: live.version });
   }
 
   return { readVersion, attemptOf, effectOf, sendOnce, noteNoStart, driveState, activateOwnCreate, refuseRecordedEdits };
@@ -402,6 +423,8 @@ function createWorkflowDriver({ store, sdk, httpClient = null, instanceUrl = nul
 module.exports = {
   createWorkflowDriver,
   completionBytesFor,
+  completionWithin,
+  COMPLETION_TOO_LARGE,
   HASH_BOUND,
   NAME_BOUND,
   createCopyGuard,
