@@ -581,6 +581,73 @@ test('two pinned views with names of their own: each overwrite approval replaces
   assert.equal((await sdk.getArtifact('view', ids[1])).description, 'Unsent maker note 1');
 });
 
+// The refusal above protects a build's adopt/overwrite approvals. Teardown (the structural profile) and read-only verification use none, and an app built
+// from such a spec before the check must still be planned for teardown and verified, so both take the finding as a warning in the same words. Any build,
+// applying or planning, still refuses it before touching a dependency.
+const sameKeyMessage = (family, name) => `${family}s[0] '${name}' and ${family}s[1] '${name}' are declared ${family}s with the same key (${family}:contoso_item/${name}): `
+  + `one --authorize adopt:${family}:contoso_item/${name} or overwrite:${family}:contoso_item/${name} would approve both, so give each its own name on the table`;
+const sameKeySpec = (family) => {
+  const spec = makeSpec({ minimumPluginVersion: '2.21.0', [`${family}s`]: family === 'view' ? [declaredView(), declaredView({ columns: ['contoso_name'] })] : [declaredChart(), declaredChart({ chartType: 'Bar' })] });
+  spec.entities[0].columns.push({ schemaName: 'contoso_kind', displayName: 'Kind', type: 'Choice', options: ['Low', 'High'] });
+  return spec;
+};
+
+test('a build, applying or planning, refuses two same-key declared views or charts before it touches any dependency', async () => {
+  const { buildModelApp } = require('../build-model-app.js');
+  const untouchable = new Proxy({}, { get(_target, key) { throw new Error(`a dependency was read: ${String(key)}`); } });
+  for (const [family, name] of [['view', 'Declared Items'], ['chart', 'By Kind']]) {
+    for (const opts of [{ apply: true }, { apply: true, profile: 'deploy' }, { apply: false, profile: 'plan' }]) {
+      const r = await buildModelApp(sameKeySpec(family), opts, untouchable);
+      assert.equal(r.ok, false, `${family} ${JSON.stringify(opts)}`);
+      assert.deepEqual(r.errors, [sameKeyMessage(family, name)]);
+    }
+  }
+});
+
+test('teardown still plans a spec with two same-key declared views or charts: the structural profile takes the finding as a warning', async () => {
+  const { teardownModelApp } = require('../teardown-model-app.js');
+  for (const [family, name] of [['view', 'Declared Items'], ['chart', 'By Kind']]) {
+    const spec = sameKeySpec(family);
+    const structural = validateAppSpec(spec, { profile: 'structural' });
+    assert.equal(structural.ok, true, JSON.stringify(structural.errors));
+    assert.deepEqual(structural.warnings.filter((w) => w.includes('same key')), [sameKeyMessage(family, name)]);
+    const r = await teardownModelApp(spec, { apply: false }, { sdk: {}, log: () => {} });
+    assert.equal(r.ok, true, `${family}: ${JSON.stringify(r.errors)}`);
+  }
+});
+
+test('verify CLI still verifies a spec with two same-key declared views or charts, and warns in the same words', () => {
+  const { spawnSync } = require('node:child_process');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sdk-build-declared-verify-'));
+  dirs.push(dir);
+  for (const [family, name] of [['view', 'Declared Items'], ['chart', 'By Kind']]) {
+    const specPath = path.join(dir, `${family}-spec.json`);
+    fs.writeFileSync(specPath, JSON.stringify(sameKeySpec(family)));
+    const run = spawnSync(process.execPath, [
+      '--require', path.join(__dirname, 'helpers', 'fake-verify-preload.js'),
+      path.join(__dirname, '..', 'verify-model-app.js'), '--env', 'https://contoso.crm.dynamics.com', '--spec', `@${specPath}`,
+    ], {
+      encoding: 'utf8',
+      timeout: 60000,
+      env: { ...process.env, POWER_PLATFORM_SKILLS_TELEMETRY_MODEL_APPS_OPTOUT: '1', FAKE_VERIFY: JSON.stringify({ result: { ok: true, checks: [], missing: [], unverified: [] } }) },
+    });
+    assert.ifError(run.error);
+    assert.equal(run.status, 0, `${family}: ${run.stdout}${run.stderr}`);
+    const result = JSON.parse(run.stdout);
+    assert.equal(result.ok, true);
+    assert.deepEqual(result.warnings, [sameKeyMessage(family, name)]);
+    assert.ok(run.stderr.includes(`WARNING: ${sameKeyMessage(family, name)}\n`), run.stderr);
+  }
+  // Only read-only verification passes the option: the deploy profile without it still refuses.
+  assert.deepEqual(validateAppSpec(sameKeySpec('view'), { profile: 'deploy', relationshipCollisions: 'warn', columnValues: 'warn', fieldOptionKeys: 'warn', primaryAttributeKeys: 'warn' }).errors,
+    [sameKeyMessage('view', 'Declared Items')]);
+  for (const declaredKeyCollisions of [undefined, 'WARN', true, 'error']) {
+    assert.deepEqual(validateAppSpec(sameKeySpec('chart'), { profile: 'deploy', declaredKeyCollisions }).errors, [sameKeyMessage('chart', 'By Kind')]);
+  }
+  const lenient = validateAppSpec(sameKeySpec('chart'), { profile: 'deploy', declaredKeyCollisions: 'warn' });
+  assert.deepEqual([lenient.ok, lenient.warnings], [true, [sameKeyMessage('chart', 'By Kind')]]);
+});
+
 test('push preview: a declared view edit is not evaluated rather than previewed as unchanged; the apply writes it', async () => {
   const env = newOrg();
   const view = declaredView({ activeOnly: false });

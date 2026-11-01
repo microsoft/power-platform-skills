@@ -3290,6 +3290,11 @@ function validateAppSpec(spec, opts = {}) {
   // (build-model-app.js authorizationKeys) names that key, not a row: one approval would adopt or replace the workspace copies of
   // both, discarding each one's unsent edits. A view's viewId pin picks the row it reconciles but is not part of the key, so it
   // cannot tell the two approvals apart. Refused here, before any build work: each declared artifact of a family needs its own name.
+  // Only a build reconciles views and charts and takes those approvals, so every profile that builds or plans a build refuses the pair. Teardown's
+  // structural profile and read-only verification (`declaredKeyCollisions: 'warn'`, as it passes `relationshipCollisions: 'warn'`) take it as a
+  // warning in the same words: neither uses an adopt/overwrite approval, and an app built from such a spec before this check must still be planned
+  // for teardown and verified.
+  const sameKeyFindings = profile === 'structural' || opts.declaredKeyCollisions === 'warn' ? warnings : errors;
   const sameKey = (family, list, isDeclared, compile, compilable) => {
     const first = new Map();
     (Array.isArray(list) ? list : []).forEach((item, i) => {
@@ -3298,7 +3303,7 @@ function validateAppSpec(spec, opts = {}) {
       if (!intent) return;
       const label = `${family}s[${i}] '${item.name}'`;
       const key = approvalKey(family, intent.key);
-      if (first.has(intent.key)) errors.push(`${first.get(intent.key)} and ${label} are declared ${family}s with the same key (${key}): one --authorize adopt:${key} or overwrite:${key} would approve both, so give each its own name on the table`);
+      if (first.has(intent.key)) sameKeyFindings.push(`${first.get(intent.key)} and ${label} are declared ${family}s with the same key (${key}): one --authorize adopt:${key} or overwrite:${key} would approve both, so give each its own name on the table`);
       else first.set(intent.key, label);
     });
   };
