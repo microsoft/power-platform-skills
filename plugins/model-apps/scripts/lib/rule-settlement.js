@@ -17,11 +17,22 @@
 // by a fresh read, and then activated with the state-only path (`updateRecord` -> one PATCH workflows(<id>)) when the
 // declaration asks for Active. Every such write runs inside `withWorkflowEffect` with its persisted effect record, so a
 // write whose answer is lost is proved by reading the row and is never sent again. An edit of the body or the state
-// of a rule that already exists refuses before any workflow request with `workflow-edit-refused` unless
-// `opts.workflowConditionalEdits` is on: a local lock cannot stop another session changing the row between the read
-// and the write. With the switch on, every write carries the row version of the read that proved it (If-Match), a
-// stale-version refusal is reported as `rule-drift` and is not retried, and an Active rule is edited as three
-// separate effects (Draft, body, Active), each conditioned on the version its own proof read returned.
+// of a rule that already exists (its scope included) refuses before any workflow request with `workflow-edit-refused`
+// unless `opts.workflowConditionalEdits` is on: a local lock cannot stop another session changing the row between the
+// read and the write. The same gate holds on every recovery path: a re-run may prove by reading that an earlier write
+// landed, but it sends nothing to an existing row with the switch off. With the switch on, every write carries the row
+// version of the read that proved it (If-Match), a stale-version refusal is reported as `rule-drift` and is not
+// retried, an Active rule's body is edited as three separate effects (Draft, body, Active), each conditioned on the
+// version its own proof read returned, and a state-only change is ONE conditional state write with no body.
+//
+// WHAT A RE-RUN MAY DO. Only the exact unresolved create of an attempt (its effect `create`, the group uncommitted,
+// no row bound) continues as a create; an absent row is never permission to create again, and a missing adopted rule
+// stops. A write whose answer was lost, or that was answered with a generic 4xx/5xx, is `unconfirmed`: an answer is not
+// proof that nothing started, so it is proved by reading and never sent again. A create that no 2xx acknowledged is not
+// known to be this build's: it is activated and bound only with the rule's typed adoption approval
+// (`managed-adoption-required`, the attempt kept). The SDK's local copy of the rule is checked first on every path: a
+// copy with edits that never reached the server stops everything (`create-completion-required`, category
+// `workspace-copy-unsent-edits`) before any fetch could overwrite it.
 //
 // AVAILABILITY. An environment that cannot host business rules answers the first create with the documented refusal
 // (the member is missing, or HTTP 400 0x80040216 to a first send). Only that answer to a CREATE, confirmed by a fresh
@@ -36,7 +47,7 @@ const { requestBodySha256 } = require('./workflow-effect-context.js');
 const { identityFor } = require('./creates-catalog.js');
 const { CODES } = require('./managed-bindings.js');
 const { HTTP_SEND_HISTORY } = require('./sdk-http-client.js');
-const { createWorkflowDriver, isDefiniteRefusal, causeChain, leavesOutcomeOpen, coded, ACTIVE, DRAFT } = require('./workflow-drive.js');
+const { createWorkflowDriver, createCopyGuard, answeredRefusal, causeChain, leavesOutcomeOpen, coded, ACTIVE, DRAFT } = require('./workflow-drive.js');
 
 // sdk-build is required lazily: it is the module that will call this one, so a top-level require would be a cycle.
 const sdkBuild = () => require('./sdk-build.js');
@@ -328,9 +339,14 @@ function declaredNodes(rule) {
 }
 
 /** Every reason this declared rule cannot be settled, before any request: its shape. [] when it can. */
+const RULE_SCOPES = ['Entity', 'AllForms'];
 function validateDeclaredRule(rule, opts) {
   if (!isDeclaredRule(rule)) return ['the rule is not declared (reconcile: "declared")'];
-  return ruleShapeErrors(rule, opts);
+  const errors = ruleShapeErrors(rule, opts);
+  // The scopes this helper stages and proves: the table (Entity) and all forms (AllForms). A single-form scope needs a
+  // form id this declaration cannot name, so it is refused rather than half-written.
+  if (rule.scope !== undefined && !RULE_SCOPES.includes(rule.scope)) errors.push(`business rule '${rule.name || '(unnamed)'}': scope must be one of ${RULE_SCOPES.join('|')}`);
+  return errors;
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -460,6 +476,7 @@ function wholeBodyErrors(rule, view) {
   }
   if (rule.conditionLogic !== undefined && rule.conditionLogic !== view.projection.logic) errs.push(`it declares ${rule.conditionLogic} and the rule joins its conditions with ${view.projection.logic}`);
   if (rule.description !== undefined && String(rule.description) !== view.projection.description) errs.push('its description is not the rule\'s');
+  if ((rule.scope || 'Entity') !== view.projection.scope) errs.push(`it declares scope ${rule.scope || 'Entity (the default)'} and the rule's is ${view.projection.scope}`);
   if ((rule.status || ACTIVE) !== view.status) errs.push(`it declares status ${rule.status || `${ACTIVE} (the default)`} and the rule is ${view.status}`);
   return errs;
 }
@@ -618,8 +635,12 @@ async function settleDeclaredRule(input) {
   // its persisted effect, and an unproved write is proved by reading, never sent again.
   const { readVersion, attemptOf, effectOf, sendOnce, noteNoStart, driveState } = createWorkflowDriver({
     store, sdk, httpClient, instanceUrl, family: FAMILY, key, label, noun: 'rule', driftCode: 'rule-drift',
+    conditionalEdits: switchOn, editRefusedRemedy: EDIT_REFUSED_REMEDY,
   });
+  // The local SDK copy is checked before anything reads over it, reseeds or deletes it (an unsent edit stops the build).
+  const guard = createCopyGuard({ sdk, artifact: ARTIFACT, label, noun: 'rule' });
   async function readBody(id) {
+    await guard.assertClean(id);
     try {
       await sdk.fetchArtifact(ARTIFACT, id, { overwrite: true });
       const art = await sdk.getArtifact(ARTIFACT, id);
@@ -642,17 +663,22 @@ async function settleDeclaredRule(input) {
   }
 
   // ----- local SDK staging (no request). The local copy is laid out from the declaration or the proved read, so a
-  // dirty earlier copy is never pushed.
+  // dirty earlier copy is never pushed (and never thrown away: it was refused before this, by the copy guard).
   async function stageCreate(id) {
+    await guard.assertClean(id);
+    guard.noteStaged(id);
     const def = compileRuleIntent(rule);
     try { await sdk.deleteArtifact(ARTIFACT, id); } catch { /* no local copy */ }
     await sdk.createArtifact(ARTIFACT, { ...def, id, status: DRAFT });
     await sdk.updateElement(ARTIFACT, id, '/rootCondition', def.rootCondition);
     return prepared(id, def.status);
   }
-  async function stageEdit(id, root) {
+  async function stageEdit(id, root, liveScope) {
+    guard.noteStaged(id);
     await sdk.updateElement(ARTIFACT, id, '/rootCondition', root);
     if (rule.description !== undefined) await sdk.updateElement(ARTIFACT, id, '/description', String(rule.description));
+    // The SDK sends the scope as Entity.processtriggerscope (Entity -> 2, AllForms -> 1 with no form id).
+    if ((rule.scope || 'Entity') !== liveScope) await sdk.updateElement(ARTIFACT, id, '/scope', rule.scope || 'Entity');
     return prepared(id, rule.status || ACTIVE);
   }
   async function prepared(id, desiredStatus) {
@@ -677,33 +703,49 @@ async function settleDeclaredRule(input) {
     };
   }
 
-  /** The Draft create of this attempt's own row, then its own activation. */
-  async function driveCreate(token, id, staged, recovering) {
+  /**
+   * Send the Draft create of this attempt's own row (from `apply` only: a first send, or the same create under the same
+   * token after resumeCreate read its id absent), then finish it (finishCreate). An answered create is durable at once
+   * (noteSaved, acknowledgedRoot): that answer is what lets this attempt call the row its own creation.
+   */
+  async function driveCreate(token, id, staged) {
     let create = effectOf(token, (e) => e.effect === 'create');
-    let acknowledged = false;
     let failure = null;
     if (!create || create.state === 'definitely-unsent') {
-      if (recovering && await readVersion(id)) throw coded('create-identity-conflict', `${label}: a workflow already holds the id ${id}, and this build never sent its create`);
       const s = staged || await stageCreate(id);
       if (create && create.desiredSha256 !== s.desiredSha256) throw coded(CODES.pending, `${label}: the create waiting to be sent was made from another declaration; restore it to finish`);
       failure = await sendOnce(token, create, {
         rowId: id, effect: 'create', request: { method: 'POST', shape: 'rule-create' }, desiredSha256: s.desiredSha256, desiredState: null, expectedVersion: null,
       }, () => sdk.withArtifactLock(ARTIFACT, id, () => sdk.executePrepared(s.prep)));
       create = effectOf(token, (e) => e.effect === 'create');
-      acknowledged = !failure;
+      if (!failure) store.noteSaved(token, { proof: null, acknowledgedRoot: true, phase: 'state-pending' });
+      // The documented availability answer to a create (see isAvailabilityRefusal), with a fresh read that finds no
+      // row and no rule of the name, is the one refusal recorded as never started: it is what lets the next run resume
+      // the same create (resumeCreate) once the environment can host business rules.
       if (failure && isAvailabilityRefusal(failure) && await nothingCreated(id)) {
         noteNoStart(create);
         throw Object.assign(new Error(`${label}: this environment cannot host business rules`), { [SKIP]: true, cause: failure });
       }
     }
+    return finishCreate(token, id, failure);
+  }
+
+  /**
+   * Prove this attempt's own create by reading (never by sending it again), then complete its own activation. The
+   * activation needs no edit switch — the row is the one this exact attempt created — but a create no answer
+   * acknowledged is not known to be this build's: it is neither activated nor bound without the rule's typed adoption
+   * approval (`managed-adoption-required`, the attempt kept).
+   */
+  async function finishCreate(token, id, failure) {
+    const create = effectOf(token, (e) => e.effect === 'create');
     if (create.state !== 'confirmed') {
       const live = await readLive(id);
       if (live.missing) {
-        if (failure && isDefiniteRefusal(failure)) {
-          noteNoStart(create);
-          throw coded('create-completion-required', `${label}: the create was refused (${failure.message}); nothing was written`, { cause: failure });
+        if (failure && answeredRefusal(failure)) {
+          throw coded('create-completion-required', `${label}: the create was refused (${failure.message}) and no row is there now. That answer does not prove the `
+            + `create never started, so it is not sent again from this attempt; a later run reads ${id} again`, { cause: failure });
         }
-        throw coded(CODES.pending, `${label}: the create of ${id} has not appeared; it is not sent again. Re-run the build to prove it`, { cause: failure });
+        throw coded(CODES.pending, `${label}: the create of ${id} has not appeared; it is not sent again, and a later run reads the row again`, { cause: failure });
       }
       const expected = attemptOf(token).attempt.expected;
       if (statusFor(expected, live.view.projection) === null) {
@@ -711,13 +753,19 @@ async function settleDeclaredRule(input) {
       }
       store.confirmEffect(create.token, { observedSha256: create.desiredSha256 });
     }
-    const expected = attemptOf(token).attempt.expected;
+    const { attempt } = attemptOf(token);
+    const acknowledged = attempt.acknowledgedRoot === true || !!(attempt.savedObservation && attempt.savedObservation.acknowledgedRoot);
     const live = await readLive(id);
     if (live.missing) throw coded(CODES.pending, `${label}: the workflow ${id} could not be read back`);
-    const desired = statusFor(expected, live.view.projection);
+    const desired = statusFor(attempt.expected, live.view.projection);
     if (desired === null) throw coded('create-completion-required', `${label}: the workflow ${id} is not the rule this build sent`);
-    // Completing this attempt's own Draft is allowed by default: the row is the one this exact attempt created.
-    if (desired === ACTIVE && live.view.status !== ACTIVE) await driveState(token, id, ACTIVE, null, { conditional: false });
+    if (desired === ACTIVE && live.view.status !== ACTIVE) {
+      if (!acknowledged && !approved) {
+        throw coded(CODES.adoptionRequired, `${label}: the workflow ${id} carries what this build sent, but no answer acknowledged its create, so it is not known `
+          + `to be this build's; it is neither activated nor bound without the adoption approval adopt:rule:${approvalIdOf(rule)}. The attempt is kept`);
+      }
+      await driveState(token, id, ACTIVE, null, { conditional: false });
+    }
     return { acknowledged };
   }
 
@@ -731,7 +779,7 @@ async function settleDeclaredRule(input) {
       live = await readLive(id);
       if (live.missing || intentSha256(live.view.projection) !== baseSemantic) throw coded('rule-drift', `${label}: the rule changed on the server while it was being edited; nothing more is sent`);
     }
-    const staged = await stageEdit(id, planned.root);
+    const staged = await stageEdit(id, planned.root, base.view.projection.scope);
     if (savedShaOf(staged.sent.projection, staged.desiredStatus) !== planned.expected.sentProjectionSha256) {
       throw coded('rule-drift', `${label}: the rule read back differently from the proof it was planned on; nothing more is sent`);
     }
@@ -812,6 +860,10 @@ async function settleDeclaredRule(input) {
     }
     if (!edits.length) return { mode: 'noop' };
     if (!switchOn) throw coded('workflow-edit-refused', `${label}: the declaration ${edits.join(', ')}. ${EDIT_REFUSED_REMEDY}`);
+    // A declaration that changes only the status is a pure state change: one conditional state write, no body push
+    // (the body is already proved, and regenerating it would rewrite what the server holds for nothing).
+    const bodyEdits = editsOf(prev, { ...rule, status: prev.rule.status });
+    if (!bodyEdits.length) return { mode: 'state', id, live, target: rule.status || ACTIVE };
     return { mode: 'edit', id, live };
   }
 
@@ -862,9 +914,17 @@ async function settleDeclaredRule(input) {
       const expected = expectedOf({ id, sent: staged.sent, desiredStatus: staged.desiredStatus, slots, live: null });
       return { root: root(id), expected, declarationSha256, publication: null, mode: 'create', staged, slots };
     }
+    if (resolution.mode === 'state') {
+      // The live body is what stays; only the status moves. The committed slots still name the live nodes (the row
+      // equals the committed proof, checked in resolveManaged).
+      const { id, live, target } = resolution;
+      const slots = run.committed.consumerState.slots || {};
+      const expected = expectedOf({ id, sent: live.view, desiredStatus: target, slots, live });
+      return { root: root(id), expected, declarationSha256, publication: null, mode: 'state', live, target, slots };
+    }
     const { id, live } = resolution;
     const { root: edited, slots } = layoutEdit(live.view.root, run.committed.consumerState.slots || {}, rule, lengthsOf(live.view.root));
-    const staged = await stageEdit(id, edited);
+    const staged = await stageEdit(id, edited, live.view.projection.scope);
     const expected = expectedOf({ id, sent: staged.sent, desiredStatus: staged.desiredStatus, slots, live });
     return { root: root(id), expected, declarationSha256, publication: null, mode: 'edit', live, root2: edited, slots, staged };
   }
@@ -872,7 +932,11 @@ async function settleDeclaredRule(input) {
   async function apply({ token, plan: planned }) {
     run.token = token;
     if (planned.mode === 'adopt') return { mode: 'adopt', acknowledged: false };
-    if (planned.mode === 'create') return { mode: 'create', ...(await driveCreate(token, planned.root.id, planned.staged, false)), slots: planned.slots };
+    if (planned.mode === 'create') return { mode: 'create', ...(await driveCreate(token, planned.root.id, planned.staged)), slots: planned.slots };
+    if (planned.mode === 'state') {
+      await driveState(token, planned.root.id, planned.target, planned.live.version, { conditional: true });
+      return { mode: 'state', acknowledged: false, slots: planned.slots };
+    }
     await driveEdit(token, planned.root.id, { live: planned.live, root: planned.root2, expected: planned.expected });
     return { mode: 'edit', acknowledged: false, slots: planned.slots };
   }
@@ -886,40 +950,41 @@ async function settleDeclaredRule(input) {
       return finalProof(id, expected, applied.slots || positionalSlots(rule), origin, applied.acknowledged);
     }
     // Recovery: the change may already be on the server. Nothing is planned again; the attempt's own effects are
-    // proved by reading, and only what is definitely unsent may still be sent (under its stored record).
+    // proved by reading. A write is sent from here only when its record says it never started AND it is this attempt's
+    // own create's activation, or the edit switch is on (an existing workflow is never changed by default).
     const { committed } = store.readGroup(FAMILY, key);
     run.committed = committed;
     const { attempt, effects } = attemptOf(token);
     if (attempt.declarationSha256 !== declarationSha256) {
       throw coded(CODES.pending, `${label}: an earlier change of this rule is not proved, and the declaration it was sent from has changed; restore that declaration to finish it`);
     }
-    if (!committed) {
-      if (effects.some((e) => e.effect === 'create') || (await readLive(id)).missing) await driveCreate(token, id, null, true);
-      return finalProof(id, expected, positionalSlots(rule), 'adopted', false);
-    }
+    if (!committed) return proveUncommitted(token, id, expected, attempt, effects);
     const origin = (committed.records.find((r) => r.kind === ROOT_KIND) || {}).origin || 'adopted';
     if (!effects.length) {
       // A re-adoption (no write), or an edit whose first write was never recorded: the read decides.
       const live = await readLive(id);
       if (!live.missing && savedShaOf(live.view.projection, live.view.status) === expected.sentProjectionSha256) {
-        const slots = expected.baseObservation && expected.baseObservation.savedSha256 === committed.proof.savedSha256
-          ? editedSlots(committed, live) : positionalSlots(rule);
-        return finalProof(id, expected, slots, origin, false);
+        const rebased = !(expected.baseObservation && expected.baseObservation.savedSha256 === committed.proof.savedSha256);
+        // Binding the rule's current body again (a re-adoption) is the maker's decision, on this run as on the first.
+        if (rebased && !approved) {
+          throw coded(CODES.adoptionRequired, `${label}: an earlier re-adoption of this rule is proved by reading, but binding its current body again needs the adoption approval adopt:rule:${approvalIdOf(rule)}; the attempt is kept`);
+        }
+        return finalProof(id, expected, rebased ? positionalSlots(rule) : editedSlots(committed, live), origin, false);
       }
-      throw coded(CODES.pending, `${label}: an earlier change of this rule was prepared and not sent; re-run with the same declaration and the edit switch to finish it`);
+      throw coded(CODES.pending, `${label}: an earlier change of this rule was prepared and is not on the row; nothing of it is sent from this attempt, which stays pending`);
     }
     // An edit: every write it dispatched is proved by the row as it is now, or the attempt stays pending.
     const live = await readLive(id);
     // The status the edit was meant to end in, when the row as it is now carries exactly what was sent. A row that
-    // carries the sent body but is still Draft is an edit stopped between its body and its own activation.
+    // carries the sent body in the other status is an edit stopped between its body and its own state change.
     const target = live.missing ? null : statusFor(expected, live.view.projection);
-    if (target === null || (target !== live.view.status && target !== ACTIVE)) {
+    if (target === null) {
       throw coded(CODES.pending, `${label}: an earlier edit of this rule is not proved by the row as it is now; it is not sent again`);
     }
     for (const e of effects) {
       if (e.state === 'confirmed') continue;
-      // The edit's own activation is finished below (driveState sends it only when it is definitely unsent).
-      if (e.effect === 'state' && e.desiredState === ACTIVE && live.view.status !== ACTIVE) continue;
+      // The edit's own final state change is settled below.
+      if (e.effect === 'state' && e.desiredState === target && live.view.status !== target) continue;
       if (e.state === 'definitely-unsent') throw coded(CODES.pending, `${label}: an earlier edit of this rule has a write that was never sent`);
       if (e.effect === 'state') {
         if (e.desiredState === live.view.status) store.confirmEffect(e.token, { observedState: e.desiredState });
@@ -928,9 +993,17 @@ async function settleDeclaredRule(input) {
         store.confirmEffect(e.token, { observedSha256: e.desiredSha256 });
       }
     }
-    // The body is on the row and proved; only the edit's own activation is missing. It is sent (once, against the
-    // version of this read) when it never left; one that may have left is proved by reading, never sent again.
-    if (target === ACTIVE && live.view.status !== ACTIVE) await driveState(token, id, ACTIVE, live.version, { conditional: true });
+    if (target !== live.view.status) {
+      // The body is on the row and proved; only the edit's own state change is missing. That is a write to a workflow
+      // that already exists, so by default it is refused before anything is sent, whatever its record says.
+      if (!switchOn) {
+        throw coded('workflow-edit-refused', `${label}: an earlier edit is on the row but the rule is not ${target}; setting it ${target} is a state change of a `
+          + `workflow that already exists, so nothing is sent and the attempt stays pending. ${EDIT_REFUSED_REMEDY}`);
+      }
+      // Sent (once, against the version of this read) only when its record says it never left; one that may have left
+      // is proved by reading, never sent again.
+      await driveState(token, id, target, live.version, { conditional: true });
+    }
     // A Draft state effect the row has since left (the edit's own Active) is proved by the later Active write.
     for (const e of attemptOf(token).effects) {
       if (e.state !== 'confirmed' && e.effect === 'state' && e.desiredState === DRAFT) {
@@ -940,6 +1013,32 @@ async function settleDeclaredRule(input) {
       }
     }
     return finalProof(id, expected, editedSlots(committed, live), origin, false);
+  }
+
+  /**
+   * Recovery of an attempt with no committed group: a create, or a read-only adoption. Only the attempt's own CREATE
+   * may continue as a create, and only by proving it (resumeCreate is what sends a create again, when the row is
+   * proved absent). The discriminator is positive: no base generation, no base observation, no base proof — what
+   * expectedOf records for a create and never for an adoption. Neither "not committed" nor "the row is absent" is
+   * creation authority: an adoption whose row is gone stops, nothing created.
+   */
+  async function proveUncommitted(token, id, expected, attempt, effects) {
+    const isCreate = attempt.baseGeneration === null && expected.baseObservation === null && expected.baseProofSha256 === null;
+    if (isCreate) {
+      const create = effects.find((e) => e.effect === 'create') || null;
+      if (!create || create.state === 'definitely-unsent') {
+        if (await readVersion(id)) throw coded('create-identity-conflict', `${label}: a workflow already holds the id ${id}, and no create of this build reached the server; nothing is bound to it`);
+        throw coded(CODES.pending, `${label}: its create never left and the row is absent; it is not sent from here`);
+      }
+      const { acknowledged } = await finishCreate(token, id, null);
+      return finalProof(id, expected, positionalSlots(rule), acknowledged ? 'created' : 'adopted', acknowledged);
+    }
+    if (effects.length) throw coded('create-completion-required', `${label}: an earlier adoption of ${id} recorded a write, which an adoption never makes; nothing is sent or bound`);
+    const live = await readLive(id);
+    if (live.missing) {
+      throw coded('create-completion-required', `${label}: the rule ${id} an earlier run was adopting is gone; an adoption never becomes a create, so nothing is created or bound`);
+    }
+    return finalProof(id, expected, positionalSlots(rule), 'adopted', false);
   }
 
   // The slots an edit laid out, recomputed from the edited tree (see layoutEdit / lengthsBefore).
@@ -959,16 +1058,34 @@ async function settleDeclaredRule(input) {
     return halt(ph, lbl, code, extra);
   };
 
+  // The feature's own checks on every path (runManagedFeature `preflight`), before anything is read into the
+  // workspace or sent: the local copy of every row this attempt may touch holds no unsent edit. No request is made.
+  async function preflight({ committed, pending }) {
+    const ids = [committed && committed.root && committed.root.id, pending && pending.root && pending.root.id, pending && pending.expected && pending.expected.rootId];
+    if (!committed) {
+      try { ids.push(identityFor('businessRule', key, { catalog }).id); } catch { /* resolve reports a catalog without this rule */ }
+    }
+    for (const id of ids) if (id) await guard.assertClean(id);
+  }
+
+  // A create no answer acknowledged (runManagedFeature `resumeCreate`): is its row there, by the id the create names?
+  // A workflow row has one layer (no unpublished/published split), so one read answers for both; a failed read throws.
+  async function resumeCreate({ pending }) {
+    return { root: (await readVersion(pending.root.id)) ? 'present' : 'absent' };
+  }
+
   try {
     const out = await runManagedFeature({
       phase, family: FAMILY, key, label, knownScopes: [], knownIds: [], store, barrier, halt: haltOrSkip,
-      resolve, plan, apply, prove, ensureMembership,
+      preflight, resolve, plan, apply, prove, ensureMembership, resumeCreate, adoptionApproved: approved,
     });
     const id = out.committedGroup && out.committedGroup.root ? out.committedGroup.root.id : null;
     return { ...out.result, id };
   } catch (err) {
     if (err && err[SKIP]) return { skipped: 'unavailable', cause: err.cause };
     throw err;
+  } finally {
+    await guard.restoreStaged();
   }
 }
 
@@ -983,7 +1100,6 @@ module.exports = {
   editsOf,
   wholeBodyErrors,
   isAvailabilityRefusal,
-  isDefiniteRefusal,
   EDIT_REFUSED_REMEDY,
   PROOF_SCHEMA,
 };

@@ -35,6 +35,12 @@ function createWorkflowWire({ enforceIfMatch = true } = {}) {
   const stale = () => json(412, { error: { code: '0x80060882', message: 'The version of the existing record doesn\'t match the RowVersion property provided.' } });
   const etagOf = (r) => `W/"${r.version}"`;
   const bump = (r) => { r.version += 1; };
+  // A rule's trigger scope as Create/UpdateProcessWithWfomJson carry it on Entity: 2 = the table (scope Entity),
+  // 1 = all forms (AllForms, no form id). Kept on the row and read back, so a scope edit is observable.
+  const scopeOf = (e) => ({
+    processtriggerscope: e.processtriggerscope == null ? 2 : e.processtriggerscope,
+    processtriggerformid: e.processtriggerformid == null ? null : e.processtriggerformid,
+  });
   const conditionalFails = (r, headers) => {
     const held = headerValue(headers, 'if-match');
     return enforceIfMatch && held && held !== '*' && held !== etagOf(r);
@@ -45,14 +51,14 @@ function createWorkflowWire({ enforceIfMatch = true } = {}) {
     if (m && method === 'GET') {
       const r = rows.get(m[1].toLowerCase());
       if (!r || r.kind !== 'rule') return notFound();
-      return json(200, { Entity: { workflowid: r.workflowid, name: r.name, description: r.description == null ? '' : r.description, primaryentity: r.primaryentity, statecode: r.statecode, processtriggerscope: 2 }, WfomJson: r.wfom }, { etag: etagOf(r) });
+      return json(200, { Entity: { workflowid: r.workflowid, name: r.name, description: r.description == null ? '' : r.description, primaryentity: r.primaryentity, statecode: r.statecode, processtriggerscope: r.processtriggerscope, processtriggerformid: r.processtriggerformid }, WfomJson: r.wfom }, { etag: etagOf(r) });
     }
     m = /^workflows\(([^)]+)\)\/Microsoft\.Dynamics\.CRM\.(Create|Update)ProcessWithWfomJson$/i.exec(p);
     if (m && method === 'POST') {
       const id = String(body.Entity.workflowid).toLowerCase();
       if (m[2] === 'Create') {
         if (rows.has(id)) return json(412, { error: { code: '0x80040237', message: 'Cannot insert duplicate key.' } });
-        rows.set(id, { kind: 'rule', workflowid: id, category: 2, type: 1, name: body.Entity.name, description: body.Entity.description, primaryentity: body.Entity.primaryentity, wfom: body.WfomJson, statecode: 0, statuscode: 1, version: 1 });
+        rows.set(id, { kind: 'rule', workflowid: id, category: 2, type: 1, name: body.Entity.name, description: body.Entity.description, primaryentity: body.Entity.primaryentity, ...scopeOf(body.Entity), wfom: body.WfomJson, statecode: 0, statuscode: 1, version: 1 });
         return json(200, { workflowid: id }, { etag: 'W/"1"' });
       }
       const r = rows.get(id);
@@ -61,6 +67,7 @@ function createWorkflowWire({ enforceIfMatch = true } = {}) {
       r.wfom = body.WfomJson;
       if (body.Entity.description !== undefined) r.description = body.Entity.description;
       if (body.Entity.name !== undefined) r.name = body.Entity.name;
+      Object.assign(r, scopeOf(body.Entity));
       bump(r);
       return json(200, { workflowid: id }, { etag: etagOf(r) });
     }

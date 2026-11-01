@@ -19,6 +19,7 @@ const { BuildHalt } = require('../lib/entity-provision.js');
 const { RETRY } = require('../lib/retry-policy.js');
 const { businessRuleDef } = require('../lib/sdk-build.js');
 const { settleDeclaredRule, compileRuleIntent } = require('../lib/rule-settlement.js');
+const { createWorkflowDriver } = require('../lib/workflow-drive.js');
 
 const APP = 'contoso_app';
 const SOL = 'contoso_solution';
@@ -276,9 +277,42 @@ test('an enforcing service refuses a stale edit (412) and keeps the competing bo
   assert.equal(control.wire.row(control.id).description, '', 'a service that ignores the version loses the competing body');
 });
 
-test('an edit stopped between its body and its own activation is finished by a re-run: a refused activation is sent once more, a lost one is only read', async () => {
-  for (const answer of [{ statusCode: 400, body: { error: { code: '0x80040203', message: 'busy' } }, unapplied: true }, { error: 'socket hang up', code: 'ECONNRESET', unapplied: true }]) {
-    const refused = Boolean(answer.statusCode);
+test('an edit stopped between its body and its own activation: only a conditional 412 proves no start, and only the switch sends it again', async () => {
+  // The service refuses the activation's precondition (412 to a request that carried If-Match) and leaves the row as it
+  // was: the effect gate records that the write never started, so the switch-on rerun may send it once more.
+  const { wire, dir, id } = await created();
+  let bodySeen = false;
+  wire.script((e) => {
+    if (/UpdateProcess/.test(e.path)) bodySeen = true;
+    return bodySeen && e.method === 'PATCH' && e.body && e.body.statecode === 1;
+  }, { statusCode: 412, body: { error: { code: '0x80060882', message: 'precondition failed' } }, unapplied: true });
+  const first = await settle(wire, dir, withCondition(RULE, 'C'), { opts: SWITCH });
+  assert.equal(first.error && first.error.code, 'rule-drift', 'a refused precondition reads as drift');
+  assert.match(wire.row(id).wfom, /"C"/);
+
+  // Without the switch the rerun may only read: setting the existing rule Active is a state change of a live row.
+  const refused = await settle(wire, dir, withCondition(RULE, 'C'));
+  assert.equal(refused.error && refused.error.code, 'workflow-edit-refused');
+  assert.deepEqual(writesSince(wire, refused.from), [], 'no write without the switch');
+  assert.equal(wire.row(id).statecode, 0);
+
+  const again = await settle(wire, dir, withCondition(RULE, 'C'), { opts: SWITCH });
+  assert.ifError(again.error);
+  assert.equal(again.result.recovered, true);
+  assert.deepEqual(writeLines(wire, again.from), ['PATCH workflows(<id>)'], 'only the activation, sent once more');
+  const [write] = writesSince(wire, again.from);
+  assert.deepEqual(write.body, { statecode: 1, statuscode: 2 });
+  assert.equal(ifMatchOf(write), `W/"${wire.row(id).version - 1}"`, 'against the version just read');
+  assert.equal(wire.row(id).statecode, 1);
+});
+
+test('an answered refusal of an activation is not proof that it never started: it is never sent again', async () => {
+  // A generic 400, a 412 to a request that carried no If-Match, and a lost answer all leave the outcome open.
+  const answers = [
+    ['generic-400', { statusCode: 400, body: { error: { code: '0x80040203', message: 'busy' } }, unapplied: true }, 'workflow-state-path-unavailable'],
+    ['lost', { error: 'socket hang up', code: 'ECONNRESET', unapplied: true }, CODES.pending],
+  ];
+  for (const [label, answer, firstCode] of answers) {
     const { wire, dir, id } = await created();
     let bodySeen = false;
     wire.script((e) => {
@@ -286,25 +320,17 @@ test('an edit stopped between its body and its own activation is finished by a r
       return bodySeen && e.method === 'PATCH' && e.body && e.body.statecode === 1;
     }, answer);
     const first = await settle(wire, dir, withCondition(RULE, 'C'), { opts: SWITCH });
-    assert.equal(first.error && first.error.code, refused ? 'workflow-state-path-unavailable' : CODES.pending);
-    assert.equal(wire.row(id).statecode, 0, 'left Draft with the new body');
-    assert.match(wire.row(id).wfom, /"C"/);
-
+    assert.equal(first.error && first.error.code, firstCode, label);
+    const { effects } = first.p.store.readGroup('rule', 'account/Hide fax');
+    assert.deepEqual(effects.map((e) => e.state).slice(-1), ['unconfirmed'], `${label}: the activation stays unconfirmed`);
     const again = await settle(wire, dir, withCondition(RULE, 'C'), { opts: SWITCH });
-    if (refused) {
-      assert.ifError(again.error);
-      assert.equal(again.result.recovered, true);
-      const writes = writesSince(wire, again.from);
-      assert.deepEqual(writes.map((e) => e.body), [{ statecode: 1, statuscode: 2 }], 'only the activation, sent once more');
-      assert.equal(ifMatchOf(writes[0]), `W/"${wire.row(id).version - 1}"`, 'against the version just read');
-      assert.equal(wire.row(id).statecode, 1);
-    } else {
-      assert.equal(again.error && again.error.code, CODES.pending, 'a lost activation is never sent again');
-      assert.deepEqual(writesSince(wire, again.from), []);
-    }
+    assert.equal(again.error && again.error.code, CODES.pending, label);
+    assert.deepEqual(writesSince(wire, again.from), [], `${label}: never sent again`);
+    assert.equal(wire.row(id).statecode, 0);
   }
 });
-test('a create whose answer is lost is never sent again: it stays pending until a read proves it, then settles in a fresh process', async () => {
+
+test('a create whose answer is lost is never sent again; once a read finds the row, binding it needs the adopt approval', async () => {
   const wire = createWorkflowWire();
   const dir = makeTempDir('rule-settle-');
   wire.script((e) => /CreateProcess/.test(e.path), { error: 'socket hang up', code: 'ECONNRESET', unapplied: true });
@@ -317,10 +343,15 @@ test('a create whose answer is lost is never sent again: it stays pending until 
   assert.equal(still.error && still.error.code, CODES.pending);
   assert.deepEqual(writesSince(wire, still.from), [], 'an unproved create is not sent again');
 
-  // The service carried the create out after all.
+  // The service carried the create out after all. No answer said so, so the row is not known to be this build's.
   const id = String(sent.Entity.workflowid).toLowerCase();
   wire.rows.set(id, { kind: 'rule', workflowid: id, category: 2, type: 1, name: sent.Entity.name, description: sent.Entity.description, primaryentity: sent.Entity.primaryentity, wfom: sent.WfomJson, statecode: 0, statuscode: 1, version: 1 });
-  const out = await settle(wire, dir, RULE);
+  const unapproved = await settle(wire, dir, RULE);
+  assert.equal(unapproved.error && unapproved.error.code, CODES.adoptionRequired);
+  assert.deepEqual(writesSince(wire, unapproved.from), [], 'nothing is sent before the approval');
+  assert.ok(unapproved.p.store.readGroup('rule', 'account/Hide fax').pending, 'the attempt is kept');
+
+  const out = await settle(wire, dir, RULE, { approvals: approve() });
   assert.ifError(out.error);
   assert.deepEqual(out.result, { committed: true, recovered: true, id });
   assert.deepEqual(writeLines(wire, out.from), ['PATCH workflows(<id>)'], 'only its own activation is sent');
@@ -328,21 +359,23 @@ test('a create whose answer is lost is never sent again: it stays pending until 
   assert.deepEqual(wire.deleted, []);
 });
 
-test('a 503 to a create the service did carry out is proved by the read, not resent', async () => {
+test('a 503 to a create the service did carry out is proved by the read, not resent, and is bound only with the adopt approval', async () => {
   const wire = createWorkflowWire();
+  const dir = makeTempDir('rule-settle-');
   wire.script((e) => /CreateProcess/.test(e.path), { statusCode: 503, body: { error: { code: '0x80040216', message: 'busy' } } });
-  const out = await settle(wire, makeTempDir('rule-settle-'), RULE);
+  const first = await settle(wire, dir, RULE);
+  assert.equal(first.error && first.error.code, CODES.adoptionRequired);
+  assert.deepEqual(writeLines(wire, first.from), ['POST workflows(00000000-0000-0000-0000-000000000000)/Microsoft.Dynamics.CRM.CreateProcessWithWfomJson']);
+  const out = await settle(wire, dir, RULE, { approvals: approve() });
   assert.ifError(out.error);
-  assert.deepEqual(writeLines(wire, out.from), [
-    'POST workflows(00000000-0000-0000-0000-000000000000)/Microsoft.Dynamics.CRM.CreateProcessWithWfomJson',
-    'PATCH workflows(<id>)',
-  ]);
+  assert.deepEqual(writeLines(wire, out.from), ['PATCH workflows(<id>)']);
+  assert.equal(out.p.store.readGroup('rule', 'account/Hide fax').committed.records[0].origin, 'adopted');
 });
 
-test('a failed or lost activation never deletes the created rule', async () => {
+test('a failed or lost activation never deletes the created rule and is never sent again', async () => {
   const refused = { statusCode: 400, body: { error: { code: '0x80040203', message: 'invalid' } }, unapplied: true };
   const lost = { error: 'socket hang up', code: 'ECONNRESET', unapplied: true };
-  for (const [answer, code, rerunWrites] of [[refused, 'workflow-state-path-unavailable', ['PATCH']], [lost, CODES.pending, []]]) {
+  for (const [answer, code] of [[refused, 'workflow-state-path-unavailable'], [lost, CODES.pending]]) {
     const wire = createWorkflowWire();
     const dir = makeTempDir('rule-settle-');
     wire.script((e) => e.method === 'PATCH', answer);
@@ -351,12 +384,10 @@ test('a failed or lost activation never deletes the created rule', async () => {
     assert.deepEqual(writesSince(wire, out.from).map((e) => e.method), ['POST', 'PATCH'], 'the activation is sent once');
     assert.deepEqual(wire.deleted, []);
     assert.equal(wire.rows.size, 1);
-    // A refused activation was never started, so the next run sends it once more under its own record; a lost one may
-    // have been carried out, so it is never sent again and the attempt waits for a read that proves it.
+    // Neither answer proves the activation never started, so the attempt waits for a read that proves it.
     const again = await settle(wire, dir, RULE);
-    assert.deepEqual(writesSince(wire, again.from).map((x) => x.method), rerunWrites);
-    if (rerunWrites.length) assert.equal(again.result && again.result.recovered, true);
-    else assert.equal(again.error && again.error.code, CODES.pending);
+    assert.deepEqual(writesSince(wire, again.from), []);
+    assert.equal(again.error && again.error.code, CODES.pending);
   }
 });
 
@@ -390,18 +421,28 @@ test('availability: only a confirmed switched-off refusal of the create, with no
   const again = await settle(wire, dir, RULE);
   assert.equal(again.result && again.result.skipped, 'unavailable');
   assert.equal(writesSince(wire, again.from).length, 1);
-  // Once the environment hosts rules, the same attempt finishes: its create is sent under its stored record.
+  // Once the environment hosts rules, the same attempt finishes: its create is sent under its stored record, and this
+  // time its answer acknowledges the row.
   const later = await settle(wire, dir, RULE);
   assert.ifError(later.error);
   assert.deepEqual(later.result.recovered, true);
-  assert.equal(later.p.store.readGroup('rule', 'account/Hide fax').committed.records[0].origin, 'adopted');
+  assert.deepEqual(writeLines(wire, later.from), [
+    'POST workflows(00000000-0000-0000-0000-000000000000)/Microsoft.Dynamics.CRM.CreateProcessWithWfomJson',
+    'PATCH workflows(<id>)',
+  ]);
+  assert.equal(later.p.store.readGroup('rule', 'account/Hide fax').committed.records[0].origin, 'created');
 
-  // The same answer to a create the platform did save is not a skip: the rule is proved and bound.
+  // The same answer to a create the platform did save is not a skip: the row is proved by reading, and because no answer
+  // acknowledged it, it is bound only with the adopt approval.
   const saved = createWorkflowWire();
+  const savedDir = makeTempDir('rule-settle-');
   saved.script((e) => /CreateProcess/.test(e.path), off);
-  const kept = await settle(saved, makeTempDir('rule-settle-'), RULE);
+  const held = await settle(saved, savedDir, RULE);
+  assert.equal(held.error && held.error.code, CODES.adoptionRequired);
+  const kept = await settle(saved, savedDir, RULE, { approvals: approve() });
   assert.ifError(kept.error);
   assert.equal(kept.result.committed, true);
+  assert.equal(kept.p.store.readGroup('rule', 'account/Hide fax').committed.records[0].origin, 'adopted');
 
   // A 5xx is never a skip.
   const busy = createWorkflowWire();
@@ -428,6 +469,120 @@ test('an edit interrupted before its commit leaves the committed group as it was
   assert.deepEqual(writesSince(wire, out.from), []);
   const next = await settle(wire, dir, withCondition(RULE, 'C'), { opts: SWITCH });
   assert.equal(next.result.noop, true);
+});
+
+const causeCategory = (err) => { for (let e = err; e; e = e.cause) if (e.category) return e.category; return null; };
+const ruleCopy = (dir, id) => [path.join(dir, 'sdk', 'business-rules', `${id}.json`), path.join(dir, 'sdk', '.metadata', 'business-rules', `${id}.meta.json`)];
+
+test('a local copy with an edit no run sent stops every path before any request and is kept byte for byte', async () => {
+  const fs = require('node:fs');
+  const { wire, dir, id } = await created();
+  const p = await processOver(wire, dir);
+  await p.sdk.updateElement('businessRule', id, '/rootCondition/clauses/0/value', 'Z');
+  const [file] = ruleCopy(dir, id);
+  const bytes = fs.readFileSync(file);
+  // The same declaration (the no-op path), a switch-on edit and a pure state change: each refuses unread and unsent.
+  for (const [rule, extra] of [[RULE, {}], [withCondition(RULE, 'C'), { opts: SWITCH }], [{ ...RULE, status: 'Draft' }, { opts: SWITCH }], [RULE, {}]]) {
+    const out = await settle(wire, dir, rule, extra);
+    assert.equal(out.error && out.error.code, 'create-completion-required');
+    assert.equal(causeCategory(out.error), 'workspace-copy-unsent-edits');
+    assert.deepEqual(wire.log.slice(out.from), [], 'no request at all');
+    assert.deepEqual(fs.readFileSync(file), bytes, 'the local copy is kept');
+  }
+  // The remedy the message names: delete only the copy's own two files; the binding store is untouched.
+  for (const f of ruleCopy(dir, id)) fs.rmSync(f, { force: true });
+  const next = await settle(wire, dir, RULE);
+  assert.ifError(next.error);
+  assert.equal(next.result.noop, true);
+  assert.deepEqual(writesSince(wire, next.from), []);
+});
+
+test('an approved adoption whose row is gone before it is bound never recreates it', async () => {
+  const seed = await created();
+  const wire = seed.wire;
+  const dir = makeTempDir('rule-settle-');
+  const failing = async () => { throw new Error('solution membership failed'); };
+  const first = await settle(wire, dir, RULE, { approvals: approve(), ensureMembership: failing });
+  assert.ok(first.error);
+  assert.deepEqual(writesSince(wire, first.from), []);
+  wire.rows.delete(seed.id);
+  for (const extra of [{}, { approvals: approve() }, { approvals: approve(), opts: SWITCH }]) {
+    const out = await settle(wire, dir, RULE, extra);
+    assert.ok(out.error, 'it stops');
+    assert.deepEqual(writesSince(wire, out.from), [], 'no POST and no PATCH');
+    assert.equal(wire.rows.size, 0, 'no row is recreated');
+  }
+});
+
+test('with the switch, a scope change is staged, sent with the body and proved; a re-adoption compares the scope', async () => {
+  const { wire, dir, id } = await created({ ...RULE, status: 'Draft' });
+  const allForms = { ...RULE, status: 'Draft', scope: 'AllForms' };
+  const refused = await settle(wire, dir, allForms);
+  assert.equal(refused.error && refused.error.code, 'workflow-edit-refused');
+  assert.deepEqual(wire.log.slice(refused.from), []);
+  const out = await settle(wire, dir, allForms, { opts: SWITCH });
+  assert.ifError(out.error);
+  assert.deepEqual(writeLines(wire, out.from), ['POST workflows(00000000-0000-0000-0000-000000000000)/Microsoft.Dynamics.CRM.UpdateProcessWithWfomJson']);
+  assert.equal(wire.row(id).processtriggerscope, 1, 'AllForms reaches the row');
+  assert.equal((await settle(wire, dir, allForms)).result.noop, true);
+
+  // A same-name rule this workspace does not manage: a declaration whose scope differs from the live one is not its body.
+  const other = makeTempDir('rule-settle-');
+  const wrong = await settle(wire, other, { ...RULE, status: 'Draft' }, { approvals: approve() });
+  assert.equal(wrong.error && wrong.error.code, 'rule-whole-body-required');
+  assert.deepEqual(writesSince(wire, wrong.from), []);
+  const right = await settle(wire, other, allForms, { approvals: approve() });
+  assert.ifError(right.error);
+  assert.deepEqual(writesSince(wire, right.from), []);
+});
+
+test('a state-only change is one conditional state write with no body, and is refused unsent by default', async () => {
+  const { wire, dir, id } = await created({ ...RULE, status: 'Draft' });
+  const refused = await settle(wire, dir, RULE);
+  assert.equal(refused.error && refused.error.code, 'workflow-edit-refused');
+  assert.deepEqual(wire.log.slice(refused.from), [], 'the default refusal sends no request');
+  const before = wire.row(id).wfom;
+  const out = await settle(wire, dir, RULE, { opts: SWITCH });
+  assert.ifError(out.error);
+  assert.deepEqual(writeLines(wire, out.from), ['PATCH workflows(<id>)']);
+  const [write] = writesSince(wire, out.from);
+  assert.deepEqual(write.body, { statecode: 1, statuscode: 2 });
+  assert.equal(ifMatchOf(write), `W/"${wire.row(id).version - 1}"`);
+  assert.equal(wire.row(id).wfom, before, 'no definition push');
+  assert.equal((await settle(wire, dir, RULE)).result.noop, true);
+
+  const back = await settle(wire, dir, { ...RULE, status: 'Draft' }, { opts: SWITCH });
+  assert.ifError(back.error);
+  assert.deepEqual(writesSince(wire, back.from).map((e) => e.body), [{ statecode: 0, statuscode: 1 }]);
+});
+
+test('a state write a path proposes late, on a row this attempt is not proved to have created, is refused before it is recorded or sent', async () => {
+  // A Draft rule another workspace created at the id this rule's catalog derives: present, and not this attempt's.
+  const wire = createWorkflowWire();
+  const other = await settle(wire, makeTempDir('rule-settle-'), { ...RULE, status: 'Draft' });
+  assert.ifError(other.error);
+  const id = other.result.id;
+  const key = `${RULE.entity}/${RULE.name}`;
+  for (const conditionalEdits of [false, true]) {
+    const { store, sdk, httpClient } = await processOver(wire, makeTempDir('rule-settle-'));
+    // A create-shaped attempt (no base) with no recorded effect: what a recovery sees before it records one.
+    const token = store.prepareAttempt({
+      family: 'rule', key, root: { kind: 'business-rule', key, id }, declarationSha256: 'a'.repeat(64),
+      expected: { proofVersion: 1, proofSchema: 'business-rule/declared-1', rootId: id, baseProofSha256: null, sentProjectionSha256: 'b'.repeat(64), preservationSha256: 'c'.repeat(64), baseObservation: null, children: [] },
+    });
+    const driver = createWorkflowDriver({ store, sdk, httpClient, instanceUrl: ORIGIN, family: 'rule', key, label: 'probe', noun: 'rule', driftCode: 'rule-drift', conditionalEdits });
+    const from = wire.log.length;
+    const failure = await driver.driveState(token, id, 'Active', null, { conditional: false }).then(() => null, (e) => e);
+    if (!conditionalEdits) {
+      assert.equal(failure && failure.code, 'workflow-edit-refused');
+      assert.deepEqual(writeLines(wire, from), [], 'nothing is sent');
+      assert.deepEqual(store.readGroup('rule', key).effects, [], 'nothing is recorded');
+      assert.equal(wire.row(id).statecode, 0, 'the existing Draft stays Draft');
+    } else {
+      assert.ifError(failure);
+      assert.deepEqual(writeLines(wire, from), ['PATCH workflows(<id>)'], 'only the switch lets it through');
+    }
+  }
 });
 
 test('compileRuleIntent is byte-identical to businessRuleDef for the legacy rule corpus', () => {

@@ -9,9 +9,13 @@
 //     mutation inside the same call is refused unsent.
 //   - A stored record that is still `definitely-unsent` is sent under that same record (`runWithWorkflowEffect`), so
 //     a retry never mints a second record for one write.
-//   - A write whose answer is lost is proved by a fresh read of the row, never by sending it again. Only a definite
-//     refusal (a 4xx to the first send of the request, or 412) is recorded `definite-no-start`, which is what lets the
-//     next run send it once more.
+//   - A write whose answer is lost or refused is proved by a fresh read of the row, never by sending it again. Only the
+//     effect gate's own record says a write never started: a 412 to a request that carried If-Match (the precondition
+//     was false, so the method was not applied). A generic 4xx is not that proof — the operation may have started
+//     before the answer was made — so the effect stays `unconfirmed` and is never sent again.
+//     See: https://learn.microsoft.com/en-us/power-apps/developer/data-platform/webapi/perform-conditional-operations-using-web-api
+//   - The local SDK copy of the row is a maker's workspace too: an edit nobody sent is never overwritten, reseeded or
+//     deleted (createCopyGuard).
 //   - The state change is the measured state-only path: `updateRecord` -> one `PATCH workflows(<id>)` with exactly
 //     { statecode, statuscode }. With a row version (the conditional-edit switch) it is sent through the plugin's HTTP
 //     client instead, because `updateRecord` cannot carry an `If-Match` header.
@@ -21,7 +25,7 @@ const { normalizeGuid } = require('./reconcile-common.js');
 const { withWorkflowEffect } = require('./managed-feature-contract.js');
 const { runWithWorkflowEffect } = require('./workflow-effect-context.js');
 const { CODES } = require('./managed-bindings.js');
-const { HTTP_SEND_HISTORY } = require('./sdk-http-client.js');
+const { hasUnsyncedEdits } = require('./unsynced-edits.js');
 
 const ACTIVE = 'Active';
 const DRAFT = 'Draft';
@@ -35,8 +39,7 @@ function coded(code, message, extra = {}) {
 
 // The SDK throws a service answer as
 //   Error 'HTTP 400 from <url>: …' { code: 'CONNECTION_ERROR', statusCode: 400, url, cause: <the response body> }
-// and the plugin's client marks that body with HTTP_SEND_HISTORY ({ sends, earlierAmbiguous }), so the facts that
-// decide whether a write started are spread over a short cause chain.
+// so the facts about how a write ended are spread over a short cause chain.
 function causeChain(err) {
   const chain = [];
   for (let e = err; e && typeof e === 'object' && chain.length < 6 && !chain.includes(e); e = e.cause) chain.push(e);
@@ -52,21 +55,59 @@ function leavesOutcomeOpen(chain) {
   });
 }
 
-/**
- * A 4xx answer to the first send of this request (not a timeout, not throttling) that leaves nothing open: the
- * write did not start. Anything else may have started, and is proved by reading, never by sending again.
- */
-function isDefiniteRefusal(err) {
+/** The 4xx the service answered the write with, or null (no answer, or an answer that leaves the outcome open). */
+function answeredRefusal(err) {
   const chain = causeChain(err);
-  if (leavesOutcomeOpen(chain)) return false;
-  const answered = chain.find((e) => {
+  if (leavesOutcomeOpen(chain)) return null;
+  return chain.find((e) => {
     const status = e.statusCode != null ? e.statusCode : e.status;
-    return Number.isInteger(status) && status >= 400 && status < 500 && status !== 408 && status !== 429;
-  });
-  if (!answered) return false;
-  if (answered.statusCode === 412 || answered.status === 412) return true;
-  const history = answered.cause && typeof answered.cause === 'object' ? answered.cause[HTTP_SEND_HISTORY] : null;
-  return Boolean(history) && history.earlierAmbiguous === false;
+    return Number.isInteger(status) && status >= 400 && status < 500;
+  }) || null;
+}
+
+// The remedy for a local copy that holds an edit no build sent. Only this row's own copy is named: the workspace's
+// general reset also removes the managed binding store, which this attempt still needs.
+const COPY_REMEDY = 'Put any change you want to keep into the spec, then delete only this row\'s local copy (the files named '
+  + '<id>.json and <id>.meta.json under the workspace\'s sdk folder; never a managed-bindings.*.json file) and re-run';
+
+/**
+ * The clean-continuation check of the local SDK copy (lib/unsynced-edits.js hasUnsyncedEdits: the SDK's own diff of
+ * the copy against the snapshot of what the server last returned). Run before any fetch with overwrite, reseed,
+ * delete or restage of a row's copy, on every path — a no-op and a recovery included: an edit an earlier run did not
+ * send, or one made by hand, is not this build's to throw away, and an attempt that names the same id is no
+ * permission to. A copy that differs, cannot be compared, or was created and never synced stops the build untouched
+ * (`create-completion-required`, category `workspace-copy-unsent-edits`). A copy is checked once per process; after
+ * that the process's own staging is what makes it differ, and `restoreStaged` drops that staging again when the
+ * process ends with it unsent, so the next run finds a clean copy (or none) and not this run's leftovers.
+ */
+function createCopyGuard({ sdk, artifact, label, noun }) {
+  const checked = new Set();
+  const staged = new Set();
+  async function assertClean(id) {
+    const k = String(id || '').toLowerCase();
+    if (!k || checked.has(k)) return;
+    // hasUnsyncedEdits answers true for a copy it cannot compare (no method, a throw), which here is a refusal.
+    if (await hasUnsyncedEdits(sdk, artifact, id)) {
+      throw coded('create-completion-required', `${label}: the local copy of the ${noun} ${id} in the workspace differs from the server's `
+        + `(an edit an earlier run did not send, or one made by hand), or could not be compared with it, so nothing was read over it `
+        + `and nothing was written; the local copy was kept. ${COPY_REMEDY}`, { category: 'workspace-copy-unsent-edits' });
+    }
+    checked.add(k);
+  }
+  function noteStaged(id) {
+    staged.add(String(id).toLowerCase());
+  }
+  // Best effort, local only (no request): a copy this process staged and did not get synced is removed, so a later
+  // read fetches the server's. Never throws — the build is already ending with the error that left it unsent.
+  async function restoreStaged() {
+    for (const id of staged) {
+      try {
+        if (await hasUnsyncedEdits(sdk, artifact, id)) await sdk.deleteArtifact(artifact, id);
+      } catch { /* the next run's check refuses whatever is left */ }
+    }
+    staged.clear();
+  }
+  return { assertClean, noteStaged, restoreStaged };
 }
 
 /**
@@ -77,8 +118,11 @@ function isDefiniteRefusal(err) {
  *   family, key, label   the store group and the text errors name it by
  *   noun                 what the row is called in messages ('rule', 'process flow')
  *   driftCode            the family's drift code ('rule-drift', 'bpf-drift')
+ *   conditionalEdits     the edit switch (opts.workflowConditionalEdits === true); off, the dispatch gate allows a row
+ *                        no write but the activation of this attempt's own Draft
+ *   editRefusedRemedy    the family's remedy text for workflow-edit-refused
  */
-function createWorkflowDriver({ store, sdk, httpClient = null, instanceUrl = null, family, key, label, noun, driftCode }) {
+function createWorkflowDriver({ store, sdk, httpClient = null, instanceUrl = null, family, key, label, noun, driftCode, conditionalEdits = false, editRefusedRemedy = '' }) {
   // The version is read BEFORE the body by every caller, so a write that lands between the two leaves the version
   // stale: the conditional write that carries it is refused rather than overwriting a body the run never proved.
   // The row's `@odata.etag` is its version, e.g. { "workflowid": "…", "statecode": 1, "@odata.etag": "W/\"1234\"" }.
@@ -102,9 +146,43 @@ function createWorkflowDriver({ store, sdk, httpClient = null, instanceUrl = nul
   function effectOf(token, pick) {
     return attemptOf(token).effects.filter(pick).pop() || null;
   }
+  /**
+   * The rows THIS attempt's own create made, by positive evidence only: the attempt is a create (no committed group, no
+   * base generation, no base observation, no base proof — what a create records and an adoption or edit never does),
+   * and its own `create` effect for the row is confirmed (a fresh read found the row carrying what that create sent).
+   * A row that is merely present, absent, uncommitted or unrecorded is not in the set. Shaped after the shared
+   * rowsCreatedByAttempt({ pending, effects }) so the two can be swapped.
+   */
+  function rowsCreatedByAttempt(token) {
+    const { committed } = store.readGroup(family, key);
+    const { attempt, effects } = attemptOf(token);
+    const expected = attempt.expected || {};
+    const created = new Set();
+    if (committed || attempt.baseGeneration !== null || expected.baseObservation !== null || expected.baseProofSha256 !== null) return created;
+    for (const e of effects) if (e.effect === 'create' && e.state === 'confirmed' && e.rowId) created.add(normalizeGuid(e.rowId));
+    return created;
+  }
+
+  /**
+   * The existing-workflow edit gate at the point of dispatch, for every body and state write on every path (a first
+   * send, a continued attempt, a recovery), before its effect is recorded or sent. A preflight sees only effects that
+   * were already persisted, so a path that records a NEW effect late (inside recovery, after a read) must be stopped
+   * here. With the conditional-edit switch off, the one write a row may receive after its create is the activation of
+   * this attempt's own Draft; anything else to a row is `workflow-edit-refused`, nothing recorded and nothing sent.
+   */
+  function assertDispatchAllowed(token, effect) {
+    if (effect.effect === 'create' || conditionalEdits) return;
+    const id = normalizeGuid(effect.rowId);
+    if (effect.effect === 'state' && effect.desiredState === ACTIVE && rowsCreatedByAttempt(token).has(id)) return;
+    throw coded('workflow-edit-refused', `${label}: ${effect.effect === 'state' ? `setting the ${noun} ${effect.desiredState}` : `writing the ${noun}'s body`} `
+      + `would change the workflow ${id}, which this attempt's own create is not proved to have made; nothing was recorded or sent. ${editRefusedRemedy}`);
+  }
+
   // Send one write inside its effect context: a stored record (definitely-unsent) is sent under that record, else a
-  // new record is persisted first. Answers the error the write ended with, or null; never throws a write failure.
+  // new record is persisted first. Answers the error the write ended with, or null; never throws a write failure — but
+  // the dispatch gate above throws BEFORE anything is recorded or sent.
   async function sendOnce(token, stored, effect, write) {
+    assertDispatchAllowed(token, stored || effect);
     try {
       const res = stored ? await runWithWorkflowEffect(stored, () => write()) : await withWorkflowEffect({ store, effect: { attemptToken: token, baseGeneration: attemptOf(token).attempt.baseGeneration, family, key, ...effect } }, () => write());
       if (res && res.saved === false) return res.error || coded(CODES.notSettled, 'the SDK reported the write as not saved');
@@ -142,11 +220,13 @@ function createWorkflowDriver({ store, sdk, httpClient = null, instanceUrl = nul
     if (effect.state === 'definitely-unsent') {
       throw coded(driftCode, `${label}: the ${noun} changed on the server after it was read, so setting it ${state} was refused; it is not retried`, { cause: failure });
     }
-    if (failure && isDefiniteRefusal(failure)) {
-      noteNoStart(effect);
-      throw coded('workflow-state-path-unavailable', `${label}: setting the ${noun} ${state} was refused (${failure.message}); the row is kept as it is and nothing is deleted`, { cause: failure });
+    // An answered 4xx says the service did not finish the change, not that it never started it, so the effect stays
+    // unconfirmed: it is proved by reading on every later run and never sent again from this attempt.
+    if (failure && answeredRefusal(failure)) {
+      throw coded('workflow-state-path-unavailable', `${label}: setting the ${noun} ${state} was refused (${failure.message}). That answer does not prove `
+        + `the change never started, so it is not sent again from this attempt; the row is kept as it is and nothing is deleted`, { cause: failure });
     }
-    throw coded(CODES.pending, `${label}: setting the ${noun} ${state} is not proved yet; it is not sent again. Re-run the build to prove it`, { cause: failure });
+    throw coded(CODES.pending, `${label}: setting the ${noun} ${state} is not proved yet and is not sent again; a later run reads the row again to prove it`, { cause: failure });
   }
 
   return { readVersion, attemptOf, effectOf, sendOnce, noteNoStart, driveState };
@@ -154,7 +234,8 @@ function createWorkflowDriver({ store, sdk, httpClient = null, instanceUrl = nul
 
 module.exports = {
   createWorkflowDriver,
-  isDefiniteRefusal,
+  createCopyGuard,
+  answeredRefusal,
   causeChain,
   leavesOutcomeOpen,
   coded,
