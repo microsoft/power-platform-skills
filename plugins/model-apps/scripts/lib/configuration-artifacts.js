@@ -2095,6 +2095,16 @@ function membershipOf(ctx) {
       }
       return null;
     },
+    // The kinds among `kinds` whose component type cannot be read: none when the build joins no solution. It shares
+    // typeOf's memo, so a type read here is not read again by ensure or prove, and a failed read is not retried.
+    async unreadable(kinds) {
+      if (!active) return [];
+      const failed = [];
+      for (const kind of kinds) {
+        try { await typeOf(kind); } catch { failed.push(kind); }
+      }
+      return failed;
+    },
     // [{kind, key, id}] → the items NOT proven to be in the solution.
     async prove(items) {
       const wanted = items.filter((item) => applies(item));
@@ -2161,6 +2171,26 @@ async function applyConfiguration(plan, ctx) {
       continue;
     }
     const unknownBefore = result.unknown.length;
+    // A new duplicate rule joins the solution on its create header, but its declared conditions are added after it, and
+    // the rule itself is proven only at the end. Both need a component type read from metadata (typeOf); were it read
+    // that late, an unreadable type would surface only after the rule was created and published and a condition was
+    // added. So a create reads both types first, and a type it cannot read stops the step here: nothing is written for
+    // the rule. A found rule (update or unchanged) keeps its requests: ensure reads the rule's type before any write
+    // of it, and a condition's type is read when that condition is added.
+    if (op.action === 'create' && kind === 'duplicateRule') {
+      const slots = declaredSlots(kind, op.detail && op.detail.entry, ctx);
+      const failed = await membership.unreadable(slots.length ? ['duplicateRule', 'duplicateRuleCondition'] : ['duplicateRule']);
+      if (failed.length) {
+        const code = 'SOLUTION_COMPONENT_TYPE_UNREADABLE';
+        if (failed.includes('duplicateRule')) pushFinding(result, 'unknown', { kind, key, code, unit: 'membership' });
+        if (failed.includes('duplicateRuleCondition')) {
+          for (const slot of slots) pushFinding(result, 'unknown', { kind: 'duplicateRuleCondition', key: `${portKeyOf(kind, key)}|${slot}`, code, unit: 'membership' });
+        }
+        observationsOf(result).push({ kind, key, source: 'plan-read', definition: 'missing' });
+        stopped = true;
+        continue;
+      }
+    }
     if (op.action === 'update' || (op.action === 'unchanged' && !stopped)) {
       const joined = await membership.ensure(op);
       if (joined) {

@@ -228,6 +228,7 @@ test('a configuration row the build cannot record as managed, and a child the so
 // fake answers 4414 and 4416). The build reads those types and settles both; a type it cannot read is never guessed.
 const RULE_ONLY = () => ({ ...makeSpec({ configuration: false }), duplicateDetectionRules: CONFIGURATION_FIELDS.duplicateDetectionRules });
 const adds = (requests) => requests.filter((r) => r.method === 'POST' && r.path === '/AddSolutionComponent').map((r) => r.body.ComponentType);
+const ruleWrites = (writes) => writes.filter((w) => /duplicaterule|AddSolutionComponent/i.test(w));
 const membershipKeys = (h) => new Set(h.org.rows('solutioncomponents').map((m) => `${m.componenttype}:${m.objectid}`));
 
 test('a duplicate rule and its condition settle in the build solution under the types the platform lists, never under 44 or 45', async () => {
@@ -237,7 +238,10 @@ test('a duplicate rule and its condition settle in the build solution under the 
   assert.equal(first.r.ok, true, JSON.stringify(first.r.errors));
   assert.deepEqual(h.org.unexpected, []);
   const read = first.requests.filter((r) => r.method === 'GET' && /^\/EntityDefinitions\(LogicalName='duplicaterule/.test(String(r.path))).map((r) => String(r.path));
-  assert.deepEqual(read, ["/EntityDefinitions(LogicalName='duplicaterulecondition')?$select=ObjectTypeCode", "/EntityDefinitions(LogicalName='duplicaterule')?$select=ObjectTypeCode"]);
+  // A new rule's types are read before it is written: the rule's, then its conditions'. Each is read once.
+  assert.deepEqual(read, ["/EntityDefinitions(LogicalName='duplicaterule')?$select=ObjectTypeCode", "/EntityDefinitions(LogicalName='duplicaterulecondition')?$select=ObjectTypeCode"]);
+  const firstRuleWrite = first.requests.findIndex((r) => r.method !== 'GET' && /^\/duplicaterule/.test(String(r.path)));
+  assert.ok(first.requests.findIndex((r) => String(r.path).startsWith("/EntityDefinitions(LogicalName='duplicaterulecondition')")) < firstRuleWrite);
   // The rule rides in on its create header; the condition the compound create left out is added under its table's type.
   assert.deepEqual(adds(first.requests), [4416]);
   const members = membershipKeys(h);
@@ -269,6 +273,22 @@ test('a duplicate-rule component type the build cannot read is never guessed: th
   assert.equal(out.thrown.code, 'configuration-incomplete');
   assert.match(out.thrown.message, /duplicateRuleCondition email\|e \(SOLUTION_COMPONENT_TYPE_UNREADABLE\)/);
   assert.deepEqual(adds(out.requests), []);
+  // The type is read before the rule is written, so the rule is not created or published either.
+  assert.deepEqual(ruleWrites(out.writes), []);
+  assert.equal(unreadable.org.rows('duplicaterules').length, 0);
+});
+
+test('a new duplicate rule whose own component type the build cannot read stops the step before any write: not created, published or added', async () => {
+  const unreadable = await harness({ intercept: ({ method, path: p }) => (method === 'GET' && p.startsWith("/EntityDefinitions(LogicalName='duplicaterule')")
+    ? { statusCode: 500, body: { error: { code: '0x80040216', message: 'unavailable' } } } : undefined) });
+  const out = await build(unreadable, RULE_ONLY());
+  assert.ok(out.thrown, 'the build halted');
+  assert.equal(out.thrown.code, 'configuration-incomplete');
+  assert.deepEqual(adds(out.requests), [], 'no component is added before the rule type is known');
+  assert.match(out.thrown.message, /duplicateRule email \(SOLUTION_COMPONENT_TYPE_UNREADABLE\)/);
+  assert.ok(!/SOLUTION_MEMBERSHIP_UNKNOWN/.test(out.thrown.message), out.thrown.message);
+  assert.deepEqual(ruleWrites(out.writes), []);
+  assert.equal(unreadable.org.rows('duplicaterules').length, 0);
 });
 
 test('the other configuration kinds keep their component types and read no duplicate-rule metadata', async () => {
