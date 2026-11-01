@@ -14,7 +14,11 @@
 //   4. apply the change once, prove it from a fresh read against the stored expected proof (never against today's
 //      declaration), ensure solution membership, and commit the whole group in one atomic store write;
 //   5. release only this attempt's hold.
-// A pending attempt found on disk is recovered the same way, by its stored expected proof, without sending again.
+// A pending attempt found on disk is recovered (recoverManagedAttempt) by its stored expected proof, without sending
+// again — except an attempt whose durable send window proves none of its mutations was carried out (sent through a
+// send observer, createAttemptSendObserver), which continues under its own token, and a create the feature shows was
+// never made (`resumeCreate`), which is sent again under its own token and ids.
+// A prepared attempt that never reached markSending, met by a no-op plan, is retired (retireUnsentAttempt).
 // A required failure (resolve, plan, proof, membership, an unsettled dashboard creation record) quarantines the
 // artifact's scopes for the rest of the invocation; any other failure keeps the hold. Either way the attempt stays on
 // disk, the bindings do not advance, and the build stops with the halt the caller's factory makes.
@@ -23,6 +27,7 @@
 
 const { runWithWorkflowEffect } = require('./workflow-effect-context.js');
 const { CODES, classifyPersisted } = require('./managed-bindings.js');
+const { canonicalJson } = require('./reconcile-common.js');
 const { LAYER_READERS } = require('./managed-layer-readers.js');
 
 const PUBLICATION_UNVERIFIED = 'managed-publication-unverified';
@@ -32,13 +37,15 @@ const PUBLICATION_REFUSED = 'managed-publication-refused';
 // A group published in the scope whose family has no layer reader (lib/managed-layer-readers.js): the scope is fenced.
 const LAYER_READER_MISSING = 'managed-publication-reader-missing';
 const CREATION_RECORD_UNSETTLED = 'dashboard-creation-record-unsettled';
+// A publication that may have been sent and is not yet proved live (lib/managed-bindings.js UNCERTAIN).
+const UNCERTAIN_PUBLICATION = new Set(['dispatching', 'unconfirmed']);
 
 function codedError(code, message, extra) {
   return Object.assign(new Error(message), { code }, extra || {});
 }
 
 // A step whose failure means the artifact's saved state is not shown safe: its scopes stay withheld for the run.
-const REQUIRED_STEPS = new Set(['resolve', 'plan', 'prove', 'membership']);
+const REQUIRED_STEPS = new Set(['resolve', 'plan', 'prove', 'membership', 'resume']);
 
 /**
  * Settle one managed artifact. Arguments:
@@ -52,14 +59,33 @@ const REQUIRED_STEPS = new Set(['resolve', 'plan', 'prove', 'membership']);
  *   barrier?                    the publication barrier; defaults to the store's forwarded barrier operations;
  *   halt(phase, label, code, { cause })  the build's halt FACTORY: it returns the error to throw (the build's
  *                               managedStop returns a never-retry halt and does not throw it);
- *   resolve({ committed, pending })      read and preflight; answers the resolution;
- *   plan({ resolution, committed })      answers { noop: true } or { root, expected, declarationSha256,
- *                                        publication? } (publication: the attempt's { scope, state: 'owed' } or null);
- *   apply({ token, plan, resolution })   send the approved change once; answers what it sent;
+ *   resolve({ committed, pending, resuming?, continuing? })   read and preflight; answers the resolution;
+ *   plan({ resolution, committed, resuming?, continuing? })   answers { noop: true } or { root, expected,
+ *                                        declarationSha256, publication? } (publication: the attempt's
+ *                                        { scope, state: 'owed' } or null);
+ *   apply({ token, plan, resolution, resuming?, continuing? })  send the approved change once; answers what it sent.
+ *                               With a sendObserver, every mutation it makes must go through the observed transport;
  *   prove({ token, expected, applied, recovering })  a fresh read against `expected`; answers { savedProof,
  *                               acknowledgedRoot, records, proof, consumerState, publication, proofSchema? };
- *   ensureMembership({ root, records, recovering })  solution membership, for a clean reused root too.
- * Answers { result, committedGroup }: result is { noop: true } or { committed: true, recovered }.
+ *   ensureMembership({ root, records, recovering })  solution membership, for a clean reused root too;
+ *   sendObserver?               the build's createAttemptSendObserver, already wrapped around its transport (refused
+ *                               otherwise). markSending then arms the attempt's send window and `apply` runs inside it,
+ *                               so an attempt whose window shows nothing carried out (a local failure before any
+ *                               request, or only not-started rejections) is continued by the next run under the same
+ *                               token: resolve and plan with `continuing: true`, the same plan required, then `apply`
+ *                               with `continuing: true`. Without it, recovery is as before;
+ *   resumeCreate?({ token, pending, expected })  optional, for a family whose create names its root id: read the
+ *                               pending root by that stable id in BOTH layers and answer { root: 'absent' } only when
+ *                               each layer says the row does not exist, { root: 'present' } when either has it, and
+ *                               throw for any other answer. Asked only for a pending create that no answer
+ *                               acknowledged (resumableCreate). Present: recovered by `prove` as any pending attempt.
+ *                               Absent: resolve and plan run again with `resuming: true`, the plan must equal what
+ *                               the attempt recorded (root, expected proof, declaration hash, publication; otherwise
+ *                               `create-completion-required`), and `apply` sends the same create under the same token.
+ *                               Its failure, or any other answer, quarantines like a failed proof.
+ * A pending attempt still `prepared` (never marked sending) met by a no-op plan is retired with
+ * store.retireUnsentAttempt and its hold ends; a store that refuses it stops the build with the hold kept.
+ * Answers { result, committedGroup }: result is { noop: true } or { committed: true, recovered, resumed?, continued? }.
  */
 async function runManagedFeature(args) {
   const { phase, family, key, knownScopes = [], knownIds = [], store, halt, resolve, plan, apply, prove, ensureMembership } = args || {};
@@ -69,6 +95,12 @@ async function runManagedFeature(args) {
     if (typeof fn !== 'function') throw codedError(CODES.notSettled, `runManagedFeature needs ${name}`);
   }
   if (!store || typeof store.readGroup !== 'function') throw codedError(CODES.notSettled, 'runManagedFeature needs the managed binding store');
+  // A send observer that is not on the transport would arm windows nothing counts in, and an unsent-looking window is
+  // what lets a later run send again: refuse it before anything is read or written.
+  const observer = args.sendObserver || null;
+  if (observer && (typeof observer.open !== 'function' || observer.installed !== true || typeof store.noteAttemptDispatch !== 'function')) {
+    throw codedError(CODES.notSettled, 'runManagedFeature was given a send observer that is not installed on the build\'s transport');
+  }
   const barrier = args.barrier || store;
   const label = args.label || `managed ${family} "${key}"`;
   // The complete target set the artifact's holds and quarantine cover; it grows as the committed, pending and planned
@@ -105,22 +137,13 @@ async function runManagedFeature(args) {
 
   try {
     addIds(knownIds);
-    const { committed, pending } = store.readGroup(family, key);
+    const { committed, pending, effects } = store.readGroup(family, key);
     addIds([committed && committed.root && committed.root.id, pending && pending.root && pending.root.id]);
 
     if (pending && pending.expected) {
-      // Recovery: the change may already be on the server. Prove it by the expected proof it was sent with; never
-      // send it again and never re-baseline from today's declaration.
       token = pending.token;
       barrier.hold(token, scopes, ids, `${label} (an earlier change is not yet proved)`);
-      step = 'prove';
-      const proved = await prove({ token, expected: pending.expected, applied: null, recovering: true });
-      step = 'membership';
-      await ensureMembership({ root: pending.root, records: proved.records, recovering: true });
-      step = 'commit';
-      const group = commit(store, token, pending.baseGeneration, proved);
-      barrier.release(token);
-      return { result: { committed: true, recovered: true }, committedGroup: group };
+      return await recoverManagedAttempt(committed, pending, effects);
     }
 
     step = 'resolve';
@@ -128,7 +151,13 @@ async function runManagedFeature(args) {
     step = 'plan';
     const planned = await plan({ resolution, committed });
     if (!planned || planned.noop === true) {
-      if (pending) throw codedError(CODES.pending, `${label} has a prepared change that a no-op plan cannot retire`);
+      if (pending) {
+        // A prepared attempt that never reached markSending sent nothing, and the plan says nothing is to be sent:
+        // retire it (the store refuses anything that may have started) and end its hold, then settle as a no-op.
+        step = 'retire';
+        store.retireUnsentAttempt({ token: pending.token, baseGeneration: pending.baseGeneration });
+        barrier.release(pending.token);
+      }
       step = 'membership';
       await ensureMembership({ root: committed ? committed.root : null, records: committed ? committed.records : [], recovering: false });
       return { result: { noop: true }, committedGroup: committed };
@@ -147,9 +176,80 @@ async function runManagedFeature(args) {
       });
     }
     barrier.hold(token, scopes, ids, `${label} (a change is being saved and is not yet proved)`);
+    const group = await send(planned, resolution, baseGeneration);
+    return { result: { committed: true, recovered: false }, committedGroup: group };
+  } catch (err) {
+    return stop(err);
+  }
+
+  // recoverManagedAttempt (the design's recovery step): an attempt on disk that was marked sending, met before any
+  // ordinary planning. The same-token continuation contract, in this order:
+  //   1. its send window proves no mutation of it was carried out (attemptProvenUnsent: observed from markSending on,
+  //      every counted mutation answered by a not-started rejection, every owned workflow effect unsent) and this run
+  //      observes its sends too: resolve and plan again with `continuing: true` — the feature's preflight, the dirty-copy
+  //      refusal included, runs as on any run — and the plan must be exactly what the attempt recorded (same root and ids,
+  //      the same expected proof, so the same recorded base; the same declaration hash and publication). Then send it
+  //      under the same token, through a new observed window;
+  //   2. a create no answer acknowledged, whose root the feature reads absent in both layers by its stable id
+  //      (resumeCreate): resolve, plan and check the same way with `resuming: true`, and send the same create again
+  //      under the same token and ids — a delayed first create can then only fail on the primary key;
+  //   3. anything else may have been carried out: prove it by the expected proof it was sent with, from a fresh read,
+  //      and commit only what that proves. Never sent again, never re-baselined from today's declaration.
+  // A plan that differs stops the build before anything is sent (`create-completion-required`, quarantined): a new
+  // change is never made under an old token, no root is minted, and the attempt is kept as it was.
+  async function recoverManagedAttempt(committed, pending, effects) {
+    if (observer && attemptProvenUnsent(pending, effects)) {
+      const out = await sendAgain(committed, pending, 'continuing', 'was declared differently since its change was prepared; it is not sent');
+      return { result: { committed: true, recovered: true, continued: true }, committedGroup: out };
+    }
+    if (typeof args.resumeCreate === 'function' && resumableCreate(committed, pending, effects)) {
+      step = 'resume';
+      const seen = await args.resumeCreate({ token, pending, expected: pending.expected });
+      const root = seen && seen.root;
+      if (root !== 'absent' && root !== 'present') throw codedError(CODES.notSettled, `${label}: resumeCreate answered neither "absent" nor "present" for its root`);
+      if (root === 'absent') {
+        const out = await sendAgain(committed, pending, 'resuming', 'was declared differently since its create was sent; it is not resent');
+        return { result: { committed: true, recovered: true, resumed: true }, committedGroup: out };
+      }
+      // Present: prove or adopt it, exactly as any recovery.
+    }
+    step = 'prove';
+    const proved = await prove({ token, expected: pending.expected, applied: null, recovering: true });
+    step = 'membership';
+    await ensureMembership({ root: pending.root, records: proved.records, recovering: true });
+    step = 'commit';
+    const group = commit(store, token, pending.baseGeneration, proved);
+    barrier.release(token);
+    return { result: { committed: true, recovered: true }, committedGroup: group };
+  }
+
+  // Resolve and plan again under `flag` ('continuing' / 'resuming'), require the plan the attempt recorded, send it.
+  async function sendAgain(committed, pending, flag, differs) {
+    // The attempt was planned against the committed generation it recorded; anything else committed since is a
+    // different base, and the change is not sent over it.
+    step = 'resolve';
+    if ((committed ? committed.generation : null) !== pending.baseGeneration) throw codedError(CODES.completion, `${label} was committed again since its change was prepared; it is not sent`);
+    const resolution = await resolve({ committed, pending, [flag]: true });
+    step = 'plan';
+    const planned = await plan({ resolution, committed, [flag]: true });
+    if (!samePlan(planned, pending)) throw codedError(CODES.completion, `${label} ${differs}`);
+    return send(planned, resolution, pending.baseGeneration, flag);
+  }
+
+  // Persist the expected proof, send once, prove from a fresh read, ensure membership, commit, end the hold. With a send
+  // observer, markSending arms the attempt's send window and `apply` runs inside it: every mutation that reaches the
+  // transport is counted on the attempt before it leaves, so a later run can tell a send that never left from one that
+  // may have landed (recoverManagedAttempt).
+  async function send(planned, resolution, baseGeneration, flag = null) {
     step = 'send';
-    store.markSending(token, planned.expected);
-    const applied = await apply({ token, plan: planned, resolution });
+    store.markSending(token, planned.expected, { observed: !!observer });
+    const window = observer ? observer.open(store, token) : null;
+    let applied;
+    try {
+      applied = await apply({ token, plan: planned, resolution, ...(flag ? { [flag]: true } : {}) });
+    } finally {
+      if (window) window.close();
+    }
     step = 'prove';
     const proved = await prove({ token, expected: planned.expected, applied, recovering: false });
     step = 'saved';
@@ -159,10 +259,135 @@ async function runManagedFeature(args) {
     step = 'commit';
     const group = commit(store, token, baseGeneration, proved);
     barrier.release(token);
-    return { result: { committed: true, recovered: false }, committedGroup: group };
-  } catch (err) {
-    return stop(err);
+    return group;
   }
+}
+
+/**
+ * May the pending attempt be resumed as a create (runManagedFeature's `resumeCreate`)? Only when its record says it was
+ * a create of a new root and that no answer ever acknowledged it: no committed group and no base generation, an expected
+ * proof with no base, phase `sending` with no acknowledgement or saved observation, and every workflow effect it owns a
+ * create still definitely-unsent. A body or state effect, or one that may have been dispatched, is never resumed.
+ */
+function resumableCreate(committed, pending, effects) {
+  if (committed || pending.baseGeneration !== null) return false;
+  const e = pending.expected;
+  if (!e || e.baseProofSha256 !== null || e.baseObservation !== null) return false;
+  if (pending.phase !== 'sending' || pending.acknowledgedRoot || pending.savedObservation !== null) return false;
+  return (effects || []).filter((x) => x.attemptToken === pending.token)
+    .every((x) => x.effect === 'create' && x.state === 'definitely-unsent' && x.dispatchToken === null);
+}
+
+/**
+ * Does the pending attempt's own record prove that nothing it sent was carried out (recoverManagedAttempt, route 1)?
+ * Only with a send window, which markSending arms in the same write that marks it sending and only for an observed
+ * send: no counted mutation is still possibly applied, no answer acknowledged a root or a save, and every workflow
+ * effect it owns is still unsent with no dispatch token. A `sending` phase alone is no such proof, and neither is a
+ * later read that finds nothing: either may sit in front of a write still on its way.
+ */
+function attemptProvenUnsent(pending, effects) {
+  if (!pending || pending.phase !== 'sending' || !pending.expected) return false;
+  if (pending.acknowledgedRoot || pending.savedObservation !== null) return false;
+  const w = pending.sendWindow;
+  if (!w || w.possible !== 0) return false;
+  return (effects || []).filter((x) => x.attemptToken === pending.token).every((x) => x.state === 'definitely-unsent' && x.dispatchToken === null);
+}
+
+// The answers that say the service did not carry the request out, so a mutation answered with one is not counted as
+// possibly applied (createAttemptSendObserver). Narrow on purpose: everything else — a success, a 5xx or 429 (a gateway
+// or a lock may answer in front of a write that ran; the client's publish rule measured exactly that), a 408, a lost or
+// cut-off answer, any answer to a `$batch` but a 401 — leaves the mutation possibly applied.
+//   401                          the token was refused, so nothing ran (RFC 9110 §15.5.2);
+//   412 to an `If-Match` request  the precondition was false, so the method was not applied (RFC 9110 §13.1.1, §15.5.13;
+//                                https://learn.microsoft.com/power-apps/developer/data-platform/webapi/perform-conditional-operations-using-web-api);
+//   400, 403, 404, 412           only with a Dataverse error in the body, `{ "error": { "code": "0x80040203", … } }`, so
+//                                the platform itself refused the one operation (an intermediary answers no Dataverse
+//                                code), and a single Dataverse operation that fails is rolled back whole
+//                                (https://learn.microsoft.com/power-apps/developer/data-platform/event-framework).
+const NOT_STARTED_WITH_CODE = new Set([400, 403, 404, 412]);
+const DATAVERSE_ERROR_CODE = /^0x[0-9a-f]{8}$/i;
+
+function headerOf(headers, name) {
+  for (const [k, v] of Object.entries(headers || {})) if (k.toLowerCase() === name) return v;
+  return undefined;
+}
+
+function dataverseErrorCode(body) {
+  let parsed = body;
+  try {
+    if (Buffer.isBuffer(body)) parsed = JSON.parse(body.toString('utf8'));
+    else if (typeof body === 'string') parsed = JSON.parse(body);
+  } catch {
+    return null;
+  }
+  const code = parsed && typeof parsed === 'object' && parsed.error && typeof parsed.error === 'object' ? parsed.error.code : null;
+  return typeof code === 'string' && DATAVERSE_ERROR_CODE.test(code) ? code : null;
+}
+
+function notStartedAnswer(req, res) {
+  if (!res || res.error || res.incompleteResponse || !Number.isInteger(res.statusCode)) return false;
+  if (res.statusCode === 401) return true;
+  let path = '';
+  try { path = new URL(req.url).pathname; } catch { return false; }
+  if (/\/\$batch$/i.test(path)) return false;
+  if (res.statusCode === 412 && headerOf(req.headers, 'if-match') !== undefined) return true;
+  return NOT_STARTED_WITH_CODE.has(res.statusCode) && dataverseErrorCode(res.body) !== null;
+}
+
+/**
+ * The send observer of managed attempts: the build's transport, wrapped so that a mutation sent while an attempt's
+ * window is open is recorded on that attempt before it leaves (recoverManagedAttempt reads the record). Install it
+ * INSIDE the publication barrier's gate, so a request the barrier answers itself is never counted:
+ *   createAzHttpClient(env, { request: barrier.gateRequest(observer.wrap()) })     (wrap() defaults to makeRequest)
+ * and give the same observer to runManagedFeature (`sendObserver`). With no window open, every request passes untouched.
+ * In a window, a read (GET, HEAD) passes; any other request — a `$batch` of reads included — is counted on EVERY open
+ * window (store.noteAttemptDispatch, synchronous and durable; a throw leaves it unsent) and sent once by this layer; an
+ * answer that says the service did not carry it out (notStartedAnswer) is then recorded too (store.noteAttemptNotStarted)
+ * before the answer is handed back, so before any error the feature makes of it. A mutation of a sibling sent during the
+ * window is counted against it as well: the window may only overstate what was sent, never understate it.
+ */
+function createAttemptSendObserver() {
+  const windows = new Set();
+  let installed = false;
+  return {
+    get installed() { return installed; },
+    wrap(transport = require('./dataverse-auth.js').makeRequest) {
+      if (typeof transport !== 'function') throw new TypeError('createAttemptSendObserver: the transport to wrap must be a function');
+      installed = true;
+      return async function observedRequest(req) {
+        const method = String((req && req.method) || 'GET').toUpperCase();
+        if (!windows.size || method === 'GET' || method === 'HEAD') return transport(req);
+        const counted = [...windows];
+        for (const w of counted) w.store.noteAttemptDispatch(w.token);
+        const res = await transport(req);
+        if (notStartedAnswer(req, res)) {
+          for (const w of counted) {
+            // A failed write leaves this mutation counted as possibly applied: the record may overstate, never understate.
+            try { w.store.noteAttemptNotStarted(w.token); } catch { /* stays possibly applied */ }
+          }
+        }
+        return res;
+      };
+    },
+    /** Open the send window of the attempt `token` in `store`; close() ends it (runManagedFeature, around `apply`). */
+    open(store, token) {
+      if (!store || typeof store.noteAttemptDispatch !== 'function' || typeof token !== 'string' || !token) throw new TypeError('createAttemptSendObserver: a window needs the store and the attempt token');
+      const w = { store, token };
+      windows.add(w);
+      return { close() { windows.delete(w); } };
+    },
+  };
+}
+
+// A resumed create sends only what the attempt recorded: the same root (kind, key, id), the same expected proof, the
+// same declaration hash and the same publication. Anything else is a new change, which this seam never makes.
+function samePlan(planned, pending) {
+  if (!planned || planned.noop === true || !planned.root || !pending.root) return false;
+  const r = planned.root;
+  return r.kind === pending.root.kind && r.key === pending.root.key && String(r.id).toLowerCase() === String(pending.root.id).toLowerCase()
+    && canonicalJson(planned.expected) === canonicalJson(pending.expected)
+    && planned.declarationSha256 === pending.declarationSha256
+    && canonicalJson(planned.publication || null) === canonicalJson(pending.publication || null);
 }
 
 function commit(store, token, baseGeneration, proved) {
@@ -218,7 +443,79 @@ function coverageOf(store, scope) {
 }
 
 /**
+ * Read-only confirmation of an uncertain publication on `scope`: a publish whose request may have been sent
+ * (`dispatching`) or whose answer was lost (`unconfirmed`). Nothing is sent, replayed or deleted. For each dispatch
+ * token of the scope, every group that carries it is read afresh with its family's layer reader (`readers`, by default
+ * the shared LAYER_READERS); only when EVERY one of them has a published layer equal to its desired hash is that
+ * dispatch confirmed, in one store write, with its original token and the generation each read was judged against
+ * (store.confirmPublished). Any other outcome — a layer that differs, a read that fails or answers no hash, a family with
+ * no reader, debt that names no desired hash, a stored group on the scope that is not usable, a write that fails —
+ * leaves the dispatch as it is and blocks the scope for the rest of the run (barrier.blockScope).
+ * A block already set (openManagedContext quarantines a scope that holds an uncertain publication) is never cleared:
+ * the rest of the scope's debt waits for the next run, which finds the dispatch confirmed and installs no block.
+ * Answers { confirmed: [{ family, key }], unconfirmed: [{ family, key, code }] }. publishManagedScope calls it first
+ * whenever the scope holds an uncertain publication; a feature may also call it directly.
+ */
+async function confirmUncertainPublication({ store, barrier, scope, client, readers = LAYER_READERS } = {}) {
+  if (!store || typeof store.snapshot !== 'function' || typeof store.confirmPublished !== 'function' || !client || typeof client.get !== 'function' || !readers || typeof readers !== 'object') {
+    throw codedError(CODES.notSettled, 'confirmUncertainPublication needs the store, a Dataverse client to read the published layers with, and the layer readers');
+  }
+  const gate = barrier || store;
+  if (typeof gate.blockScope !== 'function') throw codedError(CODES.notSettled, 'confirmUncertainPublication needs the publication barrier (blockScope)');
+  const want = scopeId(scope);
+  if (!want) throw codedError(CODES.notSettled, 'confirmUncertainPublication needs the table or dashboard scope it confirms');
+  const units = store.snapshot().units();
+  const dispatches = new Map();
+  for (const unit of units) {
+    const pub = !unit.invalid && unit.group && unit.group.publication;
+    if (!pub || !UNCERTAIN_PUBLICATION.has(pub.state) || scopeId(pub.scope) !== want) continue;
+    dispatches.set(pub.dispatchToken, []);
+  }
+  if (!dispatches.size) return { confirmed: [], unconfirmed: [] };
+  // Every group a dispatch covered, wherever the store files it: a send is confirmed whole or not at all.
+  for (const unit of units) {
+    const pub = !unit.invalid && unit.group && unit.group.publication;
+    if (pub && UNCERTAIN_PUBLICATION.has(pub.state) && dispatches.has(pub.dispatchToken)) dispatches.get(pub.dispatchToken).push({ family: unit.family, key: unit.key, group: unit.group });
+  }
+  const corrupt = coverageOf(store, scope).corrupt;
+  const confirmed = [];
+  const unconfirmed = [];
+  for (const [token, list] of dispatches) {
+    let code = null;
+    const proofs = [];
+    if (corrupt.length) code = CODES.groupInvalid;
+    else if (typeof token !== 'string' || !token) code = PUBLICATION_UNCONFIRMED;
+    for (const o of code ? [] : list) {
+      const desired = o.group.publication.desiredSha256;
+      const reader = Object.prototype.hasOwnProperty.call(readers, o.family) ? readers[o.family] : null;
+      if (scopeId(o.group.publication.scope) !== want) { code = CODES.notSettled; break; }
+      if (typeof reader !== 'function') { code = LAYER_READER_MISSING; break; }
+      if (typeof desired !== 'string') { code = PUBLICATION_UNCONFIRMED; break; }
+      let read;
+      try { read = await reader(client, o.group); } catch { code = PUBLICATION_UNVERIFIED; break; }
+      if (!read || typeof read.publishedSha256 !== 'string') { code = PUBLICATION_UNVERIFIED; break; }
+      if (read.publishedSha256 !== desired) { code = PUBLICATION_UNCONFIRMED; break; }
+      proofs.push({ family: o.family, key: o.key, publishedSha256: read.publishedSha256, generation: o.group.generation });
+    }
+    if (!code) {
+      try {
+        store.confirmPublished({ groups: proofs, token });
+        confirmed.push(...list.map(({ family, key }) => ({ family, key })));
+        continue;
+      } catch (e) {
+        code = (e && e.code) || CODES.notSettled;
+      }
+    }
+    unconfirmed.push(...list.map(({ family, key }) => ({ family, key, code })));
+    gate.blockScope(scope, `${list.map((g) => `managed ${g.family} "${g.key}"`).join(', ')} (its publish may have been sent and a fresh read did not prove it live)`);
+  }
+  return { confirmed, unconfirmed };
+}
+
+/**
  * Pay the owed publication of committed `groups` ([{ family, key }]) that share `scope`, at most once:
+ *   - first, an uncertain publication on the scope (a publish that may have been sent) is confirmed read-only when a
+ *     fresh read proves it live (confirmUncertainPublication); one that is not proved keeps the scope blocked;
  *   - a group that owes nothing is skipped; an uncertain one (dispatching/unconfirmed) is never published again:
  *     `managed-publication-unconfirmed`; a pending attempt: `managed-settlement-pending`; a group published in another
  *     scope: `managed-not-settled`. `groups` is the debt this call dispatches and confirms, nothing more;
@@ -247,7 +544,8 @@ function coverageOf(store, scope) {
  *     clears it.
  * `publish()` may throw an error with `definiteNoStart: true` only when the request is known not to have started.
  * `readers` replaces the shared map whole (a test's fault injection); a caller's own `readLayers` is not accepted.
- * Answers { sent, withheld, confirmed: [{ family, key }] }.
+ * Answers { sent, withheld, confirmed: [{ family, key }] }: confirmed lists every group this call confirmed, a read-only
+ * confirmation of an uncertain publication included.
  */
 async function publishManagedScope({ store, barrier, scope, groups, client, readers = LAYER_READERS, publish, path = 'managed publication', newToken, ...rest } = {}) {
   if ('readLayers' in rest) throw codedError(CODES.notSettled, 'publishManagedScope reads every covered group with its family\'s shared reader (client, lib/managed-layer-readers.js); a caller\'s readLayers is not accepted');
@@ -258,6 +556,12 @@ async function publishManagedScope({ store, barrier, scope, groups, client, read
   }
   const want = scopeId(scope);
   if (!want) throw codedError(CODES.notSettled, 'publishManagedScope needs the table or dashboard scope it publishes');
+  if (typeof store.snapshot !== 'function') throw codedError(CODES.notSettled, 'publishManagedScope needs the store\'s snapshot to see every group of the scope');
+  // A publish of this scope that may have been sent is confirmed read-only first, when a fresh read proves it live; what
+  // it confirms is answered with this call's own confirmations. One it cannot prove leaves the scope blocked, and the
+  // checks below still refuse to send over it.
+  const uncertainHere = store.snapshot().units().some((u) => !u.invalid && u.group && u.group.publication && UNCERTAIN_PUBLICATION.has(u.group.publication.state) && scopeId(u.group.publication.scope) === want);
+  const readConfirmed = uncertainHere ? (await confirmUncertainPublication({ store, barrier: gate, scope, client, readers })).confirmed : [];
   const owed = [];
   for (const { family, key } of groups || []) {
     const { committed, pending } = store.readGroup(family, key);
@@ -268,7 +572,7 @@ async function publishManagedScope({ store, barrier, scope, groups, client, read
     if (scopeId(pub.scope) !== want) throw codedError(CODES.notSettled, `the managed ${family} "${key}" is published in another scope`);
     owed.push({ family, key });
   }
-  if (!owed.length) return { sent: false, withheld: false, confirmed: [] };
+  if (!owed.length) return { sent: false, withheld: false, confirmed: readConfirmed };
   const names = (list) => list.map((g) => `managed ${g.family} "${g.key}"`).join(', ');
   const isDebt = (o) => owed.some((d) => d.family === o.family && d.key === o.key);
 
@@ -282,7 +586,7 @@ async function publishManagedScope({ store, barrier, scope, groups, client, read
     throw codedError(PUBLICATION_UNCONFIRMED, `${names(cover.uncertain)} shares the publish of this scope and may have been sent unconfirmed; nothing was published`);
   }
   // A change is being made on the scope (its attempt holds it on the barrier, or will when this run reaches it).
-  if (cover.pending.length) return { sent: false, withheld: true, confirmed: [] };
+  if (cover.pending.length) return { sent: false, withheld: true, confirmed: readConfirmed };
   const unread = cover.groups.filter((o) => !Object.prototype.hasOwnProperty.call(readers, o.family) || typeof readers[o.family] !== 'function');
   if (unread.length) {
     gate.blockScope(scope, `${names(unread)} (no reader of its layers)`);
@@ -317,7 +621,7 @@ async function publishManagedScope({ store, barrier, scope, groups, client, read
   const debt = before.filter(isDebt);
   const already = debt.filter((o) => o.equal);
   if (already.length) store.confirmPublished({ groups: already.map((o) => ({ family: o.family, key: o.key, publishedSha256: o.publishedSha256 })), token: null });
-  const confirmedSoFar = () => already.map(({ family, key }) => ({ family, key }));
+  const confirmedSoFar = () => [...readConfirmed, ...already.map(({ family, key }) => ({ family, key }))];
   const due = debt.filter((o) => !o.equal);
   if (!due.length) return { sent: false, withheld: false, confirmed: confirmedSoFar() };
   const drifted = before.filter((o) => !o.safe);
@@ -392,7 +696,7 @@ async function publishManagedScope({ store, barrier, scope, groups, client, read
     // One atomic write confirms every debt of the send, so no run can see some of them confirmed and not the rest.
     store.confirmPublished({ groups: after.map((o) => ({ family: o.family, key: o.key, publishedSha256: o.publishedSha256 })), token });
     settled = true;
-    return { sent: true, withheld: false, confirmed: [...already, ...after].map(({ family, key }) => ({ family, key })) };
+    return { sent: true, withheld: false, confirmed: [...readConfirmed, ...[...already, ...after].map(({ family, key }) => ({ family, key }))] };
   } finally {
     // Fail closed after a send: whatever threw — a confirmation, an outcome write, a read — the scope stays blocked for
     // the run unless the settlement above was written whole. The block is in memory, so it cannot fail the way the
@@ -408,6 +712,10 @@ module.exports = {
   LAYER_READER_MISSING,
   CREATION_RECORD_UNSETTLED,
   runManagedFeature,
+  createAttemptSendObserver,
+  attemptProvenUnsent,
+  notStartedAnswer,
   withWorkflowEffect,
   publishManagedScope,
+  confirmUncertainPublication,
 };

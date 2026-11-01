@@ -104,4 +104,28 @@ async function readSystemFormLayers(client, group) {
   return { savedSha256: systemFormLayerSha256(r.saved), publishedSha256: r.published ? systemFormLayerSha256(r.published) : NEVER_PUBLISHED_SHA256 };
 }
 
-module.exports = { readSystemFormPublication, readSystemFormLayers, systemFormLayerSha256, NEVER_PUBLISHED_SHA256, UNVERIFIED };
+/**
+ * Is systemform `id` there at all, in either layer? For resuming a create under its stable id (runManagedFeature's
+ * `resumeCreate`): answers 'absent' only when BOTH reads answer 404 with the Dataverse "object does not exist" code
+ * (0x80040217), and 'present' when either layer answers the row itself. Every other answer — another status or
+ * error code, another row, a read that throws — is `managed-publication-unverified`: a create is never resent on a
+ * read that did not show the row missing from both layers.
+ *   saved      GET /systemforms(<id>)/Microsoft.Dynamics.CRM.RetrieveUnpublished()?$select=formid,name,description,formxml
+ *   published  GET /systemforms(<id>)?$select=formid,name,description,formxml
+ */
+async function readSystemFormRootPresence(client, rawId) {
+  const id = normalizeGuid(rawId);
+  if (!id) throw unverified(`"${rawId}" is not a systemform id`);
+  if (!client || typeof client.get !== 'function') throw unverified('no client to read the systemform with');
+  const seen = [];
+  for (const [layer, p] of [['saved', `/systemforms(${id})/Microsoft.Dynamics.CRM.RetrieveUnpublished()?${SELECT}`], ['published', `/systemforms(${id})?${SELECT}`]]) {
+    const res = await get(client, p, id, layer);
+    if (res && res.status === 404 && errorCode(res.body) === NOT_FOUND) { seen.push(false); continue; }
+    if (!ok(res)) throw unverified(`the ${layer} systemform ${id} could not be read (status ${res && res.status})`);
+    rowOf(res, id, layer);
+    seen.push(true);
+  }
+  return seen.some(Boolean) ? 'present' : 'absent';
+}
+
+module.exports = { readSystemFormPublication, readSystemFormLayers, readSystemFormRootPresence, systemFormLayerSha256, NEVER_PUBLISHED_SHA256, UNVERIFIED };

@@ -6,6 +6,7 @@
 // It keeps two layers for each systemform row (a form or a dashboard), as the platform does:
 //   GET  systemforms(<id>)/Microsoft.Dynamics.CRM.RetrieveUnpublished()?...   the saved layer
 //   GET  systemforms(<id>)?...                                                 the published layer; 404 0x80040217 when never published
+//   POST systemforms {"formid":…}   creates the saved layer under the caller's id; an id that exists answers 412 0x80040237
 //   POST PublishXml {"ParameterXml":"<importexportxml><entities><entity>account</entity></entities></importexportxml>"}
 //        copies the saved layer of every form of `account` to its published layer; a <dashboards><dashboard>id</dashboard>
 //        envelope does the same for one dashboard
@@ -41,6 +42,13 @@ function createManagedWire() {
     m = /^systemforms\(([^)]+)\)$/i.exec(p);
     if (m && method === 'GET') { const r = published.get(m[1].toLowerCase()); return r ? json(200, { ...r }) : notFound(); }
     if (m && method === 'PATCH') { const id = m[1].toLowerCase(); saved.set(id, { ...saved.get(id), ...body }); return json(204); }
+    if (/^systemforms$/i.test(p) && method === 'POST') {
+      // A create names its own formid. A second create of an id that exists fails on the primary key and changes nothing.
+      const id = String(body && body.formid).toLowerCase();
+      if (saved.has(id) || published.has(id)) return json(412, { error: { code: '0x80040237', message: 'Cannot insert duplicate key.' } });
+      saved.set(id, { description: null, ...body, formid: id });
+      return json(204, undefined, { 'odata-entityid': `${ORIGIN}/api/data/v9.0/systemforms(${id})` });
+    }
     m = /^(savedqueries|savedqueryvisualizations)\(([^)]+)\)(\/Microsoft\.Dynamics\.CRM\.RetrieveUnpublished\(\))?$/i.exec(p);
     if (m && method === 'GET') { const q = queries[m[1].toLowerCase()]; const r = (m[3] ? q.saved : q.published).get(m[2].toLowerCase()); return r ? json(200, { ...r }) : notFound(); }
     if (/^PublishXml$/i.test(p) && method === 'POST') {
@@ -130,11 +138,15 @@ function createManagedWire() {
   };
 }
 
-/** The plugin's real client over `wire`, gated as build-model-app.js gates it when a barrier is given. */
-function clientOver(wire, { barrier = null, workflowEffectGate = null } = {}) {
+/**
+ * The plugin's real client over `wire`, gated as build-model-app.js gates it when a barrier is given. `observer`: a
+ * managed attempt send observer (createAttemptSendObserver), installed inside the barrier as the build installs it.
+ */
+function clientOver(wire, { barrier = null, workflowEffectGate = null, observer = null } = {}) {
+  const transport = observer ? observer.wrap(wire.request) : wire.request;
   return createAzHttpClient(ORIGIN, {
     getToken: () => 'x'.repeat(40),
-    request: barrier ? barrier.gateRequest(wire.request) : wire.request,
+    request: barrier ? barrier.gateRequest(transport) : transport,
     sleep: async () => {},
     ...(workflowEffectGate ? { workflowEffectGate } : {}),
   });

@@ -12,9 +12,9 @@ const fs = require('node:fs');
 const { makeTempDir } = require('./helpers/temp-dirs.js');
 const { createManagedWire, sdkOver } = require('./helpers/managed-wire.js');
 const { openManagedContext, openManagedBindings, CODES } = require('../lib/managed-bindings.js');
-const { runManagedFeature, publishManagedScope, PUBLICATION_UNCONFIRMED, PUBLICATION_UNVERIFIED, CREATION_RECORD_UNSETTLED, LAYER_READER_MISSING } = require('../lib/managed-feature-contract.js');
+const { runManagedFeature, publishManagedScope, confirmUncertainPublication, createAttemptSendObserver, notStartedAnswer, PUBLICATION_UNCONFIRMED, PUBLICATION_UNVERIFIED, CREATION_RECORD_UNSETTLED, LAYER_READER_MISSING } = require('../lib/managed-feature-contract.js');
 const { createPublicationBarrier } = require('../lib/publication-barrier.js');
-const { readSystemFormPublication, readSystemFormLayers, systemFormLayerSha256 } = require('../lib/systemform-published.js');
+const { readSystemFormPublication, readSystemFormLayers, readSystemFormRootPresence, systemFormLayerSha256 } = require('../lib/systemform-published.js');
 const { publishTablesXml } = require('../lib/table-publish.js');
 const { postPublishXml } = require('../lib/publish-xml.js');
 const { environmentFingerprint } = require('../lib/page-ownership-records.js');
@@ -806,4 +806,428 @@ test('a form whose row has no description: the hash its feature records from the
   owe(c, systemFormLayerSha256({ ...declared, description: '' }));
   assert.equal(await codeOf(publishForms(c.sdk, c.store, c.barrier, [{ family: 'form', key: 'account/main' }])), CODES.completion);
   assert.equal(c.wire.publishes().length, 0);
+});
+
+// A managed form CREATED under its own stable id over the wire (POST systemforms {formid}), whose declaration is its
+// form XML: the expected proof and the declaration hash both follow it, so a changed declaration is a different plan.
+// `resumeCreate` reads the root in both layers by that id. A create whose answer was lost is adopted by the proof.
+const isCreate = (e) => e.method === 'POST' && /^systemforms$/i.test(e.path);
+function createPorts(wire, sdk, { key, id, formxml }) {
+  const p = ports(wire, sdk, { key, id, formxml });
+  const exp = { ...expected(id), sentProjectionSha256: sha({ formxml }) };
+  p.tokens = [];
+  p.resumeAsked = 0;
+  p.plan = async () => {
+    const current = wire.saved.get(id);
+    if (current && current.formxml === formxml) return { noop: true };
+    return { root: { kind: 'form', key, id }, expected: exp, declarationSha256: sha({ key, formxml }), publication: { scope: ACCOUNT, state: 'owed' } };
+  };
+  p.apply = async ({ token }) => {
+    p.tokens.push(token);
+    const res = await sdk.dataverse.post('/systemforms', { formid: id, name: key, objecttypecode: 'account', type: 2, formxml });
+    if (!(res.status >= 200 && res.status < 300)) throw Object.assign(new Error(`the create answered ${res.status}`), { code: 'create-refused' });
+    return { sent: true };
+  };
+  const prove = p.prove;
+  p.prove = async (a) => {
+    const proved = await prove(a);
+    // A recovered create was never acknowledged in this attempt: its root is adopted, not claimed as created.
+    return a.recovering ? { ...proved, records: proved.records.map((r) => ({ ...r, origin: 'adopted' })) } : proved;
+  };
+  p.resumeCreate = async () => { p.resumeAsked += 1; return { root: await readSystemFormRootPresence(sdk.dataverse, id) }; };
+  return p;
+}
+const refuseNextCreate = (wire) => wire.script(isCreate, { statusCode: 400, body: { error: { code: '0x80040203', message: 'refused' } }, unapplied: true });
+// A fresh process over the same workspace and wire.
+async function nextRun(s) {
+  const barrier = createPublicationBarrier();
+  const c = context(s.dir, barrier);
+  const { sdk } = await sdkOver(s.wire, { barrier });
+  return { barrier, store: c.store, debt: c.debt, sdk };
+}
+
+test('a create the service refused is resumed in the next run under its own token and id: exactly one more create, then one publish', async () => {
+  const s = await setup();
+  const first = createPorts(s.wire, s.sdk, { key: 'account/main', id: MAIN, formxml: '<form v="1"/>' });
+  refuseNextCreate(s.wire);
+  assert.equal(await codeOf(runManagedFeature({ ...first, store: s.store, barrier: s.barrier })), 'create-refused');
+  assert.equal(s.wire.log.filter(isCreate).length, 1);
+  const stranded = s.store.readGroup('form', 'account/main').pending;
+  assert.equal(stranded.phase, 'sending');
+
+  const n = await nextRun(s);
+  assert.deepEqual(n.debt.map((d) => d.kind), ['hold']);
+  const again = createPorts(s.wire, n.sdk, { key: 'account/main', id: MAIN, formxml: '<form v="1"/>' });
+  const r = await runManagedFeature({ ...again, store: n.store, barrier: n.barrier });
+  assert.deepEqual(r.result, { committed: true, recovered: true, resumed: true });
+  assert.equal(again.resumeAsked, 1);
+  assert.deepEqual(again.tokens, [stranded.token], 'the same create, under the attempt\'s own token');
+  assert.equal(s.wire.log.filter(isCreate).length, 2, 'exactly one more create');
+  assert.deepEqual([...s.wire.saved.keys()], [MAIN], 'one root, under its stable id');
+  assert.equal(n.store.readGroup('form', 'account/main').committed.root.id, MAIN);
+  assert.equal(n.barrier.active, false, 'the resumed attempt released its own hold');
+  assert.equal((await publishForms(n.sdk, n.store, n.barrier, [{ family: 'form', key: 'account/main' }])).sent, true);
+  assert.equal(s.wire.publishes('account').length, 1);
+
+  const third = await nextRun(s);
+  assert.deepEqual((await runManagedFeature({ ...createPorts(s.wire, third.sdk, { key: 'account/main', id: MAIN, formxml: '<form v="1"/>' }), store: third.store, barrier: third.barrier })).result, { noop: true });
+  assert.equal(s.wire.log.filter(isCreate).length, 2, 'the identical next run creates nothing');
+});
+
+test('a create whose root is present is proved and adopted, never resent; a late first create makes the resend fail on the primary key, never a second root', async () => {
+  // The service made the row and the answer was lost.
+  const s = await setup();
+  s.wire.script(isCreate, { statusCode: 400, body: { error: { code: '0x80040203', message: 'lost' } } });
+  assert.equal(await codeOf(runManagedFeature({ ...createPorts(s.wire, s.sdk, { key: 'account/main', id: MAIN, formxml: '<form v="1"/>' }), store: s.store, barrier: s.barrier })), 'create-refused');
+  const n = await nextRun(s);
+  const p = createPorts(s.wire, n.sdk, { key: 'account/main', id: MAIN, formxml: '<form v="1"/>' });
+  assert.deepEqual((await runManagedFeature({ ...p, store: n.store, barrier: n.barrier })).result, { committed: true, recovered: true });
+  assert.deepEqual([p.resumeAsked, p.tokens.length, s.wire.log.filter(isCreate).length], [1, 0, 1]);
+  assert.equal(n.store.readGroup('form', 'account/main').committed.records[0].origin, 'adopted');
+
+  // The first create is delayed: the read finds no root, and the create lands before the resend reaches the service.
+  const d = await setup();
+  refuseNextCreate(d.wire);
+  await codeOf(runManagedFeature({ ...createPorts(d.wire, d.sdk, { key: 'account/main', id: MAIN, formxml: '<form v="1"/>' }), store: d.store, barrier: d.barrier }));
+  const late = await nextRun(d);
+  const q = createPorts(d.wire, late.sdk, { key: 'account/main', id: MAIN, formxml: '<form v="1"/>' });
+  const send = q.apply;
+  q.apply = async (a) => { d.wire.putForm({ formid: MAIN, name: 'account/main', objecttypecode: 'account', type: 2, formxml: '<form v="1"/>' }); return send(a); };
+  assert.equal(await codeOf(runManagedFeature({ ...q, store: late.store, barrier: late.barrier })), 'create-refused');
+  assert.equal(d.wire.log.filter(isCreate).length, 2);
+  assert.deepEqual([...d.wire.saved.keys()], [MAIN], 'the resend failed on the primary key: one root');
+  assert.equal(late.store.readGroup('form', 'account/main').pending.token, q.tokens[0], 'the attempt stays, under its token');
+  assert.equal(late.barrier.allowScope(ACCOUNT, 'a sibling'), false, 'and its hold stays');
+  const after = await nextRun(d);
+  const r = createPorts(d.wire, after.sdk, { key: 'account/main', id: MAIN, formxml: '<form v="1"/>' });
+  assert.deepEqual((await runManagedFeature({ ...r, store: after.store, barrier: after.barrier })).result, { committed: true, recovered: true });
+  assert.equal(d.wire.log.filter(isCreate).length, 2, 'proved, not resent');
+});
+
+test('a create is not resumed when its declaration changed, when its root cannot be read, or when it was not a create', async () => {
+  const strand = async () => {
+    const s = await setup();
+    refuseNextCreate(s.wire);
+    await codeOf(runManagedFeature({ ...createPorts(s.wire, s.sdk, { key: 'account/main', id: MAIN, formxml: '<form v="1"/>' }), store: s.store, barrier: s.barrier }));
+    return s;
+  };
+  // A changed declaration is a new change: refused before anything is sent, and the scope is quarantined.
+  const s = await strand();
+  const n = await nextRun(s);
+  const changed = createPorts(s.wire, n.sdk, { key: 'account/main', id: MAIN, formxml: '<form v="2"/>' });
+  assert.equal(await codeOf(runManagedFeature({ ...changed, store: n.store, barrier: n.barrier })), 'create-completion-required');
+  assert.deepEqual([changed.tokens.length, s.wire.log.filter(isCreate).length], [0, 1]);
+  assert.equal(n.store.readGroup('form', 'account/main').pending.phase, 'sending', 'the attempt is kept as it was');
+  assert.deepEqual(n.barrier.withheld().map((w) => w.blockedBy.length > 0), [true], 'quarantined for the run');
+
+  // A presence read that is not a "does not exist" from both layers sends nothing.
+  const u = await strand();
+  const m = await nextRun(u);
+  u.wire.script((e) => e.method === 'GET' && /systemforms/.test(e.path) && !/RetrieveUnpublished/.test(e.path), { statusCode: 403, body: { error: { code: '0x80040220' } } });
+  const blind = createPorts(u.wire, m.sdk, { key: 'account/main', id: MAIN, formxml: '<form v="1"/>' });
+  assert.equal(await codeOf(runManagedFeature({ ...blind, store: m.store, barrier: m.barrier })), PUBLICATION_UNVERIFIED);
+  assert.deepEqual([blind.tokens.length, u.wire.log.filter(isCreate).length], [0, 1]);
+  assert.equal(m.barrier.allowScope(ACCOUNT, 'a sibling'), false);
+
+  // An edit of a committed form whose send was refused is never resumed: the proof decides, as before.
+  const e = await setup();
+  await runManagedFeature({ ...ports(e.wire, e.sdk, { key: 'account/main', id: MAIN, formxml: '<form v="1"/>' }), store: e.store, barrier: e.barrier });
+  e.wire.script((x) => x.method === 'PATCH', { statusCode: 400, body: { error: { code: '0x80040203' } }, unapplied: true });
+  await codeOf(runManagedFeature({ ...ports(e.wire, e.sdk, { key: 'account/main', id: MAIN, formxml: '<form v="2"/>' }), store: e.store, barrier: e.barrier }));
+  const k = await nextRun(e);
+  const edit = { ...ports(e.wire, k.sdk, { key: 'account/main', id: MAIN, formxml: '<form v="2"/>' }), resumeCreate: async () => { throw new Error('never asked'); } };
+  assert.equal(await codeOf(runManagedFeature({ ...edit, store: k.store, barrier: k.barrier })), 'create-completion-required');
+  assert.equal(e.wire.writes().filter((x) => x.method === 'PATCH').length, 1, 'no second edit');
+});
+
+test('the systemform presence read: absent only when both layers say the row does not exist', async () => {
+  const wire = createManagedWire();
+  const { sdk } = await sdkOver(wire);
+  assert.equal(await readSystemFormRootPresence(sdk.dataverse, MAIN), 'absent');
+  wire.putForm({ formid: MAIN, name: 'Main', objecttypecode: 'account', type: 2, formxml: '<form/>' });
+  assert.equal(await readSystemFormRootPresence(sdk.dataverse, MAIN.toUpperCase()), 'present', 'saved only, never published');
+  const unverified = async (answer, saved) => {
+    wire.script((e) => e.method === 'GET' && /systemforms/.test(e.path) && saved === /RetrieveUnpublished/.test(e.path), answer);
+    return codeOf(readSystemFormRootPresence(sdk.dataverse, DASH));
+  };
+  assert.equal(await unverified({ statusCode: 404, body: { error: { code: '0x80040216' } } }, true), PUBLICATION_UNVERIFIED, 'a 404 for another reason');
+  assert.equal(await unverified({ statusCode: 403, body: { error: { code: '0x80040220' } } }, false), PUBLICATION_UNVERIFIED);
+  assert.equal(await unverified({ statusCode: 200, body: { formid: QUICK, name: 'x', formxml: '<form/>' } }, true), PUBLICATION_UNVERIFIED, 'another row');
+  assert.equal(await codeOf(readSystemFormRootPresence({ get: async () => { throw new Error('reset'); } }, MAIN)), PUBLICATION_UNVERIFIED);
+  assert.equal(await codeOf(readSystemFormRootPresence(sdk.dataverse, 'not-a-guid')), PUBLICATION_UNVERIFIED);
+});
+
+test('a prepared attempt that never reached the send is retired by a no-op plan: its hold ends, nothing is written', async () => {
+  const s = await setup();
+  s.wire.putForm({ formid: MAIN, name: 'Main', objecttypecode: 'account', type: 2, formxml: '<form v="1"/>' }, { publishedToo: true });
+  // A run that stopped after prepareAttempt, before markSending: intent only.
+  s.store.prepareAttempt({ family: 'form', key: 'account/main', baseGeneration: null, root: { kind: 'form', key: 'account/main', id: MAIN }, knownScopes: [ACCOUNT], declarationSha256: H('e'), publication: { scope: ACCOUNT, state: 'owed' } });
+  const n = await nextRun(s);
+  assert.deepEqual(n.debt.map((d) => d.kind), ['hold']);
+  const r = await runManagedFeature({ ...ports(s.wire, n.sdk, { key: 'account/main', id: MAIN, formxml: '<form v="1"/>' }), store: n.store, barrier: n.barrier });
+  assert.deepEqual(r.result, { noop: true });
+  assert.equal(n.store.readGroup('form', 'account/main').pending, null);
+  assert.equal(n.barrier.active, false, 'its own hold ended');
+  assert.deepEqual(s.wire.writes(), []);
+  assert.deepEqual((await nextRun(s)).debt, [], 'the next run finds nothing pending');
+});
+
+test('a publish that landed and whose answer was lost is confirmed read-only by the next run: no second publish, and the run after finds nothing owed', async () => {
+  const s = await setup();
+  await runManagedFeature({ ...ports(s.wire, s.sdk, { key: 'account/main', id: MAIN, formxml: '<form v="1"/>' }), store: s.store, barrier: s.barrier });
+  s.wire.script((e) => /PublishXml/.test(e.path), { statusCode: 503, body: { error: { code: '0x80040216', message: 'gateway' } } });
+  assert.equal(await codeOf(publishForms(s.sdk, s.store, s.barrier, [{ family: 'form', key: 'account/main' }])), PUBLICATION_UNCONFIRMED);
+  assert.equal(s.wire.publishes('account').length, 1);
+  assert.equal(s.wire.published.get(MAIN).formxml, '<form v="1"/>', 'it landed');
+
+  const n = await nextRun(s);
+  assert.deepEqual(n.debt.map((d) => d.kind), ['uncertain']);
+  const token = n.store.readGroup('form', 'account/main').committed.publication.dispatchToken;
+  assert.deepEqual(await publishForms(n.sdk, n.store, n.barrier, [{ family: 'form', key: 'account/main' }]), { sent: false, withheld: false, confirmed: [{ family: 'form', key: 'account/main' }] });
+  const pub = n.store.readGroup('form', 'account/main').committed.publication;
+  assert.deepEqual([pub.state, pub.dispatchToken], ['confirmed', token], 'confirmed under its original dispatch');
+  assert.equal(s.wire.publishes().length, 1, 'nothing was sent');
+  assert.equal(n.barrier.allowScope(ACCOUNT, 'a sibling'), false, 'the quarantine of this run is never cleared');
+  assert.deepEqual((await nextRun(s)).debt, [], 'the next run installs no block');
+});
+
+test('an uncertain publication that a fresh read does not prove stays blocked: nothing is sent, replayed or deleted; one dispatch is confirmed whole or not at all', async () => {
+  const s = await setup();
+  await runManagedFeature({ ...ports(s.wire, s.sdk, { key: 'account/main', id: MAIN, formxml: '<form v="1"/>' }), store: s.store, barrier: s.barrier });
+  await runManagedFeature({ ...ports(s.wire, s.sdk, { key: 'account/quick', id: QUICK, formxml: '<form q="1"/>' }), store: s.store, barrier: s.barrier });
+  const both = [{ family: 'form', key: 'account/main' }, { family: 'form', key: 'account/quick' }];
+  s.wire.script((e) => /PublishXml/.test(e.path), { statusCode: 503, body: { error: { code: '0x80040216', message: 'gateway' } } });
+  assert.equal(await codeOf(publishForms(s.sdk, s.store, s.barrier, both)), PUBLICATION_UNCONFIRMED);
+  // One form of the dispatch is live; the other's published layer is not what was owed.
+  const live = s.wire.published.get(QUICK);
+  s.wire.published.set(QUICK, { ...live, formxml: '<form q="0"/>' });
+
+  const n = await nextRun(s);
+  const states = (st) => both.map(({ family, key }) => st.readGroup(family, key).committed.publication.state);
+  const answer = await confirmUncertainPublication({ store: n.store, barrier: n.barrier, scope: ACCOUNT, client: n.sdk.dataverse });
+  assert.deepEqual(answer, { confirmed: [], unconfirmed: both.map((g) => ({ ...g, code: PUBLICATION_UNCONFIRMED })) });
+  assert.deepEqual(states(n.store), ['unconfirmed', 'unconfirmed'], 'the live one is not confirmed without its sibling');
+  assert.equal(await codeOf(publishForms(n.sdk, n.store, n.barrier, both)), PUBLICATION_UNCONFIRMED);
+  const failing = { ...require('../lib/managed-layer-readers.js').LAYER_READERS, form: async () => { throw new Error('reset'); } };
+  assert.deepEqual((await confirmUncertainPublication({ store: n.store, barrier: n.barrier, scope: ACCOUNT, client: n.sdk.dataverse, readers: failing })).unconfirmed.map((u) => u.code), [PUBLICATION_UNVERIFIED, PUBLICATION_UNVERIFIED]);
+  assert.deepEqual((await confirmUncertainPublication({ store: n.store, barrier: n.barrier, scope: ACCOUNT, client: n.sdk.dataverse, readers: {} })).unconfirmed.map((u) => u.code), [LAYER_READER_MISSING, LAYER_READER_MISSING]);
+  assert.equal(s.wire.publishes().length, 1, 'nothing was sent again');
+  assert.equal(s.wire.writes().filter((w) => !/PublishXml/.test(w.path)).length, 0, 'nothing was written');
+
+  // The whole dispatch is live: one write confirms both.
+  s.wire.published.set(QUICK, live);
+  const m = await nextRun(s);
+  assert.deepEqual(await confirmUncertainPublication({ store: m.store, barrier: m.barrier, scope: ACCOUNT, client: m.sdk.dataverse }), { confirmed: both, unconfirmed: [] });
+  assert.deepEqual(states(m.store), ['confirmed', 'confirmed']);
+  assert.equal(s.wire.publishes().length, 1);
+});
+
+// The same-token continuation of recoverManagedAttempt. A build whose transport carries a send observer
+// (createAttemptSendObserver, inside the barrier's gate as build-model-app.js installs it) records on the attempt every
+// mutation its apply sends, before it leaves. An attempt that failed with nothing carried out — a local edit that failed
+// before any request, or a request the service refused unapplied — is then continued by the next run under its own
+// token; anything that may have landed is only proved, as before.
+async function observedRun(s) {
+  const barrier = createPublicationBarrier();
+  const observer = createAttemptSendObserver();
+  const { sdk } = await sdkOver(s.wire, { barrier, observer });
+  const c = context(s.dir, barrier);
+  return { barrier, observer, sdk, store: c.store, debt: c.debt };
+}
+async function observedSetup() {
+  const s = { wire: createManagedWire(), dir: makeTempDir('mp-observed-') };
+  return Object.assign(s, await observedRun(s));
+}
+const isPatch = (e) => e.method === 'PATCH' && /^systemforms\(/i.test(e.path);
+// The edit of a managed form, as the forms helper sends it: the service's answer decides, and a refusal is the
+// feature's own error. `local` makes the apply fail before it sends anything (a local SDK edit that failed).
+function editPorts(wire, sdk, { formxml, local = null }) {
+  const p = ports(wire, sdk, { key: 'account/main', id: MAIN, formxml });
+  p.sends = [];
+  p.apply = async ({ token, continuing }) => {
+    p.sends.push([token, continuing === true]);
+    if (local) throw local;
+    const res = await sdk.dataverse.patch(`/systemforms(${MAIN})`, { formxml });
+    if (!(res.status >= 200 && res.status < 300)) throw Object.assign(new Error(`the edit answered ${res.status}`), { code: 'form-layout-rejected' });
+    return { sent: true };
+  };
+  return p;
+}
+const localFailure = () => Object.assign(new Error('the local copy could not be edited'), { code: 'form-layout-local-edit' });
+const observed = (p, n) => ({ ...p, store: n.store, barrier: n.barrier, sendObserver: n.observer });
+async function committedEdit(s) {
+  await runManagedFeature(observed(ports(s.wire, s.sdk, { key: 'account/main', id: MAIN, formxml: '<form v="1"/>' }), s));
+  return s.store.readGroup('form', 'account/main').committed;
+}
+
+test('an edit that failed locally before any request is continued by the next run under its own token: one edit, then committed', async () => {
+  const s = await observedSetup();
+  const base = await committedEdit(s);
+  const first = editPorts(s.wire, s.sdk, { formxml: '<form v="2"/>', local: localFailure() });
+  assert.equal(await codeOf(runManagedFeature(observed(first, s))), 'form-layout-local-edit');
+  assert.deepEqual(s.wire.writes(), [], 'nothing reached the service');
+  const stranded = s.store.readGroup('form', 'account/main').pending;
+  assert.deepEqual([stranded.phase, stranded.sendWindow], ['sending', { possible: 0, notStarted: 0 }]);
+
+  const n = await observedRun(s);
+  assert.deepEqual(n.debt.map((d) => d.kind), ['hold']);
+  const again = editPorts(s.wire, n.sdk, { formxml: '<form v="2"/>' });
+  assert.deepEqual((await runManagedFeature(observed(again, n))).result, { committed: true, recovered: true, continued: true });
+  assert.deepEqual(again.sends, [[stranded.token, true]], 'the same attempt, continued under its own token');
+  assert.equal(s.wire.writes().filter(isPatch).length, 1, 'exactly one edit');
+  const { committed, pending } = n.store.readGroup('form', 'account/main');
+  assert.equal(pending, null);
+  assert.notEqual(committed.generation, base.generation);
+  assert.equal(s.wire.saved.get(MAIN).formxml, '<form v="2"/>');
+  assert.equal(n.barrier.active, false, 'its own hold ended');
+  const t = await observedRun(s);
+  assert.deepEqual((await runManagedFeature(observed(editPorts(s.wire, t.sdk, { formxml: '<form v="2"/>' }), t))).result, { noop: true });
+
+  // A create that failed locally is continued the same way: one create under its stable id, no presence read needed.
+  const c = await observedSetup();
+  const create = createPorts(c.wire, c.sdk, { key: 'account/main', id: MAIN, formxml: '<form v="1"/>' });
+  create.apply = async () => { throw localFailure(); };
+  assert.equal(await codeOf(runManagedFeature(observed(create, c))), 'form-layout-local-edit');
+  const m = await observedRun(c);
+  const resent = createPorts(c.wire, m.sdk, { key: 'account/main', id: MAIN, formxml: '<form v="1"/>' });
+  assert.deepEqual((await runManagedFeature(observed(resent, m))).result, { committed: true, recovered: true, continued: true });
+  assert.deepEqual([resent.resumeAsked, c.wire.log.filter(isCreate).length], [0, 1]);
+  assert.deepEqual([...c.wire.saved.keys()], [MAIN]);
+});
+
+test('an edit the service refused unapplied with a Dataverse error is continued by the next run: one more edit, then committed', async () => {
+  const s = await observedSetup();
+  await committedEdit(s);
+  s.wire.script(isPatch, { statusCode: 400, body: { error: { code: '0x80040203', message: 'refused' } }, unapplied: true });
+  const first = editPorts(s.wire, s.sdk, { formxml: '<form v="2"/>' });
+  assert.equal(await codeOf(runManagedFeature(observed(first, s))), 'form-layout-rejected');
+  assert.deepEqual(s.store.readGroup('form', 'account/main').pending.sendWindow, { possible: 0, notStarted: 1 });
+
+  const n = await observedRun(s);
+  const again = editPorts(s.wire, n.sdk, { formxml: '<form v="2"/>' });
+  assert.deepEqual((await runManagedFeature(observed(again, n))).result, { committed: true, recovered: true, continued: true });
+  assert.deepEqual(again.sends, [[first.sends[0][0], true]]);
+  assert.equal(s.wire.writes().filter(isPatch).length, 2, 'the refused edit and its one continuation');
+  assert.equal(s.wire.saved.get(MAIN).formxml, '<form v="2"/>');
+  assert.equal(n.store.readGroup('form', 'account/main').pending, null);
+});
+
+test('an answer that does not prove the edit was not carried out leaves the attempt possibly sent: the next run only proves it', async () => {
+  const strand = async (unapplied) => {
+    const s = await observedSetup();
+    await committedEdit(s);
+    // A 400 with no Dataverse error (a proxy's page): nothing says the platform refused the operation.
+    s.wire.script(isPatch, { statusCode: 400, body: '<html>bad gateway</html>', unapplied });
+    assert.equal(await codeOf(runManagedFeature(observed(editPorts(s.wire, s.sdk, { formxml: '<form v="2"/>' }), s))), 'form-layout-rejected');
+    assert.deepEqual(s.store.readGroup('form', 'account/main').pending.sendWindow, { possible: 1, notStarted: 0 });
+    return s;
+  };
+  // It landed: proved and committed, never sent again.
+  const landed = await strand(false);
+  const n = await observedRun(landed);
+  const p = editPorts(landed.wire, n.sdk, { formxml: '<form v="2"/>' });
+  assert.deepEqual((await runManagedFeature(observed(p, n))).result, { committed: true, recovered: true });
+  assert.deepEqual([p.sends.length, landed.wire.writes().filter(isPatch).length], [0, 1]);
+
+  // It did not land: the proof fails, nothing is sent, and the attempt stays under its token.
+  const lost = await strand(true);
+  const token = lost.store.readGroup('form', 'account/main').pending.token;
+  const m = await observedRun(lost);
+  const q = editPorts(lost.wire, m.sdk, { formxml: '<form v="2"/>' });
+  assert.equal(await codeOf(runManagedFeature(observed(q, m))), 'create-completion-required');
+  assert.deepEqual([q.sends.length, lost.wire.writes().filter(isPatch).length], [0, 1]);
+  assert.equal(m.store.readGroup('form', 'account/main').pending.token, token);
+  assert.equal(m.barrier.allowScope(ACCOUNT, 'a sibling'), false);
+});
+
+test('a proven-unsent attempt is not continued when its declaration changed, or by a run that does not observe its sends', async () => {
+  const strand = async () => {
+    const s = await observedSetup();
+    const p = createPorts(s.wire, s.sdk, { key: 'account/main', id: MAIN, formxml: '<form v="1"/>' });
+    p.apply = async () => { throw localFailure(); };
+    await codeOf(runManagedFeature(observed(p, s)));
+    return s;
+  };
+  const s = await strand();
+  const n = await observedRun(s);
+  const changed = createPorts(s.wire, n.sdk, { key: 'account/main', id: MAIN, formxml: '<form v="2"/>' });
+  assert.equal(await codeOf(runManagedFeature(observed(changed, n))), 'create-completion-required');
+  assert.deepEqual([changed.tokens.length, s.wire.writes().length], [0, 0]);
+  assert.equal(n.store.readGroup('form', 'account/main').pending.phase, 'sending', 'the attempt is kept as it was');
+  assert.deepEqual(n.barrier.withheld().map((w) => w.blockedBy.length > 0), [true], 'quarantined for the run');
+
+  // Without an observer the window is not trusted: only resumeCreate's presence read or the proof decide, as before.
+  const u = await strand();
+  const m = await nextRun(u);
+  const plain = createPorts(u.wire, m.sdk, { key: 'account/main', id: MAIN, formxml: '<form v="1"/>' });
+  assert.deepEqual((await runManagedFeature({ ...plain, store: m.store, barrier: m.barrier })).result, { committed: true, recovered: true, resumed: true });
+  assert.equal(plain.resumeAsked, 1);
+});
+
+test('the send observer counts a mutation on its attempt before it leaves, only inside a window, and never a publish the barrier withholds', async () => {
+  const dir = makeTempDir('mp-observer-');
+  const barrier = createPublicationBarrier();
+  const { store } = context(dir, barrier);
+  const token = store.prepareAttempt({ family: 'form', key: 'account/main', baseGeneration: null, root: { kind: 'form', key: 'account/main', id: MAIN }, knownScopes: [ACCOUNT], declarationSha256: H('e'), publication: { scope: ACCOUNT, state: 'owed' } });
+  store.markSending(token, expected(MAIN), { observed: true });
+  const windowOf = () => store.readGroup('form', 'account/main').pending.sendWindow;
+  const seen = [];
+  let answer = { statusCode: 204, headers: {}, body: '' };
+  const inner = async (req) => { seen.push([req.method, windowOf().possible]); if (answer instanceof Error) throw answer; return answer; };
+  const observer = createAttemptSendObserver();
+  assert.equal(observer.installed, false);
+  // A wrapper given an observer that is on no transport refuses before it reads or writes anything.
+  const before = fs.readFileSync(store.file, 'utf8');
+  assert.equal(await codeOf(runManagedFeature({ ...ports(createManagedWire(), null, { key: 'account/other', id: QUICK, formxml: '<form/>' }), store, barrier, sendObserver: observer })), CODES.notSettled);
+  assert.equal(fs.readFileSync(store.file, 'utf8'), before);
+
+  const send = barrier.gateRequest(observer.wrap(inner));
+  const req = (method, p = `systemforms(${MAIN})`, body = '{}', headers = {}) => send({ url: `${ENV}/api/data/v9.2/${p}`, method, headers, body });
+  await req('PATCH');
+  assert.deepEqual(windowOf(), { possible: 0, notStarted: 0 }, 'no window open: not counted');
+  const w = observer.open(store, token);
+  await req('GET');
+  await req('PATCH');
+  answer = { statusCode: 400, headers: {}, body: JSON.stringify({ error: { code: '0x80040203', message: 'refused' } }) };
+  await req('POST', 'systemforms');
+  answer = new Error('socket hang up');
+  await assert.rejects(req('DELETE'));
+  barrier.hold(token, [ACCOUNT], [MAIN], 'form main');
+  answer = { statusCode: 204, headers: {}, body: '' };
+  await req('POST', 'PublishXml', JSON.stringify({ ParameterXml: '<importexportxml><entities><entity>account</entity></entities></importexportxml>' }));
+  w.close();
+  await req('PATCH');
+  assert.deepEqual(seen, [['PATCH', 0], ['GET', 0], ['PATCH', 1], ['POST', 2], ['DELETE', 2], ['PATCH', 2]], 'counted before it left; the withheld publish never reached the transport');
+  assert.deepEqual(windowOf(), { possible: 2, notStarted: 1 }, 'a lost answer stays possibly applied');
+
+  // A count that cannot be written stops the request before it leaves.
+  const broken = { noteAttemptDispatch: () => { throw Object.assign(new Error('disk full'), { code: CODES.writeFailed }); }, noteAttemptNotStarted() {} };
+  const w2 = observer.open(broken, token);
+  await assert.rejects(req('PATCH'), { code: CODES.writeFailed });
+  w2.close();
+  assert.equal(seen.length, 6);
+});
+
+test('a not-started answer is a Dataverse refusal of one operation, a refused token or a failed If-Match; nothing else', () => {
+  const at = (p, headers = {}) => ({ url: `${ENV}/api/data/v9.2/${p}`, method: 'PATCH', headers });
+  const coded = (statusCode, code = '0x80040203') => ({ statusCode, headers: {}, body: JSON.stringify({ error: { code, message: 'x' } }) });
+  const row = at(`systemforms(${MAIN})`);
+  assert.equal(notStartedAnswer(row, coded(400)), true);
+  assert.equal(notStartedAnswer(row, { ...coded(404, '0x80040217'), body: Buffer.from(coded(404, '0x80040217').body) }), true);
+  assert.equal(notStartedAnswer(row, { statusCode: 401, headers: {}, body: '' }), true);
+  assert.equal(notStartedAnswer(at(`systemforms(${MAIN})`, { 'If-Match': '"7"' }), { statusCode: 412, headers: {}, body: '' }), true);
+  for (const [label, req, res] of [
+    ['a 412 without If-Match or a code', row, { statusCode: 412, headers: {}, body: '' }],
+    ['a 400 without a Dataverse code', row, { statusCode: 400, headers: {}, body: '<html/>' }],
+    ['a code that is not one', row, coded(400, 'BadRequest')],
+    ['a 409', row, coded(409)],
+    ['a 429', row, coded(429)],
+    ['a 503', row, coded(503)],
+    ['a 500', row, coded(500)],
+    ['a success', row, { statusCode: 204, headers: {}, body: '' }],
+    ['a batch', at('$batch'), coded(400)],
+    ['a transport error', row, { error: 'socket hang up' }],
+    ['a cut-off answer', row, { ...coded(400), incompleteResponse: true }],
+    ['no answer', row, null],
+  ]) assert.equal(notStartedAnswer(req, res), false, label);
 });
