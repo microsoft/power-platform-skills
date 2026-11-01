@@ -36,9 +36,23 @@ const { redactOutput } = require('./output-redaction.js');
 
 const PREFIX = 'managed-bindings.';
 const SCHEMA_VERSION = 1;
-// Four times the dashboard-creation record's limit (dashboard-creation-records.js MAX_BYTES), because this file holds
-// each group's canonical declaration. A larger file is refused, never truncated.
-const MAX_BYTES = 4 * (1 << 20);
+// The whole file, as written (indented JSON). A larger file is refused, never truncated: on read it is unreadable, and a
+// write that would make one is `managed-binding-store-full` with nothing written.
+// Sized for the declarations the file keeps. A group can hold its declaration up to three times: the committed
+// `originalDeclaration`, a copy the feature keeps in its consumer state (a process flow's `declaration.flow`), and a
+// pending attempt's `declaration`. A declaration at DECLARATION_MAX_BYTES is up to about 1.4 MiB once indented, so one
+// group at the cap takes about 4.2 MiB, and 32 MiB holds six such groups beside the reserve below — or about 18
+// process flows at the documented ceiling (30 stages of 30 steps; about 1.5 MiB for all three copies). Every open reads
+// and checks the whole file, so the bound stays well short of what would make a run slow.
+const MAX_BYTES = 32 * (1 << 20);
+// What a new obligation (prepareAttempt, markPublishDispatch) must leave free. Both are written before anything is
+// sent; what follows a send (noteSaved, commitGroup with the feature's consumer state, confirmPublished) must still
+// fit, or the attempt would be stranded behind a store no write can change. So a new obligation is refused
+// (`managed-binding-store-full`, nothing written, nothing sent) unless this much stays free after it: room for the
+// consumer state of a declaration at the cap (about 1.4 MiB indented) several times over. The reserve is shared, so
+// many attempts prepared at once against an almost full file can still exhaust it; each refusal then comes before the
+// send of the attempt it would have recorded, never after.
+const PREPARE_RESERVE_BYTES = 4 * (1 << 20);
 
 const CODES = Object.freeze({
   unreadable: 'managed-binding-store-unreadable',
@@ -59,6 +73,10 @@ const CODES = Object.freeze({
   // A declaration offered with an attempt that the store will not keep (see validateDeclaration): refused before
   // anything is written, so before anything is sent.
   declarationRefused: 'managed-declaration-refused',
+  // A write that would take the file past MAX_BYTES, or a new obligation that would leave less than
+  // PREPARE_RESERVE_BYTES free: nothing is written, and an attempt refused this way was never sent. Remedy: keep
+  // fewer or smaller declared groups in one app and solution.
+  storeFull: 'managed-binding-store-full',
 });
 
 const FAMILIES = ['form', 'dashboard', 'rule', 'bpf', 'view', 'chart'];
@@ -157,9 +175,12 @@ function validateConsumerValue(value, where) {
 // name the environment's own dynamics.com host — so it is kept exactly as written (nothing is ever rewritten), and only
 // what can carry a credential or a copy of service content is refused:
 //   - a JWT anywhere in a string or a key;
-//   - a URL whose authority holds userinfo — any `@` before the host, a user name alone included. Tabs and newlines are
-//     ignored first, as a URL parser ignores them, and http(s)/ws(s)/ftp/file need no `//` (a URL parser accepts
-//     `https:user@host` too);
+//   - a URL whose authority holds userinfo, by the URL syntax (urlWithUserinfo): an `@` that can start a host anywhere
+//     between the scheme and the first `/`, `?` or `#`, whitespace and a no-break space included, under any scheme.
+//     Tabs and newlines are ignored first, as a URL parser ignores them, and http(s)/ws(s)/ftp/file need no `//` (a URL
+//     parser accepts `https:user@host` too). In free text a bare link followed later by an address with no `/`, `?` or
+//     `#` between them (`Visit https://contoso.com or write to sales@contoso.com`) is ambiguous and refused as well:
+//     end the link with `/`, or quote or bracket it;
 //   - a query or fragment parameter whose name, percent-decoded (`+` read as a space), is `access_token`, `id_token`,
 //     `refresh_token`, `client_secret`, `password`, `passwd`, `pwd`, `sig` (an Azure SAS signature), `api_key` or
 //     `apikey`. A name that does not decode cleanly, or still holds a `%` once decoded (`%2561ccess_token`), is
@@ -172,33 +193,89 @@ function validateConsumerValue(value, where) {
 //   - anything that is not plain JSON data: undefined, a function, a symbol key, a Date or other object that is not a
 //     plain object or array, an accessor, a non-enumerable property (a hidden `toJSON` among them), extra properties
 //     on an array, a non-finite number, a sparse array; a top level that is not a plain object; nesting deeper than
-//     32; and more than DECLARATION_MAX_BYTES (128 KiB) of canonical JSON — the whole store is refused past MAX_BYTES
-//     (4 MiB), so one declaration may not take a large share of it.
+//     32; and more than DECLARATION_MAX_BYTES (1 MiB) of canonical JSON — a safety bound, so one declaration cannot take
+//     a large share of the store (MAX_BYTES).
+// The bound is sized from each family's largest declaration, with every name, label and description at its longest and
+// written in three-byte UTF-8 text (sizes in canonical JSON; the margin is DECLARATION_MAX_BYTES over the size):
+//   - bpf: the documented ceiling (references/app-spec-schema-advanced.md) of 30 stages of 30 steps, 64-character keys
+//     and field names, 100-character names and a 2,000-character description: 445,901 bytes, a margin of 2.35;
+//   - dashboard: 30 tiles (more components than a model-driven dashboard takes), every tile field set and a
+//     2,000-character URL each: 110,353 bytes, a margin of 9.5;
+//   - form and rule have no published ceiling, so the bound is a stated sizing model: a form of 1,000 fields in 25
+//     tabs, 500 field options, 50 sub-grids, 50 quick views and 100 events is 442,654 bytes (a margin of 2.37); a rule
+//     of 100 conditions and 100 actions, ten of them recommendations with ten apply-actions each, every literal 250
+//     characters, is 333,738 bytes (a margin of 3.14);
+//   - view and chart keep no declaration (only their consumer baseline), so only MAX_BYTES bounds them.
+// Past the bound a declaration is `managed-declaration-refused` before anything is written or sent; the tests pin each
+// family's largest declaration above.
 // Validation reads every value exactly once and builds a plain-data snapshot from what it read; the snapshot, never
 // the caller's object, is what is measured, compared and stored, so nothing can change between the check and the write.
 // A token this process obtained is refused as well, whatever its shape (checkDeclaration, output-redaction.js).
-const DECLARATION_MAX_BYTES = 128 * 1024;
+const DECLARATION_MAX_BYTES = 1 << 20;
 const DECLARATION_MAX_DEPTH = 32;
 const SERVICE_DOCUMENT = /^\s*<(?:\?xml|form|fetch|grid|savedquery|columnset|visualization|datadefinition|presentationdescription|workflow|Activity)\b/i;
-// A URL's authority: `scheme://authority` for any scheme, and also `scheme:authority` (slashes and backslashes in any
-// number) for the special schemes, which a URL parser reads the same way. It runs to the first `/`, `?`, `#` or
-// whitespace. A backslash is not a stop, so for a special scheme an `@` after one is treated as userinfo too: that
-// refuses more than a parser would, never less.
-const URL_AUTHORITY = /\b(?:(?:https?|wss?|ftp|file):[\\/]*|[a-z][a-z0-9+.-]*:[\\/]{2})([^/?#\s]*)/gi;
+// Where a URL's authority starts: after `scheme://` for any scheme, and also after `scheme:` (slashes and backslashes in
+// any number) for the special schemes, which a URL parser reads the same way.
+const URL_START = /\b(?:(?:https?|wss?|ftp|file):[\\/]*|[a-z][a-z0-9+.-]*:[\\/]{2})/gi;
+// A URL quoted or bracketed in authored text ends at the matching closer: `href="https://contoso.com"`, `<https://...>`,
+// `[help](https://...)`.
+const URL_CLOSERS = { '"': '"', "'": "'", '<': '>', '(': ')', '[': ']', '`': '`' };
 // A parameter: `name=` right after `?`, `&`, `#` or `;`, wherever it stands (a URL, a hash route, plain text).
 const PARAMETER = /[?&#;]([^=&#;?\s]*)=/g;
 const SECRET_PARAMETERS = new Set(['access_token', 'id_token', 'refresh_token', 'client_secret', 'password', 'passwd', 'pwd', 'sig', 'api_key', 'apikey']);
 const CONNECTION_SECRET = /(?:^|;)\s*(?:AccountKey|SharedAccessKey|SharedAccessSignature|ClientSecret|Password|Pwd)\s*=/i;
 const PRIVATE_KEY = /-----BEGIN [A-Z ]*PRIVATE KEY-----/;
 const isPlain = (v) => isObj(v) && (Object.getPrototypeOf(v) === Object.prototype || Object.getPrototypeOf(v) === null);
+// Whether a URL in `text` has userinfo, by the URL syntax rather than its spelling. A parser's authority runs from the
+// scheme to the first `/`, `?` or `#` (a backslash too, for a special scheme; it is not a stop here, which refuses more,
+// never less), and the LAST `@` in it ends the userinfo. Whitespace is no stop: a parser percent-encodes a space or a
+// no-break space in userinfo and keeps it (`new URL('https://fixture secret@contoso.com/').username` is
+// `fixture%20secret`), so `scheme:// … @host` is userinfo however the part before the `@` is spelled.
+// See: https://url.spec.whatwg.org/#authority-state
+// In free text that also makes the end of a bare link ambiguous: `Visit https://contoso.com or write to
+// sales@contoso.com` IS a URL with a user name to a parser handed the whole string. Rather than guess where the author
+// meant it to end, any `@` followed by a host character inside that span is refused; the remedy is to end the link with
+// `/`, or to quote or bracket it. An `@` followed by a space or by nothing cannot start a host, so it is not userinfo.
+// A link opened by a quote or bracket ends at the matching closer (URL_CLOSERS), as markup and Markdown links do.
+// One right-to-left pass records, for every position, the next stop and the next `@` that can start a host, so a long
+// text with many scheme-like words is scanned in linear time.
+function urlWithUserinfo(text) {
+  if (!text.includes('@')) return false;
+  const n = text.length;
+  const nextStop = new Int32Array(n + 1);
+  const nextAt = new Int32Array(n + 1);
+  nextStop[n] = n;
+  nextAt[n] = n;
+  for (let i = n - 1; i >= 0; i -= 1) {
+    const c = text[i];
+    nextStop[i] = c === '/' || c === '?' || c === '#' ? i : nextStop[i + 1];
+    nextAt[i] = c === '@' && i + 1 < n && text[i + 1] !== ' ' ? i : nextAt[i + 1];
+  }
+  const nextCloser = {};
+  const nextOf = (ch) => {
+    if (!nextCloser[ch]) {
+      const a = new Int32Array(n + 1);
+      a[n] = n;
+      for (let i = n - 1; i >= 0; i -= 1) a[i] = text[i] === ch ? i : a[i + 1];
+      nextCloser[ch] = a;
+    }
+    return nextCloser[ch];
+  };
+  for (const m of text.matchAll(URL_START)) {
+    const start = m.index + m[0].length;
+    let end = nextStop[start];
+    const closer = m.index > 0 ? URL_CLOSERS[text[m.index - 1]] : undefined;
+    if (closer) end = Math.min(end, nextOf(closer)[start]);
+    if (nextAt[start] < end) return true;
+  }
+  return false;
+}
 function declarationText(s, where) {
   if (JWT.test(s)) throw invalid(where, 'holds a token');
   // WHATWG URL parsing removes every ASCII tab and newline before it reads a URL, so they cannot hide userinfo here.
   // See: https://url.spec.whatwg.org/#concept-basic-url-parser
   const flat = s.replace(/[\t\n\r]/g, '');
-  for (const m of flat.matchAll(URL_AUTHORITY)) {
-    if (m[1].includes('@')) throw invalid(where, 'holds a URL with credentials');
-  }
+  if (urlWithUserinfo(flat)) throw invalid(where, 'holds a URL with credentials, or a URL whose end is ambiguous');
   for (const m of flat.matchAll(PARAMETER)) {
     let name;
     try {
@@ -351,14 +428,27 @@ function validatePublication(pub, family, where, { attempt = false } = {}) {
     // A dispatch token is written only in the branch that actually sends, so it exists exactly when a send may have run.
     const sent = pub.state === 'dispatching' || pub.state === 'unconfirmed' || pub.state === 'confirmed';
     if (sent) tokenField(pub.dispatchToken, `${where}.dispatchToken`); else if (pub.dispatchToken !== null) throw invalid(where, 'carries a dispatch token it never sent');
-    // A carried dispatch (markPublishDispatch `carried`): a group that owed nothing, swept into a publish of its scope.
-    // It keeps the settled state it had, so a send that never started puts exactly that back.
+    // A carried dispatch (markPublishDispatch `carried`): a covered group whose debt this publish does not pay, swept
+    // into a publish of its scope. It keeps the publication it had, so a send that never started puts exactly that
+    // back, and the layers read just before the send: `publishedSha256` (what was live) and `savedSha256` (what the
+    // publish ships). Its desired intent is left as it was committed, null included. A record from before that
+    // evidence existed (only `state` and `dispatchToken`) still needs a desired hash, and is never a witness.
     if (pub.carriedFrom !== undefined) {
       if (!UNCERTAIN.has(pub.state)) throw invalid(where, 'keeps a carried state outside a dispatch');
-      if (typeof pub.desiredSha256 !== 'string') throw invalid(where, 'is carried with no desired hash to confirm');
-      closedKeys(pub.carriedFrom, ['state', 'dispatchToken'], `${where}.carriedFrom`);
-      if (pub.carriedFrom.state === 'confirmed') tokenField(pub.carriedFrom.dispatchToken, `${where}.carriedFrom.dispatchToken`);
-      else if (pub.carriedFrom.state !== 'not-needed' || pub.carriedFrom.dispatchToken !== null) throw invalid(`${where}.carriedFrom`, 'is not a settled publication');
+      const cf = pub.carriedFrom;
+      const w = `${where}.carriedFrom`;
+      if (isObj(cf) && ('publishedSha256' in cf || 'savedSha256' in cf)) {
+        closedKeys(cf, ['state', 'dispatchToken', 'publishedSha256', 'savedSha256'], w);
+        hashOrNull(cf.publishedSha256, `${w}.publishedSha256`, false);
+        hashOrNull(cf.savedSha256, `${w}.savedSha256`, false);
+        if (cf.state === 'confirmed') tokenField(cf.dispatchToken, `${w}.dispatchToken`);
+        else if ((cf.state !== 'not-needed' && cf.state !== 'owed') || cf.dispatchToken !== null) throw invalid(w, 'is not a publication a publish can carry');
+      } else {
+        if (typeof pub.desiredSha256 !== 'string') throw invalid(where, 'is carried with no desired hash to confirm');
+        closedKeys(cf, ['state', 'dispatchToken'], w);
+        if (cf.state === 'confirmed') tokenField(cf.dispatchToken, `${w}.dispatchToken`);
+        else if (cf.state !== 'not-needed' || cf.dispatchToken !== null) throw invalid(w, 'is not a settled publication');
+      }
     }
   }
   validateScope(pub.scope, `${where}.scope`);
@@ -513,16 +603,21 @@ function rootCreateAcknowledged(a) {
 
 // The child-create receipt of an attempt: [{ kind, key, id }], each a child its expected proof named under that same
 // id, never the root, never twice.
+// The identity a child receipt compares row ids by: a GUID in any of its spellings (`{MAIN}`, upper case) is the one
+// row normalizeGuid names, so a braced root id is still the root; any other id (an opaque control or cell name) keeps
+// the case-insensitive exact comparison it always had.
+const rowIdKey = (id) => normalizeGuid(id) || String(id).toLowerCase();
 function validateChildReceipt(list, a, where) {
   if (!Array.isArray(list)) throw invalid(where, 'is not a list');
   const seen = new Set();
+  const rootId = rowIdKey(a.root.id);
   list.forEach((c, i) => {
     const w = `${where}[${i}]`;
     closedKeys(c, ['kind', 'key', 'id'], w);
     if (!nonempty(c.kind) || !nonempty(c.key) || !nonempty(c.id)) throw invalid(w, 'is incomplete');
-    const id = c.id.toLowerCase();
-    if ((c.kind === a.root.kind && c.key === a.root.key) || id === String(a.root.id).toLowerCase()) throw invalid(w, 'names the root, which only a root create acknowledges');
-    if (!a.expected.children.some((x) => x.kind === c.kind && x.key === c.key && String(x.id).toLowerCase() === id)) throw invalid(w, 'is a child the expected proof does not name under that id');
+    const id = rowIdKey(c.id);
+    if ((c.kind === a.root.kind && c.key === a.root.key) || id === rootId) throw invalid(w, 'names the root, which only a root create acknowledges');
+    if (!a.expected.children.some((x) => x.kind === c.kind && x.key === c.key && rowIdKey(x.id) === id)) throw invalid(w, 'is a child the expected proof does not name under that id');
     const k = `${c.kind}\u0000${c.key}`;
     if (seen.has(k) || seen.has(id)) throw invalid(w, 'repeats a child');
     seen.add(k);
@@ -572,6 +667,32 @@ function validateEffect(e, where) {
  * Parse and validate the text of a store file. Returns { envelope, invalidGroups: Map(groupId -> message) }.
  * Throws `managed-binding-store-unreadable` for anything wrong outside one group.
  */
+// The maker's recorded acceptance of an unproved publication (acceptUncertainPublication): which dispatch, of which
+// scope, under which typed approval, and the groups it released. Kept as an audit trail, newest last, at most
+// RISK_ACCEPTANCES_KEPT; it grants nothing by itself.
+const RISK_ACCEPTANCES_KEPT = 32;
+const publicationRiskApproval = (scope) => `publication-risk:${scopeKey(scope)}`;
+// The way out of an unconfirmed publish, named wherever one blocks a change: a fresh read that shows a layer the publish
+// changed settles it on its own (confirmUncertainPublication); when none can (the publish carried only layers that
+// were already live), the maker checks what is live and accepts the risk with the scope's typed approval.
+const publicationRemedy = (scope, dispatchToken) => `it settles when a fresh read shows a layer that publish changed; if none can, check what is live on ${scopeKey(scope)} and accept the risk with the approval "${publicationRiskApproval(scope)}" for dispatch ${dispatchToken} (acceptUncertainPublication)`;
+function validateRiskAcceptances(list, where) {
+  if (!Array.isArray(list) || list.length > RISK_ACCEPTANCES_KEPT) throw invalid(where, `is not a list of at most ${RISK_ACCEPTANCES_KEPT} acceptances`);
+  list.forEach((x, i) => {
+    const w = `${where}[${i}]`;
+    closedKeys(x, ['scope', 'dispatchToken', 'approval', 'groups'], w);
+    validateScope(x.scope, `${w}.scope`);
+    tokenField(x.dispatchToken, `${w}.dispatchToken`);
+    if (x.approval !== publicationRiskApproval(x.scope)) throw invalid(w, 'does not carry the approval for its scope');
+    if (!Array.isArray(x.groups) || !x.groups.length) throw invalid(w, 'names no group');
+    x.groups.forEach((g, j) => {
+      closedKeys(g, ['family', 'key', 'generation'], `${w}.groups[${j}]`);
+      if (!FAMILIES.includes(g.family) || !nonempty(g.key)) throw invalid(`${w}.groups[${j}]`, 'has no family and key');
+      tokenField(g.generation, `${w}.groups[${j}].generation`);
+    });
+  });
+}
+
 function parseEnvelope(text, expect) {
   let data;
   try {
@@ -580,13 +701,14 @@ function parseEnvelope(text, expect) {
   } catch (e) {
     throw storeError(CODES.unreadable, `the managed binding store is not valid JSON (${e.message})`);
   }
-  closedKeys(data, ['schemaVersion', 'environmentFingerprint', 'appUniqueName', 'solutionUniqueName', 'revision', 'groups', 'attempts', 'workflowEffects'], 'the managed binding store');
+  closedKeys(data, ['schemaVersion', 'environmentFingerprint', 'appUniqueName', 'solutionUniqueName', 'revision', 'groups', 'attempts', 'workflowEffects', 'publicationRiskAcceptances'], 'the managed binding store');
   if (data.schemaVersion !== SCHEMA_VERSION) throw invalid('the managed binding store', `has schema version ${data.schemaVersion}, not ${SCHEMA_VERSION}`);
   if (data.environmentFingerprint !== expect.environmentFingerprint || data.appUniqueName !== expect.appUniqueName || data.solutionUniqueName !== expect.solutionUniqueName) {
     throw invalid('the managed binding store', 'belongs to another environment, app or solution');
   }
   if (!Number.isSafeInteger(data.revision) || data.revision < 0) throw invalid('the managed binding store', 'has no revision');
   for (const list of ['groups', 'attempts', 'workflowEffects']) if (!Array.isArray(data[list])) throw invalid('the managed binding store', `has no ${list} list`);
+  if (data.publicationRiskAcceptances !== undefined) validateRiskAcceptances(data.publicationRiskAcceptances, 'publicationRiskAcceptances');
 
   const header = { appUniqueName: data.appUniqueName, environmentFingerprint: data.environmentFingerprint };
   const invalidGroups = new Map();
@@ -801,8 +923,9 @@ function openManagedBindings({ workspaceDir, environment, appUniqueName, solutio
     return barrier;
   };
 
-  // One change: take the lease, reread the disk, apply `change` to a copy, write, reread and compare.
-  function mutate(change) {
+  // One change: take the lease, reread the disk, apply `change` to a copy, write, reread and compare. `reserve`: the bytes
+  // the file must keep free after this write (PREPARE_RESERVE_BYTES for a new obligation; 0 otherwise).
+  function mutate(change, { reserve = 0 } = {}) {
     const root = workspaceRoot(workspaceDir, true);
     const full = path.join(root, ctx.file);
     // A workspace created after the store was opened: later reads (refresh) must look at the file this write makes.
@@ -816,9 +939,13 @@ function openManagedBindings({ workspaceDir, environment, appUniqueName, solutio
       next.revision = disk.envelope.revision + 1;
       const text = `${JSON.stringify(next, null, 2)}\n`;
       // A file larger than any open reads back (readStoreFile: MAX_BYTES) would be written, then refused by every later
-      // run, the attempt it records with it: refuse the change instead, before the disk is touched.
+      // run, the attempt it records with it: refuse the change instead, before the disk is touched. A new obligation
+      // must also leave the reserve free, so the writes that follow its send still fit.
       const bytes = Buffer.byteLength(text, 'utf8');
-      if (bytes > MAX_BYTES) throw storeError(CODES.writeFailed, `the managed binding store would be ${bytes} bytes, more than the ${MAX_BYTES} it may hold; nothing was written`);
+      if (bytes > MAX_BYTES - reserve) {
+        const need = reserve ? `, and a new attempt or publish must leave ${reserve} of them free, so nothing was sent for it` : '';
+        throw storeError(CODES.storeFull, `the managed binding store would be ${bytes} bytes; it may hold ${MAX_BYTES}${need}. Nothing was written: keep fewer or smaller declared groups in this app and solution`);
+      }
       // Validate in memory before anything touches the disk: an invalid group may stay as it was, never become one.
       const checked = parseEnvelope(text, ctx.expect);
       for (const id of checked.invalidGroups.keys()) {
@@ -932,7 +1059,7 @@ function openManagedBindings({ workspaceDir, environment, appUniqueName, solutio
           ...(kept !== undefined ? { declaration: kept } : {}), expected,
           acknowledgedRoot: false, savedObservation: null, publication,
         });
-      });
+      }, { reserve: PREPARE_RESERVE_BYTES });
       // Durable and read back: only now may the replaced attempt's own hold end.
       if (replaces && barrier) barrier.release(replaces.token);
       return token;
@@ -1140,7 +1267,8 @@ function openManagedBindings({ workspaceDir, environment, appUniqueName, solutio
           // attempt's child-create receipt naming that same (kind, key, id); a lost answer needs adoption. A receipt
           // never covers the root.
           const isRoot = rec.kind === a.root.kind && rec.key === a.root.key;
-          const receipted = !isRoot && receipt.some((c) => c.kind === rec.kind && c.key === rec.key && c.id === String(rec.id).toLowerCase());
+          const receipted = !isRoot && rowIdKey(rec.id) !== rowIdKey(a.root.id)
+            && receipt.some((c) => c.kind === rec.kind && c.key === rec.key && rowIdKey(c.id) === rowIdKey(rec.id));
           if (rec.origin === 'created' && !acknowledged && !receipted) throw storeError(CODES.completion, `the managed ${a.family} "${a.key}" cannot record ${rec.kind} "${rec.key}" as created without an acknowledged create`);
           // A child the group did not hold before is bound only when the expected proof, persisted before the send,
           // named it under that id: an observation cannot add a binding the attempt never said it would make.
@@ -1171,13 +1299,17 @@ function openManagedBindings({ workspaceDir, environment, appUniqueName, solutio
     },
     /**
      * Mark, in one write immediately before the one send of `scope` under `token`:
-     *   groups   [{ family, key }] the owed, unsent publication each of them pays: owed -> dispatching;
-     *   carried  [{ family, key, generation }] groups that owe nothing but whose saved layer the same publish puts live
-     *            again (a table publish ships every form and view of the table): a settled publication — confirmed, or
-     *            not-needed — at the generation the caller read, with a desired hash. It becomes dispatching under the
-     *            same token and keeps the state it had (`carriedFrom`), so the send is fenced like any other: a later
-     *            run quarantines the scope, no change is prepared or claimed over it, and only a read-only confirmation
-     *            that every group of the dispatch shows its desired hash live (confirmPublished) settles it.
+     *   groups   [{ family, key }] the owed, unsent publication each of them pays: owed -> dispatching. The caller read
+     *            each of them not yet live at its desired hash (publishManagedScope `due`), so a later read that shows it
+     *            live shows the publish changed it;
+     *   carried  [{ family, key, generation, publishedSha256, savedSha256 }] every OTHER group the same publish puts
+     *            live again (a table publish ships every form and view of the table), whatever its publication: owed
+     *            and not paid by this call, confirmed, or not-needed, a null desired hash included. `generation` is the
+     *            one the caller read, and the two hashes are its published and saved layers read just before the send.
+     *            It becomes dispatching under the same token, keeps the publication it had and that evidence
+     *            (`carriedFrom`), and keeps its desired hash as committed — nothing is invented or rewritten. The send
+     *            is then fenced like any other: a later run quarantines the scope, no change is prepared or claimed
+     *            over it, and only confirmPublished (a witness) or acceptUncertainPublication (the maker) settles it.
      * Any group that is pending, invalid, not as described, or committed again since it was read refuses the whole
      * mark and nothing is written, so nothing is sent.
      */
@@ -1185,7 +1317,11 @@ function openManagedBindings({ workspaceDir, environment, appUniqueName, solutio
       tokenField(token, 'the dispatch token');
       if (!Array.isArray(groups) || !Array.isArray(carried) || !groups.length && !carried.length) throw storeError(CODES.notSettled, 'markPublishDispatch needs the groups the publish pays or carries');
       mutate((env, disk) => {
+        const seen = new Set();
         const find = (family, key) => {
+          const id = groupId(family, key);
+          if (seen.has(id)) throw storeError(CODES.notSettled, `the managed ${family} "${key}" is named twice in one dispatch`);
+          seen.add(id);
           const unit = usable(unitOf(disk, family, key));
           if (unit.attempt) throw storeError(CODES.pending, `the managed ${family} "${key}" has a pending attempt`);
           const g = env.groups.find((x) => x.family === family && x.key === key);
@@ -1198,17 +1334,25 @@ function openManagedBindings({ workspaceDir, environment, appUniqueName, solutio
           g.publication.state = 'dispatching';
           g.publication.dispatchToken = token;
         }
-        for (const { family, key, generation } of carried) {
+        for (const { family, key, generation, publishedSha256, savedSha256 } of carried) {
           const g = find(family, key);
-          if (!g || !g.publication || (g.publication.state !== 'confirmed' && g.publication.state !== 'not-needed') || typeof g.publication.desiredSha256 !== 'string') {
-            throw storeError(CODES.notSettled, `the managed ${family} "${key}" has no settled publication to carry`);
+          const p = g && g.publication;
+          if (!p || !(p.state === 'confirmed' || p.state === 'not-needed' || (p.state === 'owed' && p.dispatchToken === null))) {
+            throw storeError(CODES.notSettled, `the managed ${family} "${key}" has no publication a publish can carry`);
+          }
+          // The layer evidence is optional only for the earlier shape: a settled carried group with a desired hash, which a later
+          // read must then show and which is never a witness. A group without one (not-needed, a null desired hash)
+          // needs the evidence, since nothing else could ever be read against it.
+          const legacy = publishedSha256 === undefined && savedSha256 === undefined && typeof p.desiredSha256 === 'string' && p.state !== 'owed';
+          if (!legacy && (typeof publishedSha256 !== 'string' || !HEX64.test(publishedSha256) || typeof savedSha256 !== 'string' || !HEX64.test(savedSha256))) {
+            throw storeError(CODES.notSettled, `the managed ${family} "${key}" is carried without the layers read before the send`);
           }
           if (g.generation !== generation) throw storeError(CODES.conflict, `the managed ${family} "${key}" was committed again since its layers were read`);
-          g.publication.carriedFrom = { state: g.publication.state, dispatchToken: g.publication.dispatchToken };
-          g.publication.state = 'dispatching';
-          g.publication.dispatchToken = token;
+          p.carriedFrom = legacy ? { state: p.state, dispatchToken: p.dispatchToken } : { state: p.state, dispatchToken: p.dispatchToken, publishedSha256, savedSha256 };
+          p.state = 'dispatching';
+          p.dispatchToken = token;
         }
-      });
+      }, { reserve: PREPARE_RESERVE_BYTES });
     },
     /**
      * After the send: 'definite-no-start' returns the debt to owed, and a carried group to the settled state it had;
@@ -1231,14 +1375,29 @@ function openManagedBindings({ workspaceDir, environment, appUniqueName, solutio
       });
     },
     /**
-     * A fresh published read equals what was owed: end the debt without sending. `token` is the dispatch token the
-     * debt carries (null for debt that was never sent, which becomes not-needed). `proof.publishedSha256` must equal
-     * the debt's desired hash when it has one; a group may carry its own `publishedSha256`, which wins, so the groups
-     * of one send are confirmed in one atomic write. A group may also name the `generation` its read was judged
-     * against: a group committed again since then is `managed-binding-generation-conflict`, and nothing is confirmed.
+     * A fresh published read settles a publication without sending.
+     * `token` null: debt that was never sent and whose published layer already equals what is owed becomes not-needed.
+     * `token` a dispatch token: the dispatch is settled WHOLE — `groups` must name every group still uncertain under
+     * it — and only when its outcome is shown, never from an observation that was already true before the send:
+     *   - every group's read must be consistent with the send: debt (dispatched owed) shows its desired hash; a carried
+     *     group shows the saved layer the send shipped (`carriedFrom.savedSha256`; a record without that evidence, its
+     *     desired hash);
+     *   - and at least one group must be a WITNESS, a layer the send changed: debt (it was read not live before the
+     *     send, markPublishDispatch), or a carried group whose published layer before the send differed from the
+     *     saved layer it shipped. A carry-only dispatch over layers that were already live has no witness;
+     *   - `answered: true` stands in for the witness, and only in the invocation that dispatched the publish and saw it
+     *     answer success (a synchronous publish that answered success has completed); it is never a later run's.
+     * Otherwise `managed-publication-unconfirmed`, and nothing is written. Settling: debt becomes confirmed; a carried
+     * group becomes confirmed under this token when its desired hash is live, and otherwise gets back the publication
+     * it had before the send. A desired hash is never rewritten. `proof.publishedSha256` is the read for every group
+     * unless an entry carries its own; an entry may name the `generation` its read was judged against: a group
+     * committed again since then is `managed-binding-generation-conflict`, and nothing is settled.
      */
-    confirmPublished({ groups, token = null, proof = {} }) {
+    confirmPublished({ groups, token = null, proof = {}, answered = false }) {
       mutate((env) => {
+        const named = new Set();
+        let witnessed = answered === true;
+        const settle = [];
         for (const entry of groups) {
           const { family, key } = entry;
           const published = typeof entry.publishedSha256 === 'string' ? entry.publishedSha256 : proof.publishedSha256;
@@ -1246,11 +1405,77 @@ function openManagedBindings({ workspaceDir, environment, appUniqueName, solutio
           if (!g || !g.publication) throw storeError(CODES.notSettled, `the managed ${family} "${key}" has no publication`);
           if (entry.generation !== undefined && g.generation !== entry.generation) throw storeError(CODES.conflict, `the managed ${family} "${key}" was committed again since its published layer was read`);
           if (g.publication.dispatchToken !== token) throw storeError(CODES.notSettled, `the managed ${family} "${key}" publication carries another dispatch token`);
-          if (g.publication.desiredSha256 && published !== g.publication.desiredSha256) throw storeError(CODES.notSettled, `the managed ${family} "${key}" published layer does not equal what was owed`);
-          if (g.publication.state === 'owed') g.publication.state = 'not-needed';
-          else if (UNCERTAIN.has(g.publication.state)) { g.publication.state = 'confirmed'; delete g.publication.carriedFrom; }
+          named.add(groupId(family, key));
+          const p = g.publication;
+          const cf = p.carriedFrom;
+          if (token !== null && cf && typeof cf.savedSha256 === 'string') {
+            if (published !== cf.savedSha256) throw storeError(CODES.publicationUncertain, `the managed ${family} "${key}" published layer is not the one its scope's publish shipped`);
+            if (cf.publishedSha256 !== cf.savedSha256) witnessed = true;
+          } else if (cf) {
+            if (published !== p.desiredSha256) throw storeError(CODES.publicationUncertain, `the managed ${family} "${key}" published layer does not equal what was carried`);
+          } else {
+            if (token !== null && typeof p.desiredSha256 !== 'string') throw storeError(CODES.publicationUncertain, `the managed ${family} "${key}" names no desired hash to confirm`);
+            if (p.desiredSha256 && published !== p.desiredSha256) throw storeError(CODES.notSettled, `the managed ${family} "${key}" published layer does not equal what was owed`);
+            if (token !== null && UNCERTAIN.has(p.state)) witnessed = true;
+          }
+          settle.push({ p, published });
+        }
+        if (token !== null) {
+          const open = env.groups.filter((g) => g.publication && g.publication.dispatchToken === token && UNCERTAIN.has(g.publication.state));
+          const missing = open.filter((g) => !named.has(groupId(g.family, g.key)));
+          if (missing.length) throw storeError(CODES.publicationUncertain, `a publish is settled whole: ${missing.map((g) => `${g.family} "${g.key}"`).join(', ')} shares its dispatch and was not read`);
+          if (open.length && !witnessed) {
+            throw storeError(CODES.publicationUncertain, 'the publish carried only layers that were already live, so no read can show it ended; it stays unconfirmed until the maker accepts the risk (acceptUncertainPublication)');
+          }
+        }
+        for (const { p, published } of settle) {
+          if (p.state === 'owed') { p.state = 'not-needed'; continue; }
+          if (!UNCERTAIN.has(p.state)) continue;
+          const cf = p.carriedFrom;
+          delete p.carriedFrom;
+          if (!cf || (typeof p.desiredSha256 === 'string' && published === p.desiredSha256)) { p.state = 'confirmed'; continue; }
+          p.state = cf.state;
+          p.dispatchToken = cf.dispatchToken;
         }
       });
+    },
+    /**
+     * The maker's way out of a publish no read can settle (a carry-only dispatch over layers that were already live,
+     * or any dispatch whose witness never shows): `approval` must be exactly publicationRiskApproval(scope),
+     * `publication-risk:table:<table>` or `publication-risk:dashboard:<id>`, and stands for "I checked what is live on
+     * this scope and accept that the lost publish may still complete". It is the feature's typed approval, never
+     * inferred. Under the lease, every group still uncertain under `dispatchToken` on `scope` is released in one write:
+     * dispatched debt is owed again (a later publish pays it after the usual layer checks), and a carried group gets
+     * back the publication it had. Nothing is sent and no desired hash changes; the acceptance is recorded in the
+     * store (`publicationRiskAcceptances`). It does not clear this run's quarantine (the barrier is in memory): the
+     * next invocation finds no uncertain publication. There is no time-based or run-based release.
+     * Answers { released: [{ family, key }] }.
+     */
+    acceptUncertainPublication({ scope, dispatchToken, approval } = {}) {
+      validateScope(scope, 'the scope');
+      tokenField(dispatchToken, 'the dispatch token');
+      if (approval !== publicationRiskApproval(scope)) throw storeError(CODES.notSettled, `accepting an unproved publish of ${scopeKey(scope)} needs its typed approval (${publicationRiskApproval(scope)})`);
+      const released = [];
+      mutate((env, disk) => {
+        const open = env.groups.filter((g) => g.publication && g.publication.dispatchToken === dispatchToken && UNCERTAIN.has(g.publication.state));
+        if (!open.length) throw storeError(CODES.notSettled, `no publish of ${scopeKey(scope)} is unconfirmed under that dispatch token`);
+        for (const g of open) {
+          if (scopeKey(g.publication.scope) !== scopeKey(scope)) throw storeError(CODES.notSettled, `the dispatch also covers ${g.family} "${g.key}" in another scope`);
+          const unit = usable(unitOf(disk, g.family, g.key));
+          if (unit.attempt) throw storeError(CODES.pending, `the managed ${g.family} "${g.key}" has a pending attempt`);
+        }
+        for (const g of open) {
+          const p = g.publication;
+          const cf = p.carriedFrom;
+          delete p.carriedFrom;
+          if (cf) { p.state = cf.state; p.dispatchToken = cf.dispatchToken; } else { p.state = 'owed'; p.dispatchToken = null; }
+          released.push({ family: g.family, key: g.key });
+        }
+        const list = Array.isArray(env.publicationRiskAcceptances) ? env.publicationRiskAcceptances : [];
+        list.push({ scope: { ...scope }, dispatchToken, approval, groups: open.map((g) => ({ family: g.family, key: g.key, generation: g.generation })) });
+        env.publicationRiskAcceptances = list.slice(-RISK_ACCEPTANCES_KEPT);
+      });
+      return { released };
     },
     /**
      * Retire the attempt `token` when its record proves no protected mutation started: phase `prepared`, never marked
@@ -1362,8 +1587,14 @@ function openManagedContext({ workspaceDir, environment, appUniqueName, solution
       barrier.registerKnown(scopes, ids);
       const label = `managed ${d.family} "${d.key}"`;
       if (d.kind === 'hold') barrier.hold(d.token, scopes, ids, `${label} (an earlier change is not yet proved)`);
-      else if (d.kind === 'uncertain') barrier.quarantine(scopes, ids, `${label} (a publish or workflow change may have been sent and is not yet confirmed)`);
-      else if (d.kind === 'corrupt') {
+      else if (d.kind === 'uncertain') {
+        const pub = store.readGroup(d.family, d.key).committed;
+        const p = pub && pub.publication;
+        const why = p && UNCERTAIN.has(p.state)
+          ? `its publish may have been sent and is not yet confirmed; ${publicationRemedy(p.scope, p.dispatchToken)}`
+          : 'a workflow change may have been sent and is not yet confirmed';
+        barrier.quarantine(scopes, ids, `${label} (${why})`);
+      } else if (d.kind === 'corrupt') {
         // A group whose targets cannot be read cannot be fenced by scope: nothing it may cover can be shown safe.
         if (!scopes.length) throw storeError(CODES.unreadable, `${label} is not usable and names no scope the build could withhold`);
         barrier.quarantine(scopes, ids, `${label} (its stored record is not usable)`);
@@ -1400,6 +1631,7 @@ function managedManifestView(snapshot) {
 module.exports = {
   PREFIX,
   MAX_BYTES,
+  PREPARE_RESERVE_BYTES,
   DECLARATION_MAX_BYTES,
   CODES,
   FAMILIES,
@@ -1416,4 +1648,6 @@ module.exports = {
   attemptProvenUnsent,
   resumableCreate,
   rootCreateAcknowledged,
+  publicationRiskApproval,
+  publicationRemedy,
 };

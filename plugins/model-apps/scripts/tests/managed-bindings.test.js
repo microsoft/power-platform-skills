@@ -11,7 +11,9 @@ const path = require('node:path');
 const { makeTempDir } = require('./helpers/temp-dirs.js');
 const {
   openManagedBindings, openManagedContext, discoverManagedStore, classifyPersisted, managedManifestView, CODES, MAX_BYTES,
+  PREPARE_RESERVE_BYTES, DECLARATION_MAX_BYTES, checkDeclaration,
 } = require('../lib/managed-bindings.js');
+const { canonicalJson } = require('../lib/reconcile-common.js');
 const { noteToken } = require('../lib/output-redaction.js');
 const { withRecordLease } = require('../lib/record-lease.js');
 const { environmentFingerprint } = require('../lib/page-ownership-records.js');
@@ -824,7 +826,7 @@ test('declaration: secrets, tokens, a markup document, non-JSON values and overs
     ['a function', { n: () => 1 }],
     ['a date', { n: new Date(0) }],
     ['too deep', deep],
-    ['over 128 KiB', { description: 'x'.repeat(130 * 1024) }],
+    ['over the bound', { description: 'x'.repeat(DECLARATION_MAX_BYTES) }],
   ];
   const before = fileText(store);
   for (const [label, declaration] of cases) {
@@ -870,6 +872,43 @@ test('declaration: a URL is judged by what it means, not how it is spelled; acce
     'https://contoso.com/a%20b?name=%E2%9C%93',
     `https://contoso.com/${at}user/profile`,
     '50% off, 100%25 sure',
+  ];
+  for (const text of accepted) {
+    const { token, base } = prepareDeclared(store, { text });
+    assert.equal(open(dir).readGroup('form', FORM_KEY).pending.declaration.text, text, `kept as written: ${text}`);
+    store.retireUnsentAttempt({ token, baseGeneration: base });
+  }
+});
+
+test('declaration: userinfo is recognised by the URL syntax — whitespace, a no-break space or a custom scheme does not hide it; an ambiguous free-text boundary is refused; ordinary text, links and markup are kept', () => {
+  const dir = makeTempDir('mb-declaration-userinfo-');
+  const store = open(dir);
+  settleForm(store, []);
+  const at = '@';
+  // Every spelling a URL parser reads as userinfo: `new URL(...)` gives each a non-empty username.
+  const refused = [
+    ['a space in the user name', `https://fixture secret${at}contoso.com/`],
+    ['a space in the password', `https://fixture:synthetic secret${at}contoso.com/`],
+    ['a no-break space in the user name', `https://fixture\u00a0secret${at}contoso.com/`],
+    ['a custom scheme', `custom://fixture secret${at}contoso.com/`],
+    ['a space and no path', `https://fixture secret${at}contoso.com`],
+    // No `/`, `?` or `#` between the link and a later address: where the URL ends is ambiguous, so it is refused.
+    ['an ambiguous boundary', `Visit https://contoso.com or write to sales${at}contoso.com`],
+  ];
+  for (const [label, url] of refused) assert.ok(new URL(url.replace(/^Visit /, '')).username, `${label}: a URL parser sees a user name`);
+  const before = fileText(store);
+  for (const [label, url] of refused) assert.equal(codeOf(() => prepareDeclared(store, { url })), CODES.declarationRefused, label);
+  assert.equal(fileText(store), before, 'nothing was written');
+
+  const accepted = [
+    `<a href="https://contoso.com">Mail sales${at}contoso.com</a>`,
+    '<b>Sales</b> and <i>service</i>',
+    `See https://contoso.com/ or write to sales${at}contoso.com`,
+    `[help](https://contoso.com) or sales${at}contoso.com`,
+    `Read 'https://contoso.com' then mail sales${at}contoso.com`,
+    `Visit https://contoso.com? Ask sales${at}contoso.com`,
+    'Visit https://contoso.com and ping @ the team',
+    `https://contoso.com/path with spaces/${at}user`,
   ];
   for (const text of accepted) {
     const { token, base } = prepareDeclared(store, { text });
@@ -950,17 +989,102 @@ test('a write larger than the store may be read back is refused before it is wri
   const { token, base } = prepareForm(store);
   store.markSending(token, expected(FORM));
   store.noteSaved(token, { proof: { savedSha256: H('1') }, acknowledgedRoot: true });
-  const big = 'x'.repeat(120 * 1024);
-  writeRaw(store, (d) => {
+  const big = 'x'.repeat(1 << 20);
+  // Fill the file to half a MiB short of what it may hold: less than a new obligation must leave free.
+  const fill = (length) => writeRaw(store, (d) => {
     const g = d.groups[0];
-    for (let i = 0; i < 33; i += 1) d.groups.push({ ...JSON.parse(JSON.stringify(g)), key: `account/f${i}`, root: { ...g.root, key: `account/f${i}`, id: `bbbbbbbb-0000-4000-8000-${String(i).padStart(12, '0')}` }, records: g.records.map((r) => ({ ...r, key: `account/f${i}`, id: `bbbbbbbb-0000-4000-8000-${String(i).padStart(12, '0')}` })), consumerState: { ...g.consumerState, declaration: { description: big } } });
+    d.groups = [g, { ...JSON.parse(JSON.stringify(g)), key: 'account/filler', root: { ...g.root, key: 'account/filler', id: SUBSTITUTE }, records: g.records.map((r) => ({ ...r, key: 'account/filler', id: SUBSTITUTE })), consumerState: { ...g.consumerState, declaration: { description: 'x'.repeat(length) } } }];
   });
+  fill(0);
+  fill(MAX_BYTES - fs.statSync(store.file).size - (1 << 19));
   store.refresh();
   assert.ok(fs.statSync(store.file).size < MAX_BYTES, 'readable');
+  assert.ok(MAX_BYTES - fs.statSync(store.file).size < PREPARE_RESERVE_BYTES);
   const before = fileText(store);
   // A commit whose consumer state would take the file past what any open reads back.
-  const commit = () => store.commitGroup({ token, baseGeneration: base, records: [rec('form', FORM_KEY, FORM)], proof: PROOF, consumerState: { ...formState(), declaration: { description: big } }, publication: owedTable() });
-  assert.equal(codeOf(commit), CODES.writeFailed);
+  const commit = (description) => store.commitGroup({ token, baseGeneration: base, records: [rec('form', FORM_KEY, FORM)], proof: PROOF, consumerState: { ...formState(), declaration: { description } }, publication: owedTable() });
+  assert.equal(codeOf(() => commit(big)), CODES.storeFull);
   assert.equal(fileText(store), before, 'nothing written');
   assert.equal(open(dir).readGroup('form', FORM_KEY).pending.token, token, 'it still opens, the attempt kept');
+  // A new attempt must leave the reserve free, so it is refused before it is recorded (and so before it is sent)...
+  const rule = () => store.prepareAttempt({ family: 'rule', key: 'account/hide', baseGeneration: null, root: { kind: 'business-rule', key: 'account/hide', id: RULE }, knownScopes: [], declarationSha256: H('e') });
+  assert.equal(codeOf(rule), CODES.storeFull);
+  assert.equal(fileText(store), before, 'nothing written');
+  // ...while the commit of the attempt already sent still fits: the reserve is there for it.
+  commit('fits');
+  assert.equal(open(dir).readGroup('form', FORM_KEY).pending, null);
+});
+
+// Each family's largest declaration, with every name, label and description at its longest and in three-byte UTF-8
+// text: the documented process-flow ceiling (references/app-spec-schema-advanced.md: 30 stages, 30 steps each), more
+// tiles than a dashboard takes, and stated sizing models for forms and rules, which have no published ceiling.
+const wideText = (n, i = 0) => `${i}${'完'.repeat(n)}`.slice(0, n);
+const key64 = (p, i) => `${p}${i}`.padEnd(64, 'k');
+const field64 = (i) => `contoso_field${i}`.padEnd(64, 'x');
+const LARGEST = {
+  bpf: () => ({ name: wideText(100), entity: field64(0), reconcile: 'declared', status: 'Active', order: 2147483647, description: wideText(2000),
+    stages: Array.from({ length: 30 }, (_, i) => ({ key: key64('s', i), name: wideText(100, i), entity: field64(0),
+      steps: Array.from({ length: 30 }, (_, j) => ({ key: key64('p', j), name: wideText(100, j), field: field64(i * 30 + j), required: true })) })) }),
+  form: () => ({ entity: field64(0), table: field64(0), name: wideText(100), formType: 'Main', reconcile: 'declared', layout: 'explicit', notes: true,
+    tabs: Array.from({ length: 25 }, (_, t) => ({ name: key64('tab', t), label: wideText(100, t), expanded: true,
+      columns: Array.from({ length: 2 }, (_, c) => ({ width: '50%', sections: Array.from({ length: 5 }, (_, s) => ({ name: key64(`sec${t}_${c}_`, s), label: wideText(100, s), columns: 4,
+        fields: Array.from({ length: 4 }, (_, f) => ({ name: field64(((t * 2 + c) * 5 + s) * 4 + f), colspan: 4, readOnly: true, hidden: false })) })) })) })),
+    fieldOptions: Object.fromEntries(Array.from({ length: 500 }, (_, i) => [field64(i), { readOnly: true, hidden: false, required: true, after: field64(i + 1) }])),
+    subgrids: Array.from({ length: 50 }, (_, i) => ({ childEntity: field64(i), view: wideText(100, i), label: wideText(100, i), tab: key64('tab', i % 25), after: field64(i) })),
+    quickViews: Array.from({ length: 50 }, (_, i) => ({ lookup: field64(i), targetEntity: field64(i), form: wideText(100, i), label: wideText(100, i) })),
+    events: Array.from({ length: 100 }, (_, i) => ({ event: 'onchange', attribute: field64(i), library: `contoso_/scripts/${'l'.repeat(80)}${i}.js`, function: `Contoso.${'f'.repeat(90)}${i}` })) }),
+  dashboard: () => ({ reconcile: 'declared', key: key64('d', 0), name: wideText(100), description: wideText(2000), dashboardId: DASH,
+    tiles: Array.from({ length: 30 }, (_, i) => ({ key: key64('t', i), type: 'iframe', name: wideText(100, i), view: wideText(100, i), chart: wideText(100, i), entity: field64(i),
+      viewId: DASH, visualizationId: DASH, url: `https://contoso.example/${'p'.repeat(2000)}?tile=${i}`, webResource: `contoso_/${'w'.repeat(90)}${i}.html`,
+      componentId: key64('c', i), colspan: 4, rowspan: 12 })) }),
+  rule: () => ({ name: wideText(100), entity: field64(0), reconcile: 'declared', key: key64('r', 0), status: 'Active', conditionLogic: 'AND', description: wideText(2000),
+    conditions: Array.from({ length: 100 }, (_, i) => ({ key: key64('c', i), field: field64(i), operator: 'Equal', value: wideText(250, i), dataType: 'string' })),
+    actions: Array.from({ length: 100 }, (_, i) => (i % 10 === 9
+      ? { key: key64('a', i), type: 'Recommendation', field: field64(i), label: wideText(100, i), recommendationTitle: wideText(100, i), messageText: wideText(500, i), acceptanceText: wideText(100, i),
+        applyActions: Array.from({ length: 10 }, (_, j) => ({ key: key64(`x${i}_`, j), field: field64(j), value: wideText(250, j), dataType: 'string' })) }
+      : { key: key64('a', i), type: 'SetFieldValue', field: field64(i), label: wideText(100, i), value: wideText(250, i), dataType: 'string' })) }),
+};
+const ROOTS = { form: ['form', FORM], dashboard: ['dashboard', DASH], rule: ['business-rule', RULE], bpf: ['bpf', BPF] };
+
+test('declaration budget: each family\'s largest declaration is kept whole, at least twice inside the bound; views and charts keep none', () => {
+  const dir = makeTempDir('mb-declaration-largest-');
+  const store = open(dir);
+  for (const [family, build] of Object.entries(LARGEST)) {
+    const declaration = build();
+    const bytes = Buffer.byteLength(canonicalJson(declaration), 'utf8');
+    assert.ok(bytes * 2 <= DECLARATION_MAX_BYTES, `${family}: ${bytes} bytes leaves a margin of at least 2`);
+    assert.deepEqual(checkDeclaration(family, `account/${family}`, declaration), declaration, family);
+    const [kind, id] = ROOTS[family];
+    store.prepareAttempt({ family, key: `account/${family}`, baseGeneration: null, root: { kind, key: `account/${family}`, id }, knownScopes: [], declarationSha256: H('e'), declaration });
+    assert.deepEqual(open(dir).readGroup(family, `account/${family}`).pending.declaration, declaration, `${family}: kept exactly`);
+  }
+  // The process flow at the documented ceiling is larger than the earlier bound of 128 KiB, which refused it.
+  assert.ok(Buffer.byteLength(canonicalJson(LARGEST.bpf()), 'utf8') > 128 * 1024);
+  for (const family of ['view', 'chart']) assert.equal(codeOf(() => checkDeclaration(family, `account/${family}`, { name: 'Active' })), CODES.declarationRefused, `${family}: no declaration`);
+});
+
+test('declaration budget: process flows at the documented ceiling, each held three times (original, consumer state, pending attempt), fit the store', () => {
+  const dir = makeTempDir('mb-declaration-store-');
+  const store = open(dir);
+  const flow = LARGEST.bpf();
+  const ids = [];
+  for (let i = 0; i < 4; i += 1) {
+    const key = `account/flow${i}`;
+    const id = `44444444-4444-4444-8444-${String(i).padStart(12, '0')}`;
+    ids.push([key, id]);
+    const prepare = (baseGeneration) => store.prepareAttempt({ family: 'bpf', key, baseGeneration, root: { kind: 'bpf', key, id }, knownScopes: [], declarationSha256: H('e'), declaration: flow });
+    const token = prepare(null);
+    store.markSending(token, expected(id, [], 'bpf-v1'));
+    store.noteSaved(token, { proof: null, acknowledgedRoot: true });
+    const g = store.commitGroup({ token, baseGeneration: null, records: [rec('bpf', key, id)], proof: PROOF, consumerState: { declaration: { flow, applied: true, backing: null }, stages: {} }, publication: null });
+    prepare(g.generation);
+  }
+  const size = fs.statSync(store.file).size;
+  assert.ok(size > 4 * (1 << 20), `${size} bytes: more than the earlier whole-store bound of 4 MiB`);
+  assert.ok(size <= MAX_BYTES - PREPARE_RESERVE_BYTES, `${size} bytes, inside the bound with the reserve free`);
+  const reopened = open(dir);
+  for (const [key] of ids) {
+    const { committed, pending } = reopened.readGroup('bpf', key);
+    assert.deepEqual([committed.originalDeclaration, committed.consumerState.declaration.flow, pending.declaration], [flow, flow, flow], key);
+  }
 });

@@ -31,7 +31,7 @@
 // Nothing calls this module until a declared form, dashboard, rule or process flow is wired to it.
 
 const { runWithWorkflowEffect } = require('./workflow-effect-context.js');
-const { CODES, classifyPersisted, attemptProvenUnsent, resumableCreate, checkDeclaration, rootCreateAcknowledged } = require('./managed-bindings.js');
+const { CODES, classifyPersisted, attemptProvenUnsent, resumableCreate, checkDeclaration, rootCreateAcknowledged, publicationRiskApproval, publicationRemedy } = require('./managed-bindings.js');
 const { canonicalJson } = require('./reconcile-common.js');
 const { LAYER_READERS } = require('./managed-layer-readers.js');
 
@@ -381,25 +381,20 @@ async function runManagedFeature(args) {
     const pub = committed && committed.publication;
     if (!pub || !UNCERTAIN_PUBLICATION.has(pub.state)) return committed;
     step = 'publication';
-    // A dispatch made only of CARRIED groups (publishManagedScope: each owed nothing and was already live at its desired
-    // hash when the scope's publish was sent) cannot be shown ended by a read: the read was true before the send too.
-    // It is still confirmed read-only here, but no change is made over it in the run that confirms it, so a request
-    // whose answer was lost is not raced by an edit of the layer it would put live. A dispatch that paid any debt is
-    // shown applied by the read of that debt, which was not live before it.
-    const onlyCarried = pub.carriedFrom !== undefined && store.snapshot().units().every((u) => {
-      const p = !u.invalid && u.group && u.group.publication;
-      return !p || p.dispatchToken !== pub.dispatchToken || !UNCERTAIN_PUBLICATION.has(p.state) || p.carriedFrom !== undefined;
-    });
+    // The confirmation settles a dispatch only on a WITNESS, a layer the publish changed (store.confirmPublished): a
+    // read that was already true before the send never does. A settled dispatch is therefore known to have ended, so
+    // the change may go ahead in this run. A carry-only dispatch over layers that were already live has no witness and
+    // stays unconfirmed in every run, until the maker accepts the risk (store.acceptUncertainPublication).
     if (args.client) {
       await confirmUncertainPublication({ store, barrier, scope: pub.scope, client: args.client, readers: args.readers || LAYER_READERS });
       const now = store.readGroup(family, key).committed;
       if (!now || now.generation !== committed.generation) throw codedError(CODES.conflict, `${label} was committed again while its earlier publish was being confirmed`);
-      if (!(now.publication && UNCERTAIN_PUBLICATION.has(now.publication.state))) {
-        if (onlyCarried) throw codedError(PUBLICATION_UNCONFIRMED, `${label} was carried by a publish of its scope whose answer was lost; a fresh read confirmed it, but its layer was live before that publish too, so no change is made over it until the next run`);
-        return now;
-      }
+      if (!(now.publication && UNCERTAIN_PUBLICATION.has(now.publication.state))) return now;
     }
-    throw codedError(PUBLICATION_UNCONFIRMED, `${label} has a publish that may have been sent and is not proved live; no change is made over it until a fresh read confirms it`);
+    const remedy = publicationRemedy(pub.scope, pub.dispatchToken);
+    throw codedError(PUBLICATION_UNCONFIRMED, `${label} has a publish that may have been sent and is not proved ended; no change is made over it; ${args.client ? '' : 'a run that passes the Dataverse client confirms it read-only first; '}${remedy}`, {
+      dispatchToken: pub.dispatchToken, approval: publicationRiskApproval(pub.scope),
+    });
   }
 
   // Adoption consent, before membership exposes the root and before the commit binds it: a group not yet committed
@@ -705,11 +700,16 @@ function coverageOf(store, scope) {
  * Read-only confirmation of an uncertain publication on `scope`: a publish whose request may have been sent
  * (`dispatching`) or whose answer was lost (`unconfirmed`). Nothing is sent, replayed or deleted. For each dispatch
  * token of the scope, every group that carries it is read afresh with its family's layer reader (`readers`, by default
- * the shared LAYER_READERS); only when EVERY one of them has a published layer equal to its desired hash is that
- * dispatch confirmed, in one store write, with its original token and the generation each read was judged against
- * (store.confirmPublished). Any other outcome — a layer that differs, a read that fails or answers no hash, a family with
- * no reader, debt that names no desired hash, a stored group on the scope that is not usable, a write that fails —
- * leaves the dispatch as it is and blocks the scope for the rest of the run (barrier.blockScope).
+ * the shared LAYER_READERS); only when EVERY one of them shows what the send shipped (debt: its desired hash; a carried
+ * group: the saved layer read just before the send) AND at least one of them is a layer the send changed (a witness:
+ * debt, or a carried group whose published layer differed from that saved layer before the send) is that dispatch
+ * settled, in one store write, with its original token and the generation each read was judged against
+ * (store.confirmPublished). A read that was already true before the send is never evidence that it ended: a carry-only
+ * dispatch over layers that were already live stays unconfirmed in every run until the maker accepts the risk
+ * (store.acceptUncertainPublication; the block names the approval). Any other outcome — a layer that differs, a read
+ * that fails or answers no hash, a family with no reader, debt that names no desired hash, a stored group on the scope
+ * that is not usable, a write that fails — leaves the dispatch as it is and blocks the scope for the rest of the run
+ * (barrier.blockScope).
  * A block already set (openManagedContext quarantines a scope that holds an uncertain publication) is never cleared:
  * the rest of the scope's debt waits for the next run, which finds the dispatch confirmed and installs no block.
  * Answers { confirmed: [{ family, key }], unconfirmed: [{ family, key, code }] }. publishManagedScope calls it first
@@ -745,18 +745,24 @@ async function confirmUncertainPublication({ store, barrier, scope, client, read
     if (corrupt.length) code = CODES.groupInvalid;
     else if (typeof token !== 'string' || !token) code = PUBLICATION_UNCONFIRMED;
     for (const o of code ? [] : list) {
-      const desired = o.group.publication.desiredSha256;
+      const pub = o.group.publication;
       const reader = Object.prototype.hasOwnProperty.call(readers, o.family) ? readers[o.family] : null;
-      if (scopeId(o.group.publication.scope) !== want) { code = CODES.notSettled; break; }
+      if (scopeId(pub.scope) !== want) { code = CODES.notSettled; break; }
       if (typeof reader !== 'function') { code = LAYER_READER_MISSING; break; }
-      if (typeof desired !== 'string') { code = PUBLICATION_UNCONFIRMED; break; }
+      // What the send must have put live: a carried group, the saved layer it shipped (read just before the send);
+      // debt, and a carried record from before that evidence was kept, its desired hash.
+      const cf = pub.carriedFrom;
+      const shipped = cf && typeof cf.savedSha256 === 'string' ? cf.savedSha256 : pub.desiredSha256;
+      if (typeof shipped !== 'string') { code = PUBLICATION_UNCONFIRMED; break; }
       let read;
       try { read = await reader(client, o.group); } catch { code = PUBLICATION_UNVERIFIED; break; }
       if (!read || typeof read.publishedSha256 !== 'string') { code = PUBLICATION_UNVERIFIED; break; }
-      if (read.publishedSha256 !== desired) { code = PUBLICATION_UNCONFIRMED; break; }
+      if (read.publishedSha256 !== shipped) { code = PUBLICATION_UNCONFIRMED; break; }
       proofs.push({ family: o.family, key: o.key, publishedSha256: read.publishedSha256, generation: o.group.generation });
     }
     if (!code) {
+      // The store settles the dispatch only when one of these reads is a witness, a layer the send changed; reads
+      // that were already true before the send leave it unconfirmed (managed-publication-unconfirmed).
       try {
         store.confirmPublished({ groups: proofs, token });
         confirmed.push(...list.map(({ family, key }) => ({ family, key })));
@@ -766,7 +772,8 @@ async function confirmUncertainPublication({ store, barrier, scope, client, read
       }
     }
     unconfirmed.push(...list.map(({ family, key }) => ({ family, key, code })));
-    gate.blockScope(scope, `${list.map((g) => `managed ${g.family} "${g.key}"`).join(', ')} (its publish may have been sent and a fresh read did not prove it live)`);
+    const remedy = typeof token === 'string' && token ? `; ${publicationRemedy(scope, token)}` : '';
+    gate.blockScope(scope, `${list.map((g) => `managed ${g.family} "${g.key}"`).join(', ')} (its publish may have been sent and a fresh read did not prove it ended${remedy})`);
   }
   return { confirmed, unconfirmed };
 }
@@ -801,24 +808,36 @@ async function confirmUncertainPublication({ store, barrier, scope, client, read
  *     proved is `managed-publication-unconfirmed`; a store write that fails after the send rethrows its own error.
  *     The block is set in memory, so it never depends on a store write succeeding, and a sibling's success never
  *     clears it.
- * `publish()` may throw an error with `definiteNoStart: true` only when the request is known not to have started.
+ * `publish()` throws on any failure (see below); with `definiteNoStart: true` only when the request is known not to have started.
  * `readers` replaces the shared map whole (a test's fault injection); a caller's own `readLayers` is not accepted.
  * Answers { sent, withheld, confirmed: [{ family, key }] }: confirmed lists every group this call confirmed, a read-only
  * confirmation of an uncertain publication included.
  *
- * Every send also journals the CARRIED groups of the scope: a covered group that owes nothing, has a settled publication
- * (confirmed or not-needed) with a desired hash, and has exactly that hash saved, so the same publish puts it live
- * again. They are marked dispatching under the send's token in the same write as the debt (store.markPublishDispatch
- * `carried`), and the read-back confirms them with the debt. A send that definitely did not start returns each to the
- * settled state it had; one whose outcome is not proved leaves them unconfirmed, which fences the scope across runs
- * like any uncertain publication until a read-only confirmation proves every group of the dispatch live.
+ * Every send also journals the CARRIED groups of the scope: every other covered group, whatever its publication — owed
+ * and not paid by this call, confirmed, or not-needed with or without a desired hash (a maker's already-published
+ * change, a no-write adoption) — with the published and saved layers read just before the send. They are marked
+ * dispatching under the send's token in the same write as the debt (store.markPublishDispatch `carried`); their desired
+ * intent is never changed. A send that definitely did not start returns each to the publication it had. After a success
+ * answer the read-back must show the debt at its desired hash and each carried group at the saved layer it shipped, and
+ * settles the send under `answered` (store.confirmPublished). A send whose outcome is not proved leaves them
+ * unconfirmed, which fences the scope across runs: discovery quarantines it, no change is prepared, claimed or committed
+ * over it, and only a fresh read that shows a layer the send CHANGED (debt, or a carried group whose published layer
+ * differed from its saved one before the send) settles it (confirmUncertainPublication). A carry-only send over layers
+ * that were already live has no such witness: it stays blocked, in every run, until the maker accepts the risk with
+ * the scope's typed approval (store.acceptUncertainPublication, publicationRiskApproval). Nothing releases it by time.
  *
  * `carry: true` is a PLAIN publish of the scope that the barrier routed here (lib/managed-scope-publisher.js): the build
  * saved something on a table a managed group publishes in and wants that table published. It is sent even when no debt
  * is owed or due, under every check above — the coverage, the reads, the drift refusal, the pending and withhold rules —
  * so a plain publish can never put a covered group's unproved saved layer live. With no debt in it, the send journals
- * only its carried groups; when the scope has none, it writes nothing to the store, and a send whose outcome is not
- * proved still blocks the scope for the run.
+ * every covered group as carried; when the scope has none, it writes nothing to the store, and a send whose outcome is
+ * not proved still blocks the scope for the run.
+ *
+ * `publish()` must THROW on any failure, and may throw with `definiteNoStart: true` only when the request is known not
+ * to have started. Do not return a failure: the SDK's publishArtifact answers a failed publish as a returned
+ * `{ shipped: false, publish: { kind: 'failed', … } }`, so a callback must check it and throw. A returned value with
+ * `shipped === false` is refused here as a failure whose outcome is unknown (never a no-start), so it is not
+ * confirmed by the read-back.
  */
 async function publishManagedScope({ store, barrier, scope, groups, client, readers = LAYER_READERS, publish, path = 'managed publication', newToken, carry = false, ...rest } = {}) {
   if ('readLayers' in rest) throw codedError(CODES.notSettled, 'publishManagedScope reads every covered group with its family\'s shared reader (client, lib/managed-layer-readers.js); a caller\'s readLayers is not accepted');
@@ -908,17 +927,20 @@ async function publishManagedScope({ store, barrier, scope, groups, client, read
 
   const token = typeof newToken === 'function' ? newToken() : require('node:crypto').randomUUID();
   const covered = due.map(({ family, key }) => ({ family, key }));
-  // A publish ships the saved layer of EVERY covered group, not only the debt it pays. A covered group that owes nothing
-  // but whose saved layer is its desired hash is put live again by the same request, so it is carried: journaled with
-  // the debt under the same token before the send, and confirmed by the same read-back. Its publication cannot be
-  // proved otherwise, so a send whose answer is lost fences the scope across runs exactly as debt does (an uncertain
-  // publication: quarantined, never prepared or claimed over, never sent again) until a read-only confirmation shows
-  // every group of the dispatch live at its desired hash. A group whose saved layer equals its published one but not
-  // its desired hash is not carried: the publish leaves it as it is, and a read could never confirm it.
-  const justConfirmed = (o) => already.some((a) => a.family === o.family && a.key === o.key);
-  const carriedReads = before.filter((o) => !due.includes(o) && typeof o.group.publication.desiredSha256 === 'string' && o.savedSha256 === o.group.publication.desiredSha256
-    && (justConfirmed(o) || o.group.publication.state === 'confirmed' || o.group.publication.state === 'not-needed'));
-  const carried = carriedReads.map(({ family, key, group }) => ({ family, key, generation: group.generation }));
+  // A publish ships the saved layer of EVERY covered group, not only the debt it pays, so every other covered group is
+  // carried, whatever its publication: owed and not paid here, confirmed, or not-needed (a null desired hash included —
+  // a maker's already-published change, a no-write adoption). Each is journaled with the debt under the same token
+  // before the send, with the published and saved layers read just above, and keeps its publication and desired hash
+  // as committed. A send whose answer is lost therefore fences the scope across runs like debt does (quarantined, never
+  // prepared or claimed over, never sent again) until a read shows a layer the send changed, or the maker accepts the
+  // risk. Every covered group was shown safe to put live above (drifted), so none is skipped.
+  const carriedReads = before.filter((o) => !due.includes(o));
+  const carried = carriedReads.map(({ family, key, group, publishedSha256, savedSha256 }) => ({ family, key, generation: group.generation, publishedSha256, savedSha256 }));
+  // The read-back reads a carried group again only when its published layer differed from its saved one: the send must
+  // change it, so its read is evidence. Any other was live as saved already, so a read after the send could tell
+  // nothing; after a success answer it settles with the read from before the send, and no request is added.
+  const readBack = carriedReads.filter((o) => o.publishedSha256 !== o.savedSha256);
+  const liveAlready = carriedReads.filter((o) => !readBack.includes(o));
   const records = covered.length > 0 || carried.length > 0;
   const label = covered.length ? names(covered) : `the saved changes on ${want.replace(':', ' ')}`;
   const journal = () => { if (records) store.markPublishDispatch({ groups: covered, carried, scope, token }); };
@@ -933,7 +955,7 @@ async function publishManagedScope({ store, barrier, scope, groups, client, read
   gate.hold(token, [scope], cover.groups.map((o) => o.group.root.id), `${label} (its publish is being sent)`);
   try {
     try {
-      await gate.withSendPermit({
+      const answer = await gate.withSendPermit({
         token,
         scope,
         // Durable at the send, after the barrier's last check: a failure to record it means the publish is not sent.
@@ -941,6 +963,13 @@ async function publishManagedScope({ store, barrier, scope, groups, client, read
         onWithheld: () => { withheld = true; },
         onRefused: () => { refused = true; },
       }, publish);
+      // `publish()` must throw on any failure. The SDK's publishArtifact answers a failed publish as a RETURNED
+      // `{ shipped: false, publish: { kind: 'failed', error } }`, so a callback that only awaits it would look like a
+      // success here, and the read-back would then confirm layers that were already live. Such an answer is a failure
+      // whose outcome is not known (a 503 may still complete), never a definite no-start.
+      if (answer && typeof answer === 'object' && answer.shipped === false) {
+        failure = codedError(PUBLICATION_UNCONFIRMED, `the publish of ${want.replace(':', ' ')} answered that it was not shipped${answer.publish && answer.publish.kind ? ` (${answer.publish.kind})` : ''}`, { answer });
+      }
     } catch (e) {
       failure = e;
     }
@@ -963,25 +992,31 @@ async function publishManagedScope({ store, barrier, scope, groups, client, read
       }
       gate.blockScope(scope, `${label} (its publish may have been sent and is not confirmed)`);
       note('unconfirmed');
-      throw codedError(PUBLICATION_UNCONFIRMED, `the publish of ${label} failed`, { cause: failure });
+      throw codedError(PUBLICATION_UNCONFIRMED, `the publish of ${label} failed and may still complete; ${publicationRemedy(scope, token)}`, { cause: failure, ...(records ? { dispatchToken: token, approval: publicationRiskApproval(scope) } : {}) });
     }
     // A success answer is not proof the content is live: read it back. A read that fails or still differs leaves the
-    // debt unconfirmed and the scope blocked, and it is never sent again.
+    // debt unconfirmed and the scope blocked, and it is never sent again. Debt must show its desired hash; a carried
+    // group the saved layer the send shipped (read just before it).
     let after;
     try {
-      after = await readAll([...due, ...carriedReads]);
+      after = await readAll([...due, ...readBack]);
     } catch (e) {
       gate.blockScope(scope, `${label} (its publish was sent and could not be read back)`);
       note('unconfirmed');
       throw codedError(PUBLICATION_UNCONFIRMED, 'the publish was sent and its published layer could not be read back', { cause: e });
     }
-    if (after.some((o) => !o.equal)) {
+    const shipped = (o) => {
+      const sent = carriedReads.find((c) => c.family === o.family && c.key === o.key);
+      return sent ? o.publishedSha256 === sent.savedSha256 : o.equal;
+    };
+    if (after.some((o) => !shipped(o))) {
       gate.blockScope(scope, `${label} (its publish was sent and the published layer does not show it)`);
       note('unconfirmed');
-      throw codedError(PUBLICATION_UNCONFIRMED, 'the publish was sent and the published layer does not show what was owed');
+      throw codedError(PUBLICATION_UNCONFIRMED, 'the publish was sent and the published layer does not show what it shipped');
     }
-    // One atomic write confirms every debt of the send, so no run can see some of them confirmed and not the rest.
-    if (records) store.confirmPublished({ groups: after.map((o) => ({ family: o.family, key: o.key, publishedSha256: o.publishedSha256 })), token });
+    // One atomic write settles the whole send, so no run can see some of it confirmed and not the rest. `answered`:
+    // this invocation dispatched the publish and it answered success, which a later run can never claim.
+    if (records) store.confirmPublished({ groups: [...after, ...liveAlready].map((o) => ({ family: o.family, key: o.key, publishedSha256: o.publishedSha256 })), token, answered: true });
     settled = true;
     // A carried group was confirmed before this call and stays so: `confirmed` keeps listing the debt this call settled.
     return { sent: true, withheld: false, confirmed: [...readConfirmed, ...[...already, ...due].map(({ family, key }) => ({ family, key }))] };
