@@ -39,7 +39,12 @@
 //               bind becomes an attempt whose COMPLETE expectation is written before anything is sent: the full projection the
 //               row must hold afterwards (sentProjectionSha256), the hash of the parts the change keeps as they are
 //               (preservationSha256), the committed proof it was planned on, the declaration hash and the table publication;
-//   apply       sends the change once, through the store's send observer when the build installed one;
+//   apply       sends the change once, through the store's send observer when the build installed one. A create is
+//               pinned at the transport (publication-barrier.js pinCreate): the build serialises the body the local draft it
+//               made must produce, and the actual POST at that id is refused unsent (create-local-draft-changed) unless it
+//               is exactly that body — another local process editing the draft before the push cannot change what is sent.
+//               The build never removes a local draft: one a lost or refused create leaves stays (create-local-draft-kept),
+//               its attempt stays pending, and the next build stops at it until the maker removes or refreshes it;
 //   prove       a fresh read must hold exactly the expected projection; the saved layer is read with the shared reader
 //               (savedquery-published.js), and the group owes its table's publish of exactly that saved layer;
 //   membership  the row joins the solution BEFORE the group is committed and the attempt removed, so a run that stops there
@@ -60,7 +65,7 @@ const { createStop } = require('./creates-identity.js');
 const { assertCleanContinuation, readLocalCreateState } = require('./creates-local.js');
 const viewReconcile = require('./view-reconcile.js');
 const chartReconcile = require('./chart-reconcile.js');
-const { intentSha256, normalizeGuid, projectionBaseline, isApproved } = require('./reconcile-common.js');
+const { intentSha256, normalizeGuid, projectionBaseline, isApproved, canonicalJson } = require('./reconcile-common.js');
 
 const SHIPPED_KINDS = Object.freeze(['view', 'chart']);
 // The proof schema a view or chart group is committed under: the read-back projection (reconcile-common.js projectionBaseline).
@@ -74,6 +79,57 @@ const FAMILY = Object.freeze({
 
 const lc = (s) => String(s == null ? '' : s).toLowerCase();
 const nonempty = (s) => typeof s === 'string' && s.trim().length > 0;
+
+/**
+ * The JSON body the SDK's push sends to create `artifact` (a view or chart draft as createArtifact answered it) at `id`: the same
+ * SDK, made over a throwaway workspace (lib/throwaway-sdk.js) with the same connection and language, is given the draft and pushed,
+ * and its first write is captured and never sent. Its reads go to the real connection (a view's push reads its table's metadata
+ * for the layout, one GET; a chart's reads nothing), so the body is serialised exactly as the real push serialises it — from the
+ * draft held in memory, not from any file a second process could change. Throws when that cannot be shown: no SDK connection,
+ * or a first write that is not one POST to the family's collection naming `id`.
+ *   POST https://contoso.crm.dynamics.com/api/data/v9.2/savedqueries?$select=savedqueryid
+ *   { "name": "Declared Items", "fetchxml": "<fetch …>", "layoutxml": "<grid …>", …, "savedqueryid": "a1d1e2a3-…" }
+ */
+async function expectedCreateBody(sdk, kind, id, artifact) {
+  const fam = FAMILY[kind];
+  const conn = sdk && sdk.dataverse;
+  if (!conn || typeof conn.instanceUrl !== 'string' || !conn.httpClient || typeof conn.httpClient.get !== 'function') {
+    throw new Error('the SDK exposes no connection to serialise the create with');
+  }
+  const { withThrowawaySdk } = require('./throwaway-sdk.js');
+  const DRY = Symbol('dry');
+  let captured = null;
+  const client = { get: (url, options) => conn.httpClient.get(url, options) };
+  for (const m of ['post', 'patch', 'put', 'delete']) {
+    client[m] = async (url, body) => {
+      if (!captured) captured = { method: m, url: String(url), body };
+      throw Object.assign(new Error('not sent: the create body is only being worked out'), { [DRY]: true });
+    };
+  }
+  await withThrowawaySdk({ env: conn.instanceUrl, prefix: 'create-body-', httpClient: client }, async (make) => {
+    const dry = make({
+      ...(typeof sdk.languageCode === 'number' || typeof sdk.languageCode === 'string' ? { languageCode: sdk.languageCode } : {}),
+      ...(typeof conn.solutionUniqueName === 'string' && conn.solutionUniqueName ? { solutionUniqueName: conn.solutionUniqueName } : {}),
+    });
+    await dry.initWorkspace();
+    await dry.createArtifact(kind, artifact);
+    try {
+      await dry.pushArtifact(kind, id);
+    } catch (err) {
+      if (!captured) throw err;
+    }
+  });
+  if (!captured) throw new Error('the push sent no create');
+  let path = '';
+  try { path = new URL(captured.url, conn.instanceUrl).pathname; } catch { /* checked below */ }
+  let body = captured.body;
+  if (typeof body === 'string') { try { body = JSON.parse(body); } catch { body = null; } }
+  if (captured.method !== 'post' || !path.toLowerCase().endsWith(`/${fam.collection}`) || !body || typeof body !== 'object' || Array.isArray(body)
+    || normalizeGuid(body[fam.idField]) !== normalizeGuid(id)) {
+    throw new Error(`the push's first write was not one create of ${id}`);
+  }
+  return body;
+}
 
 /**
  * The catalog intents of a spec's declared views and charts (creates-catalog.js shape). An entry without a table or a name is left
@@ -147,7 +203,12 @@ function createStableCreates({ spec, sdk, store = null, barrier = null, basePort
   const port = {
     async run(request, execute) {
       if (!request || !protects(request.kind, request.key)) return basePort.run(request, execute);
-      const out = await composite.run(request, execute);
+      let out;
+      try {
+        out = await composite.run(request, execute);
+      } finally {
+        releasePins();
+      }
       if (out && out.outcome === 'created') acknowledged.add(`${request.kind}\0${request.key}`);
       return out;
     },
@@ -163,67 +224,82 @@ function createStableCreates({ spec, sdk, store = null, barrier = null, basePort
   // Whether the build may continue from the workspace copy at `id` (creates-local.js assertCleanContinuation): only a copy that is
   // absent or synced with no edit. A local create no answer acknowledged stops too, whoever's it is: a diff cannot tell the draft
   // this build made from one a maker edited since (a name or a description outside the view's projection included), and the proof
-  // would fetch the server's copy over it. The run that made such a draft and lost its answer removes it only when it is still
-  // byte for byte the draft that run made (discardOwnDraft); a draft found here is one that run kept, and it is the maker's to settle.
+  // would fetch the server's copy over it. The build never removes such a draft itself (keptDraft): it is the maker's to settle.
   async function assertContinuable(kind, key, id) {
     await assertCleanContinuation(sdk, kind, id);
   }
 
-  // What this run's own creates wrote to the workspace, by `${kind}\0${id}`: the SHA-256 of the canonical JSON of the local draft as
-  // the SDK's createArtifact answered it. It is taken when the draft is made, before its push (the view and chart reconcilers call
-  // `port.materialised`), and only when the workspace then holds exactly that draft. It is the only thing that makes a later local
-  // discard this run's to do: being in the same run, or the attempt being pending, proves nothing about the copy, because a
-  // maker can edit it while the create request is outstanding.
-  const materialisedDrafts = new Map();
+  // What ties a create request to the draft this run made, by `${kind}\0${id}`: the publication barrier's pin (pinCreate) of
+  // the row's create, holding the request body the SDK serialises from the draft as createArtifact answered it. Set by
+  // `materialised` before the push and released by `port.run` once the create has run; `refusal` records why a create was not
+  // sent (the pin refused it, or it could not be pinned), for `apply` to report as `create-local-draft-changed`.
+  const draftPins = new Map();
+  const draftRefusals = new Map();
   const draftKey = (kind, id) => `${kind}\0${normalizeGuid(id) || String(id)}`;
 
-  // Called by the view and chart reconcilers between `createArtifact` and the push. A workspace that does not hold exactly the
-  // draft the SDK answered (an edit in between, or a copy that cannot be read) is refused here, before the push: the build never
-  // sends a draft it cannot show is its own. A throw from here is a local refusal (reconcile-common.js createThroughPort).
+  // Called by the view and chart reconcilers between `createArtifact` and the push. Two checks, the second the one that holds:
+  //   1. the workspace must hold exactly the draft the SDK answered (an early refusal of an edit already made);
+  //   2. the create request itself is pinned to that draft, at the transport: the body the SDK would send for the draft as
+  //      createArtifact answered it (expectedCreateBody) is what the push's POST must carry, field for field, the name included.
+  //      The workspace is a file a second local process can write at any moment (the build's lease does not exclude another
+  //      SDK), so no read of it before the push can show what the push will read; the barrier compares the request the push
+  //      actually dispatches (publication-barrier.js pinCreate) and refuses anything else before it reaches the transport.
+  // A draft that cannot be pinned — no gated transport, no SDK connection to serialise with, a serialisation that does not
+  // answer exactly one create of this row — is refused the same way: the build never sends a draft it cannot show is its own.
+  // A throw from here is a local refusal (reconcile-common.js createThroughPort); `apply` reports it as create-local-draft-changed.
   async function materialised({ kind, id, artifact }) {
-    // Without a store nothing is discarded (there is no settle), so there is nothing to record.
+    // Without a store there is no managed attempt to tie the create to, and the request vectors stay as they were.
     if (!store || !FAMILY[kind]) return;
+    const k = draftKey(kind, id);
+    const refuse = (why) => {
+      const err = coded('create-local-draft-changed', `${kind} ${id}: ${why}, so it was not sent; the local copy was kept as it is`);
+      draftRefusals.set(k, err);
+      throw err;
+    };
     const local = await readLocalCreateState(sdk, kind, id);
-    const made = intentSha256(artifact);
-    if (local.state !== 'pending' || intentSha256(local.draft) !== made) {
-      throw coded('create-local-draft-changed', `${kind} ${id}: the local draft is not the one this build just made, so it was not sent; the local copy was kept as it is`);
+    if (local.state !== 'pending' || intentSha256(local.draft) !== intentSha256(artifact)) refuse('the local draft is not the one this build just made');
+    if (!barrier || typeof barrier.pinCreate !== 'function' || typeof barrier.gatesTransport !== 'function' || !barrier.gatesTransport()) {
+      refuse('the create request cannot be tied to the draft this build made (no transport is checked by the publication barrier)');
     }
-    materialisedDrafts.set(draftKey(kind, id), made);
+    let expected;
+    try {
+      expected = await expectedCreateBody(sdk, kind, id, artifact);
+    } catch (err) {
+      refuse(`the create request the draft makes could not be worked out (${String((err && err.message) || err).slice(0, 200)})`);
+    }
+    const want = canonicalJson(expected);
+    draftPins.set(k, barrier.pinCreate({ collection: FAMILY[kind].collection, idField: FAMILY[kind].idField, id, matches: (body) => canonicalJson(body) === want }));
   }
 
-  const keptDraft = (kind, id, why) => ({
+  // Ends every pin `materialised` set, recording a refused one: called by `port.run` once its create has run, whatever its outcome.
+  function releasePins() {
+    for (const [k, pin] of draftPins) {
+      pin.release();
+      if (pin.refused && !draftRefusals.has(k)) {
+        draftRefusals.set(k, coded('create-local-draft-changed', `${k.split('\0')[0]} ${k.split('\0')[1]}: the create request the push dispatched was not the draft this build made (the local draft changed while the build pushed it), so it was not sent; the local copy was kept as it is`));
+      }
+    }
+    draftPins.clear();
+  }
+
+  const keptDraft = (kind, id) => ({
     key: `${kind}:${id}`,
     code: 'create-local-draft-kept',
-    message: `the local draft of the ${kind} ${id} ${why}, so the build kept it exactly as it is and did not remove it. Its create may still have reached the server. Put any change you want to keep into the spec, then remove that local draft yourself (or refresh the local copy of this ${kind}) and run the build again; until then the build stops at this ${kind} with create-completion-required`,
+    message: `the local draft of the ${kind} ${id} was kept exactly as it is: the build never removes a local draft (the SDK has no discard that holds only while the draft is unchanged, and a second local process may have edited it). Its create may still have reached the server, so its attempt stays pending and nothing is sent for it again in this run. Put any change you want to keep into the spec, then remove that local draft yourself (or refresh the local copy of this ${kind}) and run the build again; until then the build stops at this ${kind} with create-completion-required`,
   });
 
-  // The local create this run made at the stable `id` and never had acknowledged (a refusal, or an answer that was lost), removed
-  // from the workspace in the same run so the next build proves the row from the server rather than stopping on the draft — but
-  // only when the copy is still byte for byte the draft this run made (`materialisedDrafts`), compared immediately before the
-  // discard. A copy that differs, that this run did not record making, or that cannot be read is kept, and the answer is a
-  // `create-local-draft-kept` finding for the halt. `deleteArtifact` is the SDK's local discard (the workspace's files and
-  // manifest entry; no request) and is not conditional, so the comparison right before it is the condition; an editor writing
-  // in the instant between the two is the same check-then-act window as the build's fetch over a clean copy. Answers null when
-  // there was nothing to keep.
-  async function discardOwnDraft(kind, id) {
+  // A create this run made at the stable `id` and never had acknowledged (a refusal, or an answer that was lost) leaves a local
+  // draft. It is never removed here — `deleteArtifact` is not conditional, so whatever check came before it, a draft another
+  // process edited in between would be erased with it. Answers the `create-local-draft-kept` finding for the halt when a draft
+  // is (or may be) there, null when the workspace holds none.
+  async function keptOwnDraft(kind, id) {
     let local;
     try {
       local = await readLocalCreateState(sdk, kind, id);
     } catch {
-      return keptDraft(kind, id, 'could not be read to show it is still the one this build made');
+      return keptDraft(kind, id);
     }
-    if (local.state !== 'pending') return null;
-    const made = materialisedDrafts.get(draftKey(kind, id));
-    if (!made) return keptDraft(kind, id, 'was not made by this build in this run');
-    if (intentSha256(local.draft) !== made) return keptDraft(kind, id, 'changed after this build made it (an edit while its create was outstanding)');
-    if (!sdk || typeof sdk.deleteArtifact !== 'function') return keptDraft(kind, id, 'cannot be removed (the SDK has no local discard)');
-    try {
-      await sdk.deleteArtifact(kind, id);
-      materialisedDrafts.delete(draftKey(kind, id));
-      return null;
-    } catch {
-      return keptDraft(kind, id, 'could not be removed');
-    }
+    return local.state === 'pending' ? keptDraft(kind, id) : null;
   }
 
   // A stop the lookup makes is made while planning, before anything is written or sent: it is certified as such (creates-port.js
@@ -405,14 +481,23 @@ function createStableCreates({ spec, sdk, store = null, barrier = null, basePort
       plan: ({ resolution, committed }) => planFor(resolution.source, committed),
       apply: async ({ token, plan: planned }) => {
         const creating = planned.source.action === 'create';
+        const id = planned.root.id;
+        // A create the barrier refused unsent (its request was not the draft this run made), or one that could not be tied to
+        // that draft, stops with create-local-draft-changed: nothing of it reached the transport, so the attempt's send window
+        // counts no mutation, and its draft is kept. The halt names it first; the reconciler's own finding follows.
+        const changedDraft = () => draftRefusals.get(draftKey(kind, id)) || null;
+        const changedFinding = (e) => ({ key: label, code: 'create-local-draft-changed', message: e.message });
         let r;
         try {
           r = await applyPlan(planned.source);
         } catch (err) {
-          const kept = creating ? await discardOwnDraft(kind, planned.root.id) : null;
-          if (kept) {
+          const changed = creating ? changedDraft() : null;
+          const kept = creating ? await keptOwnDraft(kind, id) : null;
+          if (changed || kept) {
             const was = Array.isArray(err && err.findings) ? err.findings : [{ key: label, code: (err && err.code) || CODES.notSettled, message: (err && err.message) || String(err) }];
-            throw Object.assign(err instanceof Error ? err : new Error(String(err)), { findings: [...was, kept] });
+            const findings = [...(changed ? [changedFinding(changed)] : []), ...was, ...(kept ? [kept] : [])];
+            if (changed) throw coded('create-local-draft-changed', findings.map((f) => `${f.code}: ${f.message}`).join('; '), { findings, cause: err });
+            throw Object.assign(err instanceof Error ? err : new Error(String(err)), { findings });
           }
           throw err;
         }
@@ -421,10 +506,15 @@ function createStableCreates({ spec, sdk, store = null, barrier = null, basePort
         if (r.refused.length || r.unknown.length) {
           // An acknowledged create is recorded as such before the stop, so the next run recovers it as this build's create.
           let kept = null;
+          let changed = null;
           if (created) { try { store.noteSaved(token, { acknowledgedRoot: true }); } catch { /* the attempt stays unacknowledged */ } }
-          else if (creating) kept = await discardOwnDraft(kind, planned.root.id);
-          if (typeof onUnsettled === 'function') await onUnsettled(planned.source, r);
-          const findings = [...r.refused, ...r.unknown, ...(kept ? [kept] : [])];
+          else if (creating) {
+            changed = changedDraft();
+            kept = await keptOwnDraft(kind, id);
+          }
+          // An unsettled create's local copy is its draft, which stays as it is (keptOwnDraft): only an edit's copy is reset.
+          if (!creating && typeof onUnsettled === 'function') await onUnsettled(planned.source, r);
+          const findings = [...(changed ? [changedFinding(changed)] : []), ...r.refused, ...r.unknown, ...(kept ? [kept] : [])];
           throw coded((findings[0] && findings[0].code) || CODES.notSettled, findings.map((f) => `${f.code}: ${f.message}`).join('; '), { findings });
         }
         return { created };

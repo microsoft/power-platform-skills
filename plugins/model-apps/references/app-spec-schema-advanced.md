@@ -702,12 +702,13 @@ downloaded spec. The only value is `"stable-v1"`; any other value is a validatio
 - **Local copy.** A local copy at the id with an edit the server has not seen, or a local create that
   was never acknowledged, stops that view or chart before anything is fetched over, reapplied or sent
   (`create-completion-required`); the copy is kept byte for byte, and running again stops again. There is
-  no `overwrite:` approval for this stop: put the change into the spec, then refresh the local copy. A
-  build whose own create was refused or lost its answer removes the local draft it made in the same run,
-  but only while that draft is still exactly what the build made, so the next build finds the row on the
-  server instead. A draft edited meanwhile (even while the create request was outstanding), or one it
-  could not remove, is kept as it is: the build stops with `create-local-draft-kept`, and the next build
-  stops as above.
+  no `overwrite:` approval for this stop: put the change into the spec, then refresh the local copy. The
+  build never removes a local draft, not even its own: a create that was refused or lost its answer keeps
+  the draft it made and stops with `create-local-draft-kept`, and the next build stops as above until you
+  remove or refresh that draft; then it finds the row on the server (or sends the same create again when
+  nothing of it was sent). The create request is checked just before it is sent: if the draft no longer
+  produces exactly the body the build made (a name or description edited meanwhile, even by another
+  process), nothing is sent and the build stops with `create-local-draft-changed`.
 - **Publishing.** A create whose answer was lost holds its table's publish until a later build has
   found and bound the row; another table still publishes. While a change is not yet proved, page edits
   that publish the app (`genpage.js` add-to-app and remove-from-app, `genpage-upload.js --app-id`) are

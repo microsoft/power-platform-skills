@@ -58,6 +58,13 @@
 //                     `onDispatch()` runs synchronously at the send, so the dispatch is recorded where it happens (a throw
 //                     there sends nothing), and a second publish request under the same permit is not sent. A publish
 //                     outside the permit stays withheld by the hold, so a sibling cannot overlap the managed send.
+//   create pins       `pinCreate({ collection, idField, id, matches })` ties the one create request of a row to the content the
+//                     caller expects it to carry (lib/creates-stable-build.js: the body the SDK serialises from the draft the
+//                     build made). While the pin is held, a POST that creates that row is sent only when `matches(body)`;
+//                     anything else that could create it is answered 409 `create-local-draft-changed` before the transport,
+//                     so a local draft edited after the build made it is never sent as the declaration. Checked at the
+//                     dispatch, after every asynchronous step of the push, which is what a check of the workspace before the
+//                     push cannot be. `gatesTransport()` says whether a transport is gated at all: a pin holds only then.
 
 const { AsyncLocalStorage } = require('node:async_hooks');
 const { readXmlElements } = require('./strict-xml.js');
@@ -75,6 +82,9 @@ function tableKey(table) {
 function dashboardKey(id) {
   return typeof id === 'string' ? id.trim().replace(/^\{|\}$/g, '').toLowerCase() : '';
 }
+
+/** A row id as a pinned create names it: lowercased, without braces, or '' (dashboardKey's rule). */
+const guidKey = dashboardKey;
 
 // The publish actions, as lib/sdk-http-client.js (isPublishRequest) recognises them:
 //   POST https://contoso.crm.dynamics.com/api/data/v9.2/PublishXml                            { "ParameterXml": "<importexportxml>…</importexportxml>" }
@@ -249,6 +259,11 @@ function createPublicationBarrier() {
     if (path && !entry.skipped.includes(path)) entry.skipped.push(path);
     if (entry.route === true) entry.wanted = true;
   };
+  // Pinned creates (pinCreate): each { collection, idField, id, matches, checked, refused, released }. Empty unless a
+  // store-backed declared create is being pushed, so every other request skips the pin check entirely.
+  const pins = new Set();
+  // Whether gateRequest has wrapped a transport (gatesTransport): a pin can only hold where the gate sees the request.
+  let gated = false;
   // The hold a permitted publish is screened past, set only while gatedRequest screens that one request; null otherwise.
   // `exceptRoute` the same way: the permit's own table, which its one request publishes although the table is routed.
   let exceptToken = null;
@@ -511,13 +526,39 @@ function createPublicationBarrier() {
      */
     gateRequest(request = require('./dataverse-auth.js').makeRequest) {
       if (typeof request !== 'function') throw new TypeError('gateRequest: the transport to wrap must be a function');
+      gated = true;
       return function gatedRequest(req) {
+        if (pins.size) {
+          const pinned = screenPins(req);
+          if (pinned) return Promise.resolve(pinned);
+        }
         const permit = permits.getStore();
         if (permit && permit.barrier === barrier && isPublish(req)) return permitted(permit, req, request);
         if (!anyGated()) return request(req);
         const screened = screenPublish(req);
         return screened.answer ? Promise.resolve(screened.answer) : request(screened.req);
       };
+    },
+    /** Whether a transport is gated by this barrier (gateRequest was called): a pinCreate holds only then. */
+    gatesTransport() {
+      return gated;
+    },
+    /**
+     * Pin the one create request of a row (see the header, "create pins"): until `release()`, a POST to `/<collection>`
+     * whose JSON body names `id` in `idField` is sent only when `matches(body)` answers true; any other — a different body,
+     * a body that does not parse, a POST to that collection that names no id, a `$batch` that names the id or cannot be
+     * read — is answered 409 `create-local-draft-changed` here, unsent, and the pin is marked `refused`. A request that
+     * passed is marked `checked`. Answers the pin: { checked, refused, release() }.
+     */
+    pinCreate({ collection, idField, id, matches } = {}) {
+      const key = guidKey(id);
+      if (typeof collection !== 'string' || !/^[a-z_][a-z0-9_]*$/i.test(collection) || typeof idField !== 'string' || !idField || !key || typeof matches !== 'function') {
+        throw new TypeError('pinCreate: a collection, an id field, an id and a body check are required');
+      }
+      const pin = { collection: collection.toLowerCase(), idField, id: key, matches, checked: false, refused: false };
+      pins.add(pin);
+      pin.release = () => { pins.delete(pin); };
+      return pin;
     },
     /**
      * Run `fn` with a send permit for one managed publication (see the header): `token` is the hold the publication
@@ -579,6 +620,47 @@ function createPublicationBarrier() {
       return verdict;
     },
   };
+
+  // A request a pinned create stops (pinCreate), or null to go on. The body is read as the transport carries it, text
+  // (makeRequest's { method, url, headers, body }), e.g.
+  //   POST https://contoso.crm.dynamics.com/api/data/v9.2/savedqueries?$select=savedqueryid
+  //   {"name":"Declared Items","fetchxml":"<fetch …>","layoutxml":"<grid …>","returnedtypecode":"contoso_item","querytype":0,"savedqueryid":"a1d1e2a3-…"}
+  // The path is percent-decoded once before it is matched, so `/savedquer%69es` is the collection too; a path that does not
+  // decode is matched as written. Only a POST is a create; every other method passes.
+  function screenPins(req) {
+    if (String((req && req.method) || 'GET').toUpperCase() !== 'POST') return null;
+    let path = pathnameOf(req.url);
+    try { path = decodeURIComponent(path); } catch { /* matched as written */ }
+    const text = bodyText(req.body);
+    for (const pin of pins) {
+      if (BATCH.test(path)) {
+        if (text === null || text.toLowerCase().includes(pin.id)) return refusePin(pin, 'a change set that may carry it');
+        continue;
+      }
+      if (!path.toLowerCase().endsWith(`/${pin.collection}`)) continue;
+      let body;
+      try { body = JSON.parse(text); } catch { return refusePin(pin, 'a create whose body could not be read'); }
+      const named = body && typeof body === 'object' && !Array.isArray(body) ? guidKey(body[pin.idField]) : '';
+      if (!named) return refusePin(pin, 'a create that names no id');
+      if (named !== pin.id) continue;
+      let same = false;
+      try { same = pin.matches(body) === true; } catch { same = false; }
+      if (!same) return refusePin(pin, 'a create whose content is not the draft this build made');
+      pin.checked = true;
+    }
+    return null;
+  }
+
+  // The 409 a pinned create is refused with, before the transport: a final status (lib/retry-policy.js), so the client
+  // does not send it again, and the attempt send observer inside the gate never counts it as dispatched.
+  function refusePin(pin, what) {
+    pin.refused = true;
+    return {
+      statusCode: 409,
+      headers: { 'content-type': 'application/json; charset=utf-8' },
+      body: JSON.stringify({ error: { code: 'create-local-draft-changed', message: `${what} at ${pin.id} was not sent: the create of that row is pinned to the draft this build made` } }),
+    };
+  }
 
   function isPublish(req) {
     if (String((req && req.method) || 'GET').toUpperCase() !== 'POST') return false;

@@ -18,12 +18,13 @@
 // A refusal stops the build (the caller's halt), and leaves the table as publishManagedScope left it: a scope that is not shown
 // safe, or whose send is not confirmed, is blocked for the rest of the run, and its debt stays in the store for the next run.
 //
-// Every publish is sent with `carry`: a covered group that owes nothing but is already live at its desired hash is journaled
-// under the send too (carried), so a publish whose answer is lost fences its table across runs even when it paid no debt — the
-// next build sends neither a change of a managed group on that table nor another publish of it until the store settles it.
-// Only a group that qualifies is carried: a publish of a table with no debt and no such group leaves no record, so a failed
-// send of it blocks the table only for the rest of this run. That is not shown harmless (a table publish can put a saved
-// managed layer live); it is a limit of the store's journal, not something this publisher decides.
+// Every publish is sent with `carry`, so the store journals it whether or not it pays debt: every covered group the send does
+// not pay — owed and unpaid, confirmed, or not-needed with or without a desired hash — is marked dispatching under the send's
+// token in the same write as any debt, with its published and saved layers read just before the send (carried). A publish
+// whose answer is lost therefore fences its table across runs: the next build sends neither a change of a managed group on
+// that table nor another publish of it. Only a fresh read that shows a layer the send changed settles it; a publish that
+// changed nothing visible (every carried layer was already live) stays blocked until the maker accepts that risk with the
+// scope's typed approval. A routed table with no committed group on it has nothing to journal: its pending attempts fence it.
 
 const { publishManagedScope } = require('./managed-feature-contract.js');
 const { classifyPersisted } = require('./managed-bindings.js');

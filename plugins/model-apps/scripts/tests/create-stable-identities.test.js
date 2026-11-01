@@ -258,6 +258,14 @@ function loseNextCreateAnswer(org, collection) {
   return () => { org.httpClient.post = original; };
 }
 
+// The maker's step after a lost create: the build kept the local draft (create-local-draft-kept) and stops on it until the maker
+// removes it with the SDK's own local discard. It must be the draft the build reported keeping.
+async function removeKeptDraft(run, kind, id) {
+  assert.match(String(run.err && run.err.message), /create-local-draft-kept/);
+  assert.equal((await readLocalCreateState(run.sdk, kind, id)).state, 'pending');
+  await run.sdk.deleteArtifact(kind, id);
+}
+
 test('an attempt an earlier run left pending holds its table until this build proves it, then the hold ends', async () => {
   const org = createFakeBuildOrg({ entities: ENTITIES });
   const dir = newDir();
@@ -271,6 +279,8 @@ test('an attempt an earlier run left pending holds its table until this build pr
   const pending = storeOf(org, dir).readGroup('view', VIEW_KEY).pending;
   assert.ok(pending, 'and leaves its attempt pending');
   assert.equal(pending.root.id, ids.view);
+  // The build kept its local draft (it never removes one); the maker removes it, as the halt says.
+  await removeKeptDraft(first, 'view', pending.root.id);
 
   // Control: the same store, opened on a barrier with no build to prove it, holds the table.
   const held = createPublicationBarrier();
@@ -724,6 +734,7 @@ test('a removed declaration keeps its pending hold; a build recovers it by its r
   const first = await build(org, dir, declared);
   restore();
   assert.ok(storeOf(org, dir).readGroup('view', VIEW_KEY).pending, first.err && first.err.message);
+  await removeKeptDraft(first, 'view', storeOf(org, dir).readGroup('view', VIEW_KEY).pending.root.id);
   const removed = stableSpec({ views: [], charts: [] });
 
   // A spec without the field: nothing recovers it, and its table stays held.
@@ -759,9 +770,10 @@ test('a removed declaration whose row no longer holds its recorded expectation s
   const org = createFakeBuildOrg({ entities: ENTITIES });
   const dir = newDir();
   const restore = loseNextCreateAnswer(org, 'savedqueries');
-  await build(org, dir, stableSpec({ charts: [] }));
+  const first = await build(org, dir, stableSpec({ charts: [] }));
   restore();
   const id = storeOf(org, dir).readGroup('view', VIEW_KEY).pending.root.id;
+  await removeKeptDraft(first, 'view', id);
   await org.httpClient.patch(`${org.origin}/api/data/v9.2/savedqueries(${id})`, { description: 'Changed after the interruption' });
   const warnings = [];
   const barrier = createPublicationBarrier();
@@ -789,6 +801,8 @@ test('the documented recovery keeps the store: no advice to move, delete or rese
 
 // --- the build's own unacknowledged local create ---------------------------------------------------------------------------------
 const { readLocalCreateState } = require('../lib/creates-local.js');
+const { execFileSync } = require('node:child_process');
+const normalize = (g) => String(g || '').replace(/[{}]/g, '').toLowerCase();
 const { withAppBuildLease } = require('../lib/app-operation-lease.js');
 const { appUniqueName } = require('../lib/app-unique-name.js');
 
@@ -807,15 +821,31 @@ for (const kind of ['view', 'chart']) {
   const key = kind === 'view' ? VIEW_KEY : CHART_KEY;
   const only = () => stableSpec(kind === 'view' ? { charts: [] } : { views: [] });
 
-  test(`a ${kind} create whose answer was lost leaves no local draft: the run removes its own, so the next build proves the row from the server`, async () => {
+  // The tradeoff of never removing a local draft: a clean lost create no longer continues by itself. Its draft is kept, the next
+  // build stops on it and writes nothing, and once the maker removes the draft (the SDK's own local discard) the build after
+  // proves the row from the server and binds it — never creating it again.
+  test(`a ${kind} create whose answer was lost keeps its local draft; the next build stops until the maker removes it, then proves the row`, async () => {
     const org = createFakeBuildOrg({ entities: ENTITIES });
     const dir = newDir();
+    const barrier = createPublicationBarrier();
+    const sdk = createMakerSdk({ workspaceStorage: createNodeWorkspaceStorage(dir), instanceUrl: org.origin, httpClient: gatedClient(org, barrier) });
+    await sdk.initWorkspace();
+    let discards = 0;
+    const discard = sdk.deleteArtifact.bind(sdk);
+    sdk.deleteArtifact = async (...args) => { discards++; return discard(...args); };
     const restore = loseNextCreateAnswer(org, collection);
-    const first = await build(org, dir, only());
+    const first = await build(org, dir, only(), { sdk, publicationBarrier: barrier });
     restore();
     const pending = storeOf(org, dir).readGroup(kind, key).pending;
     assert.ok(pending, first.err && first.err.message);
-    assert.equal((await readLocalCreateState(first.sdk, kind, pending.root.id)).state, 'fresh', 'no unacknowledged local create is left in the workspace');
+    assert.match(String(first.err && first.err.message), /create-local-draft-kept/);
+    assert.equal(discards, 0, 'the build never removes a local draft');
+    assert.equal((await readLocalCreateState(sdk, kind, pending.root.id)).state, 'pending', 'the draft is kept');
+    const stopped = await build(org, dir, only(), { authorizedAdoption: new Set([`${kind}:${key}`]) });
+    assert.match(String(stopped.err && stopped.err.message), /create-completion-required/);
+    assert.deepEqual(stopped.writes, [], 'nothing is written while the draft is there');
+    // The maker settles the draft through the SDK's public discard.
+    await discard(kind, pending.root.id);
     const r = await build(org, dir, only(), { authorizedAdoption: new Set([`${kind}:${key}`]) });
     assert.equal(r.err, undefined, r.err && r.err.message);
     assert.equal(creates(r, collection).length, 0, 'bound, not created again');
@@ -823,14 +853,12 @@ for (const kind of ['view', 'chart']) {
   });
 
   for (const field of ['name', 'description']) {
-    test(`a ${kind} local draft the run could not remove, edited in its ${field} — outside what the build reconciles — stops every rerun with the edit and the files kept`, async () => {
+    test(`a kept ${kind} local draft of a lost create, edited in its ${field} — outside what the build reconciles — stops every rerun with the edit and the files kept`, async () => {
       const org = createFakeBuildOrg({ entities: ENTITIES });
       const dir = newDir();
-      // The run that lost the answer could not remove its draft (a crash after the send, before the discard): the draft stays.
       const barrier = createPublicationBarrier();
       const sdk = createMakerSdk({ workspaceStorage: createNodeWorkspaceStorage(dir), instanceUrl: org.origin, httpClient: gatedClient(org, barrier) });
       await sdk.initWorkspace();
-      sdk.deleteArtifact = async () => { throw new Error('stopped before the local discard'); };
       const restore = loseNextCreateAnswer(org, collection);
       const first = await build(org, dir, only(), { sdk, publicationBarrier: barrier });
       restore();
@@ -922,12 +950,145 @@ for (const kind of ['view', 'chart']) {
     const first = await build(org, dir, only(), { sdk, publicationBarrier: barrier });
     assert.ok(first.err, 'the build stops');
     assert.equal(creates(first, collection).length, 0, 'a draft the build cannot show is its own is never sent');
-    assert.match(String(first.err.message), /create-local-draft-kept/);
+    assert.match(String(first.err.message), /create-local-draft-changed[\s\S]*create-local-draft-kept/);
     const local = await readLocalCreateState(sdk, kind, id);
     assert.equal(local.state, 'pending');
     assert.equal(local.draft.name, edit);
   });
+
+  // A second local process (another SDK on the same workspace, which the build's lease does not exclude) edits the draft at the
+  // two points a check of the workspace cannot cover. Run as a real separate process, while the build holds its lease.
+  const editElsewhere = async (dir, org, id, field, value) => {
+    await assert.rejects(withAppBuildLease({ workspaceDir: dir, appUniqueName: appUniqueName(only()) }, () => assert.fail('another build must not enter')), { code: 'build-locked' });
+    const env = { ...process.env };
+    delete env.NODE_TEST_CONTEXT;
+    const out = JSON.parse(execFileSync(process.execPath, [path.join(__dirname, 'helpers', 'edit-local-draft.js'), dir, org.origin, kind, id, field, value], { env, encoding: 'utf8', timeout: 60000 }));
+    assert.equal(out.edited, true);
+    assert.notEqual(out.pid, process.pid);
+  };
+
+  // Window 1: after the create's answer was lost, when a cleanup would compare the draft and then remove it. The build removes
+  // no local draft at all, so there is no comparison an edit can slip past: the edit is kept, and so is the attempt.
+  test(`a ${kind} draft another process edits after its create answer was lost is never removed`, async () => {
+    const org = createFakeBuildOrg({ entities: ENTITIES });
+    const dir = newDir();
+    const id = derived(stableSpec())[kind];
+    const edit = 'Maker edit after the lost answer';
+    const barrier = createPublicationBarrier();
+    const observer = createAttemptSendObserver();
+    const sdk = createMakerSdk({ workspaceStorage: createNodeWorkspaceStorage(dir), instanceUrl: org.origin, httpClient: gatedClient(org, barrier, observer) });
+    await sdk.initWorkspace();
+    let discards = 0;
+    sdk.deleteArtifact = async () => { discards++; throw new Error('the build must not remove a local draft'); };
+    const post = org.httpClient.post.bind(org.httpClient);
+    let edited = false;
+    org.httpClient.post = async (url, ...args) => {
+      const response = await post(url, ...args);
+      if (!edited && new RegExp(`/${collection}(?:\\?|$)`).test(url)) {
+        edited = true;
+        await editElsewhere(dir, org, id, 'name', edit);
+        throw Object.assign(new Error('response lost after the create was applied'), { code: 'ECONNRESET' });
+      }
+      return response;
+    };
+    const first = await build(org, dir, only(), { sdk, publicationBarrier: barrier, sendObserver: observer });
+    org.httpClient.post = post;
+    assert.equal(edited, true);
+    assert.equal(discards, 0, 'no local discard is attempted');
+    const local = await readLocalCreateState(sdk, kind, id);
+    assert.equal(local.state, 'pending');
+    assert.equal(local.draft.name, edit, 'the other process\'s edit is kept');
+    assert.match(String(first.err && first.err.message), /create-local-draft-kept/);
+    assert.ok(storeOf(org, dir).readGroup(kind, key).pending, 'the attempt is kept, not released');
+    const next = await build(org, dir, only(), { authorizedAdoption: new Set([`${kind}:${key}`]) });
+    assert.match(String(next.err && next.err.message), /create-completion-required/);
+    assert.deepEqual(next.writes, [], 'nothing is sent again');
+  });
+
+  // Window 2: after the draft was made and checked, before the push reads it. The create request the push dispatches is
+  // compared at the transport with the body the draft the build made serialises to, so the edited draft is refused unsent.
+  for (const field of ['name', 'description']) {
+    test(`a ${kind} draft another process edits in its ${field} just before the push is refused at the dispatch, unsent`, async () => {
+      const org = createFakeBuildOrg({ entities: ENTITIES });
+      const dir = newDir();
+      const id = derived(stableSpec())[kind];
+      const edit = `Maker ${field} just before the push`;
+      const barrier = createPublicationBarrier();
+      const observer = createAttemptSendObserver();
+      const sdk = createMakerSdk({ workspaceStorage: createNodeWorkspaceStorage(dir), instanceUrl: org.origin, httpClient: gatedClient(org, barrier, observer) });
+      await sdk.initWorkspace();
+      const push = sdk.pushArtifact.bind(sdk);
+      let edited = false;
+      sdk.pushArtifact = async (type, artifactId, ...args) => {
+        if (type === kind && normalize(artifactId) === normalize(id) && !edited) {
+          edited = true;
+          await editElsewhere(dir, org, id, field, edit);
+        }
+        return push(type, artifactId, ...args);
+      };
+      const first = await build(org, dir, only(), { sdk, publicationBarrier: barrier, sendObserver: observer });
+      assert.equal(edited, true);
+      assert.equal(creates(first, collection).length, 0, 'the edited draft never reaches the service');
+      assert.equal(first.err && first.err.code, 'create-local-draft-changed', first.err && first.err.message);
+      const local = await readLocalCreateState(sdk, kind, id);
+      assert.equal(local.state, 'pending');
+      assert.equal(local.draft[field], edit, 'the edit is kept');
+      const pending = storeOf(org, dir).readGroup(kind, key).pending;
+      assert.ok(pending, 'the attempt is kept');
+      assert.equal(pending.sendWindow && pending.sendWindow.possible, 0, 'the refused create is never counted as possibly dispatched');
+      const next = await build(org, dir, only());
+      assert.match(String(next.err && next.err.message), /create-completion-required/);
+      assert.deepEqual(next.writes, [], 'nothing is sent while the draft is there');
+    });
+  }
 }
+
+test('a pinned create passes only the body it was pinned to; anything else that could create the row is refused unsent', async () => {
+  const barrier = createPublicationBarrier();
+  assert.equal(barrier.gatesTransport(), false);
+  const sent = [];
+  const gate = barrier.gateRequest(async (req) => { sent.push(req); return { statusCode: 204, headers: {}, body: '' }; });
+  assert.equal(barrier.gatesTransport(), true);
+  const id = 'a1d1e2a3-8ac8-5f10-8300-6ddd477124af';
+  const url = 'https://contoso.crm.dynamics.com/api/data/v9.2/savedqueries?$select=savedqueryid';
+  const body = { name: 'Declared Items', fetchxml: '<fetch/>', savedqueryid: id };
+  const send = (req) => gate({ headers: {}, ...req });
+  const code = (answer) => JSON.parse(answer.body).error.code;
+  const pinned = () => barrier.pinCreate({ collection: 'savedqueries', idField: 'savedqueryid', id: id.toUpperCase(), matches: (b) => JSON.stringify(b) === JSON.stringify(body) });
+  // Before any pin, and after its release, every request goes as it came.
+  await send({ method: 'POST', url, body: JSON.stringify({ ...body, name: 'Other' }) });
+  assert.equal(sent.length, 1);
+  let pin = pinned();
+  await send({ method: 'POST', url, body: JSON.stringify(body) });
+  assert.equal(sent.length, 2);
+  assert.equal(pin.checked, true);
+  await send({ method: 'POST', url, body: JSON.stringify({ name: 'Another row', savedqueryid: '{0B0B0B0B-0000-0000-0000-000000000001}' }) });
+  await send({ method: 'GET', url: `https://contoso.crm.dynamics.com/api/data/v9.2/savedqueries(${id})` });
+  assert.equal(sent.length, 4, 'another row\'s create and a read are not the pinned create');
+  assert.equal(pin.refused, false);
+  const refusals = [
+    { method: 'POST', url, body: JSON.stringify({ ...body, name: 'Edited' }) },
+    { method: 'POST', url: 'https://contoso.crm.dynamics.com/api/data/v9.2/savedquer%69es', body: JSON.stringify({ ...body, savedqueryid: `{${id.toUpperCase()}}`, description: 'x' }) },
+    { method: 'POST', url, body: '{not json' },
+    { method: 'POST', url, body: JSON.stringify({ name: 'No id' }) },
+    { method: 'POST', url: 'https://contoso.crm.dynamics.com/api/data/v9.2/$batch', body: `--b\r\nPOST savedqueries HTTP/1.1\r\n\r\n{"savedqueryid":"${id}"}\r\n--b--` },
+  ];
+  for (const req of refusals) {
+    const answer = await send(req);
+    assert.equal(answer.statusCode, 409, req.body);
+    assert.equal(code(answer), 'create-local-draft-changed');
+  }
+  assert.equal(sent.length, 4, 'nothing refused reached the transport');
+  assert.equal(pin.refused, true);
+  pin.release();
+  await send({ method: 'POST', url, body: JSON.stringify({ ...body, name: 'Edited' }) });
+  assert.equal(sent.length, 5, 'a released pin checks nothing');
+  pin = pinned();
+  await send({ method: 'POST', url: 'https://contoso.crm.dynamics.com/api/data/v9.2/$batch', body: '--b\r\nPOST savedqueries HTTP/1.1\r\n\r\n{"savedqueryid":"0b0b0b0b-0000-0000-0000-000000000002"}\r\n--b--' });
+  assert.equal(sent.length, 6, 'a change set that does not name the row passes');
+  pin.release();
+  assert.throws(() => barrier.pinCreate({ collection: 'savedqueries', idField: 'savedqueryid', id: '', matches: () => true }), TypeError);
+});
 
 // --- standalone discovery of a build whose spec leaves the app's unique name to be derived --------------------------------------
 test('standalone discovery finds the store of a build whose spec omits app.uniqueName, by the name the build derived', async () => {

@@ -2891,13 +2891,18 @@ kind keeps its current ids. A local copy at the id with an unsent edit, or a loc
 acknowledged, is refused before any read-back, reapply or send (`create-completion-required`, via
 `lib/creates-local.js`); there is no `overwrite:` approval for it, and no exception for the build's own
 draft: a diff cannot tell it from one a maker edited since (a name or description outside the
-reconciled projection included). Instead the run whose create was refused or lost its answer removes
-its own local draft in the same run (`discardOwnDraft` in `lib/creates-stable-build.js`, the SDK's local
-`deleteArtifact`), so the next build proves the row from the server, but only while the draft is still
-exactly the one the run recorded making (its canonical hash, taken between `createArtifact` and the push
-through the stable port's `materialised`); being the same run proves nothing, since a maker can edit the
-draft while the create is outstanding. A draft that differs, or that cannot be read or removed, is kept
-and the build stops with `create-local-draft-kept`. A store file that cannot be trusted
+reconciled projection included). The build never removes a local draft, its own included: the SDK's
+`deleteArtifact` is not conditional, and a second local process (which the build lease does not
+exclude) can edit the draft between any check and the delete. A create that was refused or lost its
+answer keeps its draft and stops with `create-local-draft-kept`; its attempt stays pending and nothing is
+resent in that run. The next build stops at it with `create-completion-required` until the maker removes
+or refreshes that draft, then proves the row from the server (or resends the same create when the send
+window proves nothing left). The create itself is pinned at the transport: between `createArtifact` and
+the push the stable port's `materialised` serialises the body that draft must produce (a throwaway SDK,
+`lib/throwaway-sdk.js`) and pins it on the run's publication barrier (`pinCreate`), which compares the
+actual POST at that id, every field, just before transport, and refuses it unsent with
+`create-local-draft-changed` when it differs; a store-backed create without a gated transport is refused
+the same way. A store file that cannot be trusted
 halts the build before any write (`managed-binding-store-unreadable`, never retried); the message tells
 the maker to keep the file as it is and never to move, delete or reset it, nor to put back an older copy
 (a backup, the build's own included, can miss an attempt or a publish sent after it was made); only a
