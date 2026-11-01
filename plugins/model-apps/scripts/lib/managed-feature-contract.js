@@ -39,7 +39,10 @@ const REQUIRED_STEPS = new Set(['resolve', 'plan', 'prove', 'membership']);
  * Settle one managed artifact. Arguments:
  *   phase, family, key, label?  where the build is, and what the artifact is called in a halt;
  *   knownScopes, knownIds       the scopes ({ type: 'table', table } / { type: 'dashboard', id }) and row ids the
- *                               artifact may publish, registered before anything else;
+ *                               artifact may publish, registered before anything else. A dashboard's own ids are its
+ *                               publish scopes, so for the dashboard family every known id (and the committed, pending
+ *                               and planned root) is held and quarantined as a dashboard scope even when no scope was
+ *                               given: a dashboard whose creation is not settled has a retained id and no scope yet;
  *   store                       the managed binding handle (lib/managed-bindings.js), opened with the barrier;
  *   barrier?                    the publication barrier; defaults to the store's forwarded barrier operations;
  *   halt(phase, label, code, { cause })  the build's halt FACTORY: it returns the error to throw (the build's
@@ -63,6 +66,21 @@ async function runManagedFeature(args) {
   if (!store || typeof store.readGroup !== 'function') throw codedError(CODES.notSettled, 'runManagedFeature needs the managed binding store');
   const barrier = args.barrier || store;
   const label = args.label || `managed ${family} "${key}"`;
+  // The complete target set the artifact's holds and quarantine cover; it grows as the committed, pending and planned
+  // roots become known. The caller's knownScopes are kept as given for the attempt record.
+  const scopes = [...knownScopes];
+  const ids = [];
+  const scopeKeys = new Set(scopes.map((s) => (s && s.type === 'dashboard' ? `d:${String(s.id).toLowerCase()}` : '')));
+  const addIds = (more) => {
+    for (const raw of more) {
+      if (!raw) continue;
+      const id = String(raw);
+      if (!ids.some((x) => x.toLowerCase() === id.toLowerCase())) ids.push(id);
+      const k = `d:${id.toLowerCase()}`;
+      if (family === 'dashboard' && !scopeKeys.has(k)) { scopeKeys.add(k); scopes.push({ type: 'dashboard', id }); }
+    }
+    barrier.registerKnown(scopes, ids);
+  };
   let token = null;
   let step = 'read';
 
@@ -70,7 +88,7 @@ async function runManagedFeature(args) {
     const code = (err && err.code) || CODES.notSettled;
     const required = REQUIRED_STEPS.has(step) || code === CREATION_RECORD_UNSETTLED;
     try {
-      if (required) barrier.quarantine(knownScopes, knownIds, `${label} (${code})`);
+      if (required) barrier.quarantine(scopes, ids, `${label} (${code})`);
     } catch (e) {
       // A barrier that cannot quarantine leaves the scope as it is; the halt below still stops the build.
       err = Object.assign(err instanceof Error ? err : new Error(String(err)), { quarantineError: e });
@@ -81,14 +99,15 @@ async function runManagedFeature(args) {
   };
 
   try {
-    barrier.registerKnown(knownScopes, knownIds);
+    addIds(knownIds);
     const { committed, pending } = store.readGroup(family, key);
+    addIds([committed && committed.root && committed.root.id, pending && pending.root && pending.root.id]);
 
     if (pending && pending.expected) {
       // Recovery: the change may already be on the server. Prove it by the expected proof it was sent with; never
       // send it again and never re-baseline from today's declaration.
       token = pending.token;
-      barrier.hold(token, knownScopes, knownIds, `${label} (an earlier change is not yet proved)`);
+      barrier.hold(token, scopes, ids, `${label} (an earlier change is not yet proved)`);
       step = 'prove';
       const proved = await prove({ token, expected: pending.expected, applied: null, recovering: true });
       step = 'membership';
@@ -111,6 +130,7 @@ async function runManagedFeature(args) {
     }
 
     step = 'prepare';
+    addIds([planned.root && planned.root.id]);
     const baseGeneration = pending ? pending.baseGeneration : committed ? committed.generation : null;
     if (pending) {
       // A prepared attempt that was never sent is intent only: it is resumed under its own token.
@@ -121,7 +141,7 @@ async function runManagedFeature(args) {
         publication: planned.publication || null,
       });
     }
-    barrier.hold(token, knownScopes, knownIds, `${label} (a change is being saved and is not yet proved)`);
+    barrier.hold(token, scopes, ids, `${label} (a change is being saved and is not yet proved)`);
     step = 'send';
     store.markSending(token, planned.expected);
     const applied = await apply({ token, plan: planned, resolution });
@@ -163,17 +183,27 @@ async function withWorkflowEffect({ store, effect }, fn) {
  * Pay the owed publication of committed `groups` ([{ family, key }]) that share `scope`, at most once:
  *   - a group that owes nothing is skipped; an uncertain one (dispatching/unconfirmed) is never published again:
  *     `managed-publication-unconfirmed`; a pending attempt: `managed-settlement-pending`;
- *   - `readPublished(group)` answers { publishedSha256 } from a fresh read of the published layer; a failed read is
+ *   - `readLayers(group)` answers { savedSha256, publishedSha256 } from a fresh read of both layers, each hashed the way
+ *     the group's `publication.desiredSha256` was; a failed read, or one without both hashes, is
  *     `managed-publication-unverified`. Debt whose published layer already equals what is owed ends without a send;
+ *   - a publish ships the SAVED layer, so a group still owed is published only while its saved layer is what is owed:
+ *     a saved layer that has drifted (or debt that names no desired hash) is `create-completion-required`, and the scope
+ *     is blocked for the run, before anything is sent;
  *   - a scope the barrier withholds is not sent and its debt stays owed;
- *   - otherwise every covered group is marked dispatching under one token, `publish()` sends the one request, and a
- *     fresh read confirms it. A send whose outcome is not proved stays unconfirmed: `managed-publication-unconfirmed`.
+ *   - otherwise the scope is held under a fresh token, and `publish()` runs under the barrier's send permit for that
+ *     token: the covered groups are marked dispatching at the moment the one publish request is sent (a request the
+ *     barrier withholds leaves the debt owed and consumes nothing), and a fresh read confirms it. A send whose outcome
+ *     is not proved stays unconfirmed — `managed-publication-unconfirmed` — and its scope is blocked for the rest of
+ *     the run, so no sibling path publishes over it; a sibling's success never clears that block.
  * `publish()` may throw an error with `definiteNoStart: true` only when the request is known not to have started.
  * Answers { sent, withheld, confirmed: [{ family, key }] }.
  */
-async function publishManagedScope({ store, barrier, scope, groups, readPublished, publish, path = 'managed publication', newToken } = {}) {
-  if (!store || typeof readPublished !== 'function' || typeof publish !== 'function') throw codedError(CODES.notSettled, 'publishManagedScope needs the store, a published-layer reader and the publish');
+async function publishManagedScope({ store, barrier, scope, groups, readLayers, publish, path = 'managed publication', newToken } = {}) {
+  if (!store || typeof readLayers !== 'function' || typeof publish !== 'function') throw codedError(CODES.notSettled, 'publishManagedScope needs the store, a reader of the saved and published layers, and the publish');
   const gate = barrier || store;
+  for (const op of ['allowScope', 'blockScope', 'hold', 'release', 'withSendPermit']) {
+    if (typeof gate[op] !== 'function') throw codedError(CODES.notSettled, `publishManagedScope needs the publication barrier (${op})`);
+  }
   const owed = [];
   for (const { family, key } of groups || []) {
     const { committed, pending } = store.readGroup(family, key);
@@ -184,55 +214,98 @@ async function publishManagedScope({ store, barrier, scope, groups, readPublishe
     owed.push({ family, key, group: committed });
   }
   if (!owed.length) return { sent: false, withheld: false, confirmed: [] };
+  const names = (list) => list.map((g) => `managed ${g.family} "${g.key}"`).join(', ');
 
-  const readAll = async () => {
+  const readAll = async (list) => {
     const out = [];
-    for (const o of owed) {
+    for (const o of list) {
       let read;
-      try { read = await readPublished(o.group); } catch (e) {
-        throw codedError(PUBLICATION_UNVERIFIED, `the published layer of managed ${o.family} "${o.key}" could not be read`, { cause: e });
+      try { read = await readLayers(o.group); } catch (e) {
+        throw codedError(PUBLICATION_UNVERIFIED, `the saved and published layers of managed ${o.family} "${o.key}" could not be read`, { cause: e });
       }
-      if (!read || typeof read.publishedSha256 !== 'string') throw codedError(PUBLICATION_UNVERIFIED, `the published layer of managed ${o.family} "${o.key}" answered no proof`);
-      out.push({ ...o, publishedSha256: read.publishedSha256, equal: read.publishedSha256 === o.group.publication.desiredSha256 });
+      if (!read || typeof read.publishedSha256 !== 'string' || typeof read.savedSha256 !== 'string') throw codedError(PUBLICATION_UNVERIFIED, `the layers of managed ${o.family} "${o.key}" answered no proof`);
+      const desired = o.group.publication.desiredSha256;
+      out.push({ ...o, publishedSha256: read.publishedSha256, equal: read.publishedSha256 === desired, savedEqual: typeof desired === 'string' && read.savedSha256 === desired });
     }
     return out;
   };
 
-  const before = await readAll();
+  const before = await readAll(owed);
   const already = before.filter((o) => o.equal);
   for (const o of already) store.confirmPublished({ groups: [{ family: o.family, key: o.key }], token: null, proof: { publishedSha256: o.publishedSha256 } });
+  const confirmedSoFar = () => already.map(({ family, key }) => ({ family, key }));
   const due = before.filter((o) => !o.equal);
-  if (!due.length) return { sent: false, withheld: false, confirmed: already.map(({ family, key }) => ({ family, key })) };
-  if (!gate.allowScope || !gate.allowScope(scope, path)) return { sent: false, withheld: true, confirmed: already.map(({ family, key }) => ({ family, key })) };
+  if (!due.length) return { sent: false, withheld: false, confirmed: confirmedSoFar() };
+  const drifted = due.filter((o) => !o.savedEqual);
+  if (drifted.length) {
+    // The saved layer is not what this debt owes: publishing it would put someone else's change live. Nothing is sent,
+    // the debt stays owed, and the scope is withheld for the run, because what is saved on it is not shown safe.
+    gate.blockScope(scope, `${names(drifted)} (its saved layer is not the one it owes the publish of)`);
+    throw codedError(CODES.completion, `${names(drifted)} owes the publish of a saved layer that is no longer saved; it was not published`);
+  }
+  if (!gate.allowScope(scope, path)) return { sent: false, withheld: true, confirmed: confirmedSoFar() };
 
   const token = typeof newToken === 'function' ? newToken() : require('node:crypto').randomUUID();
   const covered = due.map(({ family, key }) => ({ family, key }));
-  // Durable before the send: a failure to record the dispatch means the publish is not sent.
-  store.markPublishDispatch({ groups: covered, scope, token });
+  const label = names(covered);
+  let dispatched = false;
+  let withheld = false;
+  let failure = null;
+  gate.hold(token, [scope], due.map((o) => o.group.root.id), `${label} (its publish is being sent)`);
   try {
-    await publish();
-  } catch (e) {
-    store.notePublishOutcome({ token, outcome: e && e.definiteNoStart === true ? 'definite-no-start' : 'unconfirmed' });
-    throw codedError(e && e.definiteNoStart === true ? (e.code || CODES.notSettled) : PUBLICATION_UNCONFIRMED, `the publish of ${covered.map((g) => `managed ${g.family} "${g.key}"`).join(', ')} failed`, { cause: e });
+    try {
+      await gate.withSendPermit({
+        token,
+        scope,
+        // Durable at the send, after the barrier's last check: a failure to record it means the publish is not sent.
+        onDispatch: () => { store.markPublishDispatch({ groups: covered, scope, token }); dispatched = true; },
+        onWithheld: () => { withheld = true; },
+      }, publish);
+    } catch (e) {
+      failure = e;
+    }
+    if (!dispatched) {
+      if (withheld) return { sent: false, withheld: true, confirmed: confirmedSoFar() };
+      if (failure) throw failure;
+      // `publish()` finished without its request passing the permit: it was sent some other way, or not at all, and
+      // nothing can show which. Fail closed, as for a lost answer.
+      gate.blockScope(scope, `${label} (its publish was not sent through the barrier)`);
+      store.markPublishDispatch({ groups: covered, scope, token });
+      store.notePublishOutcome({ token, outcome: 'unconfirmed' });
+      throw codedError(PUBLICATION_UNCONFIRMED, `the publish of ${label} did not pass the publication barrier, so whether it was sent is unknown`);
+    }
+    if (failure) {
+      if (failure.definiteNoStart === true) {
+        store.notePublishOutcome({ token, outcome: 'definite-no-start' });
+        throw codedError(failure.code || CODES.notSettled, `the publish of ${label} did not start`, { cause: failure });
+      }
+      // Blocked before the outcome is written: if that write fails, the scope is withheld all the same.
+      gate.blockScope(scope, `${label} (its publish may have been sent and is not confirmed)`);
+      store.notePublishOutcome({ token, outcome: 'unconfirmed' });
+      throw codedError(PUBLICATION_UNCONFIRMED, `the publish of ${label} failed`, { cause: failure });
+    }
+    // A success answer is not proof the content is live: read it back. A read that fails or still differs leaves the
+    // debt unconfirmed and the scope blocked, and it is never sent again.
+    let after;
+    try {
+      after = await readAll(due);
+    } catch (e) {
+      gate.blockScope(scope, `${label} (its publish was sent and could not be read back)`);
+      store.notePublishOutcome({ token, outcome: 'unconfirmed' });
+      throw codedError(PUBLICATION_UNCONFIRMED, 'the publish was sent and its published layer could not be read back', { cause: e });
+    }
+    if (after.some((o) => !o.equal)) {
+      gate.blockScope(scope, `${label} (its publish was sent and the published layer does not show it)`);
+      store.notePublishOutcome({ token, outcome: 'unconfirmed' });
+      throw codedError(PUBLICATION_UNCONFIRMED, 'the publish was sent and the published layer does not show what was owed');
+    }
+    for (const o of after) store.confirmPublished({ groups: [{ family: o.family, key: o.key }], token, proof: { publishedSha256: o.publishedSha256 } });
+    return { sent: true, withheld: false, confirmed: [...already, ...after].map(({ family, key }) => ({ family, key })) };
+  } finally {
+    // Only this publication's own hold ends; a block set above stays for the run.
+    gate.release(token);
   }
-  // A success answer is not proof the content is live: read it back. A read that fails or still differs leaves the
-  // debt unconfirmed, and it is never sent again.
-  let after;
-  try {
-    owed.splice(0, owed.length, ...due);
-    after = await readAll();
-  } catch (e) {
-    store.notePublishOutcome({ token, outcome: 'unconfirmed' });
-    throw codedError(PUBLICATION_UNCONFIRMED, 'the publish was sent and its published layer could not be read back', { cause: e });
-  }
-  if (after.some((o) => !o.equal)) {
-    store.notePublishOutcome({ token, outcome: 'unconfirmed' });
-    throw codedError(PUBLICATION_UNCONFIRMED, 'the publish was sent and the published layer does not show what was owed');
-  }
-  for (const o of after) store.confirmPublished({ groups: [{ family: o.family, key: o.key }], token, proof: { publishedSha256: o.publishedSha256 } });
-  return { sent: true, withheld: false, confirmed: [...already, ...after].map(({ family, key }) => ({ family, key })) };
 }
-
 module.exports = {
   PUBLICATION_UNVERIFIED,
   PUBLICATION_UNCONFIRMED,

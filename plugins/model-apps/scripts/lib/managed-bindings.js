@@ -837,6 +837,9 @@ function openManagedBindings({ workspaceDir, environment, appUniqueName, solutio
     hold(token, scopes, ids, label) { return needBarrier().hold(token, scopes, ids, label); },
     release(token) { return needBarrier().release(token); },
     quarantine(scopes, ids, label) { return needBarrier().quarantine(scopes, ids, label); },
+    allowScope(scope, path) { return needBarrier().allowScope(scope, path); },
+    blockScope(scope, label) { return needBarrier().blockScope(scope, label); },
+    withSendPermit(permit, fn) { return needBarrier().withSendPermit(permit, fn); },
   };
   return handle;
 }

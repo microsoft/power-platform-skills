@@ -158,7 +158,7 @@ test('discovery, then recovery of a pending attempt, then commit, then exactly o
   assert.deepEqual(calls, ['prove', 'membership'], 'recovery sends nothing again');
   const out = await publishManagedScope({
     store: ctx.store, barrier, scope: ACCOUNT, groups: [{ family: 'form', key: 'account/main' }],
-    readPublished: async (g) => { const x = await readSystemFormPublication(sdk.dataverse, g.root.id); return { publishedSha256: x.state === 'equal' ? H('9') : H('8') }; },
+    readLayers: async (g) => { const x = await readSystemFormPublication(sdk.dataverse, g.root.id); return { savedSha256: H('9'), publishedSha256: x.state === 'equal' ? H('9') : H('8') }; },
     publish: async () => { await sdk.fetchArtifact('form', MAIN); await sdk.publishArtifact('form', MAIN); },
   });
   assert.equal(out.sent, true);

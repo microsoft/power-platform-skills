@@ -40,6 +40,19 @@
 //                     and committed. Only that token is released: a sibling's success never frees a scope another attempt holds.
 //   quarantine        a block for the rest of the run, set by a required failure; nothing releases it.
 //   registerKnown     maps a managed artifact's ids to the scopes they publish. It is not a block.
+//   send permits      `withSendPermit({ token, scope, onDispatch, onWithheld }, fn)` lets the one publish request of a
+//                     managed publication through `token`'s own hold, and through nothing else: inside `fn`, a publish
+//                     request is screened as if that hold were absent (every block and every other hold still applies).
+//                     If the permit's own scope is withheld, nothing is sent and `onWithheld()` is told; otherwise
+//                     `onDispatch()` runs synchronously at the send, so the dispatch is recorded where it happens (a throw
+//                     there sends nothing), and a second publish request under the same permit is not sent. A publish
+//                     outside the permit stays withheld by the hold, so a sibling cannot overlap the managed send.
+
+const { AsyncLocalStorage } = require('node:async_hooks');
+
+// The permit a managed publication runs under (withSendPermit). Module-wide because an async context crosses every
+// barrier, but each permit names its barrier, and a gate honours only its own.
+const permits = new AsyncLocalStorage();
 
 /** Lowercased table logical name, or '' for anything that is not a non-empty string. */
 function tableKey(table) {
@@ -118,15 +131,18 @@ function createPublicationBarrier() {
   const skip = (entry, path) => {
     if (path && !entry.skipped.includes(path)) entry.skipped.push(path);
   };
+  // The hold a permitted publish is screened past, set only while gatedRequest screens that one request; null otherwise.
+  let exceptToken = null;
+  const liveHolds = () => [...holds].filter(([t]) => t !== exceptToken).map(([, h]) => h);
   const isHeld = (kind, name) => {
-    for (const h of holds.values()) if ((kind === 'table' ? h.tables : h.dashboards).has(name)) return true;
+    for (const h of liveHolds()) if ((kind === 'table' ? h.tables : h.dashboards).has(name)) return true;
     return false;
   };
   const heldEntry = (kind, name) => {
     const k = `${kind}:${name}`;
     if (!heldEntries.has(k)) heldEntries.set(k, kind === 'table' ? { table: name, blockedBy: [], skipped: [] } : { dashboard: name, blockedBy: [], skipped: [] });
     const entry = heldEntries.get(k);
-    for (const h of holds.values()) if ((kind === 'table' ? h.tables : h.dashboards).has(name) && h.label && !entry.blockedBy.includes(h.label)) entry.blockedBy.push(h.label);
+    for (const h of liveHolds()) if ((kind === 'table' ? h.tables : h.dashboards).has(name) && h.label && !entry.blockedBy.includes(h.label)) entry.blockedBy.push(h.label);
     return entry;
   };
   // The entry that withholds a table or dashboard now — a run-long block, else a live hold — or undefined.
@@ -140,16 +156,16 @@ function createPublicationBarrier() {
   };
   const activeTables = () => {
     const list = [...blocked.keys()];
-    for (const h of holds.values()) for (const t of h.tables) if (!list.includes(t)) list.push(t);
+    for (const h of liveHolds()) for (const t of h.tables) if (!list.includes(t)) list.push(t);
     return list;
   };
   const activeDashboards = () => {
     const list = [...dashboardsBlocked.keys()];
-    for (const h of holds.values()) for (const d of h.dashboards) if (!list.includes(d)) list.push(d);
+    for (const h of liveHolds()) for (const d of h.dashboards) if (!list.includes(d)) list.push(d);
     return list;
   };
   // Whether anything is withheld. While nothing is, every check below answers exactly what it was given.
-  const anyActive = () => blocked.size > 0 || dashboardsBlocked.size > 0 || [...holds.values()].some((h) => h.tables.size || h.dashboards.size);
+  const anyActive = () => blocked.size > 0 || dashboardsBlocked.size > 0 || liveHolds().some((h) => h.tables.size || h.dashboards.size);
   const scopesOf = (scopes) => {
     const out = { tables: new Set(), dashboards: new Set() };
     for (const s of Array.isArray(scopes) ? scopes : [scopes]) {
@@ -328,10 +344,24 @@ function createPublicationBarrier() {
     gateRequest(request = require('./dataverse-auth.js').makeRequest) {
       if (typeof request !== 'function') throw new TypeError('gateRequest: the transport to wrap must be a function');
       return function gatedRequest(req) {
+        const permit = permits.getStore();
+        if (permit && permit.barrier === barrier && isPublish(req)) return permitted(permit, req, request);
         if (!anyActive()) return request(req);
         const screened = screenPublish(req);
         return screened.answer ? Promise.resolve(screened.answer) : request(screened.req);
       };
+    },
+    /**
+     * Run `fn` with a send permit for one managed publication (see the header): `token` is the hold the publication
+     * placed on `scope` ({ type: 'table', table } / { type: 'dashboard', id }); `onDispatch()` is called synchronously
+     * just before the one publish request is sent, and may throw to stop it; `onWithheld()` when the request is not
+     * sent because the scope is withheld by something else. Answers what `fn` answers.
+     */
+    withSendPermit({ token, scope, onDispatch, onWithheld } = {}, fn) {
+      if (!token || !scope || typeof onDispatch !== 'function' || typeof fn !== 'function') throw new TypeError('withSendPermit: a token, a scope, onDispatch and the publish to run are required');
+      const own = scope.type === 'dashboard' ? (dashboardKey(scope.id) && `dashboard ${dashboardKey(scope.id)}`) : tableKey(scope.table);
+      if (!own) throw new TypeError('withSendPermit: the scope names no table or dashboard');
+      return permits.run({ barrier, token, own, onDispatch, onWithheld, dispatched: false }, fn);
     },
     /**
      * May the build write or publish the app? `added`: the tables whose Main forms this write adds;
@@ -381,8 +411,44 @@ function createPublicationBarrier() {
     },
   };
 
+  function isPublish(req) {
+    if (String((req && req.method) || 'GET').toUpperCase() !== 'POST') return false;
+    const path = pathnameOf(req.url);
+    if (PUBLISH_XML.test(path) || PUBLISH_ALL_XML.test(path)) return true;
+    if (!BATCH.test(path)) return false;
+    const text = bodyText(req.body);
+    return text === null || /Publish(?:All)?Xml/i.test(text);
+  }
+
+  // A publish request inside a send permit: screened past the permit's own hold only, sent at most once, with the
+  // dispatch recorded by `onDispatch` at the moment it is sent. A request that would not publish the permit's own
+  // scope (something else withholds it) is not sent at all — not even the rest of it — so the publication is either
+  // sent whole or recorded withheld, never half of each.
+  function permitted(permit, req, request) {
+    let screened;
+    exceptToken = permit.token;
+    try {
+      screened = anyActive() ? screenPublish(req) : { req, hit: [] };
+    } finally {
+      exceptToken = null;
+    }
+    if (screened.answer || (screened.hit || []).includes(permit.own)) {
+      if (!permit.dispatched && typeof permit.onWithheld === 'function') permit.onWithheld();
+      return Promise.resolve(screened.answer || withheldAnswer(false, `the managed publish of ${permit.own} was not sent: it is withheld in this run`));
+    }
+    if (permit.dispatched) return Promise.resolve(withheldAnswer(false, `a second publish request of the managed publication of ${permit.own} was not sent: it is sent once`));
+    try {
+      permit.onDispatch();
+    } catch (e) {
+      return Promise.reject(e);
+    }
+    permit.dispatched = true;
+    return request(screened.req);
+  }
+
   // The synchronous check of one request at dispatch (gateRequest). Returns { req } to send (the same
-  // object when it names no blocked table or dashboard) or { answer } for a request that is not sent.
+  // object when it names no blocked table or dashboard; `hit` lists what was cut from a PublishXml) or
+  // { answer } for a request that is not sent.
   function screenPublish(req) {
     if (String((req && req.method) || 'GET').toUpperCase() !== 'POST') return { req };
     const path = pathnameOf(req.url);
@@ -432,7 +498,7 @@ function createPublicationBarrier() {
       if (!hit.includes(`dashboard ${entry.dashboard}`)) hit.push(`dashboard ${entry.dashboard}`);
       return '';
     });
-    if (!hit.length) return { req };
+    if (!hit.length) return { req, hit };
     const xml = cut.replace(/<entities>\s*<\/entities>/gi, '').replace(/<dashboards>\s*<\/dashboards>/gi, '');
     let rest = xml;
     for (let before = null; before !== rest;) {
@@ -443,7 +509,7 @@ function createPublicationBarrier() {
     const body = JSON.stringify({ ...payload, ParameterXml: xml });
     const headers = { ...((req && req.headers) || {}) };
     for (const name of Object.keys(headers)) if (name.toLowerCase() === 'content-length') headers[name] = String(Buffer.byteLength(body));
-    return { req: { ...req, headers, body } };
+    return { req: { ...req, headers, body }, hit };
   }
 
   function namedBlocked(text) {
