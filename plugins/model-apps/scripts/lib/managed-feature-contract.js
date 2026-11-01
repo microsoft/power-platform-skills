@@ -7,21 +7,24 @@
 // createFeatureSettlement) records bindings one at a time, so a crash between two records leaves the old root bound
 // with only some of its new children — and a crash after the remote write but before any record leaves nothing that
 // says what was sent. runManagedFeature closes both:
-//   1. register the artifact's scopes and ids with the publication barrier (not a block);
+//   1. register the artifact's scopes and ids with the publication barrier (not a block), and run the feature's
+//      preflight — on every path, recovery included;
 //   2. resolve and plan; a proved no-op ensures membership and changes nothing else;
 //   3. persist an attempt (prepareAttempt) and hold its scopes under the attempt's token, then persist the complete
 //      expected proof (markSending) BEFORE the one push — a failed store write means the push is not sent;
 //   4. apply the change once, prove it from a fresh read against the stored expected proof (never against today's
-//      declaration), ensure solution membership, and commit the whole group in one atomic store write;
+//      declaration), require adoption approval for a root whose create was never acknowledged, ensure solution
+//      membership, and commit the whole group in one atomic store write;
 //   5. release only this attempt's hold.
 // A pending attempt found on disk is recovered (recoverManagedAttempt) by its stored expected proof, without sending
 // again — except an attempt whose durable send window proves none of its mutations was carried out (sent through a
 // send observer, createAttemptSendObserver), which continues under its own token, and a create the feature shows was
 // never made (`resumeCreate`), which is sent again under its own token and ids.
 // A prepared attempt that never reached markSending, met by a no-op plan, is retired (retireUnsentAttempt).
-// A required failure (resolve, plan, proof, membership, an unsettled dashboard creation record) quarantines the
-// artifact's scopes for the rest of the invocation; any other failure keeps the hold. Either way the attempt stays on
-// disk, the bindings do not advance, and the build stops with the halt the caller's factory makes.
+// A required failure (preflight, resolve, plan, proof, adoption consent, membership, an unsettled dashboard creation
+// record) quarantines the artifact's scopes for the rest of the invocation; any other failure keeps the hold. Either
+// way the attempt stays on disk, the bindings do not advance, and the build stops with the halt the caller's factory
+// makes.
 //
 // Nothing calls this module until a declared form, dashboard, rule or process flow is wired to it.
 
@@ -45,7 +48,7 @@ function codedError(code, message, extra) {
 }
 
 // A step whose failure means the artifact's saved state is not shown safe: its scopes stay withheld for the run.
-const REQUIRED_STEPS = new Set(['resolve', 'plan', 'prove', 'membership', 'resume']);
+const REQUIRED_STEPS = new Set(['preflight', 'resolve', 'plan', 'prove', 'membership', 'resume', 'adopt']);
 
 /**
  * Settle one managed artifact. Arguments:
@@ -59,6 +62,19 @@ const REQUIRED_STEPS = new Set(['resolve', 'plan', 'prove', 'membership', 'resum
  *   barrier?                    the publication barrier; defaults to the store's forwarded barrier operations;
  *   halt(phase, label, code, { cause })  the build's halt FACTORY: it returns the error to throw (the build's
  *                               managedStop returns a never-retry halt and does not throw it);
+ *   preflight({ committed, pending, recovering })  required: the feature's own safety checks, run on EVERY path —
+ *                               an ordinary run, a prepared attempt, and every recovery (prove, continue, resume) —
+ *                               before resolve, prove or any continuation, and before anything is prepared or sent.
+ *                               `recovering` is true when `pending` was marked sending (its scopes are already held).
+ *                               It must not fetch into, overwrite or delete the local copy. It refuses by throwing
+ *                               (its own code, e.g. `create-completion-required` with category
+ *                               `workspace-copy-unsent-edits`): quarantined, the attempt and its token kept, nothing
+ *                               written. A feature without one is refused (`managed-not-settled`) before anything;
+ *   adoptionApproved?           boolean, `true` only when the feature's own typed adoption approval
+ *                               (`<family>:<key>`) covers this artifact; never inferred here. A group not yet committed
+ *                               whose root create this attempt never had acknowledged is bound only with it; otherwise
+ *                               `managed-adoption-required` before membership, quarantined, the attempt kept, no
+ *                               binding. An acknowledged create needs none and commits as created;
  *   resolve({ committed, pending, resuming?, continuing? })   read and preflight; answers the resolution;
  *   plan({ resolution, committed, resuming?, continuing? })   answers { noop: true } or { root, expected,
  *                                        declarationSha256, publication? } (publication: the attempt's
@@ -88,12 +104,16 @@ const REQUIRED_STEPS = new Set(['resolve', 'plan', 'prove', 'membership', 'resum
  * Answers { result, committedGroup }: result is { noop: true } or { committed: true, recovered, resumed?, continued? }.
  */
 async function runManagedFeature(args) {
-  const { phase, family, key, knownScopes = [], knownIds = [], store, halt, resolve, plan, apply, prove, ensureMembership } = args || {};
+  const { phase, family, key, knownScopes = [], knownIds = [], store, halt, preflight, resolve, plan, apply, prove, ensureMembership } = args || {};
   // The factory is checked before any side effect: a wrapper that could not stop the build must not start it.
   if (typeof halt !== 'function') throw codedError(CODES.notSettled, 'runManagedFeature needs the build\'s halt factory');
-  for (const [name, fn] of Object.entries({ resolve, plan, apply, prove, ensureMembership })) {
+  // preflight is required for the same reason: a feature whose own safety checks (a dirty local copy, a retained
+  // creation id, an edit switch) did not run on a recovery would let a pending token stand in for them.
+  for (const [name, fn] of Object.entries({ preflight, resolve, plan, apply, prove, ensureMembership })) {
     if (typeof fn !== 'function') throw codedError(CODES.notSettled, `runManagedFeature needs ${name}`);
   }
+  if ('adoptionApproved' in args && typeof args.adoptionApproved !== 'boolean') throw codedError(CODES.notSettled, 'runManagedFeature takes adoptionApproved only as a boolean the feature derives from its own adoption approval');
+  const adoptionApproved = args.adoptionApproved === true;
   if (!store || typeof store.readGroup !== 'function') throw codedError(CODES.notSettled, 'runManagedFeature needs the managed binding store');
   // A send observer that is not on the transport would arm windows nothing counts in, and an unsent-looking window is
   // what lets a later run send again: refuse it before anything is read or written.
@@ -139,12 +159,16 @@ async function runManagedFeature(args) {
     addIds(knownIds);
     const { committed, pending, effects } = store.readGroup(family, key);
     addIds([committed && committed.root && committed.root.id, pending && pending.root && pending.root.id]);
-
-    if (pending && pending.expected) {
+    const recovering = !!(pending && pending.expected);
+    if (recovering) {
       token = pending.token;
       barrier.hold(token, scopes, ids, `${label} (an earlier change is not yet proved)`);
-      return await recoverManagedAttempt(committed, pending, effects);
     }
+    // The feature's own checks, on every path and before anything it reads into its workspace or sends: a refusal is a
+    // required failure (quarantined) that keeps any attempt and its token, and nothing has been written yet.
+    step = 'preflight';
+    await preflight({ committed, pending, recovering });
+    if (recovering) return await recoverManagedAttempt(committed, pending, effects);
 
     step = 'resolve';
     const resolution = await resolve({ committed, pending });
@@ -215,10 +239,11 @@ async function runManagedFeature(args) {
     }
     step = 'prove';
     const proved = await prove({ token, expected: pending.expected, applied: null, recovering: true });
+    requireAdoptionConsent(!!committed);
     step = 'membership';
     await ensureMembership({ root: pending.root, records: proved.records, recovering: true });
     step = 'commit';
-    const group = commit(store, token, pending.baseGeneration, proved);
+    const group = commit(store, token, pending.baseGeneration, proved, adoptionApproved);
     barrier.release(token);
     return { result: { committed: true, recovered: true }, committedGroup: group };
   }
@@ -254,12 +279,26 @@ async function runManagedFeature(args) {
     const proved = await prove({ token, expected: planned.expected, applied, recovering: false });
     step = 'saved';
     store.noteSaved(token, { proof: proved.savedProof === undefined ? null : proved.savedProof, acknowledgedRoot: proved.acknowledgedRoot === true });
+    requireAdoptionConsent(baseGeneration !== null);
     step = 'membership';
     await ensureMembership({ root: planned.root, records: proved.records, recovering: false });
     step = 'commit';
-    const group = commit(store, token, baseGeneration, proved);
+    const group = commit(store, token, baseGeneration, proved, adoptionApproved);
     barrier.release(token);
     return group;
+  }
+
+  // Adoption consent, before membership exposes the root and before the commit binds it: a group not yet committed
+  // whose root create this attempt never had acknowledged (durably: noteSaved, or the attempt record) is bound only
+  // with the feature's own typed adoption approval. A proof shows what the row is, not that the maker agreed to manage
+  // it. The store refuses the same commit without the flag (commitGroup), so this is the early, write-free stop.
+  function requireAdoptionConsent(alreadyCommitted) {
+    step = 'adopt';
+    if (alreadyCommitted || adoptionApproved) return;
+    const { pending: a } = store.readGroup(family, key);
+    if (!a || a.token !== token) throw codedError(CODES.notSettled, `${label}: its attempt is no longer on disk`);
+    if (a.acknowledgedRoot || (a.savedObservation && a.savedObservation.acknowledgedRoot)) return;
+    throw codedError(CODES.adoptionRequired, `${label} was proved on the service, but its create was never acknowledged; binding it needs its adoption approval (${family}:${key})`);
   }
 }
 
@@ -390,10 +429,10 @@ function samePlan(planned, pending) {
     && canonicalJson(planned.publication || null) === canonicalJson(pending.publication || null);
 }
 
-function commit(store, token, baseGeneration, proved) {
+function commit(store, token, baseGeneration, proved, adoptionApproved) {
   return store.commitGroup({
     token, baseGeneration, records: proved.records, proof: proved.proof, consumerState: proved.consumerState,
-    publication: proved.publication === undefined ? null : proved.publication, proofSchema: proved.proofSchema,
+    publication: proved.publication === undefined ? null : proved.publication, proofSchema: proved.proofSchema, adoptionApproved,
   });
 }
 

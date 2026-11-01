@@ -45,6 +45,7 @@ function formPorts(wire, sdk, { formxml, calls = [] } = {}) {
   const note = (name, fn) => async (...a) => { calls.push(name); return fn(...a); };
   return {
     phase: 'forms', family: 'form', key: 'account/main', knownScopes: [ACCOUNT], knownIds: [MAIN], halt: managedStop,
+    preflight: note('preflight', async () => undefined),
     resolve: note('resolve', async () => ({})),
     plan: note('plan', async () => (wire.saved.get(MAIN) && wire.saved.get(MAIN).formxml === formxml
       ? { noop: true }
@@ -63,7 +64,7 @@ function formPorts(wire, sdk, { formxml, calls = [] } = {}) {
 }
 
 test('a required failure rejects with the build\'s never-retry halt and runs no downstream step; nothing is prepared before the plan', async () => {
-  for (const failing of ['resolve', 'plan', 'prove', 'membership']) {
+  for (const failing of ['preflight', 'resolve', 'plan', 'prove', 'membership']) {
     const wire = createManagedWire();
     const barrier = createPublicationBarrier();
     const { sdk } = await sdkOver(wire, { barrier });
@@ -81,7 +82,7 @@ test('a required failure rejects with the build\'s never-retry halt and runs no 
     assert.equal(calls[calls.length - 1], failing, `nothing ran after ${failing}`);
     assert.equal(barrier.allowScope(ACCOUNT, 'check'), false, 'and the table is quarantined');
     assert.equal(wire.publishes().length, 0);
-    if (failing === 'resolve' || failing === 'plan') assert.equal(store.snapshot().revision, before, 'nothing was prepared');
+    if (failing === 'preflight' || failing === 'resolve' || failing === 'plan') assert.equal(store.snapshot().revision, before, 'nothing was prepared');
   }
 });
 
@@ -153,9 +154,10 @@ test('discovery, then recovery of a pending attempt, then commit, then exactly o
   const ctx = context(dir, barrier);
   assert.deepEqual(ctx.debt.map((d) => d.kind), ['hold']);
   const calls = [];
-  const r = await runManagedFeature({ ...formPorts(wire, sdk, { formxml: '<form v="1"/>', calls }), store: ctx.store, barrier });
+  // The create's answer was never noted before the process ended: binding its root is an adoption, approved here.
+  const r = await runManagedFeature({ ...formPorts(wire, sdk, { formxml: '<form v="1"/>', calls }), adoptionApproved: true, store: ctx.store, barrier });
   assert.deepEqual(r.result, { committed: true, recovered: true });
-  assert.deepEqual(calls, ['prove', 'membership'], 'recovery sends nothing again');
+  assert.deepEqual(calls, ['preflight', 'prove', 'membership'], 'recovery sends nothing again');
   const out = await publishManagedScope({
     store: ctx.store, barrier, scope: ACCOUNT, groups: [{ family: 'form', key: 'account/main' }],
     client: sdk.dataverse,

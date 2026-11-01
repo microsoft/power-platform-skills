@@ -56,6 +56,7 @@ function ports(wire, sdk, { family = 'form', key, id, formxml, fail = {} }) {
   const step = (name, fn) => async (...a) => { if (fail[name]) throw fail[name]; return fn(...a); };
   return {
     phase: family === 'dashboard' ? 'dashboards' : 'forms', family, key, knownScopes: [scope], knownIds: [id], halt,
+    preflight: step('preflight', async () => undefined),
     resolve: step('resolve', async () => ({})),
     plan: step('plan', async () => {
       const current = wire.saved.get(id);
@@ -611,6 +612,7 @@ test('a dashboard known only by its retained id, with no scope given, is quarant
   const later = async () => { downstream += 1; };
   const code = await codeOf(runManagedFeature({
     phase: 'dashboards', family: 'dashboard', key: 'sales', knownScopes: [], knownIds: [DASH], store: s.store, barrier: s.barrier, halt,
+    preflight: async () => undefined,
     resolve: async () => { throw Object.assign(new Error('the retained creation is not settled'), { code: CREATION_RECORD_UNSETTLED }); },
     plan: later, apply: later, prove: later, ensureMembership: later,
   }));
@@ -881,7 +883,7 @@ test('a create whose root is present is proved and adopted, never resent; a late
   assert.equal(await codeOf(runManagedFeature({ ...createPorts(s.wire, s.sdk, { key: 'account/main', id: MAIN, formxml: '<form v="1"/>' }), store: s.store, barrier: s.barrier })), 'create-refused');
   const n = await nextRun(s);
   const p = createPorts(s.wire, n.sdk, { key: 'account/main', id: MAIN, formxml: '<form v="1"/>' });
-  assert.deepEqual((await runManagedFeature({ ...p, store: n.store, barrier: n.barrier })).result, { committed: true, recovered: true });
+  assert.deepEqual((await runManagedFeature({ ...p, adoptionApproved: true, store: n.store, barrier: n.barrier })).result, { committed: true, recovered: true });
   assert.deepEqual([p.resumeAsked, p.tokens.length, s.wire.log.filter(isCreate).length], [1, 0, 1]);
   assert.equal(n.store.readGroup('form', 'account/main').committed.records[0].origin, 'adopted');
 
@@ -900,7 +902,7 @@ test('a create whose root is present is proved and adopted, never resent; a late
   assert.equal(late.barrier.allowScope(ACCOUNT, 'a sibling'), false, 'and its hold stays');
   const after = await nextRun(d);
   const r = createPorts(d.wire, after.sdk, { key: 'account/main', id: MAIN, formxml: '<form v="1"/>' });
-  assert.deepEqual((await runManagedFeature({ ...r, store: after.store, barrier: after.barrier })).result, { committed: true, recovered: true });
+  assert.deepEqual((await runManagedFeature({ ...r, adoptionApproved: true, store: after.store, barrier: after.barrier })).result, { committed: true, recovered: true });
   assert.equal(d.wire.log.filter(isCreate).length, 2, 'proved, not resent');
 });
 
@@ -1230,4 +1232,122 @@ test('a not-started answer is a Dataverse refusal of one operation, a refused to
     ['a cut-off answer', row, { ...coded(400), incompleteResponse: true }],
     ['no answer', row, null],
   ]) assert.equal(notStartedAnswer(req, res), false, label);
+});
+
+// The feature's preflight (runManagedFeature `preflight`): its own safety checks — the clean-continuation check of a
+// dirty local copy, a retained creation id, an edit switch — run on EVERY path, recovery included, before anything the
+// feature reads into its workspace or sends. A refusal keeps the attempt and its token and writes nothing.
+const tracked = (p) => {
+  p.calls = [];
+  for (const name of ['resolve', 'plan', 'apply', 'prove', 'ensureMembership', 'resumeCreate']) {
+    const fn = p[name];
+    if (typeof fn === 'function') p[name] = async (...a) => { p.calls.push(name); return fn(...a); };
+  }
+  return p;
+};
+const dirtyCopy = () => Object.assign(new Error('the local copy has unsent edits'), { code: 'create-completion-required', category: 'workspace-copy-unsent-edits' });
+const fileOf = (store) => (fs.existsSync(store.file) ? fs.readFileSync(store.file, 'utf8') : null);
+
+test('the feature preflight is required: without it nothing is read, held or written', async () => {
+  const s = await setup();
+  const p = ports(s.wire, s.sdk, { key: 'account/main', id: MAIN, formxml: '<form v="1"/>' });
+  delete p.preflight;
+  const before = fileOf(s.store);
+  assert.equal(await codeOf(runManagedFeature({ ...p, store: s.store, barrier: s.barrier })), CODES.notSettled);
+  assert.deepEqual(s.wire.log, []);
+  assert.equal(s.barrier.active, false);
+  assert.equal(fileOf(s.store), before);
+});
+
+test('the feature preflight runs first on an ordinary run: a refusal plans, prepares and sends nothing', async () => {
+  const s = await setup();
+  const seen = [];
+  const p = tracked(ports(s.wire, s.sdk, { key: 'account/main', id: MAIN, formxml: '<form v="1"/>' }));
+  p.preflight = async (a) => { seen.push(a); throw dirtyCopy(); };
+  const before = fileOf(s.store);
+  assert.equal(await codeOf(runManagedFeature({ ...p, store: s.store, barrier: s.barrier })), 'create-completion-required');
+  assert.deepEqual(p.calls, []);
+  assert.deepEqual(seen.map((a) => [a.recovering, a.committed, a.pending]), [[false, null, null]]);
+  assert.equal(fileOf(s.store), before, 'nothing prepared');
+  assert.deepEqual(s.wire.writes(), []);
+  assert.equal(s.barrier.allowScope(ACCOUNT, 'a sibling'), false, 'quarantined for the run');
+});
+
+test('the feature preflight runs before every recovery route — prove, continue, resume — and a refusal keeps the attempt, its token and every byte, on each identical rerun', async () => {
+  // Each case strands an attempt, then answers a fresh run over the same workspace: [run, ports, observed?].
+  const proveCase = async () => {
+    const s = await setup();
+    await runManagedFeature({ ...ports(s.wire, s.sdk, { key: 'account/main', id: MAIN, formxml: '<form v="1"/>' }), store: s.store, barrier: s.barrier });
+    const crash = Object.assign(new Error('the process ended'), { code: 'crash' });
+    assert.equal(await codeOf(runManagedFeature({ ...ports(s.wire, s.sdk, { key: 'account/main', id: MAIN, formxml: '<form v="2"/>', fail: { prove: crash } }), store: s.store, barrier: s.barrier })), 'crash');
+    return { s, next: () => nextRun(s), make: (n) => ports(s.wire, n.sdk, { key: 'account/main', id: MAIN, formxml: '<form v="2"/>' }), want: { committed: true, recovered: true } };
+  };
+  const continueCase = async () => {
+    const s = await observedSetup();
+    await committedEdit(s);
+    await codeOf(runManagedFeature(observed(editPorts(s.wire, s.sdk, { formxml: '<form v="2"/>', local: localFailure() }), s)));
+    return { s, next: () => observedRun(s), make: (n) => editPorts(s.wire, n.sdk, { formxml: '<form v="2"/>' }), want: { committed: true, recovered: true, continued: true } };
+  };
+  const resumeCase = async () => {
+    const s = await setup();
+    refuseNextCreate(s.wire);
+    await codeOf(runManagedFeature({ ...createPorts(s.wire, s.sdk, { key: 'account/main', id: MAIN, formxml: '<form v="1"/>' }), store: s.store, barrier: s.barrier }));
+    return { s, next: () => nextRun(s), make: (n) => createPorts(s.wire, n.sdk, { key: 'account/main', id: MAIN, formxml: '<form v="1"/>' }), want: { committed: true, recovered: true, resumed: true } };
+  };
+  for (const [route, strand] of [['prove', proveCase], ['continue', continueCase], ['resume', resumeCase]]) {
+    const { s, next, make, want } = await strand();
+    const stranded = s.store.readGroup('form', 'account/main').pending;
+    assert.equal(stranded.phase, 'sending', route);
+    const writes = s.wire.writes().length;
+    for (const attempt of [1, 2]) {
+      const n = await next();
+      const before = fileOf(n.store);
+      const seen = [];
+      const p = tracked(make(n));
+      p.preflight = async (a) => { seen.push(a); throw dirtyCopy(); };
+      assert.equal(await codeOf(runManagedFeature({ ...p, store: n.store, barrier: n.barrier, ...(n.observer ? { sendObserver: n.observer } : {}) })), 'create-completion-required', `${route} #${attempt}`);
+      assert.deepEqual(p.calls, [], `${route} #${attempt}: nothing read, planned or sent after the refusal`);
+      assert.deepEqual(seen.map((a) => [a.recovering, a.pending.token]), [[true, stranded.token]], `${route} #${attempt}`);
+      assert.equal(fileOf(n.store), before, `${route} #${attempt}: nothing written`);
+      assert.equal(n.store.readGroup('form', 'account/main').pending.token, stranded.token);
+      assert.equal(s.wire.writes().length, writes);
+      assert.equal(n.barrier.allowScope(ACCOUNT, 'a sibling'), false, `${route} #${attempt}: withheld for the run`);
+    }
+    const n = await next();
+    const p = make(n);
+    assert.deepEqual((await runManagedFeature({ ...p, store: n.store, barrier: n.barrier, ...(n.observer ? { sendObserver: n.observer } : {}) })).result, want, `${route}: a passing preflight recovers as before`);
+  }
+});
+
+// Adoption consent: a root whose create no answer acknowledged is bound only with the feature's typed adoption
+// approval (`adoptionApproved: true`, which the feature derives from its own `<family>:<key>` approval). A fresh read
+// that proves the content shows what the row is, not that the maker agreed to manage it.
+test('an unacknowledged root is committed only with adoption approved: without it the attempt stays, no binding and no membership', async () => {
+  const s = await setup();
+  s.wire.script(isCreate, { statusCode: 400, body: { error: { code: '0x80040203', message: 'lost' } } });
+  assert.equal(await codeOf(runManagedFeature({ ...createPorts(s.wire, s.sdk, { key: 'account/main', id: MAIN, formxml: '<form v="1"/>' }), store: s.store, barrier: s.barrier })), 'create-refused');
+  const stranded = s.store.readGroup('form', 'account/main').pending;
+  for (const attempt of [1, 2]) {
+    const n = await nextRun(s);
+    const before = fileOf(n.store);
+    const p = tracked(createPorts(s.wire, n.sdk, { key: 'account/main', id: MAIN, formxml: '<form v="1"/>' }));
+    assert.equal(await codeOf(runManagedFeature({ ...p, store: n.store, barrier: n.barrier })), CODES.adoptionRequired, `#${attempt}`);
+    assert.ok(!p.calls.includes('ensureMembership'), 'no membership for a root nobody approved');
+    const { committed, pending } = n.store.readGroup('form', 'account/main');
+    assert.deepEqual([committed, pending.token], [null, stranded.token], 'no binding; the attempt stays under its token');
+    assert.equal(fileOf(n.store), before, 'nothing written');
+    assert.equal(n.barrier.allowScope(ACCOUNT, 'a sibling'), false, 'withheld for the run');
+  }
+  const bad = await nextRun(s);
+  assert.equal(await codeOf(runManagedFeature({ ...createPorts(s.wire, bad.sdk, { key: 'account/main', id: MAIN, formxml: '<form v="1"/>' }), adoptionApproved: 'yes', store: bad.store, barrier: bad.barrier })), CODES.notSettled, 'only a boolean approval');
+  const n = await nextRun(s);
+  const p = createPorts(s.wire, n.sdk, { key: 'account/main', id: MAIN, formxml: '<form v="1"/>' });
+  assert.deepEqual((await runManagedFeature({ ...p, adoptionApproved: true, store: n.store, barrier: n.barrier })).result, { committed: true, recovered: true });
+  assert.equal(n.store.readGroup('form', 'account/main').committed.records[0].origin, 'adopted');
+  assert.equal(s.wire.log.filter(isCreate).length, 1, 'never resent');
+
+  // An acknowledged create needs no approval and commits as created.
+  const a = await setup();
+  assert.equal((await runManagedFeature({ ...createPorts(a.wire, a.sdk, { key: 'account/main', id: MAIN, formxml: '<form v="1"/>' }), store: a.store, barrier: a.barrier })).result.committed, true);
+  assert.equal(a.store.readGroup('form', 'account/main').committed.records[0].origin, 'created');
 });

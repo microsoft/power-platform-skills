@@ -624,3 +624,21 @@ test('a confirmation judged against an older generation confirms nothing; a late
   const pub = open(dir).readGroup('form', FORM_KEY).committed.publication;
   assert.deepEqual([pub.state, pub.dispatchToken], ['confirmed', 'dispatch-1']);
 });
+
+test('a new group whose root create no answer acknowledged is committed only with adoption approved; an acknowledged create needs none', () => {
+  const dir = makeTempDir('mb-adopt-');
+  const store = open(dir);
+  const token = store.prepareAttempt({ family: 'form', key: FORM_KEY, baseGeneration: null, root: { kind: 'form', key: FORM_KEY, id: FORM }, knownScopes: [TABLE], declarationSha256: H('e') });
+  store.markSending(token, expected(FORM));
+  const args = (over = {}) => ({ token, baseGeneration: null, records: [rec('form', FORM_KEY, FORM, { origin: 'adopted' })], proof: PROOF, consumerState: formState(), publication: owedTable(), ...over });
+  const before = fileText(store);
+  for (const approval of [undefined, false, 'yes', 1]) {
+    assert.equal(codeOf(() => store.commitGroup(args({ adoptionApproved: approval }))), CODES.adoptionRequired, String(approval));
+  }
+  assert.equal(fileText(store), before, 'a refused commit writes nothing');
+  assert.equal(open(dir).readGroup('form', FORM_KEY).pending.token, token, 'the attempt stays');
+  assert.equal(store.commitGroup(args({ adoptionApproved: true })).records[0].origin, 'adopted');
+
+  const acked = makeTempDir('mb-adopt-acked-');
+  assert.equal(settleForm(open(acked), []).records[0].origin, 'created');
+});

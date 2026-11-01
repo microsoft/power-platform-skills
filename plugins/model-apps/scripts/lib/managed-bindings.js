@@ -48,6 +48,10 @@ const CODES = Object.freeze({
   writeFailed: 'managed-binding-write-failed',
   notSettled: 'managed-not-settled',
   completion: 'create-completion-required',
+  // A root whose create no answer acknowledged, offered for a group not yet committed, without the feature's typed
+  // adoption approval: a fresh read that proves the content shows what the row is, not that the maker agreed to
+  // manage it.
+  adoptionRequired: 'managed-adoption-required',
 });
 
 const FAMILIES = ['form', 'dashboard', 'rule', 'bpf', 'view', 'chart'];
@@ -707,9 +711,12 @@ function openManagedBindings({ workspaceDir, environment, appUniqueName, solutio
      * Replace the whole group of the attempt `token` with the observed complete set, remove the attempt, and bump the
      * revision — one atomic write. Records the old group held that this set omits are kept (removing a declaration
      * never forgets a row). A record whose id differs from the one the group or the expected proof holds, or an
-     * expected child the set lacks, is `create-completion-required`: no substitute is bound.
+     * expected child the set lacks, is `create-completion-required`: no substitute is bound. A group not yet committed
+     * whose root create this attempt never had acknowledged is committed only with `adoptionApproved: true` — the
+     * feature's own typed adoption approval, never inferred here — and is otherwise `managed-adoption-required`,
+     * nothing written and the attempt kept.
      */
-    commitGroup({ token, baseGeneration, records, proof, consumerState, publication = null, proofSchema }) {
+    commitGroup({ token, baseGeneration, records, proof, consumerState, publication = null, proofSchema, adoptionApproved = false }) {
       // The proposal is checked whole before anything else: a list that repeats a (kind, key) or an id must be refused,
       // not folded into a map where the last record silently wins, and a proof must carry every field it promises.
       try {
@@ -741,6 +748,11 @@ function openManagedBindings({ workspaceDir, environment, appUniqueName, solutio
         // they are, and no other attempt's effects are read or touched.
         if (effects.some((e) => e.state !== 'confirmed')) throw storeError(CODES.pending, `the managed ${a.family} "${a.key}" has a workflow effect that is not confirmed`);
         const old = env.groups.find((g) => g.family === a.family && g.key === a.key) || null;
+        const acknowledged = a.acknowledgedRoot || !!(a.savedObservation && a.savedObservation.acknowledgedRoot);
+        // Strictly `true`: a truthy flag computed carelessly ('yes', 1) must not stand in for the maker's approval.
+        if (!old && !acknowledged && adoptionApproved !== true) {
+          throw storeError(CODES.adoptionRequired, `the managed ${a.family} "${a.key}" root was never acknowledged as created; binding it needs its adoption approval`);
+        }
         const merged = [];
         const byKey = new Map();
         for (const rec of records || []) byKey.set(`${rec.kind}\u0000${rec.key}`, rec);
@@ -754,7 +766,6 @@ function openManagedBindings({ workspaceDir, environment, appUniqueName, solutio
           merged.push({ ...next, origin: rec.origin === 'adopted' ? 'adopted' : next.origin });
           byKey.delete(k);
         }
-        const acknowledged = a.acknowledgedRoot || !!(a.savedObservation && a.savedObservation.acknowledgedRoot);
         for (const rec of byKey.values()) {
           // A new record claims `created` only on this attempt's acknowledged create; a lost answer needs adoption.
           if (rec.origin === 'created' && !acknowledged) throw storeError(CODES.completion, `the managed ${a.family} "${a.key}" cannot record ${rec.kind} "${rec.key}" as created without an acknowledged create`);
