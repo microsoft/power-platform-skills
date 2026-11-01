@@ -11,7 +11,7 @@ const { makeTempDir } = require('./helpers/temp-dirs.js');
 const { createWorkflowWire, ORIGIN } = require('./helpers/workflow-wire.js');
 const { createMakerSdk, createNodeWorkspaceStorage } = require('../vendor/cds-maker-sdk.cjs');
 const { createAzHttpClient } = require('../lib/sdk-http-client.js');
-const { openManagedBindings, CODES } = require('../lib/managed-bindings.js');
+const { openManagedBindings, classifyPersisted, CODES } = require('../lib/managed-bindings.js');
 const { createWorkflowEffectGate } = require('../lib/workflow-effect-context.js');
 const { createPublicationBarrier } = require('../lib/publication-barrier.js');
 const { createIntentCatalog } = require('../lib/creates-catalog.js');
@@ -138,6 +138,10 @@ test('by default an edit of a managed rule is refused before any request (workfl
     assert.equal(out.error.retry, RETRY.NEVER);
     assert.deepEqual(wire.log.slice(out.from), [], 'no request at all');
   }
+  // An adoption approval lets the rule be read (a re-adoption may be what it asks for), but an edit is still refused, unsent.
+  const approved = await settle(wire, dir, withCondition(RULE, 'B'), { approvals: approve() });
+  assert.equal(approved.error && approved.error.code, 'workflow-edit-refused');
+  assert.deepEqual(writesSince(wire, approved.from), []);
   assert.deepEqual(store.readGroup('rule', 'account/Hide fax').committed, before);
 });
 
@@ -227,6 +231,19 @@ test('with the switch, an Active rule is edited as Draft, body, Active: three wr
   assert.equal(next.result.noop, true);
 });
 
+test('with the switch, a version that moves between the version read and the body read is rule-drift; nothing is sent', async () => {
+  const { wire, dir, id } = await created({ ...RULE, status: 'Draft' });
+  // Another writer touches the row (its body unchanged) between this build's two reads.
+  let bumped = false;
+  wire.script((e) => {
+    if (!bumped && e.method === 'GET' && /RetrieveProcess/.test(e.path)) { bumped = true; wire.row(id).version += 1; }
+    return false;
+  }, null);
+  const out = await settle(wire, dir, withCondition({ ...RULE, status: 'Draft' }, 'C'), { opts: SWITCH });
+  assert.equal(out.error && out.error.code, 'rule-drift');
+  assert.deepEqual(writesSince(wire, out.from), []);
+});
+
 test('an enforcing service refuses a stale edit (412) and keeps the competing body; the non-enforcing control would overwrite it', async () => {
   const competing = async (enforceIfMatch) => {
     const wire = createWorkflowWire({ enforceIfMatch });
@@ -297,17 +314,37 @@ test('a 503 to a create the service did carry out is proved by the read, not res
 test('a failed or lost activation never deletes the created rule', async () => {
   const refused = { statusCode: 400, body: { error: { code: '0x80040203', message: 'invalid' } }, unapplied: true };
   const lost = { error: 'socket hang up', code: 'ECONNRESET', unapplied: true };
-  for (const [answer, code] of [[refused, 'workflow-state-path-unavailable'], [lost, CODES.pending]]) {
+  for (const [answer, code, rerunWrites] of [[refused, 'workflow-state-path-unavailable', ['PATCH']], [lost, CODES.pending, []]]) {
     const wire = createWorkflowWire();
+    const dir = makeTempDir('rule-settle-');
     wire.script((e) => e.method === 'PATCH', answer);
-    const out = await settle(wire, makeTempDir('rule-settle-'), RULE);
+    const out = await settle(wire, dir, RULE);
     assert.equal(out.error && out.error.code, code);
     assert.deepEqual(writesSince(wire, out.from).map((e) => e.method), ['POST', 'PATCH'], 'the activation is sent once');
     assert.deepEqual(wire.deleted, []);
     assert.equal(wire.rows.size, 1);
+    // A refused activation was never started, so the next run sends it once more under its own record; a lost one may
+    // have been carried out, so it is never sent again and the attempt waits for a read that proves it.
+    const again = await settle(wire, dir, RULE);
+    assert.deepEqual(writesSince(wire, again.from).map((x) => x.method), rerunWrites);
+    if (rerunWrites.length) assert.equal(again.result && again.result.recovered, true);
+    else assert.equal(again.error && again.error.code, CODES.pending);
   }
 });
 
+test('a rule never claims a publication scope, committed, pending or uncertain, so a table publish never covers or waits on it', async () => {
+  // A table publish covers every store unit whose scopes include its table (classifyPersisted). A rule has no layer to
+  // publish, so no sibling publish may need a layer reader for it or be blocked by an unproved rule write.
+  const scopesOf = (store) => store.snapshot().units().filter((u) => u.family === 'rule').map((u) => ({ kind: classifyPersisted(u).kind, scopes: classifyPersisted(u).targets.scopes }));
+  const { store } = await created();
+  assert.deepEqual(scopesOf(store), [{ kind: 'settled', scopes: [] }]);
+  assert.equal(store.readGroup('rule', 'account/Hide fax').committed.publication, null);
+  const wire = createWorkflowWire();
+  wire.script((e) => e.method === 'PATCH', { error: 'socket hang up', code: 'ECONNRESET', unapplied: true });
+  const lost = await settle(wire, makeTempDir('rule-settle-'), RULE);
+  assert.equal(lost.error && lost.error.code, CODES.pending);
+  assert.deepEqual(scopesOf(lost.p.store), [{ kind: 'uncertain', scopes: [] }]);
+});
 test('availability: only a confirmed switched-off refusal of the create, with no row read back, skips the rule', async () => {
   const off = { statusCode: 400, body: { error: { code: '0x80040216', message: 'Business rules are not enabled' } } };
   const wire = createWorkflowWire();
