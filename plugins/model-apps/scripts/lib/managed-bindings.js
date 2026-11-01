@@ -1557,6 +1557,24 @@ function openManagedBindings({ workspaceDir, environment, appUniqueName, solutio
         e.state = 'confirmed';
       });
     },
+    /**
+     * A state change this attempt never sent (definitely-unsent, no dispatch token) whose desired state a fresh read
+     * finds already on its row, put there by someone else: there is nothing left to send and nothing of this attempt's
+     * to prove, so the record is dropped rather than confirmed (a confirmed effect claims a dispatch). Only a state
+     * effect: a body is never settled this way. The caller has proved, from the same read, that the row carries exactly
+     * the attempt's own body; the store cannot see the row.
+     */
+    retireMootEffect(token, { observedState } = {}) {
+      mutate((env) => {
+        const i = env.workflowEffects.findIndex((x) => x.token === token);
+        const e = i < 0 ? null : env.workflowEffects[i];
+        if (!e || e.effect !== 'state' || e.state !== 'definitely-unsent' || e.dispatchToken !== null) {
+          throw storeError(CODES.notSettled, 'only a state change that was never sent can be settled without sending it');
+        }
+        if (observedState !== e.desiredState) throw storeError(CODES.notSettled, 'the observed workflow row is not in the state the change asks for');
+        env.workflowEffects.splice(i, 1);
+      });
+    },
     // The barrier operations, forwarded so one handle carries the whole contract of a managed feature.
     registerKnown(scopes, ids) { return needBarrier().registerKnown(scopes, ids); },
     hold(token, scopes, ids, label) { return needBarrier().hold(token, scopes, ids, label); },

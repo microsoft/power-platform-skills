@@ -319,6 +319,26 @@ test('a rule and a process flow settle with confirmed create and state effects, 
   assert.deepEqual(reopened.envelope.workflowEffects, [], 'no effect outlives its attempt');
 });
 
+test('a state change never sent, whose state a read already finds on the row, is dropped; a body or a dispatched change is not', () => {
+  const dir = makeTempDir('mb-moot-');
+  const store = open(dir);
+  const { token, create, state } = settleRule(store, 'account/hide', RULE, { confirm: false });
+  assert.equal(codeOf(() => store.retireMootEffect(create.token, { observedState: 'Active' })), CODES.notSettled, 'a body is never settled without its proof');
+  assert.equal(codeOf(() => store.retireMootEffect(state.token, { observedState: 'Draft' })), CODES.notSettled, 'the row is not in the asked state');
+  store.markEffectDispatching(create.token, 'dispatch-create');
+  store.confirmEffect(create.token, { observedSha256: H('7') });
+  store.retireMootEffect(state.token, { observedState: 'Active' });
+  assert.deepEqual(store.snapshot().envelope.workflowEffects.map((e) => e.effect), ['create']);
+  store.noteSaved(token, { proof: null, acknowledgedRoot: true });
+  store.commitGroup({ token, baseGeneration: null, records: [rec('business-rule', 'account/hide', RULE)], proof: PROOF, consumerState: { declaration: {}, slots: ['clause_a'] }, publication: null });
+  assert.deepEqual(open(dir).snapshot().envelope.workflowEffects, []);
+
+  const other = open(makeTempDir('mb-moot-sent-'));
+  const sent = settleRule(other, 'account/hide', RULE, { confirm: false });
+  other.markEffectDispatching(sent.state.token, 'dispatch-state');
+  assert.equal(codeOf(() => other.retireMootEffect(sent.state.token, { observedState: 'Active' })), CODES.notSettled, 'a change that may have left is confirmed, not dropped');
+});
+
 test('an interruption before the replace keeps the attempt and its whole effect set; after it, no retired owner is left', () => {
   const dir = makeTempDir('mb-retire-crash-');
   const store = open(dir);
