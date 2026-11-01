@@ -31,11 +31,12 @@
 // Nothing here publishes: a business rule has no PublishXml scope (its activation is the state change above).
 
 const { canonicalJson, intentSha256, normalizeGuid, isApproved } = require('./reconcile-common.js');
-const { runManagedFeature, withWorkflowEffect } = require('./managed-feature-contract.js');
-const { requestBodySha256, runWithWorkflowEffect } = require('./workflow-effect-context.js');
+const { runManagedFeature } = require('./managed-feature-contract.js');
+const { requestBodySha256 } = require('./workflow-effect-context.js');
 const { identityFor } = require('./creates-catalog.js');
 const { CODES } = require('./managed-bindings.js');
 const { HTTP_SEND_HISTORY } = require('./sdk-http-client.js');
+const { createWorkflowDriver, isDefiniteRefusal, causeChain, leavesOutcomeOpen, coded, ACTIVE, DRAFT } = require('./workflow-drive.js');
 
 // sdk-build is required lazily: it is the module that will call this one, so a top-level require would be a cycle.
 const sdkBuild = () => require('./sdk-build.js');
@@ -339,21 +340,12 @@ const FAMILY = 'rule';
 const ROOT_KIND = 'business-rule';
 const ARTIFACT = 'businessRule';
 const PROOF_SCHEMA = 'business-rule/declared-1';
-const ACTIVE = 'Active';
-const DRAFT = 'Draft';
-// The state-only body of each workflow state. The effect gate accepts exactly these pairs for a state effect.
-// See: https://learn.microsoft.com/en-us/power-apps/developer/data-platform/reference/entities/workflow#statecode-choicesoptions
-const STATE_BODY = { Draft: { statecode: 0, statuscode: 1 }, Active: { statecode: 1, statuscode: 2 } };
 const EDIT_REFUSED_REMEDY = 'A declared rule can be created and adopted read-only; editing one that already exists stays off until '
   + 'conditional writes are enabled, because a local lock cannot stop another session changing the rule between the read and the write. '
   + 'Change the rule in the maker, then re-adopt it with a declaration that names its whole body.';
 const SKIP = Symbol('rule-settlement.skip');
 const BUSINESS_RULE_MEMBER = 'Microsoft.Dynamics.CRM.CreateProcessWithWfomJson';
 const SWITCHED_OFF_CODE = '0x80040216';
-
-function coded(code, message, extra = {}) {
-  return Object.assign(new Error(message), extra, { code });
-}
 
 const clone = (v) => (v === undefined ? undefined : JSON.parse(JSON.stringify(v)));
 const tableOf = (rule) => lc(rule && rule.entity);
@@ -561,25 +553,10 @@ function lengthsBefore(editedRoot, slotsBefore, rule) {
 //   Error 'HTTP 400 from <url>: …' { code: 'CONNECTION_ERROR', statusCode: 400, url, cause: <the response body> }
 // and the plugin's client marks that body with HTTP_SEND_HISTORY ({ sends, earlierAmbiguous }).
 
-function causeChain(err) {
-  const chain = [];
-  for (let e = err; e && typeof e === 'object' && chain.length < 6 && !chain.includes(e); e = e.cause) chain.push(e);
-  return chain;
-}
-
 function isBusinessRuleMemberUrl(url) {
   let pathname;
   try { pathname = new URL(String(url), 'https://placeholder.invalid').pathname; } catch { return false; }
   return pathname.endsWith(`/${BUSINESS_RULE_MEMBER}`);
-}
-
-// An answer that leaves the outcome open (no answer, a 5xx, a success the SDK could not use, an unknown outcome).
-function leavesOutcomeOpen(chain) {
-  return chain.some((e) => {
-    const status = e.statusCode != null ? e.statusCode : e.status;
-    return e.outcome === 'unknown' || /outcome[-_ ]?unknown/i.test(String(e.code || '')) || e.code === 'BUSINESS_RULE_LEFT_DEACTIVATED'
-      || (Number.isInteger(status) && (status === 0 || status >= 500 || (status >= 200 && status < 300)));
-  });
 }
 
 function isConfirmedBusinessRuleRefusal(err) {
@@ -599,23 +576,6 @@ function isAvailabilityRefusal(err) {
   const chain = causeChain(err);
   if (chain.some((e) => e.code === 'BUSINESS_RULE_LEFT_DEACTIVATED')) return false;
   return chain.some((e) => e.code === 'BUSINESS_RULE_API_UNAVAILABLE') || isConfirmedBusinessRuleRefusal(err);
-}
-
-/**
- * A 4xx answer to the first send of this request (not a timeout, not throttling) that leaves nothing open: the
- * write did not start. Anything else may have started, and is proved by reading, never by sending again.
- */
-function isDefiniteRefusal(err) {
-  const chain = causeChain(err);
-  if (leavesOutcomeOpen(chain)) return false;
-  const answered = chain.find((e) => {
-    const status = e.statusCode != null ? e.statusCode : e.status;
-    return Number.isInteger(status) && status >= 400 && status < 500 && status !== 408 && status !== 429;
-  });
-  if (!answered) return false;
-  if (answered.statusCode === 412 || answered.status === 412) return true;
-  const history = answered.cause && typeof answered.cause === 'object' ? answered.cause[HTTP_SEND_HISTORY] : null;
-  return Boolean(history) && history.earlierAmbiguous === false;
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -654,19 +614,11 @@ async function settleDeclaredRule(input) {
   });
   const run = { token: null, committed: null };
 
-  // ----- reads. The version is read BEFORE the body, so a write that lands between the two leaves the version
-  // stale: the conditional write that carries it is refused rather than overwriting a body this run never proved.
-  async function readVersion(id) {
-    let rows;
-    try {
-      rows = await sdk.queryRecords('workflow', { select: ['workflowid', 'statecode', 'statuscode'], filter: `workflowid eq ${id}` });
-    } catch (err) {
-      throw coded(CODES.notSettled, `${label}: the workflow row ${id} could not be read`, { cause: err });
-    }
-    const row = (rows || []).find((r) => normalizeGuid(r.workflowid) === id);
-    if (!row) return null;
-    return { version: row['@odata.etag'] || null, state: Number(row.statecode) === 1 ? ACTIVE : DRAFT };
-  }
+  // ----- reads and writes (lib/workflow-drive.js): the version is read before the body, every write is sent once inside
+  // its persisted effect, and an unproved write is proved by reading, never sent again.
+  const { readVersion, attemptOf, effectOf, sendOnce, noteNoStart, driveState } = createWorkflowDriver({
+    store, sdk, httpClient, instanceUrl, family: FAMILY, key, label, noun: 'rule', driftCode: 'rule-drift',
+  });
   async function readBody(id) {
     try {
       await sdk.fetchArtifact(ARTIFACT, id, { overwrite: true });
@@ -723,62 +675,6 @@ async function settleDeclaredRule(input) {
       baseObservation: live ? { rowVersion: live.version || null, savedSha256: savedShaOf(live.view.projection, live.view.status) } : null,
       children: [],
     };
-  }
-
-  // ----- effects.
-  function attemptOf(token) {
-    const { pending, effects } = store.readGroup(FAMILY, key);
-    if (!pending || pending.token !== token) throw coded(CODES.notSettled, `${label}: its attempt is not pending`);
-    return { attempt: pending, effects: effects.filter((e) => e.attemptToken === token) };
-  }
-  function effectOf(token, pick) {
-    return attemptOf(token).effects.filter(pick).pop() || null;
-  }
-  // Send one write inside its effect context: a stored record (definitely-unsent) is sent under that record, else a
-  // new record is persisted first. Answers the error the write ended with, or null; never throws a write failure.
-  async function sendOnce(token, stored, effect, write) {
-    try {
-      const res = stored ? await runWithWorkflowEffect(stored, () => write()) : await withWorkflowEffect({ store, effect: { attemptToken: token, baseGeneration: attemptOf(token).attempt.baseGeneration, family: FAMILY, key, ...effect } }, () => write());
-      if (res && res.saved === false) return res.error || coded(CODES.notSettled, 'the SDK reported the write as not saved');
-      if (res && Number.isInteger(res.status) && (res.status < 200 || res.status >= 300)) return Object.assign(new Error(`HTTP ${res.status}`), { statusCode: res.status, cause: res.body });
-      return null;
-    } catch (err) {
-      return err;
-    }
-  }
-  // A write the server refused before it started: its effect may be sent again under its own record.
-  function noteNoStart(effect) {
-    if (effect.state === 'dispatching' || effect.state === 'unconfirmed') store.noteEffectOutcome(effect.token, 'definite-no-start');
-  }
-  const sendState = (id, state, version) => () => (version
-    ? httpClient.patch(`${String(instanceUrl).replace(/\/+$/, '')}/api/data/v9.2/workflows(${id})`, STATE_BODY[state], { headers: { 'If-Match': version } })
-    : sdk.updateRecord('workflow', id, STATE_BODY[state]));
-
-  /**
-   * Bring this attempt's row to `state` with one state effect, proved by reading. An effect already dispatched is
-   * proved, never sent again; a definitely-unsent one is sent under its own record.
-   */
-  async function driveState(token, id, state, version, { conditional }) {
-    let effect = effectOf(token, (e) => e.effect === 'state' && e.desiredState === state);
-    let failure = null;
-    if (!effect || effect.state === 'definitely-unsent') {
-      if (conditional && !version) throw coded('rule-drift', `${label}: no row version was read, so a conditional state change cannot be sent`);
-      failure = await sendOnce(token, effect, {
-        rowId: id, effect: 'state', request: { method: 'PATCH', shape: 'workflow-patch' }, desiredSha256: null, desiredState: state, expectedVersion: version || null,
-      }, sendState(id, state, version));
-      effect = effectOf(token, (e) => e.effect === 'state' && e.desiredState === state);
-    }
-    if (effect.state === 'confirmed') return;
-    const row = await readVersion(id);
-    if (row && row.state === state) { store.confirmEffect(effect.token, { observedState: state }); return; }
-    if (effect.state === 'definitely-unsent') {
-      throw coded('rule-drift', `${label}: the rule changed on the server after it was read, so setting it ${state} was refused; it is not retried`, { cause: failure });
-    }
-    if (failure && isDefiniteRefusal(failure)) {
-      noteNoStart(effect);
-      throw coded('workflow-state-path-unavailable', `${label}: setting the rule ${state} was refused (${failure.message}); the row is kept as it is and nothing is deleted`, { cause: failure });
-    }
-    throw coded(CODES.pending, `${label}: setting the rule ${state} is not proved yet; it is not sent again. Re-run the build to prove it`, { cause: failure });
   }
 
   /** The Draft create of this attempt's own row, then its own activation. */
@@ -1014,11 +910,16 @@ async function settleDeclaredRule(input) {
     }
     // An edit: every write it dispatched is proved by the row as it is now, or the attempt stays pending.
     const live = await readLive(id);
-    if (live.missing || savedShaOf(live.view.projection, live.view.status) !== expected.sentProjectionSha256) {
+    // The status the edit was meant to end in, when the row as it is now carries exactly what was sent. A row that
+    // carries the sent body but is still Draft is an edit stopped between its body and its own activation.
+    const target = live.missing ? null : statusFor(expected, live.view.projection);
+    if (target === null || (target !== live.view.status && target !== ACTIVE)) {
       throw coded(CODES.pending, `${label}: an earlier edit of this rule is not proved by the row as it is now; it is not sent again`);
     }
     for (const e of effects) {
       if (e.state === 'confirmed') continue;
+      // The edit's own activation is finished below (driveState sends it only when it is definitely unsent).
+      if (e.effect === 'state' && e.desiredState === ACTIVE && live.view.status !== ACTIVE) continue;
       if (e.state === 'definitely-unsent') throw coded(CODES.pending, `${label}: an earlier edit of this rule has a write that was never sent`);
       if (e.effect === 'state') {
         if (e.desiredState === live.view.status) store.confirmEffect(e.token, { observedState: e.desiredState });
@@ -1027,6 +928,9 @@ async function settleDeclaredRule(input) {
         store.confirmEffect(e.token, { observedSha256: e.desiredSha256 });
       }
     }
+    // The body is on the row and proved; only the edit's own activation is missing. It is sent (once, against the
+    // version of this read) when it never left; one that may have left is proved by reading, never sent again.
+    if (target === ACTIVE && live.view.status !== ACTIVE) await driveState(token, id, ACTIVE, live.version, { conditional: true });
     // A Draft state effect the row has since left (the edit's own Active) is proved by the later Active write.
     for (const e of attemptOf(token).effects) {
       if (e.state !== 'confirmed' && e.effect === 'state' && e.desiredState === DRAFT) {

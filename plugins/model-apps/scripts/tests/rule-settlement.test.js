@@ -145,7 +145,7 @@ test('by default an edit of a managed rule is refused before any request (workfl
   assert.deepEqual(store.readGroup('rule', 'account/Hide fax').committed, before);
 });
 
-test('Q2: a maker copy of the bound clause plus a change to the original is rule-drift; the switch-on edit sends nothing', async () => {
+test('a maker copy of the bound clause plus a change to the original is rule-drift; the switch-on edit sends nothing', async () => {
   const { wire, dir, id } = await created();
   await makerEdit(wire, id, (root) => {
     const copy = { ...root.clauses[0], id: 'maker-copy' };
@@ -160,7 +160,7 @@ test('Q2: a maker copy of the bound clause plus a change to the original is rule
   assert.equal(wire.row(id).wfom, before);
 });
 
-test('Q3: stored [A], live [B, A]: the slot no longer names the bound clause, so the switch-on edit is rule-drift with no write', async () => {
+test('stored [A], live [B, A]: the slot no longer names the bound clause, so the switch-on edit is rule-drift with no write', async () => {
   const { wire, dir, id } = await created();
   await makerEdit(wire, id, (root) => {
     const b = { ...root.clauses[0], id: 'maker-b', value: 'B' };
@@ -276,6 +276,34 @@ test('an enforcing service refuses a stale edit (412) and keeps the competing bo
   assert.equal(control.wire.row(control.id).description, '', 'a service that ignores the version loses the competing body');
 });
 
+test('an edit stopped between its body and its own activation is finished by a re-run: a refused activation is sent once more, a lost one is only read', async () => {
+  for (const answer of [{ statusCode: 400, body: { error: { code: '0x80040203', message: 'busy' } }, unapplied: true }, { error: 'socket hang up', code: 'ECONNRESET', unapplied: true }]) {
+    const refused = Boolean(answer.statusCode);
+    const { wire, dir, id } = await created();
+    let bodySeen = false;
+    wire.script((e) => {
+      if (/UpdateProcess/.test(e.path)) bodySeen = true;
+      return bodySeen && e.method === 'PATCH' && e.body && e.body.statecode === 1;
+    }, answer);
+    const first = await settle(wire, dir, withCondition(RULE, 'C'), { opts: SWITCH });
+    assert.equal(first.error && first.error.code, refused ? 'workflow-state-path-unavailable' : CODES.pending);
+    assert.equal(wire.row(id).statecode, 0, 'left Draft with the new body');
+    assert.match(wire.row(id).wfom, /"C"/);
+
+    const again = await settle(wire, dir, withCondition(RULE, 'C'), { opts: SWITCH });
+    if (refused) {
+      assert.ifError(again.error);
+      assert.equal(again.result.recovered, true);
+      const writes = writesSince(wire, again.from);
+      assert.deepEqual(writes.map((e) => e.body), [{ statecode: 1, statuscode: 2 }], 'only the activation, sent once more');
+      assert.equal(ifMatchOf(writes[0]), `W/"${wire.row(id).version - 1}"`, 'against the version just read');
+      assert.equal(wire.row(id).statecode, 1);
+    } else {
+      assert.equal(again.error && again.error.code, CODES.pending, 'a lost activation is never sent again');
+      assert.deepEqual(writesSince(wire, again.from), []);
+    }
+  }
+});
 test('a create whose answer is lost is never sent again: it stays pending until a read proves it, then settles in a fresh process', async () => {
   const wire = createWorkflowWire();
   const dir = makeTempDir('rule-settle-');
@@ -382,7 +410,7 @@ test('availability: only a confirmed switched-off refusal of the create, with no
   assert.equal(unknown.error && unknown.error.code, CODES.pending);
 });
 
-test('Q5: an edit interrupted before its commit leaves the committed group as it was; only the same declaration finishes it, without a resend', async () => {
+test('an edit interrupted before its commit leaves the committed group as it was; only the same declaration finishes it, without a resend', async () => {
   const { wire, dir, store } = await created();
   const before = store.readGroup('rule', 'account/Hide fax').committed;
   const failing = async () => { throw new Error('solution membership failed'); };
