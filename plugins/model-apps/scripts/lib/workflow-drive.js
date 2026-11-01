@@ -22,7 +22,8 @@
 //     See: https://learn.microsoft.com/en-us/power-apps/developer/data-platform/webapi/perform-conditional-operations-using-web-api
 
 const { normalizeGuid } = require('./reconcile-common.js');
-const { withWorkflowEffect, editSwitchRequired, existingRowDispatches } = require('./managed-feature-contract.js');
+const contract = require('./managed-feature-contract.js');
+const { editSwitchRequired, existingRowDispatches } = contract;
 const { runWithWorkflowEffect } = require('./workflow-effect-context.js');
 const { CODES } = require('./managed-bindings.js');
 const { hasUnsyncedEdits } = require('./unsynced-edits.js');
@@ -194,14 +195,22 @@ function createWorkflowDriver({ store, sdk, httpClient = null, instanceUrl = nul
   // Send one write inside its effect context: a stored record (definitely-unsent) is sent under that record, else a
   // new record is persisted first. Answers the error the write ended with, or null; never throws a write failure — but
   // the dispatch gate above throws BEFORE anything is recorded or sent.
+  // The edit switch is passed to the shared `withWorkflowEffect` as a boolean on every new record, so its own check
+  // (editSwitchRequired, `workflow-edit-refused` before recording) backs this module's stricter gate. A stored record is
+  // replayed with `runWithWorkflowEffect`, which takes no switch: on that path assertDispatchAllowed is the check.
+  // It is called through the module object so a test can observe the switch each call carries.
   async function sendOnce(token, stored, effect, write) {
     assertDispatchAllowed(token, stored || effect);
     try {
-      const res = stored ? await runWithWorkflowEffect(stored, () => write()) : await withWorkflowEffect({ store, effect: { attemptToken: token, baseGeneration: attemptOf(token).attempt.baseGeneration, family, key, ...effect } }, () => write());
+      const res = stored ? await runWithWorkflowEffect(stored, () => write())
+        : await contract.withWorkflowEffect({ store, workflowConditionalEdits: conditionalEdits === true, effect: { attemptToken: token, baseGeneration: attemptOf(token).attempt.baseGeneration, family, key, ...effect } }, () => write());
       if (res && res.saved === false) return res.error || coded(CODES.notSettled, 'the SDK reported the write as not saved');
       if (res && Number.isInteger(res.status) && (res.status < 200 || res.status >= 300)) return Object.assign(new Error(`HTTP ${res.status}`), { statusCode: res.status, cause: res.body });
       return null;
     } catch (err) {
+      // The shared gate's refusal happens before anything is recorded or sent: it is a refusal of the run, not an
+      // answer of the write.
+      if (err && err.code === 'workflow-edit-refused') throw err;
       return err;
     }
   }

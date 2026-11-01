@@ -257,6 +257,20 @@ test('a same-name rule the plugin does not manage needs adopt approval and a who
   assert.deepEqual(committed.records.map((r) => [r.id, r.origin]), [[seed.id, 'adopted']]);
 });
 
+test('every new workflow effect carries the edit switch to the shared gate as a boolean', async (t) => {
+  const contract = require('../lib/managed-feature-contract.js');
+  const real = contract.withWorkflowEffect;
+  const seen = [];
+  contract.withWorkflowEffect = (args, fn) => { seen.push([args.effect.effect, args.workflowConditionalEdits]); return real(args, fn); };
+  t.after(() => { contract.withWorkflowEffect = real; });
+  const { wire, dir } = await created();
+  assert.deepEqual(seen, [['create', false], ['state', false]], 'a default create and its activation: the switch is off');
+  seen.length = 0;
+  const edit = await settle(wire, dir, withCondition(RULE, 'C'), { opts: SWITCH });
+  assert.ifError(edit.error);
+  assert.deepEqual(seen, [['state', true], ['body', true], ['state', true]], 'Draft, body, Active: each with the switch on');
+});
+
 test('with the switch, an Active rule is edited as Draft, body, Active: three writes, each carrying the version its read returned', async () => {
   const { wire, dir, id } = await created();
   const out = await settle(wire, dir, withCondition(RULE, 'C'), { opts: SWITCH });

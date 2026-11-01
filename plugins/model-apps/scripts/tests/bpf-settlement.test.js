@@ -600,6 +600,21 @@ test('a linear flow whose control steps are renamed, unnamed or indented is stil
   }
 });
 
+test('every new workflow effect carries the edit switch to the shared gate as a boolean', async (t) => {
+  const contract = require('../lib/managed-feature-contract.js');
+  const real = contract.withWorkflowEffect;
+  const seen = [];
+  contract.withWorkflowEffect = (args, fn) => { seen.push([args.effect.effect, args.workflowConditionalEdits]); return real(args, fn); };
+  t.after(() => { contract.withWorkflowEffect = real; });
+  const { wire, dir } = await created();
+  assert.deepEqual(seen, [['create', false], ['state', false]], 'a default create and its activation: the switch is off');
+  seen.length = 0;
+  const edit = await settle(wire, dir, { ...FLOW, order: 124 }, { opts: SWITCH });
+  assert.ifError(edit.error);
+  assert.ok(seen.length, 'the edit records effects');
+  assert.ok(seen.every(([, on]) => on === true), `with the switch on, each effect says so: ${JSON.stringify(seen)}`);
+});
+
 test('a create that failed on this side before any request is sent again under its own token: continued with the send observer, resumed without it', async () => {
   const clean = createWorkflowWire();
   const fresh = await settle(clean, makeTempDir('bpf-settle-'), FLOW);
