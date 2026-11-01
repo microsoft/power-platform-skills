@@ -2703,7 +2703,11 @@ const IMAGE_WR_TYPES = new Set([5, 6, 7, 10, 11]);
 //   any path-derived WR (an unknown non-'new' prefix would BuildHalt on a fresh env) but we PROBE every
 //   customRef and surface each genuine CUSTOM (unmanaged image) one as `unresolved` — a managed/OOB/absent
 //   ref is a system icon present in every env, so it stays silent (no false alarm).
-async function iconWebResources(sdk, icons, customRefs, ownPrefix, prefixResolved, navRefs, tableRefs) {
+//
+// `onRead(name, row, failed)` — optional; told what each PASS-1 read returned (`row` undefined when no row came back,
+//   `failed` true when the read threw), so a caller that needs a stricter answer than `unresolved` (the theme logo's
+//   classifyThemeLogo) can have it without reading the resource twice. It changes nothing this helper returns.
+async function iconWebResources(sdk, icons, customRefs, ownPrefix, prefixResolved, navRefs, tableRefs, onRead) {
   const out = [];
   const seen = new Set();                 // lowercased names actually re-declared into `out`
   const prefixLc = ownPrefix ? String(ownPrefix).toLowerCase() + '_' : null;
@@ -2733,8 +2737,11 @@ async function iconWebResources(sdk, icons, customRefs, ownPrefix, prefixResolve
     // TRUSTED prefix: only an OWN-prefix ref is a candidate; a foreign/OOB ref is left as a bare reference
     // (never queried). UNTRUSTED prefix: fall through and probe EVERY ref to classify it (see below).
     if (prefixResolved && !ownScoped) continue;
+    let read = false;
     try {
       const wr = await queryWr(name);
+      read = true;
+      if (onRead) onRead(name, wr, false);
       if (!prefixResolved) {
         // Unverified prefix — classify only, NEVER re-declare (an unknown non-'new' prefix would BuildHalt).
         // Flag a genuine custom icon as a candidate so a transient recovery failure degrades to a warning,
@@ -2750,7 +2757,7 @@ async function iconWebResources(sdk, icons, customRefs, ownPrefix, prefixResolve
       if (wr.ismanaged === true || (allowed && !allowed.has(wr.webresourcetype))) continue;   // managed / wrong type → leave as a bare reference
       seen.add(key);
       out.push({ name, ...(wr.displayname ? { displayName: wr.displayname } : {}), type: WR_TYPE[wr.webresourcetype] || 'png', contentBase64: wr.content, external: true });
-    } catch { candidateUnresolved.set(key, name); /* read failure → candidate (surface unless a bare pass resolves it) */ }
+    } catch { if (onRead && !read) onRead(name, undefined, true); candidateUnresolved.set(key, name); /* read failure → candidate (surface unless a bare pass resolves it) */ }
   }
 
   // PASS 2 — author-declared BARE names. A bare name MUST be re-declared (validation requires a bare icon
@@ -2776,6 +2783,30 @@ async function iconWebResources(sdk, icons, customRefs, ownPrefix, prefixResolve
   // overlapping name — that resolves it, so it must not also warn). Dedup preserved by the Map key.
   const unresolved = [...candidateUnresolved].filter(([key]) => !seen.has(key)).map(([, name]) => name);
   return { webResources: out, unresolved };
+}
+
+// The theme's header logo, as a strict download must classify it — three ways, each one established, never inferred:
+//   exported     — this publisher's own unmanaged image with content: iconWebResources re-declared it `external: true`;
+//   reference    — POSITIVELY another publisher's (the app's publisher prefix is known and the name is outside it) or
+//                  managed (read, with content, `ismanaged: true`): left as a bare reference, as such a navigation icon is;
+//   unexportable — anything else: unread, gone, empty, or a resource not known to be another publisher's or managed.
+// Absence from iconWebResources' `unresolved` list is NOT evidence of "reference": with an unverified publisher prefix
+// that helper deliberately stays silent about a missing row, an empty image or an unstated management flag (for a
+// navigation icon that state is most likely a system icon, and a warning would be a false alarm). A theme logo the spec
+// names but does not carry has no such benign reading: a rebuild into a fresh environment refuses the theme for it.
+// `read` is what the helper's single read returned ({ row, failed }), or undefined when it made none.
+function classifyThemeLogo(themeLogo, trustedPrefix, logoExport, read) {
+  const key = String(themeLogo).toLowerCase();
+  if (logoExport.webResources.some((wr) => wr.name.toLowerCase() === key)) return { kind: 'exported' };
+  if (trustedPrefix && !key.startsWith(`${String(trustedPrefix).toLowerCase()}_`)) return { kind: 'reference', what: "another publisher's" };
+  if (!read || read.failed) return { kind: 'unexportable', why: 'it could not be read' };
+  const row = read.row;
+  if (!row) return { kind: 'unexportable', why: 'it was not found' };
+  if (!row.content) return { kind: 'unexportable', why: 'it has no content' };
+  if (row.ismanaged === true) return { kind: 'reference', what: 'managed' };
+  return { kind: 'unexportable', why: trustedPrefix
+    ? 'it is not an image this publisher can export'
+    : "the app's publisher could not be verified, so it is neither known to be this publisher's (to export) nor another publisher's or managed (to reference)" };
 }
 
 // Count sitemap subareas hydrateSpec could not round-trip (present in the deployed sitemap but not in
@@ -3021,23 +3052,21 @@ async function runDownload({ sdk, genpage, outDir, appId, appUnique, allowLossy 
   if (themeLogo) {
     const recovered = await recoverAppSolution(sdk, appId);
     const { trustedPrefix } = downloadPublisherPrefix(recovered, appUnique);
-    const logoExport = await iconWebResources(sdk, [], [themeLogo], trustedPrefix || 'new', !!trustedPrefix, [], []);
+    let logoRead;
+    const logoExport = await iconWebResources(sdk, [], [themeLogo], trustedPrefix || 'new', !!trustedPrefix, [], [], (name, row, failed) => { logoRead = { row, failed }; });
     themePreflight = { recovered, logoExport };
-    const key = themeLogo.toLowerCase();
-    if (!logoExport.webResources.some((wr) => wr.name.toLowerCase() === key)) {
-      if (logoExport.unresolved.some((name) => String(name).toLowerCase() === key)) {
-        // This publisher's own logo (or one whose publisher could not be verified) that could not be exported: a rebuild into a
-        // fresh environment would refuse the theme for its missing logo, so the theme is not portable as written.
-        const why = `app.theme: its header logo '${themeLogo}' could not be exported (unread, or its publisher could not be verified)`;
-        if (!allowLossy) return { ok: false, code: 'APP_THEME_LOGO_UNEXPORTABLE', error: `${why} — refusing to write a spec whose theme names an image it does not carry. Pass --allow-lossy-download to write the spec without app.theme.` };
-        process.stderr.write(`WARNING: app.theme was LEFT OUT (APP_THEME_LOGO_UNEXPORTABLE): ${why.replace(/^app\.theme: /, '')}. A build from this spec leaves the app's theme as it is.\n`);
-        appTheme = { write: false };
-        themeLogo = null;
-      } else {
-        // Another publisher's, or managed: left as a bare reference, as such a navigation icon is (re-declaring it would make a
-        // build create a resource under a prefix it does not own). The image must exist where the spec is built.
-        process.stderr.write(`NOTE: app.theme's header logo '${themeLogo}' is another publisher's or managed, so it is referenced, not exported — it must exist in the environment you build into.\n`);
-      }
+    const logoClass = classifyThemeLogo(themeLogo, trustedPrefix, logoExport, logoRead);
+    if (logoClass.kind === 'unexportable') {
+      // A rebuild into a fresh environment would refuse the theme for its missing logo, so the theme is not portable as written.
+      const why = `app.theme: its header logo '${themeLogo}' could not be exported (${logoClass.why})`;
+      if (!allowLossy) return { ok: false, code: 'APP_THEME_LOGO_UNEXPORTABLE', error: `${why} — refusing to write a spec whose theme names an image it does not carry. Pass --allow-lossy-download to write the spec without app.theme.` };
+      process.stderr.write(`WARNING: app.theme was LEFT OUT (APP_THEME_LOGO_UNEXPORTABLE): ${why.replace(/^app\.theme: /, '')}. A build from this spec leaves the app's theme as it is.\n`);
+      appTheme = { write: false };
+      themeLogo = null;
+    } else if (logoClass.kind === 'reference') {
+      // Another publisher's, or managed: left as a bare reference, as such a navigation icon is (re-declaring it would make a
+      // build create a resource under a prefix it does not own). The image must exist where the spec is built.
+      process.stderr.write(`NOTE: app.theme's header logo '${themeLogo}' is ${logoClass.what}, so it is referenced, not exported — it must exist in the environment you build into.\n`);
     }
   }
   const { entities: entityLogicals, icons, customRefs, navRefs } = collectSitemap(app);

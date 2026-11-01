@@ -1429,8 +1429,10 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   incomplete with `APP_THEME_UNVERIFIED` (no re-publish). `--verify` uses the same check and says it is
   API state, not render proof. Theme versions are never deleted and the logo is a reference. Download
   captures the theme only with `--include-capabilities`; strict refusals (unrepresentable theme, missing or
-  non-image logo, an own logo that cannot be exported) happen before any file is written, and an own
-  logo is exported as an `external: true` web resource. `themeReads` is a plugin-only option and is
+  non-image logo, an own logo that cannot be exported, a logo not positively another publisher's or managed)
+  happen before any file is written, and an own logo is exported as an `external: true` web resource. The logo
+  preflight (`classifyThemeLogo`) classifies exported / reference / unexportable from the one logo read; it
+  never reads "not in `iconWebResources`' unresolved list" as "another publisher's or managed". `themeReads` is a plugin-only option and is
   never forwarded to the SDK. Tests: `app-theme*.test.js` (`app-theme-real-bundle.test.js` runs a full
   build over the real SDK with `tests/helpers/app-theme-server.js`).
 - **`scripts/teardown-model-app.js` → `scripts/lib/sdk-teardown.js`** — the first-class, **classifier-safe**

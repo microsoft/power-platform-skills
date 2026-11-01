@@ -641,6 +641,65 @@ test('app.theme: another publisher\'s logo stays a bare reference that must exis
   assert.ok(warnings.some((w) => /referenced, not exported/.test(w)));
 });
 
+// A logo that is not exported is kept as a reference only when it is KNOWN to be another publisher's or managed. When the
+// app's publisher cannot be read, a missing or empty image is neither: the strict download refuses it before writing.
+const publisherUnread = (row) => (sdk) => {
+  const inner = withLogoRow(OWN_LOGO, row)(sdk);
+  return { ...inner, queryRecords: async (set, opts = {}) => {
+    if (set === 'solutioncomponent') throw new Error('solution membership unreadable');
+    return inner.queryRecords(set, opts);
+  } };
+};
+const LOGO_ROW = { name: OWN_LOGO, webresourcetype: 11, content: 'PHN2Zz4=', ismanaged: false };
+for (const [label, row] of [
+  ['an empty unmanaged image', { ...LOGO_ROW, content: '' }],
+  ['an image gone before the export', null],
+  ['a readable image whose management is not stated', { ...LOGO_ROW, ismanaged: undefined }],
+]) {
+  test(`app.theme: publisher unknown, ${label}: a strict download refuses before anything is written, and leaves an earlier spec as it was`, async (t) => {
+    themeAnswer(t, captured({ logo: { webResourceName: OWN_LOGO } }, OWN_LOGO));
+    const { result, directory, warnings } = await download(t, { captureTheme: true, page: true, expectRefusal: true, wrapSdk: publisherUnread(row) }, '2.13.0');
+    assert.equal(result.code, 'APP_THEME_LOGO_UNEXPORTABLE', JSON.stringify(result));
+    assert.match(result.error, /--allow-lossy-download/);
+    assert.deepEqual(filesIn(directory), ['app-spec.json'], 'no page, no new file');
+    assert.deepEqual(JSON.parse(fs.readFileSync(path.join(directory, 'app-spec.json'), 'utf8')), { minimumPluginVersion: '2.13.0' });
+    assert.ok(!warnings.some((w) => /referenced, not exported/.test(w)), 'never called another publisher\'s or managed');
+  });
+  test(`app.theme: publisher unknown, ${label}: --allow-lossy-download leaves the theme out and names the loss`, async (t) => {
+    themeAnswer(t, captured({ logo: { webResourceName: OWN_LOGO } }, OWN_LOGO));
+    const { result, warnings } = await download(t, { captureTheme: true, page: true, allowLossy: true, wrapSdk: publisherUnread(row) });
+    assert.equal(result.spec.app.theme, undefined);
+    assert.ok(!(result.spec.webResources || []).some((wr) => wr.name === OWN_LOGO));
+    assert.ok(warnings.some((w) => /app\.theme was LEFT OUT \(APP_THEME_LOGO_UNEXPORTABLE\)/.test(w)), warnings.join(''));
+  });
+}
+
+test('app.theme: publisher unknown, a readable managed logo stays a reference, and is said to be managed', async (t) => {
+  themeAnswer(t, captured({ logo: { webResourceName: OWN_LOGO } }, OWN_LOGO));
+  const { result, warnings } = await download(t, { captureTheme: true, page: true, wrapSdk: publisherUnread({ ...LOGO_ROW, ismanaged: true }) });
+  assert.deepEqual(result.spec.app.theme, { logo: { webResourceName: OWN_LOGO } });
+  assert.ok(!(result.spec.webResources || []).some((wr) => wr.name === OWN_LOGO));
+  assert.ok(warnings.some((w) => /header logo '[^']+' is managed, so it is referenced, not exported/.test(w)), warnings.join(''));
+});
+
+test('app.theme: publisher unknown, a readable unmanaged logo is refused, as it was', async (t) => {
+  themeAnswer(t, captured({ logo: { webResourceName: OWN_LOGO } }, OWN_LOGO));
+  const { result, directory } = await download(t, { captureTheme: true, page: true, expectRefusal: true, wrapSdk: publisherUnread(LOGO_ROW) });
+  assert.equal(result.code, 'APP_THEME_LOGO_UNEXPORTABLE');
+  assert.deepEqual(filesIn(directory), []);
+});
+
+test('app.theme: publisher known, an empty logo of this publisher is refused, and a managed one with content stays a reference', async (t) => {
+  themeAnswer(t, captured({ logo: { webResourceName: OWN_LOGO } }, OWN_LOGO));
+  const empty = await download(t, { captureTheme: true, page: true, expectRefusal: true, wrapSdk: withLogoRow(OWN_LOGO, { ...LOGO_ROW, content: '' }) });
+  assert.equal(empty.result.code, 'APP_THEME_LOGO_UNEXPORTABLE');
+  assert.deepEqual(filesIn(empty.directory), []);
+  const managed = await download(t, { captureTheme: true, wrapSdk: withLogoRow(OWN_LOGO, { ...LOGO_ROW, ismanaged: true }) });
+  assert.deepEqual(managed.result.spec.app.theme, { logo: { webResourceName: OWN_LOGO } });
+  assert.ok(!(managed.result.spec.webResources || []).some((wr) => wr.name === OWN_LOGO));
+  assert.ok(managed.warnings.some((w) => /is managed, so it is referenced, not exported/.test(w)), managed.warnings.join(''));
+});
+
 test('app.theme: a spec that keeps app.theme on re-download keeps a higher floor its author set', async (t) => {
   themeAnswer(t, captured({ basePaletteColor: '#0f6cbd' }));
   const { result } = await download(t, { captureTheme: true }, '2.30.0');

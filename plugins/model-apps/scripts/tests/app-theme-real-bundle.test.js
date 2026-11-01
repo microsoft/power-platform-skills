@@ -441,6 +441,20 @@ test('REAL BUNDLE: download refuses a theme whose header logo is gone, and names
   assert.deepEqual(server.writes().filter((line) => line.includes(LOGO)), [], 'download writes nothing');
 });
 
+// An image that still exists but whose bytes are empty is captured: the capture checks that the logo is there and is an
+// image, not that it can be exported. Whether it can is decided by the download's logo preflight (download-model-app.js
+// classifyThemeLogo), which refuses it — app-membership-download.test.js pins that refusal.
+test('REAL BUNDLE: download captures a theme whose header logo exists with no content (the export preflight decides)', async (t) => {
+  const server = await build(t, { images: [LOGO] });
+  await server.run({ ...THEME, logo: { webResourceName: LOGO } });
+  const image = server.theme.webResources.find((resource) => resource.name === LOGO);
+  image.content = '';
+  image.publishedContent = '';
+  const captured = await downloadAppTheme(server.ctx);
+  assert.equal(captured.status, 'captured');
+  assert.deepEqual(captured.logo, { webResourceName: LOGO, webResourceType: 11 });
+});
+
 // The build engine (lib/sdk-build.js) over the same server and SDK: a themed build reads the theme back once, after the
 // app publication that paid it, before it calls itself complete. An accepted publish is not proof that the app resolves
 // the theme; a build with no theme makes no theme read at all.

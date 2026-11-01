@@ -197,10 +197,11 @@ apart deliberately.
   it, a logo that is only referenced is never touched, and a logo that is also declared in `webResources[]`
   without `external` follows the normal `webResources` teardown rules.
 - **Download (opt-in, strict).** Only `--include-capabilities` reads the theme. A theme the spec cannot state
-  (the platform's "no theme" value, raw attributes, a logo that is gone or not an image, or this publisher's
-  own logo that cannot be exported) refuses the download **before anything is written**;
+  (the platform's "no theme" value, raw attributes, a logo that is gone or not an image, this publisher's
+  own logo that cannot be exported, or a logo not known to be another publisher's or managed — for example an
+  empty or vanished image when the app's publisher cannot be read) refuses the download **before anything is written**;
   `--allow-lossy-download` writes the spec without `app.theme` and names the loss. This publisher's own logo
-  is exported as an `external: true` web resource; another publisher's or a managed logo stays a reference
+  is exported as an `external: true` web resource; a logo known to be another publisher's or managed stays a reference
   that must exist where the spec is built. A theme saved but not yet published is downloaded with a note.
 
 ### Generative-page management — three-authority, id-based — 🧪 tested
