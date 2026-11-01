@@ -23,11 +23,14 @@
 
 const { runWithWorkflowEffect } = require('./workflow-effect-context.js');
 const { CODES, classifyPersisted } = require('./managed-bindings.js');
+const { LAYER_READERS } = require('./managed-layer-readers.js');
 
 const PUBLICATION_UNVERIFIED = 'managed-publication-unverified';
 const PUBLICATION_UNCONFIRMED = 'managed-publication-unconfirmed';
 // A managed publish whose request named other publish targets than its one scope: refused unsent, debt still owed.
 const PUBLICATION_REFUSED = 'managed-publication-refused';
+// A group published in the scope whose family has no layer reader (lib/managed-layer-readers.js): the scope is fenced.
+const LAYER_READER_MISSING = 'managed-publication-reader-missing';
 const CREATION_RECORD_UNSETTLED = 'dashboard-creation-record-unsettled';
 
 function codedError(code, message, extra) {
@@ -222,10 +225,12 @@ function coverageOf(store, scope) {
  *   - what the publish would put live is every committed group of `scope` in the store (coverageOf), passed or not.
  *     A corrupt or uncertain one blocks the scope for the run and stops (`managed-binding-group-invalid` /
  *     `managed-publication-unconfirmed`); a pending attempt on the scope withholds the publish, debt still owed;
- *   - `readLayers(group)` answers { savedSha256, publishedSha256 } from a fresh read of both layers of one covered
- *     group, each hashed the way its `publication.desiredSha256` was. A read that fails or lacks a hash, before
- *     anything is sent, is `managed-publication-unverified` and blocks the scope for the run: what is saved on it is
- *     not shown safe. Debt whose published layer already equals what is owed ends without a send;
+ *   - `client` reads both layers of every covered group, each with its family's reader (`readers`, by default the
+ *     shared LAYER_READERS of lib/managed-layer-readers.js), as { savedSha256, publishedSha256 } hashed the way the
+ *     group's `publication.desiredSha256` was. A covered group whose family has no reader is never skipped: the scope is
+ *     blocked for the run before anything is read or sent (`managed-publication-reader-missing`). A read that fails or
+ *     lacks a hash, before anything is sent, is `managed-publication-unverified` and blocks the scope for the run: what
+ *     is saved on it is not shown safe. Debt whose published layer already equals what is owed ends without a send;
  *   - a publish ships the SAVED layer of every covered group, so it is sent only while each of them is safe to put
  *     live: a group that owes a publish must have exactly its owed layer saved (debt that names no desired hash never
  *     is), and any other group a saved layer equal to its published one or to its desired hash. Otherwise
@@ -241,10 +246,12 @@ function coverageOf(store, scope) {
  *     The block is set in memory, so it never depends on a store write succeeding, and a sibling's success never
  *     clears it.
  * `publish()` may throw an error with `definiteNoStart: true` only when the request is known not to have started.
+ * `readers` replaces the shared map whole (a test's fault injection); a caller's own `readLayers` is not accepted.
  * Answers { sent, withheld, confirmed: [{ family, key }] }.
  */
-async function publishManagedScope({ store, barrier, scope, groups, readLayers, publish, path = 'managed publication', newToken } = {}) {
-  if (!store || typeof readLayers !== 'function' || typeof publish !== 'function') throw codedError(CODES.notSettled, 'publishManagedScope needs the store, a reader of the saved and published layers, and the publish');
+async function publishManagedScope({ store, barrier, scope, groups, client, readers = LAYER_READERS, publish, path = 'managed publication', newToken, ...rest } = {}) {
+  if ('readLayers' in rest) throw codedError(CODES.notSettled, 'publishManagedScope reads every covered group with its family\'s shared reader (client, lib/managed-layer-readers.js); a caller\'s readLayers is not accepted');
+  if (!store || !client || typeof client.get !== 'function' || !readers || typeof readers !== 'object' || typeof publish !== 'function') throw codedError(CODES.notSettled, 'publishManagedScope needs the store, a Dataverse client to read the saved and published layers with, and the publish');
   const gate = barrier || store;
   for (const op of ['allowScope', 'blockScope', 'hold', 'release', 'withSendPermit']) {
     if (typeof gate[op] !== 'function') throw codedError(CODES.notSettled, `publishManagedScope needs the publication barrier (${op})`);
@@ -276,12 +283,17 @@ async function publishManagedScope({ store, barrier, scope, groups, readLayers, 
   }
   // A change is being made on the scope (its attempt holds it on the barrier, or will when this run reaches it).
   if (cover.pending.length) return { sent: false, withheld: true, confirmed: [] };
+  const unread = cover.groups.filter((o) => !Object.prototype.hasOwnProperty.call(readers, o.family) || typeof readers[o.family] !== 'function');
+  if (unread.length) {
+    gate.blockScope(scope, `${names(unread)} (no reader of its layers)`);
+    throw codedError(LAYER_READER_MISSING, `${names(unread)} shares the publish of this scope and its family has no layer reader, so its saved layer cannot be shown safe; nothing was published`);
+  }
 
   const readAll = async (list) => {
     const out = [];
     for (const o of list) {
       let read;
-      try { read = await readLayers(o.group); } catch (e) {
+      try { read = await readers[o.family](client, o.group); } catch (e) {
         throw codedError(PUBLICATION_UNVERIFIED, `the saved and published layers of managed ${o.family} "${o.key}" could not be read`, { cause: e });
       }
       if (!read || typeof read.publishedSha256 !== 'string' || typeof read.savedSha256 !== 'string') throw codedError(PUBLICATION_UNVERIFIED, `the layers of managed ${o.family} "${o.key}" answered no proof`);
@@ -393,6 +405,7 @@ module.exports = {
   PUBLICATION_UNVERIFIED,
   PUBLICATION_UNCONFIRMED,
   PUBLICATION_REFUSED,
+  LAYER_READER_MISSING,
   CREATION_RECORD_UNSETTLED,
   runManagedFeature,
   withWorkflowEffect,

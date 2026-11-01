@@ -15,7 +15,7 @@ const { openManagedContext, openManagedBindings, CODES } = require('../lib/manag
 const { runManagedFeature, withWorkflowEffect, publishManagedScope } = require('../lib/managed-feature-contract.js');
 const { createWorkflowEffectGate, requestBodySha256, MISMATCH, currentWorkflowEffect } = require('../lib/workflow-effect-context.js');
 const { createPublicationBarrier } = require('../lib/publication-barrier.js');
-const { readSystemFormPublication } = require('../lib/systemform-published.js');
+const { readSystemFormPublication, systemFormLayerSha256 } = require('../lib/systemform-published.js');
 const { BuildHalt } = require('../lib/entity-provision.js');
 const { RETRY, retryPolicyFor } = require('../lib/retry-policy.js');
 const { environmentFingerprint } = require('../lib/page-ownership-records.js');
@@ -56,7 +56,7 @@ function formPorts(wire, sdk, { formxml, calls = [] } = {}) {
     prove: note('prove', async ({ recovering } = {}) => {
       const read = await readSystemFormPublication(sdk.dataverse, MAIN);
       if (read.saved.formxml !== formxml) throw Object.assign(new Error('the saved form is not the declared one'), { code: 'create-completion-required' });
-      return { savedProof: { savedSha256: H('1') }, acknowledgedRoot: !recovering, records: [{ ...rec('form', 'account/main', MAIN), origin: recovering ? 'adopted' : 'created' }], proof: PROOF, consumerState: { declaration: {}, children: {}, proofSchema: 'form-v1' }, publication: { scope: ACCOUNT, state: 'owed', desiredSha256: H('9'), dispatchToken: null } };
+      return { savedProof: { savedSha256: H('1') }, acknowledgedRoot: !recovering, records: [{ ...rec('form', 'account/main', MAIN), origin: recovering ? 'adopted' : 'created' }], proof: PROOF, consumerState: { declaration: {}, children: {}, proofSchema: 'form-v1' }, publication: { scope: ACCOUNT, state: 'owed', desiredSha256: systemFormLayerSha256(read.saved), dispatchToken: null } };
     }),
     ensureMembership: note('membership', async () => undefined),
   };
@@ -158,7 +158,7 @@ test('discovery, then recovery of a pending attempt, then commit, then exactly o
   assert.deepEqual(calls, ['prove', 'membership'], 'recovery sends nothing again');
   const out = await publishManagedScope({
     store: ctx.store, barrier, scope: ACCOUNT, groups: [{ family: 'form', key: 'account/main' }],
-    readLayers: async (g) => { const x = await readSystemFormPublication(sdk.dataverse, g.root.id); return { savedSha256: H('9'), publishedSha256: x.state === 'equal' ? H('9') : H('8') }; },
+    client: sdk.dataverse,
     publish: async () => { await sdk.fetchArtifact('form', MAIN); await sdk.publishArtifact('form', MAIN); },
   });
   assert.equal(out.sent, true);

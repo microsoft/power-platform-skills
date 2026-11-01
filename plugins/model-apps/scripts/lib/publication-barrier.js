@@ -51,6 +51,7 @@
 //                     outside the permit stays withheld by the hold, so a sibling cannot overlap the managed send.
 
 const { AsyncLocalStorage } = require('node:async_hooks');
+const { readXmlElements } = require('./strict-xml.js');
 
 // The permit a managed publication runs under (withSendPermit). Module-wide because an async context crosses every
 // barrier, but each permit names its barrier, and a gate honours only its own.
@@ -87,6 +88,97 @@ const ENTITY_ELEMENT = /<entity>\s*([^<]*?)\s*<\/entity>/gi;
 const DASHBOARD_ELEMENT = /<dashboard>\s*([^<]*?)\s*<\/dashboard>/gi;
 // An element left with nothing in it once its tables are cut (`<entities></entities>`, `<nodes/>`).
 const EMPTY_ELEMENT = /<([A-Za-z_][\w.-]*)(\s[^<>]*)?>\s*<\/\1>|<[A-Za-z_][\w.-]*(\s[^<>]*)?\/>/g;
+
+// The two target lists of a ParameterXml and the one kind of leaf each holds (names compared lowercased).
+const TARGET_LISTS = Object.freeze({ entities: 'entity', dashboards: 'dashboard' });
+
+/**
+ * The complete publish target set of one ParameterXml, read as ONE strict XML document (lib/strict-xml.js), or null when it
+ * is not one this reads whole. A permit's request is sent only when this is exactly the permit's one scope, so every doubt
+ * is a null, never a smaller set: a part this does not understand could publish something the scope check never saw.
+ *
+ * THE SUPPORTED SUBSET — what the plugin's own writers send (lib/table-publish.js, the SDK's dashboard publish):
+ *   <importexportxml><entities><entity>account</entity><entity>contoso_task</entity></entities><nodes/></importexportxml>  -> ['account', 'contoso_task']
+ *   <importexportxml><dashboards><dashboard>{5555…}</dashboard></dashboards></importexportxml>                            -> ['dashboard 5555…']
+ *   - the document is the `importexportxml` root alone: no declaration, comment or text around it;
+ *   - each child of the root is an `entities` or `dashboards` list, or an EMPTY container (`<nodes/>`, `<nodes />`,
+ *     `<nodes></nodes>`), which publishes nothing; a list with no leaf is such a container too;
+ *   - a list holds only its own leaf — `entity` in `entities`, `dashboard` in `dashboards` — and a leaf is written exactly
+ *     `<entity>name</entity>`, its text a table name or a dashboard id with white space around it at most;
+ *   - names are matched case-insensitively (an uppercase `<ENTITY>ACCOUNT</ENTITY>` reads), each tag closes as it opened.
+ * Refused (null): a document that is not well-formed or mismatched; an empty leaf in any spelling (`<entity/>`, `<entity />`,
+ * `<entity> </entity>`); a leaf outside its own list; a container holding anything (`<appmodules><appmodule>…`, text);
+ * any attribute (so any namespace declaration) or prefixed name; a comment, CDATA section, processing instruction or
+ * reference in the document; and other spellings of a target tag (`<entity >`), which are well-formed but not what any
+ * writer here sends — a conservative refusal of a request that is then not sent, never a guess.
+ */
+function parameterTargets(xml) {
+  // A ParameterXml nests three deep at most (importexportxml / entities / entity): anything deeper is not read.
+  const read = readXmlElements(xml, () => true, { spans: true, maxDepth: 3 });
+  if (!read.ok) return null;
+  const els = read.elements.slice().sort((a, b) => a.start - b.start);
+  const root = els[0];
+  if (!root || root.path !== '' || xml.slice(0, root.start).trim() || xml.slice(root.end).trim()) return null;
+  const childPath = (e) => (e.path ? `${e.path}/${e.name}` : e.name);
+  const selfClosing = (e) => xml.charCodeAt(e.end - 2) === 0x2F && xml.charCodeAt(e.end - 1) === 0x3E;
+  // A paired element's content, between `<name>` and `</name>` written exactly so; null for any other spelling.
+  const inner = (e) => {
+    const open = `<${e.name}>`;
+    const close = `</${e.name}>`;
+    if (!xml.startsWith(open, e.start) || xml.slice(e.end - close.length, e.end) !== close) return null;
+    return { from: e.start + open.length, to: e.end - close.length };
+  };
+  // The text directly in `e` (its children cut out) is white space only: no text, comment, CDATA or reference.
+  const onlySpaceAround = (e, kids) => {
+    const box = inner(e);
+    if (!box) return false;
+    let at = box.from;
+    for (const k of kids) {
+      if (xml.slice(at, k.start).trim()) return false;
+      at = k.end;
+    }
+    return !xml.slice(at, box.to).trim();
+  };
+  const childrenOf = (e) => els.filter((k) => k.path === childPath(e) && k.start > e.start && k.end <= e.end);
+  for (const e of els) {
+    if (e.name.includes(':') || Object.keys(e.attrs).length) return null;
+  }
+  if (root.name.toLowerCase() !== 'importexportxml') return null;
+  const targets = [];
+  const add = (name) => { if (!targets.includes(name)) targets.push(name); };
+  if (selfClosing(root)) return els.length === 1 ? targets : null;
+  const top = childrenOf(root);
+  if (!onlySpaceAround(root, top)) return null;
+  for (const list of top) {
+    const leafName = TARGET_LISTS[list.name.toLowerCase()];
+    // A target leaf straight under the root, outside its list, is not read — in any spelling, empty or not.
+    if (Object.values(TARGET_LISTS).includes(list.name.toLowerCase())) return null;
+    const leaves = childrenOf(list);
+    if (selfClosing(list)) continue;
+    if (!onlySpaceAround(list, leaves)) return null;
+    if (!leaves.length) continue;
+    // A leaf in a container that is not its list (`<appmodules><appmodule>…`), or in the other list.
+    if (!leafName) return null;
+    for (const leaf of leaves) {
+      if (leaf.name.toLowerCase() !== leafName || selfClosing(leaf)) return null;
+      const box = inner(leaf);
+      if (!box) return null;
+      const text = xml.slice(box.from, box.to);
+      // A leaf's text is a name or an id and nothing else: a comment, CDATA section or reference inside it is not read.
+      if (/[<&]/.test(text)) return null;
+      if (leafName === 'entity') {
+        const t = tableKey(text);
+        if (!t) return null;
+        add(t);
+      } else {
+        const d = dashboardKey(text);
+        if (!d) return null;
+        add(`dashboard ${d}`);
+      }
+    }
+  }
+  return targets;
+}
 
 function pathnameOf(url) {
   try {
@@ -469,12 +561,8 @@ function createPublicationBarrier() {
   }
 
   // The complete publish target set of one request, in the names a permit's own scope is written in (`account`,
-  // `dashboard <id>`), or null when it cannot be read whole. Only a PublishXml whose ParameterXml holds nothing but
-  // `entities`/`dashboards` lists (and elements left empty, e.g. `<nodes/>`) is read:
-  //   <importexportxml><entities><entity>account</entity></entities><nodes/></importexportxml>        -> ['account']
-  //   <importexportxml><dashboards><dashboard>{5555…}</dashboard></dashboards></importexportxml>       -> ['dashboard 5555…']
-  // A PublishAllXml publishes everything, a $batch is a change set of parts, and any other element (an `appmodules`
-  // list, a web resource) publishes something that is not a table or dashboard: all null.
+  // `dashboard <id>`), or null when it cannot be read whole. Only a PublishXml is read; a PublishAllXml publishes
+  // everything and a $batch is a change set of parts, so both are null. See parameterTargets for the subset read.
   function permitTargets(req) {
     if (!PUBLISH_XML.test(pathnameOf(req && req.url))) return null;
     let payload = null;
@@ -484,18 +572,7 @@ function createPublicationBarrier() {
       return null;
     }
     if (!payload || typeof payload.ParameterXml !== 'string') return null;
-    const targets = [];
-    const add = (name) => { if (!targets.includes(name)) targets.push(name); };
-    let unreadable = false;
-    let rest = payload.ParameterXml
-      .replace(ENTITY_ELEMENT, (whole, name) => { const t = tableKey(name); if (t) add(t); else unreadable = true; return ''; })
-      .replace(DASHBOARD_ELEMENT, (whole, id) => { const d = dashboardKey(id); if (d) add(`dashboard ${d}`); else unreadable = true; return ''; })
-      .replace(/<\/?(?:importexportxml|entities|dashboards)\s*>/gi, '');
-    for (let before = null; before !== rest;) {
-      before = rest;
-      rest = rest.replace(EMPTY_ELEMENT, '');
-    }
-    return unreadable || rest.trim() ? null : targets;
+    return parameterTargets(payload.ParameterXml);
   }
 
   // The synchronous check of one request at dispatch (gateRequest). Returns { req } to send (the same

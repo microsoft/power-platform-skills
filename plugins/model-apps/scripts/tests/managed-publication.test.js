@@ -12,10 +12,11 @@ const fs = require('node:fs');
 const { makeTempDir } = require('./helpers/temp-dirs.js');
 const { createManagedWire, sdkOver } = require('./helpers/managed-wire.js');
 const { openManagedContext, openManagedBindings, CODES } = require('../lib/managed-bindings.js');
-const { runManagedFeature, publishManagedScope, PUBLICATION_UNCONFIRMED, PUBLICATION_UNVERIFIED, CREATION_RECORD_UNSETTLED } = require('../lib/managed-feature-contract.js');
+const { runManagedFeature, publishManagedScope, PUBLICATION_UNCONFIRMED, PUBLICATION_UNVERIFIED, CREATION_RECORD_UNSETTLED, LAYER_READER_MISSING } = require('../lib/managed-feature-contract.js');
 const { createPublicationBarrier } = require('../lib/publication-barrier.js');
-const { readSystemFormPublication } = require('../lib/systemform-published.js');
+const { readSystemFormPublication, readSystemFormLayers } = require('../lib/systemform-published.js');
 const { publishTablesXml } = require('../lib/table-publish.js');
+const { postPublishXml } = require('../lib/publish-xml.js');
 const { environmentFingerprint } = require('../lib/page-ownership-records.js');
 const { canonicalJson } = require('../lib/reconcile-common.js');
 
@@ -83,11 +84,11 @@ const readLayersOf = (sdk) => async (group) => {
   return { savedSha256: layerHash(r.saved), publishedSha256: r.published ? layerHash(r.published) : H('0') };
 };
 const publishForms = (sdk, store, barrier, groups) => publishManagedScope({
-  store, barrier, scope: ACCOUNT, groups, readLayers: readLayersOf(sdk), path: 'managed forms of account',
+  store, barrier, scope: ACCOUNT, groups, client: sdk.dataverse, path: 'managed forms of account',
   publish: async () => { const r = await publishTablesXml(sdk.dataverse, ['account']); if (!r.ok) throw Object.assign(new Error(r.reason), { code: 'publish-failed' }); },
 });
 const publishDashboard = (sdk, store, barrier, family, key, id) => publishManagedScope({
-  store, barrier, scope: dashScope(id), groups: [{ family, key }], readLayers: readLayersOf(sdk), path: `managed dashboard ${key}`,
+  store, barrier, scope: dashScope(id), groups: [{ family, key }], client: sdk.dataverse, path: `managed dashboard ${key}`,
   publish: async () => { await sdk.fetchArtifact('dashboard', id); await sdk.publishArtifact('dashboard', id); },
 });
 
@@ -246,7 +247,7 @@ test('a scope a sibling holds at the moment of the send is not published and con
   await runManagedFeature({ ...ports(s.wire, s.sdk, { key: 'account/main', id: MAIN, formxml: '<form v="1"/>' }), store: s.store, barrier: s.barrier });
   const groups = [{ family: 'form', key: 'account/main' }];
   const out = await publishManagedScope({
-    store: s.store, barrier: s.barrier, scope: ACCOUNT, groups, readLayers: readLayersOf(s.sdk), path: 'managed forms of account',
+    store: s.store, barrier: s.barrier, scope: ACCOUNT, groups, client: s.sdk.dataverse, path: 'managed forms of account',
     publish: async () => {
       // A sibling form starts saving on the table between the barrier's check and the send.
       s.barrier.hold('sibling', [ACCOUNT], [QUICK], 'form quick (being saved)');
@@ -336,7 +337,7 @@ test('a publish that was sent fails closed when its settlement is not recorded: 
   committedForm(c, { id: MAIN, key: 'account/main', publishedXml: '<form v="1"/>', savedXml: '<form v="2"/>' });
   c.store.notePublishOutcome = () => { throw storeWriteFailure(); };
   const refusedConnection = (s) => publishManagedScope({
-    store: s.store, barrier: s.barrier, scope: ACCOUNT, groups: [MAIN_G], readLayers: readLayersOf(s.sdk),
+    store: s.store, barrier: s.barrier, scope: ACCOUNT, groups: [MAIN_G], client: s.sdk.dataverse,
     publish: async () => { await publishTablesXml(s.sdk.dataverse, ['account']); throw Object.assign(new Error('connection refused before the request was written'), { code: 'ECONNREFUSED', definiteNoStart: true }); },
   });
   c.wire.script((e) => /PublishXml/.test(e.path), { statusCode: 503, body: {}, unapplied: true });
@@ -356,10 +357,10 @@ test('a publish that was sent fails closed when its settlement is not recorded: 
 });
 
 test('a pre-send read of the layers that fails or answers no proof withholds the table for the run: nothing is sent and no sibling publishes it', async () => {
-  for (const readLayers of [async () => { throw new Error('socket hang up'); }, async () => ({ savedSha256: H('9') })]) {
+  for (const form of [async () => { throw new Error('socket hang up'); }, async () => ({ savedSha256: H('9') })]) {
     const s = await setup();
     committedForm(s, { id: MAIN, key: 'account/main', publishedXml: '<form v="1"/>', savedXml: '<form v="2"/>' });
-    const out = codeOf(publishManagedScope({ store: s.store, barrier: s.barrier, scope: ACCOUNT, groups: [MAIN_G], readLayers, publish: () => publishTablesXml(s.sdk.dataverse, ['account']) }));
+    const out = codeOf(publishManagedScope({ store: s.store, barrier: s.barrier, scope: ACCOUNT, groups: [MAIN_G], client: s.sdk.dataverse, readers: { form }, publish: () => publishTablesXml(s.sdk.dataverse, ['account']) }));
     assert.equal(await out, PUBLICATION_UNVERIFIED);
     assert.equal(s.wire.publishes().length, 0);
     assert.equal(s.barrier.allowScope(ACCOUNT, 'a sibling view'), false, 'the unread table is fenced');
@@ -427,6 +428,17 @@ test('a send permit sends only a request whose whole publish target set is the p
     [ACCOUNT, 'own', xml('')],
     [dashScope(DASH), 'dash', xml(entities('account'))],
     [dashScope(DASH), 'dash', xml(`<dashboards><dashboard>${DASH}</dashboard><dashboard>${DASH2}</dashboard></dashboards>`)],
+    // An empty target leaf, in every spelling, and a structure that does not close as it opens.
+    [ACCOUNT, 'own', xml(`${entities('account')}`.replace('</entities>', '<entity/></entities>'))],
+    [ACCOUNT, 'own', xml(`${entities('account')}`.replace('</entities>', '<entity /></entities>'))],
+    [ACCOUNT, 'own', xml(`${entities('account')}`.replace('</entities>', '<entity>\n</entity></entities>'))],
+    [dashScope(DASH), 'dash', xml(`<dashboards><dashboard>${DASH}</dashboard><dashboard/></dashboards>`)],
+    [ACCOUNT, 'own', xml('<entities><entity>account</entity></dashboards>')],
+    [ACCOUNT, 'own', post('PublishXml', JSON.stringify({ ParameterXml: '<importexportxml><entities><entity>account</entity></entities>' }))],
+    // The supported subset: no namespace, no attribute, and a target tag written exactly `<entity>` / `<dashboard>`.
+    [ACCOUNT, 'own', xml('<entities><entity >account</entity></entities>')],
+    [ACCOUNT, 'own', xml('<entities><x:entity xmlns:x="urn:x">account</x:entity></entities>')],
+    [ACCOUNT, 'own', post('PublishXml', JSON.stringify({ ParameterXml: '<importexportxml xmlns="urn:x"><entities><entity>account</entity></entities></importexportxml>' }))],
   ];
   for (const [scope, token, req] of refusals) {
     assert.deepEqual(await refusedFor(scope, token, req), { status: 409, events: ['refused'] }, `refused: ${req.url} ${req.body}`);
@@ -454,7 +466,7 @@ test('a managed publish whose request names more than its own scope is refused u
   s.wire.putForm(formRow(UNRELATED, '<form c="1"/>', 'contact'), { publishedToo: true });
   s.wire.saved.get(UNRELATED).formxml = '<form c="2"/>';
   const broad = publishManagedScope({
-    store: s.store, barrier: s.barrier, scope: ACCOUNT, groups: [MAIN_G], readLayers: readLayersOf(s.sdk),
+    store: s.store, barrier: s.barrier, scope: ACCOUNT, groups: [MAIN_G], client: s.sdk.dataverse,
     publish: () => publishTablesXml(s.sdk.dataverse, ['account', 'contact']),
   });
   assert.equal(await codeOf(broad), 'managed-publication-refused');
@@ -466,6 +478,85 @@ test('a managed publish whose request names more than its own scope is refused u
   assert.equal((await publishForms(s.sdk, s.store, s.barrier, [MAIN_G])).sent, true);
   assert.equal(s.wire.publishes('account').length, 1);
   assert.equal(s.wire.publishes('contact').length, 0);
+});
+
+test('a managed publish whose ParameterXml has an empty target leaf or a malformed structure is refused unsent: no dispatch, debt owed, no token used', async () => {
+  const bodies = {
+    selfClosingEntity: '<importexportxml><entities><entity>account</entity><entity/></entities></importexportxml>',
+    selfClosingWhitespaceEntity: '<importexportxml><entities><entity>account</entity><entity /></entities></importexportxml>',
+    selfClosingDashboard: '<importexportxml><entities><entity>account</entity></entities><dashboards><dashboard/></dashboards></importexportxml>',
+    malformed: '<importexportxml><entities><entity>account</entity></dashboards></importexportxml>',
+    pairedEmptyEntity: '<importexportxml><entities><entity>account</entity><entity>  </entity></entities></importexportxml>',
+    leafOutsideItsList: '<importexportxml><entity>account</entity></importexportxml>',
+    leafInTheOtherList: '<importexportxml><dashboards><entity>account</entity></dashboards></importexportxml>',
+    nonEmptyContainer: '<importexportxml><entities><entity>account</entity></entities><nodes>x</nodes></importexportxml>',
+    commentInLeaf: '<importexportxml><entities><entity>account<!-- contact --></entity></entities></importexportxml>',
+    textAroundRoot: 'x<importexportxml><entities><entity>account</entity></entities></importexportxml>',
+  };
+  for (const [name, body] of Object.entries(bodies)) {
+    const s = await setup();
+    committedForm(s, { id: MAIN, key: 'account/main', publishedXml: '<form v="1"/>', savedXml: '<form v="2"/>' });
+    const out = publishManagedScope({
+      store: s.store, barrier: s.barrier, scope: ACCOUNT, groups: [MAIN_G], client: s.sdk.dataverse,
+      publish: () => postPublishXml(s.sdk.dataverse, body),
+    });
+    assert.equal(await codeOf(out), 'managed-publication-refused', name);
+    assert.equal(s.wire.publishes().length, 0, `${name}: nothing is sent`);
+    const pub = s.store.readGroup('form', 'account/main').committed.publication;
+    assert.deepEqual([pub.state, pub.dispatchToken], ['owed', null], `${name}: the debt stays owed and no token is used`);
+    assert.equal(s.barrier.allowScope(ACCOUNT, 'after'), true, `${name}: definitely unsent, so not blocked`);
+  }
+  // Controls: the scoped table request with a harmless empty container, and a scoped dashboard request, each send once.
+  const t = await setup();
+  committedForm(t, { id: MAIN, key: 'account/main', publishedXml: '<form v="1"/>', savedXml: '<form v="2"/>' });
+  const table = await publishManagedScope({
+    store: t.store, barrier: t.barrier, scope: ACCOUNT, groups: [MAIN_G], client: t.sdk.dataverse,
+    publish: () => postPublishXml(t.sdk.dataverse, '<importexportxml><entities><entity>account</entity></entities><nodes/><nodes /><entities></entities></importexportxml>'),
+  });
+  assert.equal(table.sent, true);
+  assert.equal(t.wire.publishes().length, 1);
+});
+
+test('the layers of every covered group are read by its family\'s reader: a covered group of a family with no reader fences the scope, never skipped', async () => {
+  const VIEW = '31313131-3131-4313-8313-313131313131';
+  const viewGroup = (s) => {
+    const t = s.store.prepareAttempt({ family: 'view', key: 'account/active', baseGeneration: null, root: { kind: 'view', key: 'account/active', id: VIEW }, knownScopes: [ACCOUNT], declarationSha256: H('e') });
+    s.store.markSending(t, { ...expected(VIEW), proofSchema: 'view-v1' });
+    s.store.noteSaved(t, { proof: null, acknowledgedRoot: true });
+    s.store.commitGroup({ token: t, baseGeneration: null, records: [rec('view', 'account/active', VIEW)], proof: PROOF, consumerState: { baseline: {} }, publication: { scope: ACCOUNT, state: 'not-needed', desiredSha256: null, dispatchToken: null }, proofSchema: 'view-v1' });
+  };
+  // A form debt on a table that also holds a committed view group: the shared readers have no view reader here.
+  const s = await setup();
+  committedForm(s, { id: MAIN, key: 'account/main', publishedXml: '<form v="1"/>', savedXml: '<form v="2"/>' });
+  viewGroup(s);
+  const read = [];
+  const formOnly = { form: async (client, group) => { read.push(group.family); return readSystemFormLayers(client, group); } };
+  const missing = publishManagedScope({ store: s.store, barrier: s.barrier, scope: ACCOUNT, groups: [MAIN_G], client: s.sdk.dataverse, readers: formOnly, publish: () => publishTablesXml(s.sdk.dataverse, ['account']) });
+  assert.equal(await codeOf(missing), LAYER_READER_MISSING);
+  assert.deepEqual(read, [], 'nothing is read for a scope that cannot be read whole');
+  assert.equal(s.wire.publishes().length, 0);
+  assert.equal(s.barrier.allowScope(ACCOUNT, 'a sibling'), false, 'the scope is fenced for the run');
+  assert.equal(s.store.readGroup('form', 'account/main').committed.publication.state, 'owed');
+
+  // With a view reader, each covered group goes to its own family's reader, and the form publish is sent once.
+  const v = await setup();
+  committedForm(v, { id: MAIN, key: 'account/main', publishedXml: '<form v="1"/>', savedXml: '<form v="2"/>' });
+  viewGroup(v);
+  const calls = [];
+  const readers = {
+    form: async (client, group) => { calls.push(`form ${group.root.id}`); return readSystemFormLayers(client, group); },
+    view: async (client, group) => { calls.push(`view ${group.root.id}`); return { savedSha256: H('7'), publishedSha256: H('7') }; },
+  };
+  const out = await publishManagedScope({ store: v.store, barrier: v.barrier, scope: ACCOUNT, groups: [MAIN_G], client: v.sdk.dataverse, readers, publish: () => publishTablesXml(v.sdk.dataverse, ['account']) });
+  assert.equal(out.sent, true);
+  assert.deepEqual(calls, [`form ${MAIN}`, `view ${VIEW}`, `form ${MAIN}`], 'before the send every covered group; after it the debt');
+  assert.equal(v.wire.publishes('account').length, 1);
+
+  // A caller-supplied reader function is not accepted: a family's reader is shared, never reimplemented per caller.
+  const r = await setup();
+  committedForm(r, { id: MAIN, key: 'account/main', publishedXml: '<form v="1"/>', savedXml: '<form v="2"/>' });
+  assert.equal(await codeOf(publishManagedScope({ store: r.store, barrier: r.barrier, scope: ACCOUNT, groups: [MAIN_G], readLayers: readLayersOf(r.sdk), publish: () => publishTablesXml(r.sdk.dataverse, ['account']) })), CODES.notSettled);
+  assert.equal(r.wire.publishes().length, 0);
 });
 
 test('a dashboard known only by its retained id, with no scope given, is quarantined when its creation record is not settled: no path publishes it', async () => {

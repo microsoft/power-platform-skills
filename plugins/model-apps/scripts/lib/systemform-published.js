@@ -13,7 +13,7 @@
 // A row that was created but never published has no published layer: the plain retrieve answers 404 with the
 // Dataverse "object does not exist" code, e.g. { "error": { "code": "0x80040217", "message": "systemform With Id = … Does Not Exist" } }.
 
-const { normalizeGuid } = require('./reconcile-common.js');
+const { normalizeGuid, intentSha256 } = require('./reconcile-common.js');
 
 const SELECT = '$select=formid,name,description,formxml';
 // Dataverse "Object does not exist" (ObjectDoesNotExist), the code a 404 for a missing row carries.
@@ -80,4 +80,25 @@ async function readSystemFormPublication(client, rawId) {
   return { state: same ? 'equal' : 'differs', saved, published };
 }
 
-module.exports = { readSystemFormPublication, UNVERIFIED };
+/**
+ * The hash a managed form's publication is recorded by (its `publication.desiredSha256`) and its layers are compared by:
+ * the SHA-256 of the canonical JSON of the compared fields of one layer, `{ name, description, formxml }`.
+ */
+function systemFormLayerSha256(layer) {
+  return intentSha256({ name: layer.name, description: layer.description, formxml: layer.formxml });
+}
+
+// What a never-published row's published layer reads as: a hash no layer has, so it equals no desired or saved hash.
+const NEVER_PUBLISHED_SHA256 = intentSha256({ neverPublished: true });
+
+/**
+ * The layer reader of a managed systemform group (lib/managed-layer-readers.js): both layers of the group's root row, as
+ * { savedSha256, publishedSha256 } hashed by systemFormLayerSha256. Throws `managed-publication-unverified` as
+ * readSystemFormPublication does.
+ */
+async function readSystemFormLayers(client, group) {
+  const r = await readSystemFormPublication(client, group && group.root && group.root.id);
+  return { savedSha256: systemFormLayerSha256(r.saved), publishedSha256: r.published ? systemFormLayerSha256(r.published) : NEVER_PUBLISHED_SHA256 };
+}
+
+module.exports = { readSystemFormPublication, readSystemFormLayers, systemFormLayerSha256, NEVER_PUBLISHED_SHA256, UNVERIFIED };
