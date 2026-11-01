@@ -83,9 +83,12 @@ async function readSystemFormPublication(client, rawId) {
 /**
  * The hash a managed form's publication is recorded by (its `publication.desiredSha256`) and its layers are compared by:
  * the SHA-256 of the canonical JSON of the compared fields of one layer, `{ name, description, formxml }`.
+ * An omitted or null description hashes as null, as rowOf reads it: canonical JSON drops an undefined key, so a feature
+ * that hashes its own row without a description would otherwise record a hash no read of that row ever answers, and
+ * its debt could never be paid. Empty text stays distinct from null.
  */
 function systemFormLayerSha256(layer) {
-  return intentSha256({ name: layer.name, description: layer.description, formxml: layer.formxml });
+  return intentSha256({ name: layer.name, description: layer.description == null ? null : layer.description, formxml: layer.formxml });
 }
 
 // What a never-published row's published layer reads as: a hash no layer has, so it equals no desired or saved hash.

@@ -14,7 +14,7 @@ const { createManagedWire, sdkOver } = require('./helpers/managed-wire.js');
 const { openManagedContext, openManagedBindings, CODES } = require('../lib/managed-bindings.js');
 const { runManagedFeature, publishManagedScope, PUBLICATION_UNCONFIRMED, PUBLICATION_UNVERIFIED, CREATION_RECORD_UNSETTLED, LAYER_READER_MISSING } = require('../lib/managed-feature-contract.js');
 const { createPublicationBarrier } = require('../lib/publication-barrier.js');
-const { readSystemFormPublication, readSystemFormLayers } = require('../lib/systemform-published.js');
+const { readSystemFormPublication, readSystemFormLayers, systemFormLayerSha256 } = require('../lib/systemform-published.js');
 const { publishTablesXml } = require('../lib/table-publish.js');
 const { postPublishXml } = require('../lib/publish-xml.js');
 const { environmentFingerprint } = require('../lib/page-ownership-records.js');
@@ -779,4 +779,31 @@ test('the systemform reader: equal, differing and never-published layers; every 
   assert.equal(await unverified({ statusCode: 404, body: { error: { code: '0x80040217' } } }, true), PUBLICATION_UNVERIFIED, 'a saved layer that is missing is not "never published"');
   assert.equal(await codeOf(readSystemFormPublication(sdk.dataverse, 'not-a-guid')), PUBLICATION_UNVERIFIED);
   assert.equal(await codeOf(readSystemFormPublication({ get: async () => { throw new Error('reset'); } }, MAIN)), PUBLICATION_UNVERIFIED);
+});
+
+test('a form whose row has no description: the hash its feature records from the row is the hash the shared reader answers, so its debt is paid; empty text stays distinct', async () => {
+  const owe = (s, desiredSha256) => {
+    const t = s.store.prepareAttempt({ family: 'form', key: 'account/main', baseGeneration: null, root: { kind: 'form', key: 'account/main', id: MAIN }, knownScopes: [ACCOUNT], declarationSha256: H('e'), publication: { scope: ACCOUNT, state: 'owed' } });
+    s.store.markSending(t, expected(MAIN));
+    s.store.noteSaved(t, { proof: null, acknowledgedRoot: true });
+    s.store.commitGroup({ token: t, baseGeneration: null, records: [rec('form', 'account/main', MAIN)], proof: PROOF, consumerState: consumer('form'), publication: { scope: ACCOUNT, state: 'owed', desiredSha256, dispatchToken: null } });
+  };
+  // The row as the feature declares it: no description key at all. The service answers it with description null.
+  const declared = { name: 'Main', formxml: '<form v="2"/>' };
+  const s = await setup();
+  s.wire.putForm({ formid: MAIN, name: 'Main', objecttypecode: 'account', type: 2, formxml: '<form v="1"/>' }, { publishedToo: true });
+  s.wire.saved.get(MAIN).formxml = declared.formxml;
+  owe(s, systemFormLayerSha256(declared));
+  assert.deepEqual(await publishForms(s.sdk, s.store, s.barrier, [{ family: 'form', key: 'account/main' }]), { sent: true, withheld: false, confirmed: [{ family: 'form', key: 'account/main' }] });
+  assert.equal(s.wire.publishes('account').length, 1);
+  assert.equal(s.store.readGroup('form', 'account/main').committed.publication.state, 'confirmed');
+  assert.equal(systemFormLayerSha256(declared), systemFormLayerSha256({ ...declared, description: null }));
+
+  // Control: a declared empty description is not the service's null, so that saved layer is not the owed one.
+  const c = await setup();
+  c.wire.putForm({ formid: MAIN, name: 'Main', objecttypecode: 'account', type: 2, formxml: '<form v="1"/>' }, { publishedToo: true });
+  c.wire.saved.get(MAIN).formxml = declared.formxml;
+  owe(c, systemFormLayerSha256({ ...declared, description: '' }));
+  assert.equal(await codeOf(publishForms(c.sdk, c.store, c.barrier, [{ family: 'form', key: 'account/main' }])), CODES.completion);
+  assert.equal(c.wire.publishes().length, 0);
 });
