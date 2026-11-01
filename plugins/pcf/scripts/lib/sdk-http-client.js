@@ -620,6 +620,10 @@ function scrubBearer(text, headers) {
  *   `sendOnce(method, url)` -> true for a request that must be sent exactly once, whatever answers it (see `once` in `call`); and
  *   `throttle`, the budget a run allows itself for waiting out a throttled service (lib/throttle-budget.js: `fits`, `spend`, `announce`, `decline`, `note`), which every wait this client takes for a throttled answer (HTTP 429) is
  *   then drawn from — see `waitOutThrottle`. A client given none waits exactly as it always did, and the pcf plugin, which has none, never passes one.
+ *   `workflowEffectGate`, an object whose `screen({ method, url, body, headers })` is asked before each request (model-apps' lib/workflow-effect-context.js):
+ *   it throws to refuse the request unsent, answers null to let it pass as any other, or answers a send handle — the request is then sent once (as `sendOnce`),
+ *   `dispatching()` is called (synchronously, and a throw leaves it unsent) right before the send and `answered(res)` with the answer. A client given none,
+ *   which is every client but a declared business rule's or process flow's, sends exactly as it always did.
  * @returns {{get,post,patch,delete,put,postRaw,patchRaw}}
  */
 function createAzHttpClient(orgUrl, deps = {}) {
@@ -643,6 +647,7 @@ function createAzHttpClient(orgUrl, deps = {}) {
   const getToken = deps.getToken || ((u, options) => getAuthToken(u, options));
   const request = deps.request || makeRequest;
   const sendOnce = typeof deps.sendOnce === 'function' ? deps.sendOnce : () => false;
+  const workflowEffectGate = deps.workflowEffectGate && typeof deps.workflowEffectGate.screen === 'function' ? deps.workflowEffectGate : null;
   const sleep = deps.sleep || ((ms) => new Promise((r) => setTimeout(r, ms)));
   const random = deps.random || Math.random;
   const now = deps.now || Date.now;
@@ -808,7 +813,11 @@ function createAzHttpClient(orgUrl, deps = {}) {
     // answers on which a record DELETE or a `$batch` is re-sent in spite of its own rule (a 429 and a SQL deadlock victim, below), each of which the server may
     // answer AFTER it accepted the request. The first answer is handed to the SDK as it came, so its status and its code survive, and what happened to the work is
     // the caller's to look up. The exceptions of a record DELETE and a `$batch` stay what they were for every request the caller does not name.
-    const once = sendOnce(method_, url) === true;
+    // A business rule's or process flow's workflow write, under a persisted effect (`workflowEffectGate`, see createAzHttpClient): refused unsent when it
+    // does not match that effect, and otherwise sent exactly once, because a repeat of a write that may have run is what the effect record exists to stop.
+    // A gate answers null for every other request, so the request is sent below exactly as it would be without one.
+    const effectSend = workflowEffectGate ? workflowEffectGate.screen({ method: method_, url, body: bodyOut, headers: (options && options.headers) || {} }) : null;
+    const once = sendOnce(method_, url) === true || !!effectSend;
     const noRetry = recordDelete || isBatch || once;
     // A PUBLISH (`POST …/PublishXml`, `…/PublishAllXml`) is sent ONCE on a 5xx, on a transport failure and on a 429 — but for the two answers that prove
     // the platform never started it: a 401 (refused before it ran: the token is refreshed and the publish sent again, as any request is) and a 429 of the
@@ -887,7 +896,16 @@ function createAzHttpClient(orgUrl, deps = {}) {
         headers['Content-Type'] = 'application/json; charset=utf-8';
       }
 
-      const res = await request({ url, method, headers, body: bodyOut, includeHeaders: true, timeout: isWrite ? WRITE_TIMEOUT_MS : READ_TIMEOUT_MS, ...(ctl.bytes ? { binary: true } : {}) });
+      // The effect is durably marked as possibly sent before the request leaves; a failed mark leaves it unsent.
+      if (effectSend) effectSend.dispatching();
+      let res;
+      try {
+        res = await request({ url, method, headers, body: bodyOut, includeHeaders: true, timeout: isWrite ? WRITE_TIMEOUT_MS : READ_TIMEOUT_MS, ...(ctl.bytes ? { binary: true } : {}) });
+      } catch (e) {
+        if (effectSend) effectSend.answered({ error: String((e && e.message) || e) });
+        throw e;
+      }
+      if (effectSend) effectSend.answered(res);
       // Read before this answer is recorded: what matters to a caller is whether an EARLIER send was ambiguous.
       const sendKey = `${method_} ${url}`;
       const history = { sends: attempt + 1, earlierAmbiguous: earlierSendAmbiguous(sendKey) };
