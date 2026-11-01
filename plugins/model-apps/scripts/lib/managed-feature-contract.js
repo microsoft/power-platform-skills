@@ -789,6 +789,33 @@ async function confirmUncertainPublication({ store, barrier, scope, client, read
   return { confirmed, unconfirmed };
 }
 
+// What a publish callback's RETURNED answer says, judged by the SDK's `publish.kind`. publishArtifact answers
+//   { type, id, shipped, publish: { kind: 'submitted' } }                    — sent, answered success (no verify)
+//   { …, shipped: true,  publish: { kind: 'verified' } }                     — sent, and the SDK's own read matched
+//   { …, shipped: false, publish: { kind: 'unverifiable', reason } }         — sent, answered success, SDK read inconclusive
+//   { …, shipped: false, publish: { kind: 'failed', error } }                — the request threw (a 503 may still complete)
+//   { …, shipped: false, publish: { kind: 'notApplicable' } }                — nothing to publish: no request was made
+// `shipped` is `kind === 'verified'`, so it is false on an ordinary successful publish and is never the test here.
+// A success answer is read back by the caller; a failure is one whose outcome is unknown, never a definite no-start;
+// a no-request kind is left to the barrier, which already knows whether a request passed its permit. A no-request kind
+// beside a request that DID pass the permit, an unknown kind, or `shipped: false` with no kind at all cannot be told
+// apart from a lost answer, so each fails closed as unknown. Any other answer (none, or one without `publish`) is a
+// success, as before. Returns the failure to raise, or null.
+const PUBLISH_ANSWERED = new Set(['submitted', 'verified', 'unverifiable']);
+const PUBLISH_NOT_REQUESTED = new Set(['none', 'notApplicable', 'notRequested']);
+function publishAnswerFailure(answer, dispatched, scopeKey) {
+  if (!answer || typeof answer !== 'object') return null;
+  const where = scopeKey.replace(':', ' ');
+  const kind = answer.publish && typeof answer.publish === 'object' ? answer.publish.kind : undefined;
+  if (kind === undefined) {
+    return answer.shipped === false ? codedError(PUBLICATION_UNCONFIRMED, `the publish of ${where} answered that it was not shipped, with no publish kind`, { answer }) : null;
+  }
+  if (PUBLISH_ANSWERED.has(kind)) return null;
+  if (PUBLISH_NOT_REQUESTED.has(kind) && !dispatched) return null;
+  const why = kind === 'failed' ? 'failed' : PUBLISH_NOT_REQUESTED.has(kind) ? `answered that no request was made (${kind}), but one passed the publication barrier` : `answered an unknown publish kind (${String(kind)})`;
+  return codedError(PUBLICATION_UNCONFIRMED, `the publish of ${where} ${why}`, { answer });
+}
+
 /**
  * Pay the owed publication of committed `groups` ([{ family, key }]) that share `scope`, at most once:
  *   - first, an uncertain publication on the scope (a publish that may have been sent) is confirmed read-only when a
@@ -852,9 +879,13 @@ async function confirmUncertainPublication({ store, barrier, scope, client, read
  *
  * `publish()` must THROW on any failure, and may throw with `definiteNoStart: true` only when the request is known not
  * to have started. Do not return a failure: the SDK's publishArtifact answers a failed publish as a returned
- * `{ shipped: false, publish: { kind: 'failed', … } }`, so a callback must check it and throw. A returned value with
- * `shipped === false` is refused here as a failure whose outcome is unknown (never a no-start), so it is not
- * confirmed by the read-back.
+ * `{ shipped: false, publish: { kind: 'failed', … } }`, so a callback should check it and throw. A returned answer is
+ * judged by its `publish.kind`, never by `shipped` (which is true only for `verified`, so an ordinary successful
+ * publish answers `shipped: false, kind: 'submitted'`): `submitted`, `verified` and `unverifiable` are a success
+ * answer and are read back; `failed` is a failure whose outcome is unknown (never a no-start); a no-request kind
+ * (`none`, `notApplicable`, `notRequested`) is left to the barrier, which fails closed when nothing passed its permit;
+ * a no-request kind beside a request that passed the permit, an unknown kind, or `shipped: false` with no kind fail
+ * closed as unknown.
  */
 async function publishManagedScope({ store, barrier, scope, groups, client, readers = LAYER_READERS, publish, path = 'managed publication', newToken, carry = false, ...rest } = {}) {
   if ('readLayers' in rest) throw codedError(CODES.notSettled, 'publishManagedScope reads every covered group with its family\'s shared reader (client, lib/managed-layer-readers.js); a caller\'s readLayers is not accepted');
@@ -991,13 +1022,10 @@ async function publishManagedScope({ store, barrier, scope, groups, client, read
         onWithheld: () => { withheld = true; },
         onRefused: () => { refused = true; },
       }, publish);
-      // `publish()` must throw on any failure. The SDK's publishArtifact answers a failed publish as a RETURNED
-      // `{ shipped: false, publish: { kind: 'failed', error } }`, so a callback that only awaits it would look like a
-      // success here, and the read-back would then confirm layers that were already live. Such an answer is a failure
-      // whose outcome is not known (a 503 may still complete), never a definite no-start.
-      if (answer && typeof answer === 'object' && answer.shipped === false) {
-        failure = codedError(PUBLICATION_UNCONFIRMED, `the publish of ${want.replace(':', ' ')} answered that it was not shipped${answer.publish && answer.publish.kind ? ` (${answer.publish.kind})` : ''}`, { answer });
-      }
+      // `publish()` must throw on any failure, but a callback that only awaits the SDK's publishArtifact gets its
+      // answer RETURNED, so it is judged here by `publish.kind`, never by `shipped` (see publishAnswerFailure).
+      const refusal = publishAnswerFailure(answer, dispatched, want);
+      if (refusal) failure = refusal;
     } catch (e) {
       failure = e;
     }

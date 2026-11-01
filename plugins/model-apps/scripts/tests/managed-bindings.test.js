@@ -1204,6 +1204,18 @@ test('a write larger than the store may be read back is refused before it is wri
   assert.equal(open(dir).readGroup('form', FORM_KEY).pending, null);
 });
 
+test('child receipt: a later observation that repeats a receipt in another spelling of the same GUID adds nothing and is not a duplicate, whichever spelling was stored first', () => {
+  for (const [first, later] of [[CTRL_A, `{${CTRL_A.toUpperCase()}}`], [`{${CTRL_A.toUpperCase()}}`, CTRL_A]]) {
+    const store = open(makeTempDir('mb-receipt-alias-'));
+    const base = settleForm(store, [], { publication: { scope: TABLE, state: 'not-needed', desiredSha256: null, dispatchToken: null } });
+    const token = store.prepareAttempt({ family: 'form', key: FORM_KEY, root: base.root, baseGeneration: base.generation, declarationSha256: H('a'), knownScopes: [TABLE] });
+    store.markSending(token, { ...expected(FORM, [child('account/main/one', CTRL_A), child('account/main/two', CTRL_B)]), baseObservation: { rowVersion: null, savedSha256: H('b') } });
+    store.noteSaved(token, { proof: null, acknowledgedChildCreates: [{ kind: 'control', key: 'account/main/one', id: first }] });
+    store.noteSaved(token, { proof: null, acknowledgedChildCreates: [{ kind: 'control', key: 'account/main/one', id: later }, { kind: 'control', key: 'account/main/two', id: CTRL_B }] });
+    assert.deepEqual(store.readGroup('form', FORM_KEY).pending.acknowledgedChildCreates, [{ kind: 'control', key: 'account/main/one', id: first.toLowerCase() }, { kind: 'control', key: 'account/main/two', id: CTRL_B }], `stored ${first}, repeated as ${later}`);
+  }
+});
+
 // Each family's largest declaration, with every name, label and description at its longest and in three-byte UTF-8
 // text: the documented process-flow ceiling (references/app-spec-schema-advanced.md: 30 stages, 30 steps each), more
 // tiles than a dashboard takes, and stated sizing models for forms and rules, which have no published ceiling.
@@ -1276,4 +1288,120 @@ test('declaration budget: process flows at the documented ceiling, each held thr
     const { committed, pending } = reopened.readGroup('bpf', key);
     assert.deepEqual([committed.originalDeclaration, committed.consumerState.declaration.flow, pending.declaration], [flow, flow, flow], key);
   }
+});
+
+// Completion capacity: twelve process flows at the documented ceiling sent against an almost full store must all be
+// able to commit the consumer state that keeps their flow. A free-space check at each admission let all twelve send
+// and only seven commit; each attempt now holds its own reservation from prepareAttempt to its commit.
+test('completion capacity: every pending attempt holds its own completion bytes; an admission that would leave too little is refused before its send, no other write takes them, and every attempt sent can commit', () => {
+  const flow = LARGEST.bpf();
+  const bpfKey = (i) => `account/flow${i}`;
+  const bpfId = (i) => `44444444-4444-4444-8444-${String(i).padStart(12, '0')}`;
+  const prepareBpf = (store, i) => store.prepareAttempt({ family: 'bpf', key: bpfKey(i), root: { kind: 'bpf', key: bpfKey(i), id: bpfId(i) }, baseGeneration: null, knownScopes: [], declarationSha256: H('e'), declaration: flow });
+  // Each write here rewrites a file of about 30 MB, so a send is the two writes that grow it: the expected proof and the
+  // saved observation.
+  const send = (store, i, token) => {
+    store.markSending(token, expected(bpfId(i), [], 'bpf-v1'));
+    store.noteSaved(token, { proof: { savedSha256: H('1') }, acknowledgedRoot: true });
+  };
+  const commitBpf = (store, i, token) => store.commitGroup({ token, baseGeneration: null, records: [rec('bpf', bpfKey(i), bpfId(i))], proof: PROOF, consumerState: { declaration: { flow, applied: true, backing: null }, stages: {} }, publication: null });
+  const held = (store) => store.snapshot().envelope.attempts.reduce((n, a) => n + (a.completionReserve ? a.completionReserve.bytes - a.completionReserve.used : 0), 0);
+  const padded = (description) => ({ ...formState(), declaration: { ...formState().declaration, description } });
+  // A form attempt sent and saved, whose commit adds `description` to its consumer state.
+  const sentForm = (store) => {
+    const base = store.readGroup('form', FORM_KEY).committed;
+    const token = store.prepareAttempt({ family: 'form', key: FORM_KEY, root: base.root, baseGeneration: base.generation, knownScopes: [TABLE], declarationSha256: H('e') });
+    store.markSending(token, expected(FORM));
+    store.noteSaved(token, { proof: null, acknowledgedRoot: false });
+    return (description) => store.commitGroup({ token, baseGeneration: base.generation, records: [rec('form', FORM_KEY, FORM)], proof: PROOF, consumerState: padded(description), publication: base.publication });
+  };
+
+  // The order that exposed the gap: twelve prepared, then other content fills the file, then all twelve are sent.
+  const a = open(makeTempDir('mb-capacity-first-'));
+  settleForm(a, [], { publication: { scope: TABLE, state: 'not-needed', desiredSha256: null, dispatchToken: null } });
+  const tokens = Array.from({ length: 12 }, (_, i) => prepareBpf(a, i));
+  // The near-limit baseline of the original reproduction (the shared reserve and a quarter MiB left free) reaches into
+  // the bytes the twelve hold: it is refused, nothing written, and no reservation is spent. What is left beside the
+  // reservations still fits.
+  const fill = sentForm(a);
+  const reserved = held(a);
+  const target = (store, free) => 'x'.repeat(MAX_BYTES - free - fs.statSync(store.file).size - 2048);
+  const bytes = fileText(a);
+  const refused = codeOf(() => fill(target(a, PREPARE_RESERVE_BYTES + (1 << 18))));
+  if (refused !== null) {
+    assert.equal(refused, CODES.storeFull);
+    assert.equal(fileText(a), bytes, 'nothing written');
+    assert.equal(held(a), reserved, 'and no one\'s reservation was spent');
+    fill(target(a, reserved + (1 << 18)));
+  }
+  assert.ok(MAX_BYTES - fs.statSync(a.file).size < PREPARE_RESERVE_BYTES + reserved + (1 << 19), 'the file is almost full');
+  tokens.forEach((t, i) => send(a, i, t));
+  const commits = tokens.map((t, i) => codeOf(() => commitBpf(a, i, t)));
+  assert.deepEqual(commits, tokens.map(() => null), 'every attempt sent commits the consumer state that keeps its flow');
+  assert.deepEqual(a.snapshot().envelope.attempts, [], 'all twelve completed');
+  assert.deepEqual(open(path.dirname(a.file)).readGroup('bpf', bpfKey(11)).committed.consumerState.declaration.flow, flow);
+  assert.equal(refused, CODES.storeFull, 'the baseline that would have taken their bytes was refused');
+
+  // The other order: the file is almost full first. Each admission must leave the shared reserve beyond every
+  // reservation, so the attempts that would not fit are refused at prepareAttempt (before anything is sent, nothing
+  // written); every one admitted is sent and commits.
+  const b = open(makeTempDir('mb-capacity-full-'));
+  settleForm(b, [], { publication: { scope: TABLE, state: 'not-needed', desiredSha256: null, dispatchToken: null } });
+  prepareBpf(b, 99);
+  const each = b.snapshot().envelope.attempts[0].completionReserve.bytes;
+  assert.ok(each >= Buffer.byteLength(JSON.stringify({ flow }, null, 2)), `${each} bytes held for a flow's consumer copy`);
+  b.retireUnsentAttempt({ token: b.snapshot().envelope.attempts[0].token, baseGeneration: null });
+  sentForm(b)(target(b, PREPARE_RESERVE_BYTES + 5 * each));
+  const admitted = [];
+  let refusedAt = null;
+  for (let i = 0; i < 12 && refusedAt === null; i += 1) {
+    const before = fileText(b);
+    const code = codeOf(() => admitted.push([i, prepareBpf(b, i)]));
+    if (code) { assert.equal(code, CODES.storeFull); assert.equal(fileText(b), before, 'refused before it was recorded'); refusedAt = i; }
+  }
+  assert.ok(refusedAt !== null && admitted.length >= 3 && admitted.length < 12, `${admitted.length} admitted, the next refused`);
+  // An admitted attempt's markSending spends its own reservation, so content written since its prepare cannot strand it.
+  for (const [i, t] of admitted) send(b, i, t);
+  for (const [i, t] of admitted) commitBpf(b, i, t);
+  assert.deepEqual(b.snapshot().envelope.attempts, []);
+
+  // A completion that knows it is large says so (completionBytes) and is refused before its send when it cannot fit.
+  const c = open(makeTempDir('mb-capacity-declared-'));
+  settleForm(c, [], { publication: { scope: TABLE, state: 'not-needed', desiredSha256: null, dispatchToken: null } });
+  const t0 = prepareBpf(c, 0);
+  const base = c.readGroup('form', FORM_KEY).committed;
+  const declare = (completionBytes) => c.prepareAttempt({ family: 'form', key: FORM_KEY, root: base.root, baseGeneration: base.generation, knownScopes: [TABLE], declarationSha256: H('e'), completionBytes });
+  assert.equal(codeOf(() => declare(MAX_BYTES)), CODES.notSettled, 'more than one attempt may hold');
+  assert.equal(codeOf(() => declare(-1)), CODES.notSettled);
+  const big = declare(6 * (1 << 20));
+  assert.equal(c.readGroup('form', FORM_KEY).pending.completionReserve.bytes, 6 * (1 << 20));
+  // Retiring it releases its own reservation and no other.
+  const withBoth = held(c);
+  c.retireUnsentAttempt({ token: big, baseGeneration: base.generation });
+  assert.equal(held(c), withBoth - 6 * (1 << 20));
+  assert.equal(c.readGroup('bpf', bpfKey(0)).pending.token, t0);
+  // A reservation written by hand is held to its shape on read.
+  writeRaw(c, (d) => { d.attempts[0].completionReserve.used = d.attempts[0].completionReserve.bytes + 1; });
+  assert.equal(codeOf(() => open(path.dirname(c.file)).readGroup('bpf', bpfKey(0))), CODES.groupInvalid);
+
+  // An attempt's own writes from its send on spend its own reservation: a large expected proof fits in a file whose
+  // only free bytes are the ones that attempt holds, and what it spent is no longer counted as held.
+  const d = open(makeTempDir('mb-capacity-spend-'));
+  const settledD = settleForm(d, [], { publication: { scope: TABLE, state: 'not-needed', desiredSha256: null, dispatchToken: null } });
+  const own = d.prepareAttempt({ family: 'form', key: FORM_KEY, root: settledD.root, baseGeneration: settledD.generation, knownScopes: [TABLE], declarationSha256: H('e'), completionBytes: 2 * (1 << 20) });
+  const kids = Array.from({ length: 3000 }, (_, i) => child(`account/main/cell${i}`, `aaaaaaaa-0000-4000-8000-${String(i).padStart(12, '0')}`));
+  const fillD = (length) => writeRaw(d, (x) => {
+    const g = x.groups[0];
+    x.groups = [g, { ...JSON.parse(JSON.stringify(g)), key: 'account/filler', root: { ...g.root, key: 'account/filler', id: SUBSTITUTE }, records: g.records.map((r) => ({ ...r, key: 'account/filler', id: SUBSTITUTE })), consumerState: { ...g.consumerState, declaration: { description: 'x'.repeat(length) } } }];
+  });
+  fillD(0);
+  fillD(MAX_BYTES - 2 * (1 << 20) - (1 << 16) - fs.statSync(d.file).size);
+  d.refresh();
+  const proofBytes = Buffer.byteLength(JSON.stringify(expected(FORM, kids), null, 2));
+  assert.ok(proofBytes > (1 << 17) && proofBytes < 2 * (1 << 20) - (1 << 18), `a ${proofBytes}-byte proof: more than the free bytes beside the reservation, less than the reservation`);
+  d.markSending(own, expected(FORM, kids));
+  const spent = d.readGroup('form', FORM_KEY).pending.completionReserve;
+  assert.ok(spent.used >= proofBytes && spent.used < spent.bytes, `${spent.used} of ${spent.bytes} spent`);
+  d.noteSaved(own, { proof: null, acknowledgedRoot: false });
+  assert.equal(d.readGroup('form', FORM_KEY).pending.phase, 'saved');
 });

@@ -2022,6 +2022,61 @@ test('carry: a lost table publish that pays no debt and re-ships only live layer
   assert.deepEqual(s.wire.writes().slice(writesBefore).map((w) => w.method), ['PATCH']);
 });
 
+// An older store can hold an attempt beside a publish no read can settle. Retiring a sending or saved attempt is
+// refused, and recovering it is refused while the publish is uncertain, so the typed acceptance must not need either
+// first: it releases only the publication, and normal recovery then settles the attempt it left in place.
+test('acceptance: a pending attempt (prepared, sending or saved) beside an unprovable publish does not block the typed acceptance; it is kept whole and recovered afterwards', async () => {
+  const outcomes = [];
+  for (const phase of ['prepared', 'sending', 'saved']) {
+    const s = await setup();
+    await editMain(s, s, '<form v="1"/>');
+    await publishForms(s.sdk, s.store, s.barrier, [MAIN_G]);
+    const committed = s.store.readGroup('form', 'account/main').committed;
+    const token = s.store.prepareAttempt({ family: 'form', key: 'account/main', root: committed.root, baseGeneration: committed.generation, declarationSha256: H('a'), knownScopes: [ACCOUNT] });
+    if (phase !== 'prepared') {
+      const { epoch } = s.store.markSending(token, { ...expected(MAIN), baseObservation: { rowVersion: null, savedSha256: committed.publication.desiredSha256 } }, { observed: true, claim: 'first' });
+      if (phase === 'saved') {
+        s.store.noteAttemptDispatch(token, epoch);
+        s.store.noteSaved(token, { proof: { savedSha256: committed.publication.desiredSha256 }, acknowledgedRoot: false });
+      }
+    }
+    // What an older store could hold: the group's publish lost while it carried only layers already live.
+    const env = JSON.parse(fs.readFileSync(s.store.file, 'utf8'));
+    const p = env.groups.find((g) => g.family === 'form' && g.key === 'account/main').publication;
+    p.carriedFrom = { state: p.state, dispatchToken: p.dispatchToken, publishedSha256: p.desiredSha256, savedSha256: p.desiredSha256 };
+    p.state = 'unconfirmed';
+    p.dispatchToken = 'older-lost-carry';
+    fs.writeFileSync(s.store.file, `${JSON.stringify(env, null, 2)}\n`);
+    const n = await nextRun(s);
+    const pending = n.store.readGroup('form', 'account/main').pending;
+    const writes = s.wire.writes().length;
+    // Before: recovery is refused while the publish is uncertain, and a sending or saved attempt is never retired. (A
+    // prepared one is retired by the run itself, as before: it was never sent.)
+    if (phase !== 'prepared') assert.equal(await codeOf(editMain(s, n, '<form v="1"/>')), PUBLICATION_UNCONFIRMED, phase);
+    if (phase !== 'prepared') assert.equal(await codeOf(Promise.resolve().then(() => n.store.retireUnsentAttempt({ token, baseGeneration: committed.generation }))), CODES.pending, phase);
+    // The approval, dispatch token and scope checks are unchanged, and a refusal writes nothing.
+    const bytes = fs.readFileSync(n.store.file, 'utf8');
+    const accept = (args) => n.store.acceptUncertainPublication({ scope: ACCOUNT, dispatchToken: 'older-lost-carry', approval: publicationRiskApproval(ACCOUNT), ...args });
+    for (const args of [{ approval: 'publication-risk:table:contact' }, { dispatchToken: 'another-dispatch' }, { scope: { type: 'table', table: 'contact' } }]) {
+      assert.equal(await codeOf(Promise.resolve().then(() => accept(args))), CODES.notSettled, `${phase}: ${JSON.stringify(args)}`);
+      assert.equal(fs.readFileSync(n.store.file, 'utf8'), bytes);
+    }
+    assert.deepEqual(accept({}), { released: [MAIN_G] }, phase);
+    const after = n.store.readGroup('form', 'account/main');
+    assert.deepEqual(after.pending, pending, `${phase}: the attempt, its expected proof and its saved observation are kept whole`);
+    assert.equal(after.committed.publication.state, committed.publication.state, `${phase}: the publication it had before is back`);
+    assert.deepEqual(JSON.parse(fs.readFileSync(n.store.file, 'utf8')).publicationRiskAcceptances.map((a) => a.dispatchToken), ['older-lost-carry']);
+    // The next invocation settles the attempt by the usual recovery.
+    const m = await nextRun(s);
+    const result = (await editMain(s, m, '<form v="1"/>')).result;
+    outcomes.push([phase, result.committed === true, s.wire.writes().length - writes]);
+    assert.equal(m.store.readGroup('form', 'account/main').pending, null, phase);
+  }
+  // A sending or saved attempt whose change is already what the service holds commits read-only: no write at all.
+  // The prepared one was never sent: the run retires it and finds nothing to change.
+  assert.deepEqual(outcomes, [['prepared', false, 0], ['sending', true, 0], ['saved', true, 0]]);
+});
+
 test('carry: a carried group is journaled with the layers read before the send; a definite no-start restores it; a send answered and read back settles under its own token; a lost one settles read-only only once a layer it changed shows', async () => {
   const s = await setup();
   await runManagedFeature({ ...ports(s.wire, s.sdk, { key: 'account/main', id: MAIN, formxml: '<form v="1"/>' }), store: s.store, barrier: s.barrier });
@@ -2141,6 +2196,50 @@ test('carry: a publish() that returns a failed answer instead of throwing is nev
   const n = await nextRun(s);
   assert.deepEqual(await confirmUncertainPublication({ store: n.store, barrier: n.barrier, scope: ACCOUNT, client: n.sdk.dataverse }), { confirmed: [MAIN_G], unconfirmed: [] });
   assert.equal(s.wire.publishes('account').length, sends);
+});
+
+test('carry: a publish() answer is judged by its publish kind, never by `shipped` — submitted, verified and unverifiable are read back; failed, an unknown kind, a no-request kind beside a sent request and `shipped: false` with no kind are unknown', async () => {
+  // The SDK's own successful publish answers `shipped: false, kind: 'submitted'` (shipped is kind === 'verified').
+  const d = await setup();
+  const dash = ports(d.wire, d.sdk, { family: 'dashboard', key: 'ops', id: DASH, formxml: '<dash v="1"/>' });
+  const apply = dash.apply;
+  dash.apply = async (args) => { const r = await apply(args); d.wire.published.set(DASH, { ...d.wire.saved.get(DASH) }); return r; };
+  await runManagedFeature({ ...dash, store: d.store, barrier: d.barrier });
+  let answer;
+  const sent = await publishManagedScope({
+    store: d.store, barrier: d.barrier, scope: dashScope(DASH), groups: [], client: d.sdk.dataverse, path: 'dashboard ops', carry: true,
+    publish: async () => { await d.sdk.fetchArtifact('dashboard', DASH); answer = await d.sdk.publishArtifact('dashboard', DASH); return answer; },
+  });
+  assert.deepEqual([answer.shipped, answer.publish.kind], [false, 'submitted'], 'the SDK\'s ordinary success answer');
+  assert.deepEqual(sent, { sent: true, withheld: false, confirmed: [] });
+  assert.equal(d.store.readGroup('dashboard', 'ops').committed.publication.state, 'not-needed', 'read back and settled under its own token');
+
+  // A form that owes a publish, sent through a callback that returns each kind after a request that applied.
+  const owe = async (returned, { send = true } = {}) => {
+    const s = await setup();
+    committedForm(s, { id: MAIN, key: 'account/main', publishedXml: '<form v="1"/>', savedXml: '<form v="2"/>' });
+    const out = await caught(publishManagedScope({
+      store: s.store, barrier: s.barrier, scope: ACCOUNT, groups: [MAIN_G], client: s.sdk.dataverse, path: 'managed forms of account',
+      publish: async () => { if (send) await publishTablesXml(s.sdk.dataverse, ['account']); return returned; },
+    }));
+    return { code: out ? out.code : null, state: pubOf(s.store).state, message: out ? out.message : '' };
+  };
+  for (const kind of ['submitted', 'verified', 'unverifiable']) {
+    assert.deepEqual(await owe({ shipped: kind === 'verified', publish: { kind } }), { code: null, state: 'confirmed', message: '' }, kind);
+  }
+  for (const [label, returned] of [
+    ['failed', { shipped: false, publish: { kind: 'failed', error: { statusCode: 503 } } }],
+    ['an unknown kind', { shipped: false, publish: { kind: 'queued' } }],
+    ['a no-request kind beside a sent request', { shipped: false, publish: { kind: 'notApplicable' } }],
+    ['shipped false with no kind', { shipped: false }],
+  ]) {
+    const r = await owe(returned);
+    assert.deepEqual([r.code, r.state], [PUBLICATION_UNCONFIRMED, 'unconfirmed'], label);
+  }
+  // No request at all, and the answer says so: the barrier saw nothing pass its permit and fails closed, as before.
+  const none = await owe({ shipped: false, publish: { kind: 'none' } }, { send: false });
+  assert.deepEqual([none.code, none.state], [PUBLICATION_UNCONFIRMED, 'unconfirmed']);
+  assert.match(none.message, /did not pass the publication barrier/);
 });
 
 test('publication refusals: a send answered but not read back names its own dispatch as data; a send with no managed group on the scope journals nothing and names none', async () => {

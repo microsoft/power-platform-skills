@@ -45,14 +45,40 @@ const SCHEMA_VERSION = 1;
 // process flows at the documented ceiling (30 stages of 30 steps; about 1.5 MiB for all three copies). Every open reads
 // and checks the whole file, so the bound stays well short of what would make a run slow.
 const MAX_BYTES = 32 * (1 << 20);
-// What a new obligation (prepareAttempt, markPublishDispatch) must leave free. Both are written before anything is
-// sent; what follows a send (noteSaved, commitGroup with the feature's consumer state, confirmPublished) must still
-// fit, or the attempt would be stranded behind a store no write can change. So a new obligation is refused
-// (`managed-binding-store-full`, nothing written, nothing sent) unless this much stays free after it: room for the
-// consumer state of a declaration at the cap (about 1.4 MiB indented) several times over. The reserve is shared, so
-// many attempts prepared at once against an almost full file can still exhaust it; each refusal then comes before the
-// send of the attempt it would have recorded, never after.
+// What a new obligation (prepareAttempt, markPublishDispatch; markSending for an attempt that holds no reservation) must
+// leave free beyond every pending attempt's reservation (below). All are written before anything is sent, so a refusal here
+// (`managed-binding-store-full`, nothing written) comes before the send it would have recorded. The shared part is
+// room for the writes that follow a publish (notePublishOutcome, confirmPublished) and for the rest of the store's
+// own bookkeeping, which no attempt owns.
 const PREPARE_RESERVE_BYTES = 4 * (1 << 20);
+// What each pending attempt keeps reserved, from its prepareAttempt until its commit or retirement removes it, for the
+// writes from its send on (the expected proof, the counted dispatches, noteSaved, its workflow effects, and the commit
+// that adds the feature's consumer state). The shared reserve above is free space at the moment of a check, so several attempts
+// admitted against an almost full file could all rely on the same bytes and, once sent, not all complete. A
+// reservation is per attempt instead: it is stored on the attempt (`completionReserve: { bytes, used }`), every
+// admission (prepareAttempt, markPublishDispatch) must leave the shared reserve free beyond EVERY pending attempt's
+// unused reservation, the attempt's own writes from markSending on spend its own reservation first,
+// and no growing write may take the file into the bytes other attempts still hold. Commit and retirement release only
+// the attempt they remove. Its size: the feature's `completionBytes`, never less than COMPLETION_BASE_BYTES plus one
+// copy of its declaration as a feature's consumer state keeps it (a process flow's `declaration.flow`, a rule's
+// `declaration.rule`).
+const COMPLETION_BASE_BYTES = 256 * (1 << 10);
+// The largest reservation one attempt may ask for: room for a consumer state as large as a declaration at the cap
+// (DECLARATION_MAX_BYTES, about 1.4 MiB indented) several times over, and never more than a quarter of the file.
+const COMPLETION_MAX_BYTES = 8 * (1 << 20);
+// How deep a feature's consumer state keeps its copy of the declaration in the file (env → groups → [i] →
+// consumerState → declaration → flow → …), so the copy's indentation is counted; deeper than any family nests it.
+const CONSUMER_COPY_DEPTH = 8;
+// The reservation for an attempt: its `completionBytes`, never less than the base plus one indented copy of its
+// declaration (`kept`, the plain-data snapshot checkDeclaration answered), and never more than COMPLETION_MAX_BYTES.
+function completionReserveFor(kept, completionBytes) {
+  let copy = 0;
+  if (kept !== undefined) {
+    const text = JSON.stringify(kept, null, 2);
+    copy = Buffer.byteLength(text, 'utf8') + text.split('\n').length * 2 * CONSUMER_COPY_DEPTH;
+  }
+  return Math.min(COMPLETION_MAX_BYTES, Math.max(COMPLETION_BASE_BYTES + copy, completionBytes || 0));
+}
 
 const CODES = Object.freeze({
   unreadable: 'managed-binding-store-unreadable',
@@ -73,9 +99,12 @@ const CODES = Object.freeze({
   // A declaration offered with an attempt that the store will not keep (see validateDeclaration): refused before
   // anything is written, so before anything is sent.
   declarationRefused: 'managed-declaration-refused',
-  // A write that would take the file past MAX_BYTES, or a new obligation that would leave less than
-  // PREPARE_RESERVE_BYTES free: nothing is written, and an attempt refused this way was never sent. Remedy: keep
-  // fewer or smaller declared groups in one app and solution.
+  // A write that would take the file past MAX_BYTES, a new obligation that would not leave PREPARE_RESERVE_BYTES free
+  // beyond every pending attempt's reservation, or a growing write that would take bytes another attempt still holds:
+  // nothing is written. A refused new obligation was never sent. After a send, an attempt whose writes stay within its
+  // own reservation is never refused this way; one whose completion grows past it (a consumer state larger than its
+  // `completionBytes`) may be, once the unreserved bytes are gone. Remedy: keep fewer or smaller declared groups in one
+  // app and solution, or settle the pending ones first.
   storeFull: 'managed-binding-store-full',
 });
 
@@ -507,7 +536,14 @@ function validateGroup(g, header, where) {
 }
 
 function validateAttempt(a, where) {
-  closedKeys(a, ['family', 'key', 'token', 'baseGeneration', 'phase', 'root', 'knownScopes', 'declarationSha256', 'declaration', 'expected', 'acknowledgedRoot', 'acknowledgedChildCreates', 'savedObservation', 'publication', 'sendWindow'], where);
+  closedKeys(a, ['family', 'key', 'token', 'baseGeneration', 'phase', 'root', 'knownScopes', 'declarationSha256', 'declaration', 'expected', 'acknowledgedRoot', 'acknowledgedChildCreates', 'savedObservation', 'publication', 'sendWindow', 'completionReserve'], where);
+  // The completion reservation (prepareAttempt; see COMPLETION_BASE_BYTES), e.g. { bytes: 434176, used: 1290 }. Absent
+  // on an attempt an older build prepared: it holds nothing, and its writes use only unreserved bytes.
+  if (a.completionReserve !== undefined) {
+    closedKeys(a.completionReserve, ['bytes', 'used'], `${where}.completionReserve`);
+    const { bytes, used } = a.completionReserve;
+    if (!Number.isSafeInteger(bytes) || bytes < 0 || bytes > COMPLETION_MAX_BYTES || !Number.isSafeInteger(used) || used < 0 || used > bytes) throw invalid(`${where}.completionReserve`, 'is not a reservation');
+  }
   tokenField(a.token, `${where}.token`);
   tokenField(a.baseGeneration, `${where}.baseGeneration`, true);
   if (!PHASES.has(a.phase)) throw invalid(where, 'has an unknown phase');
@@ -853,7 +889,7 @@ function readStoreFile(ctx) {
     throw storeError(CODES.unreadable, `the managed binding store ${ctx.file} could not be read (${e.code || e.message})`);
   }
   const parsed = parseEnvelope(text, ctx.expect);
-  return { ...parsed, sha256: sha256(canonicalJson(parsed.envelope)) };
+  return { ...parsed, sha256: sha256(canonicalJson(parsed.envelope)), bytes: Buffer.byteLength(text, 'utf8') };
 }
 
 function emptyEnvelope(expect) {
@@ -971,9 +1007,14 @@ function openManagedBindings({ workspaceDir, environment, appUniqueName, solutio
     return barrier;
   };
 
-  // One change: take the lease, reread the disk, apply `change` to a copy, write, reread and compare. `reserve`: the bytes
-  // the file must keep free after this write (PREPARE_RESERVE_BYTES for a new obligation; 0 otherwise).
-  function mutate(change, { reserve = 0 } = {}) {
+  // One change: take the lease, reread the disk, apply `change` to a copy, write, reread and compare.
+  // `admit`: the write is a new obligation, written before its send (prepareAttempt, markPublishDispatch):
+  // it must leave PREPARE_RESERVE_BYTES free beyond every pending attempt's unused reservation, its own included.
+  // 'unreserved' (markSending): an admission only for an attempt that holds no reservation (one an older build
+  // prepared); an attempt that holds one spends it, as its later writes do: it was admitted at its prepareAttempt.
+  // `change(next, disk, spend)`: a write made for an attempt after its send calls `spend(token)` to charge what it adds
+  // to that attempt's own reservation (see COMPLETION_BASE_BYTES).
+  function mutate(change, { admit = false } = {}) {
     const root = workspaceRoot(workspaceDir, true);
     const full = path.join(root, ctx.file);
     // A workspace created after the store was opened: later reads (refresh) must look at the file this write makes.
@@ -982,17 +1023,37 @@ function openManagedBindings({ workspaceDir, environment, appUniqueName, solutio
     const lease = withRecordLease(root, ctx.file, () => {
       const disk = readStoreFile({ ...ctx, root, full }) || { envelope: emptyEnvelope(ctx.expect), invalidGroups: new Map() };
       const next = clone(disk.envelope);
-      const answer = change(next, disk);
+      let spender = null;
+      const answer = change(next, disk, (token) => { spender = token; });
       if (answer && typeof answer.then === 'function') throw storeError(CODES.notSettled, 'a managed binding change must be synchronous');
       next.revision = disk.envelope.revision + 1;
-      const text = `${JSON.stringify(next, null, 2)}\n`;
+      const prevBytes = typeof disk.bytes === 'number' ? disk.bytes : 0;
+      let text = `${JSON.stringify(next, null, 2)}\n`;
+      // Charge the growth to the spending attempt's reservation. Recording the charge changes the text by a few digits,
+      // so it is settled again until the size is stable (two or three passes; the base reservation covers the digits).
+      const own = spender ? findAttempt(next, spender) : null;
+      const admitting = admit === true || (admit === 'unreserved' && !(own && own.completionReserve));
+      if (own && own.completionReserve && !admitting) {
+        const start = own.completionReserve.used;
+        for (let pass = 0; pass < 4; pass += 1) {
+          const grown = Buffer.byteLength(text, 'utf8') - prevBytes;
+          const used = Math.min(own.completionReserve.bytes, start + Math.max(0, grown));
+          if (used === own.completionReserve.used && pass > 0) break;
+          own.completionReserve.used = used;
+          text = `${JSON.stringify(next, null, 2)}\n`;
+        }
+      }
       // A file larger than any open reads back (readStoreFile: MAX_BYTES) would be written, then refused by every later
-      // run, the attempt it records with it: refuse the change instead, before the disk is touched. A new obligation
-      // must also leave the reserve free, so the writes that follow its send still fit.
+      // run, the attempt it records with it: refuse the change instead, before the disk is touched. A write that does
+      // not grow the file can take no one's bytes. A growing one must leave every pending attempt's unused reservation
+      // free, so each attempt already sent can still complete; a new obligation must also leave the shared reserve.
       const bytes = Buffer.byteLength(text, 'utf8');
-      if (bytes > MAX_BYTES - reserve) {
-        const need = reserve ? `, and a new attempt or publish must leave ${reserve} of them free, so nothing was sent for it` : '';
-        throw storeError(CODES.storeFull, `the managed binding store would be ${bytes} bytes; it may hold ${MAX_BYTES}${need}. Nothing was written: keep fewer or smaller declared groups in this app and solution`);
+      const fail = (detail) => storeError(CODES.storeFull, `the managed binding store would be ${bytes} bytes${detail}; it may hold ${MAX_BYTES}. Nothing was written${admit ? ', and nothing was sent for it' : ''}: keep fewer or smaller declared groups in this app and solution, or settle the pending ones first`);
+      if (bytes > MAX_BYTES) throw fail('');
+      if (admitting || bytes > prevBytes) {
+        const held = next.attempts.reduce((sum, a) => sum + (a.completionReserve ? a.completionReserve.bytes - a.completionReserve.used : 0), 0);
+        const shared = admitting ? PREPARE_RESERVE_BYTES : 0;
+        if (bytes + held + shared > MAX_BYTES) throw fail(` with ${held} more held for the completion of pending attempts${shared ? ` and ${shared} kept free for a new attempt or publish` : ''}`);
       }
       // Validate in memory before anything touches the disk: an invalid group may stay as it was, never become one.
       const checked = parseEnvelope(text, ctx.expect);
@@ -1092,9 +1153,18 @@ function openManagedBindings({ workspaceDir, environment, appUniqueName, solutio
      * prove nothing of it started) together with the effects it owns; any refusal — the new declaration, a conflict,
      * an uncertain publish, an old attempt that may have been sent — writes nothing, so the old attempt, its token and
      * its hold all stay. The old hold ends only after the write (when the store has the barrier).
+     * `completionBytes`: optional, the bytes the feature's completion may add after the send (its consumer state, saved
+     * proof and workflow effects). The attempt reserves the larger of it and COMPLETION_BASE_BYTES plus one copy of its
+     * declaration (at most COMPLETION_MAX_BYTES) until its commit or retirement; the write is refused
+     * (`managed-binding-store-full`, nothing written, nothing sent) unless it leaves PREPARE_RESERVE_BYTES free beyond
+     * every pending attempt's unused reservation, this one's included.
      */
-    prepareAttempt({ family, key, baseGeneration = null, revision, root, expected = null, knownScopes = [], declarationSha256, declaration, publication = null, replaces }) {
+    prepareAttempt({ family, key, baseGeneration = null, revision, root, expected = null, knownScopes = [], declarationSha256, declaration, publication = null, replaces, completionBytes }) {
       const kept = declaration !== undefined ? checkDeclaration(family, key, declaration) : undefined;
+      if (completionBytes !== undefined && (!Number.isSafeInteger(completionBytes) || completionBytes < 0 || completionBytes > COMPLETION_MAX_BYTES)) {
+        throw storeError(CODES.notSettled, `prepareAttempt \`completionBytes\` is the bytes the attempt's completion may add, a whole number up to ${COMPLETION_MAX_BYTES}`);
+      }
+      const completionReserve = { bytes: completionReserveFor(kept, completionBytes), used: 0 };
       if (replaces !== undefined && (!isObj(replaces) || typeof replaces.token !== 'string' || !replaces.token || replaces.baseGeneration === undefined)) {
         throw storeError(CODES.notSettled, 'prepareAttempt `replaces` needs the old attempt token and the generation it was based on');
       }
@@ -1116,9 +1186,9 @@ function openManagedBindings({ workspaceDir, environment, appUniqueName, solutio
         env.attempts.push({
           family, key, token, baseGeneration, phase: expected ? 'sending' : 'prepared', root, knownScopes, declarationSha256,
           ...(kept !== undefined ? { declaration: kept } : {}), expected,
-          acknowledgedRoot: false, savedObservation: null, publication,
+          acknowledgedRoot: false, savedObservation: null, publication, completionReserve,
         });
-      }, { reserve: PREPARE_RESERVE_BYTES });
+      }, { admit: true });
       // Durable and read back: only now may the replaced attempt's own hold end.
       if (replaces && barrier) barrier.release(replaces.token);
       return token;
@@ -1144,8 +1214,12 @@ function openManagedBindings({ workspaceDir, environment, appUniqueName, solutio
     markSending(token, expected, { observed = false, claim } = {}) {
       if (claim !== undefined && claim !== 'first' && claim !== 'continue' && claim !== 'resume') throw storeError(CODES.notSettled, `markSending cannot claim an attempt to "${claim}"`);
       let epoch = null;
-      mutate((env, disk) => {
+      // Written before the send, with the expected proof, so a refusal here comes before the send. The attempt was
+      // admitted at its prepareAttempt and spends its own reservation, so content written since cannot strand it unsent.
+      // One with no reservation (an older build's) is admitted here instead: every reservation and the shared reserve free.
+      mutate((env, disk, spend) => {
         const a = requireAttempt(env, disk, token);
+        spend(token);
         if (a.expected !== null && canonicalJson(a.expected) !== canonicalJson(expected)) {
           throw storeError(CODES.completion, 'a sent attempt keeps the expected proof it was sent with');
         }
@@ -1169,7 +1243,7 @@ function openManagedBindings({ workspaceDir, environment, appUniqueName, solutio
           a.sendWindow.epoch += 1;
         }
         epoch = a.sendWindow ? a.sendWindow.epoch : null;
-      });
+      }, { admit: 'unreserved' });
       return { epoch };
     },
     /**
@@ -1180,8 +1254,9 @@ function openManagedBindings({ workspaceDir, environment, appUniqueName, solutio
      * direct caller; runManagedFeature always passes the one markSending answered) is counted but not fenced.
      */
     noteAttemptDispatch(token, epoch) {
-      mutate((env, disk) => {
+      mutate((env, disk, spend) => {
         const a = requireAttempt(env, disk, token);
+        spend(token);
         if (!a.sendWindow) return;
         if (epoch !== undefined && epoch !== null && a.sendWindow.epoch !== epoch) throw storeError(CODES.pending, `the managed ${a.family} "${a.key}" attempt was claimed by another run since this send began; the request is not sent`);
         a.sendWindow.possible += 1;
@@ -1194,8 +1269,9 @@ function openManagedBindings({ workspaceDir, environment, appUniqueName, solutio
      * epoch or a failed write here leaves the attempt possibly sent.
      */
     noteAttemptNotStarted(token, epoch) {
-      mutate((env, disk) => {
+      mutate((env, disk, spend) => {
         const a = requireAttempt(env, disk, token);
+        spend(token);
         if (!a.sendWindow || a.sendWindow.possible < 1) throw storeError(CODES.notSettled, 'the managed attempt has no counted send to answer');
         if (epoch !== undefined && epoch !== null && a.sendWindow.epoch !== epoch) throw storeError(CODES.pending, 'the managed attempt was claimed by another run since this send was counted; it stays possibly applied');
         a.sendWindow.possible -= 1;
@@ -1221,8 +1297,9 @@ function openManagedBindings({ workspaceDir, environment, appUniqueName, solutio
     noteSaved(token, { proof, acknowledgedRoot = false, acknowledgedChildCreates = [], phase = 'saved' } = {}) {
       if (phase !== 'saved' && phase !== 'state-pending' && phase !== 'membership-pending') throw storeError(CODES.notSettled, `noteSaved cannot move an attempt to ${phase}`);
       if (!Array.isArray(acknowledgedChildCreates)) throw storeError(CODES.completion, 'a child-create receipt is a list of { kind, key, id }');
-      mutate((env, disk) => {
+      mutate((env, disk, spend) => {
         const a = requireAttempt(env, disk, token);
+        spend(token);
         if (!a.expected) throw storeError(CODES.notSettled, 'an attempt cannot be saved before it was sent');
         if (acknowledgedRoot === true && a.expected.baseObservation !== null) {
           throw storeError(CODES.notSettled, `the managed ${a.family} "${a.key}" edited an existing root; an answer to an edit never acknowledges a create`);
@@ -1233,7 +1310,9 @@ function openManagedBindings({ workspaceDir, environment, appUniqueName, solutio
             closedKeys(c, ['kind', 'key', 'id'], 'the child-create receipt entry');
             if (!nonempty(c.kind) || !nonempty(c.key) || !nonempty(c.id)) throw invalid('the child-create receipt entry', 'is incomplete');
             const entry = { kind: c.kind, key: c.key, id: c.id.toLowerCase() };
-            if (!receipt.some((x) => x.kind === entry.kind && x.key === entry.key && x.id === entry.id)) receipt.push(entry);
+            // The same child in another valid spelling (a braced or upper-case GUID) is the receipt already held,
+            // compared as validateChildReceipt compares it; the spelling first stored is kept.
+            if (!receipt.some((x) => x.kind === entry.kind && x.key === entry.key && rowIdKey(x.id) === rowIdKey(entry.id))) receipt.push(entry);
           }
           validateChildReceipt(receipt, a, 'the child-create receipt');
         } catch (e) {
@@ -1412,7 +1491,7 @@ function openManagedBindings({ workspaceDir, environment, appUniqueName, solutio
           p.state = 'dispatching';
           p.dispatchToken = token;
         }
-      }, { reserve: PREPARE_RESERVE_BYTES });
+      }, { admit: true });
     },
     /**
      * After the send: 'definite-no-start' returns the debt to owed, and a carried group to the settled state it had;
@@ -1509,6 +1588,10 @@ function openManagedBindings({ workspaceDir, environment, appUniqueName, solutio
      * back the publication it had. Nothing is sent and no desired hash changes; the acceptance is recorded in the
      * store (`publicationRiskAcceptances`). It does not clear this run's quarantine (the barrier is in memory): the
      * next invocation finds no uncertain publication. There is no time-based or run-based release.
+     * It releases ONLY the publication. A pending attempt on a released group (prepared, sending or saved; an older
+     * store can hold one beside an uncertain publish) is left exactly as it is: its phase, expected proof, saved
+     * observation, effects and hold. Retiring a sending or saved attempt is refused, and recovering it is refused while
+     * the publish is uncertain, so requiring either first would leave no way out; normal recovery settles it afterwards.
      * Answers { released: [{ family, key }] }.
      */
     acceptUncertainPublication({ scope, dispatchToken, approval } = {}) {
@@ -1521,8 +1604,6 @@ function openManagedBindings({ workspaceDir, environment, appUniqueName, solutio
         if (!open.length) throw storeError(CODES.notSettled, `no publish of ${scopeKey(scope)} is unconfirmed under that dispatch token`);
         for (const g of open) {
           if (scopeKey(g.publication.scope) !== scopeKey(scope)) throw storeError(CODES.notSettled, `the dispatch also covers ${g.family} "${g.key}" in another scope`);
-          const unit = usable(unitOf(disk, g.family, g.key));
-          if (unit.attempt) throw storeError(CODES.pending, `the managed ${g.family} "${g.key}" has a pending attempt`);
         }
         for (const g of open) {
           const p = g.publication;
@@ -1575,8 +1656,9 @@ function openManagedBindings({ workspaceDir, environment, appUniqueName, solutio
       const same = (e) => canonicalJson([e.attemptToken, e.baseGeneration, e.family, e.key, e.rowId, e.effect, e.request, e.desiredSha256, e.desiredState, e.expectedVersion])
         === canonicalJson([rec.attemptToken, rec.baseGeneration, rec.family, rec.key, rec.rowId, rec.effect, rec.request, rec.desiredSha256, rec.desiredState, rec.expectedVersion]);
       let reused = null;
-      mutate((env, disk) => {
+      mutate((env, disk, spend) => {
         checkEffectOwner(env, disk, rec);
+        spend(rec.attemptToken);
         const reached = fulfilledTarget(env, rec);
         if (reached) { reused = clone(reached); return; }
         const open = env.workflowEffects.filter((e) => e.rowId === rec.rowId && e.effect === rec.effect && e.state !== 'confirmed');
@@ -1588,28 +1670,31 @@ function openManagedBindings({ workspaceDir, environment, appUniqueName, solutio
     },
     markEffectDispatching(token, dispatchToken) {
       tokenField(dispatchToken, 'the dispatch token');
-      mutate((env) => {
+      mutate((env, disk, spend) => {
         const e = env.workflowEffects.find((x) => x.token === token);
         if (!e || e.state !== 'definitely-unsent') throw storeError(CODES.notSettled, 'the workflow effect is not waiting to be sent');
+        spend(e.attemptToken);
         e.state = 'dispatching';
         e.dispatchToken = dispatchToken;
       });
     },
     noteEffectOutcome(token, outcome) {
       if (outcome !== 'definite-no-start' && outcome !== 'unconfirmed') throw storeError(CODES.notSettled, `unknown effect outcome ${outcome}`);
-      mutate((env) => {
+      mutate((env, disk, spend) => {
         const e = env.workflowEffects.find((x) => x.token === token);
         if (!e || !UNCERTAIN.has(e.state)) throw storeError(CODES.notSettled, 'the workflow effect was not dispatched');
+        spend(e.attemptToken);
         if (outcome === 'definite-no-start') { e.state = 'definitely-unsent'; e.dispatchToken = null; } else e.state = 'unconfirmed';
       });
     },
     /** A fresh read proved the effect's desired body (create, body) or state on its row: confirm it without sending again. */
     confirmEffect(token, { observedSha256, observedState } = {}) {
-      mutate((env) => {
+      mutate((env, disk, spend) => {
         const e = env.workflowEffects.find((x) => x.token === token);
         // A fulfilled change was never sent by this attempt, so it is never called confirmed (a confirmed effect claims
         // a dispatch of ours).
         if (!e || e.state === 'definitely-unsent' || e.state === 'fulfilled') throw storeError(CODES.notSettled, 'the workflow effect was not dispatched');
+        spend(e.attemptToken);
         const proved = e.effect === 'state' ? observedState === e.desiredState : observedSha256 === e.desiredSha256;
         if (!proved) throw storeError(CODES.notSettled, 'the observed workflow row does not prove the effect');
         e.state = 'confirmed';
@@ -1633,12 +1718,13 @@ function openManagedBindings({ workspaceDir, environment, appUniqueName, solutio
      */
     fulfillEffect(token, { observedState, observedVersion } = {}) {
       let out = null;
-      mutate((env, disk) => {
+      mutate((env, disk, spend) => {
         const e = env.workflowEffects.find((x) => x.token === token);
         if (!e || e.effect !== 'state' || e.state !== 'definitely-unsent' || e.dispatchToken !== null) {
           throw storeError(CODES.notSettled, 'only a state change that was never sent can be found fulfilled without sending it');
         }
         requireAttempt(env, disk, e.attemptToken);
+        spend(e.attemptToken);
         fulfilInto(e, observedState, observedVersion);
         out = clone(e);
       });
@@ -1657,8 +1743,9 @@ function openManagedBindings({ workspaceDir, environment, appUniqueName, solutio
       const rec = effectRecord(effect);
       if (rec.effect !== 'state') throw storeError(CODES.notSettled, 'only a state change can be found fulfilled without sending it');
       let out = null;
-      mutate((env, disk) => {
+      mutate((env, disk, spend) => {
         checkEffectOwner(env, disk, rec);
+        spend(rec.attemptToken);
         const reached = fulfilledTarget(env, rec, true);
         if (reached) { out = clone(reached); return; }
         const open = env.workflowEffects.filter((e) => e.rowId === rec.rowId && e.effect === rec.effect && e.state !== 'confirmed');
@@ -1750,6 +1837,8 @@ module.exports = {
   PREFIX,
   MAX_BYTES,
   PREPARE_RESERVE_BYTES,
+  COMPLETION_BASE_BYTES,
+  COMPLETION_MAX_BYTES,
   DECLARATION_MAX_BYTES,
   CODES,
   FAMILIES,
