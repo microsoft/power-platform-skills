@@ -32,7 +32,9 @@
 //
 // Proof (proofSchema `dashboard-v1`): the expected proof persisted before the send names every managed tile's control
 // id with the association of its type, cell, section and tab, and the sha256 of the INTENDED projection: the root's
-// type, scope and description, and each managed tile's key, id, type, containers and full ownable parts. A fresh read
+// name, type, scope and description, and each managed tile's key, id, type, containers and full ownable parts. The
+// root's name is the one the send leaves: a create's declared name, or an existing dashboard's live name (the spec's
+// name only finds an existing dashboard, it never renames one). A fresh read
 // must reproduce it exactly. Preservation is proven over everything the declaration does NOT own: the whole layout
 // (every foreign cell and control, the tabs, sections and rows and their order) with each managed cell kept in place
 // with only its authored parts taken out (its spans, the label the SDK writes its name to, its owned parameters), so its
@@ -277,7 +279,7 @@ function placeOf(component, layout) {
 const associationOf = (tileKey, type, place) => sha({ tileKey, type, cell: place.cell, section: place.section, tab: place.tab });
 
 /**
- * The hash of a dashboard's managed projection: the root's type, scope and description, and every managed tile — key,
+ * The hash of a dashboard's managed projection: the root's name, type, scope and description, and every managed tile — key,
  * control id, type, containers and full ownable parts — in key order. Built from the INTENDED state before the send, and
  * from a fresh read in the proof; the two must be equal.
  */
@@ -435,8 +437,9 @@ function appendKeepsLayout(live, intended, additionIds, managedTypes, languageCo
  *                 the seed tab and section must each be on exactly one element of their role, the section in the tab;
  *   languageCode  the SDK's language (sdk.languageCode; 1033 when omitted): which label a tile's name is read from.
  * Answers:
- *   root                { dashboardType, global, description } as read. Both hashes are of the root as read, so a
- *                       table-scoped or non-Standard root never matches a committed proof (always Standard and global);
+ *   root                { name, dashboardType, global, description } as read. Both hashes are of the root as read, so a
+ *                       table-scoped or non-Standard root never matches a committed proof (always Standard and global),
+ *                       and neither does a root renamed since the proof;
  *   invalid             why the root or seed is not one a declared dashboard may be: 'dashboard-interactive-unsupported'
  *                       (not Standard), 'dashboard-scope-unsupported' (belongs to a table), 'dashboard-seed-unrecognized'
  *                       (seedIds is neither empty nor two ids), 'dashboard-seed-not-in-place' (the seed is not where the
@@ -452,7 +455,7 @@ function appendKeepsLayout(live, intended, additionIds, managedTypes, languageCo
 function projectDashboard(art, { managed = [], seedIds = [], languageCode = DEFAULT_LCID } = {}) {
   const components = (art && art.components) || [];
   const layout = layoutOf(art && art.bag);
-  const root = rootProjection(art && art.dashboardType, isGlobal(art), art && art.description);
+  const root = rootProjection(art && art.dashboardType, isGlobal(art), art && art.description, art && art.name);
   const invalid = [];
   if (root.dashboardType !== 'Standard') invalid.push('dashboard-interactive-unsupported');
   if (!root.global) invalid.push('dashboard-scope-unsupported');
@@ -533,13 +536,18 @@ function committedDeclaration(group) {
   return d && typeof d === 'object' ? JSON.parse(JSON.stringify(d)) : null;
 }
 
-const rootProjection = (dashboardType, global, description) => ({
+// The root fields both hashes of a dashboard cover. The row's name is one: the name the send leaves must be the name
+// proved, or a maker's rename landing after the send (or between the proof's reads) would be certified and published
+// as this build's change.
+const rootProjection = (dashboardType, global, description, name) => ({
+  name: String(name == null ? '' : name),
   dashboardType: dashboardType === undefined ? null : dashboardType,
   global: !!global,
   description: String(description == null ? '' : description),
 });
-// The root a declared dashboard is written as and proved against: global and Standard.
-const declaredRoot = (description) => rootProjection('Standard', true, description);
+// The root a declared dashboard is written as and proved against: global and Standard, with the resolution's
+// description and name (rootName: a create's declared name, an existing dashboard's live one).
+const declaredRoot = (r) => rootProjection('Standard', true, r.desiredRoot.description, r.rootName);
 
 /** Read a dashboard by exact id from the service (never the workspace copy); throws what the read threw. */
 async function readDashboard(sdk, id) {
@@ -676,7 +684,7 @@ function unpreservableSend(s, r, intended, tiles) {
     languageCode: s.languageCode,
   });
   if (projected.invalid.length || projected.missing.length || projected.duplicated.length ||
-    projected.semanticSha256 !== projectionSha256(declaredRoot(r.desiredRoot.description), tiles)) {
+    projected.semanticSha256 !== projectionSha256(declaredRoot(r), tiles)) {
     return 'the SDK would not store this change as declared';
   }
   if (!r.create && !appendKeepsLayout(r.live, intended, r.additions.map((e) => e.controlId), managedTypes, s.languageCode)) {
@@ -878,7 +886,10 @@ async function resolveDashboard(s, committed, pending) {
   if (!refusals.length && writes && !adoptable) refuse(key, 'dashboard-adoption-not-authorized', `the dashboard exists and is not yet managed by this spec; approve adopting it first (dashboard:${key})`);
   if (refusals.length) throw stop(refusals[0].code, `declared dashboard "${key}": ${refusals.map((r) => `${r.key}: ${r.message}`).join('; ')}`, { refusals });
 
-  const resolution = { create: false, id, source, live, pub, layout, entries, additions, description, desiredRoot, writes, adoptable, pending: !!pending };
+  // The spec's name found this dashboard (or a pin or binding did); it is not a rename. The send keeps the live name,
+  // and the proof holds the stored row to it.
+  const rootName = live.name;
+  const resolution = { create: false, id, source, live, pub, layout, entries, additions, description, desiredRoot, rootName, writes, adoptable, pending: !!pending };
   return withIntended(s, resolution);
 }
 
@@ -920,7 +931,7 @@ function resolveCreate(s, id, pending) {
     e.place = { cell: e.cellId, section: seed.section, tab: seed.tab };
   }
   const description = typeof dashboard.description === 'string' ? dashboard.description : '';
-  return withIntended(s, { create: true, id, source: 'derived', seed, entries, additions: entries, description, desiredRoot: { description }, writes: 1 + entries.length, adoptable: true, pending: !!pending });
+  return withIntended(s, { create: true, id, source: 'derived', seed, entries, additions: entries, description, desiredRoot: { description }, rootName: dashboard.name, writes: 1 + entries.length, adoptable: true, pending: !!pending });
 }
 
 /**
@@ -956,7 +967,7 @@ function planDashboard(s, resolution, committed) {
     proofSchema: PROOF_SCHEMA,
     rootId: r.id,
     baseProofSha256: committed ? committed.proof.semanticSha256 : null,
-    sentProjectionSha256: projectionSha256(declaredRoot(r.desiredRoot.description), tiles),
+    sentProjectionSha256: projectionSha256(declaredRoot(r), tiles),
     preservationSha256: preservationSha256(r.writes ? r.intended.bag : r.live.bag, managedTypes, s.languageCode),
     baseObservation: r.create ? null : { rowVersion: null, savedSha256: savedSha },
     children,

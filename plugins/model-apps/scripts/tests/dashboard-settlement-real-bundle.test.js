@@ -1021,3 +1021,66 @@ test('a send the SDK would not store as declared is refused before it is sent: a
   const g = w.store.readGroup('dashboard', 'ops');
   assert.deepEqual([g.committed, g.pending], [null, null], 'no attempt was opened');
 });
+
+// The dashboard row's name is part of what the proof binds. A create proves the name it was created with; an existing
+// dashboard keeps its live name, which the spec's name only looked up. A rename landing after the send is never
+// certified as this build's change, nor published.
+const existingOps = () => declared([{ key: 'open', type: 'list', view: 'Open cases', componentId: C_OPEN, name: 'Open now' }], { dashboardId: DID });
+for (const created of [false, true]) {
+  test(`a commit lost after the save, then the ${created ? 'created' : 'existing'} dashboard renamed: nothing bound or published`, async () => {
+    const w = await world();
+    if (!created) putExisting(w.wire);
+    const d = created ? declared([{ key: 'open', type: 'list', view: 'Open cases' }]) : existingOps();
+    const pending = await strandedAttempt(w, d);
+    const id = pending.root.id;
+    assert.equal(w.wire.saved.get(id).name, 'Ops');
+    w.wire.saved.get(id).name = 'MAKER TITLE AFTER THE SEND';
+    const next = await rerun(w);
+    assert.equal(await codeOf(settle(next, d)), 'create-completion-required');
+    const g = next.store.readGroup('dashboard', 'ops');
+    assert.equal(g.committed, null);
+    assert.ok(g.pending, 'the attempt and its proof are kept');
+    await publish(next, 'ops', id).catch(() => undefined);
+    assert.equal(w.wire.publishes(id).length, 0);
+  });
+}
+
+test('a dashboard renamed between the proof reads is not bound or published; a live name the spec does not use is kept', async () => {
+  const w = await world();
+  putExisting(w.wire);
+  let written = false;
+  let injected = false;
+  w.wire.script((e) => {
+    if (e.method === 'PATCH' && /^systemforms/.test(e.path)) written = true;
+    if (written && !injected && e.method === 'GET' && /RetrieveUnpublished/.test(e.path) && PUBLICATION_SELECTS.has(new URL(e.url).searchParams.get('$select'))) {
+      w.wire.saved.get(DID).name = 'MAKER TITLE DURING PROOF';
+      injected = true;
+    }
+    return false;
+  }, {});
+  assert.equal(await codeOf(settle(w, existingOps())), 'create-completion-required');
+  assert.equal(injected, true, 'the rename lands between the SDK read and the publication read');
+  assert.equal(w.store.readGroup('dashboard', 'ops').committed, null);
+  await publish(w, 'ops', DID).catch(() => undefined);
+  assert.equal(w.wire.publishes(DID).length, 0);
+
+  // The spec's name finds a dashboard; it does not rename one: a pinned dashboard with another live name commits with it.
+  const k = await world();
+  putExisting(k.wire);
+  for (const layer of [k.wire.saved, k.wire.published]) layer.get(DID).name = 'Operations board';
+  assert.equal(await codeOf(settle(k, existingOps())), null);
+  assert.equal(k.wire.saved.get(DID).name, 'Operations board');
+  assert.equal((await projectCommitted(k, DID)).certified, true);
+});
+
+test('the shared projection does not certify a dashboard renamed after its commit', async () => {
+  const w = await world();
+  const id = (await settle(w, declared([{ key: 'open', type: 'list', view: 'Open cases' }]))).id;
+  await publish(w, 'ops', id);
+  assert.equal((await projectCommitted(w, id)).certified, true);
+  w.wire.saved.get(id).name = 'MAKER TITLE AFTER COMMIT';
+  const p = await projectCommitted(w, id);
+  assert.equal(p.out.preservationSha256, p.group.proof.preservationSha256, 'the layout is unchanged');
+  assert.notEqual(p.out.semanticSha256, p.group.proof.semanticSha256, 'the name as read is in the hash');
+  assert.equal(p.certified, false);
+});
