@@ -9,7 +9,9 @@
 //   POST PublishXml {"ParameterXml":"<importexportxml><entities><entity>account</entity></entities></importexportxml>"}
 //        copies the saved layer of every form of `account` to its published layer; a <dashboards><dashboard>id</dashboard>
 //        envelope does the same for one dashboard
-// and workflow rows:
+// The same two layers for view (savedquery) and chart (savedqueryvisualization) rows, by id (`putQuery`); a table's PublishXml
+// publishes the ones whose `returnedtypecode`/`primaryentitytypecode` is the table, as it publishes its forms.
+// And workflow rows:
 //   POST workflows(00000000-…)/Microsoft.Dynamics.CRM.CreateProcessWithWfomJson|UpdateProcessWithWfomJson  {"Entity":{"workflowid":…}}
 //   POST workflows {"workflowid":…}     PATCH workflows(<id>) {…}     GET workflows(<id>)
 // Anything else: a GET answers an empty collection, a write 204. `script(match, answer)` makes the next request that
@@ -26,6 +28,8 @@ function createManagedWire() {
   const saved = new Map();
   const published = new Map();
   const workflows = new Map();
+  // savedqueries / savedqueryvisualizations: collection -> { saved: Map, published: Map }
+  const queries = { savedqueries: { saved: new Map(), published: new Map(), table: 'returnedtypecode' }, savedqueryvisualizations: { saved: new Map(), published: new Map(), table: 'primaryentitytypecode' } };
   const log = [];
   const scripted = [];
   const json = (statusCode, body, headers = {}) => ({ statusCode, headers, body: body === undefined ? '' : JSON.stringify(body) });
@@ -37,10 +41,13 @@ function createManagedWire() {
     m = /^systemforms\(([^)]+)\)$/i.exec(p);
     if (m && method === 'GET') { const r = published.get(m[1].toLowerCase()); return r ? json(200, { ...r }) : notFound(); }
     if (m && method === 'PATCH') { const id = m[1].toLowerCase(); saved.set(id, { ...saved.get(id), ...body }); return json(204); }
+    m = /^(savedqueries|savedqueryvisualizations)\(([^)]+)\)(\/Microsoft\.Dynamics\.CRM\.RetrieveUnpublished\(\))?$/i.exec(p);
+    if (m && method === 'GET') { const q = queries[m[1].toLowerCase()]; const r = (m[3] ? q.saved : q.published).get(m[2].toLowerCase()); return r ? json(200, { ...r }) : notFound(); }
     if (/^PublishXml$/i.test(p) && method === 'POST') {
       const xml = String(body && body.ParameterXml);
       for (const [, t] of xml.matchAll(/<entity>([^<]+)<\/entity>/g)) {
         for (const [id, r] of saved) if (r.objecttypecode === t && r.type !== 0) published.set(id, { ...r });
+        for (const q of Object.values(queries)) for (const [id, r] of q.saved) if (r[q.table] === t) q.published.set(id, { ...r });
       }
       for (const [, id] of xml.matchAll(/<dashboard>([^<]+)<\/dashboard>/g)) {
         const r = saved.get(id.toLowerCase());
@@ -104,6 +111,14 @@ function createManagedWire() {
       const r = { description: null, ...row, formid: row.formid.toLowerCase() };
       saved.set(r.formid, r);
       if (publishedToo) published.set(r.formid, { ...r });
+      return r;
+    },
+    /** Put a view (`savedqueries`) or chart (`savedqueryvisualizations`) row by its id field; `publishedToo` as putForm. */
+    putQuery(collection, idField, row, { publishedToo = false } = {}) {
+      const q = queries[collection];
+      const r = { description: null, ...row, [idField]: row[idField].toLowerCase() };
+      q.saved.set(r[idField], r);
+      if (publishedToo) q.published.set(r[idField], { ...r });
       return r;
     },
     /** The PublishXml requests that reached the wire. `name`: only those whose envelope names this table or dashboard id. */

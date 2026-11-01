@@ -559,6 +559,50 @@ test('the layers of every covered group are read by its family\'s reader: a cove
   assert.equal(r.wire.publishes().length, 0);
 });
 
+test('a table\'s managed views and charts are read by the shared readers before a form publish of the table: equal layers send once, an unpublished saved layer fences the table', async () => {
+  const VIEW = '31313131-3131-4313-8313-313131313131';
+  const CHART = '32323232-3232-4323-8323-323232323232';
+  const committedQuery = (s, family, key, id) => {
+    const t = s.store.prepareAttempt({ family, key, baseGeneration: null, root: { kind: family, key, id }, knownScopes: [ACCOUNT], declarationSha256: H('e') });
+    s.store.markSending(t, { ...expected(id), proofSchema: `${family}-v1` });
+    s.store.noteSaved(t, { proof: null, acknowledgedRoot: true });
+    s.store.commitGroup({ token: t, baseGeneration: null, records: [rec(family, key, id)], proof: PROOF, consumerState: { baseline: {} }, publication: { scope: ACCOUNT, state: 'not-needed', desiredSha256: null, dispatchToken: null }, proofSchema: `${family}-v1` });
+  };
+  const view = { savedqueryid: VIEW, name: 'Active', returnedtypecode: 'account', fetchxml: '<fetch v="1"/>', layoutxml: '<grid/>' };
+  const chart = { savedqueryvisualizationid: CHART, name: 'By owner', primaryentitytypecode: 'account', datadescription: '<datadefinition/>', presentationdescription: '<Chart/>' };
+  const arrange = async ({ viewEdited = false, chartPublished = true } = {}) => {
+    const s = await setup();
+    committedForm(s, { id: MAIN, key: 'account/main', publishedXml: '<form v="1"/>', savedXml: '<form v="2"/>' });
+    // viewEdited: the view's published layer is an older definition; its saved layer holds an edit not yet published.
+    if (viewEdited) s.wire.putQuery('savedqueries', 'savedqueryid', { ...view, fetchxml: '<fetch v="0"/>' }, { publishedToo: true });
+    s.wire.putQuery('savedqueries', 'savedqueryid', view, { publishedToo: !viewEdited });
+    s.wire.putQuery('savedqueryvisualizations', 'savedqueryvisualizationid', chart, { publishedToo: chartPublished });
+    committedQuery(s, 'view', 'account/active', VIEW);
+    committedQuery(s, 'chart', 'account/by owner', CHART);
+    return s;
+  };
+  const publish = (s) => publishManagedScope({ store: s.store, barrier: s.barrier, scope: ACCOUNT, groups: [MAIN_G], client: s.sdk.dataverse, publish: () => publishTablesXml(s.sdk.dataverse, ['account']) });
+  const readPaths = (s) => s.wire.log.filter((e) => e.method === 'GET' && /^savedquer/i.test(e.path)).map((e) => e.path);
+
+  // Saved equals published on both: the form publish is sent once, after each was read in both layers by the shared map.
+  const s = await arrange();
+  assert.equal((await publish(s)).sent, true);
+  assert.equal(s.wire.publishes('account').length, 1);
+  assert.deepEqual(readPaths(s), [
+    `savedqueries(${VIEW})/Microsoft.Dynamics.CRM.RetrieveUnpublished()`, `savedqueries(${VIEW})`,
+    `savedqueryvisualizations(${CHART})/Microsoft.Dynamics.CRM.RetrieveUnpublished()`, `savedqueryvisualizations(${CHART})`,
+  ]);
+
+  // A chart saved and never published (or a view edit saved and not published) would go live with the form: nothing is sent.
+  for (const variant of [{ chartPublished: false }, { viewEdited: true }]) {
+    const u = await arrange(variant);
+    assert.equal(await codeOf(publish(u)), CODES.completion, JSON.stringify(variant));
+    assert.equal(u.wire.publishes().length, 0);
+    assert.equal(u.barrier.allowScope(ACCOUNT, 'a sibling'), false, 'the table is fenced for the run');
+    assert.equal(u.store.readGroup('form', 'account/main').committed.publication.state, 'owed');
+  }
+});
+
 test('a dashboard known only by its retained id, with no scope given, is quarantined when its creation record is not settled: no path publishes it', async () => {
   const s = await setup();
   s.wire.putForm({ formid: DASH, name: 'Sales', objecttypecode: 'none', type: 0, formxml: '<form d="1"/>' });
