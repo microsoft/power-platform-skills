@@ -2171,25 +2171,32 @@ async function applyConfiguration(plan, ctx) {
       continue;
     }
     const unknownBefore = result.unknown.length;
-    // A new duplicate rule joins the solution on its create header, but its declared conditions are added after it, and
-    // the rule itself is proven only at the end. Both need a component type read from metadata (typeOf); were it read
-    // that late, an unreadable type would surface only after the rule was created and published and a condition was
-    // added. So a create reads both types first, and a type it cannot read stops the step here: nothing is written for
-    // the rule. A found rule (update or unchanged) keeps its requests: ensure reads the rule's type before any write
-    // of it, and a condition's type is read when that condition is added.
+    // A duplicate rule's conditions join the solution after they are written, and a new rule itself is proven only at
+    // the end. Each needs a component type read from metadata (typeOf); were it read that late, an unreadable type would
+    // surface only after the rule or its new conditions were written (and the rule published). So the types a write
+    // will need are read before it, through the same memo (so the later ensure and proof read nothing again), and a type
+    // that cannot be read stops the step with nothing written for the rule:
+    //   - a create reads the rule's type and, when it declares conditions, theirs (before the create);
+    //   - an update whose edit creates conditions reads theirs (below, after its preconditions and before the write: the
+    //     rule's own type is read by ensure, which an update goes through first).
+    // A found rule whose edit adds no condition keeps its requests: ensure reads the rule's type before any write of it.
+    const typesUnreadable = async (kinds, conditionKeys) => {
+      const failed = await membership.unreadable(kinds);
+      if (!failed.length) return false;
+      const code = 'SOLUTION_COMPONENT_TYPE_UNREADABLE';
+      if (failed.includes('duplicateRule')) pushFinding(result, 'unknown', { kind, key, ...(op.action === 'create' ? {} : { id: op.id }), code, unit: 'membership' });
+      if (failed.includes('duplicateRuleCondition')) {
+        for (const childKey of conditionKeys) pushFinding(result, 'unknown', { kind: 'duplicateRuleCondition', key: childKey, code, unit: 'membership' });
+      }
+      observationsOf(result).push(op.action === 'create'
+        ? { kind, key, source: 'plan-read', definition: 'missing' }
+        : observe(kind, key, op.id, op.detail.entry, op.detail.remote, 'plan-read', result[INVENTORY]));
+      stopped = true;
+      return true;
+    };
     if (op.action === 'create' && kind === 'duplicateRule') {
       const slots = declaredSlots(kind, op.detail && op.detail.entry, ctx);
-      const failed = await membership.unreadable(slots.length ? ['duplicateRule', 'duplicateRuleCondition'] : ['duplicateRule']);
-      if (failed.length) {
-        const code = 'SOLUTION_COMPONENT_TYPE_UNREADABLE';
-        if (failed.includes('duplicateRule')) pushFinding(result, 'unknown', { kind, key, code, unit: 'membership' });
-        if (failed.includes('duplicateRuleCondition')) {
-          for (const slot of slots) pushFinding(result, 'unknown', { kind: 'duplicateRuleCondition', key: `${portKeyOf(kind, key)}|${slot}`, code, unit: 'membership' });
-        }
-        observationsOf(result).push({ kind, key, source: 'plan-read', definition: 'missing' });
-        stopped = true;
-        continue;
-      }
+      if (await typesUnreadable(slots.length ? ['duplicateRule', 'duplicateRuleCondition'] : ['duplicateRule'], slots.map((slot) => `${portKeyOf(kind, key)}|${slot}`))) continue;
     }
     if (op.action === 'update' || (op.action === 'unchanged' && !stopped)) {
       const joined = await membership.ensure(op);
@@ -2208,6 +2215,10 @@ async function applyConfiguration(plan, ctx) {
     }
     const blocked = await preconditionsHold(op, ctx, preconditionCache);
     if (blocked) { pushFinding(result, 'refused', { kind, key, id: op.id, code: blocked }); continue; }
+    if (op.action === 'update' && kind === 'duplicateRule') {
+      const added = (op.detail.changes || []).flatMap((change) => change.created || []).filter((child) => child.kind === 'duplicateRuleCondition');
+      if (added.length && await typesUnreadable(['duplicateRuleCondition'], added.map((child) => child.key))) continue;
+    }
     if (op.action === 'create') await applyCreate(op, ctx, result, known);
     else if (op.action === 'update') await applyUpdate(op, ctx, result, known);
     if (result.unknown.length > unknownBefore) stopped = true;

@@ -291,21 +291,51 @@ test('a new duplicate rule whose own component type the build cannot read stops 
   assert.equal(unreadable.org.rows('duplicaterules').length, 0);
 });
 
-test('a duplicate rule saved but not published says how to finish it; a rebuild without status keeps it unpublished, one with status publishes it', async () => {
-  // The publish job fails after its request was accepted, as one does on an environment whose async host has not yet seen a
-  // table created moments earlier: PublishDuplicateRule answers 200 and its asyncoperation ends Failed (statecode 3, statuscode 31).
-  const JOB = '00000000-0000-4000-8000-0000000000f1';
-  let failPublish = true;
-  const h = await harness({ intercept: ({ method, path: p }) => (failPublish && method === 'POST' && /\/Microsoft\.Dynamics\.CRM\.PublishDuplicateRule$/.test(p)
-    ? { statusCode: 200, body: { asyncoperationid: JOB } } : undefined) });
-  h.org.sets.get('asyncoperations').set(JOB, { asyncoperationid: JOB, statecode: 3, statuscode: 31, operationtype: 7, name: 'Publish duplicate rule',
+// A reused rule the edit adds a condition to: the update creates the condition in the same push, so the condition's type is read
+// before that push, whatever the rule's status. Unreadable, it stops the step with no write: the rule keeps its one condition.
+for (const status of ['unpublished', 'published']) {
+  test(`a duplicate rule (${status}) an edit adds a condition to reads the condition type before the update: unreadable, nothing is written`, async () => {
+    let fail = false;
+    const h = await harness({ intercept: ({ method, path: p }) => (fail && method === 'GET' && p.startsWith("/EntityDefinitions(LogicalName='duplicaterulecondition')")
+      ? { statusCode: 500, body: { error: { code: '0x80040216', message: 'unavailable' } } } : undefined) });
+    const spec = { ...RULE_ONLY(), duplicateDetectionRules: CONFIGURATION_FIELDS.duplicateDetectionRules.map((r) => ({ ...r, status })) };
+    const first = await build(h, spec);
+    if (first.thrown) throw first.thrown;
+    assert.equal(h.org.rows('duplicaterules')[0].statecode, status === 'published' ? 1 : 0);
+    fail = true;
+    const edited = { ...spec, duplicateDetectionRules: spec.duplicateDetectionRules.map((r) => ({ ...r, conditions: [...r.conditions, { key: 'l', column: 'lastname', match: 'exact' }] })) };
+    const out = await build(h, edited);
+    assert.ok(out.thrown, 'the build halted');
+    assert.equal(out.thrown.code, 'configuration-incomplete');
+    assert.deepEqual(out.writes, [], 'nothing is written before the new condition\u2019s type is known');
+    assert.equal(h.org.rows('duplicateruleconditions').length, 1, 'the rule keeps its one condition');
+    assert.match(out.thrown.message, /duplicateRuleCondition email\|l \(SOLUTION_COMPONENT_TYPE_UNREADABLE\)/);
+    assert.ok(!/SOLUTION_MEMBERSHIP_UNKNOWN/.test(out.thrown.message), out.thrown.message);
+    assert.equal(h.org.rows('duplicaterules')[0].statecode, status === 'published' ? 1 : 0);
+    assert.deepEqual(h.org.unexpected, []);
+  });
+}
+
+// The publish job fails after its request was accepted, as one does on an environment whose async host has not yet seen a
+// table created moments earlier: PublishDuplicateRule answers 200 and its asyncoperation ends Failed (statecode 3, statuscode 31).
+const PUBLISH_JOB = '00000000-0000-4000-8000-0000000000f1';
+const failingPublish = async (enabled = () => true) => {
+  const h = await harness({ intercept: ({ method, path: p }) => (enabled() && method === 'POST' && /\/Microsoft\.Dynamics\.CRM\.PublishDuplicateRule$/.test(p)
+    ? { statusCode: 200, body: { asyncoperationid: PUBLISH_JOB } } : undefined) });
+  h.org.sets.get('asyncoperations').set(PUBLISH_JOB, { asyncoperationid: PUBLISH_JOB, statecode: 3, statuscode: 31, operationtype: 7, name: 'Publish duplicate rule',
     message: 'The entity was not found in the MetadataCache.' });
-  const HINT = '(saved, but its publication did not complete: publish the rule in the environment\'s duplicate detection rules settings, '
-    + 'or set "status": "published" on it in the App Spec and build again; a build without "status" keeps it unpublished)';
+  return h;
+};
+const PUBLISH_HINT = '(saved, but its publication did not complete: publish the rule in the environment\'s duplicate detection rules settings, '
+  + 'or set "status": "published" on it in the App Spec and build again; a build without "status" keeps it unpublished)';
+
+test('a duplicate rule saved but not published says how to finish it; a rebuild without status keeps it unpublished, one with status publishes it', async () => {
+  let failPublish = true;
+  const h = await failingPublish(() => failPublish);
   const first = await build(h, RULE_ONLY());
   assert.ok(first.thrown, 'the build halted');
   assert.equal(first.thrown.code, 'configuration-incomplete');
-  assert.equal(first.thrown.message, `data-model failed: 1 configuration item not completed: duplicateRule email (DUPLICATE_RULE_PUBLISH_FAILED) ${HINT}`);
+  assert.equal(first.thrown.message, `data-model failed: 1 configuration item not completed: duplicateRule email (DUPLICATE_RULE_PUBLISH_FAILED) ${PUBLISH_HINT}`);
   assert.equal(h.org.rows('duplicaterules')[0].statecode, 0, 'the rule is saved and unpublished');
 
   // The documented rule holds: a rule whose spec omits status keeps the status it has, so a rebuild reports it unchanged.
@@ -321,6 +351,35 @@ test('a duplicate rule saved but not published says how to finish it; a rebuild 
   if (fixed.thrown) throw fixed.thrown;
   assert.equal(fixed.r.ok, true, JSON.stringify(fixed.r.errors));
   assert.equal(h.org.rows('duplicaterules')[0].statecode, 1);
+  assert.deepEqual(h.org.unexpected, []);
+});
+
+// The hint is carried by a marker on the halt item that is not one of its fields: a caller that reads or serializes the items
+// still sees {kind, key, code}. The configuration runtime rebuilds the message from the same items when recording what the step
+// made fails (configuration-build.js), and the hint stays in that message too. One run covers both: the step's own halt items
+// are the ones the rebuilt halt carries. (Each failed publish costs the SDK's full publish wait, so this is one build, not two.)
+test('the publication hint leaves the halt item {kind, key, code} and survives the message a failed record rebuilds', async () => {
+  const { createConfigurationRuntime } = require('../lib/configuration-build.js');
+  const h = await failingPublish();
+  const records = [];
+  const managed = { recordApplied: async (rec) => { records.push(rec.kind); throw new Error('store unavailable'); } };
+  const runtime = createConfigurationRuntime({ spec: RULE_ONLY(), sdk: h.sdk, opts: { managed }, appUniqueName: 'contoso_hintpin' });
+  const step = await runtime.apply('data-model');
+  assert.equal(step.halt.code, 'configuration-incomplete');
+  const pending = step.halt.items.find((p) => p.code === 'DUPLICATE_RULE_PUBLISH_FAILED');
+  assert.ok(pending, JSON.stringify(step.halt.items));
+  assert.deepEqual(Object.keys(pending), ['kind', 'key', 'code']);
+  assert.equal(JSON.stringify(pending), '{"kind":"duplicateRule","key":"email","code":"DUPLICATE_RULE_PUBLISH_FAILED"}');
+  const marker = Object.getOwnPropertySymbols(pending);
+  assert.equal(marker.length, 1);
+  assert.equal(Object.getOwnPropertyDescriptor(pending, marker[0]).enumerable, false);
+  // The record failed, so this message is the runtime's rebuild of the step's halt, with the unconfirmed record added.
+  assert.ok(records.length > 0, 'the runtime tried to record what the step made');
+  assert.ok(step.halt.items.some((p) => p.code === 'CONFIGURATION_RECORD_UNCONFIRMED'), JSON.stringify(step.halt.items));
+  assert.match(step.halt.message, /\(CONFIGURATION_RECORD_UNCONFIRMED\)/);
+  assert.ok(step.halt.message.includes(`duplicateRule email (DUPLICATE_RULE_PUBLISH_FAILED) ${PUBLISH_HINT}`), step.halt.message);
+  assert.ok(!step.halt.message.includes('store unavailable'));
+  assert.throws(() => runtime.throwIfIncomplete(step), (e) => e.code === 'configuration-incomplete' && e.message.includes(PUBLISH_HINT));
   assert.deepEqual(h.org.unexpected, []);
 });
 
