@@ -156,23 +156,26 @@ function createStableCreates({ spec, sdk, store = null, barrier = null, basePort
     return { g, rec, id: rec ? normalizeGuid(rec.id) : g.pending ? g.pending.root.id : composite.identityFor(kind, key).id };
   };
 
-  // Whether the build may continue from the workspace copy at `id` (creates-local.js assertCleanContinuation), with one case that
-  // function cannot see: the local create a pending attempt of this store sent and never had acknowledged. That draft is the
-  // attempt's own when its projection is exactly the one the attempt recorded before the send (`expected.sentProjectionSha256`):
-  // it holds nothing a maker added, and the attempt's proof fetches the server's copy over it. A draft with anything else in it
-  // stops as before.
+  // Whether the build may continue from the workspace copy at `id` (creates-local.js assertCleanContinuation): only a copy that is
+  // absent or synced with no edit. A local create no answer acknowledged stops too, whoever's it is: a diff cannot tell the draft
+  // this build made from one a maker edited since (a name or a description outside the view's projection included), and the proof
+  // would fetch the server's copy over it. The run that made such a draft and lost its answer removes it itself (discardOwnDraft),
+  // so a draft found here is one that run could not remove, and it is the maker's to settle.
   async function assertContinuable(kind, key, id) {
-    const pending = store ? store.readGroup(kind, key).pending : null;
-    if (pending && normalizeGuid(pending.root.id) === normalizeGuid(id)) {
-      let local = null;
-      try { local = await readLocalCreateState(sdk, kind, id); } catch { local = null; }
-      if (local && local.state === 'pending' && local.draft) {
-        let own = false;
-        try { own = projectionBaseline(FAMILY[kind].mod.liveFull(local.draft)).intentSha256 === pending.expected.sentProjectionSha256; } catch { own = false; }
-        if (own) return;
-      }
-    }
     await assertCleanContinuation(sdk, kind, id);
+  }
+
+  // The local create this run made at the stable `id` and never had acknowledged (a refusal, or an answer that was lost), removed
+  // from the workspace in the same run so the next build proves the row from the server rather than stopping on the draft. Only
+  // in this run: its preflight proved the copy at `id` absent or clean (assertContinuable) just before the create, so a draft there
+  // now is the one this run wrote from the declaration. `deleteArtifact` is the SDK's local discard (the workspace's files and
+  // manifest entry; no request). Best effort: a draft left behind stops the next build before anything is fetched over it.
+  async function discardOwnDraft(kind, id) {
+    if (!sdk || typeof sdk.deleteArtifact !== 'function') return;
+    try {
+      const local = await readLocalCreateState(sdk, kind, id);
+      if (local.state === 'pending') await sdk.deleteArtifact(kind, id);
+    } catch { /* kept: the next build refuses it */ }
   }
 
   // A stop the lookup makes is made while planning, before anything is written or sent: it is certified as such (creates-port.js
@@ -343,12 +346,20 @@ function createStableCreates({ spec, sdk, store = null, barrier = null, basePort
       resolve: async () => ({ source: await planOnce() }),
       plan: ({ resolution, committed }) => planFor(resolution.source, committed),
       apply: async ({ token, plan: planned }) => {
-        const r = await applyPlan(planned.source);
-        const created = planned.source.action === 'create' && acknowledged.has(`${kind}\0${key}`);
+        const creating = planned.source.action === 'create';
+        let r;
+        try {
+          r = await applyPlan(planned.source);
+        } catch (err) {
+          if (creating) await discardOwnDraft(kind, planned.root.id);
+          throw err;
+        }
+        const created = creating && acknowledged.has(`${kind}\0${key}`);
         applied = { plan: planned.source, r };
         if (r.refused.length || r.unknown.length) {
           // An acknowledged create is recorded as such before the stop, so the next run recovers it as this build's create.
           if (created) { try { store.noteSaved(token, { acknowledgedRoot: true }); } catch { /* the attempt stays unacknowledged */ } }
+          else if (creating) await discardOwnDraft(kind, planned.root.id);
           if (typeof onUnsettled === 'function') await onUnsettled(planned.source, r);
           const findings = [...r.refused, ...r.unknown];
           throw coded((findings[0] && findings[0].code) || CODES.notSettled, findings.map((f) => `${f.code}: ${f.message}`).join('; '), { findings });

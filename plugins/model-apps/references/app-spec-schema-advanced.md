@@ -682,9 +682,12 @@ downloaded spec. The only value is `"stable-v1"`; any other value is a validatio
 - **Where the binding is kept.** In the build workspace, one file per environment, app and solution
   (`managed-bindings.<hash>.json`). It holds ids, hashes and the state of each change (for a change
   not yet proved, the content it expects the row to hold); never credentials. Keep it with the build
-  workspace: it is the record of changes not yet proved. A file the build cannot trust stops the build
-  before any write (`managed-binding-store-unreadable`); put back the build's own copy of it (from a
-  backup or version control) and run the build again.
+  workspace: it is the record of changes not yet proved and of publishes not yet confirmed. A file the
+  build cannot trust stops the build before any write (`managed-binding-store-unreadable`). Keep it as
+  it is. Never put back an older copy — a backup or a version-control copy, the build's own included,
+  can miss a change or a publish sent after it was made, and a build from it could publish that change
+  unproved. Only a copy known to hold the file's latest content may take its place; when that cannot be
+  known, keep the file and the workspace as they are and do not build, edit or tear down the app from them.
 - **Adoption.** A row found at its id that this workspace never bound — including one equal to the
   spec, and one left by a create whose answer was lost — is bound only with
   `--authorize adopt:view:<table>/<name>` (or `adopt:chart:<table>/<name>`). Without it nothing is
@@ -699,10 +702,14 @@ downloaded spec. The only value is `"stable-v1"`; any other value is a validatio
 - **Local copy.** A local copy at the id with an edit the server has not seen, or a local create that
   was never acknowledged, stops that view or chart before anything is fetched over, reapplied or sent
   (`create-completion-required`); the copy is kept byte for byte, and running again stops again. There is
-  no `overwrite:` approval for this stop: put the change into the spec, then refresh the local copy.
+  no `overwrite:` approval for this stop: put the change into the spec, then refresh the local copy. A
+  build whose own create was refused or lost its answer removes the local draft it made in the same run,
+  so the next build finds the row on the server instead; a draft it could not remove stops as above.
 - **Publishing.** A create whose answer was lost holds its table's publish until a later build has
   found and bound the row; another table still publishes. While a change is not yet proved, page edits
   that publish the app (`genpage.js` add-to-app and remove-from-app, `genpage-upload.js --app-id`) are
   refused with `publication-withheld`, and a teardown leaves that table's publish unsent, with a warning.
+  A page edit makes that check under the app's build and pages leases, so it is refused with
+  `build-locked` while a build of the app runs in the same workspace; run it again once the build ends.
 - **`--verify`** reads each bound view or chart by its id. A binding whose create is not yet settled, or
   a file it cannot read, is reported as unverified, never as a pass.

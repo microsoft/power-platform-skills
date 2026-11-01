@@ -19,6 +19,7 @@ const path = require('path');
 const { PREFIX, CODES, openManagedContext, isStoreEnvironment } = require('./managed-bindings.js');
 const { createPublicationBarrier, describeWithheldApp } = require('./publication-barrier.js');
 const { applyWorkspaceOf } = require('./app-operation-lease.js');
+const { appUniqueName } = require('./app-unique-name.js');
 
 const STORE_FILE = new RegExp(`^${PREFIX.replace(/\./g, '\\.')}[0-9a-f]{64}\\.json$`, 'i');
 // The code of an app write a standalone entry refused because managed debt withholds a table or dashboard it may put live.
@@ -39,38 +40,57 @@ function storeFilesIn(workspaceDir) {
   return names.filter((n) => STORE_FILE.test(n));
 }
 
+const nonEmpty = (v) => typeof v === 'string' && v.trim() !== '';
+
+// The names the build gave the store (lib/sdk-build.js openBuildBindingGroups): the app's by the build's own rule
+// (lib/app-unique-name.js — `app.uniqueName` is optional, an authored spec derives it from the publisher prefix and the display
+// name) and the solution's unique name. { app, solution }; `app` is null when the spec gives neither form, `solution` null when
+// it names none. Never a guess: a part the spec cannot give is null, and the caller decides whether that fails closed.
 function namesOf(spec) {
-  const app = spec && spec.app && spec.app.uniqueName;
-  const solution = spec && spec.solution && spec.solution.uniqueName;
-  return typeof app === 'string' && app.trim() && typeof solution === 'string' && solution.trim() ? { app, solution } : null;
+  if (!spec || typeof spec !== 'object') return { app: null, solution: null };
+  const solution = spec.solution && nonEmpty(spec.solution.uniqueName) ? spec.solution.uniqueName : null;
+  const app = spec.app && typeof spec.app === 'object' ? spec.app : null;
+  let name = null;
+  if (app && nonEmpty(app.uniqueName)) name = appUniqueName(spec);
+  else if (app && nonEmpty(app.name) && spec.solution && nonEmpty(spec.solution.publisherPrefix)) name = appUniqueName(spec) || null;
+  return { app: name, solution };
 }
 
 function readSpecNames(appDir) {
   try {
     return namesOf(JSON.parse(fs.readFileSync(path.join(appDir, 'app-spec.json'), 'utf8')));
   } catch {
-    return null;
+    return { app: null, solution: null };
   }
 }
 
 /**
  * Discover the managed debt of one app's workspace into a publication barrier.
- * opts: { environment, appDir?, workspaceDir?, spec?, barrier? } — `spec` names the app and solution (else the app folder's
- * app-spec.json); `barrier` is filled (a new one when omitted). Answers { barrier, absent, debt }. Throws
- * `managed-binding-store-unreadable` for a store it cannot trust or a workspace with a store whose names cannot be read.
+ * opts: { environment, appDir?, workspaceDir?, spec?, barrier?, appUniqueName? } — `spec` names the app and solution (else the
+ * app folder's app-spec.json); `appUniqueName` is the app's name as the service gives it (the pages lease is keyed by it,
+ * lib/standalone-page-lease.js), discovered beside the spec's own name when the two differ; `barrier` is filled (a new one
+ * when omitted). Answers { barrier, absent, debt }. Throws `managed-binding-store-unreadable` for a store it cannot trust or
+ * a workspace with a store whose app or solution cannot be named.
  */
-function openStandaloneManagedFence({ environment, appDir, workspaceDir, spec, barrier } = {}) {
+function openStandaloneManagedFence({ environment, appDir, workspaceDir, spec, barrier, appUniqueName: leased } = {}) {
   const gate = barrier || createPublicationBarrier();
   const none = { barrier: gate, absent: true, debt: [] };
   if (!isStoreEnvironment(environment)) return none;
   const ws = applyWorkspaceOf({ workspaceDir, appDir });
   if (!storeFilesIn(ws).length) return none;
   const names = spec ? namesOf(spec) : readSpecNames(appDir ? path.resolve(appDir) : path.dirname(path.resolve(ws)));
-  if (!names) {
+  const apps = [...new Set([names.app, nonEmpty(leased) ? leased : null].filter(Boolean))];
+  if (!names.solution || !apps.length) {
     throw fenceError(CODES.unreadable, `the workspace ${ws} holds a managed binding store, and the app and solution it belongs to could not be read from the app's app-spec.json — nothing was changed; run from the app folder (or name it with --app-dir) so the build's withheld publications are seen`);
   }
-  const ctx = openManagedContext({ workspaceDir: ws, environment, appUniqueName: names.app, solutionUniqueName: names.solution, barrier: gate });
-  return { barrier: gate, absent: ctx.absent, debt: ctx.debt };
+  let absent = true;
+  const debt = [];
+  for (const app of apps) {
+    const ctx = openManagedContext({ workspaceDir: ws, environment, appUniqueName: app, solutionUniqueName: names.solution, barrier: gate });
+    absent = absent && ctx.absent;
+    debt.push(...ctx.debt);
+  }
+  return { barrier: gate, absent, debt };
 }
 
 /**
@@ -85,4 +105,30 @@ function assertStandaloneAppWrite(fence, extra) {
   throw fenceError(APP_WRITE_WITHHELD, describeWithheldApp(verdict), { outcome: 'nothing', ...(extra || {}) });
 }
 
-module.exports = { openStandaloneManagedFence, assertStandaloneAppWrite, APP_WRITE_WITHHELD };
+/**
+ * The fence of a standalone app write made under the app's build and pages leases (genpage.js add-to-app / remove-from-app, the placing
+ * genpage-upload.js). Two reads, and only the second one decides:
+ *   - now, before the backend exists: an early refusal (thrown, as assertStandaloneAppWrite) that saves building a backend for
+ *     an edit that cannot run. Its barrier is thrown away;
+ *   - `underLease({ appUniqueName })`, inside the app's build and pages leases (lib/standalone-page-lease.js) and before the
+ *     edit's first read or write: the store is discovered again into `barrier`, by the spec's app name and by the name the
+ *     leases are keyed by, and the app write is refused if anything is withheld. A build holds the build lease for its whole
+ *     apply, so debt it left after the first read — while this entry read the app's name, before it took the leases — is
+ *     seen here; once the leases are held no build of this workspace can add more.
+ * `barrier` is what the backend's transport is gated by. It exists whenever the environment can hold a store, even with no
+ * store yet: one may appear before the lease is taken, and the transport must screen by what the leased read discovers. An
+ * empty barrier passes every request through as it is (publication-barrier.js gateRequest), so no store changes nothing.
+ */
+function openStandaloneAppWriteFence({ environment, appDir, workspaceDir, appId } = {}) {
+  assertStandaloneAppWrite(openStandaloneManagedFence({ environment, appDir, workspaceDir }), { appId });
+  const barrier = isStoreEnvironment(environment) ? createPublicationBarrier() : null;
+  return {
+    barrier,
+    underLease({ appUniqueName } = {}) {
+      if (!barrier) return;
+      assertStandaloneAppWrite(openStandaloneManagedFence({ environment, appDir, workspaceDir, barrier, appUniqueName }), { appId });
+    },
+  };
+}
+
+module.exports = { openStandaloneManagedFence, assertStandaloneAppWrite, openStandaloneAppWriteFence, APP_WRITE_WITHHELD };

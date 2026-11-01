@@ -1303,18 +1303,9 @@ function chartDef(spec, ch) {  const entityLogical = ch.entity.toLowerCase();
 // The ordered field logical names a form places -> moved to ./artifact-intent.js `formFieldLogicals`
 // (walks the new tabs[].columns[].sections[] topology).
 
-// The app module's uniquename. A DOWNLOADED/edit spec carries the app's REAL, immutable uniquename in
-// `spec.app.uniqueName` — return it VERBATIM so the build's existing-app lookup (findArtifact) AND teardown
-// resolve the SAME deployed app even after a display-name RENAME. A Dataverse appmodule uniquename never
-// changes once created, so deriving it from the MUTABLE display name would miss the existing app on a
-// rebuild and CREATE A DUPLICATE. An AUTHORED create-fresh spec has no `app.uniqueName`, so
-// derive it deterministically from the publisher prefix + display name — the exact rule the builder creates
-// with. Shared with the teardown engine so both agree on the identity.
-function appUniqueName(spec) {
-  if (spec.app && spec.app.uniqueName) return String(spec.app.uniqueName);
-  const sol = spec.solution;
-  return `${sol.publisherPrefix}_${spec.app.name}`.replace(/[^a-z0-9_]/gi, '').toLowerCase();
-}
+// The app module's uniquename (lib/app-unique-name.js: the spec's own, else derived from the publisher prefix and display name). Shared
+// with the teardown engine and the standalone managed fence so all three agree on the identity.
+const { appUniqueName } = require('./app-unique-name.js');
 
 // A simple, self-contained default app-tile icon (SVG) — a rounded square with the app's initial.
 // Generated INTO the app's solution so the app never depends on an arbitrary external/managed icon
@@ -3242,7 +3233,7 @@ function openBuildBindingGroups(spec, { apply, env, workspaceDir, appDir, barrie
   try {
     return openManagedContext({ workspaceDir: applyWorkspaceOf({ workspaceDir, appDir }), environment: env, appUniqueName: appUniqueName(spec), solutionUniqueName: sol.uniqueName, barrier: barrier || null });
   } catch (err) {
-    throw new BuildHalt(`the managed binding store of this app could not be read (${String((err && err.message) || err).replace(/\s+/g, ' ').slice(0, 300)}); the build stopped before writing anything. Keep this file: it is the record of changes not yet proved, and a build without it could publish them unproved. Put back the build's own copy of it (from a backup or version control; a link must be replaced by the file itself) and run the build again.`, { phase: 'preflight', code: 'managed-binding-store-unreadable', recoverable: false, retry: RETRY.NEVER, cause: err });
+    throw new BuildHalt(`the managed binding store of this app could not be read (${String((err && err.message) || err).replace(/\s+/g, ' ').slice(0, 300)}); the build stopped before writing anything. Keep this file as it is: it is the record of changes not yet proved and of publishes sent and not confirmed, and a build without it could publish them unproved. Never put back an older copy of it — a backup or a version-control copy, the build's own included, can miss a change or a publish sent after it was made. Only a copy known to hold this file's latest content may take its place (a link, for one, is replaced by the file it points to); when that cannot be known, keep the file and the workspace as they are and do not build, edit or tear down this app from them.`, { phase: 'preflight', code: 'managed-binding-store-unreadable', recoverable: false, retry: RETRY.NEVER, cause: err });
   }
 }
 

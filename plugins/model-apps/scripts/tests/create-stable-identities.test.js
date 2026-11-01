@@ -299,9 +299,12 @@ test('a store the build cannot trust halts before any write: managed-binding-sto
   const r = await build(org, dir, spec);
   assert.equal(r.err && r.err.code, 'managed-binding-store-unreadable', r.err && r.err.stack);
   assert.equal(r.err.transient, false);
-  // The file is the record of changes not yet proved: the remedy keeps it and puts the build's own copy back, never moves, deletes or resets it.
+  // The file is the record of changes not yet proved: the remedy keeps it, never moves, deletes or resets it, and never puts back an older
+  // copy — a backup, the build's own included, can miss an attempt or a publish sent after it was made.
   assert.match(r.err.message, /keep this file/i);
   assert.doesNotMatch(r.err.message, /aside|delete|remove the file|reset/i);
+  assert.match(r.err.message, /never put back an older copy/i);
+  assert.doesNotMatch(r.err.message, /put back the build's own copy/i);
   assert.deepEqual(r.writes, []);
   assert.equal(fs.readFileSync(file, 'utf8'), '{ "not": "a store"');
 
@@ -579,6 +582,93 @@ test('the documented recovery keeps the store: no advice to move, delete or rese
   const next = doc.indexOf('\n## ', start + 3);
   const section = doc.slice(start, next < 0 ? undefined : next);
   assert.doesNotMatch(section, /\baside\b|delete (it|the (store|file))|reset (it|the store)|start (over|fresh)/i);
+  // Restoring an older copy is not recovery: it can miss an attempt or a publish sent after it was made.
+  assert.match(section, /never put back an older copy/i);
+  assert.doesNotMatch(section, /put back the build's own copy/i);
   assert.match(section, /--authorize adopt:view:/);
   assert.match(section, /declaration/);
+});
+
+// --- the build's own unacknowledged local create ---------------------------------------------------------------------------------
+const { readLocalCreateState } = require('../lib/creates-local.js');
+
+// Every file under `dir`, by relative path, to compare a workspace byte for byte.
+function filesOf(dir) {
+  const out = {};
+  for (const name of fs.readdirSync(dir, { recursive: true })) {
+    const file = path.join(dir, name);
+    if (fs.statSync(file).isFile()) out[name] = fs.readFileSync(file, 'base64');
+  }
+  return out;
+}
+
+for (const kind of ['view', 'chart']) {
+  const collection = kind === 'view' ? 'savedqueries' : 'savedqueryvisualizations';
+  const key = kind === 'view' ? VIEW_KEY : CHART_KEY;
+  const only = () => stableSpec(kind === 'view' ? { charts: [] } : { views: [] });
+
+  test(`a ${kind} create whose answer was lost leaves no local draft: the run removes its own, so the next build proves the row from the server`, async () => {
+    const org = createFakeBuildOrg({ entities: ENTITIES });
+    const dir = newDir();
+    const restore = loseNextCreateAnswer(org, collection);
+    const first = await build(org, dir, only());
+    restore();
+    const pending = storeOf(org, dir).readGroup(kind, key).pending;
+    assert.ok(pending, first.err && first.err.message);
+    assert.equal((await readLocalCreateState(first.sdk, kind, pending.root.id)).state, 'fresh', 'no unacknowledged local create is left in the workspace');
+    const r = await build(org, dir, only(), { authorizedAdoption: new Set([`${kind}:${key}`]) });
+    assert.equal(r.err, undefined, r.err && r.err.message);
+    assert.equal(creates(r, collection).length, 0, 'bound, not created again');
+    assert.equal(storeOf(org, dir).readGroup(kind, key).pending, null);
+  });
+
+  for (const field of ['name', 'description']) {
+    test(`a ${kind} local draft the run could not remove, edited in its ${field} — outside what the build reconciles — stops every rerun with the edit and the files kept`, async () => {
+      const org = createFakeBuildOrg({ entities: ENTITIES });
+      const dir = newDir();
+      // The run that lost the answer could not remove its draft (a crash after the send, before the discard): the draft stays.
+      const barrier = createPublicationBarrier();
+      const sdk = createMakerSdk({ workspaceStorage: createNodeWorkspaceStorage(dir), instanceUrl: org.origin, httpClient: gatedClient(org, barrier) });
+      await sdk.initWorkspace();
+      sdk.deleteArtifact = async () => { throw new Error('stopped before the local discard'); };
+      const restore = loseNextCreateAnswer(org, collection);
+      const first = await build(org, dir, only(), { sdk, publicationBarrier: barrier });
+      restore();
+      const pending = storeOf(org, dir).readGroup(kind, key).pending;
+      assert.ok(pending, first.err && first.err.message);
+      const id = pending.root.id;
+      const label = 'A maker\'s local edit the declaration does not carry';
+      await sdk.updateElement(kind, id, `/${field}`, label);
+      assert.equal((await readLocalCreateState(sdk, kind, id)).state, 'pending');
+      const before = filesOf(dir);
+      for (let i = 0; i < 2; i++) {
+        const next = await build(org, dir, only(), { authorizedAdoption: new Set([`${kind}:${key}`]) });
+        assert.match(String(next.err && next.err.message), /create-completion-required/, `rerun ${i + 1}`);
+        assert.deepEqual(next.writes, [], `rerun ${i + 1} writes nothing`);
+        assert.equal((await next.sdk.getArtifact(kind, id))[field], label, `rerun ${i + 1} keeps the edit`);
+        assert.deepEqual(filesOf(dir), before, `rerun ${i + 1} keeps every file as it was`);
+      }
+      assert.ok(storeOf(org, dir).readGroup(kind, key).pending, 'the attempt is kept');
+    });
+  }
+}
+
+// --- standalone discovery of a build whose spec leaves the app's unique name to be derived --------------------------------------
+test('standalone discovery finds the store of a build whose spec omits app.uniqueName, by the name the build derived', async () => {
+  const { openStandaloneManagedFence } = require('../lib/managed-standalone-fence.js');
+  const org = createFakeBuildOrg({ entities: ENTITIES });
+  const appDir = newDir();
+  const workspaceDir = path.join(appDir, '.maker-workspace');
+  fs.mkdirSync(workspaceDir);
+  const spec = stableSpec({ charts: [] });
+  delete spec.app.uniqueName;
+  assert.equal(validateAppSpec(spec).ok, true);
+  fs.writeFileSync(path.join(appDir, 'app-spec.json'), JSON.stringify(spec));
+  const built = await build(org, workspaceDir, spec, { appDir });
+  assert.equal(built.err, undefined, built.err && built.err.message);
+  assert.equal(storeOf(org, workspaceDir).readGroup('view', VIEW_KEY).committed.publication.state, 'confirmed');
+  for (const where of [{ appDir }, { workspaceDir, spec }]) {
+    const found = openStandaloneManagedFence({ environment: org.origin, ...where });
+    assert.equal(found.absent, false, JSON.stringify(Object.keys(where)));
+  }
 });
