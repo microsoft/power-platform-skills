@@ -10,8 +10,9 @@
 //   1. register the artifact's scopes and ids with the publication barrier (not a block), and run the feature's
 //      preflight — on every path, recovery included;
 //   2. resolve and plan; a proved no-op ensures membership and changes nothing else;
-//   3. persist an attempt (prepareAttempt) and hold its scopes under the attempt's token, then persist the complete
-//      expected proof (markSending) BEFORE the one push — a failed store write means the push is not sent;
+//   3. persist an attempt (prepareAttempt, with the original declaration it commits) and hold its scopes under the
+//      attempt's token, then persist the complete expected proof (markSending) BEFORE the one push — a failed store
+//      write means the push is not sent; neither write is made over a publish of the group that may have been sent;
 //   4. apply the change once, prove it from a fresh read against the stored expected proof (never against today's
 //      declaration), require adoption approval for a root whose create was never acknowledged, ensure solution
 //      membership, and commit the whole group in one atomic store write;
@@ -40,6 +41,8 @@ const PUBLICATION_REFUSED = 'managed-publication-refused';
 // A group published in the scope whose family has no layer reader (lib/managed-layer-readers.js): the scope is fenced.
 const LAYER_READER_MISSING = 'managed-publication-reader-missing';
 const CREATION_RECORD_UNSETTLED = 'dashboard-creation-record-unsettled';
+// The workflow features' refusal of an edit of an existing workflow while their edit switch is off (design §4.6).
+const WORKFLOW_EDIT_REFUSED = 'workflow-edit-refused';
 // A publication that may have been sent and is not yet proved live (lib/managed-bindings.js UNCERTAIN).
 const UNCERTAIN_PUBLICATION = new Set(['dispatching', 'unconfirmed']);
 
@@ -65,9 +68,14 @@ const REQUIRED_STEPS = new Set(['preflight', 'resolve', 'plan', 'prove', 'member
  *   preflight({ committed, pending, recovering, effects })  required: the feature's own safety checks, run on EVERY
  *                               path — an ordinary run, a prepared attempt, and every recovery (prove, continue,
  *                               resume) — before resolve, prove or any continuation, and before anything is prepared or
- *                               sent. `recovering` is true when `pending` was marked sending (its scopes are already
- *                               held); `effects` are the workflow effects the store holds for the group (the pending
- *                               attempt's among them: existingRowDispatches reads them).
+ *                               sent. `committed` is the group as this run first read it, BEFORE any earlier
+ *                               uncertain publish is confirmed (resolve and plan see that same read); a recovery is
+ *                               then given the group as it stands after that confirmation. `recovering` is true when
+ *                               `pending` was marked sending (its scopes are already held); `pending.declaration` is
+ *                               the declaration it recorded, if any; `effects` are the workflow effects the store holds
+ *                               for the group (the pending attempt's among them: existingRowDispatches reads them —
+ *                               an early refusal only; every newly proposed workflow write is checked again by
+ *                               editSwitchRequired).
  *                               It must not fetch into, overwrite or delete the local copy. It refuses by throwing
  *                               (its own code, e.g. `create-completion-required` with category
  *                               `workspace-copy-unsent-edits`): quarantined, the attempt and its token kept, nothing
@@ -77,7 +85,12 @@ const REQUIRED_STEPS = new Set(['preflight', 'resolve', 'plan', 'prove', 'member
  *                               again over it: with `client`, that dispatch is first confirmed read-only
  *                               (confirmUncertainPublication), before anything is prepared or sent; without it, or when
  *                               the read does not prove it, `managed-publication-unconfirmed`, quarantined, nothing
- *                               prepared or sent and any attempt kept;
+ *                               prepared or sent and any attempt kept. A publish dispatched AFTER this run read the
+ *                               group (by another process, while preflight, resolve or plan was awaited) is met by the
+ *                               store under its lease at prepareAttempt or at the send claim (markSending) with the
+ *                               same code and the same stop. A confirmation never lifts a quarantine this run already
+ *                               set (it lasts for the invocation), and debt the confirmation leaves owed may need the
+ *                               next invocation to publish;
  *   adoptionApproved?           boolean, `true` only when the feature's own typed adoption approval
  *                               (`<family>:<key>`) covers this artifact; never inferred here. A group not yet committed
  *                               whose root create this attempt never had acknowledged is bound only with it; otherwise
@@ -85,12 +98,21 @@ const REQUIRED_STEPS = new Set(['preflight', 'resolve', 'plan', 'prove', 'member
  *                               binding. An acknowledged create needs none and commits as created;
  *   resolve({ committed, pending, resuming?, continuing? })   read and preflight; answers the resolution;
  *   plan({ resolution, committed, resuming?, continuing? })   answers { noop: true } or { root, expected,
- *                                        declarationSha256, publication? } (publication: the attempt's
- *                                        { scope, state: 'owed' } or null);
+ *                                        declarationSha256, declaration?, publication? } (publication: the attempt's
+ *                                        { scope, state: 'owed' } or null; declaration: the ORIGINAL declaration as a
+ *                                        plain JSON object, for form, dashboard, rule and bpf — persisted with the
+ *                                        attempt before anything is sent (store prepareAttempt; an unsafe one is
+ *                                        `managed-declaration-refused`, nothing written or sent) and committed as the
+ *                                        group's consumerState.declaration in place of whatever prove answers. A
+ *                                        prepared attempt whose recorded root, declaration hash, declaration or
+ *                                        publication differ from the plan is retired and prepared again; a continued or
+ *                                        resumed attempt that recorded a declaration is sent only for that one);
  *   apply({ token, plan, resolution, resuming?, continuing? })  send the approved change once; answers what it sent.
  *                               With a sendObserver, every mutation it makes must go through the observed transport;
- *   prove({ token, expected, applied, recovering })  a fresh read against `expected`; answers { savedProof,
- *                               acknowledgedRoot, records, proof, consumerState, publication, proofSchema? };
+ *   prove({ token, expected, applied, recovering, declaration })  a fresh read against `expected`; answers { savedProof,
+ *                               acknowledgedRoot, records, proof, consumerState, publication, proofSchema? }.
+ *                               `declaration` is the one the attempt recorded (on recovery always the attempt's, never
+ *                               today's spec; undefined when it recorded none — then, on a send, the plan's);
  *   ensureMembership({ root, records, recovering })  solution membership, for a clean reused root too;
  *   sendObserver?               the build's createAttemptSendObserver, already wrapped around its transport (refused
  *                               otherwise). markSending then arms the attempt's send window and `apply` runs inside it,
@@ -155,7 +177,9 @@ async function runManagedFeature(args) {
 
   const stop = (err) => {
     const code = (err && err.code) || CODES.notSettled;
-    const required = REQUIRED_STEPS.has(step) || code === CREATION_RECORD_UNSETTLED;
+    // A publish that may have been sent, met by the store under its lease at prepare or at the send claim, is the same
+    // stop as one met before (settleEarlierPublication): the artifact's saved state is not shown safe to publish.
+    const required = REQUIRED_STEPS.has(step) || code === CREATION_RECORD_UNSETTLED || code === PUBLICATION_UNCONFIRMED;
     try {
       if (required) barrier.quarantine(scopes, ids, `${label} (${code})`);
     } catch (e) {
@@ -202,13 +226,26 @@ async function runManagedFeature(args) {
     await settleEarlierPublication(committed);
     step = 'prepare';
     addIds([planned.root && planned.root.id]);
-    const baseGeneration = pending ? pending.baseGeneration : committed ? committed.generation : null;
-    if (pending) {
+    let baseGeneration = pending ? pending.baseGeneration : committed ? committed.generation : null;
+    if (pending && samePreparedIntent(planned, pending)) {
       // A prepared attempt that was never sent is intent only: it is resumed under its own token.
       token = pending.token;
     } else {
+      if (pending) {
+        // A prepared attempt records the intent it was planned with (root, declaration and its hash, publication) and
+        // sent nothing. A plan that now says something else is a new change: the old intent is retired, never sent
+        // under — its recorded declaration would otherwise be what the new change commits — and a fresh one prepared.
+        step = 'retire';
+        store.retireUnsentAttempt({ token: pending.token, baseGeneration: pending.baseGeneration });
+        barrier.release(pending.token);
+        baseGeneration = committed ? committed.generation : null;
+        step = 'prepare';
+      }
+      // Store-side, under the lease: refused (`managed-publication-unconfirmed`) over a publish dispatched since the
+      // group was read, and `managed-declaration-refused` for a declaration the store will not keep — nothing written.
       token = store.prepareAttempt({
         family, key, baseGeneration, root: planned.root, expected: null, knownScopes, declarationSha256: planned.declarationSha256,
+        ...(planned.declaration !== undefined ? { declaration: planned.declaration } : {}),
         publication: planned.publication || null,
       });
     }
@@ -253,12 +290,12 @@ async function runManagedFeature(args) {
       // Present: prove or adopt it, exactly as any recovery.
     }
     step = 'prove';
-    const proved = await prove({ token, expected: pending.expected, applied: null, recovering: true });
+    const proved = await prove({ token, expected: pending.expected, applied: null, recovering: true, declaration: pending.declaration });
     requireAdoptionConsent(!!committed);
     step = 'membership';
     await ensureMembership({ root: pending.root, records: proved.records, recovering: true });
     step = 'commit';
-    const group = commit(store, token, pending.baseGeneration, proved, adoptionApproved);
+    const group = commit(store, token, pending.baseGeneration, proved, adoptionApproved, pending.declaration);
     barrier.release(token);
     return { result: { committed: true, recovered: true }, committedGroup: group };
   }
@@ -286,6 +323,10 @@ async function runManagedFeature(args) {
     // same attempt, or one whose zero went stale while it resolved and planned, is refused here, before anything leaves.
     const claim = flag === 'continuing' ? 'continue' : flag === 'resuming' ? 'resume' : 'first';
     const marked = store.markSending(token, planned.expected, { observed: !!observer, claim });
+    // The declaration the attempt recorded before this send (prepareAttempt), as the store now holds it: the one prove
+    // is given and commit binds. An attempt an earlier build prepared recorded none; prove is then given the plan's.
+    const held = store.readGroup(family, key).pending;
+    const recorded = held && held.token === token ? held.declaration : undefined;
     const window = observer ? observer.open(store, token, marked && marked.epoch !== undefined ? marked.epoch : null) : null;
     let applied;
     try {
@@ -295,14 +336,14 @@ async function runManagedFeature(args) {
       if (window) window.close();
     }
     step = 'prove';
-    const proved = await prove({ token, expected: planned.expected, applied, recovering: false });
+    const proved = await prove({ token, expected: planned.expected, applied, recovering: false, declaration: recorded !== undefined ? recorded : planned.declaration });
     step = 'saved';
     store.noteSaved(token, { proof: proved.savedProof === undefined ? null : proved.savedProof, acknowledgedRoot: proved.acknowledgedRoot === true });
     requireAdoptionConsent(baseGeneration !== null);
     step = 'membership';
     await ensureMembership({ root: planned.root, records: proved.records, recovering: false });
     step = 'commit';
-    const group = commit(store, token, baseGeneration, proved, adoptionApproved);
+    const group = commit(store, token, baseGeneration, proved, adoptionApproved, recorded);
     // The attempt is gone from the store: nothing of it is left to count.
     if (window) window.end();
     barrier.release(token);
@@ -358,16 +399,41 @@ function rowsCreatedByAttempt({ pending, effects } = {}) {
 }
 
 /**
- * The body and state effects the pending attempt still has to send (definitely-unsent, no dispatch token) to a row it
- * has no positive evidence of having created (rowsCreatedByAttempt): each would write an EXISTING row. A workflow
- * feature (rules, process flows) whose edit switch is off refuses in its preflight when this is not empty; a recovery
- * then only reads. An effect that may already have been dispatched is not listed — it is proved, never sent again.
+ * Whether sending `proposed` — a workflow effect this run is about to record and send ({ attemptToken, rowId, effect:
+ * 'create' | 'body' | 'state', ... }) — needs the workflow edit switch (design §4.6, `workflowConditionalEdits`):
+ *   create  false: a new row is not an edit;
+ *   body    true, always: a body write changes a row's logic, even of a Draft this attempt created;
+ *   state   false only for the attempt's own Draft completion — `proposed` is the pending attempt's (its token) and
+ *           its row is one the attempt has positive evidence of having created (rowsCreatedByAttempt); true otherwise,
+ *           with no pending attempt, and for another attempt's effect;
+ *   anything else  true.
+ * `group` is the store's readGroup(family, key) ({ pending, effects }). A workflow feature whose switch is off checks
+ * this before EVERY body or state dispatch it newly proposes — on an ordinary run, a continued or resumed attempt and a
+ * recovery alike — and refuses (`workflow-edit-refused`) before it records or sends anything; withWorkflowEffect makes
+ * the same check when given `workflowConditionalEdits: false`. The preflight's existingRowDispatches is an early refusal
+ * on top of it, not a substitute: an effect first proposed inside recovery is not on disk when preflight runs.
+ */
+function editSwitchRequired(group, proposed) {
+  if (!proposed || typeof proposed !== 'object') throw codedError(CODES.notSettled, 'editSwitchRequired needs the proposed workflow effect');
+  if (proposed.effect === 'create') return false;
+  if (proposed.effect !== 'state') return true;
+  const { pending, effects } = group || {};
+  if (!pending || proposed.attemptToken !== pending.token) return true;
+  return !rowsCreatedByAttempt({ pending, effects }).has(String(proposed.rowId).toLowerCase());
+}
+
+/**
+ * The body and state effects the pending attempt has recorded and still has to send (definitely-unsent, no dispatch
+ * token) that need the edit switch (editSwitchRequired): every body write, and a state write to a row the attempt has
+ * no positive evidence of having created. A workflow feature (rules, process flows) whose edit switch is off refuses in
+ * its preflight when this is not empty — an early refusal of what is already on disk. It does not show that the run
+ * stays read-only: an effect first proposed later (inside recovery, say) is checked by editSwitchRequired before it is
+ * recorded. An effect that may already have been dispatched is not listed — it is proved, never sent again.
  */
 function existingRowDispatches({ pending, effects } = {}) {
   if (!pending) return [];
-  const created = rowsCreatedByAttempt({ pending, effects });
   return (effects || []).filter((e) => e.attemptToken === pending.token && (e.effect === 'body' || e.effect === 'state')
-    && e.state === 'definitely-unsent' && e.dispatchToken === null && !created.has(String(e.rowId).toLowerCase()));
+    && e.state === 'definitely-unsent' && e.dispatchToken === null && editSwitchRequired({ pending, effects }, e));
 }
 
 // The answers that say the service did not carry the request out, so a mutation answered with one is not counted as
@@ -495,17 +561,41 @@ function createAttemptSendObserver() {
 // A resumed create sends only what the attempt recorded: the same root (kind, key, id), the same expected proof, the
 // same declaration hash and the same publication. Anything else is a new change, which this seam never makes.
 function samePlan(planned, pending) {
+  return sameIntent(planned, pending) && canonicalJson(planned.expected) === canonicalJson(pending.expected)
+    // An attempt that recorded its declaration is sent again only for that one: commit binds it. One prepared by an
+    // earlier build recorded none, and is compared by its declaration hash alone, as before.
+    && (pending.declaration === undefined || sameDeclaration(planned, pending));
+}
+
+// The intent a prepared attempt records before anything is sent: its root, declaration hash, original declaration and
+// publication. Retiring a prepared attempt is always safe (nothing was sent), so here a declaration the attempt did not
+// record, or a different one, is a different intent: the change is prepared again with the declaration it commits.
+function samePreparedIntent(planned, pending) {
+  return sameIntent(planned, pending) && sameDeclaration(planned, pending);
+}
+
+function sameIntent(planned, pending) {
   if (!planned || planned.noop === true || !planned.root || !pending.root) return false;
   const r = planned.root;
   return r.kind === pending.root.kind && r.key === pending.root.key && String(r.id).toLowerCase() === String(pending.root.id).toLowerCase()
-    && canonicalJson(planned.expected) === canonicalJson(pending.expected)
     && planned.declarationSha256 === pending.declarationSha256
     && canonicalJson(planned.publication || null) === canonicalJson(pending.publication || null);
 }
 
-function commit(store, token, baseGeneration, proved, adoptionApproved) {
+function sameDeclaration(planned, pending) {
+  if (pending.declaration === undefined || planned.declaration === undefined) return pending.declaration === planned.declaration;
+  return canonicalJson(planned.declaration) === canonicalJson(pending.declaration);
+}
+
+// The group's declaration is the one the attempt recorded before it sent (design §1.2: the canonical declaration is
+// local-only, and hashes cannot restore it), never one the proof rebuilt from today's spec, and never null: the store
+// would refuse any other (commitGroup), so it is set here from the attempt as the store holds it.
+function commit(store, token, baseGeneration, proved, adoptionApproved, recorded) {
+  const consumerState = recorded !== undefined && proved.consumerState && typeof proved.consumerState === 'object'
+    ? { ...proved.consumerState, declaration: recorded }
+    : proved.consumerState;
   return store.commitGroup({
-    token, baseGeneration, records: proved.records, proof: proved.proof, consumerState: proved.consumerState,
+    token, baseGeneration, records: proved.records, proof: proved.proof, consumerState,
     publication: proved.publication === undefined ? null : proved.publication, proofSchema: proved.proofSchema, adoptionApproved,
   });
 }
@@ -514,10 +604,17 @@ function commit(store, token, baseGeneration, proved, adoptionApproved) {
  * Persist `effect` (a workflowEffects record, without token and state) as definitely-unsent under its attempt, then
  * run `fn(record)` inside its transport context: the one workflow write that matches it is sent once, and any other
  * mutation inside `fn` is refused unsent (lib/workflow-effect-context.js). Reads inside `fn` pass as always.
+ * `workflowConditionalEdits`: the feature's edit switch (design §4.6). `false` checks the effect first
+ * (editSwitchRequired) and refuses one that needs the switch with `workflow-edit-refused`, nothing recorded or sent;
+ * `true` or omitted records it as before — omitted leaves the check to the caller.
  */
-async function withWorkflowEffect({ store, effect }, fn) {
+async function withWorkflowEffect({ store, effect, workflowConditionalEdits }, fn) {
   if (!store || typeof store.recordWorkflowEffect !== 'function') throw codedError(CODES.notSettled, 'withWorkflowEffect needs the managed binding store');
   if (typeof fn !== 'function') throw codedError(CODES.notSettled, 'withWorkflowEffect needs the write to run');
+  if (workflowConditionalEdits !== undefined && typeof workflowConditionalEdits !== 'boolean') throw codedError(CODES.notSettled, 'withWorkflowEffect takes workflowConditionalEdits only as a boolean');
+  if (workflowConditionalEdits === false && editSwitchRequired(store.readGroup(effect.family, effect.key), effect)) {
+    throw codedError(WORKFLOW_EDIT_REFUSED, `the managed ${effect.family} "${effect.key}" would ${effect.effect === 'body' ? 'change the logic of' : 'change the state of'} workflow ${effect.rowId}, which this attempt did not create; edits of existing workflows are switched off`);
+  }
   const record = store.recordWorkflowEffect(effect);
   return runWithWorkflowEffect(record, () => fn(record));
 }
@@ -830,6 +927,8 @@ module.exports = {
   notStartedAnswer,
   rowsCreatedByAttempt,
   existingRowDispatches,
+  editSwitchRequired,
+  WORKFLOW_EDIT_REFUSED,
   withWorkflowEffect,
   publishManagedScope,
   confirmUncertainPublication,

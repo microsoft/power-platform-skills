@@ -10,8 +10,9 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { makeTempDir } = require('./helpers/temp-dirs.js');
 const {
-  openManagedBindings, openManagedContext, discoverManagedStore, classifyPersisted, CODES,
+  openManagedBindings, openManagedContext, discoverManagedStore, classifyPersisted, CODES, MAX_BYTES,
 } = require('../lib/managed-bindings.js');
+const { noteToken } = require('../lib/output-redaction.js');
 const { withRecordLease } = require('../lib/record-lease.js');
 const { environmentFingerprint } = require('../lib/page-ownership-records.js');
 const { createPublicationBarrier } = require('../lib/publication-barrier.js');
@@ -678,10 +679,13 @@ test('publication: a new generation is not committed over a publish that may hav
   const dir = makeTempDir('mb-uncertain-commit-');
   const store = open(dir);
   const g = settleForm(store, []);
-  store.markPublishDispatch({ groups: [{ family: 'form', key: FORM_KEY }], scope: TABLE, token: 'dispatch-old' });
+  // The store no longer lets an attempt and an uncertain publish of its group coexist (prepareAttempt and markSending
+  // refuse it), so the state a store written by an earlier build may hold is made by hand: the attempt saved, then the
+  // publish dispatched with the attempt set aside, then the attempt put back.
   const { token } = prepareForm(store);
   store.markSending(token, expected(FORM));
   store.noteSaved(token, { proof: { savedSha256: H('1') }, acknowledgedRoot: true });
+  coexist(store, () => store.markPublishDispatch({ groups: [{ family: 'form', key: FORM_KEY }], scope: TABLE, token: 'dispatch-old' }));
   const owed = { scope: TABLE, state: 'owed', desiredSha256: H('6'), dispatchToken: null };
   const args = { token, baseGeneration: g.generation, records: [rec('form', FORM_KEY, FORM)], proof: PROOF, consumerState: formState(), publication: owed };
   for (const outcome of [null, 'unconfirmed']) {
@@ -696,4 +700,160 @@ test('publication: a new generation is not committed over a publish that may hav
   assert.deepEqual(store.commitGroup(args).publication, owed, 'its own debt, never the old dispatch');
   codeOf(() => store.notePublishOutcome({ token: 'dispatch-old', outcome: 'unconfirmed' }));
   assert.deepEqual(open(dir).readGroup('form', FORM_KEY).committed.publication, owed, 'a late outcome of the old dispatch touches nothing');
+});
+
+// Put a publish dispatch beside an attempt the way only an older store could hold them: set the attempts aside, dispatch,
+// put them back.
+function coexist(store, dispatch) {
+  let attempts;
+  writeRaw(store, (d) => { attempts = d.attempts; d.attempts = []; });
+  store.refresh();
+  dispatch();
+  writeRaw(store, (d) => { d.attempts = attempts; });
+  store.refresh();
+}
+
+test('publication: an attempt is neither prepared nor claimed over a publish that may have been sent, whatever the run read before', () => {
+  for (const outcome of [null, 'unconfirmed']) {
+    const dir = makeTempDir('mb-uncertain-prepare-');
+    const store = open(dir);
+    settleForm(store, []);
+    // A run that read the group before another process dispatched its publish: its read is stale, the lease-held check is not.
+    const stale = open(dir);
+    open(dir).markPublishDispatch({ groups: [{ family: 'form', key: FORM_KEY }], scope: TABLE, token: 'dispatch-1' });
+    if (outcome) open(dir).notePublishOutcome({ token: 'dispatch-1', outcome });
+    assert.equal(stale.readGroup('form', FORM_KEY).committed.publication.state, 'owed', 'what the run read');
+    const before = fileText(store);
+    assert.equal(codeOf(() => prepareForm(stale)), CODES.publicationUncertain, outcome || 'dispatching');
+    assert.equal(fileText(store), before, 'nothing prepared');
+  }
+
+  // A store that already holds both: no claim of any kind sends under the attempt.
+  const dir = makeTempDir('mb-uncertain-claim-');
+  const store = open(dir);
+  settleForm(store, []);
+  const { token } = prepareForm(store);
+  coexist(store, () => store.markPublishDispatch({ groups: [{ family: 'form', key: FORM_KEY }], scope: TABLE, token: 'dispatch-2' }));
+  const before = fileText(store);
+  for (const claim of ['first', undefined]) {
+    assert.equal(codeOf(() => store.markSending(token, expected(FORM), { observed: true, claim })), CODES.publicationUncertain, String(claim));
+  }
+  writeRaw(store, (d) => { d.attempts[0].phase = 'sending'; d.attempts[0].expected = expected(FORM); d.attempts[0].sendWindow = { possible: 0, notStarted: 0, epoch: 1 }; });
+  const sending = fileText(store);
+  for (const claim of ['continue', 'resume']) {
+    assert.equal(codeOf(() => store.markSending(token, expected(FORM), { observed: true, claim })), CODES.publicationUncertain, claim);
+  }
+  assert.equal(fileText(store), sending, 'a refused claim writes nothing');
+  assert.notEqual(before, sending);
+  // Once the dispatch is confirmed read-only, the continuation is claimed as before.
+  store.refresh();
+  store.confirmPublished({ groups: [{ family: 'form', key: FORM_KEY, publishedSha256: H('5'), generation: store.readGroup('form', FORM_KEY).committed.generation }], token: 'dispatch-2' });
+  assert.deepEqual(store.markSending(token, expected(FORM), { observed: true, claim: 'continue' }), { epoch: 2 });
+});
+
+// A declaration as a maker writes it: names, a description with markup characters and quotes, unicode, a URL.
+const DECLARATION = Object.freeze({
+  name: 'Main',
+  heading: '<b>Sales</b>',
+  description: 'Sales <overview> & pipeline — “quarterly” ünïcode; see https://contoso.com/a?b=1&c=2',
+  fieldOptions: { name: { required: false, label: 'Account <name>' } },
+  iframe: { name: 'News', url: 'https://contoso.crm.dynamics.com/WebResources/new_news.htm?id=1&lang=en' },
+  order: [1, 2.5, -3, true, null],
+});
+
+function prepareDeclared(store, declaration) {
+  const { committed } = store.readGroup('form', FORM_KEY);
+  const base = committed ? committed.generation : null;
+  const token = store.prepareAttempt({ family: 'form', key: FORM_KEY, baseGeneration: base, root: { kind: 'form', key: FORM_KEY, id: FORM }, knownScopes: [TABLE], declarationSha256: H('e'), declaration, publication: { scope: TABLE, state: 'owed' } });
+  return { token, base };
+}
+
+test('declaration: an attempt keeps its declaration losslessly, and commits only that one', () => {
+  const dir = makeTempDir('mb-declaration-');
+  const store = open(dir);
+  settleForm(store, []);
+  const { token, base } = prepareDeclared(store, DECLARATION);
+  assert.deepEqual(open(dir).readGroup('form', FORM_KEY).pending.declaration, DECLARATION, 'free text, unicode and URLs survive a reopen');
+  store.markSending(token, expected(FORM));
+  store.noteSaved(token, { proof: { savedSha256: H('1') }, acknowledgedRoot: true });
+  const args = (declaration) => ({ token, baseGeneration: base, records: [rec('form', FORM_KEY, FORM)], proof: PROOF, consumerState: { ...formState(), declaration }, publication: owedTable() });
+  const before = fileText(store);
+  for (const [label, other] of [['null', null], ['today\'s', { ...DECLARATION, name: 'Changed' }]]) {
+    assert.equal(codeOf(() => store.commitGroup(args(other))), CODES.completion, label);
+  }
+  assert.equal(fileText(store), before, 'refused, nothing written, the attempt kept');
+  const reordered = Object.fromEntries(Object.entries(DECLARATION).reverse());
+  assert.deepEqual(store.commitGroup(args(reordered)).consumerState.declaration, DECLARATION, 'the same declaration, in any key order');
+
+  // A commit that gives none takes the attempt's.
+  const next = prepareDeclared(store, DECLARATION);
+  store.markSending(next.token, expected(FORM));
+  store.noteSaved(next.token, { proof: { savedSha256: H('1') }, acknowledgedRoot: true });
+  const { declaration: omitted, ...rest } = formState();
+  const g = store.commitGroup({ token: next.token, baseGeneration: next.base, records: [rec('form', FORM_KEY, FORM)], proof: PROOF, consumerState: rest, publication: owedTable() });
+  assert.notDeepEqual(omitted, DECLARATION);
+  assert.deepEqual(open(dir).readGroup('form', FORM_KEY).committed.consumerState.declaration, DECLARATION);
+  assert.equal(g.consumerState.declaration.iframe.url, DECLARATION.iframe.url);
+});
+
+test('declaration: secrets, tokens, a markup document, non-JSON values and oversized declarations are refused before anything is written', () => {
+  const dir = makeTempDir('mb-declaration-refused-');
+  const store = open(dir);
+  settleForm(store, []);
+  const jwt = `eyJ${'a'.repeat(20)}.${'b'.repeat(20)}.${'c'.repeat(20)}`;
+  let deep = {};
+  for (let i = 0; i < 40; i += 1) deep = { d: deep };
+  const cases = [
+    ['a JWT', { description: `token ${jwt}` }],
+    ['a JWT as a key', { [jwt]: 1 }],
+    ['a URL with credentials', { url: 'https://maker:hunter2@contoso.com/x' }],
+    ['a signed URL', { url: 'https://contoso.blob.core.windows.net/c/x?sv=2020&sig=abcdef' }],
+    ['an access token parameter', { url: 'https://contoso.com/x?access_token=abc' }],
+    ['a connection string', { note: 'DefaultEndpointsProtocol=https;AccountName=a;AccountKey=abc==' }],
+    ['a private key', { note: '-----BEGIN PRIVATE KEY-----\nMIIabc\n-----END PRIVATE KEY-----' }],
+    ['a markup document', { formxml: '<form><tabs/></form>' }],
+    ['a top-level list', [1, 2]],
+    ['no object', 'Main'],
+    ['a non-finite number', { n: Infinity }],
+    ['undefined', { n: undefined }],
+    ['a function', { n: () => 1 }],
+    ['a date', { n: new Date(0) }],
+    ['too deep', deep],
+    ['over 128 KiB', { description: 'x'.repeat(130 * 1024) }],
+  ];
+  const before = fileText(store);
+  for (const [label, declaration] of cases) {
+    assert.equal(codeOf(() => prepareDeclared(store, declaration)), CODES.declarationRefused, label);
+  }
+  assert.equal(codeOf(() => store.prepareAttempt({ family: 'view', key: 'account/active', baseGeneration: null, root: { kind: 'view', key: 'account/active', id: FORM }, knownScopes: [TABLE], declarationSha256: H('e'), declaration: { name: 'Active' } })), CODES.declarationRefused, 'a family whose group keeps no declaration');
+  // A token this process obtained, whatever its shape: the atomic writer would redact it, so it is refused before.
+  const obtained = 'r7-obtained-token-0123456789abcdef';
+  noteToken(obtained);
+  assert.equal(codeOf(() => prepareDeclared(store, { description: `x ${obtained} y` })), CODES.declarationRefused, 'an obtained token');
+  assert.equal(fileText(store), before, 'nothing was written');
+  // Each refusal is answered on the store as written by hand too: the reopened store refuses the group, not the file.
+  writeRaw(store, (d) => { d.groups[0].consumerState.declaration = { description: `token ${jwt}` }; });
+  assert.equal(codeOf(() => open(dir).readGroup('form', FORM_KEY)), CODES.groupInvalid);
+});
+
+test('a write larger than the store may be read back is refused before it is written; the store stays readable', () => {
+  const dir = makeTempDir('mb-oversize-');
+  const store = open(dir);
+  settleForm(store, []);
+  const { token, base } = prepareForm(store);
+  store.markSending(token, expected(FORM));
+  store.noteSaved(token, { proof: { savedSha256: H('1') }, acknowledgedRoot: true });
+  const big = 'x'.repeat(120 * 1024);
+  writeRaw(store, (d) => {
+    const g = d.groups[0];
+    for (let i = 0; i < 33; i += 1) d.groups.push({ ...JSON.parse(JSON.stringify(g)), key: `account/f${i}`, root: { ...g.root, key: `account/f${i}`, id: `bbbbbbbb-0000-4000-8000-${String(i).padStart(12, '0')}` }, records: g.records.map((r) => ({ ...r, key: `account/f${i}`, id: `bbbbbbbb-0000-4000-8000-${String(i).padStart(12, '0')}` })), consumerState: { ...g.consumerState, declaration: { description: big } } });
+  });
+  store.refresh();
+  assert.ok(fs.statSync(store.file).size < MAX_BYTES, 'readable');
+  const before = fileText(store);
+  // A commit whose consumer state would take the file past what any open reads back.
+  const commit = () => store.commitGroup({ token, baseGeneration: base, records: [rec('form', FORM_KEY, FORM)], proof: PROOF, consumerState: { ...formState(), declaration: { description: big } }, publication: owedTable() });
+  assert.equal(codeOf(commit), CODES.writeFailed);
+  assert.equal(fileText(store), before, 'nothing written');
+  assert.equal(open(dir).readGroup('form', FORM_KEY).pending.token, token, 'it still opens, the attempt kept');
 });

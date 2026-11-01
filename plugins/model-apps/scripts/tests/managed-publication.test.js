@@ -12,7 +12,7 @@ const fs = require('node:fs');
 const { makeTempDir } = require('./helpers/temp-dirs.js');
 const { createManagedWire, sdkOver } = require('./helpers/managed-wire.js');
 const { openManagedContext, openManagedBindings, CODES } = require('../lib/managed-bindings.js');
-const { runManagedFeature, publishManagedScope, confirmUncertainPublication, createAttemptSendObserver, notStartedAnswer, existingRowDispatches, rowsCreatedByAttempt, withWorkflowEffect, PUBLICATION_UNCONFIRMED, PUBLICATION_UNVERIFIED, CREATION_RECORD_UNSETTLED, LAYER_READER_MISSING } = require('../lib/managed-feature-contract.js');
+const { runManagedFeature, publishManagedScope, confirmUncertainPublication, createAttemptSendObserver, notStartedAnswer, existingRowDispatches, rowsCreatedByAttempt, withWorkflowEffect, editSwitchRequired, PUBLICATION_UNCONFIRMED, PUBLICATION_UNVERIFIED, CREATION_RECORD_UNSETTLED, LAYER_READER_MISSING } = require('../lib/managed-feature-contract.js');
 const { createPublicationBarrier } = require('../lib/publication-barrier.js');
 const { readSystemFormPublication, readSystemFormLayers, readSystemFormRootPresence, systemFormLayerSha256 } = require('../lib/systemform-published.js');
 const { publishTablesXml } = require('../lib/table-publish.js');
@@ -1612,4 +1612,187 @@ test('workflow preflight: with the edit switch off, a state write to an adopted 
   assert.deepEqual(s.wire.writes(), [], 'adoption approval does not switch edits on');
   assert.equal(s.wire.workflows.get(MAIN).statecode, 0);
   assert.equal(s.store.readGroup('rule', key).pending.token, token);
+});
+
+test('publication race: a publish dispatched while an edit runs its preflight stops the edit before it prepares or sends; the publish puts only its own version live', { timeout: 20000 }, async () => {
+  const s = await setup();
+  const refs = [{ family: 'form', key: 'account/main' }];
+  await runManagedFeature({ ...ports(s.wire, s.sdk, { key: 'account/main', id: MAIN, formxml: '<form v="1"/>' }), store: s.store, barrier: s.barrier });
+  const inPreflight = latch();
+  const releaseEdit = latch();
+  const entered = latch();
+  const releasePublish = latch();
+  const p = tracked(ports(s.wire, s.sdk, { key: 'account/main', id: MAIN, formxml: '<form v="2"/>' }));
+  let saw;
+  p.preflight = async ({ committed }) => { saw = committed.publication.state; inPreflight.resolve(); await releaseEdit.promise; };
+  const editDone = outcome(runManagedFeature({ ...p, client: s.sdk.dataverse, store: s.store, barrier: s.barrier }));
+  await inPreflight.promise;
+  // Another process publishes version 1 while the edit waits in its preflight: its dispatch is recorded, then held in flight.
+  const original = s.wire.request;
+  s.wire.request = async (req) => {
+    if (req.method === 'POST' && /PublishXml/.test(req.url)) { entered.resolve(); await releasePublish.promise; }
+    return original(req);
+  };
+  const publisher = await nextRun(s);
+  s.wire.request = original;
+  const publishDone = outcome(publishForms(publisher.sdk, publisher.store, publisher.barrier, refs));
+  assert.equal(await Promise.race([entered.promise.then(() => true), publishDone.then(() => false)]), true, 'the publish is in flight');
+  assert.equal(publisher.store.readGroup('form', 'account/main').committed.publication.state, 'dispatching');
+  releaseEdit.resolve();
+  const edited = await editDone;
+  releasePublish.resolve();
+  const published = await publishDone;
+  assert.equal(saw, 'owed', 'the edit read the group before the publish was dispatched');
+  assert.equal(edited.error, PUBLICATION_UNCONFIRMED);
+  assert.equal(s.barrier.allowScope(ACCOUNT, 'a sibling'), false, 'the edit\'s scope is quarantined for the run');
+  assert.ok(!p.calls.includes('apply'), 'nothing sent');
+  assert.deepEqual(s.wire.log.filter(isPatch), [], 'the edit never left');
+  assert.equal(s.wire.published.get(MAIN).formxml, '<form v="1"/>', 'the earlier publish put only its own version live');
+  assert.equal(published.error, undefined, 'the publish settled');
+  const reopened = await nextRun(s);
+  const after = reopened.store.readGroup('form', 'account/main');
+  assert.equal(after.pending, null, 'nothing prepared');
+  assert.equal(after.committed.publication.state, 'confirmed');
+  // No dead end: the next run makes the edit.
+  const again = ports(s.wire, reopened.sdk, { key: 'account/main', id: MAIN, formxml: '<form v="2"/>' });
+  assert.deepEqual((await runManagedFeature({ ...again, client: reopened.sdk.dataverse, store: reopened.store, barrier: reopened.barrier })).result, { committed: true, recovered: false });
+  assert.equal(s.wire.saved.get(MAIN).formxml, '<form v="2"/>');
+});
+
+test('workflow handoff: a state effect first recorded inside recovery is refused by the operation check before it is sent; only the attempt\'s own Draft completion passes', async () => {
+  const key = 'account/hide';
+  const refusal = () => Object.assign(new Error('edits are switched off'), { code: 'workflow-edit-refused' });
+  // An existing Draft workflow, a pending attempt with a recorded base and no effect recorded yet: the persisted-effect
+  // preflight sees nothing, and recovery proposes the state write for the first time.
+  const strand = async ({ acknowledged = false } = {}) => {
+    const s = await setup();
+    s.wire.workflows.set(MAIN, { workflowid: MAIN, statecode: 0, statuscode: 1 });
+    const token = s.store.prepareAttempt({ family: 'rule', key, baseGeneration: null, root: { kind: 'business-rule', key, id: MAIN }, declarationSha256: H('e'), knownScopes: [] });
+    s.store.markSending(token, { ...expected(MAIN), proofSchema: 'rule-v1', baseProofSha256: H('d'), baseObservation: { rowVersion: null, savedSha256: H('d') } });
+    if (acknowledged) s.store.noteSaved(token, { proof: null, acknowledgedRoot: true, phase: 'state-pending' });
+    const effect = { attemptToken: token, baseGeneration: null, family: 'rule', key, rowId: MAIN, effect: 'state', request: { method: 'PATCH', shape: 'workflow-patch' }, desiredState: 'Active' };
+    const { sdk } = await sdkOver(s.wire, { barrier: s.barrier, workflowEffectGate: createWorkflowEffectGate({ store: s.store }) });
+    return { s, token, effect, sdk };
+  };
+  const recover = ({ s, effect, sdk }, proposeWith) => {
+    const seen = {};
+    const run = codeOf(runManagedFeature({
+      family: 'rule', key, phase: 'rules', halt, store: s.store, barrier: s.barrier, adoptionApproved: true,
+      preflight: async (a) => {
+        seen.preflight = existingRowDispatches(a).length;
+        if (existingRowDispatches(a).length) throw refusal();
+      },
+      resolve: async () => {}, plan: async () => {}, apply: async () => {}, ensureMembership: async () => {},
+      prove: async () => {
+        await proposeWith(() => sdk.dataverse.patch(`/workflows(${MAIN})`, { statecode: 1, statuscode: 2 }));
+        throw Object.assign(new Error('stopped after the write'), { code: 'probe-complete' });
+      },
+    }));
+    return run.then((code) => ({ code, seen }));
+  };
+  // The documented consumer rule: check the proposed operation, with the switch off, before it is recorded or sent.
+  const byRule = (x) => (send) => {
+    if (editSwitchRequired(x.s.store.readGroup('rule', key), x.effect)) throw refusal();
+    return withWorkflowEffect({ store: x.s.store, effect: x.effect }, send);
+  };
+  // The same check made by withWorkflowEffect itself when the feature passes its switch.
+  const bySwitch = (x) => (send) => withWorkflowEffect({ store: x.s.store, effect: x.effect, workflowConditionalEdits: false }, send);
+  for (const [label, how] of [['the consumer rule', byRule], ['withWorkflowEffect with the switch off', bySwitch]]) {
+    const x = await strand();
+    const { code, seen } = await recover(x, how(x));
+    assert.equal(seen.preflight, 0, `${label}: the persisted-effect preflight sees nothing to refuse`);
+    assert.equal(code, 'workflow-edit-refused', label);
+    assert.deepEqual(x.s.wire.writes(), [], `${label}: zero writes`);
+    assert.equal(x.s.wire.workflows.get(MAIN).statecode, 0, `${label}: Draft kept`);
+    const after = x.s.store.readGroup('rule', key);
+    assert.deepEqual([after.pending.token, after.effects], [x.token, []], `${label}: the attempt kept, nothing recorded`);
+  }
+  // The attempt's own Draft, its create acknowledged: completing it is the one write the default path allows.
+  const own = await strand({ acknowledged: true });
+  assert.equal((await recover(own, bySwitch(own))).code, 'probe-complete');
+  assert.equal(own.s.wire.writes().length, 1);
+  assert.equal(own.s.wire.workflows.get(MAIN).statecode, 1);
+  // Any body write, and a state write of another attempt or with no pending attempt, is an edit; a create is not.
+  const read = own.s.store.readGroup('rule', key);
+  assert.equal(editSwitchRequired(read, { ...own.effect, effect: 'body', desiredState: null }), true, 'a body write of its own Draft is not completion');
+  assert.equal(editSwitchRequired(read, { ...own.effect, attemptToken: 'another' }), true);
+  assert.equal(editSwitchRequired({ pending: null, effects: [] }, own.effect), true);
+  assert.equal(editSwitchRequired({ pending: null, effects: [] }, { ...own.effect, effect: 'create' }), false);
+});
+
+// A declaration with authored free text, as a maker writes it: names, a description with markup characters, a URL.
+const DECLARED = Object.freeze({
+  name: 'Main', description: 'Sales <overview> & pipeline — “quarterly” ünïcode', fieldOptions: { name: { required: false } },
+  iframe: { name: 'News', url: 'https://contoso.crm.dynamics.com/WebResources/new_news.htm?id=1&lang=en' },
+});
+const TODAY = Object.freeze({ ...DECLARED, description: 'Changed since' });
+// The ports of a feature that records its declaration with the attempt; its proof answers today's declaration, as a helper
+// that rebuilt it from the spec would.
+function declaring(p, declaration, answered = declaration) {
+  const plan = p.plan;
+  p.plan = async (a) => { const r = await plan(a); return r && r.noop !== true ? { ...r, declaration } : r; };
+  const prove = p.prove;
+  p.proveSaw = [];
+  p.prove = async (a) => { p.proveSaw.push(a.declaration); const r = await prove(a); return { ...r, consumerState: { ...r.consumerState, declaration: answered } }; };
+  return p;
+}
+
+test('declaration: an attempt keeps its original declaration from before the send; recovery commits that one, never today\'s, never null', async () => {
+  const s = await setup();
+  await runManagedFeature({ ...ports(s.wire, s.sdk, { key: 'account/main', id: MAIN, formxml: '<form v="1"/>' }), store: s.store, barrier: s.barrier });
+  const first = declaring(ports(s.wire, s.sdk, { key: 'account/main', id: MAIN, formxml: '<form v="2"/>', fail: { membership: Object.assign(new Error('membership failed'), { code: 'membership-failed' }) } }), DECLARED);
+  const apply = first.apply;
+  let onDisk;
+  first.apply = async (a) => { onDisk = context(s.dir, createPublicationBarrier()).store.readGroup('form', 'account/main').pending.declaration; return apply(a); };
+  assert.equal(await codeOf(runManagedFeature({ ...first, store: s.store, barrier: s.barrier })), 'membership-failed');
+  assert.deepEqual(onDisk, DECLARED, 'persisted, losslessly, before the send');
+  assert.equal(s.wire.saved.get(MAIN).formxml, '<form v="2"/>');
+
+  for (const answered of [TODAY, null]) {
+    const u = await setup();
+    await runManagedFeature({ ...ports(u.wire, u.sdk, { key: 'account/main', id: MAIN, formxml: '<form v="1"/>' }), store: u.store, barrier: u.barrier });
+    const p = declaring(ports(u.wire, u.sdk, { key: 'account/main', id: MAIN, formxml: '<form v="2"/>', fail: { membership: Object.assign(new Error('membership failed'), { code: 'membership-failed' }) } }), DECLARED);
+    await codeOf(runManagedFeature({ ...p, store: u.store, barrier: u.barrier }));
+    const n = await nextRun(u);
+    // Today's spec says something else; the recovery proves the save the attempt made and records what it declared.
+    const q = declaring(ports(u.wire, n.sdk, { key: 'account/main', id: MAIN, formxml: '<form v="2"/>' }), TODAY, answered);
+    let preflightSaw;
+    q.preflight = async ({ pending }) => { preflightSaw = pending.declaration; };
+    assert.deepEqual((await runManagedFeature({ ...q, store: n.store, barrier: n.barrier })).result, { committed: true, recovered: true });
+    assert.deepEqual(preflightSaw, DECLARED);
+    assert.deepEqual(q.proveSaw, [DECLARED], 'the recovery proof is given the recorded declaration');
+    const { committed, pending } = (await nextRun(u)).store.readGroup('form', 'account/main');
+    assert.equal(pending, null);
+    assert.deepEqual(committed.consumerState.declaration, DECLARED, `answered ${answered === null ? 'null' : 'today\'s'}`);
+  }
+});
+
+test('declaration: a changed declaration is never sent under an attempt that recorded another; a prepared one is retired and prepared again', async () => {
+  // A continuation whose declaration changed, under the same hash: refused before anything is sent.
+  const s = await observedSetup();
+  await committedEdit(s);
+  const first = declaring(editPorts(s.wire, s.sdk, { formxml: '<form v="2"/>', local: localFailure() }), DECLARED);
+  assert.equal(await codeOf(runManagedFeature(observed(first, s))), 'form-layout-local-edit');
+  const stranded = s.store.readGroup('form', 'account/main').pending;
+  const n = await observedRun(s);
+  const changed = declaring(editPorts(s.wire, n.sdk, { formxml: '<form v="2"/>' }), TODAY);
+  assert.equal(await codeOf(runManagedFeature(observed(changed, n))), 'create-completion-required');
+  assert.deepEqual([changed.sends, s.wire.log.filter(isPatch)], [[], []]);
+  assert.deepEqual(n.store.readGroup('form', 'account/main').pending, stranded, 'kept as it was');
+
+  // A prepared attempt (never marked sending) whose plan now declares something else sent nothing: it is retired, and
+  // the change is prepared and sent under a new attempt that records today's declaration.
+  const u = await setup();
+  await runManagedFeature({ ...ports(u.wire, u.sdk, { key: 'account/main', id: MAIN, formxml: '<form v="1"/>' }), store: u.store, barrier: u.barrier });
+  const g = u.store.readGroup('form', 'account/main').committed;
+  const old = u.store.prepareAttempt({ family: 'form', key: 'account/main', baseGeneration: g.generation, root: { kind: 'form', key: 'account/main', id: MAIN }, knownScopes: [ACCOUNT], declarationSha256: H('e'), declaration: DECLARED, publication: { scope: ACCOUNT, state: 'owed' } });
+  const m = await nextRun(u);
+  const p = declaring(ports(u.wire, m.sdk, { key: 'account/main', id: MAIN, formxml: '<form v="2"/>' }), TODAY);
+  const tokens = [];
+  const apply = p.apply;
+  p.apply = async (a) => { tokens.push(a.token); return apply(a); };
+  assert.deepEqual((await runManagedFeature({ ...p, store: m.store, barrier: m.barrier })).result, { committed: true, recovered: false });
+  assert.equal(tokens.length, 1);
+  assert.notEqual(tokens[0], old, 'not sent under the attempt that recorded another declaration');
+  assert.deepEqual(m.store.readGroup('form', 'account/main').committed.consumerState.declaration, TODAY);
 });

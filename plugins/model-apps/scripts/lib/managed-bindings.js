@@ -32,6 +32,7 @@ const { canonicalJson, normalizeGuid } = require('./reconcile-common.js');
 const { environmentFingerprint, workspaceRoot } = require('./page-ownership-records.js');
 const { writeFileAtomic } = require('./apply-snapshot-store.js');
 const { withRecordLease } = require('./record-lease.js');
+const { redactOutput } = require('./output-redaction.js');
 
 const PREFIX = 'managed-bindings.';
 const SCHEMA_VERSION = 1;
@@ -55,6 +56,9 @@ const CODES = Object.freeze({
   // A new generation offered over a group whose publish may have been sent and is not proved live: committing it would
   // let a later read of the OLD dispatch's layer settle the NEW generation's debt. Confirm that dispatch first.
   publicationUncertain: 'managed-publication-unconfirmed',
+  // A declaration offered with an attempt that the store will not keep (see validateDeclaration): refused before
+  // anything is written, so before anything is sent.
+  declarationRefused: 'managed-declaration-refused',
 });
 
 const FAMILIES = ['form', 'dashboard', 'rule', 'bpf', 'view', 'chart'];
@@ -143,6 +147,73 @@ function validateConsumerValue(value, where) {
   if (isObj(value)) { for (const [k, v] of Object.entries(value)) validateConsumerValue(v, `${where}.${k}`); return; }
   if (value === null || typeof value === 'boolean' || (typeof value === 'number' && Number.isFinite(value))) return;
   throw invalid(where, 'holds a value JSON cannot keep');
+}
+
+// The ORIGINAL declaration an attempt was planned from (design §1.2: "Hashes cannot restore it, so it is stored here
+// and nowhere else"). Unlike other consumer state it is the maker's authored text — names, descriptions, labels, a web
+// resource or iframe URL, which may well name the environment's own dynamics.com host — so it is kept as written, and
+// only what can carry a credential or a copy of service content is refused:
+//   - a JWT anywhere in a string or a key;
+//   - a URL with userinfo (`https://user:pass@host`), or a secret query/fragment parameter (`access_token`, `id_token`,
+//     `refresh_token`, `client_secret`, `password`, `passwd`, `pwd`, `sig` — an Azure SAS signature —, `api_key`,
+//     `apikey`);
+//   - a connection-string secret (`AccountKey=`, `SharedAccessKey=`, `SharedAccessSignature=`, `ClientSecret=`,
+//     `Password=` / `Pwd=` after a `;` or at the start);
+//   - a PEM private key;
+//   - a string that is a service document (formxml, fetchxml, layoutxml, a chart's XML, WFOM or XAML): it opens with
+//     `<?xml` or one of those roots. Authored markup such as `<b>Sales</b>` is free text and is kept;
+//   - anything JSON does not keep exactly (undefined, a function, a Date or other non-plain object, a non-finite
+//     number, a sparse array); a top level that is not a plain object; nesting deeper than 32; and more than
+//     DECLARATION_MAX_BYTES (128 KiB) of canonical JSON — the whole store is refused past MAX_BYTES (4 MiB), so one
+//     declaration may not take a large share of it.
+// A token this process obtained is refused by prepareAttempt as well, whatever its shape (output-redaction.js).
+const DECLARATION_MAX_BYTES = 128 * 1024;
+const DECLARATION_MAX_DEPTH = 32;
+const SERVICE_DOCUMENT = /^\s*<(?:\?xml|form|fetch|grid|savedquery|columnset|visualization|datadefinition|presentationdescription|workflow|Activity)\b/i;
+const URL_CREDENTIALS = /\b[a-z][a-z0-9+.-]*:\/\/[^\s/?#@]*:[^\s/?#@]*@/i;
+const SECRET_PARAMETER = /[?&#;](?:access_token|id_token|refresh_token|client_secret|password|passwd|pwd|sig|api_key|apikey)=/i;
+const CONNECTION_SECRET = /(?:^|;)\s*(?:AccountKey|SharedAccessKey|SharedAccessSignature|ClientSecret|Password|Pwd)\s*=/i;
+const PRIVATE_KEY = /-----BEGIN [A-Z ]*PRIVATE KEY-----/;
+const isPlain = (v) => isObj(v) && (Object.getPrototypeOf(v) === Object.prototype || Object.getPrototypeOf(v) === null);
+function declarationText(s, where) {
+  if (JWT.test(s)) throw invalid(where, 'holds a token');
+  if (URL_CREDENTIALS.test(s)) throw invalid(where, 'holds a URL with credentials');
+  if (SECRET_PARAMETER.test(s) || CONNECTION_SECRET.test(s)) throw invalid(where, 'holds a secret');
+  if (PRIVATE_KEY.test(s)) throw invalid(where, 'holds a private key');
+  if (SERVICE_DOCUMENT.test(s)) throw invalid(where, 'holds a service document');
+}
+function declarationValue(v, where, depth) {
+  if (depth > DECLARATION_MAX_DEPTH) throw invalid(where, `is nested deeper than ${DECLARATION_MAX_DEPTH}`);
+  if (typeof v === 'string') { declarationText(v, where); return; }
+  if (v === null || typeof v === 'boolean' || (typeof v === 'number' && Number.isFinite(v))) return;
+  if (Array.isArray(v)) {
+    // An index loop, not forEach: a hole would be written as null and read back as something else.
+    for (let i = 0; i < v.length; i += 1) declarationValue(v[i], `${where}[${i}]`, depth + 1);
+    return;
+  }
+  if (isPlain(v)) {
+    for (const k of Object.keys(v)) {
+      declarationText(k, `${where} (a key)`);
+      declarationValue(v[k], `${where}.${k}`, depth + 1);
+    }
+    return;
+  }
+  throw invalid(where, 'holds a value JSON cannot keep');
+}
+function validateDeclaration(value, where) {
+  if (!isPlain(value)) throw invalid(where, 'is not a plain object');
+  declarationValue(value, where, 0);
+  const bytes = Buffer.byteLength(canonicalJson(value), 'utf8');
+  if (bytes > DECLARATION_MAX_BYTES) throw invalid(where, `is ${bytes} bytes, more than ${DECLARATION_MAX_BYTES}`);
+}
+// A group's consumer state: its declaration, when it is one (a plain object), by the declaration rule; anything else —
+// other keys, and a declaration a feature keeps in another shape — by the stricter consumer-value rule, as before.
+function validateConsumerState(state, family, where) {
+  closedKeys(state, CONSUMER_KEYS[family], where);
+  for (const [k, v] of Object.entries(state)) {
+    if (k === 'declaration' && isPlain(v)) validateDeclaration(v, `${where}.declaration`);
+    else validateConsumerValue(v, `${where}.${k}`);
+  }
 }
 
 function validateRoot(root, family, key, where) {
@@ -261,13 +332,12 @@ function validateGroup(g, header, where) {
   validateRecords(g.records, g.root, header, `${where}.records`);
   if (!g.records.some((r) => r.kind === g.root.kind && r.key === g.root.key)) throw invalid(where, 'holds no record of its root');
   validateProof(g.proof, `${where}.proof`);
-  closedKeys(g.consumerState, CONSUMER_KEYS[g.family], `${where}.consumerState`);
-  validateConsumerValue(g.consumerState, `${where}.consumerState`);
+  validateConsumerState(g.consumerState, g.family, `${where}.consumerState`);
   validatePublication(g.publication, g.family, `${where}.publication`);
 }
 
 function validateAttempt(a, where) {
-  closedKeys(a, ['family', 'key', 'token', 'baseGeneration', 'phase', 'root', 'knownScopes', 'declarationSha256', 'expected', 'acknowledgedRoot', 'savedObservation', 'publication', 'sendWindow'], where);
+  closedKeys(a, ['family', 'key', 'token', 'baseGeneration', 'phase', 'root', 'knownScopes', 'declarationSha256', 'declaration', 'expected', 'acknowledgedRoot', 'savedObservation', 'publication', 'sendWindow'], where);
   tokenField(a.token, `${where}.token`);
   tokenField(a.baseGeneration, `${where}.baseGeneration`, true);
   if (!PHASES.has(a.phase)) throw invalid(where, 'has an unknown phase');
@@ -275,6 +345,11 @@ function validateAttempt(a, where) {
   if (!Array.isArray(a.knownScopes)) throw invalid(where, 'has no known scopes');
   a.knownScopes.forEach((s, i) => validateScope(s, `${where}.knownScopes[${i}]`));
   hashOrNull(a.declarationSha256, `${where}.declarationSha256`, false);
+  // The original declaration (prepareAttempt `declaration`): optional, and only for a family whose group keeps one.
+  if (a.declaration !== undefined) {
+    if (!CONSUMER_KEYS[a.family].includes('declaration')) throw invalid(where, 'keeps a declaration its family has no place for');
+    validateDeclaration(a.declaration, `${where}.declaration`);
+  }
   // Only a prepared attempt may lack `expected`: nothing is sent before it is written (markSending).
   if (a.expected === null) {
     if (a.phase !== 'prepared') throw invalid(where, 'was sent without an expected proof');
@@ -624,6 +699,10 @@ function openManagedBindings({ workspaceDir, environment, appUniqueName, solutio
       if (answer && typeof answer.then === 'function') throw storeError(CODES.notSettled, 'a managed binding change must be synchronous');
       next.revision = disk.envelope.revision + 1;
       const text = `${JSON.stringify(next, null, 2)}\n`;
+      // A file larger than any open reads back (readStoreFile: MAX_BYTES) would be written, then refused by every later
+      // run, the attempt it records with it: refuse the change instead, before the disk is touched.
+      const bytes = Buffer.byteLength(text, 'utf8');
+      if (bytes > MAX_BYTES) throw storeError(CODES.writeFailed, `the managed binding store would be ${bytes} bytes, more than the ${MAX_BYTES} it may hold; nothing was written`);
       // Validate in memory before anything touches the disk: an invalid group may stay as it was, never become one.
       const checked = parseEnvelope(text, ctx.expect);
       for (const id of checked.invalidGroups.keys()) {
@@ -680,15 +759,42 @@ function openManagedBindings({ workspaceDir, environment, appUniqueName, solutio
       const unit = usable(unitOf(state, family, key));
       return { committed: unit.group ? clone(unit.group) : null, pending: unit.attempt ? clone(unit.attempt) : null, effects: clone(unit.effects) };
     },
-    prepareAttempt({ family, key, baseGeneration = null, revision, root, expected = null, knownScopes = [], declarationSha256, publication = null }) {
+    /**
+     * Persist an attempt's intent before anything is sent. `declaration`: optional, for the families whose group keeps
+     * one (form, dashboard, rule, bpf) — the ORIGINAL declaration the attempt was planned from, as a plain JSON object.
+     * It is checked here (validateDeclaration; and a token this process obtained, which the atomic writer would
+     * redact), so an unsafe one is `managed-declaration-refused` with nothing written and nothing sent; it is kept with
+     * the attempt and becomes the group's declaration at commit (commitGroup). A group whose publish may have been sent
+     * and is not proved live (dispatching / unconfirmed), read here under the lease, is `managed-publication-unconfirmed`:
+     * an attempt is never prepared over it, whatever the caller read before.
+     */
+    prepareAttempt({ family, key, baseGeneration = null, revision, root, expected = null, knownScopes = [], declarationSha256, declaration, publication = null }) {
+      if (declaration !== undefined) {
+        try {
+          if (!CONSUMER_KEYS[family] || !CONSUMER_KEYS[family].includes('declaration')) throw invalid('the declaration', `has no place in a ${family} group`);
+          validateDeclaration(declaration, 'the declaration');
+          // The atomic writer takes out every access token this process obtained (output-redaction.js); a declaration
+          // that holds one would be written changed and fail its read-back, so it is refused here, before the send.
+          const text = JSON.stringify(declaration);
+          if (redactOutput(text) !== text) throw invalid('the declaration', 'holds an access token this process obtained');
+        } catch (e) {
+          throw storeError(CODES.declarationRefused, `the declaration of the managed ${family} "${key}" is refused: ${e.message}`, { cause: e });
+        }
+      }
       const token = newToken();
       mutate((env, disk) => {
         if (revision !== undefined && revision !== disk.envelope.revision) throw storeError(CODES.conflict, `the managed binding store changed since the plan was made (revision ${disk.envelope.revision}, plan ${revision})`);
         const unit = usable(unitOf(disk, family, key));
         if (unit.attempt) throw storeError(CODES.pending, `the managed ${family} "${key}" already has a pending attempt`);
         if ((unit.group ? unit.group.generation : null) !== baseGeneration) throw storeError(CODES.conflict, `the managed ${family} "${key}" changed since the plan was made`);
+        // Under the lease, against the file as it is now: markPublishDispatch refuses a group with an attempt, and this
+        // refuses an attempt over a dispatched publish, so the two never stand together.
+        if (unit.group && unit.group.publication && UNCERTAIN.has(unit.group.publication.state)) {
+          throw storeError(CODES.publicationUncertain, `the managed ${family} "${key}" has a publish that may have been sent and is not proved live; no change is prepared over it until a fresh read confirms it`);
+        }
         env.attempts.push({
-          family, key, token, baseGeneration, phase: expected ? 'sending' : 'prepared', root, knownScopes, declarationSha256, expected,
+          family, key, token, baseGeneration, phase: expected ? 'sending' : 'prepared', root, knownScopes, declarationSha256,
+          ...(declaration !== undefined ? { declaration: clone(declaration) } : {}), expected,
           acknowledgedRoot: false, savedObservation: null, publication,
         });
       });
@@ -705,7 +811,8 @@ function openManagedBindings({ workspaceDir, environment, appUniqueName, solutio
      *   'continue'  the attempt must still prove nothing it sent was carried out (attemptProvenUnsent: a window at zero,
      *               no acknowledgement or saved observation, its effects unsent) and the caller must observe its sends;
      *   'resume'    the attempt must still be a create no answer acknowledged (resumableCreate);
-     * otherwise `managed-settlement-pending`, nothing written. 'continue' and 'resume' move the window to a new epoch, so
+     * otherwise `managed-settlement-pending`, nothing written. Any mark, claimed or not, over a group whose publish may
+     * have been sent and is not proved live is `managed-publication-unconfirmed`, nothing written. 'continue' and 'resume' move the window to a new epoch, so
      * a dispatch counted under the old one — a run that read the same zero earlier, or a retry of an older run — is
      * refused unsent (noteAttemptDispatch). A claim takes over a zero window rather than waiting for an earlier claimant:
      * a run that died between its claim and its first send would otherwise strand the attempt, and the epoch already
@@ -721,6 +828,13 @@ function openManagedBindings({ workspaceDir, environment, appUniqueName, solutio
         }
         const group = env.groups.find((g) => g.family === a.family && g.key === a.key) || null;
         const name = `the managed ${a.family} "${a.key}"`;
+        // Every claim, and a mark with none, is checked against the group's CURRENT publication, here under the lease: a
+        // publish dispatched after the run read the group (while its preflight, resolve or plan was awaited) would put
+        // this attempt's saved change live before it is proved. prepareAttempt makes the same check; this one also covers
+        // an attempt an older store holds beside such a publish.
+        if (group && group.publication && UNCERTAIN.has(group.publication.state)) {
+          throw storeError(CODES.publicationUncertain, `${name} has a publish that may have been sent and is not proved live; nothing is sent under its attempt until a fresh read confirms it`);
+        }
         if (claim === 'first' && a.phase !== 'prepared') throw storeError(CODES.pending, `${name} attempt was marked sending by another run`);
         if (claim === 'continue' && !(observed === true && attemptProvenUnsent(a, env.workflowEffects))) throw storeError(CODES.pending, `${name} attempt no longer shows that nothing it sent was carried out; it is not sent again`);
         if (claim === 'resume' && !resumableCreate(group, a, env.workflowEffects)) throw storeError(CODES.pending, `${name} attempt is no longer a create no answer acknowledged; it is not sent again`);
@@ -785,7 +899,10 @@ function openManagedBindings({ workspaceDir, environment, appUniqueName, solutio
      * feature's own typed adoption approval, never inferred here — and is otherwise `managed-adoption-required`,
      * nothing written and the attempt kept. A group whose publication may have been sent and is not proved live
      * (dispatching / unconfirmed) is not committed again: `managed-publication-unconfirmed`, nothing written and the
-     * attempt kept, until that dispatch is confirmed read-only (confirmPublished).
+     * attempt kept, until that dispatch is confirmed read-only (confirmPublished). An attempt that recorded its
+     * declaration (prepareAttempt `declaration`) commits it as `consumerState.declaration`: an omitted one is filled in,
+     * an equal one (canonical JSON) passes, and any other — `null` included — is `create-completion-required`, nothing
+     * written and the attempt kept.
      */
     commitGroup({ token, baseGeneration, records, proof, consumerState, publication = null, proofSchema, adoptionApproved = false }) {
       // The proposal is checked whole before anything else: a list that repeats a (kind, key) or an id must be refused,
@@ -830,6 +947,17 @@ function openManagedBindings({ workspaceDir, environment, appUniqueName, solutio
         if (!old && !acknowledged && adoptionApproved !== true) {
           throw storeError(CODES.adoptionRequired, `the managed ${a.family} "${a.key}" root was never acknowledged as created; binding it needs its adoption approval`);
         }
+        // An attempt that recorded its original declaration commits that one and no other: a recovery that rebuilt it
+        // from today's spec, or lost it (null), would bind the proved change to a declaration it was never sent for.
+        let state = consumerState;
+        if (a.declaration !== undefined && isObj(consumerState)) {
+          if (Object.prototype.hasOwnProperty.call(consumerState, 'declaration')) {
+            if (canonicalJson(consumerState.declaration) !== canonicalJson(a.declaration)) {
+              throw storeError(CODES.completion, `the managed ${a.family} "${a.key}" is committed with the declaration its attempt recorded, not another`);
+            }
+          }
+          state = { ...consumerState, declaration: clone(a.declaration) };
+        }
         const merged = [];
         const byKey = new Map();
         for (const rec of records || []) byKey.set(`${rec.kind}\u0000${rec.key}`, rec);
@@ -861,7 +989,7 @@ function openManagedBindings({ workspaceDir, environment, appUniqueName, solutio
         }
         committed = {
           family: a.family, key: a.key, generation: newToken(), previousGeneration: old ? old.generation : null,
-          root: a.root, proofSchema: proofSchema || a.expected.proofSchema, records: merged, proof, consumerState, publication,
+          root: a.root, proofSchema: proofSchema || a.expected.proofSchema, records: merged, proof, consumerState: state, publication,
         };
         env.groups = env.groups.filter((g) => g !== old);
         env.groups.push(committed);
@@ -1081,6 +1209,7 @@ function managedManifestView(snapshot) {
 module.exports = {
   PREFIX,
   MAX_BYTES,
+  DECLARATION_MAX_BYTES,
   CODES,
   FAMILIES,
   ROOT_KIND,
