@@ -38,4 +38,20 @@ function createPassthroughCreates({ newId = randomUUID } = {}) {
   };
 }
 
-module.exports = { createPassthroughCreates };
+// Whether `creates` protects `kind`. A wiring site asks through this, never through `creates.protects` directly: the port the build
+// constructs without createIdentity is the one above, which has only `run`, and a test may inject any `{ run }` double — neither
+// protects anything, and a direct call would throw on every such build. Lives here, not in the stable port's module, so a default
+// build can call it without loading any of the identity modules.
+function portProtects(creates, kind) {
+  return Boolean(creates && typeof creates.protects === 'function' && creates.protects(kind));
+}
+
+// The ids a protected create would be sent with (creates-port.js identityFor), or null for a kind the port does not protect. A port
+// that protects a kind but cannot name its ids is refused, so a protected create never falls back to a name lookup unnoticed.
+function portIdentityFor(creates, kind, key) {
+  if (!portProtects(creates, kind)) return null;
+  if (typeof creates.identityFor !== 'function') throw new TypeError(`creates port: it protects '${kind}' but has no identityFor`);
+  return creates.identityFor(kind, key);
+}
+
+module.exports = { createPassthroughCreates, portProtects, portIdentityFor };

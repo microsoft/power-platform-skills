@@ -89,3 +89,30 @@ test('creates port: a field security profile is created through it with the mint
   await assert.rejects(() => fls.applyFieldSecurity(plan, { sdk: failing, creates: createPassthroughCreates() }), (e) => e === lost);
   assert.deepEqual(failing.calls.map((c) => c[0]), ['createArtifact']);
 });
+
+// A wiring site asks the port whether it protects a kind through portProtects / portIdentityFor, never through creates.protects:
+// the default port the build constructs without createIdentity (createPassthroughCreates) has only `run`, and a test may inject any
+// `{ run }` double, so a direct call would throw "protects is not a function" on every legacy build.
+test('creates port: the plain port and a { run } double protect nothing, through the wiring helpers', () => {
+  const { portProtects, portIdentityFor } = require('../lib/creates-passthrough.js');
+  const plain = createPassthroughCreates();
+  assert.deepEqual(Object.keys(plain), ['run'], 'the plain port keeps its one method');
+  for (const port of [plain, { run: async () => ({}) }, undefined, null]) {
+    for (const kind of ['form', 'view', 'chart', 'dashboard', 'fieldSecurityProfile']) {
+      assert.equal(portProtects(port, kind), false);
+      assert.equal(portIdentityFor(port, kind, 'k'), null);
+    }
+  }
+});
+
+test('creates port: the helpers answer a stable port exactly as it answers, and refuse a port that protects without ids', () => {
+  const { portProtects, portIdentityFor } = require('../lib/creates-passthrough.js');
+  const calls = [];
+  const port = { run: async () => ({}), protects: (k) => { calls.push(['protects', k]); return k === 'form' ? 1 : 0; }, identityFor: (k, key) => { calls.push(['identityFor', k, key]); return { id: `id-${key}`, childIds: {} }; } };
+  assert.equal(portProtects(port, 'form'), true, 'a truthy answer is true');
+  assert.equal(portProtects(port, 'view'), false);
+  assert.deepEqual(portIdentityFor(port, 'form', 'k1'), { id: 'id-k1', childIds: {} });
+  assert.equal(portIdentityFor(port, 'view', 'k2'), null, 'an unprotected kind is never asked for ids');
+  assert.deepEqual(calls, [['protects', 'form'], ['protects', 'view'], ['protects', 'form'], ['identityFor', 'form', 'k1'], ['protects', 'view']]);
+  assert.throws(() => portIdentityFor({ run() {}, protects: () => true }, 'form', 'k'), /protects 'form' but has no identityFor/);
+});
