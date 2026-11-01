@@ -129,7 +129,9 @@ prod-ready** app; don't under-build (a bare table list) or over-build (surfaces 
   one existing view or chart the maker asks to change: a rebuild then applies its columns, filters, sort
   and joins (`linkEntities`) instead of only adding columns. Never set `title` on a new declared chart,
   and give a declared view its own name — not the stock `Active <plural>` or `Inactive <plural>`, which
-  every table already has, so changing one is an adoption.
+  every table already has, so changing one is an adoption. Two declared views on one table need different
+  names, and so do two declared charts: a `viewId` pin does not tell them apart, and the build refuses the
+  pair (see Approvals in the advanced reference).
   For a new table you create, propose `entities[].quickFind.findColumns` (the primary name plus what a
   user types in the search box: a number, an email, a code) and confirm it with the maker; on an
   existing table, only when the maker names what search should match. A change to a view or chart that

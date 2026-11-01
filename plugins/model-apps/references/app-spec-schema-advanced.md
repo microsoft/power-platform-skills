@@ -640,7 +640,11 @@ shown as an adoption: the build leaves it unchanged, builds the rest, and then s
 case, the name exactly as in the spec). `--authorize overwrite:view:<table>/<name>` (or `chart:`)
 approves replacing changes made elsewhere, and `--allow-destructive` approves removing columns. Each key
 approves only the artifact of its family, so a view and a chart with the same name are approved
-separately. The older `adopt:<table>/<name>` form still works when it names exactly one declared view or
+separately. Within a family a key must name one artifact: two declared views on one table need different
+names, and so do two declared charts (a chart's name is compared with its outer spaces trimmed). A
+`viewId` pin chooses the row a view edits but is not part of its key, so it does not tell two
+same-named declared views apart. A build or a plan refuses such a pair before any work; teardown and
+verification only warn. The same name on another table, or on a view and a chart, is fine. The older `adopt:<table>/<name>` form still works when it names exactly one declared view or
 chart; a key that could name several, or that names no declared view or chart, stops the build. **Local copy.** A declared view, chart or Quick Find view whose local copy differs from the
 server's (an edit an earlier run did not send, or one made by hand), or cannot be compared with it, is
 refused before anything is written (`workspace-copy-unsent-edits`); the copy is kept. Put any change
