@@ -89,7 +89,9 @@ const NAMESPACE = { form: 'systemform', dashboard: 'systemform', rule: 'workflow
 const ROOT_KIND = Object.freeze({ form: 'form', dashboard: 'dashboard', rule: 'business-rule', bpf: 'bpf', view: 'view', chart: 'chart' });
 const PUBLISHING = new Set(['form', 'dashboard', 'view', 'chart']);
 const PUBLICATION_STATES = new Set(['not-needed', 'owed', 'dispatching', 'unconfirmed', 'confirmed']);
-const EFFECT_STATES = new Set(['definitely-unsent', 'dispatching', 'unconfirmed', 'confirmed']);
+// `fulfilled` is a state change this attempt never sent whose desired state a fresh read found already on its row: a
+// terminal fact, kept until the attempt commits, so the change is never proposed or sent again (fulfillEffect).
+const EFFECT_STATES = new Set(['definitely-unsent', 'dispatching', 'unconfirmed', 'confirmed', 'fulfilled']);
 const UNCERTAIN = new Set(['dispatching', 'unconfirmed']);
 const PHASES = new Set(['prepared', 'sending', 'saved', 'state-pending', 'membership-pending']);
 const EFFECTS = new Set(['create', 'body', 'state']);
@@ -558,11 +560,44 @@ function validateAttempt(a, where) {
 // The workflow effects the attempt `a` owns.
 const ownedEffects = (a, effects) => (effects || []).filter((x) => x.attemptToken === a.token);
 
+// A workflow effect as recordWorkflowEffect persists it: definitely-unsent, with a fresh token and no dispatch token.
+function effectRecord(effect) {
+  if (!isObj(effect)) throw storeError(CODES.notSettled, 'a workflow effect must be an object');
+  const request = isObj(effect.request) ? { method: String(effect.request.method || '').toUpperCase(), shape: effect.request.shape } : effect.request;
+  return {
+    token: newToken(), attemptToken: effect.attemptToken, baseGeneration: effect.baseGeneration === undefined ? null : effect.baseGeneration,
+    family: effect.family, key: effect.key, rowId: normalizeGuid(effect.rowId) || effect.rowId, effect: effect.effect, request,
+    desiredSha256: effect.desiredSha256 === undefined ? null : effect.desiredSha256, desiredState: effect.desiredState === undefined ? null : effect.desiredState,
+    expectedVersion: effect.expectedVersion === undefined ? null : effect.expectedVersion, state: 'definitely-unsent', dispatchToken: null,
+  };
+}
+
+// The record of `rec`'s attempt that already reached `rec`'s target — a state change of the same row to the same state —
+// without this attempt sending it (fulfilled), or, with `confirmedToo`, by a send a read proved (confirmed).
+function fulfilledTarget(env, rec, confirmedToo = false) {
+  if (rec.effect !== 'state') return null;
+  return env.workflowEffects.find((e) => e.attemptToken === rec.attemptToken && e.rowId === rec.rowId && e.effect === 'state'
+    && e.desiredState === rec.desiredState && (e.state === 'fulfilled' || (confirmedToo && e.state === 'confirmed'))) || null;
+}
+
+// Turn the unsent state change `e` into the fulfilled fact a read made: checked whole before anything of `e` changes.
+function fulfilInto(e, observedState, observedVersion) {
+  if (!nonempty(observedState) || !nonempty(e.desiredState) || observedState !== e.desiredState) {
+    throw storeError(CODES.notSettled, 'the observed workflow row is not in the state the change asks for');
+  }
+  if (!nonempty(observedVersion)) throw storeError(CODES.notSettled, 'a change found fulfilled needs the row version of the read that found it');
+  e.state = 'fulfilled';
+  e.dispatchToken = null;
+  e.observedState = observedState;
+  e.observedVersion = observedVersion;
+}
+
 /**
  * Does the attempt's own record prove that nothing it sent was carried out (lib/managed-feature-contract.js
  * recoverManagedAttempt, route 1)? Only with a send window, which markSending arms in the same write that marks it
  * sending and only for an observed send: no counted mutation is still possibly applied, no answer acknowledged a root or
- * a save, and every workflow effect it owns is still unsent with no dispatch token. A `sending` phase alone is no such
+ * a save, and every workflow effect it owns is still unsent with no dispatch token, or fulfilled by a read (it was never
+ * sent either, and is never sent again). A `sending` phase alone is no such
  * proof, and neither is a later read that finds nothing: either may sit in front of a write still on its way. Pure: the
  * store applies it again to the record it rereads under the lease when a run claims the attempt (markSending `claim`).
  */
@@ -571,7 +606,7 @@ function attemptProvenUnsent(a, effects) {
   if (a.acknowledgedRoot || a.savedObservation !== null) return false;
   const w = a.sendWindow;
   if (!w || w.possible !== 0) return false;
-  return ownedEffects(a, effects).every((x) => x.state === 'definitely-unsent' && x.dispatchToken === null);
+  return ownedEffects(a, effects).every((x) => (x.state === 'definitely-unsent' || x.state === 'fulfilled') && x.dispatchToken === null);
 }
 
 /**
@@ -635,7 +670,7 @@ const REQUEST_SHAPES = Object.freeze({
 });
 
 function validateEffect(e, where) {
-  closedKeys(e, ['token', 'attemptToken', 'baseGeneration', 'family', 'key', 'rowId', 'effect', 'request', 'desiredSha256', 'desiredState', 'expectedVersion', 'state', 'dispatchToken'], where);
+  closedKeys(e, ['token', 'attemptToken', 'baseGeneration', 'family', 'key', 'rowId', 'effect', 'request', 'desiredSha256', 'desiredState', 'expectedVersion', 'state', 'dispatchToken', 'observedState', 'observedVersion'], where);
   tokenField(e.token, `${where}.token`);
   tokenField(e.attemptToken, `${where}.attemptToken`);
   tokenField(e.baseGeneration, `${where}.baseGeneration`, true);
@@ -660,7 +695,16 @@ function validateEffect(e, where) {
   if (e.effect === 'create' && e.expectedVersion !== null) throw invalid(where, 'is a create with a row version');
   if (e.expectedVersion !== null && !nonempty(e.expectedVersion)) throw invalid(where, 'has an empty row version');
   if (!EFFECT_STATES.has(e.state)) throw invalid(where, 'has an unknown state');
-  if (e.state === 'definitely-unsent') { if (e.dispatchToken !== null) throw invalid(where, 'carries a dispatch token it never sent'); } else tokenField(e.dispatchToken, `${where}.dispatchToken`);
+  if (e.state === 'definitely-unsent' || e.state === 'fulfilled') { if (e.dispatchToken !== null) throw invalid(where, 'carries a dispatch token it never sent'); } else tokenField(e.dispatchToken, `${where}.dispatchToken`);
+  // Only a fulfilled effect records the read that fulfilled it: the state it found (the one the effect asks for) and the
+  // row version that read answered. Every other record keeps the shape it always had, without the two keys.
+  if (e.state === 'fulfilled') {
+    if (e.effect !== 'state') throw invalid(where, 'is fulfilled by a read but is not a state change');
+    if (!nonempty(e.observedState) || e.observedState !== e.desiredState) throw invalid(where, 'is fulfilled by a read that did not find its desired state');
+    if (!nonempty(e.observedVersion)) throw invalid(where, 'is fulfilled by a read with no row version');
+  } else if (e.observedState !== undefined || e.observedVersion !== undefined) {
+    throw invalid(where, 'records a fulfilling read but is not fulfilled');
+  }
 }
 
 /**
@@ -676,6 +720,10 @@ const publicationRiskApproval = (scope) => `publication-risk:${scopeKey(scope)}`
 // changed settles it on its own (confirmUncertainPublication); when none can (the publish carried only layers that
 // were already live), the maker checks what is live and accepts the risk with the scope's typed approval.
 const publicationRemedy = (scope, dispatchToken) => `it settles when a fresh read shows a layer that publish changed; if none can, check what is live on ${scopeKey(scope)} and accept the risk with the approval "${publicationRiskApproval(scope)}" for dispatch ${dispatchToken} (acceptUncertainPublication)`;
+// The fields every refusal over an unconfirmed publish carries, so a caller offers the maker that dispatch's decision
+// from data, never by parsing a token out of the message: the blocked dispatch, the scope's typed approval
+// (acceptUncertainPublication takes both) and the remedy text.
+const blockedPublication = (scope, dispatchToken) => ({ dispatchToken, approval: publicationRiskApproval(scope), remedy: publicationRemedy(scope, dispatchToken) });
 function validateRiskAcceptances(list, where) {
   if (!Array.isArray(list) || list.length > RISK_ACCEPTANCES_KEPT) throw invalid(where, `is not a list of at most ${RISK_ACCEPTANCES_KEPT} acceptances`);
   list.forEach((x, i) => {
@@ -976,6 +1024,14 @@ function openManagedBindings({ workspaceDir, environment, appUniqueName, solutio
     usable(unitOf(disk, a.family, a.key));
     return a;
   };
+  // A workflow effect (`rec`, from effectRecord) must belong to its own pending attempt, at its generation, on its root.
+  const checkEffectOwner = (env, disk, rec) => {
+    const a = requireAttempt(env, disk, rec.attemptToken);
+    if (a.family !== rec.family || a.key !== rec.key) throw storeError(CODES.notSettled, 'a workflow effect must belong to its own attempt');
+    if (a.baseGeneration !== rec.baseGeneration) throw storeError(CODES.conflict, 'a workflow effect must name its attempt\'s generation');
+    if (rec.rowId !== a.root.id) throw storeError(CODES.notSettled, `a workflow effect changes its attempt's own row ${a.root.id}, not ${rec.rowId}`);
+    return a;
+  };
   // The retire rules, inside a lease-held change (retireUnsentAttempt, and prepareAttempt `replaces`): the attempt must
   // still be based on `baseGeneration`, which must still be its group's generation, and must prove nothing of it
   // started. Removes the attempt and the effects it owns from `env`; answers how many effects went with it.
@@ -987,8 +1043,11 @@ function openManagedBindings({ workspaceDir, environment, appUniqueName, solutio
       throw storeError(CODES.pending, `the managed ${a.family} "${a.key}" attempt may have been sent; it is recovered, never retired`);
     }
     const owned = env.workflowEffects.filter((e) => e.attemptToken === a.token);
+    // Only effects still unsent let the attempt go. A fulfilled one never left either, but it is the record that its
+    // target was reached: it settles only with the attempt's commit, so retiring the attempt would drop it and let a
+    // later attempt send that change again.
     if (owned.some((e) => e.state !== 'definitely-unsent' || e.dispatchToken !== null)) {
-      throw storeError(CODES.pending, `the managed ${a.family} "${a.key}" attempt has a workflow effect that may have been sent`);
+      throw storeError(CODES.pending, `the managed ${a.family} "${a.key}" attempt has a workflow effect that may have been sent, or a change a read found already made; it is never retired`);
     }
     env.attempts = env.attempts.filter((x) => x !== a);
     env.workflowEffects = env.workflowEffects.filter((e) => e.attemptToken !== a.token);
@@ -1052,7 +1111,7 @@ function openManagedBindings({ workspaceDir, environment, appUniqueName, solutio
         // Under the lease, against the file as it is now: markPublishDispatch refuses a group with an attempt, and this
         // refuses an attempt over a dispatched publish, so the two never stand together.
         if (unit.group && unit.group.publication && UNCERTAIN.has(unit.group.publication.state)) {
-          throw storeError(CODES.publicationUncertain, `the managed ${family} "${key}" has a publish that may have been sent and is not proved live; no change is prepared over it until a fresh read confirms it`);
+          throw storeError(CODES.publicationUncertain, `the managed ${family} "${key}" has a publish that may have been sent and is not proved live; no change is prepared over it until a fresh read confirms it`, blockedPublication(unit.group.publication.scope, unit.group.publication.dispatchToken));
         }
         env.attempts.push({
           family, key, token, baseGeneration, phase: expected ? 'sending' : 'prepared', root, knownScopes, declarationSha256,
@@ -1076,7 +1135,7 @@ function openManagedBindings({ workspaceDir, environment, appUniqueName, solutio
      *               no acknowledgement or saved observation, its effects unsent) and the caller must observe its sends;
      *   'resume'    the attempt must still be a create no answer acknowledged (resumableCreate);
      * otherwise `managed-settlement-pending`, nothing written. Any mark, claimed or not, over a group whose publish may
-     * have been sent and is not proved live is `managed-publication-unconfirmed`, nothing written. 'continue' and 'resume' move the window to a new epoch, so
+     * have been sent and is not proved live is `managed-publication-unconfirmed` (carrying blockedPublication's fields), nothing written. 'continue' and 'resume' move the window to a new epoch, so
      * a dispatch counted under the old one — a run that read the same zero earlier, or a retry of an older run — is
      * refused unsent (noteAttemptDispatch). A claim takes over a zero window rather than waiting for an earlier claimant:
      * a run that died between its claim and its first send would otherwise strand the attempt, and the epoch already
@@ -1097,7 +1156,7 @@ function openManagedBindings({ workspaceDir, environment, appUniqueName, solutio
         // this attempt's saved change live before it is proved. prepareAttempt makes the same check; this one also covers
         // an attempt an older store holds beside such a publish.
         if (group && group.publication && UNCERTAIN.has(group.publication.state)) {
-          throw storeError(CODES.publicationUncertain, `${name} has a publish that may have been sent and is not proved live; nothing is sent under its attempt until a fresh read confirms it`);
+          throw storeError(CODES.publicationUncertain, `${name} has a publish that may have been sent and is not proved live; nothing is sent under its attempt until a fresh read confirms it`, blockedPublication(group.publication.scope, group.publication.dispatchToken));
         }
         if (claim === 'first' && a.phase !== 'prepared') throw storeError(CODES.pending, `${name} attempt was marked sending by another run`);
         if (claim === 'continue' && !(observed === true && attemptProvenUnsent(a, env.workflowEffects))) throw storeError(CODES.pending, `${name} attempt no longer shows that nothing it sent was carried out; it is not sent again`);
@@ -1233,15 +1292,16 @@ function openManagedBindings({ workspaceDir, environment, appUniqueName, solutio
         if (!a.expected) throw storeError(CODES.notSettled, 'an attempt that was never sent has nothing to commit');
         const effects = env.workflowEffects.filter((e) => e.attemptToken === token);
         // Every workflow effect this attempt owns retires in this same write, so none must still be open: an effect
-        // that may have reached the server must be proved first. The refusal leaves the attempt and its effects as
-        // they are, and no other attempt's effects are read or touched.
-        if (effects.some((e) => e.state !== 'confirmed')) throw storeError(CODES.pending, `the managed ${a.family} "${a.key}" has a workflow effect that is not confirmed`);
+        // that may have reached the server must be proved first, and one never sent must be sent and proved, or found
+        // fulfilled by a read (fulfillEffect). The refusal leaves the attempt and its effects as they are, and no other
+        // attempt's effects are read or touched.
+        if (effects.some((e) => e.state !== 'confirmed' && e.state !== 'fulfilled')) throw storeError(CODES.pending, `the managed ${a.family} "${a.key}" has a workflow effect that is not confirmed`);
         const old = env.groups.find((g) => g.family === a.family && g.key === a.key) || null;
         // A publish of the old generation that may have been sent is settled first (a read-only confirmation, or it stays
         // blocked). Carried over a new generation, a later read of the OLD layer would confirm the NEW group and drop
         // the new generation's own debt; the new debt is never folded into the old dispatch either.
         if (old && old.publication && UNCERTAIN.has(old.publication.state)) {
-          throw storeError(CODES.publicationUncertain, `the managed ${a.family} "${a.key}" has a publish that may have been sent and is not proved live; a new generation is committed only after it is confirmed`);
+          throw storeError(CODES.publicationUncertain, `the managed ${a.family} "${a.key}" has a publish that may have been sent and is not proved live; a new generation is committed only after it is confirmed`, blockedPublication(old.publication.scope, old.publication.dispatchToken));
         }
         const acknowledged = rootCreateAcknowledged(a);
         const receipt = a.acknowledgedChildCreates || [];
@@ -1504,25 +1564,21 @@ function openManagedBindings({ workspaceDir, environment, appUniqueName, solutio
      * Persist one workflow effect as definitely-unsent; it must belong to the pending attempt `attemptToken`.
      * The same effect asked for again by the same attempt (every field that says what it is equal), while its record is
      * still definitely-unsent with no dispatch token, answers that record instead of a second one: it never started, so
-     * a resumed create or a continued attempt (recoverManagedAttempt) sends it under its own token. Any other unsettled
-     * effect of the same kind on the row is refused.
+     * a resumed create or a continued attempt (recoverManagedAttempt) sends it under its own token. A state change the
+     * attempt already has fulfilled (fulfillEffect: the same row and desired state) answers that fulfilled record,
+     * whatever row version the new proposal carries: its target was reached, and a change the row has had since (a
+     * maker's deactivation, say) is never undone by sending it again. Any other unsettled effect of the same kind on the
+     * row is refused.
      */
     recordWorkflowEffect(effect) {
-      const request = isObj(effect.request) ? { method: String(effect.request.method || '').toUpperCase(), shape: effect.request.shape } : effect.request;
-      const rec = {
-        token: newToken(), attemptToken: effect.attemptToken, baseGeneration: effect.baseGeneration === undefined ? null : effect.baseGeneration,
-        family: effect.family, key: effect.key, rowId: normalizeGuid(effect.rowId) || effect.rowId, effect: effect.effect, request,
-        desiredSha256: effect.desiredSha256 === undefined ? null : effect.desiredSha256, desiredState: effect.desiredState === undefined ? null : effect.desiredState,
-        expectedVersion: effect.expectedVersion === undefined ? null : effect.expectedVersion, state: 'definitely-unsent', dispatchToken: null,
-      };
+      const rec = effectRecord(effect);
       const same = (e) => canonicalJson([e.attemptToken, e.baseGeneration, e.family, e.key, e.rowId, e.effect, e.request, e.desiredSha256, e.desiredState, e.expectedVersion])
         === canonicalJson([rec.attemptToken, rec.baseGeneration, rec.family, rec.key, rec.rowId, rec.effect, rec.request, rec.desiredSha256, rec.desiredState, rec.expectedVersion]);
       let reused = null;
       mutate((env, disk) => {
-        const a = requireAttempt(env, disk, rec.attemptToken);
-        if (a.family !== rec.family || a.key !== rec.key) throw storeError(CODES.notSettled, 'a workflow effect must belong to its own attempt');
-        if (a.baseGeneration !== rec.baseGeneration) throw storeError(CODES.conflict, 'a workflow effect must name its attempt\'s generation');
-        if (rec.rowId !== a.root.id) throw storeError(CODES.notSettled, `a workflow effect changes its attempt's own row ${a.root.id}, not ${rec.rowId}`);
+        checkEffectOwner(env, disk, rec);
+        const reached = fulfilledTarget(env, rec);
+        if (reached) { reused = clone(reached); return; }
         const open = env.workflowEffects.filter((e) => e.rowId === rec.rowId && e.effect === rec.effect && e.state !== 'confirmed');
         if (open.length === 1 && open[0].state === 'definitely-unsent' && open[0].dispatchToken === null && same(open[0])) { reused = clone(open[0]); return; }
         if (open.length) throw storeError(CODES.pending, `the workflow row ${rec.rowId} already has an unsettled ${rec.effect} effect`);
@@ -1551,7 +1607,9 @@ function openManagedBindings({ workspaceDir, environment, appUniqueName, solutio
     confirmEffect(token, { observedSha256, observedState } = {}) {
       mutate((env) => {
         const e = env.workflowEffects.find((x) => x.token === token);
-        if (!e || e.state === 'definitely-unsent') throw storeError(CODES.notSettled, 'the workflow effect was not dispatched');
+        // A fulfilled change was never sent by this attempt, so it is never called confirmed (a confirmed effect claims
+        // a dispatch of ours).
+        if (!e || e.state === 'definitely-unsent' || e.state === 'fulfilled') throw storeError(CODES.notSettled, 'the workflow effect was not dispatched');
         const proved = e.effect === 'state' ? observedState === e.desiredState : observedSha256 === e.desiredSha256;
         if (!proved) throw storeError(CODES.notSettled, 'the observed workflow row does not prove the effect');
         e.state = 'confirmed';
@@ -1559,28 +1617,63 @@ function openManagedBindings({ workspaceDir, environment, appUniqueName, solutio
     },
     /**
      * A state change this attempt never sent (definitely-unsent, no dispatch token) whose desired state a fresh read
-     * finds already on its row, put there by someone else: there is nothing left to send and nothing of this attempt's
-     * to prove, so the record is dropped rather than confirmed (a confirmed effect claims a dispatch). Only a state
-     * effect: a body is never settled this way. The caller has proved, from the same read, that the row carries exactly
-     * the attempt's own body; the store cannot see the row.
-     * Every condition is checked on the record reread under the lease, so a run that claimed and dispatched the change
-     * since the caller's read (it is then dispatching, with a token) is never undone. The owning attempt must still be
-     * pending, and it stays so: its token, its other effects and the barrier hold under that token are untouched, and
-     * the attempt still settles only through commitGroup or the retire rules.
+     * finds already on its row, put there by someone else: there is nothing left to send, so the record becomes
+     * `fulfilled` — a terminal fact that keeps the read's `observedState` and `observedVersion` (the row version that
+     * read answered), keeps no dispatch token and is never called confirmed. It stays on disk with its attempt, through
+     * any failure or restart, until the attempt's commit retires it (commitGroup accepts it); until then the change is
+     * never proposed or sent again: recordWorkflowEffect answers the fulfilled record for the same target at any row
+     * version, the transport and markEffectDispatching refuse it, and withWorkflowEffect refuses it unsent
+     * (`workflow-effect-fulfilled`). A row the maker changed since (deactivated, say) is therefore never changed back.
+     * Only a state effect: a body is never settled this way. The caller has proved, from the same read, that the row
+     * carries exactly the attempt's own body; the store cannot see the row.
+     * Every condition is checked on the record reread under the lease, in one write, so a run that claimed and
+     * dispatched the change since the caller's read (it is then dispatching, with a token) is never overwritten, and a
+     * write that fails leaves the effect unsent. The owning attempt must still be pending, and it stays so: its token,
+     * its other effects and the barrier hold under that token are untouched. Answers the fulfilled record.
      */
-    retireMootEffect(token, { observedState } = {}) {
+    fulfillEffect(token, { observedState, observedVersion } = {}) {
+      let out = null;
       mutate((env, disk) => {
-        const i = env.workflowEffects.findIndex((x) => x.token === token);
-        const e = i < 0 ? null : env.workflowEffects[i];
+        const e = env.workflowEffects.find((x) => x.token === token);
         if (!e || e.effect !== 'state' || e.state !== 'definitely-unsent' || e.dispatchToken !== null) {
-          throw storeError(CODES.notSettled, 'only a state change that was never sent can be settled without sending it');
+          throw storeError(CODES.notSettled, 'only a state change that was never sent can be found fulfilled without sending it');
         }
         requireAttempt(env, disk, e.attemptToken);
-        if (typeof observedState !== 'string' || typeof e.desiredState !== 'string' || observedState !== e.desiredState) {
-          throw storeError(CODES.notSettled, 'the observed workflow row is not in the state the change asks for');
-        }
-        env.workflowEffects.splice(i, 1);
+        fulfilInto(e, observedState, observedVersion);
+        out = clone(e);
       });
+      return out;
+    },
+    /**
+     * The same fact when no change was recorded first: the row a fresh read found already in the state the attempt
+     * wants (its own create may have left it so), before any state effect was proposed. `effect` is what
+     * recordWorkflowEffect takes (a state effect of the pending attempt `attemptToken`, on its own root); it is recorded
+     * as `fulfilled` in ONE write, never as a sendable change first, so no failure in between can leave one to send.
+     * The same target already on the attempt — fulfilled, or confirmed — answers that record; the same change still
+     * unsent and never dispatched is fulfilled in place; any other unsettled state effect on the row is refused.
+     * Answers the fulfilled (or answered) record.
+     */
+    recordFulfilledEffect(effect, { observedState, observedVersion } = {}) {
+      const rec = effectRecord(effect);
+      if (rec.effect !== 'state') throw storeError(CODES.notSettled, 'only a state change can be found fulfilled without sending it');
+      let out = null;
+      mutate((env, disk) => {
+        checkEffectOwner(env, disk, rec);
+        const reached = fulfilledTarget(env, rec, true);
+        if (reached) { out = clone(reached); return; }
+        const open = env.workflowEffects.filter((e) => e.rowId === rec.rowId && e.effect === rec.effect && e.state !== 'confirmed');
+        if (open.length === 1 && open[0].attemptToken === rec.attemptToken && open[0].state === 'definitely-unsent' && open[0].dispatchToken === null
+          && open[0].desiredState === rec.desiredState) {
+          fulfilInto(open[0], observedState, observedVersion);
+          out = clone(open[0]);
+          return;
+        }
+        if (open.length) throw storeError(CODES.pending, `the workflow row ${rec.rowId} already has an unsettled ${rec.effect} effect`);
+        fulfilInto(rec, observedState, observedVersion);
+        env.workflowEffects.push(rec);
+        out = clone(rec);
+      });
+      return out;
     },
     // The barrier operations, forwarded so one handle carries the whole contract of a managed feature.
     registerKnown(scopes, ids) { return needBarrier().registerKnown(scopes, ids); },
@@ -1675,4 +1768,5 @@ module.exports = {
   rootCreateAcknowledged,
   publicationRiskApproval,
   publicationRemedy,
+  blockedPublication,
 };

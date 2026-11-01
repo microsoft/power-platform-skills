@@ -11,8 +11,8 @@ const crypto = require('node:crypto');
 const fs = require('node:fs');
 const { makeTempDir } = require('./helpers/temp-dirs.js');
 const { createManagedWire, sdkOver } = require('./helpers/managed-wire.js');
-const { openManagedContext, openManagedBindings, CODES, publicationRiskApproval } = require('../lib/managed-bindings.js');
-const { runManagedFeature, publishManagedScope, confirmUncertainPublication, createAttemptSendObserver, notStartedAnswer, existingRowDispatches, rowsCreatedByAttempt, withWorkflowEffect, editSwitchRequired, PUBLICATION_UNCONFIRMED, PUBLICATION_UNVERIFIED, CREATION_RECORD_UNSETTLED, LAYER_READER_MISSING } = require('../lib/managed-feature-contract.js');
+const { openManagedContext, openManagedBindings, CODES, publicationRiskApproval, publicationRemedy } = require('../lib/managed-bindings.js');
+const { runManagedFeature, publishManagedScope, confirmUncertainPublication, createAttemptSendObserver, notStartedAnswer, existingRowDispatches, rowsCreatedByAttempt, withWorkflowEffect, editSwitchRequired, WORKFLOW_EFFECT_FULFILLED, PUBLICATION_UNCONFIRMED, PUBLICATION_UNVERIFIED, CREATION_RECORD_UNSETTLED, LAYER_READER_MISSING } = require('../lib/managed-feature-contract.js');
 const { createPublicationBarrier } = require('../lib/publication-barrier.js');
 const { readSystemFormPublication, readSystemFormLayers, readSystemFormRootPresence, systemFormLayerSha256 } = require('../lib/systemform-published.js');
 const { publishTablesXml } = require('../lib/table-publish.js');
@@ -1753,6 +1753,45 @@ test('workflow handoff: a state effect first recorded inside recovery is refused
   }
 });
 
+test('workflow handoff: an activation a read found already made is never sent; after a failure before the commit and a maker\'s deactivation, the next run\'s proposal is refused with zero writes', async () => {
+  const key = 'account/hide';
+  const seen = { observedState: 'Active', observedVersion: 'W/"2"' };
+  for (const how of ['fulfil the recorded activation', 'no activation recorded']) {
+    const s = await setup();
+    // The attempt's own Draft, its create acknowledged; someone else activates it (version 2) before this run sends.
+    s.wire.workflows.set(MAIN, { workflowid: MAIN, statecode: 0, statuscode: 1 });
+    const token = s.store.prepareAttempt({ family: 'rule', key, baseGeneration: null, root: { kind: 'business-rule', key, id: MAIN }, declarationSha256: H('e'), knownScopes: [] });
+    s.store.markSending(token, { ...expected(MAIN), proofSchema: 'rule-v1', baseProofSha256: null, baseObservation: null });
+    s.store.noteSaved(token, { proof: null, acknowledgedRoot: true, phase: 'state-pending' });
+    const effect = { attemptToken: token, baseGeneration: null, family: 'rule', key, rowId: MAIN, effect: 'state', request: { method: 'PATCH', shape: 'workflow-patch' }, desiredState: 'Active', expectedVersion: 'W/"1"' };
+    s.wire.workflows.set(MAIN, { workflowid: MAIN, statecode: 1, statuscode: 2 });
+    const fulfilled = how === 'no activation recorded'
+      ? s.store.recordFulfilledEffect(effect, seen)
+      : s.store.fulfillEffect(s.store.recordWorkflowEffect(effect).token, seen);
+    assert.equal(fulfilled.state, 'fulfilled', how);
+    // The run fails before its commit; a maker deactivates the row (version 3); the next process proposes the
+    // activation again, the row read fresh as Draft, with and without the edit switch.
+    s.wire.workflows.set(MAIN, { workflowid: MAIN, statecode: 0, statuscode: 1 });
+    const next = await nextRun(s);
+    const { sdk } = await sdkOver(s.wire, { barrier: next.barrier, workflowEffectGate: createWorkflowEffectGate({ store: next.store }) });
+    for (const switchOn of [false, true]) {
+      let ran = false;
+      const err = await withWorkflowEffect({ store: next.store, effect: { ...effect, expectedVersion: 'W/"3"' }, workflowConditionalEdits: switchOn, observedState: 'Draft' }, () => {
+        ran = true;
+        return sdk.dataverse.patch(`/workflows(${MAIN})`, { statecode: 1, statuscode: 2 });
+      }).then(() => null, (e) => e);
+      assert.equal(err && err.code, WORKFLOW_EFFECT_FULFILLED, `${how}, switch ${switchOn}`);
+      assert.equal(err.effect.token, fulfilled.token);
+      assert.equal(ran, false, 'the write never runs');
+    }
+    assert.deepEqual(s.wire.writes(), [], `${how}: zero writes`);
+    assert.equal(s.wire.workflows.get(MAIN).statecode, 0, `${how}: the maker's deactivation kept`);
+    const after = next.store.readGroup('rule', key);
+    assert.deepEqual([after.pending.token, after.effects.map((e) => [e.token, e.state, e.dispatchToken])], [token, [[fulfilled.token, 'fulfilled', null]]], `${how}: the attempt and its fulfilled fact kept`);
+    assert.deepEqual(existingRowDispatches(after), [], `${how}: nothing left to send`);
+  }
+});
+
 // A declaration with authored free text, as a maker writes it: names, a description with markup characters, a URL.
 const DECLARED = Object.freeze({
   name: 'Main', description: 'Sales <overview> & pipeline — “quarterly” ünïcode', fieldOptions: { name: { required: false } },
@@ -1910,6 +1949,9 @@ const carryTable = (sdk, store, barrier) => publishManagedScope({
 
 const caught = async (p) => { try { await p; } catch (e) { return e; } return null; };
 const pubOf = (store, key = 'account/main') => store.readGroup('form', key).committed.publication;
+// Every refusal over an unconfirmed publish names that dispatch as data: its token, the scope's typed approval and the remedy.
+const shapeOf = (e) => [e.code, e.dispatchToken, e.approval, e.remedy];
+const blockedBy = (token, scope = ACCOUNT) => [PUBLICATION_UNCONFIRMED, token, publicationRiskApproval(scope), publicationRemedy(scope, token)];
 const editMain = (s, p, formxml) => runManagedFeature({ ...ports(s.wire, p.sdk, { key: 'account/main', id: MAIN, formxml }), client: p.sdk.dataverse, store: p.store, barrier: p.barrier });
 // The table publish's answer is lost: the service answers 503 and does not apply it (a delayed completion is driven by
 // the test that needs one).
@@ -1927,12 +1969,14 @@ test('carry: a lost table publish that pays no debt and re-ships only live layer
   // An ordinary build of the next run saves something unmanaged on account and publishes the table; the answer is lost.
   const a = await nextRun(s);
   assert.deepEqual(a.debt, []);
-  assert.equal(await codeOf(loseCarry(s, a)), PUBLICATION_UNCONFIRMED, 'the carried publish is sent and its outcome is not proved');
+  const lostErr = await caught(loseCarry(s, a));
+  assert.equal(lostErr.code, PUBLICATION_UNCONFIRMED, 'the carried publish is sent and its outcome is not proved');
   assert.equal(s.wire.publishes('account').length, 2, 'the ordinary publish is sent once');
   const pub = pubOf(a.store);
   assert.notEqual(pub.dispatchToken, settled.dispatchToken);
   const live = settled.desiredSha256;
   assert.deepEqual(pub, { ...settled, state: 'unconfirmed', dispatchToken: pub.dispatchToken, carriedFrom: { state: 'confirmed', dispatchToken: settled.dispatchToken, publishedSha256: live, savedSha256: live } }, 'journaled with the layers read before the send; the desired hash is as committed');
+  assert.deepEqual(shapeOf(lostErr), blockedBy(pub.dispatchToken), 'the lost send names its own dispatch');
 
   // Invocation 2: the published layer already showed the carried content before the send, so reading it again is no
   // evidence that the lost request ended. Nothing is edited or published, and the error names the way out.
@@ -1941,10 +1985,14 @@ test('carry: a lost table publish that pays no debt and re-ships only live layer
   const writesBefore = s.wire.writes().length;
   const refused = await caught(editMain(s, b, '<form v="2"/>'));
   assert.equal(refused.code, PUBLICATION_UNCONFIRMED);
-  assert.deepEqual([refused.cause.code, refused.cause.dispatchToken, refused.cause.approval], [PUBLICATION_UNCONFIRMED, pub.dispatchToken, publicationRiskApproval(ACCOUNT)], 'the refusal names the way out');
+  assert.deepEqual(shapeOf(refused.cause), blockedBy(pub.dispatchToken), 'the settlement refusal (the halt\'s cause) names the way out');
+  assert.ok(refused.cause.message.endsWith(publicationRemedy(ACCOUNT, pub.dispatchToken)), 'its message keeps the remedy');
   assert.deepEqual(pubOf(b.store), pub, 'never confirmed from an observation that was already true before the send');
   assert.deepEqual(await confirmUncertainPublication({ store: b.store, barrier: b.barrier, scope: ACCOUNT, client: b.sdk.dataverse }), { confirmed: [], unconfirmed: [{ ...MAIN_G, code: PUBLICATION_UNCONFIRMED }] });
-  assert.equal(await codeOf(carryTable(b.sdk, b.store, b.barrier)), PUBLICATION_UNCONFIRMED);
+  // The publication adapter refuses the same way: a group passed in `groups` whose publish is uncertain, and a carry
+  // over a scope one covers.
+  assert.deepEqual(shapeOf(await caught(publishForms(b.sdk, b.store, b.barrier, [MAIN_G]))), blockedBy(pub.dispatchToken), 'a group passed whose publish is uncertain');
+  assert.deepEqual(shapeOf(await caught(carryTable(b.sdk, b.store, b.barrier))), blockedBy(pub.dispatchToken), 'a covered group of the uncertain dispatch');
 
   // Invocation 3, while the old request may still run: no PATCH, not even one whose proof would fail.
   const c = await nextRun(s);
@@ -2086,13 +2134,40 @@ test('carry: a publish() that returns a failed answer instead of throwing is nev
     publish: async () => { await publishTablesXml(s.sdk.dataverse, ['account']); return { shipped: false, publish: { kind: 'failed', error: { statusCode: 503 } } }; },
   }));
   assert.equal(out.code, PUBLICATION_UNCONFIRMED);
-  assert.deepEqual([out.dispatchToken, out.approval], [pubOf(s.store).dispatchToken, publicationRiskApproval(ACCOUNT)]);
+  assert.deepEqual(shapeOf(out), blockedBy(pubOf(s.store).dispatchToken));
   assert.equal(pubOf(s.store).state, 'unconfirmed', 'not confirmed by the read-back of an answer that said it failed');
   // The debt is a layer the send changed: the next run sees it live and settles it without sending.
   const sends = s.wire.publishes('account').length;
   const n = await nextRun(s);
   assert.deepEqual(await confirmUncertainPublication({ store: n.store, barrier: n.barrier, scope: ACCOUNT, client: n.sdk.dataverse }), { confirmed: [MAIN_G], unconfirmed: [] });
   assert.equal(s.wire.publishes('account').length, sends);
+});
+
+test('publication refusals: a send answered but not read back names its own dispatch as data; a send with no managed group on the scope journals nothing and names none', async () => {
+  const send = (s, readers) => caught(publishManagedScope({
+    store: s.store, barrier: s.barrier, scope: ACCOUNT, groups: [MAIN_G], client: s.sdk.dataverse, path: 'managed forms of account', ...(readers ? { readers } : {}),
+    publish: () => publishTablesXml(s.sdk.dataverse, ['account']),
+  }));
+  // The publish answers success but the service did not apply it: the read-back does not show the debt.
+  const a = await setup();
+  committedForm(a, { id: MAIN, key: 'account/main', publishedXml: '<form v="1"/>', savedXml: '<form v="2"/>' });
+  a.wire.script((e) => /PublishXml/.test(e.path), { statusCode: 204, unapplied: true });
+  const unshown = await send(a);
+  assert.match(unshown.message, /does not show what it shipped/);
+  assert.deepEqual(shapeOf(unshown), blockedBy(pubOf(a.store).dispatchToken));
+  // The read-back itself fails.
+  const b = await setup();
+  committedForm(b, { id: MAIN, key: 'account/main', publishedXml: '<form v="1"/>', savedXml: '<form v="2"/>' });
+  let reads = 0;
+  const { LAYER_READERS } = require('../lib/managed-layer-readers.js');
+  const unread = await send(b, { ...LAYER_READERS, form: async (...args) => { reads += 1; if (reads > 1) throw new Error('reset'); return LAYER_READERS.form(...args); } });
+  assert.match(unread.message, /could not be read back/);
+  assert.deepEqual(shapeOf(unread), blockedBy(pubOf(b.store).dispatchToken));
+  // A carry over a table with no managed group: nothing is journaled, so there is no dispatch to accept.
+  const c = await setup();
+  c.wire.script((e) => /PublishXml/.test(e.path), { statusCode: 503, body: { error: { code: '0x80040216', message: 'gateway' } }, unapplied: true });
+  const bare = await caught(carryTable(c.sdk, c.store, c.barrier));
+  assert.deepEqual(shapeOf(bare), [PUBLICATION_UNCONFIRMED, undefined, undefined, undefined]);
 });
 
 test('carry: a table with no managed group is published as before — no store write and no extra request', async () => {

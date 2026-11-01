@@ -31,7 +31,7 @@
 // Nothing calls this module until a declared form, dashboard, rule or process flow is wired to it.
 
 const { runWithWorkflowEffect } = require('./workflow-effect-context.js');
-const { CODES, classifyPersisted, attemptProvenUnsent, resumableCreate, checkDeclaration, rootCreateAcknowledged, publicationRiskApproval, publicationRemedy } = require('./managed-bindings.js');
+const { CODES, classifyPersisted, attemptProvenUnsent, resumableCreate, checkDeclaration, rootCreateAcknowledged, publicationRiskApproval, publicationRemedy, blockedPublication } = require('./managed-bindings.js');
 const { canonicalJson } = require('./reconcile-common.js');
 const { LAYER_READERS } = require('./managed-layer-readers.js');
 
@@ -44,6 +44,8 @@ const LAYER_READER_MISSING = 'managed-publication-reader-missing';
 const CREATION_RECORD_UNSETTLED = 'dashboard-creation-record-unsettled';
 // The workflow features' refusal of an edit of an existing workflow while their edit switch is off.
 const WORKFLOW_EDIT_REFUSED = 'workflow-edit-refused';
+// withWorkflowEffect's refusal of a state change its attempt already found made without sending it (fulfillEffect).
+const WORKFLOW_EFFECT_FULFILLED = 'workflow-effect-fulfilled';
 // A publication that may have been sent and is not yet proved live (lib/managed-bindings.js UNCERTAIN).
 const UNCERTAIN_PUBLICATION = new Set(['dispatching', 'unconfirmed']);
 
@@ -277,7 +279,8 @@ async function runManagedFeature(args) {
   // recoverManagedAttempt (the recovery step): an attempt on disk that was marked sending, met before any
   // ordinary planning. The same-token continuation contract, in this order:
   //   1. its send window proves no mutation of it was carried out (attemptProvenUnsent: observed from markSending on,
-  //      every counted mutation answered by a not-started rejection, every owned workflow effect unsent) and this run
+  //      every counted mutation answered by a not-started rejection, every owned workflow effect unsent or fulfilled by a
+  //      read, never sent) and this run
   //      observes its sends too: resolve and plan again with `continuing: true` — the feature's preflight, the dirty-copy
   //      refusal included, runs as on any run — and the plan must be exactly what the attempt recorded (same root and ids,
   //      the same expected proof, so the same recorded base; the same declaration hash and publication). Then send it
@@ -392,9 +395,7 @@ async function runManagedFeature(args) {
       if (!(now.publication && UNCERTAIN_PUBLICATION.has(now.publication.state))) return now;
     }
     const remedy = publicationRemedy(pub.scope, pub.dispatchToken);
-    throw codedError(PUBLICATION_UNCONFIRMED, `${label} has a publish that may have been sent and is not proved ended; no change is made over it; ${args.client ? '' : 'a run that passes the Dataverse client confirms it read-only first; '}${remedy}`, {
-      dispatchToken: pub.dispatchToken, approval: publicationRiskApproval(pub.scope),
-    });
+    throw codedError(PUBLICATION_UNCONFIRMED, `${label} has a publish that may have been sent and is not proved ended; no change is made over it; ${args.client ? '' : 'a run that passes the Dataverse client confirms it read-only first; '}${remedy}`, blockedPublication(pub.scope, pub.dispatchToken));
   }
 
   // Adoption consent, before membership exposes the root and before the commit binds it: a group not yet committed
@@ -473,7 +474,8 @@ function editSwitchRequired(group, proposed, { observedState } = {}) {
  * disk. An own activation it does not list still needs the fresh `observedState: 'Draft'` at its dispatch
  * (editSwitchRequired), and this list does not show that the run stays read-only: an effect first proposed later
  * (inside recovery, say) is checked by editSwitchRequired before it is recorded. An effect that may already have been
- * dispatched is not listed — it is proved, never sent again.
+ * dispatched is not listed — it is proved, never sent again — and neither is one a read found fulfilled (fulfillEffect):
+ * it is never sent.
  */
 function existingRowDispatches({ pending, effects } = {}) {
   if (!pending) return [];
@@ -651,6 +653,9 @@ function commit(store, token, baseGeneration, proved, adoptionApproved) {
  * runWithWorkflowEffect included, which makes no check of its own — so omitted leaves the check to the caller.
  * `observedState`: for a state effect, the row's state from the feature's own fresh read before this dispatch; only
  * 'Draft' lets the attempt's own activation pass with the switch off.
+ * A change the attempt already found made by a read (the store answers its `fulfilled` record) is refused with
+ * `workflow-effect-fulfilled` (the record on `err.effect`): nothing is sent and `fn` does not run. A feature reads its
+ * effects first (store.readGroup) and treats a fulfilled one as reached, as it treats a confirmed one.
  */
 async function withWorkflowEffect({ store, effect, workflowConditionalEdits, observedState }, fn) {
   if (!store || typeof store.recordWorkflowEffect !== 'function') throw codedError(CODES.notSettled, 'withWorkflowEffect needs the managed binding store');
@@ -660,6 +665,12 @@ async function withWorkflowEffect({ store, effect, workflowConditionalEdits, obs
     throw codedError(WORKFLOW_EDIT_REFUSED, `the managed ${effect.family} "${effect.key}" would ${effect.effect === 'body' ? 'change the logic of' : 'change the state of'} workflow ${effect.rowId}, which is not this attempt's own activation of a Draft it created; edits of existing workflows are switched off`);
   }
   const record = store.recordWorkflowEffect(effect);
+  // The attempt already found this change made by someone else (fulfillEffect, recordFulfilledEffect): nothing is sent
+  // and `fn` does not run. The row may have changed since that read (a maker's deactivation, say); sending the change
+  // again, at whatever version is current, would undo it.
+  if (record.state === 'fulfilled') {
+    throw codedError(WORKFLOW_EFFECT_FULFILLED, `the managed ${effect.family} "${effect.key}" already found workflow ${record.rowId} ${record.desiredState} without sending the change; it is not sent`, { effect: record });
+  }
   return runWithWorkflowEffect(record, () => fn(record));
 }
 
@@ -810,6 +821,12 @@ async function confirmUncertainPublication({ store, barrier, scope, client, read
  *     clears it.
  * `publish()` throws on any failure (see below); with `definiteNoStart: true` only when the request is known not to have started.
  * `readers` replaces the shared map whole (a test's fault injection); a caller's own `readLayers` is not accepted.
+ * Every `managed-publication-unconfirmed` refusal that names a durable dispatch — a group passed in `groups` whose
+ * publish is already uncertain, a covered group of such a dispatch, or this call's own send left unconfirmed — carries
+ * that dispatch as data, `{ dispatchToken, approval, remedy }` (managed-bindings blockedPublication: the remedy is
+ * publicationRemedy(scope, dispatchToken), the approval publicationRiskApproval(scope)), as runManagedFeature's
+ * refusal over an earlier publish and the store's own refusals do. A send with no managed group on the scope journals
+ * nothing and blocks only its run, so its refusal names no dispatch; nor does a scope blocked only by a workflow effect.
  * Answers { sent, withheld, confirmed: [{ family, key }] }: confirmed lists every group this call confirmed, a read-only
  * confirmation of an uncertain publication included.
  *
@@ -860,7 +877,7 @@ async function publishManagedScope({ store, barrier, scope, groups, client, read
     if (pending) throw codedError(CODES.pending, `the managed ${family} "${key}" has a pending attempt`);
     const pub = committed && committed.publication;
     if (!pub || pub.state === 'not-needed' || pub.state === 'confirmed') continue;
-    if (pub.state !== 'owed' || pub.dispatchToken !== null) throw codedError(PUBLICATION_UNCONFIRMED, `the publish of managed ${family} "${key}" may have been sent and is not confirmed; it is not sent again`);
+    if (pub.state !== 'owed' || pub.dispatchToken !== null) throw codedError(PUBLICATION_UNCONFIRMED, `the publish of managed ${family} "${key}" may have been sent and is not confirmed; it is not sent again`, blockedPublication(pub.scope, pub.dispatchToken));
     if (scopeId(pub.scope) !== want) throw codedError(CODES.notSettled, `the managed ${family} "${key}" is published in another scope`);
     owed.push({ family, key });
   }
@@ -874,8 +891,16 @@ async function publishManagedScope({ store, barrier, scope, groups, client, read
     throw codedError(CODES.groupInvalid, `${names(cover.corrupt)} shares the publish of this scope and its stored group is not usable; nothing was published`);
   }
   if (cover.uncertain.length) {
+    // The unconfirmed publish of this scope the refusal names. A scope holds at most one (markPublishDispatch refuses a
+    // send over an uncertain one); a covered group blocked only by a workflow effect has no publish to name.
+    const blockedOn = () => {
+      const pubs = cover.uncertain.map(({ family, key }) => (store.readGroup(family, key).committed || {}).publication)
+        .filter((p) => p && UNCERTAIN_PUBLICATION.has(p.state) && scopeId(p.scope) === want && typeof p.dispatchToken === 'string');
+      const tokens = [...new Set(pubs.map((p) => p.dispatchToken))];
+      return tokens.length === 1 ? blockedPublication(pubs[0].scope, tokens[0]) : {};
+    };
     gate.blockScope(scope, `${names(cover.uncertain)} (its publish or workflow effect may have been sent and is not confirmed)`);
-    throw codedError(PUBLICATION_UNCONFIRMED, `${names(cover.uncertain)} shares the publish of this scope and may have been sent unconfirmed; nothing was published`);
+    throw codedError(PUBLICATION_UNCONFIRMED, `${names(cover.uncertain)} shares the publish of this scope and may have been sent unconfirmed; nothing was published`, blockedOn());
   }
   // A change is being made on the scope (its attempt holds it on the barrier, or will when this run reaches it).
   if (cover.pending.length) return { sent: false, withheld: true, confirmed: readConfirmed };
@@ -945,6 +970,9 @@ async function publishManagedScope({ store, barrier, scope, groups, client, read
   const label = covered.length ? names(covered) : `the saved changes on ${want.replace(':', ' ')}`;
   const journal = () => { if (records) store.markPublishDispatch({ groups: covered, carried, scope, token }); };
   const note = (outcome) => { if (records) store.notePublishOutcome({ token, outcome }); };
+  // A send this call journaled and left unconfirmed blocks the scope across runs: its refusal names that dispatch. One
+  // with nothing to journal (no managed group on the scope) blocks only this run, and has no dispatch to accept.
+  const journaled = () => (records ? blockedPublication(scope, token) : {});
   let dispatched = false;
   let withheld = false;
   let refused = false;
@@ -982,7 +1010,7 @@ async function publishManagedScope({ store, barrier, scope, groups, client, read
       gate.blockScope(scope, `${label} (its publish was not sent through the barrier)`);
       journal();
       note('unconfirmed');
-      throw codedError(PUBLICATION_UNCONFIRMED, `the publish of ${label} did not pass the publication barrier, so whether it was sent is unknown`);
+      throw codedError(PUBLICATION_UNCONFIRMED, `the publish of ${label} did not pass the publication barrier, so whether it was sent is unknown`, journaled());
     }
     if (failure) {
       if (failure.definiteNoStart === true) {
@@ -992,7 +1020,7 @@ async function publishManagedScope({ store, barrier, scope, groups, client, read
       }
       gate.blockScope(scope, `${label} (its publish may have been sent and is not confirmed)`);
       note('unconfirmed');
-      throw codedError(PUBLICATION_UNCONFIRMED, `the publish of ${label} failed and may still complete; ${publicationRemedy(scope, token)}`, { cause: failure, ...(records ? { dispatchToken: token, approval: publicationRiskApproval(scope) } : {}) });
+      throw codedError(PUBLICATION_UNCONFIRMED, `the publish of ${label} failed and may still complete; ${publicationRemedy(scope, token)}`, { cause: failure, ...journaled() });
     }
     // A success answer is not proof the content is live: read it back. A read that fails or still differs leaves the
     // debt unconfirmed and the scope blocked, and it is never sent again. Debt must show its desired hash; a carried
@@ -1003,7 +1031,7 @@ async function publishManagedScope({ store, barrier, scope, groups, client, read
     } catch (e) {
       gate.blockScope(scope, `${label} (its publish was sent and could not be read back)`);
       note('unconfirmed');
-      throw codedError(PUBLICATION_UNCONFIRMED, 'the publish was sent and its published layer could not be read back', { cause: e });
+      throw codedError(PUBLICATION_UNCONFIRMED, 'the publish was sent and its published layer could not be read back', { cause: e, ...journaled() });
     }
     const shipped = (o) => {
       const sent = carriedReads.find((c) => c.family === o.family && c.key === o.key);
@@ -1012,7 +1040,7 @@ async function publishManagedScope({ store, barrier, scope, groups, client, read
     if (after.some((o) => !shipped(o))) {
       gate.blockScope(scope, `${label} (its publish was sent and the published layer does not show it)`);
       note('unconfirmed');
-      throw codedError(PUBLICATION_UNCONFIRMED, 'the publish was sent and the published layer does not show what it shipped');
+      throw codedError(PUBLICATION_UNCONFIRMED, 'the publish was sent and the published layer does not show what it shipped', journaled());
     }
     // One atomic write settles the whole send, so no run can see some of it confirmed and not the rest. `answered`:
     // this invocation dispatched the publish and it answered success, which a later run can never claim.
@@ -1042,6 +1070,7 @@ module.exports = {
   existingRowDispatches,
   editSwitchRequired,
   WORKFLOW_EDIT_REFUSED,
+  WORKFLOW_EFFECT_FULFILLED,
   withWorkflowEffect,
   publishManagedScope,
   confirmUncertainPublication,

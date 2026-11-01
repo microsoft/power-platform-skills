@@ -8,10 +8,11 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
+const { spawnSync } = require('node:child_process');
 const { makeTempDir } = require('./helpers/temp-dirs.js');
 const {
   openManagedBindings, openManagedContext, discoverManagedStore, classifyPersisted, managedManifestView, CODES, MAX_BYTES,
-  PREPARE_RESERVE_BYTES, DECLARATION_MAX_BYTES, checkDeclaration,
+  PREPARE_RESERVE_BYTES, DECLARATION_MAX_BYTES, checkDeclaration, publicationRiskApproval, publicationRemedy,
 } = require('../lib/managed-bindings.js');
 const { canonicalJson } = require('../lib/reconcile-common.js');
 const { noteToken } = require('../lib/output-redaction.js');
@@ -45,6 +46,9 @@ const formState = (children = {}) => ({ declaration: { name: 'Main', fieldOption
 const owedTable = () => ({ scope: TABLE, state: 'owed', desiredSha256: H('5'), dispatchToken: null });
 const codeOf = (fn) => { try { fn(); } catch (e) { return e.code; } return null; };
 const fileText = (store) => fs.readFileSync(store.file, 'utf8');
+// A refusal over an unconfirmed publish names that dispatch as data: its token, the scope's typed approval and the remedy.
+const blockedShape = (fn) => { try { fn(); } catch (e) { return [e.code, e.dispatchToken, e.approval, e.remedy]; } return null; };
+const blockedBy = (dispatchToken, scope = TABLE) => [CODES.publicationUncertain, dispatchToken, publicationRiskApproval(scope), publicationRemedy(scope, dispatchToken)];
 
 // Settle a form group whose children are `kids` ([[key, id]]), from whatever the group is now.
 function settleForm(store, kids, { acknowledged = true, publication = owedTable() } = {}) {
@@ -319,41 +323,189 @@ test('a rule and a process flow settle with confirmed create and state effects, 
   assert.deepEqual(reopened.envelope.workflowEffects, [], 'no effect outlives its attempt');
 });
 
-test('a state change never sent, whose state a read already finds on the row, is dropped; a body or a dispatched change is not', () => {
+// The read that found a state change already made on its row: its state and the row version it answered.
+const SEEN_ACTIVE = Object.freeze({ observedState: 'Active', observedVersion: 'W/"2"' });
+const activation = (token, version, over = {}) => ({
+  attemptToken: token, baseGeneration: null, family: 'rule', key: 'account/hide', rowId: RULE, effect: 'state',
+  request: { method: 'PATCH', shape: 'workflow-patch' }, desiredState: 'Active', expectedVersion: version, ...over,
+});
+// A rule attempt whose own create a read confirmed, with no state change recorded yet.
+function createdRule(store) {
+  const key = 'account/hide';
+  const token = store.prepareAttempt({ family: 'rule', key, baseGeneration: null, root: { kind: 'business-rule', key, id: RULE }, knownScopes: [], declarationSha256: H('e') });
+  store.markSending(token, expected(RULE, [], 'rule-v1'));
+  const create = store.recordWorkflowEffect({ attemptToken: token, baseGeneration: null, family: 'rule', key, rowId: RULE, effect: 'create', request: { method: 'POST', shape: 'rule-create' }, desiredSha256: H('7') });
+  store.markEffectDispatching(create.token, 'dispatch-create');
+  store.confirmEffect(create.token, { observedSha256: H('7') });
+  store.noteSaved(token, { proof: null, acknowledgedRoot: true });
+  return token;
+}
+const commitRule = (store, token) => store.commitGroup({ token, baseGeneration: null, records: [rec('business-rule', 'account/hide', RULE)], proof: PROOF, consumerState: { declaration: {}, slots: ['clause_a'] }, publication: null });
+
+test('a state change never sent, whose state a read already finds on the row, is kept as fulfilled until its commit; a body or a dispatched change is not', () => {
   const dir = makeTempDir('mb-moot-');
   const store = open(dir);
   const { token, create, state } = settleRule(store, 'account/hide', RULE, { confirm: false });
-  assert.equal(codeOf(() => store.retireMootEffect(create.token, { observedState: 'Active' })), CODES.notSettled, 'a body is never settled without its proof');
-  assert.equal(codeOf(() => store.retireMootEffect(create.token, { observedState: null })), CODES.notSettled, 'a body has no desired state that a read could match');
-  assert.equal(codeOf(() => store.retireMootEffect(state.token, { observedState: 'Draft' })), CODES.notSettled, 'the row is not in the asked state');
-  const unchanged = fs.readFileSync(store.file, 'utf8');
-  for (const observed of [undefined, null, '']) assert.equal(codeOf(() => store.retireMootEffect(state.token, { observedState: observed })), CODES.notSettled, `no observed state (${observed})`);
-  assert.equal(codeOf(() => store.retireMootEffect(state.token)), CODES.notSettled, 'no read at all');
-  assert.equal(codeOf(() => store.retireMootEffect('no-such-effect', { observedState: 'Active' })), CODES.notSettled, 'an unknown effect');
-  assert.equal(fs.readFileSync(store.file, 'utf8'), unchanged, 'a refusal writes nothing');
+  assert.equal(codeOf(() => store.fulfillEffect(create.token, SEEN_ACTIVE)), CODES.notSettled, 'a body is never settled without its proof');
+  assert.equal(codeOf(() => store.fulfillEffect(state.token, { ...SEEN_ACTIVE, observedState: 'Draft' })), CODES.notSettled, 'the row is not in the asked state');
+  const unchanged = fileText(store);
+  for (const observed of [undefined, null, '', ' ']) assert.equal(codeOf(() => store.fulfillEffect(state.token, { ...SEEN_ACTIVE, observedState: observed })), CODES.notSettled, `no observed state (${observed})`);
+  for (const version of [undefined, null, '', ' ', 2]) assert.equal(codeOf(() => store.fulfillEffect(state.token, { ...SEEN_ACTIVE, observedVersion: version })), CODES.notSettled, `no row version (${version})`);
+  assert.equal(codeOf(() => store.fulfillEffect(state.token)), CODES.notSettled, 'no read at all');
+  assert.equal(codeOf(() => store.fulfillEffect('no-such-effect', SEEN_ACTIVE)), CODES.notSettled, 'an unknown effect');
+  assert.equal(fileText(store), unchanged, 'a refusal writes nothing');
   store.markEffectDispatching(create.token, 'dispatch-create');
   store.confirmEffect(create.token, { observedSha256: H('7') });
-  store.retireMootEffect(state.token, { observedState: 'Active' });
-  assert.deepEqual(store.snapshot().envelope.workflowEffects.map((e) => e.effect), ['create']);
-  // The attempt is untouched: still pending under the same token, so it settles only through its commit.
+  const fulfilled = store.fulfillEffect(state.token, SEEN_ACTIVE);
+  assert.deepEqual([fulfilled.token, fulfilled.state, fulfilled.dispatchToken, fulfilled.observedState, fulfilled.observedVersion], [state.token, 'fulfilled', null, 'Active', 'W/"2"']);
+  // A terminal fact on disk, never a dispatch of ours: it is not confirmed, sent or answered, nor fulfilled twice.
+  const reopened = open(dir);
+  assert.deepEqual(reopened.readGroup('rule', 'account/hide').effects.map((e) => [e.effect, e.state]), [['create', 'confirmed'], ['state', 'fulfilled']]);
+  const kept = fileText(store);
+  assert.equal(codeOf(() => reopened.confirmEffect(state.token, { observedState: 'Active' })), CODES.notSettled, 'never called confirmed');
+  assert.equal(codeOf(() => reopened.markEffectDispatching(state.token, 'dispatch-state')), CODES.notSettled, 'never sent');
+  assert.equal(codeOf(() => reopened.noteEffectOutcome(state.token, 'unconfirmed')), CODES.notSettled);
+  assert.equal(codeOf(() => reopened.fulfillEffect(state.token, SEEN_ACTIVE)), CODES.notSettled);
+  assert.equal(fileText(store), kept);
+  // The attempt is untouched, still pending under the same token; its commit takes the fulfilled fact with it.
   assert.deepEqual(store.snapshot().envelope.attempts.map((a) => a.token), [token]);
   store.noteSaved(token, { proof: null, acknowledgedRoot: true });
-  store.commitGroup({ token, baseGeneration: null, records: [rec('business-rule', 'account/hide', RULE)], proof: PROOF, consumerState: { declaration: {}, slots: ['clause_a'] }, publication: null });
+  commitRule(store, token);
   assert.deepEqual(open(dir).snapshot().envelope.workflowEffects, []);
 
   const other = open(makeTempDir('mb-moot-sent-'));
   const sent = settleRule(other, 'account/hide', RULE, { confirm: false });
   other.markEffectDispatching(sent.state.token, 'dispatch-state');
-  assert.equal(codeOf(() => other.retireMootEffect(sent.state.token, { observedState: 'Active' })), CODES.notSettled, 'a change that may have left is confirmed, not dropped');
+  assert.equal(codeOf(() => other.fulfillEffect(sent.state.token, SEEN_ACTIVE)), CODES.notSettled, 'a change that may have left is confirmed, not fulfilled');
   other.noteEffectOutcome(sent.state.token, 'unconfirmed');
-  assert.equal(codeOf(() => other.retireMootEffect(sent.state.token, { observedState: 'Active' })), CODES.notSettled, 'a lost answer is confirmed, not dropped');
-  // A change a definite no-start returned to unsent never left, so it may be dropped like one never sent.
+  assert.equal(codeOf(() => other.fulfillEffect(sent.state.token, SEEN_ACTIVE)), CODES.notSettled, 'a lost answer is confirmed, not fulfilled');
+  // A change a definite no-start returned to unsent never left, so a read may find it fulfilled like one never sent.
   const third = open(makeTempDir('mb-moot-nostart-'));
   const back = settleRule(third, 'account/hide', RULE, { confirm: false });
   third.markEffectDispatching(back.state.token, 'dispatch-state');
   third.noteEffectOutcome(back.state.token, 'definite-no-start');
-  third.retireMootEffect(back.state.token, { observedState: 'Active' });
-  assert.deepEqual(third.snapshot().envelope.workflowEffects.map((e) => e.effect), ['create']);
+  assert.equal(third.fulfillEffect(back.state.token, SEEN_ACTIVE).state, 'fulfilled');
+
+  // A prepared attempt that holds a fulfilled change is not retired: its retirement would drop the fact.
+  const fourth = open(makeTempDir('mb-moot-prepared-'));
+  const prepared = fourth.prepareAttempt({ family: 'rule', key: 'account/hide', baseGeneration: null, root: { kind: 'business-rule', key: 'account/hide', id: RULE }, knownScopes: [], declarationSha256: H('e') });
+  fourth.fulfillEffect(fourth.recordWorkflowEffect(activation(prepared, null)).token, SEEN_ACTIVE);
+  const held = fileText(fourth);
+  assert.equal(codeOf(() => fourth.retireUnsentAttempt({ token: prepared, baseGeneration: null })), CODES.pending);
+  assert.equal(fileText(fourth), held);
+});
+
+test('a change found fulfilled is never proposed again: after a failure before its commit and a maker\'s change, a proposal at the new row version answers the fulfilled record, in another handle and another process', () => {
+  const dir = makeTempDir('mb-moot-history-');
+  const store = open(dir);
+  const token = createdRule(store);
+  const state = store.recordWorkflowEffect(activation(token, 'W/"2"'));
+  store.fulfillEffect(state.token, SEEN_ACTIVE);
+  // The commit never happens (the membership step failed, say). A maker then deactivates the row: version 3.
+  const effectsOf = () => JSON.parse(fileText(store)).workflowEffects;
+  const before = effectsOf();
+  const again = open(dir).recordWorkflowEffect(activation(token, 'W/"3"'));
+  assert.deepEqual([again.token, again.state, again.dispatchToken, again.observedVersion], [state.token, 'fulfilled', null, 'W/"2"'], 'the fulfilled record, never a new change to send');
+  assert.equal(codeOf(() => open(dir).recordWorkflowEffect(activation(token, 'W/"3"', { desiredState: 'Draft' }))), CODES.pending, 'another state change of the row waits for the commit');
+  assert.deepEqual(effectsOf(), before, 'nothing recorded');
+
+  // A separate process that opens the store fresh answers the same, and cannot send the change.
+  const child = [
+    "const m = require(process.argv[1]);",
+    "const s = m.openManagedBindings({ workspaceDir: process.argv[2], environment: process.argv[3], appUniqueName: 'contoso_app', solutionUniqueName: 'contoso_solution' });",
+    "const r = s.recordWorkflowEffect(JSON.parse(process.argv[4]));",
+    "let sent = null; try { s.markEffectDispatching(r.token, 'child-dispatch'); sent = 'sent'; } catch (e) { sent = e.code; }",
+    "process.stdout.write(JSON.stringify({ pid: process.pid, token: r.token, state: r.state, sent }));",
+  ].join('\n');
+  const env = { ...process.env };
+  delete env.NODE_TEST_CONTEXT;
+  const out = spawnSync(process.execPath, ['-e', child, path.join(__dirname, '..', 'lib', 'managed-bindings.js'), dir, ENV, JSON.stringify(activation(token, 'W/"3"'))], { env, encoding: 'utf8', timeout: 60000 });
+  assert.equal(out.status, 0, out.stderr);
+  const seen = JSON.parse(out.stdout);
+  assert.notEqual(seen.pid, process.pid);
+  assert.deepEqual([seen.token, seen.state, seen.sent], [state.token, 'fulfilled', CODES.notSettled]);
+  assert.deepEqual(effectsOf(), before, 'the other process recorded and sent nothing');
+
+  // Its commit, in a later run, settles the attempt with the fact and leaves no effect behind.
+  commitRule(open(dir), token);
+  assert.deepEqual(open(dir).snapshot().envelope.workflowEffects, []);
+});
+
+test('a row already in the wanted state before any change was recorded is recorded fulfilled in one write, never as a change to send', () => {
+  const dir = makeTempDir('mb-moot-active-');
+  const store = open(dir);
+  const token = createdRule(store);
+  const before = fileText(store);
+  for (const [why, effect, seen, code] of [
+    ['a body', { effect: 'body', request: { method: 'PATCH', shape: 'workflow-patch' }, desiredState: null, desiredSha256: H('9') }, SEEN_ACTIVE, CODES.notSettled],
+    ['a read of another state', {}, { ...SEEN_ACTIVE, observedState: 'Draft' }, CODES.notSettled],
+    ['a read with no row version', {}, { observedState: 'Active' }, CODES.notSettled],
+    ['another row', { rowId: BPF }, SEEN_ACTIVE, CODES.notSettled],
+    ['an attempt that is not pending', { attemptToken: 'no-such-attempt' }, SEEN_ACTIVE, CODES.conflict],
+  ]) assert.equal(codeOf(() => store.recordFulfilledEffect(activation(token, 'W/"2"', effect), seen)), code, why);
+  // A write that fails records nothing: the row's state is read again by the next run, and nothing is left to send.
+  const failing = open(dir, { deps: { writeFileAtomic: () => { throw new Error('injected write failure'); } } });
+  assert.equal(codeOf(() => failing.recordFulfilledEffect(activation(token, 'W/"2"'), SEEN_ACTIVE)), CODES.writeFailed);
+  assert.equal(fileText(store), before, 'a refusal or a failed write leaves no record');
+
+  const fulfilled = store.recordFulfilledEffect(activation(token, 'W/"2"'), SEEN_ACTIVE);
+  assert.deepEqual([fulfilled.state, fulfilled.dispatchToken, fulfilled.observedState, fulfilled.observedVersion], ['fulfilled', null, 'Active', 'W/"2"']);
+  assert.equal(store.recordFulfilledEffect(activation(token, 'W/"2"'), SEEN_ACTIVE).token, fulfilled.token, 'the same fact answers the same record');
+  // The maker deactivates (version 3): a later proposal answers the fulfilled record.
+  assert.equal(open(dir).recordWorkflowEffect(activation(token, 'W/"3"')).token, fulfilled.token);
+  assert.equal(JSON.parse(fileText(store)).workflowEffects.filter((e) => e.effect === 'state').length, 1);
+  commitRule(store, token);
+
+  // The same change still unsent is fulfilled in place; one that may have been sent is not.
+  const unsent = open(makeTempDir('mb-moot-inplace-'));
+  const t2 = createdRule(unsent);
+  const recorded = unsent.recordWorkflowEffect(activation(t2, 'W/"1"'));
+  assert.equal(unsent.recordFulfilledEffect(activation(t2, 'W/"2"'), SEEN_ACTIVE).token, recorded.token);
+  const sent = open(makeTempDir('mb-moot-sentrec-'));
+  const t3 = createdRule(sent);
+  sent.markEffectDispatching(sent.recordWorkflowEffect(activation(t3, 'W/"1"')).token, 'dispatch-state');
+  assert.equal(codeOf(() => sent.recordFulfilledEffect(activation(t3, 'W/"2"'), SEEN_ACTIVE)), CODES.pending);
+});
+
+test('finding a change fulfilled is one lease-held write: a failure leaves it unsent, a dispatch since the read is never overwritten, and the fact fences a later dispatch', () => {
+  const dir = makeTempDir('mb-moot-crash-');
+  const store = open(dir);
+  const token = createdRule(store);
+  const state = store.recordWorkflowEffect(activation(token, 'W/"2"'));
+  const before = fileText(store);
+  const failing = open(dir, { deps: { writeFileAtomic: () => { throw new Error('injected write failure'); } } });
+  assert.equal(codeOf(() => failing.fulfillEffect(state.token, SEEN_ACTIVE)), CODES.writeFailed);
+  assert.equal(fileText(store), before, 'the unsent effect, unchanged');
+
+  // Two handles: one dispatched the change after the other read; the other cannot find it fulfilled.
+  const other = open(dir);
+  store.markEffectDispatching(state.token, 'dispatch-state');
+  assert.equal(codeOf(() => other.fulfillEffect(state.token, SEEN_ACTIVE)), CODES.notSettled);
+  assert.equal(open(dir).readGroup('rule', 'account/hide').effects.find((e) => e.token === state.token).state, 'dispatching');
+
+  // And the other way round: once fulfilled, a handle opened before cannot send it.
+  const dir2 = makeTempDir('mb-moot-fence-');
+  const first = open(dir2);
+  const t2 = createdRule(first);
+  const s2 = first.recordWorkflowEffect(activation(t2, 'W/"2"'));
+  const stale = open(dir2);
+  first.fulfillEffect(s2.token, SEEN_ACTIVE);
+  assert.equal(codeOf(() => stale.markEffectDispatching(s2.token, 'dispatch-state')), CODES.notSettled);
+  assert.equal(open(dir2).readGroup('rule', 'account/hide').effects.find((e) => e.token === s2.token).state, 'fulfilled');
+
+  // A fulfilled record that says anything else is not one: the group is unreadable rather than trusted.
+  const good = fileText(first);
+  for (const [why, change] of [
+    ['a dispatch token', (e) => { e.dispatchToken = 'd'; }],
+    ['a body', (e) => Object.assign(e, { effect: 'body', desiredState: null, desiredSha256: H('9') })],
+    ['another state', (e) => { e.observedState = 'Draft'; }],
+    ['no row version', (e) => { e.observedVersion = ''; }],
+    ['a read on an unsent record', (e) => { e.state = 'definitely-unsent'; }],
+  ]) {
+    writeRaw(first, (d) => change(d.workflowEffects.find((e) => e.token === s2.token)));
+    assert.equal(codeOf(() => open(dir2).readGroup('rule', 'account/hide')), CODES.groupInvalid, why);
+    fs.writeFileSync(first.file, good);
+  }
 });
 
 test('an interruption before the replace keeps the attempt and its whole effect set; after it, no retired owner is left', () => {
@@ -730,7 +882,7 @@ test('publication: a new generation is not committed over a publish that may hav
   for (const outcome of [null, 'unconfirmed']) {
     if (outcome) store.notePublishOutcome({ token: 'dispatch-old', outcome });
     const before = fileText(store);
-    assert.equal(codeOf(() => store.commitGroup(args)), CODES.publicationUncertain, outcome || 'dispatching');
+    assert.deepEqual(blockedShape(() => store.commitGroup(args)), blockedBy('dispatch-old'), outcome || 'dispatching');
     assert.equal(fileText(store), before, 'nothing written');
   }
   assert.equal(store.readGroup('form', FORM_KEY).pending.token, token, 'the attempt stays');
@@ -763,7 +915,7 @@ test('publication: an attempt is neither prepared nor claimed over a publish tha
     if (outcome) open(dir).notePublishOutcome({ token: 'dispatch-1', outcome });
     assert.equal(stale.readGroup('form', FORM_KEY).committed.publication.state, 'owed', 'what the run read');
     const before = fileText(store);
-    assert.equal(codeOf(() => prepareForm(stale)), CODES.publicationUncertain, outcome || 'dispatching');
+    assert.deepEqual(blockedShape(() => prepareForm(stale)), blockedBy('dispatch-1'), outcome || 'dispatching');
     assert.equal(fileText(store), before, 'nothing prepared');
   }
 
@@ -775,12 +927,12 @@ test('publication: an attempt is neither prepared nor claimed over a publish tha
   coexist(store, () => store.markPublishDispatch({ groups: [{ family: 'form', key: FORM_KEY }], scope: TABLE, token: 'dispatch-2' }));
   const before = fileText(store);
   for (const claim of ['first', undefined]) {
-    assert.equal(codeOf(() => store.markSending(token, expected(FORM), { observed: true, claim })), CODES.publicationUncertain, String(claim));
+    assert.deepEqual(blockedShape(() => store.markSending(token, expected(FORM), { observed: true, claim })), blockedBy('dispatch-2'), String(claim));
   }
   writeRaw(store, (d) => { d.attempts[0].phase = 'sending'; d.attempts[0].expected = expected(FORM); d.attempts[0].sendWindow = { possible: 0, notStarted: 0, epoch: 1 }; });
   const sending = fileText(store);
   for (const claim of ['continue', 'resume']) {
-    assert.equal(codeOf(() => store.markSending(token, expected(FORM), { observed: true, claim })), CODES.publicationUncertain, claim);
+    assert.deepEqual(blockedShape(() => store.markSending(token, expected(FORM), { observed: true, claim })), blockedBy('dispatch-2'), claim);
   }
   assert.equal(fileText(store), sending, 'a refused claim writes nothing');
   assert.notEqual(before, sending);
