@@ -677,3 +677,30 @@ test('a refusal of the shared edit gate is the coded refusal of the run: nothing
   assert.deepEqual(writesSince(wire, again.from).map((e) => e.method), ['PATCH'], 'a later run sends only the activation, once');
 });
 
+// The ORIGINAL authored flow is the attempt's declaration (recorded before any send, committed as
+// originalDeclaration); the derived state stays this module's own, so the next run is still a no-op.
+test('the authored flow is recorded with the attempt and committed apart from the derived state; the next run is still a no-op', async () => {
+  const authored = JSON.parse(JSON.stringify(FLOW));
+  const { wire, dir, id, out } = await created();
+  const group = out.p.store.readGroup('bpf', KEY).committed;
+  assert.deepEqual(group.originalDeclaration, authored);
+  assert.deepEqual(Object.keys(group.consumerState.declaration).sort(), ["applied","backing","flow"]);
+  assert.ok(out.result.uniqueName, 'the backing table is named');
+  assert.equal(out.result.uniqueName, wire.row(id).uniquename, 'the backing identity survives');
+  const next = await settle(wire, dir, FLOW);
+  assert.ifError(next.error);
+  assert.equal(next.result.noop, true);
+  assert.deepEqual(writesSince(wire, next.from), []);
+  assert.equal(next.result.uniqueName, out.result.uniqueName);
+  for (const observed of [true, false]) {
+    const w = createWorkflowWire();
+    const d = makeTempDir('bpf-settle-');
+    const first = await settle(w, d, FLOW, { observed, failLocally: true });
+    assert.ok(first.error);
+    assert.deepEqual(first.p.store.readGroup('bpf', KEY).pending.declaration, authored, `${observed}: recorded before the send`);
+    const again = await settle(w, d, FLOW, { observed });
+    assert.ifError(again.error);
+    assert.equal(observed ? again.result.continued : again.result.resumed, true, `${observed}: the same attempt, sent for its recorded declaration`);
+    assert.deepEqual(again.p.store.readGroup('bpf', KEY).committed.originalDeclaration, authored, `${observed}: committed`);
+  }
+});

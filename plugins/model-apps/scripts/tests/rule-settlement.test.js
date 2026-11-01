@@ -752,3 +752,27 @@ test('a refusal of the shared edit gate is the coded refusal of the run: nothing
   assert.deepEqual(writesSince(wire, again.from).map((e) => e.method), ['PATCH'], 'a later run sends only the activation, once');
 });
 
+// The ORIGINAL authored rule is the attempt's declaration (recorded before any send, committed as
+// originalDeclaration); the derived state stays this module's own, so the next run is still a no-op.
+test('the authored rule is recorded with the attempt and committed apart from the derived state; the next run is still a no-op', async () => {
+  const authored = JSON.parse(JSON.stringify(RULE));
+  const { wire, dir, store } = await created();
+  const group = store.readGroup('rule', 'account/Hide fax').committed;
+  assert.deepEqual(group.originalDeclaration, authored);
+  assert.deepEqual(Object.keys(group.consumerState.declaration).sort(), ["nodes","rule"]);
+  const next = await settle(wire, dir, RULE);
+  assert.ifError(next.error);
+  assert.equal(next.result.noop, true);
+  assert.deepEqual(writesSince(wire, next.from), []);
+  for (const observed of [true, false]) {
+    const w = createWorkflowWire();
+    const d = makeTempDir('rule-settle-');
+    const first = await settle(w, d, RULE, { observed, failLocally: true });
+    assert.ok(first.error);
+    assert.deepEqual(first.p.store.readGroup('rule', 'account/Hide fax').pending.declaration, authored, `${observed}: recorded before the send`);
+    const again = await settle(w, d, RULE, { observed });
+    assert.ifError(again.error);
+    assert.equal(observed ? again.result.continued : again.result.resumed, true, `${observed}: the same attempt, sent for its recorded declaration`);
+    assert.deepEqual(again.p.store.readGroup('rule', 'account/Hide fax').committed.originalDeclaration, authored, `${observed}: committed`);
+  }
+});

@@ -45,7 +45,7 @@ const { canonicalJson, intentSha256, normalizeGuid, isApproved } = require('./re
 const { runManagedFeature } = require('./managed-feature-contract.js');
 const { requestBodySha256 } = require('./workflow-effect-context.js');
 const { identityFor } = require('./creates-catalog.js');
-const { CODES } = require('./managed-bindings.js');
+const { CODES, rootCreateAcknowledged } = require('./managed-bindings.js');
 const { HTTP_SEND_HISTORY } = require('./sdk-http-client.js');
 const { createWorkflowDriver, createCopyGuard, answeredRefusal, causeChain, leavesOutcomeOpen, coded, ACTIVE, DRAFT } = require('./workflow-drive.js');
 
@@ -756,7 +756,9 @@ async function settleDeclaredRule(input) {
       store.confirmEffect(create.token, { observedSha256: create.desiredSha256 });
     }
     const { attempt } = attemptOf(token);
-    const acknowledged = attempt.acknowledgedRoot === true || !!(attempt.savedObservation && attempt.savedObservation.acknowledgedRoot);
+    // The store's one reading of the acknowledgement: honoured only for an attempt whose expected proof records no base
+    // observation, so an answer to an edit of an existing row never makes it this attempt's creation.
+    const acknowledged = rootCreateAcknowledged(attempt);
     const live = await readLive(id);
     if (live.missing) throw coded(CODES.pending, `${label}: the workflow ${id} could not be read back`);
     const desired = statusFor(attempt.expected, live.view.projection);
@@ -836,6 +838,7 @@ async function settleDeclaredRule(input) {
   // ----- the four steps.
   async function resolve({ committed, pending }) {
     run.committed = committed;
+    run.pending = pending || null;
     const errors = validateDeclaredRule(rule);
     if (errors.length) throw coded('rule-shape-unsupported', errors.join('; '));
     if (pending && pending.declarationSha256 !== declarationSha256) {
@@ -900,7 +903,19 @@ async function settleDeclaredRule(input) {
     return { mode: 'adopt', id, live };
   }
 
-  async function plan({ resolution }) {
+  // runManagedFeature `plan`: the change (planChange) plus the ORIGINAL authored rule as `declaration`, a plain-JSON
+  // copy the shared seam checks (checkDeclaration) and records with the attempt before anything is sent, then commits as
+  // the group's originalDeclaration. It is kept apart from consumerState, which stays this module's derived state as
+  // prove answers it. A continued or resumed attempt is sent only for the declaration it recorded, so that replan
+  // answers the recorded one (resolve has already refused one prepared from another declaration hash).
+  async function plan(input) {
+    const planned = await planChange(input);
+    if (!planned || planned.noop === true) return planned;
+    const recorded = (input.continuing || input.resuming) && run.pending ? run.pending.declaration : undefined;
+    return { ...planned, declaration: recorded !== undefined ? recorded : clone(rule) };
+  }
+
+  async function planChange({ resolution }) {
     const root = (id) => ({ kind: ROOT_KIND, key, id });
     if (resolution.mode === 'noop') return { noop: true };
     if (resolution.mode === 'adopt') {
