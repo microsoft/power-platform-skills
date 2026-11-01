@@ -385,6 +385,12 @@ function loadTeardownCli({
         },
       };
     }
+    // The managed fence of the app's workspace (lib/managed-standalone-fence.js) reads the real file system: the harness answers that no build left a
+    // store there, which is what every case here is about, and records the workspace it was asked about.
+    if (id === './lib/managed-standalone-fence.js') {
+      const { createPublicationBarrier } = require('../lib/publication-barrier.js');
+      return { openStandaloneManagedFence: (o) => { events.push({ type: 'managedFence', workspaceDir: o.workspaceDir }); return { barrier: createPublicationBarrier(), absent: true, debt: [] }; } };
+    }
     if (id === './lib/configuration-artifacts.js') return require('../lib/configuration-artifacts.js');
     if (id === './lib/field-security.js') return require('../lib/field-security.js');
     if (id === './lib/sdk-teardown.js') {
@@ -520,6 +526,10 @@ test('teardown CLI applies, clears the local workspace only after a clean run, a
 
   assert.ok(harness.events.some((e) => e.type === 'createMakerSdk' && e.cfg.workspaceStorage.__mockWorkspaceRoot === harness.sdkTemp));
   assert.ok(harness.events.some((e) => e.type === 'runTeardown' && e.opts.apply === true));
+  // The managed debt of the same workspace is read before the client is made, and its barrier is the one the engine withholds by.
+  const fenceIndex = harness.events.findIndex((e) => e.type === 'managedFence' && e.workspaceDir === workspaceDir);
+  assert.ok(fenceIndex > -1 && fenceIndex < harness.events.findIndex((e) => e.type === 'createMakerSdk'), 'the managed fence is read before the client exists');
+  assert.ok(harness.events.some((e) => e.type === 'runTeardown' && e.opts.publicationBarrier && typeof e.opts.publicationBarrier.allow === 'function'));
   assert.ok(harness.events.some((e) => e.type === 'tombstoneSnapshot' && e.workspaceDir === workspaceDir));
   assert.ok(harness.events.some((e) => e.type === 'releaseTombstone' && e.workspaceDir === workspaceDir && e.teardownId === 'td-1'),
     'a clean teardown releases the tombstone entry IT wrote');

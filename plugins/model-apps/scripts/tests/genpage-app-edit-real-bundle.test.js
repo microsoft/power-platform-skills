@@ -628,3 +628,53 @@ test('REAL BUNDLE: the same state reaches the SDK\'s guarded pin — through a t
     }
   });
 });
+// The managed fence (lib/managed-standalone-fence.js): a page edit that names an app writes and publishes it, which puts live the saved forms the app
+// holds. While a build of the app's workspace left a managed change unproved (pending) or a publish of it sent and not confirmed (uncertain), each
+// such entry is refused before anything is written — no navigation write, no AddAppComponents, no publish. An app folder with no store is unchanged
+// (every test above).
+const { seedManagedDebt } = require('./helpers/managed-debt.js');
+const { applyWorkspaceOf } = require('../lib/app-operation-lease.js');
+
+function appFolderWithDebt(debt) {
+  const appDir = tmp();
+  fs.writeFileSync(path.join(appDir, 'app-spec.json'), JSON.stringify({ app: { uniqueName: 'contoso_edits' }, solution: { uniqueName: 'ContosoEdits' } }));
+  const workspaceDir = applyWorkspaceOf({ appDir });
+  fs.mkdirSync(workspaceDir, { recursive: true });
+  seedManagedDebt({ workspaceDir, environment: INSTANCE, appUniqueName: 'contoso_edits', solutionUniqueName: 'ContosoEdits' }, { table: 'account', ...debt });
+  return appDir;
+}
+
+for (const [debtName, debt] of [['an unproved change (pending)', {}], ['a publish sent and not confirmed (uncertain)', { uncertain: true }]]) {
+  test(`managed fence: \`genpage.js add-to-app\` and \`remove-from-app\` are refused with nothing written while the app's build left ${debtName}`, async () => {
+    await inWorld(async ({ app, world, makeBackend }) => {
+      const appDir = appFolderWithDebt(debt);
+      const xml = app.state.xml;
+      const run = (argv) => genpageVerbs(argv, { appDir, makeGenpageSdk: makeBackend, emit: (ok, payload) => ({ ok, ...payload }), stderr: () => {} });
+      for (const argv of [['add-to-app', '--env', INSTANCE, '--app-id', APP_ID, '--page-id', OTHER], ['remove-from-app', '--env', INSTANCE, '--app-id', APP_ID, '--page-id', APP_EXISTING_PAGE_ID]]) {
+        const out = await run(argv);
+        assert.deepStrictEqual([out.ok, out.code, out.outcome], [false, 'publication-withheld', 'nothing'], JSON.stringify(out));
+      }
+      assert.strictEqual(app.state.publishAttempts, 0, 'no publish of the app');
+      assert.strictEqual(app.state.xml, xml, 'the navigation is as it was');
+      assert.deepStrictEqual(world.additions(), [], 'no AddAppComponents');
+    }, { defaultViewPinned: false });
+  });
+}
+
+test('managed fence: an upload that names an app is refused with nothing written while the app\'s build left a managed change unproved', async () => {
+  await inWorld(async ({ server, app, world, makeBackend }) => {
+    const appDir = appFolderWithDebt({});
+    const dir = tmp();
+    const file = path.join(dir, 'page.tsx');
+    fs.writeFileSync(file, SOURCE);
+    const pages = server.state.projects.size;
+    const out = await upload(['--env', INSTANCE, '--app-id', APP_ID, '--app-dir', appDir, '--code-file', file, '--name', 'Fresh page', '--data-sources', 'account', '--prompt', 'p', '--agent-message', 'm', '--add-to-sitemap'], {
+      makeGenpageSdk: makeBackend, emit: (ok, payload) => ({ ok, ...payload }),
+    });
+    assert.deepStrictEqual([out.ok, out.code, out.outcome], [false, 'publication-withheld', 'nothing'], JSON.stringify(out));
+    assert.strictEqual(server.state.projects.size, pages, 'no page was created');
+    assert.strictEqual(server.requests.length, 0, 'nothing was sent at all');
+    assert.strictEqual(app.state.publishAttempts, 0, 'no publish of the app');
+    assert.deepStrictEqual(world.additions(), []);
+  }, { defaultViewPinned: false });
+});

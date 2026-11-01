@@ -81,6 +81,7 @@ const { parseArgs, validateFlags, emitResult } = require('./lib/dataverse-auth.j
 const { makeGenpageSdk, suppliedButBlank, sourceText, dataSourcesOf, normalizeTurnId, readTurnRecord } = require('./lib/genpage-sdk.js');
 const { appTurnStore } = require('./lib/page-turn-store.js');
 const { withStandalonePagesLease } = require('./lib/standalone-page-lease.js');
+const { openStandaloneManagedFence, assertStandaloneAppWrite } = require('./lib/managed-standalone-fence.js');
 const { makeThrottleBudget } = require('./lib/throttle-budget.js');
 const { leftOnDiskWarning } = require('./lib/left-on-disk.js');
 const { griffelStyleProblems, griffelProblemsNotIn, describeGriffelRefusal, describeGriffelWarning } = require('./lib/griffel-styles.js');
@@ -511,7 +512,20 @@ async function main(argv = process.argv.slice(2), deps = {}) {
   // The waiting a run does for a throttled service is bounded at five minutes (lib/throttle-budget.js): this one budget is the page write's and the backend's HTTP client's alike — its reads and its publish wait out a throttle too. A wait of more
   // than a few seconds is announced on stderr — stdout carries the JSON result — so that a command that is silent for minutes is not mistaken for a hung one.
   const warn = (message) => process.stderr.write(`WARNING: ${message}\n`);
-  const genpage = makeBackend(flags.env, { warn, throttle: makeThrottleBudget({ warn }), ...(turnId ? { turnBindings: appTurnStore(flags['app-dir']) } : {}) });
+  // An upload that names an app writes in it and publishes it, which puts live the saved forms the app holds. So the managed debt of the app's workspace
+  // (lib/managed-standalone-fence.js) is read first, as a build reads it: while a build's managed change is unproved, or may have been sent and is not
+  // confirmed, the upload is refused with nothing written, and otherwise the backend's transport is gated by the same barrier. No store changes nothing.
+  let fence = null;
+  if (typeof flags['app-id'] === 'string' && flags['app-id']) {
+    try {
+      fence = openStandaloneManagedFence({ environment: flags.env, appDir: flags['app-dir'] || deps.appDir });
+      assertStandaloneAppWrite(fence, { appId: flags['app-id'] });
+    } catch (e) {
+      return emit(false, { ok: false, appId: flags['app-id'], code: (e && e.code) || 'managed-binding-store-unreadable', outcome: 'nothing', error: String((e && e.message) || e) });
+    }
+    if (fence.absent) fence = null;
+  }
+  const genpage = makeBackend(flags.env, { warn, throttle: makeThrottleBudget({ warn }), ...(turnId ? { turnBindings: appTurnStore(flags['app-dir']) } : {}), ...(fence ? { publicationBarrier: fence.barrier } : {}) });
   // The backend's workspace is removed BEFORE anything is reported: emitResult calls process.exit, so a cleanup placed after an emit never
   // runs, and that workspace holds the page's source. dispose() answers when the storage calls the backend had under way have settled and the
   // folder is gone — or says, in `{ left }`, which folder is not (a handle a scanner holds), and that is reported with the result: a success that left

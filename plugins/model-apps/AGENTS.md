@@ -2890,10 +2890,25 @@ by `openBuildBindingGroups` for an apply with an app, a solution and an https en
 kind keeps its current ids. A local copy at the id with an unsent edit, or a local create never
 acknowledged, is refused before any read-back, reapply or send (`create-completion-required`, via
 `lib/creates-local.js`); there is no `overwrite:` approval for it. A store file that cannot be trusted
-halts the build before any write (`managed-binding-store-unreadable`, never retried). A create whose
-answer was lost keeps its table's publish held until a later run proves and binds the row. `--verify`
-reads each bound row by its id (`readManagedManifest`, read-only) and lists unsettled bindings as
-unverified.
+halts the build before any write (`managed-binding-store-unreadable`, never retried); the message tells
+the maker to keep the file and put back the build's own copy, never to move, delete or reset it (it is
+the record of changes not yet proved). Each view or chart settles through `runManagedFeature`
+(`lib/managed-feature-contract.js`): the attempt and its complete expected content are journaled as
+sending before the create, a pending attempt is recovered against that recorded expectation
+(`recoverManagedAttempt`) before any current-spec planning, a row found at its id that this workspace
+never bound is bound only with its typed `adopt:` approval (`adoptionApproved`), and nothing is
+committed until the row's solution membership is proved. An attempt whose declaration the spec no
+longer carries is recovered by `recoverUndeclared` (phase 3z of `sdk-build.js`) against its recorded
+expectation; one that does not prove stays pending with a warning, so omission never releases a hold.
+A table publish that covers a stored managed group goes through `lib/managed-scope-publisher.js`
+(`publishManagedScope`, which first confirms an uncertain earlier publish by a fresh read), with or without
+stable ids in this spec. The
+entries that publish without a build — `genpage.js` add-to-app and remove-from-app,
+`genpage-upload.js` with `--app-id`, and teardown — read the same debt first
+(`lib/managed-standalone-fence.js`, read-only; no store changes nothing) and refuse the app write
+(`publication-withheld`) or leave the withheld table publish unsent. `--verify`, standalone or inline
+in a build, reads each bound row by its id (`readManagedManifest`, read-only) and lists unsettled
+bindings as unverified.
 
 Approval keys are typed by family, `<verb>:<family>:<id>` (`build-model-app.js` `authorizationKeys`,
 `reconcile-common.js` `approvalKey`), because ids collide across families: a view and a chart may share

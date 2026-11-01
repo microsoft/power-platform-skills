@@ -836,7 +836,8 @@ function makeGenpageSdk(env, deps = {}) {
             // The SDK's transport, limited for a page edit of an app (see appScope above and `pushApp`), and watched, so a refused page write's Retry-After reaches this backend, and so does what a change set
             // refused as a whole proved (watchThrottles): the SDK's error for either carries no headers and no part. The watch is the inner layer, next to the transport, so what it hears is what the service
             // answered: a post the limit answers itself (an AddAppComponents left with nothing to add) never reached the service.
-            httpClient: appScope.wrap(watchThrottles(deps.httpClient || (deps.createHttpClient || createAzHttpClient)(env, { throttle: deps.throttle }), (ms) => { asked = Math.max(asked, ms); }, deps.now, (found) => { refusal = found; })),
+            // `deps.publicationBarrier` (lib/managed-standalone-fence.js): the managed debt of the app's workspace, checked at every publish request this transport sends, as a build's is.
+            httpClient: appScope.wrap(watchThrottles(deps.httpClient || (deps.createHttpClient || createAzHttpClient)(env, { throttle: deps.throttle, ...(deps.publicationBarrier ? { request: deps.publicationBarrier.gateRequest() } : {}) }), (ms) => { asked = Math.max(asked, ms); }, deps.now, (found) => { refusal = found; })),
             // A page's file downloads overlap (four at a time): a read of a page is its rows' bytes, one request each.
             readConcurrency: 4,
             ...(options.languageCode ? { languageCode: options.languageCode } : {}),

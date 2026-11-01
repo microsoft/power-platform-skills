@@ -81,6 +81,7 @@ const { danglingSitemapOf, deleteAppWithoutSitemap } = require('./app-sitemap-da
 // OData v4 string-literal escaping lives in ./odata.js. `odataStr` is kept as a backward-compatible
 // alias because it is part of this module's exported (and unit-tested) surface.
 const { odataLit } = require('./odata.js');
+const { openStandaloneManagedFence } = require('./managed-standalone-fence.js');
 const odataStr = odataLit;
 
 // Extract a readable error message from an SDK error or exception.
@@ -205,6 +206,18 @@ function warnDeferredResetPublishFailure(ctx, table, err) {
   if (typeof ctx.warn === 'function') ctx.warn(message);
 }
 
+// A reset whose table publish the managed fence withholds (lib/managed-standalone-fence.js): a build of this app left a managed change on that table
+// unproved, or a publication of it that may have been sent and is not confirmed, and a publish now would put that saved state live. The reset stays
+// saved; the relationship delete that follows may then report the lookup as still referenced, which is the failure a re-run can finish.
+function warnWithheldResetPublish(ctx, table, why) {
+  const message = `default-view reset for ${table} is saved and was not published: ${why} — `
+    + 'the next relationship delete may still report the lookup as still referenced; build the app again to settle the managed change, then rerun the teardown';
+  ctx.warnings.push(message);
+  if (typeof ctx.warn === 'function') ctx.warn(message);
+}
+
+const TEARDOWN_RESET_PUBLISH = 'the teardown publish of default-view resets';
+
 function publishFailure(outcome) {
   return outcome && outcome.publish && outcome.publish.kind === 'failed'
     ? (outcome.publish.error || new Error('publish failed'))
@@ -222,8 +235,14 @@ async function settleDeferredResetPublishes(sdk, ctx) {
   if (!ctx || ctx.flushing || !ctx.owedByTable.size || typeof (sdk && sdk.publishArtifact) !== 'function') return;
   ctx.flushing = true;
   try {
-    const owed = [...ctx.owedByTable.values()];
+    const owed = [];
+    for (const target of ctx.owedByTable.values()) {
+      if (ctx.managedFenceError) warnWithheldResetPublish(ctx, target.table, `the app's managed binding store could not be read (${errMsg(ctx.managedFenceError)})`);
+      else if (ctx.barrier && !ctx.barrier.allow(target.table, TEARDOWN_RESET_PUBLISH)) warnWithheldResetPublish(ctx, target.table, 'a managed change of this table, made by a build, is not yet proved or may have been sent and is not confirmed');
+      else owed.push(target);
+    }
     ctx.owedByTable.clear();
+    if (!owed.length) return;
     const publishOne = async (target) => {
       try {
         const failed = publishFailure(await sdk.publishArtifact(target.type, target.id));
@@ -1749,6 +1768,11 @@ async function dryRunFormBlockers(sdk, plan, pageResolutions) {
 // could not be confirmed, and a deleted page whose conversation history could not be fully removed. This wrapper exists so the batched publish of those resets is settled however
 // the steps end — normally, through the app-delete stop, or because a callback threw — without wrapping
 // the step loop (and re-indenting every line of it) in a try/finally.
+//
+// `opts.publicationBarrier`: a barrier the caller already filled with the managed debt of the app's workspace (lib/managed-standalone-fence.js) — the one
+// its SDK's transport is gated by; `opts.managedFenceError`: the caller's discovery failed. Without either, an apply discovers that debt here. Either way a
+// table the debt withholds is not published by the resets' batched publish, in the step loop, the app-delete stop or the finally alike: that publish would put
+// live the saved state a build withheld. No store in the workspace changes nothing.
 async function runTeardown(spec, opts = {}, deps = {}) {
   const deferredResetPublishes = {
     deferPublish: canBatchResetDefaultViewPublishes(deps.sdk),
@@ -1756,7 +1780,16 @@ async function runTeardown(spec, opts = {}, deps = {}) {
     warnings: [],
     warn: deps.warn,
     flushing: false,
+    barrier: opts.publicationBarrier || null,
+    managedFenceError: opts.managedFenceError || null,
   };
+  if (opts.apply === true && !deferredResetPublishes.barrier && !deferredResetPublishes.managedFenceError) {
+    try {
+      deferredResetPublishes.barrier = openStandaloneManagedFence({ environment: opts.env, workspaceDir: opts.workspaceDir, appDir: opts.appDir, spec }).barrier;
+    } catch (error) {
+      deferredResetPublishes.managedFenceError = error;
+    }
+  }
   let result;
   try {
     result = await runTeardownSteps(spec, opts, deps, deferredResetPublishes);
