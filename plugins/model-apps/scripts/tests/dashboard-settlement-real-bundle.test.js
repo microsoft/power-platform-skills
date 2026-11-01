@@ -1247,3 +1247,55 @@ test('carry: a lost answer to a scope publish that only carried the dashboard st
   assert.equal(await codeOf(settle(next, { ...d, description: 'Not over the carried send' })), 'managed-publication-unconfirmed');
   assert.equal(w.wire.writes().length, writes, 'nothing sent');
 });
+
+// The SDK answers a failed publish by value, not by a throw:
+//   { type: 'dashboard', id, shipped: false, publish: { kind: 'failed', error } }
+// A 503 can come back after the service applied the PublishXml, so the adapter must not read that answer as a
+// success (the helper would then confirm the layers and admit the app) nor as a request that never started.
+const failPublishXml = (wire, { applied }) => wire.script((e) => e.method === 'POST' && /^PublishXml$/.test(e.path),
+  { statusCode: 503, body: { error: { code: '0x80040216', message: 'gateway' } }, unapplied: !applied });
+const causes = (e) => { const chain = []; for (let c = e; c && chain.length < 8; c = c.cause) chain.push(c); return chain; };
+const admitted = (w) => w.barrier.checkAppWrite({ existingApp: true, held: [], heldDashboards: [DID] }).ok;
+
+for (const applied of [false, true]) {
+  test(`a publish the SDK answers as failed stays unconfirmed and fenced, with the SDK error kept (the service ${applied ? 'applied' : 'did not apply'} it)`, async () => {
+    const first = await world();
+    putExisting(first.wire);
+    await settle(first, existingOps());
+    assert.equal(first.store.readGroup('dashboard', 'ops').committed.publication.state, 'owed');
+    const w = await rerun(first);
+    failPublishXml(w.wire, { applied });
+    let answer;
+    const sdk = Object.create(w.sdk);
+    sdk.publishArtifact = async (...a) => { answer = await w.sdk.publishArtifact(...a); return answer; };
+    const err = await failureOf(publishDeclaredDashboard({ store: w.store, barrier: w.barrier, sdk, key: 'ops', id: DID }));
+    assert.equal(answer.shipped, false);
+    assert.equal(answer.publish.kind, 'failed');
+    assert.equal(err && err.code, 'managed-publication-unconfirmed', 'a failed SDK answer is not a publish success');
+    assert.ok(causes(err).includes(answer.publish.error), 'the SDK error stays in the cause chain');
+    assert.equal(w.store.readGroup('dashboard', 'ops').committed.publication.state, 'unconfirmed', 'not recorded as confirmed, nor as a publish that never started');
+    assert.equal(admitted(w), false, 'the app is not admitted over it');
+    assert.equal(w.wire.publishes(DID).length, 1);
+    if (applied) {
+      const next = await rerun(w);
+      assert.equal((await publish(next, 'ops', DID)).sent, false, 'a later read settles the changed layer without a resend');
+      assert.equal(next.store.readGroup('dashboard', 'ops').committed.publication.state, 'confirmed');
+      assert.equal(w.wire.publishes(DID).length, 1);
+    }
+  });
+}
+
+test('a failed SDK answer returned to the scope publication is refused there as unconfirmed, never confirmed', async () => {
+  const first = await world();
+  putExisting(first.wire);
+  await settle(first, existingOps());
+  const w = await rerun(first);
+  failPublishXml(w.wire, { applied: true });
+  const code = await codeOf(publishManagedScope({
+    store: w.store, barrier: w.barrier, client: w.sdk.dataverse, scope: { type: 'dashboard', id: DID }, groups: [{ family: 'dashboard', key: 'ops' }],
+    publish: async () => { await w.sdk.fetchArtifact('dashboard', DID); return w.sdk.publishArtifact('dashboard', DID); },
+  }));
+  assert.equal(code, 'managed-publication-unconfirmed');
+  assert.equal(w.store.readGroup('dashboard', 'ops').committed.publication.state, 'unconfirmed');
+  assert.equal(admitted(w), false);
+});

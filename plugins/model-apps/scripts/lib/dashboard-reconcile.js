@@ -1274,6 +1274,41 @@ async function settleDeclaredDashboard(args) {
   return { ...run, key, id: id || (run.committedGroup && run.committedGroup.root.id) || null };
 }
 
+// The SDK's publishArtifact answers by VALUE, never by a throw. Its PublishResult, as this path receives it:
+//   { type: 'dashboard', id, shipped: false, publish: { kind: 'submitted' }, publishScope: { envelope, targetIds } }
+//       PublishXml was accepted. `shipped` is true only after the SDK's own optional read-back ('verified'), which
+//       this path does not request: publishManagedScope reads the layers back itself.
+//   { type: 'dashboard', id, shipped: false, publish: { kind: 'failed', error } }
+//       refused, or no usable answer. A 503 can arrive after the service applied the publish, so this is NOT a
+//       request known not to have started.
+// The kinds that mean "accepted" are the ones the app publication policy pays a debt with
+// (lib/app-publication-policy.js).
+const PUBLISH_ACCEPTED = new Set(['submitted', 'verified', 'unverifiable']);
+
+/**
+ * Turns the SDK's answer into what publishManagedScope expects of its callback: a throw on any failure, the answer
+ * on success. A failed or unknown answer is thrown with the SDK's error as its `cause`, and never with
+ * `definiteNoStart`: whether the request started is unknown, so the helper keeps the debt unconfirmed and the scope
+ * blocked, and a later read of a changed layer can confirm it without a resend. Returning (or awaiting) the answer
+ * without this check would let a failed publish read as a sent one, and the helper would confirm layers that were
+ * already live.
+ * An accepted answer is returned. Its `shipped: false` is dropped first, because the helper refuses a returned
+ * `shipped: false` as a failure; here the flag only says that the SDK's own read-back was not requested, and the
+ * helper's read-back is the proof.
+ */
+function publishOutcome(answer, id) {
+  const kind = answer && answer.publish && answer.publish.kind;
+  if (!PUBLISH_ACCEPTED.has(kind)) {
+    const error = kind === 'failed' ? answer.publish.error : undefined;
+    const detail = kind === 'failed' ? `failed: ${(error && error.message) || 'no detail'}` : `answered ${kind ? `'${kind}'` : 'no outcome'}`;
+    throw stop('dashboard-publish-failed', `the publish of dashboard ${id} ${detail}`, error ? { cause: error } : {});
+  }
+  if (answer.shipped !== false) return answer;
+  const accepted = { ...answer };
+  delete accepted.shipped;
+  return accepted;
+}
+
 /**
  * THE one path a declared dashboard's publication takes: publishManagedScope with exactly one scope — this
  * dashboard's own id — and one group, published by the SDK's `<dashboard>` envelope:
@@ -1291,6 +1326,10 @@ async function settleDeclaredDashboard(args) {
  *     sent, the scope is blocked for the run, and the error is rethrown so the build stops on it;
  *   - `{ sent: false, withheld: true }` (the barrier withholds the scope, or a pending attempt covers it) is returned
  *     as it is, the debt still owed;
+ *   - a publish the SDK answers as failed (by value, see publishOutcome) is thrown into the helper, which keeps the
+ *     debt `unconfirmed` and the scope blocked (`managed-publication-unconfirmed`, the SDK error in its cause chain);
+ *     it is never confirmed, never recorded as not started, and never resent; a later read of a changed layer
+ *     confirms it;
  *   - every other error (pending, unconfirmed, create-completion-required on a drifted saved layer, and
  *     `managed-publication-reader-missing` — a covered family with no shared reader, a defect no rerun in the run heals)
  *     is rethrown, the scope blocked for the run.
@@ -1307,7 +1346,7 @@ async function publishDeclaredDashboard({ store, barrier, sdk, key, id, newToken
       client: sdk.dataverse,
       publish: async () => {
         await sdk.fetchArtifact(KIND, scope.id);
-        await sdk.publishArtifact(KIND, scope.id);
+        return publishOutcome(await sdk.publishArtifact(KIND, scope.id), scope.id);
       },
     });
     return { ...out, held: false };
