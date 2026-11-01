@@ -141,7 +141,7 @@ test('a send permit lets one publish through its own hold only: once, recorded a
 
   b.hold('sibling', [ACCOUNT], [QUICK], 'form quick (being saved)');
   await b.withSendPermit({ ...permit, onDispatch: () => refused.push('dispatch'), onWithheld: () => refused.push('withheld') }, async () => {
-    assert.equal((await pub(['account', 'contact'])).statusCode, 409, 'nothing of a request whose own scope another hold withholds is sent');
+    await pub(['account']);
   });
   assert.deepEqual(refused, ['withheld']);
   assert.equal(sent.length, 1);
@@ -284,6 +284,188 @@ test('owed publication whose saved layer has drifted is not published: nothing i
   assert.equal((await publishForms(c.sdk, c.store, c.barrier, [{ family: 'form', key: 'account/main' }])).sent, true);
   assert.equal(c.wire.publishes('account').length, 1);
   assert.equal(c.wire.published.get(MAIN).formxml, '<form v="2"/>');
+});
+
+const formRow = (id, formxml, table = 'account') => ({ formid: id, name: 'Main', objecttypecode: table, type: 2, formxml });
+// A form an earlier run committed on `account`: `publishedXml` is live, `savedXml` is saved, and the group's publication
+// is `state` — 'owed' (desired = the saved layer it committed) or 'not-needed' (saved equalled published at the commit).
+function committedForm(s, { id, key, publishedXml, savedXml, state = 'owed' }) {
+  s.wire.putForm(formRow(id, publishedXml), { publishedToo: true });
+  s.wire.saved.get(id).formxml = savedXml;
+  const t = s.store.prepareAttempt({ family: 'form', key, baseGeneration: null, root: { kind: 'form', key, id }, knownScopes: [ACCOUNT], declarationSha256: H('e'), publication: { scope: ACCOUNT, state: 'owed' } });
+  s.store.markSending(t, expected(id));
+  s.store.noteSaved(t, { proof: null, acknowledgedRoot: true });
+  const publication = state === 'owed'
+    ? { scope: ACCOUNT, state: 'owed', desiredSha256: layerHash(s.wire.saved.get(id)), dispatchToken: null }
+    : { scope: ACCOUNT, state: 'not-needed', desiredSha256: null, dispatchToken: null };
+  s.store.commitGroup({ token: t, baseGeneration: null, records: [rec('form', key, id)], proof: PROOF, consumerState: consumer('form'), publication });
+}
+const MAIN_G = { family: 'form', key: 'account/main' };
+const QUICK_G = { family: 'form', key: 'account/quick' };
+const storeWriteFailure = () => Object.assign(new Error('no space left on the device'), { code: 'ENOSPC' });
+
+test('a publish that was sent fails closed when its settlement is not recorded: a failed confirm write, a partial confirmation of two groups, or a failed outcome write withholds the table for the rest of the run', async () => {
+  // The one confirmation write fails after the read-back proved the publish.
+  const a = await setup();
+  committedForm(a, { id: MAIN, key: 'account/main', publishedXml: '<form v="1"/>', savedXml: '<form v="2"/>' });
+  a.store.confirmPublished = () => { throw storeWriteFailure(); };
+  assert.equal(await codeOf(publishForms(a.sdk, a.store, a.barrier, [MAIN_G])), 'ENOSPC');
+  assert.equal(a.wire.publishes('account').length, 1);
+  assert.equal(a.barrier.allowScope(ACCOUNT, 'a sibling view'), false, 'the table is blocked, not merely released');
+  await publishTablesXml(a.sdk.dataverse, ['account']);
+  assert.equal(a.wire.publishes('account').length, 1, 'no sibling publishes over the unrecorded send');
+  await publishTablesXml(a.sdk.dataverse, ['contact']);
+  assert.equal(a.wire.publishes('contact').length, 1, 'an unrelated table still publishes');
+
+  // Two groups published by one send: the first is confirmed, then the write fails.
+  const b = await setup();
+  committedForm(b, { id: MAIN, key: 'account/main', publishedXml: '<form v="1"/>', savedXml: '<form v="2"/>' });
+  committedForm(b, { id: QUICK, key: 'account/quick', publishedXml: '<form q="1"/>', savedXml: '<form q="2"/>' });
+  const realConfirm = b.store.confirmPublished;
+  b.store.confirmPublished = (args) => { realConfirm({ ...args, groups: args.groups.slice(0, 1) }); throw storeWriteFailure(); };
+  assert.equal(await codeOf(publishForms(b.sdk, b.store, b.barrier, [MAIN_G, QUICK_G])), 'ENOSPC');
+  assert.equal(b.wire.publishes('account').length, 1);
+  assert.equal(b.barrier.allowScope(ACCOUNT, 'a sibling view'), false, 'a partial confirmation withholds the table');
+  await publishTablesXml(b.sdk.dataverse, ['account']);
+  assert.equal(b.wire.publishes('account').length, 1);
+  assert.deepEqual([MAIN_G, QUICK_G].map((g) => b.store.readGroup(g.family, g.key).committed.publication.state), ['confirmed', 'dispatching']);
+  assert.ok(context(b.dir, createPublicationBarrier()).debt.some((d) => d.key === 'account/quick' && d.kind === 'uncertain'), 'the next run still withholds it');
+
+  // A send that ended definitely-not-started, whose outcome cannot be written: the store still says dispatching.
+  const c = await setup();
+  committedForm(c, { id: MAIN, key: 'account/main', publishedXml: '<form v="1"/>', savedXml: '<form v="2"/>' });
+  c.store.notePublishOutcome = () => { throw storeWriteFailure(); };
+  const refusedConnection = (s) => publishManagedScope({
+    store: s.store, barrier: s.barrier, scope: ACCOUNT, groups: [MAIN_G], readLayers: readLayersOf(s.sdk),
+    publish: async () => { await publishTablesXml(s.sdk.dataverse, ['account']); throw Object.assign(new Error('connection refused before the request was written'), { code: 'ECONNREFUSED', definiteNoStart: true }); },
+  });
+  c.wire.script((e) => /PublishXml/.test(e.path), { statusCode: 503, body: {}, unapplied: true });
+  assert.equal(await codeOf(refusedConnection(c)), 'ENOSPC');
+  assert.equal(c.barrier.allowScope(ACCOUNT, 'a sibling view'), false, 'not proved unsent in the store: withheld');
+
+  // The same with a store that records it: proved unsent, so the scope is released and the debt is paid once later.
+  const d = await setup();
+  committedForm(d, { id: MAIN, key: 'account/main', publishedXml: '<form v="1"/>', savedXml: '<form v="2"/>' });
+  d.wire.script((e) => /PublishXml/.test(e.path), { statusCode: 503, body: {}, unapplied: true });
+  assert.equal(await codeOf(refusedConnection(d)), 'ECONNREFUSED');
+  assert.equal(d.barrier.allowScope(ACCOUNT, 'a sibling view'), true, 'a definitely-unsent exit releases');
+  assert.deepEqual(d.store.readGroup('form', 'account/main').committed.publication, { ...d.store.readGroup('form', 'account/main').committed.publication, state: 'owed', dispatchToken: null });
+  d.wire.log.length = 0;
+  assert.equal((await publishForms(d.sdk, d.store, d.barrier, [MAIN_G])).sent, true);
+  assert.equal(d.wire.publishes('account').length, 1);
+});
+
+test('a pre-send read of the layers that fails or answers no proof withholds the table for the run: nothing is sent and no sibling publishes it', async () => {
+  for (const readLayers of [async () => { throw new Error('socket hang up'); }, async () => ({ savedSha256: H('9') })]) {
+    const s = await setup();
+    committedForm(s, { id: MAIN, key: 'account/main', publishedXml: '<form v="1"/>', savedXml: '<form v="2"/>' });
+    const out = codeOf(publishManagedScope({ store: s.store, barrier: s.barrier, scope: ACCOUNT, groups: [MAIN_G], readLayers, publish: () => publishTablesXml(s.sdk.dataverse, ['account']) }));
+    assert.equal(await out, PUBLICATION_UNVERIFIED);
+    assert.equal(s.wire.publishes().length, 0);
+    assert.equal(s.barrier.allowScope(ACCOUNT, 'a sibling view'), false, 'the unread table is fenced');
+    await publishTablesXml(s.sdk.dataverse, ['account']);
+    assert.equal(s.wire.publishes('account').length, 0, 'no sibling publishes the unread saved layer');
+    assert.equal(s.store.readGroup('form', 'account/main').committed.publication.state, 'owed', 'the debt is not consumed');
+  }
+});
+
+test('a table publish is sent only while every managed form of the table has the saved layer its group proved: a drifted sibling, already published or not passed, stops it; unrelated scopes stay eligible', async () => {
+  // Both groups passed; MAIN's debt is already live, but someone saved over it since.
+  const a = await setup();
+  committedForm(a, { id: MAIN, key: 'account/main', publishedXml: '<form v="2"/>', savedXml: '<form v="2"/>' });
+  committedForm(a, { id: QUICK, key: 'account/quick', publishedXml: '<form q="1"/>', savedXml: '<form q="2"/>' });
+  a.wire.saved.get(MAIN).formxml = '<form foreign="true"/>';
+  assert.equal(await codeOf(publishForms(a.sdk, a.store, a.barrier, [MAIN_G, QUICK_G])), 'create-completion-required');
+  assert.equal(a.wire.publishes().length, 0);
+  assert.equal(a.wire.published.get(MAIN).formxml, '<form v="2"/>', 'the foreign save is not put live');
+  assert.equal(a.barrier.allowScope(ACCOUNT, 'a sibling view'), false);
+  assert.equal(a.store.readGroup('form', 'account/quick').committed.publication.state, 'owed');
+
+  // The caller passes only QUICK; MAIN settled earlier (nothing owed) and has a foreign save since.
+  const b = await setup();
+  committedForm(b, { id: MAIN, key: 'account/main', publishedXml: '<form v="1"/>', savedXml: '<form v="1"/>', state: 'not-needed' });
+  committedForm(b, { id: QUICK, key: 'account/quick', publishedXml: '<form q="1"/>', savedXml: '<form q="2"/>' });
+  b.wire.saved.get(MAIN).formxml = '<form foreign="true"/>';
+  assert.equal(await codeOf(publishForms(b.sdk, b.store, b.barrier, [QUICK_G])), 'create-completion-required');
+  assert.equal(b.wire.publishes().length, 0);
+  assert.equal(b.wire.published.get(MAIN).formxml, '<form v="1"/>');
+
+  // Controls: a settled sibling whose saved layer is still its published one, and a drifted form of another table.
+  const c = await setup();
+  committedForm(c, { id: MAIN, key: 'account/main', publishedXml: '<form v="1"/>', savedXml: '<form v="1"/>', state: 'not-needed' });
+  committedForm(c, { id: QUICK, key: 'account/quick', publishedXml: '<form q="1"/>', savedXml: '<form q="2"/>' });
+  c.wire.putForm(formRow(UNRELATED, '<form c="1"/>', 'contact'), { publishedToo: true });
+  c.wire.saved.get(UNRELATED).formxml = '<form c="foreign"/>';
+  assert.deepEqual(await publishForms(c.sdk, c.store, c.barrier, [QUICK_G]), { sent: true, withheld: false, confirmed: [QUICK_G] });
+  assert.equal(c.wire.publishes('account').length, 1, 'one send');
+  assert.equal(c.wire.published.get(QUICK).formxml, '<form q="2"/>');
+  assert.equal(c.barrier.allowScope({ type: 'table', table: 'contact' }, 'the publish phase'), true, 'an unrelated scope stays eligible');
+});
+
+test('a send permit sends only a request whose whole publish target set is the permit\'s one scope: a publish of everything, another scope, an extra scope or an unreadable request is refused unsent', async () => {
+  const b = createPublicationBarrier();
+  const sent = [];
+  const gate = b.gateRequest(async (req) => { sent.push(req); return { statusCode: 204, headers: {}, body: '' }; });
+  const post = (action, body) => ({ url: `${ENV}/api/data/v9.0/${action}`, method: 'POST', headers: {}, body });
+  const xml = (inner) => post('PublishXml', JSON.stringify({ ParameterXml: `<importexportxml>${inner}</importexportxml>` }));
+  const entities = (...t) => `<entities>${t.map((x) => `<entity>${x}</entity>`).join('')}</entities>`;
+  b.hold('own', [ACCOUNT], [MAIN], 'form main (its publish is being sent)');
+  b.hold('dash', [dashScope(DASH)], [DASH], 'dashboard sales (its publish is being sent)');
+  const refusedFor = async (scope, token, req) => {
+    const events = [];
+    const answer = await b.withSendPermit({ token, scope, onDispatch: () => events.push('dispatch'), onWithheld: () => events.push('withheld'), onRefused: () => events.push('refused') }, () => gate(req));
+    return { status: answer.statusCode, events };
+  };
+  const refusals = [
+    [ACCOUNT, 'own', xml(entities('account', 'contact'))],
+    [ACCOUNT, 'own', xml(entities('contact'))],
+    [ACCOUNT, 'own', post('PublishAllXml', '{}')],
+    [ACCOUNT, 'own', post('$batch', '--b\r\nPOST PublishXml\r\n\r\n{"ParameterXml":"<importexportxml><entities><entity>account</entity></entities></importexportxml>"}\r\n--b--')],
+    [ACCOUNT, 'own', post('PublishXml', 'not json')],
+    [ACCOUNT, 'own', xml(`${entities('account')}<appmodules><appmodule>{0a0a0a0a-0000-4000-8000-000000000001}</appmodule></appmodules>`)],
+    [ACCOUNT, 'own', xml(`${entities('account')}<dashboards><dashboard>${DASH}</dashboard></dashboards>`)],
+    [ACCOUNT, 'own', xml('')],
+    [dashScope(DASH), 'dash', xml(entities('account'))],
+    [dashScope(DASH), 'dash', xml(`<dashboards><dashboard>${DASH}</dashboard><dashboard>${DASH2}</dashboard></dashboards>`)],
+  ];
+  for (const [scope, token, req] of refusals) {
+    assert.deepEqual(await refusedFor(scope, token, req), { status: 409, events: ['refused'] }, `refused: ${req.url} ${req.body}`);
+  }
+  assert.equal(sent.length, 0, 'nothing of a refused request is sent');
+
+  // The permit's own scope, written as the SDK and the table publish write it, is sent once each.
+  const own = await refusedFor(ACCOUNT, 'own', xml(`<entities><entity> Account </entity></entities><nodes/>`));
+  assert.deepEqual(own, { status: 204, events: ['dispatch'] });
+  const dash = await refusedFor(dashScope(DASH), 'dash', xml(`<dashboards><dashboard>{${DASH.toUpperCase()}}</dashboard></dashboards>`));
+  assert.deepEqual(dash, { status: 204, events: ['dispatch'] });
+  assert.equal(sent.length, 2);
+
+  // Outside a permit nothing changes: with nothing withheld, a two-table publish goes as it came.
+  b.release('own');
+  b.release('dash');
+  const plain = xml(entities('account', 'contact'));
+  await gate(plain);
+  assert.equal(sent[2], plain);
+});
+
+test('a managed publish whose request names more than its own scope is refused unsent: the debt stays owed, nothing is blocked, and a correct publish pays it once', async () => {
+  const s = await setup();
+  committedForm(s, { id: MAIN, key: 'account/main', publishedXml: '<form v="1"/>', savedXml: '<form v="2"/>' });
+  s.wire.putForm(formRow(UNRELATED, '<form c="1"/>', 'contact'), { publishedToo: true });
+  s.wire.saved.get(UNRELATED).formxml = '<form c="2"/>';
+  const broad = publishManagedScope({
+    store: s.store, barrier: s.barrier, scope: ACCOUNT, groups: [MAIN_G], readLayers: readLayersOf(s.sdk),
+    publish: () => publishTablesXml(s.sdk.dataverse, ['account', 'contact']),
+  });
+  assert.equal(await codeOf(broad), 'managed-publication-refused');
+  assert.equal(s.wire.publishes().length, 0);
+  assert.equal(s.wire.published.get(UNRELATED).formxml, '<form c="1"/>');
+  const pub = s.store.readGroup('form', 'account/main').committed.publication;
+  assert.deepEqual([pub.state, pub.dispatchToken], ['owed', null], 'no token is used');
+  assert.equal(s.barrier.allowScope(ACCOUNT, 'after'), true, 'definitely unsent: released, not blocked');
+  assert.equal((await publishForms(s.sdk, s.store, s.barrier, [MAIN_G])).sent, true);
+  assert.equal(s.wire.publishes('account').length, 1);
+  assert.equal(s.wire.publishes('contact').length, 0);
 });
 
 test('a dashboard known only by its retained id, with no scope given, is quarantined when its creation record is not settled: no path publishes it', async () => {

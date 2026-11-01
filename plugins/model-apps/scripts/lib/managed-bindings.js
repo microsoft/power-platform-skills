@@ -772,15 +772,18 @@ function openManagedBindings({ workspaceDir, environment, appUniqueName, solutio
     /**
      * A fresh published read equals what was owed: end the debt without sending. `token` is the dispatch token the
      * debt carries (null for debt that was never sent, which becomes not-needed). `proof.publishedSha256` must equal
-     * the debt's desired hash when it has one.
+     * the debt's desired hash when it has one; a group may carry its own `publishedSha256`, which wins, so the groups
+     * of one send are confirmed in one atomic write.
      */
     confirmPublished({ groups, token = null, proof = {} }) {
       mutate((env) => {
-        for (const { family, key } of groups) {
+        for (const entry of groups) {
+          const { family, key } = entry;
+          const published = typeof entry.publishedSha256 === 'string' ? entry.publishedSha256 : proof.publishedSha256;
           const g = env.groups.find((x) => x.family === family && x.key === key);
           if (!g || !g.publication) throw storeError(CODES.notSettled, `the managed ${family} "${key}" has no publication`);
           if (g.publication.dispatchToken !== token) throw storeError(CODES.notSettled, `the managed ${family} "${key}" publication carries another dispatch token`);
-          if (g.publication.desiredSha256 && proof.publishedSha256 !== g.publication.desiredSha256) throw storeError(CODES.notSettled, `the managed ${family} "${key}" published layer does not equal what was owed`);
+          if (g.publication.desiredSha256 && published !== g.publication.desiredSha256) throw storeError(CODES.notSettled, `the managed ${family} "${key}" published layer does not equal what was owed`);
           if (g.publication.state === 'owed') g.publication.state = 'not-needed';
           else if (UNCERTAIN.has(g.publication.state)) g.publication.state = 'confirmed';
         }

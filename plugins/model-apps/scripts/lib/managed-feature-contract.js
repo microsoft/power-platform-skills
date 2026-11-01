@@ -22,10 +22,12 @@
 // Nothing calls this module until a declared form, dashboard, rule or process flow is wired to it.
 
 const { runWithWorkflowEffect } = require('./workflow-effect-context.js');
-const { CODES } = require('./managed-bindings.js');
+const { CODES, classifyPersisted } = require('./managed-bindings.js');
 
 const PUBLICATION_UNVERIFIED = 'managed-publication-unverified';
 const PUBLICATION_UNCONFIRMED = 'managed-publication-unconfirmed';
+// A managed publish whose request named other publish targets than its one scope: refused unsent, debt still owed.
+const PUBLICATION_REFUSED = 'managed-publication-refused';
 const CREATION_RECORD_UNSETTLED = 'dashboard-creation-record-unsettled';
 
 function codedError(code, message, extra) {
@@ -179,22 +181,65 @@ async function withWorkflowEffect({ store, effect }, fn) {
   return runWithWorkflowEffect(record, () => fn(record));
 }
 
+// A publication scope as one comparable key — `table:<logical name>` or `dashboard:<id>`, lowercased and without
+// braces, as the barrier normalises the names it screens in a ParameterXml — or '' for anything else.
+function scopeId(s) {
+  if (!s || typeof s !== 'object') return '';
+  if (s.type === 'dashboard') return typeof s.id === 'string' && s.id.trim() ? `dashboard:${s.id.trim().replace(/^\{|\}$/g, '').toLowerCase()}` : '';
+  return s.type === 'table' && typeof s.table === 'string' && s.table.trim() ? `table:${s.table.trim().toLowerCase()}` : '';
+}
+
+/**
+ * What a publish of `scope` puts live, as far as the store knows: a table publish ships the saved layer of EVERY form
+ * of the table, and a dashboard publish the dashboard's, so the set is taken from the store, not from the caller —
+ * a caller cannot leave a sibling out. Every unit whose scopes (classifyPersisted: the committed publication's scope,
+ * a pending attempt's known scopes) include `scope`:
+ *   groups     the committed groups published in `scope`, whose saved layers a send must show safe;
+ *   corrupt    a group that failed validation; uncertain: a publish or workflow effect that may have been sent;
+ *   pending    an attempt that is not yet proved and committed.
+ */
+function coverageOf(store, scope) {
+  if (typeof store.snapshot !== 'function') throw codedError(CODES.notSettled, 'publishManagedScope needs the store\'s snapshot to see every group of the scope');
+  const want = scopeId(scope);
+  const out = { groups: [], corrupt: [], uncertain: [], pending: [] };
+  for (const unit of store.snapshot().units()) {
+    const c = classifyPersisted(unit);
+    if (!c.targets.scopes.some((s) => scopeId(s) === want)) continue;
+    const ref = { family: unit.family, key: unit.key };
+    if (c.kind === 'corrupt') { out.corrupt.push(ref); continue; }
+    if (c.kind === 'uncertain') out.uncertain.push(ref);
+    if (c.kind === 'hold') out.pending.push(ref);
+    if (unit.group && unit.group.publication && scopeId(unit.group.publication.scope) === want) out.groups.push({ ...ref, group: unit.group });
+  }
+  return out;
+}
+
 /**
  * Pay the owed publication of committed `groups` ([{ family, key }]) that share `scope`, at most once:
  *   - a group that owes nothing is skipped; an uncertain one (dispatching/unconfirmed) is never published again:
- *     `managed-publication-unconfirmed`; a pending attempt: `managed-settlement-pending`;
- *   - `readLayers(group)` answers { savedSha256, publishedSha256 } from a fresh read of both layers, each hashed the way
- *     the group's `publication.desiredSha256` was; a failed read, or one without both hashes, is
- *     `managed-publication-unverified`. Debt whose published layer already equals what is owed ends without a send;
- *   - a publish ships the SAVED layer, so a group still owed is published only while its saved layer is what is owed:
- *     a saved layer that has drifted (or debt that names no desired hash) is `create-completion-required`, and the scope
- *     is blocked for the run, before anything is sent;
+ *     `managed-publication-unconfirmed`; a pending attempt: `managed-settlement-pending`; a group published in another
+ *     scope: `managed-not-settled`. `groups` is the debt this call dispatches and confirms, nothing more;
+ *   - what the publish would put live is every committed group of `scope` in the store (coverageOf), passed or not.
+ *     A corrupt or uncertain one blocks the scope for the run and stops (`managed-binding-group-invalid` /
+ *     `managed-publication-unconfirmed`); a pending attempt on the scope withholds the publish, debt still owed;
+ *   - `readLayers(group)` answers { savedSha256, publishedSha256 } from a fresh read of both layers of one covered
+ *     group, each hashed the way its `publication.desiredSha256` was. A read that fails or lacks a hash, before
+ *     anything is sent, is `managed-publication-unverified` and blocks the scope for the run: what is saved on it is
+ *     not shown safe. Debt whose published layer already equals what is owed ends without a send;
+ *   - a publish ships the SAVED layer of every covered group, so it is sent only while each of them is safe to put
+ *     live: a group that owes a publish must have exactly its owed layer saved (debt that names no desired hash never
+ *     is), and any other group a saved layer equal to its published one or to its desired hash. Otherwise
+ *     `create-completion-required`, and the scope is blocked for the run, before anything is sent;
  *   - a scope the barrier withholds is not sent and its debt stays owed;
  *   - otherwise the scope is held under a fresh token, and `publish()` runs under the barrier's send permit for that
- *     token: the covered groups are marked dispatching at the moment the one publish request is sent (a request the
- *     barrier withholds leaves the debt owed and consumes nothing), and a fresh read confirms it. A send whose outcome
- *     is not proved stays unconfirmed — `managed-publication-unconfirmed` — and its scope is blocked for the rest of
- *     the run, so no sibling path publishes over it; a sibling's success never clears that block.
+ *     token: the debt is marked dispatching at the moment the one publish request is sent, and a fresh read confirms
+ *     it in one store write. A request the barrier withholds leaves the debt owed and consumes nothing; one whose
+ *     publish targets are not exactly `scope` is refused unsent (`managed-publication-refused`), debt owed.
+ *   - after a send, the scope stays blocked for the rest of the run unless its whole settlement is durably written:
+ *     every covered group's debt confirmed, or the send recorded definitely not started. A send whose outcome is not
+ *     proved is `managed-publication-unconfirmed`; a store write that fails after the send rethrows its own error.
+ *     The block is set in memory, so it never depends on a store write succeeding, and a sibling's success never
+ *     clears it.
  * `publish()` may throw an error with `definiteNoStart: true` only when the request is known not to have started.
  * Answers { sent, withheld, confirmed: [{ family, key }] }.
  */
@@ -204,6 +249,8 @@ async function publishManagedScope({ store, barrier, scope, groups, readLayers, 
   for (const op of ['allowScope', 'blockScope', 'hold', 'release', 'withSendPermit']) {
     if (typeof gate[op] !== 'function') throw codedError(CODES.notSettled, `publishManagedScope needs the publication barrier (${op})`);
   }
+  const want = scopeId(scope);
+  if (!want) throw codedError(CODES.notSettled, 'publishManagedScope needs the table or dashboard scope it publishes');
   const owed = [];
   for (const { family, key } of groups || []) {
     const { committed, pending } = store.readGroup(family, key);
@@ -211,10 +258,24 @@ async function publishManagedScope({ store, barrier, scope, groups, readLayers, 
     const pub = committed && committed.publication;
     if (!pub || pub.state === 'not-needed' || pub.state === 'confirmed') continue;
     if (pub.state !== 'owed' || pub.dispatchToken !== null) throw codedError(PUBLICATION_UNCONFIRMED, `the publish of managed ${family} "${key}" may have been sent and is not confirmed; it is not sent again`);
-    owed.push({ family, key, group: committed });
+    if (scopeId(pub.scope) !== want) throw codedError(CODES.notSettled, `the managed ${family} "${key}" is published in another scope`);
+    owed.push({ family, key });
   }
   if (!owed.length) return { sent: false, withheld: false, confirmed: [] };
   const names = (list) => list.map((g) => `managed ${g.family} "${g.key}"`).join(', ');
+  const isDebt = (o) => owed.some((d) => d.family === o.family && d.key === o.key);
+
+  const cover = coverageOf(store, scope);
+  if (cover.corrupt.length) {
+    gate.blockScope(scope, `${names(cover.corrupt)} (its stored group is not usable)`);
+    throw codedError(CODES.groupInvalid, `${names(cover.corrupt)} shares the publish of this scope and its stored group is not usable; nothing was published`);
+  }
+  if (cover.uncertain.length) {
+    gate.blockScope(scope, `${names(cover.uncertain)} (its publish or workflow effect may have been sent and is not confirmed)`);
+    throw codedError(PUBLICATION_UNCONFIRMED, `${names(cover.uncertain)} shares the publish of this scope and may have been sent unconfirmed; nothing was published`);
+  }
+  // A change is being made on the scope (its attempt holds it on the barrier, or will when this run reaches it).
+  if (cover.pending.length) return { sent: false, withheld: true, confirmed: [] };
 
   const readAll = async (list) => {
     const out = [];
@@ -225,23 +286,34 @@ async function publishManagedScope({ store, barrier, scope, groups, readLayers, 
       }
       if (!read || typeof read.publishedSha256 !== 'string' || typeof read.savedSha256 !== 'string') throw codedError(PUBLICATION_UNVERIFIED, `the layers of managed ${o.family} "${o.key}" answered no proof`);
       const desired = o.group.publication.desiredSha256;
-      out.push({ ...o, publishedSha256: read.publishedSha256, equal: read.publishedSha256 === desired, savedEqual: typeof desired === 'string' && read.savedSha256 === desired });
+      const savedEqual = typeof desired === 'string' && read.savedSha256 === desired;
+      // Owed debt ships only its own saved layer. Anything else may stay as it is live, or be what it last desired.
+      const safe = o.group.publication.state === 'owed' ? savedEqual : savedEqual || read.savedSha256 === read.publishedSha256;
+      out.push({ ...o, publishedSha256: read.publishedSha256, equal: read.publishedSha256 === desired, safe });
     }
     return out;
   };
 
-  const before = await readAll(owed);
-  const already = before.filter((o) => o.equal);
-  for (const o of already) store.confirmPublished({ groups: [{ family: o.family, key: o.key }], token: null, proof: { publishedSha256: o.publishedSha256 } });
+  let before;
+  try {
+    before = await readAll(cover.groups);
+  } catch (e) {
+    // Nothing is sent, but what is saved on the scope is not shown safe: no sibling may publish it either.
+    gate.blockScope(scope, `${names(cover.groups)} (its layers could not be read before the publish)`);
+    throw e;
+  }
+  const debt = before.filter(isDebt);
+  const already = debt.filter((o) => o.equal);
+  if (already.length) store.confirmPublished({ groups: already.map((o) => ({ family: o.family, key: o.key, publishedSha256: o.publishedSha256 })), token: null });
   const confirmedSoFar = () => already.map(({ family, key }) => ({ family, key }));
-  const due = before.filter((o) => !o.equal);
+  const due = debt.filter((o) => !o.equal);
   if (!due.length) return { sent: false, withheld: false, confirmed: confirmedSoFar() };
-  const drifted = due.filter((o) => !o.savedEqual);
+  const drifted = before.filter((o) => !o.safe);
   if (drifted.length) {
-    // The saved layer is not what this debt owes: publishing it would put someone else's change live. Nothing is sent,
-    // the debt stays owed, and the scope is withheld for the run, because what is saved on it is not shown safe.
-    gate.blockScope(scope, `${names(drifted)} (its saved layer is not the one it owes the publish of)`);
-    throw codedError(CODES.completion, `${names(drifted)} owes the publish of a saved layer that is no longer saved; it was not published`);
+    // A saved layer on the scope is not one the store proved: publishing would put someone else's change live.
+    // Nothing is sent, the debt stays owed, and the scope is withheld for the run.
+    gate.blockScope(scope, `${names(drifted)} (its saved layer is not the one the store proved)`);
+    throw codedError(CODES.completion, `${names(drifted)} has a saved layer that is not the one its managed group proved; the publish of its ${want.replace(':', ' ')} was not sent`);
   }
   if (!gate.allowScope(scope, path)) return { sent: false, withheld: true, confirmed: confirmedSoFar() };
 
@@ -250,8 +322,12 @@ async function publishManagedScope({ store, barrier, scope, groups, readLayers, 
   const label = names(covered);
   let dispatched = false;
   let withheld = false;
+  let refused = false;
   let failure = null;
-  gate.hold(token, [scope], due.map((o) => o.group.root.id), `${label} (its publish is being sent)`);
+  // True only once the send's whole settlement is durably written: every debt confirmed, or the send recorded as
+  // definitely not started. Until then a dispatched send leaves the scope blocked (see `finally`).
+  let settled = false;
+  gate.hold(token, [scope], cover.groups.map((o) => o.group.root.id), `${label} (its publish is being sent)`);
   try {
     try {
       await gate.withSendPermit({
@@ -260,12 +336,14 @@ async function publishManagedScope({ store, barrier, scope, groups, readLayers, 
         // Durable at the send, after the barrier's last check: a failure to record it means the publish is not sent.
         onDispatch: () => { store.markPublishDispatch({ groups: covered, scope, token }); dispatched = true; },
         onWithheld: () => { withheld = true; },
+        onRefused: () => { refused = true; },
       }, publish);
     } catch (e) {
       failure = e;
     }
     if (!dispatched) {
       if (withheld) return { sent: false, withheld: true, confirmed: confirmedSoFar() };
+      if (refused) throw codedError(PUBLICATION_REFUSED, `the publish of ${label} named other publish targets than its ${want.replace(':', ' ')}; it was not sent`, failure ? { cause: failure } : undefined);
       if (failure) throw failure;
       // `publish()` finished without its request passing the permit: it was sent some other way, or not at all, and
       // nothing can show which. Fail closed, as for a lost answer.
@@ -277,9 +355,9 @@ async function publishManagedScope({ store, barrier, scope, groups, readLayers, 
     if (failure) {
       if (failure.definiteNoStart === true) {
         store.notePublishOutcome({ token, outcome: 'definite-no-start' });
+        settled = true;
         throw codedError(failure.code || CODES.notSettled, `the publish of ${label} did not start`, { cause: failure });
       }
-      // Blocked before the outcome is written: if that write fails, the scope is withheld all the same.
       gate.blockScope(scope, `${label} (its publish may have been sent and is not confirmed)`);
       store.notePublishOutcome({ token, outcome: 'unconfirmed' });
       throw codedError(PUBLICATION_UNCONFIRMED, `the publish of ${label} failed`, { cause: failure });
@@ -299,16 +377,22 @@ async function publishManagedScope({ store, barrier, scope, groups, readLayers, 
       store.notePublishOutcome({ token, outcome: 'unconfirmed' });
       throw codedError(PUBLICATION_UNCONFIRMED, 'the publish was sent and the published layer does not show what was owed');
     }
-    for (const o of after) store.confirmPublished({ groups: [{ family: o.family, key: o.key }], token, proof: { publishedSha256: o.publishedSha256 } });
+    // One atomic write confirms every debt of the send, so no run can see some of them confirmed and not the rest.
+    store.confirmPublished({ groups: after.map((o) => ({ family: o.family, key: o.key, publishedSha256: o.publishedSha256 })), token });
+    settled = true;
     return { sent: true, withheld: false, confirmed: [...already, ...after].map(({ family, key }) => ({ family, key })) };
   } finally {
-    // Only this publication's own hold ends; a block set above stays for the run.
+    // Fail closed after a send: whatever threw — a confirmation, an outcome write, a read — the scope stays blocked for
+    // the run unless the settlement above was written whole. The block is in memory, so it cannot fail the way the
+    // store write did. Then only this publication's own hold ends; every block stays for the run.
+    if (dispatched && !settled) gate.blockScope(scope, `${label} (its publish was sent and its outcome is not recorded)`);
     gate.release(token);
   }
 }
 module.exports = {
   PUBLICATION_UNVERIFIED,
   PUBLICATION_UNCONFIRMED,
+  PUBLICATION_REFUSED,
   CREATION_RECORD_UNSETTLED,
   runManagedFeature,
   withWorkflowEffect,

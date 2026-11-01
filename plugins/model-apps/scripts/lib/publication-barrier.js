@@ -40,10 +40,12 @@
 //                     and committed. Only that token is released: a sibling's success never frees a scope another attempt holds.
 //   quarantine        a block for the rest of the run, set by a required failure; nothing releases it.
 //   registerKnown     maps a managed artifact's ids to the scopes they publish. It is not a block.
-//   send permits      `withSendPermit({ token, scope, onDispatch, onWithheld }, fn)` lets the one publish request of a
-//                     managed publication through `token`'s own hold, and through nothing else: inside `fn`, a publish
+//   send permits      `withSendPermit({ token, scope, onDispatch, onWithheld, onRefused }, fn)` lets the one publish request of
+//                     a managed publication through `token`'s own hold, and through nothing else: inside `fn`, a publish
 //                     request is screened as if that hold were absent (every block and every other hold still applies).
-//                     If the permit's own scope is withheld, nothing is sent and `onWithheld()` is told; otherwise
+//                     A request whose complete publish target set is not exactly `scope` (a publish of everything, of
+//                     another or one more scope, a change set, an unreadable body) is refused unsent and `onRefused()`
+//                     is told. If the permit's own scope is withheld, nothing is sent and `onWithheld()` is told; otherwise
 //                     `onDispatch()` runs synchronously at the send, so the dispatch is recorded where it happens (a throw
 //                     there sends nothing), and a second publish request under the same permit is not sent. A publish
 //                     outside the permit stays withheld by the hold, so a sibling cannot overlap the managed send.
@@ -111,6 +113,16 @@ function withheldAnswer(nothingLeft, message) {
     statusCode: 409,
     headers: { 'content-type': 'application/json; charset=utf-8' },
     body: JSON.stringify({ error: { code: 'publication-withheld', message } }),
+  };
+}
+
+// What a send permit answers a publish request it refuses because the request does not publish exactly the permit's
+// scope: a final status (409, lib/retry-policy.js), so the client does not send it again.
+function refusedAnswer(message) {
+  return {
+    statusCode: 409,
+    headers: { 'content-type': 'application/json; charset=utf-8' },
+    body: JSON.stringify({ error: { code: 'publication-refused', message } }),
   };
 }
 
@@ -355,13 +367,14 @@ function createPublicationBarrier() {
      * Run `fn` with a send permit for one managed publication (see the header): `token` is the hold the publication
      * placed on `scope` ({ type: 'table', table } / { type: 'dashboard', id }); `onDispatch()` is called synchronously
      * just before the one publish request is sent, and may throw to stop it; `onWithheld()` when the request is not
-     * sent because the scope is withheld by something else. Answers what `fn` answers.
+     * sent because the scope is withheld by something else; `onRefused()` when a request is refused unsent because its
+     * publish targets are not exactly `scope`. Answers what `fn` answers.
      */
-    withSendPermit({ token, scope, onDispatch, onWithheld } = {}, fn) {
+    withSendPermit({ token, scope, onDispatch, onWithheld, onRefused } = {}, fn) {
       if (!token || !scope || typeof onDispatch !== 'function' || typeof fn !== 'function') throw new TypeError('withSendPermit: a token, a scope, onDispatch and the publish to run are required');
       const own = scope.type === 'dashboard' ? (dashboardKey(scope.id) && `dashboard ${dashboardKey(scope.id)}`) : tableKey(scope.table);
       if (!own) throw new TypeError('withSendPermit: the scope names no table or dashboard');
-      return permits.run({ barrier, token, own, onDispatch, onWithheld, dispatched: false }, fn);
+      return permits.run({ barrier, token, own, onDispatch, onWithheld, onRefused, dispatched: false, refused: false }, fn);
     },
     /**
      * May the build write or publish the app? `added`: the tables whose Main forms this write adds;
@@ -421,10 +434,20 @@ function createPublicationBarrier() {
   }
 
   // A publish request inside a send permit: screened past the permit's own hold only, sent at most once, with the
-  // dispatch recorded by `onDispatch` at the moment it is sent. A request that would not publish the permit's own
-  // scope (something else withholds it) is not sent at all — not even the rest of it — so the publication is either
-  // sent whole or recorded withheld, never half of each.
+  // dispatch recorded by `onDispatch` at the moment it is sent. Before anything else, its complete publish target set
+  // must be exactly the permit's one scope (permitTargets): a publish of everything, of another scope, of the scope plus
+  // anything more, or a request whose targets cannot be read is refused unsent — `onRefused()` is told, `onDispatch`
+  // never runs, and every later publish request under the permit is refused too. A request that would not publish the
+  // permit's own scope (something else withholds it) is not sent at all — not even the rest of it — so the publication
+  // is either sent whole or recorded withheld, never half of each.
   function permitted(permit, req, request) {
+    if (permit.dispatched) return Promise.resolve(withheldAnswer(false, `a second publish request of the managed publication of ${permit.own} was not sent: it is sent once`));
+    const targets = permit.refused ? null : permitTargets(req);
+    if (!targets || targets.length !== 1 || targets[0] !== permit.own) {
+      if (!permit.refused && typeof permit.onRefused === 'function') permit.onRefused();
+      permit.refused = true;
+      return Promise.resolve(refusedAnswer(`a publish request under the managed publication of ${permit.own} was not sent: it ${targets ? `names ${targets.length ? targets.join(', ') : 'nothing'}` : 'cannot be shown to publish only that scope'}`));
+    }
     let screened;
     exceptToken = permit.token;
     try {
@@ -433,10 +456,9 @@ function createPublicationBarrier() {
       exceptToken = null;
     }
     if (screened.answer || (screened.hit || []).includes(permit.own)) {
-      if (!permit.dispatched && typeof permit.onWithheld === 'function') permit.onWithheld();
+      if (typeof permit.onWithheld === 'function') permit.onWithheld();
       return Promise.resolve(screened.answer || withheldAnswer(false, `the managed publish of ${permit.own} was not sent: it is withheld in this run`));
     }
-    if (permit.dispatched) return Promise.resolve(withheldAnswer(false, `a second publish request of the managed publication of ${permit.own} was not sent: it is sent once`));
     try {
       permit.onDispatch();
     } catch (e) {
@@ -444,6 +466,36 @@ function createPublicationBarrier() {
     }
     permit.dispatched = true;
     return request(screened.req);
+  }
+
+  // The complete publish target set of one request, in the names a permit's own scope is written in (`account`,
+  // `dashboard <id>`), or null when it cannot be read whole. Only a PublishXml whose ParameterXml holds nothing but
+  // `entities`/`dashboards` lists (and elements left empty, e.g. `<nodes/>`) is read:
+  //   <importexportxml><entities><entity>account</entity></entities><nodes/></importexportxml>        -> ['account']
+  //   <importexportxml><dashboards><dashboard>{5555…}</dashboard></dashboards></importexportxml>       -> ['dashboard 5555…']
+  // A PublishAllXml publishes everything, a $batch is a change set of parts, and any other element (an `appmodules`
+  // list, a web resource) publishes something that is not a table or dashboard: all null.
+  function permitTargets(req) {
+    if (!PUBLISH_XML.test(pathnameOf(req && req.url))) return null;
+    let payload = null;
+    try {
+      payload = JSON.parse(bodyText(req.body));
+    } catch {
+      return null;
+    }
+    if (!payload || typeof payload.ParameterXml !== 'string') return null;
+    const targets = [];
+    const add = (name) => { if (!targets.includes(name)) targets.push(name); };
+    let unreadable = false;
+    let rest = payload.ParameterXml
+      .replace(ENTITY_ELEMENT, (whole, name) => { const t = tableKey(name); if (t) add(t); else unreadable = true; return ''; })
+      .replace(DASHBOARD_ELEMENT, (whole, id) => { const d = dashboardKey(id); if (d) add(`dashboard ${d}`); else unreadable = true; return ''; })
+      .replace(/<\/?(?:importexportxml|entities|dashboards)\s*>/gi, '');
+    for (let before = null; before !== rest;) {
+      before = rest;
+      rest = rest.replace(EMPTY_ELEMENT, '');
+    }
+    return unreadable || rest.trim() ? null : targets;
   }
 
   // The synchronous check of one request at dispatch (gateRequest). Returns { req } to send (the same
