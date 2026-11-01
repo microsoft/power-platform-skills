@@ -214,12 +214,75 @@ test('a configuration row the build cannot record as managed, and a child the so
   assert.ok(!out.thrown.message.includes('store unavailable'), 'the recorder\u2019s own text is not quoted');
 
   // An add the platform answers without making the condition a member is no proof of membership.
-  const silent = await harness({ intercept: ({ method, path: p, body }) => (method === 'POST' && p === '/AddSolutionComponent' && body && body.ComponentType === 45
+  const silent = await harness({ intercept: ({ method, path: p, body }) => (method === 'POST' && p === '/AddSolutionComponent' && body && body.ComponentType === 4416
     ? { statusCode: 200, body: { id: '00000000-0000-0000-0000-000000000045' } } : undefined) });
   const unproven = await build(silent, spec, { opts: { configurationBindings: bindingsFor(spec) } });
   assert.ok(unproven.thrown, 'the build halted');
   assert.equal(unproven.thrown.code, 'configuration-incomplete');
   assert.match(unproven.thrown.message, /duplicateRuleCondition email\|e \(SOLUTION_MEMBERSHIP_UNKNOWN\)/);
+});
+
+// A current environment refuses the documented duplicate-rule types: AddSolutionComponent with 45 answers
+//   400 {"error":{"code":"0x80040216","message":"Invalid component type provided 45"}}
+// and the solution lists the rule and its condition under the duplicaterule and duplicaterulecondition tables' ObjectTypeCodes (the
+// fake answers 4414 and 4416). The build reads those types and settles both; a type it cannot read is never guessed.
+const RULE_ONLY = () => ({ ...makeSpec({ configuration: false }), duplicateDetectionRules: CONFIGURATION_FIELDS.duplicateDetectionRules });
+const adds = (requests) => requests.filter((r) => r.method === 'POST' && r.path === '/AddSolutionComponent').map((r) => r.body.ComponentType);
+const membershipKeys = (h) => new Set(h.org.rows('solutioncomponents').map((m) => `${m.componenttype}:${m.objectid}`));
+
+test('a duplicate rule and its condition settle in the build solution under the types the platform lists, never under 44 or 45', async () => {
+  const h = await harness();
+  const first = await build(h, RULE_ONLY());
+  if (first.thrown) throw first.thrown;
+  assert.equal(first.r.ok, true, JSON.stringify(first.r.errors));
+  assert.deepEqual(h.org.unexpected, []);
+  const read = first.requests.filter((r) => r.method === 'GET' && /^\/EntityDefinitions\(LogicalName='duplicaterule/.test(String(r.path))).map((r) => String(r.path));
+  assert.deepEqual(read, ["/EntityDefinitions(LogicalName='duplicaterulecondition')?$select=ObjectTypeCode", "/EntityDefinitions(LogicalName='duplicaterule')?$select=ObjectTypeCode"]);
+  // The rule rides in on its create header; the condition the compound create left out is added under its table's type.
+  assert.deepEqual(adds(first.requests), [4416]);
+  const members = membershipKeys(h);
+  assert.ok(members.has(`4414:${h.org.rows('duplicaterules')[0].duplicateruleid}`));
+  assert.ok(members.has(`4416:${h.org.rows('duplicateruleconditions')[0].duplicateruleconditionid}`));
+  const again = await build(h, RULE_ONLY());
+  if (again.thrown) throw again.thrown;
+  assert.equal(again.r.ok, true, JSON.stringify(again.r.errors));
+  assert.deepEqual(again.writes, [], 'an unchanged rerun writes nothing');
+
+  // A solution that still lists them under the classic types holds the same components (the SDK's own solution reader folds 44 and
+  // 45 so): proof, and no add.
+  for (const row of h.org.sets.get('solutioncomponents').values()) {
+    if (row.componenttype === 4414) row.componenttype = 44;
+    if (row.componenttype === 4416) row.componenttype = 45;
+  }
+  const classic = await build(h, RULE_ONLY());
+  if (classic.thrown) throw classic.thrown;
+  assert.equal(classic.r.ok, true, JSON.stringify(classic.r.errors));
+  assert.deepEqual(classic.writes, []);
+  assert.deepEqual(h.org.unexpected, []);
+});
+
+test('a duplicate-rule component type the build cannot read is never guessed: the item is unknown and nothing is added for it', async () => {
+  const unreadable = await harness({ intercept: ({ method, path: p }) => (method === 'GET' && p.startsWith("/EntityDefinitions(LogicalName='duplicaterulecondition')")
+    ? { statusCode: 500, body: { error: { code: '0x80040216', message: 'unavailable' } } } : undefined) });
+  const out = await build(unreadable, RULE_ONLY());
+  assert.ok(out.thrown, 'the build halted');
+  assert.equal(out.thrown.code, 'configuration-incomplete');
+  assert.match(out.thrown.message, /duplicateRuleCondition email\|e \(SOLUTION_COMPONENT_TYPE_UNREADABLE\)/);
+  assert.deepEqual(adds(out.requests), []);
+});
+
+test('the other configuration kinds keep their component types and read no duplicate-rule metadata', async () => {
+  const h = await harness();
+  const spec = makeSpec();
+  delete spec.duplicateDetectionRules;
+  const out = await build(h, spec, { opts: { configurationBindings: bindingsFor(spec) } });
+  if (out.thrown) throw out.thrown;
+  assert.equal(out.r.ok, true, JSON.stringify(out.r.errors));
+  assert.ok(!out.requests.some((r) => /duplicaterule/i.test(String(r.path))), 'no duplicate-rule request');
+  assert.deepEqual(adds(out.requests).sort((a, b) => a - b), [10134, 10135]);
+  const types = [...membershipKeys(h)].map((k) => Number(k.split(':')[0])).sort((a, b) => a - b);
+  assert.deepEqual(types, [380, 380, 10132, 10133, 10134, 10135]);
+  assert.deepEqual(h.org.unexpected, []);
 });
 
 test('a spec without the configuration fields sends no configuration request and its result has no configuration entry', async () => {

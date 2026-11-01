@@ -141,6 +141,7 @@ function createConfigOrg(options = {}) {
   // `solution` and `solutioncomponent` are here for their EntitySetName, which the SDK's queryRecords reads first.
   for (const [logicalName, objectTypeCode, entitySetName] of [['connectionreference', 10132, 'connectionreferences'], ['customapi', 10133, 'customapis'],
     ['customapirequestparameter', 10134, 'customapirequestparameters'], ['customapiresponseproperty', 10135, 'customapiresponseproperties'],
+    ['duplicaterule', 4414, 'duplicaterules'], ['duplicaterulecondition', 4416, 'duplicateruleconditions'],
     ['solution', 7100, 'solutions'], ['solutioncomponent', 7103, 'solutioncomponents']]) {
     if (!tables.has(logicalName)) tables.set(logicalName, { logicalName, duplicateDetectionEnabled: false, attributes: [], objectTypeCode, entitySetName });
   }
@@ -376,15 +377,16 @@ function createConfigOrg(options = {}) {
     environmentvariabledefinitions: () => 380,
     connectionreferences: () => tables.get('connectionreference').objectTypeCode,
     customapis: () => tables.get('customapi').objectTypeCode,
-    // A duplicate rule is a solution component of its own type (44); its conditions (45) ride with it.
-    duplicaterules: () => 44,
+    // A duplicate rule is a table row too: a current environment lists it under the duplicaterule table's ObjectTypeCode, not the
+    // documented 44.
+    duplicaterules: () => tables.get('duplicaterule').objectTypeCode,
   };
-  // A child row's type: a Custom API parameter or property is a table row (its table's ObjectTypeCode); a rule
-  // condition has a type of its own (45). An environment variable VALUE is deliberately absent: it is never a member.
+  // A child row's type: a Custom API parameter or property, or a rule condition, is a table row (its table's ObjectTypeCode; for a
+  // condition not the documented 45). An environment variable VALUE is deliberately absent: it is never a member.
   const CHILD_COMPONENT_TYPES = {
     customapirequestparameters: () => tables.get('customapirequestparameter').objectTypeCode,
     customapiresponseproperties: () => tables.get('customapiresponseproperty').objectTypeCode,
-    duplicateruleconditions: () => 45,
+    duplicateruleconditions: () => tables.get('duplicaterulecondition').objectTypeCode,
   };
   const solutionByName = (name) => [...sets.get('solutions').values()].find((s) => lc(s.uniquename) === lc(name));
   function addMember(solution, objectId, componentType) {
@@ -411,12 +413,15 @@ function createConfigOrg(options = {}) {
     }
   }
   // `AddSolutionComponent`: { ComponentId, ComponentType, SolutionUniqueName, AddRequiredComponents } -> { id }. A component already in
-  // the solution is answered as success, as the platform does.
+  // the solution is answered as success, as the platform does. The classic duplicate-rule condition type is refused as a current
+  // environment refuses it (nothing is added):
+  //   400 {"error":{"code":"0x80040216","message":"Invalid component type provided 45"}}
   // See: https://learn.microsoft.com/en-us/power-apps/developer/data-platform/webapi/reference/addsolutioncomponent
   function addSolutionComponent(body) {
     const solution = solutionByName(body && body.SolutionUniqueName);
     if (!solution) return failure(404, '0x8004f01d', 'The solution does not exist');
     if (!body.ComponentId || !Number.isInteger(body.ComponentType)) throw new Unmodelled('an AddSolutionComponent without a component');
+    if (body.ComponentType === 45) return failure(400, '0x80040216', `Invalid component type provided ${body.ComponentType}`);
     const row = addMember(solution, body.ComponentId, body.ComponentType);
     return json(200, { id: row.solutioncomponentid });
   }

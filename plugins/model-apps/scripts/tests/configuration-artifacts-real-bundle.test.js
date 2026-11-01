@@ -699,8 +699,8 @@ test('a reused root, a duplicate rule included, is put into the build solution, 
   assert.ok(members.has(`380:${h.org.rows('environmentvariabledefinitions')[0].environmentvariabledefinitionid}`));
   assert.ok(members.has(`10132:${h.org.rows('connectionreferences')[0].connectionreferenceid}`));
   assert.ok(members.has(`10133:${h.org.rows('customapis')[0].customapiid}`));
-  assert.ok(members.has(`44:${h.org.rows('duplicaterules')[0].duplicateruleid}`));
-  assert.ok(members.has(`45:${h.org.rows('duplicateruleconditions')[0].duplicateruleconditionid}`));
+  assert.ok(members.has(`4414:${h.org.rows('duplicaterules')[0].duplicateruleid}`));
+  assert.ok(members.has(`4416:${h.org.rows('duplicateruleconditions')[0].duplicateruleconditionid}`));
   // Once in, a rebuild reads the membership and sends nothing.
   assert.deepEqual((await h.run(s, { solutionUniqueName: 'ContosoSol', creates: undefined })).writes, []);
   assert.deepEqual(h.org.unexpected, []);
@@ -715,11 +715,11 @@ test('a Custom API\'s parameters and a rule\'s conditions are proven solution me
     assert.deepEqual(first.result.refused, [], String(childrenJoin));
     assert.deepEqual(first.result.unknown, [], String(childrenJoin));
     // The roots ride in on their create header; each child the create left out is added, and none that it put in.
-    assert.deepEqual(adds(first.requests), childrenJoin ? [] : [45, 10134, 10134, 10135]);
+    assert.deepEqual(adds(first.requests), childrenJoin ? [] : [4416, 10134, 10134, 10135]);
     const members = new Set(h.org.rows('solutioncomponents').map((m) => `${m.componenttype}:${m.objectid}`));
     for (const p of h.org.rows('customapirequestparameters')) assert.ok(members.has(`10134:${p.customapirequestparameterid}`), p.uniquename);
     for (const p of h.org.rows('customapiresponseproperties')) assert.ok(members.has(`10135:${p.customapiresponsepropertyid}`), p.uniquename);
-    for (const c of h.org.rows('duplicateruleconditions')) assert.ok(members.has(`45:${c.duplicateruleconditionid}`));
+    for (const c of h.org.rows('duplicateruleconditions')) assert.ok(members.has(`4416:${c.duplicateruleconditionid}`));
     // A value is this environment's data: never a member, under any type.
     const value = h.org.rows('environmentvariablevalues')[0].environmentvariablevalueid;
     assert.ok(!h.org.rows('solutioncomponents').some((m) => m.componenttype === 381 || m.objectid === value));
@@ -729,12 +729,12 @@ test('a Custom API\'s parameters and a rule\'s conditions are proven solution me
     assert.deepEqual(h.org.unexpected, []);
   }
   // A condition the platform refuses to add is not a member: that line is refused, and nothing else claims it.
-  const refusing = await harness({ intercept: ({ method, path, body }) => (method === 'POST' && path === '/AddSolutionComponent' && body && body.ComponentType === 45
+  const refusing = await harness({ intercept: ({ method, path, body }) => (method === 'POST' && path === '/AddSolutionComponent' && body && body.ComponentType === 4416
     ? { statusCode: 400, body: { error: { code: '0x80040203', message: 'Invalid component' } } } : undefined) });
   const refused = await refusing.run(spec(), { bindings, solutionUniqueName: 'ContosoSol' });
   assert.deepEqual([...refused.result.refused, ...refused.result.unknown].map((x) => [x.kind, x.key, x.unit]), [['duplicateRuleCondition', 'email|e', 'membership']]);
   // An add the platform answers and does not make is no proof: the fresh read finds the condition missing.
-  const silent = await harness({ intercept: ({ method, path, body }) => (method === 'POST' && path === '/AddSolutionComponent' && body && body.ComponentType === 45
+  const silent = await harness({ intercept: ({ method, path, body }) => (method === 'POST' && path === '/AddSolutionComponent' && body && body.ComponentType === 4416
     ? { statusCode: 200, body: { id: '00000000-0000-0000-0000-000000000045' } } : undefined) });
   const unproven = await silent.run(spec(), { bindings, solutionUniqueName: 'ContosoSol' });
   const condition = silent.org.rows('duplicateruleconditions')[0].duplicateruleconditionid;

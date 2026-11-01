@@ -1992,20 +1992,32 @@ async function applyUpdate(op, ctx, result, known) {
   });
 }
 
-// Dataverse solution component types. An environment variable definition has a fixed type (380) and a duplicate
-// rule too (44); a connection reference and a Custom API are table rows, and a table row's component type is its
-// table's ObjectTypeCode, which differs between environments, so it is read (once per kind per run).
+// Dataverse solution component types. An environment variable definition has a fixed type (380). Every other kind
+// here is a table row, and a row's component type is its table's ObjectTypeCode ("The object type code of the
+// component"), so it is read from the table's metadata (once per kind per run) rather than assumed.
+// A duplicate rule and its conditions are table rows too. The choice list documents 44 (Duplicate Rule) and 45
+// (Duplicate Rule Condition), but a current environment refuses them: `AddSolutionComponent` with 45 answers
+//   400 {"error":{"code":"0x80040216","message":"Invalid component type provided 45"}}
+// and the solution lists a rule and its condition under the duplicaterule and duplicaterulecondition tables'
+// ObjectTypeCodes (4414 and 4416). 44 and 45 are only read, as proof (see CLASSIC_MEMBERSHIP_TYPES), never sent.
+// 380 is the one constant kept: environment variable definitions are added and listed under it on a current environment.
 // An environment variable VALUE is never added: it is per-environment data, and a solution that carried it would
 // export this environment's value.
 // See: https://learn.microsoft.com/power-apps/developer/data-platform/reference/entities/solutioncomponent#componenttype-choicesoptions
-const MEMBERSHIP_TABLES = Object.freeze({ environmentVariable: 380, connectionReference: 'connectionreference', customApi: 'customapi', duplicateRule: 44 });
+// See: https://learn.microsoft.com/power-apps/developer/data-platform/reference/entities/duplicaterule (its entity type
+// code list: 4414 Duplicate Detection Rule, 4416 Duplicate Rule Condition)
+const MEMBERSHIP_TABLES = Object.freeze({ environmentVariable: 380, connectionReference: 'connectionreference', customApi: 'customapi', duplicateRule: 'duplicaterule' });
 // A root exports whole only with its children, and a child's membership is never inferred from its root's (nor from a
 // table's subcomponents): each child is its own solution component and is proven as one. A Custom API parameter or
-// response property is a table row (its table's ObjectTypeCode); a duplicate rule condition has its own type, 45.
+// response property, and a duplicate rule condition, is a table row (its table's ObjectTypeCode).
 // The platform's own duplicate-rule code creates conditions solution-scoped because a compound create's children
 // can be left out of the solution, so a create header on the root proves nothing about them.
 // An environment variable value is deliberately absent (see above).
-const CHILD_MEMBERSHIP_TABLES = Object.freeze({ customApiRequestParameter: 'customapirequestparameter', customApiResponseProperty: 'customapiresponseproperty', duplicateRuleCondition: 45 });
+const CHILD_MEMBERSHIP_TABLES = Object.freeze({ customApiRequestParameter: 'customapirequestparameter', customApiResponseProperty: 'customapiresponseproperty', duplicateRuleCondition: 'duplicaterulecondition' });
+// A solution may still list a duplicate rule or condition under its classic type. The SDK's own solution reader
+// (fetchSolutionComponents) folds 44 into the rule's type and 45 into the condition's, so a row under the classic type
+// is the same component and proves membership. These are read only: an add always sends the resolved type.
+const CLASSIC_MEMBERSHIP_TYPES = Object.freeze({ duplicateRule: 44, duplicateRuleCondition: 45 });
 
 // The child rows a read of a root shows, as membership items {kind, key, id}. A child's key is its slot under the
 // root, as the create port and the management records name it: `<api>|request:<name>`, `<rule>|<condition key>`.
@@ -2071,10 +2083,12 @@ function membershipOf(ctx) {
       } catch (error) {
         return { bucket: 'unknown', code: codeOf(error) };
       }
+      const classic = has(CLASSIC_MEMBERSHIP_TYPES, op.kind) ? CLASSIC_MEMBERSHIP_TYPES[op.kind] : null;
       if (!memberships.has(op.kind)) {
-        memberships.set(op.kind, createSolutionMembership({ read: ctx.sdk, solutionUniqueName: ctx.solutionUniqueName, componentTypes: [componentType] }));
+        memberships.set(op.kind, createSolutionMembership({ read: ctx.sdk, solutionUniqueName: ctx.solutionUniqueName, componentTypes: classic ? [componentType, classic] : [componentType] }));
       }
       try {
+        if (classic && await memberships.get(op.kind).has(op.id, classic)) return null;
         await withConfigurationWrite(() => ensureSolutionComponent(ctx.sdk, memberships.get(op.kind), { componentId: op.id, componentType, solutionUniqueName: ctx.solutionUniqueName }));
       } catch (error) {
         return outcomeOf(error, true) === 'nothing' ? { bucket: 'refused', code: codeOf(error) } : { bucket: 'unknown', code: 'SOLUTION_MEMBERSHIP_UNKNOWN' };
@@ -2091,13 +2105,17 @@ function membershipOf(ctx) {
         try { typed.push({ item, type: await typeOf(item.kind) }); } catch { typed.push({ item, type: null }); }
       }
       let held = null;
+      const classicOf = (item) => (has(CLASSIC_MEMBERSHIP_TYPES, item.kind) ? CLASSIC_MEMBERSHIP_TYPES[item.kind] : null);
+      // A classic type is read only alongside a resolved one: an item whose type is unreadable stays unproven.
+      const read = typed.filter((t) => t.type).flatMap((t) => [t.type, classicOf(t.item)]).filter(Boolean);
       try {
-        held = await readSolutionMembers(ctx.sdk, ctx.solutionUniqueName, [...new Set(typed.map((t) => t.type).filter(Boolean))]);
+        held = await readSolutionMembers(ctx.sdk, ctx.solutionUniqueName, [...new Set(read)]);
       } catch {
         held = null;
       }
       const bare = (v) => String(v).replace(/[{}]/g, '').trim().toLowerCase();
-      return typed.filter(({ item, type }) => !held || !type || !held.members.has(`${type}:${bare(item.id)}`)).map(({ item }) => item);
+      const holds = (type, item) => held.members.has(`${type}:${bare(item.id)}`) || (!!classicOf(item) && held.members.has(`${classicOf(item)}:${bare(item.id)}`));
+      return typed.filter(({ item, type }) => !held || !type || !holds(type, item)).map(({ item }) => item);
     },
   };
 }
