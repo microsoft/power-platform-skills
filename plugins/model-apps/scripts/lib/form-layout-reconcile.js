@@ -71,12 +71,12 @@ const {
   controlIdTaken,
 } = require('./form-timeline.js');
 const { runManagedFeature, publishManagedScope } = require('./managed-feature-contract.js');
-const { readSystemFormPublication, systemFormLayerSha256 } = require('./systemform-published.js');
+const { readSystemFormPublication, readSystemFormRootPresence, systemFormLayerSha256 } = require('./systemform-published.js');
 const { publishTablesXml } = require('./table-publish.js');
 const { hasUnsyncedEdits } = require('./unsynced-edits.js');
 const {
   refusal,
-  isAuthorized,
+  isApproved,
   partsDriftVerdict,
   projectionBaseline,
   pushChecked,
@@ -956,7 +956,8 @@ function validateDesired(liveTabs, planned, { formType, declaredHome = {}, mobil
  *   live        the stored form as just read ({ formType, entityLogicalName, tabs, bag })
  *   ctx         { baseline (the committed root record, or null), recorded ({ locator: id } of the committed
  *               group's records), children (the last proof's { locator: { id, kind, associationSha256 } }),
- *               authorizedAdoption, authorizedOverwrite }
+ *               authorizedAdoption, authorizedOverwrite (true, or a Set or array of family-typed keys: only
+ *               `form:<key>` approves this form, reconcile-common.js approvalKey) }
  * Answers { key, action: null|'noChange'|'update', refused, unknown, planned, freshKeys, mobileIds, repairedIds,
  * addHandlers, ... }. A form that does not exist yet is not planned here: reconcileDeclaredForm builds it whole
  * with planCreate.
@@ -1170,15 +1171,15 @@ function planDeclaredFormLayout({ form, spec, formId, live, intentTabs, hosts, e
   const tabsUnchanged = canonicalJson(desired) === canonicalJson(liveTabs);
   if (tabsUnchanged && !plan.addHandlers.length) {
     plan.action = 'noChange';
-    plan.bindUnchanged = !!binding || isAuthorized(ctx.authorizedAdoption, key);
+    plan.bindUnchanged = !!binding || isApproved(ctx.authorizedAdoption, FAMILY, key);
     return plan;
   }
   const verdict = tabsUnchanged ? (binding ? 'none' : 'unbound') : partsDriftVerdict(binding, plan.liveParts, plan.desiredParts);
-  if (verdict === 'drift' && !isAuthorized(ctx.authorizedOverwrite, key)) {
-    return refuse('form-layout-drift', 'the layout of a declared field was changed outside the spec since the last build; refresh the spec or approve the overwrite');
+  if (verdict === 'drift' && !isApproved(ctx.authorizedOverwrite, FAMILY, key)) {
+    return refuse('form-layout-drift', `the layout of a declared field was changed outside the spec since the last build; refresh the spec or approve the overwrite (${FAMILY}:${key})`);
   }
-  if (verdict === 'unbound' && !isAuthorized(ctx.authorizedAdoption, key)) {
-    return refuse('form-layout-adoption-not-authorized', 'this form exists and the spec has not managed its layout before; approve adopting it first');
+  if (verdict === 'unbound' && !isApproved(ctx.authorizedAdoption, FAMILY, key)) {
+    return refuse('form-layout-adoption-not-authorized', `this form exists and the spec has not managed its layout before; approve adopting it first (${FAMILY}:${key})`);
   }
   plan.action = 'update';
   return plan;
@@ -1628,8 +1629,11 @@ function stillProven(children, lastChildren, tabs) {
 /**
  * Reconcile ONE declared form through the managed settlement (managed-feature-contract.js runManagedFeature):
  * resolve, plan, persist the attempt and its expected proof, ONE push, a fresh read proved against that expected
- * proof, solution membership, and one atomic commit of the whole group. A pending attempt found on disk is proved
- * by its stored expected proof and committed, never sent again. Never publishes: the committed group records the
+ * proof, solution membership, and one atomic commit of the whole group. A pending attempt found on disk is recovered
+ * under its own token: continued when its send window proves nothing it sent was carried out (needs ctx.sendObserver),
+ * sent again as the same create when its root reads absent in both layers (resumeCreate), and otherwise proved by its
+ * stored expected proof and committed, never sent again. Each resend rebuilds exactly the plan the attempt recorded
+ * (same ids, expected proof, declaration and publication) or stops. Never publishes: the committed group records the
  * publication it owes, and the caller pays it per table with publishDeclaredFormTable — after a no-op too.
  *   input  { form (RAW spec form), spec, def (compileFormIntent's), sdk, hosts (declaredHostsOf), events,
  *            beforePush(id) (optional local edits of a new row that travel in its push),
@@ -1638,12 +1642,15 @@ function stillProven(children, lastChildren, tabs) {
  *   ctx    { store, barrier?, halt (required: the build's halt factory, managedStop), catalog (creates-catalog.js, with
  *            formCatalogIntent registered), ensureMembership({ root, records, recovering }) (required: the form's
  *            solution membership), authorizedAdoption, authorizedOverwrite (the form family's own approvals: true, or a
- *            Set or array of form keys), phase? }
+ *            Set or array of family-typed keys; only `form:<key>` approves this form), sendObserver? (the build's
+ *            createAttemptSendObserver, installed on the transport sdk.dataverse sends through), phase? }
  *   A missing halt or ensureMembership is refused (managed-not-settled) before anything is read or written. A local
  *   copy of the bound or pending form with edits the service has not seen is refused before anything is read over it
  *   (create-completion-required, category workspace-copy-unsent-edits), a recovery included. A form whose create this
- *   build never had acknowledged is bound only under authorizedAdoption (managed-adoption-required).
- * Answers { key, formId, action: 'noop'|'noChange'|'update'|'create'|'recovered', group }. Every refusal, unknown
+ *   run never had acknowledged is bound only under the `form:<key>` adoption approval (managed-adoption-required).
+ *   A write that fails puts the local copy back as the service holds it (a create's copy is removed), so the
+ *   next run's dirty-copy refusal meets only edits this build did not make.
+ * Answers { key, formId, action: 'noop'|'noChange'|'update'|'create'|'recovered', continued?, resumed?, group }. Every refusal, unknown
  * outcome or failed proof throws the error the halt factory makes (the build stops; the form's table is withheld).
  */
 async function reconcileDeclaredForm(input, ctx = {}) {
@@ -1682,13 +1689,20 @@ async function reconcileDeclaredForm(input, ctx = {}) {
     }
   };
 
-  const resolve = async ({ committed, pending }) => {
+  const resolve = async ({ committed, pending, continuing, resuming }) => {
     if (form.prune === true) throw codeError('form-layout-prune-unsupported', 'a declared form does not delete what the spec omits; remove "prune"');
     if (Array.isArray(form.genPages) && form.genPages.length) throw codeError('form-page-embeds-incomplete', 'generative pages embedded in a declared form are not supported yet; remove "genPages" or the declared mode');
     const layout = declaredLayoutOf(form, def && def.tabs);
     if (layout.duplicates.length) throw codeError('form-layout-duplicate-field', `the spec places ${[...new Set(layout.duplicates)].join(', ')} more than once; a declared field has one place`);
     let formId = idText((committed && committed.root.id) || (pending && pending.root.id));
     let create = false;
+    if ((continuing || resuming) && !committed && pending && pending.expected && pending.expected.baseObservation === null) {
+      // The same create sent again under its own id (runManagedFeature's recovery): its send window proved nothing it
+      // sent was carried out (continuing), or the row reads absent in both layers (resuming). Nothing is read: a row
+      // under this id that appeared since can only make the create fail on its primary key.
+      state.formId = formId;
+      return { formId, create: true };
+    }
     if (!formId && typeof resolveExisting === 'function') {
       let found;
       try { found = await resolveExisting(); } catch (err) {
@@ -1708,7 +1722,14 @@ async function reconcileDeclaredForm(input, ctx = {}) {
       if (!probe) throw codeError('form-unreadable', 'the form could not be read');
       create = !!probe.missing;
     }
-    if (create) return { formId, create: true };
+    if (create) {
+      // createArtifact writes its copy over whatever the workspace holds under this id; a copy with edits the
+      // service never saw is not this run's to replace (the preflight saw no id to check for a first create).
+      if (await hasUnsyncedEdits(sdk, ARTIFACT, formId)) {
+        throw Object.assign(codeError('create-completion-required', `the workspace holds a local copy of the form ${formId} that this build did not make and the service has not seen; nothing was created over it. Remove it from the workspace, then re-run`), { category: 'workspace-copy-unsent-edits' });
+      }
+      return { formId, create: true };
+    }
     // The preflight diffed the bound or pending form; a form found by resolveExisting is diffed here, before its read.
     if (await hasUnsyncedEdits(sdk, ARTIFACT, formId)) {
       throw Object.assign(codeError('create-completion-required', 'the local copy of this form holds edits the service has not seen; refresh it before the layout is written'), { category: 'workspace-copy-unsent-edits' });
@@ -1799,33 +1820,57 @@ async function reconcileDeclaredForm(input, ctx = {}) {
 
   const apply = async ({ plan: p }) => {
     const formId = p.root.id;
-    let pushed;
-    if (p.create) {
-      const art = await sdk.createArtifact(ARTIFACT, {
-        id: formId, name: def.name, entityLogicalName: def.entityLogicalName, formType: p.formType, status: def.status,
-        ...(def.description ? { description: def.description } : {}),
-      });
-      // The id is the form's identity for every later run; a store that minted its own would orphan it.
-      if (!art || !sameId(art.id, formId)) throw codeError('form-layout-write-unknown', 'the new form did not keep the id it was created with');
-      const seed = (((await sdk.getArtifact(ARTIFACT, formId)) || {}).tabs || []).length;
-      // In order: addElement appends, and tab order is the on-form order. The adapter's seed tab(s) go after, only
-      // once the declared tabs are in, so the form is never tab-less.
-      for (const tab of p.m.tabs) await sdk.addElement(ARTIFACT, formId, '/tabs', tab);
-      if (p.m.tabs.length) for (let i = 0; i < seed; i += 1) await sdk.removeElement(ARTIFACT, formId, '/tabs/0');
-      await addHandlers(sdk, formId, p.handlers);
-      if (typeof beforePush === 'function') await beforePush(formId);
-      pushed = await pushChecked(sdk, ARTIFACT, formId);
-    } else if (p.update) {
-      await sdk.updateElement(ARTIFACT, formId, '/tabs', p.m.tabs);
-      await addHandlers(sdk, formId, p.addHandlers);
-      pushed = await pushChecked(sdk, ARTIFACT, formId);
-    } else {
+    if (!p.create && !p.update) {
       // A bind-only attempt (an unchanged form whose group is recorded or re-baselined): nothing is sent.
       return { sent: false, acknowledged: false };
     }
+    let pushed;
+    try {
+      pushed = await (p.create ? sendCreate(p, formId) : sendUpdate(p, formId));
+    } catch (err) {
+      await resetOwnCopy(p, formId);
+      throw err;
+    }
+    if (pushed.outcome === 'saved') return { sent: true, acknowledged: true };
+    await resetOwnCopy(p, formId);
     if (pushed.outcome === 'refused') throw codeError('form-layout-rejected', `the form was not saved (${pushed.code || 'refused'})`);
-    if (pushed.outcome !== 'saved') throw codeError('form-layout-write-unknown', 'the form write did not settle; the next run proves it from a fresh read before anything else');
-    return { sent: true, acknowledged: true };
+    throw codeError('form-layout-write-unknown', 'the form write did not settle; the next run proves it from a fresh read before anything else');
+  };
+  // The local SDK materialisation and its ONE push. A recovery that sends the attempt again (continuing, resuming)
+  // redoes it whole, exactly as a first run does, from the copy the preflight proved clean.
+  const sendCreate = async (p, formId) => {
+    const art = await sdk.createArtifact(ARTIFACT, {
+      id: formId, name: def.name, entityLogicalName: def.entityLogicalName, formType: p.formType, status: def.status,
+      ...(def.description ? { description: def.description } : {}),
+    });
+    // The id is the form's identity for every later run; a store that minted its own would orphan it.
+    if (!art || !sameId(art.id, formId)) throw codeError('form-layout-write-unknown', 'the new form did not keep the id it was created with');
+    const seed = (((await sdk.getArtifact(ARTIFACT, formId)) || {}).tabs || []).length;
+    // In order: addElement appends, and tab order is the on-form order. The adapter's seed tab(s) go after, only
+    // once the declared tabs are in, so the form is never tab-less.
+    for (const tab of p.m.tabs) await sdk.addElement(ARTIFACT, formId, '/tabs', tab);
+    if (p.m.tabs.length) for (let i = 0; i < seed; i += 1) await sdk.removeElement(ARTIFACT, formId, '/tabs/0');
+    await addHandlers(sdk, formId, p.handlers);
+    if (typeof beforePush === 'function') await beforePush(formId);
+    return pushChecked(sdk, ARTIFACT, formId);
+  };
+  const sendUpdate = async (p, formId) => {
+    await sdk.updateElement(ARTIFACT, formId, '/tabs', p.m.tabs);
+    await addHandlers(sdk, formId, p.addHandlers);
+    return pushChecked(sdk, ARTIFACT, formId);
+  };
+  // A write that failed (a local edit that threw, a refused push, an answer that never came) leaves this run's own
+  // edit in the workspace copy, and the CLI's workspace is durable: the next run's preflight would read it as an
+  // unsent edit and refuse, so the attempt could never be continued. The copy held nothing else (the preflight or
+  // resolve proved it clean, or absent, just before), so it is put back as the service holds it, as sdk-build.js
+  // resetUnsettledCopy does for views and charts: a create's never-synced copy is removed (a local delete, no
+  // request), an edit's copy is re-read with overwrite (a read, which the send window does not count). Best-effort:
+  // a reset that fails leaves the copy, and the next run refuses it rather than plan over it.
+  const resetOwnCopy = async (p, formId) => {
+    try {
+      if (p.create) await sdk.deleteArtifact(ARTIFACT, formId);
+      else await sdk.fetchArtifact(ARTIFACT, formId, { overwrite: true });
+    } catch { /* see above */ }
   };
 
   const prove = async ({ token, expected, applied, recovering }) => {
@@ -1900,14 +1945,23 @@ async function reconcileDeclaredForm(input, ctx = {}) {
   const { result, committedGroup } = await runManagedFeature({
     phase, family: FAMILY, key, label, knownScopes: [scope], knownIds: knownId ? [knownId] : [],
     store, barrier: ctx.barrier, halt, preflight, resolve, plan, apply, prove, ensureMembership,
+    // The build's send observer (createAttemptSendObserver), installed on the transport sdk.dataverse sends through:
+    // with it, an attempt whose window proves nothing it sent was carried out is continued under its own token.
+    ...(ctx.sendObserver ? { sendObserver: ctx.sendObserver } : {}),
+    // A create no answer acknowledged: is its row there, in either layer, under the id it was sent with? A read that
+    // fails is managed-publication-unverified, left to the wrapper to quarantine.
+    resumeCreate: async ({ pending }) => ({ root: await readSystemFormRootPresence(sdk && sdk.dataverse, pending.root.id) }),
     // A form whose create this run never had acknowledged (a lost answer, or a row found by resolveExisting) is bound
-    // only under the form family's own adoption approval for this key (ctx.authorizedAdoption: true, or a Set or array
-    // of form keys); a fresh read that proves it is no approval.
-    adoptionApproved: isAuthorized(ctx.authorizedAdoption, key) === true,
+    // only under the form family's own typed adoption approval, `form:<key>` (ctx.authorizedAdoption: true, or a Set
+    // or array of typed keys); a fresh read that proves it is no approval, and neither is an approval of another family.
+    adoptionApproved: isApproved(ctx.authorizedAdoption, FAMILY, key) === true,
   });
   const formId = state.formId || (committedGroup && committedGroup.root.id) || null;
   const action = result.recovered ? 'recovered' : (state.action || (result.noop ? 'noop' : null));
-  return { key, formId, action, group: committedGroup || null };
+  return {
+    key, formId, action, ...(result.continued ? { continued: true } : {}), ...(result.resumed ? { resumed: true } : {}),
+    group: committedGroup || null,
+  };
 }
 
 /**

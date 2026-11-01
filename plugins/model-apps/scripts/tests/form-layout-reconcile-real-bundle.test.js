@@ -12,7 +12,9 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { makeTempDir } = require('./helpers/temp-dirs.js');
 const { guid, createHarness, seedForm, NOTES_CLASS_ID } = require('./helpers/form-store-harness.js');
-const { createManagedWire, sdkOver, ORIGIN } = require('./helpers/managed-wire.js');
+const { createManagedWire, sdkOver, clientOver, ORIGIN } = require('./helpers/managed-wire.js');
+const { createMakerSdk, createNodeWorkspaceStorage } = require('../vendor/cds-maker-sdk.cjs');
+const { createAttemptSendObserver } = require('../lib/managed-feature-contract.js');
 const { compileFormIntent } = require('../lib/artifact-intent.js');
 const { slotGrid, rowOccupancy } = require('../lib/form-occupancy.js');
 const { openManagedContext } = require('../lib/managed-bindings.js');
@@ -339,7 +341,14 @@ test('adoption, drift and the bound identity gate every write; the resolver is a
   assert.deepEqual(unadopted.writes, []);
   const refusing = await reconcile(h, spec, ctx, { resolveExisting: async () => { throw new Error('two forms are named Main'); } });
   assert.deepEqual(codes(refusing.result), ['form-layout-resolve-refused']);
-  ctx.authorizedAdoption = true;
+  // Approvals are typed by family: the bare key, or the same key under another family, approves nothing here.
+  const key = flr.formLayoutKey(spec.forms[0]);
+  for (const other of [new Set([key]), new Set([`view:${key}`])]) {
+    ctx.authorizedAdoption = other;
+    const untyped = await reconcile(h, spec, ctx);
+    assert.deepEqual([codes(untyped.result), untyped.writes], [['form-layout-adoption-not-authorized'], []], [...other][0]);
+  }
+  ctx.authorizedAdoption = new Set([`form:${key}`]);
   const adopted = await reconcile(h, spec, ctx);
   assert.deepEqual(codes(adopted.result), [], JSON.stringify(adopted.result));
   delete ctx.authorizedAdoption;
@@ -351,6 +360,9 @@ test('adoption, drift and the bound identity gate every write; the resolver is a
   const drifted = await reconcile(h, spec, ctx);
   assert.deepEqual(codes(drifted.result), ['form-layout-drift']);
   assert.deepEqual(drifted.writes, []);
+  ctx.authorizedOverwrite = new Set([key]);
+  const untypedOverwrite = await reconcile(h, spec, ctx);
+  assert.deepEqual([codes(untypedOverwrite.result), untypedOverwrite.writes], [['form-layout-drift'], []], 'an untyped key overwrites nothing');
 });
 
 test('only the raw spec form opts in: a compiled def (which carries no `reconcile`) plans, creates and reads nothing', async () => {
@@ -461,7 +473,13 @@ test('a create whose answer is lost binds nothing and holds its table; the next 
   assert.deepEqual(codes(later.result), ['managed-adoption-required']);
   assert.deepEqual(later.writes, [], 'no edit is sent to an unapproved root');
   assert.equal(nothingSettled(ctx, form).token, pending.token);
-  ctx.authorizedAdoption = new Set([flr.formLayoutKey(form)]);
+  // Only the form family's typed key approves: the bare key, or another family's approval of the same text, is none.
+  for (const other of [new Set([flr.formLayoutKey(form)]), new Set([`view:${flr.formLayoutKey(form)}`])]) {
+    ctx.authorizedAdoption = other;
+    const untyped = await reconcile(lost.h, spec, ctx);
+    assert.deepEqual([codes(untyped.result), untyped.writes, ctx.members], [['managed-adoption-required'], [], []], [...other][0]);
+  }
+  ctx.authorizedAdoption = new Set([`form:${flr.formLayoutKey(form)}`]);
   const recovered = await reconcile(lost.h, spec, ctx);
   assert.deepEqual(codes(recovered.result), [], JSON.stringify(recovered.result));
   assert.equal(recovered.result.action, 'recovered');
@@ -1106,8 +1124,11 @@ test('a pending attempt is never recovered over a local copy with unsent edits: 
   const first = await reconcileOver(h, spec, ctx, local, { newForm: true });
   assert.deepEqual(codes(first.result), ['form-layout-write-unknown']);
   const token = nothingSettled(ctx, form).token;
-  // An edit made in the workspace after the lost answer, never sent: recovery reads the form with a fetch that
-  // overwrites the local copy, so it must refuse before that read, on every run.
+  // The failed write put its own copy back (a create's never-synced copy is removed), so what follows is the maker's:
+  // the form, read from the service, then edited in the workspace and never sent. Recovery reads the form with a
+  // fetch that overwrites the local copy, so it must refuse before that read, on every run.
+  assert.deepEqual((await local.sdk.diffArtifact('form', h.formId)).changes, [], 'the build left no copy of its own');
+  await local.sdk.fetchArtifact('form', h.formId, { overwrite: true });
   await local.sdk.updateElement('form', h.formId, '/tabs/0/label', 'UNSENT MAKER CAPTION');
   const before = filesOf(local.dir);
   for (let i = 0; i < 2; i += 1) {
@@ -1235,4 +1256,169 @@ test('a declared handler whose options changed is refused before anything is wri
   const twice = await create(formSpec([{ name: 'sec_main', columns: 1, fields: ['new_name'] }], { name: 'Twice' }), ports(), { events: [event, changedEvent] });
   assert.deepEqual(codes(twice.result), ['form-handler-options-unsupported']);
   assert.deepEqual(twice.writes, []);
+});
+
+// ---- Recovery under the attempt's own token: continued, resumed, or only proved. ----
+
+// One build invocation over the wire whose transport carries the build's send observer (createAttemptSendObserver,
+// inside the barrier's gate, as build-model-app.js installs it), over a workspace folder kept across runs as the
+// CLI keeps its own. `observe: false` is a build without the observer.
+async function observedRun(w, ctx, spec, id, { workspace, beforePush, observe = true, override = {} } = {}) {
+  Object.assign(ctx, openRun(ctx.dir));
+  const observer = observe ? createAttemptSendObserver() : null;
+  const sdk = createMakerSdk({ workspaceStorage: createNodeWorkspaceStorage(workspace), instanceUrl: ORIGIN, httpClient: clientOver(w, { barrier: ctx.barrier, observer }) });
+  await sdk.initWorkspace();
+  const form = spec.forms[0];
+  let result;
+  try {
+    result = await flr.reconcileDeclaredForm({ form, spec, def: compileFormIntent(spec, form, INTENT), sdk, events: [], beforePush, resolveExisting: async () => id },
+      { catalog: catalogOf(form), ...ctx, ...(observer ? { sendObserver: observer } : {}), ...override });
+  } catch (err) {
+    result = { action: null, code: err.code || 'thrown', error: err };
+  }
+  return { result, sdk };
+}
+const isFormPatch = (e) => e.method === 'PATCH' && /^systemforms\(/i.test(e.path);
+const isFormCreate = (e) => e.method === 'POST' && /^systemforms$/i.test(e.path);
+const refusedUnapplied = { statusCode: 400, body: { error: { code: '0x80040203', message: 'refused' } }, unapplied: true };
+
+test('an edit the service refused unapplied is continued by the next observed run under its own token: one more edit, then committed', async () => {
+  const wire = createManagedWire();
+  const w = etagged(wire);
+  const A = guid(4100);
+  await onWire(wire, A, 'Main', 0);
+  const spec = wireSpec('Main');
+  const form = spec.forms[0];
+  const ctx = ports({ authorizedAdoption: true });
+  const workspace = makeTempDir('form-observed-');
+  wire.script(isFormPatch, refusedUnapplied);
+  const first = await observedRun(w, ctx, spec, A, { workspace });
+  assert.ok(first.result.code, JSON.stringify(first.result));
+  const stranded = nothingSettled(ctx, form);
+  assert.deepEqual([stranded.phase, stranded.sendWindow], ['sending', { possible: 0, notStarted: 1 }]);
+  assert.deepEqual((await first.sdk.diffArtifact('form', A)).changes, [], 'the refused edit was taken back out of the local copy');
+  assert.doesNotMatch(wire.saved.get(A).formxml, /new_code/);
+  assert.notDeepEqual(openRun(ctx.dir).debt.map((d) => d.kind), ['eligible'], 'the unsettled attempt holds its scope');
+  const again = await observedRun(w, ctx, spec, A, { workspace });
+  assert.deepEqual([codes(again.result), again.result.action, again.result.continued], [[], 'recovered', true], JSON.stringify(again.result));
+  assert.equal(wire.log.filter(isFormPatch).length, 2, 'the refused edit and its one continuation');
+  assert.match(wire.saved.get(A).formxml, /new_code/);
+  const { committed, pending } = groupOf(ctx, form);
+  assert.equal(pending, null);
+  assert.equal(committed.publication.state, 'owed');
+  assert.deepEqual(ctx.members, [A]);
+  assert.deepEqual(openRun(ctx.dir).debt.map((d) => d.kind), ['eligible'], 'its hold ended: only its publication is owed');
+  assert.equal((await observedRun(w, ctx, spec, A, { workspace })).result.action, 'noop');
+
+  // A build that does not observe its sends cannot tell the refusal from a write that landed: it only proves, which
+  // fails, and nothing is sent again; the attempt keeps its token.
+  const plainWire = createManagedWire();
+  const pw = etagged(plainWire);
+  await onWire(plainWire, A, 'Main', 0);
+  const pctx = ports({ authorizedAdoption: true });
+  const pws = makeTempDir('form-observed-');
+  plainWire.script(isFormPatch, refusedUnapplied);
+  await observedRun(pw, pctx, spec, A, { workspace: pws });
+  const token = nothingSettled(pctx, form).token;
+  const proved = await observedRun(pw, pctx, spec, A, { workspace: pws, observe: false });
+  assert.ok(proved.result.code, 'only proved, and the proof fails');
+  assert.equal(plainWire.log.filter(isFormPatch).length, 1, 'never sent again');
+  assert.equal(nothingSettled(pctx, form).token, token);
+});
+
+test('a create whose local edits failed before any request is continued under its id; a changed declaration is not sent under the old token', async () => {
+  const spec = wireSpec('Main');
+  const form = spec.forms[0];
+  const id = derivedFormId(form);
+  const localFailure = async () => { throw Object.assign(new Error('the local copy could not be edited'), { code: 'LOCAL_EDIT_FAILED' }); };
+  const strand = async () => {
+    const wire = createManagedWire();
+    const ctx = ports();
+    const workspace = makeTempDir('form-observed-');
+    const first = await observedRun(wire, ctx, spec, undefined, { workspace, beforePush: localFailure });
+    assert.deepEqual(codes(first.result), ['LOCAL_EDIT_FAILED']);
+    assert.deepEqual(wire.writes(), [], 'nothing reached the service');
+    const pending = nothingSettled(ctx, form);
+    assert.deepEqual([pending.phase, pending.sendWindow, pending.root.id], ['sending', { possible: 0, notStarted: 0 }, id]);
+    assert.deepEqual((await first.sdk.diffArtifact('form', id)).changes, [], 'the never-sent copy was removed');
+    return { wire, ctx, workspace, token: pending.token };
+  };
+
+  const s = await strand();
+  const again = await observedRun(s.wire, s.ctx, spec, undefined, { workspace: s.workspace });
+  assert.deepEqual([codes(again.result), again.result.action, again.result.continued, again.result.formId], [[], 'recovered', true, id], JSON.stringify(again.result));
+  assert.equal(s.wire.log.filter(isFormCreate).length, 1, 'one create');
+  assert.deepEqual([...s.wire.saved.keys()], [id]);
+  assert.equal(recordOf(s.ctx, form).origin, 'created', 'this run\'s own create answer acknowledged it: no adoption approval needed');
+  assert.deepEqual(s.ctx.members, [id]);
+
+  // The spec changed since: the plan is not the one the attempt recorded, so nothing is sent and the attempt is kept.
+  const c = await strand();
+  const changed = wireSpec('Main');
+  changed.forms[0].tabs[0].sections[0].fields = ['new_name'];
+  const refused = await observedRun(c.wire, c.ctx, changed, undefined, { workspace: c.workspace });
+  assert.deepEqual(codes(refused.result), ['create-completion-required'], JSON.stringify(refused.result));
+  assert.deepEqual(c.wire.writes(), []);
+  assert.equal(nothingSettled(c.ctx, form).token, c.token, 'the attempt keeps its token');
+  assert.deepEqual(c.ctx.members, []);
+});
+
+test('a create whose answer never came is sent again under its id when its row reads absent; a row that is there needs the form adoption approval', async () => {
+  const spec = wireSpec('Main');
+  const form = spec.forms[0];
+  const id = derivedFormId(form);
+  const strand = async (unapplied) => {
+    const wire = createManagedWire();
+    const ctx = ports();
+    const workspace = makeTempDir('form-observed-');
+    // The connection drops after the create went out, and again on the client's own retries of it, so the service
+    // may or may not hold the row. The answers are armed for this run only.
+    const armed = { on: true };
+    wire.script((e) => armed.on && isFormCreate(e), { error: 'ECONNRESET', unapplied });
+    for (let i = 0; i < 5; i += 1) wire.script((e) => armed.on && isFormCreate(e), { error: 'ECONNRESET', unapplied: true });
+    const first = await observedRun(wire, ctx, spec, undefined, { workspace });
+    armed.on = false;
+    assert.deepEqual(codes(first.result), ['form-layout-write-unknown'], JSON.stringify(first.result));
+    const { sendWindow } = nothingSettled(ctx, form);
+    assert.ok(sendWindow.possible >= 1 && sendWindow.notStarted === 0, `the create may have landed: ${JSON.stringify(sendWindow)}`);
+    return { wire, ctx, workspace, creates: wire.log.filter(isFormCreate).length };
+  };
+
+  const absent = await strand(true);
+  assert.equal(absent.wire.saved.size, 0);
+  const resumed = await observedRun(absent.wire, absent.ctx, spec, undefined, { workspace: absent.workspace, observe: false });
+  assert.deepEqual([codes(resumed.result), resumed.result.action, resumed.result.resumed], [[], 'recovered', true], JSON.stringify(resumed.result));
+  assert.equal(absent.wire.log.filter(isFormCreate).length, absent.creates + 1, 'the same create, sent once more');
+  assert.deepEqual([...absent.wire.saved.keys()], [id]);
+  assert.equal(recordOf(absent.ctx, form).origin, 'created');
+
+  // It landed: the presence read finds it, so it is proved, never sent again, and bound only under form:<key>.
+  const present = await strand(false);
+  const unapproved = await observedRun(present.wire, present.ctx, spec, undefined, { workspace: present.workspace });
+  assert.deepEqual(codes(unapproved.result), ['managed-adoption-required'], JSON.stringify(unapproved.result));
+  assert.match(unapproved.result.error.cause.message, new RegExp(`form:${flr.formLayoutKey(form)}`));
+  assert.deepEqual(present.ctx.members, []);
+  present.ctx.authorizedAdoption = new Set([`form:${flr.formLayoutKey(form)}`]);
+  const adopted = await observedRun(present.wire, present.ctx, spec, undefined, { workspace: present.workspace });
+  assert.deepEqual([codes(adopted.result), adopted.result.action, adopted.result.resumed], [[], 'recovered', undefined], JSON.stringify(adopted.result));
+  assert.equal(present.wire.log.filter(isFormCreate).length, present.creates, 'never sent again');
+  assert.equal(recordOf(present.ctx, form).origin, 'adopted');
+});
+
+test('a new form is never created over a local copy with edits the service has not seen under its id', async () => {
+  const spec = wireSpec('Main');
+  const form = spec.forms[0];
+  const id = derivedFormId(form);
+  const wire = createManagedWire();
+  const workspace = makeTempDir('form-observed-');
+  const maker = createMakerSdk({ workspaceStorage: createNodeWorkspaceStorage(workspace), instanceUrl: ORIGIN, httpClient: clientOver(wire) });
+  await maker.initWorkspace();
+  await maker.createArtifact('form', { id, name: 'Main', entityLogicalName: 'new_ticket', formType: 'Main' });
+  const before = filesOf(workspace);
+  const ctx = ports();
+  const run = await observedRun(wire, ctx, spec, undefined, { workspace });
+  assert.deepEqual(codes(run.result), ['create-completion-required'], JSON.stringify(run.result));
+  assert.equal(run.result.error.cause.category, 'workspace-copy-unsent-edits');
+  assert.deepEqual(wire.writes(), []);
+  assert.deepEqual(filesOf(workspace), before, 'the copy is kept');
 });
