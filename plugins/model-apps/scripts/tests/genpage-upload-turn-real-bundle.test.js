@@ -400,3 +400,108 @@ test('REAL BUNDLE: without --turn-id, completing a placement whose published nav
   assert.ok((second.warnings || []).some((w) => /could not be read back/.test(w)), JSON.stringify(second.warnings));
   assert.ok(!readMarker(file).unfinished, 'finished');
 });
+// Run B is paused at the app-name read that comes before the app's pages lease — after it read the turn's record and the base marker, before it holds the lease.
+// Another run of the same command and turn (A) then runs whole, and B goes on once A has let the lease go.
+function pausedBeforeLease(w, deps = {}) {
+  let started;
+  let resume;
+  const waiting = new Promise((resolve) => { started = resolve; });
+  const held = new Promise((resolve) => { resume = resolve; });
+  const pending = w.run([], undefined, undefined, {
+    ...deps,
+    makeGenpageSdk(env, backendDeps) {
+      const backend = makeGenpageSdk(INSTANCE, { ...backendDeps, httpClient: w.app.http });
+      const appUniqueName = backend.appUniqueName;
+      backend.appUniqueName = async (...args) => {
+        started();
+        await held;
+        return appUniqueName(...args);
+      };
+      return backend;
+    },
+  });
+  return { waiting, resume, pending };
+}
+
+for (const unreadable of [false, true]) {
+  test(`REAL BUNDLE: a run that waited for the pages lease while another run of its turn created the page and failed to publish the app finishes THAT create — published and proven live, or coded unfinished (${unreadable ? 'unreadable' : 'readable'} published navigation)`, async () => {
+    const w = world();
+    const { server, app, run, file, record } = w;
+    const b = pausedBeforeLease(w);
+    await b.waiting;
+    assert.strictEqual(fs.existsSync(record()), false, 'B read no turn record before the lease');
+    app.state.failures = 1;
+    const first = await run();
+    assert.strictEqual(first.ok, false, JSON.stringify(first));
+    assert.strictEqual(readMarker(file).unfinished, 'place');
+    assert.strictEqual(pageEntries(app.state.xml, first.pageId), 1, 'A saved the placement');
+    assert.strictEqual(pageEntries(app.state.publishedXml, first.pageId), 0, 'and did not publish it');
+    const held = fs.readFileSync(record(), 'utf8');
+    const publishes = app.state.publishAttempts;
+    if (unreadable) {
+      const get = app.http.get;
+      app.http.get = async (url, options) => (/\/sitemaps\b/.test(new URL(url).pathname) && !/RetrieveUnpublished/.test(url)
+        ? { status: 403, headers: {}, body: { error: { message: 'Published navigation read denied' } } }
+        : get(url, options));
+    }
+    b.resume();
+    const second = await b.pending;
+    assert.strictEqual(second.pageId, first.pageId, 'the same page');
+    assert.strictEqual(second.turn && second.turn.intent, first.turn.intent, 'the same turn');
+    assert.strictEqual(fs.readFileSync(record(), 'utf8'), held, 'the turn record is unchanged');
+    assert.strictEqual(server.messagesOf(first.pageId).length, 2, 'one turn in the page\'s history');
+    if (second.ok) assert.strictEqual(pageEntries(app.state.publishedXml, first.pageId), 1, 'a successful resumed create is in published navigation, including a turn bound while this run waited for the lease');
+    assert.notStrictEqual(second.outcome, 'nothing', 'the run wrote: it is never "nothing"');
+    assert.ok(app.state.publishAttempts > publishes, 'the app was published');
+    if (unreadable) {
+      assert.strictEqual(second.ok, false, `an unproven placement is not finished: ${JSON.stringify(second)}`);
+      assert.strictEqual(second.code, 'GENPAGE_APP_PUBLISH_UNPROVEN');
+      assert.strictEqual(readMarker(file).unfinished, 'place', 'an unproven placement remains unfinished');
+    } else {
+      assert.strictEqual(second.ok, true, JSON.stringify(second));
+      assert.ok(!readMarker(file).unfinished, 'finished');
+    }
+  });
+}
+
+test('REAL BUNDLE: a run that waited for the pages lease while another run of its turn finished the page is proven by READING the published navigation — the app is not written or published again', async () => {
+  const w = world();
+  const { app, run, file, record } = w;
+  const b = pausedBeforeLease(w);
+  await b.waiting;
+  const first = await run();
+  assert.strictEqual(first.ok, true, JSON.stringify(first));
+  assert.ok(fs.existsSync(record()));
+  const publishes = app.state.publishAttempts;
+  const writes = app.state.writes.length;
+  b.resume();
+  const second = await b.pending;
+  assert.strictEqual(second.ok, true, JSON.stringify(second));
+  assert.strictEqual(second.pageId, first.pageId);
+  assert.strictEqual(app.state.publishAttempts, publishes, 'no app publish');
+  assert.strictEqual(app.state.writes.length, writes, 'no app write');
+  assert.strictEqual(pageEntries(app.state.publishedXml, first.pageId), 1);
+  assert.ok(!readMarker(file).unfinished);
+});
+
+test('REAL BUNDLE: what a run is, read again under the pages lease, refuses it with nothing sent when the turn another run bound meanwhile cannot be read in full — coded GENPAGE_TURN_STATE_UNAVAILABLE', async () => {
+  const w = world();
+  const { server, app, run } = w;
+  let deny = false;
+  const b = pausedBeforeLease(w, {
+    base: { ...genpageBase, readMarker(file) { if (deny) throw new Error('unavailable'); return genpageBase.readMarker(file); } },
+  });
+  await b.waiting;
+  app.state.failures = 1;
+  const first = await run();
+  assert.strictEqual(first.ok, false, JSON.stringify(first));
+  const before = { writes: server.writes().length, appWrites: app.state.writes.length, publishes: app.state.publishAttempts, messages: server.messagesOf(first.pageId).length };
+  deny = true;
+  b.resume();
+  const second = await b.pending;
+  assert.strictEqual(second.ok, false, JSON.stringify(second));
+  assert.strictEqual(second.code, 'GENPAGE_TURN_STATE_UNAVAILABLE');
+  assert.strictEqual(second.outcome, 'nothing');
+  assert.strictEqual(second.turnId, TURN);
+  assert.deepStrictEqual({ writes: server.writes().length, appWrites: app.state.writes.length, publishes: app.state.publishAttempts, messages: server.messagesOf(first.pageId).length }, before, 'nothing sent');
+});
