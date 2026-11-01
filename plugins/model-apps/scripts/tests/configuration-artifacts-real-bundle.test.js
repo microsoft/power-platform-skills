@@ -815,6 +815,89 @@ test('build wiring: one step per phase; authority is the normalized token Set; a
   assert.deepEqual(h.org.unexpected, []);
 });
 
+// A rule key is an identity kept byte for byte, so it may hold white space or quote characters, and the consent flag a halt prints carries it. Pasted into a
+// shell the skill's commands are written for (PowerShell, or a POSIX shell), the printed flag must reach the CLI as ONE argument the CLI's own parser accepts:
+// a plain token is written bare, as before; one that needs quoting is single-quoted; one no spelling carries unchanged through both shells (a quote
+// character) is a placeholder whose value the message gives as data (lib/cli-failure.js commandArg). The halt item keeps the raw token either way.
+test('a consent halt for a rule key with spaces or quotes prints a flag that reaches the CLI as one argument, and that flag lets the next step apply', async () => {
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const { spawnSync } = require('node:child_process');
+  const { authorizationKeys } = require('../build-model-app.js');
+  const { commandArg } = require('../lib/cli-failure.js');
+  const dir = makeTempDir('config-authorize-shell-');
+  const probe = path.join(dir, 'argv.js');
+  fs.writeFileSync(probe, "require('node:fs').writeFileSync(process.env.AUTHORIZE_ARGV_OUT, JSON.stringify(process.argv.slice(2)));\n", 'utf8');
+  const windows = process.platform === 'win32';
+  const shells = windows ? ['powershell.exe', 'pwsh'] : ['sh', 'bash', 'zsh', 'pwsh'];
+  const required = windows ? 'powershell.exe' : 'sh';
+  // What each shell hands node when the printed command part is pasted after `node <probe>`.
+  const throughShells = (command) => {
+    const got = {};
+    for (const shell of shells) {
+      const powershell = shell === 'powershell.exe' || shell === 'pwsh';
+      const name = shell.replace(/\W/g, '');
+      const script = path.join(dir, `paste-${name}.${powershell ? 'ps1' : 'sh'}`);
+      // `&` runs a quoted program path in PowerShell. Windows PowerShell reads a script as UTF-8 only with a BOM.
+      fs.writeFileSync(script, `${powershell ? '\uFEFF& ' : ''}${commandArg(process.execPath)} ${commandArg(probe)} ${command}\n`, 'utf8');
+      const out = path.join(dir, `argv-${name}.json`);
+      fs.rmSync(out, { force: true });
+      const args = powershell ? ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', script] : [script];
+      const r = spawnSync(shell, args, { encoding: 'utf8', timeout: 60000, env: { ...process.env, AUTHORIZE_ARGV_OUT: out } });
+      if (r.error && r.error.code === 'ENOENT' && shell !== required) continue;
+      assert.ifError(r.error);
+      assert.equal(r.status, 0, `${shell}: ${r.stderr}`);
+      got[shell] = JSON.parse(fs.readFileSync(out, 'utf8'));
+    }
+    assert.ok(required in got, `ran in ${Object.keys(got).join(', ')}`);
+    return got;
+  };
+  const cases = [
+    ['email', 'bare'],
+    ['contact email', 'quoted'],
+    ['email;$(echo x)|`y` %PATH%', 'quoted'],
+    ["owner's email", 'placeholder'],
+    ['say "hi"', 'placeholder'],
+  ];
+  for (const [key, spelling] of cases) {
+    const h = await harness();
+    const initial = { solution: { uniqueName: 'ContosoSol', publisherPrefix: 'contoso' }, duplicateDetectionRules: [
+      { key, name: 'Contact Email', entity: 'contact', status: 'unpublished', description: 'Matches contacts by email', conditions: [{ key: 'email', column: 'emailaddress1', match: 'exact' }] },
+    ] };
+    assert.deepEqual(C.validateConfiguration(initial, { profile: 'portable' }).errors, [], key);
+    assert.deepEqual((await h.run(initial)).result.refused, [], key);
+    const changed = structuredClone(initial);
+    changed.duplicateDetectionRules[0].description = null;
+    const ctx = { sdk: h.sdk, creates: h.creates, solutionUniqueName: 'ContosoSol' };
+    const mark = h.org.requests.length;
+    const step = await C.runConfigurationStep(changed, ctx, 'data-model');
+    assert.deepEqual(h.org.writes(mark), [], key);
+    const token = `duplicateRule:${key}:description`;
+    assert.deepEqual(step.halt.items.map((i) => i.authorize), [[token]], `${key}: the item keeps the raw token`);
+    const approve = /\(approve with (--authorize \S+|--authorize '[^']*')(?: — (.*))?\)$/.exec(step.halt.message);
+    assert.ok(approve, `${key}: ${step.halt.message}`);
+    let argv;
+    if (spelling === 'placeholder') {
+      assert.equal(approve[1], '--authorize <token>', key);
+      const note = /^<token> is (".*"); it is not written into the command because no way of writing it reaches the command unchanged in both PowerShell and a POSIX shell\.$/.exec(approve[2]);
+      assert.ok(note, `${key}: ${approve[2]}`);
+      argv = ['--authorize', JSON.parse(note[1])];
+    } else {
+      assert.equal(approve[2], undefined, key);
+      assert.equal(approve[1], spelling === 'bare' ? `--authorize ${token}` : `--authorize '${token}'`, key);
+      for (const [shell, got] of Object.entries(throughShells(approve[1]))) assert.deepEqual(got, ['--authorize', token], `${key}: ${shell}`);
+      argv = ['--authorize', token];
+    }
+    const parsed = authorizationKeys(argv, changed);
+    assert.equal(parsed.error, null, key);
+    const before = h.org.requests.length;
+    const approved = await C.runConfigurationStep(changed, { ...ctx, authorizedDestructive: parsed.keys }, 'data-model');
+    assert.equal(approved.halt, null, `${key}: ${approved.halt && approved.halt.message}`);
+    assert.ok(h.org.writes(before).some((w) => /^PATCH \/duplicaterules\(/.test(w)), `${key}: ${JSON.stringify(h.org.writes(before))}`);
+    assert.deepEqual(h.org.unexpected, [], key);
+  }
+});
+
 test('build wiring: an unknown outcome is never retried by a whole-build retry', async () => {
   const h = await harness({ lose: ({ method, path }) => method === 'POST' && path.startsWith('/connectionreferences') });
   const ctx = C.configurationContext({ sdk: h.sdk, creates: h.creates, solutionUniqueName: 'ContosoSol' });

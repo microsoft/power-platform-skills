@@ -46,6 +46,8 @@
 //   }
 // See: https://learn.microsoft.com/power-platform/alm/conn-ref-env-variables-build-tools
 
+const { commandArgOrPlaceholder } = require('./cli-failure.js');
+
 const CONFIGURATION_MIN_VERSION = '2.21.0';
 
 const FIELDS = Object.freeze({
@@ -2392,8 +2394,21 @@ const haltItem = ({ kind, key, code, authorize }) => ({ kind, key, code, ...(Arr
 //   environmentVariable contoso_Mode (DESTRUCTIVE_CHANGE_UNAUTHORIZED) (approve with --authorize environmentVariable:contoso_mode:defaultValue)
 // so the maker can resume without reading the plan. A token is <kind>:<key>:<field> (tokenOf): keys and field names only, never a
 // setting value or an SDK message, so it may be printed wherever the key already is.
+// The flags are meant to be pasted into a command, and a key is not always plain: a duplicate-rule key is an identity kept byte for byte, so
+// it may hold white space or quotes, and `--authorize duplicateRule:contact email:description` would reach the CLI as two arguments. So each
+// token is written as ONE argument for the shells the skill's commands are written for (commandArg: bare when plain, as above; single-quoted
+// otherwise), and a token no spelling carries unchanged through both PowerShell and a POSIX shell (a quote character) is a placeholder whose
+// value the message gives as data:
+//   duplicateRule contact email (DESTRUCTIVE_CHANGE_UNAUTHORIZED) (approve with --authorize 'duplicateRule:contact email:description')
+//   duplicateRule owner's (DESTRUCTIVE_CHANGE_UNAUTHORIZED) (approve with --authorize <token> — <token> is "duplicateRule:owner's:description"; it is ...)
+// The halt item's `authorize` keeps the raw tokens either way.
+function authorizeFlags(tokens) {
+  const spelled = tokens.map((t, i) => commandArgOrPlaceholder(t, tokens.length === 1 ? '<token>' : `<token-${i + 1}>`));
+  const notes = spelled.map((s) => s.note).filter(Boolean);
+  return `${spelled.map((s) => `--authorize ${s.arg}`).join(' ')}${notes.length ? ` — ${notes.join(' ')}` : ''}`;
+}
 function configurationHaltMessage(items) {
-  const line = (p) => `${p.kind} ${p.key} (${p.code})${p.authorize && p.authorize.length ? ` (approve with ${p.authorize.map((t) => `--authorize ${t}`).join(' ')})` : ''}`;
+  const line = (p) => `${p.kind} ${p.key} (${p.code})${p.authorize && p.authorize.length ? ` (approve with ${authorizeFlags(p.authorize)})` : ''}`;
   return `${items.length} configuration item${items.length === 1 ? '' : 's'} not completed: ${items.map(line).join(', ')}`;
 }
 
