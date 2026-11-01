@@ -31,10 +31,24 @@
 //                 table while a publish of it is being prepared therefore still stops it.
 //   checkAppWrite a write or publish of the app. An app publish puts live the saved forms the app holds, so an
 //                 app that holds, or whose write adds, a form of a blocked table is not written in this run.
+//
+// Declared forms, dashboards, business rules and process flows (lib/managed-bindings.js, lib/managed-feature-contract.js) add
+// four things, all unused by a build that declares none of them, so such a build sends the same requests as before:
+//   dashboard scopes  a dashboard publishes by its own id (`<dashboard>` in the ParameterXml), never as a table: `blockScope`,
+//                     `allowScope`, `allowTarget` and `checkAppWrite` (`addedDashboards`, `heldDashboards`) withhold it apart.
+//   holds             `hold(token, …)` withholds a managed attempt's scopes until `release(token)`, after that attempt is proved
+//                     and committed. Only that token is released: a sibling's success never frees a scope another attempt holds.
+//   quarantine        a block for the rest of the run, set by a required failure; nothing releases it.
+//   registerKnown     maps a managed artifact's ids to the scopes they publish. It is not a block.
 
 /** Lowercased table logical name, or '' for anything that is not a non-empty string. */
 function tableKey(table) {
   return typeof table === 'string' ? table.trim().toLowerCase() : '';
+}
+
+/** Lowercased dashboard (systemform) id without braces, or '' for anything that is not a non-empty string. */
+function dashboardKey(id) {
+  return typeof id === 'string' ? id.trim().replace(/^\{|\}$/g, '').toLowerCase() : '';
 }
 
 // The publish actions, as lib/sdk-http-client.js (isPublishRequest) recognises them:
@@ -51,6 +65,11 @@ const APP_WRITE = 'app write or publish (the app holds or adds a form of the tab
 //   <importexportxml><entities><entity>contoso_task</entity><entity>account</entity></entities><nodes/>…</importexportxml>
 // Logical names are [a-z0-9_], so they carry no markup or entity references to decode.
 const ENTITY_ELEMENT = /<entity>\s*([^<]*?)\s*<\/entity>/gi;
+// A dashboard in a ParameterXml is one `dashboard` element of the `dashboards` list, its form id as text (the SDK's
+// publish of one dashboard, measured with the real bundle):
+//   <importexportxml><dashboards><dashboard>55555555-5555-4555-8555-555555555555</dashboard></dashboards></importexportxml>
+// A dashboard id is never encoded as a table name: the two lists are screened apart.
+const DASHBOARD_ELEMENT = /<dashboard>\s*([^<]*?)\s*<\/dashboard>/gi;
 // An element left with nothing in it once its tables are cut (`<entities></entities>`, `<nodes/>`).
 const EMPTY_ELEMENT = /<([A-Za-z_][\w.-]*)(\s[^<>]*)?>\s*<\/\1>|<[A-Za-z_][\w.-]*(\s[^<>]*)?\/>/g;
 
@@ -83,18 +102,68 @@ function withheldAnswer(nothingLeft, message) {
 }
 
 function createPublicationBarrier() {
-  // table -> { table, blockedBy: [label], skipped: [path] }
+  // table -> { table, blockedBy: [label], skipped: [path] }: blocked for the rest of the run.
   const blocked = new Map();
+  // dashboard id -> { dashboard, blockedBy: [label], skipped: [path] }: blocked for the rest of the run.
+  const dashboardsBlocked = new Map();
+  // token -> { tables: Set, dashboards: Set, label }: withheld while a managed attempt is unproved; `release(token)`
+  // ends only that token's hold, so one artifact's success never frees what a sibling holds.
+  const holds = new Map();
+  // `table:<name>` / `dashboard:<id>` -> the entry a held scope reports and records skips on.
+  const heldEntries = new Map();
+  // id -> { tables: Set, dashboards: Set }: the scopes a managed artifact's ids publish (registerKnown; not a block).
+  const knownIds = new Map();
   // `type:id` -> table, for owed publish targets ([type, id, names?]) that carry no table of their own.
   const targetTables = new Map();
   const skip = (entry, path) => {
     if (path && !entry.skipped.includes(path)) entry.skipped.push(path);
   };
+  const isHeld = (kind, name) => {
+    for (const h of holds.values()) if ((kind === 'table' ? h.tables : h.dashboards).has(name)) return true;
+    return false;
+  };
+  const heldEntry = (kind, name) => {
+    const k = `${kind}:${name}`;
+    if (!heldEntries.has(k)) heldEntries.set(k, kind === 'table' ? { table: name, blockedBy: [], skipped: [] } : { dashboard: name, blockedBy: [], skipped: [] });
+    const entry = heldEntries.get(k);
+    for (const h of holds.values()) if ((kind === 'table' ? h.tables : h.dashboards).has(name) && h.label && !entry.blockedBy.includes(h.label)) entry.blockedBy.push(h.label);
+    return entry;
+  };
+  // The entry that withholds a table or dashboard now — a run-long block, else a live hold — or undefined.
+  const tableEntry = (table) => {
+    const t = tableKey(table);
+    return blocked.get(t) || (t && isHeld('table', t) ? heldEntry('table', t) : undefined);
+  };
+  const dashboardEntry = (id) => {
+    const d = dashboardKey(id);
+    return dashboardsBlocked.get(d) || (d && isHeld('dashboard', d) ? heldEntry('dashboard', d) : undefined);
+  };
+  const activeTables = () => {
+    const list = [...blocked.keys()];
+    for (const h of holds.values()) for (const t of h.tables) if (!list.includes(t)) list.push(t);
+    return list;
+  };
+  const activeDashboards = () => {
+    const list = [...dashboardsBlocked.keys()];
+    for (const h of holds.values()) for (const d of h.dashboards) if (!list.includes(d)) list.push(d);
+    return list;
+  };
+  // Whether anything is withheld. While nothing is, every check below answers exactly what it was given.
+  const anyActive = () => blocked.size > 0 || dashboardsBlocked.size > 0 || [...holds.values()].some((h) => h.tables.size || h.dashboards.size);
+  const scopesOf = (scopes) => {
+    const out = { tables: new Set(), dashboards: new Set() };
+    for (const s of Array.isArray(scopes) ? scopes : [scopes]) {
+      if (!s || typeof s !== 'object') continue;
+      if (s.type === 'table' && tableKey(s.table)) out.tables.add(tableKey(s.table));
+      if (s.type === 'dashboard' && dashboardKey(s.id)) out.dashboards.add(dashboardKey(s.id));
+    }
+    return out;
+  };
 
   const barrier = {
-    /** True once any table is blocked. */
+    /** True once any table or dashboard is blocked or held. */
     get active() {
-      return blocked.size > 0;
+      return anyActive();
     },
     /** Block `table` because `label` ended refused or unknown with saved or possibly-saved state. */
     block(table, label) {
@@ -125,17 +194,17 @@ function createPublicationBarrier() {
       }
       return tables;
     },
-    /** Whether `table` is blocked. Records nothing. */
+    /** Whether `table` is blocked or held. Records nothing. */
     blocks(table) {
-      return blocked.has(tableKey(table));
+      return !!tableEntry(table);
     },
-    /** The blocked tables, in the order they were blocked. */
+    /** The blocked and held tables, in the order they were blocked. */
     blockedTables() {
-      return [...blocked.keys()];
+      return activeTables();
     },
     /** May `table` be published by `path`? A refusal is recorded against the table as skipped by `path`. */
     allow(table, path) {
-      const entry = blocked.get(tableKey(table));
+      const entry = tableEntry(table);
       if (!entry) return true;
       skip(entry, path);
       return false;
@@ -143,7 +212,7 @@ function createPublicationBarrier() {
     /** The tables of `tables` that may be published by `path`, in their order; the list itself when nothing is blocked. */
     allowTables(tables, path) {
       const list = Array.isArray(tables) ? tables : [...(tables || [])];
-      if (!blocked.size) return list;
+      if (!anyActive()) return list;
       return list.filter((t) => barrier.allow(t, path));
     },
     /** Remember that the owed publish `target` ([type, id, names?]) publishes `table`. */
@@ -151,15 +220,102 @@ function createPublicationBarrier() {
       const t = tableKey(table);
       if (t && Array.isArray(target) && target[0] && target[1]) targetTables.set(`${target[0]}:${String(target[1]).toLowerCase()}`, t);
     },
-    /** May the owed publish `target` run? False when the table it was noted for is blocked. */
+    /**
+     * May the owed publish `target` run? False when the table it was noted for is blocked, when it is a dashboard whose
+     * id is blocked or held, or when its id was registered (registerKnown) for a scope that is.
+     */
     allowTarget(target, path) {
-      if (!blocked.size || !Array.isArray(target)) return true;
-      const t = targetTables.get(`${target[0]}:${String(target[1]).toLowerCase()}`);
-      return t ? barrier.allow(t, path) : true;
+      if (!anyActive() || !Array.isArray(target)) return true;
+      const id = String(target[1]).toLowerCase();
+      if (target[0] === 'dashboard') {
+        const entry = dashboardEntry(id);
+        if (entry) { skip(entry, path); return false; }
+      }
+      const t = targetTables.get(`${target[0]}:${id}`);
+      if (t && !barrier.allow(t, path)) return false;
+      const known = knownIds.get(dashboardKey(id));
+      if (known) {
+        let ok = true;
+        for (const k of known.tables) if (!barrier.allow(k, path)) ok = false;
+        for (const d of known.dashboards) {
+          const entry = dashboardEntry(d);
+          if (entry) { skip(entry, path); ok = false; }
+        }
+        return ok;
+      }
+      return true;
     },
-    /** What was withheld: [{ table, blockedBy: [label], skipped: [path] }], copies. */
+    /** May the publish of `scope` ({ type: 'table', table } or { type: 'dashboard', id }) run? Records a refusal as allow does. */
+    allowScope(scope, path) {
+      if (scope && scope.type === 'dashboard') {
+        const entry = dashboardEntry(scope.id);
+        if (!entry) return true;
+        skip(entry, path);
+        return false;
+      }
+      return barrier.allow(scope && scope.table, path);
+    },
+    /** Block one scope for the rest of the run, because `label` may have left it saved and unproved. */
+    blockScope(scope, label) {
+      if (scope && scope.type === 'dashboard') {
+        const d = dashboardKey(scope.id);
+        if (!d) return false;
+        let entry = dashboardsBlocked.get(d);
+        if (!entry) {
+          entry = { dashboard: d, blockedBy: [], skipped: [] };
+          dashboardsBlocked.set(d, entry);
+        }
+        if (label && !entry.blockedBy.includes(label)) entry.blockedBy.push(label);
+        return true;
+      }
+      return barrier.block(scope && scope.table, label);
+    },
+    /**
+     * Remember which scopes the ids of a managed artifact publish (a form id -> its table, a dashboard id -> itself).
+     * Not a block: a registered scope stays publishable until something holds or blocks it.
+     */
+    registerKnown(scopes, ids) {
+      const { tables, dashboards } = scopesOf(scopes || []);
+      for (const raw of ids || []) {
+        const id = dashboardKey(String(raw));
+        if (!id) continue;
+        const entry = knownIds.get(id) || { tables: new Set(), dashboards: new Set() };
+        for (const t of tables) entry.tables.add(t);
+        for (const d of dashboards) entry.dashboards.add(d);
+        knownIds.set(id, entry);
+      }
+    },
+    /** Withhold `scopes` under `token` until `release(token)`: a managed attempt that is not yet proved and committed. */
+    hold(token, scopes, ids, label) {
+      if (!token) throw new TypeError('hold: a token is required');
+      barrier.registerKnown(scopes, ids);
+      const { tables, dashboards } = scopesOf(scopes || []);
+      const h = holds.get(token) || { tables: new Set(), dashboards: new Set(), label: label || 'a managed artifact that is not yet proved' };
+      for (const t of tables) h.tables.add(t);
+      for (const d of dashboards) h.dashboards.add(d);
+      holds.set(token, h);
+    },
+    /** End the hold of `token` only. Run-long blocks and other tokens' holds stay. */
+    release(token) {
+      return holds.delete(token);
+    },
+    /** Block `scopes` for the rest of the run: a required failure (preflight, proof, membership, creation record). */
+    quarantine(scopes, ids, label) {
+      barrier.registerKnown(scopes, ids);
+      for (const s of Array.isArray(scopes) ? scopes : [scopes]) barrier.blockScope(s, label);
+    },
+    /** What was withheld: [{ table, blockedBy: [label], skipped: [path] }] and [{ dashboard, … }], copies. */
     withheld() {
-      return [...blocked.values()].map((e) => ({ table: e.table, blockedBy: e.blockedBy.slice(), skipped: e.skipped.slice() }));
+      const out = [];
+      for (const t of activeTables()) {
+        const e = tableEntry(t);
+        out.push({ table: e.table, blockedBy: e.blockedBy.slice(), skipped: e.skipped.slice() });
+      }
+      for (const d of activeDashboards()) {
+        const e = dashboardEntry(d);
+        out.push({ dashboard: e.dashboard, blockedBy: e.blockedBy.slice(), skipped: e.skipped.slice() });
+      }
+      return out;
     },
     /**
      * Wrap the HTTP transport (`request` of createAzHttpClient, lib/sdk-http-client.js; makeRequest by
@@ -172,7 +328,7 @@ function createPublicationBarrier() {
     gateRequest(request = require('./dataverse-auth.js').makeRequest) {
       if (typeof request !== 'function') throw new TypeError('gateRequest: the transport to wrap must be a function');
       return function gatedRequest(req) {
-        if (!blocked.size) return request(req);
+        if (!anyActive()) return request(req);
         const screened = screenPublish(req);
         return screened.answer ? Promise.resolve(screened.answer) : request(screened.req);
       };
@@ -185,36 +341,57 @@ function createPublicationBarrier() {
      * or an existing app whose holdings could not be read while a table is blocked — is not written:
      * { ok: false, tables, unknownHoldings, blockedBy }, recorded against each table as skipped by the
      * app write. { ok: true } otherwise, and always while nothing is blocked.
+     *
+     * Dashboards the same way: `addedDashboards`, the dashboard ids this write adds; `heldDashboards`, the ids the app
+     * holds (undefined when unread). An app that holds or adds a blocked or held dashboard, or an existing app whose
+     * dashboards could not be read while any dashboard is withheld, is not written; the verdict then also lists
+     * `dashboards`.
      */
-    checkAppWrite({ added = [], held, existingApp = false } = {}) {
-      if (!blocked.size) return { ok: true };
+    checkAppWrite({ added = [], held, existingApp = false, addedDashboards = [], heldDashboards } = {}) {
+      if (!anyActive()) return { ok: true };
       const heldList = held instanceof Set || Array.isArray(held) ? [...held] : null;
       const tables = [];
       for (const name of [...(added || []), ...(heldList || [])]) {
-        const entry = blocked.get(tableKey(name));
+        const entry = tableEntry(name);
         if (entry && !tables.includes(entry.table)) tables.push(entry.table);
       }
-      const unknownHoldings = !tables.length && !!existingApp && !heldList;
-      if (!tables.length && !unknownHoldings) return { ok: true };
-      const hit = tables.length ? tables : [...blocked.keys()];
+      const heldDashList = heldDashboards instanceof Set || Array.isArray(heldDashboards) ? [...heldDashboards] : null;
+      const dashboards = [];
+      for (const id of [...(addedDashboards || []), ...(heldDashList || [])]) {
+        const entry = dashboardEntry(id);
+        if (entry && !dashboards.includes(entry.dashboard)) dashboards.push(entry.dashboard);
+      }
+      const withheldTables = activeTables();
+      const withheldDashboards = activeDashboards();
+      const unknownTables = !tables.length && !!existingApp && !heldList && withheldTables.length > 0;
+      const unknownDashboards = !dashboards.length && !!existingApp && !heldDashList && withheldDashboards.length > 0;
+      if (!tables.length && !dashboards.length && !unknownTables && !unknownDashboards) return { ok: true };
+      const hit = tables.length ? tables : unknownTables ? withheldTables : [];
+      const hitDashboards = dashboards.length ? dashboards : unknownDashboards ? withheldDashboards : [];
       const blockedBy = [];
-      for (const t of hit) {
-        const entry = blocked.get(t);
+      const note = (entry) => {
         skip(entry, APP_WRITE);
         for (const label of entry.blockedBy) if (!blockedBy.includes(label)) blockedBy.push(label);
-      }
-      return { ok: false, tables: hit, unknownHoldings, blockedBy };
+      };
+      for (const t of hit) note(tableEntry(t));
+      for (const d of hitDashboards) note(dashboardEntry(d));
+      const verdict = { ok: false, tables: hit, unknownHoldings: unknownTables || unknownDashboards, blockedBy };
+      if (hitDashboards.length) verdict.dashboards = hitDashboards;
+      return verdict;
     },
   };
 
   // The synchronous check of one request at dispatch (gateRequest). Returns { req } to send (the same
-  // object when it names no blocked table) or { answer } for a request that is not sent.
+  // object when it names no blocked table or dashboard) or { answer } for a request that is not sent.
   function screenPublish(req) {
     if (String((req && req.method) || 'GET').toUpperCase() !== 'POST') return { req };
     const path = pathnameOf(req.url);
+    // Every withheld scope, recorded as skipped at send: the tables by name, the dashboards as `dashboard <id>`.
     const all = () => {
-      for (const entry of blocked.values()) skip(entry, AT_SEND);
-      return [...blocked.keys()];
+      const names = [];
+      for (const t of activeTables()) { skip(tableEntry(t), AT_SEND); names.push(t); }
+      for (const d of activeDashboards()) { skip(dashboardEntry(d), AT_SEND); names.push(`dashboard ${d}`); }
+      return names;
     };
     if (PUBLISH_ALL_XML.test(path)) {
       const tables = all();
@@ -241,15 +418,22 @@ function createPublicationBarrier() {
       return { answer: withheldAnswer(false, `a publish request that could not be read was not sent: the publish of ${tables.join(', ')} is withheld in this run`) };
     }
     const hit = [];
-    const cut = payload.ParameterXml.replace(ENTITY_ELEMENT, (whole, name) => {
-      const entry = blocked.get(tableKey(name));
+    const cutTables = payload.ParameterXml.replace(ENTITY_ELEMENT, (whole, name) => {
+      const entry = tableEntry(name);
       if (!entry) return whole;
       skip(entry, AT_SEND);
       if (!hit.includes(entry.table)) hit.push(entry.table);
       return '';
     });
+    const cut = cutTables.replace(DASHBOARD_ELEMENT, (whole, id) => {
+      const entry = dashboardEntry(id);
+      if (!entry) return whole;
+      skip(entry, AT_SEND);
+      if (!hit.includes(`dashboard ${entry.dashboard}`)) hit.push(`dashboard ${entry.dashboard}`);
+      return '';
+    });
     if (!hit.length) return { req };
-    const xml = cut.replace(/<entities>\s*<\/entities>/gi, '');
+    const xml = cut.replace(/<entities>\s*<\/entities>/gi, '').replace(/<dashboards>\s*<\/dashboards>/gi, '');
     let rest = xml;
     for (let before = null; before !== rest;) {
       before = rest;
@@ -265,10 +449,17 @@ function createPublicationBarrier() {
   function namedBlocked(text) {
     const tables = [];
     for (const m of String(text).matchAll(ENTITY_ELEMENT)) {
-      const entry = blocked.get(tableKey(m[1]));
+      const entry = tableEntry(m[1]);
       if (entry && !tables.includes(entry.table)) {
         skip(entry, AT_SEND);
         tables.push(entry.table);
+      }
+    }
+    for (const m of String(text).matchAll(DASHBOARD_ELEMENT)) {
+      const entry = dashboardEntry(m[1]);
+      if (entry && !tables.includes(`dashboard ${entry.dashboard}`)) {
+        skip(entry, AT_SEND);
+        tables.push(`dashboard ${entry.dashboard}`);
       }
     }
     return tables;
@@ -277,15 +468,19 @@ function createPublicationBarrier() {
   return barrier;
 }
 
-/** The line a build reports for one withheld table (an entry of `withheld()`). */
+/** The line a build reports for one withheld table or dashboard (an entry of `withheld()`). */
 function describeWithheld(entry) {
   const by = (entry.blockedBy || []).join('; ') || 'a declared artifact';
+  if (entry.dashboard) {
+    return `dashboard ${entry.dashboard} was not published: ${by} did not settle after saving, and a publish of the dashboard would put that saved state live — its saved changes stay saved and unpublished; repair and rerun`;
+  }
   return `table ${entry.table} was not published: ${by} ended refused or unknown after saving, and a publish of the table would put that saved state live — its saved changes stay saved and unpublished; repair and rerun`;
 }
 
 /** The message of the halt a build raises for an app write checkAppWrite refused (a verdict with ok: false). */
 function describeWithheldApp(verdict) {
-  const tables = (verdict.tables || []).join(', ');
+  const names = [...(verdict.tables || []), ...(verdict.dashboards || []).map((d) => `dashboard ${d}`)];
+  const tables = names.join(', ');
   const by = (verdict.blockedBy || []).join('; ') || 'a declared artifact';
   const why = verdict.unknownHoldings
     ? `the forms the app holds could not be read, so it may hold a form of ${tables}`
