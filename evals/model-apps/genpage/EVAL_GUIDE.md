@@ -358,6 +358,24 @@ For a side-by-side comparison or trial run:
 node run-layer-1.js --fixtures /path/to/alternate/fixtures
 ```
 
+### Selected by name: a host's retry under `--turn-id`
+
+`genpage-upload.js --turn-id` is for a host or script that retries one complete edit after losing its
+answer, not for the skill's ordinary flow, so its evidence is outside the default runs and their counts:
+
+```bash
+node evals/model-apps/genpage/run-stable-turn-retry.js                       # fixtures/stable-turn-retry
+node evals/model-apps/genpage/run-stable-turn-retry.js --fixtures <folder>   # another evidence folder
+```
+
+It grades one folder (`lib/turn-retry-contract.js`): the turn id is kept before the first send and never
+added after a lost answer; the retry is the same command with the same bytes from another process,
+under the same turn; the turn leaves one page and one history turn; a reuse of the turn for another
+request (another binding list) is refused `GENPAGE_TURN_ID_REUSED` with nothing written and the
+page's connection kept; and an ordinary edit passes no `--turn-id` — in the folder and in every upload
+the default corpus records. `--eval` and `--tier` are refused (exit 2). The evidence is constructed,
+not captured, and nothing is sent to a service.
+
 ### CI-style summary
 
 The runner emits TAP v13 — pipe through any TAP consumer for nice reporting:

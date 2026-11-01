@@ -1,0 +1,4 @@
+# The upload events record the SHA-256 of the exact bytes each send read (`inputs`), and the grader compares them with these
+# files. A Windows checkout with core.autocrlf=true would rewrite LF to CRLF and change every digest, so the folder is checked
+# out verbatim on every system.
+* -text
