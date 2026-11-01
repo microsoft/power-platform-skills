@@ -51,11 +51,13 @@
 // planned publication), or carried over from the committed group's unsent debt. A read that finds the saved layer
 // ahead of the published one — someone's draft — never makes a debt, so it is never published by this build.
 //
-// The committed consumer state keeps the canonical declaration (consumerState.declaration): every field the spec
-// authors, with its authored value as written, and only those, an absent field absent. A change of authorship alone
-// rebinds without a content write. The plan hands it to the attempt before the send, so the attempt records the
-// declaration it is sent with: a recovery commits that one, never today's spec and never null, and the next run
-// reconciles today's spec against it. Verify and hydrate read it back with committedDeclaration.
+// The canonical declaration — every field the spec authors, with its authored value as written, and only those, an
+// absent field absent — is the group's originalDeclaration: the plan hands it to the attempt before the send, the
+// attempt records it, and the store commits that recorded one with the group. So a recovery commits the declaration it
+// was sent with, never today's spec and never null, and the next run reconciles today's spec against it. A change of
+// authorship alone rebinds without a content write. It is never copied into the consumer state, which keeps only what
+// the proof derived (tiles, seed ids) and whose stricter value rule would refuse authored text such as a URL on the
+// environment's own host. Verify and hydrate read it back with committedDeclaration.
 //
 // Publication goes through ONE adapter (publishDeclaredDashboard) over publishManagedScope: one permit, one scope, the
 // dashboard's own id in a `<dashboard>` envelope. Its layers are read by the shared `dashboard` reader of
@@ -510,7 +512,7 @@ const DECLARED_TILE_FIELDS = ['key', 'type', 'name', 'view', 'chart', 'entity', 
 
 /**
  * The canonical declaration of a declared dashboard: the ORIGINAL declaration the attempt records before its send
- * (prepareAttempt `declaration`) and the group commits as consumerState.declaration; `declarationSha256` hashes it.
+ * (prepareAttempt `declaration`) and the group commits as its originalDeclaration; `declarationSha256` hashes it.
  * Free text (names, descriptions, view and chart names, urls) is kept as authored: the binding store accepts it in a
  * declaration and refuses, before anything is written or sent (`managed-declaration-refused`), a value it must not
  * hold, such as a token or a credential in a url.
@@ -529,10 +531,12 @@ function canonicalDeclaration(dashboard) {
 /**
  * The declaration a committed dashboard group was settled for, read back as the spec entry it was authored as (a deep
  * copy: changing it changes nothing stored), or null for a group committed without one. It is what verify compares
- * the spec with and what hydrate writes back; it passes validateDeclaredDashboard as the spec did.
+ * the spec with and what hydrate writes back; it passes validateDeclaredDashboard as the spec did. The group's
+ * originalDeclaration is the only authority: the store keeps it from the attempt that sent, and nothing a consumer
+ * state holds stands in for it.
  */
 function committedDeclaration(group) {
-  const d = group && group.consumerState ? group.consumerState.declaration : null;
+  const d = group ? group.originalDeclaration : null;
   return d && typeof d === 'object' ? JSON.parse(JSON.stringify(d)) : null;
 }
 
@@ -949,7 +953,7 @@ function planDashboard(s, resolution, committed) {
     const recorded = committed && r.entries.every((e) => e.record && e.record.intentSha256 === projectionBaseline(e.liveParts).intentSha256);
     const rootRec = committed && committed.records.find((x) => x.kind === KIND && x.key === s.key);
     const rootSame = !!rootRec && rootRec.intentSha256 === projectionBaseline({ description: r.desiredRoot.description }).intentSha256;
-    const declared = committed && canonicalJson(committed.consumerState && committed.consumerState.declaration) === canonicalJson(declaration);
+    const declared = committed && canonicalJson(committedDeclaration(committed)) === canonicalJson(declaration);
     // A true no-op: the committed group already says what is there and what the spec declares. Whether the published
     // layer is behind the saved one does not matter here: only debt the group already owes is published (below), and
     // a read never makes a debt. Otherwise the group is (re)bound without a content write.
@@ -1112,19 +1116,13 @@ async function proveDashboard(s, expected, applied, { token = null, recovering =
   }
   // The declaration this attempt was sent with: the one the attempt recorded before the send (the wrapper's
   // `declaration`; on a recovery always the attempt's), never rebuilt from today's spec. It must be the one the
-  // attempt's declaration hash names, or the commit would bind a declaration the attempt was not planned with. Only an
-  // attempt recorded without a declaration (before attempts kept one) falls back to the hash rule: today's spec when it
-  // hashes the same, else unknown (null), and the next run reconciles today's spec.
+  // attempt's declaration hash names, or the commit would bind a declaration the attempt was not planned with. The
+  // store commits the attempt's recorded one as the group's originalDeclaration; the consumer state never holds a copy.
+  // An attempt recorded without one (before attempts kept one) commits without one: committedDeclaration reads null,
+  // and the next run rebinds it from today's spec without a content write.
   const sentDeclarationSha = recovering ? (attempt ? attempt.declarationSha256 : null) : (s.lastPlan ? s.lastPlan.declarationSha256 : null);
-  let keptDeclaration;
-  if (declaration && typeof declaration === 'object') {
-    if (sha(declaration) !== sentDeclarationSha) {
-      throw stop('create-completion-required', `the declaration recorded for dashboard "${key}" is not the one its change was planned with; it was not bound or published`);
-    }
-    keptDeclaration = declaration;
-  } else {
-    const canonical = canonicalDeclaration(s.dashboard);
-    keptDeclaration = sha(canonical) === sentDeclarationSha ? canonical : null;
+  if (declaration && typeof declaration === 'object' && sha(declaration) !== sentDeclarationSha) {
+    throw stop('create-completion-required', `the declaration recorded for dashboard "${key}" is not the one its change was planned with; it was not bound or published`);
   }
   return {
     savedProof: { savedSha256: savedSha },
@@ -1133,7 +1131,6 @@ async function proveDashboard(s, expected, applied, { token = null, recovering =
     records,
     proof: { savedSha256: savedSha, semanticSha256: semantic, preservationSha256: preserved, expectedChildrenSha256: expected.children.length ? sha(expected.children) : null },
     consumerState: {
-      declaration: keptDeclaration,
       tiles: Object.fromEntries(found.map(({ child, place, type }) => [child.key, { id: child.id, type, cell: place.cell, section: place.section, tab: place.tab }])),
       seedIds,
     },

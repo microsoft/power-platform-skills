@@ -3,6 +3,7 @@
 // plugin's real HTTP client and the run's real publication barrier, over a fake Dataverse that keeps a saved and a
 // published layer per systemform row (helpers/managed-wire.js). Each test counts what reaches the wire: the content
 // writes (POST/PATCH systemforms) and the PublishXml requests, by dashboard id.
+const fs = require('node:fs');
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { makeTempDir } = require('./helpers/temp-dirs.js');
@@ -583,14 +584,14 @@ test('the committed declaration is the canonical one: authoring a field the live
   putExisting(w.wire);
   const omitted = declared([{ key: 'open', type: 'list', view: 'Open cases', componentId: C_OPEN }], { dashboardId: DID });
   await settle(w, omitted);
-  const first = w.store.readGroup('dashboard', 'ops').committed.consumerState.declaration;
+  const first = committedDeclaration(w.store.readGroup('dashboard', 'ops').committed);
   assert.equal(first.tiles[0].name, undefined, 'an omitted field stays absent');
   const authored = declared([{ key: 'open', type: 'list', view: 'Open cases', componentId: C_OPEN, name: 'Open cases' }], { dashboardId: DID });
   const next = await rerun(w);
   const writes = contentWrites(w.wire).length;
   assert.equal((await settle(next, authored)).result.committed, true, 'the authorship change is recorded');
   assert.equal(contentWrites(w.wire).length, writes, 'no content write');
-  assert.deepEqual(next.store.readGroup('dashboard', 'ops').committed.consumerState.declaration.tiles[0].name, 'Open cases', 'kept as authored');
+  assert.deepEqual(committedDeclaration(next.store.readGroup('dashboard', 'ops').committed).tiles[0].name, 'Open cases', 'kept as authored');
   assert.deepEqual((await settle(await rerun(w), authored)).result, { noop: true });
 });
 
@@ -604,7 +605,7 @@ test('a recovery under a spec changed since the send commits the ORIGINAL declar
   const after = await rerun(w);
   assert.equal((await settle(after, later)).result.committed, true);
   assert.match(w.wire.saved.get(DID).formxml, /Open later/);
-  assert.deepEqual(after.store.readGroup('dashboard', 'ops').committed.consumerState.declaration.tiles[0].name, 'Open later');
+  assert.deepEqual(committedDeclaration(after.store.readGroup('dashboard', 'ops').committed).tiles[0].name, 'Open later');
 });
 
 test('the committed declaration keeps authored free text as written: it reads back as a spec entry the shape validator accepts, absent fields still absent', async () => {
@@ -1083,4 +1084,59 @@ test('the shared projection does not certify a dashboard renamed after its commi
   assert.equal(p.out.preservationSha256, p.group.proof.preservationSha256, 'the layout is unchanged');
   assert.notEqual(p.out.semanticSha256, p.group.proof.semanticSha256, 'the name as read is in the hash');
   assert.equal(p.certified, false);
+});
+
+// The group's originalDeclaration — the declaration its attempt recorded before the send — is the one authority:
+// committedDeclaration and the no-op check read it, never a declaration copy in the consumer state.
+const rewriteGroup = (w, mutate) => {
+  const data = JSON.parse(fs.readFileSync(w.store.file, 'utf8'));
+  mutate(data.groups.find((g) => g.family === 'dashboard' && g.key === 'ops'));
+  fs.writeFileSync(w.store.file, JSON.stringify(data, null, 2));
+};
+test('the committed declaration is read from the group\'s original declaration, never from a copy in the consumer state', async () => {
+  const d = existingOps();
+  const stale = canonicalDeclaration({ ...d, description: 'A STALE COPY' });
+
+  const w = await world();
+  putExisting(w.wire);
+  await settle(w, d);
+  rewriteGroup(w, (g) => { g.consumerState.declaration = stale; });
+  const next = await rerun(w);
+  const group = next.store.readGroup('dashboard', 'ops').committed;
+  assert.deepEqual(group.consumerState.declaration, stale, 'the two differ on disk');
+  assert.deepEqual(committedDeclaration(group), canonicalDeclaration(d), 'read from originalDeclaration');
+  assert.deepEqual((await settle(next, d)).result, { noop: true }, 'the no-op check compares the original declaration');
+
+  const k = await world();
+  putExisting(k.wire);
+  await settle(k, d);
+  rewriteGroup(k, (g) => { g.originalDeclaration = stale; g.consumerState.declaration = canonicalDeclaration(d); });
+  const again = await rerun(k);
+  assert.deepEqual(committedDeclaration(again.store.readGroup('dashboard', 'ops').committed), stale);
+  const writes = contentWrites(k.wire).length;
+  assert.equal((await settle(again, d)).result.committed, true, 'a differing original declaration is rebound, whatever the copy says');
+  assert.equal(contentWrites(k.wire).length, writes, 'without a content write');
+  assert.deepEqual(committedDeclaration(again.store.readGroup('dashboard', 'ops').committed), canonicalDeclaration(d));
+});
+
+test('the declaration is not copied into the consumer state: an authored URL on the environment\'s own host commits and reads back', async () => {
+  const w = await world();
+  const url = 'https://contoso.crm.dynamics.com/WebResources/contoso_/report.htm?mode=summary';
+  const d = declared([{ key: 'frame', type: 'iframe', url, name: 'Report' }]);
+  assert.equal(await codeOf(settle(w, d)), null, 'committed after its send, not stranded');
+  const group = w.store.readGroup('dashboard', 'ops').committed;
+  assert.equal('declaration' in group.consumerState, false, 'the consumer state keeps only what was proved');
+  assert.equal(committedDeclaration(group).tiles[0].url, url);
+});
+
+test('a recovery whose recorded declaration no longer hashes to the attempt\'s declaration hash is refused: nothing is bound or published', async () => {
+  const { w, d } = await crashedAfterSave();
+  const data = JSON.parse(fs.readFileSync(w.store.file, 'utf8'));
+  const attempt = data.attempts.find((a) => a.family === 'dashboard' && a.key === 'ops');
+  attempt.declaration = canonicalDeclaration({ ...d, description: 'NOT THE DECLARATION IT WAS PLANNED WITH' });
+  fs.writeFileSync(w.store.file, JSON.stringify(data, null, 2));
+  const next = await rerun(w);
+  assert.equal(await codeOf(settle(next, d)), 'create-completion-required');
+  assert.equal(next.store.readGroup('dashboard', 'ops').committed, null, 'nothing was bound');
+  assert.equal(w.wire.publishes(DID).length, 0, 'nothing was published');
 });
