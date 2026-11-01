@@ -57,7 +57,10 @@
 // was sent with, never today's spec and never null, and the next run reconciles today's spec against it. A change of
 // authorship alone rebinds without a content write. It is never copied into the consumer state, which keeps only what
 // the proof derived (tiles, seed ids) and whose stricter value rule would refuse authored text such as a URL on the
-// environment's own host. Verify and hydrate read it back with committedDeclaration.
+// environment's own host. Verify and hydrate read it back with committedDeclaration. The original is required: a
+// committed group without its originalDeclaration, or an attempt without its recorded declaration, is refused before
+// anything is read, continued, committed or published (requireOriginalDeclaration). No released store predates it,
+// and today's spec is not the lost input, so nothing is migrated from it.
 //
 // Publication goes through ONE adapter (publishDeclaredDashboard) over publishManagedScope: one permit, one scope, the
 // dashboard's own id in a `<dashboard>` envelope. Its layers are read by the shared `dashboard` reader of
@@ -83,6 +86,7 @@ const { hasUnsyncedEdits } = require('./unsynced-edits.js');
 const contract = require('./managed-feature-contract.js');
 const { runManagedFeature, publishManagedScope, CREATION_RECORD_UNSETTLED, PUBLICATION_UNVERIFIED, PUBLICATION_REFUSED } = contract;
 const { readSystemFormPublication, readSystemFormRootPresence, systemFormRootLayerSha256 } = require('./systemform-published.js');
+const { LAYER_READERS } = require('./managed-layer-readers.js');
 
 const KIND = 'dashboard';
 const TILE_KIND = 'dashboard-tile';
@@ -711,8 +715,27 @@ function resolveComponent(tile, index, resolveTile, toComponent) {
 }
 
 /**
+ * A declared dashboard's binding is settled for its ORIGINAL declaration, the maker's authored input, which nothing else
+ * restores: a committed group keeps it as originalDeclaration and an attempt as its recorded declaration. The store
+ * makes both optional for families that keep none; a dashboard requires both. One that lacks either was changed outside
+ * the build (no released store predates the field), so it is refused (`create-completion-required`, category
+ * `dashboard-declaration-missing`) and nothing is migrated: today's spec is not the lost input, and committing a
+ * recovered group without one would certify a binding no run can reconcile against. The attempt, its token and the
+ * workspace are left as they are.
+ */
+function requireOriginalDeclaration(key, { committed, pending }) {
+  const lacks = (v) => !v || typeof v !== 'object' || Array.isArray(v);
+  const missing = committed && lacks(committed.originalDeclaration) ? 'its committed binding'
+    : pending && lacks(pending.declaration) ? 'its unfinished attempt' : null;
+  if (missing) {
+    throw stop('create-completion-required', `the original declaration of dashboard "${key}" is missing from ${missing} in the binding store; it is not reconciled, bound or published until the binding store is restored`, { category: 'dashboard-declaration-missing' });
+  }
+}
+
+/**
  * The wrapper's preflight (runManagedFeature `preflight`), run on every path before anything is read into the
  * workspace, proved or sent; it reads nothing from the service and writes nothing. Refuses by throwing:
+ *   - a committed group or an attempt without its original declaration (requireOriginalDeclaration);
  *   - a retained creation record of this dashboard (`dashboard-creation-record-unsettled`): runManagedFeature
  *     quarantines every id it knows by then — the retained ids, the pin, the name lookup, the catalog id and the
  *     committed and pending roots — so neither a dashboard publish nor an app publish ships any of them;
@@ -724,6 +747,7 @@ function resolveComponent(tile, index, resolveTile, toComponent) {
  */
 async function preflightDashboard(s, { committed, pending }) {
   const { key, sdk, dashboard, catalog } = s;
+  requireOriginalDeclaration(key, { committed, pending });
   if (s.retainedCreationIds.length) throw stop(CREATION_RECORD_UNSETTLED, `the creation record of dashboard "${key}" is not settled; it is not written or published in this run`);
   const ids = [committed && committed.root.id, pending && pending.root && pending.root.id, dashboard && dashboard.dashboardId, s.resolvedId];
   try { ids.push(catalog.identityFor(KIND, key).derivedId); } catch { /* not in the catalog: resolve stops it */ }
@@ -1118,10 +1142,13 @@ async function proveDashboard(s, expected, applied, { token = null, recovering =
   // `declaration`; on a recovery always the attempt's), never rebuilt from today's spec. It must be the one the
   // attempt's declaration hash names, or the commit would bind a declaration the attempt was not planned with. The
   // store commits the attempt's recorded one as the group's originalDeclaration; the consumer state never holds a copy.
-  // An attempt recorded without one (before attempts kept one) commits without one: committedDeclaration reads null,
-  // and the next run rebinds it from today's spec without a content write.
+  // An attempt without one never reaches here (the preflight refuses it: requireOriginalDeclaration), and a declaration
+  // absent here is refused as well, so no group commits without its original.
   const sentDeclarationSha = recovering ? (attempt ? attempt.declarationSha256 : null) : (s.lastPlan ? s.lastPlan.declarationSha256 : null);
-  if (declaration && typeof declaration === 'object' && sha(declaration) !== sentDeclarationSha) {
+  if (!declaration || typeof declaration !== 'object' || Array.isArray(declaration)) {
+    throw stop('create-completion-required', `dashboard "${key}" has no recorded original declaration; it was not bound or published`, { category: 'dashboard-declaration-missing' });
+  }
+  if (sha(declaration) !== sentDeclarationSha) {
     throw stop('create-completion-required', `the declaration recorded for dashboard "${key}" is not the one its change was planned with; it was not bound or published`);
   }
   return {
@@ -1203,6 +1230,11 @@ async function settleDeclaredDashboard(args) {
       phase: 'dashboards', family: KIND, key, label, knownScopes: [], knownIds, store, barrier, halt,
       ...(args.sendObserver ? { sendObserver: args.sendObserver } : {}),
       adoptionApproved: s.adoptApproved,
+      // A publish of this dashboard that an earlier run may have sent and not confirmed is confirmed read-only (the
+      // registered layer readers over the SDK's client) before a requested change; without the client every such run
+      // stops, and the documented settle-then-publish sequence never reaches its publisher.
+      client: sdk.dataverse,
+      readers: LAYER_READERS,
       preflight: async ({ committed, pending }) => preflightDashboard(s, { committed, pending }),
       // A create names its root id (the catalog id), so an attempt whose create no answer acknowledged is resumed when
       // both layers of that row read absent; a read that fails is the wrapper's hold (never caught here).
@@ -1251,6 +1283,8 @@ async function settleDeclaredDashboard(args) {
  * Dataverse client; no group is filtered or skipped here, and this adapter brings no reader of its own. A publication
  * left uncertain by an earlier run (sent, its confirmation not written) is confirmed by that read first, not resent.
  * Outcomes:
+ *   - a committed group or attempt without its original declaration (`create-completion-required`, category
+ *     `dashboard-declaration-missing`) is refused before anything is read or sent, the scope blocked for the run;
  *   - `managed-publication-unverified` (a layer read failed before the send) is a HOLD: the scope is blocked for the
  *     rest of the run and the answer says `held`; it is never retried in the run;
  *   - `managed-publication-refused` (the request named other targets than this dashboard) is a REFUSAL: nothing was
@@ -1267,6 +1301,7 @@ async function publishDeclaredDashboard({ store, barrier, sdk, key, id, newToken
   const gate = barrier || store;
   const scope = scopeOf(id);
   try {
+    requireOriginalDeclaration(key, store.readGroup(KIND, key));
     const out = await publishManagedScope({
       store, barrier: gate, scope, groups: [{ family: KIND, key }], path: `declared dashboard "${key}"`, newToken,
       client: sdk.dataverse,

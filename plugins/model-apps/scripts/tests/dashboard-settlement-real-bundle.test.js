@@ -17,7 +17,7 @@ const { createIntentCatalog } = require('../lib/creates-catalog.js');
 const { environmentFingerprint } = require('../lib/page-ownership-records.js');
 const { dashboardTileOpts, dashboardComponent } = require('../lib/sdk-build.js');
 const { settleDeclaredDashboard, publishDeclaredDashboard, dashboardKey, projectDashboard, committedProjectionInput, committedDeclaration, canonicalDeclaration, validateDeclaredDashboard } = require('../lib/dashboard-reconcile.js');
-const { createAttemptSendObserver } = require('../lib/managed-feature-contract.js');
+const { createAttemptSendObserver, publishManagedScope } = require('../lib/managed-feature-contract.js');
 const { LAYER_READERS } = require('../lib/managed-layer-readers.js');
 // The $select of the publication read of a systemform's saved layer (systemform-published.js), with and without its
 // root fields; the SDK's own fetch selects more, so a probe that injects between the two reads can tell them apart.
@@ -1139,4 +1139,111 @@ test('a recovery whose recorded declaration no longer hashes to the attempt\'s d
   assert.equal(await codeOf(settle(next, d)), 'create-completion-required');
   assert.equal(next.store.readGroup('dashboard', 'ops').committed, null, 'nothing was bound');
   assert.equal(w.wire.publishes(DID).length, 0, 'nothing was published');
+});
+
+// A dashboard's binding is settled for its original declaration and nothing else restores it: a committed group or an
+// attempt that lacks it is refused before anything is read, sent, committed or published; nothing is migrated.
+const failureOf = async (p) => { try { await p; } catch (e) { return e; } return null; };
+const categoryOf = (e) => e && ((e.cause && e.cause.category) || e.category);
+
+test('missing authority: a committed group without its original declaration is refused, not rebuilt from today\'s spec', async () => {
+  const w = await world();
+  putExisting(w.wire);
+  const d = existingOps();
+  await settle(w, d);
+  rewriteGroup(w, (g) => { delete g.originalDeclaration; g.consumerState.declaration = canonicalDeclaration(d); });
+  const next = await rerun(w);
+  assert.equal(committedDeclaration(next.store.readGroup('dashboard', 'ops').committed), null, 'a consumer-state copy is not the original');
+  const before = fs.readFileSync(w.store.file, 'utf8');
+  const writes = w.wire.writes().length;
+  const requests = w.wire.log.length;
+  const err = await failureOf(settle(next, d, { approvals: {} }));
+  assert.equal(err && err.code, 'create-completion-required');
+  assert.equal(categoryOf(err), 'dashboard-declaration-missing');
+  assert.equal(w.wire.log.length, requests, 'refused before anything is read');
+  assert.equal(fs.readFileSync(w.store.file, 'utf8'), before, 'the binding store is unchanged');
+  assert.equal(w.wire.writes().length, writes, 'nothing sent');
+});
+
+test('missing authority: an interrupted attempt without its recorded declaration is neither committed nor published, and stays pending', async () => {
+  const { w, d } = await crashedAfterSave();
+  const data = JSON.parse(fs.readFileSync(w.store.file, 'utf8'));
+  delete data.attempts.find((a) => a.family === 'dashboard' && a.key === 'ops').declaration;
+  fs.writeFileSync(w.store.file, JSON.stringify(data, null, 2));
+  const next = await rerun(w);
+  const token = next.store.readGroup('dashboard', 'ops').pending.token;
+  const before = fs.readFileSync(w.store.file, 'utf8');
+  const writes = w.wire.writes().length;
+  const requests = w.wire.log.length;
+  const err = await failureOf(settle(next, { ...d, description: 'TODAY IS NOT THE LOST INPUT' }));
+  assert.equal(err && err.code, 'create-completion-required');
+  assert.equal(categoryOf(err), 'dashboard-declaration-missing');
+  assert.equal(w.wire.log.length, requests, 'refused before anything is read');
+  assert.equal(fs.readFileSync(w.store.file, 'utf8'), before, 'the binding store is unchanged');
+  const g = next.store.readGroup('dashboard', 'ops');
+  assert.equal(g.committed, null, 'nothing was bound');
+  assert.equal(g.pending.token, token, 'the attempt and its token are kept');
+  assert.notEqual(await codeOf(publish(next, 'ops', DID)), null, 'its publish is refused');
+  assert.equal(w.wire.writes().length, writes, 'nothing sent');
+  assert.equal(w.wire.publishes(DID).length, 0);
+});
+
+test('missing authority: the publication adapter refuses a committed group without its original declaration and sends nothing', async () => {
+  const w = await world();
+  putExisting(w.wire);
+  await settle(w, existingOps());
+  assert.equal(w.store.readGroup('dashboard', 'ops').committed.publication.state, 'owed', 'its own write is owed a publish');
+  rewriteGroup(w, (g) => { delete g.originalDeclaration; });
+  const next = await rerun(w);
+  const err = await failureOf(publish(next, 'ops', DID));
+  assert.equal(categoryOf(err), 'dashboard-declaration-missing');
+  assert.equal(w.wire.publishes(DID).length, 0);
+  assert.equal(next.barrier.checkAppWrite({ existingApp: true, held: [], heldDashboards: [DID] }).ok, false, 'the scope stays fenced for the run');
+});
+
+// A publish an earlier run may have sent is confirmed read-only by the settlement itself (its client and the
+// registered layer readers) before a requested change is prepared, so the run can proceed without resending it.
+test('debt: a requested change first confirms a completed earlier publication read-only, then writes once and never republishes', async () => {
+  const { failing, deps } = failNextStoreWrite();
+  const w = await world();
+  w.store = openManagedContext({ workspaceDir: w.dir, environment: ENV, appUniqueName: APP, solutionUniqueName: SOL, barrier: w.barrier, deps }).store;
+  putExisting(w.wire);
+  const d = existingOps();
+  await settle(w, d);
+  const sdk = Object.create(w.sdk);
+  sdk.publishArtifact = async (...a) => { const answer = await w.sdk.publishArtifact(...a); failing.armed = true; return answer; };
+  assert.notEqual(await codeOf(publishDeclaredDashboard({ store: w.store, barrier: w.barrier, sdk, key: 'ops', id: DID })), null, 'the confirmation write failed after the publish');
+  assert.equal(w.store.readGroup('dashboard', 'ops').committed.publication.state, 'dispatching');
+  const before = contentWrites(w.wire).length;
+  const next = await rerun(w);
+  const out = await settle(next, { ...d, description: 'New declaration after the completed publication' });
+  assert.equal(out.result.committed, true);
+  assert.equal(contentWrites(w.wire).length, before + 1, 'one PATCH for the requested change');
+  assert.equal(contentWrites(w.wire).slice(-1)[0].method, 'PATCH');
+  assert.equal(w.wire.publishes(DID).length, 1, 'the earlier publish is not repeated');
+});
+
+test('carry: a lost answer to a scope publish that only carried the dashboard stops a requested change, and nothing is sent', async () => {
+  const w = await world();
+  putExisting(w.wire);
+  const d = existingOps();
+  await settle(w, d);
+  await publish(w, 'ops', DID);
+  assert.equal(w.store.readGroup('dashboard', 'ops').committed.publication.state, 'confirmed');
+  const carrying = await rerun(w);
+  w.wire.script((e) => e.method === 'POST' && /^PublishXml$/.test(e.path), { statusCode: 503, body: { error: { code: '0x80040216', message: 'gateway' } }, unapplied: true });
+  const carried = await codeOf(publishManagedScope({
+    store: carrying.store, barrier: carrying.barrier, client: carrying.sdk.dataverse, scope: { type: 'dashboard', id: DID }, groups: [], carry: true,
+    publish: async () => {
+      await carrying.sdk.fetchArtifact('dashboard', DID);
+      const answer = await carrying.sdk.publishArtifact('dashboard', DID);
+      // The SDK answers a failed publish as data; a carry callback must propagate it.
+      if (answer.publish && answer.publish.kind === 'failed') throw answer.publish.error;
+    },
+  }));
+  assert.equal(carried, 'managed-publication-unconfirmed');
+  const next = await rerun(w);
+  const writes = w.wire.writes().length;
+  assert.equal(await codeOf(settle(next, { ...d, description: 'Not over the carried send' })), 'managed-publication-unconfirmed');
+  assert.equal(w.wire.writes().length, writes, 'nothing sent');
 });
