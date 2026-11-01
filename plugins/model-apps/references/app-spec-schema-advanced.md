@@ -524,6 +524,9 @@ medical note, a national identifier, a private comment. Needs `minimumPluginVers
   reads made as the build's account; they do not prove what a user without the profile sees.
 - **Download** writes `isSecured: true` for a secured column. Profiles and their assignments are not
   downloaded.
+- **Teardown** never deletes a profile (users and teams can hold it beyond this app): it keeps each
+  declared profile, with its permissions and assignments, and names it as kept, by name only. Remove a
+  profile yourself once no one needs it.
 
 ## columns[].dateTimeBehavior · option values · table flags (optional — portable schema)
 

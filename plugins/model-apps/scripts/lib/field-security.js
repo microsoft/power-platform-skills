@@ -455,6 +455,18 @@ async function verifyFieldSecurity(spec, ctx) {
   return checks;
 }
 
+// A teardown never deletes a field security profile: users and teams can hold one beyond this app, and a profile found by name may
+// be someone else's (planFieldSecurity adopts an exact match). So each declared profile is named as kept — its name only, never its
+// permissions or who holds it — the way the configuration items are (configuration-artifacts.js configurationTeardownNotes). A name
+// is quoted because a profile's name is free text with spaces ("HR Confidential"). The spec gate has already refused the platform's
+// System Administrator profile, so every name here is one the build may have created.
+function fieldSecurityTeardownNotes(spec) {
+  const profiles = spec && Array.isArray(spec.fieldSecurityProfiles) ? spec.fieldSecurityProfiles : [];
+  return profiles
+    .filter((p) => p && typeof p.name === 'string' && p.name.trim())
+    .map((p) => `field security profile "${p.name}" kept: a teardown does not delete field security profiles, which users and teams can hold beyond this app; remove it yourself once no one needs it`);
+}
+
 module.exports = {
   ASSIGNEES,
   columnSecurityPath,
@@ -469,4 +481,5 @@ module.exports = {
   applyFieldSecurity,
   assignFieldSecurity,
   verifyFieldSecurity,
+  fieldSecurityTeardownNotes,
 };

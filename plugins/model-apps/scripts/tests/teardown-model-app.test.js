@@ -386,6 +386,7 @@ function loadTeardownCli({
       };
     }
     if (id === './lib/configuration-artifacts.js') return require('../lib/configuration-artifacts.js');
+    if (id === './lib/field-security.js') return require('../lib/field-security.js');
     if (id === './lib/sdk-teardown.js') {
       return {
         runTeardown: async (spec, opts, deps) => {
@@ -986,4 +987,41 @@ test('a spec without configuration items has no kept-item warning', async () => 
   const r = await teardownModelApp(desk, { apply: false }, { sdk: presentSdk(), warn: (m) => warnings.push(m) });
   assert.strictEqual(r.ok, true);
   assert.ok(!warnings.some((m) => / kept: a teardown does not delete configuration items/.test(m)));
+});
+
+// A teardown has no step for field security profiles and never deletes one (users and teams can hold it beyond this app), so it names
+// each declared profile as kept — its name only — the way it names configuration items.
+test('a spec with field security profiles: each is named as kept, by name only, before anything is deleted', async () => {
+  const spec = JSON.parse(JSON.stringify(desk));
+  spec.fieldSecurityProfiles = [
+    { key: 'hr', name: 'HR Confidential', permissions: [{ table: 'new_employee', column: 'new_salary', read: true }], assignTo: { teams: ['11111111-2222-3333-4444-555555555555'] } },
+    { key: 'audit', name: 'Audit Readers', permissions: [] },
+  ];
+  const sdk = presentSdk();
+  const warnings = [];
+  const r = await teardownModelApp(spec, { apply: false }, { sdk, warn: (m) => { warnings.push({ m, calls: sdk.calls.length }); } });
+  assert.strictEqual(r.ok, true, JSON.stringify(r.errors));
+  const kept = warnings.filter((w) => /^field security profile .* kept: /.test(w.m));
+  assert.deepStrictEqual(kept.map((w) => w.m.split(' kept:')[0]), [
+    'field security profile "HR Confidential"',
+    'field security profile "Audit Readers"',
+  ]);
+  assert.ok(kept.every((w) => w.calls === 0), 'named before any SDK call');
+  assert.ok(kept.every((w) => /a teardown does not delete field security profiles/.test(w.m)));
+  assert.ok(!warnings.some((w) => /new_salary|11111111-2222/.test(w.m)), 'no permission or holder is echoed');
+});
+
+// The neighbour: a spec that declares no profile (absent or empty) prints exactly what it printed before — every log line and warning.
+test('a spec without field security profiles prints exactly what it did before', async () => {
+  const run = async (spec) => {
+    const logs = [];
+    const warnings = [];
+    const r = await teardownModelApp(spec, { apply: false }, { sdk: presentSdk(), log: (m) => logs.push(m), warn: (m) => warnings.push(m) });
+    assert.strictEqual(r.ok, true);
+    return { logs, warnings };
+  };
+  const without = await run(desk);
+  const empty = await run({ ...JSON.parse(JSON.stringify(desk)), fieldSecurityProfiles: [] });
+  assert.deepStrictEqual(empty, without);
+  assert.ok(![...without.logs, ...without.warnings].some((m) => /field security profile/.test(m)));
 });

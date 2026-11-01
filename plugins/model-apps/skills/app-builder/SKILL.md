@@ -115,8 +115,8 @@ prod-ready** app; don't under-build (a bare table list) or over-build (surfaces 
   (`assignTo` users or teams, by id) — never infer them from a persona — and say in the preview who
   gains access, or that no assignment was requested. Tell the maker that System Administrators see
   every secured column (test as a non-admin), that an open app may need a reload, to grant `read`
-  unless `update` is needed, and that unsecuring a column deletes its permissions
-  (`--authorize isSecured:<table>.<column>`).
+  unless `update` is needed, that unsecuring a column deletes its permissions
+  (`--authorize isSecured:<table>.<column>`), and that a teardown keeps each declared profile and names it.
 - **Portable schema** — `{ "value", "label" }` options when an integration or another environment
   depends on the option numbers; `dateTimeBehavior: "DateOnly"` for birthdays, due and renewal
   dates, `"TimeZoneIndependent"` for a time that means the same clock everywhere (omit it for
@@ -697,7 +697,8 @@ columns bind, which the platform refuses to delete while the table exists, and i
 business rule on it could not be deleted (the rule's activated copy can never be deleted once its table is gone), so
 a re-run deletes the rule first, then the table and what was kept with it. It never deletes the solution's
 **publisher** (the build reuses one by prefix, and other solutions may share it); its closing summary says so in one line,
-so tell the user the publisher stays and can be removed in Maker once nothing uses it. **Generative pages on forms:** teardown keeps a page a
+so tell the user the publisher stays and can be removed in Maker once nothing uses it. It also keeps every declared
+**field security profile** and names each one (users and teams may hold it beyond this app). **Generative pages on forms:** teardown keeps a page a
 form still embeds (the `MscrmControls.UxAgentControl` control) and stops with an error that names the form, before it deletes
 anything; the dry run names the same form and reports itself as failed. Tell the user, have them take the page off that form
 (or delete the form, if it is theirs), then run teardown again. **Dry-run by default**; add `--apply

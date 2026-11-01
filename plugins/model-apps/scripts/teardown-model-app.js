@@ -125,6 +125,9 @@ async function teardownModelApp(spec, opts, deps) {
   // Custom API bound to a table the spec makes is called out, because Dataverse refuses that table's delete while the API exists. Named
   // before the fence below is taken, so nothing here can leave the fence or its heartbeat behind.
   for (const note of require('./lib/configuration-artifacts.js').configurationTeardownNotes(spec)) warn(note);
+  // Nor is a field security profile deleted: users and teams can hold one beyond this app (fieldSecurityTeardownNotes). Each declared
+  // profile is named as kept the same way, by name only.
+  for (const note of require('./lib/field-security.js').fieldSecurityTeardownNotes(spec)) warn(note);
   let createdWorkspaceDir = null;
   let teardownId = null;
   let heartbeat = null;
