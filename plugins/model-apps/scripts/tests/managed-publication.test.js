@@ -14,7 +14,7 @@ const { createManagedWire, sdkOver } = require('./helpers/managed-wire.js');
 const { openManagedContext, openManagedBindings, CODES, COMPLETION_BASE_BYTES, publicationRiskApproval, publicationRemedy } = require('../lib/managed-bindings.js');
 const { runManagedFeature, publishManagedScope, confirmUncertainPublication, createAttemptSendObserver, notStartedAnswer, existingRowDispatches, rowsCreatedByAttempt, withWorkflowEffect, editSwitchRequired, WORKFLOW_EFFECT_FULFILLED, PUBLICATION_UNCONFIRMED, PUBLICATION_UNVERIFIED, CREATION_RECORD_UNSETTLED, LAYER_READER_MISSING } = require('../lib/managed-feature-contract.js');
 const { createPublicationBarrier } = require('../lib/publication-barrier.js');
-const { readSystemFormPublication, readSystemFormLayers, readSystemFormRootPresence, systemFormLayerSha256 } = require('../lib/systemform-published.js');
+const { readSystemFormPublication, readSystemFormLayers, readSystemFormRootPresence, systemFormLayerSha256, systemFormRootLayerSha256 } = require('../lib/systemform-published.js');
 const { publishTablesXml } = require('../lib/table-publish.js');
 const { createWorkflowEffectGate } = require('../lib/workflow-effect-context.js');
 const { postPublishXml } = require('../lib/publish-xml.js');
@@ -28,6 +28,9 @@ const FP = environmentFingerprint(ENV);
 const H = (c) => c.repeat(64);
 const sha = (v) => crypto.createHash('sha256').update(canonicalJson(v)).digest('hex');
 const layerHash = (row) => sha({ name: row.name, description: row.description, formxml: row.formxml });
+// A dashboard's publication hash also covers its root type and table (the shared dashboard layer reader), so a
+// dashboard group records it from a read of those fields.
+const familyLayerHash = (family, row) => (family === 'dashboard' ? systemFormRootLayerSha256(row) : layerHash(row));
 const MAIN = '11111111-1111-4111-8111-111111111111';
 const QUICK = '12121212-1212-4121-8121-121212121212';
 const DASH = '22222222-2222-4222-8222-222222222222';
@@ -70,11 +73,11 @@ function ports(wire, sdk, { family = 'form', key, id, formxml, fail = {} }) {
       return { sent: true };
     }),
     prove: step('prove', async () => {
-      const read = await readSystemFormPublication(sdk.dataverse, id);
+      const read = await readSystemFormPublication(sdk.dataverse, id, { rootFields: family === 'dashboard' });
       if (read.saved.formxml !== formxml) throw Object.assign(new Error('the saved form is not the declared one'), { code: 'create-completion-required' });
       return {
-        savedProof: { savedSha256: layerHash(read.saved) }, acknowledgedRoot: true, records: [rec(family, key, id)], proof: PROOF, consumerState: consumer(family),
-        publication: read.state === 'equal' ? { scope, state: 'not-needed', desiredSha256: null, dispatchToken: null } : { scope, state: 'owed', desiredSha256: layerHash(read.saved), dispatchToken: null },
+        savedProof: { savedSha256: familyLayerHash(family, read.saved) }, acknowledgedRoot: true, records: [rec(family, key, id)], proof: PROOF, consumerState: consumer(family),
+        publication: read.state === 'equal' ? { scope, state: 'not-needed', desiredSha256: null, dispatchToken: null } : { scope, state: 'owed', desiredSha256: familyLayerHash(family, read.saved), dispatchToken: null },
       };
     }),
     ensureMembership: step('membership', async () => undefined),

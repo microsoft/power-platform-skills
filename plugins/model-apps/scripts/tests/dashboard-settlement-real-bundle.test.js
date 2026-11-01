@@ -17,7 +17,10 @@ const { environmentFingerprint } = require('../lib/page-ownership-records.js');
 const { dashboardTileOpts, dashboardComponent } = require('../lib/sdk-build.js');
 const { settleDeclaredDashboard, publishDeclaredDashboard, dashboardKey, projectDashboard, committedProjectionInput, committedDeclaration, canonicalDeclaration, validateDeclaredDashboard } = require('../lib/dashboard-reconcile.js');
 const { createAttemptSendObserver } = require('../lib/managed-feature-contract.js');
-const { systemFormLayerSha256 } = require('../lib/systemform-published.js');
+const { LAYER_READERS } = require('../lib/managed-layer-readers.js');
+// The $select of the publication read of a systemform's saved layer (systemform-published.js), with and without its
+// root fields; the SDK's own fetch selects more, so a probe that injects between the two reads can tell them apart.
+const PUBLICATION_SELECTS = new Set(['formid,name,description,formxml', 'formid,name,description,formxml,type,objecttypecode']);
 
 const ENV = 'https://contoso.crm.dynamics.com';
 const APP = 'contoso_app';
@@ -107,7 +110,7 @@ test('a missing declared dashboard is created under its catalog id with catalog 
   ]);
   assert.deepEqual(group.consumerState.seedIds, [ids.t, ids.s]);
   assert.equal(group.publication.state, 'owed');
-  assert.equal(group.publication.desiredSha256, systemFormLayerSha256(w.wire.saved.get(id)), 'the debt records the hash the shared dashboard layer reader answers');
+  assert.equal(group.publication.desiredSha256, (await LAYER_READERS.dashboard(w.sdk.dataverse, group)).savedSha256, 'the debt records the hash the shared dashboard layer reader answers');
 
   const pub = await publish(w, 'ops', id);
   assert.equal(pub.sent, true);
@@ -842,7 +845,7 @@ test('the proof and the publication hash are one saved snapshot: a change betwee
     w.wire.script((e) => {
       if ((e.method === 'PATCH' || e.method === 'POST') && /^systemforms/.test(e.path)) ownWrite = true;
       const u = new URL(e.url);
-      if ((ownWrite || !afterWrite) && !injected && e.method === 'GET' && /RetrieveUnpublished/.test(e.path) && u.searchParams.get('$select') === 'formid,name,description,formxml') {
+      if ((ownWrite || !afterWrite) && !injected && e.method === 'GET' && /RetrieveUnpublished/.test(e.path) && PUBLICATION_SELECTS.has(u.searchParams.get('$select'))) {
         const row = w.wire.saved.get(DID);
         row.formxml = row.formxml.replace('<RecordsPerPage>8</RecordsPerPage>', '<RecordsPerPage>42</RecordsPerPage>');
         injected = true;
@@ -889,4 +892,132 @@ test('a recovery never overwrites unsent edits on disk: a fresh SDK reads them b
   const third = await open();
   assert.equal((await third.sdk.getArtifact('dashboard', DID)).description, 'DURABLE UNSENT MAKER TEXT', 'the recovery did not overwrite the file');
   assert.equal(third.store.readGroup('dashboard', 'ops').committed, null);
+});
+
+// What the plan models the send to store (the SDK's own serializer and reader) is the whole of what the proof holds the
+// stored row to: a non-authored attribute of a cell the send appended, or of the seed a create wrote, that differs
+// after the send is someone's edit, and is never bound or published.
+const toggleShowlabel = (tag) => (/\bshowlabel="/.test(tag)
+  ? tag.replace(/\bshowlabel="([^"]*)"/, (_, value) => `showlabel="${value === 'true' ? 'false' : 'true'}"`)
+  : tag.replace(/>$/, ' showlabel="true">'));
+for (const created of [false, true]) {
+  test(`a non-authored attribute changed after the send on a newly ${created ? 'created' : 'appended'} tile's cell stops the recovery; nothing bound or published`, async () => {
+    const w = await world();
+    if (!created) putExisting(w.wire);
+    const d = created
+      ? declared([{ key: 'all', type: 'list', view: 'All cases' }])
+      : declared([{ key: 'open', type: 'list', view: 'Open cases', componentId: C_OPEN }, { key: 'all', type: 'list', view: 'All cases' }], { dashboardId: DID });
+    const pending = await strandedAttempt(w, d);
+    const id = pending.root.id;
+    const childId = pending.expected.children.find((c) => c.key === 'ops/all').id;
+    const row = w.wire.saved.get(id);
+    const cell = row.formxml.match(/<cell\b[\s\S]*?<\/cell>/g).find((c) => c.toLowerCase().includes(childId));
+    const changed = cell.replace(/<cell\b[^>]*>/, toggleShowlabel);
+    assert.notEqual(changed, cell);
+    row.formxml = row.formxml.replace(cell, changed);
+    const next = await rerun(w);
+    assert.equal(await codeOf(settle(next, d)), 'create-completion-required', 'the appended cell is proved whole, not only its id and parameters');
+    assert.equal(next.store.readGroup('dashboard', 'ops').committed, null);
+    await publish(next, 'ops', id).catch(() => undefined);
+    assert.equal(w.wire.publishes(id).length, 0);
+  });
+}
+
+test('a changed attribute of the catalog seed tab after a create stops the recovery: the seed is proved whole, not only its shape', async () => {
+  const w = await world();
+  const d = declared([{ key: 'open', type: 'list', view: 'Open cases' }]);
+  const pending = await strandedAttempt(w, d);
+  const id = pending.root.id;
+  const row = w.wire.saved.get(id);
+  const oldTag = row.formxml.match(/<tab\b[^>]*>/)[0];
+  const newTag = toggleShowlabel(oldTag);
+  assert.notEqual(newTag, oldTag);
+  row.formxml = row.formxml.replace(oldTag, newTag);
+  const next = await rerun(w);
+  assert.equal(await codeOf(settle(next, d)), 'create-completion-required');
+  assert.equal(next.store.readGroup('dashboard', 'ops').committed, null);
+  await publish(next, 'ops', id).catch(() => undefined);
+  assert.equal(w.wire.publishes(id).length, 0);
+});
+
+test('an append into an existing empty section commits, and an append the SDK would reshape is refused before any write', async () => {
+  // `<rows></rows>`: the SDK's parser marks it empty; the append fills it and the marker goes. That is the append itself.
+  const w = await world();
+  w.wire.putForm({ formid: DID, name: 'Ops', description: 'Cases', type: 0, objecttypecode: 'none', formxml: X.dashboardXml([]) }, { publishedToo: true });
+  const d = declared([{ key: 'all', type: 'list', view: 'All cases' }], { dashboardId: DID });
+  assert.equal(await codeOf(settle(w, d)), null, 'the append into an empty section is proved and bound');
+  assert.equal(contentWrites(w.wire).length, 1);
+  assert.ok(w.wire.saved.get(DID).formxml.includes(ALL));
+  assert.ok(w.store.readGroup('dashboard', 'ops').committed);
+  assert.equal((await projectCommitted(w, DID)).certified, true, 'verify and hydrate certify what the proof bound');
+
+  // A row with no control: the SDK drops it when it appends, so the append would lose the maker's row.
+  const e = await world();
+  e.wire.putForm({ formid: DID, name: 'Ops', description: 'Cases', type: 0, objecttypecode: 'none', formxml: X.dashboardXml([[]]) }, { publishedToo: true });
+  assert.equal(await codeOf(settle(e, d)), 'dashboard-layout-unsupported');
+  assert.equal(contentWrites(e.wire).length, 0, 'refused before the send, never stranded after it');
+});
+
+test('the root type and table come from the same saved read as the content: a type or table change between the proof reads stops the settle', async () => {
+  for (const change of [{ objecttypecode: 'incident' }, { type: 10 }]) {
+    const w = await world();
+    putExisting(w.wire);
+    let written = false;
+    let injected = false;
+    w.wire.script((e) => {
+      if (e.method === 'PATCH' && /^systemforms/.test(e.path)) written = true;
+      if (written && !injected && e.method === 'GET' && /RetrieveUnpublished/.test(e.path) && PUBLICATION_SELECTS.has(new URL(e.url).searchParams.get('$select'))) {
+        Object.assign(w.wire.saved.get(DID), change);
+        injected = true;
+      }
+      return false;
+    }, {});
+    const d = declared([{ key: 'open', type: 'list', view: 'Open cases', componentId: C_OPEN, name: 'Open now' }], { dashboardId: DID });
+    const code = await codeOf(settle(w, d));
+    assert.equal(injected, true, 'the change lands between the SDK read and the publication read');
+    assert.equal(code, 'dashboard-stored-mismatch', 'the root is judged on the saved row the publication hash is of');
+    assert.equal(w.store.readGroup('dashboard', 'ops').committed, null);
+    await publish(w, 'ops', DID).catch(() => undefined);
+    assert.equal(w.wire.publishes(DID).length, 0);
+  }
+});
+
+// The SDK writes a renamed tile's name to the label of its own language and, when the cell has none, ADDS one, keeping
+// every other label: the cell's fallback-language label stays, and is proved.
+test('a tile rename commits whether or not the cell has a label in the SDK language, and every other label is kept', async () => {
+  for (const [lcid, labels, kept] of [
+    [1036, '<label description="English" languagecode="1033" /><label description="Francais" languagecode="1036" />', 'description="English"'],
+    [1033, '<label description="Francais" languagecode="1036" />', 'description="Francais"'],
+  ]) {
+    const w = await world();
+    const sdk = createMakerSdk({ workspaceStorage: createNodeWorkspaceStorage(makeTempDir('dash-lang-')), instanceUrl: ENV, languageCode: lcid, httpClient: clientOver(w.wire, { barrier: w.barrier, observer: w.observer }) });
+    await sdk.initWorkspace();
+    assert.equal(sdk.languageCode, lcid);
+    w.sdk = sdk;
+    putExisting(w.wire);
+    for (const layer of [w.wire.saved, w.wire.published]) {
+      const row = layer.get(DID);
+      row.formxml = row.formxml.replace(/(<cell\b[^>]*>)<labels>[\s\S]*?<\/labels>/, `$1<labels>${labels}</labels>`);
+    }
+    const d = declared([{ key: 'open', type: 'list', view: 'Open cases', componentId: C_OPEN, name: 'Open now' }], { dashboardId: DID });
+    assert.equal(await codeOf(settle(w, d)), null, `LCID ${lcid}: the SDK's own name write is recognized`);
+    const cell = w.wire.saved.get(DID).formxml.match(/<cell\b[\s\S]*?<\/cell>/)[0];
+    assert.ok(cell.includes(kept), 'the other-language label is kept');
+    assert.ok(cell.includes('description="Open now"'));
+    const c = await projectCommitted(w, DID);
+    assert.equal(c.certified, true, 'verify and hydrate reproduce the proof');
+    if (lcid === 1036) {
+      const wrong = projectDashboard(await freshRead(w, DID), { ...c.input, languageCode: 1033 });
+      assert.notEqual(wrong.preservationSha256, c.group.proof.preservationSha256, 'another language cannot certify this proof');
+    }
+  }
+});
+test('a send the SDK would not store as declared is refused before it is sent: a span wider than the seed section on a create', async () => {
+  // The catalog seed's section has 2 columns, and the SDK clamps an appended cell's colspan to them.
+  const w = await world();
+  const d = declared([{ key: 'open', type: 'list', view: 'Open cases', colspan: 3 }]);
+  assert.equal(await codeOf(settle(w, d)), 'dashboard-layout-unsupported');
+  assert.equal(contentWrites(w.wire).length, 0, 'nothing sent, nothing stranded');
+  const g = w.store.readGroup('dashboard', 'ops');
+  assert.deepEqual([g.committed, g.pending], [null, null], 'no attempt was opened');
 });

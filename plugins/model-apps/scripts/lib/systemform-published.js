@@ -16,6 +16,11 @@
 const { normalizeGuid, intentSha256 } = require('./reconcile-common.js');
 
 const SELECT = '$select=formid,name,description,formxml';
+// The root fields a dashboard's support and identity depend on: its systemform `type` (0 a Standard dashboard, 10 an
+// interactive one) and its `objecttypecode` ("none" for a global dashboard, a table's logical name otherwise). Read in
+// the SAME GET as the content when the caller asks for them, so content and root are one observation.
+// See: https://learn.microsoft.com/en-us/power-apps/developer/data-platform/reference/entities/systemform
+const ROOT_SELECT = `${SELECT},type,objecttypecode`;
 // Dataverse "Object does not exist" (ObjectDoesNotExist), the code a 404 for a missing row carries.
 // See: https://learn.microsoft.com/en-us/power-apps/developer/data-platform/reference/web-service-error-codes
 const NOT_FOUND = '0x80040217';
@@ -42,13 +47,22 @@ const ok = (res) => !!res && Number.isInteger(res.status) && res.status >= 200 &
 
 // A row counts only when it is the row asked for and carries the compared fields as strings. `description` is
 // optional on a systemform and may be missing or null; name and formxml may not.
-function rowOf(res, id, layer) {
+//
+// With `rootFields`, the row also carries its `type` and `objecttypecode`. `type` is an OData Int32 option set, e.g.
+// "type": 0, but a client that echoes what the SDK sent may hold the string "0"; it must be a whole number either way.
+// `objecttypecode` is a logical name, e.g. "objecttypecode": "none"; a row may hold it null, which reads as global.
+function rowOf(res, id, layer, rootFields = false) {
   const row = parsed(res.body);
   if (!row || typeof row !== 'object') throw unverified(`the ${layer} systemform ${id} answered no row`);
   if (normalizeGuid(row.formid) !== id) throw unverified(`the ${layer} systemform read answered another row than ${id}`);
   if (typeof row.name !== 'string' || typeof row.formxml !== 'string') throw unverified(`the ${layer} systemform ${id} answered no name or form XML`);
   if (row.description !== undefined && row.description !== null && typeof row.description !== 'string') throw unverified(`the ${layer} systemform ${id} answered a description that is not text`);
-  return { formid: id, name: row.name, description: row.description == null ? null : row.description, formxml: row.formxml };
+  const out = { formid: id, name: row.name, description: row.description == null ? null : row.description, formxml: row.formxml };
+  if (!rootFields) return out;
+  const type = typeof row.type === 'string' && /^\d+$/.test(row.type) ? Number(row.type) : row.type;
+  if (!Number.isInteger(type)) throw unverified(`the ${layer} systemform ${id} answered no form type`);
+  if (row.objecttypecode !== undefined && row.objecttypecode !== null && typeof row.objecttypecode !== 'string') throw unverified(`the ${layer} systemform ${id} answered a table that is not a logical name`);
+  return { ...out, type, objecttypecode: row.objecttypecode == null ? null : row.objecttypecode };
 }
 
 async function get(client, path, id, layer) {
@@ -60,23 +74,26 @@ async function get(client, path, id, layer) {
 }
 
 /**
- * Read both layers of systemform `id` and compare name, description and formxml.
+ * Read both layers of systemform `id` and compare name, description and formxml — and, with `{ rootFields: true }`,
+ * also `type` and `objecttypecode`, read in the same GET of each layer (ROOT_SELECT).
  * Answers { state: 'equal' | 'differs' | 'never-published', saved, published } (published is null when never
  * published). Throws `managed-publication-unverified` for every other answer: a failed read is not evidence that
  * the layers are equal, nor that they differ.
  */
-async function readSystemFormPublication(client, rawId) {
+async function readSystemFormPublication(client, rawId, { rootFields = false } = {}) {
   const id = normalizeGuid(rawId);
   if (!id) throw unverified(`"${rawId}" is not a systemform id`);
   if (!client || typeof client.get !== 'function') throw unverified('no client to read the systemform with');
-  const savedRes = await get(client, `/systemforms(${id})/Microsoft.Dynamics.CRM.RetrieveUnpublished()?${SELECT}`, id, 'saved');
+  const select = rootFields ? ROOT_SELECT : SELECT;
+  const savedRes = await get(client, `/systemforms(${id})/Microsoft.Dynamics.CRM.RetrieveUnpublished()?${select}`, id, 'saved');
   if (!ok(savedRes)) throw unverified(`the saved systemform ${id} could not be read (status ${savedRes && savedRes.status})`);
-  const saved = rowOf(savedRes, id, 'saved');
-  const pubRes = await get(client, `/systemforms(${id})?${SELECT}`, id, 'published');
+  const saved = rowOf(savedRes, id, 'saved', rootFields);
+  const pubRes = await get(client, `/systemforms(${id})?${select}`, id, 'published');
   if (pubRes && pubRes.status === 404 && errorCode(pubRes.body) === NOT_FOUND) return { state: 'never-published', saved, published: null };
   if (!ok(pubRes)) throw unverified(`the published systemform ${id} could not be read (status ${pubRes && pubRes.status})`);
-  const published = rowOf(pubRes, id, 'published');
-  const same = saved.name === published.name && saved.description === published.description && saved.formxml === published.formxml;
+  const published = rowOf(pubRes, id, 'published', rootFields);
+  const same = saved.name === published.name && saved.description === published.description && saved.formxml === published.formxml &&
+    (!rootFields || (saved.type === published.type && saved.objecttypecode === published.objecttypecode));
   return { state: same ? 'equal' : 'differs', saved, published };
 }
 
@@ -91,6 +108,18 @@ function systemFormLayerSha256(layer) {
   return intentSha256({ name: layer.name, description: layer.description == null ? null : layer.description, formxml: layer.formxml });
 }
 
+/**
+ * The layer hash of a systemform whose root fields are part of what it is — a dashboard: systemFormLayerSha256's fields
+ * plus `type` and `objecttypecode`, as read with `{ rootFields: true }`. A change of the row's type or table between
+ * the proof and the publish then changes the saved hash, so it is never published under a desired hash taken before.
+ */
+function systemFormRootLayerSha256(layer) {
+  return intentSha256({
+    name: layer.name, description: layer.description == null ? null : layer.description, formxml: layer.formxml,
+    type: layer.type, objecttypecode: layer.objecttypecode == null ? null : layer.objecttypecode,
+  });
+}
+
 // What a never-published row's published layer reads as: a hash no layer has, so it equals no desired or saved hash.
 const NEVER_PUBLISHED_SHA256 = intentSha256({ neverPublished: true });
 
@@ -102,6 +131,15 @@ const NEVER_PUBLISHED_SHA256 = intentSha256({ neverPublished: true });
 async function readSystemFormLayers(client, group) {
   const r = await readSystemFormPublication(client, group && group.root && group.root.id);
   return { savedSha256: systemFormLayerSha256(r.saved), publishedSha256: r.published ? systemFormLayerSha256(r.published) : NEVER_PUBLISHED_SHA256 };
+}
+
+/**
+ * The layer reader of a managed dashboard group: readSystemFormLayers with the root fields read and hashed too
+ * (systemFormRootLayerSha256), the hash a dashboard group records as its `publication.desiredSha256`.
+ */
+async function readSystemFormRootLayers(client, group) {
+  const r = await readSystemFormPublication(client, group && group.root && group.root.id, { rootFields: true });
+  return { savedSha256: systemFormRootLayerSha256(r.saved), publishedSha256: r.published ? systemFormRootLayerSha256(r.published) : NEVER_PUBLISHED_SHA256 };
 }
 
 /**
@@ -128,4 +166,7 @@ async function readSystemFormRootPresence(client, rawId) {
   return seen.some(Boolean) ? 'present' : 'absent';
 }
 
-module.exports = { readSystemFormPublication, readSystemFormLayers, readSystemFormRootPresence, systemFormLayerSha256, NEVER_PUBLISHED_SHA256, UNVERIFIED };
+module.exports = {
+  readSystemFormPublication, readSystemFormLayers, readSystemFormRootLayers, readSystemFormRootPresence,
+  systemFormLayerSha256, systemFormRootLayerSha256, NEVER_PUBLISHED_SHA256, UNVERIFIED,
+};

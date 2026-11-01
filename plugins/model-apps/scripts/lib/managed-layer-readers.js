@@ -18,19 +18,22 @@
 // and throws (`managed-publication-unverified`) for any read it cannot prove. Each entry is required lazily, so loading
 // this map loads no family's code.
 //
-// Families add their entry with the change that commits their groups with a publication scope. A dashboard is a
-// systemform row like a form, so both read the same way, and a dashboard's `desiredSha256` is the same layer hash
-// (systemform-published.js systemFormLayerSha256). A view or chart group owes no publish of its own (its publication is the build's
-// table publish, state `not-needed`), so its reader only has to show its saved layer equal to its published one
-// (savedquery-published.js).
+// Families add their entry with the change that commits their groups with a publication scope. A form and a dashboard
+// are both systemform rows. A form's `desiredSha256` is the layer hash of its content (systemform-published.js
+// systemFormLayerSha256). A dashboard's also covers the row's `type` and `objecttypecode`, read in the same GET
+// (systemFormRootLayerSha256): which kind of dashboard it is and whether it belongs to a table decide whether it may be
+// published as the one proved, so a change of either after the proof is drift, never published. A view or chart group
+// owes no publish of its own (its publication is the build's table publish, state `not-needed`), so its reader only has
+// to show its saved layer equal to its published one (savedquery-published.js).
 
 const readSystemFormLayers = (client, group) => require('./systemform-published.js').readSystemFormLayers(client, group);
+const readSystemFormRootLayers = (client, group) => require('./systemform-published.js').readSystemFormRootLayers(client, group);
 
 const readSavedQueryLayers = (family) => (client, group) => require('./savedquery-published.js').readSavedQueryLayers(family, client, group);
 
 const LAYER_READERS = Object.freeze({
   form: readSystemFormLayers,
-  dashboard: readSystemFormLayers,
+  dashboard: readSystemFormRootLayers,
   view: readSavedQueryLayers('view'),
   chart: readSavedQueryLayers('chart'),
 });

@@ -35,13 +35,15 @@
 // type, scope and description, and each managed tile's key, id, type, containers and full ownable parts. A fresh read
 // must reproduce it exactly. Preservation is proven over everything the declaration does NOT own: the whole layout
 // (every foreign cell and control, the tabs, sections and rows and their order) with each managed cell kept in place
-// with only its authored parts taken out (its spans, the label its name is read from, its owned parameters), so its
-// other attributes, labels and parameters (showlabel, RecordsPerPage, ...) are proved too. The expected proof binds the
-// cells a run appends — ids, order and non-authored parameters — so the proof cuts exactly those from the end of the
-// first section and nothing else; a create's proof requires that what remains is the catalog seed alone. Both hashes
-// are taken from the saved row whose hash the publication records. So a run that stopped after the service accepted its
-// change cannot bind or publish what someone changed on the dashboard since: recovery recomputes both hashes from a
-// fresh read and the expected proof alone.
+// with only its authored parts taken out (its spans, the label the SDK writes its name to, its owned parameters), so its
+// other attributes, labels and parameters (showlabel, RecordsPerPage, ...) are proved too. Before the send, the plan
+// models the stored result with the SDK's own dashboard serializer and reader (intendedDashboard) and records the
+// preservation hash of THAT: every appended cell and a create's seed whole, attribute by attribute. A send the model
+// shows would not come out as declared, or would change anything the spec does not own, is refused before it is sent
+// (`dashboard-layout-unsupported`). After the send, the stored row must hash exactly as modelled — no cut, no tolerance.
+// Both hashes, and the root's type and table, are taken from the ONE saved row (read with its root fields) whose hash
+// the publication records. So a run that stopped after the service accepted its change cannot bind or publish what
+// someone changed on the dashboard since: recovery recomputes both hashes from a fresh read and the expected proof alone.
 //
 // Publication debt has a provenance: it is owed only for this attempt's own proved content write (the attempt's
 // planned publication), or carried over from the committed group's unsent debt. A read that finds the saved layer
@@ -55,7 +57,8 @@
 //
 // Publication goes through ONE adapter (publishDeclaredDashboard) over publishManagedScope: one permit, one scope, the
 // dashboard's own id in a `<dashboard>` envelope. Its layers are read by the shared `dashboard` reader of
-// lib/managed-layer-readers.js, so the publication debt records the hash that reader answers (systemFormLayerSha256).
+// lib/managed-layer-readers.js, so the publication debt records the hash that reader answers (systemFormRootLayerSha256:
+// content, type and table).
 // A layer read that fails there is a hold for the run, never a retry.
 //
 // Tile options are resolved by the build's own dashboardTileOpts and turned into a component by its dashboardComponent
@@ -75,7 +78,7 @@ const {
 const { hasUnsyncedEdits } = require('./unsynced-edits.js');
 const contract = require('./managed-feature-contract.js');
 const { runManagedFeature, publishManagedScope, CREATION_RECORD_UNSETTLED, PUBLICATION_UNVERIFIED, PUBLICATION_REFUSED } = contract;
-const { readSystemFormPublication, readSystemFormRootPresence, systemFormLayerSha256 } = require('./systemform-published.js');
+const { readSystemFormPublication, readSystemFormRootPresence, systemFormRootLayerSha256 } = require('./systemform-published.js');
 
 const KIND = 'dashboard';
 const TILE_KIND = 'dashboard-tile';
@@ -283,14 +286,6 @@ function projectionSha256(root, tiles) {
   return sha({ root, tiles: sorted });
 }
 
-/** A managed tile's parameters the spec does NOT author (RecordsPerPage, ChartGridMode, ...), as the platform keeps them. */
-function unownedParams(type, parameters) {
-  const owned = new Set(OWNED_PARAMS[type] || []);
-  const out = {};
-  for (const [k, v] of Object.entries(parameters || {})) if (!owned.has(k)) out[k] = v === undefined || v === null ? '' : String(v);
-  return out;
-}
-
 // The cell attributes a declared tile authors: its spans. The semantic projection compares them.
 const AUTHORED_CELL_ATTRS = new Set(['colspan', 'rowspan']);
 // The SDK's default language (its DEFAULT_LCID): the label a tile's name is read from when the caller names no other.
@@ -303,24 +298,33 @@ const withoutAttrs = (el, names) => ({ ...el, a: (el.a || []).filter((p) => !(Ar
  * A managed cell with exactly the parts the declaration authors taken out, so the semantic projection compares those
  * and preservation compares everything else:
  *   - the cell's colspan and rowspan;
- *   - the `description` of the label the SDK reads the tile's name from: in the cell's first <labels>, the <label> whose
- *     languagecode is the SDK's language, else the first one (the SDK's own rule for a tile's name);
+ *   - the <label> of the SDK's language in the cell's first <labels> — the label the SDK WRITES a tile's name to. The
+ *     SDK's write (CSe in the bundled SDK) sets the description of the first label whose languagecode is its language,
+ *     and when the cell has none it ADDS one, keeping every other label; so that label is taken out whole (and a
+ *     <labels> it leaves empty with it), whether the write updated or added it. Every other label stays and is proved,
+ *     including the fallback label a cell with no label in the SDK's language is read from;
  *   - the owned <parameters> of its control (OWNED_PARAMS of its type).
  * Everything else in the cell stays and is proved: its other attributes (showlabel, auto, ...), every other label and
- * language, the control's attributes, its non-authored parameters (RecordsPerPage, ...) and any other child.
+ * language, the control's attributes, its non-authored parameters (RecordsPerPage, ...) and any other child. The
+ * tile's name itself is in the semantic projection, read by the SDK's read rule (its language, else the first label).
  */
 function strippedManagedCell(cell, type, languageCode) {
   const owned = new Set(OWNED_PARAMS[type] || []);
-  const labels = childrenNamed(childrenNamed(cell, 'labels')[0], 'label');
-  const named = labels.find((l) => attrOf(l, 'languagecode') === String(languageCode)) || labels[0] || null;
-  const description = new Set(['description']);
-  return mapChildren(withoutAttrs(cell, AUTHORED_CELL_ATTRS), (child) => {
-    if (child && child.n === 'labels') return mapChildren(child, (l) => (l === named ? withoutAttrs(l, description) : l));
+  const labelsEl = childrenNamed(cell, 'labels')[0] || null;
+  const written = childrenNamed(labelsEl, 'label').find((l) => attrOf(l, 'languagecode') === String(languageCode)) || null;
+  const DROP = {};
+  const stripped = mapChildren(withoutAttrs(cell, AUTHORED_CELL_ATTRS), (child) => {
+    if (written && child === labelsEl) {
+      const rest = { ...child, c: (child.c || []).filter((x) => nodeOf(x) !== written) };
+      // The SDK creates the <labels> element for the label it adds, so one left holding no label goes with it.
+      return childrenNamed(rest, 'label').length ? rest : DROP;
+    }
     if (child && child.n === 'control') {
       return mapChildren(child, (p) => (p && p.n === 'parameters' ? { ...p, c: (p.c || []).filter((x) => !owned.has(nodeOf(x) && nodeOf(x).n)) } : p));
     }
     return child;
   });
+  return { ...stripped, c: (stripped.c || []).filter((x) => nodeOf(x) !== DROP) };
 }
 
 /**
@@ -345,13 +349,11 @@ function preservedLayout(bag, managedTypes, languageCode) {
 }
 
 /**
- * The hash of everything the declaration does NOT own: the preserved layout above, and `appended` — the cells a planned
- * append adds, in the order it adds them, as [{ id, parameters }] with each one's non-authored parameters (empty for a
- * read of what is stored). A component's `position` is not hashed: it is an index the SDK assigns on read; the layout
- * tree carries the order it is derived from.
+ * The hash of everything the declaration does NOT own: the preserved layout above. A component's `position` is not
+ * hashed: it is an index the SDK assigns on read; the layout tree carries the order it is derived from.
  */
-function preservationSha256(bag, managedTypes, languageCode, appended = []) {
-  return sha({ layout: preservedLayout(bag, managedTypes, languageCode), appended });
+function preservationSha256(bag, managedTypes, languageCode) {
+  return sha({ layout: preservedLayout(bag, managedTypes, languageCode) });
 }
 
 /**
@@ -390,50 +392,31 @@ function withoutTrailingCells(bag, count, removable) {
   return { bag: copy, removed };
 }
 
-/**
- * Whether a created dashboard, its appended tiles cut away, is the catalog seed and nothing else: exactly the seed tab,
- * exactly the seed section in it, and no row, cell or control left. A create adds no row of its own (the SDK drops the
- * seed's placeholder row when it appends the first tile), so anything left is someone else's content.
- */
-function seedSkeletonOnly(bag, seed) {
-  const layout = layoutOf(bag);
-  let rows = 0;
-  let controls = 0;
-  const walk = (el) => {
-    if (!el || typeof el !== 'object') return;
-    if (el.n === 'row') rows += 1;
-    if (el.n === 'control') controls += 1;
-    for (const ch of el.c || []) walk(nodeOf(ch));
-  };
-  walk(bag);
-  return layout.tabs.length === 1 && layout.tabs[0] === bareId(seed.tab) &&
-    layout.sections.length === 1 && layout.sections[0].id === bareId(seed.section) && layout.sections[0].tab === bareId(seed.tab) &&
-    !layout.cells.length && !rows && !controls;
+// The SDK's XML parser marks an element written with no children, e.g. `<rows></rows>`, with the pseudo-attribute
+// ["#empty", "1"] in its bag (`{ n: 'rows', a: [['#empty', '1']], c: [] }`), so its serializer can write it back the
+// same way. It is no content: an append fills such an element and the marker goes, so the layout before an append is
+// compared with the one after it, its appended cells taken away, without it.
+const EMPTY_MARK = new Set(['#empty']);
+function withoutEmptyMarks(el) {
+  if (!el || typeof el !== 'object') return el;
+  if (Array.isArray(el)) return el.map(withoutEmptyMarks);
+  if (el.node) return { ...el, node: withoutEmptyMarks(el.node) };
+  return { ...withoutAttrs(el, EMPTY_MARK), ...(el.c ? { c: el.c.map(withoutEmptyMarks) } : {}) };
 }
 
 /**
- * Whether `art` holds what the expected proof's preservation hash says was there before the send, with the planned
- * append on top and nothing else. The hash binds the appended cells' ids, order and non-authored parameters, so only a
- * cut of exactly those cells — and none of a pre-existing one, whose id the hash also binds — can match it:
- *   - an edit of an existing dashboard: some count of trailing cells of the first section (0 when nothing was appended)
- *     is cut, and the rest must hash as the layout the plan read;
- *   - a create: every managed cell is cut, the rest must be the seed alone (seedSkeletonOnly), and the cut cells must
- *     be the planned ones in the planned order.
+ * Whether the send planned for an existing dashboard leaves everything the declaration does not own as it is: `intended`
+ * (intendedDashboard), with the cells the plan appends cut away — exactly those, last in the first section and in the
+ * planned order — must hold the preserved layout `live` holds, apart from the parser's empty-element marker. Every
+ * other change the SDK's write would make (a row it drops, a foreign cell it touches, a managed cell's non-authored
+ * part it rewrites) fails this, before anything is sent.
  */
-function preservedSinceSend(art, managedTypes, languageCode, expectedSha256, seed) {
-  const byId = new Map(((art && art.components) || []).map((c) => [bareId(c.id), c]));
-  const appendedOf = (removed) => removed.map((id) => ({ id, parameters: unownedParams(managedTypes.get(id), (byId.get(id) || {}).parameters) }));
-  if (seed) {
-    const cut = withoutTrailingCells(art && art.bag, managedTypes.size, new Set(managedTypes.keys()));
-    return !!cut && seedSkeletonOnly(cut.bag, seed) && sha({ layout: null, appended: appendedOf(cut.removed) }) === expectedSha256;
-  }
-  for (let count = 0; count <= managedTypes.size; count += 1) {
-    const cut = withoutTrailingCells(art && art.bag, count, new Set(managedTypes.keys()));
-    // A longer cut contains the cell that stopped this one, so it cannot succeed either.
-    if (!cut) return false;
-    if (preservationSha256(cut.bag, managedTypes, languageCode, appendedOf(cut.removed)) === expectedSha256) return true;
-  }
-  return false;
+function appendKeepsLayout(live, intended, additionIds, managedTypes, languageCode) {
+  const cut = withoutTrailingCells(intended && intended.bag, additionIds.length, new Set(additionIds));
+  if (!cut || cut.removed.join('\n') !== additionIds.join('\n')) return false;
+  const before = withoutEmptyMarks(preservedLayout(live && live.bag, managedTypes, languageCode));
+  const after = withoutEmptyMarks(preservedLayout(cut.bag, managedTypes, languageCode));
+  return sha(before) === sha(after);
 }
 
 /**
@@ -564,28 +547,46 @@ async function readDashboard(sdk, id) {
   return (await sdk.getArtifact(KIND, id)) || null;
 }
 
-const snapshotSha256 = (art) => sha(JSON.parse(JSON.stringify({ name: art.name, description: art.description, layoutType: art.layoutType, components: art.components, bag: art.bag })));
+const snapshotSha256 = (art) => sha(JSON.parse(JSON.stringify({
+  name: art.name, description: art.description, dashboardType: art.dashboardType, entityLogicalName: art.entityLogicalName == null ? null : art.entityLogicalName,
+  layoutType: art.layoutType, components: art.components, bag: art.bag,
+})));
 
-/**
- * The dashboard as stored in ONE saved row: `saved` is the row readSystemFormPublication answered,
- *   { formid, name, description, formxml }
- * (its RetrieveUnpublished layer, the row systemFormLayerSha256 hashes), turned into the SDK's artifact by the SDK's own
- * dashboard adapter — the very function its fetch uses — so its components and bag are parsed exactly as `art`'s were.
- * The root's type and table come from `art` (the publication read does not select them; nor does the layer hash cover
- * them). Throws `dashboard-unreadable` when the SDK offers no such adapter or cannot parse the row: without it no proof
- * can be bound to the hashed row.
- */
-function savedSnapshot(sdk, art, saved, key) {
+/** The SDK's own dashboard adapter (the functions its fetch and push use); throws `dashboard-unreadable` without it. */
+function dashboardAdapter(sdk, key) {
   const reg = sdk && sdk.registrations && typeof sdk.registrations.get === 'function' ? sdk.registrations.get(KIND) : null;
   const adapter = reg && reg.adapter;
-  if (!adapter || typeof adapter.toArtifact !== 'function') throw stop('dashboard-unreadable', `the SDK offers no reader of a dashboard row, so dashboard "${key}" cannot be proved against its saved row`);
+  if (!adapter || ['toArtifact', 'fromArtifact', 'createDefault'].some((f) => typeof adapter[f] !== 'function')) {
+    throw stop('dashboard-unreadable', `the SDK offers no reader and writer of a dashboard row, so dashboard "${key}" cannot be proved against its saved row`);
+  }
+  return adapter;
+}
+
+// A dashboard's systemform `type`: 0 a Standard dashboard, 10 an interactive one. Any other type is not a dashboard
+// this build reconciles, so it is named as it is and never read as Standard (the SDK's reader would).
+// See: https://learn.microsoft.com/en-us/power-apps/developer/data-platform/reference/entities/systemform
+const dashboardTypeOf = (type) => (type === 0 ? 'Standard' : type === 10 ? 'Interactive' : `systemform type ${type}`);
+
+/**
+ * The dashboard as stored in ONE saved row: `saved` is the row readSystemFormPublication answered with its root fields,
+ *   { formid, name, description, formxml, type, objecttypecode }
+ * (its RetrieveUnpublished layer, the row systemFormRootLayerSha256 hashes), turned into the SDK's artifact by the
+ * SDK's own dashboard adapter — the very function its fetch uses — so its components and bag are parsed exactly as the
+ * SDK's read was. Its content, its type and its table all come from that one GET: a row whose type or table changed
+ * after the SDK's read is read as it now is, never with the root of an earlier read. Throws `dashboard-unreadable`
+ * when the SDK offers no such adapter or cannot parse the row: without it no proof can be bound to the hashed row.
+ */
+function savedSnapshot(sdk, saved, key) {
+  const adapter = dashboardAdapter(sdk, key);
   let parsed;
   try {
-    parsed = JSON.parse(JSON.stringify(adapter.toArtifact({ formid: saved.formid, name: saved.name, description: saved.description, formxml: saved.formxml })));
+    parsed = JSON.parse(JSON.stringify(adapter.toArtifact({
+      formid: saved.formid, name: saved.name, description: saved.description, formxml: saved.formxml, type: saved.type, objecttypecode: saved.objecttypecode,
+    })));
   } catch (err) {
     throw stop('dashboard-unreadable', `the saved row of dashboard "${key}" could not be read as a dashboard`, { cause: err });
   }
-  return { ...art, name: parsed.name, description: parsed.description, layoutType: parsed.layoutType, components: parsed.components, bag: parsed.bag };
+  return { ...parsed, id: saved.formid, dashboardType: dashboardTypeOf(saved.type), entityLogicalName: parsed.entityLogicalName == null ? null : parsed.entityLogicalName };
 }
 
 /** Replace the seed tab's and section's ids in the SDK's freshly generated local seed; throws on any other shape. */
@@ -605,6 +606,87 @@ function reseedBag(seedBag, tabId, sectionId) {
 }
 
 const newTileComponent = (e) => ({ ...e.component, id: braced(e.controlId), bag: { a: [['id', braced(e.cellId)]], c: [] } });
+
+// The in-place edits of an existing dashboard's bound tiles, as the SDK's updateElement paths and values: one per
+// authored part that changes. applyDashboard sends them; intendedDashboard models them.
+const inPlaceEdits = (r) => r.entries.filter((e) => e.changed && e.changed.length).flatMap((e) => e.changed.map((part) => ({
+  path: `/components/${e.index}/${part}`,
+  value: part.startsWith('parameters/') ? e.component.parameters[part.slice('parameters/'.length)] : e.desired[part],
+})));
+
+const isObject = (v) => !!v && typeof v === 'object' && !Array.isArray(v);
+// The SDK's updateElement on an artifact (a JSON pointer set): an object onto an object merges, anything else replaces.
+function setAtPointer(obj, pointer, value) {
+  const parts = pointer.split('/').slice(1).map((p) => p.replace(/~1/g, '/').replace(/~0/g, '~'));
+  let at = obj;
+  for (const p of parts.slice(0, -1)) {
+    if (!isObject(at) && !Array.isArray(at)) throw new Error(`no element at ${pointer}`);
+    at = at[p];
+  }
+  if (!isObject(at) && !Array.isArray(at)) throw new Error(`no element at ${pointer}`);
+  const last = parts[parts.length - 1];
+  at[last] = isObject(at[last]) && isObject(value) ? { ...at[last], ...value } : JSON.parse(JSON.stringify(value));
+}
+
+/**
+ * The dashboard the planned send stores, as the SDK will read it back — modelled BEFORE the send with the SDK's own
+ * dashboard adapter, so what the proof holds the stored row to is what this build's write makes of it, cell by cell,
+ * attribute by attribute: the same edits on the same artifact as applyDashboard (its seed for a create, re-keyed to the
+ * catalog ids; the SDK's read of the live row otherwise), then the adapter's own serializer (fromArtifact: the formxml
+ * its push sends) and its own reader (toArtifact). That covers what the SDK writes and the declaration does not author:
+ * an appended cell's showlabel, rowspan default and label, the seed tab's and section's attributes, the label the SDK
+ * adds for a renamed tile (keeping every other one), and the rows it drops or adds. The service stores the formxml it is
+ * sent, so the proof after the send compares the stored row with this one exactly. Throws `dashboard-rejected` when the
+ * SDK's serializer refuses the planned artifact (nothing was sent).
+ */
+function intendedDashboard(s, r) {
+  const adapter = dashboardAdapter(s.sdk, s.key);
+  try {
+    let art;
+    if (r.create) {
+      art = JSON.parse(JSON.stringify(adapter.createDefault({ name: s.dashboard.name, ...(r.description ? { description: r.description } : {}), id: r.id })));
+      setAtPointer(art, '/bag', reseedBag(art.bag, r.seed.tab, r.seed.section));
+    } else {
+      art = JSON.parse(JSON.stringify(r.live));
+      for (const { path, value } of inPlaceEdits(r)) setAtPointer(art, path, value);
+    }
+    art.components = [...(art.components || []), ...r.additions.map((e) => JSON.parse(JSON.stringify(newTileComponent(e))))];
+    if (!r.create && r.description !== undefined) art.description = r.description;
+    const row = adapter.fromArtifact(art);
+    return JSON.parse(JSON.stringify(adapter.toArtifact({ formid: r.id, name: row.name, description: row.description, formxml: row.formxml, type: row.type, objecttypecode: row.objecttypecode })));
+  } catch (err) {
+    if (err && err.code === 'dashboard-seed-unrecognized') throw err;
+    throw stop('dashboard-rejected', `the planned edit of dashboard "${s.key}" could not be written by the SDK; nothing was sent`, { cause: err });
+  }
+}
+
+/**
+ * The pre-send gates on the modelled result (intendedDashboard): refusals, before anything is sent, of a send whose
+ * stored result this build could not prove or that would change what it does not own.
+ *   - What the declaration authors must come out as declared: the modelled dashboard projects to the projection the
+ *     plan sends (an SDK clamp of a declared span, a parameter it rewrites, a seed out of place all fail this);
+ *   - for an existing dashboard, everything else must be kept (appendKeepsLayout).
+ * Answers the refusal message, or null when the send may go ahead.
+ */
+function unpreservableSend(s, r, intended, tiles) {
+  const managedTypes = new Map(r.entries.map((e) => [e.controlId, e.component.type]));
+  const projected = projectDashboard(intended, {
+    managed: r.entries.map((e) => ({ key: e.tileKey, id: e.controlId })),
+    seedIds: r.create ? [r.seed.tab, r.seed.section] : [],
+    languageCode: s.languageCode,
+  });
+  if (projected.invalid.length || projected.missing.length || projected.duplicated.length ||
+    projected.semanticSha256 !== projectionSha256(declaredRoot(r.desiredRoot.description), tiles)) {
+    return 'the SDK would not store this change as declared';
+  }
+  if (!r.create && !appendKeepsLayout(r.live, intended, r.additions.map((e) => e.controlId), managedTypes, s.languageCode)) {
+    return 'the SDK would change parts of the dashboard the spec does not own';
+  }
+  return null;
+}
+
+/** The tiles of a resolution as the plan sends them: the semantic projection's input. */
+const plannedTiles = (r) => r.entries.map((e) => ({ key: e.tileKey, id: e.controlId, type: e.component.type, cell: e.place.cell, section: e.place.section, tab: e.place.tab, parts: e.desired }));
 
 function resolveComponent(tile, index, resolveTile, toComponent) {
   let component;
@@ -675,15 +757,19 @@ async function resolveDashboard(s, committed, pending) {
 
   let pub;
   try {
-    pub = await readSystemFormPublication(sdk.dataverse, id);
+    pub = await readSystemFormPublication(sdk.dataverse, id, { rootFields: true });
   } catch (err) {
     throw stop('dashboard-published-unreadable', `whether the saved state of dashboard "${key}" is published could not be read`, { cause: err });
   }
-  if (live.dashboardType !== 'Standard') throw stop('dashboard-interactive-unsupported', `dashboard "${key}" is not a standard dashboard; only a standard one is reconciled, and it was left as it is`);
-  if (!isGlobal(live)) throw stop('dashboard-scope-unsupported', `dashboard "${key}" belongs to a table; only a global dashboard is reconciled, and it was left as it is`);
+  // The root is judged on the saved row the publication read answered — its type and table read in the same GET as
+  // its content — and the SDK's read must be that same snapshot (below).
+  const snap = savedSnapshot(sdk, pub.saved, key);
+  if (live.dashboardType !== 'Standard' || snap.dashboardType !== 'Standard') throw stop('dashboard-interactive-unsupported', `dashboard "${key}" is not a standard dashboard; only a standard one is reconciled, and it was left as it is`);
+  if (!isGlobal(live) || !isGlobal(snap)) throw stop('dashboard-scope-unsupported', `dashboard "${key}" belongs to a table; only a global dashboard is reconciled, and it was left as it is`);
   // The plan below is built from the SDK's read, and its base observation hashes the publication read's saved row: two
-  // GETs. They must be one snapshot, or the plan would describe one row and record the hash of another.
-  if (snapshotSha256(savedSnapshot(sdk, live, pub.saved, key)) !== snapshotSha256(live)) {
+  // GETs. They must be one snapshot — content, type and table — or the plan would describe one row and record the hash
+  // of another.
+  if (snapshotSha256(snap) !== snapshotSha256(live)) {
     throw stop('dashboard-unreadable', `dashboard "${key}" changed while it was read; nothing was sent, run again`);
   }
 
@@ -792,7 +878,25 @@ async function resolveDashboard(s, committed, pending) {
   if (!refusals.length && writes && !adoptable) refuse(key, 'dashboard-adoption-not-authorized', `the dashboard exists and is not yet managed by this spec; approve adopting it first (dashboard:${key})`);
   if (refusals.length) throw stop(refusals[0].code, `declared dashboard "${key}": ${refusals.map((r) => `${r.key}: ${r.message}`).join('; ')}`, { refusals });
 
-  return { create: false, id, source, live, pub, layout, entries, additions, description, desiredRoot, writes, adoptable, pending: !!pending };
+  const resolution = { create: false, id, source, live, pub, layout, entries, additions, description, desiredRoot, writes, adoptable, pending: !!pending };
+  return withIntended(s, resolution);
+}
+
+/**
+ * A resolution with its modelled result (`intended`, intendedDashboard) when it sends anything, after the pre-send
+ * gates (unpreservableSend): a send whose result could not be proved, or that would change what the spec does not own,
+ * is refused with `dashboard-layout-unsupported` for every tile it would add or edit — nothing sent.
+ */
+function withIntended(s, r) {
+  if (!r.writes) return r;
+  const intended = intendedDashboard(s, r);
+  const why = unpreservableSend(s, r, intended, plannedTiles(r));
+  if (why) {
+    const keys = r.entries.filter((e) => r.create || r.additions.includes(e) || (e.changed && e.changed.length)).map((e) => e.tileKey);
+    const refusals = (keys.length ? keys : [s.key]).map((k) => ({ key: k, code: 'dashboard-layout-unsupported', message: `${why}; make this change in Maker` }));
+    throw stop('dashboard-layout-unsupported', `declared dashboard "${s.key}": ${refusals.map((x) => `${x.key}: ${x.message}`).join('; ')}`, { refusals });
+  }
+  return { ...r, intended };
 }
 
 /** A dashboard no id names that is not there: it is created under its catalog id, every tile a catalog child of it. */
@@ -816,7 +920,7 @@ function resolveCreate(s, id, pending) {
     e.place = { cell: e.cellId, section: seed.section, tab: seed.tab };
   }
   const description = typeof dashboard.description === 'string' ? dashboard.description : '';
-  return { create: true, id, source: 'derived', seed, entries, additions: entries, description, desiredRoot: { description }, writes: 1 + entries.length, adoptable: true, pending: !!pending };
+  return withIntended(s, { create: true, id, source: 'derived', seed, entries, additions: entries, description, desiredRoot: { description }, writes: 1 + entries.length, adoptable: true, pending: !!pending });
 }
 
 /**
@@ -827,7 +931,7 @@ function resolveCreate(s, id, pending) {
  */
 function planDashboard(s, resolution, committed) {
   const r = resolution;
-  const savedSha = r.create ? null : systemFormLayerSha256(r.pub.saved);
+  const savedSha = r.create ? null : systemFormRootLayerSha256(r.pub.saved);
   const declaration = canonicalDeclaration(s.dashboard);
   if (!r.create && r.writes === 0) {
     if (!r.adoptable) return { noop: true };
@@ -840,20 +944,20 @@ function planDashboard(s, resolution, committed) {
     // a read never makes a debt. Otherwise the group is (re)bound without a content write.
     if (!r.pending && recorded && rootSame && declared && committed.proof.savedSha256 === savedSha) return { noop: true };
   }
-  const tiles = r.entries.map((e) => ({ key: e.tileKey, id: e.controlId, type: e.component.type, cell: e.place.cell, section: e.place.section, tab: e.place.tab, parts: e.desired }));
+  const tiles = plannedTiles(r);
   const children = r.entries.map((e) => ({ kind: TILE_KIND, key: e.tileKey, namespaceParentId: r.id, id: e.controlId, associationSha256: associationOf(e.tileKey, e.component.type, e.place) }));
-  // What the declaration does not own, as the send leaves it: the layout read now (each bound managed cell with its
-  // authored parts taken out), plus the cells this run appends, in the order it appends them, with the non-authored
-  // parameters it gives them. A create has no layout before the send: its proof checks the rest is the seed alone.
+  // What the declaration does not own, as the send leaves it: for a send, the whole modelled result (intendedDashboard)
+  // with each managed cell's authored parts taken out — every appended cell's other attributes, labels and parameters,
+  // the seed tab and section of a create, and the layout kept around them, which the pre-send gate already held to the
+  // live one; with nothing to send, the layout read now. The proof holds the stored row to it exactly.
   const managedTypes = new Map(r.entries.map((e) => [e.controlId, e.component.type]));
-  const appended = r.additions.map((e) => ({ id: e.controlId, parameters: unownedParams(e.component.type, e.component.parameters) }));
   const expected = {
     proofVersion: 1,
     proofSchema: PROOF_SCHEMA,
     rootId: r.id,
     baseProofSha256: committed ? committed.proof.semanticSha256 : null,
     sentProjectionSha256: projectionSha256(declaredRoot(r.desiredRoot.description), tiles),
-    preservationSha256: r.create ? sha({ layout: null, appended }) : preservationSha256(r.live.bag, managedTypes, s.languageCode, appended),
+    preservationSha256: preservationSha256(r.writes ? r.intended.bag : r.live.bag, managedTypes, s.languageCode),
     baseObservation: r.create ? null : { rowVersion: null, savedSha256: savedSha },
     children,
   };
@@ -883,12 +987,7 @@ async function applyDashboard(s, r) {
       await sdk.updateElement(KIND, id, '/bag', reseedBag(art.bag, r.seed.tab, r.seed.section));
       for (const e of r.entries) await sdk.addElement(KIND, id, '/components', newTileComponent(e));
     } else {
-      for (const e of r.entries.filter((x) => x.changed && x.changed.length)) {
-        for (const part of e.changed) {
-          const value = part.startsWith('parameters/') ? e.component.parameters[part.slice('parameters/'.length)] : e.desired[part];
-          await sdk.updateElement(KIND, id, `/components/${e.index}/${part}`, value);
-        }
-      }
+      for (const { path, value } of inPlaceEdits(r)) await sdk.updateElement(KIND, id, path, value);
       for (const e of r.additions) await sdk.addElement(KIND, id, '/components', newTileComponent(e));
       if (r.description !== undefined) await sdk.updateElement(KIND, id, '/description', r.description);
     }
@@ -919,22 +1018,20 @@ async function proveDashboard(s, expected, applied, { token = null, recovering =
     throw stop('dashboard-unreadable', `dashboard "${key}" was written and could not be read back to prove it`, { cause: err });
   }
   try {
-    pub = await readSystemFormPublication(sdk.dataverse, id);
+    pub = await readSystemFormPublication(sdk.dataverse, id, { rootFields: true });
   } catch (err) {
     throw stop('dashboard-published-unreadable', `whether the saved state of dashboard "${key}" is published could not be read`, { cause: err });
   }
   if (!art || art.dashboardType !== 'Standard' || !isGlobal(art)) throw stop('dashboard-stored-mismatch', `the stored dashboard "${key}" is not a global standard dashboard`);
-  // Everything below is proved on the saved row the publication read answered — the one whose hash becomes the
-  // committed savedSha256 and the publication's desired hash — never on the SDK's earlier read of it: a change landing
-  // between the two GETs would otherwise be published without ever having been proved.
-  const saved = savedSnapshot(sdk, art, pub.saved, key);
+  // Everything below is proved on the saved row the publication read answered — its content, type and table from one
+  // GET, the row whose hash becomes the committed savedSha256 and the publication's desired hash — never on the SDK's
+  // earlier read of it: a change landing between the two GETs would otherwise be published without ever being proved.
+  const saved = savedSnapshot(sdk, pub.saved, key);
   const created = expected.baseObservation === null;
   let seedIds = [];
-  let seed = null;
   if (created) {
     const { childIds } = s.catalog.reserveChildren(KIND, key, { actualRootId: id, children: SEED_CHILDREN });
     seedIds = [childIds[SEED_TAB], childIds[SEED_SECTION]];
-    seed = { tab: seedIds[0], section: seedIds[1] };
   }
   const projected = projectDashboard(saved, { managed: expected.children.map((c) => ({ key: c.key, id: c.id })), seedIds, languageCode: s.languageCode });
   if (projected.invalid.some((code) => code === 'dashboard-interactive-unsupported' || code === 'dashboard-scope-unsupported')) {
@@ -951,14 +1048,14 @@ async function proveDashboard(s, expected, applied, { token = null, recovering =
   if (missing.length) throw stop('create-completion-required', `a part of dashboard "${key}" is not on the stored dashboard (${missing.join(', ')}); complete or remove it in Maker, then run again`);
   if (mismatch.length) throw stop('dashboard-stored-mismatch', `the stored dashboard "${key}" does not hold what was written (${mismatch.join(', ')}); check the dashboard`);
   const semantic = projected.semanticSha256;
-  const managedTypes = new Map(projected.tiles.map((t) => [t.id, t.type]));
-  // What is stored now is not what was sent, or a part the spec does not own changed, or content was added that the
-  // send did not add (on a create: anything but the seed and the planned tiles): binding or publishing it would claim
-  // content this build never wrote — after a crash, someone's edit made since.
-  if (semantic !== expected.sentProjectionSha256 || !preservedSinceSend(saved, managedTypes, s.languageCode, expected.preservationSha256, seed)) {
+  // What is stored now is not what was sent, or anything the spec does not own differs from what the send was modelled
+  // to leave (expected.preservationSha256, intendedDashboard): an attribute of an appended cell or of the seed, a label,
+  // a foreign cell, a row. Binding or publishing it would claim content this build never wrote — after a crash,
+  // someone's edit made since. The committed preservation is then the stored row's, as projectDashboard answers it to
+  // verify and hydrate.
+  if (semantic !== expected.sentProjectionSha256 || projected.preservationSha256 !== expected.preservationSha256) {
     throw stop('create-completion-required', `the stored dashboard "${key}" is not the one this build sent; it was not bound or published`);
   }
-  // The committed preservation is the plain one of the stored row, as projectDashboard answers it to verify and hydrate.
   const preserved = projected.preservationSha256;
 
   const { committed, pending } = store.readGroup(KIND, key);
@@ -988,7 +1085,7 @@ async function proveDashboard(s, expected, applied, { token = null, recovering =
     record(KIND, key, id, { description: String(saved.description == null ? '' : saved.description) }, { origin: originOf(KIND, key, created) }),
   ];
   // The debt's desired hash is the one the shared `dashboard` layer reader answers, so publishManagedScope compares like with like.
-  const savedSha = systemFormLayerSha256(pub.saved);
+  const savedSha = systemFormRootLayerSha256(pub.saved);
   const scope = scopeOf(id);
   const notNeeded = { scope, state: 'not-needed', desiredSha256: null, dispatchToken: null };
   // Publication provenance: a debt is owed only for THIS attempt's proved content write (its planned publication — the
@@ -1142,7 +1239,7 @@ async function settleDeclaredDashboard(args) {
  * dashboard's own id — and one group, published by the SDK's `<dashboard>` envelope:
  *   POST PublishXml {"ParameterXml":"<importexportxml><dashboards><dashboard>ID</dashboard></dashboards></importexportxml>"}
  * The pre-send check reads every committed group on the scope with its family's shared reader
- * (lib/managed-layer-readers.js; a dashboard is a systemform row, read by readSystemFormLayers) over the SDK's
+ * (lib/managed-layer-readers.js; a dashboard is a systemform row, read by readSystemFormRootLayers) over the SDK's
  * Dataverse client; no group is filtered or skipped here, and this adapter brings no reader of its own. A publication
  * left uncertain by an earlier run (sent, its confirmation not written) is confirmed by that read first, not resent.
  * Outcomes:
