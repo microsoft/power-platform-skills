@@ -2895,14 +2895,25 @@ reconciled projection included). The build never removes a local draft, its own 
 `deleteArtifact` is not conditional, and a second local process (which the build lease does not
 exclude) can edit the draft between any check and the delete. A create that was refused or lost its
 answer keeps its draft and stops with `create-local-draft-kept`; its attempt stays pending and nothing is
-resent in that run. The next build stops at it with `create-completion-required` until the maker removes
-or refreshes that draft, then proves the row from the server (or resends the same create when the send
-window proves nothing left). The create itself is pinned at the transport: between `createArtifact` and
-the push the stable port's `materialised` serialises the body that draft must produce (a throwaway SDK,
-`lib/throwaway-sdk.js`) and pins it on the run's publication barrier (`pinCreate`), which compares the
-actual POST at that id, every field, just before transport, and refuses it unsent with
-`create-local-draft-changed` when it differs; a store-backed create without a gated transport is refused
-the same way. A store file that cannot be trusted
+resent in that run. The next build stops at it with `create-completion-required` until the local copy is
+discarded. The recovery order the stop and `create-local-draft-kept` give (`pendingAdvice` in
+`lib/creates-stable-build.js`) follows from the immutable prepared intent: keep the wanted change apart,
+keep or restore the ORIGINAL declaration, discard only the local copy (the SDK's local `deleteArtifact`
+or a refresh — not a service-row delete, not a binding-store delete), rebuild the original (with the
+adoption approval if asked), and only then apply the changed declaration. Putting the change into the
+spec first stops on the immutable-intent check ("declared differently since its change was prepared")
+and keeps the attempt. That rebuild proves the row from the server (or resends the same create when the
+send window proves nothing left). The create itself is pinned at the transport: between `createArtifact`
+and the push the stable port's `materialised` serialises the body that draft must produce (a throwaway
+SDK, `lib/throwaway-sdk.js`) and pins it on the run's publication barrier (`pinCreate`). While the pin
+is held the row's whole write boundary is closed but for that create: the POST at that id passes only
+with every field equal; a PATCH, PUT or DELETE of the row (the native SDK pushes a PATCH once another
+process has saved the draft), any write that names it, and a `$batch` with a part that touches it (read
+part by part with `lib/batch-request.js`, JSON bodies parsed so an escaped id is still seen) or that
+cannot be read are refused unsent with `create-local-draft-changed`; reads and writes of other rows
+pass. Each create holds its own pin, scoped to its own `port.run` (an `AsyncLocalStorage`), so a
+parallel create's end never releases another's pin. A store-backed create without a gated transport is
+refused the same way. A store file that cannot be trusted
 halts the build before any write (`managed-binding-store-unreadable`, never retried); the message tells
 the maker to keep the file as it is and never to move, delete or reset it, nor to put back an older copy
 (a backup, the build's own included, can miss an attempt or a publish sent after it was made); only a

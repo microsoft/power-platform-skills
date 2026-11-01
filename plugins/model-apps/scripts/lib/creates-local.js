@@ -61,10 +61,13 @@ async function readLocalCreateState(sdk, type, id) {
  *   synced with any edit — inside or outside what the spec declares — or `isDirty` with an empty diff;
  *   a pending local create (a draft at this id the server never acknowledged);
  *   an orphaned baseline, a malformed or unreadable workspace.
+ * `advice` replaces what the stop tells the maker to do next (creates-stable-build.js: the order that settles a change still
+ * pending in the binding store); by default, to put the change into the spec and refresh the local copy.
  */
-async function assertCleanContinuation(sdk, type, id) {
+async function assertCleanContinuation(sdk, type, id, { advice } = {}) {
+  const next = advice || `Put any change you want to keep into the spec, then refresh the local copy of this ${type}. Running the build again without that stops here again`;
   const stop = (found) => {
-    const err = createStop('create-completion-required', `the local copy of the ${type} ${id} in the workspace ${found}, so the build stopped before it fetched over, reapplied or pushed it; the local copy was kept exactly as it is and nothing was written. Put any change you want to keep into the spec, then refresh the local copy of this ${type}. Running the build again without that stops here again`, { create: { kind: type, id } });
+    const err = createStop('create-completion-required', `the local copy of the ${type} ${id} in the workspace ${found}, so the build stopped before it fetched over, reapplied or pushed it; the local copy was kept exactly as it is and nothing was written. ${next}`, { create: { kind: type, id } });
     err.category = UNSENT_EDITS;
     return err;
   };

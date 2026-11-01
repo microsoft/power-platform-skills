@@ -60,6 +60,7 @@
 // Without a store (no workspace folder, or a target no store can be kept for) the port and lookup still work by identity alone and
 // nothing is persisted: a rerun finds the row by its derived id the same way, and an observed row is unbound the same way.
 
+const { AsyncLocalStorage } = require('node:async_hooks');
 const { createCompositePortForSpec, markPreSend } = require('./creates-port.js');
 const { createStop } = require('./creates-identity.js');
 const { assertCleanContinuation, readLocalCreateState } = require('./creates-local.js');
@@ -70,6 +71,29 @@ const { intentSha256, normalizeGuid, projectionBaseline, isApproved, canonicalJs
 const SHIPPED_KINDS = Object.freeze(['view', 'chart']);
 // The proof schema a view or chart group is committed under: the read-back projection (reconcile-common.js projectionBaseline).
 const PROOF_SCHEMA = Object.freeze({ view: 'view-v1', chart: 'chart-v1' });
+
+// How many bytes the commit of one view or chart change may add to the binding store (prepareAttempt `completionBytes`), as an
+// upper bound the store reserves before the send. The store's default reservation is a fixed size, but the committed group
+// repeats strings the spec controls — the key (a view's explicit `key`, or `<table>/<name>`) is written in the group, its
+// root and its record — so a long key could outgrow it and take bytes other attempts hold. The bound is the group serialised
+// the way the store writes it (indented JSON, every string escaped as JSON escapes it), with the real key, table and app name
+// and every hash and id at full length, its lines indented to a depth deeper than the store nests a group, then doubled for
+// the attempt bookkeeping written beside it, plus the store's own base reservation.
+const COMPLETION_NESTING = 8;
+function completionBytesFor(kind, key, table, appUniqueName, parts) {
+  const { COMPLETION_BASE_BYTES } = require('./managed-bindings.js');
+  const hex = '0'.repeat(64);
+  const guid = '00000000-0000-0000-0000-000000000000';
+  const group = {
+    family: kind, key, generation: guid, previousGeneration: guid, root: { kind, key, id: guid }, proofSchema: PROOF_SCHEMA[kind],
+    records: [{ formatVersion: 1, appUniqueName: String(appUniqueName || ''), environmentFingerprint: hex, kind, key, id: guid, origin: 'adopted', intentSha256: hex, partsSha256: Object.fromEntries(parts.map((p) => [p, hex])) }],
+    proof: { savedSha256: hex, semanticSha256: hex, preservationSha256: hex, expectedChildrenSha256: hex },
+    consumerState: { baseline: { intentSha256: hex } },
+    publication: { scope: { type: 'table', table: String(table || '') }, state: 'not-needed', desiredSha256: hex, dispatchToken: guid, carriedFrom: guid },
+  };
+  const text = JSON.stringify(group, null, 2);
+  return COMPLETION_BASE_BYTES + 2 * (Buffer.byteLength(text, 'utf8') + text.split('\n').length * 2 * COMPLETION_NESTING);
+}
 // Per family: the planner module, the plan's id field, the Web API collection and id column of the row, and the live projection
 // of a row that does not exist yet (what a create's expectation is laid over: no columns, links or sort, an empty description).
 const FAMILY = Object.freeze({
@@ -200,14 +224,19 @@ function createStableCreates({ spec, sdk, store = null, barrier = null, basePort
   // Creates this run saw acknowledged at their stable id (the composite port's 'created'), by `${kind}\0${key}`.
   const acknowledged = new Set();
 
+  // Each create runs in its own pin scope (createRuns): the pins its `materialised` sets belong to it alone and are released when
+  // its own run ends — after its push and every retry the push awaits — whatever another create running alongside does. The
+  // build runs creates in parallel (the engine's concurrency, and charts through mapLimit), so a pin shared across creates
+  // would let one create's end release another's pin while that one's push was still to dispatch.
   const port = {
     async run(request, execute) {
-      if (!request || !protects(request.kind, request.key)) return basePort.run(request, execute);
+      const own = { pins: new Map() };
       let out;
       try {
-        out = await composite.run(request, execute);
+        if (!request || !protects(request.kind, request.key)) return await createRuns.run(own, () => basePort.run(request, execute));
+        out = await createRuns.run(own, () => composite.run(request, execute));
       } finally {
-        releasePins();
+        releasePins(own);
       }
       if (out && out.outcome === 'created') acknowledged.add(`${request.kind}\0${request.key}`);
       return out;
@@ -225,15 +254,33 @@ function createStableCreates({ spec, sdk, store = null, barrier = null, basePort
   // absent or synced with no edit. A local create no answer acknowledged stops too, whoever's it is: a diff cannot tell the draft
   // this build made from one a maker edited since (a name or a description outside the view's projection included), and the proof
   // would fetch the server's copy over it. The build never removes such a draft itself (keptDraft): it is the maker's to settle.
+  // While the store holds this artifact's change pending at that id, the stop tells the order that settles it (pendingAdvice).
   async function assertContinuable(kind, key, id) {
-    await assertCleanContinuation(sdk, kind, id);
+    const pending = store ? store.readGroup(kind, key).pending : null;
+    const atPending = !!pending && normalizeGuid(pending.root.id) === normalizeGuid(id);
+    await assertCleanContinuation(sdk, kind, id, atPending ? { advice: pendingAdvice(kind, key) } : {});
   }
+
+  // What the maker does about a local copy at an artifact whose change the store still holds pending. Order matters: the pending
+  // change is proved (or its unsent create finished) only against the declaration it was prepared from — a run with any other
+  // declaration stops with create-completion-required ("declared differently since its change was prepared") and keeps the
+  // attempt — so the change the maker wants is set aside and applied only after the original declaration has settled. The
+  // discard is the SDK's local one: it removes the workspace copy only, never the row on the service and never the binding store.
+  const pendingAdvice = (kind, key) => [
+    `To go on, in this order: 1. keep the change you want (from the local copy or from the spec) somewhere apart;`,
+    `2. keep the spec's declaration of this ${kind} (${key}) exactly as it was when its change was prepared, or put it back;`,
+    `3. discard only the local copy of this ${kind} — the maker SDK's local discard (deleteArtifact) or a refresh of the local copy — which removes nothing on the service and leaves the managed binding store as it is;`,
+    `4. run the build again with that original declaration (add --authorize adopt:${kind}:${key} if the build asks for it), which proves the change or finishes its create;`,
+    `5. only then put your change into the spec and run the build again.`,
+    `A changed declaration before step 4 stops at this ${kind} with create-completion-required and keeps the pending change`,
+  ].join(' ');
 
   // What ties a create request to the draft this run made, by `${kind}\0${id}`: the publication barrier's pin (pinCreate) of
   // the row's create, holding the request body the SDK serialises from the draft as createArtifact answered it. Set by
-  // `materialised` before the push and released by `port.run` once the create has run; `refusal` records why a create was not
-  // sent (the pin refused it, or it could not be pinned), for `apply` to report as `create-local-draft-changed`.
-  const draftPins = new Map();
+  // `materialised` before the push into the pin scope of the create that made the draft (createRuns), and released by that
+  // create's `port.run` once it has run; `draftRefusals` records why a create was not sent (the pin refused it, or it could not
+  // be pinned), for `apply` to report as `create-local-draft-changed`. A create's release never touches another's entries.
+  const createRuns = new AsyncLocalStorage();
   const draftRefusals = new Map();
   const draftKey = (kind, id) => `${kind}\0${normalizeGuid(id) || String(id)}`;
 
@@ -267,39 +314,44 @@ function createStableCreates({ spec, sdk, store = null, barrier = null, basePort
     } catch (err) {
       refuse(`the create request the draft makes could not be worked out (${String((err && err.message) || err).slice(0, 200)})`);
     }
+    // The pin belongs to the create running this push (port.run's scope). Outside one there is no lifetime to tie it to, and a
+    // pin nobody releases would hold the row for the rest of the run, so the draft is refused instead.
+    const own = createRuns.getStore();
+    if (!own) refuse('the create request cannot be tied to the draft this build made (it is not pushed under the build\'s create port)');
     const want = canonicalJson(expected);
-    draftPins.set(k, barrier.pinCreate({ collection: FAMILY[kind].collection, idField: FAMILY[kind].idField, id, matches: (body) => canonicalJson(body) === want }));
+    own.pins.set(k, barrier.pinCreate({ collection: FAMILY[kind].collection, idField: FAMILY[kind].idField, id, matches: (body) => canonicalJson(body) === want }));
   }
 
-  // Ends every pin `materialised` set, recording a refused one: called by `port.run` once its create has run, whatever its outcome.
-  function releasePins() {
-    for (const [k, pin] of draftPins) {
+  // Ends the pins `materialised` set in one create's scope, recording a refused one: called by that create's `port.run` once it
+  // has run, whatever its outcome. Only `own`'s pins: another create's pins, and its refusals, stay as they are.
+  function releasePins(own) {
+    for (const [k, pin] of own.pins) {
       pin.release();
       if (pin.refused && !draftRefusals.has(k)) {
         draftRefusals.set(k, coded('create-local-draft-changed', `${k.split('\0')[0]} ${k.split('\0')[1]}: the create request the push dispatched was not the draft this build made (the local draft changed while the build pushed it), so it was not sent; the local copy was kept as it is`));
       }
     }
-    draftPins.clear();
+    own.pins.clear();
   }
 
-  const keptDraft = (kind, id) => ({
+  const keptDraft = (kind, key, id) => ({
     key: `${kind}:${id}`,
     code: 'create-local-draft-kept',
-    message: `the local draft of the ${kind} ${id} was kept exactly as it is: the build never removes a local draft (the SDK has no discard that holds only while the draft is unchanged, and a second local process may have edited it). Its create may still have reached the server, so its attempt stays pending and nothing is sent for it again in this run. Put any change you want to keep into the spec, then remove that local draft yourself (or refresh the local copy of this ${kind}) and run the build again; until then the build stops at this ${kind} with create-completion-required`,
+    message: `the local draft of the ${kind} ${id} was kept exactly as it is: the build never removes a local draft (the SDK has no discard that holds only while the draft is unchanged, and a second local process may have edited it). Its create may still have reached the server, so its attempt stays pending and nothing is sent for it again in this run; until the local copy is discarded every build stops at this ${kind} with create-completion-required. ${pendingAdvice(kind, key)}`,
   });
 
   // A create this run made at the stable `id` and never had acknowledged (a refusal, or an answer that was lost) leaves a local
   // draft. It is never removed here — `deleteArtifact` is not conditional, so whatever check came before it, a draft another
   // process edited in between would be erased with it. Answers the `create-local-draft-kept` finding for the halt when a draft
   // is (or may be) there, null when the workspace holds none.
-  async function keptOwnDraft(kind, id) {
+  async function keptOwnDraft(kind, key, id) {
     let local;
     try {
       local = await readLocalCreateState(sdk, kind, id);
     } catch {
-      return keptDraft(kind, id);
+      return keptDraft(kind, key, id);
     }
-    return local.state === 'pending' ? keptDraft(kind, id) : null;
+    return local.state === 'pending' ? keptDraft(kind, key, id) : null;
   }
 
   // A stop the lookup makes is made while planning, before anything is written or sent: it is certified as such (creates-port.js
@@ -416,6 +468,13 @@ function createStableCreates({ spec, sdk, store = null, barrier = null, basePort
         if (!source.bindUnchanged) { stash = source; return { noop: true }; }
         if (rec && normalizeGuid(rec.id) === normalizeGuid(id) && rec.intentSha256 === source.baseline.intentSha256) { stash = source; return { noop: true }; }
       }
+      // The commit's size is bounded before anything is prepared or sent: a completion larger than one attempt may reserve is
+      // refused here, so a key too long for the store never gets a send whose commit cannot be written.
+      const { COMPLETION_MAX_BYTES } = require('./managed-bindings.js');
+      const completionBytes = completionBytesFor(kind, key, table, store.snapshot().envelope.appUniqueName, fam.mod.PARTS);
+      if (completionBytes > COMPLETION_MAX_BYTES) {
+        throw markPreSend(coded(CODES.storeFull, `${label}: the key of this ${kind} is too long to record: committing its change could need up to ${completionBytes} bytes of the binding store, more than the ${COMPLETION_MAX_BYTES} one change may reserve. Shorten its key${kind === 'view' ? ' (views[].key, or the name it defaults from)' : ' (the chart\'s name)'}; nothing was sent`));
+      }
       const create = source.action === 'create';
       const rootId = create ? composite.identityFor(kind, key).id : normalizeGuid(id);
       const desired = create ? fam.mod.desiredFull(source.intent, fam.emptyLive()) : source.desired;
@@ -439,6 +498,7 @@ function createStableCreates({ spec, sdk, store = null, barrier = null, basePort
         },
         declarationSha256: intentSha256(source.intent),
         publication: { scope, state: 'owed' },
+        completionBytes,
         source,
       };
     };
@@ -492,7 +552,7 @@ function createStableCreates({ spec, sdk, store = null, barrier = null, basePort
           r = await applyPlan(planned.source);
         } catch (err) {
           const changed = creating ? changedDraft() : null;
-          const kept = creating ? await keptOwnDraft(kind, id) : null;
+          const kept = creating ? await keptOwnDraft(kind, key, id) : null;
           if (changed || kept) {
             const was = Array.isArray(err && err.findings) ? err.findings : [{ key: label, code: (err && err.code) || CODES.notSettled, message: (err && err.message) || String(err) }];
             const findings = [...(changed ? [changedFinding(changed)] : []), ...was, ...(kept ? [kept] : [])];
@@ -510,7 +570,7 @@ function createStableCreates({ spec, sdk, store = null, barrier = null, basePort
           if (created) { try { store.noteSaved(token, { acknowledgedRoot: true }); } catch { /* the attempt stays unacknowledged */ } }
           else if (creating) {
             changed = changedDraft();
-            kept = await keptOwnDraft(kind, id);
+            kept = await keptOwnDraft(kind, key, id);
           }
           // An unsettled create's local copy is its draft, which stays as it is (keptOwnDraft): only an edit's copy is reset.
           if (!creating && typeof onUnsettled === 'function') await onUnsettled(planned.source, r);

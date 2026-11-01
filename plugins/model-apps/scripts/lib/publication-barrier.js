@@ -60,14 +60,21 @@
 //                     outside the permit stays withheld by the hold, so a sibling cannot overlap the managed send.
 //   create pins       `pinCreate({ collection, idField, id, matches })` ties the one create request of a row to the content the
 //                     caller expects it to carry (lib/creates-stable-build.js: the body the SDK serialises from the draft the
-//                     build made). While the pin is held, a POST that creates that row is sent only when `matches(body)`;
-//                     anything else that could create it is answered 409 `create-local-draft-changed` before the transport,
-//                     so a local draft edited after the build made it is never sent as the declaration. Checked at the
+//                     build made). While the pin is held, the row's whole write boundary is closed but for that one request:
+//                     a POST to the collection naming the row is sent only when `matches(body)`; every other write that
+//                     could create, change or remove the row — a PATCH, PUT or DELETE of it (the SDK pushes as a PATCH a
+//                     draft another process has saved meanwhile), any write addressed to it or below it, a write whose body
+//                     names it, a `$batch` with any part that touches it (its parts read the way the service reads them,
+//                     lib/batch-request.js) or that cannot be read — is answered 409 `create-local-draft-changed` before
+//                     the transport. So a local draft edited after the build made it is never sent, as a create or as an
+//                     update. Reads (GET, HEAD) and writes that do not touch the row go as they came. Checked at the
 //                     dispatch, after every asynchronous step of the push, which is what a check of the workspace before the
-//                     push cannot be. `gatesTransport()` says whether a transport is gated at all: a pin holds only then.
+//                     push cannot be. Each pin is its own: its release ends that pin only. `gatesTransport()` says whether a
+//                     transport is gated at all: a pin holds only then.
 
 const { AsyncLocalStorage } = require('node:async_hooks');
 const { readXmlElements } = require('./strict-xml.js');
+const { readBatchRequest } = require('./batch-request.js');
 
 // The permit a managed publication runs under (withSendPermit). Module-wide because an async context crosses every
 // barrier, but each permit names its barrier, and a gate honours only its own.
@@ -235,6 +242,130 @@ function refusedAnswer(message) {
     headers: { 'content-type': 'application/json; charset=utf-8' },
     body: JSON.stringify({ error: { code: 'publication-refused', message } }),
   };
+}
+
+// --- create pins (pinCreate): reading a write the way the service does ---------------------------------------------------
+const READ_METHODS = new Set(['GET', 'HEAD']);
+const BATCH_ENDPOINT = /(?:^|\/)\$batch\/*$/i;
+const PLAIN_GUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+// The transport sends the path `new URL(address)` makes (lib/dataverse-auth.js), which resolves dot segments, so an address
+// is read the same way; a relative one (a batch part writes `savedqueries` or `/api/data/v9.2/savedqueries`) is resolved
+// against a root that serves only to resolve it. Escapes are decoded once, as the service decodes them (`savedquer%69es` is
+// the collection), and the path is lowercased (logical names and ids are case-insensitive). A path that still holds an
+// escape after that cannot be read with confidence: undefined, and refused while a pin is held.
+const PIN_RESOLVE_AGAINST = 'https://service-root.invalid/api/data/v9.2/';
+function pinPathOf(address) {
+  let path;
+  try {
+    path = new URL(String(address), PIN_RESOLVE_AGAINST).pathname;
+  } catch {
+    return undefined;
+  }
+  const decoded = path.replace(/(?:%[0-9a-f]{2})+/gi, (run) => {
+    try { return decodeURIComponent(run); } catch { return run; }
+  });
+  return decoded.includes('%') ? undefined : decoded.toLowerCase();
+}
+
+function headerValue(headers, name) {
+  if (!headers || typeof headers !== 'object') return undefined;
+  for (const [k, v] of Object.entries(headers)) if (String(k).toLowerCase() === name) return v == null ? undefined : String(v);
+  return undefined;
+}
+
+function readJsonText(text) {
+  try {
+    return { value: JSON.parse(text) };
+  } catch {
+    return undefined;
+  }
+}
+
+// Whether a text names the pinned row's id: hyphenated (as OData writes a Guid) or as its 32 digits alone, in any case.
+function namesPinnedId(pin, text) {
+  const lower = String(text).toLowerCase();
+  return lower.includes(pin.id) || lower.replace(/-/g, '').includes(pin.compact);
+}
+
+// Whether a parsed JSON value names the pinned id in any key or string at any depth. Parsed first, so a JSON escape
+// (`"\u0061…"`) is read as the character it stands for, never matched as written.
+function jsonNamesPinnedId(pin, value) {
+  const stack = [value];
+  while (stack.length) {
+    const v = stack.pop();
+    if (typeof v === 'string') {
+      if (namesPinnedId(pin, v)) return true;
+    } else if (v && typeof v === 'object') {
+      for (const [k, item] of Object.entries(v)) {
+        if (namesPinnedId(pin, k)) return true;
+        stack.push(item);
+      }
+    }
+  }
+  return false;
+}
+
+// Why one write is refused under `pin`, or null when it does not touch the pinned row. `inBatch`: a part of a $batch, where
+// even the matching create is refused (the pinned create is the SDK's plain POST; a change set carrying the row is not the
+// request the build made).
+//   POST <collection>                 a create: passes when it names another row by a readable id and the pinned one nowhere,
+//                                     or when it is the matching create; refused otherwise (no id, unreadable, other content);
+//   any write of <collection>(<key>)  the row, or anything addressed below it (`savedqueries(<id>)/…`): refused when the key
+//                                     is the pinned id or is not a plain id (an alternate key may name the same row);
+//   any other write                   refused when its address or its body names the pinned id (a JSON body parsed first).
+function screenPinnedWrite(pin, method, path, text, inBatch) {
+  if (path === undefined) return `a ${method} whose address could not be read`;
+  if (text === null) return `a ${method} whose body could not be read`;
+  if (path.endsWith(`/${pin.collection}`) || path.endsWith(`/${pin.collection}/`) || path === pin.collection) {
+    if (method !== 'POST') return `a ${method} of the ${pin.collection} collection`;
+    const parsed = readJsonText(text);
+    const body = parsed && parsed.value && typeof parsed.value === 'object' && !Array.isArray(parsed.value) ? parsed.value : null;
+    if (!body) return 'a create whose body could not be read';
+    const named = guidKey(body[pin.idField]);
+    if (!named) return 'a create that names no id';
+    if (named !== pin.id) return jsonNamesPinnedId(pin, body) ? 'a create of another row that names this one' : null;
+    if (inBatch) return 'a create of the row inside a change set';
+    let same = false;
+    try { same = pin.matches(body) === true; } catch { same = false; }
+    if (!same) return 'a create whose content is not the draft this build made';
+    pin.checked = true;
+    return null;
+  }
+  const at = path.indexOf(`/${pin.collection}(`);
+  if (at >= 0) {
+    const open = at + pin.collection.length + 2;
+    const close = path.indexOf(')', open);
+    const raw = close < 0 ? '' : path.slice(open, close);
+    const key = guidKey(raw.startsWith(`${pin.idField.toLowerCase()}=`) ? raw.slice(pin.idField.length + 1) : raw);
+    if (!PLAIN_GUID.test(key)) return `a ${method} of a ${pin.collection} row named by a key that is not a plain id`;
+    if (key === pin.id) return `a ${method} of the row`;
+  }
+  if (namesPinnedId(pin, path)) return `a ${method} addressed to the row`;
+  if (text === '') return null;
+  const parsed = readJsonText(text);
+  if (parsed ? jsonNamesPinnedId(pin, parsed.value) : namesPinnedId(pin, text)) return `a ${method} whose body names the row`;
+  return null;
+}
+
+// Why a $batch is refused under `pin`, or null when it is shown not to touch the pinned row: every part is read the way the
+// service reads it (lib/batch-request.js: the boundary the Content-Type declares, change sets opened, each part one request
+// with its body text) and screened as a write of its own. A body that cannot be read as a batch is refused: what it would
+// write cannot be shown. A part addressed to an earlier part's row by its Content-ID (`$1/…`) touches the row that part
+// creates, and every create part is screened itself (one that names the pinned row, or no id, is refused), so such a
+// reference needs no rule of its own.
+function screenPinnedBatch(pin, text, contentType) {
+  if (text === null) return 'a change set whose body could not be read';
+  const batch = readBatchRequest(text, contentType);
+  if (batch.problem) return `a change set that could not be read (${batch.problem}), which may carry it`;
+  for (const op of batch.operations) {
+    const method = String(op.method || '').toUpperCase();
+    if (READ_METHODS.has(method)) continue;
+    const path = pinPathOf(op.target);
+    if (path !== undefined && BATCH_ENDPOINT.test(path)) return 'a change set that holds another batch';
+    const why = screenPinnedWrite(pin, method, path, op.body == null ? '' : op.body, true);
+    if (why) return `${why}, in a change set`;
+  }
+  return null;
 }
 
 function createPublicationBarrier() {
@@ -545,17 +676,19 @@ function createPublicationBarrier() {
     },
     /**
      * Pin the one create request of a row (see the header, "create pins"): until `release()`, a POST to `/<collection>`
-     * whose JSON body names `id` in `idField` is sent only when `matches(body)` answers true; any other — a different body,
-     * a body that does not parse, a POST to that collection that names no id, a `$batch` that names the id or cannot be
-     * read — is answered 409 `create-local-draft-changed` here, unsent, and the pin is marked `refused`. A request that
-     * passed is marked `checked`. Answers the pin: { checked, refused, release() }.
+     * whose JSON body names `id` in `idField` is sent only when `matches(body)` answers true; every other write that
+     * touches the row — a different create body, a body that does not parse, a POST to that collection that names no id,
+     * a PATCH, PUT or DELETE of the row or of anything below it, a write whose body names the id, a `$batch` with a part
+     * that touches it or that cannot be read — is answered 409 `create-local-draft-changed` here, unsent, and the pin is
+     * marked `refused`. A request that passed is marked `checked`. Answers the pin: { checked, refused, release() }; each
+     * pin is its own, and its release ends that pin only.
      */
     pinCreate({ collection, idField, id, matches } = {}) {
       const key = guidKey(id);
       if (typeof collection !== 'string' || !/^[a-z_][a-z0-9_]*$/i.test(collection) || typeof idField !== 'string' || !idField || !key || typeof matches !== 'function') {
         throw new TypeError('pinCreate: a collection, an id field, an id and a body check are required');
       }
-      const pin = { collection: collection.toLowerCase(), idField, id: key, matches, checked: false, refused: false };
+      const pin = { collection: collection.toLowerCase(), idField, id: key, compact: key.replace(/-/g, ''), matches, checked: false, refused: false };
       pins.add(pin);
       pin.release = () => { pins.delete(pin); };
       return pin;
@@ -621,32 +754,24 @@ function createPublicationBarrier() {
     },
   };
 
-  // A request a pinned create stops (pinCreate), or null to go on. The body is read as the transport carries it, text
-  // (makeRequest's { method, url, headers, body }), e.g.
+  // A request a pinned create stops (pinCreate), or null to go on. A request is read as the transport carries it, text
+  // (makeRequest's { method, url, headers, body }). The one request a pin lets through is the row's create, e.g.
   //   POST https://contoso.crm.dynamics.com/api/data/v9.2/savedqueries?$select=savedqueryid
   //   {"name":"Declared Items","fetchxml":"<fetch …>","layoutxml":"<grid …>","returnedtypecode":"contoso_item","querytype":0,"savedqueryid":"a1d1e2a3-…"}
-  // The path is percent-decoded once before it is matched, so `/savedquer%69es` is the collection too; a path that does not
-  // decode is matched as written. Only a POST is a create; every other method passes.
+  // and every other write that touches the row is refused, among them the PATCH the SDK pushes instead once another process
+  // has saved the draft:
+  //   PATCH https://contoso.crm.dynamics.com/api/data/v9.2/savedqueries(a1d1e2a3-…)?$select=savedqueryid
+  // Reads (GET, HEAD) are never stopped: they change nothing, and the push and the proof read the row.
   function screenPins(req) {
-    if (String((req && req.method) || 'GET').toUpperCase() !== 'POST') return null;
-    let path = pathnameOf(req.url);
-    try { path = decodeURIComponent(path); } catch { /* matched as written */ }
-    const text = bodyText(req.body);
+    const method = String((req && req.method) || 'GET').toUpperCase();
+    if (READ_METHODS.has(method)) return null;
+    const path = pinPathOf(req && req.url);
+    const text = bodyText(req && req.body);
     for (const pin of pins) {
-      if (BATCH.test(path)) {
-        if (text === null || text.toLowerCase().includes(pin.id)) return refusePin(pin, 'a change set that may carry it');
-        continue;
-      }
-      if (!path.toLowerCase().endsWith(`/${pin.collection}`)) continue;
-      let body;
-      try { body = JSON.parse(text); } catch { return refusePin(pin, 'a create whose body could not be read'); }
-      const named = body && typeof body === 'object' && !Array.isArray(body) ? guidKey(body[pin.idField]) : '';
-      if (!named) return refusePin(pin, 'a create that names no id');
-      if (named !== pin.id) continue;
-      let same = false;
-      try { same = pin.matches(body) === true; } catch { same = false; }
-      if (!same) return refusePin(pin, 'a create whose content is not the draft this build made');
-      pin.checked = true;
+      const why = path !== undefined && BATCH_ENDPOINT.test(path)
+        ? screenPinnedBatch(pin, text, headerValue(req && req.headers, 'content-type'))
+        : screenPinnedWrite(pin, method, path, text, false);
+      if (why) return refusePin(pin, why);
     }
     return null;
   }

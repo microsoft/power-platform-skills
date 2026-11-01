@@ -291,7 +291,7 @@ async function applyChartCreate(plan, sdk, ctx, result) {
     // The chart must be stored under the id this create was given: the result, the binding and the
     // solution bookkeeping all name that id, so a create that does not keep it is refused.
     if (normalizeGuid(art && art.id) !== normalizeGuid(id)) return { outcome: 'refused', code: 'CREATE_ID_NOT_KEPT' };
-    // The stable port records the exact draft it made (see applyViewCreate).
+    // The stable port pins the create request to the draft it made (see applyViewCreate).
     if (ctx.creates && typeof ctx.creates.materialised === 'function') await ctx.creates.materialised({ kind: 'chart', id, artifact: art });
     return pushChecked(sdk, 'chart', id);
   });

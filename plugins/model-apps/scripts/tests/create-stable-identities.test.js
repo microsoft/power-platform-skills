@@ -115,6 +115,21 @@ const viewsAndCharts = (s, o) => runSdkBuild(s, { ...o, phases: ['views', 'chart
 
 const creates = (r, collection) => r.writes.filter((c) => c.method === 'POST' && c.path.startsWith(`/${collection}`));
 
+// Everything a build's stop says: its message, its causes and the findings it carries, as one text.
+function chainText(err) {
+  const out = [];
+  const seen = new Set();
+  const walk = (e) => {
+    if (!e || typeof e !== 'object' || seen.has(e)) return;
+    seen.add(e);
+    out.push(String(e.message || ''));
+    for (const f of Array.isArray(e.findings) ? e.findings : []) out.push(`${f.code}: ${f.message}`);
+    walk(e.cause);
+  };
+  walk(err);
+  return out.join('\n');
+}
+
 // --- grammar --------------------------------------------------------------------------------------------------------------------
 
 test('the grammar takes createIdentity absent or exactly the one value the identity module activates on', () => {
@@ -1041,6 +1056,95 @@ for (const kind of ['view', 'chart']) {
       assert.deepEqual(next.writes, [], 'nothing is sent while the draft is there');
     });
   }
+
+  // The native SDK pushes a draft as a PATCH once it has been saved: a second SDK on the same workspace (which the build's lease
+  // does not exclude) saves the draft and edits it between the build's check and its push. The pinned row's whole write boundary
+  // is closed, so the PATCH is refused unsent and the create is never acknowledged as an update of the maker's edit.
+  test(`a ${kind} draft another SDK saves and edits before the push is never sent as a PATCH`, async () => {
+    const org = createFakeBuildOrg({ entities: ENTITIES });
+    const dir = newDir();
+    const id = derived(stableSpec())[kind];
+    const barrier = createPublicationBarrier();
+    const observer = createAttemptSendObserver();
+    const sdk = createMakerSdk({ workspaceStorage: createNodeWorkspaceStorage(dir), instanceUrl: org.origin, httpClient: gatedClient(org, barrier, observer) });
+    await sdk.initWorkspace();
+    const transmitted = [];
+    const patch = org.httpClient.patch.bind(org.httpClient);
+    org.httpClient.patch = async (...args) => { transmitted.push(args); return patch(...args); };
+    const push = sdk.pushArtifact.bind(sdk);
+    let saved = false;
+    sdk.pushArtifact = async (type, artifactId, ...args) => {
+      if (type === kind && normalize(artifactId) === normalize(id) && !saved) {
+        await assert.rejects(withAppBuildLease({ workspaceDir: dir, appUniqueName: appUniqueName(only()) }, () => assert.fail('another build must not enter')), { code: 'build-locked' });
+        const editor = createMakerSdk({ workspaceStorage: createNodeWorkspaceStorage(dir), instanceUrl: org.origin, httpClient: org.httpClient });
+        await editor.initWorkspace();
+        assert.equal((await editor.pushArtifact(kind, id)).saved, true);
+        await editor.updateElement(kind, id, '/name', 'Maker edit after an independent save');
+        saved = true;
+      }
+      return push(type, artifactId, ...args);
+    };
+    const r = await build(org, dir, only(), { sdk, publicationBarrier: barrier, sendObserver: observer });
+    org.httpClient.patch = patch;
+    assert.equal(saved, true);
+    assert.deepEqual(transmitted, [], 'the edited draft never reaches the service as an update');
+    assert.match(String(r.err && r.err.message), /create-local-draft-changed/);
+    const pending = storeOf(org, dir).readGroup(kind, key).pending;
+    assert.ok(pending, 'the attempt is kept');
+    assert.equal(pending.sendWindow && pending.sendWindow.possible, 0, 'the refused PATCH is never counted as dispatched');
+  });
+
+  // The recovery order the build gives for a kept draft. Its change is proved only against the declaration it was prepared from,
+  // so the maker's change goes in AFTER the original has settled: putting it into the spec before the discard is refused (and
+  // keeps the attempt); keeping the original, discarding the local copy, building, then applying the change works.
+  test(`a kept ${kind} draft settles in the order the build gives: original declaration, local discard, build, then the change`, async () => {
+    const org = createFakeBuildOrg({ entities: ENTITIES });
+    const dir = newDir();
+    const id = derived(stableSpec())[kind];
+    const spec = only();
+    const edit = 'A local description the maker wants to keep';
+    const barrier = createPublicationBarrier();
+    const observer = createAttemptSendObserver();
+    const sdk = createMakerSdk({ workspaceStorage: createNodeWorkspaceStorage(dir), instanceUrl: org.origin, httpClient: gatedClient(org, barrier, observer) });
+    await sdk.initWorkspace();
+    const push = sdk.pushArtifact.bind(sdk);
+    let edited = false;
+    sdk.pushArtifact = async (type, artifactId, ...args) => {
+      if (type === kind && normalize(artifactId) === normalize(id) && !edited) {
+        edited = true;
+        const editor = createMakerSdk({ workspaceStorage: createNodeWorkspaceStorage(dir), instanceUrl: org.origin, httpClient: org.httpClient });
+        await editor.initWorkspace();
+        await editor.updateElement(kind, id, '/description', edit);
+      }
+      return push(type, artifactId, ...args);
+    };
+    const first = await build(org, dir, spec, { sdk, publicationBarrier: barrier, sendObserver: observer });
+    assert.match(String(first.err && first.err.message), /create-local-draft-changed/);
+    const said = chainText(first.err);
+    assert.match(said, /create-local-draft-kept/);
+    assert.match(said, /1\. keep the change you want[\s\S]*2\. keep the spec's declaration[\s\S]*3\. discard only the local copy[\s\S]*deleteArtifact[\s\S]*removes nothing on the service and leaves the managed binding store as it is[\s\S]*4\. run the build again with that original declaration[\s\S]*5\. only then put your change into the spec/);
+    const token = storeOf(org, dir).readGroup(kind, key).pending.token;
+    const changed = structuredClone(spec);
+    changed[kind === 'view' ? 'views' : 'charts'][0].description = edit;
+    // While the draft is there, the stop gives the same order.
+    const stopped = await build(org, dir, spec, { sendObserver: createAttemptSendObserver() });
+    assert.deepEqual(stopped.writes, []);
+    assert.match(chainText(stopped.err), /create-completion-required[\s\S]*1\. keep the change you want/);
+    await sdk.deleteArtifact(kind, id);
+    // The change put into the spec before the original settled: refused, nothing written, the same attempt kept.
+    const early = await build(org, dir, changed, { sendObserver: createAttemptSendObserver() });
+    assert.match(chainText(early.err), /declared differently since its change was prepared/);
+    assert.deepEqual(early.writes, []);
+    assert.equal(storeOf(org, dir).readGroup(kind, key).pending.token, token);
+    // The order the build gives: the original declaration first, then the change.
+    const original = await build(org, dir, spec, { sendObserver: createAttemptSendObserver() });
+    assert.equal(original.err, undefined, original.err && chainText(original.err));
+    assert.equal(storeOf(org, dir).readGroup(kind, key).pending, null);
+    const then = await build(org, dir, changed, { sendObserver: createAttemptSendObserver() });
+    assert.equal(then.err, undefined, then.err && chainText(then.err));
+    assert.ok(then.writes.some((c) => c.method === 'PATCH' && c.path.startsWith(`/${collection}(`) && c.body && c.body.description === edit), 'the change is applied after the original settled');
+    assert.equal(storeOf(org, dir).readGroup(kind, key).pending, null);
+  });
 }
 
 test('a pinned create passes only the body it was pinned to; anything else that could create the row is refused unsent', async () => {
@@ -1084,10 +1188,148 @@ test('a pinned create passes only the body it was pinned to; anything else that 
   await send({ method: 'POST', url, body: JSON.stringify({ ...body, name: 'Edited' }) });
   assert.equal(sent.length, 5, 'a released pin checks nothing');
   pin = pinned();
-  await send({ method: 'POST', url: 'https://contoso.crm.dynamics.com/api/data/v9.2/$batch', body: '--b\r\nPOST savedqueries HTTP/1.1\r\n\r\n{"savedqueryid":"0b0b0b0b-0000-0000-0000-000000000002"}\r\n--b--' });
-  assert.equal(sent.length, 6, 'a change set that does not name the row passes');
+  // A batch is read part by part, the way the service reads it (its Content-Type's boundary, change sets opened).
+  const batch = (parts) => ({
+    method: 'POST',
+    url: 'https://contoso.crm.dynamics.com/api/data/v9.2/$batch',
+    headers: { 'Content-Type': 'multipart/mixed; boundary=batch_p' },
+    body: ['--batch_p', 'Content-Type: multipart/mixed; boundary=changeset_p', '', ...parts.flatMap((p, i) => ['--changeset_p', 'Content-Type: application/http', 'Content-Transfer-Encoding: binary', `Content-ID: ${i + 1}`, '', p]), '--changeset_p--', '--batch_p--', ''].join('\r\n'),
+  });
+  const otherRow = '0b0b0b0b-0000-0000-0000-000000000002';
+  await send(batch([`POST /api/data/v9.2/savedqueries HTTP/1.1\r\nContent-Type: application/json\r\n\r\n{"savedqueryid":"${otherRow}","name":"Other"}`, `PATCH /api/data/v9.2/savedqueries(${otherRow}) HTTP/1.1\r\nContent-Type: application/json\r\n\r\n{"name":"Other again"}`]));
+  await send({ method: 'PATCH', url: `https://contoso.crm.dynamics.com/api/data/v9.2/savedqueries(${otherRow})`, body: JSON.stringify({ name: 'Another row' }) });
+  await send({ method: 'POST', url: 'https://contoso.crm.dynamics.com/api/data/v9.2/PublishXml', body: JSON.stringify({ ParameterXml: '<importexportxml><entities><entity>contoso_item</entity></entities></importexportxml>' }) });
+  await send({ method: 'HEAD', url: `https://contoso.crm.dynamics.com/api/data/v9.2/savedqueries(${id})` });
+  assert.equal(sent.length, 9, 'a change set of another row, a write of another row, a publish and a read pass');
+  assert.equal(pin.refused, false);
+  const escaped = JSON.stringify({ ...body, name: 'Not declared' }).replace(id, `\\u0061${id.slice(1)}`);
+  assert.equal(escaped.includes(id), false);
+  const rowWrites = [
+    // The native SDK's push of a draft that another process has saved: an update of the pinned row.
+    { method: 'PATCH', url: `https://contoso.crm.dynamics.com/api/data/v9.2/savedqueries(${id})?$select=savedqueryid`, body: JSON.stringify({ name: 'Edited' }) },
+    { method: 'PUT', url: `https://contoso.crm.dynamics.com/api/data/v9.2/savedqueries(${id.toUpperCase()})/name`, body: JSON.stringify({ value: 'Edited' }) },
+    { method: 'DELETE', url: `https://contoso.crm.dynamics.com/api/data/v9.2/savedqueries({${id}})` },
+    { method: 'PATCH', url: `https://contoso.crm.dynamics.com/api/data/v9.2/savedqueries(savedqueryid=${id})`, body: JSON.stringify({ name: 'Edited' }) },
+    { method: 'PATCH', url: 'https://contoso.crm.dynamics.com/api/data/v9.2/savedqueries(name=\'Declared Items\')', body: JSON.stringify({ name: 'Edited' }) },
+    { method: 'PATCH', url: `https://contoso.crm.dynamics.com/api/data/v9.2/savedquer%69es(${id})`, body: JSON.stringify({ name: 'Edited' }) },
+    { method: 'POST', url: 'https://contoso.crm.dynamics.com/api/data/v9.2/AddSolutionComponent', body: JSON.stringify({ ComponentId: id.replace(/-/g, '').toUpperCase() }) },
+    // A change set whose create names the row only through a JSON escape, a PATCH of the row inside a change set, the exact
+    // create inside a change set, and a body that cannot be read as a batch.
+    batch([`POST /api/data/v9.2/savedqueries HTTP/1.1\r\nContent-Type: application/json\r\n\r\n${escaped}`]),
+    batch([`PATCH savedqueries(${id}) HTTP/1.1\r\nContent-Type: application/json\r\n\r\n{"name":"Edited"}`]),
+    batch([`POST savedqueries HTTP/1.1\r\nContent-Type: application/json\r\n\r\n${JSON.stringify(body)}`]),
+    { method: 'POST', url: 'https://contoso.crm.dynamics.com/api/data/v9.2/$batch', headers: { 'content-type': 'multipart/mixed; boundary=batch_p' }, body: 'not a batch' },
+  ];
+  for (const req of rowWrites) {
+    const answer = await send(req);
+    assert.equal(answer.statusCode, 409, `${req.method} ${req.url}`);
+    assert.equal(code(answer), 'create-local-draft-changed');
+  }
+  assert.equal(sent.length, 9, 'no write of the pinned row reached the transport');
   pin.release();
+  // Each pin is its own: releasing one leaves another pin of another row holding.
+  const a = barrier.pinCreate({ collection: 'savedqueries', idField: 'savedqueryid', id, matches: () => false });
+  const b = barrier.pinCreate({ collection: 'savedqueries', idField: 'savedqueryid', id: otherRow, matches: () => false });
+  a.release();
+  assert.equal((await send({ method: 'PATCH', url: `https://contoso.crm.dynamics.com/api/data/v9.2/savedqueries(${otherRow})`, body: '{}' })).statusCode, 409);
+  assert.equal(b.refused, true);
+  assert.equal(a.refused, false);
+  b.release();
   assert.throws(() => barrier.pinCreate({ collection: 'savedqueries', idField: 'savedqueryid', id: '', matches: () => true }), TypeError);
+});
+
+// Production runs creates in parallel (the engine's concurrency; charts through mapLimit). Each create holds its own pin until
+// its push ends, so one create finishing never releases another's pin while that one is still to push: a second local process
+// that edits the second chart then is refused at the dispatch.
+test('one parallel create finishing never releases another create\'s pin', async () => {
+  const org = createFakeBuildOrg({ entities: ENTITIES });
+  const dir = newDir();
+  const spec = stableSpec({ views: [] });
+  spec.charts.push({ ...spec.charts[0], name: 'Other Kind' });
+  const firstId = derived(stableSpec()).chart;
+  const barrier = createPublicationBarrier();
+  const observer = createAttemptSendObserver();
+  const sdk = createMakerSdk({ workspaceStorage: createNodeWorkspaceStorage(dir), instanceUrl: org.origin, httpClient: gatedClient(org, barrier, observer) });
+  await sdk.initWorkspace();
+  let ready;
+  let released;
+  const secondReady = new Promise((resolve) => { ready = resolve; });
+  const firstReleased = new Promise((resolve) => { released = resolve; });
+  const pinCreate = barrier.pinCreate.bind(barrier);
+  const releases = [];
+  barrier.pinCreate = (args) => {
+    const pin = pinCreate(args);
+    const release = pin.release;
+    pin.release = () => { releases.push(pin.id); release(); if (pin.id === firstId) released(); };
+    return pin;
+  };
+  const push = sdk.pushArtifact.bind(sdk);
+  let secondId;
+  let releasedEarly;
+  sdk.pushArtifact = async (kind, id, ...args) => {
+    if (kind === 'chart' && normalize(id) === normalize(firstId)) await secondReady;
+    else if (kind === 'chart') {
+      secondId = normalize(id);
+      ready();
+      await firstReleased;
+      releasedEarly = releases.includes(secondId);
+      const env = { ...process.env };
+      delete env.NODE_TEST_CONTEXT;
+      const out = JSON.parse(execFileSync(process.execPath, [path.join(__dirname, 'helpers', 'edit-local-draft.js'), dir, org.origin, 'chart', id, 'name', 'Concurrent maker edit'], { env, encoding: 'utf8', timeout: 60000 }));
+      assert.equal(out.edited, true);
+    }
+    return push(kind, id, ...args);
+  };
+  const r = await build(org, dir, spec, { sdk, publicationBarrier: barrier, sendObserver: observer, concurrency: 2 });
+  assert.ok(secondId, 'both charts were pushed');
+  assert.equal(releasedEarly, false, 'the first create\'s end left the second create\'s pin in place');
+  assert.deepEqual(r.writes.filter((c) => c.method === 'POST' && c.body && normalize(c.body.savedqueryvisualizationid) === secondId), [], 'the edited second chart is never sent');
+  assert.match(String(r.err && r.err.message), /create-local-draft-changed/);
+  assert.ok(storeOf(org, dir).readGroup('chart', 'contoso_item/Other Kind').pending, 'its attempt is kept');
+  assert.deepEqual(new Set(releases), new Set([normalize(firstId), secondId]), 'each pin was released by its own create');
+});
+
+// The commit of a view's change repeats its key, which the spec controls without a length limit, so the bytes the store reserves
+// for it are worked out from the key (planFor's completionBytes): a long key gets a reservation its commit fits in, and a key whose
+// commit could outgrow what one change may reserve is refused before anything is prepared or sent.
+test('a long view key reserves the room its commit takes; a key too long to record is refused before the send', async () => {
+  for (const [label, k] of [['plain', 'k'.repeat(384 * 1024)], ['escaped', '"'.repeat(200 * 1024)]]) {
+    const org = createFakeBuildOrg({ entities: ENTITIES });
+    const dir = newDir();
+    const spec = stableSpec({ charts: [] });
+    spec.views[0].key = k;
+    let before = null;
+    const post = org.httpClient.post.bind(org.httpClient);
+    org.httpClient.post = async (url, ...args) => {
+      const answer = await post(url, ...args);
+      if (/\/AddSolutionComponent(?:\?|$)/i.test(url)) {
+        const store = storeOf(org, dir);
+        const pending = store.readGroup('view', k).pending;
+        if (pending) before = { size: fs.statSync(store.file).size, ...pending.completionReserve };
+      }
+      return answer;
+    };
+    const r = await build(org, dir, spec, { sendObserver: createAttemptSendObserver() });
+    assert.equal(r.err, undefined, r.err && r.err.message.slice(0, 400));
+    assert.ok(before, label);
+    const store = storeOf(org, dir);
+    assert.ok(store.readGroup('view', k).committed, label);
+    const growth = fs.statSync(store.file).size - before.size;
+    assert.ok(growth <= before.bytes - before.used, `${label}: the commit grew the store by ${growth}, within the ${before.bytes - before.used} its attempt held`);
+  }
+  // Raw, this key is half of what its escaped copies take; each of its quotes is written as two bytes in the store.
+  for (const k of ['k'.repeat(1536 * 1024), '"'.repeat(768 * 1024)]) {
+    const org = createFakeBuildOrg({ entities: ENTITIES });
+    const dir = newDir();
+    const spec = stableSpec({ charts: [] });
+    spec.views[0].key = k;
+    const r = await build(org, dir, spec, { sendObserver: createAttemptSendObserver() });
+    assert.match(String(r.err && chainText(r.err)), /managed-binding-store-full[\s\S]*too long to record[\s\S]*nothing was sent/);
+    assert.deepEqual(r.writes, [], 'nothing is sent');
+    const g = storeOf(org, dir).readGroup('view', k);
+    assert.equal(g.pending, null, 'no attempt is prepared');
+    assert.equal(g.committed, null);
+  }
 });
 
 // --- standalone discovery of a build whose spec leaves the app's unique name to be derived --------------------------------------
