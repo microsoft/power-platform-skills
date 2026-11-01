@@ -21,7 +21,12 @@
 // entries (marked `withheld` by commitPublication, reconcile-common.js). The helpers record such an
 // entry at every point where a write was sent and may have been stored (saved, created, or a write
 // whose outcome was not reported), and never for a refusal or unknown that is reached before anything
-// is sent, so a plan-level refusal does not block its table.
+// is sent, so a plan-level refusal does not block its table. That rule is for the table results noted
+// here. A declared dashboard settles through runManagedFeature (lib/managed-feature-contract.js)
+// instead: a preflight stop of a dashboard an id already names (bound, pinned, found by name, or
+// retained by its creation record) quarantines that id for the run, before anything is sent, so its
+// earlier owed publish and an app publish that holds it are withheld. Only a new dashboard that no id
+// names yet stays unscoped: there is no row to withhold.
 
 //
 // Two checks sit at the edges of a run, past every per-path guard:
@@ -300,7 +305,8 @@ function createPublicationBarrier() {
     /**
      * Note one declared artifact's settled FeatureResult. A clean result, or one whose refusal/unknown
      * came before anything was sent (no `pendingPublish` entry), blocks nothing. Returns the tables
-     * this result blocked.
+     * this result blocked. Declared dashboards are not noted here: runManagedFeature quarantines a
+     * known dashboard's id when it stops, a preflight stop included (see the header).
      */
     noteResult(result, label) {
       if (!result) return [];
