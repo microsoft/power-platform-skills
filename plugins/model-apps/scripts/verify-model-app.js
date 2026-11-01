@@ -50,6 +50,7 @@ const { createAzHttpClient } = require('./lib/sdk-http-client.js');
 const { readTranslationLabels, isTranslationExport } = require('./lib/translation-labels.js');
 const { verifySpec } = require('./lib/verify-spec.js');
 const { readBaseline } = require('./lib/deployed-baseline.js');
+const { readManagedManifest } = require('./lib/managed-bindings.js');
 const { appUniqueName } = require('./lib/sdk-build.js');
 const { validateAppSpec, migrateAppSpec } = require('./lib/app-spec.js');
 const { readRelationshipsOf, findRelationshipHolder } = require('./lib/relationship-metadata.js');
@@ -791,8 +792,13 @@ async function main() {
     // kept because it was changed in the designer since then is not a failure (AB#6726727). It is keyed by
     // environment, so a folder built against another one yields none.
     const baselineSpec = readBaseline(workspaceDir, { environment: dataverseOrigin(env), appUniqueName: appUniqueName(spec) }) || undefined;
+    // The managed bindings recorded in the same workspace for this environment, app and solution (lib/managed-bindings.js), read only:
+    // a bound view or chart is held to its bound id by a fresh read, and a pending or unusable group is listed as unverified.
+    const managedManifest = spec.solution && spec.solution.uniqueName
+      ? readManagedManifest({ workspaceDir, environment: dataverseOrigin(env), appUniqueName: appUniqueName(spec), solutionUniqueName: spec.solution.uniqueName })
+      : undefined;
     // `appDir`: a web resource's `contentPath` is read relative to the spec's folder, as the build reads it, to compare its content.
-    r = await verifySpec(spec, readerFor(session.sdk, appUniqueName(spec), { genpage, workspaceDir, isolatedReader: isolatedReaderFor(env, { httpClient }) }), { baselineSpec, languageCode, appDir: path.dirname(specPath) });
+    r = await verifySpec(spec, readerFor(session.sdk, appUniqueName(spec), { genpage, workspaceDir, isolatedReader: isolatedReaderFor(env, { httpClient }) }), { baselineSpec, languageCode, appDir: path.dirname(specPath), managedManifest });
     // Only when asked, and before the SDK's workspace is disposed below.
     if (flags['inspect-components'] === true) components = await inspectComponents(session.sdk, spec);
   } finally {

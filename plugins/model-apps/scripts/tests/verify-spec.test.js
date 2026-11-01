@@ -3787,3 +3787,74 @@ test('verifySpec: a spec without configuration fields adds no configuration sect
   assert.deepStrictEqual(configChecks(r), []);
   assert.ok(!(r.unverified || []).some((u) => /configuration/.test(u)), 'nothing configuration-related is unverified');
 });
+
+// --- managed bindings (lib/managed-bindings.js readManagedManifest): a bound view or chart is held to its bound id ---------------------
+
+test('verifySpec: a bound view or chart is read by its bound id; a pending or unusable group is unverified, never a pass', async () => {
+  const VIEW_ID = '11111111-2222-4333-8444-555555555555';
+  const CHART_ID = '66666666-7777-4888-8999-aaaaaaaaaaaa';
+  const managedManifest = {
+    revision: 3,
+    groups: [
+      { family: 'view', key: 'new_o/V', root: { kind: 'view', key: 'new_o/V', id: VIEW_ID } },
+      { family: 'chart', key: 'new_o/C', root: { kind: 'chart', key: 'new_o/C', id: CHART_ID } },
+    ],
+    pending: [{ family: 'view', key: 'new_o/W', code: 'managed-settlement-pending' }],
+    invalid: [{ family: 'store', key: 'managed-bindings', reason: 'not valid JSON', code: 'managed-binding-store-unreadable' }],
+  };
+  const filters = [];
+  const read = (bound) => ({
+    findTable: async () => null,
+    findColumns: async () => [],
+    sitemapXml: async () => '',
+    queryRecords: async (set, opts) => {
+      filters.push(`${set}: ${opts.filter}`);
+      return bound.some((id) => opts.filter.endsWith(id)) ? [{ [idFor(set)]: 'row' }] : [];
+    },
+  });
+  const spec = { entities: [], appShell: { areas: [] } };
+  const both = await verifySpec(spec, read([VIEW_ID, CHART_ID]), { managedManifest });
+  assert.deepStrictEqual(both.checks.filter((c) => c.kind.startsWith('managed-')).map((c) => [c.kind, c.name, c.present]), [
+    ['managed-view', `new_o/V (${VIEW_ID})`, true],
+    ['managed-chart', `new_o/C (${CHART_ID})`, true],
+  ]);
+  assert.deepStrictEqual(filters.sort(), [`savedquery: savedqueryid eq ${VIEW_ID}`, `savedqueryvisualization: savedqueryvisualizationid eq ${CHART_ID}`]);
+  assert.deepStrictEqual(both.unverified.filter((u) => u.startsWith('managed:')), [
+    'managed:view new_o/W (managed-settlement-pending)',
+    'managed:store managed-bindings (managed-binding-store-unreadable)',
+  ]);
+  // The row a name check would find is not enough: the bound id is gone, so the bound view is missing.
+  const gone = await verifySpec(spec, read([CHART_ID]), { managedManifest });
+  assert.strictEqual(gone.ok, false);
+  assert.ok(gone.missing.some((m) => m.kind === 'managed-view' && m.name === `new_o/V (${VIEW_ID})`));
+  // Control: no manifest (or an empty one) adds no check and no read.
+  filters.length = 0;
+  const none = await verifySpec(spec, read([]), { managedManifest: { revision: 0, groups: [], pending: [], invalid: [] } });
+  assert.strictEqual(none.checks.some((c) => c.kind.startsWith('managed-')), false);
+  assert.deepStrictEqual(filters, []);
+});
+
+test('readManagedManifest: read-only; no store and a non-https target are empty, an unusable store is one unverified entry', () => {
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const { makeTempDir } = require('./helpers/temp-dirs.js');
+  const { openManagedBindings, readManagedManifest, PREFIX } = require('../lib/managed-bindings.js');
+  const dir = makeTempDir('verify-managed-');
+  const args = { workspaceDir: dir, environment: 'https://contoso.crm.dynamics.com', appUniqueName: 'contoso_app', solutionUniqueName: 'Contoso' };
+  assert.deepStrictEqual(readManagedManifest(args), { revision: 0, groups: [], pending: [], invalid: [] });
+  assert.deepStrictEqual(fs.readdirSync(dir), [], 'reading creates nothing');
+  openManagedBindings(args).prepareAttempt({
+    family: 'view', key: 'new_o/V', baseGeneration: null, root: { kind: 'view', key: 'new_o/V', id: '11111111-2222-4333-8444-555555555555' },
+    expected: { proofVersion: 1, proofSchema: 'view-v1', rootId: '11111111-2222-4333-8444-555555555555', baseProofSha256: null, sentProjectionSha256: 'a'.repeat(64), preservationSha256: 'a'.repeat(64), baseObservation: null, children: [] },
+    knownScopes: [{ type: 'table', table: 'new_o' }], declarationSha256: 'b'.repeat(64),
+  });
+  const file = path.join(dir, fs.readdirSync(dir).find((f) => f.startsWith(PREFIX)));
+  const bytes = fs.readFileSync(file, 'utf8');
+  assert.deepStrictEqual(readManagedManifest(args).pending.map((p) => p.key), ['new_o/V']);
+  assert.deepStrictEqual(readManagedManifest({ ...args, environment: 'http://contoso.crm.dynamics.com' }), { revision: 0, groups: [], pending: [], invalid: [] });
+  fs.writeFileSync(file, '{ "not": "a store"');
+  const broken = readManagedManifest(args);
+  assert.deepStrictEqual(broken.invalid.map((i) => [i.family, i.key, i.code]), [['store', 'managed-bindings', 'managed-binding-store-unreadable']]);
+  assert.strictEqual(fs.readFileSync(file, 'utf8'), '{ "not": "a store"');
+  assert.notStrictEqual(bytes, '');
+});

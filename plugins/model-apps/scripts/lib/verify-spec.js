@@ -2270,6 +2270,32 @@ async function verifySpec(spec, read, opts = {}) {
     });
   }
 
+  // The managed bindings of this workspace (`opts.managedManifest`: managed-bindings.js managedManifestView, read-only). A committed view or
+  // chart group is held to the row it is bound to, by a fresh read of the service by that id — the name checks above cannot tell a namesake
+  // from the bound row. A group with an attempt still pending, or one whose stored record is not usable, proves nothing yet: it is listed as
+  // unverified, never as a pass or a failure. Verify only reads: nothing here writes, binds, clears a debt or publishes.
+  const managedManifest = opts.managedManifest;
+  if (managedManifest && (managedManifest.groups.length || managedManifest.pending.length || managedManifest.invalid.length)) {
+    plan.section(async ({ add, unverified }) => {
+      for (const p of managedManifest.pending) unverified.push(`managed:${p.family} ${p.key} (${p.code})`);
+      for (const p of managedManifest.invalid) unverified.push(`managed:${p.family} ${p.key} (${p.code || 'managed-binding-group-invalid'})`);
+      const tables = { view: ['savedquery', 'savedqueryid'], chart: ['savedqueryvisualization', 'savedqueryvisualizationid'] };
+      for (const g of managedManifest.groups) {
+        const t = tables[g.family];
+        if (!t) continue;
+        if (!read || typeof read.queryRecords !== 'function') { unverified.push(`managed:${g.family} ${g.key} (this reader cannot read by id)`); continue; }
+        let rows = [];
+        let readError = null;
+        try {
+          rows = await read.queryRecords(t[0], { select: [t[1]], filter: `${t[1]} eq ${g.root.id}`, top: 1 });
+        } catch (error) {
+          readError = error;
+        }
+        add(`managed-${g.family}`, `${g.key} (${g.root.id})`, rows && rows[0], readError ? String(readError.message || readError) : '');
+      }
+    });
+  }
+
   // Every check above is registered and none has run yet: run them. The reads overlap (at most
   // `concurrency` at a time); the report below does not depend on which answered first.
   //
