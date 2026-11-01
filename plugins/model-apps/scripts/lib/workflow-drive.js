@@ -232,6 +232,8 @@ function createWorkflowDriver({ store, sdk, httpClient = null, instanceUrl = nul
   const sendState = (id, state, version) => () => (version
     ? httpClient.patch(`${String(instanceUrl).replace(/\/+$/, '')}/api/data/v9.2/workflows(${id})`, STATE_BODY[state], { headers: { 'If-Match': version } })
     : sdk.updateRecord('workflow', id, STATE_BODY[state]));
+  // The conditional state path needs both the client and an absolute environment URL to build the row address above.
+  const stateTargetGiven = () => Boolean(httpClient) && typeof instanceUrl === 'string' && /^https?:\/\/[^/\s]+/i.test(instanceUrl);
 
   /**
    * Bring this attempt's row to `state` with one state effect, proved by reading. An effect already dispatched is
@@ -244,8 +246,12 @@ function createWorkflowDriver({ store, sdk, httpClient = null, instanceUrl = nul
     let failure = null;
     if (!effect || effect.state === 'definitely-unsent') {
       if (conditional && !version) throw coded(driftCode, `${label}: no row version was read, so a conditional state change cannot be sent`);
-      // Only the plugin's client carries If-Match (sendState); without it a conditional write would go out unconditional.
-      if (version && !httpClient) throw coded('workflow-state-path-unavailable', `${label}: no client that carries the row version was given, so setting the ${noun} ${state} is not sent`);
+      // Only the plugin's client carries If-Match (sendState), and it needs the environment URL to address the row:
+      // without either a conditional write would go out unconditional or not at all. Checked before the effect is
+      // recorded, so a missing input leaves no state record behind.
+      if (version && !stateTargetGiven()) {
+        throw coded('workflow-state-path-unavailable', `${label}: no client and environment URL that carry the row version were given, so setting the ${noun} ${state} is not sent`);
+      }
       failure = await sendOnce(token, effect, {
         rowId: id, effect: 'state', request: { method: 'PATCH', shape: 'workflow-patch' }, desiredSha256: null, desiredState: state, expectedVersion: version || null,
       }, sendState(id, state, version), { observedState: observed });
@@ -281,7 +287,9 @@ function createWorkflowDriver({ store, sdk, httpClient = null, instanceUrl = nul
    *   Active, carrying exactly the proved body   the activation is moot: its record is dropped and the row settles as is;
    *   anything else (Draft at a newer version, a changed body, the maker's deactivation)
    *                                              `create-completion-required`, the attempt kept;
-   *   Draft at the very version that was read     the write never reached the service: its record waits for a later run.
+   *   Draft at the very version that was read     the activation was not applied (the service refused its precondition):
+   *                                              its record waits for a later run; if it keeps being refused, the maker
+   *                                              activates the verified row and reruns.
    * A row the caller's read already found Active settles the same way, with no write. A recorded activation that was
    * held to another version than this read (or to none: an unconditional record) is never sent: the row changed since,
    * or the record cannot say what it was proved against.
@@ -303,10 +311,14 @@ function createWorkflowDriver({ store, sdk, httpClient = null, instanceUrl = nul
       onConflict: async (effect, failure) => {
         const now = await reread();
         if (!now.missing && now.version === live.version && now.view.status !== ACTIVE) {
-          // The row is as the proof read it: the write never reached the service (a local failure before the request,
-          // or the gate refusing it), so its record waits, unsent, for a later run to send at this same version.
-          throw coded(CODES.pending, `${label}: the activation of the ${noun} ${id} was not sent${failure ? ` (${failure.message})` : ''}; the row is `
-            + 'unchanged, and a later run sends it against the same version', { cause: failure });
+          // The row is as the proof read it, so the activation was not applied: the service refused its precondition
+          // (an answered 412 proves a refusal, not that nothing left this side; it can repeat if the service keeps
+          // refusing the version token). Its record stays, unsent, and a later run sends it against this same
+          // version. The maker's way out when it keeps being refused: activate the verified row, then rerun; the run
+          // proves the Active row by reading and binds it without a write.
+          throw coded(CODES.pending, `${label}: the activation of the ${noun} ${id} was not applied${failure ? ` (${failure.message})` : ''}; the row is `
+            + `unchanged at the version it was proved against, and a later run sends it again against that version. If it keeps being refused, `
+            + `activate the ${noun} yourself if it is as declared, then rerun: the run proves it by reading and binds it without a write`, { cause: failure });
         }
         const why = now.missing ? 'it could not be read back' : now.view.status !== ACTIVE ? `it is ${now.view.status} at another version` : provedActive(now.view);
         if (!why) { store.retireMootEffect(effect.token, { observedState: ACTIVE }); return; }

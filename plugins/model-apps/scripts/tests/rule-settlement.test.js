@@ -13,7 +13,7 @@ const { makeTempDir } = require('./helpers/temp-dirs.js');
 const { createWorkflowWire, ORIGIN } = require('./helpers/workflow-wire.js');
 const { createMakerSdk, createNodeWorkspaceStorage } = require('../vendor/cds-maker-sdk.cjs');
 const { createAzHttpClient } = require('../lib/sdk-http-client.js');
-const { openManagedBindings, classifyPersisted, CODES } = require('../lib/managed-bindings.js');
+const { openManagedBindings, classifyPersisted, CODES, DECLARATION_MAX_BYTES } = require('../lib/managed-bindings.js');
 const { createWorkflowEffectGate } = require('../lib/workflow-effect-context.js');
 const { createPublicationBarrier } = require('../lib/publication-barrier.js');
 const { createAttemptSendObserver } = require('../lib/managed-feature-contract.js');
@@ -21,7 +21,9 @@ const { createIntentCatalog } = require('../lib/creates-catalog.js');
 const { BuildHalt } = require('../lib/entity-provision.js');
 const { RETRY } = require('../lib/retry-policy.js');
 const { businessRuleDef } = require('../lib/sdk-build.js');
-const { settleDeclaredRule, compileRuleIntent } = require('../lib/rule-settlement.js');
+const { settleDeclaredRule, compileRuleIntent, validateDeclaredRule } = require('../lib/rule-settlement.js');
+const { canonicalJson } = require('../lib/reconcile-common.js');
+const { largestRule } = require('./helpers/workflow-largest.js');
 const { createWorkflowDriver } = require('../lib/workflow-drive.js');
 
 const APP = 'contoso_app';
@@ -917,3 +919,57 @@ for (const when of ['before-read', 'at-activation']) {
     }
   });
 }
+
+test('the largest supported rule (100 conditions, 100 actions) commits with its authored declaration whole, and the next run is a no-op', async () => {
+  const decl = largestRule();
+  assert.deepEqual(validateDeclaredRule(decl), []);
+  const bytes = Buffer.byteLength(canonicalJson(decl), 'utf8');
+  assert.ok(bytes > 128 * 1024 && bytes <= DECLARATION_MAX_BYTES, `${bytes} bytes, inside the store's declaration bound`);
+  const wire = createWorkflowWire();
+  const dir = makeTempDir('rule-largest-');
+  const out = await settle(wire, dir, decl);
+  assert.ifError(out.error);
+  assert.deepEqual(writeLines(wire, out.from), ['POST workflows(00000000-0000-0000-0000-000000000000)/Microsoft.Dynamics.CRM.CreateProcessWithWfomJson', 'PATCH workflows(<id>)']);
+  const { committed } = out.p.store.readGroup('rule', `account/${decl.name}`);
+  assert.equal(canonicalJson(committed.originalDeclaration), canonicalJson(decl), 'the authored declaration is kept whole');
+  const again = await settle(wire, dir, decl);
+  assert.ifError(again.error);
+  assert.deepEqual(writeLines(wire, again.from), []);
+});
+
+for (const missing of ['httpClient', 'instanceUrl']) {
+  test(`without the ${missing} the conditional activation needs, it stops workflow-state-path-unavailable before the activation is recorded`, async () => {
+    const wire = createWorkflowWire();
+    const out = await settle(wire, makeTempDir('rule-no-state-path-'), RULE, { [missing]: null });
+    assert.equal(out.error && out.error.code, 'workflow-state-path-unavailable');
+    assert.deepEqual(out.p.store.readGroup('rule', `account/${RULE.name}`).effects.map((e) => [e.effect, e.state]), [['create', 'confirmed']]);
+    assert.deepEqual(writeLines(wire, out.from), ['POST workflows(00000000-0000-0000-0000-000000000000)/Microsoft.Dynamics.CRM.CreateProcessWithWfomJson']);
+  });
+}
+
+test('an activation the service keeps refusing at the proved version is not applied and kept; activating the verified row, then rerunning, settles it with no write', async () => {
+  const wire = createWorkflowWire();
+  const dir = makeTempDir('rule-refused-412-');
+  let token = null;
+  for (let run = 0; run < 2; run++) {
+    // A 412 that changes nothing: the row stays at the version the activation was proved against.
+    wire.script((e) => e.method === 'PATCH' && e.body && e.body.statecode === 1, { statusCode: 412, unapplied: true, body: { error: { code: '0x80060882', message: 'The version of the existing record doesn\'t match the RowVersion property provided.' } } });
+    const out = await settle(wire, dir, RULE);
+    assert.equal(out.error && out.error.code, CODES.pending);
+    const message = out.error.cause.message;
+    assert.match(message, /was not applied/);
+    assert.doesNotMatch(message, /was not sent/, 'an answered 412 proves a refusal, not that nothing was sent');
+    assert.match(message, /activate the rule yourself if it is as declared, then rerun/);
+    const { pending } = out.p.store.readGroup('rule', `account/${RULE.name}`);
+    token = token || pending.token;
+    assert.equal(pending.token, token, 'the same attempt is kept');
+    assert.equal(writesSince(wire, out.from).filter((e) => e.method === 'PATCH').length, 1, 'one conditional activation per run');
+  }
+  const row = [...wire.rows.values()][0];
+  assert.equal(row.version, 1);
+  Object.assign(row, { statecode: 1, statuscode: 2 });
+  row.version += 1;
+  const final = await settle(wire, dir, RULE);
+  assert.ifError(final.error);
+  assert.deepEqual(writeLines(wire, final.from), []);
+});
