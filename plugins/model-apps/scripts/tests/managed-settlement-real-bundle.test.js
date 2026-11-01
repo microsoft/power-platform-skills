@@ -171,7 +171,7 @@ test('discovery, then recovery of a pending attempt, then commit, then exactly o
 
 // A rule whose attempt is prepared and sending, so its workflow effects can be recorded.
 function ruleAttempt(store, key, id) {
-  const token = store.prepareAttempt({ family: 'rule', key, baseGeneration: null, root: { kind: 'rule', key, id }, knownScopes: [], declarationSha256: H('e') });
+  const token = store.prepareAttempt({ family: 'rule', key, baseGeneration: null, root: { kind: 'business-rule', key, id }, knownScopes: [], declarationSha256: H('e') });
   store.markSending(token, expected(id, 'rule-v1'));
   return token;
 }

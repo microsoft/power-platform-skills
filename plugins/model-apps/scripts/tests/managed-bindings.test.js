@@ -270,7 +270,7 @@ test('an interrupted update leaves no new tile baseline or rule slot map in the 
   store.markSending(t2, expected(RULE, [], 'rule-v1'));
   const failing = open(dir, { deps: { writeFileAtomic: () => { throw new Error('crash before the replace'); } } });
   assert.equal(codeOf(() => failing.commitGroup({ token: t1, baseGeneration: dash.generation, records: [rec('dashboard', dashKey, DASH)], proof: PROOF, consumerState: { declaration: {}, tiles: { revenue: 'cell_1', margin: 'cell_9' }, seedIds: [] }, publication: { scope: { type: 'dashboard', id: DASH }, state: 'not-needed', desiredSha256: null, dispatchToken: null } })), CODES.writeFailed);
-  assert.equal(codeOf(() => failing.commitGroup({ token: t2, baseGeneration: rule.generation, records: [rec('rule', 'account/hide', RULE)], proof: PROOF, consumerState: { declaration: {}, slots: ['clause_b', 'clause_a'] }, publication: null })), CODES.writeFailed);
+  assert.equal(codeOf(() => failing.commitGroup({ token: t2, baseGeneration: rule.generation, records: [rec('business-rule', 'account/hide', RULE)], proof: PROOF, consumerState: { declaration: {}, slots: ['clause_b', 'clause_a'] }, publication: null })), CODES.writeFailed);
 
   const disk = JSON.parse(fileText(open(dir)));
   assert.deepEqual(disk.groups.find((g) => g.family === 'dashboard').consumerState.tiles, { revenue: 'cell_1' });
@@ -282,7 +282,7 @@ test('an interrupted update leaves no new tile baseline or rule slot map in the 
 function settleRule(store, key, id, { slots = ['clause_a'], confirm = true } = {}) {
   const { committed } = store.readGroup('rule', key);
   const base = committed ? committed.generation : null;
-  const token = store.prepareAttempt({ family: 'rule', key, baseGeneration: base, root: { kind: 'rule', key, id }, knownScopes: [], declarationSha256: H('e') });
+  const token = store.prepareAttempt({ family: 'rule', key, baseGeneration: base, root: { kind: 'business-rule', key, id }, knownScopes: [], declarationSha256: H('e') });
   store.markSending(token, expected(id, [], 'rule-v1'));
   const create = store.recordWorkflowEffect({ attemptToken: token, baseGeneration: base, family: 'rule', key, rowId: id, effect: 'create', request: { method: 'POST', shape: 'rule-create' }, desiredSha256: H('7') });
   const state = store.recordWorkflowEffect({ attemptToken: token, baseGeneration: base, family: 'rule', key, rowId: id, effect: 'state', request: { method: 'PATCH', shape: 'workflow-patch' }, desiredState: 'Active' });
@@ -292,7 +292,7 @@ function settleRule(store, key, id, { slots = ['clause_a'], confirm = true } = {
     store.markEffectDispatching(state.token, 'dispatch-state');
     store.confirmEffect(state.token, { observedState: 'Active' });
     store.noteSaved(token, { proof: null, acknowledgedRoot: true });
-    return store.commitGroup({ token, baseGeneration: base, records: [rec('rule', key, id)], proof: PROOF, consumerState: { declaration: {}, slots }, publication: null });
+    return store.commitGroup({ token, baseGeneration: base, records: [rec('business-rule', key, id)], proof: PROOF, consumerState: { declaration: {}, slots }, publication: null });
   }
   return { token, create, state };
 }
@@ -323,7 +323,7 @@ test('an interruption before the replace keeps the attempt and its whole effect 
   for (const [e, proof] of [[create, { observedSha256: H('7') }], [state, { observedState: 'Active' }]]) { store.markEffectDispatching(e.token, `d-${e.effect}`); store.confirmEffect(e.token, proof); }
   store.noteSaved(token, { proof: null, acknowledgedRoot: true });
   const before = fileText(store);
-  const args = { token, baseGeneration: null, records: [rec('rule', 'account/hide', RULE)], proof: PROOF, consumerState: { declaration: {}, slots: ['clause_a'] }, publication: null };
+  const args = { token, baseGeneration: null, records: [rec('business-rule', 'account/hide', RULE)], proof: PROOF, consumerState: { declaration: {}, slots: ['clause_a'] }, publication: null };
   const crashing = open(dir, { deps: { writeFileAtomic: () => { throw new Error('crash before the replace'); } } });
   assert.equal(codeOf(() => crashing.commitGroup(args)), CODES.writeFailed);
   assert.equal(fileText(store), before, 'the old image: the attempt and both effects, unchanged');
@@ -346,7 +346,7 @@ test('an unconfirmed effect refuses its attempt\'s commit and stays intact, and 
   store.markEffectDispatching(b.state.token, 'd-b');
   store.noteSaved(a.token, { proof: null, acknowledgedRoot: true });
   const before = fileText(store);
-  const args = { token: a.token, baseGeneration: null, records: [rec('rule', 'account/hide', RULE)], proof: PROOF, consumerState: { declaration: {}, slots: [] }, publication: null };
+  const args = { token: a.token, baseGeneration: null, records: [rec('business-rule', 'account/hide', RULE)], proof: PROOF, consumerState: { declaration: {}, slots: [] }, publication: null };
   assert.equal(codeOf(() => store.commitGroup(args)), CODES.pending);
   assert.equal(fileText(store), before, 'the refused commit writes nothing');
 
@@ -444,4 +444,67 @@ test('classification: settled installs nothing, owed debt is eligible with no ho
 
   fs.writeFileSync(k.file, '{');
   assert.equal(codeOf(() => ctx(corruptDir, createPublicationBarrier())), CODES.unreadable);
+});
+
+test('a commit that repeats a record, or carries an incomplete proof, is refused before it writes; distinct children still commit', () => {
+  const dir = makeTempDir('mb-proposal-');
+  const store = open(dir);
+  const token = store.prepareAttempt({
+    family: 'form', key: FORM_KEY, baseGeneration: null, root: { kind: 'form', key: FORM_KEY, id: FORM },
+    knownScopes: [TABLE], declarationSha256: H('e'), publication: { scope: TABLE, state: 'owed' },
+  });
+  store.markSending(token, expected(FORM, [child('name', CTRL_A), child('phone', CTRL_B)]));
+  store.noteSaved(token, { proof: { savedSha256: H('1') }, acknowledgedRoot: true });
+  const before = fileText(store);
+  const args = (records, proof = PROOF) => ({ token, baseGeneration: null, records, proof, consumerState: formState(), publication: owedTable() });
+  const root = rec('form', FORM_KEY, FORM);
+  const ctl = (key, id) => rec('control', key, id, { parentKey: FORM_KEY });
+  // One key twice with two ids: a map would keep the last one and bind it silently.
+  assert.equal(codeOf(() => store.commitGroup(args([root, ctl('name', SUBSTITUTE), ctl('name', CTRL_A), ctl('phone', CTRL_B)]))), CODES.groupInvalid, 'a repeated (kind, key)');
+  assert.equal(codeOf(() => store.commitGroup(args([root, ctl('name', CTRL_A), ctl('phone', CTRL_B), ctl('fax', CTRL_A)]))), CODES.groupInvalid, 'a repeated id');
+  assert.equal(codeOf(() => store.commitGroup(args([root, ctl('name', CTRL_A), ctl('phone', CTRL_B)], {}))), CODES.groupInvalid, 'an empty proof');
+  assert.equal(codeOf(() => store.commitGroup(args([root, ctl('name', CTRL_A), ctl('phone', CTRL_B)], { ...PROOF, semanticSha256: null }))), CODES.groupInvalid, 'a proof without its semantic hash');
+  const { expectedChildrenSha256, ...partial } = PROOF;
+  assert.ok(expectedChildrenSha256);
+  assert.equal(codeOf(() => store.commitGroup(args([root, ctl('name', CTRL_A), ctl('phone', CTRL_B)], partial))), CODES.groupInvalid, 'a proof that omits a field');
+  // A child the expected proof never named is not bound by an observation.
+  assert.equal(codeOf(() => store.commitGroup(args([root, ctl('name', CTRL_A), ctl('phone', CTRL_B), ctl('fax', SUBSTITUTE)]))), CODES.completion, 'an unplanned child');
+  assert.equal(fileText(store), before, 'every refusal leaves the file byte for byte');
+
+  const g = store.commitGroup(args([root, ctl('name', CTRL_A), ctl('phone', CTRL_B)], { ...PROOF, expectedChildrenSha256: null }));
+  assert.deepEqual(g.records.map((r) => [r.key, r.id]), [[FORM_KEY, FORM], ['name', CTRL_A], ['phone', CTRL_B]]);
+
+  // A proof edited on disk to lose its fields makes the group unusable on reopen.
+  writeRaw(store, (d) => { d.groups[0].proof = {}; });
+  assert.equal(open(dir).snapshot().invalidGroups.size, 1);
+  assert.equal(codeOf(() => open(dir).readGroup('form', FORM_KEY)), CODES.groupInvalid);
+});
+
+test('a business rule\'s root is a business-rule binding: it prepares, commits and reopens; any other family-to-root pairing is refused', () => {
+  const dir = makeTempDir('mb-rule-kind-');
+  const store = open(dir);
+  const g = settleRule(store, 'account/hide', RULE);
+  assert.deepEqual(g.root, { kind: 'business-rule', key: 'account/hide', id: RULE });
+  assert.equal(open(dir).readGroup('rule', 'account/hide').committed.records[0].kind, 'business-rule');
+  const before = fileText(store);
+  const prepare = (family, kind, id) => codeOf(() => store.prepareAttempt({ family, key: `${family}/x`, baseGeneration: null, root: { kind, key: `${family}/x`, id }, knownScopes: [], declarationSha256: H('e') }));
+  assert.equal(prepare('rule', 'rule', '66666666-6666-4666-8666-666666666666'), CODES.groupInvalid, 'a rule root spelled as its family');
+  assert.equal(prepare('form', 'business-rule', '77777777-7777-4777-8777-777777777777'), CODES.groupInvalid, 'a form with a rule root');
+  assert.equal(prepare('bpf', 'business-rule', '88888888-8888-4888-8888-888888888888'), CODES.groupInvalid, 'a process flow with a rule root');
+  assert.equal(fileText(store), before);
+});
+
+test('a workflow effect changes its own attempt\'s root row only, when recorded and when read back from disk', () => {
+  const dir = makeTempDir('mb-effect-row-');
+  const store = open(dir);
+  const OTHER = '99999999-9999-4999-8999-999999999999';
+  const token = store.prepareAttempt({ family: 'rule', key: 'account/hide', baseGeneration: null, root: { kind: 'business-rule', key: 'account/hide', id: RULE }, knownScopes: [], declarationSha256: H('e') });
+  store.markSending(token, expected(RULE, [], 'rule-v1'));
+  const before = fileText(store);
+  const effect = { attemptToken: token, baseGeneration: null, family: 'rule', key: 'account/hide', effect: 'state', request: { method: 'PATCH', shape: 'workflow-patch' }, desiredState: 'Active' };
+  assert.equal(codeOf(() => store.recordWorkflowEffect({ ...effect, rowId: OTHER })), CODES.notSettled, 'an effect on another workflow row');
+  assert.equal(fileText(store), before, 'nothing was recorded');
+  store.recordWorkflowEffect({ ...effect, rowId: RULE });
+  writeRaw(store, (d) => { d.workflowEffects[0].rowId = OTHER; });
+  assert.equal(codeOf(() => open(dir)), CODES.unreadable, 'an effect on disk that names another row than its attempt\'s root');
 });

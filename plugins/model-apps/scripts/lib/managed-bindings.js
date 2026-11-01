@@ -54,6 +54,10 @@ const FAMILIES = ['form', 'dashboard', 'rule', 'bpf', 'view', 'chart'];
 // Forms and dashboards are rows of one table (systemform), rules and process flows of another (workflow): a root id
 // may be bound once per table, whichever family claims it.
 const NAMESPACE = { form: 'systemform', dashboard: 'systemform', rule: 'workflow', bpf: 'workflow', view: 'savedquery', chart: 'savedqueryvisualization' };
+// The binding kind of each family's root record. It is the kind the create catalog (lib/creates-catalog.js) hands a
+// feature, so a feature records its root under the same spelling it was given: a business rule's group family is the
+// short `rule`, but its root is a `business-rule` binding, never a `rule` one.
+const ROOT_KIND = Object.freeze({ form: 'form', dashboard: 'dashboard', rule: 'business-rule', bpf: 'bpf', view: 'view', chart: 'chart' });
 const PUBLISHING = new Set(['form', 'dashboard', 'view', 'chart']);
 const PUBLICATION_STATES = new Set(['not-needed', 'owed', 'dispatching', 'unconfirmed', 'confirmed']);
 const EFFECT_STATES = new Set(['definitely-unsent', 'dispatching', 'unconfirmed', 'confirmed']);
@@ -138,7 +142,19 @@ function validateRoot(root, family, key, where) {
   closedKeys(root, ['kind', 'key', 'id'], where);
   if (!nonempty(root.kind) || root.key !== key) throw invalid(where, 'is not this group\'s root');
   guidField(root.id, `${where}.id`);
-  if (family === 'rule' && root.kind !== 'rule') throw invalid(where, 'is not a rule root');
+  if (root.kind !== ROOT_KIND[family]) throw invalid(where, `is a ${root.kind} root, and a ${family} group's root is a ${ROOT_KIND[family]}`);
+}
+
+// The proof a committed group keeps. Every field is required: the saved, semantic and preservation hashes are never
+// null, because a group that cannot show them was not proved; the child-set hash is null only for a group that
+// expects no child (a business rule, a form whose declaration places no control).
+const PROOF_KEYS = ['savedSha256', 'semanticSha256', 'preservationSha256', 'expectedChildrenSha256'];
+function validateProof(proof, where) {
+  closedKeys(proof, PROOF_KEYS, where);
+  for (const k of PROOF_KEYS) {
+    if (!Object.prototype.hasOwnProperty.call(proof, k)) throw invalid(where, `has no ${k}`);
+    hashOrNull(proof[k], `${where}.${k}`, k === 'expectedChildrenSha256');
+  }
 }
 
 function validateRecord(rec, header, where) {
@@ -237,8 +253,7 @@ function validateGroup(g, header, where) {
   if (!nonempty(g.proofSchema)) throw invalid(where, 'names no proof schema');
   validateRecords(g.records, g.root, header, `${where}.records`);
   if (!g.records.some((r) => r.kind === g.root.kind && r.key === g.root.key)) throw invalid(where, 'holds no record of its root');
-  closedKeys(g.proof, ['savedSha256', 'semanticSha256', 'preservationSha256', 'expectedChildrenSha256'], `${where}.proof`);
-  for (const [k, v] of Object.entries(g.proof)) hashOrNull(v, `${where}.proof.${k}`);
+  validateProof(g.proof, `${where}.proof`);
   closedKeys(g.consumerState, CONSUMER_KEYS[g.family], `${where}.consumerState`);
   validateConsumerValue(g.consumerState, `${where}.consumerState`);
   validatePublication(g.publication, g.family, `${where}.publication`);
@@ -367,6 +382,9 @@ function parseEnvelope(text, expect) {
     const owner = isObj(e) ? attemptTokens.get(e.attemptToken) : null;
     if (!owner || owner.family !== e.family || owner.key !== e.key) throw invalid(where, 'names no pending attempt of its group');
     if (owner.baseGeneration !== e.baseGeneration) throw invalid(where, 'names another generation than its attempt');
+    // An effect changes its own attempt's row and no other: an attempt for one workflow cannot carry, and later settle
+    // or block, a write of another.
+    if (!isObj(owner.root) || typeof e.rowId !== 'string' || e.rowId !== owner.root.id) throw invalid(where, 'changes another row than its attempt\'s root');
     try {
       validateEffect(e, where);
       // An edit of a row the store already binds is an existing-row edit, and must say which version it edits.
@@ -650,6 +668,26 @@ function openManagedBindings({ workspaceDir, environment, appUniqueName, solutio
      * expected child the set lacks, is `create-completion-required`: no substitute is bound.
      */
     commitGroup({ token, baseGeneration, records, proof, consumerState, publication = null, proofSchema }) {
+      // The proposal is checked whole before anything else: a list that repeats a (kind, key) or an id must be refused,
+      // not folded into a map where the last record silently wins, and a proof must carry every field it promises.
+      try {
+        if (!Array.isArray(records)) throw invalid('the proposed records', 'is not a list');
+        const keys = new Set();
+        const ids = new Set();
+        records.forEach((rec, i) => {
+          const where = `the proposed records[${i}]`;
+          validateRecord(rec, ctx.expect, where);
+          const k = `${rec.kind}\u0000${rec.key}`;
+          if (keys.has(k)) throw invalid(where, `repeats ${rec.kind} "${rec.key}"`);
+          keys.add(k);
+          const id = rec.id.toLowerCase();
+          if (id !== NOTES_CONTROL && ids.has(id)) throw invalid(where, `repeats the id ${rec.id}`);
+          ids.add(id);
+        });
+        validateProof(proof, 'the proposed proof');
+      } catch (e) {
+        throw storeError(CODES.groupInvalid, `a managed group commit was refused before it was written: ${e.message}`);
+      }
       let committed;
       mutate((env, disk) => {
         const a = requireAttempt(env, disk, token);
@@ -678,6 +716,11 @@ function openManagedBindings({ workspaceDir, environment, appUniqueName, solutio
         for (const rec of byKey.values()) {
           // A new record claims `created` only on this attempt's acknowledged create; a lost answer needs adoption.
           if (rec.origin === 'created' && !acknowledged) throw storeError(CODES.completion, `the managed ${a.family} "${a.key}" cannot record ${rec.kind} "${rec.key}" as created without an acknowledged create`);
+          // A child the group did not hold before is bound only when the expected proof, persisted before the send,
+          // named it under that id: an observation cannot add a binding the attempt never said it would make.
+          const isRoot = rec.kind === a.root.kind && rec.key === a.root.key;
+          const planned = isRoot || a.expected.children.some((c) => c.kind === rec.kind && c.key === rec.key && String(c.id).toLowerCase() === String(rec.id).toLowerCase());
+          if (!planned) throw storeError(CODES.completion, `the managed ${a.family} "${a.key}" would bind ${rec.kind} "${rec.key}", which its expected proof does not name`);
           merged.push(rec);
         }
         const rootRec = merged.find((r) => r.kind === a.root.kind && r.key === a.root.key);
@@ -756,6 +799,7 @@ function openManagedBindings({ workspaceDir, environment, appUniqueName, solutio
         const a = requireAttempt(env, disk, rec.attemptToken);
         if (a.family !== rec.family || a.key !== rec.key) throw storeError(CODES.notSettled, 'a workflow effect must belong to its own attempt');
         if (a.baseGeneration !== rec.baseGeneration) throw storeError(CODES.conflict, 'a workflow effect must name its attempt\'s generation');
+        if (rec.rowId !== a.root.id) throw storeError(CODES.notSettled, `a workflow effect changes its attempt's own row ${a.root.id}, not ${rec.rowId}`);
         if (env.workflowEffects.some((e) => e.rowId === rec.rowId && e.effect === rec.effect && e.state !== 'confirmed')) throw storeError(CODES.pending, `the workflow row ${rec.rowId} already has an unsettled ${rec.effect} effect`);
         env.workflowEffects.push(rec);
       });
@@ -852,6 +896,7 @@ module.exports = {
   MAX_BYTES,
   CODES,
   FAMILIES,
+  ROOT_KIND,
   storeFileName,
   parseEnvelope,
   classifyPersisted,
