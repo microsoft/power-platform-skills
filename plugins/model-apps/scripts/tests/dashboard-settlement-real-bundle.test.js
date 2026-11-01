@@ -6,7 +6,8 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { makeTempDir } = require('./helpers/temp-dirs.js');
-const { createManagedWire, sdkOver } = require('./helpers/managed-wire.js');
+const { createManagedWire, sdkOver, clientOver } = require('./helpers/managed-wire.js');
+const { createMakerSdk, createNodeWorkspaceStorage } = require('../vendor/cds-maker-sdk.cjs');
 const X = require('./helpers/dashboard-formxml.js');
 const { openManagedContext } = require('../lib/managed-bindings.js');
 const { writeFileAtomic } = require('../lib/apply-snapshot-store.js');
@@ -14,7 +15,7 @@ const { createPublicationBarrier } = require('../lib/publication-barrier.js');
 const { createIntentCatalog } = require('../lib/creates-catalog.js');
 const { environmentFingerprint } = require('../lib/page-ownership-records.js');
 const { dashboardTileOpts, dashboardComponent } = require('../lib/sdk-build.js');
-const { settleDeclaredDashboard, publishDeclaredDashboard, dashboardKey } = require('../lib/dashboard-reconcile.js');
+const { settleDeclaredDashboard, publishDeclaredDashboard, dashboardKey, projectDashboard, committedProjectionInput } = require('../lib/dashboard-reconcile.js');
 const { createAttemptSendObserver } = require('../lib/managed-feature-contract.js');
 const { systemFormLayerSha256 } = require('../lib/systemform-published.js');
 const { canonicalJson } = require('../lib/reconcile-common.js');
@@ -483,6 +484,8 @@ test('a create whose answer was lost: the next run binds it only with the typed 
   const next = await rerun(w);
   assert.equal(await codeOf(settle(next, d, { approvals: {} })), 'managed-adoption-required');
   assert.equal(next.store.readGroup('dashboard', 'ops').committed, null, 'nothing bound');
+  const kept = next.store.readGroup('dashboard', 'ops').pending;
+  assert.ok(kept && kept.expected && kept.expected.rootId === id, 'the attempt and its expected proof are kept for the approved run');
   const approved = await rerun(w);
   assert.deepEqual((await settle(approved, d)).result, { committed: true, recovered: true });
   assert.equal(w.wire.log.filter(isCreate).length, creates, 'no later run sends a create');
@@ -620,4 +623,68 @@ test('a publish whose confirmation write failed after the send: the next run con
   assert.deepEqual(out.confirmed, [{ family: 'dashboard', key: 'ops' }]);
   assert.equal(w.wire.publishes(DID).length, 1, 'no second PublishXml');
   assert.equal(next.store.readGroup('dashboard', 'ops').committed.publication.state, 'confirmed');
+});
+
+// The read-only projection verify and hydrate share with the proof (projectDashboard): over a fresh read of what was
+// settled it reproduces the committed proof, and it sees the non-authored and layout drift the proof refuses.
+test('the shared read-only projection reproduces the committed proof of a created and an adopted dashboard, and sees a non-authored or layout change', async () => {
+  const fresh = async (w, id) => { await w.sdk.fetchArtifact('dashboard', id, { overwrite: true }); return await w.sdk.getArtifact('dashboard', id); };
+  const project = async (w, id) => {
+    const group = w.store.readGroup('dashboard', 'ops').committed;
+    const { managed, preservesLayout } = committedProjectionInput(group);
+    return { group, preservesLayout, out: projectDashboard(await fresh(w, id), managed, { preservesLayout }) };
+  };
+  const made = await world();
+  const d = declared([{ key: 'open', type: 'list', view: 'Open cases' }]);
+  const id = (await settle(made, d)).id;
+  const c = await project(made, id);
+  assert.equal(c.preservesLayout, false, 'the create preserved nothing');
+  assert.deepEqual([c.out.semanticSha256, c.out.preservationSha256], [c.group.proof.semanticSha256, c.group.proof.preservationSha256]);
+
+  const w = await world();
+  putExisting(w.wire);
+  await settle(w, declared([{ key: 'open', type: 'list', view: 'Open cases', componentId: C_OPEN, name: 'Open now' }], { dashboardId: DID }));
+  const a = await project(w, DID);
+  assert.equal(a.preservesLayout, true);
+  assert.deepEqual([a.out.semanticSha256, a.out.preservationSha256, a.out.missing, a.out.duplicated], [a.group.proof.semanticSha256, a.group.proof.preservationSha256, [], []]);
+  const row = w.wire.saved.get(DID);
+  for (const change of [
+    (xml) => xml.replace('<RecordsPerPage>8</RecordsPerPage>', '<RecordsPerPage>42</RecordsPerPage>'),
+    (xml) => { const rows = xml.match(/<row>.*?<\/row>/g); return xml.replace(rows.join(''), [...rows].reverse().join('')); },
+  ]) {
+    const was = row.formxml;
+    row.formxml = change(was);
+    assert.notEqual(row.formxml, was);
+    const b = await project(w, DID);
+    assert.equal(b.out.semanticSha256, a.group.proof.semanticSha256, 'the authored projection is unchanged');
+    assert.notEqual(b.out.preservationSha256, a.group.proof.preservationSha256, 'the change outside the declaration is seen');
+    row.formxml = was;
+  }
+});
+
+// The workspace copy is a file: three SDK instances open the same workspace directory in turn, as three builds would.
+test('a recovery never overwrites unsent edits on disk: a fresh SDK reads them before and after the stopped recovery', async () => {
+  const wire = createManagedWire();
+  const sdkDir = makeTempDir('dash-sdk-');
+  const dir = makeTempDir('dash-settle-');
+  const { failing, deps } = failNextStoreWrite();
+  const open = async (faults = false) => {
+    const barrier = createPublicationBarrier();
+    const observer = createAttemptSendObserver();
+    const sdk = createMakerSdk({ workspaceStorage: createNodeWorkspaceStorage(sdkDir), instanceUrl: ENV, httpClient: clientOver(wire, { barrier, observer }) });
+    await sdk.initWorkspace();
+    const { store } = openManagedContext({ workspaceDir: dir, environment: ENV, appUniqueName: APP, solutionUniqueName: SOL, barrier, ...(faults ? { deps } : {}) });
+    return { wire, barrier, sdk, dir, store, observer };
+  };
+  putExisting(wire);
+  const d = declared([{ key: 'open', type: 'list', view: 'Open cases', componentId: C_OPEN, name: 'Open now' }], { dashboardId: DID });
+  const first = await open(true);
+  assert.ok(await codeOf(settle(first, d, { ensureMembership: async () => { failing.armed = true; } })), 'the commit failed after the save');
+  await first.sdk.updateElement('dashboard', DID, '/description', 'DURABLE UNSENT MAKER TEXT');
+  const second = await open();
+  assert.equal((await second.sdk.getArtifact('dashboard', DID)).description, 'DURABLE UNSENT MAKER TEXT', 'the edit is on disk');
+  assert.equal(await codeOf(settle(second, d)), 'create-completion-required');
+  const third = await open();
+  assert.equal((await third.sdk.getArtifact('dashboard', DID)).description, 'DURABLE UNSENT MAKER TEXT', 'the recovery did not overwrite the file');
+  assert.equal(third.store.readGroup('dashboard', 'ops').committed, null);
 });

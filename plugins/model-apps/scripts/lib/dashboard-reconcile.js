@@ -341,6 +341,56 @@ function preservationSha256(bag, managedParams) {
   return sha({ layout: preservedLayout(bag, new Set(Object.keys(managedParams))), managed });
 }
 
+/**
+ * The read-only projection of a stored dashboard: the one surface the proof, verify and hydrate share, so that no
+ * later reader rebuilds a looser one. It reads and writes nothing.
+ *   art              the dashboard as the SDK reads it (getArtifact after a fresh fetch)
+ *   managed          the managed tiles by key and control id, [{ key, id }]
+ *   preservesLayout  false only for the proof of the attempt that created the dashboard (nothing on it existed to
+ *                    preserve)
+ * For a committed group, committedProjectionInput(group) answers both arguments.
+ * Returns { tiles, missing, duplicated, semanticSha256, preservationSha256 }. `tiles` holds each tile found exactly
+ * once — { key, id, type, cell, section, tab, parts } — and a tile in `missing` or `duplicated` is a mismatch on its
+ * own. The two hashes are the ones a committed group's proof keeps (proof.semanticSha256, proof.preservationSha256):
+ * the managed projection, and everything the declaration does not own (the layout around the managed cells, every
+ * foreign cell and control, and each managed tile's non-authored parameters).
+ */
+function projectDashboard(art, managed, { preservesLayout = true } = {}) {
+  const components = (art && art.components) || [];
+  const layout = layoutOf(art && art.bag);
+  const tiles = [];
+  const unowned = {};
+  const missing = [];
+  const duplicated = [];
+  for (const { key, id } of managed) {
+    const hits = components.filter((c) => bareId(c.id) === id);
+    if (hits.length !== 1) { (hits.length ? duplicated : missing).push(key); continue; }
+    const c = hits[0];
+    tiles.push({ key, id, type: c.type, ...placeOf(c, layout), parts: liveTile(c, c.type) });
+    unowned[id] = unownedParams(c.type, c.parameters);
+  }
+  return {
+    tiles,
+    missing,
+    duplicated,
+    semanticSha256: projectionSha256(rootProjection(art && art.description), tiles),
+    preservationSha256: preservationSha256(preservesLayout && art ? art.bag : null, unowned),
+  };
+}
+
+/**
+ * projectDashboard's `managed` and `preservesLayout` for a committed dashboard group. The store keeps the catalog seed
+ * ids (consumerState.seedIds) only on the commit of the attempt that created the dashboard, which is exactly the proof
+ * that hashed no layout; every later commit proves the layout and records no seed ids.
+ */
+function committedProjectionInput(group) {
+  const cs = (group && group.consumerState) || {};
+  return {
+    managed: Object.entries(cs.tiles || {}).map(([key, t]) => ({ key, id: t.id })),
+    preservesLayout: !(Array.isArray(cs.seedIds) && cs.seedIds.length),
+  };
+}
+
 // The fields a declared dashboard and its tiles may author. The canonical declaration keeps exactly the ones the spec
 // sets: an absent field stays absent, so "not authored" and "authored as the live value" stay different.
 const DECLARED_FIELDS = ['name', 'description', 'dashboardId'];
@@ -701,34 +751,26 @@ async function proveDashboard(s, expected, applied, { token = null, recovering =
     throw stop('dashboard-published-unreadable', `whether the saved state of dashboard "${key}" is published could not be read`, { cause: err });
   }
   if (!art || art.dashboardType !== 'Standard' || !isGlobal(art)) throw stop('dashboard-stored-mismatch', `the stored dashboard "${key}" is not a global standard dashboard`);
-  const components = art.components || [];
-  const layout = layoutOf(art.bag);
-  const missing = [];
-  const mismatch = [];
-  const tiles = [];
-  const found = [];
-  for (const child of expected.children) {
-    const hits = components.filter((c) => bareId(c.id) === child.id);
-    if (hits.length !== 1) { (hits.length ? mismatch : missing).push(child.key); continue; }
-    const place = placeOf(hits[0], layout);
-    if (associationOf(child.key, hits[0].type, place) !== child.associationSha256) { mismatch.push(child.key); continue; }
-    const parts = liveTile(hits[0], hits[0].type);
-    tiles.push({ key: child.key, id: child.id, type: hits[0].type, ...place, parts });
-    found.push({ child, parts, place, type: hits[0].type });
-  }
   const created = expected.baseObservation === null;
+  const projected = projectDashboard(art, expected.children.map((c) => ({ key: c.key, id: c.id })), { preservesLayout: !created });
+  const missing = [...projected.missing];
+  const mismatch = [...projected.duplicated];
+  const found = [];
+  for (const t of projected.tiles) {
+    const child = expected.children.find((c) => c.key === t.key);
+    if (associationOf(t.key, t.type, t) !== child.associationSha256) { mismatch.push(t.key); continue; }
+    found.push({ child, parts: t.parts, place: { cell: t.cell, section: t.section, tab: t.tab }, type: t.type });
+  }
   let seedIds = [];
   if (created) {
     const { childIds } = s.catalog.reserveChildren(KIND, key, { actualRootId: id, children: SEED_CHILDREN });
     seedIds = [childIds[SEED_TAB], childIds[SEED_SECTION]];
-    if (!seedInPlace(layout, { tab: seedIds[0], section: seedIds[1] })) missing.push(key);
+    if (!seedInPlace(layoutOf(art.bag), { tab: seedIds[0], section: seedIds[1] })) missing.push(key);
   }
   if (missing.length) throw stop('create-completion-required', `a part of dashboard "${key}" is not on the stored dashboard (${missing.join(', ')}); complete or remove it in Maker, then run again`);
   if (mismatch.length) throw stop('dashboard-stored-mismatch', `the stored dashboard "${key}" does not hold what was written (${mismatch.join(', ')}); check the dashboard`);
-  const semantic = projectionSha256(rootProjection(art.description), tiles);
-  const byId = new Map(components.map((c) => [bareId(c.id), c]));
-  const managedParams = Object.fromEntries(found.map(({ child, type }) => [child.id, unownedParams(type, byId.get(child.id).parameters)]));
-  const preserved = preservationSha256(created ? null : art.bag, managedParams);
+  const semantic = projected.semanticSha256;
+  const preserved = projected.preservationSha256;
   // What is stored now is not what was sent, or a part the spec does not own changed: binding or publishing it would
   // claim content this build never wrote — after a crash, someone's edit made since.
   if (semantic !== expected.sentProjectionSha256 || preserved !== expected.preservationSha256) {
@@ -944,6 +986,9 @@ module.exports = {
   liveTile,
   layoutOf,
   seedInPlace,
+  projectDashboard,
+  committedProjectionInput,
+  canonicalDeclaration,
   settleDeclaredDashboard,
   publishDeclaredDashboard,
 };
