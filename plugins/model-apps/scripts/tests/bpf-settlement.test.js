@@ -486,6 +486,7 @@ test('an approved adoption whose row is gone before it is bound never recreates 
   for (const extra of [{}, { approvals: approve() }, { approvals: approve(), opts: SWITCH }]) {
     const out = await settle(wire, dir, FLOW, extra);
     assert.ok(out.error, 'it stops');
+    assert.equal(out.error.code, 'create-completion-required', 'an adoption never takes the create branch');
     assert.deepEqual(writesSince(wire, out.from), [], 'no POST and no PATCH');
     assert.equal(wire.rows.size, 0, 'no row is recreated');
   }
