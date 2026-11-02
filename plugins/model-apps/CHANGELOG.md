@@ -11,32 +11,32 @@ Bundled SDK: commit 0eef55f8c2d0.
 
 ### Added
 
-- **Portable schema**: Choice `value`s, `dateTimeBehavior`, `isSecured`, `fieldSecurityProfiles`, table flags ([schema](references/app-spec-schema-advanced.md)); `--include-capabilities` downloads behaviours/flags; destructive edits need `--authorize <key>`.
-- **Configuration**: environment variables (including secrets), connection references, Custom APIs, duplicate-detection rules and `solution.version` ([schema](references/app-spec-schema.md)). Per-environment values use `--deployment-settings`.
-- **Declared views, charts and web resources** follow the spec on rebuild (`reconcile: "declared"`). Existing-item changes need `--authorize adopt:<family>:<key>`; untyped view/chart keys work only unambiguously. Web-resource case-only name duplicates are refused.
-- **`entities[].quickFind.findColumns`** sets search columns; `--verify` checks them.
-- **`createIdentity: "stable-v1"`** keeps declared view/chart ids across retries; unproved changes withhold table publishes.
-- **`app.mainFormsOnUpdate: "exact"`** restricts listed tables' Main-form membership (`--allow-destructive` on existing apps); **`app.pinDeclaredArtifacts`** adds declared forms/views/charts/dashboards. Lost component-add answers get one checked repair attempt.
-- **Read-only tools**: build `--dry-run --preview-push`, verify `--inspect-components`, `solutions.js inspect`, `plan-app-promotion.js`. **`data-fix.js`** repairs rows.
-- **Page drafts**: `genpage-upload.js --draft`, `genpage.js` navigation `--draft`; pages leases and `prepare-compiler-refresh` ([skill](skills/genpage/SKILL.md)).
+- **Declared views, charts, web resources, forms, dashboards, business rules and process flows** (`reconcile: "declared"`) follow the spec and keep what it omits; `--verify` and `--include-managed` downloads cover them. Existing items need `adopt:<family>:<key>`.
+- **Removed declarations** delete nothing; after a Maker delete the build releases them; re-declaring creates new ones.
+- **`createIdentity: "stable-v1"`** keeps view and chart ids across retries; unproved changes withhold publishes.
+- **Portable schema**: Choice `value`s, `dateTimeBehavior`, `isSecured`, `fieldSecurityProfiles`, table flags; `--include-capabilities` downloads them; destructive edits need `--authorize <key>`.
+- **Configuration**: environment variables, connection references, Custom APIs, duplicate-detection rules, `solution.version`; `--deployment-settings` sets per-environment values.
+- **`app.theme`** (Preview) brands the header and logo.
+- **`quickFind.findColumns`**, **`app.mainFormsOnUpdate: "exact"`**, **`app.pinDeclaredArtifacts`**: search columns, exact Main forms, declared pins.
+- **Pages**: `genpage-upload.js --draft` and `--turn-id`, navigation drafts, leases, `prepare-compiler-refresh` ([skill](skills/genpage/SKILL.md)).
+- **Read-only tools**: `--dry-run --preview-push`, `--inspect-components`, `solutions.js inspect`, `plan-app-promotion.js`; `data-fix.js` repairs rows.
 
 ### Changed
 
-- **Reads** add `IsSecured`, enumerate name matches, count distinct IDs, leave incomplete lookups unproven, check Date and Time behaviours once per existing table gaining columns, and scan published/unpublished forms before page teardown.
-- **Teardown** keeps form-embedded pages and named configuration items; downloads omit configuration.
-- **Pages calling unusable declared connection references or Custom APIs halt before writing.**
+- **Reads** add `IsSecured`, all name matches, Date and Time behaviours of tables gaining columns, and forms before page deletes.
+- **Teardown** keeps and names form-embedded pages, configuration items and declared field security profiles; downloads omit configuration.
+- **Pages using unusable connection references or Custom APIs halt before writing**; edits wait on unsettled app publishes.
 
 ### Fixed
 
-- Business-process-flow deletes retry "no active transaction"; unknown-outcome process steps never retry. Refused app-access unlinks now fail.
+- Process-flow deletes retry "no active transaction"; unknown-outcome steps never rerun; refused app-access unlinks fail; duplicate rules get their component types; emptied declared web resources settle.
 
 ### Known limitations
 
-- Unbound declared edits need adoption; keyed commands are refused. Differing local view/chart/Quick-Find copies are refused; printed `overwrite:` keys discard them.
-- Emptying web resources or Quick Find or removing view columns needs `--allow-destructive`.
-- Component inspection fails for caption-only controls.
-- Lost configuration-create answers can cause duplicates on whole-build retry; after duplicate-table recovery, declared Date and Time repairs may need another run.
-- `forms[].genPages` halts `form-page-embeds-incomplete`; use navigation.
+- Unversioned form and dashboard saved layers miss Maker edits made mid-write.
+- Keyed commands are refused; differing local copies need the printed `overwrite:` key; emptying web resources or Quick Find, or removing view columns, needs `--allow-destructive`.
+- Unpublished duplicate rules need publishing; unprovisioned label languages fail after solution creation.
+- Retried lost configuration creates can duplicate; `forms[].genPages` halts; caption-only controls fail inspection.
 
 ## [2.20.6]
 
