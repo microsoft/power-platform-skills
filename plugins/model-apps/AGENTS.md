@@ -3279,7 +3279,7 @@ as `{0}%` counts). No such view, several, a read that fails or a find filter the
 nested or joined marker, a condition with a literal value or none) fails the check with the reason. A reader that returns the view without its content is reported as not verified.
 One savedquery read per table that declares `quickFind`; none otherwise.
 
-Refusal codes and remedies (`remedyFor`; the build adds the CLI flag that gives the approval):
+Refusal codes and remedies (`remedyFor`; the build adds the CLI flag that gives the approval). A printed flag reaches the shell as ONE argument: `authorizeFlag` (`lib/cli-failure.js`) writes the approval bare when it is plain, double-quoted when it holds white space (`--authorize "adopt:view:contoso_item/Declared Items"`), and, for a name no quoting carries unchanged (a quote, backslash, `$`, backtick or `!`), prints `--authorize <approval>` with the value as data. Route any new printed `--authorize` hint built from a maker-authored name through it.
 
 | Remedy | Codes |
 | --- | --- |
