@@ -797,9 +797,19 @@ existing one is reused and its tiles are never edited.
 - **Download.** A plain download writes each dashboard of the site map as an undeclared entry pinned by its
   id. With both `--include-managed` and `--managed-manifest <store file>`, each declared dashboard the store
   proves (a fresh read still shows what its last build proved) comes back as the declaration it was built
-  from, with `reconcile: "declared"`, in place of that entry; one that is pending, gone, changed since, or not
-  valid stays the plain entry and is named. The downloaded folder has no store, so its first rebuild needs
-  `--authorize "adopt:dashboard:<key>"` for each.
+  from, with `reconcile: "declared"`, in place of that entry, plus the ids its last build proved: the
+  dashboard's `dashboardId` and each declared tile's `componentId`. A rebuild then finds that dashboard by its
+  id even after a rename in Maker or a new dashboard with the same name. One that is pending, gone, changed
+  since, or not valid stays the plain entry and is named. The ids are not a binding: the downloaded folder has
+  no store, so its first binding needs `--authorize "adopt:dashboard:<key>"` for each (a build without it
+  writes nothing to the dashboard and binds nothing).
+- **Identity.** A declared dashboard is found by its binding first, then by an earlier build's unfinished
+  attempt, then by its `dashboardId`, and only then by its name. A `dashboardId` that is not the bound
+  dashboard stops the build. `--verify` uses the same bound dashboard for every dashboard check, the site
+  map's included.
+- **A removed declaration.** When the spec no longer declares a dashboard whose last publish is not
+  confirmed, the build still reads it and confirms that publish when a fresh read proves it live. It never
+  publishes it again. One it cannot confirm stops the build with `publication-risk:dashboard:<id>`.
 
 ## businessRules[].reconcile (optional — declared business rules)
 

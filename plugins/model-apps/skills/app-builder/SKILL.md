@@ -179,8 +179,9 @@ prod-ready** app; don't under-build (a bare table list) or over-build (surfaces 
   `--allow-destructive` to clear its description with `""`): explain it and let the maker choose. `--verify`
   holds a declared dashboard to its last build (a dashboard changed in Maker since fails until a build
   settles it; one whose publish is unconfirmed is unverified, not passed). A download brings it back declared
-  only with `--include-managed --managed-manifest <store file>` (otherwise it is an undeclared entry); its
-  first rebuild needs `adopt:dashboard:<key>`, because the downloaded folder has no store.
+  only with `--include-managed --managed-manifest <store file>` (otherwise it is an undeclared entry), with the
+  dashboard and tile ids it was proved on; its first binding needs `adopt:dashboard:<key>`, because the
+  downloaded folder has no store.
 - **Declared business rules** (`minimumPluginVersion: "2.21.0"`) — write `reconcile: "declared"` on a rule only
   when the maker accepts that the build manages the WHOLE rule; give every condition, action and apply-action a
   `key`. Tell the maker: conditions and actions are never matched by their text; a new rule is created Draft and

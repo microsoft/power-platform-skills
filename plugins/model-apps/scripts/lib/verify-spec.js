@@ -458,7 +458,43 @@ async function verifySpec(spec, read, opts = {}) {
   // A downloaded dashboard's pinned id (dashboards[].dashboardId) is what the build binds first, so it
   // is what verify checks first — after a rename in the designer the name alone finds nothing.
   const pinByName = new Map((spec.dashboards || []).filter((d) => d && d.name && d.dashboardId).map((d) => [d.name, d.dashboardId]));
+  // A DECLARED dashboard (dashboards[].reconcile "declared", its build path on) that the managed bindings of this workspace
+  // (`opts.managedManifest`) bind is identified by its binding, before its pin and its name: the build resolves it so
+  // (committed root first), and keeps a maker's rename, so its spec name may find nothing, or a namesake made since. Every
+  // check that asks ownDashboard (the dashboard check and its tile checks below, and the site map's dashboard subareas)
+  // then reads the same row the managed check reads. A binding verify cannot use never falls back to the name: an
+  // authored dashboardId that is not the bound row fails, and a group with an attempt still pending, or a stored record
+  // that is not usable, is unverified (its managed listing says why).
+  const boundByName = new Map();
+  if (opts.managedManifest && Array.isArray(opts.managedManifest.groups)) {
+    const unsettled = (list, key) => (Array.isArray(list) ? list : []).find((p) => p && p.family === 'dashboard' && p.key === key);
+    for (const [key, d] of declaredDashboardsByKey(spec)) {
+      if (!d.name) continue;
+      const open = unsettled(opts.managedManifest.pending, key) || unsettled(opts.managedManifest.invalid, key);
+      if (open) {
+        boundByName.set(d.name, { detail: `its managed binding (${key}) is not settled (${open.code || open.reason || 'managed-binding-group-invalid'}) — unverified, not proven correct` });
+        continue;
+      }
+      const g = opts.managedManifest.groups.find((x) => x && x.family === 'dashboard' && x.key === key);
+      if (!g) continue;
+      const bound = bareGuid(g.root && g.root.id);
+      const pin = d.dashboardId === undefined ? '' : bareGuid(d.dashboardId);
+      if (!bound) boundByName.set(d.name, { detail: `its managed binding (${key}) records no dashboard id — unverified, not proven correct` });
+      else if (d.dashboardId !== undefined && pin !== bound) boundByName.set(d.name, { detail: `its dashboardId ${String(d.dashboardId)} is not the dashboard its managed binding (${key}) is bound to (${bound}); correct or remove the dashboardId` });
+      else boundByName.set(d.name, { id: bound });
+    }
+  }
   const identifyDashboard = async (name) => {
+    if (boundByName.has(name)) {
+      const b = boundByName.get(name);
+      if (!b.id) return { id: null, detail: b.detail };
+      try {
+        const row = await findPinnedDashboard(read, b.id);
+        return row ? { id: row.id } : { id: null, detail: `the dashboard its managed binding is bound to (${b.id}) was not found` };
+      } catch (e) {
+        return { id: null, detail: `the dashboard its managed binding is bound to (${b.id}) could not be read (${(e && e.message) || e}) — unverified, not proven correct` };
+      }
+    }
     if (pinByName.has(name)) {
       try {
         const pinned = await findPinnedDashboard(read, pinByName.get(name));

@@ -2900,10 +2900,19 @@ charts phases. A spec that uses none of them takes the legacy paths unchanged. W
   tile and every setting the spec does not author are kept (an omitted tile is never deleted). The
   dashboards phase settles each declared dashboard as one managed group (`settleDeclaredDashboard`, with
   the run's store, barrier, creation catalog, halt factory, solution membership, typed approvals and
-  `sendObserver`; the name lookup, narrowed to the app's solution, only says where an unbound one is),
+  `sendObserver`). Identity order: the committed root, then the pending attempt's root, then the
+  authored `dashboardId`, and only then the name lookup, narrowed to the app's solution, which runs only
+  for a declaration with none of the three and only says where an unbound one is (a pin that differs
+  from the binding is `dashboard-binding-mismatch`). It
   then publishes it on EVERY run, a no-op included, through `publishDeclaredDashboard` (one scope, the
   dashboard's own `<dashboard>` PublishXml; a pending or uncertain earlier publish is confirmed or paid
-  there). A withheld publish leaves the run incomplete (`managed-publication-owed`, or
+  there). A stored dashboard group the spec no longer declares (or declares with the path off) whose
+  publish is `dispatching` or `unconfirmed` is visited at the end of the phase: `confirmUncertainPublication`
+  confirms it read-only with the registered layer readers; nothing is replayed, no owed debt of it is
+  paid, nothing is bound and this run's quarantine is not cleared. One it cannot confirm halts
+  (`managed-publication-unconfirmed`) with `{dispatchToken, approval, remedy}` on the cause, so the shared
+  `publication-risk` decision works without the old spec entry. A withheld publish leaves the run
+  incomplete (`managed-publication-owed`, or
   `managed-publication-unverified` when a layer read failed), and the app write is checked with the
   dashboards the app would hold (`checkAppWrite` `addedDashboards`), so an app publish never puts an
   unfinished dashboard live. A same-named dashboard an earlier build created and did not finish stops it
@@ -2922,12 +2931,19 @@ charts phases. A spec that uses none of them takes the legacy paths unchanged. W
   root and seed are valid, no managed tile is `missing` or `duplicated`, and BOTH hashes equal the proof's,
   plus the spec's `canonicalDeclaration` equal to the group's `originalDeclaration`. A group with no original
   declaration or proof, a `dispatching` or `unconfirmed` publication, or a reader that cannot read by id is
-  listed unverified, never passed; with the path off, the group is held to its bound id as before.
+  listed unverified, never passed; with the path off, the group is held to its bound id as before. Every
+  other dashboard identity consumer in verify (`identifyDashboard`: the generic dashboard and tile checks
+  and the site map's dashboard subareas) uses the bound root of a declared dashboard before its pin and
+  name; a pin that differs from it fails, and a pending or unusable group is unverified, never resolved by
+  name.
   `download-model-app.js --include-managed --managed-manifest <store file>` restores each certified group's
   `originalDeclaration` in place of the plain `dashboards[]` entry with the same `dashboardId` (appended when
-  there is none), validating incrementally; a pending, unreadable, changed or invalid one stays plain and is
-  named (`managedDashboards.stale`). The download writes no store, so a rebuild from the downloaded folder
-  needs `adopt:dashboard:<key>` once.
+  there is none), plus the certified root `dashboardId` and each declared tile's `componentId`
+  (`withCertifiedIds`; an authored id that differs, or a tile with no certified control, keeps it stale),
+  validating incrementally; a pending, unreadable, changed or invalid one stays plain and is
+  named (`managedDashboards.stale`). The ids are identities, not consent: the download writes no store, so
+  the first binding from the downloaded folder needs `adopt:dashboard:<key>`, and an identical unbound
+  inspection binds nothing.
 - **Business rule** (`businessRules[].reconcile: "declared"`, `lib/rule-settlement.js`, enabled by
   `DECLARED_FEATURES.rules` in `lib/declared-features.js`): a rule is ONE `workflows` row managed whole (one
   binding, kind `business-rule`); its nodes are not rows and a read gives them new ids, so they are never
