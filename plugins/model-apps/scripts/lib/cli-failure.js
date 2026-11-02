@@ -99,5 +99,24 @@ function commandArgOrPlaceholder(value, placeholder) {
   };
 }
 
+// The `--authorize <approval>` flag a message tells the maker to paste, as ONE argument. An approval is built from a name the maker wrote (a view, a form, a rule,
+// a dashboard key), so it can hold white space — `adopt:view:contoso_item/Declared Items` — and an unquoted paste reaches the CLI as two arguments
+// (`adopt:view:contoso_item/Declared`, `Items`), which it rejects as an approval nothing declares.
+//   plain (letters, digits, `_ . / : -`)   written bare, exactly as before: `--authorize adopt:view:contoso_item/Items`
+//   anything else                          double-quoted, the spelling the printed approvals already used for a form, a rule and a process flow:
+//                                          `--authorize "adopt:view:contoso_item/Declared Items"`
+//   a double quote, `$`, a backtick, `\`, `!`, a curly double quote, a line break or another control character
+//                                          no double-quoted spelling is literal in both PowerShell and a POSIX shell (they expand `$` and the backtick, and a
+//                                          double quote or `\` ends or escapes the quoting, differently in Windows PowerShell 5.1 and 7), so the flag
+//                                          carries a placeholder and a note that gives the value as data, as commandArgOrPlaceholder does.
+// Double quotes rather than commandArg's single quotes keep the spelling already printed (and pinned) for forms, rules and process flows.
+const DOUBLE_QUOTE_UNSAFE = /["$`\\!\u201C\u201D\u201E\u201F\p{Zl}\p{Zp}]|[^\P{Cc}\t]/u;
+function authorizeFlag(approval) {
+  const text = String(approval);
+  if (BARE_ARG.test(text)) return `--authorize ${text}`;
+  if (text !== '' && !DOUBLE_QUOTE_UNSAFE.test(text)) return `--authorize "${text}"`;
+  return `--authorize <approval> — <approval> is ${JSON.stringify(text)}; it is not written into the command because no way of writing it reaches the command unchanged in both PowerShell and a POSIX shell. Type it as one argument in your shell, or rename the item so its name has no quote, backslash, $, backtick or !.`;
+}
+
 module.exports = { AZ_TIMEOUT_ENV, DEFAULT_AZ_TIMEOUT_MS, MIN_AZ_TIMEOUT_MS, MAX_AZ_TIMEOUT_MS, azTimeoutMs, cliFailureKind, azTimeoutAdvice, commandArg,
-  commandArgOrPlaceholder };
+  commandArgOrPlaceholder, authorizeFlag };

@@ -1170,6 +1170,83 @@ test('--authorize: an untyped key that could name a view and a chart, or two nam
   assert.deepStrictEqual([...chart.overwrite], ['chart:new_ticket/By Kind']);
 });
 
+test('a printed --authorize approval reaches the CLI parser as ONE argument and names exactly the key it was printed for', () => {
+  const { shellTokens } = require('./helpers/shell-tokens.js');
+  const { authorizationKeys } = require(path.join(__dirname, '..', 'build-model-app.js'));
+  const { authorizeFlag } = require(path.join(__dirname, '..', 'lib', 'cli-failure.js'));
+  const spec = {
+    entities: [{ schemaName: 'new_Ticket', columns: [{ schemaName: 'new_Kind', type: 'Choice', options: ['A', 'B'] }] }],
+    views: [{ entity: 'new_ticket', name: 'Declared Items', reconcile: 'declared', columns: ['new_name'] }, { entity: 'new_ticket', name: 'Plain', reconcile: 'declared', columns: ['new_name'] }],
+    charts: [{ entity: 'new_ticket', name: 'By Kind', chartType: 'Pie', groupBy: 'new_kind', reconcile: 'declared' }],
+  };
+  for (const [key, set, member] of [
+    ['adopt:view:new_ticket/Declared Items', 'adopt', 'view:new_ticket/Declared Items'],
+    ['overwrite:chart:new_ticket/By Kind', 'overwrite', 'chart:new_ticket/By Kind'],
+    ['adopt:view:new_ticket/Plain', 'adopt', 'view:new_ticket/Plain'],
+  ]) {
+    const printed = `run the build again with ${authorizeFlag(key)}`;
+    const tokens = shellTokens(printed.slice(printed.indexOf('--authorize')));
+    assert.deepStrictEqual(tokens, ['--authorize', key], `${printed}: one argument after the flag`);
+    const r = authorizationKeys(tokens, spec);
+    assert.strictEqual(r.error, null, `${printed}: ${r.error}`);
+    assert.deepStrictEqual([...r[set]], [member], printed);
+  }
+  // What the old, unquoted text became after the shell split it: the parser refused it.
+  assert.ok(authorizationKeys(shellTokens('--authorize adopt:view:new_ticket/Declared Items'), spec).error);
+  // A plain key is printed exactly as before.
+  assert.strictEqual(authorizeFlag('adopt:dashboard:ops'), '--authorize adopt:dashboard:ops');
+  assert.strictEqual(authorizeFlag('adopt:view:contoso_item/Items'), '--authorize adopt:view:contoso_item/Items');
+});
+
+// An approval with white space or a shell-special character is double-quoted; one a double-quoted spelling cannot carry (PowerShell and POSIX shells expand `$` and the
+// backtick, and a double quote or backslash ends or escapes the quoting) is a placeholder, with the value given as data. Checked in each real shell found.
+test('authorizeFlag double-quotes what needs it, hands a real shell exactly the key, and gives a key it cannot quote as data', () => {
+  const { authorizeFlag, commandArg } = require(path.join(__dirname, '..', 'lib', 'cli-failure.js'));
+  const { spawnSync } = require('node:child_process');
+  const os = require('node:os');
+  const fs = require('node:fs');
+  const quotable = ['adopt:view:t/Declared Items', 'adopt:form:t/main/Item (open) & more', 'overwrite:view:t/It\'s; mine', 'adopt:rule:t/a|b #c', 'adopt:bpf:t/100% {x} @y, z', 'adopt:view:t/café page', 'adopt:view:t/a\tb'];
+  for (const key of quotable) assert.strictEqual(authorizeFlag(key), `--authorize "${key}"`, key);
+  const unquotable = ['adopt:view:t/say "hi"', 'adopt:view:t/cost $5', 'adopt:view:t/a`b', 'adopt:view:t/C:\\x y', 'adopt:view:t/Wow!', 'adopt:view:t/\u201Cq\u201D', 'adopt:view:t/a\nb'];
+  for (const key of unquotable) {
+    const flag = authorizeFlag(key);
+    assert.ok(flag.startsWith('--authorize <approval> — <approval> is '), flag);
+    assert.ok(flag.includes(JSON.stringify(key)), `${flag} gives the value as data`);
+    // The data note spells the value as JSON, which for a key with no quote or backslash looks like a double-quoted argument; only the command part must not carry it.
+    const command = flag.split(' — ')[0];
+    assert.strictEqual(command, '--authorize <approval>', 'the value is not written into the command');
+  }
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'authorize-flag-'));
+  try {
+    const probe = path.join(dir, 'argv.js');
+    fs.writeFileSync(probe, "require('node:fs').writeFileSync(process.env.AUTHORIZE_OUT, JSON.stringify(process.argv.slice(2)));\n", 'utf8');
+    const windows = process.platform === 'win32';
+    const shells = windows ? ['powershell.exe', 'pwsh'] : ['sh', 'bash', 'zsh', 'pwsh'];
+    const ran = [];
+    for (const shell of shells) {
+      const powershell = shell === 'powershell.exe' || shell === 'pwsh';
+      const name = shell.replace(/\W/g, '');
+      const lines = quotable.map((key) => `${powershell ? '& ' : ''}${commandArg(process.execPath)} ${commandArg(probe)} ${authorizeFlag(key)}`);
+      let ok = 0;
+      for (const [i, line] of lines.entries()) {
+        const script = path.join(dir, `probe-${name}-${i}.${powershell ? 'ps1' : 'sh'}`);
+        fs.writeFileSync(script, `${powershell ? '\uFEFF' : ''}${line}\n`, 'utf8');
+        const out = path.join(dir, `argv-${name}-${i}.json`);
+        const r = spawnSync(shell, powershell ? ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', script] : [script], { encoding: 'utf8', env: { ...process.env, AUTHORIZE_OUT: out } });
+        if (r.error && r.error.code === 'ENOENT') break;
+        assert.ifError(r.error);
+        assert.strictEqual(r.status, 0, `${shell}: ${r.stderr}`);
+        assert.deepStrictEqual(JSON.parse(fs.readFileSync(out, 'utf8')), ['--authorize', quotable[i]], `${shell}: ${line}`);
+        ok += 1;
+      }
+      if (ok === lines.length) ran.push(shell);
+    }
+    assert.ok(ran.includes(windows ? 'powershell.exe' : 'sh'), `ran in ${ran.join(', ')}`);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('--authorize overwrite:quickfind:<table> approves replacing the local copy of a declared Quick Find view, and nothing else', () => {
   const { authorizationKeys } = require(path.join(__dirname, '..', 'build-model-app.js'));
   const spec = {

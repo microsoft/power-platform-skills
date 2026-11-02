@@ -281,7 +281,7 @@ test('a DECLARED view named like the stock default warns that editing it is an a
   assert.strictEqual(r.ok, true, JSON.stringify(r.errors));
   const hits = r.warnings.filter((w) => /Active Tickets/.test(w) && /stock default view/.test(w));
   assert.strictEqual(hits.length, 1, JSON.stringify(r.warnings));
-  assert.match(hits[0], /--authorize adopt:view:new_ticket\/Active Tickets/);
+  assert.match(hits[0], /--authorize "adopt:view:new_ticket\/Active Tickets"/);
   assert.doesNotMatch(hits[0], /filters\/sort are ignored/);
 });
 

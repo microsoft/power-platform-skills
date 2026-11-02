@@ -65,6 +65,7 @@ const { AsyncLocalStorage } = require('node:async_hooks');
 const { createCompositePortForSpec, markPreSend } = require('./creates-port.js');
 const { createStop } = require('./creates-identity.js');
 const { assertCleanContinuation, readLocalCreateState } = require('./creates-local.js');
+const { authorizeFlag } = require('./cli-failure.js');
 const viewReconcile = require('./view-reconcile.js');
 const chartReconcile = require('./chart-reconcile.js');
 const { intentSha256, normalizeGuid, projectionBaseline, isApproved, canonicalJson } = require('./reconcile-common.js');
@@ -259,7 +260,14 @@ function createStableCreates({ spec, sdk, store = null, barrier = null, basePort
   async function assertContinuable(kind, key, id) {
     const pending = store ? store.readGroup(kind, key).pending : null;
     const atPending = !!pending && normalizeGuid(pending.root.id) === normalizeGuid(id);
-    await assertCleanContinuation(sdk, kind, id, atPending ? { advice: pendingAdvice(kind, key) } : {});
+    try {
+      await assertCleanContinuation(sdk, kind, id, atPending ? { advice: pendingAdvice(kind, key) } : {});
+    } catch (err) {
+      // The advice is ordered steps whose last one names an approval only if a later build asks for it; the halt's footer reads this
+      // flag (sdk-build.js managedStop) to send the maker through the steps instead of offering that approval as an alternative.
+      if (atPending && err && typeof err === 'object') err.orderedSteps = true;
+      throw err;
+    }
   }
 
   // What the maker does about a local copy at an artifact whose change the store still holds pending. Order matters: the pending
@@ -271,7 +279,7 @@ function createStableCreates({ spec, sdk, store = null, barrier = null, basePort
     `To go on, in this order: 1. keep the change you want (from the local copy or from the spec) somewhere apart;`,
     `2. keep the spec's declaration of this ${kind} (${key}) exactly as it was when its change was prepared, or put it back;`,
     `3. discard only the local copy of this ${kind} — the maker SDK's local discard (deleteArtifact) or a refresh of the local copy — which removes nothing on the service and leaves the managed binding store as it is;`,
-    `4. run the build again with that original declaration (add --authorize adopt:${kind}:${key} if the build asks for it), which proves the change or finishes its create;`,
+    `4. run the build again with that original declaration (add ${authorizeFlag(`adopt:${kind}:${key}`)} if the build asks for it), which proves the change or finishes its create;`,
     `5. only then put your change into the spec and run the build again.`,
     `A changed declaration before step 4 stops at this ${kind} with create-completion-required and keeps the pending change`,
   ].join(' ');
@@ -338,6 +346,7 @@ function createStableCreates({ spec, sdk, store = null, barrier = null, basePort
   const keptDraft = (kind, key, id) => ({
     key: `${kind}:${id}`,
     code: 'create-local-draft-kept',
+    orderedSteps: true,
     message: `the local draft of the ${kind} ${id} was kept exactly as it is: the build never removes a local draft (the SDK has no discard that holds only while the draft is unchanged, and a second local process may have edited it). Its create may still have reached the server, so its attempt stays pending and nothing is sent for it again in this run; until the local copy is discarded every build stops at this ${kind} with create-completion-required. ${pendingAdvice(kind, key)}`,
   });
 
@@ -555,7 +564,7 @@ function createStableCreates({ spec, sdk, store = null, barrier = null, basePort
           const changed = creating ? changedDraft() : null;
           const kept = creating ? await keptOwnDraft(kind, key, id) : null;
           if (changed || kept) {
-            const was = Array.isArray(err && err.findings) ? err.findings : [{ key: label, code: (err && err.code) || CODES.notSettled, message: (err && err.message) || String(err) }];
+            const was = Array.isArray(err && err.findings) ? err.findings : [{ key: label, code: (err && err.code) || CODES.notSettled, message: (err && err.message) || String(err), ...(err && err.orderedSteps === true ? { orderedSteps: true } : {}) }];
             const findings = [...(changed ? [changedFinding(changed)] : []), ...was, ...(kept ? [kept] : [])];
             if (changed) throw coded('create-local-draft-changed', findings.map((f) => `${f.code}: ${f.message}`).join('; '), { findings, cause: err });
             throw Object.assign(err instanceof Error ? err : new Error(String(err)), { findings });

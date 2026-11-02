@@ -11,6 +11,7 @@ const { declaredFeatureOn } = require('./declared-features.js');
 const { isAppSourcePath } = require('./app-source-path.js');
 const { labelLintWarnings, viewsForLabels } = require('./view-filter-labels.js');
 const { navigationVerdict } = require('./app-navigation.js');
+const { authorizeFlag } = require('./cli-failure.js');
 const { noPersonasWarning, uncoveredTables, uncoveredTablesWarning } = require('./app-access.js');
 
 const CHOICE_OPTION_WARN = 12;
@@ -479,7 +480,7 @@ function lintAppSpec(spec) {
         // A declared view (reconcile: "declared") is not merged: it replaces the stock view's columns, filters and sort. But the
         // stock view exists on every table, new ones included, and this spec did not create it, so every edit is an adoption
         // the build refuses until the maker names it (lib/view-reconcile.js, view-adoption-not-authorized).
-        if (v.reconcile === 'declared') W(`View '${v.name}' has the same name as ${ve.schemaName}'s stock default view, which exists on every table, new ones included — as a declared view, a build changes it only with --authorize adopt:view:${lc(v.entity)}/${v.name}. Use a distinct name to author a separate view.`);
+        if (v.reconcile === 'declared') W(`View '${v.name}' has the same name as ${ve.schemaName}'s stock default view, which exists on every table, new ones included — as a declared view, a build changes it only with ${authorizeFlag(`adopt:view:${lc(v.entity)}/${v.name}`)}. Use a distinct name to author a separate view.`);
         else W(`View '${v.name}' has the same name as ${ve.schemaName}'s stock default view — it will MERGE onto that default (columns are unioned and the stock "Created On" is kept, but its filters/sort are ignored). Use a distinct name to author a separate view.`);
       }
     }

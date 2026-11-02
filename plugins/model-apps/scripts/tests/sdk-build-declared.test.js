@@ -126,7 +126,7 @@ test('a declared view rebuilt unchanged writes nothing; a changed one over an un
   const refused = await build(env, changed, { phases: ['views'] });
   assert.ok(refused.err, 'the refused view halts the run');
   assert.equal(refused.err.code, 'view-adoption-not-authorized');
-  assert.match(refused.err.message, /--authorize adopt:view:contoso_item\/Declared Items/);
+  assert.match(refused.err.message, /--authorize "adopt:view:contoso_item\/Declared Items"/);
   assert.deepEqual(refused.err.incomplete.map((x) => x.code), ['view-adoption-not-authorized']);
   assert.deepEqual(refused.writes, []);
 
@@ -355,7 +355,7 @@ test('a declared view whose copy holds an unsent edit is refused and kept; with 
   const r = await build(env, makeSpec({ views: [declaredView()] }), { phases: ['views'], authorizedAdoption: adopt, sdk: refused.sdk });
   assert.equal(r.err && r.err.code, UNSENT);
   assert.match(r.err.message, /view contoso_item\/Declared Items: workspace-copy-unsent-edits/);
-  assert.match(r.err.message, /--authorize overwrite:view:contoso_item\/Declared Items/);
+  assert.match(r.err.message, /--authorize "overwrite:view:contoso_item\/Declared Items"/);
   assert.equal(refused.resets.count, 0);
   assert.deepEqual(r.writes, []);
   assert.ok((await refused.sdk.getArtifact('view', id)).columns.some((c) => c.name === 'contoso_code'), 'the local edit is kept');
@@ -414,7 +414,7 @@ test('a declared chart whose copy holds a local edit is refused before any write
   const r = await build(env, spec, { phases: ['charts'], sdk });
   assert.equal(r.err && r.err.code, UNSENT);
   assert.match(r.err.message, /chart contoso_item\/By Kind: workspace-copy-unsent-edits/);
-  assert.match(r.err.message, /--authorize overwrite:chart:contoso_item\/By Kind/);
+  assert.match(r.err.message, /--authorize "overwrite:chart:contoso_item\/By Kind"/);
   assert.deepEqual(r.writes, []);
   assert.equal(resets.count, 0);
   assert.equal((await sdk.getArtifact('chart', id)).description, 'Unsaved maker note');
@@ -486,8 +486,8 @@ test('a declared view and a declared chart with the same table and name: each ty
   const changed = makeSpec({ views: [declaredView({ name: 'By Kind' })], charts: [declaredChart({ description: 'Items by kind' })] });
   const refused = await build(env, changed, { phases: ['views', 'charts'] });
   assert.deepEqual(refused.err.incomplete.map((x) => x.code).sort(), ['chart-adoption-not-authorized', 'view-adoption-not-authorized']);
-  assert.match(refused.err.message, /--authorize adopt:view:contoso_item\/By Kind/);
-  assert.match(refused.err.message, /--authorize adopt:chart:contoso_item\/By Kind/);
+  assert.match(refused.err.message, /--authorize "adopt:view:contoso_item\/By Kind"/);
+  assert.match(refused.err.message, /--authorize "adopt:chart:contoso_item\/By Kind"/);
   assert.deepEqual(refused.writes, []);
   const chartOnly = await build(env, changed, { phases: ['views', 'charts'], authorizedAdoption: approvals(changed, 'adopt:chart:contoso_item/By Kind').adopt });
   assert.deepEqual(chartOnly.err.incomplete.map((x) => x.code), ['view-adoption-not-authorized']);

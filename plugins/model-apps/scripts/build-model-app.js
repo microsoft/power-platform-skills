@@ -16,6 +16,7 @@ const { randomUUID } = require('node:crypto');
 const { sha256 } = require('./lib/hash.js');
 const { validateAppSpec, migrateAppSpec, normalizePageSource, normalizeLanguageCode, specDeclaresAttribute } = require('./lib/app-spec.js');
 const { runSdkBuild, openBuildBindingGroups, planFor, appUniqueName, compileFormIntent, resolveExistingFormId, normalizeFormId, settleOwedPublishes, collectOwedPublishes, settleOwedLengths } = require('./lib/sdk-build.js');
+const { authorizeFlag } = require('./lib/cli-failure.js');
 const { specTables } = require('./lib/table-publish.js');
 const { stagePhasesOrResolve, PHASES, STAGES } = require('./lib/stages.js');
 // #455: resolves the authoring LCID over the transport hatch, BEFORE constructing the SDK that
@@ -489,7 +490,7 @@ function blockedPublicationOf(err) {
 function offerPublicationRisk(err, { accepted, store, say } = {}) {
   const blocked = blockedPublicationOf(err);
   if (!blocked || typeof say !== 'function') return null;
-  say(`a managed publish of ${blocked.approval.slice('publication-risk:'.length)} was sent and could not be confirmed (dispatch ${blocked.dispatchToken}): ${blocked.remedy}. Check what is live there; to accept that the lost publish may still complete, run the build again with --authorize ${blocked.approval}`);
+  say(`a managed publish of ${blocked.approval.slice('publication-risk:'.length)} was sent and could not be confirmed (dispatch ${blocked.dispatchToken}): ${blocked.remedy}. Check what is live there; to accept that the lost publish may still complete, run the build again with ${authorizeFlag(blocked.approval)}`);
   if (!(accepted instanceof Set) || !accepted.has(blocked.approval)) return null;
   if (!store || typeof store.acceptUncertainPublication !== 'function') {
     say(`--authorize ${blocked.approval} was given, but this run has no managed binding store to record it in; nothing was accepted`);

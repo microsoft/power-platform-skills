@@ -19,7 +19,8 @@ const { createPassthroughCreates } = require('../lib/creates-passthrough.js');
 const { openManagedBindings, openManagedContext, readManagedManifest, PREFIX } = require('../lib/managed-bindings.js');
 const { createPublicationBarrier } = require('../lib/publication-barrier.js');
 const { createAttemptSendObserver } = require('../lib/managed-feature-contract.js');
-const { buildModelApp } = require('../build-model-app.js');
+const { buildModelApp, authorizationKeys } = require('../build-model-app.js');
+const { shellTokens } = require('./helpers/shell-tokens.js');
 const { createFakeBuildOrg } = require('./helpers/fake-app-build-org.js');
 const { gatedClient } = require('./helpers/gated-fake-client.js');
 const { seedManagedDebt } = require('./helpers/managed-debt.js');
@@ -173,7 +174,13 @@ test('a fresh workspace on the same environment finds the rows at the derived id
     const lines = said.filter((m) => m.includes(`${kind}-not-adopted`));
     assert.equal(lines.length, 1, `${kind}: one warning\n${said.join('\n')}`);
     assert.ok(lines[0].includes(id), `${kind}: the warning names the row`);
-    assert.ok(lines[0].endsWith(`--authorize adopt:${kind}:${key}`), `${kind}: the warning names the approval: ${lines[0]}`);
+    assert.ok(lines[0].endsWith(`--authorize "adopt:${kind}:${key}"`), `${kind}: the warning names the approval as one quoted argument: ${lines[0]}`);
+    // Pasted into a shell, the printed hint is the one argument the CLI's own parser accepts, and it names exactly this row.
+    const tokens = shellTokens(lines[0].slice(lines[0].lastIndexOf('--authorize')));
+    assert.deepEqual(tokens, ['--authorize', `adopt:${kind}:${key}`]);
+    const parsed = authorizationKeys(tokens, spec);
+    assert.equal(parsed.error, null, parsed.error);
+    assert.deepEqual([...parsed.adopt], [`${kind}:${key}`]);
   }
   // Nor does it give authority to change the row: an edited declaration without the approval writes nothing.
   const edited = stableSpec();
@@ -277,6 +284,24 @@ async function removeKeptDraft(run, kind, id) {
   assert.match(String(run.err && run.err.message), /create-local-draft-kept/);
   assert.equal((await readLocalCreateState(run.sdk, kind, id)).state, 'pending');
   await run.sdk.deleteArtifact(kind, id);
+}
+
+for (const [kind, key, collection] of [['view', VIEW_KEY, 'savedqueries'], ['chart', CHART_KEY, 'savedqueryvisualizations']]) {
+  test(`a ${kind} whose create answer was lost and whose draft remains tells the maker to follow the steps, never to give the approval they mention`, async () => {
+    const org = createFakeBuildOrg({ entities: ENTITIES });
+    const dir = newDir();
+    const spec = stableSpec(kind === 'view' ? { charts: [] } : { views: [] });
+    const restore = loseNextCreateAnswer(org, collection);
+    const first = await build(org, dir, spec);
+    restore();
+    for (const [what, run] of [['the run that lost the answer', first], ['the next run, which finds the draft', await build(org, dir, spec)]]) {
+      const message = String(run.err && run.err.message);
+      assert.match(message, /create-completion-required|create-local-draft-kept/, what);
+      assert.match(message, new RegExp(`add --authorize "adopt:${kind}:${key}" if the build asks for it`), `${what}: the conditional step quotes its key`);
+      assert.match(message, /Follow the steps above, then run the build again; it is not retried automatically\.$/, what);
+      assert.doesNotMatch(message, /approval named above|Do what the message above says/, what);
+    }
+  });
 }
 
 test('an attempt an earlier run left pending holds its table until this build proves it, then the hold ends', async () => {

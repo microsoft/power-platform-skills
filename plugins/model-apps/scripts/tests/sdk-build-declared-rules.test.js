@@ -227,6 +227,8 @@ test('a declared rule found unbound halts through the build halt with the typed 
     assert.equal(halt.retry, RETRY.NEVER);
     assert.deepEqual(halt.findings.map((f) => [f.label, f.code]), [[`declared rule "new_ticket/${RULE.name}"`, 'create-ownership-required']]);
     assert.match(halt.message, /\(approve with --authorize "adopt:rule:new_ticket\/Hide notes when closed"\)/);
+    // A real, current approval keeps the footer that offers it.
+    assert.match(halt.message, /Fix the cause \(or give the approval named above\) and run the build again; it is not retried automatically\.$/);
 
     const adopted = await build(wire, dir, specWith([RULE]), { authorizedAdoption: new Set([APPROVAL]) });
     assert.equal(adopted.err, undefined, chainText(adopted.err));

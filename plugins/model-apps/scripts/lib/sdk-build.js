@@ -19,6 +19,7 @@ const { resolveAppSource } = require('./app-source-path.js');
 const { readPageOwnership, recordPageCreation, recordPagePending, readPendingCreations, completePendingCreations, creationIds } = require('./page-ownership-records.js');
 const { readPublishedPages, writePublishedPages, sameFileVersions } = require('./page-publish-records.js');
 const { leftOnDiskWarning } = require('./left-on-disk.js');
+const { authorizeFlag } = require('./cli-failure.js');
 // The pages lock: two files (one keyed without regard to case, one spelled as every earlier release spells it), each taken through the snapshot
 // lease's exclusive create-and-reclaim and reclaimed only from a build that is provably gone; and the build lease an apply holds outside it
 // (lib/app-operation-lease.js).
@@ -3583,15 +3584,14 @@ async function runSdkBuildPhases(spec, opts, owed) {
       const formVerb = wholeWorkflow
         ? (code === 'managed-adoption-required' || code === 'create-ownership-required' || /-drift$/.test(code) ? 'adopt' : '')
         : code === 'managed-adoption-required' || /-adoption-not-authorized$/.test(code) ? 'adopt' : /-drift$/.test(code) ? 'overwrite' : '';
-      // A form name may hold spaces (`contoso_item/main/declared item`), so the printed key is quoted for the shell then.
-      const formKey = formVerb ? `${formVerb}:${approvalKey(form[1], form[2])}` : '';
-      return formKey ? `--authorize ${/\s/.test(formKey) ? `"${formKey}"` : formKey}` : '';
+      // A form name may hold spaces (`contoso_item/main/declared item`), so authorizeFlag quotes the printed key for the shell then.
+      return formVerb ? authorizeFlag(`${formVerb}:${approvalKey(form[1], form[2])}`) : '';
     }
     const verb = /-adoption-not-authorized$/.test(code) ? 'adopt' : /-drift$/.test(code) ? 'overwrite' : '';
     const at = verb ? label.indexOf(`: ${code} — `) : -1;
     const m = at > 0 ? /^(view|chart|web resource) (.+)$/.exec(label.slice(0, at)) : null;
     if (!m) return '';
-    return m[1] === 'web resource' ? `--authorize ${verb}:webresource:${m[2]}` : `--authorize ${verb}:${approvalKey(m[1], m[2])}`;
+    return authorizeFlag(m[1] === 'web resource' ? `${verb}:webresource:${m[2]}` : `${verb}:${approvalKey(m[1], m[2])}`);
   };
   const featureIncomplete = (phase, label, detail = {}) => {
     const flag = cliApproval(label, String(detail.code || ''));
@@ -3683,7 +3683,7 @@ async function runSdkBuildPhases(spec, opts, owed) {
     const found = state === 'changed'
       ? `the local copy of the ${what} ${id} in the workspace differs from the server's (an edit an earlier run did not send, or one made by hand)`
       : `the local copy of the ${what} ${id} in the workspace could not be compared with the server's`;
-    plan.refused.unshift(featureRefusal(plan.key, 'workspace-copy-unsent-edits', `${found}, so it was not planned over and nothing was written; the local copy was kept. Put any change you want to keep into the spec, then refresh the local copy: ${RESET_WORKSPACE}. Or approve replacing the local copy with the server's (this also lets the spec replace any change made on the server): --authorize overwrite:${approval}`));
+    plan.refused.unshift(featureRefusal(plan.key, 'workspace-copy-unsent-edits', `${found}, so it was not planned over and nothing was written; the local copy was kept. Put any change you want to keep into the spec, then refresh the local copy: ${RESET_WORKSPACE}. Or approve replacing the local copy with the server's (this also lets the spec replace any change made on the server): ${authorizeFlag(`overwrite:${approval}`)}`));
     return plan;
   };
   // A stable view or chart (createIdentity, settled through the binding store: `stable.settle`) whose row already holds exactly what
@@ -3697,7 +3697,7 @@ async function runSdkBuildPhases(spec, opts, owed) {
   const warnUnadopted = (kind, id, plan, r) => {
     if (typeof opts.warn !== 'function' || !plan || plan.action !== 'noChange' || plan.bindUnchanged || !id) return;
     if ((r.refused || []).length || (r.unknown || []).length || (r.managedBindings || []).length) return;
-    opts.warn(`${kind} ${plan.key}: ${kind}-not-adopted — the ${kind} ${id} already holds what the spec declares, so nothing was written, but it is not managed by this spec: it was not bound, and a later change to its declaration stops until it is adopted. To manage it, run the build again with --authorize adopt:${approvalKey(kind, plan.key)}`);
+    opts.warn(`${kind} ${plan.key}: ${kind}-not-adopted — the ${kind} ${id} already holds what the spec declares, so nothing was written, but it is not managed by this spec: it was not bound, and a later change to its declaration stops until it is adopted. To manage it, run the build again with ${authorizeFlag(`adopt:${approvalKey(kind, plan.key)}`)}`);
   };
   const settleFeatureResult = createFeatureSettlement({ barrier: owed.barrier, markIncomplete: featureIncomplete, settled: settledPublishes, recordBinding: managedArtifacts ? (b) => managedArtifacts.recordApplied(b) : undefined });
   // #changed-only (pages-only fast apply): seed the LIVE app id (discovered by unique name upstream) so the
@@ -3728,13 +3728,20 @@ async function runSdkBuildPhases(spec, opts, owed) {
   // is where what to do is written. The halt points to an approval only when it named one: most such stops have none. A finding may carry
   // its own `label` (a declared dashboard's tile, `declared dashboard "<key>/<tile>"`), which names the approval it needs.
   const managedStop = (phase, label, stopCode, { cause, findings = [] } = {}) => {
-    const said = findings.filter((x) => x && x.code).map((x) => {
+    const items = findings.filter((x) => x && x.code).map((x) => {
       const flag = cliApproval(`${x.label || label}: ${x.code} — `, x.code);
-      return `${x.code} — ${x.message}${flag ? ` (approve with ${flag})` : ''}`;
+      return { text: `${x.code} — ${x.message}${flag ? ` (approve with ${flag})` : ''}`, ordered: x.orderedSteps === true };
     });
-    if (!said.length && cause && typeof cause.message === 'string' && cause.message) said.push(`${stopCode} — ${cause.message}`);
-    const approvalNamed = said.some((s) => /--authorize \S|--allow-destructive/.test(s));
-    const next = approvalNamed ? 'Fix the cause (or give the approval named above) and run the build again' : 'Do what the message above says, then run the build again';
+    if (!items.length && cause && typeof cause.message === 'string' && cause.message) items.push({ text: `${stopCode} — ${cause.message}`, ordered: cause.orderedSteps === true });
+    const said = items.map((i) => i.text);
+    // An item flagged `orderedSteps` (a pending create's advice, lib/creates-stable-build.js pendingAdvice) lists steps in an order, and
+    // its last step mentions an approval only for a later run that "asks for it": giving that approval now does not clear the stop
+    // (create-completion-required). So its prose never counts as an approval to give, whatever flags it names, and the footer sends the
+    // maker through the steps. The flag is data on the finding or cause, not a pattern in its text, so rewording the advice cannot flip it.
+    const approvalNamed = items.some((i) => !i.ordered && /--authorize \S|--allow-destructive/.test(i.text));
+    const next = approvalNamed ? 'Fix the cause (or give the approval named above) and run the build again'
+      : items.some((i) => i.ordered) ? 'Follow the steps above, then run the build again'
+        : 'Do what the message above says, then run the build again';
     const err = new BuildHalt(`${label}: ${said.length ? said.join('; ') : stopCode} — this declared artifact did not settle, and nothing more was written for it. ${next}; it is not retried automatically.`, { phase, code: stopCode, recoverable: false, retry: RETRY.NEVER, cause });
     Object.defineProperty(err, 'findings', { value: findings, enumerable: false, configurable: true });
     return err;
