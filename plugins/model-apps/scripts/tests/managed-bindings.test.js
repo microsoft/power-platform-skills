@@ -13,6 +13,7 @@ const { makeTempDir } = require('./helpers/temp-dirs.js');
 const {
   openManagedBindings, openManagedContext, discoverManagedStore, classifyPersisted, managedManifestView, CODES, MAX_BYTES,
   PREPARE_RESERVE_BYTES, DECLARATION_MAX_BYTES, COMPLETION_BASE_BYTES, COMPLETION_MAX_BYTES, checkDeclaration, publicationRiskApproval, publicationRemedy,
+  RETIRED_GROUPS_KEPT,
 } = require('../lib/managed-bindings.js');
 const { canonicalJson } = require('../lib/reconcile-common.js');
 const { noteToken } = require('../lib/output-redaction.js');
@@ -1525,4 +1526,195 @@ test('capacity: a declaration whose calculated minimum exceeds the maximum reser
   assert.equal(codeOf(() => older.markSending(small, expected(FORM))), CODES.storeFull);
   assert.equal(fileText(older), before);
   assert.equal(older.readGroup('form', key).pending.phase, 'prepared');
+});
+// A group whose root the service no longer has (the maker deleted it) can never be published, used or proved again;
+// without a way to retire it, an owed but never-sent publish blocks every later build. The CALLER proves the root gone
+// from a fresh read of both layers; the store rechecks, under the lease, that nothing of the group could still land.
+const DASH_SCOPE = { type: 'dashboard', id: DASH };
+const absent = (rootId, over = {}) => ({ kind: 'root-absent', rootId, saved: 'not-found', published: 'not-found', ...over });
+function settleDashboard(store, key, { publication = { scope: DASH_SCOPE, state: 'owed', desiredSha256: H('5'), dispatchToken: null } } = {}) {
+  const token = store.prepareAttempt({ family: 'dashboard', key, baseGeneration: null, root: { kind: 'dashboard', key, id: DASH }, knownScopes: [DASH_SCOPE], declarationSha256: H('e'), publication: { scope: DASH_SCOPE, state: 'owed' } });
+  store.markSending(token, expected(DASH, [], 'dashboard-v1'));
+  store.noteSaved(token, { proof: null, acknowledgedRoot: true });
+  return store.commitGroup({ token, baseGeneration: null, records: [rec('dashboard', key, DASH)], proof: PROOF, consumerState: { declaration: {}, tiles: {}, seedIds: [] }, publication });
+}
+const debtOf = (dir) => (discoverManagedStore({ workspaceDir: dir, environment: ENV, appUniqueName: APP, solutionUniqueName: SOL }).debt || []).map((d) => `${d.family}:${d.key}:${d.kind}`).sort();
+
+test('absent root: a committed group whose root both layers prove gone is retired alone, with an audit entry that pays no debt', () => {
+  const dir = makeTempDir('mb-absent-root-');
+  const AT = Date.UTC(2025, 0, 2, 3, 4, 5, 678);
+  const store = open(dir, { deps: { now: () => AT } });
+  settleForm(store, [['name', CTRL_A]]);
+  settleRule(store, 'account/hide', RULE);
+  const dash = settleDashboard(store, 'sales');
+  assert.deepEqual(debtOf(dir), ['dashboard:sales:eligible', 'form:account/main:eligible']);
+  const before = JSON.parse(fileText(store));
+
+  // The root id may come in any GUID spelling; the evidence must be about that same row.
+  const answer = store.retireAbsentGroup({ family: 'dashboard', key: 'sales', generation: dash.generation, rootId: `{${DASH.toUpperCase()}}`, evidence: absent(DASH) });
+  assert.deepEqual(answer, { retired: { family: 'dashboard', key: 'sales', generation: dash.generation } });
+  const after = JSON.parse(fileText(store));
+  assert.deepEqual(after.groups, before.groups.filter((g) => g.family !== 'dashboard'), 'every other group, its debt and proof stay exactly');
+  assert.deepEqual([after.attempts, after.workflowEffects], [before.attempts, before.workflowEffects]);
+  assert.deepEqual(after.retiredGroups, [{ family: 'dashboard', key: 'sales', generation: dash.generation, rootId: DASH, reason: 'root-absent', publication: 'owed', at: '2025-01-02T03:04:05.678Z' }],
+    'the entry records an unpaid debt dropped with its root, never a publish');
+  assert.equal(open(dir).readGroup('dashboard', 'sales').committed, null);
+  assert.deepEqual(debtOf(dir), ['form:account/main:eligible'], 'the sibling form still owes its publish');
+
+  // A settled publication (not-needed, confirmed) and a family that never publishes retire alike.
+  const notNeeded = makeTempDir('mb-absent-root-not-needed-');
+  const n = settleForm(open(notNeeded), [], { publication: { scope: TABLE, state: 'not-needed', desiredSha256: null, dispatchToken: null } });
+  open(notNeeded).retireAbsentGroup({ family: 'form', key: FORM_KEY, generation: n.generation, rootId: FORM, evidence: absent(FORM) });
+  assert.equal(JSON.parse(fs.readFileSync(open(notNeeded).file, 'utf8')).retiredGroups[0].publication, 'not-needed');
+  const confirmedDir = makeTempDir('mb-absent-root-confirmed-');
+  const c = open(confirmedDir);
+  const cg = settleForm(c, []);
+  c.markPublishDispatch({ groups: [{ family: 'form', key: FORM_KEY }], scope: TABLE, token: 'dispatch-1' });
+  c.confirmPublished({ groups: [{ family: 'form', key: FORM_KEY, publishedSha256: H('5'), generation: cg.generation }], token: 'dispatch-1' });
+  c.retireAbsentGroup({ family: 'form', key: FORM_KEY, generation: cg.generation, rootId: FORM, evidence: absent(FORM) });
+  assert.equal(JSON.parse(fileText(c)).retiredGroups[0].publication, 'confirmed');
+  const ruleDir = makeTempDir('mb-absent-root-rule-');
+  const r = settleRule(open(ruleDir), 'account/hide', RULE);
+  open(ruleDir).retireAbsentGroup({ family: 'rule', key: 'account/hide', generation: r.generation, rootId: RULE, evidence: absent(RULE) });
+  assert.equal(JSON.parse(fs.readFileSync(open(ruleDir).file, 'utf8')).retiredGroups[0].publication, null);
+});
+
+test('absent root: retirement refuses with nothing written unless the evidence is typed proof of absence in both layers and the group is the one proved', () => {
+  const dir = makeTempDir('mb-absent-root-refuse-');
+  const store = open(dir);
+  const g = settleForm(store, [['name', CTRL_A]]);
+  const args = (over = {}) => ({ family: 'form', key: FORM_KEY, generation: g.generation, rootId: FORM, evidence: absent(FORM), ...over });
+  const { kind, rootId, published } = absent(FORM);
+  const before = fileText(store);
+  for (const [label, over, code] of [
+    ['no evidence', { evidence: undefined }, CODES.notSettled],
+    ['evidence that is not an object', { evidence: 'absent' }, CODES.notSettled],
+    ['the published layer alone', { evidence: { kind, rootId, published } }, CODES.notSettled],
+    ['a saved layer that was found', { evidence: absent(FORM, { saved: 'found' }) }, CODES.notSettled],
+    ['a saved layer that was forbidden', { evidence: absent(FORM, { saved: 'forbidden' }) }, CODES.notSettled],
+    ['a published layer that timed out', { evidence: absent(FORM, { published: 'timeout' }) }, CODES.notSettled],
+    ['another kind of evidence', { evidence: absent(FORM, { kind: 'published-absent' }) }, CODES.notSettled],
+    ['an untyped extra field', { evidence: absent(FORM, { status: 404 }) }, CODES.notSettled],
+    ['evidence about another row', { evidence: absent(CTRL_A) }, CODES.notSettled],
+    ['evidence with no row', { evidence: absent(FORM, { rootId: 'not-a-guid' }) }, CODES.notSettled],
+    ['no root id', { rootId: undefined }, CODES.notSettled],
+    ['no generation', { generation: undefined }, CODES.notSettled],
+    ['an unknown family', { family: 'widget' }, CODES.notSettled],
+    ['a group that does not exist', { key: 'contact/main' }, CODES.notSettled],
+    ['the other family on the key', { family: 'dashboard' }, CODES.notSettled],
+    ['another generation', { generation: 'older' }, CODES.conflict],
+    ['another root, proved absent', { rootId: CTRL_A, evidence: absent(CTRL_A) }, CODES.conflict],
+  ]) {
+    assert.equal(codeOf(() => store.retireAbsentGroup(args(over))), code, label);
+    assert.equal(fileText(store), before, `${label}: nothing written`);
+  }
+  assert.equal(codeOf(() => store.retireAbsentGroup()), CODES.notSettled);
+
+  // A group the file cannot vouch for is never retired (an owed publish with a dispatch token is not a valid record).
+  writeRaw(store, (d) => { d.groups[0].publication.dispatchToken = 'dispatch-x'; });
+  const invalidText = fileText(store);
+  assert.equal(codeOf(() => open(dir).retireAbsentGroup(args())), CODES.groupInvalid);
+  assert.equal(fileText(store), invalidText);
+});
+
+test('absent root: retirement refuses with nothing written while an attempt, a workflow effect or a possibly sent publish could still land', () => {
+  // A pending attempt, prepared, sending or saved: it is recovered or retired as an attempt first, never dropped here.
+  for (const phase of ['prepared', 'sending', 'saved']) {
+    const dir = makeTempDir(`mb-absent-root-${phase}-`);
+    const store = open(dir);
+    const g = settleForm(store, []);
+    const token = store.prepareAttempt({ family: 'form', key: FORM_KEY, baseGeneration: g.generation, root: g.root, knownScopes: [TABLE], declarationSha256: H('f') });
+    if (phase !== 'prepared') store.markSending(token, expected(FORM));
+    if (phase === 'saved') store.noteSaved(token, { proof: { savedSha256: H('1') } });
+    const before = fileText(store);
+    const args = { family: 'form', key: FORM_KEY, generation: g.generation, rootId: FORM, evidence: absent(FORM) };
+    assert.equal(codeOf(() => store.retireAbsentGroup(args)), CODES.pending, phase);
+    assert.equal(fileText(store), before, `${phase}: nothing written`);
+    if (phase === 'prepared') {
+      // The way out: a provably unsent attempt is retired first; then the group is.
+      store.retireUnsentAttempt({ token, baseGeneration: g.generation });
+      store.retireAbsentGroup(args);
+      assert.equal(open(dir).readGroup('form', FORM_KEY).committed, null);
+    }
+  }
+
+  // A workflow effect of a pending attempt on the group (an activation still unsent counts: it may yet be sent).
+  const wf = makeTempDir('mb-absent-root-effect-');
+  const ws = open(wf);
+  const rule = settleRule(ws, 'account/hide', RULE);
+  const wt = ws.prepareAttempt({ family: 'rule', key: 'account/hide', baseGeneration: rule.generation, root: rule.root, knownScopes: [], declarationSha256: H('f') });
+  ws.markSending(wt, expected(RULE, [], 'rule-v1'));
+  ws.recordWorkflowEffect(activation(wt, 'W/"3"', { baseGeneration: rule.generation }));
+  const wfBefore = fileText(ws);
+  let refusal = null;
+  try { ws.retireAbsentGroup({ family: 'rule', key: 'account/hide', generation: rule.generation, rootId: RULE, evidence: absent(RULE) }); } catch (e) { refusal = e; }
+  assert.deepEqual([refusal && refusal.code, /workflow effect/.test(refusal && refusal.message)], [CODES.pending, true]);
+  assert.equal(fileText(ws), wfBefore);
+
+  // A publish that may have been sent (dispatching, then unconfirmed): refused with the dispatch's decision as data.
+  const pub = makeTempDir('mb-absent-root-publish-');
+  const ps = open(pub);
+  const pg = settleForm(ps, []);
+  const pargs = { family: 'form', key: FORM_KEY, generation: pg.generation, rootId: FORM, evidence: absent(FORM) };
+  ps.markPublishDispatch({ groups: [{ family: 'form', key: FORM_KEY }], scope: TABLE, token: 'dispatch-1' });
+  let pubBefore = fileText(ps);
+  assert.deepEqual(blockedShape(() => ps.retireAbsentGroup(pargs)), blockedBy('dispatch-1'), 'dispatching');
+  assert.equal(fileText(ps), pubBefore);
+  ps.notePublishOutcome({ token: 'dispatch-1', outcome: 'unconfirmed' });
+  pubBefore = fileText(ps);
+  assert.deepEqual(blockedShape(() => ps.retireAbsentGroup(pargs)), blockedBy('dispatch-1'), 'unconfirmed');
+  assert.equal(fileText(ps), pubBefore);
+  // The way out of that one is the publish's own: accept its risk (or confirm it); the debt is owed again, then retirable.
+  ps.acceptUncertainPublication({ scope: TABLE, dispatchToken: 'dispatch-1', approval: publicationRiskApproval(TABLE) });
+  ps.retireAbsentGroup(pargs);
+  const final = JSON.parse(fileText(ps));
+  assert.deepEqual([final.groups.length, final.publicationRiskAcceptances.length, final.retiredGroups[0].publication], [0, 1, 'owed']);
+});
+
+test('absent root: two handles race under the lease, a failed write leaves the bytes, the audit stays bounded, and a build that does not know it refuses the file', () => {
+  const dir = makeTempDir('mb-absent-root-race-');
+  const a = open(dir);
+  const b = open(dir);
+  const g = settleForm(a, []);
+  const args = { family: 'form', key: FORM_KEY, generation: g.generation, rootId: FORM, evidence: absent(FORM) };
+  a.retireAbsentGroup(args);
+  const once = fileText(a);
+  assert.equal(codeOf(() => b.retireAbsentGroup(args)), CODES.notSettled, 'the stale handle rereads under the lease and finds no group');
+  assert.equal(fileText(a), once);
+  assert.equal(JSON.parse(once).retiredGroups.length, 1);
+
+  const crash = makeTempDir('mb-absent-root-crash-');
+  const cg = settleForm(open(crash), []);
+  const crashBefore = fs.readFileSync(open(crash).file, 'utf8');
+  const failing = open(crash, { deps: { writeFileAtomic: () => { throw new Error('crash before the replace'); } } });
+  assert.equal(codeOf(() => failing.retireAbsentGroup({ ...args, generation: cg.generation })), CODES.writeFailed);
+  assert.equal(fs.readFileSync(failing.file, 'utf8'), crashBefore);
+  assert.equal(open(crash).readGroup('form', FORM_KEY).committed.generation, cg.generation);
+
+  // Newest last, at most RETIRED_GROUPS_KEPT; anything else in the list makes the file unreadable, unchanged.
+  const bound = makeTempDir('mb-absent-root-bound-');
+  const bs = open(bound);
+  const bg = settleForm(bs, []);
+  const old = (i) => ({ family: 'form', key: `old/${i}`, generation: `gen-${i}`, rootId: FORM, reason: 'root-absent', publication: 'owed', at: '2025-01-01T00:00:00.000Z' });
+  writeRaw(bs, (d) => { d.retiredGroups = Array.from({ length: RETIRED_GROUPS_KEPT }, (_, i) => old(i)); });
+  bs.refresh();
+  bs.retireAbsentGroup({ ...args, generation: bg.generation });
+  const kept = JSON.parse(fileText(bs)).retiredGroups;
+  assert.deepEqual([kept.length, kept[0].key, kept[kept.length - 1].generation], [RETIRED_GROUPS_KEPT, 'old/1', bg.generation]);
+  for (const [label, list] of [
+    ['too many', Array.from({ length: RETIRED_GROUPS_KEPT + 1 }, (_, i) => old(i))],
+    ['another reason', [{ ...old(0), reason: 'deleted' }]],
+    ['a publish that may have been sent', [{ ...old(0), publication: 'unconfirmed' }]],
+    ['an untyped field', [{ ...old(0), paid: true }]],
+    ['no time', [{ ...old(0), at: 'yesterday' }]],
+  ]) {
+    writeRaw(bs, (d) => { d.retiredGroups = list; });
+    const text = fileText(bs);
+    assert.equal(codeOf(() => open(bound)), CODES.unreadable, label);
+    assert.equal(fileText(bs), text, `${label}: unchanged`);
+  }
+
+  // A build that predates the audit list reads it as an unexpected key: the whole file is refused, not read as empty.
+  writeRaw(bs, (d) => { d.retiredGroups = [old(0)]; d.retiredGroupsV2 = []; });
+  assert.equal(codeOf(() => open(bound)), CODES.unreadable);
 });

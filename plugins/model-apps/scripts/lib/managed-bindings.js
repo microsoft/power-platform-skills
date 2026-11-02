@@ -803,6 +803,44 @@ function validateRiskAcceptances(list, where) {
   });
 }
 
+// The audit of groups retired because their root was proved gone (retireAbsentGroup): which group, at which
+// generation, bound to which root, with the publication state it was retired in, and when. It records that the root was
+// proved absent and the group retired: NOT that its content was published or its debt paid (`publication: 'owed'`
+// says the debt was dropped unpaid, with nothing left to publish). Newest last, at most RETIRED_GROUPS_KEPT; it grants
+// nothing by itself. A build that predates it reads the key as unexpected and refuses the whole file (fail closed).
+const RETIRED_GROUPS_KEPT = 32;
+const RETIRABLE_PUBLICATIONS = new Set(['owed', 'not-needed', 'confirmed']);
+const ISO_INSTANT = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
+function validateRetiredGroups(list, where) {
+  if (!Array.isArray(list) || list.length > RETIRED_GROUPS_KEPT) throw invalid(where, `is not a list of at most ${RETIRED_GROUPS_KEPT} retired groups`);
+  list.forEach((x, i) => {
+    const w = `${where}[${i}]`;
+    closedKeys(x, ['family', 'key', 'generation', 'rootId', 'reason', 'publication', 'at'], w);
+    if (!FAMILIES.includes(x.family) || !nonempty(x.key)) throw invalid(w, 'has no family and key');
+    tokenField(x.generation, `${w}.generation`);
+    guidField(x.rootId, `${w}.rootId`);
+    if (x.reason !== 'root-absent') throw invalid(w, 'has an unknown reason');
+    if (x.publication !== null && !RETIRABLE_PUBLICATIONS.has(x.publication)) throw invalid(w, 'names a publication no group is retired in');
+    if (typeof x.at !== 'string' || !ISO_INSTANT.test(x.at) || Number.isNaN(Date.parse(x.at))) throw invalid(w, 'has no time');
+  });
+}
+
+// The caller's proof that a group's root row is gone (retireAbsentGroup). The store cannot read the service, so the
+// caller must have proved it from a FRESH read of BOTH layers, each answering the missing-row 404 (Dataverse
+// 0x80040217) for exactly this id: for a systemform, readSystemFormRootPresence(client, id) === 'absent'. Shape:
+//   { kind: 'root-absent', rootId: '<guid>', saved: 'not-found', published: 'not-found' }
+// A missing published layer alone is NOT absence (a never-published row still has its saved layer), and neither is a
+// 403, a timeout or an unreadable answer: only both layers 'not-found' is accepted, typed, never inferred.
+function checkAbsenceEvidence(evidence, rootId) {
+  const refuse = (why) => storeError(CODES.notSettled, `retiring a managed group needs typed evidence that its root ${rootId} is gone from both layers ({ kind: 'root-absent', rootId, saved: 'not-found', published: 'not-found' }): ${why}`);
+  if (!isObj(evidence)) throw refuse('none was given');
+  const keys = Object.keys(evidence).sort().join(',');
+  if (keys !== 'kind,published,rootId,saved') throw refuse(`it has the fields ${keys || 'none'}`);
+  if (evidence.kind !== 'root-absent') throw refuse(`its kind is ${JSON.stringify(evidence.kind)}`);
+  if (evidence.saved !== 'not-found' || evidence.published !== 'not-found') throw refuse('both the saved and the published layer must have answered not-found');
+  if (typeof evidence.rootId !== 'string' || !normalizeGuid(evidence.rootId) || normalizeGuid(evidence.rootId) !== normalizeGuid(rootId)) throw refuse(`it is about ${JSON.stringify(evidence.rootId)}`);
+}
+
 function parseEnvelope(text, expect) {
   let data;
   try {
@@ -811,7 +849,7 @@ function parseEnvelope(text, expect) {
   } catch (e) {
     throw storeError(CODES.unreadable, `the managed binding store is not valid JSON (${e.message})`);
   }
-  closedKeys(data, ['schemaVersion', 'environmentFingerprint', 'appUniqueName', 'solutionUniqueName', 'revision', 'groups', 'attempts', 'workflowEffects', 'publicationRiskAcceptances'], 'the managed binding store');
+  closedKeys(data, ['schemaVersion', 'environmentFingerprint', 'appUniqueName', 'solutionUniqueName', 'revision', 'groups', 'attempts', 'workflowEffects', 'publicationRiskAcceptances', 'retiredGroups'], 'the managed binding store');
   if (data.schemaVersion !== SCHEMA_VERSION) throw invalid('the managed binding store', `has schema version ${data.schemaVersion}, not ${SCHEMA_VERSION}`);
   if (data.environmentFingerprint !== expect.environmentFingerprint || data.appUniqueName !== expect.appUniqueName || data.solutionUniqueName !== expect.solutionUniqueName) {
     throw invalid('the managed binding store', 'belongs to another environment, app or solution');
@@ -819,6 +857,7 @@ function parseEnvelope(text, expect) {
   if (!Number.isSafeInteger(data.revision) || data.revision < 0) throw invalid('the managed binding store', 'has no revision');
   for (const list of ['groups', 'attempts', 'workflowEffects']) if (!Array.isArray(data[list])) throw invalid('the managed binding store', `has no ${list} list`);
   if (data.publicationRiskAcceptances !== undefined) validateRiskAcceptances(data.publicationRiskAcceptances, 'publicationRiskAcceptances');
+  if (data.retiredGroups !== undefined) validateRetiredGroups(data.retiredGroups, 'retiredGroups');
 
   const header = { appUniqueName: data.appUniqueName, environmentFingerprint: data.environmentFingerprint };
   const invalidGroups = new Map();
@@ -1020,6 +1059,7 @@ function discoverManagedStore(args) {
 function openManagedBindings({ workspaceDir, environment, appUniqueName, solutionUniqueName, barrier = null, deps = {} }) {
   const ctx = resolveContext({ workspaceDir, environment, appUniqueName, solutionUniqueName });
   const write = typeof deps.writeFileAtomic === 'function' ? deps.writeFileAtomic : writeFileAtomic;
+  const now = typeof deps.now === 'function' ? deps.now : Date.now;
   let state = readStoreFile(ctx) || { envelope: emptyEnvelope(ctx.expect), invalidGroups: new Map(), sha256: null };
 
   const unitOf = (st, family, key) => unitsOf(st.envelope, st.invalidGroups).find((u) => u.family === family && u.key === key)
@@ -1680,6 +1720,57 @@ function openManagedBindings({ workspaceDir, environment, appUniqueName, solutio
       return { retired: true, effects: removed };
     },
     /**
+     * Retire the committed group (`family`, `key`) whose root row is gone from the service, so a group that can no
+     * longer be published, used or re-proved stops blocking every later build (for example a declared dashboard with an
+     * owed, never-sent publish whose declaration was removed and whose row the maker then deleted).
+     * `evidence` is REQUIRED and typed: { kind: 'root-absent', rootId, saved: 'not-found', published: 'not-found' }.
+     * The store cannot read the service: the CALLER must prove it from a fresh read of both layers that each answered
+     * the missing-row 404 for exactly `rootId` (for a systemform, readSystemFormRootPresence(client, rootId) === 'absent').
+     * A missing published layer alone is not absence, nor is a 403, a timeout or an unreadable answer.
+     * Under the record lease the file is reread, and in that one change the group must still be valid, at
+     * `generation`, bound to the root `rootId` (GUID spellings compare equal), with nothing that could still land:
+     * no pending attempt (so no workflow effect either: every effect belongs to a pending attempt), and a publication
+     * that is `owed` with no dispatch token, `not-needed` or `confirmed` (or none, for a family that never publishes).
+     * Otherwise it refuses with nothing written: `managed-not-settled` (bad arguments or evidence, or no such group),
+     * `managed-binding-group-invalid`, `managed-binding-generation-conflict` (another generation or root),
+     * `managed-settlement-pending` (a pending attempt or effect) or `managed-publication-unconfirmed` (a publish that
+     * may have been sent; it carries { dispatchToken, approval, remedy }). The normal write rules apply, including
+     * `managed-binding-store-full`.
+     * One write removes that group only and appends { family, key, generation, rootId, reason: 'root-absent',
+     * publication, at } to `retiredGroups` (newest last, at most RETIRED_GROUPS_KEPT). The entry says the root was
+     * proved gone and the group retired: NOT that its content was published or its debt paid. Every other group,
+     * attempt, effect, publication and risk acceptance stays as it was, and this run's barrier (holds, quarantine) is
+     * not touched. Answers { retired: { family, key, generation } }.
+     */
+    retireAbsentGroup({ family, key, generation, rootId, evidence } = {}) {
+      if (!FAMILIES.includes(family) || !nonempty(key)) throw storeError(CODES.notSettled, 'retireAbsentGroup needs the group\'s family and key');
+      if (typeof generation !== 'string' || !generation) throw storeError(CODES.notSettled, 'retireAbsentGroup needs the generation the root was proved absent for');
+      if (typeof rootId !== 'string' || !normalizeGuid(rootId)) throw storeError(CODES.notSettled, 'retireAbsentGroup needs the id of the root proved absent');
+      checkAbsenceEvidence(evidence, rootId);
+      const name = `the managed ${family} "${key}"`;
+      mutate((env, disk) => {
+        usable(unitOf(disk, family, key));
+        const g = env.groups.find((x) => x.family === family && x.key === key);
+        if (!g) throw storeError(CODES.notSettled, `${name} has no committed group to retire`);
+        if (g.generation !== generation) throw storeError(CODES.conflict, `${name} is at another generation than the one its root was proved absent for`);
+        if (normalizeGuid(g.root.id) !== normalizeGuid(rootId)) throw storeError(CODES.conflict, `${name} is bound to the root ${g.root.id}, not ${rootId}`);
+        if (env.workflowEffects.some((e) => e.family === family && e.key === key)) throw storeError(CODES.pending, `${name} has a workflow effect that is not settled; it is never retired`);
+        if (env.attempts.some((a) => a.family === family && a.key === key)) throw storeError(CODES.pending, `${name} has a pending attempt that may still land; it is recovered, never retired`);
+        const p = g.publication;
+        if (p && UNCERTAIN.has(p.state)) {
+          throw storeError(CODES.publicationUncertain, `${name} has a publish that may have been sent and is not proved live; it is never retired over it`, blockedPublication(p.scope, p.dispatchToken));
+        }
+        if (p && (!RETIRABLE_PUBLICATIONS.has(p.state) || (p.state === 'owed' && p.dispatchToken !== null))) {
+          throw storeError(CODES.pending, `${name} has a publication in state ${p.state} that is not settled; it is never retired`);
+        }
+        env.groups = env.groups.filter((x) => x !== g);
+        const list = Array.isArray(env.retiredGroups) ? env.retiredGroups : [];
+        list.push({ family, key, generation, rootId: g.root.id, reason: 'root-absent', publication: p ? p.state : null, at: new Date(now()).toISOString() });
+        env.retiredGroups = list.slice(-RETIRED_GROUPS_KEPT);
+      });
+      return { retired: { family, key, generation } };
+    },
+    /**
      * Persist one workflow effect as definitely-unsent; it must belong to the pending attempt `attemptToken`.
      * The same effect asked for again by the same attempt (every field that says what it is equal), while its record is
      * still definitely-unsent with no dispatch token, answers that record instead of a second one: it never started, so
@@ -1930,4 +2021,5 @@ module.exports = {
   publicationRiskApproval,
   publicationRemedy,
   blockedPublication,
+  RETIRED_GROUPS_KEPT,
 };
