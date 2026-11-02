@@ -1886,7 +1886,8 @@ function openManagedBindings({ workspaceDir, environment, appUniqueName, solutio
      * its workflow effects as they are now. Pass it to retireAbsentGroup, which refuses when they changed since. The
      * order is the contract: observe, then read every layer by the root id, then retire. An observation taken AFTER
      * the read proves nothing (a create may have landed between the read and it), so never refresh it to get past a
-     * refusal: observe again and read again. Refuses (`managed-not-settled`) when there is nothing to retire, and as
+     * refusal: stop this invocation instead, and let a later invocation observe again, read every layer again, then
+     * retire. Refuses (`managed-not-settled`) when there is nothing to retire, and as
      * readGroup for a group the file cannot vouch for. Writes nothing.
      */
     observeRetirement({ family, key } = {}) {
@@ -1911,10 +1912,13 @@ function openManagedBindings({ workspaceDir, environment, appUniqueName, solutio
      * `observation` is REQUIRED: what observeRetirement answered BEFORE those reads. Under the lease the group, its
      * attempt and its effects must be exactly as observed; any progress since (a send counted, an effect dispatched or
      * confirmed, a root acknowledged) may have put the row back after the read, so the retirement is refused
-     * (`managed-binding-generation-conflict`, nothing written, no hold released): observe again, read again, retry.
+     * (`managed-binding-generation-conflict`, nothing written, no hold released). The caller stops this invocation
+     * and keeps what it holds; a later invocation observes again, reads every layer again, then retires. Never retry
+     * in the same invocation with a fresh observation: it would be taken after the read.
      * `generation` is the committed group's generation, or null for a group never committed. `attemptToken` names the
      * pending attempt to retire with it: required when one is pending, refused when none is, and accepted only for a
-     * workflow family (rule, bpf), whose every write is a journaled effect, so its own record shows nothing on its way:
+     * workflow family (rule, bpf), whose every write is a journaled effect (sent through withWorkflowEffect, which
+     * records it before it leaves), so its own record shows nothing on its way:
      * every effect it owns `confirmed`, `fulfilled` or `definitely-unsent` with no dispatch token, AND an affirmative
      * record that nothing it may have sent outside that journal can still land: it is still `prepared` (never marked
      * sending), or its send window counted no possibly applied mutation (attemptProvenUnsent), or its own create of
