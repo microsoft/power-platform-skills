@@ -3730,27 +3730,46 @@ async function runSdkBuildPhases(spec, opts, owed) {
   // definitely-unsent publish (or no publish to settle) has its root read fresh in BOTH layers by its id
   // (readSystemFormRootPresence). Only 'absent', the missing-row 404 (0x80040217) in both layers, is evidence: a row in
   // either layer, a 403, a timeout, a malformed answer or any read that fails keeps the fence (and keeps the group). On
-  // that evidence the store retires the group in one generation-checked change (retireAbsentGroup: the same generation
-  // and root, no attempt, no publish that may have been sent; it refuses with nothing written otherwise, and the fence
-  // stays), which records that the root was proved gone and the group retired, NOT that its content was published or
-  // its debt paid. A retired group installs no fence; a block this invocation already holds on the scope (a caller's
-  // barrier) is never cleared, so that invocation stays stopped and the next proceeds from the file. A group with a
-  // pending attempt, or a publish that may have been sent, is not read here: the store holds those (openManagedContext).
+  // that evidence the store retires the group in one change checked against what it observed before the reads
+  // (retireAbsentGroup: the same observation, generation and root, no attempt, no publish that may have been sent; it
+  // refuses with nothing written otherwise, and the fence stays), which records that the root was proved gone and the
+  // group retired, NOT that its content was published or its debt paid. A retired group installs no fence; a block this
+  // invocation already holds on the scope (a caller's barrier) is never cleared, so that invocation stays stopped and the
+  // next proceeds from the file. A group with a pending attempt, or a publish that may have been sent, is not read here:
+  // the store holds those (openManagedContext).
   if (bindingGroups && bindingGroups.store) {
     const store = bindingGroups.store;
     const declaredOn = new Set((spec.dashboards || []).filter(isDeclaredDashboardOn).map(declaredDashboardKey));
     const settledHere = has('dashboards') ? declaredOn : new Set();
     const client = provision && provision.dataverse;
-    // The order is the proof's: (1) the store observation, (2) the fresh reads of both layers, (3) the retirement bound to
-    // that observation, so a managed write that lands between them makes the store refuse the retirement instead of
-    // retiring on a proof about an older state. The observation is the group's generation and root as read from the store
-    // before the reads; keep all three steps here so a store-issued observation token replaces it in one place.
-    const retireIfAbsent = async (unit) => {
-      if (unit.attempt || !client) return false; // an attempt (journal empty or not) is never retired here
+    // A removed declaration's group that may be retired: no attempt (journal empty or not, it is never retired here), bound
+    // to a root, and with an owed, definitely-unsent dashboard publish or none to settle.
+    const retirable = (unit) => {
+      if (!unit || unit.invalid || unit.attempt || unit.family !== 'dashboard' || declaredOn.has(unit.key)) return false;
       const group = unit.group;
-      const observed = group && group.root && group.root.id ? { generation: group.generation, rootId: group.root.id } : null;
-      if (!observed) return false;
-      const { rootId } = observed;
+      if (!group || !group.root || !group.root.id) return false;
+      const pub = group.publication;
+      return !pub || pub.state === 'not-needed' || pub.state === 'confirmed'
+        || (pub.state === 'owed' && pub.dispatchToken === null && !!pub.scope && pub.scope.type === 'dashboard');
+    };
+    // The order is the proof's, and every step is here and nowhere else: (1) observeRetirement, which rereads the store
+    // file and fingerprints the group as it is now; (2) the fresh reads of both layers; (3) retireAbsentGroup with that
+    // observation. A managed write that lands on the group between (1) and (3) (another invocation that settled its
+    // publish against a live layer, prepared a change, committed) makes the store refuse the retirement instead of
+    // retiring on a proof about an older state. An observation taken after the reads proves nothing (the row may have come
+    // back between the read and it), so a refusal is never retried here with a new one: the next build observes and
+    // reads again. The generation and root retired are the ones the observation saw, taken from the reread store.
+    const retireIfAbsent = async (key) => {
+      let observation;
+      try {
+        ({ observation } = store.observeRetirement({ family: 'dashboard', key }));
+      } catch {
+        return false; // the file no longer vouches for a group to retire: the fence below decides from the reread store
+      }
+      const unit = store.snapshot().units().find((u) => u.family === 'dashboard' && u.key === key);
+      if (!retirable(unit)) return false;
+      const { generation, publication } = unit.group;
+      const rootId = unit.group.root.id;
       let presence;
       try {
         presence = await readSystemFormRootPresence(client, rootId);
@@ -3759,21 +3778,27 @@ async function runSdkBuildPhases(spec, opts, owed) {
       }
       if (presence !== 'absent') return false;
       try {
-        store.retireAbsentGroup({ family: 'dashboard', key: unit.key, generation: observed.generation, rootId: observed.rootId, evidence: { kind: 'root-absent', rootId, saved: 'not-found', published: 'not-found' } });
-      } catch {
-        return false; // the store refused (another generation or root, a publish that may have been sent, a failed write): the fence stays
+        store.retireAbsentGroup({ family: 'dashboard', key, generation, rootId, observation, evidence: { kind: 'root-absent', rootId, saved: 'not-found', published: 'not-found' } });
+      } catch (err) {
+        // The store refused (it changed since the observation, another generation or root, a publish that may have been
+        // sent, a failed write): nothing was retired, and the group and its fence stay as they were.
+        if (typeof opts.warn === 'function') {
+          opts.warn(`declared dashboard "${key}": its dashboard ${rootId} read as gone from both layers, but its managed record was not retired (${(err && err.code) || 'error'}: ${String((err && err.message) || err)}); it is kept as it was, and a later build reads it again.`);
+        }
+        return false;
       }
       if (typeof opts.warn === 'function') {
-        opts.warn(`declared dashboard "${unit.key}": managed-dashboard-retired — its dashboard ${rootId} is gone from both the saved and the published layer, and the spec no longer declares it, so its managed record was retired${group.publication && group.publication.state === 'owed' ? ' with its unpublished change, which was never published' : ''}. Nothing was sent for it; a dashboard declared under this key again is a new one.`);
+        opts.warn(`declared dashboard "${key}": managed-dashboard-retired — its dashboard ${rootId} is gone from both the saved and the published layer, and the spec no longer declares it, so its managed record was retired${publication && publication.state === 'owed' ? ' with its unpublished change, which was never published' : ''}. Nothing was sent for it; a dashboard declared under this key again is a new one.`);
       }
       return true;
     };
+    // Nothing is read when the store holds no retirable group, so every other build sends what it always sent.
+    if (client) {
+      for (const key of store.snapshot().units().filter(retirable).map((u) => u.key)) await retireIfAbsent(key);
+    }
     for (const unit of store.snapshot().units()) {
       const pub = unit.group && unit.group.publication;
       if (unit.invalid || unit.attempt || unit.family !== 'dashboard' || settledHere.has(unit.key)) continue;
-      const owedDebt = !!pub && pub.state === 'owed' && pub.dispatchToken === null && !!pub.scope && pub.scope.type === 'dashboard';
-      const noDebt = !pub || pub.state === 'not-needed' || pub.state === 'confirmed';
-      if (!declaredOn.has(unit.key) && (owedDebt || noDebt) && await retireIfAbsent(unit)) continue;
       if (!pub || pub.state !== 'owed' || !pub.scope || pub.scope.type !== 'dashboard') continue;
       const why = has('dashboards') ? 'this spec does not declare it' : 'this run does not run the dashboards phase';
       owed.barrier.quarantine([pub.scope], [pub.scope.id], `managed dashboard "${unit.key}" (its last change is saved and its publish is owed, and ${why}; declare it with reconcile: "declared" and run the dashboards phase to publish it through its proof, or, if it was deleted, remove its declaration: a build that reads it gone from both layers retires it)`);

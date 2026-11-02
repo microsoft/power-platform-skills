@@ -2923,7 +2923,9 @@ charts phases. A spec that uses none of them takes the legacy paths unchanged. W
   proof. The one other way out is for a REMOVED declaration whose dashboard was deleted: before the fence, a
   group with no attempt and an owed, definitely-unsent publish (or none to settle) has its root read fresh in
   both layers (`readSystemFormRootPresence`); only `absent` (the missing-row 404 in both) lets the store retire
-  it (`retireAbsentGroup`, generation- and root-checked) with the notice `managed-dashboard-retired`. A row in
+  it (`retireAbsentGroup`, generation- and root-checked, and bound to the `observeRetirement` observation taken
+  before the reads, so a change to the group while the build reads refuses it) with the notice
+  `managed-dashboard-retired`. A row in
   either layer, a 403, a timeout or any other failed read keeps the group and its fence; a block this
   invocation already holds is never cleared, so that invocation stays stopped and the next one is clean.
   The store's classification of owed debt (`classifyPersisted`) is unchanged; the fence is the build's. A withheld publish leaves the run

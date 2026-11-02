@@ -23,6 +23,7 @@ const { buildModelApp, authorizationKeys } = require('../build-model-app.js');
 const { readerFor, isolatedReaderFor } = require('../verify-model-app.js');
 const { main: downloadMain } = require('../download-model-app.js');
 const { verifySpec } = require('../lib/verify-spec.js');
+const { readSystemFormRootPresence } = require('../lib/systemform-published.js');
 const { readVerifyManifest } = require('../lib/declared-form-io.js');
 const { storeFileName } = require('../lib/managed-bindings.js');
 const { environmentFingerprint } = require('../lib/page-ownership-records.js');
@@ -1166,5 +1167,66 @@ test('removed settled: a deleted dashboard with no debt is retired once both lay
     assert.equal(committedGroup(dir), null);
     assert.equal(retiredOf(dir)[0].rootId, id);
     assert.notEqual(retiredOf(dir)[0].publication, 'owed');
+  });
+});
+
+// The removed-declaration dead end as first reported: the owed dashboard is deleted from both layers (the presence read
+// proves it), its declaration is removed and the build runs twice. Before the retirement both runs ended on the same
+// re-declaration instruction with zero requests, and re-declaring stopped on dashboard-bound-row-missing.
+test('removed owed liveness: two runs after the deletion finish, and declaring the key again afterwards is not stopped on the deleted row', async () => {
+  await withDashboards(true, async () => {
+    const w = await owedDashboard();
+    w.wire.saved.delete(w.id);
+    w.wire.published.delete(w.id);
+    const { sdk } = await sdkOver(w.wire);
+    assert.equal(await readSystemFormRootPresence(sdk.dataverse, w.id), 'absent');
+    const removed = dropDashboard(w.changed);
+    const first = await buildWith(w.wire, w.dir, removed);
+    const second = await buildWith(w.wire, w.dir, removed);
+    assert.equal(first.err, undefined, chainText(first.err));
+    assert.equal(second.err, undefined, chainText(second.err));
+    assert.equal(serviceWrites([...first.calls, ...second.calls]).length, 0);
+    assert.equal(committedGroup(w.dir), null);
+    assert.equal(retiredOf(w.dir).length, 1);
+    const redeclared = await buildWith(w.wire, w.dir, w.changed);
+    assert.doesNotMatch(chainText(redeclared.err), /dashboard-bound-row-missing/);
+  });
+});
+
+// The retirement is bound to the store as observed BEFORE the two layer reads. Here another invocation settles the owed
+// publish against a live published layer (confirmPublished, no dispatch: owed becomes not-needed) while this build is
+// reading the saved layer: same generation, same root, a state that is itself retirable. Only the observation tells the
+// store that the group moved after the proof's read, so the retirement must be refused and nothing written for it.
+test('removed owed: a store change between the observation and the retirement refuses the retirement; the next build observes and reads again', async () => {
+  await withDashboards(true, async () => {
+    const w = await owedDashboard();
+    w.wire.saved.delete(w.id);
+    w.wire.published.delete(w.id);
+    const removed = dropDashboard(w.changed);
+    const request = w.wire.request;
+    let raced = 0;
+    w.wire.request = async (req) => {
+      if (!raced && String(req.method).toUpperCase() === 'GET' && req.url.includes(w.id) && /RetrieveUnpublished/.test(req.url)) {
+        raced += 1;
+        storeOf(w.dir).confirmPublished({ groups: [{ family: 'dashboard', key: KEY, generation: w.group.generation }], token: null, proof: { publishedSha256: w.group.publication.desiredSha256 || 'a'.repeat(64) } });
+      }
+      return request(req);
+    };
+    const warnings = [];
+    const r = await buildWith(w.wire, w.dir, removed, { warn: (m) => warnings.push(String(m)) });
+    w.wire.request = request;
+    assert.equal(raced, 1, 'the concurrent change landed between the observation and the retirement');
+    assert.equal(serviceWrites(r.calls).length, 0);
+    assert.deepEqual(retiredOf(w.dir), [], 'nothing is retired on a proof about an older state');
+    const kept = committedGroup(w.dir);
+    assert.equal(kept.generation, w.group.generation);
+    assert.equal(kept.publication.state, 'not-needed', 'the concurrent change is kept');
+    assert.ok(warnings.some((m) => m.includes(`declared dashboard "${KEY}"`) && m.includes('managed-binding-generation-conflict') && m.includes('not retired')), warnings.join('\n'));
+    assert.ok(!warnings.some((m) => m.includes('managed-dashboard-retired')), warnings.join('\n'));
+    const next = await buildWith(w.wire, w.dir, removed);
+    assert.equal(next.err, undefined, chainText(next.err));
+    assert.equal(next.calls.filter(savedReadOf(w.id)).length, 1, 'the next build reads the root again');
+    assert.equal(committedGroup(w.dir), null);
+    assert.equal(retiredOf(w.dir)[0].publication, 'not-needed');
   });
 });
