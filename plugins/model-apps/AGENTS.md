@@ -2960,7 +2960,18 @@ charts phases. A spec that uses none of them takes the legacy paths unchanged. W
   stored rule attempt whose declaration left the spec keeps the run incomplete (`managed-not-settled`) while
   any of its effects may have been sent (`holdRemovedWorkflowAttempts`): the legacy path neither reads nor
   creates a rule of the table and name that attempt declared (its create may not be visible yet), nor writes
-  the row it holds; one whose effects are all unsent only warns. Validation refuses a declared and an undeclared rule with one `<table>/<name>`, and two declared
+  the row it holds; one whose effects are all unsent only warns. A removed group whose row is proved gone is
+  retired (`retireAbsentGroup`, workflow evidence `{ kind: 'root-absent', rootId, row: 'not-found' }`) when a
+  fresh exact-id `GET workflows(<id>)` this run made answered 404 `0x80040217` (`readWorkflowRowPresence`):
+  an attempt whose effects are all settled (`confirmed`, `fulfilled`, or `definitely-unsent` with no dispatch
+  token; e.g. a confirmed create whose activation was refused unapplied), with its token, at the generation it
+  is based on (`null` when nothing was committed); or a committed group with no attempt or effect. The notice
+  is a warning `managed-root-retired: declared <noun> "<key>" …` and never claims an activation. A present row,
+  any other answer (403, a 404 without that code, another row, a lost answer) or a store refusal keeps the hold;
+  a `dispatching`/`unconfirmed` effect is held without a read, and an attempt with an empty effect journal is
+  never retired. The order is observe, read, retire: the store file is re-read before and after the row read,
+  and a group that changed in between is kept (one place, `retire` in `holdRemovedWorkflowAttempts`, so a store
+  observation token replaces it there). Validation refuses a declared and an undeclared rule with one `<table>/<name>`, and two declared
   rules with one key. Nothing is published: a rule's activation is its state write.
   **Verify and download** (`lib/declared-rule-io.js`): verify reads each bound declared rule fresh by its
   recorded id through the isolated reader (`readerFor(...).declaredRule`) and runs `verifyDeclaredRule`
@@ -3012,7 +3023,10 @@ charts phases. A spec that uses none of them takes the legacy paths unchanged. W
   declaration left the spec holds the run (`managed-not-settled`) exactly as a rule's does
   (`holdRemovedWorkflowAttempts`): the legacy path neither reads nor creates a flow of the table and name that
   attempt declared (a create whose answer was lost may not be visible yet, or may still arrive), nor writes the
-  row it holds. Nothing is published.
+  row it holds, and a removed flow whose row is proved gone is retired as a rule's is. A declaration that changes
+  nothing of the workflow but differs from the group's `originalDeclaration` (its `securityRoles`, say) is the
+  plan's `declaration` mode: no workflow request, and a commit that records it, so the managed download restores
+  the current intent; an identical one is a no-op with no store write. Nothing is published.
   **Verify and download** (`lib/declared-bpf-io.js`): verify reads each bound declared flow fresh by its
   recorded id through the isolated reader (`readerFor(...).declaredBpf`) and runs `verifyDeclaredBpf`
   (`managed-bpf` check): the helper's one read-only `projectBpf`, certified only when it is a shape the

@@ -82,7 +82,8 @@ const storeOf = (dir) => openManagedBindings({ workspaceDir: dir, environment: O
 
 // One invocation, as build-model-app.js assembles it: a fresh barrier, send observer, workflow effect gate and SDK over the same
 // wire and the same build workspace `dir`, which holds the binding store. `gate: false` leaves the client without a gate.
-async function build(wire, dir, spec, { gate = true, ...opts } = {}) {
+// `configureSdk(sdk, gate)`, when given, adjusts that invocation's SDK before the build runs (e.g. an operation it lacks).
+async function build(wire, dir, spec, { gate = true, configureSdk, ...opts } = {}) {
   const barrier = createPublicationBarrier();
   const sendObserver = createAttemptSendObserver();
   const workflowEffectGate = gate ? createDeferredWorkflowGate() : null;
@@ -92,6 +93,7 @@ async function build(wire, dir, spec, { gate = true, ...opts } = {}) {
     workflowEffectGate.bind = (store) => { binds.push(store); return bind(store); };
   }
   const { sdk } = await sdkOver(wire, { barrier, observer: sendObserver, workflowEffectGate });
+  if (configureSdk) await configureSdk(sdk, workflowEffectGate);
   const mark = wire.log.length;
   const warnings = [];
   let out;
@@ -725,5 +727,195 @@ test('verify reads a pending or bound declared flow by its own id before any nam
     const committed = await verifySpec(specWith([FLOW]), await readOver(bound, bq), { managedManifest: manifestOf(bdir) });
     assert.deepEqual(legacyChecks(committed), [[false, DRAFT]]);
     assert.ok(!bq.some((q) => /\bname eq/.test(q)));
+  });
+});
+// --- a removed flow whose row is gone ----------------------------------------------------------------------------------------
+
+const RETIRED = /^managed-root-retired: declared business process flow "new_ticket\/Ticket process": its row [0-9a-f-]{36} is gone \(a read by its exact id answered not found\) and the spec no longer declares it/;
+const isStateChange = (e) => e.method === 'PATCH' && /^workflows\(/i.test(e.path);
+const idReadOf = (id) => (e) => e.method === 'GET' && e.path.toLowerCase() === `workflows(${id})`;
+
+for (const [how, refuse] of [
+  ['answered 412 and was not applied', (wire) => wire.script(isStateChange, { statusCode: 412, body: { error: { code: '0x80060882', message: 'version mismatch' } }, unapplied: true })],
+  ['met a row a maker saved after the run read it', (wire) => wire.advance(isStateChange)],
+]) {
+  test(`a removed flow whose activation ${how} is retired, with a notice, once a fresh read by its id answers not found; until then it is held`, async () => {
+    await withBpf(true, async () => {
+      const wire = createWorkflowWire();
+      const dir = makeTempDir('declared-bpf-');
+      refuse(wire);
+      const first = await build(wire, dir, specWith([FLOW]));
+      assert.ok(first.err, 'the refused activation stops the run');
+      const held = storeOf(dir).readGroup('bpf', GROUP);
+      const id = held.pending.root.id;
+      assert.deepEqual(held.effects.map((e) => [e.effect, e.state]), [['create', 'confirmed'], ['state', 'definitely-unsent']]);
+      assert.equal(wire.row(id).statecode, 0, 'Draft');
+
+      // The row is there: held, and nothing is written.
+      const present = await build(wire, dir, specWith([]));
+      assert.equal(present.err && present.err.code, 'managed-not-settled', chainText(present.err));
+      assert.match(chainText(present.err), /it is not retired: its row is still there/);
+      assert.deepEqual(present.writes, []);
+      assert.equal(present.lines.filter((l) => l === 'GET workflows(<id>)?$select').length, 1, 'one read by its exact id');
+
+      // Gone, but the answer proves nothing: a refusal, a 404 without the documented code, another row. Held each time.
+      wire.rows.delete(id);
+      for (const answer of [
+        { statusCode: 403, body: { error: { code: '0x80040220', message: 'Principal user is missing prvReadWorkflow privilege' } } },
+        { statusCode: 404, body: { error: { code: '0x80060888', message: 'Resource not found for the segment' } } },
+        { statusCode: 200, body: { workflowid: '77777777-7777-4777-8777-777777777777' } },
+      ]) {
+        wire.script(idReadOf(id), answer);
+        const unread = await build(wire, dir, specWith([]));
+        assert.equal(unread.err && unread.err.code, 'managed-not-settled', JSON.stringify(answer));
+        assert.match(chainText(unread.err), /it is not retired: its row could not be read/);
+        assert.deepEqual(unread.writes, []);
+        assert.ok(storeOf(dir).readGroup('bpf', GROUP).pending, 'still pending');
+      }
+
+      // Proved gone: retired with a notice that names the key and claims no change; nothing is written, and it stays retired.
+      const retired = await build(wire, dir, specWith([]));
+      assert.equal(retired.err, undefined, chainText(retired.err));
+      assert.deepEqual(retired.writes, []);
+      const notices = retired.warnings.filter((w) => w.startsWith('managed-root-retired:'));
+      assert.equal(notices.length, 1, retired.warnings.join('\n'));
+      assert.match(notices[0], RETIRED);
+      assert.doesNotMatch(notices[0], /\bactivated\b/);
+      const after = storeOf(dir);
+      assert.deepEqual(after.readGroup('bpf', GROUP), { committed: null, pending: null, effects: [] });
+      const entry = after.snapshot().envelope.retiredGroups.at(-1);
+      assert.deepEqual([entry.family, entry.key, entry.generation, entry.rootId, entry.reason], ['bpf', GROUP, null, id, 'root-absent']);
+      assert.deepEqual(entry.attempt.effects, [{ effect: 'create', state: 'confirmed' }, { effect: 'state', state: 'definitely-unsent' }], 'the record says what each change was');
+      const again = await build(wire, dir, specWith([]));
+      assert.equal(again.err, undefined);
+      assert.deepEqual(again.lines.filter((l) => /workflows/i.test(l)), [], 'nothing left to read');
+      assert.deepEqual(again.warnings.filter((w) => w.startsWith('managed-root-retired:')), []);
+    });
+  });
+}
+
+test('a committed flow the spec no longer declares is retired once its row is proved gone, so verify stops checking it; a row that is there or cannot be read keeps it', async () => {
+  await withBpf(true, async () => {
+    const wire = createWorkflowWire();
+    const dir = makeTempDir('declared-bpf-');
+    assert.equal((await build(wire, dir, specWith([FLOW]))).err, undefined);
+    const id = storeOf(dir).readGroup('bpf', GROUP).committed.root.id;
+
+    const present = await build(wire, dir, specWith([]));
+    assert.equal(present.err, undefined);
+    assert.deepEqual(present.writes, []);
+    assert.deepEqual(present.warnings, []);
+    assert.ok(storeOf(dir).readGroup('bpf', GROUP).committed, 'still managed');
+
+    wire.rows.delete(id);
+    wire.script(idReadOf(id), { statusCode: 403, body: { error: { code: '0x80040220', message: 'Principal user is missing prvReadWorkflow privilege' } } });
+    const unread = await build(wire, dir, specWith([]));
+    assert.equal(unread.err, undefined, 'a removed committed flow never stopped the run, and an unreadable row does not either');
+    assert.match(unread.warnings.join('\n'), /declared business process flow "new_ticket\/Ticket process": the spec no longer declares it, and it stays in the binding store: its row could not be read \(HTTP 403: Principal user is missing prvReadWorkflow privilege\)/);
+    assert.ok(storeOf(dir).readGroup('bpf', GROUP).committed);
+    const { read } = await verifyReader(wire);
+    assert.equal((await verifySpec({}, read, { managedManifest: manifestOf(dir) })).ok, false, 'verify still checks the row it is bound to');
+
+    const retired = await build(wire, dir, specWith([]));
+    assert.equal(retired.err, undefined);
+    assert.deepEqual(retired.writes, []);
+    assert.match(retired.warnings.join('\n'), RETIRED);
+    const entry = storeOf(dir).snapshot().envelope.retiredGroups.at(-1);
+    assert.deepEqual([entry.key, entry.rootId, entry.attempt], [GROUP, id, null]);
+    assert.ok(typeof entry.generation === 'string' && entry.generation);
+    const verified = await verifySpec({}, read, { managedManifest: manifestOf(dir) });
+    assert.equal(verified.ok, true, JSON.stringify(verified.checks));
+  });
+});
+
+test('a removed flow whose binding store changes while its row is read is not retired by that read', async () => {
+  await withBpf(true, async () => {
+    const wire = createWorkflowWire();
+    const dir = makeTempDir('declared-bpf-');
+    assert.equal((await build(wire, dir, specWith([FLOW]))).err, undefined);
+    const committed = storeOf(dir).readGroup('bpf', GROUP).committed;
+    const id = committed.root.id;
+    wire.rows.delete(id);
+    // Another run retires the group from its own store handle while this run's read of the row is on the wire.
+    let raced = false;
+    wire.script((e) => {
+      if (!raced && idReadOf(id)(e)) {
+        raced = true;
+        storeOf(dir).retireAbsentGroup({ family: 'bpf', key: GROUP, generation: committed.generation, rootId: id, evidence: { kind: 'root-absent', rootId: id, row: 'not-found' } });
+      }
+      return false;
+    }, null);
+    const res = await build(wire, dir, specWith([]));
+    assert.equal(raced, true);
+    assert.equal(res.err, undefined);
+    assert.deepEqual(res.writes, []);
+    assert.doesNotMatch(res.warnings.join('\n'), RETIRED);
+    assert.match(res.warnings.join('\n'), /declared business process flow "new_ticket\/Ticket process": the spec no longer declares it, and it stays in the binding store: the binding store changed while its row was read/);
+    assert.equal(storeOf(dir).snapshot().envelope.retiredGroups.length, 1, 'only the other run\'s retirement is recorded');
+  });
+});
+
+test('a removed flow whose operation was never sent is only noted: no read of its row, nothing written, and the run goes on', async () => {
+  await withBpf(true, async () => {
+    const wire = createWorkflowWire();
+    const dir = makeTempDir('declared-bpf-');
+    const denied = await build(wire, dir, specWith([FLOW]), {
+      configureSdk: (sdk) => { sdk.executePrepared = async () => { throw Object.assign(new Error('flow operation unavailable'), { code: 'BPF_API_UNAVAILABLE' }); }; },
+    });
+    assert.ok(denied.err);
+    assert.deepEqual(denied.writes, []);
+    assert.ok(storeOf(dir).readGroup('bpf', GROUP).effects.every((e) => e.state === 'definitely-unsent'));
+    const removed = await build(wire, dir, specWith([]));
+    assert.equal(removed.err, undefined, chainText(removed.err));
+    assert.deepEqual(removed.writes, []);
+    assert.deepEqual(removed.lines.filter((l) => /workflows/i.test(l)), [], 'nothing sent, so nothing to read');
+    assert.match(removed.warnings.join('\n'), /declared business process flow "new_ticket\/Ticket process": an earlier run prepared it and sent nothing/);
+  });
+});
+
+// --- a change of the authored flow alone -------------------------------------------------------------------------------------
+
+test('a change of the security roles alone sends no workflow write, grants on the stored backing table, and the managed download restores the flow as now written', async () => {
+  await withBpf(true, async () => {
+    const wire = createWorkflowWire();
+    const dir = makeTempDir('declared-bpf-');
+    const grants = [];
+    const persona = { persona: 'Ops', appAccess: false, jobs: [{ name: 'Triage', privileges: [{ entity: 'new_ticket', access: ['read'] }] }] };
+    // A flow a maker made, with a backing table name the build would not derive: the grant must follow the stored one.
+    const seeded = await build(wire, makeTempDir('declared-bpf-'), specWith([legacy(FLOW)]));
+    assert.equal(seeded.err, undefined);
+    wire.row(seeded.out.created.businessProcessFlows[KEY]).uniquename = 'new_maker_owned_backing';
+    const configureSdk = (sdk) => {
+      sdk.createPersonaRole = async () => ({ roleId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', reused: true, appliedPrivileges: [] });
+      sdk.addEntityPrivilegesToRole = async (roleId, privileges) => { grants.push({ roleId, privileges }); return privileges; };
+    };
+    const phases = ['business-process-flows', 'security'];
+    const spec = { ...specWith([FLOW]), personas: [persona] };
+    assert.deepEqual(validateAppSpec(spec, { profile: 'deploy' }).errors, []);
+    assert.equal((await build(wire, dir, spec, { phases, configureSdk, authorizedAdoption: new Set([APPROVAL]) })).err, undefined);
+    assert.equal(grants.length, 0);
+
+    const updated = { ...FLOW, securityRoles: { personas: ['Ops'] } };
+    const next = await build(wire, dir, { ...spec, businessProcessFlows: [updated] }, { phases, configureSdk });
+    assert.equal(next.err, undefined, chainText(next.err));
+    assert.deepEqual(next.writes.filter((e) => /^workflows/i.test(e.path)), [], 'no workflow write');
+    assert.deepEqual(grants.map((g) => g.privileges[0].entity), ['new_maker_owned_backing']);
+    const group = storeOf(dir).readGroup('bpf', GROUP);
+    assert.deepEqual(group.committed.originalDeclaration, updated, 'the commit records the flow as now written');
+    assert.equal(group.committed.consumerState.declaration.backing, 'new_maker_owned_backing', 'and keeps the backing table it proved');
+
+    // The same flow again records nothing new.
+    const file = storeFileOf(dir);
+    const before = fs.readFileSync(file, 'utf8');
+    const same = await build(wire, dir, { ...spec, businessProcessFlows: [updated] }, { phases, configureSdk });
+    assert.equal(same.err, undefined);
+    assert.deepEqual(same.writes.filter((e) => /^workflows/i.test(e.path)), []);
+    assert.equal(fs.readFileSync(file, 'utf8'), before, 'an unchanged declaration is a no-op');
+
+    const dl = await download(wire, makeTempDir('declared-bpf-'), ['--include-managed', '--managed-manifest', file], {
+      runDownload: async () => ({ ok: true, spec: { ...specWith([]), personas: [persona] }, pages: [], entities: [], webResources: [], droppedSubareas: 0, droppedSubareaDetails: [] }),
+    });
+    assert.equal(dl.emitted[0].ok, true, JSON.stringify(dl.emitted) + dl.said);
+    assert.deepEqual(dl.written.businessProcessFlows, [updated]);
   });
 });

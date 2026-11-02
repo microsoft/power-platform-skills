@@ -706,3 +706,63 @@ test('the enabled feature through the CLI: the printed typed approval binds the 
     assert.deepEqual(downloaded.written.businessRules, [RULE]);
   });
 });
+
+// --- a removed rule whose row is gone ----------------------------------------------------------------------------------------
+
+const RETIRED = /^managed-root-retired: declared business rule "new_ticket\/Hide notes when closed": its row [0-9a-f-]{36} is gone \(a read by its exact id answered not found\) and the spec no longer declares it/;
+const isStateChange = (e) => e.method === 'PATCH' && /^workflows\(/i.test(e.path);
+
+for (const [how, refuse] of [
+  ['answered 412 and was not applied', (wire) => wire.script(isStateChange, { statusCode: 412, body: { error: { code: '0x80060882', message: 'version mismatch' } }, unapplied: true })],
+  ['met a row a maker saved after the run read it', (wire) => wire.advance(isStateChange)],
+]) {
+  test(`a removed rule whose activation ${how} is held while its row is there, and retired with a notice once a fresh read by its id answers not found`, async () => {
+    await withRules(true, async () => {
+      const wire = createWorkflowWire();
+      const dir = makeTempDir('declared-rule-');
+      refuse(wire);
+      assert.ok((await build(wire, dir, specWith([RULE]))).err, 'the refused activation stops the run');
+      const held = storeOf(dir).readGroup('rule', KEY);
+      const id = held.pending.root.id;
+      assert.deepEqual(held.effects.map((e) => [e.effect, e.state]), [['create', 'confirmed'], ['state', 'definitely-unsent']]);
+
+      const present = await build(wire, dir, specWith([]));
+      assert.equal(present.err && present.err.code, 'managed-not-settled', chainText(present.err));
+      assert.match(chainText(present.err), /it is not retired: its row is still there/);
+      assert.deepEqual(present.writes, []);
+
+      wire.rows.delete(id);
+      const retired = await build(wire, dir, specWith([]));
+      assert.equal(retired.err, undefined, chainText(retired.err));
+      assert.deepEqual(retired.writes, []);
+      assert.match(retired.warnings.join('\n'), RETIRED);
+      assert.deepEqual(storeOf(dir).readGroup('rule', KEY), { committed: null, pending: null, effects: [] });
+      const entry = storeOf(dir).snapshot().envelope.retiredGroups.at(-1);
+      assert.deepEqual([entry.family, entry.key, entry.generation, entry.rootId], ['rule', KEY, null, id]);
+      assert.equal((await build(wire, dir, specWith([]))).err, undefined, 'and stays retired');
+    });
+  });
+}
+
+test('a committed rule the spec no longer declares is retired once its row is proved gone, so verify stops checking it; while its row is there it stays', async () => {
+  await withRules(true, async () => {
+    const wire = createWorkflowWire();
+    const dir = makeTempDir('declared-rule-');
+    assert.equal((await build(wire, dir, specWith([RULE]))).err, undefined);
+    const id = storeOf(dir).readGroup('rule', KEY).committed.root.id;
+    const present = await build(wire, dir, specWith([]));
+    assert.equal(present.err, undefined);
+    assert.deepEqual(present.warnings, []);
+    assert.ok(storeOf(dir).readGroup('rule', KEY).committed, 'still managed');
+
+    wire.rows.delete(id);
+    const { read } = await verifyReader(wire);
+    assert.equal((await verifySpec({}, read, { managedManifest: manifestOf(dir) })).ok, false, 'verify checks the row it is bound to');
+    const retired = await build(wire, dir, specWith([]));
+    assert.equal(retired.err, undefined, chainText(retired.err));
+    assert.deepEqual(retired.writes, []);
+    assert.match(retired.warnings.join('\n'), RETIRED);
+    const verified = await verifySpec({}, read, { managedManifest: manifestOf(dir) });
+    assert.equal(verified.ok, true, JSON.stringify(verified.checks));
+  });
+});

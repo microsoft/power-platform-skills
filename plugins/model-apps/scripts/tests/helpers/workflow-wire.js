@@ -17,6 +17,7 @@
 // the row's version answers 412 and changes nothing — what a service that enforces the version token does. With
 // `enforceIfMatch: false` the header is ignored: the negative control, a double that cannot prove a conditional write.
 //
+// `advance(match)` moves the row the next matching request names one version on before that request is served.
 // `script(match, answer)` makes the next request that `match`es answer `answer` instead: `{ statusCode, body }`, or
 // `{ error, code }` for a transport failure after the send (a lost answer). The request is still recorded, and is
 // applied unless `answer.unapplied` — so a 503 or a lost answer can be one the service did carry out.
@@ -29,6 +30,7 @@ function createWorkflowWire({ enforceIfMatch = true } = {}) {
   const rows = new Map();
   const log = [];
   const scripted = [];
+  const advances = [];
   const deleted = [];
   const json = (statusCode, body, headers = {}) => ({ statusCode, headers, body: body === undefined ? '' : JSON.stringify(body) });
   const notFound = () => json(404, { error: { code: '0x80040217', message: 'workflow With Id Does Not Exist' } });
@@ -121,6 +123,13 @@ function createWorkflowWire({ enforceIfMatch = true } = {}) {
     try { body = raw ? JSON.parse(raw) : null; } catch { body = raw; }
     const entry = { method: String(req.method).toUpperCase(), url: req.url, path: p, query: url.search, body, headers: { ...(req.headers || {}) } };
     log.push(entry);
+    const ahead = advances.findIndex((match) => match(entry));
+    if (ahead >= 0) {
+      advances.splice(ahead, 1);
+      const m = /^workflows\(([^)]+)\)/i.exec(p);
+      const r = m && rows.get(m[1].replace(/'/g, '').toLowerCase());
+      if (r) bump(r);
+    }
     const at = scripted.findIndex((s) => s.match(entry));
     if (at >= 0) {
       const [{ answer }] = scripted.splice(at, 1);
@@ -141,6 +150,9 @@ function createWorkflowWire({ enforceIfMatch = true } = {}) {
     rows,
     deleted,
     script(match, answer) { scripted.push({ match, answer }); },
+    // The next request that `match`es finds the row it names one version on, as after a maker's save between the run's read
+    // and its write: a conditional write carrying the version the run read then answers 412 and changes nothing.
+    advance(match) { advances.push(match); },
     writes() { return log.filter((e) => e.method !== 'GET'); },
     lines(from = 0) { return log.slice(from).map(lineOf); },
     row(id) { return rows.get(String(id).toLowerCase()) || null; },

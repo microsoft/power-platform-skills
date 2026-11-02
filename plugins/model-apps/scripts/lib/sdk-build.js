@@ -328,6 +328,36 @@ async function readSavedSystemForm(provision, id) {
   return { state: 'unreadable', id, status, answered, why: `HTTP ${status}${answered && typeof answered.message === 'string' ? `: ${answered.message}` : ' with no row the build can read'}` };
 }
 
+// One workflow row read by its EXACT id, through the plugin's client (the one every state change of a declared workflow goes through):
+//   GET <envUrl>/api/data/v9.2/workflows(<id>)?$select=workflowid
+//   200 { "@odata.etag": "W/\"1234567\"", "workflowid": "11111111-1111-4111-8111-111111111111" }
+//   404 { "error": { "code": "0x80040217", "message": "workflow With Id = 11111111-… Does Not Exist" } }
+// A workflow has one layer (no saved and published pair, as a systemform has), so this answer is the whole word on whether the row
+// exists. The client answers a non-2xx as a response ({ status, headers, body }, the body text or parsed JSON) and throws only when
+// no answer came. Only the documented "Does Not Exist" proves the row absent; a 404 without that code, a 401 or 403, a throttle, a
+// body that names another row, or a thrown error proves nothing either way.
+// Answers { state: 'present', id } | { state: 'absent', id } | { state: 'unreadable', id, why, status? }.
+// See: https://learn.microsoft.com/power-apps/developer/data-platform/reference/entities/workflow
+async function readWorkflowRowPresence(provision, instanceUrl, id) {
+  const client = provision && provision.dataverse && provision.dataverse.httpClient;
+  if (!client || typeof client.get !== 'function' || !instanceUrl) return { state: 'unreadable', id, why: 'no client to read the workflow row by its id' };
+  let response;
+  try {
+    response = await client.get(`${String(instanceUrl).replace(/\/+$/, '')}/api/data/v9.2/workflows(${id})?$select=workflowid`);
+  } catch (error) {
+    return { state: 'unreadable', id, why: (error && error.message) || String(error) };
+  }
+  const status = response && response.status;
+  let body = response && response.body;
+  if (typeof body === 'string') {
+    try { body = body ? JSON.parse(body) : null; } catch { body = null; }
+  }
+  const answered = body && typeof body === 'object' && body.error && typeof body.error === 'object' ? body.error : undefined;
+  if (status === 404 && answered && answered.code === '0x80040217') return { state: 'absent', id };
+  if (status >= 200 && status < 300 && body && typeof body === 'object' && String(body.workflowid || '').replace(/[{}]/g, '').toLowerCase() === id) return { state: 'present', id };
+  return { state: 'unreadable', id, status, why: `HTTP ${status}${answered && typeof answered.message === 'string' ? `: ${answered.message}` : ' with no row the build can read'}` };
+}
+
 // A systemform `type` as the integer it is, strictly (the platform answers a number; a text of digits is read as one). Anything else is NaN, never 0 —
 // 0 is a real type, the standard dashboard the build creates.
 function systemFormType(raw) {
@@ -7087,28 +7117,112 @@ async function runSdkBuildPhases(spec, opts, owed) {
   // readable table and name fences every legacy entry of its family, never none.
   //   heldName(table, name)  the key of the attempt fencing that table and name, before any legacy read or create
   //   heldRow(ids)           the key of the attempt holding one of those row ids (a held row renamed to another entry's name)
-  const holdRemovedWorkflowAttempts = (family, declaredKeys, { phase, noun, short, entries }) => {
+  //
+  // A removed declaration whose row is GONE has a way out, since putting the entry back cannot settle a row that no longer exists:
+  // the group is retired (managed-bindings.js retireAbsentGroup), with a notice, when a fresh read by the row's exact id, made in
+  // this run, answers not found (readWorkflowRowPresence). Two shapes reach it:
+  //   - a removed attempt whose every effect is settled (confirmed, fulfilled, or definitely-unsent with no dispatch token), for
+  //     example a confirmed create whose activation was never sent: retired with its attempt (attemptToken), at the generation of
+  //     the committed group it is based on, or null when nothing was ever committed;
+  //   - a committed group with no attempt and no effect, whose declaration was removed: retired at its generation. A present row
+  //     keeps it as it is (verify still checks it); one that cannot be read keeps it too, with a warning.
+  // An attempt with an effect that may have been sent and is not proved (dispatching, unconfirmed) is held without a read: no
+  // answer about the row now can say what that send will do. A row that is present, a read that is unreadable, refused or
+  // malformed, and a store that refuses the retirement all keep the hold above, unchanged. Workflows have one layer (no saved and
+  // published pair), so the one exact read is the whole proof. The store is observed BEFORE that read and the retirement is made
+  // against that observation (retire, below), so a managed write that lands during the read keeps the group. The retirement says
+  // the row was proved gone and the group dropped, never that an activation or any other change was made.
+  const settledEffect = (e) => e && (e.state === 'confirmed' || e.state === 'fulfilled' || (e.state === 'definitely-unsent' && (e.dispatchToken === null || e.dispatchToken === undefined)));
+  const holdRemovedWorkflowAttempts = async (family, declaredKeys, { phase, noun, short, entries }) => {
     const rows = new Map();
     const names = new Map();
     let all = null;
+    // The store's view of one group, taken BEFORE the row is read: its generation and its attempt and effects as they stand. The
+    // proof that the row is gone holds only for the group as it was when the read began; a managed write that lands while the read
+    // is in flight (another run settling, re-sending or re-creating it) makes it a proof about something else. So the order is
+    // fixed: observe, read fresh, retire against the observation. Until the store takes an observation token, the file is read
+    // again (refresh, so another process's change is seen) before and after the row read, and anything that moved keeps the
+    // group; the store also rereads its file under its lease and refuses a generation, attempt or effect that no longer matches
+    // (retireAbsentGroup).
+    const observeGroup = (key) => {
+      let units;
+      try { units = bindingGroups.store.refresh().units(); } catch (err) { return null; }
+      const unit = units.find((u) => u.family === family && u.key === key) || null;
+      if (!unit) return null;
+      const a = unit.attempt;
+      return {
+        generation: unit.group ? unit.group.generation : null,
+        print: JSON.stringify({
+          invalid: !!unit.invalid,
+          generation: unit.group ? unit.group.generation : null,
+          root: unit.group && unit.group.root ? unit.group.root.id : null,
+          attempt: a ? { token: a.token, phase: a.phase, root: a.root ? a.root.id : null, sendWindow: a.sendWindow === undefined ? null : a.sendWindow } : null,
+          effects: (unit.effects || []).map((e) => [e.token, e.state, e.dispatchToken === undefined ? null : e.dispatchToken]),
+        }),
+      };
+    };
+    // The one place a removed declared workflow is retired, so the store's observation contract changes one call.
+    const retire = async (unit, rootId, attemptToken) => {
+      const observed = observeGroup(unit.key);
+      if (!observed) return { kept: 'the binding store could not be read again before its row was read' };
+      const read = await readWorkflowRowPresence(provision, opts.env, rootId);
+      if (read.state !== 'absent') return { kept: read.state === 'present' ? 'its row is still there' : `its row could not be read (${read.why})` };
+      const now = observeGroup(unit.key);
+      if (!now || now.print !== observed.print) return { kept: 'the binding store changed while its row was read' };
+      try {
+        bindingGroups.store.retireAbsentGroup({
+          family, key: unit.key, generation: observed.generation, rootId,
+          evidence: { kind: 'root-absent', rootId, row: 'not-found' },
+          ...(attemptToken ? { attemptToken } : {}),
+        });
+      } catch (err) {
+        return { kept: `the binding store did not retire it (${(err && err.code) || 'error'}: ${(err && err.message) || String(err)})` };
+      }
+      if (typeof opts.warn === 'function') {
+        opts.warn(`managed-root-retired: declared ${noun} "${unit.key}": its row ${rootId} is gone (a read by its exact id answered not found) and the spec no longer declares it, so the build no longer manages it. Nothing was sent for it; this says the row is gone, not that any change of it was made.`);
+      }
+      return { retired: true };
+    };
     if (bindingGroups && bindingGroups.store) {
-      const envelope = bindingGroups.store.snapshot().envelope;
+      const snap = bindingGroups.store.snapshot();
+      const envelope = snap.envelope;
+      const unitOf = new Map(snap.units().filter((u) => u.family === family).map((u) => [u.key, u]));
       for (const a of envelope.attempts || []) {
         if (!a || a.family !== family || declaredKeys.has(a.key)) continue;
-        const sent = (envelope.workflowEffects || []).some((e) => e && e.attemptToken === a.token && e.state !== 'definitely-unsent');
+        const owned = (envelope.workflowEffects || []).filter((e) => e && e.attemptToken === a.token);
+        const sent = owned.some((e) => e.state !== 'definitely-unsent');
         if (!sent) {
           if (typeof opts.warn === 'function') opts.warn(`declared ${noun} "${a.key}": an earlier run prepared it and sent nothing, and the spec no longer declares it, so nothing is done for it.`);
           continue;
         }
-        if (a.root && typeof a.root.id === 'string') rows.set(a.root.id.toLowerCase(), a.key);
+        const unit = unitOf.get(a.key);
+        const rootId = a.root && typeof a.root.id === 'string' ? a.root.id.toLowerCase() : null;
+        let why = null;
+        // Only an attempt with a journal is retired: one whose journal is empty has no recorded effect to show what it sent, and
+        // its send window (absent, or counting a possible send) cannot say nothing landed, so it is never retired here.
+        if (unit && !unit.invalid && rootId && owned.length && owned.every(settledEffect)) {
+          const outcome = await retire(unit, rootId, a.token);
+          if (outcome.retired) continue;
+          why = outcome.kept;
+        }
+        if (rootId) rows.set(rootId, a.key);
         const d = a.declaration;
         if (d && typeof d.entity === 'string' && d.entity && typeof d.name === 'string' && d.name) names.set(`${d.entity.toLowerCase()}|${d.name.toLowerCase()}`, a.key);
         else if (!all) all = a.key;
         markIncomplete({
           phase,
           code: 'managed-not-settled',
-          message: `declared ${noun} "${a.key}": an earlier run's change of this ${short} is still waiting to be proved, and the spec no longer declares it, so this run did not finish it and wrote nothing to it. Put its ${entries} entry back with reconcile "declared" and run the build again; once that run settles it, the entry can be removed.`,
+          message: `declared ${noun} "${a.key}": an earlier run's change of this ${short} is still waiting to be proved, and the spec no longer declares it, so this run did not finish it and wrote nothing to it${why ? ` (it is not retired: ${why})` : ''}. Put its ${entries} entry back with reconcile "declared" and run the build again; once that run settles it, the entry can be removed.`,
         });
+      }
+      for (const unit of unitOf.values()) {
+        if (declaredKeys.has(unit.key) || unit.invalid || unit.attempt || unit.effects.length || !unit.group) continue;
+        const rootId = unit.group.root && typeof unit.group.root.id === 'string' ? unit.group.root.id.toLowerCase() : null;
+        if (!rootId) continue;
+        const outcome = await retire(unit, rootId);
+        if (!outcome.retired && outcome.kept !== 'its row is still there' && typeof opts.warn === 'function') {
+          opts.warn(`declared ${noun} "${unit.key}": the spec no longer declares it, and it stays in the binding store: ${outcome.kept}. A later run reads it again.`);
+        }
       }
     }
     return {
@@ -7327,11 +7441,11 @@ async function runSdkBuildPhases(spec, opts, owed) {
     // or no longer says reconcile "declared"): holdRemovedWorkflowAttempts. Nothing in this run will finish it, so it is not
     // dropped silently: the run ends incomplete with what to do, and the legacy path below neither reads nor creates a rule of
     // the table and name it declared (its create may not be visible yet, or may still arrive), nor writes the row it holds (an
-    // uncertain write's row is refused by the client's gate as well). A committed group with no attempt needs nothing: the rule
-    // simply leaves management, as a removed declared form does. Loaded only when the feature is on, so a build with no declared
+    // uncertain write's row is refused by the client's gate as well). A committed group with no attempt stays as it is while its row is
+    // there (verify still checks it), and is retired once a read by its id proves the row gone. Loaded only when the feature is on, so a build with no declared
     // rule does not load the rule helper (tests/creates-port.test.js).
     const ruleHold = declaredFeatureOn('rules')
-      ? holdRemovedWorkflowAttempts('rule', new Set((spec.businessRules || []).filter(isDeclaredRuleOn).map((r) => require('./rule-settlement.js').ruleKey(r))), {
+      ? await holdRemovedWorkflowAttempts('rule', new Set((spec.businessRules || []).filter(isDeclaredRuleOn).map((r) => require('./rule-settlement.js').ruleKey(r))), {
         phase: 'business-rules', noun: 'business rule', short: 'rule', entries: 'businessRules[]',
       })
       : { heldName: () => undefined, heldRow: () => undefined };
@@ -7625,7 +7739,7 @@ async function runSdkBuildPhases(spec, opts, owed) {
     // (holdRemovedWorkflowAttempts). The legacy path below neither reads nor creates a flow of the table and name it declared, and
     // does not write the row it holds.
     const bpfHold = declaredFeatureOn('bpf')
-      ? holdRemovedWorkflowAttempts('bpf', new Set((spec.businessProcessFlows || []).filter(isDeclaredBpfOn).map((f) => require('./bpf-settlement.js').bpfKey(f))), {
+      ? await holdRemovedWorkflowAttempts('bpf', new Set((spec.businessProcessFlows || []).filter(isDeclaredBpfOn).map((f) => require('./bpf-settlement.js').bpfKey(f))), {
         phase: 'business-process-flows', noun: 'business process flow', short: 'flow', entries: 'businessProcessFlows[]',
       })
       : { heldName: () => undefined, heldRow: () => undefined };

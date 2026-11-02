@@ -856,6 +856,12 @@ Requires `minimumPluginVersion: "2.21.0"`. A rule without `reconcile` builds exa
   earlier build sent to it is still waiting to be proved, the build ends incomplete (`managed-not-settled`)
   and does not touch that rule: put its entry back and build again. Until then the build neither reads nor
   creates a rule of the same table and name, because the earlier create may not be visible yet.
+- **A removed rule whose row is gone.** When a read by the rule's own id answers that the row does not
+  exist, the build stops managing it and warns `managed-root-retired` with its `<table>/<name>`: this
+  holds for a rule whose last change was proved, and for one whose create was proved but whose activation
+  was never sent. The notice says only that the row is gone, never that a change of it was made. A row that
+  is there, a read that is refused or cannot be read, and a change that may have been sent and is not proved
+  keep it as above. Once retired, `--verify` no longer checks it.
 - **Publishing.** A rule is not published; its activation is the state change above.
 - **Verify.** `--verify` reads each bound declared rule again by its id and holds it to what its last
   build proved: its whole body (every condition and action, the spec's and any other) and its status. It
@@ -918,12 +924,19 @@ Requires `minimumPluginVersion: "2.21.0"`. A flow without `reconcile` builds exa
   A flow changed outside the spec stops the build (`bpf-drift`) and needs the same complete
   re-adoption. There is no `overwrite:` approval for a flow.
 - **The backing table.** `securityRoles` are granted on the table name Dataverse stored for the flow,
-  as the build read it, never on a name derived from the display name.
+  as the build read it, never on a name derived from the display name. A change of a managed flow's
+  `securityRoles` alone (or of any setting the flow already holds) sends no workflow write; the build
+  records the flow as now written, so a managed download gives it back with the new roles.
 - **Removing one.** A declared flow taken out of the spec leaves management and is kept. When a change
   an earlier build sent to it is still waiting to be proved, the build ends incomplete
   (`managed-not-settled`) and does not touch that flow: put its entry back and build again. Until then
   an undeclared flow with the same table and name is not read, created or changed either, because the
   row of a create whose answer was lost may not be visible yet.
+- **A removed flow whose row is gone.** When a read by the flow's own id answers that the row does not
+  exist, the build stops managing it and warns `managed-root-retired` with its `<table>/<name>`, as for a
+  rule (above): a flow whose last change was proved, and one whose create was proved but whose activation
+  was never sent. Anything less than that answer keeps it as above. Once retired, `--verify` no longer
+  checks it.
 - **Publishing.** A flow is not published; its activation is the state change above.
 - **Verify.** `--verify` reads each bound declared flow again by its id and holds it to what its last
   build proved: its whole body (every stage and step, with their ids) and its status. It also fails when

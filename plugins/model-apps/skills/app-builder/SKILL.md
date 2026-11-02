@@ -203,7 +203,11 @@ prod-ready** app; don't under-build (a bare table list) or over-build (surfaces 
   the maker choose. `--verify` holds a declared flow to its last build (a flow changed in Maker since fails until
   it is re-adopted). A download brings it back declared, keys included, only with `--include-managed
   --managed-manifest <store file>` (otherwise it is left out); the first build that binds it from the downloaded folder
-  needs `adopt:bpf:<table>/<name>`, because that folder has no store.
+  needs `adopt:bpf:<table>/<name>`, because that folder has no store. Changing only who may run a managed flow
+  (`securityRoles`) writes nothing to the flow; the build records it, and a managed download brings it back. A
+  declared rule or flow removed from the spec whose row was deleted is no longer managed once the build reads it gone
+  by its id (a `managed-root-retired` warning, which never means it was activated); until then, a removed one whose
+  change is still waiting to be proved keeps the build incomplete.
 - **An unconfirmed publish** — a build that stops naming `--authorize publication-risk:table:<table>` (or
   `publication-risk:dashboard:<id>`) lost the answer to a publish that may still complete. Tell the maker to
   check what is live on that table; pass the key exactly as printed only when they accept the risk. The run

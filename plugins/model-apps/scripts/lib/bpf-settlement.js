@@ -28,7 +28,10 @@
 // three effects — Draft, body, Active — each conditioned on the version its own proof read returned (an Active
 // flow's SDK push is a `$batch` the effect gate cannot read whole, so it is never sent); a state-only change is ONE
 // conditional state write with no definition push. The gate also holds on every recovery path: with the switch off a
-// re-run may prove by reading that an earlier write landed, but it sends nothing to an existing flow.
+// re-run may prove by reading that an earlier write landed, but it sends nothing to an existing flow. A declaration
+// that changes nothing of the workflow but differs from the one the group recorded (its `securityRoles`, say) is a
+// declaration-only change: no workflow request, and a commit that records it as the group's original declaration,
+// the one the managed download restores.
 //
 // WHAT A RE-RUN MAY DO. Only the exact unresolved create of an attempt continues as a create; an absent row is never
 // permission to create again, and a missing adopted flow stops. A write whose answer was lost, or that was answered
@@ -883,7 +886,15 @@ async function settleDeclaredBpf(input) {
       }
       return adoption(id, live);
     }
-    if (!edits.length) return { mode: 'noop' };
+    if (!edits.length) {
+      // Nothing of the workflow changes. The authored flow may still differ from the one the group recorded: the
+      // security roles a later phase grants, or a property the flow already holds stated (or left out) differently.
+      // That is a declaration-only change: a plan that sends nothing, whose commit records today's flow as the group's
+      // originalDeclaration (what the managed download restores). A no-op would keep the earlier one as current.
+      const recorded = committed.originalDeclaration;
+      if (recorded !== undefined && intentSha256(recorded) === declarationSha256) return { mode: 'noop' };
+      return { mode: 'declaration', id, live, held };
+    }
     if (!switchOn) throw coded('workflow-edit-refused', `${label}: the declaration ${edits.join(', ')}. ${EDIT_REFUSED_REMEDY}`);
     // A declaration that changes only the status is a pure state change: one conditional state write, no body push
     // (the body is already proved, and regenerating its XAML would rewrite what the server holds for nothing).
@@ -972,6 +983,13 @@ async function settleDeclaredBpf(input) {
       const expected = expectedOf({ id, sent: staged.sent, desiredStatus: staged.desiredStatus, map, live: null });
       return { root: root(id), expected, declarationSha256, publication: null, mode: 'create', staged, map, proved: staged.sent.projection };
     }
+    if (resolution.mode === 'declaration') {
+      // The live flow stays as it is, status included (it equals the committed proof, checked in resolveManaged); only
+      // the recorded declaration changes, so the proof expected is today's, under the held map.
+      const { id, live, held } = resolution;
+      const expected = expectedOf({ id, sent: live.view, desiredStatus: live.view.status, map: held, live });
+      return { root: root(id), expected, declarationSha256, publication: null, mode: 'declaration', map: held, proved: live.view.projection };
+    }
     if (resolution.mode === 'state') {
       // The live flow is what stays; only the status moves. The held map still names the live stages and steps (the
       // row equals the committed proof, checked in resolveManaged).
@@ -990,6 +1008,7 @@ async function settleDeclaredBpf(input) {
   async function apply({ token, plan: planned }) {
     run.token = token;
     if (planned.mode === 'adopt') return { mode: 'adopt', acknowledged: false, map: planned.map };
+    if (planned.mode === 'declaration') return { mode: 'declaration', acknowledged: false, sent: false, map: planned.map };
     if (planned.mode === 'create') return { mode: 'create', ...(await driveCreate(token, planned.root.id, planned.staged)), map: planned.map };
     if (planned.mode === 'state') {
       await driveState(token, planned.root.id, planned.target, planned.live.version, { conditional: true, observed: planned.live.view.status });
